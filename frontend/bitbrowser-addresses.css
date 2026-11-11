@@ -15,51 +15,31 @@
   margin-inline-end: auto;
 }
 
-.bit-address-import-controls {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-}
-
-#bit-address-import {
-  flex: 1 1 14.5rem;
-  min-width: 0;
-  max-width: 34rem;
-}
-
-#bit-address-import .field {
-  grid-template-columns: max-content minmax(0, 1fr);
-  gap: 8px;
-  margin: 0;
-}
-
 #bit-address-generate-count {
   max-width: 8rem;
 }
 
-.bit-address-import-controls input {
-  flex: 1 1 5.25rem;
-  width: auto;
-  min-width: 0;
-  max-width: 100%;
+.bit-address-controls {
+  padding-inline: 0;
 }
 
-#bit-address-file-summary {
-  margin: 0;
-  overflow-wrap: anywhere;
+.bit-address-controls > .bit-address-filters {
+  flex-basis: 26rem;
 }
 
-.bit-address-filters {
-  padding: 0;
+.bit-address-controls > .bit-address-filters:has([data-action='bit-address-delete-used']:not([hidden])) {
+  flex-basis: 35rem;
 }
 
-.bit-address-filters > .toolbar-left {
+.bit-address-controls .bit-address-filters > .toolbar-left {
   flex: 1 1 15rem;
+  justify-content: flex-start;
 }
 
 .bit-address-filters .search-field {
+  flex: 1 1 8rem;
   min-width: 8rem;
+  max-width: 280px;
 }
 
 .bit-address-columns:not([hidden]) {

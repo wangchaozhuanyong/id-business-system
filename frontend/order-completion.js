@@ -64,9 +64,9 @@
     const assignOwners = manual && sourceRows.some(row => row.needsOwner)
       ? button('补齐空白归属', 'completion-assign-manual') : '';
     return title + '<section class="panel design-async-region" id="completion-list">' +
-      '<div class="list-controls"><div class="tabs" role="group" aria-label="订单补全分类">' +
+      '<div class="list-controls completion-controls"><div class="tabs" role="group" aria-label="订单补全分类">' +
       tabMarkup + '</div><div class="toolbar"><div class="toolbar-left"><div class="search-field">' + A.icon('search') +
-      input('list-search', S.query, 'type="search" aria-label="搜索订单" placeholder="搜索订单编号、邮箱或客户"') +
+      input('list-search', S.query, 'type="search" aria-label="搜索订单" placeholder="订单号、邮箱或客户"') +
       '</div></div><div class="toolbar-right" data-page-actions>' + assignOwners + '</div></div></div><div role="status" id="completion-list-progress" hidden></div>' +
       (loadError ? '<div class="panel-body"><p class="inline-notice warning" role="status">' +
         (snapshot ? '刷新失败，已保留上次订单。' : '暂时无法读取订单，请刷新重试。') + '</p></div>' : '') +

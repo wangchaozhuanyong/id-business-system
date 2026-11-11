@@ -24,9 +24,8 @@ test('汇率四栏目、设置草稿、版本冲突、采集记录与事件更�
   const collection = createFinanceCollection({ store, provider: automaticProvider.id, clock: () => now,
     fetchQuote: async () => {
       providerCalls++;
-      return Response.json({ result: 'success', base_code: 'CNY', time_eol_unix: 0,
-        time_last_update_unix: (now - 3_600_000) / 1000, time_next_update_unix: (now + 23 * 3_600_000) / 1000,
-        rates: { CNY: 1, MYR: 0.625, USD: 0.125, PHP: 8, CLP: 125, IDR: 2500, EGP: 6.25 } });
+      return Response.json({ date: new Date(now).toISOString().slice(0, 10),
+        cny: { cny: 1, myr: 0.625, usd: 0.125, php: 8, clp: 125, idr: 2500, egp: 6.25 } });
     }
   });
   t.after(() => collection.close());
@@ -93,6 +92,12 @@ test('汇率四栏目、设置草稿、版本冲突、采集记录与事件更�
     await page.locator('#main[data-layout-route="' + route + '"]').waitFor();
   };
   const tab = name => page.getByRole('tab', { name, exact: true }).click();
+  const listAction = async name => {
+    const button = page.getByRole('button', { name, exact: true });
+    if (await button.isVisible()) return button.click();
+    await page.locator('#main .fx-toolbar [data-action="mobile-list-actions"]').click();
+    await page.getByRole('menuitem', { name, exact: true }).click();
+  };
   const financePager = page.locator('#main nav[data-pagination]');
   const jumpPage = async number => {
     await financePager.locator('.pagination-jump summary').click();
@@ -150,7 +155,7 @@ test('汇率四栏目、设置草稿、版本冲突、采集记录与事件更�
   await page.locator('tr[data-row-id="fxr-fixture-19"]').waitFor({ state: 'detached' });
   await page.locator('#fx-query').fill('没有匹配资料');
   await page.getByRole('heading', { name: '暂无符合条件的汇率记录' }).waitFor();
-  await page.getByRole('button', { name: '清空筛选', exact: true }).click();
+  await listAction('清空筛选');
   await page.locator('tr[data-row-id="fxr-fixture-0"]').waitFor();
 
   await tab('采集设置'); await page.locator('#fx-settings-form').waitFor();
@@ -265,14 +270,14 @@ test('汇率四栏目、设置草稿、版本冲突、采集记录与事件更�
       await page.locator('#fx-query').fill('没有匹配资料');
       await page.getByRole('heading', { name: '暂无符合条件的汇率记录' }).waitFor();
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
-      await page.getByRole('button', { name: '清空筛选', exact: true }).click();
+      await listAction('清空筛选');
       await page.locator('tr[data-row-id="fxr-fixture-0"]').waitFor();
       await tab('采集设置');
     }
   }
   await tab('当前汇率');
   await page.locator('table[data-table="fx-rates"] tbody tr').filter({ hasText: '美元' }).waitFor();
-  await page.getByRole('button', { name: '列设置', exact: true }).click();
+  await listAction('列设置');
   await page.locator('#drawer[open]').getByText('每 1 原币兑人民币', { exact: true }).waitFor();
   await page.locator('#drawer[open] [data-action="drawer-close"]').first().click();
   rejectReads = true;
@@ -288,12 +293,17 @@ test('汇率四栏目、设置草稿、版本冲突、采集记录与事件更�
   await page.getByRole('button', { name: '立即采集', exact: true }).click();
   await page.waitForFunction(() => !document.querySelector('#fx-progress:not([hidden])') && !document.querySelector('[data-action="fx-collect"]').disabled);
   assert.equal(providerCalls, 2);
-  assert.equal(document.data.quotes.length, 2);
+  assert.equal(document.data.quotes.length, 1, '同日相同报价只保留一个批次');
+  assert.equal(document.data.runs[0].status, 'unchanged');
   const beforePush = reads;
   document.version++;
   document.data.quotes[0].rates.USD = '7.77777777';
   await page.evaluate(version => window.emitFxVersion(version), document.version);
-  await page.getByRole('cell', { name: '7.77777777', exact: true }).waitFor();
+  const usdRow = page.locator('table[data-table="fx-rates"] tbody tr').filter({ hasText: '美元 USD' });
+  await usdRow.locator('[data-column="rate"]').filter({ hasText: '7.77777777' }).waitFor({ state: 'attached' });
+  const expand = usdRow.locator('[data-action="table-mobile-toggle"]');
+  if (await expand.isVisible()) await expand.click();
+  await usdRow.locator('[data-column="rate"]').getByText('7.77777777', { exact: true }).waitFor();
   assert.equal(reads, beforePush + 1, '新版本只触发一次相关读取');
   assert.equal(await page.evaluate(() => window.fxBoot), boot, '没有整页刷新');
   assert.deepEqual(errors, []); assert.deepEqual(external, []);

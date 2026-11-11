@@ -11,7 +11,7 @@ import { interceptDesign, origin, root, settle, spacingSnapshot } from './helper
 test('充值码合并工作台独立刷新分页、保留草稿、审批后定位新批次并完整显示', { timeout: 120_000 }, async t => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
   const browser = await chromium.launch(); t.after(() => browser.close());
-  const output = root + '/.runtime/recharge-workspace-20261110'; await mkdir(output, { recursive: true });
+  const output = process.env.ID_LAYOUT_QA_OUTPUT || root + '/.runtime/recharge-workspace-20261110'; await mkdir(output, { recursive: true });
   const f = setup(), admin = { ...actor, name: '工作台验收员', role: 'admin' };
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   const code = i => 'KC-' + 'A'.repeat(13) + alphabet[Math.floor(i / alphabet.length)] + alphabet[i % alphabet.length];
@@ -185,7 +185,8 @@ test('充值码合并工作台独立刷新分页、保留草稿、审批后定�
   await page.locator(`[data-request-id="${pending.id}"] [data-action="order-code-approve"]`).click();
   await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
   await page.locator('#recharge-code-new-batch:not([hidden])').waitFor();
-  assert.match(await page.locator('#recharge-code-new-batch').innerText(), new RegExp(pending.id));
+  assert.match(await page.locator('#recharge-code-new-batch').innerText(), new RegExp(f.store.load().data.requests.find(row => row.id === pending.id).batchNo));
+  assert(!(await page.locator('#recharge-code-new-batch').innerText()).includes(pending.id));
   assert.equal(await page.locator('#recharge-code-list tbody tr[data-row-id]').count(), 1);
   assert.equal(await page.locator('#recharge-request-count').inputValue(), '2');
   assert.equal(await page.locator('#code-list-query').inputValue(), '');
@@ -226,7 +227,7 @@ test('充值码合并工作台独立刷新分页、保留草稿、审批后定�
   await right.locator('[data-action="order-code-tab"][data-id="returns"]').click();
   assert.equal((await call(handler, { action: 'approve', id: anotherOwn.id }, admin)).status, 200);
   await page.evaluate(() => window.IDDesignModules.find(m => m.id === 'order-operations').onDataChanges(['recharge-codes']));
-  assert.match(await page.locator('#recharge-code-new-batch').innerText(), new RegExp(anotherOwn.id));
+  assert.match(await page.locator('#recharge-code-new-batch').innerText(), new RegExp(f.store.load().data.requests.find(row => row.id === anotherOwn.id).batchNo));
   assert.equal(await right.locator('[data-action="order-code-tab"][data-id="unused"]').getAttribute('aria-selected'), 'true');
   const activeTab = await right.locator('[data-action="order-code-tab"][data-id="unused"]').boundingBox(), strip = await right.locator('.recharge-code-tabs').boundingBox();
   assert(activeTab.x >= strip.x - 1 && activeTab.x + activeTab.width <= strip.x + strip.width + 1, '新批次的选中页签在手机完整可见');

@@ -6,6 +6,7 @@
   const M = A.money;
   const business = window.IDLocalData;
   const draftKey = 'overview:filters';
+  const rechargeRequestsRoute = 'workspace/recharge-codes';
   const ranges = [['today', '今日'], ['week', '近 7 天'], ['month', '近 30 天']];
   const chartModes = [['orders', '订单量'], ['profit', '已核算利润']];
   const products = [
@@ -61,7 +62,8 @@
     const finance = allowed('orders/statistics');
     return {
       actor: actor?.id || '', role: actor?.role || '', finance,
-      apple: finance && allowed('accounts/apple-balances')
+      apple: finance && allowed('accounts/apple-balances'),
+      rechargeRequests: finance && Boolean(business?.canApproveRechargeCodes) && allowed(rechargeRequestsRoute)
     };
   }
 
@@ -73,10 +75,11 @@
   async function loadOverview(key) {
     const previous = business.queries.peek('overview', key)?.data || {};
     const { commerce, inventory, appleBalance } = A.modules;
-    const [inventoryReady, commerceReady, appleReady] = await Promise.all([
+    const [inventoryReady, commerceReady, appleReady, rechargeSummary] = await Promise.all([
       readSource(() => inventory.refreshOverview()),
       key.finance && readSource(() => commerce.refreshOverview()),
-      key.apple && readSource(() => appleBalance.refreshLocalBalance())
+      key.apple && readSource(() => appleBalance.refreshLocalBalance()),
+      key.rechargeRequests && readSource(() => business.rechargeCodePendingSummary())
     ]);
     const asOf = Date.now();
     const section = (name, data) => data === false || data == null
@@ -96,6 +99,10 @@
     }
     if (key.apple) snapshot.apple = section('apple', await readSource(() =>
       appleReady && appleBalance.listRefunds().filter(row => row.status === 'pending').length));
+    if (key.rechargeRequests) {
+      const pending = rechargeSummary?.pending;
+      snapshot.rechargeRequests = section('rechargeRequests', Number.isSafeInteger(pending) && pending >= 0 ? pending : null);
+    }
     return snapshot;
   }
 
@@ -171,7 +178,7 @@
       </div></article>`;
   }
 
-  const metricValue = (value, unit = '') => `<div class="overview-metric-value"><strong>${E(value)}</strong>${unit ? `<span>${unit}</span>` : ''}</div>`;
+  const metricValue = (value, unit = '') => `<div class="overview-metric-value"><strong>${E(value)}</strong>${unit ? `<span>${E(unit)}</span>` : ''}</div>`;
 
   function renderMetrics(activity, earnings, commerce, profit) {
     const current = activity?.current;
@@ -183,11 +190,14 @@
       ...Object.keys(current.receipts), ...Object.keys(previous.receipts)
     ])].sort() : [];
     const receipts = currencyKeys.length
-      ? `<dl class="overview-receipts">${currencyKeys.map(currency => {
-        const value = current.receipts[currency] || '0';
-        return `<div><dt>${E(currency)}</dt><dd><strong>${moneyText(value)}</strong><small>较上期${changeText(M.subtract(value, previous.receipts[currency] || '0'), currency, true)}</small></dd></div>`;
-      }).join('')}</dl>`
+      ? `<dl class="overview-receipts">${currencyKeys.map(currency =>
+        `<div class="overview-metric-value"><dt>${E(currency)}</dt><dd><strong>${moneyText(current.receipts[currency] || '0')}</strong></dd></div>`).join('')}</dl>`
       : metricValue(current ? '0' : '—', current ? '按原币' : '');
+    const receiptChanges = currencyKeys.map(currency => {
+      const difference = M.subtract(current.receipts[currency] || '0', previous.receipts[currency] || '0');
+      const comparison = '较上期' + changeText(difference, currency, true);
+      return `<span>${E(comparison + (M.compare(difference, '0') === 0 ? ` ${currency}` : ''))}</span>`;
+    }).join('');
     const refunds = current ? Object.entries(current.refunds).sort(([a], [b]) => a.localeCompare(b))
       .map(([currency, amount]) => `${moneyText(amount)} ${currency}`) : [];
     const profitChange = !earnings ? sectionStatus(profit)
@@ -200,7 +210,7 @@
         current ? '较上期' + changeText(current.orders - previous.orders, '笔') : status,
         current ? `<span>撤单 ${countText(current.cancelled)} 笔</span>` : '')}
       ${metricCard('receipts', receipts, !current ? status : !currencyKeys.length ? '较上期持平' : '',
-        current ? `<span>退款 ${E(refunds.join(' · ') || '0')}</span>` : '')}
+        current ? `${receiptChanges}<span>退款 ${E(refunds.join(' · ') || '0')}</span>` : '')}
       ${metricCard('profit', metricValue(moneyText(profitValue(currentProfit)), 'CNY'), profitChange,
         currentProfit ? `<span class="${currentProfit.pending ? 'overview-warning' : ''}">已核算 ${countText(currentProfit.accounted)} 笔 · 待核算 ${countText(currentProfit.pending)} 笔</span>
           ${currentProfit.reference ? `<span>含参考核算 ${countText(currentProfit.reference)} 笔</span>` : ''}
@@ -286,7 +296,7 @@
       </div></section>`;
   }
 
-  function renderTasks(sections) {
+  function renderTasks(sections, showRechargeRequests) {
     const incomplete = sections.commerce?.data?.incomplete;
     const byProduct = products.filter(([product]) => incomplete?.[product])
       .map(([product, route]) => route && allowed(route)
@@ -297,7 +307,11 @@
       ['订单待补资料', '按产品核对客户、支付或订阅资料', 'orders/statistics', 'orders', sections.commerce,
         incomplete && Object.values(incomplete).reduce((sum, value) => sum + value, 0), byProduct],
       ['已领用待处理', '核对使用结果或归还', 'workspace/extractions', 'return', sections.inventory, sections.inventory?.data?.pending],
-      ['苹果待回款', '已登记，等待确认到账', 'accounts/apple-balances', 'card', sections.apple, sections.apple?.data]
+      ['苹果待回款', '已登记，等待确认到账', 'accounts/apple-balances', 'card', sections.apple, sections.apple?.data],
+      ...(showRechargeRequests ? [['充值码申请待处理', '待审核或待发码核对', rechargeRequestsRoute, 'key',
+        sections.rechargeRequests, sections.rechargeRequests?.data]] : []),
+      ['Claude 付租待发放', '待发放或发放失败', 'orders/claude/rentals', 'card', sections.commerce,
+        sections.commerce?.data?.pendingRentItems]
     ].filter(([, , route, , section, value]) =>
       allowed(route) && (value !== 0 || section?.phase !== 'ready'));
     const markup = rows.map(([title, note, route, icon, section, value, links]) => {
@@ -308,7 +322,7 @@
         : `<li><a class="overview-task" href="#/${route}">${content}${A.icon('chevron')}</a></li>`;
     }).join('');
     return `<section class="panel overview-section" aria-labelledby="overview-tasks"><div class="panel-body">
-      ${heading('tasks', '当前待处理', '数量取自当前业务状态。续费按提醒订单计数，客户区按客户去重。')}
+      ${heading('tasks', '当前待处理', '数量取自当前业务状态。续费按提醒订单计数，充值码按申请笔数计数，Claude 付租按待发放明细计数。')}
       ${markup ? `<ul class="overview-task-list">${markup}</ul>` : '<p class="overview-section-note">当前没有待处理事项</p>'}
       </div></section>`;
   }
@@ -339,29 +353,54 @@
     ['disabled', '邮箱停用', 'warning'], ['frozen', '冻结', 'warning'],
     ['restricted', '封控中', 'warning'], ['review', '资料待核对', 'warning']
   ];
-  function stockIssueDetail(issues) {
-    if (!issues) return '—';
-    const tags = stockIssueLabels.filter(([key]) => issues[key] > 0)
-      .map(([key, label, tone]) => A.tag(`${label} ${countText(issues[key])}`, tone)).join(' ');
-    return tags ? `<div class="overview-stock-issues">${tags}</div>` : '无';
+  function renderOrderProgress(activity, earnings, commerce, profit) {
+    const current = activity?.current, accounting = earnings?.current;
+    const groups = [
+      ['receipts', '实收确认', '已确认实收', '待确认实收', current?.receiptConfirmedOrders, current?.orders, commerce],
+      ['accounting', '利润核算', '已核算', '待核算', accounting?.accounted,
+        accounting ? accounting.accounted + accounting.pending : null, profit]
+    ];
+    return `<section class="panel overview-section" aria-labelledby="overview-order-progress"><div class="panel-body">
+      ${heading('order-progress', '收款与核算', '按本期创建的未撤单订单统计。实收确认率为已确认实收订单占比，待确认不代表尚未收到款项。核算率包含实账与参考核算，参考核算不是最终结算。两项分别使用各自最近成功的数据快照；空集不计算比例。')}
+      <div class="overview-progress-content">${groups.map(([id, title, doneLabel, pendingLabel, done, total, section]) => {
+        const known = Number.isSafeInteger(done) && Number.isSafeInteger(total);
+        const pending = known ? total - done : null;
+        return `<section class="overview-progress-group" data-overview-progress-group="${id}">
+          <div class="overview-progress-heading"><h3>${title}</h3><span>${known ? total ? ratio.format(done / total) : '暂无订单' : '—'}</span></div>
+          <dl class="overview-progress-counts"><div><dt>${doneLabel}</dt><dd data-progress-count="done">${countText(done)}<small>笔</small></dd></div>
+            <div><dt>${pendingLabel}</dt><dd data-progress-count="pending">${countText(pending)}<small>笔</small></dd></div></dl>
+          ${known && total ? `<progress value="${done}" max="${total}" aria-label="${title}进度"></progress>` : ''}
+          <p class="overview-section-note${section?.phase === 'error' ? ' overview-warning' : ''}">${E(sectionStatus(section))}</p>
+        </section>`;
+      }).join('')}</div>
+      <p class="overview-section-note">已撤单 ${countText(current?.cancelled)} 笔 · 已核算中含参考核算 ${countText(accounting?.reference)} 笔</p>
+    </div></section>`;
+  }
+  function stockCell(column, value, tone = '') {
+    const text = typeof value === 'string' ? E(value) : countText(value);
+    return `<td data-stock-column="${column}"${value === 0 || value == null ? ' class="overview-stock-muted"' : ''}>${
+      tone && value > 0 ? A.tag(text, tone) : text}</td>`;
   }
 
   function renderInventory(section) {
     const stock = section?.data?.stocks;
     const rows = inventories.filter(([, , route]) => allowed(route)).map(([key, name, route]) => {
       const row = stock?.[key];
-      const cells = key === 'microsoft'
-        ? `<td colspan="3">已登记 ${countText(row?.registered)} 条</td>`
-        : `<td>${key === 'relay' && row ? '提取时核验' : countText(row?.available)}</td>
-          <td>${countText(row?.claimed)}</td><td>${stockIssueDetail(row?.issues)}</td>`;
-      return `<tr><th scope="row">${link(name, route)}</th>${cells}</tr>`;
+      const cells = stockCell('registered', row?.registered) +
+        stockCell('available', key === 'relay' && row ? '提取时核验' : row?.available) +
+        stockCell('claimed', row?.claimed) + stockIssueLabels.map(([column, , tone]) =>
+          stockCell(column, column === 'disabled' && key !== 'relay' ? null : row?.issues?.[column], tone)).join('');
+      return `<tr data-stock-type="${key}"><th scope="row">${link(name, route)}</th>${cells}</tr>`;
     }).join('');
     if (!rows) return '';
-    return `<section class="panel overview-section" aria-labelledby="overview-inventory"><div class="panel-body">
-      ${heading('inventory', '库存现状', '可提取数量沿用各类库存的资格和占用规则。Claude 按养号要求计算，苹果隐藏邮箱在提取时远端核验。状态明细优先显示死号和解封中，每条资料只计一种主要状态。')}
-      <table class="overview-data-table overview-stock-table" aria-labelledby="overview-inventory"><thead><tr>
-        <th scope="col">类型</th><th scope="col">可提取</th><th scope="col">已领用</th><th scope="col">状态明细</th>
-      </tr></thead><tbody>${rows}</tbody></table>
+    return `<section class="panel overview-section overview-inventory-section" aria-labelledby="overview-inventory"><div class="panel-body">
+      ${heading('inventory', '库存现状', '已登记为当前保存的资料总数，包含已使用资料，排除已删除的隐藏邮箱。可提取沿用资格和占用规则，Claude 按养号要求计算，隐藏邮箱提取时远端核验；微软邮箱不统计可提取和已领用。异常状态从左到右优先归类，每条资料只计一种，与库存占用可能重叠，各列不可直接相加。0 表示已统计且没有，— 表示不适用或尚未取得数据。窄屏可横向滚动查看所有列。')}
+      <div class="table-viewport overview-stock-viewport" tabindex="0" role="region" aria-label="库存状态统计，可横向滚动查看所有列">
+        <table class="overview-data-table overview-stock-table" aria-labelledby="overview-inventory"><thead><tr>
+          <th scope="col">类型</th><th scope="col">已登记</th><th scope="col">可提取</th><th scope="col">已领用</th>
+          ${stockIssueLabels.map(([, label]) => `<th scope="col">${label}</th>`).join('')}
+        </tr></thead><tbody>${rows}</tbody></table>
+      </div>
       <p class="overview-section-note${section?.phase === 'error' ? ' overview-warning' : ''}">${E(sectionStatus(section))}</p>
       </div></section>`;
   }
@@ -373,15 +412,27 @@
       ['续费待跟进', data?.followUp, '续费管理', 'workspace/renewals'],
       ['已确认流失', data?.lost, '流失明细', 'workspace/customer-loss']
     ];
+    const details = [
+      ['renewals', '待处理续费单', data?.renewals, '笔', 'workspace/renewals'],
+      ['scheduled', '待生效客户', data?.scheduled, '位', 'workspace/customer-loss'],
+      ['recent', '近 7 天流失', data?.recentlyLost, '位', 'workspace/customer-loss'],
+      ['review', '待核对订单', data?.review, '笔', 'workspace/customer-loss']
+    ];
     return `<section class="panel overview-section overview-customer-section" aria-labelledby="overview-customers"><div class="panel-body">
-      ${heading('customers', '客户状态', '按客户编号去重。客户名下仍有有效服务时不计为流失。归属和服务周期存疑的订单另列。')}
-      <dl class="overview-customer-summary">${items.map(([title, value, action, route]) => `<div>
-        <dt>${title}</dt><dd><span class="overview-customer-count">${countText(value)}${value != null ? '<small>位</small>' : ''}</span>${link(action, route)}</dd>
-        </div>`).join('')}</dl>
-      <div class="overview-section-note overview-customer-meta">
-        <span>待核对订单 ${countText(data?.review)} 笔</span>
-        <span class="${section?.phase === 'error' ? 'overview-warning' : ''}">${E(sectionStatus(section))}</span>
+      ${heading('customers', '客户状态', '按客户编号去重。客户名下仍有有效服务时不计流失，续费待跟进可与有效服务重叠。待生效指曾开通过、当前无有效服务但已登记未来订阅的客户；近 7 天流失取已确认流失中停止服务不足 7 个北京时间自然日的客户。续费单和待核对订单按笔数列示，不能与客户数相加。所有数据取当前快照，不随顶部经营区间切换。')}
+      <div class="overview-customer-content">
+        <dl class="overview-customer-summary">${items.map(([title, value, action, route]) => `<div>
+          <dt>${title}</dt><dd><span class="overview-customer-count">${countText(value)}${value != null ? '<small>位</small>' : ''}</span>${link(action, route)}</dd>
+          </div>`).join('')}</dl>
+        <ul class="overview-customer-details" aria-label="客户跟进与数据核对">${details.map(([id, label, value, unit, route]) => {
+          const content = `<span>${label}</span><span class="overview-customer-detail-count"><strong>${countText(value)}</strong><small>${unit}</small></span>`;
+          const action = !allowed(route) ? `<div class="overview-customer-detail">${content}</div>`
+            : id === 'renewals' ? `<a class="overview-customer-detail" href="#/${route}">${content}${A.icon('chevron')}</a>`
+              : `<button class="overview-customer-detail" type="button" data-action="commerce-loss-open" data-view="${id}">${content}${A.icon('chevron')}</button>`;
+          return `<li data-customer-detail="${id}">${action}</li>`;
+        }).join('')}</ul>
       </div>
+      <p class="overview-section-note${section?.phase === 'error' ? ' overview-warning' : ''}">${E(sectionStatus(section))}</p>
       </div></section>`;
   }
 
@@ -396,18 +447,17 @@
     return A.header('网站总览', '查看经营指标、变化来源和当前需要处理的事项。') +
       `<div class="website-overview design-async-region"><div data-overview-progress role="status" hidden></div>
         <div class="overview-toolbar"><div class="overview-period">
-          <strong>${activity ? E(windowText(activity.current)) : key.finance ? '统计区间' : '库存快照'}</strong>
-          <span>北京时间${activity ? ` · 对比 ${E(windowText(activity.previous))}` : ''}</span>
-          <span class="overview-design-label" role="status">${E(sectionStatus(key.finance ? sections.commerce : sections.inventory))}</span>
-        </div><div class="toolbar-right">
+          <div class="overview-period-current"><strong>${activity ? E(windowText(activity.current)) : key.finance ? '统计区间' : '库存快照'}</strong><span class="overview-timezone">北京时间</span></div>
+          ${activity ? `<span>对比 ${E(windowText(activity.previous))}</span>` : ''}
+        </div><div class="overview-actions"><div class="toolbar-right">
           ${key.finance ? renderControls(ranges, range, 'range', '统计时间范围') : ''}
           ${business ? A.button('刷新数据', 'overview-refresh') : ''}
           ${A.button('指标口径', 'overview-methodology', '', 'info')}
-        </div></div>
+        </div><span class="overview-design-label" role="status">${E(sectionStatus(key.finance ? sections.commerce : sections.inventory))}</span></div></div>
         ${key.finance ? `${renderMetrics(activity, earnings, sections.commerce, profit)}
-          <div class="overview-columns">${renderTrend(activity, earnings, chart === 'profit' ? profit : sections.commerce, range, chart, detailsOpen)}${renderTasks(sections)}</div>
-          ${renderProducts(activity, earnings, profit)}
-          <div class="overview-columns">${inventory}${allowed('customers/list') ? renderCustomers(sections.customers) : ''}</div>` : inventory}
+          <div class="overview-columns">${renderTrend(activity, earnings, chart === 'profit' ? profit : sections.commerce, range, chart, detailsOpen)}${renderTasks(sections, key.rechargeRequests)}</div>
+          <div class="overview-business"><div class="overview-business-grid">${renderProducts(activity, earnings, profit)}${renderOrderProgress(activity, earnings, sections.commerce, profit)}</div></div>
+          <div class="overview-snapshots"><div class="overview-snapshot-grid">${inventory}${allowed('customers/list') ? renderCustomers(sections.customers) : ''}</div></div>` : inventory}
       </div>`;
   }
 

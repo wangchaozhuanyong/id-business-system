@@ -1,6 +1,7 @@
 import { currentV2BusinessDate, parseV2DateTimeInput } from '../modules/time/dateTime.ts';
 import { rechargePlanLabels } from './order-policy.mjs';
 import { rechargeCodeItemId } from './recharge-code-returns.mjs';
+import { numberedRechargeRequests, rechargeCodeItemNumber } from './recharge-code-numbers.mjs';
 
 export const employeeStatisticsRoute = '/api/local/employee-statistics';
 
@@ -163,10 +164,10 @@ export function buildEmployeeStatistics({ employees, commerce, inventory, reques
   }
 
   if (includes('code')) {
-    for (const request of uniqueRows(requests).values()) {
+    for (const request of numberedRechargeRequests([...uniqueRows(requests).values()])) {
       const who = person(request.applicantId, request.applicantName);
       if (['pending', 'issuing'].includes(request.status)) {
-        add('pendingCodeRequests', who, { id: request.id, kind: 'code', reference: request.id,
+        add('pendingCodeRequests', who, { id: request.id, kind: 'code', reference: request.batchNo,
           status: request.status === 'issuing' ? '发放待确认' : '待审核'
         }, instant(request.createdAt));
         continue;
@@ -181,7 +182,7 @@ export function buildEmployeeStatistics({ employees, commerce, inventory, reques
         const native = statusByCode.get(code);
         const order = ordersByTask.get(native?.session_job_key);
         const entry = {
-          id: itemId, kind: 'code', reference: itemId, batch: request.id,
+          id: itemId, kind: 'code', reference: rechargeCodeItemNumber(request, code), batch: request.batchNo,
           subject: /^KC-[A-F0-9]{28}$/i.test(code) ? '尾号 ' + code.slice(-4) : '',
           purpose: Object.hasOwn(rechargePlanLabels, request.plan) ? rechargePlanLabels[request.plan] : '',
           related: orderReference(order?.id), status: '已发放'

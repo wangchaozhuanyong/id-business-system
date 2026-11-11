@@ -562,10 +562,11 @@ function appleListRuntime() {
   // Use the real shared table and column picker: the new cells must survive
   // the same visibility contract as the original Apple ID columns.
   const shared = runInNewContext(
-    `${coreSource.slice(coreSource.indexOf('function table('), coreSource.indexOf('function pagination('))}
-${coreSource.slice(coreSource.indexOf('function showColumns('), coreSource.indexOf('function updateColumnCount('))}
+    `${coreSource.slice(coreSource.indexOf('function hiddenTableColumns('), coreSource.indexOf('function pagination('))}
+${coreSource.slice(coreSource.indexOf('function showColumns('), coreSource.indexOf('async function changeTableColumns('))}
 ({ table, showColumns })`,
     {
+      columnPreferencesMeta: null,
       columnDefinitions: {},
       tableRecords: new Map(),
       state: api.state,

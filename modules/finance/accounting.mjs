@@ -3,10 +3,15 @@ export const currencies = Object.freeze(['CNY', 'MYR', 'USD', 'PHP', 'CLP', 'IDR
 export const validCurrencyCode = code => typeof code === 'string' && /^[A-Z]{3}$/.test(code);
 export const snapshotAction = '登记订单汇率快照';
 export const automaticProvider = Object.freeze({
-  id: 'exchange-rate-api-open',
-  source: 'ExchangeRate-API',
-  attributionUrl: 'https://www.exchangerate-api.com'
+  id: 'currency-api',
+  source: 'Fawaz Currency API'
 });
+// Existing frozen quotes keep their original provider, source, dates and values.
+export const normalizeAutomaticProvider = provider =>
+  provider === 'exchange-rate-api-open' ? automaticProvider.id : provider;
+export const isAutomaticQuote = quote =>
+  (quote?.provider === automaticProvider.id && quote.source === automaticProvider.source) ||
+  (quote?.provider === 'exchange-rate-api-open' && quote.source === 'ExchangeRate-API');
 const targets = ['CNY', 'MYR'];
 const one = 10n ** 4n;
 const rateOne = 10n ** 8n;
@@ -92,7 +97,7 @@ export function createManualSnapshot(input, orderAt, clock = Date.now()) {
 }
 
 function normalizeAutomaticSnapshot(input, orderAt, clock) {
-  if (input.provider !== automaticProvider.id || input.source !== automaticProvider.source)
+  if (!isAutomaticQuote(input))
     throw new Error('订单自动汇率来源未经确认');
   const checked = normalizeSnapshot(input, orderAt, clock);
   const fetchedAt = instant(input.fetchedAt);

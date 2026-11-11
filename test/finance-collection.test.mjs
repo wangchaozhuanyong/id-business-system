@@ -11,9 +11,8 @@ import { automaticProvider, calculateOrder } from '../modules/finance/accounting
 const initial = Date.parse('2026-11-07T09:00:00Z');
 const actor = { id: 'fixture-admin', name: '合成管理员', role: 'admin' };
 function providerResponse(now, overrides = {}) {
-  return Response.json({ result: 'success', base_code: 'CNY', time_eol_unix: 0,
-    time_last_update_unix: (now - hour) / 1000, time_next_update_unix: (now + 23 * hour) / 1000,
-    rates: { CNY: 1, MYR: 0.625, USD: 0.125, PHP: 8, CLP: 125, IDR: 2500, EGP: 6.25 }, ...overrides });
+  return Response.json({ date: new Date(now).toISOString().slice(0, 10),
+    cny: { cny: 1, myr: 0.625, usd: 0.125, php: 8, clp: 125, idr: 2500, egp: 6.25 }, ...overrides });
 }
 const order = () => ({ id: 'fixture-order', start: '2026-11-07T16:30', product: 'GPT', payment: '银行卡',
   paidAmount: '1000', paidCurrency: 'PHP', saleAmount: '250', saleCurrency: 'CNY', refunds: [], bankReturns: [],
@@ -72,7 +71,7 @@ test('来源默认关闭，管理员配置后生效；暂停自动采集仍可�
   assert.equal(f.calls(), 1);
   assert.equal(f.collection.view().validCount, 6);
   assert.equal(f.collection.view({ currency: 'EGP' }).rows[0].rate, '0.16000000');
-  assert.equal(f.collection.view().nextExpiryAt, new Date(initial + 23 * hour).toISOString());
+  assert.equal(f.collection.view().nextExpiryAt, '2026-11-08T12:00:00.000Z');
 });
 
 test('精确报价、相同批次去重与采集任务留痕，普通重复点击不重复取价', async () => {
@@ -93,7 +92,7 @@ test('精确报价、相同批次去重与采集任务留痕，普通重复点�
 });
 
 test('只采集选中币种；无关币种缺失不阻止本单冻结，必要币种缺失明确待核算', async () => {
-  const f = fixture({ fetcher: now => providerResponse(now, { rates: { CNY: 1, MYR: 0.625, USD: 0.125, PHP: 8 } }) });
+  const f = fixture({ fetcher: now => providerResponse(now, { cny: { cny: 1, myr: 0.625, usd: 0.125, php: 8 } }) });
   f.collection.saveSettings(1, { ...input(defaults(automaticProvider.id)), currencies: ['USD', 'MYR', 'PHP'] }, actor);
   const snapshot = await f.collection.snapshotFor(order());
   assert(!('IDR' in snapshot.rates)); assert.equal(snapshot.rates.USD, '8.00000000');
@@ -109,7 +108,7 @@ test('失败保留原报价，错误脱敏，部分结果独立标记，不拼�
   let failure = false;
   const f = fixture({ fetcher: now => {
     if (failure) throw new Error('synthetic-secret-must-not-appear');
-    return providerResponse(now, { rates: { CNY: 1, MYR: 0.625, USD: 0.125 } });
+    return providerResponse(now, { cny: { cny: 1, myr: 0.625, usd: 0.125 } });
   } });
   await f.collection.collect();
   assert.equal(f.collection.read().data.runs[0].status, 'partial');
@@ -159,7 +158,7 @@ test('重启恢复计划与中断任务；配置更新不会触发毫秒级失�
   await f.collection.collect();
   const restarted = createFinanceCollection(f.options);
   restarted.start();
-  assert.equal(f.timers.at(-1).delay, 23 * hour);
+  assert.equal(f.timers.at(-1).delay, 15 * hour);
   restarted.saveSettings(1, { ...input(defaults(automaticProvider.id)), schedule: 'interval', intervalMinutes: 60 }, actor);
   assert.equal(f.timers.at(-1).delay, hour);
   const state = restarted.read().data;
@@ -268,7 +267,7 @@ test('后台定时器无需浏览器即可执行首轮采集，关闭后不再�
   assert.equal(f.calls(), 1);
   assert.equal(f.collection.read().data.runs[0].mode, 'automatic');
   assert.equal(f.collection.read().data.runs[0].status, 'updated');
-  assert.equal(f.timers.at(-1).delay, 23 * hour);
+  assert.equal(f.timers.at(-1).delay, 15 * hour);
   f.collection.close();
   const version = f.collection.read().version;
   first.fn(); await new Promise(resolve => setImmediate(resolve));
@@ -299,9 +298,32 @@ test('普通失败最多三次后台重试，耗尽后等待下一轮计划，�
     assert.equal(f.timers.at(-1).delay, delay);
     f.advance(delay); f.timers.at(-1).fn(); await new Promise(resolve => setImmediate(resolve));
   }
-  assert.equal(f.calls(), 4);
+  assert.equal(f.calls(), 8); // Four collection attempts, each checks two fixed endpoints.
   assert.equal(f.collection.read().data.state.failures, 4);
   assert.equal(f.collection.read().data.state.retryAt, null);
   assert.equal(f.timers.at(-1).delay, day);
   f.collection.close();
+});
+
+
+test('既有来源设置只兼容投影，保留暂停、历史来源与报价编号，普通读取不写库', async () => {
+  const f = fixture();
+  await f.collection.collect('manual', actor);
+  const legacy = f.collection.read().data;
+  legacy.settings.provider = 'exchange-rate-api-open';
+  legacy.settings.enabled = false;
+  legacy.quotes[0].provider = 'exchange-rate-api-open';
+  legacy.quotes[0].source = 'ExchangeRate-API';
+  legacy.quotes[0].id = quoteId(legacy.quotes[0]);
+  f.replace(legacy);
+  const audits = f.audits.length, version = f.collection.read().version;
+  assert.equal(f.collection.view().settings.provider, automaticProvider.id);
+  assert.equal(f.collection.view().settings.enabled, false);
+  const snapshot = await f.collection.snapshotFor(order());
+  assert.equal(snapshot.source, 'ExchangeRate-API');
+  assert.equal(snapshot.quoteId, legacy.quotes[0].id);
+  assert.equal(f.collection.verifySnapshot(snapshot, order()), true);
+  assert.equal(f.collection.read().version, version);
+  assert.equal(f.audits.length, audits);
+  assert.deepEqual(f.store.featureDocument(collectionDomain).data, legacy);
 });

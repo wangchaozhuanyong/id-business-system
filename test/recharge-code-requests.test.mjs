@@ -65,6 +65,59 @@ function setup(requests = []) {
 const application = { action: 'request', requestKey: 'application-1', plan: 'pro100', count: 2 };
 const shortCodes = ['A', 'B', 'C', 'D'].map(letter => 'KC-' + letter.repeat(15));
 
+test('short batch numbers stay stable across accounts, legacy reads, concurrent requests and restarts', async () => {
+  const legacy = [
+    { id: '22222222-2222-4222-8222-222222222222', applicantId: employee.id, status: 'pending', plan: 'pro100', count: 1, createdAt: '2026-11-08T00:00:00Z' },
+    { id: '11111111-1111-4111-8111-111111111111', applicantId: other.id, status: 'rejected', plan: 'pro100', count: 1, createdAt: '2026-11-07T00:00:00Z' }
+  ];
+  const f = setup(legacy);
+  f.addCodes(shortCodes, 'pro100');
+  const own = (await call(f.start(), employee)).requests;
+  assert.deepEqual(own.map(row => [row.id, row.batchNo]), [[legacy[0].id, 'PO000002']]);
+  assert.equal((await call(f.start(), other)).requests[0].batchNo, 'PO000001');
+  assert.deepEqual(f.store.load(), { version: 0, data: { requests: legacy } }, 'GET does not write or renumber stored history');
+  assert.deepEqual(f.audit, []);
+  const created = await Promise.all([0, 1, 2].map(n => call(f.start(), n === 1 ? other : employee,
+    { ...application, requestKey: `concurrent-${n}`, count: 1, batchNo: 'PO999999' })));
+  assert(created.every(result => result.status === 201));
+  assert.deepEqual(created.map(result => result.request.batchNo).sort(), ['PO000003', 'PO000004', 'PO000005']);
+  const persisted = f.store.load();
+  assert.equal(new Set(persisted.data.requests.map(row => row.batchNo)).size, 5);
+  assert.equal(persisted.data.requests.find(row => row.id === legacy[0].id).batchNo, 'PO000002');
+  const replay = await call(f.start(), employee, { ...application, requestKey: 'concurrent-0', count: 1 });
+  assert.equal(replay.status, 200);
+  assert.equal(replay.request.batchNo, created[0].request.batchNo);
+  assert.equal(replay.request.id, created[0].request.id);
+  f.store.save(persisted.version, { requests: [...persisted.data.requests].reverse() }, { action: 'fixture_reorder' });
+  const reloaded = (await call(f.start(), admin)).requests;
+  for (const row of persisted.data.requests) assert.equal(reloaded.find(item => item.id === row.id).batchNo, row.batchNo);
+  const next = await call(f.start(), employee, { ...application, requestKey: 'after-restart', count: 1 });
+  assert.equal(next.request.batchNo, 'PO000006');
+});
+
+test('overview counts open applications for approvers without reading upstream or exposing codes', async () => {
+  const { start, transport, audit } = setup([
+    { status: 'pending', applicantId: employee.id, count: 40 },
+    { status: 'issuing', applicantId: other.id, count: 2, codes: shortCodes.slice(0, 2) },
+    { status: 'issued', applicantId: employee.id, codes: shortCodes.slice(2) },
+    { status: 'rejected', applicantId: other.id }
+  ]);
+  const upstreamReads = [];
+  for (const name of Object.keys(transport)) transport[name] = () => {
+    upstreamReads.push(name);
+    throw new Error('总览不应读取上游');
+  };
+  const summary = (handler, actor) => call(handler, actor, undefined, origin, '?view=pending-summary');
+  const handle = start();
+  assert.deepEqual(await summary(handle, admin), { status: 200, version: 0, pending: 2 });
+  assert.deepEqual(await summary(handle, { ...admin, role: 'super' }), { status: 200, version: 0, pending: 2 });
+  assert.equal((await summary(handle, employee)).status, 403);
+  assert.equal((await summary(handle, null)).status, 401);
+  assert.deepEqual(await summary(setup().start(), admin), { status: 200, version: 0, pending: 0 });
+  assert.deepEqual(upstreamReads, []);
+  assert.deepEqual(audit, []);
+});
+
 test('approval assigns existing codes and only the applicant can read them', async () => {
   const { audit, store, addCodes, start } = setup();
   addCodes(shortCodes.slice(0, 2), 'pro100');
@@ -83,6 +136,8 @@ test('approval assigns existing codes and only the applicant can read them', asy
   assert.equal(replay.request.id, id);
   assert.equal((await call(handle, employee, { ...application, count: 1 })).status, 409);
   assert.equal((await call(handle, employee, { action: 'approve', id })).status, 403);
+  assert.equal((await call(handle, employee, { action: 'reject', id })).status, 403);
+  assert.equal((await call(handle, employee, { action: 'reconcile', id })).status, 403);
   const otherBefore = await call(handle, other);
   assert.deepEqual(otherBefore.requests, []);
   assert.deepEqual(otherBefore.stock, { plus: 1, pro100: 2, pro200: 0, pro500: 0 });

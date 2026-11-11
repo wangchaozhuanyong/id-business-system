@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   deleteUsedBitBrowserAddresses,
+  generateBitBrowserAddresses,
   listBitBrowserAddresses,
   updateBitBrowserAddress
 } from '../server/bitbrowser-addresses.mjs';
@@ -18,6 +19,22 @@ function address(number, status) {
     createdAt
   });
 }
+
+test('generation preserves historical imported addresses and their location metadata', () => {
+  const historical = Object.freeze({
+    ...address(1, 'unused'),
+    city: 'Portland', state: 'OR', postalCode: '97204', country: 'US'
+  });
+  const rows = Object.freeze([historical]);
+  const generated = generateBitBrowserAddresses(rows, 10, '2026-11-11T00:00:00.000Z');
+  assert.equal(generated.rows.length, 11);
+  assert.equal(generated.rows[0], historical);
+  assert.deepEqual(listBitBrowserAddresses(generated.rows, new URLSearchParams('keyword=Fixture')).items, [historical]);
+  const updated = updateBitBrowserAddress(generated.rows, {
+    id: historical.id, status: 'used', expectedStatus: 'unused'
+  }, usedAt);
+  assert.deepEqual(updated.result, { ...historical, status: 'used', usedAt });
+});
 
 test('historical disabled addresses are listed and counted as unused without rewriting the source', () => {
   const legacy = address(1, 'disabled');

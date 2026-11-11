@@ -1,12 +1,12 @@
 import { createHash } from 'node:crypto';
-import { automaticProvider, currencies } from '../../modules/finance/accounting.mjs';
+import { automaticProvider, currencies, normalizeAutomaticProvider } from '../../modules/finance/accounting.mjs';
 
 export const collectionDomain = 'finance-rates';
 export const hour = 3_600_000;
 export const day = 24 * hour;
 export const collectionError = (status, message) => Object.assign(new Error(message), { status });
 export const defaults = (provider = 'disabled') => ({
-  version: 1, provider, enabled: true, schedule: 'source', intervalMinutes: 1440,
+  version: 1, provider: normalizeAutomaticProvider(provider), enabled: true, schedule: 'source', intervalMinutes: 1440,
   currencies: currencies.filter(code => code !== 'CNY'), quoteRetentionDays: 365,
   runRetentionDays: 90, retryAttempts: 3
 });
@@ -15,6 +15,7 @@ export function validateSettings(input) {
   const allowed = Object.keys(defaults()).filter(key => key !== 'version');
   if (!input || typeof input !== 'object' || Array.isArray(input) ||
       Object.keys(input).some(key => !allowed.includes(key))) throw collectionError(400, '采集设置格式无效');
+  input = { ...input, provider: normalizeAutomaticProvider(input.provider) };
   if (![automaticProvider.id, 'disabled'].includes(input.provider) || typeof input.enabled !== 'boolean' ||
       !['source', 'interval'].includes(input.schedule)) throw collectionError(400, '请选择有效的来源和采集方式');
   for (const [key, min, max, label] of [

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { numberedRechargeRequests, rechargeCodeItemNumber } from './recharge-code-numbers.mjs';
 export const rechargeCodeItemId = (requestId, code) => 'code-' + createHash('sha256').update(requestId + ':' + code).digest('hex').slice(0, 32);
 export const codeReturnEntry = (row, code) => row.returns?.find(entry => entry.itemId === rechargeCodeItemId(row.id, code));
 export const publicReturnRecord = entry => {
@@ -7,7 +8,8 @@ export const publicReturnRecord = entry => {
 };
 const states = new Set(['unused', 'used', 'processing']);
 const pending = entry => entry?.state === 'pending';
-const metadata = (row, code) => ({ id: rechargeCodeItemId(row.id, code), requestId: row.id, plan: row.plan,
+const metadata = (row, code) => ({ id: rechargeCodeItemId(row.id, code), requestId: row.id,
+  batchNo: row.batchNo, itemNo: rechargeCodeItemNumber(row, code), plan: row.plan,
   applicantId: row.applicantId, applicantName: row.applicantName, issuedAt: row.issuedAt, last4: code.slice(-4) });
 class ReturnError extends Error { constructor(status, message, items) { super(message); this.status = status; this.items = items; } }
 
@@ -69,7 +71,7 @@ export function createCodeReturnManager({ store, transport, change, time }) {
     });
   }
   async function preview(ids, actor) {
-    const { data } = await store.load(), rows = data?.requests || [];
+    const { data } = await store.load(), rows = numberedRechargeRequests(data?.requests || []);
     const targets = selected(rows, ids, actor), checks = await upstreamChecks(targets.filter(row => !row.missing));
     return targets.map(item => {
       if (item.missing) return { id: item.id, eligible: false, reason: '领码记录不存在或不属于当前账号' };
@@ -96,7 +98,7 @@ export function createCodeReturnManager({ store, transport, change, time }) {
       throw new ReturnError(400, '归还备注最多 200 字');
     if (!transport?.commitReturn || !transport?.returnReceipt || !transport?.checkReturns)
       throw new ReturnError(503, '归还服务尚未就绪');
-    const { data } = await store.load(), targets = selected(data?.requests || [], ids, actor);
+    const { data } = await store.load(), targets = selected(numberedRechargeRequests(data?.requests || []), ids, actor);
     if (targets.some(item => item.missing)) throw new ReturnError(403, '只能归还本账号可追溯的领码记录');
     const review = await preview(ids, actor);
     const valid = review.every((row, i) => row.eligible || row.state === 'returned' ||
@@ -115,7 +117,7 @@ export function createCodeReturnManager({ store, transport, change, time }) {
           action: 'recharge_code_return_started' };
       });
       const record = codeReturnEntry(row, item.code);
-      if (record.state === 'returned') { results.push({ ...publicReturnRecord(record), id: item.id, returnId: record.id }); continue; }
+      if (record.state === 'returned') { results.push({ ...metadata(row, item.code), ...publicReturnRecord(record), id: item.id, returnId: record.id }); continue; }
       const command = { code: item.code, plan: item.row.plan, operationId: record.id };
       let receipt;
       try {

@@ -235,12 +235,8 @@ test('configured local mode gates business routes and saves the actual session a
       financeFetch: async () => {
         financeRequests++;
         return Response.json({
-          result: 'success',
-          base_code: 'CNY',
-          time_eol_unix: 0,
-          time_last_update_unix: seconds - 3600,
-          time_next_update_unix: seconds + 3600,
-          rates: { CNY: 1, MYR: 0.625, USD: 0.125, PHP: 8, CLP: 125, IDR: 2500 }
+          date: new Date(seconds * 1000).toISOString().slice(0, 10),
+          cny: { cny: 1, myr: 0.625, usd: 0.125, php: 8, clp: 125, idr: 2500 }
         });
       }
     });

@@ -222,7 +222,7 @@ test('shared layouts preserve alignment, readable controls and stable navigation
     await table.getByRole('heading', { name: '请先添加 Apple 主邮箱' }).waitFor();
     assert.equal(await toolbar.evaluate(node => node.parentElement.querySelectorAll(':scope > .toolbar').length), 1);
     assert.equal(await table.getByText('可调整搜索或筛选条件。', { exact: true }).count(), 0);
-    for (const width of [1591, 1440, 390, 320]) {
+    for (const width of [2048, 1591, 1440, 390, 320]) {
       await page.setViewportSize({ width, height: 900 });
       for (const dark of [false, true]) {
         await theme(dark);
@@ -239,12 +239,14 @@ test('shared layouts preserve alignment, readable controls and stable navigation
             };
           });
         });
-        if (width === 1591)
+        if (width === 2048)
           assert(Math.max(...controls.map(c => c.y)) - Math.min(...controls.map(c => c.y)) <= 1, '宽屏按钮和状态文字未同排对齐');
-        if (width === 1440) {
+        if ([1591, 1440].includes(width)) {
           const search = await box('#relay-search');
           const action = await box('[data-action="relay-parent-add"]');
           aligned(search, action, '空间不足时搜索和操作应整组换行');
+          const filters = await box('.relay-alias-filters');
+          assert(filters.y + filters.height <= search.y - 8, '完整状态筛选与搜索操作分行时保持间距');
         }
         assert(controls.every(c => c.left >= 0 && c.right <= width), '工具栏控件越过视口');
         if (width <= 390)

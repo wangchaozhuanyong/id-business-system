@@ -145,15 +145,17 @@
       button('列设置', 'column-settings', '', 'columns', `data-table-id="${tableId}"`);
     return A.header(name + ' 订阅管理', '按账号查看已确认的订阅与待核对记录；同一账号的不同系列可能计入多个状态。', actions) +
       `<div id="subscription-overview">${overviewMarkup()}</div><section class="panel" id="subscriptions-panel">
-        <div class="tabs" role="tablist" aria-label="订阅来源">${tabs}</div>
-        <form class="toolbar" id="subscription-filter" aria-label="筛选订阅" novalidate>
-          <div class="toolbar-left"><div class="search-field">${A.icon('search')}${A.input('subscription-query', f.input,
-            'maxlength="254" aria-label="搜索订单、邮箱账号或人员" placeholder="搜索订单、邮箱账号或人员"')}</div>
-            <select id="subscription-status" aria-label="订阅状态">${A.options([['', '全部状态'], ...Object.entries(states)], f.status)}</select>
-            <select id="subscription-sort" aria-label="排序">${A.options([['expiry_asc', '到期由近到远'], ['expiry_desc', '到期由远到近'], ['account_asc', '账号排序']], f.sort || 'expiry_asc')}</select>
-            <button class="button" type="submit">搜索</button></div>
-          <div class="toolbar-right">${button('刷新', 'subscriptions-refresh')}</div>
-        </form><div class="design-async-region"><div id="subscription-read-status" role="status" hidden></div>
+        <div class="list-controls subscription-controls">
+          <div class="tabs" role="tablist" aria-label="订阅来源">${tabs}</div>
+          <form class="toolbar" id="subscription-filter" aria-label="筛选订阅" novalidate>
+            <div class="toolbar-left"><div class="search-field">${A.icon('search')}${A.input('subscription-query', f.input,
+              'maxlength="254" aria-label="搜索订单、邮箱账号或人员" placeholder="搜索订单、邮箱账号或人员"')}</div>
+              <select id="subscription-status" aria-label="订阅状态">${A.options([['', '全部状态'], ...Object.entries(states)], f.status)}</select>
+              <select id="subscription-sort" aria-label="排序">${A.options([['expiry_asc', '到期由近到远'], ['expiry_desc', '到期由远到近'], ['account_asc', '账号排序']], f.sort || 'expiry_asc')}</select>
+              <button class="button" type="submit">搜索</button></div>
+            <div class="toolbar-right" data-page-actions>${button('刷新', 'subscriptions-refresh')}</div>
+          </form>
+        </div><div class="design-async-region"><div id="subscription-read-status" role="status" hidden></div>
           <div id="subscription-read-error" role="status" hidden></div><div id="subscription-list" data-pagination-table>${listMarkup()}</div>
         </div></section>`;
   }

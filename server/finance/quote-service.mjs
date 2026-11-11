@@ -1,10 +1,13 @@
 import { isDeepStrictEqual } from 'node:util';
 
 import {
-  automaticProvider, createAutomaticOrderSnapshot, currencies
+  automaticProvider, createAutomaticOrderSnapshot, currencies, normalizeAutomaticProvider
 } from '../../modules/finance/accounting.mjs';
 
-const endpoint = 'https://open.er-api.com/v6/latest/CNY';
+const endpoints = [
+  'https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/cny.min.json',
+  'https://latest.currency-api.pages.dev/v1/currencies/cny.min.json'
+];
 const maximumAge = 36 * 60 * 60 * 1000;
 const scale = 100_000_000n;
 
@@ -26,22 +29,18 @@ export async function readFinanceQuote(response, clock, codes = currencies, part
   const data = JSON.parse(text, (_key, value, context) =>
     typeof value === 'number' ? context.source : value
   );
-  if (data?.result !== 'success' || data.base_code !== 'CNY' ||
-      typeof data.rates !== 'object' || !data.rates ||
-      !/^\d{10}$/.test(data.time_last_update_unix) || !/^\d{10}$/.test(data.time_next_update_unix))
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(data?.date) ||
+      !data.cny || typeof data.cny !== 'object' || Array.isArray(data.cny))
     throw new Error('供应商报价格式无效');
-  const at = Number(data.time_last_update_unix) * 1000;
-  const next = Number(data.time_next_update_unix) * 1000;
-  const eol = Number(data.time_eol_unix);
-  if (!Number.isSafeInteger(eol) || eol < 0) throw new Error('供应商有效期格式无效');
-  const fetchedAt = clock();
-  const expiresAt = Math.min(next, at + maximumAge, eol ? eol * 1000 : Infinity);
+  const at = Date.parse(data.date + 'T00:00:00.000Z');
+  if (!Number.isFinite(at) || new Date(at).toISOString().slice(0, 10) !== data.date)
+    throw new Error('供应商报价日期无效');
+  const fetchedAt = clock(), expiresAt = at + maximumAge;
   if (!(at <= fetchedAt && fetchedAt < expiresAt)) throw new Error('供应商报价尚未生效或已过期');
-  if (!/^1(?:\.0+)?$/.test(data.rates.CNY))
-    throw new Error('供应商报价基准无效');
+  if (!/^1(?:\.0+)?$/.test(data.cny.cny)) throw new Error('供应商报价基准无效');
   const rates = { CNY: '1' }, errors = {};
   for (const code of codes.filter(code => code !== 'CNY')) {
-    try { rates[code] = toCny(data.rates[code]); }
+    try { rates[code] = toCny(data.cny[code.toLowerCase()]); }
     catch (error) { if (!partial) throw error; errors[code] = '报价缺失或格式无效'; }
   }
   return {
@@ -54,20 +53,33 @@ export async function readFinanceQuote(response, clock, codes = currencies, part
 
 export async function fetchFinanceQuote({ fetchQuote = globalThis.fetch, clock = Date.now,
   codes = currencies, partial = false, signal } = {}) {
-  const response = await fetchQuote(endpoint, {
-    redirect: 'error', headers: { Accept: 'application/json' },
-    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(4000)]) : AbortSignal.timeout(4000)
-  });
-  if (!response.ok) {
-    await response.body?.cancel();
-    throw Object.assign(new Error(response.status === 429 ? '来源请求受限，等待冷却后重试' : '汇率来源暂时不可用'), { status: response.status });
+  const requestSignal = signal ? AbortSignal.any([signal, AbortSignal.timeout(4000)]) : AbortSignal.timeout(4000);
+  for (let index = 0; index < endpoints.length; index++) {
+    let response;
+    try {
+      response = await fetchQuote(endpoints[index], {
+        redirect: 'error', headers: { Accept: 'application/json' }, signal: requestSignal
+      });
+      if (!response.ok) {
+        await response.body?.cancel();
+        throw Object.assign(new Error(response.status === 429 ? '来源请求受限，等待冷却后重试' : '汇率来源暂时不可用'), { status: response.status });
+      }
+    } catch (error) {
+      // Both official endpoints share one timeout budget. Rate limits and aborts never trigger retries.
+      if (index === endpoints.length - 1 || requestSignal.aborted || error.status === 429 ||
+          ['AbortError', 'TimeoutError'].includes(error.name)) throw error;
+      continue;
+    }
+    // Invalid data fails closed; never combine rates from separate responses.
+    return readFinanceQuote(response, clock, codes, partial);
   }
-  return readFinanceQuote(response, clock, codes, partial);
+
 }
 
 export function createFinanceQuoteService({
   provider = 'disabled', fetchQuote = globalThis.fetch, clock = Date.now, collection
 } = {}) {
+  provider = normalizeAutomaticProvider(provider);
   if (provider !== 'disabled' && provider !== automaticProvider.id)
     throw new Error('未识别的自动汇率来源');
   if (collection) return {
