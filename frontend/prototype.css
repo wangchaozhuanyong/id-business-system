@@ -765,7 +765,6 @@ h1 {
 }
 .relay-alias-toolbar {
   gap: 10px 14px;
-  padding-block: 12px;
 }
 .relay-alias-filters,
 .relay-alias-controls {
@@ -4215,10 +4214,15 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
 .recharge-workspace .recharge-request-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .recharge-workspace .recharge-request-fields > .field { grid-template-columns: 44px minmax(0, 1fr); gap: 8px; margin-bottom: 0; }
 .recharge-request-form { padding-block: 16px; }
-.recharge-request-submit { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 16px; }
-.recharge-stock-notice { flex: 1 1 200px; margin: 0; color: var(--secondary); font-size: 12px; line-height: 1.7; }
+.recharge-request-submit {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+}
+.recharge-stock-notice { margin: 0; overflow-wrap: anywhere; color: var(--secondary); font-size: 12px; line-height: 1.7; }
 .recharge-stock-notice[data-blocked='true'] { color: var(--warning); }
-.recharge-request-submit > .button { flex: 0 0 auto; margin-left: auto; }
 .recharge-request-review { min-width: 0; border-top: 1px solid var(--line); background: var(--surface-soft); }
 .recharge-review-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 16px var(--panel-padding-inline) 0; }
 .recharge-review-heading h3 { margin: 0; font-size: 14px; line-height: 24px; }

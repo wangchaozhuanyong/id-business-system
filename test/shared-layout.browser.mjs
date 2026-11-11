@@ -67,10 +67,11 @@ test('shared layouts preserve alignment, readable controls and stable navigation
           });
           if (width >= 1440) assert(formWidth >= 640, '宽屏录单为双列表单保留足够正文宽度');
           if (formWidth >= 640) {
-            aligned(await box('#commerce-payment'), await box('#commerce-cardTypeId'), '支付方式与银行卡类型应同排');
+            aligned(await box('#commerce-payment'), await box('#commerce-proMaterialMode'), '支付方式与填写方式应同排');
+            aligned(await box('label[for="commerce-payment"]'), await box('label[for="commerce-proMaterialMode"]'), '第一行标签不齐');
             const next = product === 'claude' ? 'tenantId' : 'cardId';
-            aligned(await box('#commerce-proMaterialMode'), await box(`#commerce-${next}-picker`), '填写方式与下一步控件应同排');
-            aligned(await box('label[for="commerce-proMaterialMode"]'), await box(`label[for="commerce-${next}-picker"]`), '填写方式与下一步标签不齐');
+            aligned(await box('#commerce-cardTypeId'), await box(`#commerce-${next}-picker`), '银行卡类型与下一步控件应同排');
+            aligned(await box('label[for="commerce-cardTypeId"]'), await box(`label[for="commerce-${next}-picker"]`), '第二行标签不齐');
             if (product === 'claude')
               aligned(await box('#commerce-cardId-picker'), await box('#commerce-paymentId'), '用卡人的银行卡与尾号应同排');
             else aligned(await box('#commerce-paymentId'), await box('#commerce-proCardSerial'), '卡尾号与序列号应同排');
@@ -226,6 +227,10 @@ test('shared layouts preserve alignment, readable controls and stable navigation
       await page.setViewportSize({ width, height: 900 });
       for (const dark of [false, true]) {
         await theme(dark);
+        assert.deepEqual(await toolbar.evaluate(node => {
+          const style = getComputedStyle(node);
+          return [style.paddingBlockStart, style.paddingBlockEnd];
+        }), ['12px', '12px'], '隐藏邮箱工具栏应采用共用内距');
         const controls = await toolbar.evaluate(node => {
           const middle = element => element.top + element.height / 2;
           return [...node.querySelectorAll('button, input, select, .relay-status-group > span')].filter(control => control.checkVisibility()).map(control => {

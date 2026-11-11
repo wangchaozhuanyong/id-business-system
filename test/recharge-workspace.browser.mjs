@@ -64,12 +64,15 @@ test('充值码合并工作台独立刷新分页、保留草稿、审批后定�
       const rect = node => node.getBoundingClientRect().toJSON();
       const text = node => { const r = document.createRange(); r.selectNodeContents(node); return r.getBoundingClientRect().toJSON(); };
       const [left, right] = container.children;
+      const submitRow = left.querySelector('.recharge-request-submit');
       const toolbar = right.querySelector('.recharge-code-toolbar');
       const tabs = toolbar.querySelector('.recharge-code-tabs');
       const controls = ['#code-list-query', '#code-list-plan', '[data-action="order-code-return-selected"]']
         .map(selector => rect(toolbar.querySelector(selector)));
       return { container: rect(container), left: rect(left), right: rect(right), lt: text(left.querySelector('h2')), rt: text(right.querySelector('h2')),
         fields: [...left.querySelectorAll('.field')].map(field => ({ label: rect(field.querySelector('label')), control: rect(field.querySelector('input,select')) })),
+        submission: { row: rect(submitRow), notice: rect(submitRow.querySelector('#recharge-request-stock')),
+          button: rect(submitRow.querySelector('button[type="submit"]')) },
         toolbar: { bounds: rect(toolbar), tabs: rect(tabs), tabText: text(tabs.querySelector('.active')), controls,
           scrolling: tabs.scrollWidth > tabs.clientWidth + 1, border: getComputedStyle(toolbar).borderBottomWidth,
           tabBorder: getComputedStyle(tabs).borderBottomWidth },
@@ -82,12 +85,15 @@ test('充值码合并工作台独立刷新分页、保留草稿、审批后定�
       assert(Math.abs(geometry.fields[0].control.top - geometry.fields[1].control.top) < 1, '套餐与数量同排');
     } else assert(geometry.right.top >= geometry.left.bottom + 19);
     for (const field of geometry.fields) assert(field.label.right <= field.control.left + 1);
+    const { row, notice, button } = geometry.submission;
+    const centerY = bounds => (bounds.top + bounds.bottom) / 2;
+    assert(button.left - notice.right >= 11 && Math.abs(centerY(button) - centerY(notice)) <= 1 &&
+      Math.abs(button.right - row.right) <= 1, `${width}/${theme}/${state} 提交申请与余量提示同排，按钮靠右`);
     const { bounds, tabs, tabText, controls, scrolling, border, tabBorder } = geometry.toolbar;
     assert.equal(border, '1px');
     assert.equal(tabBorder, '0px');
     assert(controls.every(control => control.left >= bounds.left && control.right <= bounds.right + 1), '筛选与归还按钮完整可见');
     if (geometry.right.width >= 900) {
-      const centerY = rect => (rect.top + rect.bottom) / 2;
       assert(!scrolling && tabs.right <= controls[0].left, '宽面板完整显示五个页签，右侧同排');
       assert(controls.every(control => Math.abs(centerY(tabs) - centerY(control)) <= 1), '页签与筛选控件同排居中');
       assert(Math.abs(centerY(tabs) - centerY(tabText)) <= 2, '页签文字垂直居中');
@@ -168,6 +174,9 @@ test('充值码合并工作台独立刷新分页、保留草稿、审批后定�
   await left.getByRole('button', { name: '刷新提取申请', exact: true }).click();
   await left.locator('[data-code-error]:not([hidden])').waitFor();
   assert(await left.getByRole('button', { name: '提交申请', exact: true }).isDisabled());
+  await page.setViewportSize({ width: 320, height: 1050 });
+  await measure(320, 'dark', 'unavailable');
+  await page.setViewportSize({ width: 1680, height: 1050 });
   assert.equal(await right.locator('tbody').innerText(), original);
   await left.getByRole('button', { name: '刷新提取申请', exact: true }).click();
   await left.locator('[data-code-error][hidden]').waitFor({ state: 'attached' });
