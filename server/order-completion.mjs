@@ -99,6 +99,7 @@ function manualOrderView(order, customer, names) {
     details.customer && (order.customerId ? '客户关联待核对' : '客户'),
     details.account && '邮箱账号',
     details.period && '订阅周期',
+    details.cost && '实际总成本',
     (!order.paidConfirmed || !(moneyUnits(order.paidAmount) > 0n) || !validCurrencyCode(order.paidCurrency)) && '实际代付',
     (!order.receiptConfirmed || !validMoney(order.saleAmount) || !validCurrencyCode(order.saleCurrency)) && '客户实收',
     details.end && '实际终止时间',
@@ -198,7 +199,7 @@ export function fillManualOrderDetails(data, inventory, actor, command, at, lega
   if (!manager(actor)) throw new OrderCompletionError(403, '只有管理员可以补齐手工订单资料');
   exactKeys(command, ['action', 'orderId', 'version', 'details']);
   const fields = ['customerId', 'email', 'xHandle', 'start', 'expiry', 'subscriptionEndedAt'];
-  exactKeys(command.details, fields);
+  exactKeys(command.details, [...fields, 'actualCost']);
   const now = Date.parse(at);
   const prior = data?.orders?.find(row => row.id === command.orderId);
   const missing = manualOrderDetailsMissing(prior, data?.customers || [], now);
@@ -206,10 +207,24 @@ export function fillManualOrderDetails(data, inventory, actor, command, at, lega
   const invalid = message => { throw new OrderCompletionError(409, message); };
   if (command.action !== 'fill-manual-details') throw new OrderCompletionError(400, '订单补全操作无效');
   if (command.version !== (prior.version ?? 0)) invalid('订单已变化，请刷新后补齐资料');
-  const details = Object.fromEntries(Object.entries(command.details).map(([key, value]) => [key, text(value, 254)]));
+  const { actualCost, ...rawDetails } = command.details;
+  const details = Object.fromEntries(Object.entries(rawDetails).map(([key, value]) => [key, text(value, 254)]));
   const order = { ...prior, ...details };
   const edits = fields.filter(key => order[key] !== prior[key]);
-  if (!edits.length || Object.values(details).some(value => !value)) invalid('请填写可核实的原订单资料');
+  if ((!edits.length && actualCost === undefined) || Object.values(details).some(value => !value))
+    invalid('请填写可核实的原订单资料');
+  let costReason;
+  if (actualCost !== undefined) {
+    exactKeys(actualCost, ['amount', 'currency', 'reason']);
+    const accounts = (inventory?.accounts || []).filter(row => row.id === prior.accountId);
+    if (!missing.cost || accounts.length !== 1 || !isClaudeHistoricalSale(prior, accounts[0]))
+      invalid('请核对原历史销售订单的成本资料');
+    const amount = text(actualCost.amount, 21), currency = text(actualCost.currency, 3);
+    costReason = text(actualCost.reason, 150);
+    if (!validMoney(amount) || !validCurrencyCode(currency) || !costReason || /[\p{Cc}\p{Cf}]/u.test(costReason))
+      invalid('请填写有效的实际总成本、币种和核对依据');
+    Object.assign(order, { costBasis: 'actual', actualCostAmount: amount, actualCostCurrency: currency });
+  }
   if (edits.includes('customerId') && (!missing.customer ||
       !data.customers.some(row => row.id === order.customerId && row.active !== false)))
     invalid('请选择在用的客户并保留原有客户关联');
@@ -257,7 +272,7 @@ export function fillManualOrderDetails(data, inventory, actor, command, at, lega
   const terminationError = checkSubscriptionTermination(order, prior, manualOrderDetailsAction, now);
   if (terminationError) invalid(terminationError);
   if (legacyConfirmed && orderOpeningConfirmed(prior, now, true)) order.entitlementStatus = 'active';
-  return { order: { ...order, ...editMetadata(actor, at), version: command.version + 1 } };
+  return { order: { ...order, ...editMetadata(actor, at), version: command.version + 1 }, ...(costReason && { costReason }) };
 }
 
 export function applyOrderCompletion(data, settings, actor, command, readOwners, at) {

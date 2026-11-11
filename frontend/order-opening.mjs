@@ -36,11 +36,14 @@ export function manualBusinessOrder(order) {
 
 export function manualOrderDetailsMissing(order, customers, now = Date.now()) {
   if (!manualBusinessOrder(order)) return null;
+  const historicalSale = ['Claude Pro', 'Claude Max'].includes(order.product) &&
+    order.source === '历史入库' && order.businessType === '成品交付' && order.accountId;
   return {
     customer: !customers.some(row => row.id === order.customerId),
     account: orderNeedsAccount(order),
     period: !(subscriptionTime(order.expiry) > subscriptionTime(order.start)),
-    end: order.subscriptionEnded === true && !Number.isFinite(orderTerminationTime(order, now))
+    end: order.subscriptionEnded === true && !Number.isFinite(orderTerminationTime(order, now)),
+    ...(historicalSale && !order.actualCostAmount && { cost: true })
   };
 }
 

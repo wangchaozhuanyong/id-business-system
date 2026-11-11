@@ -1182,6 +1182,7 @@
     if (!amountValid(order.paidAmount || '') || !order.paidCurrency) reasons.push('代付金额或币种待核对');
     if (!order.start || !order.expiry || missing?.period) reasons.push('订阅周期待补充');
     if (missing?.end) reasons.push('实际终止时间待补充');
+    if (missing?.cost) reasons.push('实际总成本待补充');
     if (!proMaterialMode(order) && !order.paymentId && !(order.product === 'GPT' && order.payment === '银行卡' && !order.cardId))
       reasons.push('支付资料待补充');
     if (proMaterialMode(order) === 'manual_card' &&
@@ -5614,11 +5615,19 @@
       : '';
     const endField = missing.end ? field('实际终止时间', 'endAt',
       input('endAt', saved('endAt'), 'type="datetime-local"')) : '';
+    const costFields = missing.cost
+      ? field('实际总成本（退回前）', 'completionCostAmount',
+          input('completionCostAmount', saved('completionCostAmount'), 'inputmode="decimal" maxlength="21"')) +
+        field('成本币种', 'completionCostCurrency',
+          select('completionCostCurrency', currencyChoices(), saved('completionCostCurrency', order.saleCurrency || 'CNY'))) +
+        field('成本核对依据', 'completionCostReason',
+          input('completionCostReason', saved('completionCostReason'), 'maxlength="150"'), false, '', 'commerce-span-all')
+      : '';
     A.openDrawer('补齐原单资料', '填写已有依据的资料，可分次保存。',
       `<form id="commerce-order-completion-form" data-commerce-draft="${E(key)}" novalidate>
         <input type="hidden" name="commerce-id" value="${E(id)}" />
         <input type="hidden" name="commerce-version" value="${E(saved('version', order.version ?? 0))}" />
-        <div class="commerce-field-grid">${customerField}${accountField}${periodFields}${endField}</div></form>`,
+        <div class="commerce-field-grid">${customerField}${accountField}${periodFields}${endField}${costFields}</div></form>`,
       A.button('取消', 'drawer-close') +
       '<button type="submit" form="commerce-order-completion-form" class="button primary">保存到原单</button>', key);
   }
@@ -5646,13 +5655,19 @@
       details.expiry = expiry;
     }
     if (missing.end && value(raw, 'endAt')) details.subscriptionEndedAt = value(raw, 'endAt');
+    const costAmount = value(raw, 'completionCostAmount'), costReason = value(raw, 'completionCostReason');
+    if (missing.cost && (costAmount || costReason)) {
+      details.actualCost = { amount: costAmount, currency: value(raw, 'completionCostCurrency'), reason: costReason };
+    }
     const errors = {
       [accountControl]: account && !(x ? validOrderXHandle(account) : validOrderEmail(account))
         ? '请填写有效的邮箱账号或 X @账号' : '',
       expiry: details.expiry !== undefined && !(subscriptionTime(expiry) > subscriptionTime(start))
         ? '请填写有效的订阅起止时间' : '',
       endAt: details.subscriptionEndedAt && !Number.isFinite(orderTerminationTime({ ...order, ...details }, orderEvaluationTime()))
-        ? '请填写实际终止时间' : ''
+        ? '请填写实际终止时间' : '',
+      completionCostAmount: details.actualCost && !amountValid(costAmount) ? '请填写实际总成本' : '',
+      completionCostReason: details.actualCost && !costReason ? '请填写成本核对依据' : ''
     };
     for (const [name, message] of Object.entries(errors)) A.setError('commerce-' + name, message, form);
     if (Object.values(errors).some(Boolean)) return;

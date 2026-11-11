@@ -9,6 +9,7 @@ import {
   claudeHistoricalSales, claudeHistoryPreview, planClaudeHistoryIntake, recordClaudeHistoricalSale, stageClaudeHistoryIntake
 } from '../server/claude-history-intake.mjs';
 import { projectSubscriptions } from '../server/subscription-management.mjs';
+import { fillManualOrderDetails } from '../server/order-completion.mjs';
 import { interceptDesign, origin, separatorSnapshot, toggleDesignTheme } from './helpers/offline-design.mjs';
 
 const actor = { id: 'fixture-admin', name: '合成管理员', role: 'super' };
@@ -165,6 +166,14 @@ test('Claude 订单补录复用原账号，保留租户并在订阅显示来源�
       local.commerce.version++;
       return route.fulfill({ json: { orderId: order.id, orderNo: order.orderNo, created, version: local.commerce.version } });
     });
+    await context.route(origin + '/api/local/order-completion', route => {
+      assert.equal(route.request().method(), 'POST');
+      const { order } = fillManualOrderDetails(local.commerce.data, local.inventory.data, actor,
+        route.request().postDataJSON(), at.toISOString());
+      local.commerce.data.orders = [order];
+      local.commerce.version++;
+      return route.fulfill({ json: { orderId: order.id, version: local.commerce.version } });
+    });
     await context.route(origin + '/api/local/subscriptions/list', route => {
       const input = route.request().postDataJSON();
       const items = projectSubscriptions({ inventory: local.inventory, commerce: local.commerce,
@@ -208,16 +217,29 @@ test('Claude 订单补录复用原账号，保留租户并在订阅显示来源�
     await drawer.getByRole('combobox', { name: '租户*', exact: true }).selectOption(tenant.id);
     await drawer.getByLabel(/原开通方式/).selectOption('银行卡');
     await drawer.getByLabel(/^售价\*?$/).fill('1500');
-    await drawer.getByLabel('实际总成本', { exact: true }).fill('1350');
     await drawer.getByRole('button', { name: '保存历史订单', exact: true }).click();
     await drawer.waitFor({ state: 'hidden' });
     const [order] = local.commerce.data.orders;
-    assert.deepEqual([order.tenantId, order.customerId, order.actualCostAmount], [tenant.id, '', '1350']);
+    assert.deepEqual([order.tenantId, order.customerId, order.actualCostAmount], [tenant.id, '', '']);
     const orderRow = page.locator(`[data-table="commerce-orders-Claude"] tbody tr[data-row-id="${order.id}"]`);
     await orderRow.waitFor();
     const number = orderRow.getByText(order.orderNo, { exact: true });
     if (!(await number.isVisible())) await orderRow.getByRole('button', { name: '更多资料', exact: true }).click();
     await number.waitFor();
+    const detail = page.getByRole('dialog', { name: '订单详情', exact: true });
+    await orderRow.getByRole('button', { name: '详情', exact: true }).click();
+    await detail.getByRole('button', { name: '补齐资料', exact: true }).click();
+    const completion = page.getByRole('dialog', { name: '补齐原单资料', exact: true });
+    await completion.getByLabel('实际总成本（退回前）', { exact: true }).fill('1350');
+    await completion.getByLabel('成本核对依据', { exact: true }).fill('按原销售凭据核对');
+    await completion.getByRole('button', { name: '保存到原单', exact: true }).click();
+    await completion.waitFor({ state: 'hidden' });
+    await detail.getByRole('tab', { name: '成本与汇率', exact: true }).click();
+    await detail.getByText('1350.00 人民币 CNY', { exact: true }).waitFor();
+    const [updated] = local.commerce.data.orders;
+    assert.deepEqual([updated.id, updated.actualCostAmount, updated.customerId, updated.paidAmount, updated.receiptConfirmed],
+      [order.id, '1350', '', '', false]);
+    await detail.getByRole('button', { name: '关闭抽屉', exact: true }).click();
     await page.goto(origin + '/#/subscriptions/claude');
     await page.getByRole('tab', { name: '客户订阅', exact: true }).click();
     const row = page.locator('#subscription-list tbody tr').filter({ hasText: email });

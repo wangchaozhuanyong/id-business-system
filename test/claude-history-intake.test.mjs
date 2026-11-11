@@ -145,6 +145,24 @@ test('Claude 历史销售从原库存生成订单，买家可补齐，死号保�
     assert.deepEqual([firstOrder.paidConfirmed, firstOrder.receiptConfirmed, endedOrder.actualCostAmount], [false, false, '']);
     assert.deepEqual([endedOrder.start, endedOrder.expiry, endedOrder.subscriptionEndedAt],
       ['2026-10-27', '2026-11-26', '2026-11-06T19:20']);
+    const cost = { action: 'fill-manual-details', orderId: endedOrder.id, version: endedOrder.version,
+      details: { actualCost: { amount: '1234.50', currency: 'CNY', reason: '按原销售凭据核对' } } };
+    assert.throws(() => store.saveOrderCompletion({ ...actor, role: 'employee' }, cost), /只有管理员/);
+    assert.throws(() => store.saveOrderCompletion(actor, { ...cost, orderId: firstOrder.id }), /核对原历史销售/);
+    assert.throws(() => store.saveOrderCompletion(actor, { ...cost, details: {
+      actualCost: { ...cost.details.actualCost, reason: '' }
+    } }), /成本、币种和核对依据/);
+    store.saveOrderCompletion(actor, cost);
+    const afterCost = store.load('commerce').data;
+    const saved = afterCost.orders.find(row => row.id === endedOrder.id);
+    const { updatedAt, version, actualCostAmount, actualCostCurrency, costBasis, ...retained } = saved;
+    const { updatedAt: previousUpdate, version: priorVersion, actualCostAmount: previousCost,
+      actualCostCurrency: previousCurrency, ...priorDetails } = endedOrder;
+    assert.deepEqual(retained, priorDetails);
+    assert.deepEqual([version, actualCostAmount, actualCostCurrency, costBasis],
+      [priorVersion + 1, '1234.50', 'CNY', 'actual']);
+    assert.match(afterCost.logs[0].detail, /实际总成本 1234\.50 CNY · 按原销售凭据核对/);
+    assert.throws(() => store.saveOrderCompletion(actor, cost), /订单已变化/);
     for (const [order, status] of [[firstOrder, 'pending'], [endedOrder, 'ended']]) {
       const row = subscriptionRows().find(row => row.account === order.email);
       assert.deepEqual([row.scope, row.status, row.series[0].orderNo], ['customer', status, order.orderNo]);
