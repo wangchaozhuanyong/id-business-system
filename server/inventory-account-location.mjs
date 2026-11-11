@@ -19,7 +19,11 @@ export function checkAccountLocations(previous, next) {
     if (!Array.isArray(entry) || !accountTypes.has(entry[0])) continue;
     const [type, config] = entry;
     if (settings.has(type) || !config || !labels(config.countries) || !config.countries.length)
-      return `${accountTypes.get(type)} 账号的国家地区设置格式不正确`;
+      return `${accountTypes.get(type)} 账号的注册国家设置格式不正确`;
+    if (type === 'gpt') {
+      settings.set(type, { countries: config.countries });
+      continue;
+    }
     const cities = config.cities ?? [];
     if (!Array.isArray(cities) ||
         !cities.every((pair) => Array.isArray(pair) && pair.length === 2 &&
@@ -38,11 +42,12 @@ export function checkAccountLocations(previous, next) {
     const prior = priorById.get(row.id);
     if (prior?.type === row.type && prior.email === row.email &&
         (prior.country ?? '') === (row.country ?? '') &&
-        (prior.city ?? '') === (row.city ?? '')) continue;
+        (row.type === 'gpt' || (prior.city ?? '') === (row.city ?? ''))) continue;
 
     const config = settings.get(row.type);
     if (!row.country || !(config?.countries ?? [...defaultLocations.keys()]).includes(row.country))
-      return `请选择 ${product} 账号国家地区设置中的注册国家`;
+      return `请选择 ${product} 账号设置中的注册国家`;
+    if (row.type === 'gpt') continue;
     const cities = config?.cities.get(row.country) ?? defaultLocations.get(row.country) ?? [];
     if (!row.city || !cities.includes(row.city))
       return `请选择 ${product} 账号所选国家下的地区／城市`;
