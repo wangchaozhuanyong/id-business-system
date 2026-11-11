@@ -73,7 +73,7 @@ test('注册通过明确库存编号消耗选定邮箱并留存原领取批次',
     'inventory_create', actor, at, review), /原邮箱领用批次/);
   assert.equal(preparePersonalInventory(before, next, 'inventory_create', actor, at, review), undefined);
   const usage = inspectInventoryUsage(next, { orders: [apple] }, at.getTime());
-  assert.equal(usage.size, 1);
+  assert.equal(usage.get('other-source').status, 'review');
   assert.equal(usage.get(selected.id).evidence.accountId, 'gemini-stock');
   assert.equal(applyInventoryUsage(usage, actor, at), true);
   assert.equal(next.mailboxes[0].inventoryState, 'used');
@@ -85,7 +85,7 @@ test('注册通过明确库存编号消耗选定邮箱并留存原领取批次',
     { ...next.accounts[0], id: 'second-stock', email: 'other@example.test' }] }, 'inventory_create', actor, at), /来源邮箱/);
   const withoutSource = { ...makeInventory(), mailboxes: next.mailboxes, accounts: [account] };
   assert.equal(preparePersonalInventory(next, withoutSource, 'inventory_create', actor, at), undefined);
-  assert.equal(inspectInventoryUsage(withoutSource, { orders: [grok] }, at.getTime()).size, 0);
+  assert.equal(inspectInventoryUsage(withoutSource, { orders: [grok] }, at.getTime()).get('other-source').status, 'review');
 });
 
 test('成品先占用后交付，后续续费只追加同一账号的历史', () => {

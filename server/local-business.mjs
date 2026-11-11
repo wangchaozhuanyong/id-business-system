@@ -56,6 +56,7 @@ import { AccountLifecycleError, accountLifecycleSummaries, changeAccountLifecycl
 import { planLegacyMailboxImport } from './tools/legacy-mailbox-import.mjs';
 import { planLegacyTotpImport } from './tools/legacy-totp-import.mjs';
 import { applyInventoryUsage, correctInventoryUsage, inspectInventoryUsage, usageReviewRows } from './inventory-usage.mjs';
+import { checkRegistrationChanges } from './inventory-registration.mjs';
 import { attributeInventory, defaultInventoryRegistrationTimes } from './inventory-attribution.mjs';
 import { checkAccountLocations } from './inventory-account-location.mjs';
 import { emptyAppleLedger, stageAppleOpenings, stageAppleOrderFunding } from './apple-funding.mjs';
@@ -705,6 +706,8 @@ async function saveHttpWrites(store, entries, actor, verifyRelayExtraction, read
   if (locationError) throw new LocalDataError(400, locationError);
   const ids = checkedRelayClaims(current.data, inventory, actor);
   if (!ids.length) return store.saveBatch(writes, options);
+  const registrationError = checkRegistrationChanges(current.data, inventory.data, inventory.action, actor);
+  if (registrationError) throw new LocalDataError(409, registrationError);
   if (typeof verifyRelayExtraction !== 'function') requireVerifiedRelayClaimIds(ids);
   let verifiedIds;
   try {
@@ -963,9 +966,11 @@ export function createLocalBusinessStore(databasePath) {
         const current = readDocument('inventory');
         const time = new Date();
         const plan = planClaudeHistoryIntake(input, current, readDocument('commerce'), time.getTime());
-        const inventory = current.data ?? Object.fromEntries(inventoryLists.map(key => [key, []]));
+        const inventory = current.data ? structuredClone(current.data) : Object.fromEntries(inventoryLists.map(key => [key, []]));
         const result = stageClaudeHistoryIntake(plan, input.inventoryVersion, inventory, actor, time);
         if (result.imported) {
+          const error = checkRegistrationChanges(current.data, inventory, 'inventory_claude_history_import');
+          if (error) throw new LocalDataError(409, error);
           const version = current.version + 1;
           put.run('inventory', version, encrypt(key, 'inventory', version, JSON.stringify(inventory)));
           log.run(time.toISOString(), 'inventory', 'inventory_claude_history_import',
@@ -1565,6 +1570,8 @@ export function createLocalBusinessStore(databasePath) {
           defaultInventoryRegistrationTimes(priorInventory, inventory);
           const historyError = checkInventoryHistory(priorInventory, inventory);
           if (historyError) throw new LocalDataError(409, historyError);
+          const registrationError = checkRegistrationChanges(priorInventory, inventory, write.action, actor);
+          if (registrationError) throw new LocalDataError(409, registrationError);
           const existingUsage = incoming.has('commerce')
             ? inspectInventoryUsage(priorInventory, commerce) : new Map(priorUsage);
           if (priorInventory && write.action === 'inventory_return') {
@@ -1867,7 +1874,7 @@ export function createLocalBusinessStore(databasePath) {
           const next = inventoryWrite ? inventory : structuredClone(inventory);
           const matches = inspectInventoryUsage(next, commerce, Date.parse(now));
           const oldRegistrationIds = new Set((priorInventory?.registrationRecords || []).map(row => row.id));
-          if ((next.registrationRecords || []).some(row => ['Gemini', 'Grok'].includes(row.product) &&
+          if ((next.registrationRecords || []).some(row => row.accountId && ['Gemini', 'Grok'].includes(row.product) &&
               !oldRegistrationIds.has(row.id) && (matches.get(row.assetId)?.status !== 'used' ||
                 matches.get(row.assetId)?.evidence.registrationId !== row.id)))
             throw new LocalDataError(409, '邮箱使用结果待核对，账号和领用资料尚未保存');
@@ -1883,6 +1890,14 @@ export function createLocalBusinessStore(databasePath) {
             }
           }
           const usageChanged = applyInventoryUsage(matches, actor, new Date(now));
+          if (usageChanged && inventoryWrite) {
+            const priorAccountIds = new Set((priorInventory?.accounts || []).map(row => row.id));
+            const newAccounts = new Map(next.accounts.filter(row => !priorAccountIds.has(row.id)).map(row => [row.id, row]));
+            for (const { asset, evidence, status } of matches.values()) {
+              const account = status === 'used' && evidence.kind === 'registration' && newAccounts.get(evidence.accountId);
+              if (account) account.emailType = asset.type;
+            }
+          }
           if (relayIntake && next.mailboxes.some(row => relayIntake.aliasIds.has(row.id) &&
               (row.inventoryState || (row.used ? 'used' : 'available')) !== 'used'))
             throw new LocalDataError(409, '存在无法确认注册使用的隐藏邮箱，请核对原资料后重新预检');
