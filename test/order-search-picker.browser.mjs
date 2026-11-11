@@ -100,8 +100,7 @@ test('订单下拉框在展开后搜索，保留联动、草稿与快捷新增',
         assert(input.y + input.height <= option.y, '搜索框必须在选项上方');
         await page.keyboard.press('Escape');
         await page.locator('#commerce-payment').selectOption('银行卡');
-        if (product === 'claude')
-          await page.locator('#commerce-proMaterialMode').selectOption('tenant_card');
+        await page.locator('#commerce-proMaterialMode').selectOption(product === 'claude' ? 'tenant_card' : '');
         await page.locator('#commerce-cardId-picker').click();
         await page.getByRole('searchbox', { name: '搜索银行卡' }).waitFor();
         await page.keyboard.press('Escape');
@@ -124,9 +123,9 @@ test('订单下拉框在展开后搜索，保留联动、草稿与快捷新增',
   await page.locator('#main[data-layout-route="workspace/order/gpt"]').waitFor();
   assert.equal(await page.locator('#commerce-customerId').inputValue(), 'qa-beta', '切页返回恢复客户');
   await page.locator('#commerce-email').fill('draft-preserved@example.test');
+  await page.getByRole('textbox', { name: '新客户姓名', exact: true }).fill('快捷新增合成客户');
+  await page.getByRole('textbox', { name: '新客户微信', exact: true }).fill('qa_new_customer');
   await page.locator('[data-action="commerce-quick-customer"]').click();
-  await page.locator('#commerce-contact-name').fill('快捷新增合成客户');
-  await page.locator('#commerce-contact-wechat').fill('qa_new_customer');
   await page.locator('#drawer').getByRole('button', { name: '核对并保存', exact: true }).click();
   await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
   await page.locator('#commerce-contact-form').waitFor({ state: 'hidden' });

@@ -48,7 +48,7 @@ test('所有产品可选择卡池，完整卡号由可信卡资料产生并在�
   assert.equal(Object.hasOwn((await readPoolCards(client))[0], 'number'), false, '选择列表不返回完整号');
   const [card] = await readPoolCards(client, { includeNumbers: true });
   for (const product of ['GPT', 'Claude Pro', 'Claude Max', 'Gemini', 'Grok']) {
-    const serial = product.startsWith('Claude') ? '' : '00042';
+    const serial = '00042';
     const row = { ...base(product), cardId: card.id, proMaterialMode: 'pool_card', proCardNumber: replacement, proCardSerial: serial };
     assert.equal(normalizeClaudeProMaterials(row, undefined, []), undefined);
     assert.equal(row.proCardSerial || '', serial);

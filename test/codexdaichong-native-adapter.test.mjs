@@ -5,7 +5,10 @@ import { createServer, request as httpRequest } from 'node:http';
 import { createRequire } from 'node:module';
 import test from 'node:test';
 import { signRechargeAssertion } from '../modules/recharge/assertion.mjs';
-import { createNativeRechargeAdapter, createNativeAdminTokenIssuer, startNativeRechargeAdapter } from '../modules/recharge/codexdaichong/native-adapter.mjs';
+import {
+  createNativeCardStop, createNativeRechargeAdapter, createNativeAdminTokenIssuer, startNativeRechargeAdapter
+} from '../modules/recharge/codexdaichong/native-adapter.mjs';
+import { createOrderRechargeClient } from '../server/order-recharge-client.mjs';
 import { verifyNativeNetworkIsolation } from '../modules/recharge/codexdaichong/native-network.mjs';
 
 const nativeAuth = createRequire(import.meta.url)('../.upstream/codexdaichong/admin-auth.js');
@@ -21,6 +24,66 @@ async function listen(t, handler) {
   t.after(() => { for (const socket of sockets) socket.destroy(); return new Promise((resolve) => server.close(resolve)); });
   return { server, url: 'http://127.0.0.1:' + server.address().port };
 }
+
+test('managed stop leaves active work locked, preserves both kinds of card records, and can retry', async t => {
+  const number = '4242424242424242', secret = randomBytes(32).toString('hex');
+  const cards = { card_assets: { id: 7, canUse: 1, inUse: 1 }, orbitcard_card_usage: { id: 8, canUse: 1, inUse: 0 } };
+  const events = [];
+  const db = {
+    async beginTransaction() { events.push('begin'); },
+    async commit() { events.push('commit'); },
+    async rollback() { assert.fail('Unexpected rollback'); },
+    release() { events.push('release'); },
+    async execute({ sql }, params) {
+      assert.doesNotMatch(sql, /\bDELETE\s+FROM\b|locked_(?:at|by)|in_use\s*=(?=\s*1)/i);
+      const table = sql.includes('orbitcard_card_usage') ? 'orbitcard_card_usage' : 'card_assets';
+      assert.ok(params.includes(number));
+      if (sql.startsWith('UPDATE')) {
+        assert.match(sql, /AND in_use = 0/);
+        if (!cards[table].inUse) cards[table].canUse = 0;
+        return [{ affectedRows: cards[table].inUse ? 0 : 1 }];
+      }
+      assert.match(sql, /FOR UPDATE$/);
+      return [[{ id: cards[table].id, canUse: cards[table].canUse }]];
+    }
+  };
+  const adapter = createNativeRechargeAdapter({ nativeUrl: 'http://127.0.0.1:1', secret,
+    getNativeAdminToken: async () => assert.fail('This operation stays in the adapter'),
+    stopCardUse: createNativeCardStop({ getConnection: async () => db }) });
+  const { url } = await listen(t, adapter.handle);
+  const client = createOrderRechargeClient({ upstreamUrl: url, secret });
+  const path = '/api/admin/cards/stop-use';
+  const rejected = await fetch(url + path, { method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-id-recharge-assertion': signRechargeAssertion(secret, 'POST', path, superUser) },
+    body: JSON.stringify({ refs: ['recharge:7'], number }) });
+  assert.equal(rejected.status, 403);
+  const service = { ...superUser, id: 'order-reconciliation' };
+  const readback = await fetch(url + path, {
+    headers: { 'x-id-recharge-assertion': signRechargeAssertion(secret, 'GET', path, service) }
+  });
+  assert.equal(readback.status, 405);
+  assert.deepEqual(events, []);
+  assert.deepEqual(await client.stopCardUse(['recharge:7'], number),
+    { state: 'pending', refs: ['recharge:7', 'orbitcard:8'] });
+  assert.equal(cards.card_assets.canUse, 1);
+  assert.equal(cards.orbitcard_card_usage.canUse, 0);
+  cards.card_assets.inUse = 0;
+  assert.deepEqual(await client.stopCardUse(['recharge:7', 'orbitcard:8'], number),
+    { state: 'stopped', refs: ['recharge:7', 'orbitcard:8'] });
+  assert.equal(cards.card_assets.canUse, 0);
+  assert.deepEqual(events, ['begin', 'commit', 'release', 'begin', 'commit', 'release']);
+});
+
+test('a card reference missing from the readback remains pending', async () => {
+  const connection = {
+    async beginTransaction() {},
+    async execute({ sql }) { return sql.startsWith('UPDATE') ? [{ affectedRows: 0 }] : [[]]; },
+    async commit() {},
+    release() {}
+  };
+  const stop = createNativeCardStop({ getConnection: async () => connection });
+  assert.deepEqual(await stop({ refs: ['recharge:7'], number: '4242424242424242' }), { state: 'pending', refs: [] });
+});
 
 test('the outer adapter uses native authentication without exposing its token or granting customers card access', async (t) => {
   const nativeSecret = randomBytes(32).toString('hex');

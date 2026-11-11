@@ -56,6 +56,8 @@ test('录单分离银行卡来源、订单类型和共享卡分类，GPT 未登�
   assert.deepEqual(await mode.locator('option').evaluateAll(options => options.map(item => item.value)),
     ['none', 'manual_card', 'pool_card', 'tenant_card']);
   await mode.selectOption('pool_card');
+  const serial = field('proCardSerial');
+  await serial.fill('00017-POOL');
   const pool = field('proPoolCardId');
   await pool.locator(`option[value="${poolId}"]`).waitFor({ state: 'attached' });
   await pool.evaluate((select, id) => { select.value = id; select.dispatchEvent(new Event('change', { bubbles: true })); }, poolId);
@@ -63,13 +65,16 @@ test('录单分离银行卡来源、订单类型和共享卡分类，GPT 未登�
   await field('cardTypeId').selectOption(cardTypeB.id);
   assert.equal(typeWrites.length, 0, '订单类型下拉不改共享卡分类');
   await mode.selectOption('tenant_card');
+  assert.equal(await serial.isVisible(), true);
   assert.equal(await field('tenantId-picker').isVisible(), true);
   assert.equal(await field('cardId-picker').isVisible(), true);
   assert.equal(await field('proPoolCardId-picker').isVisible(), false);
   await mode.selectOption('none');
+  assert.equal(await serial.isVisible(), false);
   assert.equal(await field('tenantId-picker').isVisible(), false);
   assert.equal(await field('proCardNumber').isVisible(), false);
   await mode.selectOption('pool_card');
+  assert.equal(await serial.inputValue(), '00017-POOL');
   assert.equal(await pool.inputValue(), poolId);
   assert.equal(await field('cardTypeId').inputValue(), cardTypeB.id);
   await page.locator('#main [data-action="commerce-card-type-assign"]:visible').click();
@@ -81,6 +86,7 @@ test('录单分离银行卡来源、订单类型和共享卡分类，GPT 未登�
   assert.equal(await mode.isVisible(), true);
   assert.equal(await field('cardTypeId').isVisible(), true);
   await field('payment').selectOption('苹果内购');
+  assert.equal(await serial.isVisible(), false);
   assert.equal(await field('cardTypeId').isVisible(), false);
 
   await page.goto(`${origin}/#/workspace/order/gpt`);
@@ -115,6 +121,7 @@ test('录单分离银行卡来源、订单类型和共享卡分类，GPT 未登�
     select.dispatchEvent(new Event('change', { bubbles: true }));
   }, customer.id);
   await field('email').fill('no-card-fixture@example.test');
+  await mode.selectOption('');
   await field('paidAmount').fill('20');
   await field('saleAmount').fill('100');
   await field('cardTypeId').selectOption(cardTypeA.id);

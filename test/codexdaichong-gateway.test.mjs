@@ -48,6 +48,39 @@ test('删除关联卡前先留存订单资料；留存失败不会转发删除�
   assert.deepEqual(events.slice(2), ['archive', 'delete']);
 });
 
+test('冻结卡写入检查拦截重新导入和恢复，其他配置按原入口转发', async t => {
+  const origin = 'https://cards.example.test', forwarded = [];
+  const engine = await listen(t, async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    forwarded.push([req.url, JSON.parse(Buffer.concat(chunks))]);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end('{"success":true}');
+  });
+  const guard = ({ id, kind, data }) => {
+    if (id === 'orbitcard:8' || (kind === 'import' && data.cards[0].card_number === '4242424242424242') ||
+      (kind === 'config' && Object.hasOwn(data, 'card_pool')))
+      throw Object.assign(new Error('冻结银行卡不能重新加入卡池'), { status: 409 });
+  };
+  const gateway = createCodexdaichongGateway({ upstreamUrl: engine, publicOrigin: origin,
+    secret: randomBytes(48).toString('base64url'), getUnifiedPrincipal: () => admin, beforeCardWrite: guard });
+  const host = await listen(t, gateway.handle);
+  const post = (path, body) => fetch(host + prefix + path, {
+    method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+  });
+  const importPath = '/api/admin/cards/import';
+  assert.equal((await post(importPath, { cards: [{ card_number: '4242424242424242' }] })).status, 409);
+  assert.equal((await post('/api/admin/orbitcard/cards/00%38/restore', {})).status, 409);
+  assert.equal((await post('/api/admin/config', { card_pool: [] })).status, 409);
+  assert.equal((await post('/api/admin/cards/stop-use', {})).status, 404);
+  assert.deepEqual(forwarded, []);
+  const config = { maintenance_mode: false };
+  assert.equal((await post('/api/admin/config', config)).status, 200);
+  const valid = { cards: [{ card_number: '4000000000000002' }] };
+  assert.equal((await post(importPath, valid)).status, 200);
+  assert.deepEqual(forwarded, [['/api/admin/config', config], [importPath, valid]]);
+});
+
 test('browser progress uses only confirmed native receipts and never resends a submission', async (t) => {
   const secret = randomBytes(48).toString('base64url');
   const origin = 'https://recharge.example.test';

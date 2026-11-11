@@ -17,16 +17,26 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
   const products = ['GPT', 'Claude Pro', 'Claude Max', 'Gemini', 'Grok'];
   const plans = ['Plus', 'Pro', 'Max 5x', 'Google AI Pro', 'The X Subscription Premium'];
   const sample = fixture.commerce.data.orders[0];
+  const contact = {
+    wechat: 'qa_customer_"wechat"&id',
+    phone: '+1 (202) 555-0102',
+    qq: '08',
+    whatsapp: '+1 (202) 555-0103',
+    telegram: '@qa_customer_contact'
+  };
+  const orderWechat = 'qa_order_wechat_snapshot';
+  const invalidChatLink = 'https://example.invalid/unknown-contact';
   fixture.commerce.data.customers = Array.from({ length: 12 }, (_, i) => ({
     id: `entry-customer-${i}`, name: i === 0 ? '林先生 · 企业订阅' : `示例客户 ${i + 1}`,
     active: true, version: 1, createdAt: i === 11 ? '' : new Date(clock - Math.floor(i / 2) * 86_400_000 - i * 60_000).toISOString(),
     ...(i % 2 ? { phone: '+60 12 345 6789' } : { wechat: i === 0 ? 'customer_' + 'long_contact_'.repeat(5) : 'sample_wechat_' + i }),
+    ...(i === 1 ? contact : i === 2 ? { whatsapp: invalidChatLink, telegram: invalidChatLink } : {}),
     tags: [], source: '客户推荐', notes: i === 0 ? '隔离测试长备注 ' + '仅用于离线验收。'.repeat(40) : ''
   }));
   fixture.commerce.data.orders = products.flatMap((product, p) => fixture.commerce.data.customers.map((customer, i) => ({
     ...sample, id: `entry-order-${p}-${i}`, orderNo: `DEMO-${p}-${i}`, product, plan: plans[p],
     customerId: customer.id, createdAt: customer.createdAt, email: `sample-${p}-${i}@example.test`,
-    wechat: '', customerPhone: '', qq: '', whatsapp: '', telegram: '', source: '管理员手工', taskId: '',
+    wechat: i === 1 ? orderWechat : '', customerPhone: ' ', qq: '', whatsapp: '', telegram: '', source: '管理员手工', taskId: '',
     payment: i === 2 ? '' : i % 2 ? '苹果内购' : '银行卡',
     createdById: actor.id, createdBy: actor.name
   })));
@@ -65,6 +75,18 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
       const sideBySide = history.left >= form.right;
       const findings = [];
       const editor = formPanel.querySelector('form');
+      const quickCustomer = editor.querySelector('.order-quick-customer');
+      if (quickCustomer) {
+        const bounds = quickCustomer.closest('.field-control').getBoundingClientRect();
+        const controls = [editor.querySelector('#commerce-customerId-picker'), ...quickCustomer.querySelectorAll('input, button')];
+        const positions = controls.map(control => control.getBoundingClientRect());
+        if (positions.some(position => position.left < bounds.left - 1 || position.right > bounds.right + 1))
+          findings.push('客户选择与快捷新增超出资料行');
+        if (bounds.width >= 460 && positions.some(position => Math.abs(position.top - positions[0].top) > 3))
+          findings.push('宽屏下客户选择与快捷新增应同排');
+        if (innerWidth <= 900 && positions.some(position => position.height < 44))
+          findings.push('手机客户资料控件高度不足 44px');
+      }
       const firstGroup = editor.querySelector('[data-commerce-section="01"] > .section-heading');
       if (firstGroup) {
         const start = formPanel.querySelector(':scope > .tabs')?.getBoundingClientRect().bottom ?? form.top;
@@ -157,7 +179,7 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
     assert((await history.locator('td[data-column="plan"]').allTextContents()).every(text => text === 'GPT · Plus'));
     assert.deepEqual((await history.locator('thead th').evaluateAll(nodes => nodes.map(node => node.getAttribute('aria-label') || node.textContent.trim()))).slice(0, 4), ['客户', '联系方式', '订阅套餐', '支付方式']);
     assert.equal(await history.getByRole('columnheader', { name: 'QQ', exact: true }).count(), 0);
-    assert.match(await history.locator('td[data-column="contact"]').first().textContent(), /^微信：customer_/);
+    assert.equal(await history.locator('td[data-column="contact"]').first().textContent(), '微信：cu****t_');
     assert(!/QQ|WhatsApp|Telegram/.test(await history.locator('td[data-column="contact"]').first().textContent()));
     const first = history.locator('tbody tr[data-row-id]').first();
     await page.locator('#commerce-email').fill('unfinished@example.test');
@@ -184,6 +206,79 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
     await page.locator('#drawer [data-action="drawer-close"]').last().click();
     await go('customers/new/tenant');
     assert.equal(await history.getByRole('columnheader', { name: '支付方式', exact: true }).count(), 0);
+  });
+
+  await t.test('订单和客户近期记录脱敏，详情支持复制完整值与跳转', async () => {
+    const history = page.locator('#commerce-entry-records');
+    const drawer = page.locator('#drawer[open]');
+    const closeDrawer = () => drawer.locator('[data-action="drawer-close"]').last().click();
+    const property = label => drawer.locator('.property-row').filter({ has: page.getByText(label, { exact: true }) });
+    const copy = async (label, value) => {
+      await property(label).getByRole('button', { name: '复制' + label, exact: true }).click();
+      await page.waitForFunction(async expected => await navigator.clipboard.readText() === expected, value);
+    };
+    const links = [
+      ['WhatsApp', contact.whatsapp, 'https://wa.me/12025550103'],
+      ['Telegram', contact.telegram, 'https://t.me/qa_customer_contact']
+    ];
+    await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
+    for (const [, , href] of links)
+      await context.route(href, route => route.fulfill({ body: '离线聊天跳转目标' }));
+
+    const routes = ['gpt', 'claude', 'claude', 'gemini', 'grok'].map((slug, index) => ({
+      route: 'workspace/order/' + slug, rowId: `entry-order-${index}-1`, wechat: orderWechat, phoneLabel: '客户电话'
+    }));
+    routes.push({ route: 'customers/new', rowId: 'entry-customer-1', wechat: contact.wechat, phoneLabel: '联系电话' });
+    try {
+      for (const { route, rowId, wechat, phoneLabel } of routes) {
+        const customerEntry = route === 'customers/new';
+        if (customerEntry) await page.setViewportSize({ width: 390, height: 1000 });
+        await go(route);
+        if (customerEntry) await page.getByRole('tab', { name: '最近客户', exact: true }).click();
+        const row = history.locator(`tr[data-row-id="${rowId}"]`);
+        const summary = row.locator('td[data-column="contact"]');
+        if (!(await summary.isVisible())) await row.getByRole('button', { name: '更多资料' }).click();
+        const maskedWechat = customerEntry ? 'qa****id' : 'qa****ot';
+        assert.equal(await summary.textContent(),
+          `联系电话：+1****02；微信：${maskedWechat}；QQ：****；WhatsApp：+1****03；Telegram：@q****ct`);
+        assert.equal(await summary.locator('button, a, [title]').count(), 0);
+        await row.locator('[data-action$="-detail"]').click();
+        for (const [label, value] of [['微信', wechat], [phoneLabel, contact.phone], ['QQ', contact.qq]])
+          assert.equal(await property(label).locator('strong').textContent(), value);
+        for (const [label, value, href] of links) {
+          const field = property(label);
+          assert.equal(await field.locator('strong').textContent(), value);
+          const link = field.getByRole('link', { name: `打开 ${label}（新标签页）` });
+          assert.equal(await link.getAttribute('href'), href);
+          assert.equal(await link.getAttribute('target'), '_blank');
+          if (customerEntry) {
+            assert((await link.boundingBox()).height >= 44);
+            const [tab] = await Promise.all([context.waitForEvent('page'), link.click()]);
+            await tab.waitForURL(href);
+            await tab.close();
+          }
+        }
+        if (route === 'workspace/order/gpt' || customerEntry) {
+          await copy('微信', wechat);
+          await copy(phoneLabel, contact.phone);
+        }
+        await closeDrawer();
+      }
+      await history.locator('tr[data-row-id="entry-customer-2"] [data-action="commerce-contact-detail"]').click();
+      assert.equal(await drawer.locator('a.contact-detail-link').count(), 0);
+      await copy('WhatsApp', invalidChatLink);
+      await copy('Telegram', invalidChatLink);
+      await closeDrawer();
+    } finally {
+      const formTab = page.getByRole('tab', { name: '填写资料', exact: true });
+      if (await formTab.isVisible()) await formTab.click();
+      await page.setViewportSize({ width: 1440, height: 1000 });
+    }
+    await go('customers/new/tenant');
+    assert.equal(await history.locator('td[data-column="contact"]').textContent(), '联系电话：+6****33');
+    await history.locator('[data-action="commerce-contact-detail"]').click();
+    await copy('联系电话', fixture.commerce.data.tenants[0].phone);
+    await closeDrawer();
   });
 
   await t.test('四类订单的日期和分页独立操作，不更改录单草稿', async () => {
@@ -295,9 +390,11 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
             await page.locator('#commerce-proCardNumber').fill('4242424242424242');
             await page.locator('#commerce-proCardSerial').fill('SERIAL-' + '0123456789'.repeat(8));
             if ((await page.locator('.commerce-entry-columns > .form-panel').boundingBox()).width >= 700) {
-              const a = await page.locator('#commerce-proCardNumber').boundingBox();
-              const b = await page.locator('#commerce-proCardSerial').boundingBox();
-              assert(Math.abs(a.y - b.y) <= 1, '银行卡号和卡序列号应一行两个');
+              const mode = await page.locator('#commerce-proMaterialMode').boundingBox();
+              const number = await page.locator('#commerce-proCardNumber').boundingBox();
+              const serial = await page.locator('#commerce-proCardSerial').boundingBox();
+              assert(Math.abs(mode.y - number.y) <= 1 && number.x > mode.x, '填写方式左侧，手填卡号同排右侧');
+              assert(serial.y >= number.y + number.height - 1, '卡序列号在后续行完整可用');
             }
             await page.locator('[data-commerce-field="proCardSerial"] .order-value-readout').waitFor();
           }

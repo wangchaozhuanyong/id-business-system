@@ -18,6 +18,16 @@ ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = ROOT / ".runtime/website-release"
 SHA = re.compile(r"[a-f0-9]{40}\Z")
 CORE_PATHS = ("deploy/recharge-core", "deploy/caddy", "modules/recharge/codexdaichong", "package.json")
+ADAPTER_SCOPE = {
+    "modules/recharge/codexdaichong/gateway.mjs", "modules/recharge/codexdaichong/local-gateway.mjs",
+    "modules/recharge/codexdaichong/native-adapter.mjs", "modules/recharge/codexdaichong/runtime.mjs",
+    "deploy/recharge-core/canary.py", "deploy/recharge-core/health.mjs", "deploy/recharge-core/run-recharge.py",
+}
+ADAPTER_RUNTIME_FILES = (
+    "modules/recharge/codexdaichong/native-adapter.mjs", "modules/recharge/codexdaichong/runtime.mjs",
+    "deploy/recharge-core/health.mjs",
+)
+ADAPTER_FILES = (*ADAPTER_RUNTIME_FILES, "deploy/recharge-core/canary.py", "deploy/recharge-core/run-recharge.py")
 
 
 class AwsError(RuntimeError):
@@ -58,9 +68,13 @@ def require_ancestor(base, sha):
         raise RuntimeError("requested_revision_not_an_ancestor_of_main")
 
 
-def require_website_scope(base, sha):
+def require_website_scope(base, sha, include_adapter=False):
     require_ancestor(base, sha)
-    if git("diff", "--name-only", base, sha, "--", *CORE_PATHS):
+    changed = set(git("diff", "--name-only", base, sha, "--", *CORE_PATHS).splitlines())
+    if include_adapter:
+        if not changed <= ADAPTER_SCOPE or not changed.intersection(ADAPTER_RUNTIME_FILES):
+            raise RuntimeError("recharge_adapter_release_scope_mismatch")
+    elif changed:
         raise RuntimeError("recharge_core_or_runtime_changed")
 
 
@@ -87,10 +101,11 @@ def remote(plan):
     comment = f"ID website {name} {plan['sha'][:12]} run {os.environ['GITHUB_RUN_ID']}/{os.environ['GITHUB_RUN_ATTEMPT']}"
     started = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     print(f"SSM request: {comment}", flush=True)
+    execution_timeout = 900 if plan.get("adapter") and name == "release" else 600
     try:
         result = aws("ssm", "send-command", "--instance-ids", INSTANCE, "--document-name", "AWS-RunShellScript",
                      "--timeout-seconds", "600", "--comment", comment, "--parameters",
-                     json.dumps({"commands": [script_for(plan)], "executionTimeout": ["600"]}), once=True)
+                     json.dumps({"commands": [script_for(plan)], "executionTimeout": [str(execution_timeout)]}), once=True)
         command_id = result["Command"]["CommandId"]
     except AwsError as error:
         if error.code not in {"response_unavailable", "InternalServerError", "RequestTimeout", "ServiceUnavailable"}:
@@ -99,7 +114,7 @@ def remote(plan):
     except (subprocess.TimeoutExpired, json.JSONDecodeError):
         command_id = recover_command(comment, started)
     print(f"SSM command: {command_id}", flush=True)
-    until = time.monotonic() + 640
+    until = time.monotonic() + execution_timeout + 40
     while time.monotonic() < until:
         try:
             invocation = aws("ssm", "get-command-invocation", "--command-id", command_id, "--instance-id", INSTANCE)
@@ -143,17 +158,23 @@ def main():
     quality_run = os.environ["QUALITY_RUN_ID"]
     require_main(sha)
     attempt = os.environ.get("INSPECT_CANARY_SHA")
+    include_adapter = os.environ.get("RELEASE_RECHARGE_ADAPTER") == "true"
     if attempt:
+        if include_adapter:
+            raise RuntimeError("inspect_and_release_are_separate")
         require_ancestor(attempt, sha)
         command_id, diagnostic = remote({"operation": "inspect", "sha": sha, "attemptSha": attempt})
         print(json.dumps({"command": command_id, "diagnostic": diagnostic}), flush=True)
         return
-    preflight_id, before = remote({"operation": "preflight", "sha": sha})
+    preflight_id, before = remote({"operation": "preflight", "sha": sha, "adapter": include_adapter})
     base = before["components"]["app"]["revision"]
     print(f"Live website: {base}; free bytes: {before['freeBytes']}", flush=True)
     if base == sha:
         raise RuntimeError("requested_revision_already_running_read_back_the_existing_release")
-    require_website_scope(base, sha)
+    require_website_scope(base, sha, include_adapter)
+    if include_adapter:
+        for name in ("recharge", "recharge-native"):
+            require_ancestor(before["components"][name]["revision"], sha)
     names = (f"independent-source-{sha}.tar.gz", f"independent-assets-{sha}.json")
     if hashlib.sha256((OUTPUT / names[1]).read_bytes()).hexdigest() != before["assetsSha256"]:
         raise RuntimeError("website_release_would_change_recharge_assets")
@@ -167,13 +188,23 @@ def main():
              "deploy/website/id-business-independent-backup-monitoring.timer")
     files += tuple(path for path in ("frontend/order-opening.mjs", "server/recharge-order-sync.mjs")
                    if (ROOT / path).is_file())
+    if include_adapter:
+        files += ("frontend/prototype.js", "server/card-management.mjs", "server/local-business.mjs",
+                  "server/order-auxiliary.mjs", "server/order-recharge-client.mjs",
+                  "modules/recharge/codexdaichong/gateway.mjs", "modules/recharge/codexdaichong/local-gateway.mjs",
+                  *ADAPTER_FILES)
     plan = {"operation": "release", "sha": sha, "before": before, "artifacts": artifacts,
             "files": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in files},
             "qualityRun": quality_run, "preflightCommand": preflight_id}
+    if include_adapter:
+        plan["adapter"] = {"runtimeFiles": ADAPTER_RUNTIME_FILES}
     require_main(sha)
     command_id, receipt = remote(plan)
     if receipt.get("mainSha") != sha or not receipt.get("appCanaryPassed"):
         raise RuntimeError(f"website_release_receipt_mismatch: {command_id}")
+    if include_adapter and (receipt.get("adapter", {}).get("revision") != sha or
+                            not receipt.get("adapterCanaryPassed") or not receipt.get("nativeEngineUnchanged")):
+        raise RuntimeError(f"adapter_release_receipt_mismatch: {command_id}")
     receipt["releaseCommand"] = command_id
     print(json.dumps(receipt, sort_keys=True), flush=True)
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:

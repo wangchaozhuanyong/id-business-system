@@ -93,6 +93,7 @@ test('管理员代录订单可指定员工，草稿、列表与实际录入人�
     enabled = false;
     await page.locator('[data-action="commerce-order-owner-refresh"]').click();
     await page.locator('#commerce-ownerId-error').waitFor();
+    await page.locator('#commerce-proMaterialMode').selectOption('');
     await page.locator('button[form="commerce-order-form"][type="submit"]').click();
     assert.equal(writes.length, 0, '失效归属不能被静默改成自己后保存');
     assert.equal(await page.locator('#confirm-dialog[open]').count(), 0);

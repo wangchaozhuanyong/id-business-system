@@ -15,7 +15,8 @@ async function fixture() {
   const data = JSON.parse(await readFile(fixturePath, 'utf8'));
   const { orders, customers } = data.commerce.data;
   const original = { ...orders[0], cardId: 'recharge:7', payment: '银行卡', paymentId: '4242',
-    product: 'GPT', plan: 'Plus', source: '手工录单', paidConfirmed: true, paidAmount: '10000', paidCurrency: 'PHP',
+    product: 'GPT', plan: 'Plus', source: '管理员手工', paidConfirmed: true, receiptConfirmed: true,
+    entitlementStatus: 'active', paidAmount: '10000', paidCurrency: 'PHP',
     businessType: '续费', accountSource: '客户自有', accountId: '', version: 1, cancelled: false,
     corrections: [], financialEvidence: [] };
   const at = Date.now();
@@ -93,6 +94,8 @@ test('银行卡管理与续费共用复制、筛选、分组和预计金额', { 
         const rows = list.locator('tbody tr[data-row-id]');
         const expired = list.locator('[data-row-id="expired"]');
         const upcoming = list.locator('[data-row-id="upcoming"]');
+        if (width <= 900) for (const row of [expired, upcoming, list.locator('[data-row-id="switch-old"]'),
+          list.locator('[data-row-id="switch-new"]')]) await row.getByRole('button', { name: '更多资料' }).click();
         await expired.getByText('175.92 USD').waitFor();
         assert.equal(await expired.getByText('已过期', { exact: true }).count(), 1);
         assert.equal(await upcoming.getByText('即将到期', { exact: true }).count(), 1);
@@ -101,9 +104,10 @@ test('银行卡管理与续费共用复制、筛选、分组和预计金额', { 
         assert.equal(await list.getByText('no-card@example.test').count(), 0);
         assert.ok(!(await list.innerText()).includes(pan));
         assert.equal(await rows.count(), 20);
-        const amountHeading = list.getByRole('columnheader', { name: '预计金额', exact: true });
+        const amountHeading = list.locator('thead th[aria-label="预计金额"]');
         const amountHelp = amountHeading.getByLabel('查看预计金额说明');
         const amountNote = amountHeading.locator('.title-description');
+        if (width > 900) {
         await amountHelp.scrollIntoViewIfNeeded();
         assert.equal(await amountNote.isVisible(), false);
         const triggerLayout = await amountHelp.evaluate(node => {
@@ -133,6 +137,10 @@ test('银行卡管理与续费共用复制、筛选、分组和预计金额', { 
         await amountHeading.locator('.title-description:popover-open').waitFor();
         await page.getByLabel('搜索当前列表').click();
         await amountNote.waitFor({ state: 'hidden' });
+        } else {
+          assert.equal(await expired.getByText('175.92 USD').isVisible(), true);
+          assert.equal(await amountHeading.isVisible(), false, '移动端金额随展开的记录显示');
+        }
         const copyButton = expired.getByRole('button', { name: '复制', exact: true });
         await copyButton.scrollIntoViewIfNeeded();
         assert.equal(await copyButton.evaluate(button => {
@@ -184,4 +192,101 @@ test('银行卡管理与续费共用复制、筛选、分组和预计金额', { 
       } finally { await context.close(); }
     });
   }
+});
+
+test('冻结银行卡后两个续费账号都收到提示并可选择新卡', { timeout: 40_000 }, async t => {
+  const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
+  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
+  t.after(() => browser.close());
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const localFixtures = await fixture();
+  localFixtures['auth/order-owners'] = { items: [actor] };
+  const mock = await interceptDesign(context, { localFixtures, actor, skipRechargeAssets: true });
+  const shared = localFixtures.commerce.data.orders.filter(row => row.cardId === 'recharge:7');
+  const counts = { GPT: 3 };
+  const frozen = { id: 'frozen-card', orderId: 'upcoming', typeName: 'wise潘', last4: '4242',
+    counts, frozenAt: new Date().toISOString(), frozenBy: actor.name, reason: '冻结测试', poolState: 'pending' };
+  let isFrozen = false, submitted;
+  await context.route('**/api/local/subscription-card-status*', route => {
+    const orderId = new URL(route.request().url()).searchParams.get('orderId');
+    if (orderId) {
+      const order = localFixtures.commerce.data.orders.find(row => row.id === orderId);
+      return route.fulfill({ json: { order: { id: order.id, version: order.version, card: {
+        typeName: 'wise潘', last4: '4242', availability: isFrozen ? 'frozen' : 'normal'
+      } } } });
+    }
+    if (route.request().method() === 'GET') return route.fulfill({ json: {
+      items: shared.map(row => ({ id: row.id, cardKey: 'shared-card', last4: '4242', counts,
+        state: isFrozen ? 'frozen' : 'normal', canFreeze: !isFrozen })),
+      frozen: isFrozen ? [frozen] : []
+    } });
+    const body = route.request().postDataJSON();
+    if (body.action === 'accounts') return route.fulfill({ json: { accounts: [
+      { product: 'GPT', account: 'upcoming@example.test', orders: [{ id: 'upcoming', orderNo: 'QA-upcoming',
+        plan: 'Plus', start: shared.find(row => row.id === 'upcoming').start, refunds: 1, bankReturns: 0 }] }
+    ] } });
+    assert.deepEqual(body, { action: 'freeze', orderId: 'upcoming', version: 1, reason: '冻结测试' });
+    isFrozen = true;
+    return route.fulfill({ json: { card: frozen } });
+  });
+  await context.route('**/api/local/order-cards', route => route.fulfill({ json: { items: [
+    { id: 'recharge:7', last4: '4242', active: !isFrozen, frozen: isFrozen },
+    { id: 'recharge:9', last4: '0009', active: true }
+  ] } }));
+  await context.route('**/api/local/commerce', route => {
+    if (route.request().method() === 'GET') return route.fulfill({ json: localFixtures.commerce });
+    const { data, version } = route.request().postDataJSON();
+    submitted = data.orders.find(row => !localFixtures.commerce.data.orders.some(old => row.id === old.id));
+    localFixtures.commerce = { data, version: version + 1 };
+    return route.fulfill({ json: localFixtures.commerce });
+  });
+  const page = await context.newPage(), errors = [];
+  page.setDefaultTimeout(6500);
+  page.on('pageerror', error => errors.push(error.message));
+  await page.goto(origin + '/#/data-management/bank-cards');
+  const row = page.locator('table[data-table="commerce-subscription-cards"] [data-row-id="upcoming"]');
+  await row.getByText('正常', { exact: true }).waitFor();
+  await row.getByRole('button', { name: '修改', exact: true }).click();
+  await page.getByRole('menuitem', { name: '标记为冻结' }).click();
+  const drawer = page.locator('#drawer');
+  await drawer.getByLabel('冻结原因（选填）').fill('冻结测试');
+  await drawer.getByRole('button', { name: '确认冻结', exact: true }).click();
+  await row.waitFor({ state: 'detached' });
+  await page.getByRole('tab', { name: '冻结银行卡' }).click();
+  const frozenTable = page.locator('table[data-table="commerce-frozen-cards"]');
+  await frozenTable.getByText('卡池待停用').waitFor();
+  await frozenTable.getByRole('button', { name: '查看银行卡关联账号' }).click();
+  await drawer.getByText('GPT · upcoming@example.test · 1 笔订单').click();
+  await drawer.getByText('QA-upcoming', { exact: true }).waitFor();
+  await drawer.getByRole('button', { name: '关闭', exact: true }).click();
+  await page.goto(origin + '/#/workspace/order/gpt');
+  await page.locator('#commerce-customerId').evaluate((select, id) => {
+    select.value = id;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  }, shared.find(row => row.id === 'upcoming').customerId);
+  const email = page.locator('#commerce-email');
+  await email.fill('upcoming@example.test');
+  await email.blur();
+  await page.locator('[data-order-renewal-card]').getByText('已冻结', { exact: true }).waitFor();
+  for (const id of ['expired', 'upcoming']) {
+    await page.goto(origin + '/#/workspace/order/renew/' + id);
+    const hint = page.locator('[data-order-renewal-card]');
+    await hint.getByText('已冻结', { exact: true }).waitFor();
+    assert.match(await hint.innerText(), /4242/);
+    assert.equal(await page.locator('#commerce-cardId option[value="recharge:7"]').count(), 0);
+  }
+  const picker = page.locator('#commerce-cardId-picker');
+  await page.getByRole('button', { name: '换用银行卡', exact: true }).click();
+  assert.equal(await picker.evaluate(node => document.activeElement === node), true);
+  await picker.click();
+  await page.locator('#commerce-cardId-options').getByRole('option', { name: /0009/ }).click();
+  await page.locator('#commerce-paidAmount').fill('20');
+  await page.locator('#commerce-saleAmount').fill('120');
+  await page.getByRole('button', { name: '核对并保存', exact: true }).click();
+  await page.locator('#confirm-dialog[open] [data-action="confirm-accept"]').click();
+  await page.locator('#toast').filter({ hasText: '订单提交成功' }).waitFor();
+  assert.equal(submitted.cardId, 'recharge:9');
+  assert.equal(submitted.previousOrderId, 'upcoming');
+  assert.deepEqual(errors, []);
+  assert.deepEqual(mock.external, []);
 });

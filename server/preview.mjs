@@ -25,7 +25,9 @@ import { vendureRechargePrefix } from '../modules/recharge/vendure/loopback-brid
 import { productionDataPaths } from './production-data.mjs';
 import { createOrderRechargeClient, readPoolCards } from './order-recharge-client.mjs';
 import { createOrderAuxiliaryHandler, orderAuxiliaryRoutes } from './order-auxiliary.mjs';
-import { cardManagementRoutes, createCardManagementHandler, preserveReferencedOrderCard } from './card-management.mjs';
+import {
+  cardManagementRoutes, checkFrozenCardPoolWrite, createCardManagementHandler, preserveReferencedOrderCard
+} from './card-management.mjs';
 import { claudeGoogleSubscriptionRoutes, createClaudeGoogleSubscriptionsHandler } from './claude-google-subscriptions.mjs';
 import { createSubscriptionHandler, subscriptionRoutes } from './subscription-management.mjs';
 import { createRechargeCodeHandler, rechargeCodesRoute } from './recharge-code-requests.mjs';
@@ -209,6 +211,10 @@ export async function startPreview(
           beforeCardDelete: (cardId, actor) => {
             if (!store) throw new Error('订单资料尚未就绪');
             return preserveReferencedOrderCard(store, orderRechargeClient, cardId, actor);
+          },
+          beforeCardWrite: command => {
+            if (!store) throw new Error('订单资料尚未就绪');
+            checkFrozenCardPoolWrite(store, command);
           },
           onRechargeOutcome: outcome => queueMicrotask(() => {
             try { monitoringSources?.recordRecharge(outcome); } catch {}

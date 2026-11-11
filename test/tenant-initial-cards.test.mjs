@@ -38,7 +38,7 @@ test('已有租户银行卡入口也最多 99 张，第 100 张不写入且审�
   const audit = [];
   const store = {
     load: () => ({ data: { tenants: [{ id: 'old', active: true }] } }),
-    featureDocument: () => structuredClone(doc),
+    featureDocument: domain => domain === 'tenant-cards' ? structuredClone(doc) : { version: 0, data: null },
     saveFeatureDocument(domain, version, data, entry) {
       assert.equal(domain, 'tenant-cards'); assert.equal(version, doc.version);
       audit.push(entry); doc = { version: version + 1, data }; return doc;

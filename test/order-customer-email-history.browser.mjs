@@ -62,6 +62,7 @@ test('订单按 GPT、Claude 隔离客户历史邮箱，支持切换、手填和
   }
   await page.goto(origin + '/#/workspace/order/gpt');
   await page.locator('#commerce-customerId option[value="alpha"]').waitFor({ state: 'attached' });
+  await page.locator('#commerce-proMaterialMode').selectOption('');
   await page.locator('#commerce-cardId-picker').click();
   await page.locator('#commerce-cardId-options [data-value="synthetic-card"]').click();
   assert.match(await page.locator('#commerce-cardId-picker').innerText(), /已用 3 次/);

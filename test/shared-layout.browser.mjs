@@ -53,8 +53,7 @@ test('shared layouts preserve alignment, readable controls and stable navigation
         for (const product of ['gpt', 'claude']) {
           await go(`workspace/order/${product}`);
           await page.locator('#commerce-payment').selectOption('银行卡');
-          if (product === 'claude')
-            await page.locator('#commerce-proMaterialMode').selectOption('tenant_card');
+          await page.locator('#commerce-proMaterialMode').selectOption(product === 'claude' ? 'tenant_card' : '');
           await settled();
           const groups = await page.locator('.order-financial-group').evaluateAll(nodes =>
             nodes.map(n => n.getBoundingClientRect().top));
@@ -68,10 +67,13 @@ test('shared layouts preserve alignment, readable controls and stable navigation
           });
           if (width >= 1440) assert(formWidth >= 640, '宽屏录单为双列表单保留足够正文宽度');
           if (formWidth >= 640) {
-            const search = await box('#commerce-cardId-picker');
             aligned(await box('#commerce-payment'), await box('#commerce-cardTypeId'), '支付方式与银行卡类型应同排');
-            aligned(search, await box('#commerce-paymentId'), '选择银行卡与尾号应在后续行并排');
-            aligned(await box('label[for="commerce-cardId-picker"]'), await box('label[for="commerce-paymentId"]'), '选择银行卡与尾号标签不齐');
+            const next = product === 'claude' ? 'tenantId' : 'cardId';
+            aligned(await box('#commerce-proMaterialMode'), await box(`#commerce-${next}-picker`), '填写方式与下一步控件应同排');
+            aligned(await box('label[for="commerce-proMaterialMode"]'), await box(`label[for="commerce-${next}-picker"]`), '填写方式与下一步标签不齐');
+            if (product === 'claude')
+              aligned(await box('#commerce-cardId-picker'), await box('#commerce-paymentId'), '用卡人的银行卡与尾号应同排');
+            else aligned(await box('#commerce-paymentId'), await box('#commerce-proCardSerial'), '卡尾号与序列号应同排');
           }
           await page.locator('#commerce-payment').selectOption('苹果内购');
           assert(await page.locator('#commerce-appleIdId-picker').isVisible());

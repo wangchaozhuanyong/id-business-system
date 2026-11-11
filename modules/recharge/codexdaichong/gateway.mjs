@@ -177,6 +177,7 @@ export function createCodexdaichongGateway({
   legacyNotificationLocked,
   onRechargeOutcome,
   beforeCardDelete,
+  beforeCardWrite,
   assets = loadCodexdaichongAssets
 }) {
   const upstream = new URL(upstreamUrl);
@@ -256,6 +257,8 @@ export function createCodexdaichongGateway({
     }
     if (!external && !readMethods.has(req.method) && !canMutate(req))
       return respond(res, 403, '请求来源未通过校验');
+    if (/^\/api\/admin\/cards\/stop-use\/?$/i.test(path.pathname))
+      return respond(res, 404, '页面不存在');
     const deletedCard = req.method === 'DELETE' && /^\/api\/admin\/cards\/([^/]+)\/?$/i.exec(path.pathname);
     if (deletedCard && beforeCardDelete) {
       let id;
@@ -309,7 +312,35 @@ export function createCodexdaichongGateway({
       return;
     }
     const extraHeaders = external ? filterHeaders(req.headers, ['x-api-key']) : {};
-    let proxyImportBody;
+    let bufferedBody;
+    if (beforeCardWrite && req.method === 'POST') {
+      const restore = /^\/api\/admin\/orbitcard\/cards\/([^/]+)\/restore\/?$/i.exec(path.pathname);
+      const kind = external || /^\/api\/admin\/cards\/import\/?$/i.test(path.pathname) ? 'import'
+        : /^\/api\/admin\/config\/?$/i.test(path.pathname) ? 'config' : '';
+      if (restore || kind) {
+        let data, id;
+        try {
+          if (restore) {
+            const cardId = Number(decodeURIComponent(restore[1]));
+            if (!Number.isSafeInteger(cardId) || cardId <= 0) return respond(res, 400, '银行卡编号无效');
+            id = 'orbitcard:' + cardId;
+          }
+          else {
+            if (!/^application\/json(?:;|$)/i.test(req.headers['content-type'] || ''))
+              return respond(res, 415, '请使用 JSON 提交资料');
+            data = await readPresentationJson(req, 15 * 1024 * 1024);
+          }
+        } catch { return respond(res, 400, '无法读取银行卡池操作'); }
+        try { await beforeCardWrite({ id, kind, data }); }
+        catch (error) {
+          return error.status === 409 ? respond(res, 409, error.message) : respond(res, 503, '暂时无法核对银行卡冻结状态');
+        }
+        if (kind) {
+          bufferedBody = Buffer.from(JSON.stringify(data));
+          extraHeaders['content-length'] = String(bufferedBody.length);
+        }
+      }
+    }
     if (req.method === 'POST' && path.pathname === '/api/admin/proxies') {
       if (!/^application\/json(?:;|$)/i.test(req.headers['content-type'] || ''))
         return respond(res, 415, '请使用 JSON 提交代理资料');
@@ -331,9 +362,9 @@ export function createCodexdaichongGateway({
         let batch;
         try { batch = normalizeRechargeProxyInput(data.proxies ?? data.proxy_url ?? data.proxy ?? ''); }
         catch (error) { return respond(res, 400, error.message); }
-        proxyImportBody = Buffer.from(JSON.stringify({ proxies: batch.proxies, countryCode: data.countryCode }));
+        bufferedBody = Buffer.from(JSON.stringify({ proxies: batch.proxies, countryCode: data.countryCode }));
         extraHeaders['content-type'] = 'application/json';
-        extraHeaders['content-length'] = String(proxyImportBody.length);
+        extraHeaders['content-length'] = String(bufferedBody.length);
       } catch { return respond(res, 400, '代理资料读取失败，请重试'); }
     }
     const upstreamRequest = httpRequest(
@@ -390,7 +421,7 @@ export function createCodexdaichongGateway({
     res.once('close', () => {
       if (!res.writableFinished) upstreamRequest.destroy();
     });
-    if (proxyImportBody) upstreamRequest.end(proxyImportBody);
+    if (bufferedBody) upstreamRequest.end(bufferedBody);
     else req.pipe(upstreamRequest);
   }
 

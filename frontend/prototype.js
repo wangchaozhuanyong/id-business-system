@@ -981,7 +981,9 @@ function table(columns, rows, scope = '', tableId = 'default', emptyState, selec
     .map(key => dataColumns.find(column => column.id === key)).find(Boolean) || dataColumns[0];
   const preferred = tableId === '苹果ID余额' ? ['balance', 'status', 'country']
     : ['status', 'use', 'subscriptionStatus', 'plan', 'balance', 'saleAmount', 'amount', 'owner', 'ownerName', 'currentCustomer', 'customer', 'expiry'];
-  const summaryColumns = new Set([identity?.id, ...preferred.filter(key => dataColumns.some(column => column.id === key)).slice(0, 3)]);
+  const summaries = [...new Set([...dataColumns.filter(column => column.mobileSummary).map(column => column.id),
+    ...preferred.filter(key => dataColumns.some(column => column.id === key))])];
+  const summaryColumns = new Set([identity?.id, ...summaries.slice(0, 3)]);
   if (summaryColumns.size === 1) for (const column of dataColumns) {
     if (!/password|totp|secret|token|session|security|proxy/i.test(column.id)) summaryColumns.add(column.id);
     if (summaryColumns.size >= 4) break;

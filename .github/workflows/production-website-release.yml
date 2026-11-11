@@ -7,6 +7,10 @@ on:
         description: 最新 main 的完整提交 SHA
         required: true
         type: string
+      include_recharge_adapter:
+        description: 同版本发布银行卡停用所需的代充适配器
+        default: false
+        type: boolean
       inspect_canary_sha:
         description: 只读检查指定失败版本的金丝雀日志，发布时留空
         required: false
@@ -24,7 +28,7 @@ jobs:
   release:
     if: github.repository == 'wangchaozhuanyong/id-business-system' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
-    timeout-minutes: 18
+    timeout-minutes: 24
     permissions:
       contents: read
       actions: read
@@ -32,6 +36,7 @@ jobs:
     env:
       RELEASE_SHA: ${{ inputs.expected_sha }}
       INSPECT_CANARY_SHA: ${{ inputs.inspect_canary_sha }}
+      RELEASE_RECHARGE_ADAPTER: ${{ inputs.include_recharge_adapter }}
     steps:
       - name: Check out main
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683

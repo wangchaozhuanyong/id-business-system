@@ -64,26 +64,33 @@ function seed(source) {
   }
 }
 
-test('银行卡类型和稳定卡 ID 关联随加密快照恢复', async t => {
+test('银行卡类型、冻结状态和卡片匹配随加密快照恢复', async t => {
   const paths = await drill(t);
   const store = createLocalBusinessStore(paths.source);
   const data = {
     items: [{ id: 'type-fixture', name: '合成卡类型', active: true }],
     assignments: { 'recharge:74': 'type-fixture' }
   };
+  const syntheticCard = '4242424242424242';
+  const freezes = { items: [{ id: 'frozen-fixture', cardIds: ['recharge:74'], last4: '4242',
+    fingerprint: store.orderCardFingerprint(syntheticCard), reason: '合成冻结原因', poolState: 'stopped' }] };
   try {
     store.saveFeatureDocument('card-types', 0, data, {
       action: '设置银行卡类型', actor: { id: 'fixture-actor', name: '合成操作员' }, targetId: 'recharge:74'
     });
+    store.saveFeatureDocument('order-card-freeze', 0, freezes);
   } finally {
     store.close();
   }
   await createSnapshot({ source: paths.source, output: paths.output });
   assert.ok(!(await readFile(join(paths.output, snapshotFile))).includes(Buffer.from('合成卡类型')));
+  assert.ok(!(await readFile(join(paths.output, snapshotFile))).includes(Buffer.from('合成冻结原因')));
   await restoreSnapshot({ input: paths.output, output: paths.restore, key: paths.source + '.key' });
   const recovered = createLocalBusinessStore(join(paths.restore, snapshotFile));
   try {
     assert.deepEqual(recovered.featureDocument('card-types'), { version: 1, data });
+    assert.deepEqual(recovered.featureDocument('order-card-freeze'), { version: 1, data: freezes });
+    assert.equal(recovered.orderCardFingerprint(syntheticCard), freezes.items[0].fingerprint);
   } finally {
     recovered.close();
   }

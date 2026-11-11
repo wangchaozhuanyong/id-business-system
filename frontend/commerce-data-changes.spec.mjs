@@ -7,7 +7,7 @@ import * as orderOpening from './order-opening.mjs';
 const source = await readFile(new URL('./commerce-prototype.js', import.meta.url), 'utf8');
 
 test('银行卡价格与类型的变动触发重新读取，失败时通知同步层重试', async () => {
-  const reads = { estimates: 0, types: 0, renders: 0 };
+  const reads = { estimates: 0, types: 0, status: 0, renders: 0 };
   let unavailable = false;
   const modules = [];
   const api = { state: { route: 'data-management/bank-cards', demoOrders: [], drafts: new Map() }, modules: {}, money: {},
@@ -19,6 +19,7 @@ test('银行卡价格与类型的变动触发重新读取，失败时通知同�
       if (unavailable) throw new Error('合成读取失败');
       return { items: [] };
     },
+    subscriptionCardStatus: async () => { reads.status++; return { items: [], frozen: [] }; },
     cardTypes: async () => { reads.types++; return { version: reads.types, items: [], assignments: {} }; }
   };
   runInNewContext(source, {
@@ -31,6 +32,7 @@ test('银行卡价格与类型的变动触发重新读取，失败时通知同�
   await commerce.onDataChanges(['settings', 'card-types', 'finance-rates']);
   assert.equal(reads.estimates, 1);
   assert.equal(reads.types, 1);
+  assert.equal(reads.status, 1);
   assert.equal(reads.renders, 1);
 
   unavailable = true;
@@ -40,4 +42,6 @@ test('银行卡价格与类型的变动触发重新读取，失败时通知同�
   unavailable = false;
   assert.notEqual(await commerce.onDataChanges(['finance-rates']), false);
   assert.equal(reads.estimates, 3);
+  await commerce.onDataChanges(['order-card-freeze']);
+  assert.equal(reads.status, 4);
 });

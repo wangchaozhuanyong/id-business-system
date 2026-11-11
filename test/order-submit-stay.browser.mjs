@@ -8,6 +8,7 @@ import { interceptDesign, origin } from './helpers/offline-design.mjs';
 
 const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
 const actor = { id: 'submit-stay', name: '离线录单员', role: 'admin' };
+const sampleCard = '4242424242424242';
 async function setup(browser, slug = 'gpt', width = 1440, seed) {
   const fixture = JSON.parse(await readFile(new URL('../docs/audits/2026-11-06-design-review/visual-fixtures.json', import.meta.url)));
   fixture.commerce.data.orders = [];
@@ -60,13 +61,34 @@ test('五类订单提交后留在录入页，刷新最近记录并可连续录�
   ];
   for (const [slug, product, plan] of products) {
     await t.test(product, async () => {
-      const { context, page, fixture, writes, errors, traffic, submit, success } = await setup(browser, slug, product === 'Grok' ? 390 : 1440);
+      const { context, page, fixture, writes, errors, traffic, submit, success } = await setup(browser, slug, product === 'Grok' ? 390 : 1440, fixture => {
+        fixture['card-types'] = {
+          version: 1,
+          items: [{ id: 'qa-default-type', name: 'vccwc999', active: true }, { id: 'qa-wise-type', name: 'wise潘', active: true }],
+          assignments: { 'recharge:71': 'qa-wise-type' }
+        };
+        fixture['order-cards'] = { items: [
+          { id: 'recharge:71', last4: '0171', active: true, status: '正常' },
+          { id: 'recharge:72', last4: '0172', active: true, status: '正常' }
+        ] };
+      });
       try {
         if (plan) await page.locator('#commerce-plan').selectOption(plan);
-        if (product !== 'GPT') {
-          await page.locator('#commerce-proMaterialMode').selectOption('manual_card');
-          await page.locator('#commerce-proCardNumber').fill('4000000000004242');
-        }
+        const materialMode = page.locator('#commerce-proMaterialMode');
+        assert.equal(await materialMode.inputValue(), 'manual_card');
+        const cardType = page.locator('#commerce-cardTypeId');
+        await cardType.locator('option[value="qa-default-type"]').waitFor({ state: 'attached' });
+        assert.equal(await cardType.inputValue(), product === 'GPT' ? 'qa-default-type' : '');
+        if (product === 'GPT') {
+          await materialMode.selectOption('');
+          const picker = page.locator('#commerce-cardId-picker');
+          await page.locator('#commerce-cardId option[value="recharge:72"]').waitFor({ state: 'attached' });
+          for (const [tail, expected] of [['0171', 'qa-wise-type'], ['0172', 'qa-default-type']]) {
+            await picker.click();
+            await page.locator('#commerce-cardId-options').getByRole('option', { name: new RegExp(tail) }).click();
+            assert.equal(await cardType.inputValue(), expected);
+          }
+        } else await page.locator('#commerce-proCardNumber').fill(sampleCard);
         await page.locator('#commerce-email').fill('stay-' + slug + '@example.test');
         await page.locator('#commerce-notes').fill('本次提交的草稿');
         const now = Date.now(), day = 86_400_000;
@@ -91,6 +113,12 @@ test('五类订单提交后留在录入页，刷新最近记录并可连续录�
         const orderStatus = await page.evaluate(id => window.IDDesignAPI.modules.commerce.getOrderStatuses(id).subscription, saved.id);
         assert.equal(orderStatus, '有效');
         assert.equal(await page.evaluate(() => window.IDDesignAPI.modules.commerce.renewalReminderCount()), 1);
+        assert.equal(await materialMode.inputValue(), 'manual_card');
+        if (product === 'GPT') {
+          assert.equal(saved.cardTypeId, 'qa-default-type');
+          assert.equal(await cardType.inputValue(), 'qa-default-type');
+          await cardType.selectOption('');
+        }
         assert.equal(await page.locator('#main #commerce-email').inputValue(), '', '只清理本次已保存草稿');
         assert.equal(await page.locator('#main #commerce-notes').inputValue(), '');
         const recent = page.locator('#commerce-entry-records');
@@ -106,6 +134,7 @@ test('五类订单提交后留在录入页，刷新最近记录并可连续录�
         await page.locator('#commerce-contact-name').waitFor();
         await page.evaluate(slug => { location.hash = '#/workspace/order/' + slug; }, slug);
         assert.equal(await page.locator('#commerce-email').inputValue(), 'next-' + slug + '@example.test', '后续新草稿仍可切页保留');
+        if (product === 'GPT') assert.equal(await cardType.inputValue(), '', '手动选未填写后返回草稿仍保留');
         assert.deepEqual(errors, []); assert.deepEqual(traffic.external, []);
       } finally { await context.close(); }
     });
@@ -215,6 +244,7 @@ test('提交失败可重试，迟到成功不会清除后续输入或抢回页�
   t.after(() => browser.close());
   const { context, page, control, writes, submit, success, errors, traffic } = await setup(browser);
   t.after(() => context.close());
+  await page.locator('#commerce-proCardNumber').fill(sampleCard);
   await page.locator('#commerce-email').fill('retry@example.test');
   await page.locator('#commerce-notes').fill('失败保留');
   const url = page.url();
@@ -228,6 +258,7 @@ test('提交失败可重试，迟到成功不会清除后续输入或抢回页�
   await submit(); await success();
   assert.equal(page.url(), url);
   assert.equal(writes.length, 2);
+  await page.locator('#commerce-proCardNumber').fill(sampleCard);
   await page.locator('#commerce-email').fill('late@example.test');
   control.hold = Promise.withResolvers(); control.started = Promise.withResolvers();
   await submit(); await control.started.promise;

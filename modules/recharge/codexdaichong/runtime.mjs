@@ -5,7 +5,7 @@ import { isAbsolute, join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { CODEXDAICHONG_REVISION, verifyCodexdaichongSource } from './prepare.mjs';
 import { probeCodexdaichongRuntime } from './runtime-health.mjs';
-import { createNativeAdminTokenIssuer, startNativeRechargeAdapter } from './native-adapter.mjs';
+import { createNativeAdminTokenIssuer, createNativeCardStop, startNativeRechargeAdapter } from './native-adapter.mjs';
 import { verifyNativeNetworkIsolation } from './native-network.mjs';
 import { resolveNativeAdminTokenSecret } from './native-secret.mjs';
 
@@ -222,7 +222,7 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
             }
           });
           const adapter = await startNativeRechargeAdapter({ nativeUrl, secret: env.ID_RECHARGE_BRIDGE_SECRET,
-            getNativeAdminToken }, Number(env.PORT));
+            getNativeAdminToken, stopCardUse: createNativeCardStop(pool) }, Number(env.PORT));
           let closing;
           const stop = () => {
             closing ??= adapter.close().finally(() => pool.end()).catch(() => { process.exitCode = 1; });
