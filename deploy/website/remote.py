@@ -1,4 +1,4 @@
-"""Run the existing website-only staging, canary, and switch on the SSM host."""
+"""Stage, verify and switch the website and its explicitly selected adapter on the SSM host."""
 
 import fcntl
 import hashlib
@@ -25,6 +25,10 @@ BUCKET = "id-business-v2-backups-098208446664-ap-northeast-1"
 SITE_HOST = "54-249-61-238.sslip.io"
 WEBSITE = ("app", "drive-backup", "sheets-sync")
 PROTECTED = ("recharge", "recharge-native", "vendure", "formal-mysql", "media", "caddy")
+ADAPTER_UNIT = "id-business-independent-recharge.service"
+ADAPTER_DROP = DROP.parent.parent / (ADAPTER_UNIT + ".d") / "99-id-managed-adapter-release.conf"
+PINNED_UPSTREAM = "4e9bb201cf481d4bcc85da34970fc26c63ab818a"
+ADAPTER_MOUNTS = ("modules", "deploy/recharge-core")
 LAUNCHERS = ("run-app", "app-entry.mjs", "check-app.mjs")
 MONITORING = FORMAL / "backup-monitoring"
 MONITORING_RECEIPTS = MONITORING / "receipts"
@@ -67,7 +71,32 @@ def require_main(sha):
     require(remote.decode().split() == [sha, "refs/heads/main"], "remote_main_changed")
 
 
-def snapshot():
+def adapter_unit_state(components):
+    adapter, native = components["recharge"], components["recharge-native"]
+    image, revision = adapter["image"], adapter["revision"]
+    require(adapter["running"] and native["running"] and image == native["image"] and
+            re.fullmatch(r"sha256:[a-f0-9]{64}", image or "") and
+            re.fullmatch(r"[a-f0-9]{40}", revision or "") and
+            re.fullmatch(r"[a-f0-9]{40}", native["revision"] or ""), "adapter_runtime_identity_mismatch")
+    labels = json.loads(run(["docker", "image", "inspect", "--format", "{{json .Config.Labels}}", image]))
+    require(labels.get("org.id-business.upstream.revision") == PINNED_UPSTREAM and
+            labels.get("org.opencontainers.image.revision") == native["revision"], "adapter_runtime_source_mismatch")
+    binding = inspect("recharge-native")["NetworkSettings"]["Ports"].get("3000/tcp")
+    require(binding == [{"HostIp": "127.0.0.1", "HostPort": "44579"}], "native_binding_mismatch")
+    require(run(["systemctl", "is-active", ADAPTER_UNIT]).strip() == b"active", "adapter_unit_not_active")
+    command = run(["systemctl", "show", "--property=ExecStart", "--value", ADAPTER_UNIT]).decode()
+    require(re.search(r"/run-recharge\.py adapter " + revision + r"(?=[ ;}]|$)", command), "adapter_unit_launch_mismatch")
+    override = None
+    if ADAPTER_DROP.exists() or ADAPTER_DROP.is_symlink():
+        info = ADAPTER_DROP.lstat()
+        require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and
+                ADAPTER_DROP.read_text() == adapter_override(revision, native["revision"], image),
+                "adapter_override_not_managed")
+        override = digest(ADAPTER_DROP)
+    return {"commandSha256": hashlib.sha256(command.encode()).hexdigest(), "overrideSha256": override}
+
+
+def snapshot(include_adapter=False):
     components = {name: identity(inspect(name)) for name in (*WEBSITE, *PROTECTED)}
     base = components["app"]["revision"]
     require(isinstance(base, str) and re.fullmatch(r"[a-f0-9]{40}", base), "invalid_live_revision")
@@ -78,15 +107,19 @@ def snapshot():
     free = shutil.disk_usage(ROOT).free
     require(free > 12 * 1024**3, "insufficient_free_space")
     live = ROOT / "releases" / base
-    return {"components": components, "unitSha256": digest(DROP), "gatewaySha256": digest(GATEWAY),
-            "assetsSha256": digest(live / "assets.json"), "freeBytes": free,
-            "launchers": {name: digest(live / "operations" / name) for name in LAUNCHERS}}
+    state = {"components": components, "unitSha256": digest(DROP), "gatewaySha256": digest(GATEWAY),
+             "assetsSha256": digest(live / "assets.json"), "freeBytes": free,
+             "launchers": {name: digest(live / "operations" / name) for name in LAUNCHERS}}
+    if include_adapter:
+        state["adapterUnit"] = adapter_unit_state(components)
+    return state
 
 
 def check_baseline(current, expected):
     require(all(current[key] == expected[key] for key in
                 ("components", "unitSha256", "gatewaySha256", "assetsSha256", "launchers")),
             "live_baseline_changed")
+    require(current.get("adapterUnit") == expected.get("adapterUnit"), "live_adapter_unit_changed")
 
 
 def write_new(path, value, mode):
@@ -213,6 +246,90 @@ def mount_matches(container, source, destination=None):
                for mount in container["Mounts"])
 
 
+def adapter_canary(plan, source, ops):
+    image = plan["before"]["components"]["recharge"]["image"]
+    with (ops / "adapter-canary.log").open("xb") as log:
+        os.chmod(log.name, 0o600)
+        outcome = subprocess.run(["python3", str(source / "deploy/recharge-core/canary.py"), plan["sha"], image],
+                                 stdout=log, stderr=subprocess.STDOUT, timeout=260)
+    if outcome.returncode:
+        try:
+            reason = json.loads((ops / "adapter-canary.log").read_text().splitlines()[-1]).get("reason", "")
+        except (IndexError, ValueError):
+            reason = ""
+        raise ReleaseError("adapter_canary_failed" + (": " + reason if re.fullmatch("[a-z0-9_]+", reason) else ""))
+    receipt = json.loads((ops / "native-canary.receipt.json").read_text())
+    checks = {"source_203_native", "source_203_adapter", "synthetic_card_stop_and_retry_preserved_history",
+              "no_payment_or_activation_requests", "owned_temporary_containers_removed"}
+    require(receipt.get("mainSha") == plan["sha"] and receipt.get("productionWrites") is False and
+            checks.issubset(receipt["checks"]), "adapter_canary_receipt_mismatch")
+
+
+def adapter_override(sha, native, image):
+    launcher = ROOT / "releases" / sha / "source/deploy/recharge-core/run-recharge.py"
+    return f"[Service]\nExecStart=\nExecStart=/usr/bin/python3 {launcher} adapter {sha} {native} {image}\n"
+
+
+def require_native_idle():
+    request = urllib.request.Request("http://127.0.0.1:44579/api/public/runtime")
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    deadline = time.monotonic() + 45
+    while time.monotonic() < deadline:
+        with opener.open(request, timeout=5) as response:
+            status = json.loads(response.read(8192))
+        active = status.get("runtime", {}).get("active_foreground_jobs")
+        require(status.get("success") is True and type(active) is int and active >= 0, "native_runtime_unavailable")
+        if active == 0:
+            return
+        time.sleep(3)
+    raise ReleaseError("native_recharge_work_in_progress")
+
+
+def switch_adapter(plan, source, ops):
+    before, sha = plan["before"], plan["sha"]
+    native = before["components"]["recharge-native"]
+    image = before["components"]["recharge"]["image"]
+    require(adapter_unit_state(before["components"]) == before["adapterUnit"] and
+            identity(inspect("recharge-native")) == native, "live_adapter_baseline_changed")
+    require_native_idle()
+    require_main(sha)
+    ADAPTER_DROP.parent.mkdir(mode=0o755, exist_ok=True)
+    directory = ADAPTER_DROP.parent.lstat()
+    require(stat.S_ISDIR(directory.st_mode) and directory.st_uid == 0 and directory.st_mode & 0o022 == 0,
+            "adapter_override_directory_mismatch")
+    if ADAPTER_DROP.exists():
+        write_new(ops / "recharge-adapter.before.conf", ADAPTER_DROP.read_text(), 0o600)
+    pending = ADAPTER_DROP.with_name(f".{ADAPTER_DROP.name}.{sha[:12]}")
+    write_new(pending, adapter_override(sha, native["revision"], image), 0o644)
+    os.replace(pending, ADAPTER_DROP)
+    run(["systemctl", "daemon-reload"])
+    command = run(["systemctl", "show", "--property=ExecStart", "--value", ADAPTER_UNIT]).decode()
+    require(str(source / "deploy/recharge-core/run-recharge.py") + f" adapter {sha} {native['revision']} {image}" in command,
+            "adapter_effective_command_mismatch")
+    run(["systemctl", "restart", ADAPTER_UNIT], timeout=55)
+    deadline = time.monotonic() + 55
+    while time.monotonic() < deadline:
+        try:
+            container = inspect("recharge")
+            state = identity(container)
+            if (state["running"] and state["revision"] == sha and state["image"] == image and
+                    all(mount_matches(container, source / name, "/candidate/" + name) for name in ADAPTER_MOUNTS)):
+                ready = json.loads(run(["docker", "exec", state["id"], "node",
+                                        "/candidate/deploy/recharge-core/health.mjs", "--check-card-stop"], timeout=12))
+                if ready == {"ready": True, "cardStopRouteReady": True}:
+                    break
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError):
+            pass
+        time.sleep(1)
+    else:
+        raise ReleaseError("adapter_readback_failed")
+    for name in plan["adapter"]["runtimeFiles"]:
+        reported = run(["docker", "exec", state["id"], "sha256sum", "/candidate/" + name]).decode().split()[0]
+        require(reported == plan["files"][name], "adapter_source_mismatch")
+    require(identity(inspect("recharge-native")) == native, "native_engine_changed")
+    return state
+
+
 def install_backup_monitoring(source, sha):
     user = inspect("app")["Config"]["User"]
     data = (FORMAL / "data").lstat()
@@ -278,7 +395,7 @@ def http(path):
     return urllib.request.urlopen(request, timeout=5)
 
 
-def read_website(plan, release, source):
+def read_website(plan, release, source, adapter=None):
     deadline = time.monotonic() + 65
     while time.monotonic() < deadline:
         try:
@@ -313,14 +430,18 @@ console.log(JSON.stringify(Object.fromEntries(hashes)));
         if name.startswith("frontend/") and name != "frontend/index.html":
             with http("/" + Path(name).name) as response:
                 require(hashlib.sha256(response.read()).hexdigest() == expected, "live_website_asset_mismatch")
-    for path in ("/api/local/settings", "/api/local/inventory", "/api/local/commerce", "/api/local/order-sync",
-                 "/api/local/system-monitoring"):
+    protected_reads = ("/api/local/settings", "/api/local/inventory", "/api/local/commerce", "/api/local/order-sync",
+                       "/api/local/system-monitoring")
+    if adapter:
+        protected_reads += ("/api/local/subscription-card-status",)
+    for path in protected_reads:
         try:
             with http(path):
                 raise ReleaseError("anonymous_protected_read_allowed")
         except urllib.error.HTTPError as error:
             require(error.code in (401, 403), "protected_read_status_unexpected")
-    require(all(identity(inspect(name)) == plan["before"]["components"][name] for name in PROTECTED),
+    expected = plan["before"]["components"] | ({"recharge": adapter} if adapter else {})
+    require(all(identity(inspect(name)) == expected[name] for name in PROTECTED),
             "protected_component_changed")
     require(digest(GATEWAY) == plan["before"]["gatewaySha256"], "gateway_changed")
     return states
@@ -330,13 +451,18 @@ def release_website(plan):
     sha = plan["sha"]
     before = plan["before"]
     base = before["components"]["app"]["revision"]
-    check_baseline(snapshot(), before)
+    include_adapter = bool(plan.get("adapter"))
+    check_baseline(snapshot(include_adapter), before)
     release = ROOT / "releases" / sha
     source, ops = stage(plan, release)
     canary(sha, ops)
-    check_baseline(snapshot(), before)
+    if include_adapter:
+        adapter_canary(plan, source, ops)
+    check_baseline(snapshot(include_adapter), before)
     require_main(sha)
     install_backup_monitoring(source, sha)
+    adapter = switch_adapter(plan, source, ops) if include_adapter else None
+    require_main(sha)
     old = DROP.read_text()
     write_new(ops / "id-business-independent-app.service.before.conf", old, 0o600)
     pending = DROP.with_name(f".{DROP.name}.{sha[:12]}")
@@ -344,15 +470,18 @@ def release_website(plan):
     os.replace(pending, DROP)
     run(["systemctl", "daemon-reload"])
     run(["systemctl", "restart", UNIT], timeout=55)
-    live = read_website(plan, release, source)
+    live = read_website(plan, release, source, adapter)
     monitoring = read_backup_monitoring(inspect("app"))
     result = {"mainSha": sha, "previousWebsiteSha": base, "website": live["app"],
               "sidecars": {name: live[name] for name in WEBSITE[1:]},
               "sourceFilesVerified": len(plan["files"]), "artifacts": plan["artifacts"],
               "qualityRun": plan["qualityRun"], "preflightCommand": plan["preflightCommand"],
-              "appCanaryPassed": True, "protectedComponentsUnchanged": True,
+              "appCanaryPassed": True, "protectedComponentsUnchanged": not include_adapter,
               "backupMonitoring": monitoring,
               "unauthenticatedProtectedReadsRejected": True, "productionBusinessTestWrites": False}
+    if adapter:
+        result.update(adapter=adapter, adapterCanaryPassed=True, nativeEngineUnchanged=True,
+                      otherProtectedComponentsUnchanged=True)
     write_new(ops / "release.receipt.json", json.dumps(result, indent=2) + "\n", 0o600)
     return result
 
@@ -364,7 +493,7 @@ def main(plan):
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             require_main(plan["sha"])
             if plan["operation"] == "preflight":
-                result = snapshot()
+                result = snapshot(plan.get("adapter") is True)
             elif plan["operation"] == "inspect":
                 result = inspect_canary(plan["attemptSha"])
             else:

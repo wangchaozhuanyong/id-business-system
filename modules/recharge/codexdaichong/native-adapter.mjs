@@ -75,8 +75,7 @@ export function createNativeCardStop(pool) {
         const [rows] = await connection.execute({ sql: 'SELECT ' + key + ' AS id, (' + active +
           ') AS canUse FROM ' + table + ' WHERE ' + where + ' FOR UPDATE', timeout: 3000 }, params);
         matched.push(...rows.map(row => prefix + row.id));
-        if (rows.some(row => Number(row.canUse) !== 0) ||
-            (prefix === 'orbitcard:' && ids.some(id => !rows.some(row => String(row.id) === id)))) pending = true;
+        if (rows.some(row => Number(row.canUse) !== 0) || ids.some(id => !rows.some(row => String(row.id) === id))) pending = true;
       }
       await connection.commit();
       return { state: pending ? 'pending' : matched.length || refs.length ? 'stopped' : 'not_used', refs: matched };

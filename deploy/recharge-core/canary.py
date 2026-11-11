@@ -29,6 +29,7 @@ RETURN_PATHS = {'/api/admin/cdks/returns/check', '/api/admin/cdks/returns/commit
 STOCK_PATH = '/api/admin/cdks/returns/stock'
 ROUTING_PATH = '/api/admin/recharge-routing'
 PROXY_IMPORT_PATH = '/api/admin/proxies'
+CARD_STOP_PATH = '/api/admin/cards/stop-use'
 PROXY_COUNTRY_PATH = re.compile(ROUTING_PATH + r'/proxies/[1-9][0-9]{0,15}/country')
 ALLOWED_GETS = RETURN_PATHS | {STOCK_PATH, '/api/public/runtime', '/api/admin/session', '/api/admin/cards', ROUTING_PATH}
 PRIVATE_NETWORKS = tuple(ipaddress.ip_network(value) for value in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'))
@@ -71,7 +72,7 @@ def http_json(origin, path, headers=None, method='GET', body=None):
     allowed = (
         method == 'GET' and path in ALLOWED_GETS
         or method == 'PUT' and (path == ROUTING_PATH or PROXY_COUNTRY_PATH.fullmatch(path))
-        or method == 'POST' and (path in RETURN_PATHS or path == PROXY_IMPORT_PATH)
+        or method == 'POST' and (path in RETURN_PATHS or path in (PROXY_IMPORT_PATH, CARD_STOP_PATH))
     )
     if not allowed:
         raise CanaryError('read_endpoint_rejected' if method == 'GET' else 'write_endpoint_rejected')
@@ -113,7 +114,8 @@ def mysql_arguments(image, name, database, user, labels, entrypoint):
             '--max-heap-table-size=4M', '--skip-log-bin', '--mysqlx=0']
 
 
-def role_arguments(image, role, name, database, user, host, database_port, labels, native_url=None, native_name=None, service_port=3000):
+def role_arguments(image, role, name, database, user, host, database_port, labels, native_url=None,
+                   native_name=None, service_port=3000, source_mounts=()):
     if role not in ('native', 'adapter'):
         raise CanaryError('invalid_canary_role')
     args = ['docker', 'create', '--rm', '-i', '--name', name, *labels, '--cap-drop', 'ALL',
@@ -124,17 +126,21 @@ def role_arguments(image, role, name, database, user, host, database_port, label
     else:
         args += ['--network', 'host', '--read-only', '--tmpfs', '/tmp:rw,nosuid,nodev,size=32m',
                  '-e', 'ID_RECHARGE_NATIVE_URL=' + native_url, '-e', 'ID_RECHARGE_NATIVE_CONTAINER=' + native_name]
+        args += source_mounts
     for key, value in {'DB_HOST': host, 'DB_PORT': str(database_port), 'DB_NAME': database, 'DB_USER': user, 'PORT': str(service_port)}.items():
         args += ['-e', key + '=' + value]
     return args + [image, 'canary-' + role]
 
 
 class Canary:
-    def __init__(self, sha):
+    def __init__(self, sha, adapter_image=None):
         if not re.fullmatch('[a-f0-9]{40}', sha):
             raise CanaryError('invalid_release_revision')
         self.sha = sha
-        self.image = 'id-business-independent-recharge:' + sha
+        if adapter_image is not None and not re.fullmatch('sha256:[a-f0-9]{64}', adapter_image):
+            raise CanaryError('invalid_adapter_runtime_image')
+        self.adapter_only = adapter_image is not None
+        self.image = adapter_image or 'id-business-independent-recharge:' + sha
         self.owner = secrets.token_hex(16)
         self.database = 'id_redesign_codexdaichong_test_release_' + sha[:12]
         self.user = 'canary_' + sha[:12]
@@ -243,6 +249,39 @@ class Canary:
             raise CanaryError('pristine_source_mismatch')
         self.checks.append(code)
 
+    def check_card_stop(self, mysql, adapter_url, privileged):
+        number = '4242424242424242'
+        refs = ['recharge:7101', 'orbitcard:7102']
+        fixture = ("INSERT INTO card_assets (id,card_number,card_expiry,card_cvc,is_active,in_use,usage_count,locked_at,locked_by) "
+                   "VALUES (7101,'%s','12/30','000',1,1,4,NOW(),'synthetic-card-stop'); "
+                   "INSERT INTO orbitcard_card_usage (card_id,card_number,status,in_use) "
+                   "VALUES (7102,'%s','ACTIVE',0)") % (number, number)
+        release_lock = "UPDATE card_assets SET in_use=0,locked_at=NULL,locked_by=NULL WHERE id=7101"
+        card_state = "SELECT CONCAT(is_active,':',in_use,':',usage_count,':',COALESCE(locked_by,'')) FROM card_assets WHERE id=7101"
+        orbit_state = "SELECT status FROM orbitcard_card_usage WHERE card_id=7102"
+        self.return_mysql = mysql
+        self.return_queries = (fixture, release_lock, card_state, orbit_state)
+        self.mysql_query(mysql, fixture)
+
+        def stop(actor):
+            return http_json(adapter_url, CARD_STOP_PATH, {
+                'Content-Type': 'application/json',
+                'x-id-recharge-assertion': assertion(self.bridge, CARD_STOP_PATH, actor, 'POST'),
+            }, 'POST', {'refs': refs, 'number': number})
+
+        if stop(privileged)[0] != 403 or self.mysql_query(mysql, card_state) != '1:1:4:synthetic-card-stop':
+            raise CanaryError('card_stop_service_boundary_failed')
+        service = {**privileged, 'id': 'order-reconciliation'}
+        if stop(service) != (200, {'success': True, 'state': 'pending', 'refs': refs}) or \
+                self.mysql_query(mysql, card_state) != '1:1:4:synthetic-card-stop' or self.mysql_query(mysql, orbit_state) != 'RETIRED':
+            raise CanaryError('card_stop_in_use_preservation_failed')
+        self.mysql_query(mysql, release_lock)
+        for _ in range(2):
+            if stop(service) != (200, {'success': True, 'state': 'stopped', 'refs': refs}) or \
+                    self.mysql_query(mysql, card_state) != '0:0:4:' or self.mysql_query(mysql, orbit_state) != 'RETIRED':
+                raise CanaryError('card_stop_readback_failed')
+        self.checks.append('synthetic_card_stop_and_retry_preserved_history')
+
     def check_code_returns(self, mysql, native, adapter_url, privileged, sealed):
         migration = json.loads(self.command(['docker', 'exec', '-i', native, 'node',
             '/candidate/deploy/recharge-core/entry.mjs', 'migrate-canary-code-returns'], input=sealed.encode(), timeout=30))
@@ -339,7 +378,9 @@ class Canary:
         self.checks.append('stock_private_read_and_original_short_code_eligibility')
 
     def run(self):
-        if not (ROOT / 'releases' / self.sha / 'source/deploy/recharge-core/run-recharge.py').is_file():
+        source = ROOT / 'releases' / self.sha / 'source'
+        launcher_path = source / 'deploy/recharge-core/run-recharge.py'
+        if not launcher_path.is_file():
             raise CanaryError('formal_source_not_available')
         self.operations.mkdir(parents=True, exist_ok=True, mode=0o700)
         if self.operations.is_symlink() or self.receipt.exists():
@@ -347,9 +388,9 @@ class Canary:
         existing = set(self.command(['docker', 'container', 'ls', '--all', '--format', '{{.Names}}']).splitlines())
         if any(name in existing for name in self.names.values()):
             raise CanaryError('canary_name_already_exists')
-        label = self.command(['docker', 'image', 'inspect', '--format',
-                              '{{index .Config.Labels "org.opencontainers.image.revision"}}', self.image])
-        if label != self.sha:
+        labels = json.loads(self.command(['docker', 'image', 'inspect', '--format', '{{json .Config.Labels}}', self.image]))
+        if (self.adapter_only and labels.get('org.id-business.upstream.revision') != REVISION or
+                not self.adapter_only and labels.get('org.opencontainers.image.revision') != self.sha):
             raise CanaryError('image_revision_mismatch')
         mysql_image = self.command(['docker', 'inspect', '--format', '{{.Image}}', FORMAL_MYSQL])
         if not re.fullmatch('sha256:[a-f0-9]{64}', mysql_image):
@@ -395,11 +436,12 @@ class Canary:
         with socket.socket() as reserved:
             reserved.bind(('127.0.0.1', 0))
             adapter_port = reserved.getsockname()[1]
-        launcher = runpy.run_path(str(ROOT / 'releases' / self.sha / 'source/deploy/recharge-core/run-recharge.py'))
+        launcher = runpy.run_path(str(launcher_path))
         proof = launcher['network_proof'](self.inspect(native), self.bridge, native_url, container=self.names['native'])
         self.redactions.append(proof)
         adapter = self.start('adapter', role_arguments(self.image, 'adapter', self.names['adapter'], self.database,
-                             self.user, '127.0.0.1', mysql_port, self.labels(), native_url, self.names['native'], adapter_port),
+                             self.user, '127.0.0.1', mysql_port, self.labels(), native_url, self.names['native'], adapter_port,
+                             launcher['adapter_source_mounts'](source) if self.adapter_only else ()),
                              self.password + '\n' + self.bridge + '\n{}\n' + proof + '\n')
         adapter_url = 'http://127.0.0.1:' + str(adapter_port)
         customer = {'id': 'canary-customer', 'email': 'customer@example.test', 'admin': False, 'sensitive': False}
@@ -415,6 +457,11 @@ class Canary:
         if status != 200 or cards.get('success') is not True or cards.get('cards') != []:
             raise CanaryError('super_empty_cards_failed')
         self.checks.append('super_empty_cards')
+        if self.adapter_only:
+            self.check_card_stop(mysql, adapter_url, privileged)
+            self.source_check(adapter, 'source_203_adapter')
+            self.checks.append('no_payment_or_activation_requests')
+            return
         route_path = ROUTING_PATH
         def routing_request(path, actor, method='GET', body=None):
             return http_json(adapter_url, path,
@@ -522,9 +569,9 @@ class Canary:
 
 
 def main():
-    if len(sys.argv) != 2:
+    if len(sys.argv) not in (2, 3):
         raise CanaryError('expected_release_revision')
-    canary = Canary(sys.argv[1])
+    canary = Canary(*sys.argv[1:])
     def interrupted(_signum, _frame):
         signal.signal(signal.SIGINT, signal.SIG_IGN)
         signal.signal(signal.SIGTERM, signal.SIG_IGN)

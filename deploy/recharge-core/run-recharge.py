@@ -20,6 +20,7 @@ DATABASE = 'id-business-independent-formal-mysql'
 NATIVE_PORT = '44579'
 ADAPTER_PORT = '44575'
 PROOF_DOMAIN = b'id-business/codexdaichong/native-network-proof/v1\0'
+UPSTREAM_REVISION = '4e9bb201cf481d4bcc85da34970fc26c63ab818a'
 
 
 def inspect(name):
@@ -38,7 +39,19 @@ def network_proof(data, bridge, native_url, container=NATIVE, now=None):
     return (encoded + b'.' + base64.urlsafe_b64encode(signature).rstrip(b'=')).decode()
 
 
-def docker_arguments(role, sha, database_ip, image, native_url=None):
+def adapter_source_mounts(source):
+    if not source.is_dir() or source.resolve() != source:
+        raise ValueError('Invalid staged adapter source')
+    args = []
+    for name in ('modules', 'deploy/recharge-core'):
+        directory = source / name
+        if not directory.is_dir() or directory.resolve() != directory:
+            raise ValueError('Missing staged adapter code')
+        args += ['--mount', 'type=bind,src=' + str(directory) + ',dst=/candidate/' + name + ',readonly']
+    return args
+
+
+def docker_arguments(role, sha, database_ip, image, native_url=None, source=None):
     if role not in ['native', 'adapter'] or not re.fullmatch('[a-f0-9]{40}', sha):
         raise ValueError('Invalid release role')
     name = NATIVE if role == 'native' else ADAPTER
@@ -47,6 +60,8 @@ def docker_arguments(role, sha, database_ip, image, native_url=None):
             '--label', 'org.opencontainers.image.revision=' + sha,
             '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges']
     if role == 'native':
+        if source is not None:
+            raise ValueError('The original engine uses its own image')
         args += ['--network', 'bridge', '--publish', '127.0.0.1:' + NATIVE_PORT + ':3000',
                  '--shm-size', '2g']
         for directory in ['debug_screenshots', 'product_files', 'data']:
@@ -58,6 +73,8 @@ def docker_arguments(role, sha, database_ip, image, native_url=None):
         args += ['--network', 'host', '--read-only', '--tmpfs', '/tmp:rw,nosuid,nodev,size=32m',
                  '-e', 'ID_RECHARGE_NATIVE_URL=' + native_url,
                  '-e', 'ID_RECHARGE_NATIVE_CONTAINER=' + NATIVE]
+        if source is not None:
+            args += adapter_source_mounts(source)
         host, port, service_port = '127.0.0.1', '44576', ADAPTER_PORT
     for key, value in {'DB_HOST': host, 'DB_PORT': port, 'PORT': service_port,
                        'DB_NAME': 'id_redesign_codexdaichong_prod', 'DB_USER': 'id_redesign_recharge'}.items():
@@ -66,11 +83,21 @@ def docker_arguments(role, sha, database_ip, image, native_url=None):
 
 
 def main():
-    if len(sys.argv) != 3:
+    if len(sys.argv) not in (3, 5):
         raise ValueError('Expected role and release revision')
-    role, sha = sys.argv[1:]
+    role, sha = sys.argv[1:3]
     if role not in ['native', 'adapter'] or not re.fullmatch('[a-f0-9]{40}', sha):
         raise ValueError('Invalid release role')
+    source = None
+    native_revision = sha
+    image = 'id-business-independent-recharge:' + sha
+    if len(sys.argv) == 5:
+        native_revision, image = sys.argv[3:]
+        if role != 'adapter' or not re.fullmatch('[a-f0-9]{40}', native_revision) or not re.fullmatch('sha256:[a-f0-9]{64}', image):
+            raise ValueError('Invalid compatible adapter launch')
+        source = ROOT / 'releases' / sha / 'source'
+        if Path(__file__).resolve() != source / 'deploy/recharge-core/run-recharge.py':
+            raise ValueError('Adapter launcher source mismatch')
     # The lock belongs to the host launcher, never to the payment process.
     # An unavailable Docker daemon is an error, not permission to start twice.
     launch_lock = None
@@ -82,10 +109,12 @@ def main():
         existing = subprocess.check_output(['docker', 'ps', '-a', '--filter', 'name=^/' + NATIVE + '$', '--format', '{{.ID}}'], text=True).strip()
         if existing:
             raise ValueError('An original engine already exists; leave it running')
-    image = 'id-business-independent-recharge:' + sha
     built = json.loads(subprocess.check_output(['docker', 'image', 'inspect', image], text=True))[0]
-    if built['Config']['Labels'].get('org.opencontainers.image.revision') != sha:
+    labels = built['Config']['Labels']
+    if labels.get('org.opencontainers.image.revision') != native_revision:
         raise ValueError('Image revision mismatch')
+    if source is not None and (built['Id'] != image or labels.get('org.id-business.upstream.revision') != UPSTREAM_REVISION):
+        raise ValueError('Pinned runtime image mismatch')
     credentials = Path(os.environ['CREDENTIALS_DIRECTORY'])
     password = (credentials / 'independent-mysql-app').read_text().strip()
     bridge = (credentials / 'independent-recharge-bridge').read_text().strip()
@@ -111,10 +140,11 @@ def main():
     proof = None
     if role == 'adapter':
         native = inspect(NATIVE)
-        if native['Config']['Labels'].get('org.opencontainers.image.revision') != sha:
+        if native['Config']['Labels'].get('org.opencontainers.image.revision') != native_revision or \
+                (source is not None and native['Image'] != built['Id']):
             raise ValueError('Native revision mismatch')
         proof = network_proof(native, bridge, native_url)
-    args = docker_arguments(role, sha, database_ip, built['Id'], native_url)
+    args = docker_arguments(role, sha, database_ip, built['Id'], native_url, source)
     sealed = (password + '\n' + bridge + '\n' + json.dumps(options, separators=(',', ':')) + '\n' + (proof + '\n' if proof else '')).encode()
     if role == 'native':
         preflight = ['docker', 'run', '--pull=never', '--rm', '-i', '--network', 'bridge',

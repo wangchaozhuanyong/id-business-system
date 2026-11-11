@@ -57,6 +57,11 @@ test('managed stop leaves active work locked, preserves both kinds of card recor
     headers: { 'Content-Type': 'application/json', 'x-id-recharge-assertion': signRechargeAssertion(secret, 'POST', path, superUser) },
     body: JSON.stringify({ refs: ['recharge:7'], number }) });
   assert.equal(rejected.status, 403);
+  const service = { ...superUser, id: 'order-reconciliation' };
+  const readback = await fetch(url + path, {
+    headers: { 'x-id-recharge-assertion': signRechargeAssertion(secret, 'GET', path, service) }
+  });
+  assert.equal(readback.status, 405);
   assert.deepEqual(events, []);
   assert.deepEqual(await client.stopCardUse(['recharge:7'], number),
     { state: 'pending', refs: ['recharge:7', 'orbitcard:8'] });
@@ -67,6 +72,17 @@ test('managed stop leaves active work locked, preserves both kinds of card recor
     { state: 'stopped', refs: ['recharge:7', 'orbitcard:8'] });
   assert.equal(cards.card_assets.canUse, 0);
   assert.deepEqual(events, ['begin', 'commit', 'release', 'begin', 'commit', 'release']);
+});
+
+test('a card reference missing from the readback remains pending', async () => {
+  const connection = {
+    async beginTransaction() {},
+    async execute({ sql }) { return sql.startsWith('UPDATE') ? [{ affectedRows: 0 }] : [[]]; },
+    async commit() {},
+    release() {}
+  };
+  const stop = createNativeCardStop({ getConnection: async () => connection });
+  assert.deepEqual(await stop({ refs: ['recharge:7'], number: '4242424242424242' }), { state: 'pending', refs: [] });
 });
 
 test('the outer adapter uses native authentication without exposing its token or granting customers card access', async (t) => {

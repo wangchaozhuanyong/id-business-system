@@ -24,6 +24,23 @@ class WebsiteReleaseTests(unittest.TestCase):
             release.require_website_scope(BASE, TARGET)
         git.assert_called_once_with("diff", "--name-only", BASE, TARGET, "--", *release.CORE_PATHS)
 
+    @patch("release.require_ancestor")
+    @patch("release.git")
+    def test_adapter_requires_explicit_selection_and_exact_scope(self, git, ancestor):
+        git.return_value = "modules/recharge/codexdaichong/native-adapter.mjs\ndeploy/recharge-core/run-recharge.py"
+        with self.assertRaisesRegex(RuntimeError, "recharge_core_or_runtime_changed"):
+            release.require_website_scope(BASE, TARGET)
+        release.require_website_scope(BASE, TARGET, True)
+        for path in ("deploy/recharge-core/Dockerfile", "deploy/recharge-core/entry.mjs",
+                     "modules/recharge/codexdaichong/prepare.mjs", "deploy/caddy/vendure.caddy"):
+            git.return_value = "modules/recharge/codexdaichong/native-adapter.mjs\n" + path
+            with self.assertRaisesRegex(RuntimeError, "recharge_adapter_release_scope_mismatch"):
+                release.require_website_scope(BASE, TARGET, True)
+        git.return_value = "modules/recharge/codexdaichong/gateway.mjs"
+        with self.assertRaisesRegex(RuntimeError, "recharge_adapter_release_scope_mismatch"):
+            release.require_website_scope(BASE, TARGET, True)
+        ancestor.assert_called_with(BASE, TARGET)
+
     def test_ssm_payload_is_one_quoted_program(self):
         shell = release.script_for({"operation": "preflight", "sha": TARGET})
         self.assertTrue(shell.startswith("set -eu\npython3 - <<'ID_WEBSITE_RELEASE'\n"))
@@ -40,6 +57,34 @@ class WebsiteReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(remote.ReleaseError, "live_baseline_changed"):
             remote.release_website({"sha": TARGET, "before": before})
         stage.assert_not_called()
+
+    @patch("remote.switch_adapter")
+    @patch("remote.install_backup_monitoring")
+    @patch("remote.adapter_canary", side_effect=remote.ReleaseError("adapter_canary_failed"))
+    @patch("remote.canary")
+    @patch("remote.stage", return_value=(Path("/stage/source"), Path("/stage/operations")))
+    @patch("remote.snapshot")
+    def test_adapter_canary_failure_prevents_production_switch(self, snapshot, stage, canary, adapter_canary,
+                                                               install_backup_monitoring, switch_adapter):
+        before = {"components": {"app": {"revision": BASE}}, "unitSha256": "unit",
+                  "gatewaySha256": "gateway", "assetsSha256": "assets", "launchers": {},
+                  "adapterUnit": {"commandSha256": "previous"}}
+        snapshot.return_value = before
+        plan = {"sha": TARGET, "before": before, "adapter": {"runtimeFiles": []}}
+        with self.assertRaisesRegex(remote.ReleaseError, "adapter_canary_failed"):
+            remote.release_website(plan)
+        snapshot.assert_called_once_with(True)
+        canary.assert_called_once_with(TARGET, Path("/stage/operations"))
+        adapter_canary.assert_called_once_with(plan, *stage.return_value)
+        install_backup_monitoring.assert_not_called()
+        switch_adapter.assert_not_called()
+
+    def test_adapter_override_uses_exact_candidate_and_existing_native_runtime(self):
+        image = "sha256:" + "c" * 64
+        content = remote.adapter_override(TARGET, BASE, image)
+        self.assertEqual(content.splitlines(), ["[Service]", "ExecStart=",
+            f"ExecStart=/usr/bin/python3 {remote.ROOT}/releases/{TARGET}/source/deploy/recharge-core/run-recharge.py"
+            f" adapter {TARGET} {BASE} {image}"])
 
     def test_runtime_mount_must_match_exact_readonly_source(self):
         source = Path("/opt/id-business-independent/releases") / TARGET / "source"
