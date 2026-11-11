@@ -68,12 +68,18 @@ const inventoryFixture = {
   mailboxes: [
     { id: 'a', type: 'google' },
     { id: 'b', type: 'google', inventoryState: 'claimed' },
-    { id: 'c', type: 'relay', health: 'dead' },
+    { id: 'c', type: 'relay', health: 'dead', relayStatus: 'DISABLED' },
+    { id: 'relay-disabled', type: 'relay', relayStatus: 'DISABLED' },
     { id: 'd', type: 'microsoft' }
   ],
   accounts: [
     { id: 'gpt', type: 'gpt', email: 'stock-gpt@example.test' },
-    { id: 'claude', type: 'claude', email: 'stock-claude@example.test', registered: new Date(clock).toISOString() }
+    { id: 'claude', type: 'claude', email: 'stock-claude@example.test', registered: new Date(clock).toISOString() },
+    { id: 'claude-dead', type: 'claude', health: 'dead', status: '冻结', inventoryState: 'used' },
+    { id: 'claude-unlocking', type: 'claude', health: 'unlocking', status: '封控中' },
+    { id: 'claude-frozen', type: 'claude', status: '冻结' },
+    { id: 'claude-restricted', type: 'claude', status: '封控中' },
+    { id: 'claude-review', type: 'claude', status: '待核对' }
   ],
   batches: [{ id: 'batch', kind: 'mail', items: [{ id: 'claim', assetId: 'b', status: 'pending' }] }]
 };
@@ -159,10 +165,20 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     assert.deepEqual(await productRows.first().locator('td').allTextContents(), ['1', '33.3%', '68.24', '0']);
     assert.deepEqual(await productRows.nth(1).locator('td').allTextContents(), ['1', '33.3%', '—', '1']);
     const stock = page.locator('.overview-stock-table tbody tr');
-    assert.deepEqual(await stock.first().locator('td').allTextContents(), ['1', '1', '0']);
+    assert.deepEqual(await page.locator('.overview-stock-table thead th').allTextContents(), ['类型', '可提取', '已领用', '状态明细']);
+    assert.deepEqual(await stock.first().locator('td').allTextContents(), ['1', '1', '无']);
     assert.match(await stock.nth(1).innerText(), /已登记 1 条/);
-    assert.deepEqual(await stock.nth(2).locator('td').allTextContents(), ['需核验', '0', '1']);
-    assert.match(await page.locator('[aria-labelledby="overview-customers"].panel').innerText(), /待核对订单 [1-9]/);
+    assert.deepEqual(await stock.nth(2).locator('td').allTextContents(), ['提取时核验', '0', '死号 1 邮箱停用 1']);
+    const claudeStock = stock.filter({ has: page.getByRole('link', { name: 'Claude 账号', exact: true }) });
+    const claudeIssues = ['死号 1', '解封中 1', '冻结 1', '封控中 1', '资料待核对 1'];
+    assert.deepEqual(await claudeStock.locator('td').allTextContents(), ['0', '0', claudeIssues.join(' ')]);
+    assert.deepEqual(await claudeStock.locator('.overview-stock-issues .tag').allTextContents(), claudeIssues);
+    const customerPanel = page.locator('[aria-labelledby="overview-customers"].panel');
+    assert.match(await customerPanel.innerText(), /待核对订单 [1-9]/);
+    assert.deepEqual(await customerPanel.locator('.overview-customer-summary a').evaluateAll(links =>
+      links.map(link => [link.textContent, link.getAttribute('href')])), [
+      ['客户列表', '#/customers/list'], ['续费管理', '#/workspace/renewals'], ['流失明细', '#/workspace/customer-loss']
+    ]);
     const taskCounts = () => page.locator('.overview-task-count').allTextContents();
     const beforeTasks = await taskCounts();
     assert(beforeTasks.includes('1'));
@@ -227,6 +243,7 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     await refreshed(page);
     assert.doesNotMatch(await metric(page, 'profit').innerText(), /读取失败/);
     assert.match(await stock.nth(1).innerText(), /已登记 1 条/);
+    assert.deepEqual(await claudeStock.locator('.overview-stock-issues .tag').allTextContents(), claudeIssues);
     assert.match(await page.locator('[aria-labelledby="overview-inventory"].panel').innerText(), /读取失败 · 保留/);
     assert.match(await page.locator('[aria-labelledby="overview-customers"].panel').innerText(), /读取失败 · 保留/);
     failed.clear();
@@ -328,14 +345,23 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     await page.route('**/api/local/commerce', route => fail
       ? route.fulfill({ status: 503, json: {} })
       : route.fulfill({ json: { version: 0, data: null } }));
+    await page.route('**/api/local/inventory', route => fail
+      ? route.fulfill({ status: 503, json: {} })
+      : route.fulfill({ json: { version: 0, data: null } }));
     await page.goto(origin + '/#/overview');
     await page.locator('.overview-design-label').getByText(/读取失败/).waitFor();
+    const stock = page.locator('.overview-stock-table tbody tr');
+    await page.locator('section[aria-labelledby="overview-inventory"]').getByText('读取失败 · 可重试', { exact: true }).waitFor();
+    assert.deepEqual(await stock.first().locator('td').allTextContents(), ['—', '—', '—']);
+    assert.deepEqual(await stock.nth(2).locator('td').allTextContents(), ['—', '—', '—']);
     assert.equal(await value(page, 'orders'), '—');
     assert.equal(await value(page, 'profit'), '—');
     assert.equal(await page.getByText('当前没有待处理事项').count(), 0);
     fail = false;
     await page.getByRole('button', { name: '刷新数据', exact: true }).click();
     await page.getByText('该时间范围没有订单记录', { exact: true }).waitFor();
+    assert.deepEqual(await stock.first().locator('td').allTextContents(), ['0', '0', '无']);
+    assert.deepEqual(await stock.nth(2).locator('td').allTextContents(), ['提取时核验', '0', '无']);
     assert.equal(await value(page, 'orders'), '0');
     assert.equal(await value(page, 'receipts'), '0');
     assert.equal(await value(page, 'profit'), '0.00');

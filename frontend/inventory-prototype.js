@@ -5087,12 +5087,19 @@
       for (const type of ['google', 'relay', 'microsoft', ...stockTypes.map(([id]) => id)]) {
         const assets = (stockType(type) ? accounts : mailboxes)
           .filter(asset => asset.type === type && !asset.relayDeleted).map(normalize);
+        const issues = { dead: 0, unlocking: 0, disabled: 0, frozen: 0, restricted: 0, review: 0 };
+        for (const asset of assets) {
+          if (asset.health === 'dead' || asset.health === 'unlocking') issues[asset.health]++;
+          else if (type === 'relay' && asset.relayStatus === 'DISABLED') issues.disabled++;
+          else if (asset.status === '冻结') issues.frozen++;
+          else if (asset.status === '封控中') issues.restricted++;
+          else if (asset.health !== 'normal' || asset.status !== '正常' || usageReview.has(asset.id)) issues.review++;
+        }
         stocks[type] = {
           registered: assets.length,
           available: ['relay', 'microsoft'].includes(type) ? null : assets.filter(available).length,
           claimed: type === 'microsoft' ? null : assets.filter(asset => asset.inventoryState === 'claimed').length,
-          abnormal: assets.filter(asset => asset.health !== 'normal' || asset.status !== '正常' ||
-            usageReview.has(asset.id) || (type === 'relay' && asset.relayStatus === 'DISABLED')).length
+          issues
         };
       }
       return { stocks, pending: batches.reduce((count, batch) => count + batchCounts(batch).pending, 0) };

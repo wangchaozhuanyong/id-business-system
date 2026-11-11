@@ -111,7 +111,7 @@ test('客户流失归集、订阅历史、数据核对与响应式离线验收',
   await t.test('导航、订阅次数、停用天数与首页共用统计', async () => {
     await page.goto(origin + '/#/overview');
     await overviewMetric(page, '已确认流失').getByText('13位', { exact: true }).waitFor();
-    assert.equal(await overviewMetric(page, '有效服务').locator('dd').textContent(), '2位');
+    assert.equal(await overviewMetric(page, '有效服务').locator('.overview-customer-count').textContent(), '2位');
     await page.locator('#sidebar').getByRole('button', { name: '数据管理', exact: true }).click();
     await page.locator('#sidebar').getByRole('link', { name: '客户流失', exact: true }).click();
     await waitForList(page);
@@ -189,7 +189,7 @@ test('客户流失归集、订阅历史、数据核对与响应式离线验收',
     assert.deepEqual(await summary(page), ['14位客户', '2位客户', '7笔', '1位客户']);
     await page.goto(origin + '/#/overview');
     await overviewMetric(page, '已确认流失').getByText('14位', { exact: true }).waitFor();
-    await page.getByRole('link', { name: '查看客户流失', exact: true }).click();
+    await page.getByRole('link', { name: '流失明细', exact: true }).click();
     await tab(page, /^已流失/);
   });
 
@@ -343,7 +343,7 @@ test('已确认开通的人工订阅按周期统计流失，财务或邮箱缺�
   assert.match(await list(page).innerText(), /合成到期客户 3/);
   await page.goto(origin + '/#/overview');
   await overviewMetric(page, '已确认流失').getByText('39位', { exact: true }).waitFor();
-  assert.equal(await overviewMetric(page, '有效服务').locator('dd').textContent(), '2位');
+  assert.equal(await overviewMetric(page, '有效服务').locator('.overview-customer-count').textContent(), '2位');
   await page.clock.setFixedTime(new Date('2026-12-08T02:00:00Z'));
   await page.goto(lossUrl);
   await waitForList(page);
