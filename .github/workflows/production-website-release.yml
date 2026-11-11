@@ -7,6 +7,10 @@ on:
         description: 最新 main 的完整提交 SHA
         required: true
         type: string
+      inspect_canary_sha:
+        description: 只读检查指定失败版本的金丝雀日志，发布时留空
+        required: false
+        type: string
 
 concurrency:
   group: independent-production-website-release
@@ -27,6 +31,7 @@ jobs:
       id-token: write
     env:
       RELEASE_SHA: ${{ inputs.expected_sha }}
+      INSPECT_CANARY_SHA: ${{ inputs.inspect_canary_sha }}
     steps:
       - name: Check out main
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -49,10 +54,12 @@ jobs:
           echo "Verified main quality run: $run"
           echo "QUALITY_RUN_ID=$run" >> "$GITHUB_ENV"
       - name: Set up Node.js
+        if: inputs.inspect_canary_sha == ''
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: '24.22.1'
       - name: Build the exact main artifacts
+        if: inputs.inspect_canary_sha == ''
         shell: bash
         run: |
           set -euo pipefail
@@ -84,5 +91,5 @@ jobs:
               {"Effect":"Allow","Action":["ssm:GetCommandInvocation","ssm:ListCommands"],"Resource":"*"},
               {"Effect":"Allow","Action":["s3:GetObject","s3:PutObject"],"Resource":"arn:aws:s3:::id-business-v2-backups-098208446664-ap-northeast-1/release-artifacts/formal/${{ github.sha }}/*"}
             ]}
-      - name: Publish through the existing SSM release lock
+      - name: Run the selected operation through SSM
         run: python3 deploy/website/release.py
