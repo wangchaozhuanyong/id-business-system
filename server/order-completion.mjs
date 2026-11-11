@@ -1,6 +1,12 @@
 import { randomUUID } from 'node:crypto';
-import { assignOrderOwner, moneyUnits, validMoney } from './order-policy.mjs';
+import { assignOrderOwner, checkSubscriptionTermination, manualOrderDetailsAction, moneyUnits, validMoney } from './order-policy.mjs';
 import { validCurrencyCode } from '../modules/finance/accounting.mjs';
+import {
+  manualBusinessOrder, manualOrderDetailsMissing, orderOpeningConfirmed, subscriptionTime, validOrderEmail, validOrderXHandle
+} from '../frontend/order-opening.mjs';
+import { accountLifecycleSummary, systemAccount } from './account-lifecycle.mjs';
+import { registrationEmail, registrationOccupancy, registrationProductConflict } from './inventory-registration.mjs';
+import { stockTypeForProduct, targetKey } from './personal-subscriptions.mjs';
 
 const roles = ['employee', 'admin', 'super'];
 const defaultSources = ['微信', 'WhatsApp', 'Telegram', '网站', '客户推荐', '其他'];
@@ -9,7 +15,8 @@ const orderFields = ['id', 'orderNo', 'email', 'plan', 'start', 'expiry', 'recha
   'saleAmount', 'saleCurrency', 'paidAmount', 'paidCurrency', 'paidConfirmed', 'receiptConfirmed', 'notes'];
 const manager = (actor) => ['admin', 'super'].includes(actor?.role);
 const clean = (value) => typeof value === 'string' ? value.trim() : '';
-const ownerId = (order) => order.ownerId || order.rechargeOwnerId || order.createdById || '';
+const ownerId = order => clean(order.ownerId) || clean(order.rechargeOwnerId) || clean(order.createdById);
+const hasRecordedOwner = order => Boolean(clean(ownerId(order)) || clean(order.owner));
 const sourceOf = (order, customer) => clean(order.customerSource) || clean(customer?.source);
 const automatic = (order) => order.id && order.source === '线上代充' && order.product === 'GPT' && order.taskId &&
   !order.cancelled && !order.draft && !['draft', 'failed', 'cancelled', '草稿', '失败', '已撤单'].includes(order.status);
@@ -84,6 +91,27 @@ function orderView(order, customer, actor, names = new Map()) {
   };
 }
 
+function manualOrderView(order, customer, names) {
+  const details = manualOrderDetailsMissing(order, customer ? [customer] : []);
+  const needsOwner = !hasRecordedOwner(order);
+  const missing = [
+    details.customer && (order.customerId ? '客户关联待核对' : '客户'),
+    details.account && '邮箱账号',
+    details.period && '订阅周期',
+    (!order.paidConfirmed || !(moneyUnits(order.paidAmount) > 0n) || !validCurrencyCode(order.paidCurrency)) && '实际代付',
+    (!order.receiptConfirmed || !validMoney(order.saleAmount) || !validCurrencyCode(order.saleCurrency)) && '客户实收',
+    details.end && '实际终止时间',
+    needsOwner && '归属人'
+  ].filter(Boolean);
+  return {
+    ...fields(order, ['id', 'orderNo', 'product', 'plan', 'start', 'expiry']),
+    email: clean(order.email) || (order.product === 'Grok' ? clean(order.xHandle) : ''), customerName: customer?.name || '',
+    owner: clean(order.owner) || names.get(ownerId(order)) ||
+      (ownerId(order) === order.createdById ? clean(order.createdBy) : ''),
+    missing, needsOwner
+  };
+}
+
 function findOrder(data, id, actor) {
   const order = data?.orders?.find((row) => row.id === id);
   if (!order || !visible(order, actor)) throw new OrderCompletionError(404, '订单不存在或当前账号无法补全');
@@ -119,6 +147,8 @@ export function readOrderCompletion(data, settings, actor, params, readOwners) {
     .map((row) => orderView(row, byId.get(row.customerId), actor, names));
   return {
     items, sources: sourcesOf(settings), canAssign: manager(actor),
+    ...(manager(actor) && { manualItems: (data?.orders || []).filter(manualBusinessOrder)
+      .map(row => manualOrderView(row, byId.get(row.customerId), names)).filter(row => row.missing.length) }),
     owners: people.filter((row) => row.active !== false && roles.includes(row.role)).map(({ id, name }) => ({ id, name }))
   };
 }
@@ -144,6 +174,86 @@ function fill(current, input, label) {
 
 function editMetadata(actor, at) {
   return { updatedById: actor.id, updatedBy: actor.name, updatedAt: at };
+}
+
+export function assignMissingManualOrderOwners(data, actor, command, readOwners, at) {
+  requireCompletionActor(actor);
+  if (!manager(actor)) throw new OrderCompletionError(403, '只有管理员可以补齐手工订单归属');
+  exactKeys(command, ['action']);
+  if (command.action !== 'assign-manual-owners') throw new OrderCompletionError(400, '订单补全操作无效');
+  const orders = (data?.orders || []).filter(order => manualBusinessOrder(order) && !hasRecordedOwner(order));
+  if (!orders.length) return [];
+  const people = new Map([actor, ...(readOwners?.() || [])]
+    .filter(row => row.role === 'super' && row.active !== false && clean(row.id) && clean(row.name))
+    .map(row => [row.id, row]));
+  if (people.size !== 1) throw new OrderCompletionError(409, '暂时无法确认在用的超级管理员');
+  const [owner] = people.values();
+  return orders.map(order => ({ ...order, ...editMetadata(actor, at), version: (order.version ?? 0) + 1,
+    ownerId: owner.id, owner: owner.name }));
+}
+
+export function fillManualOrderDetails(data, inventory, actor, command, at, legacyConfirmed = false) {
+  requireCompletionActor(actor);
+  if (!manager(actor)) throw new OrderCompletionError(403, '只有管理员可以补齐手工订单资料');
+  exactKeys(command, ['action', 'orderId', 'version', 'details']);
+  const fields = ['customerId', 'email', 'xHandle', 'start', 'expiry', 'subscriptionEndedAt'];
+  exactKeys(command.details, fields);
+  const now = Date.parse(at);
+  const prior = data?.orders?.find(row => row.id === command.orderId);
+  const missing = manualOrderDetailsMissing(prior, data?.customers || [], now);
+  if (!missing) throw new OrderCompletionError(404, '未找到可补齐资料的原订单');
+  const invalid = message => { throw new OrderCompletionError(409, message); };
+  if (command.action !== 'fill-manual-details') throw new OrderCompletionError(400, '订单补全操作无效');
+  if (command.version !== (prior.version ?? 0)) invalid('订单已变化，请刷新后补齐资料');
+  const details = Object.fromEntries(Object.entries(command.details).map(([key, value]) => [key, text(value, 254)]));
+  const order = { ...prior, ...details };
+  const edits = fields.filter(key => order[key] !== prior[key]);
+  if (!edits.length || Object.values(details).some(value => !value)) invalid('请填写可核实的原订单资料');
+  if (edits.includes('customerId') && (!missing.customer ||
+      !data.customers.some(row => row.id === order.customerId && row.active !== false)))
+    invalid('请选择在用的客户并保留原有客户关联');
+  const fillsAccount = edits.includes('email') || edits.includes('xHandle');
+  if (fillsAccount) {
+    const isX = order.product === 'Grok' && order.loginMethod === 'x';
+    if (!missing.account || (isX ? edits.includes('email') || !validOrderXHandle(order.xHandle) :
+        edits.includes('xHandle') || !validOrderEmail(order.email)))
+      invalid('请核对账号格式及原订单的账号关联');
+  }
+  if (fillsAccount || edits.includes('customerId')) {
+    const email = registrationEmail(order.email);
+    const product = stockTypeForProduct(order.product);
+    const target = order.product === 'Grok' && order.loginMethod === 'x'
+      ? (validOrderXHandle(order.xHandle) ? targetKey(order) : '')
+      : (validOrderEmail(order.email) ? targetKey(order) : '');
+    const stock = (inventory?.accounts || []).filter(row => systemAccount(row) && row.type === product &&
+      (row.id === prior.accountId || (target && targetKey(row) === target)));
+    if (validOrderEmail(email)) {
+      const facts = registrationOccupancy(inventory).get(email) || [];
+      const conflict = registrationProductConflict(facts, product, stock[0]?.id);
+      if (conflict) invalid(conflict);
+    }
+    if (prior.accountId && (stock.length !== 1 || stock[0].id !== prior.accountId ||
+        (target && targetKey(stock[0]) !== target))) invalid('请保留原订单关联的库存账号');
+    if (stock.length && (stock.length !== 1 || !order.customerId ||
+        accountLifecycleSummary(stock[0], data, now).customerId !== order.customerId))
+      invalid('账号已关联库存，请先核对原客户归属');
+    if (target && order.customerId && data.orders.some(row => row.id !== prior.id && !row.cancelled && !row.draft &&
+        !row.subscriptionEnded && stockTypeForProduct(row.product) === product &&
+        row.customerId && row.customerId !== order.customerId && targetKey(row) === target))
+      invalid('同一账号已有其他客户的订单，请先核对原客户归属');
+    if (fillsAccount && order.appleIdId && data.orders.some(row => row.id !== prior.id && row.appleIdId === order.appleIdId &&
+        (row.paidConfirmed || row.appleFunding?.bound) && targetKey(row) && targetKey(row) !== target))
+      invalid('该苹果 ID 已绑定其他订阅账号，请核对原账单');
+  }
+  if ((edits.includes('start') || edits.includes('expiry')) &&
+      (!missing.period || !(subscriptionTime(order.expiry) > subscriptionTime(order.start))))
+    invalid('请保留原有效周期，补录时填写有效的订阅起止时间');
+  if (edits.includes('subscriptionEndedAt') && !missing.end)
+    invalid('请按原记录补充实际终止时间');
+  const terminationError = checkSubscriptionTermination(order, prior, manualOrderDetailsAction, now);
+  if (terminationError) invalid(terminationError);
+  if (legacyConfirmed && orderOpeningConfirmed(prior, now, true)) order.entitlementStatus = 'active';
+  return { order: { ...order, ...editMetadata(actor, at), version: command.version + 1 } };
 }
 
 export function applyOrderCompletion(data, settings, actor, command, readOwners, at) {

@@ -5,7 +5,8 @@ import { DatabaseSync } from 'node:sqlite';
 import { validOrderCurrencies, validOrderCurrencyGroups, retainOrderSettings } from './order-currency-settings.mjs';
 import { isDeepStrictEqual } from 'node:util';
 import {
-  applyOrderCompletion, OrderCompletionError, readOrderCompletion, rechargePriceSnapshot, requireCompletionActor
+  applyOrderCompletion, assignMissingManualOrderOwners, fillManualOrderDetails,
+  OrderCompletionError, readOrderCompletion, rechargePriceSnapshot, requireCompletionActor
 } from './order-completion.mjs';
 import { checkTenantTransferHistory, planTenantOwnerTransfer, tenantOwnerTransferView, TenantOwnerTransferError } from './tenant-owner-transfer.mjs';
 import { prepareTenantRenewalWrite, tenantRenewalHandledAction, tenantRenewalSettingsAction } from './tenant-renewal-reminders.mjs';
@@ -69,8 +70,8 @@ import { legacyOpeningOrderIds, ownerForSubscriptionOrder, subscriptionDomain } 
 import { subscriptionTime } from '../frontend/order-opening.mjs';
 import {
   assignOrderOwner, assignTenantOwner, checkClaudeProMaterialHistory,
-  checkClaudeProRenewalSource, checkNewOrder, deriveCardIssueFee, historicalGptCardBackfillError,
-  isOrderBankMaterials, nextOrderNo, normalizeClaudeCertification, normalizeClaudeProMaterials,
+  checkClaudeProRenewalSource, checkNewOrder, checkSubscriptionTermination, deriveCardIssueFee, historicalGptCardBackfillError,
+  isOrderBankMaterials, manualOrderDetailsAction, nextOrderNo, normalizeClaudeCertification, normalizeClaudeProMaterials,
   redactClaudeProOrderMaterials, retainOrderCardNumber, normalizePaymentEvidence,
   validClaudePaidPrices, validGptPaidPrices, validMoney, validOrderPrices, validPersonalPaidPrices, validApplePaidPrices
 } from './order-policy.mjs';
@@ -1616,9 +1617,10 @@ export function createLocalBusinessStore(databasePath) {
             commerce.renewalWarningDays = priorCommerce.renewalWarningDays;
           const { action } = writes.find((write) => write.domain === 'commerce');
           const subscriptions = current(subscriptionDomain);
+          const checkedAt = Date.now();
           const legacyOpening = action === tenantRenewalHandledAction
             ? new Set(legacyOpeningOrderIds(priorCommerce?.orders, subscriptions)) : undefined;
-          try { prepareTenantRenewalWrite(priorCommerce, commerce, action, actor, new Date(), legacyOpening); }
+          try { prepareTenantRenewalWrite(priorCommerce, commerce, action, actor, new Date(checkedAt), legacyOpening); }
           catch (error) { throw new LocalDataError(error.status || 400, error.message); }
           checkCustomerTagAssignments(
             priorCommerce, commerce, (incoming.get('settings') ?? current('settings'))?.customerTags
@@ -1653,6 +1655,8 @@ export function createLocalBusinessStore(databasePath) {
           for (const row of commerce.orders) {
             const prior = priorById.get(row.id);
             if (prior && isDeepStrictEqual(row, prior)) continue;
+            const terminationError = checkSubscriptionTermination(row, prior, action, checkedAt, !cards);
+            if (terminationError) throw new LocalDataError(409, terminationError);
             if (cards && !prior && action === '新增独立订单' && row.source === '管理员手工') {
               if (row.draft || row.cancelled || ['draft', 'failed', '草稿', '失败'].includes(row.status) ||
                   row.paidConfirmed !== true || row.receiptConfirmed !== true || !positiveOrderAmount(row.paidAmount) ||
@@ -2017,17 +2021,35 @@ export function createLocalBusinessStore(databasePath) {
         const current = readDocument('commerce');
         const data = current.data;
         const at = new Date().toISOString();
-        const { order, customer, createdCustomer } = applyOrderCompletion(
-          data, readDocument('settings').data, actor, command, readOrderOwners, at
-        );
         const version = current.version + 1;
+        if (command?.action === 'assign-manual-owners') {
+          const assigned = assignMissingManualOrderOwners(data, actor, command, readOrderOwners, at);
+          if (!assigned.length) return { assigned: 0, version: current.version };
+          const byId = new Map(assigned.map(order => [order.id, order]));
+          const label = '补齐手工订单归属';
+          data.orders = data.orders.map(row => byId.get(row.id) || row);
+          data.logs = [...assigned.map(order => ({
+            id: 'commerce-log-' + randomUUID(), type: label, entityId: order.id, detail: order.orderNo,
+            at: auditDate.format(new Date(at)).slice(0, 16), actor: actor.name, actorId: actor.id
+          })), ...(data.logs || [])];
+          put.run('commerce', version, encrypt(key, 'commerce', version, JSON.stringify(data)));
+          for (const order of assigned)
+            log.run(at, 'commerce', 'order_completion_assign_manual_owner', auditSummary(label, actor, order.id), version);
+          return { assigned: assigned.length, version };
+        }
+        const manual = command?.action === 'fill-manual-details';
+        const prior = manual && data?.orders?.find(row => row.id === command.orderId);
+        const legacyConfirmed = prior && legacyOpeningOrderIds([prior], readDocument(subscriptionDomain).data).length > 0;
+        const { order, customer, createdCustomer } = manual
+          ? fillManualOrderDetails(data, readDocument('inventory').data, actor, command, at, legacyConfirmed)
+          : applyOrderCompletion(data, readDocument('settings').data, actor, command, readOrderOwners, at);
         data.orders = data.orders.map((row) => row.id === order.id ? order : row);
         if (customer) {
           const customers = data.customers || [];
           data.customers = createdCustomer ? [customer, ...customers]
             : customers.map((row) => row.id === customer.id ? customer : row);
         }
-        const label = command.action === 'assign' ? '确认代充订单归属' : '补全代充订单资料';
+        const label = manual ? manualOrderDetailsAction : command.action === 'assign' ? '确认代充订单归属' : '补全代充订单资料';
         data.logs = [{
           id: 'commerce-log-' + randomUUID(), type: label, entityId: order.id, detail: order.orderNo,
           at: auditDate.format(new Date(at)).slice(0, 16), actor: actor.name, actorId: actor.id

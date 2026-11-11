@@ -20,11 +20,22 @@ test('四类订阅页面使用独立状态、真实复制入口与历史兼容�
       const fixtures = JSON.parse(await readFile(fixturePath, 'utf8'));
       fixtures['auth/session'] = { configured: true, actor };
       fixtures['auth/order-owners'] = { items: [actor, { id: 'synthetic-owner', name: '合成归属人', role: 'employee' }] };
+      const old = { ...fixtures.commerce.data.orders.find(row => row.product === 'GPT'),
+        id: 'synthetic-unlinked-order', orderNo: 'TEST-UNLINKED', email: '', entitlementStatus: 'active' };
+      fixtures.commerce.data.orders.push(old);
       const intercepted = await interceptDesign(context, { localFixtures: fixtures, actor, skipRechargeAssets: true });
       let confirmed = false, owner = '', version = 1;
       const commands = [];
       await context.route('**/api/local/subscriptions/list', route => {
         const request = route.request().postDataJSON(), status = confirmed ? 'active' : 'pending';
+        if (request.product === 'GPT' && request.scope === 'unlinked') {
+          const record = { source: 'order', sourceId: old.id, orderNo: old.orderNo, plan: old.plan,
+            start: old.start, expiry: old.expiry, status: 'active', remainingDays: 21, confirmed: true, missingAssociation: true };
+          return route.fulfill({ json: { items: [{ id: 'synthetic-unlinked', product: 'GPT', scope: 'unlinked',
+            status: 'active', series: [{ ...record, key: 'gpt' }], history: [record], missingAssociation: true }],
+            total: 1, accountCount: 0, page: 1, pageSize: request.pageSize, counts: {}, scopeCounts: { unlinked: 1 },
+            revision: 'unlinked-revision', now: '2026-11-10T02:00:00Z' } });
+        }
         const record = { source: 'order', sourceId: 'synthetic-order', orderNo: 'TEST-ORDER', plan: plans[request.product],
           start: '2026-11-01 10:00', expiry: '2026-12-01 10:00', status, remainingDays: 21,
           operatorName: actor.name, confirmed };
@@ -127,6 +138,15 @@ test('四类订阅页面使用独立状态、真实复制入口与历史兼容�
       await page.locator('#subscription-list').getByText('合成归属人', { exact: true }).waitFor();
       assert.ok(commands.some(command => command.confirmed && command.reason === '合成核对依据'));
       assert.ok(commands.some(command => command.ownerId === 'synthetic-owner'));
+      await page.evaluate(() => { location.hash = '#/subscriptions/gpt'; });
+      await page.getByRole('tab', { name: '待补邮箱', exact: true }).click();
+      const unlinked = page.locator('#subscription-list tbody tr[data-row-id="synthetic-unlinked"]');
+      await unlinked.getByText(old.orderNo, { exact: true }).waitFor();
+      assert.match(await page.locator('#subscription-overview').innerText(), /待补邮箱订单\s+1\s*笔/);
+      assert.equal(await unlinked.getByRole('button', { name: '复制', exact: true }).count(), 0);
+      await unlinked.getByRole('button', { name: '查看原单', exact: true }).click();
+      await page.waitForURL('**/#/orders/detail/synthetic-unlinked-order');
+      await page.locator('#main .property-list').getByText(old.orderNo, { exact: true }).waitFor();
       assert.deepEqual(errors, []);
       assert.deepEqual(intercepted.external, []);
     });

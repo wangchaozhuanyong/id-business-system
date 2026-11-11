@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
 import test from 'node:test';
 import { handleLocalBusiness } from '../server/local-business.mjs';
-import { applyOrderCompletion, readOrderCompletion, rechargePriceSnapshot } from '../server/order-completion.mjs';
+import { applyOrderCompletion, assignMissingManualOrderOwners, fillManualOrderDetails,
+  readOrderCompletion, rechargePriceSnapshot } from '../server/order-completion.mjs';
 import { buildRechargeOrder, rechargeOrderEvidence } from '../server/recharge-order-sync.mjs';
 
 const at = '2026-11-10T09:30:00.000Z';
@@ -164,6 +165,63 @@ test('只有管理员可为待归属单选择启用员工，已有归属不可�
   assert.deepEqual(listIds(updated, a), ['unassigned']);
   assert.deepEqual(listIds(updated, b), []);
   assert.throws(() => change(updated, admin, { ...command, version: 2 }), { status: 409 });
+});
+
+test('手工及历史单按缺项列给管理员，空白归属补给在用超级管理员', () => {
+  const manual = (id, props = {}) => order(id, { source: '历史入库', taskId: '', email: '', createdById: '',
+    rechargeOwnerId: '', customerId: existing.id, entitlementStatus: 'active', start: '2026-10-15', expiry: '2026-11-15',
+    ...props });
+  const empty = manual('historical'), assigned = manual('employee', { ownerId: a.id });
+  const named = manual('named', { owner: '历史归属人' });
+  const automatic = order('automatic', { rechargeOwnerId: '', createdById: '' });
+  const data = payload(empty, assigned, named, automatic, manual('draft', { draft: true }),
+    manual('one-off', { product: 'Claude Pro', businessType: '续费', ownerId: a.id }));
+  const managerRows = view(data, admin).manualItems;
+  assert.deepEqual(managerRows.find(row => row.id === empty.id).missing, ['邮箱账号', '客户实收', '归属人']);
+  assert.deepEqual(managerRows.find(row => row.id === 'one-off').missing, ['客户实收']);
+  assert.equal(managerRows.some(row => ['automatic', 'draft'].includes(row.id)), false);
+  assert.equal(view(data, a).manualItems, undefined);
+  const command = { action: 'assign-manual-owners' };
+  const superAdmin = { id: 'primary', role: 'super', name: '合成超级管理员' };
+  const getOwners = () => [...owners(), superAdmin, { id: 'inactive-super', role: 'super', active: false }];
+  assert.throws(() => assignMissingManualOrderOwners(data, a, command, getOwners, at), { status: 403 });
+  assert.throws(() => assignMissingManualOrderOwners(data, admin, command, owners, at), { status: 409 });
+  const [saved, ...other] = assignMissingManualOrderOwners(data, admin, command, getOwners, at);
+  assert.equal(other.length, 0);
+  assert.deepEqual(saved, { ...empty, version: 2, ownerId: superAdmin.id, owner: superAdmin.name,
+    updatedById: admin.id, updatedBy: admin.name, updatedAt: at });
+  assert.deepEqual(assignMissingManualOrderOwners(payload(saved, assigned, named, automatic), admin, command, getOwners, at), []);
+});
+
+test('原单分次补资料，保留收付款、有效期开通与人员历史，拒绝实际归属冲突', () => {
+  const legacy = order('legacy', { source: '历史入库', taskId: '', businessType: '续费', email: '', customerId: '',
+    start: '2026-10-10', expiry: '2026-11-12', saleAmount: '120', subscriptionEnded: true,
+    financialEvidence: [{ kind: 'payment', amount: '100', currency: 'PHP' }] });
+  const data = payload(legacy);
+  const command = { action: 'fill-manual-details', orderId: legacy.id, version: 1,
+    details: { email: 'proven@example.test' } };
+  const emptyInventory = { accounts: [], mailboxes: [] };
+  assert.throws(() => fillManualOrderDetails(data, emptyInventory, a, command, at), { status: 403 });
+  assert.throws(() => fillManualOrderDetails(data, emptyInventory, admin, { ...command, version: 0 }, at), { status: 409 });
+  assert.throws(() => fillManualOrderDetails(data, emptyInventory, admin,
+    { ...command, details: { saleAmount: '200', receiptConfirmed: true } }, at), { status: 400 });
+  const { order: updated } = fillManualOrderDetails(data, emptyInventory, admin, command, at, true);
+  assert.deepEqual(updated, { ...legacy, email: 'proven@example.test', entitlementStatus: 'active',
+    updatedAt: at, updatedById: admin.id, updatedBy: admin.name, version: 2 });
+  assert.equal(legacy.email, '');
+  const done = { ...command, version: 2, details: { customerId: existing.id, subscriptionEndedAt: '2026-11-08T14:00' } };
+  const next = payload(updated);
+  const { order: completed } = fillManualOrderDetails(next, emptyInventory, admin, done, at);
+  assert.equal(completed.subscriptionEndedAt, '2026-11-08T14:00');
+  assert.equal(completed.customerId, existing.id);
+  assert.equal(completed.receiptConfirmed, false);
+  const sameEmail = { ...legacy, id: 'other-order', email: updated.email, customerId: 'other-customer', subscriptionEnded: false };
+  assert.throws(() => fillManualOrderDetails(payload(updated, sameEmail), emptyInventory, admin, done, at),
+    { status: 409, message: /其他客户/ });
+  assert.throws(() => fillManualOrderDetails(next, emptyInventory, admin,
+    { ...done, details: { subscriptionEndedAt: '2026-09-01T14:00' } }, at), { status: 409 });
+  assert.throws(() => fillManualOrderDetails(payload(completed), emptyInventory, admin,
+    { ...done, version: 3, details: { subscriptionEndedAt: '2026-11-09T14:00' } }, at), { status: 409 });
 });
 
 test('HTTP 只允许同源 POST 保存并返回窄结果', async () => {

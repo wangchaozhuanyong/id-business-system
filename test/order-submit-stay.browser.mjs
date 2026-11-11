@@ -135,6 +135,15 @@ test('五类订单提交后留在录入页，刷新最近记录并可连续录�
         await page.evaluate(slug => { location.hash = '#/workspace/order/' + slug; }, slug);
         assert.equal(await page.locator('#commerce-email').inputValue(), 'next-' + slug + '@example.test', '后续新草稿仍可切页保留');
         if (product === 'GPT') assert.equal(await cardType.inputValue(), '', '手动选未填写后返回草稿仍保留');
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await page.goto(origin + '/#/customers/list');
+        const customer = page.locator(`#main tr[data-row-id="${saved.customerId}"]`);
+        const drawer = page.locator('#drawer[open]');
+        await customer.locator('[data-action="commerce-contact-orders"]').click();
+        await drawer.locator(`[data-action="commerce-order-detail"][data-id="${saved.id}"]`).waitFor();
+        await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
+        await customer.locator('[data-action="commerce-contact-services"]').click();
+        await drawer.locator('[data-column="orderNos"]').getByText(saved.orderNo, { exact: true }).waitFor();
         assert.deepEqual(errors, []); assert.deepEqual(traffic.external, []);
       } finally { await context.close(); }
     });

@@ -199,6 +199,18 @@ test('Gemini 从谷歌邮箱登记并交付，Apple 扣款与库存同批保存�
   await page.locator('#main [data-action="commerce-renewal-open"][data-id="' + prior.id + '"]').waitFor();
   await go(page, 'workspace/order/gemini');
   assert.equal(await page.locator('#commerce-paidAmount').inputValue(), '20.00');
+  await page.locator('#commerce-paidAmount').fill('10.00');
+  const newExpiry = new Date(Date.parse(prior.expiry + '+08:00') + 31 * 86_400_000 + 28_800_000).toISOString().slice(0, 16);
+  await page.locator('#commerce-expiry').fill(newExpiry);
+  await page.locator('button[form="commerce-order-form"][type="submit"]').click();
+  assert.equal((await confirm(page, 'batch')).status(), 200);
+  const renewed = fixture.commerce.data.orders.find(row => row.id !== prior.id);
+  assert.equal(renewed.previousOrderId, prior.id);
+  assert.equal(renewed.accountId, stock.id);
+  assert.equal(renewed.appleIdId, wallet.id);
+  assert.equal(renewed.entitlementStatus, 'active');
+  assert.equal(fixture.appleBalance.data.wallets[0].balance, '5.0000');
+  assert.deepEqual(fixture.commerce.data.orders.find(row => row.id === prior.id), prior);
   assert.deepEqual(errors, []);
   assert.deepEqual(requests.external, []);
 });

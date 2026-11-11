@@ -3,7 +3,7 @@ import { Readable } from 'node:stream';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { createLocalBusinessStore, handleLocalBusiness } from '../server/local-business.mjs';
-import { interceptDesign, origin } from './helpers/offline-design.mjs';
+import { interceptDesign, origin, toggleDesignTheme } from './helpers/offline-design.mjs';
 
 test('renewal workbench persists decisions, creates a new order and projects customer loss', { timeout: 45000 }, async () => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
@@ -41,7 +41,7 @@ test('renewal workbench persists decisions, creates a new order and projects cus
     const read = async () => (await commerceRequest('GET')).json;
     const order = (id, customerId, expiry, extra = {}) => ({
       id, orderNo: id, customerId, expiry, email: id + '@example.test',
-      product: 'GPT', plan: 'Plus', businessType: '续费', start: '2026-10-07T16:00',
+      product: 'GPT', plan: 'Plus', source: '历史入库', businessType: '续费', start: '2026-10-07T16:00',
       paidConfirmed: true, receiptConfirmed: true, entitlementStatus: 'active',
       payment: '银行卡', paidAmount: '20', paidCurrency: 'USD',
       paymentId: '', cardId: '', saleAmount: '180', saleCurrency: 'CNY', version: 1,
@@ -151,7 +151,7 @@ test('renewal workbench persists decisions, creates a new order and projects cus
     await completed();
     await tab(/^即将到期/);
     await page.getByLabel('产品', { exact: true }).selectOption('Gemini');
-    await page.getByText('订单待接入', { exact: true }).waitFor();
+    assert.equal(await list.locator('tbody tr[data-row-id]').count(), 0);
     for (const [dayCount, hourCount, label] of [[0, 23, '23 小时'], [3, 12, '3 天 12 小时']]) {
       await page.getByRole('button', { name: '提醒设置' }).click();
       await days.fill(String(dayCount));
@@ -161,7 +161,7 @@ test('renewal workbench persists decisions, creates a new order and projects cus
       assert.equal((await read()).data.renewalWarningHours, dayCount * 24 + hourCount);
     }
     await page.setViewportSize({ width: 390, height: 850 });
-    await page.locator('#theme-toggle').click();
+    await toggleDesignTheme(page);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     assert.deepEqual(offline.external, []);
   } finally {

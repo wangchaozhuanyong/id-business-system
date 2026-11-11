@@ -89,6 +89,55 @@ test('已确认手工旧单直接有效，新的待开通续费不覆盖仍有�
   ]);
 });
 
+test('已开通但缺客户的新续费保留历史，资料补齐后才更新当前周期', () => {
+  const original = makeOrder('linked', 'GPT', { entitlementStatus: 'active' });
+  const renewal = makeOrder('unlinked-renewal', 'GPT', { entitlementStatus: 'active', customerId: '',
+    start: '2026-11-08 10:00', expiry: '2026-12-08 10:00' });
+  const data = fixtures([original, renewal]);
+  const [row] = projectSubscriptions(data, now);
+  assert.equal(row.conflict, false);
+  assert.equal(row.status, 'active');
+  assert.equal(row.series[0].orderNo, original.id);
+  assert.deepEqual(row.history.map(item => [item.sourceId, item.status, item.missingAssociation]),
+    [[renewal.id, 'active', true], [original.id, 'active', false]]);
+  renewal.customerId = original.customerId;
+  assert.equal(projectSubscriptions(data, now)[0].series[0].orderNo, renewal.id);
+  renewal.customerId = 'other-customer';
+  assert.equal(projectSubscriptions(data, now)[0].conflict, true);
+});
+
+test('Claude 自有历史保留终止周期，明确交付后转到客户订阅', async () => {
+  const data = fixtures();
+  for (const index of [1, 2, 3, 4]) {
+    data.inventory.data.accounts.push({ id: 'owned-' + index, type: 'claude', email: `owned-${index}@example.test`,
+      claudeHistory: { phase: 'opened', plan: 'Max 20x', start: '2026-10-23', expiry: '2026-11-22' },
+      health: index === 4 ? 'dead' : 'normal' });
+  }
+  const handler = createSubscriptionHandler({ store: fakeStore(data), publicOrigin: origin, clock: () => now });
+  const read = scope => request(handler, 'list', { product: 'Claude', scope });
+  let result = await read('owned');
+  assert.equal(result.body.accountCount, 4);
+  assert.equal(result.body.counts.active, 3);
+  assert.equal(result.body.counts.ended, 1);
+  const ended = result.body.items.find(row => row.status === 'ended');
+  assert.equal(ended.series[0].expiry, '2026-11-22');
+  assert.equal(ended.series[0].remainingDays, 0);
+  assert.equal((await read('customer')).body.total, 0);
+  assert.equal(data.commerce.data.orders.length, 0);
+
+  const delivery = makeOrder('delivery', 'Claude Max', { plan: 'Max 20x', email: 'owned-1@example.test',
+    businessType: '成品交付', entitlementStatus: 'active' });
+  data.commerce.data.orders.push(delivery);
+  assert.equal((await read('owned')).body.total, 4, '同邮箱尚未证实是库存交付');
+  delivery.accountId = 'owned-1';
+  data.inventory.data.accounts[0].accountLifecycle = { customerId: delivery.customerId, disposition: 'in_use' };
+  result = await read('customer');
+  assert.deepEqual(result.body.scopeCounts, { customer: 1, owned: 3, unlinked: 0 });
+  assert.equal(result.body.items[0].status, 'active');
+  assert.equal(result.body.items[0].series[0].orderNo, delivery.id);
+  assert.deepEqual(result.body.items[0].history.map(item => item.source), ['order', 'history']);
+});
+
 test('成功代充缺客户和订阅周期时显示已开通，后续仅凭实际日期显示有效', () => {
   const automatic = makeOrder('successful-task', 'GPT', { source: '线上代充', taskId: 'synthetic-job',
     entitlementStatus: 'active', paidConfirmed: false, customerId: '', start: '', expiry: '' });
@@ -299,20 +348,37 @@ test('已确认的自动充值和平台权益可进入有效订阅，退款不�
   assert.equal(rows.find(row => row.product === 'Gemini').status, 'active');
 });
 
-test('缺失账号或客户的订单单独待核对，撤单不会被误认为有效', () => {
+test('缺邮箱按原单列出但不计账号，缺客户不抹去已开通状态', async () => {
   const data = fixtures([
-    makeOrder('missing-one', 'GPT', { email: '', accountId: '', customerId: 'customer-a' }),
-    makeOrder('missing-two', 'GPT', { email: '', accountId: '', customerId: 'customer-b' }),
+    makeOrder('missing-one', 'GPT', { email: '', accountId: '', customerId: 'customer-a', entitlementStatus: 'active' }),
+    makeOrder('missing-two', 'GPT', { email: '待核对', accountId: '', customerId: 'customer-b' }),
+    makeOrder('recognized', 'GPT', { entitlementStatus: 'active' }),
+    makeOrder('recognized-renewal', 'GPT', { email: email.toUpperCase(), entitlementStatus: 'active' }),
+    makeOrder('one-off', 'Claude Pro', { email: '', businessType: '续费', entitlementStatus: 'active' }),
     makeOrder('missing-customer', 'Gemini', { entitlementStatus: 'active', customerId: '' }),
     makeOrder('cancelled', 'Grok', { entitlementStatus: 'active', cancelled: true })
   ]);
   const rows = projectSubscriptions(data, now);
-  const missing = rows.filter(row => row.product === 'GPT');
+  const missing = rows.filter(row => row.scope === 'unlinked');
   assert.equal(missing.length, 2);
   assert.notEqual(missing[0].id, missing[1].id);
-  assert.ok(missing.every(row => row.status === 'pending' && row.conflict));
-  assert.equal(rows.find(row => row.product === 'Gemini').status, 'pending');
+  assert.ok(missing.every(row => !row.conflict && row.missingAssociation));
+  assert.equal(missing.find(row => row.history[0].orderNo === 'missing-one').status, 'active');
+  assert.equal(rows.find(row => row.product === 'Gemini').status, 'active');
+  assert.equal(rows.find(row => row.product === 'Gemini').missingAssociation, true);
   assert.equal(rows.find(row => row.product === 'Grok').status, 'pending');
+  const handler = createSubscriptionHandler({ store: fakeStore(data), publicOrigin: origin, clock: () => now });
+  const customers = await request(handler, 'list', { product: 'GPT', scope: 'customer' });
+  assert.equal(customers.body.total, 1);
+  assert.equal(customers.body.accountCount, 1);
+  assert.equal(customers.body.counts.active, 1);
+  assert.deepEqual(customers.body.scopeCounts, { customer: 1, owned: 0, unlinked: 2 });
+  const unlinked = await request(handler, 'list', { product: 'GPT', scope: 'unlinked', query: 'missing-one' });
+  assert.equal(unlinked.body.accountCount, 0);
+  assert.equal(unlinked.body.total, 1);
+  assert.equal(unlinked.body.items[0].series[0].orderNo, 'missing-one');
+  const copy = await request(handler, 'copy', { id: unlinked.body.items[0].id, mode: 'full', revision: unlinked.body.revision });
+  assert.equal(copy.status, 409);
 });
 
 // Run the on-disk fixture only in the project's isolated CI.
