@@ -1,0 +1,18 @@
+[Unit]
+Description=ID formal recharge encrypted MySQL backup to S3
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=8min
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+UMask=0077
+WorkingDirectory=/opt/id-business-independent
+ExecStart=/usr/bin/python3 -B /opt/id-business-independent/formal/ops/recharge-core/scheduled-backup.py
+TimeoutStartSec=5min
+Restart=on-failure
+RestartSec=2min
+Nice=10
+IOSchedulingClass=idle

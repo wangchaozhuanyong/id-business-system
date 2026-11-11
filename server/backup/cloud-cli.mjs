@@ -65,7 +65,8 @@ async function run(config) {
     return;
   }
   const recipient = await privateBackupFile(config.recipientFile, 16_384);
-  const report = createWorkerReceipt(process.env.ID_MONITOR_WORKER_RECEIPTS_DIR, 'backup', config.dataDir);
+  const receiptsDir = process.env.ID_MONITOR_WORKER_RECEIPTS_DIR || config.outbox;
+  const report = createWorkerReceipt(receiptsDir, 'backup', config.dataDir);
   const shutdown = new AbortController();
   const lock = await lockOutbox(config.outbox, shutdown);
   let worker;

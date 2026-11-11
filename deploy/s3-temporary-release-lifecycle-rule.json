@@ -1,0 +1,8 @@
+{
+  "ID": "ExpireIndependentTemporaryReleaseArtifacts",
+  "Status": "Enabled",
+  "Filter": { "Prefix": "release-artifacts/temporary/" },
+  "Expiration": { "Days": 7 },
+  "NoncurrentVersionExpiration": { "NoncurrentDays": 7 },
+  "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 1 }
+}

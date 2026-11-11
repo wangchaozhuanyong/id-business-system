@@ -9,6 +9,9 @@ import subprocess
 import sys
 
 ROOT = Path('/opt/id-business-independent')
+MYSQL_CONTAINER = 'id-business-independent-formal-mysql'
+MYSQL_DATABASE = 'id_redesign_codexdaichong_prod'
+BACKUP_FILENAME = 'mysql.sql.aes256gcm'
 
 
 def credential(name):
@@ -28,11 +31,12 @@ def file_digest(path):
     return digest.hexdigest()
 
 
-def main():
-    if len(sys.argv) != 2 or not re.fullmatch('[a-f0-9]{40}', sys.argv[1]):
+def take_snapshot(sha, destination, *, backup_key=None):
+    if not re.fullmatch('[a-f0-9]{40}', sha):
         raise ValueError('Expected release revision')
-    sha = sys.argv[1]
-    destination = ROOT / 'backups' / ('recharge-core-' + sha)
+    scheduled = backup_key is not None
+    if scheduled and not re.fullmatch('[a-f0-9]{64}', backup_key):
+        raise ValueError('Invalid scheduled backup key')
     destination.mkdir(mode=0o700, parents=True, exist_ok=False)
     image = (ROOT / 'formal/node-image-id').read_text().strip()
     script = (ROOT / 'releases' / sha / 'source/deploy/recharge-core/seal-backup.mjs').read_text()
@@ -40,24 +44,25 @@ def main():
                '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--entrypoint', 'node', image,
                '--input-type=module', '-e', script, 'seal-backup.mjs']
     password = credential('independent-mysql-app')
-    bridge = credential('independent-recharge-bridge')
+    if not scheduled:
+        backup_key = credential('independent-recharge-bridge')
     children = []
     try:
-        dump = subprocess.Popen(['docker', 'exec', '-i', 'id-business-independent-formal-mysql',
+        dump = subprocess.Popen(['docker', 'exec', '-i', MYSQL_CONTAINER,
                                  'bash', '-ec', 'IFS= read -r MYSQL_PWD; export MYSQL_PWD; exec mysqldump '
                                  '--host=127.0.0.1 --user=id_redesign_recharge --single-transaction '
                                  '--skip-lock-tables --no-tablespaces --set-gtid-purged=OFF '
-                                 '--databases id_redesign_codexdaichong_prod'],
+                                 '--databases ' + MYSQL_DATABASE],
                                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         children.append(dump)
         dump.stdin.write((password + '\n').encode())
         dump.stdin.close()
-        backup = destination / 'mysql.sql.aes256gcm'
+        backup = destination / BACKUP_FILENAME
         with backup.open('xb') as output:
             os.chmod(backup, 0o600)
             seal = subprocess.Popen(command + ['seal', sha], stdin=subprocess.PIPE, stdout=output, stderr=subprocess.PIPE)
             children.append(seal)
-            seal.stdin.write((bridge + '\n').encode())
+            seal.stdin.write((backup_key + '\n').encode())
             while True:
                 chunk = dump.stdout.read(65536)
                 if not chunk:
@@ -74,7 +79,7 @@ def main():
         verify = subprocess.Popen(command + ['verify', sha], stdin=subprocess.PIPE,
                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         children.append(verify)
-        verify.stdin.write((bridge + '\n').encode())
+        verify.stdin.write((backup_key + '\n').encode())
         with backup.open('rb') as encrypted:
             while True:
                 chunk = encrypted.read(65536)
@@ -87,14 +92,16 @@ def main():
         if verify.wait() != 0:
             raise ValueError('Snapshot verification failed')
         restored = json.loads(verified)
-        if restored['sha256'] != metadata['sha256'] or restored['bytes'] != metadata['bytes'] or not restored['verified']:
+        if (restored['sha256'] != metadata['sha256'] or restored['bytes'] != metadata['bytes']
+                or restored['bytes'] <= 0 or not restored['verified']):
             raise ValueError('Snapshot digest mismatch')
+        scheme = ('AES-256-GCM; per-backup key domain-separated by source revision'
+                  if scheduled else 'AES-256-GCM; existing bridge domain-separated by source revision')
         manifest = {'revision': sha, 'encrypted': True, 'verified': True, 'plainBytes': metadata['bytes'],
                     'plainSha256': metadata['sha256'], 'cipherSha256': file_digest(backup),
-                    'scheme': 'AES-256-GCM; existing bridge domain-separated by source revision',
-                    'database': 'id_redesign_codexdaichong_prod'}
+                    'scheme': scheme, 'database': MYSQL_DATABASE}
         (destination / 'manifest.json').write_text(json.dumps(manifest, indent=2) + '\n')
-        print(json.dumps({'backup': str(destination), 'verified': True, 'plainBytes': manifest['plainBytes']}))
+        return manifest
     finally:
         for child in reversed(children):
             if child.poll() is None:
@@ -109,8 +116,13 @@ def main():
                 except subprocess.TimeoutExpired:
                     child.kill()
                     child.wait()
-
-
+def main():
+    if len(sys.argv) != 2 or not re.fullmatch('[a-f0-9]{40}', sys.argv[1]):
+        raise ValueError('Expected release revision')
+    sha = sys.argv[1]
+    destination = ROOT / 'backups' / ('recharge-core-' + sha)
+    manifest = take_snapshot(sha, destination)
+    print(json.dumps({'backup': str(destination), 'verified': True, 'plainBytes': manifest['plainBytes']}))
 
 if __name__ == '__main__':
     try:
