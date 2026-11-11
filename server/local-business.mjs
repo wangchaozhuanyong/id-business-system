@@ -68,7 +68,7 @@ import {
 } from './card-management.mjs';
 import { claudeGoogleCopyDomainPrefix, validateClaudeGoogleCopySettings } from './claude-google-subscriptions.mjs';
 import { legacyOpeningOrderIds, ownerForSubscriptionOrder, subscriptionDomain } from './subscription-management.mjs';
-import { subscriptionTime } from '../frontend/order-opening.mjs';
+import { matchOrderCustomer, orderCustomerCreateAction, subscriptionTime } from '../frontend/order-opening.mjs';
 import {
   assignOrderOwner, assignTenantOwner, checkClaudeProMaterialHistory,
   checkClaudeProRenewalSource, checkNewOrder, checkSubscriptionTermination, deriveCardIssueFee, historicalGptCardBackfillError,
@@ -159,6 +159,7 @@ const actionsByDomain = {
     '停用资料',
     '恢复资料',
     '新增独立订单',
+    orderCustomerCreateAction,
     '更新续费提醒设置',
     tenantRenewalSettingsAction,
     tenantRenewalHandledAction,
@@ -327,8 +328,30 @@ export function pageAuditRows(rows, search) {
   return { items: matches.slice((page - 1) * pageSize, page * pageSize), total, page, pageSize, snapshot };
 }
 
+function tenantPhoneKey(phone) {
+  const normalized = phone.normalize('NFKC').trim().toLowerCase();
+  if (!/^\+?[\d\s().-]+$/.test(normalized)) return normalized;
+  return normalized.replace(/[\s().-]/g, '').replace(/^(?:\+|00)(?=\d+$)/, '');
+}
+
+function checkTenantWrites(tenants, previous = []) {
+  checkTenantTransferHistory(tenants, previous);
+  const previousPhones = new Map(previous.map(row => [row.id, String(row.phone ?? '').trim()]));
+  const seen = new Map();
+  for (const row of tenants) {
+    const phone = String(row.phone ?? '').trim();
+    const key = tenantPhoneKey(phone);
+    if (!key) continue;
+    // Existing duplicate numbers do not block unrelated saves.
+    const changed = phone !== previousPhones.get(row.id);
+    if (seen.has(key) && (changed || seen.get(key)))
+      throw new LocalDataError(409, '此联系电话已被其他租户使用。');
+    seen.set(key, changed);
+  }
+}
+
 export function attributeCommerce(data, previous, actor, owners, subscriptions, inventory) {
-  checkTenantTransferHistory(data.tenants, previous?.tenants);
+  checkTenantWrites(data.tenants, previous?.tenants);
   const attributeNew = (rows = [], before = []) => {
     const known = new Set(Array.isArray(before) ? before.map((row) => row?.id) : []);
     for (const row of rows) {
@@ -599,6 +622,36 @@ function checkCustomerTagAssignments(previous, next, options) {
       throw new LocalDataError(409, '客户标签已变化，请刷新后重新选择');
     }
   }
+}
+
+function prepareOrderCustomerWrite(previous, next, actor, checkedAt) {
+  const previousCustomers = previous?.customers || [];
+  const knownCustomerIds = new Set(previousCustomers.map(row => row.id));
+  const added = next.customers.filter(row => !knownCustomerIds.has(row.id));
+  const knownOrderIds = new Set((previous?.orders || []).map(row => row.id));
+  const newOrders = next.orders.filter(row => !knownOrderIds.has(row.id));
+  const [customer] = added, [order] = newOrders;
+  if (added.length !== 1 || newOrders.length !== 1 || !customer.id || typeof customer.id !== 'string' ||
+      order.source !== '管理员手工' || order.customerId !== customer.id || customer.active !== true || customer.version !== 1)
+    throw new LocalDataError(400, '随单建档须关联本次新增的一笔订单');
+  if (!isDeepStrictEqual(next.customers.filter(row => knownCustomerIds.has(row.id)), previousCustomers))
+    throw new LocalDataError(409, '客户资料已变化，请重新核对订单');
+
+  const name = typeof customer.name === 'string' ? customer.name.trim() : '';
+  const wechat = typeof customer.wechat === 'string' ? customer.wechat.trim() : '';
+  const match = matchOrderCustomer(previousCustomers, name, wechat);
+  if (!name || !wechat || ['empty', 'invalid'].includes(match.kind))
+    throw new LocalDataError(400, '随单建档须填写有效的客户姓名和微信');
+  if (match.kind !== 'new')
+    throw new LocalDataError(409, '姓名或微信已存在，请核对已有客户后再提交');
+
+  const at = new Date(checkedAt).toISOString();
+  const createdById = actor?.id ?? customer.createdById;
+  const createdBy = actor?.name ?? customer.createdBy;
+  next.customers[next.customers.indexOf(customer)] = {
+    id: customer.id, name, wechat, version: 1, active: true,
+    createdById, createdBy, createdAt: at, updatedById: createdById, updatedBy: createdBy, updatedAt: at
+  };
 }
 
 function checkWrite(entry) {
@@ -1564,9 +1617,9 @@ export function createLocalBusinessStore(databasePath) {
       actor, verifyAutomaticSnapshot, readOrderOwners, [verifiedRelayClaimIds]: verifiedIds,
       [verifiedAppleRelayPrimaries]: primaryTargets, [verifiedOrderCards]: cards, [stagedRelayIntake]: relayIntake
     } = {}) {
-      // Initial cards are transient input: preserve the caller's retry snapshot on rollback.
+      // Preserve the caller's retry snapshot when normalizing transient input.
       const writes = checkWrites(entries).map(write => (write.domain === 'commerce' &&
-        write.data.tenants.some(row => Object.hasOwn(row, 'initialCards'))) ||
+        (write.action === orderCustomerCreateAction || write.data.tenants.some(row => Object.hasOwn(row, 'initialCards')))) ||
         (write.domain === 'inventory' && write.data.mailboxes.some(row => Object.hasOwn(row, 'appleOpeningBalance'))) ||
         (write.domain === 'appleBalance' && write.action === 'apple_topup')
         ? { ...write, data: structuredClone(write.data) } : write);
@@ -1677,6 +1730,7 @@ export function createLocalBusinessStore(databasePath) {
           const { action } = writes.find((write) => write.domain === 'commerce');
           const subscriptions = current(subscriptionDomain);
           const checkedAt = Date.now();
+          if (action === orderCustomerCreateAction) prepareOrderCustomerWrite(priorCommerce, commerce, actor, checkedAt);
           const legacyOpening = action === tenantRenewalHandledAction
             ? new Set(legacyOpeningOrderIds(priorCommerce?.orders, subscriptions)) : undefined;
           try { prepareTenantRenewalWrite(priorCommerce, commerce, action, actor, new Date(checkedAt), legacyOpening); }
@@ -1691,7 +1745,7 @@ export function createLocalBusinessStore(databasePath) {
             try { owners = readOrderOwners?.() || []; }
             catch { throw new LocalDataError(503, '暂时无法核对归属人，请稍后重试'); }
             attributeCommerce(commerce, priorCommerce, actor, owners, subscriptions, inventory);
-          } else checkTenantTransferHistory(commerce.tenants, priorCommerce?.tenants);
+          } else checkTenantWrites(commerce.tenants, priorCommerce?.tenants);
           if (action === historicalFeeAction && (writes.length !== 1 || !actor?.id ||
               !['admin', 'super'].includes(actor.role)))
             throw new LocalDataError(403, '历史费率更正须由管理员单独核对');
@@ -1716,7 +1770,8 @@ export function createLocalBusinessStore(databasePath) {
             if (prior && isDeepStrictEqual(row, prior)) continue;
             const terminationError = checkSubscriptionTermination(row, prior, action, checkedAt, !cards);
             if (terminationError) throw new LocalDataError(409, terminationError);
-            if (cards && !prior && action === '新增独立订单' && row.source === '管理员手工') {
+            if (!prior && row.source === '管理员手工' &&
+                (action === orderCustomerCreateAction || (cards && action === '新增独立订单'))) {
               if (row.draft || row.cancelled || ['draft', 'failed', '草稿', '失败'].includes(row.status) ||
                   row.paidConfirmed !== true || row.receiptConfirmed !== true || !positiveOrderAmount(row.paidAmount) ||
                   !validMoney(row.saleAmount) || !validCurrencyCode(row.paidCurrency) || !validCurrencyCode(row.saleCurrency))

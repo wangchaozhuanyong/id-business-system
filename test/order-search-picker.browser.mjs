@@ -123,8 +123,8 @@ test('订单下拉框在展开后搜索，保留联动、草稿与快捷新增',
   await page.locator('#main[data-layout-route="workspace/order/gpt"]').waitFor();
   assert.equal(await page.locator('#commerce-customerId').inputValue(), 'qa-beta', '切页返回恢复客户');
   await page.locator('#commerce-email').fill('draft-preserved@example.test');
-  await page.getByRole('textbox', { name: '新客户姓名', exact: true }).fill('快捷新增合成客户');
-  await page.getByRole('textbox', { name: '新客户微信', exact: true }).fill('qa_new_customer');
+  await page.locator('#order-quick-customer-name').fill('快捷新增合成客户');
+  await page.locator('#order-quick-customer-wechat').fill('qa_new_customer');
   await page.locator('[data-action="commerce-quick-customer"]').click();
   await page.locator('#drawer').getByRole('button', { name: '核对并保存', exact: true }).click();
   await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
@@ -153,7 +153,8 @@ test('订单下拉框在展开后搜索，保留联动、草稿与快捷新增',
       const select = field('cardTypeId').querySelector('select');
       const controls = field('cardTypeId').querySelector('.field-control');
       return {
-        width: box(node).width, customer: box(field('customerId')), email: box(field('email')), card: box(field('cardId')),
+        width: box(node).width, customer: box(field('customerId')), email: box(field('email')),
+        owner: box(field('ownerId')), card: box(field('cardId')),
         payment: box(field('payment')), type: box(field('cardTypeId')), tail: box(field('paymentId')),
         labelsFit: ['customerId', 'cardId'].every(key => {
           const label = field(key).querySelector('.commerce-picker-label');
@@ -165,8 +166,16 @@ test('订单下拉框在展开后搜索，保留联动、草稿与快捷新增',
         clientWidth: node.closest('.drawer-body').clientWidth
       };
     });
-    assert(geometry.customer.width >= geometry.width - 1 && geometry.email.width >= geometry.width - 1, JSON.stringify(geometry));
+    assert(geometry.customer.width >= geometry.width - 1, JSON.stringify(geometry));
     assert(geometry.email.top >= geometry.customer.bottom);
+    if (geometry.width >= 640) {
+      assert(Math.abs(geometry.email.top - geometry.owner.top) <= 1 && geometry.owner.left >= geometry.email.right,
+        '宽抽屉的邮箱和归属人同排且互不挤压');
+      assert(Math.abs(geometry.email.width - geometry.owner.width) <= 1);
+    } else {
+      assert(geometry.email.width >= geometry.width - 1 && geometry.owner.top >= geometry.email.bottom,
+        '窄抽屉的邮箱和归属人按顺序通栏排列');
+    }
     assert(geometry.labelsFit && geometry.actionsFit && geometry.scrollWidth <= geometry.clientWidth + 1);
     if (width >= 753) {
       assert.equal(geometry.payment.top, geometry.type.top);

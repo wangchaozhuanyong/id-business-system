@@ -1,11 +1,48 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { assignTenantOwner } from '../server/order-policy.mjs';
-import { attributeCommerce } from '../server/local-business.mjs';
+import { attributeCommerce, createLocalBusinessStore } from '../server/local-business.mjs';
 
 const admin = { id: 'admin', name: '代录管理员', role: 'admin' };
 const staff = { id: 'staff', name: '业务员工', role: 'employee' };
 const commerce = (tenants = [], orders = []) => ({ customers: [], tenants, orders, operating: [], rentBatches: [], logs: [] });
+
+test('租户保存拒绝其他租户已占用的号码，查重包含停用租户和常见号码格式', t => {
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  const data = commerce([
+    { id: 'active', name: '合成租户甲', phone: '+1 (202) 555-0101', version: 1, active: true },
+    { id: 'disabled', name: '合成租户乙', phone: '001 202 555 0102', version: 1, active: false }
+  ]);
+  data.customers.push({ id: 'customer', name: '合成客户', phone: data.tenants[0].phone, version: 1 });
+  const save = (version, data) => store.saveBatch([{ domain: 'commerce', version, data }], { actor: admin })[0];
+  const saved = save(0, data);
+  const duplicate = { status: 409, message: '此联系电话已被其他租户使用。' };
+
+  const adding = structuredClone(saved.data);
+  adding.tenants.unshift({ id: 'new', name: '不同姓名的租户', phone: '＋１ ２０２ ５５５ ０１０１', version: 1 });
+  assert.throws(() => save(saved.version, adding), duplicate);
+
+  const editing = structuredClone(saved.data);
+  Object.assign(editing.tenants[0], { phone: '+1 202-555-0102', version: 2 });
+  assert.throws(() => save(saved.version, editing), duplicate);
+  assert.deepEqual(store.load('commerce'), { version: saved.version, data: saved.data });
+
+  editing.tenants[0].phone = '001 202.555.0101';
+  assert.equal(save(saved.version, editing).data.tenants[0].phone, '001 202.555.0101');
+});
+
+test('历史重复号码允许修改其他资料，也可以更正为新号码', () => {
+  const previous = commerce([
+    { id: 'a', phone: '+1 202 555 0101', version: 1 },
+    { id: 'b', phone: '001 202 555 0101', version: 1 }
+  ]);
+  const changed = structuredClone(previous);
+  Object.assign(changed.tenants[0], { notes: '更正备注', version: 2 });
+  assert.doesNotThrow(() => attributeCommerce(changed, previous, admin, []));
+  changed.tenants[0].phone = '+1 202 555 0103';
+  assert.doesNotThrow(() => attributeCommerce(changed, previous, admin, []));
+});
 
 test('租户新增默认实际录入人，管理员代录按启用员工编号保存姓名快照', () => {
   for (const role of ['super', 'admin', 'employee']) {
