@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
+import { moyaoRechargeChannel, rechargeManualReviewReason, storefrontRechargeCode } from './admission.mjs';
 
 export const vendureRechargePrefix = '/api/id-business-v2/online-recharge/integrations/vendure';
 export const rechargeWorkerPrefix = '/integrations/recharge-worker';
@@ -127,13 +128,18 @@ export function createLoopbackVendureRechargeBridge({
   vendureKey,
   workerSecret,
   store,
+  lookupAdmission,
   acceptSubmissions = true,
+  acceptStorefrontSubmissions = () => true,
   legacyReceipts = [],
   now = Date.now
 }) {
   if (!strongSecret(vendureKey) || !strongSecret(workerSecret) || vendureKey === workerSecret)
     throw new TypeError('Vendure 与测试执行器需要独立服务凭据');
-  if (typeof acceptSubmissions !== 'boolean') throw new TypeError('商城代充受理开关无效');
+  if (typeof acceptSubmissions !== 'boolean' || typeof acceptStorefrontSubmissions !== 'function')
+    throw new TypeError('商城代充受理开关无效');
+  if (lookupAdmission !== undefined && typeof lookupAdmission !== 'function')
+    throw new TypeError('商城准入查询配置无效');
   if (!store && legacyReceipts?.length) throw new TypeError('商城历史回执需要正式任务存储密钥');
 
   const memoryKey = store ? null : randomBytes(32);
@@ -230,8 +236,16 @@ export function createLoopbackVendureRechargeBridge({
   }, signatureWindowMs);
   timer.unref();
 
-  function handleVendure(action, body, res, at, clientIp) {
-    if (action === 'config') return send(res, 200, { maintenance: !acceptSubmissions });
+  async function handleVendure(action, body, res, at, clientIp, storefrontChannel) {
+    const useAdmission = Boolean(lookupAdmission && storefrontChannel === moyaoRechargeChannel);
+    const accepting = () => acceptSubmissions && (!lookupAdmission || (useAdmission && acceptStorefrontSubmissions()));
+    if (lookupAdmission && storefrontChannel !== undefined && !useAdmission) {
+      if (action === 'config') return send(res, 200, { maintenance: true });
+      if (action === 'task') return send(res, 404, { error: '任务不可用' });
+      if (action === 'submit') return send(res, 200, { rejected: true });
+      return send(res, 400, { reason: 'storefront_code_not_admitted' });
+    }
+    if (action === 'config') return send(res, 200, { maintenance: !accepting() });
     if (action === 'task') {
       const task = tasks.get(body.id) ?? legacy.byId.get(body.id);
       const supplied = body.taskToken;
@@ -242,16 +256,42 @@ export function createLoopbackVendureRechargeBridge({
       return send(res, 200, taskView(task));
     }
 
-    const codeRef = fingerprint('code', codeKey(body.code));
-    const record = registry.get(codeRef);
-    const prior = legacy.byCode.get(codeRef) ?? [...tasks.values()].findLast((task) => task.codeRef === codeRef);
+    const nativeCode = useAdmission ? storefrontRechargeCode(body.code) : '';
+    const codeRef = fingerprint('code', nativeCode || codeKey(body.code));
+    const lastTask = () => legacy.byCode.get(codeRef) ?? [...tasks.values()].findLast(task => task.codeRef === codeRef);
+    const recover = task => task && (useAdmission || task.status !== 'failed' || legacy.byCode.has(codeRef));
+    let prior = lastTask();
     if (action === 'submit') {
-      // Only a new, explicit customer submission may retry a definitive failure.
-      // The engine still validates its own CDK state and resource/manual holds.
-      if (prior && (prior.status !== 'failed' || legacy.byCode.has(codeRef)))
-        return send(res, 200, taskView(prior, true));
-      if (!acceptSubmissions) return send(res, 200, { rejected: true });
-      if (!record || record.disabled || !acceptedSession(body.session, at))
+      if (recover(prior)) return send(res, 200, taskView(prior, true));
+      if (!accepting() || !acceptedSession(body.session)) return send(res, 200, { rejected: true });
+    }
+    const registered = registry.get(codeRef);
+    let record = useAdmission ? null : registered && {
+      plan: registered.plan, status: registered.disabled ? 'disabled' : 'available', upstreamCode: registered.upstreamCode
+    };
+    // Existing receipts remain readable even when the issuer is unavailable.
+    if (useAdmission && !prior && nativeCode && !registered?.disabled &&
+        (!assignedCodes.has(nativeCode) || registered?.upstreamCode === nativeCode)) {
+      let admitted;
+      try {
+        admitted = await lookupAdmission(nativeCode, clientIp);
+      } catch (error) {
+        if (action === 'submit') {
+          const current = lastTask();
+          return send(res, 200, recover(current) ? taskView(current, true) : { rejected: true });
+        }
+        throw error;
+      }
+      if (closed || needsRecovery) return send(res, 503, { error: '隔离联调暂不可用' });
+      at = now();
+      expire(at);
+      prior = lastTask();
+      if (admitted) record = { ...admitted, upstreamCode: nativeCode };
+    }
+    if (action === 'submit') {
+      // Lookup yields to concurrent requests. Reuse their task before claiming this code.
+      if (recover(prior)) return send(res, 200, taskView(prior, true));
+      if (!accepting() || record?.status !== 'available')
         return send(res, 200, { rejected: true });
       const task = {
         id: randomUUID(),
@@ -263,20 +303,22 @@ export function createLoopbackVendureRechargeBridge({
         updatedAt: at
       };
       commit(new Map(tasks).set(task.id, task));
-      sessions.set(task.id, body.session);
+      sessions.set(task.id, { session: body.session, executionCode: record.upstreamCode });
       return send(res, 200, taskView(task, true));
     }
 
-    if (!record && !prior) return send(res, 400, { error: '兑换码不可用' });
+    if (!record && !prior)
+      return send(res, 400, useAdmission ? { reason: 'storefront_code_not_admitted' } : { error: '兑换码不可用' });
     const status = prior?.codeStatus ?? (prior
       ? prior.status === 'succeeded'
         ? 'used'
-        : prior.status === 'failed' && !legacy.byCode.has(codeRef) && !record?.disabled
+        : prior.status === 'failed' && !legacy.byCode.has(codeRef) && !useAdmission && !registered?.disabled
           ? 'available' : 'reserved'
-      : record.disabled
-        ? 'disabled'
-        : 'available');
+      : record.status);
     const result = { plan: prior?.plan ?? record.plan, status };
+    if (useAdmission && status === 'reserved' &&
+        (prior?.status === 'awaiting_review' || record?.reason === rechargeManualReviewReason))
+      result.reason = rechargeManualReviewReason;
     if (action === 'query') result.task = prior ? taskView(prior, true) : null;
     return send(res, 200, result);
   }
@@ -292,9 +334,8 @@ export function createLoopbackVendureRechargeBridge({
       if (!acceptSubmissions) return finish(200, { task: null });
       for (const task of tasks.values()) {
         if (task.status !== 'queued') continue;
-        const session = sessions.get(task.id);
-        const record = registry.get(task.codeRef);
-        if (!record || record.disabled || record.plan !== task.plan || !acceptedSession(session, at)) {
+        const authorization = sessions.get(task.id);
+        if (!authorization?.executionCode || !acceptedSession(authorization.session)) {
           sessions.delete(task.id);
           nextTasks.set(task.id, transition(task, 'awaiting_review', at));
           continue;
@@ -310,7 +351,7 @@ export function createLoopbackVendureRechargeBridge({
         commit(nextTasks, nextNonces);
         sessions.delete(task.id);
         return send(res, 200, {
-          task: { ...taskView(leased), leaseToken, leaseUntil, session, executionCode: record.upstreamCode,
+          task: { ...taskView(leased), leaseToken, leaseUntil, ...authorization,
             ...(isIP(task.clientIp ?? '') ? { clientIp: task.clientIp } : {}) }
         });
       }
@@ -426,7 +467,7 @@ export function createLoopbackVendureRechargeBridge({
     expire(at);
     if (worker && nonces.has(nonceRef)) return send(res, 409, { error: '执行请求已接收' });
     return vendure
-      ? handleVendure(vendure[1], body, res, at, headers['x-vendure-client-ip'])
+      ? handleVendure(vendure[1], body, res, at, headers['x-vendure-client-ip'], headers['x-vendure-recharge-channel'])
       : handleWorker(worker[1], body, res, at, nonceRef, nonceUntil);
   }
 
