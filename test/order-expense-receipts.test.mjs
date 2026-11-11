@@ -13,8 +13,18 @@ const charge = { category: 'kyc', chargedOn: '2026-11-11', source: '合成机构
 function setup(t) {
   const store = createLocalBusinessStore(':memory:');
   t.after(() => store.close());
-  const orders = [{ id: 'claude-fixture', orderNo: 'SYN-CLAUDE', email: 'private-fixture@example.test' },
-    { id: 'draft-fixture', orderNo: 'SYN-DRAFT', draft: true }];
+  const card = { product: 'GPT', payment: '银行卡', cardId: 'recharge:7', start: '2026-11-03T12:00',
+    paidConfirmed: true, costBasis: 'standard' };
+  const orders = [
+    { id: 'claude-fixture', orderNo: 'SYN-CLAUDE', email: 'private-fixture@example.test',
+      product: 'Claude Pro', payment: '银行卡', costBasis: 'standard', paidConfirmed: true },
+    { id: 'actual-fixture', orderNo: 'SYN-ACTUAL', paidConfirmed: true, costBasis: 'actual',
+      actualCostAmount: '40', actualCostCurrency: 'CNY' },
+    { ...card, id: 'card-fixture', orderNo: 'SYN-CARD', issueFeeSnapshot: { cardId: card.cardId, applied: true, amountUsd: '0.5' } },
+    { ...card, id: 'second-card-use', orderNo: 'SYN-CARD-2' },
+    { ...card, cardId: 'recharge:8', id: 'incomplete-card', orderNo: 'SYN-CARD-INCOMPLETE' },
+    { id: 'draft-fixture', orderNo: 'SYN-DRAFT', draft: true }
+  ];
   const handler = createOrderExpenseHandler({ publicOrigin: origin, clock: () => Date.parse('2026-11-10T18:00:00Z'),
     store: { ...store, load: domain => domain === 'commerce' ? { data: { orders } } : store.load(domain) } });
   const send = (body, { actor = admin, requestOrigin = origin, contentType = 'application/json' } = {}) =>
@@ -26,7 +36,7 @@ function setup(t) {
       void handler(req, { writeHead(code, values) { status = code; headers = values; },
         end(raw) { resolve({ status, headers, body: JSON.parse(raw) }); } }, actor);
     });
-  return { store, send };
+  return { store, send, orders };
 }
 
 test('实付凭据按原币与账单结算分开保存，可追原订单及作废审计', async t => {
@@ -54,6 +64,49 @@ test('实付凭据按原币与账单结算分开保存，可追原订单及作�
   assert.deepEqual((await send()).body.items.map(item => [item.amount, Boolean(item.voidedAt)]),
     [['18', false], ['20', true]]);
   assert.equal(store.audit().filter(event => event.domain === orderExpenseDomain).length, 3);
+});
+
+test('管理员核对费用归属，限制重复替换和原单已含费用合计', async t => {
+  const { store, send, orders } = setup(t);
+  const before = structuredClone(orders);
+  const record = (version, entry) => send({ action: 'record', version, entry });
+  const account = (version, id, mode, options) => send({ action: 'account', version, id, mode }, options);
+  const first = (await record(0, charge)).body.items[0];
+  assert.equal(first.accountingMode, undefined);
+  assert.equal((await account(1, first.id, 'replace-kyc', { actor: employee })).status, 403);
+  assert.equal((await account(1, first.id, 'included')).status, 400);
+  const applied = await account(1, first.id, 'replace-kyc');
+  assert.equal(applied.status, 200);
+  assert.equal(applied.body.items[0].accountingMode, 'replace-kyc');
+  assert.equal(applied.body.items[0].amount, charge.amount);
+  assert.equal((await account(1, first.id, 'cash')).status, 409);
+  const second = (await record(2, { ...charge, reference: 'KYC-2' })).body.items[0];
+  assert.match((await account(3, second.id, 'replace-kyc')).body.error, /已有一笔/);
+  assert.equal((await account(3, first.id, 'cash')).body.items.find(row => row.id === first.id).accountingMode, 'cash');
+  const included = (await record(4, { ...charge, reference: 'KYC-ACT', orderNo: 'SYN-ACTUAL' })).body.items[0];
+  assert.equal((await account(5, included.id, 'included')).status, 200);
+  const fx = (await record(6, { category: 'fx-fee', chargedOn: charge.chargedOn, source: '合成账单',
+    reference: 'FX-ACT', amount: '8', currency: 'CNY', orderNo: 'SYN-ACTUAL' })).body.items[0];
+  assert.match((await account(7, fx.id, 'included')).body.error, /合计超过/);
+  assert.equal((await account(7, fx.id, 'add-fx')).status, 200);
+  assert.deepEqual(orders, before);
+  assert.equal(store.audit().filter(row => row.domain === orderExpenseDomain && row.action === 'order_expense_account').length, 4);
+});
+
+test('发卡实付绑定原付款卡，拒绝同卡多份及开通历史未核全的凭据', async t => {
+  const { send } = setup(t);
+  const entry = { category: 'card-issue', chargedOn: '2026-11-02', source: '合成卡商',
+    reference: 'CARD-1', amount: '1.0001', currency: 'USD', orderNo: 'SYN-CARD' };
+  const saved = await send({ action: 'record', version: 0, entry });
+  const account = { action: 'account', version: 1, id: saved.body.items[0].id, mode: 'replace-card' };
+  const applied = await send(account);
+  assert.equal(applied.status, 200);
+  assert.equal(applied.body.items[0].accountingCardId, 'recharge:7');
+  const duplicate = await send({ action: 'record', version: 2, entry: { ...entry, reference: 'CARD-2', orderNo: 'SYN-CARD-2' } });
+  assert.equal((await send({ ...account, version: 3, id: duplicate.body.items[0].id })).status, 409);
+  const missing = await send({ action: 'record', version: 3,
+    entry: { ...entry, reference: 'CARD-3', currency: 'CNY', orderNo: 'SYN-CARD-INCOMPLETE' } });
+  assert.match((await send({ ...account, version: 4, id: missing.body.items[0].id })).body.error, /核对该卡开通记录/);
 });
 
 test('越权、跨站、无效金额和日期被拒，竞争提交保留一次有效写入', async t => {

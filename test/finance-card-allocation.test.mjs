@@ -37,6 +37,29 @@ const allocate = (orders, at = clock) => buildCardIssueAllocations(orders, { clo
 const compute = (order, allocations, currency = 'CNY') =>
   calculateOrder(order, { clock, currency, cardIssueAllocations: allocations });
 
+test('同卡发卡实付替换一次规则金额，仍按完整开通历史分摊', () => {
+  const orders = trio();
+  orders[2].cancelled = true;
+  const receipt = { id: 'card-cost', category: 'card-issue', orderId: orders[0].id, chargedOn: '2026-11-03',
+    amount: '7.2', currency: 'CNY', settlementAmount: '1.0001', settlementCurrency: 'USD',
+    accountingMode: 'replace-card', accountingCardId: cardId, source: '合成发行方', reference: 'CARD-A' };
+  const run = expenseReceipts => buildCardIssueAllocations(orders, { clock, expenseReceipts });
+  const allocations = run([receipt]);
+  assert.deepEqual(orders.map(order => allocations.get(order.id).amountUsd), ['0.3334', '0.3334', '0.3333']);
+  assert.equal(allocations.get(orders[0].id).count, 3);
+  const detail = compute(orders[1], allocations).items.find(row => row.key === 'card-issue');
+  assert.equal(detail.expenseReceipt.reference, 'CARD-A');
+  assert.equal(detail.originalAmount, '0.3334');
+  const settled = run([{ ...receipt, amount: '1', currency: 'USD', settlementAmount: '7.11', settlementCurrency: 'CNY' }]);
+  assert.equal(settled.get(orders[1].id).amount, '2.3700');
+  assert.equal(settled.get(orders[1].id).total, '7.1100');
+  const settledLine = compute(orders[1], settled).items.find(row => row.key === 'card-issue');
+  assert.equal(settledLine.originalCurrency, 'CNY');
+  assert.equal(settledLine.amount, '2.3700');
+  assert.deepEqual(run([{ ...receipt, voidedAt: '2026-11-09T00:00:00Z' }]), allocate(orders));
+  assert.equal(run([receipt, { ...receipt, id: 'duplicate' }]).get(orders[0].id).status, 'pending');
+});
+
 test('更正银行卡资料不改变原开卡费分摊、同卡其他订单或历史成本', () => {
   const orders = trio(), before = allocate(orders);
   const corrected = structuredClone(orders);

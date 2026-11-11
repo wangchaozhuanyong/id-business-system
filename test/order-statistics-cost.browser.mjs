@@ -225,11 +225,14 @@ test('实付凭据按扣款日和原币汇总，登记及作废后可逐单核�
         operations.push(input);
         assert.equal(input.version, receiptState.version);
         if (input.action === 'record') {
-          receiptState = { version: 5, items: [
+          receiptState = { version: receiptState.version + 1, items: [
             { ...input.entry, id: 'new-kyc', orderId: 'claude', recordedAt }, ...receiptState.items
           ] };
+        } else if (input.action === 'account') {
+          receiptState = { version: receiptState.version + 1, items: receiptState.items.map(row => row.id === input.id
+            ? { ...row, accountingMode: input.mode } : row) };
         } else {
-          receiptState = { version: 6, items: receiptState.items.map(row => row.id === input.id
+          receiptState = { version: receiptState.version + 1, items: receiptState.items.map(row => row.id === input.id
             ? { ...row, voidedAt: recordedAt, voidReason: input.reason } : row) };
         }
         return route.fulfill({ json: receiptState });
@@ -283,16 +286,36 @@ test('实付凭据按扣款日和原币汇总，登记及作废后可逐单核�
       await page.getByLabel('套餐', { exact: true }).selectOption('Claude Pro:Pro');
       assert.equal(await cell('kyc', 'count').textContent(), '1');
       const saved = receiptTable.locator('tr[data-row-id="new-kyc"]');
+      await page.getByLabel('开通起日').fill('');
+      await page.getByRole('tab', { name: '统计概览' }).click();
+      const plan = page.locator('table[data-table="commerce-plan-statistics"] tr[data-row-id="Claude Pro:Pro"]');
+      assert.match(await plan.locator('[data-column="reference"]').textContent(), /净成本 249\.375/);
+      await page.getByRole('tab', { name: '费用拆分' }).click();
+      await saved.getByRole('button', { name: '核对计入', exact: true }).click();
+      await drawer.locator('#commerce-expense-mode').selectOption('replace-kyc');
+      await drawer.getByRole('button', { name: '确认核算方式', exact: true }).click();
+      await drawer.waitFor({ state: 'hidden' });
+      assert.equal(operations[1].mode, 'replace-kyc');
+      assert.equal(await saved.locator('[data-column="mode"]').textContent(), '用实付替换本单 KYC');
+      await page.getByRole('tab', { name: '统计概览' }).click();
+      assert.match(await plan.locator('[data-column="reference"]').textContent(), /净成本 219\.45/);
+      await page.getByRole('tab', { name: '费用拆分' }).click();
       await saved.getByRole('button', { name: '查看原单', exact: true }).click();
       assert.equal(await drawer.getByRole('tab', { name: '成本与汇率' }).getAttribute('aria-selected'), 'true');
+      await drawer.getByLabel('查看KYC 认证实付说明').click();
+      await drawer.getByRole('note').filter({ hasText: 'KYC-001' }).waitFor();
+      await page.keyboard.press('Escape');
       await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
       await saved.getByRole('button', { name: '作废凭据', exact: true }).click();
       await drawer.locator('#commerce-expense-reason').fill('合成凭据录入更正');
       await drawer.getByRole('button', { name: '确认作废', exact: true }).click();
       await drawer.waitFor({ state: 'hidden' });
-      assert.equal(operations[1].action, 'void');
+      assert.equal(operations[2].action, 'void');
       assert.equal(await cell('kyc', 'count').textContent(), '0');
       assert.match(await saved.locator('[data-column="status"]').textContent(), /已作废.*合成凭据录入更正/s);
+      await page.getByRole('tab', { name: '统计概览' }).click();
+      assert.match(await plan.locator('[data-column="reference"]').textContent(), /净成本 249\.375/);
+      await page.getByRole('tab', { name: '费用拆分' }).click();
       await settle(page);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
       assert.deepEqual((await spacingSnapshot(page)).findings, []);

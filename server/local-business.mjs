@@ -209,6 +209,7 @@ const orderFeatureDomains = new Set([
 ]);
 const orderFeatureAuditLabels = {
   order_expense_record: '登记费用实付凭据',
+  order_expense_account: '核对费用凭据的入账方式',
   order_expense_void: '作废费用实付凭据',
   monitor_settings: '保存监控与通知设置',
   monitor_test: '提交 Telegram 测试投递',

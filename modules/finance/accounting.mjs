@@ -174,6 +174,56 @@ const stableCardId = (order) => {
   const id = original ? original.cardId : order.cardId;
   return typeof id === 'string' && id.trim() === id && id.length > 0 && !/^\d{4,19}$/.test(id) ? id : '';
 };
+export const expenseAccountingModes = Object.freeze({
+  kyc: Object.freeze(['cash', 'replace-kyc', 'included']),
+  'card-issue': Object.freeze(['cash', 'replace-card']),
+  'fx-fee': Object.freeze(['cash', 'add-fx', 'included'])
+});
+export function expenseAmountIn(receipt, currency) {
+  if (receipt.currency === currency) return receipt.amount;
+  return receipt.settlementCurrency === currency ? receipt.settlementAmount ?? null : null;
+}
+
+export function orderExpenseTerms(order, receipts) {
+  const terms = [];
+  for (const receipt of receipts) {
+    const { category, accountingMode: mode = 'cash' } = receipt;
+    if (receipt.voidedAt || mode === 'cash') continue;
+    if (!Object.hasOwn(expenseAccountingModes, category) || !expenseAccountingModes[category].includes(mode))
+      throw new Error('费用凭据的核算方式无效');
+    if (!order || receipt.orderId !== order.id || (!order.paidConfirmed && !usesRecordedClaudeSaleCost(order)) || order.draft ||
+        unavailableOrders.includes(order.status) || order.entitlementStatus === 'failed')
+      throw new Error('费用凭据须关联已确认代付或具备实际总成本的有效原单');
+    if (mode === 'replace-kyc' && (order.costBasis !== 'standard' || order.payment !== '银行卡' ||
+        !['Claude Pro', 'Claude Max'].includes(order.product)))
+      throw new Error('仅按规则核算的 Claude 银行卡订单可以替换 KYC 参考成本');
+    if (mode === 'add-fx' && !['actual', 'standard'].includes(order.costBasis))
+      throw new Error('请先核对原单的成本依据');
+    if (mode === 'included' && order.costBasis !== 'actual')
+      throw new Error('原单须已登记实际总成本，才可拆出已包含的费用');
+    const cardId = mode === 'replace-card' && order.payment === '银行卡' ? stableCardId(order) : '';
+    if (mode === 'replace-card' && (!cardId || (receipt.accountingCardId && receipt.accountingCardId !== cardId)))
+      throw new Error('开卡费凭据关联的原付款卡待核对');
+    const currency = mode === 'included' ? order.actualCostCurrency : receipt.settlementCurrency || receipt.currency;
+    const amount = expenseAmountIn(receipt, currency);
+    if (!validCurrencyCode(currency) || amount === null)
+      throw new Error(mode === 'included' ? '已包含费用须有与原单实际总成本同币种的账单金额'
+        : '凭据缺少用于核算的原币或结算金额');
+    const units = unsigned(amount);
+    if (!units) throw new Error('费用凭据金额须大于零');
+    terms.push({ category, mode, units, currency, cardId,
+      receipt: { id: receipt.id, source: receipt.source, reference: receipt.reference } });
+  }
+  if (terms.filter(term => term.mode === 'replace-kyc').length > 1)
+    throw new Error('本单已有一笔替换 KYC 参考成本的凭据');
+  const included = terms.filter(term => term.mode === 'included');
+  if (included.length && included.reduce((total, term) => total + term.units, 0n) > unsigned(order.actualCostAmount))
+    throw new Error('已包含费用合计超过原单实际总成本');
+  return terms;
+}
+
+export const activeExpenseReceipt = (receipt, clock) => !receipt.voidedAt && typeof receipt.accountingMode === 'string' &&
+  receipt.accountingMode !== 'cash' && Date.parse(receipt.chargedOn + 'T00:00:00+08:00') <= clock;
 const compareKey = (a, b) => a === b ? 0 : a < b ? -1 : 1;
 const openingOrder = (a, b) => a.at - b.at ||
   compareKey(a.order.orderNo || a.order.id, b.order.orderNo || b.order.id) || compareKey(a.order.id, b.order.id);
@@ -206,9 +256,17 @@ function canUseUnlinkedCardReference(order, clock, opening) {
 
 // Use the complete order set, including successful orders later refunded or
 // cancelled. Display filters and FX gaps do not alter a card's denominator.
-export function buildCardIssueAllocations(orders, { clock = Date.now() } = {}) {
+export function buildCardIssueAllocations(orders, { clock = Date.now(), expenseReceipts = [] } = {}) {
   const result = new Map(), groups = new Map(), tasks = new Map();
   const pending = (reason) => ({ status: 'pending', reason });
+  const cardReceipts = new Map();
+  const ordersById = new Map(orders.filter(order => order?.id).map(order => [order.id, order]));
+  for (const receipt of expenseReceipts) {
+    if (receipt.accountingMode !== 'replace-card' || !activeExpenseReceipt(receipt, clock)) continue;
+    const group = cardReceipts.get(receipt.accountingCardId) || [];
+    group.push(receipt);
+    cardReceipts.set(receipt.accountingCardId, group);
+  }
   const candidates = [...new Map(orders.filter((row) => row?.id && row.payment === '银行卡' &&
     bankProducts.includes(row.product) && !row.draft && !unavailableOrders.includes(row.status))
     .map((row) => [row.id, row])).values()].map((row) => confirmedCardOpening(row, clock));
@@ -259,7 +317,8 @@ export function buildCardIssueAllocations(orders, { clock = Date.now() } = {}) {
     const charges = [...group.filter(({ order }) => order.issueFeeSnapshot?.applied === true),
       ...(feesOnFailedOpenings.get(cardId) || [])];
     if (!charges.length && !group.some(({ order }) => requiresCardAllocation(order.product)) && !ambiguousCards.has(cardId)) continue;
-    let total;
+    let total, appliedReceipt;
+    let currency = 'USD';
     let reason;
     if (ambiguousCards.has(cardId) || group.some((item) => item.state !== 'opened')) {
       reason = '同卡开通记录存在待核对项';
@@ -274,15 +333,31 @@ export function buildCardIssueAllocations(orders, { clock = Date.now() } = {}) {
         reason = '原卡开卡费凭据待核对';
       }
     }
+    const verified = cardReceipts.get(cardId);
+    if (!reason && verified?.length) {
+      try {
+        if (verified.length !== 1 || !group.some(item => item.order.id === verified[0].orderId))
+          throw new Error('发卡实付凭据或同卡原单待核对');
+        const [term] = orderExpenseTerms(ordersById.get(verified[0].orderId), verified);
+        total = term.units;
+        currency = term.currency;
+        appliedReceipt = term.receipt;
+      } catch (error) {
+        reason = error.message;
+      }
+    }
     if (reason) {
       for (const { order } of group) result.set(order.id, pending(reason));
       continue;
     }
     const count = BigInt(group.length), base = total / count, extra = total % count;
+    const totalAmount = formatted(total);
     group.sort(openingOrder).forEach(({ order }, index) => {
+      const amount = formatted(base + (BigInt(index) < extra ? 1n : 0n));
       result.set(order.id, {
-        status: 'ready', amountUsd: formatted(base + (BigInt(index) < extra ? 1n : 0n)),
-        totalUsd: formatted(total), count: group.length, asOf: new Date(clock).toISOString()
+        status: 'ready', ...(currency === 'USD' ? { amountUsd: amount, totalUsd: totalAmount } : { amount, total: totalAmount, currency }),
+        count: group.length, asOf: new Date(clock).toISOString(),
+        ...(appliedReceipt && { expenseReceipt: appliedReceipt })
       });
     });
   }
@@ -309,7 +384,7 @@ function usesRecordedClaudeSaleCost(order, appleLedger) {
 
 // All converted values share an exact denominator. Apple actual-cost returns are
 // prorated against the documented recoverable part of the total, not against fees.
-function calculateOrderAmounts(order, { appleLedger, cardIssueAllocations, currency = 'CNY', clock = Date.now() } = {},
+function calculateOrderAmounts(order, { appleLedger, cardIssueAllocations, expenseReceipts = [], currency = 'CNY', clock = Date.now() } = {},
   includeRevenue) {
   const missing = new Set();
   const recordedSaleCost = usesRecordedClaudeSaleCost(order, appleLedger);
@@ -323,8 +398,10 @@ function calculateOrderAmounts(order, { appleLedger, cardIssueAllocations, curre
       (!cardIssueAllocations && canUseUnlinkedCardReference(order, clock));
     if (order.payment === '银行卡' && order.costBasis === 'standard' && allocation?.status === 'pending')
       cardIssueReason = allocation.reason;
+    const expenseTerms = orderExpenseTerms(order, expenseReceipts.filter(row => activeExpenseReceipt(row, clock)));
     const sameCurrency = recordedSaleCost && order.actualCostCurrency === currency &&
-      (!includeRevenue || order.saleCurrency === currency);
+      (!includeRevenue || order.saleCurrency === currency) &&
+      !expenseTerms.some(term => term.mode === 'add-fx' && term.currency !== currency);
     const snapshot = sameCurrency ? null : readSnapshot(order, clock);
     const rate = (code) => {
       if (!validCurrencyCode(code)) throw new Error('订单币种无效');
@@ -364,12 +441,18 @@ function calculateOrderAmounts(order, { appleLedger, cardIssueAllocations, curre
     const original = [];
     let recovery, recoveryUnits = returned, recoveryCurrency = order.paidCurrency;
     let cardIssueUnallocated = false;
-    const item = (key, label, units, code, multiplier = one) =>
+    const item = (key, label, units, code, multiplier = one, expenseReceipt) =>
       original.push({ key, label, amount: value(units, code) * multiplier * denominator,
-        originalAmount: formatted(rounded(units * multiplier, one)), originalCurrency: code });
+        originalAmount: formatted(rounded(units * multiplier, one)), originalCurrency: code,
+        ...(expenseReceipt && { expenseReceipt }) });
+    const addTerm = (term, label) => item(term.category, label, term.units, term.currency, one, term.receipt);
     if (actual) {
       const cost = unsigned(order.actualCostAmount);
-      item('actual-total', '实际总成本（退回前）', cost, order.actualCostCurrency);
+      const included = expenseTerms.filter(term => term.mode === 'included');
+      item('actual-total', included.length ? '实际总成本未拆分部分' : '实际总成本（退回前）',
+        cost - included.reduce((total, term) => total + term.units, 0n), order.actualCostCurrency);
+      for (const term of included)
+        addTerm(term, term.category === 'kyc' ? '已含 KYC 实付' : '已含换汇手续费');
       if (apple && returned > 0n) {
         if (!order.appleRecoverableCostAmount)
           throw new Error('请核对实际总成本中可按 Apple 面额比例收回的部分');
@@ -386,11 +469,14 @@ function calculateOrderAmounts(order, { appleLedger, cardIssueAllocations, curre
       if (!apple && !unlinkedCard && cardIssueAllocations && (allocation || requiresCardAllocation(order.product))) {
         if (allocation?.status !== 'ready')
           throw new Error(allocation?.reason || '本单开卡成本待核对');
-        item('card-issue', '开卡成本分摊', unsigned(allocation.amountUsd), 'USD');
+        item('card-issue', '开卡成本分摊', unsigned(allocation.amount ?? allocation.amountUsd),
+          allocation.currency || 'USD', one, allocation.expenseReceipt);
       }
       if (!apple && claude) {
         item('service', '代付服务费', unsigned(rules.claudeBankFeeMyr), 'MYR');
-        item('kyc', 'KYC 认证成本', unsigned(rules.claudeAccountCostMyr), 'MYR');
+        const kyc = expenseTerms.find(term => term.mode === 'replace-kyc');
+        if (kyc) addTerm(kyc, 'KYC 认证实付');
+        else item('kyc', 'KYC 认证成本', unsigned(rules.claudeAccountCostMyr), 'MYR');
       } else if (!apple) {
         if (unlinkedCard || !cardIssueAllocations) {
           const fee = order.issueFeeSnapshot;
@@ -414,6 +500,8 @@ function calculateOrderAmounts(order, { appleLedger, cardIssueAllocations, curre
         recoveryUnits = rounded(returned * factor, one);
       }
     }
+    for (const term of expenseTerms.filter(term => term.mode === 'add-fx'))
+      addTerm(term, '独立换汇手续费');
     recovery ??= value(returned, order.paidCurrency) * one * denominator;
     const netRevenue = includeRevenue ? value(received, order.saleCurrency) * one * denominator : 0n;
     const grossCost = original.reduce((sum, row) => sum + row.amount, 0n);

@@ -1,10 +1,11 @@
 import { randomUUID } from 'node:crypto';
-import { validCurrencyCode } from '../../modules/finance/accounting.mjs';
+import {
+  buildCardIssueAllocations, expenseAccountingModes, orderExpenseTerms, validCurrencyCode
+} from '../../modules/finance/accounting.mjs';
 import { validMoney } from '../order-policy.mjs';
 
 export const orderExpenseDomain = 'order-expense-receipts';
 export const orderExpenseRoute = '/api/local/finance/expense-receipts';
-const categories = new Set(['kyc', 'card-issue', 'fx-fee']);
 const invalid = (message, status = 400) => Object.assign(new Error(message), { status });
 const text = (value, limit) => {
   if (typeof value !== 'string' || value.trim().length > limit || /[\p{Cc}\p{Cf}]/u.test(value)) return '';
@@ -40,7 +41,7 @@ function buildReceipt(input, snapshot, orders, actor, now) {
       Object.keys(input).some(key => !keys.includes(key))) throw invalid('凭据资料无效');
   const { category, chargedOn, amount, currency, settlementAmount = '', settlementCurrency = '' } = input;
   const source = text(input.source, 60), reference = text(input.reference, 100);
-  if (!categories.has(category) || !source || !reference)
+  if (!Object.hasOwn(expenseAccountingModes, category) || !source || !reference)
     throw invalid('请选择费用项目，填写扣款来源及凭据编号');
   if (typeof chargedOn !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(chargedOn) ||
       !Number.isFinite(Date.parse(chargedOn)) || new Date(chargedOn).toISOString().slice(0, 10) !== chargedOn ||
@@ -62,6 +63,31 @@ function buildReceipt(input, snapshot, orders, actor, now) {
     recordedBy: actor.name || '管理员' };
 }
 
+function accountForReceipt(row, mode, items, orders, actor, now) {
+  if (!expenseAccountingModes[row.category]?.includes(mode)) throw invalid('请选择适用于此凭据的核算方式');
+  const checked = { ...row, accountingMode: mode, accountedAt: new Date(now).toISOString(),
+    accountedBy: actor.name || '管理员' };
+  delete checked.accountingCardId;
+  if (mode === 'cash') return checked;
+  const order = orders.find(item => item.id === row.orderId);
+  let term;
+  try {
+    [term] = orderExpenseTerms(order, [checked, ...items.filter(item =>
+      item.id !== row.id && item.orderId === row.orderId)]);
+  } catch (error) {
+    throw invalid(error.message);
+  }
+  if (mode === 'replace-card') {
+    if (items.some(item => item.id !== row.id && !item.voidedAt &&
+        item.accountingMode === mode && item.accountingCardId === term.cardId))
+      throw invalid('原付款卡已有一笔计入核算的发卡凭据', 409);
+    const original = buildCardIssueAllocations(orders, { clock: now }).get(order.id);
+    if (original?.status !== 'ready') throw invalid('请先核对该卡开通记录及原开卡费分摊', 409);
+    checked.accountingCardId = term.cardId;
+  }
+  return checked;
+}
+
 export function createOrderExpenseHandler({ store, publicOrigin, clock = Date.now }) {
   return async (request, response, actor) => {
     if (!actor?.id) return send(response, 401, { error: '请先登录' });
@@ -81,26 +107,32 @@ export function createOrderExpenseHandler({ store, publicOrigin, clock = Date.no
       const command = await readBody(request);
       const { action, version } = command;
       const keys = action === 'record' ? ['action', 'version', 'entry']
-        : action === 'void' ? ['action', 'version', 'id', 'reason'] : null;
+        : action === 'void' ? ['action', 'version', 'id', 'reason']
+          : action === 'account' ? ['action', 'version', 'id', 'mode'] : null;
       if (!keys || Object.keys(command).some(key => !keys.includes(key)) || !Number.isSafeInteger(version) || version < 0)
         throw invalid('凭据登记格式无效');
       const current = store.featureDocument(orderExpenseDomain);
       if (current.version !== version) throw invalid('费用凭据已更新，请刷新后重新核对', 409);
       const items = current.data?.items || [];
+      const now = clock();
       let changed, next;
       if (action === 'record') {
-        changed = buildReceipt(command.entry, items, store.load('commerce').data?.orders || [], actor, clock());
+        changed = buildReceipt(command.entry, items, store.load('commerce').data?.orders || [], actor, now);
         next = [changed, ...items];
       } else {
         const row = items.find(item => item.id === command.id && !item.voidedAt);
-        const reason = text(command.reason, 150);
         if (!row) throw invalid('该笔凭据已作废或不存在，请刷新后核对', 409);
-        if (!reason) throw invalid('请填写作废原因');
-        changed = { ...row, voidedAt: new Date(clock()).toISOString(), voidedBy: actor.name || '管理员', voidReason: reason };
+        if (action === 'account') {
+          changed = accountForReceipt(row, command.mode, items, store.load('commerce').data?.orders || [], actor, now);
+        } else {
+          const reason = text(command.reason, 150);
+          if (!reason) throw invalid('请填写作废原因');
+          changed = { ...row, voidedAt: new Date(now).toISOString(), voidedBy: actor.name || '管理员', voidReason: reason };
+        }
         next = items.map(item => item.id === row.id ? changed : item);
       }
       const saved = store.saveFeatureDocument(orderExpenseDomain, version, { items: next }, {
-        action: action === 'record' ? 'order_expense_record' : 'order_expense_void', actor, targetId: changed.id
+        action: 'order_expense_' + action, actor, targetId: changed.id
       });
       return send(response, 200, { version: saved.version, items: saved.data.items });
     } catch (error) {
