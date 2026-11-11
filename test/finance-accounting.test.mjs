@@ -26,6 +26,54 @@ const bank = () => ({
 });
 const calculate = (order, options) => calculateOrder(order, { clock, ...options });
 
+test('实付替换 KYC 和另扣换汇费按原单快照复算，旧凭据和作废凭据保留原口径', () => {
+  const order = { ...bank(), product: 'Claude Pro', paidConfirmed: true };
+  order.fxSnapshot = createOrderSnapshot(quote, order, clock);
+  const kyc = { id: 'kyc-a', orderId: order.id, category: 'kyc', chargedOn: '2026-11-04',
+    amount: '20', currency: 'MYR', settlementAmount: '32.12', settlementCurrency: 'CNY',
+    source: '合成机构', reference: 'KYC-A', accountingMode: 'replace-kyc' };
+  const fx = { id: 'fx-a', orderId: order.id, category: 'fx-fee', chargedOn: '2026-11-04',
+    amount: '1.25', currency: 'CNY', accountingMode: 'add-fx' };
+  const expenseReceipts = [kyc, fx, { ...fx, id: 'fx-b', amount: '2.3' }];
+  assert.equal(calculate(order).netCost, '365.0000');
+  assert.equal(calculate(order, { expenseReceipts: [{ ...kyc, accountingMode: undefined }] }).netCost, '365.0000');
+  assert.equal(calculate(order, { expenseReceipts: [{ ...kyc, voidedAt: quote.expiresAt }] }).netCost, '365.0000');
+  const result = calculate(order, { expenseReceipts });
+  assert.equal(result.netCost, '320.6700');
+  assert.equal(result.profit, '-70.6700');
+  assert.equal(result.basis, 'reference');
+  assert.equal(result.items.find(item => item.key === 'kyc').expenseReceipt.reference, 'KYC-A');
+  assert.equal(result.items.filter(item => item.key === 'fx-fee').length, 2);
+  assert.equal(calculate(order, { expenseReceipts, currency: 'MYR' }).netCost, '200.4188');
+  assert.match(calculate(order, { expenseReceipts: [...expenseReceipts, { ...fx, currency: 'EUR' }] }).reason, /EUR 汇率/);
+  assert.match(calculate(order, { expenseReceipts: [kyc, { ...kyc, id: 'second-kyc' }] }).reason, /已有一笔/);
+});
+
+test('已含费用从实际总成本拆出，独立费用加计且不改变 Apple 的可收回成本', () => {
+  const order = { ...bank(), product: 'Claude Max', payment: '苹果内购', paidConfirmed: true,
+    appleIdId: 'apple-a', paidAmount: '3', paidCurrency: 'USD', costBasis: 'actual',
+    actualCostAmount: '20', actualCostCurrency: 'MYR', appleRecoverableCostAmount: '10' };
+  order.fxSnapshot = createOrderSnapshot({ ...quote, basis: 'settlement' }, order, clock);
+  const appleLedger = { orderId: order.id, appleIdId: order.appleIdId, amount: '3', returned: '1' };
+  const included = { id: 'kyc-a', orderId: order.id, category: 'kyc', chargedOn: '2026-11-04',
+    amount: '1', currency: 'USD', settlementAmount: '4', settlementCurrency: 'MYR', accountingMode: 'included' };
+  const fx = { ...included, id: 'fx-a', category: 'fx-fee', amount: '2', currency: 'CNY',
+    settlementAmount: undefined, settlementCurrency: undefined, accountingMode: 'add-fx' };
+  const baseline = calculate(order, { appleLedger });
+  const separated = calculate(order, { appleLedger, expenseReceipts: [included] });
+  assert.equal(separated.netCost, baseline.netCost);
+  assert.equal(separated.items.find(row => row.key === 'actual-total').amount, '25.6000');
+  assert.equal(separated.items.find(row => row.key === 'kyc').amount, '6.4000');
+  const result = calculate(order, { appleLedger, expenseReceipts: [included, fx] });
+  assert.equal(result.basis, 'actual');
+  assert.equal(result.netCost, '28.6667');
+  assert.equal(result.recoveredCost, baseline.recoveredCost);
+  assert.match(calculate(order, { appleLedger, expenseReceipts: [{ ...included, settlementAmount: '21' }] }).reason,
+    /超过原单实际总成本/);
+  assert.match(calculate(order, { appleLedger, expenseReceipts: [{ ...included, settlementCurrency: 'CNY' }] }).reason,
+    /同币种的账单金额/);
+});
+
 test('历史费用、汇率按订单冻结；统计币种切换使用每笔原快照', () => {
   const order = bank();
   order.fxSnapshot = createOrderSnapshot(quote, order, clock);
@@ -90,6 +138,21 @@ test('Claude 历史成品销售按人民币实收和实际总成本核算，计�
   assert.ok(results.every(row => row.status === 'ready' && row.basis === 'actual' && !row.requiresPaymentConfirmation));
   assert.deepEqual(results.map(row => row.profit), ['150.0000', '150.0000', '550.0000', '500.0000']);
   assert.equal(results.reduce((total, row) => total + Number(row.profit), 0), 1350);
+});
+
+test('Claude 历史实账使用同币凭据，额外外币费用才需要原单汇率', () => {
+  const order = historicalClaudeSale();
+  const included = { orderId: order.id, category: 'kyc', chargedOn: '2026-11-04',
+    amount: '20', currency: 'CNY', accountingMode: 'included' };
+  const extra = { ...included, category: 'fx-fee', amount: '2.25', accountingMode: 'add-fx' };
+  const result = calculate(order, { expenseReceipts: [included, extra] });
+  assert.equal(result.profit, '147.7500');
+  assert.equal(result.items.find(row => row.key === 'actual-total').amount, '1330.0000');
+  assert.equal(result.requiresPaymentConfirmation, false);
+  const foreign = { ...extra, amount: '1', currency: 'MYR' };
+  assert.match(calculate(order, { expenseReceipts: [foreign] }).reason, /缺少有效汇率快照/);
+  order.fxSnapshot = createOrderSnapshot({ ...quote, basis: 'settlement' }, order, clock);
+  assert.equal(calculate(order, { expenseReceipts: [foreign] }).profit, '148.4000');
 });
 
 test('历史成品销售扣除客户退款，跨币种和渠道回款使用原单汇率及代付', () => {

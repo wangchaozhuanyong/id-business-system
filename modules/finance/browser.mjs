@@ -1,4 +1,4 @@
-import * as finance from './accounting.mjs';
+import * as finance from './accounting.mjs?v=20261111-expense-accounting';
 
 async function requestAutomaticSnapshot(orderId, version) {
   const response = await window.fetch('/api/local/finance/auto-snapshot', {

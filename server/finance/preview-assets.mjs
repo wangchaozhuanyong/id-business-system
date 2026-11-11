@@ -13,7 +13,7 @@ export async function installFinanceAssets(assets, { automaticQuotes = false } =
   }
   const end = html.indexOf('</script>', html.indexOf(anchor)) + '</script>'.length;
   index.body = Buffer.from(
-    html.slice(0, end) + '\n    <script type="module" src="/assets/finance/browser.mjs"></script>' +
+    html.slice(0, end) + '\n    <script type="module" src="/assets/finance/browser.mjs?v=20261111-expense-accounting"></script>' +
     (automaticQuotes ? '\n    <meta name="id-finance-auto-quote" content="enabled" />' : '') +
     html.slice(end)
   );
