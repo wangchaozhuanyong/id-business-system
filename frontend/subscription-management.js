@@ -10,7 +10,9 @@
     auth_failed: '授权失败', conflict: '资料冲突', not_applicable: '不适用' };
   const scopes = ['inventory', 'commerce', 'tools/mailbox-pool', 'subscription-management'];
   const tableId = 'subscription-accounts';
-  const scopeLabels = { customer: '客户订阅', owned: '自有账号', unlinked: '待补邮箱' };
+  const scopeLabels = { customer: '客户订阅', owned: '自有账号', expired: '已过期', dead: '死号', unlinked: '待补邮箱' };
+  const archiveScopes = new Set(['expired', 'dead']);
+  const hour = 3_600_000, day = 24 * hour;
   let snapshot, error, requestNumber = 0, clearCopy, ownerContext, expiryTimer, frameObserver;
   const frameHeights = new Map();
   const product = () => {
@@ -29,7 +31,7 @@
     return A.state.drafts.get(key);
   };
   const selectedScope = () => filters().scope || 'customer';
-  const scopeOptions = () => product() === 'Claude' ? Object.keys(scopeLabels) : ['customer', 'unlinked'];
+  const scopeOptions = () => Object.keys(scopeLabels).filter(scope => scope !== 'owned' || product() === 'Claude');
   const currentSnapshot = () => snapshot?.product === product() && snapshot.scope === selectedScope() ? snapshot : null;
   const currentRow = id => currentSnapshot()?.items.find(row => row.id === id);
   function requestFilters() {
@@ -40,6 +42,20 @@
   const timeFormatter = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai', dateStyle: 'short', timeStyle: 'short' });
   const displayDate = value => Number.isFinite(parseTime(value)) ? timeFormatter.format(parseTime(value)) : '未登记';
   const displayDays = value => Number.isInteger(value) ? `${value} 天` : '—';
+  const estimatedNow = data => data.serverTime + performance.now() - data.receivedAt;
+  function countdownText(remaining) {
+    if (remaining <= 0) return '已到期';
+    const hours = Math.floor(remaining / hour);
+    if (!hours) return '不足 1 小时';
+    return [hours >= 24 && `${Math.floor(hours / 24)} 天`, hours % 24 && `${hours % 24} 小时`].filter(Boolean).join(' ');
+  }
+  function countdown(series) {
+    if (series.status === 'expired') return '已到期';
+    const expiry = parseTime(series.expiry), data = currentSnapshot();
+    if (!['active', 'scheduled'].includes(series.status) || !Number.isFinite(expiry) || !Number.isFinite(data?.serverTime))
+      return '—';
+    return `<span data-subscription-countdown="${expiry}">${countdownText(expiry - estimatedNow(data))}</span>`;
+  }
   const lineValues = (row, render) => row.series.map(series => `<div>${render(series)}</div>`).join('');
   const stateTag = status => A.tag(states[status] || '待核对', status === 'active' ? 'green' : status === 'pending' ? 'warning' : '');
   const emailAccount = row => row.registrationEmail || row.account || '未登记';
@@ -53,8 +69,8 @@
       { id: 'plan', label: '订阅套餐', render: row => lineValues(row, series => esc(series.plan || '待核对')) },
       { id: 'start', label: '订阅时间', render: row => lineValues(row, series => esc(displayDate(series.start))) },
       { id: 'expiry', label: '到期时间', render: row => lineValues(row, series => esc(displayDate(series.expiry))) },
-      { id: 'days', label: '订阅剩余天数', render: row => lineValues(row, series => esc(displayDays(series.remainingDays))) },
-      { id: 'status', label: '订阅状态', render: row => row.conflict ? stateTag('pending') :
+      { id: 'days', label: '到期倒计时', mobileSummary: true, render: row => row.conflict ? '—' : lineValues(row, countdown) },
+      { id: 'status', label: '订阅状态', render: row => row.status === 'dead' ? stateTag('dead') : row.conflict ? stateTag('pending') :
         lineValues(row, series => stateTag(series.status)) +
         (!unlinked && row.missingAssociation ? A.tag('客户待补', 'warning') : '') },
       { id: 'ownerName', label: unlinked ? '订单处理人' : '归属人',
@@ -77,7 +93,9 @@
 
   function listMarkup() {
     const data = currentSnapshot();
-    const state = data ? { title: selectedScope() === 'unlinked' ? '暂无待补邮箱的订单' : '暂无符合条件的订阅账号',
+    const scope = selectedScope();
+    const state = data ? { title: { unlinked: '暂无待补邮箱的订单', expired: '暂无已过期订阅', dead: '暂无死号订阅' }[scope] ||
+      '暂无符合条件的订阅账号',
       description: '可调整搜索或订阅状态。' }
       : error ? { title: error, description: '请点击刷新重试。' } : { title: '正在读取订阅账号', description: '' };
     return A.table(columns(), data?.items || [], '', tableId, state) + (data
@@ -115,21 +133,32 @@
 
   function scheduleExpiry() {
     clearTimeout(expiryTimer);
-    if (!snapshot || !Number.isFinite(snapshot.serverTime)) return;
-    const now = snapshot.serverTime + performance.now() - snapshot.receivedAt;
-    let next = Infinity;
-    for (const row of snapshot.items) {
+    const data = currentSnapshot();
+    if (!data || !Number.isFinite(data.serverTime)) return;
+    const now = estimatedNow(data);
+    let nextRead = Infinity, nextHour = Infinity;
+    for (const row of data.items) {
       for (const series of row.series) {
         const startsIn = parseTime(series.start) - now;
-        if (series.status === 'scheduled' && startsIn > 0) next = Math.min(next, startsIn);
+        if (series.status === 'scheduled' && Number.isFinite(startsIn)) nextRead = Math.min(nextRead, Math.max(0, startsIn));
+        const remaining = parseTime(series.expiry) - now;
+        if (series.status === 'active' && Number.isFinite(remaining)) nextRead = Math.min(nextRead, Math.max(0, remaining));
       }
-      for (const value of [...row.series.map(series => series.expiry), row.queryCode?.expiresAt]) {
-        const remaining = parseTime(value) - now;
-        if (remaining > 0) next = Math.min(next, remaining - (Math.ceil(remaining / 86_400_000) - 1) * 86_400_000);
-      }
+      const codeRemaining = parseTime(row.queryCode?.expiresAt) - now;
+      if (codeRemaining > 0) nextRead = Math.min(nextRead, codeRemaining - (Math.ceil(codeRemaining / day) - 1) * day);
     }
-    if (Number.isFinite(next)) expiryTimer = setTimeout(() => { if (active()) void load(); },
-      Math.min(2_147_000_000, Math.max(50, next + 50)));
+    if (error) nextRead = Infinity;
+    for (const counter of document.querySelectorAll('#subscription-list [data-subscription-countdown]')) {
+      const remaining = Number(counter.dataset.subscriptionCountdown) - now;
+      counter.textContent = countdownText(remaining);
+      if (remaining > 0) nextHour = Math.min(nextHour, remaining >= hour ? remaining % hour : remaining);
+    }
+    const next = Math.min(nextRead, nextHour);
+    if (Number.isFinite(next)) expiryTimer = setTimeout(() => {
+      if (!active() || currentSnapshot() !== data) return;
+      if (estimatedNow(data) >= now + nextRead) void load();
+      else scheduleExpiry();
+    }, Math.min(2_147_000_000, Math.max(50, next + 50)));
   }
 
   function render() {
@@ -146,11 +175,12 @@
     return A.header(name + ' 订阅管理', '按账号查看已确认的订阅与待核对记录；同一账号的不同系列可能计入多个状态。', actions) +
       `<div id="subscription-overview">${overviewMarkup()}</div><section class="panel" id="subscriptions-panel">
         <div class="list-controls subscription-controls">
-          <div class="tabs" role="tablist" aria-label="订阅来源">${tabs}</div>
+          <div class="tabs" role="tablist" aria-label="订阅列表">${tabs}</div>
           <form class="toolbar" id="subscription-filter" aria-label="筛选订阅" novalidate>
             <div class="toolbar-left"><div class="search-field">${A.icon('search')}${A.input('subscription-query', f.input,
               'maxlength="254" aria-label="搜索订单、邮箱账号或人员" placeholder="搜索订单、邮箱账号或人员"')}</div>
-              <select id="subscription-status" aria-label="订阅状态">${A.options([['', '全部状态'], ...Object.entries(states)], f.status)}</select>
+              ${archiveScopes.has(selectedScope()) ? '' : `<select id="subscription-status" aria-label="订阅状态">${A.options(
+                [['', '全部状态'], ...Object.entries(states).filter(([status]) => !archiveScopes.has(status))], f.status)}</select>`}
               <select id="subscription-sort" aria-label="排序">${A.options([['expiry_asc', '到期由近到远'], ['expiry_desc', '到期由远到近'], ['account_asc', '账号排序']], f.sort || 'expiry_asc')}</select>
               <button class="button" type="submit">搜索</button></div>
             <div class="toolbar-right" data-page-actions>${button('刷新', 'subscriptions-refresh')}</div>
@@ -163,6 +193,7 @@
   async function load() {
     const panel = $('#subscriptions-panel');
     if (!active() || !panel) return false;
+    clearTimeout(expiryTimer);
     const sequence = ++requestNumber, name = product(), actor = D.actor?.()?.id || '';
     const f = filters();
     const params = requestFilters();
@@ -220,7 +251,7 @@
       const result = await D.subscriptionCopy({ id: row.id, mode, revision: saved.revision });
       const current = () => active() && snapshot === saved;
       if (!current()) return;
-      const missing = row.status === 'ended' ? '，已终止订阅仅提供账号标识' :
+      const missing = row.status === 'ended' || row.status === 'dead' ? '，仅提供账号标识' :
         Array.isArray(result.omitted) && result.omitted.length ? `，未登记：${result.omitted.join('、')}` : '';
       const copied = await A.copyText(result.text, '已复制现有资料' + missing, { current });
       if (!copied) {
@@ -243,11 +274,12 @@
         ? A.tag('资料待补', 'warning') : ''}</td>` +
       `<td>${item.source === 'order' ? textAction(!item.confirmed && ['Gemini', 'Grok'].includes(row.product) ? '前往订单核对' : '查看订单',
         'subscriptions-order', `data-order-id="${esc(item.sourceId)}"`) : '历史资料'}` +
-      `${item.source === 'order' && !item.confirmed && !item.missingAssociation && !row.conflict && ['GPT', 'Claude'].includes(row.product) ? textAction('确认开通', 'subscriptions-confirm',
+      `${row.status !== 'dead' && item.source === 'order' && !item.confirmed && !item.missingAssociation && !row.conflict && ['GPT', 'Claude'].includes(row.product) ? textAction('确认开通', 'subscriptions-confirm',
         `data-id="${esc(row.id)}" data-order-id="${esc(item.sourceId)}"`) : ''}</td></tr>`).join('');
     A.openDrawer('订阅账号详情', '每次订单独立保留，历史入库不会生成虚构订单。',
       `<div class="property-list"><div class="property-row"><span>邮箱账号</span><strong>${esc(emailAccount(row))}</strong></div>
        ${xAccount ? `<div class="property-row"><span>X 账号</span><strong>${esc(xAccount)}</strong></div>` : ''}
+       ${row.status === 'dead' ? '<div class="property-row"><span>账号状态</span><strong>死号</strong></div>' : ''}
        <div class="property-row"><span>归属人</span><strong>${esc(row.ownerName || (row.ownerEligible ? '未设置' : '—'))}</strong></div>
        <div class="property-row"><span>操作人</span><strong>${esc(row.operatorName)}</strong></div></div>
        ${row.conflict ? '<p class="inline-notice warning">账号、客户或邮箱关联存在冲突，请先核对原资料。</p>' : ''}
@@ -412,7 +444,8 @@
         const row = currentRow(node.dataset.id);
         if (row) A.openActionMenu(node,
           (row.ownerEligible ? button('设置归属人', 'subscriptions-owner', '', '', `data-id="${esc(row.id)}"`) : '') +
-          (row.product === 'Claude' && canCopy(row) ? button('复制邮箱和查询码', 'subscriptions-copy-short', '', '', `data-id="${esc(row.id)}"`) : ''));
+          (row.product === 'Claude' && canCopy(row) ? button(['dead', 'ended'].includes(row.status) ? '复制邮箱账号' : '复制邮箱和查询码',
+            'subscriptions-copy-short', '', '', `data-id="${esc(row.id)}"`) : ''));
       } else return false;
       return true;
     },

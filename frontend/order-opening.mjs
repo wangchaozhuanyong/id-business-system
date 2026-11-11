@@ -1,6 +1,6 @@
 export const subscriptionStateLabels = Object.freeze({
   active: '有效', expired: '已过期', opened: '已开通', scheduled: '未开始',
-  ended: '已终止', pending: '待确认', failed: '开通失败'
+  ended: '已终止', pending: '待确认', failed: '开通失败', dead: '死号'
 });
 
 export function subscriptionTime(value) {

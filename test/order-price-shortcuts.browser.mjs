@@ -242,7 +242,7 @@ test('订单金额预设、手填、更正原因和既有价格与订阅快捷�
         const heading = node.getBoundingClientRect();
         return { title: { right: title.right, y: title.y },
           rightAligned: Math.abs(actions.right - heading.right) <= 1,
-          separated: title.right <= actions.left - 7,
+          separated: title.right <= actions.left - 7 || title.bottom <= actions.top - 7,
           contained: [...node.querySelectorAll('.button')].every(button => {
             const b = button.getBoundingClientRect();
             return b.left >= actions.left - 1 && b.right <= heading.right + 1 &&

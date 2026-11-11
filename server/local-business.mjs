@@ -53,7 +53,8 @@ import {
 import { validMailExtractionSettings } from './inventory-extraction-settings.mjs';
 import { checkInventoryEntryFields } from './inventory-entry-fields.mjs';
 import { personalOrderError, personalProduct, preparePersonalInventory } from './personal-subscriptions.mjs';
-import { stageInitialTenantCards } from './tenant-initial-cards.mjs';
+import { stageInitialTenantCards, stageOrderTenantCard, stageTenantCardUses, TenantCardError } from './tenant-initial-cards.mjs';
+import { checkTenantKycRecovery, checkTenantKycWrite } from './tenant-kyc.mjs';
 import { AccountLifecycleError, accountLifecycleSummaries, changeAccountLifecycle, checkInventoryRenewals, applyAccountOrderLifecycle } from './account-lifecycle.mjs';
 import { planLegacyMailboxImport } from './tools/legacy-mailbox-import.mjs';
 import { planLegacyTotpImport } from './tools/legacy-totp-import.mjs';
@@ -1620,7 +1621,9 @@ export function createLocalBusinessStore(databasePath) {
     } = {}) {
       // Preserve the caller's retry snapshot when normalizing transient input.
       const writes = checkWrites(entries).map(write => (write.domain === 'commerce' &&
-        (write.action === orderCustomerCreateAction || write.data.tenants.some(row => Object.hasOwn(row, 'initialCards')))) ||
+        (write.action === orderCustomerCreateAction ||
+          write.data.tenants.some(row => Object.hasOwn(row, 'initialCards')) ||
+          write.data.orders.some(row => Object.hasOwn(row, 'tenantCardNumber')))) ||
         (write.domain === 'inventory' && write.data.mailboxes.some(row => Object.hasOwn(row, 'appleOpeningBalance'))) ||
         (write.domain === 'appleBalance' && write.action === 'apple_topup')
         ? { ...write, data: structuredClone(write.data) } : write);
@@ -1653,6 +1656,10 @@ export function createLocalBusinessStore(databasePath) {
         let inventory = incoming.get('inventory') ?? priorInventory;
         const commerce = incoming.get('commerce') ?? priorCommerce;
         const inventoryWrite = writes.find(({ domain }) => domain === 'inventory');
+        const tenantCardDocument = incoming.has('commerce') ? readDocument('tenant-cards') : null;
+        const existingTenantCards = tenantCardDocument?.data?.items || [];
+        const stagedTenantCards = [...existingTenantCards];
+        let initialTenantCards, tenantCardArchive;
         const priorUsage = checksStock ? inspectInventoryUsage(priorInventory, priorCommerce) : null;
         const returnedBatches = new Set();
         let isolatedHistoricalOrderCorrection = false;
@@ -1751,6 +1758,15 @@ export function createLocalBusinessStore(databasePath) {
               !['admin', 'super'].includes(actor.role)))
             throw new LocalDataError(403, '历史费率更正须由管理员单独核对');
           const oldOrders = priorCommerce?.orders || [];
+          tenantCardArchive = stagedTenantCards.length || commerce.tenants.some(row => row.initialCards?.length) ||
+            commerce.orders.some(row => Object.hasOwn(row, 'tenantCardNumber')) ? current(orderCardArchiveDocument) : null;
+          try {
+            initialTenantCards = stageInitialTenantCards(priorCommerce, commerce, stagedTenantCards, undefined, tenantCardArchive);
+            stagedTenantCards.push(...initialTenantCards.additions);
+          } catch (error) {
+            if (error instanceof TenantCardError) throw error;
+            throw new LocalDataError(400, error.message);
+          }
           const priorById = new Map(oldOrders.map((row) => [row.id, row]));
           const nextById = new Map(commerce.orders.map((row) => [row.id, row]));
           const cardBackfillRequests = commerce.orders.filter(row => Object.hasOwn(row, 'cardBackfillConfirmed'));
@@ -1769,6 +1785,11 @@ export function createLocalBusinessStore(databasePath) {
           for (const row of commerce.orders) {
             const prior = priorById.get(row.id);
             if (prior && isDeepStrictEqual(row, prior)) continue;
+            if (Object.hasOwn(row, 'tenantCardNumber')) {
+              if (!cards || !['admin', 'super'].includes(actor?.role))
+                throw new LocalDataError(403, '只有管理员可以登记订单租户银行卡');
+              stageOrderTenantCard(row, stagedTenantCards, commerce, priorCommerce, tenantCardArchive);
+            }
             const terminationError = checkSubscriptionTermination(row, prior, action, checkedAt, !cards);
             if (terminationError) throw new LocalDataError(409, terminationError);
             if (!prior && row.source === '管理员手工' &&
@@ -1819,7 +1840,7 @@ export function createLocalBusinessStore(databasePath) {
               throw new LocalDataError(409, '请使用既有业务撤单流程处理代充订单');
             const seen = [...oldOrders];
             const settledThisWrite = [];
-            const tenantCards = current('tenant-cards')?.items || [];
+            const tenantCards = stagedTenantCards;
             const freezes = current(cardFreezeDocument);
             for (const row of commerce.orders) {
               const prior = priorById.get(row.id);
@@ -1957,7 +1978,13 @@ export function createLocalBusinessStore(databasePath) {
             checkFinanceSnapshots(priorCommerce, commerce, { action, verifyAutomaticSnapshot, actor, verifiedCardBackfillId,
               currentCostSettings: action === historicalFeeAction ? orderCostSnapshot(current('settings')?.costSettings) : undefined });
           if (error) throw new LocalDataError(409, error);
+          const kycIssue = checkTenantKycWrite(priorCommerce, commerce, inventory, { requireVerifier: Boolean(cards) });
+          if (kycIssue) throw new LocalDataError(409, kycIssue);
           isolatedHistoricalOrderCorrection = action === historicalFeeAction || Boolean(verifiedCardBackfillId);
+        }
+        if (inventoryWrite) {
+          const kycIssue = checkTenantKycRecovery(commerce, priorInventory, inventory);
+          if (kycIssue) throw new LocalDataError(409, kycIssue);
         }
         if (checksStock) {
           // Previously delivered accounts can be new to this system. Validate their transition in memory.
@@ -2052,13 +2079,13 @@ export function createLocalBusinessStore(databasePath) {
             inventory = next;
           }
         }
-        const tenantCardDocument = incoming.has('commerce') ? readDocument('tenant-cards') : null;
-        let initialTenantCards;
-        try {
-          initialTenantCards = incoming.has('commerce')
-            ? stageInitialTenantCards(priorCommerce, commerce, tenantCardDocument.data?.items || [])
-            : { additions: [], targets: [] };
-        } catch (error) { throw new LocalDataError(400, error.message); }
+        let nextTenantCards = existingTenantCards;
+        if (tenantCardDocument) {
+          try {
+            nextTenantCards = stageTenantCardUses(stagedTenantCards,
+              priorCommerce?.orders || [], commerce.orders, now, tenantCardArchive);
+          } catch (error) { throw new LocalDataError(409, error.message); }
+        }
         const result = [];
         for (const { domain, version, data, action } of writes) {
           const next = version + 1;
@@ -2077,12 +2104,15 @@ export function createLocalBusinessStore(databasePath) {
             ...(domain === 'inventory' && { accountSummaries: accountLifecycleSummaries(data, commerce),
               commerceVersion: writes.find(write => write.domain === 'commerce')?.version + 1 || readDocument('commerce').version }) });
         }
-        if (initialTenantCards.additions.length) {
+        if (!isDeepStrictEqual(existingTenantCards, nextTenantCards)) {
           const version = tenantCardDocument.version + 1;
-          const data = { ...tenantCardDocument.data, items: [...(tenantCardDocument.data?.items || []), ...initialTenantCards.additions] };
+          const data = { ...tenantCardDocument.data, items: nextTenantCards };
           put.run('tenant-cards', version, encrypt(key, 'tenant-cards', version, JSON.stringify(data)));
           for (const id of initialTenantCards.targets)
             log.run(now, 'tenant-cards', 'tenant_initial_cards', auditSummary('随租户新增登记银行卡', actor, id), version);
+          const used = new Set(existingTenantCards.filter(card => card.firstUse).map(card => card.id));
+          for (const card of nextTenantCards.filter(card => card.firstUse && !used.has(card.id)))
+            log.run(now, 'tenant-cards', 'tenant_card_first_use', auditSummary('登记租户银行卡首次使用', actor, card.id), version);
         }
         return result;
       });
@@ -2103,6 +2133,8 @@ export function createLocalBusinessStore(databasePath) {
           throw new LocalDataError(409, '订单报价引用已更新，请重新预览清理范围');
         if (domain === cardFreezeDocument && commerceVersion !== undefined && readDocument('commerce').version !== commerceVersion)
           throw new LocalDataError(409, '订单已变化，请刷新后核对用卡');
+        if (domain === 'tenant-cards' && commerceVersion !== undefined && readDocument('commerce').version !== commerceVersion)
+          throw new LocalDataError(409, '订单已变化，请重新查询卡号');
         const next = version + 1;
         put.run(domain, next, encrypt(key, domain, next, JSON.stringify(data)));
         if (action) log.run(new Date().toISOString(), domain, action,
@@ -2155,10 +2187,16 @@ export function createLocalBusinessStore(databasePath) {
         const manual = command?.action === 'fill-manual-details';
         const prior = manual && data?.orders?.find(row => row.id === command.orderId);
         const legacyConfirmed = prior && legacyOpeningOrderIds([prior], readDocument(subscriptionDomain).data).length > 0;
+        const inventory = manual ? readDocument('inventory').data : null;
         const { order, customer, createdCustomer, costReason } = manual
-          ? fillManualOrderDetails(data, readDocument('inventory').data, actor, command, at, legacyConfirmed)
+          ? fillManualOrderDetails(data, inventory, actor, command, at, legacyConfirmed)
           : applyOrderCompletion(data, readDocument('settings').data, actor, command, readOrderOwners, at);
-        data.orders = data.orders.map((row) => row.id === order.id ? order : row);
+        const orders = data.orders.map((row) => row.id === order.id ? order : row);
+        if (manual) {
+          const kycIssue = checkTenantKycWrite(data, { ...data, orders }, inventory);
+          if (kycIssue) throw new LocalDataError(409, kycIssue);
+        }
+        data.orders = orders;
         if (customer) {
           const customers = data.customers || [];
           data.customers = createdCustomer ? [customer, ...customers]
@@ -2532,6 +2570,7 @@ export async function handleLocalBusiness(
     return json(response, 200, entry.domain === 'commerce' ? commerceForActor(store, result, actor) : result);
   } catch (error) {
     if (response.destroyed) return;
+    if (error instanceof TenantCardError) return json(response, error.status, { error: error.message, matches: error.matches });
     if (
       error instanceof LocalDataError ||
       error instanceof TenantOwnerTransferError ||
