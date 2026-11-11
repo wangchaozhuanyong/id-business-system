@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -25,6 +26,12 @@ SITE_HOST = "54-249-61-238.sslip.io"
 WEBSITE = ("app", "drive-backup", "sheets-sync")
 PROTECTED = ("recharge", "recharge-native", "vendure", "formal-mysql", "media", "caddy")
 LAUNCHERS = ("run-app", "app-entry.mjs", "check-app.mjs")
+MONITORING = FORMAL / "backup-monitoring"
+MONITORING_RECEIPTS = MONITORING / "receipts"
+MONITORING_UNIT = "id-business-independent-backup-monitoring"
+MONITORING_ENV = "ID_MONITOR_BACKUP_RECEIPTS_DIR=/run/id-backup-monitoring"
+MONITORING_MOUNT = '  --mount "type=bind,src=$formal/backup-monitoring/receipts,dst=/run/id-backup-monitoring,readonly"'
+MONITORING_FILES = ("backup_monitoring.py", MONITORING_UNIT + ".service", MONITORING_UNIT + ".timer")
 VERSIONED_ASSET = re.compile(r'\b(?:src|href)="(?:\./|/)?([a-zA-Z0-9.-]+\.(?:m?js|css))\?v=([a-zA-Z0-9.-]+)"')
 
 
@@ -104,6 +111,16 @@ def update_canary_asset_refs(content, previous_index, target_index):
     return content
 
 
+def mount_backup_monitoring(content):
+    original = '  state=(--mount "type=bind,src=$formal/data,dst=/state")'
+    mounted = original[:-1] + "\n" + MONITORING_MOUNT + f'\n  -e "{MONITORING_ENV}")'
+    if content.count(mounted) == 1 and content.count(MONITORING_ENV) == 1:
+        return content
+    require(content.count(original) == 1 and "ID_MONITOR_BACKUP_RECEIPTS_DIR" not in content,
+            "unexpected_backup_monitoring_launcher")
+    return content.replace(original, mounted)
+
+
 def stage(plan, release):
     sha = plan["sha"]
     before = plan["before"]
@@ -140,7 +157,7 @@ def stage(plan, release):
         content = previous.read_text()
         if name == "run-app":
             require(content.count("sha=" + base) == 1, "live_launcher_revision_mismatch")
-            content = content.replace("sha=" + base, "sha=" + sha)
+            content = mount_backup_monitoring(content.replace("sha=" + base, "sha=" + sha))
         elif name == "check-app.mjs":
             content = update_canary_asset_refs(content, (live / "source/frontend/index.html").read_text(),
                                                (source / "frontend/index.html").read_text())
@@ -196,6 +213,66 @@ def mount_matches(container, source, destination=None):
                for mount in container["Mounts"])
 
 
+def install_backup_monitoring(source, sha):
+    user = inspect("app")["Config"]["User"]
+    data = (FORMAL / "data").lstat()
+    require(data.st_uid > 0 and user == f"{data.st_uid}:{data.st_gid}", "backup_monitor_site_identity_mismatch")
+    scripts = FORMAL / "ops/backup-monitoring"
+    for directory, group, mode in ((MONITORING, 0, 0o755), (MONITORING_RECEIPTS, data.st_gid, 0o750),
+                                   (scripts, 0, 0o755)):
+        if not directory.exists():
+            directory.mkdir(mode=mode)
+            os.chown(directory, 0, group)
+            directory.chmod(mode)
+        info = directory.lstat()
+        require(stat.S_ISDIR(info.st_mode) and directory.resolve() == directory and info.st_uid == 0 and
+                info.st_gid == group and stat.S_IMODE(info.st_mode) == mode, "backup_monitor_directory_mismatch")
+    for name in MONITORING_FILES:
+        target = (scripts if name.endswith(".py") else DROP.parent.parent) / name
+        content = (source / "deploy/website" / name).read_text()
+        if target.exists() or target.is_symlink():
+            info = target.lstat()
+            require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and stat.S_IMODE(info.st_mode) == 0o644,
+                    "backup_monitor_managed_file_mismatch")
+            if target.read_text() == content:
+                continue
+        pending = target.with_name(f".{name}.{sha[:12]}")
+        write_new(pending, content, 0o644)
+        os.replace(pending, target)
+    timer, service = MONITORING_UNIT + ".timer", MONITORING_UNIT + ".service"
+    run(["systemd-analyze", "verify", str(DROP.parent.parent / service), str(DROP.parent.parent / timer)])
+    run(["systemctl", "daemon-reload"])
+    run(["systemctl", "enable", "--now", timer])
+    run(["systemctl", "start", service])
+    require(run(["systemctl", "is-active", timer]).strip() == b"active" and
+            (MONITORING_RECEIPTS / "backup-status.json").is_file(), "backup_monitor_timer_unavailable")
+
+
+def read_backup_monitoring(container):
+    require(mount_matches(container, MONITORING_RECEIPTS, "/run/id-backup-monitoring") and
+            MONITORING_ENV in container["Config"]["Env"], "backup_monitor_mount_mismatch")
+    check = """
+import { createMonitoringSources } from '/app/server/monitoring-sources.mjs';
+import { readBackupMonitorReceipt } from '/app/server/monitoring-worker-receipts.mjs';
+const directory = process.env.ID_MONITOR_BACKUP_RECEIPTS_DIR;
+if (!await readBackupMonitorReceipt(directory)) throw Error('invalid backup monitor receipt');
+const states = {};
+const monitor = { probeAt: () => 0, observe(samples) {
+  for (const { code, status } of samples)
+    if (code === 'backup' || code === 'recharge_backup') states[code] = status;
+} };
+const source = createMonitoringSources({ monitor, databasePath: '/state/local-business.sqlite',
+  backupReceiptDirectory: directory });
+await source.tick();
+source.close();
+console.log(JSON.stringify(states));
+"""
+    status = json.loads(run(["docker", "exec", "id-business-independent-app", "node", "--input-type=module", "-e", check]))
+    require(set(status) == {"backup", "recharge_backup"} and all(value != "disabled" for value in status.values()),
+            "backup_monitor_check_missing")
+    return status
+
+
 def http(path):
     request = urllib.request.Request("http://127.0.0.1:44572" + path, headers={"Host": SITE_HOST})
     return urllib.request.urlopen(request, timeout=5)
@@ -236,7 +313,8 @@ console.log(JSON.stringify(Object.fromEntries(hashes)));
         if name.startswith("frontend/") and name != "frontend/index.html":
             with http("/" + Path(name).name) as response:
                 require(hashlib.sha256(response.read()).hexdigest() == expected, "live_website_asset_mismatch")
-    for path in ("/api/local/settings", "/api/local/inventory", "/api/local/commerce", "/api/local/order-sync"):
+    for path in ("/api/local/settings", "/api/local/inventory", "/api/local/commerce", "/api/local/order-sync",
+                 "/api/local/system-monitoring"):
         try:
             with http(path):
                 raise ReleaseError("anonymous_protected_read_allowed")
@@ -258,6 +336,7 @@ def release_website(plan):
     canary(sha, ops)
     check_baseline(snapshot(), before)
     require_main(sha)
+    install_backup_monitoring(source, sha)
     old = DROP.read_text()
     write_new(ops / "id-business-independent-app.service.before.conf", old, 0o600)
     pending = DROP.with_name(f".{DROP.name}.{sha[:12]}")
@@ -266,11 +345,13 @@ def release_website(plan):
     run(["systemctl", "daemon-reload"])
     run(["systemctl", "restart", UNIT], timeout=55)
     live = read_website(plan, release, source)
+    monitoring = read_backup_monitoring(inspect("app"))
     result = {"mainSha": sha, "previousWebsiteSha": base, "website": live["app"],
               "sidecars": {name: live[name] for name in WEBSITE[1:]},
               "sourceFilesVerified": len(plan["files"]), "artifacts": plan["artifacts"],
               "qualityRun": plan["qualityRun"], "preflightCommand": plan["preflightCommand"],
               "appCanaryPassed": True, "protectedComponentsUnchanged": True,
+              "backupMonitoring": monitoring,
               "unauthenticatedProtectedReadsRejected": True, "productionBusinessTestWrites": False}
     write_new(ops / "release.receipt.json", json.dumps(result, indent=2) + "\n", 0o600)
     return result

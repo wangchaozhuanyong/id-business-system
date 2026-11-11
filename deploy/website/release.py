@@ -161,7 +161,10 @@ def main():
     artifacts = {name: put_artifact(OUTPUT / name, sha) for name in names}
     files = ("frontend/index.html", "frontend/commerce-prototype.js", "frontend/subscription-management.js",
              "frontend/prototype.css", "server/preview.mjs", "server/backup/cloud-drive.mjs",
-             "server/backup/sheets-source.mjs")
+             "server/backup/sheets-source.mjs", "server/monitoring-policy.mjs",
+             "server/monitoring-sources.mjs", "server/monitoring-worker-receipts.mjs", "server/system-monitoring.mjs",
+             "deploy/website/backup_monitoring.py", "deploy/website/id-business-independent-backup-monitoring.service",
+             "deploy/website/id-business-independent-backup-monitoring.timer")
     files += tuple(path for path in ("frontend/order-opening.mjs", "server/recharge-order-sync.mjs")
                    if (ROOT / path).is_file())
     plan = {"operation": "release", "sha": sha, "before": before, "artifacts": artifacts,

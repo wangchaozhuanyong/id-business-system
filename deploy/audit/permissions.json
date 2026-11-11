@@ -1,0 +1,32 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadIdBudget",
+      "Effect": "Allow",
+      "Action": "budgets:ViewBudget",
+      "Resource": "arn:aws:budgets::098208446664:budget/ID-Production-Monthly"
+    },
+    {
+      "Sid": "ReadIdImageMetadata",
+      "Effect": "Allow",
+      "Action": ["ecr:DescribeRepositories", "ecr:DescribeImages"],
+      "Resource": "arn:aws:ecr:ap-northeast-1:098208446664:repository/id-business-v2-release"
+    },
+    {
+      "Sid": "ReadIdBackupBucketSettings",
+      "Effect": "Allow",
+      "Action": ["s3:GetLifecycleConfiguration", "s3:GetBucketVersioning"],
+      "Resource": "arn:aws:s3:::id-business-v2-backups-098208446664-ap-northeast-1"
+    },
+    {
+      "Sid": "ListIdRechargeBackupMetadata",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::id-business-v2-backups-098208446664-ap-northeast-1",
+      "Condition": {
+        "StringLike": { "s3:prefix": "mysql/daily/independent-recharge/*" }
+      }
+    }
+  ]
+}

@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { beijingDay, monitorPath } from './monitoring-policy.mjs';
 import { projectRechargeMonitoring } from './monitoring-recharge.mjs';
-import { readWorkerReceipt } from './monitoring-worker-receipts.mjs';
+import { readBackupMonitorReceipt, readWorkerReceipt } from './monitoring-worker-receipts.mjs';
 import { managedMailboxQueryRoute, storefrontMailboxQueryRoute } from './tools/mailbox-pool.mjs';
 
 const minute = 60_000;
@@ -29,11 +29,14 @@ function counts(map, at, length = 10) {
 }
 
 export function createMonitoringSources({ monitor, databasePath, externalProbe = false, runtimeProbe, rechargeClient,
-  getFinance, syncEnabled, workerReceiptDirectory, clock = Date.now, readDisk = statfs, readReceipt = readWorkerReceipt }) {
+  getFinance, syncEnabled, workerReceiptDirectory, backupReceiptDirectory, clock = Date.now,
+  readDisk = statfs, readReceipt = readWorkerReceipt, readBackupReceipt = readBackupMonitorReceipt }) {
   const startedAt = clock();
   const dataDirectory = dirname(databasePath);
   const workerReports = typeof workerReceiptDirectory === 'string' && isAbsolute(workerReceiptDirectory) &&
     resolve(workerReceiptDirectory) !== resolve(dataDirectory);
+  const backupReports = typeof backupReceiptDirectory === 'string' && isAbsolute(backupReceiptDirectory) &&
+    resolve(backupReceiptDirectory) !== resolve(dataDirectory);
   const api = new Map(), mailbox = new Map(), logins = new Map(), privateAccess = new Map();
   const refusals = new Map();
   let orderSync = { failures: 0, at: null };
@@ -115,28 +118,49 @@ export function createMonitoringSources({ monitor, databasePath, externalProbe =
 
   async function background(now) {
     const results = await Promise.allSettled([
-      readDisk(dataDirectory), workerReports && readReceipt(workerReceiptDirectory, 'backup'),
-      workerReports && readReceipt(workerReceiptDirectory, 'sheets')
+      readDisk(dataDirectory), workerReports && !backupReports && readReceipt(workerReceiptDirectory, 'backup'),
+      workerReports && readReceipt(workerReceiptDirectory, 'sheets'),
+      backupReports && readBackupReceipt(backupReceiptDirectory)
     ]);
-    const [disk, backup, sheets] = results.map(row => row.status === 'fulfilled' ? row.value : null);
+    const [disk, backup, sheets, report] = results.map(row => row.status === 'fulfilled' ? row.value : null);
     const available = disk && disk.blocks > 0 ? Math.round(100 * disk.bavail / disk.blocks) : null;
-    const job = (code, receipt, stale) => ({ code, status: !workerReports ? 'disabled' :
+    const job = (code, receipt, stale, configured = workerReports) => ({ code, status: !configured ? 'disabled' :
       !receipt || receipt.at > now + minute ? 'unknown' :
       receipt.integrityFailure || receipt.failures >= 3 || now - receipt.at > stale ? 'bad' :
         receipt.verifiedAt && receipt.failures === 0 ? 'ok' : 'unknown', count: receipt?.failures,
-      reason: !workerReports ? 'receipt_disabled' : !receipt ? 'receipt_missing' :
+      reason: !configured ? 'receipt_disabled' : !receipt ? 'receipt_missing' :
         receipt.at > now + minute ? 'receipt_future' : receipt.integrityFailure ? 'integrity_failed' :
         now - receipt.at > stale ? 'receipt_stale' : !receipt.verifiedAt ? 'verification_missing' :
         receipt.failures > 0 && receipt.failures < 3 ? 'recovering' : undefined });
     const output = [
       { code: 'disk_space', status: available === null ? 'unknown' : available < 15 ? 'bad' : 'ok', count: available,
         reason: available === null ? 'disk_unavailable' : undefined },
-      job('backup', backup, 20 * minute), job('sheets', sheets, 15 * minute),
+      job('sheets', sheets, 15 * minute),
       { code: 'order_sync', status: !syncEnabled ? 'disabled' : !orderSync.at ? 'unknown' :
         orderSync.failures >= 3 || now - orderSync.at > 10 * minute ? 'bad' : orderSync.failures === 0 ? 'ok' : 'unknown',
       count: orderSync.failures, reason: !syncEnabled ? 'sync_disabled' : !orderSync.at ? 'sync_missing' :
         now - orderSync.at > 10 * minute ? 'sync_stale' : orderSync.failures > 0 && orderSync.failures < 3 ? 'recovering' : undefined }
     ];
+    if (!backupReports) {
+      output.push(job('backup', backup, 20 * minute),
+        { code: 'recharge_backup', status: 'disabled', reason: 'receipt_disabled' });
+    } else if (!report || report.at > now + minute || now - report.at > 3 * minute) {
+      for (const code of ['backup', 'recharge_backup'])
+        output.push({ code, status: 'bad', reason: 'backup_collector_unavailable' });
+    } else {
+      const drive = report.drive;
+      output.push(drive ? job('backup', drive, 20 * minute, true) :
+        { code: 'backup', status: 'bad', reason: 'receipt_missing' });
+      const mysql = report.mysql;
+      const age = mysql && now - mysql.capturedAt;
+      const reason = !report.mysqlTimerActive ? 'mysql_timer_inactive' :
+        report.mysqlAttemptFailed ? 'mysql_attempt_failed' :
+        !mysql ? 'receipt_missing' :
+        mysql.verifiedAt > now + minute ? 'receipt_future' :
+        age > 35 * minute ? 'mysql_backup_stale' : undefined;
+      output.push({ code: 'recharge_backup', status: reason ? 'bad' : 'ok', reason,
+        count: mysql ? Math.max(0, Math.floor(age / minute)) : undefined });
+    }
     try {
       const finance = getFinance?.()?.read()?.data;
       const enabled = finance?.settings.enabled && finance.settings.provider !== 'disabled';

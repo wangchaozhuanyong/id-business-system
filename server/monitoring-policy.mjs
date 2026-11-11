@@ -32,7 +32,8 @@ export const monitorRules = Object.freeze({
   order_sync: rule('代充订单同步连续失败', '后台任务', 'P1', 'operations'),
   exchange_rates: rule('汇率采集连续失败', '后台任务', 'P1', 'operations'),
   mailbox: rule('邮箱查询服务连续异常', '后台任务', 'P1', 'operations'),
-  backup: rule('备份校验失败或回执超期', '后台任务', 'P1', 'operations'),
+  backup: rule('业务 SQLite 备份异常', '后台任务', 'P1', 'operations'),
+  recharge_backup: rule('充值 MySQL 备份异常', '后台任务', 'P1', 'operations'),
   sheets: rule('Google 表格同步连续失败', '后台任务', 'P1', 'operations'),
   digest: rule('监控与代充日报', '摘要', 'P2', 'operations', { oneShot: true, enabled: false })
 });
@@ -55,7 +56,8 @@ const observationLabels = {
   tls_expiry: '证书剩余天数', api_errors: '接口 5xx 次数', disk_space: '磁盘可用比例',
   login_abuse: '异常尝试次数', sensitive_reads: '敏感资料读取次数', recharge_burst: '明确失败任务数',
   recharge_cards: '卡池拒绝次数', recharge_route: '线路拒绝次数', mailbox: '服务端错误次数',
-  backup: '连续失败次数', sheets: '连续失败次数', order_sync: '连续失败次数', exchange_rates: '连续失败次数'
+  backup: '连续失败次数', recharge_backup: '恢复点距今分钟', sheets: '连续失败次数',
+  order_sync: '连续失败次数', exchange_rates: '连续失败次数'
 };
 
 // Display only fixed descriptions and bounded measurements, never upstream errors or credentials.
@@ -74,7 +76,8 @@ export const monitorCheckInfo = {
   order_sync: ['订单同步', '后台订单同步回执', '连续 3 次失败，或已有回执超过 10 分钟未更新。', '请运维核对订单同步任务与最近回执。'],
   exchange_rates: ['汇率采集', '汇率采集任务状态', '连续 3 次采集失败告警。', '查看汇率采集配置、最近成功时间及失败记录。'],
   mailbox: ['邮箱查询', '当前服务进程的查询统计', '近 10 分钟至少 3 次服务端错误；至少 2 次成功且无错误才显示正常。', '打开邮箱查询与邮箱池，核对连接及查询结果。'],
-  backup: ['备份校验', '备份工作进程校验回执', '完整性失败、连续 3 次失败或已有回执超过 20 分钟未更新。', '请运维接入备份校验回执；未接入无法判断备份任务是否正常。'],
+  backup: ['业务 SQLite 备份', 'Google Drive 上传校验回执', '完整性失败、连续 3 次失败或回执超过 20 分钟未更新。', '请运维检查最近一次上传、待传批次及远端校验回执。'],
+  recharge_backup: ['充值 MySQL 备份', 'S3 异机回执与定时任务状态', '任务失败、定时器未运行或最近已验证的恢复点超过 35 分钟时告警。', '请运维检查半小时备份任务和最新 S3 回执。'],
   sheets: ['Google 表格同步', '表格工作进程写后核对回执', '完整性失败、连续 3 次失败或已有回执超过 15 分钟未更新。', '请运维接入表格同步回执，并核对同步目标及写入结果。']
 };
 
@@ -85,6 +88,10 @@ export const monitorReasons = {
   receipt_missing: '尚未收到有效的工作进程回执。',
   receipt_future: '回执时间超出允许范围，请核对工作进程时间。',
   receipt_stale: '最近工作进程回执已超时，请核对任务是否仍在运行。',
+  backup_collector_unavailable: '备份状态采集回执缺失或已超时。',
+  mysql_timer_inactive: '充值 MySQL 备份定时器未运行。',
+  mysql_attempt_failed: '最近一次充值 MySQL 备份任务失败。',
+  mysql_backup_stale: '最近通过异机校验的恢复点已超过 35 分钟。',
   integrity_failed: '最近回执报告完整性校验失败。',
   verification_missing: '已有运行回执，但尚无成功校验依据。',
   sync_disabled: '订单同步任务未启用，此项没有运行回执。',

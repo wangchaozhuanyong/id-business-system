@@ -360,7 +360,7 @@ test('collects verified sources and treats missing reports or disabled jobs as d
   await sources.tick();
   tick(); await sources.tick();
   const { items, checks } = monitor.view();
-  for (const label of ['异常登录尝试', '备份校验失败或回执超期', '业务磁盘可用空间不足', '业务接口错误率过高'])
+  for (const label of ['异常登录尝试', '业务 SQLite 备份异常', '业务磁盘可用空间不足', '业务接口错误率过高'])
     assert(items.some(row => row.label === label), label);
   assert.equal(checks.find(row => row.label === 'Google 表格同步连续失败').status, 'unknown');
   assert.equal(checks.find(row => row.label === '代充订单同步连续失败').status, 'disabled');
@@ -376,11 +376,63 @@ test('backup and Sheets monitoring reserve their own mount and skip business dat
   await sources.tick();
   const checks = monitor.view().checks;
   assert.equal(receiptReads, 0);
-  assert.equal(checks.find(row => row.label === '备份校验失败或回执超期').status, 'disabled');
+  assert.equal(checks.find(row => row.code === 'backup').status, 'disabled');
   assert.equal(checks.find(row => row.label === 'Google 表格同步连续失败').status, 'disabled');
   assert.match(checks.find(row => row.code === 'backup').detail, /尚未接入/);
   assert.match(checks.find(row => row.code === 'public_site').detail, /站外探针尚未接通/);
   assert.match(checks.find(row => row.code === 'api_errors').detail, /样本不足/);
+});
+
+test('two backup checks use the verified capture time, report failure and recover independently', async t => {
+  const { monitor, store, clock, tick, sent } = fixture(t);
+  monitor.save(0, { enabled: false, channels: {}, rules: { backup: false } }, supervisor);
+  const saved = store.featureDocument('system-monitoring-config');
+  delete saved.data.rules.recharge_backup;
+  store.saveFeatureDocument('system-monitoring-config', saved.version, saved.data);
+  assert.equal(monitor.configView().rules.find(row => row.code === 'recharge_backup').enabled, true);
+  assert.equal(monitor.configView().rules.find(row => row.code === 'backup').enabled, false);
+
+  const clean = () => ({
+    at: clock(),
+    drive: { at: clock(), verifiedAt: now, failures: 0, integrityFailure: false },
+    mysql: { capturedAt: clock() - 10 * minute, verifiedAt: clock() },
+    mysqlTimerActive: true, mysqlAttemptFailed: false
+  });
+  let report = clean();
+  const sources = createMonitoringSources({ monitor, databasePath: '/fixture/state/local-business.sqlite', clock,
+    backupReceiptDirectory: '/fixture/backup-monitoring', readDisk: async () => ({ blocks: 100, bavail: 60 }),
+    readBackupReceipt: async (directory) => {
+      assert.equal(directory, '/fixture/backup-monitoring');
+      return report;
+    } });
+  t.after(() => sources.close());
+  const read = code => monitor.view().checks.find(row => row.code === code);
+  await sources.tick();
+  assert.equal(read('backup').status, 'ok');
+  assert.equal(read('recharge_backup').status, 'ok');
+  tick();
+  report = clean();
+  report.mysql.capturedAt -= 26 * minute;
+  await sources.tick();
+  assert.equal(read('backup').status, 'ok');
+  assert.equal(read('recharge_backup').status, 'bad');
+  assert.match(read('recharge_backup').detail, /超过 35 分钟/);
+
+  tick();
+  report = { ...clean(), mysqlAttemptFailed: true };
+  await sources.tick();
+  assert.match(read('recharge_backup').detail, /任务失败/);
+  for (let n = 0; n < 2; n++) {
+    tick();
+    report = clean();
+    await sources.tick();
+  }
+  assert.equal(read('recharge_backup').status, 'ok');
+  tick(4 * minute);
+  await sources.tick();
+  assert.match(read('backup').detail, /采集回执缺失或已超时/);
+  assert.equal(read('recharge_backup').status, 'bad');
+  assert.equal(sent.length, 0);
 });
 
 test('check evidence exposes fixed reasons and freshness without carrying arbitrary source text', t => {

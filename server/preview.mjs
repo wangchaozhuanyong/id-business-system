@@ -102,7 +102,8 @@ export async function startPreview(
     microsoftMailboxFetch,
     rechargeOrderSync = Boolean(publicOrigin && rechargeConfig),
     monitoringProbeSecret = process.env.ID_MONITOR_PROBE_SECRET,
-    monitoringWorkerReceiptsDirectory = process.env.ID_MONITOR_WORKER_RECEIPTS_DIR
+    monitoringWorkerReceiptsDirectory = process.env.ID_MONITOR_WORKER_RECEIPTS_DIR,
+    monitoringBackupReceiptsDirectory = process.env.ID_MONITOR_BACKUP_RECEIPTS_DIR
   } = {}
 ) {
   const publicUrl = parseToolPublicOrigin(publicOrigin);
@@ -252,6 +253,7 @@ export async function startPreview(
         handleProbeReport = createProbeReportHandler({ monitor: systemMonitoring, secret: monitoringProbeSecret });
         monitoringSources = createMonitoringSources({ monitor: systemMonitoring, databasePath, externalProbe,
           workerReceiptDirectory: monitoringWorkerReceiptsDirectory,
+          backupReceiptDirectory: monitoringBackupReceiptsDirectory,
           runtimeProbe: rechargeConfig ? () => probeCodexdaichongRuntime(rechargeConfig) : undefined,
           rechargeClient: orderRechargeClient, getFinance: () => financeCollection, syncEnabled: Boolean(rechargeConfig && rechargeOrderSync) });
       }
