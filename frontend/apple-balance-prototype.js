@@ -1460,5 +1460,5 @@
     Object.assign(managementView(), { page: detail.page, pageSize: detail.pageSize });
     A.render();
   });
-  if (localData) void ensureReady();
+  if (localData && (A.canVisit('accounts/apple-balances') || A.canVisit(managementRoute))) void ensureReady();
 })();

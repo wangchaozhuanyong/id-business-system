@@ -1128,9 +1128,9 @@
 
     return reasons;
   }
-  function localAccounting(order, currency = costSettings.currency) {
+  function localAccounting(order, currency = costSettings.currency, clock = Date.now()) {
     if (!finance) return { status: 'pending', reason: '汇率核算模块尚未接入' };
-    const clock = Date.now(), minute = Math.floor(clock / 60_000);
+    const minute = Math.floor(clock / 60_000);
     if (cardIssueContext?.minute !== minute)
       cardIssueContext = { minute, allocations: finance.buildCardIssueAllocations(orders, { clock }) };
     return finance.calculateOrder(order, {
@@ -1634,9 +1634,8 @@
       return [{ order, start, expiry }];
     });
   }
-  function renewalProjection() {
+  function renewalProjection(evaluatedAt = orderEvaluationTime()) {
     const identities = identifyOrderCustomers();
-    const evaluatedAt = orderEvaluationTime();
     const deadline = evaluatedAt + renewalWarningHours * 3_600_000;
     const rows = confirmedRenewalOrders(evaluatedAt).map((row) => {
       const { order } = row;
@@ -2252,8 +2251,7 @@
       status, reasons, blocksLoss: Boolean(stateIssue || hasSignal && !customerId) };
   }
 
-  function customerRetentionProjection() {
-    const at = orderEvaluationTime();
+  function customerRetentionProjection(at = orderEvaluationTime()) {
     const profiles = new Map(customers.map(customer => [customer.id, { id: customer.id, customer, history: [] }]));
     const contacts = orderCustomerContacts(profiles);
     const groups = new Map();
@@ -8884,66 +8882,115 @@
     if (S.route.startsWith(claudeRentalsRoute + '/')) return renderRentBatch(S.route.slice(claudeRentalsRoute.length + 1));
     return renderOrders(orderListProducts[S.route] || 'GPT');
   }
-  function overviewSummary(dates) {
+  function overviewSummary(asOf, appleReady) {
     if (localPhase !== 'ready' || !localData || !A.canVisit('orders/statistics')) return null;
-    const products = Object.keys(productPlans);
-    const totals = () => ({ orders: 0, cancelled: 0, receipts: {}, refunds: {},
-      profit: '0', accounted: 0, pending: 0, unallocatedCardFees: 0 });
-    const daily = new Map(dates.map(date => [date, {
-      date, customers: 0, ...totals(),
-      products: Object.fromEntries(products.map(product => [product, totals()]))
-    }]));
-    const bucket = value => {
-      const timestamp = parseDate(value);
-      return Number.isFinite(timestamp) ? daily.get(beijingClock.format(timestamp).slice(0, 10)) : null;
+    const hour = 3_600_000;
+    const day = 24 * hour;
+    const midnight = parseDate(beijingClock.format(asOf).slice(0, 10) + 'T00:00');
+    const accountingTotal = () => ({ amount: '0', accounted: 0, pending: 0, reference: 0, unallocatedCardFees: 0 });
+    const period = (start, end, step) => {
+      const slots = step ? Array.from({ length: Math.floor((end - start) / step) + 1 },
+        (_, index) => start + index * step) : [];
+      return {
+        activity: {
+          start, end, orders: 0, cancelled: 0, customers: 0, receipts: {}, refunds: {}, products: {},
+          series: slots.map(at => ({ at, orders: 0, cancelled: 0 }))
+        },
+        profit: {
+          start, end, ...accountingTotal(), products: {},
+          series: slots.map(at => ({ at, ...accountingTotal() }))
+        },
+        step,
+        appleUnavailable: false
+      };
     };
+    const ranges = Object.fromEntries(Object.entries({ today: 1, week: 7, month: 30 }).map(([key, days]) => {
+      const start = midnight - (days - 1) * day;
+      return [key, {
+        current: period(start, asOf, key === 'today' ? hour : day),
+        previous: period(start - days * day, asOf - days * day)
+      }];
+    }));
+    const periods = Object.values(ranges).flatMap(({ current, previous }) => [current, previous]);
+    const periodsAt = timestamp => periods.filter(({ activity }) =>
+      timestamp >= activity.start && timestamp <= activity.end);
     const addOriginal = (amounts, currency, amount) => {
       if (!/^[A-Z]{3}$/.test(currency) || !amountValid(amount)) return;
       amounts[currency] = M.add(amounts[currency] || '0', amount);
     };
-    const buckets = (day, product) => day
-      ? [day, Object.hasOwn(day.products, product) ? day.products[product] : null].filter(Boolean) : [];
-    let incomplete = 0;
-    for (const order of orders) {
-      const targets = buckets(bucket(order.createdAt), order.product);
-      for (const refund of order.refunds || [])
-        for (const target of buckets(bucket(refund.at), order.product))
-          addOriginal(target.refunds, order.saleCurrency, refund.amount);
-      if (order.cancelled) {
-        for (const target of targets) target.cancelled++;
-        continue;
+    const addProfit = (total, gain, accounting) => {
+      if (gain === null) total.pending++;
+      else {
+        total.accounted++;
+        if (accounting.basis !== 'actual') total.reference++;
+        if (accounting.cardIssueUnallocated) total.unallocatedCardFees++;
+        total.amount = M.add(total.amount, gain);
       }
-      if (orderStatus(order) === '待补全') incomplete++;
-      if (!targets.length) continue;
-      const accounting = order.payment === '苹果内购' && !A.modules.appleBalance?.ready()
-        ? { status: 'pending', reason: '苹果 ID 余额尚未就绪' }
-        : localAccounting(order, 'CNY');
-      const gain = profit(order, accounting);
-      for (const target of targets) {
-        target.orders++;
-        if (order.receiptConfirmed) addOriginal(target.receipts, order.saleCurrency, order.saleAmount);
-        if (gain === null) target.pending++;
+    };
+    const incomplete = {};
+    for (const order of orders) {
+      for (const refund of order.refunds || []) {
+        for (const { activity } of periodsAt(parseDate(refund.at)))
+          addOriginal(activity.refunds, refund.currency || order.saleCurrency, refund.amount);
+      }
+      const product = Object.hasOwn(productPlans, order.product) ? order.product : '其他业务';
+      if (!order.cancelled && orderStatus(order) === '待补全')
+        incomplete[product] = (incomplete[product] || 0) + 1;
+
+      const created = parseDate(order.createdAt);
+      const matching = periodsAt(created);
+      if (!matching.length) continue;
+      const appleUnavailable = !order.cancelled && order.payment === '苹果内购' && !appleReady;
+      const accounting = order.cancelled || appleUnavailable ? null : localAccounting(order, 'CNY', asOf);
+      const gain = accounting ? profit(order, accounting) : null;
+      for (const target of matching) {
+        const { activity, profit: totals, step } = target;
+        const index = step ? Math.floor((created - activity.start) / step) : -1;
+        const slot = activity.series[index];
+        if (order.cancelled) {
+          activity.cancelled++;
+          if (slot) slot.cancelled++;
+          continue;
+        }
+        activity.orders++;
+        activity.products[product] = (activity.products[product] || 0) + 1;
+        if (slot) slot.orders++;
+        if (order.receiptConfirmed) addOriginal(activity.receipts, order.saleCurrency, order.saleAmount);
+        if (appleUnavailable) target.appleUnavailable = true;
         else {
-          target.accounted++;
-          if (accounting.cardIssueUnallocated) target.unallocatedCardFees++;
-          target.profit = M.add(target.profit, gain);
+          addProfit(totals, gain, accounting);
+          addProfit(totals.products[product] ??= accountingTotal(), gain, accounting);
+          if (step) addProfit(totals.series[index], gain, accounting);
         }
       }
     }
+    const countedCustomers = new Set();
     for (const customer of customers) {
-      const day = bucket(customer.createdAt);
-      if (day) day.customers++;
+      if (!customer.id || countedCustomers.has(customer.id)) continue;
+      countedCustomers.add(customer.id);
+      for (const { activity } of periodsAt(parseDate(customer.createdAt))) activity.customers++;
     }
-    const { reminders } = renewalProjection();
-    const retention = customerRetentionProjection();
-    const pending = reminders.filter(row => row.state !== 'processed');
-    const renewalsByProduct = Object.fromEntries(products.map(product => [product, 0]));
-    for (const { order } of pending)
-      if (Object.hasOwn(renewalsByProduct, order.product)) renewalsByProduct[order.product]++;
     return {
-      daily: [...daily.values()], incomplete, renewals: pending.length, renewalsByProduct, active: retention.active,
+      commerce: {
+        incomplete,
+        ranges: Object.fromEntries(Object.entries(ranges).map(([key, { current, previous }]) =>
+          [key, { current: current.activity, previous: previous.activity }]))
+      },
+      profit: Object.fromEntries(Object.entries(ranges).map(([key, { current, previous }]) =>
+        [key, current.appleUnavailable || previous.appleUnavailable
+          ? null : { current: current.profit, previous: previous.profit }]))
+    };
+  }
+  function overviewCustomerSummary(asOf) {
+    if (localPhase !== 'ready' || !localData || !A.canVisit('orders/statistics')) return null;
+    const pending = renewalProjection(asOf).reminders.filter(row => row.state !== 'processed');
+    const retention = customerRetentionProjection(asOf);
+    return {
+      renewals: pending.length,
+      active: retention.active,
       followUp: new Set(pending.map(row => row.identity).filter(Boolean)).size,
-      lost: retention.lost.length
+      lost: retention.lost.length,
+      review: retention.review.length
     };
   }
   let requestedAccountLifecycle = false, accountLifecycleReading = false;
@@ -8972,6 +9019,7 @@
     syncedOrderId,
     syncedOrderReadNotice,
     overviewSummary,
+    overviewCustomerSummary,
     hasPendingPersonalDelivery: accountId => orders.some(order => personalProduct(order.product) &&
       order.accountId === accountId && order.businessType === '成品交付' && !order.cancelled &&
       order.entitlementStatus !== 'active'),
