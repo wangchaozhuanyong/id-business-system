@@ -95,11 +95,14 @@ test('统一 Claude 列表、三档套餐、独立认证与续费', { timeout: 9
     assert.equal(await scope.locator('[data-action="commerce-order-pending"]').count(), 0);
     await scope.locator('button[form="commerce-order-form"][type="submit"]').click();
     const confirm = page.locator('#confirm-dialog[open]').getByRole('button', { name: '确认保存', exact: true });
+    const success = page.locator('#toast [data-feedback-message]').filter({ hasText: '订单提交成功' });
+    const [previousSuccess] = await success.elementHandles();
     await confirm.click().catch(async error => {
       const fields = await root.locator('.field-error:visible').allTextContents();
       throw new Error([error.message, ...fields].join('\n'));
     });
-    await page.locator('#toast').filter({ hasText: '订单提交成功' }).waitFor();
+    if (previousSuccess) await previousSuccess.waitForElementState('hidden');
+    await success.waitFor();
   };
   await field('plan').waitFor();
   assert.deepEqual(await field('plan').locator('option').evaluateAll(nodes => nodes.map(node => node.value)),

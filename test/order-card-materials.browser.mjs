@@ -199,15 +199,19 @@ test('银行卡输入在深浅主题和宽窄屏不重叠、不溢出，标签�
           if (!label || !control) return true;
           return label.getBoundingClientRect().right <= control.getBoundingClientRect().left + 1;
         });
-        const mode = root.querySelector('[data-commerce-field="proMaterialMode"]').getBoundingClientRect();
-        const number = root.querySelector('[data-commerce-field="proCardNumber"]').getBoundingClientRect();
+        const bounds = name => root.querySelector(`[data-commerce-field="${name}"]`).getBoundingClientRect();
+        const payment = bounds('payment'), mode = bounds('proMaterialMode');
+        const cardType = bounds('cardTypeId'), number = bounds('proCardNumber');
         const columns = getComputedStyle(root).gridTemplateColumns.split(' ').length;
-        const numberPlacement = columns === 2
-          ? Math.abs(mode.top - number.top) <= 1 && number.left >= mode.right && Math.abs(mode.width - number.width) <= 1
-          : number.top >= mode.bottom;
-        return { overlap, labelsLeft, numberPlacement, overflow: document.documentElement.scrollWidth > innerWidth + 1 };
+        const sameRow = (left, right) => Math.abs(left.top - right.top) <= 1 &&
+          right.left >= left.right && Math.abs(left.width - right.width) <= 1;
+        const placement = columns === 2
+          ? sameRow(payment, mode) && sameRow(cardType, number) && cardType.top >= payment.bottom &&
+            Math.abs(cardType.left - payment.left) <= 1
+          : mode.top >= payment.bottom && cardType.top >= mode.bottom && number.top >= cardType.bottom;
+        return { overlap, labelsLeft, placement, overflow: document.documentElement.scrollWidth > innerWidth + 1 };
       });
-      assert.deepEqual(result, { overlap: false, labelsLeft: true, numberPlacement: true, overflow: false }, `${entry}/${width}/${theme}`);
+      assert.deepEqual(result, { overlap: false, labelsLeft: true, placement: true, overflow: false }, `${entry}/${width}/${theme}`);
       if (entry === 'claude' && [1440, 390].includes(width))
         await page.locator('#main .order-payment-options').screenshot({ path: output + `claude-card-${width}-${theme}.png` });
     }
