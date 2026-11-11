@@ -116,7 +116,7 @@
   const metrics = [
     ['orders', '订单数量', '笔', '按创建时间统计，撤单单独列示；续费作为新订单计入。', 'orders/gpt', '查看订单'],
     ['receipts', '订单实收', '按原币', '只汇总已确认的订单实收，按原币分别展示；退款另列，不将不同币种直接相加。', 'orders/statistics', '查看实收'],
-    ['profit', '核算利润合计', '人民币', '合计包含实账与参考核算。各订单使用开通时的汇率和冻结规则，开卡费用按同卡已确认开通订单分摊。缺少或失效快照的订单进入待核算。', 'orders/statistics', '查看核算'],
+    ['profit', '核算利润合计', '人民币', '合计包含实账与参考核算。各订单使用开通时的汇率和冻结规则。开卡费按同卡已确认开通订单分摊，未记录原卡的手工 GPT 订单可显示开卡费未分摊的参考利润。缺少或失效快照的订单进入待核算。', 'orders/statistics', '查看核算'],
     ['customers', '新增客户', '位', '按客户创建时间统计去重客户，不把新建订单重复计为新增客户。', 'customers/list', '查看客户']
   ];
   const tasks = [
@@ -185,6 +185,7 @@
     const receipts = days ? originalTotals(days, 'receipts') : [];
     const refunds = days ? originalTotals(days, 'refunds') : [];
     const accounted = count('accounted');
+    const unallocated = days?.reduce((total, day) => total + (day.unallocatedCardFees || 0), 0) || 0;
     const profit = !days || (!accounted && count('pending')) ? '—'
       : formatAmount(days.reduce((total, day) => A.money.add(total, day.profit), '0'));
     const values = {
@@ -194,7 +195,7 @@
     const footers = {
       orders: days ? `${rangeLabel} · 撤单 ${count('cancelled')} 笔` : rangeLabel,
       customers: rangeLabel,
-      profit: days ? `待核算 ${count('pending')} 笔` : rangeLabel,
+      profit: days ? `待核算 ${count('pending')} 笔${unallocated ? ` · ${unallocated} 笔开卡费未分摊` : ''}` : rangeLabel,
       receipts: refunds.length ? `退款 ${refunds.join(' / ')}` : rangeLabel
     };
     const taskCounts = [commerce?.renewals, commerce?.incomplete, inventory?.pending, finance ? sections.apple.data : undefined];

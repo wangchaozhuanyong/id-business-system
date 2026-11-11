@@ -1405,8 +1405,8 @@
     if (cost.total === null) return null;
     return M.subtract(cny(refundable(order), order.saleCurrency, order.rates), cost.total);
   }
-  function shownProfit(order) {
-    const amount = profit(order);
+  function shownProfit(order, accounting) {
+    const amount = profit(order, accounting);
     return amount === null || localData ? amount : shownCurrency(amount, costSettings.currency, order.rates);
   }
   function orderStatus(order) {
@@ -4989,8 +4989,11 @@
         id: 'profit',
         label: `核算收益（${currencyLabel(costSettings.currency)}）`,
         render: (row) => {
-          const p = shownProfit(row);
-          return p === null ? '—' : E(display(p));
+          const accounting = localData ? localAccounting(row) : null;
+          const p = shownProfit(row, accounting);
+          if (p === null) return '—';
+          const amount = E(display(p));
+          return accounting?.cardIssueUnallocated ? `<span title="参考利润，开卡费未分摊">${amount}</span>` : amount;
         }
       },
       { id: 'start', label: '订阅时间' },
@@ -5271,7 +5274,8 @@
     const snapshot = order.fxSnapshot;
     const issue = result.cardIssue;
     const allocation = issue ? property('开卡成本分摊依据',
-      `同卡已确认开通 ${issue.count} 单 · 原卡费用 ${issue.totalUsd} USD · 本单份额 ${issue.amountUsd} USD · 截至 ${quoteTime(issue.asOf)}`) : '';
+      `同卡已确认开通 ${issue.count} 单 · 原卡费用 ${issue.totalUsd} USD · 本单份额 ${issue.amountUsd} USD · 截至 ${quoteTime(issue.asOf)}`)
+      : result.cardIssueUnallocated ? property('开卡费用', '原付款卡未记录，开卡费未分摊') : '';
     const output = result.status === 'ready'
       ? result.items.map((row) => property(row.label, row.originalCurrency === result.currency ? amount(row.amount) :
           `${row.originalAmount} ${row.originalCurrency} · 折合 ${amount(row.amount)}`)).join('') + allocation +
@@ -5795,10 +5799,12 @@
         profit: gain === null || localData ? gain : shownCurrency(gain, currency, row.rates),
         revenue,
         basis: accounting?.basis || 'reference',
+        cardIssueUnallocated: accounting?.cardIssueUnallocated,
         reasons: pendingReasons(row, accounting)
       }];
     }));
     const complete = active.filter((row) => amounts.get(row.id).profit !== null);
+    const unallocated = complete.filter((row) => amounts.get(row.id).cardIssueUnallocated).length;
     const pending = active.filter((row) => amounts.get(row.id).profit === null);
     const received = active.filter((row) => amounts.get(row.id).revenue !== null);
     const reported = (rows, field) => rows.length ? display(sum(rows, (row) => amounts.get(row.id)[field])) : '—';
@@ -5834,6 +5840,7 @@
         [`核算利润合计（${currencyLabel(costSettings.currency)}）`, reported(complete, 'profit'), costSettings.currency],
         ['待核算', pending.length, '条']
       ]) +
+      (unallocated ? `<p class="footnote panel-body">${unallocated} 笔订单按已知成本计算参考利润，开卡费未分摊。</p>` : '') +
       quoteAttribution(active) +
       `<section class="panel">${tabs(
         [
@@ -5907,7 +5914,11 @@
                   {
                     id: 'reason',
                     label: moduleState.statsTab === 'pending' ? '待核算原因' : '核算状态',
-                    render: (row) => E(amounts.get(row.id).reasons.join('、') || accountingLabel(amounts.get(row.id).basis))
+                    render: (row) => {
+                      const amount = amounts.get(row.id);
+                      return E(amount.reasons.join('、') || (amount.cardIssueUnallocated
+                        ? '参考核算 · 开卡费未分摊' : accountingLabel(amount.basis)));
+                    }
                   },
                   {
                     id: 'amount',
@@ -8886,7 +8897,7 @@
     if (localPhase !== 'ready' || !localData || !A.canVisit('orders/statistics')) return null;
     const products = Object.keys(productPlans);
     const totals = () => ({ orders: 0, cancelled: 0, receipts: {}, refunds: {},
-      profit: '0', accounted: 0, pending: 0 });
+      profit: '0', accounted: 0, pending: 0, unallocatedCardFees: 0 });
     const daily = new Map(dates.map(date => [date, {
       date, customers: 0, ...totals(),
       products: Object.fromEntries(products.map(product => [product, totals()]))
@@ -8923,6 +8934,7 @@
         if (gain === null) target.pending++;
         else {
           target.accounted++;
+          if (accounting.cardIssueUnallocated) target.unallocatedCardFees++;
           target.profit = M.add(target.profit, gain);
         }
       }

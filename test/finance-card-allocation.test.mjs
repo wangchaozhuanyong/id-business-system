@@ -113,6 +113,36 @@ test('开卡费凭据、同卡开通日期和稳定卡编号不足时待核算',
   assert.match(compute(a, allocate([a, sameTaskA, sameTaskB])).reason, /同卡开通记录存在待核对/);
 });
 
+test('已确认的无卡 GPT 旧单计算参考利润，保留已登记费用且不改变其他卡的分摊', () => {
+  const [a] = trio();
+  const legacy = bank('legacy-unlinked', '2026-11-06T12:00', {
+    source: '历史入库', cardId: '', paymentId: '',
+    issueFeeSnapshot: { cardId: '', applied: false, pending: true }
+  });
+  const allocations = allocate([a, legacy]);
+  const result = compute(legacy, allocations);
+  assert.equal(result.profit, '11.8400');
+  assert.equal(result.basis, 'reference');
+  assert.equal(result.cardIssueUnallocated, true);
+  assert.equal(result.items.some(item => item.label.includes('开卡')), false);
+  assert.equal(allocations.get(a.id).count, 1);
+  assert.deepEqual(compute(legacy), result);
+  const report = reconcileOrders({ commerce: { orders: [legacy] } }, { clock, fullCardHistory: true });
+  assert.equal(report.orders[0].calculations.CNY.cardIssueUnallocated, true);
+  assert.deepEqual(report.counts, { ready: 1, pending: 0, excluded: 0 });
+
+  const recorded = { ...legacy, issueFeeSnapshot: { cardId: '', applied: true, amountUsd: '0.5' } };
+  assert.equal(compute(recorded, allocate([recorded])).profit, '8.2400');
+  assert.equal(compute(recorded, allocate([recorded])).cardIssueUnallocated, undefined);
+
+  const unconfirmed = { ...legacy, paidConfirmed: false };
+  assert.equal(compute(unconfirmed, allocate([unconfirmed])).status, 'pending');
+  const noQuote = { ...legacy, fxSnapshot: null };
+  assert.match(compute(noQuote, allocate([noQuote])).reason, /缺少有效汇率快照/);
+  const automatic = { ...legacy, source: '线上代充', taskId: 'no-card-task', rechargeCompletedAt: '2026-11-06T04:00:00.000Z' };
+  assert.match(compute(automatic, allocate([automatic])).reason, /原付款银行卡/);
+});
+
 test('共享用卡计入真实开通笔数，实际总成本沿用已核对的完整账单', () => {
   const [a, b, c] = trio();
   b.product = 'Claude Pro';
