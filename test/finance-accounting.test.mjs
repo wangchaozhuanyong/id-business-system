@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  calculateOrder, createManualSnapshot, createOrderSnapshot, snapshotAction
+  calculateConfirmedNetReceipt, calculateOrder, createManualSnapshot, createOrderSnapshot, snapshotAction
 } from '../modules/finance/accounting.mjs';
 import { checkFinanceSnapshots } from '../server/finance/snapshot-integrity.mjs';
 
@@ -55,6 +55,22 @@ test('银行卡部分退款与实际回款独立，按代付币种回收且保�
   assert.equal(calculate(order).profit, '73.2400');
   order.bankReturns[0].currency = 'USD';
   assert.match(calculate(order).reason, /银行卡回款币种/);
+});
+
+test('确认净收款不等利润，同币种无汇率也统计，跨币种只采用原单有效快照', () => {
+  const order = { ...bank(), paidConfirmed: false, receiptConfirmed: true,
+    refunds: [{ amount: '70', currency: 'CNY' }] };
+  const receipt = (row, currency = 'CNY') => calculateConfirmedNetReceipt(row, { clock, currency });
+  assert.equal(receipt(order), '180.0000');
+  assert.equal(receipt(order, 'MYR'), null);
+  order.fxSnapshot = createOrderSnapshot(quote, order, clock);
+  assert.equal(receipt(order, 'MYR'), '112.5000');
+  assert.equal(receipt({ ...order, start: '2026-11-04T13:00' }, 'MYR'), null);
+  assert.equal(receipt({ ...order, receiptConfirmed: false }), null);
+  assert.equal(receipt({ ...order, cancelled: true }), null);
+  assert.equal(receipt({ ...order, refunds: undefined }), null);
+  assert.equal(receipt({ ...order, refunds: [{ amount: '251', currency: 'CNY' }] }), null);
+  assert.equal(receipt({ ...order, refunds: [{ amount: '250', currency: 'CNY' }] }), '0.0000');
 });
 
 test('Claude Apple 待回款不计收益，实际到账按折扣回收并保留邮箱成本', () => {

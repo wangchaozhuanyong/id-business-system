@@ -14,7 +14,7 @@ const number = '4242424242424242', replacement = '4000000000000002';
 const actor = { id: 'fixture-admin', role: 'admin', name: '测试管理员' };
 const origin = 'https://cards.example.test';
 const base = (product = 'GPT') => ({ id: 'fixture-order', product,
-  plan: { GPT: 'Plus', 'Claude Pro': 'Pro', 'Claude Max': 'Max 5x', Gemini: 'AI Pro', Grok: 'SuperGrok' }[product],
+  plan: { GPT: 'Plus', 'Claude Pro': 'Pro', 'Claude Max': 'Max 5x', Gemini: 'Google AI Pro', Grok: 'SuperGrok' }[product],
   businessType: '续费', payment: '银行卡', cardId: '', paymentId: '4242', email: 'fixture@example.test',
   proMaterialMode: 'manual_card', proCardNumber: number, proCardSerial: '', version: 1,
   paidConfirmed: true, paidAmount: '20', paidCurrency: 'USD', corrections: [], refunds: [], bankReturns: [] });
@@ -24,18 +24,18 @@ const correction = (prior, changes) => {
     corrections: [...corrections, { reason: '核对银行卡资料', previous, versionAfter: prior.version + 1 }] };
 };
 
-test('五种订单都接受手填卡号，Claude 序列号可空且保留前导零', () => {
+test('五种订单都接受手填卡号，卡序列号可空且保留前导零', () => {
   for (const product of ['GPT', 'Claude Pro', 'Claude Max', 'Gemini', 'Grok']) {
     const row = { ...base(product), proCardNumber: '4242 4242-4242 4242' };
     assert.equal(normalizeClaudeProMaterials(row, undefined, []), undefined, product);
     assert.equal(row.proCardNumber, number);
     assert.equal(row.paymentId, '4242');
     assert.equal(row.proCardSerial, '');
-    if (!['Gemini', 'Grok'].includes(product)) assert.equal(checkNewOrder(row), undefined, product);
+    assert.equal(checkNewOrder(row), undefined, product);
+    row.proCardSerial = ' 00042 ';
+    assert.equal(normalizeClaudeProMaterials(row, undefined, []), undefined, product);
+    assert.equal(row.proCardSerial, '00042');
   }
-  const serial = { ...base('Claude Pro'), proCardSerial: '00042' };
-  assert.equal(normalizeClaudeProMaterials(serial, undefined, []), undefined);
-  assert.equal(serial.proCardSerial, '00042');
   for (const invalid of ['', '1234', '424242424242424x', '1'.repeat(20)])
     assert.match(normalizeClaudeProMaterials({ ...base(), proCardNumber: invalid }, undefined, []), /银行卡号/);
   for (const invalid of ['x'.repeat(121), 'test\u0001', 123])
@@ -48,8 +48,10 @@ test('所有产品可选择卡池，完整卡号由可信卡资料产生并在�
   assert.equal(Object.hasOwn((await readPoolCards(client))[0], 'number'), false, '选择列表不返回完整号');
   const [card] = await readPoolCards(client, { includeNumbers: true });
   for (const product of ['GPT', 'Claude Pro', 'Claude Max', 'Gemini', 'Grok']) {
-    const row = { ...base(product), cardId: card.id, proMaterialMode: 'pool_card', proCardNumber: replacement };
+    const serial = product.startsWith('Claude') ? '' : '00042';
+    const row = { ...base(product), cardId: card.id, proMaterialMode: 'pool_card', proCardNumber: replacement, proCardSerial: serial };
     assert.equal(normalizeClaudeProMaterials(row, undefined, []), undefined);
+    assert.equal(row.proCardSerial || '', serial);
     assert.equal(row.proCardNumber, undefined, '不信任浏览器提供的卡池卡号');
     retainOrderCardNumber(row, undefined, card);
     assert.equal(row.proCardNumber, number);
@@ -59,6 +61,16 @@ test('所有产品可选择卡池，完整卡号由可信卡资料产生并在�
     const changed = { ...later, cardId: 'recharge:8' };
     retainOrderCardNumber(changed, row);
     assert.equal(changed.proCardNumber, undefined, '不同卡不继承旧号');
+  }
+});
+
+test('GPT、Gemini 和 Grok 的默认选卡方式可保存卡序列号，苹果内购拒绝银行卡资料', () => {
+  for (const product of ['GPT', 'Gemini', 'Grok']) {
+    const row = { ...base(product), cardId: 'recharge:7', proMaterialMode: '', proCardSerial: '0007' };
+    assert.equal(normalizeClaudeProMaterials(row, undefined, []), undefined);
+    assert.equal(row.proCardSerial, '0007');
+    assert.match(normalizeClaudeProMaterials({ ...row, proCardSerial: 'x\u200B' }, undefined, []), /卡序列号/);
+    assert.match(normalizeClaudeProMaterials({ ...row, payment: '苹果内购' }, undefined, []), /银行卡订单/);
   }
 });
 

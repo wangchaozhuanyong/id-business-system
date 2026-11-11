@@ -63,22 +63,23 @@ export function personalOrderError(order, prior, orders, customers) {
   const series = subscriptionSeries(order);
   if (order.subscriptionSeries !== series) return '订阅系列与套餐不匹配';
   if (series === 'x_premium' && !order.xHandle) return 'X Premium 需记录实际订阅的 @账号';
-  if (!['web', 'web_apple_pay', 'google_play', 'app_store'].includes(order.billingChannel) ||
-      (order.billingChannel === 'app_store' ? order.payment !== '苹果内购' : order.payment !== '银行卡') ||
-      (series === 'x_subscription' && !['web', 'web_apple_pay'].includes(order.billingChannel)) ||
-      (order.billingChannel !== 'app_store' && order.appleIdId))
+  if (!['银行卡', '苹果内购'].includes(order.payment) ||
+      (series === 'x_subscription' && order.payment !== '银行卡') ||
+      (order.payment !== '苹果内购' && order.appleIdId))
+    return '充值方式与套餐或付款资源不匹配';
+  if (order.billingChannel && (!['web', 'web_apple_pay', 'google_play', 'app_store'].includes(order.billingChannel) ||
+      (order.billingChannel === 'app_store') !== (order.payment === '苹果内购') ||
+      (series === 'x_subscription' && !['web', 'web_apple_pay'].includes(order.billingChannel))))
     return '购买渠道与付款资源不匹配，请核对原账单';
   if (!['pending', 'active', 'failed'].includes(order.entitlementStatus) ||
-    !['unknown', 'on', 'off'].includes(order.autoRenew) ||
-    !['month', 'year', 'other'].includes(order.billingCycle)) return '请核对权益状态与订阅周期';
+    (order.autoRenew && !['unknown', 'on', 'off'].includes(order.autoRenew)) ||
+    (order.billingCycle && !['month', 'year', 'other'].includes(order.billingCycle))) return '请核对权益状态与订阅周期';
   if ((order.billingCountry && !nonempty(order.billingCountry, 100)) ||
       (order.billingReceipt && !nonempty(order.billingReceipt, 160)) ||
       (order.nextChargeAt && !Number.isFinite(time(order.nextChargeAt)))) return '请核对账单地区、编号或下次扣款日';
-  if (order.paidConfirmed && (!nonempty(order.billingReceipt, 160) || !nonempty(order.billingCountry, 100)))
-    return '确认平台实付前请填写实际账单地区与本次交易编号';
   if (order.paidConfirmed && (order.payment === '苹果内购' ? !order.appleIdId || order.paidCurrency !== 'USD'
       : order.proMaterialMode !== 'manual_card' && !/^recharge:.+/.test(order.cardId || ''))) return '请核对实际付款资源和币种';
-  if (order.paidConfirmed && order.product === 'Gemini' && order.billingChannel === 'app_store' &&
+  if (order.paidConfirmed && order.product === 'Gemini' && order.payment === '苹果内购' &&
       order.appleGoogleVerified !== true) return '请核对付款 Apple ID 对应的 Google 账号';
   if (order.appleOriginalReceipt && (!nonempty(order.appleOriginalReceipt, 160) ||
       order.payment !== '苹果内购' || order.businessType !== '续费' ||
@@ -95,9 +96,11 @@ export function personalOrderError(order, prior, orders, customers) {
       (!sameTarget(order, prior) || prior.plan !== order.plan))
     return '已确认订单的订阅目标与套餐须保留';
   // The shared order policy validates bank-card edits against the original correction snapshot.
-  if (prior?.paidConfirmed && (prior.billingChannel !== order.billingChannel ||
-      prior.billingReceipt !== order.billingReceipt || prior.appleIdId !== order.appleIdId ||
-      (prior.payment !== '银行卡' && prior.cardId !== order.cardId)))
+  if (prior?.paidConfirmed && (prior.payment !== order.payment ||
+      (prior.billingChannel ?? '') !== (order.billingChannel ?? '') ||
+      (prior.billingReceipt ?? '') !== (order.billingReceipt ?? '') ||
+      (prior.appleIdId ?? '') !== (order.appleIdId ?? '') ||
+      (prior.payment !== '银行卡' && (prior.cardId ?? '') !== (order.cardId ?? ''))))
     return '已确认订单的原账单与付款资源须保留';
   if (order.billingReceipt && orders.some(row => row.id !== order.id && personalProduct(row.product) &&
       (['web', 'web_apple_pay'].includes(row.billingChannel) ? row.product === order.product &&

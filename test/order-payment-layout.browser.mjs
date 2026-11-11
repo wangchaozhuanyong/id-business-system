@@ -129,14 +129,10 @@ test('所有录单、编辑与续费入口共用支付方式、卡类型、选�
           await choose(form, card, key === 'max' ? 'tenant:layout' : 'recharge:1');
           assert.equal(await form.locator('#commerce-paymentId').inputValue(), key === 'max' ? '4444' : '4242');
           await inspect(form, key, 'entry', card);
-          if (['gemini', 'grok'].includes(key)) {
-            await form.locator('#commerce-billingChannel').selectOption('app_store');
-            assert.equal(await form.locator('#commerce-payment').inputValue(), '苹果内购');
-          } else await form.locator('#commerce-payment').selectOption('苹果内购');
+          await form.locator('#commerce-payment').selectOption('苹果内购');
           assert.equal(await form.locator('#commerce-cardTypeId').isVisible(), false);
           assert.equal(await form.locator('#commerce-paymentId').isVisible(), false);
-          if (['gemini', 'grok'].includes(key)) await form.locator('#commerce-billingChannel').selectOption('web');
-          else await form.locator('#commerce-payment').selectOption('银行卡');
+          await form.locator('#commerce-payment').selectOption('银行卡');
 
           await go('orders/' + key);
           await page.locator(`[data-action="commerce-order-edit"][data-id="layout-${key}"]`).click();

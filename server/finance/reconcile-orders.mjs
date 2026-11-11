@@ -160,7 +160,6 @@ function checkOrder(order, indexes, clock, migrationGaps, cardIssueAllocations) 
   if (!sold.amount || !sold.currency) issues.add('缺少有效的原币实收金额或币种');
   if (order.paidConfirmed !== true) issues.add('代付待确认');
   if (order.receiptConfirmed !== true) issues.add('实收待确认');
-  if (order.costConfirmed !== true) issues.add('成本口径待确认');
   if (!order.start) issues.add('缺少订单订阅时点');
   const feeVersion = order.costSettings?.version;
   if (!Number.isSafeInteger(feeVersion) || feeVersion < 1) issues.add('缺少费用规则版本快照');
@@ -199,7 +198,8 @@ function checkOrder(order, indexes, clock, migrationGaps, cardIssueAllocations) 
   const pendingReasons = new Set(issues);
   for (const target of reportCurrencies) {
     const result = calculateOrder(financialOrder, { currency: target, appleLedger: apple?.ledger, clock, cardIssueAllocations });
-    if (result.status === 'pending') pendingReasons.add(result.reason);
+    if (result.status === 'pending')
+      for (const reason of [result.reason, ...(result.additionalReasons || [])]) pendingReasons.add(reason);
     if (order.cancelled === true) {
       currencyResults[target] = { status: 'excluded', reason: '订单已撤单' };
     } else if (issues.size || result.status === 'pending') {

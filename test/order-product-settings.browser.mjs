@@ -43,7 +43,7 @@ test('GPT、Claude Pro、Claude Max、Gemini、Grok 的币种、代付和售价�
       paidConfirmed: false, receiptConfirmed: false });
   }
   const originalOrders = structuredClone(fixture.commerce.data.orders);
-  await interceptDesign(context, { localFixtures: fixture, actor });
+  await interceptDesign(context, { localFixtures: fixture, actor, skipRechargeAssets: true });
   await context.route('**/api/local/auth/order-owners', route => route.fulfill({ json: { items: [actor] } }));
   await context.route('**/api/local/auth/display-names', route => route.fulfill({ json: { items: [actor] } }));
   let failSave = false, rateVersion = 1, phpRate = '0.125';
@@ -430,7 +430,7 @@ test('GPT、Claude Pro、Claude Max、Gemini、Grok 的币种、代付和售价�
     await order.locator('#commerce-businessType').selectOption('成品交付');
     await choosePreset('sale', stockPrice, saleCode, order);
     if (product === 'Gemini') {
-      await order.locator('#commerce-billingChannel').selectOption('app_store');
+      await order.locator('#commerce-payment').selectOption('苹果内购');
       assert.deepEqual(await codes(paid), ['USD']);
       await order.getByRole('button', { name: '选择代付金额', exact: true }).click();
       assert(await page.getByRole('menuitem', { name: '当前币种暂无预设金额' }).isDisabled());
@@ -573,7 +573,7 @@ test('GPT、Claude Pro、Claude Max、Gemini、Grok 的币种、代付和售价�
   assert.deepEqual(businessWrites, []);
   assert.deepEqual(errors, []);
   const employeeContext = await browser.newContext();
-  await interceptDesign(employeeContext, { localFixtures: fixture, actor: { ...actor, role: 'employee' } });
+  await interceptDesign(employeeContext, { localFixtures: fixture, actor: { ...actor, role: 'employee' }, skipRechargeAssets: true });
   const employee = await employeeContext.newPage();
   await employee.goto(origin + '/#/settings/payment-countries');
   await employee.getByRole('heading', { name: '访问受限' }).waitFor();

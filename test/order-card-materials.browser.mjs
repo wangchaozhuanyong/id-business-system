@@ -54,7 +54,7 @@ async function setup(t) {
   return { page, fixture, writes, errors, mock, submit, removePool: () => { cards = []; } };
 }
 
-test('所有录单入口可手填和编辑卡号，Claude 序列号可空，切页和切换保留草稿', { timeout: 90_000 }, async t => {
+test('所有录单入口可手填和编辑卡号，卡序列号选填，切页和切换保留草稿', { timeout: 90_000 }, async t => {
   const { page, fixture, writes, errors, mock, submit } = await setup(t);
   const customer = fixture.commerce.data.customers.find(row => row.active !== false);
   const main = page.locator('#main');
@@ -68,10 +68,11 @@ test('所有录单入口可手填和编辑卡号，Claude 序列号可空，切�
     const card = form.locator('#commerce-proCardNumber');
     await card.fill(number);
     assert.equal(await card.isEditable(), true);
-    if (product.startsWith('Claude')) {
-      assert.equal(await form.locator('[data-commerce-field="proCardSerial"] .required').count(), 0);
-      assert.equal(await form.locator('#commerce-proCardSerial').inputValue(), '');
-    }
+    const serial = form.locator('#commerce-proCardSerial');
+    const serialValue = product.startsWith('Claude') ? '' : '00042-' + list;
+    assert.equal(await form.locator('[data-commerce-field="proCardSerial"] .required').count(), 0);
+    assert.equal(await serial.inputValue(), '');
+    await serial.fill(serialValue);
     if (product === 'GPT') {
       await card.fill('1234');
       await main.locator('[data-action="commerce-order-pending"]').click();
@@ -81,6 +82,7 @@ test('所有录单入口可手填和编辑卡号，Claude 序列号可空，切�
       await card.fill(number);
       await form.locator('#commerce-proMaterialMode').selectOption('');
       assert.equal(await card.isVisible(), false);
+      assert.equal(await serial.isVisible(), true);
       await form.locator('#commerce-proMaterialMode').selectOption('manual_card');
       assert.equal(await card.inputValue(), number);
       await page.goto(`${origin}/#/orders/gpt`);
@@ -88,6 +90,7 @@ test('所有录单入口可手填和编辑卡号，Claude 序列号可空，切�
       form = main.locator('#commerce-order-form');
       await form.locator('#commerce-proCardNumber').waitFor();
       assert.equal(await form.locator('#commerce-proCardNumber').inputValue(), number);
+      assert.equal(await form.locator('#commerce-proCardSerial').inputValue(), serialValue);
     }
     await form.locator('#commerce-customerId').evaluate((node, id) => {
       node.value = id; node.dispatchEvent(new Event('change', { bubbles: true }));
@@ -97,12 +100,10 @@ test('所有录单入口可手填和编辑卡号，Claude 序列号可空，切�
     await form.locator('#commerce-paidAmount').fill('20');
     await form.locator('#commerce-saleAmount').fill('100');
     if (['Gemini', 'Grok'].includes(product)) {
-      await form.locator('#commerce-billingCountry').fill('马来西亚');
-      await form.locator('#commerce-billingReceipt').fill('fixture-receipt-' + list);
       await form.locator('#commerce-start').fill('2026-11-10T10:00');
       await form.locator('#commerce-expiry').fill('2026-12-10T10:00');
     }
-    assert.equal(await form.locator('[name="commerce-paidConfirmed"]').count(), 0);
+    assert.equal(await form.locator('[data-commerce-field="confirmations"]').count(), 0);
     await submit(main, true);
     const saved = writes.at(-1).data.orders.find(row => row.email === email);
     assert.ok(saved, product);
@@ -110,9 +111,10 @@ test('所有录单入口可手填和编辑卡号，Claude 序列号可空，切�
     assert.equal(saved.proCardNumber, number);
     assert.equal(saved.paymentId, '4242');
     assert.equal(saved.cardId, '');
-    assert.equal(saved.proCardSerial || '', '');
+    assert.equal(saved.proCardSerial || '', serialValue);
     assert.equal(saved.paidConfirmed, true);
     assert.equal(saved.receiptConfirmed, true);
+    assert.equal(saved.costConfirmed, true);
     created.push([saved, list]);
   }
   for (const [original, list] of created) {
@@ -127,6 +129,7 @@ test('所有录单入口可手填和编辑卡号，Claude 序列号可空，切�
     const saved = writes.at(-1).data.orders.find(row => row.id === original.id);
     assert.equal(saved.proCardNumber, replacement);
     assert.equal(saved.paymentId, '0002');
+    assert.equal(saved.proCardSerial || '', original.proCardSerial || '');
     assert.equal(saved.corrections.at(-1).previous.proCardNumber, number);
     assert.deepEqual(saved.financialEvidence.filter(row => row.kind === 'payment'),
       original.financialEvidence.filter(row => row.kind === 'payment'));

@@ -16,38 +16,43 @@ const account = { id: 'stock-grok', type: 'grok', email: '', loginMethod: 'x', x
   status: '正常', health: 'normal', source: '自己注册', inventoryState: 'available', usageLinks: [] };
 const grok = { id: 'grok-first', product: 'Grok', plan: 'X Premium', loginMethod: 'x', email: '',
   xHandle: '@fixture', xLinkState: 'linked', platformAccountId: 'platform-11', subscriptionSeries: 'x_premium',
-  customerId: 'customer', businessType: '首次开通', billingChannel: 'web', billingCycle: 'month',
-  payment: '银行卡', autoRenew: 'unknown', entitlementStatus: 'pending', paidAmount: '', start: '', expiry: '' };
+  customerId: 'customer', businessType: '续费',
+  payment: '银行卡', entitlementStatus: 'pending', paidAmount: '', start: '', expiry: '' };
 const apple = { id: 'apple-first', product: 'Gemini', plan: 'Google AI Pro', loginMethod: 'google',
   email: 'fixture@example.test', subscriptionSeries: 'google_ai', customerId: 'customer',
-  businessType: '首次开通', billingChannel: 'app_store', billingCycle: 'year', payment: '苹果内购',
-  appleIdId: 'apple-1', billingReceipt: 'receipt-first', billingCountry: '马来西亚', autoRenew: 'on',
+  businessType: '成品交付', payment: '苹果内购', appleIdId: 'apple-1',
   entitlementStatus: 'active', start: '2026-11-10T08:00', expiry: '2027-11-10T08:00', paidConfirmed: true,
   paidAmount: '19.99', paidCurrency: 'USD', appleGoogleVerified: true, cardId: '', refunds: [] };
 
-test('X 独立登录、真实账单、权益和旧系列切换各自核对', () => {
+test('个人订单直接登记付款方式，历史账单、权益和旧系列切换各自核对', () => {
   const validate = (row, prior = null, orders = []) => personalOrderError(row, prior, orders, customers);
   assert.equal(validate(grok), undefined);
+  assert.equal(validate(apple), undefined);
   assert.match(validate({ ...apple, appleGoogleVerified: false }), /对应的 Google 账号/);
   assert.match(validate({ ...grok, loginMethod: 'email' }), /登录方式/);
   assert.match(validate({ ...grok, tenantId: 'fixture-tenant' }), /仅适用于 Claude/);
   assert.match(validate({ ...grok, customerId: '' }), /请选择订单客户/);
   assert.match(validate({ ...grok, receiptConfirmed: true }), /实收/);
-  assert.match(validate({ ...grok, paidConfirmed: true }), /实际账单/);
+  assert.match(validate({ ...grok, paidConfirmed: true }), /实际付款资源/);
   assert.match(validate({ ...grok, entitlementStatus: 'active' }), /开通及到期/);
   const settled = { ...grok, entitlementStatus: 'active', start: apple.start, expiry: apple.expiry };
   assert.equal(validate(settled), undefined, '已确认权益可独立于平台付款');
-  const paid = { ...settled, paidConfirmed: true, billingReceipt: 'tx-42', billingCountry: '马来西亚',
+  const bank = { ...settled, paidConfirmed: true,
     cardId: 'recharge:card-1', paidCurrency: 'MYR', paidAmount: '9.99' };
-  assert.equal(validate(paid, settled), undefined, '已有真实开通记录可补齐实际账单');
-  assert.match(validate({ ...paid, billingReceipt: 'tx-43' }, paid), /原账单/);
-  assert.match(validate({ ...paid, id: 'another', billingReceipt: ' TX-42 ', billingChannel: 'web_apple_pay' }, null, [paid]), /已登记/);
+  assert.equal(validate(bank, settled), undefined);
+  const historic = { ...bank, businessType: '首次开通', billingChannel: 'web',
+    billingReceipt: 'tx-42', billingCountry: '马来西亚', billingCycle: 'month', autoRenew: 'on' };
+  assert.equal(validate({ ...historic, appleIdId: '', notes: '补记说明' }, historic), undefined);
+  assert.match(validate({ ...historic, billingReceipt: 'tx-43' }, historic), /原账单/);
+  assert.match(validate({ ...historic, businessType: '续费', id: 'another', billingReceipt: ' TX-42 ',
+    billingChannel: 'web_apple_pay' }, null, [historic]), /已登记/);
   const migrated = { ...grok, id: 'new-series', plan: 'The X Subscription Plus', subscriptionSeries: 'x_subscription',
     billingChannel: 'web_apple_pay', previousSubscriptionOrderId: settled.id, previousAutoRenew: 'off' };
   assert.equal(validate(migrated, null, [settled]), undefined);
   assert.match(validate({ ...migrated, xHandle: '@other' }, null, [settled]), /原 Grok 订阅/);
-  assert.match(validate({ ...migrated, billingChannel: 'app_store', payment: '苹果内购' }, null, [settled]), /购买渠道/);
-  assert.match(validate({ ...migrated, appleIdId: 'apple-1' }, null, [settled]), /购买渠道/);
+  assert.match(validate({ ...migrated, billingChannel: 'app_store', payment: '苹果内购' }, null, [settled]), /充值方式/);
+  assert.match(validate({ ...migrated, appleIdId: 'apple-1' }, null, [settled]), /充值方式/);
+  assert.match(validate({ ...migrated, billingChannel: 'app_store' }, null, [settled]), /购买渠道/);
 });
 
 test('注册通过明确库存编号消耗选定邮箱并留存原领取批次', () => {
@@ -134,7 +139,7 @@ test('Apple 首配、同 ID 续费、余额不足、重复流水与到账恢复�
   assert.equal(checkAppleOrder(renew, null, [apple], settled, inventory, [apple, renew]), undefined);
   assert.match(checkAppleOrder({ ...renew, appleIdId: 'apple-2' }, null, [apple],
     { ...settled, wallets: [...settled.wallets, { ...wallet('20', 2), id: 'apple-2' }] }, inventory, [apple, renew]), /原订阅/);
-  assert.match(checkAppleOrder({ ...renew, businessType: '首次开通' }, null, [apple], settled, inventory, [apple, renew]), /未用于订阅/);
+  assert.match(checkAppleOrder({ ...renew, businessType: '成品交付' }, null, [apple], settled, inventory, [apple, renew]), /未用于订阅/);
   const refundedOrder = { ...apple, refunds: [{ id: 'refund-1', payment: '苹果内购', amount: '12' }] };
   const refund = { id: 'refund-1', appleIdId: apple.appleIdId, orderId: apple.id, amount: '6', status: 'pending' };
   const waiting = { ...settled, refunds: [refund] };

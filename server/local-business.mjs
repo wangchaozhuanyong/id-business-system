@@ -1762,7 +1762,7 @@ export function createLocalBusinessStore(databasePath) {
                   retainOrderCardNumber(row, prior, card);
                 } else if (row.product === 'GPT' && !row.cardId) {
                   row.cardId = '';
-                  row.paymentId = '';
+                  row.paymentId = prior?.payment === '银行卡' && !prior.cardId ? prior.paymentId || '' : '';
                   if (row.paidConfirmed) row.issueFeeSnapshot = { cardId: '', applied: false, pending: true };
                 } else if (row.cardId || row.paidConfirmed) {
                   throw new LocalDataError(409, '请选择对应来源的银行卡');
