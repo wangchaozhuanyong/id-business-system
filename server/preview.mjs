@@ -1,4 +1,6 @@
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
+import { gzipSync } from 'node:zlib';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
@@ -42,6 +44,8 @@ import { createMonitoringHandler, createMonitoringReadiness, createProbeReportHa
 import { createLegacyRechargeNotifications } from './monitoring-recharge.mjs';
 import { probeCodexdaichongRuntime } from '../modules/recharge/codexdaichong/runtime-health.mjs';
 
+const publicAssetTypes = new Set(['text/css; charset=utf-8', 'text/javascript; charset=utf-8']);
+
 const files = new Map([
   ['index.html', 'text/html; charset=utf-8'],
   ['prototype.css', 'text/css; charset=utf-8'],
@@ -79,6 +83,42 @@ const files = new Map([
     'bitbrowser-addresses'
   ].map((name) => [name + '.js', 'text/javascript; charset=utf-8'])
 ]);
+
+function publicAssetMetadata(body) {
+  const etag = 'W/"' + createHash('sha256').update(body).digest('hex') + '"';
+  const gzip = body.length >= 1024 ? gzipSync(body) : undefined;
+  return { etag, gzip: gzip && gzip.length < body.length ? gzip : undefined };
+}
+
+function acceptsGzip(value = '') {
+  const encodings = value.split(',').map((entry) => entry.toLowerCase().trim().split(/\s*;\s*/));
+  const selected = encodings.find(([name]) => name === 'gzip') ??
+    encodings.find(([name]) => name === '*');
+  if (!selected) return false;
+  const quality = selected[1];
+  if (quality === undefined) return true;
+  const match = /^q\s*=\s*(0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/.exec(quality);
+  return Boolean(match && Number(match[1]) > 0);
+}
+
+function sendPublicAsset(request, response, asset) {
+  const { etag, gzip } = asset.publicMetadata;
+  response.setHeader('Cache-Control', 'public, no-cache');
+  response.setHeader('ETag', etag);
+  if (gzip) response.setHeader('Vary', 'Accept-Encoding');
+
+  const matches = request.headers['if-none-match']?.split(',').some((value) => {
+    const tag = value.trim();
+    return tag === '*' || tag.replace(/^W\//, '') === etag.slice(2);
+  });
+  if (matches) return response.writeHead(304).end();
+
+  const compressed = gzip && acceptsGzip(request.headers['accept-encoding']);
+  const body = compressed ? gzip : asset.body;
+  if (compressed) response.setHeader('Content-Encoding', 'gzip');
+  response.writeHead(200, { 'Content-Type': asset.type, 'Content-Length': body.length });
+  response.end(request.method === 'HEAD' ? undefined : body);
+}
 
 export async function startPreview(
   port = 4347,
@@ -140,10 +180,11 @@ export async function startPreview(
   const monitorWebsite = publicUrl ? createWebsiteMonitor({ publicOrigin: secureOrigin }) : handleWebsiteMonitor;
   const assets = new Map(
     await Promise.all(
-      [...files].map(async ([file, type]) => [
-        '/' + file,
-        { type, body: await readFile(new URL('../frontend/' + file, import.meta.url)) }
-      ])
+      [...files].map(async ([file, type]) => {
+        const body = await readFile(new URL('../frontend/' + file, import.meta.url));
+        const publicMetadata = publicAssetTypes.has(type) ? publicAssetMetadata(body) : undefined;
+        return ['/' + file, { type, body, publicMetadata }];
+      })
     )
   );
   assets.set('/apple-funding.mjs', { type: 'text/javascript; charset=utf-8',
@@ -614,6 +655,7 @@ export async function startPreview(
       response.writeHead(404).end();
       return;
     }
+    if (asset.publicMetadata) return sendPublicAsset(request, response, asset);
     if (path === '/mailbox-query') {
       response.setHeader(
         'Content-Security-Policy',
