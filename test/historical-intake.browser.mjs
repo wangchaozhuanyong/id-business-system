@@ -46,13 +46,14 @@ test('Claude Pro 和 Max 通过实际表单保存独立空邮箱订单', { timeo
     await page.locator('#commerce-businessType').selectOption('续费');
     await page.locator('#commerce-customerId-picker').click();
     await page.locator('#commerce-customerId-popover [data-value="fixture-customer"]').click();
-    await page.locator('#commerce-proMaterialMode').selectOption('none');
+    assert.equal(await page.locator('#commerce-proMaterialMode').inputValue(), 'manual_card');
+    await page.locator('#commerce-proCardNumber').fill('4242424242424242');
     await page.locator('#commerce-start').fill('2025-02-01T09:12');
     await page.locator('#commerce-expiry').fill('2025-03-01T09:12');
     await email.fill('');
-    await page.locator('#commerce-saleAmount').fill('');
-    await page.locator('#commerce-paidAmount').fill('');
-    await page.getByRole('button', { name: '保留待补全', exact: true }).click();
+    await page.locator('#commerce-saleAmount').fill('120');
+    await page.locator('#commerce-paidAmount').fill('21');
+    await page.getByRole('button', { name: '核对并保存', exact: true }).click();
     await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
     await page.locator('#toast').filter({ hasText: '订单提交成功' }).waitFor();
     assert.equal(page.url(), origin + '/#/workspace/order/claude');
@@ -62,15 +63,13 @@ test('Claude Pro 和 Max 通过实际表单保存独立空邮箱订单', { timeo
     assert.equal(order.email, '');
     assert.equal(order.customerId, customer.id);
     assert.equal(order.accountId, '');
+    assert.equal(order.entitlementStatus, 'active');
+    assert.equal(order.paidConfirmed && order.receiptConfirmed, true);
     await page.locator(`[data-action="commerce-order-detail"][data-id="${order.id}"]`).first().click();
     assert.equal(await page.getByRole('tab', { name: '同账号订单', exact: true }).count(), 0);
     assert.equal(await page.getByText('账号待补充', { exact: false }).count(), 0);
   }
   assert.equal(new Set(saved.map(row => row.id)).size, 2);
-  for (const order of local.commerce.data.orders) {
-    order.paidConfirmed = true;
-    order.paidAmount = '21';
-  }
   local.commerce.data.orders.push({ ...local.commerce.data.orders.find(row => row.id === saved[0].id),
     id: 'tracked-claude', orderNo: 'QA-TRACKED', email: 'tracked@example.test' });
   await page.goto(origin + '/#/workspace/renewals');
