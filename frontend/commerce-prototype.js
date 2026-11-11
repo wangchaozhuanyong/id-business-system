@@ -5613,6 +5613,10 @@
       : '';
     const endField = missing.end ? field('实际终止时间', 'endAt',
       input('endAt', saved('endAt'), 'type="datetime-local"')) : '';
+    const receiptField = missing.receipt
+      ? `<label class="checkbox-label commerce-span-all"><input name="commerce-completionFullReceipt" type="checkbox"
+        value="yes" data-no-draft />已按原售价全额收款（${E(display(order.saleAmount))} ${E(currencyLabel(order.saleCurrency))}）</label>`
+      : '';
     const costFields = missing.cost
       ? field('实际总成本（退回前）', 'completionCostAmount',
           input('completionCostAmount', saved('completionCostAmount'), 'inputmode="decimal" maxlength="21"')) +
@@ -5625,7 +5629,7 @@
       `<form id="commerce-order-completion-form" data-commerce-draft="${E(key)}" novalidate>
         <input type="hidden" name="commerce-id" value="${E(id)}" />
         <input type="hidden" name="commerce-version" value="${E(saved('version', order.version ?? 0))}" />
-        <div class="commerce-field-grid">${customerField}${accountField}${periodFields}${endField}${costFields}</div></form>`,
+        <div class="commerce-field-grid">${customerField}${accountField}${periodFields}${endField}${receiptField}${costFields}</div></form>`,
       A.button('取消', 'drawer-close') +
       '<button type="submit" form="commerce-order-completion-form" class="button primary">保存到原单</button>', key);
   }
@@ -5653,6 +5657,7 @@
       details.expiry = expiry;
     }
     if (missing.end && value(raw, 'endAt')) details.subscriptionEndedAt = value(raw, 'endAt');
+    if (missing.receipt && value(raw, 'completionFullReceipt') === 'yes') details.confirmFullReceipt = true;
     const costAmount = value(raw, 'completionCostAmount'), costReason = value(raw, 'completionCostReason');
     if (missing.cost && (costAmount || costReason)) {
       details.actualCost = { amount: costAmount, currency: value(raw, 'completionCostCurrency'), reason: costReason };
@@ -5842,10 +5847,12 @@
         ? property('实际总成本', `${display(order.actualCostAmount)} ${currencyLabel(order.actualCostCurrency)}`) : '';
     const feeCorrection = (order.corrections || []).find(item => item?.kind === historicalFeeKind);
     const originalFeeRules = feeCorrection?.previous?.costSettings;
+    const grossReceipt = isClaude(order) && order.source === '历史入库' && order.receiptConfirmed
+      ? property('客户实收（退款前）', `${display(order.saleAmount)} ${currencyLabel(order.saleCurrency)}`) : '';
     const category = result.cardIssueUnallocated ? '成本未核全' : result.status === 'ready' && order.paidConfirmed
       ? accountingLabel(result.basis) : '待核算';
     return panelTitle('本单成本', '净成本 = 费用合计 − 渠道已到账回款。利润 = 客户确认净收款 − 净成本。' + statisticsQuoteHelp) +
-      `<div class="property-list">${property('代付金额', `${display(order.paidAmount)} ${currencyLabel(order.paidCurrency)}`)}${property('售卖金额', `${display(order.saleAmount)} ${currencyLabel(order.saleCurrency)}`)}${property('成本依据', order.costBasis === 'actual' ? '实际总成本' : '订单冻结的费用规则')}${property('核算类别', category)}${property('费用规则版本', order.costSettings?.version ? `V${order.costSettings.version}` : '待核对')}${feeCorrection ? property('历史付款费率更正', '8% → 0.8% · 原 V2 规则已保留') + property('历史原费用规则', `V2 · 付款费率 8% · 每笔 ${originalFeeRules?.cardPerPaymentUsd || '待核对'} 美元 · 开卡 ${originalFeeRules?.cardIssueUsd || '待核对'} 美元`) + property('更正依据', feeCorrection.reason) : ''}${property('客户累计退款', `${display(sum(order.refunds || [], (row) => row.amount))} ${currencyLabel(order.saleCurrency)}`)}${property('退款后净收款', receipt === null ? '待确认' : amount(receipt))}${output}${property(result.cardIssueUnallocated ? '已知参考收益' : '本单核算收益', pending.length || order.cancelled ? '待核算' : amount(result.profit))}${property('核算缺口', [...pending, ...(result.cardIssueUnallocated ? ['开卡费未分摊'] : [])].join('、') || '已确认')}</div>${canCorrectHistoricalFee(order) ? panelTitle('历史费用规则', '请先核实此订单的实际付款费率，再单独更正。', A.button('更正历史付款费率', 'commerce-order-fee-correction', '', '', `data-id="${E(order.id)}"`)) : ''}${
+      `<div class="property-list">${property('代付金额', `${display(order.paidAmount)} ${currencyLabel(order.paidCurrency)}`)}${property('售卖金额', `${display(order.saleAmount)} ${currencyLabel(order.saleCurrency)}`)}${grossReceipt}${property('成本依据', order.costBasis === 'actual' ? '实际总成本' : '订单冻结的费用规则')}${property('核算类别', category)}${property('费用规则版本', order.costSettings?.version ? `V${order.costSettings.version}` : '待核对')}${feeCorrection ? property('历史付款费率更正', '8% → 0.8% · 原 V2 规则已保留') + property('历史原费用规则', `V2 · 付款费率 8% · 每笔 ${originalFeeRules?.cardPerPaymentUsd || '待核对'} 美元 · 开卡 ${originalFeeRules?.cardIssueUsd || '待核对'} 美元`) + property('更正依据', feeCorrection.reason) : ''}${property('客户累计退款', `${display(sum(order.refunds || [], (row) => row.amount))} ${currencyLabel(order.saleCurrency)}`)}${property('退款后净收款', receipt === null ? '待确认' : amount(receipt))}${output}${property(result.cardIssueUnallocated ? '已知参考收益' : '本单核算收益', pending.length || order.cancelled ? '待核算' : amount(result.profit))}${property('核算缺口', [...pending, ...(result.cardIssueUnallocated ? ['开卡费未分摊'] : [])].join('、') || '已确认')}</div>${canCorrectHistoricalFee(order) ? panelTitle('历史费用规则', '请先核实此订单的实际付款费率，再单独更正。', A.button('更正历史付款费率', 'commerce-order-fee-correction', '', '', `data-id="${E(order.id)}"`)) : ''}${
       panelTitle('订单汇率快照', '每 1 单位外币对应的人民币金额。仅使用本订单记录的汇率。', finance && !snapshot && !order.cancelled
         ? A.button('登记汇率快照', 'commerce-order-fx', 'primary', '', `data-id="${E(order.id)}"`) +
           (finance.requestAutomaticSnapshot && S.actor?.role !== 'employee'
