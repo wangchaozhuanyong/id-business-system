@@ -4492,9 +4492,10 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
   padding-inline: 10px;
   white-space: nowrap;
 }
-.order-quick-customer > .field-error {
+.order-quick-customer > .order-quick-customer-status {
   flex-basis: 100%;
   margin: 0;
+  overflow-wrap: anywhere;
 }
 .order-quick-customer-summary {
   display: flex;

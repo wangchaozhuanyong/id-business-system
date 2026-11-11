@@ -362,7 +362,8 @@ test('编辑历史记录不补造录入人，租户业务归属人与录入人�
   assert.equal(t.ownerId, 'actor-a');
   assert.equal(t.createdBy, '演示录入员');
   const historical = r.tenants().find(row => row.id === 'tenant-demo-1');
-  r.contact({ id: historical.id, version: String(historical.version), owner: '冒名修改', ownerId: 'actor-a' }, 'tenant');
+  r.contact({ id: historical.id, version: String(historical.version), phone: historical.phone,
+    owner: '冒名修改', ownerId: 'actor-a' }, 'tenant');
   r.confirm();
   assert.equal(historical.owner, '林负责人');
   assert.equal(Object.hasOwn(historical, 'ownerId'), false, '历史文字归属不猜测员工编号');
