@@ -200,17 +200,22 @@ test('overview reuses a clean visit, refreshes explicitly and preserves failed s
   const calls = { inventory: 0, commerce: 0, apple: 0 };
   const feedback = [];
   let failCommerce = false;
+  let heldInventory;
   const A = {
     $: () => null,
-    state: { route: 'overview', drafts: new Map() },
+    state: { route: 'overview', actor: api.actor(), drafts: new Map() },
     modules: {
       inventory: {
-        refreshOverview: async () => { calls.inventory++; return true; },
+        refreshOverview: async () => { calls.inventory++; await heldInventory; return true; },
         overviewSummary: () => ({ generation: calls.inventory })
       },
       commerce: {
         refreshOverview: async () => { calls.commerce++; return !failCommerce; },
-        overviewSummary: () => ({ generation: calls.commerce })
+        overviewSummary: () => {
+          const data = { generation: calls.commerce };
+          return { commerce: data, profit: { today: data, week: data, month: data } };
+        },
+        overviewCustomerSummary: () => ({ generation: calls.commerce })
       },
       appleBalance: {
         refreshLocalBalance: async () => { calls.apple++; return true; },
@@ -237,8 +242,7 @@ test('overview reuses a clean visit, refreshes explicitly and preserves failed s
     await flush();
   };
   const key = {
-    date: new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai' }).format(new Date()),
-    finance: true, apple: true
+    actor: 'fixture-actor', role: 'admin', finance: true, apple: true
   };
   await revisit();
   assert.deepEqual(calls, { inventory: 1, commerce: 1, apple: 1 });
@@ -270,4 +274,15 @@ test('overview reuses a clean visit, refreshes explicitly and preserves failed s
   await revisit();
   assert.deepEqual(calls, { inventory: 6, commerce: 6, apple: 5 });
   assert.equal(api.queries.peek('overview', { ...key, apple: false }).stale, false);
+
+  const hold = Promise.withResolvers();
+  heldInventory = hold.promise;
+  const refreshing = A.modules.overview.refresh({ refresh: true });
+  await flush();
+  api.queries.invalidate('overview');
+  heldInventory = undefined;
+  hold.resolve();
+  assert.equal(await refreshing, true);
+  assert.deepEqual(calls, { inventory: 8, commerce: 8, apple: 5 });
+  assert.equal(api.queries.peek('overview', { ...key, apple: false }).data.commerce.data.generation, 8);
 });

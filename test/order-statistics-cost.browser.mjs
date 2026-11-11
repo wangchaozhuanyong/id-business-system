@@ -112,7 +112,7 @@ test('实收独立汇总，待核算的旧单不影响净收款和同卡分摊',
       assert.match(await page.locator('tr[data-row-id="c"] [data-column="reason"]').textContent(), /实收待确认/);
       assert.match(await page.locator('tr[data-row-id="legacy"] [data-column="reason"]').textContent(), /缺少有效汇率快照.*缺少原付款银行卡/);
       await page.goto(origin + '/#/overview');
-      const profitMetric = page.locator('.overview-metric').filter({ has: page.getByRole('heading', { name: '核算利润合计', exact: true }) });
+      const profitMetric = page.locator('[data-overview-metric="profit"]');
       await profitMetric.getByText(/1 笔开卡费未分摊/).waitFor();
       assert.deepEqual(errors, []);
       assert.deepEqual(traffic.external, []);
