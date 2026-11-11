@@ -47,7 +47,8 @@ import { checkInventoryHistory } from './inventory-history.mjs';
 import { prepareMailboxPlatformMarks } from './mailbox-registration-platform.mjs';
 import { planHistoricalIntake, requireHistoricalIntake, stageHistoricalIntake } from './apple-relay/historical-intake.mjs';
 import {
-  ClaudeHistoryIntakeError, claudeHistoryPreview, planClaudeHistoryIntake, stageClaudeHistoryIntake
+  ClaudeHistoryIntakeError, claudeHistoricalSales, claudeHistoryPreview, planClaudeHistoryIntake,
+  recordClaudeHistoricalSale, stageClaudeHistoryIntake
 } from './claude-history-intake.mjs';
 import { validMailExtractionSettings } from './inventory-extraction-settings.mjs';
 import { checkInventoryEntryFields } from './inventory-entry-fields.mjs';
@@ -965,6 +966,29 @@ export function createLocalBusinessStore(databasePath) {
     },
     previewClaudeHistory(input) {
       return claudeHistoryPreview(planClaudeHistoryIntake(input, readDocument('inventory'), readDocument('commerce')));
+    },
+    claudeHistoricalSales() {
+      return claudeHistoricalSales(readDocument('inventory'), readDocument('commerce'));
+    },
+    saveClaudeHistoricalSale(input, actor) {
+      return writeTransaction(() => {
+        const commerce = readDocument('commerce');
+        const time = new Date();
+        const { order, created } = recordClaudeHistoricalSale(input, readDocument('inventory'), commerce, actor,
+          time, orderCostSnapshot(readDocument('settings').data?.costSettings));
+        const version = commerce.version + Number(created);
+        if (created) {
+          const label = '补录 Claude 历史销售';
+          commerce.data.orders.unshift(order);
+          (commerce.data.logs ||= []).unshift({
+            id: 'commerce-log-' + randomUUID(), type: label, entityId: order.id, detail: order.orderNo,
+            at: auditDate.format(time).slice(0, 16), actor: actor.name, actorId: actor.id
+          });
+          put.run('commerce', version, encrypt(key, 'commerce', version, JSON.stringify(commerce.data)));
+          log.run(time.toISOString(), 'commerce', 'claude_historical_sale', auditSummary(label, actor, order.id), version);
+        }
+        return { orderId: order.id, orderNo: order.orderNo, created, version };
+      });
     },
     saveClaudeHistory(input, actor) {
       return writeTransaction(() => {
@@ -2270,6 +2294,8 @@ export async function handleLocalBusiness(
       const { mode, ...input } = body;
       if (mode === 'preview') return json(response, 200, store.previewClaudeHistory(input));
       if (mode === 'confirm') return json(response, 200, store.saveClaudeHistory(input, actor));
+      if (mode === 'sales-candidates') return json(response, 200, store.claudeHistoricalSales());
+      if (mode === 'record-sale') return json(response, 200, store.saveClaudeHistoricalSale(input, actor));
       throw new LocalDataError(400, '请选择预检或确认入库');
     }
     if (domain === 'tenant-owner-transfer') {

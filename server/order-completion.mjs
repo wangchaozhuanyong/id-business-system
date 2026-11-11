@@ -5,6 +5,7 @@ import {
   manualBusinessOrder, manualOrderDetailsMissing, orderOpeningConfirmed, subscriptionTime, validOrderEmail, validOrderXHandle
 } from '../frontend/order-opening.mjs';
 import { accountLifecycleSummary, systemAccount } from './account-lifecycle.mjs';
+import { isClaudeHistoricalSale } from './claude-history-intake.mjs';
 import { registrationEmail, registrationOccupancy, registrationProductConflict } from './inventory-registration.mjs';
 import { stockTypeForProduct, targetKey } from './personal-subscriptions.mjs';
 
@@ -234,8 +235,11 @@ export function fillManualOrderDetails(data, inventory, actor, command, at, lega
     }
     if (prior.accountId && (stock.length !== 1 || stock[0].id !== prior.accountId ||
         (target && targetKey(stock[0]) !== target))) invalid('请保留原订单关联的库存账号');
+    const currentCustomer = stock.length === 1 ? accountLifecycleSummary(stock[0], data, now).customerId : '';
+    const firstHistoricalBuyer = edits.includes('customerId') && !fillsAccount && !prior.customerId &&
+      !currentCustomer && stock.length === 1 && isClaudeHistoricalSale(prior, stock[0]);
     if (stock.length && (stock.length !== 1 || !order.customerId ||
-        accountLifecycleSummary(stock[0], data, now).customerId !== order.customerId))
+        (currentCustomer !== order.customerId && !firstHistoricalBuyer)))
       invalid('账号已关联库存，请先核对原客户归属');
     if (target && order.customerId && data.orders.some(row => row.id !== prior.id && !row.cancelled && !row.draft &&
         !row.subscriptionEnded && stockTypeForProduct(row.product) === product &&

@@ -5,6 +5,7 @@ import {
   subscriptionPeriodState, subscriptionStateLabels, subscriptionTime as instant
 } from '../frontend/order-opening.mjs';
 import { releasedAccountOrders } from './account-lifecycle.mjs';
+import { isClaudeHistoricalSale } from './claude-history-intake.mjs';
 import { personalProduct, subscriptionSeries, targetKey } from './personal-subscriptions.mjs';
 import { isManagedCode, mailboxPoolItems } from './tools/mailbox-pool.mjs';
 
@@ -141,7 +142,9 @@ function buildRecords(snapshots, now) {
       Boolean(customerIds && !customerIds.has(order.customerId));
     const match = resolveAccount(order, product, accounts);
     const released = match.account && releasedAccountOrders(match.account).has(order.id);
-    const ended = order.subscriptionEnded === true || Boolean(released);
+    const historicalSale = isClaudeHistoricalSale(order, match.account);
+    const ended = order.subscriptionEnded === true || Boolean(released) ||
+      (historicalSale && (match.account.health === 'dead' || match.account.claudeHistory.phase === 'dead'));
     const record = {
       id, product, sourceId: order.id, source: 'order', orderNo: text(order.orderNo) || text(order.id),
       target: identity(order, product), display: order.loginMethod === 'x' && order.xHandle ? order.xHandle :
@@ -149,6 +152,7 @@ function buildRecords(snapshots, now) {
       plan: text(order.plan), start: text(order.start), expiry: text(order.expiry),
       created: text(order.createdAt), customerId: text(order.customerId), account: match.account,
       delivered: order.businessType === '成品交付' && Boolean(match.account?.id && match.account.id === order.accountId),
+      historicalSale,
       missingAssociation, accountConflict: Boolean(match.conflict || ids.get(order.id) !== 1),
       confirmed, ended, cancelled: order.cancelled === true || ['cancelled', '已撤单'].includes(order.status),
       failed: order.entitlementStatus === 'failed' || ['failed', '失败'].includes(order.status),
@@ -158,6 +162,7 @@ function buildRecords(snapshots, now) {
       operatorName: order.source === '线上代充' ? '系统自动' : text(order.createdBy) || '历史未记录'
     };
     record.status = subscriptionPeriodState(record, now);
+    if (historicalSale && missingAssociation && !ended) record.status = 'pending';
     records.push(record);
   }
   for (const account of accounts) {
@@ -255,7 +260,7 @@ export function projectSubscriptions(snapshots, now = Date.now()) {
     const accountIds = new Set(records.map(record => record.account?.id).filter(Boolean));
     const historyAccounts = new Set(records.filter(record => record.source === 'history').map(record => record.sourceId));
     const delivered = records.some(record => record.delivered && record.confirmed && !record.cancelled &&
-      !record.missingAssociation && historyAccounts.has(record.account?.id));
+      (!record.missingAssociation || record.historicalSale) && historyAccounts.has(record.account?.id));
     const scope = !records[0].target ? 'unlinked' : historyAccounts.size && !delivered ? 'owned' : 'customer';
     let conflict = records.some(record => record.accountConflict) || customers.size > 1 || accountIds.size > 1 ||
       (scope === 'owned' && activeRecords.some(record => record.confirmed && record.customerId));

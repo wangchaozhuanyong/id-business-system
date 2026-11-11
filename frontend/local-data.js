@@ -229,6 +229,9 @@
     claudeHistoryIntake: (command) => command.mode === 'preview'
       ? request('claude-history-intake', command, 'POST')
       : write(['inventory'], () => request('claude-history-intake', command, 'POST')),
+    claudeHistoricalSaleAccounts: () => request('claude-history-intake', { mode: 'sales-candidates' }, 'POST'),
+    saveClaudeHistoricalSale: (command) => write(['commerce'],
+      () => request('claude-history-intake', { ...command, mode: 'record-sale' }, 'POST')),
     employeeStatistics: (params) => request('employee-statistics?' + new URLSearchParams(params)),
     systemMonitoring: (params) => request('system-monitoring?' + new URLSearchParams(params)),
     systemMonitoringAction: (command) => write(['system-monitoring'], () => request('system-monitoring', command, 'POST')),
