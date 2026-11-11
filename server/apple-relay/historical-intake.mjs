@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { registrationOccupancy, registrationProductConflict } from '../inventory-registration.mjs';
 import { parseV2DateTimeInput, toV2DateTimeInput } from '../../modules/time/dateTime.ts';
 import { systemAccount } from '../account-lifecycle.mjs';
 import { rechargePlanLabels } from '../order-policy.mjs';
@@ -40,6 +41,7 @@ export function planHistoricalIntake(input, inventory, commerce, now = Date.now(
   const group = (items, key) => Map.groupBy(items || [], row => emailKey(row[key]));
   const aliases = group(inventory.data?.mailboxes?.filter(row => row.type === 'relay'), 'email');
   const accounts = group(inventory.data?.accounts?.filter(row => row.type === 'gpt'), 'email');
+  const registeredEmails = registrationOccupancy(inventory.data);
   const customers = group(commerce.data?.customers, 'wechat');
   const sales = group(commerce.data?.orders?.filter(row => row.product === 'GPT' && row.businessType === '成品交付'), 'email');
   const seen = new Set();
@@ -68,6 +70,8 @@ export function planHistoricalIntake(input, inventory, commerce, now = Date.now(
       return error('邮箱已有冲突的注册记录');
 
     const [account, duplicateAccount] = accounts.get(email) || [];
+    const conflict = registrationProductConflict(registeredEmails.get(email), 'gpt', account?.id);
+    if (conflict) return error(conflict);
     if (duplicateAccount || (account && (!systemAccount(account) ||
         (account.emailType && !['relay', '苹果隐藏邮箱'].includes(account.emailType)))))
       return error('GPT 账号重复或来源有冲突');

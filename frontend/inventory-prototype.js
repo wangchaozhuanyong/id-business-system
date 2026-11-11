@@ -31,6 +31,7 @@
   const registrationPlatforms = [
     ['gpt', 'ChatGPT'], ['claude', 'Claude'], ['gemini', 'Gemini'], ['grok', 'Grok'], ['apple', 'Apple ID']
   ];
+  const relayRegistrationPlatforms = registrationPlatforms.filter(([key]) => ['gpt', 'claude', 'grok'].includes(key));
   const actualUsePurposes = ['注册 GPT', ...registrationPlatforms.slice(1).map(([, label]) => `注册 ${label}`), '客户交付', '其他'];
   const mailboxType = type => ['google', 'relay', 'microsoft'].includes(type);
   function registrationProduct(value) {
@@ -54,8 +55,54 @@
     return registrationPlatforms.filter(([id]) => found.has(id));
   }
   function mailboxPlatformLabel(asset) {
-    return mailboxPlatforms(asset).map(([, label]) => label).join('、') ||
+    const platforms = mailboxPlatforms(asset);
+    if (mailboxRegistrationConflict(asset, platforms)) return '待核对';
+    return platforms.map(([, label]) => label).join('、') ||
       (asset.inventoryState === 'used' ? '平台未登记' : '未登记');
+  }
+  const registrationAddress = value => String(value || '').trim().toLowerCase();
+  const stockRegistration = row => stockType(row?.type) && row.source !== '客户提供' &&
+    !['客户自有', 'customer'].includes(row.accountSource);
+  function registeredAccounts(asset) {
+    const ids = new Set((asset.usageLinks || []).filter(link => link.kind === 'registration').map(link => link.accountId));
+    for (const record of registrationRecords)
+      if (record.assetId === asset.id && record.state === '成功') ids.add(record.accountId);
+    return accounts.filter(account => ids.has(account.id) && stockRegistration(account) &&
+      registrationAddress(account.email) === registrationAddress(asset.email));
+  }
+  function mailboxRegistrationConflict(asset, platforms = mailboxPlatforms(asset)) {
+    if (usageReview.get(asset.id)?.registrationConflict) return true;
+    const known = new Set(platforms.map(([key]) => key).filter(key => key !== 'apple'));
+    if (known.size > 1 || (asset.type === 'relay' && known.has('gemini'))) return true;
+    const address = registrationAddress(asset.email);
+    const related = address ? accounts.filter(account => stockRegistration(account) &&
+      registrationAddress(account.email) === address) : [];
+    return related.length > 1 || related.some(account => known.size && !known.has(account.type));
+  }
+  function mailboxRegistrationAccount(asset) {
+    return mailboxRegistrationConflict(asset) ? null : registeredAccounts(asset)[0] || null;
+  }
+  function mailboxRegistrationAccountCell(asset) {
+    if (mailboxRegistrationConflict(asset)) return '待核对';
+    const account = registeredAccounts(asset)[0];
+    if (!account) return asset.inventoryState === 'used' ? '账号待关联' : '—';
+    return api.canVisit('accounts/' + account.type)
+      ? textAction(account.id, 'inventory-detail', `data-id="${esc(account.id)}" data-table-value-preview`, 'table-value-ellipsis')
+      : esc(account.id);
+  }
+  function registrationInputProblem(type, email, source) {
+    const address = registrationAddress(email);
+    if (!address || !stockRegistration({ type, source })) return '';
+    const existing = accounts.find(account => stockRegistration(account) && registrationAddress(account.email) === address);
+    if (existing) {
+      const label = registrationPlatforms.find(([key]) => key === existing.type)?.[1];
+      return `该邮箱已用于注册 ${label}，关联账号 ${existing.id}`;
+    }
+    const sources = mailboxes.filter(asset => registrationAddress(asset.email) === address);
+    if (type === 'gemini' && sources.length && sources.every(asset => asset.type !== 'google'))
+      return 'Gemini 请使用谷歌邮箱';
+    const other = sources.flatMap(mailboxPlatforms).find(([key]) => key !== 'apple' && key !== type);
+    if (other) return `该邮箱已用于注册 ${other[1]}，账号待关联`;
   }
   const views = new Map();
   const undo = new Map();
@@ -731,13 +778,14 @@
     return allAssets().filter(row => {
       if (!['google', 'relay'].includes(row.type) || row.relayDeleted || row.health !== 'normal' ||
         row.status !== '正常' || usageReview.has(row.id) || row.usageLinks.length) return false;
+      if (type === 'gemini' && row.type !== 'google') return false;
       if (row.type === 'google' && row.inventoryState === 'available') return true;
       if (row.inventoryState !== 'claimed') return false;
       const claim = pendingClaim(row);
       if (!claim || claim.batch.kind !== 'mail' || claim.batch.actorId !== currentActor().id ||
           claim.item.taskId || claim.item.orderId || claim.item.registrationId) return false;
-      const purpose = /^注册\s*(GPT|Claude|Gemini|Grok)$/i.exec(claim.batch.purpose || '')?.[1];
-      return !purpose || purpose.toLowerCase() === type;
+      const purpose = registrationProduct(/^注册\s*(.+)$/.exec(claim.batch.purpose || '')?.[1]);
+      return !stockType(purpose) || purpose === type;
     });
   }
   function personalAccountError(row) {
@@ -758,9 +806,10 @@
       });
     return tableSettings.get(type);
   }
-  function mailExtractionPurposes() {
+  function mailExtractionPurposes(type) {
     const values = tableSettings.get(mailExtractionSettingsKey)?.purposes;
-    return Array.isArray(values) ? values : defaultMailPurposes;
+    const choices = Array.isArray(values) ? values : defaultMailPurposes;
+    return type === 'relay' ? choices.filter(purpose => !/^注册\s*Gemini$/i.test(purpose)) : choices;
   }
   function openMailPurposeSettings(reset = false) {
     if (api.state.route !== 'workspace/mail-extract') return;
@@ -808,6 +857,11 @@
   }
   function pendingClaim(asset) {
     return asset.claimId ? claimById(asset.claimId) : null;
+  }
+  function mailboxClaim(asset) {
+    const claim = pendingClaim(asset);
+    if (!claim || claim.batch.kind !== 'mail' || claim.item.assetId !== asset.id) return null;
+    return { id: claim.batch.id, label: extractionBatchNumbers().get(claim.batch.id) || claim.batch.id };
   }
   function itemLabel(item) {
     return (
@@ -1309,7 +1363,7 @@
   }
   function extractionPage(account = accountSubmissionRoute()) {
     const kind = account ? 'account' : 'mail';
-    const purposes = account ? ['客户交付', '比特充值', '业务备用', '其他'] : mailExtractionPurposes();
+    const defaultPurposes = account ? ['客户交付', '比特充值', '业务备用', '其他'] : mailExtractionPurposes();
     const key = `inventory-extract:${kind}`;
     const list = account
       ? stockTypes
@@ -1317,8 +1371,9 @@
     const d = draft(key, {
       'inventory-extract-type': list[0]?.[0],
       'inventory-quantity': '3',
-      'inventory-purpose': purposes[0] || ''
+      'inventory-purpose': defaultPurposes[0] || ''
     });
+    const purposes = account ? defaultPurposes : mailExtractionPurposes(d['inventory-extract-type']);
     const selectedPurpose = purposes.includes(d['inventory-purpose']) ? d['inventory-purpose'] : '';
     const purposeChoices = selectedPurpose ? purposes : [['', '原用途已移除，请重新选择'], ...purposes];
     const purposeControl = account
@@ -1724,14 +1779,20 @@
     }
     const key = `inventory-use:${eligible.map(({ item }) => item.id).sort().join(',')}`;
     const saved = draft(key);
+    const purposes = usePurposesFor(eligible);
     showDrawer(
       '登记实际使用',
       '确认后资料永久退出通用可提取库存。同一邮箱不可再提取注册其他产品。',
-      `<form id="inventory-use-form" data-inventory-draft="${esc(key)}" novalidate><input type="hidden" name="inventory-use-ids" value="${esc(eligible.map(({ item }) => item.id).join(','))}" /><div class="form-grid">${field('实际用途', 'inventory-use-purpose', select('inventory-use-purpose', actualUsePurposes, saved['inventory-use-purpose']), true)}${wide('使用结果', 'inventory-use-result', area('inventory-use-result', saved['inventory-use-result'] || '', '记录平台、关联账号或订单说明'), true)}</div></form>`,
+      `<form id="inventory-use-form" data-inventory-draft="${esc(key)}" novalidate><input type="hidden" name="inventory-use-ids" value="${esc(eligible.map(({ item }) => item.id).join(','))}" /><div class="form-grid">${field('实际用途', 'inventory-use-purpose', select('inventory-use-purpose', [['', '请选择实际用途'], ...purposes], saved['inventory-use-purpose']), true)}${wide('使用结果', 'inventory-use-result', area('inventory-use-result', saved['inventory-use-result'] || '', '记录平台、关联账号或订单说明'), true)}</div></form>`,
       button('取消', 'inventory-close') +
         '<button class="button primary" form="inventory-use-form" type="submit">核对使用结果</button>',
       key
     );
+  }
+  function usePurposesFor(claims) {
+    return claims.some(({ item }) => assetById(item.assetId)?.type === 'relay')
+      ? actualUsePurposes.filter(purpose => !['注册 Gemini', '注册 Apple ID'].includes(purpose))
+      : actualUsePurposes;
   }
 
   function assetEditor(id = '', forcedType = '', sourceId = '') {
@@ -2125,20 +2186,25 @@
   function usageAssetById(id) {
     return assetById(id) || (admin() && mailboxes.find((row) => row.type === 'relay' && row.id === id));
   }
+  function mailboxPlatformChoices(asset) {
+    const known = new Set(mailboxPlatforms(asset).map(([key]) => key));
+    const hasAi = [...known].some(key => key !== 'apple');
+    return (asset.type === 'relay' ? relayRegistrationPlatforms : registrationPlatforms)
+      .filter(([key]) => !known.has(key) && (key === 'apple' || !hasAi));
+  }
   function mailboxPlatformButton(asset) {
-    return mailboxType(asset?.type) && asset.inventoryState === 'used' && (!localData || admin())
+    return mailboxType(asset?.type) && asset.inventoryState === 'used' && (!localData || admin()) && mailboxPlatformChoices(asset).length
       ? button('标记注册平台', 'inventory-mailbox-platform', '', 'edit', `data-id="${esc(asset.id)}"`)
       : '';
   }
   function openMailboxPlatform(id) {
     const asset = usageAssetById(id);
     if (!mailboxPlatformButton(asset)) return;
-    const known = new Set(mailboxPlatforms(asset).map(([key]) => key));
-    const choices = registrationPlatforms.filter(([key]) => !known.has(key));
+    const choices = mailboxPlatformChoices(asset);
     if (!choices.length) { api.notify('该邮箱的可选平台均已登记'); return; }
     const key = `inventory-mailbox-platform:${id}`;
     const saved = draft(key);
-    showDrawer('标记注册平台', '补录已核实的平台注册用途；保留原使用时间、领用批次和已有标记。',
+    showDrawer('标记注册平台', '补录已核实的平台注册用途，保留原使用时间和领用批次。',
       `<form id="inventory-mailbox-platform-form" data-inventory-draft="${esc(key)}" novalidate><input type="hidden" name="inventory-platform-asset" value="${esc(id)}" /><input type="hidden" name="inventory-platform-version" value="${esc(saved['inventory-platform-version'] ?? asset.version)}" /><div class="form-grid">${wide('邮箱账号', 'inventory-platform-email', input('inventory-platform-email', asset.email, 'readonly'))}${field('已登记平台', 'inventory-platform-known', input('inventory-platform-known', mailboxPlatformLabel(asset), 'readonly'))}${field('注册平台', 'inventory-platform-product', select('inventory-platform-product', [['', '请选择已注册平台'], ...choices], saved['inventory-platform-product'] || ''), true)}</div></form>`,
       button('取消', 'inventory-close') +
         (saved['inventory-platform-version'] && Number(saved['inventory-platform-version']) !== asset.version
@@ -2155,7 +2221,7 @@
     const eligible = () => {
       const asset = usageAssetById(id);
       return asset && mailboxPlatformButton(asset) && asset.version === version &&
-        !mailboxPlatforms(asset).some(([key]) => key === product) ? asset : null;
+        mailboxPlatformChoices(asset).some(([key]) => key === product) ? asset : null;
     };
     if (!eligible()) { api.notify('邮箱或平台标记已变化，请重新核对；输入已保留'); return; }
     confirmInventoryChange('确认登记注册结果', `确认此邮箱已注册 ${choice[1]}，保存后保留原有使用记录。`, () => {
@@ -2168,7 +2234,8 @@
   }
   function personalRegistrationButtons(asset) {
     if ((!admin() && localData) || !asset || !['google', 'relay'].includes(asset.type)) return '';
-    return ['gemini', 'grok'].filter(type => personalSourceMailboxes(type).some(row => row.id === asset.id))
+    return (asset.type === 'relay' ? ['grok'] : ['gemini', 'grok'])
+      .filter(type => personalSourceMailboxes(type).some(row => row.id === asset.id))
       .map(type => button('登记' + typeLabel(type), 'inventory-personal-registration', '', 'plus',
         'data-id="' + esc(asset.id) + '" data-type="' + type + '"')).join('');
   }
@@ -2181,7 +2248,7 @@
       const reference = link.accountId || link.orderId || link.taskId;
       const details = [link.label || '使用登记', reference, link.time].filter(Boolean).join(' · ');
       const account = link.accountId && assetById(link.accountId);
-      const linked = account && personalAccount(account.type) && api.canVisit('accounts/' + account.type)
+      const linked = account && stockType(account.type) && api.canVisit('accounts/' + account.type)
         ? button('查看关联账号', 'inventory-detail', '', '', 'data-id="' + esc(account.id) + '"') : '';
       return `<div class="toolbar"><p>${esc(details)}</p>${linked}${action}</div>`;
     });
@@ -2362,7 +2429,10 @@
     const claim = pendingClaim(asset);
     const microsoft = asset.type === 'microsoft';
     const personal = personalAccount(asset.type);
-    const source = personal && asset.sourceMailboxId && assetById(asset.sourceMailboxId);
+    const source = stockType(asset.type) && ((asset.sourceMailboxId && usageAssetById(asset.sourceMailboxId)) || mailboxes.find(row =>
+      registrationAddress(row.email) === registrationAddress(asset.email) &&
+      (row.type !== 'relay' || !localData || canExtractLocalRelay()) && mailboxRegistrationAccount(row)?.id === asset.id));
+    const sourceClaim = source && mailboxClaim(source);
     const security = asset.microsoftSecurity;
     const recoveryMailbox = microsoft && microsoftRecoveryMailbox(asset);
     const rows = [
@@ -2374,10 +2444,13 @@
         ['登录方式', choiceLabel(grokLoginOptions, asset.loginMethod)],
         ['订阅邮箱', asset.email || '未登记'],
         ['平台账号编号', asset.platformAccountId || '未登记'],
-        ['来源邮箱', source?.email || (asset.sourceMailboxId ? '待核对' : '独立录入')],
         ...(asset.type === 'grok' ? [['X @账号', asset.xHandle || '未登记'],
           ['X 绑定状态', choiceLabel(xLinkOptions, asset.xLinkState)]] : [])
       ] : isAccount(asset) ? [['邮箱类型', accountEmailType(asset)]] : []),
+      ...(stockType(asset.type) ? [
+        ['来源邮箱', source?.email || (asset.sourceMailboxId ? '待核对' : '未关联')],
+        ...(sourceClaim ? [['邮箱领用批次', sourceClaim.label]] : [])
+      ] : []),
       [isAccount(asset) ? '注册国家' : '国家地区', asset.country || '未填写'],
       ...(usesRegistrationCity(asset.type) ? [['注册城市', asset.city || '未填写']] : []),
       ['来源渠道', asset.source || '未填写'],
@@ -2469,7 +2542,7 @@
     showDrawer(
       '资料详情',
       '资料、提取、实际使用、归还和任务来源保持关联。',
-      `<div class="property-list">${properties}</div>${source ? button('查看来源邮箱', 'inventory-detail', '', 'mail', `data-id="${esc(source.id)}"`) : ''}${recoveryMailbox ? button('查看辅助邮箱资料', 'inventory-detail', '', 'mail', `data-id="${esc(recoveryMailbox.id)}"`) : ''}${claim ? button('查看原提取批次', 'inventory-batch', '', 'orders', `data-id="${claim.batch.id}"`) : ''}${accountLifecycleDetails(asset)}${usageDetails(asset)}<section class="form-section"><h3>操作记录</h3>${history}</section>`,
+      `<div class="property-list">${properties}</div>${source ? button('查看来源邮箱', 'inventory-detail', '', 'mail', `data-id="${esc(source.id)}"`) : ''}${sourceClaim ? button('查看邮箱领用批次', 'inventory-batch', '', 'orders', `data-id="${esc(sourceClaim.id)}"`) : ''}${recoveryMailbox ? button('查看辅助邮箱资料', 'inventory-detail', '', 'mail', `data-id="${esc(recoveryMailbox.id)}"`) : ''}${claim ? button('查看原提取批次', 'inventory-batch', '', 'orders', `data-id="${claim.batch.id}"`) : ''}${accountLifecycleDetails(asset)}${usageDetails(asset)}<section class="form-section"><h3>操作记录</h3>${history}</section>`,
       button('关闭', 'inventory-close') + mailboxPlatformButton(asset) + personalRegistrationButtons(asset)
     );
   }
@@ -3189,6 +3262,8 @@
     }
     const key = `inventory-registration:${asset.id}:${pendingRecord?.id || 'new'}`;
     const saved = draft(key);
+    const products = relayRegistrationPlatforms;
+    const current = registrationProduct(pendingRecord?.product);
     showDrawer(
       '登记注册结果',
       '这里只登记外部注册结果，不启动注册器。成功后邮箱退出通用库存；账号资料请在账号管理独立录入。',
@@ -3197,11 +3272,8 @@
         'inventory-registration-product',
         select(
           'inventory-registration-product',
-          [
-            ['gpt', 'GPT'],
-            ['claude', 'Claude']
-          ],
-          saved['inventory-registration-product'] ?? pendingRecord?.product.toLowerCase() ?? 'gpt'
+          [['', '请选择实际注册平台'], ...choicesWithCurrent(products, current)],
+          saved['inventory-registration-product'] ?? (current || (asset.type === 'relay' ? '' : 'gpt'))
         ),
         true
       )}${field('注册结果', 'inventory-registration-result', select('inventory-registration-result', ['成功', '失败且未使用', '待核对'], saved['inventory-registration-result'] ?? pendingRecord?.state ?? '成功'), true)}</div></form>`,
@@ -3282,8 +3354,13 @@
       api.setError('inventory-email', '邮箱格式不正确');
       first ||= 'inventory-email';
     }
+    const registrationProblem = !id && registrationInputProblem(type, email, data['inventory-source']);
+    if (registrationProblem) {
+      api.setError('inventory-email', registrationProblem);
+      first ||= 'inventory-email';
+    }
     if (
-      allAssets().some(
+      !registrationProblem && allAssets().some(
         (asset) =>
           asset.id !== id &&
           asset.type === type &&
@@ -3710,7 +3787,7 @@
           ? `库存不足，当前可提取 ${candidates.length} 条`
           : '';
     api.setError('inventory-quantity', error);
-    if (kind === 'mail' && !mailExtractionPurposes().includes(d['inventory-purpose'])) {
+    if (kind === 'mail' && !mailExtractionPurposes(type).includes(d['inventory-purpose'])) {
       api.setError('inventory-purpose', '请选择当前有效的提取用途，原选项可能已被移除');
       return;
     }
@@ -3729,7 +3806,7 @@
       '确认提取',
       `${typeLabel(type)} ${quantity} 条，用途为“${purpose}”。领取后进入待使用，不会直接算作实际使用。`,
       () => {
-        if (kind === 'mail' && !mailExtractionPurposes().includes(d['inventory-purpose'])) {
+        if (kind === 'mail' && !mailExtractionPurposes(type).includes(d['inventory-purpose'])) {
           api.notify('提取用途已变化，请重新选择');
           return;
         }
@@ -3865,7 +3942,7 @@
   function submitUse(form) {
     const d = api.readForm(form),
       claims = d['inventory-use-ids'].split(',').map(claimById).filter(Boolean);
-    if (!actualUsePurposes.includes(d['inventory-use-purpose'])) {
+    if (!claims.length || !usePurposesFor(claims).includes(d['inventory-use-purpose'])) {
       api.setError('inventory-use-purpose', '请选择有效的实际用途');
       return;
     }
@@ -4055,6 +4132,16 @@
             }
           ];
         });
+    const registeredAddresses = new Set();
+    for (const row of results) {
+      const source = row.fields?.source || d['inventory-import-source'];
+      const address = registrationAddress(row.email);
+      if (!address || !stockRegistration({ type: row.type, source })) continue;
+      const issue = registrationInputProblem(row.type, address, source);
+      if (issue) row.error = issue;
+      else if (!row.error && registeredAddresses.has(address)) row.error = '本批次已有同邮箱的 AI 账号';
+      registeredAddresses.add(address);
+    }
     if (protectPreview) {
       if (!hasPreviousPreview) previewSource = uid('PREVIEW');
       protectedImportPreviews.set(form, { id: previewSource, snapshot });
@@ -4423,6 +4510,10 @@
     } else if (action === 'inventory-delete') {
       const asset = assetById(id);
       if (!asset) return true;
+      if (stockRegistration(asset) && registrationAddress(asset.email)) {
+        api.notify('已登记的注册邮箱和原账号必须保留');
+        return true;
+      }
       if (asset.type === 'relay') {
         api.notify('隐藏邮箱需在专用管理中核对主邮箱、邮件与历史引用后移除');
         api.modules.appleRelay?.openAliasDetail(id);
@@ -4711,9 +4802,16 @@
       const unresolved = registrationRecords.find(
         (entry) => entry.id === data['inventory-registration-id']
       );
+      const product = data['inventory-registration-product'];
+      const products = relayRegistrationPlatforms;
+      if (!products.some(([key]) => key === product) && !(unresolved && registrationProduct(unresolved.product) === product &&
+        data['inventory-registration-result'] === '失败且未使用')) {
+        api.setError('inventory-registration-product', '请选择有效的注册平台');
+        return true;
+      }
       if (
         unresolved &&
-        unresolved.product.toLowerCase() !== data['inventory-registration-product']
+        registrationProduct(unresolved.product) !== product
       ) {
         api.setError(
           'inventory-registration-product',
@@ -4864,7 +4962,7 @@
       view().country = node.value;
       api.state.page = 1;
       api.render();
-    } else if (node.id === 'inventory-purpose') {
+    } else if (node.id === 'inventory-purpose' || node.id === 'inventory-extract-type') {
       saveDrafts();
       api.render();
     } else if (node.id === 'inventory-status') {
@@ -5013,6 +5111,10 @@
       });
     },
     mailboxPlatformLabel,
+    mailboxRegistrationAccount,
+    mailboxRegistrationAccountCell,
+    healthChangeTime,
+    mailboxClaim,
     mailboxPlatformButton,
     registrationRecordsFor(assetId) {
       return registrationRecords

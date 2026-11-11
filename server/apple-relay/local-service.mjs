@@ -5,6 +5,7 @@ import { createRelayMailReassignment } from './mail-reassignment.mjs';
 import { createAppleRelayPrimaryManagement } from './primary-management.mjs';
 import { historicalIntakePreview, requireHistoricalIntake } from './historical-intake.mjs';
 import { RelayError, createVendureMailboxProvider } from './vendure-provider.mjs';
+import { registrationEmail, registrationOccupancy } from '../inventory-registration.mjs';
 
 const prefix = '/api/local/apple-relay/';
 const mailLimit = 500;
@@ -202,14 +203,21 @@ function uniqueRemoteRows(rows) {
 
 function blockedRelayExtractions(inventory) {
   const blocked = new Set();
+  const occupied = registrationOccupancy(inventory);
+  const heldEmails = new Set();
   for (const batch of inventory?.batches ?? []) {
     if (!Array.isArray(batch?.items)) continue;
     for (const item of batch.items) {
       if (['pending', 'used'].includes(item?.status)) blocked.add(item.assetId);
+      if (batch.kind === 'mail' && item?.status === 'pending') heldEmails.add(registrationEmail(item.email));
     }
   }
   for (const record of inventory?.registrationRecords ?? []) {
     if (['待核对', '成功'].includes(record?.state)) blocked.add(record.assetId);
+  }
+  for (const alias of inventory?.mailboxes ?? []) {
+    const email = registrationEmail(alias?.email);
+    if (alias?.type === 'relay' && email && (occupied.has(email) || heldEmails.has(email))) blocked.add(alias.id);
   }
   return blocked;
 }

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { parseV2DateTimeInput, toV2DateTimeInput } from '../modules/time/dateTime.ts';
 import { pendingInventoryClaim } from './inventory-usage.mjs';
+import { registrationPurposeProduct } from './inventory-registration.mjs';
 
 export const personalPlans = {
   Gemini: ['Google AI Plus', 'Google AI Pro', 'Google AI Ultra 5x', 'Google AI Ultra 20x'],
@@ -164,6 +165,7 @@ export function preparePersonalInventory(previous, next, action, actor, now = ne
     }
     const mailbox = oldMail.get(row.sourceMailboxId);
     const saved = nextMail.get(row.sourceMailboxId);
+    if (row.type === 'gemini' && mailbox && mailbox.type !== 'google') return 'Gemini 请使用谷歌邮箱';
     if (!personalStockOwner(row) || !actor?.id || !mailbox || !saved ||
         !['google', 'relay'].includes(mailbox.type) || mailbox.relayDeleted || saved.relayDeleted ||
         mailbox.email?.toLowerCase() !== row.email?.toLowerCase() || saved.email !== mailbox.email ||
@@ -182,7 +184,7 @@ export function preparePersonalInventory(previous, next, action, actor, now = ne
       return '请使用本人尚未完成的原邮箱领用批次';
     if (inventoryState(mailbox) !== 'claimed' && (mailbox.type === 'relay' || row.sourceClaimId))
       return '苹果隐藏邮箱请先从已核验的库存领用';
-    const purpose = /^注册\s*(GPT|Claude|Gemini|Grok)$/i.exec(claim?.batch.purpose || '')?.[1]?.toLowerCase();
+    const purpose = registrationPurposeProduct(claim?.batch.purpose);
     if (purpose && purpose !== row.type) return '原领用用途与本次注册产品不一致';
     sources.add(mailbox.id);
     records.push({ id: randomUUID(), assetId: mailbox.id, email: mailbox.email,
@@ -191,7 +193,9 @@ export function preparePersonalInventory(previous, next, action, actor, now = ne
   }
   const knownRecords = new Set(list(previous?.registrationRecords).map(row => row.id));
   if (list(next.registrationRecords).some(row => !knownRecords.has(row.id) &&
-      ['gemini', 'grok'].includes(String(row.product || '').toLowerCase())))
+      ['gemini', 'grok'].includes(String(row.product || '').toLowerCase()) &&
+      !(action === 'inventory_registration_result' && !row.accountId &&
+        ['成功', '待核对', '失败且未使用'].includes(row.state))))
     return '请通过产品账号登记来源邮箱的使用记录';
   if (records.length) next.registrationRecords.push(...records);
 }
