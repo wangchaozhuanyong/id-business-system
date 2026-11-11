@@ -1,14 +1,17 @@
 import assert from 'node:assert/strict';
 import { createHmac, randomBytes } from 'node:crypto';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
-import { join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { startPreview } from '../server/preview.mjs';
 import { startVendureTaskService } from '../server/vendure-task-service.mjs';
 import { createVendureCodexdaichongWorker } from '../modules/recharge/vendure/codexdaichong-worker.mjs';
+import {
+  createStorefrontAdmissionClient, listenStorefrontAdmission, storefrontAdmissionSocketName
+} from '../modules/recharge/vendure/admission.mjs';
 import {
   createLoopbackVendureRechargeBridge,
   rechargeWorkerPrefix,
@@ -29,7 +32,7 @@ const authorization = (extra = {}) =>
   });
 const taskIdentity = ({ id, taskToken }) => ({ id, taskToken });
 
-async function fixture(t, { durable = false, throughHost = false } = {}) {
+async function fixture(t, { durable = false, throughHost = false, lookupAdmission, acceptStorefrontSubmissions } = {}) {
   const vendureKey = randomBytes(32).toString('hex');
   const workerSecret = randomBytes(32).toString('hex');
   let at = Date.now();
@@ -58,6 +61,8 @@ async function fixture(t, { durable = false, throughHost = false } = {}) {
       vendureKey,
       workerSecret,
       store: injectedStore,
+      lookupAdmission,
+      acceptStorefrontSubmissions,
       codes: [
         { code: 'fixture-a', plan: 'plus' },
         { code: 'fixture-b', plan: 'pro_5x', executionCode: 'fixture-upstream-b' },
@@ -526,6 +531,77 @@ test('durable receipts, reservations and replay protection survive reopening wit
   assert.deepEqual(await f.worker('result', result), recorded);
   assert.deepEqual((await f.worker('claim')).body, { task: null });
   assert.equal((await f.vendure('query', { code: 'fixture-a' })).body.status, 'used');
+});
+
+test('private MOYAO admission keeps holds and outages distinct, and the same native code has one durable receipt', async (t) => {
+  let root = fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, '');
+  if (['.worktrees', '.codex-worktrees'].includes(basename(dirname(root)))) root = dirname(dirname(root));
+  const runtime = join(await realpath(root), '.runtime');
+  await mkdir(runtime, { recursive: true, mode: 0o700 });
+  const directory = await mkdtemp(join(runtime, 'a-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const [code, hold, outage, other] = ['K', 'M', 'N', 'P'].map(letter => 'KC-' + letter.repeat(15));
+  let lookups = 0;
+  const admission = await listenStorefrontAdmission(directory, async (value, ip) => {
+    assert.equal(ip, '203.0.113.10');
+    lookups++;
+    if (value === outage) throw new Error('private provider detail');
+    if (value === code) return { plan: 'pro_20x', status: 'available' };
+    if (value === hold) return { plan: 'plus', status: 'reserved', reason: 'manual_review_required' };
+    return null;
+  });
+  t.after(() => new Promise(resolve => admission.close(resolve)));
+  const socket = join(directory, storefrontAdmissionSocketName);
+  assert.equal((await stat(socket)).mode & 0o777, 0o600);
+  let open = false;
+  const f = await fixture(t, {
+    durable: true, lookupAdmission: createStorefrontAdmissionClient(socket), acceptStorefrontSubmissions: () => open
+  });
+  const headers = { 'x-vendure-recharge-channel': 'moyao-ai' };
+  const shop = (action, body) => f.vendure(action, body, headers);
+  const session = authorization();
+  assert.equal((await shop('config')).body.maintenance, true);
+  assert.deepEqual((await shop('submit', { code, session })).body, { rejected: true });
+  assert.equal((await f.vendure('verify', { code: 'fixture-a' })).body.status, 'available');
+  assert.deepEqual((await f.vendure('submit', { code: 'fixture-a', session })).body, { rejected: true });
+  assert.equal((await f.vendure('verify', { code })).status, 400);
+  assert.deepEqual(await f.vendure('verify', { code }, { 'x-vendure-recharge-channel': 'other-store' }), {
+    status: 400, body: { reason: 'storefront_code_not_admitted' }
+  });
+  assert.equal(lookups, 0);
+  assert.deepEqual(await shop('verify', { code: other }), {
+    status: 400, body: { reason: 'storefront_code_not_admitted' }
+  });
+  assert.deepEqual((await shop('query', { code: hold })).body, {
+    plan: 'plus', status: 'reserved', reason: 'manual_review_required', task: null
+  });
+  open = true;
+  assert.equal((await shop('config')).body.maintenance, false);
+  assert.deepEqual((await shop('submit', { code: hold, session })).body, { rejected: true });
+  assert.equal((await shop('verify', { code: outage })).status, 503);
+  assert.deepEqual((await shop('submit', { code: outage, session })).body, { rejected: true });
+  assert.equal(f.inspect().state.tasks.length, 0);
+  assert.deepEqual((await shop('verify', { code: code.toLowerCase() })).body, {
+    plan: 'pro_20x', status: 'available'
+  });
+  const [first, repeated] = await Promise.all([
+    shop('submit', { code, session }), shop('submit', { code: code.toLowerCase(), session })
+  ]);
+  assert.equal(first.status, 200);
+  assert.deepEqual(first, repeated);
+  const claim = (await f.worker('claim')).body.task;
+  assert.equal(claim.executionCode, code);
+  assert.equal(claim.id, first.body.id);
+  assert.equal((await f.worker('claim')).body.task, null);
+  await f.restart();
+  const before = lookups;
+  const recovered = (await shop('query', { code })).body;
+  assert.equal(recovered.task.id, first.body.id);
+  assert.equal(recovered.task.status, 'awaiting_review');
+  assert.equal(recovered.reason, 'manual_review_required');
+  assert.equal((await shop('submit', { code, session })).body.id, first.body.id);
+  assert.equal(lookups, before);
+  assert.equal((await f.worker('claim')).body.task, null);
 });
 
 test('reopening puts running and unclaimed tasks into review without restoring short-lived authorization', async (t) => {

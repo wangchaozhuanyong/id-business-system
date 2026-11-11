@@ -1,6 +1,7 @@
 import { createServer } from 'node:http';
+import { lstatSync } from 'node:fs';
 import { lstat, mkdir, realpath, rmdir } from 'node:fs/promises';
-import { isAbsolute, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { readToolConfig } from './tools/read-tool-config.mjs';
 import {
@@ -9,6 +10,7 @@ import {
 import {
   isolatedRechargeFilename, openIsolatedRechargeStore
 } from '../modules/recharge/vendure/isolated-task-store.mjs';
+import { createStorefrontAdmissionClient } from '../modules/recharge/vendure/admission.mjs';
 
 const runtimeRoot = fileURLToPath(new URL('../.runtime/', import.meta.url));
 
@@ -28,7 +30,7 @@ function closeServer(server) {
 
 export async function startVendureTaskService({
   directory, vendurePort, workerPort, storageKey, vendureKey, workerSecret, codes,
-  acceptSubmissions = false, legacyReceipts
+  acceptSubmissions = false, legacyReceipts, admissionSocket = process.env.ID_VENDURE_ADMISSION_SOCKET
 }) {
   const validPort = (value) => Number.isInteger(value) && value >= 0 && value <= 65535;
   if (!validPort(vendurePort) || !validPort(workerPort) || (vendurePort !== 0 && vendurePort === workerPort) ||
@@ -36,7 +38,13 @@ export async function startVendureTaskService({
       !directory.startsWith(runtimeRoot) || !/^[a-f0-9]{64}$/.test(storageKey) ||
       !Array.isArray(codes) || typeof acceptSubmissions !== 'boolean')
     throw new Error('商城任务服务需要独立端口、私有目录、存储密钥和兑换码配置');
-  if (acceptSubmissions && codes.length === 0)
+  const lookupAdmission = admissionSocket ? createStorefrontAdmissionClient(admissionSocket) : undefined;
+  const acceptanceMarker = lookupAdmission && join(dirname(admissionSocket), 'accept-submissions');
+  const acceptStorefrontSubmissions = () => {
+    const marker = lstatSync(acceptanceMarker, { throwIfNoEntry: false });
+    return marker?.isFile() && marker.uid === process.getuid() && (marker.mode & 0o777) === 0o600;
+  };
+  if (acceptSubmissions && codes.length === 0 && !lookupAdmission)
     throw new Error('开始受理商城充值前必须配置新版兑换码');
   const state = await lstat(directory);
   if (!state.isDirectory() || (state.mode & 0o777) !== 0o700 || state.uid !== process.getuid() ||
@@ -82,7 +90,8 @@ export async function startVendureTaskService({
   }
   try {
     bridge = createLoopbackVendureRechargeBridge({
-      codes, vendureKey, workerSecret, store, acceptSubmissions, legacyReceipts
+      codes, vendureKey, workerSecret, store, acceptSubmissions, legacyReceipts, lookupAdmission,
+      ...(acceptanceMarker && { acceptStorefrontSubmissions })
     });
     const vendureUrl = await startListener(vendureRechargePrefix, vendurePort);
     const workerUrl = await startListener(rechargeWorkerPrefix, workerPort);

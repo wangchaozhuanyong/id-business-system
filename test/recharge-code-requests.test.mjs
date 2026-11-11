@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
 import test from 'node:test';
-import { createRechargeCodeHandler, lookupRechargeCodeOwner } from '../server/recharge-code-requests.mjs';
+import {
+  createRechargeCodeHandler, lookupRechargeCodeOwner, lookupStorefrontRechargeAdmission
+} from '../server/recharge-code-requests.mjs';
 
 const origin = 'https://id.example.test';
 const employee = { id: 'employee-1', name: '员工甲', active: true, role: 'employee' };
@@ -181,6 +183,53 @@ test('independent approvers cannot assign the same remaining code, and insuffici
   addCodes(shortCodes.slice(1, 2), 'pro100');
   assert.equal((await call(start(), admin, { action: 'approve', id: pending.id })).request.status, 'issued');
   assert.deepEqual(store.load().data.requests.find(row => row.id === pending.id).codes, shortCodes.slice(1, 2));
+});
+
+test('a MOYAO batch becomes eligible on approval; ordinary and held codes require reviewed delivery evidence', async () => {
+  const { audit, store, addCodes, transport, start } = setup();
+  addCodes(shortCodes.slice(0, 2), 'pro100');
+  addCodes(shortCodes.slice(2), 'plus');
+  const [first, second, legacy, unrelated] = shortCodes;
+  const checked = [];
+  let hold = true;
+  transport.verifyStorefrontCode = async (code, ip) => {
+    checked.push({ code, ip });
+    if (code === legacy && hold) return { status: 'reserved', reason: 'manual_review_required' };
+    return { plan: shortCodes.slice(0, 2).includes(code) ? 'pro_5x' : 'plus', status: 'available' };
+  };
+  const handler = start();
+  const lookup = code => lookupStorefrontRechargeAdmission({ load: store.load, transport }, code, '203.0.113.10');
+  const { request: batch } = await call(handler, employee, application);
+  const approval = { action: 'approve', id: batch.id, storefrontChannel: 'moyao-ai' };
+  assert.equal(await lookup(first), null);
+  assert.equal((await call(handler, employee, approval)).status, 403);
+  assert.equal((await call(handler, admin, { ...approval, storefrontChannel: 'another-store' })).status, 400);
+  const issued = await call(handler, admin, approval);
+  assert.equal(issued.request.storefrontChannel, 'moyao-ai');
+  assert.equal(issued.request.codes, undefined);
+  assert.deepEqual(await Promise.all([lookup(first.toLowerCase()), lookup(second)]), [
+    { plan: 'pro_5x', status: 'available' }, { plan: 'pro_5x', status: 'available' }
+  ]);
+  const { request: oldBatch } = await call(handler, other, {
+    ...application, requestKey: 'application-legacy', plan: 'plus'
+  });
+  await call(handler, admin, { action: 'approve', id: oldBatch.id });
+  assert.equal(await lookup(legacy), null);
+  assert.equal(checked.length, 2);
+  assert.equal((await call(handler, admin, { ...approval, id: oldBatch.id })).status, 409);
+  const admission = { action: 'admit-storefront-code', id: oldBatch.id, code: legacy, deliveryReference: 'MOYAO-delivery-01' };
+  assert.equal((await call(handler, other, admission)).status, 403);
+  assert.equal((await call(handler, admin, { ...admission, deliveryReference: '' })).status, 400);
+  assert.match((await call(handler, admin, admission)).error, /上次开通结果待核对/);
+  assert.equal(await lookup(legacy), null);
+  hold = false;
+  assert.equal((await call(handler, admin, admission)).request.storefrontAdmissionCount, 1);
+  assert.equal((await call(handler, admin, admission)).request.storefrontAdmissionCount, 1);
+  assert.equal(await lookup(unrelated), null);
+  assert.deepEqual(await lookup(legacy), { plan: 'plus', status: 'available' });
+  hold = true;
+  assert.deepEqual(await lookup(legacy), { plan: 'plus', status: 'reserved', reason: 'manual_review_required' });
+  assert.equal(audit.filter(row => row.action === 'recharge_code_storefront_admitted').length, 1);
 });
 
 test('an unknown inventory is separate from zero and blocks both new applications and approvals', async () => {

@@ -1,4 +1,8 @@
+import { isIP } from 'node:net';
 import { signRechargeAssertion } from '../modules/recharge/assertion.mjs';
+import {
+  rechargeManualReviewReason, storefrontRechargeCode, storefrontRechargePlan
+} from '../modules/recharge/vendure/admission.mjs';
 
 const service = Object.freeze({
   id: 'order-reconciliation', email: 'order-reconciliation@localhost', admin: true, sensitive: true
@@ -33,11 +37,12 @@ export function createOrderRechargeClient(config, fetchImpl = fetch) {
       [...target.searchParams.keys()].every((name) => ['page_size', 'keyword', 'recharge_status'].includes(name));
     const monitoringPath = monitoring && (method === 'GET' && path === '/api/admin/data' ||
       method === 'POST' && path === '/api/admin/telegram');
+    const storefrontVerify = method === 'POST' && path === '/api/verify-cdk' && actor.id === 'vendure-admission';
     if (target.origin !== upstream.origin || target.hash ||
         !(method === 'GET' && readPaths.test(target.pathname) && orbitRead ||
           method === 'POST' && /^\/api\/admin\/cdks\/returns\/(check|commit|receipt)$/.test(path) ||
           method === 'POST' && path === '/api/admin/cards/stop-use' ||
-          monitoringPath))
+          monitoringPath || storefrontVerify))
       throw new Error('不支持此代充资料操作');
     const response = await fetchImpl(target, {
       method, redirect: 'error', signal: AbortSignal.timeout(6000),
@@ -47,9 +52,10 @@ export function createOrderRechargeClient(config, fetchImpl = fetch) {
       },
       ...(body && { body: JSON.stringify(body) })
     });
-    if (!response.ok) throw new Error('代充资料暂时无法读取');
+    if (!response.ok && !(storefrontVerify && [403, 409].includes(response.status)))
+      throw new Error('代充资料暂时无法读取');
     const result = await readBoundedJson(response);
-    if (!result || result.success === false) throw new Error('代充资料操作未确认');
+    if (!result || (!storefrontVerify && result.success === false)) throw new Error('代充资料操作未确认');
     return result;
   }
   return Object.freeze({
@@ -77,6 +83,24 @@ export function createOrderRechargeClient(config, fetchImpl = fetch) {
       const result = await request('GET', '/api/admin/cdks/returns/stock');
       if (!Array.isArray(result.items)) throw new Error('代充库存格式不正确');
       return result.items;
+    },
+    async verifyStorefrontCode(code, clientIp) {
+      if (!storefrontRechargeCode(code) || (clientIp !== undefined && !isIP(clientIp)))
+        throw new Error('商城验码资料无效');
+      const value = await request('POST', '/api/verify-cdk', { cdk: storefrontRechargeCode(code) }, {
+        id: 'vendure-admission', email: 'vendure-admission@localhost', admin: false, sensitive: false,
+        ...(clientIp && { clientIp })
+      });
+      if (value.success === true) {
+        const plan = storefrontRechargePlan(value.data?.plan_type);
+        if (value.data?.type !== '自助' || !plan) return { status: 'disabled' };
+        return { plan, status: value.data.status === 'processing' ? 'reserved' : 'available' };
+      }
+      if (value.code === rechargeManualReviewReason) return { status: 'reserved', reason: rechargeManualReviewReason };
+      if (value.message === '该 CDK 已使用') return { status: 'used' };
+      if (value.message === '无效 CDK') return { status: 'disabled' };
+      if (typeof value.message === 'string' && value.message.includes('冷静')) return { status: 'reserved' };
+      throw new Error('原版验码结果暂不可确认');
     },
     async checkReturns(items) {
       const result = await request('POST', '/api/admin/cdks/returns/check', { items });

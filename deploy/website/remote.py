@@ -44,6 +44,7 @@ MONITORING_RECEIPTS = MONITORING / "receipts"
 MONITORING_UNIT = "id-business-independent-backup-monitoring"
 MONITORING_ENV = "ID_MONITOR_BACKUP_RECEIPTS_DIR=/run/id-backup-monitoring"
 MONITORING_MOUNT = '  --mount "type=bind,src=$formal/backup-monitoring/receipts,dst=/run/id-backup-monitoring,readonly"'
+ADMISSION_ENV = "ID_VENDURE_ADMISSION_DIRECTORY=/state/vendure-admission"
 MONITORING_FILES = ("backup_monitoring.py", MONITORING_UNIT + ".service", MONITORING_UNIT + ".timer")
 VERSIONED_ASSET = re.compile(r'\b(?:src|href)="(?:\./|/)?([a-zA-Z0-9.-]+\.(?:m?js|css))\?v=([a-zA-Z0-9.-]+)"')
 
@@ -163,6 +164,16 @@ def mount_backup_monitoring(content):
     return content.replace(original, mounted)
 
 
+def mount_storefront_admission(content):
+    monitored = f'  -e "{MONITORING_ENV}")'
+    configured = monitored + f'\n  state+=(-e "{ADMISSION_ENV}")'
+    if content.count(configured) == 1 and content.count(ADMISSION_ENV) == 1:
+        return content
+    require(content.count(monitored) == 1 and "ID_VENDURE_ADMISSION_DIRECTORY" not in content,
+            "unexpected_storefront_admission_launcher")
+    return content.replace(monitored, configured)
+
+
 def require_asset_digest(plan, candidate_sha):
     before = plan["before"]["assetsSha256"]
     presentation = plan.get("redeemPresentation")
@@ -222,7 +233,8 @@ def stage(plan, release):
         content = previous.read_text()
         if name == "run-app":
             require(content.count("sha=" + base) == 1, "live_launcher_revision_mismatch")
-            content = mount_backup_monitoring(content.replace("sha=" + base, "sha=" + sha))
+            content = mount_storefront_admission(
+                mount_backup_monitoring(content.replace("sha=" + base, "sha=" + sha)))
         elif name == "check-app.mjs":
             content = update_canary_asset_refs(content, (live / "source/frontend/index.html").read_text(),
                                                (source / "frontend/index.html").read_text())

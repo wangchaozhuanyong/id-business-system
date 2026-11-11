@@ -1,7 +1,10 @@
 import { createCodeReturnManager, codeReturnEntry, publicReturnRecord } from './recharge-code-returns.mjs';
 import { numberedRechargeRequests } from './recharge-code-numbers.mjs';
 import { generatedCdkPattern } from '../modules/recharge/codexdaichong/native-code-returns.mjs';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  moyaoRechargeChannel, rechargeManualReviewReason, storefrontRechargeCode, storefrontRechargePlan
+} from '../modules/recharge/vendure/admission.mjs';
 
 export const rechargeCodesRoute = '/api/local/recharge-codes';
 
@@ -10,6 +13,31 @@ const roles = new Set(['employee', 'admin', 'super']);
 const approvers = new Set(['admin', 'super']);
 const requestKeyPattern = /^[a-zA-Z0-9._-]{1,120}$/;
 const idPattern = /^[0-9a-f-]{36}$/;
+const deliveryReferencePattern = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,119}$/;
+const codeDigest = code => createHash('sha256').update(code).digest('hex');
+
+function assignedToMoyao(row, code) {
+  return row.storefrontChannel === moyaoRechargeChannel ||
+    (row.storefrontAdmissions || []).some(entry => entry.codeDigest === codeDigest(code));
+}
+
+function canLookUpIssuedCode(row, code) {
+  return row.status === 'issued' && row.codes?.includes(code) &&
+    !['returned', 'pending'].includes(codeReturnEntry(row, code)?.state);
+}
+
+export async function lookupStorefrontRechargeAdmission({ load, transport }, code, clientIp) {
+  const normalized = storefrontRechargeCode(code);
+  if (!normalized) return null;
+  const { data } = await load();
+  const issued = (data?.requests ?? []).filter(row => canLookUpIssuedCode(row, normalized));
+  if (issued.length !== 1 || !assignedToMoyao(issued[0], normalized)) return null;
+  const plan = storefrontRechargePlan(issued[0].plan);
+  if (!plan) return null;
+  const native = await transport.verifyStorefrontCode(normalized, clientIp);
+  if (native.plan && native.plan !== plan) throw new Error('商城发码套餐与原版不一致');
+  return { plan, status: native.status, ...(native.reason && { reason: native.reason }) };
+}
 
 class RequestError extends Error {
   constructor(status, message) {
@@ -55,6 +83,8 @@ function visibleRequest(row, actorId) {
     id, batchNo, plan, count, applicantId, applicantName, status, createdAt, updatedAt, approvedById,
     approvedAt, issuedAt, rejectedById, rejectedAt, reason, issueProblem,
     returns: (row.returns || []).map(publicReturnRecord),
+    ...(row.storefrontChannel === moyaoRechargeChannel && { storefrontChannel: row.storefrontChannel }),
+    ...(row.storefrontAdmissions?.length && { storefrontAdmissionCount: row.storefrontAdmissions.length }),
     ...(status === 'issued' && actorId === applicantId ? { codes: row.codes.filter(code => !['returned', 'pending'].includes(codeReturnEntry(row, code)?.state)) } : {})
   };
 }
@@ -182,12 +212,19 @@ export function createRechargeCodeHandler({ store, transport, publicOrigin, cloc
     }
   }
 
-  function approveRequest({ id, action }, actor) {
+  function approveRequest({ id, action, storefrontChannel }, actor) {
+    if (storefrontChannel !== undefined && (action !== 'approve' || storefrontChannel !== moyaoRechargeChannel))
+      throw new RequestError(400, '发放渠道不正确');
     return change(actor, async rows => {
       const row = findRequest(rows, id);
-      if (row.status === 'issued') return { row };
+      if (row.status === 'issued') {
+        if (storefrontChannel && storefrontChannel !== row.storefrontChannel)
+          throw new RequestError(409, '此批已发码，请逐张核对后补录商城准入');
+        return { row };
+      }
       let codes;
       if (row.status === 'issuing') {
+        if (storefrontChannel) throw new RequestError(409, '请先核对旧批次，再补录商城准入');
         const issueProblem = await originalBatchProblem(row);
         if (issueProblem) return row.issueProblem === issueProblem ? { row }
           : { row: { ...row, issueProblem, updatedAt: time() }, action: 'recharge_code_issue_pending' };
@@ -195,13 +232,49 @@ export function createRechargeCodeHandler({ store, transport, publicOrigin, cloc
       } else {
         if (row.status !== 'pending' || action !== 'approve')
           throw new RequestError(409, '这条申请不在待审核状态');
+        if (storefrontChannel && !storefrontRechargePlan(row.plan))
+          throw new RequestError(409, '该套餐暂不支持 MOYAO 商城');
         codes = await codesFor(rows, row.plan, row.count);
       }
       const at = time();
       return {
         row: { ...row, status: 'issued', approvedById: row.approvedById ?? actor.id,
-          approvedAt: row.approvedAt ?? at, issuedAt: at, updatedAt: at, codes, issueProblem: undefined },
+          approvedAt: row.approvedAt ?? at, issuedAt: at, updatedAt: at, codes, issueProblem: undefined,
+          ...(storefrontChannel && { storefrontChannel }) },
         action: 'recharge_code_issued'
+      };
+    });
+  }
+
+  function admitIssuedCode({ id, code, deliveryReference }, actor) {
+    const normalized = storefrontRechargeCode(code);
+    const reference = typeof deliveryReference === 'string' ? deliveryReference.trim() : '';
+    if (!normalized || !deliveryReferencePattern.test(reference) || storefrontRechargeCode(reference))
+      throw new RequestError(400, '请输入已发充值码和 MOYAO 订单或发放回执编号');
+    return change(actor, async rows => {
+      const row = findRequest(rows, id);
+      const plan = storefrontRechargePlan(row.plan);
+      if (!plan || !canLookUpIssuedCode(row, normalized) ||
+          rows.some(entry => entry.id !== id && canLookUpIssuedCode(entry, normalized)))
+        throw new RequestError(409, '此码无法在该批次补录，请核对发放记录和状态');
+      if (assignedToMoyao(row, normalized)) return { row };
+      let verified;
+      try {
+        verified = await transport.verifyStorefrontCode(normalized);
+      } catch {
+        throw new RequestError(503, '暂时无法向原版核对充值码');
+      }
+      if (verified.reason === rechargeManualReviewReason)
+        throw new RequestError(409, '上次开通结果待核对，请先在原版管理台处理');
+      if (verified.status !== 'available' || verified.plan !== plan)
+        throw new RequestError(409, '原版未确认该充值码可用，请核对状态和套餐');
+      const at = time();
+      return {
+        row: { ...row, updatedAt: at, storefrontAdmissions: [
+          ...(row.storefrontAdmissions || []),
+          { codeDigest: codeDigest(normalized), deliveryReference: reference, approvedById: actor.id, approvedAt: at }
+        ] },
+        action: 'recharge_code_storefront_admitted'
       };
     });
   }
@@ -262,12 +335,13 @@ export function createRechargeCodeHandler({ store, transport, publicOrigin, cloc
         const { row, created } = await createRequest(body, actor);
         return reply(response, created ? 201 : 200, { request: visibleRequest(row, actor.id) });
       }
-      if (!['approve', 'reject', 'reconcile'].includes(body.action))
+      if (!['approve', 'reject', 'reconcile', 'admit-storefront-code'].includes(body.action))
         throw new RequestError(400, '请选择有效的充值码申请操作');
       if (!canApprove) throw new RequestError(403, '当前账号没有审批充值码的权限');
       if (typeof body.id !== 'string' || !idPattern.test(body.id))
         throw new RequestError(400, '充值码申请编号不正确');
-      const row = body.action === 'reject' ? await rejectRequest(body, actor) : await approveRequest(body, actor);
+      const row = body.action === 'reject' ? await rejectRequest(body, actor) :
+        body.action === 'admit-storefront-code' ? await admitIssuedCode(body, actor) : await approveRequest(body, actor);
       return reply(response, 200, { request: visibleRequest(row, actor.id) });
     } catch (error) {
       if (response.destroyed || response.headersSent) return;

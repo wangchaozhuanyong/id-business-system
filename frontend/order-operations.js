@@ -128,6 +128,9 @@
       A.button('重新核对', 'order-code-reconcile', 'primary', '', attrs + (saving ? ' disabled' : ''));
     if (row.status === 'issued') actions += A.textAction('批次明细', 'order-code-batch-detail', attrs) +
       A.button(row.counts?.returnable ? `归还（${row.counts.returnable}）` : '无可归还项', 'order-code-batch-return', '', '', attrs + (row.counts?.returnable ? '' : ' disabled'));
+    if (data?.canApprove && row.status === 'issued' && row.plan !== 'pro500' &&
+        row.storefrontChannel !== 'moyao-ai')
+      actions += A.button('补录商城码', 'order-code-storefront-admit', '', '', attrs + (saving ? ' disabled' : ''));
     return '<div class="recharge-record-actions">' + actions + '</div>';
   }
   function requestHistory(view) {
@@ -291,6 +294,8 @@
     return '<div class="property-list recharge-code-details">' + property('申请批次', row.batchNo) + property('申请人', actorName(row)) +
       property('套餐', planNames[row.plan] || '待核对') + property('申请数量', row.count) + property('审核状态', requestStates[row.status] || '待核对') +
       property('申请时间', displayTime(row.createdAt)) + property('发放时间', displayTime(row.issuedAt)) +
+      (row.status === 'issued' ? property('批次渠道', row.storefrontChannel === 'moyao-ai' ? 'MOYAO 商城' : '常规发放') +
+        (row.storefrontAdmissionCount ? property('已逐码补录商城', row.storefrontAdmissionCount) : '') : '') +
       property('说明', row.issueProblem || row.reason || '无') +
       Object.entries({ unused: '未使用', processing: '处理中', used: '已使用', unavailable: '待核对', returnable: '可归还', returned: '已归还', pendingReturns: '归还待核对' })
         .map(([key, label]) => property(label, row.counts?.[key])).join('') + '</div>';
@@ -449,11 +454,11 @@
     }
   }
 
-  async function requestAction(action, id, reason) {
+  async function requestAction(action, id, details = {}) {
     await perform(requestRoute, async () => {
-      const { request } = await D.rechargeCodeAction({ action, id, ...(reason && { reason }) });
-      if (action === 'reject') A.closeDrawer();
-      A.notify(request.issueProblem || requestStates[request.status] || '已保存');
+      const { request } = await D.rechargeCodeAction({ action, id, ...details });
+      if (action !== 'reconcile') A.closeDrawer();
+      A.notify(request.issueProblem || (action === 'admit-storefront-code' ? '已登记 MOYAO 商城准入' : requestStates[request.status]) || '已保存');
       await refreshWorkspace();
     });
   }
@@ -516,7 +521,23 @@
         A.field('驳回原因', 'order-code-reason', A.input('order-code-reason', '', 'maxlength="200" required'), true) + '</form>',
         A.button('取消', 'drawer-close') + '<button class="button danger" type="submit" form="order-code-reject">确认驳回</button>');
     } else if (action === 'order-code-approve') {
-      A.confirmAction('批准充值码申请', '通过后将从对应套餐的现有库存发码，并登记到申请人名下。', () => requestAction('approve', node.dataset.id), '批准并发码');
+      const view = views.get(requestRoute);
+      const row = view?.data?.requests?.find(row => row.id === node.dataset.id);
+      if (!view?.data?.canApprove || row?.status !== 'pending') return true;
+      const channels = [['', '常规发放'], ...(row.plan === 'pro500' ? [] : [['moyao-ai', 'MOYAO 商城']])];
+      A.openDrawer('批准充值码申请', '从对应套餐发码并登记到申请人名下。只有发给 MOYAO 商城的整批码才选商城渠道。',
+        '<form id="order-code-approve" data-id="' + e(row.id) + '">' +
+        A.field('发放渠道', 'order-code-channel', A.select('order-code-channel', channels)) + '</form>',
+        A.button('取消', 'drawer-close') + '<button class="button primary" type="submit" form="order-code-approve">批准并发码</button>');
+    } else if (action === 'order-code-storefront-admit') {
+      const view = views.get(requestRoute);
+      const row = view?.data?.requests?.find(row => row.id === node.dataset.id);
+      if (!view?.data?.canApprove || row?.status !== 'issued') return true;
+      A.openDrawer('补录 MOYAO 商城码', '先核对 MOYAO 发放或交付记录。每次只登记本批次中与回执对应的一张码。',
+        '<form id="order-code-storefront-admit" data-id="' + e(row.id) + '">' +
+        A.field('已发充值码', 'order-code-existing', A.input('order-code-existing', '', 'maxlength="32" autocomplete="off" spellcheck="false" required'), true) +
+        A.field('发放或交付回执编号', 'order-code-delivery', A.input('order-code-delivery', '', 'maxlength="120" autocomplete="off" required'), true) + '</form>',
+        A.button('取消', 'drawer-close') + '<button class="button primary" type="submit" form="order-code-storefront-admit">确认补录</button>');
     } else if (action === 'order-code-reconcile') {
       await requestAction('reconcile', node.dataset.id);
     } else if (action === 'order-sync-open-order') {
@@ -570,7 +591,19 @@
       return true;
     }
     if (form.id === 'order-code-reject') {
-      await requestAction('reject', form.dataset.id, form.elements['order-code-reason'].value.trim());
+      await requestAction('reject', form.dataset.id, { reason: form.elements['order-code-reason'].value.trim() });
+      return true;
+    }
+    if (form.id === 'order-code-approve') {
+      const storefrontChannel = form.elements['order-code-channel'].value;
+      await requestAction('approve', form.dataset.id, storefrontChannel ? { storefrontChannel } : {});
+      return true;
+    }
+    if (form.id === 'order-code-storefront-admit') {
+      await requestAction('admit-storefront-code', form.dataset.id, {
+        code: form.elements['order-code-existing'].value.trim(),
+        deliveryReference: form.elements['order-code-delivery'].value.trim()
+      });
       return true;
     }
     if (form.id !== 'recharge-code-request' || !D?.authRequired) return false;

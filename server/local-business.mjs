@@ -225,6 +225,7 @@ const orderFeatureAuditLabels = {
   recharge_code_import_started: '提交充值码批次',
   recharge_code_issue_pending: '充值码发放待核对',
   recharge_code_issued: '确认发放充值码',
+  recharge_code_storefront_admitted: '补录 MOYAO 商城充值码',
   recharge_code_return_started: '登记充值码归还',
   recharge_code_return_pending: '核对充值码归还结果',
   recharge_code_returned: '确认充值码归还'
