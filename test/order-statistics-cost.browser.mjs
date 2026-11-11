@@ -39,6 +39,10 @@ const fixtures = () => ({
       order('legacy', 6, {
         source: '历史入库', cardId: '', paidConfirmed: false, fxSnapshot: null,
         refunds: [{ id: 'refund-legacy', amount: '15', currency: 'CNY' }]
+      }),
+      order('unlinked', 7, {
+        source: '历史入库', cardId: '', paymentId: '',
+        issueFeeSnapshot: { cardId: '', applied: false, pending: true }
       })
     ],
     customers: [{ id: 'fixture-customer', name: '合成客户', active: true }],
@@ -65,6 +69,7 @@ test('实收独立汇总，待核算的旧单不影响净收款和同卡分摊',
       const list = page.locator('table[data-table="commerce-orders-GPT"]');
       assert.equal(await list.locator('tr[data-row-id="b"] [data-column="profit"]').textContent(), '30.00');
       assert.equal(await list.locator('tr[data-row-id="c"] [data-column="profit"]').textContent(), '—');
+      assert.equal(await list.locator('tr[data-row-id="unlinked"] [data-column="profit"]').textContent(), '11.84');
       assert.equal(await list.getByText('待核算', { exact: true }).count(), 0);
 
       await page.goto(origin + '/#/orders/statistics');
@@ -72,11 +77,12 @@ test('实收独立汇总，待核算的旧单不影响净收款和同卡分摊',
       const summary = page.locator('#main .summary-strip');
       const product = page.locator('table[data-table="commerce-product-statistics"] tbody tr[data-row-id="GPT"]');
       assert.equal(await product.locator('[data-column="actual"]').textContent(), '30.00');
-      assert.equal(await product.locator('[data-column="reference"]').textContent(), '10.6398');
-      assert.match(await summary.textContent(), /40\.6398/);
-      assert.equal(await product.locator('[data-column="revenue"]').textContent(), '545.00');
-      assert.match(await summary.textContent(), /确认净收款.*545\.00/s);
+      assert.equal(await product.locator('[data-column="reference"]').textContent(), '22.4798');
+      assert.match(await summary.textContent(), /52\.4798/);
+      assert.equal(await product.locator('[data-column="revenue"]').textContent(), '685.00');
+      assert.match(await summary.textContent(), /确认净收款.*685\.00/s);
       assert.equal(await product.locator('[data-column="pending"]').textContent(), '3');
+      await page.getByText('1 笔订单按已知成本计算参考利润，开卡费未分摊。', { exact: true }).waitFor();
       await settle(page);
       assert.deepEqual((await spacingSnapshot(page)).findings, []);
 
@@ -93,11 +99,21 @@ test('实收独立汇总，待核算的旧单不影响净收款和同卡分摊',
       await drawer.getByText(/10\.6398 人民币/).waitFor();
       await drawer.getByText('历史市场参考报价', { exact: true }).waitFor();
       await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
+      await page.locator('#commerce-search').fill('SYN-UNLINKED');
+      const unlinked = page.locator('tr[data-row-id="unlinked"]');
+      assert.equal(await unlinked.locator('[data-column="reason"]').textContent(), '参考核算 · 开卡费未分摊');
+      await unlinked.getByRole('button', { name: '查看原单', exact: true }).click();
+      await drawer.getByRole('tab', { name: '成本与汇率' }).click();
+      await drawer.getByText('原付款卡未记录，开卡费未分摊', { exact: true }).waitFor();
+      await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
       await page.locator('#commerce-search').fill('');
       await page.getByRole('tab', { name: '待核算' }).click();
       assert.match(await page.locator('tr[data-row-id="unverified"] [data-column="reason"]').textContent(), /同卡开卡费凭据缺失/);
       assert.match(await page.locator('tr[data-row-id="c"] [data-column="reason"]').textContent(), /实收待确认/);
       assert.match(await page.locator('tr[data-row-id="legacy"] [data-column="reason"]').textContent(), /缺少有效汇率快照.*缺少原付款银行卡/);
+      await page.goto(origin + '/#/overview');
+      const profitMetric = page.locator('.overview-metric').filter({ has: page.getByRole('heading', { name: '核算利润合计', exact: true }) });
+      await profitMetric.getByText(/1 笔开卡费未分摊/).waitFor();
       assert.deepEqual(errors, []);
       assert.deepEqual(traffic.external, []);
     });
