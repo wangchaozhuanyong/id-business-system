@@ -191,9 +191,9 @@ class WebsiteReleaseTests(unittest.TestCase):
             file = Path(directory) / vendure_admission.SQLITE_FILENAME
             writer = sqlite3.connect(file, timeout=0)
             try:
-                writer.execute("CREATE TABLE vendure_recharge_isolated_state(id INTEGER, payload TEXT)")
+                writer.execute("CREATE TABLE vendure_recharge_isolated_state(id INTEGER, revision INTEGER, payload TEXT)")
                 table = "vendure_recharge_isolated_state"
-                writer.execute(f"INSERT INTO {table} VALUES(1, ?)", ('{"tasks":[{"status":"succeeded"}]}',))
+                writer.execute(f"INSERT INTO {table} VALUES(1, 3, ?)", ('{"tasks":[{"status":"succeeded"}]}',))
                 writer.commit()
                 with vendure_admission.lock_idle_queue(file) as retained:
                     self.assertEqual(retained, 1)
@@ -208,6 +208,17 @@ class WebsiteReleaseTests(unittest.TestCase):
                                  {"tasks": [{"status": "running"}]})
             finally:
                 writer.close()
+
+    @patch.object(vendure_admission, "inspect")
+    @patch.object(vendure_admission, "read_idle_queue", side_effect=[(20, 0), (21, 0)])
+    @patch.object(vendure_admission, "run")
+    @patch.object(vendure_admission, "worker_binding", return_value=(b"original", "launcher-hash"))
+    def test_worker_is_started_with_its_original_runtime_and_poll_observed(self, binding, run, queue, inspect):
+        inspect.return_value = {"State": {"Running": True}, "Config": {"User": "993:992"}, "Image": "image",
+                                "Mounts": [{"Destination": "/app", "Source": "/old/source", "RW": False}]}
+        vendure_admission.resume_worker(binding.return_value, ("image", "993:992", "/old/source"), 0)
+        run.assert_called_once_with(["systemctl", "start", vendure_admission.WORKER_UNIT], timeout=35)
+        self.assertEqual(queue.call_count, 2)
 
     def test_mysql_projection_requires_the_verified_pair_and_exposes_only_times(self):
         captured = "20261111T073000Z"

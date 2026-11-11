@@ -12,15 +12,17 @@ import time
 from contextlib import closing, contextmanager
 from pathlib import Path
 
-from remote import FORMAL, LOCK, ROOT, ReleaseError, identity, inspect, require, require_main, run, write_new
+from remote import FORMAL, LOCK, ROOT, ReleaseError, digest, identity, inspect, require, require_main, run, write_new
 
 UNIT = "id-business-independent-vendure.service"
+WORKER_UNIT = "id-business-independent-vendure-worker.service"
+WORKER_LAUNCHER = FORMAL / "operations/run-vendure-worker"
 DROP = Path("/etc/systemd/system") / (UNIT + ".d") / "90-current-release.conf"
 STATE = FORMAL / "vendure-state/vendure"
 ADMISSION = FORMAL / "data/vendure-admission"
 TARGET = "/run/id-vendure-admission"
 UID, GID = 993, 992
-PROTECTED = ("recharge", "recharge-native", "vendure-worker")
+PROTECTED = ("recharge", "recharge-native")
 LAUNCHER_ANCHOR = '  --mount "type=bind,src=$formal/operations,dst=/operations,readonly" ' + chr(92)
 SQLITE_FILENAME = "vendure-recharge-isolated.sqlite"
 
@@ -34,6 +36,16 @@ def stage_launcher(content, previous, target):
         LAUNCHER_ANCHOR, LAUNCHER_ANCHOR + "\n" + mount + "\n" + env)
 
 
+def idle_snapshot(db):
+    row = db.execute("SELECT revision, payload FROM vendure_recharge_isolated_state WHERE id = 1").fetchone()
+    require(row is not None, "gateway_task_snapshot_missing")
+    revision, payload = row
+    tasks = json.loads(payload)["tasks"]
+    require(isinstance(tasks, list) and not any(
+        item["status"] in ("queued", "running") for item in tasks), "gateway_queue_not_idle")
+    return revision, len(tasks)
+
+
 @contextmanager
 def lock_idle_queue(path):
     require(path.is_file() and not path.is_symlink(), "gateway_task_store_unavailable")
@@ -42,14 +54,54 @@ def lock_idle_queue(path):
         # commit between the queue read and the service stop.
         db.execute("BEGIN IMMEDIATE")
         try:
-            row = db.execute("SELECT payload FROM vendure_recharge_isolated_state WHERE id = 1").fetchone()
-            require(row is not None, "gateway_task_snapshot_missing")
-            tasks = json.loads(row[0])["tasks"]
-            require(isinstance(tasks, list) and not any(
-                item["status"] in ("queued", "running") for item in tasks), "gateway_queue_not_idle")
-            yield len(tasks)
+            _, count = idle_snapshot(db)
+            yield count
         finally:
             db.rollback()
+
+
+def read_idle_queue(path):
+    with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=3)) as db:
+        return idle_snapshot(db)
+
+
+def worker_binding():
+    require(UNIT in run(["systemctl", "show", "-p", "PartOf", "--value", WORKER_UNIT]).decode().split(),
+            "gateway_worker_dependency_changed")
+    return run(["systemctl", "show", "-p", "ExecStart", "--value", WORKER_UNIT]), digest(WORKER_LAUNCHER)
+
+
+def worker_runtime(container):
+    require(container["State"]["Running"], "gateway_worker_not_running")
+    mounts = [m["Source"] for m in container["Mounts"] if m["Destination"] == "/app" and not m["RW"]]
+    require(len(mounts) == 1, "gateway_worker_source_unavailable")
+    return container["Image"], container["Config"]["User"], mounts[0]
+
+
+def resume_worker(binding, expected, task_count):
+    require(worker_binding() == binding, "gateway_worker_launcher_changed")
+    path = STATE / SQLITE_FILENAME
+    baseline, count = read_idle_queue(path)
+    require(count == task_count, "gateway_task_snapshot_changed")
+    # Stopping a systemd PartOf unit also stops the worker. Starting the gateway
+    # does not start its dependent worker; restore the same worker explicitly.
+    run(["systemctl", "start", WORKER_UNIT], timeout=35)
+    for _ in range(12):
+        try:
+            container = inspect("vendure-worker")
+        except subprocess.CalledProcessError:
+            time.sleep(1)
+            continue
+        if not container["State"]["Running"]:
+            time.sleep(1)
+            continue
+        require(worker_runtime(container) == expected, "gateway_worker_runtime_changed")
+        revision, count = read_idle_queue(path)
+        require(count == task_count, "gateway_task_snapshot_changed")
+        if revision > baseline:
+            return
+        time.sleep(1)
+    raise ReleaseError("gateway_worker_poll_not_observed")
 
 
 def source_mount(container, path):
@@ -104,6 +156,8 @@ def cutover(sha, release):
     pending = DROP.with_name(f".moyao-admission-{sha[:12]}.conf")
     protected = {name: identity(inspect(name)) for name in PROTECTED}
     require(all(item["running"] for item in protected.values()), "original_recharge_runtime_not_ready")
+    worker = worker_runtime(inspect("vendure-worker"))
+    binding = worker_binding()
     with lock_idle_queue(STATE / SQLITE_FILENAME) as retained_tasks:
         require_main(sha)
         run(["systemctl", "stop", UNIT], timeout=45)
@@ -121,18 +175,22 @@ def cutover(sha, release):
             time.sleep(1)
     else:
         raise ReleaseError("new_gateway_readback_failed")
+    resume_worker(binding, worker, retained_tasks)
     require(all(identity(inspect(name)) == value for name, value in protected.items()),
             "original_recharge_runtime_changed")
     record = {"mainSha": sha, "gatewaySha": current["revision"], "previousGatewaySha": previous,
-              "retainedTaskCount": retained_tasks, "originalRuntimeUnchanged": True, "accepting": False}
+              "retainedTaskCount": retained_tasks, "originalRuntimeUnchanged": True,
+              "workerSourceUnchanged": True, "workerPollingObserved": True, "accepting": False}
     write_new(ops / "vendure-admission.receipt.json", json.dumps(record) + "\n", 0o600)
     return record
 
 
 def open_submissions(sha, release):
     record = json.loads((release / "operations/vendure-admission.receipt.json").read_text())
-    require(record["gatewaySha"] == sha and record["originalRuntimeUnchanged"] is True, "gateway_receipt_missing")
+    require(record["gatewaySha"] == sha and record["originalRuntimeUnchanged"] is True and
+            record.get("workerPollingObserved") is True, "gateway_receipt_missing")
     read_gateway(sha, release / "source")
+    worker_runtime(inspect("vendure-worker"))
     ready_socket()
     marker = ADMISSION / "accept-submissions"
     pending = ADMISSION / f".accept-submissions-{sha[:12]}"
