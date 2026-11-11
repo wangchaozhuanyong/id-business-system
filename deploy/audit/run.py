@@ -18,6 +18,10 @@ PREFIX = "mysql/daily/independent-recharge/"
 BACKUP = re.compile(PREFIX + r"([0-9]{8}T[0-9]{6}Z)/[a-f0-9]{40}/(manifest\.json|mysql\.sql\.aes256gcm)")
 
 
+class AuditError(RuntimeError):
+    pass
+
+
 def aws(*args, region=REGION, expect_denied=False):
     result = subprocess.run(
         ["aws", "--region", region, "--no-cli-pager", "--cli-connect-timeout", "8",
@@ -27,13 +31,15 @@ def aws(*args, region=REGION, expect_denied=False):
     if expect_denied:
         return result.returncode != 0 and "(AccessDenied)" in result.stderr
     if result.returncode:
-        raise RuntimeError("aws_read_failed")
+        match = re.search(r"An error occurred \(([a-zA-Z0-9_.-]+)\)", result.stderr)
+        code = match[1] if match else "response_unavailable"
+        raise AuditError(f"{args[0]} {args[1]}: {code}")
     return json.loads(result.stdout)
 
 
 def require(ok, reason):
     if not ok:
-        raise RuntimeError(reason)
+        raise AuditError(reason)
 
 
 def check_identity():
@@ -52,8 +58,11 @@ def check_budget():
             budget["BudgetLimit"]["Unit"] == "USD" and Decimal(budget["BudgetLimit"]["Amount"]) == 40 and
             set(budget["CostFilters"]["TagKeyValue"]) == {"user:Project$ID", "user:Project$id-business-independent"},
             "budget_scope_or_amount_changed")
-    require({(item["NotificationType"], item["ThresholdType"], item["Threshold"]) for item in alerts} ==
-            {("ACTUAL", "PERCENTAGE", 80), ("FORECASTED", "PERCENTAGE", 100)}, "budget_alerts_changed")
+    # DescribeNotificationsForBudget can omit the default percentage threshold type.
+    thresholds = {(item["NotificationType"], item.get("ThresholdType", "PERCENTAGE"),
+                   item["ComparisonOperator"], item["Threshold"]) for item in alerts}
+    require(len(alerts) == 2 and thresholds == {("ACTUAL", "PERCENTAGE", "GREATER_THAN", 80),
+            ("FORECASTED", "PERCENTAGE", "GREATER_THAN", 100)}, "budget_alerts_changed")
     print("ID budget and notification thresholds verified")
 
 
@@ -97,8 +106,10 @@ def main():
     for operation in (check_identity, check_budget, check_registry, check_backups):
         try:
             operation()
+        except AuditError as error:
+            raise SystemExit(f"ID audit failed at {operation.__name__}: {error}") from None
         except (OSError, ValueError, RuntimeError, KeyError, subprocess.SubprocessError):
-            raise SystemExit(f"ID audit failed at {operation.__name__}") from None
+            raise SystemExit(f"ID audit failed at {operation.__name__}: invalid_response") from None
 
 
 if __name__ == "__main__":
