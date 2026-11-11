@@ -431,7 +431,7 @@ test('本机主邮箱与批量登记归属于同一库存版本，重开后读�
   assert.match(reopened.html, /查询服务待接入/);
 });
 
-test('本机隐藏邮箱的账号状态独立于使用状态，重新打开后仍可筛选及恢复', async (t) => {
+test('本机隐藏邮箱的资料状态独立于使用状态，重新打开后仍可筛选及恢复', async (t) => {
   const store = createLocalBusinessStore(':memory:');
   t.after(() => store.close());
   let browser = runtime(store);
@@ -474,7 +474,7 @@ test('本机隐藏邮箱的账号状态独立于使用状态，重新打开后�
   assert.equal(current.batches.length, 0);
   assert.deepEqual(
     current.appleRelay.events
-      .filter((entry) => entry.kind === '账号状态变化')
+      .filter((entry) => entry.kind === '邮箱资料状态变化')
       .map((entry) => entry.note),
     ['解封中 → 正常', '死号 → 解封中', '正常 → 死号']
   );
@@ -545,10 +545,11 @@ test('隐藏邮箱及主邮箱的远端 UTC 时间与历史本地时间均按北
   assert.equal(value('queryExpiry'), '2026-11-15 00:45');
   assert.equal(value('createdAt'), '2026-10-16 00:45');
   assert.equal(value('updatedAt'), '2026-11-03 10:30');
-  assert.equal(value('healthChangedAt'), '2026-11-03 10:30');
+  assert.equal(table.columns.some(column => column.id === 'healthChangedAt'), false);
   assert.equal(value('lastQueriedAt'), '—');
   browser.click('relay-alias-detail', { id: row.id });
   assert.match(browser.opened.body, /2026-11-15 00:45/);
+  assert.match(browser.opened.body, /邮箱资料状态变更时间<\/span><strong>2026-11-03 10:30/);
   assert.doesNotMatch(browser.opened.body, /16:45:00.*Z/);
   const parent = browser.parent();
   parent.queryExpiry = row.queryExpiry;
@@ -1089,20 +1090,23 @@ test('平台注册状态读取实际登记事件，不把邮箱注册日期或�
   a.registered = '2020-01-01';
   a.inventoryState = 'used';
   r.tab('aliases');
-  let table = r.tables.find((t) => t.id === 'relay-aliases');
-  let column = table.columns.find((c) => c.id === 'registration');
-  assert.equal(column.render(a), '未登记注册结果');
+  const table = r.table('relay-aliases');
+  assert.ok(table.columns.some(column => column.id === 'registrationAccount'));
+  assert.ok(!table.columns.some(column => column.id === 'registration'));
+  const details = () => {
+    r.click('relay-alias-detail', { id: a.id });
+    return r.opened.body;
+  };
+  assert.match(details(), /未登记注册结果/);
   r.api.modules.inventory = {
     registrationRecordsFor: () => [{ state: '待核对', time: '2026-11-03 10:00' }]
   };
-  table = r.table('relay-aliases');
-  column = table.columns.find((c) => c.id === 'registration');
-  assert.equal(column.render(a), '注册结果待核对');
+  assert.match(details(), /注册结果待核对/);
   r.api.modules.inventory.registrationRecordsFor = () => [
     { state: '待核对', time: '2026-11-03 10:00' },
     { state: '成功', time: '2026-11-03 10:30' }
   ];
-  assert.equal(column.render(a), '已登记注册');
+  assert.match(details(), /已登记注册/);
 });
 
 test('导入记录或已归还领用历史仍是引用，不能删除别名后绕过历史关系', () => {

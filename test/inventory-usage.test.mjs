@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createLocalBusinessStore } from '../server/local-business.mjs';
-import { inspectInventoryUsage } from '../server/inventory-usage.mjs';
+import { applyInventoryUsage, inspectInventoryUsage } from '../server/inventory-usage.mjs';
 
 const actor = { id: 'operator-a', name: '测试员甲', role: 'admin' };
 const other = { id: 'operator-b', name: '测试员乙', role: 'admin' };
@@ -185,16 +185,31 @@ test('历史核对先只读预览，确认后写入一次并保留批次', (t) =
   assert.equal(saved.data.mailboxes[0].usageLinks.length, 1);
 });
 
+test('旧邮箱存在跨平台账号时列出冲突，同步保留原使用依据', () => {
+  const mail = { ...stock('relay-history', 'relay'), inventoryState: 'used', used: true,
+    usageLinks: [{ kind: 'registration', product: 'gpt', accountId: 'history-gpt' }] };
+  const data = document([mail], [stock('history-gpt', 'gpt', mail.email), stock('history-claude', 'claude', mail.email)]);
+  const before = structuredClone(data);
+  const review = inspectInventoryUsage(data, commerce());
+  const match = review.get(mail.id);
+  assert.equal(match.status, 'review');
+  assert.equal(match.registrationConflict, true);
+  assert.match(match.message, /history-gpt.*history-claude/);
+  assert.equal(applyInventoryUsage(review, actor), false);
+  assert.deepEqual(data, before);
+});
+
 test('隐藏邮箱来源类型、领取人及归还前的旧业务分别核验', () => {
   const relay = stock('relay', 'relay', 'shared@example.test');
   const google = stock('google', 'google', relay.email);
   const account = {
-    ...stock('gpt', 'gpt', relay.email), registered: occurred, emailType: 'relay', createdById: actor.id
+    ...stock('gpt', 'gpt', relay.email), registered: occurred, emailType: 'relay', sourceMailboxId: 'relay', createdById: actor.id
   };
   const initial = document([relay, google], [account]);
   const batch = extract(initial, [relay, google], 'mail', '注册 GPT');
-  assert.deepEqual([...inspectInventoryUsage(initial, commerce()).keys()], ['relay']);
-  assert.equal(inspectInventoryUsage(initial, commerce()).get('relay').status, 'used');
+  const matched = inspectInventoryUsage(initial, commerce());
+  assert.equal(matched.get('relay').status, 'used');
+  assert.equal(matched.get('google').status, 'review');
   account.createdById = other.id;
   assert.equal(inspectInventoryUsage(initial, commerce()).get('relay').status, 'review');
   account.createdById = actor.id;
@@ -203,6 +218,7 @@ test('隐藏邮箱来源类型、领取人及归还前的旧业务分别核验',
   next.items[0].claimedAt = '2026-01-01 13:00';
   assert.equal(inspectInventoryUsage(initial, commerce()).get('relay').status, 'review');
   delete account.emailType;
+  delete account.sourceMailboxId;
   const ambiguous = inspectInventoryUsage(initial, commerce());
   assert.equal(ambiguous.get('relay').status, 'review');
   assert.equal(ambiguous.get('google').status, 'review');

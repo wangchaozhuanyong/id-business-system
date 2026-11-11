@@ -1,4 +1,5 @@
 import { toV2DateTimeInput } from '../modules/time/dateTime.ts';
+import { aiRegistrationProduct } from './inventory-registration.mjs';
 
 const platforms = new Map([
   ['gpt', 'ChatGPT'], ['claude', 'Claude'], ['gemini', 'Gemini'], ['grok', 'Grok'], ['apple', 'Apple ID']
@@ -38,6 +39,10 @@ export function prepareMailboxPlatformMarks(previous, next, action, actor, now =
     for (const mark of marks) {
       if (!platforms.has(mark.product)) return '请选择有效的注册平台';
       if (known.has(mark.product)) return '该邮箱已登记此注册平台，请勿重复保存';
+      if (prior.type === 'relay' && !['gpt', 'claude', 'grok'].includes(mark.product))
+        return '隐藏邮箱仅可登记 ChatGPT、Claude 或 Grok';
+      if (aiRegistrationProduct(mark.product) && [...known].some(aiRegistrationProduct))
+        return '该邮箱已有注册平台，请核对原账号';
       known.add(mark.product);
       mark.label = `人工登记 · 已注册 ${platforms.get(mark.product)}`;
       mark.time = time;

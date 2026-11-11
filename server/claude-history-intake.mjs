@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { parseV2DateTimeInput, toV2DateTimeInput } from '../modules/time/dateTime.ts';
+import { registrationOccupancy, registrationProductConflict } from './inventory-registration.mjs';
 
 const phases = new Map([['已开通', 'opened'], ['养号中', 'aging'], ['死号', 'dead']]);
 const plans = new Set(['Pro', 'Max 5x', 'Max 20x']);
@@ -30,6 +31,7 @@ export function planClaudeHistoryIntake(input, inventory, commerce, now = Date.n
 
   const accounts = Map.groupBy((inventory.data?.accounts || []).filter(row => row?.type === 'claude'),
     row => emailKey(row.email));
+  const registeredEmails = registrationOccupancy(inventory.data);
   const sold = new Set((commerce.data?.orders || []).filter(row =>
     ['Claude Pro', 'Claude Max'].includes(row?.product) && (row.accountId || row.customerId))
     .map(row => emailKey(row.email)));
@@ -70,6 +72,8 @@ export function planClaudeHistoryIntake(input, inventory, commerce, now = Date.n
     const history = { phase, plan: values.plan, start: start?.date || '', expiry: expiry?.date || '' };
     const health = phase === 'dead' ? 'dead' : 'normal';
     const [prior, duplicate] = accounts.get(email) || [];
+    const conflict = registrationProductConflict(registeredEmails.get(email), 'claude', prior?.id);
+    if (conflict) return problem(conflict);
     if (prior && (duplicate || !isDeepStrictEqual(prior.claudeHistory, history) || prior.health !== health ||
         Object.entries(details).some(([key, value]) => (prior[key] || '') !== value)))
       return problem('已有同邮箱的 Claude 账号，请核对原记录');

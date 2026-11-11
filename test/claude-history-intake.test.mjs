@@ -58,7 +58,7 @@ test('历史账号保留原周期和未知日期，谷歌邮箱无自动关联',
   assert.match(checkInventoryHistory(legacy, claimed), /历史账号当前不可提取/);
   assert.equal(inventory.data.importRecords[0].id, result.batchId);
   assert.equal(inventory.data.importRecords[0].actorId, actor.id);
-  assert.equal(inspectInventoryUsage(inventory.data, commerce.data, at.getTime()).size, 0);
+  assert.equal(inspectInventoryUsage(inventory.data, commerce.data, at.getTime()).get('google').status, 'review');
   const googlePool = { items: [{ email: dead.email, source: 'manual' }] };
   assert.deepEqual(withClaudeMailboxCandidates(googlePool, inventory.data), googlePool);
 });

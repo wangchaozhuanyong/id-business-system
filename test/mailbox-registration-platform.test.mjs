@@ -46,7 +46,7 @@ test('从明确注册记录与关联账号识别平台，付款和相同邮箱�
   asset.usageLinks.push({ kind: 'registration', accountId: 'gpt-1' });
   assert.equal(label(asset), 'ChatGPT');
   asset.usageLinks.push({ kind: 'manual-use', product: 'claude' }, { kind: 'registration', product: 'ChatGPT' });
-  assert.equal(label(asset), 'ChatGPT、Claude');
+  assert.equal(label(asset), '待核对');
 });
 
 test('历史成功记录映射 ChatGPT／Codex，失败和待核对不显示成已注册', () => {
@@ -54,11 +54,11 @@ test('历史成功记录映射 ChatGPT／Codex，失败和待核对不显示成�
   data.registrationRecords = [
     { assetId: 'mail-1', state: '成功', product: 'GPT' },
     { assetId: 'mail-1', state: '成功', product: 'Codex' },
-    { assetId: 'mail-1', state: '成功', product: 'Claude' },
+    { assetId: 'mail-1', state: '失败且未使用', product: 'Claude' },
     { assetId: 'mail-1', state: '待核对', product: 'Gemini' },
     { assetId: 'other', state: '成功', product: 'Grok' }
   ];
-  assert.equal(presentation(data)(data.mailboxes[0]), 'ChatGPT、Claude');
+  assert.equal(presentation(data)(data.mailboxes[0]), 'ChatGPT');
   assert.equal(presentation(doc(row()))({ ...row(), inventoryState: 'available' }), '未登记');
 });
 
@@ -86,6 +86,7 @@ test('拒绝未知平台、重复平台、错误入口和更改使用时间；�
   assert.match(prepareMailboxPlatformMarks(previous, altered, 'inventory_registration_result', actor), /原使用时间/);
   previous.registrationRecords.push({ assetId: 'mail-1', state: '成功', product: 'CLAUDE' });
   assert.match(prepareMailboxPlatformMarks(previous, addMark(previous), 'inventory_registration_result', actor), /重复/);
+  assert.match(prepareMailboxPlatformMarks(previous, addMark(previous, 'grok'), 'inventory_registration_result', actor), /已有注册平台/);
   previous.registrationRecords = [];
   const twice = addMark(previous); twice.mailboxes[0].usageLinks.push({ kind: 'registration', product: 'claude' });
   assert.match(prepareMailboxPlatformMarks(previous, twice, 'inventory_registration_result', actor), /重复/);

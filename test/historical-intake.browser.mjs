@@ -140,7 +140,14 @@ test('隐藏邮箱历史入库预检、冲突保留输入和刷新回读', { tim
   const preview = page.getByRole('button', { name: '预检资料', exact: true });
   const pending = page.locator('#relay-intake-preview').getByText('新增待补全订单');
   await preview.click();
-  await pending.waitFor();
+  const inspectPreview = async () => {
+    await pending.waitFor({ state: 'attached' });
+    const previewRow = page.locator('#relay-intake-preview tr').filter({ hasText: '新增待补全订单' });
+    const details = previewRow.locator('[data-action="table-mobile-toggle"]');
+    if (await details.isVisible() && await details.getAttribute('aria-expanded') === 'false') await details.click();
+    await pending.waitFor();
+  };
+  await inspectPreview();
   await editor.fill(content + '\t合成更改');
   await page.locator('button[form="relay-intake-form"][type="submit"]').click();
   assert.equal(writes, 0);
@@ -149,7 +156,7 @@ test('隐藏邮箱历史入库预检、冲突保留输入和刷新回读', { tim
   await page.setViewportSize({ width: 390, height: 900 });
   await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
   await preview.click();
-  await pending.waitFor();
+  await inspectPreview();
   await settle(page);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   const confirm = async () => {
@@ -160,21 +167,27 @@ test('隐藏邮箱历史入库预检、冲突保留输入和刷新回读', { tim
   await page.getByText('合成资料版本冲突，请重新预检', { exact: true }).waitFor();
   assert.equal(await editor.inputValue(), content);
   await preview.click();
-  await pending.waitFor();
+  await inspectPreview();
   await confirm();
   await page.locator('#drawer[open]').waitFor({ state: 'hidden' });
   assert.equal(writes, 2);
   await page.reload();
   await page.getByRole('tab', { name: '隐藏邮箱管理', exact: true }).click();
   for (const address of ['sold@example.test', 'registered@example.test']) {
-    const row = page.getByRole('row').filter({ hasText: address });
+    const row = page.locator('table[data-table="relay-aliases"] tbody tr').filter({ hasText: address });
+    await row.waitFor();
+    const details = row.locator('[data-action="table-mobile-toggle"]');
+    if (await details.isVisible() && await details.getAttribute('aria-expanded') === 'false') await details.click();
     await row.getByText('已实际使用', { exact: true }).waitFor();
-    await row.getByText('已登记注册', { exact: true }).waitFor();
+    await row.getByText('ChatGPT', { exact: true }).waitFor();
+    const account = local.inventory.data.accounts.find(item => item.email === address);
+    await row.getByRole('button', { name: account.id, exact: true }).waitFor();
   }
   assert.equal(local.commerce.data.orders.length, 1);
   await page.goto(origin + '/#/accounts/gpt');
   const registeredRow = page.getByRole('row').filter({ hasText: 'registered@example.test' });
   await registeredRow.locator('[data-column="status"]').getByText('正常', { exact: true }).waitFor();
+  await registeredRow.getByRole('button', { name: '更多资料', exact: true }).click();
   await registeredRow.locator('[data-column="source"]').getByText('自己注册', { exact: true }).waitFor();
   for (const field of ['password', 'totp'])
     assert.equal(await registeredRow.locator(`[data-column="${field}"]`).textContent(), '未录入');

@@ -251,6 +251,9 @@
     return '待核对';
   }
   function usedLabel(row) {
+    const review = A.modules.inventory?.usageReviewFor?.(row.id);
+    if (review?.status === 'review') return '待核对';
+    if (review?.status === 'used' && row.inventoryState !== 'used') return '检测到已使用';
     return (
       { available: '未使用', claimed: '已提取待使用', used: '已实际使用' }[row.inventoryState] ||
       '待核对'
@@ -264,8 +267,10 @@
     );
   }
   function registrationLabel(row) {
+    if (A.modules.inventory?.mailboxRegistrationAccount?.(row)) return '已登记注册';
     const records = A.modules.inventory?.registrationRecordsFor?.(row.id) || [];
-    const latest = [...records].sort((a, b) => timestamp(b.time) - timestamp(a.time))[0];
+    const latest = records.find(record => record.state === '成功') ||
+      [...records].sort((a, b) => timestamp(b.time) - timestamp(a.time))[0];
     if (latest)
       return (
         {
@@ -281,6 +286,9 @@
   }
   function platformLabel(row) {
     return A.modules.inventory?.mailboxPlatformLabel?.(row) || '平台未登记';
+  }
+  function registrationAccountCell(row) {
+    return A.modules.inventory?.mailboxRegistrationAccountCell?.(row) || '—';
   }
   function unknown(value) {
     return value || '历史未记录';
@@ -639,7 +647,7 @@
     const matching = allAliases.filter(
       (r) =>
         (!view.parentId || r.parentMailboxId === view.parentId) &&
-        (!query || `${r.email} ${r.id} ${displayId('alias', r)} ${r.parentMailboxId || ''} ${displayId('parent', r.parentMailboxId)} ${parentEmail(r.parentMailboxId)} ${r.notes || ''} ${r.createdBy || ''} ${r.importId || ''} ${displayImportId(r.importId)} ${platformLabel(r)}`
+        (!query || `${r.email} ${r.id} ${displayId('alias', r)} ${r.parentMailboxId || ''} ${displayId('parent', r.parentMailboxId)} ${parentEmail(r.parentMailboxId)} ${r.notes || ''} ${r.createdBy || ''} ${r.importId || ''} ${displayImportId(r.importId)} ${platformLabel(r)} ${A.modules.inventory?.mailboxRegistrationAccount?.(r)?.id || ''}`
           .toLowerCase().includes(query))
     );
     const matchesUse = (row) =>
@@ -656,7 +664,7 @@
     );
     const health = statusButtons(
       'health',
-      '账号状态',
+      '邮箱资料状态',
       healthOptions,
       matching.filter(matchesUse),
       (row) => row.health || 'normal'
@@ -687,24 +695,15 @@
           { id: 'aliasId', label: '隐藏邮箱编号', class: 'mono', render: (r) => E(displayId('alias', r)) },
           { id: 'parentMailboxId', label: '主邮箱编号', class: 'mono', render: (r) => E(displayId('parent', r.parentMailboxId)) },
           { id: 'email', label: '隐藏邮箱地址' },
-          { id: 'registrationPlatform', label: '注册平台', render: (r) => E(platformLabel(r)) },
           {
             id: 'parent',
             label: '所属 Apple 主邮箱',
             render: (r) => E(parentEmail(r.parentMailboxId))
           },
-          { id: 'relayStatus', label: '邮箱状态', render: (r) => E(status(r)) },
-          {
-            id: 'health',
-            label: '账号状态',
-            render: (r) => E(healthLabel(r))
-          },
-          { id: 'healthChangedAt', label: '账号状态变更时间', render: (r) => E(timeText(r.healthChangedAt)) },
-          { id: 'inventoryState', label: '使用状态', render: (r) => {
-            const review = A.modules.inventory?.usageReviewFor?.(r.id);
-            return E(review ? (review.status === 'used' ? '检测到已使用' : '待核对') : usedLabel(r));
-          } },
-          { id: 'registration', label: '注册状态', render: (r) => E(registrationLabel(r)) },
+          { id: 'relayStatus', label: '邮箱启用状态', render: (r) => E(status(r)) },
+          { id: 'inventoryState', label: '邮箱使用状态', render: (r) => E(usedLabel(r)) },
+          { id: 'registrationPlatform', label: '注册平台', render: (r) => E(platformLabel(r)) },
+          { id: 'registrationAccount', label: '关联账号', render: registrationAccountCell },
           { id: 'queryCode', label: '买家查询码', class: 'relay-buyer-code-column', render: buyerCodeCell },
           { id: 'queryExpiry', label: '查询码到期', render: (r) => E(timeText(r.queryExpiry)) },
           { id: 'lastQueriedAt', label: '最近查询时间', render: (r) => E(timeText(r.lastQueriedAt)) },
@@ -1111,7 +1110,7 @@
     preview = null;
     const d = draft('intake');
     const heading = intakeFields.map(([label]) => label).join('\t');
-    openForm('intake', '', '苹果隐藏邮箱历史入库',
+    openForm('intake', '', 'ChatGPT 历史入库',
       parentPicker(d['relay-parentId'] || view.parentId, d['relay-parent-choice']) +
       field('有效天数', 'days', input('days', d['relay-days'] || 30, 'type="number" min="1" max="3650"'), true) +
       `<div class="commerce-span-all">${field('历史资料', 'intake-content',
@@ -1805,12 +1804,27 @@
     initialize();
     const a = alias(id);
     if (!a) return;
-    const usage = A.modules.inventory?.usageDetails?.(a) || '';
+    const inventory = A.modules.inventory;
+    const usage = inventory?.usageDetails?.(a) || '';
+    const account = inventory?.mailboxRegistrationAccount?.(a);
+    const claim = inventory?.mailboxClaim?.(a);
+    const review = inventory?.usageReviewFor?.(a.id);
+    const platform = platformLabel(a);
+    const accountState = account && ({ dead: '死号', unlocking: '解封中' }[account.health] || account.status || '正常');
+    const accountProperties = account ? prop('注册时间', timeText(inventory.registrationTime?.(account))) +
+      prop('账号状态', accountState) + prop('账号状态变更时间', timeText(inventory.healthChangeTime?.(account))) : '';
+    const registration = `<section class="form-section"><h3>关联账号</h3><div class="property-list">
+      ${prop('注册平台', platform)}
+      <div class="property-row"><span>账号编号</span><strong>${registrationAccountCell(a)}</strong></div>
+      ${prop('注册状态', platform === '待核对' ? '待核对' : registrationLabel(a))}
+      ${review?.status === 'review' ? prop('待核对原因', review.message) : ''}
+      ${accountProperties}${prop('实际使用时间', timeText(a.actualUsedAt))}${claim ? prop('原领用批次', claim.label) : ''}
+      </div>${claim ? A.button('查看原领用批次', 'inventory-batch', '', 'orders', `data-id="${E(claim.id)}"`) : ''}</section>`;
     const history = usage + eventList(a.id);
     A.openDrawer(
       'Apple 隐藏邮箱详情',
       '隐藏邮箱从所属 Apple 主邮箱收信；库存使用和平台注册记录分别保留。',
-      `<div class="property-list">${prop('隐藏邮箱编号', displayId('alias', a))}${prop('主邮箱编号', displayId('parent', a.parentMailboxId))}${prop('所属主邮箱', parentEmail(a.parentMailboxId))}${prop('隐藏邮箱地址', a.email)}${prop('邮箱状态', status(a))}${prop('账号状态', healthLabel(a))}${prop('账号状态变更时间', timeText(a.healthChangedAt))}${prop('库存使用状态', usedLabel(a))}${prop('注册状态', registrationLabel(a))}${prop('注册平台', platformLabel(a))}${prop('买家查询码', a.queryCode)}${prop('查询码到期', timeText(a.queryExpiry))}${prop('有效天数', String(a.codeResetIntervalDays))}${prop('最近查询时间', timeText(a.lastQueriedAt))}${prop('邮件数量', String(mails.filter((mail) => mail.aliasId === a.id).length))}${prop('最近收件时间', lastMailTime(a.id))}${prop('来源导入批次', sourceBatchLabel(a))}${prop('备注', a.notes)}${trace(a)}</div>${history}`,
+      `<div class="property-list">${prop('隐藏邮箱编号', displayId('alias', a))}${prop('主邮箱编号', displayId('parent', a.parentMailboxId))}${prop('所属主邮箱', parentEmail(a.parentMailboxId))}${prop('隐藏邮箱地址', a.email)}${prop('邮箱启用状态', status(a))}${prop('邮箱资料状态', healthLabel(a))}${prop('邮箱资料状态变更时间', timeText(a.healthChangedAt))}${prop('邮箱使用状态', usedLabel(a))}${prop('买家查询码', a.queryCode)}${prop('查询码到期', timeText(a.queryExpiry))}${prop('有效天数', String(a.codeResetIntervalDays))}${prop('最近查询时间', timeText(a.lastQueriedAt))}${prop('邮件数量', String(mails.filter((mail) => mail.aliasId === a.id).length))}${prop('最近收件时间', lastMailTime(a.id))}${prop('来源导入批次', sourceBatchLabel(a))}${prop('备注', a.notes)}${trace(a)}</div>${registration}${history}`,
       A.button('关闭', 'drawer-close') +
         (A.modules.inventory?.mailboxPlatformButton?.(a) || '') +
         A.button('查看邮件', 'relay-mails', '', 'mail', `data-id="${E(a.id)}"`) +
@@ -1834,7 +1848,7 @@
     const drawer = document.querySelector('#drawer');
     const drawerContent = drawer?.firstElementChild;
     A.confirmAction(
-      '确认调整账号状态',
+      '确认调整邮箱资料状态',
       `${row.email}：${healthLabel(row)} → ${label}。已有领用、实际使用、注册和收件记录均保留。`,
       async () => {
         function apply() {
@@ -1846,7 +1860,7 @@
           const previous = healthLabel(current);
           current.health = health;
           current.healthChangedAt = now();
-          audit('账号状态变化', current, `${previous} → ${healthLabel(current)}`, {
+          audit('邮箱资料状态变化', current, `${previous} → ${healthLabel(current)}`, {
             updateDetails: false
           });
           return true;

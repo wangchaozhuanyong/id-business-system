@@ -1,12 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import { parseV2DateTimeInput, toV2DateTimeInput } from '../modules/time/dateTime.ts';
+import {
+  aiRegistrationProduct, conflictingRegistration, isStockRegistration,
+  registrationEmail as emailKey, registrationOccupancy, registrationOccupancyMessage, registrationPurposeProduct
+} from './inventory-registration.mjs';
 
 const mailboxTypes = new Map([
   ['google', 'google'], ['谷歌邮箱', 'google'],
   ['relay', 'relay'], ['苹果隐藏邮箱', 'relay']
 ]);
-const accountTypes = new Set(['gpt', 'claude']);
-const emailKey = (email) => String(email || '').trim().toLowerCase();
+const accountTypes = new Set(['gpt', 'claude', 'grok']);
 const state = (row) => row.inventoryState || (row.used ? 'used' : 'available');
 const list = (value) => Array.isArray(value) ? value : [];
 
@@ -25,13 +28,13 @@ function instant(value) {
     : parseV2DateTimeInput(text)?.getTime() ?? NaN;
 }
 
-export function pendingInventoryClaim(inventory, asset) {
+export function pendingInventoryClaim(inventory, asset, status = 'pending') {
   if (!asset?.claimId || !asset.claimBatchId) return null;
   const batch = list(inventory?.batches).find((row) => row?.id === asset.claimBatchId);
   const item = list(batch?.items).find((row) =>
     row?.id === asset.claimId && row.assetId === asset.id &&
     (!row.type || row.type === asset.type) &&
-    (!row.email || emailKey(row.email) === emailKey(asset.email)) && row.status === 'pending'
+    (!row.email || emailKey(row.email) === emailKey(asset.email)) && row.status === status
   );
   return item ? { batch, item } : null;
 }
@@ -100,10 +103,13 @@ export function inspectInventoryUsage(inventory, commerce, now = Date.now()) {
     }
   }
   const registrations = list(inventory?.registrationRecords);
+  const occupied = registrationOccupancy(inventory);
   const unresolved = new Set(registrations.filter((row) => row?.state === '待核对').map((row) => row.assetId));
   const matches = new Map();
 
-  function consider(asset, evidence, ambiguous = false) {
+  function consider(asset, evidence, ambiguous = false, sourceMismatch = false) {
+    const facts = occupied.get(emailKey(asset.email)) || [];
+    if (conflictingRegistration(facts)) return;
     if (list(asset.usageCorrections).some(({ originalLink }) =>
       originalLink?.kind === evidence.kind &&
       originalLink.accountId === evidence.accountId &&
@@ -111,27 +117,30 @@ export function inspectInventoryUsage(inventory, commerce, now = Date.now()) {
       originalLink.registrationId === evidence.registrationId
     )) return;
     const usage = list(asset.usageLinks);
-    const supplement = state(asset) === 'used' && evidence.kind === 'registration' &&
-      usage.some((link) => link.kind === 'order-use') &&
-      !usage.some((link) => link.kind === 'registration');
+    const supplement = state(asset) === 'used' && evidence.kind === 'registration' && evidence.accountId &&
+      !usage.some(link => link.kind === 'registration' && link.accountId) &&
+      (facts.some(fact => fact.assetId === asset.id && fact.product === evidence.product && !fact.pending) ||
+        registrations.some(record => record?.assetId === asset.id && record.state === '成功' && !record.product) ||
+        usage.some(link => link.kind === 'order-use'));
     if ((state(asset) === 'used' || usage.length) && !supplement) return;
     const existing = matches.get(asset.id);
-    const claim = pendingInventoryClaim(inventory, asset);
+    const claim = pendingInventoryClaim(inventory, asset, supplement ? 'used' : 'pending');
     const claimedAt = instant(claim?.item.claimedAt || claim?.batch.time);
-    const purpose = /^(?:注册\s*)(GPT|Claude|Gemini|Grok)$/i.exec(claim?.batch.purpose || '')?.[1]?.toLowerCase();
+    const purpose = registrationPurposeProduct(claim?.batch.purpose);
     const explicit = evidence.registrationId && ['gemini', 'grok'].includes(evidence.product);
     let reason = '';
     if (ambiguous) reason = '有多条同地址资料，需核对来源';
-    else if (evidence.pending || unresolved.has(asset.id) || claim?.item.taskId ||
+    else if (sourceMismatch && !claim && !supplement) reason = '账号邮箱类型与库存来源需核对';
+    else if (evidence.pending || unresolved.has(asset.id) || (!supplement && (claim?.item.taskId ||
       (claim?.item.registrationId && claim.item.registrationId !== evidence.registrationId) ||
-      (claim?.item.orderId && claim.item.orderId !== evidence.orderId))
+      (claim?.item.orderId && claim.item.orderId !== evidence.orderId))))
       reason = '订单、任务或注册结果待确认';
     else if (state(asset) === 'claimed' && !claim) reason = '提取批次关联待核对';
-    else if (claim && (!evidence.actorId || claim.batch.actorId !== evidence.actorId))
+    else if (!supplement && claim && (!evidence.actorId || claim.batch.actorId !== evidence.actorId))
       reason = '业务来源与领取人需核对';
-    else if (purpose && purpose !== evidence.product) reason = '业务产品与提取用途不一致';
+    else if (!supplement && purpose && purpose !== evidence.product) reason = '业务产品与提取用途不一致';
     else if (!Number.isFinite(evidence.occurred) || evidence.occurred > now ||
-      (claim && (!Number.isFinite(claimedAt) || evidence.occurred < claimedAt)) ||
+      (!supplement && claim && (!Number.isFinite(claimedAt) || evidence.occurred < claimedAt)) ||
       (explicit ? evidence.occurred < (lastReturn.get(asset.id) ?? -Infinity)
         : evidence.occurred <= (lastReturn.get(asset.id) ?? -Infinity)))
       reason = '业务时间与本次提取或历史归还需核对';
@@ -147,9 +156,10 @@ export function inspectInventoryUsage(inventory, commerce, now = Date.now()) {
   for (const record of registrations) {
     const asset = mailById.get(record?.assetId);
     if (!asset || !record.id || !['待核对', '成功'].includes(record.state)) continue;
+    const product = aiRegistrationProduct(record.product) || String(record.product || '').toLowerCase();
     consider(asset, {
-      kind: 'registration', registrationId: record.id, product: String(record.product || '').toLowerCase(),
-      ...(['gemini', 'grok'].includes(String(record.product || '').toLowerCase()) && { accountId: record.accountId }),
+      kind: 'registration', registrationId: record.id, product,
+      ...(record.accountId && { accountId: record.accountId }),
       actorId: record.createdById || record.actorId, occurred: instant(record.time),
       pending: record.state === '待核对', label: `注册登记 · ${record.id}`
     });
@@ -157,17 +167,18 @@ export function inspectInventoryUsage(inventory, commerce, now = Date.now()) {
 
   for (const [email, rows] of accounts) {
     for (const account of rows) {
-      if (account.claudeHistory || account.source === '客户提供' || account.accountSource === '客户自有') continue;
+      if (!isStockRegistration(account)) continue;
       const type = mailboxTypes.get(account.emailType);
-      if (account.emailType && !type) continue;
-      const sources = (mail.get(email) || []).filter((row) => !type || row.type === type);
+      const recorded = occupied.get(email)?.find(fact => fact.assetId && !fact.pending && fact.product === account.type);
+      const sourceId = account.sourceMailboxId || recorded?.assetId;
+      const sources = (mail.get(email) || []).filter(row => !sourceId || row.id === sourceId);
       const ambiguous = sources.length > 1 || rows.filter((row) => row.type === account.type).length > 1;
       for (const source of sources) {
         consider(source, {
           kind: 'registration', accountId: account.id, product: account.type,
-          actorId: account.createdById, occurred: instant(account.registered || account.createdAt),
+          actorId: account.createdById, occurred: instant(account.registered || (!account.claudeHistory && account.createdAt)),
           label: `账号登记 · ${account.id}`
-        }, ambiguous);
+        }, ambiguous, Boolean(!sourceId && account.emailType && source.type !== type));
       }
     }
   }
@@ -195,11 +206,29 @@ export function inspectInventoryUsage(inventory, commerce, now = Date.now()) {
       }
     }
   }
+  for (const [email, assets] of mail) {
+    const facts = occupied.get(email) || [];
+    const conflict = conflictingRegistration(facts);
+    for (const asset of assets) {
+      if (conflict) {
+        const references = [...new Set(facts.map(fact => fact.accountId || fact.product))];
+        matches.set(asset.id, { asset, status: 'review', evidence: {}, registrationConflict: true,
+          message: `同一邮箱有多条注册依据 · ${references.join('、')}` });
+      } else if (state(asset) !== 'used' && !matches.has(asset.id)) {
+        const unresolvedFacts = facts.filter(fact => !list(asset.usageCorrections).some(({ originalLink }) =>
+          fact.accountId && originalLink?.kind === 'registration' && originalLink.accountId === fact.accountId));
+        if (unresolvedFacts.length) matches.set(asset.id, { asset, status: 'review', evidence: {},
+          message: registrationOccupancyMessage(unresolvedFacts) });
+      }
+    }
+  }
   return matches;
 }
 
 export function usageReviewRows(matches) {
-  return [...matches.values()].map(({ asset, status, message }) => ({ assetId: asset.id, status, message }));
+  return [...matches.values()].map(({ asset, status, message, registrationConflict }) => ({
+    assetId: asset.id, status, message, ...(registrationConflict && { registrationConflict })
+  }));
 }
 
 export function applyInventoryUsage(matches, actor, now = new Date()) {
@@ -209,7 +238,7 @@ export function applyInventoryUsage(matches, actor, now = new Date()) {
     if (status !== 'used') continue;
     const { actorId, occurred, pending, ...link } = evidence;
     const occurredAt = toV2DateTimeInput(occurred).replace('T', ' ');
-    if (claim) {
+    if (claim && !supplement) {
       claim.item.status = 'used';
       claim.item.usedAt = occurredAt;
       claim.item.orderId = link.orderId || '';
