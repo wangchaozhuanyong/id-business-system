@@ -201,3 +201,103 @@ test('按套餐独立汇总实收、成本、分摊及费用来源，并用原�
     });
   }
 });
+
+test('实付凭据按扣款日和原币汇总，登记及作废后可逐单核对', { timeout: 65_000 }, async t => {
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  for (const width of [1440, 390]) {
+    await t.test(width + 'px', async t => {
+      const context = await browser.newContext({ viewport: { width, height: 900 } });
+      t.after(() => context.close());
+      const traffic = await interceptDesign(context, { actor, localFixtures: fixtures(), skipRechargeAssets: true });
+      const endpoint = origin + '/api/local/finance/expense-receipts';
+      const recordedAt = '2026-11-10T08:00:00Z';
+      const operations = [];
+      let receiptState = { version: 4, items: [
+        { id: 'card-fee', category: 'card-issue', chargedOn: '2026-11-08', source: '合成卡商', reference: 'CARD-001',
+          amount: '0.5', currency: 'USD', recordedAt },
+        { id: 'fx-fee', category: 'fx-fee', chargedOn: '2026-11-09', source: '合成银行', reference: 'FX-001',
+          amount: '4.15', currency: 'CNY', orderId: 'claude', orderNo: 'SYN-CLAUDE', recordedAt }
+      ] };
+      await context.route(endpoint, async route => {
+        if (route.request().method() === 'GET') return route.fulfill({ json: receiptState });
+        const input = route.request().postDataJSON();
+        operations.push(input);
+        assert.equal(input.version, receiptState.version);
+        if (input.action === 'record') {
+          receiptState = { version: 5, items: [
+            { ...input.entry, id: 'new-kyc', orderId: 'claude', recordedAt }, ...receiptState.items
+          ] };
+        } else {
+          receiptState = { version: 6, items: receiptState.items.map(row => row.id === input.id
+            ? { ...row, voidedAt: recordedAt, voidReason: input.reason } : row) };
+        }
+        return route.fulfill({ json: receiptState });
+      });
+      const page = await context.newPage();
+      page.setDefaultTimeout(5500);
+      await page.clock.install({ time: new Date(clock) });
+      const errors = [];
+      page.on('pageerror', error => errors.push(error.message));
+      await page.goto(origin + '/#/orders/statistics');
+      if (width === 390) await toggleDesignTheme(page);
+      await page.getByRole('tab', { name: '费用拆分' }).click();
+      const summary = page.locator('table[data-table="commerce-expense-summary"]');
+      const receiptTable = page.locator('table[data-table="commerce-expense-receipts"]');
+      const cell = (id, column) => summary.locator(`tr[data-row-id="${id}"] [data-column="${column}"]`);
+      await summary.waitFor();
+      assert.equal(await cell('card-issue', 'original').textContent(), '0.50 USD');
+      assert.equal(await cell('card-issue', 'converted').textContent(), '—');
+      assert.equal(await cell('card-issue', 'pending').textContent(), '1');
+      assert.equal(await cell('fx-fee', 'converted').textContent(), '4.15');
+      await page.getByLabel('开通起日').fill('2026-11-10');
+      assert.equal(await cell('card-issue', 'count').textContent(), '1');
+      await page.getByLabel('扣款起日').fill('2026-11-09');
+      assert.equal(await cell('card-issue', 'count').textContent(), '0');
+      await page.getByLabel('扣款止日').fill('2026-11-08');
+      await page.getByRole('alert').filter({ hasText: '扣款起日须早于或等于止日' }).waitFor();
+      await page.getByLabel('扣款止日').fill('');
+      const help = page.getByLabel('查看实付凭据说明');
+      await help.click();
+      await page.getByRole('note').filter({ hasText: '原币按币种分别加总' }).waitFor();
+      await page.keyboard.press('Escape');
+      assert.equal(await page.getByRole('note').filter({ hasText: '原币按币种分别加总' }).isVisible(), false);
+
+      await page.getByRole('button', { name: '登记实付凭据' }).click();
+      const drawer = page.locator('#drawer[open]');
+      for (const [field, value] of Object.entries({ chargedOn: '2026-11-10', source: '合成机构', reference: 'KYC-001',
+        amount: '20', settlementAmount: '32.12', orderNo: 'SYN-CLAUDE' })) {
+        await drawer.locator('#commerce-expense-' + field).fill(value);
+      }
+      await drawer.locator('#commerce-expense-currency').selectOption('MYR');
+      await drawer.locator('#commerce-expense-settlementCurrency').selectOption('CNY');
+      await drawer.getByRole('button', { name: '确认登记', exact: true }).click();
+      await drawer.waitFor({ state: 'hidden' });
+      assert.equal(operations[0].entry.orderNo, 'SYN-CLAUDE');
+      assert.equal(await cell('kyc', 'original').textContent(), '20.00 MYR');
+      assert.equal(await cell('kyc', 'converted').textContent(), '32.12');
+      await page.getByLabel('统计币种').selectOption('MYR');
+      assert.equal(await cell('kyc', 'converted').textContent(), '20.00');
+      assert.equal(await cell('fx-fee', 'pending').textContent(), '1');
+      await page.getByLabel('产品', { exact: true }).selectOption('Claude');
+      await page.getByLabel('套餐', { exact: true }).selectOption('Claude Pro:Pro');
+      assert.equal(await cell('kyc', 'count').textContent(), '1');
+      const saved = receiptTable.locator('tr[data-row-id="new-kyc"]');
+      await saved.getByRole('button', { name: '查看原单', exact: true }).click();
+      assert.equal(await drawer.getByRole('tab', { name: '成本与汇率' }).getAttribute('aria-selected'), 'true');
+      await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
+      await saved.getByRole('button', { name: '作废凭据', exact: true }).click();
+      await drawer.locator('#commerce-expense-reason').fill('合成凭据录入更正');
+      await drawer.getByRole('button', { name: '确认作废', exact: true }).click();
+      await drawer.waitFor({ state: 'hidden' });
+      assert.equal(operations[1].action, 'void');
+      assert.equal(await cell('kyc', 'count').textContent(), '0');
+      assert.match(await saved.locator('[data-column="status"]').textContent(), /已作废.*合成凭据录入更正/s);
+      await settle(page);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+      assert.deepEqual((await spacingSnapshot(page)).findings, []);
+      assert.deepEqual(errors, []);
+      assert.deepEqual(traffic.external, []);
+    });
+  }
+});
