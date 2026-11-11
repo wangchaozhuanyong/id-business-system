@@ -6266,6 +6266,12 @@
     ['recovery', '已到账回款', '作为成本抵减。银行卡取原单实际到账；苹果内购按订单折扣或实际成本中可收回部分折算。'],
     ['rounding', '折算尾差', '订单净成本与各项折算金额相加可能相差万分位，归到此行以便逐单对平。']
   ];
+  const expenseCategories = [
+    ['kyc', 'KYC 认证实付'], ['card-issue', '发卡实付'], ['fx-fee', '独立换汇手续费']
+  ];
+  const expenseCategoryName = Object.fromEntries(expenseCategories);
+  const expenseRoute = '/api/local/finance/expense-receipts';
+  let expenseReceipts;
   const statisticsAmount = amount => amount == null ? '—' : display(amount);
   const statisticsSum = (rows, get) => {
     const values = rows.map(get).filter(amount => amount != null);
@@ -6460,8 +6466,161 @@
       { id: 'actual', label: '实账', mobileSummary: true, render: row => feeCell(row, 'actual') },
       { id: 'reference', label: '参考', mobileSummary: true, render: row => feeCell(row, 'reference') },
       { id: 'partial', label: '未核全订单的已知费用', mobileSummary: true, render: row => feeCell(row, 'partial') }
-    ], rows, '', 'commerce-fee-statistics') +
-      '<p class="footnote panel-body">按扣款日期统计的发卡实付待补账单。现有开卡费记录用于订单分摊。KYC 和独立换汇实付也需要费用凭据。</p>';
+    ], rows, '', 'commerce-fee-statistics');
+  }
+
+  async function expenseRequest(command) {
+    const response = await fetch(expenseRoute, command ? {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(command)
+    } : { cache: 'no-store' });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) throw Object.assign(new Error(data?.error || '读取或保存费用凭据失败'), { status: response.status });
+    if (!Number.isSafeInteger(data?.version) || !Array.isArray(data?.items)) throw new Error('费用凭据回执无效');
+    return data;
+  }
+
+  function showingExpenseReceipts() {
+    return S.route === 'orders/statistics' && moduleState.statsTab === 'fees';
+  }
+
+  async function loadExpenseReceipts() {
+    const state = expenseReceipts;
+    if (!state || state.phase === 'loading') return;
+    state.phase = 'loading';
+    try {
+      Object.assign(state, await expenseRequest(), { phase: 'ready' });
+    } catch {
+      state.phase = 'error';
+    }
+    if (showingExpenseReceipts() && expenseReceipts === state) A.render();
+  }
+
+  function renderExpenseReceipts(currency) {
+    const actorId = currentOperator().id;
+    if (!localData || !actorId || !canManageOrders()) return '';
+    if (expenseReceipts?.actorId !== actorId)
+      expenseReceipts = { actorId, phase: 'idle', from: '', to: '', version: 0, items: [] };
+    const state = expenseReceipts;
+    if (state.phase === 'idle') void loadExpenseReceipts();
+    const title = panelTitle('实付凭据', '以北京时间的实际扣款日统计。原币按币种分别加总。统计币金额只汇总同币扣款及有该币结算金额的凭据。产品或套餐筛选只计入有原单归属的 KYC 和换汇费。发卡费在全部产品中显示为卡级支出。套餐净成本以原单的实际总成本或冻结费用为准。', state.phase === 'ready'
+      ? A.button('刷新凭据', 'commerce-expense-refresh') + A.button('登记实付凭据', 'commerce-expense-record', 'primary', 'plus')
+      : state.phase === 'error' ? A.button('重试', 'commerce-expense-refresh') : '');
+    if (state.phase !== 'ready')
+      return '<section class="panel commerce-stat-filters">' + title + (state.phase === 'error'
+        ? A.empty('费用凭据读取失败', '请重试读取账单记录。')
+        : A.empty('正在读取费用凭据', '请稍候。')) + '</section>';
+    const invalidDates = state.from && state.to && state.from > state.to;
+    const dates = ['from', 'to'].map((key, index) =>
+      `<div><label for="commerce-expense-${key}">扣款${index ? '止' : '起'}日</label><input id="commerce-expense-${key}" type="date" data-expense-date="${key}" value="${E(state[key])}"${invalidDates ? ' aria-invalid="true" aria-describedby="commerce-expense-date-error"' : ''} /></div>`
+    ).join('');
+    const byId = new Map(orders.map(order => [order.id, order]));
+    const f = moduleState.statsFilters;
+    const records = (invalidDates ? [] : state.items).filter(row =>
+      (!state.from || row.chargedOn >= state.from) && (!state.to || row.chargedOn <= state.to))
+      .map(row => ({ ...row, order: byId.get(row.orderId) }))
+      .filter(({ order, category }) => (!f.product && !f.plan) ||
+        (order && category !== 'card-issue' &&
+         (!f.product || statisticsProduct(order.product) === f.product) &&
+         (!f.plan || statisticsPlanKey(order.product, statisticsPlan(order)) === f.plan)))
+      .sort((a, b) => b.chargedOn.localeCompare(a.chargedOn) || b.recordedAt.localeCompare(a.recordedAt));
+    const amountInCurrency = row => row.currency === currency ? row.amount
+      : row.settlementCurrency === currency ? row.settlementAmount : null;
+    const summary = expenseCategories.map(([id, label]) => {
+      const rows = records.filter(row => row.category === id && !row.voidedAt);
+      const originals = new Map();
+      for (const row of rows) originals.set(row.currency, M.add(originals.get(row.currency) || '0', row.amount));
+      return { id, label, count: rows.length,
+        original: [...originals].map(([code, amount]) => `${display(amount)} ${code}`).join(' · ') || '—',
+        converted: statisticsAmount(statisticsSum(rows, amountInCurrency)),
+        pending: rows.filter(row => amountInCurrency(row) === null).length };
+    });
+    return `<section class="panel commerce-stat-filters">${title}
+      <div class="toolbar commerce-stat-filter-controls">${dates}</div>
+      ${invalidDates ? '<p class="field-error commerce-stat-filter-error" id="commerce-expense-date-error" role="alert">扣款起日须早于或等于止日。</p>' : ''}
+      ${A.table([
+        { id: 'label', label: '费用项目' }, { id: 'count', label: '有效凭据' },
+        { id: 'original', label: '实付原币', mobileSummary: true },
+        { id: 'converted', label: `已核实结算（${currency}）`, mobileSummary: true },
+        { id: 'pending', label: '待补结算笔数', mobileSummary: true }
+      ], summary, '', 'commerce-expense-summary')}
+      ${panelTitle('凭据明细', '凭据编号用于追溯原账单。同一来源及编号只计入一笔有效凭据。作废记录保留核对依据。')}
+      ${tableList([
+        { id: 'chargedOn', label: '扣款日' },
+        { id: 'category', label: '费用项目', render: row => E(expenseCategoryName[row.category]) },
+        { id: 'receipt', label: '来源与编号', long: true, render: row =>
+          `<div class="commerce-stat-amounts"><span>${E(row.source)}</span><small>${E(row.reference)}</small></div>` },
+        { id: 'amount', label: '实付原币', mobileSummary: true, render: row => `${display(row.amount)} ${E(row.currency)}` },
+        { id: 'settlement', label: '账单结算', render: row => row.settlementAmount
+          ? `${display(row.settlementAmount)} ${E(row.settlementCurrency)}` : '—' },
+        { id: 'order', label: '订单归属', render: row => {
+          const label = row.category === 'card-issue' ? '卡级费用'
+            : row.order ? statisticsPlanLabel(row.order.product, statisticsPlan(row.order)) : '未关联订单';
+          return row.orderNo ? `<div class="commerce-stat-amounts"><span>${E(label)}</span><small>${E(row.orderNo)}</small></div>` : E(label);
+        } },
+        { id: 'status', label: '状态', mobileSummary: true, render: row => row.voidedAt
+          ? `<div class="commerce-stat-amounts"><span>已作废</span><small>${E(row.voidReason)}</small></div>` : '已登记' },
+        { id: 'actions', label: '操作', action: true, render: row => `<div class="action-links">${row.order
+          ? A.textAction('查看原单', 'commerce-order-detail', `data-id="${E(row.order.id)}" data-tab="costs"`) : ''}
+          ${row.voidedAt ? '' : A.textAction('作废凭据', 'commerce-expense-void', `data-id="${E(row.id)}"`)}</div>` }
+      ], records, 'commerce-expense-receipts')}</section>`;
+  }
+
+  function openExpenseReceipt(id) {
+    if (expenseReceipts?.phase !== 'ready' || !canManageOrders()) return;
+    const row = id && expenseReceipts.items.find(item => item.id === id && !item.voidedAt);
+    if (id && !row) return;
+    const fields = row
+      ? field('作废原因', 'expense-reason', input('expense-reason', '', 'required maxlength="150"'), true)
+      : field('费用项目', 'expense-category', select('expense-category', expenseCategories, 'kyc'), true) +
+        field('扣款日期', 'expense-chargedOn', input('expense-chargedOn', '', `type="date" required max="${now().slice(0, 10)}"`), true) +
+        field('扣款来源', 'expense-source', input('expense-source', '', 'required maxlength="60"'), true) +
+        field('凭据编号', 'expense-reference', input('expense-reference', '', 'required maxlength="100"'), true, '填写账单流水号或账单行号。') +
+        field('实付原币金额', 'expense-amount', input('expense-amount', '', 'required inputmode="decimal" maxlength="21"'), true) +
+        field('原币', 'expense-currency', select('expense-currency', currencyChoices(), 'CNY'), true) +
+        field('账单结算金额', 'expense-settlementAmount', input('expense-settlementAmount', '', 'inputmode="decimal" maxlength="21"'), false,
+          '仅在账单另列实际结算币种和金额时填写。') +
+        field('账单结算币种', 'expense-settlementCurrency', select('expense-settlementCurrency', [['', '未另列'], ...currencyChoices()])) +
+        field('原订单编号', 'expense-orderNo', input('expense-orderNo', '', 'maxlength="80"'), false,
+          '可选。发卡费登记原单时用于追溯，同一张卡的开支仍按卡统计。', 'commerce-span-all');
+    const form = 'commerce-expense-form';
+    const summary = row ? '<div class="property-list">' + property('凭据', `${row.source} · ${row.reference}`) +
+      property('原币扣款', `${display(row.amount)} ${row.currency}`) + '</div>' : '';
+    A.openDrawer(row ? '作废实付凭据' : '登记实付凭据', row ? '作废后保留原记录和原因，汇总移除此笔。'
+      : '根据已发生的扣款登记。原币和结算金额均以账单为准。',
+      `${summary}<form id="${form}" data-expense-id="${E(id || '')}"><div class="commerce-field-grid">${fields}</div>
+        <p class="field-error" role="alert" hidden></p></form>`,
+      A.button('取消', 'drawer-close') + `<button class="button primary" type="submit" form="${form}">${row ? '确认作废' : '确认登记'}</button>`);
+  }
+
+  async function saveExpenseReceipt(form) {
+    const state = expenseReceipts;
+    if (state?.phase !== 'ready' || state.saving || state.actorId !== currentOperator().id || !canManageOrders()) return;
+    const raw = A.readForm(form), error = form.querySelector('p[role="alert"]');
+    const read = field => value(raw, 'expense-' + field);
+    const keys = ['category', 'chargedOn', 'source', 'reference', 'amount', 'currency',
+      'settlementAmount', 'settlementCurrency', 'orderNo'];
+    const id = form.dataset.expenseId;
+    const command = id ? { action: 'void', version: state.version, id, reason: read('reason') }
+      : { action: 'record', version: state.version, entry: Object.fromEntries(keys.map(key => [key, read(key)])) };
+    const submit = form.closest('dialog').querySelector(`button[form="${form.id}"]`);
+    state.saving = true;
+    submit.disabled = true;
+    error.hidden = true;
+    try {
+      Object.assign(state, await expenseRequest(command));
+      if (expenseReceipts !== state || state.actorId !== currentOperator().id) return;
+      if (form.isConnected && form.closest('dialog').open) cleanClose();
+      S.page = 1;
+      if (showingExpenseReceipts()) A.render();
+      A.notify(id ? '实付凭据已作废' : '实付凭据已登记');
+    } catch (failure) {
+      error.textContent = failure.message;
+      error.hidden = false;
+      if (failure.status === 409 && expenseReceipts === state) await loadExpenseReceipts();
+    } finally {
+      state.saving = false;
+      submit.disabled = false;
+    }
   }
 
   function renderStatisticsOrders(facts, currency) {
@@ -6561,7 +6720,8 @@
       `<section class="panel">${tabs([
         ['overview', '统计概览'], ['fees', '费用拆分'], ['details', '来源订单'], ['pending', '待核算'],
         ['rates', localData ? '汇率来源' : '演示汇率记录']
-      ], moduleState.statsTab, 'commerce-stats-tab', 'data-page-actions="tabs"')}${body}</section>`;
+      ], moduleState.statsTab, 'commerce-stats-tab', 'data-page-actions="tabs"')}${body}</section>` +
+      (showingExpenseReceipts() ? renderExpenseReceipts(currency) : '');
   }
 
   function contactKey(text, channel) {
@@ -8896,6 +9056,15 @@
       A.render();
       return true;
     }
+    if (action === 'commerce-expense-refresh') {
+      void loadExpenseReceipts();
+      A.render();
+      return true;
+    }
+    if (action === 'commerce-expense-record' || action === 'commerce-expense-void') {
+      openExpenseReceipt(node.dataset.id);
+      return true;
+    }
     if (action === 'commerce-stat-source') {
       moduleState.statsSource = { type: node.dataset.statSource, key: node.dataset.value,
         channel: node.dataset.channel, basis: node.dataset.basis };
@@ -8926,6 +9095,7 @@
     return false;
   }
   function onSubmit(form) {
+    if (form.id === 'commerce-expense-form') { void saveExpenseReceipt(form); return true; }
     if (form.id === 'commerce-claude-historical-sale-form') { void saveClaudeHistoricalSale(form); return true; }
     if (form.id === 'commerce-card-freeze-form') {
       const button = $('[data-action="commerce-card-freeze-save"]:not(:disabled)', form.closest('dialog'));
@@ -9340,6 +9510,14 @@
       return true;
     }
     const statFilter = node.dataset?.statFilter;
+    const expenseDate = node.dataset?.expenseDate;
+    if (showingExpenseReceipts() && expenseReceipts && ['from', 'to'].includes(expenseDate)) {
+      expenseReceipts[expenseDate] = node.value;
+      S.page = 1;
+      A.render();
+      document.getElementById(node.id)?.focus({ preventScroll: true });
+      return true;
+    }
     if (S.route === 'orders/statistics' && ['from', 'to', 'product', 'plan', 'payment', 'operation', 'currency'].includes(statFilter)) {
       const filters = moduleState.statsFilters;
       filters[statFilter] = node.value;

@@ -6,6 +6,7 @@ import { installFinanceAssets } from './finance/preview-assets.mjs';
 import { createFinanceQuoteService } from './finance/quote-service.mjs';
 import { createFinanceCollection } from './finance/collection-service.mjs';
 import { financeCollectionRoute, createFinanceCollectionHandler } from './finance/collection-route.mjs';
+import { orderExpenseRoute, createOrderExpenseHandler } from './finance/expense-receipts.mjs';
 import { automaticSnapshotRoute, createAutomaticSnapshotHandler } from './finance/quote-route.mjs';
 import { createWebsiteMonitor, handleWebsiteMonitor } from './tools/website-monitor.mjs';
 import { createBitBrowserProxyExtraction } from './bitbrowser-proxy-extraction.mjs';
@@ -191,7 +192,7 @@ export async function startPreview(
   let signedOutIndex = null;
   let setupIndex = null;
   let handleAutomaticSnapshot = null;
-  let financeCollection = null, handleFinanceCollection = null;
+  let financeCollection = null, handleFinanceCollection = null, handleOrderExpense = null;
   let handleOrderAuxiliary, handleCardManagement, handleClaudeGoogleSubscriptions, handleSubscriptions, handleRechargeCodes, orderSync;
   let handleEmployeeStatistics;
   let systemMonitoring, monitoringSources, handleMonitoring, handleProbeReport, handleReadiness;
@@ -345,6 +346,7 @@ export async function startPreview(
     try {
       financeCollection = createFinanceCollection({ store, provider: financeProvider, fetchQuote: financeFetch });
       handleFinanceCollection = createFinanceCollectionHandler({ collection: financeCollection, publicOrigin: secureOrigin });
+      handleOrderExpense = createOrderExpenseHandler({ store, publicOrigin: secureOrigin });
       const quoteService = createFinanceQuoteService({
         provider: financeProvider,
         fetchQuote: financeFetch, collection: financeCollection
@@ -485,6 +487,10 @@ export async function startPreview(
     if (store && route === financeCollectionRoute) {
       if (!canManage || (loginRequired && !actor)) return forbidden();
       return void handleFinanceCollection(request, response, actor || { id: 'local-operator', name: '本机操作员', role: 'admin' });
+    }
+    if (store && route === orderExpenseRoute) {
+      if (!canManage || (loginRequired && !actor)) return forbidden();
+      return void handleOrderExpense(request, response, actor || { id: 'local-operator', name: '本机操作员', role: 'admin' });
     }
     if (route === monitorPath && handleMonitoring) return void handleMonitoring(request, response, actor);
     if (store && route === automaticSnapshotRoute) {

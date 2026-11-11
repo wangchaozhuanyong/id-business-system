@@ -13,6 +13,7 @@ import { prepareTenantRenewalWrite, tenantRenewalHandledAction, tenantRenewalSet
 import { toV2DateTimeInput } from '../modules/time/dateTime.ts';
 import { validCurrencyCode, snapshotAction } from '../modules/finance/accounting.mjs';
 import { checkFinanceSnapshots, historicalFeeAction } from './finance/snapshot-integrity.mjs';
+import { orderExpenseDomain } from './finance/expense-receipts.mjs';
 import { appendWebsiteVisit, getWebsiteVisitIp, reportWebsiteVisits, websiteVisitsDomain } from './tools/website-visits.mjs';
 import {
   applyMailboxPoolWrite, findMailboxQuery, mailboxPoolCodePage, mailboxPoolItems, mailboxPoolMetadata,
@@ -204,9 +205,11 @@ const sessionEventLabels = {
 };
 const orderFeatureDomains = new Set([
   'recharge-codes', 'tenant-cards', 'order-sync', 'finance-rates', cardTypeDocument, orderCardArchiveDocument,
-  cardFreezeDocument, 'system-monitoring-config', 'system-monitoring-state', subscriptionDomain
+  cardFreezeDocument, 'system-monitoring-config', 'system-monitoring-state', subscriptionDomain, orderExpenseDomain
 ]);
 const orderFeatureAuditLabels = {
+  order_expense_record: '登记费用实付凭据',
+  order_expense_void: '作废费用实付凭据',
   monitor_settings: '保存监控与通知设置',
   monitor_test: '提交 Telegram 测试投递',
   monitor_acknowledge: '确认监控告警',
