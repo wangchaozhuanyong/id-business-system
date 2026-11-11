@@ -1,9 +1,12 @@
-// Stream a database dump into an authenticated encrypted backup. Never emit SQL.
+// Seal or verify a dump. Only the explicit isolated restore mode emits verified SQL.
 import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 
 const [mode, revision] = process.argv.slice(2);
-if (!['seal', 'verify'].includes(mode) || !/^[a-f0-9]{40}$/.test(revision || '')) throw new Error('Invalid backup mode');
+if (!['seal', 'verify', 'restore-isolated'].includes(mode) || !/^[a-f0-9]{40}$/.test(revision || ''))
+  throw new Error('Invalid backup mode');
+if (mode === 'restore-isolated' && process.stdout.isTTY) throw new Error('Restore requires a private pipe');
+const restored = mode === 'restore-isolated' ? [] : null;
 const magic = Buffer.from('IDBKUP01');
 let header = Buffer.alloc(0);
 let key;
@@ -12,9 +15,14 @@ let tail = Buffer.alloc(0);
 let bytes = 0;
 const digest = createHash('sha256');
 const write = async (data) => { if (!process.stdout.write(data)) await once(process.stdout, 'drain'); };
+const recordPlaintext = (data) => {
+  digest.update(data);
+  bytes += data.length;
+  restored?.push(data);
+};
 const consume = async (data) => {
   if (mode === 'seal') {
-    digest.update(data); bytes += data.length;
+    recordPlaintext(data);
     await write(cipher.update(data));
   } else {
     tail = Buffer.concat([tail, data]);
@@ -26,8 +34,7 @@ const consume = async (data) => {
       tail = tail.subarray(20);
     }
     if (tail.length <= 16) return;
-    const output = cipher.update(tail.subarray(0, -16));
-    digest.update(output); bytes += output.length;
+    recordPlaintext(cipher.update(tail.subarray(0, -16)));
     tail = tail.subarray(-16);
   }
 };
@@ -58,8 +65,14 @@ try {
   } else {
     if (tail.length !== 16) throw new Error('Incomplete backup');
     cipher.setAuthTag(tail);
-    const last = cipher.final(); digest.update(last); bytes += last.length;
-    process.stdout.write(JSON.stringify({ bytes, sha256: digest.digest('hex'), verified: true }) + '\n');
+    recordPlaintext(cipher.final());
+    const verification = JSON.stringify({ bytes, sha256: digest.digest('hex'), verified: true }) + '\n';
+    if (restored) {
+      for (const data of restored) await write(data);
+      process.stderr.write(verification);
+    } else {
+      process.stdout.write(verification);
+    }
   }
 } catch {
   process.stderr.write('Private backup validation failed.\n');

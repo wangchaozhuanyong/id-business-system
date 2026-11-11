@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createHash, generateKeyPairSync, randomUUID } from 'node:crypto';
 import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { performance } from 'node:perf_hooks';
 import test from 'node:test';
@@ -86,6 +87,63 @@ test('Drive reuses the reserved ID after a lost success response and verifies do
   assert.equal(download, 1);
   await assert.rejects(drive.uploadBatch({ ...batch, sha256: '0'.repeat(64) }, path),
     { message: 'DRIVE_REMOTE_BYTES_MISMATCH' });
+});
+
+test('Drive accepts a real 308 chunk acknowledgement without following its Location', async (t) => {
+  const dir = await fixture(t);
+  const path = join(dir, 'split.fixture');
+  const chunkSize = 1024 * 1024;
+  const bytes = Buffer.alloc(chunkSize + 71, 0x5a);
+  await writeFile(path, bytes, { mode: 0o600 });
+  const batch = { batch: randomUUID(), source: randomUUID(), remoteId: 'synthetic_file_id',
+    size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') };
+  const ranges = [];
+  let unexpectedRedirects = 0;
+  const server = createServer(async (req, res) => {
+    if (req.url !== '/session' || req.method !== 'PUT') {
+      unexpectedRedirects++;
+      res.writeHead(500).end();
+      return;
+    }
+    let received = 0;
+    for await (const part of req) received += part.length;
+    ranges.push([req.headers['content-range'], received]);
+    if (ranges.length === 1) {
+      res.writeHead(308, { range: `bytes=0-${chunkSize - 1}`, location: '/unexpected-redirect' }).end();
+    } else {
+      res.writeHead(200).end();
+    }
+  });
+  await new Promise((resolve, reject) => server.listen(0, '127.0.0.1', resolve).once('error', reject));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const drive = createBackupDrive({ oauth, root: parent, folder, fetchImpl: async (url, init) => {
+    const endpoint = new URL(url);
+    if (endpoint.hostname === 'oauth2.googleapis.com')
+      return Response.json({ access_token: 'synthetic', expires_in: 3600 });
+    if (endpoint.pathname.endsWith(folder)) return Response.json({
+      id: folder, mimeType: 'application/vnd.google-apps.folder', parents: [parent],
+      capabilities: { canAddChildren: true }
+    });
+    if (endpoint.pathname.endsWith(batch.remoteId)) {
+      return ranges.length === 2 ? Response.json({
+        id: batch.remoteId, parents: [folder], size: String(batch.size), sha256Checksum: batch.sha256,
+        appProperties: { format: 'independent-sqlite-v1', source: batch.source, batch: batch.batch }
+      }) : new Response(null, { status: 404 });
+    }
+    if (init.method === 'POST') return new Response(null, { headers: {
+      location: 'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&upload_id=synthetic'
+    } });
+    if (init.method === 'PUT') {
+      return fetch(`http://127.0.0.1:${server.address().port}/session`, init);
+    }
+    throw new Error('unrecognized synthetic request');
+  } });
+  await drive.uploadBatch(batch, path);
+  assert.deepEqual(ranges, [
+    [`bytes 0-${chunkSize - 1}/${batch.size}`, chunkSize],
+    [`bytes ${chunkSize}-${batch.size - 1}/${batch.size}`, 71]
+  ]);
+  assert.equal(unexpectedRedirects, 0);
 });
 
 test('isolated SQLite worker restores archived business data and resumes interrupted uploads',

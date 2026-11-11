@@ -48,8 +48,10 @@ export function createGoogleBackupRequest({ oauth, fetchImpl = fetch }) {
     return access.value;
   }
   async function request(url, init = {}, allowed = []) {
+    // A resumable PUT uses 308 as a chunk receipt. Inspect it without following a redirect.
+    const redirect = init.method === 'PUT' && allowed.includes(308) ? 'manual' : 'error';
     const response = await fetchImpl(url, {
-      ...init, redirect: 'error', signal: AbortSignal.timeout(30_000),
+      ...init, redirect, signal: AbortSignal.timeout(30_000),
       headers: { ...init.headers, authorization: 'Bearer ' + await token() }
     });
     if (response.status === 401) access = undefined;

@@ -18,8 +18,17 @@ test('a deployment backup verifies without emitting plaintext and binds cipherte
   const verified = JSON.parse(execFileSync(process.execPath, [script, 'verify', revision], { input }));
   assert.equal(verified.sha256, metadata.sha256);
   assert.equal(verified.bytes, sql.length);
+  const restore = spawnSync(process.execPath, [script, 'restore-isolated', revision], { input });
+  assert.equal(restore.status, 0);
+  assert.deepEqual(restore.stdout, sql);
+  assert.deepEqual(JSON.parse(restore.stderr), verified);
   const tampered = Buffer.from(sealed.stdout); tampered[25] ^= 1;
   assert.equal(spawnSync(process.execPath, [script, 'verify', revision], { input: Buffer.concat([Buffer.from(key + '\n'), tampered]) }).status, 1);
+  const invalidRestore = spawnSync(process.execPath, [script, 'restore-isolated', revision], {
+    input: Buffer.concat([Buffer.from(key + '\n'), tampered])
+  });
+  assert.equal(invalidRestore.status, 1);
+  assert.equal(invalidRestore.stdout.length, 0);
   assert.equal(spawnSync(process.execPath, [script, 'verify', 'b'.repeat(40)], { input }).status, 1);
   assert.equal(spawnSync(process.execPath, [script, 'verify', revision], { input: Buffer.concat([Buffer.from(randomBytes(32).toString('hex') + '\n'), sealed.stdout]) }).status, 1);
 });
