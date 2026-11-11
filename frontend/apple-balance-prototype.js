@@ -929,12 +929,12 @@
   function renderManagement() {
     const view = managementView(), all = fundingRows();
     const title = A.header('苹果 ID 管理', '查询订阅使用、到期与预计代付金额。',
-      A.button('刷新', 'apple-management-refresh'));
-    if (!all || (!ready() && !hasLoaded)) return title + '<section class="panel">' +
-      A.empty(managementError || loadState === 'error' ? '苹果 ID 管理读取失败' : '正在读取苹果 ID 管理', '可点击刷新重试。') + '</section>';
-    const plans = [...new Set(all.map(row => row.plan).filter(Boolean))].sort();
+      A.button('列设置', 'column-settings', '', 'columns', 'data-table-id="苹果 ID 管理"') +
+      A.button('刷新', 'apple-management-refresh', '', 'return'));
+    const available = Boolean(all && (ready() || hasLoaded));
+    const plans = [...new Set((all || []).map(row => row.plan).filter(Boolean))].sort();
     const query = view.query.trim().toLowerCase();
-    const rows = all.filter(row => (!view.state || row.state === view.state) && (!view.plan || row.plan === view.plan) &&
+    const rows = (all || []).filter(row => (!view.state || row.state === view.state) && (!view.plan || row.plan === view.plan) &&
       (!query || [row.name, row.contact, row.account, row.apple, row.order?.orderNo].some(value =>
         String(value || '').toLowerCase().includes(query))))
       .sort((a, b) => {
@@ -942,25 +942,43 @@
         const dateOrder = (a.end - b.end) * (view.sort === 'desc' ? -1 : 1);
         return dateOrder || a.apple.localeCompare(b.apple);
       });
-    view.page = Math.min(view.page, Math.max(1, Math.ceil(rows.length / view.pageSize)));
+    if (available) view.page = Math.min(view.page, Math.max(1, Math.ceil(rows.length / view.pageSize)));
     const start = (view.page - 1) * view.pageSize;
     const choices = [['', '全部状态'], ...Object.entries(fundingStates)];
     const columns = [
-      { id: 'name', label: '客户姓名' }, { id: 'contact', label: '联系方式' }, { id: 'account', label: '订阅账号' },
-      { id: 'apple', label: '苹果 ID 账号' }, { id: 'plan', label: '订阅套餐' },
-      { id: 'state', label: '使用状态', render: row => A.tag(fundingStates[row.state]) +
-        (row.subscription ? `<div>${E(row.subscription)}</div>` : '') },
-      { id: 'expiry', label: '到期时间' }, { id: 'duration', label: '到期时长' }, { id: 'expected', label: '预计金额' },
-      { id: 'actions', label: '操作', render: row => A.textAction('更多操作', 'apple-management-more', `data-id="${E(row.id)}"`) }
+      { id: 'apple', label: '苹果 ID 账号', fixed: true, long: true, class: 'apple-management-account' },
+      { id: 'state', label: '使用状态', class: 'apple-management-status', render: row =>
+        A.tag(fundingStates[row.state], { used: 'success', reserved: 'warning', conflict: 'danger' }[row.state] || '') },
+      { id: 'name', label: '客户姓名', long: true, class: 'apple-management-customer', render: row => E(row.name || '—') },
+      { id: 'contact', label: '联系方式', long: true, class: 'apple-management-contact', render: row => E(row.contact || '—') },
+      { id: 'account', label: '订阅账号', long: true, class: 'apple-management-account', render: row => E(row.account || '—') },
+      { id: 'plan', label: '订阅套餐', long: true, class: 'apple-management-plan', render: row => E(row.plan || '—') },
+      { id: 'subscription', label: '订阅状态', class: 'apple-management-status', render: row => row.subscription ?
+        A.tag(row.subscription, { '有效期内': 'success', '即将到期': 'warning', '订阅待核对': 'warning', '已过期': 'danger' }[row.subscription] || '') : '—' },
+      { id: 'expiry', label: '到期时间', render: row => E(row.expiry || '—') },
+      { id: 'duration', label: '到期时长', render: row => E(row.duration || '—') },
+      { id: 'expected', label: '预计金额', class: 'apple-management-amount', render: row => E(row.expected || '—') },
+      { id: 'actions', label: '操作', action: true, class: 'apple-management-actions', render: row =>
+        `<div class="action-links">${A.textAction('更多操作', 'apple-management-more', `data-id="${E(row.id)}"`, '', 'chevron')}</div>` }
     ];
-    return title + (managementError ? '<p class="inline-notice warning" role="status">读取失败，已保留上次成功读取的资料。</p>' : '') +
-      `<section class="panel"><div class="toolbar"><div class="toolbar-left"><div class="search-field">
+    const count = state => available ? all.filter(row => row.state === state).length : '—';
+    const overview = A.summary([
+      ['全部苹果 ID', available ? all.length : '—', '个', true],
+      ['未使用', count('unused'), '个'], ['已使用', count('used'), '个'], ['待核对', count('conflict'), '个']
+    ]);
+    const emptyState = available ? { title: '暂无符合条件的记录', description: '可调整搜索或筛选条件。' } : {
+      title: managementError || loadState === 'error' ? '苹果 ID 管理读取失败' : '正在读取苹果 ID 管理',
+      description: managementError || loadState === 'error' ? '可点击刷新重试。' : ''
+    };
+    return title + overview + (managementError && available ? '<p class="inline-notice warning" role="status">读取失败，已保留上次成功读取的资料。</p>' : '') +
+      `<section class="panel apple-management-list" data-pagination-table><div class="toolbar"><div class="toolbar-left"><div class="search-field">
       ${A.icon('search')}<input id="apple-management-search" aria-label="搜索苹果 ID 使用记录" placeholder="搜索客户、账号或订单" value="${E(view.query)}" /></div>
       <select id="apple-management-state" aria-label="使用状态">${A.options(choices, view.state)}</select>
       <select id="apple-management-plan" aria-label="订阅套餐">${A.options([['', '全部套餐'], ...plans], view.plan)}</select>
       <select id="apple-management-sort" aria-label="到期排序">${A.options([['asc', '到期时间升序'], ['desc', '到期时间降序']], view.sort)}</select>
-      </div></div>${fundingTable(columns, rows.slice(start, start + view.pageSize), '苹果 ID 管理')}
-      ${window.IDPagination.render({ id: 'apple-management', page: view.page, pageSize: view.pageSize, total: rows.length })}</section>`;
+      </div><div class="toolbar-right" data-page-actions></div></div>
+      ${A.table(columns, available ? rows.slice(start, start + view.pageSize) : [], '', '苹果 ID 管理', emptyState)}
+      ${available ? window.IDPagination.render({ id: 'apple-management', page: view.page, pageSize: view.pageSize, total: rows.length }) : ''}</section>`;
   }
   function fundingHistory(row) {
     A.openDrawer('苹果 ID 使用记录', '保留原订单、付款和绑定的核对记录。',
