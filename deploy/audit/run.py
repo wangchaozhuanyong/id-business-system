@@ -7,6 +7,7 @@ import re
 import subprocess
 from collections import defaultdict
 from decimal import Decimal
+from pathlib import Path
 
 ACCOUNT = "098208446664"
 REGION = "ap-northeast-1"
@@ -16,6 +17,12 @@ BUCKET = f"id-business-v2-backups-{ACCOUNT}-{REGION}"
 BUDGET = "ID-Production-Monthly"
 PREFIX = "mysql/daily/independent-recharge/"
 BACKUP = re.compile(PREFIX + r"([0-9]{8}T[0-9]{6}Z)/[a-f0-9]{40}/(manifest\.json|mysql\.sql\.aes256gcm)")
+# Baseline measured after the 2026-11-11 retention review.
+ECR_BASELINE_COUNT = 36
+ECR_BASELINE_REPORTED_BYTES = 10_560_774_320
+ECR_IMAGE_GROWTH_ALLOWANCE = 8
+ECR_REPORTED_BYTE_GROWTH_ALLOWANCE = 2 * 1024**3
+ARCHIVE_POLICY = Path(__file__).resolve().parents[1] / "s3-legacy-archive-lifecycle-rules.json"
 
 
 class AuditError(RuntimeError):
@@ -70,9 +77,21 @@ def check_registry():
     scope = ("--registry-id", ACCOUNT)
     repo, = aws("ecr", "describe-repositories", *scope, "--repository-names", REPOSITORY)["repositories"]
     require(repo["imageTagMutability"] == "IMMUTABLE", "registry_tag_mutability_changed")
-    images = aws("ecr", "describe-images", *scope, "--repository-name", REPOSITORY)["imageDetails"]
-    require(bool(images), "registry_empty")
-    print("ID registry metadata and immutable tags verified")
+    images = aws("ecr", "describe-images", *scope, "--repository-name", REPOSITORY,
+                 "--filter", "imageStatus=ANY")["imageDetails"]
+    sizes = {item["imageDigest"]: item["imageSizeInBytes"] for item in images}
+    require(bool(sizes) and all(type(size) is int and size > 0 for size in sizes.values()), "registry_size_unavailable")
+    require(len(sizes) <= ECR_BASELINE_COUNT + ECR_IMAGE_GROWTH_ALLOWANCE, "registry_image_count_above_review_limit")
+    require(sum(sizes.values()) <= ECR_BASELINE_REPORTED_BYTES + ECR_REPORTED_BYTE_GROWTH_ALLOWANCE,
+            "registry_image_size_above_review_limit")
+    print("ID registry metadata, immutable tags and growth limits verified")
+
+
+def check_legacy_archive_rules(rules):
+    expected = json.loads(ARCHIVE_POLICY.read_text())["Rules"]
+    for rule in expected:
+        matching = [item for item in rules if item.get("ID") == rule["ID"]]
+        require(matching == [rule], "legacy_archive_lifecycle_changed")
 
 
 def check_backups():
@@ -85,6 +104,7 @@ def check_backups():
         require(len(matching) == 1 and matching[0]["Status"] == "Enabled" and
                 matching[0]["Expiration"]["Days"] == current and
                 matching[0]["NoncurrentVersionExpiration"]["NoncurrentDays"] == older, "backup_retention_changed")
+    check_legacy_archive_rules(rules)
     require(aws("s3api", "list-objects-v2", *scope, "--prefix", "release-artifacts/formal/",
                 "--max-keys", "1", "--no-paginate", expect_denied=True), "out_of_scope_listing_not_denied")
     now = dt.datetime.now(dt.timezone.utc)
@@ -99,7 +119,7 @@ def check_backups():
                 for folder, names in pairs.items() if names == {"manifest.json", "mysql.sql.aes256gcm"}]
     require(complete and dt.timedelta(0) <= now - max(complete) <= dt.timedelta(minutes=35),
             "missing_fresh_mysql_backup_pair")
-    print("ID backup retention, fresh object pair and denied out-of-scope listing verified")
+    print("ID backup retention, historical archive rules, fresh object pair and denied out-of-scope listing verified")
 
 
 def main():

@@ -1,0 +1,18 @@
+{
+  "Rules": [
+    {
+      "ID": "TierHistoricalIdMigrationArchives",
+      "Status": "Enabled",
+      "Filter": { "And": { "Prefix": "migration-final/", "ObjectSizeGreaterThan": 1048575 } },
+      "Transitions": [{ "Days": 30, "StorageClass": "INTELLIGENT_TIERING" }],
+      "NoncurrentVersionTransitions": [{ "NoncurrentDays": 30, "StorageClass": "INTELLIGENT_TIERING" }]
+    },
+    {
+      "ID": "TierHistoricalIdDeploymentArchives",
+      "Status": "Enabled",
+      "Filter": { "And": { "Prefix": "deployments/", "ObjectSizeGreaterThan": 1048575 } },
+      "Transitions": [{ "Days": 30, "StorageClass": "INTELLIGENT_TIERING" }],
+      "NoncurrentVersionTransitions": [{ "NoncurrentDays": 30, "StorageClass": "INTELLIGENT_TIERING" }]
+    }
+  ]
+}
