@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { interceptDesign, origin, settle } from './helpers/offline-design.mjs';
+import { checkSubscriptionTermination } from '../server/order-policy.mjs';
 
 const at = new Date('2026-11-09T02:00:00Z');
 const admin = { id: 'qa-retention-admin', name: '合成管理员', role: 'admin' };
@@ -266,6 +267,80 @@ test('客户流失归集、订阅历史、数据核对与响应式离线验收',
   assert.deepEqual(writes, []);
   assert.deepEqual(requests.external, []);
   assert.deepEqual(requests.unavailable, []);
+});
+
+test('部分退款保留有效期，明确终止的退款同时写入实际时间并进入流失', { timeout: 35_000 }, async t => {
+  const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const current = order('QA-REFUND', 'refund-customer', '2026-11-01T10:00', '2026-12-01T10:00', {
+    version: 1, saleAmount: '140', saleCurrency: 'CNY', entitlementStatus: 'active'
+  });
+  const unlinked = order('QA-ENDED-WITHOUT-STOCK', 'legacy-customer', '2026-11-01T10:00', '2026-12-01T10:00', {
+    businessType: '成品交付', email: '', subscriptionEnded: true, subscriptionEndedAt: '2026-11-07T12:00'
+  });
+  const data = {
+    commerce: { version: 1, data: {
+      customers: [{ id: current.customerId, name: '合成退款客户', active: true },
+        { id: unlinked.customerId, name: '合成历史交付客户', active: true }], orders: [current, unlinked],
+      tenants: [], operating: [], rentBatches: [], logs: []
+    } },
+    inventory: { version: 1, data: { accounts: [], mailboxes: [] }, accountSummaries: [] }
+  };
+  const { context, page, errors, requests } = await openFixture(browser, data);
+  t.after(() => context.close());
+  const saved = [];
+  await context.route(origin + '/api/local/commerce', route => {
+    if (route.request().method() === 'GET') return route.fulfill({ json: data.commerce });
+    const write = route.request().postDataJSON();
+    const issue = checkSubscriptionTermination(write.data.orders[0], data.commerce.data.orders[0], write.action, at.getTime());
+    if (issue) return route.fulfill({ status: 409, json: { error: issue } });
+    saved.push(write);
+    data.commerce = { version: data.commerce.version + 1, data: write.data };
+    return route.fulfill({ json: data.commerce });
+  });
+  await page.goto(origin + '/#/orders/gpt');
+  const openRefund = async () => {
+    await page.locator('#main [data-action="commerce-order-refund"][data-id="QA-REFUND"]').click();
+    await drawer(page).locator('#commerce-refundAmount').fill('10');
+    await drawer(page).locator('#commerce-refundReason').fill('隔离验收');
+  };
+  const submit = async () => {
+    await drawer(page).getByRole('button', { name: '核对退款', exact: true }).click();
+    await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
+    await drawer(page).getByRole('heading', { name: '订单详情', exact: true }).waitFor();
+    await drawer(page).getByRole('button', { name: '关闭抽屉', exact: true }).click();
+  };
+  await openRefund();
+  await submit();
+  assert.equal(saved[0].data.orders[0].subscriptionEnded, undefined);
+  assert.equal(saved[0].data.orders[0].refunds.length, 1);
+  await openRefund();
+  await drawer(page).locator('[name="commerce-endSubscription"]').check();
+  const refundTime = drawer(page).locator('#commerce-refundAt');
+  const endTime = drawer(page).locator('#commerce-endAt');
+  assert.equal(await endTime.inputValue(), await refundTime.inputValue());
+  await refundTime.fill('2026-11-08T16:00');
+  assert.equal(await endTime.inputValue(), '2026-11-08T16:00');
+  await endTime.fill('2026-11-07T14:30');
+  await refundTime.fill('2026-11-08T17:00');
+  assert.equal(await endTime.inputValue(), '2026-11-07T14:30');
+  await submit();
+  assert.equal(saved.length, 2);
+  const ended = saved[1].data.orders[0];
+  assert.equal(ended.subscriptionEnded, true);
+  assert.equal(ended.subscriptionEndedAt, '2026-11-07T14:30');
+  assert.deepEqual(ended.refunds[0], saved[0].data.orders[0].refunds[0]);
+  assert.equal(ended.refunds[1].at, '2026-11-08T17:00');
+  assert.equal(ended.expiry, current.expiry);
+  await page.goto(lossUrl);
+  await waitForList(page);
+  const lost = list(page).locator('tbody tr[data-row-id="refund-customer"]');
+  await lost.getByText('合成退款客户', { exact: true }).waitFor();
+  assert.match(await lost.innerText(), /2026-11-07 14:30/);
+  await list(page).getByText('合成历史交付客户', { exact: true }).waitFor();
+  assert.deepEqual(errors, []);
+  assert.deepEqual(requests.external, []);
 });
 
 test('已确认开通的人工订阅按周期统计流失，财务或邮箱缺项可后补', { timeout: 90_000 }, async t => {

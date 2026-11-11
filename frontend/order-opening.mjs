@@ -11,6 +11,39 @@ export function subscriptionTime(value) {
   return Date.parse(/(?:Z|[+-]\d{2}:?\d{2})$/i.test(input) ? input : input + '+08:00');
 }
 
+export function orderTerminationTime(order, now = Date.now()) {
+  if (order.subscriptionEnded !== true) return NaN;
+  const end = subscriptionTime(order.subscriptionEndedAt);
+  const start = subscriptionTime(order.start);
+  return end <= now && (!Number.isFinite(start) || end >= start) ? end : NaN;
+}
+
+export const validOrderEmail = value => typeof value === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+export const validOrderXHandle = value => typeof value === 'string' && /^@[a-z0-9_]{1,15}$/i.test(value.trim());
+
+export function orderNeedsAccount(order) {
+  const oneOffClaude = ['Claude Pro', 'Claude Max'].includes(order.product) && order.businessType === '续费' &&
+    !order.accountId && !order.claudeRenewalId;
+  return !oneOffClaude && !(order.product === 'Grok' && order.loginMethod === 'x'
+    ? validOrderXHandle(order.xHandle) : validOrderEmail(order.email));
+}
+
+export function manualBusinessOrder(order) {
+  return Boolean(order?.id) && ['GPT', 'Claude Pro', 'Claude Max', 'Gemini', 'Grok'].includes(order.product) &&
+    order.source !== '线上代充' && !order.cancelled && !order.draft && order.entitlementStatus !== 'failed' &&
+    !['draft', 'failed', 'cancelled', '草稿', '失败', '已撤单'].includes(order.status);
+}
+
+export function manualOrderDetailsMissing(order, customers, now = Date.now()) {
+  if (!manualBusinessOrder(order)) return null;
+  return {
+    customer: !customers.some(row => row.id === order.customerId),
+    account: orderNeedsAccount(order),
+    period: !(subscriptionTime(order.expiry) > subscriptionTime(order.start)),
+    end: order.subscriptionEnded === true && !Number.isFinite(orderTerminationTime(order, now))
+  };
+}
+
 export function orderOpeningConfirmed(order, now, legacyConfirmed = false) {
   if (order.draft || ['draft', 'failed', '草稿', '失败'].includes(order.status) ||
       ['pending', 'failed'].includes(order.entitlementStatus)) return false;
@@ -39,5 +72,6 @@ export function subscriptionPeriodState({ start, expiry, confirmed, ended, cance
 }
 
 if (typeof window !== 'undefined') window.IDOrderOpening = Object.freeze({
-  orderOpeningConfirmed, subscriptionPeriodState, subscriptionStateLabels, subscriptionTime
+  orderOpeningConfirmed, orderTerminationTime, orderNeedsAccount, manualOrderDetailsMissing,
+  validOrderEmail, validOrderXHandle, subscriptionPeriodState, subscriptionStateLabels, subscriptionTime
 });

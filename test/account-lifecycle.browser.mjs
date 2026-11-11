@@ -105,8 +105,14 @@ test('GPT／Claude 回库、历史资料、再交付、续费归属与停止复�
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
       await page.screenshot({ path: `${output}/${type}-history-${width}-${theme}.png` });
       await drawer.getByRole('heading', { name: '历史订单、付款与认证资料', exact: true }).scrollIntoViewIfNeeded();
-      assert.equal(await drawer.locator('.account-lifecycle-history td').evaluateAll(cells =>
-        cells.every(cell => getComputedStyle(cell).whiteSpace === 'nowrap')), true, '历史订单每格保持单行');
+      const history = drawer.locator('.account-lifecycle-history');
+      if (width > 900) {
+        assert.equal(await history.locator('td').evaluateAll(cells =>
+          cells.every(cell => getComputedStyle(cell).whiteSpace === 'nowrap')), true, '桌面历史订单每格保持单行');
+      } else {
+        await history.locator('.mobile-records tr[data-row-id]').first().waitFor();
+        assert.equal(await history.evaluate(node => node.scrollWidth <= node.clientWidth + 1), true, '手机历史订单卡片留在抽屉内');
+      }
       await page.screenshot({ path: `${output}/${type}-orders-${width}-${theme}.png` });
       await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
       await go(`workspace/order/${type}`);

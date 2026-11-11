@@ -26,12 +26,13 @@ test('Claude 账号历史入口预检、冲突重试、保存和刷新回读', {
   const requests = await interceptDesign(context, { localFixtures: local, actor, skipRechargeAssets: true });
   await context.route(origin + '/api/local/subscriptions/list', route => {
     const input = route.request().postDataJSON();
-    const rows = projectSubscriptions({ inventory: local.inventory, commerce: local.commerce,
+    const all = projectSubscriptions({ inventory: local.inventory, commerce: local.commerce,
       mailboxes: { version: 0, data: { items: [] } }, subscriptions: { version: 0, data: {} } }, at.getTime())
       .filter(row => row.product === input.product).map(({ _account, _records, ...row }) => row);
+    const rows = all.filter(row => row.scope === input.scope);
     const counts = Object.fromEntries(['active', 'expired', 'pending', 'ended'].map(status =>
       [status, rows.filter(row => row.status === status).length]));
-    return route.fulfill({ json: { items: rows, total: rows.length, counts, page: 1,
+    return route.fulfill({ json: { items: rows, total: rows.length, accountCount: rows.length, counts, page: 1,
       pageSize: input.pageSize, revision: 'fixture-' + local.inventory.version, now: at.toISOString() } });
   });
   let confirmations = 0;
@@ -55,6 +56,7 @@ test('Claude 账号历史入口预检、冲突重试、保存和刷新回读', {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(origin + '/#/subscriptions/claude');
+  assert.equal(await page.getByRole('tab', { name: '客户订阅', exact: true }).getAttribute('aria-selected'), 'true');
   const open = page.getByRole('button', { name: '订阅历史入库', exact: true });
   await open.click();
   const content = page.locator('#inventory-claude-history-content');
@@ -83,6 +85,7 @@ test('Claude 账号历史入口预检、冲突重试、保存和刷新回读', {
   assert.equal(confirmations, 2);
   assert.equal(local.commerce.data.orders.length, 0);
 
+  await page.getByRole('tab', { name: '自有账号', exact: true }).click();
   await page.locator('#subscription-list').getByText('ready-history@example.test', { exact: true }).first().waitFor();
   await page.locator('#subscription-list').getByText('2026-11-30 22:00', { exact: true }).waitFor();
   await page.goto(origin + '/#/orders/claude');

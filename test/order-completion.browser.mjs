@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { applyOrderCompletion, readOrderCompletion, rechargePriceSnapshot } from '../server/order-completion.mjs';
+import { applyOrderCompletion, assignMissingManualOrderOwners, fillManualOrderDetails,
+  readOrderCompletion, rechargePriceSnapshot } from '../server/order-completion.mjs';
 import { interceptDesign, origin, settle, spacingSnapshot, toggleDesignTheme } from './helpers/offline-design.mjs';
 
 const playwright = process.env.ID_RECHARGE_QA_PLAYWRIGHT;
@@ -12,7 +13,8 @@ const now = '2026-11-10T06:40:00.000Z';
 const a = { id: 'staff-a', name: '员工甲', role: 'employee' };
 const b = { id: 'staff-b', name: '员工乙', role: 'employee' };
 const admin = { id: 'admin', name: '管理员', role: 'admin' };
-const owners = () => [a, b, admin];
+const superAdmin = { id: 'primary', name: '合成超级管理员', role: 'super' };
+const owners = () => [a, b, admin, superAdmin];
 const settings = { customerSources: ['网站', '客户推荐'], orderPrices: { GPT: { Plus: { CNY: '140.00' } } },
   gptPaidPrices: { Plus: { PHP: '100' } } };
 const price = rechargePriceSnapshot({ version: 2, data: settings }, 'Plus', now);
@@ -50,7 +52,14 @@ async function open(t, browser, model, actor, width, theme) {
         return route.fulfill({ json: readOrderCompletion(data, settings, actor, new URL(request.url()).searchParams, owners) });
       const command = request.postDataJSON();
       writes.push(command);
-      const { order, customer, createdCustomer } = applyOrderCompletion(data, settings, actor, command, owners, now);
+      if (command.action === 'assign-manual-owners') {
+        const orders = assignMissingManualOrderOwners(data, actor, command, owners, now);
+        data.orders = data.orders.map(row => orders.find(order => order.id === row.id) || row);
+        return route.fulfill({ json: { assigned: orders.length, version: ++model.commerce.version } });
+      }
+      const { order, customer, createdCustomer } = command.action === 'fill-manual-details'
+        ? fillManualOrderDetails(data, model.inventory?.data, actor, command, now)
+        : applyOrderCompletion(data, settings, actor, command, owners, now);
       data.orders = data.orders.map((row) => row.id === order.id ? order : row);
       if (customer) {
         data.customers = createdCustomer ? [customer, ...data.customers]
@@ -203,4 +212,50 @@ test('管理员待归属，归属员工可快捷新增客户并随原单保存',
   assert.deepEqual(employee.errors, []);
   assert.deepEqual(manager.traffic.external, []);
   assert.deepEqual(employee.traffic.external, []);
+});
+
+test('手工旧单从补全和续费提醒进入原单，独立补邮箱并保留实际收付款', { timeout: 35_000 }, async t => {
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const data = model();
+  const legacy = { ...auto('manual', ''), taskId: '', source: '历史入库', customerId: 'known', email: '',
+    start: '2026-10-08T10:00', expiry: '2026-11-09T10:00', paidConfirmed: true, receiptConfirmed: false };
+  data.commerce.data.orders.push(legacy);
+  const { page, drawer, writes, errors, traffic } = await open(t, browser, data, admin, 1440, 'light');
+  await page.clock.setFixedTime(new Date(now));
+  await page.getByRole('button', { name: '手工与历史单', exact: true }).click();
+  const row = page.locator('tr[data-row-id="manual"]');
+  await row.getByText('SYN-manual', { exact: true }).waitFor();
+  assert.match(await row.innerText(), /邮箱账号.*客户实收/s);
+  await page.getByRole('button', { name: '补齐空白归属', exact: true }).click();
+  await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
+  await row.getByText(superAdmin.name, { exact: true }).waitFor();
+  await row.getByRole('button', { name: '查看原单', exact: true }).click();
+  await page.waitForURL('**/#/orders/detail/manual');
+  await page.getByRole('button', { name: '补齐资料', exact: true }).click();
+  await drawer.getByRole('heading', { name: '补齐原单资料', exact: true }).waitFor();
+  await drawer.getByRole('button', { name: '取消', exact: true }).click();
+
+  await page.goto(origin + '/#/workspace/renewals');
+  await page.getByRole('tab', { name: /^已到期/ }).click();
+  const reminder = page.locator('table[data-table="commerce-renewals"] tr[data-row-id="manual"]');
+  await reminder.getByRole('button', { name: '补邮箱', exact: true }).click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await drawer.getByLabel('邮箱账号', { exact: true }).fill('verified@example.test');
+  const form = drawer.locator('#commerce-order-completion-form');
+  assert.equal(await form.evaluate(node => node.scrollWidth <= node.clientWidth + 1), true);
+  await drawer.getByRole('button', { name: '保存到原单', exact: true }).click();
+  await drawer.getByRole('heading', { name: '订单详情', exact: true }).waitFor();
+  await drawer.getByText('verified@example.test', { exact: true }).waitFor();
+  const order = data.commerce.data.orders.find(row => row.id === legacy.id);
+  assert.equal(order.ownerId, superAdmin.id);
+  assert.equal(order.email, 'verified@example.test');
+  for (const field of ['paidAmount', 'paidConfirmed', 'saleAmount', 'receiptConfirmed', 'entitlementStatus', 'start', 'expiry'])
+    assert.equal(order[field], legacy[field], field);
+  assert.deepEqual(writes, [
+    { action: 'assign-manual-owners' },
+    { action: 'fill-manual-details', orderId: legacy.id, version: 2, details: { email: 'verified@example.test' } }
+  ]);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(traffic.external, []);
 });

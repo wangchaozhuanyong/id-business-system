@@ -1,7 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 
 import {
-  orderOpeningConfirmed, subscriptionPeriodState, subscriptionStateLabels, subscriptionTime as instant
+  orderOpeningConfirmed, orderNeedsAccount, validOrderEmail, validOrderXHandle,
+  subscriptionPeriodState, subscriptionStateLabels, subscriptionTime as instant
 } from '../frontend/order-opening.mjs';
 import { releasedAccountOrders } from './account-lifecycle.mjs';
 import { personalProduct, subscriptionSeries, targetKey } from './personal-subscriptions.mjs';
@@ -13,6 +14,7 @@ export const subscriptionRoutes = new Set(['list', 'account', 'lookup', 'copy', 
 const products = new Set(['GPT', 'Claude', 'Gemini', 'Grok']);
 const statuses = new Set(Object.keys(subscriptionStateLabels));
 const sorts = new Set(['expiry_asc', 'expiry_desc', 'account_asc']);
+const subscriptionScopes = ['customer', 'owned', 'unlinked'];
 const defaultPageSize = 20;
 const day = 86_400_000;
 const array = value => Array.isArray(value) ? value : [];
@@ -25,9 +27,9 @@ const failure = (status, message) => Object.assign(new Error(message), { status 
 const digest = value => createHash('sha256').update(value).digest('base64url');
 
 function identity(row, product) {
-  if (product === 'Gemini' || product === 'Grok') return targetKey(row);
-  const email = emailKey(row?.email);
-  return email ? `email:${email}` : '';
+  if (product === 'Grok' && (row?.loginMethod === 'x' || (!row?.email && row?.xHandle)))
+    return validOrderXHandle(row.xHandle) ? targetKey(row) : '';
+  return validOrderEmail(row?.email) ? `email:${emailKey(row.email)}` : '';
 }
 
 export function subscriptionAccountId(product, row) {
@@ -121,6 +123,8 @@ function buildRecords(snapshots, now) {
   const accounts = array(inventory.accounts);
   const profiles = snapshots.subscriptions?.data || {};
   const orders = array(snapshots.commerce.data?.orders);
+  const customers = snapshots.commerce.data?.customers;
+  const customerIds = Array.isArray(customers) ? new Set(customers.map(row => row.id)) : null;
   const ids = new Map();
   for (const order of orders) ids.set(order?.id, (ids.get(order?.id) || 0) + 1);
   const records = [];
@@ -128,12 +132,13 @@ function buildRecords(snapshots, now) {
     const product = family(order?.product);
     if (!products.has(product) || !text(order.id) || order.draft || ['draft', '草稿'].includes(order.status)) continue;
     const accountIdentity = identity(order, product);
+    if (!accountIdentity && product === 'Claude' && !orderNeedsAccount(order)) continue;
     // Missing identities stay individually reviewable and must never be merged by product.
     const id = accountIdentity ? subscriptionAccountId(product, order) : digest(`${product}\0unresolved-order:${order.id}`);
     const confirmed = openingConfirmed(order, profiles, now);
     if (!confirmed && !paid(order)) continue;
-    const automatic = order.source === '线上代充' && Boolean(order.taskId);
-    const missingAssociation = (!accountIdentity || !text(order.customerId)) && !(automatic && confirmed);
+    const missingAssociation = !accountIdentity || !text(order.customerId) ||
+      Boolean(customerIds && !customerIds.has(order.customerId));
     const match = resolveAccount(order, product, accounts);
     const released = match.account && releasedAccountOrders(match.account).has(order.id);
     const ended = order.subscriptionEnded === true || Boolean(released);
@@ -143,9 +148,12 @@ function buildRecords(snapshots, now) {
         text(order.email) || text(order.xHandle), email: text(order.email), series: seriesFor(order),
       plan: text(order.plan), start: text(order.start), expiry: text(order.expiry),
       created: text(order.createdAt), customerId: text(order.customerId), account: match.account,
-      accountConflict: Boolean(missingAssociation || match.conflict || ids.get(order.id) !== 1),
+      delivered: order.businessType === '成品交付' && Boolean(match.account?.id && match.account.id === order.accountId),
+      missingAssociation, accountConflict: Boolean(match.conflict || ids.get(order.id) !== 1),
       confirmed, ended, cancelled: order.cancelled === true || ['cancelled', '已撤单'].includes(order.status),
       failed: order.entitlementStatus === 'failed' || ['failed', '失败'].includes(order.status),
+      orderOwner: text(order.owner) ||
+        (order.createdById && (order.ownerId || order.rechargeOwnerId || order.createdById) === order.createdById ? text(order.createdBy) : ''),
       operatorId: order.source === '线上代充' ? '' : text(order.createdById),
       operatorName: order.source === '线上代充' ? '系统自动' : text(order.createdBy) || '历史未记录'
     };
@@ -163,7 +171,8 @@ function buildRecords(snapshots, now) {
       target: identity(account, 'Claude'), display: text(account.email), email: text(account.email),
       series: 'claude', plan: text(history.plan), start: text(history.start), expiry: text(history.expiry),
       created: '', customerId: '', account, accountConflict: false, confirmed: true,
-      ended: ['recovered', 'retired'].includes(account.accountLifecycle?.disposition),
+      ended: history.phase === 'dead' || account.health === 'dead' ||
+        ['recovered', 'retired'].includes(account.accountLifecycle?.disposition),
       operatorId: '', operatorName: '历史未记录'
     };
     record.status = subscriptionPeriodState(record, now);
@@ -178,10 +187,11 @@ function orderTime(record) {
 
 function currentSeriesRecord(records) {
   const [latest, ...earlier] = records;
-  if (!['pending', 'failed', 'scheduled', 'opened'].includes(latest.status)) return latest;
+  if (!latest.missingAssociation && !['pending', 'failed', 'scheduled', 'opened'].includes(latest.status))
+    return latest;
   for (const record of earlier) {
-    if (record.ended) break;
-    if (record.status === 'active') return record;
+    if (record.ended && !record.missingAssociation) break;
+    if (record.status === 'active' && !record.missingAssociation) return record;
   }
   return latest;
 }
@@ -190,15 +200,16 @@ function publicRecord(record, now) {
   return {
     source: record.source, sourceId: record.sourceId, orderNo: record.orderNo, plan: record.plan,
     start: record.start, expiry: record.expiry, status: record.status,
-    remainingDays: remaining(record.expiry, now), operatorName: record.operatorName,
-    confirmed: record.confirmed
+    remainingDays: record.ended ? 0 : remaining(record.expiry, now), operatorName: record.operatorName,
+    confirmed: record.confirmed, missingAssociation: Boolean(record.missingAssociation)
   };
 }
 
 function mailboxFor(row, inventory) {
   if (row.product === 'GPT' && !row.customerId) return {};
   const account = row._account;
-  const orderIds = new Set(row._records.filter(record => record.source === 'order' && !record.ended)
+  const orderIds = new Set(row._records.filter(record => record.source === 'order' && record.confirmed &&
+      !record.ended && !record.cancelled && !record.missingAssociation && record.customerId === row.customerId)
     .map(record => record.sourceId));
   const mailboxes = array(inventory.mailboxes);
   const explicit = mailboxes.filter(mailbox => (account?.sourceMailboxId && mailbox.id === account.sourceMailboxId) ||
@@ -237,13 +248,22 @@ export function projectSubscriptions(snapshots, now = Date.now()) {
   const profiles = snapshots.subscriptions?.data || {};
   const result = [];
   for (const [id, records] of groups) {
-    records.sort((a, b) => orderTime(b) - orderTime(a) || a.sourceId.localeCompare(b.sourceId));
-    const activeRecords = records.filter(record => !record.ended && record.source === 'order');
+    records.sort((a, b) => orderTime(b) - orderTime(a) || (instant(b.created) || 0) - (instant(a.created) || 0) ||
+      (instant(b.expiry) || 0) - (instant(a.expiry) || 0) || a.sourceId.localeCompare(b.sourceId));
+    const activeRecords = records.filter(record => !record.ended && !record.cancelled && record.source === 'order');
     const customers = new Set(activeRecords.map(record => record.customerId).filter(Boolean));
     const accountIds = new Set(records.map(record => record.account?.id).filter(Boolean));
-    let conflict = records.some(record => record.accountConflict) || customers.size > 1 || accountIds.size > 1;
+    const historyAccounts = new Set(records.filter(record => record.source === 'history').map(record => record.sourceId));
+    const delivered = records.some(record => record.delivered && record.confirmed && !record.cancelled &&
+      !record.missingAssociation && historyAccounts.has(record.account?.id));
+    const scope = !records[0].target ? 'unlinked' : historyAccounts.size && !delivered ? 'owned' : 'customer';
+    let conflict = records.some(record => record.accountConflict) || customers.size > 1 || accountIds.size > 1 ||
+      (scope === 'owned' && activeRecords.some(record => record.confirmed && record.customerId));
     const series = new Map();
-    for (const record of records) {
+    const currentRecords = historyAccounts.size
+      ? records.filter(record => record.source === (scope === 'owned' ? 'history' : 'order'))
+      : records;
+    for (const record of currentRecords) {
       if (!series.has(record.series)) series.set(record.series, []);
       series.get(record.series).push(record);
     }
@@ -263,21 +283,24 @@ export function projectSubscriptions(snapshots, now = Date.now()) {
     }
     const protectedLifecycle = currentLifecycle && ['recovered', 'retired'].includes(currentLifecycle.disposition);
     const owner = profiles.owners?.[id];
-    const ownerEligible = !conflict && !protectedLifecycle && records.some(record => record.confirmed && !record.ended &&
+    const missingAssociation = scope === 'unlinked' || Boolean(primary.missingAssociation);
+    const ownerEligible = !conflict && !missingAssociation && !protectedLifecycle && currentRecords.some(record => record.confirmed && !record.ended &&
       !record.cancelled && (record.source === 'history' || (record.customerId && record.customerId === primary.customerId)));
     const ownerValid = ownerEligible && owner && (!owner.accountId || owner.accountId === account?.id) &&
       (!owner.customerId || !primary.customerId || owner.customerId === primary.customerId);
     const row = {
       id, product: primary.product, account: primary.display, registrationEmail: primary.email || text(account?.email),
-      status, ownerId: ownerValid ? text(owner.ownerId) : '', ownerName: ownerValid ? text(owner.ownerName) : '',
+      scope, status, ownerId: ownerValid ? text(owner.ownerId) : '',
+      ownerName: ownerValid ? text(owner.ownerName) : scope === 'unlinked' ? primary.orderOwner : '',
       operatorName: primary.operatorName, accountId: account?.id || '', customerId: primary.customerId,
-      conflict: Boolean(conflict), ownerEligible,
+      conflict: Boolean(conflict), missingAssociation, ownerEligible,
       series: selected.map(record => ({ key: record.series, ...publicRecord(record, now) })),
       history: records.map(record => publicRecord(record, now)),
       _account: account, _records: records
     };
-    const binding = status === 'ended' ? {} : mailboxFor(row, snapshots.inventory.data || {});
-    row.credentialStatus = row.conflict || protectedLifecycle || binding.conflict ? 'conflict' : binding.mailbox ? 'available' : 'missing';
+    const binding = status === 'ended' || missingAssociation ? {} : mailboxFor(row, snapshots.inventory.data || {});
+    row.credentialStatus = row.conflict || missingAssociation || protectedLifecycle || binding.conflict
+      ? 'conflict' : binding.mailbox ? 'available' : 'missing';
     if (row.credentialStatus === 'conflict') row.queryCode = { status: 'conflict', remainingDays: null };
     else if (status === 'ended') row.queryCode = { status: 'not_applicable', remainingDays: null };
     else if (row.product === 'Claude') row.queryCode = queryCodeFor(row, snapshots, now);
@@ -406,22 +429,29 @@ export function createSubscriptionHandler({ store, publicOrigin, readOwners = ()
         }
         if (action === 'list') {
           const pageSize = body.pageSize ?? defaultPageSize;
+          const scope = body.scope;
           if (!products.has(body.product) || (body.status && !statuses.has(body.status)) ||
               (body.sort && !sorts.has(body.sort)) ||
+              (scope !== undefined && !subscriptionScopes.includes(scope)) ||
               typeof (body.query ?? '') !== 'string' || (body.query || '').length > 254 ||
               !Number.isSafeInteger(body.page ?? 1) || (body.page ?? 1) < 1 ||
               !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 100)
             throw failure(400, '查询筛选或分页格式不正确');
-          const productRows = rows.filter(row => row.product === body.product);
+          const allProductRows = rows.filter(row => row.product === body.product);
+          const scopeCounts = Object.fromEntries(subscriptionScopes.map(value =>
+            [value, allProductRows.filter(row => row.scope === value).length]));
+          const productRows = scope ? allProductRows.filter(row => row.scope === scope) : allProductRows;
           // One Grok account can have several series in different states.
           // A conflicting identity remains pending until the association is resolved.
           const hasStatus = (row, status) => row.conflict ? status === 'pending' :
             row.series.some(series => series.status === status);
+          const accounts = productRows.filter(row => row.scope !== 'unlinked');
           const counts = Object.fromEntries([...statuses].map(status =>
-            [status, productRows.filter(row => hasStatus(row, status)).length]));
+            [status, accounts.filter(row => hasStatus(row, status)).length]));
           const query = text(body.query).toLowerCase();
           const matching = productRows.filter(row => (!body.status || hasStatus(row, body.status)) &&
-            (!query || [row.account, row.registrationEmail, row.ownerName, row.operatorName].some(value =>
+            (!query || [row.account, row.registrationEmail, row.ownerName, row.operatorName,
+              ...row.history.map(record => record.orderNo)].some(value =>
               text(value).toLowerCase().includes(query))));
           const sort = body.sort || 'expiry_asc';
           const due = row => {
@@ -440,7 +470,7 @@ export function createSubscriptionHandler({ store, publicOrigin, readOwners = ()
           const page = Math.min(body.page ?? 1, Math.max(1, Math.ceil(matching.length / pageSize)));
           const items = matching.slice((page - 1) * pageSize, page * pageSize);
           audit('view', items.map(row => row.id));
-          return { items: items.map(safeRow), total: matching.length, accountCount: productRows.length, counts, page, pageSize, revision,
+          return { items: items.map(safeRow), total: matching.length, accountCount: accounts.length, scopeCounts, counts, page, pageSize, revision,
             now: new Date(now).toISOString() };
         }
         if (typeof body.id !== 'string' || typeof body.revision !== 'string' || body.revision !== revision)
@@ -462,7 +492,7 @@ export function createSubscriptionHandler({ store, publicOrigin, readOwners = ()
           audit('copy', [row.id]);
           return output;
         }
-        if (row.conflict) throw failure(409, '账号归属存在冲突，请先核对原订单及库存');
+        if (row.conflict || row.missingAssociation) throw failure(409, '请先补齐或核对原订单的账号与客户关联');
         const profile = structuredClone(snapshots.subscriptions.data || {});
         profile.owners ||= {};
         profile.confirmations ||= {};

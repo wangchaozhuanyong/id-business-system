@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { currencies, validCurrencyCode } from '../modules/finance/accounting.mjs';
 import { validApplePaidPrices as validateApplePrices } from './apple-funding.mjs';
 import { personalPlans, personalProduct, samePersonalSubscription } from './personal-subscriptions.mjs';
+import { orderTerminationTime } from '../frontend/order-opening.mjs';
 
 export const rechargePlanLabels = Object.freeze({
   plus: 'Plus', pro100: 'Pro 100', pro200: 'Pro 200', pro500: 'Pro 500'
@@ -15,6 +16,28 @@ const plans = {
 };
 const isClaudeOrder = order => order?.product === 'Claude Pro' || order?.product === 'Claude Max';
 export const validApplePaidPrices = prices => validateApplePrices(prices, plans);
+export const manualOrderDetailsAction = '补齐订单资料';
+
+export function checkSubscriptionTermination(order, prior, action, now, allowHistoricalCreate = false) {
+  const wasEnded = prior?.subscriptionEnded === true;
+  const ended = order.subscriptionEnded === true;
+  const priorTime = prior?.subscriptionEndedAt ?? '';
+  const time = order.subscriptionEndedAt ?? '';
+  const valid = Number.isFinite(orderTerminationTime(order, now));
+  const priorValid = prior && Number.isFinite(orderTerminationTime(prior, now));
+  if (wasEnded === ended && time === priorTime) {
+    if (priorValid && !valid) return '订阅开始时间不能晚于已登记的实际终止时间';
+    return;
+  }
+  if (!prior && allowHistoricalCreate && ended && (!time || valid)) return;
+  if (priorValid) return '原订单已登记的实际终止时间必须保留';
+  if (!prior || order.cancelled || !ended || !valid)
+    return '请填写不早于订阅开始且不晚于当前的实际终止时间';
+  if (wasEnded && action === manualOrderDetailsAction) return;
+  if (action === '退款登记' && (order.refunds?.length || 0) === (prior.refunds?.length || 0) + 1) return;
+  return '请通过原订单退款或历史资料补全登记实际终止时间';
+}
+
 export function checkNewOrder(order) {
   if (!order.product) return;
   if (!Object.hasOwn(plans, order.product) || !plans[order.product].includes(order.plan))

@@ -2,7 +2,7 @@
   const A = window.IDDesignAPI, D = window.IDLocalData, S = A.state;
   const { $, esc, button, field, input, select } = A;
   const route = 'workspace/order-completion';
-  const tabs = [['pending', '待补全'], ['complete', '已补全'], ['unassigned', '待归属']];
+  const tabs = [['pending', '待补全'], ['complete', '已补全'], ['unassigned', '待归属'], ['manual', '手工与历史单']];
   const contacts = [['customerPhone', 'phone', '联系电话'], ['wechat', 'wechat', '微信'],
     ['qq', 'qq', 'QQ'], ['whatsapp', 'whatsapp', 'WhatsApp'], ['telegram', 'telegram', 'Telegram']];
   const time = new Intl.DateTimeFormat('zh-CN', {
@@ -20,22 +20,32 @@
   const open = (form) => form?.isConnected && $('#drawer').open && S.drawerContext === form.dataset.completionDraft;
   const money = (value, currency) => value && currency ? value + ' ' + currency : '待核对';
   const fieldId = (name) => 'completion-' + name;
-  let snapshot, loadError, latestLoad, editor, saving, searchTimer, searchRequest;
+  let snapshot, loadError, latestLoad, editor, saving, searchTimer, searchRequest, assigningManualOwners;
 
   function render() {
     const title = A.header('订单补全',
-      '代充成功会自动入单。此处补充客户、来源和归属人，资料保存到原单。',
+      '在原订单补齐代充、手工与历史订单的资料。',
       D ? button('刷新', 'completion-refresh', '', 'refresh') : '');
     if (!D) return title + '<section class="panel">' + A.empty('暂无可补全订单', '连接业务数据后显示已同步的代充订单。') + '</section>';
     const current = S.drafts.get(route)?.tab || 'pending';
     const available = snapshot?.canAssign ? tabs : tabs.slice(0, 2);
+    const manual = current === 'manual' && snapshot?.canAssign;
     const query = S.query.trim().toLowerCase();
-    const rows = (snapshot?.items || []).filter((row) => row.state === current && (!query ||
-      [row.orderNo, row.email, row.customer?.name].some((value) => value?.toLowerCase().includes(query))));
+    const sourceRows = manual ? snapshot.manualItems || [] : (snapshot?.items || []).filter(row => row.state === current);
+    const rows = sourceRows.filter(row => !query ||
+      [row.orderNo, row.email, row.customerName || row.customer?.name].some(value => value?.toLowerCase().includes(query)));
     const tabMarkup = available.map(([id, label]) => '<button type="button" class="tab' +
       (id === current ? ' active' : '') + '" data-action="completion-tab" data-id="' + id +
       '" aria-pressed="' + (id === current) + '">' + label + '</button>').join('');
-    const columns = [
+    const columns = manual ? [
+      { id: 'orderNo', label: '订单编号' }, { id: 'email', label: '邮箱账号' },
+      { id: 'plan', label: '产品 / 套餐', render: row => esc([row.product, row.plan].filter(Boolean).join(' / ')) },
+      { id: 'customerName', label: '客户' },
+      { id: 'missing', label: '待补资料', render: row => esc(row.missing.join('、')) },
+      { id: 'owner', label: '处理人', render: row => esc(row.owner || '未设置') },
+      { id: 'actions', label: '操作', action: true, render: row => A.textAction(
+        '查看原单', 'completion-original', 'data-id="' + esc(row.id) + '"') }
+    ] : [
       { id: 'orderNo', label: '订单编号' }, { id: 'email', label: '账号邮箱' }, { id: 'plan', label: '套餐' },
       { id: 'rechargeCompletedAt', label: '开通时间', render: (row) => esc(displayTime(row.rechargeCompletedAt || row.start)) },
       ...(snapshot?.canAssign ? [{ id: 'owner', label: '归属人', render: (row) => esc(row.owner || '—') }] : []),
@@ -49,13 +59,15 @@
     const shown = A.pageRows(rows);
     const emptyTitle = query ? '未找到符合条件的订单'
       : current === 'complete' ? '暂无已补全订单' : current === 'unassigned' ? '暂无待归属订单' : '暂无待补全订单';
-    const contents = snapshot ? A.table(columns, shown, '', '订单补全', { title: emptyTitle, description: '' }) +
+    const contents = snapshot ? A.table(columns, shown, '', manual ? '手工与历史单' : '订单补全', { title: emptyTitle, description: '' }) +
       A.pagination(rows.length) : '';
+    const assignOwners = manual && sourceRows.some(row => row.needsOwner)
+      ? button('补齐空白归属', 'completion-assign-manual') : '';
     return title + '<section class="panel design-async-region" id="completion-list">' +
       '<div class="list-controls"><div class="tabs" role="group" aria-label="订单补全分类">' +
       tabMarkup + '</div><div class="toolbar"><div class="toolbar-left"><div class="search-field">' + A.icon('search') +
       input('list-search', S.query, 'type="search" aria-label="搜索订单" placeholder="搜索订单编号、邮箱或客户"') +
-      '</div></div><div class="toolbar-right" data-page-actions></div></div></div><div role="status" id="completion-list-progress" hidden></div>' +
+      '</div></div><div class="toolbar-right" data-page-actions>' + assignOwners + '</div></div></div><div role="status" id="completion-list-progress" hidden></div>' +
       (loadError ? '<div class="panel-body"><p class="inline-notice warning" role="status">' +
         (snapshot ? '刷新失败，已保留上次订单。' : '暂时无法读取订单，请刷新重试。') + '</p></div>' : '') +
       contents + '</section>';
@@ -73,7 +85,7 @@
       if (latestLoad !== token || !active()) return false;
       if (!Array.isArray(data?.items)) throw new Error('订单响应格式无效');
       snapshot = data;
-      if (!data.canAssign && S.drafts.get(route)?.tab === 'unassigned') S.drafts.delete(route);
+      if (!data.canAssign && ['unassigned', 'manual'].includes(S.drafts.get(route)?.tab)) S.drafts.delete(route);
       loadError = false;
       A.render();
       return true;
@@ -86,6 +98,25 @@
     } finally {
       read.finish();
     }
+  }
+
+  function confirmManualOwners() {
+    if (!snapshot?.canAssign || assigningManualOwners || !snapshot.manualItems?.some(row => row.needsOwner)) return;
+    A.confirmAction('补齐手工订单归属', '将当前缺少归属的手工和历史订单分配给超级管理员。', async () => {
+      if (!active() || !snapshot?.canAssign || assigningManualOwners) return;
+      assigningManualOwners = true;
+      try {
+        const { assigned } = await D.saveOrderCompletion({ action: 'assign-manual-owners' });
+        if (assigned) await A.modules.commerce?.refreshAfterOrderSync?.();
+        if (!active()) return;
+        A.notify(assigned ? '已补齐 ' + assigned + ' 笔订单归属' : '当前订单归属已齐全');
+        await load();
+      } catch (error) {
+        if (active()) A.notify(error.message || '暂时无法保存归属');
+      } finally {
+        assigningManualOwners = false;
+      }
+    }, '确认补齐');
   }
 
   function section(title, content) {
@@ -344,7 +375,11 @@
       } else if (action === 'completion-open') {
         if (saving) A.notify('订单正在保存，请稍候');
         else if (find(node.dataset.id)) show(find(node.dataset.id));
-      } else if (action === 'completion-new') quickNew();
+      } else if (action === 'completion-original') {
+        if (snapshot?.manualItems?.some(row => row.id === node.dataset.id))
+          A.go('orders/detail/' + encodeURIComponent(node.dataset.id));
+      } else if (action === 'completion-assign-manual') confirmManualOwners();
+      else if (action === 'completion-new') quickNew();
       else if (action === 'completion-back') show(editor.row);
       else if (action === 'completion-unselect' || action === 'completion-select') {
         preserveDraft();
