@@ -2064,7 +2064,7 @@ export function createLocalBusinessStore(databasePath) {
         const manual = command?.action === 'fill-manual-details';
         const prior = manual && data?.orders?.find(row => row.id === command.orderId);
         const legacyConfirmed = prior && legacyOpeningOrderIds([prior], readDocument(subscriptionDomain).data).length > 0;
-        const { order, customer, createdCustomer } = manual
+        const { order, customer, createdCustomer, costReason } = manual
           ? fillManualOrderDetails(data, readDocument('inventory').data, actor, command, at, legacyConfirmed)
           : applyOrderCompletion(data, readDocument('settings').data, actor, command, readOrderOwners, at);
         data.orders = data.orders.map((row) => row.id === order.id ? order : row);
@@ -2074,8 +2074,10 @@ export function createLocalBusinessStore(databasePath) {
             : customers.map((row) => row.id === customer.id ? customer : row);
         }
         const label = manual ? manualOrderDetailsAction : command.action === 'assign' ? '确认代充订单归属' : '补全代充订单资料';
+        const detail = costReason
+          ? `${order.orderNo} · 实际总成本 ${order.actualCostAmount} ${order.actualCostCurrency} · ${costReason}` : order.orderNo;
         data.logs = [{
-          id: 'commerce-log-' + randomUUID(), type: label, entityId: order.id, detail: order.orderNo,
+          id: 'commerce-log-' + randomUUID(), type: label, entityId: order.id, detail,
           at: auditDate.format(new Date(at)).slice(0, 16), actor: actor.name, actorId: actor.id
         }, ...(data.logs || [])];
         put.run('commerce', version, encrypt(key, 'commerce', version, JSON.stringify(data)));
