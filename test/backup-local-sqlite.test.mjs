@@ -89,6 +89,27 @@ test('银行卡类型和稳定卡 ID 关联随加密快照恢复', async t => {
   }
 });
 
+test('恢复支持通过专用业务入口读写的监控文档', async t => {
+  const paths = await drill(t);
+  const domain = 'system-monitoring-config';
+  const data = { enabled: false };
+  const store = createLocalBusinessStore(paths.source);
+  try {
+    store.saveFeatureDocument(domain, 0, data);
+  } finally {
+    store.close();
+  }
+  await createSnapshot({ source: paths.source, output: paths.output });
+  const result = await restoreSnapshot({ input: paths.output, output: paths.restore, key: paths.source + '.key' });
+  assert.equal(result.documents, 1);
+  const recovered = createLocalBusinessStore(join(paths.restore, snapshotFile));
+  try {
+    assert.deepEqual(recovered.featureDocument(domain), { version: 1, data });
+  } finally {
+    recovered.close();
+  }
+});
+
 test('Claude 邮箱复制后缀按操作员分开备份和恢复', async t => {
   const paths = await drill(t);
   const alpha = { id: 'synthetic-alpha', name: '合成甲', role: 'admin' };

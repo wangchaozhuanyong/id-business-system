@@ -541,6 +541,19 @@ function decrypt(key, domain, version, value) {
   return JSON.parse(Buffer.concat([decipher.update(bytes.subarray(28)), decipher.final()]));
 }
 
+export function verifyBusinessDocumentPayloads(databasePath, key) {
+  const db = new DatabaseSync(databasePath, { readOnly: true, timeout: 4000 });
+  try {
+    const documents = db.prepare('SELECT domain, version, payload FROM business_document');
+    for (const { domain, version, payload } of documents.iterate()) {
+      const data = decrypt(key, domain, version, payload);
+      if (!data || typeof data !== 'object') throw new Error('无效的业务文档');
+    }
+  } finally {
+    db.close();
+  }
+}
+
 function checkDomain(domain) {
   if (!allowedDomains.has(domain)) throw new LocalDataError(404, '没有这个本机数据模块');
 }
