@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { randomBytes } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import test from 'node:test';
 import {
   createLoopbackVendureRechargeBridge,
@@ -17,12 +17,12 @@ const session = JSON.stringify({
   accessToken: 'synthetic-authorization-for-offline-test'
 });
 
-function fixture(t, codes = [{ code: 'synthetic-code', plan: 'plus' }]) {
+function fixture(t, codes = [{ code: 'synthetic-code', plan: 'plus' }], store) {
   const vendureKey = randomBytes(32).toString('hex');
   const workerSecret = randomBytes(32).toString('hex');
   let at = Date.now();
   const bridge = createLoopbackVendureRechargeBridge({
-    codes, vendureKey, workerSecret, now: () => at
+    codes, vendureKey, workerSecret, store, now: () => at
   });
   t.after(() => bridge.close());
   async function post(path, body = {}, headers = {}) {
@@ -47,6 +47,34 @@ function fixture(t, codes = [{ code: 'synthetic-code', plan: 'plus' }]) {
     return post(path, body, signRechargeWorkerRequest(workerSecret, path, JSON.stringify(body), at));
   };
   return { vendure, worker, post, workerSecret, advance(ms) { at += ms; } };
+}
+
+function memoryStore() {
+  const key = randomBytes(32);
+  let current = { revision: 0, state: { tasks: [], nonces: [] } };
+  let fault;
+  let failures = 0;
+  return {
+    fingerprint: (purpose, value) => createHmac('sha256', key).update(purpose).update('\0').update(value).digest('hex'),
+    load: () => structuredClone(current),
+    failWhen(predicate, afterCommit = false) { fault = { predicate, afterCommit }; },
+    get failures() { return failures; },
+    commit(revision, state) {
+      assert.equal(revision, current.revision);
+      const fail = fault?.predicate(state);
+      if (fail && !fault.afterCommit) {
+        failures++;
+        throw new Error('synthetic-private-storage-diagnostic');
+      }
+      current = { revision: revision + 1, state: structuredClone(state) };
+      if (fail) {
+        failures++;
+        fault = undefined;
+        throw new Error('synthetic-private-storage-diagnostic');
+      }
+      return current.revision;
+    }
+  };
 }
 
 test('progress is a fixed safe projection and renews observation without changing the original task', async (t) => {
@@ -121,6 +149,33 @@ test('confirmed failure stays bound to the observed original job and exposes onl
   assert.equal(failed.body.stage, 'failed');
   assert.equal(failed.body.message, '执行失败，请联系客服处理。');
   assert.deepEqual(Object.keys(failed.body).sort(), ['id', 'message', 'plan', 'stage', 'status', 'updatedAt']);
+});
+
+test('only an explicit route rejection before execution is definitive; other missing jobs remain unknown', async t => {
+  for (const explicit of [true, false]) {
+    const f = fixture(t);
+    const submitted = (await f.vendure('submit', { code: 'synthetic-code', session })).body;
+    let starts = 0;
+    const mock = t.mock.method(globalThis, 'fetch', async (input, options) => {
+      const url = new URL(input);
+      if (url.port === '31992') {
+        const reply = await f.post(url.pathname, JSON.parse(options.body), options.headers);
+        return new Response(JSON.stringify(reply.body), { status: reply.status });
+      }
+      if (url.pathname === '/api/public/runtime') return Response.json({ success: true });
+      assert.equal(url.pathname, '/api/run-process'); starts++;
+      return Response.json({ success: false, code: 'recharge_route_unavailable',
+        ...(explicit ? { execution_started: false } : {}) }, { status: 409 });
+    });
+    const run = createVendureCodexdaichongWorker({
+      bridgeUrl: 'http://127.0.0.1:31992', upstreamUrl: 'http://127.0.0.1:31993',
+      workerSecret: f.workerSecret, upstreamSecret: randomBytes(32).toString('hex'), pollIntervalMs: 1
+    });
+    assert.deepEqual(await run(), { status: explicit ? 'failed' : 'awaiting_review' });
+    const view = (await f.vendure('task', { id: submitted.id, taskToken: submitted.taskToken })).body;
+    assert.equal(view.status, explicit ? 'failed' : 'awaiting_review');
+    assert.equal(starts, 1); mock.mock.restore();
+  }
 });
 
 test('worker accepts the original runtime and never adds plan, card or retry overrides', async (t) => {
@@ -261,4 +316,86 @@ test('definitive failure allows only an explicit new submission; unknown outcome
   await f.worker('result', { id: retryLease.id, leaseToken: retryLease.leaseToken, outcome: 'unknown', upstreamJobId: 'unknown-original-job' });
   assert.equal((await f.vendure('submit', { code: 'synthetic-code', session })).body.id, second.id);
   assert.equal((await f.vendure('task', { id: first.id, taskToken: first.taskToken })).body.status, 'failed');
+});
+
+test('a failed progress-table commit cannot cancel, change or resubmit a successful original recharge', async t => {
+  const store = memoryStore();
+  const f = fixture(t, undefined, store);
+  const submitted = (await f.vendure('submit', { code: 'synthetic-code', session })).body;
+  store.failWhen(state => state.tasks.some(task => task.status === 'running' && task.stage));
+  const originalCalls = [];
+  const privateValues = [session, 'synthetic-full-bank-number', 'synthetic-card-expiry', 'synthetic-cvc',
+    'synthetic-private-log', '/private-screenshot', '/private-video', 'https://example.test/private-payment'];
+  t.mock.method(globalThis, 'fetch', async (input, options) => {
+    const url = new URL(input);
+    if (url.port === '31992') {
+      const reply = await f.post(url.pathname, JSON.parse(options.body), options.headers);
+      return Response.json(reply.body, { status: reply.status });
+    }
+    originalCalls.push({ path: url.pathname, method: options.method, body: options.body });
+    if (url.pathname === '/api/public/runtime') return Response.json({ success: true });
+    if (url.pathname === '/api/run-process') return Response.json({ success: true, jobKey: 'original-job' });
+    assert.equal(url.pathname, '/api/task-status/original-job');
+    return Response.json({ success: true, data: {
+      jobKey: 'original-job', cdkCode: 'synthetic-code', status: 'success', isTerminal: true,
+      session, card_number: privateValues[1], expiry: privateValues[2], cvc: privateValues[3],
+      message: privateValues[4], screenshot: privateValues[5], video: privateValues[6], checkoutUrl: privateValues[7]
+    } });
+  });
+  const run = createVendureCodexdaichongWorker({
+    bridgeUrl: 'http://127.0.0.1:31992', upstreamUrl: 'http://127.0.0.1:31993',
+    workerSecret: f.workerSecret, upstreamSecret: randomBytes(32).toString('hex'), pollIntervalMs: 1
+  });
+  assert.deepEqual(await run(), { status: 'succeeded' });
+  assert.equal(store.failures, 1);
+  assert.deepEqual(originalCalls.filter(call => call.method !== 'GET'), [{
+    path: '/api/run-process', method: 'POST', body: JSON.stringify({ cdk: 'synthetic-code', session })
+  }]);
+  const view = (await f.vendure('task', { id: submitted.id, taskToken: submitted.taskToken })).body;
+  assert.equal(view.message, '开通成功');
+  assert.deepEqual(Object.keys(view).sort(), ['id', 'message', 'plan', 'stage', 'status', 'updatedAt']);
+  for (const value of privateValues) assert.equal(JSON.stringify(view).includes(value), false);
+  assert.equal(JSON.stringify(store.load()).includes(session), false);
+  assert.deepEqual(await run(), { status: 'idle' });
+  assert.equal(originalCalls.filter(call => call.method === 'POST').length, 1);
+});
+
+test('a lost committed result is recovered from the same receipt without delivering authorization twice', async t => {
+  const store = memoryStore();
+  const f = fixture(t, undefined, store);
+  const submitted = (await f.vendure('submit', { code: 'synthetic-code', session })).body;
+  store.failWhen(state => state.tasks.some(task => task.status === 'succeeded'), true);
+  let activations = 0;
+  let resultWrites = 0;
+  const resultBodies = [];
+  t.mock.method(globalThis, 'fetch', async (input, options) => {
+    const url = new URL(input);
+    if (url.port === '31992') {
+      if (url.pathname.endsWith('/result')) { resultWrites++; resultBodies.push(options.body); }
+      const reply = await f.post(url.pathname, JSON.parse(options.body), options.headers);
+      return Response.json(reply.body, { status: reply.status });
+    }
+    if (url.pathname === '/api/public/runtime') return Response.json({ success: true });
+    if (url.pathname === '/api/run-process') { activations++; return Response.json({ success: true, jobKey: 'original-job' }); }
+    assert.equal(url.pathname, '/api/task-status/original-job');
+    return Response.json({ success: true, data: {
+      jobKey: 'original-job', cdkCode: 'synthetic-code', status: 'success', isTerminal: true
+    } });
+  });
+  const options = {
+    bridgeUrl: 'http://127.0.0.1:31992', upstreamUrl: 'http://127.0.0.1:31993',
+    workerSecret: f.workerSecret, upstreamSecret: randomBytes(32).toString('hex'), pollIntervalMs: 1
+  };
+  await assert.rejects(createVendureCodexdaichongWorker(options)(),
+    error => error.message === '无法确认回执已写入，请按原任务核对');
+  assert.equal(resultWrites, 2);
+  assert.equal(resultBodies[0], resultBodies[1]);
+  assert.equal(store.load().state.tasks[0].status, 'succeeded');
+  const reopened = fixture(t, undefined, store);
+  const current = await reopened.vendure('task', { id: submitted.id, taskToken: submitted.taskToken });
+  assert.equal(current.body.status, 'succeeded');
+  assert.equal(current.body.message, '开通成功');
+  assert.deepEqual((await reopened.worker('claim')).body, { task: null });
+  assert.equal(activations, 1);
+  assert.equal(JSON.stringify(store.load()).includes(session), false);
 });

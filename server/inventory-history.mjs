@@ -42,6 +42,8 @@ function* historyPairs(previous, next) {
   }
 }
 
+export const isHistoricallyOpenedClaude = asset => asset?.type === 'claude' && asset.claudeHistory?.phase === 'opened';
+
 function useState(asset) {
   return asset?.inventoryState || (asset?.used === true ? 'used' : undefined);
 }
@@ -70,6 +72,13 @@ export function checkInventoryHistory(previous, next, { trustedAccountLifecycle 
     const corrections = new Map(list(previous?.[key]).filter(hasId).map((row) => [row.id, row]));
     for (const row of list(next[key])) {
       const original = corrections.get(row?.id);
+      if (!isDeepStrictEqual(original?.claudeHistory, row?.claudeHistory))
+        return 'Claude 历史入库资料必须通过专用入口登记';
+      if (useState(row) === 'claimed' && useState(original) !== 'claimed') {
+        if (isHistoricallyOpenedClaude(original) || (row?.claudeHistory &&
+            (original.health !== 'normal' || original.status !== '正常')))
+          return 'Claude 历史账号当前不可提取';
+      }
       for (const field of ['accountLifecycle', 'accountLifecycleEvents']) {
         if (!trustedAccountLifecycle && !isDeepStrictEqual(original?.[field], row?.[field]))
           return '账号使用与回收记录必须通过专用操作登记';
@@ -108,9 +117,9 @@ export function checkInventoryHistory(previous, next, { trustedAccountLifecycle 
       const links = list(before.usageLinks);
       const status = useState(before);
       const used =
-        status === 'used' || links.length > 0 || (hasId(before) && consumed.has(before.id));
+        isHistoricallyOpenedClaude(before) || status === 'used' || links.length > 0 || (hasId(before) && consumed.has(before.id));
       const referenced = status === 'claimed' || (hasId(before) && references.has(before.id));
-      const reusable = ['gpt', 'claude'].includes(before.type) &&
+      const reusable = ['gpt', 'claude', 'gemini', 'grok'].includes(before.type) &&
         before.accountLifecycle?.disposition === 'recovered' && ['available', 'claimed'].includes(useState(after));
       if ((used || referenced) && !after) return '已有使用或领用记录的库存资料必须保留';
       if (status === 'claimed' && hasId(before) && before.claimId)
@@ -123,7 +132,7 @@ export function checkInventoryHistory(previous, next, { trustedAccountLifecycle 
           (before.type && before.type !== after.type))
       )
         return '已实际使用的库存资料不能退回或替换';
-      if (used && ['gpt', 'claude'].includes(before.type) && before.source !== '客户提供' &&
+      if (used && ['gpt', 'claude', 'gemini', 'grok'].includes(before.type) && before.source !== '客户提供' &&
         !['客户自有', 'customer'].includes(before.accountSource) &&
         (after.source === '客户提供' || ['客户自有', 'customer'].includes(after.accountSource)))
         return '已有库存使用历史的账号不能改为客户自有来源';

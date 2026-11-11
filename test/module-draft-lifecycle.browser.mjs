@@ -86,7 +86,7 @@ test('库存、隐藏邮箱和苹果余额表单保留草稿、隔离类型并�
     await page.locator('#inventory-asset-type').selectOption('claude');
     assert.equal(await page.locator('#inventory-notes').inputValue(), 'Claude 独立草稿');
     await close();
-    await go('workspace/account-submit');
+    await go('workspace/account-extract');
     await action('inventory', 'inventory-add-type', { type: 'gpt' });
     await page.locator('#inventory-notes').fill('工作台 GPT 草稿');
     await page.locator('#inventory-asset-type').selectOption('claude');

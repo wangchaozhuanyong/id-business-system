@@ -48,6 +48,17 @@ test('batch preparation keeps legacy account fields separate and reports only in
     expiresAt: 60_000
   });
   assert.equal(result.errors.length, 1);
+  assert.equal(result.accounts[0].secretInput, key);
+  assert.equal(result.accounts[1].secretInput, uri());
   assert.match(result.errors[0], /^第 2 行/);
   assert.doesNotMatch(JSON.stringify(result), /只用于测试的密码|INVALID/);
+});
+
+test('saving a calculated row keeps its URI configuration and excludes other account fields', async () => {
+  const input = uri(key, '&issuer=RFC&algorithm=SHA256&digits=8&period=60');
+  const { accounts } = await prepareTotpBatch(`fixture|fixture-password|${key}|fixture@example.test\n${input}`);
+  assert.deepEqual(accounts.map(row => row.secretInput), [key, input]);
+  assert.deepEqual(await calculateTotp(accounts[1].secretInput, 59_000), await accounts[1].generate(59_000));
+  assert.doesNotMatch(JSON.stringify(accounts), /fixture-password|fixture@example/);
+  assert(!JSON.stringify(await calculateTotp(input)).includes(key));
 });

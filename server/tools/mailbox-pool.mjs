@@ -10,7 +10,7 @@ const workerFile = fileURLToPath(new URL('../../modules/tools/mailbox-imap.py', 
 const providers = ['google', 'apple'];
 const codePattern = /^MBX-[A-Za-z0-9_-]{32}$/;
 export const legacyMailboxCodePattern = /^[ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789]{20}$/;
-const isManagedCode = (value) => typeof value === 'string' &&
+export const isManagedCode = (value) => typeof value === 'string' &&
   (codePattern.test(value) || legacyMailboxCodePattern.test(value));
 
 export function extractManagedMailboxCode(body) {
@@ -37,6 +37,13 @@ export function mailboxPoolMetadata(snapshot) {
     items: mailboxPoolItems(snapshot).map(({ id, provider, email, active, expiresAt, updatedAt, authFailed, label }) =>
       ({ id, provider, email, active, expiresAt, updatedAt, label: label || '', authFailed: authFailed === true }))
   };
+}
+
+export function mailboxPoolCodePage(snapshot, { ids, version }) {
+  if (snapshot.version !== version)
+    throw new MailboxPoolError(409, '邮箱池已更新，请刷新列表');
+  const codes = new Map(mailboxPoolItems(snapshot).map(({ id, queryCode }) => [id, queryCode]));
+  return { version, items: ids.map(id => ({ id, code: codes.get(id) || '' })) };
 }
 
 export function applyMailboxPoolWrite(snapshot, body, clock = Date.now(), microsoftRefreshToken) {

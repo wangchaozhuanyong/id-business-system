@@ -3,6 +3,7 @@ import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { startCodexdaichongDemoSite } from '../modules/recharge/codexdaichong/demo-site.mjs';
 import { CODEXDAICHONG_PREFIX } from '../modules/recharge/codexdaichong/gateway.mjs';
+import { toggleDesignTheme } from './helpers/offline-design.mjs';
 
 const adminViews = [
   ['概览中心', '#dashboard', '#stat_total'],
@@ -88,6 +89,24 @@ test('local demo workspace, retry, refresh failure and restart', { timeout: 45_0
   });
   const nav = page.getByRole('navigation', { name: 'ChatGPT 充值功能' });
   const select = (name) => nav.getByRole('button', { name, exact: true }).click();
+  const taskLogDrawer = page.getByRole('dialog', { name: '充值详细日志' });
+  const openTaskLog = async (jobKey) => {
+    await frame.locator('[data-view-task-log="' + jobKey + '"]:enabled').click();
+    await taskLogDrawer.frameLocator('iframe.recharge-task-log-frame')
+      .getByText(jobKey + ' · manual · 70%', { exact: true }).waitFor();
+  };
+  const closeTaskLog = async () => {
+    await taskLogDrawer.locator('[data-action="drawer-close"]').first().click();
+    await taskLogDrawer.waitFor({ state: 'hidden' });
+  };
+  const navFits = () => nav.evaluate(element => {
+    const toolbar = element.closest('.recharge-integration__toolbar');
+    const refresh = toolbar.querySelector(':scope > button').getBoundingClientRect();
+    const scrollable = ['auto', 'scroll'].includes(getComputedStyle(element).overflowX);
+    return toolbar.parentElement.scrollTop === 0 && toolbar.getBoundingClientRect().height < 90 &&
+      refresh.right <= innerWidth + 1 &&
+      (element.scrollWidth <= element.clientWidth + 1 || scrollable);
+  });
   const fill = () => frame.getByRole('button', { name: '填入演示资料' }).click();
   const verifyToolbarRow = async (toolbar, selector) => {
     const positions = await frame.locator(toolbar).evaluate(
@@ -145,40 +164,41 @@ test('local demo workspace, retry, refresh failure and restart', { timeout: 45_0
 
   await page.goto(host.url + '#/recharge/start');
   const bitFrame = page.frameLocator('.recharge-integration__frame--bit-local');
-  const addressButton = bitFrame.getByRole('button', { name: '地址管理', exact: true });
-  await addressButton.waitFor();
+  const addresses = page.locator('#bit-addresses-host');
+  await addresses.getByRole('heading', { name: '地址管理', exact: true }).waitFor();
+  assert.equal(await bitFrame.getByRole('button', { name: '地址管理', exact: true }).count(), 0);
   assert.equal(
     await page.locator('[data-recharge-module="bit"] .recharge-integration__toolbar').count(),
     0
   );
-  const bitToolbar = bitFrame.locator('.bit-local__connection-toolbar');
-  const bitPositions = await bitToolbar.evaluate((node) =>
-    [...node.querySelectorAll('[role="status"], button:not([hidden])')].map((control) => {
-      const { top, height } = control.getBoundingClientRect();
-      return Math.round(top + height / 2);
-    })
-  );
-  assert.equal(bitPositions.length, 5);
-  assert(Math.max(...bitPositions) - Math.min(...bitPositions) <= 2);
-  await bitFrame.locator('#bit-window-name').fill('演示窗口名称');
-  await addressButton.click();
-  await page.getByRole('dialog').getByRole('heading', { name: '地址管理', exact: true }).waitFor();
-  const countField = page.getByLabel('生成数量');
-  const generate = page.getByRole('button', { name: '一键生成地址', exact: true });
+  const bitToolbar = bitFrame.locator('.bit-local__workspace-bar');
+  const bitToolbarFits = () =>
+    bitToolbar.evaluate((node) => node.scrollWidth <= node.clientWidth);
+  assert.equal(await bitToolbarFits(), true);
+  const windowEmail = 'demo-window@example.test';
+  await bitFrame.locator('#bit-authorization-json').fill(JSON.stringify({
+    sessionToken: 'synthetic-session', user: { id: 'user-fixture', email: windowEmail },
+    account: { id: 'account-fixture' }
+  }));
+  await addresses.getByRole('button', { name: '生成地址', exact: true }).click();
+  const generator = page.getByRole('dialog', { name: '生成地址', exact: true });
+  const countField = generator.getByLabel('生成数量');
+  const generate = generator.getByRole('button', { name: '生成地址', exact: true });
   assert.equal(await countField.inputValue(), '10');
   await countField.fill('101');
   await generate.click();
   await page.getByText('每次可生成 1 至 100 条地址', { exact: true }).waitFor();
   await countField.fill('3');
   await generate.click();
-  await page.getByText('已生成 3 条账单地址，付款前请核对资料。', { exact: true }).waitFor();
-  assert.equal(await page.locator('#bit-address-list tbody tr').count(), 3);
+  await generator.waitFor({ state: 'hidden' });
+  await page.locator('#toast[data-kind="success"]').getByText('已成功生成 3 条地址', { exact: true }).waitFor();
+  await page.waitForFunction(() => document.querySelectorAll('#bit-address-list tbody tr[data-row-id]').length === 3);
   assert.equal(await page.getByRole('button', { name: '导入地址', exact: true }).count(), 1);
-  await page.getByRole('button', { name: '关闭抽屉' }).click();
-  assert.equal(await bitFrame.locator('#bit-window-name').inputValue(), '演示窗口名称');
+  assert.equal(await bitFrame.locator('#bit-window-name').inputValue(), windowEmail);
   await page.setViewportSize({ width: 390, height: 820 });
-  await addressButton.waitFor();
-  assert.equal(await bitToolbar.evaluate((node) => node.scrollWidth <= node.clientWidth), true);
+  await page.getByRole('button', { name: '前往地址管理', exact: true }).click();
+  assert.equal(await addresses.evaluate((node) => document.activeElement === node), true);
+  assert.equal(await bitToolbarFits(), true);
   await page.setViewportSize({ width: 1280, height: 850 });
 
   await page.goto(host.url + '#/workspace/recharge');
@@ -218,15 +238,16 @@ test('local demo workspace, retry, refresh failure and restart', { timeout: 45_0
     await frame.locator('body').evaluate((element) => element.scrollWidth <= innerWidth),
     true
   );
-  await page.locator('#theme-toggle').click();
+  await toggleDesignTheme(page);
   await frame.locator('html[data-id-theme="dark"]').waitFor({ state: 'attached' });
-  await page.locator('#theme-toggle').click();
+  await toggleDesignTheme(page);
   await page.setViewportSize({ width: 1280, height: 850 });
   const guideTab = frame.getByRole('button', { name: '使用说明', exact: true });
   const guide = frame.locator('#workspaceGuide');
   const form = frame.locator('#redeemSection');
   const queryInput = frame.locator('#queryInput');
   const queryTab = frame.getByRole('button', { name: '兑换码查询', exact: true });
+  await frame.locator('.title-with-help:has(#workspace-account-title) summary').click();
   await frame.getByRole('link', { name: '如何获取账号资料？' }).click();
   await guide.getByRole('heading', { name: '充值使用说明' }).waitFor();
   assert.equal(await guideTab.getAttribute('aria-pressed'), 'true');
@@ -245,11 +266,11 @@ test('local demo workspace, retry, refresh failure and restart', { timeout: 45_0
     'https://chatgpt.com/api/auth/session'
   );
   await page.setViewportSize({ width: 390, height: 820 });
-  await page.locator('#theme-toggle').click();
+  await toggleDesignTheme(page);
   await frame.locator('html[data-id-theme="dark"]').waitFor({ state: 'attached' });
   assert((await figures.nth(1).boundingBox()).y > (await figures.nth(0).boundingBox()).y);
   assert(await guide.evaluate((node) => node.ownerDocument.body.scrollWidth <= innerWidth));
-  await page.locator('#theme-toggle').click();
+  await toggleDesignTheme(page);
   await page.setViewportSize({ width: 1280, height: 850 });
   await guide.getByRole('button', { name: '查询充值结果' }).click();
   assert((await queryInput.boundingBox()).height <= 46, '单个兑换码输入应为单行控件');
@@ -304,7 +325,7 @@ test('local demo workspace, retry, refresh failure and restart', { timeout: 45_0
   await frame.locator('#startBtn').click();
   const { jobKey } = await (await submission).json();
   assert.ok(jobKey);
-  await frame.getByText('演示任务正在处理', { exact: true }).first().waitFor();
+  await frame.locator('#taskProgressTitle').getByText('开通中', { exact: true }).waitFor();
   await frame
     .locator('html[data-recharge-navigation-locked="true"]')
     .waitFor({ state: 'attached' });
@@ -324,7 +345,7 @@ test('local demo workspace, retry, refresh failure and restart', { timeout: 45_0
     1
   );
   clock += 1500;
-  await frame.getByText('演示任务已转待人工核对', { exact: true }).first().waitFor();
+  await frame.locator('#taskProgressTitle').getByText('开通结果待核对', { exact: true }).waitFor();
   await frame
     .locator('html[data-recharge-navigation-locked="false"]')
     .waitFor({ state: 'attached' });
@@ -346,7 +367,7 @@ test('local demo workspace, retry, refresh failure and restart', { timeout: 45_0
   assert.equal(await frame.locator('.site-hero h1').isVisible(), false);
   assert.equal(await frame.locator('.card-head h2').isVisible(), false);
   assert.equal(await nav.getByRole('button', { name: '兑换开通', exact: true }).count(), 0);
-  assert.equal(await nav.evaluate((element) => element.scrollWidth <= element.clientWidth), true);
+  assert(await navFits(), '充值页签保持单行，刷新按钮留在窗口内');
   await frame.getByRole('link', { name: '发票助手' }).click();
   await frame.locator('#checkBtn:disabled').waitFor();
   const invoiceHelp = frame.locator('.compact-hero .title-help');
@@ -398,9 +419,8 @@ test('local demo workspace, retry, refresh failure and restart', { timeout: 45_0
     }
     if (name === '任务管理') {
       await frame.locator(content).getByText('演示任务已转待人工核对').waitFor();
-      await frame.locator('[data-view-task-log="' + jobKey + '"]:enabled').click();
-      await frame.getByText(jobKey + ' · manual · 70%', { exact: true }).waitFor();
-      await frame.locator('[onclick="closeTaskLogModal()"]:enabled').click();
+      await openTaskLog(jobKey);
+      await closeTaskLog();
     }
     if (name === '运行日志')
       await frame.getByText('本机模拟上游已就绪', { exact: false }).waitFor();
@@ -426,7 +446,7 @@ test('local demo workspace, retry, refresh failure and restart', { timeout: 45_0
   await page.getByRole('button', { name: '刷新', exact: true }).click();
   await frame.locator('#stat_total').getByText('1', { exact: true }).waitFor();
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.locator('#theme-toggle').click();
+  await toggleDesignTheme(page);
   await frame.locator('html[data-id-theme="dark"]').waitFor({ state: 'attached' });
   for (const [name, view] of adminViews) {
     await select(name);
@@ -440,7 +460,7 @@ test('local demo workspace, retry, refresh failure and restart', { timeout: 45_0
       }
     }
   }
-  assert.equal(await nav.evaluate((element) => element.scrollWidth <= element.clientWidth), true);
+  assert(await navFits(), '窄屏充值页签可横向滚动，刷新按钮留在窗口内');
   await select('支付链接调试');
   await verifyAdminLayout('#checkout_debug', 390);
   const checkoutField = frame.locator('.embedded-field:has(#checkout_plan_type)');
@@ -462,12 +482,11 @@ test('local demo workspace, retry, refresh failure and restart', { timeout: 45_0
   await page.locator('#page-description').waitFor({ state: 'hidden' });
   await select('任务管理');
   await frame.locator('#logs').getByRole('tab', { name: '任务管理', exact: true }).click();
-  await frame.locator('[data-view-task-log="' + jobKey + '"]:enabled').click();
-  await frame.getByText(jobKey + ' · manual · 70%', { exact: true }).waitFor();
-  const modal = await frame.locator('#task_log_modal_overlay .screenshot-modal').boundingBox();
-  assert(modal.y >= 0 && modal.y + modal.height <= 844);
-  await frame.locator('[onclick="closeTaskLogModal()"]:enabled').click();
-  await page.locator('#theme-toggle').click();
+  await openTaskLog(jobKey);
+  const drawer = await taskLogDrawer.boundingBox();
+  assert(drawer.y >= 0 && drawer.y + drawer.height <= 844);
+  await closeTaskLog();
+  await toggleDesignTheme(page);
   await page.setViewportSize({ width: 1280, height: 850 });
   assert.equal(await nav.getByRole('button', { name: '登录日志', exact: true }).count(), 0);
   await page.goto(host.url + '#/settings/login-logs');

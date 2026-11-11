@@ -25,13 +25,30 @@ import { vendureRechargePrefix } from '../modules/recharge/vendure/loopback-brid
 import { productionDataPaths } from './production-data.mjs';
 import { createOrderRechargeClient, readPoolCards } from './order-recharge-client.mjs';
 import { createOrderAuxiliaryHandler, orderAuxiliaryRoutes } from './order-auxiliary.mjs';
+import { cardManagementRoutes, createCardManagementHandler, preserveReferencedOrderCard } from './card-management.mjs';
+import { claudeGoogleSubscriptionRoutes, createClaudeGoogleSubscriptionsHandler } from './claude-google-subscriptions.mjs';
+import { createSubscriptionHandler, subscriptionRoutes } from './subscription-management.mjs';
 import { createRechargeCodeHandler, rechargeCodesRoute } from './recharge-code-requests.mjs';
 import { createRechargeOrderSync, orderSyncRoute } from './recharge-order-sync.mjs';
 import { createDataChangeStream, dataChangeRoute } from './change-sync.mjs';
+import { createEmployeeStatisticsHandler, employeeStatisticsRoute } from './employee-statistics.mjs';
+import { monitorPath, monitorConfigDomain, monitorReportPath, readyPath } from './monitoring-policy.mjs';
+import { createSystemMonitoring } from './system-monitoring.mjs';
+import { createMonitoringSources } from './monitoring-sources.mjs';
+import { createMonitoringHandler, createMonitoringReadiness, createProbeReportHandler } from './monitoring-route.mjs';
+import { createLegacyRechargeNotifications } from './monitoring-recharge.mjs';
+import { probeCodexdaichongRuntime } from '../modules/recharge/codexdaichong/runtime-health.mjs';
 
 const files = new Map([
   ['index.html', 'text/html; charset=utf-8'],
   ['prototype.css', 'text/css; charset=utf-8'],
+  ['design-tokens.css', 'text/css; charset=utf-8'],
+  ['tabs.css', 'text/css; charset=utf-8'],
+  ['design-charts.css', 'text/css; charset=utf-8'],
+  ['design-charts.js', 'text/javascript; charset=utf-8'],
+  ['interaction-preferences.css', 'text/css; charset=utf-8'],
+  ['interaction-preferences.js', 'text/javascript; charset=utf-8'],
+  ['pagination.css', 'text/css; charset=utf-8'],
   ['title-help.css', 'text/css; charset=utf-8'],
   ['overview-prototype.css', 'text/css; charset=utf-8'],
   ['finance-collection.css', 'text/css; charset=utf-8'],
@@ -39,6 +56,7 @@ const files = new Map([
   ['bitbrowser-addresses.css', 'text/css; charset=utf-8'],
   ...[
     'prototype',
+    'pagination',
     'overview-prototype',
     'finance-collection',
     'title-help',
@@ -46,9 +64,14 @@ const files = new Map([
     'apple-relay-prototype',
     'apple-balance-prototype',
     'commerce-prototype',
+    'claude-google-subscriptions',
+    'subscription-management',
+    'employee-statistics',
     'order-operations',
+    'order-completion',
     'change-sync',
     'operations-prototype',
+    'system-monitoring',
     'bitbrowser-addresses'
   ].map((name) => [name + '.js', 'text/javascript; charset=utf-8'])
 ]);
@@ -76,7 +99,9 @@ export async function startPreview(
     mailboxPublicOrigin,
     microsoftMailboxConfig,
     microsoftMailboxFetch,
-    rechargeOrderSync = false
+    rechargeOrderSync = false,
+    monitoringProbeSecret = process.env.ID_MONITOR_PROBE_SECRET,
+    monitoringWorkerReceiptsDirectory = process.env.ID_MONITOR_WORKER_RECEIPTS_DIR
   } = {}
 ) {
   const publicUrl = parseToolPublicOrigin(publicOrigin);
@@ -116,6 +141,8 @@ export async function startPreview(
       ])
     )
   );
+  assets.set('/apple-funding.mjs', { type: 'text/javascript; charset=utf-8',
+    body: await readFile(new URL('../frontend/apple-funding.mjs', import.meta.url)) });
   const localBitAssets = [
     ['/assets/bitbrowser/authorization.mjs', '../modules/recharge/bitbrowser/authorization.mjs'],
     ['/assets/bitbrowser/catalog.mjs', '../modules/recharge/bitbrowser/catalog.mjs'],
@@ -161,7 +188,9 @@ export async function startPreview(
   let setupIndex = null;
   let handleAutomaticSnapshot = null;
   let financeCollection = null, handleFinanceCollection = null;
-  let handleOrderAuxiliary, handleRechargeCodes, orderSync;
+  let handleOrderAuxiliary, handleCardManagement, handleClaudeGoogleSubscriptions, handleSubscriptions, handleRechargeCodes, orderSync;
+  let handleEmployeeStatistics;
+  let systemMonitoring, monitoringSources, handleMonitoring, handleProbeReport, handleReadiness;
   const orderRechargeClient = createOrderRechargeClient(rechargeConfig);
   const gateways = new Map();
   function gatewayFor(host) {
@@ -174,6 +203,14 @@ export async function startPreview(
           upstreamUrl: rechargeConfig.upstreamUrl,
           publicOrigin: secureOrigin || `http://${host}`,
           secret: rechargeConfig.secret,
+          legacyNotificationLocked: () => systemMonitoring?.legacyLocked() === true,
+          beforeCardDelete: (cardId, actor) => {
+            if (!store) throw new Error('订单资料尚未就绪');
+            return preserveReferencedOrderCard(store, orderRechargeClient, cardId, actor);
+          },
+          onRechargeOutcome: outcome => queueMicrotask(() => {
+            try { monitoringSources?.recordRecharge(outcome); } catch {}
+          }),
           getActor: (request) => auth?.getActor(request)
         })
       );
@@ -186,7 +223,9 @@ export async function startPreview(
       if (authPath) {
         const { createLocalAuth, createLocalAdminSetup, localAdminEmail } = await import('./local-auth.mjs');
         loadAuth = () => createLocalAuth(authPath, {
-          onEvent: (event) => store.recordAuthEvent(event), publicUrl
+          onEvent: (event) => store.recordAuthEvent(event),
+          onMonitoring: publicUrl ? (event) => queueMicrotask(() => monitoringSources?.recordAuth(event)) : undefined,
+          publicUrl
         });
         auth = loadAuth();
         if (publicUrl && !auth) throw new Error('正式站管理员尚未初始化');
@@ -198,7 +237,31 @@ export async function startPreview(
         };
       }
       store = localBusiness.createLocalBusinessStore(databasePath);
+      systemMonitoring = createSystemMonitoring({ store, origin: secureOrigin,
+        native: rechargeConfig ? createLegacyRechargeNotifications(orderRechargeClient) : undefined,
+        send: publicUrl ? undefined : async () => ({ status: 'failed', reason: 'configuration' }) });
+      handleMonitoring = createMonitoringHandler({ monitor: systemMonitoring, publicOrigin: secureOrigin });
+      if (publicUrl) {
+        const externalProbe = typeof monitoringProbeSecret === 'string' && Buffer.byteLength(monitoringProbeSecret) >= 32;
+        handleReadiness = createMonitoringReadiness({ check() {
+          if (!auth?.ready()) return false;
+          store.featureDocument(monitorConfigDomain);
+          return true;
+        } });
+        handleProbeReport = createProbeReportHandler({ monitor: systemMonitoring, secret: monitoringProbeSecret });
+        monitoringSources = createMonitoringSources({ monitor: systemMonitoring, databasePath, externalProbe,
+          workerReceiptDirectory: monitoringWorkerReceiptsDirectory,
+          runtimeProbe: rechargeConfig ? () => probeCodexdaichongRuntime(rechargeConfig) : undefined,
+          rechargeClient: orderRechargeClient, getFinance: () => financeCollection, syncEnabled: Boolean(rechargeConfig && rechargeOrderSync) });
+      }
       handleOrderAuxiliary = createOrderAuxiliaryHandler({ store, client: orderRechargeClient, publicOrigin: secureOrigin });
+      handleCardManagement = createCardManagementHandler({ store, client: orderRechargeClient, publicOrigin: secureOrigin });
+      handleClaudeGoogleSubscriptions = createClaudeGoogleSubscriptionsHandler({ store, publicOrigin: secureOrigin });
+      handleSubscriptions = createSubscriptionHandler({ store, publicOrigin: secureOrigin,
+        readOwners: () => auth?.orderOwners() || [] });
+      handleEmployeeStatistics = createEmployeeStatisticsHandler({
+        store, client: orderRechargeClient, publicOrigin: secureOrigin, readEmployees: () => auth.orderOwners()
+      });
       handleRechargeCodes = createRechargeCodeHandler({
         store: {
           load: () => store.featureDocument('recharge-codes'),
@@ -223,6 +286,7 @@ export async function startPreview(
         config: relayConfig,
         publicOrigin: secureOrigin,
         readInventory: () => store.load('inventory').data,
+        planIntake: (input) => store.planAppleRelayIntake(input),
         savePrimaries: (rows, actor, aliases, registration) =>
           store.saveAppleRelayPrimaries(rows, actor, aliases, registration),
         fetchImpl: relayFetch,
@@ -304,7 +368,7 @@ export async function startPreview(
     return publicUrl ? host === publicUrl.host : ['127.0.0.1:' + port, 'localhost:' + port].includes(host);
   }
   const dataChanges = store ? createDataChangeStream({
-    getActor: request => auth?.getActor(request) || (!authPath && !publicUrl
+    getActor: request => auth?.getActor(request, { throwOnUnavailable: true }) || (!authPath && !publicUrl
       ? { id: 'local-operator', role: 'admin' } : null),
     getVersions: actor => ({ ...store.changeVersions(actor), operators: auth?.changeVersion() || '0' }),
     subscribe: listener => store.subscribeChanges(listener),
@@ -326,6 +390,8 @@ export async function startPreview(
       response.writeHead(403).end();
       return;
     }
+    if (route === readyPath && handleReadiness) return handleReadiness(request, response);
+    if (route === monitorReportPath && handleProbeReport) return void handleProbeReport(request, response);
     if (vendureRehearsal && route.startsWith(vendureRechargePrefix + '/'))
       return void vendureRehearsal.handle(request, response);
     if (handleLegacyToolRoute && [legacyMicrosoftMailboxCallback, legacyWebsiteVisitIngest].includes(route)) {
@@ -343,6 +409,12 @@ export async function startPreview(
       }
     }
     const actor = auth?.getActor(request);
+    if (monitoringSources && (route.startsWith('/api/') || route.startsWith('/integrations/codexdaichong/api/')))
+      response.once('finish', () => monitoringSources.recordHttp(route, response.statusCode, actor));
+    if (request.localAuthUnavailable) {
+      response.writeHead(503, { 'Content-Type': 'application/json; charset=utf-8', 'Retry-After': '5' });
+      return response.end(JSON.stringify({ error: '登录服务暂时不可用，请稍后重试，登录信息未清除' }));
+    }
     if (route === storefrontMailboxQueryRoute) {
       if (!storefrontMailbox || !auth || request.url !== storefrontMailboxQueryRoute) {
         response.writeHead(storefrontMailbox ? 400 : 404, { 'Cache-Control': 'private, no-store' }).end();
@@ -355,7 +427,8 @@ export async function startPreview(
     const forbidden = () => {
       const code = actor ? 403 : 401;
       response.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
-      return response.end(JSON.stringify({ error: actor ? '当前账号无权执行此操作' : '请先登录' }));
+      return response.end(JSON.stringify({ error: actor ? '当前账号无权执行此操作' : '登录已过期或已失效，请重新登录',
+        ...(!actor ? { reason: request.localAuthReason || 'invalid' } : {}) }));
     };
     if (dataChanges && route === dataChangeRoute) {
       if (loginRequired && !actor) return forbidden();
@@ -403,6 +476,7 @@ export async function startPreview(
       if (!canManage || (loginRequired && !actor)) return forbidden();
       return void handleFinanceCollection(request, response, actor || { id: 'local-operator', name: '本机操作员', role: 'admin' });
     }
+    if (route === monitorPath && handleMonitoring) return void handleMonitoring(request, response, actor);
     if (store && route === automaticSnapshotRoute) {
       if (!canManage) return forbidden();
       return void handleAutomaticSnapshot(request, response, actor);
@@ -419,6 +493,23 @@ export async function startPreview(
       if (!actor || !canManage) return forbidden();
       return void handleOrderAuxiliary(request, response, route, actor);
     }
+    if (store && cardManagementRoutes.has(route)) {
+      response.setHeader('Cache-Control', 'private, no-store');
+      if (!actor || !canManage) return forbidden();
+      return void handleCardManagement(request, response, route, actor);
+    }
+    if (store && claudeGoogleSubscriptionRoutes.has(route)) {
+      response.setHeader('Cache-Control', 'private, no-store');
+      if (!actor || !canManage) return forbidden();
+      return void handleClaudeGoogleSubscriptions(request, response, route, actor);
+    }
+    if (store && subscriptionRoutes.has(route)) {
+      response.setHeader('Cache-Control', 'private, no-store');
+      if (!actor || !canManage) return forbidden();
+      return void handleSubscriptions(request, response, route, actor);
+    }
+    if (store && route === employeeStatisticsRoute)
+      return void handleEmployeeStatistics(request, response, actor);
     if (store && route.startsWith('/api/local/tools/media/')) {
       if (!actor) return forbidden();
       return void handleMediaResolver(request, response, actor);
@@ -445,13 +536,14 @@ export async function startPreview(
       if (
         !canManage &&
         route !== '/api/local/toolbox' &&
-        !['/api/local/saved-totp', '/api/local/saved-totp/code'].includes(route) &&
+        route !== '/api/local/order-completion' &&
+        !['/api/local/saved-totp', '/api/local/saved-totp/code', '/api/local/saved-totp/secret'].includes(route) &&
         (request.method !== 'GET' || !['inventory', 'commerce'].includes(route.split('/').at(-1)))
       )
         return forbidden();
       return void localBusiness.handleLocalBusiness(request, response, route, store, actor, {
         publicOrigin: secureOrigin,
-        readOrderCards: () => readPoolCards(orderRechargeClient),
+        readOrderCards: () => readPoolCards(orderRechargeClient, { includeNumbers: true }),
         readOrderOwners: () => auth?.orderOwners() || [],
         verifyManagedMailbox: readManagedMailbox || verifyMailboxImap,
         async verifyRelayExtraction(aliasIds, operator) {
@@ -531,10 +623,14 @@ export async function startPreview(
     response.end(request.method === 'HEAD' ? undefined : body);
   });
   if (financeCollection) server.once('close', () => financeCollection.close());
+  if (systemMonitoring) server.once('close', () => { monitoringSources?.close(); systemMonitoring.close(); });
   if (store) server.once('close', () => store.close());
   if (dataChanges) server.once('close', () => dataChanges.close());
   if (rechargeOrderSync && orderSync && rechargeConfig) {
-    const timer = setInterval(() => void orderSync.run({ apply: true }).catch(() => {}), 60_000);
+    const timer = setInterval(() => void orderSync.run({ apply: true }).then(
+      () => monitoringSources?.recordOrderSync(true),
+      error => { if (error.status !== 409) monitoringSources?.recordOrderSync(false); }
+    ), 60_000);
     timer.unref();
     server.once('close', () => clearInterval(timer));
   }
@@ -565,6 +661,7 @@ export async function startPreview(
     });
   });
   financeCollection?.start();
+  monitoringSources?.start();
   return { server, url: 'http://127.0.0.1:' + server.address().port + '/' };
 }
 

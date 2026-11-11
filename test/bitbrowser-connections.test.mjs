@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { Readable } from 'node:stream';
 import test from 'node:test';
 import { createSnapshot, restoreSnapshot } from '../server/backup/local-sqlite.mjs';
 import { initializeLocalAdmin } from '../server/local-auth.mjs';
-import { createLocalBusinessStore } from '../server/local-business.mjs';
+import { createLocalBusinessStore, handleLocalBusiness } from '../server/local-business.mjs';
 import { startPreview } from '../server/preview.mjs';
 
 const alice = { id: '85463b17-c1a3-4371-83c5-5e150801ff3c', name: '甲' };
@@ -117,6 +118,54 @@ test('rejects credentials, undeclared fields and values that cannot run in the l
   }
 });
 
+test('personal execution defaults are isolated, independently clearable and leave resource versions intact', async () => {
+  const store = createLocalBusinessStore(':memory:');
+  const origin = 'https://bit-defaults.test';
+  async function setDefault(domain, body, actor = alice, requestOrigin = origin) {
+    const request = Readable.from([Buffer.from(JSON.stringify(body))]);
+    request.method = 'PATCH';
+    request.headers = { origin: requestOrigin, 'content-type': 'application/json' };
+    let status, data;
+    const response = {
+      setHeader() {},
+      writeHead(value) { status = value; },
+      end(value) { data = JSON.parse(value); }
+    };
+    await handleLocalBusiness(request, response, '/api/local/' + domain, store, actor, { publicOrigin: origin });
+    return { status, data };
+  }
+  const connectionScope = 'bitbrowser-connections', proxyScope = 'bitbrowser-proxies';
+  try {
+    const connection = store.saveBitBrowserConnection(command(0), alice);
+    const proxy = store.saveBitBrowserProxy({
+      version: 0, name: '合成 IP', kind: 'static_residential',
+      protocol: 'http', link: 'http://192.0.2.5:8080'
+    }, alice);
+    assert.equal((await setDefault(connectionScope, { defaultId: connection.savedId }, null)).status, 401);
+    assert.equal((await setDefault(connectionScope, { defaultId: connection.savedId }, alice, 'https://other.test')).status, 403);
+    assert.equal((await setDefault(connectionScope, { defaultId: connection.savedId }, bob)).status, 404);
+    assert.equal((await setDefault(proxyScope, { defaultId: proxy.savedId }, bob)).status, 404);
+    assert.equal((await setDefault(proxyScope, { defaultId: proxy.savedId, actorId: bob.id })).status, 400);
+    assert.deepEqual(await setDefault(connectionScope, { defaultId: connection.savedId }),
+      { status: 200, data: { defaultId: connection.savedId } });
+    assert.equal((await setDefault(proxyScope, { defaultId: proxy.savedId })).status, 200);
+    assert.deepEqual(store.loadBitBrowserConnections(alice),
+      { version: 1, profiles: connection.profiles, defaultId: connection.savedId });
+    assert.deepEqual(store.loadBitBrowserProxies(alice),
+      { version: 1, items: proxy.items, defaultId: proxy.savedId });
+    assert.deepEqual(store.loadBitBrowserConnections(bob), empty);
+    assert.deepEqual(store.loadBitBrowserProxies(bob), { version: 0, items: [] });
+    assert.equal((await setDefault(connectionScope, { defaultId: null })).status, 200);
+    assert.deepEqual(store.loadBitBrowserConnections(alice), { version: 1, profiles: connection.profiles });
+    assert.equal(store.loadBitBrowserProxies(alice).defaultId, proxy.savedId);
+    assert.equal((await setDefault(connectionScope, { defaultId: null })).status, 200);
+    assert.equal(store.loadBitBrowserDefaults(alice).version, 3);
+    assert.equal(store.audit().filter(row => row.action === 'bitbrowser_default_save').length, 3);
+  } finally {
+    store.close();
+  }
+});
+
 test('connection profiles stay encrypted and are readable after backup and recovery', async (t) => {
   const directory = await privateDirectory(t);
   const source = join(directory, 'source.sqlite');
@@ -127,10 +176,15 @@ test('connection profiles stay encrypted and are readable after backup and recov
   const staticProxyCredentials = { username: 'fixture-proxy-user', password: 'fixture-proxy-password' };
   const staticProfile = { proxyMode: 'static', staticHost: 'proxy.example.test', staticPort: 8082 };
   const secrets = { interfaceToken, staticProxyCredentials };
-  let saved;
+  let saved, savedProxy;
   try {
     assert.throws(() => store.saveBitBrowserConnection({ ...command(0), ...secrets }, alice), { status: 400 });
     saved = store.saveBitBrowserConnection({ ...command(0, staticProfile), ...secrets }, alice);
+    savedProxy = store.saveBitBrowserProxy({
+      version: 0, name: '恢复验收 IP', kind: 'static_residential', protocol: 'http', link: 'http://192.0.2.5:8080'
+    }, alice);
+    store.saveBitBrowserDefault('bitbrowser-connections', { defaultId: saved.savedId }, alice);
+    store.saveBitBrowserDefault('bitbrowser-proxies', { defaultId: savedProxy.savedId }, alice);
     assert.equal(saved.profiles[0].hasInterfaceToken, true);
     assert.equal(saved.profiles[0].hasStaticProxyCredentials, true);
     for (const value of [interfaceToken, ...Object.values(staticProxyCredentials)]) {
@@ -150,9 +204,13 @@ test('connection profiles stay encrypted and are readable after backup and recov
   try {
     assert.deepEqual(restored.loadBitBrowserConnections(alice), {
       version: 1,
-      profiles: saved.profiles
+      profiles: saved.profiles,
+      defaultId: saved.savedId
     });
+    assert.deepEqual(restored.loadBitBrowserProxies(alice),
+      { version: 1, items: savedProxy.items, defaultId: savedProxy.savedId });
     assert.deepEqual(restored.loadBitBrowserConnections(bob), empty);
+    assert.deepEqual(restored.loadBitBrowserProxies(bob), { version: 0, items: [] });
     const selection = { id: saved.savedId, version: 1 };
     assert.deepEqual(restored.useBitBrowserConnectionSecrets(selection, alice), secrets);
     assert.throws(() => restored.useBitBrowserConnectionSecrets({ ...selection, version: 0 }, bob), { status: 404 });

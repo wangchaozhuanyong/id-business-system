@@ -5,10 +5,10 @@ import { loadCodexdaichongAssets } from '../../modules/recharge/codexdaichong/as
 export const root = fileURLToPath(new URL('../../', import.meta.url));
 export const origin = 'https://design-layout.invalid';
 let rechargeAssets;
-export async function interceptDesign(context, { beforeDirectory, localFixtures, actor, changeEvents = false } = {}) {
+export async function interceptDesign(context, { beforeDirectory, localFixtures, actor, changeEvents = false, skipRechargeAssets = false } = {}) {
   const unavailable = [],
     external = [];
-  rechargeAssets ??= await loadCodexdaichongAssets();
+  if (!skipRechargeAssets) rechargeAssets ??= await loadCodexdaichongAssets();
   const handle = async (route) => {
     const url = new URL(route.request().url());
     if (url.origin !== origin) {
@@ -35,6 +35,16 @@ export async function interceptDesign(context, { beforeDirectory, localFixtures,
         'admin/ip-bans': { bans: [], activeCount: 0 },
         'admin/checkout/plans': { plans: {} },
         'admin/region': { region: 'PH', label: '离线合成地区', currency: 'PHP' },
+        'admin/recharge-routing': {
+          version: 1,
+          regions: { PH: { label: '菲律宾', currency: 'PHP' }, EG: { label: '埃及', currency: 'EGP' } },
+          plans: { plus: 'PH', pro100: 'EG', pro200: 'PH', pro500: 'EG' },
+          checks: [], audit: [], auditCount: 0,
+          proxyCountries: [
+            { code: 'PH', name: '菲律宾' }, { code: 'EG', name: '埃及' }, { code: 'MX', name: '墨西哥' }
+          ],
+          proxyLabels: []
+        },
         'admin/gpt-api': { config: {} },
         'admin/gpt-api/status': {},
         'public/runtime': { runtime: { active_foreground_jobs: 0, max_foreground_jobs: 1 } },
@@ -47,7 +57,7 @@ export async function interceptDesign(context, { beforeDirectory, localFixtures,
       );
     }
     if (url.pathname.startsWith(prefix + '/')) {
-      const asset = rechargeAssets.get(url.pathname.slice(prefix.length));
+      const asset = rechargeAssets?.get(url.pathname.slice(prefix.length));
       if (asset)
         return route.fulfill({
           body: asset.body,
@@ -60,6 +70,8 @@ export async function interceptDesign(context, { beforeDirectory, localFixtures,
       if (resource === 'apple-relay/status')
         return json({ configured: true, parentIds: [], aliasIds: [] });
       if (resource === 'audit') return json([]);
+      if (resource === 'subscriptions/lookup' && !localFixtures?.[resource])
+        return json({ ownerId: '', ownerName: '' });
       return json(localFixtures?.[resource] ?? { version: 0, data: null, items: [] });
     }
     let file = path.join(
@@ -136,11 +148,62 @@ export async function settle(page) {
     () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
   );
 }
-export async function spacingSnapshot(page, scope = '#main') {
+export async function separatorSnapshot(page, scope = '#main') {
   return page.locator(scope).evaluate((root) => {
+    const visible = node => node.checkVisibility() && node.getBoundingClientRect().width > 0;
+    // Measure painted portions inside scrollports, not off-screen rows beneath their pagination.
+    const paintedRect = node => {
+      const rect = node.getBoundingClientRect().toJSON();
+      for (let parent = node.parentElement; parent && parent !== root; parent = parent.parentElement) {
+        const style = getComputedStyle(parent), box = parent.getBoundingClientRect();
+        if (/^(auto|scroll|hidden|clip)$/.test(style.overflowY)) {
+          rect.top = Math.max(rect.top, box.top); rect.bottom = Math.min(rect.bottom, box.bottom);
+        }
+        if (/^(auto|scroll|hidden|clip)$/.test(style.overflowX)) {
+          rect.left = Math.max(rect.left, box.left); rect.right = Math.min(rect.right, box.right);
+        }
+      }
+      return rect.right > rect.left && rect.bottom > rect.top ? rect : null;
+    };
+    const controls = [...root.querySelectorAll('.button,input:not([type=hidden]),select,textarea,summary')]
+      .filter(node => visible(node) && !node.closest('table,.table-viewport,.title-description,[popover]'));
+    const findings = [];
+    let measurements = 0;
+    for (const region of root.querySelectorAll('.list-controls,.content-toolbar,.panel-heading,.toolbar,.form-footer,.tool-header-row,.pagination,.form-section,.tabs')) {
+      if (!visible(region)) continue;
+      const box = region.getBoundingClientRect(), style = getComputedStyle(region);
+      for (const side of ['Top', 'Bottom']) {
+        if (!(parseFloat(style[`border${side}Width`]) > 0) || style[`border${side}Style`] === 'none') continue;
+        const line = side === 'Top' ? box.top : box.bottom;
+        for (const control of controls) {
+          if (control.contains(region)) continue;
+          const rect = paintedRect(control);
+          if (!rect || rect.right <= box.left || rect.left >= box.right) continue;
+          const distance = Math.max(rect.top - line, line - rect.bottom);
+          if (distance >= 24) continue;
+          measurements++;
+          if (distance < 8 - 0.5) findings.push({
+            region: region.className, side, control: control.id || control.getAttribute('aria-label') || control.textContent.trim().slice(0, 40),
+            distance: Math.round(distance * 100) / 100
+          });
+        }
+      }
+    }
+    return { measurements, findings };
+  });
+}
+export async function spacingSnapshot(page, scope = '#main') {
+  const result = await page.locator(scope).evaluate((root) => {
     const findings = [],
       cards = [];
     const visible = (el) => el.checkVisibility() && el.getBoundingClientRect().width > 0;
+    const inVerticalScrollport = (node, panel) => {
+      for (let parent = node.parentElement; parent && parent !== panel; parent = parent.parentElement) {
+        if (parent.scrollHeight > parent.clientHeight + 1 && /^(auto|scroll)$/.test(getComputedStyle(parent).overflowY))
+          return true;
+      }
+      return false;
+    };
     for (const panel of root.querySelectorAll('.panel')) {
       if (!visible(panel)) continue;
       const rect = panel.getBoundingClientRect(),
@@ -170,7 +233,9 @@ export async function spacingSnapshot(page, scope = '#main') {
         const left = box.left - rect.left,
           right = rect.right - box.right,
           bottom = rect.bottom - box.bottom;
-        if (left < 10 || right < 10 || bottom < 7)
+        // Scrollable content can lie below the outer panel. Its horizontal
+        // padding still counts; reachability is checked by the owning page.
+        if (left < 10 || right < 10 || (bottom < 7 && !inVerticalScrollport(parent, panel)))
           findings.push({
             text: node.textContent.trim().slice(0, 55),
             parent: parent.tagName + '.' + parent.className,
@@ -193,7 +258,7 @@ export async function spacingSnapshot(page, scope = '#main') {
           left = box.left - rect.left,
           right = rect.right - box.right,
           bottom = rect.bottom - box.bottom;
-        if (left < 10 || right < 10 || bottom < 7)
+        if (left < 10 || right < 10 || (bottom < 7 && !inVerticalScrollport(control, panel)))
           findings.push({
             control: control.id || control.textContent.slice(0, 45),
             panel: panel.className,
@@ -205,4 +270,15 @@ export async function spacingSnapshot(page, scope = '#main') {
     }
     return { findings, cards, overflow: document.documentElement.scrollWidth > innerWidth + 1 };
   });
+  const separators = await separatorSnapshot(page, scope);
+  return { ...result, separators, findings: [...result.findings, ...separators.findings] };
+}
+
+// Follow the same compact mobile tools menu used by people.
+export async function toggleDesignTheme(page) {
+  await settle(page);
+  const mobile = !(await page.locator('#theme-toggle').isVisible());
+  if (mobile) await page.locator('#mobile-tools-toggle').click();
+  await page.locator('#theme-toggle').click();
+  if (mobile) await page.locator('#mobile-tools-toggle').click();
 }

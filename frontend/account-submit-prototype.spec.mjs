@@ -96,7 +96,7 @@ function runtime() {
   };
   const api = {
     state: {
-      route: 'workspace/account-submit',
+      route: 'workspace/account-extract',
       drafts: new Map(),
       actor: { id: 'test-actor', name: '演示测试员', role: 'admin' }
     },
@@ -218,13 +218,14 @@ function runtime() {
 const gptCsv =
   '邮箱,密码,邮箱类型,2FA密钥,国家地区,地区,注册时间,登录设备,备注1,备注2\nnew.gpt@example.test,Demo-Only,谷歌邮箱,DEMO-TOTP,美国,纽约,2026-10-01T10:30,测试设备,第一条,第二条';
 
-test('账号提交页面包含三个已启用类型，复用账号库存且不提供邮箱入库', () => {
+test('账号提交页面包含五个已启用类型，复用账号库存且不提供邮箱入库', () => {
   const r = runtime();
   assert.equal(r.inventory.matches('workspace/account-submit'), true);
+  assert.equal(r.inventory.matches('workspace/account-extract'), true);
   const html = r.inventory.render();
-  for (const type of ['gpt', 'claude', 'apple'])
+  for (const type of ['gpt', 'claude', 'apple', 'gemini', 'grok'])
     assert.match(html, new RegExp(`data-type="${type}"`));
-  assert.doesNotMatch(html, /data-type="(?:google|relay|gemini|grok)"/);
+  assert.doesNotMatch(html, /data-type="(?:google|relay|microsoft)"/);
   assert.doesNotMatch(html, /IMPORT-DEMO-001/);
 });
 
@@ -247,7 +248,7 @@ for (const type of ['gpt', 'claude', 'apple'])
 test('三类单条表单保留各自字段，苹果资料入口不提供余额录入', () => {
   const r = runtime();
   for (const [type, fields] of [
-    ['gpt', ['inventory-emailType', 'inventory-city', 'inventory-totp', 'inventory-device', 'inventory-notes2']],
+    ['gpt', ['inventory-emailType', 'inventory-country-edit', 'inventory-totp', 'inventory-device', 'inventory-notes2']],
     ['claude', ['inventory-city', 'inventory-proxy-url', 'inventory-proxy-host']],
     [
       'apple',
@@ -258,6 +259,7 @@ test('三类单条表单保留各自字段，苹果资料入口不提供余额�
     assert.equal(r.form.raw['inventory-asset-type'], type);
     assert.equal(r.form.raw['inventory-entry-scope'], 'account-submit');
     for (const field of fields) assert.match(r.opened.body, new RegExp(`id="${field}"`));
+    if (type === 'gpt') assert.doesNotMatch(r.opened.body, /id="inventory-city"/);
     assert.doesNotMatch(r.opened.body, /name="[^"\s]*(?:balance|余额)[^"\s]*"/);
   }
 });
@@ -296,7 +298,7 @@ test('完整表头GPT导入保留邮箱类型、2FA、时间、设备和备注�
   assert.equal(row.totp, 'DEMO-TOTP');
   assert.equal(row.emailType, 'google');
   assert.equal(row.device, '测试设备');
-  assert.equal(row.city, '纽约');
+  assert.equal(row.city, undefined);
   assert.equal(row.notes2, '第二条');
   assert.equal(row.registered, '2026-10-01T10:30');
   assert.equal(row.createdAt, '2026-11-03 10:30');
@@ -339,7 +341,7 @@ test('Claude批导保留国家城市和代理资料，注册时间与录入时�
   r.open('claude');
   r.preview({
     'inventory-import-content':
-      '邮箱,邮箱类型,注册国家,注册城市,注册时间,代理类型,代理主机,代理端口,代理账号,代理密码\nnew.claude@example.test,苹果隐藏邮箱,美国,纽约,2026-10-01T10:30,socks5,proxy.example.test,1080,demo,DEMO-PROXY'
+      '邮箱,邮箱类型,注册国家,注册城市,注册时间,代理类型,代理主机,代理端口,代理账号,代理密码,登录设备,注册代理链接\nnew.claude@example.test,苹果隐藏邮箱,美国,纽约,2026-10-01T10:30,socks5,proxy.example.test,1080,demo,DEMO-PROXY,合成设备,socks5://demo:DEMO-PROXY@proxy.example.test:1080'
   });
   r.requestImport();
   r.confirm();
@@ -414,18 +416,19 @@ test('Apple生日无效或没有确认空电话时均不能批量入库', () => 
   }
 });
 
-test('继续接受账号旧七列格式，但保留真实注册时间和类型边界', () => {
+test('GPT 保留旧七列导入；Claude 旧模板缺设备和代理时明确拒绝', () => {
   const r = runtime();
-  r.open('claude');
-  r.preview({
-    'inventory-import-content':
-      'legacy.claude@example.test,Demo,,美国,纽约,2026-10-01T10:30,Claude账号'
-  });
-  r.requestImport();
-  r.confirm();
-  assert.equal(r.accounts.length, 1);
-  assert.equal(r.accounts[0].type, 'claude');
+  r.open('gpt');
+  r.preview({ 'inventory-import-content': 'legacy.gpt@example.test,Demo,,美国,纽约,2026-10-01T10:30,GPT账号' });
+  r.requestImport(); r.confirm();
+  assert.equal(r.accounts[0].type, 'gpt');
   assert.equal(r.accounts[0].registered, '2026-10-01T10:30');
+  r.open('claude');
+  r.preview({ 'inventory-import-content': 'legacy.claude@example.test,Demo,,美国,纽约,2026-10-01T10:30,Claude账号' });
+  r.requestImport();
+  assert.equal(r.pending, false);
+  assert.equal(r.accounts.length, 1);
+  assert([...r.errors.values()].some(Boolean));
 });
 
 for (const header of ['余额', '使用状态', '养号时长', 'KYC', '录入时间', '未知字段'])

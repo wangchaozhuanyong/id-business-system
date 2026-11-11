@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { startCodexdaichongDemoSite } from '../modules/recharge/codexdaichong/demo-site.mjs';
-import { interceptDesign, origin as offlineOrigin } from './helpers/offline-design.mjs';
+import { toggleDesignTheme, interceptDesign, origin as offlineOrigin } from './helpers/offline-design.mjs';
 
 // All requests stay inside the disposable demo host; no business writes or external calls.
 test('recharge transitions keep content and geometry through delayed, superseded and failed loads', { timeout: 90_000 }, async t => {
@@ -36,7 +36,14 @@ test('recharge transitions keep content and geometry through delayed, superseded
       // The offline host has no auth service; retain the 401 entry action without a local server.
       if (offline) await page.addInitScript(() => { window.IDLocalAuth = { getState: () => ({ status: 'signed-in' }), lock() {} }; });
       const fixtureActor = { id: '11111111-1111-4111-8111-111111111111', name: '离线验收管理员', role: 'super' };
-      const offlineFixture = offline ? await interceptDesign(page.context(), { actor: fixtureActor, localFixtures: { 'auth/session': { configured: true, actor: fixtureActor }, 'bitbrowser-addresses': { items: [], total: 0, totals: { unused: 0, used: 0, disabled: 0 }, page: 1, pageSize: 20 } } }) : null;
+      const offlineFixture = offline ? await interceptDesign(page.context(), { actor: fixtureActor, localFixtures: {
+        'auth/session': { configured: true, actor: fixtureActor },
+        'bitbrowser-addresses': { items: [], total: 0, totals: { unused: 0, used: 0, disabled: 0 }, page: 1, pageSize: 20 },
+        'bitbrowser-proxies': { version: 1, items: Array.from({ length: 51 }, (_, index) => ({
+          id: `sample-ip-${index}`, name: `离线 IP 样例 ${index + 1}`, endpoint: 'proxy.example.test',
+          countryCode: 'US', kind: 'static_residential', protocol: 'http', mode: 'fixed'
+        })) }
+      } }) : null;
       if (!offline) await page.route('**/*', route => new URL(route.request().url()).origin === origin &&
         ['GET', 'HEAD'].includes(route.request().method()) ? route.continue() : route.abort());
       const frameSelector = '#main > [data-page-region]:not([hidden]) .recharge-integration__content iframe:not([hidden])';
@@ -77,7 +84,7 @@ test('recharge transitions keep content and geometry through delayed, superseded
         await frame().locator('#querySection').waitFor();
         await idle();
         assert.equal(statusChecks, 1, '首次打开应检查服务');
-        if (dark) await page.locator('#theme-toggle').click();
+        if (dark) await toggleDesignTheme(page);
         await settle();
         const before = await page.locator(frameSelector).boundingBox();
         const started = Promise.withResolvers();
@@ -153,7 +160,13 @@ test('recharge transitions keep content and geometry through delayed, superseded
         await page.setViewportSize({ width, height: 460 });
         const navigate = async route => {
           if (width <= 900) await page.locator('#nav-toggle').click();
-          await page.locator(`#sidebar a[href="#/${route}"]`).click();
+          const link = page.locator(`#sidebar a[href="#/${route}"]`);
+          if (!await link.count()) {
+            const group = await page.evaluate(target => window.IDDesignAPI.navigation
+              .find(([, , children]) => children.some(([, key]) => key === target))?.[0], route);
+            await page.locator('#sidebar').getByRole('button', { name: group, exact: true }).click();
+          }
+          await link.click();
         };
         const bitSelector = '.recharge-integration__frame--bit-local';
         const bitReady = () => page.locator(bitSelector + ':not([hidden])').waitFor();
@@ -179,6 +192,18 @@ test('recharge transitions keep content and geometry through delayed, superseded
           sample.form && sample.theme === (dark ? 'dark' : 'light') &&
           Math.abs(sample.height - bitHeight) <= 1 && !sample.overflow),
         '比特登录首帧应包含完整表单、正确主题和测量后的高度');
+        const addresses = page.locator('#bit-addresses-host');
+        await addresses.getByRole('heading', { name: '地址管理', exact: true }).waitFor();
+        const loginBox = await page.locator('[data-recharge-module="bit"]').boundingBox();
+        const addressBox = await addresses.boundingBox();
+        const jumpToAddresses = page.getByRole('button', { name: '前往地址管理', exact: true });
+        if (width === 1440) {
+          assert(addressBox.x > loginBox.x + loginBox.width && Math.abs(addressBox.y - loginBox.y) <= 1);
+          assert.equal(await jumpToAddresses.isVisible(), false);
+        } else {
+          assert(addressBox.y > loginBox.y + loginBox.height && Math.abs(addressBox.x - loginBox.x) <= 1);
+          assert.equal(await jumpToAddresses.isVisible(), true);
+        }
 
         await page.evaluate(() => scrollTo(0, 180));
         await settle();
@@ -194,32 +219,47 @@ test('recharge transitions keep content and geometry through delayed, superseded
         assert(bitReturned.length > 0 && bitReturned.every(sample => sample.scroll === bitScroll),
           '返回比特登录的第一个可见帧应恢复阅读位置');
         if (width === 1440 && !dark) {
-          await page.frameLocator(bitSelector).getByRole('button', { name: '地址管理' }).click();
-          const addressList = page.locator('#bit-address-list');
-          await addressList.getByText('暂无地址', { exact: true }).waitFor();
+          const addressList = addresses.locator('#bit-address-list');
+          await addressList.getByText('暂无未使用地址', { exact: true }).waitFor();
           const releaseAddressRead = Promise.withResolvers();
           await page.route('**/api/local/bitbrowser-addresses?*', async route => {
             await releaseAddressRead.promise;
             await route.fulfill({ status: 503, json: { error: '地址读取暂时失败' } });
           }, { times: 1 });
-          const refreshAddresses = page.getByRole('dialog').getByRole('button', { name: '刷新', exact: true });
+          const refreshAddresses = addresses.getByRole('button', { name: '刷新', exact: true });
           try {
             await refreshAddresses.click();
-            const progress = page.locator('[data-bit-address-read-status]:not([hidden])');
+            const progress = addresses.locator('[data-bit-address-read-status]:not([hidden])');
             await progress.waitFor();
             assert.equal(await progress.textContent(), '');
             assert((await progress.boundingBox()).height <= 3);
             assert(await refreshAddresses.isDisabled());
-            await addressList.getByText('暂无地址', { exact: true }).waitFor();
+            await addressList.getByText('暂无未使用地址', { exact: true }).waitFor();
           } finally {
             releaseAddressRead.resolve();
           }
           await page.getByText(/地址读取暂时失败/).waitFor();
-          await addressList.getByText('暂无地址', { exact: true }).waitFor();
-          await page.getByRole('button', { name: '关闭抽屉' }).click();
+          await addressList.getByText('暂无未使用地址', { exact: true }).waitFor();
+        } else if (width === 390) {
+          await jumpToAddresses.click();
+          assert.equal(await addresses.evaluate((node) => document.activeElement === node), true);
         }
         assert.deepEqual(errors, []);
         if (output) await page.screenshot({ path: join(output, `transition-${width}-${dark ? 'dark' : 'light'}.png`) });
+        if (offline && !dark) {
+          await page.setViewportSize({ width, height: 900 });
+          const bit = page.frameLocator(bitSelector);
+          await bit.getByRole('tab', { name: /IP 资料库/ }).click();
+          await bit.locator('nav[data-total="51"] [data-pagination-size]').selectOption('50');
+          await page.waitForFunction(selector => {
+            const frame = document.querySelector(selector);
+            const doc = frame?.contentDocument;
+            return doc?.querySelectorAll('#bit-ip-rows tr').length === 50 &&
+              Math.abs(doc.body.offsetHeight - frame.clientHeight) <= 2;
+          }, bitSelector);
+          const rowsScroll = await bit.locator('.bit-local__ip-table').evaluate(node => node.scrollHeight > node.clientHeight + 1);
+          assert.equal(rowsScroll, width > 900, '桌面表格内部滚动，手机在页面上滚动');
+        }
         results.push({ width, theme: dark ? 'dark' : 'light', delayed, rapid, bitFirst, bitReturned, retainedOnFailure: true });
       } catch (error) {
         if (output) {

@@ -5,15 +5,154 @@ import { test } from 'node:test';
 import { Script } from 'node:vm';
 import { loadCodexdaichongAssets } from '../modules/recharge/codexdaichong/assets.mjs';
 import { createCodexdaichongGateway } from '../modules/recharge/codexdaichong/gateway.mjs';
+import { createNativeRechargeAdapter } from '../modules/recharge/codexdaichong/native-adapter.mjs';
 
 const prefix = '/integrations/codexdaichong';
 const member = { id: 'u-1', email: 'member@example.test', admin: false, sensitive: false };
 const admin = { ...member, id: 'u-2', admin: true, sensitive: true };
 
+test('删除关联卡前先留存订单资料；留存失败不会转发删除，未授权请求不触发留存', async t => {
+  const origin = 'https://cards.example.test', events = [];
+  const engine = await listen(t, (req, res) => {
+    events.push('delete');
+    assert.equal(req.method, 'DELETE');
+    assert.match(req.url, /^\/api\/admin\/cards\/7\/?$/);
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ success: true }));
+  });
+  let blocked = true, principal = admin;
+  const gateway = createCodexdaichongGateway({
+    upstreamUrl: engine, publicOrigin: origin, secret: randomBytes(48).toString('base64url'),
+    getUnifiedPrincipal: () => principal,
+    beforeCardDelete: async (id, actor) => {
+      assert.equal(id, 'recharge:7');
+      assert.equal(actor.id, admin.id);
+      if (blocked) throw new Error('合成留存失败');
+      events.push('archive');
+    }
+  });
+  const host = await listen(t, gateway.handle);
+  const remove = (requestOrigin = origin, trailingSlash = '') => fetch(host + prefix + '/api/admin/cards/7' + trailingSlash,
+    { method: 'DELETE', headers: { Origin: requestOrigin } });
+  assert.equal((await remove()).status, 409);
+  assert.deepEqual(events, []);
+  blocked = false;
+  assert.equal((await remove('https://other.example.test')).status, 403);
+  principal = member;
+  assert.equal((await remove()).status, 403);
+  assert.deepEqual(events, []);
+  principal = admin;
+  assert.equal((await remove()).status, 200);
+  assert.deepEqual(events, ['archive', 'delete']);
+  assert.equal((await remove(origin, '/')).status, 200);
+  assert.deepEqual(events.slice(2), ['archive', 'delete']);
+});
+
+test('browser progress uses only confirmed native receipts and never resends a submission', async (t) => {
+  const secret = randomBytes(48).toString('base64url');
+  const origin = 'https://recharge.example.test';
+  const jobKey = 'fixture-job-1';
+  const path = '/api/task-status/' + jobKey;
+  let submissions = 0;
+  let receipt = { status: 503, body: { success: false, message: '系统维护中，请稍后再试' } };
+  let task = { jobKey, status: 'running', isTerminal: false, progress: 100, message: '正在开通中' };
+  const engine = await listen(t, async (req, res) => {
+    let status = 200;
+    let body;
+    if (req.url === '/api/run-process') {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      assert.deepEqual(JSON.parse(Buffer.concat(chunks)), { cdk: 'KC-SYNTHETIC', session: 'synthetic-session' });
+      submissions++;
+      ({ status, body } = receipt);
+    } else if (decodeURIComponent(req.url).trimEnd() === path) {
+      body = { success: true, data: task };
+    } else if (req.url === '/api/cdk/query?cdk=KC-SYNTHETIC') {
+      body = { success: true, data: { status: '开通中', jobKey } };
+    } else {
+      assert.equal(req.url, '/api/cdk/query?cdk=KC-USED');
+      body = { success: true, data: { status: '已使用', jobKey: null } };
+    }
+    res.writeHead(status, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(body));
+  });
+  const gateway = createCodexdaichongGateway({
+    upstreamUrl: engine, publicOrigin: origin, secret, getUnifiedPrincipal: () => member
+  });
+  const host = await listen(t, gateway.handle);
+  const lookup = async (path) => (await fetch(host + prefix + path)).json();
+  const submit = () => fetch(host + prefix + '/api/run-process', {
+    method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ cdk: 'KC-SYNTHETIC', session: 'synthetic-session' })
+  });
+
+  const maintenance = await submit();
+  assert.equal(maintenance.status, 503);
+  assert.deepEqual(await maintenance.json(), {
+    success: false, notAccepted: true, code: 'maintenance_mode',
+    message: '系统维护中，充值任务未启动，请待维护结束后再提交'
+  });
+  receipt = { status: 503, body: { success: false, message: '其他异常：系统维护中，请稍后再试' } };
+  assert.equal((await (await submit()).json()).notAccepted, undefined);
+  receipt.body = { success: false, message: '系统维护中，请稍后再试', notAccepted: true, code: 'maintenance_mode', jobKey };
+  assert.equal((await (await submit()).json()).notAccepted, undefined);
+  receipt = {
+    status: 200,
+    body: { success: true, jobKey, message: '正在恢复原任务', stage: 'paid', session: 'private-fixture' }
+  };
+  assert.deepEqual(await (await submit()).json(), { success: true, jobKey });
+  receipt.body.message = '任务已启动，正在为您开通中...';
+  assert.deepEqual(await (await submit()).json(), { success: true, jobKey, stage: 'preparing' });
+  assert.equal(submissions, 5);
+
+  const generic = (await lookup(path)).data;
+  assert.equal(generic.stage, undefined);
+  assert.equal(generic.progress, 99);
+  task = {
+    ...task, message: '正在填写银行卡信息...', cdkCode: 'private-code', session: 'private-session',
+    cardLast4: '1234', phone: 'private-phone', screenshots: ['private-path'],
+    captcha: { status: 'pending', id: 'private-id', url: 'https://example.test/private', expiresAt: '1794270000' }
+  };
+  const presentedTask = (await lookup(path)).data;
+  const captchaId = presentedTask.captcha.id;
+  assert.match(captchaId, /^[A-Za-z0-9_-]{22}$/);
+  assert.deepEqual(presentedTask, {
+    jobKey, status: 'running', isTerminal: false, progress: 99, stage: 'payment_details',
+    captcha: { stage: 'awaiting_captcha', id: captchaId, expiresAt: new Date(1794270000000).toISOString() }
+  });
+  assert.deepEqual(
+    await lookup('/api/task-status/%66ixture%2Djob-1%20'),
+    await lookup(path),
+    'encoded equivalents must receive the same safe projection'
+  );
+  task.captcha.id = 'new-private-id';
+  assert.notEqual((await lookup(path)).data.captcha.id, captchaId);
+  task.message = '日志提示：支付失败，未支付成功';
+  assert.equal((await lookup(path)).data.stage, undefined);
+  task.message = '付款成功';
+  assert.equal((await lookup(path)).data.stage, 'paid');
+  assert.equal((await lookup(path)).data.status, 'running');
+  task = { ...task, status: 'failed', isTerminal: true, message: '已转人工核实；内部诊断' };
+  const held = await lookup(path);
+  assert.equal(held.data.manualReview, true);
+  assert.equal(held.data.message, undefined);
+  task = { ...task, status: 'success', isTerminal: false };
+  assert.equal((await lookup(path)).success, false);
+  task.isTerminal = true;
+  assert.equal((await lookup(path)).data.progress, 100);
+  task.jobKey = 'different-task';
+  assert.equal((await lookup(path)).success, false);
+
+  assert.deepEqual((await lookup('/api/cdk/query?cdk=KC-SYNTHETIC')).data, { status: '开通中', jobKey });
+  assert.deepEqual((await lookup('/api/cdk/query?cdk=KC-USED')).data, { status: '已使用', jobKey: null });
+  assert.equal(submissions, 5);
+});
+
 test('proxy import normalizes a complete batch before forwarding and rejects invalid or unauthorized writes', async t => {
   const received = [];
   const secret = randomBytes(48).toString('base64url');
   const engine = await listen(t, async (req, res) => {
+    assert.equal(req.url, '/api/admin/recharge-routing/proxies');
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
     const body = Buffer.concat(chunks);
@@ -22,8 +161,10 @@ test('proxy import normalizes a complete batch before forwarding and rejects inv
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ success: true, added: 1 }));
   });
+  const adapter = await listen(t, createNativeRechargeAdapter({ nativeUrl: engine, secret,
+    getNativeAdminToken: async actor => { assert.equal(actor.id, admin.id); return 'synthetic'; } }).handle);
   const origin = 'http://proxy-import.test';
-  const gateway = createCodexdaichongGateway({ upstreamUrl: engine, publicOrigin: origin, secret,
+  const gateway = createCodexdaichongGateway({ upstreamUrl: adapter, publicOrigin: origin, secret,
     getUnifiedPrincipal: req => req.headers['x-test-role'] === 'admin' ? admin
       : req.headers['x-test-role'] === 'employee' ? member : null });
   const host = await listen(t, (req, res) => { void gateway.handle(req, res); });
@@ -34,11 +175,15 @@ test('proxy import normalizes a complete batch before forwarding and rejects inv
     method: 'POST', headers: { Origin: from, 'content-type': type, 'x-test-role': role },
     body: typeof body === 'string' ? body : JSON.stringify(body)
   });
-  assert.equal((await send({ proxies: [raw, canonical] })).status, 200);
-  assert.deepEqual(received, [{ proxies: [canonical] }]);
-  assert.equal((await send({ proxy_url: raw })).status, 200, '保留原单条别名兼容');
+  assert.equal((await send({ proxies: [raw, canonical], countryCode: 'PH' })).status, 200);
+  assert.deepEqual(received, [{ proxies: [canonical], countryCode: 'PH' }]);
+  assert.equal((await send({ proxy_url: raw, countryCode: 'MX' })).status, 200, '保留原单条别名兼容');
+  assert.deepEqual(received[1], { proxies: [canonical], countryCode: 'MX' });
   const before = received.length;
-  const rejected = await send({ proxies: [raw, 'https://api.example.test/extract?id=synthetic'] });
+  const missing = await send({ proxies: [raw] });
+  assert.equal(missing.status, 400);
+  assert.equal((await missing.json()).message, '请选择代理国家');
+  const rejected = await send({ proxies: [raw, 'https://api.example.test/extract?id=synthetic'], countryCode: 'EG' });
   assert.equal(rejected.status, 400);
   const message = (await rejected.json()).message;
   assert.match(message, /第 2 行.*整批未保存/);
@@ -177,7 +322,8 @@ test('upstream pages retain the signed-in operations without their own login or 
     }
   }
   assert.match(assets.get('/redeem').body, /\/integrations\/codexdaichong\/api\/run-process/);
-  assert.match(assets.get('/redeem').body, /\/integrations\/codexdaichong\/socket/);
+  assert.match(assets.get('/redeem').body, /\/integrations\/codexdaichong\/api\/task-status\//);
+  assert.doesNotMatch(assets.get('/redeem').body, /\/integrations\/codexdaichong\/socket/);
   assert.doesNotMatch(assets.get('/admin').body, /修改后台密码|绑定 Google Authenticator/);
   assert.match(assets.get('/admin').body, /Session 管理|CDK 管理/);
   const script = assets.get('/admin.js').body;

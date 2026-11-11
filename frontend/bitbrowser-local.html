@@ -4,21 +4,23 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>比特登录</title>
-  <link rel="stylesheet" href="/prototype.css" />
+  <link rel="stylesheet" href="/prototype.css?v=20261110-tabs" />
   <link rel="stylesheet" href="/title-help.css" />
-  <link rel="stylesheet" href="/recharge-integration.css" />
+  <link rel="stylesheet" href="/recharge-integration.css?v=20261110-tabs" />
+  <link rel="stylesheet" href="/pagination.css" />
   <script src="/title-help.js" defer></script>
+  <script src="/pagination.js" defer></script>
   <script type="module" src="/assets/bitbrowser/local.mjs"></script>
 </head>
 <body class="bit-local">
 <form id="bit-login-form" autocomplete="off">
-  <div class="bit-local__workspace-bar">
+  <div class="bit-local__workspace-bar bit-workspace-heading">
     <div class="tabs" role="tablist" aria-label="比特工作区">
       <button class="tab active" type="button" id="bit-tab-login" role="tab" aria-selected="true" aria-controls="bit-login-panel">账号登录</button>
       <button class="tab" type="button" id="bit-tab-library" role="tab" aria-selected="false" aria-controls="bit-library-panel" tabindex="-1">IP 资料库 <span class="tab-count" id="bit-ip-count">—</span></button>
     </div>
-    <button class="button" type="button" id="bit-open-addresses" hidden>地址管理</button>
   </div>
+  <div class="bit-local__body">
   <div id="bit-login-panel" role="tabpanel" aria-labelledby="bit-tab-login">
     <fieldset id="bit-login-fields">
       <section class="panel bit-local__section" aria-labelledby="bit-account-title">
@@ -29,7 +31,7 @@
           <div class="bit-local__actions"><button class="button" type="button" id="bit-toggle-connection" aria-controls="bit-connection-settings" aria-expanded="false">连接设置</button><button class="button" type="button" id="bit-add-connection" data-bit-profile hidden disabled>新增连接</button></div>
         </header>
         <div class="panel-body">
-          <div class="field" data-bit-profile hidden><label for="bit-connection-profile">比特账号</label><div class="field-control"><select id="bit-connection-profile" disabled></select><p id="bit-catalog-result" class="field-help" role="status">请选择账号连接，或新增这台电脑的连接。</p></div></div>
+          <div class="field" data-bit-profile hidden><label for="bit-connection-profile">比特账号</label><div class="field-control"><div class="option-entry-controls"><select id="bit-connection-profile" disabled></select><button class="button" type="button" id="bit-default-connection" title="仅对当前登录账号生效" disabled>设为默认</button></div><p id="bit-catalog-result" class="field-help" role="status">请选择账号连接，或新增这台电脑的连接。</p><p id="bit-default-connection-result" class="field-help" role="status" hidden></p></div></div>
           <details id="bit-connection-settings">
             <summary>账号标记与本机接口</summary>
             <div class="bit-local__connection">
@@ -136,7 +138,7 @@
       </section>
       <section class="panel bit-local__section" aria-labelledby="bit-proxy-title">
         <header class="panel-heading"><div class="title-with-help"><h2 id="bit-proxy-title"><span class="bit-local__step">2</span>选择执行 IP</h2><details class="title-help"><summary aria-label="查看执行 IP 说明">ⓘ</summary><div class="title-description" role="note">录入 IP 时标记国家和类型。每次执行直接选择 IP，无需另选国家。已保存的资料可以在 IP 资料库查看和编辑。</div></details></div><div class="bit-local__actions"><button class="button" id="bit-show-library" type="button">管理 IP</button><button class="button" id="bit-add-proxy" type="button">新增 IP</button></div></header>
-        <div class="panel-body"><div class="field"><label for="bit-execution-proxy">执行 IP<span class="required">*</span></label><div class="field-control"><select id="bit-execution-proxy" disabled><option value="">正在读取 IP…</option></select><p id="bit-proxy-result" class="field-help" role="status">正在读取已保存的 IP。</p></div></div></div>
+        <div class="panel-body"><div class="field"><label for="bit-execution-proxy">执行 IP<span class="required">*</span></label><div class="field-control"><div class="option-entry-controls"><select id="bit-execution-proxy" disabled><option value="">正在读取 IP…</option></select><button class="button" type="button" id="bit-default-proxy" data-bit-profile title="仅对当前登录账号生效" hidden disabled>设为默认</button></div><p id="bit-proxy-result" class="field-help" role="status">正在读取已保存的 IP。</p></div></div></div>
       </section>
       <section class="panel bit-local__section" aria-labelledby="bit-auth-title">
         <header class="panel-heading"><h2 id="bit-auth-title"><span class="bit-local__step">3</span>填写登录资料</h2><span class="tag">授权 JSON 登录</span></header>
@@ -167,12 +169,11 @@
               />
             </div>
             <div class="field">
-              <label for="bit-window-name">窗口名称<span class="required">*</span></label>
+              <label for="bit-window-name">窗口名称</label>
               <input
                 id="bit-window-name"
-                maxlength="80"
-                placeholder="输入本次比特浏览器窗口名称"
-                required
+                placeholder="载入授权 JSON 后显示邮箱账号"
+                readonly
               />
             </div>
 
@@ -182,12 +183,13 @@
     <section class="bit-local__execution" aria-labelledby="bit-local-status"><div><h2 id="bit-local-status">执行状态</h2><p id="bit-login-result" class="bit-local__status" role="status">等待登录</p></div><div class="bit-local__actions"><button class="button primary" type="submit" id="bit-start-login" disabled>登录账号</button><button class="button" type="button" id="bit-cancel-login" hidden>取消登录</button></div></section>
   </div>
   <section id="bit-library-panel" class="panel" role="tabpanel" aria-labelledby="bit-tab-library" hidden>
-    <header class="panel-heading"><div class="title-with-help"><h2>已保存的 IP</h2><details class="title-help"><summary aria-label="查看 IP 资料库说明">ⓘ</summary><div class="title-description" role="note">IP 资料保存到当前账号的服务端资料库。列表展示地址摘要，完整代理链接加密保存。点击“使用”返回登录页并选中该 IP。</div></details></div><div class="bit-local__actions"><button class="button" id="bit-refresh-proxies" type="button">刷新列表</button><button class="button primary" id="bit-library-add" type="button">新增 IP</button></div></header>
+    <header class="panel-heading"><div class="title-with-help"><h2>已保存的 IP</h2><details class="title-help"><summary aria-label="查看 IP 资料库说明">ⓘ</summary><div class="title-description" role="note">IP 资料保存到当前账号的服务端资料库。列表展示地址摘要，完整代理链接加密保存。点击“使用”返回登录页并选中该 IP。</div></details></div><div class="bit-local__actions"><button class="button" id="bit-refresh-proxies" type="button">刷新列表</button><button class="button" id="bit-test-all-proxies" type="button" title="检测所有已保存的 IP，不受筛选和分页影响" disabled>检测全部</button><button class="button primary" id="bit-library-add" type="button">新增 IP</button></div></header>
     <div class="toolbar bit-local__filters"><input id="bit-ip-search" type="search" aria-label="搜索 IP" placeholder="搜索名称、国家或代理地址" /><select id="bit-ip-filter" aria-label="筛选 IP 类型"><option value="">全部 IP 类型</option><option value="mobile">移动 IP</option><option value="dynamic_residential">动态住宅</option><option value="static_residential">静态住宅</option></select><select id="bit-ip-sort" aria-label="IP 排序"><option value="recent">最近添加优先</option><option value="name">按名称排序</option><option value="country">按国家排序</option></select></div>
     <p id="bit-library-result" class="bit-local__library-status" role="status"></p>
     <div class="table-viewport bit-local__ip-table" tabindex="0" aria-label="IP 资料表，可横向滚动"><table><thead><tr><th>名称／备注</th><th>国家</th><th>IP 类型</th><th>检测状态</th><th>代理地址／协议</th><th>操作</th></tr></thead><tbody id="bit-ip-rows"></tbody></table><div id="bit-ip-empty" class="empty-state" hidden></div></div>
-    <footer class="bit-local__pagination"><span id="bit-ip-page-info"></span><div class="bit-local__actions"><button class="button" id="bit-ip-prev" type="button">上一页</button><button class="button" id="bit-ip-next" type="button">下一页</button></div></footer>
+    <footer id="bit-ip-pagination" data-pagination-footer></footer>
   </section>
+  </div>
   <dialog id="bit-proxy-editor" class="bit-local__proxy-editor" aria-labelledby="bit-proxy-editor-title">
     <header class="bit-local__drawer-header"><h2 id="bit-proxy-editor-title">新增执行 IP</h2><button class="button" id="bit-ip-dismiss" type="button" aria-label="关闭 IP 编辑">关闭</button></header>
     <div class="bit-local__drawer-body">

@@ -1,0 +1,22 @@
+diff --git a/mysql-store.js b/mysql-store.js
+--- a/mysql-store.js
++++ b/mysql-store.js
+@@ -4593,0 +4594 @@
++    withTransaction,
+diff --git a/server.js b/server.js
+--- a/server.js
++++ b/server.js
+@@ -4058,0 +4059,13 @@
++    }
++});
++
++// Explicitly approved unused-code return boundary; payment workers stay unchanged.
++app.use('/api/admin/cdks/returns', requireSecondaryAuth, async (req, res) => {
++    try {
++        await ensureStoreReady();
++        const url = require('url').pathToFileURL(path.resolve(__dirname,
++            '../../modules/recharge/codexdaichong/native-code-returns.mjs')).href;
++        const { createNativeCodeReturns } = await import(url);
++        return await createNativeCodeReturns({ store }).handle(req, res);
++    } catch {
++        return res.status(503).json({ success: false, message: '充值码归还服务尚未就绪' });

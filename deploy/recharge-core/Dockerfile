@@ -1,7 +1,7 @@
 FROM node:24.22.1-bookworm-slim@sha256:e1582112fb9f152ed38eefcd712efc93fee1becb519fdfa57574d5e07eaa5e7d
 ARG BUILD_HCAPTCHA_SOLVER=0
 
-# Deployment dependencies only. All 200 pinned upstream files remain untouched.
+# Pinned dependencies; only the reviewed routing and unused-code return patches are allowed.
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_BREAK_SYSTEM_PACKAGES=1 PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1 \
     PYTHONUNBUFFERED=1 HCAPTCHA_SOLVER_PYTHON=/usr/bin/python3 \
@@ -29,7 +29,7 @@ RUN mkdir -p debug_screenshots product_files /tmp/hcaptcha_auto_solver_live
 COPY source/ /candidate/
 COPY upstream/ /candidate/.upstream/codexdaichong/
 WORKDIR /candidate
-RUN node --input-type=module -e 'import {verifyCodexdaichongSource} from "./modules/recharge/codexdaichong/prepare.mjs"; console.log(await verifyCodexdaichongSource("/candidate/.runtime/codexdaichong")); console.log(await verifyCodexdaichongSource("/app"))'
+RUN node --input-type=module -e 'import {applyApprovedRechargeRouting,verifyCodexdaichongSource} from "./modules/recharge/codexdaichong/prepare.mjs"; for (const path of ["/candidate/.runtime/codexdaichong", "/app"]) { await applyApprovedRechargeRouting(path); console.log(await verifyCodexdaichongSource(path)); }'
 ENV NODE_ENV=production PORT=3000 HEADFUL=0 CDP_PORT=9222 CDP_URL=http://127.0.0.1:9222
 HEALTHCHECK --interval=20s --timeout=6s --start-period=45s --retries=3 \
   CMD node /candidate/deploy/recharge-core/health.mjs

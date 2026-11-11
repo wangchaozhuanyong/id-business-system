@@ -33,16 +33,31 @@ function browser(store, appleAsset = null) {
   const errors = new Map();
   const modules = [];
   const state = { route: 'customers/list', demoOrders: [], drafts: new Map() };
+  const amountReferences = {
+    '#commerce-paid-price-reference': { innerHTML: '' },
+    '#commerce-sale-price-reference': { innerHTML: '' }
+  };
   const bankOrderEntry = {
     isConnected: true,
+    dataset: { commerceDraft: 'local-bank-entry' },
     elements: {
+      'commerce-id': { value: '' },
+      'commerce-plan': { value: 'Plus' },
+      'commerce-businessType': { value: '续费' },
+      'commerce-paidManual': { value: '' },
+      'commerce-paidConfirmed': { checked: false },
+      'commerce-paidCurrency': { value: 'PHP' },
+      'commerce-paidAmount': { value: '' },
+      'commerce-saleManual': { value: '' },
+      'commerce-saleCurrency': { value: 'CNY' },
+      'commerce-receiptConfirmed': { checked: false },
       'commerce-payment': { value: '银行卡' },
       'commerce-product': { value: 'GPT' },
       'commerce-cardId': { tagName: 'SELECT', value: bankCard.id, closest: () => null },
       'commerce-paymentId': { value: bankCard.last4 },
       'commerce-saleAmount': { value: '150' }
     },
-    querySelector: () => null
+    querySelector: (selector) => amountReferences[selector] || null
   };
   const api = {
     state,
@@ -354,6 +369,7 @@ test('苹果内购和余额一起提交，客户退款独立登记待回款，�
     const asset = {
       id: 'apple-a',
       type: 'apple',
+      appStoreRegion: 'US',
       email: 'apple@example.test',
       status: '正常',
       health: 'normal'
@@ -372,7 +388,8 @@ test('苹果内购和余额一起提交，客户退款独立登记待回款，�
           tableSettings: [],
           undo: []
         }
-      }
+      },
+      { domain: 'settings', version: 0, data: { mailboxTypes: [], costSettings: {}, applePaidPrices: { Gemini: { 'Google AI Pro': { US: '20' } } } } }
     ]);
     const first = browser(store, asset);
     const ledger = first.api.modules.appleBalance;
@@ -388,7 +405,18 @@ test('苹果内购和余额一起提交，客户退款独立登记待回款，�
     await stale.api.modules.appleBalance.ensureReady();
     const fields = {
       ...orderFields(first.getCustomers()[0].id),
+      product: 'Gemini',
+      plan: 'Google AI Pro',
+      businessType: '首次开通',
       payment: '苹果内购',
+      appleStoreRegion: 'US',
+      billingChannel: 'app_store',
+      billingCountry: '美国',
+      billingReceipt: 'fixture-transaction',
+      billingCycle: 'month',
+      autoRenew: 'unknown',
+      loginMethod: 'google',
+      appleGoogleVerified: 'on',
       appleIdId: asset.id
     };
     stale.state.route = 'workspace/order';
@@ -409,6 +437,7 @@ test('苹果内购和余额一起提交，客户退款独立登记待回款，�
     await turn();
     const [order] = first.listOrders();
     assert.equal(order.paymentId, asset.email);
+    assert.equal(order.entitlementStatus, 'active');
     assert.equal(ledger.get(asset.id).balance, '231.0000');
     assert.equal(ledger.getOrderLedger(order.id).amount, '20.0000');
 
@@ -453,6 +482,7 @@ test('苹果内购和余额一起提交，客户退款独立登记待回款，�
       ...fields,
       id: order.id,
       version: reopened.getOrder(order.id).version,
+      entitlementStatus: reopened.getOrder(order.id).entitlementStatus,
       paidAmount: '22',
       correctionReason: '已核对实扣金额'
     });

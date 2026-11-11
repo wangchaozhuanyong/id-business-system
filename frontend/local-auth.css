@@ -51,6 +51,25 @@
 .local-auth-form input {
   min-width: 0;
 }
+.local-auth-form .local-auth-remember {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  line-height: 1.5;
+  font-weight: 400;
+  cursor: pointer;
+}
+.local-auth-remember input { width: 16px; height: 16px; flex: 0 0 auto; }
+.local-auth-form > .title-with-help { grid-column: 1 / -1; }
+.local-auth-reason { grid-column: 1 / -1; color: var(--secondary); margin: 0; line-height: 1.6; }
+.local-auth-devices { margin-top: 24px; }
+.local-auth-devices .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.local-auth-device { display: flex; align-items: start; justify-content: space-between; flex-wrap: wrap; gap: 12px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.local-auth-device p { margin: 6px 0 0; color: var(--secondary); font-size: 12px; overflow-wrap: anywhere; }
+#local-auth-connection { position: fixed; bottom: 16px; left: 16px; right: 16px; z-index: 1600; display: flex; justify-content: center; align-items: center; flex-wrap: wrap; gap: 12px; padding: 12px; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+dialog > #local-auth-connection { position: static; flex: none; margin: 12px 16px; }
 #local-auth-password-hint {
   grid-column: 2;
   margin: -6px 0 0;

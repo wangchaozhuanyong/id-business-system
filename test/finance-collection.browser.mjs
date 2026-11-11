@@ -26,7 +26,7 @@ test('汇率四栏目、设置草稿、版本冲突、采集记录与事件更�
       providerCalls++;
       return Response.json({ result: 'success', base_code: 'CNY', time_eol_unix: 0,
         time_last_update_unix: (now - 3_600_000) / 1000, time_next_update_unix: (now + 23 * 3_600_000) / 1000,
-        rates: { CNY: 1, MYR: 0.625, USD: 0.125, PHP: 8, CLP: 125, IDR: 2500 } });
+        rates: { CNY: 1, MYR: 0.625, USD: 0.125, PHP: 8, CLP: 125, IDR: 2500, EGP: 6.25 } });
     }
   });
   t.after(() => collection.close());
@@ -51,14 +51,32 @@ test('汇率四栏目、设置草稿、版本冲突、采集记录与事件更�
     };
   }, document.version);
   let page, rejectReads = false, releaseSettings, delaySettings = false, reads = 0;
+  let settingsRefreshInterruption;
+  let delayLastRunPage = false;
+  const lastRunPageStarted = Promise.withResolvers();
+  const lastRunPageReleased = Promise.withResolvers();
+  t.after(lastRunPageReleased.resolve);
   const actions = [], errors = [];
   await context.route('**/api/local/finance/collection*', async route => {
     const request = route.request();
     if (request.method() === 'GET') {
       reads++;
       if (rejectReads) return route.fulfill({ status: 503, json: { error: '合成读取失败，请重试' } });
+      const params = new URL(request.url()).searchParams;
+      if (settingsRefreshInterruption && params.get('tab') === 'settings' && document.data.settings.version === 3) {
+        const interruption = settingsRefreshInterruption;
+        settingsRefreshInterruption = undefined;
+        interruption.started.resolve();
+        await interruption.release.promise;
+      }
+      if (delayLastRunPage && params.get('tab') === 'runs' && params.get('page') === '2') {
+        delayLastRunPage = false;
+        lastRunPageStarted.resolve();
+        await lastRunPageReleased.promise;
+      }
     }
     const command = request.postData() ? JSON.parse(request.postData()) : undefined;
+    const deferVersionEvent = settingsRefreshInterruption && command?.action === 'settings' && command.version === 2;
     if (command) actions.push(command.action);
     const body = Readable.from(request.postData() ? [Buffer.from(request.postData())] : []);
     Object.assign(body, { method: request.method(), url: new URL(request.url()).pathname + new URL(request.url()).search, headers: request.headers() });
@@ -66,7 +84,7 @@ test('汇率四栏目、设置草稿、版本冲突、采集记录与事件更�
     await handle(body, { writeHead(code, values) { status = code; headers = values; }, end(value) { result = value; } }, actor);
     if (delaySettings && command?.action === 'settings') await new Promise(resolve => { releaseSettings = resolve; });
     await route.fulfill({ status, headers, body: result });
-    if (command && command.action !== 'cleanup-preview') await page.evaluate(version => window.emitFxVersion?.(version), document.version);
+    if (command && command.action !== 'cleanup-preview' && !deferVersionEvent) await page.evaluate(version => window.emitFxVersion?.(version), document.version);
   });
   page = await context.newPage(); page.setDefaultTimeout(7000);
   page.on('pageerror', failure => errors.push(failure.message));
@@ -75,11 +93,19 @@ test('汇率四栏目、设置草稿、版本冲突、采集记录与事件更�
     await page.locator('#main[data-layout-route="' + route + '"]').waitFor();
   };
   const tab = name => page.getByRole('tab', { name, exact: true }).click();
+  const financePager = page.locator('#main nav[data-pagination]');
+  const jumpPage = async number => {
+    await financePager.locator('.pagination-jump summary').click();
+    const target = financePager.locator('[data-pagination-target]');
+    await target.fill(String(number));
+    await target.press('Enter');
+  };
   const confirm = () => page.locator('#confirm-dialog[open] [data-action="confirm-accept"]').click();
   const settle = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
   await page.goto(origin + '/#/settings/exchange-rates');
   await page.locator('table[data-table="fx-rates"] tbody tr').filter({ hasText: '美元' }).waitFor();
-  assert.equal(await page.locator('table[data-table="fx-rates"] tbody tr').count(), 5);
+  await page.locator('table[data-table="fx-rates"] tbody tr').filter({ hasText: '埃及镑 EGP' }).waitFor();
+  assert.equal(await page.locator('table[data-table="fx-rates"] tbody tr').count(), 6);
   const boot = await page.evaluate(() => window.fxBoot);
   const stable = reads;
   await page.evaluate(version => window.emitFxVersion(version), document.version);
@@ -87,23 +113,51 @@ test('汇率四栏目、设置草稿、版本冲突、采集记录与事件更�
 
   await tab('采集记录');
   await page.locator('table[data-table="fx-runs"] tbody tr[data-row-id="fxr-fixture-0"]').waitFor();
+  assert.equal(await financePager.locator('[data-pagination-size]').inputValue(), '20');
   const firstFrame = await page.locator('table[data-table="fx-runs"]').locator('..').boundingBox();
-  await page.locator('#main .pagination [data-page="4"]').click();
+  delayLastRunPage = true;
+  await jumpPage(2);
+  await lastRunPageStarted.promise;
+  assert.equal(await financePager.getAttribute('data-page'), '1');
+  assert.equal(await page.locator('tr[data-row-id="fxr-fixture-0"]').isVisible(), true);
+  lastRunPageReleased.resolve();
   await page.locator('tr[data-row-id="fxr-fixture-24"]').waitFor();
-  assert.equal(await page.locator('table[data-table="fx-runs"] tbody tr').count(), 1);
+  assert.equal(await page.locator('table[data-table="fx-runs"] tbody tr').count(), 5);
   const lastFrame = await page.locator('table[data-table="fx-runs"]').locator('..').boundingBox();
   assert(lastFrame.height >= firstFrame.height - 1, '最后一页保留表格框架高度');
-  await page.getByRole('button', { name: '详情', exact: true }).click();
+  await page.locator('tr[data-row-id="fxr-fixture-24"]').getByRole('button', { name: '详情', exact: true }).click();
   await page.locator('#drawer[open]').getByText('最后一条人员', { exact: true }).waitFor();
   await page.locator('#drawer[open]').getByRole('button', { name: '关闭', exact: true }).click();
+  await tab('当前汇率');
+  await page.locator('table[data-table="fx-rates"] tbody tr').filter({ hasText: '美元' }).waitFor();
+  await financePager.locator('[data-pagination-size]').selectOption('50');
+  await tab('采集记录');
+  await page.locator('tr[data-row-id="fxr-fixture-24"]').waitFor();
+  assert.equal(await financePager.locator('[data-pagination-size]').inputValue(), '20');
+  assert.equal(await financePager.getAttribute('data-page'), '2');
+  rejectReads = true;
+  await financePager.locator('[data-pagination-size]').selectOption('50');
+  await page.getByRole('alert').getByText('合成读取失败，请重试').waitFor();
+  assert.equal(await financePager.getAttribute('data-page'), '2');
+  assert.equal(await financePager.locator('[data-pagination-size]').inputValue(), '20');
+  assert.equal(await page.locator('tr[data-row-id="fxr-fixture-24"]').isVisible(), true);
+  rejectReads = false;
+  await page.getByRole('button', { name: '刷新记录', exact: true }).click();
+  await page.locator('tr[data-row-id="fxr-fixture-19"]').waitFor();
+  assert.equal(await financePager.getAttribute('data-page'), '1');
+  assert.equal(await financePager.locator('[data-pagination-size]').inputValue(), '50');
+  await financePager.locator('[data-pagination-size]').selectOption('10');
+  await page.locator('tr[data-row-id="fxr-fixture-19"]').waitFor({ state: 'detached' });
   await page.locator('#fx-query').fill('没有匹配资料');
   await page.getByRole('heading', { name: '暂无符合条件的汇率记录' }).waitFor();
   await page.getByRole('button', { name: '清空筛选', exact: true }).click();
   await page.locator('tr[data-row-id="fxr-fixture-0"]').waitFor();
 
   await tab('采集设置'); await page.locator('#fx-settings-form').waitFor();
+  await page.waitForFunction(() => document.querySelector('#fx-progress')?.hidden);
   await page.locator('#fx-schedule').selectOption('interval');
   await page.locator('#fx-interval').fill('90');
+  assert.equal(await page.locator('#fx-interval').inputValue(), '90');
   await page.locator('#fx-currencies').click();
   await page.locator('#fx-currency-search').fill('美 USD');
   assert.equal(await page.locator('.fx-currency-options label:visible').count(), 1);
@@ -129,7 +183,15 @@ test('汇率四栏目、设置草稿、版本冲突、采集记录与事件更�
   await page.waitForFunction(() => !document.querySelector('#fx-settings-form [type="submit"]')?.disabled && document.querySelector('[name="fx-version"]')?.value === '2');
   assert.equal(document.data.settings.intervalMinutes, 90);
   assert.equal(await page.locator('#fx-interval').inputValue(), '120', '迟到保存不清除后续编辑');
+  const interruptedRefresh = { started: Promise.withResolvers(), release: Promise.withResolvers() };
+  t.after(interruptedRefresh.release.resolve);
+  settingsRefreshInterruption = interruptedRefresh;
   await page.getByRole('button', { name: '保存采集设置', exact: true }).click(); await confirm();
+  await interruptedRefresh.started.promise;
+  const changesBefore = await page.evaluate(() => window.IDChangeSync.status().changes);
+  await page.evaluate(version => window.emitFxVersion(version), document.version);
+  await page.waitForFunction(count => window.IDChangeSync.status().changes > count, changesBefore);
+  interruptedRefresh.release.resolve();
   await page.waitForFunction(() => document.querySelector('[name="fx-version"]')?.value === '3' && !document.querySelector('#fx-settings-form [type="submit"]')?.disabled);
   assert.equal(document.data.settings.intervalMinutes, 120);
   assert.equal(await page.evaluate(() => window.IDDesignAPI.state.drafts.has('finance-collection-settings')), false, '只清理成功的提交快照');
@@ -194,11 +256,12 @@ test('汇率四栏目、设置草稿、版本冲突、采集记录与事件更�
     if (width <= 390) {
       await tab('采集记录');
       await page.locator('tr[data-row-id="fxr-fixture-0"]').waitFor();
-      await page.locator('#main .pagination [data-page="4"]').click();
+      assert.equal(await financePager.locator('[data-pagination-size]').inputValue(), '10');
+      await jumpPage(3);
       await page.locator('tr[data-row-id="fxr-fixture-24"]').waitFor();
       await tab('运行状态'); await tab('采集记录');
       await page.locator('tr[data-row-id="fxr-fixture-24"]').waitFor();
-      assert.equal(await page.evaluate(() => window.IDDesignAPI.state.page), 4, '切页签返回保留分页');
+      assert.equal(await page.evaluate(() => window.IDDesignAPI.state.page), 3, '切页签返回保留分页');
       await page.locator('#fx-query').fill('没有匹配资料');
       await page.getByRole('heading', { name: '暂无符合条件的汇率记录' }).waitFor();
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
@@ -217,7 +280,7 @@ test('汇率四栏目、设置草稿、版本冲突、采集记录与事件更�
   await page.getByRole('alert').getByText('合成读取失败，请重试').waitFor();
   const failedReads = reads;
   await settle(); assert.equal(reads, failedReads, '失败后不自动重复请求');
-  assert.equal(await page.locator('table[data-table="fx-rates"] tbody tr').count(), 5);
+  assert.equal(await page.locator('table[data-table="fx-rates"] tbody tr').count(), 6);
   rejectReads = false;
   await page.getByRole('button', { name: '刷新记录', exact: true }).click();
   await page.waitForFunction(() => !document.querySelector('#fx-progress:not([hidden])'));

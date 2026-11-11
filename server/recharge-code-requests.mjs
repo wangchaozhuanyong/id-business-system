@@ -1,11 +1,12 @@
-import { randomBytes, randomUUID } from 'node:crypto';
+import { createCodeReturnManager, codeReturnEntry, publicReturnRecord } from './recharge-code-returns.mjs';
+import { generatedCdkPattern } from '../modules/recharge/codexdaichong/native-code-returns.mjs';
+import { randomUUID } from 'node:crypto';
 
 export const rechargeCodesRoute = '/api/local/recharge-codes';
 
 const plans = new Set(['plus', 'pro100', 'pro200', 'pro500']);
 const roles = new Set(['employee', 'admin', 'super']);
 const approvers = new Set(['admin', 'super']);
-const codeStatuses = new Set(['unused', 'processing', 'used']);
 const requestKeyPattern = /^[a-zA-Z0-9._-]{1,120}$/;
 const idPattern = /^[0-9a-f-]{36}$/;
 
@@ -31,7 +32,7 @@ async function readAction(request) {
   let bytes = 0;
   for await (const chunk of request.iterator({ destroyOnReturn: false })) {
     bytes += chunk.length;
-    if (bytes > 4096) {
+    if (bytes > 8192) {
       request.resume();
       throw new RequestError(400, '充值码申请内容过长');
     }
@@ -52,28 +53,15 @@ function visibleRequest(row, actorId) {
   return {
     id, plan, count, applicantId, applicantName, status, createdAt, updatedAt, approvedById,
     approvedAt, issuedAt, rejectedById, rejectedAt, reason, issueProblem,
-    ...(status === 'issued' && actorId === applicantId ? { codes: row.codes } : {})
+    returns: (row.returns || []).map(publicReturnRecord),
+    ...(status === 'issued' && actorId === applicantId ? { codes: row.codes.filter(code => !['returned', 'pending'].includes(codeReturnEntry(row, code)?.state)) } : {})
   };
 }
 
-function codeReadback(row, upstream) {
-  if (!Array.isArray(upstream)) throw new Error('充值码回读格式不正确');
-  const found = new Map();
-  const candidates = new Set(row.codes.map(code => code.toUpperCase()));
-  let conflict = false;
-  for (const item of upstream) {
-    if (typeof item?.code !== 'string' || !candidates.has(item.code.toUpperCase())) continue;
-    if (
-      found.has(item.code) ||
-      !row.codes.includes(item.code) ||
-      item.plan_type !== row.plan ||
-      item.type !== '自助' ||
-      item.status !== 'unused' ||
-      item.shipped !== false
-    ) conflict = true;
-    found.set(item.code, item);
-  }
-  return { conflict, foundCount: found.size, missing: row.codes.filter(code => !found.has(code)) };
+function unassignedStock(stock, rows) {
+  // Keep former assignments and the original codes of interrupted batches excluded.
+  const assigned = new Set(rows.flatMap(row => (row.codes || []).map(code => code.toUpperCase())));
+  return stock.filter(({ code }) => !assigned.has(code));
 }
 
 export function lookupRechargeCodeOwner(data, code) {
@@ -84,59 +72,46 @@ export function lookupRechargeCodeOwner(data, code) {
 }
 
 export function createRechargeCodeHandler({ store, transport, publicOrigin, clock = Date.now }) {
-  const issuing = new Set();
   const time = () => new Date(clock()).toISOString();
-
-  async function listIssuedCodes(rows, actorId) {
-    const issued = rows.filter(row => row.status === 'issued');
-    if (!issued.length) return [];
-    const codes = new Set(issued.flatMap(row => row.codes));
-    const current = new Map();
-    try {
-      const upstream = await transport?.listCodes();
-      if (Array.isArray(upstream)) {
-        for (const item of upstream) {
-          if (!codes.has(item?.code)) continue;
-          current.set(item.code, current.has(item.code) ? null : item);
-        }
-      }
-    } catch {
-      current.clear();
-    }
-    return issued.flatMap(row => row.codes.map(code => {
-      const record = current.get(code);
-      const status = record?.plan_type === row.plan && record.type === '自助' && codeStatuses.has(record.status)
-        ? record.status : 'unavailable';
-      return {
-        requestId: row.id,
-        plan: row.plan,
-        applicantId: row.applicantId,
-        applicantName: row.applicantName,
-        ...(actorId === row.applicantId ? { code } : {}),
-        last4: code.slice(-4),
-        status,
-        usedAt: status === 'used' && typeof record.used_at === 'string' ? record.used_at : null
-      };
-    }));
-  }
 
   async function change(actor, prepare) {
     // A concurrent change to another application can advance the document version.
     for (let attempt = 0; attempt < 4; attempt++) {
       const snapshot = await store.load();
       const previous = snapshot.data?.requests ?? [];
-      const { row, action } = prepare(previous);
+      const { row, action } = await prepare(previous);
       if (!action) return row;
       const requests = previous.some(entry => entry.id === row.id)
         ? previous.map(entry => entry.id === row.id ? row : entry)
         : [row, ...previous];
       try {
-        await store.save(snapshot.version, { requests }, { action, targetId: row.id, actor });
+        await store.save(snapshot.version, { ...snapshot.data, requests }, { action, targetId: row.id, actor });
         return row;
       } catch (error) {
         if (error?.status !== 409 || attempt === 3) throw error;
       }
     }
+  }
+
+  const returns = createCodeReturnManager({ store, transport, change, time });
+
+  async function readStock() {
+    try {
+      const stock = await transport?.listCodeStock();
+      if (Array.isArray(stock) && stock.every(item => typeof item?.code === 'string' &&
+        generatedCdkPattern.test(item.code) && plans.has(item.plan)) &&
+        new Set(stock.map(item => item.code)).size === stock.length) return stock;
+    } catch {
+      // A missing or invalid reply is distinct from a verified empty pool.
+    }
+    throw new RequestError(503, '暂时无法核对充值码库存，请刷新后重试');
+  }
+
+  async function codesFor(rows, plan, count) {
+    const available = unassignedStock(await readStock(), rows).filter(item => item.plan === plan);
+    if (available.length < count)
+      throw new RequestError(409, `该套餐当前可提取 ${available.length} 个，库存不足`);
+    return available.slice(0, count).map(item => item.code);
   }
 
   function findRequest(rows, id) {
@@ -151,7 +126,7 @@ export function createRechargeCodeHandler({ store, transport, publicOrigin, cloc
       typeof body.requestKey !== 'string' || !requestKeyPattern.test(body.requestKey)
     ) throw new RequestError(400, '请选择套餐并填写 1 至 100 的申请数量');
     let created = false;
-    const row = await change(actor, rows => {
+    const row = await change(actor, async rows => {
       const existing = rows.find(entry => entry.applicantId === actor.id && entry.requestKey === body.requestKey);
       created = !existing;
       if (existing) {
@@ -159,6 +134,7 @@ export function createRechargeCodeHandler({ store, transport, publicOrigin, cloc
           throw new RequestError(409, '同一申请编号的套餐或数量已变化，请重新发起申请');
         return { row: existing };
       }
+      await codesFor(rows, body.plan, body.count);
       const at = time();
       return {
         row: {
@@ -178,79 +154,54 @@ export function createRechargeCodeHandler({ store, transport, publicOrigin, cloc
     return change(actor, rows => {
       const row = findRequest(rows, body.id);
       if (row.status === 'rejected') return { row };
-      if (row.status !== 'pending') throw new RequestError(409, '只有待审批申请可以退回');
+      if (!['pending', 'issuing'].includes(row.status))
+        throw new RequestError(409, '只有待审核或待发码核对的申请可以驳回');
       const at = time();
       return {
-        row: { ...row, status: 'rejected', rejectedById: actor.id, rejectedAt: at, updatedAt: at, reason: reason.trim() },
+        row: { ...row, status: 'rejected', rejectedById: actor.id, rejectedAt: at, updatedAt: at,
+          reason: reason.trim(), issueProblem: undefined },
         action: 'recharge_code_reject'
       };
     });
   }
 
-  async function approveRequest(body, actor) {
-    const { id, action } = body;
-    if (!transport) throw new RequestError(503, '线上代充服务尚未接入');
-    if (issuing.has(id)) throw new RequestError(409, '正在核对这批充值码，请稍后刷新');
-    issuing.add(id);
+  async function originalBatchProblem(row) {
+    const codes = row.codes || [];
+    const incomplete = '旧批次的原码未全部核对成功，可驳回后按库存重新申请';
+    if (!row.importStartedAt || codes.length !== row.count || new Set(codes).size !== row.count) return incomplete;
     try {
-      let row = await change(actor, rows => {
-        const current = findRequest(rows, id);
-        if (current.status === 'issued' || current.status === 'issuing') return { row: current };
-        if (current.status !== 'pending' || action !== 'approve')
-          throw new RequestError(409, '这条申请尚未通过审批或已经退回');
-        const at = time();
-        return {
-          row: {
-            ...current, status: 'issuing', approvedById: actor.id, approvedAt: at, updatedAt: at,
-            codes: Array.from({ length: current.count }, () => 'KC-' + randomBytes(14).toString('hex').toUpperCase())
-          },
-          action: 'recharge_code_approve'
-        };
-      });
-      if (row.status === 'issued') return row;
-
-      async function recordIssue(patch, issueAction) {
-        return change(actor, rows => {
-          const current = findRequest(rows, id);
-          if (current.status === 'issued') return { row: current };
-          if (issueAction === 'recharge_code_issue_pending' && current.issueProblem === patch.issueProblem)
-            return { row: current };
-          return { row: { ...current, ...patch, updatedAt: time() }, action: issueAction };
-        });
-      }
-
-      const pending = issueProblem => recordIssue({ issueProblem }, 'recharge_code_issue_pending');
-      const readback = async () => {
-        try { return codeReadback(row, await transport.listCodes()); }
-        catch { return null; }
-      };
-      let receipt = await readback();
-      if (!receipt) return await pending('暂时无法核对代充卡池，请重试核对');
-      if (receipt.conflict || (!row.importStartedAt && receipt.foundCount))
-        return await pending('代充卡池存在冲突记录，请管理员核对');
-
-      if (receipt.missing.length) {
-        if (!row.importStartedAt) {
-          row = await recordIssue({ importStartedAt: time() }, 'recharge_code_import_started');
-          if (row.status === 'issued') return row;
-        }
-        try {
-          await transport.importCodes({ codes: receipt.missing, plan: row.plan });
-        } catch {
-          // The upstream may have committed even if the response timed out.
-        }
-        receipt = await readback();
-      }
-      if (receipt?.conflict) return await pending('代充卡池存在冲突记录，请管理员核对');
-      if (!receipt || receipt.missing.length)
-        return await pending('充值码尚未全部核对成功，请重试核对');
-      return await recordIssue(
-        { status: 'issued', issuedAt: time(), issueProblem: undefined },
-        'recharge_code_issued'
-      );
-    } finally {
-      issuing.delete(id);
+      const checks = await transport?.checkReturns(codes.map(code => ({ code, plan: row.plan })));
+      if (Array.isArray(checks) && checks.length === codes.length &&
+        codes.every(code => checks.some(item => item?.code === code && item.plan === row.plan &&
+          item.eligible === true && item.state === 'unused'))) return '';
+      return incomplete;
+    } catch {
+      return '暂时无法核对旧批次，请重试';
     }
+  }
+
+  function approveRequest({ id, action }, actor) {
+    return change(actor, async rows => {
+      const row = findRequest(rows, id);
+      if (row.status === 'issued') return { row };
+      let codes;
+      if (row.status === 'issuing') {
+        const issueProblem = await originalBatchProblem(row);
+        if (issueProblem) return row.issueProblem === issueProblem ? { row }
+          : { row: { ...row, issueProblem, updatedAt: time() }, action: 'recharge_code_issue_pending' };
+        codes = row.codes;
+      } else {
+        if (row.status !== 'pending' || action !== 'approve')
+          throw new RequestError(409, '这条申请不在待审核状态');
+        codes = await codesFor(rows, row.plan, row.count);
+      }
+      const at = time();
+      return {
+        row: { ...row, status: 'issued', approvedById: row.approvedById ?? actor.id,
+          approvedAt: row.approvedAt ?? at, issuedAt: at, updatedAt: at, codes, issueProblem: undefined },
+        action: 'recharge_code_issued'
+      };
+    });
   }
 
   return async function handleRechargeCodeRequests(request, response, actor) {
@@ -260,13 +211,34 @@ export function createRechargeCodeHandler({ store, transport, publicOrigin, cloc
       const canApprove = approvers.has(actor.role);
       if (request.method === 'GET') {
         const { data } = await store.load();
-        const rows = (data?.requests ?? []).filter(row => canApprove || row.applicantId === actor.id);
+        const requests = data?.requests ?? [];
+        const rows = requests.filter(row => canApprove || row.applicantId === actor.id);
         const params = new URLSearchParams((request.url || '').split('?', 2)[1]);
         if (params.get('view') === 'codes')
-          return reply(response, 200, { canApprove, items: await listIssuedCodes(rows, actor.id) });
+          return reply(response, 200, { canApprove, items: await returns.view(rows, actor.id) });
+        const [items, stock] = await Promise.all([
+          returns.view(rows, actor.id),
+          readStock().then(codes => {
+            const counts = Object.fromEntries([...plans].map(plan => [plan, 0]));
+            for (const { plan } of unassignedStock(codes, requests)) counts[plan]++;
+            return counts;
+          }).catch(() => null)
+        ]);
         return reply(response, 200, {
           canApprove,
-          requests: rows.map(row => visibleRequest(row, actor.id))
+          stock,
+          requests: rows.map(row => {
+            const own = items.filter(item => item.requestId === row.id);
+            return { ...visibleRequest(row, actor.id), counts: {
+              returnable: own.filter(item => item.eligible).length,
+              unused: own.filter(item => item.status === 'unused').length,
+              used: own.filter(item => item.status === 'used').length,
+              processing: own.filter(item => item.status === 'processing').length,
+              unavailable: own.filter(item => item.status === 'unavailable').length,
+              returned: own.filter(item => item.status === 'returned').length,
+              pendingReturns: own.filter(item => item.status === 'return-pending').length
+            } };
+          })
         });
       }
       if (request.method !== 'POST') throw new RequestError(405, '仅支持读取或提交充值码申请');
@@ -275,6 +247,10 @@ export function createRechargeCodeHandler({ store, transport, publicOrigin, cloc
         (request.headers['sec-fetch-site'] && request.headers['sec-fetch-site'] !== 'same-origin')
       ) throw new RequestError(403, '请在本系统提交充值码申请');
       const body = await readAction(request);
+      if (body.action === 'return-preview')
+        return reply(response, 200, { items: await returns.preview(body.itemIds, actor) });
+      if (['return', 'return-reconcile'].includes(body.action))
+        return reply(response, 200, { items: await returns.execute(body.itemIds, actor, body.note, body.action === 'return-reconcile') });
       if (body.action === 'request') {
         const { row, created } = await createRequest(body, actor);
         return reply(response, created ? 201 : 200, { request: visibleRequest(row, actor.id) });
@@ -288,6 +264,7 @@ export function createRechargeCodeHandler({ store, transport, publicOrigin, cloc
       return reply(response, 200, { request: visibleRequest(row, actor.id) });
     } catch (error) {
       if (response.destroyed || response.headersSent) return;
+      if (error instanceof returns.ReturnError) return reply(response, error.status, { error: error.message, ...(error.items && { items: error.items }) });
       if (error instanceof RequestError) return reply(response, error.status, { error: error.message });
       if (error?.status === 409) return reply(response, 409, { error: '申请记录已变化，请刷新后重试' });
       return reply(response, 500, { error: '未能确认充值码申请结果，请刷新后核对' });

@@ -57,6 +57,10 @@ test('the outer adapter uses native authentication without exposing its token or
   assert.equal((await request('/api/admin/cards', admin)).status, 403);
   assert.equal((await request('/API/ADMIN/CARDS/', admin)).status, 403);
   assert.equal((await request('/api/admin/sessions', admin)).status, 403);
+  assert.equal((await request('/api/admin/recharge-routing', customer)).status, 403);
+  assert.equal((await fetch(host.url + '/api/admin/recharge-routing', { method: 'PUT', headers: {
+    'x-id-recharge-assertion': signRechargeAssertion(secret, 'PUT', '/api/admin/recharge-routing', admin)
+  } })).status, 403);
   assert.equal((await request('/api/admin/login', superUser, {})).status, 404);
   assert.equal((await request('/api/admin/cards?token=forged', superUser)).status, 404);
   assert.equal((await request('/api/admin/cards%2Fother', superUser)).status, 404);
@@ -79,6 +83,11 @@ test('the outer adapter uses native authentication without exposing its token or
   assert.equal((await request('/api/admin/screenshots?path=checkout_debug%2Ffixture.png', admin)).status, 200);
   assert.equal(requests.at(-1).path, '/api/admin/screenshots?path=checkout_debug%2Ffixture.png');
   assert.equal((await request('/api/admin/orbitcard/products', admin)).status, 200);
+  for (const action of ['check', 'commit', 'receipt']) {
+    const path = '/api/admin/cdks/returns/' + action;
+    assert.equal((await request(path, superUser, { synthetic: true })).status, 403, '普通管理签名不能直接调用归还内部接口');
+    assert.equal((await request(path, { ...superUser, id: 'order-reconciliation' }, { synthetic: true })).status, 200);
+  }
 });
 
 test('network preflight rejects public, host-network, stopped, wrong-port and UDP-only native services', async () => {

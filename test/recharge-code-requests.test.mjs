@@ -25,8 +25,8 @@ async function call(handler, actor, body, requestOrigin = origin, query = '') {
   return { status, ...result };
 }
 
-function setup() {
-  let document = { version: 0, data: null };
+function setup(requests = []) {
+  let document = { version: 0, data: { requests } };
   const audit = [];
   const store = {
     load: () => structuredClone(document),
@@ -37,28 +37,38 @@ function setup() {
     }
   };
   const cardPool = new Map();
-  const imported = [];
   const addCodes = (codes, plan) => {
     for (const code of codes) {
-      assert(!cardPool.has(code), 'reconciliation must only import missing codes');
+      assert(!cardPool.has(code));
       cardPool.set(code, { code, plan_type: plan, type: '自助', status: 'unused', shipped: false });
     }
   };
   const transport = {
-    async importCodes({ codes, plan }) {
-      imported.push([...codes]);
-      addCodes(codes, plan);
+    async listCodeStock() {
+      return [...cardPool.values()]
+        .filter(row => row.code.length === 18 && row.status === 'unused' && !row.shipped)
+        .map(row => ({ code: row.code, plan: row.plan_type }));
+    },
+    async checkReturns(items) {
+      return items.map(item => {
+        const row = cardPool.get(item.code);
+        const eligible = row?.plan_type === item.plan && row.status === 'unused' && !row.shipped;
+        return { ...item, state: eligible ? 'unused' : 'blocked', eligible, reason: eligible ? '可归还' : '不可归还' };
+      });
     },
     async listCodes() { return [...cardPool.values()]; }
   };
   const start = () => createRechargeCodeHandler({ store, transport, publicOrigin: origin });
-  return { audit, store, addCodes, imported, transport, start };
+  return { audit, store, addCodes, cardPool, transport, start };
 }
 
 const application = { action: 'request', requestKey: 'application-1', plan: 'pro100', count: 2 };
+const shortCodes = ['A', 'B', 'C', 'D'].map(letter => 'KC-' + letter.repeat(15));
 
-test('employees can apply idempotently, and the approved codes are visible only to their owner', async () => {
-  const { audit, store, imported, start } = setup();
+test('approval assigns existing codes and only the applicant can read them', async () => {
+  const { audit, store, addCodes, start } = setup();
+  addCodes(shortCodes.slice(0, 2), 'pro100');
+  addCodes(shortCodes.slice(2, 3), 'plus');
   const handle = start();
   assert.equal((await call(handle, null)).status, 401);
   assert.equal((await call(handle, employee, application, 'https://invalid.test')).status, 403);
@@ -73,7 +83,10 @@ test('employees can apply idempotently, and the approved codes are visible only 
   assert.equal(replay.request.id, id);
   assert.equal((await call(handle, employee, { ...application, count: 1 })).status, 409);
   assert.equal((await call(handle, employee, { action: 'approve', id })).status, 403);
-  assert.deepEqual((await call(handle, other)).requests, []);
+  const otherBefore = await call(handle, other);
+  assert.deepEqual(otherBefore.requests, []);
+  assert.deepEqual(otherBefore.stock, { plus: 1, pro100: 2, pro200: 0, pro500: 0 });
+  for (const code of shortCodes) assert(!JSON.stringify(otherBefore).includes(code));
 
   const approved = await call(handle, admin, { action: 'approve', id });
   assert.equal(approved.request.status, 'issued');
@@ -81,66 +94,86 @@ test('employees can apply idempotently, and the approved codes are visible only 
   assert.equal(approved.request.codes, undefined);
   assert.equal((await call(handle, admin)).requests[0].codes, undefined);
   const { codes } = (await call(handle, employee)).requests[0];
-  assert.equal(codes.length, 2);
-  assert.equal(new Set(codes).size, 2);
-  assert.deepEqual(imported, [codes]);
+  assert.deepEqual(codes, shortCodes.slice(0, 2));
+  assert.deepEqual((await call(handle, other)).stock, { plus: 1, pro100: 0, pro200: 0, pro500: 0 });
   assert.deepEqual(lookupRechargeCodeOwner(store.load().data, codes[0].toLowerCase()), {
     requestId: id, employeeId: employee.id
   });
   assert.equal((await call(handle, admin, { action: 'approve', id })).request.status, 'issued');
-  assert.equal(imported.length, 1);
+  assert.equal((await call(handle, employee, application)).request.id, id);
   assert.deepEqual(audit.map(({ action }) => action), [
-    'recharge_code_request', 'recharge_code_approve', 'recharge_code_import_started', 'recharge_code_issued'
+    'recharge_code_request', 'recharge_code_issued'
   ]);
   for (const code of codes) assert(!JSON.stringify(audit).includes(code));
 });
 
-test('partial import and lost responses keep the same batch across restart and publish only after full readback', async () => {
-  const { store, addCodes, imported, transport, start } = setup();
+test('independent approvers cannot assign the same remaining code, and insufficient stock leaves the application pending', async () => {
+  const { store, addCodes, audit, start } = setup();
+  addCodes(shortCodes.slice(0, 1), 'pro100');
   const handle = start();
-  const { request: { id } } = await call(handle, employee, application);
-  const importMissing = transport.importCodes;
-  let batch;
-  transport.importCodes = async ({ codes, plan }) => {
-    batch = codes;
-    const saved = store.load().data.requests[0];
-    assert(saved.importStartedAt);
-    assert.deepEqual(saved.codes, codes);
-    addCodes(codes.slice(0, 1), plan);
-    throw new Error('response lost');
-  };
-  const pending = await call(handle, admin, { action: 'approve', id });
-  assert.equal(pending.request.status, 'issuing');
-  assert(pending.request.issueProblem);
-  assert.equal((await call(handle, employee)).requests[0].codes, undefined);
-  assert.equal(lookupRechargeCodeOwner(store.load().data, batch[0]), null);
-  transport.importCodes = importMissing;
-  const restarted = start();
-  assert.equal((await call(restarted, admin, { action: 'reconcile', id })).request.status, 'issued');
-  assert.deepEqual((await call(restarted, employee)).requests[0].codes, batch);
-  assert.deepEqual(imported, [batch.slice(1)]);
+  const command = { ...application, count: 1 };
+  const first = (await call(handle, employee, command)).request;
+  const second = (await call(handle, other, command)).request;
+  const approvals = await Promise.all([first, second].map(row =>
+    call(start(), admin, { action: 'approve', id: row.id })));
+  assert.deepEqual(approvals.map(result => result.status).sort(), [200, 409]);
+  const issued = store.load().data.requests.find(row => row.status === 'issued');
+  const pending = store.load().data.requests.find(row => row.status === 'pending');
+  assert.deepEqual(issued.codes, shortCodes.slice(0, 1));
+  assert.equal(pending.codes, undefined);
+  assert.equal((await call(handle, other, { ...command, requestKey: 'after-exhaustion' })).status, 409);
+  assert.equal(audit.filter(row => row.action === 'recharge_code_issued').length, 1);
+  addCodes(shortCodes.slice(1, 2), 'pro100');
+  assert.equal((await call(start(), admin, { action: 'approve', id: pending.id })).request.status, 'issued');
+  assert.deepEqual(store.load().data.requests.find(row => row.id === pending.id).codes, shortCodes.slice(1, 2));
 });
 
-test('upstream conflicts stay hidden and rejected applications remain terminal', async () => {
-  const { addCodes, transport, start } = setup();
+test('an unknown inventory is separate from zero and blocks both new applications and approvals', async () => {
+  const { addCodes, store, transport, start } = setup();
+  addCodes(shortCodes, 'pro100');
   const handle = start();
   const { request: { id } } = await call(handle, employee, application);
-  transport.importCodes = async ({ codes }) => addCodes(codes, 'plus');
-  const conflict = await call(handle, admin, { action: 'approve', id });
-  assert.equal(conflict.request.status, 'issuing');
-  assert.match(conflict.request.issueProblem, /冲突/);
-  assert.equal((await call(handle, employee)).requests[0].codes, undefined);
+  transport.listCodeStock = async () => { throw new Error('upstream down'); };
+  assert.equal((await call(handle, employee)).stock, null);
+  assert.equal((await call(handle, employee, application)).request.id, id);
+  assert.equal((await call(handle, employee, { ...application, requestKey: 'new-request' })).status, 503);
+  assert.equal((await call(handle, admin, { action: 'approve', id })).status, 503);
+  assert.equal(store.load().data.requests[0].status, 'pending');
+  transport.listCodeStock = async () => [
+    { code: shortCodes[0], plan: 'plus' }, { code: shortCodes[0], plan: 'pro100' }
+  ];
+  assert.equal((await call(handle, employee)).stock, null);
+});
 
-  const { request: pending } = await call(handle, employee, { ...application, requestKey: 'application-2' });
-  assert.equal((await call(handle, admin, { action: 'reconcile', id: pending.id })).status, 409);
-  const rejected = await call(handle, admin, { action: 'reject', id: pending.id, reason: '暂缓提取' });
-  assert.equal(rejected.request.status, 'rejected');
-  assert.equal(rejected.request.reason, '暂缓提取');
-  assert.equal((await call(handle, admin, { action: 'approve', id: pending.id })).status, 409);
+test('legacy interrupted requests only reconcile the original batch and rejected codes stay out of inventory', async () => {
+  const id = '11111111-1111-4111-8111-111111111111';
+  const original = ['KC-' + 'A'.repeat(28), 'KC-' + 'B'.repeat(28)];
+  const legacy = { id, plan: 'pro100', count: 2, status: 'issuing', applicantId: employee.id,
+    applicantName: employee.name, codes: original, importStartedAt: '2026-11-09T00:00:00Z' };
+  const { addCodes, start, store } = setup([legacy]);
+  addCodes(original.slice(0, 1), 'pro100');
+  addCodes(shortCodes, 'pro100');
+  let result = await call(start(), admin, { action: 'reconcile', id });
+  assert.equal(result.request.status, 'issuing');
+  assert.match(result.request.issueProblem, /原码未全部核对成功/);
+  assert.equal((await call(start(), employee)).requests[0].codes, undefined);
+  addCodes(original.slice(1), 'pro100');
+  result = await call(start(), admin, { action: 'reconcile', id });
+  assert.equal(result.request.status, 'issued');
+  assert.deepEqual((await call(start(), employee)).requests[0].codes, original);
+  assert.deepEqual(lookupRechargeCodeOwner(store.load().data, original[0]), { requestId: id, employeeId: employee.id });
+
+  const rejectedFixture = setup([{ ...legacy, codes: shortCodes.slice(0, 2) }]);
+  rejectedFixture.addCodes(shortCodes, 'pro100');
+  const reject = await call(rejectedFixture.start(), admin, { action: 'reject', id, reason: '原批次未发放' });
+  assert.equal(reject.request.status, 'rejected');
+  assert.equal((await call(rejectedFixture.start(), employee)).stock.pro100, 2);
+  assert.equal((await call(rejectedFixture.start(), admin, { action: 'approve', id })).status, 409);
 });
 
 test('issued codes use a single live status read and preserve privacy when the upstream is unavailable', async () => {
-  const { transport, start } = setup();
+  const { transport, start, addCodes } = setup();
+  addCodes(shortCodes, 'pro100');
   const handle = start();
   const { request: { id } } = await call(handle, employee, { ...application, count: 4 });
   assert.equal((await call(handle, admin, { action: 'approve', id })).request.status, 'issued');
@@ -171,7 +204,9 @@ test('issued codes use a single live status read and preserve privacy when the u
   const adminView = await readCodes(admin);
   assert.equal(reads, 2);
   assert.equal(adminView.canApprove, true);
-  assert.deepEqual(adminView.items, ownerView.items.map(({ code, ...row }) => row));
+  const comparable = ({ code, eligible, returnReason, ...row }) => row;
+  assert.deepEqual(adminView.items.map(comparable), ownerView.items.map(comparable));
+  assert(adminView.items.every(row => !row.code && !row.eligible && row.returnReason === '仅领码人可归还'));
   transport.listCodes = async () => { throw new Error('upstream down'); };
   const unavailable = await readCodes(employee);
   assert.deepEqual(unavailable.items.map(({ code }) => code), original.map(({ code }) => code));

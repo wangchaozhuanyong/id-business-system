@@ -1,28 +1,49 @@
 import assert from 'node:assert/strict';
+import { Readable } from 'node:stream';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { startPreview } from '../server/preview.mjs';
+import { createLocalBusinessStore, handleLocalBusiness } from '../server/local-business.mjs';
+import { interceptDesign, origin } from './helpers/offline-design.mjs';
 
 test('renewal workbench persists decisions, creates a new order and projects customer loss', { timeout: 45000 }, async () => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
-  const { server, url } = await startPreview(0, { databasePath: ':memory:' });
+  const store = createLocalBusinessStore(':memory:');
+  const actor = { id: 'renewal-qa', name: '合成管理员', role: 'admin' };
+  const api = '/api/local/commerce';
+  const commerceRequest = async (method, data) => {
+    const request = Object.assign(Readable.from(data ? [Buffer.from(JSON.stringify(data))] : []), {
+      method, url: api, headers: { origin, 'content-type': 'application/json' }
+    });
+    let status, json;
+    const response = {
+      setHeader() {},
+      writeHead(code) { status = code; },
+      end(body) { json = JSON.parse(body); }
+    };
+    await handleLocalBusiness(request, response, api, store, actor, { publicOrigin: origin });
+    return { status, json };
+  };
   let browser;
   try {
     browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
-    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    const offline = await interceptDesign(context, { localFixtures: {}, actor });
+    await context.route('**' + api, async route => {
+      const request = route.request();
+      await route.fulfill(await commerceRequest(request.method(), request.postDataJSON()));
+    });
+    const page = await context.newPage();
     page.setDefaultTimeout(5500);
-    const api = url + 'api/local/commerce';
-    const origin = new URL(url).origin;
     const write = async (version, data) => {
-      const response = await page.request.put(api, { headers: { Origin: origin }, data: { version, data } });
-      assert.equal(response.status(), 200, await response.text());
+      const response = await commerceRequest('PUT', { version, data });
+      assert.equal(response.status, 200, JSON.stringify(response.json));
     };
-    const read = async () => (await page.request.get(api)).json();
+    const read = async () => (await commerceRequest('GET')).json;
     const order = (id, customerId, expiry, extra = {}) => ({
       id, orderNo: id, customerId, expiry, email: id + '@example.test',
       product: 'GPT', plan: 'Plus', businessType: '续费', start: '2026-10-07T16:00',
       paidConfirmed: true, payment: '银行卡', paidAmount: '20', paidCurrency: 'USD',
-      paymentId: '123456', cardId: 'qa-card', saleAmount: '180', saleCurrency: 'CNY', version: 1,
+      paymentId: '', cardId: '', saleAmount: '180', saleCurrency: 'CNY', version: 1,
       ...extra
     });
     await write(0, {
@@ -39,9 +60,7 @@ test('renewal workbench persists decisions, creates a new order and projects cus
       tenants: [], operating: [], rentBatches: [], logs: [], renewalWarningDays: 1
     });
     await page.clock.setFixedTime(new Date('2026-11-06T08:00:00Z'));
-    await page.route('**/*', (route) =>
-      new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
-    await page.goto(url + '#/workspace/renewals');
+    await page.goto(origin + '/#/workspace/renewals');
     const drawer = page.locator('#drawer');
     const confirm = page.locator('#confirm-dialog');
     const list = page.locator('table[data-table="commerce-renewals"]');
@@ -90,32 +109,44 @@ test('renewal workbench persists decisions, creates a new order and projects cus
     await period('2026-11-06T15:59', '2026-12-06T15:59');
     await page.getByRole('button', { name: '保留待补全' }).click();
     await confirm.getByRole('button', { name: '确认保存' }).click();
-    await page.waitForURL('**/#/workspace/renewals', { timeout: 5500 }).catch(async (error) => {
-      throw new Error(`待补全保存未返回续费管理：${await page.locator('#toast').textContent()}`, { cause: error });
-    });
+    await page.locator('#toast').filter({ hasText: '订单提交成功' }).waitFor();
+    assert(new URL(page.url()).hash.startsWith('#/workspace/order/renew/'));
+    await page.getByRole('button', { name: '返回续费管理', exact: true }).click();
+    await form.waitFor({ state: 'hidden' });
     await row('QA-EXPIRED').getByRole('button', { name: '续费', exact: true }).click();
     await period('2026-11-06T15:59', '2026-12-06T15:59');
-    await form.locator('#commerce-cardId').fill('qa-card');
-    await form.locator('#commerce-paymentId').fill('123456');
+    assert.equal(await form.locator('#commerce-cardId').inputValue(), '');
     await form.locator('#commerce-paidAmount').fill('20');
     await form.locator('#commerce-saleAmount').fill('180');
-    await form.getByLabel('代付已确认').check();
+    assert.equal(await form.locator('[name="commerce-paidConfirmed"], [name="commerce-receiptConfirmed"]').count(), 0);
     await page.getByRole('button', { name: '核对并保存' }).click();
+    await confirm.getByText(/请确认充值已成功.*实际代付 20\.00 .*客户实收 180\.00 /).waitFor();
     await confirm.getByRole('button', { name: '确认保存' }).click();
-    await page.waitForURL('**/#/workspace/renewals', { timeout: 5500 });
+    await page.locator('#toast').filter({ hasText: '订单提交成功' }).waitFor();
+    assert(new URL(page.url()).hash.startsWith('#/workspace/order/renew/'));
+    await page.getByRole('button', { name: '返回续费管理', exact: true }).click();
+    await form.waitFor({ state: 'hidden' });
     await completed();
     const snapshot = await read();
-    const newOrder = snapshot.data.orders.find((item) => item.orderNo.startsWith('OD-LOCAL-') && item.paidConfirmed);
+    const newOrder = snapshot.data.orders.find((item) => item.id !== 'QA-EXPIRED' && item.customerId === 'qa-renew' && item.paidConfirmed);
     assert.equal(newOrder.expiry, '2026-12-06T15:59');
+    assert.equal(newOrder.receiptConfirmed, true);
+    assert.equal(newOrder.cardId, '');
+    assert.equal(newOrder.issueFeeSnapshot.pending, true);
     assert.equal(snapshot.data.orders.find((item) => item.id === 'QA-EXPIRED').expiry, '2026-11-05T14:35');
-    await page.getByRole('link', { name: '客户流失' }).click();
+    const sidebar = page.locator('#sidebar');
+    await sidebar.getByRole('button', { name: '数据管理', exact: true }).click();
+    await sidebar.locator('[data-group="数据管理"] + .nav-children')
+      .getByRole('link', { name: '客户流失', exact: true }).click();
     await loss.getByText('换号客户丙', { exact: true }).waitFor();
+    assert.equal(await page.locator('#breadcrumbs').innerText(), '数据管理');
     assert.equal(await loss.getByText(/续费客户甲|拒续客户乙/).count(), 0);
-    await loss.getByRole('button', { name: '历史订单' }).click();
-    await drawer.getByText('QA-LOST', { exact: true }).waitFor();
+    await loss.getByRole('button', { name: '订阅历史' }).click();
+    const lostOrder = snapshot.data.orders.find(item => item.id === 'QA-LOST');
+    await drawer.getByText(lostOrder.orderNo, { exact: true }).waitFor();
     await page.keyboard.press('Escape');
     snapshot.data.orders.push(order('QA-REJOIN', '', '2026-12-06T16:00', {
-      start: '2026-11-06T15:30', wechat: 'qa-rejoin-chat', product: 'Claude Pro', plan: 'Pro'
+      start: '2026-11-06T15:30', wechat: 'qa-rejoin-chat', product: 'Claude Pro', plan: 'Pro', proMaterialMode: 'none'
     }));
     await write(snapshot.version, snapshot.data);
     await page.reload();
@@ -138,9 +169,9 @@ test('renewal workbench persists decisions, creates a new order and projects cus
     await page.setViewportSize({ width: 390, height: 850 });
     await page.locator('#theme-toggle').click();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    assert.deepEqual(offline.external, []);
   } finally {
     await browser?.close();
-    server.closeAllConnections();
-    await new Promise((resolve) => server.close(resolve));
+    store.close();
   }
 });

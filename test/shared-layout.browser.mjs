@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { startCodexdaichongDemoSite } from '../modules/recharge/codexdaichong/demo-site.mjs';
-import { interceptDesign, origin as offlineOrigin } from './helpers/offline-design.mjs';
+import { toggleDesignTheme, interceptDesign, origin as offlineOrigin } from './helpers/offline-design.mjs';
 
 // Geometry assertions cover the user-visible regressions; no business writes are allowed.
 test('shared layouts preserve alignment, readable controls and stable navigation', { timeout: 120_000 }, async (t) => {
@@ -36,7 +36,7 @@ test('shared layouts preserve alignment, readable controls and stable navigation
   };
   const theme = async dark => {
     if (await page.evaluate(() => document.documentElement.dataset.theme === 'dark') !== dark)
-      await page.locator('#theme-toggle').click();
+      await toggleDesignTheme(page);
     await settled();
   };
   const box = selector => page.locator(selector).boundingBox();
@@ -46,13 +46,15 @@ test('shared layouts preserve alignment, readable controls and stable navigation
   await page.goto(origin + '/#/workspace/order/gpt');
 
   await t.test('GPT and Claude order columns align and narrow labels remain usable', async () => {
-    for (const width of [1440, 1024, 768, 390, 320]) {
+    for (const width of [2040, 1440, 1024, 768, 390, 320]) {
       await page.setViewportSize({ width, height: 900 });
       for (const dark of [false, true]) {
         await theme(dark);
         for (const product of ['gpt', 'claude']) {
           await go(`workspace/order/${product}`);
           await page.locator('#commerce-payment').selectOption('银行卡');
+          if (product === 'claude')
+            await page.locator('#commerce-proMaterialMode').selectOption('tenant_card');
           await settled();
           const groups = await page.locator('.order-financial-group').evaluateAll(nodes =>
             nodes.map(n => n.getBoundingClientRect().top));
@@ -60,14 +62,16 @@ test('shared layouts preserve alignment, readable controls and stable navigation
             aligned(await box('#commerce-paidAmount'), await box('#commerce-expiry'), '金额和到期控件第二行不齐');
             aligned(await box('label[for="commerce-paidAmount"]'), await box('label[for="commerce-expiry"]'), '第二行文字不齐');
           }
-          if (width === 1440) {
+          const formWidth = await page.locator('.commerce-entry-columns > .form-panel > form').evaluate(node => {
+            const style = getComputedStyle(node);
+            return node.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+          });
+          if (width >= 1440) assert(formWidth >= 640, '宽屏录单为双列表单保留足够正文宽度');
+          if (formWidth >= 640) {
             const search = await box('#commerce-cardId-picker');
-            if (product === 'gpt') {
-              aligned(await box('#commerce-payment'), search, '银行卡选择应与支付方式同排');
-              aligned(await box('#commerce-payment'), await box('#commerce-paymentId'), '卡尾号不应单独占一行');
-            } else {
-              aligned(await box('#commerce-tenantId-picker'), search, '租户与银行卡选择应同排');
-            }
+            aligned(await box('#commerce-payment'), await box('#commerce-cardTypeId'), '支付方式与银行卡类型应同排');
+            aligned(search, await box('#commerce-paymentId'), '选择银行卡与尾号应在后续行并排');
+            aligned(await box('label[for="commerce-cardId-picker"]'), await box('label[for="commerce-paymentId"]'), '选择银行卡与尾号标签不齐');
           }
           await page.locator('#commerce-payment').selectOption('苹果内购');
           assert(await page.locator('#commerce-appleIdId-picker').isVisible());
@@ -87,11 +91,11 @@ test('shared layouts preserve alignment, readable controls and stable navigation
     for (const width of [1440, 390, 320]) {
       await page.setViewportSize({ width, height: 900 });
       await go('customers/new');
-      const entryTabs = page.locator('.form-panel > .tabs');
-      if (await entryTabs.count()) {
+      const entryTabs = page.locator('.panel > .tabs[aria-label="录入类型"]');
+      {
         const tabs = await entryTabs.boundingBox();
-        const form = await box('#commerce-contact-form');
-        assert(form.y - tabs.y - tabs.height >= 16, '表单页签与首行资料应保留间距');
+        const first = await box('#commerce-contact-name');
+        assert(first.y - tabs.y - tabs.height >= 16, '表单页签与首行资料应保留间距');
       }
       const before = await box('#commerce-contact-name');
       await page.locator('summary[aria-label="查看联系方式说明"]').click();
@@ -120,6 +124,7 @@ test('shared layouts preserve alignment, readable controls and stable navigation
         await theme(dark);
         await go('workspace/order/claude');
         await page.locator('#commerce-payment').selectOption('银行卡');
+        await page.locator('#commerce-proMaterialMode').selectOption('tenant_card');
         const field = page.locator('[data-commerce-field="cardId"]:visible');
         const help = field.locator('.field-title-help');
         const trigger = help.locator('summary');
@@ -144,8 +149,9 @@ test('shared layouts preserve alignment, readable controls and stable navigation
         assert(geometry.trigger.right <= geometry.control.left, '说明按钮不占用输入区域');
         assert(geometry.error.top >= geometry.control.bottom, '校验错误位于控件下方');
         if (width <= 900) assert(geometry.trigger.width >= 44 && geometry.trigger.height >= 44, '手机帮助按钮触控区至少 44px');
-        const before = await field.locator('.field-control').boundingBox();
         await trigger.focus();
+        await settled();
+        const before = await field.locator('.field-control').boundingBox();
         await page.keyboard.press('Enter');
         await help.locator('.title-description:popover-open').waitFor();
         assert.match(await note.innerText(), /选择租户后可搜索/);
@@ -186,12 +192,17 @@ test('shared layouts preserve alignment, readable controls and stable navigation
   await t.test('long-page return restores reading position; empty rates do not reserve a sidebar', async () => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await go('workspace/order/gpt');
-    await page.evaluate(() => scrollTo(0, 220));
-    const before = await page.evaluate(() => scrollY);
+    const entry = page.locator('#commerce-order-form');
+    const before = await entry.evaluate(form => {
+      form.scrollTop = 220;
+      return form.scrollTop;
+    });
     assert(before > 0);
+    await page.evaluate(() => window.IDDesignAPI.render());
+    assert.equal(await entry.evaluate(form => form.scrollTop), before);
     await go('customers/new');
     await go('workspace/order/gpt');
-    assert.equal(await page.evaluate(() => scrollY), before);
+    assert.equal(await entry.evaluate(form => form.scrollTop), before);
     await go('settings/costs');
     assert.equal(await page.locator('.side-panel').count(), 0);
     assert.match(await page.locator('#main').innerText(), /暂无汇率报价/);
@@ -215,7 +226,7 @@ test('shared layouts preserve alignment, readable controls and stable navigation
         await theme(dark);
         const controls = await toolbar.evaluate(node => {
           const middle = element => element.top + element.height / 2;
-          return [...node.querySelectorAll('button, input, select, .relay-status-group > span')].map(control => {
+          return [...node.querySelectorAll('button, input, select, .relay-status-group > span')].filter(control => control.checkVisibility()).map(control => {
             const range = document.createRange();
             range.selectNodeContents(control);
             const bounds = control.getBoundingClientRect();
@@ -282,6 +293,98 @@ test('shared layouts preserve alignment, readable controls and stable navigation
     await oldFrame.dispose();
   });
 
+  await t.test('recharge work areas reach the footer and keep long logs inside the reader', async () => {
+    const desktop = { width: 1680, height: 1060 };
+    let entries = [];
+    const logRoute = '**/integrations/codexdaichong/api/admin/runtime-logs?*';
+    const mockLogs = route => route.fulfill({
+      json: {
+        success: true,
+        entries: new URL(route.request().url()).searchParams.has('tail') ? entries : [],
+        nextAfter: entries.length
+      }
+    });
+    await page.route(logRoute, mockLogs);
+    const select = view => page.locator(`button[data-view="${view}"]`).click();
+    const measure = async selector => {
+      const area = frame().locator(selector);
+      await area.waitFor();
+      await settled();
+      return area.evaluate(node => {
+        const hostFrame = window.frameElement;
+        const host = hostFrame.ownerDocument.defaultView;
+        const main = hostFrame.closest('main');
+        const footer = main.nextElementSibling;
+        const end = host.innerHeight - footer.offsetHeight - parseFloat(host.getComputedStyle(main).paddingBottom);
+        const rect = node.getBoundingClientRect();
+        return {
+          gap: end - hostFrame.getBoundingClientRect().bottom - host.scrollY,
+          width: rect.width, height: rect.height, frameWidth: innerWidth,
+          overflow: document.documentElement.scrollWidth > innerWidth,
+          pageHeight: host.document.documentElement.scrollHeight
+        };
+      });
+    };
+    const fit = (bounds, minimum) => {
+      assert(Math.abs(bounds.gap) <= 2, JSON.stringify(bounds));
+      assert(bounds.height >= minimum && bounds.width >= bounds.frameWidth - 100 && !bounds.overflow, JSON.stringify(bounds));
+    };
+    try {
+      await page.setViewportSize(desktop);
+      await theme(false);
+      await go('online-recharge/chatgpt');
+      await select('query');
+      fit(await measure('[data-recharge-query] .recharge-card'), 600);
+      await frame().getByRole('tab', { name: '批量查询', exact: true }).click();
+      const batch = await measure('#batchQueryInput');
+      assert(Math.abs(batch.gap) <= 2 && batch.height >= 400 && !batch.overflow, JSON.stringify(batch));
+      await frame().getByRole('tab', { name: '单个查询', exact: true }).click();
+
+      for (const [view, selector, minimum] of [
+        ['dashboard', '#dashboard.active', 700],
+        ['checkout_debug', '#checkout_debug.active .runtime-log-pre-wrap', 270],
+        ['cancel_renewal', '#cancel_renewal.active #cancel_renewal_session', 550],
+        ['runtime_logs', '#runtime_logs.active .runtime-log-pre-wrap', 650]
+      ]) {
+        await select(view);
+        fit(await measure(selector), minimum);
+      }
+
+      const log = '#runtime_logs.active .runtime-log-pre-wrap';
+      const before = await measure(log);
+      entries = Array.from({ length: 120 }, (_, index) => ({ text: `离线日志第 ${index + 1} 行` }));
+      await frame().locator('#runtime_log_refresh_btn').click();
+      await frame().getByText(/离线日志第 120 行/).waitFor();
+      const atEnd = () => frame().locator(log).evaluate(node =>
+        node.scrollTop > 0 && Math.abs(node.scrollHeight - node.clientHeight - node.scrollTop) <= 1);
+      assert(await atEnd(), '新日志滚动到日志区底部');
+      assert.deepEqual(await measure(log), before, '日志增长不撑高外页');
+
+      await page.setViewportSize({ width: 390, height: 844 });
+      await theme(true);
+      fit(await measure(log), 300);
+      assert(await atEnd(), '缩窗使日志换行后仍跟随最新一条');
+      await noOverflow();
+      await frame().locator('#runtime_log_autoscroll').uncheck();
+      await frame().locator(log).evaluate(node => { node.scrollTop = 0; });
+      await Promise.all([
+        page.waitForResponse(response => response.url().includes('/admin/runtime-logs?tail=1')),
+        frame().locator('#runtime_log_refresh_btn').click()
+      ]);
+      await settled();
+      assert.equal(await frame().locator(log).evaluate(node => node.scrollTop), 0);
+
+      await page.setViewportSize({ width: 1440, height: 460 });
+      const short = await measure(log);
+      assert(short.height >= 200 && short.pageHeight > 460 && !short.overflow, JSON.stringify(short));
+      await frame().locator('#runtime_log_refresh_btn').scrollIntoViewIfNeeded();
+      assert(await frame().locator('#runtime_log_refresh_btn').isVisible());
+    } finally {
+      await page.unroute(logRoute, mockLogs);
+      await theme(false);
+    }
+  });
+
   await t.test('recharge log tables scroll within their containers with readable single-line headings', async () => {
     await page.setViewportSize({ width: 390, height: 900 });
     await go('settings/login-logs');
@@ -297,6 +400,44 @@ test('shared layouts preserve alignment, readable controls and stable navigation
       assert(table.headings.every(th => th.height < 60 && th.wrapping === 'nowrap'));
     }
     await noOverflow();
+  });
+  await t.test('summary strips distribute all metrics evenly without a fixed four-column limit', async () => {
+    await go('mailboxes/google');
+    await page.evaluate(() => {
+      const fixture = document.createElement('section');
+      fixture.id = 'summary-layout-fixture';
+      document.getElementById('main').append(fixture);
+    });
+    try {
+      for (const width of [1440, 1024, 901, 900, 768, 720, 390, 320]) {
+        await page.setViewportSize({ width, height: 900 });
+        for (const dark of [false, true]) {
+          await theme(dark);
+          for (const count of [1, 3, 4, 5]) {
+            const boxes = await page.evaluate(count => {
+              const fixture = document.getElementById('summary-layout-fixture');
+              fixture.innerHTML = window.IDDesignAPI.summary(Array.from({ length: count }, (_, i) =>
+                ['统计项目' + (i + 1), 12345 + i, '个']));
+              return [...fixture.querySelectorAll('.summary-item')].map(node => node.getBoundingClientRect().toJSON());
+            }, count);
+            assert.equal(boxes.length, count);
+            assert(boxes.every(item => item.left >= 0 && item.right <= width), '统计不能溢出视口');
+            if (width > 900) {
+              for (const item of boxes) {
+                aligned(item, boxes[0], '桌面统计不因项数变化而提前换行');
+                assert(Math.abs(item.width - boxes[0].width) <= 1, '统计按实际项数等宽排列');
+              }
+            } else if (count % 2 && count > 1) {
+              assert(Math.abs(boxes.at(-1).right - boxes[1].right) <= 1, '窄屏奇数项末行完整铺开');
+              assert(boxes.at(-1).top >= boxes.at(-2).bottom, '统计行之间不得重叠');
+            }
+            await noOverflow();
+          }
+        }
+      }
+    } finally {
+      await page.evaluate(() => document.getElementById('summary-layout-fixture')?.remove());
+    }
   });
   assert.deepEqual(errors, []);
 });

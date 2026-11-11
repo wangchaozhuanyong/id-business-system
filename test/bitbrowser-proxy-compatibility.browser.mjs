@@ -37,7 +37,7 @@ test('successive proxy additions, extraction statuses and late edit reads stay i
     if (path === '/') file = '../frontend/bitbrowser-local.html';
     else if (path === '/assets/bitbrowser/proxies.mjs') file = '../frontend/bitbrowser-proxies.mjs';
     else if (path.startsWith('/assets/bitbrowser/')) file = '../modules/recharge/bitbrowser/' + path.slice('/assets/bitbrowser/'.length);
-    else if (['/prototype.css', '/recharge-integration.css', '/title-help.css', '/title-help.js'].includes(path)) file = '../frontend/' + path.slice(1);
+    else if (['/prototype.css', '/design-tokens.css', '/tabs.css', '/recharge-integration.css', '/title-help.css', '/title-help.js', '/pagination.css', '/pagination.js'].includes(path)) file = '../frontend/' + path.slice(1);
     if (!file) { unexpected.push(path); return route.abort(); }
     let body = await readFile(new URL(file, import.meta.url), 'utf8');
     if (path === '/') body = body.replace('<script type="module" src="/assets/bitbrowser/local.mjs"></script>', `<script type="module">

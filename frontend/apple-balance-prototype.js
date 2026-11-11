@@ -7,6 +7,7 @@
   const E = A.esc;
   const S = A.state;
   const wallets = new Map();
+  const savedWalletIds = new Set();
   const allocations = new Map();
   const movements = [];
   const refunds = new Map();
@@ -33,7 +34,8 @@
   const shown = (amount) => canonical(amount).replace(/(\.\d{2})0+$/, '$1');
   const copy = (value) => (value ? JSON.parse(JSON.stringify(value)) : value);
   const net = (allocation) => M.subtract(allocation.amount, allocation.returned);
-  const isBalanceRoute = () => ['accounts/apple-balances', 'mailboxes/apple'].includes(S.route);
+  const managementRoute = 'data-management/apple-ids';
+  const isBalanceRoute = () => ['accounts/apple-balances', 'mailboxes/apple', managementRoute].includes(S.route);
   const ready = () => !localData || loadState === 'ready';
   const pendingTotal = (orderId, exceptId) =>
     [...refunds.values()].reduce(
@@ -46,13 +48,15 @@
 
   function balanceDocument() {
     return copy({
-      wallets: [...wallets.values()].filter((wallet) => wallet.version > 1),
+      wallets: [...wallets.values()].filter(wallet => wallet.version > 1 || savedWalletIds.has(wallet.id)),
       allocations: [...allocations.values()],
       movements,
       refunds: [...refunds.values()]
     });
   }
   function replaceDocument(data) {
+    savedWalletIds.clear();
+    for (const wallet of data?.wallets || []) savedWalletIds.add(wallet.id);
     for (const [target, records, key] of [
       [wallets, data?.wallets, 'id'],
       [allocations, data?.allocations, 'orderId'],
@@ -142,6 +146,12 @@
     } catch (error) {
       const read = await refreshLocalBalance();
       if (!read) return fail('无法核对保存结果，请重新读取余额与流水');
+      if (action === 'apple_topup') {
+        const sent = prepared.data.movements.at(-1);
+        const saved = movements.find(row => row.id === sent.id && row.appleIdId === sent.appleIdId &&
+          row.kind === 'topup' && row.amount === sent.amount && row.reason === sent.reason);
+        if (saved) return prepared;
+      }
       return fail(
         error?.status === 409 && localVersion !== prepared.version
           ? '余额或回款记录已在其他页面更新，请重新打开并核对'
@@ -191,7 +201,7 @@
           email: asset.email,
           status: asset.status,
           health: asset.health,
-          country: asset.country
+          country: asset.country, appStoreRegion: asset.appStoreRegion, deleted: asset.deleted
         }
       : null;
   }
@@ -202,7 +212,7 @@
       email: asset.email,
       status: asset.status,
       health: asset.health,
-      country: asset.country
+      country: asset.country, appStoreRegion: asset.appStoreRegion, deleted: asset.deleted
     }));
   }
   function pushMovement(id, signedAmount, detail) {
@@ -576,14 +586,24 @@
     if (!/^-?\d{1,16}(?:\.\d{1,4})?$/.test(String(amount)) || M.compare(amount, '0') === 0)
       return fail('请输入有效的非零余额变动');
     if (!String(options.reason || '').trim()) return fail('请填写余额变动原因');
+    if (options.topup) {
+      if (M.compare(amount, '0') <= 0 || !/^[a-zA-Z0-9-]{1,100}$/.test(options.commandId || ''))
+        return fail('请核对充值金额后重新打开操作');
+      const existing = movements.find(row => row.id === 'APPLE-TOPUP-' + options.commandId);
+      if (existing) return existing.kind === 'topup' && existing.appleIdId === id &&
+        M.compare(existing.amount, amount) === 0 && existing.reason === options.reason
+        ? { ok: true, entry: copy(existing), balance: wallet.balance }
+        : fail('相同充值操作已登记，请重新核对');
+    }
     if (options.expectedVersion !== undefined && wallet.version !== Number(options.expectedVersion))
       return fail('余额已经变化，请重新核对');
     const nextBalance = M.add(wallet.balance, amount);
     if (M.compare(nextBalance, '0') < 0) return fail('余额不足，不能记为负数');
     if (exceedsBalanceLimit(nextBalance)) return fail('变动后余额超出可登记范围');
     const entry = pushMovement(id, amount, {
-      kind: 'manual',
-      label: M.compare(amount, '0') > 0 ? '充值或更正入账' : '人工余额更正',
+      ...(options.topup && { id: 'APPLE-TOPUP-' + options.commandId }),
+      kind: options.topup ? 'topup' : 'manual',
+      label: options.topup ? '充值到账' : M.compare(amount, '0') > 0 ? '人工余额入账' : '人工余额更正',
       reason: options.reason,
       orderId: '',
       orderNo: ''
@@ -592,7 +612,7 @@
   }
   function undoAdjustment(entryId, reason) {
     const entry = movements.find((row) => row.id === entryId);
-    if (!entry || entry.kind !== 'manual' || entry.undoneBy)
+    if (!entry || !['manual', 'topup'].includes(entry.kind) || entry.undoneBy)
       return fail('仅能撤回尚未撤回的人工余额变动');
     const wallet = get(entry.appleIdId) ? wallets.get(entry.appleIdId) : null;
     if (!wallet) return fail('原苹果 ID 资料缺失，不能自动补偿余额');
@@ -613,13 +633,20 @@
     return { ok: true, balance: wallet.balance };
   }
   function saveAdjustment(id, amount, options) {
-    return saveLocal('apple_adjust', () => adjust(id, amount, options));
+    return saveLocal(options.topup ? 'apple_topup' : 'apple_adjust', () => adjust(id, amount, options));
   }
   function saveAdjustmentUndo(id, reason) {
     return saveLocal('apple_adjust_undo', () => undoAdjustment(id, reason));
   }
   function property(name, value) {
     return `<div class="property-row"><span>${E(name)}</span><strong>${E(value || '—')}</strong></div>`;
+  }
+  function fundingTable(columns, rows, name) {
+    if (!rows.length) return A.empty('暂无符合条件的记录', '可调整搜索或筛选条件。');
+    return `<table class="apple-funding-table" aria-label="${E(name)}"><thead><tr>${columns.map(column =>
+      `<th scope="col">${E(column.label)}</th>`).join('')}</tr></thead><tbody>${rows.map(row =>
+      `<tr>${columns.map(column => `<td><span class="apple-cell-label" aria-hidden="true">${E(column.label)}</span><div>${
+        column.render ? column.render(row) : E(row[column.id] || '—')}</div></td>`).join('')}</tr>`).join('')}</tbody></table>`;
   }
   function openLedger(id) {
     if (!ready()) {
@@ -650,7 +677,7 @@
         label: '操作',
         action: true,
         render: (row) =>
-          row.kind === 'manual' && !row.undoneBy
+          ['manual', 'topup'].includes(row.kind) && !row.undoneBy
             ? A.textAction('补偿撤回', 'apple-undo', `data-id="${E(row.id)}"`)
             : row.undoneBy
               ? A.tag('已补偿撤回')
@@ -667,19 +694,21 @@
       localData
         ? '付款确认后登记扣减，回款到账后登记增加余额。'
         : '演示余额随付款、Apple 实际退回和补偿撤回变化。',
-      `<div class="property-list">${property('苹果 ID', wallet.email)}${property('当前余额', `${shown(wallet.balance)} USD · 美元`)}</div><div class="toolbar"><div class="toolbar-right">${A.button(localData ? '登记余额变动' : '充值或更正', 'apple-adjust', '', 'plus', `data-id="${E(id)}"`)}${hasRefunds ? A.button(localData ? '查看 Apple 回款' : '确认 Apple 退回', 'apple-return-select', '', 'return', `data-id="${E(id)}"`) : ''}</div></div>${A.table(columns, rows, '', '苹果ID余额变动')}`,
-      A.button('关闭', 'drawer-close')
+      `<div class="property-list">${property('苹果 ID', wallet.email)}${property('当前余额', `${shown(wallet.balance)} USD · 美元`)}</div><div class="toolbar"><div class="toolbar-right">${A.button(localData ? '登记余额变动' : '充值或更正', 'apple-adjust', '', 'plus', `data-id="${E(id)}"`)}${hasRefunds ? A.button(localData ? '查看 Apple 回款' : '确认 Apple 退回', 'apple-return-select', '', 'return', `data-id="${E(id)}"`) : ''}</div></div>${fundingTable(columns, rows, '苹果 ID 余额变动')}`,
+      A.button('关闭', 'drawer-close'), '', { kind: 'apple-ledger' }
     );
   }
-  function adjustmentEditor(id) {
+  function adjustmentEditor(id, topup = false) {
     const wallet = get(id);
     if (!wallet) return;
-    const key = `apple-adjust:${id}`,
+    const key = `apple-${topup ? 'topup' : 'adjust'}:${id}`,
       d = S.drafts.get(key) || {};
     A.openDrawer(
-      '登记余额变动',
-      localData ? '核对账户余额和实际变动后登记。' : '此处记录演示余额变动。',
-      `<div class="property-list">${property('苹果 ID', wallet.email)}${property('当前余额', `${shown(wallet.balance)} USD · 美元`)}</div><form id="apple-adjust-form" data-apple-draft="${E(key)}" novalidate><input type="hidden" name="apple-id" value="${E(id)}" /><input type="hidden" name="apple-version" value="${E(d['apple-version'] ?? wallet.version)}" /><div class="form-grid">${A.field(
+      topup ? '登记苹果 ID 充值' : '登记余额变动',
+      topup ? '请在 Apple 端完成充值并核实到账，再登记本次增加的美元余额。' :
+        localData ? '核对账户余额和实际变动后登记。' : '此处记录演示余额变动。',
+      `<div class="property-list">${property('苹果 ID', wallet.email)}${property('当前余额', `${shown(wallet.balance)} USD · 美元`)}</div><form id="apple-adjust-form" data-apple-draft="${E(key)}" novalidate><input type="hidden" name="apple-id" value="${E(id)}" /><input type="hidden" name="apple-version" value="${E(d['apple-version'] ?? wallet.version)}" /><div class="form-grid">${topup ?
+        `<input type="hidden" name="apple-topup" value="1" /><input type="hidden" name="apple-command" value="${E(d['apple-command'] || newId('TOPUP'))}" />` : A.field(
         '变动方向',
         'apple-direction',
         A.select(
@@ -691,7 +720,7 @@
           d['apple-direction'] || 'credit'
         ),
         true
-      )}${A.field('金额（美元）', 'apple-amount', A.input('apple-amount', d['apple-amount'] || '', 'inputmode="decimal"'), true)}${A.field('变动原因', 'apple-reason', `<textarea id="apple-reason" name="apple-reason" rows="3">${E(d['apple-reason'] || '')}</textarea>`, true).replace('class="field"', 'class="field form-field-wide"')}</div></form>`,
+      )}${A.field('金额（美元）', 'apple-amount', A.input('apple-amount', d['apple-amount'] || '', 'inputmode="decimal"'), true)}${A.field(topup ? '到账依据' : '变动原因', 'apple-reason', `<textarea id="apple-reason" name="apple-reason" rows="3">${E(d['apple-reason'] || '')}</textarea>`, true).replace('class="field"', 'class="field form-field-wide"')}</div></form>`,
       A.button('取消', 'drawer-close') +
         '<button class="button primary" type="submit" form="apple-adjust-form">核对变动</button>',
       key
@@ -828,7 +857,122 @@
       A.button('关闭', 'drawer-close')
     );
   }
+  const fundingStates = { unused: '未使用', reserved: '待付款占用', used: '已使用', conflict: '待核对' };
+  function fundingRows() {
+    const commerce = A.modules.commerce?.appleFundingData?.(), rules = window.IDAppleFunding;
+    if (!commerce?.ready || !rules) return null;
+    const index = rules.appleFundingIndex(commerce.orders, { allocations: [...allocations.values()], movements });
+    const history = new Map();
+    for (const order of commerce.orders) {
+      if (order.payment !== '苹果内购' || !order.appleIdId) continue;
+      if (!history.has(order.appleIdId)) history.set(order.appleIdId, []);
+      history.get(order.appleIdId).push(order);
+    }
+    return list().map(wallet => {
+      const state = index.byWallet.get(wallet.id);
+      const orders = (history.get(wallet.id) || []).sort((a, b) =>
+        String(b.expiry || b.createdAt || '').localeCompare(String(a.expiry || a.createdAt || '')));
+      const binding = state?.bindings[0];
+      const conflict = state?.used && (!binding || state.bindings.length !== 1 ||
+        rules.appleBinding(index, binding.order).conflict);
+      const latest = binding && (orders.find(order => order.paidConfirmed &&
+        rules.appleTarget(order) === binding.target && order.customerId === binding.customerId &&
+        !order.cancelled && !order.subscriptionEnded) || binding.order);
+      const order = latest || state?.pending[0];
+      const contact = order && commerce.customer(order);
+      const expiry = order?.expiry || '';
+      const end = /^\d{4}-\d\d-\d\d[T ]\d\d:\d\d$/.test(expiry)
+        ? Date.parse(expiry.replace(' ', 'T') + '+08:00') : Date.parse(expiry);
+      const distance = end - commerce.now;
+      const hours = Math.floor(Math.abs(distance) / 3600000);
+      const duration = Number.isFinite(end) && !order?.cancelled && !order?.subscriptionEnded
+        ? (distance <= 0 ? '已过期 ' : '剩余 ') +
+          (hours ? [Math.floor(hours / 24) ? Math.floor(hours / 24) + ' 天' : '', hours % 24 ? hours % 24 + ' 小时' : ''].filter(Boolean).join(' ') : '不足 1 小时') : '';
+      const estimate = order && rules.applePrice(commerce.settings, order.product, order.plan, wallet.appStoreRegion);
+      return { id: wallet.id, wallet, orders, order, name: contact?.name || '',
+        contact: contact ? ['wechat', 'customerPhone', 'whatsapp', 'telegram', 'qq'].map(key => contact[key]).filter(Boolean).join(' · ') : '',
+        account: order?.email || order?.xHandle || '', apple: wallet.email,
+        plan: order && [order.product, order.plan].filter(Boolean).join(' · '),
+        state: conflict ? 'conflict' : state?.pending.length ? 'reserved' : state?.used ? 'used' : 'unused',
+        subscription: order?.subscriptionEnded || order?.cancelled ? '已终止' :
+          order?.paidConfirmed && ['pending', 'failed'].includes(order.entitlementStatus) ? '订阅待核对' : duration &&
+          (distance <= 0 ? '已过期' : distance <= commerce.renewalWarningHours * 3600000 ? '即将到期' : '有效期内'),
+        expiry: expiry.replace('T', ' '), duration, end,
+        expected: order ? estimate ? estimate + ' USD' : '待核算' : '',
+        canRenew: Boolean(latest && !conflict && !state?.pending.length && !latest.cancelled && !latest.subscriptionEnded)
+      };
+    });
+  }
+  const managementView = () => {
+    if (!S.drafts.has(managementRoute)) S.drafts.set(managementRoute, { query: '', state: '', plan: '', sort: 'asc', page: 1, pageSize: window.IDPagination.defaultPageSize });
+    return S.drafts.get(managementRoute);
+  };
+  let managementLoad, managementError = false;
+  function refreshManagement() {
+    if (!localData) return Promise.resolve(true);
+    if (managementLoad) return managementLoad;
+    managementError = false;
+    managementLoad = Promise.all([refreshLocalBalance(),
+      A.modules.inventory?.refreshLocalInventory?.({ keepContent: true }), A.modules.commerce?.refreshAppleFundingData?.()])
+      .then(result => {
+        managementError = !result.every(Boolean);
+        return !managementError;
+      }, () => {
+        managementError = true;
+        return false;
+      }).finally(() => {
+        managementLoad = null;
+        if (S.route === managementRoute) A.render();
+      });
+    return managementLoad;
+  }
+  function renderManagement() {
+    const view = managementView(), all = fundingRows();
+    const title = A.header('苹果 ID 管理', '查询订阅使用、到期与预计代付金额。',
+      A.button('刷新', 'apple-management-refresh'));
+    if (!all || (!ready() && !hasLoaded)) return title + '<section class="panel">' +
+      A.empty(managementError || loadState === 'error' ? '苹果 ID 管理读取失败' : '正在读取苹果 ID 管理', '可点击刷新重试。') + '</section>';
+    const plans = [...new Set(all.map(row => row.plan).filter(Boolean))].sort();
+    const query = view.query.trim().toLowerCase();
+    const rows = all.filter(row => (!view.state || row.state === view.state) && (!view.plan || row.plan === view.plan) &&
+      (!query || [row.name, row.contact, row.account, row.apple, row.order?.orderNo].some(value =>
+        String(value || '').toLowerCase().includes(query))))
+      .sort((a, b) => {
+        if (Number.isFinite(a.end) !== Number.isFinite(b.end)) return Number.isFinite(a.end) ? -1 : 1;
+        const dateOrder = (a.end - b.end) * (view.sort === 'desc' ? -1 : 1);
+        return dateOrder || a.apple.localeCompare(b.apple);
+      });
+    view.page = Math.min(view.page, Math.max(1, Math.ceil(rows.length / view.pageSize)));
+    const start = (view.page - 1) * view.pageSize;
+    const choices = [['', '全部状态'], ...Object.entries(fundingStates)];
+    const columns = [
+      { id: 'name', label: '客户姓名' }, { id: 'contact', label: '联系方式' }, { id: 'account', label: '订阅账号' },
+      { id: 'apple', label: '苹果 ID 账号' }, { id: 'plan', label: '订阅套餐' },
+      { id: 'state', label: '使用状态', render: row => A.tag(fundingStates[row.state]) +
+        (row.subscription ? `<div>${E(row.subscription)}</div>` : '') },
+      { id: 'expiry', label: '到期时间' }, { id: 'duration', label: '到期时长' }, { id: 'expected', label: '预计金额' },
+      { id: 'actions', label: '操作', render: row => A.textAction('更多操作', 'apple-management-more', `data-id="${E(row.id)}"`) }
+    ];
+    return title + (managementError ? '<p class="inline-notice warning" role="status">读取失败，已保留上次成功读取的资料。</p>' : '') +
+      `<section class="panel"><div class="toolbar"><div class="toolbar-left"><div class="search-field">
+      ${A.icon('search')}<input id="apple-management-search" aria-label="搜索苹果 ID 使用记录" placeholder="搜索客户、账号或订单" value="${E(view.query)}" /></div>
+      <select id="apple-management-state" aria-label="使用状态">${A.options(choices, view.state)}</select>
+      <select id="apple-management-plan" aria-label="订阅套餐">${A.options([['', '全部套餐'], ...plans], view.plan)}</select>
+      <select id="apple-management-sort" aria-label="到期排序">${A.options([['asc', '到期时间升序'], ['desc', '到期时间降序']], view.sort)}</select>
+      </div></div>${fundingTable(columns, rows.slice(start, start + view.pageSize), '苹果 ID 管理')}
+      ${window.IDPagination.render({ id: 'apple-management', page: view.page, pageSize: view.pageSize, total: rows.length })}</section>`;
+  }
+  function fundingHistory(row) {
+    A.openDrawer('苹果 ID 使用记录', '保留原订单、付款和绑定的核对记录。',
+      `<div class="property-list">${property('苹果 ID', row.apple)}${property('订阅账号', row.account)}
+      ${property('使用状态', fundingStates[row.state])}${property('当前余额', shown(row.wallet.balance) + ' USD')}</div>` +
+      fundingTable([{ id: 'orderNo', label: '订单编号' }, { id: 'plan', label: '套餐' }, { id: 'expiry', label: '到期时间' },
+        { id: 'paidAmount', label: '实际代付（USD）', render: order => E(order.paidConfirmed ? order.paidAmount : '未确认') },
+        { id: 'actions', label: '操作', render: order => A.textAction('查看订单', 'apple-management-order', `data-id="${E(order.id)}"`) }],
+        row.orders, '历次苹果内购订单'), A.button('关闭', 'drawer-close'), '', { kind: 'apple-ledger' });
+  }
   function render() {
+    if (S.route === managementRoute) return renderManagement();
     if (!ready() && !hasLoaded) {
       const error = loadState === 'error';
       return (
@@ -841,6 +985,7 @@
     const accounts = list();
     const assets = new Map(A.modules.inventory.getAppleIds().map((asset) => [asset.id, asset]));
     const query = String(S.query || '').toLowerCase();
+    const usages = new Map((fundingRows() || []).map(row => [row.id, row]));
     const refreshFeedback = `<div class="inline-notice warning" data-apple-balance-error role="status" ${loadState === 'error' ? '' : 'hidden'}>余额刷新失败，当前显示上次成功读取的资料。</div>`;
     const rows = accounts
       .filter((row) => `${row.email} ${row.country}`.toLowerCase().includes(query))
@@ -865,8 +1010,11 @@
       { id: 'security2', label: '密保 2', render: assetValue('security2'), long: true },
       { id: 'security3', label: '密保 3', render: assetValue('security3'), long: true },
       { id: 'birthday', label: '密保生日', render: assetValue('birthday') },
-      { id: 'phone', label: '绑定电话', render: assetValue('phone') },
+      { id: 'phone', label: '绑定电话／验证码', render: row => A.modules.inventory?.phoneValue(assets.get(row.id)?.phone) || '—' },
       { id: 'country', label: '国家地区' },
+      { id: 'appStoreRegion', label: 'App Store 账单地区', render: row => E(window.IDAppleFunding?.appleRegions[row.appStoreRegion] || '待核对') },
+      { id: 'usage', label: '使用状态', render: row => E(fundingStates[usages.get(row.id)?.state] || '待核对') },
+      { id: 'binding', label: '绑定订阅账号', render: row => E(usages.get(row.id)?.account || '—') },
       { id: 'device', label: '登录设备', render: assetValue('device') },
       { id: 'appPassword', label: '应用专用密码', render: assetValue('appPassword'), long: true },
       {
@@ -912,7 +1060,7 @@
         label: '操作',
         action: true,
         render: (row) =>
-          `<div class="action-links">${A.textAction('编辑', 'apple-edit', `data-id="${E(row.id)}"`)}${A.textAction('详情', 'apple-details', `data-id="${E(row.id)}"`)}</div>`
+          `<div class="action-links">${A.textAction('编辑', 'apple-edit', `data-id="${E(row.id)}"`)}${A.textAction('详情', 'apple-details', `data-id="${E(row.id)}"`)}${A.textAction('更多操作', 'apple-more', `data-id="${E(row.id)}"`)}</div>`
       }
     ];
     return (
@@ -1028,14 +1176,15 @@
       );
       A.setError('apple-reason', reason ? '' : '请填写变动原因');
       if (!valid(amount) || M.compare(amount, '0') <= 0 || !reason) return true;
-      const signed = d['apple-direction'] === 'debit' ? M.subtract('0', amount) : amount;
+      const topup = d['apple-topup'] === '1';
+      const signed = !topup && d['apple-direction'] === 'debit' ? M.subtract('0', amount) : amount;
       A.confirmAction(
-        '确认登记余额变动',
+        topup ? '确认登记充值到账' : '确认登记余额变动',
         `${wallet.email} · ${M.compare(signed, '0') > 0 ? '+' : ''}${shown(signed)} USD · 美元。`,
         () => {
           const options = {
             reason,
-            expectedVersion: d['apple-version']
+            expectedVersion: d['apple-version'], topup, commandId: d['apple-command']
           };
           if (localData) {
             void finishLocal(form, saveAdjustment(d['apple-id'], signed, options), () =>
@@ -1091,13 +1240,47 @@
   function onClick(action, node) {
     if (!action.startsWith('apple-')) return false;
     const id = node.dataset.id;
+    if (action === 'apple-management-refresh') {
+      void A.withActionFeedback(node, refreshManagement, { pending: '正在读取苹果 ID 使用记录…', failure: '读取失败，请重试' });
+      return true;
+    }
+    if (action === 'apple-management-order') {
+      A.closeDrawer();
+      A.go('orders/detail/' + encodeURIComponent(id));
+      return true;
+    }
+    if (action.startsWith('apple-management-')) {
+      if (S.route !== managementRoute) return true;
+      const row = fundingRows()?.find(item => item.id === id);
+      if (!row) return true;
+      const attrs = `data-id="${E(id)}"`;
+      if (action === 'apple-management-more') A.openActionMenu(node,
+        (row.canRenew ? A.button('续费', 'apple-management-renew', '', '', attrs) : '') +
+        A.button('充值', 'apple-topup', '', '', attrs) + A.button('余额变动', 'apple-ledger', '', '', attrs) +
+        (row.order?.id ? A.button('订单详情', 'apple-management-order', '', '', `data-id="${E(row.order.id)}"`) : '') +
+        A.button('使用记录', 'apple-management-history', '', '', attrs) + A.button('复制', 'apple-management-copy', '', '', attrs));
+      else if (action === 'apple-management-renew' && row.canRenew) A.modules.commerce.openAppleRenewal(row.order.id);
+      else if (action === 'apple-management-history') fundingHistory(row);
+      else if (action === 'apple-management-copy') void A.copyText([
+        row.account ? '订阅账号：' + row.account : '', '苹果 ID：' + row.apple, row.expected ? '预计金额：' + row.expected : ''
+      ].filter(Boolean).join('\n'));
+      return true;
+    }
     if (action === 'apple-add') A.modules.inventory.editAppleId();
     else if (action === 'apple-edit') A.modules.inventory.editAppleId(id);
     else if (action === 'apple-details') A.modules.inventory.showAppleId(id);
     else if (action === 'apple-import') A.modules.inventory.importAppleIds();
     else if (action === 'apple-ledger') openLedger(id);
     else if (action === 'apple-adjust') adjustmentEditor(id);
-    else if (action === 'apple-reload') void refreshLocalBalance();
+    else if (action === 'apple-topup') {
+      if (ready()) adjustmentEditor(id, true);
+      else void ensureReady().then(ok => ok ? adjustmentEditor(id, true) : A.notify('余额读取失败，请重试'));
+    } else if (action === 'apple-more') {
+      A.openActionMenu(node, A.button('充值', 'apple-topup', '', '', `data-id="${E(id)}"`) +
+        A.button('余额变动', 'apple-ledger', '', '', `data-id="${E(id)}"`));
+    }
+    else if (action === 'apple-reload') void A.withActionFeedback(node, () => refreshLocalBalance(),
+      { pending: '正在读取余额与流水…', success: '余额与流水已刷新', failure: '余额读取失败，已保留当前资料' });
     else if (action === 'apple-pending-edit') pendingRefundEditor(id, true);
     else if (action === 'apple-pending-receive') pendingRefundEditor(id, false);
     else if (action === 'apple-refund-history') openRefundHistory(id);
@@ -1151,12 +1334,15 @@
     return true;
   }
   function onInput(node) {
-    if (node.id === 'apple-list-search') {
+    if (node.id === 'apple-list-search' || node.id === 'apple-management-search') {
       const cursor = node.selectionStart;
-      S.query = node.value;
-      S.page = 1;
+      if (node.id === 'apple-management-search') Object.assign(managementView(), { query: node.value, page: 1 });
+      else {
+        S.query = node.value;
+        S.page = 1;
+      }
       A.render();
-      const next = $('#apple-list-search');
+      const next = $('#' + node.id);
       next.focus();
       next.setSelectionRange(cursor, cursor);
       return true;
@@ -1200,6 +1386,7 @@
   A.modules.appleBalance = {
     list,
     get,
+    fundingIndex: orders => window.IDAppleFunding?.appleFundingIndex(orders, { allocations: [...allocations.values()], movements }),
     previewOrder,
     commitOrder: localData ? () => fail('余额扣款必须与本机订单一起保存') : commitOrder,
     prepareOrder,
@@ -1223,13 +1410,25 @@
   };
   window.IDDesignModules.push({
     id: 'apple-balance',
-    matches: (route) => ['accounts/apple-balances', 'mailboxes/apple'].includes(route),
+    matches: (route) => ['accounts/apple-balances', 'mailboxes/apple', managementRoute].includes(route),
     render,
-    afterRender() { if (loading) bindBalanceRead(); },
+    afterRender({ routeChanged } = {}) {
+      if (loading) bindBalanceRead();
+      if (routeChanged && isBalanceRoute() && localData) void refreshManagement();
+    },
+    onDataChanges(scopes) {
+      if (isBalanceRoute() && ['commerce', 'inventory', 'settings'].some(scope => scopes.includes(scope)))
+        return refreshManagement();
+    },
     onClick,
     onSubmit: submit,
     onInput,
     onChange: (node) => {
+      if (S.route === managementRoute && ['apple-management-state', 'apple-management-plan', 'apple-management-sort'].includes(node.id)) {
+        Object.assign(managementView(), { [node.id.slice('apple-management-'.length)]: node.value, page: 1 });
+        A.render();
+        return true;
+      }
       if (node.closest('form[data-apple-draft]')) {
         saveDrafts();
         return true;
@@ -1237,6 +1436,11 @@
       return false;
     },
     preserveDraft: saveDrafts
+  });
+  document.addEventListener?.('id-pagination-change', ({ detail, target }) => {
+    if (S.route !== managementRoute || detail.id !== 'apple-management' || !$('#main')?.contains(target)) return;
+    Object.assign(managementView(), { page: detail.page, pageSize: detail.pageSize });
+    A.render();
   });
   if (localData) void ensureReady();
 })();

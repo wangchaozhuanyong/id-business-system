@@ -20,6 +20,11 @@ test('embedded recharge retains ordinary drafts across reloads, isolates records
   await page.route('**/*', route => new URL(route.request().url()).origin === origin &&
     ['GET', 'HEAD'].includes(route.request().method()) ? route.continue() : route.abort());
   await page.route('**/integrations/codexdaichong/demo-only.js', route => route.fulfill({ contentType: 'text/javascript', body: '' }));
+  await page.route('**/integrations/codexdaichong/api/admin/recharge-routing', route => route.fulfill({ json: {
+    success: true, version: 1, audit: [], checks: [], proxyCountries: [], proxyLabels: [],
+    regions: { PH: { label: '菲律宾', currency: 'PHP' }, EG: { label: '埃及', currency: 'EGP' } },
+    plans: { plus: 'PH', pro100: 'EG', pro200: 'PH', pro500: 'EG' }
+  } }));
   const selector = '#main > [data-page-region]:not([hidden]) .recharge-integration__content iframe:not([hidden])';
   const frame = () => page.frameLocator(selector);
   const navigate = async hash => { await page.evaluate(hash => { location.hash = '#/' + hash; }, hash); };
@@ -99,31 +104,39 @@ test('embedded recharge retains ordinary drafts across reloads, isolates records
   // Restoring a selector also restores the derived plan/region presentation.
   await page.locator('[data-action="ops-integrated-view"][data-view="checkout_debug"]').click();
   await frame().locator('#checkout_debug.active').waitFor();
-  await frame().locator('#checkout_plan_type').selectOption('pro200');
+  await frame().locator('#checkout_plan_type').selectOption('pro100');
   await frame().locator('#checkout_plan_name').fill('custom-plan-draft');
-  await frame().locator('#checkout_region_selector').selectOption('MY');
+  assert(await frame().locator('#checkout_region_selector').isDisabled());
+  await assertEventually(() => frame().locator('#checkout_region_selector').inputValue(), 'EG');
   await navigate('customers/list');
   await page.locator('#main > [data-page-region]:not([hidden]) [data-recharge-module]').waitFor({ state: 'detached' });
   await navigate('online-recharge/chatgpt');
   await frame().locator('#checkout_debug.active').waitFor();
   await assertEventually(() => frame().locator('#checkout_plan_name').inputValue(), 'custom-plan-draft');
-  assert.equal(await frame().locator('#checkout_plan_type').inputValue(), 'pro200');
-  assert.equal(await frame().locator('#checkout_region_selector').inputValue(), 'MY');
-  assert.match(await frame().locator('#checkout_region_hint').textContent(), /马来西亚/);
+  assert.equal(await frame().locator('#checkout_plan_type').inputValue(), 'pro100');
+  await assertEventually(() => frame().locator('#checkout_region_selector').inputValue(), 'EG');
+  assert.match(await frame().locator('#checkout_region_hint').textContent(), /埃及/);
 
-  // The BitBrowser iframe keeps the editable window/configuration text, never its secrets.
+  // The BitBrowser iframe keeps connection drafts and clears the authorization and its email.
   await navigate('recharge/start');
   const bit = () => page.frameLocator('.recharge-integration__frame--bit-local');
-  await bit().locator('#bit-window-name').fill('Draft browser window');
+  const windowEmail = 'draft-window@example.test';
+  await bit().locator('#bit-authorization-json').fill(JSON.stringify({
+    sessionToken: 'synthetic-session', user: { id: 'user-fixture', email: windowEmail },
+    account: { id: 'account-fixture' }
+  }));
+  await assertEventually(() => bit().locator('#bit-window-name').inputValue(), windowEmail);
   await bit().locator('#bit-connection-name').fill('Draft connection');
   await bit().locator('#bit-local-token').fill('fixture-local-secret');
   await navigate('customers/list');
   await page.locator('#main > [data-page-region]:not([hidden]) [data-recharge-module]').waitFor({ state: 'detached' });
   await navigate('recharge/start');
-  await assertEventually(() => bit().locator('#bit-window-name').inputValue(), 'Draft browser window');
-  assert.equal(await bit().locator('#bit-connection-name').inputValue(), 'Draft connection');
+  await assertEventually(() => bit().locator('#bit-connection-name').inputValue(), 'Draft connection');
+  assert.equal(await bit().locator('#bit-window-name').inputValue(), '');
   assert.equal(await bit().locator('#bit-local-token').inputValue(), '');
-  assert(!JSON.stringify(await page.evaluate(() => window.IDRechargeDrafts.read('bit-local'))).includes('fixture-local-secret'));
+  const bitDraft = JSON.stringify(await page.evaluate(() => window.IDRechargeDrafts.read('bit-local')));
+  assert(!bitDraft.includes(windowEmail));
+  assert(!bitDraft.includes('fixture-local-secret'));
   assert.deepEqual(errors, []);
 });
 

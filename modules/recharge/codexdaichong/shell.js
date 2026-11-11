@@ -2,13 +2,20 @@
   const origin = window.location.origin;
   const standalone = window.parent === window;
   const root = document.documentElement;
-  const taskLog = new URLSearchParams(window.location.search).get('taskLog');
+  const search = new URLSearchParams(window.location.search);
+  const taskLog = search.get('taskLog');
+  const telegramSettings = !standalone && window.location.pathname.endsWith('/admin') &&
+    search.get('section') === 'telegram' && !taskLog;
+  if (telegramSettings) root.dataset.rechargeTelegram = 'loading';
   if (!standalone && window.location.pathname.endsWith('/admin') && /^[\w-]{1,128}$/.test(taskLog ?? '')) {
     root.dataset.rechargeTaskLog = '';
     window.idRechargeTaskLog = taskLog;
   }
   root.dataset.rechargeNavigationLocked = 'false';
   let reportType = '';
+  let updateTableLayout;
+  let syncWorkspaceViewport;
+  let telegramStatus;
   window.idRechargeVisible = standalone;
   function setVisible(visible) {
     window.idRechargeVisible = visible;
@@ -26,6 +33,137 @@
   }
   let restoreDrafts = () => {};
   if (!standalone) syncTheme();
+
+  function setupWorkspaceViewport() {
+    const workspace = document.body.hasAttribute('data-recharge-workspace');
+    const frame = window.frameElement;
+    const embedded = frame?.classList.contains('recharge-integration__frame');
+    if (!embedded && !workspace) return;
+    const host = frame?.ownerDocument.defaultView || window;
+    const sync = () => {
+      if (embedded && !frame.getClientRects().length) return;
+      // The budget belongs to the host so reporting the iframe height cannot enlarge it.
+      const available = embedded
+        ? host.IDPagination?.workspaceViewportHeight?.(frame) : host.innerHeight;
+      if (embedded && !Number.isFinite(available)) return;
+      root.toggleAttribute('data-recharge-viewport', embedded === true);
+      const value = (workspace ? Math.max(640, available) : available) + 'px';
+      if (root.style.getPropertyValue('--workspace-available-height') !== value)
+        root.style.setProperty('--workspace-available-height', value);
+    };
+    sync();
+    host.addEventListener('resize', sync);
+    const observer = new ResizeObserver(sync);
+    if (embedded) {
+      const toolbar = frame.closest('.recharge-integration')?.querySelector('.recharge-integration__toolbar');
+      const footer = frame.closest('main')?.nextElementSibling;
+      if (toolbar) observer.observe(toolbar);
+      if (footer?.matches('.workspace-footer')) observer.observe(footer);
+    }
+    window.addEventListener('pagehide', event => {
+      if (event.persisted) return;
+      host.removeEventListener('resize', sync);
+      observer.disconnect();
+    });
+    return sync;
+  }
+
+  function setupWorkspaceLog() {
+    const viewport = document.getElementById('workspaceLogViewport');
+    const entries = document.getElementById('workspaceLogEntries');
+    const empty = document.getElementById('workspaceLogEmpty');
+    const follow = document.getElementById('workspaceLogFollow');
+    const latest = document.getElementById('workspaceLogLatest');
+    const refresh = document.getElementById('workspaceLogRefresh');
+    const status = document.getElementById('workspaceLogStatus');
+    const clock = new Intl.DateTimeFormat('zh-CN', {
+      timeZone: 'Asia/Shanghai', hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit'
+    });
+    let state = 'idle', busy = false, offline = false, lastEntry = '', updated = '';
+    const recordedSteps = new Set();
+    let latestStep;
+    const renderStatus = () => {
+      refresh.disabled = state !== 'running' || busy;
+      refresh.textContent = busy ? '刷新中…' : '刷新';
+      status.textContent = offline ? '连接中断，正在重连' : state === 'running'
+        ? '自动更新中' + (updated ? ' · ' + updated : '')
+        : state === 'finished' ? '更新已结束' + (updated ? ' · ' + updated : '')
+        : state === 'uncertain' ? '提交结果待核对' : state === 'submitting' ? '正在确认提交结果' : '等待提交';
+    };
+    const scrollLatest = () => { viewport.scrollTop = viewport.scrollHeight; };
+    const setFollow = (enabled) => {
+      follow.checked = enabled;
+      latest.hidden = enabled;
+      if (enabled) scrollLatest();
+    };
+    follow.addEventListener('change', () => setFollow(follow.checked));
+    latest.addEventListener('click', () => setFollow(true));
+    viewport.addEventListener('scroll', () => {
+      if (follow.checked && viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop > 24)
+        setFollow(false);
+    }, { passive: true });
+    refresh.addEventListener('click', () => window.idRechargeRefreshTask?.());
+    const validTime = at => Number.isSafeInteger(at) && at > 0 && at <= 8.64e15;
+    const append = (text, tone, at) => {
+      empty.hidden = true;
+      const entry = document.createElement('li');
+      entry.dataset.tone = tone;
+      const instant = validTime(at) ? at : Date.now();
+      entry.dataset.at = String(instant);
+      const time = document.createElement('time');
+      const date = new Date(instant);
+      time.dateTime = date.toISOString();
+      time.textContent = clock.format(date);
+      entry.append(time, document.createTextNode('  ' + text));
+      const following = [...entries.children].find(child => Number(child.dataset.at) > instant);
+      entries.insertBefore(entry, following || null);
+      if (follow.checked) scrollLatest();
+    };
+    const record = (text, tone = 'running', at) => {
+      const signature = tone + ':' + text;
+      if (!text || signature === lastEntry) return;
+      lastEntry = signature;
+      append(text, tone, at);
+    };
+    window.idRechargeWorkspaceLog = {
+      record,
+      syncSteps(steps, labels) {
+        for (const step of Array.isArray(steps) ? steps.slice(-80) : []) {
+          if (!step || !Object.hasOwn(labels, step.stage) || !validTime(step.at)) continue;
+          const key = step.stage + ':' + step.at;
+          if (recordedSteps.has(key)) continue;
+          recordedSteps.add(key);
+          const label = labels[step.stage];
+          append(label, 'running', step.at);
+          if (!latestStep || step.at >= latestStep.at) latestStep = { label, at: step.at };
+        }
+        return latestStep?.label;
+      },
+      reset() {
+        entries.replaceChildren();
+        empty.hidden = false;
+        recordedSteps.clear();
+        latestStep = undefined;
+        state = 'idle'; busy = false; offline = false; lastEntry = ''; updated = '';
+        setFollow(true);
+        renderStatus();
+      },
+      state(value) { state = value; renderStatus(); },
+      refreshing(value) { busy = value; renderStatus(); },
+      connected() {
+        if (offline) record('连接已恢复，继续更新任务状态。');
+        offline = false;
+        updated = clock.format(new Date());
+        renderStatus();
+      },
+      disconnected() {
+        if (!offline) record('连接暂时中断，已保留记录，正在重新连接。', 'review');
+        offline = true;
+        renderStatus();
+      }
+    };
+    window.IDTitleHelp.attach(document.getElementById('workspace-log-title'), document.getElementById('workspace-log-help'));
+  }
 
   function syncTheme(theme) {
     try {
@@ -61,7 +199,17 @@
 
   function report(type) {
     if (type === 'ready') restoreDrafts();
-    if (type !== 'resize' && type !== 'view-context') reportType = type;
+    if (type === 'ready' || type === 'view-context') {
+      syncWorkspaceViewport?.();
+      updateTableLayout?.();
+    }
+    if (type !== 'resize' && type !== 'view-context') {
+      reportType = type;
+      if (telegramSettings) {
+        root.dataset.rechargeTelegram = type;
+        updateTelegramStatus();
+      }
+    }
     if (standalone) return;
     const context = type === 'ready' || type === 'view-context';
     window.parent.postMessage(
@@ -124,7 +272,12 @@
       syncTheme(message.theme);
     } else if (message.type === 'visibility' && typeof message.visible === 'boolean') {
       setVisible(message.visible);
-    } else if (message.type === 'select-view') window.idRechargeSelect(message.view);
+    } else if (message.type === 'select-view') {
+      window.idRechargeSelect(message.view);
+    } else if (!standalone && message.type === 'data-change' &&
+        Array.isArray(message.scopes) && message.scopes.includes('card-types')) {
+      window.idRechargeCardTypesChanged?.();
+    }
   });
 
   function styleAdminLayout() {
@@ -158,6 +311,26 @@
     });
     for (const view of document.querySelectorAll('.page-view'))
       viewChanges.observe(view, { attributes: true, attributeFilter: ['class'] });
+  }
+
+  function setupRechargeCellText() {
+    let dialog;
+    document.addEventListener('click', (event) => {
+      const preview = event.target.closest('.recharge-cell-text');
+      if (!preview) return;
+      if (!dialog) {
+        dialog = document.createElement('dialog');
+        dialog.className = 'recharge-cell-dialog';
+        dialog.setAttribute('aria-labelledby', 'recharge-cell-dialog-title');
+        dialog.innerHTML = `
+          <h2 id="recharge-cell-dialog-title">完整内容</h2>
+          <div class="recharge-cell-full-text"></div>
+          <form method="dialog"><button class="btn btn-secondary" autofocus>关闭</button></form>`;
+        document.body.append(dialog);
+      }
+      dialog.querySelector('.recharge-cell-full-text').textContent = preview.textContent;
+      dialog.showModal();
+    });
   }
 
   function setupAdminDrafts() {
@@ -290,6 +463,74 @@
     restoreDrafts();
   }
 
+  function setupWorkspaceClipboard() {
+    for (const actions of document.querySelectorAll('[data-workspace-clipboard]')) {
+      const input = document.getElementById(actions.dataset.workspaceClipboard);
+      const status = document.getElementById(input.id + 'ClipboardStatus');
+      const paste = actions.querySelector('[data-paste]');
+      const clear = actions.querySelector('[data-clear]');
+      const singleLine = input instanceof HTMLInputElement;
+      let revision = 0;
+      function syncButtons() {
+        paste.disabled = input.readOnly;
+        clear.disabled = input.readOnly || !input.value;
+      }
+      function editable() {
+        return window.idRechargeVisible && input.getClientRects().length > 0 &&
+          !input.readOnly && !input.matches(':disabled');
+      }
+      function apply(value) {
+        input.value = value;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      input.addEventListener('input', () => {
+        revision++;
+        status.textContent = '';
+        syncButtons();
+      });
+      new MutationObserver(() => {
+        revision++;
+        syncButtons();
+      }).observe(input, { attributes: true, attributeFilter: ['readonly'] });
+      syncButtons();
+      clear.addEventListener('click', () => {
+        if (!editable()) return;
+        apply('');
+        input.focus();
+      });
+      paste.addEventListener('click', async () => {
+        if (!editable()) return;
+        const started = ++revision;
+        const previous = input.value;
+        const current = () => started === revision && previous === input.value && editable();
+        status.textContent = '';
+        let text;
+        try {
+          text = await navigator.clipboard.readText();
+        } catch {
+          if (current()) {
+            input.focus();
+            status.textContent = '无法读取剪贴板，请在输入框内手动粘贴。';
+          }
+          return;
+        }
+        if (!current()) return;
+        if (!text.trim()) {
+          status.textContent = '剪贴板没有可粘贴的文本。';
+          return;
+        }
+        if (singleLine) {
+          text = text.trim();
+          if (text.length > input.maxLength || /[\r\n]/.test(text)) {
+            status.textContent = '请复制一条完整的兑换码后再粘贴。';
+            return;
+          }
+        }
+        apply(text);
+      });
+    }
+  }
+
   function setupWorkspaceGuide() {
     for (const control of document.querySelectorAll('[data-workspace-tab]')) {
       control.addEventListener('click', (event) => {
@@ -318,6 +559,42 @@
     }
   }
 
+  function updateTelegramStatus() {
+    if (!telegramStatus) return;
+    const status = root.dataset.rechargeTelegram;
+    telegramStatus.hidden = status === 'ready';
+    telegramStatus.textContent = {
+      loading: '正在读取原代充 Telegram 设置…',
+      'telegram-locked': '代充通知已进入统一接管，请在监控与通知核对。',
+      'session-expired': '统一登录已失效，请重新登录。',
+      unavailable: '暂时无法读取原代充 Telegram 设置，请关闭后重新打开。'
+    }[status] || '';
+  }
+
+  function placeTelegramSettings() {
+    const panel = document.querySelector('[data-recharge-telegram-form]');
+    if (!panel) return;
+    if (!telegramSettings) {
+      panel.remove();
+      return;
+    }
+    const main = panel.closest('main');
+    const title = panel.querySelector('.panel-title');
+    title.nextElementSibling?.remove();
+    title.remove();
+    panel.style.removeProperty('margin-top');
+    for (const row of panel.querySelectorAll('.toggle-field')) {
+      const label = row.querySelector('.toggle-label');
+      const input = row.querySelector('input');
+      label.id = input.id + '-label';
+      input.setAttribute('aria-labelledby', label.id);
+    }
+    telegramStatus = document.createElement('p');
+    telegramStatus.setAttribute('role', 'status');
+    main.append(telegramStatus, panel);
+    updateTelegramStatus();
+  }
+
   window.addEventListener('DOMContentLoaded', () => {
     if (window.idRechargeTaskLog) {
       const dialog = document.querySelector('#task_log_modal_overlay .task-log-modal');
@@ -332,8 +609,11 @@
       return;
     }
     if (standalone) document.body.dataset.standalone = 'true';
+    syncWorkspaceViewport = setupWorkspaceViewport();
     setupAdminDrafts();
     if (document.body.dataset.rechargeView === 'admin') {
+      placeTelegramSettings();
+      setupRechargeCellText();
       const subtitleSelector =
         'p:not([id]):not([role]), #orbitcard_usage_hint, .log-page-toolbar-hint';
       for (const title of document.querySelectorAll('h2.panel-title, .log-page-toolbar h2')) {
@@ -353,10 +633,15 @@
         for (const title of document.querySelectorAll('.page-header > h1'))
           window.IDTitleHelp.attach(title, title.nextElementSibling);
       } else styleAdminLayout();
+      updateTableLayout = window.IDPagination?.watchTableLayout?.(
+        document.querySelector('.main-content'),
+        { hostFrame: window.frameElement, rows: '.table-container' }
+      );
     } else {
       const tab = new URLSearchParams(location.search).get('tab');
       const workspaceTitle = document.querySelector('.workspace-recharge-standalone-title');
       if (workspaceTitle) {
+        setupWorkspaceLog();
         if (standalone)
           window.IDTitleHelp.attach(
             workspaceTitle.querySelector('h1'),
@@ -367,7 +652,12 @@
           document.querySelector('#workspace-code-title'),
           document.querySelector('#workspace-code-title + p')
         );
+        window.IDTitleHelp.attach(
+          document.querySelector('#workspace-account-title'),
+          document.querySelector('#workspace-account-title + p')
+        );
         setupWorkspaceGuide();
+        setupWorkspaceClipboard();
       } else if (!standalone && tab === 'query') {
         document.body.dataset.rechargeQuery = '';
       } else {
@@ -383,9 +673,17 @@
       window.idRechargeSelect(tab);
       report('ready');
     }
-    const observer = new ResizeObserver(() => {
-      if (reportType === 'ready') report('resize');
+    const observer = new ResizeObserver((entries) => {
+      for (const { target } of entries) {
+        if (target === document.body) {
+          if (reportType === 'ready') report('resize');
+        } else if (target.parentElement?.querySelector('input[id$="_log_autoscroll"]:checked')) {
+          target.scrollTop = target.scrollHeight;
+        }
+      }
     });
     observer.observe(document.body);
+    if (root.hasAttribute('data-recharge-viewport'))
+      for (const log of document.querySelectorAll('.runtime-log-pre-wrap')) observer.observe(log);
   });
 })();

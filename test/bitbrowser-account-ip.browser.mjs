@@ -36,10 +36,10 @@ test('account connection and IP stay separate; proxy creation, retries, saved ke
         }
         selectedBody = request.postDataJSON(); return json({ ...items[0], link: 'socks5://synthetic-user:synthetic-pass@192.0.2.8:8080' });
       }
-      if (path === '/assets/bitbrowser/login/index.mjs') return route.fulfill({ contentType: 'text/javascript', body: `export { V2_RECHARGE_BROWSER_DEFAULTS as BIT_BROWSER_LOGIN_DEFAULTS } from './browser-options.mjs'; export class BitBrowserLoginError extends Error {} export async function runBitBrowserJsonLogin(input) { const email=JSON.parse(input.sessionJson).user.email; window.fixtureLoginAttempts=(window.fixtureLoginAttempts||0)+1; await new Promise(resolve=>{window.releaseFixtureLogin=resolve}); if(window.fixtureLoginAttempts===1)throw new BitBrowserLoginError('合成控制通道失败'); window.fixtureLaunch={country:input.expectedCountryCode,protocol:input.proxyType,host:input.browserOptions.staticHost,port:input.browserOptions.staticPort,email}; return {email,profileSequence:56}; }` });
+      if (path === '/assets/bitbrowser/login/index.mjs') return route.fulfill({ contentType: 'text/javascript', body: `export { V2_RECHARGE_BROWSER_DEFAULTS as BIT_BROWSER_LOGIN_DEFAULTS } from './browser-options.mjs'; export class BitBrowserLoginError extends Error {} export async function runBitBrowserJsonLogin(input) { const email=JSON.parse(input.sessionJson).user.email; window.fixtureLoginAttempts=(window.fixtureLoginAttempts||0)+1; await new Promise(resolve=>{window.releaseFixtureLogin=resolve}); if(window.fixtureLoginAttempts===1)throw new BitBrowserLoginError('合成控制通道失败'); window.fixtureLaunch={country:input.expectedCountryCode,protocol:input.proxyType,host:input.browserOptions.staticHost,port:input.browserOptions.staticPort,email,windowName:input.windowName}; return {email,profileSequence:56}; }` });
       let file;
       if (path === '/') file = '../frontend/bitbrowser-local.html';
-      else if (['/prototype.css', '/recharge-integration.css', '/title-help.css', '/title-help.js'].includes(path)) file = '../frontend/' + path.slice(1);
+      else if (['/prototype.css', '/design-tokens.css', '/tabs.css', '/recharge-integration.css', '/title-help.css', '/title-help.js', '/pagination.css', '/pagination.js'].includes(path)) file = '../frontend/' + path.slice(1);
       else if (path === '/assets/bitbrowser/local.mjs') file = '../frontend/bitbrowser-local.mjs';
       else if (path === '/assets/bitbrowser/proxies.mjs') file = '../frontend/bitbrowser-proxies.mjs';
       else if (path.startsWith('/assets/bitbrowser/')) file = '../modules/recharge/bitbrowser/' + path.slice('/assets/bitbrowser/'.length);
@@ -94,12 +94,19 @@ test('account connection and IP stay separate; proxy creation, retries, saved ke
     await page.locator('#bit-ip-save').click(); await page.locator('#bit-proxy-editor').waitFor({ state: 'hidden' });
     assert.equal(await page.locator('#bit-execution-proxy').inputValue(), items[0].id);
     // Long, multi-page data stays in the list; no extra production or network writes.
-    items.push(...Array.from({ length: 11 }, (_, i) => ({ ...items[0], id: `fixture-${i}`, name: `合成长名称代理 ${i + 1} · 办公室备用网络资料` })));
+    items.push(...Array.from({ length: 21 }, (_, i) => ({ ...items[0], id: `fixture-${i}`, name: `合成长名称代理 ${i + 1} · 办公室备用网络资料` })));
     await page.locator('#bit-tab-library').click(); await page.locator('#bit-refresh-proxies').click();
-    await page.waitForFunction(() => document.querySelector('#bit-ip-count').textContent === '12');
-    await page.locator('#bit-ip-next').click(); await page.locator('#bit-ip-next').click();
-    assert.match(await page.locator('#bit-ip-page-info').innerText(), /3 \/ 3/);
-    assert.equal(await page.locator('#bit-ip-next').isDisabled(), true);
+    await page.waitForFunction(() => document.querySelector('#bit-ip-count').textContent === '22');
+    const ipPager = page.locator('nav[data-pagination="bit-ip"]');
+    assert.equal(await ipPager.locator('[data-pagination-size]').inputValue(), '20');
+    await ipPager.locator('.pagination-jump summary').click();
+    await ipPager.locator('[data-pagination-target]').fill('2');
+    await ipPager.locator('[data-pagination-target]').press('Enter');
+    assert.equal(await page.locator('#bit-ip-rows tr').count(), 2);
+    assert.equal(await ipPager.getByRole('button', { name: '下一页' }).isDisabled(), true);
+    await ipPager.locator('[data-pagination-size]').selectOption('50');
+    assert.equal(await page.locator('#bit-ip-rows tr').count(), 22);
+    assert.equal(await ipPager.getAttribute('data-page'), '1');
     await page.locator('#bit-ip-search').fill('没有匹配的合成资料');
     assert.equal(await page.locator('#bit-ip-empty').isVisible(), true);
     await page.locator('#bit-ip-search').fill('新电脑');
@@ -149,33 +156,50 @@ test('account connection and IP stay separate; proxy creation, retries, saved ke
       assert.equal(await page.locator('#bit-local-token').inputValue(), 'synthetic-interface-key');
     }
     const authorization = JSON.stringify({ sessionToken: 'synthetic-session', user: { id: 'user-fixture', email: 'fixture@example.test' }, account: { id: 'account-fixture' } });
-    await page.locator('#bit-authorization-json').fill(authorization);
+    const authInput = page.locator('#bit-authorization-json');
+    const windowName = page.getByLabel('窗口名称', { exact: true });
+    assert.equal(await windowName.isEditable(), false);
+    await authInput.evaluate((input, value) => {
+      const clipboardData = new DataTransfer();
+      clipboardData.setData('text/plain', value);
+      input.dispatchEvent(new ClipboardEvent('paste', { clipboardData, cancelable: true }));
+    }, authorization);
+    assert.equal(await windowName.inputValue(), 'fixture@example.test');
     assert.equal(await page.locator('#bit-start-login').isEnabled(), true);
     await page.locator('#bit-clear-authorization').click();
-    assert.equal(await page.locator('#bit-window-name').inputValue(), '');
-    assert.equal(await page.locator('#bit-authorization-json').inputValue(), '');
+    assert.equal(await windowName.inputValue(), '');
+    assert.equal(await authInput.inputValue(), '');
     assert.equal(await page.locator('#bit-authorization-result').innerText(), '');
     assert.equal(await page.locator('#bit-start-login').isDisabled(), true);
     assert.equal(await page.locator('#bit-execution-proxy').inputValue(), items[0].id);
     assert.equal(await page.locator('#bit-connection-profile').inputValue(), profile.id);
     if (width === 1440 && theme === 'light') {
+      const importedEmail = 'imported@' + 'subdomain.'.repeat(12) + 'example.test';
+      const importedAuthorization = authorization.replace('fixture@example.test', importedEmail);
+      const file = page.locator('#bit-authorization-file');
+      await file.setInputFiles({ name: 'synthetic-authorization.json', mimeType: 'application/json', buffer: Buffer.from(importedAuthorization) });
+      await page.getByText('授权已载入 · ' + importedEmail, { exact: true }).waitFor();
+      assert.equal(await windowName.inputValue(), importedEmail);
+      await authInput.fill('{');
+      assert.equal(await windowName.inputValue(), '');
+      assert.equal(await page.locator('#bit-start-login').isDisabled(), true);
+
       await page.evaluate(() => {
         const original = File.prototype.text;
         File.prototype.text = function () { return new Promise(resolve => { window.finishAuthorizationFile = value => { File.prototype.text = original; resolve(value); }; }); };
       });
-      await page.locator('#bit-authorization-file').setInputFiles({ name: 'synthetic-authorization.json', mimeType: 'application/json', buffer: Buffer.from(authorization) });
+      await file.setInputFiles({ name: 'synthetic-authorization.json', mimeType: 'application/json', buffer: Buffer.from(authorization) });
       await page.getByText('正在读取授权文件…', { exact: true }).waitFor();
       await page.locator('#bit-clear-authorization').click();
       await page.evaluate(value => window.finishAuthorizationFile(value), authorization);
+      assert.equal(await windowName.inputValue(), '');
       assert.equal(await page.locator('#bit-authorization-result').innerText(), '');
       assert.equal(await page.locator('#bit-start-login').isDisabled(), true);
     }
-    await page.locator('#bit-authorization-json').fill(authorization);
-    await page.locator('#bit-window-name').fill('手工填写的窗口');
-    await page.locator('#bit-clear-authorization').click();
-    assert.equal(await page.locator('#bit-window-name').inputValue(), '手工填写的窗口');
+    await authInput.fill(authorization);
     const nextAuthorization = JSON.stringify({ ...JSON.parse(authorization), user: { id: 'user-fixture-next', email: 'next-fixture@example.test' } });
-    await page.locator('#bit-authorization-json').fill(nextAuthorization);
+    await authInput.fill(nextAuthorization);
+    assert.equal(await windowName.inputValue(), 'next-fixture@example.test');
     await page.screenshot({ path: fileURLToPath(new URL(`authorization-${theme}-${width}.png`, output)), fullPage: true });
     await page.locator('#bit-start-login').click();
     await page.waitForFunction(() => typeof window.releaseFixtureLogin === 'function');
@@ -195,7 +219,7 @@ test('account connection and IP stay separate; proxy creation, retries, saved ke
     assert.equal(await page.locator('#bit-start-login').isEnabled(), true);
     assert.equal(await page.evaluate(() => window.fixtureLoginAttempts), 2);
     assert.deepEqual(selectedBody, { id: items[0].id, version: 2 });
-    assert.deepEqual(await page.evaluate(() => window.fixtureLaunch), { country: '', protocol: 'socks5', host: '192.0.2.8', port: 8080, email: 'next-fixture@example.test' });
+    assert.deepEqual(await page.evaluate(() => window.fixtureLaunch), { country: '', protocol: 'socks5', host: '192.0.2.8', port: 8080, email: 'next-fixture@example.test', windowName: 'next-fixture@example.test' });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
     await page.screenshot({ path: fileURLToPath(new URL(`${theme}-${width}.png`, output)), fullPage: true });
     assert.deepEqual(errors, []); assert.deepEqual(unexpected, []); await context.close();

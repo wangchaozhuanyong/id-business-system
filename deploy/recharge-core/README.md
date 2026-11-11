@@ -1,9 +1,10 @@
 # 原版核心的生产运行配套
 
-本目录只包含外围部署代码，原版 200 个追踪文件全部按 `f4d7761e0036892e6dd68ec64c5447b513ca37da` 核验。不得在此加入原版替换、请求内重试或付款逻辑。
+本目录只包含外围部署代码，203 个追踪文件全部按 `4e9bb201cf481d4bcc85da34970fc26c63ab818a` 及用户批准的选路、未使用码归还两份精确补丁核验（199 个原文件不变，4 个按哈希核验）。未使用码归还边界见 `docs/RECHARGE_CODE_RETURNS_20261108.md`。不得在此加入请求内支付重试或付款逻辑。选路授权边界和两张新增表见 `docs/RECHARGE_PLAN_ROUTING_20261108.md`。
 
 - `Dockerfile`：从既有固定 Node 24 镜像重新构建，安装原版锁定依赖、Chromium 和按现网状态选择的可选 Python 配套。构建上下文为 `source/`（确定 main 的归档）、`upstream/`（固定原仓库）、`engine/`（未改写原版加两份版本标记）。构建时必须设置 `org.opencontainers.image.revision` 和 `org.id-business.upstream.revision` 标签。
 - `entry.mjs`：私有 stdin 依次接收数据库密码、既有桥接密钥、原运行设置 JSON，adapter 额外接收宿主签发的短期网络证明。原版角色启动前全量核验；宿主预检专用库后直接运行原版 server.js，不向原进程预加载监控；adapter 不加载或替换任何原版执行函数。
+- `entry.mjs migrate-native-routing` 使用同一私有输入与已核验镜像执行幂等迁移。保留套餐配置与实测记录，新增独立的 `id_recharge_proxy_country_labels` 表及标注审计。执行前须确认原版 `proxy_assets` 表已初始化，并完成入口暂停、空闲核验和加密备份。隔离合成数据库对应 `migrate-canary-routing`，回执为 `per-plan-routing-v2`、3 张表。
 - `run-recharge.py native <main-sha>`：在独立 bridge 容器运行原版，直连同一受管 MySQL 的私网接口，端口只映射至宿主 `127.0.0.1:44579`。共享内存为 2 GiB，精确挂载私有截图/录像、导出及 data 目录，保留 Python 原路径 /app/data，源码来自确定镜像。
 - `run-recharge.py adapter <main-sha>`：外围容器继续使用原 `127.0.0.1:44575` 接入地址，数据库仍为宿主回环；宿主真实 inspect 后签发 30 秒证明，容器不挂载 Docker socket。两个角色使用独立 systemd 服务，adapter 停止不影响原版进程。
 - `capture-options.mjs`：只通过私有管道将旧原版及其父进程的白名单配置交给 `systemd-creds encrypt`；有效原生签名设置保留，原设置缺失时派生稳定内存签名值。密钥不出现在 Docker 参数、源码、发布回执或本机备份。
@@ -19,3 +20,5 @@
 入口暂停由 `release-gate.py` 精确添加和移除本次 SHA 标记，只挡充值变更请求。Caddy 2.11 起支持信号重载；现网 2.10 且管理 API 关闭时使用同一容器的短暂重启，不升级网关或开放管理 API。重载后必须核对同容器、同镜像、同挂载，以及三个变更路由的固定响应和 `Retry-After`；不能只凭 HTTP 503 判定暂停生效。正式保护记录允许本次网关重启改变启动时间，MySQL 和媒体服务仍要求原容器及启动时间不变。
 
 宿主 native 启动器使用独立 flock 与唯一容器名/端口阻止并发启动；Docker 查询失败直接停止该次启动。数据库只读预检发生在启动前的短生命周期容器中；启动后不再持有数据库监控连接，不因辅助监控断线杀死正在付款的原版进程。服务明确停止仍按原信号退出。
+
+未使用码归还发布另执行 `entry.mjs migrate-native-code-returns`，只创建一张幂等回执附属表。隔离金丝雀先验证新增迁移和与原占用条件更新的八次并发竞争，再允许正式切换；不在生产库创建测试充值码。

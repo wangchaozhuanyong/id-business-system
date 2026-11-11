@@ -1,0 +1,71 @@
+/* Shared page, drawer and embedded-workspace tabs. The enclosing action row owns its separator. */
+:root { --tab-row-height: 60px; }
+.tabs {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  min-height: var(--tab-row-height);
+  gap: 24px;
+  margin: 0;
+  padding: 0 var(--panel-padding-inline);
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  background: transparent;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.tab {
+  flex: 0 0 auto;
+  border: 0;
+  background: transparent;
+  color: var(--secondary);
+  white-space: nowrap;
+}
+.tabs > .tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: var(--tab-row-height);
+  padding: 0 1px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 20px;
+  text-decoration: none;
+  transform: none;
+  transition: color var(--motion-fast) var(--motion-ease);
+}
+.tab:is(.active, [aria-selected='true'], [aria-pressed='true'], [aria-current='page']) {
+  color: var(--primary);
+  font-weight: 600;
+}
+.tabs > .tab:is(.active, [aria-selected='true'], [aria-pressed='true'], [aria-current='page']) {
+  border-bottom-color: var(--primary);
+  font-weight: 600;
+}
+.tabs > .tab:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: -4px;
+}
+.tab-count {
+  padding: 1px 5px;
+  background: var(--surface-soft);
+  border-radius: 4px;
+  margin-left: 5px;
+  font-size: 11px;
+}
+.tab:is(.active, [aria-selected='true']) .tab-count {
+  color: var(--primary);
+  background: var(--primary-soft);
+}
+@media (max-width: 900px) {
+  :root { --tab-row-height: 68px; }
+  .tabs { gap: 22px; }
+}

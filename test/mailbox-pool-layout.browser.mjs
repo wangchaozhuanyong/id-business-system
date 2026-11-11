@@ -6,7 +6,7 @@ import { root, origin, interceptDesign, settle } from './helpers/offline-design.
 const { chromium } = await import(process.env.ID_RECHARGE_QA_PLAYWRIGHT ? pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href : 'playwright');
 const output = process.env.ID_LAYOUT_QA_OUTPUT || path.join(root, '.runtime/mailbox-rows-20261107');
 await mkdir(output, { recursive: true });
-const browser = await chromium.launch({ headless: true }), results = [];
+const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL, headless: true }), results = [];
 const providers = ['google', 'apple', 'microsoft'];
 const fixture = Array.from({ length: 2003 }, (_, i) => ({
   id: `fixture-${i}`, email: i === 0 ? 'layout-0000.with-a-long-synthetic-address@example.test' : `layout-${String(i).padStart(4, '0')}@example.test`,
@@ -18,13 +18,22 @@ try {
   for (const width of (process.env.ID_QA_WIDTHS || '1440,1024,901,900,768,390,320').split(',').map(Number)) for (const theme of ['light', 'dark']) {
     const context = await browser.newContext({ viewport: { width, height: 900 }, serviceWorkers: 'block', permissions: ['clipboard-read', 'clipboard-write'] });
     const requests = await interceptDesign(context, { localFixtures: {}, actor: { id: 'synthetic', name: '离线验收', role: 'admin' } });
-    let rows = fixture, fail = false;
-    const codeReads = [], mutations = [], errors = [];
+    let rows = fixture, fail = false, failCodes = false, metadataReads = 0;
+    const codeReads = [], singleReads = [], mutations = [], errors = [];
     await context.route(origin + '/api/local/tools/mailbox-pool', route => {
       const request = route.request();
-      if (request.method() === 'GET') return route.fulfill(fail ? { status: 502, json: { error: '合成读取失败，请重试' } } : { json: { version: 1, defaultValidDays: 30, items: rows } });
+      if (request.method() === 'GET') {
+        metadataReads++;
+        return route.fulfill(fail ? { status: 502, json: { error: '合成读取失败，请重试' } } : { json: { version: 1, defaultValidDays: 30, items: rows } });
+      }
       if (request.method() === 'POST') {
-        const { id } = request.postDataJSON(); codeReads.push(id);
+        const { id, ids, version } = request.postDataJSON();
+        if (ids) {
+          codeReads.push({ ids, version });
+          if (failCodes) return route.fulfill({ status: 503, json: { error: '合成取码失败' } });
+          return route.fulfill({ json: { version, items: ids.map(id => ({ id, code: `SYNTHETIC-${id}-LAYOUT-ONLY` })) } });
+        }
+        singleReads.push(id);
         return route.fulfill({ json: { code: `SYNTHETIC-${id}-LAYOUT-ONLY` } });
       }
       mutations.push(request.method());
@@ -36,7 +45,7 @@ try {
     if (theme === 'dark') await page.locator('#theme-toggle').click();
     const drawer = page.locator('#plugin-tool-host');
     await page.goto(origin + '/#/plugins/mailboxes');
-    await drawer.getByRole('tab', { name: '邮箱池管理', exact: true }).click();
+    await drawer.locator('#ops-mailbox-pool').waitFor();
     const pool = drawer.locator('#ops-mailbox-pool'), list = pool.locator('.online-tool-mail-list');
     const waitCodes = () => page.waitForFunction(() => {
       const codes = [...document.querySelectorAll('[data-mailbox-code]')];
@@ -50,8 +59,8 @@ try {
           const r = n.getBoundingClientRect();
           return { x: r.x, y: r.y, width: r.width, height: r.height, bottom: r.bottom };
         });
-        const pager = el.querySelector('.mailbox-pool-pagination');
-        const clipped = pager ? [...pager.querySelectorAll('button,input,select')].some(n => { const r = n.getBoundingClientRect(), p = pager.getBoundingClientRect(); return r.left < p.left - 1 || r.right > p.right + 1; }) : false;
+        const pager = el.querySelector('[data-pagination="operations-mailbox-pool"]');
+        const clipped = pager ? [...pager.querySelectorAll('button,input,select')].some(n => { const r = n.getBoundingClientRect(), p = pager.getBoundingClientRect(); return r.width > 0 && (r.left < p.left - 1 || r.right > p.right + 1); }) : false;
         return { rows, overflow: el.scrollWidth > el.clientWidth + 1 || body.scrollWidth > body.clientWidth + 1, clipped, tableOverflow: viewport ? viewport.scrollWidth > viewport.clientWidth : false };
       });
       assert(!geometry.overflow && !geometry.clipped, `${width}/${theme}/${label} overflow`);
@@ -62,7 +71,7 @@ try {
     };
     await waitCodes();
     assert.equal(await pool.locator('.mailbox-account').count(), 20);
-    assert.deepEqual(codeReads, fixture.slice(0,20).map(r => r.id), '只读取当前页查询码');
+    assert.deepEqual(codeReads, [{ version: 1, ids: fixture.slice(0,20).map(r => r.id) }], '当前页查询码只发送一次请求');
     await measure('first-page');
     const firstRow = pool.locator('.mailbox-account').first();
     const rowHeight = (await firstRow.boundingBox()).height;
@@ -88,29 +97,34 @@ try {
     await pool.locator('.mailbox-account__more').first().press('Escape');
     assert.equal(await actions.count(), 0);
     await pool.locator('.mailbox-account__more').first().click();
-    await actions.waitFor();
-    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
-    await page.waitForFunction(() => !document.querySelector('.mailbox-account__actions:popover-open'));
-    await pool.locator('.mailbox-account__more').first().click();
     await pool.getByRole('button', { name: '更新授权', exact: true }).first().click();
     assert.equal(await actions.count(), 0);
-    assert(await pool.locator('#ops-managed-pool-form').isVisible());
-    assert(await pool.locator('#ops-managed-pool-form a[href="https://myaccount.google.com/apppasswords"]').isVisible());
-    const editorRect = await pool.locator('#ops-managed-pool-form').boundingBox();
-    assert(editorRect.y >= (await drawer.locator('.drawer-body').boundingBox()).y - 1 && editorRect.y < 900);
-    await pool.getByRole('button', { name: '取消', exact: true }).click();
+    const operation = page.locator('#drawer[open]');
+    assert(await operation.locator('#ops-managed-pool-form').isVisible());
+    await operation.getByLabel('查看应用专用密码说明', { exact: true }).click();
+    assert(await operation.locator('#ops-managed-pool-form a[href="https://myaccount.google.com/apppasswords"]').isVisible());
+    await operation.getByLabel('查看应用专用密码说明', { exact: true }).press('Escape');
+    const editorRect = await operation.locator('#ops-managed-pool-form').boundingBox();
+    assert(editorRect.y >= (await operation.locator('.drawer-body').boundingBox()).y - 1 && editorRect.y < 900);
+    await operation.getByRole('button', { name: '取消', exact: true }).click();
     await pool.locator('[data-action="ops-mailbox-pool-copy-existing"]').first().click();
     await page.waitForFunction(async () => await navigator.clipboard.readText() === 'SYNTHETIC-fixture-0-LAYOUT-ONLY');
+    assert.deepEqual(singleReads, [fixture[0].id], '手动复制继续使用既有单条读取');
     await pool.getByRole('button', { name: '下一页', exact: true }).click(); await waitCodes();
     assert.equal(await pool.locator('.mailbox-account').first().locator('strong').textContent(), fixture[20].email);
     await measure('second-page');
-    for (const size of [50,100]) {
+    for (const size of [10,50]) {
       const before = codeReads.length;
-      await pool.getByLabel('邮箱池每页条数', { exact: true }).selectOption(String(size)); await waitCodes();
+      await pool.getByLabel('每页条数', { exact: true }).selectOption(String(size)); await waitCodes();
       assert.equal(await pool.locator('.mailbox-account').count(), size);
-      assert.deepEqual(codeReads.slice(before), fixture.slice(0,size).map(r => r.id));
+      assert.deepEqual(codeReads.slice(before), [{ version: 1, ids: fixture.slice(0,size).map(r => r.id) }]);
     }
-    await pool.getByLabel('邮箱池页码', { exact: true }).fill('21');
+    await pool.locator('.mailbox-account__more').first().click();
+    await actions.waitFor();
+    await pool.locator('.online-tool-mail-list').evaluate(element => { element.scrollTop = element.scrollHeight; });
+    await page.waitForFunction(() => !document.querySelector('.mailbox-account__actions:popover-open'));
+    await pool.locator('.pagination-jump summary').click();
+    await pool.getByLabel('跳至页码', { exact: true }).fill('41');
     await pool.getByRole('button', { name: '跳转', exact: true }).click(); await waitCodes();
     assert.equal(await pool.locator('.mailbox-account').count(), 3);
     assert.equal(await pool.locator('.mailbox-account').last().locator('strong').textContent(), fixture[2002].email);
@@ -120,13 +134,35 @@ try {
     await actions.waitFor();
     await settle(page);
     assert(await actions.evaluate(el => { const r = el.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; }), '末行操作浮层不能越出屏幕');
-    await pool.locator('.mailbox-account__more').last().press('Escape');
+    const scrollBeforeOperation = await page.evaluate(() => ({ window: scrollY, panel: document.querySelector('#plugin-tool-host .drawer-body').scrollTop }));
+    await actions.getByRole('button', { name: '更新授权', exact: true }).click();
+    await operation.locator('#ops-managed-pool-form').waitFor();
+    await operation.getByRole('button', { name: '取消', exact: true }).click();
+    await operation.waitFor({ state: 'hidden' });
     assert.equal(await actions.count(), 0);
+    assert.equal(await pool.locator('[data-pagination="operations-mailbox-pool"]').getAttribute('data-page'), '41', '关闭行操作保留最后一页');
+    assert.equal(await pool.locator('.mailbox-account').count(), 3);
+    assert.deepEqual(await page.evaluate(() => ({ window: scrollY, panel: document.querySelector('#plugin-tool-host .drawer-body').scrollTop })), scrollBeforeOperation, '关闭抽屉保留列表滚动位置');
+    const readsBeforeReturn = codeReads.length;
+    const metadataBeforeReturn = metadataReads;
     await page.goto(origin + '/#/plugins/websites');
+    assert.equal(await page.locator('[data-mailbox-code]').count(), 0);
     await page.goto(origin + '/#/plugins/mailboxes');
-    await drawer.getByRole('tab', { name: '邮箱池管理', exact: true }).click(); await waitCodes();
-    assert.equal(await pool.getByLabel('邮箱池每页条数', { exact: true }).inputValue(), '100');
-    assert.equal(await pool.getByLabel('邮箱池页码', { exact: true }).inputValue(), '21');
+    await drawer.locator('#ops-mailbox-pool').waitFor(); await waitCodes();
+    assert.deepEqual(codeReads.slice(readsBeforeReturn), [{ version: 1, ids: fixture.slice(2000).map(r => r.id) }],
+      '切回复用列表资料，只为最后一页重新取码一次');
+    assert.equal(metadataReads, metadataBeforeReturn);
+    if (width === 1440 && theme === 'light') {
+      await page.goBack();
+      await pool.waitFor({ state: 'detached' });
+      await page.goForward();
+      await waitCodes();
+      assert.deepEqual(codeReads.slice(readsBeforeReturn + 1), [{ version: 1, ids: fixture.slice(2000).map(r => r.id) }],
+        '浏览器前进、后退各只挂载一次当前页面');
+      assert.equal(metadataReads, metadataBeforeReturn);
+    }
+    assert.equal(await pool.getByLabel('每页条数', { exact: true }).inputValue(), '50');
+    assert.equal(await pool.locator('[data-pagination="operations-mailbox-pool"]').getAttribute('data-page'), '41');
     await pool.getByLabel('搜索邮箱池', { exact: true }).fill('layout-1999'); await waitCodes();
     assert.equal(await pool.locator('.mailbox-account').count(), 1);
     assert.equal(await pool.locator('.mailbox-account strong').textContent(), fixture[1999].email);
@@ -155,10 +191,14 @@ try {
     for (const provider of providers) {
       await editor.locator('#ops-managed-provider').selectOption(provider);
       const href = provider === 'google' ? 'https://myaccount.google.com/apppasswords' : provider === 'apple' ? 'https://account.apple.com/' : 'https://account.microsoft.com/';
-      assert(await editor.locator(`a[href="${href}"]`).last().isVisible());
+      if (provider !== 'microsoft') await editor.getByLabel('查看应用专用密码说明', { exact: true }).click();
+      await editor.locator(`a[href="${href}"]`).last().waitFor();
+      assert(await editor.locator(`a[href="${href}"]`).last().isVisible(), `${width}/${theme}/${provider} 指引应可查看`);
+      if (provider !== 'microsoft') await editor.getByLabel('查看应用专用密码说明', { exact: true }).press('Escape');
     }
     await editor.getByRole('button', { name: '取消', exact: true }).click();
     await pool.getByRole('button', { name: '批量导入', exact: true }).click();
+    await editor.getByLabel('查看收信服务商说明', { exact: true }).click();
     for (const provider of providers) {
       await editor.locator('#ops-managed-batch-provider').selectOption(provider);
       assert(await editor.locator('[data-mailbox-batch-help] a').first().isVisible());
@@ -172,8 +212,17 @@ try {
     await pool.getByRole('button', { name: '刷新', exact: true }).click();
     await pool.getByText('合成读取失败，请重试', { exact: false }).waitFor();
     assert.equal(await pool.locator('.mailbox-account').count(), 1, '刷新失败保留已有结果');
+    if (width === 1440 && theme === 'light') {
+      fail = false;
+      failCodes = true;
+      await pool.getByRole('button', { name: '重试', exact: true }).click();
+      await pool.locator('[data-mailbox-code]').getByText('读取失败', { exact: true }).waitFor();
+      await pool.locator('[data-action="ops-mailbox-pool-copy-existing"]').click();
+      await waitCodes();
+      assert.deepEqual(singleReads, [fixture[0].id, fixture[1].id]);
+    }
     fail = false; rows = [];
-    await pool.getByRole('button', { name: '重试', exact: true }).click();
+    await pool.getByRole('button', { name: failCodes ? '刷新' : '重试', exact: true }).click();
     await pool.getByText('邮箱池暂无记录', { exact: true }).waitFor(); await measure('empty');
     assert.deepEqual(errors, []); assert.deepEqual(mutations, []);
     assert.deepEqual(requests.external, []); assert.deepEqual(requests.unavailable, []);

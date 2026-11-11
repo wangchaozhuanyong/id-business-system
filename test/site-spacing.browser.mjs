@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import {
+  toggleDesignTheme,
   root,
   origin,
   interceptDesign,
@@ -14,7 +15,7 @@ const { chromium } = await import(
     : 'playwright'
 );
 const browser = await chromium.launch({ headless: true }),
-  output = root + '/.runtime/site-spacing-20261107',
+  output = process.env.ID_LAYOUT_QA_OUTPUT || root + '/.runtime/site-spacing-20261107',
   results = [];
 await mkdir(output, { recursive: true });
 const drawerActions = [
@@ -34,7 +35,7 @@ const capture = async (page, width, theme, route, state) => {
   results.push({ width, theme, route, state, ...(await spacingSnapshot(page)) });
 };
 try {
-  for (const width of [1440, 1024, 901, 900, 768, 390, 320])
+  for (const width of [1920, 1440, 1024, 901, 900, 768, 390, 320])
     for (const theme of ['light', 'dark']) {
       const context = await browser.newContext({ viewport: { width, height: 900 } }),
         requests = await interceptDesign(context);
@@ -43,7 +44,7 @@ try {
       page.on('pageerror', (e) => errors.push(e.message));
       page.setDefaultTimeout(5000);
       await page.goto(origin + '/#/overview');
-      if (theme === 'dark') await page.locator('#theme-toggle').click();
+      if (theme === 'dark') await toggleDesignTheme(page);
       const routes = await page.evaluate(() =>
         window.IDDesignAPI.navigation.flatMap((group) => group[2].map((item) => item[1]))
       );
@@ -93,7 +94,7 @@ try {
         const tabs = await page
           .locator('#main .panel > .tabs button, #main .panel > .content-toolbar > .tabs button')
           .evaluateAll((nodes) =>
-            nodes.map((n) => ({
+            nodes.filter(n => n.checkVisibility()).map((n) => ({
               text: n.textContent,
               selector:
                 'button' +
@@ -105,7 +106,7 @@ try {
           );
         for (const tab of tabs) {
           if (tab.selector === 'button') continue;
-          await page.locator('#main ' + tab.selector).click();
+          await page.locator('#main ' + tab.selector + ':visible').click();
           await settle(page);
           await capture(page, width, theme, route, tab.text);
         }
@@ -132,7 +133,8 @@ try {
         }
       }
       assert.deepEqual(errors, []);
-      assert.deepEqual(requests, { unavailable: [], external: [] });
+      assert.deepEqual(requests.unavailable, []);
+      assert.deepEqual(requests.external, []);
       console.log(JSON.stringify({ width, theme, routes: routes.length }));
       await context.close();
     }
@@ -146,7 +148,7 @@ try {
       await interceptDesign(context, { localFixtures: fixture });
       const page = await context.newPage();
       await page.goto(origin + '/#/mailboxes/relay');
-      if (theme === 'dark') await page.locator('#theme-toggle').click();
+      if (theme === 'dark') await toggleDesignTheme(page);
       await page.locator('[data-action="relay-tab"][data-tab="query"]').click();
       await page.locator('#relay-query').waitFor();
       await settle(page);
@@ -169,7 +171,7 @@ try {
       );
       const failurePage = await failed.newPage();
       await failurePage.goto(origin + '/#/mailboxes/relay');
-      if (theme === 'dark') await failurePage.locator('#theme-toggle').click();
+      if (theme === 'dark') await toggleDesignTheme(failurePage);
       await failurePage.getByRole('button', { name: '重试', exact: true }).waitFor();
       await capture(failurePage, width, theme, 'mailboxes/relay', 'API read failure');
       await failed.close();

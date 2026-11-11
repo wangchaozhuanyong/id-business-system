@@ -2,15 +2,19 @@
   'use strict';
   const A = window.IDDesignAPI, D = window.IDLocalData, route = 'settings/exchange-rates';
   const e = A.esc, $ = selector => document.querySelector(selector);
-  const labels = { USD: '美元 USD', MYR: '马币 MYR', PHP: '菲律宾比索 PHP', CLP: '智利比索 CLP', IDR: '印尼盾 IDR' };
+  const labels = {
+    USD: '美元 USD', MYR: '马币 MYR', PHP: '菲律宾比索 PHP',
+    CLP: '智利比索 CLP', IDR: '印尼盾 IDR', EGP: '埃及镑 EGP'
+  };
   const states = { running: '采集中', updated: '成功且有更新', unchanged: '成功但无变化', partial: '部分失败', failed: '失败',
     valid: '有效', expired: '已过期', missing: '缺少报价' };
   const modes = { automatic: '自动采集', manual: '手动采集', order: '订单取价' };
   const tabs = [['rates', '当前汇率'], ['runs', '采集记录'], ['settings', '采集设置'], ['status', '运行状态']];
   const viewKey = 'finance-collection-view', draftKey = 'finance-collection-settings';
+  const defaultPageSize = window.IDPagination.defaultPageSize;
   let data, loading = false, saving = false, error = '', lastKey = '', sequence = 0, lifetime = 0, searchTimer, expiryTimer;
   function view() {
-    if (!A.state.drafts.has(viewKey)) A.state.drafts.set(viewKey, { tab: 'rates', query: '', currency: '', status: '', mode: '', from: '', to: '', page: 1 });
+    if (!A.state.drafts.has(viewKey)) A.state.drafts.set(viewKey, { tab: 'rates', query: '', currency: '', status: '', mode: '', from: '', to: '', page: 1, pageSize: defaultPageSize });
     return A.state.drafts.get(viewKey);
   }
   const active = () => A.state.route === route && (!D?.authRequired || ['admin', 'super'].includes(D.actor()?.role));
@@ -24,7 +28,7 @@
   }
   function preserveDraft() {
     if (!active()) return;
-    view().page = A.state.page;
+    Object.assign(view(), { page: A.state.page, pageSize: A.state.pageSize });
     const form = $('#fx-settings-form');
     if (form && form.dataset.fxSaved !== 'true') A.state.drafts.set(draftKey, readSettings(form));
   }
@@ -44,23 +48,29 @@
     if (!refresh && data && key === lastKey && cached && !cached.stale) return true;
     preserveDraft();
     const token = ++sequence, epoch = lifetime;
+    const latest = () => token === sequence && epoch === lifetime;
+    const current = () => latest() && active() && key === JSON.stringify(params());
     lastKey = key; loading = true; error = '';
     const progress = $('#fx-progress'); if (progress) { progress.hidden = false; progress.setAttribute('aria-label', '正在更新汇率资料'); }
     try {
       const result = await D.queries.read('finance-rates', parameters,
         () => D.financeCollection(parameters).then(value => ({ ...value, receivedAt: performance.now() })), { refresh });
-      if (token !== sequence || epoch !== lifetime) return false;
+      if (!current()) return false;
       if (!result?.settings || !result.state || !Array.isArray(result.rows) || !Array.isArray(result.metrics))
         throw new Error('汇率资料响应不完整，请重新读取');
       data = { ...result, tab: parameters.tab }; A.state.page = result.page; view().page = result.page; view().total = result.total;
       lastKey = JSON.stringify({ ...parameters, page: String(result.page) });
       return true;
     } catch (failure) {
-      if (token !== sequence || epoch !== lifetime) return false;
+      if (!current()) return false;
+      if (failure.code === 'READ_SUPERSEDED') {
+        loading = false;
+        return load(refresh);
+      }
       error = failure.message || '读取失败，请重试';
       return false;
     } finally {
-      if (token === sequence && epoch === lifetime) {
+      if (latest()) {
         loading = false;
         if (active()) A.render();
       }
@@ -137,8 +147,11 @@
       { id: 'expiresAt', label: '有效截止', render: row => e(time(row.expiresAt)) },
       { id: 'status', label: '状态', render: row => badge(row.status) }
     ];
-    const tableData = D.queries.peek('finance-rates', params())?.data || (data.tab === v.tab ? data : { rows: [], total: v.total || 0 });
-    return toolbar() + A.table(columns, tableData.rows, '', 'fx-' + v.tab, { title: '暂无符合条件的汇率记录', description: '可调整筛选条件，或完成首次采集。' }) + A.pagination(tableData.total);
+    const tableData = D.queries.peek('finance-rates', params())?.data ||
+      (data.tab === v.tab ? data : { rows: [], total: 0, page: 1, pageSize: A.state.pageSize });
+    return toolbar() + A.table(columns, tableData.rows, '', 'fx-' + v.tab, {
+      title: '暂无符合条件的汇率记录', description: '可调整筛选条件，或完成首次采集。'
+    }) + A.pagination(tableData.total, { page: tableData.page, pageSize: tableData.pageSize });
   }
   function settingsForm() {
     const s = data.settings;
@@ -185,15 +198,18 @@
   function switchTab(tab) {
     preserveDraft();
     clearTimeout(searchTimer);
-    const v = view(), { query, currency, status, mode, from, to, page, total } = v;
-    (v.tabs ||= {})[v.tab] = { query, currency, status, mode, from, to, page, total };
-    Object.assign(v, v.tabs[tab] || { query: '', currency: '', status: '', mode: '', from: '', to: '', page: 1, total: 0 }, { tab });
-    A.state.page = v.page; lastKey = ''; error = ''; A.render();
+    const v = view(), { query, currency, status, mode, from, to, page, pageSize, total } = v;
+    (v.tabs ||= {})[v.tab] = { query, currency, status, mode, from, to, page, pageSize, total };
+    Object.assign(v, { query: '', currency: '', status: '', mode: '', from: '', to: '', page: 1, pageSize: defaultPageSize, total: 0 },
+      v.tabs[tab], { tab });
+    A.state.page = v.page; A.state.pageSize = v.pageSize; lastKey = ''; error = ''; A.render();
   }
   async function perform(command, success) {
     if (saving) return;
     const epoch = lifetime;
     saving = true;
+    const feedback = A.beginActionFeedback?.(null,
+      command.action === 'collect' ? '正在采集汇率…' : '正在保存采集设置…');
     for (const button of document.querySelectorAll('#main button[data-action="fx-collect"], #fx-settings-form [type="submit"]')) button.disabled = true;
     try {
       const result = await D.financeCollectionAction(command);
@@ -206,6 +222,7 @@
       if (target) { target.textContent = failure.message; target.hidden = false; }
       else { error = failure.message; A.render(); }
     } finally {
+      feedback?.finish();
       if (epoch === lifetime) {
         saving = false;
         for (const button of document.querySelectorAll('#fx-settings-form [type="submit"]')) button.disabled = false;
@@ -243,7 +260,11 @@
       Object.assign(view(), { query: '', currency: '', status: '', mode: '', from: '', to: '', page: 1 });
       A.state.page = 1; error = ''; lastKey = ''; A.render();
     }
-    else if (action === 'fx-refresh') { preserveDraft(); await load(true); }
+    else if (action === 'fx-refresh') {
+      preserveDraft();
+      await A.withActionFeedback(node, () => load(true),
+        { pending: '正在刷新汇率资料…', success: '汇率资料已刷新', failure: '汇率读取失败，已保留当前内容' });
+    }
     else if (action === 'fx-rebase') {
       const form = $('#fx-settings-form'), epoch = lifetime;
       try {
@@ -298,6 +319,9 @@
       () => {
         if (epoch !== lifetime) return;
         return perform({ action: 'settings', version: Number(raw['fx-version']), settings }, result => {
+          if (data && result.settings.version >= data.settings.version) {
+            data = { ...data, settings: result.settings };
+          }
           const currentForm = $('#fx-settings-form');
           const current = currentForm ? readSettings(currentForm) : A.state.drafts.get(draftKey);
           if (JSON.stringify(current) === serialized) A.state.drafts.delete(draftKey);
@@ -349,7 +373,10 @@
     if (!active()) return;
     const popup = $('#fx-currency-popover');
     if (popup) popup.ontoggle = () => $('#fx-currencies')?.setAttribute('aria-expanded', String(popup.matches(':popover-open')));
-    if (routeChanged) A.state.page = view().page || 1;
+    if (routeChanged) {
+      A.state.page = view().page || 1;
+      A.state.pageSize = view().pageSize || defaultPageSize;
+    }
     scheduleExpiry();
     void load();
   },

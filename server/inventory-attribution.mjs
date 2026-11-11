@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { toV2DateTimeInput } from '../modules/time/dateTime.ts';
 
-const ordinaryTypes = new Set(['google', 'gpt', 'claude']);
+const ordinaryTypes = new Set(['google', 'microsoft', 'gpt', 'claude', 'gemini', 'grok']);
 const creationFields = ['createdById', 'createdBy', 'createdAt', 'importedAt'];
 const operationFields = ['lastOperatedById', 'lastOperatedBy', 'lastOperatedAt'];
 const modificationFields = ['updatedById', 'updatedBy', 'updatedAt'];

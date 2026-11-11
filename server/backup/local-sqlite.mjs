@@ -5,11 +5,14 @@ import {
 import { createHash } from 'node:crypto';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { backup, DatabaseSync } from 'node:sqlite';
+import { claudeGoogleCopyDomainPrefix } from '../claude-google-subscriptions.mjs';
 import { fileURLToPath } from 'node:url';
 
-import { createLocalBusinessStore } from '../local-business.mjs';
+import { bitBrowserDefaultsDomain, createLocalBusinessStore } from '../local-business.mjs';
 import { bitBrowserAddressDomain } from '../bitbrowser-addresses.mjs';
 import { bitBrowserConnectionDomain } from '../bitbrowser-connections.mjs';
+import { bitBrowserProxyDomain } from '../bitbrowser-proxies.mjs';
+import { productionDataPaths } from '../production-data.mjs';
 
 const root = await realpath(fileURLToPath(new URL('../../', import.meta.url)));
 const snapshotName = 'local-business.sqlite';
@@ -23,7 +26,7 @@ function inside(parent, child) {
   return path !== '' && path !== '..' && !path.startsWith('..' + sep) && !isAbsolute(path);
 }
 
-async function projectPath(path) {
+export async function projectBackupPath(path) {
   if (typeof path !== 'string' || !path.trim()) throw new BackupError('必须显式指定路径');
   const absolute = resolve(path);
   if (!inside(root, absolute)) throw new BackupError('路径必须位于独立新版项目内');
@@ -114,8 +117,25 @@ async function removeAttempt(path) {
 }
 
 export async function createSnapshot({ source, output }) {
-  const database = await projectPath(source);
-  const target = await projectPath(output);
+  const database = await projectBackupPath(source);
+  const target = await projectBackupPath(output);
+  return snapshot(database, target);
+}
+
+export async function createRuntimeSnapshot({ dataDir, output }) {
+  const { databasePath } = await productionDataPaths(dataDir);
+  if (!isAbsolute(output)) throw new BackupError('自动备份输出必须为绝对路径');
+  const target = resolve(output);
+  const parent = dirname(target);
+  const info = await lstat(parent);
+  if (!info.isDirectory() || info.uid !== process.getuid() ||
+      (info.mode & 0o777) !== 0o700 || await realpath(parent) !== parent ||
+      parent === resolve(dataDir))
+    throw new BackupError('自动备份必须使用单独的私有目录');
+  return snapshot(databasePath, target);
+}
+
+async function snapshot(database, target) {
   await regularFile(database, '源 SQLite 数据库');
   await privateDirectory(target);
   try {
@@ -124,7 +144,7 @@ export async function createSnapshot({ source, output }) {
     await placeholder.close();
     const db = new DatabaseSync(database, { readOnly: true, timeout: 4000 });
     try {
-      await backup(db, destination);
+      await backup(db, destination, { rate: 64 });
     } finally {
       db.close();
     }
@@ -178,7 +198,7 @@ async function verifyFile(path, manifest) {
 }
 
 async function checkedPackage(input) {
-  const path = await projectPath(input);
+  const path = await projectBackupPath(input);
   const directory = await realpath(path).catch(() => null);
   if (!directory || directory !== path || !(await lstat(path)).isDirectory())
     throw new BackupError('快照包必须是项目内的普通目录');
@@ -222,6 +242,11 @@ function verifyRecoveredDocuments(path, { documents, auditEntries }) {
       let result;
       if (domain.startsWith('toolbox:')) {
         result = store.loadToolbox({ id: domain.slice('toolbox:'.length) });
+      } else if (domain.startsWith(claudeGoogleCopyDomainPrefix)) {
+        const snapshot = store.loadClaudeGoogleCopySettings({
+          id: domain.slice(claudeGoogleCopyDomainPrefix.length), role: 'admin'
+        });
+        result = { version: snapshot.version, data: snapshot };
       } else if (domain.startsWith('saved-totp:')) {
         const snapshot = store.loadSavedTotp({ id: domain.slice('saved-totp:'.length) });
         result = { version: snapshot.version, data: snapshot.items };
@@ -231,7 +256,7 @@ function verifyRecoveredDocuments(path, { documents, auditEntries }) {
       } else if (domain === 'website-visits') {
         const snapshot = store.loadWebsiteVisitBackup();
         result = { version: snapshot.version, data: snapshot };
-      } else if (['recharge-codes', 'tenant-cards', 'order-sync'].includes(domain)) {
+      } else if (['recharge-codes', 'tenant-cards', 'order-sync', 'card-types', 'finance-rates', 'subscription-management'].includes(domain)) {
         result = store.featureDocument(domain);
       } else if (domain.startsWith(`${bitBrowserAddressDomain}:`)) {
         result = store.loadBitBrowserAddressBackup(domain);
@@ -240,6 +265,11 @@ function verifyRecoveredDocuments(path, { documents, auditEntries }) {
         const { version, profiles } = store.loadBitBrowserConnections({ id: owner });
         if (!Array.isArray(profiles)) throw new Error();
         result = { version, data: profiles };
+      } else if (domain.startsWith(`${bitBrowserDefaultsDomain}:`)) {
+        result = store.loadBitBrowserDefaults({ id: domain.slice(bitBrowserDefaultsDomain.length + 1) });
+      } else if (domain.startsWith(`${bitBrowserProxyDomain}:`)) {
+        const { version, items } = store.loadBitBrowserProxies({ id: domain.slice(bitBrowserProxyDomain.length + 1) });
+        result = { version, data: items };
       } else {
         result = store.load(domain);
       }
@@ -256,8 +286,8 @@ function verifyRecoveredDocuments(path, { documents, auditEntries }) {
 
 export async function restoreSnapshot({ input, key, output }) {
   const source = await checkedPackage(input);
-  const target = await projectPath(output);
-  const keyPath = await projectPath(key);
+  const target = await projectBackupPath(output);
+  const keyPath = await projectBackupPath(key);
   if (inside(source.directory, keyPath)) throw new BackupError('恢复密钥必须与快照包分别保管');
   if (target === source.directory || inside(source.directory, target))
     throw new BackupError('恢复目标必须位于快照包之外的新目录');

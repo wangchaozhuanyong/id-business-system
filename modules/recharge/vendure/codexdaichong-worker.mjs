@@ -3,30 +3,20 @@ import { isIP } from 'node:net';
 import { pathToFileURL } from 'node:url';
 import { signRechargeAssertion } from '../assertion.mjs';
 import { validateRuntimeOrigin } from '../codexdaichong/runtime-health.mjs';
+import { originalRechargeNeedsReview, originalRechargeStage } from '../codexdaichong/progress-presentation.mjs';
 import { rechargeWorkerPrefix, signRechargeWorkerRequest } from './loopback-bridge.mjs';
+
+export { originalRechargeStage } from '../codexdaichong/progress-presentation.mjs';
 
 const actor = Object.freeze({
   id: 'vendure-recharge-executor', email: 'vendure-worker@localhost', admin: false, sensitive: false
 });
 const jobIdPattern = /^[A-Za-z0-9_-]{1,128}$/;
-// Public task messages from the pinned engine are often just “正在开通中”.
-// Do not infer card entry or payment success from percentages or raw diagnostics.
-export function originalRechargeStage(message) {
-  const value = typeof message === 'string' ? message.trim() : '';
-  const stages = new Map([
-    ['正在填写支付资料', 'payment_details'], ['正在填写银行卡信息', 'payment_details'],
-    ['正在填写账单资料', 'payment_details'], ['正在付款', 'paying'],
-    ['正在执行付款', 'paying'], ['付款成功', 'paid'], ['支付成功', 'paid'],
-    ['正在确认订阅', 'subscription_check'], ['正在核对订阅状态', 'subscription_check']
-  ]);
-  return stages.get(value.replace(/[。.!！…]+$/, '')) ?? 'processing';
-}
-
 async function requestJson(url, options, timeout) {
   const response = await fetch(url, {
     ...options, redirect: 'error', signal: AbortSignal.timeout(timeout)
   });
-  if (!response.ok || !response.body) {
+  if ((!response.ok && response.status !== 409) || !response.body) {
     await response.body?.cancel();
     return { response };
   }
@@ -61,7 +51,7 @@ export function createVendureCodexdaichongWorker({
         ...(body === undefined ? {} : { 'content-type': 'application/json' })
       },
       body: body === undefined ? undefined : JSON.stringify(body)
-    }, timeoutMs);
+    }, path === '/api/run-process' ? timeoutMs + 30_000 : timeoutMs);
   };
   const workerRequest = (action, value) => {
     const path = rechargeWorkerPrefix + '/' + action;
@@ -79,9 +69,12 @@ export function createVendureCodexdaichongWorker({
         !task.executionCode || typeof task.session !== 'string') return unknown;
     let jobKey;
     try {
-      const { data: accepted } = await upstreamRequest('/api/run-process', {
+      const { response, data: accepted } = await upstreamRequest('/api/run-process', {
         cdk: task.executionCode, session: task.session
       }, task.clientIp);
+      if (response.status === 409 && accepted?.success === false &&
+          accepted.code === 'recharge_route_unavailable' && accepted.execution_started === false)
+        return { outcome: 'confirmed_failure', evidenceId: 'codexdaichong:route:' + task.id };
       if (accepted?.success !== true || typeof accepted.jobKey !== 'string' || !jobIdPattern.test(accepted.jobKey))
         return unknown;
       jobKey = accepted.jobKey;
@@ -112,7 +105,7 @@ export function createVendureCodexdaichongWorker({
         if (status.status === 'success' && status.isTerminal === true)
           return { outcome: 'confirmed_success', evidenceId: 'codexdaichong:' + jobKey, upstreamJobId: jobKey };
         if (status.status === 'failed' && status.isTerminal === true &&
-            /转人工|人工确认|人工核|待核实|结果.*(?:未知|不明)|processing.*timeout/i.test(String(status.message ?? '')))
+            originalRechargeNeedsReview(status.message))
           return { outcome: 'unknown', upstreamJobId: jobKey };
         if (status.status === 'failed' && status.isTerminal === true)
           return { outcome: 'confirmed_failure', evidenceId: 'codexdaichong:' + jobKey, upstreamJobId: jobKey };

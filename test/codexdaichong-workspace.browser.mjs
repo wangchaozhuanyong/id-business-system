@@ -225,7 +225,7 @@ test(
     assert.equal(await frame.locator('#startBtn').isEnabled(), true);
     assert.equal(upstream.submitted(), 0);
     await frame.locator('#startBtn').click();
-    await frame.getByText('模拟任务待人工核对', { exact: true }).first().waitFor();
+    await frame.locator('#taskProgressTitle').getByText('开通结果待核对', { exact: true }).waitFor();
     assert.equal(upstream.submitted(), 1);
     await page.getByRole('button', { name: '线上代充', exact: true, expanded: false }).click();
     await page.getByRole('link', { name: 'ChatGPT 充值', exact: true }).click();

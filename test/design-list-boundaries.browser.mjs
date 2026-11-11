@@ -3,7 +3,7 @@ import test from 'node:test';
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { join } from 'node:path';
-import { interceptDesign, origin as offlineOrigin } from './helpers/offline-design.mjs';
+import { toggleDesignTheme, interceptDesign, origin as offlineOrigin } from './helpers/offline-design.mjs';
 import { startCodexdaichongDemoSite } from '../modules/recharge/codexdaichong/demo-site.mjs';
 
 test('dense lists retain pagination and drawer controls within their visible boundaries', { timeout: 120_000 }, async t => {
@@ -42,19 +42,23 @@ test('dense lists retain pagination and drawer controls within their visible bou
         const bounds = controls.getBoundingClientRect();
         const strip = n.querySelector('.pagination-pages')?.getBoundingClientRect();
         const active = n.querySelector('[aria-current="page"]')?.getBoundingClientRect();
-        const outside = [...controls.querySelectorAll('select, button[aria-label], button.active')].filter(x => {
+        const outside = [...controls.querySelectorAll('select, button, summary')].filter(x => {
+          if (!x.getClientRects().length) return false;
           const r = x.getBoundingClientRect(); return r.left < outer.left || r.right > outer.right;
         }).map(x => x.getAttribute('aria-label') || x.textContent.trim());
+        const viewport = document.querySelector('#main .table-viewport');
         return { outerWidth: outer.width, controlsWidth: bounds.width, controlsOutside: bounds.left < outer.left || bounds.right > outer.right,
-          outside, page: Number(n.querySelector('[aria-current="page"]')?.dataset.page),
-          activeClipped: !!strip && (active.left < strip.left - 1 || active.right > strip.right + 1),
-          pages: [...n.querySelectorAll('button[data-page]:not([aria-label])')].length,
+          outside, page: Number(n.dataset.page),
+          activeClipped: !!strip?.width && (active.left < strip.left - 1 || active.right > strip.right + 1),
+          pages: Math.max(1, Math.ceil(Number(n.dataset.total) / Number(n.dataset.pageSize))),
+          numericButtons: n.querySelectorAll('.pagination-pages button').length,
           pageOverflow: document.documentElement.scrollWidth > innerWidth,
-          tableHeight: document.querySelector('#main .table-viewport')?.getBoundingClientRect().height };
+          tableHeight: viewport?.getBoundingClientRect().height,
+          tableScrollsVertically: viewport && viewport.scrollHeight > viewport.clientHeight + 1 };
       });
       try {
         await page.goto(origin + '/#/customers/list');
-        if (dark) await page.locator('#theme-toggle').click();
+        if (dark) await toggleDesignTheme(page);
         for (const route of routes) {
           await page.evaluate(route => { location.hash = '#/' + route; }, route);
           await page.locator(`#main[data-layout-route="${route}"]`).waitFor();
@@ -70,12 +74,27 @@ test('dense lists retain pagination and drawer controls within their visible bou
           }
           assert(!first.pageOverflow && !first.controlsOutside && !first.outside.length && !first.activeClipped, `${route}: ${JSON.stringify(first)}`);
           const lastPage = first.pages;
-          await page.locator(`#main .pagination button[data-page="${lastPage}"]:not([aria-label])`).click();
+          assert(first.numericButtons <= 7, `${route}: 页码按钮过多`);
+          if (lastPage > 1) {
+            const number = page.locator(`#main .pagination button[data-page="${lastPage}"]`);
+            if (await number.isVisible()) await number.click();
+            else {
+              await page.locator('#main .pagination summary').click();
+              const target = page.locator('#main [data-pagination-target]');
+              await target.fill(String(lastPage));
+              await target.press('Enter');
+            }
+          }
           await settle();
           const last = await inspect();
           assert.equal(last.page, lastPage);
           assert(!last.controlsOutside && !last.outside.length && !last.pageOverflow && !last.activeClipped, `${route}: ${JSON.stringify(last)}`);
-          assert(Math.abs(last.tableHeight - first.tableHeight) <= 1, `${route}: 末页表格突然缩小`);
+          if (width > 900) {
+            assert(Math.abs(last.tableHeight - first.tableHeight) <= 1, `${route}: 末页表格突然缩小`);
+          } else {
+            assert(!first.tableScrollsVertically && !last.tableScrollsVertically, `${route}: 窄屏表格应随页面纵向滚动`);
+            assert(last.tableHeight <= first.tableHeight + 1, `${route}: 手机末页不应保留空白卡片高度`);
+          }
           if (route === 'customers/list') {
             await page.locator('#main .pagination button[aria-label="上一页"]').press('Enter');
             await settle();
@@ -112,8 +131,7 @@ test('dense lists retain pagination and drawer controls within their visible bou
               empty = await inspect();
               assert(!empty.controlsOutside && !empty.outside.length && !empty.pageOverflow && !empty.activeClipped);
               assert.equal(empty.page, 1);
-              assert(await page.locator('#main .pagination button[aria-label="上一页"]').isDisabled());
-              assert(await page.locator('#main .pagination button[aria-label="下一页"]').isDisabled());
+              assert.equal(await page.locator('#main .pagination button[data-pagination-page]').count(), 0);
             }
             await search.fill('');
             await page.locator('#main tr[data-row-id]').first().waitFor();

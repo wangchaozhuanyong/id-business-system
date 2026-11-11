@@ -1,0 +1,18 @@
+CREATE TABLE IF NOT EXISTS id_recharge_route_config (
+  singleton_id TINYINT UNSIGNED NOT NULL PRIMARY KEY,
+  version BIGINT UNSIGNED NOT NULL,
+  plans_json JSON NOT NULL,
+  audit_json JSON NOT NULL,
+  updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS id_recharge_proxy_checks (
+  proxy_id BIGINT UNSIGNED NOT NULL PRIMARY KEY,
+  config_hash CHAR(64) NOT NULL,
+  country_code CHAR(2) NOT NULL DEFAULT '',
+  exit_ip VARCHAR(64) NOT NULL DEFAULT '',
+  check_status ENUM('verified', 'failed', 'unknown') NOT NULL,
+  check_source VARCHAR(64) NOT NULL,
+  checked_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  latency_ms INT UNSIGNED NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

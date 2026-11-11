@@ -15,6 +15,7 @@ const icons = {
   menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
   chevron: '<path d="m9 5 7 7-7 7"/>',
   down: '<path d="m6 9 6 6 6-6"/>',
+  chart: '<path d="M4 3v17h17M8 15v-4M13 15V6M18 15V9"/>',
   grid: '<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
   work: '<rect x="3" y="7" width="18" height="14" rx="2"/><path d="M8 7V4h8v3M3 12h18M10 12v3h4v-3"/>',
   mail: '<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 6 9 7 9-7"/>',
@@ -76,7 +77,7 @@ function closeActionMenu(restoreFocus = false) {
   current.anchor.removeAttribute('aria-controls');
   if (restoreFocus && current.anchor.isConnected) current.anchor.focus({ preventScroll: true });
 }
-function openActionMenu(anchor, actions) {
+function openActionMenu(anchor, actions, { label = '更多操作', onSelect } = {}) {
   anchor = actionMenuInvokers.get(anchor) || anchor;
   const toggle = activeActionMenu?.anchor === anchor;
   closeActionMenu();
@@ -86,7 +87,7 @@ function openActionMenu(anchor, actions) {
   menu.className = 'row-action-menu';
   menu.setAttribute('popover', 'auto');
   menu.setAttribute('role', 'menu');
-  menu.setAttribute('aria-label', '更多操作');
+  menu.setAttribute('aria-label', label);
   menu.innerHTML = actions;
   // 复用原操作按钮及禁用条件，去掉中转面板的分组和说明。
   menu.replaceChildren(...$$('button[data-action]', menu));
@@ -98,6 +99,9 @@ function openActionMenu(anchor, actions) {
   const position = () => {
     if (!anchor.isConnected || !anchor.checkVisibility()) return closeActionMenu();
     const trigger = anchor.getBoundingClientRect();
+    const viewport = anchor.closest('.table-viewport, [data-pagination-rows]')?.getBoundingClientRect();
+    if (viewport && (trigger.bottom <= viewport.top || trigger.top >= viewport.bottom ||
+        trigger.right <= viewport.left || trigger.left >= viewport.right)) return closeActionMenu();
     const bounds = menu.getBoundingClientRect();
     menu.style.left = `${Math.max(12, Math.min(trigger.right - bounds.width, innerWidth - bounds.width - 12))}px`;
     const below = trigger.bottom + 6;
@@ -112,7 +116,13 @@ function openActionMenu(anchor, actions) {
     if (event.newState === 'closed' && activeActionMenu?.menu === menu) closeActionMenu();
   });
   menu.addEventListener('click', event => {
-    if (event.target.closest('button:not(:disabled)')) closeActionMenu();
+    const choice = event.target.closest('button:not(:disabled)');
+    if (!choice) return;
+    closeActionMenu();
+    if (onSelect) {
+      event.stopPropagation();
+      onSelect(choice);
+    }
   });
   menu.addEventListener('keydown', event => {
     if (event.key === 'Escape' || event.key === 'Tab') {
@@ -163,6 +173,7 @@ function select(name, values, selected = '') {
   return `<select id="${name}" name="${name}">${options(values, selected)}</select>`;
 }
 
+const gptOrderSyncRoute = 'orders/gpt/recharge-sync';
 const navigation = [
   ['网站总览', 'grid', [['网站总览', 'overview']]],
   [
@@ -171,18 +182,23 @@ const navigation = [
     [
       ['GPT 提交订单', 'workspace/order/gpt'],
       ['Claude 提交订单', 'workspace/order/claude'],
+      ['Gemini 提交订单', 'workspace/order/gemini'],
+      ['Grok 提交订单', 'workspace/order/grok'],
       ['续费管理', 'workspace/renewals'],
-      ['客户流失', 'workspace/customer-loss'],
       ['客户录入', 'customers/new'],
-      ['邮箱提交', 'workspace/mail-submit'],
-      ['账号提交', 'workspace/account-submit'],
-      ['邮箱提取', 'workspace/mail-extract'],
-      ['账号提取', 'workspace/account-extract'],
-      ['提取与归还', 'workspace/extractions'],
       ['充值码提取', 'workspace/recharge-codes'],
-      ['我的充值码', 'workspace/my-recharge-codes'],
-      ['比特登录', 'recharge/start'],
+      ['订单补全', 'workspace/order-completion'],
       ['兑换开通', 'workspace/recharge']
+    ]
+  ],
+  [
+    '管理快捷',
+    'bolt',
+    [
+      ['账号提取', 'workspace/account-extract'],
+      ['邮箱提取', 'workspace/mail-extract'],
+      ['提取与归还', 'workspace/extractions'],
+      ['比特登录', 'recharge/start']
     ]
   ],
   [
@@ -191,7 +207,7 @@ const navigation = [
     [
       ['谷歌邮箱', 'mailboxes/google'],
       ['苹果隐藏邮箱', 'mailboxes/relay'],
-      ['微软邮箱', 'mailboxes/microsoft', true]
+      ['微软邮箱', 'mailboxes/microsoft']
     ]
   ],
   [
@@ -201,8 +217,8 @@ const navigation = [
       ['GPT 账号', 'accounts/gpt'],
       ['Claude 账号', 'accounts/claude'],
       ['苹果 ID 余额', 'accounts/apple-balances'],
-      ['Gemini 账号', 'accounts/gemini', true],
-      ['Grok 账号', 'accounts/grok', true]
+      ['Gemini 账号', 'accounts/gemini'],
+      ['Grok 账号', 'accounts/grok']
     ]
   ],
   [
@@ -217,16 +233,20 @@ const navigation = [
     '订单管理',
     'orders',
     [
-      ['数据统计', 'orders/statistics'],
       ['GPT 订单', 'orders/gpt'],
-      ['代充订单同步', 'orders/recharge-sync'],
       ['Claude Pro 订单', 'orders/pro'],
       ['Claude Max 订单', 'orders/max'],
       ['Claude 专属', 'orders/exclusive'],
-      ['Gemini 订单', 'orders/gemini', true],
-      ['Grok 订单', 'orders/grok', true]
+      ['Gemini 订单', 'orders/gemini'],
+      ['Grok 订单', 'orders/grok']
     ]
   ],
+  ['订阅管理', 'orders', [
+    ['GPT 订阅管理', 'subscriptions/gpt'],
+    ['Claude 订阅管理', 'subscriptions/claude'],
+    ['Gemini 订阅管理', 'subscriptions/gemini'],
+    ['Grok 订阅管理', 'subscriptions/grok']
+  ]],
   [
     '线上代充',
     'card',
@@ -235,6 +255,13 @@ const navigation = [
       ['Claude 充值', 'online-recharge/claude', true]
     ]
   ],
+  ['数据管理', 'database', [
+    ['订单统计', 'orders/statistics'],
+    ['银行卡管理', 'data-management/bank-cards'],
+    ['苹果 ID 管理', 'data-management/apple-ids'],
+    ['客户流失', 'workspace/customer-loss'],
+    ['员工数据统计', 'data-management/employee-statistics']
+  ]],
   ['数据中心', 'database', [['数据中心', 'data', true]]],
   ['插件管理', 'grid', [
     ['邮箱查询与邮箱池', 'plugins/mailboxes'],
@@ -248,9 +275,11 @@ const navigation = [
     [
       ['员工与权限', 'settings/accounts'],
       ['邮箱分类', 'settings/mail-types'],
-      ['费用规则', 'settings/costs'],
+      ['下拉设置', 'settings/costs'],
+      ['代付国家', 'settings/payment-countries'],
       ['汇率采集', 'settings/exchange-rates'],
       ['登录日志', 'settings/login-logs'],
+      ['监控与通知', 'settings/monitoring'],
       ['操作记录', 'settings/audit']
     ]
   ]
@@ -274,7 +303,7 @@ const state = {
   query: '',
   country: '',
   status: '',
-  pageSize: 8,
+  pageSize: window.IDPagination.defaultPageSize,
   collapsed: false,
   expanded: new Set(['快速操作', '邮箱管理']),
   selections: new Map(),
@@ -384,28 +413,115 @@ localToolbox?.setDefaultShortcuts(personalTools);
 const columnDefinitions = {};
 const tableRecords = new Map();
 let pendingConfirm = null;
-let toastTimer;
-
-function notify(message) {
-  const toast = $('#toast');
-  toast.textContent = message;
-  toast.hidden = false;
+const actionToast = $('#toast');
+let toastTimer, toastRevision = 0, toastExpiresAt = 0, toastRemaining = 0;
+function dismissFeedback() {
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => {
-    toast.hidden = true;
-  }, 3800);
+  if (actionToast.matches(':popover-open')) actionToast.hidePopover();
+  actionToast.hidden = true;
+}
+function positionFeedback() {
+  if (actionToast.hidden) return;
+  // A body-level notice is both covered and inert while a modal dialog is open.
+  // Keep the live region inside the active modal, and paint it in the top layer.
+  const host = $$('dialog[open]').at(-1) || document.body;
+  if (actionToast.parentElement !== host) host.append(actionToast);
+  if (actionToast.showPopover && !actionToast.matches(':popover-open')) {
+    try { actionToast.showPopover(); } catch { /* A notice must not fail a completed operation. */ }
+  }
+}
+function resumeFeedbackTimer() {
+  clearTimeout(toastTimer);
+  if (actionToast.hidden || !toastRemaining) return;
+  toastExpiresAt = Date.now() + toastRemaining;
+  toastTimer = setTimeout(dismissFeedback, toastRemaining);
+}
+function notify(message, { kind = 'info', duration } = {}) {
+  const text = String(message ?? '').trim();
+  if (!text) return toastRevision;
+  toastRevision++;
+  kind = ['success', 'error', 'warning', 'info', 'loading'].includes(kind) ? kind : 'info';
+  clearTimeout(toastTimer);
+  if (actionToast.matches(':popover-open')) actionToast.hidePopover();
+  actionToast.dataset.kind = kind;
+  actionToast.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+  actionToast.setAttribute('aria-live', kind === 'error' ? 'assertive' : 'polite');
+  actionToast.innerHTML = icon(kind === 'success' ? 'check' : kind === 'loading' ? 'clock' : 'info') +
+    `<span data-feedback-message>${escapeHtml(text)}</span><button type="button" class="toast-dismiss" aria-label="关闭提示">${icon('close')}</button>`;
+  actionToast.querySelector('button').addEventListener('click', dismissFeedback);
+  actionToast.hidden = false;
+  positionFeedback();
+  toastRemaining = duration ?? (kind === 'loading' ? 0 : kind === 'error' || kind === 'warning' ? 8000 : 3800);
+  resumeFeedbackTimer();
+  if (kind === 'success' || kind === 'error') window.IDInteractionSound?.play(kind);
+  return toastRevision;
+}
+actionToast.addEventListener('pointerenter', () => {
+  clearTimeout(toastTimer);
+  if (toastRemaining) toastRemaining = Math.max(1, toastExpiresAt - Date.now());
+});
+actionToast.addEventListener('pointerleave', resumeFeedbackTimer);
+actionToast.addEventListener('focusin', () => clearTimeout(toastTimer));
+actionToast.addEventListener('focusout', resumeFeedbackTimer);
+for (const dialog of $$('dialog')) {
+  new MutationObserver(positionFeedback).observe(dialog, { childList: true, attributes: true, attributeFilter: ['open'] });
+}
+const pendingActionFeedback = new WeakMap();
+function beginActionFeedback(node, pending = '正在处理…') {
+  const route = state.route, actorId = state.actor.id, context = state.drawerContext;
+  const before = toastRevision;
+  const current = () => state.route === route && state.actor.id === actorId && state.drawerContext === context;
+  const disabled = node?.disabled, busy = node?.getAttribute('aria-busy');
+  if (node) { node.disabled = true; node.setAttribute('aria-busy', 'true'); }
+  let notice;
+  const quiet = () => toastRevision === before || toastRevision === notice;
+  const timer = setTimeout(() => { if (current() && quiet()) notice = notify(pending, { kind: 'loading' }); }, 350);
+  const finish = () => {
+    clearTimeout(timer);
+    if (notice !== undefined && notice === toastRevision) dismissFeedback();
+    if (node) {
+      node.disabled = disabled;
+      if (busy === null) node.removeAttribute('aria-busy'); else node.setAttribute('aria-busy', busy);
+    }
+  };
+  return { current, quiet, finish };
+}
+async function withActionFeedback(node, operation, { pending, success, failure } = {}) {
+  if (node && pendingActionFeedback.has(node)) return pendingActionFeedback.get(node);
+  const feedback = beginActionFeedback(node, pending);
+  const task = Promise.resolve().then(operation).then(result => {
+    if (feedback.current() && feedback.quiet() && result !== undefined) {
+      if (result === false && failure) notify(failure, { kind: 'error' });
+      else if (result !== false && success) notify(success, { kind: 'success' });
+    }
+    return result;
+  }, error => {
+    if (!failure) throw error;
+    if (feedback.current() && feedback.quiet() && error?.name !== 'AbortError') notify(error?.message || failure, { kind: 'error' });
+    return false;
+  }).finally(() => {
+    feedback.finish();
+    if (node) pendingActionFeedback.delete(node);
+  });
+  if (node) pendingActionFeedback.set(node, task);
+  return task;
+}
+function completeAction(callback, message = '操作已保存') {
+  const before = toastRevision;
+  callback();
+  if (before === toastRevision) notify(message, { kind: 'success' });
 }
 function getSelection(scope) {
   if (!state.selections.has(scope)) state.selections.set(scope, new Set());
   return state.selections.get(scope);
 }
-function setError(name, message) {
-  const node = $(`#${name}-error`);
+function setError(name, message, root = document) {
+  const node = $(`#${name}-error`, root);
   if (node) {
     node.textContent = message;
     node.hidden = !message;
   }
-  const control = document.getElementById(name);
+  const control = $(`#${name}`, root);
   if (control) {
     control.setAttribute('aria-invalid', String(Boolean(message)));
     control.setAttribute('aria-describedby', `${name}-error`);
@@ -575,11 +691,13 @@ function finishRegionRead(region) {
 function beginRegionRead(region, status, { loadingText = '', refreshButton } = {}) {
   finishRegionRead(region);
   const dialog = region.closest('dialog');
+  const label = document.createElement('span');
+  label.className = 'design-progress-label';
   const current = () => activeRegionReads.get(region) === read && region.isConnected &&
     (!dialog || dialog.open);
   const setLoadingText = (text) => {
     loadingText = text;
-    if (current() && !status.hidden) status.textContent = text;
+    if (current() && !status.hidden) label.textContent = text;
   };
   const finish = () => {
     clearTimeout(timer);
@@ -588,19 +706,22 @@ function beginRegionRead(region, status, { loadingText = '', refreshButton } = {
     region.setAttribute('aria-busy', 'false');
     status.textContent = '';
     status.hidden = true;
+    delete status.dataset.regionLoading;
     if (refreshButton) refreshButton.disabled = wasDisabled;
   };
   const wasDisabled = refreshButton?.disabled;
   const read = { region, current, setLoadingText, finish };
   activeRegionReads.set(region, read);
+  region.classList.add('design-async-region');
   region.setAttribute('aria-busy', 'true');
   status.hidden = true;
-  status.textContent = '';
+  status.replaceChildren(label);
+  status.dataset.regionLoading = '';
   status.className = 'design-region-progress';
   if (refreshButton) refreshButton.disabled = true;
   const timer = setTimeout(() => {
     if (!current()) return;
-    status.textContent = loadingText;
+    label.textContent = loadingText;
     status.hidden = false;
   }, 120);
   return read;
@@ -630,16 +751,17 @@ function openDrawer(title, description, body, footer = '', context = '', layout 
   normalizeDrawerActions(drawer);
   drawer.showModal();
   restoreTabScroll(drawer, tabScroll);
+  requestAnimationFrame(() => { if (drawer.open) updateMobileDatePreviews(drawer); });
 }
 function tabScrollKey(tabs, index) {
   return tabs.getAttribute('aria-label') || tabs.id ||
     `${tabs.querySelector('[data-action]')?.dataset.action || 'tabs'}:${index}`;
 }
 function captureTabScroll(root) {
-  return new Map($$('.tabs, .pagination-pages', root).map((tabs, index) => [tabScrollKey(tabs, index), tabs.scrollLeft]));
+  return new Map($$('.tabs', root).map((tabs, index) => [tabScrollKey(tabs, index), tabs.scrollLeft]));
 }
 function restoreTabScroll(root, previous = new Map()) {
-  $$('.tabs, .pagination-pages', root).forEach((tabs, index) => {
+  $$('.tabs', root).forEach((tabs, index) => {
     tabs.scrollLeft = previous.get(tabScrollKey(tabs, index)) || 0;
     const active = tabs.querySelector('.tab.active, [role="tab"][aria-selected="true"], [aria-current="page"]');
     if (!active) return;
@@ -690,6 +812,7 @@ function closeDrawer() {
   toolEntry?.focus({ preventScroll: true });
 }
 function dismissDrawer() {
+  if ($('#drawer [data-protect-drawer-dismiss][aria-busy="true"]')) return;
   if ($('#drawer').dataset.layout === 'online-tool') {
     const tool = $('#drawer').dataset.tool;
     showTools('在线工具');
@@ -698,20 +821,28 @@ function dismissDrawer() {
   else if ($('#drawer').dataset.layout === 'toolbox-phrase-detail') showTools('话术文案');
   else closeDrawer();
 }
-async function copyText(value, success = '演示内容已复制') {
+async function copyText(value, success = '内容已复制', { current = () => true } = {}) {
+  if (!current()) return false;
+  const text = String(value ?? '');
+  if (!text) { notify('暂无可复制内容', { kind: 'warning' }); return false; }
   try {
-    await navigator.clipboard.writeText(value);
-    notify(success);
+    await withActionFeedback(null, () => navigator.clipboard.writeText(text), { pending: '正在复制…' });
+    if (!current()) return false;
+    notify(success, { kind: 'success' });
+    return true;
   } catch {
+    if (!current()) return false;
     openDrawer(
       '复制内容',
       '当前浏览器无法直接写入剪贴板，可选中下方内容复制。',
-      `<textarea class="copy-block" aria-label="待复制内容" readonly>${escapeHtml(value)}</textarea>`,
+      `<textarea class="copy-block" aria-label="待复制内容" readonly>${escapeHtml(text)}</textarea>`,
       button('关闭', 'drawer-close')
     );
     const area = $('textarea', $('#drawer'));
     area.focus();
     area.select();
+    notify('复制失败，请选中下方内容手动复制', { kind: 'error' });
+    return false;
   }
 }
 function titleInfo(title, description, id, trustedHtml = false) {
@@ -719,14 +850,76 @@ function titleInfo(title, description, id, trustedHtml = false) {
     ? `<details class="title-help"><summary aria-label="查看${escapeHtml(title)}说明" aria-controls="${id}">${icon('info')}</summary><div class="title-description" id="${id}" role="note">${trustedHtml ? description : escapeHtml(description)}</div></details>`
     : '';
 }
+let operatorIdNoteSequence = 0;
+function operatorIdProperty(label, id) {
+  const full = typeof id === 'string' && id.trim() ? id : '';
+  let value = `<strong>${escapeHtml(full || '历史未记录')}</strong>`;
+  if (full.length > 12) {
+    const short = escapeHtml(full.slice(0, 4) + '…' + full.slice(-4));
+    const escaped = escapeHtml(full);
+    const copy = textAction('复制完整编号', 'copy-value', `data-value="${escaped}"`);
+    const help = titleInfo(
+      '完整' + label,
+      `<div><code>${escaped}</code></div>${copy}`,
+      'operator-id-note-' + ++operatorIdNoteSequence,
+      true
+    );
+    value = `<div class="title-with-help"><strong>${short}</strong>${help}</div>`;
+  }
+  return `<div class="property-row"><span>${escapeHtml(label)}</span>${value}</div>`;
+}
 function header(title, description, actions = '', label = '') {
   return `<div class="page-header"><div class="page-heading"><h1 id="page-title-heading">${escapeHtml(title)}</h1>${titleInfo(title, [description, label].filter(Boolean).join(' · '), 'page-description')}</div><div class="page-header-actions">${actions}</div></div>`;
+}
+function gptOrderTabs() {
+  if (!permittedRoute(gptOrderSyncRoute)) return '';
+  const views = [['orders/gpt', '订单列表'], [gptOrderSyncRoute, '代充订单同步']];
+  const links = views.map(([route, label]) => {
+    const active = state.route === route;
+    return `<a class="tab${active ? ' active' : ''}" href="#/${route}"${active ? ' aria-current="page"' : ''}>${label}</a>`;
+  }).join('');
+  return `<nav class="tabs" data-route-tabs aria-label="GPT 订单视图">${links}</nav>`;
+}
+function compactListToolbars(region) {
+  const simple = /^(workspace\/(customer-loss|renewals|extractions)|customers\/(list|tenants)|orders\/(gpt|pro|max|exclusive|statistics)|settings\/(accounts|login-logs|exchange-rates))$/.test(state.route);
+  const relay = state.route === 'mailboxes/relay' && ['parents', 'imports'].includes($('.panel > .tabs .tab.active', region)?.dataset.tab);
+  if (state.route === 'settings/login-logs') {
+    const tabs = $(':scope > .tabs', region), panel = tabs?.nextElementSibling;
+    if (panel?.matches('.panel') && $(':scope > .toolbar', panel)) panel.prepend(tabs);
+  }
+  if (simple || relay) for (const panel of $$('.panel', region)) {
+    const header = $(':scope > .tabs:not([data-route-tabs]), :scope > .content-toolbar', panel);
+    const controls = header?.nextElementSibling;
+    if (!controls?.matches('.toolbar')) continue;
+    const tabs = header.matches('.tabs') ? header : $(':scope > .tabs', header);
+    if (!tabs) continue;
+    const row = document.createElement('div');
+    row.className = 'list-controls';
+    header.before(row);
+    if (header !== tabs) {
+      let right = $(':scope > .toolbar-right', controls);
+      if (!right) { right = document.createElement('div'); right.className = 'toolbar-right'; controls.append(right); }
+      for (const actions of $$(':scope > .page-actions', header)) right.append(...actions.childNodes);
+    }
+    row.append(tabs, controls);
+    if (header !== tabs) header.remove();
+  }
+  if (/^(mailboxes\/(google|relay)|accounts\/(gpt|claude))$/.test(state.route))
+    for (const controls of $$('.panel > .toolbar', region)) controls.classList.add('list-filters');
+  const pool = $('#ops-mailbox-pool', region), heading = pool && $('.panel-heading', pool);
+  const filters = pool && $('#ops-mailbox-pool-search-form', pool);
+  if (heading && filters && !heading.closest('.list-controls')) {
+    const row = document.createElement('div'); row.className = 'list-controls list-controls--filters';
+    heading.before(row);
+    row.append($('.section-title-row', heading), filters, $('.mailbox-pool-actions', heading));
+    heading.remove();
+  }
 }
 function mountPageContext(region = $('#main')) {
   const source = $('.page-header', region);
   const title = $('#page-title');
   title.replaceChildren();
-  if (!source) return;
+  if (!source) { compactListToolbars(region); return; }
   title.append($('.page-heading', source));
   const actions = $('.page-header-actions', source);
   if (actions.innerHTML.trim()) {
@@ -753,6 +946,7 @@ function mountPageContext(region = $('#main')) {
     }
   }
   source.remove();
+  compactListToolbars(region);
 }
 function summary(items) {
   return `<div class="summary-strip">${items.map(([label, count, note, accent]) => `<div class="summary-item ${accent ? 'accent' : ''}"><div class="summary-label">${escapeHtml(label)}</div><div class="summary-number">${escapeHtml(count)}<small>${escapeHtml(note || '条')}</small></div></div>`).join('')}</div>`;
@@ -773,30 +967,60 @@ function table(columns, rows, scope = '', tableId = 'default', emptyState) {
       (window.IDLocalData ? '可调整搜索或筛选条件。' : '调整搜索和筛选条件，或新增一条演示资料。')
   );
   const check = scope
-    ? `<th class="check-cell"><input type="checkbox" aria-label="选择当前页" data-select-all="${scope}" ${rows.length && rows.every((row) => getSelection(scope).has(row.id)) ? 'checked' : ''} ${rows.length ? '' : 'disabled'} /></th>`
+    ? `<th class="check-cell"><label class="table-selection"><input type="checkbox" aria-label="选择当前页" data-select-all="${scope}" ${rows.length && rows.every((row) => getSelection(scope).has(row.id)) ? 'checked' : ''} ${rows.length ? '' : 'disabled'} /><span class="mobile-record-only">选择本页</span></label></th>`
     : '';
-  return `<div class="table-viewport ${['邮箱库存', '账号库存', 'Claude专属'].includes(tableId) ? `stable-table page-size-${state.pageSize}` : ''}" tabindex="0" role="region" aria-label="${escapeHtml(tableId)}数据表，可横向滚动"><table data-table="${tableId}"><thead><tr>${check}${visible.map((column) => `<th class="${column.action ? 'table-actions' : ''}" scope="col">${escapeHtml(column.label)}</th>`).join('')}</tr></thead><tbody>${rows.length ? rows.map((row) => `<tr data-row-id="${row.id}">${scope ? `<td class="check-cell"><input type="checkbox" aria-label="选择 ${escapeHtml(row.email || row.id)}" data-select="${scope}" data-id="${row.id}" ${getSelection(scope).has(row.id) ? 'checked' : ''} /></td>` : ''}${visible.map((column) => `<td class="${column.class || ''} ${column.action ? 'table-actions' : ''}" data-column="${column.id}">${renderTableCell(column, row, tableId)}</td>`).join('')}</tr>`).join('') : `<tr${emptyState ? ' data-table-empty-guidance' : ''}><td colspan="${visible.length + (scope ? 1 : 0)}">${emptyContent}</td></tr>`}</tbody></table></div>`;
+  const headers = visible.map((column) => {
+    const label = escapeHtml(column.label);
+    const help = column.headerHelp && titleInfo(column.label, column.headerHelp,
+      `column-help-${encodeURIComponent(tableId)}-${encodeURIComponent(column.id)}`);
+    const content = help ? `<div class="title-with-help"><span>${label}</span>${help}</div>` : label;
+    return `<th class="${column.action ? 'table-actions' : ''}" scope="col"${help ? ` aria-label="${label}"` : ''}>${content}</th>`;
+  }).join('');
+  const dataColumns = visible.filter(column => !column.action);
+  const identity = ['email', 'account', 'name', 'orderNo', 'title', 'id']
+    .map(key => dataColumns.find(column => column.id === key)).find(Boolean) || dataColumns[0];
+  const preferred = tableId === '苹果ID余额' ? ['balance', 'status', 'country']
+    : ['status', 'use', 'subscriptionStatus', 'plan', 'balance', 'saleAmount', 'amount', 'owner', 'ownerName', 'currentCustomer', 'customer', 'expiry'];
+  const summaryColumns = new Set([identity?.id, ...preferred.filter(key => dataColumns.some(column => column.id === key)).slice(0, 3)]);
+  if (summaryColumns.size === 1) for (const column of dataColumns) {
+    if (!/password|totp|secret|token|session|security|proxy/i.test(column.id)) summaryColumns.add(column.id);
+    if (summaryColumns.size >= 4) break;
+  }
+  const expandable = dataColumns.some(column => !summaryColumns.has(column.id));
+  const toggleColumn = visible.find(column => column.action) || identity;
+  const renderRow = row => `<tr data-row-id="${escapeHtml(row.id)}">${scope ? `<td class="check-cell"><label class="table-selection"><input type="checkbox" aria-label="选择 ${escapeHtml(row.email || row.id)}" data-select="${scope}" data-id="${escapeHtml(row.id)}" ${getSelection(scope).has(row.id) ? 'checked' : ''} /></label></td>` : ''}${visible.map(column => {
+    const presentation = column.action ? 'actions' : column === identity ? 'identity' : summaryColumns.has(column.id) ? 'summary' : 'secondary';
+    const toggle = expandable && column === toggleColumn
+      ? '<button type="button" class="text-button mobile-record-only mobile-record-toggle" data-action="table-mobile-toggle" aria-expanded="false">更多资料</button>' : '';
+    return `<td class="${column.class || ''} ${column.action ? 'table-actions' : ''}" data-column="${escapeHtml(column.id)}" data-mobile-field="${presentation}" data-label="${escapeHtml(column.label)}">${column.action ? renderTableCell(column, row, tableId) : `<div class="mobile-record-value">${renderTableCell(column, row, tableId)}</div>`}${toggle}</td>`;
+  }).join('')}</tr>`;
+  return `<div class="table-viewport mobile-records ${scope ? 'mobile-records--selectable' : ''} ${['邮箱库存', '账号库存', 'Claude专属'].includes(tableId) ? 'stable-table' : ''}" tabindex="0" role="region" aria-label="${escapeHtml(tableId)}资料列表"><table data-table="${escapeHtml(tableId)}"><thead><tr>${check}${headers}</tr></thead><tbody>${rows.length ? rows.map(renderRow).join('') : `<tr${emptyState ? ' data-table-empty-guidance' : ''}><td colspan="${visible.length + (scope ? 1 : 0)}">${emptyContent}</td></tr>`}</tbody></table></div>`;
 }
 function fixedTableColumn(column) {
   return column.action || ['email', 'orderNo', 'name'].includes(column.id);
 }
+// Long credential columns retain their explicit full-content action only.
+const tableHoverColumns = new Set([
+  'auxiliary', 'device', 'extractionNotes', 'importId', 'note', 'notes', 'notes2', 'orderNos',
+  'reason', 'services', 'tags', 'usageEvidence'
+]);
 function renderTableCell(column, row, tableId) {
   const value = row[column.id];
   const content = column.render ? column.render(row) : escapeHtml(value ?? '—');
   if (!column.long || value === undefined || value === null || value === '') return content;
-  return `<button class="table-value-button" type="button" data-action="table-cell-view" data-table-id="${escapeHtml(tableId)}" data-column="${escapeHtml(column.id)}" data-row-id="${escapeHtml(row.id)}" aria-label="查看${escapeHtml(column.label)}完整内容"><span>${content}</span>${icon('info')}</button>`;
+  const preview = tableHoverColumns.has(column.id) ? ' data-table-value-preview' : '';
+  return `<button class="table-value-button" type="button" data-action="table-cell-view" data-table-id="${escapeHtml(tableId)}" data-column="${escapeHtml(column.id)}" data-row-id="${escapeHtml(row.id)}" aria-label="查看${escapeHtml(column.label)}完整内容"${preview}><span class="table-value-ellipsis">${content}</span>${icon('info')}</button>`;
 }
-function pagination(total) {
-  const pages = Math.max(1, Math.ceil(total / state.pageSize));
-  state.page = Math.min(state.page, pages);
-  return `<div class="pagination" data-total="${total}" data-page-size="${state.pageSize}"><span>共 ${total} 条记录${total ? `，当前第 ${(state.page - 1) * state.pageSize + 1}–${Math.min(state.page * state.pageSize, total)} 条` : ''}</span><div class="pagination-controls"><select id="page-size" aria-label="每页条数">${options(
-    [
-      ['8', '8 条 / 页'],
-      ['16', '16 条 / 页']
-    ],
-    state.pageSize
-  )}</select><button class="page-number" data-action="page" data-page="${state.page - 1}" aria-label="上一页" ${state.page === 1 ? 'disabled' : ''}>${icon('chevron')}</button><div class="pagination-pages" role="group" aria-label="页码">${Array.from({ length: pages }, (_, i) => `<button class="page-number ${state.page === i + 1 ? 'active' : ''}" data-action="page" data-page="${i + 1}" ${state.page === i + 1 ? 'aria-current="page"' : ''}>${i + 1}</button>`).join('')}</div><button class="page-number" data-action="page" data-page="${state.page + 1}" aria-label="下一页" ${state.page === pages ? 'disabled' : ''}>${icon('chevron')}</button></div></div>`;
+function pagination(total, { page = state.page, pageSize = state.pageSize, disabled = false } = {}) {
+  return window.IDPagination.render({ id: 'main-list', page, pageSize, total, disabled });
 }
+document.addEventListener('id-pagination-change', (event) => {
+  const { id, page, pageSize } = event.detail;
+  if (id !== 'main-list' || !activePageRegion().contains(event.target)) return;
+  state.page = page;
+  state.pageSize = pageSize;
+  render();
+});
 function pageRows(rows) {
   state.page = Math.min(state.page, Math.max(1, Math.ceil(rows.length / state.pageSize)));
   return rows.slice((state.page - 1) * state.pageSize, state.page * state.pageSize);
@@ -806,14 +1030,19 @@ function matchesNav(route, base) {
   return route === base || route.startsWith(base + '/');
 }
 function permittedRoute(route) {
+  if (route === 'settings/monitoring' && window.IDLocalData?.authRequired) return state.actor?.role === 'super';
   if (!window.IDLocalData?.authRequired || state.actor?.role !== 'employee') return true;
-  return /^(overview$|plugins\/(mailboxes|websites)$|workspace\/(recharge-codes|my-recharge-codes)$|mailboxes\/(google|microsoft)$|accounts\/(gpt|claude|gemini|grok)$|orders\/(gpt|pro|max|exclusive|gemini|grok)$)/.test(
+  return /^(overview$|plugins\/(mailboxes|websites)$|workspace\/(recharge-codes|my-recharge-codes|order-completion)$|mailboxes\/(google|microsoft)$|accounts\/(gpt|claude|gemini|grok)$|orders\/(gpt|pro|max|exclusive|gemini|grok)$)/.test(
     route
   );
 }
 const designTableFrames = new Map();
+function tableScrollKey(table) {
+  const rows = table.tBodies[0]?.rows;
+  return JSON.stringify([table.dataset.table, rows?.[0]?.dataset.rowId, rows?.[rows.length - 1]?.dataset.rowId]);
+}
 function stabilizeDesignTables() {
-  for (const pager of $$('#main .pagination')) {
+  for (const pager of $$('[data-pagination="main-list"]', activePageRegion())) {
     let viewport = pager.previousElementSibling;
     while (viewport && !viewport.classList.contains('table-viewport'))
       viewport = viewport.previousElementSibling;
@@ -827,9 +1056,96 @@ function stabilizeDesignTables() {
     );
     designTableFrames.set(key, rows);
     viewport.classList.add('stable-table');
-    viewport.dataset.frameRows = String(rows);
+    viewport.style.setProperty('--table-page-rows', String(rows));
   }
 }
+// Keep one set of controls and records across desktop and mobile. Menus forward
+// to the original button so module context, permissions and confirmations survive.
+const mobileToolbarSources = new WeakMap();
+const mobileToolSlots = [];
+let mobileEntryFooter = null;
+function restoreMobileEntryFooter() {
+  if (!mobileEntryFooter) return;
+  const { footer, marker } = mobileEntryFooter;
+  if (marker.isConnected) marker.replaceWith(footer);
+  else footer.remove();
+  mobileEntryFooter = null;
+  $('#mobile-entry-actions').hidden = true;
+}
+function mountMobileListActions(region) {
+  const sourceButtons = group => Array.from(group.children).filter(node => node.matches('button:not(.primary):not(.mobile-secondary-action):not(.mobile-list-actions):not([type="submit"]):not([hidden])'));
+  const prepare = (group, sources) => {
+    const trigger = document.createElement('button');
+    trigger.type = 'button'; trigger.className = 'button mobile-list-actions';
+    trigger.dataset.action = 'mobile-list-actions'; trigger.textContent = '更多操作';
+    trigger.setAttribute('aria-haspopup', 'menu'); trigger.setAttribute('aria-expanded', 'false');
+    for (const source of sources) source.classList.add('mobile-secondary-action');
+    group.append(trigger);
+    mobileToolbarSources.set(trigger, sources);
+  };
+  for (const panel of $$('.panel', region)) {
+    const groups = $$(':scope > .content-toolbar > .toolbar-right, :scope > .toolbar > .toolbar-right', panel);
+    const primary = groups.find(group => $(':scope > .primary', group));
+    if (!primary || groups.length < 2 || $('.mobile-list-actions', primary)) continue;
+    const sources = groups.flatMap(sourceButtons);
+    if (sources.length < 2) continue;
+    prepare(primary, sources);
+    for (const group of groups) if (Array.from(group.children).every(node => node.matches('button'))) group.classList.add('mobile-merged-actions');
+  }
+  for (const group of $$('.toolbar-right', region)) {
+    if (group.closest('form,.form-panel,.entry-records') || group.classList.contains('mobile-merged-actions') || $('.mobile-list-actions', group)) continue;
+    const sources = sourceButtons(group);
+    if (sources.length >= 2) prepare(group, sources);
+  }
+}
+function syncMobileLayout() {
+  const mobile = matchMedia('(max-width: 900px)').matches;
+  const tools = $('#mobile-tools-panel');
+  if (!mobileToolSlots.length) for (const node of $$('.topbar-tools, #interaction-preferences, #theme-toggle, .prototype-label')) {
+    const marker = document.createComment('desktop tool position');
+    node.before(marker); mobileToolSlots.push({ node, marker });
+  }
+  for (const { node, marker } of mobileToolSlots) {
+    if (mobile && node.parentElement !== tools) tools.append(node);
+    if (!mobile && node.parentElement === tools) marker.after(node);
+  }
+  if (!mobile && tools.matches(':popover-open')) tools.hidePopover();
+  const region = activePageRegion();
+  const entry = $('.commerce-entry-layout', region);
+  const showFooter = mobile && entry && entry.dataset.mobileView !== 'records';
+  if (!showFooter) restoreMobileEntryFooter();
+  else if (!mobileEntryFooter) {
+    const footer = $('.commerce-entry-columns > .form-panel > .form-footer', entry);
+    if (footer) {
+      const marker = document.createComment('entry footer position');
+      footer.before(marker); mobileEntryFooter = { footer, marker };
+      $('#mobile-entry-actions').replaceChildren(footer);
+      $('#mobile-entry-actions').hidden = false;
+    }
+  }
+  updateMobileDatePreviews(region);
+}
+function updateMobileDatePreviews(root) {
+  for (const input of $$('input[type="datetime-local"]', root)) {
+    let output = input.parentElement.querySelector('.mobile-date-preview');
+    if (!output) { output = document.createElement('output'); output.className = 'mobile-date-preview'; output.htmlFor = input.id; input.after(output); }
+    output.textContent = input.value.replace('T', ' ');
+  }
+}
+function positionMobileKeyboard() {
+  const viewport = window.visualViewport;
+  const inset = viewport ? Math.max(0, innerHeight - viewport.height - viewport.offsetTop) : 0;
+  document.documentElement.style.setProperty('--mobile-keyboard-inset', `${inset}px`);
+}
+window.visualViewport?.addEventListener('resize', positionMobileKeyboard);
+window.visualViewport?.addEventListener('scroll', positionMobileKeyboard);
+window.addEventListener('resize', syncMobileLayout);
+document.addEventListener('input', event => {
+  if (event.target.matches('input[type="datetime-local"]')) {
+    const output = event.target.parentElement.querySelector('.mobile-date-preview');
+    if (output) output.textContent = event.target.value.replace('T', ' ');
+  }
+});
 function renderSidebar() {
   const previousScroll = $('.sidebar-navigation')?.scrollTop || 0;
   const allowedNavigation = navigation
@@ -849,11 +1165,11 @@ function renderSidebar() {
       .map(([group, iconName, children]) => {
         const direct = children.length === 1;
         const active = currentGroup?.[0] === group;
-        return `<div class="nav-group">${direct ? `<a class="nav-heading ${active ? 'active-direct' : ''}" href="#/${children[0][1]}" title="${group}" ${active ? 'aria-current="page"' : ''}>${icon(iconName)}<span class="nav-text">${group}</span></a>` : `<button class="nav-heading ${active ? 'active-parent' : ''}" data-action="nav-group" data-group="${group}" aria-expanded="${state.expanded.has(group)}" title="${group}">${icon(iconName)}<span class="nav-text">${group}</span>${icon(state.expanded.has(group) ? 'down' : 'chevron', 'chevron')}</button>${state.expanded.has(group) ? `<div class="nav-children">${children.map(([title, route, placeholder]) => `<a class="nav-child ${matchesNav(state.route, route) ? 'active' : ''}" href="#/${route}" ${matchesNav(state.route, route) ? 'aria-current="page"' : ''}>${title}${route === 'workspace/renewals' ? `<small id="renewal-reminder-count" aria-label="待处理提醒" ${renewalCount ? '' : 'hidden'}>${renewalCount}</small>` : placeholder ? '<small>占位</small>' : ''}</a>`).join('')}</div>` : ''}`}</div>`;
+        return `<div class="nav-group" data-tone="${({ mail: 'cyan', key: 'violet', users: 'teal', user: 'teal', orders: 'blue', bolt: 'violet', database: 'blue', monitor: 'teal', settings: 'blue', work: 'violet' })[iconName] || 'blue'}">${direct ? `<a class="nav-heading ${active ? 'active-direct' : ''}" href="#/${children[0][1]}" title="${group}" ${active ? 'aria-current="page"' : ''}>${icon(iconName)}<span class="nav-text">${group}</span></a>` : `<button class="nav-heading ${active ? 'active-parent' : ''}" data-action="nav-group" data-group="${group}" aria-expanded="${state.expanded.has(group)}" title="${group}">${icon(iconName)}<span class="nav-text">${group}</span>${icon(state.expanded.has(group) ? 'down' : 'chevron', 'chevron')}</button>${state.expanded.has(group) ? `<div class="nav-children">${children.map(([title, route, placeholder]) => `<a class="nav-child ${matchesNav(state.route, route) ? 'active' : ''}" href="#/${route}" ${matchesNav(state.route, route) ? 'aria-current="page"' : ''}>${title}${route === 'workspace/renewals' ? `<small id="renewal-reminder-count" aria-label="待处理提醒" ${renewalCount ? '' : 'hidden'}>${renewalCount}</small>` : placeholder ? '<small>占位</small>' : ''}</a>`).join('')}</div>` : ''}`}</div>`;
       })
       .join(
         ''
-      )}</nav><div class="sidebar-bottom"><i class="dot"></i><span>${window.IDLocalData ? '独立新版 · 本机业务' : '新版页面设计 · 第一阶段'}</span></div>`;
+      )}</nav><div class="sidebar-bottom"><i class="dot"></i><span>${window.IDLocalData ? '独立新版 · 业务管理' : '新版页面设计 · 第一阶段'}</span></div>`;
   $('.sidebar-navigation').scrollTop = previousScroll;
   const pageTitle = $('#page-title h1')?.textContent?.trim() || '';
   $('#breadcrumbs').innerHTML =
@@ -1278,6 +1594,7 @@ function preserveMainDraft() {
 }
 let pendingPageScroll = null;
 let layoutRenderVersion = 0;
+const entryFormSelector = '.commerce-entry-columns .form-panel > form';
 const retainedPageRegions = new Map();
 let mountedPage;
 function activePageRegion() {
@@ -1305,6 +1622,7 @@ function restorePendingPageScroll() {
 // a resize may complete a previously clamped restoration without taking over
 // subsequent manual scrolling.
 new ResizeObserver(restorePendingPageScroll).observe($('#main'));
+const updateTableLayout = window.IDPagination?.watchTableLayout?.($('#main'));
 for (const eventName of ['wheel', 'touchstart', 'pointerdown', 'keydown'])
   window.addEventListener(eventName, () => {
     pendingPageScroll = null;
@@ -1312,10 +1630,22 @@ for (const eventName of ['wheel', 'touchstart', 'pointerdown', 'keydown'])
   }, { passive: true });
 function render() {
   closeActionMenu();
+  restoreMobileEntryFooter();
   const renderVersion = ++layoutRenderVersion;
   const main = $('#main');
   const sameRoute = main.dataset.layoutRoute === state.route;
   const tabScroll = sameRoute ? captureTabScroll(activePageRegion()) : new Map();
+  const entryFormScroll = sameRoute
+    ? $(entryFormSelector, activePageRegion())?.scrollTop
+    : state.viewDrafts.get(state.route)?.entryFormScroll;
+  const tableScroll = new Map();
+  if (sameRoute) {
+    for (const table of $$('.table-viewport > table[data-table]', activePageRegion())) {
+      const viewport = table.parentElement;
+      if (viewport.scrollTop || viewport.scrollLeft)
+        tableScroll.set(tableScrollKey(table), { top: viewport.scrollTop, left: viewport.scrollLeft });
+    }
+  }
   if (!sameRoute)
     pendingPageScroll = { route: state.route, top: state.viewDrafts.get(state.route)?.scrollY || 0 };
   const scrollTarget = pendingPageScroll?.route === state.route
@@ -1390,7 +1720,18 @@ function render() {
     extension?.afterRender?.({ routeChanged: !sameRoute });
   window.IDChangeSync?.resume();
   applyDesignPreviewState();
+  mountMobileListActions(region);
+  syncMobileLayout();
+  updateTableLayout?.();
+  const entryForm = $(entryFormSelector, region);
+  if (entryForm && entryFormScroll) entryForm.scrollTop = entryFormScroll;
   restoreTabScroll(region, tabScroll);
+  if (tableScroll.size) {
+    for (const table of $$('.table-viewport > table[data-table]', region)) {
+      const scroll = tableScroll.get(tableScrollKey(table));
+      if (scroll) table.parentElement.scrollTo({ ...scroll, behavior: 'instant' });
+    }
+  }
   requestAnimationFrame(() => {
     if (renderVersion !== layoutRenderVersion) return;
     restorePageScroll(scrollTarget);
@@ -1402,7 +1743,7 @@ function render() {
     )
   );
 }
-function navigate() {
+function navigate(event) {
   let next = location.hash.replace(/^#\/?/, '') || 'mailboxes/google';
   const currentHash = '#/' + state.route;
   if (
@@ -1413,13 +1754,28 @@ function navigate() {
     if (location.hash !== currentHash) history.replaceState(null, '', currentHash);
     return;
   }
-  preserveMainDraft();
-  if (next === 'settings/customer-tags') {
-    next = 'customers/list';
+  const entryRouteAliases = {
+    'workspace/account-submit': 'workspace/account-extract',
+    'workspace/mail-submit': 'workspace/mail-extract',
+    'workspace/my-recharge-codes': 'workspace/recharge-codes',
+    'data-management/claude-google-subscriptions': 'subscriptions/claude'
+  };
+  if (entryRouteAliases[next]) {
+    next = entryRouteAliases[next];
+    history.replaceState(null, '', '#/' + next);
+  }
+  const legacyCustomerTags = next === 'settings/customer-tags';
+  if (legacyCustomerTags) {
+    state.drafts.set('operations:dropdown-settings', { tab: 'tags' });
+    next = 'settings/costs';
     history.replaceState(null, '', '#/' + next);
   }
   if (next === 'mailboxes/apple') {
     next = 'accounts/apple-balances';
+    history.replaceState(null, '', '#/' + next);
+  }
+  if (next === 'orders/recharge-sync') {
+    next = gptOrderSyncRoute;
     history.replaceState(null, '', '#/' + next);
   }
   if (
@@ -1429,22 +1785,28 @@ function navigate() {
     location.hash = '/mailboxes/google';
     return;
   }
+  // A hash navigation can emit both popstate and hashchange.
+  if (event && !legacyCustomerTags && state.route === next && mountedPage?.region.isConnected &&
+      mountedPage.region.dataset.pageRegion === next) return;
+  preserveMainDraft();
   if (state.route !== next) {
     if (state.route)
       state.viewDrafts.set(state.route, {
         page: state.page,
+        pageSize: state.pageSize,
         query: state.query,
         country: state.country,
         status: state.status,
         mailTab: state.mailTab,
         claudeTab: state.claudeTab,
-        scrollY: window.scrollY
+        scrollY: window.scrollY,
+        entryFormScroll: $(entryFormSelector, activePageRegion())?.scrollTop
       });
     state.route = next;
     state.previewMode = 'normal';
     Object.assign(
       state,
-      { page: 1, query: '', country: '', status: '', mailTab: 'available', claudeTab: 'active' },
+      { page: 1, pageSize: window.IDPagination.defaultPageSize, query: '', country: '', status: '', mailTab: 'available', claudeTab: 'active' },
       state.viewDrafts.get(next) || {}
     );
     state.selections.clear();
@@ -1772,7 +2134,7 @@ function showImport() {
     $('#import-no-phone').checked = Boolean(draft['import-no-phone']);
   }
 }
-function parseCsv(text) {
+function parseCsv(text, { trimCells = true } = {}) {
   const rows = [];
   let row = [],
     value = '',
@@ -1785,18 +2147,18 @@ function parseCsv(text) {
         i++;
       } else quoted = !quoted;
     } else if (char === ',' && !quoted) {
-      row.push(value.trim());
+      row.push(trimCells ? value.trim() : value);
       value = '';
     } else if (char === '\n' && !quoted) {
-      row.push(value.trim());
-      if (row.some(Boolean)) rows.push(row);
+      row.push(trimCells ? value.trim() : value);
+      if (row.some((cell) => cell.trim())) rows.push(row);
       row = [];
       value = '';
-    } else if (char !== '\r') value += char;
+    } else if (char !== '\r' || (!trimCells && quoted)) value += char;
   }
   if (quoted) throw new Error('CSV 引号未闭合，请检查内容');
-  row.push(value.trim());
-  if (row.some(Boolean)) rows.push(row);
+  row.push(trimCells ? value.trim() : value);
+  if (row.some((cell) => cell.trim())) rows.push(row);
   return rows;
 }
 function validateImport(form) {
@@ -2299,6 +2661,15 @@ function saveOrder(form, renewal = false) {
     }
   );
 }
+document.addEventListener('pointerover', (event) => {
+  const target = event.target.closest('[data-table-value-preview]');
+  if (!target || target.contains(event.relatedTarget)) return;
+  const text = target.querySelector('.table-value-ellipsis') || target;
+  // Use the displayed text so previews respect the column's formatting and masking.
+  if (text.scrollWidth > text.clientWidth) target.title = text.textContent.trim();
+  else target.removeAttribute('title');
+});
+
 document.addEventListener('click', async (event) => {
   const navigationLink = event.target.closest('a[href^="#/"]');
   if (navigationLink && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) {
@@ -2311,6 +2682,34 @@ document.addEventListener('click', async (event) => {
   if (!node || node.disabled) return;
   const action = node.dataset.action,
     id = node.dataset.id;
+  if (action === 'table-mobile-toggle') {
+    const row = node.closest('tr');
+    const expanded = row.dataset.mobileExpanded !== 'true';
+    row.dataset.mobileExpanded = String(expanded);
+    node.setAttribute('aria-expanded', String(expanded));
+    node.textContent = expanded ? '收起资料' : '更多资料';
+    return;
+  }
+  if (action === 'mobile-list-actions') {
+    const sources = mobileToolbarSources.get(node) || [];
+    openActionMenu(node, sources.map((source, index) => `<button type="button" data-action="mobile-list-action" data-index="${index}" ${source.matches(':disabled') ? 'disabled' : ''}>${source.innerHTML}</button>`).join(''));
+    return;
+  }
+  if (action === 'mobile-list-action') {
+    const source = mobileToolbarSources.get(actionMenuInvokers.get(node))?.[Number(node.dataset.index)];
+    if (source?.isConnected && !source.matches(':disabled') && !source.closest('[inert], [hidden]')) source.click();
+    return;
+  }
+  if (action === 'mobile-entry-view') {
+    const entry = node.closest('.commerce-entry-layout');
+    entry.dataset.mobileView = node.dataset.view;
+    state.drafts.set(`mobile-entry:${state.route}`, { view: node.dataset.view });
+    for (const tab of $$('[data-action="mobile-entry-view"]', entry)) tab.setAttribute('aria-selected', String(tab === node));
+    syncMobileLayout();
+    entry.scrollIntoView({ block: 'start' });
+    return;
+  }
+  if (node.closest('#mobile-tools-panel') && action === 'tools-open') $('#mobile-tools-panel').hidePopover();
   if (action.startsWith('option-')) {
     changeOptionList(action, node);
     return;
@@ -2365,11 +2764,6 @@ document.addEventListener('click', async (event) => {
     state.mailTab = node.dataset.tab;
     state.page = 1;
     getSelection('inventory').clear();
-    render();
-    return;
-  }
-  if (action === 'page') {
-    state.page = Number(node.dataset.page);
     render();
     return;
   }
@@ -2639,8 +3033,8 @@ document.addEventListener('click', async (event) => {
   }
   if (action === 'personal-tool-retry') {
     const panel = $('#personal-tool-load');
-    void localToolbox
-      .load({ refresh: true })
+    void withActionFeedback(node, async () => { await localToolbox.load({ refresh: true }); return true; },
+        { pending: '正在读取个人工具…', success: '个人工具已重新读取', failure: '个人工具读取失败，请重试' })
       .finally(() => {
         if (panel?.isConnected && $('#drawer').open) showTools('个人工具');
       })
@@ -2800,10 +3194,6 @@ document.addEventListener('change', async (event) => {
   } else if (node.id === 'mail-type') {
     preserveDrawerDraft();
     editMailbox($('input[name="recordId"]', $('#drawer'))?.value || '');
-  } else if (node.id === 'page-size') {
-    state.pageSize = Number(node.value);
-    state.page = 1;
-    render();
   } else if (node.id === 'country-filter') {
     state.country = node.value;
     state.page = 1;
@@ -3063,16 +3453,22 @@ window.IDDesignAPI = {
   input,
   select,
   header,
+  gptOrderSyncRoute,
+  gptOrderTabs,
   summary,
   empty,
   table,
   pagination,
   pageRows,
   titleInfo,
+  operatorIdProperty,
   state,
   collections: { mailboxes, accounts, subscriptions },
   getSelection,
   notify,
+  beginActionFeedback,
+  withActionFeedback,
+  completeAction,
   setError,
   readForm,
   optionListEditor,
@@ -3096,6 +3492,7 @@ window.IDDesignAPI = {
   modules: {},
   navigation,
   canVisit: permittedRoute,
+  compactListToolbars,
   legacy: {
     editMailbox,
     showImport,

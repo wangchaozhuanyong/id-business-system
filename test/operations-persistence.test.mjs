@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
 import test from 'node:test';
+import { pageAuditRows } from '../server/local-business.mjs';
 
 const source = await readFile(
   new URL('../frontend/operations-prototype.js', import.meta.url),
@@ -38,6 +39,7 @@ function fixture() {
         }
         stored = { version: version + 1, data: structuredClone(data) };
         audits.unshift({
+          id: stored.version,
           at: '2026-11-05T08:10:00Z',
           domain,
           action,
@@ -46,8 +48,8 @@ function fixture() {
         });
         return structuredClone(stored);
       },
-      async audit() {
-        return structuredClone(audits);
+      async auditPage(params) {
+        return pageAuditRows(audits, new URLSearchParams(params));
       }
     },
     get stored() {
@@ -63,6 +65,7 @@ function browser(localData, route = 'settings/mail-types') {
   const notices = [];
   const state = { route, drafts: new Map(), query: '', page: 1 };
   const modules = [];
+  const listeners = new Map();
   const API = {
     state,
     modules: {
@@ -100,17 +103,22 @@ function browser(localData, route = 'settings/mail-types') {
       confirmation = cb;
     },
     closeDrawer: () => {},
+    withActionFeedback: (_node, operation) => operation(),
     render: () => {}
   };
   runInNewContext(source, {
-    window: { IDDesignAPI: API, IDDesignModules: modules, IDLocalData: localData },
-    document: { querySelector: () => null, querySelectorAll: () => [] }
+    window: { IDDesignAPI: API, IDDesignModules: modules, IDLocalData: localData, IDPagination: { defaultPageSize: 20 } },
+    document: {
+      querySelector: () => null, querySelectorAll: () => [],
+      addEventListener: (name, listener) => listeners.set(name, listener)
+    }
   });
   return {
     state,
     module: modules[0],
     operations: API.modules.operations,
     notices,
+    paginate: (detail) => listeners.get('id-pagination-change')?.({ detail }),
     get costs() {
       return costs;
     },
@@ -126,6 +134,50 @@ const form = (id, values) => ({
   dataset: id === 'ops-mail-type-form'
     ? { opsDraft: `operations:mail-type:${values['ops-type-id'] || 'new'}` }
     : {}
+});
+
+test('audit navigation ignores late responses and keeps the last displayed page when refresh fails', async () => {
+  const store = fixture();
+  const requests = [];
+  store.api.auditPage = (params) => new Promise((resolve, reject) => requests.push({ params, resolve, reject }));
+  const browserState = browser(store.api, 'settings/audit');
+  browserState.module.afterRender();
+  const page = (id) => ({ items: [{ id }], page: 1, pageSize: 10, total: 1, snapshot: 100 });
+  requests[0].resolve(page('original'));
+  await flush();
+  assert.equal(browserState.operations.getAudit()[0].id, 'original');
+
+  browserState.paginate({ id: 'operations-login', page: 2, pageSize: 10 });
+  assert.equal(requests.length, 1);
+  browserState.paginate({ id: 'operations-audit', page: 2, pageSize: 10 });
+  assert.equal(requests[1].params.snapshot, 100);
+  browserState.module.onInput({ id: 'ops-list-search', value: '新版搜索' });
+  assert.equal(requests[2].params.page, 1);
+  assert.equal(requests[2].params.query, '新版搜索');
+  assert.equal(requests[2].params.snapshot, undefined);
+  requests[2].resolve(page('filtered'));
+  requests[1].resolve(page('late'));
+  await flush();
+  assert.equal(browserState.operations.getAudit()[0].id, 'filtered');
+
+  const refresh = browserState.operations.refreshAudit();
+  assert.equal(requests[3].params.query, '新版搜索');
+  assert.equal(requests[3].params.snapshot, undefined);
+  requests[3].reject(new Error('network unavailable'));
+  assert.equal(await refresh, false);
+  assert.equal(browserState.operations.getAudit()[0].id, 'filtered');
+
+  browserState.paginate({ id: 'operations-audit', page: 2, pageSize: 20 });
+  requests[4].reject(new Error('page unavailable'));
+  await flush();
+  browserState.module.onClick('ops-audit-refresh', { dataset: {} });
+  assert.equal(requests[5].params.page, 2);
+  assert.equal(requests[5].params.pageSize, 20);
+  assert.equal(requests[5].params.snapshot, 100);
+  assert.equal(browserState.operations.getAudit()[0].id, 'filtered');
+  requests[5].reject(Object.assign(new Error('access revoked'), { status: 403 }));
+  await flush();
+  assert.equal(browserState.operations.getAudit().length, 0);
 });
 
 test('mailbox classification and cost rules survive reload, with local audit records', async () => {

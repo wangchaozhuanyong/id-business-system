@@ -27,6 +27,20 @@ export function savedTotpMetadata(snapshot) {
   };
 }
 
+export function revealSavedTotpSecret(body, actor, { readSnapshot, recordView }) {
+  if (!actor?.id) throw new SavedTotpError(401, '请先登录');
+  if (!/^[a-f\d-]{36}$/.test(body?.id || '') ||
+      !Number.isSafeInteger(body?.version) || body.version < 0)
+    throw new SavedTotpError(400, '账号操作格式无效');
+  const snapshot = readSnapshot(`${savedTotpDomain}:${actor.id}`);
+  if (snapshot.version !== body.version)
+    throw new SavedTotpError(409, '账号列表已更新，请重新读取后核对');
+  const account = (snapshot.data || []).find(row => row.id === body.id);
+  if (!account) throw new SavedTotpError(404, '找不到已保存的账号');
+  recordView(account.id, snapshot.version);
+  return { id: account.id, version: snapshot.version, secret: account.secret };
+}
+
 export async function validateTotpWrite(body) {
   if (!body || !['create', 'update', 'delete'].includes(body.action) ||
       !Number.isSafeInteger(body.version) || body.version < 0 ||
@@ -74,10 +88,23 @@ export function applyTotpWrite(snapshot, command, now) {
   return { id: item.id, items: items.map((row, i) => i === index ? item : row) };
 }
 
-export async function generateSavedCode(snapshot, id) {
+export async function generateSavedCode(snapshot, id, now = Date.now()) {
   const account = (snapshot.data || []).find((row) => row.id === id);
   if (!account) throw new SavedTotpError(404, '找不到已保存的账号');
-  const now = Date.now();
   const code = await calculateTotp(account.secret, now);
   return { ...code, serverNow: now };
+}
+
+export async function generateSavedCodePage(snapshot, { ids, version }, serverNow = Date.now()) {
+  if (snapshot.version !== version)
+    throw new SavedTotpError(409, '账号列表已更新，请刷新列表');
+  const items = await Promise.all(ids.map(async (id) => {
+    try {
+      const { code, expiresAt } = await generateSavedCode(snapshot, id, serverNow);
+      return { id, code, expiresAt };
+    } catch (error) {
+      return { id, error: error instanceof SavedTotpError ? error.message : '验证码无法生成，请核对密钥' };
+    }
+  }));
+  return { version, serverNow, items };
 }

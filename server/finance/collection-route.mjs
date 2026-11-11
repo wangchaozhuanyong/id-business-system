@@ -1,3 +1,4 @@
+import { currencies } from '../../modules/finance/accounting.mjs';
 import { collectionError } from './collection-policy.mjs';
 
 export const financeCollectionRoute = '/api/local/finance/collection';
@@ -26,9 +27,9 @@ function queryParameters(url) {
     throw collectionError(400, '查询条件无效');
   input.page = Number(input.page || 1); input.pageSize = Number(input.pageSize || 8);
   if (!Number.isSafeInteger(input.page) || input.page < 1 || input.page > 1_000_000 ||
-      ![8, 16, 32].includes(input.pageSize) ||
+      ![8, 10, 16, 20, 32, 50].includes(input.pageSize) ||
       (input.tab && !['rates', 'runs', 'history', 'settings', 'settings-history', 'status'].includes(input.tab)) ||
-      (input.currency && !['USD', 'MYR', 'PHP', 'CLP', 'IDR'].includes(input.currency)) ||
+      (input.currency && (input.currency === 'CNY' || !currencies.includes(input.currency))) ||
       (input.status && !['running', 'updated', 'unchanged', 'partial', 'failed', 'valid', 'expired', 'missing'].includes(input.status)) ||
       (input.mode && !['automatic', 'manual', 'order'].includes(input.mode)) || (input.query?.length || 0) > 120)
     throw collectionError(400, '查询条件无效');

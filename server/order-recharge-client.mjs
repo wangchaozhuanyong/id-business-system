@@ -3,7 +3,7 @@ import { signRechargeAssertion } from '../modules/recharge/assertion.mjs';
 const service = Object.freeze({
   id: 'order-reconciliation', email: 'order-reconciliation@localhost', admin: true, sensitive: true
 });
-const readPaths = /^\/api\/admin\/(?:cards|cdks|billing|sessions|orbitcard\/usage|task-logs(?:\/[a-zA-Z0-9_-]+)?)$/;
+const readPaths = /^\/api\/admin\/(?:cards|cdks(?:\/returns\/stock)?|billing|sessions|orbitcard\/usage|task-logs(?:\/[a-zA-Z0-9_-]+)?)$/;
 const maximumResponseBytes = 4 * 1024 * 1024;
 
 async function readBoundedJson(response) {
@@ -23,7 +23,7 @@ async function readBoundedJson(response) {
 
 export function createOrderRechargeClient(config, fetchImpl = fetch) {
   const upstream = config && new URL(config.upstreamUrl);
-  async function request(method, path, body, actor = service) {
+  async function request(method, path, body, actor = service, monitoring = false) {
     if (!upstream || upstream.protocol !== 'http:' || upstream.hostname !== '127.0.0.1' ||
         upstream.pathname !== '/' || upstream.username || upstream.password || !upstream.port ||
         typeof config.secret !== 'string' || Buffer.byteLength(config.secret) < 32)
@@ -31,9 +31,12 @@ export function createOrderRechargeClient(config, fetchImpl = fetch) {
     const target = new URL(path, upstream);
     const orbitRead = target.pathname !== '/api/admin/orbitcard/usage' ||
       [...target.searchParams.keys()].every((name) => ['page_size', 'keyword', 'recharge_status'].includes(name));
+    const monitoringPath = monitoring && (method === 'GET' && path === '/api/admin/data' ||
+      method === 'POST' && path === '/api/admin/telegram');
     if (target.origin !== upstream.origin || target.hash ||
         !(method === 'GET' && readPaths.test(target.pathname) && orbitRead ||
-          method === 'POST' && path === '/api/admin/cdks/import'))
+          method === 'POST' && /^\/api\/admin\/cdks\/returns\/(check|commit|receipt)$/.test(path) ||
+          monitoringPath))
       throw new Error('不支持此代充资料操作');
     const response = await fetchImpl(target, {
       method, redirect: 'error', signal: AbortSignal.timeout(6000),
@@ -50,27 +53,41 @@ export function createOrderRechargeClient(config, fetchImpl = fetch) {
   }
   return Object.freeze({
     get: (path) => request('GET', path),
+    readLegacyNotificationSettings: () => request('GET', '/api/admin/data', undefined, service, true),
+    async disableLegacyBusinessNotifications({ adminChat, groupChat, notifyAdmin, notifyGroup }) {
+      await request('POST', '/api/admin/telegram', {
+        admin_chat_id: adminChat, group_chat_id: groupChat, notify_admin: notifyAdmin, notify_group: notifyGroup,
+        on_success: false, on_failure: false, on_card_pool_empty: false
+      }, service, true);
+    },
     async listCodes() {
       const result = await request('GET', '/api/admin/cdks');
       if (!Array.isArray(result)) throw new Error('代充码列表格式不正确');
       return result;
     },
-    async importCodes({ codes, plan, actor }) {
-      const principal = actor?.id && actor?.email
-        ? { id: actor.id, email: actor.email, admin: true, sensitive: true }
-        : service;
-      await request('POST', '/api/admin/cdks/import', { cdks: codes, plan_type: plan }, principal);
-    }
+    async listCodeStock() {
+      const result = await request('GET', '/api/admin/cdks/returns/stock');
+      if (!Array.isArray(result.items)) throw new Error('代充库存格式不正确');
+      return result.items;
+    },
+    async checkReturns(items) {
+      const result = await request('POST', '/api/admin/cdks/returns/check', { items });
+      if (!Array.isArray(result.items)) throw new Error('归还核对资料无效');
+      return result.items;
+    },
+    async commitReturn(item) { return (await request('POST', '/api/admin/cdks/returns/commit', item)).receipt; },
+    async returnReceipt(item) { return (await request('POST', '/api/admin/cdks/returns/receipt', item)).receipt; }
   });
 }
 
-export async function readPoolCards(client) {
+export async function readPoolCards(client, { includeNumbers = false } = {}) {
   const { cards } = await client.get('/api/admin/cards');
   if (!Array.isArray(cards)) throw new Error('代充卡池格式不正确');
   return cards.filter((row) => Number.isSafeInteger(Number(row.id)) && Number(row.id) > 0 &&
     /^\d{4}$/.test(row.last4)).map((row) => ({
     id: 'recharge:' + row.id,
     last4: row.last4,
+    ...(includeNumbers && { number: row.card_number }),
     active: Number(row.is_active) === 1,
     usageCount: Number.isSafeInteger(row.usage_count) && row.usage_count >= 0 ? row.usage_count : null,
     lastUsedAt: row.last_used_at || null,

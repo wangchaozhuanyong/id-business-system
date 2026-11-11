@@ -156,7 +156,8 @@ test('only known writes invalidate related snapshots; query POSTs and explicit r
     await api.queries.read(scope, 'fixture', async () => ({ rows: [] }));
   await api.websiteVisits({ page: 1 });
   await api.queryManagedMailbox('MBX-synthetic', 10);
-  await api.savedTotpCode('synthetic');
+  await api.managedMailboxCodePage(['synthetic'], 0);
+  await api.savedTotpCodePage(['synthetic'], 0);
   await api.tenantCardAction({ action: 'reveal', tenantId: 'fixture' });
   await api.orderSync({ mode: 'preview' });
   assert.equal(api.queries.peek('overview', 'fixture').stale, false);
@@ -197,6 +198,7 @@ test('permission rejection removes old protected snapshots instead of treating t
 test('overview reuses a clean visit, refreshes explicitly and preserves failed sections after writes', async () => {
   const { api, window, document } = client();
   const calls = { inventory: 0, commerce: 0, apple: 0 };
+  const feedback = [];
   let failCommerce = false;
   const A = {
     $: () => null,
@@ -217,6 +219,11 @@ test('overview reuses a clean visit, refreshes explicitly and preserves failed s
     },
     canVisit: () => true,
     render() {},
+    async withActionFeedback(node, operation, messages) {
+      const result = await operation();
+      feedback.push({ result, messages });
+      return result;
+    },
     esc: String
   };
   window.IDDesignAPI = A;
@@ -240,6 +247,7 @@ test('overview reuses a clean visit, refreshes explicitly and preserves failed s
   overview.onClick('overview-refresh');
   await flush();
   assert.deepEqual(calls, { inventory: 2, commerce: 2, apple: 2 });
+  assert.equal(feedback[0].result, true, '完整刷新才允许成功反馈');
   await api.save('inventory', 0, {});
   await revisit();
   assert.deepEqual(calls, { inventory: 3, commerce: 3, apple: 3 });
@@ -251,6 +259,8 @@ test('overview reuses a clean visit, refreshes explicitly and preserves failed s
   assert.equal(snapshot.data.inventory.data.generation, 4);
   assert.equal(snapshot.data.commerce.data.generation, 3);
   assert.equal(snapshot.data.commerce.phase, 'error');
+  assert.equal(feedback[1].result, false, '部分失败不能报告全部更新成功');
+  assert.match(feedback[1].messages.failure, /部分数据/);
   await revisit();
   assert.deepEqual(calls, { inventory: 5, commerce: 5, apple: 5 });
   failCommerce = false;

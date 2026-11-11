@@ -13,7 +13,7 @@ const units = (value = '0') => {
 };
 // Drive the real public handlers with fictional identities and form snapshots.
 // No private exports, production data, network, or database is involved.
-function runtime() {
+function runtime(localData) {
   let sequence = 0,
     callback,
     confirmation,
@@ -49,6 +49,7 @@ function runtime() {
     icon: () => '',
     tag: esc,
     titleInfo: () => '',
+    operatorIdProperty: (label, id) => `<div>${esc(label)} ${esc(id || '历史未记录')}</div>`,
     header: () => '',
     summary: () => '',
     button: () => '',
@@ -89,7 +90,7 @@ function runtime() {
     getElementById: () => null
   };
   runInNewContext(source, {
-    window: { IDDesignAPI: api, IDDesignModules: modules },
+    window: { IDDesignAPI: api, IDDesignModules: modules, IDLocalData: localData, IDPagination: { defaultPageSize: 10, render: () => '' } },
     document,
     structuredClone: globalThis.structuredClone,
     Date,
@@ -177,6 +178,10 @@ function runtime() {
       module.onClick('commerce-contact-detail', { dataset: { id, kind } });
       return drawers.at(-1);
     },
+    records(id) {
+      tables.length = 0;
+      module.onClick('commerce-contact-services', { dataset: { id, kind: 'customer' } });
+    },
     customers: () => api.modules.commerce.getCustomers(),
     tenants: () => api.modules.commerce.getTenants()
   };
@@ -198,7 +203,7 @@ test('客户和租户展示明确录入、修改字段，旧记录不冒充当�
   for (const key of ['qq', 'tags', 'services']) assert(c.columns.some((col) => col.id === key));
 });
 
-test('录入页切换客户与租户，草稿隔离且保存后进入各自列表', () => {
+test('客户与租户录入草稿独立，保存后留在当前页签并更新最近记录', () => {
   const r = runtime();
   r.api.state.route = 'customers/new';
   r.api.state.drafts.set('commerce-contact:customer:new', { 'commerce-name': '客户草稿' });
@@ -216,14 +221,19 @@ test('录入页切换客户与租户，草稿隔离且保存后进入各自列�
   r.contact({ name: '工作台租户' }, 'tenant');
   r.confirm();
   assert.equal(r.tenants()[0].name, '工作台租户');
-  assert.equal(r.api.state.route, 'customers/tenants');
+  assert.equal(r.api.state.route, 'customers/new/tenant');
+  r.module.render();
+  assert.equal(r.tables.at(-1).rows[0].name, '工作台租户');
 
   r.module.onClick('commerce-contact-entry-tab', { dataset: { tab: 'customer' } });
   assert.match(r.module.render(), /value="客户草稿"/);
   r.contact({ name: '工作台客户', phone: '60123456789' });
   r.confirm();
   assert.equal(r.customers()[0].name, '工作台客户');
-  assert.equal(r.api.state.route, 'customers/list');
+  assert.equal(r.api.state.route, 'customers/new');
+  assert.equal(r.api.state.drafts.has('commerce-contact:customer:new'), false);
+  r.module.render();
+  assert.equal(r.tables.at(-1).rows[0].name, '工作台客户');
 });
 
 test('新增客户保存QQ和标签，录入身份由会话生成而非表单填写', () => {
@@ -245,19 +255,24 @@ test('新增客户保存QQ和标签，录入身份由会话生成而非表单填
   assert.equal(c.updatedById, 'actor-a');
 });
 
-test('姓名和至少一种联系方式必填，失败保留草稿且不写入', () => {
+test('姓名必填而客户联系方式可空，失败保留草稿且不写入', () => {
   const r = runtime();
   const key = 'commerce-contact:customer:new';
   r.api.state.drafts.set(key, { 'commerce-name': '  ' });
   r.contact({ name: '  ', phone: '  ' });
   assert.equal(r.errors.get('commerce-contact-name'), '请填写姓名');
-  assert.equal(r.errors.get('commerce-contact-phone'), '请至少填写一种联系方式');
+  assert.equal(r.errors.get('commerce-contact-phone'), '');
   assert.equal(r.customers().length, 3);
   assert(r.api.state.drafts.has(key));
   r.contact({ phone: '', qq: 'qq-only' });
   r.confirm();
   assert.equal(r.customers()[0].qq, 'qq-only');
   assert(!r.api.state.drafts.has(key));
+  const before = r.customers().length;
+  r.contact({ name: '网站下单无联系方式客户', phone: '', qq: '', wechat: '', whatsapp: '', telegram: '' });
+  r.confirm();
+  assert.equal(r.customers().length, before + 1);
+  assert.equal(r.customers()[0].phone, '');
 });
 
 test('按同渠道核对重复客户，覆盖停用记录、格式差异和编辑冲突', () => {
@@ -342,8 +357,23 @@ test('编辑历史记录不补造录入人，租户业务归属人与录入人�
   r.contact({ name: '新租户', owner: '业务负责人' }, 'tenant');
   r.confirm();
   const t = r.tenants()[0];
-  assert.equal(t.owner, '业务负责人');
+  assert.equal(t.owner, '演示录入员', '新增租户不再信任自由填写的归属人文字');
+  assert.equal(t.ownerId, 'actor-a');
   assert.equal(t.createdBy, '演示录入员');
+  const historical = r.tenants().find(row => row.id === 'tenant-demo-1');
+  r.contact({ id: historical.id, version: String(historical.version), owner: '冒名修改', ownerId: 'actor-a' }, 'tenant');
+  r.confirm();
+  assert.equal(historical.owner, '林负责人');
+  assert.equal(Object.hasOwn(historical, 'ownerId'), false, '历史文字归属不猜测员工编号');
+});
+
+test('员工新增租户只读显示自己，不读取可分配人员目录', () => {
+  const actor = { id: 'staff', name: '当前员工', role: 'employee' };
+  const r = runtime({ authRequired: true, actor: () => actor });
+  r.module.onClick('commerce-contact-add', { dataset: { kind: 'tenant' } });
+  const { body } = r.drawers.at(-1);
+  assert.match(body, /id="commerce-contact-ownerId" value="当前员工" readonly/);
+  assert.doesNotMatch(body, /commerce-contact-ownerId-picker|业务归属人员/);
 });
 
 test('历史业务按明确客户编号汇总次数、首末开通及来源单号，不按邮箱猜客户', () => {
@@ -359,19 +389,26 @@ test('历史业务按明确客户编号汇总次数、首末开通及来源单�
       orderNo: 'NO-CUSTOMER',
       start: '2026-08-01T10:00'
     },
-    { ...base, id: 'unpaid', paidConfirmed: false, orderNo: 'UNPAID', start: '2026-07-01T10:00' }
+    { ...base, id: 'unpaid', paidConfirmed: false, orderNo: 'UNPAID', start: '2026-07-01T10:00' },
+    { ...base, id: 'synced', source: '线上代充', taskId: 'job-synced', orderNo: 'SYNCED',
+      paidConfirmed: false, rechargeCompletedAt: '2026-10-15T02:00:12Z', start: '2026-10-15T10:00',
+      expiry: '2026-11-15T10:00' },
+    { ...base, id: 'pending-opening', source: '线上代充', taskId: 'job-pending', orderNo: 'NO-OPENING',
+      paidConfirmed: true, rechargeCompletedAt: '', start: '2026-10-16T10:00', expiry: '2026-11-16T10:00' }
   );
-  r.detail('customer-demo-1');
+  r.records('customer-demo-1');
   const table = r.tables.find((t) => t.id === 'commerce-contact-services');
   const service = table.rows.find((entry) => entry.name === 'GPT · Plus');
-  assert.equal(service.count, 3);
+  assert.equal(service.count, 4);
   assert.equal(service.firstOpenedAt, '2026-09-01T10:00');
   assert.equal(service.lastOpenedAt, '2026-11-01T10:00');
   assert(!service.orderNos.includes('NO-CUSTOMER'));
   assert(!service.orderNos.includes('UNPAID'));
+  assert(service.orderNos.includes('SYNCED'));
+  assert(!service.orderNos.includes('NO-OPENING'));
   r.contact();
   r.confirm();
-  r.detail(r.customers()[0].id);
+  r.records(r.customers()[0].id);
   assert.equal(r.tables.find((t) => t.id === 'commerce-contact-services').rows.length, 0);
 });
 
@@ -495,7 +532,7 @@ test('历史首末时间按北京时间数值排序，兼容空格格式且不�
     { ...base, id: 'afternoon', orderNo: 'AFTERNOON', start: '2026-11-02 15:00' },
     { ...base, id: 'future', orderNo: 'FUTURE', start: '2026-11-04T09:00' }
   );
-  r.detail('customer-demo-1');
+  r.records('customer-demo-1');
   const service = r.tables.find((t) => t.id === 'commerce-contact-services').rows[0];
   assert.equal(service.count, 2);
   assert.equal(service.firstOpenedAt, '2026-11-02T09:00');

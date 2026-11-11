@@ -1,0 +1,89 @@
+/* ID 全站视觉规范：后台、登录、公开工具与充值外壳共用。 */
+:root {
+  color-scheme: light;
+  --bg: #f3f6fa;
+  --surface: #ffffff;
+  --surface-soft: #edf3f9;
+  --text: #1f2a37;
+  --secondary: #526176;
+  --muted: #607087;
+  --line: #d9e2ed;
+  --control-border: #8291a5;
+  --primary: #2563a6;
+  --primary-hover: #1d528b;
+  --primary-active: #174674;
+  --primary-soft: #e9f1fb;
+  --on-primary: #ffffff;
+  --success: #0f766e;
+  --success-soft: #e4f4f0;
+  --violet: #6d5acf;
+  --violet-soft: #f0ecfc;
+  --cyan: #087486;
+  --cyan-soft: #e2f3f7;
+  --danger: #b6424b;
+  --danger-soft: #fcebee;
+  --warning: #946000;
+  --warning-soft: #fff3dc;
+  --blue: #2563a6;
+  --blue-soft: #e9f1fb;
+  --sidebar-surface: #f8faff;
+  --shadow: 0 3px 16px rgb(36 63 99 / 5%);
+  --shadow-raised: 0 12px 32px rgb(36 63 99 / 12%);
+  --radius: 12px;
+  --radius-control: 8px;
+  --panel-padding-inline: 24px;
+  --panel-padding-block: 20px;
+  --toolbar-padding-block: 12px;
+  --section-gap: 16px;
+  --control-gap: 8px;
+  --sidebar-width: 232px;
+  --header-height: 64px;
+  --motion-fast: 140ms;
+  --motion-ease: cubic-bezier(.2, .8, .2, 1);
+}
+html[data-theme='dark'], :root[data-id-theme='dark'] {
+  color-scheme: dark;
+  --bg: #111a27;
+  --surface: #192638;
+  --surface-soft: #213249;
+  --text: #e7edf5;
+  --secondary: #b4c0d0;
+  --muted: #a2b2c6;
+  --line: #36475d;
+  --control-border: #788da7;
+  --primary: #8ab9f3;
+  --primary-hover: #accdf7;
+  --primary-active: #c4dcfa;
+  --primary-soft: #233d5e;
+  --on-primary: #111a27;
+  --success: #65cbb8;
+  --success-soft: #163c3b;
+  --violet: #b4a5f5;
+  --violet-soft: #342e52;
+  --cyan: #78cfdf;
+  --cyan-soft: #153b49;
+  --danger: #ee99a6;
+  --danger-soft: #492b38;
+  --warning: #e9c575;
+  --warning-soft: #413820;
+  --blue: #8ab9f3;
+  --blue-soft: #233d5e;
+  --sidebar-surface: #152131;
+  --shadow: 0 3px 16px rgb(0 0 0 / 12%);
+  --shadow-raised: 0 12px 32px rgb(0 0 0 / 26%);
+}
+[data-tone='blue'] { --tone: var(--blue); --tone-soft: var(--blue-soft); }
+[data-tone='teal'] { --tone: var(--success); --tone-soft: var(--success-soft); }
+[data-tone='violet'] { --tone: var(--violet); --tone-soft: var(--violet-soft); }
+[data-tone='cyan'] { --tone: var(--cyan); --tone-soft: var(--cyan-soft); }
+[data-tone='amber'] { --tone: var(--warning); --tone-soft: var(--warning-soft); }
+[data-tone='danger'] { --tone: var(--danger); --tone-soft: var(--danger-soft); }
+@media (max-width: 1150px) {
+  :root { --panel-padding-inline: 20px; }
+}
+@media (max-width: 900px) {
+  :root { --panel-padding-inline: 16px; --panel-padding-block: 18px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  :root { --motion-fast: 0ms; }
+}

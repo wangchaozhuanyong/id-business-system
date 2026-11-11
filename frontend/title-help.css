@@ -25,6 +25,7 @@
   color: var(--secondary, var(--text-secondary));
   font-size: 12px;
   line-height: 1.8;
+  white-space: normal;
   overflow-wrap: anywhere;
 }
 .title-description[popover] {
@@ -41,8 +42,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 36px;
+  height: 36px;
   border-radius: 6px;
   color: var(--muted, var(--text-dim));
   list-style: none;

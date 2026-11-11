@@ -2,14 +2,82 @@ import { isDeepStrictEqual } from 'node:util';
 
 import { createOrderSnapshot, snapshotAction } from '../../modules/finance/accounting.mjs';
 
+export const historicalFeeAction = '更正历史付款费率';
+const historicalFeeKind = 'historical-card-fee';
+const rateIs = (value, fraction) => typeof value === 'string' &&
+  new RegExp(`^0\\.${fraction}0*$`).test(value);
+
+function checkHistoricalFeeCorrection(previous, incoming, before, after, currentCostSettings, actor) {
+  const fail = '历史费率更正条件未满足，请单独核对订单、费用规则和更正依据';
+  if (!previous || !actor?.id || !['admin', 'super'].includes(actor.role) ||
+      before.size !== after.size) return fail;
+  const changed = incoming.orders.filter(order => !isDeepStrictEqual(order, before.get(order.id)));
+  if (changed.length !== 1) return fail;
+  const next = changed[0], prior = before.get(next.id);
+  if (!prior || prior.product !== 'GPT' || prior.payment !== '银行卡' || prior.costBasis !== 'standard' ||
+      prior.cancelled || prior.source === '线上代充' || prior.taskId || prior.taskEvidenceId ||
+      prior.rechargeCompletedAt || prior.costSettings?.version !== 2 ||
+      !rateIs(prior.costSettings.cardPercent, '08') || !currentCostSettings ||
+      !Number.isSafeInteger(currentCostSettings.version) || currentCostSettings.version <= 2 ||
+      !rateIs(currentCostSettings.cardPercent, '008') || !isDeepStrictEqual(next.costSettings, currentCostSettings)) return fail;
+  const { version: _oldVersion, cardPercent: _oldRate, ...oldRules } = prior.costSettings;
+  const { version: _newVersion, cardPercent: _newRate, ...newRules } = currentCostSettings;
+  if (!isDeepStrictEqual(oldRules, newRules) || !Number.isSafeInteger(prior.version) ||
+      next.version !== prior.version + 1 || next.updatedById !== actor.id) return fail;
+  const existing = prior.corrections || [], corrections = next.corrections;
+  if (!Array.isArray(existing) || !Array.isArray(corrections) ||
+      existing.some(item => item?.kind === historicalFeeKind) || corrections.length !== existing.length + 1 ||
+      !isDeepStrictEqual(corrections.slice(0, -1), existing)) return fail;
+  const correction = corrections.at(-1), reason = correction?.reason;
+  const { corrections: _corrections, refunds: _refunds, bankReturns: _returns, ...original } = prior;
+  if (correction?.kind !== historicalFeeKind || correction.verified !== true ||
+      typeof correction.id !== 'string' || !correction.id || existing.some(item => item?.id === correction.id) ||
+      typeof correction.at !== 'string' || !correction.at || correction.actorId !== actor.id ||
+      typeof reason !== 'string' || reason !== reason.trim() || !reason || reason.length > 200 ||
+      /(?:\d[ -]?){12,19}/.test(reason) || correction.versionAfter !== next.version ||
+      !isDeepStrictEqual(correction.previous, original)) return fail;
+  const [entry, ...logs] = incoming.logs || [];
+  if (!entry?.id || (previous.logs || []).some(item => item?.id === entry.id) ||
+      entry.type !== historicalFeeAction || entry.entityId !== prior.id || entry.actorId !== actor.id ||
+      typeof entry.detail !== 'string' || !entry.detail.includes(reason) ||
+      !isDeepStrictEqual(logs, previous.logs)) return fail;
+  const orders = previous.orders.map(order => order.id === prior.id ? {
+    ...order, costSettings: currentCostSettings, corrections, version: next.version,
+    updatedAt: next.updatedAt, updatedBy: next.updatedBy, updatedById: next.updatedById
+  } : order);
+  return isDeepStrictEqual(incoming, { ...previous, orders, logs: incoming.logs }) ? '' : fail;
+}
+
 // Call inside the commerce document transaction, after its version check.
 // Other commerce writes must carry frozen snapshots through unchanged.
 export function checkFinanceSnapshots(
-  previous, incoming, { action, clock = Date.now(), verifyAutomaticSnapshot } = {}
+  previous, incoming, { action, clock = Date.now(), verifyAutomaticSnapshot, currentCostSettings, actor,
+    verifiedCardBackfillId } = {}
 ) {
   const before = new Map((previous?.orders || []).map((order) => [order.id, order]));
   const after = new Map(incoming.orders.map((order) => [order.id, order]));
   if (after.size !== incoming.orders.length) return '订单编号重复，无法核对汇率快照';
+  for (const [id, order] of before) {
+    const next = after.get(id);
+    if ((order.corrections || []).some(item => item?.kind === historicalFeeKind) &&
+        !isDeepStrictEqual(order.costSettings, next?.costSettings)) return '已更正的费用规则不可覆盖或删除';
+    for (const [index, correction] of (order.corrections || []).entries()) {
+      if ([historicalFeeKind, 'historical-card-backfill'].includes(correction?.kind) &&
+          !isDeepStrictEqual(correction, next?.corrections?.[index])) return '历史费率或原付款卡更正记录不可覆盖或删除';
+    }
+    if (action === '补偿撤回更正' && [historicalFeeKind, 'historical-card-backfill'].includes(order.corrections?.at(-1)?.kind) &&
+        !isDeepStrictEqual(order, next)) return '历史费率或原付款卡更正不可通过普通撤回覆盖';
+  }
+  if (action === historicalFeeAction)
+    return checkHistoricalFeeCorrection(previous, incoming, before, after, currentCostSettings, actor);
+  for (const [id, order] of after) {
+    const original = before.get(id)?.corrections || [];
+    if ((order.corrections || []).some((item, index) =>
+      item?.kind === historicalFeeKind && !isDeepStrictEqual(item, original[index]) ||
+      item?.kind === 'historical-card-backfill' && !isDeepStrictEqual(item, original[index]) &&
+        !(verifiedCardBackfillId === id && index === original.length && index === order.corrections.length - 1)))
+      return '请通过对应的历史订单更正入口登记';
+  }
   for (const [id, order] of before) {
     if (!order.fxSnapshot) continue;
     if (!isDeepStrictEqual(order.fxSnapshot, after.get(id)?.fxSnapshot))

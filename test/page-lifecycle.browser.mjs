@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { startCodexdaichongDemoSite } from '../modules/recharge/codexdaichong/demo-site.mjs';
+import { interceptDesign, origin as offlineOrigin } from './helpers/offline-design.mjs';
 
 const active = '#main > [data-page-region]:not([hidden])';
 const frameSelector = active + ' .recharge-integration__content iframe:not([hidden])';
@@ -15,11 +16,12 @@ test('warm navigation reuses connected page documents, scopes refresh and clears
   assert(process.env.ID_RECHARGE_QA_PLAYWRIGHT, '请指定已有 Playwright 模块入口');
   const module = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
   const { chromium } = module.default || module;
-  const host = await startCodexdaichongDemoSite(0);
+  const offline = process.env.ID_LAYOUT_QA_OFFLINE === '1';
+  const host = offline ? { url: offlineOrigin + '/' } : await startCodexdaichongDemoSite(0);
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
   t.after(async () => {
     await browser.close();
-    await new Promise(resolve => { host.server.close(resolve); host.server.closeAllConnections(); });
+    if (!offline) await new Promise(resolve => { host.server.close(resolve); host.server.closeAllConnections(); });
   });
   const origin = new URL(host.url).origin;
   const output = process.env.ID_LAYOUT_QA_OUTPUT;
@@ -29,6 +31,7 @@ test('warm navigation reuses connected page documents, scopes refresh and clears
   for (const width of [1440, 390]) for (const dark of [false, true]) {
     await t.test(`${width}px ${dark ? 'dark' : 'light'}`, async () => {
       const page = await browser.newPage({ viewport: { width, height: 900 } });
+      if (offline) await interceptDesign(page.context());
       page.setDefaultTimeout(7000);
       const errors = [];
       const requests = { query: 0, admin: 0, workspace: 0, bit: 0 };
@@ -48,7 +51,7 @@ test('warm navigation reuses connected page documents, scopes refresh and clears
         if (key) requests[key]++;
       });
       await page.route('**/*', route => new URL(route.request().url()).origin === origin &&
-        ['GET', 'HEAD'].includes(route.request().method()) ? route.continue() : route.abort());
+        ['GET', 'HEAD'].includes(route.request().method()) ? (offline ? route.fallback() : route.continue()) : route.abort());
       const frame = () => page.frameLocator(frameSelector);
       const settle = () => page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
       const idle = () => page.locator(active + ' .recharge-integration__view[aria-busy="false"]').waitFor();
@@ -60,10 +63,11 @@ test('warm navigation reuses connected page documents, scopes refresh and clears
       };
       const navigate = async route => {
         if (width <= 900) await page.locator('#nav-toggle').click();
-        const group = route === online ? '线上代充' : '快速操作';
-        if (!await page.locator(`#sidebar a[href="#/${route}"]`).count())
-          await page.locator(`#sidebar [data-group="${group}"]`).click();
-        await page.locator(`#sidebar a[href="#/${route}"]`).click();
+        const label = { [online]: '线上代充', [workspace]: '快速操作', [bit]: '管理快捷' }[route];
+        const group = page.locator(`#sidebar .nav-group:has(> [data-group="${label}"])`);
+        const link = group.locator(`a[href="#/${route}"]`);
+        if (!await link.count()) await group.locator('[data-action="nav-group"]').click();
+        await link.click();
         await page.waitForURL(origin + '/#/' + route);
         await ready(route);
         if (width <= 900) await page.waitForFunction(() => document.querySelector('#sidebar').getBoundingClientRect().right <= 1);

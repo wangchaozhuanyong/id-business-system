@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto';
 import {
   closeSync,
   constants,
@@ -19,6 +19,9 @@ import { openLocalSessionStore } from './local-auth-sessions.mjs';
 export const localAdminEmail = 'ppfzj1314@gmail.com';
 const localCookieName = 'id_local_session';
 const sessionLifetime = 8 * 60 * 60 * 1000;
+const day = 24 * 60 * 60 * 1000;
+const rememberedIdleLifetime = 30 * day;
+const rememberedMaximumLifetime = 90 * day;
 const loginWindow = 60_000;
 const accountAttempts = 8;
 const totalAttempts = 32;
@@ -198,20 +201,26 @@ export async function initializeLocalAdmin(accountPath, { email, name, password 
   return publicEmployee(employee);
 }
 
-function requestToken(request, cookieName) {
+function requestCookie(request, cookieName) {
   const cookies = String(request.headers.cookie || '').split(';');
   const matches = cookies
     .map((cookie) => cookie.trim())
     .filter((cookie) => cookie.startsWith(cookieName + '='));
   if (matches.length !== 1) return null;
   const token = matches[0].slice(cookieName.length + 1);
-  return tokenPattern.test(token) ? createHash('sha256').update(token).digest('hex') : null;
+  return tokenPattern.test(token) ? token : null;
+}
+function requestToken(request, cookieName) {
+  const token = requestCookie(request, cookieName);
+  return token ? createHash('sha256').update(token).digest('hex') : null;
 }
 
-function setCookie(response, token, lifetime, cookieName, secure) {
+function setCookie(response, token, lifetime, cookieName, secure, alsoClear = []) {
+  const value = (name, token, age) => `${name}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(age / 1000)}${secure ? '; Secure' : ''}`;
   response.setHeader(
     'Set-Cookie',
-    `${cookieName}=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=${Math.floor(lifetime / 1000)}${secure ? '; Secure' : ''}`
+    alsoClear.length ? [value(cookieName, token, lifetime), ...alsoClear.map(name => value(name, '', 0))]
+      : value(cookieName, token, lifetime)
   );
 }
 
@@ -300,35 +309,83 @@ export function createLocalAdminSetup(accountPath, { onCreated } = {}) {
   };
 }
 
-export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUrl } = {}) {
+export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date.now, publicUrl } = {}) {
+  const monitoringKey = onMonitoring && randomBytes(32);
+  function monitor(kind, email) {
+    if (!onMonitoring) return;
+    try {
+      onMonitoring({ kind, ...(email && email.length <= 254 && {
+        accountKey: createHmac('sha256', monitoringKey).update(email).digest('hex')
+      }) });
+    } catch { /* Auth decisions do not depend on monitoring. */ }
+  }
   if (!readAccounts(accountPath)) return null;
-  const cookieName = publicUrl ? '__Host-id_session' : localCookieName;
+  const legacyCookieName = publicUrl ? '__Host-id_session' : localCookieName;
+  const cookieName = legacyCookieName + '_v2';
   const sessions = publicUrl ? openLocalSessionStore(accountPath + '.sessions') : new Map();
   const attempts = [];
   let verifying = 0;
 
+  function selectedCookie(request) {
+    // An explicitly present new cookie (including an invalid duplicate) must
+    // never fall back to a different identity in a leftover legacy cookie.
+    return String(request.headers.cookie || '').split(';').some(value => value.trim().startsWith(cookieName + '='))
+      ? cookieName : legacyCookieName;
+  }
+  const sessionToken = request => requestToken(request, selectedCookie(request));
+  function removeBrowserSessions(request) {
+    for (const name of [cookieName, legacyCookieName]) {
+      const digest = requestToken(request, name);
+      if (digest) sessions.delete(digest);
+    }
+  }
+
+  function updateSession(digest, change) {
+    if (sessions.update) return sessions.update(digest, change);
+    const current = sessions.get(digest);
+    if (!current) return undefined;
+    const next = change(current);
+    if (next) sessions.set(digest, next);
+    return next;
+  }
+
+  function sessionMetadata(session) {
+    // Old eight-hour sessions remain eight-hour sessions after a deployment.
+    return session.id ? session : {
+      ...session, id: randomUUID(), remembered: false,
+      createdAt: session.expiresAt - sessionLifetime,
+      lastUsedAt: session.expiresAt - sessionLifetime,
+      absoluteExpiresAt: session.expiresAt,
+      device: '更新前的登录设备'
+    };
+  }
+
   function actorRecord(request, accounts) {
-    const token = requestToken(request, cookieName);
+    const token = sessionToken(request);
+    if (!token) return null;
     const session = sessions.get(token);
-    if (!session) return null;
+    if (!session) { request.localAuthReason = 'invalid'; return null; }
     const current = accounts === undefined ? readAccounts(accountPath) : accounts;
+    if (!current) throw new Error('账号存储暂不可用');
     const employee = current?.employees.find((row) => row.id === session.employeeId);
     if (
       session.expiresAt <= now() ||
       !employee?.active ||
       employee.sessionVersion !== session.version
     ) {
-      sessions.delete(token);
+      request.localAuthReason = session.expiresAt <= now() ? 'expired' : 'revoked';
       return null;
     }
     return employee;
   }
 
-  function getActor(request) {
+  function getActor(request, { throwOnUnavailable = false } = {}) {
     try {
       const employee = actorRecord(request);
       return employee ? publicEmployee(employee) : null;
-    } catch {
+    } catch (error) {
+      if (throwOnUnavailable) throw error;
+      request.localAuthUnavailable = true;
       return null;
     }
   }
@@ -339,7 +396,7 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
 
   function requireActor(request, accounts) {
     const employee = actorRecord(request, accounts);
-    if (!employee) throw new AuthError(401, '请先登录本机业务系统');
+    if (!employee) throw new AuthError(401, '登录已过期或已失效，请重新登录');
     return employee;
   }
 
@@ -362,6 +419,8 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
 
   async function login(request, response) {
     const body = await parseJson(request);
+    if (body.remember !== undefined && typeof body.remember !== 'boolean')
+      throw new AuthError(400, '保持登录选项格式不正确');
     const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
     const password = typeof body.password === 'string' ? body.password : '';
     const at = now();
@@ -371,11 +430,13 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
       attempts.filter((attempt) => attempt.email === email).length >= accountAttempts ||
       verifying >= 2
     ) {
+      monitor('limited', email);
       response.setHeader('Retry-After', '60');
       throw new AuthError(429, '登录尝试过于频繁，请稍后再试');
     }
     attempts.push({ email: email.slice(0, 254), at });
     if (email.length > 254 || password.length > 256 || Buffer.byteLength(password, 'utf8') > 512) {
+      monitor('rejected', email);
       throw new AuthError(401, '邮箱或密码不正确');
     }
     const previous = readAccounts(accountPath)?.employees.find((row) => row.email === email);
@@ -388,10 +449,10 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
     }
     const employee = readAccounts(accountPath)?.employees.find((row) => row.id === previous?.id);
     if (!matches || !employee?.active || employee.sessionVersion !== previous.sessionVersion) {
+      monitor('rejected', email);
       throw new AuthError(401, '邮箱或密码不正确');
     }
-    const previousToken = requestToken(request, cookieName);
-    if (previousToken) sessions.delete(previousToken);
+    removeBrowserSessions(request);
     if (publicUrl) {
       sessions.prune(at);
     } else {
@@ -401,12 +462,25 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
       if (sessions.size >= 1024) sessions.delete(sessions.keys().next().value);
     }
     const token = randomBytes(32).toString('hex');
+    const createdAt = now();
+    const lifetime = body.remember === true ? rememberedIdleLifetime : sessionLifetime;
+    const agent = String(request.headers['user-agent'] || '').slice(0, 512);
+    const browser = /Edg\//.test(agent) ? 'Edge' : /Firefox\//.test(agent) ? 'Firefox'
+      : /Chrome\//.test(agent) ? 'Chrome' : /Safari\//.test(agent) ? 'Safari' : '浏览器';
+    const platform = /Android/.test(agent) ? 'Android' : /iPhone|iPad/.test(agent) ? 'iOS'
+      : /Macintosh/.test(agent) ? 'macOS' : /Windows/.test(agent) ? 'Windows' : /Linux/.test(agent) ? 'Linux' : '未知设备';
     sessions.set(createHash('sha256').update(token).digest('hex'), {
+      id: randomUUID(), remembered: body.remember === true,
+      createdAt, lastUsedAt: createdAt,
+      absoluteExpiresAt: createdAt + (body.remember === true ? rememberedMaximumLifetime : sessionLifetime),
+      device: browser + ' · ' + platform,
       employeeId: employee.id,
       version: employee.sessionVersion,
-      expiresAt: now() + sessionLifetime
+      expiresAt: createdAt + lifetime
     });
-    setCookie(response, token, sessionLifetime, cookieName, Boolean(publicUrl));
+    // The server enforces rolling idle expiry; the browser cookie lasts only
+    // until the absolute cap. Activity responses cannot overwrite a later login.
+    setCookie(response, token, body.remember === true ? rememberedMaximumLifetime : lifetime, cookieName, Boolean(publicUrl));
     report('auth_login', employee);
     sendJson(response, 200, { actor: publicEmployee(employee) });
   }
@@ -461,6 +535,7 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
       return row;
     });
     report('auth_employee_create', operator, employee.id);
+    if (employee.role === 'admin' && employee.active) monitor('admin_access');
     sendJson(response, 201, { employee: publicEmployee(employee) });
   }
 
@@ -480,6 +555,7 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
     const name = nameValue === undefined ? undefined : validatedName(nameValue);
     const credential =
       body.password === undefined ? undefined : await createCredential(body.password);
+    let accessChanged = false;
     const { employee, operator } = mutate(request, (employees, actor) => {
       const row = employees.find((entry) => entry.id === employeeId);
       if (!row) throw new AuthError(404, '员工账号不存在');
@@ -492,7 +568,8 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
       ) {
         throw new AuthError(403, '超级管理员角色与启用状态受保护');
       }
-      if (role !== row.role || active !== row.active || credential) row.sessionVersion++;
+      accessChanged = Boolean(role !== row.role || active !== row.active || credential);
+      if (accessChanged) row.sessionVersion++;
       if (body.nickname !== undefined || (name !== undefined && name !== row.name)) row.nicknameSet = true;
       row.name = name ?? row.name;
       row.role = role;
@@ -503,6 +580,7 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
       return row;
     });
     report('auth_employee_update', operator, employee.id);
+    if (accessChanged) monitor('admin_access');
     sendJson(response, 200, { employee: publicEmployee(employee) });
   }
 
@@ -530,14 +608,67 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
       const route = (request.url || '').split('?', 1)[0];
       const method = request.method;
       if (route === '/api/local/auth/session' && method === 'GET') {
-        return sendJson(response, 200, { configured: true, actor: getActor(request) });
+        const actor = getActor(request);
+        if (request.localAuthUnavailable) throw new Error('会话存储暂不可用');
+        return sendJson(response, 200, { configured: true, actor, ...(!actor ? { reason: request.localAuthReason } : {}) });
+      }
+      if (route === '/api/local/auth/activity' && method === 'POST') {
+        requireActor(request);
+        const at = now();
+        const digest = sessionToken(request);
+        const session = updateSession(digest, current => {
+          const row = sessionMetadata(current);
+          if (row.expiresAt <= at) return undefined;
+          return { ...row, lastUsedAt: at,
+            expiresAt: row.remembered ? Math.min(at + rememberedIdleLifetime, row.absoluteExpiresAt) : row.expiresAt };
+        });
+        if (!session) throw new AuthError(401, '登录已过期，请重新登录');
+        // Previously issued cookies retain rolling renewal under their old name.
+        // A delayed legacy response cannot replace the authoritative v2 cookie.
+        if (selectedCookie(request) === legacyCookieName && session.remembered)
+          setCookie(response, requestCookie(request, legacyCookieName), session.expiresAt - at, legacyCookieName, Boolean(publicUrl));
+        return sendJson(response, 200, { expiresAt: session.expiresAt, remembered: session.remembered });
+      }
+      if (route === '/api/local/auth/devices' && method === 'GET') {
+        const employee = requireActor(request);
+        const currentDigest = sessionToken(request);
+        const items = [];
+        for (const [digest, current] of sessions.entries()) {
+          if (current.employeeId !== employee.id || current.version !== employee.sessionVersion || current.expiresAt <= now()) continue;
+          const row = current.id ? current : updateSession(digest, sessionMetadata);
+          if (!row) continue;
+          items.push({ id: row.id, device: row.device, current: digest === currentDigest,
+            remembered: row.remembered, createdAt: row.createdAt, lastUsedAt: row.lastUsedAt,
+            expiresAt: row.expiresAt, absoluteExpiresAt: row.absoluteExpiresAt });
+        }
+        items.sort((a, b) => Number(b.current) - Number(a.current) || b.lastUsedAt - a.lastUsedAt);
+        return sendJson(response, 200, { items });
+      }
+      const deviceId = route.match(/^\/api\/local\/auth\/devices\/([0-9a-f-]{36})$/)?.[1];
+      if (deviceId && method === 'DELETE') {
+        const employee = requireActor(request);
+        const currentDigest = sessionToken(request);
+        let found = false, current = false;
+        for (const [digest, row] of sessions.entries()) {
+          if (row.employeeId !== employee.id || row.id !== deviceId) continue;
+          sessions.delete(digest);
+          current = digest === currentDigest;
+          found = true;
+        }
+        if (!found) throw new AuthError(404, '该登录设备已退出，请刷新列表');
+        if (current) {
+          removeBrowserSessions(request);
+          setCookie(response, '', 0, cookieName, Boolean(publicUrl), [legacyCookieName]);
+        }
+        report('auth_session_revoke', employee);
+        return sendJson(response, 200, { current });
       }
       if (route === '/api/local/auth/login' && method === 'POST')
         return await login(request, response);
       if (route === '/api/local/auth/logout' && method === 'POST') {
         const employee = actorRecord(request);
-        sessions.delete(requestToken(request, cookieName));
-        setCookie(response, '', 0, cookieName, Boolean(publicUrl));
+        removeBrowserSessions(request);
+        setCookie(response, '', 0, cookieName, Boolean(publicUrl), [legacyCookieName]);
         if (employee) report('auth_logout', employee);
         return sendJson(response, 200, { actor: null });
       }
@@ -569,13 +700,21 @@ export function createLocalAuth(accountPath, { onEvent, now = Date.now, publicUr
     } catch (error) {
       if (response.destroyed || response.headersSent) return;
       sendJson(response, error instanceof AuthError ? error.status : 500, {
-        error: error instanceof AuthError ? error.message : '本机员工服务暂时无法处理请求'
+        error: error instanceof AuthError ? error.message : '账户服务暂时无法处理请求，请稍后重试',
+        ...(error instanceof AuthError && error.status === 401 ? { reason: request.localAuthReason || 'invalid' } : {})
       });
     }
   }
 
   return {
     getActor, orderOwners, handle,
+    ready() {
+      // Validate the account store and the existing session directory without
+      // creating a session or reading a real user's token.
+      if (!readAccounts(accountPath)) return false;
+      sessions.get('0'.repeat(64));
+      return true;
+    },
     changeVersion: () => createHash('sha256').update(JSON.stringify(
       readAccounts(accountPath).employees.map(({ id, version }) => [id, version]).sort(([a], [b]) => a.localeCompare(b))
     )).digest('hex')

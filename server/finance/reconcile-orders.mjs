@@ -1,5 +1,5 @@
 import { addDecimalStrings } from '../../modules/contracts/decimal.ts';
-import { calculateOrder, currencies } from '../../modules/finance/accounting.mjs';
+import { buildCardIssueAllocations, calculateOrder, currencies } from '../../modules/finance/accounting.mjs';
 import { checkBankReturns } from '../local-business-integrity.mjs';
 import { migrationInputSchema } from './migration-input.mjs';
 
@@ -152,7 +152,7 @@ function inspectApple(order, indexes, issues) {
   };
 }
 
-function checkOrder(order, indexes, clock, migrationGaps) {
+function checkOrder(order, indexes, clock, migrationGaps, cardIssueAllocations) {
   const issues = new Set(migrationGaps);
   const paid = money(order.paidAmount, order.paidCurrency);
   const sold = money(order.saleAmount, order.saleCurrency);
@@ -160,7 +160,6 @@ function checkOrder(order, indexes, clock, migrationGaps) {
   if (!sold.amount || !sold.currency) issues.add('缺少有效的原币实收金额或币种');
   if (order.paidConfirmed !== true) issues.add('代付待确认');
   if (order.receiptConfirmed !== true) issues.add('实收待确认');
-  if (order.costConfirmed !== true) issues.add('成本口径待确认');
   if (!order.start) issues.add('缺少订单订阅时点');
   const feeVersion = order.costSettings?.version;
   if (!Number.isSafeInteger(feeVersion) || feeVersion < 1) issues.add('缺少费用规则版本快照');
@@ -198,8 +197,9 @@ function checkOrder(order, indexes, clock, migrationGaps) {
   const currencyResults = {};
   const pendingReasons = new Set(issues);
   for (const target of reportCurrencies) {
-    const result = calculateOrder(financialOrder, { currency: target, appleLedger: apple?.ledger, clock });
-    if (result.status === 'pending') pendingReasons.add(result.reason);
+    const result = calculateOrder(financialOrder, { currency: target, appleLedger: apple?.ledger, clock, cardIssueAllocations });
+    if (result.status === 'pending')
+      for (const reason of [result.reason, ...(result.additionalReasons || [])]) pendingReasons.add(reason);
     if (order.cancelled === true) {
       currencyResults[target] = { status: 'excluded', reason: '订单已撤单' };
     } else if (issues.size || result.status === 'pending') {
@@ -211,8 +211,15 @@ function checkOrder(order, indexes, clock, migrationGaps) {
     }
   }
 
+  const allocation = cardIssueAllocations?.get(order.id);
+  const legacyFee = order.issueFeeSnapshot?.applied ? decimal(order.issueFeeSnapshot.amountUsd)
+    : order.issueFeeSnapshot?.applied === false && !order.issueFeeSnapshot.pending ? '0' : null;
   return {
     orderId: order.id, orderNo: safeId(order.orderNo), cancelled: order.cancelled === true,
+    ...(allocation && { cardIssueAllocation: {
+      ...allocation, previousUsd: legacyFee,
+      differenceUsd: allocation.status === 'ready' && legacyFee !== null ? difference(allocation.amountUsd, legacyFee) : null
+    } }),
     status: order.cancelled === true ? 'excluded' : pendingReasons.size ? 'pending' : 'ready',
     feeRuleVersion: Number.isSafeInteger(feeVersion) && feeVersion > 0 ? feeVersion : null,
     snapshotKind: ['manual', 'automatic'].includes(order.fxSnapshot?.kind) ? order.fxSnapshot.kind : null,
@@ -228,7 +235,7 @@ function checkOrder(order, indexes, clock, migrationGaps) {
   };
 }
 
-export function reconcileOrders(input, { clock = Date.now() } = {}) {
+export function reconcileOrders(input, { clock = Date.now(), fullCardHistory = false } = {}) {
   const orders = input?.commerce?.orders;
   if (!Array.isArray(orders) || !Number.isFinite(clock))
     throw new Error('需要独立新版的 commerce.orders 数组和有效检查时点');
@@ -273,7 +280,8 @@ export function reconcileOrders(input, { clock = Date.now() } = {}) {
     });
     if (excludedLegacy.length) issues.add('本批含旧 ID 通用业务订单，需另行核对');
   }
-  const checked = orders.map((order) => checkOrder(order, indexes, clock, migrationGaps.get(order.id)));
+  const allocations = fullCardHistory ? buildCardIssueAllocations(orders, { clock }) : undefined;
+  const checked = orders.map((order) => checkOrder(order, indexes, clock, migrationGaps.get(order.id), allocations));
   const counts = { ready: 0, pending: 0, excluded: 0 };
   for (const order of checked) counts[order.status]++;
   return {

@@ -90,6 +90,7 @@ async function put(store, domain, body, verifyRelayExtraction, operator = actor)
   request.headers = { host, origin: `http://${host}`, 'content-type': 'application/json' };
   request.method = 'PUT';
   const response = {
+    setHeader() {},
     writeHead(status) {
       this.status = status;
       return this;

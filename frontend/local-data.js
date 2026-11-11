@@ -14,7 +14,7 @@
   let pendingWrites = 0;
   const revisionScopes = new Set(['inventory', 'commerce', 'settings', 'appleBalance', 'toolbox', 'saved-totp',
     'bitbrowser-connections', 'bitbrowser-proxies', 'bitbrowser-addresses', 'tenant-cards', 'recharge-codes',
-    'order-sync', 'tools/mailbox-pool', 'tools/website-visits', 'apple-relay', 'operators', 'audit', 'finance-rates']);
+    'order-sync', 'tools/mailbox-pool', 'tools/website-visits', 'apple-relay', 'operators', 'audit', 'finance-rates', 'card-types']);
   const newer = (incoming, observed) => observed === undefined ||
     (/^\d+$/.test(incoming) && /^\d+$/.test(observed)
       ? BigInt(incoming) > BigInt(observed) : incoming !== observed);
@@ -22,7 +22,7 @@
     if (!scopes.length) return;
     const expanded = new Set(scopes);
     if (scopes.some(scope => ['inventory', 'commerce', 'settings', 'appleBalance'].includes(scope))) expanded.add('overview');
-    if (scopes.includes('inventory')) { expanded.add('apple-relay'); expanded.add('tools/mailbox-pool'); }
+    if (scopes.includes('inventory')) { expanded.add('appleBalance'); expanded.add('apple-relay'); expanded.add('tools/mailbox-pool'); }
     if (scopes.includes('operators')) expanded.add('order-owners');
     queries.invalidate([...expanded]);
     for (const listener of changeListeners) {
@@ -133,7 +133,7 @@
     pendingWrites++;
     try {
       const result = await operation();
-      queries.invalidate([...scopes, ...(scopes.includes('inventory') ? ['tools/mailbox-pool'] : []), 'overview', 'audit']);
+      queries.invalidate([...scopes, ...(scopes.includes('inventory') ? ['tools/mailbox-pool', 'appleBalance'] : []), 'overview', 'audit']);
       return result;
     } finally {
       pendingWrites--;
@@ -160,7 +160,7 @@
     if (!response.ok || result === null) {
       if (response.status === 401) {
         queries.clear();
-        window.IDLocalAuth?.lock?.();
+        window.IDLocalAuth?.lock?.(result?.reason);
       }
       const error = new Error(result?.error || result?.message || '本机数据接口未响应，请重试');
       error.status = response.status;
@@ -205,7 +205,32 @@
     operatorLabel: (id, fallback) => labels.get(id) || fallback || '',
     refreshOperatorLabels,
     orderCards: () => request('order-cards'),
+    cardTypes: () => request('card-types'),
+    cardTypeAction: (command) => write(['card-types'], () => request('card-types', command, 'POST')),
+    subscriptionCardEstimates: () => request('subscription-card-estimates'),
+    subscriptionCardDetails: (command) => request('subscription-card-details', command, 'POST'),
+    revealSubscriptionCard: (orderId, version) => request('subscription-card-reveal', { orderId, version }, 'POST'),
+    copySubscriptionCard: (orderId, cardId, { context, version } = {}) =>
+      request('subscription-card-copy', { orderId, cardId, context, version }, 'POST'),
+    claudeGoogleSubscriptions: (params) => request('claude-google-subscriptions/list', params, 'POST'),
+    subscriptions: (params) => request('subscriptions/list', params, 'POST'),
+    subscriptionOwnerLookup: (order) => request('subscriptions/lookup', { order }, 'POST'),
+    subscriptionCopy: (command) => request('subscriptions/copy', command, 'POST'),
+    subscriptionConfirm: (command) => write(['subscription-management'], () => request('subscriptions/confirm', command, 'POST')),
+    subscriptionOwner: (command) => write(['subscription-management'], () => request('subscriptions/owner', command, 'POST')),
+    claudeHistoryIntake: (command) => command.mode === 'preview'
+      ? request('claude-history-intake', command, 'POST')
+      : write(['inventory'], () => request('claude-history-intake', command, 'POST')),
+    employeeStatistics: (params) => request('employee-statistics?' + new URLSearchParams(params)),
+    systemMonitoring: (params) => request('system-monitoring?' + new URLSearchParams(params)),
+    systemMonitoringAction: (command) => write(['system-monitoring'], () => request('system-monitoring', command, 'POST')),
+    copyClaudeGoogleSubscription: (command) => request('claude-google-subscriptions/copy', command, 'POST'),
+    claudeGoogleCopySettings: () => request('claude-google-subscriptions/copy-settings'),
+    saveClaudeGoogleCopySettings: (command) =>
+      write([], () => request('claude-google-subscriptions/copy-settings', command)),
     orderOwners: () => request('auth/order-owners'),
+    tenantOwnerTransfer: (tenantId) => request('tenant-owner-transfer?tenantId=' + encodeURIComponent(tenantId)),
+    transferTenantOwner: (command) => write(['commerce'], () => request('tenant-owner-transfer', command, 'POST')),
     tenantCards: (tenantId) => request('tenant-cards?tenantId=' + encodeURIComponent(tenantId)),
     tenantCardAction: (command) => ['copy', 'reveal'].includes(command.action)
       ? request('tenant-cards', command, 'POST')
@@ -213,6 +238,8 @@
     rechargeCodeRequests: () => request('recharge-codes'),
     rechargeCodes: () => request('recharge-codes?view=codes'),
     rechargeCodeAction: (command) => write(['recharge-codes'], () => request('recharge-codes', command, 'POST')),
+    orderCompletion: (params) => request('order-completion' + (params ? '?' + new URLSearchParams(params) : '')),
+    saveOrderCompletion: (command) => write(['commerce'], () => request('order-completion', command, 'POST')),
     orderSyncStatus: () => request('order-sync'),
     orderSync: (command) => command.mode === 'preview'
       ? request('order-sync', command, 'POST')
@@ -226,14 +253,19 @@
     save: (domain, version, data, { action } = {}) => write([domain], () => request(domain, { version, data, action })),
     saveBatch: (entries) => write(entries.map((entry) => entry.domain), () => request('batch', entries)),
     audit: () => request('audit'),
-    relay: (operation, data) => ['primary-save', 'primary-import', 'alias-register', 'code-reset-confirm', 'mail-reassign-confirm'].includes(operation)
-      ? write(['inventory', 'apple-relay', 'tools/mailbox-pool'], () => request('apple-relay/' + operation, data, 'POST'))
-      : request('apple-relay/' + operation, data, 'POST'),
+    auditPage: (params) => request('audit/page?' + new URLSearchParams(params)),
+    relay(operation, data) {
+      const send = () => request('apple-relay/' + operation, data, 'POST');
+      if (operation === 'alias-intake-confirm') return write(['inventory', 'commerce', 'apple-relay'], send);
+      return ['primary-save', 'primary-import', 'alias-register', 'code-reset-confirm', 'mail-reassign-confirm'].includes(operation)
+        ? write(['inventory', 'apple-relay', 'tools/mailbox-pool'], send) : send();
+    },
     saveBitBrowserAddresses: (data) => write(['bitbrowser-addresses'], () => request('bitbrowser-addresses', data)),
     startMicrosoftMailbox: (data) => request('tools/mailbox-microsoft/start', data, 'POST'),
     finishMicrosoftMailbox: (authorizationId) => write(['tools/mailbox-pool'], () => request('tools/mailbox-microsoft/finish', { authorizationId }, 'POST')),
     managedMailboxPool: () => request('tools/mailbox-pool'),
     managedMailboxCode: (id) => request('tools/mailbox-pool', { id }, 'POST'),
+    managedMailboxCodePage: (ids, version) => request('tools/mailbox-pool', { ids, version }, 'POST'),
     saveManagedMailboxPool: (data) => write(['tools/mailbox-pool'], () => request('tools/mailbox-pool', data)),
     async queryManagedMailbox(queryCode, limit) {
       const legacy = /^[ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789]{20}$/.test(queryCode);
@@ -253,7 +285,8 @@
     },
     savedTotp: () => request('saved-totp'),
     saveTotp: (data) => write(['saved-totp'], () => request('saved-totp', data)),
-    savedTotpCode: (id) => request('saved-totp/code', { id }, 'POST'),
+    savedTotpCodePage: (ids, version) => request('saved-totp/code', { ids, version }, 'POST'),
+    savedTotpSecret: (id, version) => request('saved-totp/secret', { id, version }, 'POST'),
     websiteVisits: (filters) => request('tools/website-visits/search', filters, 'POST'),
     websiteVisitIp: (id) => request('tools/website-visits/reveal', { id }, 'POST'),
     websiteAnalytics: (days) => request('tools/website-analytics?days=' + days),

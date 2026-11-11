@@ -11,6 +11,7 @@ const run = (input) => reconcileOrders(input, { clock: demoClock });
 
 test('迁移前按原币逐笔对账，留存历史版本和旧快照，待回款不抵减成本', () => {
   const input = demoOrders();
+  find(input.commerce, 'QA-BANK').costConfirmed = false;
   const before = structuredClone(input);
   const report = run(input);
   assert.deepEqual(report.counts, { ready: 4, pending: 1, excluded: 0 });

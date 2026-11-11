@@ -36,7 +36,8 @@ test('全局外点收起与切页草稿保留', { timeout: 90_000 }, async (t) =
   await page.goto(host.url + '#/customers/new');
   await name.fill('客户录入未保存');
   await page.locator('#commerce-contact-phone').fill('5550123');
-  await page.getByRole('button', { name: '标签设置', exact: true }).click();
+  await go('settings/costs');
+  await page.getByRole('tab', { name: '标签设置', exact: true }).click();
   const settings = page.locator('#ops-customer-tags-form');
   for (const tag of ['大客户', '测试']) {
     await settings.getByPlaceholder('请输入标签').fill(tag);
@@ -48,7 +49,8 @@ test('全局外点收起与切页草稿保留', { timeout: 90_000 }, async (t) =
   assert(await settings.isVisible(), '点击确认框遮罩只取消确认，保留待保存设置');
   await page.getByRole('button', { name: '保存标签设置', exact: true }).click();
   await page.locator('[data-action="confirm-accept"]').click();
-  await settings.waitFor({ state: 'hidden' });
+  await page.getByText('客户标签设置已保存', { exact: true }).waitFor();
+  await go('customers/new');
   await picker.locator('summary').click();
   await picker.getByRole('checkbox', { name: '大客户', exact: true }).check();
   await picker.getByRole('checkbox', { name: '测试', exact: true }).check();
@@ -97,12 +99,14 @@ test('全局外点收起与切页草稿保留', { timeout: 90_000 }, async (t) =
   assert.equal(await picker.getByRole('checkbox', { name: '测试', exact: true }).isChecked(), false);
   await name.click();
 
-  await drawer.getByRole('button', { name: '标签设置', exact: true }).click();
+  await go('settings/costs');
+  await page.getByRole('tab', { name: '标签设置', exact: true }).click();
   await settings.getByPlaceholder('请输入标签').fill('仍未添加的标签');
-  await outsideDrawer();
-  await form.waitFor();
-  assert.equal(await name.inputValue(), '抽屉未保存客户', '嵌套设置收起后回到原客户草稿');
-  await drawer.getByRole('button', { name: '标签设置', exact: true }).click();
+  await go('customers/list');
+  await page.getByRole('button', { name: '新增客户', exact: true }).click();
+  assert.equal(await name.inputValue(), '抽屉未保存客户', '设置切页后保留原客户草稿');
+  await go('settings/costs');
+  await page.getByRole('tab', { name: '标签设置', exact: true }).click();
   assert.equal(await settings.getByPlaceholder('请输入标签').inputValue(), '仍未添加的标签');
   await go('workspace/order');
   await page.locator('#commerce-notes').fill('订单切页草稿');

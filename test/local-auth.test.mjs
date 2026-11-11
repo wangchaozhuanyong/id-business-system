@@ -131,7 +131,7 @@ test('production requires initialized staff and authenticates only the canonical
   const authenticated = await login(publicOrigin);
   assert.equal(authenticated.status, 200);
   const session = cookie(authenticated);
-  assert.match(authenticated.headers.get('set-cookie'), /^__Host-id_session=.*; Path=\/; HttpOnly; SameSite=Strict;.*; Secure$/);
+  assert.match(authenticated.headers.get('set-cookie'), /^__Host-id_session_v2=.*; Path=\/; HttpOnly; SameSite=Strict;.*; Secure$/);
   assert.equal((await request('/api/local/inventory', { session })).status, 200);
   assert.equal((await request('/api/local/inventory', {
     session, method: 'PUT', origin: 'http://' + host, body: {}

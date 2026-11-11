@@ -31,6 +31,8 @@ const proxyMode = get('bit-proxy-mode');
 const settings = get('bit-connection-settings');
 const catalogButton = get('bit-check-connection');
 const profileChoice = get('bit-connection-profile');
+const defaultProfileButton = get('bit-default-connection');
+const defaultProfileResult = get('bit-default-connection-result');
 const profileName = get('bit-connection-name');
 const accountName = get('bit-account-name');
 const saveProfileButton = get('bit-save-connection');
@@ -63,10 +65,8 @@ const defaultConnection = {
   sessionRetryLimit: BIT_BROWSER_LOGIN_DEFAULTS.sessionRetryLimit
 };
 const profilesEnabled = document.body.hasAttribute('data-connection-profiles');
-const lastConnectionKey = 'id-bitbrowser-last-connection';
 
 let credential = '';
-let lastAutomaticName = '';
 let authorizationCheckId = 0;
 let activeCatalogCheck;
 let activeLogin;
@@ -75,7 +75,7 @@ let connectionRestoreId = 0;
 let connectionRestoreController;
 const pendingDataChanges = new Set();
 async function refreshLiveChoices() {
-  if (activeLogin || activeCatalogCheck || profileBusy || document.hidden || !moduleVisible) return;
+  if (activeLogin || activeCatalogCheck || profileBusy || savingProfileDefault || document.hidden || !moduleVisible) return;
   if (pendingDataChanges.has('bitbrowser-connections') && settings.hidden) {
     pendingDataChanges.delete('bitbrowser-connections');
     await loadProfiles();
@@ -92,6 +92,7 @@ function setLoginLock(locked) {
 let catalogReady = false;
 let profileData;
 let profileBusy = false;
+let savingProfileDefault = false;
 let profileConflict = false;
 let selectedProfileId = '';
 let loadedProxyEndpoint = '';
@@ -114,19 +115,17 @@ function restoreConnectionDraft() {
     if (Object.hasOwn(values, prefix + control.id)) control.value = values[prefix + control.id];
   groupPreference = values[prefix + 'groupPreference'] ?? groupPreference;
   tagPreference = values[prefix + 'tagPreference'] ?? tagPreference;
-  if (Object.hasOwn(values, 'bit-window-name')) windowName.value = values['bit-window-name'];
 }
 function captureConnectionDraft(event) {
   if (!draftBridge || !event.isTrusted) return;
   const control = event.target;
   const values = readConnectionDrafts();
   const prefix = draftPrefix();
-  if (control === windowName) values['bit-window-name'] = control.value;
-  else if (connectionDraftFields.includes(control)) values[prefix + control.id] = control.value;
+  if (connectionDraftFields.includes(control)) values[prefix + control.id] = control.value;
   else if (control === groupSelect && control.value) values[prefix + 'groupPreference'] = control.selectedOptions[0].text;
   else if (control === tagSelect && control.value) values[prefix + 'tagPreference'] = control.selectedOptions[0].text;
   else return;
-  if (control !== windowName && profileData && !Object.hasOwn(values, prefix + 'version'))
+  if (profileData && !Object.hasOwn(values, prefix + 'version'))
     values[prefix + 'version'] = String(profileData.version);
   draftBridge.write('bit-local', values);
 }
@@ -134,25 +133,28 @@ loginForm.addEventListener('input', captureConnectionDraft);
 loginForm.addEventListener('change', captureConnectionDraft);
 
 function updateStartButton() {
+  const profilePending = profileBusy || savingProfileDefault;
   startButton.disabled =
     !executionProxies?.ready() ||
     !credential ||
-    !windowName.value.trim() ||
     !groupSelect.value ||
     !tagSelect.value ||
     !tokenInput.value ||
-    Boolean(activeLogin || activeCatalogCheck || profileBusy);
-  catalogButton.disabled = Boolean(activeLogin || activeCatalogCheck || profileBusy);
+    Boolean(activeLogin || activeCatalogCheck || profilePending);
+  catalogButton.disabled = Boolean(activeLogin || activeCatalogCheck || profilePending);
   saveProfileButton.disabled =
     !profileData ||
-    profileBusy ||
+    profilePending ||
     profileConflict ||
     !catalogReady ||
     !groupSelect.value ||
     !tagSelect.value ||
     Boolean(activeLogin);
-  addProfileButton.disabled = !profileData || profileBusy || Boolean(activeLogin);
-  profileChoice.disabled = !profileData || profileBusy || Boolean(activeLogin);
+  addProfileButton.disabled = !profileData || profilePending || Boolean(activeLogin);
+  profileChoice.disabled = !profileData || profilePending || Boolean(activeLogin);
+  defaultProfileButton.disabled = profileChoice.disabled || !selectedProfileId;
+  defaultProfileButton.textContent = selectedProfileId && selectedProfileId === profileData?.defaultId
+    ? '取消默认' : '设为默认';
   get('bit-toggle-connection').disabled = Boolean(activeLogin);
   for (const id of ['bit-tab-login', 'bit-tab-library', 'bit-show-library']) get(id).disabled = Boolean(activeLogin);
   if (pendingDataChanges.size) queueMicrotask(refreshLiveChoices);
@@ -188,6 +190,7 @@ get('bit-token-eye').addEventListener('click', () => {
 
 function loadAuthorization(value) {
   credential = '';
+  windowName.value = '';
   jsonInput.placeholder = '粘贴完整授权 JSON，将自动载入';
   authorizationResult.textContent = '';
   if (value) {
@@ -197,11 +200,7 @@ function loadAuthorization(value) {
       jsonInput.value = '';
       jsonInput.placeholder = '授权已自动载入，可粘贴新 JSON 替换';
       authorizationResult.textContent = `授权已载入 · ${email}`;
-      const currentName = windowName.value;
-      if (!currentName.trim() || currentName === lastAutomaticName) {
-        lastAutomaticName = `ChatGPT-${email.split('@')[0]}`.slice(0, 80);
-        windowName.value = lastAutomaticName;
-      }
+      windowName.value = email;
     } catch {
       authorizationResult.textContent = '请粘贴完整有效的单账户授权 JSON（不超过 65 KB）。';
     }
@@ -215,15 +214,7 @@ get('bit-clear-authorization').addEventListener('click', () => {
   jsonInput.value = '';
   fileInput.value = '';
   loadAuthorization('');
-  if (lastAutomaticName && windowName.value === lastAutomaticName) {
-    windowName.value = '';
-    const values = readConnectionDrafts();
-    values['bit-window-name'] = '';
-    draftBridge?.write('bit-local', values);
-  }
-  lastAutomaticName = '';
   loginResult.textContent = '等待登录';
-  updateStartButton();
   jsonInput.focus();
 });
 
@@ -306,7 +297,6 @@ urlInput.addEventListener('input', () => {
   clearCatalog();
 });
 tokenInput.addEventListener('input', () => { cancelConnectionRestore(); clearCatalog(); });
-windowName.addEventListener('input', updateStartButton);
 function updateCatalogStatus() {
   if (catalogReady) {
     catalogResult.textContent =
@@ -408,6 +398,7 @@ function selectConnection(profile = defaultConnection) {
   cancelConnectionRestore();
   selectedProfileId = profile.id || '';
   profileChoice.value = selectedProfileId;
+  defaultProfileResult.hidden = true;
   profileName.value = profile.name;
   accountName.value = profile.accountName || '';
   settings.open = !profile.id;
@@ -422,25 +413,8 @@ function selectConnection(profile = defaultConnection) {
   profileResult.textContent = selectedProfileId ? '请填写这台电脑的接口密钥，再检测连接。' : '';
 }
 
-function rememberConnection() {
-  try {
-    sessionStorage.setItem(lastConnectionKey, selectedProfileId);
-  } catch {
-    // Browser privacy settings can disable session storage.
-  }
-}
-
-function lastConnection() {
-  try {
-    return sessionStorage.getItem(lastConnectionKey);
-  } catch {
-    return null;
-  }
-}
-
 async function restoreConnection(profile) {
   selectConnection(profile);
-  rememberConnection();
   if (!moduleVisible || (!profile?.hasInterfaceToken && !profile?.hasStaticProxyCredentials)) return;
   const restoreId = ++connectionRestoreId;
   const controller = new AbortController();
@@ -493,33 +467,38 @@ async function restoreConnection(profile) {
 function updateProfileOptions() {
   profileChoice.replaceChildren(
     new Option('本次手动设置', ''),
-    ...profileData.profiles.map(({ name, accountName, id }) => new Option(`${accountName || '账号待确认'} · ${name}`, id))
+    ...profileData.profiles.map(({ name, accountName, id }) => new Option(
+      `${accountName || '账号待确认'} · ${name}${id === profileData.defaultId ? '（我的默认）' : ''}`, id
+    ))
   );
   profileChoice.value = selectedProfileId;
 }
 
-async function profileRequest(payload) {
+async function profileRequest(payload, method = 'PUT') {
   const response = await fetch(
     '/api/local/bitbrowser-connections',
     payload
       ? {
-          method: 'PUT',
+          method,
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
         }
       : { cache: 'no-store' }
   );
   const result = await response.json().catch(() => null);
-  if (!response.ok || !Array.isArray(result?.profiles)) {
+  if (!response.ok || (method === 'PATCH'
+    ? result?.defaultId !== payload.defaultId
+    : !Array.isArray(result?.profiles))) {
     const error = new Error(result?.error || '无法读取或保存连接，请稍后重试。');
     error.status = response.status;
     throw error;
   }
+  if (method === 'PATCH') return result;
   return { ...result, canSaveToken: response.headers.get('X-ID-BitBrowser-Token-Storage') === 'enabled' };
 }
 
 async function loadProfiles() {
-  if (profileBusy || activeLogin) return;
+  if (profileBusy || savingProfileDefault || activeLogin) return;
   profileBusy = true;
   reloadProfileButton.hidden = true;
   updateStartButton();
@@ -539,9 +518,8 @@ async function loadProfiles() {
       profileResult.textContent = '已读取最新配置，请核对后重新检测和保存。';
       restore = selected;
     }
-    if (firstLoad || !selectedProfileId) {
-      restore = profileData.profiles.find(({ id }) => id === lastConnection());
-    }
+    if (firstLoad) restore = profileData.profiles.find(({ id }) => id === profileData.defaultId);
+    else if (selectedProfileId && !selected) selectConnection();
     profileConflict = false;
   } catch (error) {
     profileResult.textContent = error.message;
@@ -550,7 +528,27 @@ async function loadProfiles() {
     profileBusy = false;
     updateStartButton();
   }
-  if (restore && moduleVisible) await restoreConnection(restore);
+  if (restore) await restoreConnection(restore);
+}
+
+async function saveProfileDefault() {
+  if (defaultProfileButton.disabled) return;
+  const defaultId = selectedProfileId === profileData.defaultId ? null : selectedProfileId;
+  savingProfileDefault = true;
+  updateStartButton();
+  defaultProfileResult.hidden = false;
+  defaultProfileResult.textContent = '正在保存个人默认比特账号…';
+  try {
+    const result = await profileRequest({ defaultId }, 'PATCH');
+    profileData.defaultId = result.defaultId;
+    updateProfileOptions();
+    defaultProfileResult.textContent = defaultId ? '已设为我的默认比特账号。' : '已取消默认比特账号。';
+  } catch (error) {
+    defaultProfileResult.textContent = error.message;
+  } finally {
+    savingProfileDefault = false;
+    updateStartButton();
+  }
 }
 
 async function saveProfile() {
@@ -622,7 +620,6 @@ async function saveProfile() {
       loadedProxyEndpoint = proxyEndpoint(profile);
     else if (staticProxyCredentials === null) loadedProxyEndpoint = '';
     updateProfileOptions();
-    rememberConnection();
     profileResult.textContent = '连接配置已保存。';
   } catch (error) {
     profileResult.textContent = error.message;
@@ -649,7 +646,6 @@ if (profilesEnabled) {
   for (const control of document.querySelectorAll('[data-bit-profile]')) control.hidden = false;
   addProfileButton.addEventListener('click', () => {
     selectConnection();
-    rememberConnection();
     settings.open = true;
     profileName.focus();
   });
@@ -657,6 +653,7 @@ if (profilesEnabled) {
     void restoreConnection(profileData.profiles.find(({ id }) => id === profileChoice.value))
   );
   saveProfileButton.addEventListener('click', () => void saveProfile());
+  defaultProfileButton.addEventListener('click', () => void saveProfileDefault());
   reloadProfileButton.addEventListener('click', () => void loadProfiles());
   void loadProfiles();
 }
@@ -680,6 +677,8 @@ loginForm.addEventListener('submit', async (event) => {
   setLoginLock(true);
   updateStartButton();
   const sessionJson = credential;
+  // Keep the full email in the form and respect the login adapter's window name limit.
+  const accountWindowName = windowName.value.slice(0, 100);
   loginFields.disabled = true;
   cancelButton.hidden = false;
   loginResult.textContent = '正在启动登录…';
@@ -691,7 +690,7 @@ loginForm.addEventListener('submit', async (event) => {
       token: tokenInput.value,
       groupName: groupSelect.selectedOptions[0].text,
       tagName: tagSelect.selectedOptions[0].text,
-      windowName: windowName.value.trim(),
+      windowName: accountWindowName,
       sessionJson,
       browserOptions: {
         coreVersion: get('bit-core').value,
@@ -745,13 +744,13 @@ window.addEventListener('pagehide', () => {
   authorizationCheckId++;
   activeLogin?.abort();
   clearCatalog();
-  credential = '';
   jsonInput.value = '';
+  loadAuthorization('');
   clearConnectionSecrets();
 });
 
 function resumeConnection() {
-  if (activeLogin || profileBusy || !moduleVisible) return;
+  if (activeLogin || profileBusy || savingProfileDefault || !moduleVisible) return;
   const profile = profileData?.profiles.find(({ id }) => id === selectedProfileId);
   if (!tokenInput.value && profile?.hasInterfaceToken) void restoreConnection(profile);
   else if (tokenInput.value && !catalogReady) catalogButton.click();
@@ -784,9 +783,27 @@ document.addEventListener('close', () => void refreshLiveChoices(), true);
 get('bit-toggle-connection').addEventListener('click', () => queueMicrotask(refreshLiveChoices));
 window.addEventListener('focus', () => void refreshLiveChoices());
 
+if (jsonInput.value) loadAuthorization(jsonInput.value);
+
+window.IDPagination?.watchTableLayout?.(document.body, { hostFrame: window.frameElement });
+
 if (window.parent !== window) {
+  document.body.classList.add('bit-local--embedded');
+  const syncWorkspaceSpacing = () => {
+    try {
+      const hostStyle = window.parent.getComputedStyle(window.parent.document.documentElement);
+      for (const token of ['--panel-padding-inline', '--panel-padding-block']) {
+        const value = hostStyle.getPropertyValue(token).trim();
+        if (value && document.documentElement.style.getPropertyValue(token) !== value)
+          document.documentElement.style.setProperty(token, value);
+      }
+    } catch { /* Standalone tokens also cover an inaccessible embedding host. */ }
+  };
+  syncWorkspaceSpacing();
   try {
     document.documentElement.dataset.theme = window.parent.document.documentElement.dataset.theme || 'light';
+    window.parent.addEventListener('resize', syncWorkspaceSpacing);
+    window.addEventListener('pagehide', () => window.parent.removeEventListener('resize', syncWorkspaceSpacing), { once: true });
   } catch { /* Standalone styling remains the default for an inaccessible parent. */ }
   const reportHeight = () =>
     window.parent.postMessage(

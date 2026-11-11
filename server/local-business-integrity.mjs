@@ -7,6 +7,8 @@ import {
 import { parseV2DateTimeInput } from '../modules/time/dateTime.ts';
 import { claimAllowsDelivery, pendingInventoryClaim } from './inventory-usage.mjs';
 import { releasedAccountOrders } from './account-lifecycle.mjs';
+import { isHistoricallyOpenedClaude } from './inventory-history.mjs';
+import { personalDelivery, personalProduct, sameTarget, stockTypeForProduct } from './personal-subscriptions.mjs';
 
 function units(value) {
   if (typeof value !== 'string' || !/^-?\d{1,16}(?:\.\d{1,4})?$/.test(value)) return null;
@@ -49,6 +51,7 @@ export function checkBankReturns(previous, commerce) {
     }
     if (!order.bankReturns.length) continue;
     const paid = units(order.paidAmount);
+    const previousReturns = previous?.orders?.find(row => row.id === order.id)?.bankReturns || [];
     let total = 0n;
     for (const record of order.bankReturns) {
       const amount = units(record.amount);
@@ -56,7 +59,7 @@ export function checkBankReturns(previous, commerce) {
         amount === null ||
         amount <= 0n ||
         record.currency !== order.paidCurrency ||
-        record.cardId !== order.cardId
+        (record.cardId !== order.cardId && !previousReturns.some(before => isDeepStrictEqual(before, record)))
       ) {
         return '银行卡回款必须按原付款银行卡和代付币种登记';
       }
@@ -198,7 +201,8 @@ function meetsClaudeAging(account, inventory) {
   const configured = inventory.tableSettings?.find((entry) => entry?.[0] === 'claude')?.[1];
   const hours = configured?.hours ?? DEFAULT_CLAUDE_AGING_HOURS;
   if (!Number.isInteger(hours) || hours < 1 || hours > MAX_CLAUDE_AGING_HOURS) return false;
-  const input = String(String(account.registered || '').trim() || account.createdAt || account.importedAt || '')
+  const fallback = account.claudeHistory ? '' : account.createdAt || account.importedAt || '';
+  const input = String(String(account.registered || '').trim() || fallback)
     .trim()
     .replace(' ', 'T');
   const local = /^\d{4}-\d{2}-\d{2}$/.test(input) ? `${input}T00:00` : input;
@@ -223,19 +227,23 @@ export function checkStockDeliveries(previousCommerce, commerce, previousInvento
       next.businessType !== order.businessType ||
       next.accountId !== order.accountId ||
       next.product !== order.product ||
-      next.email !== order.email
+      next.email !== order.email ||
+      (personalProduct(order.product) && !sameTarget(next, order))
     ) {
       return '原成品交付订单及其库存账号必须保留';
     }
-    if (order.accountId && !releasedAccountOrders(priorAccounts.get(order.accountId) || {}).has(order.id)) usedAccounts.add(order.accountId);
+    if (personalDelivery(order) && order.accountId &&
+      !releasedAccountOrders(priorAccounts.get(order.accountId) || {}).has(order.id)) usedAccounts.add(order.accountId);
   }
 
   const newSales = new Map();
   for (const order of orders.values()) {
     if (order.businessType !== '成品交付') continue;
     const prior = priorOrders.get(order.id);
-    if (prior?.businessType === '成品交付') continue;
-    if (prior) return '已保存订单不能改为成品交付，请登记独立新订单';
+    if (personalDelivery(prior)) continue;
+    if (prior && prior.businessType !== '成品交付') return '已保存订单不能改为成品交付，请登记独立新订单';
+    const personal = personalProduct(order.product);
+    if (personal && order.cancelled && !personalDelivery(order)) continue;
     if (
       typeof order.accountId !== 'string' ||
       !order.accountId ||
@@ -244,6 +252,22 @@ export function checkStockDeliveries(previousCommerce, commerce, previousInvento
       return '成品交付必须使用未交付的库存账号，同一账号不能重复交付';
     }
     usedAccounts.add(order.accountId);
+    if (personal && !personalDelivery(order)) {
+      const account = nextAccounts.get(order.accountId);
+      const before = priorAccounts.get(order.accountId);
+      const state = row => row?.inventoryState || (row?.used ? 'used' : 'available');
+      const claim = pendingInventoryClaim(previousInventory, before);
+      const nextClaim = pendingInventoryClaim(inventory, account);
+      if (!account || !before || account.type !== stockTypeForProduct(order.product) ||
+          account.source === '客户提供' || ['客户自有', 'customer'].includes(account.accountSource) ||
+          !sameTarget(order, account) || state(account) !== state(before) ||
+          (!prior && ((before.health || 'normal') !== 'normal' || (before.status || '正常') !== '正常' ||
+            (before.usageLinks?.length && before.accountLifecycle?.disposition !== 'recovered'))) ||
+          account.claimId !== before.claimId || (state(before) !== 'available' &&
+            (!claim || nextClaim?.item.id !== claim.item.id || (!prior && !claimAllowsDelivery(claim, actor)))))
+        return '待核对订单须保留原可交付库存与领用';
+      continue;
+    }
     newSales.set(order.id, order);
   }
 
@@ -262,12 +286,7 @@ export function checkStockDeliveries(previousCommerce, commerce, previousInvento
       const validClaimDelivery = claimAllowsDelivery(claim, actor) &&
         account.claimId === prior.claimId && account.claimBatchId === prior.claimBatchId &&
         delivered?.status === 'used' && delivered.orderId === order?.id && delivered.usedAt;
-      const type =
-        order?.product === 'GPT'
-          ? 'gpt'
-          : /^Claude (?:Pro|Max)$/.test(order?.product || '')
-            ? 'claude'
-            : '';
+      const type = stockTypeForProduct(order?.product);
       if (
         !order ||
         nextAccounts.get(account.id) !== account ||
@@ -281,12 +300,14 @@ export function checkStockDeliveries(previousCommerce, commerce, previousInvento
         account.inventoryState !== 'used' ||
         prior.type !== type ||
         account.type !== type ||
-        !order.email ||
-        prior.email !== order.email ||
-        account.email !== order.email
+        (personalProduct(order.product)
+          ? !sameTarget(order, prior) || !sameTarget(order, account) ||
+            prior.source === '客户提供' || ['客户自有', 'customer'].includes(prior.accountSource)
+          : !order.email || prior.email !== order.email || account.email !== order.email)
       ) {
         return '成品交付必须与原可用库存账号的使用记录一起保存';
       }
+      if (isHistoricallyOpenedClaude(prior)) return '已开通的 Claude 历史账号不能再次交付';
       if (type === 'claude' && !meetsClaudeAging(prior, previousInventory)) {
         return 'Claude 库存账号未达到养号阈值，不能交付';
       }
@@ -326,6 +347,10 @@ function checkMovements(previous, ledger, appleIds, wallets, orders, allocations
         return 'Apple 回款流水必须与一笔已到账记录对应';
       }
       received.add(refund.id);
+    } else if (['opening', 'topup'].includes(movement.kind)) {
+      if (amount <= 0n || movement.orderId || !String(movement.reason || '').trim() ||
+          (movement.kind === 'opening' && balances.has(movement.appleIdId)))
+        return '苹果 ID 期初余额或充值流水不正确';
     } else if (!['manual', 'manual-undo'].includes(movement.kind) || movement.orderId) {
       return '苹果 ID 余额变动类型不正确';
     }
@@ -334,7 +359,7 @@ function checkMovements(previous, ledger, appleIds, wallets, orders, allocations
     if (movement.kind === 'manual-undo') {
       const original = history.get(movement.originalEntryId);
       if (
-        original?.kind !== 'manual' ||
+        !['manual', 'topup'].includes(original?.kind) ||
         original.appleIdId !== movement.appleIdId ||
         original.undoneBy !== movement.id ||
         original.versionAfter !== prior.version ||

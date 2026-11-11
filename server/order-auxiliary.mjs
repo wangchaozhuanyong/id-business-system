@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { tenantCardLimit } from './tenant-initial-cards.mjs';
 import { readPoolCards } from './order-recharge-client.mjs';
 
 export const orderAuxiliaryRoutes = new Set(['/api/local/order-cards', '/api/local/tenant-cards']);
@@ -96,9 +97,9 @@ export function createOrderAuxiliaryHandler({ store, client, publicOrigin }) {
         const label = typeof command.label === 'string' ? command.label.trim() : '';
         if (!/^\d{12,19}$/.test(number) || label.length > 80 || /[\x00-\x1f]/.test(label))
           return send(response, 400, { error: '请填写有效银行卡号，名称最多 80 字' });
-        if (tenant.active === false || items.filter((row) => row.tenantId === tenantId).length >= 999 ||
+        if (tenant.active === false || items.filter((row) => row.tenantId === tenantId).length >= tenantCardLimit ||
             items.some((row) => row.tenantId === tenantId && row.number === number))
-          return send(response, 409, { error: '认证人已停用、银行卡重复或已达 999 张上限' });
+          return send(response, 409, { error: '租户已停用、银行卡重复或已达 99 张上限' });
         targetId = 'tenant:' + randomUUID();
         next = [...items, { id: targetId, tenantId, number, label: label || '银行卡 ' +
           (items.filter((row) => row.tenantId === tenantId).length + 1), active: true }];

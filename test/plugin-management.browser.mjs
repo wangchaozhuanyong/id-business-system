@@ -4,7 +4,7 @@ import test from 'node:test';
 import { chromium } from 'playwright';
 import { interceptDesign, origin, root, settle } from './helpers/offline-design.mjs';
 import { withClaudeMailboxCandidates } from '../server/tools/claude-mailbox-candidates.mjs';
-import { mailboxPoolMetadata, prepareVerifiedMailboxWrite } from '../server/tools/mailbox-pool.mjs';
+import { mailboxPoolCodePage, mailboxPoolMetadata, prepareVerifiedMailboxWrite } from '../server/tools/mailbox-pool.mjs';
 
 test('插件导航、Claude 待授权、授权后取码与可点击邮件链接', { timeout: 90_000 }, async t => {
   const fixture = JSON.parse(await readFile(new URL('../docs/audits/2026-11-06-design-review/visual-fixtures.json', import.meta.url)));
@@ -27,9 +27,11 @@ test('插件导航、Claude 待授权、授权后取码与可点击邮件链接'
     const request = route.request();
     if (request.method() === 'GET') return route.fulfill({ json: view() });
     if (request.method() === 'POST') {
-      const { id } = request.postDataJSON();
-      codeReads.push(id);
-      assert(!id.startsWith('claude:'), '待授权记录不能读取查询码');
+      const command = request.postDataJSON();
+      const { id, ids } = command;
+      codeReads.push(...(ids || [id]));
+      assert((ids || [id]).every(id => !id.startsWith('claude:')), '待授权记录不能读取查询码');
+      if (ids) return route.fulfill({ json: mailboxPoolCodePage(snapshot, command) });
       return route.fulfill({ json: { code: snapshot.data.items.find(row => row.id === id).queryCode } });
     }
     try {
@@ -62,7 +64,7 @@ test('插件导航、Claude 待授权、授权后取码与可点击邮件链接'
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(origin + '/#/plugins/mailboxes');
   assert.equal(await page.locator('#drawer').isVisible(), false, '插件使用整页布局');
-  await page.getByRole('tab', { name: '邮箱池管理', exact: true }).click();
+  await page.locator('#ops-mailbox-pool').waitFor();
   const pool = page.locator('#ops-mailbox-pool');
   await pool.locator('.mailbox-account').first().waitFor();
   await pool.getByRole('searchbox', { name: '搜索邮箱池' }).fill('pending@example.test');
@@ -76,13 +78,15 @@ test('插件导航、Claude 待授权、授权后取码与可点击邮件链接'
   await page.locator('.field').filter({ has: page.locator('#ops-managed-app-password') }).locator('.field-title-help summary').click();
   assert.equal(await page.getByRole('link', { name: '前往 Google 生成', exact: true }).getAttribute('href'), 'https://myaccount.google.com/apppasswords');
   await page.locator('#ops-managed-app-password').fill('synthetic-credential');
-  await page.locator('#ops-managed-pool-form button[type="submit"]').click();
+  await page.locator('#drawer button[form="ops-managed-pool-form"]').click();
   await page.getByText(/邮箱授权验证失败/).waitFor();
   assert.equal(await page.locator('#ops-managed-app-password').inputValue(), 'synthetic-credential', '失败保留本次输入供重试');
   rejectAuthorization = false;
-  await page.locator('#ops-managed-pool-form button[type="submit"]').click();
+  await page.locator('#drawer button[form="ops-managed-pool-form"]').click();
   await pending.getByText('可查询', { exact: true }).waitFor();
   assert.equal(await pending.count(), 1, '授权后按邮箱合并，不保留重复待授权记录');
+  await page.locator('#drawer [data-action="drawer-close"]').first().click();
+  await page.locator('#drawer').waitFor({ state: 'hidden' });
   await pending.locator('[data-action="ops-mailbox-pool-query"]').click();
   const link = page.getByRole('link', { name: '验证邮箱按钮', exact: true });
   await link.waitFor();
@@ -95,7 +99,9 @@ test('插件导航、Claude 待授权、授权后取码与可点击邮件链接'
   const popup = await popupEvent;
   await popup.waitForURL('https://example.test/verify/synthetic');
   await popup.close();
-  await page.getByRole('tab', { name: '邮箱池管理', exact: true }).click();
+  await page.locator('#drawer [data-action="drawer-close"]').first().click();
+  await page.locator('#drawer').waitFor({ state: 'hidden' });
+  await page.locator('#ops-mailbox-pool').waitFor();
   await pool.getByRole('searchbox', { name: '搜索邮箱池' }).fill('');
   await page.goto(origin + '/#/plugins/websites');
   await page.goto(origin + '/#/plugins/mailboxes');
@@ -128,7 +134,7 @@ test('插件导航、Claude 待授权、授权后取码与可点击邮件链接'
   await page.goto(origin + '/#/plugins/sheets');
   assert.match(await page.locator('#main').innerText(), /待开发/);
   await page.goto(origin + '/#/plugins/mailboxes');
-  await page.getByRole('tab', { name: '邮箱池管理', exact: true }).click();
+  await page.locator('#ops-mailbox-pool').waitFor();
   assert.equal(await pool.getByRole('searchbox', { name: '搜索邮箱池' }).inputValue(), '');
   assert.deepEqual(errors, []);
   assert(!codeReads.some(id => id.startsWith('claude:')));

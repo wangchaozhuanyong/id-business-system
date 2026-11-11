@@ -26,7 +26,7 @@ function instant(value) {
 }
 
 export function pendingInventoryClaim(inventory, asset) {
-  if (!asset.claimId || !asset.claimBatchId) return null;
+  if (!asset?.claimId || !asset.claimBatchId) return null;
   const batch = list(inventory?.batches).find((row) => row?.id === asset.claimBatchId);
   const item = list(batch?.items).find((row) =>
     row?.id === asset.claimId && row.assetId === asset.id &&
@@ -118,7 +118,8 @@ export function inspectInventoryUsage(inventory, commerce, now = Date.now()) {
     const existing = matches.get(asset.id);
     const claim = pendingInventoryClaim(inventory, asset);
     const claimedAt = instant(claim?.item.claimedAt || claim?.batch.time);
-    const purpose = /^(?:注册\s*)(GPT|Claude)$/i.exec(claim?.batch.purpose || '')?.[1]?.toLowerCase();
+    const purpose = /^(?:注册\s*)(GPT|Claude|Gemini|Grok)$/i.exec(claim?.batch.purpose || '')?.[1]?.toLowerCase();
+    const explicit = evidence.registrationId && ['gemini', 'grok'].includes(evidence.product);
     let reason = '';
     if (ambiguous) reason = '有多条同地址资料，需核对来源';
     else if (evidence.pending || unresolved.has(asset.id) || claim?.item.taskId ||
@@ -131,7 +132,8 @@ export function inspectInventoryUsage(inventory, commerce, now = Date.now()) {
     else if (purpose && purpose !== evidence.product) reason = '业务产品与提取用途不一致';
     else if (!Number.isFinite(evidence.occurred) || evidence.occurred > now ||
       (claim && (!Number.isFinite(claimedAt) || evidence.occurred < claimedAt)) ||
-      evidence.occurred <= (lastReturn.get(asset.id) ?? -Infinity))
+      (explicit ? evidence.occurred < (lastReturn.get(asset.id) ?? -Infinity)
+        : evidence.occurred <= (lastReturn.get(asset.id) ?? -Infinity)))
       reason = '业务时间与本次提取或历史归还需核对';
     if (existing?.status === 'used') return;
     matches.set(asset.id, {
@@ -147,6 +149,7 @@ export function inspectInventoryUsage(inventory, commerce, now = Date.now()) {
     if (!asset || !record.id || !['待核对', '成功'].includes(record.state)) continue;
     consider(asset, {
       kind: 'registration', registrationId: record.id, product: String(record.product || '').toLowerCase(),
+      ...(['gemini', 'grok'].includes(String(record.product || '').toLowerCase()) && { accountId: record.accountId }),
       actorId: record.createdById || record.actorId, occurred: instant(record.time),
       pending: record.state === '待核对', label: `注册登记 · ${record.id}`
     });
@@ -154,7 +157,7 @@ export function inspectInventoryUsage(inventory, commerce, now = Date.now()) {
 
   for (const [email, rows] of accounts) {
     for (const account of rows) {
-      if (account.source === '客户提供' || account.accountSource === '客户自有') continue;
+      if (account.claudeHistory || account.source === '客户提供' || account.accountSource === '客户自有') continue;
       const type = mailboxTypes.get(account.emailType);
       if (account.emailType && !type) continue;
       const sources = (mail.get(email) || []).filter((row) => !type || row.type === type);

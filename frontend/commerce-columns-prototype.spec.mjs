@@ -58,7 +58,7 @@ function runtime() {
     openDrawer: (title, description, body) => drawers.push({ title, description, body })
   };
   runInNewContext(source, {
-    window: { IDDesignAPI: api, IDDesignModules: modules },
+    window: { IDDesignAPI: api, IDDesignModules: modules, IDPagination: { defaultPageSize: 10, render: () => '' } },
     document: { querySelector: () => null, querySelectorAll: () => [] },
     structuredClone: globalThis.structuredClone,
     Date,
@@ -153,6 +153,8 @@ test('GPT 列表完整显示联系、交易、周期和备注字段，并绑定�
   assert.equal(owner.render({ ownerId: 'staff', owner: '业务员工', createdBy: '代录管理员' }), '业务员工');
   assert.equal(owner.render({ createdBy: '原录入人' }), '原录入人');
   assert.equal(owner.render({}), '历史未记录');
+  const profit = table.columns.find(column => column.id === 'profit');
+  assert.equal(profit.render({ ...table.rows[0], paidConfirmed: false }), '—');
   assert.match(expiry.render(table.rows[0]), /天后到期/);
   assert.match(expiry.render({ expiry: '2026-10-01T10:30' }), /已过期/);
   for (const id of ['createdAt', 'notes']) {
@@ -179,6 +181,26 @@ test('Claude Pro 与 Max 订单各自补齐人员和租户列，空值明确显�
       else assert.equal(column.render({ [id]: '已填写资料' }), '已填写资料');
     }
   }
+});
+
+test('各产品共用银行卡资料列，旧单和 Apple 内购各自显示原口径', () => {
+  const context = runtime();
+  const pro = context.render('orders/pro', 'commerce-orders-Claude Pro');
+  const columns = ['proMaterialMode', 'proCardNumber', 'proCardSerial'];
+  requireColumns(pro, columns);
+  const manual = {
+    product: 'Claude Pro', payment: '银行卡', proMaterialMode: 'manual_card',
+    proCardNumber: '•••• 4242', proCardSerial: '00042-QA'
+  };
+  const render = (id, row) => pro.columns.find((column) => column.id === id).render(row);
+  assert.equal(render('proMaterialMode', manual), '手动填写银行卡');
+  assert.equal(render('proCardNumber', manual), '•••• 4242');
+  assert.equal(render('proCardSerial', manual), '00042-QA');
+  assert.equal(render('proMaterialMode', { product: 'Claude Pro', payment: '银行卡' }), '原订单资料');
+  assert.equal(render('proMaterialMode', { product: 'Claude Pro', payment: '苹果内购' }), '不适用');
+  const max = context.render('orders/max', 'commerce-orders-Claude Max');
+  requireColumns(max, columns);
+  requireColumns(context.render('orders/gpt', 'commerce-orders-GPT'), ['proMaterialMode', 'proCardNumber']);
 });
 
 test('Claude 专属显示认证电话、备注、录入时间；客户租户列表字段与列设置齐全', () => {
@@ -240,7 +262,7 @@ test('Claude 专属显示认证电话、备注、录入时间；客户租户列�
 
 test('租户关联订单显示业务类型与当前运营状态，能看到冻结账号且不编造人员电话', () => {
   const context = runtime();
-  context.module.onClick('commerce-contact-detail', {
+  context.module.onClick('commerce-contact-orders', {
     dataset: { id: 'tenant-demo-1', kind: 'tenant' }
   });
   const table = context.tables.find((entry) => entry.id === 'commerce-contact-orders');

@@ -8,7 +8,8 @@ const other = { id: 'operator-b', name: '测试员乙', role: 'admin' };
 const claimedAt = '2026-01-01 10:30';
 const occurred = '2026-01-01T11:30';
 const stock = (id, type, email = `${id}@example.test`) => ({
-  id, type, email, inventoryState: 'available', health: 'normal', status: '正常', usageLinks: [], version: 1
+  id, type, email, ...(['google', 'claude'].includes(type) ? { country: '马来西亚', device: '合成设备' } : {}),
+  ...(type === 'claude' ? { proxyUrl: 'socks5://proxy.example.test:1080' } : {}), inventoryState: 'available', health: 'normal', status: '正常', usageLinks: [], version: 1
 });
 const document = (mailboxes = [], accounts = []) => ({
   mailboxes, accounts, batches: [], returnRecords: [], importRecords: [], registrationRecords: [],

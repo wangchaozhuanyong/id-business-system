@@ -16,7 +16,7 @@ const providerResponse = (at = initial - hour, next = initial + hour, overrides 
   Response.json({
     result: 'success', base_code: 'CNY', time_eol_unix: 0,
     time_last_update_unix: at / 1000, time_next_update_unix: next / 1000,
-    rates: { CNY: 1, MYR: 0.625, USD: 0.125, PHP: 8, CLP: 125, IDR: 2500 },
+    rates: { CNY: 1, MYR: 0.625, USD: 0.125, PHP: 8, CLP: 125, IDR: 2500, EGP: 6.25 },
     ...overrides
   });
 const newOrder = (id, start = '2026-11-05T12:30') => ({
@@ -37,7 +37,7 @@ test('供应商默认关闭，未知选择报错且零网络调用', async () =>
   assert.equal(calls, 0);
 });
 
-test('六币种精确倒数、并发合并和缓存时效，刷新后不重算原单', async () => {
+test('七币种精确倒数、并发合并和缓存时效，刷新后不重算原单', async () => {
   let now = initial;
   let calls = 0;
   const service = serviceFor(async (url, { redirect, signal }) => {
@@ -46,7 +46,7 @@ test('六币种精确倒数、并发合并和缓存时效，刷新后不重算�
     assert.ok(signal instanceof AbortSignal);
     if (++calls === 1) return providerResponse();
     return providerResponse(now - 15 * 60_000, now + hour, {
-      rates: { CNY: 1, MYR: 0.5, USD: 0.125, PHP: 6, CLP: 125, IDR: 2500 }
+      rates: { CNY: 1, MYR: 0.5, USD: 0.125, PHP: 6, CLP: 125, IDR: 2500, EGP: 6.25 }
     });
   }, () => now);
   const order = newOrder('one');
@@ -56,7 +56,7 @@ test('六币种精确倒数、并发合并和缓存时效，刷新后不重算�
   assert.deepEqual(first, concurrent);
   assert.deepEqual(first.rates, {
     CNY: '1', MYR: '1.60000000', USD: '8.00000000',
-    PHP: '0.12500000', CLP: '0.00800000', IDR: '0.00040000'
+    PHP: '0.12500000', CLP: '0.00800000', IDR: '0.00040000', EGP: '0.16000000'
   });
   assert.equal(first.fetchedAt, '2026-11-05T05:00:00.000Z');
   assert.equal(first.basisAt, '2026-11-05T04:30:00.000Z');

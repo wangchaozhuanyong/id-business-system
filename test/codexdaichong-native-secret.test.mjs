@@ -7,10 +7,11 @@ import { fileURLToPath } from 'node:url';
 import { runInNewContext } from 'node:vm';
 import { createNativeAdminTokenIssuer } from '../modules/recharge/codexdaichong/native-adapter.mjs';
 import { resolveNativeAdminTokenSecret } from '../modules/recharge/codexdaichong/native-secret.mjs';
+import { CODEXDAICHONG_REVISION } from '../modules/recharge/codexdaichong/prepare.mjs';
 
 const sourceRoot = fileURLToPath(new URL('../.upstream/codexdaichong/', import.meta.url));
 const originalAuthSource = execFileSync('git', [
-  '-C', sourceRoot, 'show', 'f4d7761e0036892e6dd68ec64c5447b513ca37da:admin-auth.js'
+  '-C', sourceRoot, 'show', CODEXDAICHONG_REVISION + ':admin-auth.js'
 ], { encoding: 'utf8' });
 const require = createRequire(import.meta.url);
 

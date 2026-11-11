@@ -93,6 +93,7 @@ function runtime() {
     collections: { mailboxes, accounts },
     modules: {},
     esc: escape,
+    operatorIdProperty: (label, id) => `<div>${escape(label)} ${escape(id || '历史未记录')}</div>`,
     icon: () => '',
     button: (label, action, _kind, _icon, attributes = '') =>
       `<button data-action="${action}" ${attributes}>${escape(label)}</button>`,
@@ -328,7 +329,7 @@ test('未绑定主邮箱的旧隐藏邮箱保持待核对，不按数组位置�
   assert.equal(alias.queryExpiry, undefined);
   assert.equal(alias.inventoryState, 'available');
   const { html } = render(context, 'workspace/mail-extract');
-  assert.match(html, /苹果隐藏邮箱 0/);
+  assert.match(html.replace(/<[^>]*>/g, ''), /苹果隐藏邮箱 0/);
 });
 
 test('专用模块拒绝可用性时不能提取，确认期间主邮箱或查询码失效仍重新检查', () => {
@@ -402,10 +403,9 @@ test('工作台回读隐藏邮箱导入批次，详情交给原导入模块', ()
       status: '已导入'
     }
   ];
-  const { table } = render(context, 'workspace/mail-submit');
-  const record = table.rows.find((row) => row.id === 'alias-import-fixture');
-  assert.ok(record, '工作台近期导入必须包含专用隐藏邮箱批次');
-  assert.equal(record.actor, '演示导入人');
+  const { html } = render(context, 'workspace/mail-extract');
+  assert.match(html, /data-id="alias-import-fixture"/, '工作台近期导入必须包含专用隐藏邮箱批次');
+  assert.match(html, /演示导入人/);
   context.inventory.onClick('inventory-import-detail', {
     dataset: { id: 'alias-import-fixture' }
   });

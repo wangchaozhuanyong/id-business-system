@@ -1,0 +1,99 @@
+{
+  "sourceBase": "03d02fc057086af9dee26c289bcb19a322b29b13",
+  "figmaFile": "https://www.figma.com/design/zHZxKtRsXr3UFONOCtbHL8",
+  "kind": "人工核对的源码映射；未发布 Code Connect",
+  "status": {
+    "website": "代码和离线验证完成，已整合最新业务；正式发布结果另记发布回执",
+    "figma": "参考稿，未完全验收：深色按钮和说明图标文字待修；插件额度用尽。用户选择不新增付费，以项目源码和真实页面截图交付，不再将 Figma 修正作为前置条件。"
+  },
+  "components": {
+    "Button": {
+      "source": "frontend/prototype.js:button / frontend/prototype.css:.button",
+      "figma": "2:257"
+    },
+    "Help": {
+      "source": "frontend/prototype.js:titleInfo / frontend/title-help.js / frontend/title-help.css",
+      "figma": "2:223"
+    },
+    "Input": {
+      "source": "frontend/prototype.css:input,select,textarea",
+      "figma": {
+        "状态=默认": "2:258",
+        "状态=焦点": "2:260",
+        "状态=错误": "2:262",
+        "状态=禁用": "2:264"
+      }
+    },
+    "Tag": {
+      "source": "frontend/prototype.js:tag",
+      "figma": {
+        "语义=success": "2:267",
+        "语义=warning": "2:269",
+        "语义=danger": "2:271",
+        "语义=blue": "2:273",
+        "语义=violet": "2:275",
+        "语义=cyan": "2:277"
+      }
+    },
+    "Chart": {
+      "source": "frontend/design-charts.js / frontend/design-charts.css",
+      "behavior": "只读、键盘导航、精确值、缺失值不绘制为零"
+    },
+    "Sound": {
+      "source": "frontend/interaction-preferences.js / frontend/interaction-preferences.css",
+      "behavior": "会话内显式开启，默认静音，同源嵌入页复用"
+    }
+  },
+  "tokens": {
+    "bg": "VariableID:2:97",
+    "surface": "VariableID:2:100",
+    "surface-soft": "VariableID:2:103",
+    "text": "VariableID:2:106",
+    "secondary": "VariableID:2:109",
+    "muted": "VariableID:2:112",
+    "line": "VariableID:2:115",
+    "control-border": "VariableID:2:118",
+    "primary": "VariableID:2:121",
+    "primary-hover": "VariableID:2:124",
+    "primary-active": "VariableID:2:127",
+    "primary-soft": "VariableID:2:130",
+    "on-primary": "VariableID:2:133",
+    "success": "VariableID:2:136",
+    "success-soft": "VariableID:2:139",
+    "violet": "VariableID:2:142",
+    "violet-soft": "VariableID:2:145",
+    "cyan": "VariableID:2:148",
+    "cyan-soft": "VariableID:2:151",
+    "danger": "VariableID:2:154",
+    "danger-soft": "VariableID:2:157",
+    "warning": "VariableID:2:160",
+    "warning-soft": "VariableID:2:163",
+    "blue": "VariableID:2:166",
+    "blue-soft": "VariableID:2:169",
+    "sidebar-surface": "VariableID:2:172",
+    "radius": "VariableID:2:175",
+    "radius-control": "VariableID:2:177",
+    "panel-padding-inline": "VariableID:2:179",
+    "panel-padding-block": "VariableID:2:181",
+    "section-gap": "VariableID:2:183",
+    "control-gap": "VariableID:2:184",
+    "sidebar-width": "VariableID:2:186",
+    "header-height": "VariableID:2:188",
+    "toolbar-padding-block": "VariableID:2:189"
+  },
+  "screenNodes": {
+    "网站总览": "3:132",
+    "GPT 订单": "3:404",
+    "GPT 提交订单": "3:591",
+    "订单统计": "3:730",
+    "在线工具": "3:868",
+    "mobile": "3:985",
+    "login": "3:1101",
+    "overlays": "3:1120",
+    "dark": "3:1165",
+    "publicMailbox": "5:114",
+    "ChatGPT 充值": "5:136",
+    "recharge": "5:136"
+  },
+  "pageMapFrame": "7:3"
+}

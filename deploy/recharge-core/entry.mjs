@@ -5,11 +5,15 @@ import { createRequire } from 'node:module';
 import { checkNativeProductionDatabase } from '../../modules/recharge/codexdaichong/runtime.mjs';
 import { verifyCodexdaichongSource } from '../../modules/recharge/codexdaichong/prepare.mjs';
 import { resolveNativeAdminTokenSecret } from '../../modules/recharge/codexdaichong/native-secret.mjs';
+import { migrateRechargeCodeReturns } from '../../modules/recharge/codexdaichong/native-code-returns.mjs';
+import { migrateRechargeRouting } from '../../modules/recharge/codexdaichong/native-routing.mjs';
 
 const role = process.argv[2];
-if (!['native', 'adapter', 'canary-native', 'canary-adapter', 'preflight-native'].includes(role)) throw new Error('Invalid runtime role');
-const canary = role.startsWith('canary-');
-const native = role.endsWith('native');
+if (!['native', 'adapter', 'canary-native', 'canary-adapter', 'preflight-native',
+  'migrate-native-routing', 'migrate-canary-routing', 'migrate-native-code-returns', 'migrate-canary-code-returns'].includes(role)) throw new Error('Invalid runtime role');
+const migration = role.startsWith('migrate-');
+const canary = role.startsWith('canary-') || role.startsWith('migrate-canary-');
+const native = role.endsWith('native') || migration;
 const lines = readFileSync(0, 'utf8').trimEnd().split('\n');
 if (lines.length !== (native ? 3 : 4) || lines.slice(0, 2).some((value) => !/^[a-f0-9]{64}$/.test(value)))
   throw new Error('Invalid sealed runtime input');
@@ -29,6 +33,18 @@ if (canary) {
   delete env.ID_RECHARGE_RUNTIME_MODE;
 } else env.ID_RECHARGE_RUNTIME_MODE = 'production';
 await verifyCodexdaichongSource('/candidate/.runtime/codexdaichong');
+if (migration) {
+  const require = createRequire('/candidate/.runtime/codexdaichong/package.json');
+  const createConnection = require('mysql2/promise').createConnection;
+  if (!canary) await checkNativeProductionDatabase(env, createConnection);
+  const db = await createConnection({ host: env.DB_HOST, port: Number(env.DB_PORT), database: env.DB_NAME,
+    user: env.DB_USER, password: env.DB_PASSWORD, connectTimeout: 3000 });
+  const returns = role.endsWith('-code-returns');
+  try { await (returns ? migrateRechargeCodeReturns(db) : migrateRechargeRouting(db)); }
+  finally { await db.end(); }
+  console.log(JSON.stringify({ migration: returns ? 'unused-code-returns-v1' : 'per-plan-routing-v2', tables: returns ? 1 : 3, completed: true }));
+  process.exit(0);
+}
 if (role === 'preflight-native') {
   const require = createRequire('/candidate/.runtime/codexdaichong/package.json');
   await checkNativeProductionDatabase(env, require('mysql2/promise').createConnection);
