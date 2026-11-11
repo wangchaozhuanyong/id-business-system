@@ -218,11 +218,10 @@ test('restores address records for both local and signed-in operators without mi
   const paths = await drill(t);
   const store = createLocalBusinessStore(paths.source);
   const owner = { id: randomUUID(), name: '合成地址录入人' };
-  const localStreet = '49 Local Fixture Avenue';
-  const ownedStreet = '50 Staff Fixture Avenue';
+  let localStreet, ownedStreet;
   try {
-    store.saveBitBrowserAddresses({ streets: [localStreet] });
-    store.saveBitBrowserAddresses({ streets: [ownedStreet] }, owner);
+    localStreet = store.saveBitBrowserAddresses({ count: 1 }).items[0].line1;
+    ownedStreet = store.saveBitBrowserAddresses({ count: 1 }, owner).items[0].line1;
     assert.throws(() => store.loadBitBrowserAddressBackup('bitbrowser-addresses:invalid'), {
       status: 404
     });

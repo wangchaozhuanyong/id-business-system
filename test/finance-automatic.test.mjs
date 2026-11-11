@@ -7,18 +7,15 @@ import {
   automaticProvider, calculateOrder, createOrderSnapshot, snapshotAction
 } from '../modules/finance/accounting.mjs';
 import { createAutomaticSnapshotHandler } from '../server/finance/quote-route.mjs';
-import { createFinanceQuoteService } from '../server/finance/quote-service.mjs';
+import { createFinanceQuoteService, fetchFinanceQuote } from '../server/finance/quote-service.mjs';
 import { checkFinanceSnapshots } from '../server/finance/snapshot-integrity.mjs';
 
 const initial = Date.parse('2026-11-05T05:00:00Z');
 const hour = 3_600_000;
-const providerResponse = (at = initial - hour, next = initial + hour, overrides = {}) =>
-  Response.json({
-    result: 'success', base_code: 'CNY', time_eol_unix: 0,
-    time_last_update_unix: at / 1000, time_next_update_unix: next / 1000,
-    rates: { CNY: 1, MYR: 0.625, USD: 0.125, PHP: 8, CLP: 125, IDR: 2500, EGP: 6.25 },
-    ...overrides
-  });
+const providerResponse = (at = initial, overrides = {}) => Response.json({
+  date: new Date(at).toISOString().slice(0, 10),
+  cny: { cny: 1, myr: 0.625, usd: 0.125, php: 8, clp: 125, idr: 2500, egp: 6.25 }, ...overrides
+});
 const newOrder = (id, start = '2026-11-05T12:30') => ({
   id, orderNo: id, version: 1, start, product: 'GPT', payment: '银行卡',
   paidAmount: '1000', paidCurrency: 'PHP', saleAmount: '250', saleCurrency: 'CNY',
@@ -41,12 +38,12 @@ test('七币种精确倒数、并发合并和缓存时效，刷新后不重算�
   let now = initial;
   let calls = 0;
   const service = serviceFor(async (url, { redirect, signal }) => {
-    assert.equal(url, 'https://open.er-api.com/v6/latest/CNY');
+    assert.equal(url, 'https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@latest/v1/currencies/cny.min.json');
     assert.equal(redirect, 'error');
     assert.ok(signal instanceof AbortSignal);
     if (++calls === 1) return providerResponse();
-    return providerResponse(now - 15 * 60_000, now + hour, {
-      rates: { CNY: 1, MYR: 0.5, USD: 0.125, PHP: 6, CLP: 125, IDR: 2500, EGP: 6.25 }
+    return providerResponse(now, {
+      cny: { cny: 1, myr: 0.5, usd: 0.125, php: 6, clp: 125, idr: 2500, egp: 6.25 }
     });
   }, () => now);
   const order = newOrder('one');
@@ -67,9 +64,9 @@ test('七币种精确倒数、并发合并和缓存时效，刷新后不重算�
   order.fxSnapshot = first;
   const old = calculateOrder(order, { clock: now, currency: 'MYR' });
   assert.equal(old.profit, '45.3750');
-  now = initial + hour;
+  now = initial + 32 * hour;
   assert.equal(service.verifySnapshot(first, order), false);
-  const newer = newOrder('two', '2026-11-05T13:55');
+  const newer = newOrder('two', '2026-11-06T20:55');
   newer.fxSnapshot = await service.snapshotFor(newer);
   assert.equal(newer.fxSnapshot.rates.PHP, '0.16666667');
   assert.equal(newer.fxSnapshot.rates.MYR, '2.00000000');
@@ -80,10 +77,10 @@ test('七币种精确倒数、并发合并和缓存时效，刷新后不重算�
 
 test('缺币种、过期、未来、限流与超时均不产生快照，冷却期内不重试', async () => {
   const failures = [
-    () => providerResponse(initial - 2 * hour, initial),
-    () => providerResponse(initial + hour, initial + 2 * hour),
-    () => providerResponse(initial - 37 * hour, initial + hour),
-    () => providerResponse(initial - hour, initial + hour, { rates: { CNY: 1, MYR: 0.6 } }),
+    () => providerResponse(initial - 48 * hour),
+    () => providerResponse(initial + 24 * hour),
+    () => providerResponse(initial, { date: '2026-02-30' }),
+    () => providerResponse(initial, { cny: { cny: 1, myr: 0.6 } }),
     () => new Response(null, { status: 429 }),
     () => { throw new DOMException('stub timeout', 'TimeoutError'); }
   ];
@@ -171,4 +168,37 @@ test('自动取价进行期间手工快照可以先提交，自动请求回来�
   release.resolve(providerResponse());
   assert.equal((await request).status, 409);
   assert.deepEqual(store.load().data.orders[0].fxSnapshot, manual);
+});
+
+
+test('免费来源使用固定备援地址；共享超时、限流和非法报价不绕过校验', async () => {
+  const urls = [], signals = [];
+  const quote = await fetchFinanceQuote({ clock: () => initial, fetchQuote: async (url, options) => {
+    urls.push(url); signals.push(options.signal);
+    return urls.length === 1 ? new Response(null, { status: 503 }) : providerResponse();
+  } });
+  assert.equal(urls[1], 'https://latest.currency-api.pages.dev/v1/currencies/cny.min.json');
+  assert.equal(signals[0], signals[1]);
+  assert.equal(quote.provider, 'currency-api');
+  assert.equal(quote.at, '2026-11-05T00:00:00.000Z');
+  assert.equal(quote.expiresAt, '2026-11-06T12:00:00.000Z');
+  let calls = 0;
+  await assert.rejects(fetchFinanceQuote({ clock: () => initial, fetchQuote: async () => {
+    calls++; return providerResponse(initial, { cny: { cny: 2 } });
+  } }), /基准无效/);
+  assert.equal(calls, 1);
+});
+
+test('新来源仍保留 JSON 小数精度，历史 ExchangeRate-API 快照核算不被重写', async () => {
+  const quote = await fetchFinanceQuote({ clock: () => initial, codes: ['MYR'], fetchQuote: async () =>
+    new Response('{"date":"2026-11-05","cny":{"cny":1,"myr":0.6250000000000000}}') });
+  assert.equal(quote.rates.MYR, '1.60000000');
+  const service = createFinanceQuoteService({ provider: 'exchange-rate-api-open', clock: () => initial,
+    fetchQuote: async () => providerResponse() });
+  const item = newOrder('legacy');
+  const snapshot = await service.snapshotFor(item);
+  item.fxSnapshot = { ...snapshot, provider: 'exchange-rate-api-open', source: 'ExchangeRate-API' };
+  const before = structuredClone(item.fxSnapshot);
+  assert.equal(calculateOrder(item, { clock: initial + 10 * 24 * hour, currency: 'MYR' }).profit, '45.3750');
+  assert.deepEqual(item.fxSnapshot, before);
 });

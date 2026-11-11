@@ -109,7 +109,9 @@ test('明细按员工和指标分页，接口输出脱敏字段', () => {
     ...query, kind: 'code', metric: 'unusedCodes', employee: employee.id
   }, now);
   assert.equal(codeDetails.total, 1);
-  assert.equal(codeDetails.items[0].batch, 'code-batch');
+  assert.equal(codeDetails.items[0].batch, 'PO000001');
+  assert.equal(codeDetails.items[0].reference, 'PO000001-01');
+  assert.equal(codeDetails.items[0].id, rechargeCodeItemId('code-batch', code(1)));
   assert(!JSON.stringify(codeDetails).includes(code(1)));
 });
 

@@ -291,6 +291,7 @@ const accountTypes = [
   ['gpt', 'GPT 账号'],
   ['claude', 'Claude 账号']
 ];
+const columnPreferencesMeta = $('meta[name="id-column-preferences"]');
 const state = {
   route: '',
   actor: window.IDLocalData?.actor?.() || { id: 'demo-lin', name: '林管理员', role: 'admin' },
@@ -305,7 +306,8 @@ const state = {
   collapsed: false,
   expanded: new Set(['快速操作', '邮箱管理']),
   selections: new Map(),
-  columns: new Map(),
+  columns: new Map(JSON.parse(decodeURIComponent(columnPreferencesMeta?.content || '[]'))
+    .map(([tableId, hidden]) => [tableId, new Set(hidden)])),
   drafts: new Map(),
   mailUndo: new Map(),
   extractionIds: [],
@@ -409,6 +411,7 @@ const personalTools = [
 const localToolbox = window.IDLocalToolbox;
 localToolbox?.setDefaultShortcuts(personalTools);
 const columnDefinitions = {};
+const pendingColumnSaves = new Map();
 const tableRecords = new Map();
 let pendingConfirm = null;
 const actionToast = $('#toast');
@@ -952,10 +955,37 @@ function summary(items) {
 function empty(title, description) {
   return `<div class="empty-state">${icon('database')}<h2>${escapeHtml(title)}</h2><p>${escapeHtml(description)}</p></div>`;
 }
+function hiddenTableColumns(tableId) {
+  return state.columns.get(tableId) ?? new Set();
+}
+async function saveColumnPreference(tableId, change, control) {
+  if (!columnPreferencesMeta) {
+    const hidden = new Set(change.reset ? [] : hiddenTableColumns(tableId));
+    if (!change.reset) {
+      if (change.visible) hidden.delete(change.columnId);
+      else hidden.add(change.columnId);
+    }
+    state.columns.set(tableId, hidden);
+    return true;
+  }
+  return withActionFeedback(control, async () => {
+    const previous = pendingColumnSaves.get(tableId);
+    const saved = (previous?.catch(() => {}) ?? Promise.resolve()).then(async () => {
+      const result = await window.IDLocalData.saveColumnPreference({ tableId, ...change });
+      if (result.tableId !== tableId || !Array.isArray(result.hidden))
+        throw new Error('未收到列设置保存回执，请刷新页面核对');
+      state.columns.set(tableId, new Set(result.hidden));
+      return true;
+    });
+    pendingColumnSaves.set(tableId, saved);
+    try { return await saved; }
+    finally { if (pendingColumnSaves.get(tableId) === saved) pendingColumnSaves.delete(tableId); }
+  }, { pending: '正在保存列设置…', success: '列设置已保存', failure: '列设置保存失败，请重试' });
+}
 function table(columns, rows, scope = '', tableId = 'default', emptyState, selectable = () => true) {
   columnDefinitions[tableId] = columns;
   tableRecords.set(tableId, rows);
-  const hiddenColumns = state.columns.get(tableId) || new Set();
+  const hiddenColumns = hiddenTableColumns(tableId);
   const visible = columns.filter(
     (column) => fixedTableColumn(column) || !hiddenColumns.has(column.id)
   );
@@ -1433,7 +1463,7 @@ function renderClaude() {
         `<div class="action-links">${textAction('续费', 'claude-renew', `data-id="${row.id}"`)}${textAction('记录', 'claude-history', `data-id="${row.id}"`)}${textAction('更多操作', 'claude-more', `data-id="${row.id}" aria-haspopup="menu" aria-expanded="false"`, 'secondary', 'down')}</div>`
     }
   ];
-  if (!state.columns.has('Claude专属'))
+  if (!columnPreferencesMeta && !state.columns.has('Claude专属'))
     state.columns.set(
       'Claude专属',
       new Set(['verifier', 'phone', 'payment', 'paymentId', 'start'])
@@ -2094,19 +2124,30 @@ function showColumns(tableId) {
     notify('请先打开需要设置的数据表');
     return;
   }
-  const hidden = state.columns.get(tableId) || new Set();
+  const hidden = hiddenTableColumns(tableId);
   openDrawer(
     '列设置',
-    '默认显示全部业务字段。可按需隐藏，关键标识与操作列固定；偏好仅保留在当前原型标签页，刷新重置。',
+    columnPreferencesMeta ? '显示和隐藏列会自动保存到当前账户。关键标识与操作列固定显示。'
+      : '可调整本次预览的显示列。关键标识与操作列固定显示。',
     `<p id="column-settings-count" class="footnote">显示 ${columns.filter((column) => fixedTableColumn(column) || !hidden.has(column.id)).length} / ${columns.length} 列</p><div class="settings-list">${columns.map((column) => `<div class="setting-row"><label for="column-${column.id}">${escapeHtml(column.label)}${fixedTableColumn(column) ? '（固定）' : ''}</label><input type="checkbox" id="column-${column.id}" data-column-toggle="${escapeHtml(tableId)}" data-column="${column.id}" ${fixedTableColumn(column) || !hidden.has(column.id) ? 'checked' : ''} ${fixedTableColumn(column) ? 'disabled' : ''} /></div>`).join('')}</div>`,
     button('恢复全部列', 'columns-reset', '', 'return', `data-table-id="${escapeHtml(tableId)}"`) +
       button('完成', 'drawer-close')
   );
 }
-function updateColumnCount(tableId) {
+async function changeTableColumns(tableId, change, control) {
+  const saved = await saveColumnPreference(tableId, change, control);
+  if (saved && $$('table[data-table]', activePageRegion()).some(table => table.dataset.table === tableId))
+    render();
+  const drawer = $('#drawer[open]');
+  if (!drawer) return;
+  const controls = $$('[data-column-toggle]', drawer).filter(node => node.dataset.columnToggle === tableId);
+  if (!controls.length) return;
   const columns = columnDefinitions[tableId] || [];
-  const hidden = state.columns.get(tableId) || new Set();
-  const count = $('#column-settings-count');
+  const hidden = hiddenTableColumns(tableId);
+  for (const node of controls) {
+    if (!node.hasAttribute('aria-busy')) node.checked = node.disabled || !hidden.has(node.dataset.column);
+  }
+  const count = $('#column-settings-count', drawer);
   if (count)
     count.textContent = `显示 ${columns.filter((column) => fixedTableColumn(column) || !hidden.has(column.id)).length} / ${columns.length} 列`;
 }
@@ -2865,13 +2906,7 @@ document.addEventListener('click', async (event) => {
     return;
   }
   if (action === 'columns-reset') {
-    const tableId = node.dataset.tableId;
-    state.columns.delete(tableId);
-    render();
-    $$('[data-column-toggle]', $('#drawer')).forEach((control) => {
-      control.checked = true;
-    });
-    updateColumnCount(tableId);
+    void changeTableColumns(node.dataset.tableId, { reset: true }, node);
     return;
   }
   if (action === 'table-cell-view') {
@@ -3184,15 +3219,10 @@ document.addEventListener('change', async (event) => {
     });
     render();
   } else if (node.dataset.columnToggle) {
-    const tableId = node.dataset.columnToggle;
-    const column = columnDefinitions[tableId]?.find((entry) => entry.id === node.dataset.column);
+    const { columnToggle: tableId, column: columnId } = node.dataset;
+    const column = columnDefinitions[tableId]?.find((entry) => entry.id === columnId);
     if (!column || fixedTableColumn(column)) return;
-    const hidden = state.columns.get(tableId) || new Set();
-    if (node.checked) hidden.delete(node.dataset.column);
-    else hidden.add(node.dataset.column);
-    state.columns.set(tableId, hidden);
-    render();
-    updateColumnCount(tableId);
+    void changeTableColumns(tableId, { columnId, visible: node.checked }, node);
   } else if (node.id === 'order-product') {
     const plan = $('#order-plan');
     plan.innerHTML = options(productPlans[node.value], productPlans[node.value][0]);
@@ -3463,6 +3493,8 @@ window.IDDesignAPI = {
   summary,
   empty,
   table,
+  hiddenTableColumns,
+  saveColumnPreference,
   pagination,
   pageRows,
   titleInfo,
@@ -3529,6 +3561,8 @@ window.addEventListener(
   'DOMContentLoaded',
   () => {
     navigate();
+    if (columnPreferencesMeta?.content === '')
+      notify('个人列设置暂时无法读取，请刷新重试', { kind: 'error' });
     if (new URLSearchParams(window.location.search).get('panel') === 'tools') showTools();
   },
   { once: true }

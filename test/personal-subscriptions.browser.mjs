@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { pathToFileURL } from 'node:url';
 import test from 'node:test';
-import { chromium } from 'playwright';
 import { accountLifecycleSummaries, applyAccountOrderLifecycle, checkInventoryRenewals } from '../server/account-lifecycle.mjs';
 import { applyInventoryUsage, inspectInventoryUsage } from '../server/inventory-usage.mjs';
 import { checkAppleLedger, checkStockDeliveries } from '../server/local-business-integrity.mjs';
 import { checkAppleOrder } from '../server/order-policy.mjs';
 import { personalOrderError, preparePersonalInventory } from '../server/personal-subscriptions.mjs';
 import { interceptDesign, origin, separatorSnapshot, settle, toggleDesignTheme } from './helpers/offline-design.mjs';
+
+const { chromium } = await import(process.env.ID_RECHARGE_QA_PLAYWRIGHT
+  ? pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href : 'playwright');
 
 const actor = { id: 'personal-admin', name: '合成经办员', role: 'admin' };
 const customer = { id: 'personal-customer', name: '合成续费客户', active: true };
@@ -222,8 +225,20 @@ test('Grok 手机录单保留 X 标识、卡序列号、草稿和失败重试', 
   await go(page, 'workspace/order/grok');
   await toggleDesignTheme(page);
   assert.equal(await page.locator(removedFields).count(), 0);
+  assert.equal(await page.locator('[data-commerce-field="loginMethod"], [data-commerce-field="xHandle"], [data-commerce-field="xLinkState"]').count(), 0);
+  assert.equal(await page.locator('#commerce-previousSubscriptionOrderId, #commerce-previousAutoRenew').count(), 0);
   assert.equal(await page.locator('[data-commerce-field="email"] #commerce-emailHistory-picker').isVisible(), true);
   await pick(page, 'customerId', customer.id);
+  await page.locator('#commerce-email').fill('@draft_account');
+  assert.equal(await page.locator('#commerce-loginMethod').inputValue(), 'x');
+  await page.locator('#commerce-email').fill('new@example.test');
+  assert.equal(await page.locator('#commerce-loginMethod').inputValue(), 'email');
+  assert.equal(await page.locator('#commerce-xHandle').inputValue(), '', '改填邮箱后清除前一个手填 X 账号');
+  await page.locator('#commerce-plan').selectOption('X Premium');
+  await page.locator('button[form="commerce-order-form"][type="submit"]').click();
+  assert.match(await page.locator('#commerce-email-error').innerText(), /邮箱账号.*X @账号/);
+  assert(await page.locator('#commerce-email').evaluate(node => document.activeElement === node), '缺失 X 标识时定位可见的账号输入框');
+  assert.deepEqual(accepted, [], '不完整账号不提交');
   await page.locator('#commerce-email').fill('@fixture_grok');
   await page.locator('#commerce-plan').selectOption('The X Subscription Premium');
   assert.equal(await page.locator('#commerce-payment option[value="苹果内购"]').count(), 0);
@@ -232,6 +247,7 @@ test('Grok 手机录单保留 X 标识、卡序列号、草稿和失败重试', 
   assert.equal(await page.locator('#commerce-payment').inputValue(), '银行卡');
   assert.equal(await page.locator('#commerce-appleIdId-picker').isVisible(), false);
   assert.equal(await page.locator('#commerce-loginMethod').inputValue(), 'x');
+  assert.equal(await page.locator('#commerce-loginMethod').isVisible(), false);
   assert.equal(await page.locator('#commerce-email').inputValue(), '@fixture_grok');
   await page.locator('#commerce-proCardSerial').fill('00042-G');
   await page.locator('#commerce-paidAmount').fill('9.99');
@@ -270,6 +286,8 @@ test('Grok 手机录单保留 X 标识、卡序列号、草稿和失败重试', 
   assert.equal(order.paidConfirmed, true);
   assert.equal(order.receiptConfirmed, true);
   assert.equal(order.entitlementStatus, 'active');
+  assert.equal(order.previousSubscriptionOrderId, undefined, '新单不再提交切换前订单');
+  assert.equal(order.previousAutoRenew, 'unknown', '沿用默认未核验状态，不新增原订阅关系');
   assert.deepEqual(accepted, [['commerce']]);
   await page.locator('#toast').filter({ hasText: '订单提交成功' }).waitFor();
   await go(page, 'orders/grok');
@@ -279,6 +297,75 @@ test('Grok 手机录单保留 X 标识、卡序列号、草稿和失败重试', 
   await page.locator('#main [data-action="commerce-order-detail"][data-id="' + order.id + '"]').first().waitFor();
   await page.locator('#main [data-action="commerce-order-detail"][data-id="' + order.id + '"]').first().click();
   await page.getByText('00042-G', { exact: true }).waitFor();
+  assert.deepEqual(errors, []);
+  assert.deepEqual(requests.external, []);
+});
+
+test('Grok 编辑和续费沿用已登记账号资料，移除录入控件不清空历史关联', { timeout: 30_000 }, async t => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const { page, fixture, errors, requests } = await offline(browser);
+  const identity = { email: 'linked@example.test', loginMethod: 'google', xHandle: '@linked_grok', xLinkState: 'linked' };
+  const prior = { id: 'linked-grok', orderNo: 'FIXTURE-GROK', product: 'Grok', plan: 'SuperGrok',
+    businessType: '续费', customerId: customer.id, ...identity, subscriptionSeries: 'supergrok',
+    entitlementStatus: 'active', payment: '银行卡', cardId: 'recharge:fixture-card', paymentId: '0042',
+    paidConfirmed: true, receiptConfirmed: true, paidAmount: '9.99', paidCurrency: 'MYR',
+    saleAmount: '120', saleCurrency: 'CNY', start: priorTime(-3), expiry: priorTime(3),
+    version: 1, source: '管理员手工', refunds: [], bankReturns: [], corrections: [] };
+  fixture.commerce.data.orders.push(prior);
+  await go(page, 'orders/grok');
+  await page.locator('[data-action="commerce-order-edit"][data-id="linked-grok"]').click();
+  const form = page.locator('#drawer[open] #commerce-order-form');
+  assert.equal(await form.locator('[data-commerce-field="loginMethod"], [data-commerce-field="xHandle"], [data-commerce-field="xLinkState"]').count(), 0);
+  await form.locator('#commerce-notes').fill('保留原账号关联');
+  await page.locator('#drawer button[form="commerce-order-form"][type="submit"]').click();
+  assert.equal((await confirm(page, 'commerce')).status(), 200);
+  const updated = fixture.commerce.data.orders.find(row => row.id === prior.id);
+  for (const [key, value] of Object.entries(identity)) assert.equal(updated[key], value, key);
+  await page.locator('#drawer[open]').waitFor({ state: 'hidden' });
+  await go(page, 'workspace/order/renew/linked-grok');
+  const renewal = page.locator('#main #commerce-order-form');
+  for (const [key, value] of Object.entries(identity)) assert.equal(await renewal.locator('#commerce-' + key).inputValue(), value, key);
+  await renewal.locator('#commerce-email').fill('different@example.test');
+  assert.equal(await renewal.locator('#commerce-loginMethod').inputValue(), 'email');
+  assert.equal(await renewal.locator('#commerce-xHandle').inputValue(), '');
+  assert.equal(await renewal.locator('#commerce-xLinkState').inputValue(), 'unknown');
+  await renewal.locator('#commerce-emailHistory-picker').click();
+  await renewal.locator('#commerce-emailHistory-popover [data-value="linked-grok"]').click();
+  for (const [key, value] of Object.entries(identity)) assert.equal(await renewal.locator('#commerce-' + key).inputValue(), value, key);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(requests.external, []);
+});
+
+test('Grok 移除切换前订单录入项后，编辑旧单保留原关联及续费状态', { timeout: 20_000 }, async t => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const { page, fixture, errors, requests } = await offline(browser);
+  const source = { id: 'source-grok', orderNo: 'FIXTURE-SOURCE', product: 'Grok', plan: 'SuperGrok',
+    businessType: '续费', customerId: customer.id, email: '', loginMethod: 'x', xHandle: '@prior_grok',
+    xLinkState: 'linked', subscriptionSeries: 'supergrok', entitlementStatus: 'active',
+    payment: '银行卡', cardId: 'recharge:fixture-card', paymentId: '0042',
+    paidConfirmed: true, receiptConfirmed: true, paidAmount: '9.99', paidCurrency: 'MYR',
+    saleAmount: '120', saleCurrency: 'CNY', start: priorTime(-3), expiry: priorTime(3),
+    version: 1, source: '管理员手工', refunds: [], bankReturns: [], corrections: [] };
+  const switched = { ...source, id: 'switched-grok', orderNo: 'FIXTURE-SWITCHED',
+    plan: 'The X Subscription Plus', subscriptionSeries: 'x_subscription',
+    previousSubscriptionOrderId: source.id, previousAutoRenew: 'off' };
+  fixture.commerce.data.orders.push(source, switched);
+  await go(page, 'orders/grok');
+  await page.locator('[data-action="commerce-order-edit"][data-id="switched-grok"]').click();
+  const form = page.locator('#drawer[open] #commerce-order-form');
+  assert.equal(await form.locator('[data-commerce-field="previousSubscriptionOrderId"], [data-commerce-field="previousAutoRenew"]').count(), 0);
+  await form.locator('#commerce-notes').fill('仅补充说明，保留历史切换关联');
+  await page.locator('#drawer button[form="commerce-order-form"][type="submit"]').click();
+  assert.equal((await confirm(page, 'commerce')).status(), 200);
+  const saved = fixture.commerce.data.orders.find(row => row.id === switched.id);
+  assert.equal(saved.previousSubscriptionOrderId, source.id);
+  assert.equal(saved.previousAutoRenew, 'off');
+  assert.deepEqual(fixture.commerce.data.orders.find(row => row.id === source.id), source);
+  await page.locator('#drawer[open]').waitFor({ state: 'hidden' });
+  await page.locator('[data-action="commerce-order-detail"][data-id="switched-grok"]').first().click();
+  await page.locator('#drawer[open]').getByText('切换前订单及回款', { exact: true }).waitFor();
   assert.deepEqual(errors, []);
   assert.deepEqual(requests.external, []);
 });

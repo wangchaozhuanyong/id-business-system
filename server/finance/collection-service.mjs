@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
-import { automaticProvider, createAutomaticOrderSnapshot, orderAccountingAt, requiredQuoteCurrencies } from '../../modules/finance/accounting.mjs';
+import { automaticProvider, createAutomaticOrderSnapshot, orderAccountingAt, requiredQuoteCurrencies, normalizeAutomaticProvider, isAutomaticQuote } from '../../modules/finance/accounting.mjs';
 import { fetchFinanceQuote } from './quote-service.mjs';
 import { collectionDomain, collectionError, defaults, validateSettings, quoteId, cleanupPlan, collectionMetrics, hour, day } from './collection-policy.mjs';
 
@@ -13,12 +13,15 @@ const orderTime = (order) => {
 
 export function createFinanceCollection({ store, provider = 'disabled', fetchQuote = globalThis.fetch,
   clock = Date.now, setTimer = setTimeout, clearTimer = clearTimeout } = {}) {
+  provider = normalizeAutomaticProvider(provider);
   if (!['disabled', automaticProvider.id].includes(provider)) throw new Error('未识别的自动汇率来源');
   let inFlight, timer, started = false, closed = false;
   const shutdown = new AbortController();
   function read() {
     const current = store.featureDocument(collectionDomain);
-    return { version: current.version, data: current.data || { settings: defaults(provider), quotes: [], runs: [], settingChanges: [],
+    const data = current.data && { ...current.data, settings: { ...current.data.settings,
+      provider: normalizeAutomaticProvider(current.data.settings.provider) } };
+    return { version: current.version, data: data || { settings: defaults(provider), quotes: [], runs: [], settingChanges: [],
       state: { nextRunAt: null, retryAt: null, cooldownUntil: null, failures: 0, active: null, lastSuccessAt: null, lastRequestAt: null } } };
   }
   function update(mutate, audit) {
@@ -54,8 +57,10 @@ export function createFinanceCollection({ store, provider = 'disabled', fetchQuo
     timer?.unref?.();
   }
   function nextRegular(settings, quote, now) {
-    return settings.schedule === 'source' ? quote?.expiresAt || iso(now + day)
-      : iso(now + settings.intervalMinutes * 60_000);
+    if (settings.schedule !== 'source') return iso(now + settings.intervalMinutes * 60_000);
+    if (!quote) return iso(now + day);
+    // Daily publication may lag midnight; retry stale-but-valid dates at most hourly.
+    return iso(Math.min(Date.parse(quote.expiresAt), Math.max(Date.parse(quote.at) + day, now + hour)));
   }
   function recoverExpired() {
     update(data => {
@@ -181,7 +186,7 @@ export function createFinanceCollection({ store, provider = 'disabled', fetchQuo
   }
   function compatible(data, order) {
     const at = orderTime(order), required = requiredQuoteCurrencies(order);
-    return data.quotes.filter(quote => quote.provider === automaticProvider.id && Date.parse(quote.at) <= at &&
+    return data.quotes.filter(quote => isAutomaticQuote(quote) && Date.parse(quote.at) <= at &&
       at < Date.parse(quote.expiresAt) && required.every(code => Object.hasOwn(quote.rates, code)))
       .sort((a, b) => Date.parse(b.at) - Date.parse(a.at))[0];
   }

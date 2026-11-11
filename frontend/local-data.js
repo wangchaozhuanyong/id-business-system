@@ -8,6 +8,7 @@
       ? Object.freeze(JSON.parse(decodeURIComponent(encodedActor)))
       : null
     : Object.freeze({ id: 'local-operator', name: '本机操作员', role: 'admin' });
+  const canApproveRechargeCodes = authRequired && ['admin', 'super'].includes(actor?.role);
 
   const queryEntries = new Map();
   const observedVersions = new Map(), serverVersions = new Map(), changeListeners = new Set();
@@ -22,7 +23,8 @@
   function publishChanges(scopes) {
     if (!scopes.length) return;
     const expanded = new Set(scopes);
-    if (scopes.some(scope => ['inventory', 'commerce', 'settings', 'appleBalance'].includes(scope))) expanded.add('overview');
+    if (scopes.some(scope => ['inventory', 'commerce', 'settings', 'appleBalance'].includes(scope)) ||
+        (canApproveRechargeCodes && scopes.includes('recharge-codes'))) expanded.add('overview');
     if (scopes.includes('inventory')) { expanded.add('appleBalance'); expanded.add('apple-relay'); expanded.add('tools/mailbox-pool'); }
     if (scopes.includes('operators')) expanded.add('order-owners');
     queries.invalidate([...expanded]);
@@ -142,12 +144,13 @@
     }
   }
 
-  async function request(resource, data, method = 'PUT') {
+  async function request(resource, data, method = 'PUT', { keepalive = false } = {}) {
     const options =
       data === undefined
         ? { cache: 'no-store' }
         : {
             method,
+            keepalive,
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(data)
           };
@@ -201,10 +204,12 @@
     subscribeChanges(listener) { changeListeners.add(listener); return () => changeListeners.delete(listener); },
     writesPending: () => pendingWrites > 0,
     authRequired,
+    canApproveRechargeCodes,
     actor: () => actor && ({ ...actor, name: labels.get(actor.id) || actor.name }),
     queries,
     operatorLabel: (id, fallback) => labels.get(id) || fallback || '',
     refreshOperatorLabels,
+    saveColumnPreference: (change) => request('column-preferences', { ...change, actorId: actor?.id }, 'PATCH', { keepalive: true }),
     orderCards: () => request('order-cards'),
     cardTypes: () => request('card-types'),
     cardTypeAction: (command) => write(['card-types'], () => request('card-types', command, 'POST')),
@@ -247,6 +252,11 @@
       ? request('tenant-cards', command, 'POST')
       : write(['commerce', 'order-cards', 'tenant-cards'], () => request('tenant-cards', command, 'POST')),
     rechargeCodeRequests: () => request('recharge-codes'),
+    async rechargeCodePendingSummary() {
+      const result = await request('recharge-codes?view=pending-summary');
+      observeResult('recharge-codes', result);
+      return result;
+    },
     rechargeCodes: () => request('recharge-codes?view=codes'),
     rechargeCodeAction: (command) => write(['recharge-codes'], () => request('recharge-codes', command, 'POST')),
     orderCompletion: (params) => request('order-completion' + (params ? '?' + new URLSearchParams(params) : '')),

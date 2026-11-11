@@ -109,6 +109,65 @@ test('客户流失归集、订阅历史、数据核对与响应式离线验收',
   const output = process.env.ID_LAYOUT_QA_OUTPUT;
   if (output) await mkdir(output, { recursive: true });
 
+  await t.test('总览补充客户信息复用现有口径并打开对应明细', async () => {
+    const session = await openFixture(browser, fixtures());
+    const page = session.page;
+    try {
+      await page.goto(origin + '/#/overview');
+      const detail = key => page.locator('[data-customer-detail="' + key + '"]');
+      await detail('scheduled').locator('strong').getByText('1', { exact: true }).waitFor();
+      assert.equal(await detail('recent').locator('strong').textContent(), '2');
+      assert.equal(await detail('review').locator('strong').textContent(), '8');
+      assert.equal(await detail('renewals').locator('a').getAttribute('href'), '#/workspace/renewals');
+      const before = await page.locator('.overview-customer-section').innerText();
+      await page.getByRole('group', { name: '统计时间范围' }).getByRole('button', { name: '今日', exact: true }).click();
+      assert.equal(await page.locator('.overview-customer-section').innerText(), before, '客户快照不跟随经营区间变化');
+
+      for (const width of [2048, 1440, 390]) for (const theme of ['light', 'dark']) {
+        await page.setViewportSize({ width, height: 1000 });
+        await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+        const panel = page.locator('.overview-customer-section');
+        const help = panel.locator('.title-help summary');
+        await help.scrollIntoViewIfNeeded();
+        await settle(page);
+        const bounds = await panel.boundingBox();
+        assert.equal(await help.locator('..').getAttribute('open'), null);
+        await help.focus();
+        await page.keyboard.press('Enter');
+        const description = panel.locator('.title-description:popover-open');
+        await description.waitFor();
+        assert.match(await description.innerText(), /不随顶部经营区间切换/);
+        assert.deepEqual(await panel.boundingBox(), bounds, '客户说明不推动内容');
+        const note = await description.boundingBox();
+        assert(note.x >= 0 && note.x + note.width <= width, '客户说明位于视口内');
+        await page.keyboard.press('Escape');
+        await page.evaluate(() => document.activeElement?.blur());
+        await page.mouse.move(0, 0);
+        if (output) await (width === 2048 ? page.locator('.overview-snapshots') : panel)
+          .screenshot({ path: join(output, `overview-customers-${width}-${theme}.png`) });
+      }
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      await page.goto(lossUrl);
+      await waitForList(page);
+      for (const [view, tab, rows] of [['scheduled', 'scheduled', 1], ['recent', '', 2], ['review', 'review', 8]]) {
+        await search(page).fill('不会匹配的隔离查询');
+        await page.getByLabel('产品和套餐', { exact: true }).selectOption(JSON.stringify(['GPT', 'Pro 100']));
+        await page.locator('#sidebar a[href="#/overview"]').click();
+        await detail(view).getByRole('button').click();
+        await waitForList(page);
+        assert.equal(await page.locator('[data-action="commerce-loss-tab"][data-tab="' + tab + '"]').getAttribute('aria-selected'), 'true');
+        assert.equal(await search(page).inputValue(), '');
+        assert.equal(await page.getByLabel('产品和套餐', { exact: true }).inputValue(), '');
+        if (view === 'recent') assert.equal(await page.getByLabel('停用时长', { exact: true }).inputValue(), 'recent');
+        assert.equal(await list(page).locator('tbody tr[data-row-id]').count(), rows);
+      }
+      assert.deepEqual(session.errors, []);
+      assert.deepEqual(session.writes, []);
+      assert.deepEqual(session.requests.external, []);
+      assert.deepEqual(session.requests.unavailable, []);
+    } finally { await session.context.close(); }
+  });
+
   await t.test('导航、订阅次数、停用天数与首页共用统计', async () => {
     await page.goto(origin + '/#/overview');
     await overviewMetric(page, '已确认流失').getByText('13位', { exact: true }).waitFor();

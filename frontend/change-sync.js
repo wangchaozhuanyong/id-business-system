@@ -32,7 +32,8 @@
     try {
       if (has('settings')) await run(() => A.modules.operations?.loadSettings(true));
       if (has('appleBalance')) await run(() => A.modules.appleBalance?.refreshLocalBalance());
-      if (route === 'overview' && (refreshCommerce || ['inventory', 'settings', 'appleBalance'].some(has))) {
+      if (route === 'overview' && (refreshCommerce || ['inventory', 'settings', 'appleBalance'].some(has) ||
+          (data.canApproveRechargeCodes && has('recharge-codes')))) {
         await run(() => A.modules.overview?.refresh({ refresh: true }));
       } else {
         await Promise.all([

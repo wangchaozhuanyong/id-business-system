@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import {
-  generateBitBrowserAddresses, importBitBrowserAddresses, updateBitBrowserAddress,
+  generateBitBrowserAddresses, updateBitBrowserAddress,
   deleteUsedBitBrowserAddresses, listBitBrowserAddresses
 } from '../server/bitbrowser-addresses.mjs';
 import { interceptDesign, origin, settle } from './helpers/offline-design.mjs';
@@ -85,9 +85,8 @@ test('地址保存后的版本通知不丢失刷新，不重复写入或覆盖�
       if (state.failWrite) return route.fulfill({ status: 503, json: { error: '合成保存失败' } });
       const now = '2026-11-10T08:19:00Z';
       const change = Object.hasOwn(body, 'count') ? generateBitBrowserAddresses(state.rows, body.count, now)
-        : Object.hasOwn(body, 'streets') ? importBitBrowserAddresses(state.rows, body.streets, now)
-          : body.deleteUsed ? deleteUsedBitBrowserAddresses(state.rows, body, state.version)
-            : updateBitBrowserAddress(state.rows, body, now);
+        : body.deleteUsed ? deleteUsedBitBrowserAddresses(state.rows, body, state.version)
+          : updateBitBrowserAddress(state.rows, body, now);
       state.rows = change.rows;
       state.version++;
       return route.fulfill({ json: change.result });
@@ -125,7 +124,7 @@ test('地址保存后的版本通知不丢失刷新，不重复写入或覆盖�
     return { page, panel, pager, state, total, settled, openGenerator, generate, assertClean };
   }
 
-  for (const width of [1440, 390]) await t.test(width + 'px 生成、导入、复制标记与删除均只写一次，通知打断后自动显示结果', async t => {
+  for (const width of [1440, 390]) await t.test(width + 'px 生成、复制标记与删除均只写一次，通知打断后自动显示结果', async t => {
     const { page, panel, state, total, settled, openGenerator, assertClean } = await setup(t, width);
     if (width === 1440) await page.locator('#theme-toggle').click();
     assert.equal(await panel.locator('#bit-address-generate-count').count(), 0);
@@ -173,21 +172,11 @@ test('地址保存后的版本通知不丢失刷新，不重复写入或覆盖�
     assert.equal(state.reads, 3, '初次读取加两次保存后读取，不重复生成');
 
     state.invalidations = 1;
-    await panel.locator('#bit-address-file').setInputFiles({
-      name: 'offline-address.txt', mimeType: 'text/plain', buffer: Buffer.from('123 Synthetic Import St')
-    });
-    await panel.locator('#bit-address-import-button').click();
-    await total(11);
-    await settled();
-    await panel.getByText('成功导入 1 条，重复 0 条，未通过 0 条。', { exact: true }).waitFor();
-    assert.equal(state.writes.length, 2);
-
-    state.invalidations = 1;
     await panel.locator('[data-action="bit-address-copy"]').first().click();
-    await total(10);
+    await total(9);
     await settled();
     await panel.getByText('地址已复制并移入已使用。', { exact: true }).waitFor();
-    assert.equal(state.writes.length, 3);
+    assert.equal(state.writes.length, 2);
     assert.equal(await page.evaluate(() => window.addressCopies), 1);
     assert.equal(state.rows.filter(row => row.status === 'used').length, 1);
 
@@ -199,8 +188,8 @@ test('地址保存后的版本通知不丢失刷新，不重复写入或覆盖�
     await total(0);
     await settled();
     await panel.getByText('已删除 1 条已使用地址。', { exact: true }).waitFor();
-    assert.equal(state.writes.length, 4);
-    assert.equal(state.rows.length, 10);
+    assert.equal(state.writes.length, 3);
+    assert.equal(state.rows.length, 9);
     await assertClean();
   });
 

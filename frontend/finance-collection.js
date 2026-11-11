@@ -19,7 +19,7 @@
   }
   const active = () => A.state.route === route && (!D?.authRequired || ['admin', 'super'].includes(D.actor()?.role));
   const time = value => value ? new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }) : '—';
-  const source = value => value === 'disabled' ? '尚未启用' : 'ExchangeRate-API';
+  const source = value => value === 'disabled' ? '尚未启用' : value === 'exchange-rate-api-open' ? 'ExchangeRate-API（历史来源）' : 'Fawaz Currency API';
   const badge = value => A.tag(states[value] || '待核对', ['valid', 'updated', 'unchanged'].includes(value) ? 'success' : ['failed', 'expired'].includes(value) ? 'danger' : 'warning');
   function params() {
     const v = view();
@@ -167,7 +167,7 @@
       '<input id="fx-currency-search" type="search" placeholder="搜索币种" aria-label="搜索采集币种" autocomplete="off" />' +
       '<div class="fx-currency-options">' + Object.entries(labels).map(([code, label]) => '<label><input type="checkbox" name="fx-currencies" value="' + code + '" ' + (d.currencies.includes(code) ? 'checked' : '') + ' />' + e(label) + '</label>').join('') + '</div><span id="fx-currency-empty" hidden>没有匹配币种</span></div>';
     return '<form id="fx-settings-form" class="form-panel" novalidate><input type="hidden" name="fx-version" value="' + e(d['fx-version']) + '" /><div class="form-grid">' +
-      field('汇率来源', 'fx-provider', A.select('fx-provider', [['disabled', '暂不启用'], ['exchange-rate-api-open', 'ExchangeRate-API（每日报价）']], d['fx-provider']), '当前来源按天更新，采集频率不等于报价更新频率。') +
+      field('汇率来源', 'fx-provider', A.select('fx-provider', [['disabled', '暂不启用'], ['currency-api', 'Fawaz Currency API（每日报价）']], d['fx-provider']), '当前来源按天更新，采集频率不等于报价更新频率。') +
       A.field('自动采集', 'fx-enabled', '<label class="checkbox-label"><input id="fx-enabled" name="fx-enabled" type="checkbox" ' + (d.enabled ? 'checked' : '') + ' /><span>启用后台采集</span></label>', false, '服务器后台执行，关闭浏览器仍继续；暂停后保留报价与订单快照。') +
       field('采集方式', 'fx-schedule', A.select('fx-schedule', [['source', '跟随来源更新时间'], ['interval', '固定时间间隔']], d['fx-schedule'])) +
       numeric('采集间隔', 'fx-interval', 60, 10080, '固定间隔时使用；最短 60 分钟。跟随来源更新时间时此项不参与调度。', '分钟') +
@@ -191,7 +191,7 @@
     const nav = '<div class="tabs" role="tablist" aria-label="汇率采集栏目">' + tabs.map(([key, label]) => '<button class="tab ' + (selectedTab === key ? 'active' : '') + '" type="button" role="tab" aria-selected="' + (selectedTab === key) + '" data-action="fx-tab" data-tab="' + key + '">' + label + '</button>').join('') + '</div>';
     return title + '<div class="fx-page design-async-region"><div id="fx-progress" class="design-region-progress" role="status" ' + (loading ? '' : 'hidden') + '></div>' + overview() +
       (error ? '<div class="inline-notice warning" role="alert">' + e(error) + A.button('重新读取', 'fx-refresh') + '</div>' : '') +
-      '<section class="panel">' + nav + '<div class="toolbar fx-main-actions"><a href="https://www.exchangerate-api.com" target="_blank" rel="noopener noreferrer">汇率来源：ExchangeRate-API</a><div class="toolbar-right">' + A.button('刷新记录', 'fx-refresh', '', 'refresh') +
+      '<section class="panel">' + nav + '<div class="toolbar fx-main-actions"><span class="footnote">汇率来源：' + e(source(data.settings.provider)) + '</span><div class="toolbar-right">' + A.button('刷新记录', 'fx-refresh', '', 'refresh') +
       A.button(data.state.active ? '正在采集' : '立即采集', 'fx-collect', 'primary', '', saving || data.state.active || data.settings.provider === 'disabled' ? 'disabled' : '') + '</div></div>' +
       (tab === 'settings' ? settingsForm() : tab === 'status' ? statusContent() : table()) + '</section></div>';
   }

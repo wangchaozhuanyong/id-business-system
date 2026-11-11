@@ -3739,13 +3739,15 @@
     const label = grok ? '账号' : '邮箱';
     return input('accountId', v('accountId'), 'type="hidden"') +
       input('personalHistoryId', v('personalHistoryId'), 'type="hidden"') +
+      '<div class="commerce-span-all order-account-fields">' +
       field('邮箱账号', 'email', searchableSelect('emailHistory', stock ? '可用账号' : `客户历史${label}`,
         choices, selected, '', input('email', v('email') || v('xHandle'),
           `aria-required="true" ${orderAccountAutocomplete} placeholder="${grok ? '填写实际邮箱或 X @账号' : '填写订单邮箱'}"`)),
         true, '优先匹配所选客户最近使用的账号，也可直接填写。') +
-      (grok ? field('登录方式', 'loginMethod', select('loginMethod', personalLoginChoices, v('loginMethod')), true) +
-        field('关联 X @账号', 'xHandle', input('xHandle', v('xHandle'), 'maxlength="16" placeholder="@username"')) +
-        field('X 绑定状态', 'xLinkState', select('xLinkState', linkChoices, v('xLinkState')))
+      orderOwnerField(v, existing) + '</div>' +
+      (grok ? input('loginMethod', v('loginMethod'), 'type="hidden"') +
+        input('xHandle', v('xHandle'), 'type="hidden"') +
+        input('xLinkState', v('xLinkState'), 'type="hidden"')
         : input('loginMethod', 'google', 'type="hidden"'));
   }
   function orderCustomerField(customerId, quickDraft) {
@@ -3788,6 +3790,7 @@
       orderCustomerField(customerId, quickDraft) +
       (personalProduct(product) ? personalIdentityFields(v, existing, stock) :
       `<input type="hidden" id="commerce-accountId" name="commerce-accountId" value="${E(v('accountId'))}" />` +
+      '<div class="commerce-span-all order-account-fields">' +
       field(
         '邮箱账号',
         'email',
@@ -3803,8 +3806,8 @@
             : '按邮箱搜索未使用账号，保存成功后标记为已使用。'
           : auto ? '' : '优先匹配所选客户在当前产品最近使用的邮箱，也可直接填写新邮箱。',
         ''
-      ).replace('<span class="required">*', `<span class="required"${emailOptional ? ' hidden' : ''}>*`)) +
-      orderOwnerField(v, existing) +
+      ).replace('<span class="required">*', `<span class="required"${emailOptional ? ' hidden' : ''}>*`) +
+      orderOwnerField(v, existing) + '</div>') +
       '</div>' +
       `<details class="commerce-span-all"><summary>联系方式（自动回填，可展开修改）</summary><div class="commerce-field-grid">${field('客户微信', 'wechat', input('wechat', contact('wechat')))}${field('客户电话', 'customerPhone', input('customerPhone', contact('customerPhone')))}${field('QQ', 'qq', input('qq', contact('qq')))}${field('WhatsApp', 'whatsapp', input('whatsapp', contact('whatsapp')))}${field('Telegram', 'telegram', input('telegram', contact('telegram')))}</div></details>`
     );
@@ -4518,16 +4521,11 @@
       form?.removeAttribute('aria-busy');
     }
   }
-  function priorGrokChoices(customerId) {
-    return [['', '独立订阅，无原单'], ...orders.filter(row => row.product === 'Grok' &&
-      row.customerId === customerId && !row.cancelled && personalSeries(row.product, row.plan) !== 'x_subscription')
-      .map(row => [row.id, `${row.orderNo} · ${orderIdentity(row)} · ${row.plan}`])];
-  }
   function personalEntitlementFields(v, existing) {
     return (existing ? field('权益核对', 'entitlementStatus', select('entitlementStatus', openingChoices, v('entitlementStatus')), true) : '') +
-      (v('product') === 'Grok' ? field('切换前订单', 'previousSubscriptionOrderId',
-        select('previousSubscriptionOrderId', priorGrokChoices(v('customerId')), v('previousSubscriptionOrderId'))) +
-        field('原订阅自动续费', 'previousAutoRenew', select('previousAutoRenew', autoRenewChoices, v('previousAutoRenew'))) : '');
+      (v('product') === 'Grok' && existing
+        ? input('previousSubscriptionOrderId', existing.previousSubscriptionOrderId || '', 'type="hidden"') +
+          input('previousAutoRenew', existing.previousAutoRenew || 'unknown', 'type="hidden"') : '');
   }
   function orderTenantField(v, hidden) {
     return field('用卡人', 'tenantId', searchableSelect('tenantId', '用卡人',
@@ -5468,7 +5466,7 @@
       )}${toolbar(claude ? '搜索订单编号、邮箱、客户、卡号或序列号' : personal ? '搜索订单编号、账号、客户或账单' : '搜索订单编号、邮箱或客户',
         filterControls + columnSettingsButton(tableId) + (claude ? historicalSale + rentBatchesLink + viewSubscriptions :
           routeButton('订单统计', 'orders/statistics')),
-        'data-page-actions')}${product === 'GPT' ? syncedOrderReadNotice() : ''}${rentSelection}${list}${quoteAttribution(filtered)}</section>`
+        'data-page-actions')}${product === 'GPT' ? syncedOrderReadNotice() : ''}${rentSelection}${list}</section>`
     );
   }
 
@@ -5771,11 +5769,6 @@
       ? new Date(ms + 8 * 3600000).toISOString().slice(0, 19).replace('T', ' ')
       : '待核对';
   }
-  function quoteAttribution(rows) {
-    if (!localData || !finance?.automaticProvider ||
-        !rows.some((row) => row.fxSnapshot?.provider === finance.automaticProvider.id)) return '';
-    return `<p class="footnote panel-body"><a href="${E(finance.automaticProvider.attributionUrl)}" target="_blank" rel="noopener noreferrer">Rates By Exchange Rate API</a></p>`;
-  }
   const accountingLabel = (basis) => basis === 'actual' ? '实账核算' : '参考核算';
   const quoteBasisLabel = (snapshot) => snapshot?.kind === 'automatic' || snapshot?.basis === 'reference'
     ? '历史市场参考报价' : snapshot?.basis === 'settlement' ? '实际结算凭据' : '历史登记报价';
@@ -5862,7 +5855,7 @@
     }${snapshot ? `<div class="property-list">${property(snapshot.kind === 'automatic' ? '自动报价来源' : '手工登记来源', snapshot.source)}${property('汇率依据', quoteBasisLabel(snapshot))}${snapshot.fetchedAt ? property('采集时间（北京时间）', quoteTime(snapshot.fetchedAt)) : ''}${property('报价时点（北京时间）', quoteTime(snapshot.at))}${property('有效截止（北京时间）', quoteTime(snapshot.expiresAt))}${property('核算时点（北京时间）', quoteTime(snapshot.basisAt))}${Object.entries(snapshot.rates).map(([code, rate]) => property(currencyLabel(code), rate)).join('')}</div>`
       : A.empty('尚无订单汇率快照', finance?.requestAutomaticSnapshot
         ? '可获取覆盖本次订阅时点的有效报价，或根据原订单的凭据手工登记。'
-        : '核对原订单的真实报价凭据后登记。当前使用手工来源。')}${quoteAttribution([order])}`;
+        : '核对原订单的真实报价凭据后登记。当前使用手工来源。')}`;
   }
   async function openHistoricalFeeCorrection(id) {
     const order = orders.find(row => row.id === id), actorId = currentOperator().id;
@@ -6558,7 +6551,7 @@
       routeButton('费用设置', 'settings/costs', '', 'settings')) +
       statisticsSummary(facts, currency) + statisticsFilterBar(definitions, invalidDates) +
       (partialCount ? `<p class="footnote panel-body">${partialCount} 笔订单开卡费未分摊，已知费用单列。</p>` : '') +
-      quoteAttribution(selected) + `<section class="panel">${tabs([
+      `<section class="panel">${tabs([
         ['overview', '统计概览'], ['fees', '费用拆分'], ['details', '来源订单'], ['pending', '待核算'],
         ['rates', localData ? '汇率来源' : '演示汇率记录']
       ], moduleState.statsTab, 'commerce-stats-tab', 'data-page-actions="tabs"')}${body}</section>`;
@@ -6820,11 +6813,12 @@
     const emailValid = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(order.email);
     const validHandle = /^@[a-zA-Z0-9_]{1,15}$/.test(order.xHandle || '');
     const xLogin = order.product === 'Grok' && order.loginMethod === 'x';
-    error('email', ((optionalEmail || auto) && !order.email) || emailValid || (xLogin && !order.email && validHandle)
-      ? '' : xLogin ? '请填写实际 X @账号' : '请填写有效邮箱');
-    if (order.product === 'Grok')
-      error('xHandle', validHandle || (!order.xHandle && !xLogin && order.xLinkState !== 'linked' &&
-        order.subscriptionSeries !== 'x_premium') ? '' : '请填写有效的 X @账号');
+    let identityError = ((optionalEmail || auto) && !order.email) || emailValid || (xLogin && !order.email && validHandle)
+      ? '' : xLogin ? '请填写实际 X @账号' : '请填写有效邮箱';
+    if (order.product === 'Grok' && !validHandle &&
+        (order.xHandle || xLogin || order.xLinkState === 'linked' || order.subscriptionSeries === 'x_premium'))
+      identityError ||= '请在邮箱账号中填写有效的 X @账号';
+    error('email', identityError);
     error('businessType', orderBusinessTypes(order.product).includes(order.businessType) ||
       (personal && order.businessType === '首次开通') ? '' : '请选择业务类型');
     error('plan', (auto && !order.plan) || orderPlanChoices(order.product, order.plan, existing).includes(order.plan)
@@ -8272,6 +8266,17 @@
     contactForm(tenant, '', true);
   }
   function onClick(action, node) {
+    if (action === 'commerce-loss-open') {
+      const view = node.dataset.view;
+      if (!A.canVisit(customerLossRoute) || !['scheduled', 'recent', 'review'].includes(view)) return true;
+      S.drafts.set(retentionFiltersKey, { ...retentionFilterDefaults, age: view === 'recent' ? 'recent' : '' });
+      S.viewDrafts.set(customerLossRoute, {
+        ...S.viewDrafts.get(customerLossRoute), page: 1, query: '', scrollY: 0,
+        status: view === 'recent' ? '' : view
+      });
+      A.go(customerLossRoute);
+      return true;
+    }
     if (!action.startsWith('commerce-')) return false;
     if (action === 'commerce-order-amount-options') {
       openOrderAmountOptions(node);
@@ -9088,7 +9093,6 @@
     const history = controls['commerce-personalHistoryId'];
     const email = controls['commerce-email'];
     const customer = controls['commerce-customerId'].value;
-    const past = controls['commerce-previousSubscriptionOrderId'];
     const choices = stock ? personalStockChoices(product, existing, account.value) : personalHistoryChoices(customer, product);
     if (!stock && !existing) {
       const selected = history.value && orders.find(row => row.id === history.value);
@@ -9103,10 +9107,6 @@
         fillPersonalAccount(form, { email: email.value });
       }
     }
-    const displayField = (name, show) => {
-      const field = form.querySelector('[data-commerce-field="' + name + '"]');
-      if (field) field.hidden = !show;
-    };
     email.readOnly = stock || Boolean(existing?.accountId || account.value);
     if (product === 'Grok') {
       controls['commerce-loginMethod'].disabled = email.readOnly;
@@ -9114,13 +9114,6 @@
     }
     renderOrderAccountPicker(form, choices, stock ? account.value : history.value, stock,
       Boolean(existing && (!stock || existing.accountId)), product === 'Grok' ? '历史账号' : '历史邮箱');
-    if (past) {
-      const migration = personalSeries(product, controls['commerce-plan'].value) === 'x_subscription';
-      past.innerHTML = A.options(priorGrokChoices(customer), migration ? past.value : '');
-      displayField('previousSubscriptionOrderId', migration);
-      displayField('previousAutoRenew', migration && Boolean(past.value));
-      if (!past.value) controls['commerce-previousAutoRenew'].value = 'unknown';
-    }
     if (localData && stock && !stockForms.has(form)) {
       stockForms.add(form);
       void A.modules.inventory?.refreshLocalInventory?.().then((ready) => {
@@ -9138,6 +9131,26 @@
       controls['commerce-loginMethod'].value = record?.loginMethod || 'email';
       controls['commerce-xLinkState'].value = record?.xLinkState || 'unknown';
     }
+  }
+  function updateGrokOrderIdentity(form) {
+    const controls = form?.elements;
+    if (controls?.['commerce-product']?.value !== 'Grok') return;
+    const identity = controls['commerce-email'].value.trim();
+    const original = orders.find(row => row.id === controls['commerce-id'].value) ||
+      (controls['commerce-accountId'].value && A.modules.inventory?.getAsset?.(controls['commerce-accountId'].value)) ||
+      orders.find(row => row.id === controls['commerce-personalHistoryId'].value);
+    const same = value => Boolean(value) && value.trim().toLowerCase() === identity.toLowerCase();
+    if (original && same(original.email)) {
+      controls['commerce-loginMethod'].value = original.loginMethod || 'email';
+      controls['commerce-xHandle'].value = original.xHandle || '';
+      controls['commerce-xLinkState'].value = original.xLinkState || 'unknown';
+      return;
+    }
+    const x = identity.startsWith('@');
+    controls['commerce-loginMethod'].value = x ? 'x' : 'email';
+    controls['commerce-xHandle'].value = x ? identity : '';
+    controls['commerce-xLinkState'].value = x && same(original?.xHandle)
+      ? original.xLinkState || 'unknown' : 'unknown';
   }
   function updateStockSearch(form) {
     if (personalProduct(form.elements['commerce-product'].value)) return refreshPersonalAccounts(form);
@@ -9363,10 +9376,7 @@
             }
           }
         }
-        if (node.id === 'commerce-email' && product === 'Grok' && node.value.trim().startsWith('@')) {
-          controls['commerce-loginMethod'].value = 'x';
-          controls['commerce-xHandle'].value = node.value.trim();
-        }
+        if (node.id === 'commerce-email') updateGrokOrderIdentity(form);
         if (node.id === 'commerce-plan' && payment.tagName === 'SELECT')
           payment.innerHTML = A.options(orderPaymentChoices(product, node.value), previousPayment);
       }
@@ -9534,8 +9544,9 @@
     if (node.closest('form[data-commerce-draft]')) {
       if (node.id === 'order-quick-customer-name') A.setError(node.id, '', node.form);
       if (node.id === 'commerce-email') {
-        updateStockSearch(node.closest('#commerce-order-form'));
-
+        const orderForm = node.closest('#commerce-order-form');
+        updateStockSearch(orderForm);
+        updateGrokOrderIdentity(orderForm);
       }
       if (['commerce-email', 'commerce-xHandle'].includes(node.id)) lookupLinkedAccountOwner(node.closest('#commerce-order-form'), 300);
       if (node.id === 'commerce-saleAmount') node.form.elements['commerce-saleManual'].value = 'yes';
@@ -9632,7 +9643,8 @@
         (_, index) => start + index * step) : [];
       return {
         activity: {
-          start, end, orders: 0, cancelled: 0, customers: 0, receipts: {}, refunds: {}, products: {},
+          start, end, orders: 0, cancelled: 0, customers: 0, receiptConfirmedOrders: 0,
+          receipts: {}, refunds: {}, products: {},
           series: slots.map(at => ({ at, orders: 0, cancelled: 0 }))
         },
         profit: {
@@ -9694,7 +9706,10 @@
         activity.orders++;
         activity.products[product] = (activity.products[product] || 0) + 1;
         if (slot) slot.orders++;
-        if (order.receiptConfirmed) addOriginal(activity.receipts, order.saleCurrency, order.saleAmount);
+        if (order.receiptConfirmed) {
+          activity.receiptConfirmedOrders++;
+          addOriginal(activity.receipts, order.saleCurrency, order.saleAmount);
+        }
         if (appleUnavailable) target.appleUnavailable = true;
         else {
           addProfit(totals, gain, accounting);
@@ -9712,6 +9727,8 @@
     return {
       commerce: {
         incomplete,
+        pendingRentItems: rentBatches.reduce((total, batch) =>
+          total + batch.items.filter(item => item.status === '待发放' || item.status === '发放失败').length, 0),
         ranges: Object.fromEntries(Object.entries(ranges).map(([key, { current, previous }]) =>
           [key, { current: current.activity, previous: previous.activity }]))
       },
@@ -9729,6 +9746,8 @@
       active: retention.active,
       followUp: new Set(pending.map(row => row.identity).filter(Boolean)).size,
       lost: retention.lost.length,
+      scheduled: retention.scheduled.length,
+      recentlyLost: retention.lost.filter(profile => profile.days < 7).length,
       review: retention.review.length
     };
   }

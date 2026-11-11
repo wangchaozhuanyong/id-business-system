@@ -7,16 +7,16 @@ import { interceptDesign, origin, root, settle, spacingSnapshot } from './helper
 // All requests are fulfilled with synthetic fixtures; no listening server or database.
 test('账号与邮箱提交提取工作台：旧路由、双模块、草稿、批次和提交反馈', { timeout: 120_000 }, async t => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
-  const browser = await chromium.launch(); t.after(() => browser.close());
-  const output = root + '/.runtime/inventory-workspace-20261110';
+  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL || undefined }); t.after(() => browser.close());
+  const output = process.env.ID_LAYOUT_QA_OUTPUT || root + '/.runtime/inventory-workspace-20261110';
   await mkdir(output, { recursive: true });
   const fixture = JSON.parse(await readFile(root + '/docs/audits/2026-11-06-design-review/visual-fixtures.json'));
   const actor = { id: 'workspace-fixture-admin', name: '工作台验收员', role: 'admin' };
   const seed = structuredClone(fixture.inventory.data);
   for (const kind of ['account', 'mail']) {
     for (let i = 0; i < 23; i++) seed.importRecords.push({
-      id: `${kind}-import-${i}`, type: kind === 'account' ? 'gpt' : 'google',
-      time: `2026-11-${String(10 - Math.floor(i / 8)).padStart(2, '0')} 09:${String(59 - i).padStart(2, '0')}`,
+      id: `${kind}-import-${i}`, type: kind === 'account' ? 'gpt' : i === 0 ? 'relay' : 'google',
+      time: i === 0 ? '2026-11-10T01:59:00.000Z' : `2026-11-${String(10 - Math.floor(i / 8)).padStart(2, '0')} 09:${String(59 - i).padStart(2, '0')}`,
       actor: actor.name, total: 3, success: 3, failed: 0, status: '已导入', results: []
     });
     for (let i = 0; i < 6; i++) {
@@ -81,6 +81,58 @@ test('账号与邮箱提交提取工作台：旧路由、双模块、草稿、�
       assert(geometry.right.left >= geometry.left.right + 19);
     } else assert(geometry.right.top >= geometry.left.bottom + 19);
     for (const { label, control } of geometry.fields) assert(label.right <= control.left + 1, '字段标签保持在左侧');
+    const importRows = await page.locator('.inventory-import-records > li').evaluateAll(rows => rows.map(row => {
+      const bounds = row.getBoundingClientRect(), action = row.querySelector('button').getBoundingClientRect();
+      const fields = [...row.children].map(field => field.getBoundingClientRect());
+      return { width: bounds.width, actionRight: action.right, right: bounds.right,
+        clipped: [...row.children].some(field => field.scrollWidth > field.clientWidth + 1),
+        centers: fields.map(box => box.top + box.height / 2),
+        overlapping: fields.slice(0, -1).some(box => box.right > action.left + 1),
+        time: row.querySelector('time').textContent };
+    }));
+    for (const row of importRows) {
+      assert(Math.abs(row.right - row.actionRight) <= 1, '近期导入的详情始终靠最右侧');
+      assert(!row.clipped && !row.overlapping, `${width}/${theme} 导入记录不截断、不覆盖详情`);
+      if (row.width >= 600 && state === 'records')
+        assert(Math.max(...row.centers) - Math.min(...row.centers) <= 1, '宽容器的导入记录在同一行垂直居中');
+    }
+    if (importRows.length && state === 'records') assert.equal(importRows[0].time, '2026-11-10 09:59', 'ISO 时间显示为北京时间');
+    const extraction = await page.locator('.inventory-extraction-panel').evaluate(panel => {
+      const rect = node => node.getBoundingClientRect().toJSON();
+      const summary = panel.querySelector('.inventory-extraction-summary'), actions = summary.querySelector('.inventory-extraction-actions');
+      const history = panel.querySelector('.inventory-extraction-history');
+      return { summary: rect(summary), stock: rect(summary.querySelector('.inventory-availability')), actions: rect(actions),
+        buttons: [...actions.querySelectorAll('button')].map(rect),
+        separation: parseFloat(getComputedStyle(history).borderTopWidth),
+        historyTop: rect(history).top, headerBackground: getComputedStyle(history.querySelector('.panel-heading')).backgroundColor,
+        formBackground: getComputedStyle(panel).backgroundColor,
+        rows: [...panel.querySelectorAll('.inventory-extraction-records > li')].map(row => {
+          const fields = [...row.children], action = fields.at(-1);
+          return { width: rect(row).width, right: rect(row).right, actionRight: rect(action).right,
+            centers: fields.map(node => { const r = rect(node); return r.top + r.height / 2; }), columns: fields.map(node => rect(node).left),
+            singleLines: fields.filter(node => node.matches('.inventory-extraction-number, .inventory-extraction-purpose, .inventory-extraction-count, .inventory-extraction-actor, .inventory-extraction-time')).every(node => rect(node).height <= parseFloat(getComputedStyle(node).lineHeight) + 1),
+            clipped: row.scrollWidth > row.clientWidth + 1 || [...action.querySelectorAll('button')].some(node => node.scrollWidth > node.clientWidth + 1),
+            completeLabels: fields.filter(node => node.matches('.inventory-extraction-purpose, .inventory-extraction-actor')).every(node => node.title === node.textContent) };
+        }) };
+    });
+    assert.equal(extraction.buttons.length, 2, '提取与归还、确认提取各保留一个按钮');
+    assert(extraction.buttons.every(box => box.left >= extraction.summary.left && box.right <= extraction.summary.right + 1), '提取按钮不裁切');
+    assert(Math.abs(extraction.buttons[0].top - extraction.buttons[1].top) <= 1, '两个提取按钮在宽窄屏保持同排');
+    if (extraction.summary.width >= 450) {
+      assert(Math.abs(extraction.stock.top + extraction.stock.height / 2 - extraction.actions.top - extraction.actions.height / 2) <= 1, '库存与按钮同排居中');
+      assert(extraction.stock.right <= extraction.actions.left, '按钮位于库存右侧');
+    }
+    assert(Math.abs(extraction.actions.right - extraction.summary.right) <= 1, '按钮靠操作行最右侧');
+    assert(extraction.separation >= 8 && extraction.headerBackground !== extraction.formBackground && extraction.historyTop >= extraction.summary.bottom, '历史分区有明确间隔及独立标题底色');
+    for (const row of extraction.rows) {
+      assert(!row.clipped && row.completeLabels, `${width}/${theme} 批次内容可追溯且操作不裁切`);
+      assert(Math.abs(row.right - row.actionRight) <= 1, '批次操作位于最右侧');
+      if (row.width >= 600) {
+        assert(row.singleLines, '批次编号与数据字段在宽容器内不折行');
+        assert(Math.max(...row.centers) - Math.min(...row.centers) <= 1, '每个批次在同一行展示');
+        assert(row.columns.every((left, index) => Math.abs(left - extraction.rows[0].columns[index]) <= 1), '批次各列跨记录对齐');
+      }
+    }
     for (const history of await page.locator('.inventory-workspace-history:has(li)').all()) {
       const last = history.locator('li').last().locator('button').last();
       await last.scrollIntoViewIfNeeded();
@@ -89,7 +141,7 @@ test('账号与邮箱提交提取工作台：旧路由、双模块、草稿、�
       await history.evaluate(node => { node.scrollTop = 0; });
     }
     await page.evaluate(() => window.scrollTo(0, 0));
-    measurements.push({ width, theme, kind, state, geometry });
+    measurements.push({ width, theme, kind, state, geometry, importRows, extraction });
   };
   for (const kind of ['account', 'mail']) {
     await page.goto(origin + '/#/workspace/' + kind + '-submit');

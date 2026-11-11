@@ -10,8 +10,6 @@ import { startPreview } from '../server/preview.mjs';
 
 const owner = { id: 'fixture-owner', name: '地址录入人' };
 const other = { id: 'fixture-other', name: '其他管理员' };
-const street = '456 Fixture Street';
-const fixedLocation = { city: 'Portland', state: 'OR', postalCode: '97204', country: 'US' };
 
 async function fixtureDirectory(t) {
   const runtime = new URL('../.runtime/', import.meta.url);
@@ -38,50 +36,37 @@ test('address page size policy supports shared and legacy sizes', () => {
   assert.throws(() => list('pageSize=11'), { status: 400 });
 });
 
-test('normalizes and deduplicates TXT rows, returns legacy columns and scopes by owner', async (t) => {
+test('generated addresses stay encrypted and owner scoped; removed import requests cannot change data or audit', async (t) => {
   const path = join(await fixtureDirectory(t), 'addresses.sqlite');
   let store = createLocalBusinessStore(path);
   const filter = (query = '', actor = owner) =>
     store.listBitBrowserAddresses(new URLSearchParams(query), actor);
   try {
-    assert.deepEqual(
-      store.saveBitBrowserAddresses(
-        {
-          streets: [' 456   Fixture Street ', '456 fixture street', '第七号街道', '88 Other Street']
-        },
-        owner
-      ),
-      { imported: 2, duplicated: 1, rejected: 1 }
-    );
-    assert.deepEqual(store.saveBitBrowserAddresses({ streets: [street] }, owner), {
-      imported: 0,
-      duplicated: 1,
-      rejected: 0
-    });
+    const { items } = store.saveBitBrowserAddresses({ count: 2 }, owner);
+    const selected = items.reduce((longest, item) => item.line1.length > longest.line1.length ? item : longest);
+    const street = selected.line1;
+    const query = 'keyword=' + encodeURIComponent(street.toLowerCase());
     assert.equal(filter('', other).total, 0);
     assert.equal(filter('', other).version, 0);
     assert.throws(() => filter('pageSize=11'), { status: 400 });
-    const filtered = filter('keyword=fIxTuRe');
+    const filtered = filter(query);
     assert.equal(filtered.total, 1);
     assert.equal(filtered.version, 1);
     assert.deepEqual(filtered.totals, { unused: 2, used: 0, disabled: 0 });
-    assert.deepEqual(filtered.items[0], {
-      id: filtered.items[0].id,
-      createdAt: filtered.items[0].createdAt,
-      line1: street,
-      ...fixedLocation,
-      status: 'unused',
-      usedAt: null
-    });
+    assert.deepEqual(filtered.items[0], selected);
     assert.equal(filter('page=2').items.length, 0);
     assert.equal(filter('page=2').total, 2);
-    assert.throws(() => store.saveBitBrowserAddresses({ streets: ['abc\r\ndef', ''] }, owner), {
-      status: 400
-    });
-    assert.throws(
-      () => store.saveBitBrowserAddresses({ streets: Array(2001).fill(street) }, owner),
-      { status: 400 }
-    );
+    const before = filter();
+    const auditBefore = store.audit();
+    for (const data of [
+      { streets: ['123 Removed Import Street'] },
+      { streets: [] },
+      { streets: ['123 Removed Import Street'], count: 1 },
+      { streets: ['123 Removed Import Street'], id: items[0].id, status: 'used', expectedStatus: 'unused' },
+      { streets: ['123 Removed Import Street'], deleteUsed: true, version: before.version }
+    ]) assert.throws(() => store.saveBitBrowserAddresses(data, owner), { status: 400 });
+    assert.deepEqual(filter(), before);
+    assert.deepEqual(store.audit(), auditBefore);
     assert.throws(
       () =>
         store.saveBatch([{ domain: 'bitbrowser-addresses', version: 1, data: {} }], {
@@ -95,7 +80,7 @@ test('normalizes and deduplicates TXT rows, returns legacy columns and scopes by
     store = undefined;
     assert.equal((await readFile(path)).includes(Buffer.from(street)), false);
     store = createLocalBusinessStore(path);
-    assert.deepEqual(filter('keyword=fixture'), filtered);
+    assert.deepEqual(filter(query), filtered);
   } finally {
     store?.close();
   }
@@ -106,9 +91,8 @@ test('marking used is idempotent and deleting used requires the reviewed documen
   const list = (query = '', actor = owner) =>
     store.listBitBrowserAddresses(new URLSearchParams(query), actor);
   try {
-    const unusedStreet = '88 Other Street';
-    store.saveBitBrowserAddresses({ streets: [street, unusedStreet] }, owner);
-    store.saveBitBrowserAddresses({ streets: ['99 Isolated Street'] }, other);
+    store.saveBitBrowserAddresses({ count: 2 }, owner);
+    store.saveBitBrowserAddresses({ count: 1 }, other);
     const { id } = list().items[0];
     const pendingVersion = list().version;
     const markUsed = { id, status: 'used', expectedStatus: 'unused' };
@@ -152,10 +136,10 @@ test('marking used is idempotent and deleting used requires the reviewed documen
   }
 });
 
-test('generates exactly the requested unused addresses without changing imported addresses or owner scope', () => {
+test('generates exactly the requested unused addresses without changing existing addresses or owner scope', () => {
   const store = createLocalBusinessStore(':memory:');
   try {
-    store.saveBitBrowserAddresses({ streets: [street] }, owner);
+    const { items: [existing] } = store.saveBitBrowserAddresses({ count: 1 }, owner);
     for (const count of [0, 101, 1.5, '10', null]) {
       assert.throws(() => store.saveBitBrowserAddresses({ count }, owner), { status: 400 });
     }
@@ -173,13 +157,12 @@ test('generates exactly the requested unused addresses without changing imported
     }
     assert.equal(store.listBitBrowserAddresses(new URLSearchParams(), owner).total, 101);
     assert.equal(store.listBitBrowserAddresses(new URLSearchParams(), other).total, 0);
-    assert.equal(
-      store.listBitBrowserAddresses(new URLSearchParams('keyword=Fixture'), owner).items[0]
-        .postalCode,
-      '97204'
+    assert.deepEqual(
+      store.listBitBrowserAddresses(new URLSearchParams({ keyword: existing.line1 }), owner).items.find(({ id }) => id === existing.id),
+      existing
     );
     const audit = store.audit();
-    assert.equal(audit.filter(({ action }) => action === 'bitbrowser_address_generate').length, 1);
+    assert.equal(audit.filter(({ action }) => action === 'bitbrowser_address_generate').length, 2);
     assert.equal(JSON.stringify(audit).includes(items[0].line1), false);
   } finally {
     store.close();
@@ -242,7 +225,7 @@ test('address endpoint requires the existing administrator session and a same-or
       201
     );
     const otherAdminCookie = await login(otherAdmin);
-    const data = { streets: [street] };
+    const data = { count: 1 };
     assert.equal((await request(resource, { cookie: employeeCookie })).status, 403);
     assert.equal(
       (await request(resource, { method: 'PUT', cookie: employeeCookie, data })).status,
@@ -259,20 +242,28 @@ test('address endpoint requires the existing administrator session and a same-or
       ).status,
       403
     );
-    const importResult = await request(resource, { method: 'PUT', cookie, data });
-    assert.equal(importResult.status, 200);
-    assert.deepEqual(await importResult.json(), { imported: 1, duplicated: 0, rejected: 0 });
+    const removedImport = await request(resource, {
+      method: 'PUT', cookie, data: { streets: ['123 Removed Import Street'] }
+    });
+    assert.equal(removedImport.status, 400);
+    const unchanged = await (await request(resource, { cookie })).json();
+    assert.equal(unchanged.total, 0);
+    assert.equal(unchanged.version, 0);
+    const generated = await request(resource, { method: 'PUT', cookie, data });
+    assert.equal(generated.status, 200);
+    const generatedResult = await generated.json();
+    assert.equal(generatedResult.count, 1);
     const otherList = await request(resource, { cookie: otherAdminCookie });
     assert.equal(otherList.status, 200);
     assert.equal((await otherList.json()).total, 0);
-    const response = await request(resource + '?page=1&pageSize=50&keyword=fixture&status=unused', {
+    const response = await request(resource + '?page=1&pageSize=50&status=unused', {
       cookie
     });
     assert.equal(response.status, 200);
     const { items, pageSize, version } = await response.json();
     assert.equal(pageSize, 50);
     assert.equal(version, 1);
-    assert.equal(items[0].line1, street);
+    assert.deepEqual(items, generatedResult.items);
     const competing = (status) =>
       request(resource, {
         method: 'PUT',
@@ -299,7 +290,7 @@ test('address endpoint requires the existing administrator session and a same-or
 test('unconfigured local mode records the existing local operator and still requires same origin', async () => {
   const { url, server } = await startPreview(0, { databasePath: ':memory:' });
   const resource = url + 'api/local/bitbrowser-addresses';
-  const data = JSON.stringify({ streets: [street] });
+  const data = JSON.stringify({ count: 1 });
   try {
     assert.equal(
       (await fetch(resource, { headers: { 'Sec-Fetch-Site': 'cross-site' } })).status,
@@ -326,10 +317,11 @@ test('unconfigured local mode records the existing local operator and still requ
       200
     );
     const { items } = await (await fetch(resource)).json();
-    assert.equal(items[0].line1, street);
+    assert.equal(items.length, 1);
+    assert.equal(items[0].status, 'unused');
     const [audit] = await (await fetch(url + 'api/local/audit')).json();
     assert.equal(audit.actorId, 'local-operator');
-    assert.equal(audit.action, 'bitbrowser_address_import');
+    assert.equal(audit.action, 'bitbrowser_address_generate');
     assert.equal(
       (await fetch(resource + ':local-operator')).status,
       404,

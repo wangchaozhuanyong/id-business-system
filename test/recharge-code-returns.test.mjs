@@ -7,10 +7,15 @@ test('资格、归属、已交付、历史任务和未知状态逐项显示，�
   const f = setup(), handler = f.start();
   const rows = (await call(handler, null, actor, '?view=codes')).items;
   assert.deepEqual(rows.map(row => row.id), f.items);
+  assert(rows.every(row => row.batchNo === 'PO000001'));
+  assert.deepEqual(rows.map(row => row.itemNo), f.items.map((_, i) => 'PO000001-' + String(i + 1).padStart(2, '0')));
+  const preview = (await call(handler, { action: 'return-preview', itemIds: [f.items[1]] })).items[0];
+  assert.equal(preview.batchNo, rows[1].batchNo); assert.equal(preview.itemNo, rows[1].itemNo);
   assert.deepEqual(rows.map(row => row.eligible), [true, true, false, false, false, false, false]);
   const request = (await call(handler)).requests[0];
   assert.equal(request.counts.returnable, 2); assert.equal(request.counts.used, 1);
-  assert.equal((await call(handler, { action: 'return-preview', itemIds: [f.items[0]] }, other)).items[0].eligible, false);
+  const forbidden = (await call(handler, { action: 'return-preview', itemIds: [f.items[0]] }, other)).items[0];
+  assert.equal(forbidden.eligible, false); assert.equal(forbidden.batchNo, undefined); assert.equal(forbidden.itemNo, undefined);
   assert.equal((await call(handler, { action: 'return', itemIds: [f.items[0]] }, other)).status, 403);
   assert.equal((await call(handler, { action: 'return-preview', itemIds: [f.items[0], f.items[0]] })).status, 400);
   assert.equal(f.commands.length, 0);
@@ -20,6 +25,10 @@ test('部分归还保留申请数量和其他码；旧申请与列表不再返�
   const result = await call(handler, { action: 'return', itemIds: f.items.slice(0, 2), note: '合成未用归还' });
   assert.equal(result.status, 200); assert(result.items.every(row => row.state === 'returned'));
   const request = (await call(handler)).requests[0];
+  assert.equal(request.batchNo, 'PO000001');
+  assert.deepEqual(result.items.map(row => row.itemNo), ['PO000001-01', 'PO000001-02']);
+  const reloaded = (await call(f.start(), null, actor, '?view=codes')).items;
+  assert.deepEqual(reloaded.map(row => row.itemNo), f.items.map((_, i) => 'PO000001-' + String(i + 1).padStart(2, '0')));
   assert.equal(request.count, 7); assert.equal(request.status, 'issued'); assert.equal(request.counts.returned, 2);
   assert.equal(request.counts.returnable, 0); assert.equal(request.codes.length, 5);
   for (const code of f.codes.slice(0, 2)) {
@@ -30,7 +39,8 @@ test('部分归还保留申请数量和其他码；旧申请与列表不再返�
   }
   assert.equal(f.store.load().data.retained, '保留独立资料');
   const count = f.commands.length;
-  assert((await call(f.start(), { action: 'return', itemIds: [f.items[0]] })).items.every(row => row.state === 'returned'));
+  const replay = (await call(f.start(), { action: 'return', itemIds: [f.items[0]] })).items;
+  assert(replay.every(row => row.state === 'returned')); assert.equal(replay[0].itemNo, 'PO000001-01');
   assert.equal(f.commands.length, count, '重复提交不再撤销或重新发码');
 });
 test('确认前资格变化阻止整批，不静默只归还其中可用项', async () => {

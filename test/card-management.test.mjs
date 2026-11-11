@@ -33,6 +33,9 @@ test('预计余额按同一有效报价换成美元，加当前固定费和 2 �
   const result = cardFundingEstimate(order, '0.3', [quote], now);
   assert.equal(result.usd, '175.92');
   assert.equal(result.quotedAt, quote.at);
+  const current = { ...quote, provider: 'currency-api', source: 'Fawaz Currency API' };
+  assert.equal(cardFundingEstimate(order, '0.3', [current], now).usd, result.usd);
+  assert.equal(cardFundingEstimate(order, '0.3', [{ ...current, source: 'unrecognized' }], now).usd, undefined);
   assert.equal(cardFundingEstimate({ ...order, paidCurrency: 'USD', paidAmount: '20.001' }, '0.325', [], now).usd, '22.33');
   assert.equal(cardFundingEstimate({ ...order, paidConfirmed: false }, '0.3', [quote], now).usd, undefined);
   assert.equal(cardFundingEstimate(order, '0.3', [quote], Date.parse(quote.expiresAt)).usd, undefined);

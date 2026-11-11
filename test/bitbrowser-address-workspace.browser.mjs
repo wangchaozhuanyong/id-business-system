@@ -220,6 +220,8 @@ test('左右顶部栏、文字和内容起点对齐，页签切换和窄屏保�
   await frame.locator('.bit-local--embedded').waitFor();
   await frame.locator('#bit-authorization-json').fill(authorization);
   await page.locator('#bit-address-heading').waitFor();
+  assert.equal(await page.locator('#bit-addresses-panel input[type="file"], #bit-address-import').count(), 0);
+  assert.equal(await page.locator('#bit-addresses-panel').getByRole('button', { name: '导入地址', exact: true }).count(), 0);
   const measure = () => page.evaluate(() => {
     const iframe = document.querySelector('.recharge-integration__frame--bit-local');
     const inner = iframe.contentDocument;
@@ -238,18 +240,14 @@ test('左右顶部栏、文字和内容起点对齐，页签切换和窄屏保�
     const title = heading.querySelector('h2');
     const right = read(heading, title, 0, document.querySelector('.bit-address-tabs'));
     const bounds = heading.getBoundingClientRect();
-    const [titleBox, generate, file, importButton] = [
-      title, ...['#bit-address-generate-open', '#bit-address-file', '#bit-address-import-button']
-        .map(selector => heading.querySelector(selector))
-    ].map(node => node.getBoundingClientRect());
+    const [titleBox, generate] = [title, heading.querySelector('#bit-address-generate-open')]
+      .map(node => node.getBoundingClientRect());
     const middle = box => (box.top + box.bottom) / 2;
-    const centers = [titleBox, generate, file, importButton].map(middle);
+    const centers = [titleBox, generate].map(middle);
     return {
       left, right,
       oneRow: Math.max(...centers) - Math.min(...centers) <= 1,
-      titleAndGenerate: Math.abs(middle(titleBox) - middle(generate)) <= 1,
-      importBelow: file.top >= generate.bottom && importButton.top >= generate.bottom,
-      controlsInside: [generate, file, importButton].every(box =>
+      controlsInside: [generate].every(box =>
         box.left >= bounds.left && box.right <= bounds.right && bounds.bottom - box.bottom >= 8),
       hostOverflow: document.documentElement.scrollWidth - innerWidth,
       frameOverflow: inner.documentElement.scrollWidth - iframe.clientWidth
@@ -266,14 +264,10 @@ test('左右顶部栏、文字和内容起点对齐，页签切换和窄屏保�
         const { left, right } = result;
         assert.equal(left.fontSize, right.fontSize, '字号一致');
         assert.equal(left.lineHeight, right.lineHeight, '行高一致');
-        assert(result.controlsInside, '生成、导入控件完整并与分隔线留有间距');
-        assert.equal(result.oneRow, width >= 768, `${width}px ${theme} ${view} 的地址操作栏布局`);
-        if (result.oneRow) {
-          assert.equal(left.height, right.height, '同排时顶部栏高度一致');
-          assert(Math.abs((left.textTop - left.top) - (right.textTop - right.top)) <= 1, '真实文字顶边一致');
-        } else {
-          assert(result.titleAndGenerate && result.importBelow, '手机首行标题和生成，次行导入');
-        }
+        assert(result.controlsInside, '生成控件完整并与分隔线留有间距');
+        assert(result.oneRow, `${width}px ${theme} ${view} 的地址标题和生成按钮同排`);
+        assert.equal(left.height, right.height, '顶部栏高度一致');
+        assert(Math.abs((left.textTop - left.top) - (right.textTop - right.top)) <= 1, '真实文字顶边一致');
         if (view === 'login') assert(Math.abs(left.textInset - right.textInset) <= 1, '首个标题左右内距一致');
         assert(Math.abs((left.contentTop - left.bottom) - (right.contentTop - right.bottom)) <= 1, '内容区起始留白一致');
         if (width >= 1180) {

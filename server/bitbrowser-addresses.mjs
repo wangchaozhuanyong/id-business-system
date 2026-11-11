@@ -1,13 +1,6 @@
 import { randomInt, randomUUID } from 'node:crypto';
 
 export const bitBrowserAddressDomain = 'bitbrowser-addresses';
-const location = Object.freeze({
-  country: 'US',
-  city: 'Portland',
-  state: 'OR',
-  postalCode: '97204'
-});
-const streetPattern = /^[A-Za-z0-9][A-Za-z0-9 .,'#/-]{1,179}$/;
 const uuidPattern = /^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i;
 const statuses = ['all', 'unused', 'used'];
 const generatedLocations = [
@@ -118,42 +111,6 @@ export function listBitBrowserAddresses(rows, search) {
     page,
     pageSize
   };
-}
-
-export function importBitBrowserAddresses(rows, streets, now) {
-  if (!Array.isArray(streets) || streets.length < 1 || streets.length > 2000) {
-    throw new BitBrowserAddressError(400, '每次需要导入 1 至 2000 条街道地址');
-  }
-  const known = new Set(rows.map((row) => streetKey(row.line1)));
-  const added = [];
-  const result = { imported: 0, duplicated: 0, rejected: 0 };
-  for (const raw of streets) {
-    const line1 =
-      typeof raw === 'string' && !/[\r\n]/.test(raw) ? raw.trim().replace(/\s+/g, ' ') : '';
-    if (!streetPattern.test(line1)) {
-      result.rejected++;
-      continue;
-    }
-    const key = streetKey(line1);
-    if (known.has(key)) {
-      result.duplicated++;
-      continue;
-    }
-    known.add(key);
-    added.push({
-      id: randomUUID(),
-      line1,
-      ...location,
-      status: 'unused',
-      usedAt: null,
-      createdAt: now
-    });
-  }
-  if (result.rejected === streets.length) {
-    throw new BitBrowserAddressError(400, '文件中没有可导入的街道地址');
-  }
-  result.imported = added.length;
-  return { rows: result.imported ? [...rows, ...added] : rows, result };
 }
 
 export function updateBitBrowserAddress(rows, { id, status, expectedStatus }, now) {

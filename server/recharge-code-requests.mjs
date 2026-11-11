@@ -1,4 +1,5 @@
 import { createCodeReturnManager, codeReturnEntry, publicReturnRecord } from './recharge-code-returns.mjs';
+import { numberedRechargeRequests } from './recharge-code-numbers.mjs';
 import { generatedCdkPattern } from '../modules/recharge/codexdaichong/native-code-returns.mjs';
 import { randomUUID } from 'node:crypto';
 
@@ -47,11 +48,11 @@ async function readAction(request) {
 
 function visibleRequest(row, actorId) {
   const {
-    id, plan, count, applicantId, applicantName, status, createdAt, updatedAt, approvedById,
+    id, batchNo, plan, count, applicantId, applicantName, status, createdAt, updatedAt, approvedById,
     approvedAt, issuedAt, rejectedById, rejectedAt, reason, issueProblem
   } = row;
   return {
-    id, plan, count, applicantId, applicantName, status, createdAt, updatedAt, approvedById,
+    id, batchNo, plan, count, applicantId, applicantName, status, createdAt, updatedAt, approvedById,
     approvedAt, issuedAt, rejectedById, rejectedAt, reason, issueProblem,
     returns: (row.returns || []).map(publicReturnRecord),
     ...(status === 'issued' && actorId === applicantId ? { codes: row.codes.filter(code => !['returned', 'pending'].includes(codeReturnEntry(row, code)?.state)) } : {})
@@ -78,15 +79,16 @@ export function createRechargeCodeHandler({ store, transport, publicOrigin, cloc
     // A concurrent change to another application can advance the document version.
     for (let attempt = 0; attempt < 4; attempt++) {
       const snapshot = await store.load();
-      const previous = snapshot.data?.requests ?? [];
+      // Fix legacy display numbers before adding a request; the versioned save persists both together.
+      const previous = numberedRechargeRequests(snapshot.data?.requests ?? []);
       const { row, action } = await prepare(previous);
       if (!action) return row;
-      const requests = previous.some(entry => entry.id === row.id)
+      const requests = numberedRechargeRequests(previous.some(entry => entry.id === row.id)
         ? previous.map(entry => entry.id === row.id ? row : entry)
-        : [row, ...previous];
+        : [row, ...previous]);
       try {
         await store.save(snapshot.version, { ...snapshot.data, requests }, { action, targetId: row.id, actor });
-        return row;
+        return requests.find(entry => entry.id === row.id);
       } catch (error) {
         if (error?.status !== 409 || attempt === 3) throw error;
       }
@@ -210,11 +212,16 @@ export function createRechargeCodeHandler({ store, transport, publicOrigin, cloc
         throw new RequestError(401, '请先登录后管理充值码申请');
       const canApprove = approvers.has(actor.role);
       if (request.method === 'GET') {
-        const { data } = await store.load();
+        const view = new URLSearchParams((request.url || '').split('?', 2)[1]).get('view');
+        if (view === 'pending-summary' && !canApprove)
+          throw new RequestError(403, '当前账号没有审批充值码的权限');
+        const { version, data } = await store.load();
         const requests = data?.requests ?? [];
-        const rows = requests.filter(row => canApprove || row.applicantId === actor.id);
-        const params = new URLSearchParams((request.url || '').split('?', 2)[1]);
-        if (params.get('view') === 'codes')
+        if (view === 'pending-summary')
+          return reply(response, 200, { version,
+            pending: requests.filter(row => row.status === 'pending' || row.status === 'issuing').length });
+        const rows = numberedRechargeRequests(requests).filter(row => canApprove || row.applicantId === actor.id);
+        if (view === 'codes')
           return reply(response, 200, { canApprove, items: await returns.view(rows, actor.id) });
         const [items, stock] = await Promise.all([
           returns.view(rows, actor.id),

@@ -34,10 +34,8 @@ test('实际HTTP管理入口鉴权、配置回读与持久采集记录，行情�
   let calls = 0;
   const host = await startPreview(0, { databasePath: ':memory:', authPath, financeFetch: async () => {
     calls++;
-    const at = Math.floor(Date.now() / 1000);
-    return Response.json({ result: 'success', base_code: 'CNY', time_eol_unix: 0,
-      time_last_update_unix: at - 3600, time_next_update_unix: at + 23 * 3600,
-      rates: { CNY: 1, MYR: 0.625, USD: 0.125, PHP: 8, CLP: 125, IDR: 2500 } });
+    return Response.json({ date: new Date().toISOString().slice(0, 10),
+      cny: { cny: 1, myr: 0.625, usd: 0.125, php: 8, clp: 125, idr: 2500 } });
   } });
   t.after(async () => {
     host.server.closeAllConnections();

@@ -196,7 +196,8 @@ test('permission rejection removes old protected snapshots instead of treating t
 });
 
 test('overview reuses a clean visit, refreshes explicitly and preserves failed sections after writes', async () => {
-  const { api, window, document } = client();
+  const { api, window, document } = client(async resource => resource === '/api/local/recharge-codes?view=pending-summary'
+    ? reply({ version: 1, pending: 0 }) : reply({ success: true }));
   const calls = { inventory: 0, commerce: 0, apple: 0 };
   const feedback = [];
   let failCommerce = false;
@@ -242,7 +243,7 @@ test('overview reuses a clean visit, refreshes explicitly and preserves failed s
     await flush();
   };
   const key = {
-    actor: 'fixture-actor', role: 'admin', finance: true, apple: true
+    actor: 'fixture-actor', role: 'admin', finance: true, apple: true, rechargeRequests: true
   };
   await revisit();
   assert.deepEqual(calls, { inventory: 1, commerce: 1, apple: 1 });

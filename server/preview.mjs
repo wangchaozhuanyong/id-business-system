@@ -546,6 +546,7 @@ export async function startPreview(
       if (
         !canManage &&
         route !== '/api/local/toolbox' &&
+        route !== localBusiness.columnPreferencesRoute &&
         route !== '/api/local/order-completion' &&
         !['/api/local/saved-totp', '/api/local/saved-totp/code', '/api/local/saved-totp/secret'].includes(route) &&
         (request.method !== 'GET' || !['inventory', 'commerce'].includes(route.split('/').at(-1)))
@@ -614,8 +615,18 @@ export async function startPreview(
       );
     }
     let body = asset.body;
-    if (store && asset === assets.get('/index.html')) body = Buffer.from(body.toString('utf8')
-      .replace('<head>', '<head>\n<meta name="id-local-data-events" content="enabled" />'));
+    if (store && asset === assets.get('/index.html')) {
+      let metadata = '<head>\n<meta name="id-local-data-events" content="enabled" />';
+      if (!loginRequired || actor) {
+        response.setHeader('Cache-Control', 'private, no-store');
+        let preferences = '';
+        try {
+          preferences = encodeURIComponent(JSON.stringify(store.loadColumnPreferences(actor)));
+        } catch { /* Leave the page usable and let it report that preferences could not be read. */ }
+        metadata += `\n<meta name="id-column-preferences" content="${preferences}" />`;
+      }
+      body = Buffer.from(body.toString('utf8').replace('<head>', metadata));
+    }
     if (loginRequired && signedOutIndex && asset === assets.get('/index.html')) {
       if (!actor) response.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
       body = actor

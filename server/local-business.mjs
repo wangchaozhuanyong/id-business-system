@@ -28,7 +28,6 @@ import {
   bitBrowserAddressDomain,
   deleteUsedBitBrowserAddresses,
   generateBitBrowserAddresses,
-  importBitBrowserAddresses,
   isBitBrowserAddressId,
   listBitBrowserAddresses,
   updateBitBrowserAddress
@@ -237,6 +236,11 @@ const defaultOrderCosts = Object.freeze({
   cardIssueUsd: '0.5', cardPercent: '0.008', cardPerPaymentUsd: '0.3'
 });
 const maximumBodyBytes = 12 * 1024 * 1024;
+const columnPreferencesDomain = 'column-preferences';
+export const columnPreferencesRoute = '/api/local/' + columnPreferencesDomain;
+const columnPreferencesBytes = 64 * 1024;
+const validColumnPreferenceKey = (value) => typeof value === 'string' && value.length > 0 &&
+  value.length <= 128 && value === value.trim() && !/[\u0000-\u001f\u007f]/.test(value);
 const localToolboxActor = { id: 'local-operator', name: '本机操作员' };
 const verifiedRelayClaimIds = Symbol('verifiedRelayClaimIds');
 
@@ -1318,6 +1322,40 @@ export function createLocalBusinessStore(databasePath) {
       const { version, data } = readDocument(`toolbox:${actor.id}`);
       return { version, data: data ?? { shortcuts: [], phrases: [] } };
     },
+    loadColumnPreferences(actor = localToolboxActor) {
+      return readDocument(`${columnPreferencesDomain}:${actor.id}`).data ?? [];
+    },
+    saveColumnPreference(body, actor = localToolboxActor) {
+      const { actorId, tableId, columnId, visible, reset } = body ?? {};
+      if (!body || typeof body !== 'object' || Array.isArray(body) ||
+          !validColumnPreferenceKey(actorId) || !validColumnPreferenceKey(tableId) ||
+          (reset === true ? Object.keys(body).length !== 3 :
+            Object.keys(body).length !== 4 || !validColumnPreferenceKey(columnId) || typeof visible !== 'boolean'))
+        throw new LocalDataError(400, '列设置格式不正确');
+      if (actorId !== actor.id)
+        throw new LocalDataError(409, '登录账号已切换，请刷新页面后重新设置列');
+      const domain = `${columnPreferencesDomain}:${actor.id}`;
+      return writeTransaction(() => {
+        const current = readDocument(domain);
+        const tables = new Map(current.data ?? []);
+        const previous = tables.get(tableId);
+        const hidden = new Set(reset ? [] : previous);
+        if (!reset) {
+          if (visible) hidden.delete(columnId);
+          else hidden.add(columnId);
+        }
+        const values = [...hidden];
+        if (!isDeepStrictEqual(previous, values)) {
+          tables.set(tableId, values);
+          const payload = JSON.stringify([...tables]);
+          if (Buffer.byteLength(payload) > columnPreferencesBytes)
+            throw new LocalDataError(400, '个人列设置已超出保存容量');
+          const version = current.version + 1;
+          put.run(domain, version, encrypt(key, domain, version, payload));
+        }
+        return { tableId, hidden: values };
+      });
+    },
     saveToolbox(body, actor = localToolboxActor) {
       const data = checkToolbox(body);
       const domain = `toolbox:${actor.id}`;
@@ -1470,12 +1508,10 @@ export function createLocalBusinessStore(databasePath) {
       if (!body || typeof body !== 'object' || Array.isArray(body)) {
         throw new LocalDataError(400, '地址操作格式不正确');
       }
-      const importing = Object.hasOwn(body, 'streets');
       const generating = Object.hasOwn(body, 'count');
       const deleting = Object.hasOwn(body, 'deleteUsed');
-      const keys = importing ? ['streets']
-        : generating ? ['count']
-          : deleting ? ['deleteUsed', 'version'] : ['id', 'status', 'expectedStatus'];
+      const keys = generating ? ['count']
+        : deleting ? ['deleteUsed', 'version'] : ['id', 'status', 'expectedStatus'];
       if (
         Object.keys(body).length !== keys.length ||
         !keys.every((key) => Object.hasOwn(body, key))
@@ -1490,12 +1526,7 @@ export function createLocalBusinessStore(databasePath) {
         let write;
         let action;
         let label;
-        if (importing) {
-          write = importBitBrowserAddresses(previous, body.streets, now);
-          const { imported, duplicated, rejected } = write.result;
-          action = 'bitbrowser_address_import';
-          label = `批量导入比特地址，新增 ${imported} 条，重复 ${duplicated} 条，无效 ${rejected} 条`;
-        } else if (generating) {
+        if (generating) {
           write = generateBitBrowserAddresses(previous, body.count, now);
           action = 'bitbrowser_address_generate';
           label = `生成比特账单地址 ${write.result.count} 条`;
@@ -1509,7 +1540,7 @@ export function createLocalBusinessStore(databasePath) {
           label = '标记比特地址已使用';
         }
         const { rows, result } = write;
-        if (rows === previous && !importing) return result;
+        if (rows === previous) return result;
         let version = current.version;
         if (rows !== previous) {
           version++;
@@ -2222,7 +2253,7 @@ export function createLocalBusinessStore(databasePath) {
   };
 }
 
-async function readJson(request) {
+async function readJson(request, limit = maximumBodyBytes) {
   if (!/^application\/json(?:\s*;|$)/i.test(request.headers['content-type'] || '')) {
     throw new LocalDataError(415, '请提交 JSON 资料');
   }
@@ -2230,7 +2261,7 @@ async function readJson(request) {
   let size = 0;
   for await (const chunk of request.iterator({ destroyOnReturn: false })) {
     size += chunk.length;
-    if (size > maximumBodyBytes) {
+    if (size > limit) {
       request.resume();
       throw new LocalDataError(413, '本机保存资料超过大小限制');
     }
@@ -2274,6 +2305,12 @@ export async function handleLocalBusiness(
       (request.headers.origin && request.headers.origin !== origin)
     ) {
       throw new LocalDataError(403, '仅允许从本机页面访问');
+    }
+    if (route === columnPreferencesRoute) {
+      response.setHeader('Cache-Control', 'private, no-store');
+      if (request.method !== 'PATCH') throw new LocalDataError(405, '列设置接口不支持此操作');
+      if (request.headers.origin !== origin) throw new LocalDataError(403, '仅允许从当前页面保存列设置');
+      return json(response, 200, store.saveColumnPreference(await readJson(request, 4096), actor));
     }
     if (domain === 'order-completion') {
       response.setHeader('Cache-Control', 'private, no-store');
