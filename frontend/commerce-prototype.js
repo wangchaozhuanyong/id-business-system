@@ -6692,8 +6692,10 @@
       if (f.payment && order.payment !== f.payment) return false;
       if (f.operation && order.businessType !== f.operation) return false;
       if (!f.from && !f.to) return true;
-      const opened = dateInput(finance?.orderAccountingAt(order) || order.start).slice(0, 10);
-      return opened && (!f.from || opened >= f.from) && (!f.to || opened <= f.to);
+      const openingTime = subscriptionTime(finance?.orderAccountingAt(order) || order.start);
+      if (!Number.isFinite(openingTime)) return false;
+      const opened = beijingClock.format(openingTime).slice(0, 10);
+      return (!f.from || opened >= f.from) && (!f.to || opened <= f.to);
     });
     const facts = selected.map(order => statisticsFact(order, currency, clock));
     const partialCount = facts.filter(row => row.basis === 'partial').length;
