@@ -47,6 +47,13 @@ class WebsiteReleaseTests(unittest.TestCase):
         self.assertFalse(remote.mount_matches({"Mounts": [mount | {"RW": True}]}, source, "/app"))
         self.assertFalse(remote.mount_matches({"Mounts": [mount]}, source.parent, "/app"))
 
+    def test_canary_diagnostic_outputs_only_recognized_indicators_and_locations(self):
+        result = remote.canary_diagnostics("AssertionError [ERR_ASSERTION]: synthetic secret input\n"
+                                           "at /ops/check-app.mjs:24:5\n"
+                                           "prototype.css?v=20261111-confirmed-orders")
+        self.assertEqual(result, {"indicators": ["assertion"], "frames": [["check-app.mjs", "24", "5"]],
+                                  "assets": ["prototype.css?v=20261111-confirmed-orders"]})
+
 
 if __name__ == "__main__":
     unittest.main()

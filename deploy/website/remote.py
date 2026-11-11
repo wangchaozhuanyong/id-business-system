@@ -141,6 +141,36 @@ def canary(sha, ops):
     require(result.returncode == 0, "isolated_app_canary_failed")
 
 
+def canary_diagnostics(text):
+    indicators = {
+        "assertion": r"ERR_ASSERTION|AssertionError",
+        "connection_refused": r"ECONNREFUSED|Connection refused",
+        "address_in_use": r"EADDRINUSE|address already in use",
+        "module_missing": r"ERR_MODULE_NOT_FOUND|MODULE_NOT_FOUND",
+        "missing_file": r"ENOENT|No such file or directory",
+        "permission_denied": r"EACCES|Permission denied",
+        "systemd_start_failed": r"Failed to start transient|Failed to start.*service",
+        "timeout": r"TimeoutError|timed out",
+    }
+    frames = re.findall(r"\b(check-app\.mjs|app-entry\.mjs|preview\.mjs):(\d+):(\d+)", text)
+    assets = re.findall(r"\b(?:commerce-prototype\.js|prototype\.css|prototype\.js|"
+                        r"subscription-management\.js|order-opening\.mjs)(?:\?v=[a-zA-Z0-9-]+)?", text)
+    return {"indicators": [name for name, pattern in indicators.items() if re.search(pattern, text, re.I)],
+            "frames": [list(frame) for frame in dict.fromkeys(frames)][:12],
+            "assets": sorted(set(assets))[:20]}
+
+
+def inspect_canary(sha):
+    require(re.fullmatch(r"[a-f0-9]{40}", sha), "invalid_canary_revision")
+    log = ROOT / "releases" / sha / "operations/app-canary.log"
+    with log.open("rb") as file:
+        size = log.stat().st_size
+        file.seek(max(size - 64 * 1024, 0))
+        diagnostics = canary_diagnostics(file.read().decode(errors="replace"))
+    return {"attemptSha": sha, "liveWebsiteSha": identity(inspect("app"))["revision"],
+            "bytes": size, **diagnostics}
+
+
 def mount_matches(container, source, destination=None):
     return any(mount["Source"] == str(source) and not mount["RW"]
                and (destination is None or mount["Destination"] == destination)
@@ -235,6 +265,8 @@ def main(plan):
             require_main(plan["sha"])
             if plan["operation"] == "preflight":
                 result = snapshot()
+            elif plan["operation"] == "inspect":
+                result = inspect_canary(plan["attemptSha"])
             else:
                 require(plan["operation"] == "release", "invalid_release_operation")
                 result = release_website(plan)

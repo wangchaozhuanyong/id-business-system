@@ -50,12 +50,16 @@ def require_main(sha):
         raise RuntimeError("remote_main_changed")
 
 
-def require_website_scope(base, sha):
+def require_ancestor(base, sha):
     if not SHA.fullmatch(base):
-        raise RuntimeError("live_website_revision_invalid")
+        raise RuntimeError("invalid_ancestor_revision")
     result = subprocess.run(["git", "merge-base", "--is-ancestor", base, sha], cwd=ROOT, timeout=15)
     if result.returncode:
-        raise RuntimeError("live_website_not_an_ancestor_of_main")
+        raise RuntimeError("requested_revision_not_an_ancestor_of_main")
+
+
+def require_website_scope(base, sha):
+    require_ancestor(base, sha)
     if git("diff", "--name-only", base, sha, "--", *CORE_PATHS):
         raise RuntimeError("recharge_core_or_runtime_changed")
 
@@ -107,9 +111,9 @@ def remote(plan):
             if status == "Success":
                 return command_id, json.loads(invocation["StandardOutputContent"].strip().splitlines()[-1])
             if status not in {"Pending", "InProgress", "Delayed", "Cancelling"}:
-                detail = invocation["StandardErrorContent"].strip()
-                if re.fullmatch(r"[a-z_]+(?:: [a-z_]+)?", detail):
-                    print(detail, flush=True)
+                for detail in invocation["StandardErrorContent"].splitlines():
+                    if re.fullmatch(r"[a-z_]+(?:: [a-z_]+)?", detail):
+                        print(detail, flush=True)
                 raise RuntimeError(f"SSM {name} {status}: {command_id}")
         time.sleep(5)
     raise RuntimeError(f"SSM {name} outcome still pending: {command_id}")
@@ -138,6 +142,12 @@ def main():
     sha = os.environ["RELEASE_SHA"]
     quality_run = os.environ["QUALITY_RUN_ID"]
     require_main(sha)
+    attempt = os.environ.get("INSPECT_CANARY_SHA")
+    if attempt:
+        require_ancestor(attempt, sha)
+        command_id, diagnostic = remote({"operation": "inspect", "sha": sha, "attemptSha": attempt})
+        print(json.dumps({"command": command_id, "diagnostic": diagnostic}), flush=True)
+        return
     preflight_id, before = remote({"operation": "preflight", "sha": sha})
     base = before["components"]["app"]["revision"]
     print(f"Live website: {base}; free bytes: {before['freeBytes']}", flush=True)
