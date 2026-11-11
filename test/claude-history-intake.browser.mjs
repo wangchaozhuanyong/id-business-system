@@ -227,6 +227,8 @@ test('Claude 订单补录复用原账号，保留租户并在订阅显示来源�
     if (!(await number.isVisible())) await orderRow.getByRole('button', { name: '更多资料', exact: true }).click();
     await number.waitFor();
     const detail = page.getByRole('dialog', { name: '订单详情', exact: true });
+    const detailValue = name => detail.locator('.property-row')
+      .filter({ has: page.getByText(name, { exact: true }) }).locator('strong');
     await orderRow.getByRole('button', { name: '详情', exact: true }).click();
     await detail.getByRole('button', { name: '补齐资料', exact: true }).click();
     const completion = page.getByRole('dialog', { name: '补齐原单资料', exact: true });
@@ -235,7 +237,8 @@ test('Claude 订单补录复用原账号，保留租户并在订阅显示来源�
     await completion.getByRole('button', { name: '保存到原单', exact: true }).click();
     await completion.waitFor({ state: 'hidden' });
     await detail.getByRole('tab', { name: '成本与汇率', exact: true }).click();
-    await detail.getByText('1350.00 人民币 CNY', { exact: true }).waitFor();
+    assert.equal(await detailValue('原成本合计').textContent(), '1350.00 人民币 CNY');
+    assert.equal(await detailValue('本单核算收益').textContent(), '待核算');
     const [updated] = local.commerce.data.orders;
     assert.deepEqual([updated.id, updated.actualCostAmount, updated.customerId, updated.paidAmount, updated.receiptConfirmed],
       [order.id, '1350', '', '', false]);
@@ -246,12 +249,25 @@ test('Claude 订单补录复用原账号，保留租户并在订阅显示来源�
     await completion.getByRole('button', { name: '保存到原单', exact: true }).click();
     await completion.waitFor({ state: 'hidden' });
     await detail.getByRole('tab', { name: '成本与汇率', exact: true }).click();
-    await detail.locator('.property-row').filter({ hasText: '客户实收（退款前）' })
-      .getByText('1500.00 人民币 CNY', { exact: true }).waitFor();
+    assert.equal(await detailValue('客户实收（退款前）').textContent(), '1500.00 人民币 CNY');
+    assert.equal(await detailValue('本单核算收益').textContent(), '150.00 人民币 CNY');
+    assert.equal(await detailValue('核算缺口').textContent(), '已确认');
+    assert.equal(await detailValue('代付金额').textContent(), '未登记');
+    await detail.getByText('本次按原币核算', { exact: true }).waitFor();
     const [received] = local.commerce.data.orders;
     assert.deepEqual([received.id, received.actualCostAmount, received.customerId, received.paidAmount, received.receiptConfirmed],
       [order.id, '1350', '', '', true]);
     await detail.getByRole('button', { name: '关闭抽屉', exact: true }).click();
+    assert.equal(await orderRow.locator('[data-column="profit"]').textContent(), '150.00');
+    await page.goto(origin + '/#/orders/statistics');
+    const total = page.locator('#main [data-stat-metric="actual-profit"] .summary-number');
+    assert.match(await total.textContent(), /^150\.00/);
+    await page.getByLabel('统计币种', { exact: true }).selectOption('MYR');
+    assert.equal(await total.textContent(), '—');
+    await page.getByRole('tab', { name: '待核算', exact: true }).click();
+    const missing = page.locator(`[data-table="commerce-stat-detail"] tr[data-row-id="${order.id}"] [data-column="reason"]`);
+    assert.match(await missing.textContent(), /订单缺少有效汇率快照/);
+    assert.doesNotMatch(await missing.textContent(), /代付结果待确认/);
     await page.goto(origin + '/#/subscriptions/claude');
     await page.getByRole('tab', { name: '客户订阅', exact: true }).click();
     const row = page.locator('#subscription-list tbody tr').filter({ hasText: email });

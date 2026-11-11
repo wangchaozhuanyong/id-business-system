@@ -1202,15 +1202,14 @@
       appleLedger: order.payment === '苹果内购' ? A.modules.appleBalance?.getOrderLedger?.(order.id) : undefined
     });
   }
+  const paymentPendingForAccounting = (order, result) => !order.paidConfirmed && result?.requiresPaymentConfirmation !== false;
   function financialPendingReasons(order, accounting) {
     const reasons = [];
+    const result = localData ? (accounting || localAccounting(order)) : null;
     if (!order.receiptConfirmed) reasons.push('实收待确认');
-    if (!order.paidConfirmed) reasons.push('代付结果待确认');
+    if (paymentPendingForAccounting(order, result)) reasons.push('代付结果待确认');
     if (!localData && order.issueFeeSnapshot?.pending) reasons.push('首次开卡费待核对');
-    if (localData) {
-      const result = accounting || localAccounting(order);
-      if (result.status !== 'ready') reasons.push(result.reason, ...(result.additionalReasons || []));
-    }
+    if (result && result.status !== 'ready') reasons.push(result.reason, ...(result.additionalReasons || []));
     return reasons;
   }
   function pendingReasons(order, accounting) {
@@ -5849,10 +5848,12 @@
     const originalFeeRules = feeCorrection?.previous?.costSettings;
     const grossReceipt = isClaude(order) && order.source === '历史入库' && order.receiptConfirmed
       ? property('客户实收（退款前）', `${display(order.saleAmount)} ${currencyLabel(order.saleCurrency)}`) : '';
-    const category = result.cardIssueUnallocated ? '成本未核全' : result.status === 'ready' && order.paidConfirmed
+    const paidAmount = result.requiresPaymentConfirmation === false && !amountValid(order.paidAmount || '')
+      ? '未登记' : `${display(order.paidAmount)} ${currencyLabel(order.paidCurrency)}`;
+    const category = result.cardIssueUnallocated ? '成本未核全' : result.status === 'ready' && !paymentPendingForAccounting(order, result)
       ? accountingLabel(result.basis) : '待核算';
     return panelTitle('本单成本', '净成本 = 费用合计 − 渠道已到账回款。利润 = 客户确认净收款 − 净成本。' + statisticsQuoteHelp) +
-      `<div class="property-list">${property('代付金额', `${display(order.paidAmount)} ${currencyLabel(order.paidCurrency)}`)}${property('售卖金额', `${display(order.saleAmount)} ${currencyLabel(order.saleCurrency)}`)}${grossReceipt}${property('成本依据', order.costBasis === 'actual' ? '实际总成本' : '订单冻结的费用规则')}${property('核算类别', category)}${property('费用规则版本', order.costSettings?.version ? `V${order.costSettings.version}` : '待核对')}${feeCorrection ? property('历史付款费率更正', '8% → 0.8% · 原 V2 规则已保留') + property('历史原费用规则', `V2 · 付款费率 8% · 每笔 ${originalFeeRules?.cardPerPaymentUsd || '待核对'} 美元 · 开卡 ${originalFeeRules?.cardIssueUsd || '待核对'} 美元`) + property('更正依据', feeCorrection.reason) : ''}${property('客户累计退款', `${display(sum(order.refunds || [], (row) => row.amount))} ${currencyLabel(order.saleCurrency)}`)}${property('退款后净收款', receipt === null ? '待确认' : amount(receipt))}${output}${property(result.cardIssueUnallocated ? '已知参考收益' : '本单核算收益', pending.length || order.cancelled ? '待核算' : amount(result.profit))}${property('核算缺口', [...pending, ...(result.cardIssueUnallocated ? ['开卡费未分摊'] : [])].join('、') || '已确认')}</div>${canCorrectHistoricalFee(order) ? panelTitle('历史费用规则', '请先核实此订单的实际付款费率，再单独更正。', A.button('更正历史付款费率', 'commerce-order-fee-correction', '', '', `data-id="${E(order.id)}"`)) : ''}${
+      `<div class="property-list">${property('代付金额', paidAmount)}${property('售卖金额', `${display(order.saleAmount)} ${currencyLabel(order.saleCurrency)}`)}${grossReceipt}${property('成本依据', order.costBasis === 'actual' ? '实际总成本' : '订单冻结的费用规则')}${property('核算类别', category)}${property('费用规则版本', order.costSettings?.version ? `V${order.costSettings.version}` : '待核对')}${feeCorrection ? property('历史付款费率更正', '8% → 0.8% · 原 V2 规则已保留') + property('历史原费用规则', `V2 · 付款费率 8% · 每笔 ${originalFeeRules?.cardPerPaymentUsd || '待核对'} 美元 · 开卡 ${originalFeeRules?.cardIssueUsd || '待核对'} 美元`) + property('更正依据', feeCorrection.reason) : ''}${property('客户累计退款', `${display(sum(order.refunds || [], (row) => row.amount))} ${currencyLabel(order.saleCurrency)}`)}${property('退款后净收款', receipt === null ? '待确认' : amount(receipt))}${output}${property(result.cardIssueUnallocated ? '已知参考收益' : '本单核算收益', pending.length || order.cancelled ? '待核算' : amount(result.profit))}${property('核算缺口', [...pending, ...(result.cardIssueUnallocated ? ['开卡费未分摊'] : [])].join('、') || '已确认')}</div>${canCorrectHistoricalFee(order) ? panelTitle('历史费用规则', '请先核实此订单的实际付款费率，再单独更正。', A.button('更正历史付款费率', 'commerce-order-fee-correction', '', '', `data-id="${E(order.id)}"`)) : ''}${
       panelTitle('订单汇率快照', '每 1 单位外币对应的人民币金额。仅使用本订单记录的汇率。', finance && !snapshot && !order.cancelled
         ? A.button('登记汇率快照', 'commerce-order-fx', 'primary', '', `data-id="${E(order.id)}"`) +
           (finance.requestAutomaticSnapshot && S.actor?.role !== 'employee'
@@ -5860,9 +5861,11 @@
             : '')
         : '')
     }${snapshot ? `<div class="property-list">${property(snapshot.kind === 'automatic' ? '自动报价来源' : '手工登记来源', snapshot.source)}${property('汇率依据', quoteBasisLabel(snapshot))}${snapshot.fetchedAt ? property('采集时间（北京时间）', quoteTime(snapshot.fetchedAt)) : ''}${property('报价时点（北京时间）', quoteTime(snapshot.at))}${property('有效截止（北京时间）', quoteTime(snapshot.expiresAt))}${property('核算时点（北京时间）', quoteTime(snapshot.basisAt))}${Object.entries(snapshot.rates).map(([code, rate]) => property(currencyLabel(code), rate)).join('')}</div>`
-      : A.empty('尚无订单汇率快照', finance?.requestAutomaticSnapshot
-        ? '可获取覆盖本次订阅时点的有效报价，或根据原订单的凭据手工登记。'
-        : '核对原订单的真实报价凭据后登记。当前使用手工来源。')}`;
+      : result.status === 'ready' && order.saleCurrency === currency
+        ? A.empty('本次按原币核算', '折算到其他币种时使用覆盖本次订阅时点的报价。')
+        : A.empty('尚无订单汇率快照', finance?.requestAutomaticSnapshot
+          ? '可获取覆盖本次订阅时点的有效报价，或根据原订单的凭据手工登记。'
+          : '核对原订单的真实报价凭据后登记。当前使用手工来源。')}`;
   }
   async function openHistoricalFeeCorrection(id) {
     const order = orders.find(row => row.id === id), actorId = currentOperator().id;
@@ -6281,7 +6284,7 @@
   const statisticsProduct = product => isClaude({ product }) ? 'Claude' : product;
   const statisticsPlanKey = (product, plan) => `${product}:${plan}`;
   const statisticsPlanLabel = (product, plan) => `${statisticsProduct(product)} ${plan || '套餐待归类'}`;
-  const statisticsQuoteHelp = '折算金额 = 原币金额 ×（原币兑 CNY 汇率 ÷ 统计币兑 CNY 汇率）。逐笔使用原单冻结汇率，金额最多显示四位小数。';
+  const statisticsQuoteHelp = '跨币种折算金额 = 原币金额 ×（原币兑 CNY 汇率 ÷ 统计币兑 CNY 汇率）。逐笔使用原单冻结汇率，金额最多显示四位小数。';
 
   function statisticsPlan(order) {
     if (typeof order.plan !== 'string' || !order.plan.trim()) return '';
@@ -6304,7 +6307,7 @@
       const result = localAccounting(order, currency, clock, { costOnly: revenue === null });
       reasons = financialPendingReasons(order, result);
       if (revenue === null && order.receiptConfirmed) reasons.push('确认净收款金额或汇率待核对');
-      if (order.paidConfirmed && result.status === 'ready') {
+      if (result.status === 'ready' && !paymentPendingForAccounting(order, result)) {
         cost = result;
         if (!reasons.length) gain = result.profit ?? null;
       }

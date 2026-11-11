@@ -73,6 +73,46 @@ test('确认净收款不等利润，同币种无汇率也统计，跨币种只�
   assert.equal(receipt({ ...order, refunds: [{ amount: '250', currency: 'CNY' }] }), '0.0000');
 });
 
+const historicalClaudeSale = fields => ({
+  ...bank(), product: 'Claude Max', source: '历史入库', businessType: '成品交付', accountId: 'claude-stock',
+  paidAmount: '', paidCurrency: '', paidConfirmed: false, receiptConfirmed: true, entitlementStatus: 'active',
+  saleAmount: '1500', costBasis: 'actual', actualCostAmount: '1350', actualCostCurrency: 'CNY', ...fields
+});
+
+test('Claude 历史成品销售按人民币实收和实际总成本核算，计入已终止的原单', () => {
+  const orders = [
+    historicalClaudeSale(),
+    historicalClaudeSale({ payment: '苹果内购' }),
+    historicalClaudeSale({ saleAmount: '2100', actualCostAmount: '1550', subscriptionEnded: true }),
+    historicalClaudeSale({ saleAmount: '2100', actualCostAmount: '1600' })
+  ];
+  const results = orders.map(order => calculate(order));
+  assert.ok(results.every(row => row.status === 'ready' && row.basis === 'actual' && !row.requiresPaymentConfirmation));
+  assert.deepEqual(results.map(row => row.profit), ['150.0000', '150.0000', '550.0000', '500.0000']);
+  assert.equal(results.reduce((total, row) => total + Number(row.profit), 0), 1350);
+});
+
+test('历史成品销售扣除客户退款，跨币种和渠道回款使用原单汇率及代付', () => {
+  const order = historicalClaudeSale({ refunds: [{ amount: '50', currency: 'CNY' }] });
+  assert.equal(calculate(order).profit, '100.0000');
+  assert.match(calculate(order, { currency: 'MYR' }).reason, /缺少有效汇率快照/);
+  order.fxSnapshot = createOrderSnapshot(quote, order, clock);
+  assert.equal(calculate(order, { currency: 'MYR' }).profit, '62.5000');
+  assert.equal(calculate(order).basis, 'actual');
+  assert.match(calculate({ ...order, refunds: [{ amount: '1501', currency: 'CNY' }] }).reason, /客户退款超过原实收/);
+  assert.match(calculate(historicalClaudeSale({ businessType: '续费' })).reason, /缺少有效汇率快照/);
+
+  const withReturn = historicalClaudeSale({ paidAmount: '100', paidCurrency: 'USD', paidConfirmed: true,
+    bankReturns: [{ amount: '10', currency: 'USD' }] });
+  assert.match(calculate(withReturn).reason, /缺少有效汇率快照/);
+  withReturn.fxSnapshot = createOrderSnapshot(quote, withReturn, clock);
+  assert.equal(calculate(withReturn).profit, '222.0000');
+  const apple = historicalClaudeSale({ payment: '苹果内购', appleIdId: 'linked-apple',
+    paidConfirmed: true, paidAmount: '100', paidCurrency: 'USD' });
+  apple.fxSnapshot = createOrderSnapshot(quote, apple, clock);
+  assert.match(calculate(apple).reason, /Apple 实际扣款及回款台账待核对/);
+});
+
 test('Claude Apple 待回款不计收益，实际到账按折扣回收并保留邮箱成本', () => {
   const order = {
     ...bank(), product: 'Claude Pro', payment: '苹果内购', appleIdId: 'apple-a',
