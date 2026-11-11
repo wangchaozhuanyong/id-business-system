@@ -973,8 +973,9 @@ function table(columns, rows, scope = '', tableId = 'default', emptyState, selec
     const help = column.headerHelp && titleInfo(column.label, column.headerHelp,
       `column-help-${encodeURIComponent(tableId)}-${encodeURIComponent(column.id)}`);
     const content = help ? `<div class="title-with-help"><span>${label}</span>${help}</div>` : label;
-    return `<th class="${column.action ? 'table-actions' : ''}" scope="col"${help ? ` aria-label="${label}"` : ''}>${content}</th>`;
+    return `<th class="${column.class || ''} ${column.action ? 'table-actions' : ''}" scope="col"${help ? ` aria-label="${label}"` : ''}>${content}</th>`;
   }).join('');
+  const mobileCards = tableId !== '苹果 ID 管理';
   const dataColumns = visible.filter(column => !column.action);
   const identity = ['email', 'account', 'name', 'orderNo', 'title', 'id']
     .map(key => dataColumns.find(column => column.id === key)).find(Boolean) || dataColumns[0];
@@ -989,14 +990,14 @@ function table(columns, rows, scope = '', tableId = 'default', emptyState, selec
   const toggleColumn = visible.find(column => column.action) || identity;
   const renderRow = row => `<tr data-row-id="${escapeHtml(row.id)}">${scope ? `<td class="check-cell">${selectable(row) ? `<label class="table-selection"><input type="checkbox" aria-label="选择 ${escapeHtml(row.email || row.id)}" data-select="${scope}" data-id="${escapeHtml(row.id)}" ${getSelection(scope).has(row.id) ? 'checked' : ''} /></label>` : ''}</td>` : ''}${visible.map(column => {
     const presentation = column.action ? 'actions' : column === identity ? 'identity' : summaryColumns.has(column.id) ? 'summary' : 'secondary';
-    const toggle = expandable && column === toggleColumn
+    const toggle = mobileCards && expandable && column === toggleColumn
       ? '<button type="button" class="text-button mobile-record-only mobile-record-toggle" data-action="table-mobile-toggle" aria-expanded="false">更多资料</button>' : '';
     return `<td class="${column.class || ''} ${column.action ? 'table-actions' : ''}" data-column="${escapeHtml(column.id)}" data-mobile-field="${presentation}" data-label="${escapeHtml(column.label)}">${column.action ? renderTableCell(column, row, tableId) : `<div class="mobile-record-value">${renderTableCell(column, row, tableId)}</div>`}${toggle}</td>`;
   }).join('')}</tr>`;
-  return `<div class="table-viewport mobile-records ${scope ? 'mobile-records--selectable' : ''} ${['邮箱库存', '账号库存', 'Claude专属'].includes(tableId) ? 'stable-table' : ''}" tabindex="0" role="region" aria-label="${escapeHtml(tableId)}资料列表"><table data-table="${escapeHtml(tableId)}"><thead><tr>${check}${headers}</tr></thead><tbody>${rows.length ? rows.map(renderRow).join('') : `<tr${emptyState ? ' data-table-empty-guidance' : ''}><td colspan="${visible.length + (scope ? 1 : 0)}">${emptyContent}</td></tr>`}</tbody></table></div>`;
+  return `<div class="table-viewport ${mobileCards ? 'mobile-records' : ''} ${scope ? 'mobile-records--selectable' : ''} ${['邮箱库存', '账号库存', 'Claude专属'].includes(tableId) ? 'stable-table' : ''}" tabindex="0" role="region" aria-label="${escapeHtml(tableId)}资料列表"><table data-table="${escapeHtml(tableId)}" aria-label="${escapeHtml(tableId)}"><thead><tr>${check}${headers}</tr></thead><tbody>${rows.length ? rows.map(renderRow).join('') : `<tr${emptyState ? ' data-table-empty-guidance' : ''}><td colspan="${visible.length + (scope ? 1 : 0)}">${emptyContent}</td></tr>`}</tbody></table></div>`;
 }
 function fixedTableColumn(column) {
-  return column.action || ['email', 'orderNo', 'name'].includes(column.id);
+  return column.fixed || column.action || ['email', 'orderNo', 'name'].includes(column.id);
 }
 // Long credential columns retain their explicit full-content action only.
 const tableHoverColumns = new Set([

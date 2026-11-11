@@ -4518,6 +4518,133 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
   width: min(1120px, 100%);
 }
 
+.apple-management-list > .toolbar {
+  padding-block: var(--toolbar-padding-block);
+}
+.apple-management-list .toolbar-left {
+  flex: 1 1 600px;
+}
+.apple-management-list .search-field {
+  flex: 1 1 240px;
+  max-width: 360px;
+}
+.apple-management-list .toolbar select {
+  width: 144px;
+  min-width: 0;
+  text-overflow: ellipsis;
+}
+.apple-management-list .apple-management-account {
+  min-width: 220px;
+}
+.apple-management-list .apple-management-account .table-value-button {
+  max-width: 200px;
+}
+.apple-management-list .apple-management-customer .table-value-button {
+  max-width: 120px;
+}
+.apple-management-list .apple-management-contact .table-value-button {
+  max-width: 128px;
+}
+.apple-management-list .apple-management-plan .table-value-button {
+  max-width: 150px;
+}
+.apple-management-list .apple-management-status {
+  min-width: 96px;
+}
+.apple-management-list .apple-management-amount {
+  min-width: 128px;
+  text-align: right;
+}
+.apple-management-list .apple-management-actions {
+  width: 112px;
+  min-width: 112px;
+}
+@media (max-width: 900px) {
+  .apple-management-list .toolbar-left {
+    flex-basis: 100%;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .apple-management-list .search-field {
+    grid-column: 1 / -1;
+    max-width: none;
+  }
+  .apple-management-list .toolbar select {
+    width: 100%;
+  }
+  .apple-management-list #apple-management-sort {
+    grid-column: 1 / -1;
+  }
+  .apple-management-list .toolbar-right {
+    width: auto;
+    flex: 1 1 100%;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 760px) {
+  .apple-management-list table,
+  .apple-management-list tbody {
+    display: block;
+  }
+  .apple-management-list thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  .apple-management-list tbody tr {
+    display: grid;
+    gap: 8px;
+    padding: var(--panel-padding-block) var(--panel-padding-inline);
+    border-top: 1px solid var(--line);
+  }
+  .apple-management-list td {
+    display: grid;
+    grid-template-columns: 84px minmax(0, 1fr);
+    align-items: center;
+    gap: 12px;
+    width: auto;
+    min-width: 0;
+    min-height: 28px;
+    height: auto;
+    padding: 0;
+    border: 0;
+    text-align: left;
+  }
+  .apple-management-list td::before {
+    content: attr(data-label);
+    color: var(--secondary);
+  }
+  .apple-management-list td .table-value-button {
+    max-width: 100%;
+  }
+  .apple-management-list td .tag {
+    justify-self: start;
+  }
+  .apple-management-list td.apple-management-amount {
+    text-align: left;
+  }
+  .apple-management-list td:is(.table-actions, [colspan]) {
+    display: block;
+    width: auto;
+    min-width: 0;
+  }
+  .apple-management-list td:is(.table-actions, [colspan])::before {
+    display: none;
+  }
+  .apple-management-list .table-actions {
+    border-top: 1px solid var(--line);
+    margin-top: 4px;
+    padding-top: 8px;
+  }
+  .apple-management-list .action-links {
+    height: auto;
+    justify-content: flex-end;
+  }
+}
+
 .apple-funding-table {
   width: 100%;
   min-width: 0;
