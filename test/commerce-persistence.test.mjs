@@ -73,6 +73,7 @@ function browser(store, appleAsset = null) {
       add: (a, b) => moneyFormat(moneyUnits(a) + moneyUnits(b)),
       subtract: (a, b) => moneyFormat(moneyUnits(a) - moneyUnits(b))
     },
+    canVisit: () => true,
     esc: String,
     addCalendarMonth: () => '2026-12-04T10:30',
     readForm: (form) => form.raw,

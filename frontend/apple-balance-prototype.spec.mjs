@@ -38,6 +38,7 @@ function runtime(localData) {
   const api = {
     readDraft: (form) => api.readForm(form),
     state: { drafts: new Map(), actor: { name: '演示测试员' } },
+    canVisit: () => true,
     esc: String,
     nowText: () => '2026-11-03 10:30',
     newId: (prefix) => `${prefix}-${++sequence}`,

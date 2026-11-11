@@ -4994,7 +4994,7 @@
           available: ['relay', 'microsoft'].includes(type) ? null : assets.filter(available).length,
           claimed: type === 'microsoft' ? null : assets.filter(asset => asset.inventoryState === 'claimed').length,
           abnormal: assets.filter(asset => asset.health !== 'normal' || asset.status !== '正常' ||
-            (type === 'relay' && asset.relayStatus === 'DISABLED')).length
+            usageReview.has(asset.id) || (type === 'relay' && asset.relayStatus === 'DISABLED')).length
         };
       }
       return { stocks, pending: batches.reduce((count, batch) => count + batchCounts(batch).pending, 0) };
