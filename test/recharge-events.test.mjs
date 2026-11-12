@@ -8,7 +8,7 @@ import { createRechargeOrderSync } from '../server/recharge-order-sync.mjs';
 const turn = () => new Promise(resolve => setImmediate(resolve));
 const event = { version: 1, receipt: 'a'.repeat(64), jobs: ['synthetic-job'], scopes: ['task_logs'], reconcile: false };
 function runtime(t) {
-  const children = [], calls = [], scheduled = [], listeners = new Set();
+  const children = [], calls = [], scheduled = [], readerStates = [], listeners = new Set();
   const revisions = { settings: 1, inventory: 1 };
   let reject = false;
   const runtime = createRechargeEvents({
@@ -18,6 +18,7 @@ function runtime(t) {
       calls.push(command); if (reject) throw new Error('synthetic readback failure');
     } },
     activity: { collect: async () => {}, unavailable() {} },
+    onReaderStatus: state => readerStates.push(state),
     schedule(fn, delay) { const timer = { fn, delay }; scheduled.push(timer); return timer; }, cancel() {},
     spawnProcess(executable, args, options) {
       assert.equal(executable, 'python3'); assert(args.includes('--config-fd'));
@@ -30,7 +31,7 @@ function runtime(t) {
     }
   });
   t.after(() => runtime.close()); runtime.start();
-  return { runtime, children, calls, scheduled, listeners, reject() { reject = true; },
+  return { runtime, children, calls, scheduled, readerStates, listeners, reject() { reject = true; },
     notify() { revisions.settings++; for (const listener of listeners) listener(); } };
 }
 
@@ -52,9 +53,23 @@ test('failed readback never ACKs; fatal schema errors stop without a restart loo
   child.stdout.write(JSON.stringify(event) + '\n'); await turn();
   assert.equal(child.stdin.read(), null); assert.equal(child.killed, true);
   assert.equal(f.scheduled.length, 1); assert.equal(f.scheduled[0].delay, 1000);
+  assert.deepEqual(f.readerStates, ['reconnecting']);
   f.scheduled[0].fn();
   const next = f.children[1]; next.stderr.write('recharge_event_subscriber_review_required\n'); next.emit('close', 2);
   assert.equal(f.scheduled.length, 1);
+  assert.deepEqual(f.readerStates, ['reconnecting', 'review']);
+});
+
+test('startup alone does not confirm the connection; native heartbeats do not import orders', async t => {
+  const f = runtime(t), child = f.children[0];
+  child.stderr.write('recharge_event_subscriber_ready\n');
+  await turn();
+  assert.deepEqual(f.readerStates, []);
+  assert.deepEqual(f.calls.map(call => call.jobKeys), [['pending']]);
+  child.stderr.write('recharge_event_subscriber_heartbeat\n');
+  await turn();
+  assert.deepEqual(f.readerStates, ['connected']);
+  assert.equal(f.calls.length, 1);
 });
 
 test('a removed source task stays visible for review and does not block all later source commits', async () => {

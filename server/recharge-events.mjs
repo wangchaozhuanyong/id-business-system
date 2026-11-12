@@ -20,7 +20,7 @@ async function* envelopes(stream) {
 
 // The child reads MySQL only. The parent alone owns business writes and ACKs.
 // Timers retry a broken transport; they never poll the source for business data.
-export function createRechargeEvents({ config, store, orderSync, activity, onStatus,
+export function createRechargeEvents({ config, store, orderSync, activity, onReaderStatus,
   spawnProcess = spawn, schedule = setTimeout, cancel = clearTimeout }) {
   let child, reconnect, stopped = false, started = false, retry = 0, unsubscribe;
   let work = Promise.resolve(), localQueued = false, observed;
@@ -62,7 +62,7 @@ export function createRechargeEvents({ config, store, orderSync, activity, onSta
         await orderSync.runCommitted({ apply: true, jobKeys: jobs.slice(index, index + 6) });
       await activity?.collect({ jobKeys: [], reconcile: true, strict: true });
     }).catch(() => {
-      onStatus?.(false); activity?.unavailable();
+      onReaderStatus?.('reconnecting'); activity?.unavailable();
       // Force source reconnection and a catch-up pass after a failed local
       // reconciliation. The outstanding jobs remain in the durable store.
       child?.kill();
@@ -83,8 +83,10 @@ export function createRechargeEvents({ config, store, orderSync, activity, onSta
       process.kill();
       if (child === process) child = undefined;
       if (stopped) return;
-      onStatus?.(false); activity?.unavailable();
-      if (code === 2 || fatal) return;
+      const review = code === 2 || fatal;
+      onReaderStatus?.(review ? 'review' : 'reconnecting');
+      activity?.unavailable();
+      if (review) return;
       reconnect = schedule(launch, [1000, 3000, 10_000, 30_000, 60_000][Math.min(retry++, 4)]);
       reconnect.unref?.();
     }
@@ -92,18 +94,21 @@ export function createRechargeEvents({ config, store, orderSync, activity, onSta
     process.once('close', code => finish(code));
     process.stdin.on('error', () => {}); process.stdio[3].on('error', () => {});
     process.stderr.on('data', chunk => {
+      if (finished) return;
       stderr += chunk.toString('utf8');
       if (stderr.length > 1024) return finish(2);
       let end;
       while ((end = stderr.indexOf('\n')) >= 0) {
         const line = stderr.slice(0, end); stderr = stderr.slice(end + 1);
         if (line === 'recharge_event_subscriber_review_required') fatal = true;
-        if (line === 'recharge_event_subscriber_ready' && !ready) {
-          ready = true; onStatus?.(true);
+        if (line === 'recharge_event_subscriber_ready' && !ready && !fatal) {
+          ready = true;
           // Reconnection also retries durable pending work once, without an
           // idle timer or a new source commit being required.
           observed = undefined; wakeLocal();
         }
+        if (line === 'recharge_event_subscriber_heartbeat' && ready && !fatal)
+          onReaderStatus?.('connected');
       }
     });
     process.stdio[3].end(JSON.stringify(source));

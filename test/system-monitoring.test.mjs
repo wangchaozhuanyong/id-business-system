@@ -383,6 +383,41 @@ test('backup and Sheets monitoring reserve their own mount and skip business dat
   assert.match(checks.find(row => row.code === 'api_errors').detail, /样本不足/);
 });
 
+test('reader heartbeats keep quiet order sync healthy without clearing failed imports or review stops', async t => {
+  const { monitor, clock, tick } = fixture(t);
+  const sources = createMonitoringSources({ monitor, databasePath: '/fixture/data.sqlite', clock,
+    syncEnabled: true, syncViaEvents: true, readDisk: async () => ({ blocks: 100, bavail: 60 }) });
+  t.after(() => sources.close());
+  const read = async () => {
+    tick(1);
+    await sources.tick();
+    return monitor.view().checks.find(row => row.code === 'order_sync');
+  };
+  assert.equal((await read()).status, 'unknown');
+  sources.recordOrderSyncReader('connected');
+  assert.equal((await read()).status, 'ok');
+  tick(12 * minute);
+  sources.recordOrderSyncReader('connected');
+  assert.match((await read()).detail, /心跳正常/);
+  sources.recordOrderSync(false);
+  sources.recordOrderSyncReader('connected');
+  assert.equal((await read()).status, 'unknown');
+  tick(11 * minute);
+  sources.recordOrderSyncReader('connected');
+  assert.equal((await read()).status, 'bad');
+  sources.recordOrderSync(true);
+  await read();
+  tick();
+  sources.recordOrderSyncReader('connected');
+  assert.equal((await read()).status, 'ok');
+  tick(11 * minute);
+  assert.match((await read()).detail, /未收到读取器心跳/);
+  sources.recordOrderSyncReader('review');
+  const stopped = await read();
+  assert.equal(stopped.status, 'bad');
+  assert.match(stopped.detail, /读取器已停止/);
+});
+
 test('two backup checks use the verified capture time, report failure and recover independently', async t => {
   const { monitor, store, clock, tick, sent } = fixture(t);
   monitor.save(0, { enabled: false, channels: {}, rules: { backup: false } }, supervisor);

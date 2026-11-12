@@ -340,7 +340,8 @@ export async function startPreview(
           workerReceiptDirectory: monitoringWorkerReceiptsDirectory,
           backupReceiptDirectory: monitoringBackupReceiptsDirectory,
           runtimeProbe: rechargeConfig ? () => probeCodexdaichongRuntime(rechargeConfig) : undefined,
-          rechargeClient: orderRechargeClient, getFinance: () => financeCollection, syncEnabled: Boolean(rechargeConfig && rechargeOrderSync) });
+          rechargeClient: orderRechargeClient, getFinance: () => financeCollection,
+          syncEnabled: Boolean(rechargeConfig && rechargeOrderSync), syncViaEvents: Boolean(rechargeEventsConfig) });
       }
       handleOrderAuxiliary = createOrderAuxiliaryHandler({ store, client: orderRechargeClient, publicOrigin: secureOrigin });
       handleCardManagement = createCardManagementHandler({ store, client: orderRechargeClient, publicOrigin: secureOrigin });
@@ -438,7 +439,7 @@ export async function startPreview(
         background: Boolean(rechargeOrderSync && rechargeConfig),
         onStatus: success => monitoringSources?.recordOrderSync(success) });
       if (rechargeEventsConfig) rechargeEvents = createRechargeEvents({ config: rechargeEventsConfig,
-        store, orderSync, activity: rechargeActivity, onStatus: success => monitoringSources?.recordOrderSync(success) });
+        store, orderSync, activity: rechargeActivity, onReaderStatus: state => monitoringSources?.recordOrderSyncReader(state) });
       await installFinanceAssets(assets, { automaticQuotes: true });
     } catch (error) {
       financeCollection?.close();
