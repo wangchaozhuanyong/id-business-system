@@ -28,13 +28,28 @@ with connection.cursor() as cursor:
     for table in ("billing_records", "cdk_codes", "card_assets", "orbitcard_card_usage", "orbitcard_card_recharges"):
         cursor.execute(f"CREATE TABLE {table} (id INT PRIMARY KEY, job_key VARCHAR(120), secret_field TEXT) ENGINE=InnoDB")
     cursor.execute("INSERT INTO task_logs(job_key,session_payload) VALUES ('snapshot-job','synthetic-private-value')")
-config = {"host": "127.0.0.1", "port": port, "user": "root", "password": "", "database": database,
+    cursor.execute("CREATE USER 'isolated_event_reader'@'%'")
+    cursor.execute("GRANT REPLICATION SLAVE, REPLICATION CLIENT ON *.* TO 'isolated_event_reader'@'%'")
+    for table in ("task_logs", "billing_records", "cdk_codes", "card_assets", "orbitcard_card_usage", "orbitcard_card_recharges"):
+        cursor.execute(f"GRANT SELECT ON isolated_events.{table} TO 'isolated_event_reader'@'%'")
+config = {"host": "127.0.0.1", "port": port, "user": "isolated_event_reader", "password": "", "database": database,
           "serverId": 3511012, "sinceEpochSeconds": 0}
 config_file = output / "synthetic-config.json"
 config_file.write_text(json.dumps(config)); config_file.chmod(0o600)
 checkpoint = output / "checkpoint.json"
 process = None
 checks = []
+reader_connection = pymysql.connect(host='127.0.0.1', port=port, user=config['user'], password='', database=database)
+try:
+    with reader_connection.cursor() as cursor:
+        try:
+            cursor.execute("INSERT INTO task_logs(job_key) VALUES ('forbidden-reader-write')")
+            raise AssertionError('reader_must_not_write')
+        except pymysql.err.OperationalError as error:
+            assert error.args[0] == 1142
+    checks.append('least_privilege_reader_cannot_write')
+finally:
+    reader_connection.close()
 
 
 def start():
