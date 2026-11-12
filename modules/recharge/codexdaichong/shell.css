@@ -1232,6 +1232,7 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
 [data-recharge-workspace] .workspace-recharge-progress {
   display: flex;
   flex-direction: column;
+  gap: 0;
   padding-inline-start: var(--workspace-inset);
   border-inline-start: 1px solid var(--border);
 }
@@ -1241,7 +1242,7 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  gap: 12px;
+  gap: 0;
 }
 
 [data-recharge-workspace] :is(.workspace-log-toolbar, .workspace-log-actions, .workspace-log-footer) {
@@ -1255,6 +1256,20 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
   justify-content: space-between;
 }
 
+[data-recharge-workspace] .workspace-log-toolbar {
+  padding-block: var(--toolbar-padding-block);
+}
+
+[data-recharge-workspace] .workspace-log-toolbar > .title-with-help {
+  flex: none;
+}
+
+[data-recharge-workspace] .workspace-log-actions {
+  flex: none;
+  flex-wrap: nowrap;
+  margin-inline-start: auto;
+}
+
 [data-recharge-workspace] .workspace-log-toolbar h3 {
   margin: 0;
   font-size: 14px;
@@ -1265,6 +1280,7 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-height: var(--control-height);
   margin: 0;
   color: var(--text-secondary);
   font-size: 13px;
@@ -1288,6 +1304,7 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
   overscroll-behavior: contain;
   overflow-anchor: none;
   scrollbar-gutter: stable;
+  margin-block-end: 12px;
   padding: 16px;
   border: 0;
   border-radius: var(--radius-sm);
@@ -1347,7 +1364,7 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
   font-size: 12px;
 }
 
-[data-recharge-workspace] .workspace-log button {
+[data-recharge-workspace] :is(.workspace-log-actions, .workspace-log-footer) button {
   width: auto;
   min-height: var(--control-height);
   margin: 0;
@@ -1375,7 +1392,9 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
 }
 
 [data-recharge-workspace] .workspace-progress-idle {
-  color: var(--text-secondary);
+  display: none;
+  margin-block-end: 12px;
+  color: var(--warning-text);
   font-size: 13px;
   line-height: 1.6;
 }
@@ -1384,19 +1403,12 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
   margin: 0;
 }
 
-[data-recharge-workspace] .workspace-progress-idle p + p,
-[data-recharge-workspace] .workspace-recharge-progress:has(#flowStatusBadge.manual) .workspace-progress-idle p:first-child,
-[data-recharge-workspace] .workspace-recharge-progress:has(#taskProgress[data-state]) :is(.workspace-progress-idle, #flowStatusBadge) {
-  display: none;
-}
-
-[data-recharge-workspace] .workspace-recharge-progress:has(#flowStatusBadge.manual) .workspace-progress-idle p + p {
+[data-recharge-workspace] .workspace-recharge-progress:has(#flowStatusBadge.manual):not(:has(#taskProgress[data-state])) .workspace-progress-idle {
   display: block;
-  color: var(--warning-text);
 }
 
 [data-recharge-workspace] .workspace-recharge-progress .task-progress {
-  margin: 0;
+  margin: 0 0 12px;
   padding: 0;
   border: 0;
   background: transparent;

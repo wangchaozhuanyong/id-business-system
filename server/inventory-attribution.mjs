@@ -27,6 +27,7 @@ const lifecycleFields = [
   'accountLifecycleEvents'
 ];
 const list = (value) => (Array.isArray(value) ? value : []);
+const appleImport = row => row?.type === 'apple' || list(row?.types).includes('apple');
 const stableId = (row) => typeof row?.id === 'string' && row.id.length > 0;
 
 function businessFields(row, omitLifecycle = false) {
@@ -132,6 +133,7 @@ function stampLedger(previous, next, actor, time, { label, includes, kind }) {
     }
     row[fields[0]] = actor.id;
     row[fields[1]] = actor.name;
+    if (kind === 'import' && appleImport(row)) row.time = time;
   }
 }
 
@@ -155,6 +157,7 @@ function stampLedgers(previous, next, actor, time, previousIndex, nextIndex) {
       '导入记录',
       'import',
       (row) =>
+        appleImport(row) ||
         ordinaryImports.has(row?.id) ||
         ordinaryTypes.has(row?.type) ||
         list(row?.types).some((type) => ordinaryTypes.has(type)) ||

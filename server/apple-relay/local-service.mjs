@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
-import { createRelayCodeReset } from './code-reset.mjs';
+import { createRelayCodeReset, createRelayDeliveryReset } from './code-reset.mjs';
 import { createRelayMailReassignment } from './mail-reassignment.mjs';
 import { createAppleRelayPrimaryManagement } from './primary-management.mjs';
 import { historicalIntakePreview, requireHistoricalIntake } from './historical-intake.mjs';
@@ -48,6 +48,7 @@ const allowedMethods = new Map([
   ['code-read', 'POST'],
   ['code-reset-prepare', 'POST'],
   ['code-reset-confirm', 'POST'],
+  ['code-delivery-reset', 'POST'],
   ['mail-reassign-prepare', 'POST'],
   ['mail-reassign-confirm', 'POST']
 ]);
@@ -368,7 +369,7 @@ async function readBody(request, maximumBytes = 4096) {
   return body;
 }
 
-export function createAppleRelayService({ config, readInventory, savePrimaries, planIntake, fetchImpl, recordAction, recordActions, publicOrigin, subscribeChanges }) {
+export function createAppleRelayService({ config, readInventory, savePrimaries, planIntake, fetchImpl, recordAction, recordActions, publicOrigin, subscribeChanges, deliveryJournal }) {
   const provider = config ? createVendureMailboxProvider(config, fetchImpl) : null;
   const primaryBindings = loadBindings(config?.primaryBindings);
   const aliasBindings = loadBindings(config?.aliasBindings);
@@ -680,17 +681,25 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
     return kind === 'alias' ? requireAlias(state, id) : requireParent(state, id);
   }
 
+  const mutateCode = (kind, remoteId, days) => kind === 'parent'
+    ? provider.resetPrimaryCode(remoteId, days) : provider.resetAliasCode(remoteId, days);
   const codeReset = createRelayCodeReset({
     lookup: lookupCodeTarget,
-    mutate: (kind, remoteId, days) =>
-      kind === 'parent'
-        ? provider.resetPrimaryCode(remoteId, days)
-        : provider.resetAliasCode(remoteId, days),
+    mutate: mutateCode,
     record: (kind, target, actor) =>
       kind === 'parent'
         ? record('reset_code', actor, target.local.id)
         : record('reset_code', actor, target.owner.local.id, target.local.id)
   });
+  const deliveryReset = createRelayDeliveryReset({ lookup: lookupCodeTarget, mutate: mutateCode, journal: deliveryJournal,
+    async readAliases() {
+      const local = await current();
+      return { aliases: new Map([...local.aliases].filter(([, row]) => !row.relayDeleted && !row.deleted)),
+        async lookupBatch(ids) {
+          const result = await scopedTargets(local, 'alias', ids, true);
+          return id => requireAlias(result, id);
+        } };
+    } });
 
   async function lookupMailAssignment({ parentId, mailId, aliasId, sourceAliasId }) {
     if (
@@ -1255,7 +1264,7 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
           return writeJson(response, 200, result);
         }
         if (!provider) throw new RelayError(503, 'Vendure 邮箱服务尚未配置');
-        const input = await readBody(request, action === 'code-read' ? 10 * 1024 : 4096);
+        const input = await readBody(request, action === 'code-delivery-reset' ? 2 * 1024 * 1024 : action === 'code-read' ? 10 * 1024 : 4096);
         if (action === 'mails') return writeJson(response, 200, await listMails(input, actor));
         if (action === 'mail-detail') return writeJson(response, 200, await readMailDetail(input, actor));
         if (action === 'history-preview') {
@@ -1265,10 +1274,20 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
         if (action === 'code-read')
           return writeJson(response, 200, await (Object.hasOwn(input, 'ids')
             ? readCodePage(input, actor) : readCurrentCode(input, actor)));
-        if (action === 'code-reset-prepare')
+        if (action === 'code-reset-prepare') {
+          if (deliveryJournal && input.kind === 'alias') throw new RelayError(409, '请从隐藏邮箱列表执行查询码重置');
           return writeJson(response, 200, await codeReset.prepare(input, actor));
+        }
         if (action === 'code-reset-confirm')
           return writeJson(response, 200, await codeReset.confirm(input, actor));
+        if (action === 'code-delivery-reset') {
+          requireAdministrator(actor, '只有管理员可以重置查询码');
+          try { return writeJson(response, 200, await deliveryReset(input, actor, request.headers['x-id-operation'])); }
+          catch (error) {
+            if (!(error instanceof RelayError) && [400, 409].includes(error.status)) throw new RelayError(error.status, error.message);
+            throw error;
+          }
+        }
         if (action === 'mail-reassign-prepare')
           return writeJson(response, 200, await mailReassignment.prepare(input, actor));
         if (action === 'mail-reassign-confirm')

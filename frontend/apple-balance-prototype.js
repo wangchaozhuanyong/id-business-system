@@ -860,6 +860,10 @@
     );
   }
   const fundingStates = { unused: '未使用', reserved: '待付款占用', used: '已使用', conflict: '待核对', unrecorded: '未登记苹果 ID' };
+  const appleHealthLabel = asset => ({ dead: '死号', unlocking: '解封中' })[asset?.health] || asset?.status || '待核对';
+  const appleHealthTag = asset => A.tag(appleHealthLabel(asset), asset?.health === 'dead' ? 'danger' :
+    appleHealthLabel(asset) === '正常' ? 'success' : 'warning');
+  const healthAction = id => A.button('变更账号状态', 'inventory-apple-health', '', '', `data-id="${E(id)}"`);
   function fundingRows() {
     const commerce = A.modules.commerce?.appleFundingData?.(), rules = window.IDAppleFunding;
     if (!commerce?.ready || !rules) return null;
@@ -879,7 +883,7 @@
       const conflict = state?.used && (!binding || state.bindings.length !== 1 ||
         rules.appleBinding(index, binding.order).conflict);
       const latest = binding && (orders.find(order => order.paidConfirmed &&
-        rules.appleTarget(order) === binding.target && order.customerId === binding.customerId &&
+        binding.targets.has(rules.appleTarget(order)) && order.customerId === binding.customerId &&
         !order.cancelled && !order.subscriptionEnded) || binding.order);
       const order = latest || state?.pending[0];
       const contact = order && commerce.customer(order);
@@ -903,13 +907,14 @@
         contact: contact ? ['wechat', 'customerPhone', 'whatsapp', 'telegram', 'qq'].map(key => contact[key]).filter(Boolean).join(' · ') : '',
         account: order?.email || order?.xHandle || '', apple: wallet.email,
         plan: order && [order.product, order.plan].filter(Boolean).join(' · '),
-        state: conflict ? 'conflict' : state?.pending.length ? 'reserved' : state?.used ? 'used' : 'unused',
+        state: conflict ? 'conflict' : state?.pending.length ? 'reserved' : state?.used ? 'used' : 'unused', used: Boolean(state?.used),
         subscription: order?.subscriptionEnded || order?.cancelled ? '已终止' :
           order?.paidConfirmed && ['pending', 'failed'].includes(order.entitlementStatus) ? '订阅待核对' : duration &&
           (distance <= 0 ? '已过期' : distance <= commerce.renewalWarningHours * 3600000 ? '即将到期' : '有效期内'),
         expiry: expiry.replace('T', ' '), duration, end,
         expected: order ? estimate ? estimate + ' USD' : '待核算' : '',
-        canRenew: Boolean(latest && !conflict && !state?.pending.length && !latest.cancelled && !latest.subscriptionEnded)
+        canRenew: Boolean(latest && !conflict && !state?.pending.length && !latest.cancelled && !latest.subscriptionEnded &&
+          appleHealthLabel(wallet) === '正常')
       };
     });
     const managedIds = new Set(rows.map(row => row.id));
@@ -976,6 +981,7 @@
     const choices = [['', '全部状态'], ...Object.entries(fundingStates)];
     const columns = [
       { id: 'apple', label: '苹果 ID 账号', fixed: true, long: true, class: 'apple-management-account' },
+      { id: 'health', label: '账号状态', render: row => row.wallet ? appleHealthTag(row.wallet) : '待核对' },
       { id: 'state', label: '使用状态', class: 'apple-management-status', render: row =>
         A.tag(fundingStates[row.state], { used: 'success', reserved: 'warning', conflict: 'danger' }[row.state] || '') },
       { id: 'name', label: '客户姓名', long: true, class: 'apple-management-customer', render: row => E(row.name || '—') },
@@ -1097,8 +1103,17 @@
     const assets = new Map(A.modules.inventory.getAppleIds().map((asset) => [asset.id, asset]));
     const query = String(S.query || '').toLowerCase();
     const funding = fundingRows(), usages = new Map((funding || []).map(row => [row.id, row]));
+    const selected = S.drafts.get('apple-id-view') || 'all';
+    const categories = [['all', '全部'], ['unused', '未使用'], ['used', '已使用'], ['dead', '死号'],
+      ['unlocking', '解封中'], ['imports', '导入记录']];
+    const matches = (row, tab) => tab === 'all' || (tab === 'used' ? usages.get(row.id)?.used :
+      tab === 'unused' ? usages.get(row.id)?.state === 'unused' : row.health === tab);
+    const tabs = `<div class="tabs" role="tablist" aria-label="苹果 ID 分类">${categories.map(([key, label]) =>
+      `<button type="button" class="tab" role="tab" aria-selected="${selected === key}" data-action="apple-id-tab" data-tab="${key}">${label}${
+        key !== 'imports' && (funding || !['unused', 'used'].includes(key)) ? ` ${accounts.filter(row => matches(row, key)).length}` : ''}</button>`).join('')}</div>`;
     const refreshFeedback = `<div class="inline-notice warning" data-apple-balance-error role="status" ${loadState === 'error' || managementError ? '' : 'hidden'}>余额或关联资料刷新失败，当前显示上次成功读取的资料。</div>`;
     const rows = accounts
+      .filter(row => matches(row, selected))
       .filter(row => `${row.email} ${row.country}`.toLowerCase().includes(query) ||
         usages.get(row.id)?.links.some(link => [link.account, link.orderNo, link.customer].some(value => String(value).toLowerCase().includes(query))))
       .map((row) => ({ ...assets.get(row.id), ...row }));
@@ -1137,7 +1152,7 @@
       {
         id: 'status',
         label: '账号状态',
-        render: (row) => A.tag(row.status, row.status === '正常' ? 'success' : 'warning')
+        render: appleHealthTag
       },
       {
         id: 'balance',
@@ -1199,7 +1214,7 @@
         ],
         ['有余额', accounts.filter((row) => M.compare(row.balance, '0') > 0).length, '个']
       ]) +
-      `<section class="panel design-async-region" data-apple-balance-region><div data-apple-balance-progress role="status" hidden></div><div class="toolbar"><div class="toolbar-left"><div class="search-field">${A.icon('search')}<input data-auto-search id="apple-list-search" aria-label="搜索苹果 ID" placeholder="搜索苹果 ID、注册地区、关联账号或订单" value="${E(S.query || '')}" /></div></div><div class="toolbar-right" data-page-actions>${localData ? A.button('刷新', 'apple-reload') : ''}</div></div>${A.table(columns, A.pageRows(rows, row => [row.createdAt, row.importedAt, row.registered]), '', '苹果ID余额')}${A.pagination(rows.length)}</section>`
+      `<section class="panel design-async-region" data-apple-balance-region><div data-apple-balance-progress role="status" hidden></div>${tabs}${selected === 'imports' ? A.modules.inventory.renderAppleImports() : `<div class="toolbar"><div class="toolbar-left"><div class="search-field">${A.icon('search')}<input data-auto-search id="apple-list-search" aria-label="搜索苹果 ID" placeholder="搜索苹果 ID、注册地区、关联账号或订单" value="${E(S.query || '')}" /></div></div><div class="toolbar-right" data-page-actions>${localData ? A.button('刷新', 'apple-reload') : ''}</div></div>${A.table(columns, A.pageRows(rows, row => [row.createdAt, row.importedAt, row.registered]), '', '苹果ID余额')}${A.pagination(rows.length)}`}</section>`
     );
   }
   function saveDrafts() {
@@ -1357,6 +1372,12 @@
   function onClick(action, node) {
     if (!action.startsWith('apple-')) return false;
     const id = node.dataset.id;
+    if (action === 'apple-id-tab') {
+      S.drafts.set('apple-id-view', node.dataset.tab);
+      S.page = 1;
+      A.render();
+      return true;
+    }
     if (action === 'apple-management-state') {
       if (S.route === managementRoute && (id === '' || Object.hasOwn(fundingStates, id))) {
         Object.assign(managementView(), { state: id, page: 1 });
@@ -1391,7 +1412,7 @@
         (row.canRenew ? A.button('续费', 'apple-management-renew', '', '', attrs) : '') +
         (row.wallet ? A.button('充值', 'apple-topup', '', '', attrs) + A.button('余额变动', 'apple-ledger', '', '', attrs) : '') +
         (row.order?.id ? A.button('订单详情', 'apple-management-order', '', '', `data-id="${E(row.order.id)}"`) : '') +
-        (row.wallet ? A.button('使用记录', 'apple-management-history', '', '', attrs) + A.button('复制', 'apple-management-copy', '', '', attrs) : ''));
+        (row.wallet ? healthAction(id) + A.button('使用记录', 'apple-management-history', '', '', attrs) + A.button('复制', 'apple-management-copy', '', '', attrs) : ''));
       else if (action === 'apple-management-renew' && row.canRenew) A.modules.commerce.openAppleRenewal(row.order.id);
       else if (action === 'apple-management-history' && row.wallet) void openLinkedAccounts(id);
       else if (action === 'apple-management-copy' && row.wallet) void A.copyText([
@@ -1409,7 +1430,7 @@
       if (ready()) adjustmentEditor(id, true);
       else void ensureReady().then(ok => ok ? adjustmentEditor(id, true) : A.notify('余额读取失败，请重试'));
     } else if (action === 'apple-more') {
-      A.openActionMenu(node, A.button('关联账号', 'apple-linked-accounts', '', '', `data-id="${E(id)}"`) +
+      A.openActionMenu(node, healthAction(id) + A.button('关联账号', 'apple-linked-accounts', '', '', `data-id="${E(id)}"`) +
         A.button('充值', 'apple-topup', '', '', `data-id="${E(id)}"`) +
         A.button('余额变动', 'apple-ledger', '', '', `data-id="${E(id)}"`));
     }

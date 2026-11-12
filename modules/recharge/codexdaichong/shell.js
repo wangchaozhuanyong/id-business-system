@@ -217,6 +217,7 @@
       }
     };
     window.idRechargeWorkspaceLog = workspaceLog;
+    window.IDTitleHelp.attach(document.getElementById('workspace-progress-title'), document.getElementById('workspace-progress-help'));
     window.IDTitleHelp.attach(document.getElementById('workspace-log-title'), document.getElementById('workspace-log-help'));
   }
 

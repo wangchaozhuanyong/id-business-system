@@ -5,7 +5,7 @@ import { interceptDesign, origin, settle, toggleDesignTheme } from './helpers/of
 
 const browserEntry = process.env.ID_RECHARGE_QA_PLAYWRIGHT;
 const links = [['GPT', 'order/gpt'], ['Claude', 'order/claude'], ['Gemini', 'order/gemini'],
-  ['Grok', 'order/grok'], ['订单补全', 'order-completion']];
+  ['Grok', 'order/grok'], ['订单补全', 'order-completion'], ['客户查询', 'customer-query']];
 const root = '/#/workspace/';
 const actor = role => ({ id: 'qa-' + role, name: '离线验收', role });
 const fixtures = canAssign => ({ 'order-completion': { items: [], manualItems: [], canAssign } });
@@ -16,13 +16,13 @@ async function measureNavigation(nav) {
     const columns = node.closest('.commerce-entry-columns');
     const form = columns?.querySelector('.form-panel');
     const records = columns?.querySelector('.entry-records');
-    const completion = node.parentElement.querySelector('#completion-list');
+    const standalone = node.parentElement.querySelector('#completion-list, #customer-query-search')?.closest('.panel');
     return {
       navigation: box(node),
       form: box(form),
       records: records?.checkVisibility() ? box(records) : null,
       mobileSwitchVisible: columns?.querySelector('.order-entry-mobile-switch')?.checkVisibility(),
-      completion: box(completion),
+      standalone: box(standalone),
       buttons: [...node.querySelectorAll('.button')].map(button => {
         const label = document.createRange();
         label.selectNodeContents(button);
@@ -32,20 +32,21 @@ async function measureNavigation(nav) {
   });
 }
 
-async function assertNavigationLayout(nav, width, completion = false) {
-  const { navigation, form, records, mobileSwitchVisible, completion: list, buttons } = await measureNavigation(nav);
-  const panel = completion ? list : form;
+async function assertNavigationLayout(nav, width, standalonePage = false) {
+  const { navigation, form, records, mobileSwitchVisible, standalone, buttons } = await measureNavigation(nav);
+  const panel = standalonePage ? standalone : form;
   assert(panel, '业务按钮应与对应面板同宽');
   assert.equal(buttons.length, links.length);
   assert(Math.abs(buttons[0].box.left - panel.left) <= 1);
   assert(Math.abs(buttons.at(-1).box.right - panel.right) <= 1);
+  const rowCount = new Set(buttons.map(({ box }) => Math.round(box.top))).size;
+  assert.equal(rowCount, width <= 540 ? 2 : 1);
   assert(buttons.every(({ box, label }) =>
-    Math.abs(box.width - buttons[0].box.width) <= 1 &&
-    Math.abs(box.top - navigation.top) <= 1 && box.height >= (width <= 900 ? 44 : 52) &&
+    Math.abs(box.width - buttons[0].box.width) <= 1 && box.height >= (width <= 900 ? 44 : 52) &&
     label.left > box.left && label.right < box.right
-  ), '五个按钮应等宽同排，文字在按钮内完整可见');
-  if (completion) {
-    assert(list.top >= navigation.bottom, '订单补全列表应在按钮下方铺满');
+  ), '业务按钮等宽，文字在按钮内完整可见');
+  if (standalonePage) {
+    assert(panel.top >= navigation.bottom, '独立业务区应在按钮下方铺满');
     return navigation;
   }
   assert.equal(mobileSwitchVisible, width <= 900, '录单与记录的切换控件只在手机布局显示');
@@ -99,7 +100,7 @@ test('订单提交合并入口，保留五个旧地址、草稿、权限和手�
         }
         await page.locator('#commerce-notes').fill('GPT 离线草稿');
         assert.deepEqual(await nav.getByRole('link').allTextContents(), links.map(([label]) => label));
-        for (const [label, route] of links.slice(1)) {
+        for (const [label, route] of links.slice(1, -1)) {
           await nav.getByRole('link', { name: label, exact: true }).click();
           await page.waitForURL('**' + root + route);
           await heading.waitFor();
@@ -121,6 +122,10 @@ test('订单提交合并入口，保留五个旧地址、草稿、权限和手�
         await empty.waitFor();
         assert((await page.locator('#completion-list .table-viewport').boundingBox()).height < 340,
           '补全空列表不应撑满剩余视口');
+        await nav.getByRole('link', { name: '客户查询', exact: true }).click();
+        await page.getByRole('heading', { name: '客户查询', exact: true, level: 1 }).waitFor();
+        await assertNavigationLayout(nav, width, true);
+        await page.goBack();
         await page.goBack();
         await nav.getByRole('link', { name: 'Grok', exact: true }).and(nav.locator('[aria-current="page"]')).waitFor();
         await nav.getByRole('link', { name: 'GPT', exact: true }).click();

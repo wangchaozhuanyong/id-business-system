@@ -17,7 +17,7 @@
   const revisionScopes = new Set(['inventory', 'commerce', 'settings', 'appleBalance', 'toolbox', 'saved-totp',
     'bitbrowser-connections', 'bitbrowser-proxies', 'bitbrowser-addresses', 'tenant-cards', 'recharge-codes',
     'order-sync', 'tools/mailbox-pool', 'tools/website-visits', 'apple-relay', 'operators', 'audit', 'finance-rates', 'card-types',
-    'order-card-freeze', 'subscription-management', 'system-monitoring', 'recharge-card-plans']);
+    'order-card-freeze', 'subscription-management', 'system-monitoring', 'recharge-card-plans', 'tools/mailbox-delivery']);
   const newer = (incoming, observed) => observed === undefined ||
     (/^\d+$/.test(incoming) && /^\d+$/.test(observed)
       ? BigInt(incoming) > BigInt(observed) : incoming !== observed);
@@ -235,7 +235,7 @@
     }
   }
 
-  async function request(resource, data, method = 'PUT', { keepalive = false } = {}) {
+  async function request(resource, data, method = 'PUT', { keepalive = false, operationId: suppliedOperation } = {}) {
     const options =
       data === undefined
         ? { cache: 'no-store' }
@@ -245,9 +245,10 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(data)
           };
-    const receiptWrite = data !== undefined && method === 'PUT' &&
-      ['commerce', 'inventory', 'settings', 'appleBalance', 'batch'].includes(resource);
-    const operationId = receiptWrite && window.crypto?.randomUUID?.();
+    const receiptWrite = (data !== undefined && method === 'PUT' &&
+      ['commerce', 'inventory', 'settings', 'appleBalance', 'batch'].includes(resource)) ||
+      (resource === 'card-types' && data?.action === 'health');
+    const operationId = suppliedOperation || (receiptWrite && window.crypto?.randomUUID?.());
     if (operationId) options.headers['X-ID-Operation'] = operationId;
     // Retry only the same versioned operation. The server's durable receipt is
     // committed atomically, so a lost response never produces a second write.
@@ -416,6 +417,13 @@
     saveBitBrowserAddresses: (data) => write(['bitbrowser-addresses'], () => request('bitbrowser-addresses', data)),
     startMicrosoftMailbox: (data) => request('tools/mailbox-microsoft/start', data, 'POST'),
     finishMicrosoftMailbox: (authorizationId) => write(['tools/mailbox-pool'], () => request('tools/mailbox-microsoft/finish', { authorizationId }, 'POST')),
+    customerQuery: (action, command) => request('customer-query/' + action, command, 'POST'),
+    mailboxDeliverySettings: () => request('tools/mailbox-delivery'),
+    saveMailboxDeliverySettings: (data) => write(['tools/mailbox-delivery'], () => request('tools/mailbox-delivery', data)),
+    copyGoogleMailboxCredentials: (data) => request('tools/mailbox-delivery', data, 'POST'),
+    resetMailboxDelivery: (scope, data, operationId) => scope === 'relay'
+      ? write(['apple-relay'], () => request('apple-relay/code-delivery-reset', data, 'POST', { operationId }))
+      : write(['tools/mailbox-pool'], () => request('tools/mailbox-pool', { action: 'rotate-delivery', scope, ...data }, 'PUT', { operationId })),
     managedMailboxPool: () => request('tools/mailbox-pool'),
     managedMailboxCode: (id) => request('tools/mailbox-pool', { id }, 'POST'),
     managedMailboxCodePage: (ids, version) => request('tools/mailbox-pool', { ids, version }, 'POST'),

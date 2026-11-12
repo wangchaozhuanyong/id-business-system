@@ -7,6 +7,7 @@ import { createMailboxUpdates } from './mailbox-updates.mjs';
 export const managedMailboxDomain = 'managed-mailbox-pool';
 export const managedMailboxQueryRoute = '/api/local/tools/mailbox-query';
 export const storefrontMailboxQueryRoute = '/api/public/mailbox/query';
+export const defaultMailboxValidDays = 30;
 const workerFile = fileURLToPath(new URL('../../modules/tools/mailbox-imap.py', import.meta.url));
 const providers = ['google', 'apple'];
 const codePattern = /^MBX-[A-Za-z0-9_-]{32}$/;
@@ -31,13 +32,111 @@ export function mailboxPoolItems(snapshot) {
   return Array.isArray(snapshot.data) ? snapshot.data : snapshot.data?.items || [];
 }
 
+function queryCodeCounts(items) {
+  const counts = new Map();
+  for (const { queryCode } of items) if (queryCode) counts.set(queryCode, (counts.get(queryCode) || 0) + 1);
+  return counts;
+}
+
 export function mailboxPoolMetadata(snapshot) {
+  const items = mailboxPoolItems(snapshot);
+  const counts = queryCodeCounts(items);
   return {
     version: snapshot.version,
-    defaultValidDays: snapshot.data?.defaultValidDays ?? 7,
-    items: mailboxPoolItems(snapshot).map(({ id, provider, email, active, expiresAt, updatedAt, authFailed, label }) =>
-      ({ id, provider, email, active, expiresAt, updatedAt, label: label || '', authFailed: authFailed === true }))
+    defaultValidDays: snapshot.data?.defaultValidDays ?? defaultMailboxValidDays,
+    items: items.map(({ id, provider, email, active, expiresAt, updatedAt, authFailed, label, queryCode }) =>
+      ({ id, provider, email, active, expiresAt, updatedAt, label: label || '', authFailed: authFailed === true,
+        ...(counts.get(queryCode) > 1 && { associationConflict: true }) }))
   };
+}
+
+const emailKey = value => typeof value === 'string' ? value.trim().toLowerCase() : '';
+const inventoryProviders = { google: 'google', microsoft: 'microsoft', apple: 'apple' };
+
+export function inventoryMailboxPool(metadata, inventory) {
+  const mailboxes = inventory?.data?.mailboxes || [];
+  const hidden = new Set(mailboxes.filter(row => row.type === 'relay').map(row => emailKey(row.email)));
+  const items = [], byEmail = new Map();
+  for (const row of metadata.items) {
+    const email = emailKey(row.email);
+    if (!email || hidden.has(email) || row.provider === 'relay') continue;
+    const existing = byEmail.get(email);
+    if (existing) { existing.associationConflict = true; continue; }
+    const entry = { ...row, source: 'manual' };
+    byEmail.set(email, entry);
+    items.push(entry);
+  }
+  for (const asset of mailboxes) {
+    if (!Object.hasOwn(inventoryProviders, asset.type) || asset.deleted) continue;
+    const email = emailKey(asset.email);
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || hidden.has(email)) continue;
+    let row = byEmail.get(email);
+    if (!row) {
+      const provider = asset.type !== 'apple' ? inventoryProviders[asset.type]
+        : /@(?:icloud|mac|me)\.com$/.test(email) ? 'apple' : /@(?:gmail|googlemail)\.com$/.test(email) ? 'google'
+          : /@(?:outlook|hotmail|live)\.com$/.test(email) ? 'microsoft' : '';
+      row = { id: `inventory:${asset.id}`, email, provider, label: '', source: 'inventory', authorizationPending: true,
+        active: false, authFailed: false, expiresAt: null, lastQueriedAt: null };
+      byEmail.set(email, row);
+      items.push(row);
+    }
+    const sources = row.inventorySources ??= [];
+    if (sources.includes(asset.type)) row.associationConflict = true;
+    else sources.push(asset.type);
+    if (!row.authorizationPending && asset.type !== 'apple' && row.provider !== asset.type) row.associationConflict = true;
+  }
+  return { ...metadata, inventoryVersion: inventory?.version ?? 0, items };
+}
+
+export function mailboxRotationProblem(item) {
+  if (!item || item.authorizationPending) return '未绑定邮箱';
+  if (item.associationConflict) return '邮箱关联冲突';
+  if (item.authFailed) return '邮箱授权已失效';
+  if (!item.active) return '邮箱已停用';
+  if (!['google', 'apple', 'microsoft'].includes(item.provider)) return '邮箱服务商待核对';
+  return '';
+}
+
+export function planMailboxRotations(snapshot, inventory, body, now = Date.now()) {
+  if (!['google', 'pool'].includes(body.scope) || !['single', 'selected', 'all'].includes(body.mode) ||
+      (body.mode !== 'all' && (!Array.isArray(body.ids) || !body.ids.length || body.ids.length > 10000 ||
+        (body.mode === 'single' && body.ids.length !== 1) || new Set(body.ids).size !== body.ids.length ||
+        body.ids.some(id => typeof id !== 'string' || !id || id.length > 160))))
+    throw new MailboxPoolError(400, '请选择要重置的邮箱');
+  if (body.version !== snapshot.version || body.inventoryVersion !== inventory.version)
+    throw new MailboxPoolError(409, '邮箱池或库存资料已更新，请刷新后重新选择');
+  const view = inventoryMailboxPool(mailboxPoolMetadata(snapshot), inventory);
+  const byEmail = new Map(view.items.map(row => [emailKey(row.email), row]));
+  const targets = body.scope === 'pool' ? view.items.map(row => ({ id: row.id, row })) :
+    (inventory.data?.mailboxes || []).filter(asset => asset.type === 'google' && !asset.deleted)
+      .map(asset => ({ id: asset.id, row: byEmail.get(emailKey(asset.email)), asset }));
+  const index = new Map(targets.map(target => [target.id, target]));
+  const selected = body.mode === 'all' ? targets : body.ids.map(id => index.get(id) || { id });
+  const items = mailboxPoolItems(snapshot);
+  const credentials = new Map(items.map(row => [row.id, row]));
+  const updates = new Map();
+  const counts = queryCodeCounts(items);
+  const validDays = view.defaultValidDays;
+  const updatedAt = new Date(now).toISOString();
+  const expiresAt = new Date(now + validDays * 86_400_000).toISOString();
+  const results = selected.map(({ id, row, asset }) => {
+    const email = row?.email || emailKey(asset?.email);
+    const credential = credentials.get(row?.id);
+    let reason = mailboxRotationProblem(row);
+    if (!reason && asset && ((asset.health && asset.health !== 'normal') || (asset.status && asset.status !== '正常')))
+      reason = '库存邮箱状态异常';
+    if (!reason && (!credential || (credential.provider === 'microsoft' ? !credential.refreshToken : !credential.appPassword)))
+      reason = '邮箱授权资料待核对';
+    if (!reason && updates.has(row.id)) reason = '本批已处理同一邮箱';
+    if (reason) return { id, email, status: 'skipped', reason };
+    let code;
+    do { code = 'MBX-' + randomBytes(24).toString('base64url'); } while (counts.has(code));
+    counts.set(code, 1);
+    updates.set(row.id, { ...credential, queryCode: code, expiresAt, updatedAt });
+    return { id, email, status: 'success', expiresAt };
+  });
+  return { results, items: items.map(row => updates.get(row.id) || row), validDays,
+    ...(body.mode === 'single' && updates.size === 1 && { issued: updates.values().next().value }) };
 }
 
 export function mailboxPoolCodePage(snapshot, { ids, version }) {
@@ -54,7 +153,7 @@ export function applyMailboxPoolWrite(snapshot, body, clock = Date.now(), micros
   if (snapshot.version !== body.version)
     throw new MailboxPoolError(409, '邮箱池已更新，请重新读取');
   const items = mailboxPoolItems(snapshot);
-  const defaultValidDays = snapshot.data?.defaultValidDays ?? 7;
+  const defaultValidDays = snapshot.data?.defaultValidDays ?? defaultMailboxValidDays;
   const validDays = (days) => {
     if (!Number.isSafeInteger(days) || days < 1 || days > 365)
       throw new MailboxPoolError(400, '查询码有效期必须为 1 至 365 天');
@@ -64,12 +163,7 @@ export function applyMailboxPoolWrite(snapshot, body, clock = Date.now(), micros
     if (body.applyExisting !== undefined && typeof body.applyExisting !== 'boolean')
       throw new MailboxPoolError(400, '同步现有查询码设置无效');
     const days = validDays(body.validDays);
-    const expiresAt = new Date(clock + days * 86_400_000).toISOString();
-    const updatedAt = new Date(clock).toISOString();
-    return {
-      items: body.applyExisting ? items.map((row) => ({ ...row, expiresAt, updatedAt })) : items,
-      defaultValidDays: days
-    };
+    return { items, defaultValidDays: days };
   }
   if (body.action === 'batch') {
     if (!Array.isArray(body.items) || !body.items.length || body.items.length > 50)
@@ -135,6 +229,8 @@ export function applyMailboxPoolWrite(snapshot, body, clock = Date.now(), micros
     item.active = body.active;
   }
   if (body.action === 'rotate') {
+    const problem = mailboxRotationProblem(item);
+    if (problem) throw new MailboxPoolError(409, problem);
     item.expiresAt = expiry();
     item.queryCode = code();
   }
@@ -147,10 +243,15 @@ export function applyMailboxPoolWrite(snapshot, body, clock = Date.now(), micros
 export function findMailboxQuery(snapshot, input, clock = Date.now()) {
   if (!isManagedCode(input)) return null;
   const wanted = Buffer.from(input);
-  const item = mailboxPoolItems(snapshot).find((row) => row.active && !row.authFailed && Date.parse(row.expiresAt) > clock &&
-    isManagedCode(row.queryCode) && row.queryCode.length === input.length &&
-    timingSafeEqual(Buffer.from(row.queryCode), wanted));
-  return item ? { ...item, revision: snapshot.version } : null;
+  let item;
+  for (const row of mailboxPoolItems(snapshot)) {
+    if (!isManagedCode(row.queryCode) || row.queryCode.length !== input.length ||
+        !timingSafeEqual(Buffer.from(row.queryCode), wanted)) continue;
+    if (item) return null;
+    item = row;
+  }
+  return item?.active && !item.authFailed && Date.parse(item.expiresAt) > clock
+    ? { ...item, revision: snapshot.version } : null;
 }
 
 export async function prepareVerifiedMailboxWrite(snapshot, body, verify) {

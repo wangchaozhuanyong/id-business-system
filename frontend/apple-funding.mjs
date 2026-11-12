@@ -38,6 +38,17 @@ export function appleTarget(order) {
   return product && valid ? JSON.stringify([product, key]) : '';
 }
 
+const platformAccount = order => typeof order?.platformAccountId === 'string' ? order.platformAccountId.trim() : '';
+
+function appleTargets(order) {
+  const login = appleTarget(order);
+  const targets = login ? [login] : [];
+  const platform = platformAccount(order);
+  const product = productFamily(order?.product);
+  if (platform && product) targets.push(JSON.stringify([product, 'platform', platform]));
+  return targets;
+}
+
 export function appleFundingIndex(orders = [], ledger = {}) {
   const byWallet = new Map();
   const byTarget = new Map();
@@ -55,13 +66,20 @@ export function appleFundingIndex(orders = [], ledger = {}) {
     if (!id) return;
     const wallet = ensure(id);
     wallet.used = true;
-    const target = appleTarget(order);
-    if (!target || !order.customerId) return;
-    const binding = wallet.bindings.find(row => row.target === target && row.customerId === order.customerId);
-    if (!binding) wallet.bindings.push({ target, customerId: order.customerId, order,
-      accountIds: new Set(order.platformAccountId ? [order.platformAccountId] : []) });
-    else if (order.platformAccountId) binding.accountIds.add(order.platformAccountId);
-    rememberTarget(target, id);
+    const targets = appleTargets(order);
+    if (!targets.length || !order.customerId) return;
+    let binding = wallet.bindings.find(row => row.customerId === order.customerId &&
+      targets.some(target => row.targets.has(target)));
+    if (!binding) {
+      binding = { targets: new Set(), customerId: order.customerId, order, accountIds: new Set() };
+      wallet.bindings.push(binding);
+    }
+    const platform = platformAccount(order);
+    if (platform) binding.accountIds.add(platform);
+    for (const target of targets) {
+      binding.targets.add(target);
+      rememberTarget(target, id);
+    }
   }
   for (const allocation of ledger.allocations || []) {
     const order = references.get(allocation.orderId);
@@ -89,15 +107,13 @@ export function appleFundingIndex(orders = [], ledger = {}) {
     if (order.paidConfirmed) {
       // Unreconciled historical orders must not return to the unassigned pool.
       ensure(order.appleIdId).used = true;
-      const target = appleTarget(order);
-      if (target) rememberTarget(target, order.appleIdId);
+      for (const target of appleTargets(order)) rememberTarget(target, order.appleIdId);
       const paid = appleAmountUnits(order.paidAmount);
       if (paid > 0n && debits.get(order.id) === paid) bind(order.appleIdId, order);
     } else if (!order.appleFunding?.bound && (!order.cancelled ||
         order.cancellationEvents?.at(-1)?.appleUnpaidConfirmed !== true)) {
       ensure(order.appleIdId).pending.push(order);
-      const target = appleTarget(order);
-      if (target) {
+      for (const target of appleTargets(order)) {
         if (!pendingByTarget.has(target)) pendingByTarget.set(target, []);
         pendingByTarget.get(target).push(order);
       }
@@ -143,20 +159,22 @@ export function appleRelatedOrders(orders = [], ledger = {}) {
 }
 
 export function appleBinding(index, order) {
-  const target = appleTarget(order);
-  const ids = index.byTarget.get(target);
-  if (!ids?.size) return { id: '' };
+  const targets = appleTargets(order);
+  const ids = new Set(targets.flatMap(target => [...(index.byTarget.get(target) || [])]));
+  if (!ids.size) return { id: '' };
   if (ids.size !== 1) return { id: '', conflict: true };
   const id = [...ids][0], wallet = index.byWallet.get(id);
   const [binding] = wallet.bindings;
   if (!binding) return { id: '' };
-  return wallet.bindings.length === 1 && binding.target === target && binding.customerId === order.customerId &&
-    binding.accountIds.size <= 1 &&
-    (!order.platformAccountId || !binding.accountIds.size || binding.accountIds.has(order.platformAccountId))
+  const platform = platformAccount(order);
+  return wallet.bindings.length === 1 && binding.customerId === order.customerId &&
+    targets.some(target => binding.targets.has(target)) && binding.accountIds.size <= 1 &&
+    (!platform || !binding.accountIds.size || binding.accountIds.has(platform))
     ? { id } : { id: '', conflict: true };
 }
 
 export function appleFundingEligibility(wallet, order, index, settings, { actual = false, quotedPrice, forSelection = false } = {}) {
+  const targets = appleTargets(order);
   const binding = appleBinding(index, order);
   const state = index.byWallet.get(wallet?.id);
   const region = order.appleStoreRegion || wallet?.appStoreRegion;
@@ -167,11 +185,11 @@ export function appleFundingEligibility(wallet, order, index, settings, { actual
   const balance = appleAmountUnits(wallet?.balance);
   // The picker may show unused candidates before a new customer is saved.
   // Order writes use the default strict check after resolving the customer.
-  if ((!appleTarget(order) || !order.customerId) && !forSelection) return { error: '请先核对客户和订阅账号' };
+  if ((!targets.length || !order.customerId) && !forSelection) return { error: '请先核对客户和订阅账号' };
   if (binding.conflict) return { error: '历史苹果 ID 绑定存在冲突，请核对原订单' };
   if (order.businessType === '续费' && !binding.id)
     return { error: '未找到原订阅的苹果 ID 绑定，请核对历史付款记录' };
-  if (!binding.id && index.byTarget.has(appleTarget(order)))
+  if (!binding.id && targets.some(target => index.byTarget.has(target)))
     return { error: '历史苹果内购付款待核对，请核对原订单与余额流水' };
   if (binding.id && binding.id !== wallet?.id) return { error: '本账号只能使用原绑定的苹果 ID' };
   if (!wallet || wallet.deleted || wallet.status !== '正常' ||
@@ -179,7 +197,7 @@ export function appleFundingEligibility(wallet, order, index, settings, { actual
     return { error: '苹果 ID 状态异常或未建立美元余额账本' };
   if (!appleRegion(region) || wallet.appStoreRegion !== region) return { error: '请核对所选苹果 ID 的 Id地区' };
   if (state?.pending.some(other => other.id !== order.id)) return { error: '该苹果 ID 已被待付款订单占用' };
-  if (index.pendingByTarget.get(appleTarget(order))?.some(other => other.id !== order.id))
+  if (targets.some(target => index.pendingByTarget.get(target)?.some(other => other.id !== order.id)))
     return { error: '该订阅账号已有待付款订单，请先核对原单' };
   if (!binding.id && state?.used) return { error: '首次分配只能使用未使用的苹果 ID' };
   if (!actual && (estimate === null || estimate <= 0n)) return { error: '请先配置此地区的苹果内购代付价' };

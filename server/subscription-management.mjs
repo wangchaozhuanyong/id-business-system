@@ -215,7 +215,7 @@ function orderTime(record) {
   return instant(record.start) || instant(record.created) || 0;
 }
 
-function currentSeriesRecord(records) {
+export function currentSeriesRecord(records) {
   const [latest, ...earlier] = records;
   if (latest.renewalExpiryPending && !latest.missingCustomer && !latest.ended && !latest.cancelled) return latest;
   if (!latest.missingCustomer && !['pending', 'failed', 'scheduled', 'opened'].includes(latest.status))

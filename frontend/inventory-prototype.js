@@ -1133,10 +1133,28 @@
     api.openDrawer(title, description, body, footer, context);
   }
 
+  let googlePoolRead, googlePoolError = '';
+  async function refreshGooglePool(refresh = false) {
+    const delivery = api.modules.mailboxDelivery;
+    if (api.state.route !== 'mailboxes/google' || !delivery?.enabled()) return true;
+    if (googlePoolRead) return googlePoolRead;
+    const actor = currentActor().id;
+    googlePoolRead = delivery.readPool(refresh).then(() => { googlePoolError = ''; return true; }, error => {
+      if (error.code !== 'READ_SUPERSEDED') googlePoolError = error.message || '查询授权读取失败';
+      return false;
+    }).finally(() => {
+      googlePoolRead = null;
+      if (api.state.route === 'mailboxes/google' && currentActor().id === actor) api.render();
+    });
+    return googlePoolRead;
+  }
+
   function inventoryPage() {
     const kind = api.state.route.startsWith('accounts/') ? 'account' : 'mail';
     const type = api.state.route.split('/')[1];
     const microsoft = type === 'microsoft';
+    const delivery = api.modules.mailboxDelivery;
+    const googleDelivery = type === 'google' && delivery?.enabled();
     const canManage = (!microsoft && !personalAccount(type)) || !localData || admin();
     const v = view();
     const assets = collection(kind)
@@ -1152,6 +1170,8 @@
     };
     const title = typeLabel(type);
     const actions = canManage ?
+      (googleDelivery ? button('复制设置', 'mailbox-delivery-settings', '', 'settings') +
+        button('查询码设置', 'mailbox-delivery-validity', '', 'key') : '') +
       (microsoft ? '' : usageReviewButton()) + button('本表设置', 'inventory-settings', '', 'settings') +
       (type === 'claude' && localData && admin() ? button('历史账号入库', 'inventory-claude-history', '', 'upload') : '') +
       button('批量导入', 'inventory-import', '', 'upload') +
@@ -1360,23 +1380,31 @@
         { id: 'device', label: '登录设备', long: true },
         { id: 'notes', label: '备注 1', class: 'wide-cell', long: true },
         { id: 'notes2', label: '备注 2', class: 'wide-cell', long: true },
+        ...(googleDelivery ? [
+          { id: 'mailboxBinding', label: '查询授权', render: asset => esc(!delivery.currentPool() ? googlePoolError ? '读取失败' : '正在读取…' : delivery.connection(delivery.google(asset.email))) },
+          { id: 'queryExpiry', label: '查询码到期', render: asset => esc(delivery.date(delivery.google(asset.email)?.expiresAt)) },
+          { id: 'queryRemaining', label: '剩余有效天数', render: asset => esc(delivery.remaining(delivery.google(asset.email))) }
+        ] : []),
         {
           id: 'actions',
           label: '操作',
           action: true,
           render: (asset) => {
             const attrs = `data-id="${esc(asset.id)}"`;
-            return `<div class="action-links">${canManage ? textAction('编辑', 'inventory-edit', attrs) : ''}${textAction('详情', 'inventory-detail', attrs)}${canManage ? textAction('更多操作', 'inventory-more', `${attrs} aria-haspopup="menu" aria-expanded="false"`, '', 'down') : ''}</div>`;
+            const row = googleDelivery && delivery.google(asset.email);
+            const ready = delivery?.canRotate(row) && asset.health === 'normal' && asset.status === '正常';
+            return `<div class="action-links">${googleDelivery ? textAction('复制账密', 'inventory-google-credentials', attrs) +
+              textAction('复制查询', 'inventory-google-query-copy', `${attrs} ${ready ? 'title="生成新码并复制，旧码失效"' : 'disabled'}`) : ''}${canManage ? textAction('编辑', 'inventory-edit', attrs) : ''}${textAction('详情', 'inventory-detail', attrs)}${canManage ? textAction('更多操作', 'inventory-more', `${attrs} aria-haspopup="menu" aria-expanded="false"`, '', 'down') : ''}</div>`;
           }
         }
       ];
       const selection = api.getSelection('inventory-module-assets');
       body = `<div class="toolbar list-filters"><div class="toolbar-left"><div class="search-field">${icon('search')}<input data-auto-search id="inventory-list-query" aria-label="搜索库存资料" placeholder="${microsoft ? '搜索邮箱、辅助邮箱或备注' : '搜索账号、备注或用途'}" value="${esc(v.query)}" /></div><select id="inventory-country" aria-label="筛选国家">${options(choicesWithCurrent([['', '全部国家'], ...settingsFor(type).countries], v.country), v.country)}</select><select id="inventory-status" aria-label="筛选${kind === 'mail' ? '邮箱' : '账号'}状态">${options([['', '全部状态'], '正常', '冻结', '封控中', ...(kind === 'mail' ? ['死号', '解封中'] : [])], v.status)}</select>${kind === 'mail' ?
-        `<select id="inventory-usage-filter" aria-label="筛选使用状态">${options([['', '全部使用状态'], ...Object.entries(mailUseLabels)], v.usage)}</select>` : ''}</div><div class="toolbar-right">${button('列设置', 'column-settings', '', 'columns', `data-table-id="${esc(title)}库存"`)}${microsoft ? '' : button('提取与归还', 'inventory-center', '', 'return')}${button(microsoft ? '复制邮箱地址' : '复制所选', 'inventory-copy-selected', '', 'copy', selection.size ? '' : 'disabled')}${!microsoft && v.tab === 'claimed' ? button('归还所选', 'inventory-return-selected', '', 'return', selection.size ? '' : 'disabled') : ''}</div></div>${table(columns, pageRows(rows, asset => inventoryListTime(asset, v.tab)), 'inventory-module-assets', `${title}库存`)}${pagination(rows.length)}`;
+        `<select id="inventory-usage-filter" aria-label="筛选使用状态">${options([['', '全部使用状态'], ...Object.entries(mailUseLabels)], v.usage)}</select>` : ''}</div><div class="toolbar-right">${googleDelivery ? button('批量重置', 'inventory-google-batch', '', 'refresh', delivery.currentPool() ? '' : 'disabled') : ''}${button('列设置', 'column-settings', '', 'columns', `data-table-id="${esc(title)}库存"`)}${microsoft ? '' : button('提取与归还', 'inventory-center', '', 'return')}${button(microsoft ? '复制邮箱地址' : '复制所选', 'inventory-copy-selected', '', 'copy', selection.size ? '' : 'disabled')}${!microsoft && v.tab === 'claimed' ? button('归还所选', 'inventory-return-selected', '', 'return', selection.size ? '' : 'disabled') : ''}</div></div>${googleDelivery && googlePoolError ? `<p class="inline-notice warning" role="status">${esc(googlePoolError)} ${button('重试', 'inventory-google-refresh')}</p>` : ''}${table(columns, pageRows(rows, asset => inventoryListTime(asset, v.tab)), 'inventory-module-assets', `${title}库存`)}${pagination(rows.length)}`;
     }
     const tabItems = [
       ...(kind === 'mail' ? [['all', '全部', assets.length]] : []),
-      ['available', usesAccountLocation(type) ? '可用库存' : '库存', counts.available],
+      ['available', ['google', 'microsoft'].includes(type) ? '未使用' : usesAccountLocation(type) ? '可用库存' : '库存', counts.available],
       ['claimed', '已提取', counts.claimed],
       ['used', '已使用', counts.used],
       ['dead', '死号', counts.dead],
@@ -2611,7 +2639,12 @@
   function assetMore(id, node) {
     const asset = assetById(id);
     if (!asset) return;
-    api.openActionMenu(node, mailboxPlatformButton(asset) + `<div class="property-list"><div class="property-row"><span>邮箱 / 账号</span><strong>${esc(displayIdentity(asset))}</strong></div></div><div class="guide-list"><div class="guide-item"><h3>账号状态</h3><div class="toolbar">${asset.health === 'normal' ? button('移入死号', 'inventory-health', 'danger', '', `data-id="${id}" data-health="dead"`) + button('移入解封中', 'inventory-health', '', '', `data-id="${id}" data-health="unlocking"`) : button('恢复资料', 'inventory-health', '', 'return', `data-id="${id}" data-health="normal"`)}</div></div><div class="guide-item"><h3>使用与归还</h3><div class="toolbar">${accountLifecycleActions(asset)}${asset.inventoryState === 'claimed' ? button('归还资料', 'inventory-return-asset', '', 'return', `data-id="${id}"`) : ''}${asset.type === 'relay' || asset.type === 'google' || asset.type === 'apple' ? button('登记注册结果', 'inventory-register', '', 'play', `data-id="${id}"`) : ''}${button('查看记录', 'inventory-detail', '', 'orders', `data-id="${id}"`)}</div></div><div class="guide-item"><h3>资料更正</h3><div class="toolbar">${button('撤回最近修改', 'inventory-undo', '', 'return', `data-id="${id}" ${undo.has(id) ? '' : 'disabled'}`)}${asset.health === 'dead' && asset.type !== 'relay' ? button('永久删除', 'inventory-delete', 'danger', '', `data-id="${id}"`) : ''}</div></div>${asset.type === 'relay' ? `<div class="guide-item"><h3>邮箱操作</h3><div class="toolbar">${button('查看邮件', 'inventory-mail-read', '', 'mail', `data-id="${id}"`)}${button('复制查询码', 'inventory-copy-query', '', 'copy', `data-id="${id}"`)}</div></div>` : ''}</div>`);
+    const delivery = api.modules.mailboxDelivery;
+    const mailbox = asset.type === 'google' && delivery?.enabled() && delivery.google(asset.email);
+    const queryActions = mailbox && !mailbox.authorizationPending && !mailbox.associationConflict
+      ? button('仅复制当前码', 'inventory-google-current-code', '', 'copy', `data-id="${esc(id)}"`) +
+        button('重置查询码', 'inventory-google-query-reset', '', 'refresh', `data-id="${esc(id)}" ${delivery.canRotate(mailbox) && asset.health === 'normal' && asset.status === '正常' ? '' : 'disabled'}`) : '';
+    api.openActionMenu(node, queryActions + mailboxPlatformButton(asset) + `<div class="property-list"><div class="property-row"><span>邮箱 / 账号</span><strong>${esc(displayIdentity(asset))}</strong></div></div><div class="guide-list"><div class="guide-item"><h3>账号状态</h3><div class="toolbar">${asset.health === 'normal' ? button('移入死号', 'inventory-health', 'danger', '', `data-id="${id}" data-health="dead"`) + button('移入解封中', 'inventory-health', '', '', `data-id="${id}" data-health="unlocking"`) : button('恢复资料', 'inventory-health', '', 'return', `data-id="${id}" data-health="normal"`)}</div></div><div class="guide-item"><h3>使用与归还</h3><div class="toolbar">${accountLifecycleActions(asset)}${asset.inventoryState === 'claimed' ? button('归还资料', 'inventory-return-asset', '', 'return', `data-id="${id}"`) : ''}${asset.type === 'relay' || asset.type === 'google' || asset.type === 'apple' ? button('登记注册结果', 'inventory-register', '', 'play', `data-id="${id}"`) : ''}${button('查看记录', 'inventory-detail', '', 'orders', `data-id="${id}"`)}</div></div><div class="guide-item"><h3>资料更正</h3><div class="toolbar">${button('撤回最近修改', 'inventory-undo', '', 'return', `data-id="${id}" ${undo.has(id) ? '' : 'disabled'}`)}${asset.health === 'dead' && asset.type !== 'relay' ? button('永久删除', 'inventory-delete', 'danger', '', `data-id="${id}"`) : ''}</div></div>${asset.type === 'relay' ? `<div class="guide-item"><h3>邮箱操作</h3><div class="toolbar">${button('查看邮件', 'inventory-mail-read', '', 'mail', `data-id="${id}"`)}${button('复制查询码', 'inventory-copy-query', '', 'copy', `data-id="${id}"`)}</div></div>` : ''}</div>`);
   }
   const workspaceRecordTimeFormat = new Intl.DateTimeFormat('sv-SE', {
     timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
@@ -4083,7 +4116,7 @@
       }
     );
   }
-  function submitImport(form, commit = false, restored = null) {
+  function submitImport(form, commit = false, restored = null, recordFailure = false) {
     const d = { ...(restored || api.readForm(form)) },
       type = d['inventory-import-type'];
     const route = api.state.route;
@@ -4357,13 +4390,26 @@
         '',
         '导入预览'
       ) +
-      `<input type="hidden" form="inventory-import-form" name="inventory-import-preview-source" value="${esc(previewSource)}" /><div class="form-footer"><span class="footnote">${microsoft ? '微软验证资料按表头保存。' : entryContext ? '本批产品类型固定，扩展字段按表头保存。' : '每行类型可直接修正。'}空白注册时间取录入时间。</span>${button('确认导入', 'inventory-import-confirm', 'primary', '', errors.length ? 'disabled' : '')}</div>`;
+      `<input type="hidden" form="inventory-import-form" name="inventory-import-preview-source" value="${esc(previewSource)}" /><div class="form-footer"><span class="footnote">${microsoft ? '微软验证资料按表头保存。' : entryContext ? '本批产品类型固定，扩展字段按表头保存。' : '每行类型可直接修正。'}空白注册时间取录入时间。</span>${fundingApple && errors.length ? button('记录本次失败', 'inventory-import-record-failure') : ''}${button('确认导入', 'inventory-import-confirm', 'primary', '', errors.length ? 'disabled' : '')}</div>`;
     saveDrafts();
     if (errors.length) {
       api.setError(
         'inventory-import-content',
         `${errors.length} 行需修正。本次不会部分导入，也不会覆盖原资料。`
       );
+      if (fundingApple && recordFailure && hasPreviousPreview) {
+        const snapshot = formFingerprint(api.readForm(form));
+        confirmInventoryChange('确认批量导入', `保存 ${errors.length} 行预检失败的原因。本批不会导入邮箱。`, () => {
+          if (!form.isConnected || formFingerprint(api.readForm(form)) !== snapshot) return;
+          const operator = currentActor();
+          importRecords.unshift({ id: uid('IMPORT'), type: 'apple', time: inventoryNow(), actor: operator.name, actorId: operator.id,
+            total: results.length, success: 0, failed: errors.length, status: '预检未通过', results: results.map(row => ({
+              id: row.id, line: row.line, type: 'apple', email: /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(row.email) ? row.email : '',
+              result: row.error || '本批未导入'
+            })) });
+          return () => { finishDrawer(form.dataset.inventoryDraft); api.render(); api.notify('已保存本次导入记录'); };
+        }, '保存失败记录');
+      }
       return;
     }
     api.setError('inventory-import-content', '');
@@ -4478,6 +4524,27 @@
       return true;
     }
     const id = node.dataset.id;
+    if (action.startsWith('inventory-google-')) {
+      const delivery = api.modules.mailboxDelivery;
+      if (!delivery?.enabled() || api.state.route !== 'mailboxes/google') return true;
+      const asset = assetById(id), mailbox = asset && delivery.google(asset.email);
+      const reset = (mode, ids, count, trigger, copyQuery = false) => delivery.reset('google', mode, ids, count, trigger,
+        { copyQuery, done: () => api.render() });
+      if (action === 'inventory-google-refresh') void refreshGooglePool(true);
+      else if (action === 'inventory-google-batch') delivery.batchMenu(node, 'google',
+        mailboxes.filter(row => row.type === 'google' && !row.deleted).length, reset);
+      else if (asset?.type === 'google' && action === 'inventory-google-credentials') void delivery.copyCredentials(asset, node);
+      else if (mailbox && action === 'inventory-google-current-code') {
+        const actor = currentActor().id;
+        const current = () => currentActor().id === actor && api.state.route === 'mailboxes/google';
+        void api.withActionFeedback(null, async () => {
+          const { code } = await localData.managedMailboxCode(mailbox.id);
+          await api.copyText(code, '已复制当前查询码', { current });
+        }, { failure: '读取当前查询码失败' });
+      } else if (mailbox && ['inventory-google-query-copy', 'inventory-google-query-reset'].includes(action))
+        reset('single', [id], 1, node, action === 'inventory-google-query-copy');
+      return true;
+    }
     if (action === 'inventory-go') api.go(node.dataset.route);
     else if (action === 'inventory-close') api.closeDrawer();
     else if (action === 'inventory-center') {
@@ -4531,6 +4598,8 @@
       void api.copyText(accountCsvTemplate('microsoft'));
     else if (action === 'inventory-import-confirm')
       submitImport(document.getElementById('inventory-import-form'), true);
+    else if (action === 'inventory-import-record-failure')
+      submitImport(document.getElementById('inventory-import-form'), false, null, true);
     else if (action === 'inventory-personal-registration' && personalAccount(node.dataset.type))
       assetEditor('', node.dataset.type, id);
     else if (action === 'inventory-add') assetEditor();
@@ -4574,7 +4643,20 @@
           .map(copyAssetLine)
           .join('\n')
       );
-    else if (action === 'inventory-health') {
+    else if (action === 'inventory-apple-health') {
+      const asset = assetById(id);
+      if (!asset || asset.type !== 'apple') return true;
+      const key = `inventory-apple-health:${id}`;
+      const draft = api.state.drafts.get(key) || {};
+      showDrawer('变更苹果 ID 状态', '死号和解封中的账号暂停用于新单或续费。原订阅和付款记录保留。',
+        `<form id="inventory-apple-health-form" data-inventory-draft="${esc(key)}" novalidate>${
+          input('inventory-apple-health-id', id, 'type="hidden"')}${input('inventory-apple-health-version', asset.version, 'type="hidden"')}${
+          field('苹果 ID', 'inventory-apple-health-account', input('inventory-apple-health-account', asset.email, 'readonly'))}${
+          field('账号状态', 'inventory-apple-health-state', select('inventory-apple-health-state',
+            [['dead', '死号'], ['unlocking', '解封中'], ['normal', '正常']], draft['inventory-apple-health-state'] || (asset.health === 'dead' ? 'unlocking' : 'dead')), true)}${
+          field('变更原因', 'inventory-apple-health-reason', `<textarea id="inventory-apple-health-reason" name="inventory-apple-health-reason" maxlength="300" rows="3">${esc(draft['inventory-apple-health-reason'] || '')}</textarea>`, true)}</form>`,
+        button('取消', 'inventory-close') + '<button type="submit" class="button primary" form="inventory-apple-health-form">保存状态</button>', key);
+    } else if (action === 'inventory-health') {
       const asset = assetById(id),
         health = node.dataset.health;
       confirmInventoryChange(
@@ -4797,6 +4879,23 @@
     else if (form.id === 'inventory-use-form') submitUse(form);
     else if (form.id === 'inventory-mailbox-platform-form') submitMailboxPlatform(form);
     else if (form.id === 'inventory-asset-form') saveAsset(form);
+    else if (form.id === 'inventory-apple-health-form') {
+      const d = api.readForm(form), asset = assetById(d['inventory-apple-health-id']);
+      const health = d['inventory-apple-health-state'], reason = String(d['inventory-apple-health-reason'] || '').trim();
+      if (!asset || asset.type !== 'apple' || Number(d['inventory-apple-health-version']) !== asset.version)
+        api.notify('苹果 ID 资料已变化，请重新打开核对');
+      else if (health === (asset.health || 'normal'))
+        api.setError('inventory-apple-health-state', '请选择要变更的状态', form);
+      else if (!reason || reason.length > 300 || !['dead', 'unlocking', 'normal'].includes(health))
+        api.setError('inventory-apple-health-reason', '请填写变更原因（最多 300 字）', form);
+      else confirmInventoryChange('确认账号状态变化', `确认将 ${asset.email} 标记为${({ normal: '正常', dead: '死号', unlocking: '解封中' })[health]}。`, () => {
+        asset.health = health;
+        asset.healthChangedAt = inventoryNow();
+        log(asset, '健康状态变化', health);
+        asset.inventoryHistory.at(-1).reason = reason;
+        return () => { finishDrawer(form.dataset.inventoryDraft); api.render(); };
+      });
+    }
     else if (form.id === claudeHistoryKey + '-form') submitClaudeHistory(form);
     else if (form.id === 'inventory-import-form') submitImport(form);
     else if (form.id === 'inventory-quick-form') {
@@ -5249,6 +5348,7 @@
     getLocalInventoryState() {
       return localInventoryState;
     },
+    inventoryVersion: () => localInventoryVersion,
     saveAppleRelay(mutate, action) {
       return persistInventory(action, () => {
         if (mutate(appleRelayState) === false) return;
@@ -5290,6 +5390,10 @@
     importAppleIds() {
       initialize();
       importEditor('apple');
+    },
+    renderAppleImports() {
+      const rows = scopedImportRecords('apple');
+      return importList('apple', '', api.pageRows(rows)) + api.pagination(rows.length);
     },
     listAvailableAccounts(product = 'GPT') {
       initialize();
@@ -5486,7 +5590,11 @@
     onChange,
     onInput,
     preserveDraft: saveDrafts,
-    afterRender() {
+    onDataChanges(scopes) {
+      if (scopes.some(scope => ['inventory', 'tools/mailbox-pool'].includes(scope))) return refreshGooglePool(true);
+    },
+    afterRender({ routeChanged } = {}) {
+      if (routeChanged) void refreshGooglePool();
       const form = document.querySelector('form[data-inventory-draft]');
       const saved = form && api.state.drafts.get(form.dataset.inventoryDraft);
       if (saved)

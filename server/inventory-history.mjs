@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
+import { toV2DateTimeInput } from '../modules/time/dateTime.ts';
 
 const claimChanges = new Set([
   'status',
@@ -177,4 +178,26 @@ export function checkInventoryHistory(previous, next, { trustedAccountLifecycle 
     )
       return '原有注册记录及已确认结果必须保留';
   }
+}
+
+export function checkAppleIdHealthChanges(previous, next, action, actor, now = new Date()) {
+  const prior = new Map(list(previous?.mailboxes).filter(row => row.type === 'apple').map(row => [row.id, row]));
+  for (const row of list(next?.mailboxes)) {
+    if (row.type !== 'apple') continue;
+    const before = prior.get(row.id), state = row.health || 'normal';
+    if (!before || state === (before.health || 'normal')) continue;
+    const history = list(row.inventoryHistory), previousHistory = list(before.inventoryHistory);
+    const event = history.at(-1);
+    if (action !== 'inventory_health_change' || !['normal', 'dead', 'unlocking'].includes(state) ||
+        !hasId(event) || event.action !== '健康状态变化' || event.detail !== state || typeof event.reason !== 'string' ||
+        !event.reason.trim() || event.reason.length > 300 || history.length !== previousHistory.length + 1 ||
+        previousHistory.some((entry, index) => entry?.id === event.id || !isDeepStrictEqual(entry, history[index])))
+      return '请通过苹果 ID 状态操作填写原因并保存';
+    if (actor?.id && actor.name) {
+      const time = toV2DateTimeInput(now).replace('T', ' ');
+      Object.assign(event, { actorId: actor.id, actor: actor.name, time, reason: event.reason.trim() });
+      Object.assign(row, { healthChangedAt: time, lastOperatedById: actor.id, lastOperatedBy: actor.name, lastOperatedAt: time });
+    }
+  }
+  return '';
 }

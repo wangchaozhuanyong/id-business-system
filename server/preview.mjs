@@ -36,6 +36,7 @@ import {
 } from './card-management.mjs';
 import { claudeGoogleSubscriptionRoutes, createClaudeGoogleSubscriptionsHandler } from './claude-google-subscriptions.mjs';
 import { createSubscriptionHandler, subscriptionRoutes } from './subscription-management.mjs';
+import { createCustomerQueryHandler, customerQueryRoutes } from './customer-query.mjs';
 import { createRechargeCodeHandler, rechargeCodesRoute } from './recharge-code-requests.mjs';
 import { createRechargeOrderSync, orderSyncRoute } from './recharge-order-sync.mjs';
 import { createRechargeActivity, rechargeActivityDomain, rechargeActivityRoute } from './recharge-activity.mjs';
@@ -78,6 +79,8 @@ const files = new Map([
     'finance-collection',
     'title-help',
     'inventory-prototype',
+    'mailbox-delivery',
+    'customer-query',
     'apple-relay-prototype',
     'apple-balance-prototype',
     'commerce-prototype',
@@ -262,7 +265,7 @@ export async function startPreview(
   let financeCollection = null, handleFinanceCollection = null, handleOrderExpense = null;
   let handleOrderAuxiliary, handleCardManagement, handleClaudeGoogleSubscriptions, handleSubscriptions, handleRechargeCodes, orderSync;
   let rechargeActivity, rechargeEvents;
-  let handleEmployeeStatistics;
+  let handleEmployeeStatistics, handleCustomerQuery;
   let systemMonitoring, monitoringSources, handleMonitoring, handleProbeReport, handleReadiness;
   const orderRechargeClient = createOrderRechargeClient(rechargeConfig);
   const gateways = new Map();
@@ -348,6 +351,7 @@ export async function startPreview(
       handleClaudeGoogleSubscriptions = createClaudeGoogleSubscriptionsHandler({ store, publicOrigin: secureOrigin });
       handleSubscriptions = createSubscriptionHandler({ store, publicOrigin: secureOrigin,
         readOwners: () => auth?.orderOwners() || [] });
+      handleCustomerQuery = createCustomerQueryHandler({ store, publicOrigin: secureOrigin });
       handleEmployeeStatistics = createEmployeeStatisticsHandler({
         store, client: orderRechargeClient, publicOrigin: secureOrigin, readEmployees: () => auth.orderOwners()
       });
@@ -376,6 +380,7 @@ export async function startPreview(
         config: relayConfig,
         publicOrigin: secureOrigin,
         readInventory: () => store.load('inventory').data,
+        deliveryJournal: store.relayDeliveryJournal,
         subscribeChanges: listener => store.subscribeChanges(listener),
         planIntake: (input) => store.planAppleRelayIntake(input),
         savePrimaries: (rows, actor, aliases, registration) =>
@@ -627,6 +632,10 @@ export async function startPreview(
       response.setHeader('Cache-Control', 'private, no-store');
       if (!actor || !canManage) return forbidden();
       return void handleSubscriptions(request, response, route, actor);
+    }
+    if (store && customerQueryRoutes.has(route)) {
+      if (!actor || !canManage) return forbidden();
+      return void handleCustomerQuery(request, response, route, actor);
     }
     if (store && route === employeeStatisticsRoute)
       return void handleEmployeeStatistics(request, response, actor);

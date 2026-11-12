@@ -40,6 +40,7 @@ const icons = {
   close: '<path d="m6 6 12 12M6 18 18 6"/>',
   copy: '<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H3v13h5"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7h.01"/>',
+  alert: '<path d="M10.3 4.5a2 2 0 0 1 3.4 0l8 13.5a2 2 0 0 1-1.7 3H4a2 2 0 0 1-1.7-3zM12 9v4m0 4h.01"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l4 2"/>',
   refresh: '<path d="M20 7v5h-5M20 12a8 8 0 1 0-2 5"/>',
   card: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20M6 15h4"/>',
@@ -189,7 +190,8 @@ const orderSubmissionViews = [
   ['Claude', 'workspace/order/claude'],
   ['Gemini', 'workspace/order/gemini'],
   ['Grok', 'workspace/order/grok'],
-  ['订单补全', 'workspace/order-completion']
+  ['订单补全', 'workspace/order-completion'],
+  ['客户查询', 'workspace/customer-query']
 ];
 const orderSubmissionRoute = (route) => route === 'workspace/order' ? orderSubmissionViews[0][1]
   : orderSubmissionViews.find(([, path]) => path === route)?.[1];
@@ -1029,6 +1031,9 @@ function table(columns, rows, scope = '', tableId = 'default', emptyState, selec
   const identity = ['email', 'account', 'name', 'orderNo', 'title', 'id']
     .map(key => dataColumns.find(column => column.id === key)).find(Boolean) || dataColumns[0];
   const preferred = tableId === '苹果ID余额' ? ['balance', 'status', 'country']
+    : tableId === 'commerce-subscription-cards' ? ['availability', 'state', 'expiry']
+    : tableId === 'customer-query-search' ? ['wechat', 'id', 'status']
+    : /^customer-query-(accounts|orders)$/.test(tableId) ? ['status', 'assets', 'expiry']
     : ['status', 'use', 'subscriptionStatus', 'plan', 'balance', 'saleAmount', 'amount', 'owner', 'ownerName', 'currentCustomer', 'customer', 'expiry'];
   const summaries = [...new Set([...dataColumns.filter(column => column.mobileSummary).map(column => column.id),
     ...preferred.filter(key => dataColumns.some(column => column.id === key))])];

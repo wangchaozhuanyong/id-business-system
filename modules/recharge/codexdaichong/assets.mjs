@@ -1214,13 +1214,9 @@ function adaptWorkspaceRecharge(source) {
   <aside class="workspace-recharge-progress" aria-labelledby="workspace-progress-title">
     <div class="workspace-progress-heading">
       <h2 id="workspace-progress-title">充值进度</h2>
+      <p id="workspace-progress-help" hidden>提交后，这里会显示当前处理阶段和结果。</p>
       <span id="flowStatusBadge" class="flow-badge pending" role="status">待开始</span>
     </div>
-    <div class="workspace-progress-idle">
-      <p>提交后，这里会显示当前处理阶段和结果。</p>
-      <p>提交结果待核对，请用原兑换码查询。</p>
-    </div>
-    ${taskProgress}
     <section class="workspace-log" aria-labelledby="workspace-log-title">
       <div class="workspace-log-toolbar">
         <h3 id="workspace-log-title">实时操作记录</h3>
@@ -1230,6 +1226,10 @@ function adaptWorkspaceRecharge(source) {
           <button type="button" id="workspaceLogRefresh" class="btn-secondary" disabled>刷新</button>
         </div>
       </div>
+      <div class="workspace-progress-idle" role="status">
+        <p>提交结果待核对，请用原兑换码查询。</p>
+      </div>
+      ${taskProgress}
       <div id="workspaceLogViewport" class="workspace-log-viewport" tabindex="0" role="region" aria-label="本次充值运行日志">
         <p id="workspaceLogEmpty" class="workspace-log-empty">验证兑换码后，这里会记录本次操作。</p>
         <ol id="workspaceLogEntries" class="workspace-log-entries" role="log" aria-label="本次操作记录" aria-live="polite" aria-relevant="additions"></ol>
