@@ -1,7 +1,7 @@
 import { parseBitBrowserProxyInput, bitBrowserProxySettings } from '/assets/bitbrowser/proxy-input.mjs';
 import { testBitBrowserProxy } from '/assets/bitbrowser/proxy-test.mjs';
 import { bitBrowserCountryOptions, resolveBitBrowserCountry, bitBrowserCountryName as countryName } from '/assets/bitbrowser/countries.mjs';
-const kinds = { mobile: '移动 IP', dynamic_residential: '动态住宅', static_residential: '静态住宅' };
+import { proxyTypeLabels as kinds, isProxyType } from '/assets/bitbrowser/proxy-types.mjs';
 const protocolName = value => ({ socks5: 'SOCKS5', http: 'HTTP', https: 'HTTPS' })[value] || '自动识别';
 const fields = ['name', 'country', 'kind', 'mode', 'protocol'];
 export function initializeExecutionProxies({ get, drafts, onChange, locked, onUse, connection }) {
@@ -12,6 +12,9 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
   get = id => editor.querySelector(`#${id}`) || sourceGet(id);
   const message = get('bit-proxy-result'), saveMessage = get('bit-ip-save-result');
   const search = get('bit-ip-search'), filter = get('bit-ip-filter'), sort = get('bit-ip-sort');
+  const typeOptions = () => Object.entries(kinds).map(([value, label]) => new Option(label, value));
+  get('bit-ip-kind').replaceChildren(...typeOptions());
+  filter.append(...typeOptions());
   const pagination = get('bit-ip-pagination');
   const { defaultPageSize, pageSizes } = window.IDPagination;
   let pageSize = defaultPageSize, renderedPagination;
@@ -103,7 +106,7 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
       }
       if (method !== 'POST' && (!Number.isSafeInteger(result.version) || !Array.isArray(result.items) ||
         !result.items.every(item => typeof item.id === 'string' && typeof item.name === 'string' && typeof item.endpoint === 'string' &&
-          /^(?:[A-Z]{2})?$/.test(item.countryCode) && Object.hasOwn(kinds, item.kind)) ||
+          /^(?:[A-Z]{2})?$/.test(item.countryCode) && isProxyType(item.kind)) ||
         (method === 'PUT' && !result.items.some(item => item.id === result.savedId)))) throw new Error('IP 列表返回不完整，请刷新重试；输入已保留。');
       return result;
     } finally { pending.delete(controller); }

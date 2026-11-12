@@ -5,6 +5,7 @@ import { signRechargeAssertion } from '../assertion.mjs';
 import { loadCodexdaichongAssets } from './assets.mjs';
 import { probeCodexdaichongRuntime } from './runtime-health.mjs';
 import { normalizeRechargeProxyInput } from './proxy-input.mjs';
+import { isProxyType } from '../bitbrowser/proxy-types.mjs';
 import { isPlanCardRejection, readsRechargePresentation, rechargeBrowserPresentation, rechargeTaskStepHistory } from './progress-presentation.mjs';
 
 export const CODEXDAICHONG_PREFIX = '/integrations/codexdaichong';
@@ -363,10 +364,12 @@ export function createCodexdaichongGateway({
           return respond(res, 400, '代理资料格式不正确');
         if (typeof data.countryCode !== 'string' || !data.countryCode)
           return respond(res, 400, '请选择代理国家');
+        if (data.proxyType !== undefined && !isProxyType(data.proxyType))
+          return respond(res, 400, '请选择代理类型');
         let batch;
         try { batch = normalizeRechargeProxyInput(data.proxies ?? data.proxy_url ?? data.proxy ?? ''); }
         catch (error) { return respond(res, 400, error.message); }
-        bufferedBody = Buffer.from(JSON.stringify({ proxies: batch.proxies, countryCode: data.countryCode }));
+        bufferedBody = Buffer.from(JSON.stringify({ proxies: batch.proxies, countryCode: data.countryCode, proxyType: data.proxyType }));
         extraHeaders['content-type'] = 'application/json';
         extraHeaders['content-length'] = String(bufferedBody.length);
       } catch { return respond(res, 400, '代理资料读取失败，请重试'); }

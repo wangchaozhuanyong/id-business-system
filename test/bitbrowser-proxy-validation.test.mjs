@@ -16,6 +16,11 @@ test('dynamic extraction supports separate protocol and keeps query credentials 
   assert.equal(proxy.protocol, 'socks5');
   assert(!JSON.stringify(summarizeBitBrowserProxies([proxy])).includes('test-extraction-key'));
 });
+test('dedicated residential IP keeps its classification independently of protocol and connection mode', () => {
+  const { proxy } = validateBitBrowserProxyWrite({ ...input, kind: 'dedicated_static_residential' });
+  assert.deepEqual([proxy.kind, proxy.mode, proxy.protocol], ['dedicated_static_residential', 'static', 'socks5']);
+  assert.equal(summarizeBitBrowserProxies([proxy])[0].kind, 'dedicated_static_residential');
+});
 test('invalid proxy metadata, malformed URL and injected fields are rejected', () => {
   for (const changes of [{ countryCode: 'China' }, { kind: 'unknown' }, { link: 'not-a-link' }, { mode: 'direct' }, { version: -1 },
     { link: 'socks5://proxy.example.test' }, { link: 'http://user@proxy.example.test:8080' },

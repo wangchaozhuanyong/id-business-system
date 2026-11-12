@@ -30,7 +30,7 @@ STOCK_PATH = '/api/admin/cdks/returns/stock'
 ROUTING_PATH = '/api/admin/recharge-routing'
 PROXY_IMPORT_PATH = '/api/admin/proxies'
 CARD_STOP_PATH = '/api/admin/cards/stop-use'
-PROXY_COUNTRY_PATH = re.compile(ROUTING_PATH + r'/proxies/[1-9][0-9]{0,15}/country')
+PROXY_LABEL_PATH = re.compile(ROUTING_PATH + r'/proxies/[1-9][0-9]{0,15}/(?:country|type)')
 ALLOWED_GETS = RETURN_PATHS | {STOCK_PATH, '/api/public/runtime', '/api/admin/session', '/api/admin/cards', ROUTING_PATH}
 PRIVATE_NETWORKS = tuple(ipaddress.ip_network(value) for value in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'))
 
@@ -71,7 +71,7 @@ def http_json(origin, path, headers=None, method='GET', body=None):
         raise CanaryError('read_endpoint_rejected')
     allowed = (
         method == 'GET' and path in ALLOWED_GETS
-        or method == 'PUT' and (path == ROUTING_PATH or PROXY_COUNTRY_PATH.fullmatch(path))
+        or method == 'PUT' and (path == ROUTING_PATH or PROXY_LABEL_PATH.fullmatch(path))
         or method == 'POST' and (path in RETURN_PATHS or path in (PROXY_IMPORT_PATH, CARD_STOP_PATH))
     )
     if not allowed:
@@ -529,9 +529,45 @@ class Canary:
             config.get('proxyLabels') != [{'proxyId': proxy_id, 'countryCode': 'MX'}] or config.get('checks') != []):
             raise CanaryError('routing_migration_not_idempotent')
         self.checks.append('routing_persistence_version_audit_and_migration_idempotency')
+        self.check_proxy_types(routing_request, privileged, customer, proxy_id)
         self.check_code_returns(mysql, native, adapter_url, privileged, sealed)
         self.source_check(adapter, 'source_203_adapter')
         self.checks.append('no_payment_or_activation_requests')
+
+    def check_proxy_types(self, request, admin, customer, legacy_id):
+        batch = {
+            'proxies': ['http://proxy-one.example.test:8080', 'http://proxy-two.example.test:8080'],
+            'countryCode': 'PH',
+            'proxyType': 'dedicated_static_residential',
+        }
+        status, _ = request(PROXY_IMPORT_PATH, admin, 'POST', {**batch, 'proxyType': 'unknown'})
+        if status != 400:
+            raise CanaryError('invalid_proxy_type_accepted')
+        status, imported = request(PROXY_IMPORT_PATH, admin, 'POST', batch)
+        ids = imported.get('ids', [])
+        if (status != 200 or imported.get('added') != 2 or len(ids) != 2 or ids[0] == ids[1] or
+                imported.get('proxyType') != batch['proxyType']):
+            raise CanaryError('typed_proxy_batch_import_failed')
+        status, duplicate = request(PROXY_IMPORT_PATH, admin, 'POST', {**batch, 'proxyType': 'mobile'})
+        if status != 200 or duplicate.get('added') != 0 or duplicate.get('skipped') != 2:
+            raise CanaryError('typed_proxy_duplicates_not_skipped')
+        path = ROUTING_PATH + f'/proxies/{legacy_id}/type'
+        update = {'proxyType': 'mobile', 'expectedProxyType': None}
+        status, _ = request(path, customer, 'PUT', update)
+        if status != 403:
+            raise CanaryError('customer_proxy_type_write_not_denied')
+        status, changed = request(path, admin, 'PUT', update)
+        if status != 200 or changed.get('proxyId') != legacy_id or changed.get('proxyType') != 'mobile':
+            raise CanaryError('legacy_proxy_type_edit_failed')
+        status, _ = request(path, admin, 'PUT', {**update, 'proxyType': 'static_residential'})
+        if status != 409:
+            raise CanaryError('stale_proxy_type_edit_accepted')
+        status, routing = request(ROUTING_PATH, admin)
+        expected = {legacy_id: 'mobile', **{proxy_id: batch['proxyType'] for proxy_id in ids}}
+        saved = {row['proxyId']: row['proxyType'] for row in routing.get('proxyTypes', [])}
+        if status != 200 or saved != expected:
+            raise CanaryError('proxy_type_readback_mismatch')
+        self.checks.append('proxy_type_batch_import_and_edit')
 
     def cleanup(self):
         clean = True

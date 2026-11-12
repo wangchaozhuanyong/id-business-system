@@ -408,6 +408,7 @@
         'hcaptcha_captcha_platform_timeout', 'hcaptcha_vlm_base_url', 'hcaptcha_vlm_model',
         'hcaptcha_vlm_timeout', 'hcaptcha_solver_timeout', 'hcaptcha_cdp_port'],
       region: ['region_selector'],
+      proxyImport: ['proxy_add_country', 'proxy_add_type'],
       checkout: ['checkout_plan_type', 'checkout_plan_name', 'checkout_region_selector', 'checkout_log_autoscroll'],
       usage: ['orbitcard_usage_keyword', 'orbitcard_usage_plan', 'orbitcard_usage_card_status', 'orbitcard_usage_recharge_status'],
       strategy: ['orbitcard_strategy_product_code', ...['plus', 'pro100', 'pro200', 'pro500']
@@ -468,7 +469,7 @@
         return result;
       };
     };
-    for (const name of ['applySystemConfigFromData', 'loadOrbitcardConfig', 'loadRegionConfig',
+    for (const name of ['applySystemConfigFromData', 'loadOrbitcardConfig', 'loadRegionConfig', 'loadProxyPool',
       'loadCheckoutPlans', 'loadCheckoutDebugPage', 'loadOrbitcardProductStrategy', 'showAddressForm'])
       wrapRestore(name);
 

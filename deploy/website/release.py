@@ -19,7 +19,8 @@ ROOT = Path(__file__).resolve().parents[2]
 OUTPUT = ROOT / ".runtime/website-release"
 SHA = re.compile(r"[a-f0-9]{40}\Z")
 SHA256 = re.compile(r"[a-f0-9]{64}\Z")
-CORE_PATHS = ("deploy/recharge-core", "deploy/caddy", "modules/recharge/codexdaichong", "package.json")
+PROXY_TYPE_CATALOG = "modules/recharge/bitbrowser/proxy-types.mjs"
+CORE_PATHS = ("deploy/recharge-core", "deploy/caddy", "modules/recharge/codexdaichong", "package.json", PROXY_TYPE_CATALOG)
 ADAPTER_SCOPE = {
     "modules/recharge/codexdaichong/gateway.mjs", "modules/recharge/codexdaichong/local-gateway.mjs",
     "modules/recharge/codexdaichong/native-adapter.mjs", "modules/recharge/codexdaichong/runtime.mjs",
@@ -45,7 +46,14 @@ NATIVE_CORE_SCOPE = NATIVE_PATCH_FILES | {
     "modules/recharge/codexdaichong/prepare.mjs", "modules/recharge/codexdaichong/progress-presentation.mjs",
     "modules/recharge/codexdaichong/shell.css", "modules/recharge/codexdaichong/shell.js",
 }
-NATIVE_RELEASE_FILES = tuple(sorted(NATIVE_CORE_SCOPE | set(ADAPTER_FILES) | {
+PROXY_TYPE_CORE_SCOPE = {
+    PROXY_TYPE_CATALOG, "deploy/recharge-core/canary.py",
+    "modules/recharge/codexdaichong/assets.mjs", "modules/recharge/codexdaichong/gateway.mjs",
+    "modules/recharge/codexdaichong/native-routing.mjs", "modules/recharge/codexdaichong/native-routing.test.mjs",
+    "modules/recharge/codexdaichong/routing-admin.js",
+    "modules/recharge/codexdaichong/shell.css", "modules/recharge/codexdaichong/shell.js",
+}
+NATIVE_RELEASE_FILES = tuple(sorted(NATIVE_CORE_SCOPE | PROXY_TYPE_CORE_SCOPE | set(ADAPTER_FILES) | {
     "deploy/recharge-core/Dockerfile", "deploy/recharge-core/entry.mjs", "deploy/recharge-core/release-gate.py",
     "deploy/recharge-core/snapshot.py", "deploy/recharge-core/seal-backup.mjs",
     "deploy/website/recharge_core.py", "deploy/website/remote.py", "deploy/website/vendure_admission.py",
@@ -122,7 +130,8 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False):
     require_ancestor(base, sha)
     changed = set(git("diff", "--name-only", base, sha, "--", *CORE_PATHS).splitlines())
     if include_core:
-        if include_adapter or not NATIVE_PATCH_FILES <= changed <= NATIVE_CORE_SCOPE:
+        approved_patches = NATIVE_PATCH_FILES <= changed <= NATIVE_CORE_SCOPE
+        if include_adapter or (not approved_patches and changed != PROXY_TYPE_CORE_SCOPE):
             raise RuntimeError("recharge_native_release_scope_mismatch")
     elif include_adapter:
         if not changed <= ADAPTER_SCOPE or not changed.intersection(ADAPTER_RUNTIME_FILES):

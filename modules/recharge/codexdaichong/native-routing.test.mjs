@@ -12,12 +12,17 @@ function fixture({ rows = [], countries = ['PH'], onProbe, failures = [] } = {})
   const labelAudit = [];
   const calls = [];
   const warnings = [];
+  let proxyTypes = new Map();
   const fail = name => { if (failures.includes(name)) throw new Error('private database credentials'); };
   let substitutions = 0;
   const store = {
     async runQuery(sql, values) {
       if (sql.startsWith('SELECT version')) { fail('policy'); return [{ version, plans_json: plans, audit_json: audit }]; }
       if (sql.includes('FROM id_recharge_proxy_checks')) { fail('history-read'); return [...checks.values()]; }
+      if (sql.includes('JOIN app_config c ON')) {
+        fail('type-read');
+        return rows.filter(row => proxyTypes.has(row.id)).map(row => ({ id: row.id, proxy_type: proxyTypes.get(row.id) }));
+      }
       if (sql.includes('FROM proxy_assets p LEFT JOIN id_recharge_proxy_country_labels')) {
         if (sql.includes('WHERE p.id')) { fail('proxy-read'); return rows.filter(row => row.id === values[0]); }
         fail('pool-read');
@@ -46,11 +51,16 @@ function fixture({ rows = [], countries = ['PH'], onProbe, failures = [] } = {})
     async updateProxyAssetCheck(id, value) { fail('status-write'); calls.push(['check', id, value.ok]); },
     async withTransaction(operation) {
       const draft = structuredClone(rows);
+      const draftTypes = new Map(proxyTypes);
       const events = [];
       const result = await operation({
         async query(sql, [value]) {
+          if (sql.startsWith('SELECT config_value FROM app_config')) {
+            const current = draftTypes.get(Number(value.split(':').at(-1)));
+            return [current ? [{ config_value: current }] : []];
+          }
           assert.match(sql, /FOR UPDATE$/);
-          return [draft.filter(row => sql.includes('WHERE p.id') ? row.id === value :
+          return [draft.filter(row => /WHERE (?:p\.)?id =/.test(sql) ? row.id === value :
             createHash('sha256').update(row.proxy_url).digest('hex') === value)];
         },
         async execute(sql, values) {
@@ -58,6 +68,13 @@ function fixture({ rows = [], countries = ['PH'], onProbe, failures = [] } = {})
             const id = Math.max(0, ...draft.map(row => row.id)) + 1;
             draft.push({ id, proxy_url: values[0], is_active: 1 });
             return [{ insertId: id }];
+          }
+          if (sql.startsWith('INSERT INTO app_config')) {
+            fail('type-write');
+            const [key, type] = values;
+            assert.match(key, /^id_recharge_proxy_type:[1-9]\d*$/);
+            draftTypes.set(Number(key.split(':').at(-1)), type);
+            return [{ affectedRows: 1 }];
           }
           assert.match(sql, /^INSERT INTO id_recharge_proxy_country_labels/);
           fail('label-write');
@@ -68,6 +85,7 @@ function fixture({ rows = [], countries = ['PH'], onProbe, failures = [] } = {})
         }
       });
       rows.splice(0, rows.length, ...draft);
+      proxyTypes = draftTypes;
       labelAudit.push(...events);
       return result;
     }
@@ -206,6 +224,37 @@ test('editing an existing label detects stale edits and never writes exit observ
   assert.equal((await edit(1, 'MX', 'PH')).statusCode, 200);
   assert.deepEqual(f.labelAudit.map(event => [event.previousCountryCode, event.countryCode]), [[null, 'PH'], ['PH', 'MX']]);
   assert.equal(f.checks.size, 0);
+});
+test('proxy types apply to the entire new batch and survive relabeling without changing route selection', async () => {
+  const legacy = proxy(1, 1, 'PH');
+  const f = fixture({ rows: [legacy] });
+  const proxies = [proxy(2).proxy_url, proxy(3).proxy_url, legacy.proxy_url];
+  const batch = { proxies, countryCode: 'PH', proxyType: 'dedicated_static_residential' };
+  const invalid = await f.request('POST', '/proxies', { ...batch, proxyType: 'socks5' });
+  assert.equal(invalid.statusCode, 400);
+  assert.deepEqual(f.rows, [legacy]);
+  const imported = (await f.request('POST', '/proxies', batch)).payload;
+  assert.deepEqual([imported.added, imported.skipped, imported.proxyType], [2, 1, batch.proxyType]);
+  const expected = [2, 3].map(proxyId => ({ proxyId, proxyType: batch.proxyType }));
+  assert.deepEqual((await f.routing.view()).proxyTypes, expected);
+  const repeated = (await f.request('POST', '/proxies', { ...batch, proxyType: 'mobile' })).payload;
+  assert.equal(repeated.skipped, 3);
+  assert.deepEqual((await f.routing.view()).proxyTypes, expected);
+  assert.equal((await f.routing.resolve('plus')).proxyId, 1);
+
+  const edit = (id, proxyType, expectedProxyType) => f.request('PUT', '/proxies/' + id + '/type', { proxyType, expectedProxyType });
+  assert.equal((await edit(99, 'mobile', null)).statusCode, 404);
+  assert.equal((await edit(1, 'mobile', undefined)).statusCode, 400);
+  assert.deepEqual((await edit(1, 'mobile', null)).payload, { success: true, proxyId: 1, proxyType: 'mobile' });
+  assert.equal((await edit(1, 'static_residential', null)).statusCode, 409);
+  assert.equal((await edit(1, 'mobile', null)).statusCode, 200);
+  await f.request('PUT', '/proxies/1/country', { countryCode: 'EG', expectedCountryCode: 'PH' });
+  assert.deepEqual((await f.routing.view()).proxyTypes, [{ proxyId: 1, proxyType: 'mobile' }, ...expected]);
+
+  const failed = fixture({ failures: ['type-write'] });
+  assert.equal((await failed.request('POST', '/proxies', batch)).statusCode, 503);
+  assert.deepEqual(failed.rows, []);
+  assert.deepEqual(failed.labelAudit, []);
 });
 test('selected sticky proxy is resolved once and exactly reused immediately before the worker starts', async () => {
   const f = fixture({ rows: [proxy(1)], countries: ['EG'] });

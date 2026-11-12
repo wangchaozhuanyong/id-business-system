@@ -86,7 +86,7 @@
   }
   const frameDraftScopes = new Set(['admin', 'workspace', 'public', 'bit-local']);
   const rechargeDraftFields = new Set((
-    'orbitcard_live_management orbitcard_base_url card_pool_allowed_plans card_pool_plan_editor ' +
+    'orbitcard_live_management orbitcard_base_url card_pool_allowed_plans card_pool_plan_editor proxy_add_country proxy_add_type ' +
     'max_concurrent_activations maintenance_mode telegram_admin_chat_id telegram_group_chat_id ' +
     'telegram_notify_admin telegram_notify_group telegram_on_success telegram_on_failure ' +
     'telegram_on_card_pool_empty hcaptcha_enabled hcaptcha_no_vlm hcaptcha_captcha_platform_api_url ' +
@@ -101,7 +101,8 @@
   ).split(' '));
   function frameDraftFieldAllowed(scope, key) {
     if (scope === 'admin') return rechargeDraftFields.has(key) ||
-      /^address\/(?:new|[1-9]\d{0,15})\/addr_(?:line1|city|state|postal_code|country)$/.test(key);
+      /^address\/(?:new|[1-9]\d{0,15})\/addr_(?:line1|city|state|postal_code|country)$/.test(key) ||
+      /^proxy-type\/[1-9]\d{0,15}$/.test(key);
     if (scope === 'bit-local') return ['workspace', 'bit-execution-proxy', 'ip-search', 'ip-filter', 'ip-sort', 'ip-page', 'ip-page-size'].includes(key) ||
       /^ip-draft\/[a-zA-Z0-9_-]{1,80}\/(?:name|country|kind|mode|protocol|version)$/.test(key) ||
       /^profile\/[a-zA-Z0-9_-]{1,80}\/(?:version|bit-connection-name|bit-account-name|bit-local-url|bit-core|bit-proxy-mode|bit-proxy-type|bit-proxy-country|bit-proxy-host|bit-proxy-port|bit-session-wait|bit-session-retries|groupPreference|tagPreference)$/.test(key);

@@ -241,11 +241,12 @@ test('proxy import normalizes a complete batch before forwarding and rejects inv
     method: 'POST', headers: { Origin: from, 'content-type': type, 'x-test-role': role },
     body: typeof body === 'string' ? body : JSON.stringify(body)
   });
-  assert.equal((await send({ proxies: [raw, canonical], countryCode: 'PH' })).status, 200);
-  assert.deepEqual(received, [{ proxies: [canonical], countryCode: 'PH' }]);
+  assert.equal((await send({ proxies: [raw, canonical], countryCode: 'PH', proxyType: 'mobile' })).status, 200);
+  assert.deepEqual(received, [{ proxies: [canonical], countryCode: 'PH', proxyType: 'mobile' }]);
   assert.equal((await send({ proxy_url: raw, countryCode: 'MX' })).status, 200, '保留原单条别名兼容');
   assert.deepEqual(received[1], { proxies: [canonical], countryCode: 'MX' });
   const before = received.length;
+  assert.equal((await send({ proxies: [raw], countryCode: 'PH', proxyType: 'socks5' })).status, 400);
   const missing = await send({ proxies: [raw] });
   assert.equal(missing.status, 400);
   assert.equal((await missing.json()).message, '请选择代理国家');
