@@ -51,9 +51,14 @@
       return;
     }
     if (!revisionScopes.has(resource) || !Number.isSafeInteger(result?.version)) return;
-    const version = String(result.version), previous = observedVersions.get(resource);
-    if (previous === undefined || !newer(previous, version)) observedVersions.set(resource, version);
     const expected = serverVersions.get(resource);
+    // External source receipts are opaque revisions, not document counters.
+    // A numeric HTTP result cannot acknowledge or invalidate that revision:
+    // the change dispatcher acknowledges it only after all affected reads pass.
+    if (expected !== undefined && !/^\d+$/.test(expected)) return;
+    const version = String(result.version), previous = observedVersions.get(resource);
+    if (previous === undefined || !/^\d+$/.test(previous) || !newer(previous, version))
+      observedVersions.set(resource, version);
     if (expected !== undefined && newer(expected, observedVersions.get(resource))) publishChanges([resource]);
   }
   let queryEpoch = 0;
@@ -152,7 +157,7 @@
       if (!current()) return;
       const controller = new AbortController();
       connection = controller;
-      const started = Date.now();
+      let readyAt;
       const connecting = window.setTimeout(() => controller.abort(), 45_000);
       let reader;
       try {
@@ -175,7 +180,13 @@
         const decoder = new TextDecoder();
         let buffer = '', version = -1;
         while (current()) {
-          const { done, value } = await reader.read();
+          // The server sends a heartbeat every 20 seconds. A silent transport
+          // must reconnect; healthy heartbeats never trigger a mailbox read.
+          const idleDeadline = window.setTimeout(() => controller.abort(), 60_000);
+          let chunk;
+          try { chunk = await reader.read(); }
+          finally { window.clearTimeout(idleDeadline); }
+          const { done, value } = chunk;
           if (done) throw new Error('邮件更新连接已断开');
           buffer += decoder.decode(value, { stream: true });
           buffer = buffer.replace(/\r\n/g, '\n');
@@ -190,12 +201,13 @@
               data.reason === 'authorization' ? '查询授权已变化，请重新查询' : '邮件更新连接已断开'
             ), { status: data.reason === 'authorization' ? 403 : 503 });
             if (!Number.isSafeInteger(data.version) || data.version < 0) throw new Error('邮件更新通知格式无效');
+            readyAt ??= Date.now();
             if (data.version > version) { version = data.version; onChange?.(); }
           }
         }
       } catch (error) {
         if (!current()) return;
-        if (Date.now() - started > 30_000) failures = 0;
+        if (readyAt !== undefined && Date.now() - readyAt > 30_000) failures = 0;
         const terminal = [400, 401, 403, 404, 409, 415].includes(error.status);
         if (terminal || failures >= 3) { stop(); onError?.(error); return; }
         const delay = Math.max([1000, 3000, 10_000][failures++], Math.min(300, error.retryAfter || 0) * 1000);

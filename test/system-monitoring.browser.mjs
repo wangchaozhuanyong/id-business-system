@@ -275,7 +275,11 @@ test('监控仅在新版本时更新，保留抽屉和失败内容，无变更�
       return Promise.resolve(new Response(new ReadableStream({ start(controller) {
         window.monitoringStream = controller;
         controller.enqueue(new TextEncoder().encode(frame('1', 'snapshot')));
-        options.signal.addEventListener('abort', () => controller.error(new DOMException('aborted', 'AbortError')), { once: true });
+        const heartbeat = setInterval(() => controller.enqueue(new TextEncoder().encode(': heartbeat\n\n')), 20_000);
+        options.signal.addEventListener('abort', () => {
+          clearInterval(heartbeat);
+          controller.error(new DOMException('aborted', 'AbortError'));
+        }, { once: true });
       } }), { headers: { 'content-type': 'text/event-stream' } }));
     };
   });
@@ -284,7 +288,7 @@ test('监控仅在新版本时更新，保留抽屉和失败内容，无变更�
   await page.locator('[data-monitor-check="backup"]').waitFor();
   await page.waitForFunction(() => window.monitoringStream && !window.IDChangeSync.status().refreshing);
   const initial = f.reads.length;
-  await page.clock.fastForward(120_000);
+  await page.clock.runFor(120_000);
   assert.equal(f.reads.length, initial, 'no periodic business read');
   f.setChecks(checkFixtures().map(row => row.code === 'disk_space'
     ? { ...row, status: 'bad', detail: '合成磁盘可用比例低于阈值。' } : row));
@@ -292,7 +296,7 @@ test('监控仅在新版本时更新，保留抽屉和失败内容，无变更�
   await page.locator('[data-monitor-check="disk_space"]').getByText('异常', { exact: true }).waitFor();
   assert.equal(f.reads.length, initial + 1);
   await page.evaluate(() => window.emitMonitoring('2'));
-  await page.clock.fastForward(120_000);
+  await page.clock.runFor(120_000);
   assert.equal(f.reads.length, initial + 1, 'same revision cannot re-read');
   await page.locator('[data-action="system-monitor-check"][data-code="backup"]').click();
   await page.evaluate(() => { window.monitorDrawer = document.querySelector('#drawer'); window.emitMonitoring('3'); });
@@ -309,7 +313,7 @@ test('监控仅在新版本时更新，保留抽屉和失败内容，无变更�
   await page.evaluate(() => window.IDDesignAPI.go('customers/list'));
   const afterLeave = f.reads.length;
   await page.evaluate(() => window.emitMonitoring('5'));
-  await page.clock.fastForward(120_000);
+  await page.clock.runFor(120_000);
   assert.equal(f.reads.length, afterLeave, 'inactive pages do not fetch new data');
   assert.deepEqual(f.writes, []); assert.deepEqual(f.offline.external, []); assert.deepEqual(f.errors, []);
 });

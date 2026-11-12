@@ -76,6 +76,48 @@ test('metadata revisions are acknowledged without accepting a later unseen chang
   assert.deepEqual(Object.keys(api.pendingChangeVersions(['unknown', 'inventory'])), []);
 });
 
+test('a committed external revision does not invalidate the HTTP read that is applying it', async () => {
+  const { api } = client(async () => reply({ version: 1, items: [] }));
+  await api.queries.read('recharge-codes', 'requests', () => api.rechargeCodeRequests());
+  api.acceptChangeVersions({ 'recharge-codes': '1' }, { reconcile: true });
+  const changes = [];
+  api.subscribeChanges(scopes => changes.push([...scopes]));
+  api.acceptChangeVersions({ 'recharge-codes': '1:' + 'a'.repeat(64) });
+  const captured = api.pendingChangeVersions(['recharge-codes']);
+  await api.queries.read('recharge-codes', 'requests', () => api.rechargeCodeRequests());
+  api.acknowledgeChanges(captured);
+  assert.equal(api.queries.peek('recharge-codes', 'requests').stale, false);
+  assert.equal(changes.length, 1, 'the numeric document response must not re-emit an opaque source revision');
+  assert.deepEqual(Object.keys(api.pendingChangeVersions(['recharge-codes'])), []);
+  await api.rechargeCodeRequests();
+  assert.equal(changes.length, 1, 'a later same-document read must not undo the opaque acknowledgement');
+});
+
+test('a later external revision still supersedes an in-flight document read', async () => {
+  let resolve;
+  const { api } = client(() => new Promise(done => { resolve = done; }));
+  api.acceptChangeVersions({ 'card-types': '2:' + 'a'.repeat(64) }, { reconcile: true });
+  const captured = api.pendingChangeVersions(['card-types']);
+  const reading = api.queries.read('card-types', 'list', () => api.cardTypes());
+  const rejected = assert.rejects(reading, { code: 'READ_SUPERSEDED' });
+  await flush();
+  api.acceptChangeVersions({ 'card-types': '2:' + 'b'.repeat(64) });
+  resolve(reply({ version: 2, items: [] }));
+  await rejected;
+  api.acknowledgeChanges(captured);
+  assert.equal(api.pendingChangeVersions(['card-types'])['card-types'], '2:' + 'b'.repeat(64));
+});
+
+test('a restarted source can return to a numeric revision without invalidating its recovery read', async () => {
+  const { api } = client(async () => reply({ version: 2, items: [] }));
+  api.acceptChangeVersions({ 'recharge-codes': '2:' + 'a'.repeat(64) }, { reconcile: true });
+  api.acknowledgeChanges(api.pendingChangeVersions(['recharge-codes']));
+  api.acceptChangeVersions({ 'recharge-codes': '2' }, { reconcile: true });
+  await api.queries.read('recharge-codes', 'requests', () => api.rechargeCodeRequests());
+  assert.deepEqual(Object.keys(api.pendingChangeVersions(['recharge-codes'])), []);
+  assert.equal(api.queries.peek('recharge-codes', 'requests').stale, false);
+});
+
 test('subscription changes invalidate subscription views and are acknowledged once', async () => {
   const { api } = client();
   const changes = [];
