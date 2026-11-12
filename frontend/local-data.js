@@ -214,7 +214,7 @@
     orderCards: () => request('order-cards'),
     cardTypes: () => request('card-types'),
     cardTypeAction: (command) => write(['card-types'], () => request('card-types', command, 'POST')),
-    subscriptionCardEstimates: () => request('subscription-card-estimates'),
+    subscriptionCardEstimates: () => request('subscription-card-estimates?includeNext=1'),
     subscriptionCardStatus: () => request('subscription-card-status'),
     renewalCardStatus: (orderId, version) => request('subscription-card-status?' + new URLSearchParams({
       orderId, ...(version !== undefined && { version })
@@ -230,6 +230,13 @@
     subscriptions: (params) => request('subscriptions/list', params, 'POST'),
     subscriptionOwnerLookup: (order) => request('subscriptions/lookup', { order }, 'POST'),
     subscriptionCopy: (command) => request('subscriptions/copy', command, 'POST'),
+    renewalContactCopy: command => request('subscriptions/contact-copy', command, 'POST'),
+    renewalContactSettings: (suffix) => suffix === undefined
+      ? request('subscriptions/renewal-settings', {}, 'POST')
+      : write(['subscription-management'], () => request('subscriptions/renewal-settings', { suffix }, 'POST')),
+    renewalCard: command => command.action === 'bind'
+      ? write(['subscription-management'], () => request('subscription-renewal-card', command, 'POST'))
+      : request('subscription-renewal-card', command, 'POST'),
     subscriptionConfirm: (command) => write(['subscription-management'], () => request('subscriptions/confirm', command, 'POST')),
     subscriptionOwner: (command) => write(['subscription-management'], () => request('subscriptions/owner', command, 'POST')),
     claudeHistoryIntake: (command) => command.mode === 'preview'
@@ -266,7 +273,6 @@
     rechargeCodeAction: (command) => write(['recharge-codes'], () => request('recharge-codes', command, 'POST')),
     orderCompletion: (params) => request('order-completion' + (params ? '?' + new URLSearchParams(params) : '')),
     saveOrderCompletion: (command) => write(['commerce'], () => request('order-completion', command, 'POST')),
-    orderSyncStatus: () => request('order-sync'),
     orderSync: (command) => command.mode === 'preview'
       ? request('order-sync', command, 'POST')
       : write(['order-sync', 'commerce', 'inventory', 'recharge-codes'], () => request('order-sync', command, 'POST')),

@@ -236,6 +236,34 @@ test('邮箱工作台录入和导入微软邮箱，共用库存及录入草稿',
   assert.deepEqual(f.requests.external, []);
 });
 
+test('旧微软邮箱可补使用状态，健康状态独立筛选', async t => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const historical = { id: 'old-ms', type: 'microsoft', email: 'old-ms@example.test',
+    source: '自己注册', status: '封控中' };
+  const f = await fixture(browser, 1440, [historical]);
+  t.after(() => f.context.close());
+  const { main, drawer, confirm } = f;
+  const row = main.locator('tr[data-row-id="old-ms"]');
+  await row.locator('[data-column="use"] .tag').filter({ hasText: '未登记' }).waitFor();
+  await row.getByRole('button', { name: '编辑', exact: true }).click();
+  await drawer.getByLabel('使用状态', { exact: true }).selectOption('used');
+  await drawer.getByRole('button', { name: '核对并保存' }).click();
+  await confirm.locator('[data-action="confirm-accept"]').click();
+  await row.locator('[data-column="use"] .tag').filter({ hasText: '已使用' }).waitFor();
+  assert.equal(f.snapshot().mailboxes.find(item => item.id === historical.id).mailboxUsage, 'used');
+  await row.getByRole('button', { name: '详情', exact: true }).click();
+  const usage = drawer.locator('.property-row').filter({ hasText: '使用状态' });
+  await usage.getByText('已使用', { exact: true }).waitFor();
+  await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
+  await main.getByLabel('筛选邮箱状态').selectOption('封控中');
+  await main.getByLabel('筛选使用状态').selectOption('used');
+  await row.getByText('封控中', { exact: true }).waitFor();
+  await main.getByLabel('筛选使用状态').selectOption('unknown');
+  assert.equal(await row.count(), 0);
+  assert.deepEqual(f.errors, []);
+});
+
 test('微软邮箱桌面与手机的列表和抽屉布局', { timeout: 50000 }, async (t) => {
   const browser = await chromium.launch();
   t.after(() => browser.close());
@@ -258,7 +286,13 @@ test('微软邮箱桌面与手机的列表和抽屉布局', { timeout: 50000 }, 
       const next = main.getByRole('button', { name: '下一页' });
       await next.click();
       await measure('#main');
-      assert(Math.abs((await table.boundingBox()).height - firstHeight) <= 1);
+      const lastHeight = (await table.boundingBox()).height;
+      if (width > 900) assert(Math.abs(lastHeight - firstHeight) <= 1, '桌面末页表格外框应保持稳定');
+      else {
+        assert(lastHeight < firstHeight, '手机末页只为实际资料卡保留空间');
+        assert(await main.getByRole('button', { name: '上一页' }).isVisible());
+        assert(await next.isDisabled());
+      }
       const search = main.getByRole('textbox', { name: '搜索库存资料' });
       await search.fill('不存在的邮箱');
       assert.equal(await main.locator('tbody tr[data-row-id]').count(), 0);

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { parseV2DateTimeInput, toV2DateTimeInput } from '../modules/time/dateTime.ts';
+import { orderFieldChanged } from '../frontend/order-opening.mjs';
 import { pendingInventoryClaim } from './inventory-usage.mjs';
 import { registrationPurposeProduct } from './inventory-registration.mjs';
 
@@ -38,9 +39,12 @@ const time = value => typeof value === 'string' && value
   ? /(?:Z|[+-]\d\d:\d\d)$/i.test(value) ? Date.parse(value) :
     parseV2DateTimeInput(value.replace(' ', 'T'))?.getTime() ?? NaN : NaN;
 
-function targetError(row, gemini) {
-  if (typeof row.email !== 'string' || (row.email && (!nonempty(row.email, 254) || !emailFormat.test(row.email)))) return '请填写有效订阅邮箱';
+function targetError(row, gemini, optional = false) {
+  const email = row.email ?? '';
+  if (typeof email !== 'string' || (email && (!nonempty(email, 254) || !emailFormat.test(email)))) return '请填写有效订阅邮箱';
   if (row.xHandle && (typeof row.xHandle !== 'string' || !xFormat.test(row.xHandle))) return '请填写有效的 X @账号';
+  const missing = !row.email && !row.xHandle;
+  if (optional && missing && !row.platformAccountId && row.xLinkState !== 'linked') return;
   if (gemini && (!row.email || row.xHandle || row.loginMethod !== 'google')) return 'Gemini 需记录实际 Google 账号';
   if (!gemini && (!targetKey(row) || !['email', 'google', 'apple', 'x'].includes(row.loginMethod) ||
     (row.loginMethod === 'x' && !row.xHandle) || (row.loginMethod !== 'x' && !row.email)))
@@ -52,49 +56,56 @@ function targetError(row, gemini) {
 
 export function personalOrderError(order, prior, orders, customers) {
   if (!personalProduct(order.product)) return;
-  const identity = targetError(order, order.product === 'Gemini');
-  if (identity) return identity;
+  const manual = order.source === '管理员手工' || prior?.source === '管理员手工';
+  const changed = (...keys) => orderFieldChanged(order, prior, ...keys);
+  if (changed('email', 'xHandle', 'loginMethod', 'platformAccountId', 'xLinkState')) {
+    const identity = targetError(order, order.product === 'Gemini', manual && !order.accountId && !order.appleIdId);
+    if (identity) return identity;
+  }
   if (order.taskId || order.taskEvidenceId) return '个人订阅请登记手工订单';
-  if (customers && !customers.some(row => row.id === order.customerId)) return '请选择订单客户';
-  if (!personalPlans[order.product].includes(order.plan) || !['首次开通', '续费', '成品交付'].includes(order.businessType))
+  if (changed('customerId') && customers && !customers.some(row => row.id === order.customerId)) return '请选择订单客户';
+  if (changed('plan', 'businessType') && (!personalPlans[order.product].includes(order.plan) || !['首次开通', '续费', '成品交付'].includes(order.businessType)))
     return '请选择对应产品的可售套餐与业务类型';
   if (['tenantId', 'verifier', 'verifierPhone', 'phone'].some(field => order[field]) ||
-      (order.proMaterialMode && !['manual_card', 'pool_card'].includes(order.proMaterialMode)) ||
+      (order.proMaterialMode && !['manual_card', 'pool_card', 'none'].includes(order.proMaterialMode)) ||
     (order.kyc && order.kyc !== '未认证')) return '认证人与租户资料仅适用于 Claude';
   const series = subscriptionSeries(order);
   if (order.subscriptionSeries !== series) return '订阅系列与套餐不匹配';
-  if (series === 'x_premium' && !order.xHandle) return 'X Premium 需记录实际订阅的 @账号';
-  if (!['银行卡', '苹果内购'].includes(order.payment) ||
+  if (series === 'x_premium' && !order.xHandle && !manual && changed('email', 'xHandle', 'plan')) return 'X Premium 需记录实际订阅的 @账号';
+  if (changed('payment', 'plan', 'appleIdId') && (!['银行卡', '苹果内购'].includes(order.payment) ||
       (series === 'x_subscription' && order.payment !== '银行卡') ||
-      (order.payment !== '苹果内购' && order.appleIdId))
+      (order.payment !== '苹果内购' && order.appleIdId)))
     return '充值方式与套餐或付款资源不匹配';
-  if (order.billingChannel && (!['web', 'web_apple_pay', 'google_play', 'app_store'].includes(order.billingChannel) ||
+  if (order.billingChannel && changed('billingChannel', 'payment', 'plan') && (!['web', 'web_apple_pay', 'google_play', 'app_store'].includes(order.billingChannel) ||
       (order.billingChannel === 'app_store') !== (order.payment === '苹果内购') ||
       (series === 'x_subscription' && !['web', 'web_apple_pay'].includes(order.billingChannel))))
     return '购买渠道与付款资源不匹配，请核对原账单';
-  if (!['pending', 'active', 'failed'].includes(order.entitlementStatus) ||
-    (order.autoRenew && !['unknown', 'on', 'off'].includes(order.autoRenew)) ||
-    (order.billingCycle && !['month', 'year', 'other'].includes(order.billingCycle))) return '请核对权益状态与订阅周期';
-  if ((order.billingCountry && !nonempty(order.billingCountry, 100)) ||
-      (order.billingReceipt && !nonempty(order.billingReceipt, 160)) ||
-      (order.nextChargeAt && !Number.isFinite(time(order.nextChargeAt)))) return '请核对账单地区、编号或下次扣款日';
-  if (order.paidConfirmed && (order.payment === '苹果内购' ? !order.appleIdId || order.paidCurrency !== 'USD'
-      : order.proMaterialMode !== 'manual_card' && !/^recharge:.+/.test(order.cardId || ''))) return '请核对实际付款资源和币种';
-  if (order.paidConfirmed && order.product === 'Gemini' && order.payment === '苹果内购' &&
-      order.appleGoogleVerified !== true) return '请核对付款 Apple ID 对应的 Google 账号';
-  if (order.appleOriginalReceipt && (!nonempty(order.appleOriginalReceipt, 160) ||
+  if ((changed('entitlementStatus') && !['pending', 'active', 'failed'].includes(order.entitlementStatus)) ||
+    (changed('autoRenew') && order.autoRenew && !['unknown', 'on', 'off'].includes(order.autoRenew)) ||
+    (changed('billingCycle') && order.billingCycle && !['month', 'year', 'other'].includes(order.billingCycle))) return '请核对权益状态与订阅周期';
+  if ((changed('billingCountry') && order.billingCountry && !nonempty(order.billingCountry, 100)) ||
+      (changed('billingReceipt') && order.billingReceipt && !nonempty(order.billingReceipt, 160)) ||
+      (changed('nextChargeAt') && order.nextChargeAt && !Number.isFinite(time(order.nextChargeAt)))) return '请核对账单地区、编号或下次扣款日';
+  if (order.paidConfirmed && changed('payment', 'appleIdId', 'paidCurrency', 'cardId', 'proMaterialMode', 'paidConfirmed') &&
+      (order.payment === '苹果内购' ? (!manual && !order.appleIdId) || order.paidCurrency !== 'USD'
+      : (!manual || order.cardId) && order.proMaterialMode !== 'manual_card' && !/^recharge:.+/.test(order.cardId || ''))) return '请核对实际付款资源和币种';
+  if (order.paidConfirmed && order.appleIdId && order.product === 'Gemini' && order.payment === '苹果内购' &&
+      order.appleGoogleVerified !== true && changed('payment', 'appleIdId', 'paidConfirmed', 'email', 'appleGoogleVerified')) return '请核对付款 Apple ID 对应的 Google 账号';
+  if (order.appleOriginalReceipt && changed('appleOriginalReceipt', 'billingReceipt', 'payment', 'businessType') && (!nonempty(order.appleOriginalReceipt, 160) ||
       order.payment !== '苹果内购' || order.businessType !== '续费' ||
       order.appleOriginalReceipt.trim().toLowerCase() === String(order.billingReceipt || '').trim().toLowerCase()))
     return '请填写与本次交易不同的旧订阅交易编号';
-  if (order.receiptConfirmed && !/^\d{1,16}(?:\.\d{1,4})?$/.test(order.saleAmount || ''))
+  if (order.receiptConfirmed && changed('saleAmount', 'receiptConfirmed') && !/^\d{1,16}(?:\.\d{1,4})?$/.test(order.saleAmount || ''))
     return '请登记实际实收金额';
-  if ((order.start && !Number.isFinite(time(order.start))) ||
+  if (changed('start', 'expiry', 'entitlementStatus') && ((order.start && !Number.isFinite(time(order.start))) ||
       (order.expiry && !(time(order.expiry) > time(order.start))) ||
-      (order.entitlementStatus === 'active' && !(time(order.expiry) > time(order.start))))
+      (order.entitlementStatus === 'active' && !(time(order.expiry) > time(order.start)))))
     return '确认权益前请填写平台实际开通及到期时间';
   if (prior?.entitlementStatus === 'active' && order.entitlementStatus !== 'active') return '已核实的开通历史须保留';
   if (prior && (prior.paidConfirmed || prior.entitlementStatus === 'active') &&
-      (!sameTarget(order, prior) || prior.plan !== order.plan))
+      ((changed('email', 'xHandle', 'loginMethod', 'platformAccountId') &&
+        !sameTarget(order, prior) && (!manual || targetKey(prior) || prior.accountId || prior.appleIdId)) ||
+        prior.plan !== order.plan))
     return '已确认订单的订阅目标与套餐须保留';
   // The shared order policy validates bank-card edits against the original correction snapshot.
   if (prior?.paidConfirmed && (prior.payment !== order.payment ||
@@ -103,19 +114,23 @@ export function personalOrderError(order, prior, orders, customers) {
       (prior.appleIdId ?? '') !== (order.appleIdId ?? '') ||
       (prior.payment !== '银行卡' && (prior.cardId ?? '') !== (order.cardId ?? ''))))
     return '已确认订单的原账单与付款资源须保留';
-  if (order.billingReceipt && orders.some(row => row.id !== order.id && personalProduct(row.product) &&
+  if (order.billingReceipt && changed('billingReceipt', 'billingChannel') && orders.some(row => row.id !== order.id && personalProduct(row.product) &&
       (['web', 'web_apple_pay'].includes(row.billingChannel) ? row.product === order.product &&
         ['web', 'web_apple_pay'].includes(order.billingChannel) : row.billingChannel === order.billingChannel) &&
       String(row.billingReceipt || '').trim().toLowerCase() === order.billingReceipt.trim().toLowerCase()))
     return '原渠道交易编号已登记，请继续处理原订单';
   if (prior?.previousOrderId && prior.previousOrderId !== order.previousOrderId)
     return '原续费订单关联须保留';
-  if (order.previousOrderId) {
+  if (order.previousOrderId && changed('previousOrderId')) {
     const previous = orders.find(row => row.id === order.previousOrderId);
     if (order.businessType !== '续费' || !previous || previous.id === order.id ||
-        previous.customerId !== order.customerId || !samePersonalSubscription(previous, order) ||
+        previous.customerId !== order.customerId ||
+        !(samePersonalSubscription(previous, order) || (manual && order.renewalSourceVersion !== undefined &&
+          previous.product === order.product && subscriptionSeries(previous) === series &&
+          (!targetKey(previous) || !targetKey(order)))) ||
         previous.entitlementStatus !== 'active') return '请核对本次续费对应的原订单';
   }
+  if (!changed('previousSubscriptionOrderId', 'previousAutoRenew', 'xHandle', 'plan', 'customerId')) return;
   if (order.previousSubscriptionOrderId) {
     const previous = orders.find(row => row.id === order.previousSubscriptionOrderId);
     const sameX = previous?.xHandle && order.xHandle && previous.xHandle.toLowerCase() === order.xHandle.toLowerCase();
@@ -131,7 +146,8 @@ export function preparePersonalInventory(previous, next, action, actor, now = ne
   const oldAccounts = new Map(list(previous?.accounts).map(row => [row.id, row]));
   const oldMail = new Map(list(previous?.mailboxes).map(row => [row.id, row]));
   const nextMail = new Map(list(next.mailboxes).map(row => [row.id, row]));
-  const personal = list(next.accounts).filter(row => personalStock(row.type));
+  const personal = list(next.accounts).filter(row => personalStock(row.type) ||
+    (['gpt', 'claude'].includes(row.type) && (row.sourceMailboxId || oldAccounts.get(row.id)?.sourceMailboxId)));
   if (list(next.mailboxes).some(row => personalStock(row.type))) return '请在对应产品的账号管理登记资料';
   const addresses = new Set();
   const platformIds = new Set();
@@ -143,14 +159,17 @@ export function preparePersonalInventory(previous, next, action, actor, now = ne
     if (old && (!sameTarget(old, row) || (old.platformAccountId && row.platformAccountId !== old.platformAccountId) ||
         personalStockOwner(old) !== personalStockOwner(row) || (row.sourceMailboxId || '') !== (old.sourceMailboxId || '') ||
         (row.sourceClaimId || '') !== (old.sourceClaimId || ''))) return '账号标识和来源库存创建后须保留';
-    const issue = targetError(row, row.type === 'gemini');
-    if (issue) return issue;
+    if (personalStock(row.type)) {
+      const issue = targetError(row, row.type === 'gemini');
+      if (issue) return issue;
+    }
     const identity = row.type + ':' + targetKey(row);
     const platform = row.platformAccountId && row.type + ':' + row.platformAccountId;
     if (addresses.has(identity) || (platform && platformIds.has(platform))) return '相同产品中已有该账号';
     addresses.add(identity);
     if (platform) platformIds.add(platform);
-    if (!nonempty(row.source, 200) || !['正常', '冻结', '封控中'].includes(row.status))
+    if ((!old || row.source !== old.source || row.status !== old.status) &&
+        (!nonempty(row.source, 200) || !['正常', '冻结', '封控中'].includes(row.status)))
       return '请核对账号来源与状态';
     if (old) {
       if (inventoryState(old) !== 'used' && inventoryState(row) === 'used' && action !== 'inventory_order_sale')
@@ -166,7 +185,7 @@ export function preparePersonalInventory(previous, next, action, actor, now = ne
     const mailbox = oldMail.get(row.sourceMailboxId);
     const saved = nextMail.get(row.sourceMailboxId);
     if (row.type === 'gemini' && mailbox && mailbox.type !== 'google') return 'Gemini 请使用谷歌邮箱';
-    if (!personalStockOwner(row) || !actor?.id || !mailbox || !saved ||
+    if (row.acquisitionMethod === 'purchased' || !personalStockOwner(row) || !actor?.id || !mailbox || !saved ||
         !['google', 'relay'].includes(mailbox.type) || mailbox.relayDeleted || saved.relayDeleted ||
         mailbox.email?.toLowerCase() !== row.email?.toLowerCase() || saved.email !== mailbox.email ||
         saved.type !== mailbox.type || inventoryState(saved) !== inventoryState(mailbox) ||
@@ -188,7 +207,7 @@ export function preparePersonalInventory(previous, next, action, actor, now = ne
     if (purpose && purpose !== row.type) return '原领用用途与本次注册产品不一致';
     sources.add(mailbox.id);
     records.push({ id: randomUUID(), assetId: mailbox.id, email: mailbox.email,
-      product: row.type === 'gemini' ? 'Gemini' : 'Grok', state: '成功', accountId: row.id,
+      product: { gemini: 'Gemini', grok: 'Grok', gpt: 'GPT', claude: 'Claude' }[row.type], state: '成功', accountId: row.id,
       createdById: actor.id, createdBy: actor.name, createdAt: stamp, actorId: actor.id, actor: actor.name, time: stamp });
   }
   const knownRecords = new Set(list(previous?.registrationRecords).map(row => row.id));

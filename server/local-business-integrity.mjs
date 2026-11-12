@@ -227,8 +227,8 @@ export function checkStockDeliveries(previousCommerce, commerce, previousInvento
       next.businessType !== order.businessType ||
       next.accountId !== order.accountId ||
       next.product !== order.product ||
-      next.email !== order.email ||
-      (personalProduct(order.product) && !sameTarget(next, order))
+      (order.accountId && (next.email !== order.email ||
+        (personalProduct(order.product) && !sameTarget(next, order))))
     ) {
       return '原成品交付订单及其库存账号必须保留';
     }
@@ -251,6 +251,7 @@ export function checkStockDeliveries(previousCommerce, commerce, previousInvento
     if (prior && prior.businessType !== '成品交付') return '已保存订单不能改为成品交付，请登记独立新订单';
     const personal = personalProduct(order.product);
     if (personal && order.cancelled && !personalDelivery(order)) continue;
+    if (order.source === '管理员手工' && !order.accountId && order.entitlementStatus === 'active') continue;
     if (
       typeof order.accountId !== 'string' ||
       !order.accountId ||
@@ -430,7 +431,7 @@ function checkMovements(previous, ledger, appleIds, wallets, orders, allocations
   }
 }
 
-export function checkAppleLedger(previous, ledger, inventory, commerce) {
+export function checkAppleLedger(previous, ledger, inventory, commerce, previousCommerce) {
   const appleIds = new Set(
     (inventory?.mailboxes || []).filter((row) => row?.type === 'apple').map((row) => row.id)
   );
@@ -504,12 +505,20 @@ export function checkAppleLedger(previous, ledger, inventory, commerce) {
       return '苹果内购的扣款、待回款与原订单不一致';
     }
   }
+  const priorOrders = new Map((previousCommerce?.orders || []).map(row => [row.id, row]));
+  const originalAllocations = new Set((previous?.allocations || []).map(row => row.orderId));
+  const originalRefunds = new Set((previous?.refunds || []).map(row => row.id));
   for (const order of orders.values()) {
-    if (order?.payment === '苹果内购' && order.paidConfirmed && !allocations.has(order.id)) {
+    const prior = priorOrders.get(order.id);
+    const samePayment = prior?.paidConfirmed && !originalAllocations.has(order.id) && ['payment', 'appleIdId', 'paidCurrency', 'paidAmount'].every(key =>
+      (order[key] ?? '') === (prior[key] ?? ''));
+    const externalApple = order.externalApplePayment === true && !order.appleIdId;
+    if (order.payment === '苹果内购' && order.paidConfirmed && !externalApple && !allocations.has(order.id) && !samePayment) {
       return '确认苹果内购时必须同时保存余额扣款';
     }
     for (const refund of order?.refunds || []) {
-      if (refund?.payment === '苹果内购' && refunds.get(refund.id)?.orderId !== order.id) {
+      if (refund?.payment === '苹果内购' && !externalApple && refunds.get(refund.id)?.orderId !== order.id &&
+          (originalRefunds.has(refund.id) || !prior?.refunds?.some(saved => isDeepStrictEqual(saved, refund)))) {
         return '苹果内购退款必须同时登记本次 Apple ID 回款金额';
       }
     }

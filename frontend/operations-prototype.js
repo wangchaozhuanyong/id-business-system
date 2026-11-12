@@ -1323,15 +1323,15 @@
     });
   }
   const costFields = [
-    ['claudeBankFeeMyr', 'Claude 代付服务费', 'MYR / 每单'],
-    ['claudeAccountCostMyr', 'Claude KYC 认证成本', 'MYR / 每单'],
-    ['gmailCostCny', '谷歌邮箱成本', 'CNY / 每单'],
-    ['appleCostCny', '苹果邮箱成本', 'CNY / 每单'],
-    ['microsoftCostCny', '微软邮箱成本', 'CNY / 每单'],
-    ['appleDiscount', '苹果内购折扣', '0 < 折扣 ≤ 1'],
-    ['cardIssueUsd', '通用开卡成本', 'USD / 每张一次'],
-    ['cardPercent', '通用付款费率', '0.008 表示 0.8%'],
-    ['cardPerPaymentUsd', '通用付款固定费用', 'USD / 每笔']
+    ['claudeBankFeeMyr', 'Claude 代付服务费', '每笔 Claude 银行卡订单加这笔马币费用，再按订单汇率折算。'],
+    ['claudeAccountCostMyr', 'Claude KYC 认证成本', '按每笔的马币规则金额计入。已有核对后的 KYC 实付凭据时，按凭据核算。'],
+    ['gmailCostCny', '谷歌邮箱成本', '使用有明确来源的谷歌邮箱时，录单可带入这笔人民币成本。'],
+    ['appleCostCny', '苹果邮箱成本', '使用有明确来源的苹果隐藏邮箱时，录单可带入这笔人民币成本。'],
+    ['microsoftCostCny', '微软邮箱成本', '使用有明确来源的微软邮箱时，录单可带入这笔人民币成本。'],
+    ['appleDiscount', '苹果内购折扣', 'Claude 苹果内购成本等于订阅面额乘折扣。填 0.8 时，20 美元面额按 16 美元计成本。'],
+    ['cardIssueUsd', '通用开卡成本', '每张卡一次，单位美元。单笔分摊等于这张卡的开卡费除以同卡成功开通笔数。'],
+    ['cardPercent', '通用付款费率', '比例手续费等于本单代付金额乘费率。填 0.008 表示 0.8%。'],
+    ['cardPerPaymentUsd', '通用付款固定费用', '每笔符合通用银行卡规则的付款固定加这笔美元费用。']
   ];
   function renderCosts() {
     const config = api.modules.commerce?.getCostSettings?.();

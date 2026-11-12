@@ -447,6 +447,54 @@ h1 {
   width: auto;
   max-width: 100%;
 }
+.gpt-order-origin-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: var(--toolbar-padding-block) var(--panel-padding-inline);
+  border-bottom: 1px solid var(--line);
+}
+.gpt-order-origin-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  color: var(--secondary);
+}
+.gpt-order-origin-legend > span, .gpt-order-origin-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.gpt-order-origin-legend > span::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  background: currentColor;
+  border-radius: 50%;
+}
+.gpt-order-origin-legend [data-order-source='recharge'],
+.gpt-order-origin-label[data-order-source='recharge'] { color: var(--primary); }
+.gpt-order-origin-label {
+  margin-inline-start: 8px;
+  color: var(--secondary);
+}
+@media (width > 900px) {
+  table[data-table='commerce-orders-GPT'] tbody tr:has(.gpt-order-origin-label[data-order-source='recharge']) > td {
+    background: color-mix(in srgb, var(--surface) 55%, var(--primary-soft));
+  }
+  table[data-table='commerce-orders-GPT'] tbody tr:has(.gpt-order-origin-label[data-order-source='recharge']):hover > td {
+    background: var(--primary-soft);
+  }
+}
+.completion-saved {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+}
 .completion-controls > .toolbar { flex-basis: 20rem; }
 .completion-controls > .toolbar:has([data-action='completion-assign-manual']) { flex-basis: 30rem; }
 .completion-controls .search-field { flex: 1 1 180px; }
@@ -5483,6 +5531,9 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
   .mobile-records--selectable thead .check-cell { display: block; width: auto; height: auto; padding: 0; text-align: left; background: none; border: 0; }
   .mobile-records--selectable thead .mobile-record-only { display: inline; font-size: 12px; }
   .mobile-records tbody > tr { position: relative; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius-control); background: var(--surface); }
+  .mobile-records table[data-table='commerce-orders-GPT'] tbody > tr:has(.gpt-order-origin-label[data-order-source='recharge']) {
+    background: color-mix(in srgb, var(--surface) 55%, var(--primary-soft));
+  }
   .mobile-records tbody > tr + tr { margin-top: 12px; }
   .mobile-records tbody td { position: static; display: block; width: auto; min-width: 0; height: auto; padding: 0; border: 0; box-shadow: none; white-space: normal; overflow-wrap: anywhere; background: transparent; }
   .mobile-records td[data-mobile-field='identity'] { min-height: 44px; display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 14px; font-weight: 600; }
@@ -5536,4 +5587,82 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
   .mobile-entry-actions .form-footer .footnote { display: none; }
   .mobile-entry-actions .form-footer > button { flex: 1; min-width: 0; }
   .commerce-entry-layout :is(input, select, textarea) { scroll-margin-bottom: 120px; }
+}
+
+
+.subscription-center-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-block-end: 12px;
+}
+
+.renewal-workbench {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(0, 2fr);
+  border-top: 1px solid var(--line);
+}
+
+.renewal-workbench-queue {
+  min-width: 0;
+  border-inline-end: 1px solid var(--line);
+}
+
+.renewal-workbench-items {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  max-height: min(55vh, 550px);
+  overflow: auto;
+}
+
+.renewal-workbench-item {
+  width: 100%;
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  text-align: start;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.renewal-workbench-item[aria-pressed="true"] {
+  border-color: currentColor;
+  background: var(--surface-soft, transparent);
+}
+
+.renewal-workbench-item-top, .renewal-workbench-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.renewal-workbench-item-top { justify-content: space-between; }
+.renewal-workbench-item-meta { overflow-wrap: anywhere; font-size: .9em; }
+.renewal-workbench-detail { min-width: 0; padding: 12px 16px; }
+.renewal-workbench-heading h2 { margin: 0; overflow-wrap: anywhere; }
+
+.renewal-workbench-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-block: 8px;
+  gap: 0 16px;
+}
+.renewal-workbench-fields .property-row { min-width: 0; overflow-wrap: anywhere; }
+.renewal-workbench-actions { flex-wrap: wrap; }
+.renewal-mobile-back { display: none; }
+
+@media (max-width: 760px) {
+  .renewal-workbench { grid-template-columns: minmax(0, 1fr); }
+  .renewal-workbench-queue { border-inline-end: 0; }
+  .renewal-workbench-items { max-height: 58vh; }
+  .renewal-workbench-detail { display: none; }
+  .renewal-workbench.show-renewal-detail .renewal-workbench-queue { display: none; }
+  .renewal-workbench.show-renewal-detail .renewal-workbench-detail { display: block; }
+  .renewal-mobile-back { display: inline-flex; flex-basis: 100%; min-height: 44px; }
+  .renewal-workbench-fields { grid-template-columns: minmax(0, 1fr); }
 }

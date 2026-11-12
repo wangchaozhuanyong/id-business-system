@@ -57,7 +57,7 @@ async function open(t, browser, model, actor, width, theme) {
         data.orders = data.orders.map(row => orders.find(order => order.id === row.id) || row);
         return route.fulfill({ json: { assigned: orders.length, version: ++model.commerce.version } });
       }
-      const { order, customer, createdCustomer } = command.action === 'fill-manual-details'
+      const { order, customer, createdCustomer, completion } = command.action === 'fill-manual-details'
         ? fillManualOrderDetails(data, model.inventory?.data, actor, command, now)
         : applyOrderCompletion(data, settings, actor, command, owners, now);
       data.orders = data.orders.map((row) => row.id === order.id ? order : row);
@@ -65,7 +65,7 @@ async function open(t, browser, model, actor, width, theme) {
         data.customers = createdCustomer ? [customer, ...data.customers]
           : data.customers.map((row) => row.id === customer.id ? customer : row);
       }
-      return route.fulfill({ json: { orderId: order.id, version: ++model.commerce.version } });
+      return route.fulfill({ json: { orderId: order.id, version: ++model.commerce.version, state: completion?.state } });
     } catch (error) {
       return route.fulfill({ status: error.status || 500, json: { error: error.message } });
     }
@@ -119,13 +119,16 @@ test('员工桌面和窄屏可选客户、恢复草稿、核对冲突并写回�
     const { page, drawer, errors, traffic, writes } = await open(t, browser, data, a, width, theme);
     assert.equal(await page.locator('table[data-table="订单补全"] tbody tr[data-row-id]').count(), 1);
     assert.equal(await page.getByText('SYN-other', { exact: true }).count(), 0);
-    assert.equal(await page.getByRole('button', { name: '待归属', exact: true }).count(), 0);
+    assert.equal(await page.getByRole('button', { name: '待分配', exact: true }).count(), 0);
     const pending = page.getByRole('button', { name: '补全资料', exact: true });
     await pending.click();
     await drawer.getByText('100 PHP', { exact: true }).waitFor();
     await drawer.getByText('101 PHP', { exact: true }).waitFor();
     await drawer.getByText('配置代付与实际扣款有差额', { exact: false }).waitFor();
     assert.equal(await drawer.locator('input[name*="paid"], input[name*="sale"]').count(), 0);
+    assert.equal(await drawer.locator('#completion-receipt-amount').inputValue(), '');
+    await drawer.locator('#completion-receipt-amount').fill('84.75');
+    await drawer.locator('#completion-receipt-currency').selectOption('MYR');
     await checkLayout(page, drawer);
     const choose = async () => {
       await drawer.getByLabel('选择客户', { exact: false }).fill('已有测试');
@@ -139,19 +142,21 @@ test('员工桌面和窄屏可选客户、恢复草稿、核对冲突并写回�
     await pending.click();
     assert.equal(await drawer.locator('#completion-source').inputValue(), '网站');
     assert.equal(await drawer.locator('#completion-notes').inputValue(), '草稿保留');
+    assert.equal(await drawer.locator('#completion-receipt-amount').inputValue(), '84.75');
     data.commerce.data.orders[0].version++;
-    await drawer.getByRole('button', { name: '保存补全', exact: true }).click();
+    await drawer.getByRole('button', { name: '保存订单', exact: true }).click();
     await drawer.getByText('订单已更新', { exact: false }).waitFor();
     await drawer.getByRole('button', { name: '重新核对', exact: true }).click();
     await choose();
     assert.equal(await drawer.locator('#completion-wechat').inputValue(), 'customer-wechat');
-    await drawer.getByRole('button', { name: '保存补全', exact: true }).click();
+    assert.equal(await drawer.locator('#completion-receipt-amount').inputValue(), '84.75');
+    assert.equal(await drawer.locator('#completion-receipt-currency').inputValue(), 'MYR');
+    await drawer.getByRole('button', { name: '保存订单', exact: true }).click();
     await page.getByText('暂无待补全订单', { exact: true }).waitFor();
-    await page.getByRole('button', { name: '已补全', exact: true }).click();
-    await page.getByRole('button', { name: '查看', exact: true }).click();
+    await page.locator('.completion-saved').getByRole('button', { name: '查看此订单', exact: true }).click();
     await drawer.getByText('已有测试客户', { exact: true }).waitFor();
     await drawer.getByText('网站', { exact: true }).waitFor();
-    assert.equal(await drawer.getByRole('button', { name: '保存补全', exact: true }).count(), 0);
+    assert.equal(await drawer.getByRole('button', { name: '保存订单', exact: true }).count(), 0);
     assert.equal(writes.length, 2);
     assert.equal(writes[1].version, 2);
     assert.equal(data.commerce.data.orders.length, 3);
@@ -159,7 +164,8 @@ test('员工桌面和窄屏可选客户、恢复草稿、核对冲突并写回�
     assert.equal(saved.orderNo, 'SYN-own');
     assert.equal(saved.entitlementStatus, 'active');
     assert.equal(saved.paidAmount, '101');
-    assert.equal(saved.saleAmount, '140.00');
+    assert.equal(saved.saleAmount, '84.75');
+    assert.equal(saved.saleCurrency, 'MYR');
     assert.equal(saved.customerId, 'known');
     assert.equal(saved.customerPhone, '123456');
     assert.equal(saved.customerSource, '网站');
@@ -173,24 +179,25 @@ test('管理员待归属，归属员工可快捷新增客户并随原单保存',
   t.after(() => browser.close());
   const data = model();
   const manager = await open(t, browser, data, admin, 1440, 'dark');
-  await manager.page.getByRole('button', { name: '待归属', exact: true }).click();
-  await manager.page.getByRole('button', { name: '确认归属', exact: true }).click();
+  await manager.page.getByRole('button', { name: '待分配', exact: true }).click();
+  await manager.page.getByRole('button', { name: '补全资料', exact: true }).click();
   await manager.drawer.locator('#completion-owner').selectOption(b.id);
   await manager.drawer.locator('#completion-reason').fill('已核对合成领码记录');
-  await manager.drawer.getByRole('button', { name: '保存归属', exact: true }).click();
-  await manager.page.getByText('暂无待归属订单', { exact: true }).waitFor();
+  await manager.drawer.getByRole('button', { name: '保存订单', exact: true }).click();
+  await manager.page.getByText('暂无待分配订单', { exact: true }).waitFor();
 
   const employee = await open(t, browser, data, b, 390, 'light');
   await employee.page.locator('tr[data-row-id="unassigned"]').getByRole('button', { name: '补全资料', exact: true }).click();
+  await employee.drawer.locator('#completion-receipt-amount').fill('120');
   await employee.drawer.getByRole('button', { name: '新增客户', exact: true }).click();
   await employee.drawer.locator('#completion-name').fill('快捷录入客户');
   await employee.drawer.getByRole('button', { name: '选用此客户', exact: true }).click();
   await employee.drawer.getByText('快捷录入客户（待保存）', { exact: true }).waitFor();
   assert.equal(data.commerce.data.customers.length, 1);
-  await employee.drawer.locator('#completion-source').selectOption('客户推荐');
+  assert.equal(await employee.drawer.locator('#completion-receipt-amount').inputValue(), '120');
   await employee.drawer.locator('#completion-customerPhone').fill('789012');
   await checkLayout(employee.page, employee.drawer);
-  await employee.drawer.getByRole('button', { name: '保存补全', exact: true }).click();
+  await employee.drawer.getByRole('button', { name: '保存订单', exact: true }).click();
   await employee.page.getByRole('button', { name: '已补全', exact: true }).click();
   const completed = employee.page.locator('tr[data-row-id="unassigned"]');
   await completed.getByRole('button', { name: '更多资料', exact: true }).click();
@@ -202,11 +209,21 @@ test('管理员待归属，归属员工可快捷新增客户并随原单保存',
   assert.equal(saved.rechargeOwnerAssignment.reason, '已核对合成领码记录');
   assert.equal(customer.name, '快捷录入客户');
   assert.equal(customer.phone, '789012');
-  assert.equal(customer.source, '客户推荐');
+  assert.equal(customer.source, undefined);
+  assert.equal(saved.saleAmount, '120');
+  await employee.page.locator('.completion-saved').getByRole('button', { name: '查看此订单' }).click();
+  await employee.drawer.getByRole('button', { name: '补充资料', exact: true }).click();
+  assert.equal(await employee.drawer.locator('#completion-receipt-amount').count(), 0);
+  await employee.drawer.locator('#completion-card-last4').fill('2468');
+  await employee.drawer.getByRole('button', { name: '保存订单', exact: true }).click();
+  await employee.drawer.waitFor({ state: 'hidden' });
+  const afterCard = data.commerce.data.orders.find(row => row.id === saved.id);
+  assert.equal(afterCard.paymentId, '2468');
+  assert.equal(afterCard.saleAmount, '120');
+  assert.equal(afterCard.financialEvidence.filter(event => event.kind === 'receipt').length, 1);
   await manager.page.goto(origin + '/?verify=original#/orders/detail/unassigned');
   const original = manager.page.locator('#main .property-list');
   await original.getByText('快捷录入客户', { exact: true }).waitFor();
-  await original.getByText('客户推荐', { exact: true }).waitFor();
   await original.getByText('789012', { exact: true }).waitFor();
   assert.deepEqual(manager.errors, []);
   assert.deepEqual(employee.errors, []);
@@ -238,8 +255,8 @@ test('手工旧单从补全和续费提醒进入原单，独立补邮箱并保�
 
   await page.goto(origin + '/#/workspace/renewals');
   await page.getByRole('tab', { name: /^已到期/ }).click();
-  const reminder = page.locator('table[data-table="commerce-renewals"] tr[data-row-id="manual"]');
-  await reminder.getByRole('button', { name: '补邮箱', exact: true }).click();
+  await page.locator('[data-action="commerce-renewal-select"][data-id="manual"]').click();
+  await page.getByRole('region', { name: '当前选中客户' }).getByRole('button', { name: '补邮箱', exact: true }).click();
   await page.setViewportSize({ width: 390, height: 844 });
   await drawer.getByLabel('邮箱账号', { exact: true }).fill('verified@example.test');
   const form = drawer.locator('#commerce-order-completion-form');

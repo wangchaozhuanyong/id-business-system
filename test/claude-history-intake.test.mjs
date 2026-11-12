@@ -180,7 +180,7 @@ test('Claude 历史销售从原库存生成订单，买家可补齐，死号保�
     assert.match(afterReceipt.logs[0].detail, /确认全额实收 2100 CNY/);
     assert.throws(() => store.saveOrderCompletion(actor, receipt), /订单已变化/);
     assert.throws(() => store.saveOrderCompletion(actor, { ...receipt, version: received.version }), /售价及实收/);
-    for (const [order, status] of [[firstOrder, 'pending'], [endedOrder, 'dead']]) {
+    for (const [order, status] of [[firstOrder, 'active'], [endedOrder, 'dead']]) {
       const row = subscriptionRows().find(row => row.account === order.email);
       assert.deepEqual([row.scope, row.status, row.series[0].orderNo], ['customer', status, order.orderNo]);
     }

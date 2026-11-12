@@ -10,7 +10,7 @@ test('银行卡价格与类型的变动触发重新读取，失败时通知同�
   const reads = { estimates: 0, types: 0, status: 0, renders: 0 };
   let unavailable = false;
   const modules = [];
-  const api = { state: { route: 'data-management/bank-cards', demoOrders: [], drafts: new Map() }, modules: {}, money: {},
+  const api = { state: { route: 'subscriptions/bank-cards', demoOrders: [], drafts: new Map() }, modules: {}, money: {},
     render: () => { reads.renders++; } };
   const data = {
     actor: () => ({ id: 'synthetic-admin', role: 'admin' }),

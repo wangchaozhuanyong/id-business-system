@@ -44,12 +44,13 @@ export function checkAccountLocations(previous, next) {
         (prior.country ?? '') === (row.country ?? '') &&
         (row.type === 'gpt' || (prior.city ?? '') === (row.city ?? ''))) continue;
 
+    if (row.acquisitionMethod === 'purchased' && !row.country && !row.city) continue;
     const config = settings.get(row.type);
     if (!row.country || !(config?.countries ?? [...defaultLocations.keys()]).includes(row.country))
       return `请选择 ${product} 账号设置中的注册国家`;
     if (row.type === 'gpt') continue;
     const cities = config?.cities.get(row.country) ?? defaultLocations.get(row.country) ?? [];
-    if (!row.city || !cities.includes(row.city))
+    if ((!row.city && row.acquisitionMethod !== 'purchased') || (row.city && !cities.includes(row.city)))
       return `请选择 ${product} 账号所选国家下的地区／城市`;
   }
 }

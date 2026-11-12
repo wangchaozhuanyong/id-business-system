@@ -25,7 +25,7 @@
   const metrics = [
     ['orders', '新建订单', '按北京时间的创建时间统计。已撤单另列，续费新单计入订单量。'],
     ['receipts', '订单实收', '已确认的实收按订单创建时间归集，按原币分列。客户退款按登记时间另列。'],
-    ['profit', '已核算利润', '合计包含实账与参考核算。按开通时的汇率、冻结规则及同卡开卡成本分摊计算。无原卡的 GPT 参考利润注明开卡费未分摊。'],
+    ['profit', '已核算利润', '按北京时间开通日期归集，与订单统计使用同一套费用和历史汇率。逐单计算净收款减已知净成本。开卡费未分摊时，仍计入已知部分。'],
     ['customers', '新增客户', '按客户创建时间和客户编号去重统计。']
   ];
   const timezone = 'Asia/Shanghai';
@@ -361,7 +361,7 @@
         accounting ? accounting.accounted + accounting.pending : null, profit]
     ];
     return `<section class="panel overview-section" aria-labelledby="overview-order-progress"><div class="panel-body">
-      ${heading('order-progress', '收款与核算', '按本期创建的未撤单订单统计。实收确认率为已确认实收订单占比，待确认不代表尚未收到款项。核算率包含实账与参考核算，参考核算不是最终结算。两项分别使用各自最近成功的数据快照；空集不计算比例。')}
+      ${heading('order-progress', '收款与核算', '实收确认率按本期录入的订单计算。利润核算率按本期开通的订单计算，包含实账与参考核算。刷新失败时显示最近一次成功读取的结果。')}
       <div class="overview-progress-content">${groups.map(([id, title, doneLabel, pendingLabel, done, total, section]) => {
         const known = Number.isSafeInteger(done) && Number.isSafeInteger(total);
         const pending = known ? total - done : null;
