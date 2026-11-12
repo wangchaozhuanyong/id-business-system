@@ -20,7 +20,7 @@ jobs:
         ports:
           - 3306/tcp
         options: >-
-          --health-cmd='mysqladmin ping -h 127.0.0.1'
+          --health-cmd="mysqladmin ping -h 127.0.0.1"
           --health-interval=5s --health-timeout=5s --health-retries=30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
