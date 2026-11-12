@@ -250,7 +250,7 @@ test('Claude inventory must have a known and eligible registration age at delive
   }
 });
 
-test('orders with confirmed payment or receipt cannot be cancelled or deleted directly', () => {
+test('orders with recorded payment or receipt cannot be cancelled or deleted directly', () => {
   const store = createLocalBusinessStore(':memory:');
   const cancel = (row) => ({
     ...row,
@@ -261,12 +261,14 @@ test('orders with confirmed payment or receipt cannot be cancelled or deleted di
     ]
   });
   try {
-    const paid = order('paid-only', { receiptConfirmed: false });
-    const received = order('received-only', { paidConfirmed: false });
-    const draft = order('draft-order', { paidConfirmed: false, receiptConfirmed: false });
-    const original = [paid, received, draft];
+    const paid = order('paid-only', { receiptConfirmed: false, saleAmount: '' });
+    const received = order('received-only', { paidConfirmed: false, paidAmount: '' });
+    const recorded = order('legacy-recorded', { paidConfirmed: false, receiptConfirmed: false });
+    const draft = order('draft-order', { paidConfirmed: false, receiptConfirmed: false,
+      paidAmount: '', saleAmount: '' });
+    const original = [paid, received, recorded, draft];
     store.saveBatch([commerceWrite(0, commerce(original))]);
-    for (const confirmed of [paid, received]) {
+    for (const confirmed of [paid, received, recorded]) {
       const cancelled = original.map((row) => (row.id === confirmed.id ? cancel(row) : row));
       assert.throws(() => store.saveBatch([commerceWrite(1, commerce(cancelled), '业务撤单')]), {
         status: 409
@@ -278,7 +280,7 @@ test('orders with confirmed payment or receipt cannot be cancelled or deleted di
     }
     assert.deepEqual(store.load('commerce'), { version: 1, data: commerce(original) });
     assert.equal(store.audit().length, 1);
-    const valid = commerce([paid, received, cancel(draft)]);
+    const valid = commerce([paid, received, recorded, cancel(draft)]);
     store.saveBatch([commerceWrite(1, valid, '业务撤单')]);
     assert.deepEqual(store.load('commerce'), { version: 2, data: valid });
   } finally {
@@ -286,7 +288,7 @@ test('orders with confirmed payment or receipt cannot be cancelled or deleted di
   }
 });
 
-test('customer refunds remain append-only and cannot exceed the confirmed receipt', () => {
+test('customer refunds remain append-only and cannot exceed the recorded receipt', () => {
   const store = createLocalBusinessStore(':memory:');
   const refund = (id, amount) => ({
     id,
@@ -301,9 +303,12 @@ test('customer refunds remain append-only and cannot exceed the confirmed receip
   const withRefunds = (row, ...refunds) =>
     commerce([{ ...row, refunds, version: row.version + 1 }]);
   try {
-    const original = order('refund-order-1');
-    const unconfirmed = { ...original, receiptConfirmed: false };
-    assert.throws(
+    const original = order('refund-order-1', { receiptConfirmed: false });
+    for (const unconfirmed of [
+      { ...original, source: '线上代充' },
+      { ...original, saleAmount: '' },
+      { ...original, saleCurrency: '' }
+    ]) assert.throws(
       () =>
         store.saveBatch([
           commerceWrite(0, withRefunds(unconfirmed, refund('unconfirmed', '1.0000')), '退款登记')
