@@ -8,6 +8,8 @@
   const listViewKey = namespace + ':list';
   const tabKey = namespace + ':tab';
   const checksKey = namespace + ':checks';
+  const viewKey = namespace + ':view';
+  const monitorView = () => A.state.drafts.get(viewKey) || 'checks';
   const checks = { ok: '正常', bad: '异常', watch: '观察中', unknown: '未知', disabled: '未启用' };
   const delivery = { queued: '等待发送', sending: '正在发送', accepted: 'Telegram 已接收', failed: '投递失败',
     unknown: '结果待核对', cancelled: '配置变化，已取消' };
@@ -31,7 +33,7 @@
   const superAdmin = () => A.state.actor?.role === 'super';
   const settingsTab = () => A.state.drafts.get(tabKey) || 'channels';
   const queryTab = () => !settingsPage() ? 'incidents' : settingsTab() === 'deliveries' ? 'deliveries' : 'config';
-  const list = (tab = queryTab()) => A.state.drafts.get(listViewKey + tab) || { page: 1, pageSize: defaultPageSize, status: '' };
+  const list = (tab = queryTab()) => A.state.drafts.get(listViewKey + tab) || { page: 1, pageSize: defaultPageSize, status: '', q: '', days: 0, priority: '' };
   const currentDraftKey = () => draftKey + ':' + settingsTab();
   const draft = () => A.state.drafts.get(currentDraftKey());
   const snapshots = new Map();
@@ -56,8 +58,7 @@
   }
 
   function params(tab = queryTab()) {
-    const { page, pageSize, status } = list(tab);
-    return tab === 'config' ? { tab } : { tab, page, pageSize, status };
+    return tab === 'config' ? { tab } : { tab, ...list(tab) };
   }
 
   function bindRead(tab) {
@@ -94,14 +95,23 @@
         !Object.hasOwn(notificationLabels, data.notifications.status)))
         throw new Error('监控状态响应不完整，请重新读取');
       snapshots.set(tab, { key, data });
-      if (tab !== 'config') A.state.drafts.set(listViewKey + tab, { status: input.status, page: data.page, pageSize: data.pageSize });
+      if (tab !== 'config') A.state.drafts.set(listViewKey + tab, { ...list(tab), page: data.page, pageSize: data.pageSize });
     } catch (error) {
       if (current()) errors.set(tab, error.message || '读取失败，请重试');
     } finally {
       if (current()) {
         request.feedback?.finish();
         pending.delete(tab);
-        if (queryTab() === tab && ['monitor', settingsRoute].includes(A.state.route)) A.render();
+        if (queryTab() === tab && ['monitor', settingsRoute].includes(A.state.route)) {
+          const focused = document.activeElement;
+          const restore = focused?.closest('.monitor-navigation, #system-monitor-query-form');
+          const id = restore ? focused.id : '';
+          const searchText = id === 'system-monitor-search' ? focused.value : null;
+          A.render();
+          const control = id ? document.getElementById(id) : null;
+          if (searchText !== null && control) control.value = searchText;
+          control?.focus({ preventScroll: true });
+        }
       }
     }
   }
@@ -146,11 +156,22 @@
           `<div class="property-row"><span>${e(column.label)}</span><strong>${column.render ? column.render(row) : e(row[column.id] ?? '—')}</strong></div>`).join('')}</div>
         ${isDelivery ? '' : `<div class="system-monitor-card-actions">${action(row)}</div>`}</article>`).join('') + '</div>'
       : A.empty(empty, guidance);
-    return `<div class="toolbar"><div class="toolbar-left"><label for="system-monitor-filter">状态</label>
-      <select id="system-monitor-filter" ${pending.has(tab) ? 'disabled' : ''}>${A.options([['', '全部状态'], ...statuses], list(tab).status)}</select></div></div>` +
+    const selection = list(tab);
+    const help = isDelivery ? '投递记录保留 Telegram 接收结果，已接收不代表接收人已阅读。时间筛选按完成时间，未完成的记录按创建时间。'
+      : '人工确认表示已知悉，恢复由后续检测确认。关键词可查告警名称、事件编号或任务尾号。时间筛选按发生时间。';
+    return `<form id="system-monitor-query-form" class="toolbar system-monitor-query" role="search">
+      <div class="system-monitor-query-heading"><div class="section-title-row"><h2>${isDelivery ? '投递记录' : '告警记录'}</h2>${A.titleInfo(isDelivery ? '投递记录' : '告警记录', help, 'system-monitor-list-help')}</div><div data-page-actions></div></div>
+      <div class="system-monitor-filters">
+        <label class="system-monitor-search"><span class="sr-only">搜索${isDelivery ? '通知' : '告警'}</span><input id="system-monitor-search" type="search" maxlength="100" placeholder="${isDelivery ? '搜索通知、接收人或编号' : '搜索告警、事件编号或任务尾号'}" value="${e(selection.q || '')}"/></label>
+        <label>时间<select id="system-monitor-days">${A.options([['0', '全部时间'], ['1', '最近 24 小时'], ['7', '最近 7 天'], ['30', '最近 30 天']], String(selection.days || 0))}</select></label>
+        <label>状态<select id="system-monitor-filter">${A.options([['', '全部状态'], ...statuses], selection.status)}</select></label>
+        ${isDelivery ? '' : `<label>级别<select id="system-monitor-priority">${A.options([['', '全部级别'], ['P0', 'P0 · 紧急'], ['P1', 'P1 · 重要'], ['P2', 'P2 · 一般']], selection.priority || '')}</select></label>`}
+        <div class="system-monitor-filter-actions"><button type="submit" class="button primary">查询</button>${A.button('重置', 'system-monitor-reset')}</div>
+      </div></form>` +
       '<div data-monitor-list-frame><div class="system-monitor-list" data-pagination-table>' + A.table(columns, data.items, '', tableName, { title: empty, description: guidance }) +
       `<div class="system-monitor-mobile panel-body" data-pagination-rows tabindex="0" role="region" aria-label="${tableName}">${cards}</div></div>` +
       window.IDPagination.render({ id: namespace, page: data.page, pageSize: data.pageSize, total: data.total, disabled: pending.has(tab) }) + '</div>';
+
   }
 
   function notificationDetails() {
@@ -167,7 +188,7 @@
         ? '自动发送已关闭。请超级管理员配置接收人、核对测试回执后再启用。'
         : current.missingChannels?.length ? '部分规则缺少已验证的接收方，请超级管理员在通知设置补齐。'
         : '可在投递记录核对各条通知的实际结果。原代充通知的接管需单独核对。')}</p>`,
-      (superAdmin() ? A.button('打开监控与通知', 'goto', 'primary', '', 'data-route="settings/monitoring"') : '') +
+      (superAdmin() ? A.button('打开监控通知', 'goto', 'primary', '', 'data-route="settings/monitoring"') : '') +
       A.button('关闭', 'drawer-close'));
   }
 
@@ -199,62 +220,63 @@
     ];
     return '<div class="summary-strip system-monitor-summary" aria-label="监控概览">' + metrics.map(([label, value, detail], index) =>
       `<div class="summary-item" data-monitor-metric="${index}"><div class="summary-label">${e(label)}</div>
-        <div class="summary-number">${e(value)}</div><div class="system-monitor-metric-detail">${e(detail)}</div>
-        ${index === 3 && notification ? A.button('查看接通情况', 'system-monitor-notifications', 'compact') : ''}</div>`).join('') + '</div>';
+        <div class="system-monitor-number-row"><div class="summary-number" data-status="${index === 0 && value > 0 ? 'bad' : ''}">${e(value)}</div>
+        ${index === 3 && notification ? A.button('详情', 'system-monitor-notifications', 'compact', '', 'aria-label="查看接通情况"') : ''}</div><div class="system-monitor-metric-detail">${e(detail)}</div></div>`).join('') + '</div>';
   }
 
   function monitoringChecks(data) {
     const severity = { bad: 0, watch: 1, unknown: 2, disabled: 3, ok: 4 };
-    const groups = [['运行', '系统运行'], ['安全', '访问安全'], ['代充', '代充服务'], ['后台任务', '后台任务']];
-    const rows = (data.checks || []).filter(row => checkFilter() === 'all' ||
-      (checkFilter() === 'normal' ? row.status === 'ok' : row.status !== 'ok'));
-    const renderedGroups = groups.map(([category, label]) => {
-      const selected = rows.filter(row => row.category === category).sort((a, b) => severity[a.status] - severity[b.status]);
-      if (!selected.length) return '';
-      return `<section class="system-monitor-group" aria-label="${label}"><h3>${label}<span>${selected.length} 项</span></h3>` +
-        selected.map(row => `<article class="system-monitor-check" data-monitor-check="${e(row.code)}">
-          <div class="system-monitor-check-heading"><h4>${e(row.title || row.label)}</h4>${A.tag(checks[row.status] || '未知', statusKind(row.status))}</div>
-          <p>${e(row.detail || '尚未取得有效检测结果。')}</p>
-          ${row.measurement ? `<p class="system-monitor-measurement">${e(row.measurement)}</p>` : ''}
-          <div class="system-monitor-check-footer"><span>最近检查 ${e(time(row.at))}</span>
-            ${A.button('查看与处理', 'system-monitor-check', 'compact', '', `data-code="${e(row.code)}" aria-label="查看${e(row.title || row.label)}与处理"`)}</div>
-        </article>`).join('') + '</section>';
-    });
-    const rendered = [renderedGroups.slice(0, 2), renderedGroups.slice(2)].map(column => {
-      const content = column.join('');
-      return content ? '<div class="system-monitor-column">' + content + '</div>' : '';
-    }).join('');
-    return `<section class="panel"><div class="toolbar system-monitor-toolbar"><div class="toolbar-left">
-      <h2>监控项目</h2>${A.titleInfo('监控项目', '按系统、安全、代充和后台任务分组。默认显示异常、观察中、未知和未启用项目；可切换查看正常项目。时间均为北京时间。', 'system-monitor-checks-help')}
-      <label for="system-monitor-check-filter">显示</label><select id="system-monitor-check-filter">${A.options([
-        ['attention', '需关注'], ['all', '全部项目'], ['normal', '正常项目']], checkFilter())}</select>
+    const category = A.state.drafts.get(checksKey + ':category') || '';
+    const rows = (data.checks || []).filter(row => (!category || row.category === category) && (checkFilter() === 'all' ||
+      (checkFilter() === 'normal' ? row.status === 'ok' : row.status !== 'ok'))).sort((a, b) => severity[a.status] - severity[b.status]);
+    return `<div class="toolbar system-monitor-toolbar system-monitor-check-toolbar"><div class="toolbar-left">
+      <div class="section-title-row"><h2>监控项目</h2>${A.titleInfo('监控项目', '按系统、安全、代充和后台任务分类。默认显示需关注项目，未知和未接入不会视为正常。时间均为北京时间。页面可见时每 60 秒更新。', 'system-monitor-checks-help')}</div>
+      <label class="system-monitor-choice">状态<select id="system-monitor-check-filter">${A.options([
+        ['attention', '需关注'], ['all', '全部状态'], ['normal', '正常项目']], checkFilter())}</select></label>
+      <label class="system-monitor-choice">分类<select id="system-monitor-category">${A.options([
+        ['', '全部分类'], ['运行', '系统运行'], ['安全', '访问安全'], ['代充', '代充服务'], ['后台任务', '后台任务']], category)}</select></label>
       </div><div class="toolbar-right" data-page-actions></div></div>
-      <div class="system-monitor-read-time">最近更新 ${e(time(data.generatedAt))} · 页面可见时每 60 秒更新</div>
-      <div class="panel-body system-monitor-groups">${rendered || A.empty('暂无符合条件的监控项目', '可切换显示范围查看其他监控状态。')}</div></section>`;
+      <div class="system-monitor-read-time">${rows.length} 项 · 最近更新 ${e(time(data.generatedAt))}</div>
+      <div class="system-monitor-check-list" data-pagination-table><div class="table-viewport" tabindex="0" role="region" aria-label="监控项目列表">
+        <table class="system-monitor-check-table" data-table="system-monitor-checks"><thead><tr><th scope="col">监控项目</th><th scope="col">状态</th><th scope="col">检测结果</th><th scope="col">最近检查（北京）</th><th scope="col">操作</th></tr></thead>
+        <tbody>${rows.map(row => `<tr class="system-monitor-check" data-monitor-check="${e(row.code)}" data-row-id="${e(row.code)}">
+          <td><strong>${e(row.title || row.label)}</strong><span class="system-monitor-check-category">${e(row.category)}</span></td>
+          <td>${A.tag(checks[row.status] || '未知', statusKind(row.status))}</td>
+          <td class="system-monitor-check-result">${e(row.detail || '尚未取得有效检测结果。')}${row.measurement ? `<span class="system-monitor-measurement">${e(row.measurement)}</span>` : ''}</td>
+          <td class="system-monitor-check-time">${e(time(row.at))}</td>
+          <td>${A.button('查看详情', 'system-monitor-check', 'compact', '', `data-code="${e(row.code)}" aria-label="查看${e(row.title || row.label)}与处理"`)}</td>
+        </tr>`).join('') || `<tr><td colspan="5">${A.empty('暂无符合条件的监控项目', '可切换状态或分类查看其他项目。')}</td></tr>`}</tbody></table>
+      </div></div>`;
   }
 
   function channelForm(config) {
     const edited = draft();
     const fields = Object.entries(config.channels).map(([key, item]) =>
-      A.field(item.label, 'system-monitor-channel-' + key,
+      `<div class="system-monitor-recipient">${A.field(item.label, 'system-monitor-channel-' + key,
         A.input('system-monitor-channel-' + key, '', `data-channel="${key}" data-no-draft inputmode="numeric" autocomplete="off" maxlength="20" placeholder="${item.configured ? '已配置，填写可替换' : '请输入数字 Chat ID'}"`),
-        false, '留空保留当前编号。停用自动发送后可更换编号并重新测试。')).join('');
+        false, '留空保留当前编号。停用自动发送后可更换编号并重新测试。')}
+        <span class="system-monitor-recipient-status">${A.tag(item.verified ? '已取得回执' : item.configured ? '待测试' : '未配置', item.verified ? 'success' : '')}</span>
+        ${A.button('测试', 'system-monitor-test', '', '', `data-target="${key}" aria-label="测试${e(item.label)}" ${busy || !item.configured || !config.tokenConfigured ? 'disabled' : ''}`)}</div>`).join('');
     const targets = edited?.legacyRecipients || config.legacy.recipients || [];
     const migrated = config.legacy.phase !== 'managed' ? '' : A.field('代充业务接收人', 'system-monitor-legacy-admin',
       [['rechargeAdmin', 'system-monitor-legacy-admin'], ['rechargeGroup', 'system-monitor-legacy-group']].map(([key, id]) =>
         `<label class="checkbox-label"><input id="${id}" type="checkbox" data-legacy-target="${key}"
          ${targets.includes(key) ? 'checked' : ''}/>${e(config.channels[key].label)}</label>`).join(''), false,
       '适用于已接管的成功、失败和卡池告警。付款待核实发给代充管理员。');
-    return `<form id="system-monitor-channel-form" class="form-panel" novalidate><fieldset class="form-grid system-monitor-fields" ${busy ? 'disabled' : ''}>
-      ${A.field('自动发送', 'system-monitor-enabled', `<label class="checkbox-label"><input id="system-monitor-enabled" type="checkbox" ${(edited?.enabled ?? config.enabled) ? 'checked' : ''}/>启用 Telegram 告警</label>`)}
-      ${A.field('Bot 密钥', 'system-monitor-token', A.input('system-monitor-token', '', `type="password" data-no-draft autocomplete="new-password" maxlength="128" placeholder="${config.tokenConfigured ? '已配置，填写可替换' : '请输入 Bot 密钥'}"`),
-        false, '密钥只写入服务端。停用自动发送后可更换密钥并重新测试。')}
-      ${fields}${migrated}</fieldset><p class="field-error" data-system-monitor-error role="alert" hidden></p>
+    return `<form id="system-monitor-channel-form" class="form-panel system-monitor-channel-form" novalidate>
+      <fieldset class="system-monitor-fields system-monitor-channel-layout" ${busy ? 'disabled' : ''}>
+        <section class="system-monitor-connection"><div class="section-title-row"><h2>发送设置</h2>${A.titleInfo('发送设置', '先保存 Bot 和接收人，再分别测试渠道，确认回执后启用自动发送。测试操作会向已保存的接收人发出一条消息。', 'system-monitor-connection-help')}</div>
+          ${A.field('自动发送', 'system-monitor-enabled', `<label class="checkbox-label"><input id="system-monitor-enabled" type="checkbox" ${(edited?.enabled ?? config.enabled) ? 'checked' : ''}/>启用 Telegram 告警</label>`)}
+          ${A.field('Bot 密钥', 'system-monitor-token', A.input('system-monitor-token', '', `type="password" data-no-draft autocomplete="new-password" maxlength="128" placeholder="${config.tokenConfigured ? '已配置，填写可替换' : '请输入 Bot 密钥'}"`),
+            false, '密钥只写入服务端。留空保留已保存密钥，离开页面清除未提交内容。停用自动发送后可更换密钥并重新测试。')}
+          <div class="system-monitor-connection-state">Bot 状态 ${A.tag(config.tokenConfigured ? '已配置' : '未配置', config.tokenConfigured ? 'success' : '')}</div>
+        </section>
+        <section class="system-monitor-recipients"><div class="section-title-row"><h2>接收渠道</h2>${A.titleInfo('接收渠道', '每个接收人独立保存配置和测试回执。测试按钮使用服务端已保存的编号，新填写的编号需要先保存。', 'system-monitor-recipient-help')}</div>${fields}${migrated}</section>
+      </fieldset><p class="field-error" data-system-monitor-error role="alert" hidden></p>
       <div class="form-footer"><button type="submit" class="button primary" ${busy ? 'disabled' : ''}>保存渠道</button></div></form>
-      <div class="toolbar"><div class="toolbar-left">${Object.entries(config.channels).map(([key, item]) =>
-        A.button('测试' + item.label, 'system-monitor-test', '', '', `data-target="${key}" ${busy || !item.configured || !config.tokenConfigured ? 'disabled' : ''}`) +
-        A.tag(item.verified ? '已取得回执' : item.configured ? '待测试' : '未配置')).join('')}</div></div>
-      <div class="toolbar"><div class="toolbar-left"><strong>代充通知</strong>${A.tag(phases[config.legacy.phase] || '未知')}
+      <div class="toolbar system-monitor-legacy"><div class="toolbar-left"><strong>代充通知</strong>${A.tag(phases[config.legacy.phase] || '未知')}
+        ${A.titleInfo('代充通知', '原代充继续发送、接管核对中和已由系统统一发送分别记录。导入与接管沿用既有操作确认。', 'system-monitor-legacy-help')}
+      </div><div class="toolbar-right">
         ${config.legacy.available && config.legacy.phase !== 'managed' ? (config.legacy.phase === 'native' ?
           A.button('原代充 Telegram 设置', 'system-monitor-legacy-settings') +
           A.button(config.legacy.imported ? '重新核对并导入' : '导入原代充订阅', 'system-monitor-import') : '') +
@@ -264,47 +286,54 @@
 
   function ruleForm(config) {
     const edited = draft()?.rules || {};
-    return `<form id="system-monitor-rules-form" class="form-panel"><fieldset class="form-grid system-monitor-fields" ${busy ? 'disabled' : ''}>
-      ${config.rules.map(rule => A.field(rule.label, 'system-monitor-rule-' + rule.code,
-        `<label class="checkbox-label"><input type="checkbox" id="system-monitor-rule-${e(rule.code)}" data-rule="${e(rule.code)}"
-        ${(edited[rule.code] ?? rule.enabled) ? 'checked' : ''} ${rule.code === 'public_site' ||
-          (config.legacy.imported && config.legacy.phase !== 'managed' && ['recharge_success', 'recharge_failure', 'recharge_cards'].includes(rule.code)) ? 'disabled' : ''}/>${e(rule.priority)} · ${e(rule.category)}</label>`,
-        false, rule.code === 'public_site' ? '由独立站外探针配置接收人和投递。' : '接收方为' + (rule.recipient || '已配置接收人') + '。')).join('')}
-      </fieldset><p class="field-error" data-system-monitor-error role="alert" hidden></p>
+    const groups = [...new Set(config.rules.map(rule => rule.category))];
+    const selected = A.state.drafts.get(namespace + ':rule-category') || '';
+    const rules = config.rules.filter(rule => !selected || rule.category === selected);
+    return `<form id="system-monitor-rules-form" class="form-panel system-monitor-rule-form"><fieldset class="system-monitor-fields" ${busy ? 'disabled' : ''}>
+      <div class="toolbar system-monitor-toolbar"><div class="toolbar-left"><div class="section-title-row"><label for="system-monitor-rule-category">规则分类</label>${A.titleInfo('规则分类', '按分类查找通知规则。启用只调整该规则的发送开关，自动投递还取决于渠道配置及测试回执。筛选保留尚未保存的规则改动。', 'system-monitor-rules-help')}</div>
+        <select id="system-monitor-rule-category">${A.options([['', '全部分类'], ...groups.map(group => [group, group])], selected)}</select>
+        <span class="system-monitor-rule-count">${rules.length} / ${config.rules.length} 项</span>
+      </div></div>
+      <div class="system-monitor-rules-list" data-pagination-table><div class="table-viewport" role="region" aria-label="通知规则列表" tabindex="0">
+        <table class="system-monitor-rule-table" data-table="system-monitor-rules"><thead><tr><th scope="col">通知规则</th><th scope="col">分类</th><th scope="col">接收方</th><th scope="col">级别</th><th scope="col">通知开关</th></tr></thead><tbody>
+        ${rules.map(rule => `<tr data-row-id="${e(rule.code)}"><td><div class="section-title-row"><label for="system-monitor-rule-${e(rule.code)}">${e(rule.label)}</label>${A.titleInfo(rule.label,
+          rule.code === 'public_site' ? '由独立站外探针配置接收人和投递。' : '接收方为' + (rule.recipient || '已配置接收人') + '。', 'system-monitor-rule-help-' + rule.code)}</div></td>
+          <td>${e(rule.category)}</td><td>${e(rule.code === 'public_site' ? '独立站外探针' : rule.recipient || '已配置接收人')}</td><td>${A.tag(rule.priority, rule.priority === 'P0' ? 'danger' : '')}</td>
+          <td><label class="checkbox-label"><input type="checkbox" id="system-monitor-rule-${e(rule.code)}" data-rule="${e(rule.code)}"
+          ${(edited[rule.code] ?? rule.enabled) ? 'checked' : ''} ${rule.code === 'public_site' ||
+            (config.legacy.imported && config.legacy.phase !== 'managed' && ['recharge_success', 'recharge_failure', 'recharge_cards'].includes(rule.code)) ? 'disabled' : ''}/>启用</label></td></tr>`).join('') || `<tr><td colspan="5">${A.empty('暂无此分类规则', '请选择其他分类。')}</td></tr>`}
+        </tbody></table></div></div></fieldset><p class="field-error" data-system-monitor-error role="alert" hidden></p>
       <div class="form-footer"><button type="submit" class="button primary" ${busy ? 'disabled' : ''}>保存通知规则</button></div></form>`;
   }
 
   function render() {
     const setting = settingsPage();
-    const title = setting ? '监控与通知' : '监控中心';
-    const description = setting ? '设置 Telegram 接收人、规则和代充通知交接。测试与启用分别操作。'
-      : '查看基于实际观测的服务状态、异常、人工确认及恢复。没有有效观测时显示未知。';
+    const title = setting ? '监控通知' : '网站监控';
+    const description = setting ? '设置 Telegram 接收人、通知规则并查询投递回执。测试与启用分别操作。'
+      : '查看服务运行状态、告警记录与各网站访问统计。没有有效观测时显示未知。';
     if (!local() || (setting && !superAdmin()))
       return A.header(title, description) + `<section class="panel">${A.empty('监控资料不可用', D ? '请使用有权限的管理账号。' : '设计预览尚未接入实际监控。')}</section>`;
     const tab = queryTab(), snapshot = snapshots.get(tab)?.data, error = errors.get(tab);
     const refresh = A.button('刷新', 'system-monitor-refresh', '', 'refresh');
-    const jump = !setting && superAdmin() ? A.button('监控与通知', 'goto', '', '', 'data-route="settings/monitoring"') : '';
-    const nav = setting ? `<div class="tabs" role="tablist" aria-label="监控设置栏目">${[
+    const jump = !setting && superAdmin() ? A.button('监控通知', 'goto', '', '', 'data-route="settings/monitoring"') : '';
+    const nav = setting ? `<div class="tabs monitor-navigation" role="tablist" aria-label="监控通知栏目">${[
       ['channels', 'Telegram 渠道'], ['rules', '通知规则'], ['deliveries', '投递记录']
-    ].map(([key, label]) => `<button class="tab ${settingsTab() === key ? 'active' : ''}" role="tab" aria-selected="${settingsTab() === key}" data-action="system-monitor-tab" data-tab="${key}">${label}</button>`).join('')}</div>` : '';
+    ].map(([key, label]) => `<button type="button" id="tab-notification-${key}" class="tab ${settingsTab() === key ? 'active' : ''}" role="tab" aria-selected="${settingsTab() === key}" tabindex="${settingsTab() === key ? 0 : -1}"${settingsTab() === key ? ' aria-controls="system-monitor-view-content"' : ''} data-action="system-monitor-tab" data-tab="${key}">${label}</button>`).join('')}</div>` : A.websiteMonitorTabs(monitorView());
     let content = '';
     if (snapshot) {
       if (tab === 'config') {
         if (draft() && draft().version !== snapshot.version) content +=
           `<div class="toolbar"><span>服务器设置已更新，草稿待核对。</span>${A.button('使用最新版本继续编辑', 'system-monitor-rebase')}</div>`;
         content += settingsTab() === 'channels' ? channelForm(snapshot) : ruleForm(snapshot);
-      } else {
-        if (!setting) content += monitorOverview(snapshot) + monitoringChecks(snapshot) +
-          `<section class="panel system-monitor-incidents"><div class="panel-heading"><div class="section-title-row"><h2>告警记录</h2>
-            ${A.titleInfo('告警记录', '待确认、已确认、已恢复依次展示，组内按紧急程度及发生时间排序。人工确认只记录已知悉，恢复由后续检测确认。', 'system-monitor-incidents-help')}</div></div>` +
-          tableView(tab, snapshot) + '</section>';
-        else content += tableView(tab, snapshot);
-      }
+      } else content += !setting && monitorView() === 'checks' ?
+        `<div class="panel-body system-monitor-summary-wrap">${monitorOverview(snapshot)}</div>` + monitoringChecks(snapshot) : tableView(tab, snapshot);
     } else if (!error) content = '<div class="toolbar" role="status">等待读取监控资料</div>';
     if (error) content = `<div class="inline-notice warning" role="alert">${e(error)} ${snapshot ? '已保留上次读取。' : ''}</div>` + content;
-    return A.header(title, description, refresh + jump +
-      (!setting && superAdmin() ? A.button('登记已核实事件', 'system-monitor-verified') : '')) +
-      `<${setting ? 'section' : 'div'} class="${setting ? 'panel' : 'system-monitor-center'}" data-system-monitor-region>${nav}<div id="system-monitor-progress" role="status" hidden></div>${content}</${setting ? 'section' : 'div'}>`;
+    const actions = refresh + jump + (!setting && monitorView() === 'incidents' && superAdmin() ? A.button('登记已核实事件', 'system-monitor-verified') : '');
+    return A.header(title, description, actions) +
+      `<section class="panel system-monitor-workspace ${!setting && monitorView() === 'incidents' ? 'system-monitor-incidents' : ''}" data-system-monitor-region>
+        <div class="content-toolbar">${nav}${setting && tab === 'config' ? '<div class="toolbar-right" data-page-actions></div>' : ''}</div>
+        <div id="system-monitor-progress" role="status" hidden></div><div id="system-monitor-view-content" role="tabpanel" aria-labelledby="${setting ? 'tab-notification-' + settingsTab() : 'tab-' + monitorView()}">${content}</div></section>`;
   }
 
   async function act(command, success, form) {
@@ -346,10 +375,30 @@
   }
 
   function onClick(action, node) {
+    if (action === 'system-monitor-view') {
+      const view = node.dataset.view;
+      if (['checks', 'incidents'].includes(view)) {
+        if (!local()) return true;
+        A.state.drafts.set(viewKey, view);
+        if (A.state.route === 'monitor') { A.render(); void load(); }
+        else location.hash = '#/monitor';
+      } else if (['ops-website-analytics', 'ops-website-visits', 'ops-website-check'].includes(view)) {
+        if (view !== 'ops-website-check' && !local()) return true;
+        A.state.drafts.set('operations:tool-section:网站监控', { panel: view });
+        if (A.state.route === 'plugins/websites') A.render();
+        else location.hash = '#/plugins/websites';
+      }
+      return true;
+    }
     if (!action.startsWith('system-monitor-') || !local()) return false;
     const config = snapshots.get('config')?.data;
     const row = snapshots.get('incidents')?.data.items.find(item => item.id === node.dataset.id);
     if (action === 'system-monitor-refresh') void load(true);
+    if (action === 'system-monitor-reset') {
+      const tab = queryTab();
+      A.state.drafts.set(listViewKey + tab, { page: 1, pageSize: list(tab).pageSize, status: '', q: '', days: 0, priority: '' });
+      A.render(); void load();
+    }
     if (action === 'system-monitor-check') checkDetails(node.dataset.code);
     if (action === 'system-monitor-notifications') notificationDetails();
     if (action === 'system-monitor-tab' && ['channels', 'rules', 'deliveries'].includes(node.dataset.tab)) {
@@ -399,8 +448,14 @@
     if (node.id === 'system-monitor-check-filter' && ['attention', 'all', 'normal'].includes(node.value)) {
       A.state.drafts.set(checksKey, node.value); A.render(); return true;
     }
-    if (node.id === 'system-monitor-filter') {
-      A.state.drafts.set(listViewKey + tab, { ...list(tab), status: node.value, page: 1 }); void load(); return true;
+    if (node.id === 'system-monitor-rule-category') {
+      A.state.drafts.set(namespace + ':rule-category', node.value); A.render(); return true;
+    }
+    if (node.id === 'system-monitor-category') {
+      A.state.drafts.set(checksKey + ':category', node.value); A.render(); return true;
+    }
+    if (['system-monitor-filter', 'system-monitor-days', 'system-monitor-priority'].includes(node.id)) {
+      queryList(node.form); return true;
     }
     if (settingsPage() && (node.dataset.rule || node.dataset.legacyTarget || node.id === 'system-monitor-enabled')) {
       const config = snapshots.get('config')?.data;
@@ -416,7 +471,19 @@
     return false;
   }
 
+  function queryList(form) {
+    if (!form) return;
+    const tab = queryTab();
+    A.state.drafts.set(listViewKey + tab, { ...list(tab), page: 1,
+      q: form.querySelector('#system-monitor-search').value.trim(),
+      days: Number(form.querySelector('#system-monitor-days').value),
+      status: form.querySelector('#system-monitor-filter').value,
+      priority: form.querySelector('#system-monitor-priority')?.value || '' });
+    void load();
+  }
+
   async function onSubmit(form) {
+    if (form.id === 'system-monitor-query-form') { queryList(form); return true; }
     if (form.id === 'system-monitor-verified-form') {
       if (form.reportValidity()) await act({ action: 'verified',
         code: form.elements['system-monitor-verified-code'].value,
@@ -444,6 +511,16 @@
     const { page, pageSize } = event.detail;
     A.state.drafts.set(listViewKey + tab, { ...list(tab), page, pageSize });
     void load();
+  });
+  document.addEventListener('keydown', event => {
+    const nav = event.target.closest('.monitor-navigation');
+    if (!nav || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const tabs = [...nav.querySelectorAll('[role="tab"]')], index = tabs.indexOf(event.target);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 :
+      (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
+    tabs[next].click();
+    requestAnimationFrame(() => document.querySelector('.monitor-navigation [aria-selected="true"]')?.focus({ preventScroll: true }));
   });
   document.addEventListener('visibilitychange', scheduleRefresh);
   window.IDDesignModules.push({

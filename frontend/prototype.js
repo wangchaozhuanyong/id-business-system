@@ -263,10 +263,12 @@ const navigation = [
   ['数据中心', 'database', [['数据中心', 'data', true]]],
   ['插件管理', 'grid', [
     ['邮箱查询与邮箱池', 'plugins/mailboxes'],
-    ['网站监控', 'plugins/websites'],
     ['谷歌表格同步', 'plugins/sheets']
   ]],
-  ['监控中心', 'monitor', [['监控中心', 'monitor', true]]],
+  ['监控中心', 'monitor', [
+    ['网站监控', 'plugins/websites'],
+    ['监控通知', 'settings/monitoring']
+  ]],
   [
     '系统设置',
     'settings',
@@ -277,7 +279,6 @@ const navigation = [
       ['代付国家', 'settings/payment-countries'],
       ['汇率采集', 'settings/exchange-rates'],
       ['登录日志', 'settings/login-logs'],
-      ['监控与通知', 'settings/monitoring'],
       ['操作记录', 'settings/audit']
     ]
   ]
@@ -872,6 +873,15 @@ function operatorIdProperty(label, id) {
 function header(title, description, actions = '', label = '') {
   return `<div class="page-header"><div class="page-heading"><h1 id="page-title-heading">${escapeHtml(title)}</h1>${titleInfo(title, [description, label].filter(Boolean).join(' · '), 'page-description')}</div><div class="page-header-actions">${actions}</div></div>`;
 }
+function websiteMonitorTabs(active) {
+  const managed = !window.IDLocalData?.authRequired || ['admin', 'super'].includes(state.actor?.role);
+  const views = managed ? [
+    ['checks', '运行状态'], ['incidents', '告警记录'], ['ops-website-analytics', '访问统计'],
+    ['ops-website-visits', '访问记录与 IP'], ['ops-website-check', '网站检测']
+  ] : [['ops-website-check', '网站检测']];
+  return `<div class="tabs monitor-navigation" role="tablist" aria-label="网站监控功能">${views.map(([key, label]) =>
+    `<button type="button" id="tab-${key}" class="tab${active === key ? ' active' : ''}" role="tab" aria-selected="${active === key}" tabindex="${active === key ? 0 : -1}"${active === key ? ` aria-controls="${key.startsWith('ops-') ? key : 'system-monitor-view-content'}"` : ''} data-action="system-monitor-view" data-view="${key}">${label}</button>`).join('')}</div>`;
+}
 function gptOrderTabs() {
   if (!permittedRoute(gptOrderSyncRoute)) return '';
   const views = [['orders/gpt', '订单列表'], [gptOrderSyncRoute, '代充订单同步']];
@@ -1062,6 +1072,7 @@ function pageRows(rows) {
   return rows.slice((state.page - 1) * state.pageSize, state.page * state.pageSize);
 }
 function matchesNav(route, base) {
+  if (route === 'monitor' && base === 'plugins/websites') return true;
   if (route === 'workspace/order' && base === 'workspace/order/gpt') return true;
   return route === base || route.startsWith(base + '/');
 }
@@ -1194,16 +1205,16 @@ function renderSidebar(openCurrent = false) {
   const currentGroup = allowedNavigation.find((group) =>
     group[2].some((item) => matchesNav(state.route, item[1]))
   );
-  if (openCurrent && currentGroup && currentGroup[2].length > 1) state.expandedGroup = currentGroup[0];
+  if (openCurrent && currentGroup && (currentGroup[2].length > 1 || currentGroup[0] === '监控中心')) state.expandedGroup = currentGroup[0];
   const renewalCount = permittedRoute('workspace/renewals')
     ? window.IDDesignAPI.modules.commerce?.renewalReminderCount?.() || 0 : 0;
   $('#sidebar').innerHTML =
     `<a class="brand" href="#/mailboxes/google" aria-label="ID 业务管理首页"><span class="brand-mark">ID</span><span class="brand-name">业务管理系统</span></a><nav class="sidebar-navigation" tabindex="0" aria-label="业务模块导航">${allowedNavigation
       .map(([group, iconName, children]) => {
-        const direct = children.length === 1;
+        const direct = children.length === 1 && group !== '监控中心';
         const active = currentGroup?.[0] === group;
         const expanded = state.expandedGroup === group;
-        return `<div class="nav-group" data-tone="${({ mail: 'cyan', key: 'violet', users: 'teal', user: 'teal', orders: 'blue', bolt: 'violet', database: 'blue', monitor: 'teal', settings: 'blue', work: 'violet' })[iconName] || 'blue'}">${direct ? `<a class="nav-heading ${active ? 'active-direct' : ''}" href="#/${children[0][1]}" title="${group}" ${active ? 'aria-current="page"' : ''}>${icon(iconName)}<span class="nav-text">${group}</span></a>` : `<button class="nav-heading ${active ? 'active-parent' : ''}" data-action="nav-group" data-group="${group}" aria-expanded="${expanded}" title="${group}">${icon(iconName)}<span class="nav-text">${group}</span>${icon(expanded ? 'down' : 'chevron', 'chevron')}</button>${expanded ? `<div class="nav-children">${children.map(([title, route, placeholder]) => `<a class="nav-child ${matchesNav(state.route, route) ? 'active' : ''}" href="#/${route}" ${matchesNav(state.route, route) ? 'aria-current="page"' : ''}>${title}${route === 'workspace/renewals' ? `<small id="renewal-reminder-count" aria-label="待处理提醒" ${renewalCount ? '' : 'hidden'}>${renewalCount}</small>` : placeholder ? '<small>占位</small>' : ''}</a>`).join('')}</div>` : ''}`}</div>`;
+        return `<div class="nav-group" data-tone="${({ mail: 'cyan', key: 'violet', users: 'teal', user: 'teal', orders: 'blue', bolt: 'violet', database: 'blue', monitor: 'teal', settings: 'blue', work: 'violet' })[iconName] || 'blue'}">${direct ? `<a class="nav-heading ${active ? 'active-direct' : ''}" href="#/${children[0][1]}" title="${group}" ${active ? 'aria-current="page"' : ''}>${icon(iconName)}<span class="nav-text">${group}</span></a>` : `<button class="nav-heading ${active ? 'active-parent' : ''}" data-action="nav-group" data-group="${group}" aria-expanded="${expanded}" title="${group}">${icon(iconName)}<span class="nav-text">${group}</span>${icon(expanded ? 'down' : 'chevron', 'chevron')}</button>${expanded ? `<div class="nav-children">${children.map(([title, route, placeholder]) => `<a class="nav-child ${matchesNav(state.route, route) ? 'active' : ''}" href="#/${route === 'plugins/websites' && permittedRoute('monitor') ? 'monitor' : route}" ${matchesNav(state.route, route) ? 'aria-current="page"' : ''}>${title}${route === 'workspace/renewals' ? `<small id="renewal-reminder-count" aria-label="待处理提醒" ${renewalCount ? '' : 'hidden'}>${renewalCount}</small>` : placeholder ? '<small>占位</small>' : ''}</a>`).join('')}</div>` : ''}`}</div>`;
       })
       .join(
         ''
@@ -3496,6 +3507,7 @@ window.IDDesignAPI = {
   header,
   gptOrderSyncRoute,
   gptOrderTabs,
+  websiteMonitorTabs,
   summary,
   empty,
   table,

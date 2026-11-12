@@ -235,6 +235,7 @@ test('在线工具启动列表及原有工具操作、布局和草稿兼容', { 
       await page.evaluate((value) => document.documentElement.dataset.theme = value, theme);
       const personal = nav.getByRole('button', { name: '个人工具', exact: true });
       await close.click();
+      if (width <= 900) await page.locator('#mobile-tools-toggle').click();
       await personal.click();
       await drawer.getByRole('link', { name: '打开工作邮箱', exact: true }).waitFor();
       assert.equal(await drawer.getByRole('link', { name: '打开工作邮箱', exact: true }).getAttribute('target'), '_blank');
@@ -242,6 +243,7 @@ test('在线工具启动列表及原有工具操作、布局和草稿兼容', { 
       if (width === 1440 && theme === 'light') await screenshot('personal-tools-desktop');
       const phrase = nav.getByRole('button', { name: '话术文案', exact: true });
       await close.click();
+      if (width <= 900) await page.locator('#mobile-tools-toggle').click();
       await phrase.click();
       await drawer.getByText('A 话术', { exact: true }).waitFor();
       await checkFrame();

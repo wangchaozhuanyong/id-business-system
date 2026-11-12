@@ -167,7 +167,7 @@ test(
     };
     const showMetric = async (value) => {
       await drawer.getByRole('tab', { name: '访问统计', exact: true }).click();
-      await analytics.getByText(String(value), { exact: true }).waitFor();
+      await analytics.getByText(value + '次', { exact: true }).waitFor();
     };
     const showVisit = async (path) => {
       await drawer.getByRole('tab', { name: '访问记录与 IP', exact: true }).click();
@@ -217,7 +217,7 @@ test(
     await showMetric(333);
     await tools.reply(slowerAnalytics, analyticsResult(222));
     await showMetric(333);
-    assert.equal(await analytics.getByText('222', { exact: true }).count(), 0);
+    assert.equal(await analytics.getByText('222次', { exact: true }).count(), 0);
 
     const pendingThirtyDays = await requestAnalytics();
     const beforeCachedSwitch = { ...readCounts };
@@ -229,10 +229,58 @@ test(
     await drawer.getByRole('button', { name: '最近 30 天', exact: true }).click();
     await showMetric(666);
 
+    async function switchSite(site) {
+      await drawer.getByRole('group', { name: '统计站点' }).locator(`button[data-analytics-site="${site}"]`).click();
+      const route = await tools.next(analyticsPath);
+      const params = new URL(route.request().url()).searchParams;
+      assert.equal(params.get('site'), site);
+      assert.equal(params.get('days'), '30');
+      return route;
+    }
+    function storefrontResult(site, pageViews) {
+      return {
+        site, timeZone: 'UTC', utcOffset: 'GMT+00:00',
+        reportUrl: 'https://dash.cloudflare.com/example/web-analytics/overview/page-views?host=' + site,
+        summary: { pageViews, visits: 12 },
+        daily: [
+          { date: '2026-11-02', metrics: null },
+          { date: '2026-11-03', metrics: { pageViews: 0, visits: 0 } },
+          { date: '2026-11-04', metrics: { pageViews, visits: 12 } }
+        ]
+      };
+    }
+    const firstShop = await switchSite('damatong.net');
+    assert.equal(await analytics.getByText('666次', { exact: true }).count(), 0, '切站清除上一站的数据');
+    const secondShop = await switchSite('moyaoai.com');
+    await tools.reply(secondShop, storefrontResult('moyaoai.com', 730));
+    await showMetric(730);
+    await tools.reply(firstShop, storefrontResult('damatong.net', 719));
+    await showMetric(730);
+    assert.equal(await analytics.getByText('719次', { exact: true }).count(), 0, '旧站迟到响应不覆盖当前站点');
+    assert.deepEqual(await analytics.getByRole('columnheader').allTextContents(), ['日期', '浏览量', '访问次数']);
+    assert.deepEqual(await analytics.locator('tbody tr').first().getByRole('cell').allTextContents(), ['2026-11-02', '—', '—']);
+    assert.deepEqual(await analytics.locator('tbody tr').nth(1).getByRole('cell').allTextContents(), ['2026-11-03', '0', '0']);
+    assert.match(await analytics.getByRole('link', { name: '查看完整报表' }).getAttribute('href'), /host=moyaoai\.com$/);
+    const thirdShop = await switchSite('shop.flashcast.com.my');
+    await tools.reply(thirdShop, { status: 'unconfigured' });
+    await analytics.getByText('统计尚未接入', { exact: true }).waitFor();
+    assert.equal(await analytics.getByRole('link').count(), 0);
+    const siteCounts = { ...readCounts };
+    await drawer.getByRole('button', { name: /大马通/ }).click();
+    await showMetric(719);
+    await drawer.getByRole('button', { name: /FLASH CAST 装修/ }).click();
+    await showMetric(666);
+    assert.deepEqual(readCounts, siteCounts, '切回已读站点按站点和时间范围复用缓存');
+
     const failingAnalytics = await requestAnalytics();
     await showMetric(666);
     await tools.reply(failingAnalytics, { error: '统计服务暂时失败' }, 503);
     assert.match(await analyticsStatus.textContent(), /统计服务暂时失败/);
+    await showMetric(666);
+    await drawer.getByRole('button', { name: /大马通/ }).click();
+    await showMetric(719);
+    assert.equal(await analyticsStatus.isVisible(), false, '缓存命中后清理上一站的错误');
+    await tools.reply(await switchSite('flashcast.com.my'), analyticsResult(666));
     await showMetric(666);
 
     await setVisitFilters(page, firstVisitFilters);
@@ -284,7 +332,7 @@ test(
     await tools.reply(closedVisits, visitResult('/closed-drawer'));
     await showMetric(444);
     await showVisit('/reopened');
-    assert.equal(await analytics.getByText('555', { exact: true }).count(), 0);
+    assert.equal(await analytics.getByText('555次', { exact: true }).count(), 0);
     assert.equal(await visits.getByText('/closed-drawer', { exact: true }).count(), 0);
     assert.deepEqual(errors, []);
   }

@@ -118,6 +118,22 @@ test('public preflight requires explicit HTTPS and validates the deployed Micros
   assert.equal(read('--public-origin', publicOrigin, '--preview-origin', preview).status, 1);
 });
 
+test('the optional Cloudflare config is validated without sending or printing the credential', async (t) => {
+  const dir = await testDirectory(t);
+  const file = await fixture(dir, 'cloudflare.json', JSON.stringify({
+    accountId: 'a'.repeat(32),
+    apiToken: secretMarker,
+    sites: { 'shop.flashcast.com.my': 'b'.repeat(32) }
+  }));
+  const result = runCli('--website-cloudflare-config', file);
+  assert.equal(result.status, 2, 'the other tools are still missing');
+  const report = JSON.parse(result.stdout);
+  assert.deepEqual(report.counts, { valid: 1, missing: 4, invalid: 0, unavailable: 0 });
+  assert.equal(report.tools.websiteCloudflare.status, 'valid');
+  assert.equal(report.tools.websiteCloudflare.realIntegration, 'not_verified');
+  assert.ok(!result.stdout.includes(secretMarker));
+});
+
 test('public route checks issue only two safe GETs and reject redirects or missing endpoints', async () => {
   const publicOrigin = 'https://admin.example.test';
   const options = { 'public-origin': publicOrigin, 'probe-public-routes': true };

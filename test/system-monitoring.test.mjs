@@ -533,3 +533,42 @@ test('Telegram transport distinguishes acceptance, explicit rate limits, and an 
   assert.deepEqual(await attempt(async () => Response.json({ ok: true, result: { message_id: 1, chat: { id: 11 } } })),
     { status: 'unknown', reason: 'unconfirmed' });
 });
+
+
+test('monitor queries filter all records before pagination and use displayed timestamps', async t => {
+  const f = fixture(t);
+  const { monitor, tick } = f;
+  // More than one page of independent one-shot events; these are in-memory fixtures.
+  for (let i = 0; i < 25; i++) monitor.observe([{ code: 'security_confirmed', scope: 'old-' + i, status: 'bad' }]);
+  tick(8 * 86400_000);
+  monitor.observe([{ code: 'payment_duplicate', scope: 'new-payment', status: 'bad' }]);
+  monitor.observe([{ code: 'recharge_route', scope: 'new-route', status: 'bad' }]);
+  const selected = monitor.view({ q: '重复扣款', priority: 'P0', days: 7, page: 9, pageSize: 10 });
+  assert.equal(selected.total, 1);
+  assert.equal(selected.page, 1);
+  assert.equal(selected.items[0].label, '已核实重复扣款');
+  assert.equal(monitor.view({ priority: 'P1', days: 1 }).total, 1);
+  assert.equal(monitor.view({ q: '安全', days: 7 }).total, 0);
+  assert.equal(monitor.view({ q: selected.items[0].id.toUpperCase() }).total, 1);
+  assert.equal(monitor.view({ q: '安全', page: 3, pageSize: 10 }).items.length, 5);
+  assert.equal(monitor.view({ q: '不存在' }).total, 0);
+
+  monitor.save(0, { enabled: false, token, channels: { operations: ops }, rules: {} }, supervisor);
+  monitor.queueTest(1, 'operations', supervisor);
+  tick(2 * 86400_000);
+  assert.equal(monitor.view({ tab: 'deliveries', q: '渠道测试', days: 1 }).total, 0);
+  await monitor.dispatch();
+  const sent = monitor.view({ tab: 'deliveries', q: '运维', status: 'accepted', days: 1 });
+  assert.equal(sent.total, 1, 'time filter follows the completion time displayed in the table');
+  assert.equal(monitor.view({ tab: 'deliveries', q: '安全' }).total, 0);
+  assert.equal(monitor.view({ tab: 'deliveries', q: ops }).total, 0, 'private recipient ID is not a searchable field');
+});
+
+test('monitor query validation rejects ambiguous, excessive and unknown filters', async t => {
+  const { monitor } = fixture(t);
+  const handler = createMonitoringHandler({ monitor, publicOrigin: origin });
+  for (const query of ['q=' + 'x'.repeat(101), 'q=a&q=b', 'days=-1', 'days=2', 'priority=P3',
+    'q=%00', 'tab=deliveries&priority=P0', 'surprise=true'])
+    assert.equal((await http(handler, { url: monitorPath + '?' + query })).status, 400, query);
+  assert.equal((await http(handler, { url: monitorPath + '?q=%E6%94%AF%E4%BB%98&days=7&priority=P0', actor: admin })).status, 200);
+});

@@ -5,7 +5,7 @@
 | 工具 | 本机接入 | 实际服务配置 |
 | --- | --- | --- |
 | 2FA | 手工计算支持 Base32、验证器链接和多行输入。保存账号按登录身份隔离，加密落盘，取码和变更审计不包含密钥或验证码 | 使用新版登录，支持本机验证，无外部依赖 |
-| 网站监控 | 公开网站健康检测。管理员访问统计保留 GA4 属性时区；访问明细支持 7／30 天、排序分页、按 IP 查询、默认遮挡与经审计查看 | `--website-analytics-config` 直接接受标准 Google 只读服务账号 JSON，自动使用线上 FLASH CAST 数据源。也接受显式包含 `propertyId`、`streamId`、`hosts`、`serviceAccount` 的已有配置。签名采集使用 `--website-visits-secret-file` |
+| 网站监控 | 公开网站健康检测。管理员可查看装修站 GA4 和三个商城的 Cloudflare 流量。装修站访问明细支持 7／30 天、排序分页、按 IP 查询、默认遮挡与经审计查看 | `--website-analytics-config` 接受标准 Google 只读服务账号 JSON 或显式 GA4 配置。`--website-cloudflare-config` 读取商城报表。`--website-visits-secret-file` 用于装修站签名采集 |
 | 抖音解析 | 沿用原执行器协议、公开作品平台规则，按视频、原声、图片显示，统一登录下载 | 通过 `--media-resolver-url` 挂载独立执行器，详见 [解析执行器](MEDIA_RESOLVER.md) |
 | 邮箱查询与邮箱池 | 登录工具和买家查询页共用查询码。管理员可登记、批量登记谷歌／苹果、修改授权、启停、重发查询码、设定默认有效期。Microsoft 逐个完成 OAuth，已接通的 Apple 隐藏邮箱查询入口继续可用 | 谷歌、苹果填写应用专用密码；Microsoft 使用 `--microsoft-mailbox-config`，包含 `clientId`、`clientSecret`、`redirectUri`。独立回调路径为 `/api/local/tools/mailbox-microsoft/callback`。详见 [Microsoft 回调要求](https://learn.microsoft.com/entra/identity-platform/reply-url) 和 [IMAP 授权范围](https://learn.microsoft.com/en-us/exchange/client-developer/legacy-protocols/how-to-authenticate-an-imap-pop-smtp-application-by-using-oauth/) |
 
@@ -34,6 +34,26 @@ const microsoftMailboxConfig = await readToolConfig(
 ```
 
 三项返回值仍按原名称传给 `startPreview`。合成文件验收运行 `node --test test/tools-config-file.test.mjs`。
+
+## 商城流量配置
+
+`--website-cloudflare-config` 使用单独的 `0600` 或 `0400` JSON 文件，内容如下。将 Cloudflare API 令牌写入服务运行用户的私有配置，令牌权限使用目标账户的 [Account Analytics Read](https://developers.cloudflare.com/fundamentals/api/reference/permissions/)。
+
+```json
+{
+  "accountId": "<Cloudflare 账户 ID>",
+  "apiToken": "<只读 API 令牌>",
+  "sites": {
+    "damatong.net": "<damatong.net 的 siteTag>",
+    "moyaoai.com": "<moyaoai.com 的 siteTag>",
+    "shop.flashcast.com.my": "<flashcast.com.my 的 siteTag>"
+  }
+}
+```
+
+在 Cloudflare Web Analytics 打开对应报表，从报表链接读取 `siteTag~in`。闪铸商城复用 `flashcast.com.my` 的站点标识，查询精确匹配 `shop.flashcast.com.my`。可分批添加域名，缺少配置的站点会显示待接入。报表按 UTC 自然日展示 7／30 天，包含当天，查询排除 Cloudflare 标记的机器人。访问次数采用 [Cloudflare Web Analytics 口径](https://developers.cloudflare.com/web-analytics/data-metrics/high-level-metrics/)。
+
+将相同参数传给 `server/tools/online-tools-preflight.mjs` 检查私有文件权限和字段。真实验收需在服务配置后逐站对照 Cloudflare 报表，并统一域名、机器人过滤条件、日期和时区。服务端按站点和时间范围缓存报表 60 秒。
 
 ## 线上配置与新版接入
 

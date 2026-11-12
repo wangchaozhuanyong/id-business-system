@@ -37,7 +37,8 @@ test('the normal preview routes isolate saved 2FA, website analytics and signed 
   const visitSecret = 'test-only-website-visits-signed-fixture';
   const gaMetricHeaders = ['screenPageViews', 'totalUsers', 'sessions'].map((name) => ({ name }));
   const gaMetrics = ['9', '5', '7'].map((value) => ({ value }));
-  const rawDay = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const date = new Date().toISOString().slice(0, 10);
+  const rawDay = date.replaceAll('-', '');
   const rawReports = [{
     metadata: { timeZone: 'UTC' }, metricHeaders: gaMetricHeaders,
     rows: [{ metricValues: gaMetrics }], rowCount: 1
@@ -46,6 +47,7 @@ test('the normal preview routes isolate saved 2FA, website analytics and signed 
     rows: [{ dimensionValues: [{ value: rawDay }], metricValues: gaMetrics }], rowCount: 1
   }];
   let analyticsCalls = 0;
+  let cloudflareCalls = 0;
   let mailboxCalls = 0;
   let rejectExistingMailbox = false;
   const { server, url } = await startPreview(0, {
@@ -57,7 +59,21 @@ test('the normal preview routes isolate saved 2FA, website analytics and signed 
         private_key: privateKey.export({ type: 'pkcs8', format: 'pem' })
       }
     },
+    websiteCloudflareConfig: {
+      accountId: 'a'.repeat(32),
+      apiToken: 'synthetic-cloudflare-analytics-token',
+      sites: { 'shop.flashcast.com.my': 'b'.repeat(32) }
+    },
     websiteAnalyticsFetch: async (target, options) => {
+      if (target === 'https://api.cloudflare.com/client/v4/graphql') {
+        cloudflareCalls++;
+        const { variables } = JSON.parse(options.body);
+        assert(variables.filter.AND.some(filter => filter.requestHost === 'shop.flashcast.com.my'));
+        const totals = { count: 14, sum: { visits: 4 } };
+        return Response.json({ data: { viewer: { accounts: [{
+          total: [totals], daily: [{ dimensions: { date }, ...totals }]
+        }] } } });
+      }
       analyticsCalls++;
       if (target.includes('oauth2.googleapis.com')) {
         const claims = JSON.parse(Buffer.from(options.body.get('assertion').split('.')[1], 'base64url'));
@@ -121,6 +137,13 @@ test('the normal preview routes isolate saved 2FA, website analytics and signed 
   assert.equal(report.daily.length, 7);
   assert.equal((await call(analytics, { cookie: admin })).status, 200);
   assert.equal(analyticsCalls, 2);
+  const storefrontAnalytics = analytics + '&site=shop.flashcast.com.my';
+  assert.equal((await call(storefrontAnalytics, { cookie: employee })).status, 403);
+  const storefront = await (await call(storefrontAnalytics, { cookie: admin })).json();
+  assert.deepEqual(storefront.summary, { pageViews: 14, visits: 4 });
+  const waiting = await (await call(analytics + '&site=moyaoai.com', { cookie: admin })).json();
+  assert.equal(waiting.status, 'unconfigured');
+  assert.equal(cloudflareCalls, 1);
 
   const event = { eventId: randomUUID(), host: 'flashcast.com.my', path: '/zh/gallery',
     ip: '203.0.113.12', occurredAt: new Date().toISOString() };

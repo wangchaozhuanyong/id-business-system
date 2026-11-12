@@ -141,6 +141,7 @@ export async function startPreview(
     mediaResolverUrl,
     mediaFetch,
     websiteAnalyticsConfig,
+    websiteCloudflareConfig,
     websiteAnalyticsFetch,
     websiteVisitsSecret,
     readManagedMailbox,
@@ -181,6 +182,7 @@ export async function startPreview(
   });
   const handleWebsiteAnalytics = createWebsiteAnalytics({
     config: websiteAnalyticsConfig,
+    cloudflareConfig: websiteCloudflareConfig,
     fetchImpl: websiteAnalyticsFetch
   });
   const extractBitProxy = createBitBrowserProxyExtraction({ publicOrigin: secureOrigin });
@@ -783,6 +785,7 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
         'finance-provider': { type: 'string' },
         'media-resolver-url': { type: 'string' },
         'website-analytics-config': { type: 'string' },
+        'website-cloudflare-config': { type: 'string' },
         'website-visits-secret-file': { type: 'string' },
         'microsoft-mailbox-config': { type: 'string' },
         'mailbox-public-origin': { type: 'string' },
@@ -811,9 +814,10 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
     const rechargeConfig = values['codexdaichong-url']
       ? { upstreamUrl: values['codexdaichong-url'], secret: process.env.ID_RECHARGE_BRIDGE_SECRET }
       : undefined;
-    const [websiteAnalyticsConfig, websiteVisitsSecret, microsoftMailboxConfig] = await Promise.all(
+    const [websiteAnalyticsConfig, websiteCloudflareConfig, websiteVisitsSecret, microsoftMailboxConfig] = await Promise.all(
       [
         readToolConfig(values['website-analytics-config'], 'website-analytics'),
+        readToolConfig(values['website-cloudflare-config'], 'website-cloudflare'),
         readToolConfig(values['website-visits-secret-file'], 'website-visits'),
         readToolConfig(values['microsoft-mailbox-config'], 'microsoft-mailbox')
       ]
@@ -828,6 +832,7 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
       financeProvider: values['finance-provider'],
       mediaResolverUrl: values['media-resolver-url'],
       websiteAnalyticsConfig,
+      websiteCloudflareConfig,
       websiteVisitsSecret,
       mailboxPublicOrigin: values['mailbox-public-origin'],
       microsoftMailboxConfig

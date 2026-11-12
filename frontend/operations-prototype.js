@@ -36,7 +36,7 @@
   const localData = window.IDLocalData;
   const pluginPages = {
     'plugins/mailboxes': { label: '邮箱查询与邮箱池', tool: '邮箱查询与邮箱池', description: '统一管理收信连接、Claude 待授权邮箱与验证码查询。' },
-    'plugins/websites': { label: '网站监控', tool: '网站监控', description: '查看访问统计、访问记录与网站检测结果。' },
+    'plugins/websites': { label: '网站监控', tool: '网站监控', description: '集中查看运行状态、告警记录、各网站访问统计与网站检测。' },
     'plugins/sheets': { label: '谷歌表格同步', tool: 'Google 表格同步', description: '管理业务报表同步；当前同步功能尚待接入。' }
   };
   let pluginCleanup;
@@ -1746,7 +1746,7 @@
     const section = sections.some(([id]) => id === selected) ? selected : sections[0]?.[0] || '';
     const toolbar = tabs || lead ? `<div class="tool-header-row">${tabs}${lead}</div>` : '';
     const page = pluginPages[state.route]?.tool === name ? $('#plugin-tool-host') : null;
-    if (page) page.innerHTML = toolbar + `<div class="drawer-body plugin-tool-body">${body}</div>`;
+    if (page) page.innerHTML = (name === '网站监控' ? `<div class="tool-header-row">${api.websiteMonitorTabs(section || 'ops-website-check')}</div>` : toolbar) + `<div class="drawer-body plugin-tool-body">${body}</div>`;
     else openDrawer(titles[name] || name, description, toolbar + body, '', context, { kind: 'online-tool', tool: name, section });
     const drawer = page || $('#drawer');
     drawer.dataset.tool = name;
@@ -1764,7 +1764,7 @@
     if (sections.length) {
       const saved = getDraft(`tool-section:${name}`).panel;
       selectToolSection(sections.some(([id]) => id === saved) ? saved : sections[0][0]);
-      drawer.querySelector('[role="tablist"]').addEventListener('keydown', (event) => {
+      drawer.querySelector('[role="tablist"]:not(.monitor-navigation)')?.addEventListener('keydown', (event) => {
         const tabs = [...event.currentTarget.querySelectorAll('[role="tab"]')];
         if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
         event.preventDefault();
@@ -3142,6 +3142,8 @@
     if (cached) result.innerHTML = renderReport(cached.data);
     if (cached && !cached.stale && !refresh) {
       api.finishRegionRead(result.parentElement);
+      status.hidden = true;
+      status.textContent = '';
       return;
     }
     const hasResult = result.hasChildNodes();
@@ -3171,7 +3173,7 @@
       }
       read.finish();
       status.className = 'inline-notice warning';
-      status.textContent = `读取${label}失败。${hasResult ? '已保留上次结果。' : ''}${error?.message || '请稍后重试。'}`;
+      status.textContent = `读取${label}失败。${result.hasChildNodes() ? '已保留上次结果。' : ''}${error?.message || '请稍后重试。'}`;
       status.hidden = false;
     } finally {
       dialog?.removeEventListener('id-view-deactivate', cancelClosedRead);
@@ -3179,15 +3181,20 @@
       read.finish();
     }
   }
-  function websiteToolHeader(title, actions) {
-    return `<div class="tool-panel-header"><h3>${esc(title)}</h3><div class="tool-panel-actions" data-page-actions>${actions}</div></div>`;
+  function websiteToolHeader(title, actions, help = '') {
+    const heading = `<h3>${esc(title)}</h3>`;
+    return `<div class="tool-panel-header">${help ? `<div class="section-title-row">${heading}${help}</div>` : heading}<div class="tool-panel-actions" data-page-actions>${actions}</div></div>`;
   }
   function websiteMetrics(items) {
     return `<div class="tool-metrics${items.length === 2 ? ' tool-metrics--two' : ''}">${items.map(([label, amount]) =>
       `<div class="tool-metric"><span>${esc(label)}</span><strong>${amount}</strong></div>`).join('')}</div>`;
   }
   function websiteVisitsPanel() {
-    return `<section class="form-section website-tool-panel" id="ops-website-visits"><form id="ops-website-visits-form" novalidate>${websiteToolHeader('访问记录与访客 IP', button('刷新记录', 'ops-website-visit-refresh', '', 'return', 'data-async-refresh') + '<button type="submit" class="button primary">查询明细</button>')}${grid(
+    const title = '访问记录与访客 IP';
+    const actions = button('刷新记录', 'ops-website-visit-refresh', '', 'return', 'data-async-refresh') +
+      '<button type="submit" class="button primary">查询明细</button>';
+    const help = titleInfo(title, '这里显示 flashcast.com.my 装修站的签名采集记录。', 'website-visits-help');
+    return `<section class="form-section website-tool-panel" id="ops-website-visits"><form id="ops-website-visits-form" novalidate>${websiteToolHeader(title, actions, help)}${grid(
       field(
         '最近天数',
         'ops-visits-days',
@@ -3316,45 +3323,105 @@
     }
     node.disabled = false;
   }
+  const renovationAnalyticsSite = 'flashcast.com.my';
+  const websiteAnalyticsSites = [
+    [renovationAnalyticsSite, 'FLASH CAST 装修'],
+    ['damatong.net', '大马通'],
+    ['moyaoai.com', '模钥商城'],
+    ['shop.flashcast.com.my', '闪铸商城']
+  ];
+  const websiteAnalyticsCount = new Intl.NumberFormat('zh-CN');
   function websiteAnalyticsPanel() {
-    const actions = `<div class="tool-period" role="group" aria-label="统计时间范围">${button('最近 7 天', 'ops-website-analytics', '', '', 'data-days="7" aria-pressed="false"')}${button('最近 30 天', 'ops-website-analytics', '', '', 'data-days="30" aria-pressed="false"')}${button('刷新统计', 'ops-website-analytics', '', 'return', 'data-async-refresh')}</div><a class="button" href="https://analytics.google.com/analytics/web/#/a396903314p540413787/reports" target="_blank" rel="noopener noreferrer">查看完整报表</a>`;
-    return `<section class="form-section website-tool-panel" id="ops-website-analytics">${websiteToolHeader('装修网站访问统计', actions)}<div class="design-async-region" aria-busy="false"><div data-website-analytics-status role="status" hidden></div><div data-website-analytics-result></div></div></section>`;
+    const title = '流量概览';
+    const help = titleInfo(title,
+      '最近 7 天或 30 天包含今天，以报表标明的时区划分。装修站的访客数按所选期间去重。商城的访问次数按 Cloudflare 的外部来源或直接访问口径统计。每日明细中的「—」表示该日期未返回数据。',
+      'website-analytics-help');
+    const periods = [7, 30].map(days => button(`最近 ${days} 天`, 'ops-website-analytics', '', '',
+      `data-days="${days}" aria-pressed="false"`)).join('');
+    const actions = `<div class="tool-period" role="group" aria-label="统计时间范围">${periods}</div>` +
+      button('刷新统计', 'ops-website-analytics', '', 'return', 'data-async-refresh');
+    const sites = websiteAnalyticsSites.map(([host, name]) =>
+      `<button type="button" class="button website-analytics-site" data-action="ops-website-analytics" data-analytics-site="${host}" aria-pressed="false">
+        <span class="website-analytics-site-name"><strong>${esc(name)}</strong>${icon('check')}</span>
+        <span class="website-analytics-host">${host}</span>
+      </button>`).join('');
+    return `<section class="form-section website-tool-panel website-analytics-panel" id="ops-website-analytics">
+      ${websiteToolHeader(title, actions, help)}
+      <div class="website-analytics-sites" role="group" aria-label="统计站点">${sites}</div>
+      <div class="design-async-region" aria-busy="false">
+        <div data-website-analytics-status role="status" hidden></div><div data-website-analytics-result></div>
+      </div>
+    </section>`;
   }
-  async function showWebsiteAnalytics(days, { refresh = false } = {}) {
+  function renderWebsiteAnalyticsReport(report, site, days) {
+    const renovation = site === renovationAnalyticsSite;
+    const source = renovation ? 'Google Analytics 4' : 'Cloudflare Web Analytics';
+    if (report.status === 'unconfigured') {
+      return `<div class="website-analytics-empty">${empty('统计尚未接入', `${site} · 等待配置 ${source} 只读数据源。`)}</div>`;
+    }
+    const daily = report.daily || [];
+    const range = daily.length ? `${daily[0].date} 至 ${daily.at(-1).date}` : `最近 ${days} 天`;
+    const url = renovation ? 'https://analytics.google.com/analytics/web/#/a396903314p540413787/reports' : report.reportUrl;
+    const reportLink = typeof url === 'string' && (renovation || url.startsWith('https://dash.cloudflare.com/'))
+      ? `<a class="button" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${icon('external')}查看完整报表</a>` : '';
+    const timezone = report.timeZone === 'UTC' ? 'UTC' : [report.timeZone || '待确认', report.utcOffset].filter(Boolean).join(' ');
+    const meta = `<div class="website-analytics-meta"><p class="tool-report-meta">${source} · ${esc(range)} · 统计时区 ${esc(timezone)}${report.thresholded ? ' · 数据可能受隐私阈值限制' : ''}</p>${reportLink}</div>`;
+    if (!report.summary) {
+      return `<div class="tool-report">${meta}<div class="website-analytics-empty">${empty('该时间段没有访问统计', '')}</div></div>`;
+    }
+    const columns = renovation
+      ? [['pageViews', '浏览量', '次'], ['visitors', '访客数', '位'], ['sessions', '会话数', '次']]
+      : [['pageViews', '浏览量', '次'], ['visits', '访问次数', '次']];
+    const amount = (value) => Number.isSafeInteger(value) ? websiteAnalyticsCount.format(value) : '—';
+    const totals = api.summary(columns.map(([key, label, unit]) =>
+      [label, amount(report.summary[key]), unit, key === 'pageViews']));
+    const trend = window.IDCharts.bars({
+      title: '每日浏览量趋势', unit: '次', details: false,
+      rows: daily.map(row => ({ label: row.date, shortLabel: row.date.slice(5), pageViews: row.metrics?.pageViews })),
+      series: [{ key: 'pageViews', label: '浏览量', tone: 'blue' }]
+    });
+    const rows = daily.map(row => `<tr><td><time datetime="${esc(row.date)}">${esc(row.date)}</time></td>${columns.map(([key]) =>
+      `<td class="tool-data-number">${amount(row.metrics?.[key])}</td>`).join('')}</tr>`).join('');
+    return `<div class="tool-report website-analytics-report">
+      <div class="website-analytics-totals" role="group" aria-label="所选时间范围汇总">${totals}</div>
+      ${meta}
+      <div class="website-analytics-details">
+        <section class="panel website-analytics-trend" aria-labelledby="website-analytics-trend-title">
+          <h4 id="website-analytics-trend-title">每日浏览量趋势</h4>
+          <div class="website-analytics-chart">${trend}</div>
+        </section>
+        <section class="panel website-analytics-daily" aria-labelledby="website-analytics-daily-title">
+          <h4 id="website-analytics-daily-title">每日明细</h4>
+          <div class="table-viewport" role="region" aria-labelledby="website-analytics-daily-title" tabindex="0">
+            <table aria-labelledby="website-analytics-daily-title"><thead><tr><th scope="col">日期</th>${columns.map(([, label]) =>
+              `<th scope="col" class="tool-data-number">${label}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>
+          </div>
+        </section>
+      </div>
+    </div>`;
+  }
+  async function showWebsiteAnalytics(site, days, { refresh = false } = {}) {
     const panel = $('#ops-website-analytics');
     if (!panel) return;
-    state.drafts.set(draftKey('website-analytics'), { days });
+    state.drafts.set(draftKey('website-analytics'), { site, days });
+    for (const button of panel.querySelectorAll('[data-analytics-site]'))
+      button.setAttribute('aria-pressed', String(button.dataset.analyticsSite === site));
     for (const button of panel.querySelectorAll('[data-days]'))
       button.setAttribute('aria-pressed', String(Number(button.dataset.days) === days));
     const result = panel.querySelector('[data-website-analytics-result]');
     const status = panel.querySelector('[data-website-analytics-status]');
+    const selection = site + ':' + days;
+    if (result.dataset.selection !== selection) {
+      result.replaceChildren();
+      result.dataset.selection = selection;
+    }
     await refreshWebsiteReport(
       result,
       status,
       '网站访问统计',
-      () => localData.websiteAnalytics(days),
-      (report) => {
-        if (!report.summary) {
-          return empty(
-            '该时间段没有访问统计',
-            `最近 ${days} 天 · 统计时区 ${report.timeZone || '待确认'}。`
-          );
-        }
-        const metrics = (item) =>
-          [item?.pageViews, item?.visitors, item?.sessions].map((value) =>
-            Number.isSafeInteger(value) ? esc(value) : '—'
-          );
-        const [pv, users, sessions] = metrics(report.summary);
-        return `<div class="tool-report">${websiteMetrics([['浏览量', pv], ['访客数', users], ['会话数', sessions]])}<p class="tool-report-meta">最近 ${days} 天 · 统计时区 ${esc(report.timeZone)} ${esc(report.utcOffset || '')}${report.thresholded ? ' · 数据可能受隐私阈值限制' : ''}</p><div class="table-viewport"><table><thead><tr><th scope="col">日期</th><th scope="col" class="tool-data-number">浏览量</th><th scope="col" class="tool-data-number">访客数</th><th scope="col" class="tool-data-number">会话数</th></tr></thead><tbody>${report.daily
-          .map(
-            (row) =>
-              `<tr><td>${esc(row.date)}</td>${metrics(row.metrics)
-                .map((value) => `<td class="tool-data-number">${value}</td>`)
-                .join('')}</tr>`
-          )
-          .join('')}</tbody></table></div></div>`;
-      },
-      { scope: 'tools/website-analytics', key: days, refresh }
+      () => localData.websiteAnalytics(days, site),
+      (report) => renderWebsiteAnalyticsReport(report, site, days),
+      { scope: 'tools/website-analytics', key: { site, days }, refresh }
     );
   }
   function openWebsiteMonitor() {
@@ -3391,7 +3458,8 @@
       const visits = $('#ops-website-visits-form');
       bindToolDraft(visits, 'website-visits');
       if (isAdmin()) {
-        void showWebsiteAnalytics(getDraft('website-analytics').days || 7);
+        const { site, days } = getDraft('website-analytics', { site: renovationAnalyticsSite, days: 7 });
+        void showWebsiteAnalytics(site, days);
         void showWebsiteVisits(visits);
       }
       $('#ops-monitor-url').addEventListener('input', () => {
@@ -3590,7 +3658,9 @@
       return true;
     }
     if (action === 'ops-website-analytics') {
-      void showWebsiteAnalytics(Number(node.dataset.days) || getDraft('website-analytics').days || 7, { refresh: node.hasAttribute('data-async-refresh') });
+      const { site, days } = getDraft('website-analytics', { site: renovationAnalyticsSite, days: 7 });
+      void showWebsiteAnalytics(node.dataset.analyticsSite || site, Number(node.dataset.days) || days,
+        { refresh: node.hasAttribute('data-async-refresh') });
       return true;
     }
     if (['ops-mail-copy-code', 'ops-mail-copy-body', 'ops-mail-retry'].includes(action)) {
