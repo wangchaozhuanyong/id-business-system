@@ -22,6 +22,14 @@ CARD_PLAN_CHECKS = {"card_plan_mysql_transactions_passed", "source_203_native", 
                     "owned_temporary_containers_removed"}
 
 
+def worker_launch_binding():
+    state, launcher_hash = worker_binding()
+    commands = re.findall(rb"argv\[\]=([^;]+)", state)
+    require(len(commands) == 1 and str(WORKER_LAUNCHER).encode() in commands[0],
+            "worker_launch_binding_mismatch")
+    return commands[0].strip(), launcher_hash
+
+
 def stage_worker_launcher(content, previous, source):
     old_path = Path(previous)
     require(old_path.is_absolute() and old_path != ROOT and ROOT in old_path.parents, "worker_source_outside_project")
@@ -182,8 +190,8 @@ class CoreRelease:
         mounts = media_mounts(native)
         ready_socket()
         worker = worker_runtime(inspect("vendure-worker"))
-        binding, launcher_hash = worker_binding()
-        require(str(WORKER_LAUNCHER).encode() in binding and digest(WORKER_LAUNCHER) == launcher_hash,
+        binding, launcher_hash = worker_launch_binding()
+        require(digest(WORKER_LAUNCHER) == launcher_hash,
                 "worker_launch_binding_mismatch")
         launcher_folder = WORKER_LAUNCHER.parent.lstat()
         require(not WORKER_LAUNCHER.is_symlink() and not WORKER_LAUNCHER.parent.is_symlink() and
@@ -255,7 +263,7 @@ class CoreRelease:
         try:
             self.pause_intake()
             self.drain_worker()
-            require(worker_binding() == binding, "storefront_worker_binding_changed_during_drain")
+            require(worker_launch_binding() == binding, "storefront_worker_binding_changed_during_drain")
             drained = self.production_readback("--require-idle")
             require(drained["providerActive"] == self.state["providerActive"] and
                     drained["providerInFlight"] == 0 and drained["providerUnresolved"] == 0 and

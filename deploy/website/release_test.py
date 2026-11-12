@@ -167,6 +167,14 @@ class WebsiteReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(remote.ReleaseError, "native_recharge_asset_digest_mismatch"):
             remote.require_asset_digest(plan, old)
 
+    @patch("recharge_core.worker_binding")
+    def test_worker_drain_compares_the_command_and_digest_without_runtime_timestamps(self, binding):
+        path = str(recharge_core.WORKER_LAUNCHER)
+        command = f"{{ path={path} ; argv[]={path} ; "
+        binding.side_effect = [(f"{command}start_time=100 ; stop_time=none }}".encode(), "hash"),
+                               (f"{command}start_time=100 ; stop_time=200 }}".encode(), "hash")]
+        self.assertEqual(recharge_core.worker_launch_binding(), recharge_core.worker_launch_binding())
+
     @patch("release.require_redeem_presentation")
     @patch("release.require_ancestor")
     @patch("release.git")
