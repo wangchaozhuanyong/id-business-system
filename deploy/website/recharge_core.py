@@ -107,6 +107,25 @@ def media_mounts(container):
     return observed
 
 
+def verify_snapshot_receipt(sha, summary):
+    folder = ROOT / "backups" / ("recharge-core-" + sha)
+    manifest = folder / "manifest.json"
+    ciphertext = folder / "mysql.sql.aes256gcm"
+    require(summary.get("backup") == str(folder) and summary.get("verified") is True and
+            type(summary.get("plainBytes")) is int and summary["plainBytes"] > 0 and
+            folder.is_dir() and not folder.is_symlink() and
+            all(file.is_file() and not file.is_symlink() for file in (manifest, ciphertext)),
+            "sealed_recharge_backup_receipt_invalid")
+    data = json.loads(manifest.read_text())
+    require(data.get("revision") == sha and data.get("encrypted") is True and data.get("verified") is True and
+            data.get("database") == "id_redesign_codexdaichong_prod" and
+            data.get("plainBytes") == summary["plainBytes"] and
+            re.fullmatch(r"[a-f0-9]{64}", data.get("plainSha256", "")) and
+            re.fullmatch(r"[a-f0-9]{64}", data.get("cipherSha256", "")) and ciphertext.stat().st_size > 0,
+            "sealed_recharge_backup_not_verified")
+    return {"plainBytes": data["plainBytes"], "cipherSha256": data["cipherSha256"]}
+
+
 class CoreRelease:
     def __init__(self, plan, source, operations):
         self.sha = plan["sha"]
@@ -269,8 +288,7 @@ class CoreRelease:
                     drained["providerInFlight"] == 0 and drained["providerUnresolved"] == 0 and
                     (not drained["providerActive"] or drained["availableCards"] > 0), "native_recharge_cutover_not_ready")
             backup = json.loads(run(["python3", str(self.scripts / "snapshot.py"), self.sha], timeout=90))
-            require(backup.get("revision") == self.sha and backup.get("verified") is True and
-                    backup.get("encrypted") is True, "sealed_recharge_backup_not_verified")
+            backup_evidence = verify_snapshot_receipt(self.sha, backup)
             require_main(self.sha)
             self.switched = True
             print("Switching the drained native recharge runtime", flush=True)
@@ -281,7 +299,8 @@ class CoreRelease:
             run(["systemctl", "start", NATIVE_UNIT], timeout=50)
             native = ready_native(self.sha, self.image, mounts)
             self.receipt = {"native": native, "nativeCanaryPassed": True, "encryptedSnapshotVerified": True,
-                            "providerBefore": drained, "routesBefore": self.state["routes"]}
+                            "encryptedSnapshot": backup_evidence, "providerBefore": drained,
+                            "routesBefore": self.state["routes"]}
             self.worker_expected = (worker[0], worker[1], str(self.source))
             yield native
         finally:
