@@ -5,6 +5,7 @@ import { isAbsolute, join, resolve } from 'node:path';
 
 const workers = new Set(['backup', 'sheets']);
 const receiptPath = (directory, name) => join(directory, 'monitoring-' + name + '.json');
+export const sheetsReceiptMaxAge = 15 * 60_000;
 const timestamp = value => Number.isSafeInteger(value) && value > 0;
 
 async function readReceiptFile(path, { uid, mode, gid }) {
@@ -30,6 +31,13 @@ function validWorkerReceipt(value) {
 export async function readWorkerReceipt(directory, name) {
   if (!directory || !workers.has(name)) return null;
   const value = await readReceiptFile(receiptPath(directory, name), { uid: process.getuid(), mode: 0o600 });
+  return validWorkerReceipt(value) ? value : null;
+}
+
+export async function readSheetsMonitorReceipt(directory) {
+  if (!directory) return null;
+  const value = await readReceiptFile(join(directory, 'sheets-status.json'),
+    { uid: 0, gid: process.getgid(), mode: 0o640 });
   return validWorkerReceipt(value) ? value : null;
 }
 

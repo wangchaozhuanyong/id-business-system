@@ -266,6 +266,25 @@ class WebsiteReleaseTests(unittest.TestCase):
         self.assertIsNone(backup_monitoring.mysql_fields(receipt | {"manifestVersionId": "null"}))
         self.assertIsNone(backup_monitoring.mysql_fields(receipt | {"verifiedAt": "2026-11-11T07:29:59+00:00"}))
 
+    def test_sheets_projection_uses_timestamped_worker_outcomes(self):
+        verified = '{"status":"verified","writes":0,"rows":{"邮箱管理":1,"账号管理":2,"订单管理":3,"客户管理":4}}'
+        retry = '{"status":"retry","code":"SHEETS_SYNC_FAILED"}'
+        result = backup_monitoring.sheets_fields("\n".join([
+            f"2026-11-12T03:04:00.500000000Z {retry}",
+            f"2026-11-12T03:00:00.200000000Z {verified}",
+            f"2026-11-12T03:02:00.300000000Z {retry}",
+            '2026-11-12T03:05:00Z {"status":"verified","private":"fixture-only"}',
+            '2026-11-12T03:06:00Z unrelated output',
+        ]))
+        self.assertEqual(result["at"] - result["verifiedAt"], 240_300)
+        self.assertEqual(result["failures"], 2)
+        self.assertEqual(set(result), {"at", "verifiedAt", "failures", "integrityFailure"})
+        self.assertIsNone(backup_monitoring.sheets_fields('{"status":"verified"}'))
+        recovered = backup_monitoring.sheets_fields(
+            f"2026-11-12T03:02:00Z {retry}\n2026-11-12T03:04:00Z {verified}")
+        self.assertEqual(recovered["verifiedAt"], recovered["at"])
+        self.assertEqual(recovered["failures"], 0)
+
     def test_canary_diagnostic_outputs_only_recognized_indicators_and_locations(self):
         result = remote.canary_diagnostics("AssertionError [ERR_ASSERTION]: synthetic secret input\n"
                                            "at /ops/check-app.mjs:24:5\n"

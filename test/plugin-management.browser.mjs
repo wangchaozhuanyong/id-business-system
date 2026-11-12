@@ -48,8 +48,8 @@ test('插件导航、Claude 待授权、授权后取码与可点击邮件链接'
       body: '<p>验证码 123456</p><a href="https://example.test/verify/synthetic">验证邮箱按钮</a><script>window.injectedMail=true</script><img src="https://tracking.invalid/pixel"><a href="javascript:alert(1)">危险链接</a>' }] } });
   });
   await context.route('https://example.test/verify/synthetic', route => route.fulfill({ body: 'synthetic verification target' }));
-  await context.route(origin + '/api/local/tools/website-analytics?*', route => route.fulfill({ json: {
-    summary: { pageViews: 9, visitors: 5, sessions: 6 }, daily: [{ date: '2026-11-07', metrics: { pageViews: 9, visitors: 5, sessions: 6 } }], timeZone: 'UTC'
+  await context.route(origin + '/api/local/tools/sheets-status', route => route.fulfill({ json: {
+    state: 'no_receipt', reportedAt: null, verifiedAt: null, failures: null, tabs: []
   } }));
   await context.route(origin + '/api/local/tools/website-visits/search', route => route.fulfill({ json: {
     items: [{ id: 'synthetic-visit', ipMasked: '203.0.*.*', path: '/long-path/'.repeat(20), occurredAt: '2026-11-07T08:00:00Z' }],
@@ -122,7 +122,7 @@ test('插件导航、Claude 待授权、授权后取码与可点击邮件链接'
     if ([1440, 390].includes(width)) await page.screenshot({ path: `${output}/mailboxes-${width}-${theme}.png` });
   }
   await page.goto(origin + '/#/plugins/websites');
-  await page.locator('[data-website-analytics-result] table tbody tr').waitFor();
+  assert.equal(await page.getByRole('link', { name: '查看网站统计', exact: true }).getAttribute('href'), '#/data');
   await page.getByRole('tab', { name: '访问记录与 IP', exact: true }).click();
   await page.locator('[data-visits-result] table tbody tr').waitFor();
   assert.equal(await page.locator('[data-visits-result] td').nth(1).evaluate(node => getComputedStyle(node).whiteSpace), 'nowrap');
@@ -132,7 +132,8 @@ test('插件导航、Claude 待授权、授权后取码与可点击邮件链接'
   await page.locator('#ops-website-monitor-form button[type="submit"]').click();
   await page.locator('#ops-monitor-result').getByText('网站可访问', { exact: true }).waitFor();
   await page.goto(origin + '/#/plugins/sheets');
-  assert.match(await page.locator('#main').innerText(), /待开发/);
+  await page.getByText('未收到有效回执', { exact: true }).waitFor();
+  assert.equal(new URL(page.url()).hash, '#/data/sheets');
   await page.goto(origin + '/#/plugins/mailboxes');
   await page.locator('#ops-mailbox-pool').waitFor();
   assert.equal(await pool.getByRole('searchbox', { name: '搜索邮箱池' }).inputValue(), '');

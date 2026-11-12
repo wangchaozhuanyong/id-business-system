@@ -1,11 +1,13 @@
 # 独立新版在线工具验收
 
-左侧插件管理提供邮箱查询与邮箱池、网站监控、谷歌表格同步；工具箱保留计算 2FA 验证码和抖音解析。谷歌表格同步保留管理员占位，按新版数据范围另行开发。Claude 邮箱自动投影为待授权记录，沿用原服务商授权验证后才可取信，详见 [插件管理](../../docs/PLUGIN_MANAGEMENT_20261107.md)。中转脚本暂从菜单移除。
+左侧插件管理提供邮箱查询与邮箱池、网站监控，工具箱保留计算 2FA 验证码和抖音解析。数据中心提供网站统计和谷歌表格同步，沿用管理员权限。
 
 | 工具 | 本机接入 | 实际服务配置 |
 | --- | --- | --- |
 | 2FA | 手工计算支持 Base32、验证器链接和多行输入。保存账号按登录身份隔离，加密落盘，取码和变更审计不包含密钥或验证码 | 使用新版登录，支持本机验证，无外部依赖 |
-| 网站监控 | 公开网站健康检测。管理员访问统计保留 GA4 属性时区；访问明细支持 7／30 天、排序分页、按 IP 查询、默认遮挡与经审计查看 | `--website-analytics-config` 直接接受标准 Google 只读服务账号 JSON，自动使用线上 FLASH CAST 数据源。也接受显式包含 `propertyId`、`streamId`、`hosts`、`serviceAccount` 的已有配置。签名采集使用 `--website-visits-secret-file` |
+| 网站监控 | 公开网站健康检测。管理员访问明细支持 7／30 天、排序分页、按 IP 查询、默认遮挡与经审计查看 | 签名采集使用 `--website-visits-secret-file` |
+| 网站统计 | 装修站展示浏览量、访问次数和时段去重访客数。三个商城展示浏览量与访问次数，按站点与时间范围分别查看 | `--website-analytics-config` 读取装修站 GA4，`--website-cloudflare-config` 读取商城 Cloudflare Web Analytics |
+| 谷歌表格同步 | 查看持续运行的同步进程回执，以及邮箱、账号、订单和客户的工作表字段。刷新只读取回执 | 优先读取同步进程的专用回执。正式站的现有备份状态采集器也从同步进程的日志投影最后核验时间和失败状态，通过现有只读挂载提供给页面 |
 | 抖音解析 | 沿用原执行器协议、公开作品平台规则，按视频、原声、图片显示，统一登录下载 | 通过 `--media-resolver-url` 挂载独立执行器，详见 [解析执行器](MEDIA_RESOLVER.md) |
 | 邮箱查询与邮箱池 | 登录工具和买家查询页共用查询码。管理员可登记、批量登记谷歌／苹果、修改授权、启停、重发查询码、设定默认有效期。Microsoft 逐个完成 OAuth，已接通的 Apple 隐藏邮箱查询入口继续可用 | 谷歌、苹果填写应用专用密码；Microsoft 使用 `--microsoft-mailbox-config`，包含 `clientId`、`clientSecret`、`redirectUri`。独立回调路径为 `/api/local/tools/mailbox-microsoft/callback`。详见 [Microsoft 回调要求](https://learn.microsoft.com/entra/identity-platform/reply-url) 和 [IMAP 授权范围](https://learn.microsoft.com/en-us/exchange/client-developer/legacy-protocols/how-to-authenticate-an-imap-pop-smtp-application-by-using-oauth/) |
 
@@ -34,6 +36,12 @@ const microsoftMailboxConfig = await readToolConfig(
 ```
 
 三项返回值仍按原名称传给 `startPreview`。合成文件验收运行 `node --test test/tools-config-file.test.mjs`。
+
+## 商城统计接入
+
+`--website-cloudflare-config` 接收私有 JSON 文件，字段为 `accountId`、`apiToken` 和 `sites`。令牌使用目标账户的 Analytics 读取权限。`sites` 按域名映射各 Web Analytics 报表的 `siteTag`，支持 `damatong.net`、`moyaoai.com`、`shop.flashcast.com.my`，可分批接入。闪铸商城可与装修站复用 Cloudflare 的站点标识，查询仍精确限定商城域名。
+
+商城按 UTC 自然日统计，装修站保留 GA4 属性的统计时区。最近 7／30 天包含读取当天。上线验收需按同一域名、日期、时区和机器人过滤条件逐站核对读数，并回读同步进程的真实回执。访问次数定义见[Cloudflare Web Analytics 指标](https://developers.cloudflare.com/web-analytics/data-metrics/high-level-metrics/)。
 
 ## 线上配置与新版接入
 
@@ -73,6 +81,7 @@ if (await handleLegacyToolRoute(request, response)) return;
 node server/tools/online-tools-preflight.mjs
 node server/tools/online-tools-preflight.mjs \
   --website-analytics-config "$ga4_private_file" \
+  --website-cloudflare-config "$cloudflare_private_file" \
   --website-visits-secret-file "$visits_private_file" \
   --media-resolver-url "$worker_loopback_origin" \
   --microsoft-mailbox-config "$microsoft_private_file" \
