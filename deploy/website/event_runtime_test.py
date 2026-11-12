@@ -1,10 +1,13 @@
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import urllib.error
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import build_event_runtime
@@ -30,6 +33,53 @@ class EventReleaseTests(unittest.TestCase):
         self.assertEqual(sum('GRANT SELECT ON' in grant for grant in grants), 6)
         self.assertTrue(all("'id_recharge_events'@'172.17.0.1'" in grant for grant in grants))
         self.assertFalse(any(word in ' '.join(grants) for word in ['INSERT', 'UPDATE', 'DELETE', 'ALL PRIVILEGES', 'GRANT OPTION']))
+
+    def test_gateway_recovers_written_but_inactive_config_without_rewriting_it(self):
+        runtime = ROOT / '.runtime'; runtime.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=runtime) as directory:
+            root = Path(directory); gateway = root / 'Caddyfile'
+            (root / '.application-release.lock').touch()
+            gateway.write_text(event_gateway.UPDATED)
+            inode = gateway.stat().st_ino
+            with patch.object(event_gateway, 'ROOT', root), patch.object(event_gateway, 'GATEWAY', gateway), \
+                    patch.object(event_gateway, 'caddy'), patch.object(event_gateway, 'probe', side_effect=[False, True]), \
+                    patch.object(event_gateway, 'activate', return_value='gateway-restart') as activate:
+                result = event_gateway.prepare(True)
+                activate.assert_called_once_with(event_gateway.UPDATED)
+                self.assertFalse(result['changed']); self.assertTrue(result['applied'])
+                self.assertEqual(gateway.stat().st_ino, inode)
+            with patch.object(event_gateway, 'ROOT', root), patch.object(event_gateway, 'GATEWAY', gateway), \
+                    patch.object(event_gateway, 'caddy'), patch.object(event_gateway, 'probe', return_value=True), \
+                    patch.object(event_gateway, 'activate') as activate:
+                self.assertEqual(event_gateway.prepare(True)['activation'], 'already-active')
+                activate.assert_not_called()
+
+    def test_disabled_admin_activation_preserves_image_and_rejects_unexpected_startup(self):
+        command = json.dumps(['caddy', 'run', '--config', '/etc/caddy/Caddyfile', '--adapter', 'caddyfile'])
+        for version, operation in [('v2.10.2 hash', 'restart'), ('v2.11.0 hash', 'kill')]:
+            with self.subTest(version=version), \
+                    patch.object(event_gateway.subprocess, 'check_output', side_effect=[command, version]), \
+                    patch.object(event_gateway.subprocess, 'run', return_value=SimpleNamespace(returncode=0)) as run:
+                event_gateway.activate('{\n  admin off\n}\n' + event_gateway.UPDATED)
+                args = run.call_args.args[0]
+                self.assertEqual(args[1], operation)
+                self.assertEqual(args[-1], 'id-business-independent-caddy')
+                if operation == 'kill': self.assertIn('--signal=USR1', args)
+        with patch.object(event_gateway.subprocess, 'check_output', return_value='["caddy", "run", "--resume"]'), \
+                patch.object(event_gateway.subprocess, 'run') as run:
+            with self.assertRaisesRegex(RuntimeError, 'start_command_changed'):
+                event_gateway.activate('{\n  admin off\n}\n')
+            run.assert_not_called()
+
+    def test_gateway_probe_matches_application_headers_and_requires_exact_rejection(self):
+        for status, body, expected in [(400, b'{"error":"invalid_request"}', True),
+                                       (403, b'blocked', False), (400, b'other', False)]:
+            with patch.object(event_gateway.urllib.request, 'urlopen', side_effect=urllib.error.HTTPError(
+                    'http://127.0.0.1', status, '', {}, io.BytesIO(body))) as request:
+                self.assertEqual(event_gateway.probe(), expected)
+                req = request.call_args.args[0]
+                self.assertEqual(req.get_header('User-agent'), 'node')
+                self.assertEqual(req.data, b'{}')
 
     def test_launcher_frames_credentials_and_does_not_need_reader_secret_in_canary(self):
         runtime = ROOT / '.runtime'
