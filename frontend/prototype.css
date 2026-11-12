@@ -4702,13 +4702,8 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
   .recharge-code-table .table-actions > .action-links { display: flex; flex-wrap: wrap; height: auto; }
   .recharge-code-table .empty-state { padding: 8px; }
 }
-@container (max-width: 319px) {
+@container (max-width: 439px) {
   .recharge-workspace .recharge-request-fields { grid-template-columns: minmax(0, 1fr); }
-}
-@media (max-width: 900px) {
-  @container (max-width: 419px) {
-    .recharge-workspace .recharge-request-fields { grid-template-columns: minmax(0, 1fr); }
-  }
 }
 
 /* Submission workspaces use the same inset for titles, fields, and actions. */
