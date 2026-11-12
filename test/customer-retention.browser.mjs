@@ -268,6 +268,19 @@ test('客户流失归集、订阅历史、数据核对与响应式离线验收',
         return { controlsFit, pageOverflow: document.documentElement.scrollWidth > innerWidth + 1 };
       });
       assert.deepEqual(geometry, { controlsFit: true, pageOverflow: false }, `${width}/${theme}`);
+      const overview = await page.locator('.retention-summary-bar').evaluate(region => {
+        const box = region.getBoundingClientRect();
+        const scroll = region.querySelector('.retention-summary-scroll');
+        const refresh = region.querySelector('.button').getBoundingClientRect();
+        const centers = [...region.querySelectorAll('.summary-label,.summary-number,.retention-report-meta,.button')]
+          .map(node => { const rect = node.getBoundingClientRect(); return (rect.top + rect.bottom) / 2; });
+        return { deviation: Math.max(...centers) - Math.min(...centers), scrollWidth: scroll.clientWidth,
+          refreshVisible: refresh.left >= box.left && refresh.right <= box.right && refresh.right <= innerWidth,
+          insets: [refresh.top - box.top, box.bottom - refresh.bottom] };
+      });
+      assert(overview.deviation <= 1, '统计标签、数量、时间及刷新必须同排');
+      assert(overview.refreshVisible && overview.scrollWidth >= 140, '窄屏刷新固定可见且统计可滚动');
+      assert(overview.insets.every(value => value >= 8), '刷新控件距外框至少 8px');
       if ([1440, 390, 320].includes(width)) {
         const row = width <= 760 ? page.locator('[data-retention-card="main"]') :
           list(page).getByRole('row').filter({ hasText: '合成复购客户' });
