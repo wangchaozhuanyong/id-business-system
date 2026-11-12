@@ -1,0 +1,18 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "patchSha256": "fddaf725df2c2a0de8e1b1df76befbe13d7b408016abd83a45b31cbce7069701",
+  "files": {
+    "mysql-store.js": {
+      "original": "2b02b843134387bf75a112b681ea9028edb7648b",
+      "approved": "7d4b6b152b14cd155ad37e23528830c36cedfc7b"
+    },
+    "payment-retry.js": {
+      "original": "d0a398bf7ef1f7743590798d0621fc268368cc34",
+      "approved": "df2d2e6893e7046cc11ea41dbb0d2c2b4fbc6199"
+    },
+    "server.js": {
+      "original": "d0f3dc5c7127ec2de0c9b18367db6a520fccb0a1",
+      "approved": "a46b52cf8aac02cc65fcfba0d106c26fe8f969e2"
+    }
+  }
+}

@@ -1,6 +1,6 @@
 # 原版核心的生产运行配套
 
-本目录只包含外围部署代码，203 个追踪文件全部按 `4e9bb201cf481d4bcc85da34970fc26c63ab818a` 及用户批准的选路、未使用码归还两份精确补丁核验（199 个原文件不变，4 个按哈希核验）。未使用码归还边界见 `docs/RECHARGE_CODE_RETURNS_20261108.md`。不得在此加入请求内支付重试或付款逻辑。选路授权边界和两张新增表见 `docs/RECHARGE_PLAN_ROUTING_20261108.md`。
+本目录只包含外围部署代码。203 个追踪文件全部按 `4e9bb201cf481d4bcc85da34970fc26c63ab818a` 及选路、未使用码归还、第三方代充移除、银行卡套餐四份精确补丁核验（198 个原文件不变，5 个按哈希核验）。归还和选路边界分别见 `docs/RECHARGE_CODE_RETURNS_20261108.md` 和 `docs/RECHARGE_PLAN_ROUTING_20261108.md`。
 
 - `Dockerfile`：从既有固定 Node 24 镜像重新构建，安装原版锁定依赖、Chromium 和按现网状态选择的可选 Python 配套。构建上下文为 `source/`（确定 main 的归档）、`upstream/`（固定原仓库）、`engine/`（未改写原版加两份版本标记）。构建时必须设置 `org.opencontainers.image.revision` 和 `org.id-business.upstream.revision` 标签。
 - `entry.mjs`：私有 stdin 依次接收数据库密码、既有桥接密钥、原运行设置 JSON，adapter 额外接收宿主签发的短期网络证明。原版角色启动前全量核验；宿主预检专用库后直接运行原版 server.js，不向原进程预加载监控；adapter 不加载或替换任何原版执行函数。
@@ -14,6 +14,12 @@
 正式 unit 延用平台加密 credential `independent-mysql-app`、`independent-recharge-bridge`，新增同平台加密的配置快照 `independent-recharge-options`（保存原值，不轮换）。切换前先保留旧容器唯一的截图、录像、导出文件，目标为 `formal/recharge-data/{debug_screenshots,product_files,data}`，权限 `0700`。禁止复制整个旧源码目录或覆盖已有同名文件。
 
 发布沿用现有正式锁和 app 金丝雀流程。先在外围暂停新充值受理，并确认商城 worker 不再领取，再检查原版活动任务、待核对付款和资产锁均为空。构建与隔离金丝雀通过、加密备份验证和媒体保留完成后，停止旧原版、启动新 native，再启动 adapter、同 SHA 网站与商城回读服务。核对真实文件、数据库身份、健康和客户拒绝访问银行卡后再解除临时受理暂停。
+
+第三方代充移除需要同批切换 native、adapter 和网站。切换前在旧版确认第三方在途订单已结清，并核对自有卡池及各套餐线路可用。切换后核对第三方配置和验证码接口均已下线，确认原验码及任务查询接口可用。数据库历史回执继续供对账使用。旧加密运行配置中的第三方轮询参数仍可读入，执行器已无相关消费者。
+
+本次四份补丁的正式切换使用现有 `production-website-release.yml` 的 `include_recharge_core` 选项。传入已通过 quality 的当前 main 完整 SHA。宿主在同一发布锁内准备网站、重建原生镜像并运行合成 MySQL 金丝雀。正式检查通过后暂时关闭商城受理并等现有队列空闲，再按 native、adapter、网站和商城执行器顺序切换。只有读回通过才恢复受理。失败时按原 Actions 和 SSM 回执核对受理与各组件版本。
+
+银行卡套餐配置复用 `app_config`，无需表结构迁移。首次启用前先批量分配旧卡，再开启「仅使用已设置套餐的卡」。设置过的卡始终只用于允许的套餐。发布前在隔离数据库验收同套餐取卡、并发占用、原子导入、版本冲突及同套餐缺卡的未受理回执。
 
 现有商城维护模式和充值码配置不会因部署自动改变。本轮发布不产生测试订单、真实付款或通知，不自动回滚生产。所有命令、镜像和实际回执按确定 main SHA 记录；未确认的步骤不得记为完成。
 

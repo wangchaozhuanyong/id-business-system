@@ -32,13 +32,13 @@ test('failed selection returns before card availability, CDK locking or task cre
     substituteSession: value => value,
     async probe() { calls.push('probe'); }
   });
-  const phase = section(server, '        const gptApiConfig = await store.getGptApiConfig();\n        const useGptApi',
+  const phase = section(server, '        let executionRoute;\n        try { executionRoute',
     '        const lockSuccess = await store.markCdkUsed(cdk);');
   let result;
   const res = { status(code) { result = { code }; return this; }, json(body) { result.body = body; return result; } };
   await runInNewContext('(async () => {' + phase + '\n})()', {
     res, planType: 'plus',
-    store: { getGptApiConfig: async () => ({ enabled: false }), hasAvailableCard: async () => calls.push('card') },
+    store: { hasAvailableCard: async () => calls.push('card') },
     getRechargeRouting: async () => routing
   });
   assert.equal(result.code, 409); assert.equal(result.body.execution_started, false);
@@ -51,7 +51,7 @@ test('debug worker passes the selected route and preserves all upstream api_only
   const route = { proxy: 'socks5://synthetic-sticky', region: 'PH' };
   let actual, verifyCount = 0, finish;
   const done = new Promise(resolve => { finish = resolve; });
-  const worker = section(server, 'function spawnCheckoutDebugWorker(', '/**\n * 第三方 GPT');
+  const worker = section(server, 'function spawnCheckoutDebugWorker(', 'const LEGACY_PROVIDER_FAILURE_MESSAGE');
   const sandbox = {
     path: { join: (...parts) => parts.join('/') }, __dirname: '/synthetic',
     process: { env: { PROXY: 'wrong-global', PAYMENT_REGION_OVERRIDE: 'MY', CHECKOUT_API_ONLY: '1' } }, console: { error: finish },

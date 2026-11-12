@@ -7,7 +7,7 @@ import { toggleDesignTheme } from './helpers/offline-design.mjs';
 
 const adminViews = [
   ['概览中心', '#dashboard', '#stat_total'],
-  ['系统配置', '#config', '#gpt_api_base_url', '[onclick="saveAllConfigs()"]'],
+  ['系统配置', '#config', '#orbitcard_base_url', '[onclick="saveAllConfigs()"]'],
   ['代理池', '#proxies', '#proxy_pool_body', '[onclick="testAllSavedProxies()"]'],
   ['免税地址', '#tax_addresses', '#address_empty_hint', '#btn_generate_us_addresses'],
   ['支付链接调试', '#checkout_debug', '#checkout_session_input', '#checkout_generate_btn'],

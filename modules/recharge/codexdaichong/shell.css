@@ -59,6 +59,34 @@
   color: var(--text-secondary);
   font-size: 13px;
 }
+
+[data-recharge-view='admin'] :is(.card-plan-toolbar, .card-plan-cell, .card-plan-options) {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+}
+
+[data-recharge-view='admin'] .card-plan-toolbar {
+  padding-block: var(--toolbar-padding-block, 12px);
+}
+
+[data-recharge-view='admin'] .card-plan-options {
+  margin-block: 12px;
+}
+
+[data-recharge-view='admin'] .card-plan-cell button {
+  white-space: normal;
+}
+
+[data-recharge-view='admin'] .card-plan-editor {
+  width: min(420px, calc(100% - 24px));
+  padding: 16px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
 [data-recharge-view='admin'] .card-pool-type-feedback:has(#card_pool_type_status:not(:empty)) {
   margin-bottom: 8px;
 }
@@ -1353,11 +1381,6 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
 
 [data-recharge-workspace] .workspace-recharge-progress .task-progress[data-state='submitting'] :is(#taskProgressPercent, .task-progress-track) {
   display: none;
-}
-
-[data-recharge-workspace] .workspace-recharge-progress .captcha-verification {
-  flex-wrap: wrap;
-  margin: 0;
 }
 
 [data-recharge-workspace] .workspace-recharge-step :is(input, textarea) {

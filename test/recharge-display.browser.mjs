@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { interceptDesign, origin } from './helpers/offline-design.mjs';
+import { interceptDesign, origin, toggleDesignTheme } from './helpers/offline-design.mjs';
 
 const code = 'KC-OFFLINE-DISPLAY';
 const jobKey = 'offline-recharge-display';
@@ -33,7 +33,9 @@ test('recharge shortcuts and server-reported progress work on desktop and touch 
       const mobile = width === 390;
       const context = await browser.newContext({ viewport: { width, height: 900 }, hasTouch: mobile });
       t.after(() => context.close());
-      const routes = await interceptDesign(context);
+      const routes = await interceptDesign(context, {
+        actor: { id: 'display-fixture', name: '离线验收管理员', role: 'admin' }, localFixtures: {}
+      });
       await context.addInitScript(() => {
         window.clipboardFixture = { value: '', denied: false };
         Object.defineProperty(navigator, 'clipboard', {
@@ -57,7 +59,7 @@ test('recharge shortcuts and server-reported progress work on desktop and touch 
       let reenterRunningCode = false;
       let task = { status: 'running', stage: 'payment_details', progress: 25 };
       let taskAvailable = true;
-      let rejection = 'maintenance';
+      let rejection = mobile ? 'plan-cards' : 'maintenance';
       page.on('pageerror', (error) => errors.push(error.message));
       page.on('websocket', () => socketAttempts++);
       await page.route(api + 'verify-cdk', (route) => {
@@ -71,15 +73,14 @@ test('recharge shortcuts and server-reported progress work on desktop and touch 
         if (rejection) {
           const json = rejection === 'maintenance'
             ? { success: false, notAccepted: true, code: 'maintenance_mode', message: '系统维护中，充值任务未启动，请待维护结束后再提交' }
-            : { success: false, message: 'Offline upstream unavailable' };
-          return route.fulfill({ status: rejection === 'maintenance' ? 503 : 200, json });
+            : rejection === 'plan-cards'
+              ? { success: false, notAccepted: true, code: 'recharge_plan_cards_unavailable', message: '该套餐暂无可用银行卡，请稍后再试或联系客服。' }
+              : { success: false, message: 'Offline upstream unavailable' };
+          return route.fulfill({ status: rejection === 'maintenance' || rejection === 'plan-cards' ? 503 : 200, json });
         }
         return route.fulfill({ json: { success: true, jobKey, stage: 'preparing' } });
       });
-      await context.route(api + 'task-captcha/' + jobKey, (route) =>
-        route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<title>离线验证页</title><p>离线验证页</p>' })
-      );
-      await page.route(api + 'task-status/' + jobKey, (route) => {
+      await page.route(url => url.origin + url.pathname === api + 'task-status/' + jobKey, (route) => {
         taskReads++;
         return taskAvailable
           ? route.fulfill({ json: { success: true, data: { jobKey, ...task } } })
@@ -99,7 +100,7 @@ test('recharge shortcuts and server-reported progress work on desktop and touch 
 
       await page.goto(origin + '/#/workspace/recharge');
       const frame = page.frameLocator('#main > [data-page-region]:not([hidden]) .recharge-integration__content iframe:not([hidden])');
-      if (mobile) await page.locator('#theme-toggle').click();
+      if (mobile) await toggleDesignTheme(page);
       const codeInput = frame.locator('#cdkInput');
       const accountInput = frame.locator('#tokenInput');
       const pasteCode = frame.getByRole('button', { name: '粘贴兑换码' });
@@ -164,7 +165,7 @@ test('recharge shortcuts and server-reported progress work on desktop and touch 
       await press(pasteAccount);
 
       await press(submit);
-      await status.getByText(/系统维护中，充值任务未启动/).waitFor();
+      await status.getByText(mobile ? /该套餐暂无可用银行卡/ : /系统维护中，充值任务未启动/).waitFor();
       assert.equal(await accountInput.inputValue(), account);
       assert.equal(await submit.isEnabled(), true);
       assert.deepEqual(submissions, [{ cdk: code, session: account }]);
@@ -190,22 +191,11 @@ test('recharge shortcuts and server-reported progress work on desktop and touch 
       assert.equal(await stage.textContent(), '正在填写支付资料');
       assert.equal(await submit.isDisabled(), true);
       taskAvailable = true;
-      if (!mobile) {
-        task = { status: 'running', progress: 40, captcha: { id: 'offline-captcha', stage: 'awaiting_captcha' } };
-        await advancePoll();
-        await waitForText(stage, '等待完成验证');
-        const captcha = frame.getByRole('button', { name: '打开验证页面' });
-        assert.equal(await captcha.isEnabled(), true);
-        const [popup] = await Promise.all([page.waitForEvent('popup'), press(captcha)]);
-        await popup.getByText('离线验证页', { exact: true }).waitFor({ timeout: 7500 });
-        assert.equal(popup.url(), api + 'task-captcha/' + jobKey);
-        assert.equal(await popup.evaluate(() => window.opener), null);
-        task = { status: 'running', progress: 45, captcha: { id: 'offline-captcha', stage: 'captcha_submitted' } };
-        await advancePoll();
-        await waitForText(stage, '正在确认验证结果');
-        assert.equal(await frame.getByRole('button', { name: '等待验证状态' }).isDisabled(), true);
-        await popup.close();
-      }
+      task = { status: 'running', stage: 'paying', progress: 40, captcha: { id: 'offline-captcha', stage: 'awaiting_captcha' } };
+      await advancePoll();
+      await waitForText(stage, '正在付款');
+      assert.equal(await frame.locator('#captchaVerificationPanel').count(), 0);
+      assert.equal(context.pages().length, 1);
       task = { status: 'running', stage: 'private stage fixture', progress: 100, captcha: null };
       await advancePoll();
       await waitForText(stage, '处理中');

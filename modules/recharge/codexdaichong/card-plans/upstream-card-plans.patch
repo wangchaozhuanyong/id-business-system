@@ -1,0 +1,442 @@
+diff --git a/mysql-store.js b/mysql-store.js
+--- a/mysql-store.js
++++ b/mysql-store.js
+@@ -780,6 +780,7 @@
+     await ensureAdminSecurityDefaults();
+     await ensureHcaptchaConfigDefaults();
+     await ensureOrbitcardConfigDefaults();
++    await ensureCardPlanPolicy();
+     await syncHcaptchaConfigPersistence();
+     await migrateLegacyProxyConfig();
+     await seedTaxFreeAddresses();
+@@ -1348,6 +1349,7 @@
+         }
+
+         if (cardPool !== null) {
++            await readCardPlanPolicy(connection, true);
+             if (cardPool.length > 0) {
+                 const cardNumbers = cardPool.map((item) => item[0]);
+                 const cardPlaceholders = cardNumbers.map(() => '?').join(', ');
+@@ -3431,31 +3433,148 @@
+  * @param {string} ownerKey - 锁持有者标识（通常为 jobKey）
+  * @returns {object|null} 卡片信息 { id, card_number, card_expiry, card_cvc, card_holder, usage_count } 或 null（无可用卡）
+  */
+-async function hasAvailableCard() {
++const CARD_PLAN_POLICY_KEY = 'id_recharge_card_plan_policy';
++const CARD_PLAN_PREFIX = 'id_recharge_card_plans:';
++const CARD_PLAN_INITIAL = JSON.stringify({ version: 0, strict: false });
++
++async function ensureCardPlanPolicy() {
++    await runExecute(
++        `INSERT INTO app_config (config_key, config_value) VALUES (?, ?)
++         ON DUPLICATE KEY UPDATE config_value = config_value`,
++        [CARD_PLAN_POLICY_KEY, CARD_PLAN_INITIAL]
++    );
++}
++
++async function readCardPlanPolicy(connection, write = false) {
+     const rows = await runQuery(
++        'SELECT config_value FROM app_config WHERE config_key = ? ' + (write ? 'FOR UPDATE' : 'FOR SHARE'),
++        [CARD_PLAN_POLICY_KEY], { connection }
++    );
++    const policy = JSON.parse(rows[0]?.config_value || 'null');
++    if (!Number.isSafeInteger(policy?.version) || policy.version < 0 || typeof policy.strict !== 'boolean')
++        throw new Error('银行卡套餐规则读取失败');
++    return { version: policy.version, strict: policy.strict };
++}
++
++function cardPlanError(status, message) {
++    return Object.assign(new Error(message), { status });
++}
++
++function normalizeAllowedCardPlans(value) {
++    if (!Array.isArray(value) || value.length === 0 || value.length > CANONICAL_PLAN_TYPES.length ||
++        value.some(plan => !CANONICAL_PLAN_TYPES.includes(plan)) || new Set(value).size !== value.length)
++        throw cardPlanError(400, '请选择一项或多项有效的允许套餐');
++    return CANONICAL_PLAN_TYPES.filter(plan => value.includes(plan));
++}
++
++function checkCardPlanVersion(policy, version) {
++    if (!Number.isSafeInteger(version) || version < 0) throw cardPlanError(400, '缺少有效的套餐设置版本');
++    if (version !== policy.version) throw cardPlanError(409, '套餐设置已更新，请核对最新设置后重试');
++}
++
++async function storeCardPlanAssignments(connection, ids, plans) {
++    await runExecute(
++        `INSERT INTO app_config (config_key, config_value) VALUES ${ids.map(() => '(?, ?)').join(', ')}
++         ON DUPLICATE KEY UPDATE config_value = VALUES(config_value)`,
++        ids.flatMap(id => [CARD_PLAN_PREFIX + id, plans.join(',')]), { connection }
++    );
++}
++
++async function advanceCardPlanPolicy(connection, policy, strict = policy.strict) {
++    const next = { version: policy.version + 1, strict };
++    if (!Number.isSafeInteger(next.version)) throw new Error('银行卡套餐版本超出范围');
++    await runExecute('UPDATE app_config SET config_value = ? WHERE config_key = ?',
++        [JSON.stringify(next), CARD_PLAN_POLICY_KEY], { connection });
++    return next;
++}
++
++async function readCardPlanPool() {
++    return withTransaction(async connection => {
++        const planPolicy = await readCardPlanPolicy(connection);
++        const rows = await runQuery(
++            `SELECT card.*, plan.config_key AS plan_key, plan.config_value AS plan_value
++             FROM card_assets AS card
++             LEFT JOIN app_config AS plan ON plan.config_key = CONCAT(?, card.id)
++             ORDER BY card.sort_order ASC, card.id ASC`,
++            [CARD_PLAN_PREFIX], { connection }
++        );
++        return { rows, planPolicy };
++    });
++}
++
++async function saveCardPlanPolicy(command) {
++    if (!command || typeof command !== 'object' || Array.isArray(command))
++        throw cardPlanError(400, '套餐设置格式无效');
++    const settingMode = Object.hasOwn(command, 'strict');
++    let ids, plans;
++    if (settingMode) {
++        if (typeof command.strict !== 'boolean' || Object.hasOwn(command, 'cardIds') || Object.hasOwn(command, 'allowedPlans'))
++            throw cardPlanError(400, '套餐取卡模式无效');
++    } else {
++        ids = command.cardIds;
++        if (!Array.isArray(ids) || ids.length === 0 || ids.length > 500 ||
++            ids.some(id => !Number.isSafeInteger(id) || id < 1) || new Set(ids).size !== ids.length)
++            throw cardPlanError(400, '请选择有效银行卡，每次最多 500 张');
++        plans = normalizeAllowedCardPlans(command.allowedPlans);
++    }
++    return withTransaction(async connection => {
++        const policy = await readCardPlanPolicy(connection, true);
++        checkCardPlanVersion(policy, command.version);
++        if (settingMode) {
++            if (command.strict === policy.strict) return policy;
++            return advanceCardPlanPolicy(connection, policy, command.strict);
++        }
++        const rows = await runQuery(
++            `SELECT id, in_use FROM card_assets WHERE id IN (${ids.map(() => '?').join(', ')})
++             ORDER BY id FOR UPDATE`, ids, { connection }
++        );
++        if (rows.length !== ids.length) throw cardPlanError(409, '部分银行卡已变更，请刷新卡池');
++        if (rows.some(row => Number(row.in_use) !== 0)) throw cardPlanError(409, '所选银行卡正在使用，请等待任务结束');
++        await storeCardPlanAssignments(connection, ids, plans);
++        return advanceCardPlanPolicy(connection, policy);
++    });
++}
++
++// The policy row is locked before reading assignments or reserving a card.
++// Only unassigned cards can participate in the legacy pool when strict mode is off.
++const CARD_PLAN_PREDICATE = `
++           AND COALESCE((
++                SELECT COALESCE(FIND_IN_SET(?, plan.config_value), 0)
++                FROM app_config AS plan WHERE plan.config_key = CONCAT(?, card_assets.id)
++           ), ?) > 0`;
++
++function cardPlanParams(planType, policy) {
++    return [String(planType || ''), CARD_PLAN_PREFIX, policy.strict ? 0 : 1];
++}
++
++async function hasAvailableCard(planType) {
++    return withTransaction(async connection => {
++        const policy = await readCardPlanPolicy(connection);
++        const rows = await runQuery(
+         `SELECT id
+          FROM card_assets
+          WHERE is_active = 1
+            AND in_use = 0
+            AND status = '正常'
+-           AND (cooldown_until IS NULL OR cooldown_until < NOW())
+-         LIMIT 1`
+-    );
+-    return rows.length > 0;
+-}
+-
+-async function reserveCard(ownerKey) {
++           AND (cooldown_until IS NULL OR cooldown_until < NOW())${CARD_PLAN_PREDICATE}
++         LIMIT 1`, cardPlanParams(planType, policy), { connection });
++        return rows.length > 0;
++    });
++}
++
++async function reserveCard(ownerKey, planType) {
+     return withTransaction(async (connection) => {
++        const policy = await readCardPlanPolicy(connection);
+         const [rows] = await connection.query(
+             `SELECT id, card_number, card_expiry, card_cvc, card_holder, usage_count
+              FROM card_assets
+              WHERE is_active = 1
+                AND in_use = 0
+                AND status = '正常'
+-               AND (cooldown_until IS NULL OR cooldown_until < NOW())
++               AND (cooldown_until IS NULL OR cooldown_until < NOW())${CARD_PLAN_PREDICATE}
+              ORDER BY usage_count ASC, COALESCE(last_used_at, '1970-01-01') ASC, id ASC
+              LIMIT 1
+-             FOR UPDATE SKIP LOCKED`
++             FOR UPDATE SKIP LOCKED`, cardPlanParams(planType, policy)
+         );
+
+         if (!rows.length) {
+@@ -4164,7 +4283,8 @@
+  * @param {Array<{ card_number: string, card_expiry: string, card_cvc: string, card_holder?: string }>} cards
+  * @returns {Promise<{ imported: number, skipped: number, failed: number, failures: Array<{ index: number, errors: string[] }> }>}
+  */
+-async function importCards(cards) {
++async function importCards(cards, planRequest = null) {
++    const plans = planRequest ? normalizeAllowedCardPlans(planRequest.allowedPlans) : null;
+     if (!Array.isArray(cards)) {
+         throw new Error('cards 参数必须为数组');
+     }
+@@ -4200,69 +4320,81 @@
+         }
+     }
+
+-    if (validCards.length === 0) {
+-        return {
+-            imported: 0,
+-            skipped: 0,
+-            failed: failures.length,
+-            failures
+-        };
+-    }
+-
+-    // Step 2: Check for duplicates in database
+-    const cardNumbers = validCards.map((c) => c.card_number);
+-    const placeholders = cardNumbers.map(() => '?').join(', ');
+-    const existingRows = await runQuery(
+-        `SELECT card_number FROM card_assets WHERE card_number IN (${placeholders})`,
+-        cardNumbers
+-    );
+-    const existingSet = new Set(existingRows.map((r) => r.card_number));
+-
+-    const toInsert = [];
+-    let skipped = 0;
+-
+-    for (const card of validCards) {
+-        if (existingSet.has(card.card_number)) {
+-            skipped++;
+-        } else {
+-            toInsert.push(card);
++    return withTransaction(async connection => {
++        let policy = await readCardPlanPolicy(connection, true);
++        if (plans) checkCardPlanVersion(policy, planRequest.version);
++        if (validCards.length === 0) {
++            return {
++                imported: 0,
++                skipped: 0,
++                failed: failures.length,
++                failures,
++                ...(plans && { planPolicy: policy, assignedPlans: 0 })
++            };
+         }
+-    }
+-
+-    // Step 3: Insert new cards (also deduplicate within the batch itself)
+-    let imported = 0;
+-    const seenInBatch = new Set();
+-
+-    for (const card of toInsert) {
+-        if (seenInBatch.has(card.card_number)) {
+-            skipped++;
+-            continue;
+-        }
+-        seenInBatch.add(card.card_number);
+-
+-        try {
+-            await runExecute(
+-                `INSERT INTO card_assets (card_number, card_expiry, card_cvc, card_holder, sort_order, is_active, status)
+-                 VALUES (?, ?, ?, ?, 0, 1, '正常')`,
+-                [card.card_number, card.card_expiry, card.card_cvc, card.card_holder]
+-            );
+-            imported++;
+-        } catch (err) {
+-            // Duplicate key error (in case of race condition)
+-            if (err.message && err.message.includes('Duplicate')) {
++
++        // Step 2: Check for duplicates in database
++        const cardNumbers = validCards.map((c) => c.card_number);
++        const placeholders = cardNumbers.map(() => '?').join(', ');
++        const existingRows = await runQuery(
++            `SELECT card_number FROM card_assets WHERE card_number IN (${placeholders})`,
++            cardNumbers, { connection }
++        );
++        const existingSet = new Set(existingRows.map((r) => r.card_number));
++
++        const toInsert = [];
++        let skipped = 0;
++
++        for (const card of validCards) {
++            if (existingSet.has(card.card_number)) {
+                 skipped++;
+             } else {
+-                failures.push({ index: card.index, errors: [err.message || '插入失败'] });
++                toInsert.push(card);
+             }
+         }
+-    }
+-
+-    return {
+-        imported,
+-        skipped,
+-        failed: failures.length,
+-        failures
+-    };
++
++        // Step 3: Insert new cards (also deduplicate within the batch itself)
++        const importedIds = [];
++        const seenInBatch = new Set();
++
++        for (const card of toInsert) {
++            if (seenInBatch.has(card.card_number)) {
++                skipped++;
++                continue;
++            }
++            seenInBatch.add(card.card_number);
++
++            try {
++                const result = await runExecute(
++                    `INSERT INTO card_assets (card_number, card_expiry, card_cvc, card_holder, sort_order, is_active, status)
++                     VALUES (?, ?, ?, ?, 0, 1, '正常')`,
++                    [card.card_number, card.card_expiry, card.card_cvc, card.card_holder], { connection }
++                );
++                const id = Number(result.insertId);
++                if (!Number.isSafeInteger(id) || id < 1) throw new Error('无法确认新银行卡编号');
++                importedIds.push(id);
++            } catch (err) {
++                // Duplicate key error (in case of race condition)
++                if (err.message && err.message.includes('Duplicate')) {
++                    skipped++;
++                } else {
++                    throw err;
++                }
++            }
++        }
++
++        if (plans && importedIds.length) {
++            await storeCardPlanAssignments(connection, importedIds, plans);
++            policy = await advanceCardPlanPolicy(connection, policy);
++        }
++        return {
++            imported: importedIds.length,
++            skipped,
++            failed: failures.length,
++            failures,
++            ...(plans && { planPolicy: policy, assignedPlans: importedIds.length })
++        };
++    });
+ }
+
+ // ─── Region Selector ────────────────────────────────────────────────────────
+@@ -4610,6 +4742,8 @@
+     getClaimedProductDownloadInfo,
+     reserveCard,
+     hasAvailableCard,
++    readCardPlanPool,
++    saveCardPlanPolicy,
+     releaseCard,
+     reserveOrbitcardCard,
+     releaseOrbitcardCard,
+diff --git a/payment-retry.js b/payment-retry.js
+--- a/payment-retry.js
++++ b/payment-retry.js
+@@ -119,7 +119,7 @@
+     progress(`开始支付（最多尝试 ${MAX_CARD_ATTEMPTS} 张卡）...`);
+
+     for (let cardAttempt = 1; cardAttempt <= MAX_CARD_ATTEMPTS; cardAttempt += 1) {
+-        const card = await store.reserveCard(ownerKey);
++        const card = await store.reserveCard(ownerKey, planType);
+         if (!card) {
+             progress(cardAttempt === 1 ? '卡池无可用卡，终止支付' : `卡池已无更多可用卡（已拒 ${declinedLast4s.length} 张）`);
+             if (cardAttempt === 1) {
+diff --git a/server.js b/server.js
+--- a/server.js
++++ b/server.js
+@@ -3431,14 +3431,7 @@
+ app.get('/api/admin/cards', requireSecondaryAuth, async (req, res) => {
+     try {
+         await ensureStoreReady();
+-        const rows = await store.runQuery(
+-            `SELECT id, card_number, card_expiry, card_cvc, card_holder,
+-                    payment_holder_name, payment_address_line1, payment_address_city,
+-                    payment_address_state, payment_address_postal, payment_address_id,
+-                    is_active, usage_count, last_used_at, status, cooldown_until
+-             FROM card_assets
+-             ORDER BY sort_order ASC, id ASC`
+-        );
++        const { rows, planPolicy } = await store.readCardPlanPool();
+         const cards = rows.map((row) => ({
+             id: row.id,
+             card_number: row.card_number || '',
+@@ -3456,9 +3449,10 @@
+             usage_count: Number(row.usage_count || 0),
+             last_used_at: row.last_used_at || null,
+             status: row.status || '正常',
+-            cooldown_until: row.cooldown_until || null
++            cooldown_until: row.cooldown_until || null,
++            allowed_plans: row.plan_key ? String(row.plan_value || '').split(',').filter(plan => CANONICAL_PLAN_TYPES.includes(plan)) : null
+         }));
+-        res.json({ success: true, cards });
++        res.json({ success: true, cards, planPolicy });
+     } catch (error) {
+         res.status(500).json({ success: false, message: error.message });
+     }
+@@ -3711,6 +3705,19 @@
+     }
+ });
+
++app.put('/api/admin/cards/plan-policy', requireSecondaryAuth, async (req, res) => {
++    try {
++        await ensureStoreReady();
++        const planPolicy = await store.saveCardPlanPolicy(req.body);
++        res.setHeader('X-ID-Recharge-Card-Plan-Version', String(planPolicy.version));
++        res.json({ success: true, planPolicy });
++    } catch (error) {
++        if (error.status === 400 || error.status === 409)
++            return res.status(error.status).json({ success: false, message: error.message });
++        res.status(500).json({ success: false, message: '套餐设置保存未确认，请刷新后核对' });
++    }
++});
++
+ app.post('/api/admin/cards/import', requireSecondaryAuth, async (req, res) => {
+     try {
+         await ensureStoreReady();
+@@ -3722,13 +3729,19 @@
+             return res.status(400).json({ success: false, error: '单次导入上限 500 条' });
+         }
+
+-        const result = await store.importCards(cards);
++        const planRequest = Object.hasOwn(req.body, 'allowedPlans')
++            ? { allowedPlans: req.body.allowedPlans, version: req.body.planVersion } : null;
++        const result = await store.importCards(cards, planRequest);
++        if (result.assignedPlans > 0)
++            res.setHeader('X-ID-Recharge-Card-Plan-Version', String(result.planPolicy.version));
+         res.json({ success: true, ...result });
+     } catch (error) {
++        if (error.status === 400 || error.status === 409)
++            return res.status(error.status).json({ success: false, message: error.message });
+         if (error.message === '单次导入上限 500 条') {
+             return res.status(400).json({ success: false, error: error.message });
+         }
+-        res.status(500).json({ success: false, message: error.message });
++        res.status(500).json({ success: false, message: '卡池导入未确认，请刷新后核对' });
+     }
+ });
+
+@@ -4612,7 +4625,7 @@
+             return res.status(409).json({ success: false, code: 'recharge_route_unavailable', execution_started: false,
+                 message: error.publicMessage || '当前套餐的充值线路暂不可用，请联系客服处理。' });
+         }
+-        const hasCard = await store.hasAvailableCard();
++        const hasCard = await store.hasAvailableCard(planType);
+         if (!hasCard) {
+             const poolEmail = extractEmailFromSession(rawSession);
+             fireTelegramNotification('card_pool_empty', {
+@@ -4623,6 +4636,8 @@
+             });
+             return res.status(503).json({
+                 success: false,
+-                message: '银行卡池暂无可用卡片，请先在后台「银行卡池」导入银行卡后再试'
++                code: 'recharge_plan_cards_unavailable',
++                execution_started: false,
++                message: '该套餐暂无可用银行卡，请稍后再试或联系客服。'
+             });
+         }

@@ -52,8 +52,7 @@ const adminReads = {
   sessions: { items: [], total: 0 },
   'ip-bans': { bans: [], activeCount: 0 },
   'checkout/plans': { plans: {} },
-  'gpt-api': { config: {} },
-  'gpt-api/status': {},
+  'orbitcard/config': { config: {} },
   'security/status': {},
   'hcaptcha/logs': { logs: [] },
   'orbitcard/usage': { rows: [], total: 0 },
@@ -225,7 +224,8 @@ export async function startCodexdaichongDemoSite(
         }))
       );
     if (path === root + 'cards')
-      return json(res, { cards: [{ id: 1, last4: '0007', card_holder: '虚构演示持卡人' }] });
+      return json(res, { planPolicy: { version: 0, strict: false },
+        cards: [{ id: 1, last4: '0007', card_holder: '虚构演示持卡人', allowed_plans: null }] });
     const tasks = [...jobs.values()].map(readJob);
     if (path === root + 'task-logs')
       return json(res, {

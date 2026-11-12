@@ -266,6 +266,8 @@ export async function startPreview(
   let systemMonitoring, monitoringSources, handleMonitoring, handleProbeReport, handleReadiness;
   const orderRechargeClient = createOrderRechargeClient(rechargeConfig);
   const gateways = new Map();
+  const cardPlanEpoch = Date.now().toString(36);
+  let cardPlanVersion = 0;
   function gatewayFor(host) {
     if (!rechargeConfig) return codexdaichong;
     if (!gateways.has(host)) {
@@ -284,6 +286,11 @@ export async function startPreview(
           beforeCardWrite: command => {
             if (!store) throw new Error('订单资料尚未就绪');
             checkFrozenCardPoolWrite(store, command);
+          },
+          onCardPlanChange(version) {
+            if (version <= cardPlanVersion) return;
+            cardPlanVersion = version;
+            store?.notifyChanges();
           },
           onRechargeOutcome: outcome => queueMicrotask(() => {
             try { monitoringSources?.recordRecharge(outcome); } catch {}
@@ -467,6 +474,8 @@ export async function startPreview(
         if (Object.hasOwn(versions, scope)) versions[scope] += ':' + revision;
       if (systemMonitoring && Object.hasOwn(versions, 'system-monitoring'))
         versions['system-monitoring'] += ':' + systemMonitoring.changeVersion();
+      if (rechargeConfig && actor.role === 'super')
+        versions['recharge-card-plans'] = cardPlanEpoch + ':' + cardPlanVersion;
       return versions;
     },
     subscribe: listener => {

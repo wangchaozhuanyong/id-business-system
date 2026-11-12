@@ -5,7 +5,7 @@ import { signRechargeAssertion } from '../assertion.mjs';
 import { loadCodexdaichongAssets } from './assets.mjs';
 import { probeCodexdaichongRuntime } from './runtime-health.mjs';
 import { normalizeRechargeProxyInput } from './proxy-input.mjs';
-import { readsRechargePresentation, rechargeBrowserPresentation, rechargeTaskStepHistory } from './progress-presentation.mjs';
+import { isPlanCardRejection, readsRechargePresentation, rechargeBrowserPresentation, rechargeTaskStepHistory } from './progress-presentation.mjs';
 
 export const CODEXDAICHONG_PREFIX = '/integrations/codexdaichong';
 const allowedMethods = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']);
@@ -15,7 +15,7 @@ const publicRoutes = [
   /^\/api\/public\/(payment-region|runtime|subscription\/check)$/,
   /^\/api\/(verify-cdk|run-process)$/,
   /^\/api\/cdk\/(query|query-batch|download)$/,
-  /^\/api\/task-(status|captcha)\/[^/]+$/
+  /^\/api\/task-status\/[^/]+$/
 ];
 const separateIdentity =
   /^\/api\/admin\/(?:login(?:\/|$)|2fa(?:\/|$)|security(?:\/|$)|secondary(?:\/|$)|verify-secondary$|change-(?:secondary-)?password$)/i;
@@ -40,8 +40,8 @@ function respond(res, status, message) {
 function recordRechargeResponse(status, body, report) {
   if (!report) return;
   let outcome;
-  if (status === 503 && body?.success === false &&
-      body.message === '银行卡池暂无可用卡片，请先在后台「银行卡池」导入银行卡后再试')
+  if (isPlanCardRejection(status, body) || (status === 503 && body?.success === false &&
+      body.message === '银行卡池暂无可用卡片，请先在后台「银行卡池」导入银行卡后再试'))
     outcome = 'recharge_cards';
   if (status === 409 && body?.success === false && body.code === 'recharge_route_unavailable' && body.execution_started === false)
     outcome = 'recharge_route';
@@ -74,7 +74,7 @@ async function readPresentationJson(stream, limit) {
   return JSON.parse(Buffer.concat(chunks));
 }
 
-async function writeRechargePresentation(reply, res, path, secret, report, readSteps) {
+async function writeRechargePresentation(reply, res, path, report, readSteps) {
   let body;
   try {
     body = await readPresentationJson(reply, 128 * 1024);
@@ -84,7 +84,7 @@ async function writeRechargePresentation(reply, res, path, secret, report, readS
   }
   if (path === '/api/run-process') recordRechargeResponse(reply.statusCode, body, report);
   if (res.destroyed) return;
-  const projected = rechargeBrowserPresentation(path, reply.statusCode, body, secret);
+  const projected = rechargeBrowserPresentation(path, reply.statusCode, body);
   if (readSteps && projected.success && projected.data) {
     projected.data.stepsAvailable = false;
     try {
@@ -106,6 +106,7 @@ async function writeRechargePresentation(reply, res, path, secret, report, readS
 
 function classify(path) {
   if (!path.startsWith('/api/')) return 'asset';
+  if (/^\/api\/admin\/gpt-api(?:\/|$)/i.test(path)) return 'blocked';
   if (separateIdentity.test(path.replace(/\/+$/, ''))) return 'blocked';
   if (path.startsWith('/api/admin/')) return 'admin';
   if (path === externalCardPush) return 'external-card-push';
@@ -180,6 +181,7 @@ export function createCodexdaichongGateway({
   onRechargeOutcome,
   beforeCardDelete,
   beforeCardWrite,
+  onCardPlanChange,
   assets = loadCodexdaichongAssets
 }) {
   const upstream = new URL(upstreamUrl);
@@ -374,30 +376,13 @@ export function createCodexdaichongGateway({
       (reply) => {
         if (reply.statusCode >= 300 && reply.statusCode < 400) {
           reply.resume();
-          const location = URL.parse(reply.headers.location || '');
-          if (
-            reply.statusCode === 302 &&
-            req.method === 'GET' &&
-            path.pathname.startsWith('/api/task-captcha/') &&
-            location?.protocol === 'https:' &&
-            !location.username &&
-            !location.password
-          ) {
-            return res
-              .writeHead(302, {
-                Location: location.href,
-                'Cache-Control': 'no-store',
-                'Referrer-Policy': 'no-referrer'
-              })
-              .end();
-          }
           respond(res, 502, '充值服务返回了无效跳转');
           return;
         }
         if (readsRechargePresentation(req.method, path.pathname, reply.statusCode, reply.headers['content-type'])) {
           const readSteps = req.method === 'GET' && actor.admin && req.headers['sec-fetch-site'] !== 'cross-site' &&
             path.raw === path.pathname + '?view=steps' ? task => readTaskSteps(task, actor) : undefined;
-          void writeRechargePresentation(reply, res, path.pathname, secret, onRechargeOutcome, readSteps).catch(() => {
+          void writeRechargePresentation(reply, res, path.pathname, onRechargeOutcome, readSteps).catch(() => {
             if (res.destroyed) return;
             if (res.headersSent) res.destroy();
             else respond(res, 502, '暂时无法确认充值回执，请用原兑换码查询。');
@@ -411,6 +396,14 @@ export function createCodexdaichongGateway({
         });
         if (onRechargeOutcome && req.method === 'POST' && path.pathname === '/api/run-process' && reply.statusCode === 409)
           observeRouteRejection(reply, onRechargeOutcome);
+        if (onCardPlanChange && actor.sensitive && reply.statusCode === 200 &&
+            ((req.method === 'PUT' && path.pathname === '/api/admin/cards/plan-policy') ||
+             (req.method === 'POST' && path.pathname === '/api/admin/cards/import'))) {
+          const value = reply.headers['x-id-recharge-card-plan-version'];
+          if (typeof value === 'string' && /^\d{1,16}$/.test(value) && Number.isSafeInteger(Number(value))) {
+            try { onCardPlanChange(Number(value)); } catch { /* The native write is already committed. */ }
+          }
+        }
         reply.on('error', () => res.destroy());
         reply.pipe(res);
       }

@@ -1,30 +1,35 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { startCodexdaichongDemoSite } from '../modules/recharge/codexdaichong/demo-site.mjs';
+import { interceptDesign, origin } from './helpers/offline-design.mjs';
 
 test('embedded recharge retains ordinary drafts across reloads, isolates records and protects later edits', { timeout: 90_000 }, async t => {
   assert(process.env.ID_RECHARGE_QA_PLAYWRIGHT, '请指定已有 Playwright 模块入口');
   const playwright = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
   const browser = await (playwright.default || playwright).chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
   t.after(() => browser.close());
-  const host = await startCodexdaichongDemoSite(0);
-  t.after(() => new Promise(resolve => { host.server.close(resolve); host.server.closeAllConnections(); }));
-  const origin = new URL(host.url).origin;
   const page = await browser.newPage();
+  const traffic = await interceptDesign(page.context(), { localFixtures: {} });
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   page.setDefaultTimeout(8000);
-  // This test unlocks only the disposable demo UI. Every external request and every
-  // real mutation is blocked; the save responses below are browser-local fixtures.
-  await page.route('**/*', route => new URL(route.request().url()).origin === origin &&
-    ['GET', 'HEAD'].includes(route.request().method()) ? route.continue() : route.abort());
-  await page.route('**/integrations/codexdaichong/demo-only.js', route => route.fulfill({ contentType: 'text/javascript', body: '' }));
-  await page.route('**/integrations/codexdaichong/api/admin/recharge-routing', route => route.fulfill({ json: {
-    success: true, version: 1, audit: [], checks: [], proxyCountries: [], proxyLabels: [],
-    regions: { PH: { label: '菲律宾', currency: 'PHP' }, EG: { label: '埃及', currency: 'EGP' } },
-    plans: { plus: 'PH', pro100: 'EG', pro200: 'PH', pro500: 'EG' }
-  } }));
+  await page.route('**/*', route =>
+    ['GET', 'HEAD'].includes(route.request().method()) ? route.fallback() : route.abort());
+  let savedOrbitcard = { live_management: false, orbitcard_base_url: 'https://cards.example.test' };
+  let failSave = true;
+  const started = Promise.withResolvers();
+  const release = Promise.withResolvers();
+  t.after(() => release.resolve());
+  await page.route('**/integrations/codexdaichong/api/admin/orbitcard/config', async route => {
+    if (route.request().method() === 'GET') return route.fulfill({ json: { success: true, config: savedOrbitcard } });
+    if (failSave) return route.fulfill({ status: 503, json: { success: false, message: 'fixture failure' } });
+    const { live_management, orbitcard_base_url } = route.request().postDataJSON();
+    assert.equal(live_management, true);
+    started.resolve();
+    await release.promise;
+    savedOrbitcard = { live_management, orbitcard_base_url };
+    await route.fulfill({ json: { success: true, message: 'fixture saved' } });
+  });
   const selector = '#main > [data-page-region]:not([hidden]) .recharge-integration__content iframe:not([hidden])';
   const frame = () => page.frameLocator(selector);
   const navigate = async hash => { await page.evaluate(hash => { location.hash = '#/' + hash; }, hash); };
@@ -37,8 +42,10 @@ test('embedded recharge retains ordinary drafts across reloads, isolates records
   await frame().locator('#queryInput').waitFor();
   await config();
   await frame().locator('#max_concurrent_activations').fill('7');
-  await frame().locator('#gpt_api_base_url').fill('https://draft.example.test/api');
-  await frame().locator('#gpt_api_key').fill('fixture-not-a-real-key');
+  assert.equal(await frame().locator('#gpt_api_enabled').count(), 0);
+  await frame().locator('#orbitcard_base_url').fill('https://draft.example.test/api');
+  await frame().locator('#orbitcard_live_management').check();
+  await frame().locator('#orbitcard_api_key').fill('fixture-not-a-real-key');
   await page.locator('[data-action="ops-integrated-view"][data-view="dashboard"]').click();
   await config();
   await assertEventually(() => frame().locator('#max_concurrent_activations').inputValue(), '7');
@@ -51,38 +58,27 @@ test('embedded recharge retains ordinary drafts across reloads, isolates records
   await page.locator('#main > [data-page-region]:not([hidden]) [data-recharge-module]').waitFor({ state: 'detached' });
   await navigate('online-recharge/chatgpt');
   await frame().locator('#config.active').waitFor();
-  await assertEventually(() => frame().locator('#gpt_api_base_url').inputValue(), 'https://draft.example.test/api');
-  assert.equal(await frame().locator('#gpt_api_key').inputValue(), '');
+  await assertEventually(() => frame().locator('#orbitcard_base_url').inputValue(), 'https://draft.example.test/api');
+  assert.equal(await frame().locator('#orbitcard_live_management').isChecked(), true);
+  assert.equal(await frame().locator('#orbitcard_api_key').inputValue(), '');
   const saved = await page.evaluate(() => window.IDRechargeDrafts.read('admin'));
   assert.equal(saved.max_concurrent_activations, '7');
   assert(!JSON.stringify(saved).includes('fixture-not-a-real-key'));
 
   // A failed save and a late successful response both preserve the appropriate draft.
-  const api = '**/integrations/codexdaichong/api/admin/gpt-api';
-  await page.route(api, route => route.request().method() === 'POST'
-    ? route.fulfill({ status: 503, contentType: 'application/json', body: '{"success":false,"message":"fixture failure"}' })
-    : route.continue());
-  await frame().locator('button[onclick="saveGptApiConfig()"]').click();
+  await frame().locator('#orbitcard_config_save').click();
   await frame().getByText('fixture failure', { exact: true }).waitFor();
-  assert.equal(await frame().locator('#gpt_api_base_url').inputValue(), 'https://draft.example.test/api');
-  await page.unroute(api);
-  const started = Promise.withResolvers();
-  const release = Promise.withResolvers();
-  await page.route(api, async route => {
-    if (route.request().method() !== 'POST') return route.continue();
-    started.resolve();
-    await release.promise;
-    await route.fulfill({ contentType: 'application/json', body: '{"success":true,"message":"fixture saved"}' });
-  });
-  await frame().locator('button[onclick="saveGptApiConfig()"]').click();
+  assert.equal(await frame().locator('#orbitcard_base_url').inputValue(), 'https://draft.example.test/api');
+  failSave = false;
+  await frame().locator('#orbitcard_config_save').click();
   await started.promise;
-  await frame().locator('#gpt_api_base_url').fill('https://later.example.test/api');
+  await frame().locator('#orbitcard_base_url').fill('https://later.example.test/api');
   release.resolve();
   await frame().getByText('fixture saved', { exact: true }).waitFor();
-  await assertEventually(() => frame().locator('#gpt_api_base_url').inputValue(), 'https://later.example.test/api');
-  assert.equal(await page.evaluate(() => window.IDRechargeDrafts.read('admin').gpt_api_base_url), 'https://later.example.test/api');
-  await frame().locator('button[onclick="saveGptApiConfig()"]').click();
-  await assertEventually(() => page.evaluate(() => Object.hasOwn(window.IDRechargeDrafts.read('admin'), 'gpt_api_base_url')), false);
+  await assertEventually(() => frame().locator('#orbitcard_base_url').inputValue(), 'https://later.example.test/api');
+  assert.equal(await page.evaluate(() => window.IDRechargeDrafts.read('admin').orbitcard_base_url), 'https://later.example.test/api');
+  await frame().locator('#orbitcard_config_save').click();
+  await assertEventually(() => page.evaluate(() => Object.hasOwn(window.IDRechargeDrafts.read('admin'), 'orbitcard_base_url')), false);
 
   // Address editors key drafts by record, including a separate new-address draft.
   await page.locator('[data-action="ops-integrated-view"][data-view="tax_addresses"]').click();
@@ -137,6 +133,7 @@ test('embedded recharge retains ordinary drafts across reloads, isolates records
   const bitDraft = JSON.stringify(await page.evaluate(() => window.IDRechargeDrafts.read('bit-local')));
   assert(!bitDraft.includes(windowEmail));
   assert(!bitDraft.includes('fixture-local-secret'));
+  assert.deepEqual(traffic.external, []);
   assert.deepEqual(errors, []);
 });
 

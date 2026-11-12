@@ -24,7 +24,7 @@ export async function interceptDesign(context, { beforeDirectory, localFixtures,
         'admin/session': { success: true, email: 'layout@example.test' },
         'admin/data': { stats: { total: 0, success: 0, failed: 0 }, config: {}, logs: [] },
         'admin/cdks': [],
-        'admin/cards': { cards: [] },
+        'admin/cards': { cards: [], planPolicy: { version: 0, strict: false } },
         'admin/proxies': { proxies: [] },
         'admin/addresses': { addresses: [] },
         'admin/sessions': { items: [], total: 0 },
@@ -45,8 +45,7 @@ export async function interceptDesign(context, { beforeDirectory, localFixtures,
           ],
           proxyLabels: []
         },
-        'admin/gpt-api': { config: {} },
-        'admin/gpt-api/status': {},
+        'admin/orbitcard/config': { config: {} },
         'public/runtime': { runtime: { active_foreground_jobs: 0, max_foreground_jobs: 1 } },
         'public/payment-region': { region: 'PH', label: '离线合成地区', currency: 'PHP' }
       };

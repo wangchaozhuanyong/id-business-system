@@ -328,11 +328,11 @@ test('运营表单关闭和切页保留普通草稿，提交快照及敏感字�
   assert.equal(await page.locator('#local-staff-name').inputValue(), '员工晚到后输入', '员工版本变化仍保留未提交昵称');
   assert.equal(await page.locator('[name="staff-version"]').inputValue(), employeeVersion, '保留原版本校验依据');
   const bridge = await page.evaluate(() => {
-    window.IDRechargeDrafts.write('admin', { gpt_api_base_url: 'https://example.test', tokenInput: 'fixture', gpt_api_key: 'fixture' });
+    window.IDRechargeDrafts.write('admin', { orbitcard_base_url: 'https://example.test', tokenInput: 'fixture', orbitcard_api_key: 'fixture' });
     const first = window.IDRechargeDrafts.read('admin');
-    first.gpt_api_base_url = 'modified';
+    first.orbitcard_base_url = 'modified';
     return window.IDRechargeDrafts.read('admin');
   });
-  assert.deepEqual(bridge, { gpt_api_base_url: 'https://example.test' });
+  assert.deepEqual(bridge, { orbitcard_base_url: 'https://example.test' });
   assert.deepEqual(errors, []);
 });

@@ -10,6 +10,7 @@ import { normalizeRechargeProxyInput } from './proxy-input.mjs';
 import { RECHARGE_STAGE_LABELS, RECHARGE_STEP_LABELS } from './progress-presentation.mjs';
 import { routingAdminPanel } from './routing-admin-ui.mjs';
 import { createRechargeCardTypeOverlay } from './card-type-overlay.mjs';
+import { cardPlanAdminScript, cardPlanImportFields, cardPlanLabels, cardPlanToolbar } from './card-plan-admin.mjs';
 
 const git = promisify(execFile);
 const clone = fileURLToPath(new URL('../../../.upstream/codexdaichong/', import.meta.url));
@@ -255,6 +256,56 @@ function adaptRemoteAdminPagination(source) {
 
 function adaptAdminScript(source, routingScript) {
   source = adaptAdminPagination(source);
+  source = replaceSection(source, '        // ─── 第三方代充 API 配置', 'const US_TAX_FREE_STATE_NAMES', `
+        async function loadOrbitcardConfig() {
+            const status = document.getElementById('orbitcard_config_status');
+            const save = document.getElementById('orbitcard_config_save');
+            try {
+                const res = await authFetch('/api/admin/orbitcard/config');
+                const data = await res.json();
+                if (!res.ok || !data.success) throw new Error(data.message || '加载 Orbitcard 配置失败');
+                const cfg = data.config;
+                document.getElementById('orbitcard_live_management').checked = cfg.live_management === true;
+                document.getElementById('orbitcard_base_url').value = cfg.orbitcard_base_url || '';
+                for (const [id, saved] of [
+                    ['orbitcard_api_key', cfg.orbitcard_api_key_saved],
+                    ['orbitcard_api_secret', cfg.orbitcard_api_secret_configured]
+                ]) {
+                    const input = document.getElementById(id);
+                    input.value = '';
+                    input.placeholder = saved ? '已保存，留空不修改' : '';
+                }
+                status.textContent = '';
+                save.disabled = false;
+            } catch {
+                status.textContent = '读取 Orbitcard 配置失败，请刷新后重试。';
+            }
+        }
+
+        async function saveOrbitcardConfig() {
+            const save = document.getElementById('orbitcard_config_save');
+            if (save.disabled) return;
+            save.disabled = true;
+            try {
+                const res = await authFetch('/api/admin/orbitcard/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        live_management: document.getElementById('orbitcard_live_management').checked,
+                        orbitcard_base_url: document.getElementById('orbitcard_base_url').value.trim(),
+                        orbitcard_api_key: document.getElementById('orbitcard_api_key').value.trim(),
+                        orbitcard_api_secret: document.getElementById('orbitcard_api_secret').value.trim()
+                    })
+                });
+                const data = await res.json();
+                if (!res.ok || !data.success) throw new Error(data.message || '保存 Orbitcard 配置失败');
+                showMessage(data.message || 'Orbitcard 配置已保存', 'success');
+                await loadOrbitcardConfig();
+            } catch (error) {
+                showMessage(error.message || '保存 Orbitcard 配置失败', 'error');
+            } finally { save.disabled = false; }
+        }
+  `);
   source = replaceSection(source, '        async function saveProxyPool() {', '        function applyProxyTestResultToRow', `
         const normalizeRechargeProxyInput = ${normalizeRechargeProxyInput.toString()};
         function normalizeProxyPoolEditor(input) {
@@ -406,7 +457,7 @@ function adaptAdminScript(source, routingScript) {
                 }
                 await loadData(true);
                 await loadRegionConfig();
-                await loadGptApiConfig();
+                await loadOrbitcardConfig();
                 if (adminDataRefreshTimer) clearInterval(adminDataRefreshTimer);
                 adminDataRefreshTimer = setInterval(() => {
                     if (!document.hidden && window.idRechargeVisible !== false && !adminDataRefreshPaused)
@@ -493,8 +544,10 @@ function adaptAdminScript(source, routingScript) {
     '                cardPoolList = Array.isArray(data.cards) ? data.cards : (Array.isArray(data) ? data : []);\n                renderCardPoolTable();',
     `                const rows = Array.isArray(data.cards) ? data.cards : (Array.isArray(data) ? data : null);
                 if (!res.ok || !rows) throw new Error('卡池读取失败');
+                if (!rechargeCardPlans.accept(data.planPolicy, rows)) return cardPoolList;
                 cardPoolList = rows;
                 renderCardPoolTable();
+                paintRechargeCardTypes();
                 return rows;`
   );
   source = replaceOne(
@@ -502,7 +555,8 @@ function adaptAdminScript(source, routingScript) {
     "            const btn = document.getElementById('card_pool_import_btn');\n            const text = (textarea.value || '').trim();",
     `            const btn = document.getElementById('card_pool_import_btn');
             const typeId = document.getElementById('card_pool_import_type').value;
-            if (btn.disabled || !typeId) return;
+            const planRequest = rechargeCardPlans.importRequest();
+            if (btn.disabled || !typeId || !planRequest) return;
             const submitted = textarea.value;
             const text = submitted.trim();`
   );
@@ -516,16 +570,29 @@ function adaptAdminScript(source, routingScript) {
             try {
                 const res = await authFetch('/api/admin/cards/import', {`
   );
+  source = replaceOne(source, '                    body: JSON.stringify({ cards })',
+    '                    body: JSON.stringify({ cards, ...planRequest })');
+  source = replaceOne(source, '                    cardPoolList = cardPoolList.filter((c) => c.id !== cardId);',
+    '                    cardPoolList = cardPoolList.filter((c) => c.id !== cardId);\n' +
+    '                    rechargeCardPlans.remove(cardId);');
   source = replaceSection(
     source,
     '                if (res.ok) {\n                    const imported = data.imported || 0;',
     '        // ============ End Card Pool Management ============',
-    `                if (!res.ok) throw new Error('卡池导入回执待核对');
+    `                if ([400, 409].includes(res.status) && data.success === false) {
+                    resultEl.textContent = data.message || data.error || '卡池导入未受理';
+                    resultEl.style.color = 'var(--error)';
+                    if (res.status === 409) await loadCardPoolList();
+                    return;
+                }
+                if (!res.ok || !rechargeCardPlans.confirmedImport(data, planRequest))
+                    throw new Error('卡池导入回执待核对');
                 const numbers = rechargeCardTypes.acceptedNumbers(cards, data);
                 if (textarea.value === submitted) textarea.value = '';
                 const result = await finishRechargeCardImport(numbers, typeId);
                 resultEl.textContent = '导入 ' + data.imported + ' 张，跳过重复 ' + data.skipped +
-                    ' 张，失败 ' + (data.failed + parseErrors.length) + ' 张' + result;
+                    ' 张，失败 ' + (data.failed + parseErrors.length) + ' 张；已设置允许套餐 ' +
+                    data.assignedPlans + ' 张' + result;
                 resultEl.style.color = 'var(--text-dim)';
             } catch {
                 resultEl.textContent = '导入回执待核对，请先刷新卡池查看。';
@@ -542,7 +609,7 @@ function adaptAdminScript(source, routingScript) {
   source = replaceOne(
     source,
     '<tr><td colspan="10" style="text-align:center; color: var(--text-dim); padding: 40px 0;">暂无卡片，请使用批量导入添加</td></tr>',
-    '<tr><td colspan="11" style="text-align:center; color: var(--text-dim); padding: 40px 0;">暂无卡片，请使用批量导入添加</td></tr>'
+    '<tr><td colspan="12" style="text-align:center; color: var(--text-dim); padding: 40px 0;">暂无卡片，请使用批量导入添加</td></tr>'
   );
   source = replaceOne(
     source,
@@ -554,7 +621,8 @@ function adaptAdminScript(source, routingScript) {
     source,
     '<td><code>${cardNumber}</code></td>',
     '<td><code>${cardNumber}</code></td>\n' +
-      '                    <td data-recharge-card-type="${cardKey}"></td>'
+      '                    <td data-recharge-card-type="${cardKey}"></td>\n' +
+      '                    <td>${rechargeCardPlans.cell(card)}</td>'
   );
   const deleteCardButton = '<button class="btn-delete" onclick="deleteCardPoolItem(${card.id})" title="删除">\n' +
     '                            <i data-lucide="trash-2"></i>\n                        </button>';
@@ -566,7 +634,7 @@ function adaptAdminScript(source, routingScript) {
   source = replaceOne(
     source,
     "            }).join('');\n            lucide.createIcons();\n        }\n\n        function getCardStatusBadge(card)",
-    "            }).join('');\n            paintRechargeCardTypes();\n            lucide.createIcons();\n        }\n\n        function getCardStatusBadge(card)"
+    "            }).join('');\n            paintRechargeCardTypes();\n            rechargeCardPlans.paint();\n            lucide.createIcons();\n        }\n\n        function getCardStatusBadge(card)"
   );
   for (const [anchor, replacement] of [
     [
@@ -601,6 +669,14 @@ function adaptAdminScript(source, routingScript) {
   // Add the local settings call after namespacing upstream URLs. It goes to the host, not the engine.
   return replaceOne(localUrls(source + '\n' + routingScript), '        let cardPoolList = [];', `
         let cardPoolList = [];
+        const rechargeCardPlans = ${cardPlanAdminScript}({
+            labels: ${JSON.stringify(cardPlanLabels)},
+            request: (url, options) => authFetch('${prefix}' + url, options),
+            loadCards: () => loadCardPoolList(),
+            onImportChange: () => paintRechargeCardTypes(),
+            notify: (message, kind) => showMessage(message, kind),
+            confirm: (message, title) => showAdminConfirm(message, title)
+        });
         function hasHostedCardTypeEditor() {
             return window.frameElement?.matches('.recharge-integration__frame[data-view="cards"][data-view-group="admin"]');
         }
@@ -644,7 +720,7 @@ function adaptAdminScript(source, routingScript) {
                 rechargeCardTypes.version !== null && !rechargeCardTypes.options.length
                     ? '暂无可用银行卡类型' : '请选择银行卡类型');
             typeSelect.disabled = unavailable || busy;
-            importButton.disabled = typeSelect.disabled || !typeSelect.value;
+            importButton.disabled = typeSelect.disabled || !typeSelect.value || !rechargeCardPlans.importRequest();
             const hosted = hasHostedCardTypeEditor();
             for (const cell of document.querySelectorAll('#card_pool_list_body [data-recharge-card-type]')) {
                 const cardId = cell.dataset.rechargeCardType;
@@ -784,6 +860,12 @@ function adaptRedeemHtml(source) {
 }
 
 function adaptRechargeProgress(source, workspace) {
+  const retiredPanel = source.match(/<section id="captchaVerificationPanel"[\s\S]*?<\/section>/)?.[0];
+  if (!retiredPanel) throw new Error('原版验证码面板结构不符');
+  source = replaceOne(source, retiredPanel, '');
+  source = replaceSection(source, 'const captchaVerificationPanel', 'const flowStatusBadge', '');
+  source = replaceSection(source, 'let activeCaptcha = null;', 'const PLAN_LABELS', '');
+  source = replaceSection(source, 'function hideCaptchaVerification()', 'function decodeJwtPart(', '');
   const replacements = [
     ['<span>开通进度</span>', '<strong id="taskProgressTitle">开通中</strong>'],
     [
@@ -957,20 +1039,15 @@ function adaptRechargeProgress(source, workspace) {
             if (taskCompleted || (status !== 'running' && !Object.hasOwn(openingResults, status))) return;
             ${workspace ? 'const detailedStep = window.idRechargeWorkspaceLog?.syncSteps(data.steps, openingSteps);' : ''}
             const progress = Number.isFinite(data.progress) ? data.progress : taskProgressValue;
-            if (Object.hasOwn(data, 'captcha')) updateCaptchaVerification(data.captcha);
             showProgress();
             statusMsg.style.display = 'none';
-            if (status === 'running') {
-                const needsVerification = activeCaptcha?.stage === 'awaiting_captcha' || activeCaptcha?.status === 'pending';
-                const verificationSubmitted = activeCaptcha?.stage === 'captcha_submitted' || activeCaptcha?.status === 'submitted';${workspace ? `
+            if (status === 'running') {${workspace ? `
                 const useStep = data.stepsAvailable !== false && detailedStep &&
                     data.stage !== 'paid' && data.stage !== 'subscription_check';` : ''}
-                const label = needsVerification ? '等待完成验证' : verificationSubmitted ? '正在确认验证结果' :
-                    ${workspace ? '(useStep ? detailedStep : stageLabel(data.stage))' : 'stageLabel(data.stage)'};
+                const label = ${workspace ? 'useStep ? detailedStep : stageLabel(data.stage)' : 'stageLabel(data.stage)'};
                 setProgress(progress, label);
-                ${workspace ? 'if (recordReceipt && (!useStep || needsVerification || verificationSubmitted)) window.idRechargeWorkspaceLog?.receipt(label);' : ''}
-                setProgressHint(needsVerification && !captchaVerificationBtn.disabled
-                    ? '请在验证页面完成操作后返回。' : '请稍候，同一兑换码无需重复提交。');
+                ${workspace ? 'if (recordReceipt && !useStep) window.idRechargeWorkspaceLog?.receipt(label);' : ''}
+                setProgressHint('请稍候，同一兑换码无需重复提交。');
                 updateFlowUI(2, 'running');
                 return;
             }
@@ -978,7 +1055,6 @@ function adaptRechargeProgress(source, workspace) {
             taskCompleted = true;
             clearTaskStatusPolling();
             activeJobKey = '';
-            hideCaptchaVerification();
             const result = openingResults[status];
             const succeeded = status === 'success';
             ${workspace ? "if (status === 'manual') pendingReview.add(verifiedCdk);" : ''}
@@ -998,6 +1074,7 @@ function adaptRechargeProgress(source, workspace) {
             } else startBtn.disabled = true;
         }
   `);
+  source = replaceOne(source, '            hideCaptchaVerification();\n', '');
   source = replaceOne(source, '            closeTaskSocket();', "            activeJobKey = '';\n            taskStatusRequest = null;" +
     (workspace ? '\n            window.idRechargeWorkspaceLog?.reset();' : ''));
   source = replaceOne(source, 'if (isProcessing && data.data?.jobKey) {', 'if (isProcessing && validRechargeJobKey(data.data?.jobKey)) {');
@@ -1351,7 +1428,8 @@ function adaptWorkspaceRechargeScript(source) {
     "                } else {\n                    hideProgress();\n                    updateFlowUI(2, 'failed');",
     `
                 } else if (response.ok || data.success !== false || (response.status >= 500 && !(
-                    response.status === 503 && data.notAccepted === true && data.code === 'maintenance_mode'
+                    response.status === 503 && data.notAccepted === true &&
+                    ['maintenance_mode', 'recharge_plan_cards_unavailable'].includes(data.code)
                 ))) {
                     markUncertain();
                 } else {
@@ -1414,6 +1492,31 @@ function adaptHtml(source, kind) {
         : '<body data-recharge-view="' + kind + '"'
     );
   if (kind === 'admin') {
+    source = replaceSection(source, '<!-- 第三方代充 API 设置 -->', '<div class="config-grid">', `
+            <div class="panel">
+                <h2 class="panel-title">Orbitcard 卡片管理</h2>
+                <div class="toggle-field">
+                    <label for="orbitcard_live_management">允许实时查余额、恢复及绑定套餐</label>
+                    <input type="checkbox" id="orbitcard_live_management">
+                </div>
+                <div class="form-group">
+                    <label for="orbitcard_base_url">Orbitcard 地址</label>
+                    <input type="text" id="orbitcard_base_url" class="asset-input" autocomplete="off">
+                </div>
+                <div class="form-group">
+                    <label for="orbitcard_api_key">Orbitcard API Key</label>
+                    <input type="password" id="orbitcard_api_key" class="asset-input" autocomplete="off">
+                </div>
+                <div class="form-group">
+                    <label for="orbitcard_api_secret">Orbitcard Secret</label>
+                    <input type="password" id="orbitcard_api_secret" class="asset-input" autocomplete="off">
+                </div>
+                <p id="orbitcard_config_status" role="status"></p>
+                <div class="import-actions">
+                    <button type="button" id="orbitcard_config_save" class="btn btn-primary" onclick="saveOrbitcardConfig()" disabled>保存 Orbitcard 配置</button>
+                </div>
+            </div>
+    `);
     source = source.replaceAll('class="admin-switcher-tabs"', 'class="admin-switcher-tabs tabs"')
       .replace(/class="admin-switcher-tab(?=[" ])/g, 'class="tab admin-switcher-tab');
     const telegramPanel = '<div class="panel" style="margin-top: 24px;">\n                <h2 class="panel-title">Telegram 通知</h2>';
@@ -1422,7 +1525,8 @@ function adaptHtml(source, kind) {
       source,
       '<th width="200px">卡号</th>',
       '<th width="200px">卡号</th>\n' +
-        '                                <th width="110px" scope="col">银行卡类型</th>'
+        '                                <th width="110px" scope="col">银行卡类型</th>\n' +
+        '                                <th scope="col">允许套餐</th>'
     );
     source = replaceOne(
       source,
@@ -1432,7 +1536,7 @@ function adaptHtml(source, kind) {
         '<select id="card_pool_import_type" class="asset-input" required disabled aria-describedby="card_pool_import_type_hint">' +
         '<option value="">请选择银行卡类型</option></select>' +
         '<p id="card_pool_import_type_hint" class="embedded-field-hint">同一批使用所选类型。已有其他类型的重复卡片可在列表修改。</p>' +
-        '</div>\n                    <textarea id="card_pool_import_text" class="import-textarea"'
+        '</div>\n' + cardPlanImportFields + '\n                    <textarea id="card_pool_import_text" class="import-textarea"'
     );
     source = replaceOne(source, 'id="card_pool_import_btn" class="btn btn-success"',
       'id="card_pool_import_btn" class="btn btn-success" disabled');
@@ -1444,7 +1548,8 @@ function adaptHtml(source, kind) {
       '<div class="card-pool-type-feedback">' +
         '<span id="card_pool_type_status" role="status"></span>' +
         '<button type="button" id="card_pool_type_retry" class="btn btn-secondary" hidden>重试读取类型</button>' +
-        '</div>\n                <div class="table-container">\n                    <table class="admin-action-table card-pool-table">'
+        '</div>\n' + cardPlanToolbar +
+        '\n                <div class="table-container">\n                    <table class="admin-action-table card-pool-table">'
     );
     source = source.replace('每次任务从「启用」的代理中随机抽取。',
       '优先检测标注国家与套餐一致的启用代理，再检测待标注旧代理。实测出口匹配才会创建任务。');
