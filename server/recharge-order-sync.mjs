@@ -151,7 +151,7 @@ export function createRechargeOrderSync({ store, client, publicOrigin, quoteServ
     return { bills, more };
   }
 
-  async function scan(apply, selected, retry) {
+  async function scan(apply, selected, retry, committed) {
     let checkpoint = store.featureDocument(domain);
     if (apply && !checkpoint.data) checkpoint = store.saveFeatureDocument(domain, checkpoint.version, { since: startAt, rows: [] });
     let saved = checkpoint.data || { since: startAt, rows: [] };
@@ -189,13 +189,21 @@ export function createRechargeOrderSync({ store, client, publicOrigin, quoteServ
       .sort((a, b) => (prior.get(a)?.checkedAt || 0) - (prior.get(b)?.checkedAt || 0));
     if (!candidates.length) return { rows: [], more };
     const date = beijing(saved.since).slice(0, 10);
-    const [codeResult, cardResult, billingResult] = await Promise.allSettled([
-      client.listCodes(), client.get('/api/admin/cards'), readBills(date)
-    ]);
-    const codes = codeResult.status === 'fulfilled' && Array.isArray(codeResult.value) ? codeResult.value : [];
-    const cards = cardResult.status === 'fulfilled' && Array.isArray(cardResult.value?.cards) ? cardResult.value.cards : [];
-    const bills = billingResult.status === 'fulfilled' ? billingResult.value.bills : [];
-    more ||= billingResult.status === 'fulfilled' && billingResult.value.more;
+    let shared;
+    async function evidenceSources() {
+      shared ??= Promise.allSettled([client.listCodes(), client.get('/api/admin/cards'), readBills(date)])
+        .then(([codeResult, cardResult, billingResult]) => {
+          if (committed && [codeResult, cardResult, billingResult].some(result => result.status !== 'fulfilled'))
+            throw new Error('committed_evidence_unavailable');
+          more ||= billingResult.status === 'fulfilled' && billingResult.value.more;
+          return {
+            codes: codeResult.status === 'fulfilled' && Array.isArray(codeResult.value) ? codeResult.value : [],
+            cards: cardResult.status === 'fulfilled' && Array.isArray(cardResult.value?.cards) ? cardResult.value.cards : [],
+            bills: billingResult.status === 'fulfilled' ? billingResult.value.bills : []
+          };
+        });
+      return shared;
+    }
     const ownerData = store.featureDocument('recharge-codes').data;
     const settings = store.load('settings').data;
     const rows = [];
@@ -205,16 +213,19 @@ export function createRechargeOrderSync({ store, client, publicOrigin, quoteServ
       try {
         const { task, runtimeEntries } = await client.get('/api/admin/task-logs/' + jobKey);
         if (task?.jobKey !== jobKey) {
-          if (prior.has(jobKey)) throw new Error('未取得对应的代充任务');
+          if (committed || prior.has(jobKey)) throw new Error('未取得对应的代充任务');
           continue;
         }
+        if (task.status !== 'success') continue;
+        if (committed) store.rememberRechargeSessions([jobKey], saved.scanOffset);
+        const { codes, cards, bills } = await evidenceSources();
         let orbitCards = [];
         if (typeof task.gptApiOrderId === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(task.gptApiOrderId)) {
           try {
             const related = await client.get('/api/admin/orbitcard/usage?page_size=20&recharge_status=success&keyword=' +
               encodeURIComponent(task.gptApiOrderId));
             if (Array.isArray(related.cards)) orbitCards = related.cards;
-          } catch {}
+          } catch (error) { if (committed) throw error; }
         }
         const evidence = rechargeOrderEvidence(task, { bills, codes, cards, orbitCards, ownerData, runtimeEntries, now: checkedAt });
         if (!evidence) continue;
@@ -234,17 +245,18 @@ export function createRechargeOrderSync({ store, client, publicOrigin, quoteServ
         }
         result = { jobKey, needs: evidence.needs, checkedAt };
         if (apply) result = store.applyRechargeOrder({ since: saved.since, row: result, order, firstUse: evidence.firstUse });
-      } catch {
-        result = { jobKey, checkedAt, needs: [readbackFailure] };
+      } catch (error) {
+        result = { jobKey, checkedAt, needs: [committed && error.upstreamStatus === 404
+          ? '原代充任务已移除，请人工核对' : readbackFailure] };
         if (apply) result = store.applyRechargeOrder({ since: saved.since, row: result });
       }
       rows.push(publicSummary(result));
     }
     return { rows, more: more || candidates.length > maxChecks };
   }
-  function run({ apply = false, jobKeys, retry = false } = {}) {
+  function run({ apply = false, jobKeys, retry = false, committed = false } = {}) {
     if (running) return Promise.reject(Object.assign(new Error('同步正在进行，请稍后查看'), { status: 409 }));
-    running = scan(apply, jobKeys, retry).then((result) => {
+    running = scan(apply, jobKeys, retry, committed).then((result) => {
       const pending = apply ? (store.featureDocument(domain).data?.rows || []).filter(retryable).length : 0;
       if (apply) {
         lastError = pending ? '有代充任务暂未取得入单回执，可重试读取' : '';
@@ -295,5 +307,19 @@ export function createRechargeOrderSync({ store, client, publicOrigin, quoteServ
       return send(error.status === 409 ? 409 : 503, { error: error.status === 409 ? error.message : '代充资料暂时无法同步' });
     }
   }
-  return { handle, run };
+  return { handle, run,
+    eventBoundary() {
+      let current = store.featureDocument(domain);
+      if (!current.data) current = store.saveFeatureDocument(domain, current.version, { since: startAt, rows: [] });
+      if (!Number.isFinite(current.data.since) || current.data.since <= 0) throw new Error('入单启用边界无效');
+      return Math.floor(current.data.since / 1000);
+    },
+    pendingJobs: () => (store.featureDocument(domain).data?.rows || [])
+      .filter(row => !row.excluded && (!row.orderNo || row.needs?.length)).map(row => row.jobKey),
+    async runCommitted(command) {
+      const result = await run({ ...command, committed: true });
+      if (result.rows.some(row => row.needs?.includes(readbackFailure))) throw new Error('committed_readback_unavailable');
+      return result;
+    }
+  };
 }

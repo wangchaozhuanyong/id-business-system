@@ -137,10 +137,12 @@ def stream(config, checkpoint_path, send=deliver):
         raise Unavailable("database_name_invalid")
     # Only a private loopback transport or verified TLS is accepted.
     settings = {key: config[key] for key in ("host", "port", "user", "password")}
-    if settings["host"] not in ("127.0.0.1", "localhost", "::1"):
+    loopback = settings["host"] in ("127.0.0.1", "localhost", "::1")
+    if not loopback:
         if not isinstance(config.get("caFile"), str):
             raise Unavailable("verified_tls_required")
-        settings.update(ssl_ca=config["caFile"], ssl_verify_cert=True, ssl_verify_identity=True)
+    if config.get("caFile"):
+        settings.update(ssl_ca=config["caFile"], ssl_verify_cert=True, ssl_verify_identity=not loopback)
     settings.update(connect_timeout=10, read_timeout=45, write_timeout=10, charset="utf8mb4")
     if not isinstance(config["serverId"], int) or not 1 <= config["serverId"] <= 2**32 - 1:
         raise Unavailable("replica_identity_invalid")
@@ -169,7 +171,8 @@ def stream(config, checkpoint_path, send=deliver):
             while True:
                 with connection.cursor() as cursor:
                     cursor.execute("SELECT job_key FROM task_logs WHERE job_key > %s "
-                                   "AND created_at >= FROM_UNIXTIME(%s) ORDER BY job_key LIMIT 512", (last, since))
+                                   "AND (created_at >= FROM_UNIXTIME(%s) OR updated_at >= FROM_UNIXTIME(%s)) "
+                                   "ORDER BY job_key LIMIT 512", (last, since, since))
                     rows = cursor.fetchall()
                 if not rows:
                     break
@@ -179,6 +182,8 @@ def stream(config, checkpoint_path, send=deliver):
                 last = rows[-1][0]
             saved["snapshotDone"] = True
             save_checkpoint(checkpoint_path, saved)
+        sys.stderr.write("recharge_event_subscriber_ready\n")
+        sys.stderr.flush()
         reader = BinLogStreamReader(connection_settings=settings, server_id=config["serverId"],
                                     only_schemas=[database], only_tables=list(TABLES),
                                     only_events=[WriteRowsEvent, UpdateRowsEvent, DeleteRowsEvent,
@@ -203,11 +208,20 @@ def stream(config, checkpoint_path, send=deliver):
                 position = {"file": reader.log_file, "position": event.packet.log_pos}
                 if transaction.scopes:
                     send(transaction.event(source, position))
+                    saved["position"] = position
+                    save_checkpoint(checkpoint_path, saved)
+                # Unrelated transactions do not require a disk fsync. A later
+                # relevant commit or log rotation safely advances the receipt.
                 saved["position"] = position
-                save_checkpoint(checkpoint_path, saved)
                 transaction = Transaction()
-            elif isinstance(event, RotateEvent) and transaction.scopes:
-                raise Unavailable("rotation_inside_transaction")
+            elif isinstance(event, RotateEvent):
+                if transaction.scopes:
+                    raise Unavailable("rotation_inside_transaction")
+                if event.next_binlog != saved['position']['file']:
+                    if not FILE.fullmatch(event.next_binlog) or event.position < 4:
+                        raise Unavailable('rotation_position_invalid')
+                    saved['position'] = {'file': event.next_binlog, 'position': event.position}
+                    save_checkpoint(checkpoint_path, saved)
     finally:
         if reader:
             reader.close()
@@ -217,8 +231,23 @@ def stream(config, checkpoint_path, send=deliver):
 if __name__ == "__main__":
     logging.disable(logging.CRITICAL)
     try:
-        stream(private_json(sys.argv[1]), sys.argv[2])
-    except BaseException:
+        if sys.argv[1] == '--config-fd':
+            with os.fdopen(3) as private_pipe:
+                raw = private_pipe.read(8193)
+            if len(raw) > 8192:
+                raise Unavailable('private_configuration_too_large')
+            config = json.loads(raw)
+        else:
+            config = private_json(sys.argv[1])
+        stream(config, sys.argv[2])
+    except (Unavailable, ValueError, TypeError, KeyError, ImportError) as error:
+        fatal = not isinstance(error, Unavailable) or str(error) != 'event_not_acknowledged'
+        sys.stderr.write('recharge_event_subscriber_review_required\n' if fatal else
+                         'recharge_event_subscriber_unavailable\n')
+        sys.exit(2 if fatal else 1)
+    except BaseException as error:
         # Includes connection/library failures: never emit their raw messages.
-        sys.stderr.write("recharge_event_subscriber_unavailable\n")
-        sys.exit(1)
+        fatal = bool(error.args and error.args[0] in (1044, 1045, 1142, 1227))
+        sys.stderr.write('recharge_event_subscriber_review_required\n' if fatal else
+                         'recharge_event_subscriber_unavailable\n')
+        sys.exit(2 if fatal else 1)

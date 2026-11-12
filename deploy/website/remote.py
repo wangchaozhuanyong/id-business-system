@@ -238,6 +238,74 @@ def normalize_tools_credential_stream(content):
     return content.replace(original, normalized)
 
 
+def wire_event_launcher(content):
+    credential = '  cat "$CREDENTIALS_DIRECTORY/independent-vendure-integrations"'
+    framed = (
+        "  python3 -c 'import json,sys; sys.stdout.write(json.dumps(json.load(sys.stdin), separators=(\",\", \":\")))'"
+        ' < "$CREDENTIALS_DIRECTORY/independent-vendure-integrations"\n'
+        "  printf '\\n'\n"
+        '  if [ "$mode" = live ]; then\n'
+        '    cat "$CREDENTIALS_DIRECTORY/independent-recharge-events"\n'
+        "  else printf disabled; fi"
+    )
+    state = f'  state+=(-e "{ADMISSION_ENV}")'
+    mounted = state + '\n  state+=(\n' + \
+        '    --mount "type=bind,src=$root/releases/$sha/runtime/external-events,dst=/external-events-runtime,readonly"\n' + \
+        '    --mount "type=bind,src=$root/releases/$sha/runtime/mysql-ca.pem,dst=/run/recharge-mysql-ca.pem,readonly")'
+    if 'independent-recharge-events' in content:
+        require(content.count(framed) == 1 and content.count(mounted) == 1, 'unexpected_event_launcher')
+        return content
+    require(content.count(credential) == 1 and content.count(state) == 1, 'unexpected_event_launcher')
+    return content.replace(credential, framed).replace(state, mounted)
+
+
+def wire_event_entry(content):
+    old = 'const [toolConfig, vendureConfig] = '
+    new = 'const [toolConfig, vendureConfig, eventPassword] = '
+    anchor = '  relayConfig,\n'
+    configured = anchor + "  rechargeEventsConfig: mode === 'live' ? {\n" + \
+        "    host: '127.0.0.1', port: 44576, user: 'id_recharge_events', password: eventPassword,\n" + \
+        "    database: 'id_redesign_codexdaichong_prod', serverId: 3511012,\n" + \
+        "    caFile: '/run/recharge-mysql-ca.pem', pythonPath: '/external-events-runtime',\n" + \
+        "    checkpointPath: '/state/recharge-events.checkpoint.json'\n" + \
+        "  } : undefined,\n"
+    guard = "if (mode === 'live' && !/^[a-f0-9]{64}$/.test(eventPassword || '')) throw new Error('event_credential_required');\n"
+    start = 'const service = await startPreview('
+    if 'eventPassword' in content:
+        require(content.count(new) == 1 and content.count(configured) == 1 and content.count(guard) == 1,
+                'unexpected_event_entry')
+        return content
+    require(content.count(old) == 1 and content.count(anchor) == 1 and content.count(start) == 1,
+            'unexpected_event_entry')
+    return content.replace(old, new).replace(anchor, configured).replace(start, guard + start)
+
+
+def wire_event_credential(content):
+    line = 'LoadCredentialEncrypted=independent-recharge-events:' + str(FORMAL / 'private/independent-recharge-events.cred')
+    if 'independent-recharge-events' in content:
+        require(content.splitlines().count(line) == 1, 'unexpected_event_credential_unit')
+        return content
+    require(content.count('[Service]') == 1 and (FORMAL / 'private/independent-recharge-events.cred').is_file(),
+            'event_prerequisites_missing')
+    return content.rstrip() + '\n' + line + '\n'
+
+
+def stage_event_runtime(plan, release):
+    require((FORMAL / 'private/independent-recharge-events.cred').is_file(), 'event_prerequisites_missing')
+    require('path /shop-api /storefront-realtime/mail-events' in GATEWAY.read_text(), 'mail_event_gateway_missing')
+    runtime = release / 'runtime'
+    target = runtime / 'external-events'
+    target.mkdir(parents=True, mode=0o755)
+    run(['tar', '-xzf', str(release / 'artifacts' / f"independent-event-runtime-{plan['sha']}.tar.gz"), '-C', str(target)])
+    manifest = json.loads((target / 'manifest.json').read_text())
+    require(manifest['sha'] == plan['sha'] and bool(manifest['files']) and
+            all(digest(target / name) == value for name, value in manifest['files'].items()), 'event_runtime_hash_mismatch')
+    certificate = run(['docker', 'exec', 'id-business-independent-formal-mysql', 'cat', '/var/lib/mysql/ca.pem']).decode()
+    require(certificate.startswith('-----BEGIN CERTIFICATE-----') and 'PRIVATE KEY' not in certificate,
+            'mysql_ca_certificate_invalid')
+    write_new(runtime / 'mysql-ca.pem', certificate, 0o644)
+
+
 def presentation_scope(plan):
     scopes = [name for name in PRESENTATION_SCOPES if name in plan]
     require(len(scopes) <= 1, "recharge_presentation_approval_mismatch")
@@ -293,6 +361,8 @@ def stage(plan, release):
     run(["tar", "-xzf", str(artifacts / source_name), "-C", str(source)])
     require(all(digest(source / name) == expected for name, expected in plan["files"].items()),
             "prepared_source_mismatch")
+    if plan.get('externalEvents'):
+        stage_event_runtime(plan, release)
     live = ROOT / "releases" / base
     if scope:
         verify_presentation_bundle(live / "assets.json", artifacts / assets_name, PRESENTATION_SCOPES[scope][1])
@@ -316,6 +386,11 @@ def stage(plan, release):
         elif name == "check-app.mjs":
             content = update_canary_asset_refs(content, (live / "source/frontend/index.html").read_text(),
                                                (source / "frontend/index.html").read_text())
+        if plan.get('externalEvents'):
+            if name == 'run-app':
+                content = wire_event_launcher(content)
+            elif name == 'app-entry.mjs':
+                content = wire_event_entry(content)
         write_new(ops / name, content, 0o755 if name == "run-app" else 0o644)
     return source, ops
 
@@ -537,6 +612,32 @@ def http(path):
     return urllib.request.urlopen(request, timeout=5)
 
 
+def read_event_runtime():
+    name = 'independent-mysql-root'
+    password = run(['systemd-creds', 'decrypt', '--name=' + name,
+                    str(FORMAL / 'private' / (name + '.cred')), '-']).decode().strip()
+    require(re.fullmatch('[a-f0-9]{64}', password), 'event_health_credential_invalid')
+    query = ("SELECT @@server_uuid, @@binlog_row_metadata, "
+             "(SELECT COUNT(*) FROM performance_schema.threads WHERE PROCESSLIST_USER='id_recharge_events' "
+             "AND PROCESSLIST_COMMAND LIKE 'Binlog Dump%');\n")
+    checkpoint = FORMAL / 'data/recharge-events.checkpoint.json'
+    deadline = time.monotonic() + 180
+    while time.monotonic() < deadline:
+        result = subprocess.run(['docker', 'exec', '-i', 'id-business-independent-formal-mysql', 'bash', '-ec',
+            'IFS= read -r MYSQL_PWD; export MYSQL_PWD; exec mysql --host=127.0.0.1 --user=root --batch --skip-column-names'],
+            input=(password + '\n' + query).encode(), capture_output=True, timeout=15)
+        if result.returncode == 0:
+            fields = result.stdout.decode().strip().split('\t')
+            if len(fields) == 3 and fields[1:] == ['FULL', '1'] and checkpoint.is_file():
+                state = json.loads(checkpoint.read_text())
+                if state.get('snapshotDone') is True and state.get('source') == fields[0]:
+                    require(checkpoint.stat().st_mode & 0o777 == 0o600, 'event_checkpoint_permissions_invalid')
+                    return {'readerConnected': True, 'snapshotAcknowledged': True, 'metadata': 'FULL',
+                            'checkpointPrivate': True, 'businessTestWrites': 0}
+        time.sleep(3)
+    raise ReleaseError('event_runtime_not_ready')
+
+
 def read_website(plan, release, source, adapter=None):
     deadline = time.monotonic() + 65
     while time.monotonic() < deadline:
@@ -606,6 +707,8 @@ def release_website(plan):
     launcher = ops / "run-app"
     require(launcher.is_file() and os.access(launcher, os.X_OK), "staged_website_launcher_not_executable")
     new = website_release_dropin(old, base, launcher)
+    if plan.get('externalEvents'):
+        new = wire_event_credential(new)
     require_main(sha)
     install_backup_monitoring(source, sha)
     adapter = switch_adapter(plan, source, ops) if include_adapter else None
@@ -618,6 +721,7 @@ def release_website(plan):
     run(["systemctl", "daemon-reload"])
     run(["systemctl", "restart", UNIT], timeout=55)
     live = read_website(plan, release, source, adapter)
+    events = read_event_runtime() if plan.get('externalEvents') else None
     monitoring = read_backup_monitoring(inspect("app"))
     result = {"mainSha": sha, "previousWebsiteSha": base, "website": live["app"],
               "sidecars": {name: live[name] for name in WEBSITE[1:]},
@@ -628,6 +732,8 @@ def release_website(plan):
               "liveAssetsSha256": digest(release / "assets.json"),
               "backupMonitoring": monitoring,
               "unauthenticatedProtectedReadsRejected": True, "productionBusinessTestWrites": False}
+    if events:
+        result['externalEvents'] = events
     scope = presentation_scope(plan)
     if scope:
         result[scope + "Verified"] = True

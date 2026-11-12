@@ -34,7 +34,7 @@ export async function consumeCommittedJobs(events, { run, pendingJobs, changed, 
         }
       }
     }
-    await changed(event.scopes);
+    await changed(event.scopes, event);
     signal?.throwIfAborted();
     await acknowledge(event.receipt);
   }

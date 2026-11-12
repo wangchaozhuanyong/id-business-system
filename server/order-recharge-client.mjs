@@ -56,7 +56,7 @@ export function createOrderRechargeClient(config, fetchImpl = fetch) {
     });
     if (!response.ok && !(storefrontVerify && [403, 409].includes(response.status)) &&
         !(storefrontLookup && response.status === 404))
-      throw new Error('代充资料暂时无法读取');
+      throw Object.assign(new Error('代充资料暂时无法读取'), { upstreamStatus: response.status });
     const result = await readBoundedJson(response);
     if (!result || (!storefrontVerify && !storefrontLookup && result.success === false))
       throw new Error('代充资料操作未确认');

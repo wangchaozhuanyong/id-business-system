@@ -3,15 +3,15 @@ import test from 'node:test';
 import { chromium } from 'playwright';
 import { interceptDesign, origin } from './helpers/offline-design.mjs';
 
-async function prepare(browser, width) {
+async function prepare(browser, width, relay = false) {
   const context = await browser.newContext({ viewport: { width, height: 900 } });
   const requests = await interceptDesign(context, { localFixtures: {},
     actor: { id: 'mail-update-fixture', name: '合成管理员', role: 'admin' } });
-  await context.addInitScript(() => {
+  await context.addInitScript(({ relay }) => {
     const fetchOriginal = window.fetch.bind(window);
     window.mailReads = 0; window.mailStreams = []; window.mailHeld = [];
     window.mailState = { success: true, primaryEmail: 'f***@example.test', targetType: 'PRIMARY',
-      codeExpiresAt: '2027-01-01T00:00:00Z', items: [
+      codeExpiresAt: '2027-01-01T00:00:00Z', supportsUpdates: true, updatesSource: relay ? 'relay' : 'managed', items: [
         { subject: '合成邮件一', receivedAt: '2026-11-12T01:00:00Z', body: '合成正文一', extractedCode: '123456' }
       ] };
     window.emitMail = (event, data) => {
@@ -21,7 +21,7 @@ async function prepare(browser, width) {
       stream.controller.enqueue(bytes.slice(0, -1)); stream.controller.enqueue(bytes.slice(-1));
     };
     window.fetch = (url, options) => {
-      if (String(url) !== '/api/local/tools/mailbox-query') return fetchOriginal(url, options);
+      if (String(url) !== (relay ? '/api/local/apple-relay/public-query' : '/api/local/tools/mailbox-query')) return fetchOriginal(url, options);
       if (options.headers.Accept === 'text/event-stream') {
         const stream = { closed: false };
         window.mailStreams.push(stream);
@@ -39,13 +39,13 @@ async function prepare(browser, width) {
       if (window.holdMail) return new Promise(resolve => window.mailHeld.push(() => resolve(Response.json(payload))));
       return Promise.resolve(Response.json(payload));
     };
-  });
+  }, { relay });
   const page = await context.newPage(), errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(origin + '/#/plugins/mailboxes');
   await page.getByRole('button', { name: '邮箱查询', exact: true }).click();
   const form = page.locator('#drawer #ops-managed-mail-query');
-  await form.locator('#ops-managed-query-code').fill('MBX-' + 'F'.repeat(32));
+  await form.locator('#ops-managed-query-code').fill(relay ? 'BUY-AAAA-BBBB' : 'MBX-' + 'F'.repeat(32));
   await form.getByRole('button', { name: '查询邮件', exact: true }).click();
   await form.getByText('合成邮件一', { exact: true }).waitFor();
   return { context, page, form, errors, requests };
@@ -53,8 +53,8 @@ async function prepare(browser, width) {
 
 test('mail notifications are idle without reads, preserve content, coalesce bursts and stop on hidden/closed views', async t => {
   const browser = await chromium.launch(); t.after(() => browser.close());
-  for (const width of [1440, 390]) await t.test(`${width}px`, async () => {
-    const { context, page, form, errors, requests } = await prepare(browser, width);
+  for (const relay of [false, true]) for (const width of [1440, 390]) await t.test(`${relay ? 'relay' : 'managed'} ${width}px`, async () => {
+    const { context, page, form, errors, requests } = await prepare(browser, width, relay);
     try {
       await page.clock.install({ time: new Date('2026-11-12T02:00:00Z') });
       await page.clock.pauseAt(new Date('2026-11-12T02:00:01Z'));

@@ -175,14 +175,36 @@ export function createRechargeActivity({ store, client, publicOrigin, getActor, 
     return items.map(nativeSession).find(task => task?.id === row.id);
   }
 
-  async function scan() {
+  async function scan({ jobKeys, reconcile = false, strict = false } = {}) {
     const now = clock();
     if (!snapshot.data) update(data => data || { since: now, checkedThrough: now, rows: [] });
     const cutoff = Math.max(snapshot.data.since, now - retentionMs);
     const floor = Math.max(cutoff, (checkedThrough ?? snapshot.data.checkedThrough) - 60_000);
-    const result = await readRecent(floor, cutoff);
+    const explicit = Array.isArray(jobKeys);
+    const result = explicit ? { tasks: new Map(), complete: true } : await readRecent(floor, cutoff);
     if (closed) return;
     const { tasks, complete } = result;
+    if (explicit) {
+      const jobs = [...new Set(jobKeys)].filter(key => jobPattern.test(key) && Number(key.slice(0, 13)) >= cutoff);
+      for (let index = 0; index < jobs.length; index += 6) {
+        await Promise.all(jobs.slice(index, index + 6).map(async key => {
+          const { items } = await client.get('/api/admin/sessions?limit=10&offset=0&search=' + key);
+          if (!Array.isArray(items)) throw new Error('代充任务读取不完整');
+          const task = items.map(nativeSession).find(task => task?.jobKey === key);
+          if (task) tasks.set(task.id, task);
+        }));
+      }
+      if (reconcile) {
+        const unresolved = snapshot.data.rows.filter(row => !tasks.has(row.id) &&
+          (inProgress(row) || !row.owner || !row.plan));
+        for (let index = 0; index < unresolved.length; index += 6) {
+          await Promise.all(unresolved.slice(index, index + 6).map(async row => {
+            const task = await findOriginal(row);
+            if (task) tasks.set(task.id, task);
+          }));
+        }
+      }
+    }
     const known = new Map(snapshot.data.rows.map(row => [row.id, row]));
     const pending = [
       ...snapshot.data.rows.filter(row => inProgress(row) && !tasks.has(row.id)).map(row => ({ row })),
@@ -190,10 +212,11 @@ export function createRechargeActivity({ store, client, publicOrigin, getActor, 
         .map(task => ({ task }))
     ];
     const cursor = pending.length ? detailCursor % pending.length : 0;
-    const checks = pending.slice(cursor).concat(pending.slice(0, cursor)).slice(0, maximumDetails);
+    const checks = explicit ? pending : pending.slice(cursor).concat(pending.slice(0, cursor)).slice(0, maximumDetails);
     detailCursor = cursor + checks.length;
     const started = new Map();
-    const details = await Promise.allSettled(checks.map(async ({ row, task }) => {
+    const details = [];
+    for (let index = 0; index < checks.length; index += maximumDetails) details.push(...await Promise.allSettled(checks.slice(index, index + maximumDetails).map(async ({ row, task }) => {
       if (row) {
         task = await findOriginal(row);
         if (!task) return false;
@@ -207,13 +230,13 @@ export function createRechargeActivity({ store, client, publicOrigin, getActor, 
         if (actual) started.set(task.id, actual.at);
       }
       return true;
-    }));
+    })));
     if (closed) return;
 
     const candidates = [...tasks.values()].filter(task => task.createdAt <= now + 30_000 &&
       ['running', 'success', 'failed', 'manual', 'maintenance'].includes(task.status));
     const needsPlan = candidates.some(task => !known.get(task.id)?.plan);
-    if (candidates.some(task => !known.has(task.id)) || (needsPlan && now - lastPlanRead >= planRetryMs)) {
+    if (candidates.some(task => !known.has(task.id)) || (needsPlan && (explicit || now - lastPlanRead >= planRetryMs))) {
       lastPlanRead = now;
       try {
         nativePlans = new Map((await client.listCodes()).filter(row => row.type === '自助' && typeof row.code === 'string')
@@ -260,11 +283,16 @@ export function createRechargeActivity({ store, client, publicOrigin, getActor, 
         now - data.checkedThrough >= 60_000 ? now : data.checkedThrough };
     });
     changeCoverage(limited ? 'limited' : 'ready');
+    if (strict && ((needsPlan && planReadFailed) || ownershipReadFailed || details.some(result => result.status === 'rejected')))
+      throw new Error('committed_activity_readback_unavailable');
   }
 
-  function collect() {
+  function collect(options = {}) {
     if (closed) return Promise.resolve();
-    running ??= scan().catch(() => changeCoverage('unavailable')).finally(() => { running = undefined; });
+    running ??= scan(options).catch(error => {
+      changeCoverage('unavailable');
+      if (options.strict) throw error;
+    }).finally(() => { running = undefined; });
     return running;
   }
 
@@ -344,6 +372,7 @@ export function createRechargeActivity({ store, client, publicOrigin, getActor, 
 
   return {
     handle, collect,
+    unavailable: () => changeCoverage('unavailable'),
     version(actor) {
       if (!canRead(actor)) return undefined;
       const key = actor.role + ':' + actor.id;

@@ -3,7 +3,7 @@ name: External Event Isolation
 on:
   pull_request:
     branches: [main]
-    paths: ['modules/external-events/**', '.github/workflows/external-event-isolation.yml']
+    paths: ['modules/external-events/**', 'server/recharge-events.mjs', 'deploy/website/event_prerequisites.py', '.github/workflows/external-event-isolation.yml']
 
 permissions:
   contents: read
@@ -37,8 +37,14 @@ jobs:
         run: |
           node --test modules/external-events/*.test.mjs
           .runtime/cdc-venv/bin/python -B -m unittest discover -s modules/external-events -p '*_test.py'
+          python3 -B -m unittest discover -s deploy/website -p event_runtime_test.py
+      - name: Build the exact runtime dependency artifact
+        run: |
+          python3 deploy/website/build_event_runtime.py "$(git rev-parse HEAD)"
+          PYTHONPATH="$GITHUB_WORKSPACE/.runtime/website-release/event-runtime" python3 -B -c 'import pymysql, pymysqlreplication; assert pymysql.__file__.startswith(".runtime") or "/.runtime/website-release/event-runtime/" in pymysql.__file__'
       - name: Verify committed rows, rollback, replay, late bills and fail-closed schema changes
         env:
           CDC_ISOLATION: synthetic-only
           CDC_MYSQL_PORT: ${{ job.services.mysql.ports[3306] }}
+          CDC_MYSQL_CONTAINER: ${{ job.services.mysql.id }}
         run: .runtime/cdc-venv/bin/python -B modules/external-events/cdc_isolation.py
