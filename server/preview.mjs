@@ -34,7 +34,7 @@ import {
 } from './card-management.mjs';
 import { claudeGoogleSubscriptionRoutes, createClaudeGoogleSubscriptionsHandler } from './claude-google-subscriptions.mjs';
 import { createSubscriptionHandler, subscriptionRoutes } from './subscription-management.mjs';
-import { createRechargeCodeHandler, lookupStorefrontRechargeAdmission, rechargeCodesRoute } from './recharge-code-requests.mjs';
+import { createRechargeCodeHandler, rechargeCodesRoute } from './recharge-code-requests.mjs';
 import { createRechargeOrderSync, orderSyncRoute } from './recharge-order-sync.mjs';
 import { createDataChangeStream, dataChangeRoute } from './change-sync.mjs';
 import { createEmployeeStatisticsHandler, employeeStatisticsRoute } from './employee-statistics.mjs';
@@ -729,9 +729,7 @@ export async function startPreview(
   if (storefrontAdmissionDirectory) {
     try {
       storefrontAdmission = await listenStorefrontAdmission(storefrontAdmissionDirectory, (code, ip) =>
-        lookupStorefrontRechargeAdmission({
-          load: () => store.featureDocument('recharge-codes'), transport: orderRechargeClient
-        }, code, ip));
+        orderRechargeClient.verifyStorefrontCode(code, ip));
       server.once('close', () => storefrontAdmission.close());
     } catch (error) {
       financeCollection?.close();

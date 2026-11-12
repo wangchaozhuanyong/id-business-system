@@ -6,6 +6,7 @@ import { createServer } from 'node:http';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import { createOrderRechargeClient } from '../server/order-recharge-client.mjs';
 import { startPreview } from '../server/preview.mjs';
 import { startVendureTaskService } from '../server/vendure-task-service.mjs';
 import { createVendureCodexdaichongWorker } from '../modules/recharge/vendure/codexdaichong-worker.mjs';
@@ -533,22 +534,40 @@ test('durable receipts, reservations and replay protection survive reopening wit
   assert.equal((await f.vendure('query', { code: 'fixture-a' })).body.status, 'used');
 });
 
-test('private MOYAO admission keeps holds and outages distinct, and the same native code has one durable receipt', async (t) => {
+test('the original source decides code validity without an issuance record and repeated submits share one receipt', async (t) => {
   let root = fileURLToPath(new URL('..', import.meta.url)).replace(/\/$/, '');
   if (['.worktrees', '.codex-worktrees'].includes(basename(dirname(root)))) root = dirname(dirname(root));
   const runtime = join(await realpath(root), '.runtime');
   await mkdir(runtime, { recursive: true, mode: 0o700 });
   const directory = await mkdtemp(join(runtime, 'a-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const [code, hold, outage, other] = ['K', 'M', 'N', 'P'].map(letter => 'KC-' + letter.repeat(15));
+  const code = 'KC-' + 'ABCD'.repeat(7);
+  const [hold, outage, other, used] = ['K', 'M', 'N', 'P'].map(letter => 'KC-' + letter.repeat(15));
   let lookups = 0;
-  const admission = await listenStorefrontAdmission(directory, async (value, ip) => {
+  const native = createOrderRechargeClient({
+    upstreamUrl: 'http://127.0.0.1:44575', secret: 's'.repeat(40)
+  }, async (url, options) => {
+    if (url.pathname === '/api/cdk/query') {
+      assert.equal(options.method, 'GET');
+      assert.ok([hold, used].includes(url.searchParams.get('cdk')));
+      return Response.json({
+        success: true, data: { planType: 'plus', type: '自助', accountEmail: 'private@example.test' }
+      });
+    }
+    assert.equal(url.pathname, '/api/verify-cdk');
+    assert.equal(options.method, 'POST');
+    const { cdk } = JSON.parse(options.body);
+    if (cdk === outage) return new Response(null, { status: 503 });
+    if (cdk === code) return Response.json({ success: true, data: { plan_type: 'pro_20x', type: '自助' } });
+    if (cdk === hold)
+      return Response.json({ success: false, code: 'manual_review_required' }, { status: 409 });
+    const message = cdk === used ? '该 CDK 已使用' : '无效 CDK';
+    return Response.json({ success: false, message }, { status: 403 });
+  });
+  const admission = await listenStorefrontAdmission(directory, (value, ip) => {
     assert.equal(ip, '203.0.113.10');
     lookups++;
-    if (value === outage) throw new Error('private provider detail');
-    if (value === code) return { plan: 'pro_20x', status: 'available' };
-    if (value === hold) return { plan: 'plus', status: 'reserved', reason: 'manual_review_required' };
-    return null;
+    return native.verifyStorefrontCode(value, ip);
   });
   t.after(() => new Promise(resolve => admission.close(resolve)));
   const socket = join(directory, storefrontAdmissionSocketName);
@@ -575,6 +594,7 @@ test('private MOYAO admission keeps holds and outages distinct, and the same nat
   assert.deepEqual((await shop('query', { code: hold })).body, {
     plan: 'plus', status: 'reserved', reason: 'manual_review_required', task: null
   });
+  assert.deepEqual((await shop('verify', { code: used })).body, { plan: 'plus', status: 'used' });
   open = true;
   assert.equal((await shop('config')).body.maintenance, false);
   assert.deepEqual((await shop('submit', { code: hold, session })).body, { rejected: true });

@@ -37,12 +37,14 @@ export function createOrderRechargeClient(config, fetchImpl = fetch) {
       [...target.searchParams.keys()].every((name) => ['page_size', 'keyword', 'recharge_status'].includes(name));
     const monitoringPath = monitoring && (method === 'GET' && path === '/api/admin/data' ||
       method === 'POST' && path === '/api/admin/telegram');
-    const storefrontVerify = method === 'POST' && path === '/api/verify-cdk' && actor.id === 'vendure-admission';
+    const storefrontVerify = actor.id === 'vendure-admission' && method === 'POST' && path === '/api/verify-cdk';
+    const storefrontLookup = actor.id === 'vendure-admission' && method === 'GET' && target.pathname === '/api/cdk/query' &&
+      target.searchParams.size === 1 && storefrontRechargeCode(target.searchParams.get('cdk'));
     if (target.origin !== upstream.origin || target.hash ||
         !(method === 'GET' && readPaths.test(target.pathname) && orbitRead ||
           method === 'POST' && /^\/api\/admin\/cdks\/returns\/(check|commit|receipt)$/.test(path) ||
           method === 'POST' && path === '/api/admin/cards/stop-use' ||
-          monitoringPath || storefrontVerify))
+          monitoringPath || storefrontVerify || storefrontLookup))
       throw new Error('不支持此代充资料操作');
     const response = await fetchImpl(target, {
       method, redirect: 'error', signal: AbortSignal.timeout(6000),
@@ -52,10 +54,12 @@ export function createOrderRechargeClient(config, fetchImpl = fetch) {
       },
       ...(body && { body: JSON.stringify(body) })
     });
-    if (!response.ok && !(storefrontVerify && [403, 409].includes(response.status)))
+    if (!response.ok && !(storefrontVerify && [403, 409].includes(response.status)) &&
+        !(storefrontLookup && response.status === 404))
       throw new Error('代充资料暂时无法读取');
     const result = await readBoundedJson(response);
-    if (!result || (!storefrontVerify && result.success === false)) throw new Error('代充资料操作未确认');
+    if (!result || (!storefrontVerify && !storefrontLookup && result.success === false))
+      throw new Error('代充资料操作未确认');
     return result;
   }
   return Object.freeze({
@@ -85,22 +89,33 @@ export function createOrderRechargeClient(config, fetchImpl = fetch) {
       return result.items;
     },
     async verifyStorefrontCode(code, clientIp) {
-      if (!storefrontRechargeCode(code) || (clientIp !== undefined && !isIP(clientIp)))
+      const normalized = storefrontRechargeCode(code);
+      if (!normalized || (clientIp !== undefined && !isIP(clientIp)))
         throw new Error('商城验码资料无效');
-      const value = await request('POST', '/api/verify-cdk', { cdk: storefrontRechargeCode(code) }, {
+      const actor = {
         id: 'vendure-admission', email: 'vendure-admission@localhost', admin: false, sensitive: false,
         ...(clientIp && { clientIp })
-      });
+      };
+      const value = await request('POST', '/api/verify-cdk', { cdk: normalized }, actor);
       if (value.success === true) {
         const plan = storefrontRechargePlan(value.data?.plan_type);
-        if (value.data?.type !== '自助' || !plan) return { status: 'disabled' };
+        if (value.data?.type !== '自助' || !plan) return null;
         return { plan, status: value.data.status === 'processing' ? 'reserved' : 'available' };
       }
-      if (value.code === rechargeManualReviewReason) return { status: 'reserved', reason: rechargeManualReviewReason };
-      if (value.message === '该 CDK 已使用') return { status: 'used' };
-      if (value.message === '无效 CDK') return { status: 'disabled' };
-      if (typeof value.message === 'string' && value.message.includes('冷静')) return { status: 'reserved' };
-      throw new Error('原版验码结果暂不可确认');
+
+      if (value.message === '无效 CDK') return null;
+      const manualReview = value.code === rechargeManualReviewReason;
+      let status;
+      if (value.message === '该 CDK 已使用') status = 'used';
+      else if (manualReview || (typeof value.message === 'string' && value.message.includes('冷静'))) status = 'reserved';
+      else throw new Error('原版验码结果暂不可确认');
+
+      // The original verify response omits the plan for unavailable codes.
+      const path = '/api/cdk/query?' + new URLSearchParams({ cdk: normalized });
+      const details = await request('GET', path, undefined, actor);
+      const plan = storefrontRechargePlan(details.data?.planType);
+      if (details.success !== true || details.data?.type !== '自助' || !plan) return null;
+      return { plan, status, ...(manualReview && { reason: rechargeManualReviewReason }) };
     },
     async checkReturns(items) {
       const result = await request('POST', '/api/admin/cdks/returns/check', { items });
