@@ -1,9 +1,11 @@
 import hashlib
 import json
 import sqlite3
+import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import release
@@ -201,6 +203,69 @@ class WebsiteReleaseTests(unittest.TestCase):
         self.assertEqual(remote.mount_storefront_admission(remote.mount_backup_monitoring(result)), result)
         with self.assertRaisesRegex(remote.ReleaseError, "unexpected_storefront_admission_launcher"):
             remote.mount_storefront_admission(result + "\n" + remote.ADMISSION_ENV)
+
+    def test_only_the_live_app_prepares_and_mounts_the_analytics_credential(self):
+        live = f'  state+=(-e "{remote.ADMISSION_ENV}")'
+        canary = '  state=(--tmpfs "/state:rw,size=32m")'
+        launcher = remote.mount_storefront_analytics(live + "\n" + canary)
+        self.assertEqual(remote.mount_storefront_analytics(launcher), launcher)
+        self.assertIn(remote.CLOUDFLARE_CREDENTIAL.name, launcher)
+        self.assertIn('--prepare-storefront-analytics || exit 1', launcher)
+        self.assertIn(remote.storefront_analytics_mount(remote.CLOUDFLARE_CONFIG), launcher)
+        self.assertTrue(launcher.endswith(canary))
+        subprocess.run(["bash", "-n"], input=launcher, text=True, check=True)
+        with self.assertRaisesRegex(remote.ReleaseError, "unexpected_storefront_analytics_launcher"):
+            remote.mount_storefront_analytics(canary)
+
+    def test_analytics_credential_decrypts_to_a_private_file_and_never_replaces_it_on_failure(self):
+        runtime = Path(__file__).resolve().parents[2] / ".runtime"
+        runtime.mkdir(exist_ok=True)
+        credential = (1, 2, 3, 4, 5)
+        with TemporaryDirectory(dir=runtime) as directory:
+            target = Path(directory) / "cloudflare.json"
+            synthetic = b'{"apiToken":"synthetic-local-only"}'
+            data = SimpleNamespace(st_mode=0o40700, st_uid=123, st_gid=124)
+
+            def decrypt(args, stdout, **_):
+                self.assertEqual(args, ["systemd-creds", "decrypt",
+                                        "--name=" + remote.CLOUDFLARE_CREDENTIAL_NAME,
+                                        str(remote.CLOUDFLARE_CREDENTIAL), "-"])
+                stdout.write(synthetic)
+                stdout.flush()
+
+            with patch.object(remote, "storefront_analytics_credential", return_value=credential), \
+                 patch.object(remote.Path, "lstat", return_value=data), \
+                 patch.object(remote.os, "fchown") as chown, \
+                 patch.object(remote.subprocess, "run", side_effect=decrypt) as command:
+                remote.materialize_storefront_analytics(target, credential)
+                chown.assert_called_once_with(unittest.mock.ANY, 123, 124)
+                command.side_effect = subprocess.CalledProcessError(1, "systemd-creds")
+                with self.assertRaises(subprocess.CalledProcessError):
+                    remote.materialize_storefront_analytics(target, credential)
+            self.assertEqual(target.read_bytes(), synthetic)
+            self.assertEqual(target.stat().st_mode & 0o777, 0o400)
+            self.assertEqual(list(target.parent.iterdir()), [target])
+
+    def test_analytics_probe_reads_only_the_candidate_and_a_temporary_private_file(self):
+        runtime = Path(__file__).resolve().parents[2] / ".runtime"
+        runtime.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=runtime) as directory:
+            root = Path(directory)
+            reports = {"damatong.net:7": "ready", "damatong.net:30": "empty"}
+            with patch.object(remote, "storefront_analytics_runtime_directory", return_value=root), \
+                 patch.object(remote, "materialize_storefront_analytics") as prepare, \
+                 patch.object(remote, "run", return_value=json.dumps(reports).encode()) as run:
+                actual = remote.verify_storefront_analytics(Path("/candidate"), "image-sha", "123:124", (1, 2))
+            self.assertEqual(actual, reports)
+            config = prepare.call_args.args[0]
+            self.assertEqual(config.parent.parent, root)
+            args = run.call_args.args[0]
+            self.assertEqual(args[:6], ["docker", "run", "--rm", "--read-only", "--user", "123:124"])
+            self.assertIn("type=bind,src=/candidate,dst=/app,readonly", args)
+            self.assertIn(remote.storefront_analytics_mount(config), args)
+            self.assertIn(remote.CLOUDFLARE_ENV, args)
+            self.assertNotIn("/state", " ".join(args))
+            self.assertFalse(config.parent.exists())
 
     def test_gateway_launcher_changes_only_its_source_and_mounts_the_admission_socket_readonly(self):
         before, target = "a" * 40, "b" * 40

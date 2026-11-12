@@ -186,9 +186,12 @@ export async function startPreview(
     publicOrigin: secureOrigin,
     fetchWorker: mediaFetch
   });
+  const storefrontAnalyticsConfig = websiteCloudflareConfig ?? await readToolConfig(
+    secureOrigin ? process.env.ID_WEBSITE_CLOUDFLARE_CONFIG_FILE || undefined : undefined, 'website-cloudflare'
+  );
   const handleWebsiteAnalytics = createWebsiteAnalytics({
     config: websiteAnalyticsConfig,
-    cloudflareConfig: websiteCloudflareConfig,
+    cloudflareConfig: storefrontAnalyticsConfig,
     publicOrigin: secureOrigin,
     fetchImpl: websiteAnalyticsFetch
   });

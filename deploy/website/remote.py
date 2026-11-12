@@ -9,6 +9,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -51,6 +52,11 @@ MONITORING_UNIT = "id-business-independent-backup-monitoring"
 MONITORING_ENV = "ID_MONITOR_BACKUP_RECEIPTS_DIR=/run/id-backup-monitoring"
 MONITORING_MOUNT = '  --mount "type=bind,src=$formal/backup-monitoring/receipts,dst=/run/id-backup-monitoring,readonly"'
 ADMISSION_ENV = "ID_VENDURE_ADMISSION_DIRECTORY=/state/vendure-admission"
+CLOUDFLARE_CREDENTIAL_NAME = "independent-website-cloudflare"
+CLOUDFLARE_CREDENTIAL = FORMAL / "private" / (CLOUDFLARE_CREDENTIAL_NAME + ".cred")
+CLOUDFLARE_CONFIG = Path("/run/id-business-independent-website-analytics/cloudflare.json")
+CLOUDFLARE_CONTAINER_CONFIG = "/run/id-website-cloudflare.json"
+CLOUDFLARE_ENV = f"ID_WEBSITE_CLOUDFLARE_CONFIG_FILE={CLOUDFLARE_CONTAINER_CONFIG}"
 MONITORING_FILES = ("backup_monitoring.py", MONITORING_UNIT + ".service", MONITORING_UNIT + ".timer")
 VERSIONED_ASSET = re.compile(r'\b(?:src|href)="(?:\./|/)?([a-zA-Z0-9.-]+\.(?:m?js|css))\?v=([a-zA-Z0-9.-]+)"')
 
@@ -180,6 +186,104 @@ def mount_storefront_admission(content):
     return content.replace(monitored, configured)
 
 
+def storefront_analytics_mount(path):
+    return f"type=bind,src={path},dst={CLOUDFLARE_CONTAINER_CONFIG},readonly"
+
+
+def mount_storefront_analytics(content):
+    anchor = f'  state+=(-e "{ADMISSION_ENV}")'
+    addition = (
+        f'  if [[ -f "$formal/private/{CLOUDFLARE_CREDENTIAL.name}" ]]; then\n'
+        '    python3 "$formal/../releases/$sha/source/deploy/website/remote.py" '
+        '--prepare-storefront-analytics || exit 1\n'
+        f'    state+=(--mount "{storefront_analytics_mount(CLOUDFLARE_CONFIG)}" -e "{CLOUDFLARE_ENV}")\n'
+        '  fi'
+    )
+    if content.count(anchor + "\n" + addition) == 1 and content.count(CLOUDFLARE_ENV) == 1:
+        return content
+    require(content.count(anchor) == 1 and "ID_WEBSITE_CLOUDFLARE_CONFIG_FILE" not in content,
+            "unexpected_storefront_analytics_launcher")
+    return content.replace(anchor, anchor + "\n" + addition)
+
+
+def storefront_analytics_credential():
+    try:
+        info = CLOUDFLARE_CREDENTIAL.lstat()
+    except FileNotFoundError:
+        return None
+    require(CLOUDFLARE_CREDENTIAL.resolve() == CLOUDFLARE_CREDENTIAL and
+            stat.S_ISREG(info.st_mode) and info.st_nlink == 1 and info.st_uid == 0 and
+            stat.S_IMODE(info.st_mode) in (0o400, 0o600) and 0 < info.st_size <= 128 * 1024,
+            "invalid_storefront_analytics_credential")
+    return info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns
+
+
+def storefront_analytics_runtime_directory():
+    directory = CLOUDFLARE_CONFIG.parent
+    directory.mkdir(mode=0o700, exist_ok=True)
+    info = directory.lstat()
+    require(stat.S_ISDIR(info.st_mode) and info.st_uid == 0 and
+            stat.S_IMODE(info.st_mode) == 0o700 and directory.resolve() == directory,
+            "invalid_storefront_analytics_runtime_directory")
+    return directory
+
+
+def materialize_storefront_analytics(target, credential):
+    data = (FORMAL / "data").lstat()
+    require(stat.S_ISDIR(data.st_mode) and data.st_uid > 0 and
+            credential is not None and storefront_analytics_credential() == credential,
+            "storefront_analytics_credential_changed")
+    fd, path = tempfile.mkstemp(prefix=".cloudflare-", dir=target.parent)
+    try:
+        with os.fdopen(fd, "wb") as output:
+            subprocess.run(["systemd-creds", "decrypt", "--name=" + CLOUDFLARE_CREDENTIAL_NAME,
+                            str(CLOUDFLARE_CREDENTIAL), "-"], stdout=output,
+                           stderr=subprocess.DEVNULL, timeout=10, check=True)
+            require(0 < os.fstat(output.fileno()).st_size <= 64 * 1024 and
+                    storefront_analytics_credential() == credential, "storefront_analytics_credential_changed")
+            os.fchown(output.fileno(), data.st_uid, data.st_gid)
+            os.fchmod(output.fileno(), 0o400)
+        os.replace(path, target)
+    finally:
+        Path(path).unlink(missing_ok=True)
+
+
+def verify_storefront_analytics(source, image, user, credential):
+    probe = """
+import { readToolConfig } from '/app/server/tools/read-tool-config.mjs';
+import { createWebsiteAnalytics } from '/app/server/tools/website-analytics.mjs';
+const config = await readToolConfig(process.env.ID_WEBSITE_CLOUDFLARE_CONFIG_FILE, 'website-cloudflare');
+const handle = createWebsiteAnalytics({ cloudflareConfig: config });
+async function read(site, days) {
+  const params = new URLSearchParams({ site, days });
+  let code, report;
+  await handle({ method: 'GET', url: '/api/local/tools/website-analytics?' + params, headers: {} }, {
+    writeHead(status) { code = status; },
+    end(body) { report = JSON.parse(body); }
+  });
+  if (code !== 200 || report.site !== site || report.days !== days || report.timeZone !== 'UTC' ||
+      report.daily.length !== days || !['ready', 'empty'].includes(report.status)) {
+    throw Error('Cloudflare report preflight failed');
+  }
+  return [site + ':' + days, report.status];
+}
+const reports = Object.keys(config.sites).flatMap(site => [7, 30].map(days => read(site, days)));
+console.log(JSON.stringify(Object.fromEntries(await Promise.all(reports))));
+"""
+    require(isinstance(user, str) and re.fullmatch(r"[1-9]\d*:\d+", user),
+            "invalid_storefront_analytics_runtime_user")
+    try:
+        with tempfile.TemporaryDirectory(prefix=".probe-", dir=storefront_analytics_runtime_directory()) as path:
+            config = Path(path) / CLOUDFLARE_CONFIG.name
+            materialize_storefront_analytics(config, credential)
+            return json.loads(run(["docker", "run", "--rm", "--read-only", "--user", user,
+                                   "--mount", f"type=bind,src={source},dst=/app,readonly",
+                                   "--mount", storefront_analytics_mount(config), "-e", CLOUDFLARE_ENV,
+                                   "--entrypoint", "node", image, "--input-type=module", "-e", probe], timeout=40))
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError):
+        raise ReleaseError("storefront_analytics_preflight_failed") from None
+
+
 def presentation_scope(plan):
     scopes = [name for name in PRESENTATION_SCOPES if name in plan]
     require(len(scopes) <= 1, "recharge_presentation_approval_mismatch")
@@ -248,8 +352,8 @@ def stage(plan, release):
         content = previous.read_text()
         if name == "run-app":
             require(content.count("sha=" + base) == 1, "live_launcher_revision_mismatch")
-            content = mount_storefront_admission(
-                mount_backup_monitoring(content.replace("sha=" + base, "sha=" + sha)))
+            content = mount_storefront_analytics(mount_storefront_admission(
+                mount_backup_monitoring(content.replace("sha=" + base, "sha=" + sha))))
         elif name == "check-app.mjs":
             content = update_canary_asset_refs(content, (live / "source/frontend/index.html").read_text(),
                                                (source / "frontend/index.html").read_text())
@@ -511,7 +615,8 @@ console.log(JSON.stringify(Object.fromEntries(hashes)));
             with http("/" + Path(name).name) as response:
                 require(hashlib.sha256(response.read()).hexdigest() == expected, "live_website_asset_mismatch")
     protected_reads = ("/api/local/settings", "/api/local/inventory", "/api/local/commerce", "/api/local/order-sync",
-                       "/api/local/system-monitoring", "/api/local/recharge-activity")
+                       "/api/local/system-monitoring", "/api/local/recharge-activity",
+                       "/api/local/tools/website-analytics?site=damatong.net&days=7")
     if adapter:
         protected_reads += ("/api/local/subscription-card-status",)
     for path in protected_reads:
@@ -534,12 +639,17 @@ def release_website(plan):
     include_adapter = bool(plan.get("adapter"))
     check_baseline(snapshot(include_adapter), before)
     release = ROOT / "releases" / sha
+    analytics_credential = storefront_analytics_credential()
     source, ops = stage(plan, release)
+    analytics = verify_storefront_analytics(source, before["components"]["app"]["image"],
+                                           inspect("app")["Config"]["User"],
+                                           analytics_credential) if analytics_credential else {}
     canary_retried = canary(sha, ops)
     if include_adapter:
         adapter_canary(plan, source, ops)
     check_baseline(snapshot(include_adapter), before)
     require_main(sha)
+    require(storefront_analytics_credential() == analytics_credential, "storefront_analytics_credential_changed")
     install_backup_monitoring(source, sha)
     adapter = switch_adapter(plan, source, ops) if include_adapter else None
     require_main(sha)
@@ -551,7 +661,11 @@ def release_website(plan):
     run(["systemctl", "daemon-reload"])
     run(["systemctl", "restart", UNIT], timeout=55)
     live = read_website(plan, release, source, adapter)
-    monitoring = read_backup_monitoring(inspect("app"))
+    app = inspect("app")
+    mounted = mount_matches(app, CLOUDFLARE_CONFIG, CLOUDFLARE_CONTAINER_CONFIG)
+    require(mounted == bool(analytics_credential) and
+            (CLOUDFLARE_ENV in app["Config"]["Env"]) == mounted, "storefront_analytics_mount_mismatch")
+    monitoring = read_backup_monitoring(app)
     result = {"mainSha": sha, "previousWebsiteSha": base, "website": live["app"],
               "sidecars": {name: live[name] for name in WEBSITE[1:]},
               "sourceFilesVerified": len(plan["files"]), "artifacts": plan["artifacts"],
@@ -560,6 +674,7 @@ def release_website(plan):
               "protectedComponentsUnchanged": not include_adapter,
               "liveAssetsSha256": digest(release / "assets.json"),
               "backupMonitoring": monitoring,
+              "storefrontAnalytics": analytics,
               "unauthenticatedProtectedReadsRejected": True, "productionBusinessTestWrites": False}
     scope = presentation_scope(plan)
     if scope:
@@ -591,3 +706,11 @@ def main(plan):
         sys.exit("application_release_lock_busy")
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError, ValueError, KeyError) as error:
         sys.exit("website_release_error: " + type(error).__name__.lower())
+
+
+if __name__ == "__main__" and sys.argv[1:] == ["--prepare-storefront-analytics"]:
+    try:
+        storefront_analytics_runtime_directory()
+        materialize_storefront_analytics(CLOUDFLARE_CONFIG, storefront_analytics_credential())
+    except (ReleaseError, OSError, subprocess.SubprocessError):
+        sys.exit("storefront_analytics_credential_preparation_failed")
