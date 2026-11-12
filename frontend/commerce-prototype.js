@@ -5543,7 +5543,7 @@
       },
       {
         id: 'profit',
-        label: `核算收益（${currencyLabel(costSettings.currency)}）`,
+        label: `收益 ${costSettings.currency}`,
         render: (row) => {
           const accounting = localData ? localAccounting(row) : null;
           const p = shownProfit(row, accounting);

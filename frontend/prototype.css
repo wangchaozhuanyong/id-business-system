@@ -3788,7 +3788,8 @@ details.toolbox-phrase-more[open] > summary {
   gap: var(--toolbar-padding-block) var(--section-gap);
   min-width: 0;
 }
-.order-wide-fields > [data-commerce-field='customerId'] {
+.order-wide-fields > [data-commerce-field='customerId'],
+#commerce-order-form :is(.order-wide-fields, .order-account-fields) > :is([data-commerce-field='email'], [data-commerce-field='ownerId']) {
   grid-column: 1 / -1;
 }
 .order-payment-options > :is([data-commerce-field='appleIdId'], [data-commerce-field='proMaterialMode'],
