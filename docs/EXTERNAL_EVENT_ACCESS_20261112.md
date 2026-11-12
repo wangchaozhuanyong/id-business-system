@@ -38,9 +38,9 @@ IDLE 每25分钟的 DONE/IDLE 和 SSE 心跳仅维持连接，不读取邮件或
 
 ### 2. 苹果隐藏邮箱的外部通知
 
-`server/apple-relay/vendure-provider.mjs` 目前调用 `icloudRelayCodeTarget` / `icloudRelayMailPage` 等 GraphQL 查询，没有已接入的订阅出口。它属于另一个服务，不能用本项目的普通 IMAP 监听冒充该服务的提交事件。
+`server/apple-relay/vendure-provider.mjs` 目前调用 `icloudRelayCodeTarget` / `icloudRelayMailPage` 等 GraphQL 查询，没有已接入的订阅出口。后续只读检查发现 Vendure 源码已有 `POST /storefront-realtime/mail-events`（`IcloudMailStreamController`，来源提交 `e1beda18b01fe2d22039007bf8a202ee26c62a93`），通过正文查询码、`ready/mail/reconcile/access-denied` 等事件提供提交后通知；本项目尚未消费该协议。源码存在不代表当前受管服务已启用或网络可达。
 
-需要由该服务在邮件保存、重新归属、查询码或授权变化提交后输出可续接的范围通知。本项目只接收主邮箱/别名范围与版本，经原查询码校验后读取既有接口；回滚、重复事件、别名改绑、失效查询码和断线恢复都要隔离验收。实际接口由服务所有者确认后才能实现，本文没有虚构一个已存在的 webhook / GraphQL subscription。
+可基于该既有接口开发外围消费者，仍须先核验本地绑定范围与查询码权限，只输出无正文的版本通知，再读取既有查询接口；回滚、重复事件、别名改绑、失效查询码和断线恢复都要隔离验收。若受管环境未启用该接口，再列出具体配置差异申请生产配置授权，不修改其他仓库。
 
 当前仍保留该来源用户主动开启的30秒自动查询选项，默认关闭。没有新增轮询，不能宣称这一来源已完成无轮询更新。
 
