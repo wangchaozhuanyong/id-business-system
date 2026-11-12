@@ -37,11 +37,25 @@ const microsoftMailboxConfig = await readToolConfig(
 
 三项返回值仍按原名称传给 `startPreview`。合成文件验收运行 `node --test test/tools-config-file.test.mjs`。
 
-## 商城统计接入
+## 商城流量配置
 
-`--website-cloudflare-config` 接收私有 JSON 文件，字段为 `accountId`、`apiToken` 和 `sites`。令牌使用目标账户的 Analytics 读取权限。`sites` 按域名映射各 Web Analytics 报表的 `siteTag`，支持 `damatong.net`、`moyaoai.com`、`shop.flashcast.com.my`，可分批接入。闪铸商城可与装修站复用 Cloudflare 的站点标识，查询仍精确限定商城域名。
+`--website-cloudflare-config` 使用单独的 `0600` 或 `0400` JSON 文件，内容如下。将 Cloudflare API 令牌写入服务运行用户的私有配置，令牌权限使用目标账户的 [Account Analytics Read](https://developers.cloudflare.com/fundamentals/api/reference/permissions/)。
 
-商城按 UTC 自然日统计，装修站保留 GA4 属性的统计时区。最近 7／30 天包含读取当天。上线验收需按同一域名、日期、时区和机器人过滤条件逐站核对读数，并回读同步进程的真实回执。访问次数定义见[Cloudflare Web Analytics 指标](https://developers.cloudflare.com/web-analytics/data-metrics/high-level-metrics/)。
+```json
+{
+  "accountId": "<Cloudflare 账户 ID>",
+  "apiToken": "<只读 API 令牌>",
+  "sites": {
+    "damatong.net": "<damatong.net 的 siteTag>",
+    "moyaoai.com": "<moyaoai.com 的 siteTag>",
+    "shop.flashcast.com.my": "<flashcast.com.my 的 siteTag>"
+  }
+}
+```
+
+在 Cloudflare Web Analytics 打开对应报表，从报表链接读取 `siteTag~in`。闪铸商城复用 `flashcast.com.my` 的站点标识，查询精确匹配 `shop.flashcast.com.my`。可分批添加域名，缺少配置的站点会显示待接入。报表按 UTC 自然日展示 7／30 天，包含当天，查询排除 Cloudflare 标记的机器人。访问次数采用 [Cloudflare Web Analytics 口径](https://developers.cloudflare.com/web-analytics/data-metrics/high-level-metrics/)。
+
+将相同参数传给 `server/tools/online-tools-preflight.mjs` 检查私有文件权限和字段。真实验收需在服务配置后逐站对照 Cloudflare 报表，并统一域名、机器人过滤条件、日期和时区。服务端按站点和时间范围缓存报表 60 秒。
 
 ## 线上配置与新版接入
 

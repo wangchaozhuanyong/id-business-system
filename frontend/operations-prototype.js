@@ -36,7 +36,7 @@
   const localData = window.IDLocalData;
   const pluginPages = {
     'plugins/mailboxes': { label: '邮箱查询与邮箱池', tool: '邮箱查询与邮箱池', description: '统一管理收信连接、Claude 待授权邮箱与验证码查询。' },
-    'plugins/websites': { label: '网站监控', tool: '网站监控', description: '查看网站访问记录，或检测网站能否正常打开。' }
+    'plugins/websites': { label: '网站监控', tool: '网站监控', description: '集中查看运行状态、告警记录、访问记录与网站检测，网站统计进入数据中心。' }
   };
   let pluginCleanup;
   function toolActive(node) {
@@ -1745,7 +1745,7 @@
     const section = sections.some(([id]) => id === selected) ? selected : sections[0]?.[0] || '';
     const toolbar = tabs || lead ? `<div class="tool-header-row">${tabs}${lead}</div>` : '';
     const page = pluginPages[state.route]?.tool === name ? $('#plugin-tool-host') : null;
-    if (page) page.innerHTML = toolbar + `<div class="drawer-body plugin-tool-body">${body}</div>`;
+    if (page) page.innerHTML = (name === '网站监控' ? `<div class="tool-header-row">${api.websiteMonitorTabs(section || 'ops-website-check')}</div>` : toolbar) + `<div class="drawer-body plugin-tool-body">${body}</div>`;
     else openDrawer(titles[name] || name, description, toolbar + body, '', context, { kind: 'online-tool', tool: name, section });
     const drawer = page || $('#drawer');
     drawer.dataset.tool = name;
@@ -1763,7 +1763,7 @@
     if (sections.length) {
       const saved = getDraft(`tool-section:${name}`).panel;
       selectToolSection(sections.some(([id]) => id === saved) ? saved : sections[0][0]);
-      drawer.querySelector('[role="tablist"]').addEventListener('keydown', (event) => {
+      drawer.querySelector('[role="tablist"]:not(.monitor-navigation)')?.addEventListener('keydown', (event) => {
         const tabs = [...event.currentTarget.querySelectorAll('[role="tab"]')];
         if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
         event.preventDefault();
@@ -3129,6 +3129,8 @@
     if (cached) result.innerHTML = renderReport(cached.data);
     if (cached && !cached.stale && !refresh) {
       api.finishRegionRead(result.parentElement);
+      status.hidden = true;
+      status.textContent = '';
       return;
     }
     const hasResult = result.hasChildNodes();
@@ -3158,7 +3160,7 @@
       }
       read.finish();
       status.className = 'inline-notice warning';
-      status.textContent = `读取${label}失败。${hasResult ? '已保留上次结果。' : ''}${error?.message || '请稍后重试。'}`;
+      status.textContent = `读取${label}失败。${result.hasChildNodes() ? '已保留上次结果。' : ''}${error?.message || '请稍后重试。'}`;
       status.hidden = false;
     } finally {
       dialog?.removeEventListener('id-view-deactivate', cancelClosedRead);
@@ -3166,15 +3168,20 @@
       read.finish();
     }
   }
-  function websiteToolHeader(title, actions) {
-    return `<div class="tool-panel-header"><h3>${esc(title)}</h3><div class="tool-panel-actions" data-page-actions>${actions}</div></div>`;
+  function websiteToolHeader(title, actions, help = '') {
+    const heading = `<h3>${esc(title)}</h3>`;
+    return `<div class="tool-panel-header">${help ? `<div class="section-title-row">${heading}${help}</div>` : heading}<div class="tool-panel-actions" data-page-actions>${actions}</div></div>`;
   }
   function websiteMetrics(items) {
     return `<div class="tool-metrics${items.length === 2 ? ' tool-metrics--two' : ''}">${items.map(([label, amount]) =>
       `<div class="tool-metric"><span>${esc(label)}</span><strong>${amount}</strong></div>`).join('')}</div>`;
   }
   function websiteVisitsPanel() {
-    return `<section class="form-section website-tool-panel" id="ops-website-visits"><form id="ops-website-visits-form" novalidate>${websiteToolHeader('访问记录与访客 IP', button('刷新记录', 'ops-website-visit-refresh', '', 'return', 'data-async-refresh') + '<button type="submit" class="button primary">查询明细</button>')}${grid(
+    const title = '访问记录与访客 IP';
+    const actions = button('刷新记录', 'ops-website-visit-refresh', '', 'return', 'data-async-refresh') +
+      '<button type="submit" class="button primary">查询明细</button>';
+    const help = titleInfo(title, '这里显示 flashcast.com.my 装修站的签名采集记录。', 'website-visits-help');
+    return `<section class="form-section website-tool-panel" id="ops-website-visits"><form id="ops-website-visits-form" novalidate>${websiteToolHeader(title, actions, help)}${grid(
       field(
         '最近天数',
         'ops-visits-days',

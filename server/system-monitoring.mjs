@@ -415,13 +415,17 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
       receipts.some(item => item.status === state)) || 'unknown';
   }
 
-  function view({ tab = 'incidents', status = '', page = 1, pageSize = 20 } = {}) {
+  function view({ tab = 'incidents', status = '', page = 1, pageSize = 20, q = '', days = 0, priority = '' } = {}) {
     const { data } = state();
+    const query = q.trim().toLocaleLowerCase('zh-CN');
+    const matches = row => (!days || (tab === 'deliveries' ? row.finishedAt || row.at : row.at) >= clock() - days * 86400_000) &&
+      (!priority || row.priority === priority) && (!query || [row.label, row.id, row.target, row.taskTail]
+        .some(value => String(value || '').toLocaleLowerCase('zh-CN').includes(query)));
     if (tab === 'deliveries') return pageOf(data.deliveries.filter(row => !status || row.status === status).map(row => ({
       id: row.id, incidentId: row.incidentId, label: row.kind === 'test' ? '渠道测试' : monitorRules[row.code].label,
       kind: row.kind, target: monitorChannels[row.target], status: row.status, attempts: row.attempts,
       at: row.at, finishedAt: row.finishedAt, messageId: row.messageId, reason: row.reason
-    })), page, pageSize);
+    })).filter(matches), page, pageSize);
     const checks = Object.entries(monitorRules).filter(([, rule]) => !rule.oneShot).map(([code, rule]) => {
       const readings = [...samples.values()].filter(sample => sample.code === code);
       const observed = readings.sort((a, b) => b.at - a.at)[0];
@@ -446,7 +450,7 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
       queueFull: row.queueFull, external: row.external, deliveryStatus: incidentDelivery(data, row),
       accepted: row.externalAccepted || data.deliveries.some(item => item.incidentId === row.id &&
         item.kind === 'opened' && item.status === 'accepted')
-    })), page, pageSize) };
+    })).filter(matches), page, pageSize) };
   }
 
   return { observe, receiveProbe, configView, view, save, importLegacy, takeOver, acknowledge, queueTest, dispatch,

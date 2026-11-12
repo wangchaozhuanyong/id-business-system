@@ -223,6 +223,8 @@ def main():
              "frontend/prototype.css", "server/preview.mjs", "server/backup/cloud-drive.mjs",
              "frontend/prototype.js", "frontend/interaction-preferences.js", "frontend/change-sync.js",
              "frontend/local-data.js", "frontend/operations-prototype.js", "frontend/apple-balance-prototype.js",
+             "frontend/system-monitoring.js", "server/monitoring-route.mjs",
+             "server/tools/website-analytics.mjs", "server/tools/read-tool-config.mjs",
              "frontend/recharge-integration.css", "frontend/bitbrowser-addresses.css",
              "frontend/recharge-activity.js", "frontend/recharge-activity.css",
              "frontend/data-center.js", "frontend/data-center.css", "frontend/sheets-status.js", "frontend/sheets-status.css",

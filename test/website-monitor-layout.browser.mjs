@@ -34,8 +34,8 @@ test('网站监控的访问记录与检测页签共享布局，并保留统计�
     await page.goto(origin + '/#/plugins/websites');
     if (theme === 'dark') await toggleDesignTheme(page);
     const host = page.locator('#plugin-tool-host');
-    const entry = host.getByRole('link', { name: '查看网站统计', exact: true });
-    assert.equal(await entry.getAttribute('href'), '#/data');
+    const entry = host.getByRole('tab', { name: '访问统计', exact: true });
+    await entry.waitFor();
     await host.getByRole('button', { name: '每日统计', exact: true }).waitFor();
     const tabs = [['访问记录与 IP', 'ops-website-visits'], ['网站检测', 'ops-website-check']];
     const titlePositions = [];

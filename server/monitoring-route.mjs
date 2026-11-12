@@ -32,12 +32,14 @@ function parse(body) {
 
 function viewQuery(request, origin) {
   const params = new URL(request.url, origin).searchParams;
-  const { tab = 'incidents', status = '', page = '1', pageSize = '20' } = Object.fromEntries(params);
-  if ([...params.keys()].some(key => !['tab', 'status', 'page', 'pageSize'].includes(key) || params.getAll(key).length > 1) ||
+  const { tab = 'incidents', status = '', page = '1', pageSize = '20', q = '', days = '0', priority = '' } = Object.fromEntries(params);
+  if ([...params.keys()].some(key => !['tab', 'status', 'page', 'pageSize', 'q', 'days', 'priority'].includes(key) || params.getAll(key).length > 1) ||
       !['incidents', 'config', 'deliveries', 'legacy'].includes(tab) ||
       !(tab === 'deliveries' ? deliveryStates : incidentStates).includes(status) ||
+      q.length > 100 || /[\u0000-\u001f]/.test(q) || !['0', '1', '7', '30'].includes(days) ||
+      !['', 'P0', 'P1', 'P2'].includes(priority) || (tab !== 'incidents' && priority !== '') ||
       !/^[1-9]\d{0,5}$/.test(page) || !['10', '20', '50'].includes(pageSize)) throw monitoringError(400, '监控筛选条件无效');
-  return { tab, status, page: Number(page), pageSize: Number(pageSize) };
+  return { tab, status, page: Number(page), pageSize: Number(pageSize), q: q.trim(), days: Number(days), priority };
 }
 
 export function createMonitoringHandler({ monitor, publicOrigin }) {

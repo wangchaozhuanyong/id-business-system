@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
@@ -14,7 +14,8 @@ const config = () => ({
   version: 1, enabled: false, tokenConfigured: true,
   channels: Object.fromEntries(Object.entries(monitorChannels).map(([key, label]) =>
     [key, { label, configured: key === 'operations', verified: key === 'operations' }])),
-  rules: Object.entries(monitorRules).map(([code, rule]) => ({ code, ...rule })),
+  rules: Object.entries(monitorRules).map(([code, rule]) => ({ code, ...rule, recipient:
+    rule.channel === 'legacy' ? '已接管的代充接收人' : monitorChannels[rule.channel === 'recharge' ? 'rechargeAdmin' : rule.channel] })),
   legacy: { available: true, phase: 'native', imported: false, recipients: [] }
 });
 const fixtures = Array.from({ length: 24 }, (_, index) => ({
@@ -74,7 +75,10 @@ async function prepare(browser, width, role = 'super', phase = 'native') {
     if (tab === 'legacy') return request.fulfill({ json: { phase } });
     if (tab === 'deliveries') return request.fulfill({ json: { page: 1, total: 1, pageSize,
       items: [{ id: 'receipt-fixture', label: '渠道测试', status: 'accepted', target: '运维接收人', at, attempts: 1, messageId: 421 }] } });
-    const matched = url.searchParams.get('status') === 'resolved' ? [] : records;
+    const query = (url.searchParams.get('q') || '').toLowerCase();
+    const matched = url.searchParams.get('status') === 'resolved' ? [] : records.filter(row =>
+      (!url.searchParams.get('priority') || row.priority === url.searchParams.get('priority')) &&
+      (!query || [row.label, row.id, row.taskTail].some(value => String(value || '').toLowerCase().includes(query))));
     const page = Math.min(requestedPage, Math.max(1, Math.ceil(matched.length / pageSize)));
     return request.fulfill({ json: { checks: readings, generatedAt: at,
       notifications: { status: 'disabled', configured: 1, verified: 1, total: 4,
@@ -142,12 +146,22 @@ test('监控配置和告警使用实际路由并兼容桌面、手机及深浅�
     await page.getByRole('tab', { name: '通知规则' }).click();
     await page.getByRole('button', { name: '保存通知规则' }).waitFor();
     await pageGeometry(page);
+    if (width > 900) {
+      const save = await page.getByRole('button', { name: '保存通知规则', exact: true }).boundingBox();
+      assert(save.y + save.height < 940, '规则保存按钮在桌面首屏内');
+    }
+    if (output && [1440, 390].includes(width)) await page.screenshot({ path: join(output, 'rules-' + width + '-' + theme + '.png'), fullPage: true });
     await page.getByRole('tab', { name: '投递记录' }).click();
     const receipt = page.locator('[data-monitor-card="receipt-fixture"]:visible, [data-row-id="receipt-fixture"]:visible');
     await receipt.getByText('Telegram 已接收', { exact: true }).waitFor();
     assert.equal(await receipt.count(), 1);
     await pageGeometry(page);
+    if (output && [1440, 390].includes(width)) await page.screenshot({ path: join(output, 'deliveries-' + width + '-' + theme + '.png') });
     await page.evaluate(() => { location.hash = '#/monitor'; });
+    await page.locator('[data-monitor-check]').first().waitFor();
+    await pageGeometry(page);
+    if (output && [1440, 390].includes(width)) await page.screenshot({ path: join(output, 'checks-' + width + '-' + theme + '.png') });
+    await page.getByRole('tab', { name: '告警记录', exact: true }).click();
     const incident = page.locator('[data-monitor-card="monitor-fixture-1"]:visible, [data-row-id="monitor-fixture-1"]:visible');
     await incident.getByText('代充付款待核实', { exact: true }).waitFor();
     assert.equal(await incident.count(), 1);
@@ -189,20 +203,23 @@ test('监控概览显示完整状态、检查依据和通知缺口，筛选及�
   await page.locator('[data-monitor-metric="1"] .summary-number').filter({ hasText: '6' }).waitFor();
   assert.equal(await page.locator('[data-monitor-metric="2"] .summary-number').innerText(), '10');
   assert.equal(await page.locator('[data-monitor-check]').count(), 10);
+  await page.getByRole('tab', { name: '告警记录', exact: true }).click();
   assert.match(await page.locator('[data-row-id="monitor-fixture-2"]').innerText(), /无投递记录/);
+  await page.getByRole('tab', { name: '运行状态', exact: true }).click();
   await page.locator('#system-monitor-check-filter').selectOption('all');
   assert.equal(await page.locator('[data-monitor-check]').count(), 16);
-  await page.getByRole('button', { name: '查看备份校验与处理', exact: true }).click();
+  await page.locator('[data-action="system-monitor-check"][data-code="backup"]').click();
   const drawer = page.locator('#drawer[open]');
   await drawer.getByText('尚未接入专用工作进程回执，无法判断任务运行结果。', { exact: true }).waitFor();
-  await drawer.getByText('备份工作进程校验回执', { exact: true }).waitFor();
+  await drawer.getByText(checkFixtures().find(row => row.code === 'backup').source, { exact: true }).waitFor();
   await drawer.getByRole('button', { name: '关闭', exact: true }).click();
   await page.getByRole('button', { name: '查看接通情况' }).click();
   await drawer.getByText('安全管理员、代充管理员', { exact: true }).waitFor();
-  await drawer.getByRole('button', { name: '打开监控与通知' }).click();
+  await drawer.getByRole('button', { name: '打开监控通知' }).click();
   await page.waitForURL(origin + route);
   assert.equal(await drawer.count(), 0);
-  await page.getByRole('link', { name: '监控中心', exact: true }).click();
+  await page.getByRole('link', { name: '网站监控', exact: true }).click();
+  await page.getByRole('tab', { name: '运行状态', exact: true }).click();
   await page.locator('#system-monitor-check-filter').waitFor();
   assert.equal(await page.locator('#system-monitor-check-filter').inputValue(), 'all');
   await page.getByRole('button', { name: '查看汇率采集与处理', exact: true }).click();
@@ -244,7 +261,7 @@ test('监控定时读取不打断抽屉，切页后停止，读取失败保留�
   await page.clock.fastForward(60_100);
   await page.locator('[data-monitor-check="disk_space"]').waitFor();
   assert.equal(f.reads.length, initial + 1);
-  await page.getByRole('button', { name: '查看备份校验与处理', exact: true }).click();
+  await page.locator('[data-action="system-monitor-check"][data-code="backup"]').click();
   await page.clock.fastForward(120_000);
   assert.equal(f.reads.length, initial + 1);
   await page.locator('#drawer').getByRole('button', { name: '关闭', exact: true }).click();
@@ -255,7 +272,7 @@ test('监控定时读取不打断抽屉，切页后停止，读取失败保留�
   f.setFailRead(false);
   await page.getByRole('button', { name: '刷新', exact: true }).click();
   await page.getByRole('alert').filter({ hasText: '已保留上次读取' }).waitFor({ state: 'hidden' });
-  await page.getByRole('button', { name: '监控与通知', exact: true }).click();
+  await page.getByRole('button', { name: '监控通知', exact: true }).click();
   await page.getByRole('button', { name: '保存渠道' }).waitFor();
   const afterLeave = f.reads.length;
   await page.clock.fastForward(120_000);
@@ -282,6 +299,19 @@ test('监控设置保留普通草稿、清除离页密钥并分开投递和人�
   await page.getByRole('tab', { name: '通知规则' }).click();
   const apiErrors = page.locator('#system-monitor-rule-api_errors');
   await apiErrors.uncheck();
+  const ruleList = page.locator('.system-monitor-rules-list > .table-viewport');
+  await ruleList.evaluate(node => { node.scrollTop = 200; });
+  const ruleScroll = await ruleList.evaluate(node => node.scrollTop);
+  assert(ruleScroll > 0);
+  await Promise.all([page.waitForResponse(response => response.url().includes('system-monitoring?') && response.request().method() === 'GET'),
+    page.getByRole('button', { name: '刷新', exact: true }).click()]);
+  await settle(page);
+  assert.equal(await ruleList.evaluate(node => node.scrollTop), ruleScroll, '刷新保持规则阅读位置');
+  assert.equal(await apiErrors.isChecked(), false, '刷新保留未保存规则');
+  await page.locator('#system-monitor-rule-category').selectOption('安全');
+  assert.equal(await apiErrors.count(), 0);
+  await page.locator('#system-monitor-rule-category').selectOption('运行');
+  assert.equal(await apiErrors.isChecked(), false);
   await page.getByRole('tab', { name: 'Telegram 渠道' }).click();
   assert.equal(await enabled.isChecked(), true);
   assert.equal(await token.inputValue(), '');
@@ -299,6 +329,7 @@ test('监控设置保留普通草稿、清除离页密钥并分开投递和人�
   await page.getByRole('tab', { name: '投递记录' }).click();
   await page.getByRole('cell', { name: 'Telegram 已接收', exact: true }).waitFor();
   await page.evaluate(() => { location.hash = '#/monitor'; });
+  await page.getByRole('tab', { name: '告警记录', exact: true }).click();
   const first = page.locator('[data-row-id="monitor-fixture-1"]');
   await first.getByRole('button', { name: '查看详情' }).click();
   const drawer = page.locator('#drawer[open]');
@@ -324,7 +355,7 @@ async function assertNoRechargeTelegram(frame) {
   await frame.getByRole('button', { name: '保存全局配置', exact: true }).waitFor();
   assert.equal(await frame.locator('#telegram_bot_token').count(), 0);
   assert.equal(await frame.getByRole('heading', { name: 'Telegram 通知', exact: true }).count(), 0);
-  assert.equal(await frame.getByRole('link', { name: '打开监控与通知' }).count(), 0);
+  assert.equal(await frame.getByRole('link', { name: '打开监控通知' }).count(), 0);
 }
 
 test('接管后代充配置没有 Telegram 区块，普通管理员仍可查看监控', { timeout: 30_000 }, async t => {
@@ -335,6 +366,11 @@ test('接管后代充配置没有 Telegram 区块，普通管理员仍可查看�
   await page.getByRole('button', { name: '系统配置', exact: true }).click();
   const frame = page.frameLocator('iframe[data-view="config"]:not([hidden])');
   await assertNoRechargeTelegram(frame);
+  await page.goto(origin + route);
+  await page.locator('#system-monitor-legacy-admin').waitFor();
+  await pageGeometry(page);
+  await page.setViewportSize({ width: 390, height: 940 });
+  await pageGeometry(page);
   assert.deepEqual(offline.external, []);
   await context.close();
 
@@ -343,12 +379,13 @@ test('接管后代充配置没有 Telegram 区块，普通管理员仍可查看�
   await limited.page.goto(origin + route);
   assert.equal(await limited.page.getByRole('button', { name: '保存渠道' }).count(), 0);
   await limited.page.evaluate(() => { location.hash = '#/monitor'; });
+  await limited.page.getByRole('tab', { name: '告警记录', exact: true }).click();
   await limited.page.getByRole('heading', { name: '代充付款待核实' }).waitFor();
   assert.equal(await limited.page.getByRole('button', { name: '登记已核实事件' }).count(), 0);
   assert.deepEqual(limited.errors, []);
 });
 
-test('接管前从系统设置打开原代充表单，沿用保存、测试及草稿', { timeout: 45_000 }, async t => {
+test('接管前从监控通知打开原代充表单，沿用保存、测试及草稿', { timeout: 45_000 }, async t => {
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
   for (const [width, theme] of [[1440, 'light'], [390, 'dark']]) {
@@ -380,11 +417,18 @@ test('接管前从系统设置打开原代充表单，沿用保存、测试及�
     await assertNoRechargeTelegram(page.frameLocator('iframe[data-view="config"]:not([hidden])'));
     if (width <= 900) await page.locator('#nav-toggle').click();
     const sidebar = page.locator('#sidebar');
-    const link = sidebar.getByRole('link', { name: '监控与通知', exact: true });
-    if (!await link.count()) await sidebar.getByRole('button', { name: '系统设置', exact: true }).click();
+    const link = sidebar.getByRole('link', { name: '监控通知', exact: true });
+    if (!await link.count()) await sidebar.getByRole('button', { name: '监控中心', exact: true }).click();
     await link.click();
     await page.waitForURL(origin + route);
     const open = page.getByRole('button', { name: '原代充 Telegram 设置' });
+    const openLegacy = async () => {
+      await page.locator('#system-monitor-channel-form').waitFor();
+      await settle(page);
+      if (await open.isVisible()) return open.click();
+      await page.locator('.system-monitor-legacy').getByRole('button', { name: '更多操作', exact: true }).click();
+      await page.getByRole('menuitem', { name: '原代充 Telegram 设置', exact: true }).click();
+    };
     const drawer = page.locator('#drawer');
     const frame = drawer.frameLocator('iframe');
     const token = frame.getByLabel('Bot Token');
@@ -396,7 +440,7 @@ test('接管前从系统设置打开原代充表单，沿用保存、测试及�
       await drawer.getByRole('button', { name: '关闭抽屉' }).click();
       await drawer.locator('iframe').waitFor({ state: 'detached' });
     };
-    await open.click();
+    await openLegacy();
     await save.waitFor();
     assert.equal(await token.inputValue(), '');
     assert.match(await token.getAttribute('placeholder'), /已保存/);
@@ -416,7 +460,7 @@ test('接管前从系统设置打开原代充表单，沿用保存、测试及�
     await token.fill('synthetic-secret');
     await failure.uncheck();
     await close();
-    await open.click();
+    await openLegacy();
     await save.waitFor();
     assert.equal(await chat.inputValue(), '123456790');
     assert.equal(await failure.isChecked(), false);
@@ -433,11 +477,90 @@ test('接管前从系统设置打开原代充表单，沿用保存、测试及�
     await close();
 
     setLegacyStatus('switching');
-    await open.click();
+    await openLegacy();
     await frame.getByText('代充通知已进入统一接管，请在监控与通知核对。').waitFor();
     assert.equal(await save.isVisible(), false);
     assert.deepEqual(errors, []);
     assert.deepEqual(offline.external, []);
     await context.close();
   }
+});
+
+
+test('监控中心入口、全量筛选、键盘和大表格视口保持可用', { timeout: 30_000 }, async t => {
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const f = await prepare(browser, 1440);
+  t.after(() => f.context.close());
+  const { page } = f;
+  await page.goto(origin + '/#/monitor');
+  await page.locator('[data-monitor-check]').first().waitFor();
+  const navigation = await page.evaluate(() => window.IDDesignAPI.navigation);
+  assert.deepEqual(navigation.find(group => group[0] === '监控中心')[2].map(item => item[0]), ['网站监控', '监控通知']);
+  assert(!navigation.find(group => group[0] === '插件管理')[2].some(item => item[1] === 'plugins/websites'));
+  assert(!navigation.find(group => group[0] === '系统设置')[2].some(item => item[1] === 'settings/monitoring'));
+  assert.equal(await page.locator('#breadcrumbs').innerText(), '监控中心');
+  assert.equal(await page.locator('#page-title h1').innerText(), '网站监控');
+  assert.equal(await page.getByRole('link', { name: '网站监控', exact: true }).getAttribute('href'), '#/monitor');
+  await page.getByRole('tab', { name: '运行状态', exact: true }).press('ArrowRight');
+  await page.getByRole('tab', { name: '告警记录', exact: true, selected: true }).waitFor();
+  await page.locator('[data-row-id="monitor-fixture-1"]').waitFor();
+  const geometry = await page.locator('.system-monitor-list > .table-viewport').evaluate(view => {
+    const box = view.getBoundingClientRect(), header = view.querySelector('thead').getBoundingClientRect();
+    const pager = document.querySelector('[data-pagination="system-monitoring"]').getBoundingClientRect();
+    return { top: box.top, height: box.height, bottom: box.bottom, pagerBottom: pager.bottom, viewport: innerHeight,
+      visibleRows: [...view.querySelectorAll('tbody tr')].filter(row => {
+        const item = row.getBoundingClientRect(); return item.top >= header.bottom && item.bottom <= box.bottom;
+      }).length };
+  });
+  assert(geometry.height >= 500 && geometry.visibleRows >= 9 && geometry.pagerBottom < geometry.viewport, JSON.stringify(geometry));
+  if (output) await writeFile(join(output, 'record-viewport.json'), JSON.stringify(geometry, null, 2));
+  const help = page.getByLabel('查看告警记录说明');
+  const table = page.locator('.system-monitor-list');
+  const initialBox = await table.boundingBox();
+  await help.press('Enter');
+  await page.getByText(/关键词可查告警名称/).waitFor();
+  assert.deepEqual(await table.boundingBox(), initialBox);
+  await page.keyboard.press('Escape');
+  await page.getByText(/关键词可查告警名称/).waitFor({ state: 'hidden' });
+  await page.locator('#system-monitor-search').fill('付款');
+  await page.getByRole('button', { name: '查询', exact: true }).click();
+  await page.locator('[data-pagination="system-monitoring"]').getByText('共 1 条 · 第 1–1 条', { exact: true }).waitFor();
+  assert.equal(await page.locator('.system-monitor-list tbody tr').count(), 1);
+  await page.locator('#system-monitor-priority').selectOption('P0');
+  await page.getByRole('heading', { name: '暂无符合条件的告警' }).waitFor();
+  await page.getByRole('button', { name: '重置', exact: true }).click();
+  await page.locator('[data-row-id="monitor-fixture-2"]').waitFor();
+  assert.equal(await page.locator('#system-monitor-search').inputValue(), '');
+  await page.locator('#system-monitor-days').selectOption('7');
+  await page.getByRole('tab', { name: '运行状态', exact: true }).click();
+  await page.getByRole('tab', { name: '告警记录', exact: true }).click();
+  assert.equal(await page.locator('#system-monitor-days').inputValue(), '7');
+  await page.getByRole('tab', { name: '告警记录', exact: true }).press('End');
+  await page.locator('#ops-monitor-url').waitFor();
+  assert.equal(await page.locator('#sidebar a[aria-current="page"]').innerText(), '网站监控');
+  await page.getByRole('tab', { name: '网站检测', exact: true }).press('Home');
+  await page.locator('[data-monitor-check]').first().waitFor();
+  await settle(page);
+  assert(await page.getByRole('tab', { name: '运行状态', exact: true }).evaluate(node => document.activeElement === node));
+  assert.deepEqual(f.writes, []);
+  assert.deepEqual(f.errors, []);
+  assert.deepEqual(f.offline.external, []);
+});
+
+
+test('员工保留网站检测入口，不呈现管理监控和通知配置', { timeout: 15_000 }, async t => {
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const f = await prepare(browser, 390, 'employee');
+  t.after(() => f.context.close());
+  await f.page.goto(origin + '/#/plugins/websites');
+  await f.page.locator('#ops-monitor-url').waitFor();
+  assert.equal(await f.page.locator('.monitor-navigation [role="tab"]').count(), 1);
+  await f.page.locator('#nav-toggle').click();
+  assert.equal(await f.page.getByRole('link', { name: '网站监控', exact: true }).getAttribute('href'), '#/plugins/websites');
+  assert.equal(await f.page.getByRole('link', { name: '监控通知', exact: true }).count(), 0);
+  assert.deepEqual(f.reads, []);
+  assert.deepEqual(f.writes, []);
+  assert.deepEqual(f.errors, []);
 });
