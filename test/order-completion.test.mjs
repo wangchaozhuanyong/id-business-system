@@ -56,8 +56,8 @@ test('有效充值码把成功入单映射到领用员工，列表、详情资�
     order('draft', { status: 'draft' }));
   assert.deepEqual(listIds(data, a), ['imported', 'own', 'historical']);
   assert.deepEqual(listIds(data, b), ['another']);
-  assert.deepEqual(listIds(data, admin), ['imported', 'own', 'another', 'historical', 'unassigned']);
-  assert.equal(view(data, admin).items.at(-1).state, 'unassigned');
+  assert.deepEqual(new Set(listIds(data, admin)), new Set(['imported', 'own', 'another', 'historical', 'unassigned']));
+  assert.equal(view(data, admin).items.find(row => row.id === 'unassigned').state, 'unassigned');
   assert.equal(view(data, a).canAssign, false);
   assert.deepEqual(view(data, a).owners, []);
   assert.equal(view(data, a, { orderId: 'own', q: '123-456' }).items[0].id, existing.id);
@@ -77,7 +77,8 @@ test('配置与实际扣款独立，历史订单保留原收费并标记缺失�
     order('historical', { rechargePriceSnapshot: undefined, saleAmount: '130' }),
     order('unknown', { paidAmount: '', paidCurrency: '', paidConfirmed: false }),
     order('unpriced', { saleAmount: '', rechargePriceSnapshot: rechargePriceSnapshot({ version: 0, data: null }, 'Plus', at) }));
-  const [same, difference, historical, unknown, unpriced] = readOrderCompletion(data, changedSettings, a, new URLSearchParams(), owners).items;
+  const { items } = readOrderCompletion(data, changedSettings, a, new URLSearchParams(), owners);
+  const { same, difference, historical, unknown, unpriced } = Object.fromEntries(items.map(row => [row.id, row]));
   assert.equal(same.configuredSaleAmount, '140.00');
   assert.equal(same.standardPaidAmount, '100.0000');
   assert.deepEqual(same.financeIssues, ['客户实收未登记']);
@@ -90,6 +91,16 @@ test('配置与实际扣款独立，历史订单保留原收费并标记缺失�
   assert(unpriced.financeIssues.includes('入库时未配置收费金额'));
   assert(unpriced.financeIssues.includes('入库时未配置该币种代付金额'));
   assert.equal(change(data, a, { ...complete, orderId: unpriced.id }).order.customerId, existing.id);
+});
+
+test('订单补全按实际开通时间由新到旧，旧单缺开通时间时使用已知业务时间', () => {
+  const data = payload(
+    order('unknown-time'),
+    order('old-opening', { rechargeCompletedAt: '2026-11-08T03:00:00Z', createdAt: '2026-11-12 11:30' }),
+    order('new-opening', { rechargeCompletedAt: '2026-11-10 16:00', createdAt: '2026-11-10 15:00' }),
+    order('legacy-start', { start: '2026-11-09 09:00' })
+  );
+  assert.deepEqual(listIds(data, a), ['new-opening', 'legacy-start', 'old-opening', 'unknown-time']);
 });
 
 test('补齐原单客户资料时保留入库金额、回执、归属和现有资料', () => {

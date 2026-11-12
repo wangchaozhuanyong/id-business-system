@@ -336,8 +336,8 @@
         .sort((a, b) => timestamp(b.receivedAt) - timestamp(a.receivedAt))[0]?.receivedAt
     );
   }
-  function list(columns, rows, id, emptyState) {
-    return A.table(columns, A.pageRows(rows), '', id, emptyState) + A.pagination(rows.length);
+  function list(columns, rows, id, emptyState, timeOf) {
+    return A.table(columns, A.pageRows(rows, timeOf), '', id, emptyState) + A.pagination(rows.length);
   }
   function columnButton(id) {
     return A.button('列设置', 'column-settings', '', 'columns', `data-table-id="${id}"`);
@@ -740,7 +740,9 @@
           }
         ],
         rows,
-        'relay-parents'
+        'relay-parents',
+        undefined,
+        row => row.createdAt
       )
     );
   }
@@ -835,7 +837,8 @@
         ],
         rows,
         'relay-aliases',
-        emptyState
+        emptyState,
+        row => [row.createdAt, row.importedAt]
       )
     );
   }
@@ -928,7 +931,8 @@
         ],
         rows,
         'relay-mails',
-        emptyState
+        emptyState,
+        row => row.receivedAt
       )
     );
   }
@@ -994,7 +998,9 @@
           }
         ],
         imports,
-        'relay-imports'
+        'relay-imports',
+        undefined,
+        row => row.time
       )
     );
   }
@@ -1870,7 +1876,7 @@
   function eventList(id) {
     const asset = alias(id);
     const rows = asset
-      ? [...asset.inventoryHistory].reverse().map((entry) => ({
+      ? asset.inventoryHistory.map((entry) => ({
           id: entry.id,
           kind: entry.action,
           actor: entry.actor || '历史未记录',
@@ -1888,7 +1894,7 @@
           { id: 'at', label: '操作时间', render: (r) => E(timeText(r.at)) },
             { id: 'note', label: '说明' }
           ],
-          rows,
+          window.IDListOrder.sortByRecordTime(rows, row => row.at),
           '',
           'relay-events'
         )
@@ -1907,7 +1913,8 @@
           { id: 'email', label: '隐藏邮箱' },
           { id: 'relayStatus', label: '邮箱状态', render: (r) => E(status(r)) }
         ],
-        aliases().filter((a) => a.parentMailboxId === p.id),
+        window.IDListOrder.sortByRecordTime(aliases().filter((a) => a.parentMailboxId === p.id),
+          row => [row.createdAt, row.importedAt]),
         '',
         'relay-parent-children'
       )}${eventList(p.id)}`,

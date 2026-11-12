@@ -50,7 +50,7 @@ test('银行卡管理与续费共用复制、筛选、分组和预计金额', { 
       const context = await browser.newContext({ viewport: { width, height: 900 }, locale: 'zh-CN' });
       try {
         const localFixtures = await fixture();
-        const mock = await interceptDesign(context, { localFixtures, actor });
+        const mock = await interceptDesign(context, { localFixtures, actor, skipRechargeAssets: true });
         await context.addInitScript(() => {
           Object.defineProperty(navigator, 'clipboard', { value: {
             async writeText(text) {
@@ -61,22 +61,24 @@ test('银行卡管理与续费共用复制、筛选、分组和预计金额', { 
           } });
         });
         let failEstimates = true;
-        await context.route('**/api/local/subscription-card-estimates', route => failEstimates
+        await context.route(url => url.pathname === '/api/local/subscription-card-estimates', route => failEstimates
           ? route.fulfill({ status: 503, json: { error: '合成读取失败' } }) : route.fallback());
-        await context.route('**/api/local/subscription-card-details', route => {
-          const { orderId } = route.request().postDataJSON();
+        const copied = [];
+        const confirmation = 'synthetic-card-confirmation';
+        await context.route('**/api/local/subscription-renewal-card', route => {
+          const command = route.request().postDataJSON();
+          const { action, orderId } = command;
           const order = localFixtures.commerce.data.orders.find(row => row.id === orderId);
           const estimate = localFixtures['subscription-card-estimates'].items.find(row => row.id === orderId);
-          return route.fulfill({ json: { order: { id: order.id, version: order.version, orderNo: order.orderNo, payment: order.payment,
-            account: { email: order.email, source: '客户自有', status: '由客户管理' },
-            card: { source: '充值卡池', typeName: 'wise潘', last4: '4242', status: '可用',
-              canReveal: true, estimate, balance: null } }, renewal: null } });
-        });
-        const copied = [];
-        await context.route('**/api/local/subscription-card-copy', route => {
-          const command = route.request().postDataJSON();
-          copied.push(command);
-          return route.fulfill({ json: { text: 'wise潘 / ' + pan + ' / GPT Plus / 175.92 USD' } });
+          if (action === 'copy') {
+            assert.equal(command.confirmation, confirmation);
+            copied.push(orderId);
+            return route.fulfill({ json: { text: pan } });
+          }
+          assert.equal(action, 'prepare');
+          return route.fulfill({ json: { orderId, account: order.email, customerName: '合成客户', last4: '4242',
+            canCopy: true, hasCard: true, availability: 'normal', confirmation, estimate,
+            balance: { amount: '42', currency: 'USD' } } });
         });
         const page = await context.newPage();
         page.setDefaultTimeout(5500);
@@ -84,23 +86,31 @@ test('银行卡管理与续费共用复制、筛选、分组和预计金额', { 
         page.on('pageerror', error => errors.push(error.message));
         await page.goto(origin + '/#/data-management/bank-cards');
         await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, dark ? 'dark' : 'light');
-        await page.getByRole('heading', { name: '银行卡管理', exact: true }).waitFor();
-        assert.equal(await page.locator('.nav-child[href="#/data-management/bank-cards"]').count(), 1);
-        assert.equal(await page.locator('.nav-heading[title="数据管理"]').count(), 1);
+        await page.getByRole('heading', { name: '订阅管理 · 按银行卡', exact: true }).waitFor();
+        assert.equal(new URL(page.url()).hash, '#/subscriptions/bank-cards');
+        assert.equal(await page.getByRole('navigation', { name: '订阅管理视图' })
+          .getByRole('link', { name: '按银行卡', exact: true }).getAttribute('aria-current'), 'page');
         await page.getByText('部分银行卡类型或预计金额暂时无法读取').waitFor();
         failEstimates = false;
         await page.getByRole('button', { name: '重试', exact: true }).click();
+        const drawer = page.locator('#drawer[open]');
+        const groups = page.locator('table[data-table="commerce-bank-card-groups"]');
+        await groups.locator('[data-row-id="recharge:7"]').getByRole('button', { name: '查看订阅及余额' }).click();
+        await drawer.getByText('42 USD', { exact: true }).waitFor();
+        assert.deepEqual(await drawer.locator('table[data-table="commerce-bank-card-subs"] tr[data-row-id]')
+          .evaluateAll(rows => rows.map(row => row.dataset.rowId)), ['upcoming', 'switch-old', 'expired']);
+        await drawer.getByRole('button', { name: '关闭', exact: true }).click();
+        const detailTab = page.getByRole('tab', { name: '订阅用卡明细', exact: true });
+        await detailTab.click();
         const list = page.locator('table[data-table="commerce-subscription-cards"]');
         const rows = list.locator('tbody tr[data-row-id]');
-        const expired = list.locator('[data-row-id="expired"]');
         const upcoming = list.locator('[data-row-id="upcoming"]');
-        if (width <= 900) for (const row of [expired, upcoming, list.locator('[data-row-id="switch-old"]'),
-          list.locator('[data-row-id="switch-new"]')]) await row.getByRole('button', { name: '更多资料' }).click();
-        await expired.getByText('175.92 USD').waitFor();
-        assert.equal(await expired.getByText('已过期', { exact: true }).count(), 1);
+        const switchNew = list.locator('[data-row-id="switch-new"]');
+        if (width <= 900) for (const row of [upcoming, switchNew]) await row.getByRole('button', { name: '更多资料' }).click();
+        await upcoming.getByText('175.92 USD').waitFor();
+        assert.deepEqual(await rows.evaluateAll(rows => rows.slice(0, 2).map(row => row.dataset.rowId)), ['upcoming', 'switch-new']);
         assert.equal(await upcoming.getByText('即将到期', { exact: true }).count(), 1);
-        assert.equal(await list.locator('[data-row-id="switch-old"]').getByText('历史用卡').count(), 1);
-        assert.equal(await list.locator('[data-row-id="switch-new"]').getByText('使用中').count(), 1);
+        assert.equal(await switchNew.getByText('使用中').count(), 1);
         assert.equal(await list.getByText('no-card@example.test').count(), 0);
         assert.ok(!(await list.innerText()).includes(pan));
         assert.equal(await rows.count(), 20);
@@ -138,10 +148,10 @@ test('银行卡管理与续费共用复制、筛选、分组和预计金额', { 
         await page.getByLabel('搜索当前列表').click();
         await amountNote.waitFor({ state: 'hidden' });
         } else {
-          assert.equal(await expired.getByText('175.92 USD').isVisible(), true);
+          assert.equal(await upcoming.getByText('175.92 USD').isVisible(), true);
           assert.equal(await amountHeading.isVisible(), false, '移动端金额随展开的记录显示');
         }
-        const copyButton = expired.getByRole('button', { name: '复制', exact: true });
+        const copyButton = upcoming.getByRole('button', { name: '复制银行卡', exact: true });
         await copyButton.scrollIntoViewIfNeeded();
         assert.equal(await copyButton.evaluate(button => {
           const rect = button.getBoundingClientRect();
@@ -149,43 +159,54 @@ test('银行卡管理与续费共用复制、筛选、分组和预计金额', { 
           return rect.left >= table.left - 1 && rect.right <= Math.min(innerWidth, table.right) + 1;
         }), true);
         await page.getByRole('button', { name: '下一页', exact: true }).click();
-        assert.equal(await rows.count(), 2);
+        assert.deepEqual(await rows.evaluateAll(rows => rows.map(row => row.dataset.rowId)), ['switch-old', 'expired']);
+        const expired = list.locator('[data-row-id="expired"]');
+        const switchOld = list.locator('[data-row-id="switch-old"]');
+        if (width <= 900) for (const row of [expired, switchOld]) await row.getByRole('button', { name: '更多资料' }).click();
+        assert.equal(await expired.getByText('已过期', { exact: true }).count(), 1);
+        assert.equal(await switchOld.getByText('历史用卡', { exact: true }).count(), 1);
         assert.equal(await amountHelp.count(), 1);
         assert.ok(await page.getByRole('button', { name: '下一页', exact: true }).isDisabled());
+        await page.getByRole('tab', { name: '按卡汇总', exact: true }).click();
+        await groups.waitFor();
+        await detailTab.click();
+        assert.equal(await rows.count(), 20);
         await page.getByLabel('使用状态', { exact: true }).selectOption('upcoming');
         assert.equal(await rows.count(), 1);
         await upcoming.getByRole('button', { name: '详情', exact: true }).click();
-        const drawer = page.locator('#drawer');
         await drawer.getByText('银行卡详情', { exact: true }).waitFor();
         assert.equal(await drawer.getByText('QA-history', { exact: true }).count(), 1);
         assert.equal(await drawer.getByText('10000 PHP', { exact: true }).count(), 1);
         await drawer.getByRole('button', { name: '关闭', exact: true }).click();
-        await upcoming.getByRole('button', { name: '复制', exact: true }).click();
-        await page.waitForFunction(value => window.qaCopied === value, 'wise潘 / ' + pan + ' / GPT Plus / 175.92 USD');
-        assert.deepEqual(copied[0], { orderId: 'upcoming', cardId: 'recharge:7' });
+        const confirm = page.locator('#confirm-dialog[open]');
+        await copyButton.click();
+        await confirm.getByText(/upcoming@example.test.*卡尾号 4242/).waitFor();
+        assert.deepEqual(copied, []);
+        await confirm.getByRole('button', { name: '确认复制', exact: true }).click();
+        await page.waitForFunction(value => window.qaCopied === value, pan);
+        assert.deepEqual(copied, ['upcoming']);
         await page.getByLabel('搜索当前列表').fill('不匹配的检索词');
         await page.getByText('暂无符合条件的记录').waitFor();
         assert.equal(await amountHelp.count(), 1);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1), false);
         await page.goto(origin + '/#/workspace/renewals');
-        const renewalRow = page.locator('table[data-table="commerce-renewals"] [data-row-id="upcoming"]');
-        await renewalRow.getByRole('button', { name: '银行卡', exact: true }).click();
-        await drawer.getByRole('button', { name: '复制账号', exact: true }).click();
-        await page.waitForFunction(() => window.qaCopied === 'upcoming@example.test');
-        const renewalCopy = drawer.getByRole('button', { name: '复制银行卡资料', exact: true });
+        await page.locator('[data-action="commerce-renewal-select"][data-id="upcoming"]').click();
+        const renewal = page.getByRole('region', { name: '当前选中客户', exact: true });
+        await renewal.getByText('175.92 USD', { exact: true }).waitFor();
+        const renewalCopy = renewal.getByRole('button', { name: '复制银行卡', exact: true });
         await renewalCopy.click();
-        await page.waitForFunction(() => window.qaCopies === 3);
-        assert.equal(copied[1].orderId, copied[0].orderId);
-        assert.equal(copied[1].context, 'renewal');
-        assert.equal(copied[1].version, 1);
+        await confirm.getByText(/upcoming@example.test.*卡尾号 4242/).waitFor();
+        assert.deepEqual(copied, ['upcoming']);
+        await confirm.getByRole('button', { name: '确认复制', exact: true }).click();
+        await page.waitForFunction(() => window.qaCopies === 2);
+        assert.deepEqual(copied, ['upcoming', 'upcoming']);
         if (width === 1440 && !dark) {
           await page.evaluate(() => { window.qaRejectClipboard = true; });
           await renewalCopy.click();
-          const fallback = drawer.getByLabel('待复制内容');
-          await fallback.waitFor();
-          assert.ok((await fallback.inputValue()).includes(pan));
-          await drawer.getByRole('button', { name: '关闭', exact: true }).click();
-          await page.waitForFunction(() => !document.querySelector('#drawer textarea.copy-block')?.textContent);
+          await confirm.getByRole('button', { name: '确认复制', exact: true }).click();
+          await page.locator('#toast').getByText('合成剪贴板权限拒绝', { exact: true }).waitFor();
+          assert.equal(await page.evaluate(() => window.qaCopies), 2);
+          assert.ok(!(await page.locator('#main').innerText()).includes(pan));
         }
         assert.deepEqual(errors, []);
         assert.deepEqual(mock.external, []);
@@ -195,7 +216,8 @@ test('银行卡管理与续费共用复制、筛选、分组和预计金额', { 
 });
 
 test('冻结银行卡后两个续费账号都收到提示并可选择新卡', { timeout: 40_000 }, async t => {
-  const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
+  const playwright = process.env.ID_RECHARGE_QA_PLAYWRIGHT;
+  const { chromium } = await import(playwright ? pathToFileURL(playwright).href : 'playwright');
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
@@ -233,6 +255,12 @@ test('冻结银行卡后两个续费账号都收到提示并可选择新卡', { 
     { id: 'recharge:7', last4: '4242', active: !isFrozen, frozen: isFrozen },
     { id: 'recharge:9', last4: '0009', active: true }
   ] } }));
+  await context.route('**/api/local/subscription-renewal-card', route => {
+    const { action, orderId } = route.request().postDataJSON();
+    assert.equal(action, 'prepare');
+    return route.fulfill({ json: { orderId, last4: '4242', hasCard: true,
+      availability: isFrozen ? 'frozen' : 'normal', canCopy: !isFrozen } });
+  });
   await context.route('**/api/local/commerce', route => {
     if (route.request().method() === 'GET') return route.fulfill({ json: localFixtures.commerce });
     const { data, version } = route.request().postDataJSON();
@@ -244,9 +272,10 @@ test('冻结银行卡后两个续费账号都收到提示并可选择新卡', { 
   page.setDefaultTimeout(6500);
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(origin + '/#/data-management/bank-cards');
+  await page.getByRole('tab', { name: '订阅用卡明细', exact: true }).click();
   const row = page.locator('table[data-table="commerce-subscription-cards"] [data-row-id="upcoming"]');
   await row.getByText('正常', { exact: true }).waitFor();
-  await row.getByRole('button', { name: '修改', exact: true }).click();
+  await row.getByRole('button', { name: '更多操作', exact: true }).click();
   await page.getByRole('menuitem', { name: '标记为冻结' }).click();
   const drawer = page.locator('#drawer');
   await drawer.getByLabel('冻结原因（选填）').fill('冻结测试');
@@ -260,6 +289,8 @@ test('冻结银行卡后两个续费账号都收到提示并可选择新卡', { 
   await drawer.getByText('QA-upcoming', { exact: true }).waitFor();
   await drawer.getByRole('button', { name: '关闭', exact: true }).click();
   await page.goto(origin + '/#/workspace/order/gpt');
+  await page.locator('#commerce-businessType').selectOption('续费');
+  await page.locator('#commerce-payment').selectOption('银行卡');
   await page.locator('#commerce-customerId').evaluate((select, id) => {
     select.value = id;
     select.dispatchEvent(new Event('change', { bubbles: true }));
@@ -273,6 +304,8 @@ test('冻结银行卡后两个续费账号都收到提示并可选择新卡', { 
     const hint = page.locator('[data-order-renewal-card]');
     await hint.getByText('已冻结', { exact: true }).waitFor();
     assert.match(await hint.innerText(), /4242/);
+    await page.locator('#commerce-proMaterialMode').selectOption('');
+    await page.locator('#commerce-cardId option[value="recharge:9"]').waitFor({ state: 'attached' });
     assert.equal(await page.locator('#commerce-cardId option[value="recharge:7"]').count(), 0);
   }
   const picker = page.locator('#commerce-cardId-picker');
@@ -282,8 +315,7 @@ test('冻结银行卡后两个续费账号都收到提示并可选择新卡', { 
   await page.locator('#commerce-cardId-options').getByRole('option', { name: /0009/ }).click();
   await page.locator('#commerce-paidAmount').fill('20');
   await page.locator('#commerce-saleAmount').fill('120');
-  await page.getByRole('button', { name: '核对并保存', exact: true }).click();
-  await page.locator('#confirm-dialog[open] [data-action="confirm-accept"]').click();
+  await page.getByRole('button', { name: '确认提交', exact: true }).click();
   await page.locator('#toast').filter({ hasText: '订单提交成功' }).waitFor();
   assert.equal(submitted.cardId, 'recharge:9');
   assert.equal(submitted.previousOrderId, 'upcoming');

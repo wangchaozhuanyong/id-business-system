@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import * as listOrder from './list-order.mjs';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
@@ -152,6 +153,7 @@ async function fixture({ auth = true, role = 'admin', configured = true } = {}) 
     }
   };
   window.IDDesignAPI = api;
+  window.IDListOrder = listOrder;
   const document = {
     querySelector(selector) {
       if (selector === 'meta[name="id-local-auth"]') return auth ? { content: 'required' } : null;

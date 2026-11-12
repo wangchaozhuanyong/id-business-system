@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import * as listOrder from './list-order.mjs';
 import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
 import { URL } from 'node:url';
@@ -113,7 +114,7 @@ function runtime() {
   };
   const modules = [];
   runInNewContext(source, {
-    window: { IDDesignAPI: api, IDDesignModules: modules },
+    window: { IDDesignAPI: api, IDListOrder: listOrder, IDDesignModules: modules },
     document: {
       querySelectorAll: () => currentForms,
       querySelector: () => ({ close() {} }),

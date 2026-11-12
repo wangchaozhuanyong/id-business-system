@@ -222,6 +222,7 @@ test('账号管理保留注册国家和操作人，未开通库存不会给新�
   t.after(() => context.close());
   const fixtures = JSON.parse(await readFile(fixturePath, 'utf8'));
   const asset = fixtures.inventory.data.accounts.find(row => row.type === 'gpt');
+  asset.createdAt = '2026-11-12 23:59';
   fixtures['auth/session'] = { configured: true, actor };
   fixtures['auth/order-owners'] = { items: [actor] };
   await interceptDesign(context, { localFixtures: fixtures, actor, skipRechargeAssets: true });

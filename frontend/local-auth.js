@@ -425,7 +425,7 @@
                 `<div class="action-links">${textAction('编辑', 'ops-local-staff-edit', `data-id="${esc(row.id)}"`)}${row.role === 'super' ? '' : textAction(row.active ? '停用' : '启用', 'ops-local-staff-toggle', `data-id="${esc(row.id)}"`)}</div>`
             }
           ],
-          pageRows(rows),
+          pageRows(rows, row => row.createdAt),
           '',
           'local-employee-accounts'
         ) + pagination(rows.length)

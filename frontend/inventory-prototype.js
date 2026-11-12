@@ -649,6 +649,13 @@
       );
     return event?.time || asset.healthChangedAt || '历史未记录';
   }
+  function inventoryListTime(asset, tab) {
+    const recorded = [asset.createdAt, asset.importedAt, asset.registered];
+    if (tab === 'claimed') return [asset.claimedAt, ...recorded];
+    if (tab === 'used') return [asset.actualUsedAt, asset.claudeHistory?.start, asset.usedAt, ...recorded];
+    if (tab === 'dead' || tab === 'unlocking') return [healthChangeTime(asset), ...recorded];
+    return recorded;
+  }
   function wide(label, id, control, required = false, help = '') {
     return field(label, id, control, required, help).replace(
       'class="field"',
@@ -1365,7 +1372,7 @@
       ];
       const selection = api.getSelection('inventory-module-assets');
       body = `<div class="toolbar list-filters"><div class="toolbar-left"><div class="search-field">${icon('search')}<input data-auto-search id="inventory-list-query" aria-label="搜索库存资料" placeholder="${microsoft ? '搜索邮箱、辅助邮箱或备注' : '搜索账号、备注或用途'}" value="${esc(v.query)}" /></div><select id="inventory-country" aria-label="筛选国家">${options(choicesWithCurrent([['', '全部国家'], ...settingsFor(type).countries], v.country), v.country)}</select><select id="inventory-status" aria-label="筛选${kind === 'mail' ? '邮箱' : '账号'}状态">${options([['', '全部状态'], '正常', '冻结', '封控中', ...(kind === 'mail' ? ['死号', '解封中'] : [])], v.status)}</select>${kind === 'mail' ?
-        `<select id="inventory-usage-filter" aria-label="筛选使用状态">${options([['', '全部使用状态'], ...Object.entries(mailUseLabels)], v.usage)}</select>` : ''}</div><div class="toolbar-right">${button('列设置', 'column-settings', '', 'columns', `data-table-id="${esc(title)}库存"`)}${microsoft ? '' : button('提取与归还', 'inventory-center', '', 'return')}${button(microsoft ? '复制邮箱地址' : '复制所选', 'inventory-copy-selected', '', 'copy', selection.size ? '' : 'disabled')}${!microsoft && v.tab === 'claimed' ? button('归还所选', 'inventory-return-selected', '', 'return', selection.size ? '' : 'disabled') : ''}</div></div>${table(columns, pageRows(rows), 'inventory-module-assets', `${title}库存`)}${pagination(rows.length)}`;
+        `<select id="inventory-usage-filter" aria-label="筛选使用状态">${options([['', '全部使用状态'], ...Object.entries(mailUseLabels)], v.usage)}</select>` : ''}</div><div class="toolbar-right">${button('列设置', 'column-settings', '', 'columns', `data-table-id="${esc(title)}库存"`)}${microsoft ? '' : button('提取与归还', 'inventory-center', '', 'return')}${button(microsoft ? '复制邮箱地址' : '复制所选', 'inventory-copy-selected', '', 'copy', selection.size ? '' : 'disabled')}${!microsoft && v.tab === 'claimed' ? button('归还所选', 'inventory-return-selected', '', 'return', selection.size ? '' : 'disabled') : ''}</div></div>${table(columns, pageRows(rows, asset => inventoryListTime(asset, v.tab)), 'inventory-module-assets', `${title}库存`)}${pagination(rows.length)}`;
     }
     const tabItems = [
       ...(kind === 'mail' ? [['all', '全部', assets.length]] : []),
@@ -1418,9 +1425,9 @@
     const purposeControl = account
       ? select('inventory-purpose', purposeChoices, selectedPurpose)
       : `<div class="option-entry-controls">${select('inventory-purpose', purposeChoices, selectedPurpose)}${button('设置', 'inventory-purpose-settings', '', 'settings', 'aria-label="设置邮箱提取用途"')}</div>`;
-    const recent = batches
-      .filter((batch) => batch.kind === kind && ownerAllowed(batch))
-      .slice(0, 5);
+    const recent = window.IDListOrder.sortByRecordTime(
+      batches.filter((batch) => batch.kind === kind && ownerAllowed(batch)), batch => batch.time
+    ).slice(0, 5);
     const availableCounts = list
       .map(([type, label]) => `<span>${esc(label)} <strong>${type === 'relay' && localData
         ? '提交时核对'
@@ -1534,7 +1541,7 @@
               textAction('原批次', 'inventory-batch', `data-id="${entry.batchId}"`)
           }
         ],
-        pageRows(rows),
+        pageRows(rows, entry => entry.time),
         '',
         '归还记录',
         { title: '暂无归还记录', description: '完成归还后会保留原批次、理由、时间和操作人。' }
@@ -1548,7 +1555,7 @@
               .toLowerCase()
               .includes(v.query.toLowerCase()))
       );
-      body = `<div class="toolbar"><div class="toolbar-left"><div class="search-field">${icon('search')}<input data-auto-search id="inventory-center-query" aria-label="搜索提取记录" placeholder="搜索批次、邮箱、用途或提取人" value="${esc(v.query)}" /></div></div>${button('提取邮箱', 'inventory-go', '', 'download', 'data-route="workspace/mail-extract"')}${button('提取账号', 'inventory-go', '', 'download', 'data-route="workspace/account-extract"')}</div>${batchTable(pageRows(rows), numbers)}${pagination(rows.length)}`;
+      body = `<div class="toolbar"><div class="toolbar-left"><div class="search-field">${icon('search')}<input data-auto-search id="inventory-center-query" aria-label="搜索提取记录" placeholder="搜索批次、邮箱、用途或提取人" value="${esc(v.query)}" /></div></div>${button('提取邮箱', 'inventory-go', '', 'download', 'data-route="workspace/mail-extract"')}${button('提取账号', 'inventory-go', '', 'download', 'data-route="workspace/account-extract"')}</div>${batchTable(pageRows(rows, batch => batch.time), numbers)}${pagination(rows.length)}`;
     }
     return (
       header(
@@ -2639,7 +2646,7 @@
         )}</div></div>${results}<div class="panel-heading"><h3>近期导入</h3>${button('全部导入', 'inventory-entry-imports')}</div><div class="panel-body inventory-workspace-history" tabindex="0" aria-label="近期导入列表">${recent.length ? `<ul class="inventory-workspace-records inventory-import-records">${recent.map(recentImportRecord).join('')}</ul>` : empty('暂无导入记录', '完成批量导入后在这里查看结果。')}</div></section>`;
   }
   function scopedImportRecords(type = '', scope = '') {
-    return [...importRecords, ...(api.modules.appleRelay?.listImports?.() || [])].filter(
+    const rows = [...importRecords, ...(api.modules.appleRelay?.listImports?.() || [])].filter(
       (record) =>
         (!type || record.type === type || record.types?.includes(type)) &&
         (!scope ||
@@ -2648,7 +2655,8 @@
               ? accountEntryType(id)
               : mailboxSubmissionTypes().some(([typeId]) => typeId === id)
           ))
-    ).sort((a, b) => String(b.time || '').localeCompare(String(a.time || '')));
+    );
+    return window.IDListOrder.sortByRecordTime(rows, row => row.time);
   }
   function importList(type = '', scope = '', rows = scopedImportRecords(type, scope)) {
     return rows.length
@@ -3307,7 +3315,7 @@
             },
             { id: 'time', label: '最近结果登记时间' }
           ],
-          registrationRecords,
+          window.IDListOrder.sortByRecordTime(registrationRecords, row => [row.createdAt, row.time]),
           '',
           '注册记录'
         )
