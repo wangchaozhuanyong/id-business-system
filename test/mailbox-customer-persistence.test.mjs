@@ -39,7 +39,8 @@ const rotateWorker = `
         store.rotateManagedMailboxDelivery(workerData.command, workerData.actor, workerData.operation);
         status = 200;
       } catch (error) {
-        status = error.status || 500;
+        if (!Number.isInteger(error.status)) throw error;
+        status = error.status;
       }
       parentPort.postMessage(status);
     } finally { store.close(); }
