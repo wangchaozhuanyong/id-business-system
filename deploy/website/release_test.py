@@ -300,7 +300,7 @@ class WebsiteReleaseTests(unittest.TestCase):
                 self.assertNotEqual(run.call_args_list[0].args[0][4], run.call_args_list[1].args[0][4])
                 self.assertLessEqual(run.call_args_list[1].kwargs["timeout"], run.call_args_list[0].kwargs["timeout"])
                 self.assertTrue((ops / remote.CANARY_RETRY_LOG).is_file())
-                sleep.assert_called_once_with(3)
+                sleep.assert_called_once_with(30)
         self.assertEqual(remote.canary_diagnostics(unavailable)["indicators"], ["vendure_mailbox_unavailable"])
 
     @patch("remote.subprocess.run")
