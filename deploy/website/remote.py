@@ -112,6 +112,20 @@ def adapter_unit_state(components):
     return {"commandSha256": hashlib.sha256(command.encode()).hexdigest(), "overrideSha256": override}
 
 
+def website_launcher(content, revision):
+    commands = list(re.finditer(r"(?m)^[ \t]*ExecStart=[ \t]*(?P<path>[^ \t\r\n]+)", content))
+    release = re.escape(str(ROOT / "releases" / revision))
+    expected = release + r"/operations(?:-[a-zA-Z0-9_-]+)?/run-app"
+    require(len(commands) == 1 and re.fullmatch(expected, commands[0]["path"]),
+            "live_website_launcher_unrecognized")
+    return commands[0]
+
+
+def website_release_dropin(content, base, launcher):
+    active = website_launcher(content, base)
+    return content[:active.start("path")] + str(launcher) + content[active.end("path"):]
+
+
 def snapshot(include_adapter=False):
     components = {name: identity(inspect(name)) for name in (*WEBSITE, *PROTECTED)}
     base = components["app"]["revision"]
@@ -119,13 +133,15 @@ def snapshot(include_adapter=False):
     require(all(components[name]["running"] and components[name]["revision"] == base for name in WEBSITE),
             "website_and_sidecars_not_on_one_live_revision")
     require("# BEGIN ID CORE RELEASE " not in GATEWAY.read_text(), "core_release_gate_active")
-    require(DROP.read_text().count(base) == 1, "live_service_revision_mismatch")
+    dropin = DROP.read_text()
+    require(dropin.count(base) == 1, "live_service_revision_mismatch")
+    live_operations = Path(website_launcher(dropin, base)["path"]).parent
     free = shutil.disk_usage(ROOT).free
     require(free > 12 * 1024**3, "insufficient_free_space")
     live = ROOT / "releases" / base
     state = {"components": components, "unitSha256": digest(DROP), "gatewaySha256": digest(GATEWAY),
              "assetsSha256": digest(live / "assets.json"), "freeBytes": free,
-             "launchers": {name: digest(live / "operations" / name) for name in LAUNCHERS}}
+             "launchers": {name: digest(live_operations / name) for name in LAUNCHERS}}
     if include_adapter:
         state["adapterUnit"] = adapter_unit_state(components)
     return state
@@ -241,6 +257,7 @@ def stage(plan, release):
     before = plan["before"]
     base = before["components"]["app"]["revision"]
     require(sha != base, "release_revision_already_running")
+    live_operations = Path(website_launcher(DROP.read_text(), base)["path"]).parent
     source_name = f"independent-source-{sha}.tar.gz"
     assets_name = f"independent-assets-{sha}.json"
     require(set(plan["artifacts"]) == {source_name, assets_name}, "invalid_artifact_names")
@@ -269,9 +286,11 @@ def stage(plan, release):
     ops = release / "operations"
     ops.mkdir(mode=0o755)
     for name in LAUNCHERS:
-        previous = live / "operations" / name
+        previous = live_operations / name
         require(digest(previous) == before["launchers"][name], "live_launcher_changed")
         content = previous.read_text()
+        if live_operations.name != "operations":
+            content = re.sub(rf"/{re.escape(live_operations.name)}(?![a-zA-Z0-9_.-])", "/operations", content)
         if name == "run-app":
             require(content.count("sha=" + base) == 1, "live_launcher_revision_mismatch")
             content = mount_storefront_admission(
@@ -567,14 +586,18 @@ def release_website(plan):
     if include_adapter:
         adapter_canary(plan, source, ops)
     check_baseline(snapshot(include_adapter), before)
+    old = DROP.read_text()
+    launcher = ops / "run-app"
+    require(launcher.is_file() and os.access(launcher, os.X_OK), "staged_website_launcher_not_executable")
+    new = website_release_dropin(old, base, launcher)
     require_main(sha)
     install_backup_monitoring(source, sha)
     adapter = switch_adapter(plan, source, ops) if include_adapter else None
     require_main(sha)
-    old = DROP.read_text()
+    require(digest(DROP) == before["unitSha256"], "live_service_override_changed")
     write_new(ops / "id-business-independent-app.service.before.conf", old, 0o600)
     pending = DROP.with_name(f".{DROP.name}.{sha[:12]}")
-    write_new(pending, old.replace(base, sha), DROP.stat().st_mode & 0o777)
+    write_new(pending, new, DROP.stat().st_mode & 0o777)
     os.replace(pending, DROP)
     run(["systemctl", "daemon-reload"])
     run(["systemctl", "restart", UNIT], timeout=55)

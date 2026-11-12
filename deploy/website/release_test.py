@@ -143,6 +143,65 @@ class WebsiteReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_approval_mismatch"):
                 remote.require_asset_digest(changed, after)
 
+    def test_stages_active_website_launchers_and_switches_to_the_prepared_path(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            live = root / "releases" / BASE
+            active = live / "operations-mailbox-public-20261112"
+            active.mkdir(parents=True)
+            (live / "source/frontend").mkdir(parents=True)
+            (live / "source/frontend/index.html").write_text('<link href="./prototype.css?v=old">')
+            launchers = {"run-app": f"sha={BASE}\nops=$release/{active.name}\n",
+                         "app-entry.mjs": "// active mailbox entry\n",
+                         "check-app.mjs": "assert(index.includes('prototype.css?v=old'));\n"}
+            for name, content in launchers.items():
+                (active / name).write_text(content)
+            dropin = root / "website.conf"
+            dropin.write_text(f"[Service]\nExecStart=\nExecStart={active / 'run-app'} live\n")
+            release_dir = root / "releases" / TARGET
+            assets_name = f"independent-assets-{TARGET}.json"
+            source_name = f"independent-source-{TARGET}.tar.gz"
+            artifacts = {assets_name: b"{}", source_name: b"synthetic archive"}
+            index = b'<link href="./prototype.css?v=new">'
+
+            def digest(data):
+                return hashlib.sha256(data).hexdigest()
+
+            def run(args, **_options):
+                if args[0] == "aws":
+                    destination = Path(args[4])
+                    destination.write_bytes(artifacts[destination.name])
+                else:
+                    frontend = Path(args[-1]) / "frontend"
+                    frontend.mkdir()
+                    (frontend / "index.html").write_bytes(index)
+
+            plan = {"sha": TARGET, "files": {"frontend/index.html": digest(index)},
+                    "before": {"components": {"app": {"revision": BASE}},
+                               "assetsSha256": digest(artifacts[assets_name]),
+                               "launchers": {name: digest(content.encode()) for name, content in launchers.items()}},
+                    "artifacts": {name: {"bytes": len(data), "sha256": digest(data)}
+                                  for name, data in artifacts.items()}}
+            wire_analytics = Mock(side_effect=lambda content: content)
+            with patch.multiple(remote, ROOT=root, DROP=dropin, run=run,
+                                mount_backup_monitoring=lambda content: content,
+                                mount_storefront_admission=lambda content: content,
+                                wire_storefront_analytics=wire_analytics):
+                _, operations = remote.stage(plan, release_dir)
+                self.assertEqual(remote.website_release_dropin(dropin.read_text(), BASE, operations / "run-app"),
+                                 f"[Service]\nExecStart=\nExecStart={operations / 'run-app'} live\n")
+            self.assertEqual((operations / "run-app").read_text(), f"sha={TARGET}\nops=$release/operations\n")
+            self.assertEqual((operations / "app-entry.mjs").read_text(), launchers["app-entry.mjs"])
+            wire_analytics.assert_called_once_with(launchers["app-entry.mjs"])
+            self.assertIn("prototype.css?v=new", (operations / "check-app.mjs").read_text())
+
+    def test_rejects_unrecognized_or_multiple_website_start_commands(self):
+        launcher = remote.ROOT / "releases" / BASE / "operations/run-app"
+        for content in ("ExecStart=/usr/bin/other\n",
+                        f"ExecStart={launcher} live\nExecStart=/usr/bin/other\n"):
+            with self.assertRaisesRegex(remote.ReleaseError, "live_website_launcher_unrecognized"):
+                remote.website_launcher(content, BASE)
+
     def test_table_actions_release_rejects_missing_source_proof_or_a_second_scope(self):
         before, after = "a" * 64, "b" * 64
         approval = {"beforeAssetsSha256": before, "assetsSha256": after}
