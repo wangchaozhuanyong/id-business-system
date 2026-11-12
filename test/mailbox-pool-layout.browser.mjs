@@ -86,18 +86,18 @@ try {
     assert.equal(compact.copy, '复制');
     assert(compact.centerDifference < 1 && compact.codeHeight <= 20);
     await pool.locator('.mailbox-account__more').first().click();
-    const actions = pool.locator('.mailbox-account__actions:popover-open');
-    await actions.getByRole('button', { name: '更新授权', exact: true }).waitFor();
+    const actions = page.getByRole('menu', { name: '邮箱操作', exact: true });
+    await actions.getByRole('menuitem', { name: '更新授权', exact: true }).waitFor();
     await settle(page);
     assert.equal((await firstRow.boundingBox()).height, rowHeight, '浮层操作不能撑高数据行');
     assert(await actions.evaluate(el => {
       const r = el.getBoundingClientRect();
       return r.left >= 0 && r.right <= innerWidth && r.top >= 0 && r.bottom <= innerHeight && [...el.querySelectorAll('button')].every(button => { const b = button.getBoundingClientRect(); return b.left >= r.left && b.right <= r.right && b.width >= 44; });
     }), `浮层操作必须完整可用 ${width}/${theme}`);
-    await pool.locator('.mailbox-account__more').first().press('Escape');
+    await page.keyboard.press('Escape');
     assert.equal(await actions.count(), 0);
     await pool.locator('.mailbox-account__more').first().click();
-    await pool.getByRole('button', { name: '更新授权', exact: true }).first().click();
+    await actions.getByRole('menuitem', { name: '更新授权', exact: true }).click();
     assert.equal(await actions.count(), 0);
     const operation = page.locator('#drawer[open]');
     assert(await operation.locator('#ops-managed-pool-form').isVisible());
@@ -127,7 +127,21 @@ try {
       const container = [element, element.closest('.drawer-body')].find(scrollable) || document.scrollingElement;
       container.scrollTop = container.scrollHeight;
     });
-    await page.waitForFunction(() => !document.querySelector('.mailbox-account__actions:popover-open'));
+    await settle(page);
+    const triggerVisible = await firstRow.locator('.mailbox-account__more').evaluate(element => new Promise(resolve => {
+      const observer = new IntersectionObserver(([entry]) => {
+        observer.disconnect();
+        resolve(entry.intersectionRatio > 0);
+      });
+      observer.observe(element);
+    }));
+    if (!triggerVisible) {
+      assert.equal(await actions.count(), 0, '滚动后操作按钮离开可见区域时关闭菜单');
+    } else if (await actions.isVisible()) {
+      assert(await actions.evaluate(el => { const r = el.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; }), '共享菜单跟随可见操作按钮且不越出屏幕');
+      await page.keyboard.press('Escape');
+    }
+    await actions.waitFor({ state: 'hidden' });
     await pool.locator('.pagination-jump summary').click();
     await pool.getByLabel('跳至页码', { exact: true }).fill('41');
     await pool.getByRole('button', { name: '跳转', exact: true }).click(); await waitCodes();
@@ -140,7 +154,7 @@ try {
     await settle(page);
     assert(await actions.evaluate(el => { const r = el.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; }), '末行操作浮层不能越出屏幕');
     const scrollBeforeOperation = await page.evaluate(() => ({ window: scrollY, panel: document.querySelector('#plugin-tool-host .drawer-body').scrollTop }));
-    await actions.getByRole('button', { name: '更新授权', exact: true }).click();
+    await actions.getByRole('menuitem', { name: '更新授权', exact: true }).click();
     await operation.locator('#ops-managed-pool-form').waitFor();
     await operation.getByRole('button', { name: '取消', exact: true }).click();
     await operation.waitFor({ state: 'hidden' });
@@ -179,39 +193,40 @@ try {
     await pool.getByLabel('搜索邮箱池', { exact: true }).fill('不存在');
     await pool.getByText('没有匹配的邮箱', { exact: true }).waitFor(); await measure('no-match');
     // The title help opens in the top layer, includes actual official destinations, and never shifts the form.
-    await pool.getByRole('button', { name: '登记邮箱', exact: true }).click();
-    await pool.locator('#ops-managed-email').fill('draft@example.test');
-    const fieldTop = (await pool.locator('#ops-managed-email').boundingBox()).y;
     await pool.getByLabel('查看邮箱池说明', { exact: true }).click();
     const help = pool.locator('#mailbox-pool-help');
-    await help.getByRole('link', { name: '前往 Google 生成', exact: true }).waitFor();
-    for (const [name, href] of [['前往 Google 生成','https://myaccount.google.com/apppasswords'], ['登录 Apple 账户生成','https://account.apple.com/'], ['登录 Microsoft 账户','https://account.microsoft.com/']]) {
+    await help.getByRole('link', { name: '前往 Google 生成应用专用密码', exact: true }).waitFor();
+    for (const [name, href] of [['前往 Google 生成应用专用密码','https://myaccount.google.com/apppasswords'], ['打开 Apple 账户设置','https://account.apple.com/'], ['打开 Outlook 设置邮箱','https://outlook.live.com/mail/']]) {
       assert.equal(await help.getByRole('link', { name, exact: true }).getAttribute('href'), href);
       assert.equal(await help.getByRole('link', { name, exact: true }).getAttribute('target'), '_blank');
     }
-    assert.equal((await pool.locator('#ops-managed-email').boundingBox()).y, fieldTop);
     if ([1440,390].includes(width)) await page.screenshot({ path: path.join(output, `help-${width}-${theme}.png`) });
     await pool.getByLabel('查看邮箱池说明', { exact: true }).press('Escape');
-    const editor = pool.locator('#ops-managed-pool-form');
+    await pool.getByRole('button', { name: '绑定邮箱', exact: true }).click();
+    const editor = operation.locator('#ops-managed-pool-form');
+    await editor.locator('#ops-managed-email').fill('draft@example.test');
+    const fieldTop = (await editor.locator('#ops-managed-email').boundingBox()).y;
     for (const provider of providers) {
       await editor.locator('#ops-managed-provider').selectOption(provider);
-      const href = provider === 'google' ? 'https://myaccount.google.com/apppasswords' : provider === 'apple' ? 'https://account.apple.com/' : 'https://account.microsoft.com/';
-      if (provider !== 'microsoft') await editor.getByLabel('查看应用专用密码说明', { exact: true }).click();
+      const href = provider === 'google' ? 'https://myaccount.google.com/apppasswords' : provider === 'apple' ? 'https://account.apple.com/' : 'https://outlook.live.com/mail/';
+      const trigger = editor.getByLabel(provider === 'microsoft' ? '查看收信服务商说明' : '查看应用专用密码说明', { exact: true });
+      await trigger.click();
       await editor.locator(`a[href="${href}"]`).last().waitFor();
       assert(await editor.locator(`a[href="${href}"]`).last().isVisible(), `${width}/${theme}/${provider} 指引应可查看`);
-      if (provider !== 'microsoft') await editor.getByLabel('查看应用专用密码说明', { exact: true }).press('Escape');
+      assert.equal((await editor.locator('#ops-managed-email').boundingBox()).y, fieldTop, '说明和服务商切换不挤动邮箱输入');
+      await trigger.press('Escape');
     }
-    await editor.getByRole('button', { name: '取消', exact: true }).click();
+    await operation.getByRole('button', { name: '取消', exact: true }).click();
     await pool.getByRole('button', { name: '批量导入', exact: true }).click();
     await editor.getByLabel('查看收信服务商说明', { exact: true }).click();
     for (const provider of providers) {
       await editor.locator('#ops-managed-batch-provider').selectOption(provider);
       assert(await editor.locator('[data-mailbox-batch-help] a').first().isVisible());
     }
-    await editor.getByRole('button', { name: '取消', exact: true }).click();
-    await pool.getByRole('button', { name: '登记邮箱', exact: true }).click();
+    await operation.getByRole('button', { name: '取消', exact: true }).click();
+    await pool.getByRole('button', { name: '绑定邮箱', exact: true }).click();
     assert.equal(await editor.locator('#ops-managed-email').inputValue(), 'draft@example.test');
-    await editor.getByRole('button', { name: '取消', exact: true }).click();
+    await operation.getByRole('button', { name: '取消', exact: true }).click();
     await pool.getByLabel('搜索邮箱池', { exact: true }).fill(''); await waitCodes();
     fail = true;
     await pool.getByRole('button', { name: '刷新', exact: true }).click();

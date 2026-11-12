@@ -189,7 +189,7 @@ test('运营表单关闭和切页保留普通草稿，提交快照及敏感字�
   await drawer.getByRole('tab', { name: '邮箱池管理', exact: true }).click();
   await page.locator('#ops-mailbox-pool[data-version]').waitFor();
   await page.locator('#ops-mailbox-pool-search').fill('草稿搜索');
-  await drawer.getByRole('button', { name: '登记邮箱', exact: true }).click();
+  await drawer.getByRole('button', { name: '绑定邮箱', exact: true }).click();
   await page.locator('#ops-managed-email').fill('draft@example.test');
   await page.locator('#ops-managed-days').fill('23');
   await page.locator('#ops-managed-app-password').fill('fixture-secret-not-retained');
@@ -201,7 +201,7 @@ test('运营表单关闭和切页保留普通草稿，提交快照及敏感字�
   assert.equal(await page.locator('#ops-managed-days').inputValue(), '23');
   assert.equal(await page.locator('#ops-managed-app-password').inputValue(), '');
   await drawer.locator('[data-action="ops-mailbox-pool-cancel"]').click();
-  await drawer.getByRole('button', { name: '登记邮箱', exact: true }).click();
+  await drawer.getByRole('button', { name: '绑定邮箱', exact: true }).click();
   assert.equal(await page.locator('#ops-managed-email').inputValue(), 'draft@example.test');
   failPoolSave = true;
   await page.locator('#ops-managed-app-password').fill('fixture-only');
@@ -224,7 +224,7 @@ test('运营表单关闭和切页保留普通草稿，提交快照及敏感字�
   await page.locator('#ops-managed-app-password').fill('fixture-only');
   await page.locator('#ops-managed-pool-form').locator('button[type="submit"]').click();
   await page.locator('#ops-managed-pool-form').waitFor({ state: 'detached' });
-  await drawer.getByRole('button', { name: '登记邮箱', exact: true }).click();
+  await drawer.getByRole('button', { name: '绑定邮箱', exact: true }).click();
   assert.equal(await page.locator('#ops-managed-email').inputValue(), '', '成功只清除对应提交草稿');
   await close();
 

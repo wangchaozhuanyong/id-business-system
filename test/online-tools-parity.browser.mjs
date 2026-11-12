@@ -8,6 +8,7 @@ const { chromium } = playwright;
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import assert from 'node:assert/strict';
+import { toggleDesignTheme } from './helpers/offline-design.mjs';
 const root = fileURLToPath(new URL('../', import.meta.url)),
   output = process.env.ID_LAYOUT_QA_OUTPUT || path.join(root, '.runtime/tool-parity-20261107');
 await mkdir(output, { recursive: true });
@@ -178,7 +179,9 @@ try {
       await page.goto(origin + '/#/overview');
       // Theme is a user preference, set through the actual visible control.
       if ((await page.locator('html').getAttribute('data-theme')) !== theme)
-        await page.locator('#theme-toggle').click();
+        await toggleDesignTheme(page);
+      if (!(await page.getByRole('button', { name: '在线工具', exact: true }).isVisible()))
+        await page.locator('#mobile-tools-toggle').click();
       await page.getByRole('button', { name: '在线工具', exact: true }).click();
       const drawer = page.locator('#drawer');
 
@@ -360,17 +363,17 @@ try {
           );
           await drawer.getByRole('tab', { name: '邮箱池管理', exact: true }).click();
           await drawer.getByText('邮箱池暂无记录', { exact: true }).waitFor();
-          await drawer.getByRole('button', { name: '登记邮箱', exact: true }).click();
+          await drawer.getByRole('button', { name: '绑定邮箱', exact: true }).click();
           await page.locator('#ops-managed-email').fill('draft@example.test');
           {
             // Field instructions now use the shared, body-level help popover.
             const credentialHelp = drawer.locator('summary[aria-label="查看应用专用密码说明"]');
             await credentialHelp.click();
-            await page.getByRole('link', { name: '前往 Google 生成', exact: true }).waitFor();
+            await page.getByRole('link', { name: '前往 Google 生成应用专用密码', exact: true }).waitFor();
             await credentialHelp.press('Escape');
             await page.locator('#ops-managed-provider').selectOption('apple');
             await credentialHelp.click();
-            await page.getByRole('link', { name: '登录 Apple 账户生成', exact: true }).waitFor();
+            await page.getByRole('link', { name: '打开 Apple 账户设置', exact: true }).waitFor();
             await credentialHelp.press('Escape');
             await page.locator('#ops-managed-provider').selectOption('microsoft');
             assert(!(await page.locator('#ops-managed-app-password').isVisible()));
@@ -381,6 +384,7 @@ try {
             const heading = drawer
               .locator('.section-title-row')
               .filter({ has: page.getByRole('heading', { name: '邮箱池', exact: true }) });
+            await heading.scrollIntoViewIfNeeded();
             const fieldBox = await page.locator('#ops-managed-email').boundingBox();
             await heading.locator('summary').click();
             assert.equal((await page.locator('#ops-managed-email').boundingBox()).y, fieldBox.y);
@@ -449,18 +453,20 @@ try {
           !(await drawer.evaluate((el) => el.scrollWidth > el.clientWidth + 1)),
           `${label} populated overflow`
         );
-        const labelsLeft = await drawer.locator('.field:visible').evaluateAll((nodes) =>
+        const labelsAligned = await drawer.locator('.field:visible').evaluateAll((nodes) =>
           nodes.every((node) => {
             const label = node.querySelector(':scope > label'),
               control = node.querySelector(':scope > .field-control');
             return (
               !label ||
               !control ||
-              label.getBoundingClientRect().right <= control.getBoundingClientRect().left + 1
+              (node.closest('.mailbox-pool-form')
+                ? label.getBoundingClientRect().bottom <= control.getBoundingClientRect().top + 1
+                : label.getBoundingClientRect().right <= control.getBoundingClientRect().left + 1)
             );
           })
         );
-        assert(labelsLeft, `${width} ${theme} ${label}: field labels moved above controls`);
+        assert(labelsAligned, `${width} ${theme} ${label}: field label alignment`);
         if (name !== '邮箱查询与邮箱池')
           await page.screenshot({
             path: path.join(output, `after-${label}-result-${width}-${theme}.png`)

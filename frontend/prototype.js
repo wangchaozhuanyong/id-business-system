@@ -99,13 +99,22 @@ function openActionMenu(anchor, actions, { label = '更多操作', onSelect } = 
   const position = () => {
     if (!anchor.isConnected || !anchor.checkVisibility()) return closeActionMenu();
     const trigger = anchor.getBoundingClientRect();
-    const viewport = anchor.closest('.table-viewport, [data-pagination-rows]')?.getBoundingClientRect();
-    if (viewport && (trigger.bottom <= viewport.top || trigger.top >= viewport.bottom ||
-        trigger.right <= viewport.left || trigger.left >= viewport.right)) return closeActionMenu();
+    let top = 0, right = innerWidth, bottom = innerHeight, left = 0;
+    for (const container of [anchor.closest('.table-viewport, [data-pagination-rows]'), anchor.closest('.drawer-body')]) {
+      if (!container) continue;
+      const bounds = container.getBoundingClientRect();
+      top = Math.max(top, bounds.top);
+      right = Math.min(right, bounds.right);
+      bottom = Math.min(bottom, bounds.bottom);
+      left = Math.max(left, bounds.left);
+    }
+    if (trigger.bottom <= top || trigger.top >= bottom ||
+        trigger.right <= left || trigger.left >= right) return closeActionMenu();
     const bounds = menu.getBoundingClientRect();
     menu.style.left = `${Math.max(12, Math.min(trigger.right - bounds.width, innerWidth - bounds.width - 12))}px`;
     const below = trigger.bottom + 6;
-    menu.style.top = `${below + bounds.height <= innerHeight - 12 ? below : Math.max(12, trigger.top - bounds.height - 6)}px`;
+    const preferred = below + bounds.height <= innerHeight - 12 ? below : trigger.top - bounds.height - 6;
+    menu.style.top = `${Math.max(12, Math.min(preferred, innerHeight - bounds.height - 12))}px`;
   };
   activeActionMenu = { anchor, menu, position };
   anchor.setAttribute('aria-haspopup', 'menu');
@@ -140,6 +149,7 @@ function openActionMenu(anchor, actions, { label = '更多操作', onSelect } = 
   });
   menu.showPopover();
   position();
+  if (activeActionMenu?.menu !== menu) return;
   window.addEventListener('resize', position);
   window.addEventListener('scroll', position, { capture: true, passive: true });
   $('button:not(:disabled)', menu)?.focus({ preventScroll: true });
