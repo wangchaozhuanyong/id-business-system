@@ -19,6 +19,36 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class EventReleaseTests(unittest.TestCase):
+    def test_stage_accepts_the_exact_event_bundle_and_rejects_missing_or_foreign_artifacts(self):
+        sha, base = 'b' * 40, 'a' * 40
+        names = {f'independent-source-{sha}.tar.gz', f'independent-assets-{sha}.json',
+                 f'independent-event-runtime-{sha}.tar.gz'}
+        before = {'components': {'app': {'revision': base}}, 'assetsSha256': 'c' * 64}
+        runtime = ROOT / '.runtime'; runtime.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=runtime) as directory:
+            root = Path(directory)
+            dropin = root / 'website.conf'
+            dropin.write_text(f'[Service]\nExecStart={root}/releases/{base}/operations/run-app live\n')
+            for index, artifacts in enumerate([names, names - {f'independent-event-runtime-{sha}.tar.gz'},
+                                               names | {'unreviewed.tar.gz'},
+                                               (names - {f'independent-event-runtime-{sha}.tar.gz'}) |
+                                               {f'independent-event-runtime-{base}.tar.gz'}]):
+                plan = {'sha': sha, 'before': before, 'externalEvents': True,
+                        'artifacts': {name: {'sha256': 'c' * 64, 'bytes': 1} for name in artifacts}}
+                target = root / ('candidate-' + str(index))
+                with self.subTest(index=index), patch.object(remote, 'ROOT', root), \
+                        patch.object(remote, 'DROP', dropin), \
+                        patch.object(remote, 'run', side_effect=RuntimeError('synthetic_download_boundary')) as download:
+                    if index == 0:
+                        with self.assertRaisesRegex(RuntimeError, 'synthetic_download_boundary'):
+                            remote.stage(plan, target)
+                        download.assert_called_once()
+                    else:
+                        with self.assertRaisesRegex(remote.ReleaseError, 'invalid_artifact_names'):
+                            remote.stage(plan, target)
+                        download.assert_not_called()
+                        self.assertFalse(target.exists())
+
     def test_gateway_changes_only_the_existing_private_post_matcher(self):
         before = '# untouched prefix\n' + event_gateway.ORIGINAL + '\n# untouched suffix'
         after = event_gateway.transform(before)
