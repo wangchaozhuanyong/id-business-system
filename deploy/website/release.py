@@ -225,8 +225,10 @@ def main():
              "frontend/local-data.js", "frontend/operations-prototype.js", "frontend/apple-balance-prototype.js",
              "frontend/recharge-integration.css", "frontend/bitbrowser-addresses.css",
              "frontend/recharge-activity.js", "frontend/recharge-activity.css",
+             "frontend/data-center.js", "frontend/data-center.css", "frontend/sheets-status.js", "frontend/sheets-status.css",
              "server/local-business.mjs", "server/recharge-activity.mjs",
              "server/backup/sheets-source.mjs", "server/monitoring-policy.mjs",
+             "server/tools/website-analytics.mjs", "server/tools/sheets-status.mjs",
              "server/monitoring-sources.mjs", "server/monitoring-worker-receipts.mjs", "server/system-monitoring.mjs",
              "deploy/website/backup_monitoring.py", "deploy/website/id-business-independent-backup-monitoring.service",
              "deploy/website/id-business-independent-backup-monitoring.timer")

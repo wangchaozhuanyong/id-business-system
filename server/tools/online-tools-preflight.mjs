@@ -27,6 +27,14 @@ const tools = {
     ],
     needs: ['FLASH CAST 媒体资源的只读服务账号文件', '可核对的真实报表日期范围']
   },
+  websiteCloudflare: {
+    label: 'Cloudflare 商城访问统计',
+    option: 'website-cloudflare-config',
+    kind: 'website-cloudflare',
+    validate: (config) => createWebsiteAnalytics({ cloudflareConfig: config }),
+    fields: (config) => [['accountId', config.accountId], ['apiToken', config.apiToken], ['sites', config.sites]],
+    needs: ['商城所在 Cloudflare 账户的 Account Analytics Read 令牌', '商城域名与 Web Analytics 站点标识的映射']
+  },
   websiteVisits: {
     label: '网站访问明细采集',
     option: 'website-visits-secret-file',
@@ -216,14 +224,17 @@ export async function preflightOnlineTools(options = {}, { fetchImpl = fetch } =
       throw new Error('计划预览地址须为 localhost 或 127.0.0.1 的 HTTP 回环地址，并含端口');
     }
   }
-  const [websiteAnalytics, websiteVisits, mediaResolver, microsoftMailbox, publicRoutes] = await Promise.all([
+  const cloudflareFile = options[tools.websiteCloudflare.option];
+  const [websiteAnalytics, websiteVisits, mediaResolver, microsoftMailbox, websiteCloudflare, publicRoutes] = await Promise.all([
     checkFile(tools.websiteAnalytics, options[tools.websiteAnalytics.option], preview),
     checkFile(tools.websiteVisits, options[tools.websiteVisits.option], preview, publicOrigin),
     checkMedia(options[tools.mediaResolver.option], preview, options['probe-media'] === true),
     checkFile(tools.microsoftMailbox, options[tools.microsoftMailbox.option], preview, publicOrigin),
+    cloudflareFile === undefined ? undefined : checkFile(tools.websiteCloudflare, cloudflareFile, preview),
     probePublic ? probePublicToolRoutes(publicOrigin, fetchImpl) : undefined
   ]);
-  const results = { websiteAnalytics, websiteVisits, mediaResolver, microsoftMailbox };
+  const results = { websiteAnalytics, websiteVisits, mediaResolver, microsoftMailbox,
+    ...(websiteCloudflare && { websiteCloudflare }) };
   const counts = { valid: 0, missing: 0, invalid: 0, unavailable: 0 };
   for (const result of Object.values(results)) counts[result.status]++;
   return { scope: publicOrigin ? 'public_config_preflight' : 'local_preflight', counts, tools: results, publicRoutes };
@@ -244,6 +255,7 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
     if (values.help) {
       process.stdout.write(
         'node server/tools/online-tools-preflight.mjs [--website-analytics-config 文件] [--website-visits-secret-file 文件]\n' +
+        '  [--website-cloudflare-config 文件]\n' +
         '  [--media-resolver-url 回环地址] [--microsoft-mailbox-config 文件]\n' +
         '  [--preview-origin 计划预览地址 | --public-origin 正式 HTTPS 地址] [--probe-media]\n' +
         '  [--probe-public-routes]\n'
@@ -251,7 +263,7 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
     } else {
       const result = await preflightOnlineTools(values);
       process.stdout.write(JSON.stringify(result, null, 2) + '\n');
-      if (result.counts.valid !== optionNames.length ||
+      if (result.counts.valid !== Object.keys(result.tools).length ||
           Object.values(result.publicRoutes || {}).some((status) => status !== 'passed')) process.exitCode = 2;
     }
   } catch {

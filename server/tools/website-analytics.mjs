@@ -1,6 +1,10 @@
 import { createPrivateKey, sign } from 'node:crypto';
 
 const METRICS = ['screenPageViews', 'totalUsers', 'sessions'];
+const renovationSite = 'flashcast.com.my';
+const storefronts = new Set(['damatong.net', 'moyaoai.com', 'shop.flashcast.com.my']);
+const cloudflareId = /^[a-f\d]{32}$/i;
+const dayMs = 86_400_000;
 
 function metrics(row) {
   const values = row.metricValues;
@@ -52,7 +56,7 @@ export function parseWebsiteAnalyticsReport(reports, days, now) {
   const part = (type) => parts.find((item) => item.type === type)?.value || '';
   const today = Date.UTC(Number(part('year')), Number(part('month')) - 1, Number(part('day')));
   const dates = Array.from({ length: days }, (_, index) =>
-    new Date(today - (days - index - 1) * 86_400_000).toISOString().slice(0, 10)
+    new Date(today - (days - index - 1) * dayMs).toISOString().slice(0, 10)
   );
   const byDate = new Map();
   for (const row of dailyReport.rows ?? []) {
@@ -99,11 +103,93 @@ async function responseJson(fetchImpl, url, options) {
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
 
-export function createWebsiteAnalytics({ config, fetchImpl = fetch, clock = Date.now } = {}) {
+const cloudflareQuery = `query WebsiteTraffic($accountTag: string, $filter: AccountRumPageloadEventsAdaptiveGroupsFilter_InputObject) {
+  viewer {
+    accounts(filter: { accountTag: $accountTag }) {
+      total: rumPageloadEventsAdaptiveGroups(filter: $filter, limit: 1) {
+        count
+        sum { visits }
+      }
+      daily: rumPageloadEventsAdaptiveGroups(filter: $filter, limit: 31) {
+        dimensions { date }
+        count
+        sum { visits }
+      }
+    }
+  }
+}`;
+
+function cloudflareSiteTags(config) {
+  if (config === undefined) return new Map();
+  if (typeof config?.accountId !== 'string' || !cloudflareId.test(config.accountId) ||
+      typeof config.apiToken !== 'string' || !/^[\x21-\x7e]{20,512}$/.test(config.apiToken) ||
+      !config.sites || typeof config.sites !== 'object' || Array.isArray(config.sites))
+    throw new Error('商城访问统计的 Cloudflare 配置无效');
+  const sites = Object.entries(config.sites);
+  if (!sites.length || sites.some(([host, tag]) =>
+    !storefronts.has(host) || typeof tag !== 'string' || !cloudflareId.test(tag)))
+    throw new Error('商城访问统计的域名或 Cloudflare 站点标识无效');
+  return new Map(sites);
+}
+
+function cloudflareMetrics(row) {
+  const pageViews = row?.count;
+  const visits = row?.sum?.visits;
+  if (![pageViews, visits].every(value => Number.isSafeInteger(value) && value >= 0))
+    throw new Error('Invalid Cloudflare metrics');
+  return { pageViews, visits };
+}
+
+async function loadCloudflareReport(config, site, siteTag, days, now, fetchImpl) {
+  const fetchedAt = now.toISOString();
+  const midnight = Date.parse(fetchedAt.slice(0, 10) + 'T00:00:00Z');
+  const dates = Array.from({ length: days }, (_, index) =>
+    new Date(midnight - (days - index - 1) * dayMs).toISOString().slice(0, 10)
+  );
+  const filter = { AND: [
+    { datetime_geq: dates[0] + 'T00:00:00Z', datetime_leq: fetchedAt.slice(0, 19) + 'Z' },
+    { bot: 0 },
+    { requestHost: site },
+    { siteTag_in: [siteTag] }
+  ] };
+  const payload = await responseJson(fetchImpl, 'https://api.cloudflare.com/client/v4/graphql', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + config.apiToken, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query: cloudflareQuery, variables: { accountTag: config.accountId, filter } })
+  });
+  const accounts = payload.data?.viewer?.accounts;
+  if (payload.errors?.length || !Array.isArray(accounts) || accounts.length !== 1)
+    throw new Error('Cloudflare report unavailable');
+  const { total, daily } = accounts[0];
+  if (!Array.isArray(total) || total.length > 1 || !Array.isArray(daily) || daily.length > days)
+    throw new Error('Incomplete Cloudflare report');
+  const byDate = new Map();
+  for (const row of daily) {
+    const date = row?.dimensions?.date;
+    if (!dates.includes(date) || byDate.has(date)) throw new Error('Unexpected Cloudflare report date');
+    byDate.set(date, cloudflareMetrics(row));
+  }
+  const summary = total.length ? cloudflareMetrics(total[0]) : null;
+  if ((byDate.size && !summary) || (!byDate.size && (summary?.pageViews || summary?.visits)))
+    throw new Error('Incomplete Cloudflare report');
+  const reportUrl = new URL(`https://dash.cloudflare.com/${config.accountId}/web-analytics/overview/page-views`);
+  reportUrl.searchParams.set('siteTag~in', siteTag);
+  reportUrl.searchParams.set('host', site);
+  reportUrl.searchParams.set('excludeBots', 'Yes');
+  return {
+    status: byDate.size ? 'ready' : 'empty',
+    days, fetchedAt, timeZone: 'UTC', utcOffset: 'GMT+00:00', reportUrl: reportUrl.href,
+    summary: byDate.size ? summary : null,
+    daily: dates.map(date => ({ date, metrics: byDate.get(date) ?? null }))
+  };
+}
+
+export function createWebsiteAnalytics({ config, cloudflareConfig, publicOrigin, fetchImpl = fetch, clock = Date.now } = {}) {
   let token;
   let tokenRequest;
   const cache = new Map();
   const pending = new Map();
+  const siteTags = cloudflareSiteTags(cloudflareConfig);
   const propertyId = config?.propertyId;
   const streamId = config?.streamId;
   const hosts = config?.hosts;
@@ -147,7 +233,7 @@ export function createWebsiteAnalytics({ config, fetchImpl = fetch, clock = Date
     tokenRequest ??= requestToken().finally(() => { tokenRequest = undefined; });
     return tokenRequest;
   }
-  async function load(days) {
+  async function loadGa4(days) {
     const access = await accessToken();
     const filters = {
       andGroup: {
@@ -171,9 +257,7 @@ export function createWebsiteAnalytics({ config, fetchImpl = fetch, clock = Date
             limit: '31'
           })) })
         });
-      const result = parseWebsiteAnalyticsReport(reports, days, new Date(clock()));
-      cache.set(days, { result, expires: clock() + 60_000 });
-      return result;
+      return parseWebsiteAnalyticsReport(reports, days, new Date(clock()));
     } catch (error) {
       if (error.status === 401) token = undefined;
       throw error;
@@ -186,21 +270,40 @@ export function createWebsiteAnalytics({ config, fetchImpl = fetch, clock = Date
       res.end(JSON.stringify(data));
     };
     if (req.method !== 'GET') return send(405, { error: '访问统计只支持 GET' });
-    if ((req.headers.origin && req.headers.origin !== 'http://' + req.headers.host) ||
+    const origin = publicOrigin || 'http://' + req.headers.host;
+    if ((req.headers.origin && req.headers.origin !== origin) ||
         (req.headers['sec-fetch-site'] && req.headers['sec-fetch-site'] !== 'same-origin'))
       return send(403, { error: '请求来源未通过校验' });
-    const days = new URL(req.url, 'http://127.0.0.1').searchParams.get('days');
+    const params = new URL(req.url, 'http://127.0.0.1').searchParams;
+    const days = params.get('days');
     if (!['7', '30'].includes(days)) return send(400, { error: '请选择最近 7 天或 30 天' });
-    if (!configured) return send(503, { error: '尚未配置独立新版的网站访问统计来源' });
+    const site = params.get('site') ?? renovationSite;
+    const isRenovation = site === renovationSite;
+    if (!isRenovation && !storefronts.has(site)) return send(400, { error: '请选择支持的统计站点' });
+    const siteTag = siteTags.get(site);
+    const provider = isRenovation ? 'ga4' : 'cloudflare';
     const count = Number(days);
+    if (!(isRenovation ? configured : siteTag)) {
+      if (!params.has('site')) return send(503, { error: '尚未配置独立新版的网站访问统计来源' });
+      return send(200, { status: 'unconfigured', site, provider, days: count, summary: null, daily: [] });
+    }
+    const cacheKey = site + ':' + days;
     try {
-      const cached = cache.get(count);
+      const cached = cache.get(cacheKey);
       if (cached?.expires > clock()) return send(200, cached.result);
-      if (!pending.has(count))
-        pending.set(count, load(count).finally(() => pending.delete(count)));
-      send(200, await pending.get(count));
+      if (!pending.has(cacheKey)) {
+        const request = isRenovation ? loadGa4(count)
+          : loadCloudflareReport(cloudflareConfig, site, siteTag, count, new Date(clock()), fetchImpl);
+        pending.set(cacheKey, request.then(report => {
+          const result = { ...report, site, provider };
+          cache.set(cacheKey, { result, expires: clock() + 60_000 });
+          return result;
+        }).finally(() => pending.delete(cacheKey)));
+      }
+      send(200, await pending.get(cacheKey));
     } catch {
-      send(502, { error: '无法读取网站访问统计，请核对专用只读授权后重试' });
+      send(502, { error: isRenovation ? '无法读取网站访问统计，请核对专用只读授权后重试'
+        : '无法读取 Cloudflare 商城统计，请核对只读授权后重试' });
     }
   };
 }

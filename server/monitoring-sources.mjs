@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { beijingDay, monitorPath } from './monitoring-policy.mjs';
 import { projectRechargeMonitoring } from './monitoring-recharge.mjs';
-import { readBackupMonitorReceipt, readWorkerReceipt } from './monitoring-worker-receipts.mjs';
+import { readBackupMonitorReceipt, readWorkerReceipt, sheetsReceiptMaxAge } from './monitoring-worker-receipts.mjs';
 import { managedMailboxQueryRoute, storefrontMailboxQueryRoute } from './tools/mailbox-pool.mjs';
 
 const minute = 60_000;
@@ -135,7 +135,7 @@ export function createMonitoringSources({ monitor, databasePath, externalProbe =
     const output = [
       { code: 'disk_space', status: available === null ? 'unknown' : available < 15 ? 'bad' : 'ok', count: available,
         reason: available === null ? 'disk_unavailable' : undefined },
-      job('sheets', sheets, 15 * minute),
+      job('sheets', sheets, sheetsReceiptMaxAge),
       { code: 'order_sync', status: !syncEnabled ? 'disabled' : !orderSync.at ? 'unknown' :
         orderSync.failures >= 3 || now - orderSync.at > 10 * minute ? 'bad' : orderSync.failures === 0 ? 'ok' : 'unknown',
       count: orderSync.failures, reason: !syncEnabled ? 'sync_disabled' : !orderSync.at ? 'sync_missing' :

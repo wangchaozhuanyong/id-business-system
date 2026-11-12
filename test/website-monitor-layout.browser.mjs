@@ -2,26 +2,22 @@ import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import test from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { interceptDesign, origin } from './helpers/offline-design.mjs';
+import { interceptDesign, origin, toggleDesignTheme } from './helpers/offline-design.mjs';
 
-test('网站监控三个页签共享标题、工具栏、筛选和结果布局，保留业务与草稿', { timeout: 90_000 }, async t => {
+test('网站监控的访问记录与检测页签共享布局，并保留统计入口和草稿', { timeout: 90_000 }, async t => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
   const browser = await chromium.launch();
   t.after(() => browser.close());
   const phase = process.env.ID_WEBSITE_QA_PHASE || 'after';
   assert(['before', 'after'].includes(phase));
-  const evidence = new URL('../.runtime/website-monitor-layout-20261108/', import.meta.url);
+  const evidence = new URL('../.runtime/data-center-review/monitor-layout/', import.meta.url);
   await mkdir(evidence, { recursive: true });
   const measured = [];
   for (const width of [1440, 1024, 390, 320]) for (const theme of ['light', 'dark']) {
     const context = await browser.newContext({ viewport: { width, height: 1000 }, locale: 'zh-CN' });
     await interceptDesign(context, { localFixtures: {}, actor: { id: 'website-qa', name: '合成管理员', role: 'admin' } });
-    let mode = 'filled';
     const errors = [], checks = [];
     const daily = Array.from({ length: 15 }, (_, i) => ({ date: `2026-10-${String(i + 10).padStart(2, '0')}`, metrics: { pageViews: 100 + i, visitors: 40 + i, sessions: 60 + i } }));
-    await context.route('**/api/local/tools/website-analytics?*', route => route.fulfill(mode === 'error'
-      ? { status: 503, json: { error: '合成统计读取失败' } }
-      : { json: { timeZone: 'Asia/Kuala_Lumpur', utcOffset: 'GMT+08:00', summary: mode === 'empty' ? null : { pageViews: 1234, visitors: 567, sessions: 789 }, daily: mode === 'empty' ? [] : daily.slice(0, 7) } }));
     await context.route('**/api/local/tools/website-visits/search', route => {
       const { page, pageSize } = route.request().postDataJSON();
       return route.fulfill({ json: { page, pageSize, total: 41, summary: { pageViews: 456, visitors: 123 }, daily,
@@ -36,10 +32,12 @@ test('网站监控三个页签共享标题、工具栏、筛选和结果布局�
     page.setDefaultTimeout(5000);
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(origin + '/#/plugins/websites');
-    if (theme === 'dark') await page.locator('#theme-toggle').click();
+    if (theme === 'dark') await toggleDesignTheme(page);
     const host = page.locator('#plugin-tool-host');
-    await host.getByText('1234', { exact: true }).waitFor();
-    const tabs = [['访问统计', 'ops-website-analytics'], ['访问记录与 IP', 'ops-website-visits'], ['网站检测', 'ops-website-check']];
+    const entry = host.getByRole('link', { name: '查看网站统计', exact: true });
+    assert.equal(await entry.getAttribute('href'), '#/data');
+    await host.getByRole('button', { name: '每日统计', exact: true }).waitFor();
+    const tabs = [['访问记录与 IP', 'ops-website-visits'], ['网站检测', 'ops-website-check']];
     const titlePositions = [];
     for (const [label, id] of tabs) {
       await host.getByRole('tab', { name: label, exact: true }).click();
@@ -73,7 +71,7 @@ test('网站监控三个页签共享标题、工具栏、筛选和结果布局�
         if (geometry.numericRows.length) for (const cells of geometry.numericRows) cells.forEach((cell, i) => assert(Math.abs(cell.textBox.right - geometry.numericRows[0][i].textBox.right) <= 1, JSON.stringify({ width, theme, label, numericRows: geometry.numericRows })));
         assert(geometry.fieldsLeft && !geometry.overflow, JSON.stringify({ width, theme, label, geometry }));
         assert(geometry.panel.top - geometry.nav.bottom >= 16, '导航和内容至少间隔 16px');
-        assert(Math.abs(geometry.title.x - geometry.panel.x) <= 1, '三个页签标题与内容左边界一致');
+        assert(Math.abs(geometry.title.x - geometry.panel.x) <= 1, '页签标题与内容左边界一致');
         assert(geometry.buttons.every(button => button.left >= geometry.panel.left && button.right <= geometry.panel.right + 1));
         for (const control of geometry.controls) assert(geometry.buttons.every(button => button.bottom <= control.top + 1 || button.top >= control.bottom - 1 || button.right <= control.left + 1 || button.left >= control.right - 1), '按钮与控件不得重叠');
       }
@@ -81,7 +79,7 @@ test('网站监控三个页签共享标题、工具栏、筛选和结果布局�
         await page.screenshot({ path: fileURLToPath(new URL(`${phase}-${id}-${width}${theme === 'dark' ? '-dark' : ''}.png`, evidence)), fullPage: true });
     }
     if (phase === 'after') {
-      assert(titlePositions.every(top => Math.abs(top - titlePositions[0]) <= 1), '三个页签实际标题文字垂直位置一致');
+      assert(titlePositions.every(top => Math.abs(top - titlePositions[0]) <= 1), '页签实际标题文字垂直位置一致');
       await host.getByRole('tab', { name: '网站检测', exact: true }).click();
       await page.locator('#ops-monitor-url').fill('https://example.test/synthetic');
       await host.getByRole('button', { name: '检测网站', exact: true }).click();
@@ -107,19 +105,12 @@ test('网站监控三个页签共享标题、工具栏、筛选和结果布局�
         await host.locator(`[data-pagination="operations-website-visits"][data-page="${pageNumber}"]`).waitFor();
       }
       assert(await nextPage.isDisabled());
-      await host.getByRole('tab', { name: '访问统计', exact: true }).click();
-      assert.match(await host.getByText(/统计时区/).textContent(), /Asia\/Kuala_Lumpur/);
-      mode = 'empty';
-      await host.getByRole('button', { name: '刷新统计', exact: true }).click();
-      await host.getByText('该时间段没有访问统计', { exact: true }).waitFor();
-      mode = 'error';
-      await host.getByRole('button', { name: '刷新统计', exact: true }).click();
-      await host.getByText(/合成统计读取失败/).waitFor();
-      assert(await host.getByText('该时间段没有访问统计', { exact: true }).isVisible(), '刷新失败保留最后成功内容');
       await host.getByRole('tab', { name: '网站检测', exact: true }).click();
       assert.equal(await page.locator('#ops-monitor-url').inputValue(), 'https://example.test/synthetic');
       await host.getByRole('tab', { name: '访问记录与 IP', exact: true }).click();
       assert.equal(await page.locator('#ops-visits-sort').inputValue(), 'oldest');
+      await entry.click();
+      await page.getByRole('heading', { name: '数据中心', exact: true }).waitFor();
     }
     assert.deepEqual(errors, []);
     await context.close();
