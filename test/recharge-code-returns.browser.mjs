@@ -101,11 +101,11 @@ test('充值码归还复用真实服务规则，状态变化重新确认，失�
   await page.evaluate(() => window.IDDesignAPI.closeDrawer());
   await page.goto(origin + '/#/workspace/my-recharge-codes');
   await page.locator('#code-list-query').fill('po000001-02');
-  await settle(page);
+  await page.waitForFunction(() => document.querySelectorAll('#recharge-code-list tbody tr[data-row-id]').length === 1);
   assert.equal(await page.locator('#recharge-code-list tbody tr[data-row-id]').count(), 1);
   assert.equal(await page.locator('#recharge-code-list tbody tr[data-row-id]').getAttribute('data-row-id'), f.items[1]);
   await page.locator('#code-list-query').fill('po000001');
-  await settle(page);
+  await page.waitForFunction(() => document.querySelectorAll('#recharge-code-list tbody tr[data-row-id]').length === 3);
   assert.equal(await page.locator('#recharge-code-list tbody tr[data-row-id]').count(), 3);
   await page.locator('#code-list-query').fill('');
   await page.locator('[data-action="order-code-tab"][data-id="returned"]').click();

@@ -1025,7 +1025,14 @@
     return A.button(label, 'commerce-go', kind, icon, `data-route="${E(route)}"`);
   }
   function tabs(choices, active, action, attributes = '') {
-    return `<div class="tabs" role="tablist"${attributes ? ` ${attributes}` : ''}>${choices.map(([id, name]) => `<button class="tab ${id === active ? 'active' : ''}" role="tab" aria-selected="${id === active}" data-action="${action}" data-tab="${id}">${E(name)}</button>`).join('')}</div>`;
+    const items = choices.map(([id, name, count]) => {
+      const countId = `${action}-${id}-count`;
+      const counted = count !== undefined;
+      const description = counted ? ` aria-label="${E(name)}" aria-describedby="${countId}"` : '';
+      const badge = counted ? `<span class="tab-count" id="${countId}">${E(typeof count === 'number' ? count.toLocaleString('zh-CN') : count)}</span>` : '';
+      return `<button class="tab ${id === active ? 'active' : ''}" role="tab" aria-selected="${id === active}" data-action="${action}" data-tab="${id}"${description}>${E(name)}${badge}</button>`;
+    });
+    return `<div class="tabs" role="tablist"${attributes ? ` ${attributes}` : ''}>${items.join('')}</div>`;
   }
   function toolbar(placeholder, actions = '', actionAttributes = '') {
     return `<div class="toolbar"><div class="toolbar-left"><div class="search-field">${A.icon('search')}<input data-auto-search id="commerce-search" aria-label="搜索当前列表" placeholder="${E(placeholder)}" value="${E(S.query || '')}" /></div></div><div class="toolbar-right"${actionAttributes ? ` ${actionAttributes}` : ''}>${actions}</div></div>`;
@@ -1870,16 +1877,18 @@
   function renewalActions(series, subscriptionId = '', extra = {}) {
     if (extra.processed || !canManageOrders() || !series?.sourceId) return '';
     const attrs = `data-id="${E(series.sourceId)}" data-subscription-id="${E(subscriptionId)}"`;
+    const action = (label, name, attributes, kind = '') => extra.buttons
+      ? A.button(label, name, kind, '', attributes) : A.textAction(label, name, attributes, kind);
     const list = [];
-    if (localData?.renewalContactCopy) list.push(A.textAction('复制订阅信息', 'commerce-renewal-contact', attrs));
+    if (localData?.renewalContactCopy) list.push(action('复制订阅信息', 'commerce-renewal-contact', attrs));
     if (series.payment === '银行卡' && localData?.renewalCard) {
       const canBind = !series.hasCard || ['inactive', 'frozen'].includes(series.availability);
-      list.push(A.textAction(canBind ? series.hasCard ? '更换银行卡' : '绑定银行卡' : '复制银行卡',
+      list.push(action(canBind ? series.hasCard ? '更换银行卡' : '绑定银行卡' : '复制银行卡',
         canBind ? 'commerce-renewal-bind' : 'commerce-renewal-card-copy', attrs));
     }
     if (series.payment === '苹果内购' && series.appleIdId)
-      list.push(A.textAction('查看苹果 ID', 'commerce-renewal-apple', `${attrs} data-apple-id="${E(series.appleIdId)}"`));
-    list.push(A.textAction('续费', 'commerce-renewal-open', attrs, 'primary'));
+      list.push(action('查看苹果 ID', 'commerce-renewal-apple', `${attrs} data-apple-id="${E(series.appleIdId)}"`));
+    list.push(action('续费', 'commerce-renewal-open', attrs, 'primary'));
     return list.join('');
   }
 
@@ -1899,7 +1908,7 @@
     if (selected) {
       const { order, completed, refused } = selected;
       const fillAccount = canManageOrders() && manualOrderDetailsMissing(order, customers, evaluatedAt)?.account
-        ? A.textAction(order.product === 'Grok' ? '补账号' : '补邮箱', 'commerce-order-fill-details', `data-id="${E(order.id)}"`)
+        ? A.button(order.product === 'Grok' ? '补账号' : '补邮箱', 'commerce-order-fill-details', '', '', `data-id="${E(order.id)}"`)
         : '';
       const tail = bankCardStatus(order)?.last4 || (/^\d{4}(?:\d{2})?$/.test(order.paymentId) ? order.paymentId.slice(-4) : '');
       const resource = moduleState.renewalResources?.orderId === order.id ? moduleState.renewalResources : null;
@@ -1924,12 +1933,12 @@
           label === '银行卡' && canManageOrders() && localData?.subscriptionCardDetails
             ? A.textAction('用卡详情', 'commerce-renewal-card-open', `data-id="${E(order.id)}"`) : '')).join('')}${subscriptionContacts(
           Object.fromEntries(orderContactFields.map(([field, channel]) => [channel, selected[field]])))}</div>
-        <div class="toolbar renewal-workbench-actions">${renewalActions(series, '', { processed: selected.state === 'processed' })}${fillAccount}${
-          A.textAction('原单', 'commerce-order-detail', `data-id="${E(order.id)}"`)}${
-          completed ? A.textAction('新订单', 'commerce-order-detail', `data-id="${E(completed.id)}"`) +
+        <div class="toolbar renewal-workbench-actions">${renewalActions(series, '', { processed: selected.state === 'processed', buttons: true })}${fillAccount}${
+          A.button('原单', 'commerce-order-detail', '', '', `data-id="${E(order.id)}"`)}${
+          completed ? A.button('新订单', 'commerce-order-detail', '', '', `data-id="${E(completed.id)}"`) +
             renewalExpiryAction(completed) :
-          A.textAction(refused ? '恢复提醒' : '拒续费', refused ? 'commerce-renewal-restore' : 'commerce-renewal-refuse',
-            `data-id="${E(order.id)}"`)}</div>`;
+          A.button(refused ? '恢复提醒' : '拒续费', refused ? 'commerce-renewal-restore' : 'commerce-renewal-refuse',
+            refused ? '' : 'danger', '', `data-id="${E(order.id)}"`)}</div>`;
     }
     return detail;
   }
@@ -1946,16 +1955,16 @@
       <span class="renewal-workbench-item-meta">${E([row.order.product, row.order.plan, orderIdentity(row.order) || row.order.orderNo].filter(Boolean).join(' · '))}</span>
     </button>`).join('');
     const detail = renderRenewalDetail(selected, evaluatedAt);
-    if (!rows.length) return A.empty('暂无符合条件的续费', '可调整产品、搜索或到期状态。');
     return `<div class="renewal-workbench ${renewalMobileDetail && selected ? 'show-renewal-detail' : ''}" data-renewal-workbench>
-      <div class="renewal-workbench-queue"><div class="renewal-workbench-items" data-renewal-scroll aria-label="续费待办">${cards}</div>
+      <div class="renewal-workbench-queue"><div class="renewal-workbench-items" data-renewal-scroll data-pagination-rows tabindex="0" role="region" aria-label="续费待办">${cards || A.empty('暂无符合条件的续费', '可调整产品、搜索或到期状态。')}</div>
       ${A.pagination(rows.length)}</div><section class="renewal-workbench-detail" aria-label="当前选中客户">${detail}</section></div>`;
   }
 
   function renderRenewals() {
     const { reminders, evaluatedAt } = renewalProjection();
     const states = [['upcoming', '即将到期'], ['expired', '已到期'], ['processed', '已处理']];
-    const counts = states.map(([key, label]) => [key, `${label} ${reminders.filter(row => row.state === key).length}`]);
+    const productRows = reminders.filter(row => !S.status || row.order.product === S.status);
+    const counts = states.map(([key, label]) => [key, label, productRows.filter(row => row.state === key).length]);
     return A.header('续费管理', '打开一笔待办后处理该客户的续费。提醒使用北京时间。',
       A.button('提醒设置', 'commerce-renewal-settings', '', 'settings') +
       (localData?.renewalContactSettings ? A.button('续费提醒话术', 'commerce-renewal-suffix', '', 'settings') : '')) +
@@ -2289,7 +2298,7 @@
   const subscriptionCardFilters = { state: '', type: '', plan: '', purpose: '' };
   const bankCardAvailability = { normal: '正常', frozen: '已冻结', inactive: '已停用', review: '待核对' };
   const frozenCardPoolStatus = { pending: '卡池待停用', stopped: '自动代充已停用', not_used: '未进入自动卡池' };
-  let subscriptionCardTab = 'groups', bankCardStatuses = new Map(), frozenBankCards = [];
+  let subscriptionCardTab = 'groups', bankCardStatuses = new Map(), frozenBankCards;
   const bankCardStatus = order => bankCardStatuses.get(order.id);
   function cardAccountCount(counts) {
     return ['GPT', 'Claude', 'Gemini', 'Grok'].filter(product => counts?.[product])
@@ -2389,13 +2398,13 @@
       else subscriptionEstimates = new Map();
       if (!ready || types.status === 'rejected')
         subscriptionEstimateError = '部分银行卡类型或预计金额暂时无法读取';
-      if (statuses.status === 'fulfilled' && Array.isArray(statuses.value.items)) {
+      if (statuses.status === 'fulfilled' && Array.isArray(statuses.value?.items)) {
         bankCardStatuses = new Map(statuses.value.items.map(row => [row.id, row]));
-        frozenBankCards = statuses.value.frozen || [];
+        frozenBankCards = Array.isArray(statuses.value.frozen) ? statuses.value.frozen : undefined;
       } else {
         if ([401, 403].includes(statuses.reason?.status)) {
           bankCardStatuses.clear();
-          frozenBankCards = [];
+          frozenBankCards = undefined;
         }
         subscriptionStatusError = '银行卡资料暂未更新';
       }
@@ -2536,11 +2545,17 @@
       } }
     ];
     const frozen = subscriptionCardTab === 'frozen';
-    return A.header('订阅管理 · 按银行卡', '查看银行卡关联的订阅和预计备款。',
+    const countsReady = !localData || frozenBankCards !== undefined;
+    const choices = [
+      ['groups', '按卡汇总', countsReady ? groupSubscriptionCards(all).length : '—'],
+      ['orders', '订阅用卡明细', countsReady ? all.length : '—'],
+      ['frozen', '冻结银行卡', countsReady ? frozenBankCards?.length ?? 0 : '—']
+    ];
+    return A.header('订阅管理 · 按银行卡', '查看银行卡关联的订阅和预计备款。页签数字分别统计卡组、用卡明细和冻结记录。',
       A.button('提醒设置', 'commerce-renewal-settings', '', 'settings') +
       columnSettingsButton(frozen ? 'commerce-frozen-cards' : subscriptionCardTab === 'groups'
         ? 'commerce-bank-card-groups' : 'commerce-subscription-cards')) + subscriptionCenterNav('bank-cards') + `<section class="panel">${tabs(
-      [['groups', '按卡汇总'], ['orders', '订阅用卡明细'], ['frozen', '冻结银行卡']], subscriptionCardTab, 'commerce-subscription-card-tab',
+      choices, subscriptionCardTab, 'commerce-subscription-card-tab',
       'aria-label="银行卡列表"')}${toolbar(frozen ? '搜索卡号、卡类型、序列号、冻结原因或操作人'
         : '搜索客户、账号、订单、卡号、卡类型或序列号', frozen ? '' : filters)}${
       subscriptionStatusError ? `<p class="footnote" role="status">${E(subscriptionStatusError)} ${
@@ -2553,7 +2568,7 @@
         ? renderBankCardGroups(rows) : tableList(columns, rows, 'commerce-subscription-cards')}</section>`;
   }
   function renderFrozenBankCards(query) {
-    const rows = frozenBankCards.filter(row => !query || [row.typeName, row.number, ...(row.serials || []), row.last4, row.reason, row.frozenBy]
+    const rows = (frozenBankCards || []).filter(row => !query || [row.typeName, row.number, ...(row.serials || []), row.last4, row.reason, row.frozenBy]
       .some(value => String(value || '').toLowerCase().includes(query)))
       .map(row => ({ ...row, serial: (row.serials || []).join(' / ') }));
     return tableList([
@@ -2576,7 +2591,7 @@
   }
   async function showBankCardAccounts(node) {
     const order = orders.find(row => row.id === node.dataset.id);
-    const frozen = frozenBankCards.find(row => row.id === node.dataset.frozenId);
+    const frozen = frozenBankCards?.find(row => row.id === node.dataset.frozenId);
     if ((!order && !frozen) || !localData?.subscriptionCardAccounts || !canManageOrders()) return;
     A.openDrawer('银行卡关联账号', '同一平台的同一账号只统计一次。订单与退款记录可从列表查看。',
       '<div data-bank-card-accounts role="status">正在读取关联账号…</div>', A.button('关闭', 'drawer-close'));
@@ -2987,9 +3002,9 @@
         <div data-retention-progress role="status" hidden></div>
         ${retentionRefreshFailed ? '<p class="inline-notice warning" role="status">部分资料读取失败，保留已读取的资料，可重试。</p>' : ''}</section>
       <section class="panel customer-retention-list">${tabs([
-        ['', `已流失 ${projection.lost.length}`],
-        ['review', `待核对 ${projection.review.length}`],
-        ['scheduled', `待生效 ${projection.scheduled.length}`]
+        ['', '已流失', projection.lost.length],
+        ['review', '待核对', projection.review.length],
+        ['scheduled', '待生效', projection.scheduled.length]
       ], tab, 'commerce-loss-tab', 'aria-label="客户流失状态"')}
       ${retentionToolbar(view, tab)}${A.table(columns, page, '', 'commerce-customer-loss', guidance)}
       ${cards}${A.pagination(rows.length)}</section>`;
@@ -3533,8 +3548,9 @@
     const view = tenant ? tenantView() : null;
     const mode = tenant ? view.tab : moduleState.customerMode;
     const reminders = tenant ? projectTenantRenewals() : null;
-    const states = [['active', '使用中'], ['inactive', '已停用']];
-    if (tenant) states.push(['pending', `待处理 ${reminders.pending.length}`], ['processed', `已处理 ${reminders.processed.length}`]);
+    const states = [['active', '使用中', data.filter(row => row.active === true).length],
+      ['inactive', '已停用', data.filter(row => row.active === false).length]];
+    if (tenant) states.push(['pending', '待处理', reminders.pending.length], ['processed', '已处理', reminders.processed.length]);
     const listTabs = tabs(states, mode, 'commerce-contact-tab', tenant ? 'aria-label="租户数据分类"' : '');
     const renewalSettings = tenant && canManageOrders() ? A.button(
       `提醒设置 · 提前 ${formatRenewalWarning(tenantRenewalWarningHours ?? defaultWarningHours)}`,
@@ -5825,7 +5841,7 @@
     const view = entryView(kind, product);
     return `<div class="entry-record-filters entry-periods" role="group" aria-label="录入时间">${[
         ['all', '全部'], ['today', '今日'], ['yesterday', '昨日'], ['custom', '选择日期']
-      ].map(([id, label]) => A.button(label, 'commerce-entry-period', view.period === id ? 'primary' : '', '',
+      ].map(([id, label]) => A.button(label, 'commerce-entry-period', view.period === id ? 'primary compact' : 'compact', '',
         `data-period="${id}" aria-pressed="${view.period === id}"${id === 'custom' ? ` aria-expanded="${Boolean(view.dateOpen || view.period === 'custom')}"` : ''}`)).join('')}</div>`;
   }
   function entryRecordDateRange(kind, product) {
@@ -5849,12 +5865,12 @@
         A.button('返回填写', 'mobile-entry-view', '', 'return', 'data-view="form" data-entry-switch-view="records"')}</div>`
       : `<div class="entry-mobile-tabs" role="tablist" aria-label="录入与最近记录"><button type="button" class="tab" role="tab" data-action="mobile-entry-view" data-view="form" aria-selected="${mobileView === 'form'}">填写资料</button><button type="button" class="tab" role="tab" data-action="mobile-entry-view" data-view="records" aria-selected="${mobileView === 'records'}">${title}</button></div>`;
     const periods = entryRecordFilters(kind, product);
-    return `<div class="commerce-entry-layout${unified ? ' order-submission-entry' : ''}" data-mobile-view="${mobileView}">${mobileControl}<div class="commerce-entry-columns">${form}
+    return `<div class="commerce-entry-layout${unified ? ' order-submission-entry' : ''}" data-mobile-view="${mobileView}">${unified ? '' : mobileControl}
+      <div class="commerce-entry-columns">${unified ? mobileControl : ''}${form}
       <aside class="panel entry-records" id="commerce-entry-records" data-kind="${kind}" data-product="${E(product)}" aria-labelledby="entry-records-title">
         <div class="panel-heading"><div class="section-title-row"><h2 id="entry-records-title">${title}</h2>${A.titleInfo(title, description, 'entry-records-help')}</div>
-          <div class="entry-record-actions">${unified ? '' : periods}
+          <div class="entry-record-actions">${periods}
             ${localData ? A.button('刷新', 'commerce-entry-refresh', 'compact', '', 'aria-label="刷新最近录入记录"') : ''}</div></div>
-        ${unified ? '<div class="toolbar order-entry-date-filters">' + periods + '</div>' : ''}
         ${entryRecordDateRange(kind, product)}
         <div class="entry-record-region design-async-region"><div data-entry-progress role="status" hidden></div><div class="entry-record-list">${entryRecordList(kind, product)}</div></div>
         <p class="entry-record-error" data-entry-error role="status" hidden></p>
@@ -6135,15 +6151,18 @@
       return claude ? control : `<label for="commerce-order-filter-${key}">${label}</label>${control}`;
     }).join('');
     const productOrders = orders.filter(row => claude ? isClaude(row) : row.product === product);
-    const filtered = productOrders.filter(
+    const buckets = { all: [], pending: [], refunded: [], cancelled: [] };
+    for (const row of productOrders) {
+      if (row.refunds?.length) buckets.refunded.push(row);
+      if (row.cancelled) buckets.cancelled.push(row);
+      else {
+        const pending = completenessReasons(row).length > 0;
+        if (pending) buckets.pending.push(row);
+        if (!automaticGptOrder(row) || !pending) buckets.all.push(row);
+      }
+    }
+    const filtered = (buckets[orderTab] || buckets.all).filter(
       (row) =>
-        (orderTab === 'pending'
-          ? completenessReasons(row).length && !row.cancelled
-          : orderTab === 'cancelled'
-            ? row.cancelled
-            : orderTab === 'refunded'
-              ? row.refunds.length > 0
-              : !row.cancelled && (!automaticGptOrder(row) || !completenessReasons(row).length)) &&
         (!S.query || orderMatchesSearch(row, S.query)) &&
         (!filters.plan || row.plan === filters.plan || (claude && claudeOrderPlan(row.product, row.plan) === filters.plan)) &&
         (!filters.operation || accountStatus(row) === filters.operation) &&
@@ -6182,10 +6201,10 @@
       ) +
       `<section class="panel">${product === 'GPT' ? gptOrderListHeading() : ''}${tabs(
         [
-          ['all', '当前订单'],
-          ['pending', '待补全'],
-          ['refunded', '有退款记录'],
-          ['cancelled', '已撤单']
+          ['all', '当前订单', buckets.all.length],
+          ['pending', '待补全', buckets.pending.length],
+          ['refunded', '有退款记录', buckets.refunded.length],
+          ['cancelled', '已撤单', buckets.cancelled.length]
         ],
         orderTab,
         'commerce-order-tab'
@@ -9424,6 +9443,7 @@
       const view = node.dataset.view;
       if (!A.canVisit(customerLossRoute) || !['scheduled', 'recent', 'review'].includes(view)) return true;
       S.drafts.set(retentionFiltersKey, { ...retentionFilterDefaults, age: view === 'recent' ? 'recent' : '' });
+      window.IDSearchInput?.discardPage(customerLossRoute, 'commerce-search');
       S.viewDrafts.set(customerLossRoute, {
         ...S.viewDrafts.get(customerLossRoute), page: 1, query: '', scrollY: 0,
         status: view === 'recent' ? '' : view
@@ -9563,6 +9583,7 @@
       return true;
     }
     if (action === 'commerce-subscription-card-tab') {
+      if (!['groups', 'orders', 'frozen'].includes(node.dataset.tab)) return true;
       subscriptionCardTab = node.dataset.tab;
       S.page = 1;
       A.render();
@@ -10892,16 +10913,21 @@
     const tenantPage = S.route === tenantRoute;
     if (localData && localPhase !== 'ready') {
       const gptOrdersPage = S.route === 'orders/gpt';
+      const orderEntryPage = isOrderEntry(S.route);
+      const notice = localPhase === 'error'
+        ? A.empty(lossPage ? '无法读取业务资料' : '无法读取本机业务资料',
+          lossPage ? '请重试读取客户与订单资料。' : '请确认本机服务后重试。') +
+          A.button('重试', 'commerce-local-retry', 'primary')
+        : A.empty(lossPage ? '正在读取客户与订单资料' : '正在读取本机业务资料', '请稍候。');
+      if (orderEntryPage)
+        return A.header('订单提交', '') +
+          `<div class="commerce-entry-layout order-submission-entry">
+            <div class="commerce-entry-columns"><section class="panel form-panel">${notice}</section></div>
+          </div>`;
       return (
         A.header(orderListProducts[S.route] ? orderListProducts[S.route] + ' 订单' :
           lossPage ? '客户流失' : tenantPage ? '租户数据' : '本机业务资料', '') +
-        `<section class="panel">${gptOrdersPage ? gptOrderListHeading() : ''}${
-          localPhase === 'error'
-            ? A.empty(lossPage ? '无法读取业务资料' : '无法读取本机业务资料',
-              lossPage ? '请重试读取客户与订单资料。' : '请确认本机服务后重试。') +
-              A.button('重试', 'commerce-local-retry', 'primary')
-            : A.empty(lossPage ? '正在读取客户与订单资料' : '正在读取本机业务资料', '请稍候。')
-        }</section>`
+        `<section class="panel">${gptOrdersPage ? gptOrderListHeading() : ''}${notice}</section>`
       );
     }
     if (S.route === 'customers/new' || S.route === 'customers/new/tenant') {
@@ -10934,7 +10960,7 @@
     if (S.route.startsWith(claudeRentalsRoute + '/')) return renderRentBatch(S.route.slice(claudeRentalsRoute.length + 1));
     return renderOrders(orderListProducts[S.route] || 'GPT');
   }
-  function overviewSummary(asOf, appleReady) {
+  function overviewSummary(asOf, appleReady, custom) {
     if (localPhase !== 'ready' || !localData || !A.canVisit('orders/statistics')) return null;
     const hour = 3_600_000;
     const day = 24 * hour;
@@ -10964,6 +10990,19 @@
         previous: period(start - days * day, asOf - days * day)
       }];
     }));
+    if (custom) {
+      const [from, to] = custom;
+      const start = parseDate(from + 'T00:00');
+      const last = parseDate(to + 'T00:00');
+      const days = (last - start) / day + 1;
+      if (Number.isSafeInteger(days) && days > 0 && last <= midnight) {
+        const end = Math.min(asOf, last + day - 1);
+        const daysPerPoint = Math.ceil(days / 30);
+        const current = period(start, end, day * daysPerPoint);
+        current.activity.daysPerPoint = current.profit.daysPerPoint = daysPerPoint;
+        ranges.custom = { current, previous: period(start - days * day, end - days * day) };
+      }
+    }
     const periods = Object.values(ranges).flatMap(({ current, previous }) => [current, previous]);
     const periodsAt = timestamp => periods.filter(({ activity }) =>
       timestamp >= activity.start && timestamp <= activity.end);
@@ -11296,9 +11335,10 @@
       subscriptionCardRequestGeneration++;
       subscriptionEstimateRequest = undefined;
       subscriptionEstimateKey = undefined;
-      bankCardStatuses.clear();
-      frozenBankCards = [];
       retentionRefreshFailed = false;
+      bankCardStatuses.clear();
+      frozenBankCards = undefined;
+      subscriptionEstimateKey = undefined;
     },
     render,
     onClick,

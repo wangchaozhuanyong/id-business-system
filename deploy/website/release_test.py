@@ -233,6 +233,20 @@ class WebsiteReleaseTests(unittest.TestCase):
     @patch("release.require_presentation_approval")
     @patch("release.require_ancestor")
     @patch("release.git")
+    def test_card_import_release_checks_the_adapter_and_shared_asset_inputs(self, git, ancestor, approval):
+        git.return_value = remote.CARD_IMPORT_ASSET_SOURCE
+        self.assertEqual(release.require_website_scope(BASE, TARGET),
+                         ("cardImportPresentation", approval.return_value))
+        approval.assert_called_once_with(BASE, TARGET, "card-import-20261113.json",
+                                         remote.CARD_IMPORT_PRESENTATION_FILES)
+        git.return_value += "\nmodules/recharge/codexdaichong/native-routing.mjs"
+        with self.assertRaisesRegex(RuntimeError, "recharge_core_or_runtime_changed"):
+            release.require_website_scope(BASE, TARGET)
+        self.assertEqual(approval.call_count, 1)
+
+    @patch("release.require_presentation_approval")
+    @patch("release.require_ancestor")
+    @patch("release.git")
     def test_table_actions_release_only_accepts_the_reviewed_stylesheet(self, git, ancestor, approval):
         git.return_value = remote.TABLE_ACTIONS_STYLESHEET
         self.assertEqual(release.require_website_scope(BASE, TARGET),
@@ -357,6 +371,13 @@ class WebsiteReleaseTests(unittest.TestCase):
         remote.verify_presentation_bundle(bundle(base), bundle(base | {"/shell.css": {"body": "new"}}), table_assets)
         with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_bundle_scope_mismatch"):
             remote.verify_presentation_bundle(bundle(base), bundle(candidate), table_assets)
+        card_assets = remote.PRESENTATION_SCOPES["cardImportPresentation"][1]
+        previous = base | {"/admin.js": {"body": "old"}}
+        changed = previous | {name: {"body": "new"} for name in card_assets}
+        remote.verify_presentation_bundle(bundle(previous), bundle(changed), card_assets)
+        with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_bundle_scope_mismatch"):
+            remote.verify_presentation_bundle(bundle(previous), bundle(changed | {"/workspace": {"body": "new"}}),
+                                              card_assets)
 
     def test_ssm_payload_is_one_quoted_program(self):
         shell = release.script_for({"operation": "preflight", "sha": TARGET})

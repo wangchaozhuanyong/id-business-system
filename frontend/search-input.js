@@ -80,6 +80,14 @@
   }, true);
   window.IDSearchInput = {
     value(node) { return pending.get(owner(node))?.appliedValue ?? node.value; },
+    discardPage(route, id) {
+      const key = JSON.stringify([window.IDDesignAPI?.state.actor?.id, route, 'page', id]);
+      const entry = pending.get(key);
+      if (!entry) return;
+      clearTimeout(entry.timer);
+      compositions.delete(entry.node);
+      pending.delete(key);
+    },
     // Do not replace an IME's live input node during a background render.
     deferRender(root) {
       for (const node of compositions) if (visible(node) && root.contains(node)) {

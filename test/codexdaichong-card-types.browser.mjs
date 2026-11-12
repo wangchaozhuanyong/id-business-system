@@ -41,7 +41,12 @@ test('card pool renders, imports and edits shared card types', { timeout: 35_000
     importRequests.push(numbers.length);
     planPolicy = { ...planPolicy, version: planPolicy.version + 1 };
     if (numbers.length === 4) {
-      assert.deepEqual(numbers, [newNumber, firstNumber, newNumber, 'invalid']);
+      assert.deepEqual(request.cards, [
+        { card_number: newNumber, card_expiry: '01/30', card_cvc: '007', card_holder: 'Sample  Card Holder' },
+        { card_number: firstNumber, card_expiry: '01/30', card_cvc: '000', card_holder: 'Original Holder' },
+        { card_number: newNumber, card_expiry: '0130', card_cvc: '000', card_holder: '' },
+        { card_number: 'invalid', card_expiry: '01/30', card_cvc: '000', card_holder: '' }
+      ]);
       pool.push({ id: 3, last4: '0007', card_number: newNumber, allowed_plans: ['pro500'] });
       return route.fulfill({ json: { success: true, imported: 1, assignedPlans: 1, planPolicy, skipped: 2, failed: 1,
         failures: [{ index: 3, errors: ['synthetic-sensitive-failure'] }] } });
@@ -152,8 +157,10 @@ test('card pool renders, imports and edits shared card types', { timeout: 35_000
   const importBox = page.locator('#card_pool_import_box');
   const type = importBox.getByRole('combobox', { name: '银行卡类型', exact: true });
   const submit = importBox.getByRole('button', { name: '解析并导入', exact: true });
-  const input = importBox.locator('#card_pool_import_text');
+  const input = importBox.getByRole('textbox', { name: '待导入银行卡资料', exact: true });
   const receipt = importBox.getByRole('status');
+  await importBox.getByText('卡号 有效期 CVC 持卡人', { exact: true }).waitFor();
+  assert.equal(await input.getAttribute('placeholder'), '卡号 10/30 CVC\n卡号 10/30 CVC 持卡人');
   await type.locator('option[value="type-b"]').waitFor({ state: 'attached' });
   assert.equal(await type.locator('option[value="type-disabled"]').count(), 0);
   assert.equal(await submit.isDisabled(), true);
@@ -167,7 +174,19 @@ test('card pool renders, imports and edits shared card types', { timeout: 35_000
   assert.equal(placement, true);
   await type.selectOption(otherType.id);
   await importBox.getByRole('checkbox', { name: 'Pro 500' }).check();
-  await input.fill([newNumber, firstNumber, newNumber, 'invalid'].map(number => number + '|01/30|000').join('\n'));
+  const incomplete = newNumber + ' 01/30';
+  await input.fill(incomplete);
+  await submit.click();
+  await receipt.filter({ hasText: '第 1 行格式错误（请填写卡号、有效期和 CVC，用空格或竖线分隔）' }).waitFor();
+  assert.equal(await input.inputValue(), incomplete);
+  assert.equal(importRequests.length, 0);
+  await input.fill([
+    '  ' + newNumber + '   01/30   007 Sample  Card Holder  ',
+    firstNumber + '|01/30|000|Original Holder',
+    newNumber + '\t0130\t000',
+    'invalid 01/30 000',
+    ' '
+  ].join('\n'));
   await submit.click();
   await receipt.filter({ hasText: '导入 1 张，跳过重复 2 张，失败 1 张；已设置允许套餐 1 张；已确认银行卡类型 1 张，已有其他类型 1 张' }).waitFor();
   assert.equal(await input.inputValue(), '');

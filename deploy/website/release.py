@@ -9,7 +9,8 @@ import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from remote import PRESENTATION_SCOPES, REDEEM_PRESENTATION_FILES, TABLE_ACTIONS_STYLESHEET
+from remote import (CARD_IMPORT_ASSET_SOURCE, CARD_IMPORT_PRESENTATION_FILES, PRESENTATION_SCOPES,
+                    REDEEM_PRESENTATION_FILES, TABLE_ACTIONS_STYLESHEET)
 
 ACCOUNT = "098208446664"
 REGION = "ap-northeast-1"
@@ -141,6 +142,9 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False):
     elif changed == {TABLE_ACTIONS_STYLESHEET}:
         return "tableActionsPresentation", require_presentation_approval(
             base, sha, "table-actions-20261112.json", (TABLE_ACTIONS_STYLESHEET,))
+    elif changed == {CARD_IMPORT_ASSET_SOURCE}:
+        return "cardImportPresentation", require_presentation_approval(
+            base, sha, "card-import-20261113.json", CARD_IMPORT_PRESENTATION_FILES)
     elif changed:
         raise RuntimeError("recharge_core_or_runtime_changed")
 

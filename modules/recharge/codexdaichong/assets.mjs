@@ -583,6 +583,14 @@ function adaptAdminScript(source, routingScript) {
   );
   source = replaceOne(
     source,
+    "            // Parse pipe-delimited format: number|expiry|CVC|holder\n            const lines = text.split('\\n').map(l => l.trim()).filter(Boolean);",
+    String.raw`            // Normalize space-delimited rows for the existing import parser.
+            const lines = text.split('\n').map(line => line.trim()).filter(Boolean).map(line =>
+                line.includes('|') ? line : line.replace(/^(\S+)\s+(\S+)\s+(\S+)(?:\s+(.*))?$/, '$1|$2|$3|$4'));`
+  );
+  source = replaceOne(source, '（需至少 3 个字段，用 | 分隔）', '（请填写卡号、有效期和 CVC，用空格或竖线分隔）');
+  source = replaceOne(
+    source,
     "            lucide.createIcons();\n\n            try {\n                const res = await authFetch('/api/admin/cards/import', {",
     `            lucide.createIcons();
             btn.dataset.saving = 'true';
@@ -1552,13 +1560,23 @@ function adaptHtml(source, kind) {
     );
     source = replaceOne(
       source,
-      '<textarea id="card_pool_import_text" class="import-textarea"',
+      '<div class="import-box-tip">\n                        每行一条，格式：<code>卡号|有效期|CVC|持卡人</code>（持卡人可选）。',
+      '<div class="import-box-tip" id="card_pool_import_hint">\n' +
+        '                        每行一张卡，按 <code>卡号 有效期 CVC 持卡人</code> 的顺序用空格分隔。持卡人可选，也兼容竖线分隔。'
+    );
+    const cardImportTextarea = source.match(/<textarea id="card_pool_import_text" class="import-textarea"\s+placeholder="[^"]*"><\/textarea>/)?.[0];
+    if (!cardImportTextarea) throw new Error('上游界面缺少银行卡批量输入框');
+    source = replaceOne(
+      source,
+      cardImportTextarea,
       '<div class="embedded-field card-pool-import-type">' +
         '<label for="card_pool_import_type">银行卡类型<span class="required" aria-hidden="true"> *</span></label>' +
         '<select id="card_pool_import_type" class="asset-input" required disabled aria-describedby="card_pool_import_type_hint">' +
         '<option value="">请选择银行卡类型</option></select>' +
         '<p id="card_pool_import_type_hint" class="embedded-field-hint">同一批使用所选类型。已有其他类型的重复卡片可在列表修改。</p>' +
-        '</div>\n' + cardPlanImportFields + '\n                    <textarea id="card_pool_import_text" class="import-textarea"'
+        '</div>\n' + cardPlanImportFields + '\n                    <textarea id="card_pool_import_text" class="import-textarea" ' +
+        'aria-label="待导入银行卡资料" aria-describedby="card_pool_import_hint" ' +
+        'placeholder="卡号 10/30 CVC&#10;卡号 10/30 CVC 持卡人"></textarea>'
     );
     source = replaceOne(source, 'id="card_pool_import_btn" class="btn btn-success"',
       'id="card_pool_import_btn" class="btn btn-success" disabled');

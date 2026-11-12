@@ -60,10 +60,12 @@
   function overviewKey() {
     const actor = A.state.actor;
     const finance = allowed('orders/statistics');
+    const draft = A.state.drafts.get(draftKey);
     return {
       actor: actor?.id || '', role: actor?.role || '', finance,
       apple: finance && allowed('accounts/apple-balances'),
-      rechargeRequests: finance && Boolean(business?.canApproveRechargeCodes) && allowed(rechargeRequestsRoute)
+      rechargeRequests: finance && Boolean(business?.canApproveRechargeCodes) && allowed(rechargeRequestsRoute),
+      ...(finance && draft?.range === 'custom' ? { custom: draft.custom } : {})
     };
   }
 
@@ -89,12 +91,12 @@
     const snapshot = { inventory: section('inventory', stock) };
     if (key.finance) {
       const [summary, customers] = await Promise.all([
-        readSource(() => commerceReady && commerce.overviewSummary(asOf, appleReady)),
+        readSource(() => commerceReady && commerce.overviewSummary(asOf, appleReady, key.custom)),
         readSource(() => commerceReady && inventoryReady && commerce.overviewCustomerSummary(asOf))
       ]);
       snapshot.commerce = section('commerce', summary?.commerce);
       snapshot.customers = section('customers', customers);
-      for (const [range] of ranges)
+      for (const range of [...ranges.map(([id]) => id), ...(key.custom ? ['custom'] : [])])
         snapshot['profit:' + range] = section('profit:' + range, summary?.profit?.[range]);
     }
     if (key.apple) snapshot.apple = section('apple', await readSource(() =>
@@ -108,8 +110,9 @@
 
   function refreshOverview({ refresh = false } = {}) {
     if (!business) return;
-    if (refreshing) return refreshing;
     const key = overviewKey();
+    const id = JSON.stringify(key);
+    if (refreshing?.id === id) return refreshing.promise;
     const cached = business.queries.peek('overview', key);
     const last = cached?.data?.inventory?.updated;
     if (!refresh && !cached?.stale && last != null &&
@@ -118,22 +121,25 @@
     const read = () => business.queries.read('overview', key, () => loadOverview(key), {
       refresh: true, isFresh: ready
     });
-    refreshing = read().catch(error => {
+    const current = () => A.state.route === 'overview' && JSON.stringify(overviewKey()) === id;
+    const request = { id };
+    request.promise = read().catch(error => {
       // A change notification can invalidate an in-flight read. An expired session clears the entry.
-      if (error?.name === 'AbortError' && A.state.route === 'overview' &&
-          business.queries.peek('overview', key)?.stale &&
-          JSON.stringify(overviewKey()) === JSON.stringify(key)) return read();
+      if (error?.name === 'AbortError' && current() &&
+          business.queries.peek('overview', key)?.stale) return read();
       throw error;
     }).then(ready).catch(error =>
       error?.name === 'AbortError' && !business.queries.peek('overview', key)?.stale ? undefined : false
     ).finally(() => {
+      if (refreshing !== request) return;
       regionRead?.finish();
       regionRead = undefined;
       refreshing = undefined;
-      if (A.state.route === 'overview') A.render();
+      if (current()) A.render();
     });
+    refreshing = request;
     bindOverviewRead();
-    return refreshing;
+    return request.promise;
   }
 
   function sectionStatus(section) {
@@ -164,10 +170,10 @@
     return `<div class="overview-heading"><div class="section-title-row"><h2 id="overview-${id}">${title}</h2>${A.titleInfo(title, note, `overview-${id}-note`)}</div>${action}</div>`;
   }
 
-  function renderControls(items, selected, name, label) {
+  function renderControls(items, selected, name, label, extra = '') {
     return `<div class="overview-controls" role="group" aria-label="${label}">${items.map(([id, title]) =>
       A.button(title, 'overview-' + name, id === selected ? 'primary' : '', '',
-        `data-value="${id}" aria-pressed="${id === selected}"`)).join('')}</div>`;
+        `data-value="${id}" aria-pressed="${id === selected}"`)).join('')}${extra}</div>`;
   }
 
   function metricCard(id, value, note, extra = '') {
@@ -279,18 +285,24 @@
     const isProfit = mode === 'profit';
     const period = isProfit ? earnings?.current : activity?.current;
     const series = period?.series || [];
-    const label = value => (range === 'today' ? hourFormatter : dateFormatter).format(value);
+    const daysPerPoint = period?.daysPerPoint || 1;
+    const crossesYear = period && dayFormatter.format(period.start).slice(0, 4) !== dayFormatter.format(period.end).slice(0, 4);
+    const dayLabel = value => crossesYear ? dayFormatter.format(value) : dateFormatter.format(value);
+    const label = value => range === 'today' ? hourFormatter.format(value) : dayLabel(value);
+    const detailLabel = value => daysPerPoint > 1
+      ? `${dayLabel(value)} 至 ${dayLabel(Math.min(period.end, value + (daysPerPoint - 1) * 86_400_000))}`
+      : label(value);
     const empty = !period ? sectionStatus(section)
       : isProfit && period.pending && !period.accounted ? '本期利润待核算'
       : !isProfit && !period.orders && !period.cancelled ? '该时间范围没有订单记录' : '';
-    const details = series.map(row => `<li><time datetime="${new Date(row.at).toISOString()}">${label(row.at)}</time>
+    const details = series.map(row => `<li><time datetime="${new Date(row.at).toISOString()}">${detailLabel(row.at)}</time>
       <span>${isProfit
         ? `${profitValue(row) == null ? '利润待核算' : `${moneyText(profitValue(row))} CNY`}${row.pending ? ` · 待核算 ${row.pending} 笔` : ''}`
         : `订单 ${countText(row.orders)} 笔 · 撤单 ${countText(row.cancelled)} 笔`}</span></li>`).join('');
     return `<section class="panel overview-section" aria-labelledby="overview-trend"><div class="panel-body">
-      ${heading('trend', '经营趋势', '今日按小时统计，其他范围按北京时间自然日统计。订单和撤单按创建时间归集。', link('查看订单统计', 'orders/statistics'))}
+      ${heading('trend', '经营趋势', '今日按小时统计，其他范围按北京时间日期统计。长区间按多日分组，订单和撤单按创建时间归集。', link('查看订单统计', 'orders/statistics'))}
       <div class="overview-chart-tools">${renderControls(chartModes, mode, 'chart', '趋势指标')}
-        <div class="overview-legend">${isProfit
+        <div class="overview-legend">${daysPerPoint > 1 ? `<span>每 ${daysPerPoint} 天汇总</span>` : ''}${isProfit
           ? '<span><i></i>已核算利润（CNY）</span><span><i class="overview-key-incomplete"></i>有待核算</span>'
           : '<span><i></i>订单</span><span><i class="overview-key-cancelled"></i>撤单</span>'}</div>
       </div>
@@ -298,7 +310,7 @@
       ${period && section?.phase === 'error' ? `<p class="overview-section-note overview-warning">${E(sectionStatus(section))}</p>` : ''}
       ${activity?.current ? `<p class="overview-insight">${A.icon('info')}<span>${E(orderInsight(activity))}</span></p>` : ''}
       ${details ? `<details class="overview-daily" data-overview-details${detailsOpen ? ' open' : ''}>
-        <summary>查看${range === 'today' ? '每小时' : '每日'}数据</summary><ul>${details}</ul></details>` : ''}
+        <summary>查看${range === 'today' ? '每小时' : daysPerPoint > 1 ? '分段' : '每日'}数据</summary><ul>${details}</ul></details>` : ''}
       </div></section>`;
   }
 
@@ -443,6 +455,7 @@
   }
 
   function renderToolbar(finance, activity, section, range) {
+    const custom = range === 'custom';
     const title = activity ? windowText(activity.current) : finance ? '统计区间' : '库存快照';
     const compactTitle = activity
       ? `${dateFormatter.format(activity.current.start)}–${dateFormatter.format(activity.current.end)}` : title;
@@ -457,9 +470,13 @@
         ${A.textAction(compactTitle, 'overview-period', 'aria-label="查看统计区间与更新时间" aria-haspopup="dialog"', 'overview-period-compact')}
       </div>
       <div class="overview-actions">
-        ${finance ? renderControls(ranges, range, 'range', '统计时间范围') +
+        ${finance ? renderControls(ranges, range, 'range', '统计时间范围',
+          A.button('自定义日期', 'overview-date-range', custom ? 'primary' : '', '',
+            `aria-haspopup="dialog" aria-pressed="${custom}"`)) +
           `<select id="overview-range-compact" aria-label="统计时间范围">${ranges.map(([id, label]) =>
-            `<option value="${id}"${id === range ? ' selected' : ''}>${label}</option>`).join('')}</select>` : ''}
+            `<option value="${id}"${id === range ? ' selected' : ''}>${label}</option>`).join('')}${
+            custom ? '<option value="custom" selected>自定义区间</option>' : ''}
+            <option value="choose-custom">自定义日期</option></select>` : ''}
         ${business ? `<button type="button" class="button overview-toolbar-action${section?.phase === 'error' ? ' overview-warning' : ''}"
           data-action="overview-refresh" aria-label="刷新数据" aria-describedby="overview-toolbar-status">${A.icon('refresh')}<span>刷新数据</span></button>` : ''}
         <span class="overview-design-label${section?.phase === 'error' ? ' overview-warning' : ''}" title="${E(status)}">
@@ -494,7 +511,7 @@
     const finance = allowed('orders/statistics');
     const items = finance ? [
       ...metrics.map(([, title, note]) => [title, note]),
-      ['时间与对比', '近 7 天和近 30 天包含今日。比较区间向前平移对应天数，截止到与本期相同的北京时间。待办、库存和客户状态取当前快照。'],
+      ['时间与对比', '预设区间包含今日。自定义区间包含起止日，今日截止到本次快照。比较区间向前平移相同天数。待办、库存和客户状态取当前快照。'],
       ['数据覆盖', '统计已录入的订单和已同步的代充订单。网站访问量、全量代充任务在各自模块核对。站点与执行器状态见监控中心。'],
       ['其他业务栏目', '网站访问和谷歌表格同步状态可在数据中心查看。Gemini、Grok 和 Claude 代充见各自栏目。']
     ] : [];
@@ -527,9 +544,27 @@
     if (!items.some(([id]) => id === value)) return;
     A.state.drafts.set(draftKey, { ...A.state.drafts.get(draftKey), [field]: value });
     A.render();
+    if (field === 'range') void refreshOverview();
+  }
+
+  function openDateRange() {
+    if (!overviewKey().finance) return;
+    const today = dayFormatter.format(Date.now());
+    const selected = A.state.drafts.get(draftKey)?.custom || [
+      dayFormatter.format(Date.now() - 6 * 86_400_000), today
+    ];
+    A.openDrawer('选择统计日期', '按北京时间统计，起止日均纳入统计。',
+      `<form id="overview-date-form" novalidate>
+        ${A.field('开始日期', 'overview-date-from', A.input('overview-date-from', selected[0], `type="date" max="${today}" required`), true)}
+        ${A.field('结束日期', 'overview-date-to', A.input('overview-date-to', selected[1], `type="date" max="${today}" required`), true)}
+      </form>`, '<button type="submit" class="button primary" form="overview-date-form">应用日期</button>');
   }
 
   function onClick(action, node) {
+    if (action === 'overview-date-range') {
+      openDateRange();
+      return true;
+    }
     if (action === 'overview-refresh') {
       void A.withActionFeedback(node, () => refreshOverview({ refresh: true }),
         { pending: '', success: '总览数据已刷新', failure: '部分数据未能更新，请查看对应区块' });
@@ -553,17 +588,44 @@
     return false;
   }
 
+  function onSubmit(form) {
+    if (form.id !== 'overview-date-form') return false;
+    if (A.state.route !== 'overview' || !overviewKey().finance) return true;
+    const from = form.elements['overview-date-from'].value;
+    const to = form.elements['overview-date-to'].value;
+    const today = dayFormatter.format(Date.now());
+    const date = /^\d{4}-\d{2}-\d{2}$/;
+    const fromError = !date.test(from) ? '请选择开始日期' : from > today ? '开始日期不能晚于今天' : '';
+    const toError = !date.test(to) ? '请选择结束日期' : to > today ? '结束日期不能晚于今天' :
+      from && to < from ? '结束日期不能早于开始日期' : '';
+    A.setError('overview-date-from', fromError);
+    A.setError('overview-date-to', toError);
+    if (fromError || toError) return true;
+    A.state.drafts.set(draftKey, { ...A.state.drafts.get(draftKey), range: 'custom', custom: [from, to] });
+    A.closeDrawer();
+    A.render();
+    A.$('[data-action="overview-date-range"]')?.focus({ preventScroll: true });
+    A.$('#overview-range-compact')?.focus({ preventScroll: true });
+    void refreshOverview();
+    return true;
+  }
+
   A.modules.overview = { refresh: refreshOverview };
   window.IDDesignModules.push({
-    id: 'overview', matches: route => route === 'overview', render, onClick,
+    id: 'overview', matches: route => route === 'overview', render, onClick, onSubmit,
     onChange(node) {
       if (node.id !== 'overview-range-compact') return false;
+      if (node.value === 'choose-custom') {
+        node.value = A.state.drafts.get(draftKey)?.range || 'week';
+        openDateRange();
+        return true;
+      }
       updateFilter('range', node.value);
       A.$('#overview-range-compact')?.focus({ preventScroll: true });
       return true;
     },
     afterRender({ routeChanged } = {}) {
-      if (refreshing) bindOverviewRead();
+      if (refreshing?.id === JSON.stringify(overviewKey())) bindOverviewRead();
       const details = A.$('#main [data-overview-details]');
       details?.addEventListener('toggle', () => {
         if (!details.isConnected) return;

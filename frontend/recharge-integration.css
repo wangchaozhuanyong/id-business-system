@@ -212,13 +212,13 @@
 .bit-local__drawer-header h2 { font-size: 17px; margin: 0; }
 .bit-local__drawer-footer { justify-content: flex-end; border-top: 1px solid var(--line); }
 .bit-local__drawer-body { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 24px var(--panel-padding-inline); }
-.bit-local__drawer-body .field { grid-template-columns: 86px minmax(0,1fr); gap: 12px; margin-bottom: 20px; }
+.bit-local__drawer-body .field { --field-label-width: 86px; --field-gap: 12px; margin-bottom: 20px; }
 .bit-local__proxy-editor::backdrop { background: rgb(0 0 0 / 25%); }
 @media (max-width: 600px) {
   .bit-local__workspace-bar { gap: 8px; }
   .bit-local__section .panel-heading { gap: 8px; }
-  .bit-local__section .panel-body > .field { grid-template-columns: 64px minmax(0,1fr); gap: 10px; }
+  .bit-local__section .panel-body > .field { --field-label-width: 64px; --field-gap: 10px; }
   .bit-local__filters select { flex: 1 1 120px; }
-  .bit-local__drawer-body .field { grid-template-columns: 70px minmax(0,1fr); gap: 10px; }
+  .bit-local__drawer-body .field { --field-label-width: 70px; --field-gap: 10px; }
   .bit-local__execution { padding-block: 14px; }
 }

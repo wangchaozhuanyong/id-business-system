@@ -60,8 +60,9 @@
   border-radius: 4px;
   margin-left: 5px;
   font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
-.tab:is(.active, [aria-selected='true']) .tab-count {
+:is(.tab:is(.active, [aria-selected='true']), .completion-filter[aria-pressed='true']) .tab-count {
   color: var(--primary);
   background: var(--primary-soft);
 }

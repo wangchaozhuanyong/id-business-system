@@ -124,8 +124,11 @@
     const header = `<div class="recharge-review-heading"><div class="section-title-row"><h3 id="code-request-history-heading">${title}</h3>${A.titleInfo(title,
       canApprove ? '管理员和超级管理员可批准、驳回或核对申请。待处理包含待审核和待发码核对；已处理包含已发码和已驳回。详情可查看使用统计、驳回原因及批次明细。'
         : '仅显示本人申请。待处理包含待审核和待发码核对；管理员审核后可查看发放结果。详情可查看驳回原因及批次明细。', 'code-request-history-help')}</div><span class="recharge-review-scope">${canApprove ? '管理员审批' : '仅本人记录'}</span></div>`;
-    const filters = `<div class="tabs recharge-request-filters" role="tablist" aria-label="申请记录状态">${requestFilters.map(([key, label]) =>
-      `<button type="button" class="tab${key === filter ? ' active' : ''}" role="tab" aria-selected="${key === filter}" aria-controls="recharge-request-records" data-action="order-request-filter" data-id="${key}"${!view.data || saving ? ' disabled' : ''}>${label}<span class="recharge-filter-count">${view.data ? rows.filter(row => requestMatches(row, key)).length : '—'}</span></button>`).join('')}</div>`;
+    const filters = `<div class="tabs recharge-request-filters" role="tablist" aria-label="申请记录状态">${requestFilters.map(([key, label]) => {
+      const countId = 'recharge-request-count-' + key;
+      const count = Array.isArray(view.data?.requests) ? rows.filter(row => requestMatches(row, key)).length : '—';
+      return `<button type="button" class="tab${key === filter ? ' active' : ''}" role="tab" aria-selected="${key === filter}" aria-label="${label}" aria-describedby="${countId}" aria-controls="recharge-request-records" data-action="order-request-filter" data-id="${key}"${!view.data || saving ? ' disabled' : ''}>${label}<span class="tab-count" id="${countId}">${count}</span></button>`;
+    }).join('')}</div>`;
     if (!view.loaded && !view.data) return header + filters + A.empty('正在读取申请记录', '');
     const page = listPage(requestRoute, rows.filter(row => requestMatches(row, filter)));
     const actionsData = view.error ? { ...view.data, stock: null } : view.data;
