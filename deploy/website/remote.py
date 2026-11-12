@@ -44,6 +44,7 @@ LAUNCHERS = ("run-app", "app-entry.mjs", "check-app.mjs")
 CANARY_LOG = "app-canary.log"
 CANARY_RETRY_LOG = "app-canary.retry.log"
 CANARY_MAILBOX_UNAVAILABLE = r"(?m)^RelayError: Vendure 邮箱服务暂时不可用，请重试\r?$"
+CANARY_MAILBOX_RETRY_DELAY = 30
 MONITORING = FORMAL / "backup-monitoring"
 MONITORING_RECEIPTS = MONITORING / "receipts"
 MONITORING_UNIT = "id-business-independent-backup-monitoring"
@@ -283,7 +284,10 @@ def canary(sha, ops):
             return bool(unit_suffix)
         if unit_suffix or not re.search(CANARY_MAILBOX_UNAVAILABLE, read_canary_log(log_path)[1]):
             raise ReleaseError("isolated_app_canary_failed")
-        time.sleep(3)
+        # Leave time for the mailbox API to recover from a runtime restart.
+        require(deadline - time.monotonic() >= CANARY_MAILBOX_RETRY_DELAY + 16,
+                "isolated_app_canary_retry_timeout")
+        time.sleep(CANARY_MAILBOX_RETRY_DELAY)
 
 
 def canary_diagnostics(text):
