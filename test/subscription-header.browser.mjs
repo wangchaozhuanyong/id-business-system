@@ -116,6 +116,9 @@ test('订阅导航与当前内容共用一行，覆盖三种视图、宽窄屏�
                 assert(Math.abs(item.y - size.items[0].y) <= 1, '统计不再拆成上下两行');
                 assert(Math.abs(item.label.y - size.items[0].label.y) <= 1, '标签真实文字对齐');
                 assert(Math.abs(item.value.y - size.items[0].value.y) <= 1, '数字真实文字对齐');
+                const center = size.content.y + size.contentClientHeight / 2;
+                assert(Math.abs(item.label.y + item.label.height / 2 - center) <= 3, '标签文字在滚动条以外的可见区域垂直居中');
+                assert(Math.abs(item.value.y + item.value.height / 2 - center) <= 3, '数字文字在滚动条以外的可见区域垂直居中');
                 assert(item.value.left >= item.label.right, '数字在标签右侧且不重叠');
               }
               if (width <= 390) {
