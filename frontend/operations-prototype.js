@@ -1473,11 +1473,11 @@
     ];
     if (!localData) return listPanel('审计日志', '仅记录当前原型中的演示操作，不包含密码、Session、安全码或生产日志。', columns, audit);
     const tableId = '运营审计日志';
-    return header('审计日志', '按北京时间记录业务操作及实际操作账号。') +
-      `<section class="panel"><div class="toolbar"><div class="toolbar-left">${search('搜索操作人、操作、对象或编号', auditViews.audit.query)}</div><div class="toolbar-right" data-page-actions>${button('列设置', 'column-settings', '', 'columns', `data-table-id="${tableId}"`)}${button(auditViews.audit.error ? '重试读取' : '刷新日志', 'ops-audit-refresh')}</div></div><p class="tool-report-meta">可查询最近 1,000 条业务日志。</p>${auditPageContent('audit', columns, tableId)}</section>`;
+    return header('审计日志', '按北京时间记录业务操作及实际操作账号。本地可查询最近 1,000 条业务日志。') +
+      `<section class="panel"><div class="toolbar"><div class="toolbar-left">${search('搜索操作人、操作、对象或编号（最近 1,000 条）', auditViews.audit.query)}<span class="toolbar-meta">可查最近 1,000 条</span></div><div class="toolbar-right" data-page-actions>${button('列设置', 'column-settings', '', 'columns', `data-table-id="${tableId}"`)}${button(auditViews.audit.error ? '重试读取' : '刷新日志', 'ops-audit-refresh')}</div></div>${auditPageContent('audit', columns, tableId)}</section>`;
   }
   function renderLoginLogs() {
-    const title = header('登录日志', '统一账号的登录与退出记录。充值服务原有记录和 IP 封禁可在对应页签查看。');
+    const title = header('登录日志', '统一账号的登录与退出记录。检索范围为最近 1,000 条业务日志；充值服务原有记录和 IP 封禁可在对应页签查看。');
     if (!isAdmin()) return title + `<section class="panel">${empty('无权查看登录日志', '请使用管理员账号。')}</section>`;
     const tabs = `<div class="tabs" role="tablist" aria-label="登录日志来源" data-page-actions="tabs">${[
       ['system', '系统登录'],
@@ -1496,9 +1496,8 @@
       { id: 'action', label: '事件' }
     ];
     return title + tabs + `<section class="panel">
-      <div class="toolbar"><div class="toolbar-left">${search('搜索账号、事件或编号', auditViews.login.query)}</div>
+      <div class="toolbar"><div class="toolbar-left">${search('搜索账号、事件或编号（最近 1,000 条）', auditViews.login.query)}<span class="toolbar-meta">检索最近 1,000 条</span></div>
       <div class="toolbar-right">${button(auditViews.login.error ? '重试读取' : '刷新日志', 'ops-audit-refresh')}</div></div>
-      <p class="tool-report-meta">从最近 1,000 条业务日志中查找系统登录与退出记录。</p>
       ${auditPageContent('login', columns, '系统登录日志')}
     </section>`;
   }
