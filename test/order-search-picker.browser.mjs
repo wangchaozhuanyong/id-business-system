@@ -168,27 +168,15 @@ test('订单下拉框在展开后搜索，保留联动、草稿与快捷新增',
     });
     assert(geometry.customer.width >= geometry.width - 1, JSON.stringify(geometry));
     assert(geometry.email.top >= geometry.customer.bottom);
-    if (geometry.width >= 640) {
-      assert(Math.abs(geometry.email.top - geometry.owner.top) <= 1 && geometry.owner.left >= geometry.email.right,
-        '宽抽屉的邮箱和归属人同排且互不挤压');
-      assert(Math.abs(geometry.email.width - geometry.owner.width) <= 1);
-    } else {
-      assert(geometry.email.width >= geometry.width - 1 && geometry.owner.top >= geometry.email.bottom,
-        '窄抽屉的邮箱和归属人按顺序通栏排列');
-    }
+    assert(geometry.email.width >= geometry.width - 1, '邮箱账号单独一行占满宽度');
+    assert(geometry.owner.top >= geometry.email.bottom - 1, '归属人位于邮箱账号下方独立成行');
+    assert(geometry.owner.width >= geometry.width - 1, '归属人通栏显示完整操作者资料');
     assert(geometry.labelsFit && geometry.actionsFit && geometry.scrollWidth <= geometry.clientWidth + 1);
     if (width >= 753) {
-      assert.equal(geometry.email.top, geometry.owner.top);
-      assert.equal(geometry.email.left, geometry.payment.left);
-      assert.equal(geometry.owner.left, geometry.type.left);
-      assert.equal(geometry.email.width, geometry.payment.width);
-      assert.equal(geometry.owner.width, geometry.type.width);
       assert.equal(geometry.payment.top, geometry.type.top);
       assert.equal(geometry.card.top, geometry.tail.top);
       assert(geometry.card.top >= geometry.type.bottom);
     } else {
-      assert(geometry.email.width >= geometry.width - 1);
-      assert(geometry.owner.top >= geometry.email.bottom - 1);
       assert(geometry.type.top >= geometry.payment.bottom);
       assert(geometry.card.top >= geometry.type.bottom);
       assert(geometry.tail.top >= geometry.card.bottom);
