@@ -57,6 +57,8 @@ const microsoftMailboxConfig = await readToolConfig(
 
 将相同参数传给 `server/tools/online-tools-preflight.mjs` 检查私有文件权限和字段。真实验收需在服务配置后逐站对照 Cloudflare 报表，并统一域名、机器人过滤条件、日期和时区。服务端按站点和时间范围缓存报表 60 秒。
 
+正式主机沿用 `independent-online-tools` 的 systemd 加密凭据，在现有 JSON 顶层增加 `cloudflare` 对象，结构与上述单独配置相同。发布流程仅为已核验的 `app-entry.mjs` 补齐读取接入；没有该字段时保持待接入状态，有字段但格式或私有文件校验失败时停止启动。凭据仅经现有标准输入进入容器，并在 `/credentials` 内存文件系统中以 `0600` 读取，不加入仓库、资源包、命令参数或发布日志。专用令牌应使用目标账户的 `Account Analytics Read`，限制正式服务器出口 IP；该权限在 Cloudflare 侧属于账户级，应用查询另以这三个域名和对应站点标识严格过滤。
+
 ## 线上配置与新版接入
 
 已核对成功的 [生产发布记录](https://github.com/wangchaozhuanyong/id-business-system/actions/runs/40105506608) 对应源码和部署清单，以及原系统 GA4 和邮箱接入说明。生产 ID API readiness 和装修网站公开页面均返回 HTTP 200。以下是部署契约与新版待验收项，公开健康检查只覆盖对应端点。

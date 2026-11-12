@@ -14,8 +14,50 @@ import vendure_admission
 BASE = "a" * 40
 TARGET = "b" * 40
 
+ANALYTICS_LAUNCHER = """const { analytics, visits, microsoft } = JSON.parse(toolConfig);
+for (const [name, value] of [
+  ['analytics', JSON.stringify(analytics)],
+  ['visits', visits],
+  ['microsoft', JSON.stringify(microsoft)]
+]) writeFileSync('/credentials/' + name, value, { flag: 'wx', mode: 0o600 });
+const [websiteAnalyticsConfig, websiteVisitsSecret, microsoftMailboxConfig] = await Promise.all([
+  readToolConfig('/credentials/analytics', 'website-analytics'),
+  readToolConfig('/credentials/visits', 'website-visits'),
+  readToolConfig('/credentials/microsoft', 'microsoft-mailbox')
+]);
+await startPreview(port, {
+  websiteAnalyticsConfig,
+  websiteVisitsSecret,
+  microsoftMailboxConfig
+});
+"""
+
 
 class WebsiteReleaseTests(unittest.TestCase):
+    def test_storefront_analytics_uses_private_config_and_is_idempotent(self):
+        result = remote.wire_storefront_analytics(ANALYTICS_LAUNCHER)
+        self.assertIn("readToolConfig(cloudflare === undefined ? undefined : '/credentials/cloudflare', 'website-cloudflare')", result)
+        self.assertIn("...(cloudflare === undefined ? [] : [['cloudflare', JSON.stringify(cloudflare)]])", result)
+        self.assertIn("{ flag: 'wx', mode: 0o600 }", result)
+        self.assertIn("  websiteAnalyticsConfig,\n  websiteCloudflareConfig,\n  websiteVisitsSecret,", result)
+        self.assertEqual(remote.wire_storefront_analytics(result), result)
+        # Original credentials and launcher behavior outside these anchors stay intact.
+        prefix, suffix = "const bridgeSecret = source;\n", "\ncheckOriginalIntegrations();\n"
+        self.assertEqual(remote.wire_storefront_analytics(prefix + ANALYTICS_LAUNCHER + suffix),
+                         prefix + result + suffix)
+
+    def test_storefront_analytics_rejects_drift_or_partial_wiring(self):
+        for content in (
+            ANALYTICS_LAUNCHER.replace("JSON.parse(toolConfig)", "loadDifferentConfig()"),
+            ANALYTICS_LAUNCHER + "\n  websiteAnalyticsConfig,\n",
+            ANALYTICS_LAUNCHER.replace("  websiteAnalyticsConfig,", "  websiteAnalyticsConfig,\n  websiteCloudflareConfig,"),
+            remote.wire_storefront_analytics(ANALYTICS_LAUNCHER)
+                .replace("'website-cloudflare'", "'website-analytics'"),
+        ):
+            with self.subTest(content=content), self.assertRaisesRegex(
+                    remote.ReleaseError, "unexpected_storefront_analytics_launcher"):
+                remote.wire_storefront_analytics(content)
+
     @patch("release.git")
     def test_rejects_a_main_that_changed(self, git):
         git.side_effect = [TARGET, f"{BASE}\trefs/heads/main"]

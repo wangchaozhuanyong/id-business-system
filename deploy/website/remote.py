@@ -180,6 +180,32 @@ def mount_storefront_admission(content):
     return content.replace(monitored, configured)
 
 
+def wire_storefront_analytics(content):
+    """Read the optional Cloudflare configuration from the existing sealed tools credential."""
+    replacements = (
+        ("const { analytics, visits, microsoft } = JSON.parse(toolConfig);",
+         "const { analytics, visits, microsoft, cloudflare } = JSON.parse(toolConfig);"),
+        ("  ['microsoft', JSON.stringify(microsoft)]\n",
+         "  ['microsoft', JSON.stringify(microsoft)],\n"
+         "  ...(cloudflare === undefined ? [] : [['cloudflare', JSON.stringify(cloudflare)]])\n"),
+        ("const [websiteAnalyticsConfig, websiteVisitsSecret, microsoftMailboxConfig] = await Promise.all([",
+         "const [websiteAnalyticsConfig, websiteVisitsSecret, microsoftMailboxConfig, websiteCloudflareConfig] = await Promise.all(["),
+        ("  readToolConfig('/credentials/microsoft', 'microsoft-mailbox')\n",
+         "  readToolConfig('/credentials/microsoft', 'microsoft-mailbox'),\n"
+         "  readToolConfig(cloudflare === undefined ? undefined : '/credentials/cloudflare', 'website-cloudflare')\n"),
+        ("  websiteAnalyticsConfig,\n", "  websiteAnalyticsConfig,\n  websiteCloudflareConfig,\n"),
+    )
+    if "websiteCloudflareConfig" in content or "['cloudflare'," in content:
+        require(all(content.count(new) == 1 for _, new in replacements),
+                "unexpected_storefront_analytics_launcher")
+        return content
+    require(all(content.count(old) == 1 for old, _ in replacements),
+            "unexpected_storefront_analytics_launcher")
+    for old, new in replacements:
+        content = content.replace(old, new)
+    return content
+
+
 def presentation_scope(plan):
     scopes = [name for name in PRESENTATION_SCOPES if name in plan]
     require(len(scopes) <= 1, "recharge_presentation_approval_mismatch")
@@ -250,6 +276,8 @@ def stage(plan, release):
             require(content.count("sha=" + base) == 1, "live_launcher_revision_mismatch")
             content = mount_storefront_admission(
                 mount_backup_monitoring(content.replace("sha=" + base, "sha=" + sha)))
+        elif name == "app-entry.mjs":
+            content = wire_storefront_analytics(content)
         elif name == "check-app.mjs":
             content = update_canary_asset_refs(content, (live / "source/frontend/index.html").read_text(),
                                                (source / "frontend/index.html").read_text())
