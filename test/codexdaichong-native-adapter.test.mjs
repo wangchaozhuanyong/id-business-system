@@ -127,6 +127,10 @@ test('the outer adapter uses native authentication without exposing its token or
   assert.equal((await request('/api/admin/login', superUser, {})).status, 404);
   assert.equal((await request('/api/admin/cards?token=forged', superUser)).status, 404);
   assert.equal((await request('/api/admin/cards%2Fother', superUser)).status, 404);
+  for (const path of ['/api/admin/gpt-api', '/api/admin/gpt-api/test', '/api/admin/gpt-api/status', '/api/task-captcha/fixture']) {
+    assert.equal((await request(path, superUser)).status, 404);
+    assert.equal((await request(path, superUser, {})).status, 404);
+  }
   assert.equal(requests.length, 0);
   const session = await request('/api/admin/session', admin);
   assert.equal((await session.json()).token, null);
@@ -146,6 +150,8 @@ test('the outer adapter uses native authentication without exposing its token or
   assert.equal((await request('/api/admin/screenshots?path=checkout_debug%2Ffixture.png', admin)).status, 200);
   assert.equal(requests.at(-1).path, '/api/admin/screenshots?path=checkout_debug%2Ffixture.png');
   assert.equal((await request('/api/admin/orbitcard/products', admin)).status, 200);
+  assert.equal((await request('/api/admin/orbitcard/config', customer)).status, 403);
+  assert.equal((await request('/api/admin/orbitcard/config', admin)).status, 200);
   for (const action of ['check', 'commit', 'receipt']) {
     const path = '/api/admin/cdks/returns/' + action;
     assert.equal((await request(path, superUser, { synthetic: true })).status, 403, '普通管理签名不能直接调用归还内部接口');

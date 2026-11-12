@@ -151,8 +151,11 @@ test('confirmed failure stays bound to the observed original job and exposes onl
   assert.deepEqual(Object.keys(failed.body).sort(), ['id', 'message', 'plan', 'stage', 'status', 'updatedAt']);
 });
 
-test('only an explicit route rejection before execution is definitive; other missing jobs remain unknown', async t => {
-  for (const explicit of [true, false]) {
+test('only explicit route and plan-card rejections before execution are definitive', async t => {
+  for (const [code, status, explicit] of [
+    ['recharge_route_unavailable', 409, true], ['recharge_route_unavailable', 409, false],
+    ['recharge_plan_cards_unavailable', 503, true], ['recharge_plan_cards_unavailable', 503, false]
+  ]) {
     const f = fixture(t);
     const submitted = (await f.vendure('submit', { code: 'synthetic-code', session })).body;
     let starts = 0;
@@ -164,8 +167,8 @@ test('only an explicit route rejection before execution is definitive; other mis
       }
       if (url.pathname === '/api/public/runtime') return Response.json({ success: true });
       assert.equal(url.pathname, '/api/run-process'); starts++;
-      return Response.json({ success: false, code: 'recharge_route_unavailable',
-        ...(explicit ? { execution_started: false } : {}) }, { status: 409 });
+      return Response.json({ success: false, code,
+        ...(explicit ? { execution_started: false } : {}) }, { status });
     });
     const run = createVendureCodexdaichongWorker({
       bridgeUrl: 'http://127.0.0.1:31992', upstreamUrl: 'http://127.0.0.1:31993',

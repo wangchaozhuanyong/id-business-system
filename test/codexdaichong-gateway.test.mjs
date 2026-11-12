@@ -11,6 +11,36 @@ const prefix = '/integrations/codexdaichong';
 const member = { id: 'u-1', email: 'member@example.test', admin: false, sensitive: false };
 const admin = { ...member, id: 'u-2', admin: true, sensitive: true };
 
+test('only a committed card-plan write publishes its private version', async t => {
+  const origin = 'https://cards.example.test', versions = [];
+  let status = 409, marker = '8';
+  const engine = await listen(t, (req, res) => {
+    assert.equal(req.url, '/api/admin/cards/plan-policy');
+    assert.equal(req.method, 'PUT');
+    req.resume();
+    res.writeHead(status, { 'Content-Type': 'application/json', 'X-ID-Recharge-Card-Plan-Version': marker });
+    res.end(JSON.stringify({ success: status === 200 }));
+  });
+  const gateway = createCodexdaichongGateway({
+    upstreamUrl: engine, publicOrigin: origin, secret: randomBytes(48).toString('base64url'),
+    getUnifiedPrincipal: () => admin, onCardPlanChange: version => versions.push(version)
+  });
+  const host = await listen(t, gateway.handle);
+  const write = () => fetch(host + prefix + '/api/admin/cards/plan-policy', {
+    method: 'PUT', headers: { Origin: origin, 'Content-Type': 'application/json' }, body: '{}'
+  });
+  assert.equal((await write()).status, 409);
+  assert.deepEqual(versions, []);
+  status = 200;
+  const response = await write();
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('x-id-recharge-card-plan-version'), null);
+  assert.deepEqual(versions, [8]);
+  marker = 'invalid';
+  assert.equal((await write()).status, 200);
+  assert.deepEqual(versions, [8]);
+});
+
 test('删除关联卡前先留存订单资料；留存失败不会转发删除，未授权请求不触发留存', async t => {
   const origin = 'https://cards.example.test', events = [];
   const engine = await listen(t, (req, res) => {
@@ -129,6 +159,13 @@ test('browser progress uses only confirmed native receipts and never resends a s
   assert.equal((await (await submit()).json()).notAccepted, undefined);
   receipt.body = { success: false, message: '系统维护中，请稍后再试', notAccepted: true, code: 'maintenance_mode', jobKey };
   assert.equal((await (await submit()).json()).notAccepted, undefined);
+  receipt.body = { success: false, code: 'recharge_plan_cards_unavailable', execution_started: false, message: 'internal card detail' };
+  assert.deepEqual(await (await submit()).json(), {
+    success: false, notAccepted: true, code: 'recharge_plan_cards_unavailable',
+    message: '该套餐暂无可用银行卡，请稍后再试或联系客服。'
+  });
+  delete receipt.body.execution_started;
+  assert.equal((await (await submit()).json()).notAccepted, undefined);
   receipt = {
     status: 200,
     body: { success: true, jobKey, message: '正在恢复原任务', stage: 'paid', session: 'private-fixture' }
@@ -136,7 +173,7 @@ test('browser progress uses only confirmed native receipts and never resends a s
   assert.deepEqual(await (await submit()).json(), { success: true, jobKey });
   receipt.body.message = '任务已启动，正在为您开通中...';
   assert.deepEqual(await (await submit()).json(), { success: true, jobKey, stage: 'preparing' });
-  assert.equal(submissions, 5);
+  assert.equal(submissions, 7);
 
   const generic = (await lookup(path)).data;
   assert.equal(generic.stage, undefined);
@@ -147,19 +184,15 @@ test('browser progress uses only confirmed native receipts and never resends a s
     captcha: { status: 'pending', id: 'private-id', url: 'https://example.test/private', expiresAt: '1794270000' }
   };
   const presentedTask = (await lookup(path)).data;
-  const captchaId = presentedTask.captcha.id;
-  assert.match(captchaId, /^[A-Za-z0-9_-]{22}$/);
   assert.deepEqual(presentedTask, {
     jobKey, status: 'running', isTerminal: false, progress: 99, stage: 'payment_details',
-    captcha: { stage: 'awaiting_captcha', id: captchaId, expiresAt: new Date(1794270000000).toISOString() }
+    captcha: null
   });
   assert.deepEqual(
     await lookup('/api/task-status/%66ixture%2Djob-1%20'),
     await lookup(path),
     'encoded equivalents must receive the same safe projection'
   );
-  task.captcha.id = 'new-private-id';
-  assert.notEqual((await lookup(path)).data.captcha.id, captchaId);
   task.message = '日志提示：支付失败，未支付成功';
   assert.equal((await lookup(path)).data.stage, undefined);
   task.message = '付款成功';
@@ -178,7 +211,7 @@ test('browser progress uses only confirmed native receipts and never resends a s
 
   assert.deepEqual((await lookup('/api/cdk/query?cdk=KC-SYNTHETIC')).data, { status: '开通中', jobKey });
   assert.deepEqual((await lookup('/api/cdk/query?cdk=KC-USED')).data, { status: '已使用', jobKey: null });
-  assert.equal(submissions, 5);
+  assert.equal(submissions, 7);
 });
 
 test('proxy import normalizes a complete batch before forwarding and rejects invalid or unauthorized writes', async t => {
@@ -237,7 +270,7 @@ async function listen(t, handler) {
   return 'http://127.0.0.1:' + server.address().port;
 }
 
-test('gateway accepts the unified session only and preserves upstream JSON and CAPTCHA semantics', async (t) => {
+test('gateway preserves unified-session JSON requests and blocks the retired provider routes', async (t) => {
   const secret = randomBytes(48).toString('base64url');
   const upstreamRequests = [];
   const engine = await listen(t, async (req, res) => {
@@ -334,18 +367,28 @@ test('gateway accepts the unified session only and preserves upstream JSON and C
   await makeRequest('/api/public/runtime', { headers: { ...memberHeaders, 'x-forwarded-for': 'spoofed, 203.0.113.17', 'x-real-ip': 'spoofed' } });
   assert.equal(upstreamRequests.at(-1).claim.actor.clientIp, '203.0.113.17');
 
+  const forwardedCount = upstreamRequests.length;
   const captcha = await makeRequest('/api/task-captcha/fixture', {
     headers: memberHeaders,
     redirect: 'manual'
   });
-  assert.equal(captcha.status, 302);
-  assert.equal(captcha.headers.get('location'), 'https://validation.example.test/challenge');
+  assert.equal(captcha.status, 404);
+  assert.equal(captcha.headers.get('location'), null);
   assert.equal(captcha.headers.get('set-cookie'), null);
+  for (const path of ['/api/admin/gpt-api', '/api/admin/gpt-api/status', '/api/admin/gpt-api/test']) {
+    assert.equal((await makeRequest(path, { headers: adminHeaders })).status, 404);
+    assert.equal((await makeRequest(path, { method: 'POST', headers: { ...adminHeaders, Origin: origin } })).status, 404);
+  }
+  assert.equal(upstreamRequests.length, forwardedCount);
 });
 
 test('upstream pages retain the signed-in operations without their own login or external runtime assets', async () => {
   const assets = await loadCodexdaichongAssets();
   assert.equal(assets.has('/admin-login.html'), false);
+  for (const path of ['/admin', '/admin.js', '/shell.js', '/redeem', '/workspace'])
+    assert.doesNotMatch(String(assets.get(path).body), /gpt_api_|\/api\/(?:admin\/gpt-api|task-captcha)|captchaVerificationBtn/);
+  assert.match(assets.get('/admin').body, /orbitcard_config_save/);
+  assert.match(assets.get('/admin.js').body, /\/api\/admin\/orbitcard\/config/);
   for (const path of ['/redeem', '/subscription', '/admin']) {
     const page = assets.get(path);
     assert.match(page.csp, /frame-ancestors 'self'/);

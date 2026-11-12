@@ -86,8 +86,7 @@
   }
   const frameDraftScopes = new Set(['admin', 'workspace', 'public', 'bit-local']);
   const rechargeDraftFields = new Set((
-    'gpt_api_enabled gpt_api_base_url gpt_api_plan_key gpt_api_plan_key_pro100 gpt_api_plan_key_pro200 ' +
-    'gpt_api_plan_key_pro500 gpt_api_payment_region gpt_api_card_source orbitcard_base_url ' +
+    'orbitcard_live_management orbitcard_base_url card_pool_allowed_plans card_pool_plan_editor ' +
     'max_concurrent_activations maintenance_mode telegram_admin_chat_id telegram_group_chat_id ' +
     'telegram_notify_admin telegram_notify_group telegram_on_success telegram_on_failure ' +
     'telegram_on_card_pool_empty hcaptcha_enabled hcaptcha_no_vlm hcaptcha_captcha_platform_api_url ' +

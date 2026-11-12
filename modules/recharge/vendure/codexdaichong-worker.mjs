@@ -3,7 +3,7 @@ import { isIP } from 'node:net';
 import { pathToFileURL } from 'node:url';
 import { signRechargeAssertion } from '../assertion.mjs';
 import { validateRuntimeOrigin } from '../codexdaichong/runtime-health.mjs';
-import { originalRechargeNeedsReview, originalRechargeStage } from '../codexdaichong/progress-presentation.mjs';
+import { isPlanCardRejection, originalRechargeNeedsReview, originalRechargeStage } from '../codexdaichong/progress-presentation.mjs';
 import { rechargeWorkerPrefix, signRechargeWorkerRequest } from './loopback-bridge.mjs';
 
 export { originalRechargeStage } from '../codexdaichong/progress-presentation.mjs';
@@ -16,7 +16,8 @@ async function requestJson(url, options, timeout) {
   const response = await fetch(url, {
     ...options, redirect: 'error', signal: AbortSignal.timeout(timeout)
   });
-  if ((!response.ok && response.status !== 409) || !response.body) {
+  const cardPoolReply = response.status === 503 && new URL(url).pathname === '/api/run-process';
+  if ((!response.ok && response.status !== 409 && !cardPoolReply) || !response.body) {
     await response.body?.cancel();
     return { response };
   }
@@ -75,6 +76,8 @@ export function createVendureCodexdaichongWorker({
       if (response.status === 409 && accepted?.success === false &&
           accepted.code === 'recharge_route_unavailable' && accepted.execution_started === false)
         return { outcome: 'confirmed_failure', evidenceId: 'codexdaichong:route:' + task.id };
+      if (isPlanCardRejection(response.status, accepted))
+        return { outcome: 'confirmed_failure', evidenceId: 'codexdaichong:cards:' + task.id };
       if (accepted?.success !== true || typeof accepted.jobKey !== 'string' || !jobIdPattern.test(accepted.jobKey))
         return unknown;
       jobKey = accepted.jobKey;

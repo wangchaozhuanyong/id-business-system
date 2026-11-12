@@ -244,10 +244,21 @@ class Canary:
                   'console.log(JSON.stringify(await verifyCodexdaichongSource("/candidate/.runtime/codexdaichong")));')
         result = json.loads(self.command(['docker', 'exec', identity, 'node', '--input-type=module', '-e', script], timeout=30))
         if (result.get('revision') != REVISION or result.get('files') != 203 or
-            result.get('originalFiles') != 199 or result.get('routingFiles') !=
-            ['pricing-checkout.js', 'region-config.js', 'server.js'] or result.get('returnFiles') != ['mysql-store.js', 'server.js']):
+            result.get('originalFiles') != 198 or result.get('routingFiles') !=
+            ['pricing-checkout.js', 'region-config.js', 'server.js'] or result.get('returnFiles') != ['mysql-store.js', 'server.js'] or
+            result.get('providerRetirementFiles') != ['mysql-store.js', 'server.js'] or
+            result.get('cardPlanFiles') != ['mysql-store.js', 'payment-retry.js', 'server.js']):
             raise CanaryError('pristine_source_mismatch')
         self.checks.append(code)
+
+    def check_card_plans(self, native):
+        if not same_owner(self.inspect(native), self.sha, self.owner, native, self.names['native']):
+            raise CanaryError('canary_card_plan_ownership_rejected')
+        result = self.command(['docker', 'exec', '-i', native, 'node',
+            '/candidate/deploy/recharge-core/card-plans-canary.mjs'], input=(self.password + '\n').encode(), timeout=35)
+        if result != 'card_plan_mysql_transactions_passed':
+            raise CanaryError('card_plan_mysql_transactions_failed')
+        self.checks.append(result)
 
     def check_card_stop(self, mysql, adapter_url, privileged):
         number = '4242424242424242'
@@ -462,6 +473,7 @@ class Canary:
             self.source_check(adapter, 'source_203_adapter')
             self.checks.append('no_payment_or_activation_requests')
             return
+        self.check_card_plans(native)
         route_path = ROUTING_PATH
         def routing_request(path, actor, method='GET', body=None):
             return http_json(adapter_url, path,

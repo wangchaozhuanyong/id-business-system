@@ -7,13 +7,14 @@ const publicPaths = [
   /^\/api\/public\/(payment-region|runtime|subscription\/check)$/,
   /^\/api\/(verify-cdk|run-process)$/,
   /^\/api\/cdk\/(query|query-batch|download)$/,
-  /^\/api\/task-(status|captcha)\/[^/]+$/
+  /^\/api\/task-status\/[^/]+$/
 ];
 // Match the original sensitive operations; product browsing keeps its existing staff permission.
 const sensitivePaths = /^\/api\/admin\/(?:sessions|cards|cdks)(?:\/|$)|^\/api\/admin\/orbitcard\/(?:usage|sync|cards\/[^/]+\/(?:restore|plan))(?:\/|$)/;
 const identityPaths = /^\/api\/(?:admin\/(?:login|2fa|security|secondary|verify-secondary|change-password|change-secondary-password)(?:\/|$)|public\/admin-paths$)/;
 const requestHeaders = ['accept', 'content-type', 'content-length', 'user-agent', 'range', 'x-real-ip'];
-const responseHeaders = ['content-type', 'content-disposition', 'content-length', 'content-range', 'accept-ranges', 'retry-after'];
+const responseHeaders = ['content-type', 'content-disposition', 'content-length', 'content-range', 'accept-ranges', 'retry-after',
+  'x-id-recharge-card-plan-version'];
 const pick = (headers, names) => Object.fromEntries(names.filter((name) => headers[name] !== undefined).map((name) => [name, headers[name]]));
 const cardStopPath = '/api/admin/cards/stop-use';
 
@@ -116,6 +117,7 @@ export function createNativeRechargeAdapter({ nativeUrl, secret, getNativeAdminT
     if (!actor) return reply(res, 401, '服务认证无效');
     const path = checkedPath(req.url);
     if (!path || !methods.has(req.method) || identityPaths.test(path)) return reply(res, 404, '接口不存在');
+    if (/^\/api\/admin\/gpt-api(?:\/|$)/.test(path)) return reply(res, 404, '接口不存在');
     const admin = path.startsWith('/api/admin/');
     const external = path === '/api/external/cards/push';
     if (!admin && !external && !publicPaths.some((pattern) => pattern.test(path)))
@@ -151,15 +153,11 @@ export function createNativeRechargeAdapter({ nativeUrl, secret, getNativeAdminT
       ? '/api/admin/recharge-routing/proxies' : req.url;
     const upstream = httpRequest({ hostname: native.hostname, port: native.port, method: req.method,
       path: nativePath, headers }, (response) => {
-      const permittedRedirect = path.startsWith('/api/task-captcha/') && response.statusCode === 302;
-      const location = permittedRedirect && URL.parse(response.headers.location || '');
-      if (response.statusCode >= 300 && response.statusCode < 400 &&
-          (!location || location.protocol !== 'https:' || location.username || location.password)) {
+      if (response.statusCode >= 300 && response.statusCode < 400) {
         response.resume();
         return reply(res, 502, '原版服务返回无效跳转');
       }
       res.writeHead(response.statusCode, { ...pick(response.headers, responseHeaders),
-        ...(location ? { Location: location.href, 'Referrer-Policy': 'no-referrer' } : {}),
         'Cache-Control': 'no-store', 'X-Content-Type-Options': 'nosniff' });
       response.on('error', () => res.destroy());
       response.pipe(res);

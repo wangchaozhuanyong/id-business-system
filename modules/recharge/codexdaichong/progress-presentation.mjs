@@ -1,5 +1,3 @@
-import { createHmac } from 'node:crypto';
-
 export const RECHARGE_STAGE_LABELS = Object.freeze({
   preparing: '任务已受理，正在准备开通',
   payment_details: '正在填写支付资料',
@@ -168,35 +166,6 @@ export function rechargeTaskStepHistory(body, { jobKey, status }) {
   return { steps: steps.slice(-160), ...(terminalAt === undefined ? {} : { terminalAt }) };
 }
 
-function captchaView(value, jobKey, secret) {
-  const stage =
-    value?.stage === 'captcha_submitted' || value?.status === 'submitted'
-      ? 'captcha_submitted'
-      : value?.stage === 'awaiting_captcha' || value?.status === 'pending'
-        ? 'awaiting_captcha'
-        : null;
-  if (!stage) return null;
-  const expiry = value.expiresAt ?? value.expires_at;
-  const numeric = typeof expiry === 'string' || typeof expiry === 'number' ? Number(expiry) : NaN;
-  let timestamp = NaN;
-  if (Number.isFinite(numeric) && numeric > 1e9)
-    timestamp = new Date(numeric > 1e12 ? numeric : numeric * 1000).getTime();
-  else if (typeof expiry === 'string') timestamp = Date.parse(expiry);
-  // The browser compares IDs only to close a popup when its challenge is replaced.
-  const challengeId = typeof value.id === 'string' ? value.id.trim() : '';
-  const id = challengeId
-    ? createHmac('sha256', secret)
-        .update('recharge-browser-captcha\0' + jobKey + '\0' + challengeId)
-        .digest('base64url')
-        .slice(0, 22)
-    : '';
-  return {
-    stage,
-    ...(id ? { id } : {}),
-    ...(Number.isFinite(timestamp) ? { expiresAt: new Date(timestamp).toISOString() } : {})
-  };
-}
-
 export function readsRechargePresentation(method, path, status, contentType) {
   if (method === 'GET') return taskStatusPath.test(path);
   return (
@@ -207,9 +176,18 @@ export function readsRechargePresentation(method, path, status, contentType) {
   );
 }
 
+export function isPlanCardRejection(status, body) {
+  return status === 503 && body?.success === false &&
+    body.code === 'recharge_plan_cards_unavailable' && body.execution_started === false;
+}
+
 /** Add display facts at the browser boundary. The original executor and merchant transport are unchanged. */
-export function rechargeBrowserPresentation(path, httpStatus, body, secret) {
+export function rechargeBrowserPresentation(path, httpStatus, body) {
   if (path === '/api/run-process') {
+    if (isPlanCardRejection(httpStatus, body)) return {
+      success: false, notAccepted: true, code: 'recharge_plan_cards_unavailable',
+      message: '该套餐暂无可用银行卡，请稍后再试或联系客服。'
+    };
     // This exact response is returned by the pinned engine before code reservation or dispatch.
     if (
       httpStatus === 503 &&
@@ -267,9 +245,7 @@ export function rechargeBrowserPresentation(path, httpStatus, body, secret) {
       ...(stage !== 'processing' ? { stage } : {}),
       ...(manualReview ? { manualReview: true } : {}),
       ...(renewalUnconfirmed ? { renewalUnconfirmed: true } : {}),
-      ...(Object.hasOwn(task, 'captcha')
-        ? { captcha: captchaView(task.captcha, jobKey, secret) }
-        : {})
+      ...(Object.hasOwn(task, 'captcha') ? { captcha: null } : {})
     }
   };
 }

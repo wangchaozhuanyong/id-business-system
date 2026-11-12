@@ -30,6 +30,27 @@ ADAPTER_RUNTIME_FILES = (
     "deploy/recharge-core/health.mjs",
 )
 ADAPTER_FILES = (*ADAPTER_RUNTIME_FILES, "deploy/recharge-core/canary.py", "deploy/recharge-core/run-recharge.py")
+NATIVE_PATCH_FILES = {
+    f"modules/recharge/codexdaichong/{folder}/{name}"
+    for folder, patch in (("card-plans", "upstream-card-plans.patch"),
+                          ("provider-retirement", "upstream-provider-retirement.patch"))
+    for name in ("manifest.json", patch)
+}
+NATIVE_CORE_SCOPE = NATIVE_PATCH_FILES | {
+    "deploy/recharge-core/README.md", "deploy/recharge-core/canary.py", "deploy/recharge-core/health.mjs",
+    "deploy/recharge-core/card-plans-canary.mjs", "deploy/recharge-core/check-provider-cutover.mjs",
+    "modules/recharge/codexdaichong/assets.mjs", "modules/recharge/codexdaichong/card-plan-admin.mjs",
+    "modules/recharge/codexdaichong/demo-site.mjs", "modules/recharge/codexdaichong/gateway.mjs",
+    "modules/recharge/codexdaichong/local-gateway.mjs", "modules/recharge/codexdaichong/native-adapter.mjs",
+    "modules/recharge/codexdaichong/prepare.mjs", "modules/recharge/codexdaichong/progress-presentation.mjs",
+    "modules/recharge/codexdaichong/shell.css", "modules/recharge/codexdaichong/shell.js",
+}
+NATIVE_RELEASE_FILES = tuple(sorted(NATIVE_CORE_SCOPE | set(ADAPTER_FILES) | {
+    "deploy/recharge-core/Dockerfile", "deploy/recharge-core/entry.mjs", "deploy/recharge-core/release-gate.py",
+    "deploy/recharge-core/snapshot.py", "deploy/recharge-core/seal-backup.mjs",
+    "deploy/website/recharge_core.py", "deploy/website/remote.py", "deploy/website/vendure_admission.py",
+    "modules/recharge/vendure/codexdaichong-worker.mjs",
+}))
 
 
 class AwsError(RuntimeError):
@@ -97,10 +118,13 @@ def require_redeem_presentation(base, sha):
     return require_presentation_approval(base, sha, "redeem-log-20261111.json", REDEEM_PRESENTATION_FILES)
 
 
-def require_website_scope(base, sha, include_adapter=False):
+def require_website_scope(base, sha, include_adapter=False, include_core=False):
     require_ancestor(base, sha)
     changed = set(git("diff", "--name-only", base, sha, "--", *CORE_PATHS).splitlines())
-    if include_adapter:
+    if include_core:
+        if include_adapter or not NATIVE_PATCH_FILES <= changed <= NATIVE_CORE_SCOPE:
+            raise RuntimeError("recharge_native_release_scope_mismatch")
+    elif include_adapter:
         if not changed <= ADAPTER_SCOPE or not changed.intersection(ADAPTER_RUNTIME_FILES):
             raise RuntimeError("recharge_adapter_release_scope_mismatch")
     elif changed == set(REDEEM_PRESENTATION_FILES):
@@ -135,7 +159,7 @@ def remote(plan):
     comment = f"ID website {name} {plan['sha'][:12]} run {os.environ['GITHUB_RUN_ID']}/{os.environ['GITHUB_RUN_ATTEMPT']}"
     started = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     print(f"SSM request: {comment}", flush=True)
-    execution_timeout = 900 if plan.get("adapter") and name == "release" else 600
+    execution_timeout = 1140 if plan.get("rechargeCore") else (900 if plan.get("adapter") and name == "release" else 600)
     try:
         result = aws("ssm", "send-command", "--instance-ids", INSTANCE, "--document-name", "AWS-RunShellScript",
                      "--timeout-seconds", "600", "--comment", comment, "--parameters",
@@ -160,6 +184,10 @@ def remote(plan):
             if status == "Success":
                 return command_id, json.loads(invocation["StandardOutputContent"].strip().splitlines()[-1])
             if status not in {"Pending", "InProgress", "Delayed", "Cancelling"}:
+                if plan.get("rechargeCore"):
+                    for line in invocation["StandardOutputContent"].splitlines():
+                        if re.fullmatch(r'\{"rechargePreflight": [a-zA-Z0-9_":{}, ]+\}', line):
+                            print(line, flush=True)
                 for detail in invocation["StandardErrorContent"].splitlines():
                     if re.fullmatch(r"[a-z_]+(?:: [a-z_]+)?", detail):
                         print(detail, flush=True)
@@ -193,6 +221,9 @@ def main():
     require_main(sha)
     attempt = os.environ.get("INSPECT_CANARY_SHA")
     include_adapter = os.environ.get("RELEASE_RECHARGE_ADAPTER") == "true"
+    include_core = os.environ.get("RELEASE_RECHARGE_CORE") == "true"
+    if include_core and (include_adapter or attempt):
+        raise RuntimeError("recharge_core_release_requires_its_own_operation")
     if attempt:
         if include_adapter:
             raise RuntimeError("inspect_and_release_are_separate")
@@ -200,22 +231,25 @@ def main():
         command_id, diagnostic = remote({"operation": "inspect", "sha": sha, "attemptSha": attempt})
         print(json.dumps({"command": command_id, "diagnostic": diagnostic}), flush=True)
         return
-    preflight_id, before = remote({"operation": "preflight", "sha": sha, "adapter": include_adapter})
+    preflight_id, before = remote({"operation": "preflight", "sha": sha, "adapter": include_adapter or include_core})
     base = before["components"]["app"]["revision"]
     print(f"Live website: {base}; free bytes: {before['freeBytes']}", flush=True)
     if base == sha:
         raise RuntimeError("requested_revision_already_running_read_back_the_existing_release")
-    presentation_scope, presentation = require_website_scope(base, sha, include_adapter) or (None, None)
-    if include_adapter:
+    presentation_scope, presentation = require_website_scope(base, sha, include_adapter, include_core) or (None, None)
+    if include_adapter or include_core:
         for name in ("recharge", "recharge-native"):
             require_ancestor(before["components"][name]["revision"], sha)
     names = (f"independent-source-{sha}.tar.gz", f"independent-assets-{sha}.json", f"independent-event-runtime-{sha}.tar.gz")
     expected_assets = before["assetsSha256"]
+    actual_assets = hashlib.sha256((OUTPUT / names[1]).read_bytes()).hexdigest()
+    if include_core:
+        expected_assets = actual_assets
     if presentation:
         if presentation["beforeAssetsSha256"] != expected_assets:
             raise RuntimeError("recharge_presentation_live_baseline_mismatch")
         expected_assets = presentation["assetsSha256"]
-    if hashlib.sha256((OUTPUT / names[1]).read_bytes()).hexdigest() != expected_assets:
+    if actual_assets != expected_assets:
         raise RuntimeError("website_release_would_change_recharge_assets")
     require_main(sha)
     artifacts = {name: put_artifact(OUTPUT / name, sha) for name in names}
@@ -249,10 +283,15 @@ def main():
                   "server/order-auxiliary.mjs", "server/order-recharge-client.mjs",
                   "modules/recharge/codexdaichong/gateway.mjs", "modules/recharge/codexdaichong/local-gateway.mjs",
                   *ADAPTER_FILES)
+    if include_core:
+        files = tuple(dict.fromkeys((*files, *NATIVE_RELEASE_FILES)))
     plan = {"operation": "release", "sha": sha, "before": before, "artifacts": artifacts,
             "files": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in files},
             "qualityRun": quality_run, "preflightCommand": preflight_id, 'externalEvents': True}
     if include_adapter:
+        plan["adapter"] = {"runtimeFiles": ADAPTER_RUNTIME_FILES}
+    if include_core:
+        plan["rechargeCore"] = {"assetsSha256": expected_assets}
         plan["adapter"] = {"runtimeFiles": ADAPTER_RUNTIME_FILES}
     if presentation_scope:
         plan[presentation_scope] = presentation
@@ -263,6 +302,12 @@ def main():
     if include_adapter and (receipt.get("adapter", {}).get("revision") != sha or
                             not receipt.get("adapterCanaryPassed") or not receipt.get("nativeEngineUnchanged")):
         raise RuntimeError(f"adapter_release_receipt_mismatch: {command_id}")
+    if include_core:
+        core = receipt.get("rechargeCore", {})
+        if (core.get("native", {}).get("revision") != sha or receipt.get("adapter", {}).get("revision") != sha or
+                core.get("workerSourceRevision") != sha or core.get("ingressResumed") is not True or
+                core.get("nativeCanaryPassed") is not True or receipt.get("liveAssetsSha256") != expected_assets):
+            raise RuntimeError(f"recharge_core_release_receipt_mismatch: {command_id}")
     if presentation_scope and (receipt.get(presentation_scope + "Verified") is not True or
                                receipt.get("liveAssetsSha256") != expected_assets or
                                receipt.get("protectedComponentsUnchanged") is not True):

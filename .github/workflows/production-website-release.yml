@@ -11,6 +11,10 @@ on:
         description: 同版本发布银行卡停用所需的代充适配器
         default: false
         type: boolean
+      include_recharge_core:
+        description: 同版本发布原生代充、适配器、商城执行器和网站
+        default: false
+        type: boolean
       inspect_canary_sha:
         description: 只读检查指定失败版本的金丝雀日志，发布时留空
         required: false
@@ -37,6 +41,7 @@ jobs:
       RELEASE_SHA: ${{ inputs.expected_sha }}
       INSPECT_CANARY_SHA: ${{ inputs.inspect_canary_sha }}
       RELEASE_RECHARGE_ADAPTER: ${{ inputs.include_recharge_adapter }}
+      RELEASE_RECHARGE_CORE: ${{ inputs.include_recharge_core }}
     steps:
       - name: Check out main
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683

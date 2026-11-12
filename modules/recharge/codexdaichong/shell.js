@@ -329,9 +329,10 @@
       setVisible(message.visible);
     } else if (message.type === 'select-view') {
       window.idRechargeSelect(message.view);
-    } else if (!standalone && message.type === 'data-change' &&
-        Array.isArray(message.scopes) && message.scopes.includes('card-types')) {
-      window.idRechargeCardTypesChanged?.();
+    } else if (!standalone && message.type === 'data-change' && Array.isArray(message.scopes)) {
+      if (message.scopes.includes('card-types')) window.idRechargeCardTypesChanged?.();
+      if (message.scopes.includes('recharge-card-plans'))
+        window.idRechargeCardPlansChanged?.(message.cardPlanVersion);
     }
   });
 
@@ -398,9 +399,7 @@
     // Only ordinary editable fields belong to a navigation draft. Authorization JSON,
     // redemption/query codes, passwords, card data and one-time confirmations never do.
     const groups = {
-      gpt: ['gpt_api_enabled', 'gpt_api_base_url', 'gpt_api_plan_key',
-        'gpt_api_plan_key_pro100', 'gpt_api_plan_key_pro200', 'gpt_api_plan_key_pro500',
-        'gpt_api_payment_region', 'gpt_api_card_source', 'orbitcard_base_url'],
+      orbitcard: ['orbitcard_live_management', 'orbitcard_base_url'],
       config: ['max_concurrent_activations'],
       maintenance: ['maintenance_mode'],
       telegram: ['telegram_admin_chat_id', 'telegram_group_chat_id', 'telegram_notify_admin',
@@ -451,7 +450,6 @@
           element.value = values[key];
       }
       // Update presentation without dispatching change events that could submit a setting.
-      window.updateOrbitcardConfigVisibility?.();
       window.renderOrbitcardStrategyDetails?.();
       if (Object.hasOwn(values, 'checkout_plan_type') || Object.hasOwn(values, 'checkout_plan_name')) {
         window.syncCheckoutPlanName?.();
@@ -470,12 +468,12 @@
         return result;
       };
     };
-    for (const name of ['applySystemConfigFromData', 'loadGptApiConfig', 'loadRegionConfig',
+    for (const name of ['applySystemConfigFromData', 'loadOrbitcardConfig', 'loadRegionConfig',
       'loadCheckoutPlans', 'loadCheckoutDebugPage', 'loadOrbitcardProductStrategy', 'showAddressForm'])
       wrapRestore(name);
 
     const savedGroups = {
-      '/api/admin/gpt-api': groups.gpt,
+      '/api/admin/orbitcard/config': groups.orbitcard,
       '/api/admin/config': groups.config,
       '/api/admin/telegram': groups.telegram,
       '/api/admin/hcaptcha': groups.hcaptcha,

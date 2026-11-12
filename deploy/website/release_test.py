@@ -11,6 +11,7 @@ from unittest.mock import Mock, patch
 import release
 import remote
 import backup_monitoring
+import recharge_core
 import vendure_admission
 
 BASE = "a" * 40
@@ -131,6 +132,40 @@ class WebsiteReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "recharge_adapter_release_scope_mismatch"):
             release.require_website_scope(BASE, TARGET, True)
         ancestor.assert_called_with(BASE, TARGET)
+
+    @patch("release.require_ancestor")
+    @patch("release.git")
+    def test_native_release_requires_both_reviewed_patches_and_rejects_unrelated_runtime_changes(self, git, _ancestor):
+        approved = sorted(release.NATIVE_CORE_SCOPE)
+        git.return_value = "\n".join(approved)
+        self.assertIsNone(release.require_website_scope(BASE, TARGET, include_core=True))
+        with self.assertRaisesRegex(RuntimeError, "recharge_native_release_scope_mismatch"):
+            release.require_website_scope(BASE, TARGET, include_adapter=True, include_core=True)
+        with self.assertRaisesRegex(RuntimeError, "recharge_core_or_runtime_changed"):
+            release.require_website_scope(BASE, TARGET)
+        for paths in (approved + ["deploy/recharge-core/Dockerfile"],
+                      sorted(set(approved) - release.NATIVE_PATCH_FILES)):
+            git.return_value = "\n".join(paths)
+            with self.assertRaisesRegex(RuntimeError, "recharge_native_release_scope_mismatch"):
+                release.require_website_scope(BASE, TARGET, include_core=True)
+
+    def test_worker_source_cutover_requires_the_actual_previous_launcher_reference(self):
+        previous = remote.ROOT / "releases" / BASE / "source"
+        target = remote.ROOT / "releases" / TARGET / "source"
+        before = f"sha={BASE}\ndocker run --mount type=bind,src={previous},dst=/app,readonly image\n"
+        expected = before.replace(BASE, TARGET)
+        self.assertEqual(recharge_core.stage_worker_launcher(before, str(previous), target), expected)
+        with self.assertRaisesRegex(remote.ReleaseError, "worker_source_reference_ambiguous"):
+            recharge_core.stage_worker_launcher(before + f"# also {previous}\n", str(previous), target)
+        with self.assertRaisesRegex(remote.ReleaseError, "worker_source_launcher_mismatch"):
+            recharge_core.stage_worker_launcher("docker run image\n", str(previous), target)
+
+    def test_core_assets_are_bound_to_the_exact_approved_bundle_digest(self):
+        old, new = "a" * 64, "b" * 64
+        plan = {"before": {"assetsSha256": old}, "adapter": True, "rechargeCore": {"assetsSha256": new}}
+        self.assertIsNone(remote.require_asset_digest(plan, new))
+        with self.assertRaisesRegex(remote.ReleaseError, "native_recharge_asset_digest_mismatch"):
+            remote.require_asset_digest(plan, old)
 
     @patch("release.require_redeem_presentation")
     @patch("release.require_ancestor")

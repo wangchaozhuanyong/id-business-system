@@ -1,6 +1,7 @@
 """Stage, verify and switch the website and its explicitly selected adapter on the SSM host."""
 
 import fcntl
+from contextlib import nullcontext
 import hashlib
 import json
 import os
@@ -315,6 +316,11 @@ def presentation_scope(plan):
 def require_asset_digest(plan, candidate_sha):
     before = plan["before"]["assetsSha256"]
     scope = presentation_scope(plan)
+    if plan.get("rechargeCore"):
+        require(scope is None and plan.get("adapter") and
+                plan["rechargeCore"]["assetsSha256"] == candidate_sha and
+                re.fullmatch(r"[a-f0-9]{64}", candidate_sha), "native_recharge_asset_digest_mismatch")
+        return
     if scope is None:
         require(candidate_sha == before, "recharge_assets_changed")
         return
@@ -505,13 +511,14 @@ def require_native_idle():
     raise ReleaseError("native_recharge_work_in_progress")
 
 
-def switch_adapter(plan, source, ops):
+def switch_adapter(plan, source, ops, native_runtime=None):
     before, sha = plan["before"], plan["sha"]
-    native = before["components"]["recharge-native"]
-    image = before["components"]["recharge"]["image"]
-    require(adapter_unit_state(before["components"]) == before["adapterUnit"] and
-            identity(inspect("recharge-native")) == native, "live_adapter_baseline_changed")
-    require_native_idle()
+    native = native_runtime or before["components"]["recharge-native"]
+    image = native["image"]
+    require(identity(inspect("recharge-native")) == native, "live_native_baseline_changed")
+    if not native_runtime:
+        require(adapter_unit_state(before["components"]) == before["adapterUnit"], "live_adapter_baseline_changed")
+        require_native_idle()
     require_main(sha)
     ADAPTER_DROP.parent.mkdir(mode=0o755, exist_ok=True)
     directory = ADAPTER_DROP.parent.lstat()
@@ -534,9 +541,12 @@ def switch_adapter(plan, source, ops):
             state = identity(container)
             if (state["running"] and state["revision"] == sha and state["image"] == image and
                     all(mount_matches(container, source / name, "/candidate/" + name) for name in ADAPTER_MOUNTS)):
+                flag = "--check-card-plans" if native_runtime else "--check-card-stop"
                 ready = json.loads(run(["docker", "exec", state["id"], "node",
-                                        "/candidate/deploy/recharge-core/health.mjs", "--check-card-stop"], timeout=12))
-                if ready == {"ready": True, "cardStopRouteReady": True}:
+                                        "/candidate/deploy/recharge-core/health.mjs", flag], timeout=14))
+                expected = ({"ready": True, "cardPlansReady": True, "retiredProviderRoute": 404}
+                            if native_runtime else {"ready": True, "cardStopRouteReady": True})
+                if ready == expected:
                     break
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError):
             pass
@@ -641,7 +651,7 @@ def read_event_runtime():
     raise ReleaseError('event_runtime_not_ready')
 
 
-def read_website(plan, release, source, adapter=None):
+def read_website(plan, release, source, adapter=None, core=None):
     deadline = time.monotonic() + 65
     while time.monotonic() < deadline:
         try:
@@ -688,9 +698,13 @@ console.log(JSON.stringify(Object.fromEntries(hashes)));
         except urllib.error.HTTPError as error:
             require(error.code in (401, 403), "protected_read_status_unexpected")
     expected = plan["before"]["components"] | ({"recharge": adapter} if adapter else {})
+    gateway_digest = plan["before"]["gatewaySha256"]
+    if core:
+        expected = expected | {"recharge-native": core.receipt["native"], "caddy": core.gated_gateway}
+        gateway_digest = core.gated_digest
     require(all(identity(inspect(name)) == expected[name] for name in PROTECTED),
             "protected_component_changed")
-    require(digest(GATEWAY) == plan["before"]["gatewaySha256"], "gateway_changed")
+    require(digest(GATEWAY) == gateway_digest, "gateway_changed")
     return states
 
 
@@ -702,9 +716,19 @@ def release_website(plan):
     check_baseline(snapshot(include_adapter), before)
     release = ROOT / "releases" / sha
     source, ops = stage(plan, release)
+    core = None
+    if plan.get("rechargeCore"):
+        sys.path.insert(0, str(source / "deploy/website"))
+        try:
+            from recharge_core import CoreRelease
+        finally:
+            sys.path.pop(0)
+        core = CoreRelease(plan, source, ops)
     canary_retried = canary(sha, ops)
-    if include_adapter:
+    if include_adapter and not core:
         adapter_canary(plan, source, ops)
+    if core:
+        core.prepare()
     check_baseline(snapshot(include_adapter), before)
     old = DROP.read_text()
     launcher = ops / "run-app"
@@ -714,18 +738,22 @@ def release_website(plan):
         new = wire_event_credential(new)
     require_main(sha)
     install_backup_monitoring(source, sha)
-    adapter = switch_adapter(plan, source, ops) if include_adapter else None
-    require_main(sha)
-    require(digest(DROP) == before["unitSha256"], "live_service_override_changed")
-    write_new(ops / "id-business-independent-app.service.before.conf", old, 0o600)
-    pending = DROP.with_name(f".{DROP.name}.{sha[:12]}")
-    write_new(pending, new, DROP.stat().st_mode & 0o777)
-    os.replace(pending, DROP)
-    run(["systemctl", "daemon-reload"])
-    run(["systemctl", "restart", UNIT], timeout=55)
-    live = read_website(plan, release, source, adapter)
-    events = read_event_runtime() if plan.get('externalEvents') else None
-    monitoring = read_backup_monitoring(inspect("app"))
+    with core.cutover() if core else nullcontext() as native:
+        adapter = switch_adapter(plan, source, ops, native) if native else (
+            switch_adapter(plan, source, ops) if include_adapter else None)
+        require_main(sha)
+        require(digest(DROP) == before["unitSha256"], "live_service_override_changed")
+        write_new(ops / "id-business-independent-app.service.before.conf", old, 0o600)
+        pending = DROP.with_name(f".{DROP.name}.{sha[:12]}")
+        write_new(pending, new, DROP.stat().st_mode & 0o777)
+        os.replace(pending, DROP)
+        run(["systemctl", "daemon-reload"])
+        run(["systemctl", "restart", UNIT], timeout=55)
+        live = read_website(plan, release, source, adapter, core) if core else read_website(plan, release, source, adapter)
+        events = read_event_runtime() if plan.get('externalEvents') else None
+        monitoring = read_backup_monitoring(inspect("app"))
+        if core:
+            core.finish()
     result = {"mainSha": sha, "previousWebsiteSha": base, "website": live["app"],
               "sidecars": {name: live[name] for name in WEBSITE[1:]},
               "sourceFilesVerified": len(plan["files"]), "artifacts": plan["artifacts"],
@@ -740,7 +768,9 @@ def release_website(plan):
     scope = presentation_scope(plan)
     if scope:
         result[scope + "Verified"] = True
-    if adapter:
+    if core:
+        result.update(adapter=adapter, rechargeCore=core.receipt)
+    elif adapter:
         result.update(adapter=adapter, adapterCanaryPassed=True, nativeEngineUnchanged=True,
                       otherProtectedComponentsUnchanged=True)
     write_new(ops / "release.receipt.json", json.dumps(result, indent=2) + "\n", 0o600)

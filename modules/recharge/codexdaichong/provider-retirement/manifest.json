@@ -1,0 +1,14 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "patchSha256": "9cb380e5b662c0c479817f0473fc5759aef8da1c0d5fe7402049164a6538d9bb",
+  "files": {
+    "mysql-store.js": {
+      "original": "138b218f3c4a038f34152a5aa4bc6345780aee77",
+      "approved": "2b02b843134387bf75a112b681ea9028edb7648b"
+    },
+    "server.js": {
+      "original": "25dca45e3ab7e2ecd0405e5334902be7ac2bdbac",
+      "approved": "d0f3dc5c7127ec2de0c9b18367db6a520fccb0a1"
+    }
+  }
+}

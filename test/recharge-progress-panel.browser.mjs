@@ -96,11 +96,12 @@ test('充值进度使用同一任务，桌面右栏和手机顺序正确，失�
         await page.clock.fastForward(5100);
         await panel.getByText('正在重新连接，已保留上次进度。', { exact: true }).waitFor();
         assert.equal(await panel.locator('#taskProgressPercent').textContent(), '37%');
-        next = { status: 'running', progress: 62, captcha: { id: 'fixture-verification', status: 'pending',
-          stage: 'awaiting_captcha', expiresAt: new Date(Date.now() + 60_000).toISOString() } };
+        next = { status: 'running', stage: 'paying', progress: 62,
+          captcha: { id: 'fixture-verification', status: 'pending', stage: 'awaiting_captcha' } };
         await page.clock.fastForward(5100);
-        await panel.getByText('等待完成验证', { exact: true }).waitFor();
-        assert.equal(await panel.getByRole('button', { name: '打开验证页面' }).isEnabled(), true);
+        await panel.getByText('正在付款', { exact: true }).waitFor();
+        await panel.getByText('62%', { exact: true }).waitFor();
+        assert.equal(await panel.getByRole('button', { name: '打开验证页面' }).count(), 0);
       }
       next = dark ? { status: 'failed', progress: 67, manualReview: true }
         : { status: 'success', progress: 100, renewalUnconfirmed: true };

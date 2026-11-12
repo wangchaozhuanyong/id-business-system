@@ -16,6 +16,7 @@ test('card pool renders, imports and edits shared card types', { timeout: 35_000
   const release = Promise.withResolvers();
   let reads = 0;
   let cardReads = 0;
+  let planPolicy = { version: 0, strict: false };
   const firstNumber = '4000000000000007';
   const newNumber = '5000000000000007';
   const thirdNumber = '6000000000000007';
@@ -29,23 +30,25 @@ test('card pool renders, imports and edits shared card types', { timeout: 35_000
   let failing = false;
   await context.route(origin + prefix + '/api/admin/cards', (route) => {
     cardReads++;
-    return route.fulfill({ json: { cards: pool } });
+    return route.fulfill({ json: { cards: pool, planPolicy } });
   });
   await context.route(origin + prefix + '/api/admin/cards/import', (route) => {
     assert.equal(route.request().method(), 'POST');
     const request = route.request().postDataJSON();
-    assert.deepEqual(Object.keys(request), ['cards']);
+    assert.deepEqual(request.allowedPlans, ['pro500']);
+    assert.equal(request.planVersion, planPolicy.version);
     const numbers = request.cards.map(card => card.card_number);
     importRequests.push(numbers.length);
+    planPolicy = { ...planPolicy, version: planPolicy.version + 1 };
     if (numbers.length === 4) {
       assert.deepEqual(numbers, [newNumber, firstNumber, newNumber, 'invalid']);
-      pool.push({ id: 3, last4: '0007', card_number: newNumber });
-      return route.fulfill({ json: { success: true, imported: 1, skipped: 2, failed: 1,
+      pool.push({ id: 3, last4: '0007', card_number: newNumber, allowed_plans: ['pro500'] });
+      return route.fulfill({ json: { success: true, imported: 1, assignedPlans: 1, planPolicy, skipped: 2, failed: 1,
         failures: [{ index: 3, errors: ['synthetic-sensitive-failure'] }] } });
     }
     assert.deepEqual(numbers, [thirdNumber]);
-    pool.push({ id: 4, last4: '0007', card_number: thirdNumber });
-    return route.fulfill({ json: { success: true, imported: 1, skipped: 0, failed: 0, failures: [] } });
+    pool.push({ id: 4, last4: '0007', card_number: thirdNumber, allowed_plans: ['pro500'] });
+    return route.fulfill({ json: { success: true, imported: 1, assignedPlans: 1, planPolicy, skipped: 0, failed: 0, failures: [] } });
   });
   await context.route(origin + '/api/local/card-types', async (route) => {
     if (route.request().method() === 'POST') {
@@ -88,8 +91,8 @@ test('card pool renders, imports and edits shared card types', { timeout: 35_000
   await selected(typed, types.items[0].name);
   await selected(untyped, '未设置');
   assert.equal(await typed.locator('img').count(), 0);
-  assert.equal(await cards.locator('thead th').count(), 11);
-  assert.equal(await cards.locator('tbody tr').first().locator('td').count(), 11);
+  assert.equal(await cards.locator('thead th').count(), 12);
+  assert.equal(await cards.locator('tbody tr').first().locator('td').count(), 12);
 
   failing = true;
   await page.evaluate(() => loadCardPoolList());
@@ -163,12 +166,14 @@ test('card pool renders, imports and edits shared card types', { timeout: 35_000
   });
   assert.equal(placement, true);
   await type.selectOption(otherType.id);
+  await importBox.getByRole('checkbox', { name: 'Pro 500' }).check();
   await input.fill([newNumber, firstNumber, newNumber, 'invalid'].map(number => number + '|01/30|000').join('\n'));
   await submit.click();
-  await receipt.filter({ hasText: '导入 1 张，跳过重复 2 张，失败 1 张；已确认银行卡类型 1 张，已有其他类型 1 张' }).waitFor();
+  await receipt.filter({ hasText: '导入 1 张，跳过重复 2 张，失败 1 张；已设置允许套餐 1 张；已确认银行卡类型 1 张，已有其他类型 1 张' }).waitFor();
   assert.equal(await input.inputValue(), '');
   await selected(cards.locator('[data-recharge-card-type="recharge:3"] select'), otherType.name);
   assert.equal(await typed.inputValue(), 'type-a');
+  await cards.locator('[data-card-plan-edit="3"]').getByText('Pro 500').waitFor();
 
   failingWrite = true;
   await input.fill(thirdNumber + '|01/30|000');

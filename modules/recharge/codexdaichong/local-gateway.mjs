@@ -5,7 +5,7 @@ import { createCodexdaichongGateway } from './gateway.mjs';
  * live actor resolver so every request rechecks the current account.
  */
 export function createLocalCodexdaichongGateway({ upstreamUrl, publicOrigin, secret, getActor, assets,
-  legacyNotificationLocked, onRechargeOutcome, beforeCardDelete, beforeCardWrite }) {
+  legacyNotificationLocked, onRechargeOutcome, beforeCardDelete, beforeCardWrite, onCardPlanChange }) {
   if (typeof getActor !== 'function') {
     throw new TypeError('本机线上代充需要统一员工会话');
   }
@@ -18,6 +18,7 @@ export function createLocalCodexdaichongGateway({ upstreamUrl, publicOrigin, sec
     onRechargeOutcome,
     beforeCardDelete,
     beforeCardWrite,
+    onCardPlanChange,
     async getUnifiedPrincipal(request) {
       const actor = await getActor(request);
       if (!actor || actor.active !== true || !['admin', 'super'].includes(actor.role)) {

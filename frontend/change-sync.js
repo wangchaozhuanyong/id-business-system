@@ -73,7 +73,8 @@
       for (const frame of document.querySelectorAll('iframe')) {
         try {
           if (new URL(frame.src, location.href).origin === location.origin)
-            frame.contentWindow?.postMessage({ source: 'id-recharge-shell', type: 'data-change', scopes }, location.origin);
+            frame.contentWindow?.postMessage({ source: 'id-recharge-shell', type: 'data-change', scopes,
+              ...(has('recharge-card-plans') && { cardPlanVersion: versions['recharge-card-plans'] }) }, location.origin);
         } catch { /* External tools retain their own update contract. */ }
       }
     } catch {
