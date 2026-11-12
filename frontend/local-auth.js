@@ -108,35 +108,61 @@
     gate.setAttribute('aria-labelledby', 'local-auth-title');
     gate.innerHTML = `
       <section class="local-auth-card">
-        <div class="local-auth-brand"><span class="local-auth-mark" aria-hidden="true">ID</span><span>ID 业务管理系统</span></div>
-        <h1 id="local-auth-title">${setup ? '设置本机管理员密码' : '登录工作台'}</h1>
-        <p class="local-auth-intro">${setup ? '首次设置只在本机进行。完成后可在系统设置中管理员工。' : '使用本机账户访问业务资料。'}</p>
+        <div class="local-auth-brand">
+          <span class="local-auth-mark" aria-hidden="true">ID</span>
+          <div class="local-auth-brand-text">
+            <span class="local-auth-brand-name">ID 业务管理系统</span>
+            <span class="local-auth-badge"><span class="local-auth-badge-dot" aria-hidden="true"></span>内部专网</span>
+          </div>
+        </div>
+        <h1 id="local-auth-title">${setup ? '设置本机管理员密码' : '登录内部工作台'}</h1>
+        <p class="local-auth-intro">${setup ? '首次设置只在本机进行。完成后可在系统设置中管理员工。' : '受控内部业务中枢 · 仅限授权人员登录访问。'}</p>
         <form class="local-auth-form">
           <label for="local-auth-email">登录邮箱</label>
           <input id="local-auth-email" name="email" type="email" autocomplete="username" required maxlength="254" ${setup ? 'readonly' : ''} />
           <label for="local-auth-password">${setup ? '新密码' : '密码'}</label>
-          <input id="local-auth-password" name="password" type="password" autocomplete="${setup ? 'new-password' : 'current-password'}" required ${setup ? 'aria-describedby="local-auth-password-hint" maxlength="256"' : ''} />
+          <div class="local-auth-password-wrapper">
+            <input id="local-auth-password" name="password" type="password" autocomplete="${setup ? 'new-password' : 'current-password'}" required ${setup ? 'aria-describedby="local-auth-password-hint" maxlength="256"' : ''} />
+            <button type="button" class="local-auth-password-toggle" aria-label="显示或隐藏密码" tabindex="-1">
+              <svg class="icon icon-eye" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+            </button>
+          </div>
           ${setup ? `<p id="local-auth-password-hint">请输入至少 12 个字符。</p>
           <label for="local-auth-confirmation">确认密码</label>
-          <input id="local-auth-confirmation" name="confirmation" type="password" autocomplete="new-password" required maxlength="256" />` : ''}
+          <div class="local-auth-password-wrapper">
+            <input id="local-auth-confirmation" name="confirmation" type="password" autocomplete="new-password" required maxlength="256" />
+            <button type="button" class="local-auth-password-toggle" aria-label="显示或隐藏密码" tabindex="-1">
+              <svg class="icon icon-eye" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+            </button>
+          </div>` : ''}
           <label class="local-auth-remember" for="local-auth-remember"><input id="local-auth-remember" name="remember" type="checkbox" />在此设备保持登录</label>
           <p class="local-auth-reason" role="status" hidden></p>
           <p class="local-auth-error" role="alert" hidden></p>
           <button type="submit" class="button primary">${submitLabel}</button>
         </form>
-        <p class="local-auth-footnote">仅在自己的设备上选择保持登录。</p>
+        <p class="local-auth-footnote">内部受控专网系统 · 严禁非授权人员操作</p>
       </section>`;
     document.body.append(gate);
     window.IDTitleHelp.attach($('#local-auth-title', gate), $('.local-auth-intro', gate));
     const help = document.createElement('span');
     help.textContent = '保持登录后，实际操作时自动续期；闲置30天或首次登录满90天需重新登录。未勾选时登录有效期为8小时。更新网站不会主动退出。';
-    window.IDTitleHelp.attach($('.local-auth-remember', gate), help);
+    window.IDTitleHelp.attach($('.local-auth-remember', gate), help, 'field-help');
     const reasons = { expired: '登录已到期，请重新登录。', revoked: '账号密码、权限或启用状态已变化，请重新登录。',
       invalid: '登录已失效或已在其他设备退出，请重新登录。', logout: '已安全退出登录。' };
     const reason = reasons[new URL(window.location.href).searchParams.get('auth_reason')];
     if (reason) { $('.local-auth-reason', gate).textContent = reason; $('.local-auth-reason', gate).hidden = false; }
 
     const form = $('form', gate);
+    gate.querySelectorAll('.local-auth-password-toggle').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const input = btn.closest('.local-auth-password-wrapper')?.querySelector('input');
+        if (!input) return;
+        const isPassword = input.type === 'password';
+        input.type = isPassword ? 'text' : 'password';
+        btn.setAttribute('aria-label', isPassword ? '隐藏密码' : '显示密码');
+        btn.classList.toggle('active', isPassword);
+      });
+    });
     const submit = $('button[type="submit"]', form);
     const email = $('#local-auth-email', form);
     const password = $('#local-auth-password', form);

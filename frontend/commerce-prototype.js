@@ -3248,7 +3248,7 @@
                 const value = E(wechat);
                 const copy = A.button('复制', 'copy-value', 'compact', '',
                   `data-value="${value}" aria-label="复制微信号"`);
-                return `<div class="action-links"><span>${value}</span>${copy}</div>`;
+                return `<div class="table-copyable-cell"><span class="table-copyable-text" title="${value}">${value}</span>${copy}</div>`;
               }
             },
             { id: 'qq', label: 'QQ' },
