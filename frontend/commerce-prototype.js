@@ -2635,12 +2635,13 @@
       </article>`).join('')}</div>`
       : A.empty(guidance.title, guidance.description)}</div>`;
     return A.header('客户流失', '按订单开通记录和实际订阅周期统计。同一客户仍有有效订阅时不计流失。') +
-      `<section class="retention-overview design-async-region" aria-label="客户流失概览">${A.summary([
+      `<section class="retention-overview design-async-region" aria-label="客户流失概览">
+        <div class="retention-summary-bar"><div class="retention-summary-scroll" tabindex="0" role="group" aria-label="客户流失统计及更新时间">${A.summary([
         ['已流失客户', projection.lost.length, '位客户', true],
         ['近 7 天停止服务', projection.lost.filter(profile => profile.days < 7).length, '位客户'],
         ['待核对订单', projection.review.length, '笔'],
         ['待生效', projection.scheduled.length, '位客户']
-      ])}<div class="retention-report-meta"><p class="footnote">北京时间 ${E(retentionDate(projection.at))} · GPT、Claude、Gemini、Grok</p>
+      ])}<p class="retention-report-meta">北京时间 ${E(retentionDate(projection.at))} · GPT、Claude、Gemini、Grok</p></div>
         ${localData ? A.button(retentionRefreshFailed ? '重试' : '刷新', 'commerce-loss-refresh', '', 'return', retentionRefresh ? 'disabled' : '') : ''}</div>
         <div data-retention-progress role="status" hidden></div>
         ${retentionRefreshFailed ? '<p class="inline-notice warning" role="status">部分资料读取失败，保留已读取的资料，可重试。</p>' : ''}</section>

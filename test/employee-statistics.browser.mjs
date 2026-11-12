@@ -90,9 +90,9 @@ test('员工统计从数据管理进入，工作量、当前资产与权限独�
         await group.getByRole('link', { name: '员工数据统计', exact: true }).click();
         await page.getByRole('heading', { name: '员工数据统计', exact: true }).waitFor();
         const statistics = page.locator('#employee-statistics');
-        const header = label => statistics.locator('thead th').getByText(label, { exact: true });
+        const header = label => statistics.locator('.employee-statistics-details thead th').getByText(label, { exact: true });
         const employee = statistics.getByRole('combobox', { name: '员工', exact: true });
-        const orderCount = statistics.getByRole('button', { name: '查看测试员工的提交订单明细' });
+        const orderCount = statistics.getByRole('button', { name: '查看测试员工的提交订单明细', exact: true });
         await orderCount.waitFor();
         assert.equal(await orderCount.textContent(), '13');
         const toolbar = statistics.getByRole('group', { name: '员工统计筛选', exact: true });
@@ -100,6 +100,14 @@ test('员工统计从数据管理进入，工作量、当前资产与权限独�
         assert.equal(await shortcuts.getByRole('button', { name: '今天', exact: true }).getAttribute('aria-pressed'), 'true');
         const geometry = await toolbar.evaluate(node => {
           const bounds = node.getBoundingClientRect();
+          const heading = node.closest('.employee-statistics-header');
+          const row = heading.getBoundingClientRect();
+          const refresh = heading.querySelector('[data-action="employee-statistics-refresh"]').getBoundingClientRect();
+          const centers = [...heading.querySelectorAll('.tabs > .tab, .toolbar input, .toolbar select, .toolbar button, .employee-statistics-scope'),
+            heading.querySelector('[data-action="employee-statistics-refresh"]')].map(control => {
+            const box = control.getBoundingClientRect();
+            return (box.top + box.bottom) / 2;
+          });
           const controls = [...node.querySelectorAll('input, select, button')].map(control => {
             const rect = control.getBoundingClientRect();
             return { x: rect.x, y: rect.y, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height };
@@ -108,6 +116,10 @@ test('员工统计从数据管理进入，工作量、当前资产与权限独�
           const text = document.createRange();
           text.selectNodeContents(label.firstChild);
           return { controls, top: bounds.top, bottom: bounds.bottom,
+            scrollportWidth: heading.querySelector('.employee-statistics-scroll').clientWidth,
+            centerDeviation: Math.max(...centers) - Math.min(...centers),
+            refreshVisible: refresh.left >= row.left && refresh.right <= row.right && refresh.right <= innerWidth,
+            refreshInsets: [refresh.top - row.top, row.bottom - refresh.bottom],
             labelRight: text.getBoundingClientRect().right, labelCenter: (text.getBoundingClientRect().top + text.getBoundingClientRect().bottom) / 2 };
         });
         const [dateBox] = geometry.controls;
@@ -116,6 +128,9 @@ test('员工统计从数据管理进入，工作量、当前资产与权限独�
         assert(Math.abs(geometry.labelCenter - dateBox.y - dateBox.height / 2) <= 2, '日期文字未垂直居中');
         assert(geometry.controls.every(box => box.y - geometry.top >= 8 && geometry.bottom - box.bottom >= 8), '筛选控件贴边');
         assert(geometry.controls.every(box => box.height >= (width <= 900 ? 44 : 36)), '控件触控高度不足');
+        assert(geometry.centerDeviation <= 1, '页签、筛选、数据时间和刷新必须同排居中');
+        assert(geometry.scrollportWidth >= 140, '单行滚动区必须保留可见的操作空间');
+        assert(geometry.refreshVisible && geometry.refreshInsets.every(value => value >= 8), '刷新必须始终可见且与分隔线保持间距');
         for (let i = 0; i < geometry.controls.length; i++) for (let j = i + 1; j < geometry.controls.length; j++) {
           const a = geometry.controls[i], b = geometry.controls[j];
           assert(a.right <= b.x || b.right <= a.x || a.bottom <= b.y || b.bottom <= a.y, '筛选控件重叠');
@@ -125,10 +140,11 @@ test('员工统计从数据管理进入，工作量、当前资产与权限独�
         if (process.env.ID_LAYOUT_QA_OUTPUT && [2062, 1440, 390, 320].includes(width)) {
           await mkdir(process.env.ID_LAYOUT_QA_OUTPUT, { recursive: true });
           await page.screenshot({ path: `${process.env.ID_LAYOUT_QA_OUTPUT}/employee-statistics-${width}-${dark ? 'dark' : 'light'}.png` });
-          await toolbar.screenshot({ path: `${process.env.ID_LAYOUT_QA_OUTPUT}/toolbar-${width}-${dark ? 'dark' : 'light'}.png` });
+          await statistics.locator('.employee-statistics-header').screenshot({ path: `${process.env.ID_LAYOUT_QA_OUTPUT}/toolbar-${width}-${dark ? 'dark' : 'light'}.png` });
         }
         assert(await statistics.evaluate(panel => {
-          const bounds = panel.getBoundingClientRect();
+          const scroll = panel.querySelector('.employee-statistics-scroll');
+          const bounds = scroll.getBoundingClientRect();
           const controls = [...panel.querySelectorAll('.toolbar input, .toolbar select, .toolbar button')]
             .map(control => control.getBoundingClientRect());
           const textFits = [...panel.querySelectorAll('th')].every(heading => {
@@ -138,10 +154,14 @@ test('员工统计从数据管理进入，工作量、当前资产与权限独�
             const cell = heading.getBoundingClientRect();
             return text.left >= cell.left && text.right <= cell.right && text.bottom <= cell.bottom;
           });
-          return textFits && controls.every(control => control.left >= bounds.left && control.right <= bounds.right);
-        }), '统计表头文字或筛选控件超出边界');
+          return textFits && controls.every(control => control.left + scroll.scrollLeft >= bounds.left - 1 &&
+            control.right + scroll.scrollLeft <= bounds.left + scroll.scrollWidth + 1);
+        }), '统计表头文字或筛选控件超出可滚动范围');
+        const scroll = statistics.locator('.employee-statistics-scroll');
+        const previousScroll = await scroll.evaluate(node => { node.scrollLeft = node.scrollWidth; return node.scrollLeft; });
         await employee.selectOption(operator.id);
-        assert.equal(await statistics.locator('tbody tr').count(), 1);
+        assert.equal(await statistics.locator('.employee-statistics-details tbody tr').count(), 1);
+        assert.equal(await scroll.evaluate(node => node.scrollLeft), previousScroll, '筛选重绘应保留横向位置');
         await orderCount.press('Enter');
         const details = page.locator('#employee-statistics-detail');
         const firstDetail = details.locator('tbody tr[data-row-id]').first();
@@ -180,7 +200,7 @@ test('员工统计从数据管理进入，工作量、当前资产与权限独�
         assert.equal(await header('提交订单').count(), 0);
         await statistics.getByRole('button', { name: '待处理资产' }).click();
         assert.equal(await shortcuts.count(), 0, '待处理资产不使用历史日期筛选');
-        const unused = statistics.getByRole('button', { name: '查看测试员工的未用未还充值码明细' });
+        const unused = statistics.getByRole('button', { name: '查看测试员工的未用未还充值码明细', exact: true });
         await unused.waitFor();
         assert.equal(await unused.textContent(), '1');
         await employee.selectOption('');
@@ -205,7 +225,7 @@ test('员工统计从数据管理进入，工作量、当前资产与权限独�
           assert(a.right <= b.left || b.right <= a.left || a.bottom <= b.top || b.bottom <= a.top, '待处理资产筛选控件重叠');
         }
         if (process.env.ID_LAYOUT_QA_OUTPUT && [1440, 390, 320].includes(width)) {
-          await toolbar.screenshot({ path: `${process.env.ID_LAYOUT_QA_OUTPUT}/pending-toolbar-${width}-${dark ? 'dark' : 'light'}.png` });
+          await statistics.locator('.employee-statistics-header').screenshot({ path: `${process.env.ID_LAYOUT_QA_OUTPUT}/pending-toolbar-${width}-${dark ? 'dark' : 'light'}.png` });
         }
         for (const [label, column, excluded] of [
           ['充值码', '未用未还充值码', '未结邮箱'],
@@ -220,7 +240,7 @@ test('员工统计从数据管理进入，工作量、当前资产与权限独�
           assert.equal(await kinds.locator('[aria-pressed="true"]').count(), 1);
         }
         await statistics.getByRole('checkbox', { name: '只看异常' }).check();
-        assert.equal(await statistics.locator('tbody tr').count(), 2);
+        assert.equal(await statistics.locator('.employee-statistics-details tbody tr').count(), 2);
         await kinds.getByRole('button', { name: '账号', exact: true }).click();
         await statistics.getByRole('heading', { name: '暂无符合条件的待处理资产' }).waitFor();
         assert(await statistics.getByRole('checkbox', { name: '只看异常' }).isChecked());
@@ -247,7 +267,7 @@ test('员工统计从数据管理进入，工作量、当前资产与权限独�
           controls.httpError = true;
           await statistics.getByRole('button', { name: '刷新', exact: true }).click();
           await statistics.getByText('刷新失败，已保留上次统计。', { exact: true }).waitFor();
-          assert.equal(await statistics.locator('tbody tr').count(), 1);
+          assert.equal(await statistics.locator('.employee-statistics-details tbody tr').count(), 1);
           controls.httpError = false;
           await statistics.getByRole('button', { name: '刷新', exact: true }).click();
           await unused.waitFor();
