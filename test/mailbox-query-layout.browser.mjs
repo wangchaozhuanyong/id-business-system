@@ -74,11 +74,15 @@ try {
       await page.screenshot({ path: `${output}/after-${width}-${theme}.png` });
       await page.locator('#plugin-tool-host').screenshot({ path: `${output}/mailbox-panel-${width}-${theme}.png` });
     }
+    assert.equal(await pool.locator('#mailbox-pool-help').isVisible(), false, '用途说明默认收起');
     if (width === 2080) {
-      const centers = await pool.locator('.list-controls--filters').evaluate(el =>
-        [...el.querySelectorAll('.section-title-row,input,select,.mailbox-pool-actions > .button')]
-          .map(node => { const b = node.getBoundingClientRect(); return b.y + b.height / 2; }));
-      assert(Math.max(...centers) - Math.min(...centers) <= 1, '宽屏筛选与操作应在同一行对齐');
+      for (const selector of ['.mailbox-pool-toolbar', '#ops-mailbox-pool-search-form']) {
+        const centers = await pool.locator(selector).evaluate(el =>
+          [...el.querySelectorAll('.section-title-row,input,select,.button')]
+            .filter(node => node.checkVisibility())
+            .map(node => { const b = node.getBoundingClientRect(); return b.y + b.height / 2; }));
+        assert(Math.max(...centers) - Math.min(...centers) <= 1, '操作区和筛选区各自同排对齐');
+      }
     }
     await pool.getByRole('searchbox', { name: '搜索邮箱池' }).fill('layout-0');
     await pool.getByRole('button', { name: '邮箱查询', exact: true }).click();
@@ -112,7 +116,7 @@ try {
     assert.equal(await drawer.getByText('合成查询结果', { exact: true }).count(), 0, '邮件正文不保留');
     await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
     await drawer.waitFor({ state: 'hidden' });
-    await pool.getByRole('button', { name: '相关入口', exact: true }).click();
+    await pool.getByRole('button', { name: '邮箱池更多操作', exact: true }).click();
     assert(await page.getByRole('menuitem', { name: '打开买家查询页', exact: true }).isVisible());
     await page.keyboard.press('Escape');
     assert.deepEqual(errors, []);
