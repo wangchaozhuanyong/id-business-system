@@ -64,7 +64,9 @@ export function initializeExecutionProxies({ get, drafts, onChange, locked, onUs
       for (const value of [item.name, item.countryCode ? `${countryName(item.countryCode)} ${item.countryCode}` : '自动识别', kinds[item.kind], probeResults.has(item.id) ? (probeResults.get(item.id).status === 'usable' ? `可用 · ${probeResults.get(item.id).latencyMs}ms` : probeResults.get(item.id).status === 'failed' ? '检测未通过' : probeResults.get(item.id).status === 'testing' ? '检测中' : '未完成检测') : '未测试', `${item.endpoint} · ${protocolName(item.protocol)} · ${item.mode === 'dynamic' ? 'API 提取' : '代理地址'}`]) {
         const cell = document.createElement('td'); cell.textContent = value; cell.title = value; row.append(cell);
       }
-      const cell = document.createElement('td'), actions = document.createElement('div'); actions.className = 'bit-local__actions';
+      const cell = document.createElement('td'), actions = document.createElement('div');
+      cell.className = 'table-actions';
+      actions.className = 'action-links bit-local__actions';
       for (const [label, action] of [[item.id === select.value ? '已选用' : '使用', () => use(item.id)], ['测试', () => void testSaved(item)], ['编辑', () => openEditor(item)]]) {
         const button = document.createElement('button'); button.type = 'button'; button.className = 'button'; button.textContent = label;
         button.disabled = saving || probing || probeLoading || Boolean(batch) || locked(); button.addEventListener('click', action); actions.append(button);

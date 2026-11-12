@@ -36,6 +36,7 @@ import { claudeGoogleSubscriptionRoutes, createClaudeGoogleSubscriptionsHandler 
 import { createSubscriptionHandler, subscriptionRoutes } from './subscription-management.mjs';
 import { createRechargeCodeHandler, rechargeCodesRoute } from './recharge-code-requests.mjs';
 import { createRechargeOrderSync, orderSyncRoute } from './recharge-order-sync.mjs';
+import { createRechargeActivity, rechargeActivityDomain, rechargeActivityRoute } from './recharge-activity.mjs';
 import { createDataChangeStream, dataChangeRoute } from './change-sync.mjs';
 import { createEmployeeStatisticsHandler, employeeStatisticsRoute } from './employee-statistics.mjs';
 import { monitorPath, monitorConfigDomain, monitorReportPath, readyPath } from './monitoring-policy.mjs';
@@ -61,6 +62,7 @@ const files = new Map([
   ['overview-prototype.css', 'text/css; charset=utf-8'],
   ['finance-collection.css', 'text/css; charset=utf-8'],
   ['recharge-integration.css', 'text/css; charset=utf-8'],
+  ['recharge-activity.css', 'text/css; charset=utf-8'],
   ['bitbrowser-addresses.css', 'text/css; charset=utf-8'],
   ['order-opening.mjs', 'text/javascript; charset=utf-8'],
   ...[
@@ -78,6 +80,7 @@ const files = new Map([
     'employee-statistics',
     'order-operations',
     'order-completion',
+    'recharge-activity',
     'change-sync',
     'operations-prototype',
     'system-monitoring',
@@ -239,6 +242,7 @@ export async function startPreview(
   let handleAutomaticSnapshot = null;
   let financeCollection = null, handleFinanceCollection = null, handleOrderExpense = null;
   let handleOrderAuxiliary, handleCardManagement, handleClaudeGoogleSubscriptions, handleSubscriptions, handleRechargeCodes, orderSync;
+  let rechargeActivity;
   let handleEmployeeStatistics;
   let systemMonitoring, monitoringSources, handleMonitoring, handleProbeReport, handleReadiness;
   const orderRechargeClient = createOrderRechargeClient(rechargeConfig);
@@ -291,6 +295,9 @@ export async function startPreview(
         };
       }
       store = localBusiness.createLocalBusinessStore(databasePath);
+      if (rechargeConfig) rechargeActivity = createRechargeActivity({
+        store, client: orderRechargeClient, publicOrigin: secureOrigin, getActor: request => auth?.getActor(request)
+      });
       systemMonitoring = createSystemMonitoring({ store, origin: secureOrigin,
         native: rechargeConfig ? createLegacyRechargeNotifications(orderRechargeClient) : undefined,
         send: publicUrl ? undefined : async () => ({ status: 'failed', reason: 'configuration' }) });
@@ -429,7 +436,10 @@ export async function startPreview(
   const dataChanges = store ? createDataChangeStream({
     getActor: request => auth?.getActor(request, { throwOnUnavailable: true }) || (!authPath && !publicUrl
       ? { id: 'local-operator', role: 'admin' } : null),
-    getVersions: actor => ({ ...store.changeVersions(actor), operators: auth?.changeVersion() || '0' }),
+    getVersions: actor => ({
+      ...store.changeVersions(actor), operators: auth?.changeVersion() || '0',
+      ...(rechargeActivity && { [rechargeActivityDomain]: rechargeActivity.version(actor) })
+    }),
     subscribe: listener => store.subscribeChanges(listener),
     watchPaths: [
       ...(databasePath && databasePath !== ':memory:' ? [databasePath, databasePath + '-wal', databasePath + '-journal'] : []),
@@ -547,6 +557,10 @@ export async function startPreview(
     if (store && route === rechargeCodesRoute) {
       if (!actor) return forbidden();
       return void handleRechargeCodes(request, response, actor);
+    }
+    if (rechargeActivity && (route === rechargeActivityRoute || route.startsWith(rechargeActivityRoute + '/'))) {
+      if (!actor) return forbidden();
+      return void rechargeActivity.handle(request, response, actor);
     }
     if (store && route === orderSyncRoute) {
       if (!actor || !canManage) return forbidden();
@@ -699,6 +713,7 @@ export async function startPreview(
   });
   if (financeCollection) server.once('close', () => financeCollection.close());
   if (systemMonitoring) server.once('close', () => { monitoringSources?.close(); systemMonitoring.close(); });
+  if (rechargeActivity) server.once('close', () => rechargeActivity.close());
   if (store) server.once('close', () => store.close());
   if (dataChanges) server.once('close', () => dataChanges.close());
   if (rechargeOrderSync && orderSync && rechargeConfig) {
@@ -752,6 +767,7 @@ export async function startPreview(
   });
   financeCollection?.start();
   monitoringSources?.start();
+  rechargeActivity?.start();
   return { server, url: 'http://127.0.0.1:' + server.address().port + '/' };
 }
 

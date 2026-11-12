@@ -9,10 +9,11 @@
       content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
     />
     <title>ID 业务管理 · 新版交互设计</title>
-    <link rel="stylesheet" href="./prototype.css?v=20261112-relay-layout" />
+    <link rel="stylesheet" href="./prototype.css?v=20261112-ui-fixes" />
     <link rel="stylesheet" href="./pagination.css?v=20261110-entry-card-mail" />
-    <link rel="stylesheet" href="./recharge-integration.css?v=20261110-tabs" />
-    <link rel="stylesheet" href="./bitbrowser-addresses.css?v=20261111-address-generate-only" />
+    <link rel="stylesheet" href="./recharge-integration.css?v=20261112-table-action-width" />
+    <link rel="stylesheet" href="./recharge-activity.css" />
+    <link rel="stylesheet" href="./bitbrowser-addresses.css?v=20261112-table-action-width" />
     <link rel="stylesheet" href="./title-help.css?v=20261110-visual-r1" />
     <link rel="stylesheet" href="./overview-prototype.css?v=20261111-ui-closure" />
     <link rel="stylesheet" href="./design-charts.css?v=20261110-visual-r1" />
@@ -21,25 +22,26 @@
     <script src="/title-help.js?v=20261110-order-workspace-viewport" defer></script>
     <script src="./pagination.js?v=20261111-monitoring-orders-toolbar" defer></script>
     <script src="./design-charts.js?v=20261110-visual-r1" defer></script>
-    <script src="./interaction-preferences.js?v=20261110-visual-r1" defer></script>
-    <script src="./prototype.js?v=20261112-workspace-ui-fixes" defer></script>
+    <script src="./interaction-preferences.js?v=20261112-sidebar-sound" defer></script>
+    <script src="./prototype.js?v=20261112-ui-fixes" defer></script>
     <script src="./inventory-prototype.js?v=20261112-workspace-ui-fixes" defer></script>
     <script src="./apple-relay-prototype.js?v=20261112-relay-performance" defer></script>
     <script type="module" src="./apple-funding.mjs?v=20261110-account-apple-funding"></script>
-    <script src="./apple-balance-prototype.js?v=20261111-overview-analytics" defer></script>
+    <script src="./apple-balance-prototype.js?v=20261112-table-action-width" defer></script>
     <script type="module" src="./order-opening.mjs?v=20261112-order-customer-match"></script>
     <script src="./commerce-prototype.js?v=20261112-order-customer-tenant-phone" defer></script>
     <script src="./claude-google-subscriptions.js?v=20261110-entry-card-mail" defer></script>
-    <script src="./subscription-management.js?v=20261111-subscription-toolbar" defer></script>
+    <script src="./subscription-management.js?v=20261112-table-action-width" defer></script>
     <script src="./employee-statistics.js?v=20261110-mobile-workflow" defer></script>
     <script src="./order-completion.js?v=20261111-ui-closure" defer></script>
     <script src="./order-operations.js?v=20261112-recharge-approval" defer></script>
-    <script src="./operations-prototype.js?v=20261110-mobile-workflow" defer></script>
+    <script src="./operations-prototype.js?v=20261112-table-action-width" defer></script>
     <script src="./bitbrowser-addresses.js?v=20261111-ui-closure" defer></script>
     <script src="./overview-prototype.js?v=20261111-ui-closure" defer></script>
     <script src="./finance-collection.js?v=20261111-free-fx-backup" defer></script>
     <script src="./system-monitoring.js?v=20261111-monitoring-orders-toolbar" defer></script>
-    <script src="./change-sync.js?v=20261111-overview-pending" defer></script>
+    <script src="./recharge-activity.js" defer></script>
+    <script src="./change-sync.js?v=20261112-recharge-activity" defer></script>
   </head>
   <body>
     <a class="skip-link" href="#main">跳到主要内容</a>
@@ -85,6 +87,7 @@
             >
               <i></i>交互原型 · 状态预览
             </button>
+            <button class="icon-button recharge-activity-toggle" id="recharge-activity-toggle" type="button" data-action="recharge-activity-open" aria-label="代充动态" title="代充动态" aria-haspopup="dialog" aria-controls="drawer" hidden></button>
             <button class="icon-button" id="theme-toggle" aria-label="切换为深色主题"></button>
             <span class="topbar-divider"></span>
             <button class="profile-button" id="profile-button" aria-label="查看演示账户">
@@ -103,6 +106,8 @@
     <dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-title"></dialog>
     <div id="mobile-tools-panel" class="mobile-tools-panel" popover="auto" aria-label="工具与界面设置"></div>
     <div id="mobile-entry-actions" class="mobile-entry-actions" hidden></div>
+    <aside class="recharge-activity-toast" id="recharge-activity-toast" aria-label="代充提醒" hidden></aside>
+    <div class="recharge-activity-announcement" id="recharge-activity-announcement" role="status" aria-live="polite"></div>
     <div class="toast" id="toast" popover="manual" role="status" aria-live="polite" aria-atomic="true" hidden></div>
   </body>
 </html>

@@ -272,10 +272,10 @@
     const history = row.history.map(item => `<tr><td>${esc(item.orderNo || '历史入库')}</td><td>${esc(item.plan || '待核对')}</td>` +
       `<td>${esc(displayDate(item.start))}</td><td>${esc(displayDate(item.expiry))}</td><td>${stateTag(item.status)}${item.missingAssociation
         ? A.tag('资料待补', 'warning') : ''}</td>` +
-      `<td>${item.source === 'order' ? textAction(!item.confirmed && ['Gemini', 'Grok'].includes(row.product) ? '前往订单核对' : '查看订单',
+      `<td class="table-actions"><div class="action-links">${item.source === 'order' ? textAction(!item.confirmed && ['Gemini', 'Grok'].includes(row.product) ? '前往订单核对' : '查看订单',
         'subscriptions-order', `data-order-id="${esc(item.sourceId)}"`) : '历史资料'}` +
       `${row.status !== 'dead' && item.source === 'order' && !item.confirmed && !item.missingAssociation && !row.conflict && ['GPT', 'Claude'].includes(row.product) ? textAction('确认开通', 'subscriptions-confirm',
-        `data-id="${esc(row.id)}" data-order-id="${esc(item.sourceId)}"`) : ''}</td></tr>`).join('');
+        `data-id="${esc(row.id)}" data-order-id="${esc(item.sourceId)}"`) : ''}</div></td></tr>`).join('');
     A.openDrawer('订阅账号详情', '每次订单独立保留，历史入库不会生成虚构订单。',
       `<div class="property-list"><div class="property-row"><span>邮箱账号</span><strong>${esc(emailAccount(row))}</strong></div>
        ${xAccount ? `<div class="property-row"><span>X 账号</span><strong>${esc(xAccount)}</strong></div>` : ''}
@@ -283,7 +283,7 @@
        <div class="property-row"><span>归属人</span><strong>${esc(row.ownerName || (row.ownerEligible ? '未设置' : '—'))}</strong></div>
        <div class="property-row"><span>操作人</span><strong>${esc(row.operatorName)}</strong></div></div>
        ${row.conflict ? '<p class="inline-notice warning">账号、客户或邮箱关联存在冲突，请先核对原资料。</p>' : ''}
-       <div class="table-viewport" tabindex="0"><table><thead><tr><th>订单／来源</th><th>套餐</th><th>订阅时间</th><th>到期时间</th><th>状态</th><th>操作</th></tr></thead><tbody>${history}</tbody></table></div>`,
+       <div class="table-viewport" tabindex="0"><table><thead><tr><th>订单／来源</th><th>套餐</th><th>订阅时间</th><th>到期时间</th><th>状态</th><th class="table-actions">操作</th></tr></thead><tbody>${history}</tbody></table></div>`,
       button('关闭', 'drawer-close'));
   }
 

@@ -66,10 +66,6 @@
   padding-inline: 0;
 }
 
-#bit-address-list .table-actions {
-  min-width: 6rem;
-}
-
 #bit-address-list td[data-column='line1'] {
   min-width: 10rem;
   white-space: normal;

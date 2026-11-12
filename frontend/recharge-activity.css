@@ -1,0 +1,139 @@
+.recharge-activity-toggle {
+  position: relative;
+  flex: none;
+}
+.recharge-activity-count {
+  position: absolute;
+  inset: 1px 1px auto auto;
+  min-width: 17px;
+  padding: 0 3px;
+  border-radius: 9px;
+  background: var(--primary);
+  color: var(--on-primary);
+  font-size: 10px;
+  line-height: 17px;
+  text-align: center;
+}
+.recharge-activity-toast {
+  position: fixed;
+  z-index: 29;
+  inset: auto max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) auto;
+  width: min(355px, calc(100vw - 32px));
+  max-height: min(460px, 75dvh);
+  overflow: auto;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-inline-start: 3px solid var(--activity-color);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-raised);
+}
+:is(.recharge-activity-toast, .recharge-activity-detail-status) { --activity-color: var(--blue); }
+:is(.recharge-activity-toast, .recharge-activity-detail-status)[data-status='success'] { --activity-color: var(--primary); }
+:is(.recharge-activity-toast, .recharge-activity-detail-status)[data-status='failed'] { --activity-color: var(--danger); }
+:is(.recharge-activity-toast, .recharge-activity-detail-status)[data-status='review'] { --activity-color: var(--warning); }
+.recharge-activity-toast-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  line-height: 1.4;
+}
+.recharge-activity-toast-heading strong {
+  font-size: 14px;
+}
+.recharge-activity-toast-heading .icon-button {
+  flex: none;
+  width: 32px;
+  min-height: 32px;
+  height: 32px;
+}
+.recharge-activity-fields {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px 12px;
+  margin: 8px 0;
+  font-size: 13px;
+}
+.recharge-activity-fields dt,
+.recharge-activity-meta {
+  color: var(--secondary);
+}
+.recharge-activity-fields dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.recharge-activity-meta {
+  margin: 8px 0 0;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.recharge-activity-toast-actions,
+.recharge-activity-history-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-block: var(--toolbar-padding-block, 12px) 0;
+}
+.recharge-activity-announcement {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.recharge-activity-history,
+.recharge-activity-timeline {
+  list-style: none;
+  margin: 8px 0 12px;
+  padding: 0;
+}
+.recharge-activity-history li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: var(--toolbar-padding-block, 12px) 0;
+  border-bottom: 1px solid var(--line);
+}
+.recharge-activity-history li > button { flex: none; }
+.recharge-activity-history-summary { min-width: 0; overflow-wrap: anywhere; }
+.recharge-activity-history-summary > span { display: block; }
+.recharge-activity-history-summary .recharge-activity-meta { margin-top: 3px; }
+.recharge-activity-unread {
+  margin-inline-start: 8px;
+  color: var(--blue);
+  font-size: 12px;
+  font-weight: 500;
+}
+.recharge-activity-detail-status {
+  display: block;
+  margin-bottom: 14px;
+  padding-inline-start: 10px;
+  border-inline-start: 3px solid var(--activity-color);
+}
+.recharge-activity-timeline li {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+.recharge-activity-timeline time { color: var(--secondary); margin-inline-start: 6px; }
+.recharge-activity-timeline p { margin: 4px 0 0; }
+@media (max-width: 900px) {
+  .recharge-activity-toast {
+    inset-inline: max(12px, env(safe-area-inset-left)) max(12px, env(safe-area-inset-right));
+    bottom: calc(max(12px, env(safe-area-inset-bottom)) + var(--mobile-keyboard-inset, 0px));
+    width: auto;
+  }
+  #mobile-entry-actions:not([hidden]) ~ .recharge-activity-toast {
+    bottom: calc(84px + env(safe-area-inset-bottom) + var(--mobile-keyboard-inset, 0px));
+  }
+  .recharge-activity-toast-heading .icon-button { width: 44px; min-height: 44px; height: 44px; }
+}
+@media (max-width: 370px) {
+  .recharge-activity-history li { flex-wrap: wrap; }
+  .recharge-activity-history li > button { margin-inline-start: auto; }
+}
