@@ -422,7 +422,8 @@ export async function startPreview(
       });
       handleAutomaticSnapshot = createAutomaticSnapshotHandler({ store, quoteService, publicOrigin: secureOrigin });
       orderSync = createRechargeOrderSync({ store, client: orderRechargeClient, quoteService, publicOrigin: secureOrigin,
-        background: Boolean(rechargeOrderSync && rechargeConfig) });
+        background: Boolean(rechargeOrderSync && rechargeConfig),
+        onStatus: success => monitoringSources?.recordOrderSync(success) });
       await installFinanceAssets(assets, { automaticQuotes: true });
     } catch (error) {
       financeCollection?.close();
@@ -733,10 +734,7 @@ export async function startPreview(
   if (store) server.once('close', () => store.close());
   if (dataChanges) server.once('close', () => dataChanges.close());
   if (rechargeOrderSync && orderSync && rechargeConfig) {
-    const syncOrders = () => void orderSync.run({ apply: true }).then(
-      () => monitoringSources?.recordOrderSync(true),
-      error => { if (error.status !== 409) monitoringSources?.recordOrderSync(false); }
-    );
+    const syncOrders = () => void orderSync.run({ apply: true }).catch(() => {});
     const timer = setInterval(syncOrders, 60_000);
     timer.unref();
     server.once('listening', syncOrders);

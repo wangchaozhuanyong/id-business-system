@@ -79,33 +79,48 @@ export function checkInventoryEntryFields(previous, next, action) {
   for (const row of [...mailboxes, ...accounts]) {
     if (!row) continue;
     const old = prior.get(row.id);
+    const changed = key => !old || (old[key] ?? '') !== (row[key] ?? '');
+    if (row.acquisitionMethod && !['self_registered', 'purchased'].includes(row.acquisitionMethod))
+      return '请选择有效的账号来源';
+    if (changed('acquisitionMethod') && row.acquisitionMethod === 'purchased' && row.sourceMailboxId)
+      return '已关联注册邮箱的账号须保留原来源记录';
     if (row.type === 'microsoft') {
+      if (changed('mailboxUsage') && (!entryAction || !['', 'available', 'used'].includes(row.mailboxUsage || '')))
+        return '请在微软邮箱资料中登记已知的使用状态';
       if (old && row.email !== old.email) return '邮箱地址创建后不可修改';
       if (useState(row) !== useState(old) || row.claimId !== old?.claimId || row.claimBatchId !== old?.claimBatchId ||
           !isDeepStrictEqual(row.usageLinks ?? [], old?.usageLinks ?? []))
         return '微软邮箱库存暂未接入提取、归还和使用流程';
       if (old && sameEntryFields(old, row)) continue;
       if (!entryAction && (action !== 'inventory_undo' || !old)) return '请从微软邮箱管理录入或编辑资料';
-      const issue = checkMicrosoftFields(row, recoveryMailboxes);
-      if (issue) return issue;
-      if (microsoftAddresses.get(emailKey(row.email)) > 1) return '相同类型邮箱重复，不覆盖原资料';
+      if ((changed('source') && !text(row.source, 200)) ||
+          (changed('status') && !['正常', '冻结', '封控中'].includes(row.status)))
+        return '请选择有效的微软邮箱来源渠道和账号状态';
+      const changesSecurity = !old || ['password', 'phone', 'auxiliary', 'totp', 'appPassword'].some(changed) ||
+        !isDeepStrictEqual(old.microsoftSecurity, row.microsoftSecurity);
+      if (changesSecurity) {
+        const issue = checkMicrosoftFields(row, recoveryMailboxes);
+        if (issue) return issue;
+      }
+      if (!old && microsoftAddresses.get(emailKey(row.email)) > 1) return '相同类型邮箱重复，不覆盖原资料';
     } else {
       if (!entryAction || (old && (old.version || 1) === (row.version || 1) && sameEntryFields(old, row))) continue;
     }
     if (row.type === 'google') {
-      if (!text(row.country, 100)) return '谷歌邮箱的国家地区必填';
-      if (!optionalText(row.device, 200)) return '谷歌邮箱的登录设备须为不超过 200 个字符的文字';
+      if (changed('country') && !text(row.country, 100)) return '谷歌邮箱的国家地区必填';
+      if (changed('device') && !optionalText(row.device, 200)) return '谷歌邮箱的登录设备须为不超过 200 个字符的文字';
     }
-    if (row.type === 'claude' && (!text(row.device, 200) || !text(row.proxyUrl, 2048)))
+    if (row.type === 'claude' && row.acquisitionMethod !== 'purchased' &&
+        ((changed('device') && !text(row.device, 200)) || (changed('proxyUrl') && !text(row.proxyUrl, 2048))))
       return 'Claude 账号的登录设备和注册代理链接必填';
-    if (row.type === 'claude') {
+    if (row.type === 'claude' && row.proxyUrl && changed('proxyUrl')) {
       try {
         const proxy = new URL(row.proxyUrl);
         if (!['socks5:', 'http:', 'https:'].includes(proxy.protocol) || !proxy.hostname || /\s/.test(row.proxyUrl) ||
             (proxy.pathname && proxy.pathname !== '/') || proxy.search || proxy.hash) return '注册代理链接格式不正确';
       } catch { return '注册代理链接格式不正确'; }
     }
-    if (['google', 'apple', 'microsoft'].includes(row.type) && /^[a-z][a-z0-9+.-]*:/i.test(row.phone || '')) {
+    if (['google', 'apple', 'microsoft'].includes(row.type) && changed('phone') && /^[a-z][a-z0-9+.-]*:/i.test(row.phone || '')) {
       try {
         const url = new URL(row.phone);
         if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) return '验证码链接仅支持有效的 HTTP(S) 地址';

@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { assignOrderOwner, checkSubscriptionTermination, manualOrderDetailsAction, moneyUnits, validMoney } from './order-policy.mjs';
-import { validCurrencyCode } from '../modules/finance/accounting.mjs';
+import { currencies, validCurrencyCode } from '../modules/finance/accounting.mjs';
 import {
-  manualBusinessOrder, manualOrderDetailsMissing, orderOpeningConfirmed, subscriptionTime, validOrderEmail, validOrderXHandle
+  automaticGptOrder, rechargeOrderCompletion, rechargeOrderOwner, manualBusinessOrder, manualOrderDetailsMissing,
+  orderOpeningConfirmed, subscriptionTime, validOrderEmail, validOrderXHandle
 } from '../frontend/order-opening.mjs';
 import { accountLifecycleSummary, systemAccount } from './account-lifecycle.mjs';
 import { isClaudeHistoricalSale } from './claude-history-intake.mjs';
@@ -16,10 +18,10 @@ const orderFields = ['id', 'orderNo', 'email', 'plan', 'start', 'expiry', 'recha
   'saleAmount', 'saleCurrency', 'paidAmount', 'paidCurrency', 'paidConfirmed', 'receiptConfirmed', 'notes'];
 const manager = (actor) => ['admin', 'super'].includes(actor?.role);
 const clean = (value) => typeof value === 'string' ? value.trim() : '';
-const ownerId = order => clean(order.ownerId) || clean(order.rechargeOwnerId) || clean(order.createdById);
+const ownerId = rechargeOrderOwner;
 const hasRecordedOwner = order => Boolean(clean(ownerId(order)) || clean(order.owner));
 const sourceOf = (order, customer) => clean(order.customerSource) || clean(customer?.source);
-const automatic = (order) => order.id && order.source === '线上代充' && order.product === 'GPT' && order.taskId &&
+const automatic = (order) => order.id && automaticGptOrder(order) && order.entitlementStatus !== 'failed' &&
   !order.cancelled && !order.draft && !['draft', 'failed', 'cancelled', '草稿', '失败', '已撤单'].includes(order.status);
 const visible = (order, actor) => automatic(order) && (manager(actor) || ownerId(order) === actor.id);
 const sourcesOf = (settings) => Array.isArray(settings?.customerSources) ? settings.customerSources : defaultSources;
@@ -62,7 +64,7 @@ function paymentView(order) {
   } else if (configured !== null && actual !== configured) {
     financeIssues.push('配置代付与实际扣款有差额');
   }
-  if (!order.receiptConfirmed) financeIssues.push('实收待确认');
+  if (!rechargeOrderCompletion(order).receiptRecorded) financeIssues.push('客户实收未登记');
   return {
     configuredSaleAmount: price?.saleAmount ?? '', configuredSaleCurrency: price?.saleCurrency ?? '',
     standardPaidAmount, financeIssues
@@ -78,17 +80,16 @@ function customerView(row) {
 
 function orderView(order, customer, actor, names = new Map()) {
   const source = sourceOf(order, customer);
-  const owner = ownerId(order);
-  const customerLinkMissing = Boolean(order.customerId && !customer);
-  const missing = [...(customer ? [] : [customerLinkMissing ? '客户关联待核对' : '客户']),
-    ...(source ? [] : ['客户来源'])];
+  const { ownerId: owner, receiptRecorded, state, missing } = rechargeOrderCompletion(order, customer);
+  const tail = clean(order.paymentId) || clean(order.proCardNumber).slice(-4);
+  const cardLast4 = /^\d{4,6}$/.test(tail) ? tail.slice(-4) : '';
   return {
     ...fields(order, [...orderFields, ...contactFields.map(([key]) => key)]),
     ...paymentView(order), customer: customerView(customer),
-    customerSource: source, customerLinkMissing,
-    owner: order.owner || names.get(owner) || (owner === actor.id ? actor.name : ''),
-    state: !owner ? 'unassigned' : missing.length ? 'pending' : 'complete',
-    missing
+    customerSource: source, cardLast4, bankPayment: order.payment === '银行卡',
+    customerLinkMissing: Boolean(order.customerId && !customer), receiptRecorded,
+    owner: order.owner || names.get(owner) || (owner === actor.id ? actor.name : owner),
+    state, missing
   };
 }
 
@@ -133,7 +134,7 @@ export function readOrderCompletion(data, settings, actor, params, readOwners) {
   const customers = data?.customers || [];
   if (params.has('orderId')) {
     const order = findOrder(data, params.get('orderId'), actor);
-    if (!ownerId(order) || order.customerId) return { items: [] };
+    if (customers.some(row => row.id === order.customerId)) return { items: [] };
     const query = clean(params.get('q')).slice(0, 100);
     if (!query) return { items: [] };
     const match = ['name', ...contactFields.map(([, key]) => key)].map((key) => [key, contactKey(query, key)]);
@@ -149,6 +150,8 @@ export function readOrderCompletion(data, settings, actor, params, readOwners) {
     .map((row) => orderView(row, byId.get(row.customerId), actor, names));
   return {
     items, sources: sourcesOf(settings), canAssign: manager(actor),
+    receiptCurrencies: [...new Set([...currencies, ...(settings?.orderCurrenciesByProduct?.GPT ||
+      settings?.orderCurrencies || []).map(row => row.code).filter(validCurrencyCode)])],
     ...(manager(actor) && { manualItems: (data?.orders || []).filter(manualBusinessOrder)
       .map(row => manualOrderView(row, byId.get(row.customerId), names)).filter(row => row.missing.length) }),
     owners: people.filter((row) => row.active !== false && roles.includes(row.role)).map(({ id, name }) => ({ id, name }))
@@ -289,81 +292,133 @@ export function fillManualOrderDetails(data, inventory, actor, command, at, lega
   return { order: { ...order, ...editMetadata(actor, at), version: command.version + 1 }, ...(costReason && { costReason }) };
 }
 
+function fillRechargeOwner(next, order, actor, command, readOwners, at) {
+  if (!manager(actor)) throw new OrderCompletionError(403, '只有管理员可以确认订单归属');
+  if (ownerId(order)) throw new OrderCompletionError(409, '订单已有归属人');
+  const reason = text(command.reason, 200);
+  const selected = { ownerId: text(command.ownerId, 100) };
+  if (!selected.ownerId || !reason) throw new OrderCompletionError(400, '请选择归属人并填写归属依据');
+  const error = assignOrderOwner(selected, null, actor, readOwners?.() || []);
+  if (error) throw new OrderCompletionError(error.status, error.message);
+  Object.assign(next, selected, { rechargeOwnerAssignment: { actorId: actor.id, at, reason } });
+}
+
+function recordRechargeReceipt(next, order, receipt, at) {
+  if (receipt === undefined) return;
+  exactKeys(receipt, ['amount', 'currency']);
+  const amount = text(receipt.amount, 21), currency = text(receipt.currency, 3);
+  if (!validMoney(amount) || !validCurrencyCode(currency))
+    throw new OrderCompletionError(400, '请填写有效的实际收款金额和币种');
+  const evidence = order.financialEvidence || [];
+  const recorded = rechargeOrderCompletion(order).receiptRecorded;
+  if (recorded || evidence.some(item => item.kind === 'receipt')) {
+    if (recorded && currency === order.saleCurrency && moneyUnits(amount) === moneyUnits(order.saleAmount)) return;
+    throw new OrderCompletionError(409, '原实收已有记录，请在原单办理更正');
+  }
+  next.saleAmount = amount;
+  next.saleCurrency = currency;
+  next.receiptConfirmed = true;
+  next.financialEvidence = [...evidence, { kind: 'receipt', amount, currency, at }];
+}
+
+export function rechargeOrderEmailConflict(orders, order, email) {
+  return Boolean(order.customerId && validOrderEmail(email) && orders.some(row => row.id !== order.id &&
+    row.product === 'GPT' && !row.cancelled && !row.draft && !row.subscriptionEnded && row.customerId &&
+    row.customerId !== order.customerId && clean(row.email).toLowerCase() === email.trim().toLowerCase()));
+}
+
 export function applyOrderCompletion(data, settings, actor, command, readOwners, at) {
   requireCompletionActor(actor);
   const envelope = ['action', 'orderId', 'version'];
   const assign = command?.action === 'assign';
-  exactKeys(command, assign ? [...envelope, 'ownerId', 'reason'] : [...envelope,
-    'customerId', 'customerVersion', 'newCustomer', 'customerSource', 'contacts', 'notes']);
+  exactKeys(command, assign ? [...envelope, 'ownerId', 'reason'] : [...envelope, 'ownerId', 'reason',
+    'customerId', 'customerVersion', 'newCustomer', 'customerSource', 'contacts', 'notes', 'receipt', 'email', 'cardLast4']);
   if (typeof command.orderId !== 'string' || !Number.isSafeInteger(command.version) ||
       !['complete', 'assign'].includes(command.action))
     throw new OrderCompletionError(400, '订单或资料版本无效');
   if (assign && !manager(actor)) throw new OrderCompletionError(403, '只有管理员可以确认订单归属');
   const order = findOrder(data, command.orderId, actor);
-  if (order.version !== command.version) throw new OrderCompletionError(409, '订单已更新，请关闭并重新打开后核对');
-  const next = { ...order, ...editMetadata(actor, at), version: order.version + 1 };
-  if (assign) {
-    if (ownerId(order)) throw new OrderCompletionError(409, '订单已有归属人');
-    const reason = text(command.reason, 200);
-    if (!reason) throw new OrderCompletionError(400, '请填写归属依据');
-    const owner = { ownerId: text(command.ownerId, 100) };
-    if (!owner.ownerId) throw new OrderCompletionError(400, '请选择归属人');
-    const error = assignOrderOwner(owner, null, actor, readOwners?.() || []);
-    if (error) throw new OrderCompletionError(error.status, error.message);
-    Object.assign(next, owner);
-    next.rechargeOwnerAssignment = { actorId: actor.id, at, reason };
-    return { order: next };
-  }
-  if (!ownerId(order)) throw new OrderCompletionError(409, '请先确认订单归属');
+  if ((order.version ?? 0) !== command.version) throw new OrderCompletionError(409, '订单已更新，请重新读取后保存');
+  const next = { ...order };
+  if (assign || command.ownerId !== undefined) fillRechargeOwner(next, order, actor, command, readOwners, at);
+
+  let customer, adding = false;
   const customers = data.customers || [];
-  const inputId = text(command.customerId, 100);
-  const current = customers.find((row) => row.id === (order.customerId || inputId));
-  if (order.customerId && !current) throw new OrderCompletionError(409, '原订单的客户关联待核对');
-  const adding = command.newCustomer !== undefined;
-  if (order.customerId && (adding || (inputId && inputId !== order.customerId)))
-    throw new OrderCompletionError(409, '订单已关联客户，请刷新核对');
-  if (adding && (inputId || command.customerVersion !== undefined))
-    throw new OrderCompletionError(400, '请选择已有客户或新增客户');
-  if (!current && !adding) throw new OrderCompletionError(400, '请选择客户');
-  if (current?.active === false && !order.customerId) throw new OrderCompletionError(409, '所选客户已停用');
-  if (current && command.customerVersion !== (current.version ?? 0))
-    throw new OrderCompletionError(409, '客户资料已更新，请重新打开后核对');
-  const source = fill(sourceOf(order, current), text(command.customerSource, 40), '客户来源');
-  if (!source || (!sourceOf(order, current) && !sourcesOf(settings).includes(source)))
-    throw new OrderCompletionError(400, '请选择系统设置中的客户来源');
+  const linked = customers.find(row => row.id === order.customerId);
+  let current = linked;
+  if (!assign) {
+    const inputId = text(command.customerId, 100);
+    adding = command.newCustomer !== undefined;
+    if (linked && (adding || (inputId && inputId !== linked.id)))
+      throw new OrderCompletionError(409, '订单已关联客户，请重新读取后保存');
+    if (adding && (inputId || command.customerVersion !== undefined))
+      throw new OrderCompletionError(400, '请选择已有客户或新增客户');
+    current ||= customers.find(row => row.id === inputId);
+    if (inputId && (!current || (!linked && current.active === false)))
+      throw new OrderCompletionError(409, '所选客户已停用或不存在');
+    if (current && command.customerVersion !== (current.version ?? 0))
+      throw new OrderCompletionError(409, '客户资料已更新，请重新读取后保存');
 
-  const contacts = command.contacts === undefined ? {} : command.contacts;
-  exactKeys(contacts, contactFields.map(([key]) => key));
-  if (adding) exactKeys(command.newCustomer, ['name']);
-  const name = current ? current.name : text(command.newCustomer.name, 80);
-  if (!clean(name)) throw new OrderCompletionError(400, '请填写客户姓名');
+    const source = fill(sourceOf(order, current), text(command.customerSource, 40), '客户来源');
+    if (source && !sourceOf(order, current) && !sourcesOf(settings).includes(source))
+      throw new OrderCompletionError(400, '请选择有效的客户来源');
+    if (source) next.customerSource = source;
+    const contacts = command.contacts === undefined ? {} : command.contacts;
+    exactKeys(contacts, contactFields.map(([key]) => key));
+    if (adding) exactKeys(command.newCustomer, ['name']);
+    const name = current?.name || (adding ? text(command.newCustomer.name, 80) : '');
+    if (adding && (!name || /[\r\n]/.test(name))) throw new OrderCompletionError(400, '请填写客户姓名');
 
-  const customerChanges = {};
-  if (!clean(current?.source)) customerChanges.source = source;
-  for (const [orderKey, customerKey] of contactFields) {
-    const entered = text(contacts[orderKey], 60);
-    const existing = clean(order[orderKey]) ? order[orderKey] : current?.[customerKey];
-    const value = fill(existing, entered, '联系方式');
-    if (value && !clean(order[orderKey])) next[orderKey] = value;
-    if (value && !clean(current?.[customerKey])) customerChanges[customerKey] = value;
+    const customerChanges = {};
+    if (source && !clean(current?.source)) customerChanges.source = source;
+    for (const [orderKey, customerKey] of contactFields) {
+      const entered = text(contacts[orderKey], 60);
+      const existing = clean(order[orderKey]) ? order[orderKey] : current?.[customerKey];
+      const value = fill(existing, entered, '联系方式');
+      if (value && !clean(order[orderKey])) next[orderKey] = value;
+      if (value && !clean(current?.[customerKey])) customerChanges[customerKey] = value;
+    }
+    if (command.notes !== undefined) next.notes = fill(order.notes, text(command.notes, 1000), '备注') || '';
+    if ((current || adding) && customers.some(row => row.id !== current?.id && contactKey(row.name) === contactKey(name) &&
+        contactFields.some(([, key]) => clean(customerChanges[key]) &&
+          contactKey(row[key], key) === contactKey(customerChanges[key], key))))
+      throw new OrderCompletionError(409, '已有同名客户使用相同联系方式，请选择已有客户');
+    if (adding) {
+      customer = {
+        id: 'commerce-customer-' + randomUUID(), name, active: true, version: 1, tags: [], notes: '',
+        ...customerChanges, ...editMetadata(actor, at), createdById: actor.id, createdBy: actor.name, createdAt: at
+      };
+    } else if (current && Object.keys(customerChanges).length) {
+      customer = { ...current, ...customerChanges, ...editMetadata(actor, at), version: (current.version ?? 0) + 1 };
+    }
+    if (customer || current) next.customerId = (customer || current).id;
+    recordRechargeReceipt(next, order, command.receipt, at);
+
+    const email = text(command.email, 254);
+    if (email) {
+      if (!validOrderEmail(email)) throw new OrderCompletionError(400, '请填写有效的账号邮箱');
+      const known = validOrderEmail(order.email) ? order.email : '';
+      if (known && clean(known).toLowerCase() !== email.toLowerCase())
+        throw new OrderCompletionError(409, '原单已有账号邮箱，请在原单核对');
+      if (!known) next.email = email;
+    }
+    if ((next.customerId !== order.customerId || next.email !== order.email) &&
+        rechargeOrderEmailConflict(data.orders, next, next.email))
+      throw new OrderCompletionError(409, '此邮箱已有其他客户的订单，请核对原客户归属');
+    const tail = text(command.cardLast4, 4);
+    if (tail) {
+      if (!/^\d{4}$/.test(tail) || order.payment !== '银行卡')
+        throw new OrderCompletionError(400, '请输入银行卡最后四位');
+      const known = clean(order.paymentId) || clean(order.proCardNumber).slice(-4);
+      if (known && known.slice(-4) !== tail)
+        throw new OrderCompletionError(409, '银行卡尾号与原付款记录不一致');
+      if (!known) next.paymentId = tail;
+    }
   }
-  next.notes = fill(order.notes, text(command.notes, 1000), '备注') || '';
-  if (customers.some((row) => row.id !== current?.id && contactKey(row.name) === contactKey(name) &&
-      contactFields.some(([, key]) => clean(customerChanges[key]) &&
-        contactKey(row[key], key) === contactKey(customerChanges[key], key))))
-    throw new OrderCompletionError(409, '已有同名客户使用相同联系方式，请核对并选择已有客户');
-
-  let customer;
-  if (!current) {
-    customer = {
-      id: 'commerce-customer-' + randomUUID(), name, active: true, version: 1, tags: [], notes: '',
-      ...customerChanges, ...editMetadata(actor, at),
-      createdById: actor.id, createdBy: actor.name, createdAt: at
-    };
-  } else if (Object.keys(customerChanges).length) {
-    customer = { ...current, ...customerChanges, ...editMetadata(actor, at), version: (current.version ?? 0) + 1 };
-  }
-  next.customerId = (customer || current).id;
-  next.customerSource = source;
-  return { order: next, customer, createdCustomer: !current };
+  const completion = rechargeOrderCompletion(next, customer || current);
+  if (!customer && isDeepStrictEqual(next, order)) return { order, completion };
+  return {
+    order: { ...next, ...editMetadata(actor, at), version: command.version + 1 },
+    customer, createdCustomer: adding, completion
+  };
 }

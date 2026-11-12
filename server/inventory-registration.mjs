@@ -31,6 +31,8 @@ export function registrationOccupancy(inventory) {
     byEmail.get(email).push(fact);
   }
   for (const account of accounts.values()) {
+    if (account.acquisitionMethod && !account.sourceMailboxId &&
+        !records.some(record => record.accountId === account.id && record.state === '成功')) continue;
     add(account.email, { product: account.type, accountId: account.id, key: `account:${account.id}` });
   }
   for (const record of records) {
@@ -87,10 +89,12 @@ export function checkRegistrationChanges(previous, next, action, actor) {
 
   const mailboxes = new Map(list(next.mailboxes).map(row => [row?.id, row]));
   const oldMailboxes = new Map(list(previous?.mailboxes).map(row => [row?.id, row]));
-  const nonGoogleEmails = new Set([...mailboxes.values()]
-    .filter(row => ['relay', 'microsoft'].includes(row?.type)).map(row => registrationEmail(row.email)));
-  const googleEmails = new Set([...mailboxes.values()]
-    .filter(row => row?.type === 'google').map(row => registrationEmail(row.email)));
+
+
+  const addresses = types => new Set([...mailboxes.values()].filter(row => types.includes(row?.type))
+    .map(row => registrationEmail(row.email)));
+  const googleEmails = addresses(['google']);
+  const otherEmails = addresses(['relay', 'microsoft']);
   const oldRecords = new Map(list(previous?.registrationRecords).map(row => [row?.id, row]));
   for (const record of list(next.registrationRecords)) {
     if (!['成功', '待核对'].includes(record?.state)) continue;
@@ -130,8 +134,10 @@ export function checkRegistrationChanges(previous, next, action, actor) {
         return '关联账号与登记的邮箱或注册平台不一致';
       if (mailboxes.get(fact.assetId)?.type === 'relay' && fact.product === 'gemini')
         return 'Gemini 请使用谷歌邮箱';
-      if (account?.type === 'gemini' && (['relay', '苹果隐藏邮箱'].includes(account.emailType) ||
-          (nonGoogleEmails.has(email) && !googleEmails.has(email)))) return 'Gemini 请使用谷歌邮箱';
+      if (account?.type === 'gemini' && (account.sourceMailboxId
+        ? mailboxes.get(account.sourceMailboxId)?.type !== 'google'
+        : !account.acquisitionMethod && (['relay', '苹果隐藏邮箱'].includes(account.emailType) ||
+          (otherEmails.has(email) && !googleEmails.has(email))))) return 'Gemini 请使用谷歌邮箱';
       if (!fact.assetId && account?.sourceMailboxId &&
           registrationEmail(mailboxes.get(account.sourceMailboxId)?.email) !== email)
         return '来源邮箱编号与注册邮箱不一致';

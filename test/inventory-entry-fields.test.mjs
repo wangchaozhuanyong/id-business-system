@@ -20,7 +20,9 @@ test('历史未变资料允许保留；伪造相同版本不能绕过新增字�
   const old = inventory({ id: 'old', type: 'google', version: 1 });
   assert.equal(check(old, structuredClone(old), 'inventory_edit'), undefined);
   const changed = structuredClone(old); changed.mailboxes[0].device = '新增设备';
-  assert.match(check(old, changed, 'inventory_edit'), /必填/);
+  assert.equal(check(old, changed, 'inventory_edit'), undefined);
+  changed.mailboxes[0].country = {};
+  assert.match(check(old, changed, 'inventory_edit'), /国家/);
   for (const action of ['inventory_extract', 'inventory_return']) assert.equal(check(old, changed, action), undefined);
 });
 test('绑定电话可填普通号码或 HTTPS 验证码链接，脚本和含基础认证的链接拒绝', () => {
@@ -35,7 +37,7 @@ test('历史资料只补齐运行元数据时不强补业务字段；新建及�
   const normalized = inventory({ ...old.mailboxes[0], version: 1, health: 'normal', status: '正常', usageLinks: [], inventoryHistory: [] });
   assert.equal(check(old, normalized, 'inventory_create'), undefined);
   normalized.mailboxes[0].notes = '修改业务内容';
-  assert.match(check(old, normalized, 'inventory_edit'), /必填/);
+  assert.equal(check(old, normalized, 'inventory_edit'), undefined);
   assert.match(check(null, inventory({ type: 'google', country: {}, device: [] }), 'inventory_create'), /必填/);
   assert.match(check(null, inventory({ type: 'claude', device: '设备', proxyUrl: 'not-a-proxy' }), 'inventory_import'), /格式/);
 });

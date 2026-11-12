@@ -733,6 +733,12 @@
   }
   const historicallyOpened = asset => asset.type === 'claude' && asset.claudeHistory?.phase === 'opened';
   const displayInventoryState = asset => historicallyOpened(asset) ? 'used' : asset.inventoryState;
+  const acquisitionChoices = [['self_registered', '自己邮箱注册'], ['purchased', '网上购买']];
+  const acquisitionLabel = value => acquisitionChoices.find(([id]) => id === value)?.[1] || '未登记';
+  const mailHealth = asset => ({ dead: '死号', unlocking: '解封中' }[asset.health] || asset.status || '未登记');
+  const mailUse = asset => asset.type === 'microsoft' && asset.inventoryState === 'available'
+    ? asset.mailboxUsage || 'unknown' : displayInventoryState(asset);
+  const mailUseLabels = { available: '未使用', claimed: '已提取', used: '已使用', unknown: '未登记' };
   const claudeAgingHours = () => settingsFor('claude').hours ?? 72;
   function claudeReadiness(asset) {
     if (asset.health === 'dead') return tag('死号', 'warning');
@@ -1053,10 +1059,11 @@
     const route = api.state.route;
     if (!views.has(route))
       views.set(route, {
-        tab: 'available',
+        tab: route.startsWith('mailboxes/') ? 'all' : 'available',
         query: '',
         country: '',
         status: '',
+        usage: '',
         centerTab: 'pending',
         quickText: ''
       });
@@ -1104,14 +1111,11 @@
     const assets = collection(kind)
       .map(normalize)
       .filter((asset) => asset.type === type);
+    const useState = kind === 'mail' ? mailUse : displayInventoryState;
     const counts = {
-      available: assets.filter(
-        (asset) => displayInventoryState(asset) === 'available' && asset.health === 'normal'
-      ).length,
-      claimed: assets.filter(
-        (asset) => displayInventoryState(asset) === 'claimed' && asset.health === 'normal'
-      ).length,
-      used: assets.filter((asset) => displayInventoryState(asset) === 'used').length,
+      available: assets.filter(asset => useState(asset) === 'available' && asset.health === 'normal').length,
+      claimed: assets.filter(asset => useState(asset) === 'claimed' && asset.health === 'normal').length,
+      used: assets.filter(asset => useState(asset) === 'used').length,
       dead: assets.filter((asset) => asset.health === 'dead').length,
       unlocking: assets.filter((asset) => asset.health === 'unlocking').length
     };
@@ -1127,15 +1131,17 @@
     else {
       const rows = assets.filter(
         (asset) =>
-          (['dead', 'unlocking'].includes(v.tab)
+          (v.tab === 'all' || (['dead', 'unlocking'].includes(v.tab)
             ? asset.health === v.tab
-            : (v.tab === 'used' || asset.health === 'normal') && displayInventoryState(asset) === v.tab) &&
+            : (v.tab === 'used' || asset.health === 'normal') &&
+              useState(asset) === v.tab)) &&
           (!v.query ||
             `${displayIdentity(asset)} ${asset.email || ''} ${asset.notes || ''} ${asset.purpose || ''} ${kind === 'mail' ? mailboxPlatformLabel(asset) : ''} ${microsoft ? asset.auxiliary || '' : ''}`
               .toLowerCase()
               .includes(v.query.toLowerCase())) &&
           (!v.country || asset.country === v.country) &&
-          (!v.status || asset.status === v.status)
+          (!v.status || (kind === 'mail' ? mailHealth(asset) : asset.status) === v.status) &&
+          (kind !== 'mail' || !v.usage || mailUse(asset) === v.usage)
       );
       const totpColumn = {
         id: 'totp', label: '2FA 密钥', class: 'mono wide-cell', long: true,
@@ -1162,6 +1168,8 @@
           render: (asset) =>
             textAction(displayIdentity(asset), 'inventory-detail', `data-id="${esc(asset.id)}" data-table-value-preview`, 'table-value-ellipsis')
         },
+        ...(kind === 'account' && type !== 'apple' ? [{ id: 'acquisitionMethod', label: '账号来源',
+          render: asset => esc(acquisitionLabel(asset.acquisitionMethod)) }] : []),
         ...(mailboxType(type) ? [{ id: 'registrationPlatform', label: '注册平台',
           render: asset => esc(mailboxPlatformLabel(asset)) }] : []),
         ...(type === 'claude' && assets.some(asset => asset.claudeHistory) ? [
@@ -1202,13 +1210,18 @@
         ...(usesRegistrationCity(type) ? [{ id: 'city', label: '注册城市' }] : []),
         {
           id: 'status',
-          label: '账号状态',
-          render: (asset) => tag(asset.status, asset.status === '正常' ? 'success' : 'warning')
+          label: kind === 'mail' ? '邮箱状态' : '账号状态',
+          render: asset => {
+            const state = mailHealth(asset);
+            return tag(state, state === '正常' ? 'success' : 'warning');
+          }
         },
         {
           id: 'use',
           label: '使用状态',
-          render: (asset) => usageReview.has(asset.id)
+          render: (asset) => kind === 'mail'
+            ? tag(mailUseLabels[mailUse(asset)] || '未登记', mailUse(asset) === 'used' ? 'success' : '')
+            : usageReview.has(asset.id)
             ? tag(usageReview.get(asset.id).status === 'used' ? '检测到已使用' : '待核对', 'warning')
             :
             tag(
@@ -1327,9 +1340,11 @@
         }
       ];
       const selection = api.getSelection('inventory-module-assets');
-      body = `<div class="toolbar list-filters"><div class="toolbar-left"><div class="search-field">${icon('search')}<input id="inventory-list-query" aria-label="搜索库存资料" placeholder="${microsoft ? '搜索邮箱、辅助邮箱或备注' : '搜索账号、备注或用途'}" value="${esc(v.query)}" /></div><select id="inventory-country" aria-label="筛选国家">${options(choicesWithCurrent([['', '全部国家'], ...settingsFor(type).countries], v.country), v.country)}</select><select id="inventory-status" aria-label="筛选账号状态">${options([['', '全部状态'], '正常', '冻结', '封控中'], v.status)}</select></div><div class="toolbar-right">${button('列设置', 'column-settings', '', 'columns', `data-table-id="${esc(title)}库存"`)}${microsoft ? '' : button('提取与归还', 'inventory-center', '', 'return')}${button(microsoft ? '复制邮箱地址' : '复制所选', 'inventory-copy-selected', '', 'copy', selection.size ? '' : 'disabled')}${!microsoft && v.tab === 'claimed' ? button('归还所选', 'inventory-return-selected', '', 'return', selection.size ? '' : 'disabled') : ''}</div></div>${table(columns, pageRows(rows), 'inventory-module-assets', `${title}库存`)}${pagination(rows.length)}`;
+      body = `<div class="toolbar list-filters"><div class="toolbar-left"><div class="search-field">${icon('search')}<input id="inventory-list-query" aria-label="搜索库存资料" placeholder="${microsoft ? '搜索邮箱、辅助邮箱或备注' : '搜索账号、备注或用途'}" value="${esc(v.query)}" /></div><select id="inventory-country" aria-label="筛选国家">${options(choicesWithCurrent([['', '全部国家'], ...settingsFor(type).countries], v.country), v.country)}</select><select id="inventory-status" aria-label="筛选${kind === 'mail' ? '邮箱' : '账号'}状态">${options([['', '全部状态'], '正常', '冻结', '封控中', ...(kind === 'mail' ? ['死号', '解封中'] : [])], v.status)}</select>${kind === 'mail' ?
+        `<select id="inventory-usage-filter" aria-label="筛选使用状态">${options([['', '全部使用状态'], ...Object.entries(mailUseLabels)], v.usage)}</select>` : ''}</div><div class="toolbar-right">${button('列设置', 'column-settings', '', 'columns', `data-table-id="${esc(title)}库存"`)}${microsoft ? '' : button('提取与归还', 'inventory-center', '', 'return')}${button(microsoft ? '复制邮箱地址' : '复制所选', 'inventory-copy-selected', '', 'copy', selection.size ? '' : 'disabled')}${!microsoft && v.tab === 'claimed' ? button('归还所选', 'inventory-return-selected', '', 'return', selection.size ? '' : 'disabled') : ''}</div></div>${table(columns, pageRows(rows), 'inventory-module-assets', `${title}库存`)}${pagination(rows.length)}`;
     }
     const tabItems = [
+      ...(kind === 'mail' ? [['all', '全部', assets.length]] : []),
       ['available', usesAccountLocation(type) ? '可用库存' : '库存', counts.available],
       ['claimed', '已提取', counts.claimed],
       ['used', '已使用', counts.used],
@@ -1343,7 +1358,7 @@
         : '资料只保存一份，提取、实际使用、归还与异常记录分别追溯。', actions) +
       summary([
         ['全部资料', assets.length, '条'],
-        [microsoft ? '库存资料' : '当前可提取', microsoft ? counts.available : assets.filter(available).length, '条', true],
+        [microsoft ? '未使用' : '当前可提取', microsoft ? counts.available : assets.filter(available).length, '条', true],
         ['待使用', counts.claimed, '条'],
         ['已实际使用', counts.used, '条']
       ]) +
@@ -1842,6 +1857,8 @@
       }
     );
     const val = (name) => d[`inventory-${name}`] ?? d[name] ?? '';
+    const acquisition = val('acquisitionMethod') || (original ? '' : 'self_registered');
+    const purchased = acquisition === 'purchased';
     const config = settingsFor(type);
     const country = d['inventory-country-edit'] ?? d.country ?? '';
     const typeChoices = microsoft
@@ -1865,6 +1882,9 @@
           true,
           original ? '创建后不可更改资料类型。' : '请按实际用途人工确认，邮箱域名不会自动改变类型。'
         );
+    if (account) fields += field('账号来源', 'inventory-acquisitionMethod',
+      select('inventory-acquisitionMethod', [...(original ? [['', '未登记']] : []), ...acquisitionChoices], acquisition),
+      !original, '自注册可选择系统邮箱，也可独立录入。购买账号保留已知的注册资料。');
     fields += wide(
       fundingApple ? '苹果 ID' : type === 'gemini' ? 'Google 账号邮箱' : account ? '账号邮箱' : '邮箱账号',
       'inventory-email',
@@ -1886,9 +1906,6 @@
         true
       );
     if (personal) {
-      const source = original?.sourceMailboxId && assetById(original.sourceMailboxId);
-      const choices = [['', '已有账号或客户提供'], ...personalSourceMailboxes(type)
-        .map(row => [row.id, `${row.email} · ${row.inventoryState === 'claimed' ? '本人已领用' : '可用库存'}`])];
       fields += type === 'gemini'
         ? '<input type="hidden" name="inventory-loginMethod" value="google" />'
         : field('登录方式', 'inventory-loginMethod', select('inventory-loginMethod', grokLoginOptions, val('loginMethod') || 'email'), true) +
@@ -1896,12 +1913,20 @@
             original?.loginMethod === 'x' ? 'readonly' : 'placeholder="@username" maxlength="16"')) +
           field('X 绑定状态', 'inventory-xLinkState', select('inventory-xLinkState', xLinkOptions, val('xLinkState') || 'unknown'));
       fields += field('平台账号编号', 'inventory-platformAccountId', input('inventory-platformAccountId', val('platformAccountId'), 'maxlength="120"'));
-      fields += original ? field('来源邮箱', 'inventory-sourceMailboxDisplay',
-        input('inventory-sourceMailboxDisplay', source?.email || (original.sourceMailboxId ? '原资料待核对' : '独立录入'), 'readonly'))
-        : field('来源邮箱', 'inventory-sourceMailboxId', select('inventory-sourceMailboxId', choicesWithCurrent(choices, val('sourceMailboxId')), val('sourceMailboxId')),
-          false, '选择可用谷歌邮箱或本人已领用的邮箱，并确认账号已经使用该地址。') +
-          wide('邮箱实际使用', 'inventory-source-confirmed', `<label class="checkbox-label"><input id="inventory-source-confirmed" name="inventory-source-confirmed" type="checkbox" ${d['inventory-source-confirmed'] ? 'checked' : ''} />账号已建立，确认实际使用选中邮箱</label>`);
     }
+    if (account) {
+      const linked = original?.sourceMailboxId && assetById(original.sourceMailboxId);
+      const choices = [['', '独立录入'], ...personalSourceMailboxes(type)
+        .map(row => [row.id, `${row.email} · ${row.inventoryState === 'claimed' ? '本人已领用' : '可用库存'}`])];
+      fields += original ? field('来源邮箱', 'inventory-sourceMailboxDisplay',
+        input('inventory-sourceMailboxDisplay', linked?.email || (original.sourceMailboxId ? '原资料待核对' : '独立录入'), 'readonly'))
+        : field('来源邮箱', 'inventory-sourceMailboxId',
+          select('inventory-sourceMailboxId', choicesWithCurrent(choices, val('sourceMailboxId')), val('sourceMailboxId'))
+            .replace('<select ', purchased ? '<select disabled ' : '<select '),
+          false, '仅在选中本系统邮箱时登记实际使用。');
+    }
+    if (microsoft) fields += field('使用状态', 'inventory-mailboxUsage',
+      select('inventory-mailboxUsage', [['', '未登记'], ['available', '未使用'], ['used', '已使用']], val('mailboxUsage')));
     const security = original?.microsoftSecurity || {};
     if (microsoft)
       fields += field(
@@ -1913,7 +1938,7 @@
       account ? '账号密码' : microsoft ? '登录密码' : '邮箱密码',
       'inventory-password',
       input('inventory-password', val('password'), 'autocomplete="off"'),
-      ['google', 'apple'].includes(type),
+      ['google', 'apple'].includes(type) && (!original || Boolean(original.password)),
       microsoft ? '密码登录必填。无密码登录留空，并记录实际验证方式。' : ''
     );
     if (['google', 'apple'].includes(type))
@@ -1936,7 +1961,8 @@
       account
         ? `<div class="option-entry-controls">${countrySelect}${locationSettingsButton(type, 'asset', id)}</div>`
         : countrySelect,
-      usesAccountLocation(type) || ['google', 'apple'].includes(type)
+      (usesAccountLocation(type) && !purchased && (!original || Boolean(original.country))) ||
+        (['google', 'apple'].includes(type) && (!original || Boolean(original.country)))
     );
     if (fundingApple && window.IDAppleFunding) {
       fields += field('App Store 账单地区', 'inventory-appStoreRegion',
@@ -1951,7 +1977,7 @@
         '注册城市',
         'inventory-city',
         select('inventory-city', accountCityChoices(type, country, original, val('city')), val('city')),
-        true,
+        !purchased && (!original || Boolean(original.city)),
         '请先选国家。地区／城市可在本账号的国家地区设置中维护。'
       );
     fields +=
@@ -1998,7 +2024,7 @@
         '系统生成，编辑资料不会改变。'
       ) +
       field('登录设备', 'inventory-device',
-        input('inventory-device', val('device'), type === 'google' ? 'maxlength="200"' : ''), type === 'claude');
+        input('inventory-device', val('device'), type === 'google' ? 'maxlength="200"' : ''), type === 'claude' && !purchased && (!original || Boolean(original.device)));
     if (type === 'google' || type === 'gpt' || microsoft || personal)
       fields += wide(
         '2FA 密钥',
@@ -2072,7 +2098,7 @@
             d['inventory-proxy-url'] ?? original?.proxyUrl ?? '',
             'placeholder="粘贴代理链接，自动填入下方四项"'
           ),
-          true,
+          !purchased && (!original || Boolean(original.proxyUrl)),
           '支持代理链接、主机:端口或主机:端口:账号:密码；带协议时自动识别。'
         ) +
         field(
@@ -2448,6 +2474,7 @@
           ['X 绑定状态', choiceLabel(xLinkOptions, asset.xLinkState)]] : [])
       ] : isAccount(asset) ? [['邮箱类型', accountEmailType(asset)]] : []),
       ...(stockType(asset.type) ? [
+        ['账号来源', acquisitionLabel(asset.acquisitionMethod)],
         ['来源邮箱', source?.email || (asset.sourceMailboxId ? '待核对' : '未关联')],
         ...(sourceClaim ? [['邮箱领用批次', sourceClaim.label]] : [])
       ] : []),
@@ -2458,7 +2485,8 @@
       ...(asset.claudeHistory ? [['历史登记状态', claudeHistoryStates[asset.claudeHistory.phase]]] : []),
       [
         '使用状态',
-        accountSummaries.get(asset.id)?.label || { available: '未使用', claimed: '已提取待使用', used: '已实际使用' }[asset.inventoryState]
+        isAccount(asset) ? accountSummaries.get(asset.id)?.label || mailUseLabels[displayInventoryState(asset)] :
+          mailUseLabels[mailUse(asset)] || '未登记'
       ],
       ...(mailboxType(asset.type) ? [['注册平台', mailboxPlatformLabel(asset)]] : []),
       ['注册时间', registrationTime(asset) || '未提供'],
@@ -2857,6 +2885,7 @@
     ['device', '登录设备', ['设备', 'device']],
     ['notes', '备注1', ['备注', 'notes']],
     ['notes2', '备注2', ['notes2']],
+    ['acquisitionMethod', '账号来源', ['acquisitionMethod'], ['gpt', 'claude', 'gemini', 'grok']],
     ['type', '资料类型', ['账号类型', '产品类型', 'type']]
   ];
   function csvFieldName(value) {
@@ -2886,6 +2915,7 @@
       city: usesRegistrationCity(type) ? cityOptions(type, country)[0] || '' : '',
       status: '正常',
       source: '自己注册',
+      acquisitionMethod: '自己邮箱注册',
       registered: '2026-10-29T09:20',
       totp: 'DEMO-TOTP-ONLY',
       proxyUrl: 'socks5://demo:demo@proxy.example.test:1080',
@@ -2938,6 +2968,8 @@
         select('inventory-import-type', [[type, typeLabel(type)]], type),
         true
       ) +
+      (type !== 'apple' ? field('默认账号来源', 'inventory-import-acquisition',
+        select('inventory-import-acquisition', acquisitionChoices, d['inventory-import-acquisition'] || 'self_registered')) : '') +
       field(
         '默认来源',
         'inventory-import-source',
@@ -3123,11 +3155,19 @@
       if (!error && context.type === 'apple' && !values.phone && !d['inventory-import-no-phone'])
         error = '需确认未绑定电话';
       if (!error && context.type === 'apple' && !values.country) error = '缺少国家';
-      if (!error && context.type === 'claude' && !values.device) error = '缺少登录设备';
-      if (!error && context.type === 'claude' && !values.proxyUrl) error = '缺少注册代理链接';
+      if (context.type !== 'apple' && !microsoft) {
+        try {
+          values.acquisitionMethod = csvChoice(values.acquisitionMethod, acquisitionChoices,
+            d['inventory-import-acquisition'] || 'self_registered', '账号来源');
+        } catch (issue) { error ||= issue.message; }
+      }
+      const purchased = values.acquisitionMethod === 'purchased';
+      if (!error && context.type === 'claude' && !purchased && !values.device) error = '缺少登录设备';
+      if (!error && context.type === 'claude' && !purchased && !values.proxyUrl) error = '缺少注册代理链接';
       if (!error && values.phone && /^[a-z][a-z0-9+.-]*:/i.test(values.phone) && !phoneCodeUrl(values.phone)) error = '验证码链接仅支持有效的 HTTP(S) 地址';
-      if (!error && usesAccountLocation(context.type))
-        error = accountLocationError(context.type, values.country, values.city);
+      if (!error && usesAccountLocation(context.type) && (!purchased || values.country || values.city))
+        error = accountLocationError(context.type, values.country, values.city,
+          purchased && !values.city ? { country: values.country, city: '' } : null);
       if (!error && values.registered && !validRegisteredDate(values.registered))
         error = '注册时间无效或晚于当前时间，请按北京时间填写';
       if (!error && values.birthday && !validCalendarDate(values.birthday))
@@ -3313,7 +3353,11 @@
     const personal = personalAccount(type);
     const inputSnapshot = accountEntry || microsoft || personal || type === 'apple' || (type === 'google' && !id)
       ? formFingerprint(data) : '';
-    const sourceEntry = personal && !id && ['mailboxes/google', 'mailboxes/relay'].includes(api.state.route) &&
+    const productAccount = usesAccountLocation(type) || personal;
+    const acquisition = data['inventory-acquisitionMethod'] || (productAccount && !id ? 'self_registered' : '');
+    const purchased = acquisition === 'purchased';
+    const previous = id ? assetById(id) : null;
+    const sourceEntry = productAccount && !id && ['mailboxes/google', 'mailboxes/relay'].includes(api.state.route) &&
       Boolean(data['inventory-sourceMailboxId']) && form.dataset.inventoryDraft ===
         'inventory-edit:source:' + data['inventory-sourceMailboxId'] + ':' + type;
     if (personal && !accountEntry && !sourceEntry && api.state.route !== 'accounts/' + type) {
@@ -3341,9 +3385,12 @@
     }
     let first = '';
     const required = type === 'grok' ? [] : ['inventory-email'];
-    if (['google', 'apple'].includes(type)) required.push('inventory-password');
-    if (['google', 'apple'].includes(type)) required.push('inventory-country-edit');
-    if (type === 'claude') required.push('inventory-device', 'inventory-proxy-url');
+    if (['google', 'apple'].includes(type) && (!previous || previous.password)) required.push('inventory-password');
+    if (['google', 'apple'].includes(type) && (!previous || previous.country)) required.push('inventory-country-edit');
+    if (type === 'claude' && !purchased) {
+      if (!previous || previous.device) required.push('inventory-device');
+      if (!previous || previous.proxyUrl) required.push('inventory-proxy-url');
+    }
     for (const name of required) {
       const error = !String(data[name] || '').trim() ? '请填写此项资料' : '';
       api.setError(name, error);
@@ -3366,7 +3413,8 @@
       api.setError('inventory-email', '邮箱格式不正确');
       first ||= 'inventory-email';
     }
-    const registrationProblem = !id && registrationInputProblem(type, email, data['inventory-source']);
+    const registrationProblem = !id && data['inventory-sourceMailboxId'] &&
+      registrationInputProblem(type, email, data['inventory-source']);
     if (registrationProblem) {
       api.setError('inventory-email', registrationProblem);
       first ||= 'inventory-email';
@@ -3391,7 +3439,7 @@
       first ||= 'inventory-phone';
     }
     const phone = String(data['inventory-phone'] || '').trim();
-    if (phone && /^[a-z][a-z0-9+.-]*:/i.test(phone) && !phoneCodeUrl(phone)) {
+    if (phone && phone !== previous?.phone && /^[a-z][a-z0-9+.-]*:/i.test(phone) && !phoneCodeUrl(phone)) {
       api.setError('inventory-phone', '验证码链接仅支持有效的 HTTP(S) 地址');
       first ||= 'inventory-phone';
     }
@@ -3401,7 +3449,7 @@
     }
     if (
       accountEntry &&
-      type !== 'apple' && !personal &&
+      type !== 'apple' && !personal && (data['inventory-emailType'] || !purchased) &&
       !enabledTypes().some(([value]) => value === data['inventory-emailType'])
     ) {
       api.setError('inventory-emailType', '请选择有效邮箱类型');
@@ -3419,7 +3467,7 @@
       api.setError('inventory-status-edit', '请选择有效账号状态');
       return;
     }
-    const original = id ? assetById(id) : null;
+    const original = previous;
     if (
       ![
         ...stockTypes.map(([value]) => value),
@@ -3433,14 +3481,14 @@
       return;
     }
     let sourceMailbox;
-    if (personal) {
+    if (productAccount) {
       const sourceId = data['inventory-sourceMailboxId'];
       api.setError('inventory-sourceMailboxId', '');
       if (sourceId) {
         sourceMailbox = personalSourceMailboxes(type).find(row => row.id === sourceId);
-        if (id || !sourceMailbox || !data['inventory-source-confirmed'] || data['inventory-source'] === '客户提供' ||
-            sourceMailbox.email.toLowerCase() !== identity.email.toLowerCase()) {
-          api.setError('inventory-sourceMailboxId', '请核对选中的库存邮箱地址并确认账号实际使用该邮箱');
+        if (id || purchased || !sourceMailbox || data['inventory-source'] === '客户提供' ||
+            sourceMailbox.email.toLowerCase() !== identity.email.trim().toLowerCase()) {
+          api.setError('inventory-sourceMailboxId', '所选库存邮箱须与注册邮箱一致。网上购买请选择独立录入。');
           return;
         }
       }
@@ -3451,7 +3499,10 @@
     }
     if (usesAccountLocation(type)) {
       const country = data['inventory-country-edit'] || '';
-      const issue = accountLocationError(type, country, data['inventory-city'] || '', original);
+      const city = data['inventory-city'] || '';
+      const issue = purchased && !city
+        ? country && !settingsFor(type).countries.includes(country) && country !== original?.country ? '请选择有效注册国家' : ''
+        : accountLocationError(type, country, city, original);
       const locationField = usesRegistrationCity(type) && settingsFor(type).countries.includes(country)
         ? 'inventory-city'
         : 'inventory-country-edit';
@@ -3470,7 +3521,8 @@
       if (!id) api.setError('inventory-appleOpeningBalance', balanceError ? '请输入非负美元金额，最多四位小数' : '');
       if (regionError || balanceError) return;
     }
-    if (data['inventory-registered'] && !validRegisteredDate(data['inventory-registered'])) {
+    if (data['inventory-registered'] && data['inventory-registered'] !== (original && registrationInput(original)) &&
+        !validRegisteredDate(data['inventory-registered'])) {
       api.setError('inventory-registered', '注册时间无效或晚于当前时间，请按北京时间填写');
       return;
     }
@@ -3483,23 +3535,29 @@
         api.setError('inventory-source', '请选择来源渠道');
         return;
       }
+      const savedSecurity = original?.microsoftSecurity;
+      const security = {
+        loginMode: data['inventory-microsoft-login'],
+        recoveryAccess: data['inventory-microsoft-recovery'],
+        twoStep: data['inventory-microsoft-two-step'],
+        verificationMethods: microsoftVerificationOptions
+          .map(([method]) => method).filter((method) => data[`inventory-microsoft-method-${method}`]),
+        verificationDevice: String(data['inventory-microsoft-device'] || '').trim()
+      };
+      const changesSecurity = !original ||
+        ['password', 'phone', 'auxiliary', 'totp', 'appPassword'].some(key =>
+          String(data['inventory-' + key] || '').trim() !== String(original[key] || '').trim()) ||
+        security.loginMode !== (savedSecurity?.loginMode || 'password') ||
+        security.recoveryAccess !== (savedSecurity?.recoveryAccess || 'unknown') ||
+        security.twoStep !== (savedSecurity?.twoStep || 'unknown') ||
+        security.verificationDevice !== (savedSecurity?.verificationDevice || '') ||
+        security.verificationMethods.length !== (savedSecurity?.verificationMethods?.length || 0) ||
+        security.verificationMethods.some(method => !savedSecurity?.verificationMethods?.includes(method));
       try {
-        microsoftSecurity = readMicrosoftSecurity({
-          email,
-          password: data['inventory-password'],
-          phone,
-          auxiliary: data['inventory-auxiliary'],
-          totp: data['inventory-totp']?.trim(),
-          appPassword: data['inventory-appPassword'],
-          source: data['inventory-source']
-        }, {
-          loginMode: data['inventory-microsoft-login'],
-          recoveryAccess: data['inventory-microsoft-recovery'],
-          twoStep: data['inventory-microsoft-two-step'],
-          verificationMethods: microsoftVerificationOptions
-            .map(([method]) => method).filter((method) => data[`inventory-microsoft-method-${method}`]),
-          verificationDevice: String(data['inventory-microsoft-device'] || '').trim()
-        });
+        microsoftSecurity = changesSecurity ? readMicrosoftSecurity({
+          email, phone, password: data['inventory-password'], auxiliary: data['inventory-auxiliary'],
+          totp: data['inventory-totp']?.trim(), appPassword: data['inventory-appPassword'], source: data['inventory-source']
+        }, security) : savedSecurity;
       } catch (issue) {
         const field = issue.cause || 'inventory-microsoft-methods';
         api.setError(field, issue.message);
@@ -3614,19 +3672,20 @@
         ])
           if ((key !== 'city' || usesRegistrationCity(type)) && data[`inventory-${key}`] !== undefined)
             update[key] = data[`inventory-${key}`];
+        if (productAccount && acquisition) update.acquisitionMethod = acquisition;
+        if (sourceMailbox) Object.assign(update, { sourceMailboxId: sourceMailbox.id,
+          sourceClaimId: sourceMailbox.claimId || '', emailType: sourceMailbox.type });
         if (microsoft) {
+          update.mailboxUsage = data['inventory-mailboxUsage'] || '';
           update.auxiliary = (update.auxiliary || '').trim().toLowerCase();
           update.totp = (update.totp || '').trim();
-          update.microsoftSecurity = microsoftSecurity;
+          if (microsoftSecurity) update.microsoftSecurity = microsoftSecurity;
         }
         if (personal) {
           const { type: _, email: accountEmail, ...personalFields } = identity;
           Object.assign(update, personalFields);
           if (!original) update.email = accountEmail;
-          if (sourceMailbox) Object.assign(update, {
-            sourceMailboxId: sourceMailbox.id, sourceClaimId: sourceMailbox.claimId || '',
-            emailType: sourceMailbox.type
-          });
+
         }
         if (proxyFields) Object.assign(update, proxyFields);
         if (original) {
@@ -3671,7 +3730,7 @@
           if (!localData && sourceMailbox) {
             const claim = pendingClaim(sourceMailbox), registrationId = uid('REGISTER');
             registrationRecords.unshift({ id: registrationId, assetId: sourceMailbox.id, accountId: asset.id,
-              email: sourceMailbox.email, product: type === 'gemini' ? 'Gemini' : 'Grok', state: '成功',
+              email: sourceMailbox.email, product: { gemini: 'Gemini', grok: 'Grok', gpt: 'GPT', claude: 'Claude' }[type], state: '成功',
               actorId: currentActor().id, actor: currentActor().name, time: createdAt });
             consume(sourceMailbox, claim, { kind: 'registration', registrationId, accountId: asset.id, label: '账号登记' });
           }
@@ -4916,6 +4975,32 @@
       saveDrafts();
       return true;
     }
+    if (node.id === 'inventory-acquisitionMethod') {
+      const form = node.form;
+      const purchased = node.value === 'purchased';
+      const previous = assetById(form.elements['inventory-asset-id'].value);
+      const type = form.elements['inventory-asset-type'].value;
+      const source = form.elements['inventory-sourceMailboxId'];
+      if (source) {
+        if (purchased) source.value = '';
+        source.disabled = purchased;
+      }
+      for (const [name, key] of [['country-edit', 'country'], ['city', 'city'], ['device', 'device'], ['proxy-url', 'proxyUrl']]) {
+        const control = form.elements['inventory-' + name];
+        const label = control?.closest('.field')?.querySelector('label[for="' + control.id + '"]');
+        const applies = key === 'country' ? usesAccountLocation(type) : type === 'claude';
+        const required = applies && !purchased && (!previous || Boolean(previous[key]));
+        const star = label?.querySelector('.required');
+        if (star) star.hidden = !required;
+        else if (label && required) label.insertAdjacentHTML('beforeend', '<span class="required">*</span>');
+      }
+      if (purchased && !previous) {
+        const registered = form.elements['inventory-registered'];
+        if (registered && registered.value === registered.defaultValue) registered.value = '';
+      }
+      saveDrafts();
+      return true;
+    }
     if (node.id === 'inventory-sourceMailboxId') {
       const mailbox = assetById(node.value);
       const email = document.getElementById('inventory-email');
@@ -4977,6 +5062,12 @@
     } else if (node.id === 'inventory-purpose' || node.id === 'inventory-extract-type') {
       saveDrafts();
       api.render();
+    } else if (node.id === 'inventory-usage-filter') {
+      view().usage = node.value;
+      api.state.page = 1;
+      api.render();
+      document.getElementById(node.id)?.focus({ preventScroll: true });
+      return true;
     } else if (node.id === 'inventory-status') {
       view().status = node.value;
       api.state.page = 1;

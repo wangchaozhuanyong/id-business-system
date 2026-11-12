@@ -29,7 +29,7 @@ const moneyFormat = (units) => {
 const bankCard = { id: 'recharge:1', last4: '2345', active: true, status: '正常', usageCount: 0 };
 
 function browser(store, appleAsset = null) {
-  let confirm;
+  let confirm, beforeBatch;
   const notices = [];
   const errors = new Map();
   const modules = [];
@@ -98,6 +98,9 @@ function browser(store, appleAsset = null) {
       store.saveBatch([{ domain, version, data: JSON.parse(JSON.stringify(data)), action }])[0],
     saveBatch: async (entries) => {
       try {
+        const hook = beforeBatch;
+        beforeBatch = undefined;
+        if (hook) await hook();
         return store.saveBatch(JSON.parse(JSON.stringify(entries)));
       } catch (error) {
         notices.push(error.message);
@@ -123,6 +126,7 @@ function browser(store, appleAsset = null) {
     state,
     api,
     notices,
+    beforeNextBatch(hook) { beforeBatch = hook; },
     ...api.modules.commerce,
     load: () => {
       commerce.afterRender();
@@ -201,8 +205,6 @@ test('客户和银行卡独立订单在本机保存、重开后可读，旧标�
 
     await first.openBankOrderEntry();
     first.submit('commerce-order-form', orderFields(first.getCustomers()[0].id));
-    await turn();
-    first.confirm();
     await turn();
     const reopened = browser(store);
     await reopened.load();
@@ -331,13 +333,11 @@ test('成品订单和库存占用一起提交，库存版本冲突时两边都�
     const order = {
       ...orderFields(tab.getCustomers()[0].id),
       businessType: '成品交付',
-      email: account.email
+      email: account.email, accountId: account.id
     };
     store.saveBatch([{ domain: 'inventory', version, data: inventory }]);
     await tab.openBankOrderEntry();
     tab.submit('commerce-order-form', order);
-    await turn();
-    tab.confirm();
     await turn();
     assert.match(tab.notices.at(-1), /本次未保存/);
     assert.equal(tab.listOrders().length, 0);
@@ -346,8 +346,6 @@ test('成品订单和库存占用一起提交，库存版本冲突时两边都�
     assert.deepEqual(store.load('inventory').data.accounts[0].usageLinks, []);
 
     tab.submit('commerce-order-form', order);
-    await turn();
-    tab.confirm();
     await turn();
     assert.equal(applied, 3);
     const [saved] = store.load('commerce').data.orders;
@@ -422,10 +420,10 @@ test('苹果内购和余额一起提交，客户退款独立登记待回款，�
       appleIdId: asset.id
     };
     stale.state.route = 'workspace/order';
+    stale.beforeNextBatch(async () => {
+      assert.equal((await ledger.adjust(asset.id, '1', { reason: '核实新增余额' })).ok, true);
+    });
     stale.submit('commerce-order-form', fields);
-    await turn();
-    assert.equal((await ledger.adjust(asset.id, '1', { reason: '核实新增余额' })).ok, true);
-    stale.confirm();
     await turn();
     assert.match(stale.notices.at(-1), /本次未保存/);
     assert.equal(store.load('commerce').data.orders.length, 0);
@@ -433,8 +431,6 @@ test('苹果内购和余额一起提交，客户退款独立登记待回款，�
 
     first.state.route = 'workspace/order';
     first.submit('commerce-order-form', fields);
-    await turn();
-    first.confirm();
     assert.equal(first.listOrders().length, 0);
     await turn();
     const [order] = first.listOrders();
@@ -488,8 +484,6 @@ test('苹果内购和余额一起提交，客户退款独立登记待回款，�
       paidAmount: '22',
       correctionReason: '已核对实扣金额'
     });
-    await turn();
-    reopened.confirm();
     await turn();
     assert.equal(reopenedLedger.get(asset.id).balance, '236.0000', reopened.notices.join('、'));
     const corrected = reopened.getOrder(order.id);

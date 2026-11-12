@@ -222,6 +222,20 @@ test('监控概览显示完整状态、检查依据和通知缺口，筛选及�
   await page.getByRole('tab', { name: '运行状态', exact: true }).click();
   await page.locator('#system-monitor-check-filter').waitFor();
   assert.equal(await page.locator('#system-monitor-check-filter').inputValue(), 'all');
+  const syncCommands = [];
+  await f.context.route(url => url.pathname === '/api/local/order-sync', async route => {
+    syncCommands.push(route.request().postDataJSON());
+    f.setChecks(checkFixtures().map(row => row.code === 'order_sync' ? { ...row, status: 'ok' } : row));
+    await route.fulfill({ json: { rows: [{ jobKey: 'synthetic-job', orderNo: 'OD-SYNTHETIC' }], pending: 0 } });
+  });
+  f.setChecks(checkFixtures().map(row => row.code === 'order_sync' ? { ...row, status: 'bad' } : row));
+  await page.getByRole('button', { name: '刷新', exact: true }).click();
+  const orderSync = page.locator('[data-monitor-check="order_sync"]');
+  await orderSync.getByText('异常', { exact: true }).waitFor();
+  await orderSync.getByRole('button', { name: '查看订单同步与处理' }).click();
+  await drawer.getByRole('button', { name: '重试入单', exact: true }).click();
+  await orderSync.getByText('正常', { exact: true }).waitFor();
+  assert.deepEqual(syncCommands, [{ mode: 'retry' }]);
   await page.getByRole('button', { name: '查看汇率采集与处理', exact: true }).click();
   await drawer.getByRole('button', { name: '查看汇率采集', exact: true }).click();
   await page.waitForURL(origin + '/#/settings/exchange-rates');

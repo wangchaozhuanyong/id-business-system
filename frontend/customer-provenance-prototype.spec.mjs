@@ -483,7 +483,6 @@ test('订单新增记录会话身份，编辑保留原录入身份和时间', ()
   const r = runtime();
   r.api.state.route = 'workspace/order';
   r.order({ createdBy: '伪造', createdById: 'fake' });
-  r.confirm();
   const first = r.api.modules.commerce.listOrders()[0];
   assert.equal(first.createdById, 'actor-a');
   r.api.state.actor = { id: 'actor-b', name: '订单修改员' };
@@ -494,7 +493,6 @@ test('订单新增记录会话身份，编辑保留原录入身份和时间', ()
     correctionReason: '核对备注',
     createdBy: '伪造2'
   });
-  r.confirm();
   const edited = r.api.modules.commerce.getOrder(first.id);
   assert.equal(edited.createdById, 'actor-a');
   assert.equal(edited.createdAt, first.createdAt);
@@ -502,23 +500,21 @@ test('订单新增记录会话身份，编辑保留原录入身份和时间', ()
   assert.equal(edited.corrections[0].actorId, 'actor-b');
 });
 
-test('订单编辑不补造未知录入人，确认期间身份变化不保存', () => {
+test('订单编辑不补造未知录入人，未登录的手工订单不保存', () => {
   const r = runtime();
   r.api.state.route = 'workspace/order';
   const previous = r.api.state.demoOrders[0];
   delete previous.createdBy;
   delete previous.createdAt;
   r.order({ id: previous.id, version: String(previous.version), correctionReason: '补充备注' });
-  r.confirm();
   const edited = r.api.modules.commerce.getOrder(previous.id);
   assert.equal(edited.createdBy, '');
   assert.equal(edited.createdById, '');
   assert.equal(edited.createdAt, '');
   assert.equal(edited.updatedById, 'actor-a');
+  r.api.state.actor = null;
   r.order();
-  r.api.state.actor = { id: 'actor-b', name: '另一账号' };
-  r.confirm();
-  assert.match(r.notices.at(-1), /身份已变化/);
+  assert.match(r.notices.at(-1), /身份不可用/);
   assert.equal(r.api.modules.commerce.listOrders().length, 11);
 });
 

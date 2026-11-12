@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { createLocalBusinessStore } from '../server/local-business.mjs';
 import { createOrderRechargeClient } from '../server/order-recharge-client.mjs';
 import { buildRechargeOrder, createRechargeOrderSync, rechargeOrderEvidence } from '../server/recharge-order-sync.mjs';
 import { checkAppleOrder, deriveCardIssueFee, nextOrderNo, redactClaudeProOrderMaterials } from '../server/order-policy.mjs';
@@ -185,6 +186,58 @@ test('后台按终态入单，账单与卡池不可用时保留成功并等待�
   assert.equal(writes[1].order.entitlementStatus, 'active');
   assert.equal(writes[1].order.email, 'account@example.test');
   assert.equal(writes[1].order.paidAmount, '123');
+});
+
+test('入单回读失败保持监控异常，管理员每次只重读一批已有任务', async t => {
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  const since = Date.parse('2026-10-31T15:00:00.000Z');
+  const tasks = Array.from({ length: 7 }, (_, index) => 'retry-' + index);
+  store.saveFeatureDocument('order-sync', 0, { since, rows: tasks.map(jobKey => ({
+    jobKey, checkedAt: now, needs: ['本次回读未确认，可重试']
+  })) });
+  const reads = [], states = [];
+  const client = {
+    listCodes: async () => [],
+    async get(path) {
+      if (path.startsWith('/api/admin/sessions')) return { total: 0, items: [] };
+      if (path.startsWith('/api/admin/billing')) return { total: 0, records: [] };
+      if (path === '/api/admin/cards') return { cards: [] };
+      assert(path.startsWith('/api/admin/task-logs/'));
+      const jobKey = path.split('/').at(-1);
+      reads.push(jobKey);
+      return { task: { ...session, jobKey }, runtimeEntries: [{
+        source: 'task', jobKey, ts: Date.parse(completedAt), text: '任务结束 status=success progress=100'
+      }] };
+    }
+  };
+  const sync = createRechargeOrderSync({ store, client, background: true, clock: () => now,
+    publicOrigin: 'http://fixture.local', onStatus: ok => states.push(ok) });
+  await sync.run({ apply: true });
+  assert.deepEqual(reads, []);
+  assert.deepEqual(states, [false]);
+  const call = async (actor, origin = 'http://fixture.local', body = { mode: 'retry' }) => {
+    const response = { writeHead(status) { this.status = status; }, end(raw) { this.body = JSON.parse(raw); } };
+    await sync.handle({ method: 'POST', headers: { origin }, async *[Symbol.asyncIterator]() { yield JSON.stringify(body); } },
+      response, actor);
+    return response;
+  };
+  const admin = { id: 'test-admin', role: 'admin' };
+  assert.equal((await call({ id: 'test-employee', role: 'employee' })).status, 403);
+  assert.equal((await call(admin, 'http://external.local')).status, 403);
+  assert.equal((await call(admin, undefined, { mode: 'retry', jobKeys: ['other'] })).status, 400);
+  assert.deepEqual(reads, []);
+  const first = await call(admin);
+  assert.equal(first.status, 200);
+  assert.equal(first.body.rows.filter(row => row.orderNo).length, 6);
+  assert.equal(first.body.pending, 1);
+  assert.deepEqual(reads, tasks.slice(0, 6));
+  assert.deepEqual(states, [false, false]);
+  const second = await call(admin);
+  assert.equal(second.body.pending, 0);
+  assert.deepEqual(reads, tasks);
+  assert.deepEqual(states, [false, false, true]);
+  assert.equal(store.load('commerce').data.orders.length, 7);
 });
 
 test('Apple renewals enforce original binding and first-use card fees use actual history', () => {

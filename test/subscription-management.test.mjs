@@ -134,7 +134,7 @@ test('Claude 自有历史的死号独立显示，明确交付后转到客户订�
   delivery.accountId = 'owned-1';
   data.inventory.data.accounts[0].accountLifecycle = { customerId: delivery.customerId, disposition: 'in_use' };
   result = await read('customer');
-  assert.deepEqual(result.body.scopeCounts, { customer: 1, owned: 2, unlinked: 0, expired: 0, dead: 1 });
+  assert.deepEqual(result.body.scopeCounts, { all: 4, customer: 1, owned: 2, unlinked: 0, upcoming: 0, expired: 0, dead: 1 });
   assert.equal(result.body.items[0].status, 'active');
   assert.equal(result.body.items[0].series[0].orderNo, delivery.id);
   assert.deepEqual(result.body.items[0].history.map(item => item.source), ['order', 'history']);
@@ -397,7 +397,7 @@ test('缺邮箱按原单列出但不计账号，缺客户不抹去已开通状�
   ]);
   const rows = projectSubscriptions(data, now);
   const missing = rows.filter(row => row.scope === 'unlinked');
-  assert.equal(missing.length, 2);
+  assert.equal(missing.length, 3);
   assert.notEqual(missing[0].id, missing[1].id);
   assert.ok(missing.every(row => !row.conflict && row.missingAssociation));
   assert.equal(missing.find(row => row.history[0].orderNo === 'missing-one').status, 'active');
@@ -409,7 +409,7 @@ test('缺邮箱按原单列出但不计账号，缺客户不抹去已开通状�
   assert.equal(customers.body.total, 1);
   assert.equal(customers.body.accountCount, 1);
   assert.equal(customers.body.counts.active, 1);
-  assert.deepEqual(customers.body.scopeCounts, { customer: 1, owned: 0, unlinked: 2, expired: 0, dead: 0 });
+  assert.deepEqual(customers.body.scopeCounts, { all: 3, customer: 1, owned: 0, unlinked: 2, upcoming: 0, expired: 0, dead: 0 });
   const unlinked = await request(handler, 'list', { product: 'GPT', scope: 'unlinked', query: 'missing-one' });
   assert.equal(unlinked.body.accountCount, 0);
   assert.equal(unlinked.body.total, 1);

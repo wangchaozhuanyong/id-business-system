@@ -19,7 +19,7 @@ const base = {
 };
 const order = (id, createdAt, options = {}) => ({
   ...base, id, orderNo: id, email: id + '@example.test', createdAt: beijing(createdAt),
-  cardId: id + '-card', issueFeeSnapshot: { ...base.issueFeeSnapshot, cardId: id + '-card' }, ...options
+  start: beijing(createdAt), cardId: id + '-card', issueFeeSnapshot: { ...base.issueFeeSnapshot, cardId: id + '-card' }, ...options
 });
 const expired = {
   start: beijing('2026-10-08T08:00:00'), expiry: beijing('2026-11-08T08:00:00')
@@ -43,20 +43,20 @@ const commerceFixture = {
     current,
     order('cancelled', '2026-11-10T00:20:00', { cancelled: true }),
     order('same-time', '2026-11-09T10:40:00', {
-      ...expired, product: 'Claude Max', plan: 'Max 5x', customerId: 'customer-b',
+      expiry: beijing('2026-11-09T11:40:00'), product: 'Claude Max', plan: 'Max 5x', customerId: 'customer-b',
       saleAmount: '0.33', saleCurrency: 'MYR'
     }),
     order('after-yesterday-cutoff', '2026-11-09T10:40:00.001', {
-      ...expired, product: 'Claude Pro', plan: 'Pro', customerId: '',
+      expiry: beijing('2026-11-09T11:40:00'), product: 'Claude Pro', plan: 'Pro', customerId: '',
       saleAmount: '0.10', saleCurrency: 'MYR'
     }),
-    order('prior-week', '2026-11-03T10:40:00', { ...expired, saleAmount: '100', customerId: '' }),
-    order('after-week-cutoff', '2026-11-03T10:40:00.001', { ...expired, customerId: '' }),
+    order('prior-week', '2026-11-03T10:40:00', { expiry: expired.expiry, saleAmount: '100', customerId: '' }),
+    order('after-week-cutoff', '2026-11-03T10:40:00.001', { expiry: expired.expiry, customerId: '' }),
     order('large-amount', '2026-10-15T08:00:00', {
-      ...expired, saleAmount: '1234567890.0001', saleCurrency: 'MYR', customerId: ''
+      expiry: expired.expiry, saleAmount: '1234567890.0001', saleCurrency: 'MYR', customerId: ''
     }),
     order('outside-range', '2026-09-01T09:00:00', {
-      ...expired, saleAmount: '10', saleCurrency: 'MYR', customerId: '',
+      expiry: expired.expiry, saleAmount: '10', saleCurrency: 'MYR', customerId: '',
       refunds: [{ id: 'historical-order-refund', amount: '1.2345', currency: 'MYR', at: refundAt }]
     }),
     order('future-in-same-hour', '2026-11-10T10:40:00.001', {
@@ -364,7 +364,7 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     failed.clear();
 
     commerce.orders.push(order('apple-new', '2026-11-10T09:45:00', {
-      payment: '苹果内购', paidCurrency: 'USD', saleAmount: '80', customerId: ''
+      payment: '苹果内购', appleIdId: 'fixture-wallet', paidCurrency: 'USD', saleAmount: '80', customerId: ''
     }));
     failed.add('appleBalance');
     await refresh.click();
@@ -401,7 +401,7 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     assert.equal(await page.locator('.overview-bar-loss').count(), 1);
     await page.getByRole('link', { name: '查看订单统计', exact: true }).click();
     await page.getByRole('heading', { name: '订单统计', exact: true }).waitFor();
-    assert.equal((await page.locator('[data-stat-metric="reference-profit"] .summary-number').innerText()).replace(/\s/g, ''), '-49.92CNY');
+    assert.equal((await page.locator('[data-stat-metric="profit"] .summary-number').innerText()).replace(/\s/g, ''), '-49.92CNY');
     await go(page, 'overview');
     await refreshed(page);
     assert.equal(await value(page, 'profit'), '-49.92');

@@ -23,6 +23,11 @@ const fixture = {
       appleStoreRegion: 'US', appleFunding: { region: 'US', expected: '20', bound: true },
       billingChannel: 'app_store', billingCountry: '美国', billingCycle: 'month', loginMethod: 'google',
       entitlementStatus: 'active', version: 1
+    }, {
+      id: 'external-apple-order', orderNo: 'SYN-EXTERNAL-APPLE', customerId: 'fixture-customer',
+      product: 'Gemini', plan: 'Google AI Plus', businessType: '首次开通', start: '2026-11-01 12:00', expiry,
+      payment: '苹果内购', paidConfirmed: true, receiptConfirmed: true, entitlementStatus: 'active',
+      externalApplePayment: true, loginMethod: 'google', email: '', version: 1
     }],
     tenants: [], operating: [], rentBatches: [], logs: []
   } },
@@ -60,6 +65,10 @@ try {
     await main.getByText('20 USD', { exact: true }).waitFor();
     const table = main.getByRole('table', { name: '苹果 ID 管理' });
     const panel = main.locator('.apple-management-list');
+    assert.equal(new URL(page.url()).hash, '#/subscriptions/apple-ids');
+    const unrecorded = table.locator('tr[data-row-id="unrecorded:external-apple-order"]');
+    await unrecorded.getByText('SYN-EXTERNAL-APPLE', { exact: true }).waitFor({ state: 'attached' });
+    assert.equal(await unrecorded.locator('[data-column="balance"]').textContent(), '未读取');
     const search = main.getByRole('textbox', { name: '搜索苹果 ID 使用记录' });
     await settle(page);
     assert.deepEqual((await separatorSnapshot(page)).findings, []);
@@ -93,7 +102,7 @@ try {
       assert.equal(await card.locator('[data-column="expected"]').evaluate(node => getComputedStyle(node).textAlign), 'left');
     }
     if (output) await page.screenshot({ path: join(output, `apple-management-${width}-${theme}.png`) });
-    await table.getByRole('button', { name: '查看苹果 ID 账号完整内容', exact: true }).first().click();
+    await table.locator('tr[data-row-id="' + id + '"]').getByRole('button', { name: '查看苹果 ID 账号完整内容', exact: true }).click();
     assert.equal(await page.locator('#table-cell-full-value').inputValue(), apple);
     await page.locator('#drawer[open]').getByRole('button', { name: '关闭', exact: true }).last().click();
     await openColumns();

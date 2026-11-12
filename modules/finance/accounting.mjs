@@ -246,9 +246,9 @@ function confirmedCardOpening(order, clock) {
 }
 
 function canUseUnlinkedCardReference(order, clock, opening) {
-  if (order.cardId || order.product !== 'GPT' || order.payment !== '银行卡' || order.costBasis !== 'standard' ||
+  if (order.cardId || !requiresCardAllocation(order.product) || order.payment !== '银行卡' || order.costBasis !== 'standard' ||
       !['管理员手工', '历史入库'].includes(order.source) ||
-      order.paidConfirmed !== true || order.receiptConfirmed !== true ||
+      order.paidConfirmed !== true ||
       order.cancelled || order.draft || unavailableOrders.includes(order.status)) return false;
   const { cardId, state } = opening || confirmedCardOpening(order, clock);
   return !cardId && state === 'opened';
@@ -389,18 +389,17 @@ function calculateOrderAmounts(order, { appleLedger, cardIssueAllocations, expen
   const missing = new Set();
   const recordedSaleCost = usesRecordedClaudeSaleCost(order, appleLedger);
   const paymentRequirement = recordedSaleCost ? { requiresPaymentConfirmation: false } : {};
-  let cardIssueReason;
   try {
     if (!targets.includes(currency)) throw new Error('统计币种无效');
     const allocation = cardIssueAllocations?.get(order.id);
     if (allocation?.status === 'duplicate') throw new Error(allocation.reason);
-    const unlinkedCard = allocation?.status === 'unlinked' ||
+    const unallocatedCard = allocation?.status === 'unlinked' || allocation?.status === 'pending' ||
       (!cardIssueAllocations && canUseUnlinkedCardReference(order, clock));
-    if (order.payment === '银行卡' && order.costBasis === 'standard' && allocation?.status === 'pending')
-      cardIssueReason = allocation.reason;
     const expenseTerms = orderExpenseTerms(order, expenseReceipts.filter(row => activeExpenseReceipt(row, clock)));
-    const sameCurrency = recordedSaleCost && order.actualCostCurrency === currency &&
+    const sameCurrency = (recordedSaleCost || (order.paidConfirmed && !order.fxSnapshot)) &&
+      order.costBasis === 'actual' && order.actualCostCurrency === currency &&
       (!includeRevenue || order.saleCurrency === currency) &&
+      (!order.bankReturns?.length || order.paidCurrency === currency) &&
       !expenseTerms.some(term => term.mode === 'add-fx' && term.currency !== currency);
     const snapshot = sameCurrency ? null : readSnapshot(order, clock);
     const rate = (code) => {
@@ -413,6 +412,10 @@ function calculateOrderAmounts(order, { appleLedger, cardIssueAllocations, expen
       return unsigned(snapshot.rates[code], 8);
     };
     const value = (units, code) => units === 0n ? 0n : units * rate(code);
+    if (!recordedSaleCost && !isAutomatic(order) && order.paidConfirmed === false)
+      throw new Error('缺少已登记的代付金额');
+    if (includeRevenue && order.receiptConfirmed === false)
+      throw new Error('缺少已登记的收款金额');
     const paid = recordedSaleCost ? 0n : unsigned(order.paidAmount);
     const received = includeRevenue ? netReceiptUnits(order) : 0n;
     const rules = order.costSettings;
@@ -428,7 +431,8 @@ function calculateOrderAmounts(order, { appleLedger, cardIssueAllocations, expen
     let returned;
     if (apple) {
       // Allocation.returned is posted by the existing Apple receipt ledger only.
-      if (order.paidConfirmed && (!appleLedger || appleLedger.orderId !== order.id ||
+      if (order.paidConfirmed && !(order.externalApplePayment === true && !order.appleIdId) &&
+          (!appleLedger || appleLedger.orderId !== order.id ||
           appleLedger.appleIdId !== order.appleIdId || unsigned(appleLedger.amount) !== paid))
         throw new Error('Apple 实际扣款及回款台账待核对');
       returned = unsigned(appleLedger?.returned ?? '0');
@@ -466,11 +470,14 @@ function calculateOrderAmounts(order, { appleLedger, cardIssueAllocations, expen
       const factor = apple && claude ? unsigned(rules.appleDiscount) : one;
       if (factor === 0n || factor > one) throw new Error('Apple 折扣必须大于 0 且不超过 1');
       item('subscription', apple && claude ? '苹果内购折扣后成本' : '代付金额', paid, order.paidCurrency, factor);
-      if (!apple && !unlinkedCard && cardIssueAllocations && (allocation || requiresCardAllocation(order.product))) {
-        if (allocation?.status !== 'ready')
-          throw new Error(allocation?.reason || '本单开卡成本待核对');
+      if (!apple && allocation?.status === 'ready') {
         item('card-issue', '开卡成本分摊', unsigned(allocation.amount ?? allocation.amountUsd),
           allocation.currency || 'USD', one, allocation.expenseReceipt);
+      } else if (!apple && unallocatedCard) {
+        const fee = order.issueFeeSnapshot;
+        if (allocation?.status !== 'pending' && fee?.applied)
+          item('card-issue', '原单已登记开卡费', unsigned(fee.amountUsd), 'USD');
+        else cardIssueUnallocated = true;
       }
       if (!apple && claude) {
         item('service', '代付服务费', unsigned(rules.claudeBankFeeMyr), 'MYR');
@@ -478,16 +485,10 @@ function calculateOrderAmounts(order, { appleLedger, cardIssueAllocations, expen
         if (kyc) addTerm(kyc, 'KYC 认证实付');
         else item('kyc', 'KYC 认证成本', unsigned(rules.claudeAccountCostMyr), 'MYR');
       } else if (!apple) {
-        if (unlinkedCard || !cardIssueAllocations) {
+        if (!cardIssueAllocations && !unallocatedCard) {
           const fee = order.issueFeeSnapshot;
-          if (unlinkedCard && fee?.applied !== true) {
-            cardIssueUnallocated = true;
-          } else {
-            if (!fee) throw new Error('订单缺少开卡费快照');
-            if (fee.pending) throw new Error('首次开卡费待核对');
-            if (fee.applied)
-              item('card-issue', unlinkedCard ? '原单已登记开卡费' : '本卡首次开卡费', unsigned(fee.amountUsd), 'USD');
-          }
+          if (!fee || fee.pending) cardIssueUnallocated = true;
+          else if (fee.applied) item('card-issue', '本卡首次开卡费', unsigned(fee.amountUsd), 'USD');
         }
         const feePercent = unsigned(rules.cardPercent);
         if (feePercent > one) throw new Error('银行卡手续费比例不能大于 1');
@@ -521,12 +522,12 @@ function calculateOrderAmounts(order, { appleLedger, cardIssueAllocations, expen
       basis: actual && (sameCurrency || snapshot.basis === 'settlement') ? 'actual' : 'reference',
       ...paymentRequirement,
       ...(allocation?.status === 'ready' && { cardIssue: allocation }),
-      ...(cardIssueUnallocated && { cardIssueUnallocated }),
+      ...(cardIssueUnallocated && { cardIssueUnallocated,
+        ...(allocation?.reason && { cardIssueUnallocatedReason: allocation.reason }) }),
       items: original.map((row) => ({ ...row, amount: toMoney(row.amount) }))
     };
   } catch (error) {
-    return { status: 'pending', currency, reason: error.message, ...paymentRequirement,
-      ...(cardIssueReason && cardIssueReason !== error.message && { additionalReasons: [cardIssueReason] }) };
+    return { status: 'pending', currency, reason: error.message, ...paymentRequirement };
   }
 }
 

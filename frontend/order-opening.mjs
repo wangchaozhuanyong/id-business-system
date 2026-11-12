@@ -21,6 +21,25 @@ export function orderTerminationTime(order, now = Date.now()) {
 export const validOrderEmail = value => typeof value === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 export const validOrderXHandle = value => typeof value === 'string' && /^@[a-z0-9_]{1,15}$/i.test(value.trim());
 
+export const rechargeOrderOwner = order =>
+  [order?.ownerId, order?.rechargeOwnerId, order?.createdById]
+    .find(value => typeof value === 'string' && value.trim())?.trim() || '';
+
+export const automaticGptOrder = order => order?.product === 'GPT' && order.source === '线上代充' && Boolean(order.taskId);
+
+export function rechargeOrderCompletion(order, customer) {
+  const ownerId = rechargeOrderOwner(order);
+  const receiptRecorded = order.receiptConfirmed === true &&
+    typeof order.saleAmount === 'string' && /^\d{1,16}(?:\.\d{1,4})?$/.test(order.saleAmount) &&
+    typeof order.saleCurrency === 'string' && /^[A-Z]{3}$/.test(order.saleCurrency);
+  const missing = [
+    !ownerId && '归属人',
+    !customer && (order.customerId ? '客户关联' : '客户'),
+    !receiptRecorded && '客户实收'
+  ].filter(Boolean);
+  return { ownerId, receiptRecorded, missing, state: !ownerId ? 'unassigned' : missing.length ? 'pending' : 'complete' };
+}
+
 const customerKey = value => typeof value === 'string' ? value.normalize('NFKC').trim().toLowerCase() : '';
 export const orderCustomerCreateAction = '新增订单并登记客户';
 
@@ -46,10 +65,39 @@ export function matchOrderCustomer(customers, name, wechat = '') {
 }
 
 export function orderNeedsAccount(order) {
-  const oneOffClaude = ['Claude Pro', 'Claude Max'].includes(order.product) && order.businessType === '续费' &&
-    !order.accountId && !order.claudeRenewalId;
-  return !oneOffClaude && !(order.product === 'Grok' && order.loginMethod === 'x'
+  return !(order.product === 'Grok' && (order.loginMethod === 'x' || (!order.email && order.xHandle))
     ? validOrderXHandle(order.xHandle) : validOrderEmail(order.email));
+}
+
+export function orderFieldChanged(order, prior, ...fields) {
+  return !prior || fields.some(field => (order[field] ?? '') !== (prior[field] ?? ''));
+}
+
+function subscriptionFamily(order) {
+  if (['Claude Pro', 'Claude Max'].includes(order.product)) return 'Claude';
+  if (order.product === 'Grok') {
+    if (order.plan?.startsWith('The X Subscription ')) return 'Grok:x_subscription';
+    if (order.plan?.startsWith('SuperGrok')) return 'Grok:supergrok';
+    return 'Grok:x_premium';
+  }
+  return order.product;
+}
+
+export function subscriptionChainRoot(order, ordersById) {
+  const login = row => !orderNeedsAccount(row)
+    ? String(row.loginMethod === 'x' ? row.xHandle : row.email || row.xHandle).trim().toLowerCase() : '';
+  let root = order;
+  const seen = new Set([root.id]);
+  while (root.customerId && (root.previousOrderId || root.claudeRenewalId)) {
+    const previous = ordersById.get(root.previousOrderId || root.claudeRenewalId);
+    if (!previous || seen.has(previous.id) || previous.customerId !== order.customerId ||
+        subscriptionFamily(previous) !== subscriptionFamily(order) ||
+        (login(previous) && login(order) && login(previous) !== login(order)) ||
+        (previous.accountId && order.accountId && previous.accountId !== order.accountId)) break;
+    seen.add(previous.id);
+    root = previous;
+  }
+  return root;
 }
 
 export function manualBusinessOrder(order) {
@@ -104,5 +152,6 @@ export function subscriptionPeriodState({ start, expiry, confirmed, ended, cance
 if (typeof window !== 'undefined') window.IDOrderOpening = Object.freeze({
   orderOpeningConfirmed, orderTerminationTime, orderNeedsAccount, manualOrderDetailsMissing,
   validOrderEmail, validOrderXHandle, subscriptionPeriodState, subscriptionStateLabels, subscriptionTime,
-  matchOrderCustomer, orderCustomerCreateAction
+  matchOrderCustomer, orderCustomerCreateAction, orderFieldChanged, subscriptionChainRoot,
+  automaticGptOrder, rechargeOrderOwner, rechargeOrderCompletion
 });

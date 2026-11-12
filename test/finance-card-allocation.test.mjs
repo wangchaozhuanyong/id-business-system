@@ -119,21 +119,24 @@ test('分母保留成功后撤单与退款，排除重复任务、失败和未�
   assert.equal(allocate([a, b, c], Date.parse('2026-11-04T05:00:00.000Z')).get(a.id).count, 1);
 });
 
-test('开卡费凭据、同卡开通日期和稳定卡编号不足时待核算', () => {
+test('开卡费无法分摊时继续计算已知成本和利润', () => {
   const [a, b, c] = trio();
-  assert.match(compute(b, allocate([b])).reason, /开卡费凭据缺失/);
+  const unallocated = compute(b, allocate([b]));
+  assert.equal(unallocated.status, 'ready');
+  assert.equal(unallocated.profit, '36.2000');
+  assert.match(unallocated.cardIssueUnallocatedReason, /开卡费凭据缺失/);
   const incomplete = { ...b, start: '' };
-  assert.match(compute(a, allocate([a, incomplete])).reason, /同卡开通记录存在待核对/);
+  assert.match(compute(a, allocate([a, incomplete])).cardIssueUnallocatedReason, /同卡开通记录存在待核对/);
   const originalFee = c.issueFeeSnapshot;
   c.issueFeeSnapshot = { ...a.issueFeeSnapshot };
-  assert.match(compute(a, allocate([a, c])).reason, /多份开卡费凭据/);
+  assert.match(compute(a, allocate([a, c])).cardIssueUnallocatedReason, /多份开卡费凭据/);
   c.issueFeeSnapshot = originalFee;
   c.cardId = '1234';
-  assert.match(compute(c, allocate([a, c])).reason, /稳定编号/);
+  assert.match(compute(c, allocate([a, c])).cardIssueUnallocatedReason, /稳定编号/);
 
   const sameTaskA = { ...b, source: '线上代充', taskId: 'duplicate-key', rechargeCompletedAt: '2026-11-04T05:00:00.000Z' };
   const sameTaskB = { ...sameTaskA, id: 'separate', cardId: 'recharge:2' };
-  assert.match(compute(a, allocate([a, sameTaskA, sameTaskB])).reason, /同卡开通记录存在待核对/);
+  assert.match(compute(a, allocate([a, sameTaskA, sameTaskB])).cardIssueUnallocatedReason, /同卡开通记录存在待核对/);
 });
 
 test('已确认的无卡 GPT 旧单计算参考利润，保留已登记费用且不改变其他卡的分摊', () => {
@@ -163,7 +166,7 @@ test('已确认的无卡 GPT 旧单计算参考利润，保留已登记费用且
   const noQuote = { ...legacy, fxSnapshot: null };
   assert.match(compute(noQuote, allocate([noQuote])).reason, /缺少有效汇率快照/);
   const automatic = { ...legacy, source: '线上代充', taskId: 'no-card-task', rechargeCompletedAt: '2026-11-06T04:00:00.000Z' };
-  assert.match(compute(automatic, allocate([automatic])).reason, /原付款银行卡/);
+  assert.match(compute(automatic, allocate([automatic])).cardIssueUnallocatedReason, /原付款银行卡/);
 });
 
 test('共享用卡计入真实开通笔数，实际总成本沿用已核对的完整账单', () => {

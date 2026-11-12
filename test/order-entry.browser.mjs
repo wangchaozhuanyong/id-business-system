@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { interceptDesign, origin } from './helpers/offline-design.mjs';
+import { applyOrderCompletion, readOrderCompletion } from '../server/order-completion.mjs';
+import { interceptDesign, origin, toggleDesignTheme } from './helpers/offline-design.mjs';
 
 test('自动订单证据缺失时可以补资料并保留原始证据', { timeout: 15_000 }, async (t) => {
   const playwright = process.env.ID_RECHARGE_QA_PLAYWRIGHT;
@@ -35,8 +36,8 @@ test('自动订单证据缺失时可以补资料并保留原始证据', { timeou
   page.setDefaultTimeout(5000);
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
-  await page.goto(`${origin}/#/orders/gpt`);
-  await page.locator(`[data-action="commerce-order-edit"][data-id="${prior.id}"]`).click();
+  await page.goto(`${origin}/#/orders/detail/${prior.id}`);
+  await page.getByRole('button', { name: '编辑资料', exact: true }).click();
   const form = page.locator('#drawer[open] #commerce-order-form');
   assert.equal(await form.locator('#commerce-paidCurrency').inputValue(), '');
   assert.equal(await form.locator('#commerce-start').inputValue(), '');
@@ -61,7 +62,7 @@ test('自动订单证据缺失时可以补资料并保留原始证据', { timeou
   assert.deepEqual(saved.issueFeeSnapshot, prior.issueFeeSnapshot);
 
   await page.locator('#drawer[open]').waitFor({ state: 'hidden' });
-  await page.locator(`[data-action="commerce-order-edit"][data-id="${prior.id}"]`).click();
+  await page.getByRole('button', { name: '编辑资料', exact: true }).click();
   await form.locator('#commerce-saleAmount').fill('120');
   await page.locator('#drawer[open] button[form="commerce-order-form"][type="submit"]').click();
   await page.locator('#confirm-dialog[open]').getByText(/客户实收 120\.00 .*代付以任务回执为准/).waitFor();
@@ -76,16 +77,16 @@ test('自动订单证据缺失时可以补资料并保留原始证据', { timeou
   assert.deepEqual(errors, []);
 });
 
-test('员工审批边界及 GPT 同步入单后共用客户、录单和续费资料', { timeout: 40_000 }, async (t) => {
+test('员工审批边界及 GPT 代充原单、来源颜色和跨页关联', { timeout: 40_000 }, async (t) => {
   const playwright = process.env.ID_RECHARGE_QA_PLAYWRIGHT;
   const { chromium } = await import(playwright ? pathToFileURL(playwright).href : 'playwright');
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
   t.after(() => browser.close());
   const requests = [];
-  const syncCommands = [];
   const code = 'SYNTHETIC-RECHARGE-ONLY';
   const fixture = JSON.parse(await readFile(new URL('../docs/audits/2026-11-06-design-review/visual-fixtures.json', import.meta.url)));
   const customer = { id: 'sync-customer', name: '合成代充客户', active: true, version: 1 };
+  const staff = { id: 'employee', name: '当前员工昵称', role: 'employee' };
   const now = Date.now(), hour = 3_600_000;
   const start = new Date(now - hour).toISOString();
   const synced = {
@@ -94,6 +95,7 @@ test('员工审批边界及 GPT 同步入单后共用客户、录单和续费资
     email: 'synced-customer@example.test', customerId: '', product: 'GPT', plan: 'Plus', businessType: '续费',
     accountSource: '客户自有', accountId: '', start, expiry: new Date(now + 24 * hour).toISOString(),
     rechargeCompletedAt: start, cardId: '', paymentId: '', paidAmount: '', paidCurrency: '',
+    ownerId: '', rechargeOwnerId: staff.id, createdById: staff.id,
     paidConfirmed: false, receiptConfirmed: false, costConfirmed: false, saleAmount: '120', saleCurrency: 'CNY',
     cancelled: false, subscriptionEnded: false, refunds: [], bankReturns: [], corrections: [], financialEvidence: [], version: 1
   };
@@ -102,25 +104,27 @@ test('员工审批边界及 GPT 同步入单后共用客户、录单和续费资
     const actor = { id: role, name: '离线测试', email: 'fixture@example.test', role };
     const localFixtures = structuredClone(fixture);
     localFixtures.commerce.data.customers.push(customer);
+    const manual = localFixtures.commerce.data.orders.find(row => row.product === 'GPT' && !row.cancelled);
+    manual.source = '管理员手工';
+    localFixtures.commerce.data.orders.unshift(structuredClone(synced));
     await interceptDesign(context, { localFixtures, actor });
-    let failLedgerRead = false, syncReads = 0, savedSyncRow;
+    let syncReads = 0;
     const corrections = [];
-    await context.route('**/api/local/commerce', route => {
-      if (route.request().method() === 'GET') {
-        if (!failLedgerRead) return route.fallback();
-        failLedgerRead = false;
-        return route.fulfill({ status: 503, json: { error: '合成订单读取失败' } });
-      }
-      const command = route.request().postDataJSON();
-      const rows = command.data.orders.filter(row => row.taskId === synced.taskId);
-      assert.equal(command.version, localFixtures.commerce.version);
-      assert.equal(rows.length, 1);
-      assert.equal(rows[0].id, synced.id);
-      assert.equal(rows[0].customerId, customer.id);
-      assert.equal(rows[0].paidConfirmed, false);
-      corrections.push(rows[0]);
-      localFixtures.commerce = { version: command.version + 1, data: command.data };
-      return route.fulfill({ json: localFixtures.commerce });
+    await context.route((url) => url.pathname === '/api/local/order-completion', async route => {
+      const request = route.request();
+      const ledger = localFixtures.commerce;
+      const settings = localFixtures.settings?.data;
+      if (request.method() === 'GET') return route.fulfill({
+        json: readOrderCompletion(ledger.data, settings, actor, new URL(request.url()).searchParams, () => [staff, actor])
+      });
+      const command = request.postDataJSON();
+      const { order, completion } = applyOrderCompletion(ledger.data, settings, actor, command, () => [staff, actor], start);
+      assert.equal(order.id, synced.id);
+      assert.equal(order.customerId, customer.id);
+      assert.equal(order.paidConfirmed, false);
+      corrections.push(order);
+      ledger.data.orders = ledger.data.orders.map(row => row.id === order.id ? order : row);
+      return route.fulfill({ json: { orderId: order.id, version: ++ledger.version, state: completion.state } });
     });
     await context.route('**/api/local/auth/display-names', (route) =>
       route.fulfill({ json: { items: [{ id: 'employee', name: '当前员工昵称' }] } }));
@@ -147,19 +151,7 @@ test('员工审批边界及 GPT 同步入单后共用客户、录单和续费资
     });
     await context.route('**/api/local/order-sync', (route) => {
       syncReads++;
-      if (route.request().method() !== 'POST')
-        return route.fulfill({ json: { rows: savedSyncRow ? [savedSyncRow] : [] } });
-      const command = route.request().postDataJSON();
-      syncCommands.push(command);
-      const row = { jobKey: synced.taskId, orderNo: '', needs: ['实扣金额待核对'] };
-      if (command.mode === 'apply') {
-        localFixtures.commerce.data.orders.unshift(structuredClone(synced));
-        localFixtures.commerce.version++;
-        failLedgerRead = true;
-        row.orderNo = synced.orderNo;
-        savedSyncRow = row;
-      }
-      return route.fulfill({ json: { rows: [row] } });
+      return route.fulfill({ status: 500, json: { error: '前端无须访问同步表' } });
     });
     const page = await context.newPage();
     const errors = [];
@@ -182,7 +174,7 @@ test('员工审批边界及 GPT 同步入单后共用客户、录单和续费资
       assert.equal(await page.getByRole('button', { name: '批准', exact: true }).count(), 0);
     } else {
       await page.getByRole('button', { name: '批准', exact: true }).click();
-      await page.locator('#confirm-dialog').getByRole('button', { name: '批准并发码' }).click();
+      await page.locator('#drawer[open]').getByRole('button', { name: '批准并发码' }).click();
       await page.locator('#recharge-request-history').getByText('已发码', { exact: true }).waitFor();
       assert.match(await remaining.textContent(), /剩余可提取 0 个/);
       assert.equal(await submit.isDisabled(), true);
@@ -191,52 +183,59 @@ test('员工审批边界及 GPT 同步入单后共用客户、录单和续费资
     await page.locator('#recharge-codes-region [data-action="order-code-item-detail"]').click();
     await page.locator('#drawer').getByText('当前员工昵称', { exact: true }).waitFor();
     await page.getByRole('button', { name: '关闭抽屉', exact: true }).click();
-    assert.equal(await page.getByRole('cell', { name: code, exact: true }).count(), role === 'employee' ? 1 : 0);
+    assert.equal(await page.locator('#recharge-codes-region .recharge-code-text').getByText(code, { exact: true }).count(), role === 'employee' ? 1 : 0);
     await page.goto(origin + '/#/orders/gpt');
-    const workspace = page.getByRole('navigation', { name: 'GPT 订单视图' });
+    const main = page.locator('#main');
     await page.getByRole('heading', { name: 'GPT 订单', exact: true }).waitFor();
+    const search = page.locator('#commerce-search');
+    const legend = main.locator('.gpt-order-origin-bar');
+    await legend.getByText('订单列表', { exact: true }).waitFor();
+    await legend.getByText('线上代充', { exact: true }).waitFor();
+    await legend.getByText('手工录单', { exact: true }).waitFor();
+    assert.equal(await main.getByText('代充订单同步', { exact: true }).count(), 0);
+    const automaticRow = main.locator(`tr[data-row-id="${synced.id}"]`);
+    const manualRow = main.locator(`tr[data-row-id="${manual.id}"]`);
+    assert.equal(await automaticRow.count(), 0);
     if (role === 'super') {
-      const listTab = workspace.getByRole('link', { name: '订单列表', exact: true });
-      const syncTab = workspace.getByRole('link', { name: '代充订单同步', exact: true });
-      const search = page.locator('#commerce-search');
-      const taskInput = page.getByLabel('指定代充任务编号');
-      assert.equal(await listTab.getAttribute('aria-current'), 'page');
-      await search.fill(synced.orderNo);
-      await syncTab.click();
-      assert.equal(await syncTab.getAttribute('aria-current'), 'page');
-      assert.equal(await page.locator('#sidebar a[href="#/orders/gpt"]').getAttribute('aria-current'), 'page');
-      assert.equal(await page.locator('#sidebar a[href*="recharge-sync"]').count(), 0);
-      await taskInput.fill(synced.taskId);
-      await listTab.click();
-      assert.equal(await search.inputValue(), synced.orderNo);
-      await syncTab.click();
-      assert.equal(await taskInput.inputValue(), synced.taskId);
-      await page.getByRole('button', { name: '预览', exact: true }).click();
-      await page.getByRole('cell', { name: synced.taskId, exact: true }).waitFor();
-      await listTab.click();
-      await syncTab.click();
-      await page.getByRole('cell', { name: synced.taskId, exact: true }).waitFor();
-      await page.getByRole('button', { name: '同步入单', exact: true }).click();
-      await page.locator('#confirm-dialog').getByRole('button', { name: '确认同步' }).click();
-      await page.getByRole('button', { name: '重读订单', exact: true }).click();
-      await page.getByText('同步批次已处理，业务订单暂未刷新。').waitFor({ state: 'hidden' });
-      assert(await page.getByRole('button', { name: '同步入单', exact: true }).isDisabled());
-      await page.getByRole('button', { name: synced.orderNo, exact: true }).click();
-      await page.getByRole('heading', { name: '订单详情', exact: true }).waitFor();
-      const detailUrl = page.url();
-      assert.match(await page.locator('#main').innerText(), /客户待补充/);
-      await page.getByRole('button', { name: '编辑资料', exact: true }).click();
-      const form = page.locator('#drawer[open] #commerce-order-form');
-      await form.locator('#commerce-customerId-picker').click();
-      await form.locator('#commerce-customerId-popover input').fill(customer.name);
-      await form.locator(`#commerce-customerId-options [data-value="${customer.id}"]`).click();
-      await form.locator('#commerce-correctionReason').fill('核实代充任务的客户归属');
-      await page.locator('#drawer[open] button[form="commerce-order-form"][type="submit"]').click();
-      await page.locator('#confirm-dialog').getByRole('button', { name: '确认', exact: false }).click();
-      await page.locator('#toast').filter({ hasText: '订单修改成功' }).waitFor();
-      assert.equal(page.url(), detailUrl, '编辑后保留订单详情页');
-      assert.match(await page.locator('#main').innerText(), new RegExp(customer.name));
+      const heading = await legend.evaluate(node => {
+        const box = node.getBoundingClientRect();
+        const title = node.firstElementChild.getBoundingClientRect();
+        const key = node.lastElementChild.getBoundingClientRect();
+        return { right: key.left > title.right, sameRow: key.top < title.bottom, gap: box.bottom - key.bottom };
+      });
+      assert(heading.right && heading.sameRow && heading.gap >= 8);
+      await page.goto(origin + '/#/orders/gpt/recharge-sync');
+      await page.waitForURL('**/#/orders/gpt');
+      await automaticRow.locator('.gpt-order-origin-label').filter({ hasText: '线上代充' }).waitFor();
+      assert.match(await main.locator('[data-action="commerce-order-tab"][data-tab="pending"]').getAttribute('class'), /active/);
+      await automaticRow.getByRole('button', { name: '补全资料', exact: true }).click();
+      await page.waitForURL('**/#/workspace/order-completion');
+      const drawer = page.locator('#drawer[open]');
+      await drawer.getByText(synced.orderNo, { exact: true }).waitFor();
+      await drawer.locator('#completion-customer-query').fill(customer.name);
+      await drawer.getByRole('button', { name: '选择客户 ' + customer.name, exact: true }).click();
+      await drawer.locator('#completion-receipt-amount').fill('119.50');
+      await drawer.getByRole('button', { name: '保存订单', exact: true }).click();
+      await main.locator('.completion-saved').getByRole('button', { name: '查看此订单' }).click();
+      await page.waitForURL('**/#/orders/detail/' + synced.id);
+      await main.getByText(customer.name, { exact: true }).waitFor();
       assert.equal(corrections.length, 1);
+      assert.equal(corrections[0].saleAmount, '119.50');
+      assert.equal(localFixtures.commerce.data.orders.filter(row => row.taskId === synced.taskId).length, 1);
+
+      await page.goto(origin + '/#/orders/gpt');
+      await main.locator('[data-action="commerce-order-tab"][data-tab="all"]').click();
+      await manualRow.locator('.gpt-order-origin-label').filter({ hasText: '手工录单' }).waitFor();
+      await automaticRow.locator('.gpt-order-origin-label').filter({ hasText: '线上代充' }).waitFor();
+      const background = (row, width) => (width > 760 ? row.locator('td[data-column="orderNo"]') : row)
+        .evaluate(node => getComputedStyle(node).backgroundColor);
+      assert.notEqual(await background(automaticRow, width), await background(manualRow, width));
+      await toggleDesignTheme(page);
+      assert.notEqual(await background(automaticRow, width), await background(manualRow, width));
+      await page.setViewportSize({ width: 320, height: 900 });
+      assert.notEqual(await background(automaticRow, 320), await background(manualRow, 320));
+      assert.equal(await legend.evaluate(node => node.scrollWidth <= node.clientWidth + 1), true);
+      await page.setViewportSize({ width, height: 900 });
 
       await page.goto(origin + '/#/customers/list');
       await search.fill(customer.name);
@@ -249,24 +248,18 @@ test('员工审批边界及 GPT 同步入单后共用客户、录单和续费资
       assert.equal(await page.locator('#commerce-email').inputValue(), synced.email);
       await page.goto(origin + '/#/workspace/renewals');
       await search.fill(synced.email);
-      await page.locator('table[data-table="commerce-renewals"]').getByText(synced.orderNo, { exact: true }).waitFor();
-      savedSyncRow = { ...savedSyncRow, needs: [...savedSyncRow.needs, '首次开卡费待核对'] };
-      await page.setViewportSize({ width: 320, height: 900 });
-      await page.goto(origin + '/#/orders/recharge-sync');
-      await syncTab.waitFor();
-      const syncedCard = page.locator(`table[data-table="recharge-order-sync"] tr[data-row-id="${synced.taskId}"]`);
-      await syncedCard.locator('td[data-column="needs"]').getByText('实扣金额待核对、首次开卡费待核对', { exact: true }).waitFor();
-      assert(await page.getByRole('button', { name: synced.orderNo, exact: true }).isVisible());
-      assert.equal(new URL(page.url()).hash, '#/orders/gpt/recharge-sync');
+      await main.locator(`[data-action="commerce-renewal-select"][data-id="${synced.id}"]`).click();
+      await main.getByRole('region', { name: '当前选中客户' }).getByText(synced.email, { exact: true }).waitFor();
     } else {
-      assert.equal(await workspace.count(), 0);
       await page.goto(origin + '/#/orders/recharge-sync');
-      await page.getByRole('heading', { name: '访问受限', exact: true }).waitFor();
-      assert.equal(syncReads, 0);
+      await page.waitForURL('**/#/orders/gpt');
+      await automaticRow.locator('.gpt-order-origin-label').filter({ hasText: '线上代充' }).waitFor();
+      assert.equal(await main.locator('[data-action="commerce-order-complete"]').count(), 1);
+      assert.equal(await main.locator('[data-action="commerce-order-edit"]').count(), 0);
     }
+    assert.equal(syncReads, 0);
     assert.deepEqual(errors, []);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
     await context.close();
   }
-  assert.deepEqual(syncCommands, [{ mode: 'preview' }, { mode: 'apply', jobKeys: ['fixture-task'] }]);
 });

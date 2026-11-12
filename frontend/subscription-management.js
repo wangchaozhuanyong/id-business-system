@@ -3,14 +3,15 @@
 
   const A = window.IDDesignAPI, D = window.IDLocalData;
   const { $, esc, button, textAction } = A;
-  const labels = { gpt: 'GPT', claude: 'Claude', gemini: 'Gemini', grok: 'Grok' };
+  const labels = { all: 'all', gpt: 'GPT', claude: 'Claude', gemini: 'Gemini', grok: 'Grok' };
   const states = window.IDOrderOpening.subscriptionStateLabels;
   const parseTime = window.IDOrderOpening.subscriptionTime;
   const codeStates = { active: '有效', missing: '未登记', expired: '已过期', disabled: '已停用',
     auth_failed: '授权失败', conflict: '资料冲突', not_applicable: '不适用' };
   const scopes = ['inventory', 'commerce', 'tools/mailbox-pool', 'subscription-management'];
   const tableId = 'subscription-accounts';
-  const scopeLabels = { customer: '客户订阅', owned: '自有账号', expired: '已过期', dead: '死号', unlinked: '待补邮箱' };
+  const scopeLabels = { all: '全部订阅', customer: '客户订阅', owned: '自有订阅',
+    upcoming: '即将到期', expired: '已到期', dead: '死号', unlinked: '无邮箱' };
   const archiveScopes = new Set(['expired', 'dead']);
   const hour = 3_600_000, day = 24 * hour;
   let snapshot, error, requestNumber = 0, clearCopy, ownerContext, expiryTimer, frameObserver;
@@ -25,18 +26,18 @@
   const filters = () => {
     const key = filterKey();
     if (!A.state.drafts.has(key)) {
-      A.state.drafts.set(key, { scope: 'customer', input: '', query: '', status: '', sort: 'expiry_asc', page: 1,
+      A.state.drafts.set(key, { scope: 'all', product: 'all', input: '', query: '', status: '', sort: 'expiry_asc', page: 1,
         pageSize: window.IDPagination.defaultPageSize });
     }
     return A.state.drafts.get(key);
   };
-  const selectedScope = () => filters().scope || 'customer';
-  const scopeOptions = () => Object.keys(scopeLabels).filter(scope => scope !== 'owned' || product() === 'Claude');
+  const selectedScope = () => filters().scope || 'all';
+  const scopeOptions = () => Object.keys(scopeLabels).filter(scope => scope !== 'owned' || ['all', 'Claude'].includes(product()));
   const currentSnapshot = () => snapshot?.product === product() && snapshot.scope === selectedScope() ? snapshot : null;
   const currentRow = id => currentSnapshot()?.items.find(row => row.id === id);
   function requestFilters() {
     const f = filters();
-    return { product: product(), scope: selectedScope(), query: f.query.trim(), status: f.status,
+    return { product: product() === 'all' ? f.product || 'all' : product(), scope: selectedScope(), query: f.query.trim(), status: f.status,
       sort: f.sort || 'expiry_asc', page: f.page, pageSize: f.pageSize };
   }
   const timeFormatter = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai', dateStyle: 'short', timeStyle: 'short' });
@@ -62,30 +63,35 @@
   const canCopy = row => !row.conflict && !row.missingAssociation && row.credentialStatus !== 'conflict';
 
   function columns() {
-    const unlinked = selectedScope() === 'unlinked';
     return [
-      { id: 'email', label: unlinked ? '订单编号' : '邮箱账号', class: 'email-cell',
-        render: row => esc(unlinked ? row.history[0]?.orderNo || '—' : emailAccount(row)) },
+      { id: 'customer', label: '客户', render: row => esc(row.conflict ? '归属待核对' : row.customerName || (row.scope === 'owned' ? '自用' : '未登记')) },
+      { id: 'email', label: '邮箱账号', class: 'email-cell',
+        render: row => esc(row.account || '未登记 · ' + (row.history[0]?.orderNo || '—')) },
+      ...(product() === 'all' ? [{ id: 'product', label: '产品' }] : []),
       { id: 'plan', label: '订阅套餐', render: row => lineValues(row, series => esc(series.plan || '待核对')) },
       { id: 'start', label: '订阅时间', render: row => lineValues(row, series => esc(displayDate(series.start))) },
       { id: 'expiry', label: '到期时间', render: row => lineValues(row, series => esc(displayDate(series.expiry))) },
-      { id: 'days', label: '到期倒计时', mobileSummary: true, render: row => row.conflict ? '—' : lineValues(row, countdown) },
-      { id: 'status', label: '订阅状态', render: row => row.status === 'dead' ? stateTag('dead') : row.conflict ? stateTag('pending') :
+      { id: 'days', label: '到期倒计时', mobileSummary: true, render: row => lineValues(row, countdown) },
+      { id: 'status', label: '订阅状态', render: row => row.status === 'dead' ? stateTag('dead') :
         lineValues(row, series => stateTag(series.status)) +
-        (!unlinked && row.missingAssociation ? A.tag('客户待补', 'warning') : '') },
-      { id: 'ownerName', label: unlinked ? '订单处理人' : '归属人',
+        (row.conflict ? A.tag('归属待核对', 'warning') : '') + (!row.account ? A.tag('邮箱未登记', '') : '') },
+      { id: 'ownerName', label: '归属人',
         render: row => esc(row.ownerName || (row.ownerEligible ? '未设置' : '—')) },
       { id: 'operatorName', label: '操作人', render: row => esc(row.operatorName || '历史未记录') },
       ...(product() === 'Claude' ? [{ id: 'code', label: '查询码状态／剩余', render: row =>
         row.queryCode?.status === 'not_applicable' ? '不适用' :
           esc(codeStates[row.queryCode?.status] || '待核对') + ' · ' + esc(displayDays(row.queryCode?.remainingDays)) }] : []),
+      { id: 'payment', label: '续费方式', render: row => lineValues(row, series =>
+        esc(series.payment === '银行卡' ? series.last4 ? '银行卡 · ' + series.last4 : '银行卡 · 未绑定'
+          : series.payment === '苹果内购' ? series.appleIdId ? '苹果内购' : '苹果内购 · 系统外'
+          : '未登记')) },
       { id: 'actions', label: '操作', action: true, render: row => {
         const attrs = `data-id="${esc(row.id)}"`;
-        if (unlinked) return textAction('查看原单', 'subscriptions-order',
-          `data-order-id="${esc(row.history[0]?.sourceId || '')}"`);
-        return '<div class="action-links">' + (canCopy(row) ? textAction('复制', 'subscriptions-copy', attrs) : '') +
-          textAction('详情', 'subscriptions-detail', attrs) +
-          (row.ownerEligible || (row.product === 'Claude' && canCopy(row))
+        const work = !row.conflict ? row.series.filter(series => series.source === 'order' && series.confirmed &&
+          !['ended', 'dead', 'pending', 'failed'].includes(series.status)) : [];
+        return '<div class="action-links">' + textAction('详情', 'subscriptions-detail', attrs) +
+          (work.length === 1 ? A.modules.commerce?.renewalActions?.(work[0], row.id) || '' : '') +
+          (row.ownerEligible || canCopy(row)
             ? textAction('更多操作', 'subscriptions-more', attrs, '', 'chevron') : '') + '</div>';
       } }
     ];
@@ -104,11 +110,11 @@
 
   function overviewMarkup() {
     const data = currentSnapshot();
-    if (selectedScope() === 'unlinked') return A.summary([['待补邮箱订单', data?.scopeCounts?.unlinked ?? '—', '笔', true]]);
+    if (selectedScope() === 'unlinked') return A.summary([['无邮箱订阅', data?.scopeCounts?.unlinked ?? '—', '笔', true]]);
     const c = data?.counts;
     return A.summary([
-      ['全部账号', c ? data.accountCount ?? Object.values(c).reduce((a, b) => a + b, 0) : '—', '个', true],
-      ['有效', c?.active ?? '—', '个'], ['已过期', c?.expired ?? '—', '个'],
+      ['订阅笔数', c ? data.scopeCounts?.[selectedScope()] ?? data.total : '—', '笔', true],
+      ['未到期', c?.active ?? '—', '个'], ['已到期', c?.expired ?? '—', '个'],
       ['待确认', c?.pending ?? '—', '个'], ['已终止', c?.ended ?? '—', '个']
     ]);
   }
@@ -163,24 +169,30 @@
 
   function render() {
     const name = product();
-    if (!active()) return A.header(name + ' 订阅管理', '') +
+    const title = name === 'all' ? '订阅管理' : name + ' 订阅管理';
+    if (!active()) return A.header(title, '') +
       `<section class="panel">${A.empty('当前无法读取订阅资料', '请使用有权限的账号访问。')}</section>`;
     const f = filters();
     const tabs = scopeOptions().map(scope => `<button type="button" role="tab" class="tab${scope === selectedScope() ? ' active' : ''}"
       aria-selected="${scope === selectedScope()}" data-action="subscriptions-scope" data-scope="${scope}">${scopeLabels[scope]}</button>`).join('');
     const actions = (name === 'Claude'
       ? button('订阅历史入库', 'inventory-claude-history', '', 'upload') +
-        button('复制后缀设置', 'subscriptions-settings', '', 'settings') : '') +
+        button('账号资料后缀', 'subscriptions-settings', '', 'settings') : '') +
+      button('续费联系后缀', 'commerce-renewal-suffix', '', 'settings') +
       button('列设置', 'column-settings', '', 'columns', `data-table-id="${tableId}"`);
-    return A.header(name + ' 订阅管理', '按账号查看已确认的订阅与待核对记录；同一账号的不同系列可能计入多个状态。', actions) +
+    return A.header(title, '查看每笔订阅的到期时间与续费方式。', actions) +
+      (A.modules.commerce?.subscriptionCenterNav?.('subscriptions') || '') +
       `<div id="subscription-overview">${overviewMarkup()}</div><section class="panel" id="subscriptions-panel">
         <div class="list-controls subscription-controls">
           <div class="tabs" role="tablist" aria-label="订阅列表">${tabs}</div>
           <form class="toolbar" id="subscription-filter" aria-label="筛选订阅" novalidate>
             <div class="toolbar-left"><div class="search-field">${A.icon('search')}${A.input('subscription-query', f.input,
-              'maxlength="254" aria-label="搜索订单、邮箱账号或人员" placeholder="搜索订单、邮箱账号或人员"')}</div>
+              'maxlength="254" aria-label="搜索客户、邮箱、订单或卡尾号" placeholder="搜索客户、邮箱、订单或卡尾号"')}</div>
+              ${name === 'all' ? `<select id="subscription-product" aria-label="产品">${A.options(
+                [['all', '全部产品'], ...Object.values(labels).filter(value => value !== 'all')], f.product || 'all')}</select>` : ''}
               ${archiveScopes.has(selectedScope()) ? '' : `<select id="subscription-status" aria-label="订阅状态">${A.options(
-                [['', '全部状态'], ...Object.entries(states).filter(([status]) => !archiveScopes.has(status))], f.status)}</select>`}
+                [['', '全部状态'], ...Object.entries(states).map(([status, label]) =>
+                  [status, status === 'active' ? '未到期' : status === 'expired' ? '已到期' : label])], f.status)}</select>`}
               <select id="subscription-sort" aria-label="排序">${A.options([['expiry_asc', '到期由近到远'], ['expiry_desc', '到期由远到近'], ['account_asc', '账号排序']], f.sort || 'expiry_asc')}</select>
               <button class="button" type="submit">搜索</button></div>
             <div class="toolbar-right" data-page-actions>${button('刷新', 'subscriptions-refresh')}</div>
@@ -272,7 +284,9 @@
     const history = row.history.map(item => `<tr><td>${esc(item.orderNo || '历史入库')}</td><td>${esc(item.plan || '待核对')}</td>` +
       `<td>${esc(displayDate(item.start))}</td><td>${esc(displayDate(item.expiry))}</td><td>${stateTag(item.status)}${item.missingAssociation
         ? A.tag('资料待补', 'warning') : ''}</td>` +
-      `<td class="table-actions"><div class="action-links">${item.source === 'order' ? textAction(!item.confirmed && ['Gemini', 'Grok'].includes(row.product) ? '前往订单核对' : '查看订单',
+      `<td class="table-actions"><div class="action-links">${!row.conflict && row.series.some(series => series.sourceId === item.sourceId) &&
+        item.source === 'order' && item.confirmed && !['ended', 'dead'].includes(item.status)
+        ? A.modules.commerce?.renewalActions?.(item, row.id) || '' : ''}${item.source === 'order' ? textAction(!item.confirmed && ['Gemini', 'Grok'].includes(row.product) ? '前往订单核对' : '查看订单',
         'subscriptions-order', `data-order-id="${esc(item.sourceId)}"`) : '历史资料'}` +
       `${row.status !== 'dead' && item.source === 'order' && !item.confirmed && !item.missingAssociation && !row.conflict && ['GPT', 'Claude'].includes(row.product) ? textAction('确认开通', 'subscriptions-confirm',
         `data-id="${esc(row.id)}" data-order-id="${esc(item.sourceId)}"`) : ''}</div></td></tr>`).join('');
@@ -403,7 +417,7 @@
   });
 
   window.IDDesignModules.push({
-    id: 'subscription-management', matches: route => /^subscriptions\/(gpt|claude|gemini|grok)$/.test(route), render,
+    id: 'subscription-management', matches: route => /^subscriptions\/(all|gpt|claude|gemini|grok)$/.test(route), render,
     afterRender() {
       if (!active()) return;
       frameObserver?.disconnect();
@@ -444,6 +458,7 @@
         const row = currentRow(node.dataset.id);
         if (row) A.openActionMenu(node,
           (row.ownerEligible ? button('设置归属人', 'subscriptions-owner', '', '', `data-id="${esc(row.id)}"`) : '') +
+          (canCopy(row) ? button('复制账号资料', 'subscriptions-copy', '', '', `data-id="${esc(row.id)}"`) : '') +
           (row.product === 'Claude' && canCopy(row) ? button(['dead', 'ended'].includes(row.status) ? '复制邮箱账号' : '复制邮箱和查询码',
             'subscriptions-copy-short', '', '', `data-id="${esc(row.id)}"`) : ''));
       } else return false;
@@ -459,6 +474,12 @@
     },
     onChange(node) {
       if (!active()) return false;
+      if (node.id === 'subscription-product') {
+        Object.assign(filters(), { product: node.value, page: 1 });
+        A.render();
+        $('#subscription-product')?.focus({ preventScroll: true });
+        return true;
+      }
       if (node.id === 'subscription-status') { filters().status = node.value; filters().page = 1; void load(); return true; }
       if (node.id === 'subscription-sort') { filters().sort = node.value; filters().page = 1; void load(); return true; }
       return false;

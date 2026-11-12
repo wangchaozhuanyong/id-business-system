@@ -8,6 +8,8 @@ const maxSessionPages = 3;
 const maxBillPages = 3;
 const maxChecks = 6;
 const retryAfter = 15 * 60_000;
+const readbackFailure = '本次回读未确认，可重试';
+const retryable = row => !row.excluded && row.needs?.includes(readbackFailure);
 const fallbackRules = Object.freeze({
   currency: 'CNY', version: 1, cardIssueUsd: '0.5', cardPercent: '0.008', cardPerPaymentUsd: '0.3'
 });
@@ -132,7 +134,7 @@ export function buildRechargeOrder(evidence, settings, at) {
 
 const publicSummary = ({ jobKey, needs, orderNo }) => ({ jobKey, needs, orderNo: orderNo || '' });
 
-export function createRechargeOrderSync({ store, client, publicOrigin, quoteService, background = false, clock = Date.now }) {
+export function createRechargeOrderSync({ store, client, publicOrigin, quoteService, background = false, onStatus, clock = Date.now }) {
   const startAt = clock();
   let running;
   let lastError = '';
@@ -149,10 +151,14 @@ export function createRechargeOrderSync({ store, client, publicOrigin, quoteServ
     return { bills, more };
   }
 
-  async function scan(apply, selected) {
+  async function scan(apply, selected, retry) {
     let checkpoint = store.featureDocument(domain);
     if (apply && !checkpoint.data) checkpoint = store.saveFeatureDocument(domain, checkpoint.version, { since: startAt, rows: [] });
     let saved = checkpoint.data || { since: startAt, rows: [] };
+    if (retry) {
+      const failed = saved.rows.filter(retryable).slice(0, maxChecks);
+      if (failed.length) selected = failed.map(row => row.jobKey);
+    }
     const jobs = new Set(selected || []);
     let more = false;
     let nextOffset = 100;
@@ -198,7 +204,10 @@ export function createRechargeOrderSync({ store, client, publicOrigin, quoteServ
       let result;
       try {
         const { task, runtimeEntries } = await client.get('/api/admin/task-logs/' + jobKey);
-        if (task?.jobKey !== jobKey) continue;
+        if (task?.jobKey !== jobKey) {
+          if (prior.has(jobKey)) throw new Error('未取得对应的代充任务');
+          continue;
+        }
         let orbitCards = [];
         if (typeof task.gptApiOrderId === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(task.gptApiOrderId)) {
           try {
@@ -226,20 +235,27 @@ export function createRechargeOrderSync({ store, client, publicOrigin, quoteServ
         result = { jobKey, needs: evidence.needs, checkedAt };
         if (apply) result = store.applyRechargeOrder({ since: saved.since, row: result, order, firstUse: evidence.firstUse });
       } catch {
-        result = { jobKey, checkedAt, needs: ['本次回读未确认，可重试'] };
+        result = { jobKey, checkedAt, needs: [readbackFailure] };
         if (apply) result = store.applyRechargeOrder({ since: saved.since, row: result });
       }
       rows.push(publicSummary(result));
     }
     return { rows, more: more || candidates.length > maxChecks };
   }
-  function run({ apply = false, jobKeys } = {}) {
+  function run({ apply = false, jobKeys, retry = false } = {}) {
     if (running) return Promise.reject(Object.assign(new Error('同步正在进行，请稍后查看'), { status: 409 }));
-    running = scan(apply, jobKeys).then((result) => {
-      lastError = '';
-      return result;
-    }, (error) => {
-      lastError = '最近一轮读取失败，等待下一次核对';
+    running = scan(apply, jobKeys, retry).then((result) => {
+      const pending = apply ? (store.featureDocument(domain).data?.rows || []).filter(retryable).length : 0;
+      if (apply) {
+        lastError = pending ? '有代充任务暂未取得入单回执，可重试读取' : '';
+        onStatus?.(!pending);
+      }
+      return retry ? { ...result, pending } : result;
+    }).catch((error) => {
+      if (apply) {
+        lastError = '最近一轮读取失败，等待重试';
+        onStatus?.(false);
+      }
       throw error;
     }).finally(() => { running = undefined; });
     return running;
@@ -265,6 +281,11 @@ export function createRechargeOrderSync({ store, client, publicOrigin, quoteServ
         if (raw.length > 1024) throw new Error('请求过长');
       }
       const { mode, jobKeys } = JSON.parse(raw);
+      if (mode === 'retry') {
+        if (!background) return send(409, { error: '自动入单尚未启用' });
+        if (jobKeys !== undefined) return send(400, { error: '请重试系统记录的待入单任务' });
+        return send(200, await run({ apply: true, retry: true }));
+      }
       if (!['preview', 'apply'].includes(mode)) return send(400, { error: '请选择预览或同步' });
       if ((mode === 'apply' || jobKeys !== undefined) && (!Array.isArray(jobKeys) || !jobKeys.length ||
         jobKeys.length > maxChecks || jobKeys.some((id) => typeof id !== 'string' || !jobPattern.test(id))))
