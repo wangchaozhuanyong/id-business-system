@@ -30,6 +30,7 @@ with connection.cursor() as cursor:
                    "updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP) ENGINE=InnoDB")
     for table in ("billing_records", "cdk_codes", "card_assets", "orbitcard_card_usage", "orbitcard_card_recharges"):
         cursor.execute(f"CREATE TABLE {table} (id INT PRIMARY KEY, job_key VARCHAR(120), secret_field TEXT) ENGINE=InnoDB")
+    cursor.execute("CREATE TABLE bootstrap_aux (id INT PRIMARY KEY) ENGINE=InnoDB")
     cursor.execute("INSERT INTO task_logs(job_key,session_payload,created_at) VALUES "
                    "('snapshot-job','synthetic-private-value',DATE_SUB(CURRENT_TIMESTAMP,INTERVAL 1 DAY))")
     cursor.execute("CREATE USER 'isolated_event_reader'@'%' IDENTIFIED BY 'synthetic-reader-password' REQUIRE SSL WITH MAX_USER_CONNECTIONS 4")
@@ -105,6 +106,32 @@ def stop():
         pipe.close()
 
 
+def wait_for_heartbeats(count):
+    observed = bytearray()
+    deadline = time.monotonic() + 40
+    with selectors.DefaultSelector() as selector:
+        selector.register(process.stderr, selectors.EVENT_READ)
+        while observed.count(b"recharge_event_subscriber_heartbeat\n") < count:
+            remaining = deadline - time.monotonic()
+            assert remaining > 0 and selector.select(remaining), "subscriber_heartbeat_timeout"
+            chunk = os.read(process.stderr.fileno(), 4096)
+            assert chunk, "subscriber_closed_before_heartbeat"
+            observed.extend(chunk)
+    assert b"recharge_event_subscriber_review_required" not in observed
+
+
+def assert_schema_stop(statement):
+    previous = checkpoint.read_bytes()
+    with connection.cursor() as cursor:
+        cursor.execute(statement)
+    process.wait(timeout=10)
+    assert process.returncode == 2
+    assert process.stderr.read().strip().splitlines()[-1] == "recharge_event_subscriber_review_required"
+    assert checkpoint.read_bytes() == previous
+    for pipe in (process.stdin, process.stdout, process.stderr):
+        pipe.close()
+
+
 try:
     process = start()
     first = receive(); assert first["jobs"] == ["snapshot-job"]
@@ -152,12 +179,38 @@ try:
     assert json.loads(checkpoint.read_text())['position']['file'] != old_file
     idle()
     checks.append('idle_rotation_advances_private_position_without_business_event')
+    # Leave the old position in place across the same initialization sequence
+    # that stopped the production reader, then replay the next committed row.
+    before_bootstrap = checkpoint.read_bytes()
+    stop()
     with connection.cursor() as cursor:
-        cursor.execute("ALTER TABLE task_logs ADD COLUMN isolated_extra INT")
-    process.wait(timeout=10)
-    assert process.returncode != 0
-    assert process.stderr.read().strip().splitlines() == ["recharge_event_subscriber_ready", "recharge_event_subscriber_review_required"]
-    checks.append("schema_change_stops_without_advancing")
+        cursor.execute("CREATE TABLE IF NOT EXISTS bootstrap_aux (id INT PRIMARY KEY) "
+                       "ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci")
+        cursor.execute("CREATE TABLE IF NOT EXISTS task_logs (job_key VARCHAR(120) PRIMARY KEY) ENGINE=InnoDB")
+        cursor.execute("INSERT INTO task_logs(job_key, session_payload) VALUES ('after-bootstrap', 'synthetic-private-value')")
+    process = start()
+    resumed = receive()
+    assert resumed["jobs"] == ["after-bootstrap"]
+    after_bootstrap = checkpoint.read_bytes()
+    assert after_bootstrap != before_bootstrap
+    acknowledge(resumed)
+    until = time.monotonic() + 10
+    while checkpoint.read_bytes() == after_bootstrap and time.monotonic() < until:
+        time.sleep(0.05)
+    assert checkpoint.read_bytes() != after_bootstrap
+    checks.append("existing_table_initialization_replays_from_checkpoint_then_delivers_committed_order")
+    wait_for_heartbeats(2)
+    idle()
+    checks.append("live_idle_reader_emits_heartbeats_without_business_events")
+    assert_schema_stop("ALTER TABLE task_logs ADD COLUMN isolated_extra INT")
+    checks.append("alter_table_stops_without_advancing")
+
+    checkpoint = output / "new-table-checkpoint.json"
+    process = start()
+    acknowledge(receive())
+    wait_for_heartbeats(1)
+    assert_schema_stop("CREATE TABLE IF NOT EXISTS actual_new_table (id INT PRIMARY KEY) ENGINE=InnoDB")
+    checks.append("actual_create_if_not_exists_stops_without_advancing")
 finally:
     if process and process.poll() is None:
         stop()
