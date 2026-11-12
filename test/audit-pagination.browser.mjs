@@ -30,6 +30,7 @@ test('audit and system login have separate paged views and recover from a failed
       return route.fulfill({ json: pageAuditRows(rows, params) });
     });
     const page = await context.newPage();
+    page.setDefaultTimeout(6000);
     await page.goto(origin + '/#/settings/audit');
     const main = page.locator('#main');
     const pager = main.locator('[data-pagination="operations-audit"]');
@@ -40,7 +41,12 @@ test('audit and system login have separate paged views and recover from a failed
     await main.getByText('日志读取失败。已保留上次结果和页码。请重试。').waitFor();
     assert.equal(await pager.getAttribute('data-page'), '1');
     assert(await main.getByText('合成账号 42', { exact: true }).isVisible());
-    await main.getByRole('button', { name: '重试读取', exact: true }).click();
+    const retry = main.getByRole('button', { name: '重试读取', exact: true });
+    if (await retry.isVisible()) await retry.click();
+    else {
+      await main.locator('.toolbar [data-action="mobile-list-actions"]').click();
+      await page.getByRole('menuitem', { name: '重试读取', exact: true }).click();
+    }
     await main.getByText('合成账号 22', { exact: true }).waitFor();
     assert.equal(await pager.getAttribute('data-page'), '2');
     assert.deepEqual(reads[1], reads[2]);

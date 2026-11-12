@@ -51,12 +51,26 @@ class WebsiteReleaseTests(unittest.TestCase):
     @patch("release.git")
     def test_workspace_release_requires_the_exact_reviewed_file_set(self, git, ancestor, approval):
         git.return_value = "\n".join(remote.REDEEM_PRESENTATION_FILES)
-        self.assertIs(release.require_website_scope(BASE, TARGET), approval.return_value)
+        self.assertEqual(release.require_website_scope(BASE, TARGET), ("redeemPresentation", approval.return_value))
         approval.assert_called_once_with(BASE, TARGET)
         for extra in ("modules/recharge/codexdaichong/native-adapter.mjs", "deploy/recharge-core/Dockerfile"):
             git.return_value = "\n".join((*remote.REDEEM_PRESENTATION_FILES, extra))
             with self.assertRaisesRegex(RuntimeError, "recharge_core_or_runtime_changed"):
                 release.require_website_scope(BASE, TARGET)
+        self.assertEqual(approval.call_count, 1)
+
+    @patch("release.require_presentation_approval")
+    @patch("release.require_ancestor")
+    @patch("release.git")
+    def test_table_actions_release_only_accepts_the_reviewed_stylesheet(self, git, ancestor, approval):
+        git.return_value = remote.TABLE_ACTIONS_STYLESHEET
+        self.assertEqual(release.require_website_scope(BASE, TARGET),
+                         ("tableActionsPresentation", approval.return_value))
+        approval.assert_called_once_with(BASE, TARGET, "table-actions-20261112.json",
+                                         (remote.TABLE_ACTIONS_STYLESHEET,))
+        git.return_value += "\nmodules/recharge/codexdaichong/shell.js"
+        with self.assertRaisesRegex(RuntimeError, "recharge_core_or_runtime_changed"):
+            release.require_website_scope(BASE, TARGET)
         self.assertEqual(approval.call_count, 1)
 
     @patch("release.subprocess.check_output")
@@ -87,16 +101,32 @@ class WebsiteReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_approval_mismatch"):
                 remote.require_asset_digest(changed, after)
 
+    def test_table_actions_release_rejects_missing_source_proof_or_a_second_scope(self):
+        before, after = "a" * 64, "b" * 64
+        approval = {"beforeAssetsSha256": before, "assetsSha256": after}
+        plan = {"before": {"assetsSha256": before}, "tableActionsPresentation": approval,
+                "files": {remote.TABLE_ACTIONS_STYLESHEET: "c" * 64}}
+        self.assertEqual(remote.require_asset_digest(plan, after), "tableActionsPresentation")
+        for changed in (plan | {"files": {}}, plan | {"redeemPresentation": approval},
+                        plan | {"adapter": {"runtimeFiles": []}}):
+            with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_approval_mismatch"):
+                remote.require_asset_digest(changed, after)
+
     def test_presentation_bundle_keeps_other_pages_and_upstream_identical(self):
         base = {name: {"body": "old"} for name in {*remote.REDEEM_PRESENTATION_ASSETS, "/redeem", "/admin"}}
         candidate = base | {name: {"body": "new"} for name in remote.REDEEM_PRESENTATION_ASSETS}
         bundle = lambda assets, revision=remote.PINNED_UPSTREAM: Mock(
             read_bytes=lambda: json.dumps({"revision": revision, "assets": assets}).encode())
-        remote.verify_redeem_bundle(bundle(base), bundle(candidate))
+        remote.verify_presentation_bundle(bundle(base), bundle(candidate), remote.REDEEM_PRESENTATION_ASSETS)
         with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_bundle_scope_mismatch"):
-            remote.verify_redeem_bundle(bundle(base), bundle(candidate | {"/redeem": {"body": "changed"}}))
+            remote.verify_presentation_bundle(bundle(base), bundle(candidate | {"/redeem": {"body": "changed"}}),
+                                              remote.REDEEM_PRESENTATION_ASSETS)
         with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_bundle_scope_mismatch"):
-            remote.verify_redeem_bundle(bundle(base), bundle(candidate, TARGET))
+            remote.verify_presentation_bundle(bundle(base), bundle(candidate, TARGET), remote.REDEEM_PRESENTATION_ASSETS)
+        table_assets = remote.PRESENTATION_SCOPES["tableActionsPresentation"][1]
+        remote.verify_presentation_bundle(bundle(base), bundle(base | {"/shell.css": {"body": "new"}}), table_assets)
+        with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_bundle_scope_mismatch"):
+            remote.verify_presentation_bundle(bundle(base), bundle(candidate), table_assets)
 
     def test_ssm_payload_is_one_quoted_program(self):
         shell = release.script_for({"operation": "preflight", "sha": TARGET})

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import path from 'node:path';
-import { root, origin, interceptDesign, settle } from './helpers/offline-design.mjs';
+import { root, origin, interceptDesign, settle, toggleDesignTheme } from './helpers/offline-design.mjs';
 const { chromium } = await import(process.env.ID_RECHARGE_QA_PLAYWRIGHT ? pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href : 'playwright');
 const output = process.env.ID_LAYOUT_QA_OUTPUT || path.join(root, '.runtime/mailbox-rows-20261107');
 await mkdir(output, { recursive: true });
@@ -42,7 +42,7 @@ try {
     const page = await context.newPage(); page.setDefaultTimeout(8000);
     page.on('pageerror', e => errors.push(e.message));
     await page.goto(origin + '/#/overview');
-    if (theme === 'dark') await page.locator('#theme-toggle').click();
+    if (theme === 'dark') await toggleDesignTheme(page);
     const drawer = page.locator('#plugin-tool-host');
     await page.goto(origin + '/#/plugins/mailboxes');
     await drawer.locator('#ops-mailbox-pool').waitFor();
@@ -121,7 +121,12 @@ try {
     }
     await pool.locator('.mailbox-account__more').first().click();
     await actions.waitFor();
-    await pool.locator('.online-tool-mail-list').evaluate(element => { element.scrollTop = element.scrollHeight; });
+    await pool.locator('.online-tool-mail-list').evaluate(element => {
+      const scrollable = node => node && node.scrollHeight > node.clientHeight + 1 &&
+        ['auto', 'scroll'].includes(getComputedStyle(node).overflowY);
+      const container = [element, element.closest('.drawer-body')].find(scrollable) || document.scrollingElement;
+      container.scrollTop = container.scrollHeight;
+    });
     await page.waitForFunction(() => !document.querySelector('.mailbox-account__actions:popover-open'));
     await pool.locator('.pagination-jump summary').click();
     await pool.getByLabel('跳至页码', { exact: true }).fill('41');

@@ -149,8 +149,13 @@ textarea:focus-visible {
   font-weight: 650;
 }
 .nav-heading:hover,
-.nav-child:hover {
+.nav-child:hover,
+.nav-heading:focus-visible,
+.nav-child:focus-visible {
   background: var(--surface-soft);
+}
+.sidebar-navigation :is(.nav-heading, .nav-child):not([aria-current='page']):is(:hover, :focus-visible) {
+  color: var(--text);
 }
 .nav-child {
   display: flex;
@@ -907,27 +912,41 @@ input[type='radio'] {
   --table-page-rows: 20;
   --pagination-content-min-height: min(100dvh, calc(43px + var(--table-page-rows) * 51px));
 }
-.table-viewport .empty-state {
+.table-viewport--empty {
+  display: flex;
+  flex-direction: column;
+  container-type: inline-size;
+}
+.table-viewport--empty > table {
+  flex: 1 0 auto;
+}
+.table-viewport--empty > table > tbody > tr > td {
+  height: 100%;
+  padding: 0;
+  vertical-align: middle;
+  background: transparent;
+}
+.table-viewport--empty .empty-state {
+  /* The table can scroll wider than the visible space beneath its header. */
+  position: sticky;
+  inset-inline-start: 0;
+  inline-size: 100cqi;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  padding: 44px 20px;
+  padding: 24px 20px;
   min-height: 160px;
   text-align: center;
-  margin-inline: auto;
-}
-.table-viewport:has(> table > tbody > tr > td > .empty-state) {
-  container-type: inline-size;
-}
-.table-viewport > table > tbody > tr > td > .empty-state {
-  position: sticky;
-  inset-inline-start: 15px;
-  inline-size: min(100%, calc(100cqi - 30px));
-  margin-inline: 0;
   overflow-wrap: anywhere;
   white-space: normal;
+}
+.table-viewport--empty .empty-state > :is(h2, p) {
+  max-inline-size: min(100%, 500px);
+}
+.table-viewport--empty .empty-state p:empty {
+  display: none;
 }
 .table-viewport .empty-state .icon {
   width: 32px;
@@ -945,7 +964,6 @@ input[type='radio'] {
   color: var(--secondary);
   font-size: 12px;
   margin: 0;
-  max-inline-size: 500px;
   line-height: 1.6;
 }
 table {
@@ -1050,13 +1068,18 @@ tbody tr:hover td {
   background: var(--blue-soft);
 }
 .table-actions {
+  /* Auto-layout tables give this column only the space its controls require. */
+  width: 1px;
+  padding-inline: 12px;
+  white-space: nowrap;
+}
+:where(table[data-table]) .table-actions {
   position: sticky;
   right: 0;
   box-shadow: -7px 0 9px -8px #0b18253b;
-  min-width: 170px;
   z-index: 1;
 }
-th.table-actions {
+:where(table[data-table]) th.table-actions {
   z-index: 2;
 }
 @media (max-width: 900px) {
@@ -1070,6 +1093,9 @@ th.table-actions {
   align-items: center;
   gap: 14px;
   height: 100%;
+}
+.table-actions > .action-links {
+  display: inline-flex;
 }
 .table-copyable-cell {
   display: flex;
@@ -2298,37 +2324,37 @@ dialog::backdrop {
   }
 }
 .mailbox-pool-table {
-  table-layout: fixed;
-  min-width: 1290px;
+  table-layout: auto;
 }
-.mailbox-column-identity { width: 210px; }
 .mailbox-column-meta { width: 100px; }
 .mailbox-column-source { width: 90px; }
 .mailbox-column-code { width: 200px; }
 .mailbox-column-status { width: 90px; }
 .mailbox-column-date { width: 125px; }
-.mailbox-column-actions { width: 250px; }
 .mailbox-pool-table :is(th, td) {
   padding: 8px;
   white-space: nowrap;
   vertical-align: middle;
 }
+.mailbox-pool-table :is(th, td):first-child { min-width: 210px; }
 .mailbox-account__heading {
   display: flex;
   gap: 0;
   line-height: 18px;
+  max-width: 194px;
 }
 .mailbox-account__heading strong {
   color: var(--text);
   font-size: 13px;
 }
 .mailbox-account__text {
+  max-width: 100px;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .mailbox-row-actions {
-  display: flex;
   gap: 8px;
+  height: auto;
 }
 .plugin-tool-page .plugin-tool-body {
   padding: 0;
@@ -2381,6 +2407,7 @@ dialog::backdrop {
   display: flex;
   align-items: center;
   gap: 8px;
+  max-width: 184px;
 }
 .mailbox-account__code output {
   flex: 1 1 0;
@@ -4338,16 +4365,13 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
 .recharge-code-filters .button { min-width: var(--code-return-min); }
 .recharge-new-batch { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 12px var(--panel-padding-inline); background: var(--primary-soft); color: var(--primary); }
 .recharge-new-batch > span { min-width: 0; flex: 1 1 180px; overflow-wrap: anywhere; }
-.recharge-code-table table { table-layout: fixed; }
-.recharge-code-table :is(th, td) { white-space: normal; overflow-wrap: anywhere; }
-.recharge-code-table .table-actions { position: static; box-shadow: none; min-width: 0; }
+.recharge-code-table :is(th, td):not(.table-actions) { white-space: normal; overflow-wrap: anywhere; }
+.recharge-code-table .table-actions { position: static; box-shadow: none; }
 .recharge-code-table .recharge-code-text { display: block; white-space: normal; overflow-wrap: anywhere; word-break: break-all; font-variant-numeric: tabular-nums; line-height: 1.6; }
 .recharge-code-table table[data-table='my-recharge-codes'] th:first-child { width: 36px; }
-.recharge-code-table table[data-table='my-recharge-codes'] th:nth-child(2) { width: 28%; }
 .recharge-code-table table[data-table='my-recharge-codes'] th:nth-child(3) { width: 72px; }
 .recharge-code-table table[data-table='my-recharge-codes'] th:nth-child(4) { width: 106px; }
 .recharge-code-table table[data-table='my-recharge-codes'] th:nth-child(5) { width: 122px; }
-.recharge-code-table table[data-table='my-recharge-codes'] th:last-child { width: 144px; }
 .recharge-code-details strong { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
 .recharge-item-number { display: block; margin-top: 4px; color: var(--secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
 .recharge-batch-detail, #code-return-form { container-type: inline-size; min-width: 0; }
@@ -4390,6 +4414,7 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
   .recharge-code-table td[data-column='status']::before { content: '状态'; }
   .recharge-code-table td[data-column='issuedAt']::before { content: '发放时间'; }
   .recharge-code-table td.table-actions { padding-top: 12px; border-top: 1px solid var(--line); }
+  .recharge-code-table .table-actions > .action-links { display: flex; flex-wrap: wrap; height: auto; }
   .recharge-code-table .empty-state { padding: 8px; }
 }
 @container (max-width: 319px) {
@@ -4699,10 +4724,6 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
 .entry-records[data-kind='order'] .entry-record-list :is(th, td) {
   padding-inline: clamp(8px, 1.4cqi, 15px);
 }
-.entry-records[data-kind='order'] .table-actions {
-  min-width: 0;
-  width: 1%;
-}
 .drawer[data-layout='commerce-contact-records'] { width: min(1120px, 100%); }
 .contact-record-table th { position: sticky; top: 0; z-index: 2; }
 .entry-record-error {
@@ -4885,7 +4906,17 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
 
 /* 可操作区域的颜色、状态和图标统一在共享层维护。 */
 .nav-heading > .icon:first-child { color: var(--tone, var(--primary)); background: var(--tone-soft, var(--primary-soft)); padding: 5px; width: 16px; height: 16px; box-sizing: content-box; border-radius: 7px; }
-.nav-heading, .nav-child { transition: background-color var(--motion-fast) var(--motion-ease), color var(--motion-fast) var(--motion-ease); }
+.nav-heading, .nav-child {
+  transition:
+    background-color var(--motion-fast) var(--motion-ease),
+    color var(--motion-fast) var(--motion-ease),
+    transform var(--motion-fast) var(--motion-ease);
+}
+@media (hover: hover) and (pointer: fine) and (prefers-reduced-motion: no-preference) {
+  .sidebar-navigation :is(.nav-heading, .nav-child):hover {
+    transform: scale(1.025);
+  }
+}
 .button:active:not(:disabled) { box-shadow: inset 0 0 0 1px var(--primary); }
 .button.primary:active:not(:disabled) { background: var(--primary-active); }
 .button:disabled, .button.primary:disabled { color: var(--muted); background: var(--surface-soft); border-color: var(--line); }
@@ -5021,6 +5052,7 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
     padding-top: 8px;
   }
   .apple-management-list .action-links {
+    display: flex;
     height: auto;
     justify-content: flex-end;
   }
@@ -5031,6 +5063,7 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
   min-width: 0;
   table-layout: fixed;
 }
+.apple-funding-table:has(.table-actions) { table-layout: auto; }
 
 .apple-funding-table th,
 .apple-funding-table td {
@@ -5038,6 +5071,7 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
   overflow-wrap: anywhere;
   vertical-align: top;
 }
+.apple-funding-table .table-actions { white-space: nowrap; }
 
 .apple-cell-label {
   display: none;
@@ -5070,6 +5104,7 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
     padding: 0;
     border: 0;
   }
+  .apple-funding-table .table-actions { width: auto; }
 
   .apple-cell-label {
     display: block;
@@ -5173,10 +5208,10 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
   .mobile-records td[data-mobile-field='identity'] > .mobile-record-value { flex: 1; }
   .mobile-records td[data-mobile-field='identity'] :is(.text-button, .table-value-button, .table-value-ellipsis) { white-space: normal; overflow-wrap: anywhere; text-align: left; }
   .mobile-records td[data-mobile-field='actions'] { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; padding-top: 8px; border-top: 1px solid var(--line); }
-  .mobile-records .action-links { flex-wrap: wrap; gap: 4px 8px; height: auto; }
+  .mobile-records .action-links { display: flex; flex-wrap: wrap; gap: 4px 8px; height: auto; }
   .mobile-records .mobile-record-toggle { display: inline-flex; align-items: center; justify-content: center; margin-left: auto; font-size: 12px; font-weight: 400; }
-  .table-viewport.mobile-records .empty-state { position: static; inline-size: auto; min-width: 0; }
-  .mobile-records .empty-state p { white-space: normal; }
+  .mobile-records.table-viewport--empty > table > tbody > tr { display: block; padding: 0; border: 0; }
+  .mobile-records--selectable.table-viewport--empty thead { margin-bottom: 12px; }
 
   #commerce-order-form { --order-label-width: 104px; }
   #commerce-order-form .field:has(> .field-title-help) {

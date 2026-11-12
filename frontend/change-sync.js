@@ -91,6 +91,7 @@
     const payload = JSON.parse(parts.join('\n'));
     if (payload.schema === 1) {
       if (type === 'snapshot') snapshots++; else changes++;
+      window.IDRechargeActivity?.onVersion(payload.versions?.['recharge-activity']);
       data.acceptChangeVersions(payload.versions, { reconcile: type === 'snapshot' });
     }
   }

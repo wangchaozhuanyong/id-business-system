@@ -34,6 +34,11 @@ REDEEM_PRESENTATION_FILES = (
     "modules/recharge/codexdaichong/shell.css",
 )
 REDEEM_PRESENTATION_ASSETS = {"/workspace", "/shell.js", "/shell.css"}
+TABLE_ACTIONS_STYLESHEET = "modules/recharge/codexdaichong/shell.css"
+PRESENTATION_SCOPES = {
+    "redeemPresentation": (REDEEM_PRESENTATION_FILES, REDEEM_PRESENTATION_ASSETS),
+    "tableActionsPresentation": ((TABLE_ACTIONS_STYLESHEET,), {"/shell.css"}),
+}
 ADAPTER_MOUNTS = ("modules", "deploy/recharge-core")
 LAUNCHERS = ("run-app", "app-entry.mjs", "check-app.mjs")
 CANARY_LOG = "app-canary.log"
@@ -174,25 +179,34 @@ def mount_storefront_admission(content):
     return content.replace(monitored, configured)
 
 
+def presentation_scope(plan):
+    scopes = [name for name in PRESENTATION_SCOPES if name in plan]
+    require(len(scopes) <= 1, "recharge_presentation_approval_mismatch")
+    return scopes[0] if scopes else None
+
+
 def require_asset_digest(plan, candidate_sha):
     before = plan["before"]["assetsSha256"]
-    presentation = plan.get("redeemPresentation")
-    if presentation is None:
+    scope = presentation_scope(plan)
+    if scope is None:
         require(candidate_sha == before, "recharge_assets_changed")
         return
+    presentation = plan[scope]
+    approved_files, _ = PRESENTATION_SCOPES[scope]
     require(isinstance(presentation, dict) and not plan.get("adapter") and
-            set(REDEEM_PRESENTATION_FILES) <= set(plan["files"]) and
+            set(approved_files) <= set(plan["files"]) and
             presentation.get("beforeAssetsSha256") == before and presentation.get("assetsSha256") == candidate_sha and
             candidate_sha != before and re.fullmatch(r"[a-f0-9]{64}", candidate_sha),
             "recharge_presentation_approval_mismatch")
+    return scope
 
 
-def verify_redeem_bundle(previous, candidate):
+def verify_presentation_bundle(previous, candidate, approved_assets):
     old, new = (json.loads(path.read_bytes()) for path in (previous, candidate))
     require(old["revision"] == new["revision"] == PINNED_UPSTREAM and
             old["assets"].keys() == new["assets"].keys(), "recharge_presentation_bundle_scope_mismatch")
     changes = {name for name, asset in old["assets"].items() if new["assets"][name] != asset}
-    require(changes == REDEEM_PRESENTATION_ASSETS, "recharge_presentation_bundle_scope_mismatch")
+    require(changes == approved_assets, "recharge_presentation_bundle_scope_mismatch")
 
 
 def stage(plan, release):
@@ -203,7 +217,7 @@ def stage(plan, release):
     source_name = f"independent-source-{sha}.tar.gz"
     assets_name = f"independent-assets-{sha}.json"
     require(set(plan["artifacts"]) == {source_name, assets_name}, "invalid_artifact_names")
-    require_asset_digest(plan, plan["artifacts"][assets_name]["sha256"])
+    scope = require_asset_digest(plan, plan["artifacts"][assets_name]["sha256"])
     require(not release.exists(), "release_directory_already_exists_inspect_before_retry")
     release.mkdir(mode=0o755)
     artifacts = release / "artifacts"
@@ -220,8 +234,8 @@ def stage(plan, release):
     require(all(digest(source / name) == expected for name, expected in plan["files"].items()),
             "prepared_source_mismatch")
     live = ROOT / "releases" / base
-    if plan.get("redeemPresentation"):
-        verify_redeem_bundle(live / "assets.json", artifacts / assets_name)
+    if scope:
+        verify_presentation_bundle(live / "assets.json", artifacts / assets_name, PRESENTATION_SCOPES[scope][1])
     (source / ".runtime").mkdir(mode=0o755)
     shutil.copyfile(artifacts / assets_name, release / "assets.json")
     os.chmod(release / "assets.json", 0o644)
@@ -493,7 +507,7 @@ console.log(JSON.stringify(Object.fromEntries(hashes)));
             with http("/" + Path(name).name) as response:
                 require(hashlib.sha256(response.read()).hexdigest() == expected, "live_website_asset_mismatch")
     protected_reads = ("/api/local/settings", "/api/local/inventory", "/api/local/commerce", "/api/local/order-sync",
-                       "/api/local/system-monitoring")
+                       "/api/local/system-monitoring", "/api/local/recharge-activity")
     if adapter:
         protected_reads += ("/api/local/subscription-card-status",)
     for path in protected_reads:
@@ -543,8 +557,9 @@ def release_website(plan):
               "liveAssetsSha256": digest(release / "assets.json"),
               "backupMonitoring": monitoring,
               "unauthenticatedProtectedReadsRejected": True, "productionBusinessTestWrites": False}
-    if plan.get("redeemPresentation"):
-        result["redeemPresentationVerified"] = True
+    scope = presentation_scope(plan)
+    if scope:
+        result[scope + "Verified"] = True
     if adapter:
         result.update(adapter=adapter, adapterCanaryPassed=True, nativeEngineUnchanged=True,
                       otherProtectedComponentsUnchanged=True)

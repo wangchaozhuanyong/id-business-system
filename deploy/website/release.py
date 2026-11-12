@@ -9,7 +9,7 @@ import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from remote import REDEEM_PRESENTATION_FILES
+from remote import PRESENTATION_SCOPES, REDEEM_PRESENTATION_FILES, TABLE_ACTIONS_STYLESHEET
 
 ACCOUNT = "098208446664"
 REGION = "ap-northeast-1"
@@ -70,29 +70,31 @@ def require_ancestor(base, sha):
         raise RuntimeError("requested_revision_not_an_ancestor_of_main")
 
 
-def require_redeem_presentation(base, sha):
-    # This approval pins one reviewed website-only change. An ordinary release
-    # still requires byte-identical recharge assets.
-    approval_file = ROOT / "deploy/website/redeem-log-20261111.json"
+def require_presentation_approval(base, sha, manifest, approved_files):
+    approval_file = ROOT / "deploy/website" / manifest
     try:
         approval = json.loads(approval_file.read_bytes())
         assets = {key: approval[key] for key in ("beforeAssetsSha256", "assetsSha256")}
         files = approval["files"]
         if (not all(isinstance(value, str) and SHA256.fullmatch(value) for value in assets.values()) or
                 assets["beforeAssetsSha256"] == assets["assetsSha256"] or
-                not isinstance(files, dict) or set(files) != set(REDEEM_PRESENTATION_FILES) or
+                not isinstance(files, dict) or set(files) != set(approved_files) or
                 not all(isinstance(pair, dict) and set(pair) == {"before", "after"} and
                         all(isinstance(value, str) and SHA256.fullmatch(value) for value in pair.values())
                         for pair in files.values())):
             raise ValueError("invalid scope")
     except (KeyError, OSError, TypeError, ValueError) as error:
         raise RuntimeError("recharge_presentation_approval_invalid") from error
-    for name in REDEEM_PRESENTATION_FILES:
+    for name in approved_files:
         for side, revision in (("before", base), ("after", sha)):
             content = subprocess.check_output(["git", "show", f"{revision}:{name}"], cwd=ROOT, timeout=30)
             if hashlib.sha256(content).hexdigest() != files[name][side]:
                 raise RuntimeError("recharge_presentation_source_mismatch")
     return assets
+
+
+def require_redeem_presentation(base, sha):
+    return require_presentation_approval(base, sha, "redeem-log-20261111.json", REDEEM_PRESENTATION_FILES)
 
 
 def require_website_scope(base, sha, include_adapter=False):
@@ -102,7 +104,10 @@ def require_website_scope(base, sha, include_adapter=False):
         if not changed <= ADAPTER_SCOPE or not changed.intersection(ADAPTER_RUNTIME_FILES):
             raise RuntimeError("recharge_adapter_release_scope_mismatch")
     elif changed == set(REDEEM_PRESENTATION_FILES):
-        return require_redeem_presentation(base, sha)
+        return "redeemPresentation", require_redeem_presentation(base, sha)
+    elif changed == {TABLE_ACTIONS_STYLESHEET}:
+        return "tableActionsPresentation", require_presentation_approval(
+            base, sha, "table-actions-20261112.json", (TABLE_ACTIONS_STYLESHEET,))
     elif changed:
         raise RuntimeError("recharge_core_or_runtime_changed")
 
@@ -200,7 +205,7 @@ def main():
     print(f"Live website: {base}; free bytes: {before['freeBytes']}", flush=True)
     if base == sha:
         raise RuntimeError("requested_revision_already_running_read_back_the_existing_release")
-    presentation = require_website_scope(base, sha, include_adapter)
+    presentation_scope, presentation = require_website_scope(base, sha, include_adapter) or (None, None)
     if include_adapter:
         for name in ("recharge", "recharge-native"):
             require_ancestor(before["components"][name]["revision"], sha)
@@ -216,16 +221,23 @@ def main():
     artifacts = {name: put_artifact(OUTPUT / name, sha) for name in names}
     files = ("frontend/index.html", "frontend/commerce-prototype.js", "frontend/subscription-management.js",
              "frontend/prototype.css", "server/preview.mjs", "server/backup/cloud-drive.mjs",
+             "frontend/prototype.js", "frontend/interaction-preferences.js", "frontend/change-sync.js",
+             "frontend/local-data.js", "frontend/operations-prototype.js", "frontend/apple-balance-prototype.js",
+             "frontend/recharge-integration.css", "frontend/bitbrowser-addresses.css",
+             "frontend/recharge-activity.js", "frontend/recharge-activity.css",
+             "server/local-business.mjs", "server/recharge-activity.mjs",
              "server/backup/sheets-source.mjs", "server/monitoring-policy.mjs",
              "server/monitoring-sources.mjs", "server/monitoring-worker-receipts.mjs", "server/system-monitoring.mjs",
              "deploy/website/backup_monitoring.py", "deploy/website/id-business-independent-backup-monitoring.service",
              "deploy/website/id-business-independent-backup-monitoring.timer")
     files += tuple(path for path in ("frontend/order-opening.mjs", "server/recharge-order-sync.mjs")
                    if (ROOT / path).is_file())
-    if presentation:
-        files += (*REDEEM_PRESENTATION_FILES, "modules/finance/accounting.mjs")
+    if presentation_scope:
+        files += PRESENTATION_SCOPES[presentation_scope][0]
+    if presentation_scope == "redeemPresentation":
+        files += ("modules/finance/accounting.mjs",)
     if include_adapter:
-        files += ("frontend/prototype.js", "server/card-management.mjs", "server/local-business.mjs",
+        files += ("server/card-management.mjs",
                   "server/order-auxiliary.mjs", "server/order-recharge-client.mjs",
                   "modules/recharge/codexdaichong/gateway.mjs", "modules/recharge/codexdaichong/local-gateway.mjs",
                   *ADAPTER_FILES)
@@ -234,8 +246,8 @@ def main():
             "qualityRun": quality_run, "preflightCommand": preflight_id}
     if include_adapter:
         plan["adapter"] = {"runtimeFiles": ADAPTER_RUNTIME_FILES}
-    if presentation:
-        plan["redeemPresentation"] = presentation
+    if presentation_scope:
+        plan[presentation_scope] = presentation
     require_main(sha)
     command_id, receipt = remote(plan)
     if receipt.get("mainSha") != sha or not receipt.get("appCanaryPassed"):
@@ -243,9 +255,9 @@ def main():
     if include_adapter and (receipt.get("adapter", {}).get("revision") != sha or
                             not receipt.get("adapterCanaryPassed") or not receipt.get("nativeEngineUnchanged")):
         raise RuntimeError(f"adapter_release_receipt_mismatch: {command_id}")
-    if presentation and (receipt.get("redeemPresentationVerified") is not True or
-                         receipt.get("liveAssetsSha256") != expected_assets or
-                         receipt.get("protectedComponentsUnchanged") is not True):
+    if presentation_scope and (receipt.get(presentation_scope + "Verified") is not True or
+                               receipt.get("liveAssetsSha256") != expected_assets or
+                               receipt.get("protectedComponentsUnchanged") is not True):
         raise RuntimeError(f"recharge_presentation_release_receipt_mismatch: {command_id}")
     receipt["releaseCommand"] = command_id
     print(json.dumps(receipt, sort_keys=True), flush=True)

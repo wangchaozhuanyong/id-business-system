@@ -68,8 +68,8 @@ test('全站视觉：截图、图表、音效、对比度、键盘与窄屏', { 
     assert((await page.evaluate(() => window.audioAudit.tones)) > beforeFrame, '同源嵌入页复用员工开启的音效');
     await page.evaluate(() => document.getElementById('sound-test-frame').remove());
     await page.getByLabel('界面音效设置').click();
-    await page.locator('#sound-volume').focus();
-    await page.keyboard.press('Home');
+    await page.locator('#sound-volume').waitFor();
+    await page.locator('#sound-volume').press('Home');
     const muted = await page.evaluate(() => window.audioAudit.tones);
     await page.evaluate(() => window.IDInteractionSound.play('success'));
     assert.equal(await page.evaluate(() => window.audioAudit.tones), muted);
@@ -139,11 +139,15 @@ test('全站视觉：截图、图表、音效、对比度、键盘与窄屏', { 
       const box = await popover.boundingBox();
       assert(box.x >= 0 && box.x + box.width <= width + 1);
       await page.keyboard.press('Escape');
-      await page.getByLabel('界面音效设置').click();
+      const soundTrigger = page.getByLabel('界面音效设置');
+      const mobileTools = page.locator('#mobile-tools-toggle');
+      if (!(await soundTrigger.isVisible())) await mobileTools.click();
+      await soundTrigger.click();
       await page.locator('#sound-settings').waitFor({ state: 'visible' });
       const soundBox = await page.locator('#sound-settings').boundingBox();
       assert(soundBox.x >= 0 && soundBox.x + soundBox.width <= width + 1);
       await page.keyboard.press('Escape');
+      if (await page.locator('#mobile-tools-panel').evaluate(node => node.matches(':popover-open'))) await mobileTools.click();
       measurements.push({ width, theme, ...snapshot });
       await page.evaluate(() => { document.activeElement?.blur(); window.scrollTo(0, 0); });
       await settle(page);

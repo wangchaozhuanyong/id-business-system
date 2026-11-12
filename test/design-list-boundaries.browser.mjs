@@ -6,6 +6,40 @@ import { join } from 'node:path';
 import { toggleDesignTheme, interceptDesign, origin as offlineOrigin } from './helpers/offline-design.mjs';
 import { startCodexdaichongDemoSite } from '../modules/recharge/codexdaichong/demo-site.mjs';
 
+async function emptyTableCenter(viewport) {
+  return viewport.evaluate(node => {
+    const measure = () => {
+      const view = node.getBoundingClientRect();
+      const header = node.querySelector('thead').getBoundingClientRect();
+      const left = view.left + node.clientLeft;
+      const right = left + node.clientWidth;
+      const top = header.height ? header.bottom : view.top + node.clientTop;
+      const bottom = view.top + node.clientTop + node.clientHeight;
+      const children = [...node.querySelector('.empty-state').children]
+        .filter(child => child.getClientRects().length).map(child => child.getBoundingClientRect());
+      const groupLeft = Math.min(...children.map(child => child.left));
+      const groupRight = Math.max(...children.map(child => child.right));
+      const groupTop = children[0].top;
+      const groupBottom = children.at(-1).bottom;
+      return {
+        x: (groupLeft + groupRight - left - right) / 2,
+        y: (groupTop + groupBottom - top - bottom) / 2,
+        bodyHeight: bottom - top,
+        withinWindow: bottom <= innerHeight + 1,
+        visible: groupLeft >= left - 1 && groupRight <= right + 1 && groupTop >= top - 1 && groupBottom <= bottom + 1
+      };
+    };
+    const originalScroll = node.scrollLeft;
+    node.scrollLeft = 0;
+    const start = measure();
+    node.scrollLeft = node.scrollWidth;
+    const end = measure();
+    const scroll = node.scrollLeft;
+    node.scrollLeft = originalScroll;
+    return { start, end, scroll };
+  });
+}
+
 test('dense lists retain pagination and drawer controls within their visible boundaries', { timeout: 120_000 }, async t => {
   assert(process.env.ID_RECHARGE_QA_PLAYWRIGHT, '请指定已有 Playwright 模块入口');
   const module = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
@@ -150,6 +184,24 @@ test('dense lists retain pagination and drawer controls within their visible bou
               assert(!empty.controlsOutside && !empty.outside.length && !empty.pageOverflow && !empty.activeClipped);
               assert.equal(empty.page, 1);
               assert.equal(await page.locator('#main .pagination button[data-pagination-page]').count(), 0);
+              const viewport = page.locator('#main .table-viewport:visible').first();
+              const center = async () => {
+                const position = await emptyTableCenter(viewport);
+                for (const { x, y, visible } of [position.start, position.end])
+                  assert(visible && Math.abs(x) <= 1 && Math.abs(y) <= 1,
+                    `${route}: 空状态须在可见表身水平和垂直居中 ${JSON.stringify(position)}`);
+                return position;
+              };
+              empty.center = await center();
+              if (route === 'mailboxes/google' && width === 1440 && !dark) {
+                assert(empty.center.scroll > 0 && empty.center.start.withinWindow);
+                await page.setViewportSize({ width: 1280, height: 650 });
+                await settle();
+                const shorter = await center();
+                assert(shorter.scroll > 0 && shorter.start.withinWindow && shorter.start.bodyHeight < empty.center.start.bodyHeight);
+                await page.setViewportSize({ width, height: 900 });
+                await settle();
+              }
             }
             await search.fill('');
             await page.locator('#main tr[data-row-id]').first().waitFor();

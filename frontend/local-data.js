@@ -259,6 +259,10 @@
       return result;
     },
     rechargeCodes: () => request('recharge-codes?view=codes'),
+    rechargeActivity: (page = 1) => request('recharge-activity?page=' + encodeURIComponent(page)),
+    rechargeActivityDetail: id => request('recharge-activity/' + encodeURIComponent(id)),
+    readRechargeActivity: (id, event) =>
+      request('recharge-activity/' + encodeURIComponent(id) + '/read?event=' + encodeURIComponent(event), {}, 'POST'),
     rechargeCodeAction: (command) => write(['recharge-codes'], () => request('recharge-codes', command, 'POST')),
     orderCompletion: (params) => request('order-completion' + (params ? '?' + new URLSearchParams(params) : '')),
     saveOrderCompletion: (command) => write(['commerce'], () => request('order-completion', command, 'POST')),
