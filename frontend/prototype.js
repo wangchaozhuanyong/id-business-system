@@ -1556,7 +1556,7 @@ function renderOrders() {
                 label: '资料完整性',
                 render: (row) => tag(row.status, row.status === '待补全' ? 'warning' : 'success')
               },
-              { id: 'profit', label: '利润' },
+              { id: 'profit', label: '收益 CNY' },
               {
                 id: 'actions',
                 label: '操作',
