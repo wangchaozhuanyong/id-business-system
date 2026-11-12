@@ -59,6 +59,8 @@ const microsoftMailboxConfig = await readToolConfig(
 
 正式主机沿用 `independent-online-tools` 的 systemd 加密凭据，在现有 JSON 顶层增加 `cloudflare` 对象，结构与上述单独配置相同。发布流程仅为已核验的 `app-entry.mjs` 补齐读取接入；没有该字段时保持待接入状态，有字段但格式或私有文件校验失败时停止启动。凭据仅经现有标准输入进入容器，并在 `/credentials` 内存文件系统中以 `0600` 读取，不加入仓库、资源包、命令参数或发布日志。专用令牌应使用目标账户的 `Account Analytics Read`，限制正式服务器出口 IP；该权限在 Cloudflare 侧属于账户级，应用查询另以这三个域名和对应站点标识严格过滤。
 
+启动器通过现有 Python 运行时将工具凭据 JSON 规范化为单行，再写入协议分隔符。配置文件可以带末尾换行或使用缩进排版，JSON 内的字符串值保持原样；无效 JSON 会阻止启动，不能破坏下一份凭据的读取边界。
+
 ## 线上配置与新版接入
 
 已核对成功的 [生产发布记录](https://github.com/wangchaozhuanyong/id-business-system/actions/runs/40105506608) 对应源码和部署清单，以及原系统 GA4 和邮箱接入说明。生产 ID API readiness 和装修网站公开页面均返回 HTTP 200。以下是部署契约与新版待验收项，公开健康检查只覆盖对应端点。
