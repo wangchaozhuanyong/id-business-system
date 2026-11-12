@@ -57,6 +57,15 @@ test('public CSS is compressed once and revalidated by content without caching H
   assert.equal(old.status, 200);
   assert.deepEqual(old.body, plain.body);
 
+  const page = await get(url, '/');
+  const scripts = [...page.body.toString().matchAll(/<script\b[^>]*\bsrc="([^\"]+)"/g)].map(match => match[1]);
+  assert(scripts.some(path => path.includes('search-input.js')), 'shared search must be loaded by the real page');
+  for (const path of scripts) {
+    const response = await get(url, path);
+    assert.equal(response.status, 200, path + ': page scripts must be registered by the HTTP server');
+    assert.match(response.headers['content-type'], /javascript/, path);
+  }
+
   for (const path of ['/', '/mailbox-query', '/api/nonexistent', '/missing.css']) {
     const response = await get(url, path, { 'Accept-Encoding': 'gzip', 'If-None-Match': '*' });
     assert.notEqual(response.status, 304);

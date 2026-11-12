@@ -601,7 +601,9 @@
       ...(tenantRenewalWarningHours !== undefined && { tenantRenewalWarningHours })
     });
   }
+  let contactIndexes;
   function applyCommerceSnapshot(data) {
+    contactIndexes = undefined;
     cardIssueContext = undefined;
     customers.splice(0, customers.length, ...(data?.customers || []));
     tenants.splice(0, tenants.length, ...(data?.tenants || []));
@@ -623,6 +625,7 @@
     applyCommerceSnapshot(response.data);
     localPhase = 'ready';
     updateEntryRecords();
+    scheduleCommerceDeadline();
   }
   let commerceLoad, orderSyncRead;
   function loadLocalCommerce(retry = false, refresh = false) {
@@ -668,7 +671,10 @@
   }
   function persistCommerce(action, mutate, completed, dependencies = [], afterCommit, submitter, newOrderId) {
     if (!localData) {
-      if (mutate() !== false) A.completeAction ? A.completeAction(completed) : completed();
+      contactIndexes = undefined;
+      const changed = mutate();
+      contactIndexes = undefined;
+      if (changed !== false) A.completeAction ? A.completeAction(completed) : completed();
       return;
     }
     if (localPhase !== 'ready' || saving) {
@@ -714,7 +720,7 @@
           return results.find((row) => row.domain === 'commerce');
         });
     } else {
-      commit = localData.save('commerce', localVersion, next, { action, summary: action });
+      commit = localData.save('commerce', localVersion, next, { action, summary: action, base: before });
     }
     const protectedContent = submitter?.closest('#drawer[open]')?.querySelector('[data-protect-drawer-dismiss]');
     protectedContent?.setAttribute('aria-busy', 'true');
@@ -783,6 +789,7 @@
                 return;
               }
               acceptLocalCommerce(result);
+              if (submittedForm?.id === 'commerce-contact-form') showContactConflict(submittedForm);
               refreshedCustomer = refreshOrderCustomerLookups();
               if (submitter && S.route === route && !refreshedCustomer) A.render();
               if (submittedForm?.id === 'commerce-contact-form' && submittedForm.isConnected && S.route === route)
@@ -868,11 +875,22 @@
     const timestamp = parseDate(text);
     return Number.isFinite(timestamp) ? beijingClock.format(timestamp).replace(' ', 'T') : '';
   }
+  function readContactIndexes() {
+    if (!contactIndexes || contactIndexes.customerCount !== customers.length || contactIndexes.tenantCount !== tenants.length) {
+      const byId = rows => {
+        const index = new Map();
+        for (const row of rows) if (!index.has(row.id)) index.set(row.id, row);
+        return index;
+      };
+      contactIndexes = { customers: byId(customers), tenants: byId(tenants), customerCount: customers.length, tenantCount: tenants.length };
+    }
+    return contactIndexes;
+  }
   function customerLabel(id) {
-    return customers.find((row) => row.id === id)?.name || '待补充客户';
+    return readContactIndexes().customers.get(id)?.name || '待补充客户';
   }
   function tenantLabel(id) {
-    return tenants.find((row) => row.id === id)?.name || '未关联租户';
+    return readContactIndexes().tenants.get(id)?.name || '未关联租户';
   }
   function cleanClose(key) {
     if (key) {
@@ -978,7 +996,7 @@
     return `<div class="tabs" role="tablist"${attributes ? ` ${attributes}` : ''}>${choices.map(([id, name]) => `<button class="tab ${id === active ? 'active' : ''}" role="tab" aria-selected="${id === active}" data-action="${action}" data-tab="${id}">${E(name)}</button>`).join('')}</div>`;
   }
   function toolbar(placeholder, actions = '', actionAttributes = '') {
-    return `<div class="toolbar"><div class="toolbar-left"><div class="search-field">${A.icon('search')}<input id="commerce-search" aria-label="搜索当前列表" placeholder="${E(placeholder)}" value="${E(S.query || '')}" /></div></div><div class="toolbar-right"${actionAttributes ? ` ${actionAttributes}` : ''}>${actions}</div></div>`;
+    return `<div class="toolbar"><div class="toolbar-left"><div class="search-field">${A.icon('search')}<input data-auto-search id="commerce-search" aria-label="搜索当前列表" placeholder="${E(placeholder)}" value="${E(S.query || '')}" /></div></div><div class="toolbar-right"${actionAttributes ? ` ${actionAttributes}` : ''}>${actions}</div></div>`;
   }
   function property(label, content, raw = false, action = '') {
     return `<div class="property-row"><span>${E(label)}</span><strong>${raw ? content : E(content || '—')}</strong>${action}</div>`;
@@ -1695,7 +1713,7 @@
     return new Set(orderContactKeys(order).flatMap(key => [...(byContact.get(key) || [])]));
   }
   function identifyOrderCustomers() {
-    const byContact = orderCustomerContacts();
+    let byContact;
 
     const identities = new Map(), anonymous = new Map();
     for (const row of orders) {
@@ -1704,7 +1722,7 @@
         continue;
       }
       const keys = orderContactKeys(row);
-      const matches = customersMatchingContacts(row, byContact);
+      const matches = customersMatchingContacts(row, byContact ??= orderCustomerContacts());
       if (matches.size === 1) {
         identities.set(row.id, [...matches][0]);
       } else if (!matches.size && keys.length) {
@@ -1783,7 +1801,7 @@
       ? JSON.stringify([identity, subscriptionFamily(root), account]) : root.id);
   }
   function customerForOrder(row, identity) {
-    const customer = customers.find((item) => item.id === identity);
+    const customer = readContactIndexes().customers.get(identity);
     return {
       name: customer?.name || row.customerName || row.customer || '待补充客户',
       ...Object.fromEntries(orderContactFields.map(([key, field]) => [key, customer?.[field] || row[key] || '']))
@@ -2658,7 +2676,7 @@
 
   function retentionOrderFact(order, profiles, contacts, at) {
     const explicit = profiles.has(order.customerId) ? order.customerId : '';
-    const candidates = explicit ? new Set([explicit]) : customersMatchingContacts(order, contacts);
+    const candidates = explicit ? new Set([explicit]) : customersMatchingContacts(order, contacts());
     const customerId = explicit || (!order.customerId && candidates.size === 1 ? candidates.values().next().value : '');
     const start = subscriptionTime(order.start), expiry = subscriptionTime(order.expiry), plan = retentionPlan(order);
     const automatic = automaticOrder(order);
@@ -2695,7 +2713,8 @@
 
   function customerRetentionProjection(at = orderEvaluationTime()) {
     const profiles = new Map(customers.map(customer => [customer.id, { id: customer.id, customer, history: [] }]));
-    const contacts = orderCustomerContacts(profiles);
+    let contactIndex;
+    const contacts = () => contactIndex ??= orderCustomerContacts(profiles);
     const groups = new Map();
     for (const order of orders) {
       if (!order.id || !Object.hasOwn(retentionPlans, order.product)) continue;
@@ -3214,10 +3233,10 @@
       property('最近修改时间', row.updatedAt || '历史未记录')
     );
   }
-  function customerServices(customerId) {
+  function customerServices(customerId, source = orders) {
     const services = new Map();
     const at = orderEvaluationTime();
-    for (const order of orders) {
+    for (const order of source) {
       if (order.customerId !== customerId) continue;
       const openedAt = parseDate(order.start), expiry = parseDate(order.expiry);
       if (!Number.isFinite(openedAt) || openedAt > at ||
@@ -3240,8 +3259,8 @@
     }
     return [...services.values()];
   }
-  function serviceSummary(customerId) {
-    return customerServices(customerId)
+  function serviceSummary(customerId, source) {
+    return customerServices(customerId, source)
       .map((service) => `${service.name}（${service.count} 次）`)
       .join('、');
   }
@@ -3413,6 +3432,16 @@
   function renderContacts(tenant = false) {
     const data = tenant ? tenants : customers,
       noun = tenant ? '租户' : '客户';
+    const ordersByCustomer = new Map(), summaries = new Map();
+    if (!tenant) for (const order of orders) {
+      const related = ordersByCustomer.get(order.customerId);
+      if (related) related.push(order);
+      else ordersByCustomer.set(order.customerId, [order]);
+    }
+    const servicesFor = id => {
+      if (!summaries.has(id)) summaries.set(id, serviceSummary(id, ordersByCustomer.get(id) || []));
+      return summaries.get(id);
+    };
     const query = String(S.query || '')
       .trim()
       .toLocaleLowerCase();
@@ -3428,6 +3457,9 @@
     if (tenant && (mode === 'pending' || mode === 'processed')) return A.header('租户数据',
       '按已确认的订阅周期查看租户待处理续费和处理记录。到期时间使用北京时间。',
       renewalSettings) + `<section class="panel">${listTabs}${renderTenantRenewalList(reminders, view)}</section>`;
+    const subscriptionCounts = new Map();
+    if (tenant) for (const order of currentSubscriptions())
+      subscriptionCounts.set(order.tenantId, (subscriptionCounts.get(order.tenantId) || 0) + 1);
     const rows = data.filter(
       (row) =>
         row.active === (mode === 'active') &&
@@ -3443,7 +3475,7 @@
             row.source,
             row.notes,
             ...(row.tags || []),
-            tenant ? '' : serviceSummary(row.id),
+            tenant ? '' : servicesFor(row.id),
             traceName(row, 'createdBy'),
             traceName(row, 'updatedBy')
           ]
@@ -3453,7 +3485,7 @@
     );
     const displayRows = rows.map((row) => ({
       ...row,
-      services: tenant ? '' : serviceSummary(row.id)
+      services: tenant ? '' : servicesFor(row.id)
     }));
     const columns = [
       { id: 'name', label: `${noun}姓名` },
@@ -3465,7 +3497,7 @@
               id: 'accounts',
               label: '关联账号',
               render: (row) =>
-                String(currentSubscriptions().filter((order) => order.tenantId === row.id).length)
+                String(subscriptionCounts.get(row.id) || 0)
             },
             ...(localData && canManageOrders() ? [{
               id: 'tenantCards', label: '银行卡', mobileSummary: true,
@@ -4419,7 +4451,7 @@
         : '<span class="muted">保留历史记录</span>' }
     ];
     const controls = `<div class="toolbar"><div class="toolbar-left"><div class="search-field">${A.icon('search')}
-      <input id="commerce-card-type-search" aria-label="搜索银行卡类型" placeholder="搜索类型名称" value="${E(view.cardSearch || '')}" /></div>${
+      <input data-auto-search id="commerce-card-type-search" aria-label="搜索银行卡类型" placeholder="搜索类型名称" value="${E(view.cardSearch || '')}" /></div>${
       select('card-type-status', [['all', '全部状态'], ['active', '可用'], ['inactive', '已停用']], status, 'aria-label="银行卡类型状态"')}
       </div><div class="toolbar-right">${A.button('刷新', 'commerce-card-type-settings-refresh')}${
         A.button('新增类型', 'commerce-card-type-add', 'primary', 'plus', !ready ? 'disabled' : '')}</div></div>`;
@@ -7399,6 +7431,56 @@
     $('#commerce-contact-wechat', form)?.focus();
     return false;
   }
+  function showContactConflict(form) {
+    if (!form?.isConnected) return;
+    const raw = A.readForm(form), tenant = value(raw, 'kind') === 'tenant';
+    const row = (tenant ? tenants : customers).find(entry => entry.id === value(raw, 'id'));
+    if (!row || String(row.version) === value(raw, 'version')) return;
+    const fields = [['name', '姓名'], ...customerChannels, ['source', '来源'], ['notes', '备注'],
+      ...(!tenant ? [['tags', '客户标签']] : [])];
+    const displayValue = (value, key) => {
+      if (key === 'tags' && typeof value === 'string') {
+        try { value = JSON.parse(value); } catch { /* Keep the original text for comparison. */ }
+      }
+      return Array.isArray(value) ? value.join('、') : String(value ?? '');
+    };
+    const differences = fields.flatMap(([key, label]) => {
+      const saved = displayValue(row[key], key), draft = displayValue(raw[`commerce-${key}`], key);
+      return saved === draft ? [] : [property(`已保存的${label}`, saved || '未填写') +
+        property(`本次填写的${label}`, draft || '未填写')];
+    }).join('');
+    form.querySelector('[data-contact-conflict]')?.remove();
+    form.insertAdjacentHTML?.('afterbegin', `<div class="inline-notice warning" data-contact-conflict role="alert"><div class="stack">
+      <p>这条资料已被其他操作更新。本次输入已保留，尚未保存。</p>
+      ${differences ? `<details><summary>查看填写差异</summary><div class="property-list">${differences}</div></details>` : ''}
+      ${A.textAction('读取最新资料重新编辑', 'commerce-contact-reload')}</div></div>`);
+  }
+  function reloadContactEditor(form) {
+    if (!form) return;
+    const raw = A.readForm(form), key = form.dataset.commerceDraft, actorId = currentOperator().id;
+    A.confirmAction('确认读取最新资料', '将清除这张表单的未保存填写，并载入最新资料。其他草稿保留。', () => {
+      void (async () => {
+        try {
+          const result = localData ? await localData.load('commerce') : null;
+          if (currentOperator().id !== actorId || !form.isConnected) return;
+          if (JSON.stringify(A.readForm(form)) !== JSON.stringify(raw)) {
+            A.notify('确认期间填写已变化，已保留输入，请重新核对');
+            return;
+          }
+          if (result) acceptLocalCommerce(result);
+          const tenant = value(raw, 'kind') === 'tenant', id = value(raw, 'id');
+          if (!(tenant ? tenants : customers).some(row => row.id === id)) {
+            A.notify('这条资料已不存在，当前输入已保留');
+            return;
+          }
+          const standalone = Boolean(form.closest('#main'));
+          cleanClose(key);
+          if (standalone) A.render();
+          else contactForm(tenant, id, value(raw, 'quick') === 'yes');
+        } catch { A.notify('最新资料读取失败，当前输入已保留，请重试'); }
+      })();
+    });
+  }
   function saveContact(form) {
     const raw = A.readForm(form),
       kind = value(raw, 'kind'),
@@ -7471,6 +7553,7 @@
       return;
     }
     if (existing && String(existing.version) !== value(raw, 'version')) {
+      showContactConflict(form);
       A.notify('资料已发生变化，请核对原版本再保存');
       return;
     }
@@ -7547,6 +7630,7 @@
           source: value(raw, 'source')
         };
         if (existing && String(existing.version) !== value(raw, 'version')) {
+          showContactConflict(form);
           A.notify('资料版本已变化，保存已停止');
           return;
         }
@@ -9528,6 +9612,10 @@
       contactForm(node.dataset.kind === 'tenant');
       return true;
     }
+    if (action === 'commerce-contact-reload') {
+      reloadContactEditor(node.closest('form'));
+      return true;
+    }
     if (action === 'commerce-contact-edit') {
       contactForm(node.dataset.kind === 'tenant', id);
       return true;
@@ -10832,17 +10920,46 @@
     if (badge && badge.textContent !== String(count)) badge.textContent = String(count);
     if (badge) badge.hidden = count === 0;
   }
+  let commerceDeadlineTimer, timeRefreshPending = false;
+  function refreshTimeDependentView() {
+    if (!timeRefreshPending || document.hidden || $('#confirm-dialog')?.open ||
+        document.activeElement?.closest('input, select, textarea') || $('#main form[novalidate]')) return;
+    timeRefreshPending = false;
+    updateRenewalReminder();
+    if ([renewalRoute, customerLossRoute, subscriptionCardsRoute].includes(S.route) && localPhase === 'ready') A.render();
+  }
+  function scheduleCommerceDeadline() {
+    if (!localData || !window.setTimeout) return;
+    window.clearTimeout(commerceDeadlineTimer);
+    const at = Date.now();
+    let next = Infinity;
+    const consider = value => { if (Number.isFinite(value) && value > at) next = Math.min(next, value); };
+    for (const order of orders) {
+      if (order.cancelled || order.subscriptionEnded) continue;
+      const expiry = parseDate(order.expiry);
+      consider(parseDate(order.start));
+      consider(expiry);
+      consider(expiry - renewalWarningHours * 3_600_000);
+      consider(expiry - (tenantRenewalWarningHours ?? defaultWarningHours) * 3_600_000);
+      // Remaining-day labels change at these exact boundaries, not every minute.
+      if (expiry > at) consider(expiry - (Math.ceil((expiry - at) / 86_400_000) - 1) * 86_400_000);
+    }
+    if (Number.isFinite(next)) commerceDeadlineTimer = window.setTimeout(() => {
+      if (Date.now() >= next) {
+        timeRefreshPending = true;
+        refreshTimeDependentView();
+      }
+      scheduleCommerceDeadline();
+    }, Math.min(2_147_000_000, next - at + 10));
+  }
+  document.addEventListener?.('visibilitychange', refreshTimeDependentView);
+  document.addEventListener?.('focusout', () => queueMicrotask(refreshTimeDependentView));
+  document.addEventListener?.('close', refreshTimeDependentView, true);
   window.addEventListener?.('DOMContentLoaded', () => {
     if (localData?.authRequired && S.actor?.role === 'employee') return;
     loadLocalCommerce();
     updateRenewalReminder();
-    if (localData) window.setInterval(() => {
-      updateRenewalReminder();
-      if ([renewalRoute, customerLossRoute, subscriptionCardsRoute].includes(S.route) &&
-          localPhase === 'ready' && !$('#drawer')?.open && !$('#confirm-dialog')?.open &&
-          !document.activeElement?.closest('input, select, textarea, button'))
-        A.render();
-    }, 60_000);
+    scheduleCommerceDeadline();
   }, { once: true });
   document.addEventListener?.('toggle', (event) => {
     const popup = event.target;
@@ -10958,6 +11075,8 @@
     id: 'commerce',
     matches,
     clearPageState() {
+      window.clearTimeout?.(commerceDeadlineTimer);
+      timeRefreshPending = false;
       clearRenewalCardSecrets();
       retentionRefreshFailed = false;
     },
@@ -11055,6 +11174,7 @@
       }
     },
     async onDataChanges(scopes) {
+      if (scopes.some(scope => ['commerce', 'settings', 'subscription-management'].includes(scope))) scheduleCommerceDeadline();
       let updated = true;
       if (scopes.includes('card-types')) {
         bankCardTypesLoaded = false;

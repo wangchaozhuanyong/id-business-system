@@ -131,7 +131,7 @@ test('员工桌面和窄屏可选客户、恢复草稿、核对冲突并写回�
     await drawer.locator('#completion-receipt-currency').selectOption('MYR');
     await checkLayout(page, drawer);
     const choose = async () => {
-      await drawer.getByLabel('选择客户', { exact: false }).fill('已有测试');
+      await drawer.getByRole('searchbox', { name: '选择客户', exact: false }).fill('已有测试');
       await drawer.getByRole('button', { name: '选择客户 已有测试客户' }).click();
     };
     await choose();
@@ -275,4 +275,39 @@ test('手工旧单从补全和续费提醒进入原单，独立补邮箱并保�
   ]);
   assert.deepEqual(errors, []);
   assert.deepEqual(traffic.external, []);
+});
+
+test('客户检索忽略新输入之前发出的迟到结果，组合输入不发请求', async t => {
+  const browser = await chromium.launch(); t.after(() => browser.close());
+  const { page, drawer, errors } = await open(t, browser, model(), a, 1440, 'light');
+  await page.getByRole('button', { name: '补全资料', exact: true }).click();
+  await page.clock.install({ time: new Date('2026-11-12T00:00:00Z') });
+  await page.clock.pauseAt(new Date('2026-11-12T00:00:01Z'));
+  let release, started, readCount = 0;
+  const held = new Promise(resolve => { started = resolve; });
+  await page.route('**/api/local/order-completion?*', async route => {
+    const q = new URL(route.request().url()).searchParams.get('q');
+    if (!q) return route.fallback();
+    readCount++;
+    if (q === '旧词') { started(); await new Promise(resolve => { release = resolve; }); }
+    return route.fulfill({ json: { items: [{ id: q, name: q === '旧词' ? '迟到旧客户' : '当前新客户' }] } });
+  });
+  t.after(() => release?.());
+  const search = drawer.locator('#completion-customer-query');
+  await search.fill('旧词'); await page.clock.runFor(300); await held;
+  await search.fill('新词');
+  const response = page.waitForResponse(response => new URL(response.url()).searchParams.get('q') === '旧词');
+  release(); await response; await page.clock.runFor(1);
+  assert.equal(await drawer.getByRole('button', { name: '选择客户 迟到旧客户' }).count(), 0);
+  await page.clock.runFor(299);
+  await drawer.getByRole('button', { name: '选择客户 当前新客户' }).waitFor();
+  assert.equal(readCount, 2);
+  await search.evaluate(node => {
+    node.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+    node.value = 'zuhe'; node.dispatchEvent(new InputEvent('input', { bubbles: true, isComposing: true }));
+  });
+  await page.clock.runFor(600); assert.equal(readCount, 2);
+  await drawer.getByRole('button', { name: '关闭', exact: true }).click();
+  await page.clock.runFor(600); assert.equal(readCount, 2, '关闭后的输入计时器不能继续检索');
+  assert.deepEqual(errors, []);
 });

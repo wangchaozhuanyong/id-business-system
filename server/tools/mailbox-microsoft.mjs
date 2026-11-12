@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 
 import { readMailboxImap } from './mailbox-pool.mjs';
+import { watchMailboxImap } from './mailbox-idle.mjs';
 import { parseToolPublicOrigin, toolRequestOrigin } from './request-origin.mjs';
 
 export const microsoftMailboxPrefix = '/api/local/tools/mailbox-microsoft/';
@@ -40,7 +41,7 @@ async function inputJson(req) {
 }
 
 export function createMicrosoftMailbox({
-  config, store, publicOrigin, fetchImpl = fetch, readImap = readMailboxImap, clock = Date.now
+  config, store, publicOrigin, fetchImpl = fetch, readImap = readMailboxImap, watchImap = watchMailboxImap, clock = Date.now
 }) {
   const publicUrl = parseToolPublicOrigin(publicOrigin);
   const callback = typeof config?.redirectUri === 'string' ? URL.parse(config.redirectUri) : null;
@@ -90,6 +91,19 @@ export function createMicrosoftMailbox({
     const tokens = await exchange({ grant_type: 'refresh_token', refresh_token: item.refreshToken }, item.refreshToken);
     const rows = await readImap({ ...fields, accessToken: tokens.accessToken });
     return { rows, refreshToken: tokens.refreshToken };
+  }
+
+  async function watchMailbox(item, options) {
+    if (options.signal?.aborted) throw Object.assign(new Error('Mailbox watch cancelled'), { code: 'ABORTED' });
+    if (item.provider !== 'microsoft') return watchImap(item, options);
+    const tokens = await exchange({ grant_type: 'refresh_token', refresh_token: item.refreshToken }, item.refreshToken);
+    if (options.signal?.aborted) throw Object.assign(new Error('Mailbox watch cancelled'), { code: 'ABORTED' });
+    const handle = await watchImap({ ...item, accessToken: tokens.accessToken }, options);
+    try {
+      if (tokens.refreshToken !== item.refreshToken)
+        store.rotateMicrosoftRefreshToken(item.id, item.revision, tokens.refreshToken);
+    } catch (error) { handle.close(); throw error; }
+    return handle;
   }
 
   async function handle(req, res, operation, actor) {
@@ -185,5 +199,5 @@ export function createMicrosoftMailbox({
     return json(res, 200, { authorizationId: id, authorizationUrl: url.href });
   }
 
-  return { readMailbox, handle };
+  return { readMailbox, watchMailbox, handle };
 }

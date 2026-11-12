@@ -125,6 +125,7 @@ test('shared pagination remains compact for 10,000 records and restores each lis
   const search = page.locator('#main .search-field input').first();
   const populatedHeight = (await viewport.boundingBox()).height;
   await search.fill('不存在的分页样本');
+  await page.waitForFunction(() => window.IDDesignAPI.state.query === '不存在的分页样本');
   assert.equal(await rows.count(), 0);
   assert.equal((await viewport.boundingBox()).height, populatedHeight);
   await search.clear();
@@ -140,10 +141,12 @@ test('shared pagination remains compact for 10,000 records and restores each lis
   assert.equal(await next.isDisabled(), true);
   assert.match(await pager.locator('.pagination-count').textContent(), /9,991–10,000/);
   await search.fill('分页样本 00005');
+  await page.waitForFunction(() => window.IDDesignAPI.state.query === '分页样本 00005');
   assert.equal(await pager.getAttribute('data-page'), '1');
   assert.equal(await rows.count(), 1);
   assert.equal(await pager.locator('button[data-pagination-page]').count(), 0);
   await search.fill('不存在的分页样本');
+  await page.waitForFunction(() => window.IDDesignAPI.state.query === '不存在的分页样本');
   assert.equal(await rows.count(), 0);
   assert.match(await pager.locator('.pagination-count').textContent(), /共 0 条/);
   assert.deepEqual(errors, []);

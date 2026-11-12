@@ -2,6 +2,8 @@ import { createCipheriv, createDecipheriv, createHmac, randomBytes, randomUUID }
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { describeWriteOperation, checkWriteReceipt, WriteOperationError } from './write-operation.mjs';
+import { mergeContactWrite } from './contact-write.mjs';
 import { validOrderCurrencies, validOrderCurrencyGroups, retainOrderSettings } from './order-currency-settings.mjs';
 import { isDeepStrictEqual } from 'node:util';
 import {
@@ -724,7 +726,8 @@ function checkWrite(entry) {
     domain,
     version,
     data,
-    action: actionsByDomain[domain].has(action) ? action : 'local_save'
+    action: actionsByDomain[domain].has(action) ? action : 'local_save',
+    ...(entry.recordChange && { recordChange: entry.recordChange })
   };
 }
 
@@ -745,12 +748,21 @@ function checkedRelayClaims(priorInventory, write, actor) {
   return pendingRelayClaimIds(priorInventory, write.data, { action: write.action, actor });
 }
 
-async function saveHttpWrites(store, entries, actor, verifyRelayExtraction, readOrderCards, readOrderOwners) {
-  const writes = checkWrites(entries);
+async function saveHttpWrites(store, entries, actor, verifyRelayExtraction, readOrderCards, readOrderOwners, operationId) {
+  let writes = checkWrites(entries);
+  const operation = describeWriteOperation(operationId, actor, writes);
+  const replay = operation && store.replayWrite?.(operation);
+  if (replay) return replay;
+  let contactSnapshot;
+  if (writes.some(write => write.recordChange)) {
+    if (writes.length !== 1) throw new WriteOperationError(400, '关联业务必须按整个批次核对版本');
+    contactSnapshot = store.load(writes[0].domain);
+    writes = writes.map(write => mergeContactWrite(write, contactSnapshot));
+  }
   const commerce = writes.find(({ domain }) => domain === 'commerce');
   const orderCards = new Map();
   if (commerce) {
-    const current = store.load('commerce');
+    const current = contactSnapshot || store.load('commerce');
     if (current.version !== commerce.version)
       throw new LocalDataError(409, '订单已在其他页面更新，请刷新后重试');
     const previous = new Map((current.data?.orders || []).map((row) => [row.id, row]));
@@ -767,7 +779,7 @@ async function saveHttpWrites(store, entries, actor, verifyRelayExtraction, read
       }
     }
   }
-  const options = { actor, readOrderOwners, [verifiedOrderCards]: orderCards };
+  const options = { actor, readOrderOwners, operation, [verifiedOrderCards]: orderCards };
   const inventory = writes.find(({ domain }) => domain === 'inventory');
   if (!inventory) return store.saveBatch(writes, options);
   const current = store.load('inventory');
@@ -887,6 +899,21 @@ export function createLocalBusinessStore(databasePath) {
     }
     notifyChanges();
     return result;
+  }
+
+  function replayWrite(operation) {
+    if (!operation) return null;
+    const domains = checkWriteReceipt(readDocument(operation.domain).data, operation);
+    if (!domains) return null;
+    const commerce = readDocument('commerce');
+    return domains.map(domain => {
+      const snapshot = readDocument(domain);
+      return { domain, ...snapshot, ...(domain === 'inventory' && {
+        commerceVersion: commerce.version,
+        accountSummaries: accountLifecycleSummaries(snapshot.data, commerce.data),
+        usageReview: usageReviewRows(inspectInventoryUsage(snapshot.data, commerce.data))
+      }) };
+    });
   }
 
   const mailboxActivity = db.prepare(`
@@ -1634,12 +1661,13 @@ export function createLocalBusinessStore(databasePath) {
         return result;
       });
     },
+    replayWrite,
     saveBatch(entries, {
-      actor, verifyAutomaticSnapshot, readOrderOwners, [verifiedRelayClaimIds]: verifiedIds,
+      actor, verifyAutomaticSnapshot, readOrderOwners, operation, [verifiedRelayClaimIds]: verifiedIds,
       [verifiedAppleRelayPrimaries]: primaryTargets, [verifiedOrderCards]: cards, [stagedRelayIntake]: relayIntake
     } = {}) {
       // Preserve the caller's retry snapshot when normalizing transient input.
-      const writes = checkWrites(entries).map(write => (write.domain === 'commerce' &&
+      let writes = checkWrites(entries).map(write => (write.domain === 'commerce' &&
         (write.action === orderCustomerCreateAction ||
           write.data.tenants.some(row => Object.hasOwn(row, 'initialCards')) ||
           write.data.orders.some(row => Object.hasOwn(row, 'tenantCardNumber')))) ||
@@ -1647,6 +1675,12 @@ export function createLocalBusinessStore(databasePath) {
         (write.domain === 'appleBalance' && write.action === 'apple_topup')
         ? { ...write, data: structuredClone(write.data) } : write);
       return writeTransaction(() => {
+        const replay = replayWrite(operation);
+        if (replay) return replay;
+        if (writes.some(write => write.recordChange)) {
+          if (writes.length !== 1) throw new WriteOperationError(400, '关联业务必须按整个批次核对版本');
+          writes = writes.map(write => mergeContactWrite(write, readDocument(write.domain)));
+        }
         if (relayIntake && (get.get('commerce')?.version ?? 0) !== relayIntake.commerceVersion)
           throw new LocalDataError(409, '订单或客户资料已变化，请重新预检');
         for (const { domain, version } of writes) {
@@ -2170,6 +2204,9 @@ export function createLocalBusinessStore(databasePath) {
           for (const card of nextTenantCards.filter(card => card.firstUse && !used.has(card.id)))
             log.run(now, 'tenant-cards', 'tenant_card_first_use', auditSummary('登记租户银行卡首次使用', actor, card.id), version);
         }
+        if (operation) put.run(operation.domain, 1, encrypt(key, operation.domain, 1, JSON.stringify({
+          fingerprint: operation.fingerprint, domains: result.map(entry => entry.domain)
+        })));
         return result;
       });
     },
@@ -2408,6 +2445,7 @@ export function createLocalBusinessStore(databasePath) {
       if (['admin', 'super'].includes(actor.role)) {
         for (const scope of ['settings', 'appleBalance', 'tenant-cards', 'recharge-codes', 'order-sync', 'finance-rates',
           cardTypeDocument, cardFreezeDocument, subscriptionDomain]) versions[scope] = version(scope);
+        versions['system-monitoring'] = `${version('system-monitoring-config')}:${version('system-monitoring-state')}`;
         versions['tools/mailbox-pool'] = version(managedMailboxDomain);
         versions['tools/website-visits'] = version(websiteVisitsDomain);
         versions['apple-relay'] = String(relayRevision.get().version);
@@ -2620,7 +2658,8 @@ export async function handleLocalBusiness(
     }
     const body = await readJson(request);
     if (domain === 'batch') {
-      const entries = await saveHttpWrites(store, body, actor, verifyRelayExtraction, readOrderCards, readOrderOwners);
+      const entries = await saveHttpWrites(store, body, actor, verifyRelayExtraction, readOrderCards, readOrderOwners,
+        request.headers['x-id-operation']);
       return json(response, 200, entries.map((entry) =>
         entry.domain === 'commerce' ? commerceForActor(store, entry, actor) : entry));
     }
@@ -2639,7 +2678,8 @@ export async function handleLocalBusiness(
     if (domain === bitBrowserAddressDomain) {
       return json(response, 200, store.saveBitBrowserAddresses(body, actor));
     }
-    const [entry, ...related] = await saveHttpWrites(store, [{ ...body, domain }], actor, verifyRelayExtraction, readOrderCards, readOrderOwners);
+    const [entry, ...related] = await saveHttpWrites(store, [{ ...body, domain }], actor, verifyRelayExtraction, readOrderCards, readOrderOwners,
+      request.headers['x-id-operation']);
     const inventory = related.find(item => item.domain === 'inventory');
     const appleBalance = related.find(item => item.domain === 'appleBalance');
     const result = {
@@ -2655,6 +2695,7 @@ export async function handleLocalBusiness(
     if (error instanceof TenantCardError) return json(response, error.status, { error: error.message, matches: error.matches });
     if (
       error instanceof LocalDataError ||
+      error instanceof WriteOperationError ||
       error instanceof TenantOwnerTransferError ||
       error instanceof OrderCompletionError ||
       error instanceof ClaudeHistoryIntakeError ||

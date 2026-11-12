@@ -40,22 +40,11 @@
   const pending = new Map();
   const errors = new Map();
   const listFrames = new Map();
-  let generation = 0, busy = false, refreshTimer, frameObserver;
+  let generation = 0, busy = false, frameObserver;
   const checkFilter = () => A.state.drafts.get(checksKey) || 'attention';
   const statusKind = status => status === 'bad' ? 'danger' : ['watch', 'unknown', 'disabled'].includes(status) ? 'warning' : 'success';
   const receiptLabel = row => incidentDelivery[row.deliveryStatus] ||
     (row.accepted ? delivery.accepted : row.external ? incidentDelivery.external_unknown : '暂无回执');
-
-  function scheduleRefresh() {
-    clearTimeout(refreshTimer);
-    if (document.hidden || A.state.route !== 'monitor' || !local()) return;
-    refreshTimer = setTimeout(() => {
-      if (A.state.route !== 'monitor' || document.hidden || !local()) return;
-      if (busy || pending.size || document.querySelector('dialog[open], [popover]:popover-open') ||
-          document.activeElement?.matches('input,select,textarea')) return scheduleRefresh();
-      void load(true);
-    }, 60_000);
-  }
 
   function params(tab = queryTab()) {
     return tab === 'config' ? { tab } : { tab, ...list(tab) };
@@ -76,7 +65,7 @@
   async function load(force = false) {
     if (!local() || (settingsPage() && !superAdmin())) return;
     const tab = queryTab(), input = params(tab), key = JSON.stringify(input), epoch = generation;
-    if (pending.get(tab)?.key === key) return;
+    if (!force && pending.get(tab)?.key === key) return;
     if (!force && snapshots.get(tab)?.key === key) return;
     const request = { key };
     pending.get(tab)?.feedback?.finish();
@@ -96,8 +85,9 @@
         throw new Error('监控状态响应不完整，请重新读取');
       snapshots.set(tab, { key, data });
       if (tab !== 'config') A.state.drafts.set(listViewKey + tab, { ...list(tab), page: data.page, pageSize: data.pageSize });
+      return true;
     } catch (error) {
-      if (current()) errors.set(tab, error.message || '读取失败，请重试');
+      if (current()) { errors.set(tab, error.message || '读取失败，请重试'); return false; }
     } finally {
       if (current()) {
         request.feedback?.finish();
@@ -545,12 +535,10 @@
     tabs[next].click();
     requestAnimationFrame(() => document.querySelector('.monitor-navigation [aria-selected="true"]')?.focus({ preventScroll: true }));
   });
-  document.addEventListener('visibilitychange', scheduleRefresh);
   window.IDDesignModules.push({
     id: namespace, matches: route => ['monitor', settingsRoute].includes(route), render, onClick, onChange, onSubmit,
     afterRender({ routeChanged } = {}) {
       bindRead(queryTab());
-      scheduleRefresh();
       frameObserver?.disconnect();
       const frame = $('[data-monitor-list-frame]');
       if (frame) {
@@ -563,8 +551,14 @@
         if (['monitor', settingsRoute].includes(A.state.route)) void load(true);
       });
     },
+    onDataChanges(scopes) {
+      if (!scopes.includes(namespace)) return;
+      // Inactive tabs must not retain clean module snapshots after a revision.
+      for (const [tab, snapshot] of snapshots) snapshots.set(tab, { ...snapshot, key: '' });
+      if (['monitor', settingsRoute].includes(A.state.route)) return load(true);
+    },
     clearPageState() {
-      generation++; busy = false; clearTimeout(refreshTimer); frameObserver?.disconnect(); listFrames.clear();
+      generation++; busy = false; frameObserver?.disconnect(); listFrames.clear();
       snapshots.clear(); pending.clear(); errors.clear();
     }
   });

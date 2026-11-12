@@ -86,6 +86,7 @@ const files = new Map([
     'order-completion',
     'recharge-activity',
     'change-sync',
+    'search-input',
     'operations-prototype',
     'data-center',
     'sheets-status',
@@ -353,7 +354,8 @@ export async function startPreview(
         fetchImpl: microsoftMailboxFetch, readImap: readManagedMailbox
       });
       handleManagedMailboxQuery = createManagedMailboxQuery({
-        store, publicOrigin: secureOrigin, storefrontOrigin: mailboxPublicUrl?.origin, readMailbox: microsoftMailbox.readMailbox
+        store, publicOrigin: secureOrigin, storefrontOrigin: mailboxPublicUrl?.origin,
+        readMailbox: microsoftMailbox.readMailbox, watchMailbox: microsoftMailbox.watchMailbox
       });
       if (publicUrl) handleLegacyToolRoute = createLegacyToolRoutes({
         publicOrigin: secureOrigin, microsoftMailbox, handleWebsiteVisits
@@ -452,11 +454,18 @@ export async function startPreview(
   const dataChanges = store ? createDataChangeStream({
     getActor: request => auth?.getActor(request, { throwOnUnavailable: true }) || (!authPath && !publicUrl
       ? { id: 'local-operator', role: 'admin' } : null),
-    getVersions: actor => ({
-      ...store.changeVersions(actor), operators: auth?.changeVersion() || '0',
-      ...(rechargeActivity && { [rechargeActivityDomain]: rechargeActivity.version(actor) })
-    }),
-    subscribe: listener => store.subscribeChanges(listener),
+    getVersions: actor => {
+      const versions = { ...store.changeVersions(actor), operators: auth?.changeVersion() || '0',
+        ...(rechargeActivity && { [rechargeActivityDomain]: rechargeActivity.version(actor) }) };
+      if (systemMonitoring && Object.hasOwn(versions, 'system-monitoring'))
+        versions['system-monitoring'] += ':' + systemMonitoring.changeVersion();
+      return versions;
+    },
+    subscribe: listener => {
+      const stopStore = store.subscribeChanges(listener);
+      const stopSamples = systemMonitoring?.subscribeChanges(listener);
+      return () => { stopStore(); stopSamples?.(); };
+    },
     watchPaths: [
       ...(databasePath && databasePath !== ':memory:' ? [databasePath, databasePath + '-wal', databasePath + '-journal'] : []),
       ...(authPath ? [authPath] : [])
@@ -731,7 +740,7 @@ export async function startPreview(
   if (financeCollection) server.once('close', () => financeCollection.close());
   if (systemMonitoring) server.once('close', () => { monitoringSources?.close(); systemMonitoring.close(); });
   if (rechargeActivity) server.once('close', () => rechargeActivity.close());
-  if (store) server.once('close', () => store.close());
+  if (store) server.once('close', () => { handleManagedMailboxQuery?.close(); store.close(); });
   if (dataChanges) server.once('close', () => dataChanges.close());
   if (rechargeOrderSync && orderSync && rechargeConfig) {
     const syncOrders = () => void orderSync.run({ apply: true }).catch(() => {});

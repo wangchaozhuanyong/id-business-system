@@ -413,7 +413,7 @@
   }
   function toolbar(actions, id, filters = '', statusGroups = '') {
     const placeholder = statusGroups ? '搜索邮箱、编号或备注' : '搜索邮箱、编号、备注或录入人';
-    const controls = `<div class="toolbar-left"><div class="search-field">${A.icon('search')}<input id="relay-search" aria-label="搜索苹果邮箱资料" value="${E(view.q)}" placeholder="${placeholder}" /></div>${filters}</div><div class="toolbar-right">${columnButton(id)}${actions}</div>`;
+    const controls = `<div class="toolbar-left"><div class="search-field">${A.icon('search')}<input data-auto-search id="relay-search" aria-label="搜索苹果邮箱资料" value="${E(view.q)}" placeholder="${placeholder}" /></div>${filters}</div><div class="toolbar-right">${columnButton(id)}${actions}</div>`;
     return statusGroups
       ? `<div class="toolbar list-filters relay-alias-toolbar"><div class="relay-alias-filters">${statusGroups}</div><div class="relay-alias-controls">${controls}</div></div>`
       : `<div class="toolbar list-filters">${controls}</div>`;

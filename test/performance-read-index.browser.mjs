@@ -1,0 +1,80 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import test from 'node:test';
+import { chromium } from 'playwright';
+import { interceptDesign, origin } from './helpers/offline-design.mjs';
+
+test('read indexes preserve duplicate handling, snapshot updates, registration and customer search', async t => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const fixture = JSON.parse(await readFile(new URL('../docs/audits/2026-11-06-design-review/visual-fixtures.json', import.meta.url)));
+  const seed = fixture.inventory.data.accounts.find(row => row.type === 'gpt');
+  fixture.inventory.data.accounts = Array.from({ length: 1200 }, (_, i) => ({ ...seed, id:'read-a-'+i, email:`read-${i}@example.test` }));
+  fixture.inventory.accountSummaries = fixture.inventory.data.accounts.map(row => ({ assetId:row.id, label:'使用中', orders:[] }));
+  fixture.inventory.data.registrationRecords = [];
+  fixture.inventory.commerceVersion = fixture.commerce.version;
+  const requests = await interceptDesign(context, { localFixtures: fixture });
+  const page = await context.newPage(), errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.goto(origin + '/#/accounts/gpt');
+  await page.waitForFunction(() => window.IDDesignAPI.modules.inventory?.accountLifecycleReady());
+  const actual = await page.evaluate(snapshot => {
+    const inventory = window.IDDesignAPI.modules.inventory;
+    let version = snapshot.version;
+    const apply = () => inventory.applyCommittedInventory({ ...structuredClone(snapshot), version: ++version });
+    apply();
+    let reads = 0;
+    for (const row of window.IDDesignAPI.collections.accounts) {
+      const type = row.type;
+      Object.defineProperty(row, 'type', { configurable:true, get() { reads++; return type; } });
+    }
+    const hits = snapshot.data.accounts.map(row => inventory.accountSummaryForEmail(' '+row.email.toUpperCase()+' ', 'GPT')?.assetId);
+    const linearReads = reads;
+    snapshot.data.accounts.push({ ...snapshot.data.accounts[0], id:'duplicate-1' }, { ...snapshot.data.accounts[0], id:'duplicate-2' });
+    apply();
+    const ambiguous = inventory.accountSummaryForEmail('read-0@example.test', 'GPT');
+    snapshot.data.accounts.splice(-2);
+    snapshot.data.accounts[0].email = 'renamed@example.test';
+    snapshot.accountSummaries[0].label = '已更新状态';
+    apply();
+    const oldIdentity = inventory.accountSummaryForEmail('read-0@example.test', 'GPT');
+    const newIdentity = inventory.accountSummaryForEmail('renamed@example.test', 'GPT');
+    const mailbox = { id:'read-mail', type:'google', email:'renamed@example.test', usageLinks:[], inventoryState:'available' };
+    const before = inventory.mailboxPlatformLabel(mailbox);
+    snapshot.data.registrationRecords.push({ id:'read-registration', assetId:mailbox.id, product:'gpt', state:'成功', accountId:'read-a-0' });
+    apply();
+    const after = inventory.mailboxPlatformLabel(mailbox), registered = inventory.mailboxRegistrationAccount(mailbox)?.id;
+    snapshot.data.accounts[0].source = '客户提供';
+    apply();
+    const external = inventory.mailboxRegistrationAccount(mailbox);
+    return { hits, linearReads, ambiguous, oldIdentity, newIdentity, before, after, registered, external };
+  }, fixture.inventory);
+  assert.equal(actual.hits.length, 1200);
+  assert.equal(actual.hits.at(-1), 'read-a-1199');
+  assert(actual.linearReads < 1200 * 20, 'repeated lookups must not rescan every account');
+  assert.equal(actual.ambiguous, null);
+  assert.equal(actual.oldIdentity, null);
+  assert.equal(actual.newIdentity.label, '已更新状态');
+  assert.equal(actual.before, '未登记');
+  assert.equal(actual.after, 'ChatGPT');
+  assert.equal(actual.registered, 'read-a-0');
+  assert.equal(actual.external, null);
+
+  const customer = fixture.commerce.data.customers[0];
+  await page.evaluate(() => window.IDDesignAPI.go('orders/gpt'));
+  await page.locator('#main[data-layout-route="orders/gpt"] tr[data-row-id]').first().waitFor();
+  customer.name = '变更后仍可立即搜索的客户';
+  fixture.commerce.version++;
+  await page.evaluate(async () => {
+    await window.IDDesignAPI.modules.commerce.refreshOverview();
+    window.IDDesignAPI.render();
+  });
+  const search = page.locator('#main > [data-page-region]:not([hidden]) #commerce-search');
+  await search.fill(customer.name);
+  await page.waitForFunction(name => window.IDDesignAPI.state.query === name, customer.name);
+  const ids = await page.locator('#main > [data-page-region]:not([hidden]) tr[data-row-id]').evaluateAll(rows => rows.map(row => row.dataset.rowId));
+  assert(ids.includes(fixture.commerce.data.orders[0].id), 'a renamed customer must immediately match order search');
+  assert.deepEqual(errors, []);
+  assert.deepEqual(requests.external, []);
+});

@@ -76,6 +76,34 @@ test('metadata revisions are acknowledged without accepting a later unseen chang
   assert.deepEqual(Object.keys(api.pendingChangeVersions(['unknown', 'inventory'])), []);
 });
 
+test('subscription changes invalidate subscription views and are acknowledged once', async () => {
+  const { api } = client();
+  const changes = [];
+  api.subscribeChanges(scopes => changes.push([...scopes]));
+  await api.queries.read('subscription-management', 'list', async () => ({ items: [] }));
+  api.acceptChangeVersions({ 'subscription-management': '1' }, { reconcile: true });
+  api.acceptChangeVersions({ 'subscription-management': '2' });
+  assert.deepEqual(changes, [['subscription-management']]);
+  assert.equal(api.queries.peek('subscription-management', 'list').stale, true);
+  api.acknowledgeChanges(api.pendingChangeVersions(['subscription-management']));
+  api.acceptChangeVersions({ 'subscription-management': '2' }, { reconcile: true });
+  assert.equal(changes.length, 1);
+});
+
+test('a lost save response reuses the exact operation identifier and payload', async () => {
+  const calls = [];
+  const { api, window } = client(async (_url, options) => {
+    calls.push(structuredClone(options));
+    if (calls.length === 1) throw new TypeError('synthetic response lost');
+    return reply({ version: 2, data: {} });
+  });
+  window.crypto = { randomUUID: () => 'operation-synthetic-0001' };
+  await api.save('commerce', 1, {}, { action: '修改资料' });
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[0], calls[1]);
+  assert.equal(calls[1].headers['X-ID-Operation'], 'operation-synthetic-0001');
+});
+
 test('clearing a rejected query cache keeps stream ordering; identity shutdown clears all tracking', async () => {
   const { api } = client(async () => reply({ version: 1, data: {} }));
   const changes = [];

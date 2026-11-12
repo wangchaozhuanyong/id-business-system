@@ -20,7 +20,7 @@
   const open = (form) => form?.isConnected && $('#drawer').open && S.drawerContext === form.dataset.completionDraft;
   const money = (value, currency) => value && currency ? value + ' ' + currency : '待核对';
   const fieldId = (name) => 'completion-' + name;
-  let snapshot, loadError, latestLoad, editor, saving, searchTimer, searchRequest, assigningManualOwners;
+  let snapshot, loadError, latestLoad, editor, saving, searchRequest, assigningManualOwners;
   let targetId, savedId;
 
   function render() {
@@ -185,7 +185,7 @@
       (row.customer ? '' : button('更换客户', 'completion-unselect'));
     const id = fieldId('customer-query');
     return field('选择客户', id, '<div class="field-row">' +
-      input(id, draft[id] || '', 'type="search" maxlength="100" placeholder="搜索姓名或联系方式"') +
+      input(id, draft[id] || '', 'data-auto-search type="search" maxlength="100" placeholder="搜索姓名或联系方式"') +
       button('新增客户', 'completion-new', '', 'plus') + '</div>') +
       '<div id="completion-customer-results" class="guide-list" role="status">输入关键词搜索客户。</div>';
   }
@@ -271,29 +271,27 @@
       '<button class="button primary" type="submit" form="completion-quick-form">选用此客户</button>', key);
   }
 
-  function scheduleSearch(node) {
-    clearTimeout(searchTimer);
+  async function scheduleSearch(node) {
     const token = searchRequest = Symbol();
     const form = node.form, query = node.value.trim();
     const result = $('#completion-customer-results');
     const selected = editor;
     if (!query) { result.textContent = '输入关键词搜索客户。'; return; }
     result.textContent = '正在搜索客户…';
-    searchTimer = setTimeout(async () => {
-      try {
-        const { items } = await D.orderCompletion({ orderId: selected.row.id, q: query });
-        if (searchRequest !== token || editor !== selected || !open(form)) return;
-        selected.results = items || [];
-        result.innerHTML = selected.results.length ? selected.results.map((person) => {
-          const hint = [person.source, ...contacts.map(([, key]) => person[key])].filter(Boolean).join(' · ');
-          return '<div class="guide-item"><strong>' + esc(person.name) + '</strong>' +
-            (hint ? '<p>' + esc(hint) + '</p>' : '') + A.textAction('选择客户', 'completion-select',
-              'data-id="' + esc(person.id) + '" aria-label="选择客户 ' + esc(person.name) + '"') + '</div>';
-        }).join('') : '未找到客户，可以调整关键词或新增客户。';
-      } catch {
-        if (searchRequest === token && editor === selected && open(form)) result.textContent = '搜索失败，请修改关键词后重试。';
-      }
-    }, 200);
+    const current = () => searchRequest === token && editor === selected && open(form) && node.value.trim() === query;
+    try {
+      const { items } = await D.orderCompletion({ orderId: selected.row.id, q: query });
+      if (!current()) return;
+      selected.results = items || [];
+      result.innerHTML = selected.results.length ? selected.results.map((person) => {
+        const hint = [person.source, ...contacts.map(([, key]) => person[key])].filter(Boolean).join(' · ');
+        return '<div class="guide-item"><strong>' + esc(person.name) + '</strong>' +
+          (hint ? '<p>' + esc(hint) + '</p>' : '') + A.textAction('选择客户', 'completion-select',
+            'data-id="' + esc(person.id) + '" aria-label="选择客户 ' + esc(person.name) + '"') + '</div>';
+      }).join('') : '未找到客户，可以调整关键词或新增客户。';
+    } catch {
+      if (current()) result.textContent = '搜索失败，请修改关键词后重试。';
+    }
   }
 
   function formError(message, canRecheck = false) {
@@ -415,7 +413,6 @@
     },
     clearPageState() {
       snapshot = loadError = latestLoad = editor = searchRequest = saving = targetId = savedId = undefined;
-      clearTimeout(searchTimer);
       for (const key of S.drafts.keys()) if (key === route || key.startsWith('completion-')) S.drafts.delete(key);
     },
     preserveDraft,

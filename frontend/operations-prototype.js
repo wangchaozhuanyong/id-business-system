@@ -138,7 +138,7 @@
   const formFooter = (form, label = '核对并保存', durable = false) =>
     `<span class="footnote">${durable ? '保存到数据库' : '仅更新演示内存，刷新重置'}</span>${button('取消', 'drawer-close')}<button class="button primary" form="${form}" type="submit">${esc(label)}</button>`;
   const search = (placeholder = '搜索名称、备注或编号', query = state.query || '') =>
-    `<div class="search-field">${icon('search')}<input id="ops-list-search" aria-label="搜索当前列表" value="${esc(query)}" placeholder="${esc(placeholder)}" /></div>`;
+    `<div class="search-field">${icon('search')}<input data-auto-search id="ops-list-search" aria-label="搜索当前列表" value="${esc(query)}" placeholder="${esc(placeholder)}" /></div>`;
   const { defaultPageSize, pageSizes } = window.IDPagination || {};
   const renderPagination = (options) => window.IDPagination?.render(options) || '';
   function finishDrawer() {
@@ -240,7 +240,6 @@
     audit: { query: '', pageSize: defaultPageSize, dirty: true },
     login: { query: '', pageSize: defaultPageSize, dirty: true }
   };
-  let composingAuditSearch;
 
   function settingsSnapshot() {
     return {
@@ -374,7 +373,6 @@
   function renderAuditRead(view) {
     if (activeAuditView() !== view) return;
     const focused = document.activeElement;
-    if (composingAuditSearch && focused === composingAuditSearch) return;
     const editingSearch = focused?.id === 'ops-list-search';
     const paging = focused?.closest?.(`[data-pagination="operations-${view}"]`);
     const pageControl = paging && (focused.hasAttribute('data-pagination-size') ? '[data-pagination-size]'
@@ -423,7 +421,6 @@
         resetAuditViews();
         list.pending = request;
         list.dirty = false;
-        composingAuditSearch = undefined;
       } else list.failedRequest = request;
       list.error = true;
       return false;
@@ -1546,7 +1543,7 @@
       .replace('<select ', '<select aria-label="话术文案排序" ');
     const emptyTitle = query ? '没有匹配的话术文案' : local.showDeleted ? '暂无已删除的话术' : '还没有话术文案';
     openToolboxPanel(state.toolsTab,
-      `<div class="toolbox-phrase-toolbar"><input type="search" id="ops-phrase-search" aria-label="搜索话术标题或内容" value="${esc(local.phraseQuery)}" placeholder="搜索文案" maxlength="100" />${sort}${button('新增', 'ops-phrase-add', 'primary')}</div>
+      `<div class="toolbox-phrase-toolbar"><input type="search" data-auto-search id="ops-phrase-search" aria-label="搜索话术标题或内容" value="${esc(local.phraseQuery)}" placeholder="搜索文案" maxlength="100" />${sort}${button('新增', 'ops-phrase-add', 'primary')}</div>
         <div id="ops-phrase-list">${cards || empty(emptyTitle, query ? '请调整搜索词。' : '新增后可一键复制正文。')}</div>
         ${renderPagination({ id: 'operations-phrases', page: local.phrasePage, pageSize, total: rows.length })}
         <div class="toolbox-phrase-archive">${textAction(local.showDeleted ? '返回正常话术' : '已删除', 'ops-phrase-deleted')}</div>`);
@@ -1802,7 +1799,7 @@
     }
   }
   function savedTotpPanel() {
-    return `<section class="form-section" id="ops-saved-totp" aria-label="已保存 2FA 账号"><div class="panel-heading"><div class="section-title-row"><h3>已保存账号</h3>${titleInfo('已保存账号', '密钥加密保存在服务器，同一账号换电脑仍可使用。支持搜索、分页、编辑、删除和复制当前验证码。', 'saved-totp-help')}</div>${button('新增账号', 'ops-saved-totp-add', 'primary', 'plus')}</div><form class="online-tool-search" id="ops-saved-totp-search-form" onsubmit="return false"><input type="search" id="ops-saved-totp-search" name="ops-saved-totp-search" aria-label="搜索已保存的 2FA 账号" placeholder="搜索账号名称或签发方"></form><div data-saved-totp-editor></div><div class="design-async-region"><div data-saved-totp-status role="status" hidden></div><div data-saved-totp-list></div></div></section>`;
+    return `<section class="form-section" id="ops-saved-totp" aria-label="已保存 2FA 账号"><div class="panel-heading"><div class="section-title-row"><h3>已保存账号</h3>${titleInfo('已保存账号', '密钥加密保存在服务器，同一账号换电脑仍可使用。支持搜索、分页、编辑、删除和复制当前验证码。', 'saved-totp-help')}</div>${button('新增账号', 'ops-saved-totp-add', 'primary', 'plus')}</div><form class="online-tool-search" id="ops-saved-totp-search-form" onsubmit="return false"><input type="search" data-auto-search id="ops-saved-totp-search" name="ops-saved-totp-search" aria-label="搜索已保存的 2FA 账号" placeholder="搜索账号名称或签发方"></form><div data-saved-totp-editor></div><div class="design-async-region"><div data-saved-totp-status role="status" hidden></div><div data-saved-totp-list></div></div></section>`;
   }
   const savedTotpSnapshots = new WeakMap();
   const temporaryTotpAccounts = new WeakMap();
@@ -1811,7 +1808,8 @@
     if (!toolActive(panel) || snapshot.version < Number(panel.dataset.version)) return;
     savedTotpSnapshots.set(panel, snapshot);
     panel.dataset.version = String(snapshot.version);
-    const search = panel.querySelector('#ops-saved-totp-search').value.trim().toLowerCase();
+    const searchInput = panel.querySelector('#ops-saved-totp-search');
+    const search = (window.IDSearchInput?.value(searchInput) ?? searchInput.value).trim().toLowerCase();
     const items = snapshot.items.filter((row) => [row.name, row.issuer].some((value) =>
       value?.toLowerCase().includes(search)));
     const draftSize = getDraft('saved-totp-page').pageSize;
@@ -2390,9 +2388,9 @@
         ${button('清空', 'ops-tool-clear', '', '', 'data-field="ops-managed-query-code"')}
         <button type="submit" class="button primary">查询邮件</button>
       </div></div><p class="footnote">邮件内容仅在本次查询时实时读取，不保存邮件正文。</p><div class="toolbar" data-mail-refresh hidden>
-        <label><input type="checkbox" data-mail-auto-refresh> 每 30 秒自动刷新</label>
+        <label><input type="checkbox" data-mail-auto-refresh> 新邮件自动更新</label>
         ${button('立即刷新', 'ops-mail-refresh')}
-      </div><div class="design-async-region"><div id="ops-managed-query-progress" role="status" hidden></div><div id="ops-managed-query-results"></div></div></form></section>${manage ? `<section class="form-section" data-tool-panel id="ops-mailbox-pool"${pageMode ? '' : ' hidden'}><div class="form-section"><div class="mailbox-pool-toolbar"><div class="section-title-row"><h3>邮箱池</h3>${titleInfo('邮箱池', '按实际收信服务商绑定邮箱。谷歌与苹果使用应用专用密码，Microsoft 通过 OAuth 连接。验证成功后可复制买家查询码交付，买家持码即可查信。查询码到期后需手动重置并重新交付；停用后停止买家查询，授权失效时先更新授权。', 'mailbox-pool-help')}</div><div class="mailbox-pool-actions">${button('绑定邮箱', 'ops-mailbox-pool-add', 'primary', 'plus', 'aria-haspopup="dialog"')}${pageMode ? button('邮箱查询', 'ops-mailbox-query-open', '', 'search', 'aria-haspopup="dialog" aria-controls="drawer"') : ''}${button('批量导入', 'ops-mailbox-pool-batch', '', '', 'aria-haspopup="dialog"')}${button('更多', 'ops-mailbox-related', '', 'more', 'aria-label="邮箱池更多操作" aria-haspopup="menu"')}</div></div><form class="online-tool-mail-filters" id="ops-mailbox-pool-search-form" onsubmit="return false"><input type="search" id="ops-mailbox-pool-search" name="ops-mailbox-pool-search" aria-label="搜索邮箱池" placeholder="搜索邮箱或备注">
+      </div><div class="design-async-region"><div id="ops-managed-query-progress" role="status" hidden></div><div id="ops-managed-query-results"></div></div></form></section>${manage ? `<section class="form-section" data-tool-panel id="ops-mailbox-pool"${pageMode ? '' : ' hidden'}><div class="form-section"><div class="mailbox-pool-toolbar"><div class="section-title-row"><h3>邮箱池</h3>${titleInfo('邮箱池', '按实际收信服务商绑定邮箱。谷歌与苹果使用应用专用密码，Microsoft 通过 OAuth 连接。验证成功后可复制买家查询码交付，买家持码即可查信。查询码到期后需手动重置并重新交付；停用后停止买家查询，授权失效时先更新授权。', 'mailbox-pool-help')}</div><div class="mailbox-pool-actions">${button('绑定邮箱', 'ops-mailbox-pool-add', 'primary', 'plus', 'aria-haspopup="dialog"')}${pageMode ? button('邮箱查询', 'ops-mailbox-query-open', '', 'search', 'aria-haspopup="dialog" aria-controls="drawer"') : ''}${button('批量导入', 'ops-mailbox-pool-batch', '', '', 'aria-haspopup="dialog"')}${button('更多', 'ops-mailbox-related', '', 'more', 'aria-label="邮箱池更多操作" aria-haspopup="menu"')}</div></div><form class="online-tool-mail-filters" id="ops-mailbox-pool-search-form" onsubmit="return false"><input type="search" data-auto-search id="ops-mailbox-pool-search" name="ops-mailbox-pool-search" aria-label="搜索邮箱池" placeholder="搜索邮箱或备注">
         ${select('ops-mailbox-filter-provider', [['', '全部类型'], ['google', '谷歌邮箱'], ['apple', '苹果云邮箱'], ['microsoft', '微软邮箱']]).replace('<select ', '<select aria-label="邮箱类型" ')}
         ${select('ops-mailbox-filter-status', [['', '全部状态'], ['pending', '待授权'], ['active', '可查询'], ['disabled', '已停用'], ['auth_failed', '授权失效'], ['expired', '查询码已过期']]).replace('<select ', '<select aria-label="邮箱状态" ')}
         ${button('刷新', 'ops-mailbox-pool-reload', '', 'return')}</form><div data-mailbox-pool-editor></div><div data-mailbox-pool-issued role="status"></div><div class="design-async-region"><div data-mailbox-pool-status role="status" hidden></div><div data-mailbox-pool-list></div></div></div></section>` : ''}`,
@@ -2416,19 +2414,49 @@
 
     const refresh = form.querySelector('[data-mail-refresh]');
     const autoRefresh = form.querySelector('[data-mail-auto-refresh]');
-    const timer = window.setInterval(() => {
-      if (!toolActive(form)) {
-        window.clearInterval(timer);
+    let stopUpdates, legacyTimer;
+    const stop = () => {
+      stopUpdates?.(); stopUpdates = undefined;
+      window.clearInterval(legacyTimer); legacyTimer = undefined;
+      queuedMailUpdates.delete(form);
+    };
+    const update = () => {
+      const snapshot = mailQuerySnapshots.get(form);
+      if (autoRefresh.nextSibling) autoRefresh.nextSibling.textContent = snapshot?.supportsUpdates
+        ? ' 新邮件自动更新' : ' 每 30 秒自动刷新';
+      if (!autoRefresh.checked || !snapshot || !toolActive(form) || document.hidden || form.closest('section').hidden) return stop();
+      if (stopUpdates || legacyTimer) return;
+      if (!snapshot.supportsUpdates) {
+        // The separate relay provider has no event outlet yet. Preserve its
+        // existing opt-in behavior until that provider can be connected safely.
+        legacyTimer = window.setInterval(() => void queryManagedMail(form, { background: true }), 30_000);
         return;
       }
-      if (!document.hidden && !form.closest('section').hidden && autoRefresh.checked)
-        void queryManagedMail(form);
-    }, 30_000);
+      stopUpdates = localData.watchManagedMailbox(form.querySelector('#ops-managed-query-code').value.trim(), {
+        onChange() {
+          if (form.querySelector('[type="submit"]').disabled) queuedMailUpdates.add(form);
+          else void queryManagedMail(form, { background: true });
+        },
+        onError(error) {
+          autoRefresh.checked = false; stop();
+          const status = form.querySelector('#ops-managed-query-progress');
+          status.className = 'inline-notice warning';
+          status.textContent = error.message || '自动更新已断开，可重新开启或立即刷新。';
+          status.hidden = false;
+        }
+      });
+    };
+    mailUpdateControls.set(form, { update, stop });
+    autoRefresh.addEventListener('change', update);
+    document.addEventListener('visibilitychange', update);
+    const visibility = new MutationObserver(update);
+    visibility.observe(form.closest('section'), { attributes: true, attributeFilter: ['hidden'] });
     form.addEventListener('input', (event) => {
       if (!['ops-managed-query-code', 'ops-managed-query-limit'].includes(event.target.id)) return;
       finishManagedMailRead(form);
       refresh.hidden = true;
       autoRefresh.checked = false;
+      stop();
       const status = form.querySelector('#ops-managed-query-progress');
       status.textContent = '';
       status.hidden = true;
@@ -2438,7 +2466,10 @@
     const clear = (force = false) => {
       if (force !== true && toolActive(form)) return;
       drawer.removeEventListener('close', clear);
-      window.clearInterval(timer);
+      stop();
+      visibility.disconnect();
+      document.removeEventListener('visibilitychange', update);
+      mailUpdateControls.delete(form);
       finishManagedMailRead(form);
       form.querySelector('#ops-managed-query-code').value = '';
       mailQuerySnapshots.delete(form);
@@ -2453,6 +2484,8 @@
     if (pageMode && pool) void loadManagedPool(pool);
   }
   const mailQuerySnapshots = new WeakMap();
+  const mailUpdateControls = new WeakMap();
+  const queuedMailUpdates = new WeakSet();
   function mailBodyParts(body) {
     const parts = [];
     const safeLink = (value) => {
@@ -2504,7 +2537,7 @@
     }).join('')}</div>` : empty('暂无邮件', '请稍后重新查询。')}`;
     result.querySelector('#ops-mail-alias-filter')?.addEventListener('change', event => renderManagedMail(form, event.target.value));
   }
-  async function queryManagedMail(form) {
+  async function queryManagedMail(form, { background = false } = {}) {
     const field = form.querySelector('#ops-managed-query-code');
     const result = form.querySelector('#ops-managed-query-results');
     const progress = form.querySelector('#ops-managed-query-progress');
@@ -2530,9 +2563,24 @@
       const response = await localData.queryManagedMailbox(code, /^BUY-/i.test(code) ? 5 : limit);
       if (!read.current() || field.value.trim() !== code || Number(limitField.value) !== limit) return;
       const maximum = response.targetType === 'VIRTUAL' || /^BUY-/i.test(code) ? 5 : limit;
-      mailQuerySnapshots.set(form, { ...response, items: response.items?.slice(0, maximum) || [] });
-      renderManagedMail(form);
+      const previous = mailQuerySnapshots.get(form);
+      const snapshot = { ...response, items: response.items?.slice(0, maximum) || [] };
+      if (JSON.stringify(previous) !== JSON.stringify(snapshot)) {
+        const selectedAlias = background ? form.querySelector('#ops-mail-alias-filter')?.value || '' : '';
+        const mailKey = row => JSON.stringify([row?.subject, row?.receivedAt || row?.savedAt, row?.body, row?.extractedCode]);
+        const open = new Set(background ? [...result.querySelectorAll('details[open]')].map(detail => {
+          const index = detail.querySelector('[data-index]')?.dataset.index;
+          return mailKey(previous?.items?.[Number(index)]);
+        }) : []);
+        mailQuerySnapshots.set(form, snapshot);
+        renderManagedMail(form, selectedAlias);
+        if (background && previous) for (const detail of result.querySelectorAll('details')) {
+          const index = detail.querySelector('[data-index]')?.dataset.index;
+          detail.open = open.has(mailKey(snapshot.items[Number(index)]));
+        }
+      }
       refresh.hidden = false;
+      mailUpdateControls.get(form)?.update();
     } catch (error) {
       if (read.current() && field.value.trim() === code && Number(limitField.value) === limit) {
         finishManagedMailRead(form, read);
@@ -2541,9 +2589,12 @@
         progress.insertAdjacentHTML('beforeend', button('重试', 'ops-mail-retry'));
         progress.hidden = false;
         form.querySelector('[data-mail-auto-refresh]').checked = false;
+        mailUpdateControls.get(form)?.stop();
       }
     } finally {
       finishManagedMailRead(form, read);
+      if (queuedMailUpdates.delete(form) && toolActive(form) && form.querySelector('[data-mail-auto-refresh]').checked)
+        void queryManagedMail(form, { background: true });
     }
   }
   const mailboxPoolSnapshots = new WeakMap();
@@ -2560,7 +2611,8 @@
     mailboxPoolSnapshots.set(panel, snapshot);
     panel.dataset.version = String(snapshot.version);
     panel.dataset.defaultValidDays = String(snapshot.defaultValidDays);
-    const search = panel.querySelector('#ops-mailbox-pool-search').value.trim().toLowerCase();
+    const searchInput = panel.querySelector('#ops-mailbox-pool-search');
+    const search = (window.IDSearchInput?.value(searchInput) ?? searchInput.value).trim().toLowerCase();
     const provider = panel.querySelector('#ops-mailbox-filter-provider').value;
     const status = panel.querySelector('#ops-mailbox-filter-status').value;
     const statusFor = (row) => row.authorizationPending ? 'pending' : row.authFailed ? 'auth_failed' : !row.active ? 'disabled'
@@ -2779,6 +2831,7 @@
     form.querySelector('[data-action="ops-tool-clear"]').hidden = Boolean(row);
     onMailboxOperationClose(root, () => {
       finishManagedMailRead(form);
+      mailUpdateControls.get(form)?.stop();
       form.querySelector('#ops-managed-query-code').value = '';
       form.querySelector('#ops-managed-query-code').closest('.field').parentElement.hidden = false;
       form.querySelector('[data-action="ops-tool-clear"]').hidden = false;
@@ -3149,7 +3202,7 @@
       api.finishRegionRead(result.parentElement);
       status.hidden = true;
       status.textContent = '';
-      return;
+      return true;
     }
     const hasResult = result.hasChildNodes();
     const read = api.beginRegionRead(result.parentElement, status, {
@@ -3169,6 +3222,7 @@
         ? await localData.queries.read(scope, key, load, { refresh }) : await load();
       if (!read.current()) return;
       result.innerHTML = renderReport(report);
+      return true;
     } catch (error) {
       if (error.name === 'AbortError') return;
       if (!read.current()) return;
@@ -3180,6 +3234,7 @@
       status.className = 'inline-notice warning';
       status.textContent = `读取${label}失败。${result.hasChildNodes() ? '已保留上次结果。' : ''}${error?.message || '请稍后重试。'}`;
       status.hidden = false;
+      return false;
     } finally {
       dialog?.removeEventListener('id-view-deactivate', cancelClosedRead);
       dialog?.removeEventListener('close', closedDialog);
@@ -3254,7 +3309,7 @@
         ip: values['ops-visits-ip'].trim()
       };
     }
-    await refreshWebsiteReport(
+    return refreshWebsiteReport(
       output,
       status,
       '访问明细',
@@ -4141,7 +4196,7 @@
     if (node.id === 'ops-list-search') {
       const view = activeAuditView();
       if (view) {
-        if (node === composingAuditSearch || auditViews[view].query === node.value) return true;
+        if (auditViews[view].query === node.value) return true;
         auditViews[view].query = node.value;
         void loadAudit(view, { page: 1, fresh: true });
         return true;
@@ -4167,16 +4222,6 @@
     }
     return false;
   }
-  document.addEventListener('compositionstart', ({ target }) => {
-    if (target.id === 'ops-list-search' && activeAuditView()) composingAuditSearch = target;
-  });
-  document.addEventListener('compositionend', ({ target }) => {
-    if (target !== composingAuditSearch) return;
-    composingAuditSearch = undefined;
-    const view = activeAuditView();
-    if (view && auditViews[view].query === target.value) renderAuditRead(view);
-    else if (view) onInput(target);
-  });
   document.addEventListener('id-pagination-change', (event) => {
     const { id, page, pageSize } = event.detail;
     const auditView = activeAuditView();
@@ -4241,7 +4286,8 @@
       if (scopes.includes('saved-totp') && totp?.checkVisibility()) jobs.push(loadSavedTotp(totp, { refresh: true }));
       if (scopes.some(scope => ['inventory', 'tools/mailbox-pool'].includes(scope)) && pool?.checkVisibility()) jobs.push(loadManagedPool(pool, { refresh: true }));
       if (scopes.includes('tools/website-visits') && visits?.checkVisibility()) jobs.push(showWebsiteVisits(visits, {}, { refresh: true }));
-      await Promise.all(jobs);
+      const results = await Promise.all(jobs);
+      return !results.includes(false);
     },
     updateStatisticsCurrency
   };
@@ -4260,7 +4306,6 @@
     clearPageState() {
       deactivateIntegration(document.getElementById('main'));
       onlineAdmin = undefined;
-      composingAuditSearch = undefined;
       resetAuditViews();
     },
     matches: (route) =>

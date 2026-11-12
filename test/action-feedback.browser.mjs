@@ -3,7 +3,7 @@ import test from 'node:test';
 import path from 'node:path';
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
-import { interceptDesign, origin, root, settle } from './helpers/offline-design.mjs';
+import { interceptDesign, origin, root, settle, toggleDesignTheme } from './helpers/offline-design.mjs';
 
 test('操作反馈可见于抽屉和确认框之上，复制与异步结果按真实完成状态显示', { timeout: 120_000 }, async t => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
@@ -61,8 +61,16 @@ test('操作反馈可见于抽屉和确认框之上，复制与异步结果按�
     page.setDefaultTimeout(6000);
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(origin + '/#/settings/audit');
-    await page.locator('[data-action="ops-audit-refresh"]').waitFor();
-    if (theme === 'dark') await page.locator('#theme-toggle').click();
+    await page.locator('[data-action="ops-audit-refresh"]').waitFor({ state: 'attached' });
+    const clickRefresh = async () => {
+      const source = page.locator('[data-action="ops-audit-refresh"]');
+      if (await source.isVisible()) return source.click();
+      const label = await source.textContent();
+      await page.locator('#main [data-action="mobile-list-actions"]').click();
+      await page.locator('.row-action-menu:popover-open').getByRole('menuitem', { name: label, exact: true }).click();
+    };
+    if (theme === 'dark') await toggleDesignTheme(page);
+    if (!await page.locator('.topbar-tools [data-tab="话术文案"]').isVisible()) await page.locator('#mobile-tools-toggle').click();
     await page.locator('.topbar-tools [data-tab="话术文案"]').click();
     await page.locator('[data-action="ops-phrase-copy"]').click();
     await page.locator('#toast[data-kind="success"]:not([hidden])').waitFor();
@@ -105,7 +113,7 @@ test('操作反馈可见于抽屉和确认框之上，复制与异步结果按�
     assert.equal(await page.locator('[data-feedback-message]').textContent(), '已有具体结果');
     auditMode = 'held'; ready = new Promise(resolve => { started = resolve; });
     const beforeReads = reads;
-    await page.locator('[data-action="ops-audit-refresh"]').click();
+    await clickRefresh();
     await ready;
     await page.locator('#toast[data-kind="loading"]:not([hidden])').waitFor();
     assert(await page.locator('[data-action="ops-audit-refresh"]').isDisabled());
@@ -115,12 +123,12 @@ test('操作反馈可见于抽屉和确认框之上，复制与异步结果按�
     await page.locator('#toast[data-kind="success"]:not([hidden])').waitFor();
     assert.match(await page.locator('#toast').innerText(), /操作记录已刷新/);
     auditMode = 'failed';
-    await page.locator('[data-action="ops-audit-refresh"]').click();
+    await clickRefresh();
     await page.locator('#toast[data-kind="error"]:not([hidden])').waitFor();
     assert.match(await page.locator('#toast').innerText(), /读取失败/);
     await page.screenshot({ path: path.join(output, `error-${width}-${theme}.png`) });
     auditMode = 'held'; ready = new Promise(resolve => { started = resolve; });
-    await page.locator('[data-action="ops-audit-refresh"]').click();
+    await clickRefresh();
     await ready;
     await page.locator('#toast[data-kind="loading"]:not([hidden])').waitFor();
     await page.evaluate(() => { location.hash = '#/customers/list'; });
