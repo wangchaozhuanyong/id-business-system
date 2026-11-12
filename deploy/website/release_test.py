@@ -1,6 +1,8 @@
 import hashlib
 import json
+import os
 import sqlite3
+import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -34,6 +36,48 @@ await startPreview(port, {
 
 
 class WebsiteReleaseTests(unittest.TestCase):
+    def test_tools_credential_json_keeps_values_and_line_boundaries(self):
+        launcher = '''{
+  cat "$CREDENTIALS_DIRECTORY/independent-recharge-bridge"
+  cat "$CREDENTIALS_DIRECTORY/independent-online-tools"
+  printf '\\n'
+  cat "$CREDENTIALS_DIRECTORY/independent-vendure-integrations"
+}'''
+        tools = {"analytics": {"key": "synthetic" + chr(10) + "multiline"}, "visits": "synthetic-visits",
+                 "microsoft": {"value": "synthetic-microsoft"}, "cloudflare": {"value": "synthetic-token"}}
+        vendure = {"mailboxApiKey": "synthetic-vendure"}
+        transformed = remote.normalize_tools_credential_stream(launcher)
+        self.assertEqual(remote.normalize_tools_credential_stream(transformed), transformed)
+        with TemporaryDirectory() as directory:
+            paths = Path(directory)
+            (paths / "independent-recharge-bridge").write_text("b" * 64 + "\n")
+            (paths / "independent-vendure-integrations").write_text(json.dumps(vendure))
+            for payload in (json.dumps(tools), json.dumps(tools) + "\n", json.dumps(tools, indent=2) + "\r\n"):
+                with self.subTest(trailing_newline=payload.endswith("\n")):
+                    (paths / "independent-online-tools").write_text(payload)
+                    result = subprocess.check_output(["bash", "-euo", "pipefail", "-c", transformed],
+                        env=os.environ | {"CREDENTIALS_DIRECTORY": directory}, text=True)
+                    bridge, tool_line, vendure_line = result.splitlines()
+                    self.assertEqual(bridge, "b" * 64)
+                    self.assertEqual(json.loads(tool_line), tools)
+                    self.assertEqual(json.loads(vendure_line), vendure)
+
+    def test_tools_credential_stream_rejects_drift(self):
+        for source in ("different input", '  cat "$CREDENTIALS_DIRECTORY/independent-online-tools"\n' * 2):
+            with self.assertRaisesRegex(remote.ReleaseError, "unexpected_tools_credential_stream"):
+                remote.normalize_tools_credential_stream(source)
+
+    def test_tools_credential_stream_stops_on_invalid_json_without_echoing_it(self):
+        script = remote.normalize_tools_credential_stream(
+            '  cat "$CREDENTIALS_DIRECTORY/independent-online-tools"')
+        with TemporaryDirectory() as directory:
+            (Path(directory) / "independent-online-tools").write_text('{"value":"synthetic-not-for-log",}')
+            result = subprocess.run(["bash", "-euo", "pipefail", "-c", script], capture_output=True,
+                env=os.environ | {"CREDENTIALS_DIRECTORY": directory}, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(result.stdout, "")
+            self.assertNotIn("synthetic-not-for-log", result.stderr)
+
     def test_storefront_analytics_uses_private_config_and_is_idempotent(self):
         result = remote.wire_storefront_analytics(ANALYTICS_LAUNCHER)
         self.assertIn("readToolConfig(cloudflare === undefined ? undefined : '/credentials/cloudflare', 'website-cloudflare')", result)
@@ -151,8 +195,9 @@ class WebsiteReleaseTests(unittest.TestCase):
             active.mkdir(parents=True)
             (live / "source/frontend").mkdir(parents=True)
             (live / "source/frontend/index.html").write_text('<link href="./prototype.css?v=old">')
-            launchers = {"run-app": f"sha={BASE}\nops=$release/{active.name}\n",
-                         "app-entry.mjs": "// active mailbox entry\n",
+            tools_stream = '  cat "$CREDENTIALS_DIRECTORY/independent-online-tools"\n'
+            launchers = {"run-app": f"sha={BASE}\nops=$release/{active.name}\n{tools_stream}",
+                         "app-entry.mjs": ANALYTICS_LAUNCHER + "\n// active mailbox entry\n",
                          "check-app.mjs": "assert(index.includes('prototype.css?v=old'));\n"}
             for name, content in launchers.items():
                 (active / name).write_text(content)
@@ -182,17 +227,16 @@ class WebsiteReleaseTests(unittest.TestCase):
                                "launchers": {name: digest(content.encode()) for name, content in launchers.items()}},
                     "artifacts": {name: {"bytes": len(data), "sha256": digest(data)}
                                   for name, data in artifacts.items()}}
-            wire_analytics = Mock(side_effect=lambda content: content)
             with patch.multiple(remote, ROOT=root, DROP=dropin, run=run,
                                 mount_backup_monitoring=lambda content: content,
-                                mount_storefront_admission=lambda content: content,
-                                wire_storefront_analytics=wire_analytics):
+                                mount_storefront_admission=lambda content: content):
                 _, operations = remote.stage(plan, release_dir)
                 self.assertEqual(remote.website_release_dropin(dropin.read_text(), BASE, operations / "run-app"),
                                  f"[Service]\nExecStart=\nExecStart={operations / 'run-app'} live\n")
-            self.assertEqual((operations / "run-app").read_text(), f"sha={TARGET}\nops=$release/operations\n")
-            self.assertEqual((operations / "app-entry.mjs").read_text(), launchers["app-entry.mjs"])
-            wire_analytics.assert_called_once_with(launchers["app-entry.mjs"])
+            self.assertEqual((operations / "run-app").read_text(), remote.normalize_tools_credential_stream(
+                f"sha={TARGET}\nops=$release/operations\n{tools_stream}"))
+            self.assertEqual((operations / "app-entry.mjs").read_text(),
+                             remote.wire_storefront_analytics(launchers["app-entry.mjs"]))
             self.assertIn("prototype.css?v=new", (operations / "check-app.mjs").read_text())
 
     def test_rejects_unrecognized_or_multiple_website_start_commands(self):
