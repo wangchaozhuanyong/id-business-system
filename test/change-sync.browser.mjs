@@ -199,6 +199,35 @@ test('版本通知更新相关列表，保留筛选、分页和草稿；心跳�
     await idle();
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   }
+  const clockStart = await page.evaluate(() => Date.now());
+  await page.clock.install({ time: new Date(clockStart) });
+  await page.clock.pauseAt(new Date(clockStart + 1000));
+  await page.evaluate(() => window.emitHeartbeat());
+  const healthyReads = { ...reads };
+  for (let index = 0; index < 4; index++) {
+    await page.clock.runFor(20_000);
+    await page.evaluate(() => window.emitHeartbeat());
+  }
+  assert.deepEqual(reads, healthyReads, '健康连接的心跳不触发业务读取');
+  fixture.inventory.data.accounts.unshift({ ...seed, id: 'silent-recovery', email: 'silent-recovery@example.test' });
+  fixture.inventory.version++;
+  await page.evaluate(version => { window.changeVersions.inventory = version; }, String(fixture.inventory.version));
+  await page.clock.runFor(61_000);
+  assert.equal(await page.evaluate(() => window.streamConnections), 3, '静默断流应重连以补齐遗漏版本');
+  await page.locator('tr[data-row-id="silent-recovery"]').waitFor();
+  await idle();
+  assert.equal(reads.inventory, healthyReads.inventory + 1);
+  assert.equal(reads.commerce, healthyReads.commerce);
+  await page.evaluate(() => window.changeController.close());
+  await page.waitForFunction(() => !window.IDChangeSync.status().connected);
+  await page.clock.runFor(2000);
+  assert.equal(await page.evaluate(() => window.streamConnections), 4);
+  await page.evaluate(() => window.changeController.close());
+  await page.waitForFunction(() => !window.IDChangeSync.status().connected);
+  await page.clock.runFor(2000);
+  assert.equal(await page.evaluate(() => window.streamConnections), 4, '短连接反复失败必须递增退避');
+  await page.clock.runFor(2000);
+  assert.equal(await page.evaluate(() => window.streamConnections), 5);
   assert.deepEqual(writes, []);
   assert.deepEqual(errors, []);
   await page.evaluate(() => window.IDChangeSync.stop());

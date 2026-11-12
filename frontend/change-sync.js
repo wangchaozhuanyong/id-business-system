@@ -129,20 +129,31 @@
   async function connect() {
     if (stopped || controller || document.hidden) return;
     const current = ++generation;
-    controller = new AbortController();
+    const started = Date.now();
+    const connection = new AbortController();
+    controller = connection;
+    let reader, deadline;
+    const armDeadline = () => {
+      clearTimeout(deadline);
+      // Heartbeats arrive every 20 seconds. This checks transport liveness,
+      // without reading versions or business data on a fixed schedule.
+      deadline = setTimeout(() => connection.abort(), 60_000);
+    };
+    armDeadline();
     try {
       const response = await fetch('/api/local/change-events', {
-        credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'text/event-stream' }, signal: controller.signal
+        credentials: 'same-origin', cache: 'no-store', headers: { Accept: 'text/event-stream' }, signal: connection.signal
       });
       if (response.status === 401) { stop(); window.IDLocalAuth?.lock?.(); return; }
       if (!response.ok || !response.headers.get('content-type')?.startsWith('text/event-stream') || !response.body)
         throw new Error('Change stream unavailable');
       connected = true;
       showStatus();
-      failures = 0;
-      const reader = response.body.getReader(), decoder = new TextDecoder();
+      reader = response.body.getReader();
+      const decoder = new TextDecoder();
       let buffer = '';
       while (!stopped && generation === current) {
+        armDeadline();
         const { value, done } = await reader.read();
         if (done) break;
         buffer = (buffer + decoder.decode(value, { stream: true })).replaceAll('\r\n', '\n');
@@ -156,10 +167,14 @@
       }
     } catch { /* Keep the last successful content and reconnect. */ }
     finally {
+      clearTimeout(deadline);
+      connection.abort();
+      await reader?.cancel().catch(() => {});
       if (generation === current) {
         controller = undefined;
         connected = false;
         showStatus();
+        if (Date.now() - started > 30_000) failures = 0;
         if (!stopped) retry = setTimeout(connect, Math.min(30_000, 1000 * 2 ** Math.min(failures++, 5)));
       }
     }

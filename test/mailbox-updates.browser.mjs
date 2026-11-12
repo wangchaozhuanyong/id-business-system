@@ -27,8 +27,13 @@ async function prepare(browser, width, relay = false) {
         window.mailStreams.push(stream);
         return Promise.resolve(new Response(new ReadableStream({ start(controller) {
           stream.controller = controller;
+          const heartbeat = setInterval(() => {
+            if (!window.silentMail && !stream.closed)
+              controller.enqueue(new TextEncoder().encode(': heartbeat\n\n'));
+          }, 20_000);
           options.signal.addEventListener('abort', () => {
             stream.closed = true;
+            clearInterval(heartbeat);
             try { controller.error(new DOMException('aborted', 'AbortError')); } catch {}
           }, { once: true });
           controller.enqueue(new TextEncoder().encode('event: ready\ndata: {"version":0}\n\n'));
@@ -107,6 +112,52 @@ test('mail notifications are idle without reads, preserve content, coalesce burs
       assert.deepEqual(errors, []); assert.deepEqual(requests.external, []);
     } finally { await context.close(); }
   });
+});
+
+test('a silently stalled mailbox stream reconnects without idle mail polling', async t => {
+  const browser = await chromium.launch(); t.after(() => browser.close());
+  const { context, page, form, errors } = await prepare(browser, 390, true);
+  try {
+    await page.clock.install({ time: new Date('2026-11-12T02:00:00Z') });
+    await page.clock.pauseAt(new Date('2026-11-12T02:00:01Z'));
+    await form.locator('[data-mail-auto-refresh]').check();
+    await page.waitForFunction(() => window.mailReads === 2);
+    await page.evaluate(() => { window.silentMail = true; });
+    await page.clock.runFor(61_000);
+    assert.equal(await page.evaluate(() => window.mailStreams.length), 2);
+    assert.equal(await page.evaluate(() => window.mailStreams[0].closed), true);
+    assert.equal(await page.evaluate(() => window.mailReads), 3, 'reconnection reconciles once');
+    await page.evaluate(() => { window.silentMail = false; });
+    await page.clock.runFor(120_000);
+    assert.equal(await page.evaluate(() => window.mailReads), 3, 'healthy heartbeats never query mail');
+    assert.equal(await page.evaluate(() => window.mailStreams.length), 2);
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); }
+});
+
+test('mail connection timeouts cannot reset the bounded retry budget', async t => {
+  const browser = await chromium.launch(); t.after(() => browser.close());
+  const { context, page, form } = await prepare(browser, 1440);
+  try {
+    await page.clock.install({ time: new Date('2026-11-12T02:00:00Z') });
+    await page.clock.pauseAt(new Date('2026-11-12T02:00:01Z'));
+    await page.evaluate(() => {
+      const original = window.fetch;
+      window.timedOutStreams = 0;
+      window.fetch = (url, options) => {
+        if (options?.headers?.Accept !== 'text/event-stream') return original(url, options);
+        window.timedOutStreams++;
+        return new Promise((_resolve, reject) => options.signal.addEventListener('abort',
+          () => reject(new DOMException('synthetic timeout', 'AbortError')), { once: true }));
+      };
+    });
+    await form.locator('[data-mail-auto-refresh]').check();
+    await page.clock.runFor(240_000);
+    assert.equal(await page.evaluate(() => window.timedOutStreams), 4);
+    assert.equal(await form.locator('[data-mail-auto-refresh]').isChecked(), false);
+    assert.equal(await page.evaluate(() => window.mailReads), 1);
+    assert.match(await form.locator('#ops-managed-query-results').textContent(), /合成邮件一/);
+  } finally { await context.close(); }
 });
 
 test('mail identity changes reject late reads and authorization errors do not auto-retry', async t => {
