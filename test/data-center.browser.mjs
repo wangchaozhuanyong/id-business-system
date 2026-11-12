@@ -114,6 +114,16 @@ test('data center navigation, four website reports, reporting dates and responsi
       assert(!geometry.overflow && geometry.gaps.every(gap => gap >= 8), context);
       if (width === 1440) assert(geometry.aligned, context);
       if (width <= 390) assert(geometry.stacked && geometry.heights.every(height => height >= 44), context);
+      const points = workspace.locator('[data-chart-point]');
+      const tooltip = workspace.locator('.design-chart-tooltip');
+      await points.first().focus();
+      assert.match(await tooltip.innerText(), /2026-11-06.*浏览量 170 次/);
+      await page.keyboard.press('ArrowRight');
+      assert.match(await tooltip.innerText(), /2026-11-07.*浏览量 未取得 次/);
+      const tipBounds = await tooltip.boundingBox();
+      assert(tipBounds.x >= 0 && tipBounds.x + tipBounds.width <= width + 1, '共享浮层不越过视口');
+      await page.keyboard.press('Escape');
+      assert(await tooltip.isHidden());
       if ([1440, 390].includes(width)) await page.screenshot({ path: join(output, `traffic-${width}-${theme}.png`), fullPage: true });
     }
   }

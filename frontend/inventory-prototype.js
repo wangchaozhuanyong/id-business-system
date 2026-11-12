@@ -1996,9 +1996,9 @@
         (['google', 'apple'].includes(type) && (!original || Boolean(original.country)))
     );
     if (fundingApple && window.IDAppleFunding) {
-      fields += field('App Store 账单地区', 'inventory-appStoreRegion',
-        select('inventory-appStoreRegion', [['', '请选择账单地区'], ...Object.entries(window.IDAppleFunding.appleRegions)],
-          val('appStoreRegion')), !original, '按 Apple 账户实际账单地区核对。');
+      fields += field('Id地区', 'inventory-appStoreRegion',
+        select('inventory-appStoreRegion', [['', '请选择 Id地区'], ...Object.entries(window.IDAppleFunding.appleRegions)],
+          val('appStoreRegion')), !original, '以苹果 ID 在 App Store 使用的国家或地区为准。');
       if (!original)
         fields += field('期初余额（USD）', 'inventory-appleOpeningBalance',
           input('inventory-appleOpeningBalance', d['inventory-appleOpeningBalance'] ?? '0.00', 'inputmode="decimal"'), true);
@@ -3549,7 +3549,7 @@
       const rules = window.IDAppleFunding;
       const regionError = (!id || data['inventory-appStoreRegion']) && !rules?.appleRegion(data['inventory-appStoreRegion']);
       const balanceError = !id && rules?.appleAmountUnits(data['inventory-appleOpeningBalance']) === null;
-      api.setError('inventory-appStoreRegion', regionError ? '请选择已核实的账单地区' : '');
+      api.setError('inventory-appStoreRegion', regionError ? '请选择已核实的 Id地区' : '');
       if (!id) api.setError('inventory-appleOpeningBalance', balanceError ? '请输入非负美元金额，最多四位小数' : '');
       if (regionError || balanceError) return;
     }

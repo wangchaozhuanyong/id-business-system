@@ -881,13 +881,10 @@
       const order = latest || state?.pending[0];
       const contact = order && commerce.customer(order);
       const expiry = order?.expiry || '';
-      const end = /^\d{4}-\d\d-\d\d[T ]\d\d:\d\d$/.test(expiry)
-        ? Date.parse(expiry.replace(' ', 'T') + '+08:00') : Date.parse(expiry);
+      const end = window.IDOrderOpening.subscriptionTime(expiry);
       const distance = end - commerce.now;
-      const hours = Math.floor(Math.abs(distance) / 3600000);
-      const duration = Number.isFinite(end) && !order?.cancelled && !order?.subscriptionEnded
-        ? (distance <= 0 ? '已过期 ' : '剩余 ') +
-          (hours ? [Math.floor(hours / 24) ? Math.floor(hours / 24) + ' 天' : '', hours % 24 ? hours % 24 + ' 小时' : ''].filter(Boolean).join(' ') : '不足 1 小时') : '';
+      const duration = order && !order.cancelled && !order.subscriptionEnded
+        ? window.IDOrderOpening.subscriptionDuration(end, commerce.now) : '';
       const estimate = order && rules.applePrice(commerce.settings, order.product, order.plan, wallet.appStoreRegion);
       return { id: wallet.id, wallet, orders, order, name: contact?.name || '',
         contact: contact ? ['wechat', 'customerPhone', 'whatsapp', 'telegram', 'qq'].map(key => contact[key]).filter(Boolean).join(' · ') : '',
@@ -1050,7 +1047,7 @@
       { id: 'birthday', label: '密保生日', render: assetValue('birthday') },
       { id: 'phone', label: '绑定电话／验证码', render: row => A.modules.inventory?.phoneValue(assets.get(row.id)?.phone) || '—' },
       { id: 'country', label: '国家地区' },
-      { id: 'appStoreRegion', label: 'App Store 账单地区', render: row => E(window.IDAppleFunding?.appleRegions[row.appStoreRegion] || '待核对') },
+      { id: 'appStoreRegion', label: 'Id地区', render: row => E(window.IDAppleFunding?.appleRegions[row.appStoreRegion] || '待核对') },
       { id: 'usage', label: '使用状态', render: row => E(fundingStates[usages.get(row.id)?.state] || '待核对') },
       { id: 'binding', label: '绑定订阅账号', render: row => E(usages.get(row.id)?.account || '—') },
       { id: 'device', label: '登录设备', render: assetValue('device') },

@@ -14,7 +14,7 @@ const products = [
 const actor = { id: 'payment-layout-admin', name: '合成管理员', role: 'admin' };
 const output = process.env.ID_LAYOUT_QA_OUTPUT || root + '/.runtime/order-payment-layout-20261110';
 
-test('所有录单、编辑与续费入口共用支付方式、卡类型、选卡、卡号顺序', { timeout: 150_000 }, async t => {
+test('所有录单、编辑与续费入口共用支付方式、填写方式、银行卡类型顺序', { timeout: 150_000 }, async t => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
@@ -138,11 +138,12 @@ test('所有录单、编辑与续费入口共用支付方式、卡类型、选�
           assert.equal(measured.typeButtons, 0, '银行卡类型下拉不再混入管理操作');
           assert.equal(measured.overflow, false);
           assert.equal(new Set(measured.ids).size, measured.ids.length, '各产品控件 ID 唯一');
-          const editing = contextName === 'edit';
-          assert.deepEqual(measured.order.slice(0, 3), editing
-            ? ['payment', 'cardTypeId', 'proMaterialMode'] : ['payment', 'proMaterialMode', 'cardTypeId']);
+          assert.deepEqual(measured.order.slice(0, 3), ['payment', 'proMaterialMode', 'cardTypeId']);
           assert.equal(measured.order.indexOf(number), measured.order.indexOf(card) + 1, '卡号紧跟选卡');
           assert.equal(measured.order.includes('proCardSerial'), key !== 'max');
+          const typeField = form.locator('#commerce-cardTypeId');
+          assert.equal(await typeField.isDisabled(), key === 'max', '租户银行卡锁定类型');
+          if (key === 'max') assert.equal(await typeField.locator('option:checked').textContent(), '真实卡');
           const [payment, type, picker, tail, mode, next, serial] = measured.fields;
           const sameRow = (left, right) => {
             assert(Math.abs(left.box.top - right.box.top) <= 1);
@@ -150,19 +151,15 @@ test('所有录单、编辑与续费入口共用支付方式、卡类型、选�
             assert(Math.abs(left.text.top - right.text.top) <= 2, `${left.name} 与 ${right.name} 的标签应对齐`);
           };
           if (measured.columns === 2) {
-            if (editing) sameRow(payment, type);
-            else {
-              sameRow(payment, mode);
-              sameRow(type, next);
-              assert(Math.abs(type.box.width - next.box.width) <= 1, '卡类型与下一步各占半行');
-            }
-            if (editing || key === 'max') sameRow(picker, tail);
+            sameRow(payment, mode);
+            sameRow(type, next);
+            assert(Math.abs(type.box.width - next.box.width) <= 1, '卡类型与下一步各占半行');
+            if (key === 'max') sameRow(picker, tail);
             else sameRow(tail, serial);
           } else {
-            const [second, third] = editing ? [type, mode] : [mode, type];
-            assert(second.box.top >= payment.box.bottom - 1);
-            assert(third.box.top >= second.box.bottom - 1);
-            assert(next.box.top >= third.box.bottom - 1);
+            assert(mode.box.top >= payment.box.bottom - 1);
+            assert(type.box.top >= mode.box.bottom - 1);
+            assert(next.box.top >= type.box.bottom - 1);
             assert(tail.box.top >= picker.box.bottom - 1);
           }
           if (next.name !== picker.name) assert(picker.box.top >= next.box.bottom - 1);

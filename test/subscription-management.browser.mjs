@@ -45,7 +45,8 @@ test('四类订阅页面使用独立状态、真实复制入口与历史兼容�
         const row = { id: 'synthetic-account', product: request.product, account: request.product === 'Grok' ? '@synthetic' : 'synthetic@example.test',
           registrationEmail: request.product === 'Grok' ? '' : 'synthetic@example.test', status, conflict: false, ownerEligible: confirmed,
           ownerId: owner, ownerName: owner ? '合成归属人' : '', operatorName: actor.name, accountId: 'asset',
-          series: [{ key: request.product, ...record }], history: [record], queryCode: { status: 'missing', remainingDays: null } };
+          series: [{ key: request.product, ...record }], history: [record], queryCode: { status: 'missing', remainingDays: null },
+          contacts: { wechat: 'qa-wechat', whatsapp: '+60 123 456 789', telegram: '@qa_customer', qq: '' } };
         if (request.product === 'Grok' && request.scope === 'expired') row.series = [{ ...record,
           key: 'x_premium', plan: 'X Premium', expiry: '2026-11-10 09:00', remainingDays: 0 }];
         const items = (!request.status || row.series.some(series => series.status === request.status)) &&
@@ -112,12 +113,21 @@ test('四类订阅页面使用独立状态、真实复制入口与历史兼容�
         const days = subscriptionRow.locator('td[data-column="days"]');
         if (!(await days.isVisible())) await subscriptionRow.getByRole('button', { name: '更多资料', exact: true }).click();
         assert.equal(await days.getAttribute('data-label'), '到期倒计时');
-        assert.equal(await days.innerText(), name === 'claude' ? '—' : '21 天 2 小时');
+        assert.equal(await days.innerText(), name === 'claude' ? '—' : '剩余 21 天 2 小时');
         if (name === 'gpt' && width === 1440 && theme === 'light') {
           const reads = listReads;
           await page.clock.fastForward(31 * 60_000);
-          await days.getByText('21 天 1 小时', { exact: true }).waitFor();
+          await days.getByText('剩余 21 天 1 小时', { exact: true }).waitFor();
           assert.equal(listReads, reads, '跨小时只更新倒计时文字');
+          await subscriptionRow.getByRole('button', { name: /微信.*WhatsApp.*Telegram/ }).click();
+          const contacts = page.locator('#drawer[open]');
+          await contacts.getByText('qa-wechat', { exact: true }).waitFor();
+          assert.equal(await contacts.getByText('QQ', { exact: true }).count(), 0);
+          assert.equal(await contacts.getByRole('link', { name: /打开 WhatsApp/ }).getAttribute('href'), 'https://wa.me/60123456789');
+          assert.equal(await contacts.getByRole('link', { name: /打开 Telegram/ }).getAttribute('href'), 'https://t.me/qa_customer');
+          await contacts.getByRole('button', { name: '复制微信', exact: true }).click();
+          await page.waitForFunction(() => window.syntheticCopies.at(-1) === 'qa-wechat');
+          await page.keyboard.press('Escape');
         }
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
         if (name === 'grok') {
@@ -127,7 +137,7 @@ test('四类订阅页面使用独立状态、真实复制入口与历史兼容�
             response.request().postDataJSON().scope === 'expired');
           await page.getByRole('tab', { name: '已到期', exact: true }).click(); await loaded;
           await page.locator('#subscription-list').getByText('X Premium', { exact: true }).waitFor();
-          await page.locator('#subscription-list').getByText('已到期', { exact: true }).waitFor();
+          await page.locator('#subscription-list [data-column="days"]').getByText('已到期 1 小时', { exact: true }).waitFor({ state: 'attached' });
           await page.getByRole('tab', { name: '死号', exact: true }).click();
           await page.locator('#subscription-list').getByText('死号', { exact: true }).waitFor();
         }
@@ -136,8 +146,7 @@ test('四类订阅页面使用独立状态、真实复制入口与历史兼容�
       await page.locator('#subscription-list tbody tr[data-row-id]').waitFor();
       await page.locator('[data-action="subscriptions-more"]').click();
       await page.getByRole('menuitem', { name: '复制账号资料', exact: true }).click();
-      await page.waitForFunction(() => window.syntheticCopies.length === 1);
-      assert.match(await page.evaluate(() => window.syntheticCopies[0]), /SYNTHETIC/);
+      await page.waitForFunction(() => window.syntheticCopies.at(-1)?.includes('SYNTHETIC'));
       await page.locator('[data-action="subscriptions-detail"]').click();
       await page.locator('#drawer [data-action="subscriptions-confirm"]').click();
       await page.locator('#subscription-reason').fill('合成核对依据');
@@ -200,17 +209,21 @@ test('到期读取失败时保留上次列表，重试后账号进入已过期',
   await page.clock.install({ time: new Date('2026-11-10T02:00:00Z') });
   await page.goto(origin + '/#/subscriptions/gpt');
   const list = page.locator('#subscription-list');
-  await list.getByText('不足 1 小时', { exact: true }).waitFor();
+  await list.getByText('剩余不足 1 小时', { exact: true }).waitFor();
   await page.clock.fastForward(31_000);
   await page.getByText(/已保留上次读取的资料/).waitFor();
   await list.getByText('qa-expiring@example.test', { exact: true }).waitFor();
   await page.clock.fastForward(60_000);
   assert.equal(reads, 2, '到期失败后不反复发起读取');
   await page.getByRole('button', { name: '刷新', exact: true }).click();
-  await list.getByText('已到期', { exact: true }).waitFor();
+  await list.getByText('已到期不足 1 小时', { exact: true }).waitFor();
   await page.getByRole('tab', { name: '已到期', exact: true }).click();
-  await list.getByText('已到期', { exact: true }).waitFor();
+  await list.getByText('已到期不足 1 小时', { exact: true }).waitFor();
   await list.getByText('qa-expiring@example.test', { exact: true }).waitFor();
+  const afterArchive = reads;
+  await page.clock.fastForward(3_601_000);
+  await list.getByText('已到期 1 小时', { exact: true }).waitFor();
+  assert.equal(reads, afterArchive, '已到期时长跨小时只更新界面');
 });
 
 test('账号管理保留注册国家和操作人，未开通库存不会给新订单预填归属', { timeout: 30_000 }, async t => {

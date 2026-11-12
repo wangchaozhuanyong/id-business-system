@@ -108,7 +108,7 @@ test('租户续费提醒、联系人、独立设置、保存失败和新周期',
   assert.equal(requests.length, 0);
   await drawer.getByRole('button', { name: '关闭', exact: true }).click();
   await filter.selectOption('');
-  await pending.locator('tbody tr[data-row-id]').first().getByText('已到期', { exact: true }).waitFor();
+  await pending.locator('tbody tr[data-row-id]').first().getByText(/^已到期 /).waitFor();
   assert.equal(await pending.locator('tbody tr[data-row-id]').count(), 2);
   for (const value of ['unpaid@example.test', 'later@example.test', 'cancelled@example.test', 'unlinked@example.test'])
     assert.equal(await pending.getByText(value, { exact: true }).count(), 0);

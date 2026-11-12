@@ -51,6 +51,9 @@
   function show(point) {
     const plot = point.closest('.design-chart-plot'), tip = plot?.querySelector('.design-chart-tooltip');
     if (!tip) return;
+    plot.removeAttribute('data-chart-dismissed');
+    plot.querySelectorAll('[data-chart-point][data-chart-dismissed]').forEach(p => p.removeAttribute('data-chart-dismissed'));
+    hideAll(tip);
     tip.textContent = point.dataset.chartLabel;
     tip.hidden = false;
     const p = plot.getBoundingClientRect(), a = point.getBoundingClientRect();
@@ -58,22 +61,73 @@
     tip.style.top = '4px';
   }
   function hide(point) { const tip = point?.closest('.design-chart-plot')?.querySelector('.design-chart-tooltip'); if (tip) tip.hidden = true; }
+  function hideAll(except) {
+    document.querySelectorAll('.design-chart-tooltip:not([hidden])').forEach(tip => {
+      if (tip !== except) tip.hidden = true;
+    });
+  }
+  function dismissAll() {
+    document.querySelectorAll('.design-chart-tooltip:not([hidden])').forEach(tip => {
+      const plot = tip.closest('.design-chart-plot');
+      // Hiding a hovered popup exposes the point underneath. Suppress that
+      // synthetic re-entry until the pointer leaves the newly exposed point.
+      const hovered = tip.matches(':hover') ? plot : plot.querySelector('[data-chart-point]:hover');
+      hovered?.setAttribute('data-chart-dismissed', '');
+      tip.hidden = true;
+    });
+  }
   if (typeof document !== 'undefined') {
-    document.addEventListener('pointerover', event => { const p = event.target.closest?.('[data-chart-point]'); if (p) show(p); });
-    document.addEventListener('pointerout', event => { const p = event.target.closest?.('[data-chart-point]'); if (p && !p.contains(event.relatedTarget)) hide(p); });
+    document.addEventListener('pointerover', event => {
+      if (event.pointerType === 'touch') return;
+      const p = event.target.closest?.('[data-chart-point]');
+      if (!p) return;
+      const plot = p.closest('.design-chart-plot');
+      if (plot.hasAttribute('data-chart-dismissed')) {
+        plot.removeAttribute('data-chart-dismissed');
+        p.setAttribute('data-chart-dismissed', '');
+      }
+      if (!p.hasAttribute('data-chart-dismissed')) show(p);
+    });
+    document.addEventListener('pointerout', event => {
+      if (event.pointerType === 'touch') return;
+      const p = event.target.closest?.('[data-chart-point]');
+      const tip = event.target.closest?.('.design-chart-tooltip');
+      const next = event.relatedTarget;
+      if (p && !p.contains(next)) p.removeAttribute('data-chart-dismissed');
+      if (p && !p.contains(next) && !p.closest('.design-chart-plot').querySelector('.design-chart-tooltip')?.contains(next)) hide(p);
+      if (tip && !tip.contains(next) && !next?.closest?.('[data-chart-point]')) {
+        tip.hidden = true;
+        tip.closest('.design-chart-plot').removeAttribute('data-chart-dismissed');
+      }
+    });
+    document.addEventListener('pointerdown', event => {
+      if (!event.target.closest?.('[data-chart-point], .design-chart-tooltip')) hideAll();
+    });
+    // Touch has no persistent hover. Keep the selected value visible until the
+    // next point, an outside press or Escape; delegation survives chart redraws.
+    document.addEventListener('click', event => {
+      const p = event.target.closest?.('[data-chart-point]');
+      if (p) show(p);
+    });
     document.addEventListener('focusin', event => { const p = event.target.closest?.('[data-chart-point]'); if (p) show(p); });
-    document.addEventListener('focusout', event => hide(event.target.closest?.('[data-chart-point]')));
+    document.addEventListener('focusout', event => {
+      const p = event.target.closest?.('[data-chart-point]');
+      const tip = p?.closest('.design-chart-plot')?.querySelector('.design-chart-tooltip');
+      if (p && !tip?.matches(':hover') && !tip?.contains(event.relatedTarget)) hide(p);
+    });
     document.addEventListener('keydown', event => {
+      if (event.key === 'Escape') { dismissAll(); return; }
       const point = event.target.closest?.('[data-chart-point]');
       if (!point) return;
-      if (event.key === 'Escape') { hide(point); return; }
       if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
       event.preventDefault();
       const points = [...point.closest('svg').querySelectorAll('[data-chart-point]')], i = points.indexOf(point);
       const next = event.key === 'Home' ? 0 : event.key === 'End' ? points.length - 1 : Math.max(0, Math.min(points.length - 1, i + (event.key === 'ArrowRight' ? 1 : -1)));
       points.forEach((p, index) => p.setAttribute('tabindex', index === next ? '0' : '-1'));
       points[next].focus();
+      show(points[next]);
     });
+    window.addEventListener('resize', () => hideAll());
   }
   window.IDCharts = { bars, comparison };
 })();

@@ -4,7 +4,7 @@ import { assignOrderOwner, checkSubscriptionTermination, manualOrderDetailsActio
 import { currencies, validCurrencyCode } from '../modules/finance/accounting.mjs';
 import { sortByRecordTime } from '../frontend/list-order.mjs';
 import {
-  automaticGptOrder, rechargeOrderCompletion, rechargeOrderOwner, manualBusinessOrder, manualOrderDetailsMissing,
+  automaticGptOrder, rechargeOrderCompletion, rechargeOrderOwner, rechargeRenewalExpiryPending, manualBusinessOrder, manualOrderDetailsMissing,
   orderOpeningConfirmed, subscriptionTime, validOrderEmail, validOrderXHandle
 } from '../frontend/order-opening.mjs';
 import { accountLifecycleSummary, systemAccount } from './account-lifecycle.mjs';
@@ -332,6 +332,27 @@ export function rechargeOrderEmailConflict(orders, order, email) {
 
 export function applyOrderCompletion(data, settings, actor, command, readOwners, at) {
   requireCompletionActor(actor);
+  if (command?.action === 'confirm-renewal-expiry') {
+    if (!manager(actor)) throw new OrderCompletionError(403, '只有管理员可以登记实际到期时间');
+    exactKeys(command, ['action', 'orderId', 'version', 'expiry']);
+    const expiry = text(command.expiry, 16), time = subscriptionTime(expiry);
+    if (typeof command.orderId !== 'string' || !Number.isSafeInteger(command.version) ||
+        !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(expiry) || !Number.isFinite(time) ||
+        new Date(time + 8 * 3_600_000).toISOString().slice(0, 16) !== expiry)
+      throw new OrderCompletionError(400, '请填写有效的实际到期时间（北京时间）');
+    const order = findOrder(data, command.orderId, actor);
+    if (order.previousOrderId && order.expiry === expiry && (order.version ?? 0) === command.version + 1)
+      return { order };
+    if ((order.version ?? 0) !== command.version || !rechargeRenewalExpiryPending(order))
+      throw new OrderCompletionError(409, '续费订单已变化，请刷新后核对');
+    const prior = data.orders.find(row => row.id === order.previousOrderId);
+    if (!prior || prior.product !== 'GPT' || !order.customerId || prior.customerId !== order.customerId ||
+        !validOrderEmail(prior.email) || prior.email.trim().toLowerCase() !== order.email?.trim().toLowerCase())
+      throw new OrderCompletionError(409, '续费关联已变化，请核对原单和新单');
+    if (!(time > subscriptionTime(order.start) && time > subscriptionTime(prior.expiry)))
+      throw new OrderCompletionError(400, '实际到期时间必须晚于续费开始和原到期时间');
+    return { order: { ...order, ...editMetadata(actor, at), expiry, version: command.version + 1 } };
+  }
   const envelope = ['action', 'orderId', 'version'];
   const assign = command?.action === 'assign';
   exactKeys(command, assign ? [...envelope, 'ownerId', 'reason'] : [...envelope, 'ownerId', 'reason',

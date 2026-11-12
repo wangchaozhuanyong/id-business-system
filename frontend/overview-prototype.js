@@ -230,7 +230,7 @@
       ? `，变化最大的是 ${product}（${changeText(delta, '笔')}）` : ''}。`;
   }
 
-  function chartMarkup(series, mode, label) {
+  function chartMarkup(series, mode, label, range) {
     const isProfit = mode === 'profit';
     // Convert only the SVG coordinates to numbers. Display and totals keep the exact decimal strings.
     const values = isProfit ? series.map(row => Number(profitValue(row)))
@@ -247,14 +247,19 @@
       `<rect class="${color}" x="${x}" y="${Math.min(base, y(value))}" width="${bar}" height="${Math.abs(base - y(value))}" />`;
     const groups = series.map((row, index) => {
       const center = slot * (index + 0.5);
-      if (!isProfit) return `<g><title>${label(row.at)} · 订单 ${row.orders} 笔 · 撤单 ${row.cancelled} 笔</title>${
-        rect(center - bar - 1, row.orders, 'overview-bar') + rect(center + 1, row.cancelled, 'overview-bar-cancelled')
-      }</g>`;
       const amount = profitValue(row);
       const value = Number(amount);
-      return `<g><title>${label(row.at)} · ${amount == null ? '利润待核算' : `利润 ${moneyText(amount)} CNY`} · 待核算 ${row.pending} 笔</title>${
-        amount != null ? rect(center - bar / 2, value, value < 0 ? 'overview-bar-loss' : 'overview-bar') : ''
-      }${row.pending ? `<line class="overview-bar-incomplete" x1="${center - bar / 2}" x2="${center + bar / 2}" y1="${Math.max(2, Math.min(plotHeight - 2, y(value)))}" y2="${Math.max(2, Math.min(plotHeight - 2, y(value)))}" />` : ''}</g>`;
+      const date = dayFormatter.format(row.at) + (range === 'today' ? ' ' + hourFormatter.format(row.at) : '');
+      const description = [date + '（北京时间）', ...(isProfit ? [
+        amount == null ? '利润待核算' : `已核算利润：${moneyText(amount)} CNY`,
+        `已核算：${countText(row.accounted)} 笔`, `待核算：${countText(row.pending)} 笔`
+      ] : [`订单量：${countText(row.orders)} 笔`, `撤单：${countText(row.cancelled)} 笔`])].join('\n');
+      const marks = !isProfit
+        ? rect(center - bar - 1, row.orders, 'overview-bar') + rect(center + 1, row.cancelled, 'overview-bar-cancelled')
+        : (amount != null ? rect(center - bar / 2, value, value < 0 ? 'overview-bar-loss' : 'overview-bar') : '') +
+          (row.pending ? `<line class="overview-bar-incomplete" x1="${center - bar / 2}" x2="${center + bar / 2}" y1="${Math.max(2, Math.min(plotHeight - 2, y(value)))}" y2="${Math.max(2, Math.min(plotHeight - 2, y(value)))}" />` : '');
+      return `<g data-chart-point data-chart-label="${E(description)}" tabindex="${index ? -1 : 0}" role="img" aria-label="${E(description)}" aria-describedby="overview-trend-tooltip">
+        <rect class="design-chart-hit" x="${slot * index}" y="0" width="${slot}" height="${plotHeight}" />${marks}</g>`;
     }).join('');
     const middle = (max + min) / 2;
     const ticks = isProfit || Number.isInteger(middle) ? [max, middle, min] : [max, min];
@@ -262,10 +267,11 @@
       Math.round((series.length - 1) * 2 / 3), series.length - 1])].map(index => label(series[index].at));
     return `<div class="overview-chart-data">
       <div class="overview-axis-y" aria-hidden="true">${ticks.map(tick => `<span>${axis.format(tick)}</span>`).join('')}</div>
-      <div class="overview-plot"><svg viewBox="0 0 ${plotWidth} ${plotHeight}" preserveAspectRatio="none" role="img" aria-label="${isProfit ? '已核算利润趋势图，单位人民币' : '订单与撤单数量趋势图'}">
+      <div class="overview-plot design-chart-plot"><svg viewBox="0 0 ${plotWidth} ${plotHeight}" preserveAspectRatio="none" role="group" aria-label="${isProfit ? '已核算利润趋势图，单位人民币' : '订单与撤单数量趋势图'}">
         ${ticks.map(tick => `<line class="overview-grid-line" x1="0" x2="${plotWidth}" y1="${y(tick)}" y2="${y(tick)}" />`).join('')}
         <line class="overview-baseline" x1="0" x2="${plotWidth}" y1="${base}" y2="${base}" />${groups}
-      </svg><div class="overview-axis-x" aria-hidden="true">${labels.map(text => `<span>${text}</span>`).join('')}</div></div>
+      </svg><div id="overview-trend-tooltip" class="design-chart-tooltip overview-chart-tooltip" role="tooltip" hidden></div>
+      <div class="overview-axis-x" aria-hidden="true">${labels.map(text => `<span>${text}</span>`).join('')}</div></div>
     </div>`;
   }
 
@@ -288,7 +294,7 @@
           ? '<span><i></i>已核算利润（CNY）</span><span><i class="overview-key-incomplete"></i>有待核算</span>'
           : '<span><i></i>订单</span><span><i class="overview-key-cancelled"></i>撤单</span>'}</div>
       </div>
-      ${empty ? `<div class="overview-chart-empty">${E(empty)}</div>` : chartMarkup(series, mode, label)}
+      ${empty ? `<div class="overview-chart-empty">${E(empty)}</div>` : chartMarkup(series, mode, label, range)}
       ${period && section?.phase === 'error' ? `<p class="overview-section-note overview-warning">${E(sectionStatus(section))}</p>` : ''}
       ${activity?.current ? `<p class="overview-insight">${A.icon('info')}<span>${E(orderInsight(activity))}</span></p>` : ''}
       ${details ? `<details class="overview-daily" data-overview-details${detailsOpen ? ' open' : ''}>
@@ -436,6 +442,36 @@
       </div></section>`;
   }
 
+  function renderToolbar(finance, activity, section, range) {
+    const title = activity ? windowText(activity.current) : finance ? '统计区间' : '库存快照';
+    const compactTitle = activity
+      ? `${dateFormatter.format(activity.current.start)}–${dateFormatter.format(activity.current.end)}` : title;
+    const status = sectionStatus(section);
+    const shortStatus = section?.phase === 'error' ? '读取失败' :
+      section?.updated != null ? `更新于 ${hourFormatter.format(section.updated)}` : status;
+    return `<div class="overview-toolbar-container"><div class="overview-toolbar">
+      <div class="overview-period">
+        <strong>${E(title)}</strong><span class="overview-timezone">北京时间</span>
+        ${activity ? `<span class="overview-previous">对比 ${E(windowText(activity.previous))}</span>` : ''}
+        ${activity ? A.textAction('上期对比', 'overview-period', 'aria-haspopup="dialog"', 'overview-previous-compact') : ''}
+        ${A.textAction(compactTitle, 'overview-period', 'aria-label="查看统计区间与更新时间" aria-haspopup="dialog"', 'overview-period-compact')}
+      </div>
+      <div class="overview-actions">
+        ${finance ? renderControls(ranges, range, 'range', '统计时间范围') +
+          `<select id="overview-range-compact" aria-label="统计时间范围">${ranges.map(([id, label]) =>
+            `<option value="${id}"${id === range ? ' selected' : ''}>${label}</option>`).join('')}</select>` : ''}
+        ${business ? `<button type="button" class="button overview-toolbar-action${section?.phase === 'error' ? ' overview-warning' : ''}"
+          data-action="overview-refresh" aria-label="刷新数据" aria-describedby="overview-toolbar-status">${A.icon('refresh')}<span>刷新数据</span></button>` : ''}
+        <span class="overview-design-label${section?.phase === 'error' ? ' overview-warning' : ''}" title="${E(status)}">
+          <span id="overview-toolbar-status" class="overview-status-announcement" role="status">${E(status)}</span>
+          <span class="overview-status-full" aria-hidden="true">${E(status)}</span>
+          <span class="overview-status-short" aria-hidden="true">${E(shortStatus)}</span>
+        </span>
+        <button type="button" class="button overview-toolbar-action" data-action="overview-methodology"
+          aria-label="指标口径" aria-haspopup="dialog">${A.icon('info')}<span>指标口径</span></button>
+      </div></div></div>`;
+  }
+
   function render() {
     const key = overviewKey();
     const sections = business?.queries.peek('overview', key)?.data || {};
@@ -446,14 +482,7 @@
     const inventory = renderInventory(sections.inventory);
     return A.header('网站总览', '查看经营指标、变化来源和当前需要处理的事项。') +
       `<div class="website-overview design-async-region"><div data-overview-progress role="status" hidden></div>
-        <div class="overview-toolbar"><div class="overview-period">
-          <div class="overview-period-current"><strong>${activity ? E(windowText(activity.current)) : key.finance ? '统计区间' : '库存快照'}</strong><span class="overview-timezone">北京时间</span></div>
-          ${activity ? `<span>对比 ${E(windowText(activity.previous))}</span>` : ''}
-        </div><div class="overview-actions"><div class="toolbar-right">
-          ${key.finance ? renderControls(ranges, range, 'range', '统计时间范围') : ''}
-          ${business ? A.button('刷新数据', 'overview-refresh') : ''}
-          ${A.button('指标口径', 'overview-methodology', '', 'info')}
-        </div><span class="overview-design-label" role="status">${E(sectionStatus(key.finance ? sections.commerce : sections.inventory))}</span></div></div>
+        ${renderToolbar(key.finance, activity, key.finance ? sections.commerce : sections.inventory, range)}
         ${key.finance ? `${renderMetrics(activity, earnings, sections.commerce, profit)}
           <div class="overview-columns">${renderTrend(activity, earnings, chart === 'profit' ? profit : sections.commerce, range, chart, detailsOpen)}${renderTasks(sections, key.rechargeRequests)}</div>
           <div class="overview-business"><div class="overview-business-grid">${renderProducts(activity, earnings, profit)}${renderOrderProgress(activity, earnings, sections.commerce, profit)}</div></div>
@@ -475,6 +504,31 @@
       A.button('关闭', 'drawer-close'));
   }
 
+  function openPeriod() {
+    const key = overviewKey();
+    const sections = business?.queries.peek('overview', key)?.data || {};
+    const range = A.state.drafts.get(draftKey)?.range || 'week';
+    const activity = sections.commerce?.data?.ranges?.[range];
+    const section = key.finance ? sections.commerce : sections.inventory;
+    const items = [
+      ['时区', '北京时间'],
+      ...(key.finance ? [['本期', windowText(activity?.current) || '未取得'],
+        ['上期', windowText(activity?.previous) || '未取得']] : []),
+      ['数据状态', sectionStatus(section)]
+    ];
+    A.openDrawer(key.finance ? '统计区间' : '库存快照', '',
+      `<div class="property-list">${items.map(([label, value]) =>
+        `<div class="property-row"><span>${label}</span><strong>${E(value)}</strong></div>`).join('')}</div>`,
+      A.button('关闭', 'drawer-close'));
+  }
+
+  function updateFilter(field, value) {
+    const items = field === 'range' ? ranges : chartModes;
+    if (!items.some(([id]) => id === value)) return;
+    A.state.drafts.set(draftKey, { ...A.state.drafts.get(draftKey), [field]: value });
+    A.render();
+  }
+
   function onClick(action, node) {
     if (action === 'overview-refresh') {
       void A.withActionFeedback(node, () => refreshOverview({ refresh: true }),
@@ -483,14 +537,13 @@
     }
     if (action === 'overview-range' || action === 'overview-chart') {
       const field = action === 'overview-range' ? 'range' : 'chart';
-      const items = field === 'range' ? ranges : chartModes;
       const value = node.dataset.value;
-      if (items.some(([id]) => id === value)) {
-        const draft = A.state.drafts.get(draftKey);
-        A.state.drafts.set(draftKey, { ...draft, [field]: value });
-        A.render();
-        A.$(`[data-action="${action}"][data-value="${value}"]`)?.focus({ preventScroll: true });
-      }
+      updateFilter(field, value);
+      A.$(`[data-action="${action}"][data-value="${value}"]`)?.focus({ preventScroll: true });
+      return true;
+    }
+    if (action === 'overview-period') {
+      openPeriod();
       return true;
     }
     if (action === 'overview-methodology') {
@@ -503,6 +556,12 @@
   A.modules.overview = { refresh: refreshOverview };
   window.IDDesignModules.push({
     id: 'overview', matches: route => route === 'overview', render, onClick,
+    onChange(node) {
+      if (node.id !== 'overview-range-compact') return false;
+      updateFilter('range', node.value);
+      A.$('#overview-range-compact')?.focus({ preventScroll: true });
+      return true;
+    },
     afterRender({ routeChanged } = {}) {
       if (refreshing) bindOverviewRead();
       const details = A.$('#main [data-overview-details]');

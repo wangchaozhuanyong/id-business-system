@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { defaultSubscriptionSort, firstRecordTime, sortByRecordTime } from '../frontend/list-order.mjs';
 import {
   orderOpeningConfirmed, subscriptionChainRoot, validOrderEmail, validOrderXHandle,
-  subscriptionPeriodState, subscriptionStateLabels, subscriptionTime as instant
+  rechargeRenewalExpiryPending, subscriptionDuration, subscriptionPeriodState, subscriptionStateLabels, subscriptionTime as instant
 } from '../frontend/order-opening.mjs';
 import { accountMarkedDead, releasedAccountOrders } from './account-lifecycle.mjs';
 import { isClaudeHistoricalSale } from './claude-history-intake.mjs';
@@ -26,6 +26,7 @@ const emailKey = value => text(value).toLowerCase();
 const family = product => ['Claude Pro', 'Claude Max'].includes(product) ? 'Claude' : product;
 const stockType = product => ({ GPT: 'gpt', Claude: 'claude', Gemini: 'gemini', Grok: 'grok' })[product];
 const manager = actor => Boolean(actor?.id && ['admin', 'super'].includes(actor.role));
+const contactChannels = ['phone', 'wechat', 'qq', 'whatsapp', 'telegram'];
 const failure = (status, message) => Object.assign(new Error(message), { status });
 const digest = value => createHash('sha256').update(value).digest('base64url');
 
@@ -158,6 +159,9 @@ function buildRecords(snapshots, now) {
     const historicalSale = isClaudeHistoricalSale(order, match.account);
     const ended = order.subscriptionEnded === true || Boolean(released);
     const customer = customersById.get(order.customerId);
+    const contacts = Object.fromEntries(contactChannels.map(channel => [
+      channel, text(customer?.[channel]) || text(order[channel === 'phone' ? 'customerPhone' : channel])
+    ]).filter(([, value]) => value));
     const nextCard = profiles.renewalCards?.[renewalCardKey(id, seriesFor(order))];
     const tail = /^\d{4}(?:\d{2})?$/.test(order.paymentId) ? order.paymentId.slice(-4) : '';
     const record = {
@@ -167,7 +171,7 @@ function buildRecords(snapshots, now) {
       email: validOrderEmail(order.email) ? text(order.email) : '', series: seriesFor(order),
       plan: text(order.plan), start: text(order.start), expiry: text(order.expiry),
       created: text(order.createdAt), customerId: text(order.customerId), account: match.account,
-      customerName: text(customer?.name || order.customerName), wechat: text(customer?.wechat || order.wechat),
+      customerName: text(customer?.name || order.customerName), wechat: text(customer?.wechat || order.wechat), contacts,
       payment: text(order.payment), appleIdId: text(order.appleIdId),
       last4: order.payment === '银行卡' ? nextCard?.last4 || tail : '',
       hasCard: order.payment === '银行卡' && Boolean(nextCard || order.cardId || order.proCardNumber || tail),
@@ -175,7 +179,8 @@ function buildRecords(snapshots, now) {
       historicalSale,
       healthId: health?.id, dead: confirmed && accountMarkedDead(health), healthChangedAt: text(health?.healthChangedAt),
       missingAssociation, missingCustomer, accountConflict: Boolean(match.conflict || ids.get(order.id) !== 1),
-      confirmed, ended, cancelled: order.cancelled === true || ['cancelled', '已撤单'].includes(order.status),
+      confirmed, ended, renewalExpiryPending: rechargeRenewalExpiryPending(order),
+      cancelled: order.cancelled === true || ['cancelled', '已撤单'].includes(order.status),
       failed: order.entitlementStatus === 'failed' || ['failed', '失败'].includes(order.status),
       orderOwner: text(order.owner) ||
         (order.createdById && (order.ownerId || order.rechargeOwnerId || order.createdById) === order.createdById ? text(order.createdBy) : ''),
@@ -212,6 +217,7 @@ function orderTime(record) {
 
 function currentSeriesRecord(records) {
   const [latest, ...earlier] = records;
+  if (latest.renewalExpiryPending && !latest.missingCustomer && !latest.ended && !latest.cancelled) return latest;
   if (!latest.missingCustomer && !['pending', 'failed', 'scheduled', 'opened'].includes(latest.status))
     return latest;
   for (const record of earlier) {
@@ -229,7 +235,8 @@ function publicRecord(record, now) {
     confirmed: record.confirmed, missingAssociation: Boolean(record.missingAssociation),
     customerName: record.customerName || '', wechat: record.wechat || '',
     payment: record.payment || '', last4: record.last4 || '', hasCard: Boolean(record.hasCard),
-    appleIdId: record.appleIdId || ''
+    appleIdId: record.appleIdId || '',
+    ...(record.renewalExpiryPending && { renewalExpiryPending: true })
   };
 }
 
@@ -326,6 +333,7 @@ export function projectSubscriptions(snapshots, now = Date.now()) {
       ownerName: ownerValid ? text(owner.ownerName) : scope === 'unlinked' ? primary.orderOwner : '',
       operatorName: primary.operatorName, accountId: account?.id || '', customerId: primary.customerId,
       customerName: primary.customerName || '', wechat: primary.wechat || '',
+      contacts: conflict ? {} : primary.contacts || {},
       conflict: Boolean(conflict), missingAssociation, ownerEligible,
       series: selected.map(record => ({ key: record.series, ...publicRecord(record, now),
         ...(dead && { status: 'dead', remainingDays: 0 }) })),
@@ -537,7 +545,7 @@ export function createSubscriptionHandler({ store, publicOrigin, readOwners = ()
             [status, accounts.filter(row => hasStatus(row, status)).length]));
           const query = text(body.query).toLowerCase();
           const matching = productRows.filter(row => (!body.status || hasStatus(row, body.status)) &&
-            (!query || [row.account, row.registrationEmail, row.ownerName, row.operatorName, row.customerName, row.wechat,
+            (!query || [row.account, row.registrationEmail, row.ownerName, row.operatorName, row.customerName, ...Object.values(row.contacts),
               ...row.series.map(series => series.last4),
               ...row.history.map(record => record.orderNo)].some(value => text(value).toLowerCase().includes(query))));
           const sort = body.sort || defaultSubscriptionSort(scope);
@@ -558,7 +566,7 @@ export function createSubscriptionHandler({ store, publicOrigin, readOwners = ()
           const suffixes = existing.renewalSuffixes || {};
           if (body.suffix === undefined) return { suffix: suffixes[actor.id] || '' };
           if (typeof body.suffix !== 'string' || body.suffix.length > 1000)
-            throw failure(400, '续费后缀最多 1000 个字');
+            throw failure(400, '续费提醒话术最多 1000 个字');
           const suffix = body.suffix.trim();
           save({ ...existing, renewalSuffixes: { ...suffixes, [actor.id]: suffix } }, 'subscription_renewal_suffix', actor.id);
           return { suffix };
@@ -572,17 +580,14 @@ export function createSubscriptionHandler({ store, publicOrigin, readOwners = ()
           const format = value => Number.isFinite(instant(value)) ? new Intl.DateTimeFormat('sv-SE', {
             timeZone: 'Asia/Shanghai', dateStyle: 'short', timeStyle: 'short'
           }).format(instant(value)) : '';
-          const left = Number.isFinite(instant(series.expiry)) ? instant(series.expiry) - now : NaN;
-          const hours = Math.floor(left / 3_600_000);
-          const duration = Number.isNaN(left) ? '' : left <= 0 ? '已到期' : hours < 1 ? '不足 1 小时' :
-            [hours >= 24 && Math.floor(hours / 24) + ' 天', hours % 24 && hours % 24 + ' 小时'].filter(Boolean).join(' ');
-          const lines = [['客户', series.customerName], ['微信', series.wechat], ['账号', row.account],
+          const duration = subscriptionDuration(series.expiry, now);
+          const lines = [['账号', row.account],
             ['订阅套餐', series.plan], ['订阅时间', format(series.start)], ['到期时间', format(series.expiry)],
             ['到期提醒', duration]].filter(([, value]) => value).map(([label, value]) => label + '：' + value);
           const suffix = snapshots.subscriptions.data?.renewalSuffixes?.[actor.id];
           if (suffix) lines.push(suffix);
           audit('contact_copy', [row.id]);
-          return { text: lines.join('\n'), customerName: series.customerName };
+          return { text: lines.join('\n') };
         }
         if (typeof body.id !== 'string' || typeof body.revision !== 'string' || body.revision !== revision)
           throw failure(409, '订阅资料已变化，请刷新后重新核对');

@@ -21,6 +21,10 @@ async function setup(t) {
   const fixture = JSON.parse(await readFile(new URL('../docs/audits/2026-11-06-design-review/visual-fixtures.json', import.meta.url)));
   const context = await browser.newContext({ viewport: { width: 1440, height: 1100 } });
   const mock = await interceptDesign(context, { localFixtures: fixture, actor, skipRechargeAssets: true });
+  await context.addInitScript(() => document.addEventListener('DOMContentLoaded', () => {
+    window.qaOrderSounds = [];
+    window.IDInteractionSound = { play: kind => window.qaOrderSounds.push(kind) };
+  }, { once: true }));
   const writes = [];
   let cards = [{ id: 'recharge:7', last4: '4242', active: true, usageCount: 1, status: '正常' }];
   await context.route('**/api/local/order-cards', route => route.fulfill({ json: { items: cards } }));
@@ -39,6 +43,7 @@ async function setup(t) {
   page.on('pageerror', error => errors.push(error.message));
   const submit = async (scope, completed = false, confirmCorrection = false) => {
     const before = writes.length;
+    const soundCount = await page.evaluate(() => window.qaOrderSounds.length);
     const url = page.url();
     const existing = await scope.locator('#commerce-id').inputValue();
     await scope.locator('button[form="commerce-order-form"][type="submit"]').click();
@@ -47,10 +52,12 @@ async function setup(t) {
       await dialog.getByText('确认更正独立订单', { exact: true }).waitFor();
       await dialog.locator('[data-action="confirm-accept"]').click();
     } else assert.equal(await dialog.count(), 0);
+    await page.waitForFunction(start => window.qaOrderSounds.length > start, soundCount);
     await page.locator('#toast').filter({ hasText: existing ? '订单修改成功' : '订单提交成功' }).waitFor();
     assert.equal(page.url(), url);
     await page.locator('#drawer[open]').waitFor({ state: 'hidden' });
     assert.equal(writes.length, before + 1);
+    assert.deepEqual(await page.evaluate(start => window.qaOrderSounds.slice(start), soundCount), ['success'], url);
     if (completed) {
       const [saved] = writes.at(-1).data.orders;
       assert.equal(Number(saved.paidAmount), 20);
@@ -85,6 +92,7 @@ test('所有录单入口默认手填并可编辑卡号，卡序列号选填，�
       await main.locator('button[form="commerce-order-form"][type="submit"]').click();
       assert.equal(await page.locator('#confirm-dialog[open]').count(), 0);
       assert.equal(writes.length, 0);
+      assert.deepEqual(await page.evaluate(() => window.qaOrderSounds), []);
       assert.ok((await form.locator('[data-commerce-field="proCardNumber"]').textContent()).includes('12 至 19 位'));
       await card.fill(number);
       await form.locator('#commerce-proMaterialMode').selectOption('');
@@ -144,6 +152,81 @@ test('所有录单入口默认手填并可编辑卡号，卡序列号选填，�
     assert.deepEqual(saved.financialEvidence.filter(row => row.kind === 'payment'),
       original.financialEvidence.filter(row => row.kind === 'payment'));
   }
+  assert.deepEqual(errors, []);
+  assert.deepEqual(mock.external, []);
+});
+
+test('租户银行卡锁定真实卡，新单和更正均保存固定类型', { timeout: 30_000 }, async t => {
+  const { page, fixture, writes, errors, mock, submit } = await setup(t);
+  const customer = fixture.commerce.data.customers.find(row => row.active !== false);
+  const tenant = { id: 'tenant-real-type', name: '合成租户', phone: '00000000', active: true };
+  const cardId = 'tenant:real-type-test';
+  const realType = { id: 'existing-real-type', name: '真实卡', active: true };
+  const customType = { id: 'custom-test-type', name: '合成类型', active: true };
+  fixture.commerce.data.orders = [];
+  fixture.commerce.data.tenants = [tenant];
+  fixture['card-types'] = { version: 1, items: [realType, customType], assignments: { [cardId]: customType.id } };
+  fixture['tenant-cards'] = { version: 1, items: [{ id: cardId, tenantId: tenant.id, last4: '4242', active: true }] };
+  await page.route('**/api/local/tenant-cards*', route => {
+    if (route.request().method() === 'POST' && route.request().postDataJSON().action === 'reveal')
+      return route.fulfill({ json: { number } });
+    return route.fallback();
+  });
+  await page.goto(origin + '/#/workspace/order/claude');
+  const main = page.locator('#main');
+  const form = main.locator('#commerce-order-form');
+  const field = name => form.locator('#commerce-' + name);
+  const choose = async (name, id) => {
+    await field(name + '-picker').click();
+    await page.locator(`#commerce-${name}-options [data-value="${id}"]`).click();
+  };
+  await field('plan').selectOption('Max 5x');
+  await choose('customerId', customer.id);
+  await field('email').fill('tenant-type@example.test');
+  await field('cardTypeId').selectOption(customType.id);
+  await field('proMaterialMode').selectOption('tenant_card');
+  assert.equal(await field('cardTypeId').inputValue(), realType.id);
+  assert.equal(await field('cardTypeId').isDisabled(), true);
+  await page.goto(origin + '/#/customers/new');
+  await page.goto(origin + '/#/workspace/order/claude');
+  assert.equal(await field('cardTypeId').inputValue(), realType.id);
+  await field('proMaterialMode').selectOption('manual_card');
+  assert.equal(await field('cardTypeId').isDisabled(), false);
+  assert.equal(await field('cardTypeId').inputValue(), customType.id);
+  await field('proMaterialMode').selectOption('tenant_card');
+  await choose('tenantId', tenant.id);
+  await field('cardId').locator(`option[value="${cardId}"]`).waitFor({ state: 'attached' });
+  await choose('cardId', cardId);
+  await field('paidAmount').fill('20');
+  await field('saleAmount').fill('100');
+  await submit(main, true);
+  const saved = writes.at(-1).data.orders[0];
+  assert.equal(saved.cardId, cardId);
+  assert.equal(saved.cardTypeId, realType.id);
+
+  // Read a historical order whose original classification predates the lock.
+  fixture.commerce = { ...fixture.commerce, data: { ...fixture.commerce.data, orders: [
+    { ...saved, cardTypeId: customType.id, cardTypeName: customType.name }
+  ] } };
+  await page.goto(origin + '/#/orders/claude');
+  await page.reload();
+  await page.locator(`[data-action="commerce-order-edit"][data-id="${saved.id}"]`).click();
+  const drawer = page.locator('#drawer[open]');
+  const editType = drawer.locator('#commerce-cardTypeId');
+  await editType.locator(`option:checked[value="${realType.id}"]`).waitFor({ state: 'attached' });
+  assert.equal(await editType.isDisabled(), true);
+  await drawer.locator('#commerce-correctionReason').fill('核对租户银行卡类型');
+  await submit(drawer);
+  const corrected = writes.at(-1).data.orders.find(row => row.id === saved.id);
+  assert.equal(corrected.cardTypeId, realType.id);
+  assert.equal(corrected.corrections.at(-1).previous.cardTypeId, customType.id);
+
+  await page.goto(origin + '/#/settings/payment-countries');
+  await page.getByRole('tab', { name: '银行卡类型', exact: true }).click();
+  const fixed = main.locator(`[data-table="commerce-card-types"] tr[data-row-id="${realType.id}"]`);
+  await fixed.getByText('固定启用', { exact: true }).waitFor();
+  assert.equal(await fixed.locator('[data-action="commerce-card-type-edit"], [data-action="commerce-card-type-remove"]').count(), 0);
+  await main.locator(`[data-action="commerce-card-type-edit"][data-id="${customType.id}"]`).waitFor();
   assert.deepEqual(errors, []);
   assert.deepEqual(mock.external, []);
 });

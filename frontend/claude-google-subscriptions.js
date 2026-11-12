@@ -11,6 +11,7 @@
   const settingsKey = tableId + ':copy-settings';
   const listScopes = ['commerce', 'inventory', 'tools/mailbox-pool', 'operators'];
   const day = 86_400_000;
+  const hour = 3_600_000;
   const suffixLimit = 2000;
   const codeStates = {
     active: '有效',
@@ -75,7 +76,12 @@
   function remainingDays(row) {
     const record = latest(row);
     if (!record?.queryCode) return '—';
-    const { remainingDays } = codeTiming(record);
+    const { remainingDays, codeStatus, difference } = codeTiming(record);
+    if (codeStatus === 'expired') {
+      const expiry = Date.parse(record.expiresAt);
+      const duration = window.IDOrderOpening.expiredDuration(expiry, expiry - difference);
+      return `<span title="${esc(displayDate(record.expiresAt))}">${duration || '已到期（时间待核对）'}</span>`;
+    }
     return Number.isInteger(remainingDays) && remainingDays >= 0
       ? `<span title="${esc(displayDate(record.expiresAt))}">${remainingDays} 天</span>` : '—';
   }
@@ -85,8 +91,9 @@
     if (!snapshot) return;
     let next = Infinity;
     for (const record of snapshot.rows.values()) {
-      const { difference } = codeTiming(record);
+      const { difference, codeStatus } = codeTiming(record);
       if (difference > 0) next = Math.min(next, difference - (Math.ceil(difference / day) - 1) * day);
+      if (codeStatus === 'expired' && difference <= 0) next = Math.min(next, hour - (-difference % hour));
     }
     if (!Number.isFinite(next)) return;
     expiryTimer = setTimeout(() => {

@@ -11,6 +11,26 @@ export function subscriptionTime(value) {
   return Date.parse(/(?:Z|[+-]\d{2}:?\d{2})$/i.test(input) ? input : input + '+08:00');
 }
 
+function hoursText(hours) {
+  const days = Math.floor(hours / 24), rest = hours % 24;
+  return [days && `${days} 天`, rest && `${rest} 小时`].filter(Boolean).join(' ');
+}
+
+export function expiredDuration(value, now) {
+  const expiry = typeof value === 'number' ? value : subscriptionTime(value);
+  if (!Number.isFinite(expiry) || !Number.isFinite(now) || expiry > now) return '';
+  const elapsed = hoursText(Math.floor((now - expiry) / 3_600_000));
+  return elapsed ? `已到期 ${elapsed}` : '已到期不足 1 小时';
+}
+
+export function subscriptionDuration(value, now) {
+  const expiry = typeof value === 'number' ? value : subscriptionTime(value);
+  if (!Number.isFinite(expiry) || !Number.isFinite(now)) return '';
+  if (expiry <= now) return expiredDuration(expiry, now);
+  const remaining = hoursText(Math.floor((expiry - now) / 3_600_000));
+  return remaining ? `剩余 ${remaining}` : '剩余不足 1 小时';
+}
+
 export function orderTerminationTime(order, now = Date.now()) {
   if (order.subscriptionEnded !== true) return NaN;
   const end = subscriptionTime(order.subscriptionEndedAt);
@@ -26,6 +46,10 @@ export const rechargeOrderOwner = order =>
     .find(value => typeof value === 'string' && value.trim())?.trim() || '';
 
 export const automaticGptOrder = order => order?.product === 'GPT' && order.source === '线上代充' && Boolean(order.taskId);
+
+export const rechargeRenewalExpiryPending = order => automaticGptOrder(order) && Boolean(order.previousOrderId) &&
+  order.entitlementStatus === 'active' && !order.cancelled && !order.subscriptionEnded &&
+  !order.expiry && Number.isFinite(subscriptionTime(order.rechargeCompletedAt));
 
 export function rechargeOrderCompletion(order, customer) {
   const ownerId = rechargeOrderOwner(order);
@@ -153,5 +177,5 @@ if (typeof window !== 'undefined') window.IDOrderOpening = Object.freeze({
   orderOpeningConfirmed, orderTerminationTime, orderNeedsAccount, manualOrderDetailsMissing,
   validOrderEmail, validOrderXHandle, subscriptionPeriodState, subscriptionStateLabels, subscriptionTime,
   matchOrderCustomer, orderCustomerCreateAction, orderFieldChanged, subscriptionChainRoot,
-  automaticGptOrder, rechargeOrderOwner, rechargeOrderCompletion
+  automaticGptOrder, rechargeOrderOwner, rechargeOrderCompletion, rechargeRenewalExpiryPending, expiredDuration, subscriptionDuration
 });

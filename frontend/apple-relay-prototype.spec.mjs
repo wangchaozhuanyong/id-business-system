@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import * as listOrder from './list-order.mjs';
+import * as orderOpening from './order-opening.mjs';
 import { webcrypto } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
@@ -241,7 +242,7 @@ function runtime(store, { relayConfigured = true } = {}) {
   };
   const modules = [];
   runInNewContext(source, {
-    window: { IDDesignAPI: api, IDListOrder: listOrder, IDDesignModules: modules, IDLocalData: store && {
+    window: { IDDesignAPI: api, IDListOrder: listOrder, IDOrderOpening: orderOpening, IDDesignModules: modules, IDLocalData: store && {
       async relay(action, input) {
         if (action === 'status') return {
           configured: relayConfigured,

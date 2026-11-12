@@ -159,7 +159,7 @@ test('GPT 列表完整显示联系、交易、周期和备注字段，并绑定�
   const profit = table.columns.find(column => column.id === 'profit');
   assert.equal(profit.render({ ...table.rows[0], paidConfirmed: false }), '—');
   assert.match(expiry.render(table.rows[0]), /剩余 .*天/);
-  assert.match(expiry.render({ entitlementStatus: 'active', start: '2026-09-01T10:30', expiry: '2026-10-01T10:30' }), /已过期/);
+  assert.match(expiry.render({ entitlementStatus: 'active', start: '2026-09-01T10:30', expiry: '2026-10-01T10:30' }), /已到期 33 天/);
   assert.match(expiry.render({ start: '2026-09-01T10:30', expiry: '2026-10-01T10:30' }), /待确认/);
   for (const id of ['createdAt', 'notes']) {
     const column = table.columns.find((entry) => entry.id === id);

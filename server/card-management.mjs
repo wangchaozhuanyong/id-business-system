@@ -24,7 +24,27 @@ const initialTypes = [
   ['vccwc999', 'vccwc999'], ['wise-pan', 'wise潘'], ['wise-jia', 'wise佳'], ['xiaohong-feng', '小红卡峰']
 ].map(([key, name]) => ({ id: 'card-type-' + key, name, active: true }));
 
-const classify = data => data ?? { items: initialTypes, assignments: {} };
+const realCardType = Object.freeze({ id: 'card-type-real', name: '真实卡', active: true });
+
+function classify(data) {
+  const { items, assignments } = data ?? { items: initialTypes, assignments: {} };
+  const existing = items.find(row => row.id === realCardType.id) ||
+    items.find(row => row.name === realCardType.name && row.active) ||
+    items.find(row => row.name === realCardType.name);
+  if (existing?.name === realCardType.name && existing.active) return data;
+  const fixed = { ...realCardType, id: existing?.id || realCardType.id };
+  return { items: existing ? items.map(row => row === existing ? fixed : row) : [...items, fixed], assignments };
+}
+
+function tenantCardType(types) {
+  return types.items.find(row => row.name === realCardType.name && row.active);
+}
+
+function assignedCardType(types, cardId) {
+  return cardId?.startsWith('tenant:') ? tenantCardType(types) :
+    types.items.find(row => row.id === types.assignments[cardId]);
+}
+
 const recognizedCard = id => typeof id === 'string' &&
   /^(?:recharge:[1-9]\d*|tenant:[a-zA-Z0-9-]{1,120}|orbitcard:[1-9]\d*)$/.test(id);
 const error = (status, message) => Object.assign(new Error(message), { status });
@@ -64,8 +84,13 @@ export async function preserveReferencedOrderCard(store, client, cardId, actor) 
   }, { action: '保留历史订单银行卡资料', actor, targetId: cardId });
 }
 
-export function cardTypeSnapshot(data, { cardId, cardTypeId, prior }) {
-  const { items, assignments } = classify(data);
+export function cardTypeSnapshot(data, { cardId, cardTypeId, prior, tenantCard = false }) {
+  const types = classify(data);
+  if (tenantCard) {
+    const { id, name } = tenantCardType(types);
+    return { id, name };
+  }
+  const { items, assignments } = types;
   const sameCard = (prior?.cardId || '') === (cardId || '');
   const priorId = prior?.cardTypeId || '';
   if (sameCard && prior && (cardTypeId === undefined || cardTypeId === priorId))
@@ -165,7 +190,7 @@ async function readCommand(request, maximumBytes = 4096) {
 }
 
 function cardTypeName(data, order, id) {
-  const type = data.items.find(row => row.id === data.assignments[id]);
+  const type = assignedCardType(data, id);
   return (type?.active ? type.name : '') || order.cardTypeName || type?.name || '未设置';
 }
 
@@ -324,7 +349,7 @@ function publicFrozenCard({ id, orderId, last4, typeName, frozenAt, frozenBy, re
   return { id, orderId, last4, typeName, frozenAt, frozenBy, reason, poolState };
 }
 
-async function cardUsageView(store, client, actor, now = Date.now()) {
+async function cardUsageView(store, client, actor, now = Date.now(), includeDetails = false) {
   const commerce = store.load('commerce');
   const orders = commerce.data?.orders || [];
   const nextCards = actor && store.withSubscriptions ? store.withSubscriptions(actor, snapshots => {
@@ -396,6 +421,37 @@ async function cardUsageView(store, client, actor, now = Date.now()) {
     for (const account of accounts.values()) summary[account.product] = (summary[account.product] || 0) + 1;
     return [key, summary];
   }));
+  const materials = new Map();
+  if (includeDetails) {
+    const currentOrders = new Set(orders);
+    const currentKeys = new Set(orders.map(order => identify(order).key).filter(Boolean));
+    for (const order of observations) {
+      const { key, cardId, number } = identify(order);
+      if (!key || (!currentOrders.has(order) && currentKeys.has(key))) continue;
+      if (!materials.has(key)) materials.set(key, { numbers: new Set(), serials: new Set(), types: new Map() });
+      const item = materials.get(key);
+      if (validPan(number)) item.numbers.add(number);
+      if (typeof order.proCardSerial === 'string' && order.proCardSerial.trim()) item.serials.add(order.proCardSerial.trim());
+      const assigned = assignedCardType(types, cardId);
+      const id = (assigned?.active && assigned.id) || order.cardTypeId || assigned?.id || '';
+      const name = cardTypeName(types, order, cardId);
+      if (name !== '未设置') item.types.set(id || name, { id, name });
+    }
+  }
+  const displayMaterials = ({ key, cardId, number }) => {
+    const item = materials.get(key);
+    const assigned = assignedCardType(types, cardId);
+    const recorded = [...(item?.types.values() || [])];
+    const selected = assigned?.active ? assigned : recorded.length === 1 ? recorded[0] : null;
+    const numbers = new Set(item?.numbers);
+    if (validPan(number)) numbers.add(number);
+    return {
+      number: numbers.size === 1 ? [...numbers][0] : '',
+      typeId: selected?.id || '',
+      typeName: selected?.name || [...new Set(recorded.map(type => type.name))].join(' / ') || '未设置',
+      serials: [...(item?.serials || [])]
+    };
+  };
   const labels = new Map();
   for (const order of orders) {
     if (order.payment !== '银行卡') continue;
@@ -410,6 +466,7 @@ async function cardUsageView(store, client, actor, now = Date.now()) {
     identities.set(order.id, {
       ...actual, order, state, typeName: cardTypeName(types, order, cardId),
       view: { id: order.id, cardKey: labels.get(key) || order.id, state, last4: identity.last4, counts: counts.get(key) || {},
+        ...(includeDetails ? displayMaterials(identity) : {}),
         preferred: Boolean(preferred), hasCard: Boolean(cardId || number || identity.last4),
         canFreeze: Boolean(!preferred && !freeze && (cardId || number)) }
     });
@@ -418,7 +475,9 @@ async function cardUsageView(store, client, actor, now = Date.now()) {
     commerce, freezes, identities, usage,
     view: {
       items: [...identities.values()].map(row => row.view),
-      frozen: frozenItems.map(row => ({ ...publicFrozenCard(row), counts: counts.get(row.id) || {} }))
+      frozen: frozenItems.map(row => ({ ...publicFrozenCard(row),
+        ...(includeDetails ? { ...displayMaterials({ key: row.id }), typeName: row.typeName || '未设置' } : {}),
+        counts: counts.get(row.id) || {} }))
     }
   };
 }
@@ -478,14 +537,6 @@ async function changeCardStatus(store, client, command, actor, now) {
   return { card: publicFrozenCard(frozen) };
 }
 
-function orbitBalance(card, now) {
-  const amount = typeof card.balance === 'number' || typeof card.balance === 'string' ? String(card.balance) : '';
-  const updated = orderTime(card.balanceUpdatedAt);
-  if (!/^-?\d{1,16}(?:\.\d{1,4})?$/.test(amount) || !validCurrencyCode(card.balanceCurrency) ||
-      !Number.isFinite(updated) || updated > now) return null;
-  return { amount, currency: card.balanceCurrency, updatedAt: new Date(updated).toISOString() };
-}
-
 async function cardDetails(context, order, account) {
   const { commerce, client, types, tenantCards, archive, freezes, fingerprint, fixedFee, quotes, now } = context;
   const bank = order.payment === '银行卡';
@@ -498,7 +549,7 @@ async function cardDetails(context, order, account) {
   const card = {
     source: bank ? '未登记银行卡' : '苹果内购', typeName: bank ? cardTypeName(types, order, id) : '未设置',
     last4: bank ? tail.slice(-4) : '', status: bank ? '无卡资料' : '无需银行卡',
-    canReveal: false, estimate, balance: null, paid
+    canReveal: false, estimate, paid
   };
   let number, verifiedTail, livePoolCard, liveTenantCard, liveOrbitCard;
   const savedNumber = order.proCardNumber || archive?.cards?.[id]?.number;
@@ -549,7 +600,6 @@ async function cardDetails(context, order, account) {
         const unavailable = ['CANCELED', 'CANCELLED', 'RETIRED', 'FROZEN', 'CLOSED', 'DISABLED', 'INACTIVE'];
         const active = row.status === 'ACTIVE' && !unavailable.includes(row.providerStatus);
         card.status = active ? '可用' : '已停用';
-        card.balance = orbitBalance(row, now);
         verifiedTail = row.cardLast4;
         if (active) number = row.cardNumber;
       }
@@ -563,13 +613,11 @@ async function cardDetails(context, order, account) {
     (completeNumber && ((tail && !number.endsWith(tail)) || (foundTail && !number.endsWith(foundTail))));
   if (tailConflict) {
     card.status = '原卡资料待核对';
-    card.balance = null;
     number = undefined;
   } else {
     card.last4 ||= foundTail || (completeNumber ? number.slice(-4) : '');
     if (['已登记', '可用'].includes(card.status) && !completeNumber) {
       card.status = '完整卡号未登记';
-      if (!tail || !foundTail) card.balance = null;
     }
   }
   card.canReveal = Boolean(validPan(number) && !account.conflict && !account.released && !order.cancelled && paymentConfirmed(order));
@@ -586,7 +634,6 @@ async function cardDetails(context, order, account) {
         if (row && owner) liveTenantCard = { ...row, active: row.active && owner.active !== false };
       }
     }
-    if (!tailConflict && liveOrbitCard) card.balance ||= orbitBalance(liveOrbitCard, now);
     const freeze = !conflict && frozenOrderCard(freezes, id, fingerprint(number || savedNumber));
     const liveNumber = livePoolCard?.card_number || liveTenantCard?.number || liveOrbitCard?.cardNumber;
     card.availability = freeze ? 'frozen' : conflict || tailConflict ||
@@ -674,6 +721,8 @@ async function writeType(store, client, command, actor) {
   if (command.version !== current.version) throw error(409, '银行卡类型已更新，请刷新后重试');
   const data = structuredClone(classify(current.data));
   const item = command.action === 'add' ? undefined : data.items.find(row => row.id === command.id && row.active);
+  if (item?.name === realCardType.name && ['rename', 'remove'].includes(command.action))
+    throw error(409, '真实卡是固定启用的银行卡类型');
   let target = command.id, label, importTypes;
   switch (command.action) {
     case 'add':
@@ -704,6 +753,8 @@ async function writeType(store, client, command, actor) {
     case 'assign': {
       target = command.cardId;
       if (!recognizedCard(target) || target.startsWith('orbitcard:')) throw error(400, '请选择可管理的银行卡');
+      if (target.startsWith('tenant:') && command.typeId !== tenantCardType(data).id)
+        throw error(409, '租户银行卡固定使用真实卡类型');
       if (command.typeId !== '' && !data.items.some(row => row.id === command.typeId && row.active))
         throw error(400, '请选择有效的银行卡类型');
       const card = target.startsWith('recharge:') ? await poolCard(client, target) : tenantCard(store, target);
@@ -826,7 +877,7 @@ async function renewalCardAction(store, client, command, actor, now) {
       orderId: order.id, subscriptionId: target.row.id, version,
       customerName: target.series.customerName, account: target.row.account || target.series.orderNo,
       last4: card.last4, availability: card.status === '历史卡已删除' ? 'inactive' : card.availability, hasCard: target.series.hasCard,
-      status: card.status, estimate: card.estimate, balance: card.balance, canCopy,
+      status: card.status, estimate: card.estimate, canCopy,
       ...(canCopy && { confirmation: expires + '.' + confirmation(expires) })
     };
   });
@@ -842,7 +893,13 @@ export function createCardManagementHandler({ store, client, publicOrigin, clock
       if (request.method === 'GET') {
         if (route === cardStatusRoute) {
           const query = new URL(request.url || route, origin).searchParams;
-          if (!query.has('orderId')) return send(response, 200, (await cardUsageView(store, client, actor, clock())).view);
+          if (!query.has('orderId')) {
+            const includeDetails = query.get('includeDetails') === '1';
+            const { view } = await cardUsageView(store, client, actor, clock(), includeDetails);
+            if (includeDetails) store.auditFeature(cardTypeDocument, store.featureDocument(cardTypeDocument).version,
+              { action: '查看订阅银行卡资料', actor, targetId: 'subscription-card-list' });
+            return send(response, 200, view);
+          }
           const { order } = await readRenewalCard(store, client, {
             orderId: query.get('orderId'), ...(query.has('version') && { version: Number(query.get('version')) })
           }, actor, clock(), 'details');

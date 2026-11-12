@@ -132,7 +132,7 @@ try {
     await page.getByText('续费', { exact: true }).filter({ visible: true }).last().click();
     await settle(page);
     assert.equal(await page.locator('#commerce-appleIdId').inputValue(), id);
-    assert.equal(await page.locator('#commerce-appleStoreRegion').inputValue(), 'US');
+    assert.equal(await page.getByLabel('Id地区', { exact: true }).inputValue(), 'US');
     await page.reload();
     await page.waitForFunction(id => document.querySelector('#commerce-appleIdId')?.value === id, id);
     await page.evaluate(() => location.hash = '#/data-management/apple-ids');
@@ -159,12 +159,15 @@ try {
     await search.waitFor();
     assert.equal(await search.inputValue(), '匹配不到的合成关键词');
     await page.evaluate(() => location.hash = '#/accounts/apple-balances');
+    await main.getByRole('columnheader', { name: 'Id地区', exact: true, includeHidden: true }).waitFor({ state: 'attached' });
     await main.locator('[data-action="apple-add"]').click();
-    await drawer.locator('#inventory-appStoreRegion').waitFor();
+    await drawer.getByLabel('Id地区*', { exact: true }).waitFor();
+    assert.equal(await drawer.locator('#inventory-appStoreRegion option').first().textContent(), '请选择 Id地区');
     assert.equal(await drawer.locator('#inventory-appleOpeningBalance').inputValue(), '0.00');
     await drawer.getByRole('button', { name: '取消', exact: true }).click();
     await page.evaluate(() => location.hash = '#/settings/payment-countries');
     await main.getByRole('tab', { name: '苹果内购代付价' }).click();
+    assert.equal(await main.getByLabel('Id地区', { exact: true }).inputValue(), 'US');
     await main.locator('#commerce-paid-product').selectOption('Gemini');
     assert.equal(await main.locator('#commerce-paid-price-1').inputValue(), '20');
     assert.deepEqual(errors, []);

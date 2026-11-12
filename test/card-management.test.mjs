@@ -56,7 +56,7 @@ test('共用类型按真实卡 ID 保存，跨站和过期版本被拒，已引�
   const get = () => request(handler, 'card-types');
   const post = (body, options) => request(handler, 'card-types', { body, ...options });
   const initial = (await get()).data;
-  assert.deepEqual(initial.items.map(item => item.name), ['vccwc999', 'wise潘', 'wise佳', '小红卡峰']);
+  assert.deepEqual(initial.items.map(item => item.name), ['vccwc999', 'wise潘', 'wise佳', '小红卡峰', '真实卡']);
   const id = initial.items[1].id;
   const assign = { action: 'assign', version: 0, cardId: 'recharge:7', typeId: id };
   assert.equal((await post(assign, { requestOrigin: 'https://other.example.test' })).status, 403);
@@ -71,6 +71,44 @@ test('共用类型按真实卡 ID 保存，跨站和过期版本被拒，已引�
   assert.deepEqual(saved.items.find(item => item.id === id), { id, name: '合成分类', active: false });
   assert.equal(store.featureDocument(cardTypeDocument).version, 3);
   assert.doesNotMatch(JSON.stringify([saved, store.audit()]), /4242424242424242|"987"/);
+});
+
+test('真实卡固定启用，保留旧分类编号并锁定租户银行卡类型', async () => {
+  const custom = { id: 'card-type-custom', name: '合成卡类型', active: true };
+  const previous = { id: 'card-type-existing-real', name: '真实卡', active: false };
+  const cardId = 'tenant:sample-card';
+  const snapshot = { items: [custom, previous], assignments: { [cardId]: custom.id } };
+  let current = { version: 4, data: snapshot };
+  const store = {
+    featureDocument: () => current,
+    saveFeatureDocument(domain, version, data) {
+      assert.equal(domain, cardTypeDocument);
+      assert.equal(version, current.version);
+      return current = { version: version + 1, data };
+    }
+  };
+  const handler = createCardManagementHandler({ store, publicOrigin: origin });
+  const get = () => request(handler, 'card-types');
+  const post = body => request(handler, 'card-types', { body: { version: 4, ...body } });
+  assert.deepEqual((await get()).data.items, [custom, { ...previous, active: true }]);
+  assert.equal(current.version, 4);
+  assert.equal(previous.active, false, '读取设置不写入旧记录');
+  for (const body of [
+    { action: 'remove', id: previous.id },
+    { action: 'rename', id: previous.id, name: '改名' },
+    { action: 'add', name: '真实卡' },
+    { action: 'assign', cardId, typeId: custom.id },
+    { action: 'assign', cardId, typeId: '' }
+  ]) assert.equal((await post(body)).status, 409);
+  assert.equal(current.version, 4);
+  assert.deepEqual(cardTypeSnapshot(snapshot, {
+    cardId, cardTypeId: custom.id, prior: { cardId, cardTypeId: custom.id, cardTypeName: custom.name }, tenantCard: true
+  }), { id: previous.id, name: '真实卡' });
+  assert.deepEqual(cardTypeSnapshot(null, { cardId, tenantCard: true }), { id: 'card-type-real', name: '真实卡' });
+  assert.equal((await post({ action: 'add', name: '新合成分类' })).status, 200);
+  assert.equal(current.version, 5);
+  assert.deepEqual(current.data.items.find(row => row.id === previous.id), { ...previous, active: true });
+  assert.deepEqual(current.data.assignments, snapshot.assignments);
 });
 
 test('导入批次只给存在且未分类的卡设置类型，重复保存保留已有分类', async () => {
@@ -186,7 +224,7 @@ function renewalCardsFixture(orders, { accounts = [], tenants = [], tenantCards 
   };
 }
 
-test('续费银行卡详情分别返回原单和可信后继，保留 Orbitcard 同步余额并阻止无关订单', async () => {
+test('续费银行卡详情分别返回原单和可信后继，忽略上游余额并阻止无关订单', async () => {
   const original = {
     ...order, orderNo: 'QA-OLD', email: 'account@example.test', customerId: 'customer-a',
     accountSource: '客户自有', cardId: 'orbitcard:9', start: '2026-10-11T20:00', expiry: '2026-11-11T20:00'
@@ -222,10 +260,10 @@ test('续费银行卡详情分别返回原单和可信后继，保留 Orbitcard 
   assert.equal(found.data.order.card.canReveal, true);
   assert.deepEqual(found.data.order.card.paid, { amount: '10000', currency: 'PHP' });
   assert.equal(found.data.order.card.estimate.usd, '175.92');
-  assert.deepEqual(found.data.order.card.balance, { amount: '8.25', currency: 'USD', updatedAt: date });
+  assert.equal(Object.hasOwn(found.data.order.card, 'balance'), false);
   assert.equal(found.data.renewal.id, renewal.id);
   assert.equal(found.data.renewal.card.last4, '0002');
-  assert.equal(found.data.renewal.card.balance, null);
+  assert.equal(Object.hasOwn(found.data.renewal.card, 'balance'), false);
   assert.doesNotMatch(JSON.stringify(found.data), /4242424242424242|4000000000000002|cardCvc|card_cvc/);
   assert.ok(calls.includes('/api/admin/orbitcard/usage?page_size=100&keyword=9'));
   assert.ok(calls.every(path => !path.includes('refresh')));
@@ -281,7 +319,7 @@ test('卡池故障保留可信历史金额和卡尾，异步读取后订单变�
   assert.deepEqual(audits, []);
 });
 
-test('Orbitcard 只有核对过的尾号时仍可展示最近同步余额', async () => {
+test('Orbitcard 仅有尾号时标记完整卡号未登记且不返回余额', async () => {
   const original = { ...order, cardId: 'orbitcard:9' };
   const orbit = {
     cardId: 9, cardLast4: '4242', status: 'ACTIVE', cardNumber: '', balance: 0,
@@ -292,13 +330,13 @@ test('Orbitcard 只有核对过的尾号时仍可展示最近同步余额', asyn
   const details = () => request(handler, 'subscription-card-details', { body });
   const first = await details();
   assert.equal(first.data.order.card.status, '完整卡号未登记');
-  assert.deepEqual(first.data.order.card.balance, { amount: '0', currency: 'USD', updatedAt: date });
+  assert.equal(Object.hasOwn(first.data.order.card, 'balance'), false);
   assert.equal(first.data.order.card.canReveal, false);
   assert.equal((await request(handler, 'subscription-card-reveal', { body })).status, 404);
   orbit.cardLast4 = '9999';
   const conflict = (await details()).data.order.card;
   assert.equal(conflict.status, '原卡资料待核对');
-  assert.equal(conflict.balance, null);
+  assert.equal(Object.hasOwn(conflict, 'balance'), false);
   assert.equal(conflict.last4, '4242');
 });
 

@@ -1,6 +1,7 @@
 import { currencies } from '../modules/finance/accounting.mjs';
 import { lookupRechargeCodeOwner } from './recharge-code-requests.mjs';
 import { rechargePlanLabels, validMoney } from './order-policy.mjs';
+import { renewalAssociationIssue, renewalExpiryIssue } from './recharge-renewal.mjs';
 
 export const orderSyncRoute = '/api/local/order-sync';
 const domain = 'order-sync';
@@ -10,6 +11,7 @@ const maxChecks = 6;
 const retryAfter = 15 * 60_000;
 const readbackFailure = '本次回读未确认，可重试';
 const retryable = row => !row.excluded && row.needs?.includes(readbackFailure);
+const hasReadbackNeeds = row => row.needs?.some(issue => issue !== renewalExpiryIssue && issue !== renewalAssociationIssue);
 const fallbackRules = Object.freeze({
   currency: 'CNY', version: 1, cardIssueUsd: '0.5', cardPercent: '0.008', cardPerPaymentUsd: '0.3'
 });
@@ -19,7 +21,7 @@ const canonical = (value) => {
   return ({ chatgptplusplan: 'plus', chatgptplus: 'plus', chatgptpro100: 'pro100',
     chatgptpro200: 'pro200', chatgptpro500: 'pro500' })[compact] || compact;
 };
-const emailValid = (value) => typeof value === 'string' && value.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+const emailValid = (value) => typeof value === 'string' && value.trim().length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 const utcInstant = (value) => typeof value === 'string' && /(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? Date.parse(value) : NaN;
 const jobPattern = /^[A-Za-z0-9_-]{1,120}$/;
 const expiryFor = (start) => {
@@ -72,6 +74,8 @@ export function rechargeOrderEvidence(task, {
   const plan = conflict ? '' : Object.hasOwn(rechargePlanLabels, evidencePlan || codeCanonical)
     ? rechargePlanLabels[evidencePlan || codeCanonical] : '';
   const email = provider?.email || bill?.email || orbit?.accountEmail;
+  const verifiedEmails = new Set([provider?.email, bill?.email, orbit?.accountEmail]
+    .filter(emailValid).map(value => value.trim().toLowerCase()));
   const tails = [...new Set([task.cardLast4, provider?.tail, bill?.card_last4, orbit?.cardLast4].filter(Boolean))];
   const tail = tails.length === 1 && /^\d{4}$/.test(tails[0]) ? tails[0] : '';
   const rawPan = typeof bill?.card_number === 'string' ? bill.card_number : '';
@@ -106,7 +110,8 @@ export function rechargeOrderEvidence(task, {
     paidAmount: provider?.paidAmount || '', paidCurrency: provider?.paidCurrency || '',
     paymentId: tail, cardId, employeeId: owner?.employeeId || '',
     ...(/^\d{12,19}$/.test(savedNumber || '') && tail && savedNumber.endsWith(tail) && { proCardNumber: savedNumber }),
-    firstUse, needs
+    firstUse, needs,
+    codeRenewal: Boolean(code && (bill || provider) && emailValid(email) && verifiedEmails.size === 1 && plan && start)
   };
 }
 
@@ -179,11 +184,11 @@ export function createRechargeOrderSync({ store, client, publicOrigin, quoteServ
     if (apply && !selected) saved = store.rememberRechargeSessions([...jobs], nextOffset);
     const prior = new Map(saved.rows.map((row) => [row.jobKey, row]));
     if (!selected) {
-      for (const row of saved.rows) if (row.needs?.length && !row.excluded) jobs.add(row.jobKey);
+      for (const row of saved.rows) if (hasReadbackNeeds(row) && !row.excluded) jobs.add(row.jobKey);
     }
     const candidates = [...jobs].filter((id) => {
       const row = prior.get(id);
-      return !row?.excluded && !(row?.orderNo && !row.needs?.length) &&
+      return !row?.excluded && !(row?.orderNo && !hasReadbackNeeds(row)) &&
         (selected || !row?.checkedAt || clock() - row.checkedAt >= retryAfter);
     })
       .sort((a, b) => (prior.get(a)?.checkedAt || 0) - (prior.get(b)?.checkedAt || 0));
@@ -244,7 +249,8 @@ export function createRechargeOrderSync({ store, client, publicOrigin, quoteServ
           if (!order.fxSnapshot) evidence.needs.push('订单汇率尚未取得');
         }
         result = { jobKey, needs: evidence.needs, checkedAt };
-        if (apply) result = store.applyRechargeOrder({ since: saved.since, row: result, order, firstUse: evidence.firstUse });
+        if (apply) result = store.applyRechargeOrder({ since: saved.since, row: result, order,
+          firstUse: evidence.firstUse, codeRenewal: evidence.codeRenewal });
       } catch (error) {
         result = { jobKey, checkedAt, needs: [committed && error.upstreamStatus === 404
           ? '原代充任务已移除，请人工核对' : readbackFailure] };
@@ -315,7 +321,7 @@ export function createRechargeOrderSync({ store, client, publicOrigin, quoteServ
       return Math.floor(current.data.since / 1000);
     },
     pendingJobs: () => (store.featureDocument(domain).data?.rows || [])
-      .filter(row => !row.excluded && (!row.orderNo || row.needs?.length)).map(row => row.jobKey),
+      .filter(row => !row.excluded && (!row.orderNo || hasReadbackNeeds(row))).map(row => row.jobKey),
     async runCommitted(command) {
       const result = await run({ ...command, committed: true });
       if (result.rows.some(row => row.needs?.includes(readbackFailure))) throw new Error('committed_readback_unavailable');

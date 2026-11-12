@@ -114,7 +114,8 @@
     if (expiresAt === null) return '长期有效';
     const time = timestamp(expiresAt);
     if (!Number.isFinite(time)) return '—';
-    return `${Math.max(0, Math.ceil((time - Date.now()) / 86400000))} 天`;
+    const at = Date.now();
+    return window.IDOrderOpening.expiredDuration(time, at) || `${Math.ceil((time - at) / 86400000)} 天`;
   }
   function expiry(days) {
     const date = new Date(timestamp(now()) + Number(days) * 86400000);
