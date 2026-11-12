@@ -4,6 +4,40 @@ import { readFile, mkdir } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { interceptDesign, origin } from './helpers/offline-design.mjs';
 
+test('隐藏邮箱的未登记计数、筛选与显示一致，健康状态独立', { timeout: 20_000 }, async t => {
+  const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const fixture = JSON.parse(await readFile(new URL('../docs/audits/2026-11-06-design-review/visual-fixtures.json', import.meta.url)));
+  const parent = fixture.inventory.data.appleRelay.parents[0];
+  const base = { type: 'relay', relayStatus: 'ACTIVE', parentMailboxId: parent.id };
+  fixture.inventory.data.mailboxes = [
+    { ...base, id: 'alias-unknown', email: 'unknown@example.test', status: '正常' },
+    { ...base, id: 'alias-available', email: 'available@example.test', status: '正常', inventoryState: 'available' },
+    { ...base, id: 'alias-used', email: 'used@example.test', status: '封控中', inventoryState: 'used' }
+  ];
+  const traffic = await interceptDesign(context, { localFixtures: fixture, skipRechargeAssets: true });
+  const page = await context.newPage();
+  page.setDefaultTimeout(5000);
+  await page.goto(origin + '/#/mailboxes/relay');
+  const main = page.locator('#main');
+  await main.getByRole('tab', { name: '隐藏邮箱管理', exact: true }).click();
+  const usage = main.getByRole('group', { name: '使用状态', exact: true });
+  const health = main.getByRole('group', { name: '邮箱资料状态', exact: true });
+  const rows = main.locator('table[data-table="relay-aliases"] tbody tr[data-row-id]');
+  const ids = () => rows.evaluateAll(nodes => nodes.map(node => node.dataset.rowId));
+  await usage.getByRole('button', { name: '未登记 1', exact: true }).click();
+  assert.deepEqual(await ids(), ['alias-unknown']);
+  await usage.getByRole('button', { name: '未使用 1', exact: true }).click();
+  assert.deepEqual(await ids(), ['alias-available']);
+  await usage.getByRole('button', { name: '全部 3', exact: true }).click();
+  await health.getByRole('button', { name: '封控中 1', exact: true }).click();
+  assert.deepEqual(await ids(), ['alias-used']);
+  assert(await usage.getByRole('button', { name: '已使用 1', exact: true }).isVisible());
+  assert.deepEqual(traffic.external, []);
+});
+
 test('收件首屏先展示已入库摘要，正文按需读取且部分失败保留旧记录', { timeout: 30_000 }, async t => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
   const browser = await chromium.launch();
