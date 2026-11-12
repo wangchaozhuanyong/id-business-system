@@ -38,7 +38,8 @@ const fixtures = {
 };
 
 async function install(page, actor) {
-  await interceptDesign(page.context(), { actor, localFixtures: { 'auth/session': { actor } }, skipRechargeAssets: true });
+  await interceptDesign(page.context(), { actor, localFixtures: { 'auth/session': { actor } }, skipRechargeAssets: true,
+    scrollbarSelector: '.employee-statistics-scroll' });
   const controls = { requests: 0, queries: [], now, codeUnavailable: false, httpError: false };
   const handler = createEmployeeStatisticsHandler({
     clock: () => controls.now, publicOrigin: origin, readEmployees: () => [manager, operator],
@@ -71,7 +72,7 @@ async function install(page, actor) {
 test('员工统计从数据管理进入，工作量、当前资产与权限独立显示', { timeout: 100_000 }, async t => {
   assert(process.env.ID_RECHARGE_QA_PLAYWRIGHT, '请指定已有 Playwright 模块入口');
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
-  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
+  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL, ignoreDefaultArgs: ['--hide-scrollbars'] });
   t.after(() => browser.close());
   for (const width of [2062, 1440, 1024, 901, 900, 768, 390, 320]) for (const dark of [false, true]) {
     await t.test(width + (dark ? ' 深色' : ' 浅色'), async () => {
@@ -116,6 +117,7 @@ test('员工统计从数据管理进入，工作量、当前资产与权限独�
           const text = document.createRange();
           text.selectNodeContents(label.firstChild);
           return { controls, top: bounds.top, bottom: bounds.bottom,
+            scrollbar: heading.querySelector('.employee-statistics-scroll').offsetHeight - heading.querySelector('.employee-statistics-scroll').clientHeight,
             scrollportWidth: heading.querySelector('.employee-statistics-scroll').clientWidth,
             centerDeviation: Math.max(...centers) - Math.min(...centers),
             refreshVisible: refresh.left >= row.left && refresh.right <= row.right && refresh.right <= innerWidth,
@@ -129,6 +131,7 @@ test('员工统计从数据管理进入，工作量、当前资产与权限独�
         assert(geometry.controls.every(box => box.y - geometry.top >= 8 && geometry.bottom - box.bottom >= 8), '筛选控件贴边');
         assert(geometry.controls.every(box => box.height >= (width <= 900 ? 44 : 36)), '控件触控高度不足');
         assert(geometry.centerDeviation <= 1, '页签、筛选、数据时间和刷新必须同排居中');
+        if (width <= 1440) assert(geometry.scrollbar >= 10, '应实际覆盖占用布局高度的可见滚动条');
         assert(geometry.scrollportWidth >= 140, '单行滚动区必须保留可见的操作空间');
         assert(geometry.refreshVisible && geometry.refreshInsets.every(value => value >= 8), '刷新必须始终可见且与分隔线保持间距');
         for (let i = 0; i < geometry.controls.length; i++) for (let j = i + 1; j < geometry.controls.length; j++) {

@@ -495,7 +495,7 @@ h1 {
 }
 .retention-summary-bar {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 16px;
   padding: var(--toolbar-padding-block) var(--panel-padding-inline);
   background: var(--surface);
@@ -523,6 +523,7 @@ h1 {
   display: flex;
   flex: 1 0 auto;
   align-items: center;
+  min-height: 36px;
   margin: 0;
   padding: 0;
   background: transparent;
@@ -567,6 +568,9 @@ h1 {
   font-size: 12px;
   line-height: 24px;
   white-space: nowrap;
+}
+@media (max-width: 900px) {
+  .retention-overview .summary-strip { min-height: 44px; }
 }
 .customer-retention-list .toolbar-left {
   flex: 1 1 200px;
@@ -964,6 +968,7 @@ input[type='radio'] {
 }
 .content-toolbar.employee-statistics-header {
   flex-wrap: nowrap;
+  align-items: flex-start;
   gap: 16px;
 }
 .employee-statistics-scroll {
