@@ -260,12 +260,11 @@ const navigation = [
     ['客户流失', 'workspace/customer-loss'],
     ['员工数据统计', 'data-management/employee-statistics']
   ]],
-  ['数据中心', 'database', [['数据中心', 'data', true]]],
   ['插件管理', 'grid', [
     ['邮箱查询与邮箱池', 'plugins/mailboxes'],
-    ['网站监控', 'plugins/websites'],
-    ['谷歌表格同步', 'plugins/sheets']
+    ['网站监控', 'plugins/websites']
   ]],
+  ['数据中心', 'database', [['数据中心', 'data']]],
   ['监控中心', 'monitor', [['监控中心', 'monitor', true]]],
   [
     '系统设置',
@@ -1791,6 +1790,7 @@ function navigate(event) {
     'workspace/account-submit': 'workspace/account-extract',
     'workspace/mail-submit': 'workspace/mail-extract',
     'workspace/my-recharge-codes': 'workspace/recharge-codes',
+    'plugins/sheets': 'data/sheets',
     'data-management/claude-google-subscriptions': 'subscriptions/claude',
     'orders/pro': 'orders/claude',
     'orders/max': 'orders/claude',

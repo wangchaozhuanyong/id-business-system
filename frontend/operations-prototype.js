@@ -36,8 +36,7 @@
   const localData = window.IDLocalData;
   const pluginPages = {
     'plugins/mailboxes': { label: '邮箱查询与邮箱池', tool: '邮箱查询与邮箱池', description: '统一管理收信连接、Claude 待授权邮箱与验证码查询。' },
-    'plugins/websites': { label: '网站监控', tool: '网站监控', description: '查看访问统计、访问记录与网站检测结果。' },
-    'plugins/sheets': { label: '谷歌表格同步', tool: 'Google 表格同步', description: '管理业务报表同步；当前同步功能尚待接入。' }
+    'plugins/websites': { label: '网站监控', tool: '网站监控', description: '查看网站访问记录，或检测网站能否正常打开。' }
   };
   let pluginCleanup;
   function toolActive(node) {
@@ -3047,18 +3046,6 @@
       openMailboxTools();
       return;
     }
-    if (name === 'Google 表格同步' && !isAdmin()) {
-      notify('当前权限不能使用此管理员工具');
-      return;
-    }
-    if (name === 'Google 表格同步') {
-      openToolDrawer(
-        name,
-        '同步范围按新版业务重新确定，沿用管理员权限。',
-        `<section class="tool-planning"><div class="panel-heading"><h3>同步方案待完善</h3>${tag('待开发')}</div><p>入口已保留。确定以下三项后，再接入实际同步。</p><dl class="property-list"><div class="property-row"><dt>目标表格</dt><dd>需要同步到哪些表格与工作表</dd></div><div class="property-row"><dt>同步字段</dt><dd>新版业务资料与表格列的对应关系</dd></div><div class="property-row"><dt>执行规则</dt><dd>同步方向、触发方式与重复数据处理</dd></div></dl></section>`
-      );
-      return;
-    }
     local.toolName = name;
     local.toolResult = null;
     let fields;
@@ -3316,54 +3303,14 @@
     }
     node.disabled = false;
   }
-  function websiteAnalyticsPanel() {
-    const actions = `<div class="tool-period" role="group" aria-label="统计时间范围">${button('最近 7 天', 'ops-website-analytics', '', '', 'data-days="7" aria-pressed="false"')}${button('最近 30 天', 'ops-website-analytics', '', '', 'data-days="30" aria-pressed="false"')}${button('刷新统计', 'ops-website-analytics', '', 'return', 'data-async-refresh')}</div><a class="button" href="https://analytics.google.com/analytics/web/#/a396903314p540413787/reports" target="_blank" rel="noopener noreferrer">查看完整报表</a>`;
-    return `<section class="form-section website-tool-panel" id="ops-website-analytics">${websiteToolHeader('装修网站访问统计', actions)}<div class="design-async-region" aria-busy="false"><div data-website-analytics-status role="status" hidden></div><div data-website-analytics-result></div></div></section>`;
-  }
-  async function showWebsiteAnalytics(days, { refresh = false } = {}) {
-    const panel = $('#ops-website-analytics');
-    if (!panel) return;
-    state.drafts.set(draftKey('website-analytics'), { days });
-    for (const button of panel.querySelectorAll('[data-days]'))
-      button.setAttribute('aria-pressed', String(Number(button.dataset.days) === days));
-    const result = panel.querySelector('[data-website-analytics-result]');
-    const status = panel.querySelector('[data-website-analytics-status]');
-    await refreshWebsiteReport(
-      result,
-      status,
-      '网站访问统计',
-      () => localData.websiteAnalytics(days),
-      (report) => {
-        if (!report.summary) {
-          return empty(
-            '该时间段没有访问统计',
-            `最近 ${days} 天 · 统计时区 ${report.timeZone || '待确认'}。`
-          );
-        }
-        const metrics = (item) =>
-          [item?.pageViews, item?.visitors, item?.sessions].map((value) =>
-            Number.isSafeInteger(value) ? esc(value) : '—'
-          );
-        const [pv, users, sessions] = metrics(report.summary);
-        return `<div class="tool-report">${websiteMetrics([['浏览量', pv], ['访客数', users], ['会话数', sessions]])}<p class="tool-report-meta">最近 ${days} 天 · 统计时区 ${esc(report.timeZone)} ${esc(report.utcOffset || '')}${report.thresholded ? ' · 数据可能受隐私阈值限制' : ''}</p><div class="table-viewport"><table><thead><tr><th scope="col">日期</th><th scope="col" class="tool-data-number">浏览量</th><th scope="col" class="tool-data-number">访客数</th><th scope="col" class="tool-data-number">会话数</th></tr></thead><tbody>${report.daily
-          .map(
-            (row) =>
-              `<tr><td>${esc(row.date)}</td>${metrics(row.metrics)
-                .map((value) => `<td class="tool-data-number">${value}</td>`)
-                .join('')}</tr>`
-          )
-          .join('')}</tbody></table></div></div>`;
-      },
-      { scope: 'tools/website-analytics', key: days, refresh }
-    );
-  }
   function openWebsiteMonitor() {
     const enabled = localData.authRequired;
+    const visitsAllowed = enabled && isAdmin();
     openToolDrawer(
       '网站监控',
       '检查公网网站的访问状态、响应时间、跳转和 HTTPS 证书。',
       enabled
-        ? `${isAdmin() ? websiteAnalyticsPanel() + websiteVisitsPanel() : ''}<section class="form-section website-tool-panel" id="ops-website-check"><form id="ops-website-monitor-form" novalidate>${websiteToolHeader('网站健康检测', '<button class="button primary" type="submit">检测网站</button>')}${grid(
+        ? `${visitsAllowed ? websiteVisitsPanel() : ''}<section class="form-section website-tool-panel" id="ops-website-check"><form id="ops-website-monitor-form" novalidate>${websiteToolHeader('网站健康检测', '<button class="button primary" type="submit">检测网站</button>')}${grid(
             wide(
               field(
                 '网站地址',
@@ -3380,20 +3327,17 @@
         : empty('请先设置本机管理员密码', '在 Mac「终端」完成首次设置，登录后即可检测公网网站。') +
           `<div class="form-footer">${button('我已设置密码，去登录', 'ops-integrated-login', 'primary')}</div>`,
       '',
-      enabled && isAdmin() ? [
-        ['ops-website-analytics', '访问统计'],
+      visitsAllowed ? [
         ['ops-website-visits', '访问记录与 IP'],
         ['ops-website-check', '网站检测']
-      ] : []
+      ] : [],
+      visitsAllowed ? '<div class="tool-query-actions website-statistics-entry"><a class="button" href="#/data">查看网站统计</a></div>' : ''
     );
     if (enabled) {
       bindToolDraft($('#ops-website-monitor-form'), 'website-monitor');
       const visits = $('#ops-website-visits-form');
       bindToolDraft(visits, 'website-visits');
-      if (isAdmin()) {
-        void showWebsiteAnalytics(getDraft('website-analytics').days || 7);
-        void showWebsiteVisits(visits);
-      }
+      if (visitsAllowed) void showWebsiteVisits(visits);
       $('#ops-monitor-url').addEventListener('input', () => {
         $('#ops-monitor-status').textContent = '';
         $('#ops-monitor-result').replaceChildren();
@@ -3587,10 +3531,6 @@
     }
     if (action === 'ops-website-visit-ip') {
       void showWebsiteVisitIp(node);
-      return true;
-    }
-    if (action === 'ops-website-analytics') {
-      void showWebsiteAnalytics(Number(node.dataset.days) || getDraft('website-analytics').days || 7, { refresh: node.hasAttribute('data-async-refresh') });
       return true;
     }
     if (['ops-mail-copy-code', 'ops-mail-copy-body', 'ops-mail-retry'].includes(action)) {

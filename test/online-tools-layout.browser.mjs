@@ -128,10 +128,10 @@ test('在线工具启动列表及原有工具操作、布局和草稿兼容', { 
   };
 
   await openTool('网站监控');
-  await drawer.getByText('该时间段没有访问统计', { exact: true }).waitFor();
-  assert.equal(analyticsCalls, 1);
+  assert.equal(await drawer.getByRole('link', { name: '查看网站统计', exact: true }).getAttribute('href'), '#/data');
+  assert.equal(analyticsCalls, 0);
   const sections = await drawer.locator('#ops-website-analytics, #ops-website-visits, #ops-website-check').evaluateAll((nodes) => nodes.map((node) => node.id));
-  assert.deepEqual(sections, ['ops-website-analytics', 'ops-website-visits', 'ops-website-check']);
+  assert.deepEqual(sections, ['ops-website-visits', 'ops-website-check']);
   await drawer.getByRole('tab', { name: '访问记录与 IP', exact: true }).click();
   await drawer.getByRole('button', { name: '每日统计', exact: true }).waitFor();
   assert(await drawer.getByText('独立 IP 数', { exact: true }).last().isVisible());
@@ -231,18 +231,21 @@ test('在线工具启动列表及原有工具操作、布局和草稿兼容', { 
   assert.equal(await drawer.locator('.drawer-title-row').count(), 1);
   for (const width of [1440, 390, 320]) {
     await page.setViewportSize({ width, height: 900 });
+    const openTopbarTool = async (name) => {
+      const mobileTools = page.locator('#mobile-tools-panel');
+      if (width <= 900 && !await mobileTools.isVisible()) await page.locator('#mobile-tools-toggle').click();
+      await (width <= 900 ? mobileTools : nav).getByRole('button', { name, exact: true }).click();
+    };
     for (const theme of ['light', 'dark']) {
       await page.evaluate((value) => document.documentElement.dataset.theme = value, theme);
-      const personal = nav.getByRole('button', { name: '个人工具', exact: true });
       await close.click();
-      await personal.click();
+      await openTopbarTool('个人工具');
       await drawer.getByRole('link', { name: '打开工作邮箱', exact: true }).waitFor();
       assert.equal(await drawer.getByRole('link', { name: '打开工作邮箱', exact: true }).getAttribute('target'), '_blank');
       await checkFrameWithFooter();
       if (width === 1440 && theme === 'light') await screenshot('personal-tools-desktop');
-      const phrase = nav.getByRole('button', { name: '话术文案', exact: true });
       await close.click();
-      await phrase.click();
+      await openTopbarTool('话术文案');
       await drawer.getByText('A 话术', { exact: true }).waitFor();
       await checkFrame();
       if (width === 1440 && theme === 'light') await screenshot('phrase-tools-desktop');
