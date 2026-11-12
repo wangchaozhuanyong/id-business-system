@@ -315,8 +315,8 @@
     savedTotpSecret: (id, version) => request('saved-totp/secret', { id, version }, 'POST'),
     websiteVisits: (filters) => request('tools/website-visits/search', filters, 'POST'),
     websiteVisitIp: (id) => request('tools/website-visits/reveal', { id }, 'POST'),
-    websiteAnalytics: (days, site) => request('tools/website-analytics?' +
-      new URLSearchParams(site ? { days, site } : { days })),
+    websiteAnalytics: (days, site) => request('tools/website-analytics?' + new URLSearchParams(site ? { days, site } : { days })),
+    sheetsStatus: () => request('tools/sheets-status'),
     websiteMonitor: (url) => request('tools/website-monitor', { url }, 'POST'),
     resolveMedia: (url) => request('tools/media/resolve', { url }, 'POST'),
     async downloadMedia(token, signal) {

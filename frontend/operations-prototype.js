@@ -36,8 +36,7 @@
   const localData = window.IDLocalData;
   const pluginPages = {
     'plugins/mailboxes': { label: '邮箱查询与邮箱池', tool: '邮箱查询与邮箱池', description: '统一管理收信连接、Claude 待授权邮箱与验证码查询。' },
-    'plugins/websites': { label: '网站监控', tool: '网站监控', description: '集中查看运行状态、告警记录、各网站访问统计与网站检测。' },
-    'plugins/sheets': { label: '谷歌表格同步', tool: 'Google 表格同步', description: '管理业务报表同步；当前同步功能尚待接入。' }
+    'plugins/websites': { label: '网站监控', tool: '网站监控', description: '集中查看运行状态、告警记录、访问记录与网站检测，网站统计进入数据中心。' }
   };
   let pluginCleanup;
   function toolActive(node) {
@@ -3047,18 +3046,6 @@
       openMailboxTools();
       return;
     }
-    if (name === 'Google 表格同步' && !isAdmin()) {
-      notify('当前权限不能使用此管理员工具');
-      return;
-    }
-    if (name === 'Google 表格同步') {
-      openToolDrawer(
-        name,
-        '同步范围按新版业务重新确定，沿用管理员权限。',
-        `<section class="tool-planning"><div class="panel-heading"><h3>同步方案待完善</h3>${tag('待开发')}</div><p>入口已保留。确定以下三项后，再接入实际同步。</p><dl class="property-list"><div class="property-row"><dt>目标表格</dt><dd>需要同步到哪些表格与工作表</dd></div><div class="property-row"><dt>同步字段</dt><dd>新版业务资料与表格列的对应关系</dd></div><div class="property-row"><dt>执行规则</dt><dd>同步方向、触发方式与重复数据处理</dd></div></dl></section>`
-      );
-      return;
-    }
     local.toolName = name;
     local.toolResult = null;
     let fields;
@@ -3323,114 +3310,14 @@
     }
     node.disabled = false;
   }
-  const renovationAnalyticsSite = 'flashcast.com.my';
-  const websiteAnalyticsSites = [
-    [renovationAnalyticsSite, 'FLASH CAST 装修'],
-    ['damatong.net', '大马通'],
-    ['moyaoai.com', '模钥商城'],
-    ['shop.flashcast.com.my', '闪铸商城']
-  ];
-  const websiteAnalyticsCount = new Intl.NumberFormat('zh-CN');
-  function websiteAnalyticsPanel() {
-    const title = '流量概览';
-    const help = titleInfo(title,
-      '最近 7 天或 30 天包含今天，以报表标明的时区划分。装修站的访客数按所选期间去重。商城的访问次数按 Cloudflare 的外部来源或直接访问口径统计。每日明细中的「—」表示该日期未返回数据。',
-      'website-analytics-help');
-    const periods = [7, 30].map(days => button(`最近 ${days} 天`, 'ops-website-analytics', '', '',
-      `data-days="${days}" aria-pressed="false"`)).join('');
-    const actions = `<div class="tool-period" role="group" aria-label="统计时间范围">${periods}</div>` +
-      button('刷新统计', 'ops-website-analytics', '', 'return', 'data-async-refresh');
-    const sites = websiteAnalyticsSites.map(([host, name]) =>
-      `<button type="button" class="button website-analytics-site" data-action="ops-website-analytics" data-analytics-site="${host}" aria-pressed="false">
-        <span class="website-analytics-site-name"><strong>${esc(name)}</strong>${icon('check')}</span>
-        <span class="website-analytics-host">${host}</span>
-      </button>`).join('');
-    return `<section class="form-section website-tool-panel website-analytics-panel" id="ops-website-analytics">
-      ${websiteToolHeader(title, actions, help)}
-      <div class="website-analytics-sites" role="group" aria-label="统计站点">${sites}</div>
-      <div class="design-async-region" aria-busy="false">
-        <div data-website-analytics-status role="status" hidden></div><div data-website-analytics-result></div>
-      </div>
-    </section>`;
-  }
-  function renderWebsiteAnalyticsReport(report, site, days) {
-    const renovation = site === renovationAnalyticsSite;
-    const source = renovation ? 'Google Analytics 4' : 'Cloudflare Web Analytics';
-    if (report.status === 'unconfigured') {
-      return `<div class="website-analytics-empty">${empty('统计尚未接入', `${site} · 等待配置 ${source} 只读数据源。`)}</div>`;
-    }
-    const daily = report.daily || [];
-    const range = daily.length ? `${daily[0].date} 至 ${daily.at(-1).date}` : `最近 ${days} 天`;
-    const url = renovation ? 'https://analytics.google.com/analytics/web/#/a396903314p540413787/reports' : report.reportUrl;
-    const reportLink = typeof url === 'string' && (renovation || url.startsWith('https://dash.cloudflare.com/'))
-      ? `<a class="button" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${icon('external')}查看完整报表</a>` : '';
-    const timezone = report.timeZone === 'UTC' ? 'UTC' : [report.timeZone || '待确认', report.utcOffset].filter(Boolean).join(' ');
-    const meta = `<div class="website-analytics-meta"><p class="tool-report-meta">${source} · ${esc(range)} · 统计时区 ${esc(timezone)}${report.thresholded ? ' · 数据可能受隐私阈值限制' : ''}</p>${reportLink}</div>`;
-    if (!report.summary) {
-      return `<div class="tool-report">${meta}<div class="website-analytics-empty">${empty('该时间段没有访问统计', '')}</div></div>`;
-    }
-    const columns = renovation
-      ? [['pageViews', '浏览量', '次'], ['visitors', '访客数', '位'], ['sessions', '会话数', '次']]
-      : [['pageViews', '浏览量', '次'], ['visits', '访问次数', '次']];
-    const amount = (value) => Number.isSafeInteger(value) ? websiteAnalyticsCount.format(value) : '—';
-    const totals = api.summary(columns.map(([key, label, unit]) =>
-      [label, amount(report.summary[key]), unit, key === 'pageViews']));
-    const trend = window.IDCharts.bars({
-      title: '每日浏览量趋势', unit: '次', details: false,
-      rows: daily.map(row => ({ label: row.date, shortLabel: row.date.slice(5), pageViews: row.metrics?.pageViews })),
-      series: [{ key: 'pageViews', label: '浏览量', tone: 'blue' }]
-    });
-    const rows = daily.map(row => `<tr><td><time datetime="${esc(row.date)}">${esc(row.date)}</time></td>${columns.map(([key]) =>
-      `<td class="tool-data-number">${amount(row.metrics?.[key])}</td>`).join('')}</tr>`).join('');
-    return `<div class="tool-report website-analytics-report">
-      <div class="website-analytics-totals" role="group" aria-label="所选时间范围汇总">${totals}</div>
-      ${meta}
-      <div class="website-analytics-details">
-        <section class="panel website-analytics-trend" aria-labelledby="website-analytics-trend-title">
-          <h4 id="website-analytics-trend-title">每日浏览量趋势</h4>
-          <div class="website-analytics-chart">${trend}</div>
-        </section>
-        <section class="panel website-analytics-daily" aria-labelledby="website-analytics-daily-title">
-          <h4 id="website-analytics-daily-title">每日明细</h4>
-          <div class="table-viewport" role="region" aria-labelledby="website-analytics-daily-title" tabindex="0">
-            <table aria-labelledby="website-analytics-daily-title"><thead><tr><th scope="col">日期</th>${columns.map(([, label]) =>
-              `<th scope="col" class="tool-data-number">${label}</th>`).join('')}</tr></thead><tbody>${rows}</tbody></table>
-          </div>
-        </section>
-      </div>
-    </div>`;
-  }
-  async function showWebsiteAnalytics(site, days, { refresh = false } = {}) {
-    const panel = $('#ops-website-analytics');
-    if (!panel) return;
-    state.drafts.set(draftKey('website-analytics'), { site, days });
-    for (const button of panel.querySelectorAll('[data-analytics-site]'))
-      button.setAttribute('aria-pressed', String(button.dataset.analyticsSite === site));
-    for (const button of panel.querySelectorAll('[data-days]'))
-      button.setAttribute('aria-pressed', String(Number(button.dataset.days) === days));
-    const result = panel.querySelector('[data-website-analytics-result]');
-    const status = panel.querySelector('[data-website-analytics-status]');
-    const selection = site + ':' + days;
-    if (result.dataset.selection !== selection) {
-      result.replaceChildren();
-      result.dataset.selection = selection;
-    }
-    await refreshWebsiteReport(
-      result,
-      status,
-      '网站访问统计',
-      () => localData.websiteAnalytics(days, site),
-      (report) => renderWebsiteAnalyticsReport(report, site, days),
-      { scope: 'tools/website-analytics', key: { site, days }, refresh }
-    );
-  }
   function openWebsiteMonitor() {
     const enabled = localData.authRequired;
+    const visitsAllowed = enabled && isAdmin();
     openToolDrawer(
       '网站监控',
       '检查公网网站的访问状态、响应时间、跳转和 HTTPS 证书。',
       enabled
-        ? `${isAdmin() ? websiteAnalyticsPanel() + websiteVisitsPanel() : ''}<section class="form-section website-tool-panel" id="ops-website-check"><form id="ops-website-monitor-form" novalidate>${websiteToolHeader('网站健康检测', '<button class="button primary" type="submit">检测网站</button>')}${grid(
+        ? `${visitsAllowed ? websiteVisitsPanel() : ''}<section class="form-section website-tool-panel" id="ops-website-check"><form id="ops-website-monitor-form" novalidate>${websiteToolHeader('网站健康检测', '<button class="button primary" type="submit">检测网站</button>')}${grid(
             wide(
               field(
                 '网站地址',
@@ -3447,21 +3334,17 @@
         : empty('请先设置本机管理员密码', '在 Mac「终端」完成首次设置，登录后即可检测公网网站。') +
           `<div class="form-footer">${button('我已设置密码，去登录', 'ops-integrated-login', 'primary')}</div>`,
       '',
-      enabled && isAdmin() ? [
-        ['ops-website-analytics', '访问统计'],
+      visitsAllowed ? [
         ['ops-website-visits', '访问记录与 IP'],
         ['ops-website-check', '网站检测']
-      ] : []
+      ] : [],
+      visitsAllowed ? '<div class="tool-query-actions website-statistics-entry"><a class="button" href="#/data">查看网站统计</a></div>' : ''
     );
     if (enabled) {
       bindToolDraft($('#ops-website-monitor-form'), 'website-monitor');
       const visits = $('#ops-website-visits-form');
       bindToolDraft(visits, 'website-visits');
-      if (isAdmin()) {
-        const { site, days } = getDraft('website-analytics', { site: renovationAnalyticsSite, days: 7 });
-        void showWebsiteAnalytics(site, days);
-        void showWebsiteVisits(visits);
-      }
+      if (visitsAllowed) void showWebsiteVisits(visits);
       $('#ops-monitor-url').addEventListener('input', () => {
         $('#ops-monitor-status').textContent = '';
         $('#ops-monitor-result').replaceChildren();
@@ -3655,12 +3538,6 @@
     }
     if (action === 'ops-website-visit-ip') {
       void showWebsiteVisitIp(node);
-      return true;
-    }
-    if (action === 'ops-website-analytics') {
-      const { site, days } = getDraft('website-analytics', { site: renovationAnalyticsSite, days: 7 });
-      void showWebsiteAnalytics(node.dataset.analyticsSite || site, Number(node.dataset.days) || days,
-        { refresh: node.hasAttribute('data-async-refresh') });
       return true;
     }
     if (['ops-mail-copy-code', 'ops-mail-copy-body', 'ops-mail-retry'].includes(action)) {

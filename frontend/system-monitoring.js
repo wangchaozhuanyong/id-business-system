@@ -382,7 +382,9 @@
         A.state.drafts.set(viewKey, view);
         if (A.state.route === 'monitor') { A.render(); void load(); }
         else location.hash = '#/monitor';
-      } else if (['ops-website-analytics', 'ops-website-visits', 'ops-website-check'].includes(view)) {
+      } else if (view === 'ops-website-analytics') {
+        if (local()) location.hash = '#/data';
+      } else if (['ops-website-visits', 'ops-website-check'].includes(view)) {
         if (view !== 'ops-website-check' && !local()) return true;
         A.state.drafts.set('operations:tool-section:网站监控', { panel: view });
         if (A.state.route === 'plugins/websites') A.render();

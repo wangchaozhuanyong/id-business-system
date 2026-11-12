@@ -1,4 +1,4 @@
-"""Publish only the health fields from the two existing backup receipts."""
+"""Publish health evidence from the existing backups and Sheets worker."""
 
 import datetime as dt
 import json
@@ -14,6 +14,7 @@ ROOT = Path("/opt/id-business-independent")
 FORMAL = ROOT / "formal"
 DIRECTORY = FORMAL / "backup-monitoring/receipts"
 RECHARGE = "id-business-independent-recharge-backup"
+SHEETS_WORKER = "id-business-independent-sheets-sync"
 
 
 def read_receipt(path, uid):
@@ -74,6 +75,69 @@ def mysql_fields(receipt):
         return None
 
 
+def sheets_fields(logs):
+    events = []
+    for line in logs.splitlines():
+        stamp, separator, payload = line.partition(" ")
+        time_parts = re.fullmatch(r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?Z", stamp)
+        if not separator or not time_parts or len(payload) > 512 or not payload.startswith("{"):
+            continue
+        try:
+            whole_seconds = dt.datetime.fromisoformat(time_parts[1] + "+00:00").timestamp()
+            milliseconds = int((time_parts[2] or "").ljust(3, "0")[:3])
+            at = int(whole_seconds) * 1000 + milliseconds
+            value = json.loads(payload)
+        except (ValueError, OverflowError):
+            continue
+        if not timestamp(at) or not isinstance(value, dict):
+            continue
+        if value.get("status") == "verified" and set(value) == {"status", "writes", "rows"}:
+            rows, writes = value["rows"], value["writes"]
+            if (type(writes) is int and writes >= 0 and isinstance(rows, dict) and len(rows) == 4
+                    and all(type(count) is int and count >= 0 for count in rows.values())):
+                events.append((at, True))
+        elif value.get("status") == "retry" and set(value) == {"status", "code"}:
+            if isinstance(value["code"], str) and re.fullmatch(r"[A-Z][A-Z0-9_]{3,70}", value["code"]):
+                events.append((at, False))
+    if not events:
+        return None
+    verified, failures = None, 0
+    for at, success in sorted(events, key=lambda event: event[0]):
+        if success:
+            verified, failures = at, 0
+        else:
+            failures = min(failures + 1, 7)
+    return {"at": at, "verifiedAt": verified, "failures": failures, "integrityFailure": False}
+
+
+def collect_sheets(group):
+    try:
+        result = subprocess.run(
+            ["/usr/bin/docker", "logs", "--timestamps", "--since", "24h", "--tail", "128", SHEETS_WORKER],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace", timeout=4, check=True,
+        )
+        report = sheets_fields(result.stdout)
+        if report:
+            write_receipt("sheets-status.json", report, group)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        # Keep the last observation for freshness checks when the worker log is temporarily unreadable.
+        pass
+
+
+def write_receipt(name, report, group):
+    with tempfile.NamedTemporaryFile(mode="w", dir=DIRECTORY, prefix=".status-", delete=False) as file:
+        path = Path(file.name)
+        try:
+            os.fchown(file.fileno(), 0, group)
+            os.fchmod(file.fileno(), 0o640)
+            json.dump(report, file, separators=(",", ":"))
+            file.flush()
+            os.fsync(file.fileno())
+            path.replace(DIRECTORY / name)
+        finally:
+            path.unlink(missing_ok=True)
+
+
 def unit_status(name):
     result = subprocess.run(
         ["/usr/bin/systemctl", "show", name, "-p", "LoadState,ActiveState,UnitFileState,Result,ExecMainStatus"],
@@ -103,17 +167,8 @@ def collect():
         "mysqlAttemptFailed": (service.get("LoadState"), service.get("Result"), service.get("ExecMainStatus")) !=
                               ("loaded", "success", "0"),
     }
-    with tempfile.NamedTemporaryFile(mode="w", dir=DIRECTORY, prefix=".status-", delete=False) as file:
-        path = Path(file.name)
-        try:
-            os.fchown(file.fileno(), 0, site.st_gid)
-            os.fchmod(file.fileno(), 0o640)
-            json.dump(report, file, separators=(",", ":"))
-            file.flush()
-            os.fsync(file.fileno())
-            path.replace(DIRECTORY / "backup-status.json")
-        finally:
-            path.unlink(missing_ok=True)
+    write_receipt("backup-status.json", report, site.st_gid)
+    collect_sheets(site.st_gid)
 
 
 if __name__ == "__main__":

@@ -260,11 +260,10 @@ const navigation = [
     ['客户流失', 'workspace/customer-loss'],
     ['员工数据统计', 'data-management/employee-statistics']
   ]],
-  ['数据中心', 'database', [['数据中心', 'data', true]]],
   ['插件管理', 'grid', [
     ['邮箱查询与邮箱池', 'plugins/mailboxes'],
-    ['谷歌表格同步', 'plugins/sheets']
   ]],
+  ['数据中心', 'database', [['数据中心', 'data']]],
   ['监控中心', 'monitor', [
     ['网站监控', 'plugins/websites'],
     ['监控通知', 'settings/monitoring']
@@ -1802,6 +1801,7 @@ function navigate(event) {
     'workspace/account-submit': 'workspace/account-extract',
     'workspace/mail-submit': 'workspace/mail-extract',
     'workspace/my-recharge-codes': 'workspace/recharge-codes',
+    'plugins/sheets': 'data/sheets',
     'data-management/claude-google-subscriptions': 'subscriptions/claude',
     'orders/pro': 'orders/claude',
     'orders/max': 'orders/claude',
@@ -2819,7 +2819,13 @@ document.addEventListener('click', async (event) => {
     renderSidebar();
     const heading = $(`#sidebar [data-group="${CSS.escape(group)}"]`);
     heading?.focus({ preventScroll: true });
-    heading?.scrollIntoView({ block: 'nearest' });
+    const navigation = heading?.closest('.sidebar-navigation');
+    if (navigation) {
+      const bounds = navigation.getBoundingClientRect();
+      const item = heading.getBoundingClientRect();
+      if (item.top < bounds.top) navigation.scrollTop += item.top - bounds.top;
+      else if (item.bottom > bounds.bottom) navigation.scrollTop += item.bottom - bounds.bottom;
+    }
     return;
   }
   if (action === 'mail-tab') {

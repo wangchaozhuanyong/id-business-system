@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { generateKeyPairSync } from 'node:crypto';
 import test from 'node:test';
 
 import { createWebsiteAnalytics } from '../server/tools/website-analytics.mjs';
@@ -34,6 +35,51 @@ function rumReport(count, visits) {
     }] } }
   };
 }
+
+test('the explicit renovation site keeps the period visitor total and the source timezone', async () => {
+  const origin = 'https://business.example.test';
+  const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const metadata = { timeZone: 'Asia/Kuala_Lumpur' };
+  const metricHeaders = ['screenPageViews', 'totalUsers', 'sessions'].map(name => ({ name }));
+  const row = (values, date) => ({
+    metricValues: values.map(value => ({ value: String(value) })),
+    ...(date && { dimensionValues: [{ value: date }] })
+  });
+  let reads = 0;
+  const handler = createWebsiteAnalytics({
+    publicOrigin: origin,
+    config: {
+      propertyId: '100', streamId: '200', hosts: ['flashcast.com.my', 'www.flashcast.com.my'],
+      serviceAccount: {
+        type: 'service_account', client_email: 'fixture@example.iam.gserviceaccount.com',
+        private_key: privateKey.export({ type: 'pkcs8', format: 'pem' })
+      }
+    },
+    clock: () => Date.parse('2026-11-12T17:00:00Z'),
+    fetchImpl: async (url, options) => {
+      if (url === 'https://oauth2.googleapis.com/token')
+        return Response.json({ access_token: 'fixture-read-token', expires_in: 3600 });
+      reads++;
+      const requests = JSON.parse(options.body).requests;
+      assert.deepEqual(requests.map(request => request.dateRanges), Array(2).fill([{ startDate: '6daysAgo', endDate: 'today' }]));
+      return Response.json({ reports: [
+        { metadata, metricHeaders, rowCount: 1, rows: [row([12, 4, 8])] },
+        { metadata, metricHeaders, dimensionHeaders: [{ name: 'date' }], rowCount: 2,
+          rows: [row([6, 3, 4], '20261112'), row([6, 3, 4], '20261113')] }
+      ] });
+    }
+  });
+  const params = { site: 'flashcast.com.my', days: 7 };
+  assert.equal((await request(handler, params, { origin: 'https://other.example.test' })).status, 403);
+  const { status, body } = await request(handler, params, { origin, 'sec-fetch-site': 'same-origin' });
+  assert.equal(status, 200);
+  assert.equal(body.provider, 'ga4');
+  assert.equal(body.timeZone, 'Asia/Kuala_Lumpur');
+  assert.deepEqual(body.summary, { pageViews: 12, visitors: 4, sessions: 8 });
+  assert.equal(body.daily[0].date, '2026-11-07');
+  assert.equal(body.daily.at(-1).date, '2026-11-13');
+  assert.equal(reads, 1);
+});
 
 test('Cloudflare reports isolate site tags, exact hosts and periods, and share in-flight reads for the same selection', async () => {
   const hosts = Object.keys(config.sites);

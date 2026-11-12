@@ -13,7 +13,6 @@ const analyticsPath = '/api/local/tools/website-analytics';
 const visitsPath = '/api/local/tools/website-visits/search';
 const firstVisitFilters = { days: 7, sort: 'newest', page: 1, pageSize: 20, ip: '203.0.113.7' };
 const nextVisitFilters = { days: 30, sort: 'oldest', page: 1, pageSize: 20, ip: '203.0.113.8' };
-const loading = /正在|加载|读取|查询/;
 
 function interceptedTools(page, origin) {
   const requests = new Map([
@@ -49,12 +48,20 @@ function interceptedTools(page, origin) {
   };
 }
 
-function analyticsResult(pageViews) {
+function analyticsResult(pageViews, request) {
+  const params = new URL(request.url()).searchParams;
+  const days = Number(params.get('days'));
   return {
+    status: 'ready',
+    site: params.get('site'),
+    days,
     timeZone: 'Asia/Shanghai',
-    utcOffset: '+08:00',
+    fetchedAt: '2026-11-12T03:00:00Z',
     summary: { pageViews, visitors: 12, sessions: 25 },
-    daily: [{ date: '2026-11-04', metrics: { pageViews: 9, visitors: 8, sessions: 10 } }]
+    daily: Array.from({ length: days }, (_, index) => ({
+      date: new Date(Date.UTC(2026, 10, 12 - days + 1 + index)).toISOString().slice(0, 10),
+      metrics: { pageViews: 9, visitors: 8, sessions: 10 }
+    }))
   };
 }
 
@@ -149,15 +156,16 @@ test(
       await drawer.getByRole('heading', { name, exact: true }).waitFor();
       await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
     }
-    async function openMonitor(expectRead = true) {
+    async function openMonitor() {
       if (!await drawer.isVisible()) {
         await page.getByRole('button', { name: '在线工具', exact: true }).click();
       }
       await page.evaluate(() => window.IDDesignModules.find(module => module.id === 'operations').onClick('tool-open', { dataset: { name: '网站监控' } }));
-      if (expectRead) return tools.next(analyticsPath);
+      return tools.next(visitsPath);
     }
-    const analytics = drawer.locator('[data-website-analytics-result]');
-    const analyticsStatus = drawer.locator('[data-website-analytics-status]');
+    const traffic = page.locator('[data-traffic]');
+    const analytics = traffic.locator('[data-traffic-summary]');
+    const analyticsStatus = traffic.locator('[data-traffic-progress]');
     const visits = drawer.locator('[data-visits-result]');
     const visitsStatus = drawer.locator('[data-visits-status]');
     const showPendingLine = async (status) => {
@@ -165,10 +173,9 @@ test(
       assert.equal(await status.textContent(), '');
       assert((await status.boundingBox()).height <= 3);
     };
-    const showMetric = async (value) => {
-      await drawer.getByRole('tab', { name: '访问统计', exact: true }).click();
-      await analytics.getByText(value + '次', { exact: true }).waitFor();
-    };
+    const showMetric = (value) => analytics.locator('.summary-number').first()
+      .filter({ hasText: new RegExp('^' + value + '次$') }).waitFor();
+    const replyAnalytics = (route, pageViews) => tools.reply(route, analyticsResult(pageViews, route.request()));
     const showVisit = async (path) => {
       await drawer.getByRole('tab', { name: '访问记录与 IP', exact: true }).click();
       await visits.getByRole('button', { name: '查看完整页面路径' })
@@ -177,11 +184,12 @@ test(
     let analyticsDays = 7;
     async function requestAnalytics(days) {
       if (days) analyticsDays = days;
-      await drawer.getByRole('tab', { name: '访问统计', exact: true }).click();
-      await drawer.getByRole('button', { name: days ? `最近 ${days} 天` : '刷新统计', exact: true }).click();
+      await traffic.getByRole('button', { name: days ? `最近 ${days} 天` : '刷新统计', exact: true }).click();
       const request = await tools.next(analyticsPath);
       assert.equal(request.request().method(), 'GET');
-      assert.equal(new URL(request.request().url()).searchParams.get('days'), String(analyticsDays));
+      const params = new URL(request.request().url()).searchParams;
+      assert.equal(params.get('days'), String(analyticsDays));
+      assert.equal(params.get('site'), 'flashcast.com.my');
       return request;
     }
     async function requestVisits() {
@@ -192,97 +200,49 @@ test(
       return request;
     }
 
-    const firstAnalytics = await openMonitor();
-    await tools.reply(await tools.next(visitsPath), { items: [], page: 1, pageSize: 20, total: 0 });
-    await analyticsStatus.waitFor();
-    assert.match(await analyticsStatus.textContent(), loading);
-    await tools.reply(firstAnalytics, analyticsResult(111));
+    await page.goto(origin + '/#/data');
+    const firstAnalytics = await tools.next(analyticsPath);
+    await traffic.getByText('正在读取网站统计…', { exact: true }).waitFor();
+    await replyAnalytics(firstAnalytics, 111);
     await showMetric(111);
 
     const initialCounts = { ...readCounts };
-    await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
-    await drawer.locator('.online-tool-list').waitFor();
-    await openMonitor(false);
+    await page.goto(origin + '/#/overview');
+    await page.goto(origin + '/#/data');
     await showMetric(111);
-    assert.deepEqual(readCounts, initialCounts, '重开工具应同步复用有效统计和明细，不重新请求');
+    assert.deepEqual(readCounts, initialCounts, '返回统计页时复用当前选择的已有数据');
 
     const beforeRefresh = await analytics.boundingBox();
     const slowerAnalytics = await requestAnalytics();
     await showPendingLine(analyticsStatus);
     assert.deepEqual(await analytics.boundingBox(), beforeRefresh);
-    assert(await drawer.getByRole('button', { name: '刷新统计' }).isDisabled());
+    assert(await traffic.getByRole('button', { name: '刷新统计' }).isDisabled());
     await showMetric(111);
     const newerAnalytics = await requestAnalytics(30);
-    await tools.reply(newerAnalytics, analyticsResult(333));
+    await replyAnalytics(newerAnalytics, 333);
     await showMetric(333);
-    await tools.reply(slowerAnalytics, analyticsResult(222));
+    await replyAnalytics(slowerAnalytics, 222);
     await showMetric(333);
-    assert.equal(await analytics.getByText('222次', { exact: true }).count(), 0);
+    assert(!/222次/.test(await analytics.innerText()));
 
     const pendingThirtyDays = await requestAnalytics();
     const beforeCachedSwitch = { ...readCounts };
-    await drawer.getByRole('button', { name: '最近 7 天', exact: true }).click();
+    await traffic.getByRole('button', { name: '最近 7 天', exact: true }).click();
     await showMetric(222);
     assert.deepEqual(readCounts, beforeCachedSwitch, '切回已有时间范围不重复请求');
-    await tools.reply(pendingThirtyDays, analyticsResult(666));
+    await replyAnalytics(pendingThirtyDays, 666);
     await showMetric(222);
-    await drawer.getByRole('button', { name: '最近 30 天', exact: true }).click();
+    await traffic.getByRole('button', { name: '最近 30 天', exact: true }).click();
     await showMetric(666);
-
-    async function switchSite(site) {
-      await drawer.getByRole('group', { name: '统计站点' }).locator(`button[data-analytics-site="${site}"]`).click();
-      const route = await tools.next(analyticsPath);
-      const params = new URL(route.request().url()).searchParams;
-      assert.equal(params.get('site'), site);
-      assert.equal(params.get('days'), '30');
-      return route;
-    }
-    function storefrontResult(site, pageViews) {
-      return {
-        site, timeZone: 'UTC', utcOffset: 'GMT+00:00',
-        reportUrl: 'https://dash.cloudflare.com/example/web-analytics/overview/page-views?host=' + site,
-        summary: { pageViews, visits: 12 },
-        daily: [
-          { date: '2026-11-02', metrics: null },
-          { date: '2026-11-03', metrics: { pageViews: 0, visits: 0 } },
-          { date: '2026-11-04', metrics: { pageViews, visits: 12 } }
-        ]
-      };
-    }
-    const firstShop = await switchSite('damatong.net');
-    assert.equal(await analytics.getByText('666次', { exact: true }).count(), 0, '切站清除上一站的数据');
-    const secondShop = await switchSite('moyaoai.com');
-    await tools.reply(secondShop, storefrontResult('moyaoai.com', 730));
-    await showMetric(730);
-    await tools.reply(firstShop, storefrontResult('damatong.net', 719));
-    await showMetric(730);
-    assert.equal(await analytics.getByText('719次', { exact: true }).count(), 0, '旧站迟到响应不覆盖当前站点');
-    assert.deepEqual(await analytics.getByRole('columnheader').allTextContents(), ['日期', '浏览量', '访问次数']);
-    assert.deepEqual(await analytics.locator('tbody tr').first().getByRole('cell').allTextContents(), ['2026-11-02', '—', '—']);
-    assert.deepEqual(await analytics.locator('tbody tr').nth(1).getByRole('cell').allTextContents(), ['2026-11-03', '0', '0']);
-    assert.match(await analytics.getByRole('link', { name: '查看完整报表' }).getAttribute('href'), /host=moyaoai\.com$/);
-    const thirdShop = await switchSite('shop.flashcast.com.my');
-    await tools.reply(thirdShop, { status: 'unconfigured' });
-    await analytics.getByText('统计尚未接入', { exact: true }).waitFor();
-    assert.equal(await analytics.getByRole('link').count(), 0);
-    const siteCounts = { ...readCounts };
-    await drawer.getByRole('button', { name: /大马通/ }).click();
-    await showMetric(719);
-    await drawer.getByRole('button', { name: /FLASH CAST 装修/ }).click();
-    await showMetric(666);
-    assert.deepEqual(readCounts, siteCounts, '切回已读站点按站点和时间范围复用缓存');
 
     const failingAnalytics = await requestAnalytics();
     await showMetric(666);
     await tools.reply(failingAnalytics, { error: '统计服务暂时失败' }, 503);
-    assert.match(await analyticsStatus.textContent(), /统计服务暂时失败/);
-    await showMetric(666);
-    await drawer.getByRole('button', { name: /大马通/ }).click();
-    await showMetric(719);
-    assert.equal(await analyticsStatus.isVisible(), false, '缓存命中后清理上一站的错误');
-    await tools.reply(await switchSite('flashcast.com.my'), analyticsResult(666));
+    await traffic.getByText('暂时无法更新，已保留上次读取的统计。', { exact: true }).waitFor();
     await showMetric(666);
 
+    await page.goto(origin + '/#/overview');
+    await tools.reply(await openMonitor(), { items: [], page: 1, pageSize: 20, total: 0 });
     await setVisitFilters(page, firstVisitFilters);
     const firstVisit = await requestVisits();
     assert.deepEqual(firstVisit.request().postDataJSON(), firstVisitFilters);
@@ -318,21 +278,14 @@ test(
     await tools.reply(resizedVisits, visitResult('/new-size', { pageSize: 50, total: 55 }));
     await showVisit('/new-size');
 
-    const closedAnalytics = await requestAnalytics();
     const closedVisits = await requestVisits();
     await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
     await drawer.locator('.online-tool-list').waitFor();
-    const reopenedAnalytics = await openMonitor();
-    const reopenedVisits = await tools.next(visitsPath);
-    await tools.reply(reopenedAnalytics, analyticsResult(444));
+    const reopenedVisits = await openMonitor();
     await tools.reply(reopenedVisits, visitResult('/reopened'));
-    await showMetric(444);
     await showVisit('/reopened');
-    await tools.reply(closedAnalytics, analyticsResult(555));
     await tools.reply(closedVisits, visitResult('/closed-drawer'));
-    await showMetric(444);
     await showVisit('/reopened');
-    assert.equal(await analytics.getByText('555次', { exact: true }).count(), 0);
     assert.equal(await visits.getByText('/closed-drawer', { exact: true }).count(), 0);
     assert.deepEqual(errors, []);
   }

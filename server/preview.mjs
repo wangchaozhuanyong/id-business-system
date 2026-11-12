@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { gzipSync } from 'node:zlib';
 import { readFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { installFinanceAssets } from './finance/preview-assets.mjs';
@@ -14,6 +15,7 @@ import { createWebsiteMonitor, handleWebsiteMonitor } from './tools/website-moni
 import { createBitBrowserProxyExtraction } from './bitbrowser-proxy-extraction.mjs';
 import { createWebsiteAnalytics } from './tools/website-analytics.mjs';
 import { createWebsiteVisits } from './tools/website-visits.mjs';
+import { createSheetsStatusHandler, sheetsStatusRoute } from './tools/sheets-status.mjs';
 import { createMediaResolver } from './tools/media-resolver.mjs';
 import {
   createManagedMailboxQuery, managedMailboxQueryRoute, storefrontMailboxQueryRoute, verifyMailboxImap
@@ -60,6 +62,8 @@ const files = new Map([
   ['pagination.css', 'text/css; charset=utf-8'],
   ['title-help.css', 'text/css; charset=utf-8'],
   ['overview-prototype.css', 'text/css; charset=utf-8'],
+  ['data-center.css', 'text/css; charset=utf-8'],
+  ['sheets-status.css', 'text/css; charset=utf-8'],
   ['finance-collection.css', 'text/css; charset=utf-8'],
   ['recharge-integration.css', 'text/css; charset=utf-8'],
   ['recharge-activity.css', 'text/css; charset=utf-8'],
@@ -83,6 +87,8 @@ const files = new Map([
     'recharge-activity',
     'change-sync',
     'operations-prototype',
+    'data-center',
+    'sheets-status',
     'system-monitoring',
     'bitbrowser-addresses'
   ].map((name) => [name + '.js', 'text/javascript; charset=utf-8'])
@@ -183,7 +189,14 @@ export async function startPreview(
   const handleWebsiteAnalytics = createWebsiteAnalytics({
     config: websiteAnalyticsConfig,
     cloudflareConfig: websiteCloudflareConfig,
+    publicOrigin: secureOrigin,
     fetchImpl: websiteAnalyticsFetch
+  });
+  const handleSheetsStatus = createSheetsStatusHandler({
+    receiptDirectory: monitoringWorkerReceiptsDirectory,
+    collectorDirectory: monitoringBackupReceiptsDirectory,
+    dataDirectory: databasePath ? dirname(databasePath) : undefined,
+    publicOrigin: secureOrigin
   });
   const extractBitProxy = createBitBrowserProxyExtraction({ publicOrigin: secureOrigin });
   const monitorWebsite = publicUrl ? createWebsiteMonitor({ publicOrigin: secureOrigin }) : handleWebsiteMonitor;
@@ -602,6 +615,7 @@ export async function startPreview(
       if (!actor || !canManage) return forbidden();
       return void handleWebsiteAnalytics(request, response);
     }
+    if (store && route === sheetsStatusRoute) return void handleSheetsStatus(request, response, actor);
     if (store && route === '/api/local/tools/website-monitor') {
       if (!actor) return forbidden();
       return void monitorWebsite(request, response, actor);

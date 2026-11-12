@@ -184,7 +184,7 @@ async function loadCloudflareReport(config, site, siteTag, days, now, fetchImpl)
   };
 }
 
-export function createWebsiteAnalytics({ config, cloudflareConfig, fetchImpl = fetch, clock = Date.now } = {}) {
+export function createWebsiteAnalytics({ config, cloudflareConfig, publicOrigin, fetchImpl = fetch, clock = Date.now } = {}) {
   let token;
   let tokenRequest;
   const cache = new Map();
@@ -270,7 +270,8 @@ export function createWebsiteAnalytics({ config, cloudflareConfig, fetchImpl = f
       res.end(JSON.stringify(data));
     };
     if (req.method !== 'GET') return send(405, { error: '访问统计只支持 GET' });
-    if ((req.headers.origin && req.headers.origin !== 'http://' + req.headers.host) ||
+    const origin = publicOrigin || 'http://' + req.headers.host;
+    if ((req.headers.origin && req.headers.origin !== origin) ||
         (req.headers['sec-fetch-site'] && req.headers['sec-fetch-site'] !== 'same-origin'))
       return send(403, { error: '请求来源未通过校验' });
     const params = new URL(req.url, 'http://127.0.0.1').searchParams;
