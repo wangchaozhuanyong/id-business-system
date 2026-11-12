@@ -1075,7 +1075,8 @@ input[type='radio'] {
   .employee-statistics-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 0; }
   .employee-statistics-kpi { padding: 16px; border-bottom: 1px solid var(--line); }
   .employee-statistics-kpi:nth-child(even) { border-right: 0; }
-  .employee-statistics-kpi:nth-last-child(-n + 2) { border-bottom: 0; }
+  .employee-statistics-kpi:last-child,
+  .employee-statistics-kpi:nth-last-child(2):nth-child(odd) { border-bottom: 0; }
   .employee-statistics-kpi:last-child:nth-child(odd) { grid-column: 1 / -1; }
   .employee-statistics-distribution[data-expanded='true'] { max-height: none; }
 }

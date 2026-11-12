@@ -163,6 +163,20 @@ test('员工统计长姓名逐行对齐，宽窄屏和深浅主题均可读', { 
           await mkdir(process.env.ID_LAYOUT_QA_OUTPUT, { recursive: true });
           await page.screenshot({ path: `${process.env.ID_LAYOUT_QA_OUTPUT}/dashboard-${width}-${dark ? 'dark' : 'light'}.png`, fullPage: true });
         }
+        await page.getByRole('combobox', { name: '业务类型', exact: true }).selectOption('customer');
+        await page.locator('[data-employee-kpi="orders"]').waitFor({ state: 'detached' });
+        await page.locator('[data-employee-kpi="customers"]').waitFor();
+        await settle(page);
+        const cards = await page.locator('.employee-statistics-kpi').evaluateAll(nodes => nodes.map(node => ({
+          ...node.getBoundingClientRect().toJSON(), border: parseFloat(getComputedStyle(node).borderBottomWidth)
+        })));
+        assert.equal(cards.length, 3);
+        if (width >= 1440) assert(cards.every(card => Math.abs(card.width - cards[0].width) <= 1 && card.y === cards[0].y), '三项概览也应均分一行');
+        else {
+          assert(cards[2].width >= cards[0].width * 2 - 1, '窄屏奇数末项铺满一行');
+          assert.equal(cards[0].border, 1);
+          assert.equal(cards[1].border, 1, '首行两项均保留底部分隔线');
+        }
       } finally { await page.close(); }
     });
   }
