@@ -188,6 +188,22 @@ class WebsiteReleaseTests(unittest.TestCase):
                                (f"{command}start_time=100 ; stop_time=200 }}".encode(), "hash")]
         self.assertEqual(recharge_core.worker_launch_binding(), recharge_core.worker_launch_binding())
 
+    def test_native_cutover_reads_snapshot_identity_from_the_verified_manifest(self):
+        with TemporaryDirectory() as temporary, patch("recharge_core.ROOT", Path(temporary)):
+            folder = Path(temporary) / "backups" / ("recharge-core-" + TARGET)
+            folder.mkdir(parents=True)
+            (folder / "mysql.sql.aes256gcm").write_bytes(b"encrypted fixture")
+            summary = {"backup": str(folder), "verified": True, "plainBytes": 80}
+            manifest = {"revision": TARGET, "encrypted": True, "verified": True, "plainBytes": 80,
+                        "database": "id_redesign_codexdaichong_prod", "plainSha256": "a" * 64, "cipherSha256": "b" * 64}
+            path = folder / "manifest.json"
+            path.write_text(json.dumps(manifest))
+            self.assertEqual(recharge_core.verify_snapshot_receipt(TARGET, summary),
+                             {"plainBytes": 80, "cipherSha256": "b" * 64})
+            path.write_text(json.dumps({**manifest, "revision": BASE}))
+            with self.assertRaisesRegex(remote.ReleaseError, "sealed_recharge_backup_not_verified"):
+                recharge_core.verify_snapshot_receipt(TARGET, summary)
+
     @patch("release.require_redeem_presentation")
     @patch("release.require_ancestor")
     @patch("release.git")
