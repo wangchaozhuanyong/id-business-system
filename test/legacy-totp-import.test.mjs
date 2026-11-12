@@ -68,12 +68,23 @@ test('storage import preserves current records, audits one atomic import and ref
   const actor = { id: ownerId, name: '管理员' };
   try {
     await store.saveSavedTotp({ action: 'create', version: 0, name: '当前账号', secret }, actor);
-    const pending = store.importLegacySavedTotp(bundle(), secrets, actor, 1);
-    await store.saveSavedTotp({ action: 'create', version: 1, name: '并发账号', secret }, actor);
-    await assert.rejects(pending, error => error.status === 409);
+    const [imported, edited] = await Promise.allSettled([
+      store.importLegacySavedTotp(bundle(), secrets, actor, 1),
+      store.saveSavedTotp({ action: 'create', version: 1, name: '并发账号', secret }, actor)
+    ]);
+    // Crypto completion order is not fixed across runners. Exactly one writer
+    // may win this version; the other must conflict without overwriting it.
+    assert.equal([imported, edited].filter(result => result.status === 'fulfilled').length, 1);
+    assert.equal([imported, edited].find(result => result.status === 'rejected').reason.status, 409);
     assert.equal(store.loadSavedTotp(actor).items.length, 2);
-    const saved = await store.importLegacySavedTotp(bundle(), secrets, actor, 2);
-    assert.deepEqual(saved, { version: 3, imported: 1, unchanged: 0, total: 3 });
+    if (imported.status === 'rejected') {
+      const saved = await store.importLegacySavedTotp(bundle(), secrets, actor, 2);
+      assert.deepEqual(saved, { version: 3, imported: 1, unchanged: 0, total: 3 });
+    } else {
+      await store.saveSavedTotp({ action: 'create', version: 2, name: '并发账号', secret }, actor);
+    }
+    assert.deepEqual(new Set(store.loadSavedTotp(actor).items.map(row => row.name)),
+      new Set(['当前账号', '并发账号', '旧验证器']));
     assert.deepEqual(await store.importLegacySavedTotp(bundle(), secrets, actor, 3),
       { version: 3, imported: 0, unchanged: 1, total: 3 });
     assert.equal(store.loadSavedTotp({ id: 'other-owner' }).items.length, 0);
