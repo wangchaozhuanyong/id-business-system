@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import { CODEXDAICHONG_REVISION } from './prepare.mjs';
 import { workspaceGuide, workspaceIcon } from './workspace-guide.mjs';
 import { normalizeRechargeProxyInput } from './proxy-input.mjs';
+import { proxyTypeLabels } from '../bitbrowser/proxy-types.mjs';
 import { RECHARGE_STAGE_LABELS, RECHARGE_STEP_LABELS } from './progress-presentation.mjs';
 import { routingAdminPanel } from './routing-admin-ui.mjs';
 import { createRechargeCardTypeOverlay } from './card-type-overlay.mjs';
@@ -333,18 +334,21 @@ function adaptAdminScript(source, routingScript) {
         });
         document.addEventListener('change', event => {
             if (event.target?.id === 'proxy_add_input') previewProxyPoolInput(event.target);
-            if (event.target?.id === 'proxy_add_country') event.target.removeAttribute('aria-invalid');
+            if (['proxy_add_country', 'proxy_add_type'].includes(event.target?.id)) event.target.removeAttribute('aria-invalid');
         });
         function clearProxyPoolEditor() {
             document.getElementById('proxy_add_input').value = '';
-            const country = document.getElementById('proxy_add_country');
-            country.value = '';
-            country.removeAttribute('aria-invalid');
+            for (const id of ['proxy_add_country', 'proxy_add_type']) {
+                const select = document.getElementById(id);
+                select.value = '';
+                select.dispatchEvent(new Event('change', { bubbles: true }));
+            }
             document.getElementById('proxy_add_hint').textContent = '';
         }
         async function saveProxyPool() {
             const input = document.getElementById('proxy_add_input');
             const country = document.getElementById('proxy_add_country');
+            const type = document.getElementById('proxy_add_type');
             const hint = document.getElementById('proxy_add_hint');
             if (!input || input.dataset.saving === 'true') return;
             const countryCode = country?.value;
@@ -353,6 +357,14 @@ function adaptAdminScript(source, routingScript) {
                 if (hint) { hint.setAttribute('role', 'alert'); hint.textContent = message; }
                 country?.setAttribute('aria-invalid', 'true');
                 country?.focus();
+                return;
+            }
+            const proxyType = type?.value;
+            if (type?.disabled || !Object.hasOwn(rechargeProxyTypeLabels, proxyType)) {
+                const message = type?.disabled ? '代理类型暂不可用，请刷新列表后重试。' : '请选择代理类型。';
+                if (hint) { hint.setAttribute('role', 'alert'); hint.textContent = message; }
+                type?.setAttribute('aria-invalid', 'true');
+                type?.focus();
                 return;
             }
             let batch;
@@ -370,7 +382,7 @@ function adaptAdminScript(source, routingScript) {
             try {
                 const res = await authFetch('/api/admin/proxies', {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ proxies: batch.proxies, countryCode })
+                    body: JSON.stringify({ proxies: batch.proxies, countryCode, proxyType })
                 });
                 const data = await res.json();
                 if (!res.ok || !data.success) {
@@ -380,7 +392,15 @@ function adaptAdminScript(source, routingScript) {
                     }
                     return;
                 }
-                if (input.value === submitted && country.value === countryCode) clearProxyPoolEditor();
+                if (data.proxyType !== proxyType) {
+                    if (hint) {
+                        hint.setAttribute('role', 'alert');
+                        hint.textContent = '代理类型保存未确认，请刷新列表核对。输入已保留。';
+                    }
+                    await loadProxyPool().catch(() => {});
+                    return;
+                }
+                if (input.value === submitted && country.value === countryCode && type.value === proxyType) clearProxyPoolEditor();
                 if (hint) hint.textContent = data.message || '代理已保存';
                 showMessage(data.message || '代理已保存', 'success');
                 await loadProxyPool().catch(() => {
@@ -399,9 +419,10 @@ function adaptAdminScript(source, routingScript) {
   source = replaceOne(source,
     '<td id="proxy_ip_${item.id}">${ipCell}</td>',
     '<td id="proxy_country_${item.id}" class="proxy-country-cell"></td>\n' +
+      '                        <td id="proxy_type_${item.id}" class="proxy-type-cell"></td>\n' +
       '                        <td id="proxy_ip_${item.id}" class="proxy-exit-cell">${ipCell}</td>');
   source = replaceOne(source, 'colspan="7">暂无代理，请在上方粘贴 URL 后点击「保存到代理池」',
-    'colspan="8">暂无代理，请选择国家并录入代理');
+    'colspan="9">暂无代理，请选择国家和类型并录入代理');
   source = replaceSection(source, 'function getAdminToken()', 'function formatDurationText(', '');
   source = replaceSection(
     source,
@@ -667,7 +688,8 @@ function adaptAdminScript(source, routingScript) {
   ])
     source = replaceOne(source, anchor, replacement);
   // Add the local settings call after namespacing upstream URLs. It goes to the host, not the engine.
-  return replaceOne(localUrls(source + '\n' + routingScript), '        let cardPoolList = [];', `
+  const proxyTypesScript = 'const rechargeProxyTypeLabels = ' + JSON.stringify(proxyTypeLabels) + ';\n';
+  return replaceOne(localUrls(source + '\n' + proxyTypesScript + routingScript), '        let cardPoolList = [];', `
         let cardPoolList = [];
         const rechargeCardPlans = ${cardPlanAdminScript}({
             labels: ${JSON.stringify(cardPlanLabels)},
@@ -1553,17 +1575,29 @@ function adaptHtml(source, kind) {
     );
     source = source.replace('每次任务从「启用」的代理中随机抽取。',
       '优先检测标注国家与套餐一致的启用代理，再检测待标注旧代理。实测出口匹配才会创建任务。');
+    const proxyTypes = Object.entries(proxyTypeLabels).map(([value, label]) =>
+      '<option value="' + value + '">' + label + '</option>').join('');
     source = replaceOne(source, '<textarea id="proxy_add_input"',
-      '<div class="form-group embedded-field proxy-country-field">' +
+      '<div class="proxy-import-fields"><div class="form-group embedded-field proxy-country-field">' +
         '<label for="proxy_add_country">代理国家 <span class="proxy-country-required" aria-hidden="true">*</span></label>' +
         '<select id="proxy_add_country" class="asset-input" required disabled aria-describedby="proxy_add_hint">' +
-        '<option value="">正在读取国家选项…</option></select></div>\n                <textarea id="proxy_add_input"');
+        '<option value="">正在读取国家选项…</option></select></div>' +
+        '<div class="form-group embedded-field proxy-type-field">' +
+        '<label for="proxy_add_type">代理类型 <span class="proxy-country-required" aria-hidden="true">*</span></label>' +
+        '<select id="proxy_add_type" class="asset-input" required disabled aria-describedby="proxy_add_hint">' +
+        '<option value="">请选择代理类型</option>' + proxyTypes + '</select></div></div>\n                <textarea id="proxy_add_input"');
     source = replaceOne(source, `onclick="document.getElementById('proxy_add_input').value=''"`, 'onclick="clearProxyPoolEditor()"');
+    source = replaceOne(source,
+      '<div class="table-container">\n                    <table class="admin-action-table proxy-pool-table">',
+      '<p id="proxy_pool_scroll_hint">左右滑动查看完整代理资料</p>\n' +
+        '                <div class="table-container" tabindex="0" role="region" aria-label="已保存代理，可横向滚动">\n' +
+        '                    <table class="admin-action-table proxy-pool-table">');
     source = replaceOne(source, '<th width="140px">出口 IP</th>',
       '<th scope="col" class="proxy-country-cell">标注国家</th>\n' +
+        '                                <th scope="col" class="proxy-type-cell">代理类型</th>\n' +
         '                                <th scope="col" class="proxy-exit-cell">实测出口</th>');
     source = replaceOne(source, '<tbody id="proxy_pool_body">\n                            <tr><td colspan="7">',
-      '<tbody id="proxy_pool_body">\n                            <tr><td colspan="8">');
+      '<tbody id="proxy_pool_body">\n                            <tr><td colspan="9">');
     source = source.replace('>支付地区设置</h2>', '>其他流程默认地区</h2>')
       .replace('选择支付地区后，系统将使用对应的币种进行 Stripe 支付。账单地址请在上方「免税地址」页面管理。',
         '此设置保留给其他原有流程。自动充值和支付页面调试统一使用上方套餐线路配置；账单地址仍沿用美国地址库。');
@@ -1680,7 +1714,7 @@ async function buildCodexdaichongAssets() {
     ['/admin', admin, 'admin'],
     ['/subscription', subscription, 'subscription']
   ]) {
-    const proxyHelp = '先选择代理国家，同一批共用所选国家，每行录入一条。支持完整代理链接、主机:端口:账号:密码、账号:密码@主机:端口。未带协议默认 SOCKS5。';
+    const proxyHelp = '同一批使用所选国家和代理类型，每行录入一条。支持完整代理链接、主机:端口:账号:密码、账号:密码@主机:端口。未带协议默认 SOCKS5。';
     const html = kind === 'admin' ? replaceOne(source,
       '粘贴一条或多条代理 URL（一行一条），点保存后立即写入代理池并在下方列表显示。', proxyHelp)
       .replace('socks5://user:pass@host:port\n', 'socks5://host:port:user:pass\nhost:port:user:pass\n') : source;

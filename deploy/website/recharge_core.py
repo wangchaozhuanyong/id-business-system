@@ -17,9 +17,9 @@ from vendure_admission import read_idle_queue, ready_socket, worker_binding, wor
 NATIVE_UNIT = "id-business-independent-recharge-native.service"
 UPSTREAM = "https://github.com/wangchaozhuanyong/codexdaichong.git"
 CORE = "deploy/recharge-core"
-CARD_PLAN_CHECKS = {"card_plan_mysql_transactions_passed", "source_203_native", "source_203_adapter",
-                    "customer_cards_denied", "no_payment_or_activation_requests",
-                    "owned_temporary_containers_removed"}
+NATIVE_CHECKS = {"card_plan_mysql_transactions_passed", "source_203_native", "source_203_adapter",
+                 "customer_cards_denied", "proxy_type_batch_import_and_edit", "no_payment_or_activation_requests",
+                 "owned_temporary_containers_removed"}
 
 
 def worker_launch_binding():
@@ -196,7 +196,7 @@ class CoreRelease:
             raise ReleaseError("native_canary_failed" + (": " + reason if re.fullmatch(r"[a-z0-9_]+", reason) else ""))
         receipt = json.loads((self.ops / "native-canary.receipt.json").read_text())
         require(receipt["mainSha"] == self.sha and receipt["productionWrites"] is False and
-                CARD_PLAN_CHECKS <= set(receipt["checks"]), "native_canary_receipt_mismatch")
+                NATIVE_CHECKS <= set(receipt["checks"]), "native_canary_receipt_mismatch")
         return image_id
 
     def stage_units(self):

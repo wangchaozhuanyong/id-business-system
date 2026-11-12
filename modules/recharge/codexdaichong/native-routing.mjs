@@ -4,6 +4,7 @@ import { createRequire } from 'node:module';
 import { isIP } from 'node:net';
 import { join } from 'node:path';
 import { bitBrowserCountryOptions } from '../bitbrowser/countries.mjs';
+import { isProxyType } from '../bitbrowser/proxy-types.mjs';
 import { normalizeRechargeProxyInput } from './proxy-input.mjs';
 
 export const ROUTE_REGIONS = Object.freeze({
@@ -19,6 +20,7 @@ const fingerprint = value => createHash('sha256').update(value).digest('hex');
 const directHash = fingerprint('id-recharge-direct-network-v1');
 const traceEndpoint = 'https://www.cloudflare.com/cdn-cgi/trace';
 const proxyCountriesByCode = new Map(bitBrowserCountryOptions.map(country => [country.code, country]));
+const proxyTypePrefix = 'id_recharge_proxy_type:';
 const proxyWithLabel = `SELECT p.id, p.proxy_url, p.is_active, l.country_code AS label_country_code
   FROM proxy_assets p LEFT JOIN id_recharge_proxy_country_labels l ON l.proxy_id = p.id`;
 
@@ -103,6 +105,11 @@ const labelOf = row => row?.label_country_code ?? null;
 function requireProxyCountry(value) {
   if (!proxyCountriesByCode.has(value))
     throw new RechargeRouteError('请选择有效的代理国家', 'invalid_proxy_country');
+  return value;
+}
+function requireProxyType(value) {
+  if (!isProxyType(value))
+    throw new RechargeRouteError('请选择代理类型', 'invalid_proxy_type');
   return value;
 }
 const shuffle = rows => {
@@ -192,8 +199,14 @@ export function createNativeRechargeRouting({ store, engineDir, probe, substitut
       ON DUPLICATE KEY UPDATE country_code = ?, audit_json = JSON_ARRAY_APPEND(audit_json, '$', CAST(? AS JSON))`,
     [id, countryCode, event, countryCode, event]);
   }
+  async function writeProxyType(connection, id, proxyType) {
+    await connection.execute(`INSERT INTO app_config (config_key, config_value) VALUES (?, ?)
+      ON DUPLICATE KEY UPDATE config_value = VALUES(config_value)`, [proxyTypePrefix + id, proxyType]);
+  }
   async function importProxies(body, actor) {
     const countryCode = requireProxyCountry(body?.countryCode);
+    // Existing import clients may omit the classification.
+    const proxyType = body.proxyType === undefined ? undefined : requireProxyType(body.proxyType);
     let urls;
     try { ({ proxies: urls } = normalizeRechargeProxyInput(body?.proxies)); }
     catch (error) { throw new RechargeRouteError(error.message, 'invalid_proxy_input'); }
@@ -220,12 +233,31 @@ export function createNativeRechargeRouting({ store, engineDir, probe, substitut
           id = result.insertId;
           ids.push(Number(id));
           added++;
+          if (proxyType) await writeProxyType(connection, id, proxyType);
         }
         await writeProxyCountry(connection, id, countryCode, previousCountryCode, actor);
       }
       const message = [`新增 ${added} 条代理`, labeled ? `补标 ${labeled} 条` : '', skipped ? `跳过重复 ${skipped} 条` : '']
         .filter(Boolean).join('，');
-      return { added, labeled, skipped, ids, message };
+      return { added, labeled, skipped, ids, message, ...(proxyType && { proxyType }) };
+    });
+  }
+  async function setProxyType(id, body) {
+    if (!safeId(id)) throw new RechargeRouteError('代理编号无效', 'invalid_proxy');
+    const proxyType = requireProxyType(body?.proxyType);
+    const expected = body?.expectedProxyType;
+    if (expected !== null) requireProxyType(expected);
+    return store.withTransaction(async connection => {
+      const [[proxy]] = await connection.query('SELECT id FROM proxy_assets WHERE id = ? FOR UPDATE', [id]);
+      if (!proxy) throw new RechargeRouteError('代理不存在', 'proxy_not_found');
+      const [[saved]] = await connection.query('SELECT config_value FROM app_config WHERE config_key = ?', [proxyTypePrefix + id]);
+      const current = isProxyType(saved?.config_value) ? saved.config_value : null;
+      if (current !== proxyType) {
+        if (current !== expected)
+          throw new RechargeRouteError('代理类型已被更新，请重新打开后核对', 'proxy_type_conflict');
+        await writeProxyType(connection, id, proxyType);
+      }
+      return { proxyId: id, proxyType };
     });
   }
   async function setProxyCountry(id, body, actor) {
@@ -345,7 +377,10 @@ export function createNativeRechargeRouting({ store, engineDir, probe, substitut
     return policy();
   }
   async function view() {
-    const [config, rows, checked] = await Promise.all([policy(), proxies(), observations()]);
+    const [config, rows, checked, types] = await Promise.all([policy(), proxies(), observations(),
+      auxiliary('代理类型读取失败', () => query(`SELECT p.id, c.config_value AS proxy_type FROM proxy_assets p
+        JOIN app_config c ON c.config_key = CONCAT(?, p.id)`, [proxyTypePrefix]))
+    ]);
     const byId = new Map(rows.map(row => [Number(row.id), row]));
     const checks = checked.filter(check => {
       const row = byId.get(check.proxyId);
@@ -355,8 +390,10 @@ export function createNativeRechargeRouting({ store, engineDir, probe, substitut
     const proxyCountries = [...Array.from(usedCountries, code => proxyCountriesByCode.get(code)),
       ...bitBrowserCountryOptions.filter(({ code }) => !usedCountries.has(code))];
     const proxyLabels = rows.map(row => ({ proxyId: Number(row.id), countryCode: labelOf(row) }));
+    const proxyTypes = types?.filter(row => isProxyType(row.proxy_type))
+      .map(row => ({ proxyId: Number(row.id), proxyType: row.proxy_type }));
     return { ...config, audit: config.audit.slice(-10), auditCount: config.audit.length,
-      regions: ROUTE_REGIONS, checks, proxyCountries, proxyLabels,
+      regions: ROUTE_REGIONS, checks, proxyCountries, proxyLabels, ...(proxyTypes && { proxyTypes }),
       localFallback: 'empty_pool_only', billingAddressCountry: 'US' };
   }
   async function checkLocal() {
@@ -380,6 +417,9 @@ export function createNativeRechargeRouting({ store, engineDir, probe, substitut
       const countryEdit = /^\/proxies\/([1-9]\d*)\/country$/.exec(path);
       if (req.method === 'PUT' && countryEdit)
         return res.json({ success: true, ...await setProxyCountry(Number(countryEdit[1]), req.body, req.admin?.email) });
+      const typeEdit = /^\/proxies\/([1-9]\d*)\/type$/.exec(path);
+      if (req.method === 'PUT' && typeEdit)
+        return res.json({ success: true, ...await setProxyType(Number(typeEdit[1]), req.body) });
       const match = /^\/proxies\/([1-9]\d*)\/check$/.exec(path);
       if (req.method === 'POST' && match) {
         if (Object.keys(req.body || {}).length) throw new RechargeRouteError('不支持的检测参数', 'invalid_probe');
@@ -387,7 +427,7 @@ export function createNativeRechargeRouting({ store, engineDir, probe, substitut
       }
       return res.status(404).json({ success: false, message: '接口不存在' });
     } catch (error) {
-      const conflicts = ['route_version_conflict', 'proxy_country_conflict'];
+      const conflicts = ['route_version_conflict', 'proxy_country_conflict', 'proxy_type_conflict'];
       const status = conflicts.includes(error.code) ? 409 : error.code === 'proxy_not_found' ? 404
         : error.code?.startsWith('invalid_') ? 400 : 503;
       return res.status(status).json({ success: false, code: error.code || 'route_storage_unavailable',

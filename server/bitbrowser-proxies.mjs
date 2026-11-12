@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { parseBitBrowserProxyInput } from '../modules/recharge/bitbrowser/proxy-input.mjs';
+import { isProxyType } from '../modules/recharge/bitbrowser/proxy-types.mjs';
 import { BitBrowserConnectionError } from './bitbrowser-connections.mjs';
 export const bitBrowserProxyDomain = 'bitbrowser-proxies';
 const uuid = /^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i;
@@ -20,7 +21,7 @@ export function validateBitBrowserProxyWrite(body, previous) {
   }
   if (typeof name !== 'string' || !name.trim() || name.length > 80 || /[\x00-\x1f\x7f]/.test(name)) fail('请填写 80 字以内的 IP 名称或备注');
   if (typeof countryCode !== 'string' || !/^(?:[a-z]{2})?$/i.test(countryCode)) fail('国家标记无效，请使用自动识别或有效国家');
-  if (!['mobile', 'dynamic_residential', 'static_residential'].includes(kind)) fail('请选择 IP 类型');
+  if (!isProxyType(kind)) fail('请选择 IP 类型');
   let parsed;
   try { parsed = parseBitBrowserProxyInput(link, { mode: mode ?? 'auto', protocol: protocol ?? 'auto' }); }
   catch { fail('代理格式无法识别，请直接粘贴账号:密码@主机:端口，或主机:端口:账号:密码。'); }

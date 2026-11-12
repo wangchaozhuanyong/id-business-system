@@ -28,7 +28,7 @@ test('account connection and IP stay separate; proxy creation, retries, saved ke
         if (request.method() === 'PUT') {
           const body = request.postDataJSON(); attempts++;
           if (attempts === 1) return json({ error: '合成保存失败，请重试' }, 503);
-          assert.equal(body.countryCode, 'PH'); assert.equal(body.kind, 'dynamic_residential'); assert.equal(body.protocol, 'socks5'); assert.match(body.link || 'socks5://retained', /^socks5:/);
+          assert.equal(body.countryCode, 'PH'); assert.equal(body.kind, 'dedicated_static_residential'); assert.equal(body.protocol, 'socks5'); assert.match(body.link || 'socks5://retained', /^socks5:/);
           version++;
           const saved = { id: body.id || '22222222-2222-4222-8222-222222222222', name: body.name, countryCode: body.countryCode, kind: body.kind, mode: body.mode, protocol: body.protocol, endpoint: '192.0.2.8:8080' };
           items = body.id ? items.map(item => item.id === body.id ? saved : item) : [saved];
@@ -73,6 +73,10 @@ test('account connection and IP stay separate; proxy creation, retries, saved ke
     await page.keyboard.press('Escape');
     assert.equal(await page.locator('#bit-connection-help').isVisible(), false);
     await page.locator('#bit-add-proxy').click();
+    const types = ['动态住宅', '静态住宅', '独享静态住宅', '移动代理'];
+    const ipType = page.locator('#bit-ip-kind');
+    assert.deepEqual(await ipType.locator('option').allTextContents(), types);
+    await ipType.selectOption('dedicated_static_residential');
     assert.equal(await page.locator('#bit-ip-country').isVisible(), false);
     assert.equal(await page.locator('#bit-ip-mode').isVisible(), false);
     assert.equal(await page.locator('#bit-ip-protocol').isVisible(), true);
@@ -93,10 +97,16 @@ test('account connection and IP stay separate; proxy creation, retries, saved ke
     })); assert(alignment.every(item => !item.overlap), JSON.stringify({ width, alignment }));
     await page.locator('#bit-ip-save').click(); await page.locator('#bit-proxy-editor').waitFor({ state: 'hidden' });
     assert.equal(await page.locator('#bit-execution-proxy').inputValue(), items[0].id);
+    assert.equal(items[0].kind, 'dedicated_static_residential');
     // Long, multi-page data stays in the list; no extra production or network writes.
     items.push(...Array.from({ length: 21 }, (_, i) => ({ ...items[0], id: `fixture-${i}`, name: `合成长名称代理 ${i + 1} · 办公室备用网络资料` })));
     await page.locator('#bit-tab-library').click(); await page.locator('#bit-refresh-proxies').click();
     await page.waitForFunction(() => document.querySelector('#bit-ip-count').textContent === '22');
+    const filter = page.locator('#bit-ip-filter');
+    assert.deepEqual(await filter.locator('option').allTextContents(), ['全部 IP 类型', ...types]);
+    await filter.selectOption('mobile');
+    assert.equal(await page.locator('#bit-ip-empty').isVisible(), true);
+    await filter.selectOption('dedicated_static_residential');
     const ipPager = page.locator('nav[data-pagination="bit-ip"]');
     assert.equal(await ipPager.locator('[data-pagination-size]').inputValue(), '20');
     await ipPager.locator('.pagination-jump summary').click();
@@ -115,6 +125,7 @@ test('account connection and IP stay separate; proxy creation, retries, saved ke
     await page.locator('#bit-ip-rows').getByRole('button', { name: '编辑', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('#bit-ip-link').value === 'socks5://synthetic-user:synthetic-pass@192.0.2.8:8080');
     assert.equal(await page.locator('#bit-ip-country').inputValue(), '菲律宾');
+    assert.equal(await ipType.inputValue(), 'dedicated_static_residential');
     await page.locator('#bit-ip-name').fill('新电脑住宅 IP 已修改');
     await page.screenshot({ path: fileURLToPath(new URL(`drawer-${theme}-${width}.png`, output)), fullPage: true });
     await page.locator('#bit-ip-save').click(); await page.locator('#bit-proxy-editor').waitFor({ state: 'hidden' });
@@ -123,7 +134,7 @@ test('account connection and IP stay separate; proxy creation, retries, saved ke
     const actionGeometry = await page.locator('#bit-ip-rows tr:first-child td:last-child button').evaluateAll(buttons => buttons.map(button => { const a=button.getBoundingClientRect(), b=button.closest('.table-viewport').getBoundingClientRect(); return a.left>=b.left && a.right<=b.right+1; }));
     assert(actionGeometry.every(Boolean), `${width} operation clipped`);
     await page.locator('#bit-tab-login').click();
-    assert.match(await page.locator('#bit-execution-proxy option:checked').innerText(), /菲律宾.*动态住宅/);
+    assert.match(await page.locator('#bit-execution-proxy option:checked').innerText(), /菲律宾.*独享静态住宅/);
     await page.evaluate(() => window.postMessage({ source: 'id-recharge-shell', type: 'visibility', visible: false }, location.origin));
     await page.waitForFunction(() => document.querySelector('#bit-local-token').value === '' && document.querySelector('#bit-local-group').disabled);
     await page.evaluate(() => window.postMessage({ source: 'id-recharge-shell', type: 'visibility', visible: true }, location.origin));

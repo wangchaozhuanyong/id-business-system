@@ -218,7 +218,7 @@ export async function startPreview(
   const localBitAssets = [
     ['/assets/bitbrowser/authorization.mjs', '../modules/recharge/bitbrowser/authorization.mjs'],
     ['/assets/bitbrowser/catalog.mjs', '../modules/recharge/bitbrowser/catalog.mjs'],
-    ...['countries', 'proxy-input', 'proxy-test', 'proxy-extraction'].map(name => [`/assets/bitbrowser/${name}.mjs`, `../modules/recharge/bitbrowser/${name}.mjs`]),
+    ...['countries', 'proxy-input', 'proxy-test', 'proxy-extraction', 'proxy-types'].map(name => [`/assets/bitbrowser/${name}.mjs`, `../modules/recharge/bitbrowser/${name}.mjs`]),
     ['/assets/bitbrowser/local.mjs', '../frontend/bitbrowser-local.mjs'],
     ['/assets/bitbrowser/proxies.mjs', '../frontend/bitbrowser-proxies.mjs'],
     ...['index', 'direct-login', 'direct-api', 'browser-options', 'cdp', 'login-page'].map(

@@ -7,7 +7,17 @@
   font-size: 13px;
   overflow-wrap: anywhere;
 }
-[data-recharge-view='admin'] .proxy-country-field > select {
+[data-recharge-view='admin'] .proxy-import-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 28rem), 1fr));
+  gap: 12px 24px;
+  max-inline-size: 64rem;
+  margin-block-end: 12px;
+}
+[data-recharge-view='admin'] .proxy-import-fields > .form-group {
+  margin-block: 0;
+}
+[data-recharge-view='admin'] .proxy-import-fields select {
   max-inline-size: 22rem;
 }
 [data-recharge-view='admin'] .proxy-country-required {
@@ -15,6 +25,20 @@
 }
 [data-recharge-view='admin'] .proxy-country-cell {
   min-inline-size: 12rem;
+}
+[data-recharge-view='admin'] .proxy-type-cell {
+  min-inline-size: 11rem;
+}
+[data-recharge-view='admin'] #proxy_pool_scroll_hint {
+  display: none;
+  margin: 0 0 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+@media (max-width: 760px) {
+  [data-recharge-view='admin'] #proxy_pool_scroll_hint {
+    display: block;
+  }
 }
 [data-recharge-view='admin'] .proxy-country-summary {
   display: flex;

@@ -162,6 +162,19 @@ class WebsiteReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "recharge_native_release_scope_mismatch"):
                 release.require_website_scope(BASE, TARGET, include_core=True)
 
+    @patch("release.require_ancestor")
+    @patch("release.git")
+    def test_proxy_types_require_exact_native_scope_and_joint_website_release(self, git, _ancestor):
+        approved = release.PROXY_TYPE_CORE_SCOPE
+        git.return_value = "\n".join(sorted(approved))
+        self.assertIsNone(release.require_website_scope(BASE, TARGET, include_core=True))
+        with self.assertRaisesRegex(RuntimeError, "recharge_core_or_runtime_changed"):
+            release.require_website_scope(BASE, TARGET)
+        for paths in (approved - {release.PROXY_TYPE_CATALOG}, approved | release.NATIVE_PATCH_FILES):
+            git.return_value = "\n".join(sorted(paths))
+            with self.assertRaisesRegex(RuntimeError, "recharge_native_release_scope_mismatch"):
+                release.require_website_scope(BASE, TARGET, include_core=True)
+
     def test_worker_source_cutover_requires_the_actual_previous_launcher_reference(self):
         previous = remote.ROOT / "releases" / BASE / "source"
         target = remote.ROOT / "releases" / TARGET / "source"

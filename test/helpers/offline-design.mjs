@@ -43,7 +43,7 @@ export async function interceptDesign(context, { beforeDirectory, localFixtures,
           proxyCountries: [
             { code: 'PH', name: '菲律宾' }, { code: 'EG', name: '埃及' }, { code: 'MX', name: '墨西哥' }
           ],
-          proxyLabels: []
+          proxyLabels: [], proxyTypes: []
         },
         'admin/orbitcard/config': { config: {} },
         'public/runtime': { runtime: { active_foreground_jobs: 0, max_foreground_jobs: 1 } },
