@@ -8,6 +8,7 @@ import { managedMailboxQueryRoute, storefrontMailboxQueryRoute } from './tools/m
 
 const minute = 60_000;
 const day = 24 * 60 * minute;
+const orderSyncTimeout = 10 * minute;
 const mailboxPaths = new Set([managedMailboxQueryRoute, storefrontMailboxQueryRoute, '/api/local/apple-relay/public-query']);
 const privateReads = new Set(['/api/local/saved-totp/secret', '/api/local/subscription-card-reveal',
   '/api/local/subscription-card-copy']);
@@ -29,7 +30,7 @@ function counts(map, at, length = 10) {
 }
 
 export function createMonitoringSources({ monitor, databasePath, externalProbe = false, runtimeProbe, rechargeClient,
-  getFinance, syncEnabled, workerReceiptDirectory, backupReceiptDirectory, clock = Date.now,
+  getFinance, syncEnabled, syncViaEvents = false, workerReceiptDirectory, backupReceiptDirectory, clock = Date.now,
   readDisk = statfs, readReceipt = readWorkerReceipt, readBackupReceipt = readBackupMonitorReceipt }) {
   const startedAt = clock();
   const dataDirectory = dirname(databasePath);
@@ -40,6 +41,7 @@ export function createMonitoringSources({ monitor, databasePath, externalProbe =
   const api = new Map(), mailbox = new Map(), logins = new Map(), privateAccess = new Map();
   const refusals = new Map();
   let orderSync = { failures: 0, at: null };
+  let orderReader = { state: 'waiting', at: startedAt };
   let timer, deliveryTimer, active = false, closed = false;
   let lastDigest;
 
@@ -92,6 +94,25 @@ export function createMonitoringSources({ monitor, databasePath, externalProbe =
     orderSync = { failures: success ? 0 : orderSync.failures + 1, at: clock() };
   }
 
+  function recordOrderSyncReader(state) {
+    if (state === 'connected' || orderReader.state !== state) orderReader = { state, at: clock() };
+  }
+
+  function orderSyncSample(now) {
+    const sample = (status, reason) => ({ code: 'order_sync', status, count: orderSync.failures, reason });
+    if (!syncEnabled) return sample('disabled', 'sync_disabled');
+    if (syncViaEvents) {
+      if (orderReader.state === 'review') return sample('bad', 'sync_reader_review');
+      if (now - orderReader.at > orderSyncTimeout) return sample('bad', 'sync_reader_stale');
+    } else if (!orderSync.at) return sample('unknown', 'sync_missing');
+    if (orderSync.at && (!syncViaEvents || orderSync.failures) && now - orderSync.at > orderSyncTimeout)
+      return sample('bad', 'sync_stale');
+    if (orderSync.failures >= 3) return sample('bad');
+    if (syncViaEvents && orderReader.state !== 'connected') return sample('unknown', 'sync_reader_waiting');
+    if (orderSync.failures) return sample('unknown', 'recovering');
+    return sample('ok', syncViaEvents ? 'sync_reader_active' : undefined);
+  }
+
   function usageSamples(now) {
     const apiWindow = counts(api, now);
     const mailboxWindow = counts(mailbox, now);
@@ -136,10 +157,7 @@ export function createMonitoringSources({ monitor, databasePath, externalProbe =
       { code: 'disk_space', status: available === null ? 'unknown' : available < 15 ? 'bad' : 'ok', count: available,
         reason: available === null ? 'disk_unavailable' : undefined },
       job('sheets', sheets, sheetsReceiptMaxAge),
-      { code: 'order_sync', status: !syncEnabled ? 'disabled' : !orderSync.at ? 'unknown' :
-        orderSync.failures >= 3 || now - orderSync.at > 10 * minute ? 'bad' : orderSync.failures === 0 ? 'ok' : 'unknown',
-      count: orderSync.failures, reason: !syncEnabled ? 'sync_disabled' : !orderSync.at ? 'sync_missing' :
-        now - orderSync.at > 10 * minute ? 'sync_stale' : orderSync.failures > 0 && orderSync.failures < 3 ? 'recovering' : undefined }
+      orderSyncSample(now)
     ];
     if (!backupReports) {
       output.push(job('backup', backup, 20 * minute),
@@ -224,7 +242,7 @@ export function createMonitoringSources({ monitor, databasePath, externalProbe =
     } finally { active = false; }
   }
 
-  return { recordHttp, recordAuth, recordRecharge, recordOrderSync, tick,
+  return { recordHttp, recordAuth, recordRecharge, recordOrderSync, recordOrderSyncReader, tick,
     start() {
       if (closed || timer) return;
       const collect = () => void tick().catch(() => {});

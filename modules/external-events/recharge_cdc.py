@@ -13,15 +13,34 @@ import re
 import stat
 import sys
 import tempfile
+import time
 
 TABLES = frozenset(("task_logs", "billing_records", "cdk_codes", "card_assets",
                    "orbitcard_card_usage", "orbitcard_card_recharges"))
 JOB = re.compile(r"[A-Za-z0-9_-]{1,120}\Z")
 FILE = re.compile(r"[A-Za-z0-9_.-]{1,160}\Z")
+BOOTSTRAP_CREATE = re.compile(
+    r"CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+(?:`[A-Za-z0-9_]+`|[A-Za-z0-9_]+)\s*"
+    r"\([^;\x00]*\)\s+ENGINE\s*=\s*INNODB"
+    r"(?:\s+DEFAULT\s+CHARSET\s*=\s*UTF8MB4(?:\s+COLLATE\s*=\s*UTF8MB4_[A-Za-z0-9_]+)?)?\s*;?",
+    re.IGNORECASE | re.ASCII,
+)
+HEARTBEAT_SECONDS = 15
 
 
 class Unavailable(RuntimeError):
     pass
+
+
+def repeated_bootstrap_create(event, database):
+    # MySQL 8 logs an actual InnoDB table creation with an atomic DDL XID.
+    # Existing-table initialization is logged too, without that XID.
+    if event.schema != database.encode("ascii") or event.error_code or hasattr(event, "ddl_xid"):
+        return False
+    query = event.query.strip()
+    if any(token in query for token in ("/*", "--", "#")) or re.search(r"\bSELECT\b", query, re.IGNORECASE):
+        return False
+    return BOOTSTRAP_CREATE.fullmatch(query) is not None
 
 
 def private_json(path):
@@ -129,7 +148,7 @@ def preflight(connection, database):
 def stream(config, checkpoint_path, send=deliver):
     import pymysql
     from pymysqlreplication import BinLogStreamReader
-    from pymysqlreplication.event import XidEvent, QueryEvent, RotateEvent
+    from pymysqlreplication.event import HeartbeatLogEvent, XidEvent, QueryEvent, RotateEvent
     from pymysqlreplication.row_event import WriteRowsEvent, UpdateRowsEvent, DeleteRowsEvent
 
     database = config["database"]
@@ -187,11 +206,12 @@ def stream(config, checkpoint_path, send=deliver):
         reader = BinLogStreamReader(connection_settings=settings, server_id=config["serverId"],
                                     only_schemas=[database], only_tables=list(TABLES),
                                     only_events=[WriteRowsEvent, UpdateRowsEvent, DeleteRowsEvent,
-                                                 XidEvent, QueryEvent, RotateEvent],
+                                                 XidEvent, QueryEvent, RotateEvent, HeartbeatLogEvent],
                                     log_file=start["file"], log_pos=start["position"],
-                                    resume_stream=True, blocking=True, slave_heartbeat=15,
+                                    resume_stream=True, blocking=True, slave_heartbeat=HEARTBEAT_SECONDS,
                                     verify_checksum=True, enable_logging=False)
         transaction = Transaction()
+        next_heartbeat = 0
         for event in reader:
             if isinstance(event, (WriteRowsEvent, UpdateRowsEvent, DeleteRowsEvent)):
                 transaction.rows(event.table, event.rows)
@@ -199,6 +219,9 @@ def stream(config, checkpoint_path, send=deliver):
                 query = event.query.strip().upper()
                 if query == "ROLLBACK":
                     transaction = Transaction()
+                elif not transaction.scopes and repeated_bootstrap_create(event, database):
+                    saved["position"] = {"file": reader.log_file, "position": event.packet.log_pos}
+                    save_checkpoint(checkpoint_path, saved)
                 elif query not in ("BEGIN", "COMMIT"):
                     # Do not silently continue across DDL or statement logging.
                     raise Unavailable("schema_or_statement_event_requires_review")
@@ -222,6 +245,10 @@ def stream(config, checkpoint_path, send=deliver):
                         raise Unavailable('rotation_position_invalid')
                     saved['position'] = {'file': event.next_binlog, 'position': event.position}
                     save_checkpoint(checkpoint_path, saved)
+            now = time.monotonic()
+            if now >= next_heartbeat:
+                print("recharge_event_subscriber_heartbeat", file=sys.stderr, flush=True)
+                next_heartbeat = now + HEARTBEAT_SECONDS
     finally:
         if reader:
             reader.close()

@@ -2,6 +2,7 @@ import importlib.util
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 
 HERE = Path(__file__).resolve().parent
@@ -22,6 +23,18 @@ class CommittedRows(unittest.TestCase):
         self.assertNotIn("private", json.dumps(event))
         self.assertEqual(event, transaction.event("source", {"file": "binlog.000001", "position": 400}))
         self.assertNotEqual(event["receipt"], transaction.event("source", {"file": "binlog.000001", "position": 401})["receipt"])
+
+    def test_bootstrap_noop_requires_expected_schema_innodb_and_no_atomic_ddl_xid(self):
+        statement = "CREATE TABLE IF NOT EXISTS `task_logs` (id INT) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
+        fields = {"schema": b"isolated_events", "error_code": 0, "query": statement}
+        self.assertTrue(cdc.repeated_bootstrap_create(SimpleNamespace(**fields), "isolated_events"))
+        for changes in (
+            {"ddl_xid": 18}, {"schema": b"other"}, {"error_code": 1050},
+            {"query": statement + " AS SELECT 1"}, {"query": statement.replace("InnoDB", "MyISAM")},
+            {"query": statement + " /*!50100 PARTITION BY HASH(id) */"},
+        ):
+            with self.subTest(changes=changes):
+                self.assertFalse(cdc.repeated_bootstrap_create(SimpleNamespace(**(fields | changes)), "isolated_events"))
 
     def test_missing_metadata_and_oversized_transactions_fail_closed(self):
         with self.assertRaises(cdc.Unavailable):
