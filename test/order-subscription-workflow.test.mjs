@@ -5,6 +5,7 @@ import { createCardManagementHandler } from '../server/card-management.mjs';
 import { createLocalBusinessStore, handleLocalBusiness } from '../server/local-business.mjs';
 import { applyInventoryUsage, inspectInventoryUsage } from '../server/inventory-usage.mjs';
 import { preparePersonalInventory } from '../server/personal-subscriptions.mjs';
+import { buildRechargeOrder } from '../server/recharge-order-sync.mjs';
 import { createSubscriptionHandler } from '../server/subscription-management.mjs';
 
 const origin = 'https://workflow.example.test';
@@ -120,6 +121,46 @@ test('续费用卡不改付款记录，复制确认锁定客户、订阅和最�
     '订阅套餐：Plus', '订阅时间：2026-10-12 12:00', '到期时间：2026-11-12 12:00',
     '到期提醒：已到期不足 1 小时', '方便时请回复是否续费。'
   ].join('\n') });
+});
+
+test('充值码成功只关联一次，实际到期确认与待核对标记一起保存', t => {
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  const email = 'recharge-renewal@example.test';
+  store.saveBatch([{ domain: 'commerce', version: 0, data: { ...blankCommerce(), customers: [customer],
+    orders: [order('qa-original-renewal', 'GPT', 'Plus', {
+      email, paidConfirmed: true, receiptConfirmed: true, entitlementStatus: 'active'
+    })]
+  } }]);
+  const original = store.load('commerce').data.orders[0];
+  const receipt = buildRechargeOrder({ jobKey: 'qa-code-job', email, plan: 'Plus',
+    start: '2026-11-12T12:00', expiry: '2026-12-12T12:00', completedAt: new Date(time).toISOString(),
+    paidAmount: '', paidCurrency: '', paymentId: '', cardId: '', employeeId: ''
+  }, {}, time);
+  const sync = () => store.applyRechargeOrder({ since: time - 1, row: {
+    jobKey: receipt.taskId, checkedAt: time, needs: []
+  }, order: receipt, codeRenewal: true });
+  assert.deepEqual(sync().needs, ['续费到期时间待核对']);
+  const first = store.load('commerce');
+  const [renewed, prior] = first.data.orders;
+  assert.deepEqual(prior, original);
+  assert.equal(renewed.previousOrderId, prior.id);
+  assert.equal(renewed.customerId, prior.customerId);
+  assert.equal(renewed.rechargeCompletedAt, receipt.rechargeCompletedAt);
+  assert.equal(renewed.expiry, '');
+  assert.equal(first.data.logs.filter(row => row.type === '关联续费订单').length, 1);
+  sync();
+  assert.deepEqual(store.load('commerce'), first);
+  const command = { action: 'confirm-renewal-expiry', orderId: renewed.id,
+    version: renewed.version, expiry: '2026-12-13T12:00' };
+  store.saveOrderCompletion(actor, command, () => []);
+  assert.deepEqual(store.featureDocument('order-sync').data.rows[0].needs, []);
+  const confirmed = store.load('commerce');
+  assert.equal(confirmed.data.orders[0].expiry, command.expiry);
+  assert.deepEqual(confirmed.data.orders[1], original);
+  store.saveOrderCompletion(actor, command, () => []);
+  sync();
+  assert.deepEqual(store.load('commerce'), confirmed);
 });
 
 
