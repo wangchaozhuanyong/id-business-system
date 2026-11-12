@@ -85,10 +85,11 @@ test('shared layouts preserve alignment, readable controls and stable navigation
           await settled();
           const groups = await page.locator('.order-financial-group').evaluateAll(nodes =>
             nodes.map(n => n.getBoundingClientRect().top));
-          if (groups[0] === groups[2]) {
-            aligned(await box('#commerce-paidAmount'), await box('#commerce-expiry'), '金额和到期控件第二行不齐');
-            aligned(await box('label[for="commerce-paidAmount"]'), await box('label[for="commerce-expiry"]'), '第二行文字不齐');
+          if (groups[0] === groups[1]) {
+            aligned(await box('#commerce-paidAmount'), await box('#commerce-saleAmount'), '代付与售卖金额控件不齐');
+            aligned(await box('label[for="commerce-paidAmount"]'), await box('label[for="commerce-saleAmount"]'), '代付与售卖标签不齐');
           }
+          assert((await box('#commerce-expiry')).y > (await box('#commerce-paidAmount')).y, '订阅周期应独立于金额区');
           const formWidth = await page.locator('.commerce-entry-columns > .form-panel > form').evaluate(node => {
             const style = getComputedStyle(node);
             return node.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);

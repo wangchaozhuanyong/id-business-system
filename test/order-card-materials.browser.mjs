@@ -37,18 +37,26 @@ async function setup(t) {
   page.setDefaultTimeout(5000);
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
-  const submit = async (scope, completed = false) => {
+  const submit = async (scope, completed = false, confirmCorrection = false) => {
     const before = writes.length;
     const url = page.url();
     const existing = await scope.locator('#commerce-id').inputValue();
     await scope.locator('button[form="commerce-order-form"][type="submit"]').click();
     const dialog = page.locator('#confirm-dialog[open]');
-    if (completed) await dialog.getByText(/请确认充值已成功.*实际代付 20\.00 .*客户实收 100\.00 /).waitFor();
-    await dialog.locator('[data-action="confirm-accept"]').click();
+    if (confirmCorrection) {
+      await dialog.getByText('确认更正独立订单', { exact: true }).waitFor();
+      await dialog.locator('[data-action="confirm-accept"]').click();
+    } else assert.equal(await dialog.count(), 0);
     await page.locator('#toast').filter({ hasText: existing ? '订单修改成功' : '订单提交成功' }).waitFor();
     assert.equal(page.url(), url);
     await page.locator('#drawer[open]').waitFor({ state: 'hidden' });
     assert.equal(writes.length, before + 1);
+    if (completed) {
+      const [saved] = writes.at(-1).data.orders;
+      assert.equal(Number(saved.paidAmount), 20);
+      assert.equal(Number(saved.saleAmount), 100);
+      assert(saved.paidConfirmed && saved.receiptConfirmed);
+    }
   };
   return { page, fixture, writes, errors, mock, submit, removePool: () => { cards = []; } };
 }
@@ -153,22 +161,27 @@ test('已选卡池资料删除后仍可编辑，自动订单更正卡号保留�
   fixture.commerce.data.orders.unshift(order);
   removePool();
   await page.goto(`${origin}/#/orders/gpt`);
+  await page.locator('[data-action="commerce-order-tab"][data-tab="pending"]').click();
   await page.locator('#commerce-search').fill(order.email);
-  await page.locator(`[data-action="commerce-order-edit"][data-id="${order.id}"]`).click();
+  const edit = async () => {
+    await page.locator(`[data-action="commerce-order-more"][data-id="${order.id}"]`).click();
+    await page.locator(`[data-action="commerce-order-edit"][data-id="${order.id}"]`).click();
+  };
+  await edit();
   let drawer = page.locator('#drawer[open]');
   await drawer.locator('#commerce-notes').fill('卡池删除后补充备注');
   await drawer.locator('#commerce-correctionReason').fill('核对订单备注');
-  await submit(drawer);
+  await submit(drawer, false, true);
   let saved = writes.at(-1).data.orders.find(row => row.id === order.id);
   assert.equal(saved.proCardNumber, number);
   assert.equal(saved.paymentId, '4242');
-  await page.locator(`[data-action="commerce-order-edit"][data-id="${order.id}"]`).click();
+  await edit();
   drawer = page.locator('#drawer[open]');
   await drawer.locator('#commerce-proMaterialMode').selectOption('manual_card');
   assert.equal(await drawer.locator('#commerce-proCardNumber').inputValue(), number);
   await drawer.locator('#commerce-proCardNumber').fill(replacement);
   await drawer.locator('#commerce-correctionReason').fill('核对登记卡号');
-  await submit(drawer);
+  await submit(drawer, false, true);
   saved = writes.at(-1).data.orders.find(row => row.id === order.id);
   assert.equal(saved.proCardNumber, replacement);
   assert.equal(saved.taskId, order.taskId);
