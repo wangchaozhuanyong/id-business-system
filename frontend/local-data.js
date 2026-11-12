@@ -11,12 +11,13 @@
   const canApproveRechargeCodes = authRequired && ['admin', 'super'].includes(actor?.role);
 
   const queryEntries = new Map();
+  const mailboxUpdateStops = new Set();
   const observedVersions = new Map(), serverVersions = new Map(), changeListeners = new Set();
   let pendingWrites = 0;
   const revisionScopes = new Set(['inventory', 'commerce', 'settings', 'appleBalance', 'toolbox', 'saved-totp',
     'bitbrowser-connections', 'bitbrowser-proxies', 'bitbrowser-addresses', 'tenant-cards', 'recharge-codes',
     'order-sync', 'tools/mailbox-pool', 'tools/website-visits', 'apple-relay', 'operators', 'audit', 'finance-rates', 'card-types',
-    'order-card-freeze']);
+    'order-card-freeze', 'subscription-management', 'system-monitoring']);
   const newer = (incoming, observed) => observed === undefined ||
     (/^\d+$/.test(incoming) && /^\d+$/.test(observed)
       ? BigInt(incoming) > BigInt(observed) : incoming !== observed);
@@ -127,10 +128,88 @@
     },
     clear() {
       queryEpoch++;
+      for (const stop of [...mailboxUpdateStops]) stop(true);
       queryEntries.clear();
       observedVersions.clear();
     }
   });
+
+  function watchManagedMailbox(queryCode, { onChange, onError } = {}) {
+    let stopped = false, connection, retryTimer, failures = 0;
+    const epoch = queryEpoch;
+    const current = () => !stopped && epoch === queryEpoch;
+    function stop(invalidated = false) {
+      if (stopped) return;
+      stopped = true;
+      window.clearTimeout(retryTimer);
+      connection?.abort();
+      mailboxUpdateStops.delete(stop);
+      if (invalidated) {
+        try { onError?.(new Error('读取状态已重置，请重新查询后开启自动更新。')); } catch {}
+      }
+    }
+    async function open() {
+      if (!current()) return;
+      const controller = new AbortController();
+      connection = controller;
+      const started = Date.now();
+      const connecting = window.setTimeout(() => controller.abort(), 45_000);
+      let reader;
+      try {
+        const response = await window.fetch('/api/local/tools/mailbox-query', {
+          method: 'POST', cache: 'no-store', signal: controller.signal,
+          headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+          body: JSON.stringify({ queryCode })
+        });
+        window.clearTimeout(connecting);
+        if (!current()) { await response.body?.cancel(); return; }
+        if (!response.ok) {
+          const payload = await response.json().catch(() => ({}));
+          throw Object.assign(new Error(payload.error || '邮件更新连接暂不可用'), {
+            status: response.status, retryAfter: Number(response.headers.get('retry-after')) || 0
+          });
+        }
+        if (!response.body || !response.headers.get('content-type')?.startsWith('text/event-stream'))
+          throw new Error('邮件更新连接暂不可用');
+        reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '', version = -1;
+        while (current()) {
+          const { done, value } = await reader.read();
+          if (done) throw new Error('邮件更新连接已断开');
+          buffer += decoder.decode(value, { stream: true });
+          buffer = buffer.replace(/\r\n/g, '\n');
+          if (buffer.length > 8192) throw new Error('邮件更新通知格式无效');
+          let end;
+          while (current() && (end = buffer.indexOf('\n\n')) !== -1) {
+            const frame = buffer.slice(0, end); buffer = buffer.slice(end + 2);
+            const event = /^event: ?(.+)$/m.exec(frame)?.[1];
+            if (!['ready', 'changed', 'stopped'].includes(event)) continue;
+            const data = JSON.parse(/^data: ?(.+)$/m.exec(frame)?.[1] || '{}');
+            if (event === 'stopped') throw Object.assign(new Error(
+              data.reason === 'authorization' ? '查询授权已变化，请重新查询' : '邮件更新连接已断开'
+            ), { status: data.reason === 'authorization' ? 403 : 503 });
+            if (!Number.isSafeInteger(data.version) || data.version < 0) throw new Error('邮件更新通知格式无效');
+            if (data.version > version) { version = data.version; onChange?.(); }
+          }
+        }
+      } catch (error) {
+        if (!current()) return;
+        if (Date.now() - started > 30_000) failures = 0;
+        const terminal = [400, 401, 403, 404, 409, 415].includes(error.status);
+        if (terminal || failures >= 3) { stop(); onError?.(error); return; }
+        const delay = Math.max([1000, 3000, 10_000][failures++], Math.min(300, error.retryAfter || 0) * 1000);
+        retryTimer = window.setTimeout(open, delay);
+      } finally {
+        window.clearTimeout(connecting);
+        await reader?.cancel().catch(() => {});
+        controller.abort();
+      }
+    }
+    mailboxUpdateStops.add(stop);
+    void open();
+    return stop;
+  }
 
   async function write(scopes, operation) {
     pendingWrites++;
@@ -154,25 +233,53 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(data)
           };
-    const response = await window.fetch('/api/local/' + resource, options);
-    let result;
-    try {
-      result = await response.json();
-    } catch {
-      result = null;
-    }
-    if (!response.ok || result === null) {
-      if (response.status === 401) {
-        queries.clear();
-        window.IDLocalAuth?.lock?.(result?.reason);
+    const receiptWrite = data !== undefined && method === 'PUT' &&
+      ['commerce', 'inventory', 'settings', 'appleBalance', 'batch'].includes(resource);
+    const operationId = receiptWrite && window.crypto?.randomUUID?.();
+    if (operationId) options.headers['X-ID-Operation'] = operationId;
+    // Retry only the same versioned operation. The server's durable receipt is
+    // committed atomically, so a lost response never produces a second write.
+    for (let attempt = 0; ; attempt++) {
+      let response;
+      try { response = await window.fetch('/api/local/' + resource, options); }
+      catch (error) {
+        if (operationId && attempt < 1) continue;
+        throw error;
       }
-      const error = new Error(result?.error || result?.message || '本机数据接口未响应，请重试');
-      error.status = response.status;
-      if (Array.isArray(result?.matches)) error.matches = result.matches;
-      throw error;
+      let result;
+      try { result = await response.json(); } catch { result = null; }
+      if (!response.ok || result === null) {
+        if (operationId && attempt < 1 && (response.status >= 500 || (response.ok && result === null))) continue;
+        if (response.status === 401) {
+          queries.clear();
+          window.IDLocalAuth?.lock?.(result?.reason);
+        }
+        const error = new Error(result?.error || result?.message || '本机数据接口未响应，请重试');
+        error.status = response.status;
+        if (Array.isArray(result?.matches)) error.matches = result.matches;
+        throw error;
+      }
+      observeResult(resource.startsWith('finance/collection') ? 'finance-rates' : resource, result);
+      return result;
     }
-    observeResult(resource.startsWith('finance/collection') ? 'finance-rates' : resource, result);
-    return result;
+  }
+
+  function contactChange(action, before, after) {
+    if (!before || !['新增资料', '修改资料'].includes(action)) return;
+    const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    if ([...new Set([...Object.keys(before), ...Object.keys(after)])].some(key =>
+      !['customers', 'tenants', 'logs'].includes(key) && !same(before[key], after[key]))) return;
+    const changes = [];
+    for (const list of ['customers', 'tenants']) {
+      if (!Array.isArray(before[list]) || !Array.isArray(after[list])) return;
+      const original = new Map(before[list].map(row => [row.id, row]));
+      if (before[list].some(row => !after[list].some(next => next.id === row.id))) return;
+      for (const row of after[list]) if (!same(original.get(row.id), row))
+        changes.push({ list, before: original.get(row.id) || null, after: row });
+    }
+    if (changes.length !== 1 || Object.hasOwn(changes[0].after, 'initialCards') ||
+        after.logs?.length !== before.logs?.length + 1 || !same(after.logs.slice(1), before.logs)) return;
+    return { ...changes[0], log: after.logs[0] };
   }
 
   let labels = new Map();
@@ -282,7 +389,9 @@
       ? request('finance/collection', command, 'POST')
       : write(['finance-rates'], () => request('finance/collection', command, 'POST')),
     changeAccountLifecycle: (data) => write(['inventory', 'commerce'], () => request('inventory/account-lifecycle', data)),
-    save: (domain, version, data, { action } = {}) => write([domain], () => request(domain, { version, data, action })),
+    save: (domain, version, data, { action, base } = {}) => write([domain], () => request(domain, {
+      version, data, action, ...(domain === 'commerce' && { recordChange: contactChange(action, base, data) })
+    })),
     saveBatch: (entries) => write(entries.map((entry) => entry.domain), () => request('batch', entries)),
     audit: () => request('audit'),
     auditPage: (params) => request('audit/page?' + new URLSearchParams(params)),
@@ -303,7 +412,7 @@
       const legacy = /^[ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789]{20}$/.test(queryCode);
       if (legacy || queryCode.startsWith('MBX-')) {
         try {
-          return await request('tools/mailbox-query', { queryCode, limit }, 'POST');
+          return { ...await request('tools/mailbox-query', { queryCode, limit }, 'POST'), supportsUpdates: true };
         } catch (error) {
           if (!legacy || error.status !== 404) throw error;
           try {
@@ -315,6 +424,7 @@
       }
       return request('apple-relay/public-query', { queryCode }, 'POST');
     },
+    watchManagedMailbox,
     savedTotp: () => request('saved-totp'),
     saveTotp: (data) => write(['saved-totp'], () => request('saved-totp', data)),
     savedTotpCodePage: (ids, version) => request('saved-totp/code', { ids, version }, 'POST'),

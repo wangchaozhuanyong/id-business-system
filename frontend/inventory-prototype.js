@@ -22,6 +22,7 @@
   } = api;
   const { mailboxes, accounts } = api.collections;
   const accountSummaries = new Map();
+  let inventoryReadIndex;
   let lifecycleCommerceVersion = 0;
   let accountLifecycleLoaded = false;
   const batches = [];
@@ -44,13 +45,12 @@
       const key = registrationProduct(value);
       if (registrationPlatforms.some(([id]) => id === key)) found.add(key);
     };
-    for (const record of registrationRecords)
-      if (record.assetId === asset.id && record.state === '成功') add(record.product);
+    for (const record of readInventoryIndex().registrations.get(asset.id) || []) add(record.product);
     for (const link of asset.usageLinks || []) {
       if (!['registration', 'manual-use'].includes(link.kind)) continue;
       add(link.product);
       if (link.kind === 'registration' && link.accountId)
-        add(accounts.find(account => account.id === link.accountId)?.type);
+        add(readInventoryIndex().accountsById.get(link.accountId)?.type);
     }
     return registrationPlatforms.filter(([id]) => found.has(id));
   }
@@ -65,18 +65,16 @@
     !['客户自有', 'customer'].includes(row.accountSource);
   function registeredAccounts(asset) {
     const ids = new Set((asset.usageLinks || []).filter(link => link.kind === 'registration').map(link => link.accountId));
-    for (const record of registrationRecords)
-      if (record.assetId === asset.id && record.state === '成功') ids.add(record.accountId);
-    return accounts.filter(account => ids.has(account.id) && stockRegistration(account) &&
-      registrationAddress(account.email) === registrationAddress(asset.email));
+    const index = readInventoryIndex();
+    for (const record of index.registrations.get(asset.id) || []) ids.add(record.accountId);
+    return (index.stockByEmail.get(registrationAddress(asset.email)) || []).filter(account => ids.has(account.id));
   }
   function mailboxRegistrationConflict(asset, platforms = mailboxPlatforms(asset)) {
     if (usageReview.get(asset.id)?.registrationConflict) return true;
     const known = new Set(platforms.map(([key]) => key).filter(key => key !== 'apple'));
     if (known.size > 1 || (asset.type === 'relay' && known.has('gemini'))) return true;
     const address = registrationAddress(asset.email);
-    const related = address ? accounts.filter(account => stockRegistration(account) &&
-      registrationAddress(account.email) === address) : [];
+    const related = address ? readInventoryIndex().stockByEmail.get(address) || [] : [];
     return related.length > 1 || related.some(account => known.size && !known.has(account.type));
   }
   function mailboxRegistrationAccount(asset) {
@@ -137,6 +135,27 @@
   const xLinkOptions = [['unknown', '未核验'], ['linked', '已绑定'], ['unlinked', '未绑定']];
   const displayIdentity = row => row?.loginMethod === 'x' && row.xHandle ? row.xHandle : row?.email || row?.xHandle || '';
   const identityKey = row => displayIdentity(row).trim().toLowerCase();
+  function readInventoryIndex() {
+    if (!inventoryReadIndex) {
+      const byIdentity = new Map(), accountsById = new Map(), stockByEmail = new Map(), registrations = new Map();
+      const append = (index, key, row) => {
+        if (index.has(key)) index.get(key).push(row); else index.set(key, [row]);
+      };
+      for (const asset of accounts) {
+        let identities = byIdentity.get(asset.type);
+        if (!identities) byIdentity.set(asset.type, identities = new Map());
+        const key = identityKey(asset);
+        // Ambiguous identities must retain the existing "no unique account" result.
+        identities.set(key, identities.has(key) ? null : asset);
+        if (!accountsById.has(asset.id)) accountsById.set(asset.id, asset);
+        if (stockRegistration(asset)) append(stockByEmail, registrationAddress(asset.email), asset);
+      }
+      for (const record of registrationRecords)
+        if (record.state === '成功') append(registrations, record.assetId, record);
+      inventoryReadIndex = { byIdentity, accountsById, stockByEmail, registrations };
+    }
+    return inventoryReadIndex;
+  }
   const proxyProtocols = [['socks5', 'SOCKS5'], ['http', 'HTTP'], ['https', 'HTTPS']];
   const proxyDefaults = { socks5: '1080', http: '80', https: '443' };
   const baseTypes = [
@@ -202,6 +221,7 @@
   }
 
   function applyInventoryDocument(data) {
+    inventoryReadIndex = undefined;
     replaceRows(mailboxes, data?.mailboxes);
     replaceRows(accounts, data?.accounts);
     replaceRows(batches, data?.batches);
@@ -303,6 +323,7 @@
     const sentVersion = localInventoryVersion;
     let after, finish, saved;
     try {
+      inventoryReadIndex = undefined;
       finish = mutate();
       if (!finish) return;
       after = inventoryDocument();
@@ -437,7 +458,10 @@
       detail,
       () => {
         if (!localData) {
-          mutate()?.();
+          inventoryReadIndex = undefined;
+          const finish = mutate();
+          inventoryReadIndex = undefined;
+          finish?.();
           return;
         }
         if (confirmedVersion !== localInventoryVersion) {
@@ -1340,7 +1364,7 @@
         }
       ];
       const selection = api.getSelection('inventory-module-assets');
-      body = `<div class="toolbar list-filters"><div class="toolbar-left"><div class="search-field">${icon('search')}<input id="inventory-list-query" aria-label="搜索库存资料" placeholder="${microsoft ? '搜索邮箱、辅助邮箱或备注' : '搜索账号、备注或用途'}" value="${esc(v.query)}" /></div><select id="inventory-country" aria-label="筛选国家">${options(choicesWithCurrent([['', '全部国家'], ...settingsFor(type).countries], v.country), v.country)}</select><select id="inventory-status" aria-label="筛选${kind === 'mail' ? '邮箱' : '账号'}状态">${options([['', '全部状态'], '正常', '冻结', '封控中', ...(kind === 'mail' ? ['死号', '解封中'] : [])], v.status)}</select>${kind === 'mail' ?
+      body = `<div class="toolbar list-filters"><div class="toolbar-left"><div class="search-field">${icon('search')}<input data-auto-search id="inventory-list-query" aria-label="搜索库存资料" placeholder="${microsoft ? '搜索邮箱、辅助邮箱或备注' : '搜索账号、备注或用途'}" value="${esc(v.query)}" /></div><select id="inventory-country" aria-label="筛选国家">${options(choicesWithCurrent([['', '全部国家'], ...settingsFor(type).countries], v.country), v.country)}</select><select id="inventory-status" aria-label="筛选${kind === 'mail' ? '邮箱' : '账号'}状态">${options([['', '全部状态'], '正常', '冻结', '封控中', ...(kind === 'mail' ? ['死号', '解封中'] : [])], v.status)}</select>${kind === 'mail' ?
         `<select id="inventory-usage-filter" aria-label="筛选使用状态">${options([['', '全部使用状态'], ...Object.entries(mailUseLabels)], v.usage)}</select>` : ''}</div><div class="toolbar-right">${button('列设置', 'column-settings', '', 'columns', `data-table-id="${esc(title)}库存"`)}${microsoft ? '' : button('提取与归还', 'inventory-center', '', 'return')}${button(microsoft ? '复制邮箱地址' : '复制所选', 'inventory-copy-selected', '', 'copy', selection.size ? '' : 'disabled')}${!microsoft && v.tab === 'claimed' ? button('归还所选', 'inventory-return-selected', '', 'return', selection.size ? '' : 'disabled') : ''}</div></div>${table(columns, pageRows(rows), 'inventory-module-assets', `${title}库存`)}${pagination(rows.length)}`;
     }
     const tabItems = [
@@ -1524,7 +1548,7 @@
               .toLowerCase()
               .includes(v.query.toLowerCase()))
       );
-      body = `<div class="toolbar"><div class="toolbar-left"><div class="search-field">${icon('search')}<input id="inventory-center-query" aria-label="搜索提取记录" placeholder="搜索批次、邮箱、用途或提取人" value="${esc(v.query)}" /></div></div>${button('提取邮箱', 'inventory-go', '', 'download', 'data-route="workspace/mail-extract"')}${button('提取账号', 'inventory-go', '', 'download', 'data-route="workspace/account-extract"')}</div>${batchTable(pageRows(rows), numbers)}${pagination(rows.length)}`;
+      body = `<div class="toolbar"><div class="toolbar-left"><div class="search-field">${icon('search')}<input data-auto-search id="inventory-center-query" aria-label="搜索提取记录" placeholder="搜索批次、邮箱、用途或提取人" value="${esc(v.query)}" /></div></div>${button('提取邮箱', 'inventory-go', '', 'download', 'data-route="workspace/mail-extract"')}${button('提取账号', 'inventory-go', '', 'download', 'data-route="workspace/account-extract"')}</div>${batchTable(pageRows(rows), numbers)}${pagination(rows.length)}`;
     }
     return (
       header(
@@ -5175,8 +5199,8 @@
     accountSummary: id => accountSummaries.get(id),
     accountSummaryForEmail(email, product) {
       const type = accountTypeForProduct(product);
-      const matched = accounts.filter(asset => asset.type === type && identityKey(asset) === String(email || '').trim().toLowerCase());
-      return matched.length === 1 ? accountSummaries.get(matched[0].id) : null;
+      const matched = readInventoryIndex().byIdentity.get(type)?.get(String(email || '').trim().toLowerCase());
+      return matched ? accountSummaries.get(matched.id) : null;
     },
     usageReviewButton,
     usageReviewFor: (id) => usageReview.get(id),

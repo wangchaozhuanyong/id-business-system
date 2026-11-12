@@ -1,26 +1,37 @@
-/* Server change notifications; timers only reconnect the event channel. */
+/* Push-driven updates. Timers only recover a disconnected stream or a failed known update. */
 (() => {
   'use strict';
   const data = window.IDLocalData, A = window.IDDesignAPI;
   if (!data || !A || document.querySelector('meta[name="id-local-data-events"]')?.content !== 'enabled') return;
   const pending = new Set();
+  const failedVersions = new Map();
+  let refreshRetry, refreshFailures = 0;
   let controller, retry, stopped = false, connected = false, failures = 0, generation = 0;
   let snapshots = 0, changes = 0;
   let refreshing = false, changeGeneration = 0, scheduled = false;
   const blocked = () => document.hidden || data.writesPending() ||
-    document.querySelector('#confirm-dialog[open], .row-action-menu:popover-open, #main form[novalidate], #drawer[open] form:not([onsubmit="return false"])');
+    document.querySelector('#confirm-dialog[open], .row-action-menu:popover-open');
+  const editing = () => document.querySelector('#main form[novalidate], #drawer[open] form:not([onsubmit="return false"])');
+  function retryFailed() {
+    clearTimeout(refreshRetry);
+    refreshRetry = undefined;
+    refreshFailures = 0;
+    resume();
+  }
   const resume = () => {
     if (scheduled || stopped) return;
     scheduled = true;
     queueMicrotask(() => { scheduled = false; void flush(); });
   };
   async function flush() {
-    if (stopped || refreshing || !pending.size || blocked()) return;
-    const versions = data.pendingChangeVersions([...pending]);
+    if (stopped || refreshing || refreshRetry !== undefined || refreshFailures > 3 || !pending.size || blocked()) return;
+    // A successful base read must not hide a failed dependent view update.
+    const versions = { ...Object.fromEntries(failedVersions), ...data.pendingChangeVersions([...pending]) };
     const scopes = Object.keys(versions), seen = changeGeneration, route = A.state.route;
     pending.clear();
     if (!scopes.length) return;
     refreshing = true;
+    showStatus();
     let failed = false;
     const has = scope => scopes.includes(scope);
     const refreshCommerce = has('commerce') || has('subscription-management');
@@ -65,18 +76,37 @@
             frame.contentWindow?.postMessage({ source: 'id-recharge-shell', type: 'data-change', scopes }, location.origin);
         } catch { /* External tools retain their own update contract. */ }
       }
+    } catch {
+      failed = true;
     } finally {
+      if (stopped) { refreshing = false; return; }
       if (failed) {
-        for (const scope of scopes) pending.add(scope);
-        A.notify('新数据暂未更新，已保留当前内容。可稍后重试。');
-      } else data.acknowledgeChanges(versions);
+        for (const scope of scopes) { pending.add(scope); failedVersions.set(scope, versions[scope]); }
+        refreshFailures++;
+        if (refreshFailures <= 3) refreshRetry = setTimeout(() => {
+          refreshRetry = undefined;
+          resume();
+        }, [500, 1500, 4500][refreshFailures - 1]);
+        if (refreshFailures === 1) A.notify('新数据暂未更新，已保留当前内容，正在重试。');
+        // A revision received during the final failed attempt must not get
+        // stranded behind the retry limit for an older revision.
+        if (refreshFailures > 3 && Object.entries(data.pendingChangeVersions([...pending]))
+          .some(([scope, version]) => versions[scope] !== version)) refreshFailures = 0;
+      } else {
+        for (const scope of scopes) failedVersions.delete(scope);
+        refreshFailures = 0;
+        data.acknowledgeChanges(versions);
+      }
       refreshing = false;
+      showStatus();
       if (changeGeneration !== seen && pending.size) resume();
     }
   }
   const unsubscribe = data.subscribeChanges(scopes => {
     for (const scope of scopes) pending.add(scope);
     changeGeneration++;
+    // A new revision is new work, independent of an exhausted older retry.
+    if (refreshFailures > 3) refreshFailures = 0;
     resume();
   });
   function applyFrame(frame) {
@@ -107,6 +137,7 @@
       if (!response.ok || !response.headers.get('content-type')?.startsWith('text/event-stream') || !response.body)
         throw new Error('Change stream unavailable');
       connected = true;
+      showStatus();
       failures = 0;
       const reader = response.body.getReader(), decoder = new TextDecoder();
       let buffer = '';
@@ -127,6 +158,7 @@
       if (generation === current) {
         controller = undefined;
         connected = false;
+        showStatus();
         if (!stopped) retry = setTimeout(connect, Math.min(30_000, 1000 * 2 ** Math.min(failures++, 5)));
       }
     }
@@ -138,16 +170,39 @@
     controller?.abort();
     controller = undefined;
     clearTimeout(retry);
+    clearTimeout(refreshRetry);
+    failedVersions.clear();
     pending.clear();
     unsubscribe();
     data.clearChangeTracking();
+    document.getElementById?.('data-sync-status')?.remove();
   }
   const foreground = () => {
     if (document.hidden || stopped) return;
-    resume();
+    retryFailed();
     if (!controller) { clearTimeout(retry); void connect(); }
   };
-  window.IDChangeSync = Object.freeze({ resume, stop, status: () => ({ connected, snapshots, changes, pending: pending.size, refreshing }) });
+  function showStatus() {
+    const footer = document.querySelector('.workspace-footer');
+    if (!footer || stopped) return;
+    let status = document.getElementById('data-sync-status');
+    if (!status) {
+      status = document.createElement('button');
+      status.id = 'data-sync-status';
+      status.type = 'button';
+      status.className = 'text-action';
+      status.setAttribute('aria-live', 'polite');
+      status.addEventListener('click', foreground);
+      footer.prepend(status);
+    }
+    const label = refreshFailures > 3 ? '更新失败 · 点击重试' : !connected ? '实时连接恢复中' :
+      refreshing || refreshFailures ? '正在同步新数据' : '实时更新已连接';
+    if (status.textContent !== label) status.textContent = label;
+    status.disabled = connected && !refreshFailures;
+  }
+  window.IDChangeSync = Object.freeze({ resume, retry: retryFailed, stop,
+    preserveEditor: () => refreshing && Boolean(editing()),
+    status: () => ({ connected, snapshots, changes, pending: pending.size, refreshing, refreshFailures }) });
   window.IDDesignModules.push({ id: 'change-sync', matches: () => false, clearPageState: stop });
   document.addEventListener('close', resume, true);
   document.addEventListener('toggle', resume, true);

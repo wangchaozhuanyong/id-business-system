@@ -185,7 +185,7 @@
     return '<div class="list-controls recharge-code-toolbar">' +
       '<div class="tabs recharge-code-tabs" role="tablist" aria-label="充值码状态">' + tabs + '</div>' +
       '<form class="toolbar recharge-code-filters" id="code-list-filters">' +
-      '<div class="search-field">' + A.icon('search') + A.input('code-list-query', draft['code-list-query'] || '', 'type="search" aria-label="搜索充值码、批次或领用编号" placeholder="充值码 / 批次 / 领用号"') + '</div>' +
+      '<div class="search-field">' + A.icon('search') + A.input('code-list-query', draft['code-list-query'] || '', 'data-auto-search type="search" aria-label="搜索充值码、批次或领用编号" placeholder="充值码 / 批次 / 领用号"') + '</div>' +
       A.select('code-list-plan', [['', '全部套餐'], ...Object.entries(planNames)], draft['code-list-plan'] || '').replace('<select ', '<select aria-label="筛选套餐" ') +
       A.button('归还所选', 'order-code-return-selected', '', '', 'disabled') + '</form></div>' +
       '<div id="recharge-code-new-batch" class="recharge-new-batch" hidden></div><div id="recharge-code-list">' + codesList(view) + '</div>';
@@ -216,6 +216,7 @@
     const draft = listView(codesRoute);
     for (const name of ['code-list-query', 'code-list-plan']) {
       const control = document.getElementById(name);
+      if (control && window.IDSearchInput && window.IDSearchInput.value(control) !== control.value) continue;
       if (control && control.value !== (draft[name] || '')) control.value = draft[name] || '';
     }
     for (const tab of region.querySelectorAll('[data-action="order-code-tab"]')) {

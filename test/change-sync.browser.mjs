@@ -115,9 +115,9 @@ test('版本通知更新相关列表，保留筛选、分页和草稿；心跳�
   fixture.commerce.data.customers.push({ ...customer, id: 'stream-during-edit', name: 'stream 编辑期间新客户' });
   fixture.commerce.version++;
   await emit({ commerce: String(fixture.commerce.version) });
-  await page.waitForFunction(() => window.IDChangeSync.status().pending > 0);
-  await settle();
-  assert.equal(reads.commerce, beforeDraft, '编辑期间暂缓更新，避免覆盖输入');
+  await page.waitForFunction(() => window.IDDesignAPI.modules.commerce.getCustomers().some(row => row.id === 'stream-during-edit'));
+  await idle();
+  assert.equal(reads.commerce, beforeDraft + 1, '编辑期间继续更新旁边记录，不重建输入表单');
   assert.equal(await page.locator('#commerce-email').inputValue(), 'unsaved-stream-draft@example.test');
   await go('orders/gpt');
   await page.waitForFunction(() => window.IDDesignAPI.modules.commerce.getCustomers().some(row => row.id === 'stream-during-edit'));
@@ -125,6 +125,53 @@ test('版本通知更新相关列表，保留筛选、分页和草稿；心跳�
   await go('workspace/order/gpt');
   assert.equal(await page.locator('#commerce-email').inputValue(), 'unsaved-stream-draft@example.test');
   await go('customers/list');
+
+  await page.evaluate(id => window.IDDesignModules.find(module => module.id === 'commerce')
+    .onClick('commerce-contact-edit', { dataset: { id, kind: 'customer' } }), customer.id);
+  const editor = page.locator('#drawer[open] #commerce-contact-form');
+  await editor.locator('#commerce-contact-name').fill('本人尚未保存的姓名');
+  const originalVersion = await editor.locator('[name="commerce-version"]').inputValue();
+  customer.version = Number(customer.version || 1) + 1;
+  customer.name = '其他员工已保存的姓名';
+  fixture.commerce.version++;
+  await emit({ commerce: String(fixture.commerce.version) });
+  await page.waitForFunction(({ id, version }) => window.IDDesignAPI.modules.commerce.getCustomers()
+    .some(row => row.id === id && row.version === version), { id: customer.id, version: customer.version });
+  await idle();
+  assert.equal(await editor.locator('#commerce-contact-name').inputValue(), '本人尚未保存的姓名');
+  assert.equal(await editor.locator('[name="commerce-version"]').inputValue(), originalVersion,
+    '推送不能把旧表单的原版本自动升级');
+  await editor.evaluate(form => form.requestSubmit());
+  await page.getByText('资料已发生变化，请核对原版本再保存', { exact: true }).waitFor();
+  assert.deepEqual(writes, [], '旧表单提交在冲突时保留输入，不发送覆盖写入');
+  await editor.getByText('查看填写差异', { exact: true }).click();
+  assert(await editor.getByText('其他员工已保存的姓名', { exact: true }).isVisible());
+  assert(await editor.getByText('本人尚未保存的姓名', { exact: true }).isVisible());
+  for (const width of [390, 1440]) for (const theme of ['dark', 'light']) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+    await settle();
+    const layout = await editor.locator('[data-contact-conflict]').evaluate(notice => {
+      const box = notice.getBoundingClientRect();
+      return { overflow: notice.scrollWidth > notice.clientWidth + 1,
+        clipped: [...notice.querySelectorAll('button,summary')].some(node => {
+          const rect = node.getBoundingClientRect();
+          return rect.left < box.left - 1 || rect.right > box.right + 1;
+        }) };
+    });
+    assert.deepEqual(layout, { overflow: false, clipped: false }, `冲突提示 ${width}/${theme}`);
+    assert.equal(await editor.locator('#commerce-contact-name').inputValue(), '本人尚未保存的姓名');
+  }
+  await editor.getByRole('button', { name: '读取最新资料重新编辑', exact: true }).click();
+  await page.locator('#confirm-dialog').getByRole('button', { name: '取消', exact: true }).click();
+  assert.equal(await editor.locator('#commerce-contact-name').inputValue(), '本人尚未保存的姓名');
+  assert.equal(await editor.locator('[name="commerce-version"]').inputValue(), originalVersion);
+  await editor.getByRole('button', { name: '读取最新资料重新编辑', exact: true }).click();
+  await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
+  await page.waitForFunction(name => document.querySelector('#commerce-contact-name')?.value === name, customer.name);
+  assert.equal(await editor.locator('[name="commerce-version"]').inputValue(), String(customer.version));
+  assert.deepEqual(writes, [], '读取最新资料不会自动提交或覆盖业务');
+  await page.evaluate(() => document.querySelector('#drawer').close());
 
   const beforeReconnect = { ...reads };
   fixture.inventory.data.accounts.unshift({ ...seed, id: 'stream-reconnected-account', email: 'reconnected@example.test' });

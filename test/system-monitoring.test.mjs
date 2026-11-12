@@ -572,3 +572,27 @@ test('monitor query validation rejects ambiguous, excessive and unknown filters'
     assert.equal((await http(handler, { url: monitorPath + '?' + query })).status, 400, query);
   assert.equal((await http(handler, { url: monitorPath + '?q=%E6%94%AF%E4%BB%98&days=7&priority=P0', actor: admin })).status, 200);
 });
+
+test('monitoring emits changed samples and their exact stale deadline without polling', t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const f = fixture(t), { monitor } = f;
+  let notifications = 0;
+  const stop = monitor.subscribeChanges(() => { notifications++; });
+  const before = monitor.changeVersion();
+  monitor.observe([{ code: 'disk_space', status: 'ok', at: f.clock() }]);
+  const observed = monitor.changeVersion();
+  assert.notEqual(observed, before);
+  assert.equal(notifications, 1);
+  monitor.observe([{ code: 'disk_space', status: 'ok', at: f.clock() }]);
+  assert.equal(monitor.changeVersion(), observed, 'duplicate observations must not publish another revision');
+  f.tick(5 * minute); t.mock.timers.tick(5 * minute);
+  assert.equal(notifications, 1, 'no interval-based updates while the observation is valid');
+  f.tick(1); t.mock.timers.tick(1);
+  assert.equal(notifications, 2);
+  assert.equal(monitor.view().checks.find(row => row.code === 'disk_space').status, 'unknown');
+  f.tick(10 * minute); t.mock.timers.tick(10 * minute);
+  assert.equal(notifications, 2, 'an expired observation does not keep firing');
+  stop();
+  monitor.observe([{ code: 'disk_space', status: 'ok', at: f.clock() }]);
+  assert.equal(notifications, 2, 'removed observers are never called');
+});

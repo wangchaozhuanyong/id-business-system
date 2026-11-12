@@ -2,6 +2,7 @@ import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseToolPublicOrigin, toolRequestOrigin } from './request-origin.mjs';
+import { createMailboxUpdates } from './mailbox-updates.mjs';
 
 export const managedMailboxDomain = 'managed-mailbox-pool';
 export const managedMailboxQueryRoute = '/api/local/tools/mailbox-query';
@@ -251,13 +252,15 @@ function storefrontMessages(value, limit, address) {
   });
 }
 
-export function createManagedMailboxQuery({ store, publicOrigin, storefrontOrigin, readMailbox = readMailboxImap, clock = Date.now }) {
+export function createManagedMailboxQuery({ store, publicOrigin, storefrontOrigin, readMailbox = readMailboxImap, watchMailbox, clock = Date.now }) {
   const publicUrl = parseToolPublicOrigin(publicOrigin);
   const storefrontUrl = parseToolPublicOrigin(storefrontOrigin);
   const attempts = [];
   let running = 0;
-  return async (request, response) => {
+  const updates = createMailboxUpdates({ store, watchMailbox, clock });
+  const handle = async (request, response) => {
     const storefront = request.url?.split('?', 1)[0] === storefrontMailboxQueryRoute;
+    const wantsUpdates = !storefront && request.headers.accept === 'text/event-stream';
     const send = (status, payload, retryAfter = 5) => {
       response.writeHead(status, {
         'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'private, no-store',
@@ -312,6 +315,10 @@ export function createManagedMailboxQuery({ store, publicOrigin, storefrontOrigi
       const item = store.findManagedMailbox(code, clock());
       const invalidCode = () => send(storefront ? 400 : 404, { error: '邮件查询码无效或已过期' });
       if (!item) return invalidCode();
+      if (wantsUpdates) {
+        await updates.handle(request, response, code, item);
+        return;
+      }
       let result;
       try {
         result = await readMailbox({ ...item, limit, ...(storefront && { storefront: true }) });
@@ -342,10 +349,13 @@ export function createManagedMailboxQuery({ store, publicOrigin, storefrontOrigi
         codeExpiresAt: item.expiresAt,
         items: rows
       });
-    } catch {
-      if (!response.destroyed) send(503, { error: '邮箱暂不可用，请联系管理员核对授权' });
+    } catch (error) {
+      const exposed = wantsUpdates && [403, 404, 409, 503].includes(error.status);
+      if (!response.destroyed) send(exposed ? error.status : 503, { error: exposed ? error.message : '邮箱暂不可用，请联系管理员核对授权' });
     } finally {
       running--;
     }
   };
+  handle.close = () => updates.close();
+  return handle;
 }

@@ -39,9 +39,9 @@ const checkFixtures = () => Object.entries(checkStates).map(([code, status]) => 
       ['backup', 'sheets'].includes(code) ? 'receipt_disabled' : code === 'api_errors' ? 'insufficient_requests' : undefined })
 }));
 
-async function prepare(browser, width, role = 'super', phase = 'native') {
+async function prepare(browser, width, role = 'super', phase = 'native', changeEvents = false) {
   const context = await browser.newContext({ viewport: { width, height: 940 }, locale: 'zh-CN' });
-  const offline = await interceptDesign(context, { localFixtures: {},
+  const offline = await interceptDesign(context, { localFixtures: {}, changeEvents,
     actor: { id: 'fixture-monitor-' + role, name: '合成管理员', role } });
   const records = structuredClone(fixtures), settings = config(), writes = [], reads = [];
   let readings = checkFixtures();
@@ -260,40 +260,58 @@ test('缺少监控资料时显示读取失败，不渲染虚构的零值概览',
   assert.deepEqual(f.errors, []);
 });
 
-test('监控定时读取不打断抽屉，切页后停止，读取失败保留已知状态', { timeout: 30_000 }, async t => {
+test('监控仅在新版本时更新，保留抽屉和失败内容，无变更不定时读取', { timeout: 30_000 }, async t => {
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
-  const f = await prepare(browser, 1440);
+  const f = await prepare(browser, 1440, 'super', 'native', true);
   t.after(() => f.context.close());
   const { page } = f;
+  await page.addInitScript(() => {
+    const original = window.fetch.bind(window);
+    const frame = (version, type = 'change') => `event: ${type}\ndata: ${JSON.stringify({ schema: 1, versions: { 'system-monitoring': version } })}\n\n`;
+    window.emitMonitoring = version => window.monitoringStream.enqueue(new TextEncoder().encode(frame(version)));
+    window.fetch = (input, options) => {
+      if (new URL(String(input), location.href).pathname !== '/api/local/change-events') return original(input, options);
+      return Promise.resolve(new Response(new ReadableStream({ start(controller) {
+        window.monitoringStream = controller;
+        controller.enqueue(new TextEncoder().encode(frame('1', 'snapshot')));
+        options.signal.addEventListener('abort', () => controller.error(new DOMException('aborted', 'AbortError')), { once: true });
+      } }), { headers: { 'content-type': 'text/event-stream' } }));
+    };
+  });
   await page.clock.install();
   await page.goto(origin + '/#/monitor');
   await page.locator('[data-monitor-check="backup"]').waitFor();
+  await page.waitForFunction(() => window.monitoringStream && !window.IDChangeSync.status().refreshing);
   const initial = f.reads.length;
+  await page.clock.fastForward(120_000);
+  assert.equal(f.reads.length, initial, 'no periodic business read');
   f.setChecks(checkFixtures().map(row => row.code === 'disk_space'
     ? { ...row, status: 'bad', detail: '合成磁盘可用比例低于阈值。' } : row));
-  await page.clock.fastForward(60_100);
-  await page.locator('[data-monitor-check="disk_space"]').waitFor();
+  await page.evaluate(() => window.emitMonitoring('2'));
+  await page.locator('[data-monitor-check="disk_space"]').getByText('异常', { exact: true }).waitFor();
   assert.equal(f.reads.length, initial + 1);
-  await page.locator('[data-action="system-monitor-check"][data-code="backup"]').click();
+  await page.evaluate(() => window.emitMonitoring('2'));
   await page.clock.fastForward(120_000);
-  assert.equal(f.reads.length, initial + 1);
+  assert.equal(f.reads.length, initial + 1, 'same revision cannot re-read');
+  await page.locator('[data-action="system-monitor-check"][data-code="backup"]').click();
+  await page.evaluate(() => { window.monitorDrawer = document.querySelector('#drawer'); window.emitMonitoring('3'); });
+  await page.waitForFunction(() => !window.IDChangeSync.status().refreshing && window.IDChangeSync.status().pending === 0);
+  assert(await page.evaluate(() => window.monitorDrawer === document.querySelector('#drawer') && window.monitorDrawer.open));
   await page.locator('#drawer').getByRole('button', { name: '关闭', exact: true }).click();
   f.setFailRead(true);
-  await page.clock.fastForward(60_100);
+  await page.evaluate(() => window.emitMonitoring('4'));
   await page.getByRole('alert').filter({ hasText: '已保留上次读取' }).waitFor();
-  await page.locator('[data-monitor-check="disk_space"]').waitFor();
+  await page.locator('[data-monitor-check="disk_space"]').getByText('异常', { exact: true }).waitFor();
   f.setFailRead(false);
   await page.getByRole('button', { name: '刷新', exact: true }).click();
   await page.getByRole('alert').filter({ hasText: '已保留上次读取' }).waitFor({ state: 'hidden' });
-  await page.getByRole('button', { name: '监控通知', exact: true }).click();
-  await page.getByRole('button', { name: '保存渠道' }).waitFor();
+  await page.evaluate(() => window.IDDesignAPI.go('customers/list'));
   const afterLeave = f.reads.length;
+  await page.evaluate(() => window.emitMonitoring('5'));
   await page.clock.fastForward(120_000);
-  assert.equal(f.reads.length, afterLeave);
-  assert.deepEqual(f.writes, []);
-  assert.deepEqual(f.offline.external, []);
-  assert.deepEqual(f.errors, []);
+  assert.equal(f.reads.length, afterLeave, 'inactive pages do not fetch new data');
+  assert.deepEqual(f.writes, []); assert.deepEqual(f.offline.external, []); assert.deepEqual(f.errors, []);
 });
 
 test('监控设置保留普通草稿、清除离页密钥并分开投递和人工确认', { timeout: 45_000 }, async t => {

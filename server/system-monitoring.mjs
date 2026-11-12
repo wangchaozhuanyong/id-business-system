@@ -30,6 +30,28 @@ function pageOf(rows, requested, pageSize) {
 
 export function createSystemMonitoring({ store, origin, native, clock = Date.now, send = sendTelegram }) {
   const samples = new Map();
+  const changeListeners = new Set(), changeEpoch = randomUUID();
+  let sampleRevision = 0, sampleExpiryTimer;
+  function publishSamples() {
+    sampleRevision++;
+    for (const listener of changeListeners) {
+      try { listener(); } catch { /* A disconnected observer cannot affect monitoring. */ }
+    }
+  }
+  function scheduleSampleExpiry() {
+    clearTimeout(sampleExpiryTimer);
+    const latest = new Map();
+    for (const sample of samples.values()) latest.set(sample.code, Math.max(latest.get(sample.code) || 0, sample.at));
+    const now = clock();
+    const deadlines = [...latest.values()].map(at => at + 5 * minute + 1).filter(at => at > now);
+    if (!closed && deadlines.length) {
+      sampleExpiryTimer = setTimeout(() => {
+        publishSamples();
+        scheduleSampleExpiry();
+      }, Math.min(...deadlines) - now);
+      sampleExpiryTimer.unref?.();
+    }
+  }
   let dispatching = false;
   let transferring = false;
   let closed = false;
@@ -181,8 +203,10 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
     for (const [key, sample] of nextSamples) {
       if (now - sample.at > 15 * minute) nextSamples.delete(key);
     }
+    const samplesChanged = !isDeepStrictEqual(samples, nextSamples);
     samples.clear();
     for (const [key, sample] of nextSamples) samples.set(key, sample);
+    if (samplesChanged) { publishSamples(); scheduleSampleExpiry(); }
     if (changed) kick();
     return changed;
   }
@@ -454,11 +478,13 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
   }
 
   return { observe, receiveProbe, configView, view, save, importLegacy, takeOver, acknowledge, queueTest, dispatch,
+    changeVersion: () => `${changeEpoch}:${sampleRevision}`,
+    subscribeChanges(listener) { changeListeners.add(listener); return () => changeListeners.delete(listener); },
     probeAt: () => lastProbeAt,
     activeCount: () => state().data.incidents.filter(row => !row.resolvedAt && !monitorRules[row.code].oneShot).length,
     legacyStatus: () => config().data.legacy,
     // The browser legacy settings are frozen while the handoff is being verified.
     legacyLocked: () => transferring || config().data.legacy.phase !== 'native',
-    close() { closed = true; clearTimeout(timer); }
+    close() { closed = true; clearTimeout(timer); clearTimeout(sampleExpiryTimer); changeListeners.clear(); }
   };
 }

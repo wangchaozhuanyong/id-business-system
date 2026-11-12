@@ -12,7 +12,7 @@
   const tabs = [['rates', '当前汇率'], ['runs', '采集记录'], ['settings', '采集设置'], ['status', '运行状态']];
   const viewKey = 'finance-collection-view', draftKey = 'finance-collection-settings';
   const defaultPageSize = window.IDPagination.defaultPageSize;
-  let data, loading = false, saving = false, error = '', lastKey = '', sequence = 0, lifetime = 0, searchTimer, expiryTimer;
+  let data, loading = false, saving = false, error = '', lastKey = '', sequence = 0, lifetime = 0, expiryTimer;
   function view() {
     if (!A.state.drafts.has(viewKey)) A.state.drafts.set(viewKey, { tab: 'rates', query: '', currency: '', status: '', mode: '', from: '', to: '', page: 1, pageSize: defaultPageSize });
     return A.state.drafts.get(viewKey);
@@ -100,7 +100,7 @@
   }
   function toolbar() {
     const v = view(), history = v.tab === 'history' || v.tab === 'settings-history', records = v.tab === 'runs';
-    let filters = A.input('fx-query', v.query, 'type="search" placeholder="搜索币种、任务编号或人员" aria-label="搜索汇率记录" maxlength="120"') +
+    let filters = A.input('fx-query', v.query, 'data-auto-search type="search" placeholder="搜索币种、任务编号或人员" aria-label="搜索汇率记录" maxlength="120"') +
       '<select id="fx-filter-currency" aria-label="筛选币种">' + A.options([['', '全部币种'], ...Object.entries(labels)], v.currency) + '</select>';
     if (!history) filters += '<select id="fx-filter-status" aria-label="筛选结果">' + A.options([['', '全部结果'],
       ...Object.entries(states).filter(([key]) => records ? ['running', 'updated', 'unchanged', 'partial', 'failed'].includes(key) : ['valid', 'expired', 'missing'].includes(key))], v.status) + '</select>';
@@ -363,7 +363,7 @@
     if (node.closest('#fx-settings-form')) { delete $('#fx-settings-form').dataset.fxSaved; preserveDraft(); return true; }
     if (node.id !== 'fx-query') return false;
     view().query = node.value; A.state.page = 1; view().page = 1;
-    clearTimeout(searchTimer); searchTimer = setTimeout(() => void load(), 250); return true;
+    void load(); return true;
   }
   window.IDDesignModules.push({ id: 'finance-collection', matches: value => value === route, render, preserveDraft: () => {
     const form = $('#fx-settings-form'); if (form?.dataset.fxSaved === 'true') return;
@@ -381,7 +381,7 @@
     void load();
   },
   onDataChanges(scopes) { if (active() && scopes.includes('finance-rates')) return load(true); },
-  clearPageState() { sequence++; lifetime++; data = undefined; lastKey = ''; loading = false; saving = false; error = ''; clearTimeout(searchTimer); clearTimeout(expiryTimer); }
+  clearPageState() { sequence++; lifetime++; data = undefined; lastKey = ''; loading = false; saving = false; error = ''; clearTimeout(expiryTimer); }
   });
   window.addEventListener('resize', () => $('#fx-currency-popover:popover-open')?.hidePopover());
 })();

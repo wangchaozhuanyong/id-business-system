@@ -963,7 +963,8 @@ h1 {
   gap: 10px 14px;
 }
 .relay-alias-controls {
-  flex: 1 1 auto;
+  /* Reserve the search/filter/action group before wrapping the whole group. */
+  flex: 1 1 38rem;
 }
 .relay-alias-controls > .toolbar-left {
   flex: 1 1 18.5rem;
@@ -983,7 +984,7 @@ h1 {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 4px;
 }
 .relay-status-group .footnote {
   white-space: nowrap;

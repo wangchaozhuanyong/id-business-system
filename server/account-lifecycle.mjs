@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { isHistoricallyOpenedClaude } from './inventory-history.mjs';
 import { parseV2DateTimeInput, toV2DateTimeInput } from '../modules/time/dateTime.ts';
-import { personalProduct, personalStock, sameTarget, stockTypeForProduct } from './personal-subscriptions.mjs';
+import { personalProduct, personalStock, sameTarget, stockTypeForProduct, targetKey } from './personal-subscriptions.mjs';
 
 const rows = value => Array.isArray(value) ? value : [];
 const emailKey = value => String(value || '').trim().toLowerCase();
@@ -25,20 +25,41 @@ export class AccountLifecycleError extends Error {
   constructor(message, status = 409) { super(message); this.status = status; }
 }
 
-export function relatedAccountOrders(account, commerce) {
+function firstById(items) {
+  const index = new Map();
+  for (const row of rows(items)) if (!index.has(row.id)) index.set(row.id, row);
+  return index;
+}
+
+function lifecycleReadContext(commerce) {
+  const ordersByTarget = new Map();
+  for (const order of rows(commerce?.orders)) {
+    const type = productType(order), identity = personalStock(type) ? targetKey(order) : emailKey(order.email);
+    let identities = ordersByTarget.get(type);
+    if (!identities) ordersByTarget.set(type, identities = new Map());
+    const related = identities.get(identity);
+    if (related) related.push(order); else identities.set(identity, [order]);
+  }
+  return { ordersByTarget, customers: firstById(commerce?.customers), tenants: firstById(commerce?.tenants) };
+}
+
+export function relatedAccountOrders(account, commerce, context) {
   const links = new Set(rows(account.usageLinks).map(link => link.orderId).filter(Boolean));
-  const all = rows(commerce?.orders).filter(order => productType(order) === account.type &&
+  const identity = personalStock(account.type) ? targetKey(account) : emailKey(account.email);
+  const candidates = context ? context.ordersByTarget.get(account.type)?.get(identity) || [] : rows(commerce?.orders);
+  const all = candidates.filter(order => productType(order) === account.type &&
     (personalStock(account.type) ? sameTarget(order, account)
       : emailKey(order.email) === emailKey(account.email)));
   const direct = all.filter(order => order.accountId === account.id || links.has(order.id));
   if (personalStock(account.type)) return direct.sort((a, b) => orderTime(b) - orderTime(a));
   const customers = new Set(direct.map(order => order.customerId).filter(Boolean));
-  return all.filter(order => direct.includes(order) || (order.businessType === '续费' && customers.has(order.customerId)))
+  const linked = new Set(direct);
+  return all.filter(order => linked.has(order) || (order.businessType === '续费' && customers.has(order.customerId)))
     .sort((a, b) => orderTime(b) - orderTime(a) || instant(b.createdAt) - instant(a.createdAt));
 }
 
-export function accountLifecycleSummary(account, commerce, now = Date.now()) {
-  const history = relatedAccountOrders(account, commerce);
+export function accountLifecycleSummary(account, commerce, now = Date.now(), context) {
+  const history = relatedAccountOrders(account, commerce, context);
   const released = releasedAccountOrders(account);
   const personal = personalStock(account.type);
   const current = history.filter(order => !released.has(order.id) && !order.cancelled && !order.subscriptionEnded &&
@@ -58,7 +79,7 @@ export function accountLifecycleSummary(account, commerce, now = Date.now()) {
     : state(account) === 'available' && account.source === '历史入库' && account.status === '冻结' ? '待核对交付资料'
     : state(account) === 'available' ? lifecycle?.disposition === 'recovered' ? '已回收可用' : '首次可用'
     : latest && instant(latest.expiry) && instant(latest.expiry) <= now ? '到期待处理' : '使用中';
-  const name = id => rows(commerce?.customers).find(customer => customer.id === id)?.name || (id ? '历史客户' : '未分配');
+  const name = id => (context ? context.customers.get(id) : rows(commerce?.customers).find(customer => customer.id === id))?.name || (id ? '历史客户' : '未分配');
   const snapshot = order => ({
     id: order.id, orderNo: order.orderNo || order.id, product: order.product, plan: order.plan || '', businessType: order.businessType,
     customerId: order.customerId || '', customer: name(order.customerId), start: order.start || '', expiry: order.expiry || '',
@@ -66,7 +87,7 @@ export function accountLifecycleSummary(account, commerce, now = Date.now()) {
     paidCurrency: order.paidCurrency || '', paidConfirmed: order.paidConfirmed === true,
     ...(personal && { entitlementStatus: order.entitlementStatus, cancelled: order.cancelled === true }),
     kyc: kycLabel(order.kyc), verifier: order.verifier || '', verifierPhone: order.verifierPhone || '',
-    tenant: rows(commerce?.tenants).find(tenant => tenant.id === order.tenantId)?.name || '',
+    tenant: (context ? context.tenants.get(order.tenantId) : rows(commerce?.tenants).find(tenant => tenant.id === order.tenantId))?.name || '',
     released: released.has(order.id)
   });
   const verified = history.find(order => kycLabel(order.kyc) === 'KYC 认证');
@@ -85,8 +106,10 @@ export function accountLifecycleSummary(account, commerce, now = Date.now()) {
 }
 
 export function accountLifecycleSummaries(inventory, commerce, now) {
-  return rows(inventory?.accounts).filter(managedAccount)
-    .map(account => accountLifecycleSummary(account, commerce, now));
+  const accounts = rows(inventory?.accounts).filter(managedAccount);
+  if (!accounts.length) return [];
+  const context = lifecycleReadContext(commerce);
+  return accounts.map(account => accountLifecycleSummary(account, commerce, now, context));
 }
 
 export function changeAccountLifecycle(inventory, commerce, command, actor, now = new Date()) {
@@ -150,10 +173,11 @@ export function changeAccountLifecycle(inventory, commerce, command, actor, now 
 
 export function checkInventoryRenewals(previousCommerce, commerce, inventory) {
   const previous = new Map(rows(previousCommerce?.orders).map(order => [order.id, order]));
+  const accountsById = firstById(inventory?.accounts);
   for (const order of rows(commerce?.orders)) {
     const prior = previous.get(order.id);
     if (prior) {
-      const account = rows(inventory?.accounts).find(row => row.id === prior.accountId);
+      const account = accountsById.get(prior.accountId);
       if (systemAccount(account) && (['accountId', 'email', 'product', 'businessType', 'customerId'].some(field => order[field] !== prior[field]) ||
           (personalStock(account.type) && !sameTarget(order, prior))))
         return '原库存账号及客户关联必须保留，不能通过普通订单更正重新分配';
@@ -162,7 +186,7 @@ export function checkInventoryRenewals(previousCommerce, commerce, inventory) {
     }
     if (personalProduct(order.product)) {
       if (!order.accountId || order.businessType === '成品交付') continue;
-      const account = rows(inventory?.accounts).find(row => row.id === order.accountId);
+      const account = accountsById.get(order.accountId);
       if (order.businessType !== '续费' || !systemAccount(account) ||
           account.type !== productType(order) || !sameTarget(order, account))
         return '请明确选择与本次续费一致的库存账号';

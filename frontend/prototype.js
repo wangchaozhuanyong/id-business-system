@@ -751,6 +751,7 @@ function confirmAction(title, message, callback, label = '确认操作') {
 function openDrawer(title, description, body, footer = '', context = '', layout = {}) {
   const drawer = $('#drawer');
   const tabScroll = captureTabScroll(drawer);
+  window.IDSearchInput?.suspend(drawer);
   if (drawer.open) {
     preserveDrawerDraft();
     drawer.dispatchEvent(new Event('id-view-deactivate'));
@@ -766,6 +767,7 @@ function openDrawer(title, description, body, footer = '', context = '', layout 
   drawer.innerHTML = `<header class="drawer-header">${heading}<button class="icon-button" data-action="drawer-close" aria-label="关闭抽屉">${icon('close')}</button></header><div class="drawer-body"${layout.tabs ? ' id="toolbox-content" role="tabpanel" aria-labelledby="toolbox-active-tab"' : ''}>${body}</div>${footer ? `<footer class="drawer-footer">${footer}</footer>` : ''}`;
   normalizeDrawerActions(drawer);
   drawer.showModal();
+  window.IDSearchInput?.restore(drawer);
   restoreTabScroll(drawer, tabScroll);
   requestAnimationFrame(() => { if (drawer.open) updateMobileDatePreviews(drawer); });
 }
@@ -819,6 +821,7 @@ function preserveDrawerDraft() {
   if (form && state.drawerContext) state.drafts.set(state.drawerContext, readDraft(form));
 }
 function closeDrawer() {
+  window.IDSearchInput?.suspend($('#drawer'));
   const toolEntry = $('#drawer').dataset.layout === 'workspace-tools'
     ? $$('.topbar-tools button').find((button) => button.dataset.tab === state.toolsTab) : null;
   preserveDrawerDraft();
@@ -1377,7 +1380,7 @@ function renderMailbox() {
       )
       .join(
         ''
-      )}</div><div class="toolbar list-filters"><div class="toolbar-left"><div class="search-field">${icon('search')}<input id="list-search" aria-label="搜索资料" placeholder="搜索邮箱、备注或辅助邮箱" value="${escapeHtml(state.query)}" /></div><select id="country-filter" aria-label="筛选国家">${options([['', '全部国家'], '马来西亚', '美国', '日本', '新加坡'], state.country)}</select><select id="status-filter" aria-label="筛选账号状态">${options([['', '全部状态'], '正常', '冻结'], state.status)}</select></div><div class="toolbar-right">${button('列设置', 'column-settings', '', 'columns', `data-table-id="${tableId}"`)}${button('批量导入', 'mail-import', '', 'upload')}</div></div>${getSelection('inventory').size ? `<div class="selection-bar">已选择 ${getSelection('inventory').size} 条${textAction('复制所选', 'mail-copy-selected')}${state.mailTab === 'used' ? textAction('归还所选', 'mail-return-selected') : ''}</div>` : ''}${table(columns, pageRows(filtered), 'inventory', tableId)}${pagination(filtered.length)}</section>`
+      )}</div><div class="toolbar list-filters"><div class="toolbar-left"><div class="search-field">${icon('search')}<input data-auto-search id="list-search" aria-label="搜索资料" placeholder="搜索邮箱、备注或辅助邮箱" value="${escapeHtml(state.query)}" /></div><select id="country-filter" aria-label="筛选国家">${options([['', '全部国家'], '马来西亚', '美国', '日本', '新加坡'], state.country)}</select><select id="status-filter" aria-label="筛选账号状态">${options([['', '全部状态'], '正常', '冻结'], state.status)}</select></div><div class="toolbar-right">${button('列设置', 'column-settings', '', 'columns', `data-table-id="${tableId}"`)}${button('批量导入', 'mail-import', '', 'upload')}</div></div>${getSelection('inventory').size ? `<div class="selection-bar">已选择 ${getSelection('inventory').size} 条${textAction('复制所选', 'mail-copy-selected')}${state.mailTab === 'used' ? textAction('归还所选', 'mail-return-selected') : ''}</div>` : ''}${table(columns, pageRows(filtered), 'inventory', tableId)}${pagination(filtered.length)}</section>`
   );
 }
 function extractionRows() {
@@ -1535,7 +1538,7 @@ function renderClaude() {
       )
       .join(
         ''
-      )}</div>${state.claudeTab === 'rental' ? renderRentals() : `<div class="toolbar"><div class="toolbar-left"><div class="search-field">${icon('search')}<input id="list-search" aria-label="搜索 Claude 账号" placeholder="搜索邮箱、租户或归属人" value="${escapeHtml(state.query)}" /></div><select id="status-filter" aria-label="筛选套餐">${options([['', '全部套餐'], 'Pro', 'Max 5x', 'Max 20x'], state.status)}</select></div><div class="toolbar-right">${button('生成付租批次', 'rental-create', '', 'orders', getSelection('claude').size ? '' : 'disabled')}${button('运营设置', 'claude-settings', '', 'settings')}</div></div>${getSelection('claude').size ? `<div class="selection-bar">已选择 ${getSelection('claude').size} 个账号${textAction('清除选择', 'clear-selection', 'data-scope="claude"')}</div>` : ''}${table(columns, pageRows(rows), 'claude', 'Claude专属')}${pagination(rows.length)}`}</section>`
+      )}</div>${state.claudeTab === 'rental' ? renderRentals() : `<div class="toolbar"><div class="toolbar-left"><div class="search-field">${icon('search')}<input data-auto-search id="list-search" aria-label="搜索 Claude 账号" placeholder="搜索邮箱、租户或归属人" value="${escapeHtml(state.query)}" /></div><select id="status-filter" aria-label="筛选套餐">${options([['', '全部套餐'], 'Pro', 'Max 5x', 'Max 20x'], state.status)}</select></div><div class="toolbar-right">${button('生成付租批次', 'rental-create', '', 'orders', getSelection('claude').size ? '' : 'disabled')}${button('运营设置', 'claude-settings', '', 'settings')}</div></div>${getSelection('claude').size ? `<div class="selection-bar">已选择 ${getSelection('claude').size} 个账号${textAction('清除选择', 'clear-selection', 'data-scope="claude"')}</div>` : ''}${table(columns, pageRows(rows), 'claude', 'Claude专属')}${pagination(rows.length)}`}</section>`
   );
 }
 function renderRentals() {
@@ -1670,6 +1673,7 @@ function activePageRegion() {
   return $('#main > [data-page-region]:not([hidden])') || $('#main');
 }
 function clearPageRegions() {
+  window.IDSearchInput?.clear();
   mountedPage?.module?.deactivate?.(mountedPage.region);
   for (const module of window.IDDesignModules) module.clearPageState?.();
   mountedPage?.region.remove();
@@ -1698,6 +1702,12 @@ for (const eventName of ['wheel', 'touchstart', 'pointerdown', 'keydown'])
     layoutRenderVersion++;
   }, { passive: true });
 function render() {
+  if (window.IDSearchInput?.deferRender(activePageRegion())) return;
+  // Background notifications can update sibling lists directly. Keep the live
+  // editor node, its focus, secrets and original version until the user acts.
+  if ($('#main')?.dataset.layoutRoute === state.route &&
+      window.IDChangeSync?.preserveEditor?.() && $('#main form[novalidate]')) return;
+  window.IDSearchInput?.suspend(activePageRegion());
   closeActionMenu();
   restoreMobileEntryFooter();
   const renderVersion = ++layoutRenderVersion;
@@ -1794,6 +1804,7 @@ function render() {
   const entryForm = $(entryFormSelector, region);
   if (entryForm && entryFormScroll) entryForm.scrollTop = entryFormScroll;
   restoreTabScroll(region, tabScroll);
+  window.IDSearchInput?.restore(region);
   if (tableScroll.size) {
     for (const table of $$('.table-viewport > table[data-table]', region)) {
       const scroll = tableScroll.get(tableScrollKey(table));
@@ -1868,6 +1879,7 @@ function navigate(event) {
   // A hash navigation can emit both popstate and hashchange.
   if (event && !legacyCustomerTags && !legacyRechargeSync && state.route === next && mountedPage?.region.isConnected &&
       mountedPage.region.dataset.pageRegion === next) return;
+  window.IDSearchInput?.suspend(activePageRegion());
   preserveMainDraft();
   if (state.route !== next) {
     if (state.route)
@@ -2477,7 +2489,7 @@ function showTools(tab = state.toolsTab) {
   }
   const body =
     tab === '个人工具'
-      ? `<div class="toolbox-search search-field">${icon('search')}<input id="personal-tool-search" aria-label="搜索个人工具" placeholder="搜索个人工具" value="${escapeHtml(state.personalToolQuery)}" /></div><div id="personal-tool-results">${personalToolTiles()}</div>`
+      ? `<div class="toolbox-search search-field">${icon('search')}<input data-auto-search id="personal-tool-search" aria-label="搜索个人工具" placeholder="搜索个人工具" value="${escapeHtml(state.personalToolQuery)}" /></div><div id="personal-tool-results">${personalToolTiles()}</div>`
       : `<div class="form-section"><div class="tool-grid ${tab === '在线工具' ? 'online-tool-list' : ''}">${(tab === '在线工具' ? online : copy)
           .map(([iconName, title, caption, planned]) =>
             tab === '在线工具'
