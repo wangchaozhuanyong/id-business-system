@@ -25,6 +25,7 @@ const expired = {
   start: beijing('2026-10-08T08:00:00'), expiry: beijing('2026-11-08T08:00:00')
 };
 const current = order('gpt-now', '2026-11-10T09:30:00', {
+  source: '管理员手工', paidConfirmed: false, receiptConfirmed: false,
   refunds: [{ id: 'refund-a', amount: '50', currency: 'CNY', at: refundAt }]
 });
 current.fxSnapshot = createOrderSnapshot({
@@ -436,7 +437,7 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     assert.deepEqual(await claudeStock.locator('td').allTextContents(), claudeCounts);
     assert.equal(await claudeStock.locator('[data-stock-column="dead"] .tag.danger').innerText(), '1');
     const customerPanel = page.locator('[aria-labelledby="overview-customers"].panel');
-    assert.match(await customerPanel.innerText(), /待核对订单\s+[1-9]/);
+    assert.match(await customerPanel.innerText(), /资料问题订单\s+[1-9]/);
     assert.deepEqual(await customerPanel.locator('.overview-customer-summary a').evaluateAll(links =>
       links.map(link => [link.textContent, link.getAttribute('href')])), [
       ['客户列表', '#/customers/list'], ['续费管理', '#/workspace/renewals'], ['流失明细', '#/workspace/customer-loss']
@@ -755,10 +756,12 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     await context.close();
   });
 
-  await t.test('实收确认按区间内未撤单订单计数，未确认和读取失败分别显示', async () => {
+  await t.test('已录入实收无需再次确认，缺金额、自动预填价和读取失败分别显示', async () => {
     const fixtures = { commerce: { version: 1, data: { ...commerceFixture, orders: [
       current,
-      order('unconfirmed', '2026-11-10T08:00:00', { receiptConfirmed: false }),
+      order('legacy-recorded', '2026-11-10T08:00:00', { source: '管理员手工', receiptConfirmed: false, saleAmount: '190' }),
+      order('missing-amount', '2026-11-10T08:00:00', { receiptConfirmed: false, saleAmount: '' }),
+      order('auto-price', '2026-11-10T08:00:00', { source: '线上代充', taskId: 'synthetic-task', receiptConfirmed: false }),
       order('cancelled-receipt', '2026-11-10T08:00:00', { cancelled: true }),
       order('future-receipt', '2026-11-10T10:40:00.001')
     ] } }, inventory: { version: 1, data: inventoryFixture }, appleBalance: { version: 1, data: appleFixture } };
@@ -766,13 +769,16 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     const { page, context } = session;
     await page.goto(origin + '/#/overview'); await refreshed(page);
     const progress = page.locator('[data-overview-progress-group="receipts"]');
-    assert.equal(await progress.locator('progress').getAttribute('value'), '1');
-    assert.equal(await progress.locator('progress').getAttribute('max'), '2');
-    assert.deepEqual(await progress.locator('dd').allTextContents(), ['1笔', '1笔']);
+    assert.equal(await progress.locator('progress').getAttribute('value'), '2');
+    assert.equal(await progress.locator('progress').getAttribute('max'), '4');
+    assert.deepEqual(await progress.locator('dd').allTextContents(), ['2笔', '2笔']);
     assert.match(await progress.innerText(), /50%/);
+    assert.match(await progress.innerText(), /已录入实收/);
+    assert.doesNotMatch(await progress.innerText(), /待确认实收|实收确认/);
+    assert.equal(await value(page, 'receipts'), '440.00');
     await page.route('**/api/local/commerce', route => route.fulfill({ status: 503, json: {} }));
     await page.getByRole('button', { name: '刷新数据', exact: true }).click(); await refreshed(page);
-    assert.deepEqual(await progress.locator('dd').allTextContents(), ['1笔', '1笔']);
+    assert.deepEqual(await progress.locator('dd').allTextContents(), ['2笔', '2笔']);
     assert.match(await progress.innerText(), /读取失败 · 保留/);
     checkTransport(session); await context.close();
   });

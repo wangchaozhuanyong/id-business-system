@@ -97,16 +97,18 @@ test('四类订阅页面使用独立状态、真实复制入口与历史兼容�
               labelTop: text('.summary-label'), numberTop: text('.summary-number') };
           }));
         assert.equal(metrics.length, 5, '每类订阅都保留全部五项统计');
-        if (width > 900) {
-          for (const item of metrics) {
-            assert(Math.abs(item.y - metrics[0].y) <= 1, '宽屏五项统计必须同一行');
+        for (const item of metrics) {
+          assert(Math.abs(item.y - metrics[0].y) <= 1, '紧凑概览的五项统计必须同一行');
+          assert(Math.abs(item.labelTop - metrics[0].labelTop) <= 1, '统计标题真实文字对齐');
+          assert(Math.abs(item.numberTop - metrics[0].numberTop) <= 1, '统计数字真实文字对齐');
+          if (width > 900)
             assert(Math.abs(item.width - metrics[0].width) <= 1, '各项统计等宽');
-            assert(Math.abs(item.labelTop - metrics[0].labelTop) <= 1, '统计标题真实文字对齐');
-            assert(Math.abs(item.numberTop - metrics[0].numberTop) <= 1, '统计数字真实文字对齐');
-          }
-        } else {
-          assert(metrics[2].y >= metrics[0].y + metrics[0].height, '窄屏统计自然分行');
-          assert(Math.abs(metrics[4].right - metrics[1].right) <= 1, '窄屏最后一项占满整行');
+        }
+        if (width <= 900) {
+          const overview = page.getByRole('group', { name: '当前视图统计' });
+          await overview.focus();
+          await overview.press('ArrowRight');
+          await page.waitForFunction(() => document.querySelector('.subscription-center-content').scrollLeft > 0);
         }
         assert.match(await page.locator('#page-title').innerText(), new RegExp(name === 'gpt' ? 'GPT' : name === 'claude' ? 'Claude' : name === 'gemini' ? 'Gemini' : 'Grok'));
         const subscriptionRow = page.locator('#subscription-list tbody tr[data-row-id]');

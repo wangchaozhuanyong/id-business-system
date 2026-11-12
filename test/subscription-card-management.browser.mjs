@@ -33,6 +33,15 @@ async function fixture() {
     ...Array.from({ length: 18 }, (_, i) => row('active-' + i, customers[0].id, 'active-' + i + '@example.test', -500, 260 + i, 'recharge:' + (100 + i))));
   data['card-types'] = { version: 1, items: [{ id: 'a', name: 'wise潘', active: true }],
     assignments: { 'recharge:7': 'a' } };
+  data['subscription-card-status'] = { items: orders.filter(order => order.cardId).map(order => ({
+    id: order.id, cardKey: order.cardId,
+    number: order.cardId === 'recharge:7' ? pan : '5555555555554444',
+    last4: order.cardId === 'recharge:7' ? '4242' : '4444',
+    typeId: order.cardId === 'recharge:7' ? 'a' : '',
+    typeName: order.cardId === 'recharge:7' ? 'wise潘' : '合成新卡类型',
+    serials: order.cardId === 'recharge:7' ? ['0007'] : [],
+    state: 'normal', canFreeze: true, counts: { GPT: 1 }
+  })), frozen: [] };
   data['subscription-card-estimates'] = { items: orders.filter(order => order.cardId).map(order => ({
     id: order.id, version: order.version, amount: '10000', currency: 'PHP', usd: '175.92', source: 'ExchangeRate-API',
     quotedAt: instant(at, -1), expiresAt: instant(at, 12), fixedFee: '0.30', bufferUsd: '2.00'
@@ -77,8 +86,7 @@ test('银行卡管理与续费共用复制、筛选、分组和预计金额', { 
           }
           assert.equal(action, 'prepare');
           return route.fulfill({ json: { orderId, account: order.email, customerName: '合成客户', last4: '4242',
-            canCopy: true, hasCard: true, availability: 'normal', confirmation, estimate,
-            balance: { amount: '42', currency: 'USD' } } });
+            canCopy: true, hasCard: true, availability: 'normal', confirmation, estimate } });
         });
         const page = await context.newPage();
         page.setDefaultTimeout(5500);
@@ -95,10 +103,13 @@ test('银行卡管理与续费共用复制、筛选、分组和预计金额', { 
         await page.getByRole('button', { name: '重试', exact: true }).click();
         const drawer = page.locator('#drawer[open]');
         const groups = page.locator('table[data-table="commerce-bank-card-groups"]');
-        await groups.locator('[data-row-id="recharge:7"]').getByRole('button', { name: '查看订阅及余额' }).click();
-        await drawer.getByText('42 USD', { exact: true }).waitFor();
+        await groups.locator('[data-row-id="recharge:7"]').getByRole('button', { name: '查看关联订单' }).click();
+        await drawer.getByText('银行卡关联订单', { exact: true }).waitFor();
+        assert.equal(await drawer.getByText(pan, { exact: true }).count(), 1);
+        assert.equal(await drawer.getByText('0007', { exact: true }).count(), 1);
+        assert.doesNotMatch(await drawer.innerText(), /余额/);
         assert.deepEqual(await drawer.locator('table[data-table="commerce-bank-card-subs"] tr[data-row-id]')
-          .evaluateAll(rows => rows.map(row => row.dataset.rowId)), ['upcoming', 'switch-old', 'expired']);
+          .evaluateAll(rows => rows.map(row => row.dataset.rowId)), ['upcoming', 'switch-old', 'expired', 'history']);
         await drawer.getByRole('button', { name: '关闭', exact: true }).click();
         const detailTab = page.getByRole('tab', { name: '订阅用卡明细', exact: true });
         await detailTab.click();
@@ -112,7 +123,11 @@ test('银行卡管理与续费共用复制、筛选、分组和预计金额', { 
         assert.equal(await upcoming.getByText('即将到期', { exact: true }).count(), 1);
         assert.equal(await switchNew.getByText('使用中').count(), 1);
         assert.equal(await list.getByText('no-card@example.test').count(), 0);
-        assert.ok(!(await list.innerText()).includes(pan));
+        assert.equal(await upcoming.getByText(pan, { exact: true }).count(), 1);
+        assert.equal(await upcoming.getByText('0007', { exact: true }).count(), 1);
+        assert.equal(await switchNew.getByText('5555555555554444', { exact: true }).count(), 1);
+        assert.equal(await switchNew.getByText('合成新卡类型', { exact: true }).count(), 1);
+        assert.equal(await switchNew.getByText('0007', { exact: true }).count(), 0);
         assert.equal(await rows.count(), 20);
         const amountHeading = list.locator('thead th[aria-label="预计金额"]');
         const amountHelp = amountHeading.getByLabel('查看预计金额说明');

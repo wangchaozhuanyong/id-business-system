@@ -44,6 +44,9 @@ test('真实成功回执必须包含同一充值码、邮箱、套餐和实际�
 test('续费仅匹配唯一有效客户链的当前到期原单', () => {
   const earlier = { ...prior, id: 'order-earlier', start: '2026-09-13T14:00', expiry: '2026-10-13T14:00' };
   assert.equal(matchRechargeRenewal(recharge, commerce([earlier, prior])).prior.id, prior.id);
+  assert.equal(matchRechargeRenewal(recharge, commerce([{ ...prior,
+    entitlementStatus: undefined, paidConfirmed: false, receiptConfirmed: false
+  }])).prior.id, prior.id, '已录入周期的手工原单不依赖旧财务确认');
   assert.equal(matchRechargeRenewal(recharge, commerce([{ ...prior, expiry: '2026-11-11T14:00' }])).kind, 'matched');
   assert.equal(matchRechargeRenewal(recharge, commerce([{ ...prior, expiry: '2026-11-17T14:00' }])).kind, 'none');
   assert.equal(matchRechargeRenewal(recharge, commerce([{ ...prior, subscriptionEnded: true }])).kind, 'none');

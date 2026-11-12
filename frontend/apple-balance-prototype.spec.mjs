@@ -155,6 +155,20 @@ test('更换苹果ID原子预检，目标余额不足时原账户不先退钱', 
   assert.equal(ledger.commitOrder(order(), options).ok, false);
 });
 
+test('充值到账依据选填，空备注重复提交只记一次流水', () => {
+  const ledger = runtime();
+  const options = { topup: true, commandId: 'synthetic-optional-reason', expectedVersion: ledger.get('apple-b').version };
+  const result = ledger.adjust('apple-b', '250', options);
+  assert.equal(result.ok, true);
+  assert.equal(result.entry.reason, '');
+  const balance = ledger.get('apple-b').balance, count = ledger.entries('apple-b').length;
+  assert.equal(ledger.adjust('apple-b', '250', { ...options, reason: '' }).ok, true);
+  assert.equal(ledger.entries('apple-b').length, count);
+  assert.equal(ledger.get('apple-b').balance, balance);
+  assert.equal(ledger.adjust('apple-b', '251', options).ok, false);
+  assert.equal(ledger.adjust('apple-b', '5', {}).ok, false, '人工余额更正继续要求原因');
+});
+
 test('人工变动撤回以反向流水补偿；后续订单发生后禁止覆盖', () => {
   const ledger = runtime();
   const first = ledger.adjust('apple-funding-demo-1', '0.0001', { reason: '精确余额更正' });

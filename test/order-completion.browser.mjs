@@ -243,7 +243,8 @@ test('手工旧单从补全和续费提醒进入原单，独立补邮箱并保�
   await page.getByRole('button', { name: '手工与历史单', exact: true }).click();
   const row = page.locator('tr[data-row-id="manual"]');
   await row.getByText('SYN-manual', { exact: true }).waitFor();
-  assert.match(await row.innerText(), /邮箱账号.*客户实收/s);
+  assert.match(await row.innerText(), /邮箱账号/);
+  assert.doesNotMatch(await row.innerText(), /客户实收/);
   await page.getByRole('button', { name: '补齐空白归属', exact: true }).click();
   await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
   await row.getByText(superAdmin.name, { exact: true }).waitFor();
@@ -251,6 +252,7 @@ test('手工旧单从补全和续费提醒进入原单，独立补邮箱并保�
   await page.waitForURL('**/#/orders/detail/manual');
   await page.getByRole('button', { name: '补齐资料', exact: true }).click();
   await drawer.getByRole('heading', { name: '补齐原单资料', exact: true }).waitFor();
+  assert.equal(await drawer.locator('[name="commerce-completionFullReceipt"]').count(), 0);
   await drawer.getByRole('button', { name: '取消', exact: true }).click();
 
   await page.goto(origin + '/#/workspace/renewals');

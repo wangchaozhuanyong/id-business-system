@@ -79,6 +79,10 @@ const list = page => page.locator('table[data-table="commerce-customer-loss"]');
 const tab = (page, name) => page.getByRole('tab', { name }).click();
 const drawer = page => page.locator('#drawer');
 const search = page => page.getByRole('textbox', { name: '搜索当前列表' });
+const searchFor = async (page, value) => {
+  await search(page).fill(value);
+  await search(page).press('Enter');
+};
 const waitForList = page => page.getByRole('region', { name: '客户流失概览' }).waitFor();
 const overviewMetric = (page, label) => page.locator('.overview-customer-summary > div')
   .filter({ has: page.getByText(label, { exact: true }) });
@@ -151,7 +155,7 @@ test('客户流失归集、订阅历史、数据核对与响应式离线验收',
       await page.goto(lossUrl);
       await waitForList(page);
       for (const [view, tab, rows] of [['scheduled', 'scheduled', 1], ['recent', '', 2], ['review', 'review', 8]]) {
-        await search(page).fill('不会匹配的隔离查询');
+        await searchFor(page, '不会匹配的隔离查询');
         await page.getByLabel('产品和套餐', { exact: true }).selectOption(JSON.stringify(['GPT', 'Pro 100']));
         await page.locator('#sidebar a[href="#/overview"]').click();
         await detail(view).getByRole('button').click();
@@ -191,7 +195,7 @@ test('客户流失归集、订阅历史、数据核对与响应式离线验收',
     await page.getByLabel('产品和套餐', { exact: true }).selectOption(JSON.stringify(['GPT', 'Pro 100']));
     await page.getByLabel('订阅次数', { exact: true }).selectOption('few');
     await page.getByLabel('排序方式', { exact: true }).selectOption('count');
-    await search(page).fill('QA-GPT-LEGACY');
+    await searchFor(page, 'QA-GPT-LEGACY');
     assert.equal(await mainPager(page).getAttribute('data-total'), '1');
     assert.equal(await mainPager(page).getAttribute('data-page'), '1');
     await main.getByRole('button', { name: '订阅历史', exact: true }).click();
@@ -210,16 +214,16 @@ test('客户流失归集、订阅历史、数据核对与响应式离线验收',
     await page.keyboard.press('Escape');
     assert.equal(await search(page).inputValue(), 'QA-GPT-LEGACY');
     assert.equal(await page.getByLabel('订阅次数', { exact: true }).inputValue(), 'few');
-    await search(page).fill('');
+    await searchFor(page, '');
     await page.getByLabel('产品和套餐', { exact: true }).selectOption('');
     await page.getByLabel('订阅次数', { exact: true }).selectOption('');
     await page.getByLabel('排序方式', { exact: true }).selectOption('recent');
   });
 
-  await t.test('明确待核对原因，未来服务单列，刷新失败保留上次资料', async () => {
-    await tab(page, /^待核对/);
+  await t.test('明确资料缺项和冲突，未来服务单列，刷新失败保留上次资料', async () => {
+    await tab(page, /^资料问题/);
     const text = await list(page).innerText();
-    for (const issue of ['客户归属待核对', '订阅周期缺失或无效', '联系方式匹配多个客户',
+    for (const issue of ['缺少客户关联', '订阅周期缺失或无效', '联系方式匹配多个客户',
       '实际终止时间待核对', '重复订单或代充任务资料冲突', '套餐待核对', '代充开通证据待核对'])
       assert(text.includes(issue), issue);
     await list(page).getByRole('row').filter({ hasText: 'QA-PERIOD' })
@@ -300,10 +304,10 @@ test('客户流失归集、订阅历史、数据核对与响应式离线验收',
         await page.keyboard.press('Escape');
       }
       if (output && [1440, 390].includes(width)) await page.screenshot({ path: join(output, `list-${width}-${theme}.png`) });
-      await search(page).fill('不存在的客户');
+      await searchFor(page, '不存在的客户');
       await page.getByText('暂无符合条件的记录', { exact: true }).filter({ visible: true }).waitFor();
       assert.equal(await mainPager(page).getAttribute('data-total'), '0');
-      await search(page).fill('');
+      await searchFor(page, '');
     }
   });
 
@@ -419,15 +423,65 @@ test('部分退款保留有效期，明确终止的退款同时写入实际时�
   assert.deepEqual(requests.external, []);
 });
 
-test('已确认开通的人工订阅按周期统计流失，财务或邮箱缺项可后补', { timeout: 90_000 }, async t => {
+test('旧手工确认标记不制造待核对，缺客户单只提示真实关联缺项', { timeout: 45_000 }, async t => {
+  const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const manual = order('QA-OLD-MANUAL', 'known', '2026-11-08T02:32', '2026-12-08T00:00', {
+    product: 'Claude Pro', plan: 'Pro', email: '', paidConfirmed: false, receiptConfirmed: false
+  });
+  const unlinked = Array.from({ length: 4 }, (_, i) => order(`QA-UNLINKED-${i}`, '', '2026-10-31T22:00', '2026-11-30T00:00', {
+    product: 'Claude Max', plan: 'Max 20x', source: '历史入库', entitlementStatus: 'active',
+    paidConfirmed: false, receiptConfirmed: false, tenantId: 'supplier'
+  }));
+  const data = {
+    commerce: { version: 1, data: { customers: [{ id: 'known', name: '合成已关联客户', active: true }],
+      orders: [manual, ...unlinked], tenants: [{ id: 'supplier', name: '合成供货租户' }], operating: [], rentBatches: [], logs: [] } },
+    inventory: { version: 1, data: { accounts: [], mailboxes: [] }, accountSummaries: [] }
+  };
+  const before = structuredClone(data);
+  const { context, page, writes, errors, requests } = await openFixture(browser, data);
+  t.after(() => context.close());
+  await page.goto(lossUrl);
+  await waitForList(page);
+  assert.deepEqual(await summary(page), ['0位客户', '0位客户', '4笔', '0位客户']);
+  const reviewTab = page.getByRole('tab', { name: '资料问题', exact: true });
+  assert.equal(await reviewTab.locator('.tab-count').textContent(), '4');
+  await reviewTab.click();
+  const rows = list(page).locator('tbody tr[data-row-id]');
+  assert.equal(await rows.count(), 4);
+  for (const row of await rows.all()) {
+    assert.match(await row.innerText(), /未关联客户.*缺少客户关联/s);
+    assert.doesNotMatch(await row.innerText(), /待确认|开通凭据|合成供货租户/);
+  }
+  assert.doesNotMatch(await list(page).innerText(), /QA-OLD-MANUAL/);
+  await rows.first().getByRole('button', { name: '查看订单', exact: true }).click();
+  await drawer(page).getByRole('heading', { name: '订单详情', exact: true }).waitFor();
+  assert.match(await drawer(page).innerText(), /订阅状态\s+有效/);
+  await drawer(page).getByRole('button', { name: '补齐资料', exact: true }).waitFor();
+  await page.keyboard.press('Escape');
+  if (process.env.ID_LAYOUT_QA_OUTPUT) {
+    await mkdir(process.env.ID_LAYOUT_QA_OUTPUT, { recursive: true });
+    await page.screenshot({ path: join(process.env.ID_LAYOUT_QA_OUTPUT, 'recorded-subscriptions-missing-customers.png') });
+  }
+  await page.goto(origin + '/#/overview');
+  await overviewMetric(page, '有效服务').getByText('1位', { exact: true }).waitFor();
+  assert.deepEqual(data, before);
+  assert.deepEqual(writes, []);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(requests.external, []);
+  assert.deepEqual(requests.unavailable, []);
+});
+
+test('已录入周期的人工订阅直接统计流失，旧确认标记和财务或邮箱缺项不阻挡', { timeout: 90_000 }, async t => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
   const browser = await chromium.launch();
   t.after(() => browser.close());
   const customers = Array.from({ length: 43 }, (_, i) => ({ id: `manual-${i}`, name: `合成到期客户 ${i + 1}`, active: true }));
   const products = [['GPT', 'Plus'], ['Claude Pro', 'Pro'], ['Claude Max', 'Max 5x']];
   const orders = customers.map((customer, i) => order(`QA-MANUAL-${i}-ROW`, customer.id, '2026-10-08T10:00', '2026-11-08T10:00', {
-    product: products[i % 3][0], plan: products[i % 3][1], email: '', source: '管理员手工',
-    entitlementStatus: 'active', paidConfirmed: false, receiptConfirmed: false, costConfirmed: false
+    product: products[i % 3][0], plan: products[i % 3][1], email: '', source: i % 2 ? '历史入库' : '管理员手工',
+    paidConfirmed: false, receiptConfirmed: false, costConfirmed: false
   }));
   const data = {
     commerce: { version: 1, data: { customers, orders, tenants: [], operating: [], rentBatches: [], logs: [] } },
@@ -447,15 +501,14 @@ test('已确认开通的人工订阅按周期统计流失，财务或邮箱缺�
   await mainPager(page).getByRole('button', { name: '下一页' }).click();
   await mainPager(page).getByRole('button', { name: '下一页' }).click();
   assert.equal(await list(page).locator('tbody tr[data-row-id]').count(), 3);
-  await search(page).fill('QA-MANUAL-0-ROW');
-  await list(page).locator('tbody tr[data-row-id="manual-0"]').waitFor();
+  await searchFor(page, 'QA-MANUAL-0-ROW');
   await list(page).getByRole('button', { name: '订阅历史', exact: true }).click();
   assert.deepEqual(await drawer(page).locator('.summary-number').allTextContents(), ['1次', '0项', '0个', '0笔']);
   await drawer(page).getByRole('button', { name: '查看订单 QA-MANUAL-0-ROW', exact: true }).click();
   await drawer(page).getByRole('heading', { name: '订单详情', exact: true }).waitFor();
-  assert.match(await drawer(page).innerText(), /付款状态\s+付款待核对/);
+  assert.match(await drawer(page).innerText(), /付款状态\s+已登记付款/);
   await page.keyboard.press('Escape');
-  await search(page).fill('');
+  await searchFor(page, '');
 
   // Follow-up reads use the same customers with active, future, invalid and cancelled renewals.
   // No write request is sent; only the isolated read fixture changes.
@@ -463,12 +516,12 @@ test('已确认开通的人工订阅按周期统计流失，财务或邮箱缺�
   orders[8].paidAmount = '';
   data.commerce.data.orders.push(
     order('QA-RENEWED-OTHER-ACCOUNT', 'manual-0', '2026-11-08T10:00', '2026-12-08T10:00', {
-      product: 'Claude Max', plan: 'Max 5x', entitlementStatus: 'active', paidConfirmed: false, email: 'different@example.test'
+      product: 'Claude Max', plan: 'Max 5x', paidConfirmed: false, email: 'different@example.test'
     }),
     order('QA-RENEWED-NO-AMOUNT', 'manual-1', '2026-11-08T10:00', '2026-12-08T10:00', {
-      entitlementStatus: 'active', paidAmount: '', paidConfirmed: false, email: ''
+      paidAmount: '', paidConfirmed: false, email: ''
     }),
-    order('QA-RENEWED-FUTURE', 'manual-2', '2026-11-11T10:00', '2026-12-11T10:00', { entitlementStatus: 'active', paidConfirmed: false }),
+    order('QA-RENEWED-FUTURE', 'manual-2', '2026-11-11T10:00', '2026-12-11T10:00', { paidConfirmed: false }),
     { ...orders[3] },
     ...['cancelled', 'failed', 'draft'].map((status, i) =>
       order('QA-NOT-OPENED-' + status, `manual-${i + 4}`, '2026-11-01T10:00', '2026-12-01T10:00', { status })),
@@ -478,18 +531,16 @@ test('已确认开通的人工订阅按周期统计流失，财务或邮箱缺�
   await page.getByRole('tab', { name: '已流失', exact: true }).locator('.tab-count').getByText('39', { exact: true }).waitFor();
   assert.deepEqual(await summary(page), ['39位客户', '39位客户', '1笔', '1位客户']);
   for (const id of ['QA-MANUAL-0-ROW', 'QA-MANUAL-1-ROW', 'QA-MANUAL-2-ROW', 'QA-MANUAL-7-ROW']) {
-    await search(page).fill(id);
-    await search(page).press('Enter');
+    await searchFor(page, id);
     assert.equal(await mainPager(page).getAttribute('data-total'), '0', id + '不应误判流失');
   }
   for (const id of ['QA-MANUAL-3-ROW', 'QA-MANUAL-4-ROW', 'QA-MANUAL-5-ROW', 'QA-MANUAL-6-ROW', 'QA-MANUAL-8-ROW']) {
-    await search(page).fill(id);
-    await search(page).press('Enter');
+    await searchFor(page, id);
     assert.equal(await mainPager(page).getAttribute('data-total'), '1', id + '应按到期订阅统计');
     assert.match(await list(page).innerText(), /1 次/);
   }
-  await search(page).fill('');
-  await tab(page, /^待核对/);
+  await searchFor(page, '');
+  await tab(page, /^资料问题/);
   assert.equal(await mainPager(page).getAttribute('data-total'), '1');
   assert.match(await list(page).innerText(), /QA-MISSING-EXPIRY.*订阅周期缺失或无效/s);
   assert.doesNotMatch(await list(page).innerText(), /开通凭据待核对/);

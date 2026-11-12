@@ -156,7 +156,7 @@ export function appleBinding(index, order) {
     ? { id } : { id: '', conflict: true };
 }
 
-export function appleFundingEligibility(wallet, order, index, settings, { actual = false, quotedPrice } = {}) {
+export function appleFundingEligibility(wallet, order, index, settings, { actual = false, quotedPrice, forSelection = false } = {}) {
   const binding = appleBinding(index, order);
   const state = index.byWallet.get(wallet?.id);
   const region = order.appleStoreRegion || wallet?.appStoreRegion;
@@ -165,7 +165,9 @@ export function appleFundingEligibility(wallet, order, index, settings, { actual
   const paid = appleAmountUnits(order.paidAmount);
   const amount = actual ? paid : paid !== null && estimate !== null && paid > estimate ? paid : estimate;
   const balance = appleAmountUnits(wallet?.balance);
-  if (!appleTarget(order) || !order.customerId) return { error: '请先核对客户和订阅账号' };
+  // The picker may show unused candidates before a new customer is saved.
+  // Order writes use the default strict check after resolving the customer.
+  if ((!appleTarget(order) || !order.customerId) && !forSelection) return { error: '请先核对客户和订阅账号' };
   if (binding.conflict) return { error: '历史苹果 ID 绑定存在冲突，请核对原订单' };
   if (order.businessType === '续费' && !binding.id)
     return { error: '未找到原订阅的苹果 ID 绑定，请核对历史付款记录' };

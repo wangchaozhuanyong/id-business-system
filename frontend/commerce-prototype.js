@@ -7,7 +7,7 @@
   const { manualOrderDetailsMissing, orderOpeningConfirmed, orderTerminationTime, orderNeedsAccount,
     validOrderEmail, validOrderXHandle, subscriptionPeriodState, subscriptionStateLabels, subscriptionTime,
     matchOrderCustomer, orderCustomerCreateAction, orderFieldChanged, subscriptionChainRoot,
-    automaticGptOrder, rechargeOrderCompletion, rechargeRenewalExpiryPending, expiredDuration, subscriptionDuration } = window.IDOrderOpening;
+    automaticGptOrder, orderReceiptRecorded, rechargeOrderCompletion, rechargeRenewalExpiryPending, expiredDuration, subscriptionDuration } = window.IDOrderOpening;
   const localData = window.IDLocalData;
   const M = A.money;
   const $ = (selector, root = document) => root.querySelector(selector);
@@ -1306,14 +1306,16 @@
       appleLedger: order.payment === '苹果内购' ? A.modules.appleBalance?.getOrderLedger?.(order.id) : undefined
     });
   }
-  const paymentPendingForAccounting = (order, result) => !order.paidConfirmed && result?.requiresPaymentConfirmation !== false;
+  const paymentRecordedForAccounting = order => finance?.hasRecordedPaymentAmount(order) ?? Boolean(order.paidConfirmed);
+  const paymentPendingForAccounting = (order, result) =>
+    result?.requiresPaymentConfirmation ?? !paymentRecordedForAccounting(order);
   function financialPendingReasons(order, accounting) {
     const reasons = [];
     const result = localData ? (accounting || localAccounting(order)) : null;
-    if (!order.receiptConfirmed) reasons.push('缺少已登记的收款金额');
-    if (paymentPendingForAccounting(order, result)) reasons.push('缺少已登记的代付金额');
+    if (!orderReceiptRecorded(order)) reasons.push('缺少已登记的收款金额');
+    if (paymentPendingForAccounting(order, result)) reasons.push('缺少已登记的代付金额或币种');
     if (result && result.status !== 'ready') reasons.push(result.reason, ...(result.additionalReasons || []));
-    return reasons;
+    return [...new Set(reasons)];
   }
   function pendingReasons(order, accounting) {
     return [...new Set([...completenessReasons(order), ...financialPendingReasons(order, accounting)])];
@@ -1321,6 +1323,7 @@
   function paymentStatus(order) {
     return order.paidConfirmed || hasPaymentHistory(order)
       ? '已付款'
+      : paymentRecordedForAccounting(order) ? '已登记付款'
       : amountValid(order.paidAmount || '')
         ? '付款待核对'
         : '未登记付款';
@@ -1442,16 +1445,16 @@
   function appleIndex() {
     return A.modules.appleBalance?.fundingIndex?.(orders);
   }
-  function appleMatchCheck(wallet, order, index = appleIndex()) {
+  function appleMatchCheck(wallet, order, index = appleIndex(), forSelection = false) {
     if (!index) return null;
     const original = orders.find(row => row.id === order.id);
     const reserved = original?.appleIdId && original.appleIdId === order.appleIdId && !original.cancelled;
     return window.IDAppleFunding.appleFundingEligibility(wallet, order, index, currencySettings, {
-      actual: Boolean(reserved && order.paidConfirmed), quotedPrice: reserved ? original.appleFunding?.expected : ''
+      actual: Boolean(reserved && order.paidConfirmed), quotedPrice: reserved ? original.appleFunding?.expected : '', forSelection
     });
   }
-  function appleEligible(wallet, order) {
-    const check = appleMatchCheck(wallet, order);
+  function appleEligible(wallet, order, forSelection = false) {
+    const check = appleMatchCheck(wallet, order, appleIndex(), forSelection);
     if (check) return !check.error;
     if (localData && (wallet.status !== '正常' || (wallet.health && wallet.health !== 'normal'))) return false;
     if (wallet.currency !== 'USD' || !amountValid(wallet.balance || '') ||
@@ -1473,7 +1476,7 @@
     const wallets = appleAccounts();
     const index = appleIndex();
     const choices = wallets.filter(wallet => wallet.id === selectedId ||
-      (index ? order.appleStoreRegion && !appleMatchCheck(wallet, order, index).error : appleEligible(wallet, order)))
+      (index ? order.appleStoreRegion && !appleMatchCheck(wallet, order, index, true).error : appleEligible(wallet, order, true)))
       .sort((a, b) => M.compare(a.balance, b.balance) || a.id.localeCompare(b.id))
       .map(wallet => [wallet.id, appleLabel(wallet.id)]);
     if (selectedId && !choices.some(([id]) => id === selectedId)) choices.unshift([selectedId, '已选苹果 ID']);
@@ -1517,7 +1520,7 @@
         region.value = order.appleStoreRegion = fixedRegion;
       }
       if (!retained && (!order.appleStoreRegion ||
-          (selected && !appleEligible(A.modules.appleBalance.get(selected), order)))) selected = '';
+          (selected && !appleEligible(A.modules.appleBalance.get(selected), order, true)))) selected = '';
     } else if (!retained && personalProduct(order.product) && order.businessType === '续费' && !order.id) {
       selected = previousAppleOrder(order)?.appleIdId || selected;
     }
@@ -1525,11 +1528,13 @@
     select.innerHTML = A.options(choices, selected);
     const notice = form.querySelector('[data-apple-match-notice]');
     if (notice) {
-      const check = selected ? appleMatchCheck(A.modules.appleBalance.get(selected), { ...order, appleIdId: selected }, index) : null;
+      const check = selected ? appleMatchCheck(A.modules.appleBalance.get(selected), { ...order, appleIdId: selected }, index, true) : null;
       const expected = check?.expected || rules?.applePrice(currencySettings, order.product, order.plan, order.appleStoreRegion);
+      const excluded = !selected && choices.length === 1 && index
+        ? [...new Set(appleAccounts().map(wallet => appleMatchCheck(wallet, order, index, true)?.error).filter(Boolean))].join('；') : '';
       const issue = bound?.conflict ? '历史苹果 ID 绑定存在冲突，请核对原订单' :
         order.businessType === '续费' && !retained && order.customerId && order.email
-          ? '未找到原订阅的苹果 ID 绑定，请核对历史付款记录' : check?.error;
+          ? '未找到原订阅的苹果 ID 绑定，请核对历史付款记录' : check?.error || excluded;
       notice.textContent = check?.shortage ? `苹果 ID 余额不足，还需 ${M.formatUnits(check.shortage, 4)} USD`
         : issue || (expected ? `预计代付 ${expected} USD${selected ? '' : choices.length > 1 ? '，可选择系统苹果 ID' : '，暂无符合条件的苹果 ID'}` : '选择 Id地区可查看套餐代付价');
     }
@@ -1865,13 +1870,14 @@
   let renewalSelected = '', renewalListTop = 0, renewalMobileDetail = false;
   const renewalFormContexts = new WeakMap();
 
-  function subscriptionCenterNav(selected) {
-    return `<nav class="subscription-center-nav" aria-label="订阅管理视图">${[
+  function subscriptionCenterNav(selected, content = '') {
+    return `<section class="subscription-center-bar" aria-label="订阅视图与概览"><nav class="subscription-center-nav" aria-label="订阅管理视图">${[
       ['subscriptions', '全部订阅', 'subscriptions/all'],
       ['bank-cards', '按银行卡', subscriptionCardsRoute],
       ['apple-ids', '按苹果 ID', 'subscriptions/apple-ids']
     ].map(([key, label, route]) => `<a class="button ${key === selected ? 'primary' : ''}" href="#/${route}"
-      ${key === selected ? 'aria-current="page"' : ''}>${label}</a>`).join('')}</nav>`;
+      ${key === selected ? 'aria-current="page"' : ''}>${label}</a>`).join('')}</nav><div class="subscription-center-content"${
+        selected === 'bank-cards' ? '' : ' tabindex="0" role="group" aria-label="当前视图统计"'}>${content}</div></section>`;
   }
 
   function renewalActions(series, subscriptionId = '', extra = {}) {
@@ -2554,9 +2560,9 @@
     return A.header('订阅管理 · 按银行卡', '查看银行卡关联的订阅和预计备款。页签数字分别统计卡组、用卡明细和冻结记录。',
       A.button('提醒设置', 'commerce-renewal-settings', '', 'settings') +
       columnSettingsButton(frozen ? 'commerce-frozen-cards' : subscriptionCardTab === 'groups'
-        ? 'commerce-bank-card-groups' : 'commerce-subscription-cards')) + subscriptionCenterNav('bank-cards') + `<section class="panel">${tabs(
+        ? 'commerce-bank-card-groups' : 'commerce-subscription-cards')) + subscriptionCenterNav('bank-cards', tabs(
       choices, subscriptionCardTab, 'commerce-subscription-card-tab',
-      'aria-label="银行卡列表"')}${toolbar(frozen ? '搜索卡号、卡类型、序列号、冻结原因或操作人'
+      'aria-label="银行卡列表"')) + `<section class="panel">${toolbar(frozen ? '搜索卡号、卡类型、序列号、冻结原因或操作人'
         : '搜索客户、账号、订单、卡号、卡类型或序列号', frozen ? '' : filters)}${
       subscriptionStatusError ? `<p class="footnote" role="status">${E(subscriptionStatusError)} ${
         A.textAction('重试', 'commerce-subscription-card-refresh')}</p>` : ''}${
@@ -2798,7 +2804,7 @@
     }
     const reasons = [
       hasSignal && !customerId && (order.customerId ? '客户编号无对应资料'
-        : candidates.size > 1 ? '联系方式匹配多个客户' : '客户归属待核对'),
+        : candidates.size > 1 ? '联系方式匹配多个客户' : '缺少客户关联'),
       stateIssue,
       hasSignal && !plan && '套餐待核对'
     ].filter(Boolean);
@@ -2918,14 +2924,14 @@
     return projection.review
       .filter(fact => {
         const customer = projection.profiles.get(fact.customerId)?.customer ||
-          { name: fact.order.customerName || fact.order.customer || '待确认客户' };
+          { name: fact.order.customerName || fact.order.customer || '未关联客户' };
         return retentionRecordMatches(fact, plan) && retentionSearch(query, customer, [fact]);
       })
       .sort(retentionTimeOrder)
       .map(fact => ({
         id: fact.order.id,
         name: projection.profiles.get(fact.customerId)?.customer.name || fact.order.customerName ||
-          fact.order.customer || '待确认客户',
+          fact.order.customer || '未关联客户',
         orderNo: fact.order.orderNo || '—',
         email: orderIdentity(fact.order) || '—',
         plans: retentionPlanLabel(fact.order.product, fact.plan),
@@ -2964,7 +2970,7 @@
     const label = review ? '查看订单' : '订阅历史';
     const columns = [{ id: 'name', label: '客户' }, ...(review ? [
       { id: 'orderNo', label: '订单编号' }, { id: 'plans', label: '产品与套餐' },
-      { id: 'email', label: '订阅账号' }, { id: 'reason', label: '待核对原因', long: true }
+      { id: 'email', label: '订阅账号' }, { id: 'reason', label: '资料问题', long: true }
     ] : [
       { id: 'count', label: '订阅次数' }, { id: 'plans', label: '套餐分布' },
       { id: 'end', label: scheduled ? '预计生效' : '最后结束' },
@@ -2977,7 +2983,7 @@
     }];
     const hasFilters = query || view.plan || !tab && (view.age || view.count);
     const guidance = hasFilters ? { title: '暂无符合条件的记录', description: '可调整搜索或筛选条件。' } :
-      { title: review ? '暂无待核对订单' : scheduled ? '暂无待生效客户' : '暂无已流失客户',
+      { title: review ? '暂无资料问题' : scheduled ? '暂无待生效客户' : '暂无已流失客户',
         description: review ? '客户归属、订阅周期或实际开通结果缺失时，会显示在这里。' :
           '已开通过、订阅已结束且没有续费的客户会显示在这里。' };
     const page = A.pageRows(rows);
@@ -2990,12 +2996,12 @@
         <div class="retention-card-action">${A.button(label, action, '', '', `data-id="${E(row.id)}"`)}</div>
       </article>`).join('')}</div>`
       : A.empty(guidance.title, guidance.description)}</div>`;
-    return A.header('客户流失', '按订单开通记录和实际订阅周期统计。同一客户仍有有效订阅时不计流失。') +
+    return A.header('客户流失', '手工及历史订单按已录入的订阅周期统计，无需再次确认开通或付款。同一客户仍有有效订阅时不计流失。缺少客户关联只影响按客户归集，不改变已登记的订阅状态；资料问题列出实际缺项或冲突。') +
       `<section class="retention-overview design-async-region" aria-label="客户流失概览">
         <div class="retention-summary-bar"><div class="retention-summary-scroll" tabindex="0" role="group" aria-label="客户流失统计及更新时间">${A.summary([
         ['已流失客户', projection.lost.length, '位客户', true],
         ['近 7 天停止服务', projection.lost.filter(profile => profile.days < 7).length, '位客户'],
-        ['待核对订单', projection.review.length, '笔'],
+        ['资料问题订单', projection.review.length, '笔'],
         ['待生效', projection.scheduled.length, '位客户']
       ])}<p class="retention-report-meta">北京时间 ${E(retentionDate(projection.at))} · GPT、Claude、Gemini、Grok</p></div>
         ${localData ? A.button(retentionRefreshFailed ? '重试' : '刷新', 'commerce-loss-refresh', '', 'return', retentionRefresh ? 'disabled' : '') : ''}</div>
@@ -3003,7 +3009,7 @@
         ${retentionRefreshFailed ? '<p class="inline-notice warning" role="status">部分资料读取失败，保留已读取的资料，可重试。</p>' : ''}</section>
       <section class="panel customer-retention-list">${tabs([
         ['', '已流失', projection.lost.length],
-        ['review', '待核对', projection.review.length],
+        ['review', '资料问题', projection.review.length],
         ['scheduled', '待生效', projection.scheduled.length]
       ], tab, 'commerce-loss-tab', 'aria-label="客户流失状态"')}
       ${retentionToolbar(view, tab)}${A.table(columns, page, '', 'commerce-customer-loss', guidance)}
@@ -5439,7 +5445,7 @@
         (base.payment === '苹果内购' ? window.IDAppleFunding?.applePrice(currencySettings, initialProduct, plan,
           draft['commerce-appleStoreRegion'] ?? base.appleStoreRegion) :
           orderPaidPrices(initialProduct)[plan]?.[draft['commerce-paidCurrency'] ?? base.paidCurrency]) ?? '' :
-      name === 'saleAmount' && auto && !existing.receiptConfirmed ?
+      name === 'saleAmount' && auto && !orderReceiptRecorded(existing) ?
         (draft['commerce-saleManual'] ? draft['commerce-saleAmount'] || '' : '') :
       name === 'saleAmount' && !existing && !draft['commerce-saleManual'] ?
         orderPrice(initialProduct, plan, draft['commerce-saleCurrency'] || base.saleCurrency, businessType) :
@@ -5651,7 +5657,7 @@
       for (const key of ['source', 'product', 'businessType', 'email', 'plan', 'payment', 'paymentId', 'cardId',
         'paidAmount', 'paidCurrency', 'start', 'expiry', 'paidConfirmed'])
         order[key] = existingOrder[key];
-      if (!order.receiptConfirmed && confirmPayment) order.saleAmount = existingOrder.saleAmount || '';
+      if (!orderReceiptRecorded(order) && confirmPayment) order.saleAmount = existingOrder.saleAmount || '';
     }
     if (!existingOrder && isClaude(order) && order.businessType === '续费' && order.claudeRenewalId) {
       order.proRenewalSourceId = order.claudeRenewalId;
@@ -6037,7 +6043,7 @@
       {
         id: 'paymentStatus',
         label: '付款状态',
-        render: (row) => A.tag(paymentStatus(row), row.paidConfirmed ? 'success' : 'warning')
+        render: (row) => A.tag(paymentStatus(row), paymentRecordedForAccounting(row) ? 'success' : 'warning')
       },
       {
         id: 'expiryStatus',
@@ -6103,7 +6109,7 @@
           const edit = fill ? A.textAction('补全资料', 'commerce-order-complete', id)
             : canManageOrders() ? A.textAction('编辑', 'commerce-order-edit', id + (row.cancelled ? ' disabled' : '')) : '';
           const manage = canManageOrders() ? A.textAction('退款', 'commerce-order-refund',
-            id + (row.cancelled || !row.receiptConfirmed ? ' disabled' : '')) +
+            id + (row.cancelled || !orderReceiptRecorded(row) ? ' disabled' : '')) +
             A.textAction(product === 'Claude' ? '更多操作' : '更多', 'commerce-order-more',
               id + ' aria-haspopup="menu" aria-expanded="false"', 'secondary', 'down') : '';
           return `<div class="action-links">${detail}${edit}${manage}</div>`;
@@ -6330,7 +6336,7 @@
       (order.autoRenew ? property('自动续费', labelOf(autoRenewChoices, order.autoRenew)) : '') +
       (order.nextChargeAt ? property('下次扣款时间', order.nextChargeAt) : '') +
       property('权益核对', labelOf(openingChoices, order.entitlementStatus)) +
-      property('客户实收', order.receiptConfirmed ? '已确认' : '待核对') +
+      property('客户实收', orderReceiptRecorded(order) ? '已录入' : '缺少实收资料') +
       (prior ? property(order.previousSubscriptionOrderId ? '切换前订单及回款' : '原续费订单',
         linked(prior.orderNo, 'commerce-order-detail', prior.id), true) : '') +
       (order.previousSubscriptionOrderId ? property('原订阅自动续费', labelOf(autoRenewChoices, order.previousAutoRenew)) : '') +
@@ -6358,10 +6364,6 @@
       : '';
     const endField = missing.end ? field('实际终止时间', 'endAt',
       input('endAt', saved('endAt'), 'type="datetime-local"')) : '';
-    const receiptField = missing.receipt
-      ? `<label class="checkbox-label commerce-span-all"><input name="commerce-completionFullReceipt" type="checkbox"
-        value="yes" data-no-draft />已按原售价全额收款（${E(display(order.saleAmount))} ${E(currencyLabel(order.saleCurrency))}）</label>`
-      : '';
     const costFields = missing.cost
       ? field('实际总成本（退回前）', 'completionCostAmount',
           input('completionCostAmount', saved('completionCostAmount'), 'inputmode="decimal" maxlength="21"')) +
@@ -6374,7 +6376,7 @@
       `<form id="commerce-order-completion-form" data-commerce-draft="${E(key)}" novalidate>
         <input type="hidden" name="commerce-id" value="${E(id)}" />
         <input type="hidden" name="commerce-version" value="${E(saved('version', order.version ?? 0))}" />
-        <div class="commerce-field-grid">${customerField}${accountField}${periodFields}${endField}${receiptField}${costFields}</div></form>`,
+        <div class="commerce-field-grid">${customerField}${accountField}${periodFields}${endField}${costFields}</div></form>`,
       A.button('取消', 'drawer-close') +
       '<button type="submit" form="commerce-order-completion-form" class="button primary">保存到原单</button>', key);
   }
@@ -6402,7 +6404,6 @@
       details.expiry = expiry;
     }
     if (missing.end && value(raw, 'endAt')) details.subscriptionEndedAt = value(raw, 'endAt');
-    if (missing.receipt && value(raw, 'completionFullReceipt') === 'yes') details.confirmFullReceipt = true;
     const costAmount = value(raw, 'completionCostAmount'), costReason = value(raw, 'completionCostReason');
     if (missing.cost && (costAmount || costReason)) {
       details.actualCost = { amount: costAmount, currency: value(raw, 'completionCostCurrency'), reason: costReason };
@@ -6658,7 +6659,7 @@
         ? property('实际总成本', `${display(order.actualCostAmount)} ${currencyLabel(order.actualCostCurrency)}`) : '';
     const feeCorrection = (order.corrections || []).find(item => item?.kind === historicalFeeKind);
     const originalFeeRules = feeCorrection?.previous?.costSettings;
-    const grossReceipt = isClaude(order) && order.source === '历史入库' && order.receiptConfirmed
+    const grossReceipt = isClaude(order) && order.source === '历史入库' && orderReceiptRecorded(order)
       ? property('客户实收（退款前）', `${display(order.saleAmount)} ${currencyLabel(order.saleCurrency)}`) : '';
     const paidAmount = !amountValid(order.paidAmount || '')
       ? '未登记' : `${display(order.paidAmount)} ${currencyLabel(order.paidCurrency)}`;
@@ -7121,7 +7122,7 @@
       revenue = finance?.calculateConfirmedNetReceipt(order, { currency, clock }) ?? null;
       const result = localAccounting(order, currency, clock, { costOnly: revenue === null, expenses });
       reasons = financialPendingReasons(order, result);
-      if (revenue === null && order.receiptConfirmed) reasons.push('净收款缺有效金额或折算汇率');
+      if (revenue === null && orderReceiptRecorded(order)) reasons.push('净收款缺有效金额或折算汇率');
       if (result.status === 'ready' && !paymentPendingForAccounting(order, result)) {
         cost = result;
         gain = revenue === null ? null : result.profit ?? null;
@@ -7135,9 +7136,9 @@
       const demo = costsFor(order);
       const demoProfit = profit(order);
       reasons = financialPendingReasons(order);
-      revenue = order.receiptConfirmed && amountValid(order.saleAmount || '')
+      revenue = orderReceiptRecorded(order) && amountValid(order.saleAmount || '')
         ? toDisplayCurrency(cny(refundable(order), order.saleCurrency, rates)) : null;
-      if (order.paidConfirmed && demo.total !== null) {
+      if (paymentRecordedForAccounting(order) && demo.total !== null) {
         const items = demo.actual === null ? demo.items : [
           { key: 'actual-total', originalAmount: order.actualCostAmount, originalCurrency: order.actualCostCurrency,
             amount: cny(order.actualCostAmount, order.actualCostCurrency, rates) },
@@ -7953,7 +7954,7 @@
     if (changed('paidAmount', 'paidCurrency') && !auto)
       error('paidAmount', amountValid(order.paidAmount) && M.compare(order.paidAmount, '0') > 0 ? '' : '请填写大于零的实际代付金额');
     if (changed('saleAmount', 'saleCurrency'))
-      error('saleAmount', amountValid(order.saleAmount, auto && !order.receiptConfirmed) ? '' : '请填写有效的实际收款金额');
+      error('saleAmount', amountValid(order.saleAmount, auto && !orderReceiptRecorded(order)) ? '' : '请填写有效的实际收款金额');
     if (changed('payment', 'plan')) error('payment', orderPaymentChoices(order.product, order.plan).includes(order.payment)
       ? '' : '请选择与套餐相符的充值方式');
     for (const name of ['paidCurrency', 'saleCurrency', 'emailCostCurrency', 'actualCostCurrency']) {
@@ -8289,7 +8290,7 @@
       : initialBalance.changes?.length
         ? `苹果 ID 余额 ${display(initialBalance.balanceBefore)} → ${display(initialBalance.balanceAfter)} ${currencyLabel('USD')}。`
         : '本次不新增苹果余额扣款。';
-    const receipt = saved.receiptConfirmed
+    const receipt = orderReceiptRecorded(saved)
       ? `客户实收 ${display(saved.saleAmount)} ${currencyLabel(saved.saleCurrency)}` : '客户实收暂未登记';
     const paid = saved.paidConfirmed ? `实际代付 ${display(saved.paidAmount)} ${currencyLabel(saved.paidCurrency)}` : '代付以任务回执为准';
     const completion = !existing || (personal && saved.entitlementStatus === 'active' && existing.entitlementStatus !== 'active')
@@ -8487,7 +8488,7 @@
               reload: () => inventory.refreshLocalInventory?.()
             }
           ],
-          saved.paidConfirmed && saved.receiptConfirmed && (saved.start || saved.rechargeCompletedAt) &&
+          saved.paidConfirmed && orderReceiptRecorded(saved) && (saved.start || saved.rechargeCompletedAt) &&
             (!personal || saved.entitlementStatus === 'active')
             ? () => { void freezeAutomaticSnapshot(id); } : undefined,
           $('button[form="commerce-order-form"][type="submit"]', form.closest?.('#drawer[open]') || document),
@@ -8501,7 +8502,7 @@
   function refundEditor(id) {
     const order = orders.find((row) => row.id === id);
     if (!order) return;
-    if (order.cancelled || !order.receiptConfirmed || M.compare(refundable(order), '0') <= 0) {
+    if (order.cancelled || !orderReceiptRecorded(order) || M.compare(refundable(order), '0') <= 0) {
       A.notify('当前订单没有可登记退款的已确认实收');
       return;
     }
@@ -8530,7 +8531,7 @@
     const raw = A.readForm(form),
       order = orders.find((row) => row.id === value(raw, 'id'));
     if (!order) return;
-    if (order.cancelled || !order.receiptConfirmed) {
+    if (order.cancelled || !orderReceiptRecorded(order)) {
       A.notify('当前订单没有可登记退款的已确认实收');
       return;
     }
@@ -8598,7 +8599,7 @@
           orders.find((row) => row.id === order.id) !== order ||
           order.version !== expectedVersion ||
           order.cancelled ||
-          !order.receiptConfirmed ||
+          !orderReceiptRecorded(order) ||
           M.compare(amount, refundable(order)) > 0
         ) {
           A.notify('可退款金额已变化，停止登记');
@@ -8749,7 +8750,7 @@
         at: now()
       });
     if (
-      order.receiptConfirmed &&
+      orderReceiptRecorded(order) &&
       amountValid(order.saleAmount || '') &&
       M.compare(order.saleAmount, '0') > 0
     )
@@ -9097,7 +9098,7 @@
       : ledger
         ? `<div class="guide-item"><h3>Apple 余额退回</h3><p>本单可确认退回 ${display(ledger.netAmount)} ${currencyLabel('USD')}，仅在 Apple 已实际返还时登记。</p><div class="toolbar">${A.button('确认 Apple 余额退回', 'commerce-apple-refund', '', 'return', `data-id="${id}" ${M.compare(ledger.netAmount, '0') <= 0 ? 'disabled' : ''}`)}</div></div>`
         : '';
-    A.openActionMenu(node, `<div class="property-list">${property('订单编号', order.orderNo)}</div><div class="guide-list">${claude}<div class="guide-item"><h3>更正与补偿</h3><div class="toolbar">${A.button('更正订单资料', 'commerce-order-edit', '', '', `data-id="${id}" ${order.cancelled ? 'disabled' : ''}`)}${A.button('补偿撤回最近更正', 'commerce-order-undo', '', 'return', `data-id="${id}" ${order.corrections.length ? '' : 'disabled'}`)}</div></div><div class="guide-item"><h3>客户退款</h3><div class="toolbar">${A.button('登记客户实际退款', 'commerce-order-refund', '', '', `data-id="${id}" ${!order.receiptConfirmed ? 'disabled' : ''}`)}</div></div>${apple}<div class="guide-item"><div class="section-title-row"><h3>业务撤单</h3>${A.titleInfo('业务撤单', '已有实付、实收、退款或任务时不能通过撤单抹账；不自动归还库存或苹果余额。', 'commerce-more-cancel')}</div><div class="toolbar">${A.button(order.cancelled ? '恢复业务订单' : '业务撤单', 'commerce-order-cancel', order.cancelled ? '' : 'danger', '', `data-id="${id}"`)}</div></div></div>`);
+    A.openActionMenu(node, `<div class="property-list">${property('订单编号', order.orderNo)}</div><div class="guide-list">${claude}<div class="guide-item"><h3>更正与补偿</h3><div class="toolbar">${A.button('更正订单资料', 'commerce-order-edit', '', '', `data-id="${id}" ${order.cancelled ? 'disabled' : ''}`)}${A.button('补偿撤回最近更正', 'commerce-order-undo', '', 'return', `data-id="${id}" ${order.corrections.length ? '' : 'disabled'}`)}</div></div><div class="guide-item"><h3>客户退款</h3><div class="toolbar">${A.button('登记客户实际退款', 'commerce-order-refund', '', '', `data-id="${id}" ${!orderReceiptRecorded(order) ? 'disabled' : ''}`)}</div></div>${apple}<div class="guide-item"><div class="section-title-row"><h3>业务撤单</h3>${A.titleInfo('业务撤单', '已有实付、实收、退款或任务时不能通过撤单抹账；不自动归还库存或苹果余额。', 'commerce-more-cancel')}</div><div class="toolbar">${A.button(order.cancelled ? '恢复业务订单' : '业务撤单', 'commerce-order-cancel', order.cancelled ? '' : 'danger', '', `data-id="${id}"`)}</div></div></div>`);
   }
   function canShortcutRenew(row) {
     return row.operation.status === 'active' && claudeProductForPlan(claudeOrderPlan(row.product, row.plan)) === row.product &&
@@ -11042,7 +11043,7 @@
         activity.orders++;
         activity.products[product] = (activity.products[product] || 0) + 1;
         if (slot) slot.orders++;
-        if (order.receiptConfirmed) {
+        if (orderReceiptRecorded(order)) {
           activity.receiptConfirmedOrders++;
           addOriginal(activity.receipts, order.saleCurrency, order.saleAmount);
         }

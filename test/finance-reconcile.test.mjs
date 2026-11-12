@@ -74,6 +74,7 @@ test('汇率窗口、缺币种、原始证据和孤立流水各自报告', () =>
   idr.notes = 'do-not-export-this';
   const apple = find(input.commerce, 'QA-APPLE-PENDING');
   apple.receiptConfirmed = false;
+  apple.saleAmount = '';
   input.appleBalance.movements.push({
     id: 'orphan', orderId: 'not-exported', kind: 'order-charge'
   });
@@ -82,7 +83,7 @@ test('汇率窗口、缺币种、原始证据和孤立流水各自报告', () =>
   const partial = find(report, 'QA-IDR');
   assert.equal(partial.calculations.CNY.status, 'ready');
   assert.match(partial.calculations.MYR.reason, /缺少 MYR/);
-  assert.match(find(report, apple.id).pendingReasons.join(), /实收待确认/);
+  assert.match(find(report, apple.id).pendingReasons.join(), /缺少已登记的实收金额或币种/);
   assert.match(report.batchIssues.join(), /未导出的原订单/);
   assert.doesNotMatch(JSON.stringify(report), /do-not-export-this|fixture-wallet|fixture-card/);
 });

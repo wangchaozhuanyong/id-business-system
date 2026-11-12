@@ -8,6 +8,8 @@ import { checkInventoryHistory } from '../server/inventory-history.mjs';
 import { inspectInventoryUsage } from '../server/inventory-usage.mjs';
 import { projectSubscriptions } from '../server/subscription-management.mjs';
 import { withClaudeMailboxCandidates } from '../server/tools/claude-mailbox-candidates.mjs';
+import { calculateConfirmedNetReceipt } from '../modules/finance/accounting.mjs';
+import { manualOrderDetailsMissing } from '../frontend/order-opening.mjs';
 
 const at = new Date('2026-11-10T08:00:00Z');
 const actor = { id: 'fixture-admin', name: '合成管理员', role: 'admin' };
@@ -163,23 +165,9 @@ test('Claude 历史销售从原库存生成订单，买家可补齐，死号保�
       [priorVersion + 1, '1234.50', 'CNY', 'actual']);
     assert.match(afterCost.logs[0].detail, /实际总成本 1234\.50 CNY · 按原销售凭据核对/);
     assert.throws(() => store.saveOrderCompletion(actor, cost), /订单已变化/);
-    const receipt = { action: 'fill-manual-details', orderId: endedOrder.id, version,
-      details: { confirmFullReceipt: true } };
-    assert.throws(() => store.saveOrderCompletion({ ...actor, role: 'employee' }, receipt), /只有管理员/);
-    assert.throws(() => store.saveOrderCompletion(actor, { ...receipt,
-      details: { confirmFullReceipt: true, saleAmount: '1' } }), /不可编辑/);
-    assert.throws(() => store.saveOrderCompletion(actor, { ...receipt,
-      details: { confirmFullReceipt: 'yes' } }), /售价及实收/);
-    store.saveOrderCompletion(actor, receipt);
-    const afterReceipt = store.load('commerce').data;
-    const received = afterReceipt.orders.find(row => row.id === endedOrder.id);
-    assert.deepEqual(received, {
-      ...saved, version: version + 1, updatedAt: received.updatedAt, receiptConfirmed: true,
-      financialEvidence: [{ kind: 'receipt', amount: saved.saleAmount, currency: saved.saleCurrency, at: received.updatedAt }]
-    });
-    assert.match(afterReceipt.logs[0].detail, /确认全额实收 2100 CNY/);
-    assert.throws(() => store.saveOrderCompletion(actor, receipt), /订单已变化/);
-    assert.throws(() => store.saveOrderCompletion(actor, { ...receipt, version: received.version }), /售价及实收/);
+    assert.equal(calculateConfirmedNetReceipt(saved), '2100.0000');
+    assert.equal(manualOrderDetailsMissing(saved, afterCost.customers).receipt, undefined);
+    assert.deepEqual(store.load('commerce').data, afterCost, '读取已录入实收不改写原单或追加确认记录');
     for (const [order, status] of [[firstOrder, 'active'], [endedOrder, 'dead']]) {
       const row = subscriptionRows().find(row => row.account === order.email);
       assert.deepEqual([row.scope, row.status, row.series[0].orderNo], ['customer', status, order.orderNo]);

@@ -391,7 +391,7 @@ test('历史业务按明确客户编号汇总次数、首末开通及来源单�
       orderNo: 'NO-CUSTOMER',
       start: '2026-08-01T10:00'
     },
-    { ...base, id: 'unpaid', paidConfirmed: false, orderNo: 'UNPAID', start: '2026-07-01T10:00' },
+    { ...base, id: 'legacy-recorded', paidConfirmed: false, orderNo: 'LEGACY-RECORDED', start: '2026-07-01T10:00' },
     { ...base, id: 'synced', source: '线上代充', taskId: 'job-synced', orderNo: 'SYNCED',
       paidConfirmed: false, rechargeCompletedAt: '2026-10-15T02:00:12Z', start: '2026-10-15T10:00',
       expiry: '2026-11-15T10:00' },
@@ -401,11 +401,11 @@ test('历史业务按明确客户编号汇总次数、首末开通及来源单�
   r.records('customer-demo-1');
   const table = r.tables.find((t) => t.id === 'commerce-contact-services');
   const service = table.rows.find((entry) => entry.name === 'GPT · Plus');
-  assert.equal(service.count, 4);
-  assert.equal(service.firstOpenedAt, '2026-09-01T10:00');
+  assert.equal(service.count, 5);
+  assert.equal(service.firstOpenedAt, '2026-07-01T10:00');
   assert.equal(service.lastOpenedAt, '2026-11-01T10:00');
   assert(!service.orderNos.includes('NO-CUSTOMER'));
-  assert(!service.orderNos.includes('UNPAID'));
+  assert(service.orderNos.includes('LEGACY-RECORDED'), '旧财务确认标记不应排除已经录入周期的手工订阅');
   assert(service.orderNos.includes('SYNCED'));
   assert(!service.orderNos.includes('NO-OPENING'));
   r.contact();

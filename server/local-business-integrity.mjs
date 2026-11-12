@@ -9,6 +9,8 @@ import { claimAllowsDelivery, pendingInventoryClaim } from './inventory-usage.mj
 import { releasedAccountOrders, systemAccount } from './account-lifecycle.mjs';
 import { isHistoricallyOpenedClaude } from './inventory-history.mjs';
 import { personalDelivery, personalProduct, sameTarget, stockTypeForProduct } from './personal-subscriptions.mjs';
+import { orderReceiptRecorded } from '../frontend/order-opening.mjs';
+import { hasRecordedPaymentAmount } from '../modules/finance/accounting.mjs';
 
 function units(value) {
   if (typeof value !== 'string' || !/^-?\d{1,16}(?:\.\d{1,4})?$/.test(value)) return null;
@@ -65,8 +67,8 @@ export function checkBankReturns(previous, commerce) {
       }
       total += amount;
     }
-    if (order.payment !== '银行卡' || !order.paidConfirmed || paid === null || total > paid) {
-      return '银行卡累计回款不得超过已确认代付金额';
+    if (order.payment !== '银行卡' || !hasRecordedPaymentAmount(order) || paid === null || total > paid) {
+      return '银行卡累计回款不得超过已登记代付金额';
     }
   }
   for (const order of previous?.orders || []) {
@@ -80,8 +82,9 @@ export function checkBankReturns(previous, commerce) {
 
 function hasConfirmedMoney(order) {
   const confirmed = (row) =>
+    hasRecordedPaymentAmount(row) ||
     (row?.paidConfirmed === true && (units(row.paidAmount) ?? 0n) > 0n) ||
-    (row?.receiptConfirmed === true && (units(row.saleAmount) ?? 0n) > 0n);
+    (orderReceiptRecorded(row) && (units(row.saleAmount) ?? 0n) > 0n);
   return (
     confirmed(order) ||
     (Array.isArray(order?.financialEvidence) &&
@@ -178,7 +181,7 @@ export function checkOrderFinancialHistory(previous, commerce) {
     const received = units(order.saleAmount);
     if (
       order.cancelled ||
-      order.receiptConfirmed !== true ||
+      !orderReceiptRecorded(order) ||
       received === null ||
       total > received
     ) {
@@ -356,8 +359,8 @@ function checkMovements(previous, ledger, appleIds, wallets, orders, allocations
       }
       received.add(refund.id);
     } else if (['opening', 'topup'].includes(movement.kind)) {
-      if (amount <= 0n || movement.orderId || !String(movement.reason || '').trim() ||
-          (movement.kind === 'opening' && balances.has(movement.appleIdId)))
+      if (amount <= 0n || movement.orderId ||
+          (movement.kind === 'opening' && (!String(movement.reason || '').trim() || balances.has(movement.appleIdId))))
         return '苹果 ID 期初余额或充值流水不正确';
     } else if (!['manual', 'manual-undo'].includes(movement.kind) || movement.orderId) {
       return '苹果 ID 余额变动类型不正确';

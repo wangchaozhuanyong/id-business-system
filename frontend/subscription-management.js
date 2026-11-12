@@ -192,9 +192,10 @@
         button('账号资料后缀', 'subscriptions-settings', '', 'settings') : '') +
       button('续费提醒话术', 'commerce-renewal-suffix', '', 'settings') +
       button('列设置', 'column-settings', '', 'columns', `data-table-id="${tableId}"`);
+    const overview = `<div id="subscription-overview">${overviewMarkup()}</div>`;
     return A.header(title, '查看每笔订阅的到期时间与续费方式。页签数字是当前产品各分类的总数。', actions) +
-      (A.modules.commerce?.subscriptionCenterNav?.('subscriptions') || '') +
-      `<div id="subscription-overview">${overviewMarkup()}</div><section class="panel" id="subscriptions-panel">
+      (A.modules.commerce?.subscriptionCenterNav?.('subscriptions', overview) || overview) +
+      `<section class="panel" id="subscriptions-panel">
         <div class="list-controls subscription-controls">
           <div class="tabs" role="tablist" aria-label="订阅列表">${tabs}</div>
           <form class="toolbar" id="subscription-filter" aria-label="筛选订阅" novalidate>

@@ -24,7 +24,7 @@
   ];
   const metrics = [
     ['orders', '新建订单', '按北京时间的创建时间统计。已撤单另列，续费新单计入订单量。'],
-    ['receipts', '订单实收', '已确认的实收按订单创建时间归集，按原币分列。客户退款按登记时间另列。'],
+    ['receipts', '订单实收', '已录入的实收按订单创建时间归集，按原币分列，无需再次确认。客户退款按登记时间另列。'],
     ['profit', '已核算利润', '按北京时间开通日期归集，与订单统计使用同一套费用和历史汇率。逐单计算净收款减已知净成本。开卡费未分摊时，仍计入已知部分。'],
     ['customers', '新增客户', '按客户创建时间和客户编号去重统计。']
   ];
@@ -374,12 +374,12 @@
   function renderOrderProgress(activity, earnings, commerce, profit) {
     const current = activity?.current, accounting = earnings?.current;
     const groups = [
-      ['receipts', '实收确认', '已确认实收', '待确认实收', current?.receiptConfirmedOrders, current?.orders, commerce],
+      ['receipts', '收款登记', '已录入实收', '缺少实收资料', current?.receiptConfirmedOrders, current?.orders, commerce],
       ['accounting', '利润核算', '已核算', '待核算', accounting?.accounted,
         accounting ? accounting.accounted + accounting.pending : null, profit]
     ];
     return `<section class="panel overview-section" aria-labelledby="overview-order-progress"><div class="panel-body">
-      ${heading('order-progress', '收款与核算', '实收确认率按本期录入的订单计算。利润核算率按本期开通的订单计算，包含实账与参考核算。刷新失败时显示最近一次成功读取的结果。')}
+      ${heading('order-progress', '收款与核算', '收款登记按本期已保存的实收金额和币种统计，无需再次确认；金额或币种缺失时单列。利润核算率按本期开通的订单计算，包含实账与参考核算。刷新失败时显示最近一次成功读取的结果。')}
       <div class="overview-progress-content">${groups.map(([id, title, doneLabel, pendingLabel, done, total, section]) => {
         const known = Number.isSafeInteger(done) && Number.isSafeInteger(total);
         const pending = known ? total - done : null;
@@ -434,10 +434,10 @@
       ['renewals', '待处理续费单', data?.renewals, '笔', 'workspace/renewals'],
       ['scheduled', '待生效客户', data?.scheduled, '位', 'workspace/customer-loss'],
       ['recent', '近 7 天流失', data?.recentlyLost, '位', 'workspace/customer-loss'],
-      ['review', '待核对订单', data?.review, '笔', 'workspace/customer-loss']
+      ['review', '资料问题订单', data?.review, '笔', 'workspace/customer-loss']
     ];
     return `<section class="panel overview-section overview-customer-section" aria-labelledby="overview-customers"><div class="panel-body">
-      ${heading('customers', '客户状态', '按客户编号去重。客户名下仍有有效服务时不计流失，续费待跟进可与有效服务重叠。待生效指曾开通过、当前无有效服务但已登记未来订阅的客户；近 7 天流失取已确认流失中停止服务不足 7 个北京时间自然日的客户。续费单和待核对订单按笔数列示，不能与客户数相加。所有数据取当前快照，不随顶部经营区间切换。')}
+      ${heading('customers', '客户状态', '按客户编号去重。客户名下仍有有效服务时不计流失，续费待跟进可与有效服务重叠。手工及历史订单按已录入周期统计，无需再次确认开通或付款。待生效指曾开通过、当前无有效服务但已登记未来订阅的客户；近 7 天流失取已确认流失中停止服务不足 7 个北京时间自然日的客户。续费单和资料问题订单按笔数列示，不能与客户数相加。所有数据取当前快照，不随顶部经营区间切换。')}
       <div class="overview-customer-content">
         <dl class="overview-customer-summary">${items.map(([title, value, action, route]) => `<div>
           <dt>${title}</dt><dd><span class="overview-customer-count">${countText(value)}${value != null ? '<small>位</small>' : ''}</span>${link(action, route)}</dd>

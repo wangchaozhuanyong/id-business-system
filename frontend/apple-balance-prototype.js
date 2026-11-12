@@ -586,13 +586,14 @@
     if (!wallet) return fail('苹果 ID 余额账户不存在');
     if (!/^-?\d{1,16}(?:\.\d{1,4})?$/.test(String(amount)) || M.compare(amount, '0') === 0)
       return fail('请输入有效的非零余额变动');
-    if (!String(options.reason || '').trim()) return fail('请填写余额变动原因');
+    const reason = String(options.reason || '').trim();
+    if (!options.topup && !reason) return fail('请填写余额变动原因');
     if (options.topup) {
       if (M.compare(amount, '0') <= 0 || !/^[a-zA-Z0-9-]{1,100}$/.test(options.commandId || ''))
         return fail('请核对充值金额后重新打开操作');
       const existing = movements.find(row => row.id === 'APPLE-TOPUP-' + options.commandId);
       if (existing) return existing.kind === 'topup' && existing.appleIdId === id &&
-        M.compare(existing.amount, amount) === 0 && existing.reason === options.reason
+        M.compare(existing.amount, amount) === 0 && String(existing.reason || '').trim() === reason
         ? { ok: true, entry: copy(existing), balance: wallet.balance }
         : fail('相同充值操作已登记，请重新核对');
     }
@@ -605,7 +606,7 @@
       ...(options.topup && { id: 'APPLE-TOPUP-' + options.commandId }),
       kind: options.topup ? 'topup' : 'manual',
       label: options.topup ? '充值到账' : M.compare(amount, '0') > 0 ? '人工余额入账' : '人工余额更正',
-      reason: options.reason,
+      reason,
       orderId: '',
       orderNo: ''
     });
@@ -721,7 +722,7 @@
           d['apple-direction'] || 'credit'
         ),
         true
-      )}${A.field('金额（美元）', 'apple-amount', A.input('apple-amount', d['apple-amount'] || '', 'inputmode="decimal"'), true)}${A.field(topup ? '到账依据' : '变动原因', 'apple-reason', `<textarea id="apple-reason" name="apple-reason" rows="3">${E(d['apple-reason'] || '')}</textarea>`, true).replace('class="field"', 'class="field form-field-wide"')}</div></form>`,
+      )}${A.field('金额（美元）', 'apple-amount', A.input('apple-amount', d['apple-amount'] || '', 'inputmode="decimal"'), true)}${A.field(topup ? '到账依据' : '变动原因', 'apple-reason', `<textarea id="apple-reason" name="apple-reason" rows="3">${E(d['apple-reason'] || '')}</textarea>`, !topup).replace('class="field"', 'class="field form-field-wide"')}</div></form>`,
       A.button('取消', 'drawer-close') +
         '<button class="button primary" type="submit" form="apple-adjust-form">核对变动</button>',
       key
@@ -1005,7 +1006,7 @@
       title: managementError || loadState === 'error' ? '苹果 ID 管理读取失败' : '正在读取苹果 ID 管理',
       description: managementError || loadState === 'error' ? '可点击刷新重试。' : ''
     };
-    return title + (A.modules.commerce?.subscriptionCenterNav?.('apple-ids') || '') + overview + (managementError && available ? '<p class="inline-notice warning" role="status">读取失败，已保留上次成功读取的资料。</p>' : '') +
+    return title + (A.modules.commerce?.subscriptionCenterNav?.('apple-ids', overview) || overview) + (managementError && available ? '<p class="inline-notice warning" role="status">读取失败，已保留上次成功读取的资料。</p>' : '') +
       `<section class="panel apple-management-list" data-pagination-table>${statusTabs}<div class="toolbar"><div class="toolbar-left"><div class="search-field">
       ${A.icon('search')}<input data-auto-search id="apple-management-search" aria-label="搜索苹果 ID 使用记录" placeholder="搜索客户、账号或订单" value="${E(view.query)}" /></div>
       <select id="apple-management-plan" aria-label="订阅套餐">${A.options([['', '全部套餐'], ...plans], view.plan)}</select>
@@ -1122,7 +1123,7 @@
       { id: 'security3', label: '密保 3', render: assetValue('security3'), long: true },
       { id: 'birthday', label: '密保生日', render: assetValue('birthday') },
       { id: 'phone', label: '绑定电话／验证码', render: row => A.modules.inventory?.phoneValue(assets.get(row.id)?.phone) || '—' },
-      { id: 'country', label: '国家地区' },
+      { id: 'country', label: '注册地区' },
       { id: 'appStoreRegion', label: 'Id地区', render: row => E(window.IDAppleFunding?.appleRegions[row.appStoreRegion] || '待核对') },
       { id: 'usage', label: '使用状态', render: row => E(fundingStates[usages.get(row.id)?.state] || (managementError ? '读取失败' : '读取中')) },
       { id: 'binding', label: '关联账号', mobileSummary: true, render: row => {
@@ -1198,7 +1199,7 @@
         ],
         ['有余额', accounts.filter((row) => M.compare(row.balance, '0') > 0).length, '个']
       ]) +
-      `<section class="panel design-async-region" data-apple-balance-region><div data-apple-balance-progress role="status" hidden></div><div class="toolbar"><div class="toolbar-left"><div class="search-field">${A.icon('search')}<input data-auto-search id="apple-list-search" aria-label="搜索苹果 ID" placeholder="搜索苹果 ID、关联账号或订单" value="${E(S.query || '')}" /></div></div><div class="toolbar-right" data-page-actions>${localData ? A.button('刷新', 'apple-reload') : ''}</div></div>${A.table(columns, A.pageRows(rows, row => [row.createdAt, row.importedAt, row.registered]), '', '苹果ID余额')}${A.pagination(rows.length)}</section>`
+      `<section class="panel design-async-region" data-apple-balance-region><div data-apple-balance-progress role="status" hidden></div><div class="toolbar"><div class="toolbar-left"><div class="search-field">${A.icon('search')}<input data-auto-search id="apple-list-search" aria-label="搜索苹果 ID" placeholder="搜索苹果 ID、注册地区、关联账号或订单" value="${E(S.query || '')}" /></div></div><div class="toolbar-right" data-page-actions>${localData ? A.button('刷新', 'apple-reload') : ''}</div></div>${A.table(columns, A.pageRows(rows, row => [row.createdAt, row.importedAt, row.registered]), '', '苹果ID余额')}${A.pagination(rows.length)}</section>`
     );
   }
   function saveDrafts() {
@@ -1279,6 +1280,7 @@
       return true;
     }
     if (form.id === 'apple-adjust-form') {
+      const topup = d['apple-topup'] === '1';
       const amount = d['apple-amount'],
         reason = String(d['apple-reason'] || '').trim();
       const wallet = get(d['apple-id']);
@@ -1290,9 +1292,8 @@
         'apple-amount',
         valid(amount) && M.compare(amount, '0') > 0 ? '' : '请填写大于零的金额'
       );
-      A.setError('apple-reason', reason ? '' : '请填写变动原因');
-      if (!valid(amount) || M.compare(amount, '0') <= 0 || !reason) return true;
-      const topup = d['apple-topup'] === '1';
+      A.setError('apple-reason', topup || reason ? '' : '请填写变动原因');
+      if (!valid(amount) || M.compare(amount, '0') <= 0 || (!topup && !reason)) return true;
       const signed = !topup && d['apple-direction'] === 'debit' ? M.subtract('0', amount) : amount;
       A.confirmAction(
         topup ? '确认登记充值到账' : '确认登记余额变动',
