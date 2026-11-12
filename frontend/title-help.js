@@ -20,7 +20,7 @@
   // The top layer escapes clipped cards, scrolling drawers and container-query boundaries.
   document.addEventListener('toggle', (event) => {
     const help = event.target;
-    if (!help.matches?.('.title-help')) return;
+    if (!help.matches?.('.title-help, .field-help')) return;
     const note = help.querySelector('.title-description');
     if (!note?.showPopover) return;
     note.setAttribute('popover', 'manual');
@@ -31,21 +31,21 @@
   }, true);
 
   const reposition = () => {
-    for (const help of document.querySelectorAll('.title-help[open]')) positionNote(help);
+    for (const help of document.querySelectorAll('.title-help[open], .field-help[open]')) positionNote(help);
   };
   window.addEventListener('resize', reposition);
   window.addEventListener('scroll', reposition, { capture: true, passive: true });
 
   window.IDTitleHelp = {
     reposition,
-    attach(title, description) {
+    attach(title, description, className = 'title-help') {
       if (!title || !description || title.parentElement.classList.contains('title-with-help'))
         return;
       const row = document.createElement('div');
       row.className = 'title-with-help';
       title.before(row);
       const help = document.createElement('details');
-      help.className = 'title-help';
+      help.className = className;
       const trigger = document.createElement('summary');
       trigger.setAttribute('aria-label', '查看' + title.textContent.trim() + '说明');
       trigger.textContent = 'ⓘ';
@@ -62,12 +62,12 @@
   };
 
   document.addEventListener('click', (event) => {
-    for (const help of document.querySelectorAll('.title-help[open]'))
+    for (const help of document.querySelectorAll('.title-help[open], .field-help[open]'))
       if (!help.contains(event.target)) help.open = false;
   });
   document.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
-    const openHelp = document.querySelectorAll('.title-help[open]');
+    const openHelp = document.querySelectorAll('.title-help[open], .field-help[open]');
     if (openHelp.length) event.preventDefault();
     for (const help of openHelp) {
       const returnFocus = help.contains(document.activeElement);

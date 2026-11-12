@@ -909,27 +909,39 @@ input[type='radio'] {
 }
 .table-viewport .empty-state {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 8px 14px;
-  padding: 12px 8px;
-  text-align: left;
+  justify-content: center;
+  gap: 8px;
+  padding: 44px 20px;
+  min-height: 160px;
+  text-align: center;
+  margin-inline: auto;
 }
 .table-viewport:has([data-table-empty-guidance]) {
   container-type: inline-size;
 }
 [data-table-empty-guidance] .empty-state {
-  max-inline-size: calc(100cqi - 24px);
-  flex-wrap: wrap;
+  max-inline-size: min(100%, 540px);
   white-space: normal;
 }
 .table-viewport .empty-state .icon {
-  width: 20px;
-  height: 20px;
-  margin: 0;
+  width: 32px;
+  height: 32px;
+  color: var(--muted);
+  margin-bottom: 6px;
 }
 .table-viewport .empty-state h2 {
-  font-size: 13px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
   margin: 0;
+}
+.table-viewport .empty-state p {
+  color: var(--secondary);
+  font-size: 12px;
+  margin: 0;
+  line-height: 1.6;
 }
 table {
   border-collapse: separate;
@@ -1053,6 +1065,37 @@ th.table-actions {
   align-items: center;
   gap: 14px;
   height: 100%;
+}
+.table-copyable-cell {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  min-width: 150px;
+}
+.table-copyable-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.5;
+}
+.table-copyable-cell > .button {
+  flex: 0 0 auto;
+  margin-left: auto;
+}
+.toolbar-meta {
+  color: var(--secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+@media (max-width: 640px) {
+  .toolbar-meta {
+    display: none;
+  }
 }
 .text-button {
   color: var(--primary);
@@ -4227,7 +4270,7 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
 .recharge-workspace .section-title-row { min-width: 0; }
 .recharge-workspace .panel-heading > .button { margin-left: auto; }
 .recharge-workspace .recharge-request-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
-.recharge-workspace .recharge-request-fields > .field { grid-template-columns: 44px minmax(0, 1fr); gap: 8px; margin-bottom: 0; }
+.recharge-workspace .recharge-request-fields > .field { margin-bottom: 0; }
 .recharge-request-form { padding-block: 16px; }
 .recharge-request-submit {
   display: grid;

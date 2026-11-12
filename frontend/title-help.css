@@ -35,10 +35,10 @@
   max-height: calc(100dvh - 24px);
   overflow: auto;
 }
-.title-help {
+:is(.title-help, .field-help) {
   flex: none;
 }
-.title-help > summary {
+:is(.title-help, .field-help) > summary {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -49,20 +49,20 @@
   list-style: none;
   cursor: pointer;
 }
-.title-help > summary::-webkit-details-marker {
+:is(.title-help, .field-help) > summary::-webkit-details-marker {
   display: none;
 }
-.title-help > summary:hover,
-.title-help[open] > summary {
+:is(.title-help, .field-help) > summary:hover,
+:is(.title-help, .field-help)[open] > summary {
   color: var(--primary);
   background: var(--primary-soft);
 }
-.title-help > summary:focus-visible {
+:is(.title-help, .field-help) > summary:focus-visible {
   outline: 3px solid var(--primary);
   outline-offset: 2px;
 }
 @media (max-width: 900px) {
-  .title-help > summary {
+  :is(.title-help, .field-help) > summary {
     width: 44px;
     height: 44px;
   }
