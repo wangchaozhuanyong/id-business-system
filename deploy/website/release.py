@@ -232,7 +232,8 @@ def main():
              "server/backup/sheets-source.mjs", "server/monitoring-policy.mjs",
              "server/tools/website-analytics.mjs", "server/tools/sheets-status.mjs",
              "server/monitoring-sources.mjs", "server/monitoring-worker-receipts.mjs", "server/system-monitoring.mjs",
-             "deploy/website/backup_monitoring.py", "deploy/website/id-business-independent-backup-monitoring.service",
+             "deploy/website/remote.py", "deploy/website/backup_monitoring.py",
+             "deploy/website/id-business-independent-backup-monitoring.service",
              "deploy/website/id-business-independent-backup-monitoring.timer")
     files += tuple(path for path in ("frontend/order-opening.mjs", "server/recharge-order-sync.mjs")
                    if (ROOT / path).is_file())

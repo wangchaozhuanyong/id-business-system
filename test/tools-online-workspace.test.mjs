@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHmac, generateKeyPairSync, randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createServer, request } from 'node:http';
 import { once } from 'node:events';
@@ -26,6 +26,59 @@ async function testDirectory(t) {
   t.after(() => rm(dir, { recursive: true, force: true }));
   return dir;
 }
+
+test('the formal app reads the mounted Cloudflare configuration through the administrator route', async (t) => {
+  const directory = await testDirectory(t);
+  const authPath = join(directory, 'auth.json');
+  const databasePath = join(directory, 'fixture.sqlite');
+  const admin = { email: 'analytics-admin@example.test', name: '统计测试', password: 'test-only-analytics-admin-password' };
+  await initializeLocalAdmin(authPath, admin);
+  const configPath = join(directory, 'cloudflare.json');
+  const site = 'damatong.net';
+  await writeFile(configPath, JSON.stringify({
+    accountId: 'a'.repeat(32), apiToken: 'test-only-cloudflare-analytics-token', sites: { [site]: 'b'.repeat(32) }
+  }), { mode: 0o600 });
+  const previous = process.env.ID_WEBSITE_CLOUDFLARE_CONFIG_FILE;
+  process.env.ID_WEBSITE_CLOUDFLARE_CONFIG_FILE = configPath;
+  t.after(() => {
+    if (previous === undefined) delete process.env.ID_WEBSITE_CLOUDFLARE_CONFIG_FILE;
+    else process.env.ID_WEBSITE_CLOUDFLARE_CONFIG_FILE = previous;
+  });
+
+  const publicOrigin = 'https://id.example.test';
+  const { server, url } = await startPreview(0, { databasePath, authPath, publicOrigin,
+    websiteAnalyticsFetch: async (target, options) => {
+      assert.equal(target, 'https://api.cloudflare.com/client/v4/graphql');
+      assert.deepEqual(JSON.parse(options.body).variables.filter.AND[2], { requestHost: site });
+      const totals = { count: 9, sum: { visits: 6 } };
+      return Response.json({ data: { viewer: { accounts: [{
+        total: [totals],
+        daily: [{ dimensions: { date: new Date().toISOString().slice(0, 10) }, ...totals }]
+      }] } } });
+    }
+  });
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const call = (path, { cookie, body } = {}) => new Promise((resolve, reject) => {
+    const outgoing = request(new URL(path, url), {
+      method: body ? 'POST' : 'GET',
+      headers: { Host: new URL(publicOrigin).host, Origin: publicOrigin,
+        ...(cookie && { Cookie: cookie }), ...(body && { 'Content-Type': 'application/json' }) }
+    }, async response => {
+      const chunks = [];
+      for await (const chunk of response) chunks.push(chunk);
+      resolve({ status: response.statusCode, headers: response.headers, body: Buffer.concat(chunks).toString('utf8') });
+    });
+    outgoing.on('error', reject);
+    outgoing.end(body ? JSON.stringify(body) : undefined);
+  });
+  const path = '/api/local/tools/website-analytics?days=7&site=' + site;
+  assert.equal((await call(path)).status, 401);
+  const login = await call('/api/local/auth/login', { body: admin });
+  assert.equal(login.status, 200);
+  const report = await call(path, { cookie: login.headers['set-cookie'][0].split(';')[0] });
+  assert.equal(report.status, 200);
+  assert.deepEqual(JSON.parse(report.body).summary, { pageViews: 9, visits: 6 });
+});
 
 test('the normal preview routes isolate saved 2FA, website analytics and signed visits, and mailbox management', async (t) => {
   const dir = await testDirectory(t);

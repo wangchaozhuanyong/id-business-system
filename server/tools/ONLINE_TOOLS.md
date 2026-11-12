@@ -57,6 +57,10 @@ const microsoftMailboxConfig = await readToolConfig(
 
 将相同参数传给 `server/tools/online-tools-preflight.mjs` 检查私有文件权限和字段。真实验收需在服务配置后逐站对照 Cloudflare 报表，并统一域名、机器人过滤条件、日期和时区。服务端按站点和时间范围缓存报表 60 秒。
 
+正式发布使用独立的 `formal/private/independent-website-cloudflare.cred`。从获准的生产凭据渠道将上述 JSON 通过标准输入交给 `systemd-creds encrypt --name=independent-website-cloudflare - <密文绝对路径>`，密文由 root 持有，权限为 `0600` 或 `0400`。将凭据保存在版本库和发布制品之外。正式应用每次启动时将这一个密文解密到宿主的 `/run` 内存文件系统，文件归运行网站的服务账号所有，只读挂载给网站容器。容器使用 `ID_WEBSITE_CLOUDFLARE_CONFIG_FILE` 指定挂载路径。
+
+已提供密文时，发布使用候选源码和网站运行身份，先对每个已配置商城发起 7 天和 30 天的只读查询。接口不可读时停止切换。回执只记录各域名和时段的读取状态。切换后检查正式应用的只读挂载，再从管理员页面核对数据。密文未交付时，商城继续显示「该网站尚未接入统计」。
+
 ## 线上配置与新版接入
 
 已核对成功的 [生产发布记录](https://github.com/wangchaozhuanyong/id-business-system/actions/runs/40105506608) 对应源码和部署清单，以及原系统 GA4 和邮箱接入说明。生产 ID API readiness 和装修网站公开页面均返回 HTTP 200。以下是部署契约与新版待验收项，公开健康检查只覆盖对应端点。
