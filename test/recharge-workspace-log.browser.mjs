@@ -65,6 +65,12 @@ test('兑换开通铺满工作区：深浅主题、宽窄屏、真实标题对�
             tabs: box('.tab-nav'), step1: box('#step1'), step2: box('#step2'), submit: box('#startBtn'),
             step1Borders: borders('#step1'), step2Borders: borders('#step2'),
             panelBorders: borders('.workspace-recharge-progress'), logBorders: borders('#workspaceLogViewport'),
+            progressRow: box('.workspace-progress-heading'), progressHeading: box('#workspace-progress-title'),
+            logToolbar: box('.workspace-log-toolbar'), logHeading: box('#workspace-log-title'),
+            badge: box('#flowStatusBadge'), actions: box('.workspace-log-actions'), refresh: box('#workspaceLogRefresh'),
+            progressHelp: box('.workspace-progress-heading summary'), follow: box('.workspace-log-follow'),
+            toolbarPadding: ['paddingTop', 'paddingBottom'].map(name =>
+              parseFloat(getComputedStyle(document.querySelector('.workspace-log-toolbar'))[name])),
             codeTitle: textTop('#workspace-code-title', '验证兑换码'), progressTitle: textTop('#workspace-progress-title', '充值进度') };
         });
         metrics.push({ width, dark, ...layout });
@@ -79,6 +85,23 @@ test('兑换开通铺满工作区：深浅主题、宽窄屏、真实标题对�
         assert.deepEqual(layout.logBorders, [0, 0, 0, 0], '日志使用底色区分，不再叠加边框');
         assert(layout.log.height >= 320 && layout.input.height >= 220, '日志与账号输入保留大面积阅读空间');
         assert(layout.code.width >= 150, '兑换码输入不能被按钮挤窄');
+        assert.equal(layout.progressHeading.x, layout.logHeading.x, '两行标题左边缘对齐');
+        assert.equal(layout.badge.right, layout.refresh.right, '状态和刷新按钮右边缘对齐');
+        assert.equal(layout.logToolbar.y, layout.progressRow.bottom, '两行之间不留静态说明占位');
+        assert.equal(layout.log.y, layout.logToolbar.bottom, '默认状态工具栏下方直接接日志正文');
+        assert(layout.toolbarPadding.every(value => value === 12), '记录工具栏上下各保留 12px 内距');
+        const center = rect => rect.y + rect.height / 2;
+        assert(Math.abs(center(layout.progressHeading) - center(layout.badge)) <= 1, '第一行垂直居中');
+        if (layout.actions.y < layout.logHeading.bottom) {
+          assert(Math.abs(center(layout.logHeading) - center(layout.actions)) <= 1, '第二行垂直居中');
+          assert(layout.actions.x >= layout.logHeading.right + 8, '记录标题与操作之间保留间距');
+        } else {
+          assert(layout.actions.y >= layout.logHeading.bottom + 8, '空间不足时操作整组换行');
+        }
+        assert(Math.abs(center(layout.follow) - center(layout.refresh)) <= 1, '自动滚动与刷新始终同排');
+        if (layout.width <= 900)
+          assert(layout.progressHelp.width >= 44 && layout.progressHelp.height >= 44 && layout.follow.height >= 44,
+            '手机说明和自动滚动保留触控空间');
         if (layout.width > 900) {
           assert(Math.abs(layout.form.bottom - layout.panel.bottom) <= 1, '桌面两栏底边一致');
           assert(Math.abs(layout.codeTitle - layout.progressTitle) <= 1, '并排标题真实文字对齐');
@@ -91,10 +114,30 @@ test('兑换开通铺满工作区：深浅主题、宽窄屏、真实标题对�
         }
         assert(Math.abs(layout.submit.right - layout.input.right) <= 1, '提交按钮与账号输入右边缘对齐');
         const emptyHeight = await page.locator('iframe[data-view="redeem"]:visible').evaluate(node => node.offsetHeight);
-        await frame.locator('.workspace-log .title-help summary').click();
-        await frame.getByText('显示本页收到的任务状态', { exact: false }).waitFor();
-        await page.keyboard.press('Escape');
-        assert.equal(await frame.getByText('显示本页收到的任务状态', { exact: false }).isVisible(), false);
+        for (const [selector, text] of [
+          ['.workspace-progress-heading', '提交后，这里会显示当前处理阶段和结果。'],
+          ['.workspace-log-toolbar', '显示本页收到的任务状态']
+        ]) {
+          const trigger = frame.locator(selector + ' .title-help summary');
+          const note = frame.getByText(text, { exact: false });
+          assert.equal(await note.isVisible(), false, '用途说明默认收起');
+          await trigger.scrollIntoViewIfNeeded();
+          const before = await frame.locator('#workspaceLogViewport').boundingBox();
+          await trigger.click();
+          await note.waitFor();
+          assert.deepEqual(await frame.locator('#workspaceLogViewport').boundingBox(), before, '打开说明不推动正文');
+          await trigger.click();
+          assert.equal(await note.isVisible(), false, '再次点击关闭说明');
+          await trigger.focus();
+          await page.keyboard.press('Enter');
+          await note.waitFor();
+          await page.keyboard.press('Escape');
+          assert.equal(await note.isVisible(), false, 'Escape 关闭说明');
+          await trigger.click();
+          await note.waitFor();
+          await frame.locator('#workspace-progress-title').click();
+          assert.equal(await note.isVisible(), false, '点击外部关闭说明');
+        }
         assert.equal(await page.locator('iframe[data-view="redeem"]:visible').evaluate(node => node.offsetHeight), emptyHeight);
         if (output && (width === 1920 || width === 390)) {
           await frame.locator('#workspace-progress-title').click();
@@ -106,6 +149,29 @@ test('兑换开通铺满工作区：深浅主题、宽窄屏、真实标题对�
           const resized = await frame.locator('.page-shell').evaluate(node => node.offsetHeight);
           assert(resized < layout.page.height && resized >= layout.page.height - 181, '高度跟随宿主视口，不能形成 iframe 增高循环');
           await page.setViewportSize({ width, height: 1080 });
+        }
+        if ([1440, 390].includes(width)) {
+          await frame.locator('#flowStatusBadge').evaluate(node => { node.className = 'flow-badge manual'; });
+          assert.equal(await frame.locator('.workspace-progress-idle').isVisible(), true, '待核对提示直接可见');
+          for (const state of ['running', 'success', 'error', 'review']) {
+            await frame.locator('#taskProgress').evaluate((node, state) => {
+              node.dataset.state = state;
+              node.style.display = 'block';
+              document.getElementById('taskProgressText').textContent = '隔离布局验证：实际处理阶段或结果。';
+            }, state);
+            assert.equal(await frame.locator('#flowStatusBadge').isVisible(), true, `${state} 保留首行状态`);
+            assert.equal(await frame.locator('#taskProgressText').isVisible(), true, `${state} 结果保持可见`);
+            assert.equal(await frame.locator('.workspace-progress-idle').isVisible(), false, '有详细结果时不重复显示待核对提示');
+            const details = await frame.locator('#taskProgress').boundingBox();
+            const toolbar = await frame.locator('.workspace-log-toolbar').boundingBox();
+            assert(details.y >= toolbar.y + toolbar.height, '实际进度与结果位于两行标题下方');
+          }
+          await frame.locator('#taskProgress').evaluate(node => {
+            delete node.dataset.state;
+            node.style.display = 'none';
+            document.getElementById('taskProgressText').textContent = '';
+            document.getElementById('flowStatusBadge').className = 'flow-badge pending';
+          });
         }
         await frame.getByRole('button', { name: '兑换码查询', exact: true }).click();
         await frame.locator('#queryInput').waitFor();
@@ -182,6 +248,7 @@ test('本次任务日志自动追加、去重、断线恢复、暂停跟随，�
   await entries.getByText(/正在填写支付资料/).waitFor();
   await frame.locator('#workspaceLogStatus').filter({ hasText: /等待执行事件/ }).waitFor();
   await idle();
+  assert.equal(await frame.locator('#flowStatusBadge').isVisible(), true, '运行中的状态保留在第一行');
   const originalCount = await entries.locator('li').count();
   await refresh.click();
   await idle();
@@ -265,6 +332,7 @@ test('本次任务日志自动追加、去重、断线恢复、暂停跟随，�
   next = { status: 'success', progress: 100, renewalUnconfirmed: true, stepsAvailable: true, steps, terminalAt: openedAt + 3000 };
   await page.clock.fastForward(5100);
   await entries.getByText(/开通成功/).waitFor();
+  assert.equal(await frame.locator('#flowStatusBadge').isVisible(), true, '完成状态保留在第一行');
   assert.equal(await entries.locator('li[data-tone="success"] time').textContent(), '23:14:40');
   assert.equal(await refresh.isEnabled(), false);
   assert.doesNotMatch(await frame.locator('body').innerText(), /PRIVATE-/);

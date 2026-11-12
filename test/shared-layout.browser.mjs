@@ -331,7 +331,7 @@ test('shared layouts preserve alignment, readable controls and stable navigation
     assert(form.width > main.width - 70, '空侧栏仍挤压费用表单');
   });
 
-  await t.test('relay filters and actions share one toolbar and empty guidance stays inside the table', async () => {
+  await t.test('relay filters and actions align in two rows and empty guidance stays inside the table', async () => {
     await page.setViewportSize({ width: 1591, height: 900 });
     await go('mailboxes/relay');
     await page.getByRole('tab', { name: '隐藏邮箱管理' }).click();
@@ -370,18 +370,17 @@ test('shared layouts preserve alignment, readable controls and stable navigation
             return {
               y: middle(control.matches('span') ? range.getBoundingClientRect() : bounds),
               left: bounds.left, right: bounds.right, height: bounds.height,
-              label: control.matches('span')
+              label: control.matches('span'), row: [...node.children].indexOf(control.closest('.relay-alias-row'))
             };
           });
         });
-        if (width === 2048)
-          assert(Math.max(...controls.map(c => c.y)) - Math.min(...controls.map(c => c.y)) <= 1, '宽屏按钮和状态文字未同排对齐');
-        if ([1591, 1440].includes(width)) {
-          const search = await box('#relay-search');
+        if (width >= 1440) {
+          const centers = [0, 1].map(row => controls.filter(c => c.row === row).map(c => c.y));
+          assert(centers.every(row => row.length && Math.max(...row) - Math.min(...row) <= 2), '每行按钮和状态文字应居中对齐');
+          assert(Math.min(...centers[1]) > Math.max(...centers[0]) + 28, '使用和资料状态应在两行');
+          const parent = await box('#relay-filter-parent');
           const action = await box('[data-action="relay-parent-add"]');
-          aligned(search, action, '空间不足时搜索和操作应整组换行');
-          const filters = await box('.relay-alias-filters');
-          assert(filters.y + filters.height <= search.y - 8, '完整状态筛选与搜索操作分行时保持间距');
+          assert(Math.abs(parent.x + parent.width - action.x - action.width) <= 1, '主邮箱筛选与末个操作右边缘应对齐');
         }
         assert(controls.every(c => c.left >= 0 && c.right <= width), '工具栏控件越过视口');
         if (width <= 390)

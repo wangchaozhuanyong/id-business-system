@@ -77,18 +77,18 @@ try {
     const firstRow = pool.locator('.mailbox-account').first();
     const rowHeight = (await firstRow.boundingBox()).height;
     const compact = await firstRow.evaluate(row => {
-      const code = row.querySelector('[data-mailbox-code]'), copy = row.querySelector('[data-action="ops-mailbox-pool-copy-existing"]');
+      const code = row.querySelector('[data-mailbox-code]'), copy = row.querySelector('[data-action="ops-mailbox-pool-copy-query"]');
       const c = code.getBoundingClientRect(), b = copy.getBoundingClientRect();
       const email = row.querySelector('strong');
       return { codeElided: code.scrollWidth > code.clientWidth && getComputedStyle(code).textOverflow === 'ellipsis', emailElided: email.scrollWidth > email.clientWidth, title: email.title, copy: copy.textContent, centerDifference: Math.abs((c.top+c.bottom-b.top-b.bottom)/2), codeHeight:c.height };
     });
     assert(compact.codeElided && compact.emailElided);
     assert.equal(compact.title, fixture[0].email);
-    assert.equal(compact.copy, '复制');
+    assert.equal(compact.copy, '复制查询');
     assert(compact.centerDifference < 1 && compact.codeHeight <= 20);
     await pool.locator('.mailbox-account__more').first().click();
     const actions = page.getByRole('menu', { name: '邮箱操作', exact: true });
-    await actions.getByRole('menuitem', { name: '更新授权', exact: true }).waitFor();
+    await actions.getByRole('menuitem', { name: '仅复制当前码', exact: true }).waitFor();
     await settle(page);
     assert.equal((await firstRow.boundingBox()).height, rowHeight, '浮层操作不能撑高数据行');
     assert(await actions.evaluate(el => {
@@ -97,18 +97,18 @@ try {
     }), `浮层操作必须完整可用 ${width}/${theme}`);
     await page.keyboard.press('Escape');
     assert.equal(await actions.count(), 0);
-    await pool.locator('.mailbox-account__more').first().click();
-    await actions.getByRole('menuitem', { name: '更新授权', exact: true }).click();
+    await firstRow.getByRole('button', { name: '绑定邮箱', exact: true }).click();
     assert.equal(await actions.count(), 0);
     const operation = page.locator('#drawer[open]');
     assert(await operation.locator('#ops-managed-pool-form').isVisible());
     await operation.getByLabel('查看应用专用密码说明', { exact: true }).click();
-    assert(await operation.locator('#ops-managed-pool-form a[href="https://myaccount.google.com/apppasswords"]').isVisible());
+    assert(await operation.locator('#ops-managed-pool-form [data-mailbox-credential-help] a[href="https://myaccount.google.com/apppasswords"]').isVisible());
     await operation.getByLabel('查看应用专用密码说明', { exact: true }).press('Escape');
     const editorRect = await operation.locator('#ops-managed-pool-form').boundingBox();
     assert(editorRect.y >= (await operation.locator('.drawer-body').boundingBox()).y - 1 && editorRect.y < 900);
     await operation.getByRole('button', { name: '取消', exact: true }).click();
-    await pool.locator('[data-action="ops-mailbox-pool-copy-existing"]').first().click();
+    await firstRow.locator('.mailbox-account__more').click();
+    await actions.getByRole('menuitem', { name: '仅复制当前码', exact: true }).click();
     await page.waitForFunction(async () => await navigator.clipboard.readText() === 'SYNTHETIC-fixture-0-LAYOUT-ONLY');
     assert.deepEqual(singleReads, [fixture[0].id], '手动复制继续使用既有单条读取');
     await pool.getByRole('button', { name: '下一页', exact: true }).click(); await waitCodes();
@@ -154,8 +154,11 @@ try {
     await actions.waitFor();
     await settle(page);
     assert(await actions.evaluate(el => { const r = el.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; }), '末行操作浮层不能越出屏幕');
+    await page.keyboard.press('Escape');
+    const lastBinding = pool.locator('.mailbox-account').last().getByRole('button', { name: '绑定邮箱', exact: true });
+    await lastBinding.scrollIntoViewIfNeeded();
     const scrollBeforeOperation = await page.evaluate(() => ({ window: scrollY, panel: document.querySelector('#plugin-tool-host .drawer-body').scrollTop }));
-    await actions.getByRole('menuitem', { name: '更新授权', exact: true }).click();
+    await lastBinding.click();
     await operation.locator('#ops-managed-pool-form').waitFor();
     await operation.getByRole('button', { name: '取消', exact: true }).click();
     await operation.waitFor({ state: 'hidden' });
@@ -205,7 +208,7 @@ try {
     }
     if ([1440,390].includes(width)) await page.screenshot({ path: path.join(output, `help-${width}-${theme}.png`) });
     await pool.getByLabel('查看邮箱池说明', { exact: true }).press('Escape');
-    await pool.getByRole('button', { name: '绑定邮箱', exact: true }).click();
+    await pool.locator('[data-action="ops-mailbox-pool-add"]').click();
     const editor = operation.locator('#ops-managed-pool-form');
     await editor.locator('#ops-managed-email').fill('draft@example.test');
     const fieldTop = (await editor.locator('#ops-managed-email').boundingBox()).y;
@@ -227,7 +230,7 @@ try {
       assert(await editor.locator('[data-mailbox-batch-help] a').first().isVisible());
     }
     await operation.getByRole('button', { name: '取消', exact: true }).click();
-    await pool.getByRole('button', { name: '绑定邮箱', exact: true }).click();
+    await pool.locator('[data-action="ops-mailbox-pool-add"]').click();
     assert.equal(await editor.locator('#ops-managed-email').inputValue(), 'draft@example.test');
     await operation.getByRole('button', { name: '取消', exact: true }).click();
     await pool.getByLabel('搜索邮箱池', { exact: true }).fill(''); await waitCodes();
@@ -240,7 +243,8 @@ try {
       failCodes = true;
       await pool.getByRole('button', { name: '重试', exact: true }).click();
       await pool.locator('[data-mailbox-code]').getByText('读取失败', { exact: true }).waitFor();
-      await pool.locator('[data-action="ops-mailbox-pool-copy-existing"]').click();
+      await pool.locator('.mailbox-account__more').click();
+      await actions.getByRole('menuitem', { name: '仅复制当前码', exact: true }).click();
       await waitCodes();
       assert.deepEqual(singleReads, [fixture[0].id, fixture[1].id]);
     }

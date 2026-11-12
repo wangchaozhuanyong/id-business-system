@@ -1,0 +1,18 @@
+{
+  "beforeAssetsSha256": "af1f706a931104fe6169cde1c5fb820557a55595a44e64e55a660ce23961d96a",
+  "assetsSha256": "af29b02efa8c9f06d04446fe1766200d9adf91a8f99f85a0b91dcdfe733ecd4f",
+  "files": {
+    "modules/recharge/codexdaichong/assets.mjs": {
+      "before": "7deca77a22f303ac301c282ba83b89de57bcb58588ecc23ce8e55015b33dbf92",
+      "after": "0e47a6b796cf2d3862e9f95eaab105b8671d599d7c23bc963bc74faba38aea51"
+    },
+    "modules/recharge/codexdaichong/shell.js": {
+      "before": "800ec2549fefc51ceb8b4a8ad7375c191936f019381c9a6d4779a9b5d69ad9dc",
+      "after": "4d4e8d89fd6621178c70bbe16e3f3454ab61bdb876698260f114a6eddf475ba6"
+    },
+    "modules/recharge/codexdaichong/shell.css": {
+      "before": "7549bb4f48dd055e239b552a6802a2dc01de8c28555a44d901444d660378a3eb",
+      "after": "1135d221a001d1d813d92a583b2750b856e33f0d23b56351bb04a31270ea0ce9"
+    }
+  }
+}

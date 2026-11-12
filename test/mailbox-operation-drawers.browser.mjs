@@ -11,7 +11,7 @@ test('邮箱池行操作使用右侧抽屉，查询、授权、状态、查询�
   t.after(async () => { release?.(); releaseOAuth?.(); await browser.close(); });
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 } });
   await interceptDesign(context, { localFixtures: {}, actor: { id: 'drawer-admin', name: '合成管理员', role: 'admin' } });
-  let snapshot = { version: 1, defaultValidDays: 7, items: ['google', 'apple', 'microsoft', 'google', 'relay'].map((provider, index) => ({
+  let snapshot = { version: 1, inventoryVersion: 0, defaultValidDays: 7, items: ['google', 'apple', 'microsoft', 'google', 'relay'].map((provider, index) => ({
     id: `drawer-${index}`, email: `drawer-${index}@example.test`, label: '仅用于离线界面测试', provider,
     active: true, authorizationPending: index === 3, expiresAt: '2099-01-01T00:00:00Z'
   })) };
@@ -28,9 +28,11 @@ test('邮箱池行操作使用右侧抽屉，查询、授权、状态、查询�
     }
     writes.push(command);
     if (fail) { fail = false; return route.fulfill({ status: 503, json: { error: '合成保存失败，请重试' } }); }
-    snapshot = { ...snapshot, version: snapshot.version + 1, items: snapshot.items.map(row => row.id === command.id
+    const id = command.action === 'rotate-delivery' ? command.ids[0] : command.id;
+    snapshot = { ...snapshot, version: snapshot.version + 1, items: snapshot.items.map(row => row.id === id
       ? { ...row, active: command.action === 'status' ? command.active : row.active, authorizationPending: false } : row) };
-    return route.fulfill({ json: { ...snapshot, ...(command.action === 'rotate' ? { issuedCode: 'MBX-SYNTHETIC-NEW-CODE' } : {}) } });
+    return route.fulfill({ json: { ...snapshot, ...(command.action === 'rotate-delivery' ? { issuedCode: 'MBX-SYNTHETIC-NEW-CODE',
+      results: [{ id, email: snapshot.items.find(row => row.id === id).email, status: 'success' }] } : {}) } });
   });
   await context.route(origin + '/api/local/tools/mailbox-query', async route => {
     queryReads++;
@@ -61,6 +63,10 @@ test('邮箱池行操作使用右侧抽屉，查询、授权、状态、查询�
   const drawer = page.locator('#drawer');
   const pool = page.locator('#ops-mailbox-pool');
   const row = id => pool.locator('.mailbox-account').filter({ has: page.locator('strong', { hasText: `drawer-${id}@example.test` }) });
+  async function bindRow(id) {
+    await row(id).getByRole('button', { name: '绑定邮箱', exact: true }).click();
+    await drawer.locator('[data-mailbox-operation]').waitFor();
+  }
   async function more(id, label) {
     await row(id).locator('.mailbox-account__more').click();
     await page.getByRole('menu', { name: '邮箱操作', exact: true }).getByRole('menuitem', { name: label, exact: true }).click();
@@ -93,7 +99,7 @@ test('邮箱池行操作使用右侧抽屉，查询、授权、状态、查询�
   assert.equal(await pool.getByRole('searchbox', { name: '搜索邮箱池' }).inputValue(), 'drawer-');
   assert.equal(await pool.locator('.mailbox-account').count(), listBefore);
   assert.equal(await page.locator('#ops-mailbox-query-panel #ops-managed-query-code').inputValue(), '');
-  await more(0, '更新授权');
+  await bindRow(0);
   assert.match(await drawer.locator('.mailbox-operation-summary').innerText(), /drawer-0@example.test/);
   await drawer.locator('#ops-managed-app-password').fill('synthetic-app-credential');
   assert.equal(await submit(), 503);
@@ -102,23 +108,22 @@ test('邮箱池行操作使用右侧抽屉，查询、授权、状态、查询�
   assert.equal(await submit(), 200);
   await drawer.locator('#ops-managed-pool-form').waitFor({ state: 'detached' });
   await close();
-  await more(0, '更新授权');
+  await bindRow(0);
   assert.equal(await drawer.locator('#ops-managed-app-password').inputValue(), '');
   await close();
-  await more(0, '重置查询码');
-  await drawer.locator('#ops-managed-days').fill('14');
-  await close();
-  await more(0, '重置查询码');
-  assert.equal(await drawer.locator('#ops-managed-days').inputValue(), '14');
-  assert.equal(await submit(), 200);
-  await drawer.getByText('MBX-SYNTHETIC-NEW-CODE', { exact: true }).waitFor();
+  await row(0).locator('.mailbox-account__more').click();
+  await page.getByRole('menuitem', { name: '重置查询码', exact: true }).click();
+  const confirm = page.locator('#confirm-dialog[open]');
+  assert.equal(writes.at(-1).action, 'credential');
+  await confirm.getByRole('button', { name: '确认重置', exact: true }).click();
+  await drawer.getByText('已重置', { exact: true }).waitFor();
   await close();
   await more(0, '停用');
-  assert.equal(writes.at(-1).action, 'rotate', '打开启停抽屉不会立即写入');
+  assert.equal(writes.at(-1).action, 'rotate-delivery', '打开启停抽屉不会立即写入');
   await drawer.getByRole('button', { name: '确认停用', exact: true }).click();
   await row(0).getByText('已停用', { exact: true }).waitFor();
   await close();
-  await more(2, '重新授权');
+  await bindRow(2);
   assert.equal(await drawer.locator('[data-mailbox-operation="oauth"]').count(), 1);
   assert.equal(oauthStarts, 0, '进入授权抽屉不提前执行 OAuth');
   const popupEvent = page.waitForEvent('popup');
@@ -128,17 +133,17 @@ test('邮箱池行操作使用右侧抽屉，查询、授权、状态、查询�
   assert.equal(oauthStarts, 1);
   await popup.close();
   await close();
-  await more(4, '更新授权');
+  await bindRow(4);
   assert.equal(await drawer.locator('[data-mailbox-operation="relay"]').count(), 1);
   assert(page.url().endsWith('#/plugins/mailboxes'));
   await close();
-  await row(3).getByRole('button', { name: '去授权', exact: true }).click();
+  await bindRow(3);
   assert.equal(await drawer.locator('#ops-managed-email').inputValue(), 'drawer-3@example.test');
   await close();
 
   slowOAuth = true;
   const oauthStarted = new Promise(resolve => { oauthRequested = resolve; });
-  await more(2, '重新授权');
+  await bindRow(2);
   const delayedPopupEvent = page.waitForEvent('popup');
   await drawer.getByRole('button', { name: '前往 Microsoft 授权', exact: true }).click();
   const delayedPopup = await delayedPopupEvent;
@@ -146,7 +151,7 @@ test('邮箱池行操作使用右侧抽屉，查询、授权、状态、查询�
   const popupClosed = delayedPopup.waitForEvent('close');
   await close();
   await bounded(popupClosed, '关闭授权窗口');
-  await more(1, '更新授权');
+  await bindRow(1);
   releaseOAuth();
   assert.equal(await drawer.locator('#ops-managed-app-password').count(), 1);
   assert.equal(await drawer.getByRole('button', { name: '核对并保存授权', exact: true }).count(), 0, '迟到授权不覆盖其他操作');
@@ -157,7 +162,7 @@ test('邮箱池行操作使用右侧抽屉，查询、授权、状态、查询�
     await page.setViewportSize({ width, height: 1000 });
     await page.waitForFunction(() => innerWidth > 900 || document.querySelector('#sidebar').getBoundingClientRect().right <= 0);
     await page.evaluate(dark => { document.documentElement.dataset.theme = dark ? 'dark' : 'light'; }, dark);
-    await more(1, '更新授权');
+    await bindRow(1);
     const dismiss = page.locator('.toast-dismiss:visible');
     if (await dismiss.count()) await dismiss.click();
     const layout = await drawer.evaluate(node => {
@@ -177,7 +182,7 @@ test('邮箱池行操作使用右侧抽屉，查询、授权、状态、查询�
   await row(1).getByRole('button', { name: '查询', exact: true }).click();
   await bounded(started, '延迟邮件查询');
   await close();
-  await more(1, '更新授权');
+  await bindRow(1);
   const finished = page.waitForResponse(r => new URL(r.url()).pathname === '/api/local/tools/mailbox-query');
   release();
   await finished;
@@ -189,8 +194,7 @@ test('邮箱池行操作使用右侧抽屉，查询、授权、状态、查询�
   await page.getByRole('button', { name: '在线工具', exact: true }).click();
   await page.evaluate(() => window.IDDesignModules.find(module => module.id === 'operations').onClick('tool-open', { dataset: { name: '邮箱查询与邮箱池' } }));
   await drawer.getByRole('tab', { name: '邮箱池管理', exact: true }).click();
-  await row(1).locator('.mailbox-account__more').click();
-  await page.getByRole('menuitem', { name: '更新授权', exact: true }).click();
+  await row(1).getByRole('button', { name: '绑定邮箱', exact: true }).click();
   assert.equal(await drawer.locator('#ops-mailbox-pool #ops-managed-pool-form').isVisible(), true, '已有在线工具抽屉内继续使用原表单，不破坏父界面');
   await pool.getByRole('button', { name: '取消', exact: true }).click();
   await row(1).getByRole('button', { name: '查询', exact: true }).click();
@@ -255,7 +259,7 @@ test('首次绑定、服务商教程、批量导入及设置抽屉保留输入�
   const email = drawer.locator('#ops-managed-email');
   const credentialHelp = drawer.locator('.field').filter({ has: page.locator('#ops-managed-app-password') }).locator('.title-help');
   async function bind() {
-    await pool.getByRole('button', { name: '绑定邮箱', exact: true }).click();
+    await pool.locator('[data-action="ops-mailbox-pool-add"]').click();
     await drawer.locator('[data-mailbox-operation="create"]').waitFor();
     assert.equal(await pool.locator('#ops-managed-pool-form').count(), 0);
   }
@@ -368,9 +372,8 @@ test('首次绑定、服务商教程、批量导入及设置抽屉保留输入�
   await close();
   await settings();
   await drawer.locator('#ops-managed-days').fill('14');
-  await drawer.locator('#ops-managed-apply-existing').check();
   assert.equal(await submit(), 200);
-  assert.equal(writes.at(-1).applyExisting, true);
+  assert.equal(writes.at(-1).applyExisting, undefined);
   await form.waitFor({ state: 'detached' });
   await close();
   await pool.getByRole('button', { name: '批量导入', exact: true }).click();

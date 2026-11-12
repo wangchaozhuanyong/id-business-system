@@ -24,7 +24,7 @@ test('隐藏邮箱的未登记计数、筛选与显示一致，健康状态独�
   const main = page.locator('#main');
   await main.getByRole('tab', { name: '隐藏邮箱管理', exact: true }).click();
   const usage = main.getByRole('group', { name: '使用状态', exact: true });
-  const health = main.getByRole('group', { name: '邮箱资料状态', exact: true });
+  const health = main.getByRole('group', { name: '资料状态', exact: true });
   const rows = main.locator('table[data-table="relay-aliases"] tbody tr[data-row-id]');
   const ids = () => rows.evaluateAll(nodes => nodes.map(node => node.dataset.rowId));
   await usage.getByRole('button', { name: '未登记 1', exact: true }).click();
@@ -200,8 +200,7 @@ test('邮箱更多操作直接下拉，保留确认、查询重试及迟到响�
     await page.locator('#confirm-dialog').getByRole('button', { name: '取消', exact: true }).click();
     await more.click();
     await items.filter({ hasText: '重置查询码' }).click();
-    await page.locator('#relay-live-code-form').waitFor();
-    await closeDrawer();
+    await page.locator('#confirm-dialog[open]').getByRole('button', { name: '取消', exact: true }).click();
     await page.locator('[data-action="relay-tab"][data-tab="parents"]').click();
     await page.locator(`[data-action="relay-parent-more"][data-id="${parent.id}"]`).click();
     assert(await menu.getByRole('menuitem', { name: '测试连接', exact: true }).isVisible());
@@ -211,7 +210,7 @@ test('邮箱更多操作直接下拉，保留确认、查询重试及迟到响�
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     assert.equal(await page.evaluate(() => scrollX), 0, `菜单操作不能横向滚动整页：${width}px`);
   }
-  await page.waitForFunction(() => !document.querySelector('[data-relay-buyer-code] button[data-action="relay-buyer-code-copy"]:disabled'));
+  await page.locator('[data-relay-buyer-code] output').getByText('SYNTHETIC-QUERY-CODE', { exact: true }).first().waitFor({ state: 'attached' });
   failNextRead = true;
   await more.click();
   await menu.getByRole('menuitem', { name: '查看查询码', exact: true }).click();

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createLocalBusinessStore } from '../server/local-business.mjs';
+import { stageAppleOrderFunding } from '../server/apple-funding.mjs';
 import { appleBinding, appleFundingEligibility, appleFundingIndex } from '../frontend/apple-funding.mjs';
 
 const actor = { id: 'apple-test-admin', name: '合成经办人', role: 'admin' };
@@ -115,6 +116,30 @@ test('旧流水可识别唯一绑定，冲突或缺少证据时留待核对', ()
   const divergent = { ...second, appleIdId: 'apple-a', platformAccountId: 'platform-b' };
   assert.equal(appleBinding(appleFundingIndex([original, divergent],
     { allocations: [allocation(original), allocation(divergent)] }), renewal).conflict, true);
+});
+
+test('同一平台账号换登录标识仍使用原苹果 ID，死号和未付款占用继续受限', () => {
+  const original = draftOrder('original-grok', { product: 'Grok', plan: 'SuperGrok', subscriptionSeries: 'supergrok',
+    loginMethod: 'email', email: 'grok-original@example.test', platformAccountId: 'grok-fixture-1',
+    paidConfirmed: true, paidAmount: '20', appleFunding: { region: 'US', expected: '20', bound: true } });
+  const incoming = draftOrder('new-grok', { product: 'Grok', plan: 'SuperGrok', subscriptionSeries: 'supergrok',
+    loginMethod: 'x', email: '', xHandle: '@fixture_grok', platformAccountId: 'grok-fixture-1', appleIdId: 'apple-b' });
+  const wallets = [{ id: 'apple-a', balance: '50', currency: 'USD' }, { id: 'apple-b', balance: '50', currency: 'USD' }];
+  const ledger = { wallets, allocations: [], movements: [] };
+  const resources = inventory({ ...asset('apple-a', '0'), health: 'dead' }, asset('apple-b', '0'));
+  const prices = { applePaidPrices: { Grok: { SuperGrok: { US: '20' } } } };
+  const index = appleFundingIndex([original], ledger);
+  assert.equal(appleBinding(index, incoming).id, 'apple-a');
+  const wallet = id => ({ ...wallets.find(row => row.id === id), ...resources.mailboxes.find(row => row.id === id) });
+  assert.match(appleFundingEligibility(wallet('apple-b'), incoming, index, prices).error, /原绑定/);
+  assert.match(appleFundingEligibility(wallet('apple-a'), incoming, index, prices).error, /状态异常/);
+  assert.match(stageAppleOrderFunding([original], [original, { ...incoming }], ledger, resources, prices, '新增订单', customers), /原绑定/);
+  assert.match(stageAppleOrderFunding([original], [original, { ...incoming, appleIdId: 'apple-a' }],
+    ledger, resources, prices, '新增订单', customers), /状态异常/);
+  assert.equal(stageAppleOrderFunding([original], [original, { ...incoming, platformAccountId: 'grok-fixture-2' }],
+    ledger, resources, prices, '新增订单', customers), undefined);
+  const pending = { ...original, paidConfirmed: false, appleFunding: { ...original.appleFunding, bound: false } };
+  assert.match(appleFundingEligibility(wallet('apple-b'), incoming, appleFundingIndex([pending], ledger), prices).error, /已有待付款订单/);
 });
 
 test('价目调整不更改占用快照，已核实的实际付款可按原单确认', t => {

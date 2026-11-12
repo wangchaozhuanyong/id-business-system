@@ -4,6 +4,7 @@ import { compareQuoteRecency, isAutomaticQuote, renewalFundingUsd, validCurrency
 import { parseV2DateTimeInput } from '../modules/time/dateTime.ts';
 import { accountLifecycleSummary, releasedAccountOrders, systemAccount } from './account-lifecycle.mjs';
 import { validMoney } from './order-policy.mjs';
+import { describeWriteOperation } from './write-operation.mjs';
 import { projectSubscriptions, renewalCardKey, subscriptionForOrder } from './subscription-management.mjs';
 import { personalProduct, samePersonalSubscription, targetKey } from './personal-subscriptions.mjs';
 
@@ -33,7 +34,7 @@ function classify(data) {
     items.find(row => row.name === realCardType.name);
   if (existing?.name === realCardType.name && existing.active) return data;
   const fixed = { ...realCardType, id: existing?.id || realCardType.id };
-  return { items: existing ? items.map(row => row === existing ? fixed : row) : [...items, fixed], assignments };
+  return { ...data, items: existing ? items.map(row => row === existing ? fixed : row) : [...items, fixed], assignments };
 }
 
 function tenantCardType(types) {
@@ -49,6 +50,25 @@ const recognizedCard = id => typeof id === 'string' &&
   /^(?:recharge:[1-9]\d*|tenant:[a-zA-Z0-9-]{1,120}|orbitcard:[1-9]\d*)$/.test(id);
 const error = (status, message) => Object.assign(new Error(message), { status });
 const validPan = number => typeof number === 'string' && /^\d{12,19}$/.test(number);
+const healthLabels = { normal: '正常', dead: '死卡', unlocking: '解封中' };
+const numberKey = number => validPan(number)
+  ? 'pan:' + createHash('sha256').update('order-card-health\0' + number).digest('hex') : '';
+
+function cardHealthRecord(data, cardId, number) {
+  const byNumber = data?.health?.[numberKey(number)];
+  const byId = recognizedCard(cardId) ? data?.health?.[cardId] : undefined;
+  return !byId || (byNumber && byNumber.revision > byId.revision) ? byNumber : byId;
+}
+export const orderCardHealth = (data, cardId, number) => cardHealthRecord(data, cardId, number)?.state || 'normal';
+
+export const blockedOrderCard = state => state === 'dead' || state === 'unlocking';
+
+function cardTypesView({ version, data: raw }) {
+  const { items, assignments, health } = classify(raw);
+  return { version, items, assignments, ...(health && { health: Object.fromEntries(
+    Object.entries(health).filter(([id]) => recognizedCard(id)).map(([id, row]) => [id, row.state])
+  ) }) };
+}
 
 export function frozenOrderCard(data, id, fingerprint) {
   return data?.items?.find(row => (id && row.cardIds.includes(id)) ||
@@ -300,6 +320,16 @@ function orderCardReference(order) {
   return { id, manual, conflict };
 }
 
+export function orderCardHealthReference(order, { archive, tenantCards = [] } = {}) {
+  if (order?.payment !== '银行卡') return { id: '', number: '', conflict: false };
+  const { id, manual, conflict } = orderCardReference(order);
+  const tenant = id.startsWith('tenant:') ? tenantCards.find(row => row.id === id && row.tenantId === order.tenantId) : undefined;
+  const numbers = new Set([order.proCardNumber, archive?.cards?.[id]?.number, tenant?.number].filter(validPan));
+  const [number = ''] = numbers;
+  const tail = /^\d{4}(?:\d{2})?$/.test(order.paymentId || '') ? order.paymentId : '';
+  return { id: manual ? '' : id, number, conflict: conflict || numbers.size > 1 || Boolean(number && tail && !number.endsWith(tail)) };
+}
+
 function cardIdentity(order, { pool, tenantCards, archive }) {
   if (order.payment !== '银行卡') return {};
   const { id, conflict } = orderCardReference(order);
@@ -453,6 +483,7 @@ async function cardUsageView(store, client, actor, now = Date.now(), includeDeta
     };
   };
   const labels = new Map();
+  const healthContext = { archive, tenantCards: [...tenantCards.values()] };
   for (const order of orders) {
     if (order.payment !== '银行卡') continue;
     const actual = identify(order);
@@ -463,11 +494,15 @@ async function cardUsageView(store, client, actor, now = Date.now(), includeDeta
     const { key, cardId, number, freeze } = identity;
     if (key && !labels.has(key)) labels.set(key, order.id);
     const state = cardAvailability(cardId, number, freeze, pool.get(cardId), tenantCards.get(cardId));
+    const health = cardHealthRecord(types, cardId, number);
+    const source = orderCardHealthReference(order, healthContext);
     identities.set(order.id, {
       ...actual, order, state, typeName: cardTypeName(types, order, cardId),
       view: { id: order.id, cardKey: labels.get(key) || order.id, state, last4: identity.last4, counts: counts.get(key) || {},
+        health: health?.state || 'normal', ...(health && { healthChange: { reason: health.reason, actor: health.actor, at: health.at } }),
         ...(includeDetails ? displayMaterials(identity) : {}),
         preferred: Boolean(preferred), hasCard: Boolean(cardId || number || identity.last4),
+        canSetHealth: Boolean(!preferred && !source.conflict && (source.id || source.number)),
         canFreeze: Boolean(!preferred && !freeze && (cardId || number)) }
     });
   }
@@ -639,6 +674,11 @@ async function cardDetails(context, order, account) {
     card.availability = freeze ? 'frozen' : conflict || tailConflict ||
       (validPan(savedNumber) && validPan(liveNumber) && savedNumber !== liveNumber) ? 'review' :
       cardAvailability(id, validPan(number) ? number : '', null, livePoolCard, liveTenantCard, liveOrbitCard);
+    const health = !conflict && !tailConflict && orderCardHealth(types, id, number || savedNumber);
+    if (blockedOrderCard(health)) {
+      if (card.availability === 'normal') card.availability = health;
+      card.status = healthLabels[health];
+    }
   }
   return { card, number: card.canReveal ? number : undefined };
 }
@@ -786,7 +826,7 @@ async function writeType(store, client, command, actor) {
       if (!importTypes.assigned) {
         if (store.featureDocument(cardTypeDocument).version !== current.version)
           throw error(409, '银行卡类型已更新，请刷新后重试');
-        return { version: current.version, ...data, importTypes };
+        return { ...cardTypesView({ version: current.version, data }), importTypes };
       }
       target = typeId;
       label = '设置本批充值银行卡类型';
@@ -795,12 +835,52 @@ async function writeType(store, client, command, actor) {
     default: throw error(400, '不支持此银行卡类型操作');
   }
   const saved = store.saveFeatureDocument(cardTypeDocument, current.version, data, { action: label, actor, targetId: target });
-  return { version: saved.version, ...saved.data, ...(importTypes && { importTypes }) };
+  return { ...cardTypesView(saved), ...(importTypes && { importTypes }) };
+}
+
+function writeHealth(store, command, actor, operationId, now) {
+  const { orderId, orderVersion, version, state } = command;
+  const reason = typeof command.reason === 'string' ? command.reason.trim() : '';
+  if (!validOrderId(orderId) || !Object.hasOwn(healthLabels, state) || !reason || reason.length > 300)
+    throw error(400, '请选择银行卡状态并填写变更原因（最多 300 字）');
+  const operation = describeWriteOperation(operationId, actor, [cardTypeDocument, 'health', orderId, orderVersion, version, state, reason]);
+  if (!operation) throw error(400, '状态操作编号无效，请重新打开页面');
+  const replay = store.replayWrite(operation);
+  if (replay) return cardTypesView(replay[0]);
+  const current = store.featureDocument(cardTypeDocument);
+  if (version !== current.version) throw error(409, '银行卡状态已更新，请刷新后重试');
+  const commerce = store.load('commerce');
+  const order = commerce.data?.orders?.find(row => row.id === orderId);
+  if (order?.payment !== '银行卡' || (order.version ?? 0) !== orderVersion)
+    throw error(409, '订单用卡资料已变化，请刷新后重试');
+  const { id: cardId, number, conflict } = orderCardHealthReference(order, {
+    archive: store.featureDocument(orderCardArchiveDocument).data,
+    tenantCards: store.featureDocument('tenant-cards').data?.items || []
+  });
+  const pan = numberKey(number);
+  if (conflict || (!cardId && !pan)) throw error(409, '卡片资料待核对，无法根据尾号标记');
+  const data = structuredClone(classify(current.data));
+  const health = data.health ??= {};
+  const key = cardId || pan;
+  const event = { state, reason, actor: actor.name, actorId: actor.id, at: new Date(now).toISOString(),
+    revision: version + 1, ...(cardId && { cardId }), ...(pan && { numberKey: pan }) };
+  // A verified complete number links handwritten records to the same card. Tail digits never do.
+  const linkedPan = pan || health[key]?.numberKey;
+  const linkedCard = cardId || health[key]?.cardId;
+  health[key] = event;
+  if (linkedPan) health[linkedPan] = { ...event, numberKey: linkedPan, cardId: linkedCard };
+  if (linkedCard) health[linkedCard] = { ...event, numberKey: linkedPan };
+  (data.healthHistory ??= []).push({ ...event, orderId });
+  const saved = store.saveFeatureDocument(cardTypeDocument, version, data, {
+    action: `银行卡状态：${healthLabels[state]}`, actor, targetId: cardId || orderId,
+    commerceVersion: commerce.version, operation
+  });
+  return cardTypesView(saved);
 }
 
 const cardConfirmationLifetime = 90_000;
-const cardVersion = (snapshots, freezes, tenantCards) =>
-  [snapshots.commerce.version, snapshots.inventory.version, snapshots.subscriptions.version, freezes.version, tenantCards.version].join(':');
+const cardVersion = (snapshots, freezes, tenantCards, types) =>
+  [snapshots.commerce.version, snapshots.inventory.version, snapshots.subscriptions.version, freezes.version, tenantCards.version, types.version].join(':');
 
 async function renewalCardAction(store, client, command, actor, now) {
   if (!['prepare', 'bind', 'copy'].includes(command.action) || !validOrderId(command.orderId))
@@ -820,9 +900,11 @@ async function renewalCardAction(store, client, command, actor, now) {
   const { snapshots, target, order, key, binding } = initial;
   const freezes = store.featureDocument(cardFreezeDocument);
   const tenantCards = store.featureDocument('tenant-cards');
-  const version = cardVersion(snapshots, freezes, tenantCards);
+  const types = store.featureDocument(cardTypeDocument);
+  const version = cardVersion(snapshots, freezes, tenantCards, types);
   const verify = (fresh) => {
-    if (cardVersion(fresh, store.featureDocument(cardFreezeDocument), store.featureDocument('tenant-cards')) !== version)
+    if (cardVersion(fresh, store.featureDocument(cardFreezeDocument), store.featureDocument('tenant-cards'),
+      store.featureDocument(cardTypeDocument)) !== version)
       throw error(409, '客户、订阅或用卡资料已更新，请重新核对');
   };
   const context = {
@@ -830,7 +912,7 @@ async function renewalCardAction(store, client, command, actor, now) {
     includeAvailability: true, freezes: freezes.data,
     fingerprint: number => store.orderCardFingerprint(number),
     archive: store.featureDocument(orderCardArchiveDocument).data,
-    types: classify(store.featureDocument(cardTypeDocument).data)
+    types: classify(types.data)
   };
   const check = card => cardDetails(context, card ? {
     ...order, cardId: card.cardId || '', proCardNumber: card.number || '', paymentId: card.last4 || '',
@@ -908,16 +990,19 @@ export function createCardManagementHandler({ store, client, publicOrigin, clock
         }
         if (route === '/api/local/card-types') {
           const current = store.featureDocument(cardTypeDocument);
-          return send(response, 200, { version: current.version, ...classify(current.data) });
+          return send(response, 200, cardTypesView(current));
         }
         if (route === '/api/local/subscription-card-estimates') {
           const orders = store.load('commerce').data?.orders || [];
           const { fixedFee, quotes } = currentEstimateContext(store);
           const now = clock();
           const includeNext = new URL(request.url || route, origin).searchParams.has('includeNext');
-          const items = orders.filter(order => includeNext ? order.payment === '银行卡' : orderCardIds(order).length).map(order => ({
-            id: order.id, version: order.version, ...cardFundingEstimate(order, fixedFee, quotes, now)
-          }));
+          const { data } = store.featureDocument(cardTypeDocument);
+          const items = orders.filter(order => includeNext ? order.payment === '银行卡' : orderCardIds(order).length || validPan(order.proCardNumber)).map(order => {
+            const { id, number, conflict } = orderCardHealthReference(order);
+            return { id: order.id, version: order.version, health: conflict ? 'unknown' : orderCardHealth(data, id, number),
+              ...cardFundingEstimate(order, fixedFee, quotes, now) };
+          });
           return send(response, 200, { items });
         }
         throw error(405, '不支持此操作');
@@ -927,7 +1012,9 @@ export function createCardManagementHandler({ store, client, publicOrigin, clock
         throw error(403, '请求来源未通过校验');
       const command = await readCommand(request, route === '/api/local/card-types' ? 20 * 1024 : undefined);
       let result;
-      if (route === '/api/local/card-types') result = await writeType(store, client, command, actor);
+      if (route === '/api/local/card-types') result = command.action === 'health'
+        ? writeHealth(store, command, actor, request.headers['x-id-operation'], clock())
+        : await writeType(store, client, command, actor);
       else if (route === renewalCardRoute) result = await renewalCardAction(store, client, command, actor, clock());
       else if (route === cardStatusRoute) result = await changeCardStatus(store, client, command, actor, clock());
       else if (route === detailsRoute || route === revealRoute || route === copyRoute) {

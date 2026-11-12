@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createLocalBusinessStore } from '../server/local-business.mjs';
+import { createRelayDeliveryJournal } from '../server/apple-relay/code-reset.mjs';
 import {
   createAppleRelayService,
   loadAppleRelayConfig
@@ -353,6 +354,7 @@ function fakeVendure() {
     if (query.includes('resetIcloudVirtualEmailCode')) {
       const target = aliases.find((row) => row.id === variables.id);
       if (!target) return Response.json({ errors: [{ message: 'fixture missing alias' }] });
+      if (state.resetAlias) return state.resetAlias(target, variables);
       target.buyerQueryCode = 'BUY-NEW-FIXTURE';
       target.codeResetIntervalDays = variables.codeResetIntervalDays;
       target.codeExpiresAt = future;
@@ -487,6 +489,7 @@ async function listen(t, state) {
   const service = createAppleRelayService({
     config: state.config,
     readInventory: () => state.inventory,
+    deliveryJournal: state.deliveryJournal,
     savePrimaries: state.savePrimaries,
     planIntake: state.planIntake,
     fetchImpl: state.upstream?.fetch,
@@ -512,7 +515,8 @@ async function listen(t, state) {
     input,
     explicitOrigin = origin,
     actorId = 'relay-tester',
-    role = 'admin'
+    role = 'admin',
+    operationId
   ) {
     const response = await fetch(
       `${origin}/api/local/apple-relay/${action}`,
@@ -525,7 +529,8 @@ async function listen(t, state) {
               origin: explicitOrigin,
               'content-type': 'application/json',
               'x-fixture-actor': actorId,
-              'x-fixture-role': role
+              'x-fixture-role': role,
+              ...(operationId && { 'x-id-operation': operationId })
             }
           }
     );
@@ -957,6 +962,74 @@ test('admin reset stops before contacting the mutation if the reviewed binding c
       .length,
     0
   );
+});
+
+test('隐藏邮箱交付接口在收信服务已重置但响应丢失时核对原操作，旧码立即失效', { timeout: 10000 }, async t => {
+  const state = fixture(), documents = new Map(), audit = [];
+  let version = 7;
+  state.deliveryJournal = createRelayDeliveryJournal({
+    read: id => documents.get(id) || { version: 0, data: null },
+    write: (id, version, data) => documents.set(id, { version, data: structuredClone(data) }),
+    transaction: run => run(),
+    inventoryVersion: () => version,
+    audit: (actor, id) => audit.push({ actor: actor.id, id })
+  });
+  const sent = Promise.withResolvers(), release = Promise.withResolvers();
+  const startedAt = Date.now(), validity = 30 * 86_400_000;
+  state.upstream.resetAlias = async (alias, { codeResetIntervalDays: days }) => {
+    assert.equal(days, 30);
+    alias.buyerQueryCode = 'BUY-DELIVERY-FIXTURE';
+    alias.codeResetIntervalDays = days;
+    alias.codeExpiresAt = new Date(Date.now() + validity).toISOString();
+    sent.resolve();
+    await release.promise;
+    return Response.json({ errors: [{ message: 'internal upstream fixture detail' }] });
+  };
+  const request = await listen(t, state);
+  const command = { mode: 'single', ids: ['first'], inventoryVersion: version };
+  const operation = 'relay-delivery-http-001';
+  const reset = (body = command, id = operation, actor = 'operator-one', role = 'admin', origin) =>
+    request('code-delivery-reset', body, origin, actor, role, id);
+  const publicQuery = code => request('public-query', { queryCode: code });
+  const mutations = () => state.upstream.calls.filter(call => call.query.includes('resetIcloudVirtualEmailCode'));
+  assert.equal((await reset(command, operation, 'employee', 'employee')).status, 403);
+  assert.equal((await reset(command, operation, 'operator-one', 'admin', 'https://foreign.example.test')).status, 403);
+  assert.equal((await reset(command, 'bad')).status, 400);
+  assert.equal((await request('code-reset-prepare', { kind: 'alias', id: 'first', validityDays: 90 })).status, 409);
+  assert.equal(mutations().length, 0);
+  assert.equal((await publicQuery('BUY-FIRST')).status, 200);
+
+  const pending = reset();
+  try {
+    await Promise.race([sent.promise, pending.then(result => assert.fail(`重置尚未送达模拟服务，接口返回 ${result.status}`))]);
+    const duplicate = await reset();
+    assert.equal(duplicate.body.results[0].status, 'pending');
+    assert.equal(duplicate.body.issued, undefined);
+    assert.equal((await publicQuery('BUY-FIRST')).status, 404);
+    assert.equal((await publicQuery('BUY-SIBLING')).status, 200);
+    assert.equal(mutations().length, 1);
+  } finally {
+    release.resolve();
+  }
+  const uncertain = await pending;
+  assert.equal(uncertain.status, 200);
+  assert.equal(uncertain.body.results[0].status, 'pending');
+  assert.doesNotMatch(JSON.stringify(uncertain.body), /internal upstream fixture detail|BUY-/);
+  const confirmed = await reset();
+  assert.equal(confirmed.status, 200);
+  assert.equal(confirmed.headers.get('cache-control'), 'no-store');
+  assert.equal(confirmed.body.results[0].status, 'success');
+  assert.equal(confirmed.body.issued.queryCode, 'BUY-DELIVERY-FIXTURE');
+  const expiresAt = Date.parse(confirmed.body.issued.codeExpiresAt);
+  assert(expiresAt >= startedAt + validity && expiresAt <= Date.now() + validity);
+  assert.equal((await publicQuery(confirmed.body.issued.queryCode)).status, 200);
+  assert.equal((await reset({ ...command, ids: ['sibling'] })).status, 409);
+  version++;
+  assert.equal((await reset(command, operation, 'operator-two')).status, 409);
+  assert.equal((await reset()).body.issued.queryCode, confirmed.body.issued.queryCode);
+  assert.deepEqual(audit, [{ actor: 'operator-one', id: 'first' }]);
+  assert.equal(mutations().length, 1);
+  assert.doesNotMatch(JSON.stringify([...documents.values()]), /BUY-FIRST|BUY-DELIVERY-FIXTURE/);
 });
 
 const reassignmentCalls = ({ upstream }) =>

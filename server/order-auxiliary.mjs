@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { duplicateTenantCard, tenantCardLimit, tenantCardMatches, tenantCardNumber, tenantCardUseHistory } from './tenant-initial-cards.mjs';
 import { tenantKycStatus } from './tenant-kyc.mjs';
 import { readPoolCards } from './order-recharge-client.mjs';
-import { cardFreezeDocument, frozenOrderCard, orderCardArchiveDocument } from './card-management.mjs';
+import { cardFreezeDocument, cardTypeDocument, frozenOrderCard, orderCardArchiveDocument, orderCardHealth } from './card-management.mjs';
 
 export const orderAuxiliaryRoutes = new Set(['/api/local/order-cards', '/api/local/tenant-cards']);
 const tenantDomain = 'tenant-cards';
@@ -47,6 +47,7 @@ export function createOrderAuxiliaryHandler({ store, client, publicOrigin }) {
       try {
         const pool = await readPoolCards(client, { includeNumbers: true });
         const freezes = store.featureDocument(cardFreezeDocument).data;
+        const types = store.featureDocument(cardTypeDocument).data;
         const orders = store.load('commerce').data?.orders || [];
         const items = pool.map(({ number, ...card }) => {
           const manual = orders.filter((row) => row.source !== '线上代充' && confirmedCardUse(row, card.id));
@@ -58,7 +59,7 @@ export function createOrderAuxiliaryHandler({ store, client, publicOrigin }) {
           const autoLast = iso(card.lastUsedAt);
           const lastUsedAt = [autoLast, manualLast].filter(Boolean).sort().at(-1) || null;
           const frozen = isFrozen(freezes, card.id, number);
-          return { ...card, ...(frozen && { active: false, frozen, status: '已冻结' }),
+          return { ...card, health: orderCardHealth(types, card.id, number), ...(frozen && { active: false, frozen, status: '已冻结' }),
             autoUsageCount: card.usageCount, manualUsageCount: manual.length,
             usageCount: card.usageCount === null ? null : card.usageCount + manual.length,
             lastUsedAt, sources: [...(card.usageCount ? ['线上代充'] : []), ...(manual.length ? ['手工录单'] : [])] };
@@ -104,12 +105,13 @@ export function createOrderAuxiliaryHandler({ store, client, publicOrigin }) {
     const tenant = commerce?.tenants?.find((row) => row.id === tenantId);
     if (!tenant) return send(response, 404, { error: '租户不存在' });
     const view = ({ version, data }) => {
+      const types = store.featureDocument(cardTypeDocument).data;
       const items = data?.items || [];
       const uses = tenantCardUseHistory(items, commerce.orders || [], items.length ? archive() : null);
       return {
         version, tenantName: tenant.name || '', kyc: tenantKycStatus(commerce, store.load('inventory').data, tenant),
         items: items.filter(row => row.tenantId === tenantId).map(row => ({
-          ...metadata(row), used: Boolean(uses.get(row.id)), firstUse: uses.get(row.id) || null,
+          ...metadata(row), health: orderCardHealth(types, row.id, row.number), used: Boolean(uses.get(row.id)), firstUse: uses.get(row.id) || null,
           ...(isFrozen(freezes, row.id, row.number) && { active: false, frozen: true })
         }))
       };

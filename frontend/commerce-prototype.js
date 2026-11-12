@@ -36,7 +36,7 @@
   let orderCards = [];
   const tenantCards = new Map();
   const cardLoads = new WeakMap();
-  let bankCardTypes = { version: 0, items: [], assignments: {} };
+  let bankCardTypes = { version: 0, items: [], assignments: {}, health: {} };
   let bankCardTypesLoaded = false;
   let bankCardTypesSeen = false;
   let bankCardTypesRequest;
@@ -208,7 +208,8 @@
     bankCardTypes = {
       version,
       items: items.filter(row => typeof row?.id === 'string' && typeof row.name === 'string'),
-      assignments: assignments && typeof assignments === 'object' && !Array.isArray(assignments) ? assignments : {}
+      assignments: assignments && typeof assignments === 'object' && !Array.isArray(assignments) ? assignments : {},
+      health: snapshot.health || {}
     };
     bankCardTypesSeen = true;
     bankCardTypeSettingsError = '';
@@ -572,6 +573,7 @@
     : product === 'GPT' ? gptOrderRoute : claudeOrderRoute;
   const automaticOrder = (row) => row?.source === '线上代充' && Boolean(row.taskId);
   const entryDraft = product => `commerce-order:new:${currencyFamily(product).toLowerCase()}`;
+  let customerOrderDraft;
   const defaultWarningHours = 72;
   const maxWarningHours = 365 * 24;
   let renewalWarningHours = defaultWarningHours;
@@ -1172,18 +1174,24 @@
       row.hidden = !row.textContent;
     }
   }
-  function cardChoices(product, tenantId, selected, savedTail = '') {
+  const cardHealthLabels = { normal: '正常', dead: '死卡', unlocking: '解封中' };
+  const blockedCard = state => state === 'dead' || state === 'unlocking';
+  function cardChoices(product, tenantId, selected, savedTail = '', historical = false) {
     const gpt = cardPoolProduct(product);
     const items = gpt ? cards() : (tenantCards.get(tenantId)?.items || []);
-    const options = items.filter(row => !gpt || row.id === selected || (row.status !== '停用' && row.active !== false))
+    const allowed = row => !blockedCard(row.health || bankCardTypes.health[row.id]) || (historical && row.id === selected);
+    const options = items.filter(row => allowed(row) && (!gpt || row.id === selected || (row.status !== '停用' && row.active !== false)))
       .map(row => {
         const status = gpt ? (Number.isInteger(row.usageCount) ? `已用 ${row.usageCount} 次` : '') :
           row.used ? '使用中' : row.frozen ? '已冻结' : !row.active ? '已停用' : '未使用';
+        const health = cardHealthLabels[row.health || bankCardTypes.health[row.id]];
         return [row.id, [row.label || row.name, `尾号 ${cardTail(row)}`,
-          gpt ? bankCardTypeName(bankCardTypes.assignments[row.id]) : tenantBankCardType().name, status].filter(Boolean).join(' · '),
+          gpt ? bankCardTypeName(bankCardTypes.assignments[row.id]) : tenantBankCardType().name, status, health === '正常' ? '' : health].filter(Boolean).join(' · '),
         { disabled: !gpt && row.id !== selected && (row.used || !row.active) }];
       });
-    if (selected && !options.some(([id]) => id === selected)) options.unshift([selected, savedTail ? `已选银行卡 · 尾号 ${savedTail}` : '已选银行卡']);
+    const selectedHealth = items.find(row => row.id === selected)?.health || bankCardTypes.health[selected];
+    if (selected && (historical || !blockedCard(selectedHealth)) && !options.some(([id]) => id === selected))
+      options.unshift([selected, savedTail ? `已选银行卡 · 尾号 ${savedTail}` : '已选银行卡']);
     return [['', gpt ? '选择银行卡' : '选择租户银行卡'], ...options];
   }
   function orderCardSource(form) {
@@ -1224,23 +1232,30 @@
       if (form.isConnected && current?.field === source.field && current.pool === source.pool &&
           (source.pool || form.elements['commerce-tenantId'].value === tenantId)) {
         const prior = orders.find(row => row.id === form.elements['commerce-id']?.value);
-        const selected = snapshot.items?.find(row => row.id === select.value);
+        const previousSelection = select.value;
+        const selected = snapshot.items?.find(row => row.id === previousSelection);
+        const historical = Boolean(prior && (prior.paidConfirmed || hasPaymentHistory(prior)) &&
+          [prior.cardId, prior.proPoolCardId].includes(previousSelection));
+        const adopted = customerOrderDraft?.key === form.dataset.commerceDraft;
+        const unavailableHealth = !historical && (blockedCard(selected?.health || bankCardTypes.health[previousSelection]) ||
+          (adopted && previousSelection && !selected));
         const frozen = selected?.frozen && (!prior || (!prior.paidConfirmed && !hasPaymentHistory(prior)));
         const unavailable = !source.pool && selected && (selected.used || !selected.active) && prior?.cardId !== selected.id;
-        if (frozen || unavailable) {
+        if (frozen || unavailable || unavailableHealth) {
           select.value = '';
           const number = form.elements['commerce-tenantCardNumber'];
           if (number?.dataset.fromSelection) clearRevealedCard(form);
           else if (number?.value) queueTenantCardLookup(number);
           refreshOrderCardType(form);
         }
-        select.innerHTML = A.options(cardChoices(source.pool ? 'GPT' : 'Claude', tenantId, select.value,
-          form.elements['commerce-paymentId'].value), select.value);
+        const retainedSelection = select.value;
+        select.innerHTML = A.options(cardChoices(source.pool ? 'GPT' : 'Claude', tenantId, retainedSelection,
+          form.elements['commerce-paymentId'].value, historical), retainedSelection);
         const search = select.closest('.commerce-search-picker')?.querySelector('input[type="search"]');
         if (search) filterPicker(search);
         refreshOrderCardTail(form);
         if (source.pool && source.field === 'cardId') refreshPoolUsage(form);
-        A.setError(`commerce-${source.field}`, '');
+        A.setError(`commerce-${source.field}`, unavailableHealth ? '原选银行卡已不可用，请重新选择' : '');
         return true;
       }
     } catch (error) {
@@ -1888,7 +1903,7 @@
     const list = [];
     if (localData?.renewalContactCopy) list.push(action('复制订阅信息', 'commerce-renewal-contact', attrs));
     if (series.payment === '银行卡' && localData?.renewalCard) {
-      const canBind = !series.hasCard || ['inactive', 'frozen'].includes(series.availability);
+      const canBind = !series.hasCard || ['inactive', 'frozen'].includes(series.availability) || blockedCard(series.availability);
       list.push(action(canBind ? series.hasCard ? '更换银行卡' : '绑定银行卡' : '复制银行卡',
         canBind ? 'commerce-renewal-bind' : 'commerce-renewal-card-copy', attrs));
     }
@@ -2041,7 +2056,7 @@
         }, '确认复制');
         return;
       }
-      if (!bind && preview.hasCard && !['frozen', 'inactive'].includes(preview.availability) && preview.status !== '历史卡已删除') {
+      if (!bind && preview.hasCard && !['frozen', 'inactive'].includes(preview.availability) && !blockedCard(preview.availability) && preview.status !== '历史卡已删除') {
         A.notify(preview.status || '当前无法核对完整银行卡号');
         return;
       }
@@ -2052,7 +2067,7 @@
       if (!current()) return;
       const available = [...(pool.status === 'fulfilled' ? pool.value?.items || [] : []),
         ...(tenant.status === 'fulfilled' ? tenant.value?.items || [] : [])]
-        .filter(row => row.active !== false && !row.frozen && row.status !== '停用');
+        .filter(row => row.active !== false && !row.frozen && row.status !== '停用' && !blockedCard(row.health));
       const choices = [['', '选择银行卡'], ...available.map(row => [row.id,
         [row.name || row.label, '尾号 ' + cardTail(row)].filter(Boolean).join(' · ')])];
       A.openDrawer(preview.hasCard ? '更换银行卡' : '绑定银行卡', '用于以后准备续费，原订单的实际用卡记录继续保留。',
@@ -2302,7 +2317,7 @@
     ['pending', '待确认'], ['replaced', '历史用卡']
   ];
   const subscriptionCardFilters = { state: '', type: '', plan: '', purpose: '' };
-  const bankCardAvailability = { normal: '正常', frozen: '已冻结', inactive: '已停用', review: '待核对' };
+  const bankCardAvailability = { ...cardHealthLabels, frozen: '已冻结', inactive: '已停用', review: '待核对' };
   const frozenCardPoolStatus = { pending: '卡池待停用', stopped: '自动代充已停用', not_used: '未进入自动卡池' };
   let subscriptionCardTab = 'groups', bankCardStatuses = new Map(), frozenBankCards;
   const bankCardStatus = order => bankCardStatuses.get(order.id);
@@ -2311,6 +2326,7 @@
       .map(product => product + ' ' + counts[product]).join(' · ') || '0';
   }
   function cardAvailabilityTag(state) {
+    if (state === 'dead') return `<span class="customer-query-risk">${A.icon('alert')}死卡</span>`;
     return A.tag(bankCardAvailability[state] || '待核对',
       state === 'normal' ? 'success' : state === 'frozen' || state === 'inactive' ? 'danger' : 'warning');
   }
@@ -2372,7 +2388,7 @@
         ((snapshot?.active && snapshot.name) || row.order.cardTypeName || snapshot?.name || '未设置');
       const serials = localData ? status?.serials || [] : row.order.proCardSerial ? [row.order.proCardSerial] : [];
       return { ...row, id: row.order.id, history, state, typeId, typeName, ...customerForOrder(row.order, row.identity), evaluatedAt,
-        detailsPending,
+        detailsPending, health: status?.health || bankCardTypes.health[row.cardId],
         number: localData ? status?.number || '' : row.order.proCardNumber || '',
         serials, serial: serials.join(' / '),
         source: row.cardId.startsWith('preferred:') ? '下次续费绑定' : row.cardId.startsWith('tenant:') ? '认证人银行卡' :
@@ -2447,6 +2463,8 @@
       return { ...group, number: numbers.length === 1 ? numbers[0] : '',
         detailsPending: group.items.some(row => row.detailsPending),
         typeName: [...new Set(group.items.map(row => row.typeName))].join(' / '),
+        health: group.items.find(row => row.health === 'dead')?.health || group.items.find(row => row.health === 'unlocking')?.health || group.items[0].health,
+        state: bankCardStatus(group.items[0].order)?.state,
         serials, serial: serials.join(' / ') };
     });
   }
@@ -2459,6 +2477,8 @@
       { id: 'tail', label: '银行卡号', render: row => E(bankNumberText(row)) },
       { id: 'typeName', label: '银行卡类型', mobileSummary: true },
       { id: 'serial', label: '卡序列号', mobileSummary: true, long: true, render: row => E(bankSerialText(row)) },
+      { id: 'availability', label: '银行卡状态', mobileSummary: true,
+        render: row => cardAvailabilityTag(blockedCard(row.health) ? row.health : row.state) },
       { id: 'count', label: '当前关联订阅', mobileSummary: true,
         render: row => row.items.filter(currentBankSubscription).length + ' 笔' },
       { id: 'funding', label: '近期预计备款', headerHelp: '把该卡临期或到期订阅的预计金额相加。按原单代付折合美元，再加固定费和备用金。',
@@ -2469,9 +2489,12 @@
           return amounts.length ? E(sum(amounts, amount => amount) + ' USD' +
             (amounts.length < due.length ? ` · ${due.length - amounts.length} 笔待报价` : '')) : '待报价';
         } },
-      { id: 'actions', label: '操作', action: true, render: row =>
-        A.textAction('查看关联订单', 'commerce-renewal-card-group',
-          `data-id="${E(row.id)}" data-order-id="${E(row.items[0].order.id)}" data-tail="${E(row.tail)}"`) }
+      { id: 'actions', label: '操作', action: true, render: row => {
+        const item = row.items.find(item => bankCardStatus(item.order)?.canSetHealth);
+        return `<div class="action-links">${A.textAction('查看关联订单', 'commerce-renewal-card-group',
+          `data-id="${E(row.id)}" data-order-id="${E(row.items[0].order.id)}" data-tail="${E(row.tail)}"`)}${
+          item && canManageOrders() ? A.textAction('变更状态', 'commerce-card-health-open', `data-id="${E(item.id)}"`) : ''}</div>`;
+      } }
     ], groupSubscriptionCards(rows), 'commerce-bank-card-groups');
   }
 
@@ -2498,11 +2521,14 @@
   }
 
   function renderSubscriptionCards() {
-    const all = subscriptionCardRows().filter(row => bankCardStatus(row.order)?.state !== 'frozen');
+    const cardRows = subscriptionCardRows();
+    const healthTab = blockedCard(subscriptionCardTab);
+    const all = cardRows.filter(row => bankCardStatus(row.order)?.state !== 'frozen');
+    const candidates = healthTab ? cardRows.filter(row => row.health === subscriptionCardTab) : all;
     const typeOptions = new Map(all.filter(row => row.typeId).map(row => [row.typeId, row.typeName]));
     const plans = [...new Set(all.map(row => row.plan).filter(Boolean))];
     const query = String(S.query || '').trim().toLowerCase();
-    const matching = all.filter(row =>
+    const matching = candidates.filter(row =>
       (!subscriptionCardFilters.state || row.state === subscriptionCardFilters.state) &&
       (!subscriptionCardFilters.type || row.typeId === subscriptionCardFilters.type) &&
       (!subscriptionCardFilters.plan || row.plan === subscriptionCardFilters.plan) &&
@@ -2526,7 +2552,7 @@
       { id: 'tail', label: '银行卡号', mobileSummary: true, render: row => E(bankNumberText(row)) },
       { id: 'serial', label: '卡序列号', mobileSummary: true, long: true, render: row => E(bankSerialText(row)) },
       { id: 'availability', label: '银行卡状态', mobileSummary: true,
-        render: row => cardAvailabilityTag(bankCardStatus(row.order)?.state) },
+        render: row => cardAvailabilityTag(blockedCard(row.health) ? row.health : bankCardStatus(row.order)?.state) },
       { id: 'accountCount', label: '已使用账号', mobileSummary: true, render: row => bankCardStatus(row.order)
         ? A.textAction(cardAccountCount(bankCardStatus(row.order).counts), 'commerce-card-accounts',
           `data-id="${E(row.order.id)}" aria-label="查看银行卡关联账号"`) : '—' },
@@ -2555,11 +2581,13 @@
     const choices = [
       ['groups', '按卡汇总', countsReady ? groupSubscriptionCards(all).length : '—'],
       ['orders', '订阅用卡明细', countsReady ? all.length : '—'],
+      ['dead', '死卡', countsReady ? groupSubscriptionCards(cardRows.filter(row => row.health === 'dead')).length : '—'],
+      ['unlocking', '解封中', countsReady ? groupSubscriptionCards(cardRows.filter(row => row.health === 'unlocking')).length : '—'],
       ['frozen', '冻结银行卡', countsReady ? frozenBankCards?.length ?? 0 : '—']
     ];
-    return A.header('订阅管理 · 按银行卡', '查看银行卡关联的订阅和预计备款。页签数字分别统计卡组、用卡明细和冻结记录。',
+    return A.header('订阅管理 · 按银行卡', '查看银行卡关联订阅、预计备款和卡片状态。用卡明细按订阅统计，死卡和解封中按卡片统计。',
       A.button('提醒设置', 'commerce-renewal-settings', '', 'settings') +
-      columnSettingsButton(frozen ? 'commerce-frozen-cards' : subscriptionCardTab === 'groups'
+      columnSettingsButton(frozen ? 'commerce-frozen-cards' : subscriptionCardTab === 'groups' || healthTab
         ? 'commerce-bank-card-groups' : 'commerce-subscription-cards')) + subscriptionCenterNav('bank-cards', tabs(
       choices, subscriptionCardTab, 'commerce-subscription-card-tab',
       'aria-label="银行卡列表"')) + `<section class="panel">${toolbar(frozen ? '搜索卡号、卡类型、序列号、冻结原因或操作人'
@@ -2570,7 +2598,7 @@
         A.textAction('重试', 'commerce-subscription-card-refresh')}</p>` :
         localData?.subscriptionCardEstimates && (!subscriptionEstimateKey || subscriptionEstimateRequest)
           ? '<p class="footnote" role="status">正在核对预计金额…</p>' : ''}${
-      frozen ? renderFrozenBankCards(query) : subscriptionCardTab === 'groups'
+      frozen ? renderFrozenBankCards(query) : subscriptionCardTab === 'groups' || healthTab
         ? renderBankCardGroups(rows) : tableList(columns, rows, 'commerce-subscription-cards')}</section>`;
   }
   function renderFrozenBankCards(query) {
@@ -2682,9 +2710,44 @@
     const customer = customers.find(item => item.id === (row.order.customerId || row.identity));
     A.openActionMenu(node, (/^(?:recharge:|tenant:)/.test(row.cardId) ?
       A.button('修改卡类型', 'commerce-subscription-card-type', '', '', orderAttr) : '') +
+      (bankCardStatus(row.order)?.canSetHealth ? A.button('变更卡片状态', 'commerce-card-health-open', '', '', orderAttr) : '') +
       (bankCardStatus(row.order)?.canFreeze ? A.button('标记为冻结', 'commerce-card-freeze-open', 'danger', '', orderAttr) : '') +
       (customer ? A.button('修改客户资料', 'commerce-contact-edit', '', '', `data-id="${E(customer.id)}" data-kind="customer"`) : '') +
       A.button('更正订单资料', 'commerce-order-edit', '', '', `${orderAttr} ${row.order.cancelled ? 'disabled' : ''}`));
+  }
+  async function editCardHealth(node) {
+    const row = subscriptionCardRows().find(item => item.id === node.dataset.id);
+    if (!row || !localData || !canManageOrders() || !bankCardStatus(row.order)?.canSetHealth) return;
+    await A.withActionFeedback(node.isConnected ? node : null, async () => {
+      const actorId = currentOperator().id;
+      const snapshot = await readBankCardTypes(true);
+      if (S.route !== subscriptionCardsRoute || actorId !== currentOperator().id) return;
+      const key = `commerce-card-health:${row.id}`;
+      const draft = S.drafts.get(key) || {};
+      const options = ['dead', 'unlocking', 'normal'].map(state => [state, cardHealthLabels[state]]);
+      A.openDrawer('变更卡片状态', '同一卡片的关联账号会同步显示。异常卡片无法用于新单或续费。',
+        `<form id="commerce-card-health-form" data-commerce-draft="${E(key)}" novalidate>${
+        input('card-health-id', row.id, 'type="hidden"')}${input('card-health-order-version', row.order.version ?? 0, 'type="hidden"')}${
+        input('card-health-version', snapshot.version, 'type="hidden"')}${field('卡片状态', 'card-health-state',
+          select('card-health-state', options, draft['commerce-card-health-state'] || (row.health === 'dead' ? 'unlocking' : 'dead')), true)}${
+        field('变更原因', 'card-health-reason', `<textarea id="commerce-card-health-reason" name="commerce-card-health-reason" maxlength="300" rows="3">${E(draft['commerce-card-health-reason'] || '')}</textarea>`, true)}</form>`,
+        A.button('取消', 'drawer-close') + '<button type="submit" class="button primary" form="commerce-card-health-form">保存状态</button>', key);
+    }, { failure: '银行卡状态读取失败' });
+  }
+
+  function saveCardHealth(form) {
+    const raw = A.readForm(form), reason = value(raw, 'card-health-reason').trim();
+    if (!reason) { A.setError('commerce-card-health-reason', '请填写变更原因', form); return; }
+    const node = $(`button[form="${form.id}"]`);
+    if (!node || !canManageOrders()) return;
+    void A.withActionFeedback(node, async () => {
+      const saved = await localData.cardTypeAction({ action: 'health', orderId: value(raw, 'card-health-id'),
+        orderVersion: Number(value(raw, 'card-health-order-version')), version: Number(value(raw, 'card-health-version')),
+        state: value(raw, 'card-health-state'), reason });
+      updateBankCardTypes(saved);
+      if (form.isConnected) cleanClose(form.dataset.commerceDraft);
+      if (S.route === subscriptionCardsRoute) await loadSubscriptionCardEstimates(true);
+    }, { success: '银行卡状态已保存', failure: '银行卡状态保存失败' });
   }
   let clearSubscriptionCardCopyFallback;
   async function copySubscriptionBankCard(orderId, node) {
@@ -4917,7 +4980,9 @@
   }
   function orderCardPicker(v, hidden, { id = 'cardId', pool = v('product') === 'GPT', optional = false } = {}) {
     const selected = v(id);
-    const choices = cardChoices(pool ? 'GPT' : 'Claude', v('tenantId'), selected, v('paymentId'));
+    const historical = orders.some(row => row.id === v('id') && (row.paidConfirmed || hasPaymentHistory(row)) &&
+      [row.cardId, row.proPoolCardId].includes(selected));
+    const choices = cardChoices(pool ? 'GPT' : 'Claude', v('tenantId'), selected, v('paymentId'), historical);
     const actions = !localData ? '' : pool
       ? A.button('刷新', 'commerce-order-card-retry', 'compact', '', 'aria-label="刷新银行卡"')
       : A.button('读取', 'commerce-tenant-card-reveal', 'compact', '', 'aria-label="读取完整卡号"');
@@ -5346,8 +5411,9 @@
       A.notify('快捷续费需要已记录邮箱的 Claude 订单，请直接提交独立新订单。');
       return '';
     }
-    const key = workbenchSource ? `commerce-order:workbench:${previous.id}` :
-      main ? entryDraft(pageProduct) : `commerce-order:${orderId || `renew:${renewalId}`}`;
+    const key = workbenchSource ? `commerce-order:workbench:${previous.id}` : main
+      ? (customerOrderDraft?.route === S.route ? customerOrderDraft.key : entryDraft(pageProduct))
+      : `commerce-order:${orderId || `renew:${renewalId}`}`;
     const legacyDraft = S.drafts.get('commerce-order:new');
     const draft = S.drafts.get(key) || (main && !previous && legacyDraft &&
       entryRoute(legacyDraft['commerce-product']) === entryRoute(pageProduct) ? legacyDraft : {});
@@ -5734,7 +5800,7 @@
     const tail = card?.last4 || order.paymentId || '';
     const type = card?.typeName || order.cardTypeName || '';
     status.innerHTML = card?.hasCard === false ? '本订阅未绑定续费用卡。' : `<strong>${E([selected ? '续费用卡' : '原卡', type, /^\d{4,6}$/.test(tail) ? '•••• ' + tail.slice(-4) : ''].filter(Boolean).join(' · '))}</strong> ${
-      cardAvailabilityTag(request.availability)}${request.availability === 'frozen' ? ' <span>请更换可用银行卡</span>' : ''}`;
+      cardAvailabilityTag(request.availability)}${request.availability === 'frozen' || blockedCard(request.availability) ? ' <span>请更换可用银行卡</span>' : ''}`;
     change.textContent = card?.hasCard === false ? '填写本次用卡' : '换用银行卡';
     change.hidden = false;
   }
@@ -5955,12 +6021,15 @@
     const renewal = S.route.startsWith(renewalOrderPrefix);
     const source = renewal ? workbenchOrderSource(S.route) : null;
     const original = renewal ? orders.find(row => encodeURIComponent(row.id) === S.route.slice(renewalOrderPrefix.length)) : null;
-    const product = source?.order.product || original?.product || personalEntries[S.route] || (S.route === claudeOrderRoute ? 'Claude Pro' : 'GPT');
+    const fromCustomer = customerOrderDraft?.route === S.route ? customerOrderDraft : null;
+    const product = source?.order.product || original?.product || fromCustomer?.product || personalEntries[S.route] ||
+      (S.route === claudeOrderRoute ? 'Claude Pro' : 'GPT');
     return (
       A.header(
         renewal ? (isClaude({ product }) ? 'Claude 提交订单' : product + ' 提交订单') : '订单提交',
         '已收款并开通后登记。填写客户、两笔金额和订阅周期，邮箱及银行卡可留空。',
-        renewal ? routeButton('返回续费管理', renewalRoute, '', 'return') : '',
+        renewal ? routeButton('返回续费管理', renewalRoute, '', 'return') : fromCustomer
+          ? routeButton('返回客户查询', 'workspace/customer-query', '', 'return') : '',
         renewal ? '续费录单' : '订单工作台'
       ) + (renewal && !source
         ? `<section class="panel">${orderReceiptAction() || A.empty('续费提醒已变化', '请返回续费管理查看最新状态。')}</section>`
@@ -9584,7 +9653,7 @@
       return true;
     }
     if (action === 'commerce-subscription-card-tab') {
-      if (!['groups', 'orders', 'frozen'].includes(node.dataset.tab)) return true;
+      if (!['groups', 'orders', 'dead', 'unlocking', 'frozen'].includes(node.dataset.tab)) return true;
       subscriptionCardTab = node.dataset.tab;
       S.page = 1;
       A.render();
@@ -9608,6 +9677,7 @@
       if (form) focusReplacementCard(form);
       return true;
     }
+    if (action === 'commerce-card-health-open') { void editCardHealth(node); return true; }
     if (action === 'commerce-subscription-card-edit') {
       editSubscriptionCard(node.dataset.id, node);
       return true;
@@ -10173,6 +10243,7 @@
     }
     if (form.id === 'commerce-expense-form') { void saveExpenseReceipt(form); return true; }
     if (form.id === 'commerce-claude-historical-sale-form') { void saveClaudeHistoricalSale(form); return true; }
+    if (form.id === 'commerce-card-health-form') { saveCardHealth(form); return true; }
     if (form.id === 'commerce-card-freeze-form') {
       const button = $('[data-action="commerce-card-freeze-save"]:not(:disabled)', form.closest('dialog'));
       if (button) void saveBankCardFreeze(button);
@@ -11103,6 +11174,23 @@
   let requestedAccountLifecycle = false, accountLifecycleReading = false;
   A.modules.commerce = {
     openBankCardTypeAssignment, subscriptionCenterNav, renewalActions, subscriptionContacts,
+    openCustomerOrder(result, orderId) {
+      const values = result?.values;
+      const product = values?.product;
+      if (!canManageOrders() || !Object.hasOwn(productPlans, product) || !values.customerId)
+        throw new Error('客户或订单产品待核对');
+      const route = entryRoute(product);
+      const key = `commerce-order:customer-query:${JSON.stringify([product, values.customerId, orderId])}`;
+      if (!S.drafts.has(key)) {
+        const fields = ['product', 'customerId', 'wechat', 'customerPhone', 'qq', 'whatsapp', 'telegram',
+          'plan', 'email', 'tenantId', 'proMaterialMode', 'proPoolCardId', 'payment', 'cardId', 'appleIdId', 'appleStoreRegion', 'loginMethod',
+          'xHandle', 'xLinkState', 'platformAccountId', 'personalHistoryId'];
+        S.drafts.set(key, Object.fromEntries(fields.filter(field => typeof values[field] === 'string')
+          .map(field => ['commerce-' + field, values[field]])));
+      }
+      customerOrderDraft = { key, route, product };
+      A.go(route);
+    },
     appleFundingData() {
       const { latest } = renewalProjection();
       return { orders, currentOrders: [...latest.values()].map(row => row.order), settings: currencySettings,
@@ -11329,7 +11417,9 @@
   window.IDDesignModules.push({
     id: 'commerce',
     matches,
+    deactivate() { if (S.route !== customerOrderDraft?.route) customerOrderDraft = undefined; },
     clearPageState() {
+      customerOrderDraft = undefined;
       window.clearTimeout?.(commerceDeadlineTimer);
       timeRefreshPending = false;
       clearRenewalCardSecrets();
@@ -11463,7 +11553,7 @@
       if (renewalCardDrawerCurrent(panel) && ['commerce', 'inventory', 'card-types', 'finance-rates', 'settings', 'order-cards', 'order-card-freeze']
         .some(scope => scopes.includes(scope)) && (await loadRenewalCardDetails(panel)) === false) updated = false;
       const form = $('#drawer[open] #commerce-order-form') || $('#main #commerce-order-form');
-      if (form && scopes.includes('order-card-freeze')) {
+      if (form && scopes.some(scope => ['order-card-freeze', 'card-types'].includes(scope))) {
         await Promise.all([updateRenewalCardHint(form, true), loadOrderCards(form, true)]);
       } else if (form && scopes.includes('tenant-cards') && orderCardSource(form)?.pool === false) {
         await loadOrderCards(form, true);
