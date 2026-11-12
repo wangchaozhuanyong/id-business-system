@@ -1024,7 +1024,13 @@ function table(columns, rows, scope = '', tableId = 'default', emptyState, selec
       ? '<button type="button" class="text-button mobile-record-only mobile-record-toggle" data-action="table-mobile-toggle" aria-expanded="false">更多资料</button>' : '';
     return `<td class="${column.class || ''} ${column.action ? 'table-actions' : ''}" data-column="${escapeHtml(column.id)}" data-mobile-field="${presentation}" data-label="${escapeHtml(column.label)}">${column.action ? renderTableCell(column, row, tableId) : `<div class="mobile-record-value">${renderTableCell(column, row, tableId)}</div>`}${toggle}</td>`;
   }).join('')}</tr>`;
-  return `<div class="table-viewport ${mobileCards ? 'mobile-records' : ''} ${scope ? 'mobile-records--selectable' : ''} ${['邮箱库存', '账号库存', 'Claude专属'].includes(tableId) ? 'stable-table' : ''}" tabindex="0" role="region" aria-label="${escapeHtml(tableId)}资料列表"><table data-table="${escapeHtml(tableId)}" aria-label="${escapeHtml(tableId)}"><thead><tr>${check}${headers}</tr></thead><tbody>${rows.length ? rows.map(renderRow).join('') : `<tr${emptyState ? ' data-table-empty-guidance' : ''}><td colspan="${visible.length + (scope ? 1 : 0)}">${emptyContent}</td></tr>`}</tbody></table></div>`;
+  const viewportClasses = ['table-viewport', mobileCards ? 'mobile-records' : '',
+    scope ? 'mobile-records--selectable' : '',
+    ['邮箱库存', '账号库存', 'Claude专属'].includes(tableId) ? 'stable-table' : '',
+    rows.length ? '' : 'table-viewport--empty'].filter(Boolean).join(' ');
+  const body = rows.length ? rows.map(renderRow).join('')
+    : `<tr><td colspan="${visible.length + (scope ? 1 : 0)}">${emptyContent}</td></tr>`;
+  return `<div class="${viewportClasses}" tabindex="0" role="region" aria-label="${escapeHtml(tableId)}资料列表"><table data-table="${escapeHtml(tableId)}" aria-label="${escapeHtml(tableId)}"><thead><tr>${check}${headers}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 function fixedTableColumn(column) {
   return column.fixed || column.action || ['email', 'orderNo', 'name'].includes(column.id);

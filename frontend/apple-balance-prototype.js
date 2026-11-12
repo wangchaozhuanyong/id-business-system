@@ -644,8 +644,8 @@
   function fundingTable(columns, rows, name) {
     if (!rows.length) return A.empty('暂无符合条件的记录', '可调整搜索或筛选条件。');
     return `<table class="apple-funding-table" aria-label="${E(name)}"><thead><tr>${columns.map(column =>
-      `<th scope="col">${E(column.label)}</th>`).join('')}</tr></thead><tbody>${rows.map(row =>
-      `<tr>${columns.map(column => `<td><span class="apple-cell-label" aria-hidden="true">${E(column.label)}</span><div>${
+      `<th scope="col"${column.action ? ' class="table-actions"' : ''}>${E(column.label)}</th>`).join('')}</tr></thead><tbody>${rows.map(row =>
+      `<tr>${columns.map(column => `<td${column.action ? ' class="table-actions"' : ''}><span class="apple-cell-label" aria-hidden="true">${E(column.label)}</span><div>${
         column.render ? column.render(row) : E(row[column.id] || '—')}</div></td>`).join('')}</tr>`).join('')}</tbody></table>`;
   }
   function openLedger(id) {

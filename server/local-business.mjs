@@ -206,7 +206,7 @@ const sessionEventLabels = {
   relay_history_preview: '预检苹果邮箱历史邮件归属'
 };
 const orderFeatureDomains = new Set([
-  'recharge-codes', 'tenant-cards', 'order-sync', 'finance-rates', cardTypeDocument, orderCardArchiveDocument,
+  'recharge-codes', 'recharge-activity', 'tenant-cards', 'order-sync', 'finance-rates', cardTypeDocument, orderCardArchiveDocument,
   cardFreezeDocument, 'system-monitoring-config', 'system-monitoring-state', subscriptionDomain, orderExpenseDomain
 ]);
 const orderFeatureAuditLabels = {
