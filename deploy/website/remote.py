@@ -206,6 +206,22 @@ def wire_storefront_analytics(content):
     return content
 
 
+def normalize_tools_credential_stream(content):
+    # The app-entry protocol has one line per credential. A valid JSON file may
+    # contain formatting or a final newline; preserve its values before framing.
+    original = '  cat "$CREDENTIALS_DIRECTORY/independent-online-tools"'
+    normalized = (
+        "  python3 -c 'import json,sys; sys.stdout.write(json.dumps(json.load(sys.stdin), separators=(\",\", \":\")))'"
+        ' < "$CREDENTIALS_DIRECTORY/independent-online-tools"'
+    )
+    if normalized in content:
+        require(content.count(normalized) == 1 and original not in content,
+                "unexpected_tools_credential_stream")
+        return content
+    require(content.count(original) == 1, "unexpected_tools_credential_stream")
+    return content.replace(original, normalized)
+
+
 def presentation_scope(plan):
     scopes = [name for name in PRESENTATION_SCOPES if name in plan]
     require(len(scopes) <= 1, "recharge_presentation_approval_mismatch")
@@ -274,8 +290,8 @@ def stage(plan, release):
         content = previous.read_text()
         if name == "run-app":
             require(content.count("sha=" + base) == 1, "live_launcher_revision_mismatch")
-            content = mount_storefront_admission(
-                mount_backup_monitoring(content.replace("sha=" + base, "sha=" + sha)))
+            content = normalize_tools_credential_stream(mount_storefront_admission(
+                mount_backup_monitoring(content.replace("sha=" + base, "sha=" + sha))))
         elif name == "app-entry.mjs":
             content = wire_storefront_analytics(content)
         elif name == "check-app.mjs":
