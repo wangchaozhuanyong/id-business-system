@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { createRelayCodeReset } from './code-reset.mjs';
@@ -8,6 +9,8 @@ import { RelayError, createVendureMailboxProvider } from './vendure-provider.mjs
 import { registrationEmail, registrationOccupancy } from '../inventory-registration.mjs';
 
 const prefix = '/api/local/apple-relay/';
+const timingScope = new AsyncLocalStorage();
+const timedActions = new Set(['status', 'code-read', 'mails', 'mail-detail', 'query', 'sync']);
 const mailLimit = 500;
 const publicQueryWindowMs = 60_000;
 const publicQueryAttemptLimit = 12;
@@ -285,11 +288,37 @@ function beijingMinute(epoch) {
 }
 
 function writeJson(response, status, data) {
+  const body = JSON.stringify(data);
+  const timing = status === 200 && timingScope.getStore();
+  if (timing) {
+    const timings = [...timing.stages, ['relay_total', performance.now() - timing.startedAt]];
+    response.setHeader('Server-Timing', timings.map(([name, ms]) => `${name};dur=${ms.toFixed(1)}`).join(', '));
+  }
   response.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Cache-Control': 'no-store'
   });
-  response.end(JSON.stringify(data));
+  response.end(body);
+}
+
+function withRelayTimings(handle) {
+  return (request, response, route, actor) => {
+    const run = () => handle(request, response, route, actor);
+    if (!route.startsWith(prefix) || !timedActions.has(route.slice(prefix.length)) ||
+        !boundedId(actor?.id) || !['admin', 'super'].includes(actor.role)) return run();
+    return timingScope.run({ startedAt: performance.now(), stages: new Map() }, run);
+  };
+}
+
+async function measureStage(name, operation) {
+  const timing = timingScope.getStore();
+  if (!timing) return operation();
+  const start = performance.now();
+  try {
+    return await operation();
+  } finally {
+    timing.stages.set(name, (timing.stages.get(name) ?? 0) + performance.now() - start);
+  }
 }
 
 async function readBody(request, maximumBytes = 4096) {
@@ -332,7 +361,7 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
   let activePublicQueries = 0;
 
   async function current() {
-    return snapshot(await readInventory());
+    return measureStage('inventory', async () => snapshot(await readInventory()));
   }
 
   const remoteIdFor = (row) => primaryBindings.get(row.id) ||
@@ -374,12 +403,13 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
       if (alias) aliasIds.add(remoteAliasIdFor(alias));
     }
     if (!primaryIds.size) return matchRows(local, [], []);
-    const result = await provider.relayTargets([...primaryIds], [...aliasIds], includeCode ? kind : undefined);
+    const result = await measureStage('vendure_targets', () =>
+      provider.relayTargets([...primaryIds], [...aliasIds], includeCode ? kind : undefined));
     return matchRows(local, checkedRows(result.primaries), checkedRows(result.aliases));
   }
 
   async function record(action, actor, parentId = '', aliasId = '') {
-    await recordAction?.({ action, actor, parentId, aliasId });
+    if (recordAction) await measureStage('audit', () => recordAction({ action, actor, parentId, aliasId }));
   }
 
   function requireParent(state, id) {
@@ -760,8 +790,9 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
         parentId: (target.owner ?? target).local.id,
         aliasId: kind === 'alias' ? target.local.id : ''
       }));
-      if (audits.length && recordActions) await recordActions(audits);
-      else await Promise.all(audits.map(event => recordAction?.(event)));
+      if (audits.length) await measureStage('audit', () => recordActions
+        ? recordActions(audits)
+        : Promise.all(audits.map(event => recordAction?.(event))));
     }
 
     // An asynchronous audit must not let a removed/rebound mailbox return an old code.
@@ -795,7 +826,7 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
         .finally(() => syncing.delete(parent.remoteId));
       syncing.set(parent.remoteId, pending);
     }
-    return syncing.get(parent.remoteId);
+    return measureStage('vendure_sync', () => syncing.get(parent.remoteId));
   }
 
   function localMailTarget(local, parentId, aliasId) {
@@ -830,13 +861,13 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
 
   async function readScopedMails(target, { unassignedOnly = false, limit, mailId }) {
     const { parent, alias } = target;
-    const page = await provider.relayMailPage({
+    const page = await measureStage('vendure_mail', () => provider.relayMailPage({
       primaryAccountId: parent.remoteId,
       virtualEmailId: alias?.remoteId,
       unassignedOnly,
       limit,
       ...(mailId && { mailId })
-    });
+    }));
     const state = matchRows(await current(), page.primary ? checkedRows([page.primary]) : [], checkedRows(page.aliases));
     const fresh = selectMailTarget(state, target);
     const aliases = new Map([...state.matchedAliases.values()]
@@ -949,10 +980,10 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
   }
 
   async function lookupQueryCode(value, expected) {
-    const verified = await provider.relayCodeTarget(normalizeCode(value), expected && {
+    const verified = await measureStage('vendure_code', () => provider.relayCodeTarget(normalizeCode(value), expected && {
       expectedPrimaryId: expected.parent.remoteId,
       expectedAliasId: expected.alias?.remoteId
-    });
+    }));
     if (Number.isSafeInteger(verified.retryAfterSeconds) && verified.retryAfterSeconds > 0) {
       const error = new RelayError(429, '查询次数过多，请稍后再试');
       error.retryAfterSeconds = verified.retryAfterSeconds;
@@ -1081,7 +1112,7 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
         if (reserved) activePublicQueries -= 1;
       }
     },
-    async handle(request, response, route, actor) {
+    handle: withRelayTimings(async (request, response, route, actor) => {
       const action = route.slice(prefix.length);
       try {
         if (!route.startsWith(prefix) || !allowedMethods.has(action)) {
@@ -1213,6 +1244,6 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
         const message = error instanceof RelayError ? error.message : '邮箱操作暂时失败，请重试';
         writeJson(response, status, { message, error: message });
       }
-    }
+    })
   };
 }

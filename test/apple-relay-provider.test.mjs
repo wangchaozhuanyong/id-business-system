@@ -1226,6 +1226,7 @@ test('buyer codes, primary codes and address queries preserve their own scope', 
   const query = (value) => request('query', { query: value });
   const buyer = await query('buy-first');
   assert.equal(buyer.status, 200, JSON.stringify(buyer.body));
+  assert.match(buyer.headers.get('server-timing'), /^vendure_code;dur=[\d.]+, inventory;dur=[\d.]+, vendure_sync;dur=[\d.]+, vendure_mail;dur=[\d.]+, audit;dur=[\d.]+, relay_total;dur=[\d.]+$/);
   assert.equal(buyer.body.targetType, 'alias');
   assert.equal(buyer.body.expiresAt, future);
   assert.deepEqual(
@@ -1321,6 +1322,7 @@ test('public query returns only scoped verification results and uses a distinct 
   const buyer = await request('public-query', { queryCode: ' buy-first ' });
   assert.equal(buyer.status, 200);
   assert.equal(buyer.headers.get('cache-control'), 'no-store');
+  assert.equal(buyer.headers.get('server-timing'), null);
   assert.deepEqual(buyer.body, {
     success: true,
     targetType: 'VIRTUAL',
