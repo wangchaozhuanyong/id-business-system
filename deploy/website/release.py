@@ -47,7 +47,7 @@ NATIVE_CORE_SCOPE = NATIVE_PATCH_FILES | {
     "modules/recharge/codexdaichong/shell.css", "modules/recharge/codexdaichong/shell.js",
 }
 PROXY_TYPE_CORE_SCOPE = {
-    PROXY_TYPE_CATALOG, "deploy/recharge-core/canary.py",
+    PROXY_TYPE_CATALOG, "deploy/recharge-core/canary.py", "deploy/recharge-core/card-plans-canary.mjs",
     "modules/recharge/codexdaichong/assets.mjs", "modules/recharge/codexdaichong/gateway.mjs",
     "modules/recharge/codexdaichong/native-routing.mjs", "modules/recharge/codexdaichong/native-routing.test.mjs",
     "modules/recharge/codexdaichong/routing-admin.js",

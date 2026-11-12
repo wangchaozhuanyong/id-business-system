@@ -547,7 +547,16 @@ class Canary:
         ids = imported.get('ids', [])
         if (status != 200 or imported.get('added') != 2 or len(ids) != 2 or ids[0] == ids[1] or
                 imported.get('proxyType') != batch['proxyType']):
-            raise CanaryError('typed_proxy_batch_import_failed')
+            code = imported.get('code', '')
+            suffix = ''
+            known_code = r'ER_[A-Z0-9_]+|invalid_proxy_[a-z_]+|route_storage_unavailable|proxy_country_conflict'
+            if isinstance(code, str) and re.fullmatch(known_code, code):
+                suffix = '_' + code.lower()
+            if status == 200:
+                count = imported.get('added')
+                suffix = f'_added_{count if type(count) is int and 0 <= count <= 2 else "invalid"}'
+                suffix += '_matching_type' if imported.get('proxyType') == batch['proxyType'] else '_missing_type'
+            raise CanaryError(f'typed_proxy_batch_import_failed_http_{status}{suffix}')
         status, duplicate = request(PROXY_IMPORT_PATH, admin, 'POST', {**batch, 'proxyType': 'mobile'})
         if status != 200 or duplicate.get('added') != 0 or duplicate.get('skipped') != 2:
             raise CanaryError('typed_proxy_duplicates_not_skipped')
@@ -636,7 +645,8 @@ def main():
     if not clean:
         failure = 'canary_cleanup_not_confirmed'
     if failure:
-        print(compact({'ok': False, 'mainSha': canary.sha, 'reason': failure, 'productionWrites': False}))
+        print(compact({'ok': False, 'mainSha': canary.sha, 'reason': failure,
+                       'completedChecks': canary.checks, 'productionWrites': False}))
         return 1
     canary.checks.append('owned_temporary_containers_removed')
     receipt = {'mainSha': canary.sha, 'checks': canary.checks, 'productionWrites': False}

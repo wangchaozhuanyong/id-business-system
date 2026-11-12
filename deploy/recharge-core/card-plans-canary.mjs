@@ -50,8 +50,12 @@ async function check() {
 
   await store.runQuery(`CREATE TRIGGER card_plan_canary_reject BEFORE INSERT ON app_config FOR EACH ROW
     SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'synthetic assignment rejection'`);
-  await assert.rejects(store.importCards([card(4)], { version: 3, allowedPlans: ['pro100'] }),
-    /synthetic assignment rejection/);
+  try {
+    await assert.rejects(store.importCards([card(4)], { version: 3, allowedPlans: ['pro100'] }),
+      /synthetic assignment rejection/);
+  } finally {
+    await store.runQuery('DROP TRIGGER card_plan_canary_reject');
+  }
   const after = await store.readCardPlanPool();
   assert.deepEqual(after.rows.map(row => row.id), pool.rows.map(row => row.id));
   assert.deepEqual(after.planPolicy, { version: 3, strict: true });
