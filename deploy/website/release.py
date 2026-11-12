@@ -139,7 +139,36 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False):
 def script_for(plan):
     script = Path(__file__).with_name("remote.py").read_text()
     return "set -eu\npython3 - <<'ID_WEBSITE_RELEASE'\n" + script + \
-        f"\nmain(json.loads({json.dumps(plan)!r}))\nID_WEBSITE_RELEASE\n"
+        f"\nsys.modules['remote'] = sys.modules[__name__]\nmain(json.loads({json.dumps(plan)!r}))\nID_WEBSITE_RELEASE\n"
+
+
+def release_failure_diagnostic(invocation):
+    reasons = []
+    for line in invocation["StandardErrorContent"].splitlines():
+        message = re.fullmatch(r"(?:remote\.ReleaseError: )?([a-z][a-z0-9_]+(?:: [a-z][a-z0-9_]+)?)", line)
+        if message and ("_" in message[1] or line.startswith("remote.ReleaseError: ")):
+            reasons.append(message[1])
+    markers = {
+        "Building the exact main native recharge image": "native_build_started",
+        "Switching the drained native recharge runtime": "native_cutover_started",
+    }
+    stdout = invocation["StandardOutputContent"].splitlines()
+    phases = [markers[line] for line in stdout if line in markers]
+    if any(line.startswith('{"rechargePreflight": ') for line in stdout):
+        phases.insert(0, "native_production_readonly_preflight_completed")
+    return {"status": invocation["Status"], "phases": phases, "reasons": reasons}
+
+
+def inspect_release_command(attempt, command_id):
+    if not re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}", command_id):
+        raise RuntimeError("invalid_inspection_command")
+    rows = aws("ssm", "list-commands", "--command-id", command_id)["Commands"]
+    if (len(rows) != 1 or rows[0]["InstanceIds"] != [INSTANCE] or
+            rows[0]["DocumentName"] != "AWS-RunShellScript" or
+            not re.fullmatch(rf"ID website release {attempt[:12]} run [0-9]+/[0-9]+", rows[0]["Comment"])):
+        raise RuntimeError("inspection_command_outside_reviewed_release")
+    invocation = aws("ssm", "get-command-invocation", "--command-id", command_id, "--instance-id", INSTANCE)
+    return {"command": command_id, "attemptSha": attempt, **release_failure_diagnostic(invocation)}
 
 
 def recover_command(comment, started):
@@ -185,6 +214,7 @@ def remote(plan):
                 return command_id, json.loads(invocation["StandardOutputContent"].strip().splitlines()[-1])
             if status not in {"Pending", "InProgress", "Delayed", "Cancelling"}:
                 if plan.get("rechargeCore"):
+                    print(json.dumps(release_failure_diagnostic(invocation), sort_keys=True), flush=True)
                     for line in invocation["StandardOutputContent"].splitlines():
                         if re.fullmatch(r'\{"rechargePreflight": [a-zA-Z0-9_":{}, ]+\}', line):
                             print(line, flush=True)
@@ -220,14 +250,20 @@ def main():
     quality_run = os.environ["QUALITY_RUN_ID"]
     require_main(sha)
     attempt = os.environ.get("INSPECT_CANARY_SHA")
+    inspect_command = os.environ.get("INSPECT_RELEASE_COMMAND")
     include_adapter = os.environ.get("RELEASE_RECHARGE_ADAPTER") == "true"
     include_core = os.environ.get("RELEASE_RECHARGE_CORE") == "true"
+    if inspect_command and not attempt:
+        raise RuntimeError("inspection_requires_attempt_revision")
     if include_core and (include_adapter or attempt):
         raise RuntimeError("recharge_core_release_requires_its_own_operation")
     if attempt:
         if include_adapter:
             raise RuntimeError("inspect_and_release_are_separate")
         require_ancestor(attempt, sha)
+        if inspect_command:
+            print(json.dumps(inspect_release_command(attempt, inspect_command), sort_keys=True), flush=True)
+            return
         command_id, diagnostic = remote({"operation": "inspect", "sha": sha, "attemptSha": attempt})
         print(json.dumps({"command": command_id, "diagnostic": diagnostic}), flush=True)
         return

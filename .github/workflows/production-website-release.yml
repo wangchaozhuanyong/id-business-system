@@ -19,6 +19,10 @@ on:
         description: 只读检查指定失败版本的金丝雀日志，发布时留空
         required: false
         type: string
+      inspect_release_command:
+        description: 与 inspect_canary_sha 同用，只读检查该提交原有的 SSM 发布回执
+        required: false
+        type: string
 
 concurrency:
   group: independent-production-website-release
@@ -40,6 +44,7 @@ jobs:
     env:
       RELEASE_SHA: ${{ inputs.expected_sha }}
       INSPECT_CANARY_SHA: ${{ inputs.inspect_canary_sha }}
+      INSPECT_RELEASE_COMMAND: ${{ inputs.inspect_release_command }}
       RELEASE_RECHARGE_ADAPTER: ${{ inputs.include_recharge_adapter }}
       RELEASE_RECHARGE_CORE: ${{ inputs.include_recharge_core }}
     steps:

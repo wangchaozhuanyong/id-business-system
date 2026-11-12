@@ -37,6 +37,19 @@ await startPreview(port, {
 
 
 class WebsiteReleaseTests(unittest.TestCase):
+    def test_native_diagnostic_uses_only_release_phases_and_fixed_error_codes(self):
+        invocation = {"Status": "Failed",
+                      "StandardOutputContent": '{"rechargePreflight": {"readOnly": true}}\n'
+                                               'Building the exact main native recharge image\n'
+                                               'unrelated terminal detail\n',
+                      "StandardErrorContent": "Traceback (most recent call last):\n"
+                                              "remote.ReleaseError: native_canary_failed: controlled_command_failed\n"}
+        self.assertEqual(release.release_failure_diagnostic(invocation), {
+            "status": "Failed",
+            "phases": ["native_production_readonly_preflight_completed", "native_build_started"],
+            "reasons": ["native_canary_failed: controlled_command_failed"]
+        })
+
     def test_tools_credential_json_keeps_values_and_line_boundaries(self):
         launcher = '''{
   cat "$CREDENTIALS_DIRECTORY/independent-recharge-bridge"
