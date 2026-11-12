@@ -2350,6 +2350,11 @@ export function createLocalBusinessStore(databasePath) {
           0
         );
     },
+    recordAuthEvents(events) {
+      return writeTransaction(() => {
+        for (const event of events) this.recordAuthEvent(event);
+      });
+    },
     close: () => { changeListeners.clear(); db.close(); }
   };
 }

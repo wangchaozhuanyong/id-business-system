@@ -266,6 +266,33 @@ function fakeVendure() {
     assert.equal(input.headers['vendure-api-key'], state.key);
     const { query, variables } = JSON.parse(input.body);
     calls.push({ query, variables, path: new URL(url).pathname });
+    if (query.includes('icloudRelayTargets')) {
+      return Response.json({ data: { icloudRelayTargets: {
+        primaries: primaries.filter(row => variables.primaryIds.includes(row.id)),
+        aliases: aliases.filter(row => variables.aliasIds.includes(row.id))
+      } } });
+    }
+    if (query.includes('icloudRelayCodeTarget')) {
+      const buyers = aliases.filter(row => row.buyerQueryCode === variables.queryCode);
+      const owners = primaries.filter(row => row.masterQueryCode === variables.queryCode);
+      if (buyers.length + owners.length !== 1)
+        return Response.json({ data: { icloudRelayCodeTarget: {} } });
+      const buyer = buyers[0];
+      const owner = buyer ? primaries.find(row => row.id === buyer.primaryAccountId) : owners[0];
+      const expected = variables.expectedPrimaryId;
+      const valid = !expected || (expected === owner?.id && variables.expectedAliasId === buyer?.id);
+      return Response.json({ data: { icloudRelayCodeTarget: valid ? { primary: owner, alias: buyer } : {} } });
+    }
+    if (query.includes('icloudRelayMailPage')) {
+      if (state.failMailOwner === variables.primaryAccountId) return Response.json({}, { status: 503 });
+      const owner = primaries.find(row => row.id === variables.primaryAccountId);
+      return Response.json({ data: { icloudRelayMailPage: {
+        primary: owner, aliases,
+        // Include off-scope rows to exercise the ID service's own binding checks.
+        items: mailRows.map(({ bodyText, ...row }) => ({ ...row, ...(variables.mailId && { bodyText }) })),
+        truncated: false
+      } } });
+    }
     if (query.includes('icloudPrimaryAccounts')) {
       return Response.json({ data: { icloudPrimaryAccounts: primaries } });
     }
@@ -347,24 +374,6 @@ function fakeVendure() {
         return Response.json({ errors: [{ message: 'upstream private details' }] });
       }
       return Response.json({ data: { result: target } });
-    }
-    if (query.includes('icloudQueryMails')) {
-      const buyer = aliases.find((row) => row.buyerQueryCode === variables.queryCode);
-      const owner = primaries.find((row) => row.masterQueryCode === variables.queryCode);
-      const matched = buyer || owner;
-      const [address, domain] = (buyer?.aliasEmail ?? owner?.email ?? '@').split('@');
-      const masked = `${address.slice(0, 3)}***@${domain}`;
-      return Response.json({
-        data: {
-          icloudQueryMails: {
-            success: Boolean(matched),
-            targetType: buyer ? 'VIRTUAL' : 'PRIMARY',
-            aliasEmail: buyer ? masked : null,
-            primaryEmail: owner ? masked : null,
-            codeExpiresAt: matched?.codeExpiresAt
-          }
-        }
-      });
     }
     assert.fail('Unexpected Vendure operation');
   };
@@ -1128,14 +1137,14 @@ test('the real Vendure operation names sync the verified parent and filter overb
     from: 'verification@example.test',
     subject: '验证码：123456',
     code: '123456',
-    body: '示例邮件正文',
     receivedAt: '2026-11-05 18:15',
     read: false
   });
   const relevant = state.upstream.calls.slice(-2);
   assert.match(relevant[0].query, /syncIcloudAccount/);
   assert.deepEqual(relevant[0].variables, { id: 'vp-one' });
-  assert.match(relevant[1].query, /icloudReceivedMails/);
+  assert.match(relevant[1].query, /icloudRelayMailPage/);
+  assert.doesNotMatch(relevant[1].query, /bodyText/);
   assert.equal(relevant[1].variables.virtualEmailId, 'va-first');
   assert.equal(relevant[1].variables.primaryAccountId, 'vp-one');
 
@@ -1150,6 +1159,13 @@ test('the real Vendure operation names sync the verified parent and filter overb
   );
   assert.equal((await request('mails', { parentId: 'two', aliasId: 'first' })).status, 400);
   assert.equal((await request('mails', { aliasId: 'first', unassignedOnly: true })).status, 400);
+  const detail = await request('mail-detail', { parentId: 'one', aliasId: 'first', mailId: 'first-mail' });
+  assert.equal(detail.status, 200);
+  assert.equal(detail.body.body, '示例邮件正文');
+  assert.match(state.upstream.calls.at(-1).query, /bodyText/);
+  assert.equal((await request('mail-detail', { parentId: 'one', mailId: 'other-mail' })).status, 404);
+  assert.equal((await request('mail-detail', { parentId: 'one', mailId: 'first-mail' },
+    undefined, 'fixture-staff', 'employee')).status, 403);
   assert.deepEqual(
     state.events.map(({ action, actor }) => [action, actor.id]),
     [
@@ -1157,6 +1173,51 @@ test('the real Vendure operation names sync the verified parent and filter overb
       ['sync', 'relay-tester']
     ]
   );
+});
+
+test('inbox snapshots skip IMAP and one failed mailbox leaves the other results available', { timeout: 5000 }, async t => {
+  const state = fixture();
+  state.inventory.appleRelay.parents.push({
+    id: 'three', email: 'three@example.test', status: 'ACTIVE', remotePrimaryId: 'vp-three'
+  });
+  state.upstream.primaries.push(primary('vp-three', 'three@example.test', 'MSTR-THREE'));
+  state.upstream.mailRows.push(mail('third-mail', 'vp-three', null));
+  const lastSyncedAt = '2026-11-11T04:00:00Z';
+  for (const owner of state.upstream.primaries) owner.lastSyncedAt = lastSyncedAt;
+  const request = await listen(t, state);
+  const snapshot = await request('mails', { refresh: false });
+  assert.equal(snapshot.status, 200);
+  assert.equal(snapshot.body.items.length, 5);
+  assert(snapshot.body.mailboxes.every(box => box.read && box.lastSyncedAt === lastSyncedAt));
+  assert.deepEqual(state.upstream.calls.map(call => call.variables.primaryAccountId).sort(),
+    ['vp-one', 'vp-three', 'vp-two']);
+  assert(state.upstream.calls.every(call => /icloudRelayMailPage/.test(call.query)));
+
+  let active = 0, maximum = 0;
+  const started = Promise.withResolvers(), release = Promise.withResolvers();
+  t.after(() => release.resolve());
+  state.upstream.failMailOwner = 'vp-two';
+  state.upstream.sync = async id => {
+    maximum = Math.max(maximum, ++active);
+    if (active === 2) started.resolve();
+    try {
+      await release.promise;
+      return { success: id !== 'vp-two', syncedCount: id === 'vp-two' ? 0 : 1 };
+    } finally {
+      active--;
+    }
+  };
+  const refreshing = request('mails', { refresh: true });
+  await started.promise;
+  assert.equal(state.upstream.calls.filter(call => /syncIcloudAccount/.test(call.query)).length, 2);
+  release.resolve();
+  const refreshed = await refreshing;
+  assert.equal(maximum, 2);
+  assert.equal(refreshed.status, 200);
+  assert.deepEqual(refreshed.body.mailboxes.filter(box => !box.read),
+    [{ parentId: 'two', lastSyncedAt: null, read: false, syncFailed: true, keepPrevious: true }]);
+  assert(refreshed.body.items.some(row => row.id === 'third-mail'));
+  assert(refreshed.body.items.some(row => row.id === 'first-mail'));
 });
 
 test('buyer codes, primary codes and address queries preserve their own scope', async (t) => {
@@ -1171,9 +1232,15 @@ test('buyer codes, primary codes and address queries preserve their own scope', 
     buyer.body.items.map(({ id }) => id),
     ['first-mail']
   );
-  const publicOperation = state.upstream.calls.find(({ path }) => path === '/shop-api');
-  assert.match(publicOperation.query, /icloudQueryMails/);
-  assert.deepEqual(publicOperation.variables, { queryCode: 'BUY-FIRST' });
+  const [resolve, sync, read, recheck] = state.upstream.calls;
+  assert.equal(state.upstream.calls.length, 4);
+  assert.match(resolve.query, /icloudRelayCodeTarget/);
+  assert.equal(resolve.path, '/admin-api');
+  assert.deepEqual(resolve.variables, { queryCode: 'BUY-FIRST' });
+  assert.match(sync.query, /syncIcloudAccount/);
+  assert.match(read.query, /icloudRelayMailPage/);
+  assert.match(recheck.query, /icloudRelayCodeTarget/);
+  assert.deepEqual(recheck.variables, { queryCode: 'BUY-FIRST', expectedPrimaryId: 'vp-one', expectedAliasId: 'va-first' });
 
   const primaryResult = await query('MSTR-ONE');
   assert.equal(primaryResult.status, 200, JSON.stringify(primaryResult.body));
@@ -1195,7 +1262,7 @@ test('buyer codes, primary codes and address queries preserve their own scope', 
     assert.equal(
       state.upstream.calls
         .slice(checkpoint)
-        .some(({ query }) => /icloudQueryMails|syncIcloudAccount/.test(query)),
+        .some(({ query }) => /icloudRelayMailPage|syncIcloudAccount/.test(query)),
       false
     );
   }
@@ -1261,8 +1328,10 @@ test('public query returns only scoped verification results and uses a distinct 
     aliasEmail: 'fir***@example.test',
     codeExpiresAt: future,
     items: [{ subject: '验证码：123456', receivedAt: '2026-11-05 18:15', extractedCode: '123456' }],
-    truncated: true
+    truncated: false
   });
+  assert.equal(state.upstream.calls.length, 4);
+  assert(state.upstream.calls.every(({ query }) => !/icloudPrimaryAccounts|icloudVirtualEmails|icloudQueryMails|bodyText/.test(query)));
   const master = await request('public-query', { queryCode: 'MSTR-ONE' });
   assert.equal(master.status, 200);
   assert.equal(master.body.primaryEmail, 'one***@example.test');
@@ -1308,7 +1377,7 @@ test('public query rejects address lookup, nonlocal requests and absent or inval
     });
   }
   assert.ok(
-    state.upstream.calls.every(({ query }) => !/icloudQueryMails|syncIcloudAccount/.test(query))
+    state.upstream.calls.every(({ query }) => !/icloudRelayMailPage|syncIcloudAccount/.test(query))
   );
   assert.equal(state.events.length, 0);
 });

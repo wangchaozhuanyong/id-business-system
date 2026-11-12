@@ -918,11 +918,15 @@ input[type='radio'] {
   text-align: center;
   margin-inline: auto;
 }
-.table-viewport:has([data-table-empty-guidance]) {
+.table-viewport:has(> table > tbody > tr > td > .empty-state) {
   container-type: inline-size;
 }
-[data-table-empty-guidance] .empty-state {
-  max-inline-size: min(100%, 540px);
+.table-viewport > table > tbody > tr > td > .empty-state {
+  position: sticky;
+  inset-inline-start: 15px;
+  inline-size: min(100%, calc(100cqi - 30px));
+  margin-inline: 0;
+  overflow-wrap: anywhere;
   white-space: normal;
 }
 .table-viewport .empty-state .icon {
@@ -941,6 +945,7 @@ input[type='radio'] {
   color: var(--secondary);
   font-size: 12px;
   margin: 0;
+  max-inline-size: 500px;
   line-height: 1.6;
 }
 table {
@@ -5170,7 +5175,7 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
   .mobile-records td[data-mobile-field='actions'] { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; padding-top: 8px; border-top: 1px solid var(--line); }
   .mobile-records .action-links { flex-wrap: wrap; gap: 4px 8px; height: auto; }
   .mobile-records .mobile-record-toggle { display: inline-flex; align-items: center; justify-content: center; margin-left: auto; font-size: 12px; font-weight: 400; }
-  .mobile-records .empty-state { flex-wrap: wrap; min-width: 0; }
+  .table-viewport.mobile-records .empty-state { position: static; inline-size: auto; min-width: 0; }
   .mobile-records .empty-state p { white-space: normal; }
 
   #commerce-order-form { --order-label-width: 104px; }

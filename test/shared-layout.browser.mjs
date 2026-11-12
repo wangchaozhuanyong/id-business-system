@@ -248,6 +248,19 @@ test('shared layouts preserve alignment, readable controls and stable navigation
     await page.getByRole('tab', { name: '隐藏邮箱管理' }).click();
     const toolbar = page.locator('.relay-alias-toolbar');
     const table = page.locator('table[data-table="relay-aliases"]');
+    const viewport = page.locator('.table-viewport:has(table[data-table="relay-aliases"])');
+    const assertEmptyGuidance = async () => {
+      const { left, right, textLeft, textRight } = await viewport.evaluate(node => {
+        const bounds = node.getBoundingClientRect();
+        const guidance = node.querySelector('.empty-state p').getBoundingClientRect();
+        return {
+          left: bounds.left, right: bounds.left + node.clientWidth,
+          textLeft: guidance.left, textRight: guidance.right
+        };
+      });
+      assert(textLeft >= left && textRight <= right, '空状态操作说明不应被表格横向裁切');
+      assert(Math.abs((textLeft + textRight - left - right) / 2) <= 2, '空状态说明应在可见区域居中');
+    };
     await table.getByRole('heading', { name: '请先添加 Apple 主邮箱' }).waitFor();
     assert.equal(await toolbar.evaluate(node => node.parentElement.querySelectorAll(':scope > .toolbar').length), 1);
     assert.equal(await table.getByText('可调整搜索或筛选条件。', { exact: true }).count(), 0);
@@ -284,10 +297,10 @@ test('shared layouts preserve alignment, readable controls and stable navigation
         assert(controls.every(c => c.left >= 0 && c.right <= width), '工具栏控件越过视口');
         if (width <= 390)
           assert(controls.filter(c => !c.label).every(c => c.height >= 44), '手机控件触控高度不足');
-        const guidance = await table.locator('.empty-state p').boundingBox();
-        const viewport = await box('.table-viewport');
-        assert(guidance.x >= viewport.x && guidance.x + guidance.width <= viewport.x + viewport.width,
-          '空状态操作说明不应被表格横向裁切');
+        await assertEmptyGuidance();
+        await viewport.evaluate(node => { node.scrollLeft = node.scrollWidth; });
+        await assertEmptyGuidance();
+        await viewport.evaluate(node => { node.scrollLeft = 0; });
         await noOverflow();
       }
     }
