@@ -134,7 +134,7 @@
     }
   });
 
-  function watchManagedMailbox(queryCode, { onChange, onError } = {}) {
+  function watchManagedMailbox(queryCode, { onChange, onError, source } = {}) {
     let stopped = false, connection, retryTimer, failures = 0;
     const epoch = queryEpoch;
     const current = () => !stopped && epoch === queryEpoch;
@@ -156,7 +156,7 @@
       const connecting = window.setTimeout(() => controller.abort(), 45_000);
       let reader;
       try {
-        const response = await window.fetch('/api/local/tools/mailbox-query', {
+        const response = await window.fetch(source === 'relay' ? '/api/local/apple-relay/public-query' : '/api/local/tools/mailbox-query', {
           method: 'POST', cache: 'no-store', signal: controller.signal,
           headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
           body: JSON.stringify({ queryCode })

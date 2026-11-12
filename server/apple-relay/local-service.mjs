@@ -7,6 +7,7 @@ import { createAppleRelayPrimaryManagement } from './primary-management.mjs';
 import { historicalIntakePreview, requireHistoricalIntake } from './historical-intake.mjs';
 import { RelayError, createVendureMailboxProvider } from './vendure-provider.mjs';
 import { registrationEmail, registrationOccupancy } from '../inventory-registration.mjs';
+import { createRelayMailUpdates, supportsRelayUpdates } from './mail-updates.mjs';
 
 const prefix = '/api/local/apple-relay/';
 const timingScope = new AsyncLocalStorage();
@@ -367,7 +368,7 @@ async function readBody(request, maximumBytes = 4096) {
   return body;
 }
 
-export function createAppleRelayService({ config, readInventory, savePrimaries, planIntake, fetchImpl, recordAction, recordActions, publicOrigin }) {
+export function createAppleRelayService({ config, readInventory, savePrimaries, planIntake, fetchImpl, recordAction, recordActions, publicOrigin, subscribeChanges }) {
   const provider = config ? createVendureMailboxProvider(config, fetchImpl) : null;
   const primaryBindings = loadBindings(config?.primaryBindings);
   const aliasBindings = loadBindings(config?.aliasBindings);
@@ -379,6 +380,16 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
   const historyPreviews = new Set();
   const publicAttempts = [];
   let activePublicQueries = 0;
+  const mailUpdates = createRelayMailUpdates({ shopUrl: config?.shopUrl, fetchImpl, subscribeChanges,
+    authorize: code => lookupQueryCode(code),
+    identity: target => JSON.stringify([target.parent.local.id, target.parent.remoteId,
+      target.alias?.local.id, target.alias?.remoteId, target.expiresAt]),
+    async validLocal(target) {
+      try {
+        return sameMailTarget(target, localMailTarget(await current(), target.parent.local.id, target.alias?.local.id));
+      } catch { return false; }
+    }
+  });
 
   async function current() {
     return measureStage('inventory', async () => snapshot(await readInventory()));
@@ -1089,6 +1100,7 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
       primaryEmail: alias ? null : maskedEmail(parent.local.email),
       aliasEmail: alias ? maskedEmail(alias.local.email) : null,
       codeExpiresAt,
+      ...(config?.shopUrl && supportsRelayUpdates(code) && { supportsUpdates: true, updatesSource: 'relay' }),
       items: items.map(({ subject, receivedAt, code }) => ({
         subject: subject.slice(0, 500),
         receivedAt,
@@ -1100,6 +1112,7 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
 
   return {
     checkExtractionEligibility,
+    close: () => mailUpdates.close(),
     async handlePublicQuery(request, response) {
       let reserved = false;
       try {
@@ -1117,10 +1130,16 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
 
         reservePublicQuery(response);
         reserved = true;
-        const result = await publicQueryMails(await readBody(request));
+        const input = await readBody(request);
+        if (request.headers.accept === 'text/event-stream') {
+          if (typeof input.queryCode !== 'string' || Object.keys(input).length !== 1)
+            throw new RelayError(400, '请输入有效的邮箱查询码');
+          return await mailUpdates.handle(request, response, normalizeCode(input.queryCode));
+        }
+        const result = await publicQueryMails(input);
         writeJson(response, 200, result);
       } catch (error) {
-        let status = error instanceof RelayError ? error.status : 500;
+        let status = error instanceof RelayError ? error.status : error.status === 503 ? 503 : 500;
         let message = status >= 500 ? '邮箱查询暂时不可用，请稍后再试' : error.message;
         if (status === 404 || status === 409) {
           status = 404;

@@ -78,6 +78,7 @@ jobs:
           git -C .upstream/codexdaichong checkout --quiet --detach "$revision"
           node modules/recharge/codexdaichong/prepare.mjs "$output/verified-recharge"
           git archive --format=tar.gz --output "$output/independent-source-$RELEASE_SHA.tar.gz" "$RELEASE_SHA"
+          python3 deploy/website/build_event_runtime.py "$RELEASE_SHA"
           node modules/recharge/codexdaichong/assets.mjs "$output/independent-assets-$RELEASE_SHA.json"
           export ID_CODEXDAICHONG_ASSETS_FILE="$output/independent-assets-$RELEASE_SHA.json"
           node --input-type=module -e 'import { loadCodexdaichongAssets } from "./modules/recharge/codexdaichong/assets.mjs"; await loadCodexdaichongAssets({requireBundle: true});'

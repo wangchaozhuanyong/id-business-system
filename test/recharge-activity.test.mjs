@@ -75,6 +75,23 @@ async function request(service, actor, path = rechargeActivityRoute, method = 'G
   return result;
 }
 
+test('committed activity reads exact jobs without a recent-page scan and propagates failed readback', async () => {
+  const h = harness(), service = h.make();
+  await service.collect({ jobKeys: [], strict: true });
+  const key = job(h.tick() - 1000, 'event');
+  h.nativeRows.push(native(key, alphaCode, { status: 'success', progress: 100 }));
+  await service.collect({ jobKeys: [key], strict: true });
+  assert(h.calls.every(path => path.includes('search=' + key)));
+  const response = await request(service, ana);
+  assert.equal(response.body.items.length, 1);
+  h.offline(true);
+  await assert.rejects(service.collect({ jobKeys: [key], strict: true }));
+  h.offline(false);
+  await service.collect({ jobKeys: [key], strict: true });
+  assert.equal((await request(service, ana)).body.items.length, 1);
+  service.close();
+});
+
 test('a confirmed worker step routes one masked notice to the issued employee and every administrator', async () => {
   const h = harness(), service = h.make();
   await service.collect();

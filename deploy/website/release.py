@@ -209,7 +209,7 @@ def main():
     if include_adapter:
         for name in ("recharge", "recharge-native"):
             require_ancestor(before["components"][name]["revision"], sha)
-    names = (f"independent-source-{sha}.tar.gz", f"independent-assets-{sha}.json")
+    names = (f"independent-source-{sha}.tar.gz", f"independent-assets-{sha}.json", f"independent-event-runtime-{sha}.tar.gz")
     expected_assets = before["assetsSha256"]
     if presentation:
         if presentation["beforeAssetsSha256"] != expected_assets:
@@ -236,6 +236,10 @@ def main():
              "deploy/website/id-business-independent-backup-monitoring.timer")
     files += tuple(path for path in ("frontend/order-opening.mjs", "server/recharge-order-sync.mjs")
                    if (ROOT / path).is_file())
+    files += ('server/recharge-events.mjs', 'server/apple-relay/mail-updates.mjs',
+              'server/apple-relay/local-service.mjs', 'server/order-recharge-client.mjs', 'modules/external-events/recharge_cdc.py',
+              'modules/external-events/committed-jobs.mjs', 'modules/external-events/vendure-mail.mjs',
+              'modules/external-events/requirements.txt')
     if presentation_scope:
         files += PRESENTATION_SCOPES[presentation_scope][0]
     if presentation_scope == "redeemPresentation":
@@ -247,7 +251,7 @@ def main():
                   *ADAPTER_FILES)
     plan = {"operation": "release", "sha": sha, "before": before, "artifacts": artifacts,
             "files": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in files},
-            "qualityRun": quality_run, "preflightCommand": preflight_id}
+            "qualityRun": quality_run, "preflightCommand": preflight_id, 'externalEvents': True}
     if include_adapter:
         plan["adapter"] = {"runtimeFiles": ADAPTER_RUNTIME_FILES}
     if presentation_scope:

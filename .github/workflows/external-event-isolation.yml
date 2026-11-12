@@ -1,0 +1,50 @@
+name: External Event Isolation
+
+on:
+  pull_request:
+    branches: [main]
+    paths: ['modules/external-events/**', 'server/recharge-events.mjs', 'deploy/website/event_prerequisites.py', '.github/workflows/external-event-isolation.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  isolated-events:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: 'yes'
+        ports:
+          - 3306/tcp
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1"
+          --health-interval=5s --health-timeout=5s --health-retries=30
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
+        with:
+          node-version: '24.22.1'
+      - name: Prepare isolated pinned subscriber dependencies
+        run: |
+          python3 -m venv .runtime/cdc-venv
+          .runtime/cdc-venv/bin/python -m pip install --disable-pip-version-check --require-hashes --only-binary=:all: -r modules/external-events/requirements.txt
+      - name: Check bounded event consumers without business services
+        run: |
+          node --test modules/external-events/*.test.mjs
+          .runtime/cdc-venv/bin/python -B -m unittest discover -s modules/external-events -p '*_test.py'
+          python3 -B -m unittest discover -s deploy/website -p event_runtime_test.py
+      - name: Build the exact runtime dependency artifact
+        run: |
+          python3 deploy/website/build_event_runtime.py "$(git rev-parse HEAD)"
+          PYTHONPATH="$GITHUB_WORKSPACE/.runtime/website-release/event-runtime" python3 -B -c 'import pymysql, pymysqlreplication; assert pymysql.__file__.startswith(".runtime") or "/.runtime/website-release/event-runtime/" in pymysql.__file__'
+      - name: Verify committed rows, rollback, replay, late bills and fail-closed schema changes
+        env:
+          CDC_ISOLATION: synthetic-only
+          CDC_MYSQL_PORT: ${{ job.services.mysql.ports[3306] }}
+          CDC_MYSQL_CONTAINER: ${{ job.services.mysql.id }}
+        run: .runtime/cdc-venv/bin/python -B modules/external-events/cdc_isolation.py

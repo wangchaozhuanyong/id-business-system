@@ -2414,25 +2414,26 @@
 
     const refresh = form.querySelector('[data-mail-refresh]');
     const autoRefresh = form.querySelector('[data-mail-auto-refresh]');
-    let stopUpdates, legacyTimer;
+    let stopUpdates;
     const stop = () => {
       stopUpdates?.(); stopUpdates = undefined;
-      window.clearInterval(legacyTimer); legacyTimer = undefined;
       queuedMailUpdates.delete(form);
     };
     const update = () => {
       const snapshot = mailQuerySnapshots.get(form);
-      if (autoRefresh.nextSibling) autoRefresh.nextSibling.textContent = snapshot?.supportsUpdates
-        ? ' 新邮件自动更新' : ' 每 30 秒自动刷新';
+      if (autoRefresh.nextSibling) autoRefresh.nextSibling.textContent = ' 新邮件自动更新';
       if (!autoRefresh.checked || !snapshot || !toolActive(form) || document.hidden || form.closest('section').hidden) return stop();
-      if (stopUpdates || legacyTimer) return;
+      if (stopUpdates) return;
       if (!snapshot.supportsUpdates) {
-        // The separate relay provider has no event outlet yet. Preserve its
-        // existing opt-in behavior until that provider can be connected safely.
-        legacyTimer = window.setInterval(() => void queryManagedMail(form, { background: true }), 30_000);
+        autoRefresh.checked = false;
+        const status = form.querySelector('#ops-managed-query-progress');
+        status.className = 'inline-notice warning';
+        status.textContent = '此查询码暂不支持新邮件通知，请使用立即刷新。';
+        status.hidden = false;
         return;
       }
       stopUpdates = localData.watchManagedMailbox(form.querySelector('#ops-managed-query-code').value.trim(), {
+        source: snapshot.updatesSource,
         onChange() {
           if (form.querySelector('[type="submit"]').disabled) queuedMailUpdates.add(form);
           else void queryManagedMail(form, { background: true });

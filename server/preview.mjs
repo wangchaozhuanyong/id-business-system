@@ -47,6 +47,7 @@ import { createMonitoringSources } from './monitoring-sources.mjs';
 import { createMonitoringHandler, createMonitoringReadiness, createProbeReportHandler } from './monitoring-route.mjs';
 import { createLegacyRechargeNotifications } from './monitoring-recharge.mjs';
 import { probeCodexdaichongRuntime } from '../modules/recharge/codexdaichong/runtime-health.mjs';
+import { createRechargeEvents } from './recharge-events.mjs';
 
 const publicAssetTypes = new Set(['text/css; charset=utf-8', 'text/javascript; charset=utf-8']);
 
@@ -136,6 +137,7 @@ export async function startPreview(
   {
     codexdaichong,
     rechargeConfig,
+    rechargeEventsConfig,
     vendureRehearsal,
     databasePath,
     authPath,
@@ -258,7 +260,7 @@ export async function startPreview(
   let handleAutomaticSnapshot = null;
   let financeCollection = null, handleFinanceCollection = null, handleOrderExpense = null;
   let handleOrderAuxiliary, handleCardManagement, handleClaudeGoogleSubscriptions, handleSubscriptions, handleRechargeCodes, orderSync;
-  let rechargeActivity;
+  let rechargeActivity, rechargeEvents;
   let handleEmployeeStatistics;
   let systemMonitoring, monitoringSources, handleMonitoring, handleProbeReport, handleReadiness;
   const orderRechargeClient = createOrderRechargeClient(rechargeConfig);
@@ -365,6 +367,7 @@ export async function startPreview(
         config: relayConfig,
         publicOrigin: secureOrigin,
         readInventory: () => store.load('inventory').data,
+        subscribeChanges: listener => store.subscribeChanges(listener),
         planIntake: (input) => store.planAppleRelayIntake(input),
         savePrimaries: (rows, actor, aliases, registration) =>
           store.saveAppleRelayPrimaries(rows, actor, aliases, registration),
@@ -426,6 +429,8 @@ export async function startPreview(
       orderSync = createRechargeOrderSync({ store, client: orderRechargeClient, quoteService, publicOrigin: secureOrigin,
         background: Boolean(rechargeOrderSync && rechargeConfig),
         onStatus: success => monitoringSources?.recordOrderSync(success) });
+      if (rechargeEventsConfig) rechargeEvents = createRechargeEvents({ config: rechargeEventsConfig,
+        store, orderSync, activity: rechargeActivity, onStatus: success => monitoringSources?.recordOrderSync(success) });
       await installFinanceAssets(assets, { automaticQuotes: true });
     } catch (error) {
       financeCollection?.close();
@@ -457,6 +462,8 @@ export async function startPreview(
     getVersions: actor => {
       const versions = { ...store.changeVersions(actor), operators: auth?.changeVersion() || '0',
         ...(rechargeActivity && { [rechargeActivityDomain]: rechargeActivity.version(actor) }) };
+      for (const [scope, revision] of Object.entries(rechargeEvents?.versions() || {}))
+        if (Object.hasOwn(versions, scope)) versions[scope] += ':' + revision;
       if (systemMonitoring && Object.hasOwn(versions, 'system-monitoring'))
         versions['system-monitoring'] += ':' + systemMonitoring.changeVersion();
       return versions;
@@ -740,9 +747,10 @@ export async function startPreview(
   if (financeCollection) server.once('close', () => financeCollection.close());
   if (systemMonitoring) server.once('close', () => { monitoringSources?.close(); systemMonitoring.close(); });
   if (rechargeActivity) server.once('close', () => rechargeActivity.close());
-  if (store) server.once('close', () => { handleManagedMailboxQuery?.close(); store.close(); });
+  if (rechargeEvents) server.once('close', () => rechargeEvents.close());
+  if (store) server.once('close', () => { relay?.close(); handleManagedMailboxQuery?.close(); store.close(); });
   if (dataChanges) server.once('close', () => dataChanges.close());
-  if (rechargeOrderSync && orderSync && rechargeConfig) {
+  if (rechargeOrderSync && orderSync && rechargeConfig && !rechargeEvents) {
     const syncOrders = () => void orderSync.run({ apply: true }).catch(() => {});
     const timer = setInterval(syncOrders, 60_000);
     timer.unref();
@@ -790,7 +798,8 @@ export async function startPreview(
   });
   financeCollection?.start();
   monitoringSources?.start();
-  rechargeActivity?.start();
+  if (rechargeEvents) rechargeEvents.start();
+  else rechargeActivity?.start();
   return { server, url: 'http://127.0.0.1:' + server.address().port + '/' };
 }
 
