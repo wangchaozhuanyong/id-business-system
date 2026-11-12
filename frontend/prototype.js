@@ -1075,9 +1075,10 @@ document.addEventListener('id-pagination-change', (event) => {
   state.pageSize = pageSize;
   render();
 });
-function pageRows(rows) {
+function pageRows(rows, timeOf, direction) {
   state.page = Math.min(state.page, Math.max(1, Math.ceil(rows.length / state.pageSize)));
-  return rows.slice((state.page - 1) * state.pageSize, state.page * state.pageSize);
+  const ordered = timeOf ? window.IDListOrder.sortByRecordTime(rows, timeOf, direction) : rows;
+  return ordered.slice((state.page - 1) * state.pageSize, state.page * state.pageSize);
 }
 function matchesNav(route, base) {
   if (route === 'monitor' && base === 'plugins/websites') return true;

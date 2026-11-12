@@ -790,7 +790,7 @@
               `<div class="action-links">${row.status === 'pending' ? A.textAction('更正金额', 'apple-pending-edit', `data-id="${E(row.id)}"`) + A.textAction('确认到账', 'apple-pending-receive', `data-id="${E(row.id)}"`) : ''}${row.corrections.length ? A.textAction('更正记录', 'apple-refund-history', `data-id="${E(row.id)}"`) : ''}</div>`
           }
         ],
-        rows,
+        window.IDListOrder.sortByRecordTime(rows, row => [row.receivedAt, row.createdAt]),
         '',
         'Apple回款记录'
       ),
@@ -850,7 +850,7 @@
           { id: 'actor', label: '登记人' },
           { id: 'reason', label: '更正原因' }
         ],
-        refund.corrections,
+        window.IDListOrder.sortByRecordTime(refund.corrections, row => row.at),
         '',
         'Apple回款更正记录'
       ),
@@ -923,7 +923,7 @@
     return rows;
   }
   const managementView = () => {
-    if (!S.drafts.has(managementRoute)) S.drafts.set(managementRoute, { query: '', state: '', plan: '', sort: 'asc', page: 1, pageSize: window.IDPagination.defaultPageSize });
+    if (!S.drafts.has(managementRoute)) S.drafts.set(managementRoute, { query: '', state: '', plan: '', sort: 'funding', page: 1, pageSize: window.IDPagination.defaultPageSize });
     return S.drafts.get(managementRoute);
   };
   let managementLoad, managementError = false;
@@ -953,14 +953,13 @@
     const available = Boolean(all && (ready() || hasLoaded));
     const plans = [...new Set((all || []).map(row => row.plan).filter(Boolean))].sort();
     const query = view.query.trim().toLowerCase();
-    const rows = (all || []).filter(row => (!view.state || row.state === view.state) && (!view.plan || row.plan === view.plan) &&
+    const matching = (all || []).filter(row => (!view.state || row.state === view.state) && (!view.plan || row.plan === view.plan) &&
       (!query || [row.name, row.contact, row.account, row.apple, row.order?.orderNo].some(value =>
-        String(value || '').toLowerCase().includes(query))))
-      .sort((a, b) => {
-        if (Number.isFinite(a.end) !== Number.isFinite(b.end)) return Number.isFinite(a.end) ? -1 : 1;
-        const dateOrder = (a.end - b.end) * (view.sort === 'desc' ? -1 : 1);
-        return dateOrder || a.apple.localeCompare(b.apple);
-      });
+        String(value || '').toLowerCase().includes(query))));
+    const rows = view.sort === 'funding'
+      ? window.IDListOrder.sortByFundingDeadline(matching, row => row.end,
+        row => ['即将到期', '有效期内'].includes(row.subscription))
+      : window.IDListOrder.sortByRecordTime(matching, row => row.end, view.sort);
     if (available) view.page = Math.min(view.page, Math.max(1, Math.ceil(rows.length / view.pageSize)));
     const start = (view.page - 1) * view.pageSize;
     const choices = [['', '全部状态'], ...Object.entries(fundingStates)];
@@ -996,7 +995,7 @@
       ${A.icon('search')}<input data-auto-search id="apple-management-search" aria-label="搜索苹果 ID 使用记录" placeholder="搜索客户、账号或订单" value="${E(view.query)}" /></div>
       <select id="apple-management-state" aria-label="使用状态">${A.options(choices, view.state)}</select>
       <select id="apple-management-plan" aria-label="订阅套餐">${A.options([['', '全部套餐'], ...plans], view.plan)}</select>
-      <select id="apple-management-sort" aria-label="到期排序">${A.options([['asc', '到期时间升序'], ['desc', '到期时间降序']], view.sort)}</select>
+      <select id="apple-management-sort" aria-label="到期排序">${A.options([['funding', '待续费优先'], ['asc', '到期时间升序'], ['desc', '到期时间降序']], view.sort)}</select>
       </div><div class="toolbar-right" data-page-actions></div></div>
       ${A.table(columns, available ? rows.slice(start, start + view.pageSize) : [], '', '苹果 ID 管理', emptyState)}
       ${available ? window.IDPagination.render({ id: 'apple-management', page: view.page, pageSize: view.pageSize, total: rows.length }) : ''}</section>`;
@@ -1121,7 +1120,7 @@
         ],
         ['有余额', accounts.filter((row) => M.compare(row.balance, '0') > 0).length, '个']
       ]) +
-      `<section class="panel design-async-region" data-apple-balance-region><div data-apple-balance-progress role="status" hidden></div><div class="toolbar"><div class="toolbar-left"><div class="search-field">${A.icon('search')}<input data-auto-search id="apple-list-search" aria-label="搜索苹果 ID" placeholder="搜索苹果 ID 或国家地区" value="${E(S.query || '')}" /></div></div><div class="toolbar-right" data-page-actions>${localData ? A.button('刷新', 'apple-reload') : ''}</div></div>${A.table(columns, A.pageRows(rows), '', '苹果ID余额')}${A.pagination(rows.length)}</section>`
+      `<section class="panel design-async-region" data-apple-balance-region><div data-apple-balance-progress role="status" hidden></div><div class="toolbar"><div class="toolbar-left"><div class="search-field">${A.icon('search')}<input data-auto-search id="apple-list-search" aria-label="搜索苹果 ID" placeholder="搜索苹果 ID 或国家地区" value="${E(S.query || '')}" /></div></div><div class="toolbar-right" data-page-actions>${localData ? A.button('刷新', 'apple-reload') : ''}</div></div>${A.table(columns, A.pageRows(rows, row => [row.createdAt, row.importedAt, row.registered]), '', '苹果ID余额')}${A.pagination(rows.length)}</section>`
     );
   }
   function saveDrafts() {

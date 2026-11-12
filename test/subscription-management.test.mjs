@@ -48,6 +48,35 @@ async function request(handler, action, body, user = admin, headers = {}) {
   return { status, body: value, headers: responseHeaders };
 }
 
+test('订阅总表按最新订阅分页，临期按符合条件的最近到期，已过期按最近过期', async () => {
+  const fixture = (id, start, expiry, extra = {}) => makeOrder(id, 'GPT', {
+    email: id + '@example.test', entitlementStatus: 'active', start, expiry, ...extra
+  });
+  const early = fixture('due-first', '2026-10-10', '2026-11-10 12:00');
+  const latest = fixture('latest', '2026-11-09 16:00', '2026-12-09');
+  const next = fixture('due-second', '2026-11-08', '2026-11-11 10:00');
+  const olderExpired = fixture('expired-older', '2026-09-01', '2026-10-01');
+  const lastExpired = fixture('expired-recent', '2026-10-09', '2026-11-09');
+  const undated = fixture('no-time', '', '', { entitlementStatus: 'pending' });
+  const mixed = makeOrder('grok-upcoming', 'Grok', { email: 'mixed@example.test', plan: 'SuperGrok',
+    entitlementStatus: 'active', start: '2026-11-07', expiry: '2026-11-12 08:00' });
+  const endedSeries = { ...mixed, id: 'grok-expired', orderNo: 'grok-expired', plan: 'X Premium',
+    start: '2026-10-06', expiry: '2026-11-06' };
+  const store = fakeStore(fixtures([early, olderExpired, undated, next, mixed, endedSeries, lastExpired, latest]));
+  const handler = createSubscriptionHandler({ store, publicOrigin: origin, clock: () => now });
+  const read = async (scope, options = {}) => {
+    const result = await request(handler, 'list', { product: 'all', scope, ...options });
+    assert.equal(result.status, 200);
+    return result.body.items.map(row => row.account);
+  };
+  assert.deepEqual(await read('all', { pageSize: 2 }), ['latest@example.test', 'due-second@example.test']);
+  assert.deepEqual(await read('all', { pageSize: 2, page: 2 }), ['mixed@example.test', 'due-first@example.test']);
+  assert.equal((await read('all')).at(-1), 'no-time@example.test');
+  assert.deepEqual(await read('upcoming'), ['due-first@example.test', 'due-second@example.test', 'mixed@example.test']);
+  assert.deepEqual(await read('expired'), ['expired-recent@example.test', 'mixed@example.test', 'expired-older@example.test']);
+  assert.equal((await read('all', { sort: 'account_asc' }))[0], 'due-first@example.test');
+});
+
 test('按产品和账号汇总历史订单，订阅有效期与查询码有效期分开', () => {
   const old = makeOrder('old', 'Gemini', { entitlementStatus: 'active', start: '2026-09-01 10:00', expiry: '2026-10-01 10:00' });
   const recent = makeOrder('recent', 'Gemini', { entitlementStatus: 'active' });

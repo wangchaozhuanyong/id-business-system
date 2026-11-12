@@ -70,6 +70,7 @@ const files = new Map([
   ['recharge-activity.css', 'text/css; charset=utf-8'],
   ['bitbrowser-addresses.css', 'text/css; charset=utf-8'],
   ['order-opening.mjs', 'text/javascript; charset=utf-8'],
+  ['list-order.mjs', 'text/javascript; charset=utf-8'],
   ...[
     'prototype',
     'pagination',

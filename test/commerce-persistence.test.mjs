@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import * as listOrder from '../frontend/list-order.mjs';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
@@ -109,7 +110,7 @@ function browser(store, appleAsset = null) {
     }
   };
   const context = {
-    window: { IDOrderOpening: orderOpening, IDDesignAPI: api, IDDesignModules: modules, IDLocalData: localData },
+    window: { IDOrderOpening: orderOpening, IDDesignAPI: api, IDListOrder: listOrder, IDDesignModules: modules, IDLocalData: localData },
     document: {
       querySelector: (selector) => selector === '#commerce-order-form' && state.route === 'workspace/order/gpt'
         ? bankOrderEntry : null,

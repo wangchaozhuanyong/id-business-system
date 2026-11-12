@@ -43,20 +43,29 @@ test('租户续费提醒、联系人、独立设置、保存失败和新周期',
   const originalOrders = structuredClone(snapshot.data.orders);
   const traffic = await interceptDesign(context, { localFixtures: { ...fixture, commerce: snapshot }, actor });
   const requests = [];
+  const receipts = new Map(), rejected = new Set();
   let nextReply, releaseWrite;
   await context.route('**/api/local/commerce', async route => {
     const request = route.request();
     if (request.method() === 'GET') return route.fulfill({ json: snapshot });
+    const operationId = request.headers()['x-id-operation'];
+    assert(operationId, '写入携带幂等操作编号');
+    if (receipts.has(operationId)) return route.fulfill({ json: receipts.get(operationId) });
+    if (rejected.has(operationId)) return route.fulfill({ status: 503, json: { error: '暂时无法保存' } });
     const { version, data, action } = request.postDataJSON();
     requests.push(action);
     if (version !== snapshot.version)
       return route.fulfill({ status: 409, json: { error: '订单已更新' } });
     const reply = nextReply;
     nextReply = undefined;
-    if (reply === 'rejected') return route.fulfill({ status: 503, json: { error: '暂时无法保存' } });
+    if (reply === 'rejected') {
+      rejected.add(operationId);
+      return route.fulfill({ status: 503, json: { error: '暂时无法保存' } });
+    }
     try {
       prepareTenantRenewalWrite(snapshot.data, data, action, actor, at);
       snapshot = { version: version + 1, data };
+      receipts.set(operationId, snapshot);
       if (reply === 'lost') {
         await new Promise(resolve => { releaseWrite = resolve; });
         return route.fulfill({ status: 503, json: { error: '模拟回包丢失' } });

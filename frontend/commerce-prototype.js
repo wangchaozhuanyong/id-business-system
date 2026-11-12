@@ -1837,11 +1837,13 @@
 
   function renewalWorkbenchRows() {
     const { reminders } = renewalProjection();
-    return reminders.filter(({ order, state }) =>
+    const rows = reminders.filter(({ order, state }) =>
       state === moduleState.renewalTab && (!S.status || order.product === S.status)
     ).map(row => ({ ...row.order, ...row, ...customerForOrder(row.order, row.identity) }))
-      .filter(row => matchesRenewalSearch(row, row.order))
-      .sort((left, right) => left.expiry - right.expiry || left.id.localeCompare(right.id));
+      .filter(row => matchesRenewalSearch(row, row.order));
+    if (moduleState.renewalTab === 'processed') return window.IDListOrder.sortByRecordTime(rows, row =>
+      row.completed ? [row.completed.createdAt, row.completed.rechargeCompletedAt, row.completed.start] : row.decision?.at);
+    return window.IDListOrder.sortByRecordTime(rows, row => row.expiry, 'asc');
   }
 
   function renderRenewalDetail(selected, evaluatedAt) {
@@ -2353,6 +2355,8 @@
     return [...groups.values()];
   }
   const currentBankSubscription = row => ['upcoming', 'expired', 'active'].includes(row.state);
+  const sortBankCardRows = rows => window.IDListOrder.sortByFundingDeadline(rows, row => row.expiry,
+    row => row.state === 'upcoming' || row.state === 'active');
 
   function renderBankCardGroups(rows) {
     return tableList([
@@ -2395,7 +2399,7 @@
           (currentBankSubscription(row) ? renewalActions({
             sourceId: row.order.id, payment: '银行卡', hasCard: true, availability: bankCardStatus(row.order)?.state
           }) : '') }
-      ], group.items, '', 'commerce-bank-card-subs'), A.button('关闭', 'drawer-close'), context);
+      ], sortBankCardRows(group.items), '', 'commerce-bank-card-subs'), A.button('关闭', 'drawer-close'), context);
     if (localData?.renewalCard && active) void localData.renewalCard({ action: 'prepare', orderId: active.order.id })
       .then(({ balance }) => {
         if (S.drawerContext !== context || !balance) return;
@@ -2410,14 +2414,14 @@
     const typeOptions = new Map(all.filter(row => row.typeId).map(row => [row.typeId, row.typeName]));
     const plans = [...new Set(all.map(row => row.plan).filter(Boolean))];
     const query = String(S.query || '').trim().toLowerCase();
-    const rows = all.filter(row =>
+    const matching = all.filter(row =>
       (!subscriptionCardFilters.state || row.state === subscriptionCardFilters.state) &&
       (!subscriptionCardFilters.type || row.typeId === subscriptionCardFilters.type) &&
       (!subscriptionCardFilters.plan || row.plan === subscriptionCardFilters.plan) &&
       (!subscriptionCardFilters.purpose || row.order.businessType === subscriptionCardFilters.purpose) &&
       (!query || [row.name, row.tail, row.order.email, row.order.orderNo, row.typeName, row.plan,
-        ...orderContactFields.map(([key]) => row[key])].some(value => String(value || '').toLowerCase().includes(query))))
-      .sort((a, b) => (a.expiry || Infinity) - (b.expiry || Infinity));
+        ...orderContactFields.map(([key]) => row[key])].some(value => String(value || '').toLowerCase().includes(query))));
+    const rows = sortBankCardRows(matching);
     const filters = [
       ['state', '使用状态', [['', '全部状态'], ...subscriptionCardStates]],
       ['purpose', '业务类型', [['', '全部业务'], '续费', '成品交付']],
@@ -2452,7 +2456,9 @@
       { id: 'actions', label: '操作', action: true, render: row => {
         const id = `data-id="${E(row.order.id)}"`;
         return `<div class="action-links">${row.state === 'replaced' ? '' : A.textAction('复制银行卡', 'commerce-renewal-card-copy', id)}${
-          A.textAction('详情', 'commerce-subscription-card-detail', id)}</div>`;
+          A.textAction('详情', 'commerce-subscription-card-detail', id)}${canManageOrders()
+          ? A.textAction('更多操作', 'commerce-subscription-card-edit', `${id} aria-haspopup="menu" aria-expanded="false"`, '', 'down')
+          : ''}</div>`;
       } }
     ];
     const frozen = subscriptionCardTab === 'frozen';
@@ -2489,7 +2495,7 @@
         return `<div class="action-links">${A.textAction('关联详情', 'commerce-card-accounts', attr)}${
           row.poolState === 'pending' ? A.textAction('重试停用', 'commerce-card-freeze-retry', attr) : ''}</div>`;
       } }
-    ], rows, 'commerce-frozen-cards');
+    ], rows, 'commerce-frozen-cards', '', row => row.frozenAt);
   }
   async function showBankCardAccounts(node) {
     const order = orders.find(row => row.id === node.dataset.id);
@@ -3081,8 +3087,8 @@
       S.drafts.set(form.dataset.commerceDraft, draft);
     }
   }
-  function tableList(columns, rows, tableId, scope = '') {
-    return A.table(columns, A.pageRows(rows), scope, tableId) + A.pagination(rows.length);
+  function tableList(columns, rows, tableId, scope = '', timeOf) {
+    return A.table(columns, A.pageRows(rows, timeOf), scope, tableId) + A.pagination(rows.length);
   }
   function columnSettingsButton(tableId) {
     return A.button('列设置', 'column-settings', '', 'columns', `data-table-id="${E(tableId)}"`);
@@ -3320,7 +3326,7 @@
         contacts: tenantRenewalCustomers(related) });
       counts.set(order.tenantId, (counts.get(order.tenantId) || 0) + 1);
     }
-    return { pending: pending.sort((left, right) => left.expiry - right.expiry), processed, counts };
+    return { pending, processed, counts };
   }
   function tenantRenewalStatus(row) {
     return row.record ? A.tag('已处理', 'success')
@@ -3372,7 +3378,8 @@
     return toolbar('搜索租户、客户、账号或联系方式',
       `<label for="commerce-tenant-renewal-filter">租户</label>${select('tenant-renewal-filter', choices, view.tenantId)}` +
       columnSettingsButton(tableId), 'data-page-actions') +
-      A.table(columns, A.pageRows(rows), '', tableId, empty) + A.pagination(rows.length);
+      A.table(columns, A.pageRows(rows, processed ? row => row.record.at : row => row.expiry, processed ? 'desc' : 'asc'),
+        '', tableId, empty) + A.pagination(rows.length);
   }
   function renewalContactProperties(record, fields) {
     return fields.map(([key, label]) => {
@@ -3569,7 +3576,7 @@
           `data-kind="${tenant ? 'tenant' : 'customer'}"`
         )
       ) +
-      `<section class="panel">${listTabs}${toolbar(`搜索${noun}、联系方式、标签、历史业务或录入人`, columnSettingsButton(`commerce-${tenant ? 'tenants' : 'customers'}`), 'data-page-actions')}${tableList(columns, displayRows, `commerce-${tenant ? 'tenants' : 'customers'}`)}</section>`
+      `<section class="panel">${listTabs}${toolbar(`搜索${noun}、联系方式、标签、历史业务或录入人`, columnSettingsButton(`commerce-${tenant ? 'tenants' : 'customers'}`), 'data-page-actions')}${tableList(columns, displayRows, `commerce-${tenant ? 'tenants' : 'customers'}`, '', row => row.createdAt)}</section>`
     );
   }
   function customerSourceOptions(selected) {
@@ -6017,6 +6024,15 @@
   function setOrderListTab(product, tab) {
     S.drafts.set('commerce-order-filters:' + product, { ...orderListFilters(product), tab });
   }
+  function orderListTime(row, tab) {
+    const dates = [row.createdAt, row.start];
+    if (tab === 'cancelled') return [row.cancellationEvents?.at(-1)?.at, ...dates];
+    if (tab === 'refunded') {
+      const latest = row.refunds.reduce((time, refund) => Math.max(time, parseDate(refund.at) || -Infinity), -Infinity);
+      return [latest, ...dates];
+    }
+    return dates;
+  }
   function renderOrders(product) {
     const personal = personalProduct(product);
     const claude = product === 'Claude';
@@ -6066,7 +6082,7 @@
     } : undefined;
     const viewSubscriptions = noOrders && A.canVisit('subscriptions/claude')
       ? routeButton('查看 Claude 订阅', 'subscriptions/claude') : '';
-    const list = A.table(orderColumns(product), A.pageRows(filtered), rentScope, tableId, emptyState,
+    const list = A.table(orderColumns(product), A.pageRows(filtered, row => orderListTime(row, orderTab)), rentScope, tableId, emptyState,
       row => current.has(row.id)) + A.pagination(filtered.length);
     return (
       A.header(
@@ -6666,7 +6682,7 @@
       { id: 'expiresAt', label: '有效截止', render: (row) => E(quoteTime(row.fxSnapshot.expiresAt)) },
       { id: 'actions', label: '操作', action: true, render: (row) =>
         A.textAction('查看快照', 'commerce-order-fx-detail', `data-id="${E(row.id)}"`) }
-    ], rows, 'commerce-stat-snapshots');
+    ], rows, 'commerce-stat-snapshots', '', row => row.fxSnapshot.at);
   }
 
   function costDetail(order) {
@@ -6721,7 +6737,7 @@
               { id: 'reason', label: '到账依据' },
               { id: 'actor', label: '登记人' }
             ],
-            order.bankReturns || [],
+            window.IDListOrder.sortByRecordTime(order.bankReturns || [], row => row.at),
             '',
             'commerce-bank-returns'
           )}</section>`
@@ -6741,7 +6757,7 @@
               { id: 'actor', label: '登记人' },
               ...appleColumns
             ],
-            rows,
+            window.IDListOrder.sortByRecordTime(rows, row => row.at),
             '',
             'commerce-refunds'
           )
@@ -6809,7 +6825,7 @@
                   `<div class="action-links">${A.textAction('逐项处理', 'commerce-rent-detail', `data-id="${row.id}"`)}${A.textAction('复制明细', 'commerce-rent-copy', `data-id="${row.id}"`)}</div>`
               }
             ],
-            rows,
+            window.IDListOrder.sortByRecordTime(rows, row => row.at),
             '',
             'commerce-rent-batches'
           )
@@ -7345,7 +7361,7 @@
         E(statisticsAmount(row.gain) + (row.basis === 'partial' && row.gain !== null ? ' · 参考' : '')) },
       { id: 'actions', label: '操作', action: true, render: row =>
         A.textAction('查看原单', 'commerce-order-detail', `data-id="${E(row.id)}" data-tab="costs"`) }
-    ], records, 'commerce-stat-detail');
+    ], records, 'commerce-stat-detail', '', row => orderListTime(row.order));
   }
 
   function renderStatistics() {
@@ -9402,7 +9418,7 @@
       return true;
     }
     if (action === 'commerce-subscription-card-tab') {
-      subscriptionCardTab = node.dataset.tab === 'frozen' ? 'frozen' : 'orders';
+      subscriptionCardTab = node.dataset.tab;
       S.page = 1;
       A.render();
       $(`[data-action="commerce-subscription-card-tab"][data-tab="${subscriptionCardTab}"]`)?.focus({ preventScroll: true });

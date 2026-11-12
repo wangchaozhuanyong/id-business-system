@@ -12,6 +12,7 @@
   const tableId = 'subscription-accounts';
   const scopeLabels = { all: '全部订阅', customer: '客户订阅', owned: '自有订阅',
     upcoming: '即将到期', expired: '已到期', dead: '死号', unlinked: '无邮箱' };
+  const recentSortLabels = { dead: '最新死号优先', unlinked: '最新订单优先' };
   const archiveScopes = new Set(['expired', 'dead']);
   const hour = 3_600_000, day = 24 * hour;
   let snapshot, error, requestNumber = 0, clearCopy, ownerContext, expiryTimer, frameObserver;
@@ -26,19 +27,20 @@
   const filters = () => {
     const key = filterKey();
     if (!A.state.drafts.has(key)) {
-      A.state.drafts.set(key, { scope: 'all', product: 'all', input: '', query: '', status: '', sort: 'expiry_asc', page: 1,
+      A.state.drafts.set(key, { scope: 'all', product: 'all', input: '', query: '', status: '', sorts: {}, page: 1,
         pageSize: window.IDPagination.defaultPageSize });
     }
     return A.state.drafts.get(key);
   };
   const selectedScope = () => filters().scope || 'all';
+  const selectedSort = () => filters().sorts?.[selectedScope()] || window.IDListOrder.defaultSubscriptionSort(selectedScope());
   const scopeOptions = () => Object.keys(scopeLabels).filter(scope => scope !== 'owned' || ['all', 'Claude'].includes(product()));
   const currentSnapshot = () => snapshot?.product === product() && snapshot.scope === selectedScope() ? snapshot : null;
   const currentRow = id => currentSnapshot()?.items.find(row => row.id === id);
   function requestFilters() {
     const f = filters();
     return { product: product() === 'all' ? f.product || 'all' : product(), scope: selectedScope(), query: f.query.trim(), status: f.status,
-      sort: f.sort || 'expiry_asc', page: f.page, pageSize: f.pageSize };
+      sort: selectedSort(), page: f.page, pageSize: f.pageSize };
   }
   const timeFormatter = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai', dateStyle: 'short', timeStyle: 'short' });
   const displayDate = value => Number.isFinite(parseTime(value)) ? timeFormatter.format(parseTime(value)) : '未登记';
@@ -193,7 +195,10 @@
               ${archiveScopes.has(selectedScope()) ? '' : `<select id="subscription-status" aria-label="订阅状态">${A.options(
                 [['', '全部状态'], ...Object.entries(states).map(([status, label]) =>
                   [status, status === 'active' ? '未到期' : status === 'expired' ? '已到期' : label])], f.status)}</select>`}
-              <select id="subscription-sort" aria-label="排序">${A.options([['expiry_asc', '到期由近到远'], ['expiry_desc', '到期由远到近'], ['account_asc', '账号排序']], f.sort || 'expiry_asc')}</select>
+              <select id="subscription-sort" aria-label="排序">${A.options([
+                ['recent', recentSortLabels[selectedScope()] || '最新订阅优先'],
+                ['expiry_asc', '到期时间升序'], ['expiry_desc', '到期时间降序'], ['account_asc', '账号排序']
+              ], selectedSort())}</select>
               <button class="button" type="submit">搜索</button></div>
             <div class="toolbar-right" data-page-actions>${button('刷新', 'subscriptions-refresh')}</div>
           </form>
@@ -481,7 +486,13 @@
         return true;
       }
       if (node.id === 'subscription-status') { filters().status = node.value; filters().page = 1; void load(); return true; }
-      if (node.id === 'subscription-sort') { filters().sort = node.value; filters().page = 1; void load(); return true; }
+      if (node.id === 'subscription-sort') {
+        const f = filters();
+        (f.sorts ||= {})[selectedScope()] = node.value;
+        f.page = 1;
+        void load();
+        return true;
+      }
       return false;
     },
     onInput(node) {

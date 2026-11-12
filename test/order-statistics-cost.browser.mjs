@@ -88,6 +88,11 @@ test('按套餐独立汇总实收、成本、分摊及费用来源，并用原�
 
       await page.goto(origin + '/#/orders/statistics');
       await page.getByRole('heading', { name: '订单统计', exact: true }).waitFor();
+      await page.getByRole('tab', { name: '汇率来源' }).click();
+      const snapshots = page.locator('table[data-table="commerce-stat-snapshots"] tbody tr[data-row-id]');
+      assert.deepEqual((await snapshots.evaluateAll(rows => rows.map(row => row.dataset.rowId))).slice(0, 3),
+        ['apple', 'claude', 'unlinked']);
+      await page.getByRole('tab', { name: '统计概览' }).click();
       const summary = page.locator('#main .summary-strip');
       const planTable = page.locator('table[data-table="commerce-plan-statistics"]');
       const plus = planTable.locator('tr[data-row-id="GPT:Plus"]');

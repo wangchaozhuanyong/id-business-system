@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { assignOrderOwner, checkSubscriptionTermination, manualOrderDetailsAction, moneyUnits, validMoney } from './order-policy.mjs';
 import { currencies, validCurrencyCode } from '../modules/finance/accounting.mjs';
+import { sortByRecordTime } from '../frontend/list-order.mjs';
 import {
   automaticGptOrder, rechargeOrderCompletion, rechargeOrderOwner, manualBusinessOrder, manualOrderDetailsMissing,
   orderOpeningConfirmed, subscriptionTime, validOrderEmail, validOrderXHandle
@@ -146,13 +147,15 @@ export function readOrderCompletion(data, settings, actor, params, readOwners) {
   const people = manager(actor) ? readOwners?.() || [] : [];
   const names = new Map(people.map(({ id, name }) => [id, name]));
   const byId = new Map(customers.map((row) => [row.id, row]));
-  const items = (data?.orders || []).filter((row) => visible(row, actor))
+  const orders = data?.orders || [];
+  const items = sortByRecordTime(orders.filter(row => visible(row, actor)),
+    row => [row.rechargeCompletedAt, row.start, row.createdAt])
     .map((row) => orderView(row, byId.get(row.customerId), actor, names));
   return {
     items, sources: sourcesOf(settings), canAssign: manager(actor),
     receiptCurrencies: [...new Set([...currencies, ...(settings?.orderCurrenciesByProduct?.GPT ||
       settings?.orderCurrencies || []).map(row => row.code).filter(validCurrencyCode)])],
-    ...(manager(actor) && { manualItems: (data?.orders || []).filter(manualBusinessOrder)
+    ...(manager(actor) && { manualItems: sortByRecordTime(orders.filter(manualBusinessOrder), row => [row.createdAt, row.start])
       .map(row => manualOrderView(row, byId.get(row.customerId), names)).filter(row => row.missing.length) }),
     owners: people.filter((row) => row.active !== false && roles.includes(row.role)).map(({ id, name }) => ({ id, name }))
   };

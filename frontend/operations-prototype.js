@@ -1811,7 +1811,7 @@
     const searchInput = panel.querySelector('#ops-saved-totp-search');
     const search = (window.IDSearchInput?.value(searchInput) ?? searchInput.value).trim().toLowerCase();
     const items = snapshot.items.filter((row) => [row.name, row.issuer].some((value) =>
-      value?.toLowerCase().includes(search)));
+      value?.toLowerCase().includes(search))).reverse();
     const draftSize = getDraft('saved-totp-page').pageSize;
     const pageSize = pageSizes.includes(draftSize) ? draftSize : defaultPageSize;
     const pages = Math.max(1, Math.ceil(items.length / pageSize));
@@ -2618,9 +2618,11 @@
     const status = panel.querySelector('#ops-mailbox-filter-status').value;
     const statusFor = (row) => row.authorizationPending ? 'pending' : row.authFailed ? 'auth_failed' : !row.active ? 'disabled'
       : Date.parse(row.expiresAt) <= Date.now() ? 'expired' : 'active';
-    const items = snapshot.items.filter((row) =>
+    const matching = snapshot.items.filter((row) =>
       (!provider || row.provider === provider) && (!status || statusFor(row) === status) &&
       [row.email, row.label].some((value) => value?.toLowerCase().includes(search)));
+    const items = matching.filter(row => !row.authorizationPending).reverse()
+      .concat(matching.filter(row => row.authorizationPending));
     const draftSize = getDraft('mailbox-pool-page').pageSize;
     const pageSize = pageSizes.includes(draftSize) ? draftSize : defaultPageSize;
     const pages = Math.max(1, Math.ceil(items.length / pageSize));

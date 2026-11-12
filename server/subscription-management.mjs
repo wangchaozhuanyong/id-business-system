@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 
+import { defaultSubscriptionSort, firstRecordTime, sortByRecordTime } from '../frontend/list-order.mjs';
 import {
   orderOpeningConfirmed, subscriptionChainRoot, validOrderEmail, validOrderXHandle,
   subscriptionPeriodState, subscriptionStateLabels, subscriptionTime as instant
@@ -14,7 +15,7 @@ const base = '/api/local/subscriptions';
 export const subscriptionRoutes = new Set(['list', 'account', 'lookup', 'copy', 'contact-copy', 'renewal-settings', 'confirm', 'owner'].map(action => `${base}/${action}`));
 const products = new Set(['GPT', 'Claude', 'Gemini', 'Grok']);
 const statuses = new Set(Object.keys(subscriptionStateLabels));
-const sorts = new Set(['expiry_asc', 'expiry_desc', 'account_asc']);
+const sorts = new Set(['recent', 'expiry_asc', 'expiry_desc', 'account_asc']);
 const subscriptionScopes = ['all', 'customer', 'owned', 'unlinked', 'upcoming', 'expired', 'dead'];
 const archiveScopes = new Set(['expired', 'dead']);
 const defaultPageSize = 20;
@@ -172,7 +173,7 @@ function buildRecords(snapshots, now) {
       hasCard: order.payment === '银行卡' && Boolean(nextCard || order.cardId || order.proCardNumber || tail),
       delivered: order.businessType === '成品交付' && Boolean(match.account?.id && match.account.id === order.accountId),
       historicalSale,
-      healthId: health?.id, dead: confirmed && accountMarkedDead(health),
+      healthId: health?.id, dead: confirmed && accountMarkedDead(health), healthChangedAt: text(health?.healthChangedAt),
       missingAssociation, missingCustomer, accountConflict: Boolean(match.conflict || ids.get(order.id) !== 1),
       confirmed, ended, cancelled: order.cancelled === true || ['cancelled', '已撤单'].includes(order.status),
       failed: order.entitlementStatus === 'failed' || ['failed', '失败'].includes(order.status),
@@ -195,7 +196,7 @@ function buildRecords(snapshots, now) {
       target: identity(account, 'Claude'), display: text(account.email), email: text(account.email),
       series: 'claude', plan: text(history.plan), start: text(history.start), expiry: text(history.expiry),
       created: '', customerId: '', account, accountConflict: false, confirmed: true,
-      healthId: account.id, dead: accountMarkedDead(account),
+      healthId: account.id, dead: accountMarkedDead(account), healthChangedAt: text(account.healthChangedAt),
       ended: ['recovered', 'retired'].includes(account.accountLifecycle?.disposition),
       operatorId: '', operatorName: '历史未记录'
     };
@@ -380,6 +381,27 @@ function listSeries(row, scope) {
   return row.series;
 }
 
+function subscriptionListTime(row, scope, sort, upcomingEnd) {
+  if (sort === 'recent') {
+    if (scope === 'dead') {
+      const changes = row._records.filter(record => record.dead)
+        .map(record => instant(record.healthChangedAt)).filter(Number.isFinite);
+      if (changes.length) return Math.max(...changes);
+    }
+    const records = row._records.filter(record => !record.cancelled);
+    return (records.length ? records : row._records).reduce((latest, record) => {
+      const time = scope === 'unlinked' ? firstRecordTime(record.created, record.start)
+        : firstRecordTime(record.start, record.created);
+      return time === null ? latest : Math.max(latest ?? time, time);
+    }, null);
+  }
+  const series = listSeries(row, scope);
+  const dates = (scope === 'upcoming' ? series.filter(item => item.status === 'active' &&
+    instant(item.expiry) <= upcomingEnd) : series).map(item => instant(item.expiry)).filter(Number.isFinite);
+  if (!dates.length) return null;
+  return scope === 'expired' && sort === 'expiry_desc' ? Math.max(...dates) : Math.min(...dates);
+}
+
 function accountRow(snapshots, accountId) {
   const accounts = array(snapshots.inventory.data?.accounts);
   const matches = accounts.filter(account => account.id === accountId);
@@ -518,22 +540,13 @@ export function createSubscriptionHandler({ store, publicOrigin, readOwners = ()
             (!query || [row.account, row.registrationEmail, row.ownerName, row.operatorName, row.customerName, row.wechat,
               ...row.series.map(series => series.last4),
               ...row.history.map(record => record.orderNo)].some(value => text(value).toLowerCase().includes(query))));
-          const sort = body.sort || 'expiry_asc';
-          const due = row => {
-            const values = listSeries(row, scope).map(series => instant(series.expiry)).filter(Number.isFinite);
-            return values.length ? Math.min(...values) : null;
-          };
-          matching.sort((a, b) => {
-            if (sort !== 'account_asc') {
-              const left = due(a), right = due(b);
-              if (left === null || right === null) {
-                if (left !== right) return left === null ? 1 : -1;
-              } else if (left !== right) return sort === 'expiry_desc' ? right - left : left - right;
-            }
-            return a.account.localeCompare(b.account, 'zh-CN') || a.id.localeCompare(b.id);
-          });
+          const sort = body.sort || defaultSubscriptionSort(scope);
+          const ordered = sort === 'account_asc'
+            ? matching.sort((a, b) => a.account.localeCompare(b.account, 'zh-CN') || a.id.localeCompare(b.id))
+            : sortByRecordTime(matching, row => subscriptionListTime(row, scope, sort, now + hours * 3_600_000),
+              sort === 'expiry_asc' ? 'asc' : 'desc');
           const page = Math.min(body.page ?? 1, Math.max(1, Math.ceil(matching.length / pageSize)));
-          const items = matching.slice((page - 1) * pageSize, page * pageSize);
+          const items = ordered.slice((page - 1) * pageSize, page * pageSize);
           audit('view', items.map(row => row.id));
           return { items: items.map(row => ({ ...safeRow(row), series: listSeries(row, scope),
             ...(scope === 'expired' && { status: 'expired' }) })), total: matching.length,

@@ -14,11 +14,12 @@ const fixture = Array.from({ length: 2003 }, (_, i) => ({
   provider: providers[i % 3], active: i !== 2, authFailed: i === 3,
   expiresAt: i === 1 ? '2020-01-01T00:00:00Z' : '2099-01-01T00:00:00Z', lastQueriedAt: '2026-11-07T03:00:00Z'
 }));
+const registeredRows = [...fixture].reverse();
 try {
   for (const width of (process.env.ID_QA_WIDTHS || '1440,1024,901,900,768,390,320').split(',').map(Number)) for (const theme of ['light', 'dark']) {
     const context = await browser.newContext({ viewport: { width, height: 900 }, serviceWorkers: 'block', permissions: ['clipboard-read', 'clipboard-write'] });
     const requests = await interceptDesign(context, { localFixtures: {}, actor: { id: 'synthetic', name: '离线验收', role: 'admin' } });
-    let rows = fixture, fail = false, failCodes = false, metadataReads = 0;
+    let rows = registeredRows, fail = false, failCodes = false, metadataReads = 0;
     const codeReads = [], singleReads = [], mutations = [], errors = [];
     await context.route(origin + '/api/local/tools/mailbox-pool', route => {
       const request = route.request();
@@ -182,7 +183,9 @@ try {
     }
     assert.equal(await pool.getByLabel('每页条数', { exact: true }).inputValue(), '50');
     assert.equal(await pool.locator('[data-pagination="operations-mailbox-pool"]').getAttribute('data-page'), '41');
-    await pool.getByLabel('搜索邮箱池', { exact: true }).fill('layout-1999'); await waitCodes();
+    await pool.getByLabel('搜索邮箱池', { exact: true }).fill('layout-1999');
+    await page.waitForFunction(() => document.querySelectorAll('#ops-mailbox-pool .mailbox-account').length === 1);
+    await waitCodes();
     assert.equal(await pool.locator('.mailbox-account').count(), 1);
     assert.equal(await pool.locator('.mailbox-account strong').textContent(), fixture[1999].email);
     await measure('search');

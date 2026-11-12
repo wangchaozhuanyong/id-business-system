@@ -66,6 +66,7 @@ try {
     const table = main.getByRole('table', { name: '苹果 ID 管理' });
     const panel = main.locator('.apple-management-list');
     assert.equal(new URL(page.url()).hash, '#/subscriptions/apple-ids');
+    assert.equal(await main.getByLabel('到期排序', { exact: true }).inputValue(), 'funding');
     const unrecorded = table.locator('tr[data-row-id="unrecorded:external-apple-order"]');
     await unrecorded.getByText('SYN-EXTERNAL-APPLE', { exact: true }).waitFor({ state: 'attached' });
     assert.equal(await unrecorded.locator('[data-column="balance"]').textContent(), '未读取');
@@ -142,6 +143,7 @@ try {
     await settle(page);
     if (width > 900) assert.ok(Math.abs((await panel.boundingBox()).height - frame.height) <= 1, '末页框架高度稳定');
     await search.fill('unused-0@example.test');
+    await page.waitForFunction(() => document.querySelectorAll('.apple-management-list tbody tr[data-row-id]').length === 1);
     await table.getByText('unused-0@example.test', { exact: true }).waitFor();
     assert.equal(await table.locator('tbody tr[data-row-id]').count(), 1);
     if (output) await page.screenshot({ path: join(output, `apple-management-single-${width}-${theme}.png`) });

@@ -16,6 +16,7 @@ test('买家查询码按页读取，切页复用成功结果，重置或失效�
   const seed = fixture.inventory.data.mailboxes.find(row => row.type === 'relay');
   const aliases = Array.from({ length: 21 }, (_, index) => ({ ...seed,
     id: `qa-code-${index}`, email: `code-${index}@example.test`, notes: '',
+    createdAt: new Date(Date.UTC(2026, 10, 10, 10, 0, 60 - index)).toISOString(),
     health: 'normal', queryCode: 'STALE-INVENTORY-CODE', codeResetIntervalDays: 30,
     queryExpiry: index === 20 ? '' : '2026-11-15 00:45'
   }));
@@ -260,7 +261,8 @@ test('整页取码合并重复绘制，支持 50 条、空列表、整批失败�
   const fixture = JSON.parse(await readFile(new URL('../docs/audits/2026-11-06-design-review/visual-fixtures.json', import.meta.url)));
   const seed = fixture.inventory.data.mailboxes.find(row => row.type === 'relay');
   const aliases = Array.from({ length: 51 }, (_, index) => ({ ...seed, id: `page-${index}`,
-    email: `page-${index}@example.test`, health: 'normal', notes: '' }));
+    email: `page-${index}@example.test`, health: 'normal', notes: '',
+    createdAt: new Date(Date.UTC(2026, 10, 10, 10, 0, 60 - index)).toISOString() }));
   fixture.inventory.data.mailboxes = aliases;
   const parent = fixture.inventory.data.appleRelay.parents[0];
   const intercepted = await interceptDesign(context, { localFixtures: fixture, skipRechargeAssets: true });
