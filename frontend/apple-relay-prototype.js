@@ -753,8 +753,7 @@
         (!query || `${r.email} ${r.id} ${displayId('alias', r)} ${r.parentMailboxId || ''} ${displayId('parent', r.parentMailboxId)} ${parentEmail(r.parentMailboxId)} ${r.notes || ''} ${r.createdBy || ''} ${r.importId || ''} ${displayImportId(r.importId)} ${platformLabel(r)} ${A.modules.inventory?.mailboxRegistrationAccount?.(r)?.id || ''}`
           .toLowerCase().includes(query))
     );
-    const matchesUse = (row) =>
-      !view.inventory || (row.inventoryState || 'available') === view.inventory;
+    const matchesUse = row => !view.inventory || aliasUse(row) === view.inventory;
     const matchesHealth = (row) => !view.health || aliasHealth(row) === view.health;
     const rows = matching.filter((row) => matchesUse(row) && matchesHealth(row));
     const filters = `<select id="relay-filter-parent" aria-label="筛选所属主邮箱">${A.options([['', '全部主邮箱'], ...parents.filter((p) => !p.deleted).map((p) => [p.id, p.email])], view.parentId)}</select>`;

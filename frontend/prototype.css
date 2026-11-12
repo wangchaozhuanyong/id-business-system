@@ -2523,15 +2523,33 @@ dialog::backdrop {
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
-  margin: 12px 0;
+  margin: 0;
+  padding-block: var(--toolbar-padding-block);
 }
 .online-tool-mail-filters > input {
   flex: 1 1 200px;
   min-width: 0;
+  max-width: 360px;
 }
 .online-tool-mail-filters > select {
   flex: 0 1 140px;
   min-width: 100px;
+}
+.online-tool-mail-filters > .button {
+  margin-left: auto;
+}
+.mailbox-pool-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  padding-block: var(--toolbar-padding-block);
+  border-bottom: 1px solid var(--line);
+}
+.mailbox-pool-toolbar h3 {
+  margin: 0;
+  font-size: 14px;
 }
 .mailbox-pool-actions,
 .mailbox-page-controls,
@@ -2596,8 +2614,12 @@ dialog::backdrop {
   text-overflow: ellipsis;
 }
 .mailbox-row-actions {
+  align-items: center;
   gap: 8px;
   height: auto;
+}
+.mailbox-row-actions > .button {
+  flex: none;
 }
 .plugin-tool-page .plugin-tool-body {
   padding: 0;
@@ -2664,26 +2686,10 @@ dialog::backdrop {
 .mailbox-account__date {
   color: var(--secondary);
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
 }
 .mailbox-account__more {
-  width: 100%;
   padding-inline: 8px;
-}
-.mailbox-account__actions[popover] {
-  position: fixed;
-  inset: auto;
-  margin: 0;
-  padding: 6px;
-  width: max-content;
-  max-width: calc(100vw - 24px);
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
-  box-shadow: var(--shadow);
-}
-.mailbox-account__actions:popover-open {
-  display: grid;
-  gap: 6px;
 }
 .mailbox-setup-guides {
   display: grid;
@@ -2695,8 +2701,23 @@ dialog::backdrop {
   color: var(--text);
   margin-bottom: 4px;
 }
+.mailbox-credential-guide {
+  display: grid;
+  gap: 10px;
+}
+.mailbox-credential-guide ol {
+  margin: 0;
+  padding-left: 20px;
+}
+.mailbox-credential-guide li + li {
+  margin-top: 10px;
+}
+.mailbox-credential-guide p {
+  margin: 0;
+  font-size: inherit;
+  line-height: inherit;
+}
 @media (max-width: 760px) {
-  .mailbox-pool-actions,
   .online-tool-mail-filters,
   .list-controls--filters .online-tool-mail-filters {
     display: grid;
@@ -2712,6 +2733,39 @@ dialog::backdrop {
   }
   .list-controls--filters .online-tool-mail-filters input {
     max-width: none;
+  }
+  .mailbox-pool-toolbar {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .mailbox-pool-toolbar > .section-title-row {
+    grid-column: 1 / 3;
+    min-height: 44px;
+  }
+  .mailbox-pool-actions {
+    display: contents;
+  }
+  .mailbox-pool-actions > .button {
+    min-width: 0;
+    padding-inline: 8px;
+  }
+  .mailbox-pool-actions .icon {
+    display: none;
+  }
+  .online-tool-mail-filters {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+  }
+  .online-tool-mail-filters > input {
+    grid-column: 1 / -1;
+    max-width: none;
+  }
+  .online-tool-mail-filters > .button {
+    margin-left: 0;
+    padding-inline: 10px;
+  }
+  .online-tool-mail-filters > .button .icon {
+    display: none;
   }
 }
 .online-tool-download-option {
@@ -5264,6 +5318,52 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
 .summary-item:nth-child(3n + 2) .summary-label::before { background: var(--success); }
 .summary-item:nth-child(3n + 3) .summary-label::before { background: var(--violet); }
 .drawer:has(.commerce-field-grid, .form-grid):not([data-layout='compact-form']) { width: min(800px, 100%); }
+.drawer[data-layout='mailbox-operation']:has(.mailbox-pool-form) {
+  width: min(560px, 100%);
+}
+.mailbox-pool-form .form-grid {
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
+}
+.mailbox-pool-form .form-grid .field {
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+}
+.mailbox-pool-form .field > label,
+.mailbox-pool-form .field > label:has(+ .field-title-help) {
+  grid-area: 1 / 1;
+  padding: 0;
+  color: var(--text);
+}
+.mailbox-pool-form .field > .field-title-help {
+  grid-area: 1 / 2;
+  justify-self: start;
+  margin: 0;
+}
+.mailbox-pool-form .field > .field-control,
+.mailbox-pool-form .field:has(> .field-title-help) > .field-control {
+  grid-area: 2 / 1 / 3 / -1;
+}
+.mailbox-pool-form textarea {
+  resize: vertical;
+}
+.mailbox-credential-guide li > .mailbox-guide-link {
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  margin-bottom: 6px;
+  font-size: 12px;
+  white-space: normal;
+  text-align: left;
+  justify-content: flex-start;
+}
+.mailbox-pool-form .inline-notice {
+  margin-bottom: 20px;
+}
+[data-mailbox-operation] [data-mailbox-pool-issued] {
+  overflow-wrap: anywhere;
+}
 .tag:is(.success, .warning, .danger, .blue)::before { content: ''; width: 5px; height: 5px; flex: none; background: currentColor; border-radius: 50%; }
 
 .drawer[data-layout='apple-ledger'] {

@@ -226,11 +226,15 @@ export async function readMailboxImap(item, { verifyOnly = false } = {}) {
 function normalizeMessages(value) {
   if (!Array.isArray(value) || value.length > 20) throw new Error('invalid mail response');
   const safe = (text, max) => typeof text === 'string' ? text.slice(0, max) : '';
-  return value.map((row) => ({
-    subject: safe(row?.subject, 500),
-    receivedAt: safe(row?.receivedAt, 64),
-    body: safe(row?.body, 2000)
-  }));
+  return value.map((row) => {
+    const body = safe(row?.body, 16_000);
+    return {
+      subject: safe(row?.subject, 500),
+      receivedAt: safe(row?.receivedAt, 64),
+      body: body.slice(0, 2000),
+      extractedCode: extractManagedMailboxCode(body)
+    };
+  });
 }
 
 function storefrontMessages(value, limit, address) {
@@ -336,9 +340,7 @@ export function createManagedMailboxQuery({ store, publicOrigin, storefrontOrigi
       send(200, {
         success: true, targetType: 'PRIMARY', primaryEmail: user.slice(0, 1) + '***@' + host,
         codeExpiresAt: item.expiresAt,
-        items: rows.map(({ body, ...row }) => ({
-          ...row, body, extractedCode: extractManagedMailboxCode(body)
-        }))
+        items: rows
       });
     } catch {
       if (!response.destroyed) send(503, { error: '邮箱暂不可用，请联系管理员核对授权' });

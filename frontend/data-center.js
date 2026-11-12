@@ -32,7 +32,8 @@
       <section class="panel" aria-labelledby="traffic-overview-title">
         <div class="panel-heading data-traffic-heading">
           <div class="section-title-row"><h2 id="traffic-overview-title">访问概况</h2>${A.titleInfo('访问概况',
-            '一次访问可以浏览多页。装修站的访客数在所选时段内去重，不能把每日人数相加。各网站的访问次数按各自报表口径统计。',
+            '一次访问可以浏览多页。装修站的访客数在所选时段内去重，不能把每日人数相加。各网站的访问次数按各自报表口径统计。' +
+            '商城数据含估算，切换日期范围时，同一天的数字也可能变化。',
             'traffic-overview-help')}</div>
           <div class="data-traffic-filters">
             <div class="data-traffic-site"><label for="data-center-site">网站</label><select id="data-center-site" ${disabled}>${[...sites].map(([value, label]) =>
@@ -77,6 +78,7 @@
       <strong>${A.esc(report.daily[0].date)} 至 ${A.esc(last)}</strong>
       <span>统计时区 ${A.esc(zone)}</span>
       <span>上次读取 <time datetime="${time.toISOString()}">${A.esc(timestamp)}</time></span>
+      ${report.provider === 'cloudflare' && report.status === 'ready' ? '<span>含估算</span>' : ''}
       <span class="data-traffic-today">${note}</span>
       ${report.thresholded ? '<span>部分数据因隐私限制未显示</span>' : ''}
     </div>`;
