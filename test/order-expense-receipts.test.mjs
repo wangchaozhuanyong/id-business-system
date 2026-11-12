@@ -14,12 +14,13 @@ function setup(t) {
   const store = createLocalBusinessStore(':memory:');
   t.after(() => store.close());
   const card = { product: 'GPT', payment: '银行卡', cardId: 'recharge:7', start: '2026-11-03T12:00',
-    paidConfirmed: true, costBasis: 'standard' };
+    paidAmount: '20', paidCurrency: 'USD', paidConfirmed: false, costBasis: 'standard' };
   const orders = [
     { id: 'claude-fixture', orderNo: 'SYN-CLAUDE', email: 'private-fixture@example.test',
-      product: 'Claude Pro', payment: '银行卡', costBasis: 'standard', paidConfirmed: true },
+      product: 'Claude Pro', payment: '银行卡', costBasis: 'standard',
+      paidAmount: '20', paidCurrency: 'USD', paidConfirmed: false },
     { id: 'actual-fixture', orderNo: 'SYN-ACTUAL', paidConfirmed: true, costBasis: 'actual',
-      actualCostAmount: '40', actualCostCurrency: 'CNY' },
+      paidAmount: '40', paidCurrency: 'CNY', actualCostAmount: '40', actualCostCurrency: 'CNY' },
     { ...card, id: 'card-fixture', orderNo: 'SYN-CARD', issueFeeSnapshot: { cardId: card.cardId, applied: true, amountUsd: '0.5' } },
     { ...card, id: 'second-card-use', orderNo: 'SYN-CARD-2' },
     { ...card, cardId: 'recharge:8', id: 'incomplete-card', orderNo: 'SYN-CARD-INCOMPLETE' },

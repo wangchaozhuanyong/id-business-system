@@ -34,11 +34,12 @@ const fixtures = () => ({
   commerce: { version: 1, data: {
     orders: [
       order('a', 3, { costConfirmed: false, issueFeeSnapshot: { cardId, applied: true, amountUsd: '0.5' } }),
-      order('b', 4, { plan: 'Pro 200', costConfirmed: false, costBasis: 'actual', actualCostAmount: '110', actualCostCurrency: 'CNY' }),
+      order('b', 4, { plan: 'Pro 200', paidConfirmed: false, receiptConfirmed: false,
+        costConfirmed: false, costBasis: 'actual', actualCostAmount: '110', actualCostCurrency: 'CNY' }),
       order('c', 5, { receiptConfirmed: false, saleAmount: '' }),
       order('unverified', 5, { cardId: 'recharge:2', issueFeeSnapshot: { cardId: 'recharge:2', applied: false, pending: true } }),
       order('legacy', 6, {
-        source: '历史入库', cardId: '', paidConfirmed: false, fxSnapshot: null,
+        source: '历史入库', cardId: '', paidConfirmed: false, receiptConfirmed: false, fxSnapshot: null,
         refunds: [{ id: 'refund-legacy', amount: '15', currency: 'CNY' }]
       }),
       order('unlinked', 7, {
@@ -188,9 +189,12 @@ test('按套餐独立汇总实收、成本、分摊及费用来源，并用原�
       await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
       await page.locator('#commerce-search').fill('');
       await page.getByRole('tab', { name: '待核算' }).click();
+      assert.equal(await page.locator('tr[data-row-id="b"]').count(), 0, '已录入金额的旧单不进入待核算');
       assert.equal(await page.locator('tr[data-row-id="unverified"]').count(), 0);
       assert.match(await page.locator('tr[data-row-id="c"] [data-column="reason"]').textContent(), /缺少已登记的收款金额/);
-      assert.match(await page.locator('tr[data-row-id="legacy"] [data-column="reason"]').textContent(), /缺少已登记的代付金额|缺少有效汇率快照/);
+      const legacyReason = await page.locator('tr[data-row-id="legacy"] [data-column="reason"]').textContent();
+      assert.match(legacyReason, /缺少有效汇率快照/);
+      assert.doesNotMatch(legacyReason, /缺少已登记的代付金额/);
 
       await page.getByRole('tab', { name: '统计概览' }).click();
       await page.getByLabel('产品', { exact: true }).selectOption('GPT');
@@ -213,7 +217,9 @@ test('按套餐独立汇总实收、成本、分摊及费用来源，并用原�
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
       await page.goto(origin + '/#/overview');
       const profitMetric = page.locator('[data-overview-metric="profit"]');
-      await page.getByRole('button', { name: '近 30 天', exact: true }).click();
+      const compactRange = page.getByRole('combobox', { name: '统计时间范围' });
+      if (await compactRange.isVisible()) await compactRange.selectOption({ label: '近 30 天' });
+      else await page.getByRole('button', { name: '近 30 天', exact: true }).click();
       await profitMetric.getByText(/2 笔开卡费未分摊/).waitFor();
       await profitMetric.getByText(/211\.9198/).waitFor();
       await profitMetric.getByText('已核算 6 笔 · 待核算 2 笔', { exact: true }).waitFor();

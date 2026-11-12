@@ -6000,11 +6000,88 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
   .order-submission-navigation > .button { font-size: 11px; }
 }
 
-.subscription-center-nav {
+.subscription-center-bar {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 24px;
+  margin-block-end: var(--section-gap);
+  padding: var(--toolbar-padding-block) var(--panel-padding-inline);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.subscription-center-nav {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
   gap: 8px;
-  margin-block-end: 12px;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.subscription-center-nav > .button {
+  flex: none;
+  padding-inline: 10px;
+}
+.subscription-center-content {
+  flex: 1 1 600px;
+  min-width: 0;
+  min-height: calc(var(--tab-row-height) + 1px);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+}
+.subscription-center-content:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 4px;
+  border-radius: 2px;
+}
+.subscription-center-content > .tabs {
+  padding-inline: 0;
+}
+.subscription-center-content .summary-strip {
+  grid-auto-flow: column;
+  grid-template-columns: none;
+  grid-auto-columns: minmax(max-content, 1fr);
+  min-height: calc(var(--tab-row-height) + 1px);
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+}
+.subscription-center-content .summary-strip > .summary-item {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  grid-column: auto;
+  padding: 0 16px;
+  border: 0;
+  white-space: nowrap;
+}
+.subscription-center-content .summary-strip > .summary-item + .summary-item {
+  border-left: 1px solid var(--line);
+}
+.subscription-center-content .summary-strip > .summary-item:last-child:nth-child(odd) {
+  grid-column: auto;
+}
+.subscription-center-content .summary-label {
+  flex: none;
+  margin: 0;
+  font-size: 12px;
+  line-height: 24px;
+}
+.subscription-center-content .summary-number {
+  flex-wrap: nowrap;
+  gap: 4px;
+  margin: 0;
+  font-size: 20px;
+  line-height: 24px;
+}
+.subscription-center-content .summary-number small {
+  margin: 0;
 }
 
 .renewal-workbench {

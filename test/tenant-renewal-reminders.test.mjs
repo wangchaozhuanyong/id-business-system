@@ -54,6 +54,11 @@ test('租户提醒设置独立持久化，旧客户端保存保留设置', () =>
 });
 
 test('处理只记录同租户同账号同周期，并由服务端记录真实操作人和时间', () => {
+  const legacy = seed();
+  for (const order of legacy.orders) Object.assign(order, { paidConfirmed: false, receiptConfirmed: false });
+  const legacyNext = handled(legacy);
+  prepare(legacy, legacyNext, tenantRenewalHandledAction);
+  assert.deepEqual(legacyNext.orders, legacy.orders, '已录入周期的提醒不依赖旧财务确认，也不改写金额');
   const before = seed(), next = handled(before);
   prepare(before, next, tenantRenewalHandledAction);
   assert.deepEqual(next.orders, before.orders);
@@ -83,7 +88,7 @@ test('拒绝跨租户、跨账号、超出提醒窗口和失效的订单', () =>
   later.orders[0].expiry = '2026-11-14T20:00';
   assert.throws(() => prepare(later, handled(later, { orderIds: ['first'], expiry: cycleEnd + 86_400_000 }),
     tenantRenewalHandledAction), /尚未进入提醒时间/);
-  for (const extra of [{ cancelled: true }, { subscriptionEnded: true }, { paidConfirmed: false },
+  for (const extra of [{ cancelled: true }, { subscriptionEnded: true }, { entitlementStatus: 'pending' },
     { start: '2026-11-12T10:00' }]) {
     const invalid = seed();
     Object.assign(invalid.orders[0], extra);

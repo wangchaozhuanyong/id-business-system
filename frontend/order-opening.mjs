@@ -47,15 +47,21 @@ export const rechargeOrderOwner = order =>
 
 export const automaticGptOrder = order => order?.product === 'GPT' && order.source === '线上代充' && Boolean(order.taskId);
 
+// Manual entries record actual receipts. The legacy confirmation flag only
+// distinguishes configured prices from receipts on automatically imported tasks.
+export function orderReceiptRecorded(order) {
+  return Boolean(order && (order.source !== '线上代充' || order.receiptConfirmed === true) &&
+    typeof order.saleAmount === 'string' && /^\d{1,16}(?:\.\d{1,4})?$/.test(order.saleAmount) &&
+    typeof order.saleCurrency === 'string' && /^[A-Z]{3}$/.test(order.saleCurrency));
+}
+
 export const rechargeRenewalExpiryPending = order => automaticGptOrder(order) && Boolean(order.previousOrderId) &&
   order.entitlementStatus === 'active' && !order.cancelled && !order.subscriptionEnded &&
   !order.expiry && Number.isFinite(subscriptionTime(order.rechargeCompletedAt));
 
 export function rechargeOrderCompletion(order, customer) {
   const ownerId = rechargeOrderOwner(order);
-  const receiptRecorded = order.receiptConfirmed === true &&
-    typeof order.saleAmount === 'string' && /^\d{1,16}(?:\.\d{1,4})?$/.test(order.saleAmount) &&
-    typeof order.saleCurrency === 'string' && /^[A-Z]{3}$/.test(order.saleCurrency);
+  const receiptRecorded = orderReceiptRecorded(order);
   const missing = [
     !ownerId && '归属人',
     !customer && (order.customerId ? '客户关联' : '客户'),
@@ -134,15 +140,12 @@ export function manualOrderDetailsMissing(order, customers, now = Date.now()) {
   if (!manualBusinessOrder(order)) return null;
   const historicalSale = ['Claude Pro', 'Claude Max'].includes(order.product) &&
     order.source === '历史入库' && order.businessType === '成品交付' && order.accountId;
-  const hasSalePrice = typeof order.saleAmount === 'string' && /^\d{1,16}(?:\.\d{1,4})?$/.test(order.saleAmount) &&
-    /[1-9]/.test(order.saleAmount) && typeof order.saleCurrency === 'string' && /^[A-Z]{3}$/.test(order.saleCurrency);
   return {
     customer: !customers.some(row => row.id === order.customerId),
     account: orderNeedsAccount(order),
     period: !(subscriptionTime(order.expiry) > subscriptionTime(order.start)),
     end: order.subscriptionEnded === true && !Number.isFinite(orderTerminationTime(order, now)),
-    ...(historicalSale && !order.actualCostAmount && { cost: true }),
-    ...(historicalSale && order.receiptConfirmed !== true && hasSalePrice && { receipt: true })
+    ...(historicalSale && !order.actualCostAmount && { cost: true })
   };
 }
 
@@ -157,9 +160,11 @@ export function orderOpeningConfirmed(order, now, legacyConfirmed = false) {
     return Number.isFinite(completed) && completed <= now &&
       (!Number.isFinite(start) || completed >= start) && (!Number.isFinite(expiry) || completed < expiry);
   }
+  // A saved manual subscription period records the opening itself. Accounting
+  // confirmation and optional contact details do not determine service status.
   return order.entitlementStatus === 'active' || legacyConfirmed ||
     (['管理员手工', '历史入库'].includes(order.source) &&
-      order.paidConfirmed === true && order.receiptConfirmed === true);
+      subscriptionTime(order.expiry) > subscriptionTime(order.start));
 }
 
 export function subscriptionPeriodState({ start, expiry, confirmed, ended, cancelled, failed }, now) {
@@ -177,5 +182,5 @@ if (typeof window !== 'undefined') window.IDOrderOpening = Object.freeze({
   orderOpeningConfirmed, orderTerminationTime, orderNeedsAccount, manualOrderDetailsMissing,
   validOrderEmail, validOrderXHandle, subscriptionPeriodState, subscriptionStateLabels, subscriptionTime,
   matchOrderCustomer, orderCustomerCreateAction, orderFieldChanged, subscriptionChainRoot,
-  automaticGptOrder, rechargeOrderOwner, rechargeOrderCompletion, rechargeRenewalExpiryPending, expiredDuration, subscriptionDuration
+  automaticGptOrder, orderReceiptRecorded, rechargeOrderOwner, rechargeOrderCompletion, rechargeRenewalExpiryPending, expiredDuration, subscriptionDuration
 });

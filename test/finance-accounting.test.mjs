@@ -114,7 +114,8 @@ test('确认净收款不等利润，同币种无汇率也统计，跨币种只�
   order.fxSnapshot = createOrderSnapshot(quote, order, clock);
   assert.equal(receipt(order, 'MYR'), '112.5000');
   assert.equal(receipt({ ...order, start: '2026-11-04T13:00' }, 'MYR'), null);
-  assert.equal(receipt({ ...order, receiptConfirmed: false }), null);
+  assert.equal(receipt({ ...order, receiptConfirmed: false }), '180.0000');
+  assert.equal(receipt({ ...order, source: '线上代充', receiptConfirmed: false }), null);
   assert.equal(receipt({ ...order, cancelled: true }), null);
   assert.equal(receipt({ ...order, refunds: undefined }), null);
   assert.equal(receipt({ ...order, refunds: [{ amount: '251', currency: 'CNY' }] }), null);

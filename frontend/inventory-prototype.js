@@ -1237,7 +1237,7 @@
               appPasswordColumn
             ]
           : []),
-        { id: 'country', label: usesAccountLocation(type) ? '注册国家' : '国家地区' },
+        { id: 'country', label: type === 'apple' ? '注册地区' : usesAccountLocation(type) ? '注册国家' : '国家地区' },
         ...(usesRegistrationCity(type) ? [{ id: 'city', label: '注册城市' }] : []),
         {
           id: 'status',
@@ -1988,18 +1988,19 @@
       country
     );
     fields += field(
-      account ? '注册国家' : '国家地区',
+      type === 'apple' ? '注册地区' : account ? '注册国家' : '国家地区',
       'inventory-country-edit',
       account
         ? `<div class="option-entry-controls">${countrySelect}${locationSettingsButton(type, 'asset', id)}</div>`
         : countrySelect,
       (usesAccountLocation(type) && !purchased && (!original || Boolean(original.country))) ||
-        (['google', 'apple'].includes(type) && (!original || Boolean(original.country)))
+        (['google', 'apple'].includes(type) && (!original || Boolean(original.country))),
+      type === 'apple' ? '记录注册这个苹果 ID 时所在的国家或地区，与当前设置的 Id地区分别保存。' : ''
     );
     if (fundingApple && window.IDAppleFunding) {
       fields += field('Id地区', 'inventory-appStoreRegion',
         select('inventory-appStoreRegion', [['', '请选择 Id地区'], ...Object.entries(window.IDAppleFunding.appleRegions)],
-          val('appStoreRegion')), !original, '以苹果 ID 在 App Store 使用的国家或地区为准。');
+          val('appStoreRegion')), !original, '记录这个苹果 ID 当前设置的国家或地区，用于匹配苹果内购地区。');
       if (!original)
         fields += field('期初余额（USD）', 'inventory-appleOpeningBalance',
           input('inventory-appleOpeningBalance', d['inventory-appleOpeningBalance'] ?? '0.00', 'inputmode="decimal"'), true);
@@ -2510,7 +2511,8 @@
         ['来源邮箱', source?.email || (asset.sourceMailboxId ? '待核对' : '未关联')],
         ...(sourceClaim ? [['邮箱领用批次', sourceClaim.label]] : [])
       ] : []),
-      [isAccount(asset) ? '注册国家' : '国家地区', asset.country || '未填写'],
+      [asset.type === 'apple' ? '注册地区' : isAccount(asset) ? '注册国家' : '国家地区', asset.country || '未填写'],
+      ...(asset.type === 'apple' ? [['Id地区', window.IDAppleFunding?.appleRegions[asset.appStoreRegion] || '未填写']] : []),
       ...(usesRegistrationCity(asset.type) ? [['注册城市', asset.city || '未填写']] : []),
       ['来源渠道', asset.source || '未填写'],
       ['账号状态', { normal: asset.status, dead: '死号', unlocking: '解封中' }[asset.health]],
@@ -4738,7 +4740,7 @@
       showDrawer(
         locationOnly ? `${typeLabel(type)}国家地区设置` : '本表设置',
         '这些选项只作用于本资料表。',
-        `<form id="inventory-settings-form" data-inventory-draft="${key}" novalidate><input type="hidden" name="inventory-settings-type" value="${type}" /><div class="option-settings-groups">${api.optionListEditor({ id: 'inventory-settings-countries', label: '国家地区', itemLabel: '国家名称', values: config.countries, minItems: 1, draft: saved })}${locationOnly ? '<input type="hidden" name="inventory-location-only" value="1" />' : api.optionListEditor({ id: 'inventory-settings-sources', label: '来源渠道', itemLabel: '来源名称', values: config.sources, minItems: 1, draft: saved })}${!locationOnly && type === 'claude' ? field('养号阈值', 'inventory-settings-hours', input('inventory-settings-hours', saved['inventory-settings-hours'] ?? config.hours, 'type="number" min="1" max="8760"'), false, '从注册时间起计算。默认 72 小时，达到门槛且账号正常时才可提取。') : ''}${cities}</div></form>`,
+        `<form id="inventory-settings-form" data-inventory-draft="${key}" novalidate><input type="hidden" name="inventory-settings-type" value="${type}" /><div class="option-settings-groups">${api.optionListEditor({ id: 'inventory-settings-countries', label: type === 'apple' ? '注册地区' : '国家地区', itemLabel: '国家名称', values: config.countries, minItems: 1, draft: saved })}${locationOnly ? '<input type="hidden" name="inventory-location-only" value="1" />' : api.optionListEditor({ id: 'inventory-settings-sources', label: '来源渠道', itemLabel: '来源名称', values: config.sources, minItems: 1, draft: saved })}${!locationOnly && type === 'claude' ? field('养号阈值', 'inventory-settings-hours', input('inventory-settings-hours', saved['inventory-settings-hours'] ?? config.hours, 'type="number" min="1" max="8760"'), false, '从注册时间起计算。默认 72 小时，达到门槛且账号正常时才可提取。') : ''}${cities}</div></form>`,
         button('取消', 'inventory-close') +
           '<button class="button primary" form="inventory-settings-form" type="submit">确认设置</button>',
         key

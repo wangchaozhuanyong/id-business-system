@@ -1,7 +1,8 @@
 import { addDecimalStrings } from '../../modules/contracts/decimal.ts';
-import { buildCardIssueAllocations, calculateOrder, currencies } from '../../modules/finance/accounting.mjs';
+import { buildCardIssueAllocations, calculateOrder, currencies, hasRecordedPaymentAmount } from '../../modules/finance/accounting.mjs';
 import { checkBankReturns } from '../local-business-integrity.mjs';
 import { migrationInputSchema } from './migration-input.mjs';
+import { orderReceiptRecorded } from '../../frontend/order-opening.mjs';
 
 const reportCurrencies = ['CNY', 'MYR'];
 const amountPattern = /^\d{1,20}(?:\.\d{1,4})?$/;
@@ -158,8 +159,9 @@ function checkOrder(order, indexes, clock, migrationGaps, cardIssueAllocations) 
   const sold = money(order.saleAmount, order.saleCurrency);
   if (!paid.amount || !paid.currency) issues.add('缺少有效的原币代付金额或币种');
   if (!sold.amount || !sold.currency) issues.add('缺少有效的原币实收金额或币种');
-  if (order.paidConfirmed !== true) issues.add('代付待确认');
-  if (order.receiptConfirmed !== true) issues.add('实收待确认');
+  if (!hasRecordedPaymentAmount(order)) issues.add(order.source === '线上代充'
+    ? '自动代充尚未取得实际扣款结果' : '缺少已登记的代付金额或币种');
+  if (!orderReceiptRecorded(order)) issues.add('缺少已登记的实收金额或币种');
   if (!order.start) issues.add('缺少订单订阅时点');
   const feeVersion = order.costSettings?.version;
   if (!Number.isSafeInteger(feeVersion) || feeVersion < 1) issues.add('缺少费用规则版本快照');

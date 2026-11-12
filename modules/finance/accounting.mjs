@@ -146,7 +146,7 @@ function netReceiptUnits(order) {
 }
 
 export function calculateConfirmedNetReceipt(order, { currency = 'CNY', clock = Date.now() } = {}) {
-  if (!order || order.receiptConfirmed !== true || order.cancelled || order.draft ||
+  if (!order || (order.source === '线上代充' && order.receiptConfirmed !== true) || order.cancelled || order.draft ||
       ['draft', '草稿'].includes(order.status) || !targets.includes(currency) ||
       !validCurrencyCode(order.saleCurrency) || !Array.isArray(order.refunds)) return null;
   try {
@@ -164,6 +164,12 @@ const bankProducts = ['GPT', 'Claude Pro', 'Claude Max', ...personalBankProducts
 const requiresCardAllocation = product => product === 'GPT' || personalBankProducts.includes(product);
 const unavailableOrders = ['draft', 'failed', '草稿', '失败'];
 const isAutomatic = (order) => order.source === '线上代充';
+// Saved manual amounts are accounting facts. This read rule never confirms a
+// payment, charges a wallet, or changes an automatic task's payment result.
+export function hasRecordedPaymentAmount(order) {
+  if (!order || (isAutomatic(order) && order.paidConfirmed !== true) || !validCurrencyCode(order.paidCurrency)) return false;
+  try { return unsigned(order.paidAmount) > 0n; } catch { return false; }
+}
 export const orderAccountingAt = (order) => isAutomatic(order) && order.rechargeCompletedAt || order.start;
 const stableCardId = (order) => {
   // A materials correction does not move the already-recorded opening fee to another card.
@@ -191,9 +197,9 @@ export function orderExpenseTerms(order, receipts) {
     if (receipt.voidedAt || mode === 'cash') continue;
     if (!Object.hasOwn(expenseAccountingModes, category) || !expenseAccountingModes[category].includes(mode))
       throw new Error('费用凭据的核算方式无效');
-    if (!order || receipt.orderId !== order.id || (!order.paidConfirmed && !usesRecordedClaudeSaleCost(order)) || order.draft ||
+    if (!order || receipt.orderId !== order.id || (!hasRecordedPaymentAmount(order) && !usesRecordedClaudeSaleCost(order)) || order.draft ||
         unavailableOrders.includes(order.status) || order.entitlementStatus === 'failed')
-      throw new Error('费用凭据须关联已确认代付或具备实际总成本的有效原单');
+      throw new Error('费用凭据须关联已登记代付或具备实际总成本的有效原单');
     if (mode === 'replace-kyc' && (order.costBasis !== 'standard' || order.payment !== '银行卡' ||
         !['Claude Pro', 'Claude Max'].includes(order.product)))
       throw new Error('仅按规则核算的 Claude 银行卡订单可以替换 KYC 参考成本');
@@ -232,7 +238,7 @@ function confirmedCardOpening(order, clock) {
   const cardId = stableCardId(order);
   const auto = isAutomatic(order);
   const evidence = Array.isArray(order.financialEvidence) ? order.financialEvidence : [];
-  const confirmed = auto || order.paidConfirmed === true || Boolean(cardId && evidence.some((row) =>
+  const confirmed = auto || hasRecordedPaymentAmount(order) || Boolean(cardId && evidence.some((row) =>
     row?.kind === 'payment' && row.payment === '银行卡' && row.cardId === cardId));
   const start = instant(order.start), expiry = instant(order.expiry);
   const at = auto ? instant(order.rechargeCompletedAt) : start;
@@ -248,7 +254,7 @@ function confirmedCardOpening(order, clock) {
 function canUseUnlinkedCardReference(order, clock, opening) {
   if (order.cardId || !requiresCardAllocation(order.product) || order.payment !== '银行卡' || order.costBasis !== 'standard' ||
       !['管理员手工', '历史入库'].includes(order.source) ||
-      order.paidConfirmed !== true ||
+      !hasRecordedPaymentAmount(order) ||
       order.cancelled || order.draft || unavailableOrders.includes(order.status)) return false;
   const { cardId, state } = opening || confirmedCardOpening(order, clock);
   return !cardId && state === 'opened';
@@ -388,7 +394,8 @@ function calculateOrderAmounts(order, { appleLedger, cardIssueAllocations, expen
   includeRevenue) {
   const missing = new Set();
   const recordedSaleCost = usesRecordedClaudeSaleCost(order, appleLedger);
-  const paymentRequirement = recordedSaleCost ? { requiresPaymentConfirmation: false } : {};
+  const paymentRecorded = hasRecordedPaymentAmount(order);
+  const paymentRequirement = { requiresPaymentConfirmation: !recordedSaleCost && !paymentRecorded };
   try {
     if (!targets.includes(currency)) throw new Error('统计币种无效');
     const allocation = cardIssueAllocations?.get(order.id);
@@ -396,7 +403,7 @@ function calculateOrderAmounts(order, { appleLedger, cardIssueAllocations, expen
     const unallocatedCard = allocation?.status === 'unlinked' || allocation?.status === 'pending' ||
       (!cardIssueAllocations && canUseUnlinkedCardReference(order, clock));
     const expenseTerms = orderExpenseTerms(order, expenseReceipts.filter(row => activeExpenseReceipt(row, clock)));
-    const sameCurrency = (recordedSaleCost || (order.paidConfirmed && !order.fxSnapshot)) &&
+    const sameCurrency = (recordedSaleCost || (paymentRecorded && !order.fxSnapshot)) &&
       order.costBasis === 'actual' && order.actualCostCurrency === currency &&
       (!includeRevenue || order.saleCurrency === currency) &&
       (!order.bankReturns?.length || order.paidCurrency === currency) &&
@@ -412,9 +419,9 @@ function calculateOrderAmounts(order, { appleLedger, cardIssueAllocations, expen
       return unsigned(snapshot.rates[code], 8);
     };
     const value = (units, code) => units === 0n ? 0n : units * rate(code);
-    if (!recordedSaleCost && !isAutomatic(order) && order.paidConfirmed === false)
-      throw new Error('缺少已登记的代付金额');
-    if (includeRevenue && order.receiptConfirmed === false)
+    if (!recordedSaleCost && !paymentRecorded)
+      throw new Error(isAutomatic(order) ? '自动代充尚未取得实际扣款结果' : '缺少已登记的代付金额或币种');
+    if (includeRevenue && isAutomatic(order) && order.receiptConfirmed !== true)
       throw new Error('缺少已登记的收款金额');
     const paid = recordedSaleCost ? 0n : unsigned(order.paidAmount);
     const received = includeRevenue ? netReceiptUnits(order) : 0n;
@@ -431,7 +438,7 @@ function calculateOrderAmounts(order, { appleLedger, cardIssueAllocations, expen
     let returned;
     if (apple) {
       // Allocation.returned is posted by the existing Apple receipt ledger only.
-      if (order.paidConfirmed && !(order.externalApplePayment === true && !order.appleIdId) &&
+      if ((order.paidConfirmed || order.appleIdId) && !(order.externalApplePayment === true && !order.appleIdId) &&
           (!appleLedger || appleLedger.orderId !== order.id ||
           appleLedger.appleIdId !== order.appleIdId || unsigned(appleLedger.amount) !== paid))
         throw new Error('Apple 实际扣款及回款台账待核对');

@@ -107,7 +107,7 @@ test('分母保留成功后撤单与退款，排除重复任务、失败和未�
   const future = { ...c, id: 'future', start: '2026-11-11T12:00', cancelled: false, paidConfirmed: true };
   const failed = { ...c, id: 'failed', status: 'failed' };
   const draft = { ...c, id: 'draft', draft: true };
-  const waiting = { ...a, id: 'waiting', paidConfirmed: false };
+  const waiting = { ...a, id: 'waiting', paidAmount: '', paidConfirmed: false };
   const allocation = allocate([waiting, copied, a, failed, c, draft, b, future]);
   assert.equal(allocation.get(a.id).count, 3);
   assert.equal(allocation.get(c.id).amountUsd, '0.1666');
@@ -162,7 +162,7 @@ test('已确认的无卡 GPT 旧单计算参考利润，保留已登记费用且
   assert.equal(compute(recorded, allocate([recorded])).cardIssueUnallocated, undefined);
 
   const unconfirmed = { ...legacy, paidConfirmed: false };
-  assert.equal(compute(unconfirmed, allocate([unconfirmed])).status, 'pending');
+  assert.equal(compute(unconfirmed, allocate([unconfirmed])).profit, '11.8400');
   const noQuote = { ...legacy, fxSnapshot: null };
   assert.match(compute(noQuote, allocate([noQuote])).reason, /缺少有效汇率快照/);
   const automatic = { ...legacy, source: '线上代充', taskId: 'no-card-task', rechargeCompletedAt: '2026-11-06T04:00:00.000Z' };
