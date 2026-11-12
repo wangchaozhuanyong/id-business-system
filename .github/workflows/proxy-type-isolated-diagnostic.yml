@@ -2,7 +2,7 @@ name: Isolated recharge proxy diagnostic
 on:
   push:
     branches: [codex/shared-proxy-types-canary-fix-20261113]
-    paths: [.github/workflows/proxy-type-isolated-diagnostic.yml, deploy/recharge-core/canary.py, modules/recharge/codexdaichong/native-routing.mjs]
+    paths: [.github/workflows/proxy-type-isolated-diagnostic.yml, 'deploy/recharge-core/**', modules/recharge/codexdaichong/native-routing.mjs]
 
 permissions:
   contents: read
