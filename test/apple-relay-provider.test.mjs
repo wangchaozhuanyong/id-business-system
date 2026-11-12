@@ -266,6 +266,14 @@ function fakeVendure() {
     assert.equal(input.headers['vendure-api-key'], state.key);
     const { query, variables } = JSON.parse(input.body);
     calls.push({ query, variables, path: new URL(url).pathname });
+    if (query.includes('icloudMailHealth')) {
+      return Response.json({ data: { icloudMailHealth: {
+        listeners: [{ primaryAccountId: 'vp-two', state: 'recovering' },
+          { primaryAccountId: 'vp-one', state: 'listening', email: 'private@example.test' }],
+        arrivalSample: { outcome: 'measured', attempted: 2, arrivalToStoreMs: [1300],
+          newestStoredAt: '2026-11-12T10:00:00Z', messageId: 'private-fixture-message' }
+      } } });
+    }
     if (query.includes('icloudRelayTargets')) {
       return Response.json({ data: { icloudRelayTargets: {
         primaries: primaries.filter(row => variables.primaryIds.includes(row.id)),
@@ -491,7 +499,7 @@ async function listen(t, state) {
     if (request.url === '/api/local/apple-relay/public-query') {
       return service.handlePublicQuery(request, response);
     }
-    return service.handle(request, response, request.url, {
+    return service.handle(request, response, new URL(request.url, 'http://fixture.invalid').pathname, {
       id: request.headers['x-fixture-actor'] ?? 'relay-tester',
       role: request.headers['x-fixture-role'] ?? 'admin'
     });
@@ -509,7 +517,7 @@ async function listen(t, state) {
     const response = await fetch(
       `${origin}/api/local/apple-relay/${action}`,
       input === undefined
-        ? {}
+        ? { headers: { origin: explicitOrigin, 'x-fixture-actor': actorId, 'x-fixture-role': role } }
         : {
             method: 'POST',
             body: JSON.stringify(input),
@@ -1173,6 +1181,28 @@ test('the real Vendure operation names sync the verified parent and filter overb
       ['sync', 'relay-tester']
     ]
   );
+});
+
+test('read-only arrival sampling uses the requested binding and projects only numeric evidence', async t => {
+  const state = fixture();
+  const request = await listen(t, state);
+  assert.equal((await request('status')).status, 200);
+  assert.equal(state.upstream.calls.length, 0);
+  assert.equal((await request('status?sampleArrival=one', undefined, undefined, 'staff', 'employee')).status, 403);
+  assert.equal((await request('status?sampleArrival=missing')).status, 409);
+  assert.equal(state.upstream.calls.length, 0);
+  const result = await request('status?sampleArrival=one');
+  assert.equal(result.status, 200);
+  assert.deepEqual(state.upstream.calls[0].variables, { primaryId: 'vp-one' });
+  assert.match(state.upstream.calls[0].query, /icloudMailHealth\(sampleArrivalFor: \$primaryId\)/);
+  assert.doesNotMatch(state.upstream.calls[0].query, /bodyText|queryCode|messageId|email/i);
+  assert.deepEqual(result.body, {
+    listenerState: 'listening',
+    arrivalSample: { outcome: 'measured', attempted: 2, arrivalToStoreMs: [1300],
+      newestStoredAt: '2026-11-12T10:00:00.000Z' }
+  });
+  assert.match(result.headers.get('server-timing'), /vendure_health;dur=/);
+  assert.deepEqual(state.events, []);
 });
 
 test('inbox snapshots skip IMAP and one failed mailbox leaves the other results available', { timeout: 5000 }, async t => {

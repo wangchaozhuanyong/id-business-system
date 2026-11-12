@@ -139,6 +139,26 @@ function checkedRows(value) {
   return value;
 }
 
+function summarizeArrival({ listeners, arrivalSample }, remoteId) {
+  const listener = checkedRows(listeners).find(row => String(row.primaryAccountId) === remoteId);
+  if (!listener) throw new RelayError(409, '主邮箱监听资料已变更，请刷新后重试');
+  const listenerState = ['listening', 'recovering', 'unavailable', 'disabled', 'unknown'].includes(listener.state)
+    ? listener.state : 'unknown';
+  if (arrivalSample == null) return { listenerState, arrivalSample: null };
+  const { outcome, attempted, arrivalToStoreMs, newestStoredAt } = arrivalSample;
+  const newest = newestStoredAt == null ? null : Date.parse(newestStoredAt);
+  if (!['measured', 'no_messages', 'no_match', 'unavailable'].includes(outcome) ||
+      !Number.isInteger(attempted) || attempted < 0 || attempted > 20 ||
+      !Array.isArray(arrivalToStoreMs) || arrivalToStoreMs.length > attempted ||
+      !arrivalToStoreMs.every(ms => Number.isSafeInteger(ms) && ms >= 0) ||
+      (outcome === 'measured') !== (arrivalToStoreMs.length > 0) ||
+      (newest !== null && !Number.isFinite(newest))) {
+    throw new RelayError(502, 'Vendure 邮箱采样返回的资料格式不正确');
+  }
+  return { listenerState, arrivalSample: { outcome, attempted, arrivalToStoreMs,
+    newestStoredAt: newest === null ? null : new Date(newest).toISOString() } };
+}
+
 function activeParent(row) {
   return row && !row.deleted && row.status !== 'DISABLED';
 }
@@ -1133,6 +1153,17 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
         }
         if (action === 'status') {
           const local = await current();
+          const sampleParent = new URL(request.url ?? route, origin).searchParams.get('sampleArrival');
+          if (sampleParent !== null) {
+            requireAdministrator(actor, '只有管理员可以采样主邮箱收件延迟');
+            if (!provider) throw new RelayError(503, 'Vendure 邮箱服务尚未配置');
+            const target = localMailTarget(local, sampleParent, '');
+            const remoteId = target.parent.remoteId;
+            const health = await measureStage('vendure_health', () => provider.relayArrivalSample(remoteId));
+            if (!sameMailTarget(target, localMailTarget(await current(), sampleParent, '')))
+              throw new RelayError(409, '主邮箱资料已变更，请重新查询');
+            return writeJson(response, 200, summarizeArrival(health, remoteId));
+          }
           const parentIds = [...local.parents.values()]
             .filter((row) => activeParent(row) && remoteIdFor(row))
             .map(({ id }) => id);

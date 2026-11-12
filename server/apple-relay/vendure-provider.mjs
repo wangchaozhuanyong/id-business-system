@@ -138,6 +138,19 @@ export function createVendureMailboxProvider(config, fetchImpl = fetch) {
         'icloudRelayTargets'
       );
     },
+    relayArrivalSample(primaryId) {
+      return request(
+        adminUrl,
+        `query IdBusinessRelayArrival($primaryId: ID!) {
+          icloudMailHealth(sampleArrivalFor: $primaryId) {
+            listeners { primaryAccountId state }
+            arrivalSample { outcome attempted arrivalToStoreMs newestStoredAt }
+          }
+        }`,
+        { primaryId },
+        'icloudMailHealth'
+      );
+    },
     relayCodeTarget(queryCode, expected = {}) {
       return request(
         adminUrl,
