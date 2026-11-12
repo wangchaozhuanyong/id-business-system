@@ -122,13 +122,13 @@ test('五类订单提交后留在录入页，刷新最近记录并可连续录�
         assert.equal(await page.locator('#main #commerce-email').inputValue(), '', '只清理本次已保存草稿');
         assert.equal(await page.locator('#main #commerce-notes').inputValue(), '');
         const recent = page.locator('#commerce-entry-records');
-        const mobileRecords = page.getByRole('tab', { name: '最近订单', exact: true });
-        if (await mobileRecords.isVisible()) {
+        const mobileRecords = page.getByRole('button', { name: '最近订单', exact: true });
+        const mobile = await mobileRecords.isVisible();
+        if (mobile) {
           await mobileRecords.click();
-          await recent.getByRole('button', { name: '更多资料', exact: true }).click();
         }
         await recent.getByText('本次提交的草稿', { exact: true }).waitFor();
-        if (await mobileRecords.isVisible()) await page.getByRole('tab', { name: '填写资料', exact: true }).click();
+        if (mobile) await page.getByRole('button', { name: '返回填写', exact: true }).click();
         await page.locator('#commerce-email').fill('next-' + slug + '@example.test');
         await page.evaluate(() => { location.hash = '#/customers/new'; });
         await page.locator('#commerce-contact-name').waitFor();

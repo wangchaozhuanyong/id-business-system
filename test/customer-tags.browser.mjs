@@ -174,6 +174,7 @@ test('下拉设置页签支持来源标签持久化、历史选项和客户草�
   assert(await quickAdd.isDisabled());
   assert.equal(await page.locator('#drawer[open]').count(), 0);
   await page.locator('#commerce-email').fill('quick-draft@example.test');
+  await page.locator('.order-quick-customer-disclosure > summary').click();
   await inlineName.fill('订单快捷客户');
   await inlineWechat.fill('order_customer_wechat');
   await quickAdd.click();
@@ -214,6 +215,7 @@ test('下拉设置页签支持来源标签持久化、历史选项和客户草�
   assert.equal(await inlineName.inputValue(), '');
   assert.equal(await inlineWechat.inputValue(), '');
 
+  if (!(await inlineName.isVisible())) await page.locator('.order-quick-customer-disclosure > summary').click();
   await inlineName.fill(quickCustomer.name);
   await inlineWechat.fill(quickCustomer.wechat);
   assert(await quickAdd.isDisabled());

@@ -48,14 +48,19 @@ test('所有录单、编辑与续费入口共用支付方式、卡类型、选�
       const context = await browser.newContext({ viewport: { width, height: 1000 }, locale: 'zh-CN' });
       try {
         const traffic = await interceptDesign(context, { localFixtures: structuredClone(fixture), actor, skipRechargeAssets: true });
-        const writes = [], errors = [];
+        const writes = [], errors = [], prepared = new Set();
         await context.route('**/api/local/**', route => {
           if (route.request().method() === 'GET') return route.fallback();
-          if (new URL(route.request().url()).pathname === '/api/local/subscriptions/lookup') return route.fallback();
+          const path = new URL(route.request().url()).pathname;
+          if (path === '/api/local/subscriptions/lookup') return route.fallback();
           const command = route.request().postDataJSON();
-          if (new URL(route.request().url()).pathname === '/api/local/tenant-cards' && command.action === 'reveal')
+          if (path === '/api/local/tenant-cards' && command.action === 'reveal')
             return route.fulfill({ json: { number: '5555555555554444' } });
-          writes.push(new URL(route.request().url()).pathname);
+          if (path === '/api/local/subscription-renewal-card' && command.action === 'prepare') {
+            prepared.add(command.orderId);
+            return route.fulfill({ json: { orderId: command.orderId, hasCard: false, availability: 'review' } });
+          }
+          writes.push(path);
           return route.abort();
         });
         const page = await context.newPage();
@@ -247,9 +252,11 @@ test('所有录单、编辑与续费入口共用支付方式、卡类型、选�
           await page.locator('#drawer [data-action="drawer-close"]').first().click();
           await go('workspace/order/renew/layout-' + key);
           await form.locator('#commerce-cardTypeId').waitFor();
+          await form.locator('#commerce-proMaterialMode').selectOption(mode);
           await inspect(form, key, 'renewal', card);
         }
         assert.deepEqual(errors, []);
+        assert.deepEqual([...prepared].sort(), products.map(([key]) => 'layout-' + key).sort(), '续费录单只读核对原用卡');
         assert.deepEqual(writes, [], '布局验证不写入业务数据');
         assert.deepEqual(traffic.external, []);
         assert.deepEqual(traffic.unavailable, []);

@@ -24,9 +24,8 @@
   let targetId, savedId;
 
   function render() {
-    const title = A.header('订单不全',
-      '在原单补充客户和实收。代充成功后自动入单，领码人可处理自己的订单。',
-      D ? button('刷新', 'completion-refresh', '', 'refresh') : '');
+    const title = A.header('订单提交',
+      '在原单补充客户和实收。代充成功后自动入单，领码人可处理自己的订单。');
     if (!D) return title + '<section class="panel">' + A.empty('暂无可补全订单', '连接业务数据后显示已同步的代充订单。') + '</section>';
     const current = S.drafts.get(route)?.tab || 'pending';
     const available = snapshot?.canAssign ? tabs : tabs.slice(0, 2);
@@ -35,14 +34,20 @@
     const sourceRows = manual ? snapshot.manualItems || [] : (snapshot?.items || []).filter(row => row.state === current);
     const rows = sourceRows.filter(row => !query ||
       [row.orderNo, row.email, row.customerName || row.customer?.name].some(value => value?.toLowerCase().includes(query)));
-    const tabMarkup = available.map(([id, label]) => '<button type="button" class="tab' +
-      (id === current ? ' active' : '') + '" data-action="completion-tab" data-id="' + id +
-      '" aria-pressed="' + (id === current) + '">' + label + '</button>').join('');
+    const counts = new Map();
+    for (const row of snapshot?.items || []) counts.set(row.state, (counts.get(row.state) || 0) + 1);
+    const tabMarkup = available.map(([id, label]) => {
+      const count = snapshot ? id === 'manual' ? (snapshot.manualItems || []).length : counts.get(id) || 0 : '—';
+      return '<button type="button" class="button completion-filter" data-action="completion-tab" data-id="' + id +
+        '" aria-label="' + label + '" aria-pressed="' + (id === current) + '">' + label +
+        '<span class="completion-count">' + count + '</span></button>';
+    }).join('');
+    const missingTags = row => row.missing.map(label => A.tag(label, 'warning')).join(' ');
     const columns = manual ? [
       { id: 'orderNo', label: '订单编号' }, { id: 'email', label: '邮箱账号' },
       { id: 'plan', label: '产品 / 套餐', render: row => esc([row.product, row.plan].filter(Boolean).join(' / ')) },
       { id: 'customerName', label: '客户' },
-      { id: 'missing', label: '待补资料', render: row => esc(row.missing.join('、')) },
+      { id: 'missing', label: '待补资料', render: missingTags },
       { id: 'owner', label: '处理人', render: row => esc(row.owner || '未设置') },
       { id: 'actions', label: '操作', action: true, render: row => A.textAction(
         '查看原单', 'completion-original', 'data-id="' + esc(row.id) + '"') }
@@ -51,7 +56,7 @@
       { id: 'rechargeCompletedAt', label: '开通时间', render: (row) => esc(displayTime(row.rechargeCompletedAt || row.start)) },
       ...(snapshot?.canAssign ? [{ id: 'owner', label: '归属人', render: (row) => esc(row.owner || '—') }] : []),
       { id: 'customer', label: current === 'complete' ? '客户' : '缺少资料', render: (row) =>
-        esc(current === 'complete' ? row.customer?.name || '—' : row.missing.join('、')) },
+        current === 'complete' ? esc(row.customer?.name || '—') : missingTags(row) },
       { id: 'finance', label: '客户实收', render: row => row.receiptRecorded
         ? esc(money(row.saleAmount, row.saleCurrency)) : A.tag('未登记', 'warning') },
       { id: 'actions', label: '操作', action: true, render: (row) => A.textAction(
@@ -71,10 +76,12 @@
         A.textAction('查看此订单', 'completion-view-saved', 'data-id="' + esc(saved.id) + '"') + '</div>'
       : '';
     return title + '<section class="panel design-async-region" id="completion-list">' +
-      '<div class="list-controls completion-controls"><div class="tabs" role="group" aria-label="订单补全分类">' +
+      '<div class="list-controls completion-controls"><div class="completion-status-filters" role="group" aria-label="订单补全分类">' +
       tabMarkup + '</div><div class="toolbar"><div class="toolbar-left"><div class="search-field">' + A.icon('search') +
       input('list-search', S.query, 'type="search" aria-label="搜索订单" placeholder="订单号、邮箱或客户"') +
-      '</div></div><div class="toolbar-right" data-page-actions>' + assignOwners + '</div></div></div><div role="status" id="completion-list-progress" hidden></div>' +
+      '</div>' + button('刷新', 'completion-refresh', '', 'refresh') +
+      '</div>' + (assignOwners ? '<div class="toolbar-right">' + assignOwners + '</div>' : '') +
+      '</div></div><div role="status" id="completion-list-progress" hidden></div>' +
       (loadError ? '<div class="panel-body"><p class="inline-notice warning" role="status">' +
         (snapshot ? '刷新失败，已保留上次订单。' : '暂时无法读取订单，请刷新重试。') + '</p></div>' : '') +
       savedNotice + contents + '</section>';

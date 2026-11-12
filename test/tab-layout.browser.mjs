@@ -113,8 +113,16 @@ try {
       await page.locator('[data-action="completion-tab"]').first().waitFor();
       await capture('workspace/order-completion', 'API empty');
       if (!baseline) {
-        if (width >= 901) assert.equal((await page.locator('#completion-list > .list-controls').boundingBox()).height, 61, '宽屏搜索与页签应在同一行');
-        await switchTabs('workspace/order-completion', page.locator('#main'));
+        if (width >= 1440) {
+          const filter = await page.locator('.completion-status-filters .button').first().boundingBox();
+          const search = await page.locator('#completion-list #list-search').boundingBox();
+          assert(Math.abs(filter.y + filter.height / 2 - search.y - search.height / 2) <= 2, '宽屏搜索和状态筛选应对齐');
+        }
+        for (const tab of await page.locator('[data-action="completion-tab"]').all()) {
+          const label = await tab.getAttribute('aria-label');
+          await tab.click();
+          await capture('workspace/order-completion', label);
+        }
       }
       if ([1440, 390].includes(width)) await page.screenshot({ path: output + `/${baseline ? 'before' : 'after'}-completion-${width}-${theme}.png` });
       assert.deepEqual(errors, []);

@@ -183,17 +183,22 @@ function select(name, values, selected = '') {
   return `<select id="${name}" name="${name}">${options(values, selected)}</select>`;
 }
 
+const orderSubmissionViews = [
+  ['GPT', 'workspace/order/gpt'],
+  ['Claude', 'workspace/order/claude'],
+  ['Gemini', 'workspace/order/gemini'],
+  ['Grok', 'workspace/order/grok'],
+  ['订单补全', 'workspace/order-completion']
+];
+const orderSubmissionRoute = (route) => route === 'workspace/order' ? orderSubmissionViews[0][1]
+  : orderSubmissionViews.find(([, path]) => path === route)?.[1];
 const navigation = [
   ['网站总览', 'grid', [['网站总览', 'overview']]],
   [
     '快速操作',
     'work',
     [
-      ['GPT提交', 'workspace/order/gpt'],
-      ['Claude提交', 'workspace/order/claude'],
-      ['Gemini提交', 'workspace/order/gemini'],
-      ['Grok提交', 'workspace/order/grok'],
-      ['订单不全', 'workspace/order-completion'],
+      ...orderSubmissionViews,
       ['续费管理', 'workspace/renewals'],
       ['客户录入', 'customers/new'],
       ['充值码提取', 'workspace/recharge-codes'],
@@ -1083,6 +1088,23 @@ function permittedRoute(route) {
     route
   );
 }
+function orderSubmissionNavigation() {
+  const active = orderSubmissionRoute(state.route);
+  state.drafts.set('order-submission-navigation', active);
+  return '<section class="panel order-submission-navigation"><nav class="tabs order-submission-tabs" aria-label="订单提交业务切换">' +
+    orderSubmissionViews.filter(([, route]) => permittedRoute(route)).map(([label, route]) =>
+      '<a class="tab' + (route === 'workspace/order-completion' ? ' order-completion-tab' : '') + '" href="#/' + route +
+      '"' + (route === active ? ' aria-current="page"' : '') + '>' + label + '</a>').join('') +
+    '</nav></section>';
+}
+function sidebarChildren(children) {
+  const allowed = children.filter(([, route]) => permittedRoute(route));
+  const orderViews = allowed.filter(([, route]) => orderSubmissionRoute(route));
+  if (!orderViews.length) return allowed;
+  const remembered = state.drafts.get('order-submission-navigation');
+  const route = orderViews.some(([, path]) => path === remembered) ? remembered : orderViews[0][1];
+  return [['订单提交', route], ...allowed.filter(([, path]) => !orderSubmissionRoute(path))];
+}
 const designTableFrames = new Map();
 function tableScrollKey(table) {
   const rows = table.tBodies[0]?.rows;
@@ -1195,15 +1217,17 @@ document.addEventListener('input', event => {
 });
 function renderSidebar(openCurrent = false) {
   const previousScroll = $('.sidebar-navigation')?.scrollTop || 0;
+  const isCurrent = (route) => orderSubmissionRoute(route)
+    ? Boolean(orderSubmissionRoute(state.route)) : matchesNav(state.route, route);
   const allowedNavigation = navigation
     .map(([label, iconName, children]) => [
       label,
       iconName,
-      children.filter((child) => permittedRoute(child[1]))
+      sidebarChildren(children)
     ])
     .filter((group) => group[2].length > 0);
   const currentGroup = allowedNavigation.find((group) =>
-    group[2].some((item) => matchesNav(state.route, item[1]))
+    group[2].some((item) => isCurrent(item[1]))
   );
   if (openCurrent && currentGroup && (currentGroup[2].length > 1 || currentGroup[0] === '监控中心')) state.expandedGroup = currentGroup[0];
   const renewalCount = permittedRoute('workspace/renewals')
@@ -1214,7 +1238,7 @@ function renderSidebar(openCurrent = false) {
         const direct = children.length === 1 && group !== '监控中心';
         const active = currentGroup?.[0] === group;
         const expanded = state.expandedGroup === group;
-        return `<div class="nav-group" data-tone="${({ mail: 'cyan', key: 'violet', users: 'teal', user: 'teal', orders: 'blue', bolt: 'violet', database: 'blue', monitor: 'teal', settings: 'blue', work: 'violet' })[iconName] || 'blue'}">${direct ? `<a class="nav-heading ${active ? 'active-direct' : ''}" href="#/${children[0][1]}" title="${group}" ${active ? 'aria-current="page"' : ''}>${icon(iconName)}<span class="nav-text">${group}</span></a>` : `<button class="nav-heading ${active ? 'active-parent' : ''}" data-action="nav-group" data-group="${group}" aria-expanded="${expanded}" title="${group}">${icon(iconName)}<span class="nav-text">${group}</span>${icon(expanded ? 'down' : 'chevron', 'chevron')}</button>${expanded ? `<div class="nav-children">${children.map(([title, route, placeholder]) => `<a class="nav-child ${matchesNav(state.route, route) ? 'active' : ''}" href="#/${route === 'plugins/websites' && permittedRoute('monitor') ? 'monitor' : route}" ${matchesNav(state.route, route) ? 'aria-current="page"' : ''}>${title}${route === 'workspace/renewals' ? `<small id="renewal-reminder-count" aria-label="待处理提醒" ${renewalCount ? '' : 'hidden'}>${renewalCount}</small>` : placeholder ? '<small>占位</small>' : ''}</a>`).join('')}</div>` : ''}`}</div>`;
+        return `<div class="nav-group" data-tone="${({ mail: 'cyan', key: 'violet', users: 'teal', user: 'teal', orders: 'blue', bolt: 'violet', database: 'blue', monitor: 'teal', settings: 'blue', work: 'violet' })[iconName] || 'blue'}">${direct ? `<a class="nav-heading ${active ? 'active-direct' : ''}" href="#/${children[0][1]}" title="${group}" ${active ? 'aria-current="page"' : ''}>${icon(iconName)}<span class="nav-text">${group}</span></a>` : `<button class="nav-heading ${active ? 'active-parent' : ''}" data-action="nav-group" data-group="${group}" aria-expanded="${expanded}" title="${group}">${icon(iconName)}<span class="nav-text">${group}</span>${icon(expanded ? 'down' : 'chevron', 'chevron')}</button>${expanded ? `<div class="nav-children">${children.map(([title, route, placeholder]) => `<a class="nav-child ${isCurrent(route) ? 'active' : ''}" href="#/${route === 'plugins/websites' && permittedRoute('monitor') ? 'monitor' : route}" ${isCurrent(route) ? 'aria-current="page"' : ''}>${title}${route === 'workspace/renewals' ? `<small id="renewal-reminder-count" aria-label="待处理提醒" ${renewalCount ? '' : 'hidden'}>${renewalCount}</small>` : placeholder ? '<small>占位</small>' : ''}</a>`).join('')}</div>` : ''}`}</div>`;
       })
       .join(
         ''
@@ -1736,7 +1760,7 @@ function render() {
     region = document.createElement('div');
     region.dataset.pageRegion = state.route;
     region.className = 'design-page-region design-async-region';
-    region.innerHTML = content;
+    region.innerHTML = (allowed && orderSubmissionRoute(state.route) ? orderSubmissionNavigation() : '') + content;
     main.append(region);
     if (retain) retainedPageRegions.set(state.route, region);
   } else {
@@ -2770,9 +2794,11 @@ document.addEventListener('click', async (event) => {
     const entry = node.closest('.commerce-entry-layout');
     entry.dataset.mobileView = node.dataset.view;
     state.drafts.set(`mobile-entry:${state.route}`, { view: node.dataset.view });
-    for (const tab of $$('[data-action="mobile-entry-view"]', entry)) tab.setAttribute('aria-selected', String(tab === node));
+    for (const tab of $$('[role="tab"][data-action="mobile-entry-view"]', entry)) tab.setAttribute('aria-selected', String(tab === node));
     syncMobileLayout();
     entry.scrollIntoView({ block: 'start' });
+    if (node.hasAttribute('data-entry-switch-view'))
+      $('button[data-entry-switch-view="' + node.dataset.view + '"]', entry)?.focus({ preventScroll: true });
     return;
   }
   if (node.closest('#mobile-tools-panel') && action === 'tools-open') $('#mobile-tools-panel').hidePopover();
