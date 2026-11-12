@@ -14,7 +14,7 @@ const products = [
 const actor = { id: 'match-admin', name: '隔离录单员', role: 'admin' };
 const localTime = at => new Date(at + 28_800_000).toISOString().slice(0, 16);
 
-test('四个录单入口匹配客户和历史账号，随单建档可核对、取消和重试', { timeout: 80_000 }, async t => {
+test('四个录单入口匹配客户和历史账号，随单建档未提交不写入，失败后可重试', { timeout: 80_000 }, async t => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
   t.after(() => browser.close());
@@ -71,6 +71,7 @@ test('四个录单入口匹配客户和历史账号，随单建档可核对、�
       const cancel = () => dialog.locator('[data-action="confirm-cancel"]').click();
       await select.locator('option[value="known"]').waitFor({ state: 'attached' });
       if (slug === 'claude') await form.locator('#commerce-plan').selectOption(plan);
+      await form.locator('.order-quick-customer-disclosure > summary').click();
       assert(await add.isDisabled());
       if (slug === 'gpt') {
         await name.evaluate(input => {
@@ -155,6 +156,7 @@ test('四个录单入口匹配客户和历史账号，随单建档可核对、�
 
       const freshName = '随单客户 ' + slug;
       const fillQuickOrder = async (customerName, customerWechat) => {
+        if (!(await name.isVisible())) await form.locator('.order-quick-customer-disclosure > summary').click();
         await name.fill(customerName);
         await wechat.fill(customerWechat);
         await status.getByText('提交订单时将新增客户。', { exact: true }).waitFor();
@@ -176,24 +178,22 @@ test('四个录单入口匹配客户和历史账号，随单建档可核对、�
         return box.width > 0 && box.left >= 0 && box.right <= innerWidth && document.documentElement.scrollWidth <= innerWidth;
       }), '窄屏状态文字在视口内');
       const count = writes.length;
-      await submit.click();
-      await dialog.getByText(new RegExp('将新增客户 ' + freshName + '.*quick_' + slug)).waitFor();
-      await cancel();
+      assert.equal(await dialog.count(), 0);
+      assert(!fixture.commerce.data.customers.some(row => row.name === freshName));
       assert.equal(writes.length, count);
 
       if (slug === 'claude') {
         fail = true;
         await submit.click();
-        await confirm();
-        await page.locator('#toast').getByText(/服务器保存失败/).waitFor();
+        await page.locator('#toast').getByText(/模拟拒绝订单/).waitFor();
         assert(!fixture.commerce.data.customers.some(row => row.name === freshName));
         assert.equal(await name.inputValue(), freshName);
         assert.equal(await form.locator('#commerce-notes').inputValue(), '保留本单备注');
         fail = false;
       }
       await submit.click();
-      await confirm();
       await page.locator('#toast').getByText(/订单提交成功/).waitFor();
+      assert.equal(writes.length, count + (slug === 'claude' ? 2 : 1));
       assert.equal(page.url(), url);
       const write = writes.at(-1);
       assert.equal(write.action, orderCustomerCreateAction);
@@ -208,16 +208,14 @@ test('四个录单入口匹配客户和历史账号，随单建档可核对、�
         fixture.commerce.data.customers.unshift({ id: 'other-tab', name: '另一页先登记', wechat: 'other_tab', active: true, version: 1 });
         fixture.commerce.version++;
         await submit.click();
-        await confirm();
         await page.locator('#toast').getByText(/本次未保存，请核对客户及订单后再提交/).waitFor();
         assert.equal(await select.inputValue(), 'other-tab');
         assert.equal(await email.inputValue(), 'manual-grok@example.test');
         assert.equal(await form.locator('#commerce-notes').inputValue(), '保留本单备注');
         assert(await add.isDisabled());
         await submit.click();
-        assert.doesNotMatch(await dialog.innerText(), /将新增客户/);
-        await confirm();
         await page.locator('#toast').getByText(/订单提交成功/).waitFor();
+        assert.equal(await dialog.count(), 0);
         assert.equal(fixture.commerce.data.customers.filter(row => row.wechat === 'other_tab').length, 1);
         assert.equal(fixture.commerce.data.orders[0].customerId, 'other-tab');
       }

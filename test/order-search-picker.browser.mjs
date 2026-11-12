@@ -123,6 +123,7 @@ test('订单下拉框在展开后搜索，保留联动、草稿与快捷新增',
   await page.locator('#main[data-layout-route="workspace/order/gpt"]').waitFor();
   assert.equal(await page.locator('#commerce-customerId').inputValue(), 'qa-beta', '切页返回恢复客户');
   await page.locator('#commerce-email').fill('draft-preserved@example.test');
+  await page.locator('.order-quick-customer-disclosure > summary').click();
   await page.locator('#order-quick-customer-name').fill('快捷新增合成客户');
   await page.locator('#order-quick-customer-wechat').fill('qa_new_customer');
   await page.locator('[data-action="commerce-quick-customer"]').click();

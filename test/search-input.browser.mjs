@@ -11,6 +11,7 @@ test('shared automatic search debounces, respects IME and preserves view ownersh
   fixture['tools/mailbox-pool'] = { version: 1, items: [
     { id: 'search-mail', email: 'search@example.test', provider: 'google', active: true }
   ] };
+  fixture['order-completion'] = { items: [], manualItems: [], canAssign: true };
   const requests = await interceptDesign(context, { localFixtures: fixture, actor: { id: 'search-admin', name: '合成管理员', role: 'admin' } });
   const page = await context.newPage(), errors = [];
   page.on('pageerror', e => errors.push(e.message));
@@ -89,5 +90,13 @@ test('shared automatic search debounces, respects IME and preserves view ownersh
   assert.equal(await page.locator('.mailbox-account').count(), 1, 'push refresh retains the applied query during typing');
   await page.clock.runFor(300);
   assert.equal(await page.locator('.mailbox-account').count(), 0);
+  await page.evaluate(() => window.IDDesignAPI.go('workspace/order-completion'));
+  const completionSearch = page.locator('#completion-list #list-search');
+  await completionSearch.waitFor();
+  await completionSearch.fill('order-search');
+  await page.clock.runFor(299);
+  assert.equal(await query(), '', 'the completion list follows the shared search delay');
+  await page.clock.runFor(1);
+  assert.equal(await query(), 'order-search');
   assert.deepEqual(errors, []); assert.deepEqual(requests.external, []); assert.deepEqual(requests.unavailable, []);
 });

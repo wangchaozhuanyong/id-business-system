@@ -3058,6 +3058,8 @@
     if (owner) draft['commerce-ownerId'] = owner.value;
     const login = form.elements?.['commerce-loginMethod'];
     if (login) draft['commerce-loginMethod'] = login.value;
+    const quickCustomer = form.querySelector?.('.order-quick-customer-disclosure');
+    if (quickCustomer) draft['order-quick-customer-open'] = quickCustomer.open;
     delete draft['commerce-balanceReversalConfirmed'];
     return draft;
   }
@@ -4078,8 +4080,11 @@
     if (customerId && !choices.some(([id]) => id === customerId))
       choices.push([customerId, '原客户待核对']);
     const picker = searchableSelect('customerId', '客户', choices, customerId, quickDraft ? '' : add);
+    const hasQuickInput = quickDraft && (quickDraft['order-quick-customer-name'] || quickDraft['order-quick-customer-wechat']);
     const control = quickDraft ? `<div class="order-customer-row">${picker}
       ${A.input('order-customer-history-email', quickDraft['order-customer-history-email'] ?? '', 'type="hidden"')}
+      <details class="order-quick-customer-disclosure"${(quickDraft['order-quick-customer-open'] ?? hasQuickInput) ? ' open' : ''}>
+      <summary class="button">${A.icon('plus')}匹配或新增</summary>
       <div class="order-quick-customer" role="group" aria-label="匹配或新增客户">
         ${A.input('order-quick-customer-name', quickDraft['order-quick-customer-name'] ?? '',
           'aria-label="客户姓名" aria-describedby="order-quick-customer-status" placeholder="客户姓名" maxlength="80"')}
@@ -4087,6 +4092,7 @@
           'aria-label="客户微信" aria-describedby="order-quick-customer-status" placeholder="客户微信" maxlength="60"')}
         ${add}<p class="footnote order-quick-customer-status" id="order-quick-customer-status" role="status" hidden></p>
       </div>
+      </details>
     </div>` : picker;
     return field('客户资料', 'customerId', control, true);
   }
@@ -5058,7 +5064,17 @@
     if (!existing || choices.some(option => (Array.isArray(option) ? option[0] : option) === value)) return choices;
     return [[value, value || '未登记'], ...choices];
   }
-  function orderPaymentFields(v, existing, defaultGptType, entryPage) {
+  function orderPeriodActions(auto) {
+    return auto ? '' : [[15, '15分钟前'], [60, '1小时前'], [120, '2小时前']].map(([minutes, label]) =>
+      A.button(label, 'commerce-order-start-shortcut', '', '', `data-minutes="${minutes}"`)).join('');
+  }
+  function orderPeriodFields(v, auto) {
+    const attributes = auto ? 'type="datetime-local" readonly' : 'type="datetime-local"';
+    return field('订阅时间', 'start', input('start', dateInput(v('start')), attributes),
+      true, '本次实际开通时间，只登记一次。') +
+      field('到期时间', 'expiry', input('expiry', dateInput(v('expiry')), attributes), true);
+  }
+  function orderPaymentFields(v, existing, defaultGptType, entryPage, separatePeriod) {
     const auto = automaticOrder(existing);
     const apple = v('payment') === '苹果内购';
     const product = v('product'), codes = orderCurrencyCodes(product);
@@ -5125,7 +5141,7 @@
         false, '', '', !apple || v('businessType') === '续费')) +
       (personal ? personalEntitlementFields(v, existing) : '') +
       `</div>` +
-      `<div class="order-financial-groups commerce-span-all">
+      `<div class="order-financial-groups commerce-span-all${separatePeriod ? ' order-financial-groups--amounts' : ''}">
         <div class="order-financial-group">
           ${orderAmountHeading('代付', true, v)}
           ${field(!auto && gptCardPayment(product, v('payment')) ? '国家／地区' : '代付币种', 'paidCurrency',
@@ -5140,12 +5156,10 @@
           ${field('售卖币种', 'saleCurrency', select('saleCurrency', keepSavedOption(currencyChoices(codes, v('saleCurrency'), product), v('saleCurrency'), existing), v('saleCurrency')), true)}
           ${field('售卖金额', 'saleAmount', orderAmountInput(v, 'saleAmount'), true)}
         </div>
-        <div class="order-financial-group">
-          <div class="order-financial-heading"><h3>订阅周期</h3>${auto ? '' : `<div class="order-financial-actions">${[[15, '15分钟前'], [60, '1小时前'], [120, '2小时前']].map(([minutes, label]) => A.button(label, 'commerce-order-start-shortcut', '', '', `data-minutes="${minutes}"`)).join('')}</div>`}</div>
-          ${field('订阅时间', 'start', input('start', dateInput(v('start')), auto ? 'type="datetime-local" readonly' : 'type="datetime-local"'),
-            true, '本次实际开通时间，只登记一次。')}
-          ${field('到期时间', 'expiry', input('expiry', dateInput(v('expiry')), auto ? 'type="datetime-local" readonly' : 'type="datetime-local"'), true)}
-        </div>
+        ${separatePeriod ? '' : `<div class="order-financial-group">
+          <div class="order-financial-heading"><h3>订阅周期</h3>${auto ? '' : `<div class="order-financial-actions">${orderPeriodActions(auto)}</div>`}</div>
+          ${orderPeriodFields(v, auto)}
+        </div>`}
       </div>` +
       (v('claudeRenewalId')
         ? `<div class="commerce-cost-strip commerce-span-all">Claude 快捷续费：当前订阅到期 ${E(orders.find((row) => row.id === v('claudeRenewalId'))?.expiry || '')}，本次新单到期 ${E(v('expiry'))}。原单保持独立可见。</div>`
@@ -5340,14 +5354,24 @@
       '';
     const claude = isClaude({ product });
     const defaultGptType = main && !existing && !previous && product === 'GPT';
-    const supplemental = claude ? section('03', '补充资料',
+    const submissionWorkspace = main && isOrderEntry(S.route);
+    const supplementalFields = claude ?
       `<div class="commerce-span-all commerce-field-grid" data-claude-certification${v('businessType') === '续费' ? ' hidden' : ''}>${
         claudeCertificationFields(v, existing)}</div>` +
-      field('订阅电话', 'phone', input('phone', v('phone'), 'type="tel" maxlength="60"'))) : '';
+      field('订阅电话', 'phone', input('phone', v('phone'), 'type="tel" maxlength="60"')) : '';
+    const supplemental = !claude ? '' : submissionWorkspace
+      ? `<details class="commerce-span-all"><summary>Claude 补充资料</summary><div class="commerce-field-grid">${supplementalFields}</div></details>`
+      : section('03', '补充资料', supplementalFields);
     const saleCurrencyChosen = existing || draft['commerce-saleCurrencyChosen'] === 'yes';
     const identityFields = orderIdentityFields(v, contact, existing, chooseClaudePlan, linkedClaude,
       main && !existing && !previous && isOrderEntry(S.route) ? draft : null, Boolean(workbenchSource));
-    const html = `<form id="commerce-order-form" data-commerce-draft="${key}"${chooseClaudePlan ? ' data-choose-claude-plan' : ''} novalidate><input type="hidden" id="commerce-id" name="commerce-id" value="${E(existing?.id || '')}" /><input type="hidden" name="commerce-version" value="${E(draft['commerce-version'] || existing?.version || '')}" /><input type="hidden" name="commerce-source" value="${E(existing?.source || '管理员手工')}" /><input type="hidden" name="commerce-submissionId" value="${E(draft['commerce-submissionId'] || '')}" /><input type="hidden" name="commerce-expiryManual" value="${E(draft['commerce-expiryManual'] || '')}" /><input type="hidden" name="commerce-emailCostManual" value="${E(draft['commerce-emailCostManual'] || '')}" /><input type="hidden" name="commerce-paidManual" value="${E(draft['commerce-paidManual'] ?? (draft['commerce-paidAmount'] ? 'yes' : ''))}" /><input type="hidden" name="commerce-saleManual" value="${E(draft['commerce-saleManual'] || '')}" /><input type="hidden" name="commerce-saleCurrencyChosen" value="${saleCurrencyChosen ? 'yes' : ''}" /><input type="hidden" id="commerce-claudeRenewalId" name="commerce-claudeRenewalId" value="${E(v('claudeRenewalId'))}" />${linkedClaude ? input('proRenewalSourceVersion', v('proRenewalSourceVersion'), 'type="hidden"') : ''}${section('01', '客户与账号', identityFields, '邮箱选填。选择系统库存时登记实际交付。')}${section('02', '金额与订阅周期', orderPaymentFields(v, existing, defaultGptType, main) + orderCostFields(v, existing))}${supplemental}<div class="commerce-field-grid">${existing ? field('更正原因', 'correctionReason', input('correctionReason', draft['commerce-correctionReason'] ?? '修改错误'), true, '', 'commerce-span-all') : ''}${field('备注', 'notes', `<textarea id="commerce-notes" name="commerce-notes" rows="2">${E(v('notes'))}</textarea>`, false, '', 'commerce-span-all')}</div></form>`;
+    const notes = field('备注', 'notes', `<textarea id="commerce-notes" name="commerce-notes" rows="2">${E(v('notes'))}</textarea>`, false, '', 'commerce-span-all');
+    const paymentSection = section('02', submissionWorkspace ? '付款与金额' : '金额与订阅周期',
+      orderPaymentFields(v, existing, defaultGptType, main, submissionWorkspace) + orderCostFields(v, existing));
+    const periodSection = submissionWorkspace ? section('03', '订阅周期',
+      orderPeriodFields(v, automaticOrder(existing)) + supplemental + notes, '', false, 'commerce-section',
+      orderPeriodActions(automaticOrder(existing))) : '';
+    const html = `<form id="commerce-order-form" data-commerce-draft="${key}"${chooseClaudePlan ? ' data-choose-claude-plan' : ''} novalidate><input type="hidden" id="commerce-id" name="commerce-id" value="${E(existing?.id || '')}" /><input type="hidden" name="commerce-version" value="${E(draft['commerce-version'] || existing?.version || '')}" /><input type="hidden" name="commerce-source" value="${E(existing?.source || '管理员手工')}" /><input type="hidden" name="commerce-submissionId" value="${E(draft['commerce-submissionId'] || '')}" /><input type="hidden" name="commerce-expiryManual" value="${E(draft['commerce-expiryManual'] || '')}" /><input type="hidden" name="commerce-emailCostManual" value="${E(draft['commerce-emailCostManual'] || '')}" /><input type="hidden" name="commerce-paidManual" value="${E(draft['commerce-paidManual'] ?? (draft['commerce-paidAmount'] ? 'yes' : ''))}" /><input type="hidden" name="commerce-saleManual" value="${E(draft['commerce-saleManual'] || '')}" /><input type="hidden" name="commerce-saleCurrencyChosen" value="${saleCurrencyChosen ? 'yes' : ''}" /><input type="hidden" id="commerce-claudeRenewalId" name="commerce-claudeRenewalId" value="${E(v('claudeRenewalId'))}" />${linkedClaude ? input('proRenewalSourceVersion', v('proRenewalSourceVersion'), 'type="hidden"') : ''}${section('01', '客户与账号', identityFields, '邮箱选填。选择系统库存时登记实际交付。')}${paymentSection}${submissionWorkspace ? periodSection : `${supplemental}<div class="commerce-field-grid">${existing ? field('更正原因', 'correctionReason', input('correctionReason', draft['commerce-correctionReason'] ?? '修改错误'), true, '', 'commerce-span-all') : ''}${notes}</div>`}</form>`;
     const footer = `<button form="commerce-order-form" type="submit" class="button primary">${existing ? '保存修改' : '确认提交'}</button>`;
     if (main)
       return entryWorkspace(`<section class="panel form-panel">${html}<div class="form-footer">${footer}${orderReceiptAction()}</div></section>`, 'order', product);
@@ -5650,6 +5674,7 @@
   }
   function entryRecordList(kind, product) {
     const view = entryView(kind, product);
+    const grouped = kind === 'order' && isOrderEntry(S.route);
     const rows = entryRecordRows(kind, product, view);
     const contacts = new Map(customers.map(row => [row.id, row]));
     const plans = new Map();
@@ -5675,15 +5700,24 @@
         submittedAt: Number.isFinite(timestamp) ? beijingClock.format(timestamp) : '时间未记录'
       };
     });
+    const hasContact = records.some(row => row.contact);
+    const entryValue = (value, detail, attribute = '') => '<span class="entry-record-primary">' + E(value) + '</span>' +
+      (detail ? '<span class="entry-record-secondary" ' + attribute + '>' + E(detail) + '</span>' : '');
     const columns = [
-      { id: 'name', label: kind === 'tenant' ? '租户' : '客户', long: true },
-      ...(records.some(row => row.contact) ? [{ id: 'contact', label: '联系方式',
+      { id: 'name', label: kind === 'tenant' ? '租户' : grouped && hasContact ? '客户 / 联系方式' : '客户', long: true,
+        render: grouped ? row => entryValue(row.name, row.contact, 'data-entry-record-contact') : undefined },
+      ...(!grouped && hasContact ? [{ id: 'contact', label: '联系方式',
         render: row => `<span class="table-value-ellipsis entry-contact-summary">${E(row.contact || '—')}</span>` }] : []),
-      { id: 'plan', label: '订阅套餐', long: true, render: row => E(row.plan || '—'),
-        headerHelp: kind === 'order' ? '本条订单登记的产品与套餐。' : '按已关联订单展示登记的产品与套餐，不代表当前订阅仍然有效；开通证据在历史开通业务中查看。' },
-      ...(kind === 'order' ? [{ id: 'payment', label: '支付方式', render: row => E(row.payment || '—') }] : []),
-      { id: 'notes', label: '备注', long: true, render: row => E(row.notes || '—') },
-      { id: 'submittedAt', label: '提交时间' },
+      { id: 'plan', label: grouped ? '套餐 / 支付方式' : '订阅套餐', long: true,
+        render: row => grouped ? entryValue(row.plan || '—', row.payment || '—', 'data-entry-record-payment') : E(row.plan || '—'),
+        headerHelp: grouped ? '本条订单实际登记的产品、套餐与支付方式。' : kind === 'order'
+          ? '本条订单登记的产品与套餐。' : '按已关联订单展示登记的产品与套餐，不代表当前订阅仍然有效；开通证据在历史开通业务中查看。' },
+      ...(kind === 'order' && !grouped ? [{ id: 'payment', label: '支付方式', render: row => E(row.payment || '—') }] : []),
+      { id: 'notes', label: '备注', long: true, mobileSummary: grouped, render: row => E(row.notes || '—') },
+      { id: 'submittedAt', label: '提交时间', class: grouped ? 'entry-record-time' : '', mobileSummary: grouped, render: grouped ? row => {
+        const [day, time] = row.submittedAt.split(' ');
+        return entryValue(day, time ? ' ' + time : '');
+      } : undefined },
       { id: 'actions', label: '操作', action: true, render: row => `<div class="action-links">${
         A.textAction('详情', kind === 'order' ? 'commerce-order-detail' : 'commerce-contact-detail',
           `data-id="${E(row.id)}" data-kind="${kind}" aria-label="查看${E(row.name)}的录入记录"`)
@@ -5716,11 +5750,20 @@
     const title = kind === 'order' ? '最近订单' : kind === 'tenant' ? '最近租户' : '最近客户';
     const description = `按北京时间筛选提交时间，默认按最新录入排序。显示当前权限内${kind === 'order' ? currencyFamily(product) + ' 的' : ''}记录，支持分页。列表显示已填写渠道的脱敏值，点击详情查看完整联系方式及快捷操作。刷新和翻页不会清空左侧输入。`;
     const mobileView = A.state.drafts.get(`mobile-entry:${A.state.route}`)?.view === 'records' ? 'records' : 'form';
-    return `<div class="commerce-entry-layout" data-mobile-view="${mobileView}"><div class="entry-mobile-tabs" role="tablist" aria-label="录入与最近记录"><button type="button" class="tab" role="tab" data-action="mobile-entry-view" data-view="form" aria-selected="${mobileView === 'form'}">填写资料</button><button type="button" class="tab" role="tab" data-action="mobile-entry-view" data-view="records" aria-selected="${mobileView === 'records'}">${title}</button></div><div class="commerce-entry-columns">${form}
+    const unified = kind === 'order' && isOrderEntry(S.route);
+    const mobileControl = unified
+      ? `<div class="panel order-entry-mobile-switch"><strong data-entry-switch-view="form">填写订单资料</strong>
+        <strong data-entry-switch-view="records">${title}</strong>${
+        A.button(title, 'mobile-entry-view', '', 'chevron', 'data-view="records" data-entry-switch-view="form"')}${
+        A.button('返回填写', 'mobile-entry-view', '', 'return', 'data-view="form" data-entry-switch-view="records"')}</div>`
+      : `<div class="entry-mobile-tabs" role="tablist" aria-label="录入与最近记录"><button type="button" class="tab" role="tab" data-action="mobile-entry-view" data-view="form" aria-selected="${mobileView === 'form'}">填写资料</button><button type="button" class="tab" role="tab" data-action="mobile-entry-view" data-view="records" aria-selected="${mobileView === 'records'}">${title}</button></div>`;
+    const periods = entryRecordFilters(kind, product);
+    return `<div class="commerce-entry-layout${unified ? ' order-submission-entry' : ''}" data-mobile-view="${mobileView}">${mobileControl}<div class="commerce-entry-columns">${form}
       <aside class="panel entry-records" id="commerce-entry-records" data-kind="${kind}" data-product="${E(product)}" aria-labelledby="entry-records-title">
         <div class="panel-heading"><div class="section-title-row"><h2 id="entry-records-title">${title}</h2>${A.titleInfo(title, description, 'entry-records-help')}</div>
-          <div class="entry-record-actions">${entryRecordFilters(kind, product)}
+          <div class="entry-record-actions">${unified ? '' : periods}
             ${localData ? A.button('刷新', 'commerce-entry-refresh', 'compact', '', 'aria-label="刷新最近录入记录"') : ''}</div></div>
+        ${unified ? '<div class="toolbar order-entry-date-filters">' + periods + '</div>' : ''}
         ${entryRecordDateRange(kind, product)}
         <div class="entry-record-region design-async-region"><div data-entry-progress role="status" hidden></div><div class="entry-record-list">${entryRecordList(kind, product)}</div></div>
         <p class="entry-record-error" data-entry-error role="status" hidden></p>
@@ -5802,7 +5845,7 @@
     const product = source?.order.product || original?.product || personalEntries[S.route] || (S.route === claudeOrderRoute ? 'Claude Pro' : 'GPT');
     return (
       A.header(
-        isClaude({ product }) ? 'Claude 提交订单' : product + ' 提交订单',
+        renewal ? (isClaude({ product }) ? 'Claude 提交订单' : product + ' 提交订单') : '订单提交',
         '已收款并开通后登记。填写客户、两笔金额和订阅周期，邮箱及银行卡可留空。',
         renewal ? routeButton('返回续费管理', renewalRoute, '', 'return') : '',
         renewal ? '续费录单' : '订单工作台'
@@ -7706,7 +7749,10 @@
     let first = '';
     const error = (name, message) => {
       A.setError(`commerce-${name}`, message);
-      if (message) first ||= `commerce-${name}`;
+      if (message) {
+        first ||= `commerce-${name}`;
+        form.elements[`commerce-${name}`]?.closest?.('.order-submission-entry details')?.setAttribute('open', '');
+      }
     };
     if (!existing) error('ownerId', form.dataset.accountOwnerId && form.dataset.accountOwnerId !== order.ownerId
       ? '请选择账号已登记的归属人' :
