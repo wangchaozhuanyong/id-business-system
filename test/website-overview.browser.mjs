@@ -94,9 +94,9 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
   t.after(() => browser.close());
   const output = process.env.ID_LAYOUT_QA_OUTPUT;
   if (output) await mkdir(output, { recursive: true });
-  const open = async (actor, localFixtures = {}, { changeEvents = false } = {}) => {
+  const open = async (actor, localFixtures = {}, { changeEvents = false, hasTouch = false, width = 1440 } = {}) => {
     const context = await browser.newContext({
-      viewport: { width: 1440, height: 1000 }, timezoneId: 'America/Los_Angeles'
+      viewport: { width, height: 1000 }, timezoneId: 'America/Los_Angeles', hasTouch
     });
     const intercepted = await interceptDesign(context, { localFixtures, actor, changeEvents });
     const page = await context.newPage();
@@ -112,6 +112,11 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
   const value = (page, id) => metric(page, id).locator('.overview-metric-value strong').innerText();
   const range = (page, label) => page.getByRole('group', { name: '统计时间范围' })
     .getByRole('button', { name: label, exact: true });
+  const selectRange = async (page, label) => {
+    const compact = page.getByRole('combobox', { name: '统计时间范围' });
+    if (await compact.isVisible()) await compact.selectOption({ label });
+    else await range(page, label).click();
+  };
   const trend = (page, label) => page.getByRole('group', { name: '趋势指标' })
     .getByRole('button', { name: label, exact: true });
   const refreshed = page => page.locator('[data-action="overview-refresh"]:enabled').waitFor({ state: 'attached' });
@@ -137,6 +142,8 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
         width: innerWidth,
         toolbar: box(document.querySelector('.overview-toolbar')),
         period: box(document.querySelector('.overview-period')),
+        controls: [...document.querySelectorAll('.overview-toolbar button, .overview-toolbar select')]
+          .filter(node => node.checkVisibility()).map(box),
         cards: [...grid.children].map(card => ({
           id: card.dataset.overviewMetric,
           bounds: box(card),
@@ -157,6 +164,13 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     assert.equal(layout.cards.length, 4);
     assert(Math.abs(layout.period.left - layout.cards[0].bounds.left) <= 1, '时间栏与首张卡片左边缘对齐');
     assert(layout.cards[0].bounds.top - layout.toolbar.bottom >= 12, '工具栏与卡片保留间距');
+    for (const control of layout.controls) {
+      assert(Math.abs((control.top + control.bottom) / 2 - (layout.toolbar.top + layout.toolbar.bottom) / 2) <= 1,
+        `${layout.width}px 区间栏控件必须在同一行`);
+      assert(control.left >= layout.toolbar.left - 1 && control.right <= layout.toolbar.right + 1,
+        `${layout.width}px 区间栏控件溢出`);
+      if (layout.width <= 560) assert(control.height >= 44, '手机工具栏保留触控高度');
+    }
     const expectedColumns = layout.width > 1150 ? 4 : layout.width > 560 ? 2 : 1;
     const rows = Map.groupBy(layout.cards, card => Math.round(card.bounds.top));
     for (const cards of rows.values()) {
@@ -253,6 +267,118 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     }
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), '库存表不能撑宽整页');
   };
+
+  await t.test('趋势浮层支持悬停、零值、键盘、触屏及指标切换', async () => {
+    const fixtures = {
+      commerce: { version: 1, data: commerceFixture },
+      inventory: { version: 1, data: inventoryFixture },
+      appleBalance: { version: 1, data: appleFixture }
+    };
+    const session = await open(undefined, fixtures);
+    const { page, context } = session;
+    const points = page.locator('.overview-plot [data-chart-point]');
+    const tip = page.locator('#overview-trend-tooltip');
+    const hover = async point => point.hover({ position: { x: 2, y: 150 } });
+    const tipFits = async () => {
+      const bounds = await tip.boundingBox();
+      const plot = await page.locator('.overview-plot').boundingBox();
+      assert(bounds && bounds.x >= plot.x && bounds.x + bounds.width <= plot.x + plot.width + 1,
+        '图表左右边缘的浮层完整显示');
+      assert(bounds.y >= plot.y && bounds.y + bounds.height <= plot.y + plot.height,
+        '浮层在图表内，不遮挡上方控件');
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+    };
+    await page.goto(origin + '/#/overview');
+    await refreshed(page);
+    await points.first().waitFor();
+    assert(await tip.isHidden());
+    await hover(points.first());
+    assert.match(await tip.innerText(), /2026-11-04（北京时间）\s+订单量：0 笔\s+撤单：0 笔/);
+    const before = await page.locator('.overview-columns').boundingBox();
+    await tip.hover();
+    assert(await tip.isVisible(), '指针移到浮层上仍可阅读');
+    await page.keyboard.press('Escape');
+    await settle(page);
+    assert(await tip.isHidden(), '只有悬停、没有键盘焦点时也能用 Escape 关闭');
+    await hover(points.last());
+    assert.match(await tip.innerText(), /2026-11-10（北京时间）\s+订单量：1 笔\s+撤单：1 笔/);
+    assert.deepEqual(await page.locator('.overview-columns').boundingBox(), before, '显示浮层不挤动布局');
+    await page.mouse.move(0, 0);
+    assert(await tip.isHidden());
+    await points.first().focus();
+    await page.keyboard.press('ArrowRight');
+    assert(await points.nth(1).evaluate(node => node === document.activeElement));
+    assert.match(await tip.innerText(), /2026-11-05/);
+    await page.keyboard.press('End');
+    assert.match(await tip.innerText(), /2026-11-10/);
+    await page.keyboard.press('Home');
+    assert.match(await tip.innerText(), /2026-11-04/);
+    await page.keyboard.press('Escape');
+    assert(await tip.isHidden());
+    await trend(page, '已核算利润').click();
+    assert(await tip.isHidden(), '切换指标后不显示旧提示');
+    await hover(points.nth(5));
+    assert.match(await tip.innerText(), /2026-11-09（北京时间）\s+利润待核算\s+已核算：0 笔\s+待核算：2 笔/);
+    assert.doesNotMatch(await tip.innerText(), /0\.00 CNY/);
+    await hover(points.last());
+    assert.match(await tip.innerText(), /已核算利润：68\.24 CNY\s+已核算：1 笔\s+待核算：0 笔/);
+    await range(page, '今日').click();
+    assert(await tip.isHidden());
+    await hover(points.nth(9));
+    assert.match(await tip.innerText(), /2026-11-10 09:00（北京时间）\s+已核算利润：68\.24 CNY/);
+    for (const width of [1440, 390, 320]) {
+      await page.setViewportSize({ width, height: 1000 });
+      for (const theme of ['light', 'dark']) {
+        await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+        await selectRange(page, '近 30 天');
+        assert.equal(await points.count(), 30);
+        for (const point of [points.first(), points.last()]) {
+          await hover(point);
+          await tipFits();
+        }
+        if (output) await page.locator('[aria-labelledby="overview-trend"]').screenshot({
+          path: output + '/trend-tooltip-' + width + '-' + theme + '.png'
+        });
+      }
+    }
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await go(page, 'orders/statistics');
+    const statistics = page.locator('.statistics-visual [data-chart-point]').first();
+    await statistics.waitFor();
+    await statistics.focus();
+    assert.match(await page.locator('.statistics-visual [role="tooltip"]').innerText(), /已核算.*待核算/);
+    await page.keyboard.press('Escape');
+    assert(await page.locator('.statistics-visual [role="tooltip"]').isHidden());
+    await go(page, 'overview');
+    await refreshed(page);
+    assert(await tip.isHidden(), '返回页面不保留旧浮层');
+    await hover(points.last());
+    await tipFits();
+    checkTransport(session);
+    await context.close();
+
+    for (const width of [390, 320]) {
+      const touch = await open(undefined, fixtures, { hasTouch: true, width });
+      const { page: mobile } = touch;
+      await mobile.goto(origin + '/#/overview');
+      await refreshed(mobile);
+      const point = mobile.locator('.overview-plot [data-chart-point]').last();
+      const tooltip = mobile.locator('#overview-trend-tooltip');
+      await point.tap({ position: { x: 2, y: 150 } });
+      assert.match(await tooltip.innerText(), /2026-11-10（北京时间）\s+订单量：1 笔/);
+      await tooltip.tap();
+      assert(await tooltip.isVisible(), '触屏点按浮层后保持可读');
+      await mobile.locator('#overview-trend').tap();
+      assert(await tooltip.isHidden(), '触屏点按外部关闭');
+      await point.tap({ position: { x: 2, y: 150 } });
+      await trend(mobile, '已核算利润').tap();
+      assert(await tooltip.isHidden());
+      await point.tap({ position: { x: 2, y: 150 } });
+      assert.match(await tooltip.innerText(), /68\.24 CNY/);
+      checkTransport(touch);
+      await touch.context.close();
+    }
+  });
 
   await t.test('区间边界、多币种、待核算、明细和分区失败', async () => {
     const session = await open();
@@ -399,6 +525,9 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     assert.equal(await value(page, 'profit'), '-49.92');
     assert.match(await metric(page, 'profit').innerText(), /含参考核算 2 笔/);
     assert.equal(await page.locator('.overview-bar-loss').count(), 1);
+    await page.locator('.overview-bar-loss').locator('..').focus();
+    assert.match(await page.locator('#overview-trend-tooltip').innerText(), /已核算利润：-119\.96 CNY/);
+    await page.keyboard.press('Escape');
     await page.getByRole('link', { name: '查看订单统计', exact: true }).click();
     await page.getByRole('heading', { name: '订单统计', exact: true }).waitFor();
     assert.equal((await page.locator('[data-stat-metric="profit"] .summary-number').innerText()).replace(/\s/g, ''), '-49.92CNY');
@@ -419,7 +548,7 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
       await page.setViewportSize({ width, height: 1000 });
       for (const theme of ['light', 'dark']) {
         await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
-        await range(page, '近 30 天').click();
+        await selectRange(page, '近 30 天');
         await trend(page, '订单量').click();
         await settle(page);
         assert.equal(await page.locator('.overview-chart-data g').count(), 30);
@@ -480,7 +609,7 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
           if (await detail.getAttribute('open') != null) await detail.locator('summary').click();
           const dismiss = page.getByRole('button', { name: '关闭提示', exact: true });
           if (await dismiss.isVisible()) await dismiss.click();
-          await range(page, '近 7 天').click();
+          await selectRange(page, '近 7 天');
           await page.evaluate(() => {
             document.activeElement?.blur();
             window.scrollTo(0, 0);
@@ -503,9 +632,13 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     unlinked.cardId = '';
     unlinked.source = '管理员手工';
     delete unlinked.issueFeeSnapshot;
-    await range(page, '近 7 天').click();
-    await page.locator('.overview-toolbar [data-action="mobile-list-actions"]').click();
-    await page.getByRole('menuitem', { name: '刷新数据', exact: true }).click();
+    await selectRange(page, '近 7 天');
+    await page.getByRole('button', { name: '查看统计区间与更新时间' }).click();
+    const period = page.locator('#drawer[open]');
+    await period.getByText('北京时间', { exact: true }).waitFor();
+    assert.match(await period.innerText(), /本期[\s\S]*上期[\s\S]*更新于/);
+    await page.keyboard.press('Escape');
+    await page.getByRole('button', { name: '刷新数据', exact: true }).click();
     await refreshed(page);
     assert.equal(await value(page, 'profit'), '71.84');
     assert.match(await metric(page, 'profit').innerText(), /1 笔开卡费未分摊/);
@@ -514,9 +647,8 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
       order('equal-current-myr', '2026-11-10T09:00:00', { saleAmount: '0.33', saleCurrency: 'MYR' }),
       order('equal-prior-cny', '2026-11-09T09:00:00')
     );
-    await range(page, '今日').click();
-    await page.locator('.overview-toolbar [data-action="mobile-list-actions"]').click();
-    await page.getByRole('menuitem', { name: '刷新数据', exact: true }).click();
+    await selectRange(page, '今日');
+    await page.getByRole('button', { name: '刷新数据', exact: true }).click();
     await refreshed(page);
     assert.deepEqual(await metric(page, 'receipts').locator('.overview-metric-footer > span').allTextContents(),
       ['较上期持平 CNY', '较上期持平 MYR', '退款 50.00 CNY · 1.2345 MYR']);
@@ -536,7 +668,7 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
       ? route.fulfill({ status: 503, json: {} })
       : route.fulfill({ json: { version: 0, data: null } }));
     await page.goto(origin + '/#/overview');
-    await page.locator('.overview-design-label').getByText(/读取失败/).waitFor();
+    await page.waitForFunction(() => document.querySelector('#overview-toolbar-status')?.textContent.includes('读取失败'));
     const stock = page.locator('.overview-stock-table tbody tr');
     await page.locator('section[aria-labelledby="overview-inventory"]').getByText('读取失败 · 可重试', { exact: true }).waitFor();
     assert.deepEqual(await stock.first().locator('td').allTextContents(), Array(9).fill('—'));

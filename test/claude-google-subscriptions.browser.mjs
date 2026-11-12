@@ -12,13 +12,14 @@ const rows = ['active', 'expired', 'conflict'].map((code, index) => ({
   id: `synthetic-${index}`, product: 'Claude', account: `synthetic-${index}@example.test`,
   registrationEmail: `synthetic-${index}@example.test`, accountId: `asset-${index}`,
   ownerName: '合成归属人', operatorName: '合成录入人', status: index === 1 ? 'expired' : 'active', conflict: false,
-  series: [{ key: 'claude', plan: 'Pro', start: '2026-11-01 10:00', expiry: '2026-12-01 10:00',
+  series: [{ key: 'claude', plan: 'Pro', start: '2026-11-01 10:00', expiry: index === 1 ? '2026-11-09T01:00:00Z' : '2026-12-01 10:00',
     status: index === 1 ? 'expired' : 'active', remainingDays: index === 1 ? 0 : 21 }],
   history: [], queryCode: { status: code, remainingDays: code === 'active' ? 3 : code === 'expired' ? 0 : null,
-    expiresAt: code === 'active' ? '2026-11-13T02:00:00Z' : null }
+    expiresAt: code === 'active' ? '2026-11-13T02:00:00Z' : code === 'expired' ? '2026-11-10T01:00:00Z' : null }
 }));
 const result = command => {
-  const items = rows.filter(row => (!command.query || row.account.includes(command.query)) &&
+  const items = rows.filter(row => (command.scope === 'expired' ? row.status === 'expired' : row.status !== 'expired') &&
+    (!command.query || row.account.includes(command.query)) &&
     (!command.status || row.status === command.status));
   return { items, total: items.length, counts: { active: 2, expired: 1, pending: 0, ended: 0 },
     page: 1, pageSize: command.pageSize, revision, now: '2026-11-10T02:00:00Z' };
@@ -79,7 +80,7 @@ test('旧 Claude 入口保留个人后缀与两种复制，并阻止冲突和迟
   assert.match(await first.innerText(), /有效 · 3 天/);
   assert.doesNotMatch(await first.innerText(), /SYNTHETIC-PASSWORD|SYNTHETIC-2FA|SYNTHETIC-QUERY/);
 
-  await page.getByRole('button', { name: '复制后缀设置' }).click();
+  await page.getByRole('button', { name: '账号资料后缀' }).click();
   const form = page.locator('#subscription-settings-form');
   await form.locator('[type="submit"]:enabled').waitFor();
   assert.equal(await form.locator('#subscription-copy1').inputValue(), '原短后缀');
@@ -97,18 +98,26 @@ test('旧 Claude 入口保留个人后缀与两种复制，并阻止冲突和迟
   assert.match(short, /SYNTHETIC-QUERY/); assert.match(short, /新短后缀/);
   assert.doesNotMatch(short, /SYNTHETIC-PASSWORD|SYNTHETIC-2FA/);
   assert.equal(copies.at(-1).mode, 'short');
-  await first.locator('[data-action="subscriptions-copy"]').click();
+  const copyAccount = async row => {
+    await row.locator('[data-action="subscriptions-more"]').click();
+    await page.getByRole('menuitem', { name: '复制账号资料', exact: true }).click();
+  };
+  await copyAccount(first);
   await page.waitForFunction(() => window.syntheticCopies.length === 2);
   const full = await page.evaluate(() => window.syntheticCopies[1]);
   assert.match(full, /SYNTHETIC-PASSWORD/); assert.match(full, /SYNTHETIC-2FA/);
   assert.match(full, /新完整后缀\n第二行/); assert.equal(copies.at(-1).mode, 'full');
 
   const expired = page.locator(`tr[data-row-id="${rows[1].id}"]`);
-  await expired.locator('[data-action="subscriptions-copy"]').click();
+  await page.getByRole('tab', { name: '已到期', exact: true }).click();
+  await expired.locator('[data-column="days"]').getByText('已到期 1 天 1 小时', { exact: true }).waitFor();
+  await expired.locator('[data-column="code"]').getByText('已到期 1 小时', { exact: true }).waitFor();
+  await copyAccount(expired);
   await page.waitForFunction(() => window.syntheticCopies.length === 3);
   assert.doesNotMatch(await page.evaluate(() => window.syntheticCopies[2]), /SYNTHETIC-QUERY/);
   await page.getByText(/未登记：买家查询码/).waitFor();
-  await page.locator(`tr[data-row-id="${rows[2].id}"] [data-action="subscriptions-copy"]`).click();
+  await page.getByRole('tab', { name: '客户订阅', exact: true }).click();
+  await copyAccount(page.locator(`tr[data-row-id="${rows[2].id}"]`));
   await page.getByText('账号或邮箱关联存在冲突，请先核对', { exact: true }).waitFor();
   assert.equal(await page.evaluate(() => window.syntheticCopies.length), 3);
 
@@ -118,7 +127,7 @@ test('旧 Claude 入口保留个人后缀与两种复制，并阻止冲突和迟
   assert.equal(lists.length, before + 1);
   holdCopy = { started: Promise.withResolvers(), release: Promise.withResolvers(), finished: Promise.withResolvers() };
   try {
-    await first.locator('[data-action="subscriptions-copy"]').click(); await holdCopy.started.promise;
+    await copyAccount(first); await holdCopy.started.promise;
     await page.goto(origin + '/#/data-management/bank-cards');
     holdCopy.release.resolve(); await holdCopy.finished.promise; await settle(page);
     assert.equal(await page.evaluate(() => window.syntheticCopies.length), 3, '切页后的迟到响应不能写入剪贴板');

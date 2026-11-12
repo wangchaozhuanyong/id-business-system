@@ -26,7 +26,7 @@ test('renewal workbench persists decisions, creates a new order and projects cus
       writeHead(code) { status = code; },
       end(body) { json = JSON.parse(body); }
     };
-    await handler(request, response, path, actor);
+    await handler(request, response, new URL(path, origin).pathname, actor);
     return { status, json };
   };
   let browser;
@@ -36,10 +36,11 @@ test('renewal workbench persists decisions, creates a new order and projects cus
     const offline = await interceptDesign(context, { localFixtures: {}, actor, skipRechargeAssets: true });
     await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
     for (const [pattern, handler] of [[api, commerce], ['/api/local/subscriptions/*', subscriptions],
-      ['/api/local/subscription-renewal-card', cards], ['/api/local/subscription-card-status', cards]]) {
+      ['/api/local/subscription-renewal-card', cards], ['/api/local/subscription-card-status*', cards]]) {
       await context.route('**' + pattern, async route => {
         const request = route.request();
-        await route.fulfill(await commerceRequest(request.method(), request.postDataJSON(), new URL(request.url()).pathname, handler));
+        const url = new URL(request.url());
+        await route.fulfill(await commerceRequest(request.method(), request.postDataJSON(), url.pathname + url.search, handler));
       });
     }
     const page = await context.newPage();
@@ -136,15 +137,17 @@ test('renewal workbench persists decisions, creates a new order and projects cus
     await row('QA-REFUSE').waitFor();
     assert.equal(await detail.getByRole('button', { name: '拒续费' }).count(), 0, '切换不会自动选中下一笔');
     await tab(/^已到期/);
-    await row('QA-EXPIRED').getByText('已过期 1 天 1 小时', { exact: true }).waitFor();
+    await row('QA-EXPIRED').getByText('已到期 1 天 1 小时', { exact: true }).waitFor();
     await select('QA-EXPIRED');
     await detail.getByText('@qa_customer').waitFor();
-    await page.getByRole('button', { name: '续费联系后缀' }).click();
-    await drawer.getByLabel('后缀文字').fill('合成续费询问。');
-    await drawer.getByRole('button', { name: '保存后缀' }).click();
-    await detail.getByRole('button', { name: '复制联系资料' }).click();
-    await page.locator('#toast').getByText(/已复制.*续费资料/).waitFor();
-    assert.match(await page.evaluate(() => navigator.clipboard.readText()), /客户：续费客户甲[\s\S]*合成续费询问/);
+    await page.getByRole('button', { name: '续费提醒话术' }).click();
+    await drawer.getByLabel('提醒话术').fill('合成续费询问。');
+    await drawer.getByRole('button', { name: '保存话术' }).click();
+    await detail.getByRole('button', { name: '复制订阅信息' }).click();
+    await page.locator('#toast').getByText('已复制订阅信息', { exact: true }).waitFor();
+    const reminderText = await page.evaluate(() => navigator.clipboard.readText());
+    assert.match(reminderText, /订阅套餐：Plus[\s\S]*合成续费询问/);
+    assert.doesNotMatch(reminderText, /续费客户甲|客户：|微信：|Telegram/);
     const bind = detail.getByRole('button', { name: '绑定银行卡' });
     assert.equal(await detail.getByRole('button', { name: '复制银行卡' }).count(), 0);
     await bind.click();
@@ -237,14 +240,14 @@ test('renewal workbench persists decisions, creates a new order and projects cus
     await row('QA-REFUSE').waitFor();
     await page.clock.setFixedTime(new Date('2026-11-06T08:30:00Z'));
     await tab(/^已到期/);
-    await row('QA-SOON').getByText('已过期不足 1 小时', { exact: true }).waitFor();
+    await row('QA-SOON').getByText('已到期不足 1 小时', { exact: true }).waitFor();
     await page.goto(origin + '/#/data-management/bank-cards');
     await page.waitForURL('**/#/subscriptions/bank-cards');
     const groupedCard = page.locator('table[data-table="commerce-bank-card-groups"] tr[data-row-id]')
-      .filter({ hasText: '尾号 0002' });
-    await groupedCard.getByRole('button', { name: '查看订阅及余额', exact: true }).click();
+      .filter({ hasText: '4000000000000002' });
+    await groupedCard.getByRole('button', { name: '查看关联订单', exact: true }).click();
     const storedNoEmail = (await read()).data.orders.find(order => order.id === 'QA-NO-EMAIL');
-    const linked = drawer.locator('tr[data-row-id="QA-NO-EMAIL"] [data-column="account"]');
+    const linked = drawer.locator('tr[data-row-id="QA-NO-EMAIL"] [data-column="orderNo"]');
     await linked.waitFor({ state: 'attached' });
     assert.equal((await linked.textContent()).trim(), storedNoEmail.orderNo);
     assert.deepEqual(errors, []);

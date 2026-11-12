@@ -27,20 +27,20 @@ export function stageAppleOpenings(previous, next, ledger, actor, now = new Date
   }
   for (const row of next?.mailboxes || []) {
     if (row.type !== 'apple') {
-      if ('appleOpeningBalance' in row || 'appStoreRegion' in row) return { error: '账单地区和期初余额仅用于苹果 ID' };
+      if ('appleOpeningBalance' in row || 'appStoreRegion' in row) return { error: 'Id地区和期初余额仅用于苹果 ID' };
       continue;
     }
     const original = before.get(row.id);
     if (original && row.email !== original.email) return { error: '已有苹果 ID 的账号邮箱不能更改' };
-    if (row.appStoreRegion !== undefined && row.appStoreRegion !== null && row.appStoreRegion !== '' && !appleRegion(row.appStoreRegion)) return { error: '请选择有效的 App Store 账单地区' };
+    if (row.appStoreRegion !== undefined && row.appStoreRegion !== null && row.appStoreRegion !== '' && !appleRegion(row.appStoreRegion)) return { error: '请选择有效的 Id地区' };
     if (original?.appStoreRegion && original.appStoreRegion !== row.appStoreRegion &&
         (funding.byWallet.get(row.id)?.used || funding.byWallet.get(row.id)?.pending.length))
-      return { error: '已有内购使用记录，不能更改原苹果 ID 账单地区' };
+      return { error: '已有内购使用记录，不能更改 Id地区' };
     if (!Object.hasOwn(row, 'appleOpeningBalance')) continue;
     const amount = row.appleOpeningBalance;
     if (original || !appleRegion(row.appStoreRegion) || appleAmountUnits(amount) === null ||
         nextLedger.wallets.some(wallet => wallet.id === row.id))
-      return { error: '期初余额只能在新增苹果 ID 时登记，请核对账单地区和金额' };
+      return { error: '期初余额只能在新增苹果 ID 时登记，请核对 Id地区和金额' };
     delete row.appleOpeningBalance;
     const positive = appleAmountUnits(amount) > 0n;
     nextLedger.wallets.push({ id: row.id, balance: amount, currency: 'USD', version: positive ? 2 : 1 });

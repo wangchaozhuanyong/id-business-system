@@ -214,7 +214,7 @@ test('买家查询码按页读取，切页复用成功结果，重置或失效�
   await ready();
   assert.deepEqual(reads.slice(beforeExpiry), [expiringId], '只重新读取已跨过有效期的查询码');
   assert.equal(await output(expiringId).textContent(), codes.get(expiringId));
-  assert.equal(await remaining(expiringId).textContent(), '0 天');
+  assert.equal(await remaining(expiringId).textContent(), '已到期不足 1 小时');
   const beforeTimeout = reads.length;
   await page.clock.fastForward(301_000);
   await page.evaluate(() => window.IDDesignAPI.render());

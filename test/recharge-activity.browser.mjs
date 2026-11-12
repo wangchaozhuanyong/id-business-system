@@ -53,6 +53,11 @@ test('the alert uses the live change channel and updates an accessible drawer in
               ? [{ status: 'review', at: at + 10_000, reason: '付款结果待核对，请勿重复提交' }] : [])] } });
         });
         await page.goto(origin + '/#/workspace/order/gpt');
+        const captureSounds = () => page.evaluate(() => {
+          window.qaResultSounds = [];
+          window.IDInteractionSound = { play: kind => window.qaResultSounds.push(kind) };
+        });
+        await captureSounds();
         if (dark) await toggleDesignTheme(page);
         const toggle = page.locator('#recharge-activity-toggle');
         const toast = page.locator('#recharge-activity-toast');
@@ -65,6 +70,7 @@ test('the alert uses the live change channel and updates an accessible drawer in
         rows = [{ ...initial }];
         await page.evaluate(() => window.emitRechargeRevision('started'));
         await toast.getByText('正在充值 · ChatGPT Pro 200', { exact: true }).waitFor();
+        assert.deepEqual(await page.evaluate(() => window.qaResultSounds), []);
         assert.match(await toast.innerText(), /li•••@example\.test/);
         assert.match(await toast.innerText(), /Z7K9/);
         assert.doesNotMatch(await toast.innerText(), /FIXTURE-RECHARGE/);
@@ -84,6 +90,7 @@ test('the alert uses the live change channel and updates an accessible drawer in
         assert(await toast.isHidden(), '相同版本重连不重弹');
         await page.reload();
         await toggle.waitFor();
+        await captureSounds();
         assert(await toast.isHidden(), '刷新后从未读列表补看已有任务');
         assert.equal(await toggle.getAttribute('aria-label'), '代充动态，1 条未读');
 
@@ -118,9 +125,16 @@ test('the alert uses the live change channel and updates an accessible drawer in
         rows[0] = { ...rows[0], status: 'review', event: 2, updatedAt: at + 10_000, unread: true };
         await page.evaluate(() => window.emitRechargeRevision('review'));
         await toast.getByText('付款待核对 · ChatGPT Pro 200', { exact: true }).waitFor();
+        assert.deepEqual(await page.evaluate(() => window.qaResultSounds), ['error']);
         await toast.getByRole('button', { name: '查看任务' }).click();
         await drawer.getByText('付款结果待核对，请勿重复提交', { exact: true }).waitFor();
         assert.deepEqual(await drawer.locator('.recharge-activity-timeline strong').allTextContents(), ['正在充值', '付款待核对']);
+        await drawer.getByRole('button', { name: '关闭抽屉' }).click();
+        rows[0] = { ...rows[0], status: 'success', event: 3, updatedAt: at + 20_000, unread: true };
+        await page.evaluate(() => window.emitRechargeRevision('succeeded'));
+        await toast.getByText('充值成功 · ChatGPT Pro 200', { exact: true }).waitFor();
+        await page.evaluate(() => window.emitRechargeRevision('succeeded', 'snapshot'));
+        assert.deepEqual(await page.evaluate(() => window.qaResultSounds), ['error', 'success']);
         await page.evaluate(() => window.IDDesignAPI.clearPageRegions());
         assert(await toggle.isHidden());
         assert(await toast.isHidden());

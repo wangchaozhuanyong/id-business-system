@@ -41,6 +41,7 @@ const icons = {
   copy: '<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V3H3v13h5"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7h.01"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l4 2"/>',
+  refresh: '<path d="M20 7v5h-5M20 12a8 8 0 1 0-2 5"/>',
   card: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20M6 15h4"/>',
   link: '<path d="m10 13 4-4m-6 7-2 2a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0m2 0 2-2a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0" transform="translate(2 -1)"/>',
   key: '<circle cx="8" cy="8" r="5"/><path d="m12 12 9 9m-3-3 3-3m-6 0 3-3"/>',
@@ -469,7 +470,6 @@ function notify(message, { kind = 'info', duration } = {}) {
   positionFeedback();
   toastRemaining = duration ?? (kind === 'loading' ? 0 : kind === 'error' || kind === 'warning' ? 8000 : 3800);
   resumeFeedbackTimer();
-  if (kind === 'success' || kind === 'error') window.IDInteractionSound?.play(kind);
   return toastRevision;
 }
 actionToast.addEventListener('pointerenter', () => {

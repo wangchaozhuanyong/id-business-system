@@ -4,8 +4,7 @@
   const A = window.IDDesignAPI, D = window.IDLocalData;
   const { $, esc, button, textAction } = A;
   const labels = { all: 'all', gpt: 'GPT', claude: 'Claude', gemini: 'Gemini', grok: 'Grok' };
-  const states = window.IDOrderOpening.subscriptionStateLabels;
-  const parseTime = window.IDOrderOpening.subscriptionTime;
+  const { subscriptionStateLabels: states, subscriptionTime: parseTime, subscriptionDuration } = window.IDOrderOpening;
   const codeStates = { active: '有效', missing: '未登记', expired: '已过期', disabled: '已停用',
     auth_failed: '授权失败', conflict: '资料冲突', not_applicable: '不适用' };
   const scopes = ['inventory', 'commerce', 'tools/mailbox-pool', 'subscription-management'];
@@ -46,18 +45,13 @@
   const displayDate = value => Number.isFinite(parseTime(value)) ? timeFormatter.format(parseTime(value)) : '未登记';
   const displayDays = value => Number.isInteger(value) ? `${value} 天` : '—';
   const estimatedNow = data => data.serverTime + performance.now() - data.receivedAt;
-  function countdownText(remaining) {
-    if (remaining <= 0) return '已到期';
-    const hours = Math.floor(remaining / hour);
-    if (!hours) return '不足 1 小时';
-    return [hours >= 24 && `${Math.floor(hours / 24)} 天`, hours % 24 && `${hours % 24} 小时`].filter(Boolean).join(' ');
-  }
   function countdown(series) {
-    if (series.status === 'expired') return '已到期';
+    if (series.renewalExpiryPending && series.status === 'opened') return '到期待核对';
     const expiry = parseTime(series.expiry), data = currentSnapshot();
-    if (!['active', 'scheduled'].includes(series.status) || !Number.isFinite(expiry) || !Number.isFinite(data?.serverTime))
-      return '—';
-    return `<span data-subscription-countdown="${expiry}">${countdownText(expiry - estimatedNow(data))}</span>`;
+    if (!['active', 'scheduled', 'expired'].includes(series.status)) return '—';
+    if (!Number.isFinite(expiry) || !Number.isFinite(data?.serverTime))
+      return series.status === 'expired' ? '已到期（时间待核对）' : '—';
+    return `<span data-subscription-countdown="${expiry}">${subscriptionDuration(expiry, estimatedNow(data))}</span>`;
   }
   const lineValues = (row, render) => row.series.map(series => `<div>${render(series)}</div>`).join('');
   const stateTag = status => A.tag(states[status] || '待核对', status === 'active' ? 'green' : status === 'pending' ? 'warning' : '');
@@ -67,12 +61,17 @@
   function columns() {
     return [
       { id: 'customer', label: '客户', render: row => esc(row.conflict ? '归属待核对' : row.customerName || (row.scope === 'owned' ? '自用' : '未登记')) },
+      { id: 'contact', label: '客户联系方式', render: row => {
+        const labels = A.modules.commerce?.subscriptionContacts?.(row.contacts, true);
+        return labels ? textAction(labels, 'subscriptions-contacts', `data-id="${esc(row.id)}"`) : '—';
+      } },
       { id: 'email', label: '邮箱账号', class: 'email-cell',
         render: row => esc(row.account || '未登记 · ' + (row.history[0]?.orderNo || '—')) },
       ...(product() === 'all' ? [{ id: 'product', label: '产品' }] : []),
       { id: 'plan', label: '订阅套餐', render: row => lineValues(row, series => esc(series.plan || '待核对')) },
       { id: 'start', label: '订阅时间', render: row => lineValues(row, series => esc(displayDate(series.start))) },
-      { id: 'expiry', label: '到期时间', render: row => lineValues(row, series => esc(displayDate(series.expiry))) },
+      { id: 'expiry', label: '到期时间', render: row => lineValues(row, series =>
+        series.renewalExpiryPending ? '待核对' : esc(displayDate(series.expiry))) },
       { id: 'days', label: '到期倒计时', mobileSummary: true, render: row => lineValues(row, countdown) },
       { id: 'status', label: '订阅状态', render: row => row.status === 'dead' ? stateTag('dead') :
         lineValues(row, series => stateTag(series.status)) +
@@ -81,7 +80,8 @@
         render: row => esc(row.ownerName || (row.ownerEligible ? '未设置' : '—')) },
       { id: 'operatorName', label: '操作人', render: row => esc(row.operatorName || '历史未记录') },
       ...(product() === 'Claude' ? [{ id: 'code', label: '查询码状态／剩余', render: row =>
-        row.queryCode?.status === 'not_applicable' ? '不适用' :
+        row.queryCode?.status === 'not_applicable' ? '不适用' : row.queryCode?.status === 'expired'
+          ? countdown({ expiry: row.queryCode.expiresAt, status: 'expired' }) :
           esc(codeStates[row.queryCode?.status] || '待核对') + ' · ' + esc(displayDays(row.queryCode?.remainingDays)) }] : []),
       { id: 'payment', label: '续费方式', render: row => lineValues(row, series =>
         esc(series.payment === '银行卡' ? series.last4 ? '银行卡 · ' + series.last4 : '银行卡 · 未绑定'
@@ -157,9 +157,10 @@
     }
     if (error) nextRead = Infinity;
     for (const counter of document.querySelectorAll('#subscription-list [data-subscription-countdown]')) {
-      const remaining = Number(counter.dataset.subscriptionCountdown) - now;
-      counter.textContent = countdownText(remaining);
-      if (remaining > 0) nextHour = Math.min(nextHour, remaining >= hour ? remaining % hour : remaining);
+      const expiry = Number(counter.dataset.subscriptionCountdown), remaining = expiry - now;
+      counter.textContent = subscriptionDuration(expiry, now);
+      nextHour = Math.min(nextHour, remaining > 0
+        ? remaining % hour : hour - (-remaining % hour));
     }
     const next = Math.min(nextRead, nextHour);
     if (Number.isFinite(next)) expiryTimer = setTimeout(() => {
@@ -180,7 +181,7 @@
     const actions = (name === 'Claude'
       ? button('订阅历史入库', 'inventory-claude-history', '', 'upload') +
         button('账号资料后缀', 'subscriptions-settings', '', 'settings') : '') +
-      button('续费联系后缀', 'commerce-renewal-suffix', '', 'settings') +
+      button('续费提醒话术', 'commerce-renewal-suffix', '', 'settings') +
       button('列设置', 'column-settings', '', 'columns', `data-table-id="${tableId}"`);
     return A.header(title, '查看每笔订阅的到期时间与续费方式。', actions) +
       (A.modules.commerce?.subscriptionCenterNav?.('subscriptions') || '') +
@@ -285,6 +286,7 @@
   }
 
   function detail(row) {
+    const contacts = A.modules.commerce?.subscriptionContacts?.(row.contacts);
     const xAccount = row.product === 'Grok' && row.registrationEmail && row.account !== row.registrationEmail ? row.account : '';
     const history = row.history.map(item => `<tr><td>${esc(item.orderNo || '历史入库')}</td><td>${esc(item.plan || '待核对')}</td>` +
       `<td>${esc(displayDate(item.start))}</td><td>${esc(displayDate(item.expiry))}</td><td>${stateTag(item.status)}${item.missingAssociation
@@ -301,6 +303,7 @@
        ${row.status === 'dead' ? '<div class="property-row"><span>账号状态</span><strong>死号</strong></div>' : ''}
        <div class="property-row"><span>归属人</span><strong>${esc(row.ownerName || (row.ownerEligible ? '未设置' : '—'))}</strong></div>
        <div class="property-row"><span>操作人</span><strong>${esc(row.operatorName)}</strong></div></div>
+       ${contacts ? `<section class="property-list subscription-contact-list" aria-label="客户联系方式">${contacts}</section>` : ''}
        ${row.conflict ? '<p class="inline-notice warning">账号、客户或邮箱关联存在冲突，请先核对原资料。</p>' : ''}
        <div class="table-viewport" tabindex="0"><table><thead><tr><th>订单／来源</th><th>套餐</th><th>订阅时间</th><th>到期时间</th><th>状态</th><th class="table-actions">操作</th></tr></thead><tbody>${history}</tbody></table></div>`,
       button('关闭', 'drawer-close'));
@@ -455,6 +458,10 @@
       else if (action === 'subscriptions-copy') void copy(node);
       else if (action === 'subscriptions-copy-short') void copy(node, 'short');
       else if (action === 'subscriptions-settings') void settingsDrawer();
+      else if (action === 'subscriptions-contacts') {
+        const row = currentRow(node.dataset.id), contacts = A.modules.commerce?.subscriptionContacts?.(row?.contacts);
+        if (contacts) A.openDrawer('客户联系方式', '', `<div class="property-list">${contacts}</div>`, button('关闭', 'drawer-close'));
+      }
       else if (action === 'subscriptions-detail') { const row = currentRow(node.dataset.id); if (row) detail(row); }
       else if (action === 'subscriptions-owner') { const row = currentRow(node.dataset.id); if (row) void ownerDrawer(row); }
       else if (action === 'subscriptions-confirm') { const row = currentRow(node.dataset.id); if (row) confirmDrawer(row, node.dataset.orderId); }

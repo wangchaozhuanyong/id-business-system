@@ -51,7 +51,7 @@ const countTones = page => page.evaluate(() => window.audioFeedback.tones.length
 const waitForTone = (page, count) => page.waitForFunction(count => window.audioFeedback.tones.length >= count, count);
 const waitForCooldown = page => page.waitForFunction(() => {
   const last = window.audioFeedback.tones.at(-1);
-  return !last || performance.now() - last.at >= 110;
+  return !last || performance.now() - last.at >= 260;
 });
 const motion = item => item.evaluate(node => getComputedStyle(node).transform);
 
@@ -64,12 +64,12 @@ async function soundSettings(page) {
   return panel;
 }
 
-test('sidebar motion and opt-in sound work with real browser audio', { timeout: 50_000 }, async t => {
+test('sidebar stays silent and opt-in outcomes use real browser audio', { timeout: 50_000 }, async t => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
   t.after(() => browser.close());
 
-  await t.test('desktop enters each navigation item once and respects volume and motion preferences', async () => {
+  await t.test('desktop navigation stays silent, outcomes respect rate limit and volume', async () => {
     const { page, context } = await observeAudio(browser, { viewport: { width: 1440, height: 900 }, reducedMotion: 'no-preference' });
     try {
       const first = page.locator('#sidebar .nav-heading').first();
@@ -88,54 +88,48 @@ test('sidebar motion and opt-in sound work with real browser audio', { timeout: 
 
       const panel = await soundSettings(page);
       await panel.getByLabel('开启轻音效').check();
-      await page.waitForFunction(() => {
-        const tone = window.audioFeedback.tones[0];
-        return tone?.state === 'running' && tone.peak > 0.005;
-      });
-      assert.match(await panel.locator('#sound-state').textContent(), /左侧导航/);
+      await page.locator('#interaction-preferences[data-enabled="true"]').waitFor({ state: 'attached' });
+      assert.match(await panel.locator('#sound-state').textContent(), /订单保存和代充结果/);
       await page.keyboard.press('Escape');
       await panel.waitFor({ state: 'hidden' });
 
-      await waitForCooldown(page);
-      const beforeHover = await countTones(page);
       await first.hover();
-      await page.waitForFunction(index => window.audioFeedback.tones[index]?.peak > 0.005, beforeHover);
-      await waitForCooldown(page);
       await first.locator('.icon').first().hover();
       await first.locator('.nav-text').hover();
       await page.evaluate(() => window.IDDesignAPI.render());
       await settle(page);
-      assert.equal(await countTones(page), beforeHover + 1, '图标、文字和后台重绘不会让同一项重复发声');
+      assert.equal(await countTones(page), 0, '悬停和重绘保持静音');
       await second.hover();
-      await waitForTone(page, beforeHover + 2);
       await second.click();
       const child = page.locator('#sidebar .nav-children a').first();
       await child.waitFor();
-      await waitForCooldown(page);
-      const beforeChild = await countTones(page);
       await child.hover();
-      await waitForTone(page, beforeChild + 1);
       await page.waitForFunction(() => {
         const item = document.querySelector('#sidebar .nav-child:hover');
         return item && getComputedStyle(item).transform !== 'none';
       });
 
-      const beforeSweep = await countTones(page);
       for (let index = 0; index < 12; index++) await (index % 2 ? first : second).hover();
-      const sweep = await page.evaluate(from => window.audioFeedback.tones.slice(from).map(tone => tone.at), beforeSweep);
-      assert(sweep.every((at, index) => index === 0 || at - sweep[index - 1] >= 85), '连续扫过不会叠加短音');
+      assert.equal(await countTones(page), 0);
+      await page.evaluate(() => {
+        for (let index = 0; index < 12; index++) window.IDInteractionSound.play('success');
+      });
+      await page.waitForFunction(() => window.audioFeedback.tones[0]?.peak > 0.005);
+      assert.equal(await countTones(page), 1, '重复结果受限流约束');
+      await waitForCooldown(page);
+      await page.evaluate(() => window.IDInteractionSound.play('error'));
+      await waitForTone(page, 2);
 
       await toggleDesignTheme(page);
       await page.locator('#nav-toggle').click();
       await page.locator('body.is-collapsed').waitFor();
-      await waitForCooldown(page);
       const beforeCollapsed = await countTones(page);
       await first.hover();
-      await waitForTone(page, beforeCollapsed + 1);
       await page.waitForFunction(() => {
         const item = document.querySelector('#sidebar .nav-heading');
         return item.matches(':hover') && new DOMMatrixReadOnly(getComputedStyle(item).transform).a > 1.02;
       });
+      assert.equal(await countTones(page), beforeCollapsed);
 
       await page.emulateMedia({ reducedMotion: 'reduce' });
       await second.hover();
@@ -145,8 +139,7 @@ test('sidebar motion and opt-in sound work with real browser audio', { timeout: 
       assert.match(await reopened.locator('#sound-state').textContent(), /音量为 0/);
       await page.keyboard.press('Escape');
       const beforeMute = await countTones(page);
-      await first.hover();
-      await second.hover();
+      await page.evaluate(() => window.IDInteractionSound.play('success'));
       assert.equal(await countTones(page), beforeMute);
 
       await soundSettings(page);
@@ -155,7 +148,7 @@ test('sidebar motion and opt-in sound work with real browser audio', { timeout: 
       await panel.getByLabel('开启轻音效').uncheck();
       await page.keyboard.press('Escape');
       const beforeOff = await countTones(page);
-      await first.hover();
+      await page.evaluate(() => window.IDInteractionSound.play('error'));
       assert.equal(await countTones(page), beforeOff);
       await page.reload();
       assert.equal(await page.locator('#interaction-preferences').getAttribute('data-enabled'), 'false');
@@ -163,26 +156,22 @@ test('sidebar motion and opt-in sound work with real browser audio', { timeout: 
     } finally { await context.close(); }
   });
 
-  await t.test('touch navigation keeps one click sound without hover enlargement', async () => {
+  await t.test('touch navigation stays silent without hover enlargement', async () => {
     const { page, context } = await observeAudio(browser, {
       viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, reducedMotion: 'no-preference'
     });
     try {
       const panel = await soundSettings(page);
       await panel.getByLabel('开启轻音效').tap();
-      await waitForTone(page, 1);
+      await page.locator('#interaction-preferences[data-enabled="true"]').waitFor({ state: 'attached' });
       await page.keyboard.press('Escape');
       const tools = page.locator('#mobile-tools-panel');
       if (await tools.evaluate(node => node.matches(':popover-open'))) await page.locator('#mobile-tools-toggle').tap();
       await page.locator('#nav-toggle').tap();
       const group = page.locator('#sidebar [data-group="账号管理"]');
-      await waitForCooldown(page);
-      const beforeTap = await countTones(page);
       await group.tap();
-      await waitForTone(page, beforeTap + 1);
       await page.locator('#sidebar .nav-child').first().waitFor();
-      await waitForCooldown(page);
-      assert.equal(await countTones(page), beforeTap + 1);
+      assert.equal(await countTones(page), 0);
       assert.equal(await motion(group), 'none');
       assert(await group.evaluate(node => node.getBoundingClientRect().height >= 44));
     } finally { await context.close(); }

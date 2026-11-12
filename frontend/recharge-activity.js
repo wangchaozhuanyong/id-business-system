@@ -21,6 +21,7 @@
   const events = new Map();
   let version, loaded = false, stopped = false, pending = false, refreshQueued = false;
   let refreshTimer, dismissTimer, retryDelay = 1000, currentToast;
+  let latestActivity = -Infinity;
 
   const plan = row => row.plan ? 'ChatGPT ' + row.plan : 'ChatGPT · 套餐待核对';
   const owner = row => row.owner ? row.owner.name || '领用人名称待核对' : '归属待核对';
@@ -87,12 +88,17 @@
           const result = await data.rechargeActivity();
           if (stopped) return;
           const newItems = loaded ? result.items.filter(row => row.unread && events.get(row.id) !== row.event) : [];
-          for (const row of result.items) events.set(row.id, row.event);
+          const terminal = newItems.find(row => row.updatedAt >= latestActivity && row.status !== 'running');
+          for (const row of result.items) {
+            events.set(row.id, row.event);
+            latestActivity = Math.max(latestActivity, row.updatedAt);
+          }
           loaded = true;
           clearTimeout(refreshTimer);
           retryDelay = 1000;
           renderBadge(result.unread);
           showToast(newItems);
+          if (terminal) window.IDInteractionSound?.play(terminal.status === 'success' ? 'success' : 'error');
         } catch (error) {
           if (stopped) return;
           if ([401, 403].includes(error.status)) return stop();

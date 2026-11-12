@@ -334,7 +334,7 @@
     cardTypes: () => request('card-types'),
     cardTypeAction: (command) => write(['card-types'], () => request('card-types', command, 'POST')),
     subscriptionCardEstimates: () => request('subscription-card-estimates?includeNext=1'),
-    subscriptionCardStatus: () => request('subscription-card-status'),
+    subscriptionCardStatus: () => request('subscription-card-status?includeDetails=1'),
     renewalCardStatus: (orderId, version) => request('subscription-card-status?' + new URLSearchParams({
       orderId, ...(version !== undefined && { version })
     })),

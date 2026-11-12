@@ -2,10 +2,21 @@
 @import './tabs.css?v=20261110-tabs';
 
 :root {
+  --bg: #f5f6f8;
+  --surface-soft: #f5f7f9;
+  --line: #e3e7ec;
+  --control-border: #88919d;
+  --sidebar-surface: #f8f9fb;
+  --shadow: 0 3px 16px rgb(36 48 65 / 4%);
   font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif;
   font-size: 14px;
   color: var(--text);
   background: var(--bg);
+}
+html[data-theme='dark'], :root[data-id-theme='dark'] {
+  --surface-soft: #233040;
+  --line: #354152;
+  --control-border: #7e8b9b;
 }
 
 * {
@@ -2941,6 +2952,10 @@ dialog::backdrop {
   justify-content: center;
   gap: 4px;
 }
+.subscription-contact-actions { flex-wrap: nowrap; white-space: nowrap; }
+@media (max-width: 900px) {
+  .subscription-contact-actions > :is(a, button) { min-height: 44px; }
+}
 .option-settings-groups {
   display: grid;
   gap: 18px;
@@ -4278,8 +4293,7 @@ details.toolbox-phrase-more[open] > summary {
 #commerce-order-form :is(.order-wide-fields, .order-account-fields) > :is([data-commerce-field='email'], [data-commerce-field='ownerId']) {
   grid-column: 1 / -1;
 }
-.order-payment-options > :is([data-commerce-field='appleIdId'], [data-commerce-field='proMaterialMode'],
-  [data-commerce-field='tenantId']) {
+.order-payment-options > [data-commerce-field='appleIdId'] {
   grid-column: 1 / -1;
 }
 .order-payment-options:has(> [data-commerce-field='paymentId'][hidden])
@@ -4312,7 +4326,7 @@ details.toolbox-phrase-more[open] > summary {
   gap: 14px;
   min-width: 0;
   padding: 16px;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: 8px;
   background: var(--surface-soft);
 }
@@ -4691,6 +4705,15 @@ details:not(.title-help, .pagination-jump)[open] > summary {
   margin-bottom: 12px;
   color: var(--primary);
 }
+#commerce-order-form .commerce-span-all > summary {
+  width: fit-content;
+  max-width: 100%;
+  padding-inline: 4px;
+  border: 0;
+  background: transparent;
+  font-size: 13px;
+}
+#commerce-order-form .commerce-span-all > summary:hover { color: var(--primary); }
 details:not(.title-help, .pagination-jump) > summary:focus-visible {
   outline: 3px solid var(--primary);
   outline-offset: 2px;
@@ -5078,9 +5101,6 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
 }
 .commerce-entry-layout #commerce-order-form .commerce-search-picker:not(.commerce-email-history) > .commerce-picker-trigger {
   flex-basis: min(100%, 160px);
-}
-.commerce-entry-layout .order-payment-options > :is([data-commerce-field='proMaterialMode'], [data-commerce-field='tenantId']) {
-  grid-column: auto;
 }
 .commerce-entry-layout #commerce-order-form .order-payment-options
   :is([data-commerce-field='cardId'], [data-commerce-field='proPoolCardId'], [data-commerce-field='tenantId']) .commerce-picker-trigger {

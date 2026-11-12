@@ -127,30 +127,29 @@ test('统一 Claude 列表、三档套餐、租户银行卡录入与续费', { t
   await page.goto(origin + entry);
   const form = page.locator('#main #commerce-order-form');
   const field = name => form.locator('#commerce-' + name);
+  const openSupplement = async () => {
+    const section = form.locator('details').filter({ hasText: 'Claude 补充资料' });
+    if (await section.getAttribute('open') === null) await section.locator('summary').click();
+  };
   const choose = async (form, name, id) => {
+    if (name === 'claudeVerifierId') await openSupplement();
     await form.locator('#commerce-' + name + '-picker').click();
     await form.locator('#commerce-' + name + '-popover [data-value="' + id + '"]').click();
   };
-  const submit = async (root = form, beforeConfirm) => {
+  const submit = async (root = form, beforeSave) => {
     const scope = root === form ? page.locator('#main') : page.locator('#drawer[open]');
     const submitted = await root.elementHandle();
     assert.equal(await scope.locator('[data-action="commerce-order-pending"]').count(), 0);
+    if (beforeSave) await beforeSave();
+    const revision = writes.length;
     await scope.locator('button[form="commerce-order-form"][type="submit"]').click();
-    const confirm = page.locator('#confirm-dialog[open]').getByRole('button', { name: '确认保存', exact: true });
-    if (beforeConfirm) {
-      await confirm.waitFor();
-      await beforeConfirm();
-    }
-    const success = page.locator('#toast [data-feedback-message]').filter({ hasText: '订单提交成功' });
-    const [previousSuccess] = await success.elementHandles();
-    await confirm.click().catch(async error => {
+    await page.waitForFunction(node => !node.isConnected || node.closest('dialog')?.open === false, submitted).catch(async error => {
       const fields = await root.locator('.field-error:visible').allTextContents();
       throw new Error([error.message, ...fields].join('\n'));
     });
-    await page.waitForFunction(node => !node.isConnected || node.closest('dialog')?.open === false, submitted);
     await submitted.dispose();
-    if (previousSuccess) await previousSuccess.waitForElementState('hidden');
-    await success.waitFor();
+    await page.locator('#toast [data-feedback-message]').getByText('订单提交成功', { exact: true }).waitFor();
+    assert.equal(writes.length, revision + 1);
   };
   await field('plan').waitFor();
   assert.deepEqual(await field('plan').locator('option').evaluateAll(nodes => nodes.map(node => node.value)),
@@ -177,6 +176,7 @@ test('统一 Claude 列表、三档套餐、租户银行卡录入与续费', { t
   assert.equal(await field('proCardSerial').inputValue(), '00042-QA');
   await page.goto(origin + '/#/workspace/order/gpt');
   await page.goto(origin + entry);
+  await openSupplement();
   await field('claudeVerifierId-picker').waitFor();
   assert.equal(await field('plan').inputValue(), 'Pro');
   assert.equal(await field('verifierPhone').inputValue(), verifier.phone);
@@ -221,7 +221,7 @@ test('统一 Claude 列表、三档套餐、租户银行卡录入与续费', { t
   await field('businessType').selectOption('续费');
   await field('email').fill('qa-max-independent@example.test');
   await field('proMaterialMode').selectOption('none');
-  assert.equal(await field('proCardSerial').isVisible(), false);
+  assert.equal(await field('proCardSerial').inputValue(), '', '独立订单没有沿用上单序列号');
   await choose(form, 'customerId', customer.id);
   await field('proMaterialMode').selectOption('manual_card');
   await field('proCardNumber').fill(sampleCard);
@@ -241,8 +241,6 @@ test('统一 Claude 列表、三档套餐、租户银行卡录入与续费', { t
   await field('proMaterialMode').selectOption('tenant_card');
   await field('paidAmount').fill('20');
   await field('saleAmount').fill('500');
-  await page.locator('#main button[form="commerce-order-form"][type="submit"]').click();
-  await form.getByText('请选择银行卡或输入完整卡号', { exact: true }).waitFor();
   const status = form.locator('[data-commerce-field="tenantCardNumber"] [data-tenant-card-status]');
   await field('tenantCardNumber').fill('4000-0000 0000 0002');
   await status.getByText('已匹配租户银行卡。', { exact: false }).waitFor();
@@ -299,6 +297,8 @@ test('统一 Claude 列表、三档套餐、租户银行卡录入与续费', { t
   assert.equal(await renewal.locator('#commerce-email').inputValue(), max.email);
   assert.equal(await renewal.locator('#commerce-claudeVerifierId-picker').isVisible(), false);
   assert.equal(await renewal.locator('#commerce-cardId').inputValue(), '');
+  await renewal.locator('#commerce-proMaterialMode').selectOption('tenant_card');
+  await choose(renewal, 'tenantId', payer.id);
   await renewal.locator('#commerce-cardId option[value="' + unusedCard.id + '"]').waitFor({ state: 'attached' });
   await renewal.locator('#commerce-cardId-picker').click();
   const popup = renewal.locator('#commerce-cardId-popover');
@@ -312,6 +312,7 @@ test('统一 Claude 列表、三档套餐、租户银行卡录入与续费', { t
   await page.keyboard.press('Escape');
   assert.equal(await renewal.locator('#commerce-expiry').inputValue(), '2027-01-11T12:00');
   await renewal.locator('#commerce-proMaterialMode').selectOption('manual_card');
+  assert.equal(await renewal.locator('#commerce-cardTypeId').inputValue(), '');
   await renewal.locator('#commerce-proCardNumber').fill(sampleCard);
   await renewal.locator('#commerce-paidAmount').fill('200');
   await renewal.locator('#commerce-saleAmount').fill('900');

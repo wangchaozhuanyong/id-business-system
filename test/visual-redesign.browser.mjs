@@ -29,6 +29,7 @@ test('全站视觉：截图、图表、音效、对比度、键盘与窄屏', { 
   page.on('console', message => { if (message.type() === 'error' && /Content Security Policy|inline style/i.test(message.text())) securityErrors.push(message.text()); });
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(origin + '/#/overview');
+  page.setDefaultTimeout(6000);
   await page.waitForFunction(() => document.querySelector('.overview-metric-value strong')?.textContent === '28');
   await page.screenshot({ path: output + '/after-overview-desktop.png', fullPage: true });
   const routes = await page.evaluate(() => window.IDDesignAPI.navigation.flatMap(([group, , rows]) =>
@@ -45,9 +46,9 @@ test('全站视觉：截图、图表、音效、对比度、键盘与窄屏', { 
     assert.deepEqual(await page.locator('.overview-columns').first().boundingBox(), before);
     await page.keyboard.press('Escape');
     assert(await page.locator('.overview-chart-data [role=tooltip]').isHidden());
-    await page.locator('.overview-chart-data summary').click();
-    assert.equal(await page.locator('.overview-chart-data tbody tr').count(), 7);
-    await page.locator('.overview-chart-data summary').click();
+    await page.locator('.overview-daily summary').click();
+    assert.equal(await page.locator('.overview-daily li').count(), 7);
+    await page.locator('.overview-daily summary').click();
   });
 
   await t.test('音效默认关闭、主动开启、限流、零音量、关闭与重载', async () => {
@@ -57,15 +58,15 @@ test('全站视觉：截图、图表、音效、对比度、键盘与窄屏', { 
     await page.getByLabel('开启轻音效').check();
     assert.equal(await page.locator('[data-sound-label]').innerText(), '音效开');
     const before = await page.evaluate(() => window.audioAudit.tones);
-    await page.evaluate(() => { for (let i = 0; i < 20; i++) window.IDInteractionSound.play('hover'); });
-    assert((await page.evaluate(() => window.audioAudit.tones)) - before <= 1);
+    await page.evaluate(() => { for (let i = 0; i < 20; i++) window.IDInteractionSound.play('success'); });
+    assert.equal((await page.evaluate(() => window.audioAudit.tones)) - before, 1);
     await context.route(origin + '/interaction-sound-fixture.html', route => route.fulfill({ contentType: 'text/html', body: '<button id="sound-control">嵌入按钮</button>' }));
     await page.evaluate(origin => { const frame = document.createElement('iframe'); frame.id = 'sound-test-frame'; frame.src = origin + '/interaction-sound-fixture.html'; document.getElementById('main').append(frame); }, origin);
     await page.frameLocator('#sound-test-frame').locator('#sound-control').waitFor();
     await page.waitForTimeout(320);
     const beforeFrame = await page.evaluate(() => window.audioAudit.tones);
     await page.frameLocator('#sound-test-frame').locator('#sound-control').click();
-    assert((await page.evaluate(() => window.audioAudit.tones)) > beforeFrame, '同源嵌入页复用员工开启的音效');
+    assert.equal(await page.evaluate(() => window.audioAudit.tones), beforeFrame, '同源嵌入页的普通点击保持静音');
     await page.evaluate(() => document.getElementById('sound-test-frame').remove());
     await page.getByLabel('界面音效设置').click();
     await page.locator('#sound-volume').waitFor();
@@ -94,15 +95,21 @@ test('全站视觉：截图、图表、音效、对比度、键盘与窄屏', { 
       orders: orders.filter((_, i) => i % 7 !== 0) } } };
     await interceptDesign(emptyContext, { localFixtures: filtered });
     const emptyPage = await emptyContext.newPage();
+    emptyPage.setDefaultTimeout(6000);
+    const selectRange = async label => {
+      const compact = emptyPage.getByRole('combobox', { name: '统计时间范围' });
+      if (await compact.isVisible()) await compact.selectOption({ label });
+      else await emptyPage.getByRole('button', { name: label, exact: true }).click();
+    };
     try {
       await emptyPage.goto(origin + '/#/overview');
       await emptyPage.waitForFunction(() => document.querySelector('.overview-metric-value strong')?.textContent === '24');
       for (const width of [1920, 1440, 390, 320]) {
         await emptyPage.setViewportSize({ width, height: 1080 });
-        await emptyPage.getByRole('button', { name: '近 7 天', exact: true }).click();
+        await selectRange('近 7 天');
         await settle(emptyPage);
         const before = await emptyPage.locator('[aria-labelledby="overview-trend"]').boundingBox();
-        await emptyPage.getByRole('button', { name: '今日', exact: true }).click();
+        await selectRange('今日');
         await settle(emptyPage);
         const after = await emptyPage.locator('[aria-labelledby="overview-trend"]').boundingBox();
         assert(Math.abs(after.height - before.height) <= 2, width + ': 图表空状态改变框架 ' + before.height + '/' + after.height);
@@ -116,25 +123,27 @@ test('全站视觉：截图、图表、音效、对比度、键盘与窄屏', { 
     for (const theme of ['light', 'dark']) {
       await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
       await page.waitForTimeout(200);
-      const primary = page.locator('.overview-range .button.primary');
-      await primary.hover();
-      assert(await primary.evaluate(node => {
+      const primary = page.locator('.overview-toolbar .button.primary');
+      if (await primary.isVisible()) {
+        await primary.hover();
+        assert(await primary.evaluate(node => {
         const expected = document.createElement('span');
         expected.style.color = 'var(--on-primary)';
         node.append(expected);
         const matches = getComputedStyle(node).color === getComputedStyle(expected).color;
         expected.remove();
         return matches;
-      }), width + '/' + theme + ' 主要按钮悬停文字不可读');
+        }), width + '/' + theme + ' 主要按钮悬停文字不可读');
+      }
       const snapshot = await page.evaluate(() => {
         const rect = n => { const r = n.getBoundingClientRect(); return { top: r.top, left: r.left, right: r.right, height: r.height }; };
-        const headings = [...document.querySelectorAll('.overview-metric-label h2')].map(rect);
+        const headings = [...document.querySelectorAll('.overview-metric h2')].map(rect);
         const columns = [...document.querySelectorAll('.overview-columns')].map(n => [...n.children].map(rect));
         return { overflow: document.documentElement.scrollWidth > innerWidth, headings, columns };
       });
       assert(!snapshot.overflow, width + '/' + theme + ' 页面溢出');
       for (const [a, b] of snapshot.columns) if (a.left !== b.left) assert(Math.abs(a.top - b.top) < 1);
-      await page.locator('.overview-metric-label summary').first().click();
+      await page.locator('.overview-metric .title-help summary').first().click();
       const popover = page.locator('.title-description:popover-open');
       const box = await popover.boundingBox();
       assert(box.x >= 0 && box.x + box.width <= width + 1);

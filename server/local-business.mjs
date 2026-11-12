@@ -4,6 +4,7 @@ import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { describeWriteOperation, checkWriteReceipt, WriteOperationError } from './write-operation.mjs';
 import { mergeContactWrite } from './contact-write.mjs';
+import { matchRechargeRenewal, renewalAssociationIssue, renewalExpiryIssue } from './recharge-renewal.mjs';
 import { validOrderCurrencies, validOrderCurrencyGroups, retainOrderSettings } from './order-currency-settings.mjs';
 import { isDeepStrictEqual } from 'node:util';
 import {
@@ -72,7 +73,7 @@ import {
 import { claudeGoogleCopyDomainPrefix, validateClaudeGoogleCopySettings } from './claude-google-subscriptions.mjs';
 import { legacyOpeningOrderIds, ownerForSubscriptionOrder, subscriptionDomain } from './subscription-management.mjs';
 import {
-  automaticGptOrder, matchOrderCustomer, orderCustomerCreateAction, orderFieldChanged, rechargeOrderOwner,
+  automaticGptOrder, matchOrderCustomer, orderCustomerCreateAction, orderFieldChanged, rechargeOrderOwner, rechargeRenewalExpiryPending,
   subscriptionChainRoot, subscriptionTime, validOrderEmail, validOrderXHandle
 } from '../frontend/order-opening.mjs';
 import {
@@ -450,7 +451,8 @@ function normalizeOrderCardType(row, prior, restorePrior, action, types) {
     try {
       const { id, name } = cardTypeSnapshot(types, {
         cardId: row.cardId, cardTypeId: restorePrior ? restorePrior.cardTypeId : row.cardTypeId,
-        prior: restorePrior || prior
+        prior: restorePrior || prior,
+        tenantCard: !restorePrior && (!prior || action === '更正订单') && row.proMaterialMode === 'tenant_card'
       });
       if (id) {
         row.cardTypeId = id;
@@ -2307,8 +2309,11 @@ export function createLocalBusinessStore(databasePath) {
           data.customers = createdCustomer ? [customer, ...customers]
             : customers.map((row) => row.id === customer.id ? customer : row);
         }
-        const label = manual ? manualOrderDetailsAction : command.action === 'assign' ? '确认代充订单归属' : '保存代充订单资料';
+        const confirmedExpiry = command.action === 'confirm-renewal-expiry';
+        const label = confirmedExpiry ? '登记实际续费到期时间'
+          : manual ? manualOrderDetailsAction : command.action === 'assign' ? '确认代充订单归属' : '保存代充订单资料';
         const detail = [order.orderNo,
+          ...(confirmedExpiry ? [order.expiry.replace('T', ' ')] : []),
           ...(costReason ? [`实际总成本 ${order.actualCostAmount} ${order.actualCostCurrency}`, costReason] : []),
           ...(addedReceipt ? [`${manual ? '按原售价确认全额实收' : '登记客户实收'} ${order.saleAmount} ${order.saleCurrency}`] : []),
           ...(completion && order.rechargeOwnerAssignment !== prior.rechargeOwnerAssignment
@@ -2319,18 +2324,28 @@ export function createLocalBusinessStore(databasePath) {
           at: auditDate.format(new Date(at)).slice(0, 16), actor: actor.name, actorId: actor.id
         }, ...(data.logs || [])];
         put.run('commerce', version, encrypt(key, 'commerce', version, JSON.stringify(data)));
+        if (confirmedExpiry) {
+          const status = readDocument('order-sync');
+          if (status.data?.rows?.some(row => row.jobKey === order.taskId && row.needs?.includes(renewalExpiryIssue))) {
+            const rows = status.data.rows.map(row => row.jobKey === order.taskId
+              ? { ...row, needs: (row.needs || []).filter(issue => issue !== renewalExpiryIssue) } : row);
+            const next = status.version + 1;
+            put.run('order-sync', next, encrypt(key, 'order-sync', next, JSON.stringify({ ...status.data, rows })));
+          }
+        }
         log.run(at, 'commerce', 'order_completion_' + command.action, auditSummary(label, actor, order.id), version);
         if (customer) log.run(at, 'commerce', createdCustomer ? 'order_completion_customer_create' : 'order_completion_customer_fill',
           auditSummary(createdCustomer ? '补全订单时新增客户' : '补齐客户资料', actor, customer.id), version);
         return result;
       });
     },
-    applyRechargeOrder({ since, row, order, firstUse }) {
+    applyRechargeOrder({ since, row, order, firstUse, codeRenewal }) {
       return writeTransaction(() => {
         const status = readDocument('order-sync');
         const commerce = readDocument('commerce');
         const data = commerce.data || { customers: [], tenants: [], orders: [], operating: [], rentBatches: [], logs: [] };
         const previous = status.data?.rows || [];
+        const previousResult = previous.find(item => item.jobKey === row.jobKey);
         const old = data.orders.find((item) => item.taskId === row.jobKey && automaticGptOrder(item));
         const result = { ...row };
         let changed;
@@ -2387,6 +2402,25 @@ export function createLocalBusinessStore(databasePath) {
           data.orders.unshift(changed);
           result.orderNo = orderNo;
         }
+        const imported = changed || old;
+        if (codeRenewal && order && imported && !imported.previousOrderId && imported.entitlementStatus === 'active' &&
+            validOrderEmail(imported.email) && imported.email.trim().toLowerCase() === order.email.toLowerCase() &&
+            imported.plan === order.plan && imported.rechargeCompletedAt === order.rechargeCompletedAt) {
+          const match = matchRechargeRenewal(imported, data, readDocument('inventory').data,
+            legacyOpeningOrderIds(data.orders, readDocument(subscriptionDomain).data));
+          if (match.kind === 'matched' && (!imported.expiry || imported.expiry === order.expiry)) {
+            changed = { ...imported, customerId: match.prior.customerId, previousOrderId: match.prior.id, expiry: '',
+              version: imported === old ? (old.version ?? 0) + 1 : imported.version };
+            data.orders[data.orders.indexOf(imported)] = changed;
+            data.logs = [{
+              id: 'commerce-log-' + randomUUID(), type: '关联续费订单', entityId: match.prior.id,
+              relatedOrderId: changed.id, detail: changed.orderNo, actorId: 'order-reconciliation', actor: '自动充值',
+              at: auditDate.format(new Date(changed.rechargeCompletedAt)).slice(0, 16)
+            }, ...(data.logs || [])];
+          } else if (match.kind !== 'none') result.needs.push(renewalAssociationIssue);
+        } else if (!imported?.previousOrderId && previousResult?.needs?.includes(renewalAssociationIssue)) {
+          result.needs.push(renewalAssociationIssue);
+        }
         if (changed) {
           if (changed.cardId && !old?.cardId && !changed.cardTypeId) {
             const { id, name } = cardTypeSnapshot(readDocument(cardTypeDocument).data, { cardId: changed.cardId });
@@ -2424,6 +2458,7 @@ export function createLocalBusinessStore(databasePath) {
             '订单汇率尚未取得': currentOrder.fxSnapshot
           };
           result.needs = result.needs.filter(issue => !filled[issue]);
+          if (rechargeRenewalExpiryPending(currentOrder)) result.needs.push(renewalExpiryIssue);
         }
         const version = status.version + 1;
         const records = { ...status.data, since: status.data?.since ?? since,

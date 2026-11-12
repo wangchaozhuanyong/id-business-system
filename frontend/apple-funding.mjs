@@ -139,7 +139,7 @@ export function appleFundingEligibility(wallet, order, index, settings, { actual
   if (!wallet || wallet.deleted || wallet.status !== '正常' ||
       (wallet.health && wallet.health !== 'normal') || wallet.currency !== 'USD')
     return { error: '苹果 ID 状态异常或未建立美元余额账本' };
-  if (!appleRegion(region) || wallet.appStoreRegion !== region) return { error: '请核对苹果 ID 的 App Store 账单地区' };
+  if (!appleRegion(region) || wallet.appStoreRegion !== region) return { error: '请核对所选苹果 ID 的 Id地区' };
   if (state?.pending.some(other => other.id !== order.id)) return { error: '该苹果 ID 已被待付款订单占用' };
   if (index.pendingByTarget.get(appleTarget(order))?.some(other => other.id !== order.id))
     return { error: '该订阅账号已有待付款订单，请先核对原单' };
