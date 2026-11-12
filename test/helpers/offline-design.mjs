@@ -5,7 +5,7 @@ import { loadCodexdaichongAssets } from '../../modules/recharge/codexdaichong/as
 export const root = fileURLToPath(new URL('../../', import.meta.url));
 export const origin = 'https://design-layout.invalid';
 let rechargeAssets;
-export async function interceptDesign(context, { beforeDirectory, localFixtures, actor, changeEvents = false, skipRechargeAssets = false } = {}) {
+export async function interceptDesign(context, { beforeDirectory, localFixtures, actor, changeEvents = false, skipRechargeAssets = false, scrollbarSelector = '' } = {}) {
   const unavailable = [],
     external = [];
   if (!skipRechargeAssets) rechargeAssets ??= await loadCodexdaichongAssets();
@@ -108,6 +108,9 @@ export async function interceptDesign(context, { beforeDirectory, localFixtures,
       file = path.join(beforeDirectory, path.basename(file));
     try {
       let body = await readFile(file);
+      // Custom scrollbars reserve layout space even when the headless browser uses overlay scrollbars.
+      if (scrollbarSelector && path.basename(file) === 'prototype.css')
+        body = body.toString() + `\n${scrollbarSelector} { scrollbar-width: auto !important; }\n${scrollbarSelector}::-webkit-scrollbar { width: 12px; height: 12px; }\n`;
       if (url.pathname === '/' && localFixtures)
         body = body
           .toString()

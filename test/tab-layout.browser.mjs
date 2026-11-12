@@ -25,6 +25,8 @@ const snapshot = () => {
       topGap: first ? rect.top - container.getBoundingClientRect().top - parseFloat(getComputedStyle(container).borderTopWidth) : null,
       lineInset: first ? container.clientWidth - rect.width : null,
       border: parseFloat(style.borderBottomWidth), rowBorder: parseFloat(getComputedStyle(row).borderBottomWidth),
+      separateRow: row !== nav,
+      hasActions: [...row.querySelectorAll('button,input,select,summary')].some(node => !nav.contains(node)),
       underlineGap: rect.bottom - navRect.bottom,
       tabs: [...nav.querySelectorAll(':scope > .tab, :scope > .tab-btn')].filter(visible).map(tab => {
         const walker = document.createTreeWalker(tab, NodeFilter.SHOW_TEXT);
@@ -133,7 +135,8 @@ try {
         const minimumHeight = record.width <= 900 && bar.row === 'content-toolbar' ? 52 : 60;
         assert(bar.tabs.every(tab => tab.height >= minimumHeight && Math.abs(tab.centerOffset) <= 2), '页签高度或文字居中不符: ' + message);
         assert(bar.tabs.every(tab => tab.font === '14px' && tab.shadow === 'none'), '页签皮肤不一致: ' + message);
-        if (bar.row !== 'tabs' && bar.row !== 'tabs recharge-code-tabs' && !bar.row.includes('tabs'))
+        // A borderless wrapper containing only tabs still lets the tabs own their separator.
+        if (bar.separateRow && (bar.hasActions || bar.rowBorder > 0))
           assert(bar.border === 0, '页签和操作行重复分隔线: ' + message);
       }
     }

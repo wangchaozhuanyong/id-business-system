@@ -86,7 +86,8 @@ const loadedMetrics = ['13位客户', '2位客户', '8笔', '1位客户'];
 
 async function openFixture(browser, data, actor = admin) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 960 }, serviceWorkers: 'block' });
-  const requests = await interceptDesign(context, { localFixtures: data, actor, skipRechargeAssets: true });
+  const requests = await interceptDesign(context, { localFixtures: data, actor, skipRechargeAssets: true,
+    scrollbarSelector: '.retention-summary-scroll' });
   const page = await context.newPage();
   page.setDefaultTimeout(6500);
   await page.clock.setFixedTime(at);
@@ -101,7 +102,7 @@ async function openFixture(browser, data, actor = admin) {
 
 test('客户流失归集、订阅历史、数据核对与响应式离线验收', { timeout: 120_000 }, async t => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
-  const browser = await chromium.launch();
+  const browser = await chromium.launch({ ignoreDefaultArgs: ['--hide-scrollbars'] });
   t.after(() => browser.close());
   const data = fixtures();
   const { context, page, requests, errors, writes } = await openFixture(browser, data);
@@ -275,10 +276,12 @@ test('客户流失归集、订阅历史、数据核对与响应式离线验收',
         const centers = [...region.querySelectorAll('.summary-label,.summary-number,.retention-report-meta,.button')]
           .map(node => { const rect = node.getBoundingClientRect(); return (rect.top + rect.bottom) / 2; });
         return { deviation: Math.max(...centers) - Math.min(...centers), scrollWidth: scroll.clientWidth,
+          scrollbar: scroll.offsetHeight - scroll.clientHeight,
           refreshVisible: refresh.left >= box.left && refresh.right <= box.right && refresh.right <= innerWidth,
           insets: [refresh.top - box.top, box.bottom - refresh.bottom] };
       });
       assert(overview.deviation <= 1, '统计标签、数量、时间及刷新必须同排');
+      if (width <= 900) assert(overview.scrollbar >= 10, '应实际覆盖占用布局高度的可见滚动条');
       assert(overview.refreshVisible && overview.scrollWidth >= 140, '窄屏刷新固定可见且统计可滚动');
       assert(overview.insets.every(value => value >= 8), '刷新控件距外框至少 8px');
       if ([1440, 390, 320].includes(width)) {
@@ -289,7 +292,8 @@ test('客户流失归集、订阅历史、数据核对与响应式离线验收',
         await action.click();
         await drawer(page).getByRole('heading', { name: '客户订阅历史' }).waitFor();
         const box = await drawer(page).boundingBox();
-        assert(Math.abs(box.x + box.width - width) <= 1);
+        const viewportRight = await page.evaluate(() => document.documentElement.clientWidth);
+        assert(Math.abs(box.x + box.width - viewportRight) <= 1);
         assert(await drawer(page).evaluate(el => el.scrollWidth <= el.clientWidth + 1));
         if (output && [1440, 390].includes(width))
           await page.screenshot({ path: join(output, `history-${width}-${theme}.png`) });
