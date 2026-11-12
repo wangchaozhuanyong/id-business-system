@@ -17,9 +17,9 @@ const fetchedAt = '2026-11-12T03:09:41Z';
 const format = new Intl.NumberFormat('zh-CN');
 
 function report(site, days, state) {
-  const common = { status: state, site, days };
-  if (state === 'unconfigured') return { ...common, summary: null, daily: [] };
   const renovation = site === 'flashcast.com.my';
+  const common = { status: state, site, days, provider: renovation ? 'ga4' : 'cloudflare' };
+  if (state === 'unconfigured') return { ...common, summary: null, daily: [] };
   const traffic = renovation ? { sessions: 458, visitors: 306 } : { visits: 458 };
   return {
     ...common,
@@ -85,6 +85,7 @@ test('data center navigation, four website reports, reporting dates and responsi
   assert.match(await overview.innerText(), /2026-11-06 至 2026-11-12/);
   assert.match(await overview.innerText(), /马来西亚时间.*上次读取 2026-11-12 11:09/s);
   await overview.getByText('今日数据仍在更新', { exact: true }).waitFor();
+  assert.equal(await overview.getByText('含估算', { exact: true }).count(), 0);
   assert.deepEqual(await metrics.allTextContents(), ['浏览量', '访问次数', '访客数']);
 
   const output = join(root, '.runtime', 'data-center-review');
@@ -122,6 +123,7 @@ test('data center navigation, four website reports, reporting dates and responsi
   assert.equal(await help.locator('..').getAttribute('open'), null);
   await help.click();
   await page.locator('#traffic-overview-help').waitFor();
+  assert.match(await page.locator('#traffic-overview-help').innerText(), /商城数据含估算.*同一天的数字也可能变化/);
   assert.deepEqual(await overview.boundingBox(), bounds);
   await page.keyboard.press('Escape');
   await page.locator('#traffic-overview-help').waitFor({ state: 'hidden' });
@@ -139,9 +141,11 @@ test('data center navigation, four website reports, reporting dates and responsi
     await waitForViews(pageViews);
     assert.deepEqual(await metrics.allTextContents(), ['浏览量', '访问次数']);
     assert.match(await overview.innerText(), /世界标准时间（UTC）.*2026-11-12 03:09/s);
+    await overview.getByText('含估算', { exact: true }).waitFor();
   }
   await workspace.getByRole('button', { name: '最近 30 天' }).click();
   await overview.getByText('2026-10-14 至 2026-11-12', { exact: true }).waitFor();
+  await overview.getByText('含估算', { exact: true }).waitFor();
   await tabs.getByRole('link', { name: '谷歌表格同步' }).click();
   await page.getByText('未收到有效回执', { exact: true }).waitFor();
   await tabs.getByRole('link', { name: '网站统计' }).click();
@@ -152,6 +156,7 @@ test('data center navigation, four website reports, reporting dates and responsi
   mode = 'empty';
   await refresh.click();
   await overview.getByText('该时段暂无访问数据。', { exact: true }).waitFor();
+  assert.equal(await overview.getByText('含估算', { exact: true }).count(), 0);
   assert.match(await overview.innerText(), /2026-10-14 至 2026-11-12/);
   assert.equal(await metrics.count(), 0);
   assert.equal(await details.count(), 0);
