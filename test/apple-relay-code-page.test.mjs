@@ -73,6 +73,7 @@ test('one visible page sends only its IDs upstream and writes one batch of per-r
   assert(response.body.items.every(item => item.queryCode === `SYNTHETIC-${item.id}`));
   assert.deepEqual(response.body.items.map(({ id, ...item }) => item), individual);
   assert.equal(response.headers['Cache-Control'], 'no-store');
+  assert.match(response.headers['Server-Timing'], /^inventory;dur=[\d.]+, vendure_targets;dur=[\d.]+, audit;dur=[\d.]+, relay_total;dur=[\d.]+$/);
   assert.deepEqual(state.audit.map(entry => entry.aliasId).sort(), [...ids].sort());
   assert(state.audit.every(entry => entry.action === 'read_code' && entry.parentId === 'parent'));
   assert.deepEqual(state.auditBatches, [20]);
@@ -121,6 +122,7 @@ test('hidden code column reads real statistics without requesting or auditing an
   assert.equal(state.calls[0].includeCodes, false);
   assert.deepEqual(state.audit, []);
   assert.deepEqual(state.auditBatches, []);
+  assert.match(response.headers['Server-Timing'], /^inventory;dur=[\d.]+, vendure_targets;dur=[\d.]+, relay_total;dur=[\d.]+$/);
 });
 
 test('the real audit store records each mailbox and publishes a single committed change', t => {
