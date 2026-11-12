@@ -6025,8 +6025,10 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
   padding-inline: 10px;
 }
 .subscription-center-content {
+  display: flex;
   flex: 1 1 600px;
   min-width: 0;
+  height: calc(var(--tab-row-height) + 1px);
   min-height: calc(var(--tab-row-height) + 1px);
   overflow-x: auto;
   overscroll-behavior-x: contain;
@@ -6038,13 +6040,20 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
   border-radius: 2px;
 }
 .subscription-center-content > .tabs {
+  flex: 1 0 auto;
+  min-height: 0;
   padding-inline: 0;
+  overflow: visible;
+}
+.subscription-center-content > .tabs > .tab {
+  min-height: 44px;
 }
 .subscription-center-content .summary-strip {
+  flex: 1 0 auto;
   grid-auto-flow: column;
   grid-template-columns: none;
   grid-auto-columns: minmax(max-content, 1fr);
-  min-height: calc(var(--tab-row-height) + 1px);
+  min-height: 0;
   margin: 0;
   padding: 0;
   background: transparent;

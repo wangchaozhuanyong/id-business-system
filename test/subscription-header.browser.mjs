@@ -46,24 +46,29 @@ function geometry() {
   const nav = bar.querySelector('.subscription-center-nav'), content = bar.querySelector('.subscription-center-content');
   const textRect = el => { const range = document.createRange(); range.selectNodeContents(el); return rect(range); };
   return { bar: rect(bar), nav: rect(nav), content: rect(content),
+    contentClientHeight: content.clientHeight, contentScrollHeight: content.scrollHeight,
+    scrollbarHeight: content.offsetHeight - content.clientHeight,
+    nestedTabScroller: [...content.querySelectorAll('.tabs')].some(el => getComputedStyle(el).overflowX !== 'visible'),
     links: [...nav.children].map(rect), overflow: document.documentElement.scrollWidth > innerWidth,
     items: [...content.querySelectorAll('.summary-item')].map(item => ({ ...rect(item),
       label: textRect(item.querySelector('.summary-label')), value: textRect(item.querySelector('.summary-number')) })) };
 }
 
-test('订阅导航与当前内容共用一行，覆盖三种视图、宽窄屏、主题与读取状态', { timeout: 180_000 }, async t => {
+test('订阅导航与当前内容共用一行，覆盖三种视图、宽窄屏、主题与读取状态', { timeout: 240_000 }, async t => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
-  const browser = await chromium.launch();
+  const browser = await chromium.launch({ ignoreDefaultArgs: ['--hide-scrollbars'] });
   t.after(() => browser.close());
   const output = process.env.ID_LAYOUT_QA_OUTPUT;
   if (output) await mkdir(output, { recursive: true });
   const results = [];
-  for (const width of [1920, 1440, 1024, 901, 900, 768, 390, 320]) {
+  for (const reservedScrollbars of [false, true]) for (const width of [1920, 1440, 1024, 901, 900, 768, 390, 320]) {
     for (const theme of ['light', 'dark']) for (const empty of [false, true]) {
-      await t.test(`${width}px ${theme} ${empty ? '空列表' : '有数据'}`, async () => {
+      const scrollbarMode = reservedScrollbars ? 'reserved' : 'native';
+      await t.test(`${width}px ${theme} ${empty ? '空列表' : '有数据'} ${scrollbarMode}`, async () => {
         const context = await browser.newContext({ viewport: { width, height: 900 }, serviceWorkers: 'block' });
         try {
-          const traffic = await interceptDesign(context, { localFixtures: fixtures(empty), actor, skipRechargeAssets: true });
+          const traffic = await interceptDesign(context, { localFixtures: fixtures(empty), actor, skipRechargeAssets: true,
+            scrollbarSelector: reservedScrollbars ? '.subscription-center-content' : '' });
           let fail = false, delay = 0;
           await context.route(origin + '/api/local/subscriptions/list', async route => {
             if (delay) await new Promise(resolve => setTimeout(resolve, delay));
@@ -94,8 +99,12 @@ test('订阅导航与当前内容共用一行，覆盖三种视图、宽窄屏�
             assert.equal(await page.getByRole('navigation', { name: '订阅管理视图' }).getByRole('link', { name: label, exact: true }).getAttribute('aria-current'), 'page');
             const size = await page.evaluate(geometry);
             heights.push(size.bar.height);
-            results.push({ width, theme, empty, view, ...size });
+            results.push({ width, theme, empty, view, scrollbarMode, ...size });
             assert.equal(size.overflow, false);
+            assert.equal(size.nestedTabScroller, false, '三个视图共用外层横向滚动区');
+            assert(size.contentScrollHeight <= size.contentClientHeight, '横向滚动条不挤出垂直滚动或裁掉页签下划线');
+            if (reservedScrollbars && width <= 390 && view !== 'bank-cards')
+              assert(size.scrollbarHeight > 0, '实际保留非浮层滚动条占用的高度');
             assert(size.links.every(link => link.left >= size.bar.left && link.right <= size.bar.right && link.top - size.bar.top >= 8 && size.bar.bottom - link.bottom >= 8));
             if (width >= 1440) {
               assert(size.content.left > size.nav.right, '宽屏主导航在左、当前内容在右');
@@ -137,7 +146,7 @@ test('订阅导航与当前内容共用一行，覆盖三种视图、宽窄屏�
             }
             if (output && [1440, 390].includes(width) && !empty) {
               await settle(page);
-              await page.locator('.subscription-center-bar').screenshot({ path: join(output, `${view}-${width}-${theme}.png`) });
+              await page.locator('.subscription-center-bar').screenshot({ path: join(output, `${view}-${width}-${theme}-${scrollbarMode}.png`) });
             }
           }
           assert(Math.max(...heights) - Math.min(...heights) <= 1, '三个视图的顶部栏高一致');
@@ -157,7 +166,7 @@ test('订阅导航与当前内容共用一行，覆盖三种视图、宽窄屏�
             await page.waitForFunction(() => document.querySelector('#subscription-overview .summary-number')?.textContent.startsWith('36'));
             const frames = await page.evaluate(() => { window.headerRecording = false; return window.headerFrames; });
             assert(frames.length > 0 && frames.every(frame => frame.height !== null && Math.abs(frame.height - heights[0]) <= 1), '慢读取与连续切换期间栏高稳定');
-            if (output) await writeFile(join(output, `frames-${width}.json`), JSON.stringify(frames, null, 2));
+            if (output) await writeFile(join(output, `frames-${width}-${scrollbarMode}.json`), JSON.stringify(frames, null, 2));
             delay = 0; fail = true;
             await page.getByRole('button', { name: '刷新', exact: true }).click();
             await page.getByText('读取订阅资料失败，请刷新重试，已保留上次读取的资料。', { exact: true }).waitFor();
