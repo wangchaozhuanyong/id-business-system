@@ -150,14 +150,14 @@
       if (host.innerWidth > 900) {
         const scroll = window.scrollY + root.scrollTop;
         const end = workspaceViewportHeight(hostFrame, main);
-        const split = scope.querySelector('.commerce-entry-columns, .inventory-workspace-columns');
+        const split = scope.querySelector('.commerce-entry-columns, .inventory-workspace-columns, .renewal-workbench');
         if (split) {
           const top = split.getBoundingClientRect().top + scroll;
           frames.push([split, 'workspace', Math.max(400, Math.floor(end - top - bottomInset(split.parentElement, stop)))]);
         }
 
         const viewports = [...scope.querySelectorAll(rows)].filter((view) =>
-          view.getClientRects().length && !view.closest('.commerce-entry-columns, dialog, [role="dialog"]')
+          view.getClientRects().length && !view.closest('.commerce-entry-columns, .renewal-workbench, dialog, [role="dialog"]')
         );
         for (const view of viewports) {
           const panel = view.closest('.panel') || view.parentElement;

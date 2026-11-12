@@ -1,7 +1,6 @@
 .sheets-workspace {
   display: grid;
   gap: var(--section-gap);
-  max-inline-size: 1320px;
   min-inline-size: 0;
   container-type: inline-size;
 }

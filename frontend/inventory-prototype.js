@@ -1506,6 +1506,8 @@
     const numbers = extractionBatchNumbers();
     const visible = batches.filter((batch) => ownerAllowed(batch));
     const pending = visible.reduce((sum, batch) => sum + batchCounts(batch).pending, 0);
+    const pendingBatches = visible.filter(batch => batchCounts(batch).pending > 0);
+    const visibleReturns = returnRecords.filter(entry => admin() || entry.actorId === currentActor().id);
     let body;
     if (v.centerTab === 'quick') {
       const d = draft('inventory-quick', { 'inventory-quick-text': '' });
@@ -1523,7 +1525,7 @@
         )
       )}${field('资料类型', 'inventory-quick-type', select('inventory-quick-type', [['', '全部类型'], ['google', '谷歌邮箱'], ['relay', '苹果隐藏邮箱'], ...stockTypes], d['inventory-quick-type'] || ''))}</div><div class="form-footer"><span class="footnote">先读取最新库存逐项核对；同一地址匹配多条时须明确选择，不会直接归还。</span><button class="button primary" type="submit">查找并核对</button></div></form></div>`;
     } else if (v.centerTab === 'returns') {
-      const rows = returnRecords.filter((entry) => admin() || entry.actorId === currentActor().id);
+      const rows = visibleReturns;
       body = table(
         [
           { id: 'id', label: '归还编号' },
@@ -1547,9 +1549,8 @@
         { title: '暂无归还记录', description: '完成归还后会保留原批次、理由、时间和操作人。' }
       ) + pagination(rows.length);
     } else {
-      const rows = visible.filter(
+      const rows = (v.centerTab === 'pending' ? pendingBatches : visible).filter(
         (batch) =>
-          (v.centerTab !== 'pending' || batchCounts(batch).pending > 0) &&
           (!v.query ||
             `${numbers.get(batch.id) ?? ''} ${batch.id} ${batch.purpose} ${batch.actorName} ${batch.items.map(displayIdentity).join(' ')}`
               .toLowerCase()
@@ -1568,18 +1569,18 @@
         ['提取批次', visible.length, '个'],
         ['待处理资料', pending, '条', true],
         ['已确认使用', visible.reduce((sum, batch) => sum + batchCounts(batch).used, 0), '条'],
-        ['归还记录', returnRecords.length, '条']
+        ['归还记录', visibleReturns.length, '条']
       ]) +
       `<section class="panel"><div class="tabs" role="tablist" aria-label="提取与归还视图">${[
-        ['pending', '我的待处理'],
-        ['history', '提取历史'],
+        ['pending', '我的待处理', pendingBatches.length],
+        ['history', '提取历史', visible.length],
         ['quick', '快捷归还'],
-        ['returns', '归还记录']
+        ['returns', '归还记录', visibleReturns.length]
       ]
-        .map(
-          ([id, label]) =>
-            `<button role="tab" aria-selected="${v.centerTab === id}" class="tab ${v.centerTab === id ? 'active' : ''}" data-action="inventory-center-tab" data-tab="${id}">${label}</button>`
-        )
+        .map(([id, label, count]) => {
+          const countId = 'inventory-center-count-' + id;
+          return `<button type="button" role="tab" aria-selected="${v.centerTab === id}" aria-label="${label}"${count === undefined ? '' : ` aria-describedby="${countId}"`} class="tab ${v.centerTab === id ? 'active' : ''}" data-action="inventory-center-tab" data-tab="${id}">${label}${count === undefined ? '' : `<span class="tab-count" id="${countId}">${count}</span>`}</button>`;
+        })
         .join('')}</div>${body}</section>`
     );
   }

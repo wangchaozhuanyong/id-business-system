@@ -1,0 +1,18 @@
+{
+  "beforeAssetsSha256": "784e19f9e74e2eba5692234a7af550ed5e593cb188313b96097baa8ce14d2b30",
+  "assetsSha256": "af1f706a931104fe6169cde1c5fb820557a55595a44e64e55a660ce23961d96a",
+  "files": {
+    "modules/recharge/codexdaichong/assets.mjs": {
+      "before": "45e0902515a122b7cbb34e5c36d3b86808be210af0e23df2883b3f865786feba",
+      "after": "7deca77a22f303ac301c282ba83b89de57bcb58588ecc23ce8e55015b33dbf92"
+    },
+    "frontend/pagination.js": {
+      "before": "7cba65d89567483bf1df4bf2edbfdd82b8223c73823e9558134753978555919d",
+      "after": "70a207625afc5babb61f19eb82560efd74b402cc81bb33a51dbe145cc13b4cf4"
+    },
+    "frontend/tabs.css": {
+      "before": "864948e6c319f9630f311a6b4b1c73a0fee797e8e327c6db95ad2c993fa757cd",
+      "after": "3ffc172cb6779d62c0c6dfbc02360beba0750a8c5d8d9742b3d78708ad8baeb0"
+    }
+  }
+}

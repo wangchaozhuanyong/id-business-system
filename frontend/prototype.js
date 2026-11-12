@@ -778,15 +778,18 @@ function tabScrollKey(tabs, index) {
 function captureTabScroll(root) {
   return new Map($$('.tabs', root).map((tabs, index) => [tabScrollKey(tabs, index), tabs.scrollLeft]));
 }
+function revealActiveTab(tabs) {
+  const active = tabs.querySelector('.tab.active, [role="tab"][aria-selected="true"], [aria-current="page"]');
+  if (!active) return;
+  const container = tabs.getBoundingClientRect();
+  const bounds = active.getBoundingClientRect();
+  if (bounds.left < container.left) tabs.scrollLeft -= container.left - bounds.left;
+  else if (bounds.right > container.right) tabs.scrollLeft += bounds.right - container.right;
+}
 function restoreTabScroll(root, previous = new Map()) {
   $$('.tabs', root).forEach((tabs, index) => {
     tabs.scrollLeft = previous.get(tabScrollKey(tabs, index)) || 0;
-    const active = tabs.querySelector('.tab.active, [role="tab"][aria-selected="true"], [aria-current="page"]');
-    if (!active) return;
-    const container = tabs.getBoundingClientRect();
-    const bounds = active.getBoundingClientRect();
-    if (bounds.left < container.left) tabs.scrollLeft -= container.left - bounds.left;
-    else if (bounds.right > container.right) tabs.scrollLeft += bounds.right - container.right;
+    revealActiveTab(tabs);
   });
 }
 function normalizeDrawerActions(drawer) {
@@ -1095,11 +1098,11 @@ function permittedRoute(route) {
 function orderSubmissionNavigation() {
   const active = orderSubmissionRoute(state.route);
   state.drafts.set('order-submission-navigation', active);
-  return '<section class="panel order-submission-navigation"><nav class="tabs order-submission-tabs" aria-label="订单提交业务切换">' +
+  return '<nav class="order-submission-navigation" aria-label="订单提交业务切换">' +
     orderSubmissionViews.filter(([, route]) => permittedRoute(route)).map(([label, route]) =>
-      '<a class="tab' + (route === 'workspace/order-completion' ? ' order-completion-tab' : '') + '" href="#/' + route +
+      '<a class="button' + (route === active ? ' primary' : '') + '" href="#/' + route +
       '"' + (route === active ? ' aria-current="page"' : '') + '>' + label + '</a>').join('') +
-    '</nav></section>';
+    '</nav>';
 }
 function sidebarChildren(children) {
   const allowed = children.filter(([, route]) => permittedRoute(route));
@@ -1771,7 +1774,11 @@ function render() {
     region = document.createElement('div');
     region.dataset.pageRegion = state.route;
     region.className = 'design-page-region design-async-region';
-    region.innerHTML = (allowed && orderSubmissionRoute(state.route) ? orderSubmissionNavigation() : '') + content;
+    region.innerHTML = content;
+    if (allowed && orderSubmissionRoute(state.route)) {
+      const columns = $('.order-submission-entry > .commerce-entry-columns', region);
+      (columns || region).insertAdjacentHTML('afterbegin', orderSubmissionNavigation());
+    }
     main.append(region);
     if (retain) retainedPageRegions.set(state.route, region);
   } else {
@@ -3543,6 +3550,7 @@ window.IDDesignAPI = {
   activePageRegion,
   clearPageRegions,
   restorePendingPageScroll,
+  revealActiveTab,
   $,
   $$,
   esc: escapeHtml,

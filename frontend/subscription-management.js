@@ -36,9 +36,14 @@
   const scopeOptions = () => Object.keys(scopeLabels).filter(scope => scope !== 'owned' || ['all', 'Claude'].includes(product()));
   const currentSnapshot = () => snapshot?.product === product() && snapshot.scope === selectedScope() ? snapshot : null;
   const currentRow = id => currentSnapshot()?.items.find(row => row.id === id);
+  const filterProduct = () => product() === 'all' ? filters().product || 'all' : product();
+  function scopeCountText(scope) {
+    const count = snapshot?.filterProduct === filterProduct() ? snapshot.scopeCounts?.[scope] : undefined;
+    return Number.isSafeInteger(count) && count >= 0 ? count.toLocaleString('zh-CN') : '—';
+  }
   function requestFilters() {
     const f = filters();
-    return { product: product() === 'all' ? f.product || 'all' : product(), scope: selectedScope(), query: f.query.trim(), status: f.status,
+    return { product: filterProduct(), scope: selectedScope(), query: f.query.trim(), status: f.status,
       sort: selectedSort(), page: f.page, pageSize: f.pageSize };
   }
   const timeFormatter = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai', dateStyle: 'short', timeStyle: 'short' });
@@ -176,14 +181,18 @@
     if (!active()) return A.header(title, '') +
       `<section class="panel">${A.empty('当前无法读取订阅资料', '请使用有权限的账号访问。')}</section>`;
     const f = filters();
-    const tabs = scopeOptions().map(scope => `<button type="button" role="tab" class="tab${scope === selectedScope() ? ' active' : ''}"
-      aria-selected="${scope === selectedScope()}" data-action="subscriptions-scope" data-scope="${scope}">${scopeLabels[scope]}</button>`).join('');
+    const tabs = scopeOptions().map(scope => {
+      const label = scopeLabels[scope], countId = 'subscription-scope-count-' + scope;
+      return `<button type="button" role="tab" class="tab${scope === selectedScope() ? ' active' : ''}"
+        aria-label="${label}" aria-describedby="${countId}" aria-selected="${scope === selectedScope()}"
+        data-action="subscriptions-scope" data-scope="${scope}">${label}<span id="${countId}" class="tab-count">${scopeCountText(scope)}</span></button>`;
+    }).join('');
     const actions = (name === 'Claude'
       ? button('订阅历史入库', 'inventory-claude-history', '', 'upload') +
         button('账号资料后缀', 'subscriptions-settings', '', 'settings') : '') +
       button('续费提醒话术', 'commerce-renewal-suffix', '', 'settings') +
       button('列设置', 'column-settings', '', 'columns', `data-table-id="${tableId}"`);
-    return A.header(title, '查看每笔订阅的到期时间与续费方式。', actions) +
+    return A.header(title, '查看每笔订阅的到期时间与续费方式。页签数字是当前产品各分类的总数。', actions) +
       (A.modules.commerce?.subscriptionCenterNav?.('subscriptions') || '') +
       `<div id="subscription-overview">${overviewMarkup()}</div><section class="panel" id="subscriptions-panel">
         <div class="list-controls subscription-controls">
@@ -233,7 +242,8 @@
           typeof result.revision !== 'string' || !Number.isSafeInteger(result.page) || !Number.isSafeInteger(result.pageSize))
         throw new Error('invalid subscription response');
       Object.assign(f, { page: result.page, pageSize: result.pageSize });
-      snapshot = { ...result, product: name, scope: params.scope, serverTime: Date.parse(result.now), receivedAt: performance.now(),
+      snapshot = { ...result, product: name, filterProduct: params.product, scope: params.scope,
+        serverTime: Date.parse(result.now), receivedAt: performance.now(),
         key: JSON.stringify({ ...params, page: result.page, pageSize: result.pageSize }) };
       error = '';
     } catch (issue) {
@@ -253,6 +263,16 @@
           (target && !target.disabled ? target : list.querySelector('[data-pagination-size]'))?.focus({ preventScroll: true });
         }
         $('#subscription-overview').innerHTML = overviewMarkup();
+        const tabs = $('.subscription-controls > .tabs', panel);
+        let countsChanged = false;
+        for (const tab of tabs.querySelectorAll('[data-action="subscriptions-scope"]')) {
+          const badge = tab.querySelector('.tab-count');
+          const count = scopeCountText(tab.dataset.scope);
+          if (badge.textContent === count) continue;
+          badge.textContent = count;
+          countsChanged = true;
+        }
+        if (countsChanged) A.revealActiveTab(tabs);
         const notice = $('#subscription-read-error', panel);
         notice.hidden = !error || !currentSnapshot();
         notice.innerHTML = error && currentSnapshot() ? `<p class="inline-notice warning">${esc(error)}，已保留上次读取的资料。</p>` : '';

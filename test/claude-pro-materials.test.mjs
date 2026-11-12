@@ -586,6 +586,63 @@ test('历史 KYC 使用认证人快照核对，租户改名后保留原认证关
   } finally { store.close(); }
 });
 
+test('死号原订单可通过真实保存接口补录、更正和补偿撤回资料，保留财务与库存状态', async () => {
+  const store = createLocalBusinessStore(':memory:');
+  const options = { readOrderCards: async () => [] };
+  try {
+    const original = manual('dead-history', { businessType: '成品交付', source: '管理员手工', entitlementStatus: 'active', paidConfirmed: true,
+      receiptConfirmed: true, kyc: '未认证', verifier: '', verifierPhone: '', phone: '' });
+    const created = await save(store, 0, makeDocument([original], [tenant]), '新增独立订单', options);
+    assert.equal(created.status, 200, created.data.error);
+    const before = created.data.data.orders[0];
+    store.saveBatch([{ domain: 'inventory', version: 0, action: 'inventory_create', data: {
+      accounts: [{ id: 'dead-history-stock', type: 'claude', email: before.email,
+        health: 'dead', inventoryState: 'used', used: true, status: '冻结', version: 1,
+        device: '合成设备', proxyUrl: 'socks5://proxy.example.test:1080' }],
+      mailboxes: [], batches: [], returnRecords: [], importRecords: [], registrationRecords: [],
+      tableSettings: [], undo: []
+    } }]);
+    const originalStock = store.load('inventory');
+    const updated = edit(before, { claudeVerifierId: tenant.id, kyc: 'KYC 认证',
+      verifier: '客户端不可伪造认证姓名', verifierPhone: '99999', phone: '+60123456780', notes: '更正历史登记资料' });
+    const write = (snapshot, orders, action = '更正订单') => save(store, snapshot.version,
+      { ...snapshot.data, orders }, action, options);
+    const corrected = await write(created.data, [updated]);
+    assert.equal(corrected.status, 200, corrected.data.error);
+    const saved = corrected.data.data.orders[0];
+    assert.equal(saved.verifier, tenant.name);
+    assert.equal(saved.verifierPhone, tenant.phone);
+    assert.equal(saved.phone, '+60123456780');
+    assert.equal(saved.corrections[0].previous.kyc, '未认证');
+    assert.deepEqual(saved.financialEvidence, before.financialEvidence);
+    assert.equal((await tenantCardView(store, tenant.id)).kyc.status, 'available');
+
+    // The drawer merges the old snapshot, so an ID absent from it can remain on the request.
+    const restored = { ...saved, ...saved.corrections.at(-1).previous,
+      corrections: saved.corrections, version: saved.version + 1, compensations: [{
+        id: 'undo-dead-history', correctionId: saved.corrections.at(-1).id, reason: '撤回本次录入更正',
+        fromVersion: saved.version, toVersion: saved.version + 1
+      }] };
+    const undone = await write(corrected.data, [restored], '补偿撤回更正');
+    assert.equal(undone.status, 200, undone.data.error);
+    const undoneOrder = undone.data.data.orders[0];
+    assert.equal(undoneOrder.kyc, before.kyc);
+    assert.equal(undoneOrder.claudeVerifierId, undefined);
+    assert.equal(undoneOrder.corrections.length, 1);
+    assert.equal(undoneOrder.compensations.length, 1);
+    assert.deepEqual(undoneOrder.financialEvidence, before.financialEvidence);
+
+    const submissions = await Promise.all(['核对补录甲', '核对补录乙'].map(notes => write(undone.data,
+      [edit(undoneOrder, { claudeVerifierId: tenant.id, kyc: 'KYC 认证', notes })])));
+    assert.deepEqual(submissions.map(result => result.status).sort(), [200, 409]);
+    const readback = await request(store, 'GET');
+    assert.equal(readback.data.data.orders[0].kyc, 'KYC 认证');
+    assert.equal(readback.data.data.orders[0].corrections.length, 2);
+    assert.deepEqual(store.load('inventory'), originalStock);
+    assert.deepEqual(readback.data.data.orders[0].financialEvidence, before.financialEvidence);
+  } finally { store.close(); }
+});
+
 test('Gemini and Grok save confirmed manual cards and audit verified card-source corrections', async () => {
   const store = createLocalBusinessStore(':memory:');
   try {

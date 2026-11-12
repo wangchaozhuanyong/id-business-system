@@ -36,9 +36,12 @@ REDEEM_PRESENTATION_FILES = (
 )
 REDEEM_PRESENTATION_ASSETS = {"/workspace", "/shell.js", "/shell.css"}
 TABLE_ACTIONS_STYLESHEET = "modules/recharge/codexdaichong/shell.css"
+CARD_IMPORT_ASSET_SOURCE = "modules/recharge/codexdaichong/assets.mjs"
+CARD_IMPORT_PRESENTATION_FILES = (CARD_IMPORT_ASSET_SOURCE, "frontend/pagination.js", "frontend/tabs.css")
 PRESENTATION_SCOPES = {
     "redeemPresentation": (REDEEM_PRESENTATION_FILES, REDEEM_PRESENTATION_ASSETS),
     "tableActionsPresentation": ((TABLE_ACTIONS_STYLESHEET,), {"/shell.css"}),
+    "cardImportPresentation": (CARD_IMPORT_PRESENTATION_FILES, {"/admin", "/admin.js", "/shell.css"}),
 }
 ADAPTER_MOUNTS = ("modules", "deploy/recharge-core")
 LAUNCHERS = ("run-app", "app-entry.mjs", "check-app.mjs")

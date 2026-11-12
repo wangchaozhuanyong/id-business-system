@@ -57,7 +57,7 @@ import { validMailExtractionSettings } from './inventory-extraction-settings.mjs
 import { checkInventoryEntryFields } from './inventory-entry-fields.mjs';
 import { personalOrderError, personalProduct, preparePersonalInventory } from './personal-subscriptions.mjs';
 import { stageInitialTenantCards, stageOrderTenantCard, stageTenantCardUses, TenantCardError } from './tenant-initial-cards.mjs';
-import { checkTenantKycRecovery, checkTenantKycWrite } from './tenant-kyc.mjs';
+import { checkTenantKycRecovery, checkTenantKycWrite, isDeadAccountCorrection } from './tenant-kyc.mjs';
 import { AccountLifecycleError, accountLifecycleSummaries, changeAccountLifecycle, checkInventoryRenewals, applyAccountOrderLifecycle } from './account-lifecycle.mjs';
 import { planLegacyMailboxImport } from './tools/legacy-mailbox-import.mjs';
 import { planLegacyTotpImport } from './tools/legacy-totp-import.mjs';
@@ -1903,12 +1903,19 @@ export function createLocalBusinessStore(databasePath) {
             const lastCorrection = prior?.corrections?.at(-1);
             const restorePrior = action === '补偿撤回更正' && lastCorrection?.versionAfter === prior?.version
               ? lastCorrection?.previous : undefined;
+            const historicalKycCorrection = isDeadAccountCorrection(prior, row, inventory, action);
+            if (historicalKycCorrection && restorePrior) {
+              for (const field of ['kyc', 'verifier', 'verifierPhone', 'claudeVerifierId'])
+                retainOrderField(row, restorePrior, field);
+            }
             // HTTP writes always supply the verified card map. Internal imports may contain historical Pro rows.
             const compatibility = { allowLegacyCreate: !cards && !prior };
             const checkCard = action !== '更正订单' || orderFieldChanged(row, prior, 'payment', 'proMaterialMode', 'proCardNumber',
               'proCardSerial', 'cardId', 'tenantId', 'phone');
             const materialError = (checkCard && normalizeClaudeProMaterials(row, restorePrior || prior, compatibility)) ||
-              normalizeClaudeCertification(row, restorePrior || prior, commerce.tenants, compatibility);
+              normalizeClaudeCertification(row, restorePrior || prior, commerce.tenants, {
+                ...compatibility, allowHistoricalCorrection: action === '更正订单' && historicalKycCorrection
+              });
             if (materialError) throw new LocalDataError(400, materialError);
             if (hasBankPayment(prior) && row.payment !== prior.payment)
               throw new LocalDataError(409, '已确认银行卡付款的原订单不可更换支付方式');
@@ -2067,7 +2074,7 @@ export function createLocalBusinessStore(databasePath) {
             checkFinanceSnapshots(priorCommerce, commerce, { action, verifyAutomaticSnapshot, actor, verifiedCardBackfillId,
               currentCostSettings: action === historicalFeeAction ? orderCostSnapshot(current('settings')?.costSettings) : undefined });
           if (error) throw new LocalDataError(409, error);
-          const kycIssue = checkTenantKycWrite(priorCommerce, commerce, inventory, { requireVerifier: Boolean(cards) });
+          const kycIssue = checkTenantKycWrite(priorCommerce, commerce, inventory, { requireVerifier: Boolean(cards), action });
           if (kycIssue) throw new LocalDataError(409, kycIssue);
           isolatedHistoricalOrderCorrection = action === historicalFeeAction || Boolean(verifiedCardBackfillId);
         }

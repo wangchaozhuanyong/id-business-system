@@ -153,6 +153,7 @@ test('充值码合并工作台独立刷新分页、保留草稿、审批后定�
   }
   await page.setViewportSize({ width: 1680, height: 1050 });
   await page.locator('#code-list-query').fill('KC-');
+  await page.waitForFunction(() => document.querySelector('[data-pagination="recharge-code-view"]')?.dataset.page === '1');
   assert.equal(await rightPager.getAttribute('data-page'), '1'); assert.equal(await leftPager.getAttribute('data-page'), '2');
   await go('overview'); await go('workspace/recharge-codes');
   assert.equal(await page.locator('#recharge-request-count').inputValue(), '7');
@@ -192,7 +193,7 @@ test('充值码合并工作台独立刷新分页、保留草稿、审批后定�
   assert.equal(pending.status, 'pending'); assert.equal(pending.codes, undefined);
   assert.equal(await page.locator('#recharge-code-new-batch').isVisible(), false);
   await page.locator(`[data-request-id="${pending.id}"] [data-action="order-code-approve"]`).click();
-  await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
+  await page.locator('#drawer[open]').getByRole('button', { name: '批准并发码', exact: true }).click();
   await page.locator('#recharge-code-new-batch:not([hidden])').waitFor();
   assert.match(await page.locator('#recharge-code-new-batch').innerText(), new RegExp(f.store.load().data.requests.find(row => row.id === pending.id).batchNo));
   assert(!(await page.locator('#recharge-code-new-batch').innerText()).includes(pending.id));

@@ -8,6 +8,8 @@
   const route = 'data-management/employee-statistics';
   const draftKey = 'employee-statistics:filters';
   const detailPager = 'employee-statistics-detail';
+  const chartPager = 'employee-statistics-chart';
+  const chartPageSize = 20;
   const scopes = ['commerce', 'inventory', 'recharge-codes', 'operators'];
   const categoryLabels = { order: '订单', customer: '客户', code: '充值码', mail: '邮箱', account: '账号' };
   const pendingKinds = ['all', 'code', 'mail', 'account'];
@@ -32,13 +34,14 @@
     unusedCodes: '枚', deliveredCodes: '枚', processingCodes: '枚', returningCodes: '枚',
     pendingCodeRequests: '笔', openMail: '个', openAccounts: '个'
   };
-  const metricLabels = Object.fromEntries([...workMetrics, ...pendingMetrics].map(([key, label]) => [key, label]));
+  const shortMetricLabels = { orders: '订单', issuedCodes: '充值码', unusedCodes: '未用充值码' };
+  const formatCount = new Intl.NumberFormat('zh-CN').format;
+  const formatTick = new Intl.NumberFormat('zh-CN', { notation: 'compact', maximumFractionDigits: 1 }).format;
   const specialEmployee = row => ['system', 'unattributed'].includes(row.id);
   const metricUnit = key => metricUnits[key] || '项';
   const metricIncomplete = (row, key) => Boolean(key === 'used' ? row.unverifiedCodes || row.useTimeUnverified
     : ['unusedCodes', 'deliveredCodes', 'processingCodes'].includes(key) && row.unverifiedCodes);
   const metricTotal = (rows, key) => rows.reduce((total, row) => total + (row.counts[key] || 0), 0);
-  let distributionObserver, distributionFrame;
   const detailColumns = [
     { id: 'kind', label: '类型', render: row => esc(categoryLabels[row.kind] || '资料') },
     { id: 'reference', label: '编号' }, { id: 'subject', label: '脱敏标识' },
@@ -51,7 +54,7 @@
   const timeFormat = new Intl.DateTimeFormat('sv-SE', {
     timeZone: 'Asia/Shanghai', dateStyle: 'short', timeStyle: 'short'
   });
-  let report, failure, detail, latestLoad, headerScroll = 0;
+  let report, failure, detail, latestLoad, headerScroll = 0, chartScroll = 0, chartScrollKey;
   const active = () => A.state.route === route && D?.authRequired &&
     ['admin', 'super'].includes(D.actor()?.role);
   const exceptions = row => (row.counts.overdue || 0) + (row.counts.review || 0) + (row.counts.returningCodes || 0);
@@ -62,7 +65,10 @@
   function filters() {
     if (!A.state.drafts.has(draftKey))
       A.state.drafts.set(draftKey, { tab: 'work', date: '', employee: '', work: 'all', pending: 'all', exceptions: false,
-        workMetric: 'orders', pendingMetric: 'unusedCodes', workExpanded: false, pendingExpanded: false });
+        comparisons: {
+          work: { metric: 'orders', sort: 'quantity', page: 1, selected: '', detailsOpen: false },
+          pending: { metric: 'unusedCodes', sort: 'quantity', page: 1, selected: '', detailsOpen: false }
+        } });
     return A.state.drafts.get(draftKey);
   }
 
@@ -82,118 +88,181 @@
       !group || kind === 'all' || group === kind || (group === 'assets' && ['code', 'mail', 'account'].includes(kind)));
   }
 
-  function metricCell(row, metric, label) {
-    const count = row.counts[metric] || 0;
-    const incomplete = metricIncomplete(row, metric);
-    if (!count) return incomplete ? A.tag('待核对', 'warning') : '0';
-    return textAction(incomplete ? count + ' 已确认' : String(count), 'employee-statistics-detail',
-      `data-employee="${esc(row.id)}" data-metric="${metric}" aria-label="查看${esc(row.name)}的${label}明细"`);
+  function metricCell(row, metric, label, context = '') {
+    if (!row.counts[metric]) return metricIncomplete(row, metric) ? A.tag('待核对', 'warning') : '0';
+    return textAction(countText(row, metric), 'employee-statistics-detail',
+      `data-employee="${esc(row.id)}" data-metric="${metric}" aria-label="${context}查看${esc(row.name)}的${label}明细"`);
   }
 
-  function employeeIdentity(row) {
-    const note = specialEmployee(row) ? row.id === 'system' ? '系统记录' : '归属待核对'
-      : row.active === null ? '历史员工' : '';
-    return `<span class="employee-statistics-identity"><span class="employee-statistics-avatar" aria-hidden="true">${A.icon(specialEmployee(row) ? 'database' : 'user')}</span><span>${esc(row.name)}${note ? `<small>${note}</small>` : ''}</span></span>`;
+  function comparison() {
+    const filter = filters();
+    return filter.comparisons[filter.tab];
   }
 
-  function renderSummary(rows, metrics) {
-    const filter = filters(), pending = filter.tab === 'pending', kind = filter[filter.tab];
-    const choices = pending ? {
-      all: ['unusedCodes', 'openMail', 'openAccounts', 'overdue'],
-      code: ['unusedCodes', 'deliveredCodes', 'processingCodes', 'returningCodes'],
-      mail: ['openMail', 'overdue', 'review'], account: ['openAccounts', 'overdue', 'review']
-    } : {
-      all: ['orders', 'people', 'customers', 'undated'], order: ['orders', 'cancelledOrders', 'syncedOrders', 'undated'],
-      customer: ['customers', 'people', 'undated'], code: ['issuedCodes', 'used', 'returned', 'undated'],
-      mail: ['extractedMail', 'submittedMail', 'used', 'returned'],
-      account: ['extractedAccounts', 'submittedAccounts', 'used', 'returned']
-    };
-    const cards = choices[kind] || choices.all;
-    const people = rows.filter(row => !specialEmployee(row) && metrics.some(([key]) => key !== 'undated' && row.counts[key] > 0)).length;
-    return `<section class="employee-statistics-kpis" aria-label="员工统计关键数据">${cards.map((key, index) => {
-      const incomplete = rows.some(row => metricIncomplete(row, key));
-      const count = key === 'people' ? people : metricTotal(rows, key);
-      const icon = key === 'people' || key === 'customers' ? 'users' : /mail/i.test(key) ? 'mail'
-        : /account/i.test(key) ? 'user' : /overdue|undated|review|returning/i.test(key) ? 'clock' : 'orders';
-      const tone = /overdue|undated|review|returning/i.test(key) ? 'amber' : ['blue', 'teal', 'violet', 'blue'][index];
-      return `<div class="employee-statistics-kpi" data-tone="${tone}" data-employee-kpi="${key}">
-        <span class="employee-statistics-kpi-icon" aria-hidden="true">${A.icon(icon)}</span>
-        <div><div class="employee-statistics-kpi-label">${key === 'people' ? '有记录员工' : metricLabels[key]}</div>
-        <div class="employee-statistics-kpi-value"><strong>${incomplete && !count ? '待核对' : count}</strong>
-        <small>${incomplete && !count ? '' : key === 'people' ? '人' : metricUnit(key)}${incomplete && count ? ' · 已确认' : ''}</small></div></div></div>`;
-    }).join('')}</section>`;
+  function employeeNote(row) {
+    if (row.id === 'system') return '系统记录';
+    if (row.id === 'unattributed') return '归属待核对';
+    return row.active === null ? '历史员工' : '';
   }
 
-  function renderDistribution(rows, metrics) {
-    const filter = filters(), pending = filter.tab === 'pending';
-    const selected = metrics.find(([key]) => key === filter[filter.tab + 'Metric']) || metrics[0];
-    if (!selected) return '';
-    const [key, label] = selected, unit = metricUnit(key), expanded = filter[filter.tab + 'Expanded'];
-    const ordered = [...rows].sort((a, b) => Number(specialEmployee(a)) - Number(specialEmployee(b)) ||
-      Number(metricIncomplete(a, key)) - Number(metricIncomplete(b, key)) ||
-      (b.counts[key] || 0) - (a.counts[key] || 0) || a.name.localeCompare(b.name, 'zh-CN'));
-    const shown = expanded ? ordered : ordered.slice(0, 6), remaining = ordered.slice(shown.length);
-    const total = metricTotal(rows, key), incomplete = rows.some(row => metricIncomplete(row, key));
-    const maximum = Math.max(1, ...ordered.map(row => row.counts[key] || 0));
-    const percent = value => !incomplete && total ? (100 * value / total).toFixed(1) + '%' : '—';
-    const countText = (count, unknown) => unknown && !count ? '待核对' : `${count} ${unit}${unknown ? ' 已确认' : ''}`;
-    const remainder = metricTotal(remaining, key), remainderIncomplete = remaining.some(row => metricIncomplete(row, key));
-    const otherName = `其余 ${remaining.length} 项统计对象`;
-    const bar = (identity, count, unknown) => `<div class="employee-statistics-bar" data-employee-chart-row>
-      ${identity}<div class="employee-statistics-track" aria-hidden="true"><div data-employee-bar-percent="${100 * count / maximum}"></div></div>
-      <span class="employee-statistics-bar-value">${esc(countText(count, unknown))}</span></div>`;
-    return `<section class="employee-statistics-analysis" aria-label="员工分布与数量说明">
-      <div class="employee-statistics-section-heading"><div class="section-title-row"><h2>${pending ? '待处理资产分布' : '员工工作分布'}</h2>${A.titleInfo('员工分布', '图表和数量说明覆盖全部筛选结果，底部表格翻页不改变合计。只比较同一指标，不将不同业务相加评估绩效。系统和归属未记录单列，未知数量不计为零。', 'employee-statistics-chart-help')}</div>
-        <div class="employee-statistics-chart-controls">${rows.length > 6 ? button(expanded ? '收起' : `查看全部 ${rows.length} 项`, 'employee-statistics-expand-chart', '', '', `aria-expanded="${Boolean(expanded)}"`) : ''}
-        <label for="employee-statistics-metric">统计指标</label>${A.select('employee-statistics-metric', metrics.map(([value, name]) => [value, name]), key).replace('<select', '<select aria-label="统计指标"')}</div></div>
-      <div class="employee-statistics-distribution" data-expanded="${Boolean(expanded)}" data-tone="${pending ? 'amber' : 'blue'}" tabindex="0">
-        <section class="employee-statistics-plot" aria-label="${esc(label)}员工对比"><div class="employee-statistics-subheading"><h3>${esc(label)} · 员工对比</h3><span>单位：${unit}</span></div>
-          <div class="employee-statistics-plot-columns"><span>员工</span><span>已确认数量</span></div>
-          <div class="employee-statistics-bars">${shown.length ? shown.map(row => bar(employeeIdentity(row), row.counts[key] || 0, metricIncomplete(row, key))).join('')
-            : '<p class="employee-statistics-chart-empty">当前条件暂无记录</p>'}</div>
-          <p class="employee-statistics-chart-note">${remaining.length ? `另有 ${esc(otherName)}，${esc(countText(remainder, remainderIncomplete))}。` : ''}${incomplete ? '部分数量待核对，条形只表示已确认数量。' : '按当前筛选范围展示已确认数量。'}</p></section>
-        <section class="employee-statistics-quantities" aria-label="${esc(label)}数量说明"><div class="employee-statistics-subheading"><h3>数量与占比</h3><span>当前筛选范围</span></div>
-          <table class="employee-statistics-report"><thead><tr><th scope="col">员工</th><th scope="col">数量</th><th scope="col">占比</th><th scope="col">操作</th></tr></thead>
-          <tbody>${shown.length ? shown.map(row => `<tr data-employee-report-row><td>${employeeIdentity(row)}</td><td>${esc(countText(row.counts[key] || 0, metricIncomplete(row, key)))}</td><td>${percent(row.counts[key] || 0)}</td><td>${row.counts[key] ? textAction('明细', 'employee-statistics-detail', `data-employee="${esc(row.id)}" data-metric="${key}" aria-label="从分布图查看${esc(row.name)}的${label}明细"`) : '—'}</td></tr>`).join('')
-            : '<tr><td colspan="4" class="employee-statistics-chart-empty">暂无员工记录</td></tr>'}
-            ${remaining.length ? `<tr class="employee-statistics-other"><td>${esc(otherName)}</td><td>${esc(countText(remainder, remainderIncomplete))}</td><td>${percent(remainder)}</td><td>${textAction('展开', 'employee-statistics-expand-chart')}</td></tr>` : ''}</tbody>
-          <tfoot><tr><th scope="row">${incomplete ? '已确认合计' : '合计'}</th><td data-employee-chart-total>${total} ${unit}</td><td>${!incomplete && total ? '100%' : '—'}</td><td></td></tr></tfoot></table>
-          <p class="employee-statistics-chart-note">${incomplete ? '部分数量待核对，暂不计算占比。' : `${rows.filter(row => !specialEmployee(row) && row.counts[key] > 0).length} 名员工有本项记录 · 当前范围 ${rows.filter(row => !specialEmployee(row)).length} 名员工`}${rows.some(specialEmployee) ? ' · 系统及未归属记录单列' : ''}</p></section>
+  function countText(row, key, unit = '') {
+    const count = row.counts[key] || 0;
+    const incomplete = metricIncomplete(row, key);
+    if (incomplete && !count) return '待核对';
+    return formatCount(count) + (unit ? ' ' + unit : '') + (incomplete ? ' 已确认' : '');
+  }
+
+  function chartScale(rows, key) {
+    const max = rows.reduce((value, row) => Math.max(value, row.counts[key] || 0), 0);
+    const roughStep = Math.max(1, (max + 1) / 4);
+    const halfPower = 10 ** Math.floor(Math.log10(roughStep)) / 2;
+    const step = Math.ceil(Math.ceil(roughStep / halfPower) * halfPower);
+    return { max: step * 4, ticks: Array.from({ length: 5 }, (_, i) => i * step) };
+  }
+
+  function renderSeries(rows, metric, selected, staff, tone) {
+    const [key, label] = metric, unit = metricUnit(key);
+    const scale = chartScale(staff, key);
+    const ticks = scale.ticks.map(value => `<span data-employee-position="${value / scale.max * 100}">${formatTick(value)}</span>`).join('');
+    const lines = scale.ticks.map(value => `<span data-employee-position="${value / scale.max * 100}"></span>`).join('');
+    const bars = rows.map(row => {
+      const value = row.counts[key] || 0;
+      const unknown = metricIncomplete(row, key) && !value;
+      const chosen = row.id === selected;
+      const description = row.name + '，' + label + ' ' + countText(row, key, unit);
+      return `<button type="button" class="employee-statistics-column" data-action="employee-statistics-select-person"
+        data-employee="${esc(row.id)}" aria-label="${esc(description)}" title="${esc(description)}"
+        aria-pressed="${chosen}" tabindex="${chosen ? 0 : -1}">
+        <span class="employee-statistics-column-slot${unknown ? ' is-unknown' : ''}" data-employee-position="${value / scale.max * 100}" aria-hidden="true">
+          <span class="employee-statistics-column-fill"></span><span class="employee-statistics-column-value">${esc(countText(row, key))}</span>
+        </span><span class="employee-statistics-column-name" aria-hidden="true">${esc(row.name)}</span></button>`;
+    }).join('');
+    return `<section class="employee-statistics-series" data-employee-series="${key}" data-tone="${tone}" aria-label="${esc(label)}员工柱状图">
+      <div class="employee-statistics-series-heading"><h3>${esc(label)} <span>／${unit}</span></h3><span>${rows.length} / ${staff.length} 名员工</span></div>
+      <div class="employee-statistics-series-plot">
+        <div class="employee-statistics-axis" aria-hidden="true">${ticks}</div>
+        <div class="employee-statistics-column-plot"><div class="employee-statistics-gridlines" aria-hidden="true">${lines}</div>
+          <div class="employee-statistics-columns">${bars}</div></div>
       </div></section>`;
   }
 
-  function alignDistribution() {
-    distributionObserver?.disconnect();
-    cancelAnimationFrame(distributionFrame);
-    const region = $('#employee-statistics .employee-statistics-distribution');
-    if (!region) return;
-    const kpis = $('#employee-statistics .employee-statistics-kpis');
-    kpis.style.setProperty('--employee-kpi-count', String(kpis.children.length));
-    for (const bar of region.querySelectorAll('[data-employee-bar-percent]'))
-      bar.style.width = bar.dataset.employeeBarPercent + '%';
-    let width = -1;
-    const align = () => {
-      const bars = [...region.querySelectorAll('[data-employee-chart-row]')];
-      const rows = [...region.querySelectorAll('[data-employee-report-row]')];
-      bars.forEach(row => row.style.removeProperty('--employee-row-height'));
-      rows.forEach(row => row.style.removeProperty('--employee-row-height'));
-      if (getComputedStyle(region).gridTemplateColumns.split(' ').length < 2) return;
-      bars.forEach((bar, index) => {
-        if (!rows[index]) return;
-        const height = Math.max(bar.getBoundingClientRect().height, rows[index].getBoundingClientRect().height);
-        bar.style.setProperty('--employee-row-height', height + 'px');
-        rows[index].style.setProperty('--employee-row-height', height + 'px');
-      });
+  function renderQuickTable(rows, metrics, selected, paired = false) {
+    if (!rows.length) return '';
+    const split = paired ? Math.ceil(rows.length / 2) : rows.length;
+    const metricHeader = metrics.map(([key, label]) =>
+      `<th scope="col" title="${esc(label + '／' + metricUnit(key))}">${esc(shortMetricLabels[key] || label)}</th>`).join('');
+    const headers = '<th scope="col">员工</th>' + metricHeader;
+    const gap = '<td class="employee-statistics-quick-gap" aria-hidden="true"></td>';
+    const cells = row => {
+      if (!row) return `<td colspan="${metrics.length + 1}"></td>`;
+      const choice = row.id === selected, id = esc(row.id);
+      const note = employeeNote(row);
+      const attrs = `data-employee-quick-cell="${id}"${choice ? ' data-selected' : ''}`;
+      const label = `${esc(row.name)}${note ? `<small>${note}</small>` : ''}`;
+      return `<td class="employee-statistics-quick-name" ${attrs}>${specialEmployee(row) ? label :
+        `<button type="button" data-action="employee-statistics-select-person" data-employee="${id}" aria-pressed="${choice}"
+          aria-label="选择${esc(row.name)}">${label}</button>`}</td>` +
+        metrics.map(([key, name], index) => `<td${index ? ' class="employee-statistics-quick-secondary"' : ''} ${attrs}>${metricCell(row, key, name, '从速查')}</td>`).join('');
     };
-    distributionObserver = new ResizeObserver(entries => {
-      const next = entries[0].contentRect.width;
-      if (next === width) return;
-      width = next;
-      cancelAnimationFrame(distributionFrame);
-      distributionFrame = requestAnimationFrame(align);
-    });
-    distributionObserver.observe(region);
-    align();
+    const body = rows.slice(0, split).map((row, i) => `<tr>${cells(row)}${paired ? gap + cells(rows[i + split]) : ''}</tr>`).join('');
+    return `<table class="employee-statistics-quick-table"${paired ? ' data-paired' : ''} aria-label="${specialEmployee(rows[0]) ? '系统与归属待核对' : '员工数量速查'}">
+      <thead><tr>${headers}${paired ? '<th class="employee-statistics-quick-gap" aria-hidden="true"></th>' + headers : ''}</tr></thead>
+      <tbody>${body}</tbody></table>`;
+  }
+
+  function selectedSummary(row, key) {
+    return row ? `<span>${esc(row.name)}</span> <strong>${esc(countText(row, key, metricUnit(key)))}</strong>` : '';
+  }
+
+  function renderDistribution(rows, metrics) {
+    const filter = filters(), pending = filter.tab === 'pending', view = comparison();
+    const primary = metrics.find(([key]) => key === view.metric) || metrics[0];
+    const [key] = primary;
+    const preferred = pending ? ['unusedCodes', 'openMail', 'openAccounts'] : ['orders', 'issuedCodes', 'extractedMail'];
+    const second = preferred.map(id => metrics.find(([metric]) => metric === id && metric !== key)).find(Boolean) ||
+      metrics.find(([metric]) => metric !== key);
+    const pair = second ? [primary, second] : [primary];
+    const staff = rows.filter(row => !specialEmployee(row));
+    const special = rows.filter(specialEmployee);
+    if (view.sort === 'quantity') staff.sort((a, b) => Number(metricIncomplete(a, key)) - Number(metricIncomplete(b, key)) ||
+      (b.counts[key] || 0) - (a.counts[key] || 0) || a.name.localeCompare(b.name, 'zh-CN'));
+    view.page = Math.min(view.page, Math.max(1, Math.ceil(staff.length / chartPageSize)));
+    const shown = staff.slice((view.page - 1) * chartPageSize, view.page * chartPageSize);
+    const selected = shown.find(row => row.id === view.selected) || shown[0];
+    view.selected = selected?.id || '';
+    const totals = pair.map(([metric, label]) => {
+      const incomplete = rows.some(row => metricIncomplete(row, metric));
+      const count = metricTotal(rows, metric);
+      return `<div class="employee-statistics-quick-total" data-employee-total="${metric}">
+        <span>${esc(label)}${incomplete && count ? '<small>已确认</small>' : ''}</span>
+        <strong${incomplete && !count ? ' class="employee-statistics-total-unknown"' : ''}>${incomplete && !count ? '待核对' : formatCount(count)}</strong>
+        ${incomplete && !count ? '' : `<small>${metricUnit(metric)}</small>`}</div>`;
+    }).join('');
+    const plotKey = JSON.stringify([filter.tab, viewKey(), filter.employee, filter.exceptions, view.page, key, view.sort]);
+    const plot = shown.length ? `<div class="employee-statistics-chart-scroll" data-employee-chart-key="${esc(plotKey)}"
+        tabindex="0" role="region" aria-label="员工柱状图，可横向滚动">
+      <div class="employee-statistics-chart-track" data-employee-column-count="${shown.length}">
+        ${pair.map((metric, i) => renderSeries(shown, metric, view.selected, staff, i ? 'teal' : 'blue')).join('')}
+      </div></div><div class="employee-statistics-chart-selection">
+        <div data-employee-selected aria-live="polite">${selectedSummary(selected, key)}</div>
+        <span>点击柱子或姓名联动</span></div>`
+      : `<p class="employee-statistics-chart-empty">${special.length ? '当前范围仅有系统或归属未记录的资料' : '当前条件暂无员工记录'}</p>`;
+    return `<section class="employee-statistics-analysis" data-employee-primary-metric="${key}" aria-label="员工分布与数量说明">
+      <div class="employee-statistics-section-heading"><div class="section-title-row">
+        <h2>${pending ? '待处理资产分布' : '员工工作分布'}</h2>
+        ${A.titleInfo('员工分布', '两张柱图与右侧速查共用员工顺序。合计覆盖当前筛选范围。不同指标分别统计，系统与归属未记录单列。', 'employee-statistics-chart-help')}
+        </div><div class="employee-statistics-chart-controls">
+        <label for="employee-statistics-metric">统计指标</label>
+        ${A.select('employee-statistics-metric', metrics.map(([value, name]) => [value, name]), key).replace('<select', '<select aria-label="统计指标"')}
+        ${button(view.sort === 'quantity' ? '数量降序' : '员工顺序', 'employee-statistics-sort', '', view.sort === 'quantity' ? 'down' : '', `aria-pressed="${view.sort === 'quantity'}"`)}</div></div>
+      <div class="employee-statistics-distribution"${shown.length === 1 ? ' data-single' : ''}>
+        <div class="employee-statistics-plot">${plot}</div>
+        <section class="employee-statistics-quantities" aria-labelledby="employee-statistics-quick-title">
+          <div class="employee-statistics-subheading"><div class="section-title-row"><h3 id="employee-statistics-quick-title">员工数量速查</h3>
+          ${A.titleInfo('员工数量速查', '每行并排两名员工。选择姓名会联动柱图，点击非零数量可打开脱敏明细。', 'employee-statistics-quick-help')}</div>
+          <span>${shown.length} 人 · ${Math.ceil(shown.length / 2)} 行</span></div>
+          <div class="employee-statistics-quick-totals">${totals}</div>
+          ${shown.length || special.length ? `<div class="employee-statistics-quick-scroll" tabindex="0" role="region" aria-label="员工数量表">
+            ${renderQuickTable(shown, pair, view.selected, shown.length > 1)}
+            ${special.length ? `<div class="employee-statistics-special">${renderQuickTable(special, pair, '')}</div>` : ''}</div>` : ''}
+          <p class="employee-statistics-chart-note">${pair.map(([metric, label]) => esc(label) + '（' + metricUnit(metric) + '）').join(' · ')}</p>
+        </section>
+      </div>
+      <div class="employee-statistics-chart-footer"><span>当前范围 ${formatCount(staff.length)} 名员工 · 合计覆盖全部筛选结果${special.length ? '，含单列记录' : ''}</span>
+        ${shown.length ? '<span class="employee-statistics-chart-legend"><span>已确认数量</span><span>当前选中</span></span>' : ''}</div>
+      ${staff.length > chartPageSize ? window.IDPagination.render({ id: chartPager, page: view.page,
+        pageSize: chartPageSize, pageSizes: [], total: staff.length }) : ''}
+    </section>`;
+  }
+
+  function prepareCharts() {
+    const plot = $('#employee-statistics .employee-statistics-chart-scroll');
+    if (!plot) return;
+    const track = $('[data-employee-column-count]', plot);
+    track.style.setProperty('--employee-column-count', track.dataset.employeeColumnCount);
+    for (const node of plot.querySelectorAll('[data-employee-position]'))
+      node.style.setProperty('--employee-position', node.dataset.employeePosition + '%');
+    if (plot.dataset.employeeChartKey === chartScrollKey) plot.scrollLeft = chartScroll;
+  }
+
+  function selectEmployee(node) {
+    const analysis = node.closest('.employee-statistics-analysis');
+    const row = report?.key === viewKey() && report.data.items.find(item => item.id === node.dataset.employee);
+    if (!analysis || !row || specialEmployee(row)) return;
+    comparison().selected = row.id;
+    for (const button of analysis.querySelectorAll('[data-action="employee-statistics-select-person"]')) {
+      const selected = button.dataset.employee === row.id;
+      button.setAttribute('aria-pressed', String(selected));
+      if (button.classList.contains('employee-statistics-column')) button.tabIndex = selected ? 0 : -1;
+    }
+    for (const cell of analysis.querySelectorAll('[data-employee-quick-cell]'))
+      cell.toggleAttribute('data-selected', cell.dataset.employeeQuickCell === row.id);
+    $('[data-employee-selected]', analysis).innerHTML = selectedSummary(row, analysis.dataset.employeePrimaryMetric);
+    const plot = $('.employee-statistics-chart-scroll', analysis);
+    const column = $('.employee-statistics-column[aria-pressed="true"]', plot);
+    const frame = plot.getBoundingClientRect(), bounds = column.getBoundingClientRect();
+    if (bounds.left < frame.left) plot.scrollLeft -= frame.left - bounds.left;
+    else if (bounds.right > frame.right) plot.scrollLeft += bounds.right - frame.right;
   }
 
   function renderReport(snapshot) {
@@ -202,26 +271,34 @@
     const pending = filter.tab === 'pending';
     const rows = snapshot.items.filter(row => (!filter.employee || filter.employee === row.id) &&
       (!pending || (metrics.some(([metric]) => row.counts[metric]) && (!filter.exceptions || exceptions(row)))));
-    if (pending) rows.sort((a, b) => exceptions(b) - exceptions(a));
-    const columns = [
-      { id: 'name', label: '员工', render: row => esc(row.name) +
-        (row.active === null && !['system', 'unattributed'].includes(row.id) ? '<br><span class="footnote">历史员工</span>' : '') },
-      ...metrics.map(([id, label]) => ({ id, label, render: row => metricCell(row, id, label) }))
-    ];
     const warning = !snapshot.codeSourceAvailable
       ? '<p class="inline-notice warning">代充码池暂不可读，涉及的使用和未归还状态待核对。</p>' : '';
-    const pageRows = A.pageRows(rows);
+    const open = comparison().detailsOpen;
+    const columns = [
+      { id: 'name', label: '员工', render: row => esc(row.name) +
+        (employeeNote(row) ? '<br><span class="footnote">' + employeeNote(row) + '</span>' : '') },
+      ...metrics.map(([id, label]) => ({ id, label, render: row => metricCell(row, id, label) }))
+    ];
+    const detailRows = open && pending ? [...rows].sort((a, b) => exceptions(b) - exceptions(a)) : rows;
+    const detailList = open ? A.table(columns, A.pageRows(detailRows), '', pending ? '员工待处理资产' : '员工工作量', {
+      title: pending ? '暂无符合条件的待处理资产' : '暂无符合条件的员工记录',
+      description: '可以调整员工或业务类型筛选。'
+    }) + A.pagination(rows.length) : '';
     return (warning ? `<div class="panel-body">${warning}</div>` : '') +
-      `<div class="employee-statistics-dashboard">${renderSummary(rows, metrics)}${renderDistribution(rows, metrics)}</div>` +
-      `<section class="employee-statistics-details"><div class="employee-statistics-section-heading"><div class="section-title-row"><h2>${pending ? '员工资产明细' : '员工工作明细'}</h2>${A.titleInfo('员工业务明细', '点击非零数量回查脱敏原始记录。撤单是提交订单的子集；使用、归还和异常分别统计，不能将不同字段相加为工作总量。', 'employee-statistics-details-help')}</div></div>` +
-      A.table(columns, pageRows, '', pending ? '员工待处理资产' : '员工工作量', {
-        title: pending ? '暂无符合条件的待处理资产' : '暂无符合条件的员工记录',
-        description: '可以调整员工或业务类型筛选。'
-      }) + A.pagination(rows.length) + '</section>';
+      `<div class="employee-statistics-dashboard">${renderDistribution(rows, metrics)}</div>` +
+      `<section class="employee-statistics-details"><div class="employee-statistics-section-heading"><div class="section-title-row"><h2>${pending ? '员工资产明细' : '员工工作明细'}</h2>${A.titleInfo('员工业务明细', '点击非零数量回查脱敏原始记录。撤单是提交订单的子集，使用、归还和异常分别统计。', 'employee-statistics-details-help')}</div>
+      ${button(open ? '收起明细' : '展开明细', 'employee-statistics-toggle-details', '', 'down', `aria-expanded="${open}" aria-controls="employee-statistics-detail-list"`)}</div>` +
+      `<div class="employee-statistics-details-content" id="employee-statistics-detail-list"${open ? '' : ' hidden'}>${detailList}</div></section>`;
   }
 
   function render() {
-    headerScroll = $('#employee-statistics .employee-statistics-scroll')?.scrollLeft || 0;
+    const priorHeader = $('#employee-statistics .employee-statistics-scroll');
+    if (priorHeader) headerScroll = priorHeader.scrollLeft;
+    const priorChart = $('#employee-statistics .employee-statistics-chart-scroll');
+    if (priorChart) {
+      chartScrollKey = priorChart.dataset.employeeChartKey;
+      chartScroll = priorChart.scrollLeft;
+    }
     const heading = A.header(title,
       '工作量按北京时间的发生日统计。待处理资产按当前状态汇总，超 24 小时未处理只提示跟进。',
       active() ? button('刷新', 'employee-statistics-refresh') : '');
@@ -230,8 +307,9 @@
     const filter = filters();
     const key = viewKey();
     const snapshot = report?.key === key ? report.data : null;
-    const scope = snapshot ? filter.tab === 'pending' ? '当前资产截至 ' + displayTime(snapshot.asOf)
-      : snapshot.date + ' · 北京时间 · 数据截至 ' + displayTime(snapshot.asOf) : '';
+    const dataTime = displayTime(snapshot?.asOf);
+    const shortTime = dataTime.startsWith(snapshot?.today + ' ') ? dataTime.slice(11) : dataTime;
+    const scope = snapshot ? (filter.tab === 'pending' ? '当前资产截至 ' : '北京时间 · 截至 ') + shortTime : '';
     const error = failure?.key === key;
     const today = businessToday();
     const selectedDate = filter.date || today;
@@ -260,6 +338,7 @@
           ${A.input('employee-statistics-date', selectedDate, `type="date" max="${esc(today)}" aria-label="统计日期"`)}
         </label><div class="toolbar-date-shortcuts" role="group" aria-label="快捷日期">${dateShortcuts}</div>` : ''}
         <div class="toolbar-select-filters">
+          <label for="employee-statistics-person">员工</label>
           ${A.select('employee-statistics-person', [['', '全部员工'], ...employees], filter.employee).replace('<select', '<select aria-label="员工"')}
           ${filter.tab === 'work' ? A.select('employee-statistics-kind', options, filter.work).replace('<select', '<select aria-label="业务类型"') : ''}
         </div>
@@ -267,7 +346,8 @@
         <label class="checkbox-label">
           <input type="checkbox" id="employee-statistics-exceptions" ${filter.exceptions ? 'checked' : ''} />
           <span>只看异常</span></label>` : ''}
-        ${scope ? `<p class="employee-statistics-scope">${esc(scope)}</p>` : ''}
+        ${scope ? `<p class="employee-statistics-scope" data-statistics-date="${esc(snapshot.date)}"
+          title="北京时间 ${esc(dataTime)}">${esc(scope)}</p>` : ''}
       </div>
       </div><div class="toolbar-right" data-page-actions></div></div>
       <div class="design-async-region" data-statistics-region>
@@ -358,6 +438,22 @@
   document.addEventListener('id-pagination-change', event => {
     const { id, page, pageSize } = event.detail;
     if (id === detailPager) void loadDetail(page, pageSize);
+    if (id === chartPager && active() && event.target.closest('#employee-statistics')) {
+      comparison().page = page;
+      A.render();
+    }
+  });
+
+  document.addEventListener('keydown', event => {
+    const column = event.target.closest?.('.employee-statistics-column');
+    if (!column || !active() || !['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    const columns = [...column.parentElement.children];
+    const index = columns.indexOf(column);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? columns.length - 1 :
+      Math.max(0, Math.min(columns.length - 1, index + (event.key === 'ArrowRight' ? 1 : -1)));
+    selectEmployee(columns[next]);
+    columns[next].focus({ preventScroll: true });
   });
 
   window.IDDesignModules.push({
@@ -365,17 +461,16 @@
     afterRender({ routeChanged }) {
       const scroll = $('#employee-statistics .employee-statistics-scroll');
       if (scroll) scroll.scrollLeft = headerScroll;
-      alignDistribution();
+      prepareCharts();
       if (active() && (routeChanged || (report?.key !== viewKey() && failure?.key !== viewKey()))) void load();
     },
     deactivate() {
-      distributionObserver?.disconnect();
-      cancelAnimationFrame(distributionFrame);
+      latestLoad = detail = undefined;
     },
     clearPageState() {
-      distributionObserver?.disconnect();
-      cancelAnimationFrame(distributionFrame);
       report = failure = detail = latestLoad = undefined;
+      headerScroll = chartScroll = 0;
+      chartScrollKey = undefined;
       A.state.drafts.delete(draftKey);
     },
     onDataChanges(changes) {
@@ -386,15 +481,21 @@
       if (action === 'employee-statistics-refresh') void load();
       else if (action === 'employee-statistics-detail') openDetail(node);
       else if (action === 'employee-statistics-detail-retry') void loadDetail(detail?.page, detail?.pageSize);
-      else if (action === 'employee-statistics-expand-chart') {
-        const filter = filters(), key = filter.tab + 'Expanded';
-        filter[key] = !filter[key];
+      else if (action === 'employee-statistics-select-person') selectEmployee(node);
+      else if (action === 'employee-statistics-sort' || action === 'employee-statistics-toggle-details') {
+        const view = comparison();
+        if (action === 'employee-statistics-sort') {
+          view.sort = view.sort === 'quantity' ? 'employee' : 'quantity';
+          view.page = 1;
+        } else view.detailsOpen = !view.detailsOpen;
         A.render();
+        $(`#employee-statistics [data-action="${action}"]`)?.focus({ preventScroll: true });
       }
       else if (action === 'employee-statistics-kind') {
         const filter = filters();
         if (filter.tab !== 'pending' || !pendingKinds.includes(node.dataset.kind)) return false;
         filter.pending = node.dataset.kind;
+        comparison().page = 1;
         A.state.page = 1;
         A.render();
       }
@@ -404,6 +505,7 @@
           const days = Number(node.dataset.daysAgo);
           if (![0, 1, 2].includes(days)) return false;
           filters().date = days ? previousDay(businessToday(), days) : '';
+          comparison().page = 1;
         }
         A.state.page = 1;
         A.render();
@@ -415,8 +517,11 @@
       const filter = filters();
       if (node.id === 'employee-statistics-metric') {
         if (visibleMetrics().some(([key]) => key === node.value)) {
-          filter[filter.tab + 'Metric'] = node.value;
+          const view = comparison();
+          view.metric = node.value;
+          view.page = 1;
           A.render();
+          $('#employee-statistics-metric')?.focus({ preventScroll: true });
         }
         return true;
       }
@@ -427,6 +532,7 @@
         case 'employee-statistics-exceptions': filter.exceptions = node.checked; break;
         default: return false;
       }
+      comparison().page = 1;
       A.state.page = 1;
       A.render();
       return true;

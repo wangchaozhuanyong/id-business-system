@@ -88,7 +88,7 @@ test('data center navigation, four website reports, reporting dates and responsi
   assert.equal(await overview.getByText('含估算', { exact: true }).count(), 0);
   assert.deepEqual(await metrics.allTextContents(), ['浏览量', '访问次数', '访客数']);
 
-  const output = join(root, '.runtime', 'data-center-review');
+  const output = process.env.ID_LAYOUT_QA_OUTPUT || join(root, '.runtime', 'data-center-review');
   await mkdir(output, { recursive: true });
   for (const width of [1440, 1024, 901, 900, 768, 390, 320]) {
     await page.setViewportSize({ width, height: 900 });

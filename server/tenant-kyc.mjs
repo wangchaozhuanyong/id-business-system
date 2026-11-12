@@ -66,20 +66,56 @@ export function tenantKycStatus(commerce, inventory, tenant) {
   accounts: [...new Set(live.map(record => record.email).filter(Boolean))] };
 }
 
+// A recorded correction describes historical facts; it does not certify or restore an account.
+export function isDeadAccountCorrection(prior, order, inventory, action) {
+  if (!prior || !order || prior.id !== order.id || !['Claude Pro', 'Claude Max'].includes(prior.product) ||
+      order.product !== prior.product || !Number.isSafeInteger(prior.version) || order.version !== prior.version + 1)
+    return false;
+  const accounts = rows(inventory?.accounts);
+  const beforeAccount = stockAccount(prior, accounts), afterAccount = stockAccount(order, accounts);
+  if (!accountMarkedDead(beforeAccount) || beforeAccount.id !== afterAccount?.id || !accountMarkedDead(afterAccount))
+    return false;
+  const before = rows(prior.corrections), after = rows(order.corrections);
+  if (before.some((entry, index) => !isDeepStrictEqual(entry, after[index]))) return false;
+  if (action === '更正订单') {
+    const { corrections, refunds, bankReturns, ...snapshot } = prior;
+    const change = after.at(-1);
+    return after.length === before.length + 1 && change?.versionAfter === order.version &&
+      typeof change.reason === 'string' && Boolean(change.reason.trim()) &&
+      isDeepStrictEqual(change.previous, snapshot);
+  }
+  if (action === '补偿撤回更正') {
+    const change = before.at(-1), oldCompensations = rows(prior.compensations), compensations = rows(order.compensations);
+    const compensation = compensations.at(-1);
+    return after.length === before.length && change?.versionAfter === prior.version &&
+      compensations.length === oldCompensations.length + 1 &&
+      oldCompensations.every((entry, index) => isDeepStrictEqual(entry, compensations[index])) &&
+      compensation?.correctionId === change.id && compensation.fromVersion === prior.version &&
+      compensation.toVersion === order.version && typeof compensation.reason === 'string' && Boolean(compensation.reason.trim()) &&
+      ['product', 'email', 'accountId', 'kyc', 'verifier', 'verifierPhone', 'claudeVerifierId']
+        .every(field => (order[field] ?? '') === (change.previous?.[field] ?? '') ||
+          (['kyc', 'verifier', 'verifierPhone', 'claudeVerifierId'].includes(field) &&
+            !Object.hasOwn(change.previous || {}, field) && order[field] === prior[field]));
+  }
+  return false;
+}
+
 // Called inside the existing business transaction after server-side verifier normalization.
-export function checkTenantKycWrite(previous, next, inventory, { requireVerifier = false } = {}) {
+export function checkTenantKycWrite(previous, next, inventory, { requireVerifier = false, action } = {}) {
   const before = rows(previous?.orders);
   const after = rows(next?.orders);
   const tenants = rows(next?.tenants), priorTenants = rows(previous?.tenants);
   const accounts = rows(inventory?.accounts);
   const byId = new Map(after.map(row => [row.id, row]));
   const priorById = new Map(before.map(row => [row.id, row]));
+  const historicalCorrections = new Set(after.filter(order =>
+    isDeadAccountCorrection(priorById.get(order.id), order, inventory, action)).map(order => order.id));
   for (const order of before) {
     const saved = byId.get(order.id);
     if (rows(order.corrections).some(entry => certified(entry?.previous) &&
         !rows(saved?.corrections).some(other => isDeepStrictEqual(entry, other))))
       return '原 KYC 核对记录必须保留';
-    if (!certified(order)) continue;
+    if (!certified(order) || historicalCorrections.has(order.id)) continue;
     const legacy = verifierMatch(order, priorTenants);
     if (!certified(saved) || (emailKey(order.email) && emailKey(saved.email) !== emailKey(order.email)) ||
         (order.accountId && order.accountId !== saved.accountId) ||
@@ -101,7 +137,10 @@ export function checkTenantKycWrite(previous, next, inventory, { requireVerifier
     if (requireVerifier && (!current.email || !current.certain ||
         (!certified(prior) && !order.claudeVerifierId)))
       return '登记 KYC 须选择租户认证人并填写可核对的 Claude 账号';
-    if (current.dead) return '死号不能登记新的 KYC 认证';
+    if (current.dead) {
+      if (historicalCorrections.has(order.id)) continue;
+      return '死号的历史认证资料须通过原订单更正，并保留更正原因和原记录';
+    }
     const others = history.filter(record => !certified(prior) || record.orderId !== order.id);
     const accountHistory = others.filter(record => sameAccount(record, current));
     if (accountHistory.length) {

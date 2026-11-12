@@ -657,6 +657,55 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     await context.close();
   });
 
+  await t.test('自定义日期覆盖两个自然月，校验起止并保留筛选', async () => {
+    const template = commerceFixture.orders.find(row => !row.cancelled);
+    const orders = ['2026-08-31 23:59', '2026-09-01 00:00', '2026-10-31 23:59', '2026-11-01 00:00']
+      .map((createdAt, index) => ({ ...template, id: 'overview-date-' + index, createdAt, start: createdAt }));
+    const { context, page, errors } = await open(undefined, {
+      commerce: { version: 1, data: { ...commerceFixture, orders } },
+      inventory: { version: 1, data: inventoryFixture }, appleBalance: { version: 1, data: appleFixture }
+    });
+    try {
+      await page.goto(origin + '/#/overview');
+      const custom = page.getByRole('button', { name: '自定义日期', exact: true });
+      await custom.click();
+      const drawer = page.locator('#drawer[open]');
+      await drawer.getByRole('heading', { name: '选择统计日期' }).waitFor();
+      await page.keyboard.press('Escape');
+      await drawer.waitFor({ state: 'hidden' });
+      await page.setViewportSize({ width: 390, height: 900 });
+      const compact = page.getByRole('combobox', { name: '统计时间范围' });
+      await selectRange(page, '自定义日期');
+      assert.equal(await compact.inputValue(), 'week');
+      await drawer.locator('#overview-date-from').fill('2026-10-01');
+      await drawer.locator('#overview-date-to').fill('2026-09-01');
+      const apply = drawer.getByRole('button', { name: '应用日期', exact: true });
+      await apply.click();
+      await drawer.getByText('结束日期不能早于开始日期', { exact: true }).waitFor();
+      await drawer.locator('#overview-date-from').fill('2026-09-01');
+      await drawer.locator('#overview-date-to').fill('2026-10-31');
+      await apply.click();
+      await drawer.waitFor({ state: 'hidden' });
+      const period = page.getByRole('button', { name: '查看统计区间与更新时间' });
+      await period.getByText(/09\/01.*10\/31/).waitFor();
+      assert.equal(await value(page, 'orders'), '2');
+      assert.equal(await compact.inputValue(), 'custom');
+      await period.click();
+      assert.match(await drawer.innerText(), /上期[\s\S]*08\/31/);
+      await page.keyboard.press('Escape');
+      assert.equal(await page.locator('.overview-chart-data g').count(), 21);
+      await page.getByText('每 3 天汇总', { exact: true }).waitFor();
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      await selectRange(page, '自定义日期');
+      assert.equal(await drawer.locator('#overview-date-from').inputValue(), '2026-09-01');
+      assert.equal(await drawer.locator('#overview-date-to').inputValue(), '2026-10-31');
+      await page.keyboard.press('Escape');
+      await selectRange(page, '近 7 天');
+      assert.equal(await compact.inputValue(), 'week');
+      assert.deepEqual(errors, []);
+    } finally { await context.close(); }
+  });
+
   await t.test('成功空集与首次失败的显示不同', async () => {
     const session = await open();
     const { page, context } = session;

@@ -38,9 +38,10 @@
     for (const row of snapshot?.items || []) counts.set(row.state, (counts.get(row.state) || 0) + 1);
     const tabMarkup = available.map(([id, label]) => {
       const count = snapshot ? id === 'manual' ? (snapshot.manualItems || []).length : counts.get(id) || 0 : '—';
+      const countId = 'completion-count-' + id;
       return '<button type="button" class="button completion-filter" data-action="completion-tab" data-id="' + id +
-        '" aria-label="' + label + '" aria-pressed="' + (id === current) + '">' + label +
-        '<span class="completion-count">' + count + '</span></button>';
+        '" aria-label="' + label + '" aria-describedby="' + countId + '" aria-pressed="' + (id === current) + '">' + label +
+        '<span class="tab-count" id="' + countId + '">' + count + '</span></button>';
     }).join('');
     const missingTags = row => row.missing.map(label => A.tag(label, 'warning')).join(' ');
     const columns = manual ? [

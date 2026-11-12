@@ -233,9 +233,11 @@ export function normalizeClaudeProMaterials(order, prior, { allowLegacyCreate = 
   if (mode === 'people' && !order.tenantId && !order.phone) return '请选择租户或填写订阅电话';
 }
 
-export function normalizeClaudeCertification(order, prior, tenants, { allowLegacyCreate = false } = {}) {
+export function normalizeClaudeCertification(order, prior, tenants,
+  { allowLegacyCreate = false, allowHistoricalCorrection = false } = {}) {
   const verifierId = order.claudeVerifierId;
-  const selected = Object.hasOwn(order, 'claudeVerifierId') && verifierId !== prior?.claudeVerifierId;
+  const selected = Object.hasOwn(order, 'claudeVerifierId') && (verifierId !== prior?.claudeVerifierId ||
+    (allowHistoricalCorrection && ['verifier', 'verifierPhone'].some(field => order[field] !== prior?.[field])));
   delete order.claudeVerifierId;
   if (!isClaudeOrder(order)) return selected ? '只有 Claude 订单可以登记认证人' : undefined;
   if (prior && order.plan !== prior.plan && !plans[order.product].includes(order.plan))

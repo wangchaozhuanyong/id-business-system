@@ -5,7 +5,6 @@
   min-inline-size: 0;
 }
 .data-center-workspace {
-  max-inline-size: 1320px;
   container-type: inline-size;
 }
 .data-center-tabs { border-bottom: 0; }

@@ -448,6 +448,7 @@ test('已确认开通的人工订阅按周期统计流失，财务或邮箱缺�
   await mainPager(page).getByRole('button', { name: '下一页' }).click();
   assert.equal(await list(page).locator('tbody tr[data-row-id]').count(), 3);
   await search(page).fill('QA-MANUAL-0-ROW');
+  await list(page).locator('tbody tr[data-row-id="manual-0"]').waitFor();
   await list(page).getByRole('button', { name: '订阅历史', exact: true }).click();
   assert.deepEqual(await drawer(page).locator('.summary-number').allTextContents(), ['1次', '0项', '0个', '0笔']);
   await drawer(page).getByRole('button', { name: '查看订单 QA-MANUAL-0-ROW', exact: true }).click();
@@ -474,14 +475,16 @@ test('已确认开通的人工订阅按周期统计流失，财务或邮箱缺�
     order('QA-MISSING-EXPIRY', 'manual-7', '2026-11-08T10:00', '', { paidConfirmed: false, paidAmount: '' })
   );
   await page.getByRole('button', { name: '刷新', exact: true }).click();
-  await page.getByRole('tab', { name: '已流失 39', exact: true }).waitFor();
+  await page.getByRole('tab', { name: '已流失', exact: true }).locator('.tab-count').getByText('39', { exact: true }).waitFor();
   assert.deepEqual(await summary(page), ['39位客户', '39位客户', '1笔', '1位客户']);
   for (const id of ['QA-MANUAL-0-ROW', 'QA-MANUAL-1-ROW', 'QA-MANUAL-2-ROW', 'QA-MANUAL-7-ROW']) {
     await search(page).fill(id);
+    await search(page).press('Enter');
     assert.equal(await mainPager(page).getAttribute('data-total'), '0', id + '不应误判流失');
   }
   for (const id of ['QA-MANUAL-3-ROW', 'QA-MANUAL-4-ROW', 'QA-MANUAL-5-ROW', 'QA-MANUAL-6-ROW', 'QA-MANUAL-8-ROW']) {
     await search(page).fill(id);
+    await search(page).press('Enter');
     assert.equal(await mainPager(page).getAttribute('data-total'), '1', id + '应按到期订阅统计');
     assert.match(await list(page).innerText(), /1 次/);
   }
@@ -501,7 +504,7 @@ test('已确认开通的人工订阅按周期统计流失，财务或邮箱缺�
   assert.deepEqual(await summary(page), ['41位客户', '2位客户', '1笔', '0位客户']);
   await page.clock.setFixedTime(new Date('2026-12-12T02:00:00Z'));
   await page.getByRole('button', { name: '刷新', exact: true }).click();
-  await page.getByRole('tab', { name: '已流失 42', exact: true }).waitFor();
+  await page.getByRole('tab', { name: '已流失', exact: true }).locator('.tab-count').getByText('42', { exact: true }).waitFor();
   assert.deepEqual(await summary(page), ['42位客户', '3位客户', '1笔', '0位客户']);
   assert.equal(data.commerce.data.orders[0].paidConfirmed, false);
   assert.equal(data.commerce.data.orders[0].receiptConfirmed, false);

@@ -138,9 +138,11 @@ test('action columns shrink to the widest visible group and keep controls usable
       const more = pool.getByRole('button', { name: '更多操作：' + active.email, exact: true });
       await more.waitFor();
       const all = await assertFits(pool, tableCell, 'mixed mailbox pool');
-      assert.deepEqual(all.controls, [1, 3]);
+      assert.deepEqual(all.controls.toSorted((left, right) => left - right), [1, 2]);
       await more.click();
-      await pool.locator('.mailbox-account__actions:popover-open').waitFor();
+      const menu = page.getByRole('menu', { name: '邮箱操作', exact: true });
+      await menu.waitFor();
+      assert.deepEqual(await menu.getByRole('menuitem').allTextContents(), ['更新授权', '重置查询码', '停用']);
       assert.equal((await geometry(pool)).width, all.width);
       await more.press('Escape');
       await page.locator('#ops-mailbox-pool-search').fill(pending.email);
@@ -192,7 +194,7 @@ test('action columns shrink to the widest visible group and keep controls usable
     } finally { await context.close(); }
   });
 
-  await t.test('issued recharge codes use content width when the workbench shows a table', async () => {
+  await t.test('issued recharge code actions fit on one line in the table and cards', async () => {
     const context = await browser.newContext({ viewport: { width: 1920, height: 1000 } });
     try {
       await interceptDesign(context, { actor: codeOwner, localFixtures: {}, skipRechargeAssets: true });
@@ -205,8 +207,36 @@ test('action columns shrink to the widest visible group and keep controls usable
       page.setDefaultTimeout(6000);
       await page.goto(origin + '/#/workspace/recharge-codes');
       const table = page.locator('table[data-table="my-recharge-codes"]');
-      await table.locator('thead .table-actions').waitFor();
-      assert((await assertFits(table, tableCell, 'issued recharge codes')).controls.some(count => count > 1));
+      const verifyRows = async (list, width) => {
+        const groups = list.locator('td.table-actions > .recharge-record-actions');
+        await groups.first().waitFor();
+        const rows = await groups.evaluateAll(groups => groups.map(group => {
+          const cell = group.parentElement.getBoundingClientRect();
+          const viewport = group.closest('.table-viewport').getBoundingClientRect();
+          const buttons = [...group.querySelectorAll('button')].map(button => button.getBoundingClientRect());
+          const center = box => box.top + box.height / 2;
+          return {
+            count: buttons.length,
+            aligned: buttons.every(box => Math.abs(center(box) - center(buttons[0])) <= 1),
+            contained: buttons.every(box => box.left >= Math.max(cell.left, viewport.left) - 1 &&
+              box.right <= Math.min(cell.right, viewport.right) + 1),
+            touchTargets: buttons.every(box => box.height >= 44)
+          };
+        }));
+        assert(rows.some(row => row.count === 3), '应覆盖复制、详情及归还同时显示');
+        assert(rows.every(row => row.aligned && row.contained && (width > 900 || row.touchTargets)),
+          `${width}px 充值码操作应同排且完整可见 ${JSON.stringify(rows)}`);
+      };
+      for (const [width, dark] of [[1920, false], [1440, true], [901, false], [390, true], [320, false]]) {
+        await page.setViewportSize({ width, height: 1000 });
+        if (dark !== await page.locator('html').evaluate(node => node.dataset.theme === 'dark'))
+          await toggleDesignTheme(page);
+        await settle(page);
+        await verifyRows(table, width);
+        if (width === 1920) await assertFits(table, tableCell, 'issued recharge codes');
+      }
+      await page.getByRole('button', { name: '批次明细', exact: true }).click();
+      await verifyRows(page.locator('#drawer[open] .recharge-batch-detail'), 320);
     } finally { await context.close(); }
   });
 });

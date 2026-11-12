@@ -84,7 +84,12 @@ test('租户续费提醒、联系人、独立设置、保存失败和新周期',
   page.setDefaultTimeout(6000);
   await page.clock.setFixedTime(at);
   await page.goto(origin + '/#/customers/tenants');
-  const tab = name => page.getByRole('tab', { name });
+  const tab = (name, count) => {
+    const item = page.getByRole('tab', { name, exact: true });
+    return count === undefined ? item : item.filter({
+      has: page.locator('.tab-count').filter({ hasText: new RegExp('^' + count + '$') })
+    });
+  };
   const drawer = page.locator('#drawer[open]');
   const pending = page.locator('table[data-table="commerce-tenant-renewals-pending"]');
   const processed = page.locator('table[data-table="commerce-tenant-renewals-processed"]');
@@ -93,7 +98,7 @@ test('租户续费提醒、联系人、独立设置、保存失败和新周期',
   const details = pending.getByRole('row').filter({ hasText: 'shared@example.test' });
   const settings = page.getByRole('button', { name: '租户续费提醒设置', exact: true });
   const shared = 'shared@example.test';
-  await tab('待处理 2').waitFor();
+  await tab('待处理', 2).waitFor();
   await page.getByRole('button', { name: '1 个待处理', exact: true }).click();
   assert.equal(await filter.inputValue(), 'a');
   assert.equal(await pending.locator('tbody tr[data-row-id]').count(), 1);
@@ -134,6 +139,7 @@ test('租户续费提醒、联系人、独立设置、保存失败和新周期',
   nextReply = 'rejected';
   await save.click();
   await notice.getByText(/本次操作未登记/).waitFor();
+  nextReply = undefined;
   assert.equal(await days.inputValue(), '4');
   assert.equal(snapshot.data.tenantRenewalWarningHours, undefined);
   snapshot.version++;
@@ -163,7 +169,7 @@ test('租户续费提醒、联系人、独立设置、保存失败和新周期',
   releaseWrite();
   await drawer.waitFor({ state: 'hidden' });
   await pending.getByText(shared, { exact: true }).waitFor({ state: 'hidden' });
-  await tab('已处理 1').click();
+  await tab('已处理', 1).click();
   await processed.getByText(shared, { exact: true }).waitFor();
   await processed.getByText(actor.name, { exact: true }).waitFor();
   await processed.getByText('2026-11-10 20:00', { exact: true }).waitFor();
@@ -181,7 +187,7 @@ test('租户续费提醒、联系人、独立设置、保存失败和新周期',
   snapshot.data.orders.push(order('new-cycle', { start: '2026-11-13T20:00', expiry: '2026-11-20T20:00' }));
   snapshot.version++;
   await page.reload();
-  await tab('待处理 3').click();
+  await tab('待处理', 3).click();
   await pending.getByText(shared, { exact: true }).waitFor();
   await pending.getByText('2026-11-20 20:00', { exact: true }).waitFor();
   await page.setViewportSize({ width: 390, height: 850 });
@@ -193,7 +199,7 @@ test('租户续费提醒、联系人、独立设置、保存失败和新周期',
   assert(await drawer.evaluate(el => el.getBoundingClientRect().width <= document.documentElement.clientWidth));
   if (output) await page.screenshot({ path: join(output, 'tenant-renewal-detail-mobile.png') });
   await drawer.getByRole('button', { name: '关闭', exact: true }).click();
-  await tab('已处理 1').click();
+  await tab('已处理', 1).click();
   await processed.getByText('2026-11-13 20:00', { exact: true }).waitFor();
   await page.getByRole('textbox', { name: '搜索当前列表' }).fill('不存在的测试账号');
   await processed.getByText('暂无符合条件的提醒', { exact: true }).waitFor();
@@ -202,7 +208,7 @@ test('租户续费提醒、联系人、独立设置、保存失败和新周期',
     snapshot.data.orders.push(order(`extra-${index}`, { email: `extra-${index}@example.test` }));
   snapshot.version++;
   await page.reload();
-  await tab('待处理 25').click();
+  await tab('待处理', 25).click();
   const pagination = page.getByRole('navigation', { name: '分页', exact: true });
   await pagination.locator('select[data-pagination-size]').selectOption('10');
   assert.equal(await pending.locator('tbody tr[data-row-id]').count(), 10);

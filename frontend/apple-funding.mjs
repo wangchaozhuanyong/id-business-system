@@ -106,6 +106,42 @@ export function appleFundingIndex(orders = [], ledger = {}) {
   return { byWallet, byTarget, pendingByTarget };
 }
 
+// Read-only references for account lookup; these do not establish or release a payment binding.
+export function appleRelatedOrders(orders = [], ledger = {}) {
+  const references = new Map(orders.map(order => [order.id, order]));
+  const wallets = new Map();
+  const add = (walletId, orderId, evidence) => {
+    if (!walletId || !orderId) return;
+    if (!wallets.has(walletId)) wallets.set(walletId, new Map());
+    const records = wallets.get(walletId), previous = records.get(orderId);
+    const order = references.get(orderId);
+    const current = order?.appleIdId === walletId &&
+      (order.payment === '苹果内购' || order.appleFunding?.bound);
+    const row = current ? {
+      orderId, orderNo: order.orderNo || orderId,
+      account: order.product === 'Grok' && order.loginMethod === 'x' ? order.xHandle || '' : order.email || '',
+      product: order.product || '', plan: order.plan || '', expiry: order.expiry || '',
+      order, historical: false
+    } : {
+      orderId, orderNo: evidence?.orderNo || orderId, account: evidence?.email || '',
+      product: '', plan: '', expiry: '', order, historical: true
+    };
+    row.accounts = row.account ? [row.account] : [];
+    if (!previous) records.set(orderId, row);
+    else if (previous.historical && row.historical) {
+      previous.accounts = [...new Set([...previous.accounts, ...row.accounts])];
+      previous.account = previous.accounts.join(' / ');
+    }
+  };
+  for (const order of orders) {
+    if ((order.payment === '苹果内购' || order.appleFunding?.bound) &&
+        !order.draft && !['draft', '草稿'].includes(order.status)) add(order.appleIdId, order.id);
+  }
+  for (const entry of [...(ledger.allocations || []), ...(ledger.movements || [])])
+    add(entry.appleIdId, entry.orderId, entry);
+  return new Map([...wallets].map(([id, records]) => [id, [...records.values()]]));
+}
+
 export function appleBinding(index, order) {
   const target = appleTarget(order);
   const ids = index.byTarget.get(target);
@@ -151,5 +187,5 @@ export function appleFundingEligibility(wallet, order, index, settings, { actual
 }
 
 if (typeof window !== 'undefined') window.IDAppleFunding = Object.freeze({
-  appleRegions, appleRegion, appleAmountUnits, applePrice, appleTarget, appleFundingIndex, appleBinding, appleFundingEligibility
+  appleRegions, appleRegion, appleAmountUnits, applePrice, appleTarget, appleFundingIndex, appleRelatedOrders, appleBinding, appleFundingEligibility
 });

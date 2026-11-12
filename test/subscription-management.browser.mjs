@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
-import { toggleDesignTheme, interceptDesign, origin } from './helpers/offline-design.mjs';
+import { toggleDesignTheme, interceptDesign, origin, settle } from './helpers/offline-design.mjs';
 
 const actor = { id: 'synthetic-admin', name: '合成操作人', role: 'admin' };
 const fixturePath = new URL('../docs/audits/2026-11-06-design-review/visual-fixtures.json', import.meta.url);
@@ -186,6 +186,74 @@ test('四类订阅页面使用独立状态、真实复制入口与历史兼容�
   }
 });
 
+test('订阅页签按产品显示全量计数，手机选中项在数字更新后仍可见', { timeout: 20_000 }, async t => {
+  const runtime = process.env.ID_RECHARGE_QA_PLAYWRIGHT;
+  const { chromium } = await import(runtime ? pathToFileURL(runtime).href : 'playwright');
+  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
+  t.after(() => browser.close());
+  const context = await browser.newContext({ viewport: { width: 390, height: 900 } });
+  await interceptDesign(context, { localFixtures: {}, actor, skipRechargeAssets: true });
+  const initial = Promise.withResolvers(), gpt = Promise.withResolvers(), gptStarted = Promise.withResolvers();
+  const totals = {
+    all: { all: 52, customer: 31, owned: 7, upcoming: 12, expired: 8, dead: 0, unlinked: 4 },
+    GPT: { all: 4, customer: 3, owned: 0, upcoming: 1, expired: 0, dead: 0, unlinked: 1 },
+    Claude: { all: 12345, customer: 10982, owned: 1225, upcoming: 294, expired: 78, dead: 0, unlinked: 60 }
+  };
+  let first = true, status = 200;
+  await context.route('**/api/local/subscriptions/list', async route => {
+    const query = route.request().postDataJSON();
+    if (first) { first = false; await initial.promise; }
+    if (query.product === 'GPT') { gptStarted.resolve(); await gpt.promise; }
+    if (status !== 200) return route.fulfill({ status, json: { error: '隔离读取失败' } });
+    const scopeCounts = totals[query.product];
+    const total = query.query ? 0 : scopeCounts[query.scope];
+    const items = Array.from({ length: Math.min(total, query.pageSize) }, (_, i) => ({
+      id: 'badge-sample-' + i, product: query.product, account: query.scope === 'unlinked' ? '' : `badge-${i}@example.test`,
+      series: [{ plan: 'Pro', status: 'active' }], history: [], queryCode: {}
+    }));
+    return route.fulfill({ json: { items, total, page: 1, pageSize: query.pageSize, counts: {}, scopeCounts,
+      revision: 'badge-qa', now: '2026-11-10T02:00:00Z' } });
+  });
+  const page = await context.newPage();
+  await page.goto(origin + '/#/subscriptions/all');
+  const tabs = page.getByRole('tablist', { name: '订阅列表' });
+  const badges = tabs.locator('.tab-count');
+  const all = tabs.getByRole('tab', { name: '全部订阅', exact: true }).locator('.tab-count');
+  const pager = page.locator('#subscription-list [data-pagination]');
+  await tabs.waitFor();
+  assert.deepEqual(await badges.allTextContents(), Array(7).fill('—'));
+  initial.resolve();
+  await all.filter({ hasText: /^52$/ }).waitFor({ state: 'attached' });
+  assert.deepEqual(await badges.allTextContents(), ['52', '31', '7', '12', '8', '0', '4']);
+  await page.locator('#subscription-query').fill('无匹配结果');
+  await page.locator('#subscription-query').press('Enter');
+  await pager.and(page.locator('[data-total="0"]')).waitFor();
+  assert.equal(await all.textContent(), '52');
+  await tabs.getByRole('tab', { name: '无邮箱', exact: true }).click();
+  await pager.waitFor();
+  const product = page.getByLabel('产品', { exact: true });
+  await product.selectOption('GPT');
+  await gptStarted.promise;
+  assert.deepEqual(await badges.allTextContents(), Array(7).fill('—'));
+  await product.selectOption('Claude');
+  await all.filter({ hasText: /^12,345$/ }).waitFor({ state: 'attached' });
+  const lateReply = page.waitForResponse(response => response.url().endsWith('/subscriptions/list') &&
+    response.request().postDataJSON().product === 'GPT');
+  gpt.resolve();
+  await (await lateReply).finished();
+  await settle(page);
+  assert.deepEqual(await badges.allTextContents(), ['12,345', '10,982', '1,225', '294', '78', '0', '60']);
+  assert(await tabs.evaluate(strip => {
+    const active = strip.querySelector('[aria-selected="true"]').getBoundingClientRect();
+    const bounds = strip.getBoundingClientRect();
+    return active.left >= bounds.left - 1 && active.right <= bounds.right + 1;
+  }), '更新多个大数字后，手机仍完整显示选中页签');
+  status = 403;
+  await page.getByRole('button', { name: '刷新', exact: true }).click();
+  await page.getByText('当前账号无权读取订阅资料', { exact: true }).waitFor();
+  assert.deepEqual(await badges.allTextContents(), Array(7).fill('—'));
+});
+
 test('到期读取失败时保留上次列表，重试后账号进入已过期', { timeout: 20_000 }, async t => {
   const runtime = process.env.ID_RECHARGE_QA_PLAYWRIGHT;
   const { chromium } = await import(runtime ? pathToFileURL(runtime).href : 'playwright');
@@ -203,20 +271,30 @@ test('到期读取失败时保留上次列表，重试后账号进入已过期',
     const items = status === 'active' || ['all', 'expired'].includes(query.scope) ? [{ id: 'qa-expiring', product: 'GPT',
       account: 'qa-expiring@example.test', status, series: [series], history: [], queryCode: {} }] : [];
     return route.fulfill({ json: { items, total: items.length, counts: {}, page: 1, pageSize: 20,
+      scopeCounts: { all: 1, upcoming: status === 'active' ? 1 : 0, expired: status === 'expired' ? 1 : 0 },
       revision: 'qa-expiry-revision', now: reads === 1 ? '2026-11-10T02:00:00Z' : expiry } });
   });
   const page = await context.newPage();
   await page.clock.install({ time: new Date('2026-11-10T02:00:00Z') });
   await page.goto(origin + '/#/subscriptions/gpt');
   const list = page.locator('#subscription-list');
+  const upcomingCount = page.getByRole('tab', { name: '即将到期', exact: true }).locator('.tab-count');
+  const expiredCount = page.getByRole('tab', { name: '已到期', exact: true }).locator('.tab-count');
   await list.getByText('剩余不足 1 小时', { exact: true }).waitFor();
+  assert.equal(await upcomingCount.textContent(), '1');
+  assert.equal(await expiredCount.textContent(), '0');
   await page.clock.fastForward(31_000);
   await page.getByText(/已保留上次读取的资料/).waitFor();
   await list.getByText('qa-expiring@example.test', { exact: true }).waitFor();
+  assert.equal(await upcomingCount.textContent(), '1');
+  assert.equal(await expiredCount.textContent(), '0');
   await page.clock.fastForward(60_000);
   assert.equal(reads, 2, '到期失败后不反复发起读取');
   await page.getByRole('button', { name: '刷新', exact: true }).click();
+  await expiredCount.filter({ hasText: /^1$/ }).waitFor();
   await list.getByText('已到期不足 1 小时', { exact: true }).waitFor();
+  assert.equal(await upcomingCount.textContent(), '0');
+  assert.equal(await expiredCount.textContent(), '1');
   await page.getByRole('tab', { name: '已到期', exact: true }).click();
   await list.getByText('已到期不足 1 小时', { exact: true }).waitFor();
   await list.getByText('qa-expiring@example.test', { exact: true }).waitFor();

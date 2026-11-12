@@ -36,7 +36,7 @@ test('账号与邮箱提交提取工作台：旧路由、双模块、草稿、�
   await context.route(origin + '/api/local/inventory', async route => {
     if (route.request().method() === 'GET') return route.fulfill({ json: inventory });
     const command = route.request().postDataJSON(); writes.push(command);
-    if (fail) { fail = false; return route.fulfill({ status: 503, json: { error: '模拟库存保存失败' } }); }
+    if (fail) return route.fulfill({ status: 503, json: { error: '模拟库存保存失败' } });
     inventory = { version: inventory.version + 1, data: structuredClone(command.data) };
     return route.fulfill({ json: inventory });
   });
@@ -211,7 +211,6 @@ test('账号与邮箱提交提取工作台：旧路由、双模块、草稿、�
   // Failure keeps the form, successful extraction uses the existing batch/detail workflow.
   await go('workspace/account-extract');
   const stock = page.locator('.inventory-availability > span').filter({ hasText: /^GPT 账号/ }).locator('strong');
-  const countBefore = Number(await stock.innerText());
   await page.locator('[data-action="inventory-import"][data-type="gpt"]').click();
   await page.locator('#inventory-import-content').fill('邮箱,密码,邮箱类型,2FA密钥,国家地区,地区,注册时间,登录设备,备注1,备注2\nworkspace-new@example.test,Fixture-Only,谷歌邮箱,DEMO-TOTP,美国,纽约,2026-10-01T10:30,测试设备,合并工作台,合成资料');
   await page.locator('button[form="inventory-import-form"][type="submit"]').click();
@@ -222,7 +221,12 @@ test('账号与邮箱提交提取工作台：旧路由、双模块、草稿、�
     await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
     assert.equal((await response).status(), status); await settle(page);
   };
+  const countBefore = Number(await stock.innerText());
+  const versionBefore = inventory.version;
   await saveImport(503);
+  await page.locator('#toast').getByText(/本次操作未保存/).waitFor();
+  fail = false;
+  assert.equal(inventory.version, versionBefore);
   assert.match(await page.locator('#inventory-import-content').inputValue(), /workspace-new@example.test/);
   assert.equal(Number(await stock.innerText()), countBefore, '失败不更新可用库存');
   await saveImport(200);
@@ -243,6 +247,8 @@ test('账号与邮箱提交提取工作台：旧路由、双模块、草稿、�
     assert.equal((await response).status(), status); await settle(page);
   };
   await extract(503);
+  await page.locator('#toast').getByText(/本次操作未保存/).waitFor();
+  fail = false;
   assert.equal(await page.locator('#inventory-extract-notes').inputValue(), 'account 的提取草稿');
   await extract(200);
   await page.locator('#main[data-layout-route^="workspace/extractions/"]').waitFor();

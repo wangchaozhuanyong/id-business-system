@@ -45,6 +45,38 @@ test('shared layouts preserve alignment, readable controls and stable navigation
   const frame = () => page.frameLocator('#main > [data-page-region]:not([hidden]) .recharge-integration__content iframe:not([hidden])');
   await page.goto(origin + '/#/workspace/order/gpt');
 
+  await t.test('page widths stay centered within the right workspace', async () => {
+    const check = async (route, cap) => {
+      await go(route);
+      const bounds = await page.locator('#main > .design-page-region:visible').evaluate(node => {
+        const main = node.parentElement;
+        const shell = main.getBoundingClientRect(), body = node.getBoundingClientRect();
+        const style = getComputedStyle(main);
+        const start = shell.left + parseFloat(style.paddingLeft);
+        const end = shell.right - parseFloat(style.paddingRight);
+        return { width: body.width, usable: end - start, start: body.left - start, end: end - body.right };
+      });
+      assert(Math.abs(bounds.width - Math.min(cap, bounds.usable)) <= 1, route + ' 容器宽度');
+      assert(Math.abs(bounds.start - bounds.end) <= 1, route + ' 居中');
+      await noOverflow();
+    };
+    const pages = [
+      ['data', 1320], ['data/sheets', 1320], ['plugins/websites', 1320], ['settings/monitoring', 1320],
+      ['settings/accounts', 1320], ['settings/costs', 1320], ['settings/payment-countries', 1320],
+      ['settings/mail-types', 960], ['workspace/order/gpt', Infinity], ['orders/gpt', Infinity]
+    ];
+    await page.setViewportSize({ width: 1920, height: 960 });
+    for (const [route, cap] of pages) await check(route, cap);
+    await page.locator('#nav-toggle').click();
+    await check('data', 1320);
+    await page.locator('#nav-toggle').click();
+    for (const width of [390, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const [route, cap] of [pages[0], pages[1], pages[7]]) await check(route, cap);
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+  });
+
   await t.test('the sidebar expands at most one group on selection and navigation', async () => {
     const sidebar = page.locator('#sidebar');
     const expandedGroups = () => sidebar.locator('.nav-heading[aria-expanded="true"]')
@@ -146,6 +178,62 @@ test('shared layouts preserve alignment, readable controls and stable navigation
       const drawerNote = await box('#drawer .title-description:popover-open');
       assert(drawerNote.x >= 0 && drawerNote.x + drawerNote.width <= width);
       await page.locator('#drawer [data-action="drawer-close"]').click();
+    }
+  });
+
+  await t.test('field label text starts at the left edge in workspaces and drawers', async () => {
+    const assertLabels = async (form, context) => {
+      const fields = form.locator('.field > :is(label, dt.field-label):visible');
+      await fields.first().waitFor();
+      const positions = await fields.evaluateAll(labels => labels.map(label => {
+        const text = document.createRange();
+        text.selectNodeContents(label);
+        const field = label.parentElement.getBoundingClientRect();
+        return { label: label.textContent, delta: text.getBoundingClientRect().left - field.left };
+      }));
+      assert(positions.every(({ delta }) => Math.abs(delta) <= 1),
+        `${context} 字段文字应对齐字段行左边缘 ${JSON.stringify(positions)}`);
+    };
+    for (const width of [1440, 901, 390, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const dark of [false, true]) {
+        await theme(dark);
+        for (const [route, selector] of [
+          ['workspace/account-extract', '#inventory-extract-form'],
+          ['customers/new', '#commerce-contact-form'],
+          ['workspace/order/gpt', '#commerce-order-form']
+        ]) {
+          await go(route);
+          await assertLabels(page.locator(selector), `${route} ${width} ${dark}`);
+        }
+        await page.evaluate(() => {
+          const api = window.IDDesignAPI;
+          api.openDrawer('字段布局验证', '',
+            api.field('姓名', 'layout-name', api.input('layout-name'), true, '姓名说明。') +
+            api.field('业务记录备注', 'layout-memo', api.input('layout-memo')));
+        });
+        const drawer = page.locator('#drawer[open]');
+        await assertLabels(drawer, `抽屉 ${width} ${dark}`);
+        const help = drawer.locator('.field-title-help summary');
+        const geometry = await help.evaluate(trigger => {
+          const field = trigger.closest('.field');
+          const range = document.createRange();
+          range.selectNodeContents(field.querySelector('label'));
+          const labelEnd = range.getBoundingClientRect().right;
+          const control = field.querySelector('.field-control').getBoundingClientRect();
+          const bounds = trigger.getBoundingClientRect();
+          return { gap: bounds.left - labelEnd, limit: control.left - bounds.right, size: bounds.width };
+        });
+        assert(geometry.gap >= -1 && geometry.gap <= 1 && geometry.limit >= 0, '说明按钮紧跟标签并留在控件左侧');
+        assert(geometry.size >= (width <= 900 ? 44 : 36));
+        const before = await drawer.locator('#layout-name').boundingBox();
+        await help.press('Enter');
+        await drawer.locator('.title-description:popover-open').waitFor();
+        assert.deepEqual(await drawer.locator('#layout-name').boundingBox(), before);
+        await page.keyboard.press('Escape');
+        assert.equal(await drawer.locator('.field-title-help[open]').count(), 0);
+        await drawer.locator('[data-action="drawer-close"]').click();
+      }
     }
   });
 
