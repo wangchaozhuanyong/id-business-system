@@ -645,7 +645,8 @@ def main():
     if not clean:
         failure = 'canary_cleanup_not_confirmed'
     if failure:
-        print(compact({'ok': False, 'mainSha': canary.sha, 'reason': failure, 'productionWrites': False}))
+        print(compact({'ok': False, 'mainSha': canary.sha, 'reason': failure,
+                       'completedChecks': canary.checks, 'productionWrites': False}))
         return 1
     canary.checks.append('owned_temporary_containers_removed')
     receipt = {'mainSha': canary.sha, 'checks': canary.checks, 'productionWrites': False}

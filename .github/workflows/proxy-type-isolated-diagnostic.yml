@@ -1,0 +1,40 @@
+name: Isolated recharge proxy diagnostic
+on:
+  push:
+    branches: [codex/shared-proxy-types-canary-fix-20261113]
+    paths: [.github/workflows/proxy-type-isolated-diagnostic.yml, 'deploy/recharge-core/**', modules/recharge/codexdaichong/native-routing.mjs]
+
+permissions:
+  contents: read
+
+jobs:
+  isolated:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Run the actual recharge canary in an isolated runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          revision=4e9bb201cf481d4bcc85da34970fc26c63ab818a
+          build="$GITHUB_WORKSPACE/.runtime/proxy-diagnostic"
+          install -d "$build"/{source,upstream,engine}
+          git archive --format=tar HEAD | tar -xf - -C "$build/source"
+          git -C "$build/upstream" init --quiet
+          git -C "$build/upstream" fetch --quiet --depth=1 --no-tags https://github.com/wangchaozhuanyong/codexdaichong.git "$revision"
+          git -C "$build/upstream" checkout --quiet --detach "$revision"
+          git -C "$build/upstream" archive --format=tar "$revision" | tar -xf - -C "$build/engine"
+          printf '%s\n' "$revision" > "$build/engine/.id-business-integrated-runtime"
+          printf '3\n' > "$build/engine/.id-business-production-guard"
+          docker build --file deploy/recharge-core/Dockerfile \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --label "org.id-business.upstream.revision=$revision" \
+            --tag "id-business-independent-recharge:$GITHUB_SHA" "$build"
+          docker create --name id-business-independent-formal-mysql mysql:8.4
+          workspace="/opt/id-business-independent/releases/$GITHUB_SHA"
+          sudo install -d -m 0700 -o "$(id -un)" "$workspace"
+          ln -s "$build/source" "$workspace/source"
+          python3 deploy/recharge-core/canary.py "$GITHUB_SHA"
