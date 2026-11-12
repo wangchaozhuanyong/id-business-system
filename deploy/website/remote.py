@@ -344,7 +344,10 @@ def stage(plan, release):
     live_operations = Path(website_launcher(DROP.read_text(), base)["path"]).parent
     source_name = f"independent-source-{sha}.tar.gz"
     assets_name = f"independent-assets-{sha}.json"
-    require(set(plan["artifacts"]) == {source_name, assets_name}, "invalid_artifact_names")
+    expected_names = {source_name, assets_name}
+    if plan.get('externalEvents'):
+        expected_names.add(f"independent-event-runtime-{sha}.tar.gz")
+    require(set(plan["artifacts"]) == expected_names, "invalid_artifact_names")
     scope = require_asset_digest(plan, plan["artifacts"][assets_name]["sha256"])
     require(not release.exists(), "release_directory_already_exists_inspect_before_retry")
     release.mkdir(mode=0o755)
