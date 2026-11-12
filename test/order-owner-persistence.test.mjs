@@ -70,10 +70,14 @@ test('HTTP 保存使用服务端实时人员目录，管理员代录不冒充员
   }],operating:[],rentBatches:[],logs:[]} };
   assert.equal((await call('commerce',{method:'PUT',session:employee.session,body:command})).status,403);
   const pending = structuredClone(command);
-  pending.data.orders[0].receiptConfirmed = false;
+  pending.data.orders[0].saleAmount = '';
   assert.equal((await call('commerce',{method:'PUT',session:administrator.session,body:pending})).status,400);
   assert.equal((await call('commerce',{session:administrator.session})).data.version,0);
+  command.data.orders[0].paidConfirmed = false;
+  command.data.orders[0].receiptConfirmed = false;
   const saved = await call('commerce',{method:'PUT',session:administrator.session,body:command});
+  assert.equal(saved.data.data.orders[0].paidConfirmed, true);
+  assert.equal(saved.data.data.orders[0].receiptConfirmed, true);
   assert.equal(saved.status,200);
   assert.equal(saved.data.data.orders[0].ownerId,staff.id);
   assert.equal(saved.data.data.orders[0].owner,staff.name);

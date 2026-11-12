@@ -34,7 +34,7 @@
   const shown = (amount) => canonical(amount).replace(/(\.\d{2})0+$/, '$1');
   const copy = (value) => (value ? JSON.parse(JSON.stringify(value)) : value);
   const net = (allocation) => M.subtract(allocation.amount, allocation.returned);
-  const managementRoute = 'data-management/apple-ids';
+  const managementRoute = 'subscriptions/apple-ids';
   const isBalanceRoute = () => ['accounts/apple-balances', 'mailboxes/apple', managementRoute].includes(S.route);
   const ready = () => !localData || loadState === 'ready';
   const pendingTotal = (orderId, exceptId) =>
@@ -857,7 +857,7 @@
       A.button('关闭', 'drawer-close')
     );
   }
-  const fundingStates = { unused: '未使用', reserved: '待付款占用', used: '已使用', conflict: '待核对' };
+  const fundingStates = { unused: '未使用', reserved: '待付款占用', used: '已使用', conflict: '待核对', unrecorded: '未登记苹果 ID' };
   function fundingRows() {
     const commerce = A.modules.commerce?.appleFundingData?.(), rules = window.IDAppleFunding;
     if (!commerce?.ready || !rules) return null;
@@ -868,7 +868,7 @@
       if (!history.has(order.appleIdId)) history.set(order.appleIdId, []);
       history.get(order.appleIdId).push(order);
     }
-    return list().map(wallet => {
+    const rows = list().map(wallet => {
       const state = index.byWallet.get(wallet.id);
       const orders = (history.get(wallet.id) || []).sort((a, b) =>
         String(b.expiry || b.createdAt || '').localeCompare(String(a.expiry || a.createdAt || '')));
@@ -902,6 +902,25 @@
         canRenew: Boolean(latest && !conflict && !state?.pending.length && !latest.cancelled && !latest.subscriptionEnded)
       };
     });
+    const managedIds = new Set(rows.map(row => row.id));
+    const external = (commerce.currentOrders || []).filter(order =>
+      order.payment === '苹果内购' && !managedIds.has(order.appleIdId));
+    for (const order of external) {
+      const contact = commerce.customer(order);
+      const expiry = String(order.expiry || '').replace('T', ' ');
+      const end = /^\d{4}-\d\d-\d\d \d\d:\d\d$/.test(expiry) ?
+        Date.parse(expiry.replace(' ', 'T') + '+08:00') : Date.parse(order.expiry);
+      const estimate = rules.applePrice(commerce.settings, order.product, order.plan, order.appleStoreRegion);
+      rows.push({
+        id: 'unrecorded:' + order.id, order, state: 'unrecorded', apple: '未登记苹果 ID',
+        name: contact?.name || '', contact: contact?.wechat || '', account: order.email || order.xHandle || order.orderNo,
+        plan: [order.product, order.plan].filter(Boolean).join(' · '), expiry, end,
+        subscription: !Number.isFinite(end) ? '' : end <= commerce.now ? '已过期' :
+          end <= commerce.now + commerce.renewalWarningHours * 3_600_000 ? '即将到期' : '有效期内',
+        expected: estimate ? estimate + ' USD' : '待核算', canRenew: Boolean(order.customerId)
+      });
+    }
+    return rows;
   }
   const managementView = () => {
     if (!S.drafts.has(managementRoute)) S.drafts.set(managementRoute, { query: '', state: '', plan: '', sort: 'asc', page: 1, pageSize: window.IDPagination.defaultPageSize });
@@ -928,7 +947,7 @@
   }
   function renderManagement() {
     const view = managementView(), all = fundingRows();
-    const title = A.header('苹果 ID 管理', '查询订阅使用、到期与预计代付金额。',
+    const title = A.header('订阅管理 · 按苹果 ID', '查看内购订阅使用的苹果 ID、余额与到期时间。',
       A.button('列设置', 'column-settings', '', 'columns', 'data-table-id="苹果 ID 管理"') +
       A.button('刷新', 'apple-management-refresh', '', 'return'));
     const available = Boolean(all && (ready() || hasLoaded));
@@ -957,20 +976,22 @@
         A.tag(row.subscription, { '有效期内': 'success', '即将到期': 'warning', '订阅待核对': 'warning', '已过期': 'danger' }[row.subscription] || '') : '—' },
       { id: 'expiry', label: '到期时间', render: row => E(row.expiry || '—') },
       { id: 'duration', label: '到期时长', render: row => E(row.duration || '—') },
+      { id: 'balance', label: '余额（USD）', mobileSummary: true,
+        render: row => E(row.wallet?.balance != null && ready() ? shown(row.wallet.balance) : '未读取') },
       { id: 'expected', label: '预计金额', class: 'apple-management-amount', render: row => E(row.expected || '—') },
       { id: 'actions', label: '操作', action: true, class: 'apple-management-actions', render: row =>
         `<div class="action-links">${A.textAction('更多操作', 'apple-management-more', `data-id="${E(row.id)}"`, '', 'chevron')}</div>` }
     ];
     const count = state => available ? all.filter(row => row.state === state).length : '—';
     const overview = A.summary([
-      ['全部苹果 ID', available ? all.length : '—', '个', true],
-      ['未使用', count('unused'), '个'], ['已使用', count('used'), '个'], ['待核对', count('conflict'), '个']
+      ['全部苹果 ID', available ? all.filter(row => row.wallet).length : '—', '个', true],
+      ['未使用', count('unused'), '个'], ['已使用', count('used'), '个'], ['未登记付款 ID', count('unrecorded'), '笔']
     ]);
     const emptyState = available ? { title: '暂无符合条件的记录', description: '可调整搜索或筛选条件。' } : {
       title: managementError || loadState === 'error' ? '苹果 ID 管理读取失败' : '正在读取苹果 ID 管理',
       description: managementError || loadState === 'error' ? '可点击刷新重试。' : ''
     };
-    return title + overview + (managementError && available ? '<p class="inline-notice warning" role="status">读取失败，已保留上次成功读取的资料。</p>' : '') +
+    return title + (A.modules.commerce?.subscriptionCenterNav?.('apple-ids') || '') + overview + (managementError && available ? '<p class="inline-notice warning" role="status">读取失败，已保留上次成功读取的资料。</p>' : '') +
       `<section class="panel apple-management-list" data-pagination-table><div class="toolbar"><div class="toolbar-left"><div class="search-field">
       ${A.icon('search')}<input id="apple-management-search" aria-label="搜索苹果 ID 使用记录" placeholder="搜索客户、账号或订单" value="${E(view.query)}" /></div>
       <select id="apple-management-state" aria-label="使用状态">${A.options(choices, view.state)}</select>
@@ -1274,12 +1295,12 @@
       const attrs = `data-id="${E(id)}"`;
       if (action === 'apple-management-more') A.openActionMenu(node,
         (row.canRenew ? A.button('续费', 'apple-management-renew', '', '', attrs) : '') +
-        A.button('充值', 'apple-topup', '', '', attrs) + A.button('余额变动', 'apple-ledger', '', '', attrs) +
+        (row.wallet ? A.button('充值', 'apple-topup', '', '', attrs) + A.button('余额变动', 'apple-ledger', '', '', attrs) : '') +
         (row.order?.id ? A.button('订单详情', 'apple-management-order', '', '', `data-id="${E(row.order.id)}"`) : '') +
-        A.button('使用记录', 'apple-management-history', '', '', attrs) + A.button('复制', 'apple-management-copy', '', '', attrs));
+        (row.wallet ? A.button('使用记录', 'apple-management-history', '', '', attrs) + A.button('复制', 'apple-management-copy', '', '', attrs) : ''));
       else if (action === 'apple-management-renew' && row.canRenew) A.modules.commerce.openAppleRenewal(row.order.id);
-      else if (action === 'apple-management-history') fundingHistory(row);
-      else if (action === 'apple-management-copy') void A.copyText([
+      else if (action === 'apple-management-history' && row.wallet) fundingHistory(row);
+      else if (action === 'apple-management-copy' && row.wallet) void A.copyText([
         row.account ? '订阅账号：' + row.account : '', '苹果 ID：' + row.apple, row.expected ? '预计金额：' + row.expected : ''
       ].filter(Boolean).join('\n'));
       return true;
@@ -1424,6 +1445,14 @@
     applyCommittedBalance,
     refreshLocalBalance,
     openLedger,
+    async openSubscriptionFunding(appleIdId) {
+      const sourceRoute = S.route;
+      await refreshManagement();
+      if (S.route !== sourceRoute) return;
+      const row = fundingRows()?.find(item => item.id === appleIdId);
+      if (row) fundingHistory(row);
+      else A.notify('当前没有可读取的苹果 ID 余额记录');
+    },
     openOrderRefund
   };
   window.IDDesignModules.push({

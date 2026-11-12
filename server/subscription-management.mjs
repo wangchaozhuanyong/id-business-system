@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 
 import {
-  orderOpeningConfirmed, orderNeedsAccount, validOrderEmail, validOrderXHandle,
+  orderOpeningConfirmed, subscriptionChainRoot, validOrderEmail, validOrderXHandle,
   subscriptionPeriodState, subscriptionStateLabels, subscriptionTime as instant
 } from '../frontend/order-opening.mjs';
 import { accountMarkedDead, releasedAccountOrders } from './account-lifecycle.mjs';
@@ -11,11 +11,11 @@ import { isManagedCode, mailboxPoolItems } from './tools/mailbox-pool.mjs';
 
 export const subscriptionDomain = 'subscription-management';
 const base = '/api/local/subscriptions';
-export const subscriptionRoutes = new Set(['list', 'account', 'lookup', 'copy', 'confirm', 'owner'].map(action => `${base}/${action}`));
+export const subscriptionRoutes = new Set(['list', 'account', 'lookup', 'copy', 'contact-copy', 'renewal-settings', 'confirm', 'owner'].map(action => `${base}/${action}`));
 const products = new Set(['GPT', 'Claude', 'Gemini', 'Grok']);
 const statuses = new Set(Object.keys(subscriptionStateLabels));
 const sorts = new Set(['expiry_asc', 'expiry_desc', 'account_asc']);
-const subscriptionScopes = ['customer', 'owned', 'unlinked', 'expired', 'dead'];
+const subscriptionScopes = ['all', 'customer', 'owned', 'unlinked', 'upcoming', 'expired', 'dead'];
 const archiveScopes = new Set(['expired', 'dead']);
 const defaultPageSize = 20;
 const day = 86_400_000;
@@ -135,6 +135,8 @@ function buildRecords(snapshots, now) {
   const orders = array(snapshots.commerce.data?.orders);
   const customers = snapshots.commerce.data?.customers;
   const customerIds = Array.isArray(customers) ? new Set(customers.map(row => row.id)) : null;
+  const orderById = new Map(orders.map(order => [order.id, order]));
+  const customersById = new Map(array(customers).map(row => [row.id, row]));
   const ids = new Map();
   for (const order of orders) ids.set(order?.id, (ids.get(order?.id) || 0) + 1);
   const records = [];
@@ -142,28 +144,36 @@ function buildRecords(snapshots, now) {
     const product = family(order?.product);
     if (!products.has(product) || !text(order.id) || order.draft || ['draft', '草稿'].includes(order.status)) continue;
     const accountIdentity = identity(order, product);
-    if (!accountIdentity && product === 'Claude' && !orderNeedsAccount(order)) continue;
-    // Missing identities stay individually reviewable and must never be merged by product.
-    const id = accountIdentity ? subscriptionAccountId(product, order) : digest(`${product}\0unresolved-order:${order.id}`);
+    const root = subscriptionChainRoot(order, orderById);
+    const anchor = root.subscriptionAnchor || (!identity(root, product) ? root.id : '');
+    const id = anchor ? digest(`${product}\0unresolved-order:${anchor}`) : subscriptionAccountId(product, root);
     const confirmed = openingConfirmed(order, profiles, now);
     if (!confirmed && !paid(order)) continue;
-    const missingAssociation = !accountIdentity || !text(order.customerId) ||
-      Boolean(customerIds && !customerIds.has(order.customerId));
+    const missingCustomer = !text(order.customerId) || Boolean(customerIds && !customerIds.has(order.customerId));
+    const missingAssociation = !accountIdentity || missingCustomer;
     const match = resolveAccount(order, product, accounts);
     const health = healthAccount(order, product, accounts, match.account);
     const released = match.account && releasedAccountOrders(match.account).has(order.id);
     const historicalSale = isClaudeHistoricalSale(order, match.account);
     const ended = order.subscriptionEnded === true || Boolean(released);
+    const customer = customersById.get(order.customerId);
+    const nextCard = profiles.renewalCards?.[renewalCardKey(id, seriesFor(order))];
+    const tail = /^\d{4}(?:\d{2})?$/.test(order.paymentId) ? order.paymentId.slice(-4) : '';
     const record = {
       id, product, sourceId: order.id, source: 'order', orderNo: text(order.orderNo) || text(order.id),
-      target: identity(order, product), display: order.loginMethod === 'x' && order.xHandle ? order.xHandle :
-        text(order.email) || text(order.xHandle), email: text(order.email), series: seriesFor(order),
+      target: accountIdentity, display: !accountIdentity ? '' : order.loginMethod === 'x' && order.xHandle
+        ? text(order.xHandle) : text(order.email) || text(order.xHandle),
+      email: validOrderEmail(order.email) ? text(order.email) : '', series: seriesFor(order),
       plan: text(order.plan), start: text(order.start), expiry: text(order.expiry),
       created: text(order.createdAt), customerId: text(order.customerId), account: match.account,
+      customerName: text(customer?.name || order.customerName), wechat: text(customer?.wechat || order.wechat),
+      payment: text(order.payment), appleIdId: text(order.appleIdId),
+      last4: order.payment === '银行卡' ? nextCard?.last4 || tail : '',
+      hasCard: order.payment === '银行卡' && Boolean(nextCard || order.cardId || order.proCardNumber || tail),
       delivered: order.businessType === '成品交付' && Boolean(match.account?.id && match.account.id === order.accountId),
       historicalSale,
       healthId: health?.id, dead: confirmed && accountMarkedDead(health),
-      missingAssociation, accountConflict: Boolean(match.conflict || ids.get(order.id) !== 1),
+      missingAssociation, missingCustomer, accountConflict: Boolean(match.conflict || ids.get(order.id) !== 1),
       confirmed, ended, cancelled: order.cancelled === true || ['cancelled', '已撤单'].includes(order.status),
       failed: order.entitlementStatus === 'failed' || ['failed', '失败'].includes(order.status),
       orderOwner: text(order.owner) ||
@@ -172,7 +182,6 @@ function buildRecords(snapshots, now) {
       operatorName: order.source === '线上代充' ? '系统自动' : text(order.createdBy) || '历史未记录'
     };
     record.status = subscriptionPeriodState(record, now);
-    if (historicalSale && missingAssociation && !ended) record.status = 'pending';
     records.push(record);
   }
   for (const account of accounts) {
@@ -202,11 +211,11 @@ function orderTime(record) {
 
 function currentSeriesRecord(records) {
   const [latest, ...earlier] = records;
-  if (!latest.missingAssociation && !['pending', 'failed', 'scheduled', 'opened'].includes(latest.status))
+  if (!latest.missingCustomer && !['pending', 'failed', 'scheduled', 'opened'].includes(latest.status))
     return latest;
   for (const record of earlier) {
-    if (record.ended && !record.missingAssociation) break;
-    if (record.status === 'active' && !record.missingAssociation) return record;
+    if (record.ended) break;
+    if (record.status === 'active' && !record.missingCustomer) return record;
   }
   return latest;
 }
@@ -216,7 +225,10 @@ function publicRecord(record, now) {
     source: record.source, sourceId: record.sourceId, orderNo: record.orderNo, plan: record.plan,
     start: record.start, expiry: record.expiry, status: record.status,
     remainingDays: record.ended ? 0 : remaining(record.expiry, now), operatorName: record.operatorName,
-    confirmed: record.confirmed, missingAssociation: Boolean(record.missingAssociation)
+    confirmed: record.confirmed, missingAssociation: Boolean(record.missingAssociation),
+    customerName: record.customerName || '', wechat: record.wechat || '',
+    payment: record.payment || '', last4: record.last4 || '', hasCard: Boolean(record.hasCard),
+    appleIdId: record.appleIdId || ''
   };
 }
 
@@ -230,7 +242,7 @@ function mailboxFor(row, inventory) {
   const explicit = mailboxes.filter(mailbox => (account?.sourceMailboxId && mailbox.id === account.sourceMailboxId) ||
     array(mailbox.usageLinks).some(link => (account && link.kind === 'registration' && link.accountId === account.id) ||
       (link.kind === 'order-use' && orderIds.has(link.orderId))));
-  const matches = explicit.length ? explicit : mailboxes.filter(mailbox =>
+  const matches = explicit.length || account?.acquisitionMethod ? explicit : mailboxes.filter(mailbox =>
     row.registrationEmail && emailKey(mailbox.email) === emailKey(row.registrationEmail));
   if (matches.length !== 1) return { conflict: matches.length > 1 };
   const mailbox = matches[0];
@@ -273,7 +285,7 @@ export function projectSubscriptions(snapshots, now = Date.now()) {
     const dead = healthIds.size === 1 && records.some(record => record.dead);
     const delivered = records.some(record => record.delivered && record.confirmed && !record.cancelled &&
       (!record.missingAssociation || record.historicalSale) && historyAccounts.has(record.account?.id));
-    const scope = !records[0].target ? 'unlinked' : historyAccounts.size && !delivered ? 'owned' : 'customer';
+    const scope = !records.some(record => record.target) ? 'unlinked' : historyAccounts.size && !delivered ? 'owned' : 'customer';
     let conflict = records.some(record => record.accountConflict) || customers.size > 1 || accountIds.size > 1 ||
       (scope === 'owned' && activeRecords.some(record => record.confirmed && record.customerId));
     const series = new Map();
@@ -306,11 +318,13 @@ export function projectSubscriptions(snapshots, now = Date.now()) {
       !record.cancelled && (record.source === 'history' || (record.customerId && record.customerId === primary.customerId)));
     const ownerValid = ownerEligible && owner && (!owner.accountId || owner.accountId === account?.id) &&
       (!owner.customerId || !primary.customerId || owner.customerId === primary.customerId);
+    const knownIdentity = primary.display ? primary : records.find(record => record.display);
     const row = {
-      id, product: primary.product, account: primary.display, registrationEmail: primary.email || text(account?.email),
+      id, product: primary.product, account: knownIdentity?.display || '', registrationEmail: knownIdentity?.email || text(account?.email),
       scope, status, ownerId: ownerValid ? text(owner.ownerId) : '',
       ownerName: ownerValid ? text(owner.ownerName) : scope === 'unlinked' ? primary.orderOwner : '',
       operatorName: primary.operatorName, accountId: account?.id || '', customerId: primary.customerId,
+      customerName: primary.customerName || '', wechat: primary.wechat || '',
       conflict: Boolean(conflict), missingAssociation, ownerEligible,
       series: selected.map(record => ({ key: record.series, ...publicRecord(record, now),
         ...(dead && { status: 'dead', remainingDays: 0 }) })),
@@ -338,13 +352,25 @@ function safeRow(row) {
 
 function hasStatus(row, status) {
   if (row.status === 'dead') return status === 'dead';
-  return row.conflict ? status === 'pending' : row.series.some(series => series.status === status);
+  return row.series.some(series => series.status === status);
 }
 
-function matchesScope(row, scope) {
-  if (archiveScopes.has(scope)) return row.scope !== 'unlinked' && hasStatus(row, scope);
+function matchesScope(row, scope, now = Date.now(), hours = 72) {
+  if (scope === 'all') return true;
+  if (scope === 'upcoming') return row.series.some(series => series.status === 'active' &&
+    instant(series.expiry) <= now + hours * 3_600_000);
+  if (archiveScopes.has(scope)) return hasStatus(row, scope);
   return row.scope === scope && (scope === 'unlinked' ||
     (row.status !== 'dead' && (row.conflict || row.series.some(series => series.status !== 'expired'))));
+}
+
+export const renewalCardKey = (id, series) => JSON.stringify([id, series]);
+
+export function subscriptionForOrder(snapshots, orderId, now) {
+  for (const row of projectSubscriptions(snapshots, now)) {
+    const series = row.series.find(item => item.source === 'order' && item.sourceId === orderId);
+    if (series) return { row, series };
+  }
 }
 
 function listSeries(row, scope) {
@@ -469,24 +495,28 @@ export function createSubscriptionHandler({ store, publicOrigin, readOwners = ()
         if (action === 'list') {
           const pageSize = body.pageSize ?? defaultPageSize;
           const scope = body.scope;
-          if (!products.has(body.product) || (body.status && !statuses.has(body.status)) ||
+          if ((body.product !== 'all' && !products.has(body.product)) || (body.status && !statuses.has(body.status)) ||
               (body.sort && !sorts.has(body.sort)) ||
               (scope !== undefined && !subscriptionScopes.includes(scope)) ||
               typeof (body.query ?? '') !== 'string' || (body.query || '').length > 254 ||
               !Number.isSafeInteger(body.page ?? 1) || (body.page ?? 1) < 1 ||
               !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 100)
             throw failure(400, '查询筛选或分页格式不正确');
-          const allProductRows = rows.filter(row => row.product === body.product);
+          const allProductRows = rows.filter(row => body.product === 'all' || row.product === body.product);
+          const hours = snapshots.commerce.data?.renewalWarningHours ??
+            (snapshots.commerce.data?.renewalWarningDays || 3) * 24;
+          const inScope = (row, value) => matchesScope(row, value, now, hours);
           const scopeCounts = Object.fromEntries(subscriptionScopes.map(value =>
-            [value, allProductRows.filter(row => matchesScope(row, value)).length]));
-          const productRows = scope ? allProductRows.filter(row => matchesScope(row, scope)) : allProductRows;
-          const accounts = (scope === 'customer' || scope === 'owned'
-            ? allProductRows.filter(row => row.scope === scope) : productRows).filter(row => row.scope !== 'unlinked');
+            [value, allProductRows.filter(row => inScope(row, value)).length]));
+          const productRows = scope ? allProductRows.filter(row => inScope(row, scope)) : allProductRows;
+          const accounts = scope === 'customer' || scope === 'owned'
+            ? allProductRows.filter(row => row.scope === scope) : productRows;
           const counts = Object.fromEntries([...statuses].map(status =>
             [status, accounts.filter(row => hasStatus(row, status)).length]));
           const query = text(body.query).toLowerCase();
           const matching = productRows.filter(row => (!body.status || hasStatus(row, body.status)) &&
-            (!query || [row.account, row.registrationEmail, row.ownerName, row.operatorName,
+            (!query || [row.account, row.registrationEmail, row.ownerName, row.operatorName, row.customerName, row.wechat,
+              ...row.series.map(series => series.last4),
               ...row.history.map(record => record.orderNo)].some(value => text(value).toLowerCase().includes(query))));
           const sort = body.sort || 'expiry_asc';
           const due = row => {
@@ -507,8 +537,39 @@ export function createSubscriptionHandler({ store, publicOrigin, readOwners = ()
           audit('view', items.map(row => row.id));
           return { items: items.map(row => ({ ...safeRow(row), series: listSeries(row, scope),
             ...(scope === 'expired' && { status: 'expired' }) })), total: matching.length,
-            accountCount: accounts.length, scopeCounts, counts, page, pageSize, revision,
+            accountCount: accounts.filter(row => Boolean(row.account)).length, scopeCounts, counts, page, pageSize, revision,
             now: new Date(now).toISOString() };
+        }
+        if (action === 'renewal-settings') {
+          const existing = snapshots.subscriptions.data || {};
+          const suffixes = existing.renewalSuffixes || {};
+          if (body.suffix === undefined) return { suffix: suffixes[actor.id] || '' };
+          if (typeof body.suffix !== 'string' || body.suffix.length > 1000)
+            throw failure(400, '续费后缀最多 1000 个字');
+          const suffix = body.suffix.trim();
+          save({ ...existing, renewalSuffixes: { ...suffixes, [actor.id]: suffix } }, 'subscription_renewal_suffix', actor.id);
+          return { suffix };
+        }
+        if (action === 'contact-copy') {
+          const target = subscriptionForOrder(snapshots, body.orderId, now);
+          if (!target || target.row.conflict || (body.id && target.row.id !== body.id))
+            throw failure(409, '订阅或客户关联已变化，请重新选择');
+          const { row, series } = target;
+          if (!series.confirmed) throw failure(409, '该订单未登记开通');
+          const format = value => Number.isFinite(instant(value)) ? new Intl.DateTimeFormat('sv-SE', {
+            timeZone: 'Asia/Shanghai', dateStyle: 'short', timeStyle: 'short'
+          }).format(instant(value)) : '';
+          const left = Number.isFinite(instant(series.expiry)) ? instant(series.expiry) - now : NaN;
+          const hours = Math.floor(left / 3_600_000);
+          const duration = Number.isNaN(left) ? '' : left <= 0 ? '已到期' : hours < 1 ? '不足 1 小时' :
+            [hours >= 24 && Math.floor(hours / 24) + ' 天', hours % 24 && hours % 24 + ' 小时'].filter(Boolean).join(' ');
+          const lines = [['客户', series.customerName], ['微信', series.wechat], ['账号', row.account],
+            ['订阅套餐', series.plan], ['订阅时间', format(series.start)], ['到期时间', format(series.expiry)],
+            ['到期提醒', duration]].filter(([, value]) => value).map(([label, value]) => label + '：' + value);
+          const suffix = snapshots.subscriptions.data?.renewalSuffixes?.[actor.id];
+          if (suffix) lines.push(suffix);
+          audit('contact_copy', [row.id]);
+          return { text: lines.join('\n'), customerName: series.customerName };
         }
         if (typeof body.id !== 'string' || typeof body.revision !== 'string' || body.revision !== revision)
           throw failure(409, '订阅资料已变化，请刷新后重新核对');

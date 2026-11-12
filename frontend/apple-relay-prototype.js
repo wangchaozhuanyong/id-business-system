@@ -83,13 +83,19 @@
   const healthOptions = [
     ['normal', '正常'],
     ['dead', '死号'],
-    ['unlocking', '解封中']
+    ['unlocking', '解封中'],
+    ['restricted', '封控中'],
+    ['frozen', '冻结']
   ];
+  const aliasHealth = row => ['dead', 'unlocking'].includes(row.health) ? row.health :
+    row.status === '封控中' ? 'restricted' : row.status === '冻结' ? 'frozen' : 'normal';
   const useOptions = [
-    ['available', '库存'],
+    ['available', '未使用'],
     ['claimed', '已提取'],
-    ['used', '已使用']
+    ['used', '已使用'],
+    ['unknown', '未登记']
   ];
+  const aliasUse = row => useOptions.some(([id]) => id === row.inventoryState) ? row.inventoryState : 'unknown';
   const beijingTime = new Intl.DateTimeFormat('sv-SE', {
     timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
@@ -265,7 +271,7 @@
     if (review?.status === 'used' && row.inventoryState !== 'used') return '检测到已使用';
     return (
       { available: '未使用', claimed: '已提取待使用', used: '已实际使用' }[row.inventoryState] ||
-      '待核对'
+      '未登记'
     );
   }
   function healthLabel(row) {
@@ -749,7 +755,7 @@
     );
     const matchesUse = (row) =>
       !view.inventory || (row.inventoryState || 'available') === view.inventory;
-    const matchesHealth = (row) => !view.health || (row.health || 'normal') === view.health;
+    const matchesHealth = (row) => !view.health || aliasHealth(row) === view.health;
     const rows = matching.filter((row) => matchesUse(row) && matchesHealth(row));
     const filters = `<select id="relay-filter-parent" aria-label="筛选所属主邮箱">${A.options([['', '全部主邮箱'], ...parents.filter((p) => !p.deleted).map((p) => [p.id, p.email])], view.parentId)}</select>`;
     const usage = statusButtons(
@@ -757,14 +763,14 @@
       '使用状态',
       useOptions,
       matching.filter(matchesHealth),
-      (row) => row.inventoryState || 'available'
+      aliasUse
     );
     const health = statusButtons(
       'health',
       '邮箱资料状态',
       healthOptions,
       matching.filter(matchesUse),
-      (row) => row.health || 'normal'
+      aliasHealth
     );
     const hasParent = parents.some((p) => !p.deleted && p.status === 'ACTIVE');
     const actions = hasParent
@@ -798,6 +804,7 @@
             render: (r) => E(parentEmail(r.parentMailboxId))
           },
           { id: 'relayStatus', label: '邮箱启用状态', render: (r) => E(status(r)) },
+          { id: 'health', label: '邮箱状态', render: row => E(healthOptions.find(([key]) => key === aliasHealth(row))?.[1]) },
           { id: 'inventoryState', label: '邮箱使用状态', render: (r) => E(usedLabel(r)) },
           { id: 'registrationPlatform', label: '注册平台', render: (r) => E(platformLabel(r)) },
           { id: 'registrationAccount', label: '关联账号', render: registrationAccountCell },

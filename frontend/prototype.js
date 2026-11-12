@@ -173,7 +173,6 @@ function select(name, values, selected = '') {
   return `<select id="${name}" name="${name}">${options(values, selected)}</select>`;
 }
 
-const gptOrderSyncRoute = 'orders/gpt/recharge-sync';
 const navigation = [
   ['网站总览', 'grid', [['网站总览', 'overview']]],
   [
@@ -184,7 +183,7 @@ const navigation = [
       ['Claude提交', 'workspace/order/claude'],
       ['Gemini提交', 'workspace/order/gemini'],
       ['Grok提交', 'workspace/order/grok'],
-      ['订单补全', 'workspace/order-completion'],
+      ['订单不全', 'workspace/order-completion'],
       ['续费管理', 'workspace/renewals'],
       ['客户录入', 'customers/new'],
       ['充值码提取', 'workspace/recharge-codes'],
@@ -240,6 +239,9 @@ const navigation = [
     ]
   ],
   ['订阅管理', 'orders', [
+    ['全部订阅', 'subscriptions/all'],
+    ['按银行卡', 'subscriptions/bank-cards'],
+    ['按苹果 ID', 'subscriptions/apple-ids'],
     ['GPT 订阅管理', 'subscriptions/gpt'],
     ['Claude 订阅管理', 'subscriptions/claude'],
     ['Gemini 订阅管理', 'subscriptions/gemini'],
@@ -255,8 +257,6 @@ const navigation = [
   ],
   ['数据管理', 'database', [
     ['订单统计', 'orders/statistics'],
-    ['银行卡管理', 'data-management/bank-cards'],
-    ['苹果 ID 管理', 'data-management/apple-ids'],
     ['客户流失', 'workspace/customer-loss'],
     ['员工数据统计', 'data-management/employee-statistics']
   ]],
@@ -880,15 +880,6 @@ function websiteMonitorTabs(active) {
   ] : [['ops-website-check', '网站检测']];
   return `<div class="tabs monitor-navigation" role="tablist" aria-label="网站监控功能">${views.map(([key, label]) =>
     `<button type="button" id="tab-${key}" class="tab${active === key ? ' active' : ''}" role="tab" aria-selected="${active === key}" tabindex="${active === key ? 0 : -1}"${active === key ? ` aria-controls="${key.startsWith('ops-') ? key : 'system-monitor-view-content'}"` : ''} data-action="system-monitor-view" data-view="${key}">${label}</button>`).join('')}</div>`;
-}
-function gptOrderTabs() {
-  if (!permittedRoute(gptOrderSyncRoute)) return '';
-  const views = [['orders/gpt', '订单列表'], [gptOrderSyncRoute, '代充订单同步']];
-  const links = views.map(([route, label]) => {
-    const active = state.route === route;
-    return `<a class="tab${active ? ' active' : ''}" href="#/${route}"${active ? ' aria-current="page"' : ''}>${label}</a>`;
-  }).join('');
-  return `<nav class="tabs" data-route-tabs aria-label="GPT 订单视图">${links}</nav>`;
 }
 function compactListToolbars(region) {
   const simple = /^(workspace\/(customer-loss|renewals|extractions)|customers\/(list|tenants)|orders\/(gpt|claude|statistics)|settings\/(accounts|login-logs|exchange-rates))$/.test(state.route);
@@ -1803,6 +1794,8 @@ function navigate(event) {
     'workspace/my-recharge-codes': 'workspace/recharge-codes',
     'plugins/sheets': 'data/sheets',
     'data-management/claude-google-subscriptions': 'subscriptions/claude',
+    'data-management/bank-cards': 'subscriptions/bank-cards',
+    'data-management/apple-ids': 'subscriptions/apple-ids',
     'orders/pro': 'orders/claude',
     'orders/max': 'orders/claude',
     'orders/exclusive': 'orders/claude'
@@ -1825,8 +1818,10 @@ function navigate(event) {
     next = 'accounts/apple-balances';
     history.replaceState(null, '', '#/' + next);
   }
-  if (next === 'orders/recharge-sync') {
-    next = gptOrderSyncRoute;
+  const legacyRechargeSync = ['orders/recharge-sync', 'orders/gpt/recharge-sync'].includes(next);
+  if (legacyRechargeSync) {
+    next = 'orders/gpt';
+    window.IDDesignAPI.modules.commerce?.setOrderListTab('GPT', 'pending');
     history.replaceState(null, '', '#/' + next);
   }
   if (
@@ -1837,7 +1832,7 @@ function navigate(event) {
     return;
   }
   // A hash navigation can emit both popstate and hashchange.
-  if (event && !legacyCustomerTags && state.route === next && mountedPage?.region.isConnected &&
+  if (event && !legacyCustomerTags && !legacyRechargeSync && state.route === next && mountedPage?.region.isConnected &&
       mountedPage.region.dataset.pageRegion === next) return;
   preserveMainDraft();
   if (state.route !== next) {
@@ -1862,6 +1857,7 @@ function navigate(event) {
     );
     state.selections.clear();
   }
+  if (legacyRechargeSync) { state.page = 1; state.query = ''; }
   document.body.classList.remove('nav-open');
   $('#sidebar-shade').hidden = true;
   if ($('#drawer').open) closeDrawer();
@@ -3511,8 +3507,6 @@ window.IDDesignAPI = {
   input,
   select,
   header,
-  gptOrderSyncRoute,
-  gptOrderTabs,
   websiteMonitorTabs,
   summary,
   empty,

@@ -31,12 +31,12 @@ test('四类订阅页面使用独立状态、真实复制入口与历史兼容�
         const request = route.request().postDataJSON();
         const status = request.scope === 'dead' ? 'dead' : request.scope === 'expired' ? 'expired' :
           (request.product === 'Claude' && !confirmed) ? 'pending' : 'active';
-        if (request.product === 'GPT' && request.scope === 'unlinked') {
+        if (request.product === 'all' || (request.product === 'GPT' && request.scope === 'unlinked')) {
           const record = { source: 'order', sourceId: old.id, orderNo: old.orderNo, plan: old.plan,
             start: old.start, expiry: old.expiry, status: 'active', remainingDays: 21, confirmed: true, missingAssociation: true };
           return route.fulfill({ json: { items: [{ id: 'synthetic-unlinked', product: 'GPT', scope: 'unlinked',
             status: 'active', series: [{ ...record, key: 'gpt' }], history: [record], missingAssociation: true }],
-            total: 1, accountCount: 0, page: 1, pageSize: request.pageSize, counts: {}, scopeCounts: { unlinked: 1 },
+            total: 1, accountCount: 0, page: 1, pageSize: request.pageSize, counts: {}, scopeCounts: { all: 1, unlinked: 1 },
             revision: 'unlinked-revision', now: '2026-11-10T02:00:00Z' } });
         }
         const record = { source: 'order', sourceId: 'synthetic-order', orderNo: 'TEST-ORDER', plan: plans[request.product],
@@ -121,11 +121,11 @@ test('四类订阅页面使用独立状态、真实复制入口与历史兼容�
         }
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
         if (name === 'grok') {
-          assert.match(await page.locator('#subscription-overview .summary-item').filter({ hasText: '全部账号' }).innerText(), /1\s*个/);
-          assert.match(await page.locator('#subscription-overview .summary-item').filter({ hasText: '已过期' }).innerText(), /1\s*个/);
+          assert.match(await page.locator('#subscription-overview .summary-item').filter({ hasText: '订阅笔数' }).innerText(), /1\s*笔/);
+          assert.match(await page.locator('#subscription-overview .summary-item').filter({ hasText: '已到期' }).innerText(), /1\s*个/);
           const loaded = page.waitForResponse(response => response.url().endsWith('/api/local/subscriptions/list') &&
             response.request().postDataJSON().scope === 'expired');
-          await page.getByRole('tab', { name: '已过期', exact: true }).click(); await loaded;
+          await page.getByRole('tab', { name: '已到期', exact: true }).click(); await loaded;
           await page.locator('#subscription-list').getByText('X Premium', { exact: true }).waitFor();
           await page.locator('#subscription-list').getByText('已到期', { exact: true }).waitFor();
           await page.getByRole('tab', { name: '死号', exact: true }).click();
@@ -134,7 +134,8 @@ test('四类订阅页面使用独立状态、真实复制入口与历史兼容�
       }
       await page.evaluate(() => { location.hash = '#/subscriptions/claude'; });
       await page.locator('#subscription-list tbody tr[data-row-id]').waitFor();
-      await page.locator('[data-action="subscriptions-copy"]').click();
+      await page.locator('[data-action="subscriptions-more"]').click();
+      await page.getByRole('menuitem', { name: '复制账号资料', exact: true }).click();
       await page.waitForFunction(() => window.syntheticCopies.length === 1);
       assert.match(await page.evaluate(() => window.syntheticCopies[0]), /SYNTHETIC/);
       await page.locator('[data-action="subscriptions-detail"]').click();
@@ -155,13 +156,19 @@ test('四类订阅页面使用独立状态、真实复制入口与历史兼容�
       await ownerName.waitFor();
       assert.ok(commands.some(command => command.confirmed && command.reason === '合成核对依据'));
       assert.ok(commands.some(command => command.ownerId === 'synthetic-owner'));
-      await page.evaluate(() => { location.hash = '#/subscriptions/gpt'; });
-      await page.getByRole('tab', { name: '待补邮箱', exact: true }).click();
+      await page.evaluate(() => { location.hash = '#/subscriptions/all'; });
+      const all = page.locator('#subscription-list tbody tr[data-row-id="synthetic-unlinked"]');
+      await all.getByText('邮箱未登记', { exact: true }).waitFor();
+      assert.match(await page.locator('#subscription-overview').innerText(), /订阅笔数\s+1\s*笔/);
+      await page.getByLabel('产品', { exact: true }).selectOption('GPT');
+      await page.locator('#subscription-list tbody tr[data-row-id="synthetic-account"]').waitFor();
+      await page.getByRole('tab', { name: '无邮箱', exact: true }).click();
       const unlinked = page.locator('#subscription-list tbody tr[data-row-id="synthetic-unlinked"]');
-      await unlinked.getByText(old.orderNo, { exact: true }).waitFor();
-      assert.match(await page.locator('#subscription-overview').innerText(), /待补邮箱订单\s+1\s*笔/);
+      await unlinked.getByText(new RegExp(old.orderNo)).waitFor();
+      assert.match(await page.locator('#subscription-overview').innerText(), /无邮箱订阅\s+1\s*笔/);
       assert.equal(await unlinked.getByRole('button', { name: '复制', exact: true }).count(), 0);
-      await unlinked.getByRole('button', { name: '查看原单', exact: true }).click();
+      await unlinked.getByRole('button', { name: '详情', exact: true }).click();
+      await page.locator('#drawer[open]').getByRole('button', { name: '查看订单', exact: true }).click();
       await page.waitForURL('**/#/orders/detail/synthetic-unlinked-order');
       await page.locator('#main .property-list').getByText(old.orderNo, { exact: true }).waitFor();
       assert.deepEqual(errors, []);
@@ -184,7 +191,7 @@ test('到期读取失败时保留上次列表，重试后账号进入已过期',
     if (++reads === 2) return route.fulfill({ status: 503, json: { error: '模拟读取失败' } });
     const status = reads === 1 ? 'active' : 'expired';
     const series = { key: 'gpt', plan: 'Plus', start, expiry, status };
-    const items = status === 'active' || query.scope === 'expired' ? [{ id: 'qa-expiring', product: 'GPT',
+    const items = status === 'active' || ['all', 'expired'].includes(query.scope) ? [{ id: 'qa-expiring', product: 'GPT',
       account: 'qa-expiring@example.test', status, series: [series], history: [], queryCode: {} }] : [];
     return route.fulfill({ json: { items, total: items.length, counts: {}, page: 1, pageSize: 20,
       revision: 'qa-expiry-revision', now: reads === 1 ? '2026-11-10T02:00:00Z' : expiry } });
@@ -200,8 +207,8 @@ test('到期读取失败时保留上次列表，重试后账号进入已过期',
   await page.clock.fastForward(60_000);
   assert.equal(reads, 2, '到期失败后不反复发起读取');
   await page.getByRole('button', { name: '刷新', exact: true }).click();
-  await list.getByText('暂无符合条件的订阅账号', { exact: true }).waitFor();
-  await page.getByRole('tab', { name: '已过期', exact: true }).click();
+  await list.getByText('已到期', { exact: true }).waitFor();
+  await page.getByRole('tab', { name: '已到期', exact: true }).click();
   await list.getByText('已到期', { exact: true }).waitFor();
   await list.getByText('qa-expiring@example.test', { exact: true }).waitFor();
 });

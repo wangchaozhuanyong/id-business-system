@@ -4,8 +4,7 @@
   const D = window.IDLocalData;
   const requestRoute = 'workspace/recharge-codes';
   const codesRoute = 'workspace/my-recharge-codes';
-  const syncRoute = A.gptOrderSyncRoute;
-  const routes = new Set([requestRoute, codesRoute, syncRoute]);
+  const routes = new Set([requestRoute, codesRoute]);
   const planNames = { plus: 'Plus', pro100: 'Pro 100', pro200: 'Pro 200', pro500: 'Pro 500' };
   const requestStates = { pending: '待审核', issuing: '待发码核对', issued: '已发码', rejected: '已驳回' };
   const requestFilters = [['all', '全部'], ['pending', '待处理'], ['processed', '已处理']];
@@ -43,10 +42,9 @@
     return new Date(at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
   };
   const actorName = (row) => D.operatorLabel(row.applicantId, row.applicantName || '历史员工');
-  const read = (route) => route === requestRoute ? D.rechargeCodeRequests()
-    : route === codesRoute ? D.rechargeCodes() : D.orderSyncStatus();
+  const read = (route) => route === requestRoute ? D.rechargeCodeRequests() : D.rechargeCodes();
 
-  async function load(route, refresh = false, showSaved = false) {
+  async function load(route, refresh = false) {
     if (!D) return;
     const current = views.get(route) || {};
     if (current.loading) {
@@ -54,12 +52,11 @@
       return current.pending;
     }
     if (current.loaded && !refresh) return true;
-    const preview = current.preview;
     const actorId = D.actor()?.id;
     current.loading = true;
     current.error = '';
     views.set(route, current);
-    const region = workspaceActive() && route !== syncRoute ? document.getElementById(regionId(route)) : null;
+    const region = workspaceActive() ? document.getElementById(regionId(route)) : null;
     const feedback = region ? A.beginRegionRead(region, region.querySelector('[data-code-progress]'), {
       refreshButton: region.querySelector('[data-action="order-ops-refresh"]')
     }) : null;
@@ -68,10 +65,6 @@
       if (actorId !== D.actor()?.id) return false;
       if (route === codesRoute && current.data) locateNewBatch(current.data.items, data.items, actorId);
       current.data = data;
-      if (route === syncRoute && current.preview === preview && (showSaved || !current.canApply)) {
-        current.preview = undefined;
-        current.canApply = false;
-      }
       return true;
     } catch (error) {
       current.error = error.message || '读取失败，请重试';
@@ -80,12 +73,11 @@
       current.loaded = true;
       current.loading = false;
       feedback?.finish();
-      if (workspaceActive() && route !== syncRoute) updateWorkspaceRegion(route);
-      else if (routeNow() === route) A.render();
+      if (workspaceActive()) updateWorkspaceRegion(route);
     } })();
     const result = await current.pending;
     current.pending = undefined;
-    if (current.reload) { current.reload = false; return load(route, true, showSaved); }
+    if (current.reload) { current.reload = false; return load(route, true); }
     return result;
   }
 
@@ -97,12 +89,6 @@
     codeTab = 'unused';
     setListView(codesRoute, { tab: codeTab, page: 1, 'code-list-query': '', 'code-list-plan': '', batchId: fresh[0].requestId });
     A.getSelection('recharge-code-items').clear();
-  }
-
-  function table(columns, rows, id, title) {
-    return rows.length
-      ? A.table(columns, A.pageRows(rows), '', id) + A.pagination(rows.length)
-      : A.empty(title, '');
   }
 
   function requestAvailability(stock, plan, count) {
@@ -375,41 +361,6 @@
       }
     } finally { delete form.dataset.saving; if (submit.isConnected) submit.disabled = false; }
   }
-  function syncContent(view) {
-    const data = view.preview || view.data;
-    const columns = [
-      { id: 'jobKey', label: '代充任务' },
-      { id: 'orderNo', label: 'GPT 订单编号', render: (row) => row.orderNo
-        ? A.textAction(row.orderNo, 'order-sync-open-order', `data-id="${e(row.jobKey)}" data-order-no="${e(row.orderNo)}"`)
-        : '—' },
-      { id: 'needs', label: '待补资料', render: (row) => e((row.needs || []).join('、') || '—') }
-    ];
-    const jobKey = A.state.drafts.get('order-sync-lookup') || '';
-    return '<div class="toolbar"><form class="toolbar-left" id="order-sync-lookup">' +
-      '<div class="search-field">' + A.icon('search') +
-      A.input('order-sync-job', jobKey, 'placeholder="指定代充任务编号" aria-label="指定代充任务编号" required maxlength="120"') +
-      `</div><button class="button" type="submit"${saving ? ' disabled' : ''}>查找任务</button></form>` +
-      '<div class="toolbar-right">' + A.button('预览', 'order-sync-preview', '', '', saving ? 'disabled' : '') +
-      A.button('同步入单', 'order-sync-apply', 'primary', '', saving || !view.canApply ? 'disabled' : '') +
-      '</div></div>' + (A.modules.commerce?.syncedOrderReadNotice() || '') +
-      (view.error ? '<p class="panel-body inline-notice warning" role="status">' + e(view.error) + '</p>' : '') +
-      (view.data?.lastError ? '<p class="panel-body footnote" role="status">' + e(view.data.lastError) + '</p>' : '') +
-      (view.data?.background !== undefined ? '<p class="panel-body footnote" role="status">' +
-        (view.data.background ? '成功任务会自动入单。' : '自动入单当前未启用。') + '</p>' : '') +
-      (data?.more ? '<p class="panel-body footnote">还有记录，可按任务编号查询。</p>' : '') +
-      table(columns, (data?.rows || []).map((row) => ({ ...row, id: row.jobKey })), 'recharge-order-sync', '暂无同步记录');
-  }
-
-  function renderSync(view) {
-    const ready = D?.authRequired && view.loaded;
-    const body = ready ? syncContent(view) : D?.authRequired
-      ? '<div aria-busy="true">' + A.empty('正在读取同步记录', '') + '</div>'
-      : A.empty('需使用员工账号登录', '');
-    return A.header('GPT 订单', '预览代充成功任务，确认后写入订单列表。已入单的记录可点击订单编号查看原单。',
-      ready ? A.button('刷新', 'order-ops-refresh', '', 'refresh') : '') +
-      '<section class="panel">' + A.gptOrderTabs() + body + '</section>';
-  }
-
   function preserveDraft() {
     const form = document.querySelector('#recharge-code-request');
     if (form) A.state.drafts.set('recharge-code-request', A.readDraft(form));
@@ -417,9 +368,6 @@
   }
 
   function render() {
-    const route = routeNow();
-    const view = views.get(route) || {};
-    if (route === syncRoute) return renderSync(view);
     const head = A.header('充值码提取', '左侧提交提取申请，审核发码后在右侧查看、复制和归还充值码。两侧记录、筛选与分页独立保留。');
     if (!D?.authRequired) return head + '<section class="panel">' + A.empty('需使用员工账号登录', '') + '</section>';
     return head + '<div class="recharge-workspace"><div class="recharge-workspace-columns">' +
@@ -444,8 +392,7 @@
       feedback?.finish();
       saving = false;
       enabled.forEach((node) => { node.disabled = false; });
-      if (workspaceActive() && route !== syncRoute) updateWorkspaceRegion(requestRoute);
-      else if (routeNow() === route) A.render();
+      if (workspaceActive()) updateWorkspaceRegion(requestRoute);
     }
   }
 
@@ -460,16 +407,12 @@
 
   async function onClick(action, node) {
     if (!routes.has(routeNow()) || !D?.authRequired) return false;
-    const route = routeNow();
     if (action === 'order-ops-refresh') {
       preserveDraft();
-      const target = workspaceActive() ? (node.dataset.route === codesRoute ? codesRoute : requestRoute) : route;
-      if (workspaceActive()) {
-        const actorId = D.actor()?.id, success = await load(target, true);
-        if (workspaceActive() && actorId === D.actor()?.id)
-          A.notify(success ? '记录已刷新' : '记录读取失败，请重试', { kind: success ? 'success' : 'error' });
-      } else await A.withActionFeedback(node, () => load(target, true, target === syncRoute),
-        { pending: '正在刷新记录…', success: '记录已刷新', failure: '记录读取失败，请重试' });
+      const target = node.dataset.route === codesRoute ? codesRoute : requestRoute;
+      const actorId = D.actor()?.id, success = await load(target, true);
+      if (workspaceActive() && actorId === D.actor()?.id)
+        A.notify(success ? '记录已刷新' : '记录读取失败，请重试', { kind: success ? 'success' : 'error' });
     } else if (action === 'order-request-filter') {
       if (!requestFilters.some(([key]) => key === node.dataset.id)) return true;
       const status = node.dataset.id;
@@ -524,39 +467,6 @@
         A.button('取消', 'drawer-close') + '<button class="button primary" type="submit" form="order-code-approve">批准并发码</button>');
     } else if (action === 'order-code-reconcile') {
       await requestAction('reconcile', node.dataset.id);
-    } else if (action === 'order-sync-open-order') {
-      const commerce = A.modules.commerce;
-      const { id: jobKey, orderNo } = node.dataset;
-      let id = commerce.syncedOrderId(jobKey, orderNo);
-      if (!id) {
-        const ready = await commerce.refreshOverview();
-        if (routeNow() !== syncRoute) return true;
-        if (!ready) {
-          A.notify('暂时无法读取订单列表，请重试');
-          return true;
-        }
-        id = commerce.syncedOrderId(jobKey, orderNo);
-      }
-      if (id) A.go('orders/detail/' + encodeURIComponent(id));
-      else A.notify('未找到可核对的对应订单');
-    } else if (action === 'order-sync-preview' || action === 'order-sync-apply') {
-      const mode = action === 'order-sync-preview' ? 'preview' : 'apply';
-      const preview = views.get(syncRoute)?.preview;
-      const jobKeys = mode === 'apply' && views.get(syncRoute)?.canApply
-        ? preview.rows.map(({ jobKey }) => jobKey) : undefined;
-      const run = () => perform(syncRoute, async (view) => {
-        view.preview = await D.orderSync({ mode, ...(jobKeys && { jobKeys }) });
-        view.canApply = mode === 'preview' && Boolean(view.preview.rows?.length);
-        if (routeNow() === syncRoute) A.state.page = 1;
-        if (mode === 'apply') {
-          const refreshed = await A.modules.commerce.refreshAfterOrderSync();
-          A.notify(refreshed ? '同步批次已处理' : '同步批次已处理，订单列表刷新失败');
-        } else A.notify('预览完成');
-      });
-      if (mode === 'preview') await run();
-      else if (jobKeys?.length) A.confirmAction('同步代充订单', '根据已核对的成功任务建立 GPT 订单。', () => {
-        if (routeNow() === syncRoute && views.get(syncRoute)?.preview === preview) return run();
-      }, '确认同步');
     } else return false;
     return true;
   }
@@ -564,16 +474,6 @@
   async function onSubmit(form) {
     if (form.id === 'code-return-form') { await submitReturn(form); return true; }
     if (form.id === 'code-list-filters') return true;
-    if (form.id === 'order-sync-lookup' && D?.authRequired) {
-      const jobKey = form.elements['order-sync-job'].value.trim();
-      await perform(syncRoute, async (view) => {
-        view.preview = await D.orderSync({ mode: 'preview', jobKeys: [jobKey] });
-        view.canApply = Boolean(view.preview.rows?.length);
-        if (routeNow() === syncRoute) A.state.page = 1;
-        A.notify(view.preview.rows?.length ? '指定任务已核对，结果已列出' : '核对完成，暂无可同步记录', { kind: 'success' });
-      });
-      return true;
-    }
     if (form.id === 'order-code-reject') {
       await requestAction('reject', form.dataset.id, { reason: form.elements['order-code-reason'].value.trim() });
       return true;
@@ -631,10 +531,6 @@
       updateWorkspaceRegion(codesRoute);
       return true;
     }
-    if (node.id === 'order-sync-job') {
-      A.state.drafts.set('order-sync-lookup', node.value);
-      return true;
-    }
     if (['recharge-request-plan', 'recharge-request-count'].includes(node.id)) {
       const form = node.closest('form');
       const draft = A.readDraft(form);
@@ -673,8 +569,6 @@
   window.IDDesignModules.push({
     id: 'order-operations', matches: (route) => routes.has(route), render, onClick, onSubmit, preserveDraft, onInput, onChange: onInput,
     onDataChanges(scopes) {
-      if (routeNow() === syncRoute && scopes.some(scope => ['order-sync', 'commerce', 'recharge-codes', 'operators'].includes(scope)))
-        return load(syncRoute, true);
       if (workspaceActive() && scopes.some(scope => ['commerce', 'recharge-codes', 'operators'].includes(scope)))
         return refreshWorkspace();
     },
@@ -687,7 +581,7 @@
         for (const region of document.querySelectorAll('#recharge-request-region, #recharge-codes-region')) codeFrameObserver.observe(region);
         stabilizeCodeFrames();
         void load(requestRoute, Boolean(routeChanged)); void load(codesRoute, Boolean(routeChanged));
-      } else void load(routeNow(), Boolean(routeChanged));
+      }
     },
     onLeave() { codeFrameObserver?.disconnect(); }
   });

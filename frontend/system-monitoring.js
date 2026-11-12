@@ -204,7 +204,27 @@
         `<div class="property-row"><span>${e(label)}</span><strong>${e(value)}</strong></div>`).join('') + '</div>' +
       `<p class="system-monitor-guidance">${e(row.guidance || '请核对采集来源及相关运行记录。')}</p>`,
       (link ? A.button(link[0], 'goto', 'primary', '', `data-route="${e(link[1])}"`) : '') +
+      (code === 'order_sync' && !['ok', 'disabled'].includes(row.status)
+        ? A.button('重试入单', 'system-monitor-order-retry', 'primary') : '') +
       A.button('关闭', 'drawer-close'));
+  }
+
+  async function retryOrderReadback(node) {
+    const feedback = A.beginActionFeedback(node, '正在重读代充任务…');
+    const epoch = generation;
+    try {
+      const result = await D.orderSync({ mode: 'retry' });
+      if (epoch !== generation) return;
+      const checked = result.rows?.filter(row => row.orderNo).length || 0;
+      const message = checked ? `已回读 ${checked} 笔 GPT 订单` : '本次没有取得新的入单回执';
+      A.notify(message + (result.pending ? `，仍有 ${result.pending} 笔任务待重读` : ''));
+      if (feedback.current()) A.closeDrawer();
+      if (A.state.route === 'monitor') await load(true);
+    } catch (error) {
+      if (epoch === generation) A.notify(error.message || '暂时无法重读代充任务', { kind: 'error' });
+    } finally {
+      feedback.finish();
+    }
   }
 
   function monitorOverview(data) {
@@ -402,6 +422,7 @@
       A.render(); void load();
     }
     if (action === 'system-monitor-check') checkDetails(node.dataset.code);
+    if (action === 'system-monitor-order-retry') void retryOrderReadback(node);
     if (action === 'system-monitor-notifications') notificationDetails();
     if (action === 'system-monitor-tab' && ['channels', 'rules', 'deliveries'].includes(node.dataset.tab)) {
       A.state.drafts.set(tabKey, node.dataset.tab); A.render(); void load();

@@ -1,8 +1,8 @@
 import { isDeepStrictEqual } from 'node:util';
 import { currencies, validCurrencyCode } from '../modules/finance/accounting.mjs';
 import { validApplePaidPrices as validateApplePrices } from './apple-funding.mjs';
-import { personalPlans, personalProduct, samePersonalSubscription } from './personal-subscriptions.mjs';
-import { orderTerminationTime } from '../frontend/order-opening.mjs';
+import { personalPlans, personalProduct, samePersonalSubscription, stockTypeForProduct, subscriptionSeries, targetKey } from './personal-subscriptions.mjs';
+import { orderNeedsAccount, orderOpeningConfirmed, orderTerminationTime, subscriptionTime } from '../frontend/order-opening.mjs';
 
 export const rechargePlanLabels = Object.freeze({
   plus: 'Plus', pro100: 'Pro 100', pro200: 'Pro 200', pro500: 'Pro 500'
@@ -40,11 +40,12 @@ export function checkSubscriptionTermination(order, prior, action, now, allowHis
 
 export function checkNewOrder(order) {
   if (!order.product) return;
+  const manual = order.source === '管理员手工';
   if (!Object.hasOwn(plans, order.product) || !plans[order.product].includes(order.plan))
     return '请选择当前可售套餐';
   if (personalProduct(order.product)) {
     if (order.costBasis === 'actual') return '新订单按费用规则核算';
-    if (order.payment === '银行卡' && !isOrderBankMaterials(order) && (order.cardId || order.paidConfirmed) &&
+    if (order.payment === '银行卡' && !isOrderBankMaterials(order) && (order.cardId || (!manual && order.paidConfirmed)) &&
       !/^recharge:.+/.test(order.cardId || '')) return '请选择本次使用的银行卡';
     return;
   }
@@ -52,14 +53,33 @@ export function checkNewOrder(order) {
   if (!businessTypes.includes(order.businessType)) return '请选择有效的业务类型';
   if (order.costBasis === 'actual') return '新订单按费用规则核算，实际总成本请通过有依据的订单更正登记';
   const email = order.email ?? '';
-  if (typeof email !== 'string' || ((email || order.businessType !== '续费') &&
+  if (typeof email !== 'string' || ((email || (!manual && order.businessType !== '续费')) &&
       !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))) return '请填写有效订单邮箱';
   if (order.payment === '银行卡' && !isOrderBankMaterials(order)) {
     const gpt = order.product === 'GPT';
-    if ((order.cardId || (!gpt && order.paidConfirmed)) &&
+    if ((order.cardId || (!manual && !gpt && order.paidConfirmed)) &&
         !(typeof order.cardId === 'string' && order.cardId.startsWith(gpt ? 'recharge:' : 'tenant:')))
       return '请选择对应来源的银行卡';
   }
+}
+
+export function checkManualRenewalLink(order, previousOrders, nextOrders, now, legacyOpened = []) {
+  if (order.renewalSourceVersion === undefined) return;
+  const source = previousOrders.get(order.previousOrderId);
+  if (order.source !== '管理员手工' || order.businessType !== '续费' || !source ||
+      source.customerId !== order.customerId || !order.customerId || !stockTypeForProduct(order.product) ||
+      stockTypeForProduct(source.product) !== stockTypeForProduct(order.product) ||
+      (personalProduct(order.product) && subscriptionSeries(source) !== subscriptionSeries(order)) ||
+      !Number.isSafeInteger(order.renewalSourceVersion) || order.renewalSourceVersion !== (source.version ?? 0) ||
+      !isDeepStrictEqual(source, nextOrders.get(source.id)) || source.cancelled || source.subscriptionEnded ||
+      !orderOpeningConfirmed(source, now, legacyOpened.includes(source.id)) ||
+      (source.accountId && source.accountId !== order.accountId) ||
+      (!orderNeedsAccount(source) && targetKey(source) !== targetKey(order)) ||
+      (Number.isFinite(subscriptionTime(source.expiry)) && !(subscriptionTime(order.expiry) > subscriptionTime(source.expiry))))
+    return '原订阅已变化或新到期时间未延长，请核对后重新登记续费';
+  if ([...nextOrders.values()].some(row => row.id !== order.id && row.previousOrderId === source.id &&
+      !row.cancelled && orderOpeningConfirmed(row, now, legacyOpened.includes(row.id))))
+    return '该期订阅已有续费订单，请刷新后查看新单';
 }
 
 // This is an association of an already-recorded payment, not another payment.
@@ -130,7 +150,7 @@ const isClaudeProBank = (order) => order?.product === 'Claude Pro' && order.paym
 // These fields now describe the bank-card materials of every order product.
 export function isOrderBankMaterials(order) {
   return order?.payment === '银行卡' && Object.hasOwn(plans, order.product) &&
-    (isClaudeOrder(order) ? proMaterialModes.has(order.proMaterialMode) : ['manual_card', 'pool_card'].includes(order.proMaterialMode));
+    (isClaudeOrder(order) ? proMaterialModes.has(order.proMaterialMode) : ['manual_card', 'pool_card', 'none'].includes(order.proMaterialMode));
 }
 
 export function sameRecordedBankPayment(before, after) {
@@ -152,13 +172,13 @@ export function retainOrderCardNumber(order, prior, card) {
 
 export function normalizeClaudeProMaterials(order, prior, { allowLegacyCreate = false } = {}) {
   if (order?.payment !== '银行卡' || !Object.hasOwn(plans, order.product)) {
-    if (proMaterialFields.some((field) => nonempty(order[field])))
+    if (proMaterialFields.some(field => nonempty(order[field]) && order[field] !== prior?.[field]))
       return '只有银行卡订单可以填写这组资料';
     return;
   }
   const { proMaterialMode: mode } = order;
   const claude = isClaudeOrder(order);
-  const allowSerial = cardMaterialModes.includes(mode) || order.product === 'GPT' || personalProduct(order.product) ||
+  const allowSerial = (order.source === '管理员手工' && mode === 'none') || cardMaterialModes.includes(mode) || order.product === 'GPT' || personalProduct(order.product) ||
     (claude && !nonempty(mode) && nonempty(order.cardId));
   if (mode === 'tenant_card') {
     if (prior?.proMaterialMode === mode && Object.hasOwn(prior, 'proCardSerial')) order.proCardSerial = prior.proCardSerial;
@@ -169,7 +189,9 @@ export function normalizeClaudeProMaterials(order, prior, { allowLegacyCreate = 
     if (serial.length > 120 || /[\p{Cc}\p{Cf}]/u.test(serial)) return '卡序列号最多 120 个字，不能包含控制字符';
     order.proCardSerial = serial;
   }
-  if (!nonempty(mode) && (!isClaudeProBank(order) || allowLegacyCreate || (isClaudeProBank(prior) && !nonempty(prior.proMaterialMode)))) {
+  if (!prior && order.source === '管理员手工' && claude && nonempty(order.cardId) && !nonempty(mode))
+    return '请选择该银行卡的登记方式';
+  if (!nonempty(mode) && (order.source === '管理员手工' || !isClaudeProBank(order) || allowLegacyCreate || (isClaudeProBank(prior) && !nonempty(prior.proMaterialMode)))) {
     if (!allowSerial && nonempty(order.proCardSerial))
       return '请先选择银行卡资料或人员与补充资料';
     retainOrderCardNumber(order, prior);
@@ -188,7 +210,7 @@ export function normalizeClaudeProMaterials(order, prior, { allowLegacyCreate = 
   }
   const mismatchedPeople = claude
     ? nonempty(order.tenantId) && order.tenantId !== prior?.tenantId
-    : proPeopleFields.some(field => nonempty(order[field]));
+    : proPeopleFields.some(field => nonempty(order[field]) && !(field === 'kyc' && order.kyc === '未认证'));
   if (mode === 'manual_card') {
     if (mismatchedPeople) return '手工银行卡方式不能关联其他租户';
     const number = typeof order.proCardNumber === 'string'
@@ -205,8 +227,8 @@ export function normalizeClaudeProMaterials(order, prior, { allowLegacyCreate = 
   if (!prefix) order.paymentId = '';
   if ((mode === 'pool_card' || mode === 'none') && mismatchedPeople)
     return '所选资料方式不能关联其他租户';
-  if (mode === 'none' && order.product === 'Claude Max' && order.paidConfirmed && !prior?.paidConfirmed)
-    return '请选择本次银行卡或手动填写卡号';
+  if (mode === 'none' && order.product === 'Claude Max' && order.source !== '管理员手工' &&
+      order.paidConfirmed && !prior?.paidConfirmed) return '请选择本次银行卡或手动填写卡号';
   if (mode === 'tenant_card' && !nonempty(order.tenantId)) return '请选择银行卡所属租户';
   if (mode === 'people' && !order.tenantId && !order.phone) return '请选择租户或填写订阅电话';
 }
@@ -302,7 +324,7 @@ export function checkClaudeProRenewalSource(order, prior, previousOrders, nextOr
   }
   if (!linked) return;
   const email = typeof order.email === 'string' ? order.email.trim().toLowerCase() : '';
-  if (!email) return '请填写邮箱后关联原 Claude 续费订单';
+  if (!email && order.renewalSourceVersion === undefined) return '请填写邮箱后关联原 Claude 续费订单';
   if (allowLegacyCreate && !hasVersionedSource) return;
   if (order.businessType !== '续费' ||
       (nonempty(order.claudeRenewalId) && order.claudeRenewalId !== order.proRenewalSourceId) ||
@@ -315,7 +337,7 @@ export function checkClaudeProRenewalSource(order, prior, previousOrders, nextOr
   if (!source || !isDeepStrictEqual(source, nextOrders.get(source.id)) ||
       source.cancelled || source.subscriptionEnded || source.product !== order.product || sourcePlan !== order.plan ||
       (source.version ?? 0) !== order.proRenewalSourceVersion || !source.customerId || source.customerId !== order.customerId ||
-      typeof source.email !== 'string' || source.email.trim().toLowerCase() !== email)
+      (!orderNeedsAccount(source) && String(source.email).trim().toLowerCase() !== email))
     return '原 Claude 订单已变化，请重新核对客户和账号后续费';
   for (const row of [...previousOrders.values(), ...nextOrders.values()]) {
     if (row.id !== order.id && (row.proRenewalSourceId === source.id || row.claudeRenewalId === source.id))

@@ -6,7 +6,7 @@ import { validOrderCurrencies, validOrderCurrencyGroups, retainOrderSettings } f
 import { isDeepStrictEqual } from 'node:util';
 import {
   applyOrderCompletion, assignMissingManualOrderOwners, fillManualOrderDetails,
-  OrderCompletionError, readOrderCompletion, rechargePriceSnapshot, requireCompletionActor
+  OrderCompletionError, readOrderCompletion, rechargeOrderEmailConflict, rechargePriceSnapshot, requireCompletionActor
 } from './order-completion.mjs';
 import { checkTenantTransferHistory, planTenantOwnerTransfer, tenantOwnerTransferView, TenantOwnerTransferError } from './tenant-owner-transfer.mjs';
 import { prepareTenantRenewalWrite, tenantRenewalHandledAction, tenantRenewalSettingsAction } from './tenant-renewal-reminders.mjs';
@@ -69,10 +69,13 @@ import {
 } from './card-management.mjs';
 import { claudeGoogleCopyDomainPrefix, validateClaudeGoogleCopySettings } from './claude-google-subscriptions.mjs';
 import { legacyOpeningOrderIds, ownerForSubscriptionOrder, subscriptionDomain } from './subscription-management.mjs';
-import { matchOrderCustomer, orderCustomerCreateAction, subscriptionTime } from '../frontend/order-opening.mjs';
+import {
+  automaticGptOrder, matchOrderCustomer, orderCustomerCreateAction, orderFieldChanged, rechargeOrderOwner,
+  subscriptionChainRoot, subscriptionTime, validOrderEmail, validOrderXHandle
+} from '../frontend/order-opening.mjs';
 import {
   assignOrderOwner, assignTenantOwner, checkClaudeProMaterialHistory,
-  checkClaudeProRenewalSource, checkNewOrder, checkSubscriptionTermination, deriveCardIssueFee, historicalGptCardBackfillError,
+  checkClaudeProRenewalSource, checkManualRenewalLink, checkNewOrder, checkSubscriptionTermination, deriveCardIssueFee, historicalGptCardBackfillError,
   isOrderBankMaterials, manualOrderDetailsAction, nextOrderNo, normalizeClaudeCertification, normalizeClaudeProMaterials,
   redactClaudeProOrderMaterials, retainOrderCardNumber, normalizePaymentEvidence,
   validClaudePaidPrices, validGptPaidPrices, validMoney, validOrderPrices, validPersonalPaidPrices, validApplePaidPrices
@@ -642,8 +645,8 @@ function prepareOrderCustomerWrite(previous, next, actor, checkedAt) {
   const name = typeof customer.name === 'string' ? customer.name.trim() : '';
   const wechat = typeof customer.wechat === 'string' ? customer.wechat.trim() : '';
   const match = matchOrderCustomer(previousCustomers, name, wechat);
-  if (!name || !wechat || ['empty', 'invalid'].includes(match.kind))
-    throw new LocalDataError(400, '随单建档须填写有效的客户姓名和微信');
+  if (['empty', 'invalid'].includes(match.kind))
+    throw new LocalDataError(400, '随单建档须填写有效的客户姓名');
   if (match.kind !== 'new')
     throw new LocalDataError(409, '姓名或微信已存在，请核对已有客户后再提交');
 
@@ -790,8 +793,22 @@ async function saveHttpWrites(store, entries, actor, verifyRelayExtraction, read
 
 function commerceForActor(store, snapshot, actor) {
   const profiles = store.featureDocument(subscriptionDomain).data;
-  return { ...redactClaudeProOrderMaterials(snapshot, actor),
-    legacyOpeningOrderIds: legacyOpeningOrderIds(snapshot.data?.orders, profiles) };
+  const result = redactClaudeProOrderMaterials(snapshot, actor);
+  if (actor?.role === 'employee' && Array.isArray(result.data?.orders)) {
+    const hidden = result.data.orders.filter(row => automaticGptOrder(row) && rechargeOrderOwner(row) !== actor.id);
+    if (hidden.length) {
+      const hiddenIds = new Set(hidden.map(row => row.id));
+      const hiddenCustomers = new Set(hidden.map(row => row.customerId).filter(Boolean));
+      const orders = result.data.orders.filter(row => !hiddenIds.has(row.id));
+      const visibleCustomers = new Set(orders.map(row => row.customerId));
+      const { customers, logs } = result.data;
+      result.data = { ...result.data, orders,
+        ...(customers && { customers: customers.filter(row => !hiddenCustomers.has(row.id) || visibleCustomers.has(row.id)) }),
+        ...(logs && { logs: logs.filter(row => !hiddenIds.has(row.entityId) && !hiddenIds.has(row.relatedOrderId)) })
+      };
+    }
+  }
+  return { ...result, legacyOpeningOrderIds: legacyOpeningOrderIds(result.data?.orders, profiles) };
 }
 
 export function createLocalBusinessStore(databasePath) {
@@ -936,7 +953,8 @@ export function createLocalBusinessStore(databasePath) {
           mailboxes: readDocument(managedMailboxDomain), subscriptions: readDocument(subscriptionDomain)
         };
         const audit = (action, ids) => {
-          const label = { view: '查看订阅资料', copy: '复制订阅资料' }[action];
+          const label = { view: '查看订阅资料', copy: '复制订阅资料', contact_copy: '复制续费联系资料',
+            renewal_card_copy: '复制续费用卡号码' }[action];
           if (!label) throw new TypeError('未知订阅资料操作');
           for (const id of ids)
             log.run(new Date().toISOString(), subscriptionDomain, `subscription_${action}`,
@@ -944,7 +962,8 @@ export function createLocalBusinessStore(databasePath) {
         };
         let saved = false;
         const save = (data, action, id) => {
-          const label = { subscription_owner: '设置账号归属', subscription_confirm: '确认订阅已开通' }[action];
+          const label = { subscription_owner: '设置账号归属', subscription_confirm: '确认订阅已开通',
+            subscription_renewal_suffix: '保存续费联系后缀', subscription_renewal_card: '设置续费用卡' }[action];
           if (saved || !label) throw new TypeError('未知订阅资料保存');
           saved = true;
           const version = snapshots.subscriptions.version + 1;
@@ -1782,6 +1801,7 @@ export function createLocalBusinessStore(databasePath) {
             throw new LocalDataError(503, '暂时无法核对原付款卡，请稍后重试');
           let verifiedCardBackfillId;
           let cardTypes;
+          const legacyOpened = legacyOpeningOrderIds(oldOrders, current(subscriptionDomain));
           for (const row of commerce.orders) {
             const prior = priorById.get(row.id);
             if (prior && isDeepStrictEqual(row, prior)) continue;
@@ -1792,19 +1812,48 @@ export function createLocalBusinessStore(databasePath) {
             }
             const terminationError = checkSubscriptionTermination(row, prior, action, checkedAt, !cards);
             if (terminationError) throw new LocalDataError(409, terminationError);
-            if (!prior && row.source === '管理员手工' &&
-                (action === orderCustomerCreateAction || (cards && action === '新增独立订单'))) {
+            const manualCreate = !prior && row.source === '管理员手工' &&
+              (action === orderCustomerCreateAction || (cards && action === '新增独立订单'));
+            if (manualCreate) {
               if (row.draft || row.cancelled || ['draft', 'failed', '草稿', '失败'].includes(row.status) ||
-                  row.paidConfirmed !== true || row.receiptConfirmed !== true || !positiveOrderAmount(row.paidAmount) ||
-                  !validMoney(row.saleAmount) || !validCurrencyCode(row.paidCurrency) || !validCurrencyCode(row.saleCurrency))
-                throw new LocalDataError(400, '请填写本单实际代付、客户实收及币种后确认提交');
+                  !positiveOrderAmount(row.paidAmount) || !validMoney(row.saleAmount) ||
+                  !validCurrencyCode(row.paidCurrency) || !validCurrencyCode(row.saleCurrency))
+                throw new LocalDataError(400, '请填写本单实际代付、客户实收及币种');
               if (!(subscriptionTime(row.expiry) > subscriptionTime(row.start)))
                 throw new LocalDataError(400, '请填写有效的订阅起止时间');
               if (!commerce.customers.some(customer => customer.id === row.customerId && customer.active !== false))
                 throw new LocalDataError(400, '请选择订单客户');
+              row.paidConfirmed = true;
+              row.receiptConfirmed = true;
               row.entitlementStatus = 'active';
+              if (row.payment === '苹果内购' && !row.appleIdId && row.paidCurrency === 'USD') row.externalApplePayment = true;
+              else delete row.externalApplePayment;
+              const renewalIssue = checkManualRenewalLink(row, priorById, nextById, checkedAt, legacyOpened);
+              if (renewalIssue) throw new LocalDataError(409, renewalIssue);
             } else if (cards && !personalProduct(row.product) && row.source !== '线上代充' && prior?.source !== '线上代充') {
               retainOrderField(row, prior, 'entitlementStatus');
+            }
+            if (!manualCreate && cards) retainOrderField(row, prior, 'externalApplePayment');
+            if (cards || action === manualOrderDetailsAction) {
+              retainOrderField(row, prior, 'subscriptionAnchor');
+              const hadIdentity = prior && (validOrderEmail(prior.email) || validOrderXHandle(prior.xHandle));
+              if (prior && !hadIdentity && !prior.subscriptionAnchor &&
+                  (validOrderEmail(row.email) || validOrderXHandle(row.xHandle))) {
+                row.subscriptionAnchor = subscriptionChainRoot(prior, priorById).id;
+              }
+            }
+            if (cards && prior && action === '更正订单' && row.source !== '线上代充') {
+              if (orderFieldChanged(row, prior, 'paidAmount', 'paidCurrency') &&
+                  (!positiveOrderAmount(row.paidAmount) || !validCurrencyCode(row.paidCurrency)))
+                throw new LocalDataError(400, '请填写有效的实际代付及币种');
+              if (orderFieldChanged(row, prior, 'saleAmount', 'saleCurrency') &&
+                  (!validMoney(row.saleAmount) || !validCurrencyCode(row.saleCurrency)))
+                throw new LocalDataError(400, '请填写有效的客户实收及币种');
+              if (orderFieldChanged(row, prior, 'start', 'expiry') &&
+                  (['start', 'expiry'].some(field => orderFieldChanged(row, prior, field) &&
+                    !Number.isFinite(subscriptionTime(row[field]))) ||
+                   (row.start && row.expiry && !(subscriptionTime(row.expiry) > subscriptionTime(row.start)))))
+                throw new LocalDataError(400, '请填写有效的订阅起止时间');
             }
             if (personalProduct(row.product) || personalProduct(prior?.product)) {
               if (prior && prior.product !== row.product) throw new LocalDataError(409, '原订单产品不可更换');
@@ -1820,7 +1869,9 @@ export function createLocalBusinessStore(databasePath) {
               ? lastCorrection?.previous : undefined;
             // HTTP writes always supply the verified card map. Internal imports may contain historical Pro rows.
             const compatibility = { allowLegacyCreate: !cards && !prior };
-            const materialError = normalizeClaudeProMaterials(row, restorePrior || prior, compatibility) ||
+            const checkCard = action !== '更正订单' || orderFieldChanged(row, prior, 'payment', 'proMaterialMode', 'proCardNumber',
+              'proCardSerial', 'cardId', 'tenantId', 'phone');
+            const materialError = (checkCard && normalizeClaudeProMaterials(row, restorePrior || prior, compatibility)) ||
               normalizeClaudeCertification(row, restorePrior || prior, commerce.tenants, compatibility);
             if (materialError) throw new LocalDataError(400, materialError);
             if (hasBankPayment(prior) && row.payment !== prior.payment)
@@ -1890,7 +1941,7 @@ export function createLocalBusinessStore(databasePath) {
               const recordsNewUse = row.payment === '银行卡' && !hasBankPayment(prior) &&
                 (!prior || row.paidConfirmed || needsOrderCardCheck(row, prior) || row.proCardNumber !== prior.proCardNumber);
               const renewal = (!prior || recordsNewUse) ? bankRenewalSource(row, oldOrders) : undefined;
-              if (!prior && row.businessType === '续费' && !personalProduct(row.product)) {
+              if (!prior && row.businessType === '续费' && !personalProduct(row.product) && row.renewalSourceVersion === undefined) {
                 if (renewal) row.previousOrderId = renewal.id;
                 else delete row.previousOrderId;
               } else if (prior && !personalProduct(row.product)) retainOrderField(row, prior, 'previousOrderId');
@@ -1900,7 +1951,8 @@ export function createLocalBusinessStore(databasePath) {
                 const fingerprint = this.orderCardFingerprint(number);
                 if (frozenOrderCard(freezes, row.cardId, fingerprint))
                   throw new LocalDataError(409, '所选银行卡已冻结，请更换可用银行卡');
-                if (row.paidConfirmed && !fingerprint && !row.cardId && frozenRenewalCard(this, freezes, renewal))
+                if (row.source !== '管理员手工' && row.paidConfirmed && !fingerprint && !row.cardId &&
+                    frozenRenewalCard(this, freezes, renewal))
                   throw new LocalDataError(409, '原银行卡已冻结，请登记可用的新银行卡后再提交');
               }
               if (!automatic && row.payment === '银行卡' && row.paidConfirmed === true &&
@@ -1956,7 +2008,7 @@ export function createLocalBusinessStore(databasePath) {
                     throw new LocalDataError(409, '请选择当前用卡人名下的银行卡');
                   row.paymentId = card.number.slice(-4);
                   retainOrderCardNumber(row, prior, card);
-                } else if (row.product === 'GPT' && !row.cardId) {
+                } else if ((row.product === 'GPT' || row.source === '管理员手工') && !row.cardId) {
                   row.cardId = '';
                   row.paymentId = prior?.payment === '银行卡' && !prior.cardId ? prior.paymentId || '' : '';
                   if (row.paidConfirmed) row.issueFeeSnapshot = { cardId: '', applied: false, pending: true };
@@ -1967,6 +2019,7 @@ export function createLocalBusinessStore(databasePath) {
                 retainOrderField(row, prior, 'paymentId');
                 retainOrderCardNumber(row, prior);
               }
+              delete row.renewalSourceVersion;
               if (action !== snapshotAction && action !== historicalFeeAction && !cardBackfilled)
                 normalizePaymentEvidence(row, prior, automatic);
               if (row.payment === '银行卡' && row.paidConfirmed) settledThisWrite.push(row);
@@ -2032,7 +2085,8 @@ export function createLocalBusinessStore(databasePath) {
             previous,
             ledger,
             checksStock ? inventory : current('inventory'),
-            checksStock ? commerce : current('commerce')
+            checksStock ? commerce : current('commerce'),
+            checksStock ? priorCommerce : current('commerce')
           );
           if (error) throw new LocalDataError(409, error);
         }
@@ -2041,7 +2095,9 @@ export function createLocalBusinessStore(databasePath) {
           const next = inventoryWrite ? inventory : structuredClone(inventory);
           const matches = inspectInventoryUsage(next, commerce, Date.parse(now));
           const oldRegistrationIds = new Set((priorInventory?.registrationRecords || []).map(row => row.id));
-          if ((next.registrationRecords || []).some(row => row.accountId && ['Gemini', 'Grok'].includes(row.product) &&
+          if ((next.registrationRecords || []).some(row => row.accountId &&
+              (['Gemini', 'Grok'].includes(row.product) ||
+                next.accounts.some(account => account.id === row.accountId && account.sourceMailboxId === row.assetId)) &&
               !oldRegistrationIds.has(row.id) && (matches.get(row.assetId)?.status !== 'used' ||
                 matches.get(row.assetId)?.evidence.registrationId !== row.id)))
             throw new LocalDataError(409, '邮箱使用结果待核对，账号和领用资料尚未保存');
@@ -2185,16 +2241,28 @@ export function createLocalBusinessStore(databasePath) {
           return { assigned: assigned.length, version };
         }
         const manual = command?.action === 'fill-manual-details';
-        const prior = manual && data?.orders?.find(row => row.id === command.orderId);
-        const legacyConfirmed = prior && legacyOpeningOrderIds([prior], readDocument(subscriptionDomain).data).length > 0;
+        const prior = data?.orders?.find(row => row.id === command?.orderId);
+        const legacyConfirmed = manual && prior && legacyOpeningOrderIds([prior], readDocument(subscriptionDomain).data).length > 0;
         const inventory = manual ? readDocument('inventory').data : null;
-        const { order, customer, createdCustomer, costReason } = manual
+        const { order, customer, createdCustomer, costReason, completion } = manual
           ? fillManualOrderDetails(data, inventory, actor, command, at, legacyConfirmed)
           : applyOrderCompletion(data, readDocument('settings').data, actor, command, readOrderOwners, at);
+        const result = { orderId: order.id, version, ...(completion && { state: completion.state, missing: completion.missing }) };
+        if (order === prior && !customer) return { ...result, version: current.version };
+        if (!prior.subscriptionAnchor && !validOrderEmail(prior.email) && !validOrderXHandle(prior.xHandle) &&
+            (validOrderEmail(order.email) || validOrderXHandle(order.xHandle))) {
+          order.subscriptionAnchor = subscriptionChainRoot(prior, new Map(data.orders.map(row => [row.id, row]))).id;
+        }
         const orders = data.orders.map((row) => row.id === order.id ? order : row);
         if (manual) {
           const kycIssue = checkTenantKycWrite(data, { ...data, orders }, inventory);
           if (kycIssue) throw new LocalDataError(409, kycIssue);
+        }
+        const addedReceipt = order.receiptConfirmed &&
+          (!prior.receiptConfirmed || order.saleAmount !== prior.saleAmount || order.saleCurrency !== prior.saleCurrency);
+        if (completion && addedReceipt) {
+          const financeIssue = checkOrderFinancialHistory({ orders: [prior] }, { orders: [order] });
+          if (financeIssue) throw new LocalDataError(409, financeIssue);
         }
         data.orders = orders;
         if (customer) {
@@ -2202,11 +2270,12 @@ export function createLocalBusinessStore(databasePath) {
           data.customers = createdCustomer ? [customer, ...customers]
             : customers.map((row) => row.id === customer.id ? customer : row);
         }
-        const label = manual ? manualOrderDetailsAction : command.action === 'assign' ? '确认代充订单归属' : '补全代充订单资料';
+        const label = manual ? manualOrderDetailsAction : command.action === 'assign' ? '确认代充订单归属' : '保存代充订单资料';
         const detail = [order.orderNo,
           ...(costReason ? [`实际总成本 ${order.actualCostAmount} ${order.actualCostCurrency}`, costReason] : []),
-          ...(manual && order.receiptConfirmed && prior.receiptConfirmed !== true
-            ? [`按原售价确认全额实收 ${order.saleAmount} ${order.saleCurrency}`] : [])
+          ...(addedReceipt ? [`${manual ? '按原售价确认全额实收' : '登记客户实收'} ${order.saleAmount} ${order.saleCurrency}`] : []),
+          ...(completion && order.rechargeOwnerAssignment !== prior.rechargeOwnerAssignment
+            ? [`归属人 ${order.owner} · ${order.rechargeOwnerAssignment.reason}`] : [])
         ].join(' · ');
         data.logs = [{
           id: 'commerce-log-' + randomUUID(), type: label, entityId: order.id, detail,
@@ -2216,7 +2285,7 @@ export function createLocalBusinessStore(databasePath) {
         log.run(at, 'commerce', 'order_completion_' + command.action, auditSummary(label, actor, order.id), version);
         if (customer) log.run(at, 'commerce', createdCustomer ? 'order_completion_customer_create' : 'order_completion_customer_fill',
           auditSummary(createdCustomer ? '补全订单时新增客户' : '补齐客户资料', actor, customer.id), version);
-        return { orderId: order.id, version };
+        return result;
       });
     },
     applyRechargeOrder({ since, row, order, firstUse }) {
@@ -2225,15 +2294,23 @@ export function createLocalBusinessStore(databasePath) {
         const commerce = readDocument('commerce');
         const data = commerce.data || { customers: [], tenants: [], orders: [], operating: [], rentBatches: [], logs: [] };
         const previous = status.data?.rows || [];
-        const old = data.orders.find((item) => item.taskId === row.jobKey && item.source === '线上代充');
+        const old = data.orders.find((item) => item.taskId === row.jobKey && automaticGptOrder(item));
         const result = { ...row };
         let changed;
         if (old) {
           result.orderNo = old.orderNo;
-          if (order && (!order.email || !old.email || order.email.toLowerCase() === old.email.toLowerCase()) &&
+          const priorEmail = validOrderEmail(old.email) ? old.email.trim() : '';
+          if (order && (!order.email || !priorEmail || order.email.toLowerCase() === priorEmail.toLowerCase()) &&
               (!order.plan || !old.plan || order.plan === old.plan)) {
             const next = { ...old, entitlementStatus: 'active' };
-            if (!old.email && order.email) next.email = order.email;
+            if (!priorEmail && order.email) {
+              if (rechargeOrderEmailConflict(data.orders, old, order.email)) {
+                result.needs = [...result.needs, '账号邮箱归属待核对'];
+              } else {
+                next.email = order.email;
+                if (!old.subscriptionAnchor) next.subscriptionAnchor = old.id;
+              }
+            }
             if (!old.plan && order.plan) {
               next.plan = order.plan;
               const price = rechargePriceSnapshot(readDocument('settings'), order.plan, new Date().toISOString());
@@ -2260,7 +2337,7 @@ export function createLocalBusinessStore(databasePath) {
               item.id !== next.id && item.cardId === next.cardId && item.issueFeeSnapshot?.applied);
             if (JSON.stringify(next) !== JSON.stringify(old) ||
                 (next.paidConfirmed && next.issueFeeSnapshot?.pending && (typeof firstUse === 'boolean' || recordedFirst))) {
-              next.version++;
+              next.version = (old.version ?? 0) + 1;
               data.orders[data.orders.indexOf(old)] = next;
               changed = next;
             }

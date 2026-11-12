@@ -171,6 +171,7 @@ export function inspectInventoryUsage(inventory, commerce, now = Date.now()) {
       const type = mailboxTypes.get(account.emailType);
       const recorded = occupied.get(email)?.find(fact => fact.assetId && !fact.pending && fact.product === account.type);
       const sourceId = account.sourceMailboxId || recorded?.assetId;
+      if (account.acquisitionMethod && !sourceId) continue;
       const sources = (mail.get(email) || []).filter(row => !sourceId || row.id === sourceId);
       const ambiguous = sources.length > 1 || rows.filter((row) => row.type === account.type).length > 1;
       for (const source of sources) {
@@ -195,6 +196,9 @@ export function inspectInventoryUsage(inventory, commerce, now = Date.now()) {
       const sourceType = productAccounts.length === 1 && mailboxTypes.get(productAccounts[0].emailType);
       const sources = sourceType ? mailboxes.filter((row) => row.type === sourceType) : mailboxes;
       for (const mailbox of sources) {
+        const explicitAccount = productAccounts.find(row => row.id === order.accountId);
+        if (explicitAccount?.acquisitionMethod && explicitAccount.sourceMailboxId !== mailbox.id) continue;
+        if (order.source === '管理员手工' && !order.accountId && order.accountSource !== '库存') continue;
         if (state(mailbox) === 'claimed' || (sourceType && order.accountId))
           consider(mailbox, evidence, sources.length > 1);
       }
