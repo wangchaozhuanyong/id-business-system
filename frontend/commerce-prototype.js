@@ -1520,7 +1520,7 @@
   }
   function refreshAppleOptions(form) {
     const select = form.elements['commerce-appleIdId'];
-    if (!select || form.elements['commerce-payment']?.value !== '苹果内购') return;
+    if (!select || select.disabled || form.elements['commerce-payment']?.value !== '苹果内购') return;
     const order = orderFromForm(form);
     const index = appleIndex(), rules = window.IDAppleFunding;
     const region = form.elements['commerce-appleStoreRegion'];
@@ -4285,6 +4285,12 @@
     return [['', '选择客户'], ...customers.filter(row => row.active !== false || row.id === customerId)
       .map(row => [row.id, [row.name, ...customerChannels.map(([key]) => row[key]).filter(Boolean)].join(' · ')])];
   }
+  const historicalStockWithoutBuyer = order => Boolean(order?.accountId && !order.customerId && !order.taskId &&
+    order.businessType === '成品交付' && isClaude(order) &&
+    [undefined, null, '', '历史入库', '管理员手工'].includes(order.source));
+  const preserveHistoricalApplePayment = order => historicalStockWithoutBuyer(order) && order.payment === '苹果内购';
+  const historicalApplePaymentFields = ['payment', 'appleIdId', 'appleStoreRegion', 'paidAmount', 'paidCurrency',
+    'paidConfirmed', 'paymentId', 'cardId', 'cardTypeId'];
   function orderCustomerField(customerId, quickDraft, existing) {
     const add = A.button('新增', 'commerce-quick-customer', '', 'plus', `aria-haspopup="dialog"${quickDraft ? ' disabled' : ''}`);
     const choices = orderCustomerChoices(customerId);
@@ -4305,11 +4311,8 @@
       </div>
       </details>
     </div>` : picker;
-    const historicalDelivery = existing?.accountId && !existing.customerId && !existing.taskId &&
-      existing.businessType === '成品交付' && isClaude(existing) &&
-      [undefined, null, '', '历史入库', '管理员手工'].includes(existing.source);
     return field('客户资料', 'customerId', control, !existing || Boolean(existing.customerId),
-      historicalDelivery ? '可以按原销售记录补选买家。暂时查不到买家时，可以先保存其他修改。' : '');
+      historicalStockWithoutBuyer(existing) ? '可以按原销售记录补选买家。暂时查不到买家时，可以先保存其他修改。' : '');
   }
   const composingCustomerFields = new WeakSet();
   const isOrderCustomerLookupInput = node => ['order-quick-customer-name', 'order-quick-customer-wechat'].includes(node.id);
@@ -5297,7 +5300,8 @@
     const apple = v('payment') === '苹果内购';
     const product = v('product'), codes = orderCurrencyCodes(product);
     const personal = personalProduct(product);
-    const paymentLocked = auto || (personal && existing && (existing.paidConfirmed || hasPaymentHistory(existing)));
+    const keepApplePayment = preserveHistoricalApplePayment(existing);
+    const paymentLocked = auto || keepApplePayment || (personal && existing && (existing.paidConfirmed || hasPaymentHistory(existing)));
     const proMode = v('proMaterialMode');
     const proChoices = orderMaterialChoices(product, existing);
     const savedCard = existing ? existing.cardId || '' : v(proMode === 'pool_card' ? 'proPoolCardId' : 'cardId');
@@ -5320,7 +5324,8 @@
         <span data-renewal-hint-status role="status"></span>${A.button('换用银行卡', 'commerce-order-replace-card', '', '', 'hidden')}
         </div>` : '') +
       field(personal ? '充值方式' : '支付方式', 'payment', paymentLocked ? input('payment', v('payment'), 'readonly')
-        : select('payment', keepSavedOption(orderPaymentChoices(product, v('plan')), v('payment'), existing), v('payment')), true) +
+        : select('payment', keepSavedOption(orderPaymentChoices(product, v('plan')), v('payment'), existing), v('payment')), true,
+        keepApplePayment ? '补充这笔历史订单的客户或资料时，沿用原付款记录。' : '') +
       materialModeField + cardTypeField +
       field('银行卡号', 'proCardNumber', input('proCardNumber', v('proCardNumber'),
         'inputmode="numeric" maxlength="32" autocomplete="off"'), false, '', '', apple || proMode !== 'manual_card') +
@@ -5337,15 +5342,19 @@
         false, '选填的业务登记编号，可保留前导零。', '', !orderCardSerialAvailable({ product,
           payment: v('payment'), proMaterialMode: proMode, cardId: v('cardId') })) +
       (window.IDAppleFunding ? field('Id地区', 'appleStoreRegion',
-        select('appleStoreRegion', [['', '请选择 Id地区'], ...Object.entries(window.IDAppleFunding.appleRegions)],
-          v('appleStoreRegion')), false, '选用系统苹果 ID 时，以该账号的 Id地区为准。', '', !apple) : '') +
+        select('appleStoreRegion', [['', keepApplePayment ? '原单未登记' : '请选择 Id地区'], ...Object.entries(window.IDAppleFunding.appleRegions)],
+          v('appleStoreRegion'), keepApplePayment ? 'disabled' : ''), false, '选用系统苹果 ID 时，以该账号的 Id地区为准。', '', !apple) : '') +
       field(
         '苹果 ID',
         'appleIdId',
-        searchableSelect('appleIdId', '苹果 ID', appleOptions(v('appleIdId'), appleSelection), v('appleIdId')) +
+        (keepApplePayment
+          ? select('appleIdId', [[v('appleIdId'), v('appleIdId') ? existing.paymentId || '原单已登记' : '原单未登记']],
+            v('appleIdId'), 'disabled')
+          : searchableSelect('appleIdId', '苹果 ID', appleOptions(v('appleIdId'), appleSelection), v('appleIdId'))) +
           (window.IDAppleFunding ? '<p class="footnote" data-apple-match-notice aria-live="polite"></p>' : ''),
         false,
-        '选用系统苹果 ID 时登记余额流水，已在系统外付款可留空。',
+        keepApplePayment ? '补资料可直接保存，保留这笔订单的原 Apple ID 和余额记录。' :
+          '选用系统苹果 ID 时登记余额流水，已在系统外付款可留空。',
         '',
         !apple
       ) +
@@ -5363,11 +5372,11 @@
         <div class="order-financial-group">
           ${orderAmountHeading('代付', true, v)}
           ${field(!auto && gptCardPayment(product, v('payment')) ? '国家／地区' : '代付币种', 'paidCurrency',
-            auto ? input('paidCurrency', v('paidCurrency') ? currencyLabel(v('paidCurrency')) : '',
+            auto || keepApplePayment ? input('paidCurrency', v('paidCurrency') ? currencyLabel(v('paidCurrency')) : '',
               `readonly placeholder="待核对" data-currency-code="${E(v('paidCurrency'))}"`)
               : select('paidCurrency', keepSavedOption(paidCurrencyChoices(product, v('payment'), v('paidCurrency')),
-                v('paidCurrency'), existing), v('paidCurrency')), true)}
-          ${field('代付金额', 'paidAmount', orderAmountInput(v, 'paidAmount', auto), true)}
+                v('paidCurrency'), existing), v('paidCurrency')), !keepApplePayment)}
+          ${field('代付金额', 'paidAmount', orderAmountInput(v, 'paidAmount', auto || keepApplePayment), !keepApplePayment)}
         </div>
         <div class="order-financial-group">
           ${orderAmountHeading('售卖', false, v)}
@@ -5382,7 +5391,7 @@
       (v('claudeRenewalId')
         ? `<div class="commerce-cost-strip commerce-span-all">Claude 快捷续费：当前订阅到期 ${E(orders.find((row) => row.id === v('claudeRenewalId'))?.expiry || '')}，本次新单到期 ${E(v('expiry'))}。原单保持独立可见。</div>`
         : '') +
-      (existing && (apple || A.modules.appleBalance?.getOrderLedger?.(existing.id))
+      (existing && !keepApplePayment && (apple || A.modules.appleBalance?.getOrderLedger?.(existing.id))
         ? field(
             '加回余额',
             'balanceReversalConfirmed',
@@ -5551,7 +5560,9 @@
       originalAccount?.source !== '客户提供' &&
       !['客户自有', 'customer'].includes(originalAccount?.accountSource ?? existing.accountSource)));
     const defaultMaterialMode = !previous && main ? 'manual_card' : 'none';
+    const keepApplePayment = preserveHistoricalApplePayment(existing);
     const v = (name) =>
+      keepApplePayment && historicalApplePaymentFields.includes(name) ? base[name] ?? '' :
       name === 'product' ? initialProduct : name === 'plan' ? plan :
       name === 'businessType' ? businessType :
       name === 'customerId' && lockCustomer ? base.customerId :
@@ -5625,7 +5636,7 @@
       else updateCustomerEmailHistory(form);
     }
     if (form) void loadOrderOwners(form);
-    if (form && v('payment') === '苹果内购') loadAppleOptions(form);
+    if (form && v('payment') === '苹果内购' && !keepApplePayment) loadAppleOptions(form);
     if (form && v('payment') === '银行卡') void loadOrderCards(form);
     if (form && v('payment') === '银行卡') void loadOrderCardType(form);
     if (form) void updateRenewalCardHint(form);
@@ -5776,6 +5787,12 @@
       order.ownerId = form.querySelector?.('select#commerce-ownerId')?.value || order.ownerId || operator.id;
       order.owner = order.ownerId === operator.id ? operator.name :
         orderOwners.find(row => row.id === order.ownerId)?.name || '';
+    }
+    if (preserveHistoricalApplePayment(existingOrder)) {
+      for (const field of historicalApplePaymentFields) {
+        if (Object.hasOwn(existingOrder, field)) order[field] = existingOrder[field];
+        else delete order[field];
+      }
     }
     if (automatic) {
       for (const key of ['source', 'product', 'businessType', 'email', 'plan', 'payment', 'paymentId', 'cardId',
@@ -8301,7 +8318,7 @@
     }
     const appleSelected = value(raw, 'payment') === '苹果内购' && value(raw, 'appleIdId');
     const hadApple = existing?.payment === '苹果内购' && existing.appleIdId;
-    const changesAppleFunding = (appleSelected || hadApple) &&
+    const changesAppleFunding = !preserveHistoricalApplePayment(existing) && (appleSelected || hadApple) &&
       (!existing || ['payment', 'appleIdId', 'paidAmount'].some(key => value(raw, key) !== String(existing[key] || '')) ||
         raw['commerce-balanceReversalConfirmed'] === 'on');
     if (localData && !appleBalanceReady && changesAppleFunding) {
