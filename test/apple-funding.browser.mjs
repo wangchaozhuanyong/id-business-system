@@ -9,7 +9,8 @@ const { chromium } = await import(process.env.ID_RECHARGE_QA_PLAYWRIGHT
 const id = 'apple-browser-1';
 const apple = 'apple-wallet-with-a-long-account-name@example.test';
 const email = 'subscriber-with-a-long-account-name@example.test';
-const expiry = new Date(Date.now() + 86400000 * 30).toISOString().slice(0, 16);
+const start = new Date(Date.now() - 86400000).toISOString();
+const expiry = new Date(Date.now() + 86400000 * 30).toISOString();
 const fixture = {
   inventory: { version: 1, data: { mailboxes: [
     { id, email: apple, type: 'apple', status: '正常', country: '美国', appStoreRegion: 'US' }
@@ -18,14 +19,14 @@ const fixture = {
     customers: [{ id: 'fixture-customer', name: '合成客户', phone: '0000000' }],
     orders: [{
       id: 'fixture-order', orderNo: 'SYNTHETIC-APPLE-ORDER-123456', customerId: 'fixture-customer', email,
-      product: 'Gemini', plan: 'Google AI Pro', businessType: '首次开通', expiry,
+      product: 'Gemini', plan: 'Google AI Pro', businessType: '首次开通', start, expiry,
       payment: '苹果内购', paidConfirmed: true, paidAmount: '20', paidCurrency: 'USD', appleIdId: id,
       appleStoreRegion: 'US', appleFunding: { region: 'US', expected: '20', bound: true },
       billingChannel: 'app_store', billingCountry: '美国', billingCycle: 'month', loginMethod: 'google',
       entitlementStatus: 'active', version: 1
     }, {
       id: 'external-apple-order', orderNo: 'SYN-EXTERNAL-APPLE', customerId: 'fixture-customer',
-      product: 'Gemini', plan: 'Google AI Plus', businessType: '首次开通', start: '2026-11-01 12:00', expiry,
+      product: 'Gemini', plan: 'Google AI Plus', businessType: '首次开通', start, expiry,
       payment: '苹果内购', paidConfirmed: true, receiptConfirmed: true, entitlementStatus: 'active',
       externalApplePayment: true, loginMethod: 'google', email: '', version: 1
     }],
@@ -40,10 +41,19 @@ const fixture = {
 };
 for (let n = 0; n < 22; n++) {
   fixture.inventory.data.mailboxes.push({
-    id: 'unused-fixture-' + n, email: 'unused-' + n + '@example.test', type: 'apple',
+    id: 'extra-apple-' + n, email: 'paying-apple-' + n + '@example.test', type: 'apple',
     status: '正常', country: '美国', appStoreRegion: 'US'
   });
+  fixture.commerce.data.orders.push({
+    ...fixture.commerce.data.orders[0], id: 'extra-order-' + n, orderNo: 'SYN-EXTRA-ORDER-' + n,
+    appleIdId: 'extra-apple-' + n, email: 'extra-subscriber-' + n + '@example.test',
+    start: new Date(Date.now() - 32 * 86400000).toISOString(), expiry: start
+  });
 }
+fixture.inventory.data.mailboxes.push({
+  id: 'unused-fixture', email: 'unused-wallet@example.test', type: 'apple',
+  status: '正常', country: '美国', appStoreRegion: 'US'
+});
 const browser = await chromium.launch({ headless: true });
 const withinWidth = locator => locator.evaluate(el => el.scrollWidth <= el.clientWidth + 1);
 const output = process.env.ID_LAYOUT_QA_OUTPUT;
@@ -62,21 +72,21 @@ try {
     if (theme === 'dark') await toggleDesignTheme(page);
     const main = page.locator('#main');
     await main.getByText(email, { exact: true }).waitFor();
-    await main.getByText('20 USD', { exact: true }).waitFor();
+    await main.locator('tr[data-row-id="fixture-order"]').getByText('20 USD', { exact: true }).waitFor();
     const table = main.getByRole('table', { name: '苹果 ID 管理' });
     const panel = main.locator('.apple-management-list');
     assert.equal(new URL(page.url()).hash, '#/subscriptions/apple-ids');
     assert.equal(await main.getByLabel('到期排序', { exact: true }).inputValue(), 'funding');
-    const unrecorded = table.locator('tr[data-row-id="unrecorded:external-apple-order"]');
+    const unrecorded = table.locator('tr[data-row-id="external-apple-order"]');
     await unrecorded.getByText('SYN-EXTERNAL-APPLE', { exact: true }).waitFor({ state: 'attached' });
-    assert.equal(await unrecorded.locator('[data-column="balance"]').textContent(), '未读取');
-    const search = main.getByRole('textbox', { name: '搜索苹果 ID 使用记录' });
+    assert.equal(await unrecorded.locator('[data-column="balance"]').textContent(), '—');
+    const search = main.getByRole('textbox', { name: '搜索苹果内购订阅' });
     await settle(page);
     assert.deepEqual((await separatorSnapshot(page)).findings, []);
     const frame = await panel.boundingBox();
     assert.ok(await withinWidth(table));
     assert.ok(await withinWidth(main));
-    assert.equal(await table.getByRole('columnheader').first().innerText(), '苹果 ID 账号');
+    assert.equal(await table.getByRole('columnheader').first().innerText(), '订阅账号');
     assert.equal(await main.locator('.page-actions-fallback').count(), 0);
     const actions = panel.locator('[data-page-actions]');
     assert.equal(await actions.locator('[data-action="apple-management-refresh"]').count(), 1);
@@ -103,7 +113,7 @@ try {
       assert.equal(await card.locator('[data-column="expected"]').evaluate(node => getComputedStyle(node).textAlign), 'left');
     }
     if (output) await page.screenshot({ path: join(output, `apple-management-${width}-${theme}.png`) });
-    await table.locator('tr[data-row-id="' + id + '"]').getByRole('button', { name: '查看苹果 ID 账号完整内容', exact: true }).click();
+    await table.locator('tr[data-row-id="fixture-order"]').getByRole('button', { name: '查看付款苹果 ID完整内容', exact: true }).click();
     assert.equal(await page.locator('#table-cell-full-value').inputValue(), apple);
     await page.locator('#drawer[open]').getByRole('button', { name: '关闭', exact: true }).last().click();
     await openColumns();
@@ -142,12 +152,12 @@ try {
     assert.ok(await withinWidth(main));
     await settle(page);
     if (width > 900) assert.ok(Math.abs((await panel.boundingBox()).height - frame.height) <= 1, '末页框架高度稳定');
-    await search.fill('unused-0@example.test');
+    await search.fill('paying-apple-0@example.test');
     await page.waitForFunction(() => document.querySelectorAll('.apple-management-list tbody tr[data-row-id]').length === 1);
-    await table.getByText('unused-0@example.test', { exact: true }).waitFor();
+    await table.getByText('paying-apple-0@example.test', { exact: true }).waitFor();
     assert.equal(await table.locator('tbody tr[data-row-id]').count(), 1);
     if (output) await page.screenshot({ path: join(output, `apple-management-single-${width}-${theme}.png`) });
-    await search.fill('匹配不到的合成关键词');
+    await search.fill('unused-wallet@example.test');
     await main.getByText('暂无符合条件的记录', { exact: true }).waitFor();
     assert.ok(await withinWidth(main));
     await settle(page);
@@ -157,7 +167,7 @@ try {
     await page.locator('#main[data-layout-route="overview"]').waitFor();
     await page.evaluate(() => location.hash = '#/data-management/apple-ids');
     await search.waitFor();
-    assert.equal(await search.inputValue(), '匹配不到的合成关键词');
+    assert.equal(await search.inputValue(), 'unused-wallet@example.test');
     await page.evaluate(() => location.hash = '#/accounts/apple-balances');
     await main.getByRole('columnheader', { name: 'Id地区', exact: true, includeHidden: true }).waitFor({ state: 'attached' });
     await main.locator('[data-action="apple-add"]').click();

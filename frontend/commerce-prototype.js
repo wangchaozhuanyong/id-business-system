@@ -11258,11 +11258,24 @@
       customerOrderDraft = { key, route, product };
       A.go(route);
     },
-    appleFundingData() {
-      const { latest } = renewalProjection();
-      return { orders, currentOrders: [...latest.values()].map(row => row.order), settings: currencySettings,
-        ready: !localData || localPhase === 'ready', customer: order => customerForOrder(order, order.customerId),
-        now: parseDate(now()), renewalWarningHours };
+    appleFundingData({ includeSubscriptions = false } = {}) {
+      const at = orderEvaluationTime();
+      const data = { orders, settings: currencySettings, ready: !localData || localPhase === 'ready',
+        customer: order => customerForOrder(order, order.customerId), now: at, renewalWarningHours };
+      if (!data.ready || !includeSubscriptions) return data;
+      const identities = identifyOrderCustomers();
+      const byId = new Map(orders.map(order => [order.id, order]));
+      const opened = orders.filter(order => Object.hasOwn(productPlans, order.product) && hasOpeningEvidence(order, at));
+      data.subscriptions = opened.map(order => {
+        const end = subscriptionTime(order.expiry);
+        return { order, key: renewalSubscriptionKey(order, identities.get(order.id), byId),
+          account: subscriptionEmail(order) ? orderIdentity(order).trim() : '',
+          start: subscriptionTime(order.start), end, expiry: Number.isFinite(end) ? beijingClock.format(end) : '',
+          status: subscriptionPeriodState({ start: order.start, expiry: order.expiry, confirmed: true,
+            ended: order.subscriptionEnded || order.cancelled || ['cancelled', '已撤单'].includes(order.status) ||
+              endedInventoryOrder(order) }, at) };
+      });
+      return data;
     },
     async refreshAppleFundingData() {
       if (localData) {
@@ -11336,7 +11349,8 @@
         document.activeElement?.closest('input, select, textarea') || $('#main form[novalidate]')) return;
     timeRefreshPending = false;
     updateRenewalReminder();
-    if ([renewalRoute, customerLossRoute, subscriptionCardsRoute].includes(S.route) && localPhase === 'ready') A.render();
+    if ([renewalRoute, customerLossRoute, subscriptionCardsRoute, 'subscriptions/apple-ids'].includes(S.route) &&
+        localPhase === 'ready') A.render();
   }
   function scheduleCommerceDeadline() {
     if (!localData || !window.setTimeout) return;
