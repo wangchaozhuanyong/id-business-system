@@ -23,6 +23,7 @@ ECR_BASELINE_REPORTED_BYTES = 10_560_774_320
 ECR_IMAGE_GROWTH_ALLOWANCE = 8
 ECR_REPORTED_BYTE_GROWTH_ALLOWANCE = 2 * 1024**3
 ARCHIVE_POLICY = Path(__file__).resolve().parents[1] / "s3-legacy-archive-lifecycle-rules.json"
+FORMAL_RELEASE_POLICY = ARCHIVE_POLICY.with_name("s3-formal-release-lifecycle-rules.json")
 
 
 class AuditError(RuntimeError):
@@ -87,11 +88,30 @@ def check_registry():
     print("ID registry metadata, immutable tags and growth limits verified")
 
 
-def check_legacy_archive_rules(rules):
-    expected = json.loads(ARCHIVE_POLICY.read_text())["Rules"]
-    for rule in expected:
+def check_lifecycle_rules(rules, policy, error):
+    for rule in json.loads(policy.read_text())["Rules"]:
         matching = [item for item in rules if item.get("ID") == rule["ID"]]
-        require(matching == [rule], "legacy_archive_lifecycle_changed")
+        require(matching == [rule], error)
+
+
+def check_legacy_archive_rules(rules):
+    check_lifecycle_rules(rules, ARCHIVE_POLICY, "legacy_archive_lifecycle_changed")
+
+
+def check_formal_release_rules(rules):
+    check_lifecycle_rules(rules, FORMAL_RELEASE_POLICY, "formal_release_lifecycle_changed")
+    formal_prefix = "release-artifacts/formal/"
+    for rule in rules:
+        if rule.get("Status") != "Enabled" or not (
+                "Expiration" in rule or "NoncurrentVersionExpiration" in rule):
+            continue
+        filter_ = rule.get("Filter", {})
+        prefix = filter_.get("And", filter_).get("Prefix", rule.get("Prefix", ""))
+        if formal_prefix.startswith(prefix) or prefix.startswith(formal_prefix):
+            require(rule["ID"] in {
+                "ExpireRetiredIndependentFormalReleaseArtifacts",
+                "RemoveExpiredIndependentFormalReleaseDeleteMarkers",
+            }, "unreviewed_expiration_overlaps_formal_releases")
 
 
 def check_backups():
@@ -105,6 +125,7 @@ def check_backups():
                 matching[0]["Expiration"]["Days"] == current and
                 matching[0]["NoncurrentVersionExpiration"]["NoncurrentDays"] == older, "backup_retention_changed")
     check_legacy_archive_rules(rules)
+    check_formal_release_rules(rules)
     require(aws("s3api", "list-objects-v2", *scope, "--prefix", "release-artifacts/formal/",
                 "--max-keys", "1", "--no-paginate", expect_denied=True), "out_of_scope_listing_not_denied")
     now = dt.datetime.now(dt.timezone.utc)
@@ -119,7 +140,7 @@ def check_backups():
                 for folder, names in pairs.items() if names == {"manifest.json", "mysql.sql.aes256gcm"}]
     require(complete and dt.timedelta(0) <= now - max(complete) <= dt.timedelta(minutes=35),
             "missing_fresh_mysql_backup_pair")
-    print("ID backup retention, historical archive rules, fresh object pair and denied out-of-scope listing verified")
+    print("ID backup retention, archive and formal release rules, fresh object pair and denied out-of-scope listing verified")
 
 
 def main():
