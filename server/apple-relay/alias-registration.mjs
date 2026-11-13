@@ -92,17 +92,25 @@ export function registerAppleRelayAliases(input, actor, { perform, provider, rem
       await provider.virtualEmails(), entries, remoteParentId, localAliases, remoteAliasIdFor, existingFor
     );
     let matches = await readMatches();
+    if (actor.role === 'registrar' && matches.some(Boolean))
+      throw new RelayError(409, '收件服务已有该隐藏邮箱，请联系管理员核对并授权');
     const missing = entries.filter((_, index) => !matches[index]);
     if (missing.length) {
       const settings = { primaryAccountId: remoteParentId, codeResetIntervalDays: days };
       let writeError;
+      let createdAliasId;
       try {
         if (batch) await provider.batchCreateAliases({ ...settings, rawInput: batchInput(missing) });
-        else await provider.createAlias({ ...settings, aliasEmail: missing[0].email, note: missing[0].note });
+        else createdAliasId = (await provider.createAlias({ ...settings, aliasEmail: missing[0].email,
+          note: missing[0].note }))?.id;
       } catch (error) {
         writeError = error;
       }
+      if (actor.role === 'registrar' && (batch || !idPattern.test(String(createdAliasId ?? ''))))
+        throw new RelayError(409, '收件服务未确认这次新登记，请联系管理员核对结果');
       matches = await readMatches();
+      if (actor.role === 'registrar' && String(matches[0]?.id) !== String(createdAliasId))
+        throw new RelayError(409, '新登记的收信记录待核对，请联系管理员');
       const missingLines = matches.flatMap((row, index) => row ? [] : [index + 1]);
       if (missingLines.length) {
         const shown = missingLines.slice(0, 8).join('、') + (missingLines.length > 8 ? ' 等' : '');

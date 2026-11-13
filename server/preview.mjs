@@ -134,7 +134,9 @@ function acceptsGzip(value = '') {
   if (!selected) return false;
   const quality = selected[1];
   if (quality === undefined) return true;
-  const match = /^q\s*=\s*(0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/.exec(quality);
+  const [parameter, weight, extra] = quality.split('=');
+  if (parameter.trim() !== 'q' || weight === undefined || extra !== undefined) return false;
+  const match = /^(0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/.exec(weight.trim());
   return Boolean(match && Number(match[1]) > 0);
 }
 

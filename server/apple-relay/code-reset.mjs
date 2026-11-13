@@ -102,7 +102,7 @@ function verifiedReset(kind, target, result, validityDays, now) {
       (kind === 'alias' && String(result.primaryAccountId) !== target.owner.remoteId) ||
       typeof code !== 'string' || !code || code === codeFor(kind, target.remote) ||
       result.codeResetIntervalDays !== validityDays ||
-      (validityDays === 0 ? result.codeExpiresAt != null : !(Date.parse(result.codeExpiresAt) > now)))
+      !(Date.parse(result.codeExpiresAt) > now))
     throw new Error('Invalid reset result');
   return { queryCode: code, codeExpiresAt: result.codeExpiresAt ?? null, email: target.local.email };
 }
@@ -204,7 +204,7 @@ export function createRelayCodeReset({ lookup, mutate, record, now = Date.now })
         typeof id !== 'string' ||
         !id ||
         !Number.isInteger(validityDays) ||
-        validityDays < 0 ||
+        validityDays < 1 ||
         validityDays > 36500
       ) {
         throw new RelayError(400, '请选择邮箱和有效天数');
