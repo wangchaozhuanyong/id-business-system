@@ -54,6 +54,7 @@ test('在线工具启动列表及原有工具操作、布局和草稿兼容', { 
     analyticsCalls++;
     return route.fulfill({ json: { summary: null, daily: [], timeZone: 'Asia/Shanghai' } });
   });
+  const newestTotpId = 'fixture-23';
   let firstTotp = true;
   const totpReads = [];
   await page.route('**/api/local/saved-totp/code', (route) => {
@@ -61,9 +62,9 @@ test('在线工具启动列表及原有工具操作、布局和草稿兼容', { 
     const serverNow = Date.now();
     totpReads.push(ids);
     const items = ids.map(id => {
-      const initial = firstTotp && id === 'fixture-0';
+      const initial = firstTotp && id === newestTotpId;
       if (initial) firstTotp = false;
-      return { id, code: initial ? '135791' : '246802', expiresAt: serverNow + (initial ? 1800 : 30_000) };
+      return { id, code: initial ? '135791' : '246802', expiresAt: serverNow + (initial ? 10_000 : 30_000) };
     });
     return route.fulfill({ json: { version, serverNow, items } });
   });
@@ -155,15 +156,18 @@ test('在线工具启动列表及原有工具操作、布局和草稿兼容', { 
   await openTool('抖音解析');
   assert.match(await page.locator('#ops-media-text').inputValue(), /123456789/);
 
+  await page.clock.install();
   await openTool('计算 2FA 验证码');
-  const firstRow = drawer.locator('.saved-totp-table tbody tr').filter({ has: page.getByText('验收账号 1', { exact: true }) });
+  const firstRow = drawer.locator('.saved-totp-table tbody tr').first();
+  await firstRow.getByText('验收账号 24', { exact: true }).waitFor();
   await firstRow.getByText('135791', { exact: true }).waitFor();
+  await page.clock.fastForward(11_000);
   await firstRow.getByText('246802', { exact: true }).waitFor();
   assert.equal(totpReads[0].length, 20);
-  assert.deepEqual(totpReads.slice(1), [['fixture-0']], '只重取已到期的验证码');
+  assert.deepEqual(totpReads.slice(1), [[newestTotpId]], '只重取已到期的验证码');
   const totpPager = drawer.locator('[data-pagination="operations-saved-totp"]');
   await totpPager.getByRole('button', { name: '下一页', exact: true }).click();
-  await drawer.getByText('验收账号 21', { exact: true }).waitFor();
+  await drawer.getByText('验收账号 4', { exact: true }).waitFor();
   assert.equal(await totpPager.getAttribute('data-page'), '2');
 
   const output = process.env.ID_LAYOUT_QA_OUTPUT;
@@ -198,17 +202,17 @@ test('在线工具启动列表及原有工具操作、布局和草稿兼容', { 
       await openTool('邮箱查询与邮箱池');
       await drawer.getByRole('tab', { name: '邮箱池管理', exact: true }).click();
       const table = drawer.locator('.online-tool-mail-list');
-      await table.getByText('layout-0@example.test', { exact: true }).waitFor();
+      await table.getByText('layout-23@example.test', { exact: true }).waitFor();
       if (width === 1440 && theme === 'light') await screenshot('mailbox-pool-desktop');
       await page.locator('#ops-mailbox-filter-provider').selectOption('apple');
       await drawer.getByText('没有匹配的邮箱', { exact: true }).waitFor();
       await page.locator('#ops-mailbox-filter-provider').selectOption('');
       const mailboxPager = drawer.locator('[data-pagination="operations-mailbox-pool"]');
       await mailboxPager.getByRole('button', { name: '下一页', exact: true }).click();
-      await table.getByText('layout-20@example.test', { exact: true }).waitFor();
+      await table.getByText('layout-3@example.test', { exact: true }).waitFor();
       assert.equal(await mailboxPager.getAttribute('data-page'), '2');
       await mailboxPager.getByRole('button', { name: '上一页', exact: true }).click();
-      await table.getByText('layout-0@example.test', { exact: true }).waitFor();
+      await table.getByText('layout-23@example.test', { exact: true }).waitFor();
       const before = await close.boundingBox();
       await drawer.locator('.drawer-body').evaluate((body) => body.scrollTop = body.scrollHeight);
       await checkFrame();

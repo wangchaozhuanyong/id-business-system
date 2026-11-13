@@ -159,11 +159,11 @@ test('离线页面只在明确核对后补原付款卡，保留已有付款证�
   await f.page.getByRole('button', { name: '编辑资料', exact: true }).click();
   await f.page.locator('#commerce-notes').fill('合成备注更新');
   await f.page.locator('#commerce-correctionReason').fill('合成备注更正');
-  await f.page.locator('button[form="commerce-order-form"][type="submit"]').click();
   const edited = f.page.waitForResponse(response => response.url() === origin + '/api/local/commerce' &&
     response.request().method() === 'PUT');
-  await f.page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
+  await f.page.locator('button[form="commerce-order-form"][type="submit"]').click();
   assert.equal((await edited).status(), 200, JSON.stringify(f.rejected));
+  assert.equal(f.stored.data.orders[0].notes, '合成备注更新');
   const payments = f.stored.data.orders[0].financialEvidence.filter(item => item.kind === 'payment');
   assert.equal(payments.length, 1, '后续编辑不能因补卡重复生成付款');
   assert.equal(payments[0].cardId, '');
