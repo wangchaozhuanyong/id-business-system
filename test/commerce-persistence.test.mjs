@@ -77,6 +77,7 @@ function browser(store, appleAsset = null) {
       subtract: (a, b) => moneyFormat(moneyUnits(a) - moneyUnits(b))
     },
     canVisit: () => true,
+    usesSharedBusinessData: () => true,
     esc: String,
     addCalendarMonth: () => '2026-12-04T10:30',
     readForm: (form) => form.raw,
