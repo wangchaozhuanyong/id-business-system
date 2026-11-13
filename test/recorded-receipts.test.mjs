@@ -62,8 +62,7 @@ test('旧单实收参与净收款和利润，代付与汇率的真实缺项独�
   }, pending, clock);
   assert.equal(calculateOrder(pending, { clock }).profit, '30.0000');
   const missingPayment = calculateOrder({ ...pending, paidAmount: '' }, { clock });
-  assert.match(missingPayment.reason, /代付金额/);
-  assert.doesNotMatch(missingPayment.reason, /收款金额/);
+  assert.equal(missingPayment.profit, '30.0000');
   assert.equal(calculateConfirmedNetReceipt(legacy({ cancelled: true })), null);
   assert.equal(calculateConfirmedNetReceipt(legacy({ draft: true })), null);
 });

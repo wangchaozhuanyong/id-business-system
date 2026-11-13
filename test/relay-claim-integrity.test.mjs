@@ -134,7 +134,7 @@ test('十个隐藏邮箱领用后，三个平台注册各回写两条，余下�
     const additions = snapshot.data.mailboxes.slice(index * 2, index * 2 + 2).map((mail, i) =>
       registeredAccount(type, mail.email.toUpperCase(), `${type}-${i}`));
     if (type === 'gpt') {
-      snapshot.data.accounts.push({ ...additions.shift(), emailType: 'google' });
+      snapshot.data.accounts.push({ ...additions.shift(), emailType: 'relay' });
       const single = await put(store, 'inventory', inventoryWrite(snapshot.version, snapshot.data, 'inventory_create'));
       assert.equal(single.status, 200, single.body.error);
       snapshot.version = single.body.version;

@@ -1846,6 +1846,8 @@ function render() {
 }
 function navigate(event) {
   let next = location.hash.replace(/^#\/?/, '') || 'mailboxes/google';
+  const statisticsQuery = next.startsWith('orders/statistics?') ? next.slice('orders/statistics?'.length) : '';
+  if (statisticsQuery) next = 'orders/statistics';
   const currentHash = '#/' + state.route;
   if (
     window.IDDesignAPI.modules.operations?.blockRechargeNavigation({
@@ -1899,7 +1901,7 @@ function navigate(event) {
     return;
   }
   // A hash navigation can emit both popstate and hashchange.
-  if (event && !legacyCustomerTags && !legacyRechargeSync && state.route === next && mountedPage?.region.isConnected &&
+  if (event && !statisticsQuery && !legacyCustomerTags && !legacyRechargeSync && state.route === next && mountedPage?.region.isConnected &&
       mountedPage.region.dataset.pageRegion === next) return;
   window.IDSearchInput?.suspend(activePageRegion());
   preserveMainDraft();
@@ -1926,6 +1928,8 @@ function navigate(event) {
     state.selections.clear();
   }
   if (legacyRechargeSync) { state.page = 1; state.query = ''; }
+  window.IDDesignAPI.modules.commerce?.applyStatisticsLink(
+    next === 'orders/statistics' && permittedRoute(next) ? statisticsQuery : '');
   document.body.classList.remove('nav-open');
   $('#sidebar-shade').hidden = true;
   if ($('#drawer').open) closeDrawer();

@@ -1,3 +1,4 @@
+import { inventoryOperationalStatus } from '../frontend/order-opening.mjs';
 import { isDeepStrictEqual } from 'node:util';
 import { toV2DateTimeInput } from '../modules/time/dateTime.ts';
 
@@ -77,7 +78,7 @@ export function checkInventoryHistory(previous, next, { trustedAccountLifecycle 
         return 'Claude 历史入库资料必须通过专用入口登记';
       if (useState(row) === 'claimed' && useState(original) !== 'claimed') {
         if (isHistoricallyOpenedClaude(original) || (row?.claudeHistory &&
-            (original.health !== 'normal' || original.status !== '正常')))
+            (original.health !== 'normal' || inventoryOperationalStatus(original) !== '正常')))
           return 'Claude 历史账号当前不可提取';
       }
       for (const field of ['accountLifecycle', 'accountLifecycleEvents']) {

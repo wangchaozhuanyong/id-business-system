@@ -35,6 +35,11 @@
   font-size: 11px;
 }
 .overview-actions { flex: none; }
+.overview-accounting-filters { display: flex; gap: 4px; }
+.overview-accounting-filters select { width: auto; }
+@container overview-toolbar (max-width: 1120px) {
+  .overview-accounting-filters { display: none; }
+}
 .overview-design-label { color: var(--secondary); font-size: 12px; }
 .overview-toolbar .overview-warning { color: var(--warning); }
 .overview-status-announcement {
@@ -61,7 +66,7 @@
   background: var(--surface);
 }
 .overview-toolbar .overview-controls .button { border-color: transparent; box-shadow: none; }
-@container overview-toolbar (max-width: 1099px) {
+@container overview-toolbar (max-width: 1120px) {
   .overview-previous { display: none; }
   .overview-toolbar .overview-previous-compact { display: inline-flex; }
 }
@@ -296,6 +301,7 @@ a.overview-task:hover .overview-task-text strong { color: var(--primary); }
 .overview-stock-viewport:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .overview-stock-table { min-width: 980px; }
 .overview-stock-table th, .overview-stock-table td { white-space: nowrap; }
+.overview-stock-table th:nth-child(12) { width: 92px; }
 .overview-stock-table th:first-child { position: sticky; left: 0; z-index: 1; width: 152px; }
 .overview-stock-table tbody tr:hover th { background: var(--surface-soft); }
 .overview-stock-muted { color: var(--secondary); }

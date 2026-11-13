@@ -828,6 +828,99 @@ h1 {
 .commerce-stat-filters {
   margin-block-end: var(--section-gap);
 }
+.commerce-stat-toolbar {
+  container-type: inline-size;
+}
+.commerce-stat-toolbar > .toolbar-right {
+  flex: 0 1 max-content;
+  min-width: 0;
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+  padding-block: var(--toolbar-padding-block);
+}
+.commerce-stat-toolbar h2 {
+  font-size: 15px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.commerce-stat-toolbar .search-field {
+  flex: 0 1 auto;
+  width: 210px;
+  min-width: 150px;
+}
+.commerce-stat-source {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 248px;
+  gap: 8px;
+}
+.commerce-stat-source .toolbar-meta {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.commerce-stat-source .button,
+.commerce-stat-toolbar .commerce-stat-settings {
+  flex: none;
+}
+.commerce-stat-expense-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.commerce-stat-expense-status p {
+  margin: 0;
+}
+@media (max-width: 900px) {
+  .commerce-stat-toolbar > .toolbar-right {
+    width: auto;
+  }
+  .commerce-stat-toolbar > .tabs > .tab {
+    min-height: var(--tab-row-height);
+  }
+}
+@container (width >= 500px) {
+  .commerce-stat-toolbar > .tabs {
+    flex-basis: 0;
+    min-width: 100px;
+  }
+  .commerce-stat-toolbar > .toolbar-right {
+    max-width: calc(100cqw - 116px);
+  }
+}
+@container (width < 500px) {
+  .commerce-stat-toolbar > .tabs {
+    flex-basis: 100%;
+  }
+  .commerce-stat-toolbar > .toolbar-right:has(.search-field) {
+    flex: 0 1 100%;
+  }
+  .commerce-stat-toolbar .search-field {
+    width: 190px;
+    min-width: 126px;
+  }
+  .commerce-stat-toolbar .commerce-stat-clear-source {
+    width: 44px;
+    padding-inline: 0;
+    font-size: 0;
+  }
+  .commerce-stat-toolbar .commerce-stat-source .toolbar-meta {
+    display: none;
+  }
+  .commerce-stat-toolbar .commerce-stat-settings {
+    padding-inline: 10px;
+  }
+}
+@container (max-width: 275px) {
+  .commerce-stat-toolbar .commerce-stat-settings {
+    width: 44px;
+    padding-inline: 0;
+    font-size: 0;
+  }
+}
 .panel > .commerce-stat-filter-controls {
   display: grid;
   grid-template-columns: repeat(2, minmax(118px, 1fr)) minmax(102px, 1fr)

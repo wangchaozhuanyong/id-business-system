@@ -1,11 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { hasRecordedPaymentAmount } from '../modules/finance/accounting.mjs';
 
 import { defaultSubscriptionSort, firstRecordTime, sortByRecordTime } from '../frontend/list-order.mjs';
 import {
-  orderOpeningConfirmed, subscriptionChainRoot, validOrderEmail, validOrderXHandle,
+  orderOpeningConfirmed, orderTerminationTime, subscriptionChainRoot, validOrderEmail, validOrderXHandle,
   rechargeRenewalExpiryPending, subscriptionDuration, subscriptionPeriodState, subscriptionStateLabels, subscriptionTime as instant
 } from '../frontend/order-opening.mjs';
-import { accountMarkedDead, releasedAccountOrders } from './account-lifecycle.mjs';
+import { accountMarkedDead, releasedAccountOrders, systemAccount } from './account-lifecycle.mjs';
 import { isClaudeHistoricalSale } from './claude-history-intake.mjs';
 import { personalProduct, subscriptionSeries, targetKey } from './personal-subscriptions.mjs';
 import { isManagedCode, mailboxPoolItems } from './tools/mailbox-pool.mjs';
@@ -29,6 +30,7 @@ const manager = actor => Boolean(actor?.id && ['admin', 'super'].includes(actor.
 const contactChannels = ['phone', 'wechat', 'qq', 'whatsapp', 'telegram'];
 const failure = (status, message) => Object.assign(new Error(message), { status });
 const digest = value => createHash('sha256').update(value).digest('base64url');
+const customerOwned = order => ['客户自有', 'customer'].includes(order?.accountSource);
 
 function identity(row, product) {
   if (product === 'Grok' && (row?.loginMethod === 'x' || (!row?.email && row?.xHandle)))
@@ -81,7 +83,7 @@ function openingConfirmed(order, profiles, now) {
 }
 
 function paid(order) {
-  return order.paidConfirmed === true || array(order.financialEvidence).some(item =>
+  return hasRecordedPaymentAmount(order) || order.paidConfirmed === true || array(order.financialEvidence).some(item =>
     item?.kind === 'payment' && typeof item.amount === 'string' && /[1-9]/.test(item.amount));
 }
 
@@ -97,7 +99,7 @@ function accountMatches(order, account, product) {
 
 // A unique same-platform login can prove health without granting access to inventory credentials.
 function healthAccount(order, product, accounts, linked) {
-  if (linked || !identity(order, product)) return linked;
+  if (linked || customerOwned(order) || !identity(order, product)) return linked;
   const matches = accounts.filter(account => (!order.accountId || account.id === order.accountId) &&
     accountMatches(order, account, product));
   return matches.length === 1 ? matches[0] : undefined;
@@ -108,10 +110,12 @@ function resolveAccount(order, product, accounts) {
     const matches = accounts.filter(account => account.id === order.accountId);
     if (matches.length !== 1 || !accountMatches(order, matches[0], product)) return { conflict: true };
     const account = matches[0], customer = account.accountLifecycle?.customerId;
+    if (customerOwned(order) && systemAccount(account)) return { conflict: true };
     if (customer && order.customerId && customer !== order.customerId && !releasedAccountOrders(account).has(order.id))
       return { conflict: true };
     return { account };
   }
+  if (customerOwned(order)) return {};
   const candidates = accounts.filter(account => accountMatches(order, account, product));
   const linked = candidates.filter(account => array(account.usageLinks).some(link => link.orderId === order.id));
   if (linked.length > 1 || (!linked.length && candidates.length > 1)) return { conflict: true };
@@ -158,6 +162,10 @@ function buildRecords(snapshots, now) {
     const released = match.account && releasedAccountOrders(match.account).has(order.id);
     const historicalSale = isClaudeHistoricalSale(order, match.account);
     const ended = order.subscriptionEnded === true || Boolean(released);
+    const releaseTime = released && array(match.account.accountLifecycleEvents).findLast(event =>
+      ['release', 'retire'].includes(event.action) && array(event.orderIds).includes(order.id))?.time;
+    const endedAt = Number.isFinite(orderTerminationTime(order, now)) ? order.subscriptionEndedAt :
+      Number.isFinite(instant(releaseTime)) ? releaseTime : '';
     const customer = customersById.get(order.customerId);
     const contacts = Object.fromEntries(contactChannels.map(channel => [
       channel, text(customer?.[channel]) || text(order[channel === 'phone' ? 'customerPhone' : channel])
@@ -169,14 +177,14 @@ function buildRecords(snapshots, now) {
       target: accountIdentity, display: !accountIdentity ? '' : order.loginMethod === 'x' && order.xHandle
         ? text(order.xHandle) : text(order.email) || text(order.xHandle),
       email: validOrderEmail(order.email) ? text(order.email) : '', series: seriesFor(order),
-      plan: text(order.plan), start: text(order.start), expiry: text(order.expiry),
+      plan: text(order.plan), start: text(order.start), expiry: text(order.expiry), endedAt,
       created: text(order.createdAt), customerId: text(order.customerId), account: match.account,
       customerName: text(customer?.name || order.customerName), wechat: text(customer?.wechat || order.wechat), contacts,
       payment: text(order.payment), appleIdId: text(order.appleIdId),
       last4: order.payment === '银行卡' ? nextCard?.last4 || tail : '',
       hasCard: order.payment === '银行卡' && Boolean(nextCard || order.cardId || order.proCardNumber || tail),
       delivered: order.businessType === '成品交付' && Boolean(match.account?.id && match.account.id === order.accountId),
-      historicalSale,
+      historicalSale, customerOwned: customerOwned(order),
       healthId: health?.id, dead: confirmed && accountMarkedDead(health), healthChangedAt: text(health?.healthChangedAt),
       missingAssociation, missingCustomer, accountConflict: Boolean(match.conflict || ids.get(order.id) !== 1),
       confirmed, ended, renewalExpiryPending: rechargeRenewalExpiryPending(order),
@@ -203,6 +211,7 @@ function buildRecords(snapshots, now) {
       created: '', customerId: '', account, accountConflict: false, confirmed: true,
       healthId: account.id, dead: accountMarkedDead(account), healthChangedAt: text(account.healthChangedAt),
       ended: ['recovered', 'retired'].includes(account.accountLifecycle?.disposition),
+      endedAt: text(account.accountLifecycle?.endedAt),
       operatorId: '', operatorName: '历史未记录'
     };
     record.status = subscriptionPeriodState(record, now);
@@ -230,7 +239,7 @@ export function currentSeriesRecord(records) {
 function publicRecord(record, now) {
   return {
     source: record.source, sourceId: record.sourceId, orderNo: record.orderNo, plan: record.plan,
-    start: record.start, expiry: record.expiry, status: record.status,
+    start: record.start, expiry: record.expiry, endedAt: record.endedAt, status: record.status,
     remainingDays: record.ended ? 0 : remaining(record.expiry, now), operatorName: record.operatorName,
     confirmed: record.confirmed, missingAssociation: Boolean(record.missingAssociation),
     customerName: record.customerName || '', wechat: record.wechat || '',
@@ -250,7 +259,7 @@ function mailboxFor(row, inventory) {
   const explicit = mailboxes.filter(mailbox => (account?.sourceMailboxId && mailbox.id === account.sourceMailboxId) ||
     array(mailbox.usageLinks).some(link => (account && link.kind === 'registration' && link.accountId === account.id) ||
       (link.kind === 'order-use' && orderIds.has(link.orderId))));
-  const matches = explicit.length || account?.acquisitionMethod ? explicit : mailboxes.filter(mailbox =>
+  const matches = explicit.length || account?.acquisitionMethod || row._customerOwned ? explicit : mailboxes.filter(mailbox =>
     row.registrationEmail && emailKey(mailbox.email) === emailKey(row.registrationEmail));
   if (matches.length !== 1) return { conflict: matches.length > 1 };
   const mailbox = matches[0];
@@ -308,7 +317,7 @@ export function projectSubscriptions(snapshots, now = Date.now()) {
     const precedence = ['active', 'opened', 'scheduled', 'pending', 'failed', 'expired', 'ended'];
     let status = conflict ? 'pending' : precedence.find(value => selected.some(record => record.status === value));
     const primary = selected.find(record => record.status === status) || selected[0];
-    const account = primary.account || (primary.customerId
+    const account = primary.account || (primary.customerId && !primary.customerOwned
       ? records.find(record => !record.ended && record.customerId === primary.customerId && record.account)?.account
       : undefined);
     const currentLifecycle = account?.accountLifecycle;
@@ -336,9 +345,9 @@ export function projectSubscriptions(snapshots, now = Date.now()) {
       contacts: conflict ? {} : primary.contacts || {},
       conflict: Boolean(conflict), missingAssociation, ownerEligible,
       series: selected.map(record => ({ key: record.series, ...publicRecord(record, now),
-        ...(dead && { status: 'dead', remainingDays: 0 }) })),
+        ...(dead && { status: 'dead', periodStatus: record.status, remainingDays: 0 }) })),
       history: records.map(record => publicRecord(record, now)),
-      _account: account, _records: records
+      _account: account, _records: records, _customerOwned: primary.customerOwned
     };
     const closed = status === 'ended' || status === 'dead';
     const binding = closed || missingAssociation ? {} : mailboxFor(row, snapshots.inventory.data || {});
@@ -346,7 +355,7 @@ export function projectSubscriptions(snapshots, now = Date.now()) {
       ? 'conflict' : binding.mailbox ? 'available' : 'missing';
     if (closed) row.queryCode = { status: 'not_applicable', remainingDays: null };
     else if (row.credentialStatus === 'conflict') row.queryCode = { status: 'conflict', remainingDays: null };
-    else if (row.product === 'Claude') row.queryCode = queryCodeFor(row, snapshots, now);
+    else if (row.product === 'Claude' && (!row._customerOwned || binding.mailbox)) row.queryCode = queryCodeFor(row, snapshots, now);
     else row.queryCode = { status: 'missing', remainingDays: null };
     result.push(row);
   }
@@ -354,7 +363,7 @@ export function projectSubscriptions(snapshots, now = Date.now()) {
 }
 
 function safeRow(row) {
-  const { _account, _records, queryCode, ...rest } = row;
+  const { _account, _records, _customerOwned, queryCode, ...rest } = row;
   return { ...rest, queryCode: { status: queryCode.status, remainingDays: queryCode.remainingDays,
     expiresAt: queryCode.expiresAt || null } };
 }
@@ -580,9 +589,11 @@ export function createSubscriptionHandler({ store, publicOrigin, readOwners = ()
           const format = value => Number.isFinite(instant(value)) ? new Intl.DateTimeFormat('sv-SE', {
             timeZone: 'Asia/Shanghai', dateStyle: 'short', timeStyle: 'short'
           }).format(instant(value)) : '';
-          const duration = subscriptionDuration(series.expiry, now);
+          const ended = series.status === 'ended' || series.periodStatus === 'ended';
+          const duration = ended ? '' : subscriptionDuration(series.expiry, now);
           const lines = [['账号', row.account],
             ['订阅套餐', series.plan], ['订阅时间', format(series.start)], ['到期时间', format(series.expiry)],
+            ['实际终止时间', ended && format(series.endedAt)],
             ['到期提醒', duration]].filter(([, value]) => value).map(([label, value]) => label + '：' + value);
           const suffix = snapshots.subscriptions.data?.renewalSuffixes?.[actor.id];
           if (suffix) lines.push(suffix);

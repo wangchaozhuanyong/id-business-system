@@ -51,11 +51,12 @@
   const displayDays = value => Number.isInteger(value) ? `${value} 天` : '—';
   const estimatedNow = data => data.serverTime + performance.now() - data.receivedAt;
   function countdown(series) {
-    if (series.renewalExpiryPending && series.status === 'opened') return '到期待核对';
+    if (series.status === 'ended' || series.periodStatus === 'ended')
+      return Number.isFinite(parseTime(series.endedAt)) ? '已终止 · ' + esc(displayDate(series.endedAt)) : '已终止 · 未登记终止时间';
     const expiry = parseTime(series.expiry), data = currentSnapshot();
-    if (!['active', 'scheduled', 'expired'].includes(series.status)) return '—';
-    if (!Number.isFinite(expiry) || !Number.isFinite(data?.serverTime))
-      return series.status === 'expired' ? '已到期（时间待核对）' : '—';
+    if (series.status === 'dead') return '账号死号';
+    if (!Number.isFinite(expiry)) return '未登记到期时间';
+    if (!Number.isFinite(data?.serverTime)) return esc(displayDate(series.expiry));
     return `<span data-subscription-countdown="${expiry}">${subscriptionDuration(expiry, estimatedNow(data))}</span>`;
   }
   const lineValues = (row, render) => row.series.map(series => `<div>${render(series)}</div>`).join('');
@@ -76,7 +77,7 @@
       { id: 'plan', label: '订阅套餐', render: row => lineValues(row, series => esc(series.plan || '待核对')) },
       { id: 'start', label: '订阅时间', render: row => lineValues(row, series => esc(displayDate(series.start))) },
       { id: 'expiry', label: '到期时间', render: row => lineValues(row, series =>
-        series.renewalExpiryPending ? '待核对' : esc(displayDate(series.expiry))) },
+        series.renewalExpiryPending ? '未登记到期时间' : esc(displayDate(series.expiry))) },
       { id: 'days', label: '到期倒计时', mobileSummary: true, render: row => lineValues(row, countdown) },
       { id: 'status', label: '订阅状态', render: row => row.status === 'dead' ? stateTag('dead') :
         lineValues(row, series => stateTag(series.status)) +

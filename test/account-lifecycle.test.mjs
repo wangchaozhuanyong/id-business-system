@@ -17,6 +17,14 @@ const renew = (fixture, customerId = 'customer-a', id = 'renew-a') => ({ ...stru
   id, orderNo: id, businessType: '续费', customerId, accountId: '', accountSource: '客户自有',
   start: '2026-11-07T12:00', expiry: '2026-12-07T12:00' });
 
+test('历史 Claude 默认冻结与实际冻结在库存和账号详情使用相同口径', () => {
+  const imported = { id: 'legacy', type: 'claude', source: '历史入库', status: '冻结',
+    health: 'normal', claudeHistory: { phase: 'aging' }, importId: 'legacy-import',
+    inventoryHistory: [{ action: 'Claude 历史入库' }] };
+  assert.equal(accountLifecycleSummary(imported, {}).label, '首次可用');
+  assert.equal(accountLifecycleSummary({ ...imported, healthChangedAt: now.toISOString() }, {}).label, '待核对交付资料');
+});
+
 for (const type of ['gpt', 'claude']) {
   test(`${type} 回收保留账号编号、历史付款、KYC 和订单；到期只提示待处理`, () => {
     const f = lifecycleFixture(type), original = structuredClone(f);

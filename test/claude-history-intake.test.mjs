@@ -14,7 +14,7 @@ import { inspectInventoryUsage } from '../server/inventory-usage.mjs';
 import { projectSubscriptions } from '../server/subscription-management.mjs';
 import { withClaudeMailboxCandidates } from '../server/tools/claude-mailbox-candidates.mjs';
 import { calculateConfirmedNetReceipt } from '../modules/finance/accounting.mjs';
-import { manualOrderDetailsMissing } from '../frontend/order-opening.mjs';
+import { inventoryOperationalStatus, manualOrderDetailsMissing } from '../frontend/order-opening.mjs';
 
 const at = new Date('2026-11-10T08:00:00Z');
 const actor = { id: 'fixture-admin', name: '合成管理员', role: 'admin' };
@@ -31,7 +31,7 @@ function snapshots() {
   };
 }
 
-test('历史账号保留原周期和未知日期，谷歌邮箱无自动关联', () => {
+test('历史账号保留原周期和未知日期，唯一注册邮箱可自动关联', () => {
   const { inventory, commerce } = snapshots();
   const prior = structuredClone(inventory.data);
   const plan = planClaudeHistoryIntake({ rows: [opened, aging, dead] }, inventory, commerce, at.getTime());
@@ -57,16 +57,20 @@ test('历史账号保留原周期和未知日期，谷歌邮箱无自动关联',
   assert.equal(archive.claudeHistory.expiry, '2026-11-26');
   assert.equal(accountLifecycleSummary(archive, commerce.data, at.getTime()).label, '已归档');
   assert.equal(archive.inventoryHistory[0].actorId, actor.id);
-  assert.ok(inventory.data.accounts.every(row => row.status === '冻结' && row.usageLinks.length === 0));
+  assert.ok(inventory.data.accounts.every(row => row.status === '正常' && row.usageLinks.length === 0));
   const legacy = structuredClone(inventory.data);
   Object.assign(legacy.accounts[0], { inventoryState: 'available', used: false, status: '正常' });
   assert.equal(accountLifecycleSummary(legacy.accounts[0], commerce.data, at.getTime()).label, '历史已开通');
   const claimed = structuredClone(legacy);
   claimed.accounts[0].inventoryState = 'claimed';
   assert.match(checkInventoryHistory(legacy, claimed), /历史账号当前不可提取/);
+  const defaultFreeze = { ...pending, status: '冻结' };
+  assert.equal(inventoryOperationalStatus(defaultFreeze), '正常');
+  assert.equal(inventoryOperationalStatus({ ...defaultFreeze,
+    inventoryHistory: [...pending.inventoryHistory, { action: '修改资料' }] }), '冻结');
   assert.equal(inventory.data.importRecords[0].id, result.batchId);
   assert.equal(inventory.data.importRecords[0].actorId, actor.id);
-  assert.equal(inspectInventoryUsage(inventory.data, commerce.data, at.getTime()).get('google').status, 'review');
+  assert.equal(inspectInventoryUsage(inventory.data, commerce.data, at.getTime()).get('google').status, 'used');
   const googlePool = { items: [{ email: dead.email, source: 'manual' }] };
   assert.deepEqual(withClaudeMailboxCandidates(googlePool, inventory.data), googlePool);
 });

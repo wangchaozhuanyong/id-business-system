@@ -257,6 +257,9 @@ test('Apple renewals enforce original binding and first-use card fees use actual
   assert.match(checkAppleOrder({ ...order, businessType: '成品交付' }, null, [], ledger, inventory, [order]), /区间/);
   const cardOrder = { ...order, payment: '银行卡', cardId: 'recharge:1', costSettings: { cardIssueUsd: '0.5' } };
   assert.equal(deriveCardIssueFee(cardOrder, null, [], { usageCount: 0 }).applied, true);
+  const claude = { ...cardOrder, product: 'Claude Pro', cardTypeId: 'card-type-vccwc999' };
+  assert.equal(deriveCardIssueFee(claude, null, [], { usageCount: 0 }).applied, true);
+  assert.equal(deriveCardIssueFee({ ...claude, cardTypeId: 'card-type-real' }, null, [], { usageCount: 0 }), undefined);
   const payment = { kind: 'payment', cardId: cardOrder.cardId };
   assert.equal(deriveCardIssueFee(cardOrder, null, [{ id: 'old', financialEvidence: [payment] }], { usageCount: 0 }).applied, false);
   assert.equal(deriveCardIssueFee(cardOrder, null, [], { usageCount: 2 }).pending, true);

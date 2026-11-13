@@ -600,6 +600,25 @@ export function verifyBusinessDocumentPayloads(databasePath, key) {
   }
 }
 
+export function readBusinessAuditDocuments(databasePath, key) {
+  const db = new DatabaseSync(databasePath, { readOnly: true, timeout: 4000 });
+  const domains = { inventory: 'inventory', commerce: 'commerce', appleBalance: 'appleBalance',
+    expenseReceipts: orderExpenseDomain };
+  try {
+    const rows = db.prepare('SELECT domain, version, payload FROM business_document WHERE domain IN (?, ?, ?, ?)')
+      .all(...Object.values(domains));
+    const byDomain = new Map(rows.map(row => [row.domain, row]));
+    return Object.fromEntries(Object.entries(domains).map(([name, domain]) => {
+      const row = byDomain.get(domain);
+      return [name, row
+        ? { version: row.version, data: decrypt(key, domain, row.version, row.payload) }
+        : { version: 0, data: null }];
+    }));
+  } finally {
+    db.close();
+  }
+}
+
 function checkDomain(domain) {
   if (!allowedDomains.has(domain)) throw new LocalDataError(404, '没有这个本机数据模块');
 }
@@ -1149,6 +1168,10 @@ export function createLocalBusinessStore(databasePath) {
         if (result.imported) {
           const error = checkRegistrationChanges(current.data, inventory, 'inventory_claude_history_import');
           if (error) throw new LocalDataError(409, error);
+          const imported = new Set(inventory.accounts.filter(row => row.importId === result.batchId).map(row => row.id));
+          const usage = inspectInventoryUsage(inventory, readDocument('commerce').data, time.getTime());
+          applyInventoryUsage(new Map([...usage].filter(([, match]) => imported.has(match.evidence.accountId))),
+            actor, time, inventory);
           const version = current.version + 1;
           put.run('inventory', version, encrypt(key, 'inventory', version, JSON.stringify(inventory)));
           log.run(time.toISOString(), 'inventory', 'inventory_claude_history_import',
@@ -2092,7 +2115,7 @@ export function createLocalBusinessStore(databasePath) {
                     throw new LocalDataError(503, '银行卡完整资料未能核对，请刷新重试或手动填写');
                   row.paymentId = card.last4;
                   retainOrderCardNumber(row, prior, card);
-                  if (!hasBankPayment(prior) && (row.product === 'GPT' || personalProduct(row.product))) {
+                  if (!hasBankPayment(prior)) {
                     const fee = deriveCardIssueFee(row, prior, [...oldOrders, ...settledThisWrite], card);
                     if (fee) row.issueFeeSnapshot = fee;
                     else delete row.issueFeeSnapshot;
@@ -2202,15 +2225,19 @@ export function createLocalBusinessStore(databasePath) {
           if (relayIntake) {
             for (const id of matches.keys()) if (!relayIntake.aliasIds.has(id)) matches.delete(id);
           } else if (inventoryWrite?.action !== 'inventory_reconcile_usage') {
+            const originalMailboxes = new Map((priorInventory?.mailboxes || []).map(asset => [asset.id, asset]));
             for (const [id, match] of matches) {
               const prior = priorUsage.get(id);
+              if (match.evidence.kind === 'registration' && match.status === 'used' &&
+                  !originalMailboxes.get(id)?.usageLinks?.some(link => link.kind === 'registration' && link.accountId === match.evidence.accountId))
+                continue;
               if (prior?.status === 'used' && !returnedBatches.has(match.claim?.batch.id) &&
                 prior.evidence.accountId === match.evidence.accountId &&
                 prior.evidence.orderId === match.evidence.orderId &&
                 prior.evidence.registrationId === match.evidence.registrationId) matches.delete(id);
             }
           }
-          const usageChanged = applyInventoryUsage(matches, actor, new Date(now));
+          const usageChanged = applyInventoryUsage(matches, actor, new Date(now), next);
           if (usageChanged && inventoryWrite) {
             const priorAccountIds = new Set((priorInventory?.accounts || []).map(row => row.id));
             const newAccounts = new Map(next.accounts.filter(row => !priorAccountIds.has(row.id)).map(row => [row.id, row]));
@@ -2544,7 +2571,7 @@ export function createLocalBusinessStore(databasePath) {
         versions[scope] = version(`${scope}:${actor.id}`);
       if (['admin', 'super'].includes(actor.role)) {
         for (const scope of ['settings', 'appleBalance', 'tenant-cards', 'recharge-codes', 'order-sync', 'finance-rates',
-          cardTypeDocument, cardFreezeDocument, subscriptionDomain]) versions[scope] = version(scope);
+          cardTypeDocument, cardFreezeDocument, subscriptionDomain, orderExpenseDomain]) versions[scope] = version(scope);
         versions['system-monitoring'] = `${version('system-monitoring-config')}:${version('system-monitoring-state')}`;
         versions['tools/mailbox-pool'] = version(managedMailboxDomain);
         versions['tools/mailbox-delivery'] = version(claudeGoogleCopyDomainPrefix + actor.id);

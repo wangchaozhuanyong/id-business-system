@@ -1612,6 +1612,7 @@
     correctRefund,
     receiveRefund,
     ready,
+    readFailed: () => loadState === 'error',
     ensureReady,
     applyCommittedBalance,
     refreshLocalBalance,

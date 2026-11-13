@@ -18,6 +18,29 @@ export function isStockRegistration(account) {
     account.source !== '客户提供' && !['客户自有', 'customer'].includes(account.accountSource));
 }
 
+export function isMailboxRegistration(account) {
+  return isStockRegistration(account) && account.acquisitionMethod !== 'purchased' &&
+    !['线上购买', '网上购买'].includes(account.source);
+}
+
+const mailboxTypes = new Map([
+  ['google', 'google'], ['谷歌邮箱', 'google'],
+  ['relay', 'relay'], ['苹果隐藏邮箱', 'relay'],
+  ['microsoft', 'microsoft'], ['微软邮箱', 'microsoft']
+]);
+
+export function registrationMailboxCandidates(account, mailboxes, recordedSourceId) {
+  if (!isMailboxRegistration(account)) return [];
+  const type = mailboxTypes.get(account.emailType);
+  const sourceId = account.sourceMailboxId || recordedSourceId;
+  return mailboxes.filter(row => {
+    if (row.relayDeleted || row.deleted || !['google', 'relay'].includes(row.type) ||
+        registrationEmail(row.email) !== registrationEmail(account.email) ||
+        (account.type === 'gemini' && row.type !== 'google')) return false;
+    return sourceId ? row.id === sourceId : !account.emailType || row.type === type;
+  });
+}
+
 export function registrationOccupancy(inventory) {
   const accounts = new Map(list(inventory?.accounts).filter(isStockRegistration).map(row => [row.id, row]));
   const mailboxes = new Map(list(inventory?.mailboxes).map(row => [row?.id, row]));
@@ -31,9 +54,9 @@ export function registrationOccupancy(inventory) {
     byEmail.get(email).push(fact);
   }
   for (const account of accounts.values()) {
-    if (account.acquisitionMethod && !account.sourceMailboxId &&
-        !records.some(record => record.accountId === account.id && record.state === '成功')) continue;
-    add(account.email, { product: account.type, accountId: account.id, key: `account:${account.id}` });
+    if (!isMailboxRegistration(account)) continue;
+    add(account.email, { product: account.type, accountId: account.id,
+      ...(account.sourceMailboxId && { assetId: account.sourceMailboxId }), key: `account:${account.id}` });
   }
   for (const record of records) {
     if (!['成功', '待核对'].includes(record?.state)) continue;
@@ -90,7 +113,6 @@ export function checkRegistrationChanges(previous, next, action, actor) {
   const mailboxes = new Map(list(next.mailboxes).map(row => [row?.id, row]));
   const oldMailboxes = new Map(list(previous?.mailboxes).map(row => [row?.id, row]));
 
-
   const addresses = types => new Set([...mailboxes.values()].filter(row => types.includes(row?.type))
     .map(row => registrationEmail(row.email)));
   const googleEmails = addresses(['google']);
@@ -125,7 +147,8 @@ export function checkRegistrationChanges(previous, next, action, actor) {
   for (const [email, facts] of after) {
     const existing = before.get(email) || [];
     const newFacts = facts.filter(fact => !existing.some(prior => prior.key === fact.key &&
-      prior.product === fact.product && prior.accountId === fact.accountId && prior.pending === fact.pending));
+      prior.product === fact.product && prior.accountId === fact.accountId && prior.assetId === fact.assetId &&
+      prior.pending === fact.pending));
     if (!newFacts.length) continue;
     for (const fact of newFacts) {
       const account = fact.accountId && accounts.get(fact.accountId);
@@ -136,9 +159,9 @@ export function checkRegistrationChanges(previous, next, action, actor) {
         return 'Gemini 请使用谷歌邮箱';
       if (account?.type === 'gemini' && (account.sourceMailboxId
         ? mailboxes.get(account.sourceMailboxId)?.type !== 'google'
-        : !account.acquisitionMethod && (['relay', '苹果隐藏邮箱'].includes(account.emailType) ||
+        : isMailboxRegistration(account) && (['relay', '苹果隐藏邮箱'].includes(account.emailType) ||
           (otherEmails.has(email) && !googleEmails.has(email))))) return 'Gemini 请使用谷歌邮箱';
-      if (!fact.assetId && account?.sourceMailboxId &&
+      if (fact.key.startsWith('account:') && account?.sourceMailboxId &&
           registrationEmail(mailboxes.get(account.sourceMailboxId)?.email) !== email)
         return '来源邮箱编号与注册邮箱不一致';
     }

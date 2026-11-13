@@ -3,6 +3,7 @@
   'use strict';
 
   const api = window.IDDesignAPI;
+  const operationalStatus = asset => window.IDOrderOpening?.inventoryOperationalStatus?.(asset) ?? (asset.status || '正常');
   const {
     esc,
     icon,
@@ -774,7 +775,7 @@
   function claudeReadiness(asset) {
     if (asset.health === 'dead') return tag('死号', 'warning');
     if (historicallyOpened(asset)) return tag('历史已开通', 'success');
-    if (asset.health !== 'normal' || asset.status !== '正常' || usageReview.has(asset.id)) return tag('资料待核对', 'warning');
+    if (asset.health !== 'normal' || operationalStatus(asset) !== '正常' || usageReview.get(asset.id)?.status === 'review') return tag('资料异常', 'warning');
     if (asset.inventoryState === 'used') return tag('已使用', 'success');
     if (asset.inventoryState === 'claimed') return tag('已提取', 'warning');
     const hours = age(asset);
@@ -791,7 +792,7 @@
       asset.inventoryState === 'available' &&
       !usageReview.has(asset.id) &&
       asset.health === 'normal' &&
-      asset.status === '正常' &&
+      operationalStatus(asset) === '正常' &&
       (asset.type !== 'claude' || (age(asset) !== null && age(asset) >= claudeAgingHours()))
     );
   }
@@ -803,7 +804,7 @@
       claim.item.assetId === asset.id && claim.batch.id === asset.claimBatchId &&
       claim.batch.actorId === currentActor().id &&
       (!claim.batch.purpose || ['客户交付', '业务备用'].includes(claim.batch.purpose)) &&
-      asset.health === 'normal' && asset.status === '正常' &&
+      asset.health === 'normal' && operationalStatus(asset) === '正常' &&
       (asset.type !== 'claude' || (age(asset) ?? -1) >= claudeAgingHours()) &&
       !returnBlock(asset, claim.batch, claim.item, true) && !claim.item.orderId;
   }
@@ -1457,8 +1458,8 @@
       batches.filter((batch) => batch.kind === kind && ownerAllowed(batch)), batch => batch.time
     ).slice(0, 5);
     const availableCounts = list
-      .map(([type, label]) => `<span>${esc(label)} <strong>${type === 'relay' && localData
-        ? '提交时核对'
+      .map(([type, label]) => `<span>${esc(label)} <strong${type === 'relay' && localData ? ' data-inventory-relay-available' : ''}>${type === 'relay' && localData
+        ? relayOverview?.available ?? '—'
         : collection(kind).filter((asset) => asset.type === type && available(asset)).length}</strong></span>`)
       .join('');
     return (
@@ -3829,6 +3830,49 @@
       !reservations.has(asset.id)
     );
   }
+  async function eligibleRelayIds({ limit = Infinity, current = () => true } = {}) {
+    const status = await localData.relay('status');
+    if (!current()) return;
+    if (!status.codeQueryConfigured) throw new Error('请先接入独立 Vendure 收件与查询服务');
+    const bound = new Set(status.aliasIds || []);
+    const ids = mailboxes.filter(asset => bound.has(asset.id) && localRelayCandidate(asset)).map(asset => asset.id);
+    const eligibleIds = [];
+    for (let offset = 0; offset < ids.length && eligibleIds.length < limit; offset += 100) {
+      const aliasIds = ids.slice(offset, offset + 100);
+      const { items } = await localData.relay('extraction-eligibility', { aliasIds });
+      if (!current()) return;
+      const eligible = new Set(items.filter(item => item.eligible === true).map(item => item.id));
+      eligibleIds.push(...aliasIds.filter(id => eligible.has(id)));
+    }
+    return eligibleIds;
+  }
+
+  let relayOverview, relayAvailabilityRead;
+  function refreshRelayOverview() {
+    if (!localData?.relay || !admin()) return;
+    const actor = currentActor().id;
+    if (relayOverview?.actor !== actor) relayOverview = { actor };
+    const snapshot = relayOverview;
+    const version = localInventoryVersion;
+    if (relayAvailabilityRead?.actor === actor && relayAvailabilityRead.version === version)
+      return relayAvailabilityRead.promise;
+    const current = () => currentActor().id === actor && localInventoryVersion === version;
+    const request = { actor, version };
+    request.promise = eligibleRelayIds({ current }).then(ids => {
+      if (ids && current()) Object.assign(snapshot, { available: ids.length, checkedAt: new Date().toISOString(), availabilityStale: false });
+    }).catch(() => { if (current()) snapshot.availabilityStale = true; }).finally(() => {
+      if (relayAvailabilityRead === request) relayAvailabilityRead = undefined;
+      if (!current()) return;
+      const output = document.querySelector?.('[data-inventory-relay-available]');
+      if (output) {
+        output.textContent = snapshot.available ?? '—';
+        output.title = snapshot.availabilityStale ? '隐藏邮箱检查暂时不可用' : '';
+      }
+    });
+    relayAvailabilityRead = request;
+    return request.promise;
+  }
+
   async function reviewRelayExtraction(form, values, quantity, purpose) {
     if (relayExtractionPending) return;
     relayExtractionPending = true;
@@ -3845,26 +3889,8 @@
       submit.textContent = '正在核对隐藏邮箱';
     }
     try {
-      const status = await localData.relay('status');
-      if (!current()) return;
-      if (!status.codeQueryConfigured) {
-        api.setError('inventory-quantity', '请先接入独立 Vendure 收件与查询服务');
-        return;
-      }
-      const bound = new Set(status.aliasIds || []);
-      const ids = mailboxes
-        .filter((asset) => bound.has(asset.id) && localRelayCandidate(asset))
-        .map((asset) => asset.id);
-      const chosen = [];
-      for (let offset = 0; offset < ids.length && chosen.length < quantity; offset += 100) {
-        const aliasIds = ids.slice(offset, offset + 100);
-        const { items } = await localData.relay('extraction-eligibility', { aliasIds });
-        if (!current()) return;
-        const eligible = new Set(
-          items.filter((item) => item.eligible === true).map((item) => item.id)
-        );
-        chosen.push(...aliasIds.filter((id) => eligible.has(id)));
-      }
+      const chosen = await eligibleRelayIds({ limit: quantity, current });
+      if (!chosen) return;
       if (chosen.length < quantity) {
         api.setError(
           'inventory-quantity',
@@ -5312,11 +5338,26 @@
       const matched = readInventoryIndex().byIdentity.get(type)?.get(String(email || '').trim().toLowerCase());
       return matched ? accountSummaries.get(matched.id) : null;
     },
+    claudeOrderAccountIssue(order) {
+      const identity = String(order.email || '').trim().toLowerCase();
+      if (!identity || ['客户自有', 'customer'].includes(order.accountSource)) return '';
+      const { accountsById, byIdentity } = readInventoryIndex();
+      const asset = order.accountId ? accountsById.get(order.accountId) : byIdentity.get('claude')?.get(identity);
+      if (asset?.type !== 'claude' || identityKey(asset) !== identity ||
+          (order.platformAccountId && asset.platformAccountId && order.platformAccountId !== asset.platformAccountId)) return '';
+      if (asset.health === 'dead' || (!asset.health && (asset.status === '死号' || asset.claudeHistory?.phase === 'dead')))
+        return '死号';
+      if (asset.health === 'unlocking' || (!asset.health && asset.status === '解封中')) return '解封中';
+      if (asset.status === '封控中') return '封控中';
+      return operationalStatus(asset) === '冻结' ? '冻结' : '';
+    },
     usageReviewButton,
     usageReviewFor: (id) => usageReview.get(id),
-    refreshOverview() {
+    async refreshOverview() {
       initialize();
-      return localData ? readLocalInventory({ keepContent: localInventoryState === 'ready' }) : Promise.resolve(false);
+      if (!localData || !await readLocalInventory({ keepContent: localInventoryState === 'ready' })) return false;
+      await refreshRelayOverview();
+      return true;
     },
     overviewSummary() {
       if (!localData || localInventoryState !== 'ready') return null;
@@ -5324,18 +5365,26 @@
       for (const type of ['google', 'relay', 'microsoft', ...stockTypes.map(([id]) => id)]) {
         const assets = (stockType(type) ? accounts : mailboxes)
           .filter(asset => asset.type === type && !asset.relayDeleted).map(normalize);
-        const issues = { dead: 0, unlocking: 0, disabled: 0, frozen: 0, restricted: 0, review: 0 };
+        const issues = { dead: 0, unlocking: 0, disabled: 0, frozen: 0, restricted: 0, aging: 0, registrationTime: 0, review: 0 };
         for (const asset of assets) {
           if (asset.health === 'dead' || asset.health === 'unlocking') issues[asset.health]++;
           else if (type === 'relay' && asset.relayStatus === 'DISABLED') issues.disabled++;
-          else if (asset.status === '冻结') issues.frozen++;
+          else if (operationalStatus(asset) === '冻结') issues.frozen++;
           else if (asset.status === '封控中') issues.restricted++;
-          else if (asset.health !== 'normal' || asset.status !== '正常' || usageReview.has(asset.id)) issues.review++;
+          else if (asset.health !== 'normal' || operationalStatus(asset) !== '正常' || usageReview.get(asset.id)?.status === 'review') issues.review++;
+          else if (type === 'claude' && asset.inventoryState === 'available' && !historicallyOpened(asset)) {
+            const hours = age(asset);
+            if (hours === null) issues.registrationTime++;
+            else if (hours < claudeAgingHours()) issues.aging++;
+          }
         }
         stocks[type] = {
           registered: assets.length,
-          available: ['relay', 'microsoft'].includes(type) ? null : assets.filter(available).length,
-          claimed: type === 'microsoft' ? null : assets.filter(asset => asset.inventoryState === 'claimed').length,
+          available: type === 'relay' ? relayOverview?.available ?? null :
+            type === 'microsoft' ? null : assets.filter(asset => available(asset)).length,
+          used: assets.filter(asset => displayInventoryState(asset) === 'used' || usageReview.get(asset.id)?.status === 'used').length,
+          claimed: type === 'microsoft' ? null : assets.filter(asset => asset.inventoryState === 'claimed' && usageReview.get(asset.id)?.status !== 'used').length,
+          ...(type === 'relay' && relayOverview && { checkedAt: relayOverview.checkedAt, availabilityStale: relayOverview.availabilityStale }),
           issues
         };
       }
@@ -5591,10 +5640,16 @@
     onInput,
     preserveDraft: saveDrafts,
     onDataChanges(scopes) {
+      if (api.state.route === 'workspace/mail-extract' && scopes.some(scope => ['inventory', 'apple-relay'].includes(scope)))
+        void refreshRelayOverview();
       if (scopes.some(scope => ['inventory', 'tools/mailbox-pool'].includes(scope))) return refreshGooglePool(true);
     },
     afterRender({ routeChanged } = {}) {
-      if (routeChanged) void refreshGooglePool();
+      if (routeChanged) {
+        void refreshGooglePool();
+        if (api.state.route === 'workspace/mail-extract' && canExtractLocalRelay())
+          void readLocalInventory({ keepContent: true }).then(ready => ready && refreshRelayOverview());
+      }
       const form = document.querySelector('form[data-inventory-draft]');
       const saved = form && api.state.drafts.get(form.dataset.inventoryDraft);
       if (saved)

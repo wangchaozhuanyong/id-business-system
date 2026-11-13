@@ -36,7 +36,7 @@ async function readBody(request) {
 
 function buildReceipt(input, snapshot, orders, actor, now) {
   const keys = ['category', 'chargedOn', 'source', 'reference', 'amount', 'currency',
-    'settlementAmount', 'settlementCurrency', 'orderNo'];
+    'settlementAmount', 'settlementCurrency', 'orderNo', 'accountingMode'];
   if (!input || typeof input !== 'object' || Array.isArray(input) ||
       Object.keys(input).some(key => !keys.includes(key))) throw invalid('凭据资料无效');
   const { category, chargedOn, amount, currency, settlementAmount = '', settlementCurrency = '' } = input;
@@ -81,9 +81,9 @@ function accountForReceipt(row, mode, items, orders, actor, now) {
     if (items.some(item => item.id !== row.id && !item.voidedAt &&
         item.accountingMode === mode && item.accountingCardId === term.cardId))
       throw invalid('原付款卡已有一笔计入核算的发卡凭据', 409);
-    const original = buildCardIssueAllocations(orders, { clock: now }).get(order.id);
-    if (original?.status !== 'ready') throw invalid('请先核对该卡开通记录及原开卡费分摊', 409);
     checked.accountingCardId = term.cardId;
+    const allocation = buildCardIssueAllocations(orders, { clock: now, expenseReceipts: [checked] }).get(order.id);
+    if (allocation?.status !== 'ready') throw invalid('缺少该卡成功开通或原付款卡记录', 409);
   }
   return checked;
 }
@@ -117,7 +117,10 @@ export function createOrderExpenseHandler({ store, publicOrigin, clock = Date.no
       const now = clock();
       let changed, next;
       if (action === 'record') {
-        changed = buildReceipt(command.entry, items, store.load('commerce').data?.orders || [], actor, now);
+        const orders = store.load('commerce').data?.orders || [];
+        changed = buildReceipt(command.entry, items, orders, actor, now);
+        const mode = command.entry.accountingMode;
+        if (mode && mode !== 'cash') changed = accountForReceipt(changed, mode, items, orders, actor, now);
         next = [changed, ...items];
       } else {
         const row = items.find(item => item.id === command.id && !item.voidedAt);

@@ -180,7 +180,7 @@ test('共享用卡计入真实开通笔数，实际总成本沿用已核对的�
   assert.equal(allocation.get(a.id).count, 3);
   const claude = compute(b, allocation);
   assert.equal(claude.items.find((item) => item.label === '开卡成本分摊').originalAmount, '0.1667');
-  assert.deepEqual(claude.items.slice(-3).map((item) => item.label), ['代付服务费', 'KYC 认证成本', '补充邮箱成本']);
+  assert.deepEqual(claude.items.slice(-3).map((item) => item.label), ['支付比例手续费', '每笔固定手续费', '补充邮箱成本']);
   const actual = compute(c, allocation);
   assert.equal(actual.cardIssue.amountUsd, '0.1666');
   assert.equal(actual.basis, 'actual');

@@ -71,6 +71,8 @@ const inventoryFixture = {
     { id: 'b', type: 'google', inventoryState: 'claimed' },
     { id: 'c', type: 'relay', health: 'dead', relayStatus: 'DISABLED' },
     { id: 'relay-disabled', type: 'relay', relayStatus: 'DISABLED' },
+    { id: 'relay-free', type: 'relay', relayStatus: 'ACTIVE' },
+    { id: 'relay-used', type: 'relay', relayStatus: 'ACTIVE', inventoryState: 'used' },
     { id: 'd', type: 'microsoft' }
   ],
   accounts: [
@@ -100,6 +102,14 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
       viewport: { width, height: 1000 }, timezoneId: 'America/Los_Angeles', hasTouch
     });
     const intercepted = await interceptDesign(context, { localFixtures, actor, changeEvents });
+    if (actor?.role !== 'employee') {
+      await context.route('**/api/local/apple-relay/status', route => route.fulfill({ json: {
+        configured: true, codeQueryConfigured: true, aliasIds: ['relay-free', 'relay-used']
+      } }));
+      await context.route('**/api/local/apple-relay/extraction-eligibility', route => route.fulfill({
+        json: { items: route.request().postDataJSON().aliasIds.map(id => ({ id, eligible: true })) }
+      }));
+    }
     const page = await context.newPage();
     await page.clock.setFixedTime(clock);
     page.setDefaultTimeout(6000);
@@ -126,7 +136,7 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     await page.locator('#main[data-layout-route="' + route + '"]').waitFor();
   };
   const checkTransport = ({ requests, errors, intercepted }) => {
-    assert.deepEqual(requests.filter(request => !['GET', 'HEAD'].includes(request.method)), []);
+    assert.deepEqual(requests.filter(request => !['GET', 'HEAD'].includes(request.method) && request.path !== '/api/local/apple-relay/extraction-eligibility'), []);
     assert.deepEqual(intercepted.external, []);
     assert.deepEqual(intercepted.unavailable, []);
     assert.deepEqual(errors, []);
@@ -246,7 +256,7 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
         if (page.viewportSize().width <= 900) assert(control.height >= 44, '手机客户入口触控高度');
       }
     }
-    assert(geometry.columns.every(columns => columns === 10), '每行保留类型及九项独立统计，不能合并状态列');
+    assert(geometry.columns.every(columns => columns === 13), '每行保留类型和各项独立库存统计');
     assert.deepEqual(geometry.clipped, [], '表格标题和实际文字不得裁切');
     assert(geometry.viewport.top - geometry.help.bottom >= 8, '说明按钮与表头分隔线保持间距');
     if (geometry.scrolls) {
@@ -316,17 +326,17 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     assert.match(await tip.innerText(), /2026-11-04/);
     await page.keyboard.press('Escape');
     assert(await tip.isHidden());
-    await trend(page, '已核算利润').click();
+    await trend(page, '自动计算利润').click();
     assert(await tip.isHidden(), '切换指标后不显示旧提示');
     await hover(points.nth(5));
-    assert.match(await tip.innerText(), /2026-11-09（北京时间）\s+利润待核算\s+已核算：0 笔\s+待核算：2 笔/);
+    assert.match(await tip.innerText(), /2026-11-09（北京时间）\s+利润计算缺项\s+已核算：0 笔\s+计算缺项：2 笔/);
     assert.doesNotMatch(await tip.innerText(), /0\.00 CNY/);
     await hover(points.last());
-    assert.match(await tip.innerText(), /已核算利润：68\.24 CNY\s+已核算：1 笔\s+待核算：0 笔/);
+    assert.match(await tip.innerText(), /自动计算利润：68\.24 CNY\s+已核算：1 笔\s+计算缺项：0 笔/);
     await range(page, '今日').click();
     assert(await tip.isHidden());
     await hover(points.nth(9));
-    assert.match(await tip.innerText(), /2026-11-10 09:00（北京时间）\s+已核算利润：68\.24 CNY/);
+    assert.match(await tip.innerText(), /2026-11-10 09:00（北京时间）\s+自动计算利润：68\.24 CNY/);
     for (const width of [1440, 390, 320]) {
       await page.setViewportSize({ width, height: 1000 });
       for (const theme of ['light', 'dark']) {
@@ -347,7 +357,7 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     const statistics = page.locator('.statistics-visual [data-chart-point]').first();
     await statistics.waitFor();
     await statistics.focus();
-    assert.match(await page.locator('.statistics-visual [role="tooltip"]').innerText(), /已核算.*待核算/);
+    assert.match(await page.locator('.statistics-visual [role="tooltip"]').innerText(), /已计算.*计算缺项/);
     await page.keyboard.press('Escape');
     assert(await page.locator('.statistics-visual [role="tooltip"]').isHidden());
     await go(page, 'overview');
@@ -372,7 +382,7 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
       await mobile.locator('#overview-trend').tap();
       assert(await tooltip.isHidden(), '触屏点按外部关闭');
       await point.tap({ position: { x: 2, y: 150 } });
-      await trend(mobile, '已核算利润').tap();
+      await trend(mobile, '自动计算利润').tap();
       assert(await tooltip.isHidden());
       await point.tap({ position: { x: 2, y: 150 } });
       assert.match(await tooltip.innerText(), /68\.24 CNY/);
@@ -381,13 +391,16 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     }
   });
 
-  await t.test('区间边界、多币种、待核算、明细和分区失败', async () => {
+  await t.test('区间边界、多币种、计算缺项、明细和分区失败', async () => {
     const session = await open();
     const { page, context } = session;
     let commerce = structuredClone(commerceFixture);
     let inventory = inventoryFixture;
     let slowCommerce;
     let failed = new Set();
+    await page.route('**/api/local/apple-relay/extraction-eligibility', route => failed.has('relay')
+      ? route.fulfill({ status: 503, json: {} })
+      : route.fulfill({ json: { items: route.request().postDataJSON().aliasIds.map(id => ({ id, eligible: true })) } }));
     const serve = (scope, read) => page.route('**/api/local/' + scope, async route => {
       if (scope === 'commerce' && slowCommerce) await slowCommerce.promise;
       return failed.has(scope) ? route.fulfill({ status: 503, json: {} })
@@ -412,8 +425,8 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     assert.deepEqual(await metric(page, 'receipts').locator('dd strong').allTextContents(), ['250.00', '0.43']);
     assert.match(await metric(page, 'receipts').innerText(), /退款 50.00 CNY · 1.2345 MYR/);
     assert.equal(await value(page, 'profit'), '68.24');
-    assert.match(await metric(page, 'profit').innerText(), /环比待核算 · 上期待核算 1 笔/);
-    assert.match(await metric(page, 'profit').innerText(), /已核算 1 笔 · 待核算 2 笔/);
+    assert.match(await metric(page, 'profit').innerText(), /环比资料不足 · 上期计算缺项 1 笔/);
+    assert.match(await metric(page, 'profit').innerText(), /已计算 1 笔 · 计算缺项 2 笔/);
     assert.match(await metric(page, 'profit').innerText(), /含参考核算 1 笔/);
     const receiptsProgress = page.locator('[data-overview-progress-group="receipts"]');
     assert.equal(await receiptsProgress.locator('progress').getAttribute('value'), '3');
@@ -428,12 +441,17 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     assert.deepEqual(await productRows.nth(1).locator('td').allTextContents(), ['1', '33.3%', '—', '1']);
     const stock = page.locator('.overview-stock-table tbody tr');
     assert.deepEqual(await page.locator('.overview-stock-table thead th').allTextContents(),
-      ['类型', '已登记', '可提取', '已领用', '死号', '解封中', '邮箱停用', '冻结', '封控中', '资料待核对']);
-    assert.deepEqual(await stock.first().locator('td').allTextContents(), ['2', '1', '1', '0', '0', '—', '0', '0', '0']);
-    assert.deepEqual(await stock.nth(1).locator('td').allTextContents(), ['1', '—', '—', '0', '0', '—', '0', '0', '0']);
-    assert.deepEqual(await stock.nth(2).locator('td').allTextContents(), ['2', '提取时核验', '0', '1', '0', '1', '0', '0', '0']);
+      ['类型', '已登记', '可提取', '已使用', '已领用', '死号', '解封中', '邮箱停用', '冻结', '封控中', '养号中', '缺登记时间', '资料异常']);
+    assert.deepEqual(await stock.first().locator('td').allTextContents(), ['2', '1', '0', '1', '0', '0', '—', '0', '0', '0', '0', '0']);
+    assert.deepEqual(await stock.nth(1).locator('td').allTextContents(), ['1', '—', '0', '—', '0', '0', '—', '0', '0', '0', '0', '0']);
+    assert.deepEqual(await stock.nth(2).locator('td').allTextContents(), ['4', '1', '1', '0', '1', '0', '1', '0', '0', '0', '0', '0']);
+    failed.add('relay');
+    await page.getByRole('button', { name: '刷新数据', exact: true }).click();
+    await page.getByText(/隐藏邮箱检查暂时不可用/).waitFor();
+    assert.equal(await stock.nth(2).locator('[data-stock-column="available"]').innerText(), '1');
+    failed.clear();
     const claudeStock = stock.filter({ has: page.getByRole('link', { name: 'Claude 账号', exact: true }) });
-    const claudeCounts = ['6', '0', '0', '1', '1', '—', '1', '1', '1'];
+    const claudeCounts = ['6', '0', '1', '0', '1', '1', '—', '1', '1', '1', '0', '1'];
     assert.deepEqual(await claudeStock.locator('td').allTextContents(), claudeCounts);
     assert.equal(await claudeStock.locator('[data-stock-column="dead"] .tag.danger').innerText(), '1');
     const customerPanel = page.locator('[aria-labelledby="overview-customers"].panel');
@@ -451,7 +469,7 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     assert.equal(await value(page, 'orders'), '1');
     assert.match(await metric(page, 'orders').innerText(), /较上期持平/);
     assert.equal(await value(page, 'customers'), '1');
-    assert.match(await metric(page, 'profit').innerText(), /上期待核算 1 笔/);
+    assert.match(await metric(page, 'profit').innerText(), /上期计算缺项 1 笔/);
     assert.deepEqual(await taskCounts(), beforeTasks);
     assert.equal(await page.locator('.overview-chart-data g').count(), 11);
     await settle(page);
@@ -460,7 +478,7 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     await detail.getByText('查看每小时数据', { exact: true }).click();
     assert.match(await detail.locator('li').first().innerText(), /00:00\s+订单 0 笔 · 撤单 1 笔/);
     assert.match(await detail.locator('li').last().innerText(), /10:00/);
-    await trend(page, '已核算利润').click();
+    await trend(page, '自动计算利润').click();
     assert.equal(await detail.getAttribute('open'), '');
     assert.match(await detail.innerText(), /09:00\s+68.24 CNY/);
     await go(page, 'customers/new');
@@ -468,7 +486,7 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     await go(page, 'overview');
     await refreshed(page);
     assert.equal(await range(page, '今日').getAttribute('aria-pressed'), 'true');
-    assert.equal(await trend(page, '已核算利润').getAttribute('aria-pressed'), 'true');
+    assert.equal(await trend(page, '自动计算利润').getAttribute('aria-pressed'), 'true');
     await go(page, 'customers/new');
     assert.equal(await page.locator('#commerce-contact-name').inputValue(), '总览切页保留测试');
     await go(page, 'overview');
@@ -498,7 +516,8 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     await refreshed(page);
     assert.equal(await value(page, 'orders'), '2');
     assert.equal(await value(page, 'profit'), '68.24');
-    assert.match(await metric(page, 'profit').innerText(), /读取失败 · 保留/);
+    assert.match(await metric(page, 'profit').innerText(), /计算缺项 1 笔/);
+    assert.match(await metric(page, 'profit').innerText(), /Apple 回款读取失败，利润按现有资料计算。/);
     assert.match(await page.locator('.overview-task-list').innerText(), /苹果待回款\s+读取失败 · 保留/);
     failed.clear();
 
@@ -527,7 +546,7 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     assert.match(await metric(page, 'profit').innerText(), /含参考核算 2 笔/);
     assert.equal(await page.locator('.overview-bar-loss').count(), 1);
     await page.locator('.overview-bar-loss').locator('..').focus();
-    assert.match(await page.locator('#overview-trend-tooltip').innerText(), /已核算利润：-119\.96 CNY/);
+    assert.match(await page.locator('#overview-trend-tooltip').innerText(), /自动计算利润：-119\.96 CNY/);
     await page.keyboard.press('Escape');
     await page.getByRole('link', { name: '查看订单统计', exact: true }).click();
     await page.getByRole('heading', { name: '订单统计', exact: true }).waitFor();
@@ -543,7 +562,7 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     await drawer.waitFor({ state: 'hidden' });
     const known = await page.evaluate(() => window.IDDesignAPI.navigation.flatMap(group => group[2].map(item => '#/' + item[1])));
     for (const href of await page.locator('.website-overview a').evaluateAll(nodes => nodes.map(node => node.getAttribute('href'))))
-      assert(known.includes(href), '无对应业务页的链接 ' + href);
+      assert(known.includes(href.split('?')[0]), '无对应业务页的链接 ' + href);
 
     for (const width of [2048, 1721, 1720, 1719, 1440, 1151, 1150, 1024, 901, 900, 768, 560, 390, 320]) {
       await page.setViewportSize({ width, height: 1000 });
@@ -721,8 +740,8 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     await page.waitForFunction(() => document.querySelector('#overview-toolbar-status')?.textContent.includes('读取失败'));
     const stock = page.locator('.overview-stock-table tbody tr');
     await page.locator('section[aria-labelledby="overview-inventory"]').getByText('读取失败 · 可重试', { exact: true }).waitFor();
-    assert.deepEqual(await stock.first().locator('td').allTextContents(), Array(9).fill('—'));
-    assert.deepEqual(await stock.nth(2).locator('td').allTextContents(), Array(9).fill('—'));
+    assert.deepEqual(await stock.first().locator('td').allTextContents(), Array(12).fill('—'));
+    assert.deepEqual(await stock.nth(2).locator('td').allTextContents(), Array(12).fill('—'));
     assert.equal(await value(page, 'orders'), '—');
     assert.equal(await value(page, 'profit'), '—');
     assert.deepEqual(await page.locator('.overview-progress-counts dd').allTextContents(), Array(4).fill('—笔'));
@@ -733,8 +752,8 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     fail = false;
     await page.getByRole('button', { name: '刷新数据', exact: true }).click();
     await page.getByText('该时间范围没有订单记录', { exact: true }).waitFor();
-    assert.deepEqual(await stock.first().locator('td').allTextContents(), ['0', '0', '0', '0', '0', '—', '0', '0', '0']);
-    assert.deepEqual(await stock.nth(2).locator('td').allTextContents(), ['0', '提取时核验', '0', '0', '0', '0', '0', '0', '0']);
+    assert.deepEqual(await stock.first().locator('td').allTextContents(), ['0', '0', '0', '0', '0', '0', '—', '0', '0', '0', '0', '0']);
+    assert.deepEqual(await stock.nth(2).locator('td').allTextContents(), ['0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0', '0']);
     assert.equal(await value(page, 'orders'), '0');
     assert.equal(await value(page, 'receipts'), '0');
     assert.equal(await value(page, 'profit'), '0.00');
