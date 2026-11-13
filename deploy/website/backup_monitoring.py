@@ -15,6 +15,10 @@ FORMAL = ROOT / "formal"
 DIRECTORY = FORMAL / "backup-monitoring/receipts"
 RECHARGE = "id-business-independent-recharge-backup"
 SHEETS_WORKER = "id-business-independent-sheets-sync"
+SHEETS_INTEGRITY_CODES = {
+    "SHEETS_HEADER_MISMATCH", "SHEETS_TAB_MISSING", "SHEETS_TARGET_INVALID",
+    "SHEETS_TARGET_NOT_PRIVATE", "SHEETS_SOURCE_KEY_INVALID", "SHEETS_SOURCE_REPLACED",
+}
 
 
 def read_receipt(path, uid):
@@ -99,19 +103,22 @@ def sheets_fields(logs):
             rows, writes = value["rows"], value["writes"]
             if (type(writes) is int and writes >= 0 and isinstance(rows, dict) and len(rows) == 4
                     and all(type(count) is int and count >= 0 for count in rows.values())):
-                events.append((at, True))
-        elif value.get("status") == "retry" and set(value) == {"status", "code"}:
+                events.append((at, "verified"))
+        elif value.get("status") in ("retry", "integrity-failed") and set(value) == {"status", "code"}:
             if isinstance(value["code"], str) and re.fullmatch(r"[A-Z][A-Z0-9_]{3,70}", value["code"]):
-                events.append((at, False))
+                # Older workers log integrity errors as retries.
+                status = "integrity-failed" if value["code"] in SHEETS_INTEGRITY_CODES else value["status"]
+                events.append((at, status))
     if not events:
         return None
-    verified, failures = None, 0
-    for at, success in sorted(events, key=lambda event: event[0]):
-        if success:
-            verified, failures = at, 0
+    verified, failures, integrity = None, 0, False
+    for at, status in sorted(events, key=lambda event: event[0]):
+        if status == "verified":
+            verified, failures, integrity = at, 0, False
         else:
             failures = min(failures + 1, 7)
-    return {"at": at, "verifiedAt": verified, "failures": failures, "integrityFailure": False}
+            integrity = integrity or status == "integrity-failed"
+    return {"at": at, "verifiedAt": verified, "failures": failures, "integrityFailure": integrity}
 
 
 def collect_sheets(group):

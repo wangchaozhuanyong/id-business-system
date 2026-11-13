@@ -150,7 +150,7 @@ export function createMonitoringSources({ monitor, databasePath, externalProbe =
       readSheetsSyncStatus({
         workerDirectory: workerReports ? workerReceiptDirectory : undefined,
         collectorDirectory: backupReports ? backupReceiptDirectory : undefined,
-        now, readWorker: readReceipt, readCollector: readSheetsReceipt
+        now, startedAt, readWorker: readReceipt, readCollector: readSheetsReceipt
       }),
       backupReports && readBackupReceipt(backupReceiptDirectory)
     ]);

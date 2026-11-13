@@ -8,6 +8,50 @@ const actor = { id: 'synthetic-admin', name: '合成操作人', role: 'admin' };
 const fixturePath = new URL('../docs/audits/2026-11-06-design-review/visual-fixtures.json', import.meta.url);
 const plans = { GPT: 'Plus', Claude: 'Max 20x', Gemini: 'Google AI Pro', Grok: 'SuperGrok' };
 
+test('an older list response cannot hide a change in the first real-time snapshot', { timeout: 30_000 }, async t => {
+  const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
+  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
+  t.after(() => browser.close());
+  const context = await browser.newContext({ viewport: { width: 390, height: 850 } });
+  const fixtures = JSON.parse(await readFile(fixturePath, 'utf8'));
+  await interceptDesign(context, { localFixtures: fixtures, actor, changeEvents: true, skipRechargeAssets: true,
+    dataVersions: { 'subscription-management': '1' } });
+  await context.addInitScript(() => {
+    const fetchLocal = window.fetch.bind(window);
+    window.fetch = (input, options) => {
+      if (new URL(String(input), location.href).pathname !== '/api/local/change-events') return fetchLocal(input, options);
+      return Promise.resolve(new Response(new ReadableStream({ start(controller) {
+        window.sendInitialSnapshot = () => controller.enqueue(new TextEncoder().encode(
+          'event: snapshot\ndata: {"schema":1,"versions":{"subscription-management":"2"}}\n\n'));
+      } }), { headers: { 'Content-Type': 'text/event-stream' } }));
+    };
+  });
+  let reads = 0;
+  const first = Promise.withResolvers(), allowOlderReply = Promise.withResolvers();
+  await context.route('**/api/local/subscriptions/list', async route => {
+    const stale = ++reads === 1;
+    if (stale) { first.resolve(); await allowOlderReply.promise; }
+    await route.fulfill({ json: {
+      items: [{ id: 'sub-race', account: 'race@example.test', product: 'GPT',
+        ownerName: stale ? '旧归属' : '最新归属', series: [], history: [] }],
+      total: 1, counts: {}, scopeCounts: {}, page: 1, pageSize: 20,
+      revision: stale ? 'older' : 'current', now: '2026-11-13T12:00:00Z'
+    } });
+  });
+  const page = await context.newPage();
+  page.setDefaultTimeout(6_000);
+  await page.goto(origin + '/#/subscriptions/gpt');
+  await first.promise;
+  await page.waitForFunction(() => typeof window.sendInitialSnapshot === 'function');
+  try {
+    await page.evaluate(() => window.sendInitialSnapshot());
+    await page.locator('#subscription-list').getByText('最新归属', { exact: true }).waitFor({ state: 'attached' });
+  } finally { allowOlderReply.resolve(); }
+  await settle(page);
+  assert.equal(await page.locator('#subscription-list').getByText('旧归属', { exact: true }).count(), 0);
+  assert(reads >= 2);
+});
+
 test('四类订阅页面使用独立状态、真实复制入口与历史兼容路由', { timeout: 120_000 }, async t => {
   const runtime = process.env.ID_RECHARGE_QA_PLAYWRIGHT;
   const { chromium } = await import(runtime ? pathToFileURL(runtime).href : 'playwright');

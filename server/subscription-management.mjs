@@ -498,8 +498,22 @@ export function createSubscriptionHandler({ store, publicOrigin, readOwners = ()
             return { saved: true, replayed: true };
           }
         }
-        const revision = digest(JSON.stringify([generation, actor.id, snapshots.commerce.version,
-          snapshots.inventory.version, snapshots.mailboxes.version, snapshots.subscriptions.version]));
+        const projectRevision = (...values) => digest(JSON.stringify([generation, actor.id, ...values]));
+        const revision = projectRevision(snapshots.commerce.version,
+          snapshots.inventory.version, snapshots.mailboxes.version, snapshots.subscriptions.version);
+        // The list and copy still use the full snapshot. Editors compare only
+        // the account binding or order they showed to the operator.
+        const ownerRevision = row => projectRevision('owner', row.id, row.accountId, row.customerId,
+          row.ownerEligible, priorProfile.owners?.[row.id] ?? null);
+        const orders = new Map(array(snapshots.commerce.data?.orders).map(order => [order.id, order]));
+        const confirmationRevision = (row, orderId) => {
+          const order = orders.get(orderId);
+          if (!order) return undefined;
+          return projectRevision('confirm', row.id, row.accountId, row.customerId, row.status === 'dead',
+            row.conflict, row.missingAssociation, order.version ?? null, orderFingerprint(order),
+            paid(order), openingConfirmed(order, priorProfile, now), order.cancelled, order.subscriptionEnded,
+            priorProfile.confirmations?.[orderId] ?? null);
+        };
         const rows = projectSubscriptions(snapshots, now);
         if (action === 'account') {
           if (typeof body.accountId !== 'string' || !body.accountId || body.accountId.length > 160)
@@ -509,7 +523,7 @@ export function createSubscriptionHandler({ store, publicOrigin, readOwners = ()
           if (existing?.conflict || (existing?.accountId && existing.accountId !== account.accountId))
             throw failure(409, '账号与订单关联存在冲突，请先核对');
           audit('view', [account.id]);
-          return { ...account, revision };
+          return { ...account, revision, ...(existing && { ownerRevision: ownerRevision(existing) }) };
         }
         if (action === 'lookup') {
           const order = body.order;
@@ -566,19 +580,29 @@ export function createSubscriptionHandler({ store, publicOrigin, readOwners = ()
           const items = ordered.slice((page - 1) * pageSize, page * pageSize);
           audit('view', items.map(row => row.id));
           return { items: items.map(row => ({ ...safeRow(row), series: listSeries(row, scope),
+            ownerRevision: ownerRevision(row),
+            history: row.history.map(record => record.source === 'order' && !record.confirmed
+              ? { ...record, confirmationRevision: confirmationRevision(row, record.sourceId) } : record),
             ...(scope === 'expired' && { status: 'expired' }) })), total: matching.length,
             accountCount: accounts.filter(row => Boolean(row.account)).length, scopeCounts, counts, page, pageSize, revision,
             now: new Date(now).toISOString() };
         }
         if (action === 'renewal-settings') {
-          const existing = snapshots.subscriptions.data || {};
-          const suffixes = existing.renewalSuffixes || {};
-          if (body.suffix === undefined) return { suffix: suffixes[actor.id] || '' };
+          const suffixes = priorProfile.renewalSuffixes || {};
+          const latest = suffixes[actor.id] || '';
+          const revisions = priorProfile.renewalSuffixRevisions || {};
+          const currentRevision = projectRevision('renewal-settings', revisions[actor.id] ?? null, latest);
+          if (body.suffix === undefined) return { suffix: latest, revision: currentRevision };
           if (typeof body.suffix !== 'string' || body.suffix.length > 1000)
             throw failure(400, '续费提醒话术最多 1000 个字');
+          if (body.revision !== currentRevision)
+            throw failure(409, '续费提醒话术已更新，请重新读取并核对');
           const suffix = body.suffix.trim();
-          save({ ...existing, renewalSuffixes: { ...suffixes, [actor.id]: suffix } }, 'subscription_renewal_suffix', actor.id);
-          return { suffix };
+          if (suffix === latest) return { suffix, revision: currentRevision };
+          const updated = randomUUID();
+          save({ ...priorProfile, renewalSuffixes: { ...suffixes, [actor.id]: suffix },
+            renewalSuffixRevisions: { ...revisions, [actor.id]: updated } }, 'subscription_renewal_suffix', actor.id);
+          return { suffix, revision: projectRevision('renewal-settings', updated, suffix) };
         }
         if (action === 'contact-copy') {
           const target = subscriptionForOrder(snapshots, body.orderId, now);
@@ -600,9 +624,13 @@ export function createSubscriptionHandler({ store, publicOrigin, readOwners = ()
           audit('contact_copy', [row.id]);
           return { text: lines.join('\n') };
         }
-        if (typeof body.id !== 'string' || typeof body.revision !== 'string' || body.revision !== revision)
+        if (typeof body.id !== 'string' || typeof body.revision !== 'string')
           throw failure(409, '订阅资料已变化，请刷新后重新核对');
-        let row = rows.find(item => item.id === body.id);
+        const row = rows.find(item => item.id === body.id);
+        const editRevision = !row ? undefined : action === 'owner' ? ownerRevision(row) :
+          action === 'confirm' ? confirmationRevision(row, body.orderId) : undefined;
+        if (body.revision !== revision && body.revision !== editRevision)
+          throw failure(409, '订阅资料已变化，请刷新后重新核对');
         if (action === 'owner' && body.accountId) {
           const account = accountRow(snapshots, body.accountId);
           if (account.id !== body.id || (row?.accountId && row.accountId !== account.accountId))
@@ -640,7 +668,7 @@ export function createSubscriptionHandler({ store, publicOrigin, readOwners = ()
         }
         if (action === 'confirm') {
           const record = row._records.find(item => item.source === 'order' && item.sourceId === body.orderId);
-          const order = array(snapshots.commerce.data?.orders).find(item => item.id === body.orderId);
+          const order = orders.get(body.orderId);
           if (row.status === 'dead' || !record || !order || personalProduct(order.product) || record.confirmed || order.cancelled ||
               !paid(order) || body.confirmed !== true)
             throw failure(400, '请先核对实际开通及付款记录');

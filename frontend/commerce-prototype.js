@@ -2189,39 +2189,104 @@
     } catch (failure) { if (current()) A.notify(failure.message || '银行卡资料暂时无法读取'); }
   }
 
+  const renewalSuffixDraft = 'renewal-suffix';
+  function showRenewalSuffixConflict(form, message) {
+    const drawer = form.closest('dialog');
+    form.dataset.renewalSuffixConflict = 'yes';
+    drawer.querySelector('[data-action="commerce-renewal-suffix-review"]').hidden = false;
+    drawer.querySelector(`button[form="${form.id}"]`).disabled = true;
+    const notice = form.querySelector('[role="alert"]');
+    notice.hidden = false;
+    notice.textContent = message;
+  }
+
   async function openRenewalSuffix(node) {
     const current = currentRenewalAction(node);
     try {
-      const { suffix } = await localData.renewalContactSettings();
+      const { suffix, revision } = await localData.renewalContactSettings();
       if (!current()) return;
+      if (typeof suffix !== 'string' || typeof revision !== 'string') throw new Error('提醒话术读取结果无效');
+      const draft = S.drafts.get(renewalSuffixDraft);
       A.openDrawer('续费提醒话术', '此文字会附在「复制订阅信息」的末尾。',
-        `<form id="commerce-renewal-suffix-form">${field('提醒话术', 'renewalSuffix',
-          `<textarea id="commerce-renewalSuffix" name="commerce-renewalSuffix" rows="5" maxlength="1000">${E(suffix)}</textarea>`)}</form>`,
-        '<button class="button primary" type="submit" form="commerce-renewal-suffix-form">保存话术</button>', 'renewal-suffix');
+        `<form id="commerce-renewal-suffix-form"><input type="hidden" name="revision" value="${E(draft?.revision || revision)}">${field('提醒话术', 'renewalSuffix',
+          `<textarea id="commerce-renewalSuffix" name="commerce-renewalSuffix" rows="5" maxlength="1000">${E(draft?.['commerce-renewalSuffix'] ?? suffix)}</textarea>`)}
+        <p class="inline-notice warning" role="alert" hidden></p>
+        <div class="field" data-renewal-suffix-latest hidden><span class="field-label">最新已保存的话术</span><p></p></div></form>`,
+        '<button class="button" type="button" data-action="commerce-renewal-suffix-review" hidden>重新读取并核对</button>' +
+        '<button class="button primary" type="submit" form="commerce-renewal-suffix-form">保存话术</button>', renewalSuffixDraft);
+      if (draft && draft.revision !== revision)
+        showRenewalSuffixConflict($('#commerce-renewal-suffix-form'), '提醒话术已更新。已保留当前输入，请读取最新内容核对。');
     } catch (failure) { if (current()) A.notify(failure.message || '暂时无法读取提醒话术'); }
   }
 
+  async function reviewRenewalSuffix(node) {
+    const form = $('#drawer[open] #commerce-renewal-suffix-form');
+    if (!form?.dataset.renewalSuffixConflict) return;
+    await A.withActionFeedback(node, async () => {
+      const latest = await localData.renewalContactSettings();
+      if (!form.isConnected || !form.closest('dialog')?.open) return;
+      if (typeof latest.suffix !== 'string' || typeof latest.revision !== 'string') throw new Error('提醒话术读取结果无效');
+      const panel = form.querySelector('[data-renewal-suffix-latest]');
+      panel.querySelector('p').textContent = latest.suffix || '（空白）';
+      panel.hidden = false;
+      form.elements.revision.value = latest.revision;
+      delete form.dataset.renewalSuffixConflict;
+      form.querySelector('[role="alert"]').textContent = '请对照最新话术，确认当前输入后再保存。';
+      node.hidden = true;
+      form.closest('dialog').querySelector(`button[form="${form.id}"]`).disabled = false;
+    }, { pending: '正在读取…', failure: '无法读取最新话术，已保留当前输入' });
+  }
+
+  async function saveRenewalSuffix(form) {
+    if (form.dataset.renewalSuffixConflict) return;
+    const submitted = A.readDraft(form);
+    const open = () => form.isConnected && form.closest('dialog')?.open;
+    const submit = form.closest('dialog').querySelector(`button[form="${form.id}"]`);
+    try {
+      await A.withActionFeedback(submit, async () => {
+        const result = await localData.renewalContactSettings({
+          suffix: submitted['commerce-renewalSuffix'], revision: submitted.revision
+        });
+        const draft = open() ? A.readDraft(form) : S.drafts.get(renewalSuffixDraft);
+        if (draft && JSON.stringify(draft) === JSON.stringify(submitted)) {
+          if (open()) cleanClose(renewalSuffixDraft);
+          else S.drafts.delete(renewalSuffixDraft);
+        } else if (open()) {
+          form.elements.revision.value = result.revision;
+          A.notify('本次话术已保存，后续输入已保留');
+          return;
+        }
+        A.notify('已保存提醒话术');
+      }, { pending: '正在保存…' });
+    } catch (failure) {
+      if (!open()) return;
+      if (failure.status === 409 || failure.code === 'WRITE_OUTCOME_UNKNOWN')
+        showRenewalSuffixConflict(form, failure.message + '。已保留当前输入。');
+      else {
+        const notice = form.querySelector('[role="alert"]');
+        notice.textContent = failure.message || '保存话术失败，请重试';
+        notice.hidden = false;
+      }
+    }
+  }
+
   async function saveRenewalForm(form) {
-    const route = S.route, actorId = currentOperator().id, suffix = form.id === 'commerce-renewal-suffix-form';
+    if (form.id === 'commerce-renewal-suffix-form') return saveRenewalSuffix(form);
+    const route = S.route, actorId = currentOperator().id;
     const current = () => form.isConnected && S.route === route && currentOperator().id === actorId;
     const submit = `button[type="submit"][form="${form.id}"]`;
     await A.withActionFeedback($(submit), async () => {
-      if (suffix) await localData.renewalContactSettings(form.elements['commerce-renewalSuffix'].value);
-      else {
-        const saved = renewalFormContexts.get(form);
-        if (!saved || saved.route !== route || saved.actorId !== actorId) throw new Error('请重新打开并核对当前客户');
-        await localData.renewalCard({ ...saved.request, action: 'bind', version: saved.preview.version,
-          cardId: form.elements['commerce-renewalBindCard'].value,
-          number: form.elements['commerce-renewalBindNumber'].value });
-      }
+      const saved = renewalFormContexts.get(form);
+      if (!saved || saved.route !== route || saved.actorId !== actorId) throw new Error('请重新打开并核对当前客户');
+      await localData.renewalCard({ ...saved.request, action: 'bind', version: saved.preview.version,
+        cardId: form.elements['commerce-renewalBindCard'].value,
+        number: form.elements['commerce-renewalBindNumber'].value });
       if (!current()) return;
       A.closeDrawer();
-      A.notify(suffix ? '已保存提醒话术' : '已保存续费用卡');
-      if (!suffix) {
-        if (route === renewalRoute) void loadWorkbenchResource(renewalSelected);
-        if (route === subscriptionCardsRoute) void loadSubscriptionCardEstimates(true);
-        window.IDDesignModules.find(module => module.id === 'subscription-management')?.onDataChanges?.(['subscription-management']);
-      }
+      A.notify('已保存续费用卡');
+      if (route === renewalRoute) void loadWorkbenchResource(renewalSelected);
+      if (route === subscriptionCardsRoute) void loadSubscriptionCardEstimates(true);
+      window.IDDesignModules.find(module => module.id === 'subscription-management')?.onDataChanges?.(['subscription-management']);
     }, { pending: '正在保存…' });
   }
   function matchesRenewalSearch(contact, order) {
@@ -7848,8 +7913,8 @@
       A.notify({ account: '凭据核算方式已保存', void: '实付凭据已作废', record: '实付凭据已登记' }[action]);
     } catch (failure) {
       if (!form.isConnected) return;
-      if (failure.status === 409) {
-        const message = failure.code === 'DATA_SOURCE_CHANGED' ? failure.message
+      if (failure.status === 409 || failure.code === 'WRITE_OUTCOME_UNKNOWN') {
+        const message = ['DATA_SOURCE_CHANGED', 'WRITE_OUTCOME_UNKNOWN'].includes(failure.code) ? failure.message
           : failure.message + '。当前输入已保留，请重新核对后提交。';
         showExpenseConflict(form, message);
         if (expenseCurrent(state)) void loadExpenseReceipts(state);
@@ -9792,6 +9857,7 @@
       return true;
     }
     if (action === 'commerce-renewal-suffix') { void openRenewalSuffix(node); return true; }
+    if (action === 'commerce-renewal-suffix-review') { void reviewRenewalSuffix(node); return true; }
     if (action === 'commerce-renewal-contact') { void copyRenewalContact(node); return true; }
     if (action === 'commerce-renewal-card-copy' || action === 'commerce-renewal-bind') {
       void openRenewalCardAction(node, action === 'commerce-renewal-bind');

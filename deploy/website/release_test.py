@@ -569,6 +569,16 @@ class WebsiteReleaseTests(unittest.TestCase):
             f"2026-11-12T03:02:00Z {retry}\n2026-11-12T03:04:00Z {verified}")
         self.assertEqual(recovered["verifiedAt"], recovered["at"])
         self.assertEqual(recovered["failures"], 0)
+        mismatch = '{"status":"retry","code":"SHEETS_HEADER_MISMATCH"}'
+        invalid_source = '{"status":"integrity-failed","code":"SHEETS_SOURCE_REPLACED"}'
+        stale = backup_monitoring.sheets_fields(
+            f"2026-11-12T03:00:00Z {verified}\n2026-11-12T03:02:00Z {mismatch}")
+        self.assertEqual(stale["failures"], 1)
+        self.assertTrue(stale["integrityFailure"])
+        self.assertTrue(backup_monitoring.sheets_fields(
+            f"2026-11-12T03:02:00Z {invalid_source}\n2026-11-12T03:04:00Z {retry}")["integrityFailure"])
+        self.assertFalse(backup_monitoring.sheets_fields(
+            f"2026-11-12T03:02:00Z {mismatch}\n2026-11-12T03:04:00Z {verified}")["integrityFailure"])
 
     def test_canary_diagnostic_outputs_only_recognized_indicators_and_locations(self):
         result = remote.canary_diagnostics("AssertionError [ERR_ASSERTION]: synthetic secret input\n"

@@ -62,6 +62,9 @@ test('status uses the existing worker receipt, keeps the last success, and repor
     at: current + 61_000, verifiedAt: current, failures: 0, integrityFailure: false, privatePath: 'fixture-only'
   }));
   assert.deepEqual((await read(handler)).body, { state: 'no_receipt', ...empty });
+  current += 61_000;
+  await writeFile(receipt, JSON.stringify({ at: current + 61_000, verifiedAt: null, failures: 0, integrityFailure: false }));
+  assert.deepEqual((await read(handler)).body, { state: 'stale', ...empty });
   await writeFile(receipt, JSON.stringify({
     at: current, verifiedAt: current, failures: 0, integrityFailure: true, privatePath: 'fixture-only'
   }));

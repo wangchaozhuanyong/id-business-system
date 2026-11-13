@@ -1,0 +1,50 @@
+import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { pathToFileURL } from 'node:url';
+import test from 'node:test';
+import { interceptDesign, origin } from './helpers/offline-design.mjs';
+
+test('a renewal template conflict shows the latest value and keeps the draft on a phone', { timeout: 30_000 }, async t => {
+  const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
+  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
+  t.after(() => browser.close());
+  const context = await browser.newContext({ viewport: { width: 390, height: 850 } });
+  const actor = { id: 'fixture-admin', name: '合成管理员', role: 'admin' };
+  const data = JSON.parse(await readFile(new URL('../docs/audits/2026-11-06-design-review/visual-fixtures.json', import.meta.url)));
+  await interceptDesign(context, { localFixtures: data, actor, skipRechargeAssets: true });
+  let latest = { suffix: '原话术', revision: 'revision-1' };
+  let saves = 0;
+  await context.route('**/api/local/subscriptions/renewal-settings', async route => {
+    const command = route.request().postDataJSON();
+    if (command.suffix === undefined) return route.fulfill({ json: latest });
+    saves++;
+    if (command.revision !== latest.revision)
+      return route.fulfill({ status: 409, json: { error: '续费提醒话术已更新，请重新读取并核对' } });
+    latest = { suffix: command.suffix, revision: 'revision-3' };
+    return route.fulfill({ json: latest });
+  });
+  const page = await context.newPage();
+  page.setDefaultTimeout(6_000);
+  await page.goto(origin + '/#/workspace/renewals/reminders');
+  await page.locator('#main').getByRole('button', { name: '更多操作', exact: true }).click();
+  await page.getByRole('menuitem', { name: '续费提醒话术', exact: true }).click();
+  const drawer = page.locator('#drawer'), input = drawer.getByRole('textbox', { name: '提醒话术', exact: true });
+  const save = drawer.getByRole('button', { name: '保存话术', exact: true });
+  const review = drawer.getByRole('button', { name: '重新读取并核对', exact: true });
+  await input.fill('本页未保存的内容');
+  latest = { suffix: '另一标签页已保存的话术', revision: 'revision-2' };
+  await save.click();
+  await review.waitFor();
+  assert(await save.isDisabled());
+  assert.equal(latest.suffix, '另一标签页已保存的话术');
+  assert.equal(await input.inputValue(), '本页未保存的内容');
+  await review.click();
+  await drawer.getByText(latest.suffix, { exact: true }).waitFor();
+  assert.equal(await input.inputValue(), '本页未保存的内容');
+  assert.equal(saves, 1);
+  assert(await drawer.evaluate(node => node.scrollWidth <= node.clientWidth + 1));
+  await save.click();
+  await drawer.waitFor({ state: 'hidden' });
+  assert.equal(latest.suffix, '本页未保存的内容');
+  assert.equal(saves, 2);
+});
