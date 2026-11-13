@@ -60,6 +60,14 @@ test('failed readback never ACKs; fatal schema errors stop without a restart loo
   assert.deepEqual(f.readerStates, ['reconnecting', 'review']);
 });
 
+test('committed billing changes publish a revision only for recharge reconciliation', async t => {
+  const f = runtime(t), child = f.children[0];
+  const billing = { ...event, jobs: [], scopes: ['billing_records'], reconcile: true };
+  child.stdout.write(JSON.stringify(billing) + '\n');
+  await turn();
+  assert.deepEqual(f.runtime.versions(), { 'recharge-billing': billing.receipt });
+});
+
 test('startup alone does not confirm the connection; native heartbeats do not import orders', async t => {
   const f = runtime(t), child = f.children[0];
   child.stderr.write('recharge_event_subscriber_ready\n');

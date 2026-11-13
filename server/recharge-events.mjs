@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { consumeCommittedJobs } from '../modules/external-events/committed-jobs.mjs';
+import { financeReconciliation } from '../modules/website/pages.mjs';
 
 const actor = { id: 'event-runtime', role: 'super' };
 const localScopes = ['settings', 'recharge-codes', 'inventory', 'finance-rates', 'card-types'];
@@ -43,6 +44,7 @@ export function createRechargeEvents({ config, store, orderSync, activity, onRea
     // opaque revision. Activity retains its per-actor visibility filtering.
     const domains = new Set();
     if (scopes.includes('cdk_codes')) domains.add('recharge-codes');
+    if (scopes.includes('billing_records')) domains.add(financeReconciliation.scope);
     if (scopes.some(scope => ['card_assets', 'orbitcard_card_usage', 'orbitcard_card_recharges'].includes(scope))) {
       domains.add('tenant-cards'); domains.add('card-types');
     }

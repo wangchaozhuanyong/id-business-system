@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { financeReconciliation, websitePages } from '../modules/website/pages.mjs';
+import { createFinanceReconciliation } from './finance/recharge-reconciliation.mjs';
 import { canUseWorkspace, employeeCommerce, managesCards, ownsRecord, registrarInventory } from './access-roles.mjs';
 import { checkFrozenCardPoolWrite } from './card-management.mjs';
 import { extractManagedMailboxCode } from './tools/mailbox-pool.mjs';
@@ -24,6 +26,7 @@ const clean = (value, maximum = 254) => typeof value === 'string' && value.lengt
 const email = value => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 const emptyDocument = keys => Object.fromEntries(keys.map(key => [key, []]));
 const isReadable = method => method === 'GET';
+const declaredWorkspaces = new Map(websitePages.map(page => ['/api/local/' + page.resource, page]));
 
 function send(response, status, value) {
   response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'private, no-store' });
@@ -218,26 +221,11 @@ function reconcileCards(pending, raw, current, store) {
 }
 
 export function createStaffWorkspaces({ store, client, publicOrigin, getAuth, readMailbox, readRelayCodes, cardChanged }) {
+  const readReconciliation = createFinanceReconciliation(client);
   const inProgress = new Set();
   const lastMailRead = new Map();
-  async function manageCards(request, route, actor, body, origin) {
+  async function manageCards(request, route, actor, body) {
     if (!managesCards(actor)) fail(403, '当前账号无权管理自动代充银行卡');
-    if (route === 'finance/reconciliation' && isReadable(request.method)) {
-      const input = new URL(request.url, origin).searchParams;
-      const page = Number(input.get('page') || 1);
-      const since = input.get('from'), until = input.get('to');
-      const day = value => /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value)) &&
-        new Date(value).toISOString().slice(0, 10) === value;
-      if (!Number.isInteger(page) || page < 1 || page > 5000 || (since && !day(since)) || (until && !day(until)) ||
-          (since && until && since > until)) fail(400, '请核对查询日期');
-      const billingTime = (date, end = false) =>
-        new Date(Date.parse(date + 'T00:00:00+08:00') + (end ? 86_400_000 - 1 : 0)).toISOString().replace('T', ' ').slice(0, 23);
-      const params = new URLSearchParams({ page: String(page), ...(since && { start_date: billingTime(since) }),
-        ...(until && { end_date: billingTime(until, true) }) });
-      const data = await client.get('/api/admin/billing?' + params);
-      const items = billingRows(data);
-      return { items, hasMore: Number.isSafeInteger(Number(data.total)) ? Number(data.total) > page * 20 : items.length === 20 };
-    }
     if (route === 'finance/cards' && isReadable(request.method)) {
       const current = cardsView(await client.get('/api/admin/cards'));
       const pending = store.pendingFinanceCardOperations().map(row => ({ id: row.id, at: row.at,
@@ -395,12 +383,17 @@ export function createStaffWorkspaces({ store, client, publicOrigin, getAuth, re
       if (!['GET', 'POST'].includes(request.method)) fail(405, '此操作不可用');
       const route = path.slice(staffPath.length);
       const read = isReadable(request.method);
-      if (route.startsWith('finance/') && !managesCards(actor)) fail(403, '当前账号无权管理自动代充银行卡');
-      if (route === 'customer-service' && !canUseWorkspace(actor, route) ||
-          ['registration', 'mail-code', 'registration-code'].includes(route) && !canUseWorkspace(actor, 'registration') ||
-          ['team', 'business-proxies'].includes(route) && !canUseWorkspace(actor, route)) fail(403, '当前账号无权访问此页面');
+      const page = declaredWorkspaces.get(path);
+      if (page) {
+        if (!page.roles.includes(actor.role)) fail(403, '当前账号无权访问此页面');
+        if (!page.methods.includes(request.method)) fail(405, '此页面只供查看');
+      } else if (['mail-code', 'registration-code'].includes(route) && !canUseWorkspace(actor, 'registration'))
+        fail(403, '当前账号无权访问此页面');
+      if (path === '/api/local/' + financeReconciliation.resource) {
+        return send(response, 200, await readReconciliation(new URL(request.url, origin).searchParams, actor));
+      }
       const body = read ? {} : await readBody(request);
-      if (route.startsWith('finance/')) return send(response, 200, await manageCards(request, route, actor, body, origin));
+      if (route.startsWith('finance/')) return send(response, 200, await manageCards(request, route, actor, body));
       if (route === 'team' && read) {
         const staff = getAuth().teamFor(actor.id);
         const orders = store.load('commerce').data?.orders || [];
@@ -468,18 +461,4 @@ export function createStaffWorkspaces({ store, client, publicOrigin, getAuth, re
 
 function requireRecent(auth, request) {
   if (!auth?.recentlyVerified(request)) fail(403, '请先完成安全确认，再提交这项操作');
-}
-
-function billingRows(data) {
-  const rows = Array.isArray(data) ? data : data.items || data.records || data.billing;
-  if (!Array.isArray(rows)) fail(503, '暂时无法读取对账记录');
-  return rows.slice(0, 500).map(row => ({
-    time: clean(row.payment_time || row.paidAt || row.paid_at || row.createdAt || row.created_at || row.time, 64),
-    reference: clean(String(row.id ?? row.orderNo ?? row.order_no ?? ''), 80),
-    amount: clean(String(row.amount ?? row.paidAmount ?? row.paid_amount ?? ''), 40),
-    currency: clean(row.currency || row.paidCurrency || row.paid_currency, 12),
-    ...(configuredPlans.has(row.plan_type) && { plan: row.plan_type }),
-    status: clean(row.status, 40),
-    last4: /^\d{4}$/.test(row.card_last4 || row.last4) ? row.card_last4 || row.last4 : ''
-  }));
 }

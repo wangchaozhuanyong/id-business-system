@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { isHistoricallyOpenedClaude } from './inventory-history.mjs';
 import { parseV2DateTimeInput, toV2DateTimeInput } from '../modules/time/dateTime.ts';
-import { inventoryOperationalStatus, manualBusinessOrder, orderFieldChanged, validOrderEmail } from '../frontend/order-opening.mjs';
+import { inventoryOperationalStatus, manualBusinessOrder, orderFieldChanged, validOrderEmail } from '../modules/orders/order-opening.mjs';
 import { personalProduct, personalStock, sameTarget, stockTypeForProduct, targetKey } from './personal-subscriptions.mjs';
 import { registrationOccupancy, registrationProductConflict } from './inventory-registration.mjs';
 
@@ -117,6 +117,32 @@ export function accountLifecycleSummaries(inventory, commerce, now) {
   if (!accounts.length) return [];
   const context = lifecycleReadContext(commerce);
   return accounts.map(account => accountLifecycleSummary(account, commerce, now, context));
+}
+
+export function releasedSubscriptionOrderIds(inventory, commerce) {
+  const accounts = rows(inventory?.accounts).filter(managedAccount);
+  const identity = account => account.loginMethod === 'x' && account.xHandle
+    ? account.xHandle : account.email || account.xHandle;
+  const identityCounts = new Map();
+  for (const account of accounts) {
+    const key = JSON.stringify([account.type, emailKey(identity(account))]);
+    identityCounts.set(key, (identityCounts.get(key) || 0) + 1);
+  }
+  const ids = new Set();
+  let context;
+  for (const account of accounts) {
+    const released = releasedAccountOrders(account);
+    if (!released.size) continue;
+    if (!personalStock(account.type) &&
+        identityCounts.get(JSON.stringify([account.type, emailKey(identity(account))])) !== 1) continue;
+    context ??= lifecycleReadContext(commerce);
+    for (const order of relatedAccountOrders(account, commerce, context)) {
+      if (released.has(order.id) && (personalStock(account.type)
+        ? order.accountId === account.id : emailKey(order.email) === emailKey(identity(account))))
+        ids.add(order.id);
+    }
+  }
+  return ids;
 }
 
 export function changeAccountLifecycle(inventory, commerce, command, actor, now = new Date()) {

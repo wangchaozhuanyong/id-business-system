@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { parseV2DateTimeInput, toV2DateTimeInput } from '../modules/time/dateTime.ts';
-import { orderFieldChanged } from '../frontend/order-opening.mjs';
+import { orderFieldChanged } from '../modules/orders/order-opening.mjs';
 import { pendingInventoryClaim } from './inventory-usage.mjs';
 import { registrationPurposeProduct } from './inventory-registration.mjs';
 

@@ -142,7 +142,7 @@ function setup(snapshot) {
     URL
   });
   const inventory = modules[0];
-  if (!snapshot) inventory.render();
+  inventory.render();
   return {
     inventory,
     api,

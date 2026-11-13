@@ -2,7 +2,7 @@ import { addDecimalStrings } from '../../modules/contracts/decimal.ts';
 import { activeExpenseReceipt, buildCardIssueAllocations, calculateOrder, calculateOrderCost, currencies, hasRecordedPaymentAmount } from '../../modules/finance/accounting.mjs';
 import { checkBankReturns } from '../local-business-integrity.mjs';
 import { migrationInputSchema } from './migration-input.mjs';
-import { orderReceiptRecorded } from '../../frontend/order-opening.mjs';
+import { orderReceiptRecorded } from '../../modules/orders/order-opening.mjs';
 
 const reportCurrencies = ['CNY', 'MYR'];
 const amountPattern = /^\d{1,20}(?:\.\d{1,4})?$/;

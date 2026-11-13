@@ -739,9 +739,22 @@ console.log(JSON.stringify(Object.fromEntries(hashes)));
     running_hashes = json.loads(run(["docker", "exec", "id-business-independent-app", "node", "--input-type=module",
                                     "-e", hash_files, json.dumps(list(plan["files"]))]))
     require(running_hashes == plan["files"], "running_source_mismatch")
+    module_paths = {
+        "frontend/staff-workspaces.mjs": "/assets/website/pages/staff-workspaces.mjs",
+        "frontend/finance-reconciliation.mjs": "/assets/website/pages/finance-reconciliation.mjs",
+        "modules/website/pages.mjs": "/assets/website/pages.mjs",
+        **{name: "/" + name for name in (
+            "modules/orders/order-opening.mjs", "modules/orders/list-order.mjs",
+            "modules/orders/renewal-reminders.mjs", "modules/finance/apple-funding.mjs",
+            "modules/data/document-delta.mjs"
+        )},
+    }
     for name, expected in plan["files"].items():
-        if name.startswith("frontend/") and name != "frontend/index.html":
-            with http("/" + Path(name).name) as response:
+        route = module_paths.get(name)
+        if not route and name.startswith("frontend/") and name != "frontend/index.html":
+            route = "/" + Path(name).name
+        if route:
+            with http(route) as response:
                 require(hashlib.sha256(response.read()).hexdigest() == expected, "live_website_asset_mismatch")
     protected_reads = ("/api/local/settings", "/api/local/inventory", "/api/local/commerce", "/api/local/order-sync",
                        "/api/local/system-monitoring", "/api/local/recharge-activity")
@@ -752,6 +765,8 @@ console.log(JSON.stringify(Object.fromEntries(hashes)));
         version = json.loads(run(["docker", "exec", "id-business-independent-app", "cat", "/app/server/.website-version.json"]))
         require(version == json.loads((source / "server/.website-version.json").read_text()) and
                 version.get("version") == plan["sha"], "website_version_receipt_mismatch")
+    if (source / "modules/website/pages.mjs").is_file():
+        protected_reads += ("/api/local/staff/finance/reconciliation", "/api/local/renewal-sidebar")
     if adapter:
         protected_reads += ("/api/local/subscription-card-status",)
     for path in protected_reads:

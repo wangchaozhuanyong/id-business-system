@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import * as orderOpening from '../frontend/order-opening.mjs';
+import * as renewalReminders from '../modules/orders/renewal-reminders.mjs';
 
 import { createLocalBusinessStore } from '../server/local-business.mjs';
 
@@ -76,6 +77,7 @@ function browser(store, appleAsset = null) {
       subtract: (a, b) => moneyFormat(moneyUnits(a) - moneyUnits(b))
     },
     canVisit: () => true,
+    usesSharedBusinessData: () => true,
     esc: String,
     addCalendarMonth: () => '2026-12-04T10:30',
     readForm: (form) => form.raw,
@@ -110,7 +112,7 @@ function browser(store, appleAsset = null) {
     }
   };
   const context = {
-    window: { IDOrderOpening: orderOpening, IDDesignAPI: api, IDListOrder: listOrder, IDDesignModules: modules, IDLocalData: localData },
+    window: { IDOrderOpening: orderOpening, IDRenewalReminders: renewalReminders, IDDesignAPI: api, IDListOrder: listOrder, IDDesignModules: modules, IDLocalData: localData },
     document: {
       querySelector: (selector) => selector === '#commerce-order-form' && state.route === 'workspace/order/gpt'
         ? bankOrderEntry : null,

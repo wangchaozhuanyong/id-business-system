@@ -1,4 +1,4 @@
-import { automaticGptOrder, orderOpeningConfirmed, rechargeOrderOwner, subscriptionChainRoot, subscriptionTime, validOrderEmail } from '../frontend/order-opening.mjs';
+import { automaticGptOrder, orderOpeningConfirmed, rechargeOrderOwner, subscriptionChainRoot, subscriptionTime, validOrderEmail } from '../modules/orders/order-opening.mjs';
 import { accountMarkedDead, releasedAccountOrders } from './account-lifecycle.mjs';
 
 export const renewalExpiryIssue = '续费到期时间待核对';

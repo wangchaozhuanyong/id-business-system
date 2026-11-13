@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { subscriptionTime, automaticGptOrder } from '../frontend/order-opening.mjs';
+import { subscriptionTime, automaticGptOrder } from '../modules/orders/order-opening.mjs';
 import { describeWriteOperation } from './write-operation.mjs';
 import { isDiagnostic, softwareVersion } from './site-observations.mjs';
 

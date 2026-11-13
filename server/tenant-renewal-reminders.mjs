@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
-import { orderOpeningConfirmed, subscriptionTime as orderTime } from '../frontend/order-opening.mjs';
+import { orderOpeningConfirmed, subscriptionTime as orderTime } from '../modules/orders/order-opening.mjs';
 import { personalProduct, subscriptionSeries, targetKey } from './personal-subscriptions.mjs';
 
 export const tenantRenewalHandledAction = '处理租户续费提醒';

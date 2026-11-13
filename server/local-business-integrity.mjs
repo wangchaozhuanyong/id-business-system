@@ -9,7 +9,7 @@ import { claimAllowsDelivery, pendingInventoryClaim } from './inventory-usage.mj
 import { releasedAccountOrders, stockLinkedToCustomer, systemAccount } from './account-lifecycle.mjs';
 import { isHistoricallyOpenedClaude } from './inventory-history.mjs';
 import { personalDelivery, personalProduct, sameTarget, stockTypeForProduct } from './personal-subscriptions.mjs';
-import { inventoryOperationalStatus, orderReceiptRecorded } from '../frontend/order-opening.mjs';
+import { inventoryOperationalStatus, orderReceiptRecorded } from '../modules/orders/order-opening.mjs';
 import { hasRecordedPaymentAmount, orderExpenseTerms, validCurrencyCode } from '../modules/finance/accounting.mjs';
 
 function units(value) {

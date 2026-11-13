@@ -2,11 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { assignOrderOwner, checkSubscriptionTermination, manualOrderDetailsAction, moneyUnits, validMoney } from './order-policy.mjs';
 import { currencies, validCurrencyCode, hasRecordedPaymentAmount } from '../modules/finance/accounting.mjs';
-import { sortByRecordTime } from '../frontend/list-order.mjs';
+import { sortByRecordTime } from '../modules/orders/list-order.mjs';
 import {
   automaticGptOrder, rechargeOrderCompletion, rechargeOrderOwner, rechargeRenewalExpiryPending, manualBusinessOrder, manualOrderDetailsMissing,
   orderOpeningConfirmed, orderReceiptRecorded, subscriptionTime, validOrderEmail, validOrderXHandle
-} from '../frontend/order-opening.mjs';
+} from '../modules/orders/order-opening.mjs';
 import { accountLifecycleSummary, systemAccount } from './account-lifecycle.mjs';
 import { isClaudeHistoricalSale } from './claude-history-intake.mjs';
 import { registrationEmail, registrationOccupancy, registrationProductConflict } from './inventory-registration.mjs';

@@ -4,6 +4,7 @@
   const data = window.IDLocalData, A = window.IDDesignAPI;
   if (!data || !A || document.querySelector('meta[name="id-local-data-events"]')?.content !== 'enabled') return;
   const pending = new Map(), activeGroups = new Set();
+  const deferred = new Map();
   const retryDelays = [500, 1500, 4500];
   // Coalesce scopes that refresh the same records. Other groups can finish
   // and retry independently while one is still reading.
@@ -34,8 +35,16 @@
     queueMicrotask(() => { scheduled = false; flush(); });
   };
   function flush() {
-    if (stopped || !pending.size) return;
+    if (stopped || (!pending.size && !deferred.size)) return;
     if (blocked()) { showStatus(); return; }
+    if (A.usesSharedBusinessData?.(A.state.route) !== false) {
+      for (const [scope, version] of deferred) {
+        if (pending.has(scope)) continue;
+        pending.set(scope, { version, failures: 0 });
+        deferred.delete(scope);
+      }
+    }
+    if (!pending.size) return;
     const groups = new Map();
     for (const [scope, job] of pending) {
       const group = groupOf(scope);
@@ -84,16 +93,23 @@
     const refreshCommerce = has('commerce') || has('subscription-management');
     const inventoryPage = /^(mailboxes\/(google|microsoft)|accounts\/(gpt|claude|gemini|grok))$/.test(route);
     const refreshInventory = has('inventory') || (has('commerce') && inventoryPage);
+    const shared = A.usesSharedBusinessData?.(route) !== false;
+    for (const scope of ['commerce', 'inventory', 'subscription-management', 'appleBalance']) {
+      if (!has(scope)) continue;
+      if (shared) deferred.delete(scope);
+      else deferred.set(scope, versions[scope]);
+    }
     const run = async operation => {
       try { if (await operation() === false) failed = true; } catch { failed = true; }
     };
     try {
       if (has('settings')) await run(() => A.modules.operations?.loadSettings(true));
-      if (has('appleBalance')) await run(() => A.modules.appleBalance?.refreshLocalBalance());
+      if (shared && route !== 'overview' && has('appleBalance'))
+        await run(() => A.modules.appleBalance?.refreshLocalBalance());
       if (route === 'overview' && (refreshCommerce || ['inventory', 'settings', 'appleBalance', 'apple-relay', 'finance-rates', 'order-expense-receipts'].some(has) ||
           (data.canApproveRechargeCodes && has('recharge-codes')))) {
         await run(() => A.modules.overview?.refresh({ refresh: true }));
-      } else {
+      } else if (shared) {
         await Promise.all([
           refreshInventory ? run(() => A.modules.inventory?.refreshLocalInventory({ keepContent: true })) : null,
           refreshCommerce ? run(() => A.modules.commerce?.refreshCommerce()) : null
@@ -228,6 +244,7 @@
     clearTimeout(retry);
     for (const job of pending.values()) clearTimeout(job.timer);
     pending.clear();
+    deferred.clear();
     activeGroups.clear();
     unsubscribe();
     data.clearChangeTracking();

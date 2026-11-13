@@ -1,19 +1,16 @@
 import { isDeepStrictEqual } from 'node:util';
+import { financeCards, websitePages } from '../modules/website/pages.mjs';
 
 export const staffRoles = new Set(['admin', 'supervisor', 'finance', 'registrar', 'employee']);
 
-const workspaces = {
-  supervisor: new Set(['team', 'business-proxies']),
-  registrar: new Set(['registration']),
-  employee: new Set(['customer-service'])
-};
+const workspaces = new Map(websitePages.map(page => [page.resource, page]));
 
 export function managesBusiness(actor) {
   return actor?.role === 'admin' || actor?.role === 'super';
 }
 
 export function canUseWorkspace(actor, workspace) {
-  return Boolean(actor && workspaces[actor.role]?.has(workspace));
+  return Boolean(workspaces.get('staff/' + workspace)?.roles.includes(actor?.role));
 }
 
 export function ownsRecord(actor, row) {
@@ -21,7 +18,7 @@ export function ownsRecord(actor, row) {
 }
 
 export function managesCards(actor) {
-  return actor?.role === 'finance' || actor?.role === 'super';
+  return financeCards.roles.includes(actor?.role);
 }
 
 const rechargeManagerReads = [
@@ -138,20 +135,20 @@ export function employeeCommerce(snapshot, actor) {
 
 export function retailAccess(actor, route, method) {
   const readable = method === 'GET' || method === 'HEAD';
+  const page = workspaces.get(route.slice('/api/local/'.length));
+  if (page && route.startsWith('/api/local/')) return page.roles.includes(actor?.role) && page.methods.includes(method);
   if (staffRoles.has(actor?.role) && route === '/api/local/toolbox') return readable || method === 'PUT';
   if (staffRoles.has(actor?.role) && ['/api/local/saved-totp', '/api/local/saved-totp/code',
     '/api/local/saved-totp/secret'].includes(route)) return true;
   if (actor?.role === 'employee')
     return (route === '/api/local/commerce' && readable) ||
-      (['/api/local/order-completion', '/api/local/recharge-codes', '/api/local/staff/customer-service',
+      (['/api/local/order-completion', '/api/local/recharge-codes',
         '/api/local/tools/website-monitor'].includes(route));
   if (actor?.role === 'finance')
-    return (readable && ['/api/local/commerce', '/api/local/settings', '/api/local/appleBalance', '/api/local/finance/expense-receipts'].includes(route)) ||
-      route.startsWith('/api/local/staff/finance/');
+    return readable && ['/api/local/commerce', '/api/local/settings', '/api/local/appleBalance', '/api/local/finance/expense-receipts'].includes(route);
   if (actor?.role === 'registrar')
     return (readable && route === '/api/local/inventory') ||
-      ['/api/local/staff/registration', '/api/local/staff/mail-code', '/api/local/staff/registration-code',
+      ['/api/local/staff/mail-code', '/api/local/staff/registration-code',
         '/api/local/apple-relay/alias-register'].includes(route);
-  if (actor?.role === 'supervisor') return ['/api/local/staff/team', '/api/local/staff/business-proxies'].includes(route);
   return false;
 }

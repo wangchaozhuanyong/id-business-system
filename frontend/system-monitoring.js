@@ -537,7 +537,8 @@
     requestAnimationFrame(() => document.querySelector('.monitor-navigation [aria-selected="true"]')?.focus({ preventScroll: true }));
   });
   window.IDDesignModules.push({
-    id: namespace, matches: route => ['monitor', settingsRoute].includes(route), render, onClick, onChange, onSubmit,
+    id: namespace, matches: route => ['monitor', settingsRoute].includes(route), sharedBusinessData: false,
+    render, onClick, onChange, onSubmit,
     afterRender({ routeChanged } = {}) {
       bindRead(queryTab());
       if (!settingsPage() && monitorView() === 'checks') A.modules.siteManagement?.mountResources?.();

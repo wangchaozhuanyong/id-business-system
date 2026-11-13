@@ -1623,6 +1623,11 @@
   window.IDDesignModules.push({
     id: 'apple-balance',
     matches: (route) => ['accounts/apple-balances', 'mailboxes/apple', managementRoute].includes(route),
+    beforeNavigate(route) {
+      if (localData && A.usesSharedBusinessData(route) &&
+          (A.canVisit('accounts/apple-balances') || A.canVisit(managementRoute)) && loadState === 'idle')
+        void ensureReady();
+    },
     render,
     afterRender({ routeChanged } = {}) {
       if (loading) bindBalanceRead();
@@ -1660,5 +1665,4 @@
     Object.assign(managementView(), { page: detail.page, pageSize: detail.pageSize });
     A.render();
   });
-  if (localData && (A.canVisit('accounts/apple-balances') || A.canVisit(managementRoute))) void ensureReady();
 })();
