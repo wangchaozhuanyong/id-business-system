@@ -361,22 +361,20 @@ main {
   flex: 1;
   min-width: 0;
 }
+.design-page-region {
+  inline-size: 100%;
+}
 .design-page-region[hidden] {
   display: none !important;
 }
-/* A tab group uses one width across all of its routes. Pages are full width by default. */
+/* Centered pages share one cap. Other pages fill the workspace. */
 .design-page-region:is(
   [data-page-region='data'], [data-page-region='data/sheets'],
-  [data-page-region='settings/monitoring'],
-  [data-page-region='settings/accounts'], [data-page-region='settings/costs'],
+  [data-page-region='settings/monitoring'], [data-page-region='settings/accounts'],
+  [data-page-region='settings/mail-types'], [data-page-region='settings/costs'],
   [data-page-region='settings/payment-countries']
 ) {
   max-inline-size: 1320px;
-  margin-inline: auto;
-}
-.design-page-region[data-page-region='settings/mail-types'],
-.design-page-region[data-page-region='plugins/mailboxes'] #ops-mailbox-query-panel {
-  max-inline-size: 960px;
   margin-inline: auto;
 }
 .design-page-region[data-page-region='settings/mail-types'] .table-viewport[data-pagination-layout] {
