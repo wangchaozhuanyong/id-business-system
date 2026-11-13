@@ -2820,6 +2820,7 @@
       credential: '生成新的应用专用密码后在这里验证并保存。现有买家查询码继续使用。',
       batch: '每批可导入 1 至 50 个邮箱。按服务商准备资料，提交后核对每行结果。失败行可修正后重新导入。',
       settings: '设置之后生成的查询码有效天数。',
+      'registration-access': '授权指定注册员查询这个邮箱的验证码，授权可以随时收回。',
       rotate: '重置后旧查询码立即失效，请复制并重新交付新码。',
       query: '按查询码读取邮件。验证码和正文仅在当前查询中展示。'
     };
@@ -2843,6 +2844,49 @@
       `<section class="form-section"><div class="section-title-row"><h3>连接邮箱</h3>${titleInfo('连接邮箱', mailboxCredentialHelp('microsoft'), 'mailbox-operation-oauth-help', true)}</div>${mailboxProviderLinks('microsoft')}</section>`,
       button('关闭', 'drawer-close') + button('前往 Microsoft 授权', 'ops-mailbox-pool-oauth-start', 'primary', '', `data-id="${esc(row.id)}"`));
     return root;
+  }
+
+  async function editRegistrationMailboxAccess(panel, row) {
+    const operator = localData.actor()?.id;
+    await api.withActionFeedback(null, async () => {
+      const { version, inventoryVersion, selected, items } = await localData.registrationMailboxChoices(row.id);
+      if (!toolActive(panel) || operator !== localData.actor()?.id) return;
+      const options = [{ value: '', label: '未授权' }, ...items.map(item => ({ value: item.id, label: item.name }))];
+      const form = '<form id="ops-mailbox-registration-access" class="form-section">' +
+        '<label for="ops-mailbox-registration-person">允许查验证码的注册员</label>' +
+        '<select id="ops-mailbox-registration-person" name="assetId">' + options.map(option =>
+          '<option value="' + esc(option.value) + '"' + (option.value === selected ? ' selected' : '') + '>' +
+          esc(option.label) + '</option>').join('') + '</select>' +
+        (!items.length ? '<p>暂无匹配的注册记录，请注册员先登记同一个邮箱。</p>' : '') +
+        '<p role="status" data-registration-access-status hidden></p></form>';
+      const root = openMailboxOperation(panel, 'registration-access', '授权注册员收信', row, form,
+        button('取消', 'drawer-close') +
+        '<button type="submit" class="button primary" form="ops-mailbox-registration-access">保存授权</button>');
+      const editor = root.querySelector('form');
+      editor.addEventListener('submit', async event => {
+        event.preventDefault();
+        const save = $('#drawer button[form="ops-mailbox-registration-access"]');
+        if (!save || save.disabled || operator !== localData.actor()?.id) return;
+        save.disabled = true;
+        const status = editor.querySelector('[data-registration-access-status]');
+        status.hidden = true;
+        try {
+          const assetId = editor.elements.assetId.value || null;
+          const snapshot = await localData.assignRegistrationMailbox({ id: row.id, version, inventoryVersion, assetId });
+          if (mailboxOperation(panel) !== root || operator !== localData.actor()?.id) return;
+          paintManagedPool(panel, snapshot);
+          api.notify(assetId ? '已授权注册员查验证码' : '已收回注册员收信权限');
+          $('#drawer').close();
+        } catch (error) {
+          if (root.isConnected) {
+            status.textContent = error.message;
+            status.hidden = false;
+          }
+        } finally {
+          save.disabled = false;
+        }
+      });
+    }, { failure: '暂时无法读取可授权的注册员' });
   }
   const mailboxQueryHosts = new WeakMap();
   function openMailboxQueryDrawer(panel, row) {
@@ -3664,9 +3708,14 @@
         const attrs = `data-id="${esc(row.id)}" data-provider="${esc(row.provider)}"`;
         api.openActionMenu(node,
           (row.associationConflict ? '' : button('仅复制当前码', 'ops-mailbox-pool-copy-existing', '', 'copy', attrs)) +
+          (row.provider === 'relay' ? '' : button('授权注册员收信', 'ops-mailbox-pool-registration-access', '', '', attrs)) +
           button('重置查询码', 'ops-mailbox-pool-rotate', '', '', attrs + (delivery?.enabled() && !delivery.canRotate(row) ? ' disabled' : '')) +
           button(row.active ? '停用' : '启用', 'ops-mailbox-pool-status', '', '', attrs + (row.authFailed ? ' disabled' : '')),
           { label: '邮箱操作' });
+      }
+      if (action === 'ops-mailbox-pool-registration-access') {
+        const row = snapshot?.items.find(item => item.id === id && !item.authorizationPending && item.provider !== 'relay');
+        if (row) void editRegistrationMailboxAccess(panel, row);
       }
       if (action === 'ops-mailbox-pool-authorize') {
         const row = mailboxPoolSnapshots.get(panel)?.items.find(item => item.id === id);

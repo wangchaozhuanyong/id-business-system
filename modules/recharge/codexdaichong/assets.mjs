@@ -430,7 +430,15 @@ function adaptAdminScript(source, routingScript) {
     'async function loadAdminSecurityStatus()',
     `
         async function authFetch(url, options = {}) {
-            const response = await fetch(url, { ...options, credentials: 'same-origin' });
+            const { securityConfirmation, ...requestOptions } = options;
+            const request = () => fetch(url, { ...requestOptions, credentials: 'same-origin' });
+            let response = await request();
+            if (response.status === 403 && (options.method && !['GET', 'HEAD'].includes(options.method) ||
+                securityConfirmation === true)) {
+                const detail = await response.clone().json().catch(() => null);
+                if (detail?.code === 'SECURITY_CONFIRMATION_REQUIRED' &&
+                    await window.parent.IDAccountSecurity?.verify()) response = await request();
+            }
             if (response.status === 401) {
                 window.idRechargeReport('session-expired');
                 throw new Error('统一登录已失效');
@@ -439,6 +447,8 @@ function adaptAdminScript(source, routingScript) {
         }
   `
   );
+  source = replaceOne(source,
+    '                            <button type="button" class="btn-delete" title="删除此任务记录" data-delete-task="${escapeHtml(l.id)}"><i data-lucide="trash-2"></i></button>\n', '');
   source = replaceSection(
     source,
     'async function ensureAdminSession()',

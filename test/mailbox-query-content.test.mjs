@@ -6,7 +6,7 @@ import {
 } from '../server/tools/mailbox-pool.mjs';
 
 // Exercise the real request handler without a server, database, network, or mailbox credentials.
-async function query(body, route = managedMailboxQueryRoute) {
+async function query(body, route = managedMailboxQueryRoute, actor = { id: 'staff-fixture', role: 'admin' }) {
   const origin = 'https://mailbox.example.test';
   const code = 'MBX-' + 'F'.repeat(32);
   const item = { id: 'fixture', revision: 1, provider: 'google', email: 'fixture@example.test',
@@ -30,7 +30,7 @@ async function query(body, route = managedMailboxQueryRoute) {
     writeHead(status, headers) { this.status = status; this.headers = headers; },
     end(value) { this.data = JSON.parse(value); }
   };
-  await handler(request, response);
+  await handler(request, response, actor);
   assert.equal(response.status, 200);
   assert.equal(response.headers['Cache-Control'], 'private, no-store');
   assert.equal(recorded, 1);
@@ -61,4 +61,10 @@ test('商城契约继续返回完整邮件正文与时间，不增加后台验�
   assert.equal(result.data.items[0].body, body);
   assert.equal(result.data.items[0].savedAt, '2026-11-12T09:06:09.000Z');
   assert.equal(Object.hasOwn(result.data.items[0], 'extractedCode'), false);
+});
+
+test('买家查询只返回识别的验证码和收件资料', async () => {
+  const data = await query('<p>Verification code 582913</p>', managedMailboxQueryRoute, null);
+  assert.equal(data.items[0].extractedCode, '582913');
+  assert.equal(Object.hasOwn(data.items[0], 'body'), false);
 });

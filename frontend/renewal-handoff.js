@@ -95,7 +95,9 @@
     if (view.finance) {
       if (row.canTake) return button('接手', 'claim', row.id);
       if (row.status === 'processing' && row.assignedToMe)
-        return (row.sourceChanged ? '' : button('登记实付', 'payment', row.id, 'primary')) + button('退回', 'return', row.id);
+        return (row.sourceChanged ? '' : button(row.paymentReview ? '核对并登记实付' : '登记实付', 'payment', row.id, 'primary')) +
+          button('退回', 'return', row.id) + button('移交', 'transfer', row.id);
+      if (row.canTransfer) return button('移交', 'transfer', row.id);
       return row.processingBy ? E(row.processingBy) : '—';
     }
     if (row.canFinish && !row.sourceChanged)
@@ -124,7 +126,7 @@
       columns.push(['submittedBy', '提交人', row => E(row.submittedBy || '—')],
         ...(view.finance ? [['submittedAt', '提交时间', row => E(beijing(row.submittedAt))],
           ['originalCard', '原用卡尾号', row => E(row.order.originalLast4 || '—')]] : []),
-        ['status', '办理进度', row => A.tag(row.sourceChanged && !['returned', 'complete'].includes(row.status) ? '原单待核对' :
+        ['status', '办理进度', row => A.tag(row.paymentReview ? '付款待核对' : row.sourceChanged && !['returned', 'complete'].includes(row.status) ? '原单待核对' :
           statuses[row.status] || '待核对', row.status === 'paid' ? 'success' : '')],
         ...(currentRole() === 'supervisor' ? [] : [
           ['amount', '本次实付', row => E(row.amount ? row.amount + ' ' + row.currency : '—')],
@@ -299,7 +301,7 @@
     }
     let feedback, timing;
     try {
-      if (command.action === 'paid' && !(await Security?.verify())) return;
+      if (['paid', 'transfer'].includes(command.action) && !(await Security?.verify())) return;
       if (active !== view || (form && !form.isConnected)) return;
       if (form) form.inert = true;
       feedback = A.beginActionFeedback(submitter, '正在登记…');
@@ -325,7 +327,7 @@
         if (!updated) notifyError(view, '已保存，列表暂未刷新。请点击刷新。');
       }
       const messages = { submit: '已提交给财务', claim: '已接手这笔续费', paid: '已交回续费管理，等待员工补资料',
-        return: '已退回业务人员', finish: '订单提交成功' };
+        return: '已退回业务人员', finish: '订单提交成功', transfer: '已移交，其他财务可接手' };
       A.notify(messages[command.action] + (result.orderNo ? ' · ' + result.orderNo : ''), { kind: 'success' });
       return true;
     } catch (error) {
@@ -397,6 +399,18 @@
     A.state.drafts.set(form.dataset.renewalDraft, values);
   }
 
+  function transferForm(row) {
+    const id = 'renewal-transfer-form';
+    A.openDrawer('移交财务续费', '先核对是否已经付款。付款未确认时，接手的人应先查付款凭证。', props([
+      ['原订单', row.order.number], ['当前经办人', row.processingBy]
+    ]) + '<form id="' + id + '" data-renewal-id="' + E(row.id) + '" data-renewal-version="' + row.version +
+      '"><div class="form-grid">' + inputField('交接原因', 'renewal-reason', '', 'required maxlength="160"') +
+      selectField('付款情况', 'renewal-review', [['review', '已付款或待核对'], ['unpaid', '已确认未付款']],
+        'review') + '</div><label class="checkbox-label"><input name="renewal-confirmed" type="checkbox" required> 已核对以上资料</label>' +
+      '<p class="field-error" role="alert" data-renewal-form-error hidden></p></form>',
+    A.button('取消', 'drawer-close') + '<button type="submit" class="button primary" form="' + id + '">确认移交</button>');
+  }
+
   function updateCardFields(form, readPool) {
     const node = $('[data-renewal-card-fields]', form);
     const mode = form.elements['renewal-cardMode'].value;
@@ -445,12 +459,14 @@
       const row = view.data?.items.find(item => item.id === node.dataset.id);
       if (row && command === 'claim') await save(view, { action: 'claim', id: row.id, version: row.version }, node);
       if (row && ['payment', 'return'].includes(command)) paymentForm(view, row, command === 'return');
+      if (row?.canTransfer && command === 'transfer') transferForm(row);
     }
     return true;
   }
 
   function onSubmit(form) {
-    const actions = { 'renewal-finish-form': 'finish', 'renewal-payment-form': 'paid', 'renewal-return-form': 'return' };
+    const actions = { 'renewal-finish-form': 'finish', 'renewal-payment-form': 'paid', 'renewal-return-form': 'return',
+      'renewal-transfer-form': 'transfer' };
     const action = actions[form.id];
     if (!active || !action) return false;
     if (!form.reportValidity()) return true;
@@ -466,6 +482,7 @@
       return true;
     }
     if (action !== 'finish') command.confirmed = fields['renewal-confirmed'] === 'on';
+    if (action === 'transfer') command.review = fields['renewal-review'] === 'review';
     const submitter = form.querySelector('[type="submit"]') || document.querySelector('[form="' + form.id + '"][type="submit"]');
     void save(view, command, submitter, form);
     return true;

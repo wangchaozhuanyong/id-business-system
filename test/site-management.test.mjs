@@ -44,8 +44,10 @@ test('keeps page and server measurements separate and never stores raw fields', 
   bad.response.emit('finish');
   const id = bad.headers['X-ID-Diagnostic'];
   assert.equal(data.sample({ id, activity: 'order-save', result: 'failed', elapsed: 111, data: 'private form' }, employee.id), false);
+  assert.equal(data.sample({ id, activity: 'order-save', result: 'ok', elapsed: 111 }, employee.id), false);
   assert.equal(data.sample({ id, activity: 'order-save', result: 'failed', elapsed: 111 }, employee.id), true);
   assert.equal(data.sample({ id: randomUUID(), activity: 'login', result: 'ok', elapsed: 1 }), false);
+  assert.equal(data.sample({ id: randomUUID(), activity: 'order-save', result: 'ok', elapsed: 1 }, employee.id), false);
   const login = requestCapture();
   data.request(login.response, 'login');
   login.response.statusCode = 401;

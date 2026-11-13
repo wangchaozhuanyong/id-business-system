@@ -88,6 +88,16 @@ test('validated login challenge matches the domain and action and is consumed be
   assert.equal(f.challengeCount(), 4);
 });
 
+test('unbound official staff can enroll but cannot change employees without confirmation', async t => {
+  const f = await fixture(t);
+  const session = await f.call('/login', { body: { ...credentials, remember: true } });
+  assert.equal(session.status, 200);
+  assert.equal((await f.call('/security', { cookie: session.cookie })).data.requiredForExistingActions, true);
+  const response = await f.call('/employees', { cookie: session.cookie,
+    body: { name: '隔离注册员', email: 'registrar@example.test', password: 'synthetic-password-only', role: 'registrar' } });
+  assert.equal(response.status, 403);
+});
+
 test('account checks, source checks and temporary limits are bounded', () => {
   let now = 0;
   const attempt = createLoginThrottle(() => now);

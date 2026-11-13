@@ -51,8 +51,8 @@ import { probeCodexdaichongRuntime } from '../modules/recharge/codexdaichong/run
 import { createRechargeEvents } from './recharge-events.mjs';
 import { createSiteObservations, measuredActivity } from './site-observations.mjs';
 import { createSiteManagement, siteManagementPath, siteObservationScope, siteReleaseInfo, siteBackupView } from './site-management.mjs';
-import { loadLoginSecurity, turnstileLoginPage } from './login-security.mjs';
-import { managesBusiness, nativeManagerAccess, retailAccess } from './access-roles.mjs';
+import { loadLoginSecurity, turnstileLoginPage, verifiedAddress } from './login-security.mjs';
+import { managesBusiness, nativeBrowserVerification, nativeManagerAccess, retailAccess } from './access-roles.mjs';
 import { createStaffWorkspaces, staffPath } from './staff-workspaces.mjs';
 import { createRenewalHandoff, renewalHandoffPath } from './renewal-handoff.mjs';
 import { readBackupMonitorReceipt, readRestoreEvidence } from './monitoring-worker-receipts.mjs';
@@ -375,7 +375,7 @@ export async function startPreview(
       systemMonitoring = createSystemMonitoring({ store, origin: secureOrigin,
         native: rechargeConfig ? createLegacyRechargeNotifications(orderRechargeClient) : undefined,
         send: publicUrl ? undefined : async () => ({ status: 'failed', reason: 'configuration' }) });
-      const confirmProtectedAction = request => !auth?.shouldVerify(request) || auth.recentlyVerified(request);
+      const confirmProtectedAction = request => !auth?.shouldVerify() || auth.recentlyVerified(request);
       handleMonitoring = createMonitoringHandler({ monitor: systemMonitoring, publicOrigin: secureOrigin,
         confirmSettings: confirmProtectedAction });
       if (publicUrl) {
@@ -424,6 +424,7 @@ export async function startPreview(
       });
       handleManagedMailboxQuery = createManagedMailboxQuery({
         store, publicOrigin: secureOrigin, storefrontOrigin: mailboxPublicUrl?.origin,
+        readSource: request => verifiedAddress(request, loginSecurity),
         readMailbox: microsoftMailbox.readMailbox, watchMailbox: microsoftMailbox.watchMailbox
       });
       if (publicUrl) handleLegacyToolRoute = createLegacyToolRoutes({
@@ -433,6 +434,7 @@ export async function startPreview(
       relay = createAppleRelayService({
         config: relayConfig,
         publicOrigin: secureOrigin,
+        readSource: request => verifiedAddress(request, loginSecurity),
         readInventory: () => store.load('inventory').data,
         deliveryJournal: store.relayDeliveryJournal,
         subscribeChanges: listener => store.subscribeChanges(listener),
@@ -565,6 +567,10 @@ export async function startPreview(
     response.setHeader('Cache-Control', 'no-store');
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('Referrer-Policy', 'no-referrer');
+    if (publicUrl) {
+      response.setHeader('Strict-Transport-Security', 'max-age=31536000');
+      response.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    }
     response.setHeader('X-ID-Workspace', 'independent-redesign-20261105');
     const address = server.address();
     const route = (request.url || '/').split('?', 1)[0];
@@ -665,7 +671,7 @@ export async function startPreview(
     }
     if (store && route === managedMailboxQueryRoute) {
       if (!auth) return forbidden();
-      return void handleManagedMailboxQuery(request, response);
+      return void handleManagedMailboxQuery(request, response, actor);
     }
     if (store && route === '/api/local/apple-relay/public-query') {
       if (!auth) {
@@ -683,7 +689,7 @@ export async function startPreview(
       if (!canManage || (loginRequired && !actor) || (actor?.role === 'admin' && (!readable ||
           ['settings', 'settings-history'].includes(new URL(request.url, 'http://localhost').searchParams.get('tab')))))
         return forbidden();
-      if (actor?.role === 'super' && !readable && auth.shouldVerify(request) && !auth.recentlyVerified(request))
+      if (actor?.role === 'super' && !readable && auth.shouldVerify() && !auth.recentlyVerified(request))
         return requireSecurityConfirmation(response);
       return void handleFinanceCollection(request, response, actor || { id: 'local-operator', name: '本机操作员', role: 'admin' });
     }
@@ -717,7 +723,7 @@ export async function startPreview(
     if (store && cardManagementRoutes.has(route)) {
       response.setHeader('Cache-Control', 'private, no-store');
       if (!actor || !canManage) return forbidden();
-      if (readable && auth.shouldVerify(request) && !auth.recentlyVerified(request) &&
+      if (readable && auth.shouldVerify() && !auth.recentlyVerified(request) &&
           route === '/api/local/subscription-card-status' &&
           new URL(request.url, 'http://localhost').searchParams.get('includeDetails') === '1')
         return requireSecurityConfirmation(response);
@@ -765,6 +771,8 @@ export async function startPreview(
       if (loginRequired && !actor) return forbidden();
       return void localBusiness.handleLocalBusiness(request, response, route, store, actor, {
         publicOrigin: secureOrigin,
+        authorizeSensitive: auth?.shouldVerify() ? request => auth.recentlyVerified(request) : undefined,
+        isRegistrar: auth?.isRegistrar,
         requireRenewalHandoff: Boolean(handleRenewalHandoff && auth),
         readOrderCards: () => readPoolCards(orderRechargeClient, { includeNumbers: true }),
         readOrderOwners: () => auth?.orderOwners() || [],
@@ -792,10 +800,9 @@ export async function startPreview(
     if (route.startsWith('/integrations/codexdaichong/')) {
       if (!canManage || (rechargeConfig && !actor)) return forbidden();
       const nativeRoute = route.slice('/integrations/codexdaichong'.length);
-      const sensitive = /^\/api\/(?:external\/cards|admin\/(?:cards|config|region|recharge-routing|proxies|security|2fa|hcaptcha|telegram|ip-bans|orbitcard\/(?:cards|sync|config|product-strategy)))(?:\/|$)/i.test(nativeRoute);
-      if (sensitive && !readable && actor?.role === 'super' && auth.shouldVerify(request) && !auth.recentlyVerified(request))
-        return requireSecurityConfirmation(response);
       if (!nativeManagerAccess(actor, nativeRoute, request.method)) return forbidden();
+      if (auth?.shouldVerify() && nativeBrowserVerification(nativeRoute, request.method) && !auth.recentlyVerified(request))
+        return requireSecurityConfirmation(response);
       const gateway = gatewayFor(request.headers.host);
       if (gateway) return gateway.handle(request, response);
       if (route === '/integrations/codexdaichong/status' && request.method === 'GET') {
@@ -845,7 +852,7 @@ export async function startPreview(
       body = Buffer.from(body.toString('utf8').replace('<head>', metadata));
     }
     if (loginRequired && signedOutIndex && asset === assets.get('/index.html')) {
-      if (!actor) response.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
+      response.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
       body = actor
         ? Buffer.from(
             body

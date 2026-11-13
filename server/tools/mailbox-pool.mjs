@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { parseToolPublicOrigin, toolRequestOrigin } from './request-origin.mjs';
 import { createMailboxUpdates } from './mailbox-updates.mjs';
+import { createSourceLimit } from '../login-security.mjs';
 
 export const managedMailboxDomain = 'managed-mailbox-pool';
 export const managedMailboxQueryRoute = '/api/local/tools/mailbox-query';
@@ -52,6 +53,38 @@ export function mailboxPoolMetadata(snapshot) {
 
 const emailKey = value => typeof value === 'string' ? value.trim().toLowerCase() : '';
 const inventoryProviders = { google: 'google', microsoft: 'microsoft', apple: 'apple' };
+
+export function availableRegistrationMailbox(asset) {
+  return Boolean(asset?.createdById && !asset.deleted && !asset.relayDeleted && !asset.used &&
+    (asset.inventoryState ?? 'available') === 'available' && (asset.health ?? 'normal') === 'normal' &&
+    (asset.status ?? '正常') === '正常');
+}
+
+export function registrationMailboxSource(snapshot, asset, actor) {
+  if (!availableRegistrationMailbox(asset) || asset.createdById !== actor.id) return null;
+  if (asset.type === 'relay') return { asset };
+  const item = mailboxPoolItems(snapshot).find(row => row.registrationAssetId === asset.id &&
+    row.registrationActorId === actor.id && emailKey(row.email) === emailKey(asset.email) && row.active && !row.authFailed);
+  if (item) return { asset, item: { ...item, revision: snapshot.version } };
+  if (asset.appPassword && ['google', 'apple'].includes(asset.type)) {
+    const provider = /@(?:gmail|googlemail)\.com$/i.test(asset.email) ? 'google'
+      : /@(?:icloud|mac|me)\.com$/i.test(asset.email) ? 'apple' : null;
+    if (provider) return { asset, item: { provider, email: asset.email, appPassword: asset.appPassword } };
+  }
+  return { asset };
+}
+
+export function mailboxRegistrationAssignment(item, mailboxes, assetId, isRegistrar) {
+  if (assetId === null) {
+    const { registrationAssetId, registrationActorId, ...unassigned } = item;
+    return unassigned;
+  }
+  const asset = mailboxes.find(row => row.id === assetId && row.type !== 'relay' &&
+    availableRegistrationMailbox(row) && emailKey(item.email) === emailKey(row.email));
+  if (!asset || !item.active || item.authFailed || !isRegistrar(asset.createdById))
+    throw new MailboxPoolError(409, '请选择仍在职的注册员及其已登记、可用的相同邮箱');
+  return { ...item, registrationAssetId: asset.id, registrationActorId: asset.createdById };
+}
 
 export function inventoryMailboxPool(metadata, inventory) {
   const mailboxes = inventory?.data?.mailboxes || [];
@@ -325,7 +358,7 @@ export async function readMailboxImap(item, { verifyOnly = false } = {}) {
   });
 }
 
-function normalizeMessages(value) {
+function normalizeMessages(value, includeBody) {
   if (!Array.isArray(value) || value.length > 20) throw new Error('invalid mail response');
   const safe = (text, max) => typeof text === 'string' ? text.slice(0, max) : '';
   return value.map((row) => {
@@ -333,7 +366,7 @@ function normalizeMessages(value) {
     return {
       subject: safe(row?.subject, 500),
       receivedAt: safe(row?.receivedAt, 64),
-      body: body.slice(0, 2000),
+      ...(includeBody && { body: body.slice(0, 2000) }),
       extractedCode: extractManagedMailboxCode(body)
     };
   });
@@ -353,14 +386,18 @@ function storefrontMessages(value, limit, address) {
   });
 }
 
-export function createManagedMailboxQuery({ store, publicOrigin, storefrontOrigin, readMailbox = readMailboxImap, watchMailbox, clock = Date.now }) {
+export function createManagedMailboxQuery({ store, publicOrigin, storefrontOrigin, readMailbox = readMailboxImap,
+  watchMailbox, readSource = () => undefined, clock = Date.now }) {
   const publicUrl = parseToolPublicOrigin(publicOrigin);
   const storefrontUrl = parseToolPublicOrigin(storefrontOrigin);
-  const attempts = [];
-  let running = 0;
+  const allowSource = createSourceLimit({ maximum: 40, windowMs: 300_000, clock });
+  const allowMailbox = createSourceLimit({ maximum: 30, windowMs: 60_000, clock });
+  const running = { site: 0, storefront: 0, staff: 0 };
   const updates = createMailboxUpdates({ store, watchMailbox, clock });
-  const handle = async (request, response) => {
+  const handle = async (request, response, actor) => {
     const storefront = request.url?.split('?', 1)[0] === storefrontMailboxQueryRoute;
+    const includeBody = !storefront && ['admin', 'super'].includes(actor?.role);
+    const channel = storefront ? 'storefront' : includeBody ? 'staff' : 'site';
     const wantsUpdates = !storefront && request.headers.accept === 'text/event-stream';
     const send = (status, payload, retryAfter = 5) => {
       response.writeHead(status, {
@@ -380,13 +417,8 @@ export function createManagedMailboxQuery({ store, publicOrigin, storefrontOrigi
       return send(403, { error: '请求来源未通过校验' });
     if (!/^application\/json(?:;|$)/i.test(request.headers['content-type'] || ''))
       return send(415, { error: '请提交 JSON 请求' });
-    const now = clock();
-    while (attempts.length && attempts[0] <= now - 300_000) attempts.shift();
-    if (attempts.length >= 40 || running >= 3)
-      return send(429, { error: '查询繁忙，请稍后再试' },
-        attempts.length >= 40 ? Math.ceil((attempts[0] + 300_000 - now) / 1000) : 5);
-    attempts.push(now);
-    running++;
+    if (!allowSource(channel + ':' + (includeBody ? actor.id : readSource(request) || 'unverified')))
+      return send(429, { error: '查询过于频繁，请稍后再试' }, 60);
     try {
       let bytes = 0;
       const chunks = [];
@@ -416,22 +448,27 @@ export function createManagedMailboxQuery({ store, publicOrigin, storefrontOrigi
       const item = store.findManagedMailbox(code, clock());
       const invalidCode = () => send(storefront ? 400 : 404, { error: '邮件查询码无效或已过期' });
       if (!item) return invalidCode();
+      if (!allowMailbox(channel + ':' + item.id) || running[channel] >= 3)
+        return send(429, { error: '查询繁忙，请稍后再试' });
       if (wantsUpdates) {
         await updates.handle(request, response, code, item);
         return;
       }
       let result;
+      running[channel]++;
       try {
         result = await readMailbox({ ...item, limit, ...(storefront && { storefront: true }) });
       } catch (error) {
         if (error instanceof MailboxAuthorizationError)
           store.markManagedMailboxAuthFailed(item.id, item.revision);
         throw error;
+      } finally {
+        running[channel]--;
       }
       const messages = Array.isArray(result) ? result : result.rows;
       const rows = storefront
         ? storefrontMessages(messages, limit, item.email)
-        : normalizeMessages(messages).slice(0, limit);
+        : normalizeMessages(messages, includeBody).slice(0, limit);
       const latest = store.findManagedMailbox(code, clock());
       if (latest?.id !== item.id || latest.revision !== item.revision)
         return invalidCode();
@@ -453,8 +490,6 @@ export function createManagedMailboxQuery({ store, publicOrigin, storefrontOrigi
     } catch (error) {
       const exposed = wantsUpdates && [403, 404, 409, 503].includes(error.status);
       if (!response.destroyed) send(exposed ? error.status : 503, { error: exposed ? error.message : '邮箱暂不可用，请联系管理员核对授权' });
-    } finally {
-      running--;
     }
   };
   handle.close = () => updates.close();

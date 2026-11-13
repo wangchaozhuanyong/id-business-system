@@ -135,7 +135,7 @@
         input('隐藏邮箱地址', 'aliasEmail', current.draft.alias?.aliasEmail, 'type="email" required maxlength="254"') +
         input('备注', 'aliasNote', current.draft.alias?.aliasNote, 'maxlength="120"'), '登记隐藏邮箱') :
         '<p class="inline-notice">暂无可用主邮箱，请管理员先连接主邮箱。</p>') +
-      heading('本人登记记录', '登记后可从此处读取独立的邮件验证码。', 'registration-list-help') + search('搜索邮箱或账号') +
+      heading('本人登记记录', '邮箱连接后可以查验证码。使用公司邮箱池的收信权限，请管理员在邮箱池授权。', 'registration-list-help') + search('搜索邮箱或账号') +
       `<div data-staff-list>${registrationList(current)}</div>`;
   }
 
@@ -264,7 +264,7 @@
     view.saving = true;
     const control = formNode?.querySelector('[type="submit"]');
     if (control) control.disabled = true;
-    const safeRetry = ['customer', 'renewal', 'manual-order', 'registration'].includes(action);
+    const safeRetry = ['customer', 'renewal', 'manual-order', 'registration'].includes(action) || action.startsWith('card-');
     const submittedVersion = payload.version ?? current.version;
     try {
       const body = { ...payload, version: submittedVersion };
@@ -292,7 +292,7 @@
       message(view, changed ? text : text + '，列表刷新失败，请点击刷新。');
       return true;
     } catch (error) {
-      if (error.status < 500) view.write = undefined;
+      if (error.status < 500 && !action.startsWith('card-')) view.write = undefined;
       message(view, error.message);
       if (!formNode) A.notify(error.message);
       return false;

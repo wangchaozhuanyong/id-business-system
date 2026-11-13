@@ -209,15 +209,19 @@ export function createStaffWorkspaces({ store, client, publicOrigin, getAuth, re
       return cardsView(await client.get('/api/admin/cards'));
     if (route !== 'finance/cards' || request.method !== 'POST') fail(405, '此操作不可用');
     requireRecent(getAuth(), request);
+    const operation = describeWriteOperation(request.headers['x-id-operation'], actor, [route, body]);
+    if (!operation) fail(400, '请从当前页面提交银行卡维护');
     if (inProgress.has('cards')) fail(409, '已有银行卡操作正在处理，请稍后重试');
     inProgress.add('cards');
     try {
       const current = cardsView(await client.get('/api/admin/cards'));
-      keepVersion(body, current);
       let audit, count;
+      const start = () => store.startFinanceCardOperation(actor, operation, body.action, body.version, current.version);
       if (body.action === 'import') {
         const command = importCommand(body);
         checkFrozenCardPoolWrite(store, { kind: 'import', data: command });
+        const replay = start();
+        if (replay) return replay;
         const result = await client.writeCardMaintenance('POST', '/api/admin/cards/import', command, actor);
         if (!Number.isSafeInteger(result.imported) || result.imported < 0 || result.imported > command.cards.length)
           fail(503, '导入结果待核对，请刷新银行卡列表');
@@ -235,6 +239,8 @@ export function createStaffWorkspaces({ store, client, publicOrigin, getAuth, re
           command.cardIds = [...new Set(ids)];
           command.allowedPlans = allowedPlans(body.plans);
         }
+        const replay = start();
+        if (replay) return replay;
         const result = await client.writeCardMaintenance('PUT', '/api/admin/cards/plan-policy', command, actor);
         if (!Number.isSafeInteger(result.planPolicy?.version) || result.planPolicy.version < current.version)
           fail(503, '套餐设置结果待核对，请刷新银行卡列表');
@@ -242,6 +248,8 @@ export function createStaffWorkspaces({ store, client, publicOrigin, getAuth, re
       } else if (body.action === 'stop') {
         const card = current.items.find(row => row.id === body.id);
         if (!card) fail(404, '未找到该银行卡');
+        const replay = start();
+        if (replay) return replay;
         if (card.active) {
           const result = await client.stopCardUse(['recharge:' + body.id]);
           if (result.state === 'pending') fail(409, '这张卡正在使用，请在本笔充值结束后再试');
@@ -249,9 +257,10 @@ export function createStaffWorkspaces({ store, client, publicOrigin, getAuth, re
         }
         audit = ['finance_card_stop', 'recharge:' + body.id];
       } else fail(400, '请选择可用的银行卡操作');
-      store.recordAuthEvent({ action: audit[0], targetId: audit[1], actor });
       cardChanged?.();
-      return { saved: true, ...(count !== undefined && { count }) };
+      const result = { saved: true, ...(count !== undefined && { count }) };
+      store.finishFinanceCardOperation(actor, operation, audit, result);
+      return result;
     } finally {
       inProgress.delete('cards');
     }
@@ -264,20 +273,22 @@ export function createStaffWorkspaces({ store, client, publicOrigin, getAuth, re
     const target = store.registrationMailbox(body.id, actor);
     if (!target) fail(404, '请选择本人已登记且可用的邮箱');
     lastMailRead.set(actor.id, now);
-    let rows;
+    let rows, result;
     if (target.asset.type === 'relay') rows = await readRelayCodes(target.asset, actor);
     else {
       if (!target.item) fail(409, '该邮箱尚未连接收信，请核对应用专用密码或联系管理员授权');
-      const result = await readMailbox({ ...target.item, limit: 8 });
+      result = await readMailbox({ ...target.item, limit: 8 });
       rows = (Array.isArray(result) ? result : result.rows).flatMap(row => {
         const code = extractManagedMailboxCode(row.body) || extractManagedMailboxCode(row.subject);
         return code ? [{ code, receivedAt: row.receivedAt }] : [];
       });
-      if (result.refreshToken && result.refreshToken !== target.item.refreshToken)
-        store.rotateMicrosoftRefreshToken(target.item.id, target.item.revision, result.refreshToken);
     }
-    if (store.registrationMailbox(body.id, actor)?.asset.version !== target.asset.version)
+    const current = store.registrationMailbox(body.id, actor);
+    if (current?.asset.version !== target.asset.version || current?.item?.revision !== target.item?.revision ||
+        current?.item?.id !== target.item?.id)
       fail(409, '邮箱资料已更新，请刷新再查询');
+    if (result?.refreshToken && target.item?.id && result.refreshToken !== target.item.refreshToken)
+      store.rotateMicrosoftRefreshToken(target.item.id, target.item.revision, result.refreshToken);
     store.recordAuthEvent({ action: 'registration_code_read', targetId: target.asset.id, actor });
     return { items: rows };
   }

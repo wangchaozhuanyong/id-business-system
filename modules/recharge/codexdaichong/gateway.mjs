@@ -75,6 +75,43 @@ async function readPresentationJson(stream, limit) {
   return JSON.parse(Buffer.concat(chunks));
 }
 
+function browserTaskRow(value) {
+  const row = value || {};
+  const progress = Number(row.progress);
+  return { id: row.id, jobKey: row.jobKey, time: row.time, createdAt: row.createdAt, displayTime: row.displayTime,
+    updatedAt: row.updatedAt, status: row.status, progress: Number.isFinite(progress) ? Math.max(0, Math.min(100, progress)) : 0,
+    cardLast4: /^\d{4}$/.test(row.cardLast4) ? row.cardLast4 : '' };
+}
+
+function browserAdminData(route, body, actor) {
+  if (route === '/api/admin/cards') {
+    return { ...body, cards: Array.isArray(body.cards) ? body.cards.map(({ card_cvc, card_number, ...card }) => ({
+      ...card, card_number: /^\d{4}$/.test(card.last4) ? '****' + card.last4 : ''
+    })) : [] };
+  }
+  if (route === '/api/admin/data') {
+    const { telegram, hcaptcha, ...data } = body;
+    const { phone_pool, ...settings } = data.config || {};
+    return { ...data,
+      config: { ...settings, phone_pool: actor.sensitive ? phone_pool || [] :
+        phone_pool?.map(({ key, ...phone }) => phone) || [] },
+      logs: Array.isArray(data.logs) ? data.logs.map(browserTaskRow) : [],
+      manual_holds: Array.isArray(data.manual_holds) ? data.manual_holds.map(({ cdkCode, ...row }) => row) : [],
+      ...(actor.sensitive && { telegram, hcaptcha })
+    };
+  }
+  if (route === '/api/admin/task-logs')
+    return { success: body.success, tasks: Array.isArray(body.tasks) ? body.tasks.map(browserTaskRow) : [] };
+  return { success: body.success, task: browserTaskRow(body.task), runtimeEntries: [] };
+}
+
+function browserAdminProjection(method, path) {
+  if (method !== 'GET') return false;
+  const route = path.toLowerCase().replace(/\/+$/, '');
+  return route === '/api/admin/cards' || route === '/api/admin/data' || route === '/api/admin/task-logs' ||
+    route.startsWith('/api/admin/task-logs/') ? route : false;
+}
+
 async function writeRechargePresentation(reply, res, path, report, readSteps) {
   let body;
   try {
@@ -380,6 +417,15 @@ export function createCodexdaichongGateway({
         if (reply.statusCode >= 300 && reply.statusCode < 400) {
           reply.resume();
           respond(res, 502, '充值服务返回了无效跳转');
+          return;
+        }
+        const projectedAdmin = reply.statusCode === 200 && browserAdminProjection(req.method, path.pathname);
+        if (projectedAdmin) {
+          void readPresentationJson(reply, 8 * 1024 * 1024).then(body => {
+            if (res.destroyed) return;
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+            res.end(JSON.stringify(browserAdminData(projectedAdmin, body, actor)));
+          }).catch(() => { if (!res.destroyed) respond(res, 502, '暂时无法读取代充资料'); });
           return;
         }
         if (readsRechargePresentation(req.method, path.pathname, reply.statusCode, reply.headers['content-type'])) {

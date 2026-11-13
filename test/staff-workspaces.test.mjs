@@ -4,7 +4,8 @@ import { Readable } from 'node:stream';
 import { randomBytes } from 'node:crypto';
 import { createStaffWorkspaces } from '../server/staff-workspaces.mjs';
 import { createOrderRechargeClient } from '../server/order-recharge-client.mjs';
-import { employeeCommerce, financeCommerce, nativeManagerAccess, protectedSettingsChanged, registrarInventory, retailAccess } from '../server/access-roles.mjs';
+import { employeeCommerce, financeCommerce, nativeBrowserVerification, nativeManagerAccess, protectedSettingsChanged, registrarInventory, retailAccess } from '../server/access-roles.mjs';
+import { mailboxRegistrationAssignment, registrationMailboxSource } from '../server/tools/mailbox-pool.mjs';
 import { calculateConfirmedNetReceipt } from '../modules/finance/accounting.mjs';
 import { verifyRechargeAssertion } from '../modules/recharge/assertion.mjs';
 
@@ -32,6 +33,7 @@ appleRelay: { parents: [{ id: 'parent-1', status: 'ACTIVE', email: 'parent@examp
 function fixture() {
   let verified = false;
   const audited = [], writes = [], used = new Map(), upstream = [];
+  const financeOperations = new Map();
   const state = { commerce: structuredClone(commerce), inventory: structuredClone(inventory) };
   const rawCards = { cards: [{ id: 5, last4: '0123', is_active: 1, card_number: 'fixture-number', card_cvc: 'fixture-cvc',
     allowed_plans: ['plus'], usage_count: 2 }], planPolicy: { strict: false, version: 7 } };
@@ -57,7 +59,18 @@ function fixture() {
     },
     loadBitBrowserProxies: () => ({ version: 0, items: [] }),
     saveBitBrowserProxy: (body, actor) => ({ version: body.version + 1, items: [{ actorId: actor.id }] }),
-    recordAuthEvent: event => audited.push(event)
+    recordAuthEvent: event => audited.push(event),
+    startFinanceCardOperation(_actor, operation, _action, expected, actual) {
+      const previous = financeOperations.get(operation.domain);
+      if (previous?.result) return previous.result;
+      if (previous || expected !== actual) throw Object.assign(new Error('请刷新后核对'), { status: 409 });
+      financeOperations.set(operation.domain, { pending: true });
+      return null;
+    },
+    finishFinanceCardOperation(actor, operation, audit, result) {
+      financeOperations.set(operation.domain, { result });
+      this.recordAuthEvent({ action: audit[0], targetId: audit[1], actor });
+    }
   };
   const client = {
     async get(path) {
@@ -85,7 +98,8 @@ function fixture() {
     request.url = '/api/local/staff/' + path;
     const route = request.url.split('?')[0];
     request.method = body ? 'POST' : 'GET';
-    request.headers = { origin, 'content-type': 'application/json', ...headers };
+    request.headers = { origin, 'content-type': 'application/json',
+      ...(path === 'finance/cards' && body && { 'x-id-operation': randomBytes(24).toString('hex') }), ...headers };
     let status, data;
     await handler(request, { writeHead(value) { status = value; }, end(value) { data = JSON.parse(value); } }, route, actors[role]);
     return { status, data };
@@ -99,6 +113,12 @@ test('role policy keeps the business administrator and blocks global settings or
   assert.equal(nativeManagerAccess(actors.admin, '/api/admin/proxies', 'POST'), true);
   assert.equal(nativeManagerAccess(actors.admin, '/api/admin/subscription/batch-renewal-status', 'GET'), true);
   assert.equal(nativeManagerAccess(actors.super, '/api/admin/region', 'POST'), true);
+  assert.equal(nativeManagerAccess(actors.admin, '/api/admin/billing', 'GET'), true);
+  assert.equal(nativeManagerAccess(actors.super, '/api/admin/billing/fixture', 'DELETE'), false);
+  assert.equal(nativeManagerAccess(actors.admin, '/api/admin/task-logs/fixture', 'DELETE'), false);
+  assert.equal(nativeManagerAccess(actors.admin, '/api/admin/unknown-future-operation', 'POST'), false);
+  assert.equal(nativeBrowserVerification('/api/admin/proxies', 'POST'), true);
+  assert.equal(nativeBrowserVerification('/api/admin/task-logs/fixture', 'GET'), false);
   assert.equal(protectedSettingsChanged({ mailboxTypes: ['new'] }, { mailboxTypes: ['old'] }), true);
   assert.equal(protectedSettingsChanged({ mailboxTypes: ['old'], orderPrices: { a: 1 } }, { mailboxTypes: ['old'] }), false);
   assert.equal(retailAccess(actors.finance, '/api/local/commerce', 'GET'), true);
@@ -122,6 +142,21 @@ test('role policy keeps the business administrator and blocks global settings or
   assert.equal(registration.data.mailboxes[0].hasAuthenticator, true);
   assert(!JSON.stringify(registration).includes('fixture-app-password'));
   assert(!JSON.stringify(registration).includes('fixture-parent-password'));
+});
+
+test('registry permissions depend on the assigned record and can be withdrawn without changing buyer delivery', () => {
+  const registrar = actors.registrar;
+  const own = { id: 'registration-fixture', type: 'microsoft', email: 'owned@example.test', createdById: registrar.id };
+  const item = { id: 'provider-fixture', provider: 'microsoft', email: own.email, active: true, queryCode: 'fixture-code' };
+  const pool = items => ({ version: 2, data: { items } });
+  assert.deepEqual(registrationMailboxSource(pool([item]), own, registrar), { asset: own });
+  const assigned = mailboxRegistrationAssignment(item, [own], own.id, id => id === registrar.id);
+  assert.equal(registrationMailboxSource(pool([assigned]), own, registrar).item.id, item.id);
+  assert.equal(registrationMailboxSource(pool([assigned]), { ...own, id: 'other-record' }, registrar).item, undefined);
+  const revoked = mailboxRegistrationAssignment(assigned, [own], null, () => false);
+  assert.equal(registrationMailboxSource(pool([revoked]), own, registrar).item, undefined);
+  assert.deepEqual(revoked, item);
+  assert.throws(() => mailboxRegistrationAssignment(item, [own], own.id, () => false), { status: 409 });
 });
 
 test('financial and proxy commands are signed for the allowed original recharge endpoints', async () => {

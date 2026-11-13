@@ -21,8 +21,9 @@ import { orderExpenseDomain } from './finance/expense-receipts.mjs';
 import { appendWebsiteVisit, getWebsiteVisitIp, reportWebsiteVisits, websiteVisitsDomain } from './tools/website-visits.mjs';
 import {
   applyMailboxPoolWrite, defaultMailboxValidDays, findMailboxQuery, inventoryMailboxPool, mailboxPoolCodePage,
-  mailboxPoolItems, mailboxPoolMetadata, mailboxRotationProblem, managedMailboxDomain, MailboxPoolError,
-  planMailboxRotations, prepareVerifiedMailboxWrite
+  availableRegistrationMailbox, mailboxPoolItems, mailboxPoolMetadata, mailboxRegistrationAssignment,
+  mailboxRotationProblem, managedMailboxDomain, MailboxPoolError, planMailboxRotations, prepareVerifiedMailboxWrite,
+  registrationMailboxSource
 } from './tools/mailbox-pool.mjs';
 import {
   applyTotpWrite, generateSavedCode, generateSavedCodePage, revealSavedTotpSecret, savedTotpDomain,
@@ -213,6 +214,7 @@ const sessionEventLabels = {
   finance_card_import: '导入自动代充银行卡',
   finance_card_plans: '更新自动代充用卡规则',
   finance_card_stop: '停用自动代充银行卡',
+  finance_card_requested: '提交自动代充银行卡维护',
   supervisor_proxy_add: '登记自动代充业务 IP',
   registration_code_read: '查询登记邮箱验证码',
   registration_totp_read: '查看登记账号动态验证码',
@@ -231,7 +233,8 @@ const orderFeatureDomains = new Set([
   cardFreezeDocument, 'system-monitoring-config', 'system-monitoring-state', subscriptionDomain, orderExpenseDomain, renewalHandoffDomain
 ]);
 const renewalAuditLabels = { renewal_submit: '提交续费给财务', renewal_claim: '领取续费申请',
-  renewal_paid: '登记续费实付', renewal_return: '退回续费申请', renewal_finish: '提交续费新订单' };
+  renewal_paid: '登记续费实付', renewal_return: '退回续费申请', renewal_finish: '提交续费新订单',
+  renewal_transfer: '移交续费待处理' };
 const orderFeatureAuditLabels = {
   order_expense_record: '登记费用实付凭据',
   order_expense_account: '核对费用凭据的入账方式',
@@ -433,9 +436,10 @@ export function attributeCommerce(data, previous, actor, owners, subscriptions, 
 }
 
 class LocalDataError extends Error {
-  constructor(status, message) {
+  constructor(status, message, code) {
     super(message);
     this.status = status;
+    if (code) this.code = code;
   }
 }
 
@@ -803,9 +807,16 @@ function checkedRelayClaims(priorInventory, write, actor) {
 }
 
 async function saveHttpWrites(store, entries, actor, operationId, {
-  verifyRelayExtraction, readOrderCards, readOrderOwners, requireRenewalHandoff
+  verifyRelayExtraction, readOrderCards, readOrderOwners, requireRenewalHandoff,
+  canChangeProtectedSettings
 }) {
   let writes = checkWrites(entries);
+  const settings = writes.find(({ domain }) => domain === 'settings');
+  if (actor?.role === 'super' && settings && canChangeProtectedSettings && !canChangeProtectedSettings()) {
+    const current = store.load('settings').data;
+    if (protectedSettingsChanged(retainOrderSettings(settings.data, current), current))
+      throw new LocalDataError(403, '请先完成安全确认，再继续这项操作', 'SECURITY_CONFIRMATION_REQUIRED');
+  }
   const operation = describeWriteOperation(operationId, actor, writes);
   const replay = operation && store.replayWrite?.(operation);
   if (replay) return replay;
@@ -988,7 +999,8 @@ export function createLocalBusinessStore(databasePath) {
     put.run(managedMailboxDomain, version, encrypt(key, managedMailboxDomain, version, JSON.stringify(data)));
     const labels = {
       create: '登记邮箱池资料', credential: '更新邮箱授权', status: '更新邮箱状态',
-      rotate: '更换邮箱查询码', settings: '保存默认查询码有效期', batch: '批量登记邮箱池资料'
+      rotate: '更换邮箱查询码', settings: '保存默认查询码有效期', batch: '批量登记邮箱池资料',
+      'registration-access': '更新注册员收信授权'
     };
     log.run(now, managedMailboxDomain, `managed_mailbox_${body.action}`, auditSummary(labels[body.action], actor, id), version);
     return {
@@ -1361,6 +1373,32 @@ export function createLocalBusinessStore(databasePath) {
     loadManagedMailboxPool() {
       return mailboxPoolView(readDocument(managedMailboxDomain));
     },
+    registrationMailboxChoices(id, isRegistrar) {
+      const pool = readDocument(managedMailboxDomain);
+      const item = mailboxPoolItems(pool).find(row => row.id === id);
+      if (!item) throw new MailboxPoolError(404, '找不到邮箱池记录');
+      const inventory = readDocument('inventory');
+      const rows = (inventory.data?.mailboxes || []).filter(row => row.type !== 'relay' &&
+        availableRegistrationMailbox(row) && isRegistrar(row.createdById) && row.email.toLowerCase() === item.email.toLowerCase());
+      return {
+        version: pool.version, inventoryVersion: inventory.version, selected: item.registrationAssetId || '',
+        items: rows.map(row => ({ id: row.id, name: row.createdBy || '注册员', type: row.type }))
+      };
+    },
+    assignRegistrationMailbox(body, actor, isRegistrar) {
+      return writeTransaction(() => {
+        const current = readDocument(managedMailboxDomain);
+        const inventory = readDocument('inventory');
+        if (body.version !== current.version || body.inventoryVersion !== inventory.version)
+          throw new MailboxPoolError(409, '邮箱资料已更新，请重新打开授权操作');
+        const items = mailboxPoolItems(current);
+        const item = items.find(row => row.id === body.id);
+        if (!item) throw new MailboxPoolError(404, '找不到邮箱池记录');
+        const assigned = mailboxRegistrationAssignment(item, inventory.data?.mailboxes || [], body.assetId, isRegistrar);
+        return commitMailboxWrite(current, body, { id: item.id, items: items.map(row => row === item ? assigned : row),
+          defaultValidDays: current.data?.defaultValidDays ?? defaultMailboxValidDays }, actor);
+      });
+    },
     saveManagedMailboxPool(body, actor, microsoftRefreshToken) {
       return writeTransaction(() => {
         const current = readDocument(managedMailboxDomain);
@@ -1447,22 +1485,8 @@ export function createLocalBusinessStore(databasePath) {
       return findMailboxQuery(readDocument(managedMailboxDomain), code, clock);
     },
     registrationMailbox(assetId, actor) {
-      const asset = readDocument('inventory').data?.mailboxes?.find(row => row.id === assetId &&
-        row.createdById === actor.id && !row.deleted && !row.relayDeleted && !row.used &&
-        (row.inventoryState ?? 'available') === 'available' && (row.health ?? 'normal') === 'normal' &&
-        (row.status ?? '正常') === '正常');
-      if (!asset) return null;
-      if (asset.type === 'relay') return { asset };
-      const snapshot = readDocument(managedMailboxDomain);
-      const matches = mailboxPoolItems(snapshot).filter(row => row.email.toLowerCase() === asset.email.toLowerCase());
-      if (matches.length === 1 && matches[0].active && !matches[0].authFailed)
-        return { asset, item: { ...matches[0], revision: snapshot.version } };
-      if (asset.appPassword && ['google', 'apple'].includes(asset.type)) {
-        const provider = /@(?:gmail|googlemail)\.com$/i.test(asset.email) ? 'google'
-          : /@(?:icloud|mac|me)\.com$/i.test(asset.email) ? 'apple' : null;
-        if (provider) return { asset, item: { provider, email: asset.email, appPassword: asset.appPassword } };
-      }
-      return { asset };
+      const asset = readDocument('inventory').data?.mailboxes?.find(row => row.id === assetId);
+      return registrationMailboxSource(readDocument(managedMailboxDomain), asset, actor);
     },
     rotateMicrosoftRefreshToken(id, expectedVersion, refreshToken) {
       return writeTransaction(() => {
@@ -2436,6 +2460,30 @@ export function createLocalBusinessStore(databasePath) {
         log.run(new Date().toISOString(), 'site-export', 'site_export', auditSummary(label, actor), 0);
       });
     },
+    startFinanceCardOperation(actor, operation, action, expectedVersion, actualVersion) {
+      return writeTransaction(() => {
+        const prior = readDocument(operation.domain);
+        if (prior.data) {
+          checkWriteReceipt(prior.data, operation);
+          if (prior.data.result) return prior.data.result;
+          throw new LocalDataError(409, '此操作已提交，结果待核对，请刷新银行卡列表');
+        }
+        if (!Number.isSafeInteger(expectedVersion) || expectedVersion !== actualVersion)
+          throw new LocalDataError(409, '资料已更新，请刷新后重新核对，输入已保留');
+        putDocument(operation.domain, 1, { fingerprint: operation.fingerprint, domains: [], pending: true });
+        this.recordAuthEvent({ action: 'finance_card_requested', actor, targetId: action });
+        return null;
+      });
+    },
+    finishFinanceCardOperation(actor, operation, audit, result) {
+      return writeTransaction(() => {
+        const prior = readDocument(operation.domain);
+        if (!prior.data?.pending) throw new LocalDataError(409, '银行卡维护记录已变化，请刷新核对');
+        checkWriteReceipt(prior.data, operation);
+        this.recordAuthEvent({ action: audit[0], actor, targetId: audit[1] });
+        putDocument(operation.domain, prior.version + 1, { fingerprint: operation.fingerprint, domains: [], result });
+      });
+    },
     auditFeature(domain, version, { action, actor, targetId }) {
       if (!orderFeatureDomains.has(domain)) throw new TypeError('未知订单附属资料');
       log.run(new Date().toISOString(), domain, action, auditSummary(action, actor, targetId), version);
@@ -2687,6 +2735,8 @@ export function createLocalBusinessStore(databasePath) {
         versions[orderExpenseDomain] = version(orderExpenseDomain);
       }
       if (actor.role === 'registrar') versions['apple-relay'] = String(relayRevision.get().version);
+      if (actor.role === 'registrar')
+        versions.inventory += ':' + version(managedMailboxDomain);
       for (const scope of ['toolbox', savedTotpDomain, bitBrowserConnectionDomain, bitBrowserProxyDomain, bitBrowserAddressDomain])
         versions[scope] = version(`${scope}:${actor.id}`);
       if (['admin', 'super'].includes(actor.role)) {
@@ -2748,6 +2798,10 @@ function json(response, status, body) {
   response.end(JSON.stringify(body));
 }
 
+function sendSensitiveConfirmation(response) {
+  return json(response, 403, { error: '请先完成安全确认，再继续这项操作', code: 'SECURITY_CONFIRMATION_REQUIRED' });
+}
+
 function codeReadPage(body) {
   const { ids, version } = body;
   if (Object.keys(body).length !== 2 || !Number.isSafeInteger(version) || version < 0 ||
@@ -2765,7 +2819,7 @@ export async function handleLocalBusiness(
   actor,
   options = {}
 ) {
-  const { verifyManagedMailbox, publicOrigin, readOrderOwners } = options;
+  const { verifyManagedMailbox, publicOrigin, readOrderOwners, authorizeSensitive, isRegistrar } = options;
   try {
     const domain = route.slice('/api/local/'.length);
     if (domain === 'commerce' || domain === 'batch') response.setHeader('Cache-Control', 'private, no-store');
@@ -2823,8 +2877,27 @@ export async function handleLocalBusiness(
       if (request.method === 'GET') return json(response, 200, store.mailboxDeliverySettings(actor));
       if (request.headers.origin !== origin) throw new LocalDataError(403, '仅允许从当前页面操作');
       if (request.method === 'PUT') return json(response, 200, store.saveMailboxDeliverySettings(await readJson(request), actor));
-      if (request.method === 'POST') return json(response, 200, store.copyGoogleMailboxCredentials(await readJson(request), actor));
+      if (request.method === 'POST') {
+        if (authorizeSensitive && !authorizeSensitive(request)) return sendSensitiveConfirmation(response);
+        return json(response, 200, store.copyGoogleMailboxCredentials(await readJson(request), actor));
+      }
       throw new LocalDataError(405, '不支持此邮箱复制操作');
+    }
+    if (domain === 'tools/mailbox-pool/registration-access') {
+      if (!['admin', 'super'].includes(actor?.role) || !isRegistrar)
+        throw new LocalDataError(403, '只有管理员可以分配注册收信权限');
+      response.setHeader('Cache-Control', 'private, no-store');
+      if (request.method === 'GET') {
+        const { searchParams } = new URL(request.url, origin);
+        return json(response, 200, store.registrationMailboxChoices(searchParams.get('id'), isRegistrar));
+      }
+      if (request.method !== 'POST') throw new LocalDataError(405, '请从邮箱池操作');
+      if (request.headers.origin !== origin) throw new LocalDataError(403, '请从当前页面操作');
+      if (!authorizeSensitive?.(request)) return sendSensitiveConfirmation(response);
+      const body = await readJson(request, 4096);
+      if (!body || typeof body.id !== 'string' || (body.assetId !== null && typeof body.assetId !== 'string'))
+        throw new LocalDataError(400, '请核对邮箱和收信授权');
+      return json(response, 200, store.assignRegistrationMailbox({ ...body, action: 'registration-access' }, actor, isRegistrar));
     }
     if (domain === 'tools/mailbox-pool') {
       if (!['admin', 'super'].includes(actor?.role)) throw new LocalDataError(403, '只有管理员可以管理邮箱池');
@@ -2859,8 +2932,10 @@ export async function handleLocalBusiness(
           return json(response, 200, await store.readSavedTotpCodePage(codeReadPage(body), actor));
         return json(response, 200, await store.useSavedTotp(body?.id, actor));
       }
-      if (domain === savedTotpDomain + '/secret' && request.method === 'POST')
+      if (domain === savedTotpDomain + '/secret' && request.method === 'POST') {
+        if (authorizeSensitive && !authorizeSensitive(request)) return sendSensitiveConfirmation(response);
         return json(response, 200, store.revealSavedTotp(await readJson(request), actor));
+      }
       throw new LocalDataError(405, '本机接口不支持此操作');
     }
     if (domain === bitBrowserWindowDomain) {
@@ -2907,7 +2982,7 @@ export async function handleLocalBusiness(
         const { searchParams } = new URL(request.url, origin);
         return json(response, 200, store.auditPage(searchParams));
       }
-      if (domain === 'inventory') {
+    if (domain === 'inventory') {
         response.setHeader('Cache-Control', 'private, no-store');
         if (actor?.role === 'registrar') return json(response, 200, registrarInventory(store.load(domain), actor));
         return json(response, 200, store.inventorySnapshot(actor));
@@ -2927,8 +3002,9 @@ export async function handleLocalBusiness(
       throw new LocalDataError(403, '仅允许从本机页面保存');
     }
     const body = await readJson(request);
+    const writeOptions = authorizeSensitive ? { ...options, canChangeProtectedSettings: () => authorizeSensitive(request) } : options;
     if (domain === 'batch') {
-      const entries = await saveHttpWrites(store, body, actor, request.headers['x-id-operation'], options);
+      const entries = await saveHttpWrites(store, body, actor, request.headers['x-id-operation'], writeOptions);
       return json(response, 200, entries.map((entry) =>
         entry.domain === 'commerce' ? commerceForActor(store, entry, actor) : entry));
     }
@@ -2948,7 +3024,7 @@ export async function handleLocalBusiness(
       return json(response, 200, store.saveBitBrowserAddresses(body, actor));
     }
     const [entry, ...related] = await saveHttpWrites(store, [{ ...body, domain }], actor,
-      request.headers['x-id-operation'], options);
+      request.headers['x-id-operation'], writeOptions);
     const inventory = related.find(item => item.domain === 'inventory');
     const appleBalance = related.find(item => item.domain === 'appleBalance');
     const result = {
@@ -2961,6 +3037,8 @@ export async function handleLocalBusiness(
     return json(response, 200, entry.domain === 'commerce' ? commerceForActor(store, result, actor) : result);
   } catch (error) {
     if (response.destroyed) return;
+    if (error instanceof LocalDataError && error.code === 'SECURITY_CONFIRMATION_REQUIRED')
+      return sendSensitiveConfirmation(response);
     if (error instanceof TenantCardError) return json(response, error.status, { error: error.message, matches: error.matches });
     if (
       error instanceof LocalDataError ||

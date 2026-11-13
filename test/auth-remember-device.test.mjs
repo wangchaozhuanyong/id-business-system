@@ -2,12 +2,13 @@ import assert from 'node:assert/strict';
 import { mkdtemp, rm, readdir, stat, writeFile, symlink, rename } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Readable } from 'node:stream';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import test from 'node:test';
 import { EventEmitter } from 'node:events';
 import { createDataChangeStream } from '../server/change-sync.mjs';
 import { createLocalAuth, initializeLocalAdmin } from '../server/local-auth.mjs';
 import { openLocalSessionStore } from '../server/local-auth-sessions.mjs';
+import { calculateTotp } from '../modules/tools/totp.mjs';
 const day = 86400000, origin = 'https://auth.example.test';
 const credentials = { email: 'owner@example.test', name: '测试管理员', password: 'fixture-only-long-password' };
 async function fixture(t) {
@@ -16,7 +17,8 @@ async function fixture(t) {
   const path = join(dir, 'accounts.json'), events = [];
   await initializeLocalAdmin(path, credentials);
   let time = Date.UTC(2026, 0, 1);
-  const options = { publicUrl: new URL(origin), now: () => time, onEvent: event => events.push(event) };
+  const options = { publicUrl: new URL(origin), security: { mfaKey: randomBytes(32) },
+    now: () => time, onEvent: event => events.push(event) };
   let auth = createLocalAuth(path, options);
   async function call(route, { cookie, body, method = body ? 'POST' : 'GET', foreign = false } = {}) {
     const request = Readable.from(body === undefined ? [] : [Buffer.from(JSON.stringify(body))]);
@@ -29,10 +31,27 @@ async function fixture(t) {
     await auth.handle(request, response);
     return { status, data, headers, cookie: (Array.isArray(headers['Set-Cookie']) ? headers['Set-Cookie'][0] : headers['Set-Cookie'])?.split(';', 1)[0] };
   }
+  const { cookie: unbound } = await call('/login', { body: credentials });
+  const { data: { setupKey, enrollment } } = await call('/security/start', { cookie: unbound, body: { password: credentials.password } });
+  const codeAt = async () => (await calculateTotp(setupKey, time)).code;
+  const enrolled = await call('/security/confirm', { cookie: unbound, body: { enrollment, code: await codeAt() } });
+  assert.equal(enrolled.status, 200);
+  assert.equal((await call('/logout', { cookie: enrolled.cookie, body: {} })).status, 200);
+  async function login(remember, extra = {}) {
+    const first = await call('/login', { body: { ...credentials, ...(remember === undefined ? {} : { remember }), ...extra } });
+    if (first.status !== 202) return first;
+    time += 30_000;
+    return call('/login/verify', { body: { verification: first.data.verification, code: await codeAt() } });
+  }
   return { dir, path, events, call, advance: value => { time += value; }, at: () => time,
     streamActor: request => auth.getActor(request, { throwOnUnavailable: true }),
     restart: () => { auth = createLocalAuth(path, options); },
-    login: (remember, extra = {}) => call('/login', { body: { ...credentials, ...(remember === undefined ? {} : { remember }), ...extra } }) };
+    login,
+    async verify(cookie) {
+      time += 30_000;
+      assert.equal((await call('/security/verify', { cookie, body: { code: await codeAt() } })).status, 200);
+    }
+  };
 }
 test('remembered activity renews 30-day idle expiry, survives restart and stops at 90 days', async t => {
   const f = await fixture(t), login = await f.login(true), cookie = login.cookie;
@@ -84,6 +103,7 @@ test('devices expose only safe metadata; revoking another device preserves this 
 });
 test('device IDs never authorize another account; password, role and disable revoke remembered sessions', async t => {
   const f = await fixture(t), owner = (await f.login(true)).cookie;
+  await f.verify(owner);
   const staff = { email: 'employee@example.test', name: '测试员工', role: 'employee', password: 'fixture-employee-password' };
   let employee = (await f.call('/employees', { cookie: owner, body: staff })).data.employee;
   for (const change of [{ password: 'fixture-changed-password' }, { role: 'admin' }, { active: false }]) {

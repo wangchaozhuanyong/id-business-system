@@ -488,12 +488,13 @@
     financeCollection: (params) => request('finance/collection?' + new URLSearchParams(params)),
     financeCollectionAction: (command) => command.action === 'cleanup-preview'
       ? request('finance/collection', command, 'POST')
-      : write(['finance-rates'], () => request('finance/collection', command, 'POST')),
+      : write(['finance-rates'], () => request('finance/collection', command, 'POST', { stepUp: true })),
     changeAccountLifecycle: (data) => write(['inventory', 'commerce'], () => request('inventory/account-lifecycle', data)),
     save: (domain, version, data, { action, base, measure, timing } = {}) => write([domain], () => request(domain, {
       version, data, action, ...(domain === 'commerce' && { recordChange: contactChange(action, base, data) })
-    }, 'PUT', { measure, timing })),
-    saveBatch: (entries, options) => write(entries.map((entry) => entry.domain), () => request('batch', entries, 'PUT', options)),
+    }, 'PUT', { measure, timing, stepUp: domain === 'settings' })),
+    saveBatch: (entries, options) => write(entries.map((entry) => entry.domain), () =>
+      request('batch', entries, 'PUT', { ...options, stepUp: entries.some(entry => entry.domain === 'settings') })),
     audit: () => request('audit'),
     auditPage: (params) => request('audit/page?' + new URLSearchParams(params)),
     relay(operation, data) {
@@ -508,7 +509,7 @@
     customerQuery: (action, command, options) => readQuery('customer-query/' + action, command, options),
     mailboxDeliverySettings: () => request('tools/mailbox-delivery'),
     saveMailboxDeliverySettings: (data) => write(['tools/mailbox-delivery'], () => request('tools/mailbox-delivery', data)),
-    copyGoogleMailboxCredentials: (data) => request('tools/mailbox-delivery', data, 'POST'),
+    copyGoogleMailboxCredentials: (data) => request('tools/mailbox-delivery', data, 'POST', { stepUp: true }),
     resetMailboxDelivery: (scope, data, operationId) => scope === 'relay'
       ? write(['apple-relay'], () => request('apple-relay/code-delivery-reset', data, 'POST', { operationId }))
       : write(['tools/mailbox-pool'], () => request('tools/mailbox-pool', { action: 'rotate-delivery', scope, ...data }, 'PUT', { operationId })),
@@ -516,6 +517,9 @@
     managedMailboxCode: (id) => request('tools/mailbox-pool', { id }, 'POST'),
     managedMailboxCodePage: (ids, version) => readQuery('tools/mailbox-pool', { ids, version }),
     saveManagedMailboxPool: (data) => write(['tools/mailbox-pool'], () => request('tools/mailbox-pool', data)),
+    registrationMailboxChoices: (id) => request('tools/mailbox-pool/registration-access?' + new URLSearchParams({ id })),
+    assignRegistrationMailbox: (data) => write(['tools/mailbox-pool', 'inventory'],
+      () => request('tools/mailbox-pool/registration-access', data, 'POST', { stepUp: true })),
     async queryManagedMailbox(queryCode, limit) {
       const legacy = /^[ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789]{20}$/.test(queryCode);
       if (legacy || queryCode.startsWith('MBX-')) {
@@ -536,7 +540,7 @@
     savedTotp: () => request('saved-totp'),
     saveTotp: (data) => write(['saved-totp'], () => request('saved-totp', data)),
     savedTotpCodePage: (ids, version) => readQuery('saved-totp/code', { ids, version }),
-    savedTotpSecret: (id, version) => request('saved-totp/secret', { id, version }, 'POST'),
+    savedTotpSecret: (id, version) => request('saved-totp/secret', { id, version }, 'POST', { stepUp: true }),
     websiteVisits: (filters) => readQuery('tools/website-visits/search', filters),
     websiteVisitIp: (id) => request('tools/website-visits/reveal', { id }, 'POST'),
     websiteAnalytics: (days, site) => request('tools/website-analytics?' + new URLSearchParams(site ? { days, site } : { days })),
