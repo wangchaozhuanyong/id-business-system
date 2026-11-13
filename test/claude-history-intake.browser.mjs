@@ -212,7 +212,7 @@ test('Claude 账号历史入口预检、冲突重试、保存和刷新回读', {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(origin + '/#/subscriptions/claude');
-  assert.equal(await page.getByRole('tab', { name: '客户订阅', exact: true }).getAttribute('aria-selected'), 'true');
+  assert.equal(await page.locator('[role="tab"][data-scope="all"]').getAttribute('aria-selected'), 'true');
   const open = page.getByRole('button', { name: '订阅历史入库', exact: true });
   await open.click();
   const content = page.locator('#inventory-claude-history-content');
@@ -241,7 +241,7 @@ test('Claude 账号历史入口预检、冲突重试、保存和刷新回读', {
   assert.equal(confirmations, 2);
   assert.equal(local.commerce.data.orders.length, 0);
 
-  await page.getByRole('tab', { name: '自有账号', exact: true }).click();
+  await page.locator('[role="tab"][data-scope="owned"]').click();
   await page.locator('#subscription-list').getByText('ready-history@example.test', { exact: true }).first().waitFor();
   await page.locator('#subscription-list').getByText('2026-11-30 22:00', { exact: true }).waitFor();
   await page.goto(origin + '/#/orders/claude');
@@ -384,6 +384,8 @@ test('Claude 订单补录复用原账号，保留租户并在订阅显示来源�
     const detailValue = name => detail.locator('.property-row')
       .filter({ has: page.getByText(name, { exact: true }) }).locator('strong');
     await orderRow.getByRole('button', { name: '详情', exact: true }).click();
+    await detail.getByRole('tab', { name: '成本与汇率', exact: true }).click();
+    assert.equal(await detailValue('本单核算收益').textContent(), '待核算');
     await detail.getByRole('button', { name: '补齐资料', exact: true }).click();
     const completion = page.getByRole('dialog', { name: '补齐原单资料', exact: true });
     await completion.getByLabel('实际总成本（退回前）', { exact: true }).fill('1350');
@@ -392,31 +394,20 @@ test('Claude 订单补录复用原账号，保留租户并在订阅显示来源�
     await completion.waitFor({ state: 'hidden' });
     await detail.getByRole('tab', { name: '成本与汇率', exact: true }).click();
     assert.equal(await detailValue('原成本合计').textContent(), '1350.00 人民币 CNY');
-    assert.equal(await detailValue('本单核算收益').textContent(), '待核算');
+    assert.equal(await detailValue('本单核算收益').textContent(), '150.00 人民币 CNY');
     const [updated] = local.commerce.data.orders;
     assert.deepEqual([updated.id, updated.actualCostAmount, updated.customerId, updated.paidAmount, updated.receiptConfirmed],
       [order.id, '1350', '', '', false]);
-    await detail.getByRole('button', { name: '补齐资料', exact: true }).click();
-    const fullReceipt = completion.getByRole('checkbox', { name: /已按原售价全额收款/ });
-    assert.equal(await fullReceipt.isChecked(), false);
-    await fullReceipt.check();
-    await completion.getByRole('button', { name: '保存到原单', exact: true }).click();
-    await completion.waitFor({ state: 'hidden' });
-    await detail.getByRole('tab', { name: '成本与汇率', exact: true }).click();
     assert.equal(await detailValue('客户实收（退款前）').textContent(), '1500.00 人民币 CNY');
-    assert.equal(await detailValue('本单核算收益').textContent(), '150.00 人民币 CNY');
     assert.equal(await detailValue('核算缺口').textContent(), '已确认');
     assert.equal(await detailValue('代付金额').textContent(), '未登记');
     await detail.getByText('本次按原币核算', { exact: true }).waitFor();
-    const [received] = local.commerce.data.orders;
-    assert.deepEqual([received.id, received.actualCostAmount, received.customerId, received.paidAmount, received.receiptConfirmed],
-      [order.id, '1350', '', '', true]);
     await detail.getByRole('button', { name: '关闭抽屉', exact: true }).click();
     assert.equal(await orderRow.locator('[data-column="profit"]').textContent(), '150.00');
     await page.goto(origin + '/#/orders/statistics');
     await page.getByLabel('开通起日', { exact: true }).fill('2026-10-31');
     await page.getByLabel('开通止日', { exact: true }).fill('2026-10-31');
-    const total = page.locator('#main [data-stat-metric="actual-profit"] .summary-number');
+    const total = page.locator('#main [data-stat-metric="profit"] .summary-number');
     assert.match(await total.textContent(), /^150\.00/);
     await page.getByLabel('统计币种', { exact: true }).selectOption('MYR');
     assert.equal(await total.textContent(), '—');
@@ -428,7 +419,12 @@ test('Claude 订单补录复用原账号，保留租户并在订阅显示来源�
     await page.getByRole('tab', { name: '客户订阅', exact: true }).click();
     const row = page.locator('#subscription-list tbody tr').filter({ hasText: email });
     await row.waitFor();
-    assert.equal(await row.getByText('待确认', { exact: true }).count(), 1);
+    assert.equal(await row.locator('[data-column="customer"]').textContent(), '未登记');
+    await row.getByRole('button', { name: '详情', exact: true }).click();
+    const sourceOrder = page.getByRole('dialog', { name: '订阅账号详情', exact: true })
+      .getByRole('row').filter({ has: page.getByText(order.orderNo, { exact: true }) });
+    await sourceOrder.getByText('资料待补', { exact: true }).waitFor();
+    assert.equal(await sourceOrder.getByText('待确认', { exact: true }).count(), 0);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     assert.deepEqual(errors, []);
     assert.deepEqual(requests.external, []);

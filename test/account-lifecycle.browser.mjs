@@ -120,7 +120,7 @@ test('GPT／Claude 回库、历史资料、再交付、续费归属与停止复�
       await chooseCustomer('customer-a');
       assert.equal(await page.locator('#commerce-email').inputValue(), '', '回收账号不自动推荐为可续费账号');
       await page.locator('#commerce-email').fill('owned@example.test');
-      await page.getByRole('button', { name: '核对并保存', exact: true }).click();
+      await page.getByRole('button', { name: '确认提交', exact: true }).click();
       assert.match(await page.locator('#commerce-email-error').innerText(), /回收|重新分配/);
       await page.locator('#commerce-businessType').selectOption('成品交付');
       await page.locator('#commerce-emailHistory-picker').click();
@@ -144,7 +144,7 @@ test('GPT／Claude 回库、历史资料、再交付、续费归属与停止复�
       await page.locator('#commerce-businessType').selectOption('续费');
       await chooseCustomer('customer-a');
       await page.locator('#commerce-email').fill('owned@example.test');
-      await page.getByRole('button', { name: '核对并保存', exact: true }).click();
+      await page.getByRole('button', { name: '确认提交', exact: true }).click();
       assert.match(await page.locator('#commerce-email-error').innerText(), /其他客户/);
       await chooseCustomer('customer-b');
       assert.equal(await page.locator('#commerce-email').inputValue(), 'owned@example.test', '当前客户可沿用原账号续费');
