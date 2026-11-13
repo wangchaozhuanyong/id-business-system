@@ -6,14 +6,16 @@ const gpt = { id: 'gpt-1', type: 'gpt', email: 'gpt@example.test', country: '美
 const claude = { ...gpt, id: 'claude-1', type: 'claude', email: 'claude@example.test' };
 const document = (accounts, tableSettings = []) => ({ accounts, tableSettings });
 
-test('GPT requires an enabled country; Claude also requires a city belonging to it', () => {
+test('registration location is optional; supplied GPT countries and Claude city-country pairs must be valid', () => {
   for (const row of [gpt, claude]) {
     assert.equal(checkAccountLocations(null, document([row])), undefined);
-    assert.match(checkAccountLocations(null, document([{ ...row, country: '' }])), /注册国家/);
+    assert.equal(checkAccountLocations(null, document([{ ...row, country: '', city: '' }])), undefined);
+    assert.equal(checkAccountLocations(null, document([{ ...row, city: '' }])), undefined);
+    assert.equal(checkAccountLocations(document([row]), document([{ ...row, country: '', city: '' }])), undefined);
   }
   assert.equal(checkAccountLocations(null, document([{ ...gpt, city: undefined }])), undefined);
   assert.match(checkAccountLocations(null, document([{ ...gpt, country: '未启用国家' }])), /注册国家/);
-  assert.match(checkAccountLocations(null, document([{ ...claude, city: '' }])), /地区／城市/);
+  assert.match(checkAccountLocations(null, document([{ ...claude, country: '' }])), /注册国家/);
   assert.match(checkAccountLocations(null, document([{ ...claude, city: '东京' }])), /地区／城市/);
   assert.equal(checkAccountLocations(null, document([{ type: 'apple' }])), undefined);
 });
@@ -31,6 +33,7 @@ test('account location settings are independent and removal preserves existing r
     { ...claude, country: '日本', city: '札幌' }
   ], settings)), /Claude/);
   assert.equal(checkAccountLocations(document([gpt, claude]), document([gpt, claude], settings)), undefined);
+  assert.equal(checkAccountLocations(document([claude]), document([{ ...claude, city: '' }], settings)), undefined);
 });
 
 test('legacy GPT records can change country without filling in or overwriting a city', () => {

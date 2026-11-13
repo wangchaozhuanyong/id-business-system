@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
 import { createLocalBusinessStore, handleLocalBusiness } from '../server/local-business.mjs';
 import { stageConfirmedRenewalDebit } from '../server/apple-funding.mjs';
+import { cardTypeDocument } from '../server/card-management.mjs';
 import { subscriptionDomain, subscriptionAccountId } from '../server/subscription-management.mjs';
 import { createRenewalHandoff, renewalHandoffDomain, renewalHandoffPath } from '../server/renewal-handoff.mjs';
 
@@ -107,6 +108,33 @@ test('confirmed staff handoff, exclusive finance claim, verified card replacemen
   assert(!JSON.stringify(receipt).includes(replacement));
   assert(!JSON.stringify(receipt).includes(firstCard));
   assert(!JSON.stringify(store.audit()).includes(replacement));
+});
+
+test('财务续费暂不登记卡号时可提交实付，明确沿用死卡仍拦截', async t => {
+  const { store, send, submit } = fixture(t);
+  const cardKey = 'pan:' + createHash('sha256').update('order-card-health\0' + firstCard).digest('hex');
+  store.saveFeatureDocument(cardTypeDocument, 0, {
+    items: [], assignments: {}, health: { [cardKey]: { state: 'dead', revision: 1 } }
+  });
+  assert.equal((await send('employee', submit)).status, 200);
+  const [{ id }] = (await send('finance', null, { view: 'finance' })).data.items;
+  assert.equal((await send('finance', { action: 'claim', id, version: 1 })).status, 200);
+  const payment = { action: 'paid', id, version: 2, confirmed: true, amount: '22.25', currency: 'USD' };
+  const invalid = await send('finance', { ...payment, cardMode: 'original' }, { verified: true });
+  assert.equal(invalid.status, 409);
+  assert.match(invalid.data.error, /这张卡的状态需要核对/);
+  assert.equal((await send('finance', { ...payment, cardMode: 'none' })).status, 403);
+  const paid = await send('finance', { ...payment, cardMode: 'none' }, { verified: true });
+  assert.equal(paid.status, 200, paid.data.error);
+  const finished = await send('employee', { action: 'finish', id, version: 3, ...finishFields });
+  assert.equal(finished.status, 200, finished.data.error);
+  const [saved, prior] = store.load('commerce').data.orders;
+  assert.equal(saved.previousOrderId, prior.id);
+  assert.equal(saved.paidAmount, '22.25');
+  assert.equal(saved.paidConfirmed, true);
+  assert.equal(saved.cardId, '');
+  assert.equal(saved.proCardNumber, undefined);
+  assert.equal(prior.proCardNumber, firstCard);
 });
 
 test('verified handoff transfers unfinished work with its payment review and history intact', async t => {
@@ -263,4 +291,14 @@ test('ordinary order writes cannot create a second renewal or a new historical r
   const batch = await put({ ...snapshot.data, rentBatches: [{ id: 'new-batch', items: [] }] }, '更新订单表头');
   assert.equal(batch.status, 403);
   assert.equal(store.load('commerce').version, snapshot.version);
+  const { proCardNumber, proCardSerial, ...ordinary } = initialOrder;
+  const newOrder = { ...ordinary, ...finishFields, id: 'manual-without-email-or-card',
+    ownerId: actors.super.id, email: '', paymentId: '', proMaterialMode: 'none' };
+  const saved = await put({ ...snapshot.data, orders: [...snapshot.data.orders, newOrder] }, '新增独立订单');
+  assert.equal(saved.status, 200, saved.result.error);
+  const order = saved.result.data.orders.find(row => row.id === newOrder.id);
+  assert.equal(order.email, '');
+  assert.equal(order.paymentId, '');
+  assert.equal(order.paidConfirmed, true);
+  assert.equal(order.entitlementStatus, 'active');
 });

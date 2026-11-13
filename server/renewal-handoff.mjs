@@ -12,7 +12,7 @@ import { legacyOpeningOrderIds, ownerForSubscriptionOrder, subscriptionDomain } 
 import { tenantCardUseHistory } from './tenant-initial-cards.mjs';
 import { parseV2DateTimeInput } from '../modules/time/dateTime.ts';
 import { appleFundingEligibility, appleFundingIndex } from '../frontend/apple-funding.mjs';
-import { cardFreezeDocument, blockedOrderCard, frozenOrderCard, orderCardHealth, bankRenewalSource,
+import { cardFreezeDocument, blockedOrderCard, frozenOrderCard, orderCardHealth,
   cardTypeDocument, orderCardArchiveDocument, orderCardHealthReference } from './card-management.mjs';
 
 export const renewalHandoffDomain = 'renewal-handoffs';
@@ -194,14 +194,8 @@ async function fundingFor(store, client, context, inventory, items, source, inpu
     return { ...funding, appleIdId: source.appleIdId || '', appleStoreRegion: source.appleStoreRegion || '' };
   }
   const kind = input.cardMode;
+  if (kind === 'none') return funding;
   const { tenantCards, archive, isAvailable } = tenantFunding(store, context, source, items);
-  if (kind === 'none') {
-    const previous = bankRenewalSource({ ...source, id: '', businessType: '续费' }, context.orders);
-    const original = orderCardHealthReference(previous, { archive, tenantCards });
-    if (blockedOrderCard(orderCardHealth(store.featureDocument(cardTypeDocument).data, original.id, original.number)))
-      fail(409, '原卡状态需要核对，请选择或填写实际使用的新卡');
-    return funding;
-  }
   let number, serial, card;
   const selectTenantCard = choice => {
     if (!choice || !isAvailable(choice)) fail(409, '这张租户卡已使用、已停用或不属于本单，请核对本次用卡');

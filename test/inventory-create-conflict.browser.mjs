@@ -35,8 +35,6 @@ async function setup(t) {
   const drawer = page.locator('#drawer[open]');
   await drawer.locator('#inventory-email').fill('concurrency@example.test');
   await drawer.locator('#inventory-password').fill('TEST-ONLY');
-  await drawer.locator('#inventory-no-phone').check();
-  await drawer.locator('#inventory-country-edit').selectOption({ label: '马来西亚' });
   return {
     page, drawer, attempts, requests, errors,
     get stored() { return structuredClone(stored); },

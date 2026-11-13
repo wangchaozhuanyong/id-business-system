@@ -227,6 +227,74 @@ test('旧订单可单独修改备注，保留原来的空值、付款状态与�
   assert.deepEqual(traffic.external, []);
 });
 
+test('手机端可编辑未登记银行卡的 Claude 订单，空卡池和空租户卡不阻止保存', { timeout: 25_000 }, async t => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const id = 'manual-without-card';
+  const { context, page, writes, errors } = await setup(browser, 'claude', 390, fixture => {
+    fixture.commerce.data.orders.push({
+      id, orderNo: 'QA-WITHOUT-CARD', product: 'Claude Pro', plan: 'Pro', businessType: '首次开通',
+      source: '管理员手工', email: '', customerId: fixture.commerce.data.customers[0].id,
+      payment: '银行卡', proMaterialMode: 'none', cardId: '', paymentId: '', paidAmount: '20', paidCurrency: 'USD',
+      saleAmount: '100', saleCurrency: 'CNY', paidConfirmed: true, receiptConfirmed: true, costBasis: 'standard',
+      start: '2026-11-05T10:00', expiry: '2026-12-05T10:00', version: 1, refunds: [], bankReturns: [], corrections: []
+    });
+  });
+  t.after(() => context.close());
+  await page.goto(origin + '/#/orders/claude');
+  for (const mode of ['manual_card', 'pool_card', 'tenant_card']) {
+    await page.locator(`#main [data-action="commerce-order-more"][data-id="${id}"]`).click();
+    await page.getByRole('menuitem', { name: '更正订单资料' }).click();
+    const drawer = page.locator('#drawer[open]');
+    await drawer.locator('#commerce-proMaterialMode').selectOption(mode);
+    if (mode === 'manual_card') {
+      await drawer.locator('#commerce-proCardNumber').fill('1234');
+      await drawer.locator('button[form="commerce-order-form"][type="submit"]').click();
+      await drawer.locator('#commerce-proCardNumber-error').getByText('请填写 12 至 19 位银行卡号').waitFor();
+      assert.equal(writes.length, 0);
+      await drawer.locator('#commerce-proCardNumber').fill('');
+    }
+    await drawer.locator('#commerce-notes').fill('只改备注 ' + mode);
+    await drawer.locator('button[form="commerce-order-form"][type="submit"]').click();
+    await drawer.waitFor({ state: 'hidden' });
+    const saved = writes.at(-1).data.orders.find(row => row.id === id);
+    assert.deepEqual([saved.email, saved.cardId, saved.proMaterialMode, saved.notes],
+      ['', '', 'none', '只改备注 ' + mode]);
+  }
+  assert.equal(writes.length, 3);
+  assert.deepEqual(errors, []);
+});
+
+test('财务续费已使用的 GPT 池卡在普通编辑中保留', { timeout: 25_000 }, async t => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const id = 'finance-renewal-pool-card', cardId = 'recharge:72', last4 = '0172';
+  const { context, page, writes, errors } = await setup(browser, 'gpt', 1440, fixture => {
+    fixture['order-cards'] = { items: [] };
+    fixture.commerce.data.orders.push({
+      id, orderNo: 'QA-FINANCE-POOL', product: 'GPT', plan: 'Plus', businessType: '续费',
+      source: '管理员手工', email: 'renewal-pool@example.test', customerId: fixture.commerce.data.customers[0].id,
+      payment: '银行卡', proMaterialMode: 'pool_card', cardId, paymentId: last4, paidAmount: '20', paidCurrency: 'USD',
+      proCardNumber: '4000000000000172', saleAmount: '100', saleCurrency: 'CNY', paidConfirmed: true, receiptConfirmed: true,
+      costBasis: 'standard', start: '2026-11-05T10:00', expiry: '2026-12-05T10:00', version: 1, refunds: [], bankReturns: [],
+      corrections: [], financialEvidence: [{ kind: 'payment', cardId, payment: '银行卡', amount: '20', currency: 'USD' }]
+    });
+  });
+  t.after(() => context.close());
+  await page.goto(origin + '/#/orders/gpt');
+  await page.locator(`#main tr[data-row-id="${id}"]`).getByRole('button', { name: '编辑', exact: true }).click();
+  const drawer = page.locator('#drawer[open]');
+  assert.equal(await drawer.locator('#commerce-proMaterialMode').inputValue(), 'pool_card');
+  assert.equal(await drawer.locator('#commerce-cardId').inputValue(), cardId);
+  await drawer.locator('#commerce-notes').fill('保留财务已登记的付款资料');
+  await drawer.locator('button[form="commerce-order-form"][type="submit"]').click();
+  await drawer.waitFor({ state: 'hidden' });
+  const saved = writes[0].data.orders.find(row => row.id === id);
+  assert.deepEqual([saved.proMaterialMode, saved.cardId, saved.paymentId, saved.proCardNumber, saved.financialEvidence[0].cardId],
+    ['pool_card', cardId, last4, '4000000000000172', cardId]);
+  assert.deepEqual(errors, []);
+});
+
 test('提交失败可重试，迟到成功不会清除后续输入或抢回页面', { timeout: 30_000 }, async t => {
   const browser = await chromium.launch();
   t.after(() => browser.close());

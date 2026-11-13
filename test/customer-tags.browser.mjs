@@ -246,5 +246,20 @@ test('下拉设置页签支持来源标签持久化、历史选项和客户草�
   await page.locator('#drawer[open]').waitFor({ state: 'hidden' });
   const newCustomer = (await readCommerce()).data.customers.find(row => row.name === '默认来源测试客户');
   assert.equal(newCustomer?.source, '咸鱼');
+  assert.deepEqual([newCustomer.phone, newCustomer.wechat, newCustomer.qq, newCustomer.whatsapp,
+    newCustomer.telegram, newCustomer.notes, newCustomer.tags], ['', '', '', '', '', '', []]);
+
+  await go('workspace/order');
+  if (!(await inlineName.isVisible())) await page.locator('.order-quick-customer-disclosure > summary').click();
+  await inlineName.fill('仅填姓名的快捷客户');
+  await quickAdd.click();
+  await identity.waitFor();
+  await form.getByLabel('来源渠道').selectOption('');
+  await saveCustomer.click();
+  await page.locator('#confirm-dialog[open] [data-action="confirm-accept"]').click();
+  await drawer.waitFor({ state: 'hidden' });
+  const nameOnly = (await readCommerce()).data.customers.find(row => row.name === '仅填姓名的快捷客户');
+  assert.deepEqual([nameOnly.phone, nameOnly.wechat, nameOnly.source, nameOnly.tags], ['', '', '', []]);
+  assert.equal(await page.locator('#commerce-customerId').inputValue(), nameOnly.id);
   assert.deepEqual(errors, []);
 });

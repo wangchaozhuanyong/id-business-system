@@ -44,6 +44,31 @@ test('历史重复号码允许修改其他资料，也可以更正为新号码',
   assert.doesNotThrow(() => attributeCommerce(changed, previous, admin, []));
 });
 
+test('员工名单不可用时仍可正常录入客户和默认归属的租户', t => {
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  let ownerReads = 0;
+  const save = (version, data) => store.saveBatch([{ domain: 'commerce', version, data }], {
+    actor: admin,
+    readOrderOwners() {
+      ownerReads++;
+      throw new Error('目录暂不可用');
+    }
+  })[0];
+  const data = commerce([{ id: 'tenant', name: '合成租户', version: 1 }]);
+  data.customers.push({ id: 'customer', name: '合成客户', version: 1 });
+  const saved = save(0, data);
+  assert.equal(saved.data.tenants[0].ownerId, admin.id);
+  assert.equal(saved.data.customers[0].id, 'customer');
+  assert.equal(ownerReads, 0);
+
+  const delegated = structuredClone(saved.data);
+  delegated.tenants.push({ id: 'delegated', name: '代录租户', ownerId: staff.id, version: 1 });
+  assert.throws(() => save(saved.version, delegated), { status: 503 });
+  assert.equal(ownerReads, 1);
+  assert.deepEqual(store.load('commerce'), { version: saved.version, data: saved.data });
+});
+
 test('租户新增默认实际录入人，管理员代录按启用员工编号保存姓名快照', () => {
   for (const role of ['super', 'admin', 'employee']) {
     const actor = { ...admin, role };

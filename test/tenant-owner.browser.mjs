@@ -21,11 +21,12 @@ test('租户普通新增及录单快捷新增复用员工归属，保存重试�
     const legacyPhone = '+1 202 555 0101';
     fixture.commerce.data.tenants = [
       { id: 'legacy', name: '历史租户', phone: legacyPhone, owner: staff.name, version: 1, active: true },
+      { id: 'no-phone', name: '无电话历史租户', owner: staff.name, version: 1, active: true },
       { id: 'disabled', name: '已停用租户', phone: '001 202 555 0102', version: 1, active: false }
     ];
     const originalOrders = structuredClone(fixture.commerce.data.orders);
     await interceptDesign(context, { localFixtures: fixture, actor, skipRechargeAssets: true });
-    let enabled = true, fail = role === 'admin', failSave = true, reads = 0;
+    let enabled = true, fail = role === 'admin', failSave = 2, reads = 0;
     await context.route('**/api/local/auth/order-owners', route => {
       reads++;
       return fail ? route.fulfill({ status: 503, json: { error: '模拟读取失败' } })
@@ -37,8 +38,8 @@ test('租户普通新增及录单快捷新增复用员工归属，保存重试�
       if (route.request().method() === 'GET') return route.fallback();
       const command = route.request().postDataJSON();
       writes.push(command);
-      if (failSave) {
-        failSave = false;
+      if (failSave > 0) {
+        failSave--;
         return route.fulfill({ status: 503, json: { error: '模拟保存失败，请重试' } });
       }
       if (command.version !== fixture.commerce.version)
@@ -72,12 +73,16 @@ test('租户普通新增及录单快捷新增复用员工归属，保存重试�
       await search.fill(id === staff.id ? '员工 甲' : '代录管理员');
       await popup.locator(`[data-value="${id}"]`).click();
     }
-    async function save(status) {
+    async function save(status, beforeConfirm) {
       await page.locator('button[form="commerce-contact-form"][type="submit"]:visible').click();
+      if (beforeConfirm) {
+        await page.locator('#confirm-dialog[open]').waitFor();
+        await beforeConfirm();
+      }
       const response = page.waitForResponse(r => r.request().method() === 'PUT' && new URL(r.url()).pathname === '/api/local/commerce');
       await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
       assert.equal((await response).status(), status);
-      if (status === 503) await page.getByText('暂时无法确认服务器保存结果，请刷新页面核对记录后再提交', { exact: true }).waitFor();
+      if (status === 503) await page.getByText('暂时无法确认服务器保存结果，请刷新核对记录后再提交', { exact: true }).waitFor();
       if (status === 409) await page.getByText(/本次未保存，请重新打开并核对当前数据/).waitFor();
     }
     await page.goto(origin + '/#/customers/new/tenant');
@@ -105,7 +110,7 @@ test('租户普通新增及录单快捷新增复用员工归属，保存重试�
     await page.locator('button[form="commerce-contact-form"][type="submit"]:visible').click();
     assert.equal(await page.locator('#confirm-dialog[open]').count(), 0);
     assert.equal(writes.length, 0, '重复电话不进入确认或写入');
-    await phone.fill('合成电话 01');
+    await phone.fill('');
     await phoneError.waitFor({ state: 'hidden' });
     await choose(staff.id);
     await form.locator('[data-action="commerce-initial-card-add"]').click();
@@ -116,7 +121,7 @@ test('租户普通新增及录单快捷新增复用员工归属，保存重试�
     await page.locator('button[form="commerce-contact-form"][type="submit"]:visible').click();
     await form.locator('#commerce-initial-card-1-number-error').getByText('银行卡号重复').waitFor();
     assert.equal(writes.length, 0, '重复银行卡不会触发保存');
-    await form.locator('[data-action="commerce-initial-card-remove"][data-index="1"]').click();
+    await form.locator('#commerce-initial-card-1-number').fill('');
     assert.equal(await form.locator('#commerce-initial-card-0-label').inputValue(), '合成银行卡');
     await page.goto(origin + '/#/customers/tenants');
     await page.locator('[data-action="commerce-contact-add"][data-kind="tenant"]').click();
@@ -140,6 +145,7 @@ test('租户普通新增及录单快捷新增复用员工归属，保存重试�
     assert(!Object.hasOwn(saved, 'initialCards'));
     assert.equal(saved.ownerId, staff.id);
     assert.equal(saved.owner, staff.name);
+    assert.equal(saved.phone, '', '普通新增允许联系方式和一个新增空白卡行留空');
     assert.equal(saved.createdById, actor.id);
     assert.equal(saved.updatedById, actor.id);
     await page.locator(`#commerce-entry-records tr[data-row-id="${saved.id}"]`).waitFor();
@@ -182,11 +188,27 @@ test('租户普通新增及录单快捷新增复用员工归属，保存重试�
     assert.equal(historical.owner, staff.name);
     assert.deepEqual(fixture.commerce.data.orders, originalOrders);
 
+    await page.locator('[data-action="commerce-contact-edit"][data-id="no-phone"]').click();
+    assert.equal(await phone.inputValue(), '');
+    await form.locator('#commerce-contact-notes').fill('无电话也可编辑');
+    await save(200, async () => {
+      fixture.commerce.version++;
+      assert.equal(await page.evaluate(() => window.IDDesignAPI.modules.commerce.refreshCommerce()), true);
+    });
+    await page.locator('#drawer:not([open])').waitFor({ state: 'attached' });
+    const noPhone = fixture.commerce.data.tenants.find(row => row.id === 'no-phone');
+    assert.equal(noPhone.notes, '无电话也可编辑');
+    assert.equal(noPhone.phone, '');
+    assert.equal(noPhone.version, 2);
+    assert.equal(writes.at(-1).recordChange.after.id, noPhone.id);
+
     await page.goto(origin + '/#/workspace/order/claude');
     await page.locator('#commerce-ownerId option[value="staff"]').waitFor({ state: 'attached' });
     await page.locator('#commerce-ownerId').selectOption(staff.id, { force: true });
     await page.locator('#commerce-email').fill('preserve-order@example.test');
     await page.locator('#commerce-businessType').selectOption('首次开通');
+    const supplement = page.locator('#main #commerce-order-form details').filter({ hasText: 'Claude 补充资料' });
+    await supplement.locator('summary').click();
     await page.locator('[data-action="commerce-quick-tenant"][data-target="claudeVerifierId"]').click();
     await owner.locator('option[value="staff"]').waitFor({ state: 'attached' });
     assert.equal(await owner.inputValue(), actor.id, '快捷新增也默认实际录入人，不沿用订单所选员工');
@@ -217,24 +239,22 @@ test('租户普通新增及录单快捷新增复用员工归属，保存重试�
         const control = node.getBoundingClientRect();
         const label = node.closest('.field').querySelector('label').getBoundingClientRect();
         const refresh = node.closest('.field').querySelector('[data-action="commerce-order-owner-refresh"]').getBoundingClientRect();
-        return { labelLeft: label.right <= control.left, overlap: label.top < control.bottom && label.bottom > control.top,
+        return { labelAbove: label.bottom <= control.top, overlap: label.left < control.right && label.right > control.left,
           actionsVisible: refresh.right <= innerWidth && refresh.width > 0 && control.width > 0 };
       });
-      assert(alignment.labelLeft && alignment.overlap && alignment.actionsVisible, JSON.stringify({ width, dark, ...alignment }));
+      assert(alignment.labelAbove && alignment.overlap && alignment.actionsVisible, JSON.stringify({ width, dark, ...alignment }));
       if (screenshots && role === 'admin' && !dark && width !== 320)
         await page.screenshot({ path: fileURLToPath(new URL(`tenant-owner-${width}-light.png`, evidence)) });
       await search.press('Escape');
     }
     await page.setViewportSize({ width: 1440, height: 900 });
     await name.fill('快捷合成租户');
-    await phone.fill('合成电话 02');
     await form.locator('[data-action="commerce-initial-card-add"]').click();
-    await form.locator('#commerce-initial-card-0-number').fill('4000000000000001');
     await save(200);
     await page.locator('#drawer:not([open])').waitFor({ state: 'attached' });
     const quick = fixture.commerce.data.tenants.find(row => row.name === '快捷合成租户');
-    assert.equal(cards.length, 2);
-    assert.equal(cards[1].tenantId, quick.id);
+    assert.equal(cards.length, 1, '快捷新增空白卡行不会创建银行卡');
+    assert.equal(quick.phone, '', '快捷新增允许联系方式留空');
     assert.equal(quick.ownerId, actor.id);
     assert.equal(await page.locator('#commerce-claudeVerifierId').inputValue(), quick.id, '快捷新增成功回填认证人');
     assert.equal(await page.locator('#commerce-tenantId').inputValue(), '', '回填认证人不改变用卡人');

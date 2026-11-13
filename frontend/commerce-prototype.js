@@ -1217,8 +1217,8 @@
     const mode = form.elements['commerce-proMaterialMode']?.value;
     if (form.elements['commerce-payment']?.value !== '银行卡') return null;
     if (mode === 'manual_card' || mode === 'none') return null;
-    if (mode === 'pool_card') return { field: 'proPoolCardId', pool: true };
     if (cardPoolProduct(product)) return { field: 'cardId', pool: true };
+    if (mode === 'pool_card') return { field: 'proPoolCardId', pool: true };
     if (isClaude({ product }) && (!mode || mode === 'tenant_card')) return { field: 'cardId', pool: false };
     return null;
   }
@@ -1436,7 +1436,8 @@
         ...(historical === 'people' ? [['people', proMaterialLabels.people]] : [])
       ];
     }
-    return [['none', proMaterialLabels.none], ['', '选择自动充值银行卡'], ['manual_card', proMaterialLabels.manual_card]];
+    const poolMode = proMaterialMode(existing) === 'pool_card' ? 'pool_card' : '';
+    return [['none', proMaterialLabels.none], [poolMode, '选择自动充值银行卡'], ['manual_card', proMaterialLabels.manual_card]];
   }
   function usesOrderTenant(mode) {
     return mode === 'tenant_card' || mode === 'people' || !mode;
@@ -3989,8 +3990,7 @@
     const phone = contactField(
       '联系电话',
       'phone',
-      contactInput('phone', tenant ? 'maxlength="60" required' : 'maxlength="60"'),
-      tenant
+      contactInput('phone', 'maxlength="60"')
     );
     const savedSource = draft['commerce-source'] ?? (row ? row.source ?? '' : undefined);
     const sourceOptions = tenant ? null : customerSourceOptions(savedSource);
@@ -4023,7 +4023,7 @@
     const initialCardCount = Math.min(99, Math.max(0, Number(draft['commerce-initial-card-count']) || 0));
     const cardFields = tenant && !row ? `<section class="form-section" aria-label="银行卡">
       <div class="section-heading section-heading--actions">
-        <div class="section-title-row"><h3>银行卡</h3>${A.titleInfo('银行卡', '可随租户一起登记，最多 99 张；保存后在租户银行卡管理中维护。', 'tenant-initial-card-help')}</div>
+        <div class="section-title-row"><h3>银行卡</h3>${A.titleInfo('银行卡', '可随租户一起登记，最多 99 张。空白行会跳过，保存后可在租户银行卡管理中维护。', 'tenant-initial-card-help')}</div>
         <div class="page-actions">${A.button('新增银行卡', 'commerce-initial-card-add', '', 'plus', initialCardCount >= 99 ? 'disabled' : '')}</div>
       </div>
       <input type="hidden" name="commerce-initial-card-count" value="${initialCardCount}" />
@@ -4033,7 +4033,7 @@
         const cardLabel = field(`银行卡 ${index + 1} 名称`, labelId,
           input(labelId, draft[`commerce-${labelId}`] || '', 'maxlength="80"'));
         const cardNumber = field('银行卡号', numberId,
-          tenantCardInput(numberId, { value: draft[`commerce-${numberId}`] || '', draft: true }), true);
+          tenantCardInput(numberId, { value: draft[`commerce-${numberId}`] || '', draft: true }));
         const remove = A.button('删除', 'commerce-initial-card-remove', 'danger', '',
           `data-index="${index}" aria-label="删除第 ${index + 1} 张银行卡"`);
         return `<div class="guide-item commerce-field-grid tenant-initial-card-row">${cardLabel}${cardNumber}${remove}</div>`;
@@ -5390,7 +5390,7 @@
   function orderTenantField(v, hidden) {
     return field('租户', 'tenantId', searchableSelect('tenantId', '租户',
       [['', '选择租户'], ...tenants.filter(row => row.active || row.id === v('tenantId')).map(row => [row.id, `${row.name} · ${row.phone}`])],
-      v('tenantId'), A.button('新增', 'commerce-quick-tenant', '', 'plus')), v('proMaterialMode') === 'tenant_card', '', '', hidden);
+      v('tenantId'), A.button('新增', 'commerce-quick-tenant', '', 'plus')), false, '', '', hidden);
   }
   function claudeCertificationFields(v, existing) {
     const selected = v('claudeVerifierId');
@@ -5460,8 +5460,8 @@
       field('银行卡号', 'proCardNumber', input('proCardNumber', v('proCardNumber'),
         'inputmode="numeric" maxlength="32" autocomplete="off"'), false, '', '', apple || proMode !== 'manual_card') +
       (isClaude({ product }) ? orderTenantField(v, apple || !usesOrderTenant(proMode)) : '') +
-      (cardPoolProduct(product) ? orderCardPicker(v, apple || Boolean(proMode), { pool: true, optional: true }) : '') +
-      (!cardPoolProduct(product) ? orderCardPicker(v, apple || proMode !== 'pool_card', { id: 'proPoolCardId', pool: true }) +
+      (cardPoolProduct(product) ? orderCardPicker(v, apple || (Boolean(proMode) && proMode !== 'pool_card'), { pool: true, optional: true }) : '') +
+      (!cardPoolProduct(product) ? orderCardPicker(v, apple || proMode !== 'pool_card', { id: 'proPoolCardId', pool: true, optional: true }) +
         orderCardPicker(v, apple || (Boolean(proMode) && proMode !== 'tenant_card'), { optional: true }) : '') +
       (isClaude({ product }) ? field('银行卡号', 'tenantCardNumber', tenantCardInput('tenantCardNumber'), false,
         '选卡或填写 12 至 19 位完整卡号，二选一。未登记的卡随订单加入所选租户。', '', apple || proMode !== 'tenant_card') : '') +
@@ -5702,7 +5702,8 @@
         (existing ? proMaterialMode(existing) : base.proMaterialMode || defaultMaterialMode)) :
       name === 'proPoolCardId' ? (draft['commerce-proPoolCardId'] ??
         (proMaterialMode(existing) === 'pool_card' ? existing.cardId : '')) :
-      name === 'cardId' && proMaterialMode(existing) === 'pool_card' ? (draft['commerce-cardId'] ?? '') :
+      name === 'cardId' && isClaude(existing) && proMaterialMode(existing) === 'pool_card'
+        ? (draft['commerce-cardId'] ?? '') :
       name === 'appleMatchMax' || name === 'appleMatchMin' ? draft[`commerce-${name}`] ?? base[name] :
       name === 'paidAmount' && !existing && !draft['commerce-paidManual'] ?
         (base.payment === '苹果内购' ? window.IDAppleFunding?.applePrice(currencySettings, initialProduct, plan,
@@ -5871,10 +5872,13 @@
         order.verifierPhone = verifier?.phone || '';
       }
     }
-    if (confirmPayment && !existingOrder && order.payment === '银行卡') {
+    const poolCardField = cardPoolProduct(order.product) ? 'cardId' : 'proPoolCardId';
+    if (confirmPayment && !automatic && order.payment === '银行卡' &&
+        (existingOrder?.source === '管理员手工' || !existingOrder) &&
+        !existingOrder?.cardId && !existingOrder?.proCardNumber && !existingOrder?.paymentId) {
       const empty = {
         manual_card: !order.proCardNumber,
-        pool_card: !value(raw, 'proPoolCardId'),
+        pool_card: !value(raw, poolCardField),
         tenant_card: !order.cardId && !order.tenantCardNumber
       };
       if (empty[order.proMaterialMode]) order.proMaterialMode = 'none';
@@ -5882,7 +5886,7 @@
     const mode = proMaterialMode(order);
     if (mode) {
       if (mode === 'pool_card') {
-        order.cardId = value(raw, 'proPoolCardId');
+        order.cardId = value(raw, poolCardField);
         order.paymentId = cardTail(cards().find(row => row.id === order.cardId)) ||
           (existingOrder?.cardId === order.cardId ? existingOrder.paymentId : '');
       } else if (mode !== 'tenant_card') {
@@ -8085,19 +8089,22 @@
     return message;
   }
   function customerDuplicates(id, name, contacts) {
-    const matches = [];
+    const previous = customers.find(row => row.id === id);
+    const nameKey = contactKey(name);
+    const nameChanged = nameKey !== contactKey(previous?.name);
+    let sharedContact = '';
     for (const row of customers) {
       if (row.id === id) continue;
       const channel = customerChannels.find(([key]) => {
         const normalized = contactKey(contacts[key], key);
-        return normalized && normalized === contactKey(row[key], key);
+        return normalized && normalized === contactKey(row[key], key) &&
+          (nameChanged || normalized !== contactKey(previous?.[key], key));
       });
-      if (channel) matches.push({ row, channel });
+      if (!channel) continue;
+      if (contactKey(row.name) === nameKey) return { duplicate: { row, channel }, sharedContact };
+      if (!sharedContact) sharedContact = channel[1];
     }
-    return {
-      duplicate: matches.find(({ row }) => contactKey(row.name) === contactKey(name)),
-      sharedContact: matches[0]?.channel[1] || ''
-    };
+    return { sharedContact };
   }
   function showDuplicate({ row, channel: [key, label] }) {
     const fieldId = `commerce-contact-${key}`;
@@ -8212,10 +8219,17 @@
       const count = Number(raw['commerce-initial-card-count'] || 0), seen = new Set();
       if (!Number.isInteger(count) || count < 0 || count > 99) return A.notify('每位租户最多登记 99 张银行卡');
       for (let i = 0; i < count; i++) {
-        const number = normalizeTenantNumber(raw[`commerce-initial-card-${i}-number`]);
+        const typedNumber = String(raw[`commerce-initial-card-${i}-number`] || '').trim();
         const label = String(raw[`commerce-initial-card-${i}-label`] || '').trim();
-        const error = !/^\d{12,19}$/.test(number) ? '请输入有效银行卡号' : seen.has(number) ? '银行卡号重复' : label.length > 80 ? '名称最多 80 个字' : '';
-        A.setError(`commerce-initial-card-${i}-number`, error);
+        const fieldId = `commerce-initial-card-${i}-number`;
+        if (!typedNumber && !label) {
+          A.setError(fieldId, '');
+          continue;
+        }
+        const number = normalizeTenantNumber(typedNumber);
+        const error = !/^\d{12,19}$/.test(number) ? '请输入有效银行卡号' :
+          seen.has(number) ? '银行卡号重复' : label.length > 80 ? '名称最多 80 个字' : '';
+        A.setError(fieldId, error);
         if (error) return;
         seen.add(number); initialCards.push({ number, label });
       }
@@ -8229,7 +8243,7 @@
       if (!valid) return;
     }
     const contacts = Object.fromEntries(customerChannels.map(([key]) => [key, value(raw, key)]));
-    const contactError = tenant ? (phone ? tenantPhoneDuplicateError(id, phone) : '请填写租户联系电话') : '';
+    const contactError = tenant ? tenantPhoneDuplicateError(id, phone) : '';
     for (const [key] of customerChannels)
       A.setError(`commerce-contact-${key}`, key === 'phone' ? contactError : '', form);
     A.setError('commerce-contact-name', name ? '' : '请填写姓名', form);
@@ -8273,6 +8287,12 @@
           A.notify('确认期间资料已变化，请重新核对后保存');
           return;
         }
+        const current = data.find(row => row.id === id);
+        if (id && (!current || String(current.version) !== value(raw, 'version'))) {
+          showContactConflict(form);
+          A.notify('资料版本已变化，保存已停止');
+          return;
+        }
         if (quickLookup) {
           const latest = { wechat: contacts.wechat, ...matchOrderCustomer(customers, name, contacts.wechat) };
           if (!checkOrderCustomerDrawer(form, latest)) return;
@@ -8303,29 +8323,24 @@
           name,
           ...contacts,
           notes: value(raw, 'notes'),
-          ...(tenant ? existing
-            ? Object.fromEntries(['ownerId', 'owner'].filter(key => Object.hasOwn(existing, key)).map(key => [key, existing[key]]))
+          ...(tenant ? current
+            ? Object.fromEntries(['ownerId', 'owner'].filter(key => Object.hasOwn(current, key)).map(key => [key, current[key]]))
             : { ownerId, owner: ownerId === operator.id ? operator.name : orderOwners.find(row => row.id === ownerId)?.name || '' }
             : { owner: value(raw, 'owner') }),
           ...(tenant ? {} : { tags }),
-          ...(tenant && !existing && initialCards.length ? { initialCards } : {}),
+          ...(tenant && !current && initialCards.length ? { initialCards } : {}),
           updatedById: operator.id,
           updatedBy: operator.name,
           updatedAt: editedAt,
           source: value(raw, 'source')
         };
-        if (existing && String(existing.version) !== value(raw, 'version')) {
-          showContactConflict(form);
-          A.notify('资料版本已变化，保存已停止');
-          return;
-        }
         let saved;
         persistCommerce(
-          existing ? '修改资料' : '新增资料',
+          current ? '修改资料' : '新增资料',
           () => {
-            if (existing) {
-              Object.assign(existing, snapshot, { version: existing.version + 1 });
-              saved = existing;
+            if (current) {
+              Object.assign(current, snapshot, { version: current.version + 1 });
+              saved = current;
             } else {
               saved = {
                 ...snapshot,
@@ -8339,7 +8354,7 @@
               data.unshift(saved);
             }
             log(
-              existing ? '修改资料' : '新增资料',
+              current ? '修改资料' : '新增资料',
               saved.id,
               `${kind === 'tenant' ? '租户' : '客户'} ${name}`
             );
@@ -8368,7 +8383,7 @@
                 }
               } else orderEditor(back.orderId, back.renewalId, false);
             } else {
-              if (!existing && !tenant && route === 'customers/list') {
+              if (!current && !tenant && route === 'customers/list') {
                 moduleState.customerMode = 'active';
                 S.query = '';
                 S.page = 1;
@@ -8482,7 +8497,7 @@
         error('tenantCardNumber', order.tenantCardNumber || order.cardId ? '' : '请选择银行卡或输入完整卡号');
         if (order.cardId) error('tenantId', order.tenantId ? '' : '请选择银行卡所属租户');
       }
-      error(mode === 'pool_card' ? 'proPoolCardId' : 'cardId', selected?.frozen && !existing?.paidConfirmed
+      error(mode === 'pool_card' && !cardPoolProduct(order.product) ? 'proPoolCardId' : 'cardId', selected?.frozen && !existing?.paidConfirmed
         ? '所选银行卡已冻结，请更换可用银行卡' : selected?.used && !usePool && !historic
           ? '所选租户银行卡已经使用过' : auto || historic ? '' : !selected && (!optional || order.cardId)
         ? '请选择本次使用的银行卡' : selected && cardTail(selected) !== order.paymentId
@@ -10846,7 +10861,7 @@
     toggle('actualCostAmount', actual);
     toggle('actualCostCurrency', actual);
     toggle('appleRecoverableCostAmount', actual && order.payment === '苹果内购');
-    toggle('cardId', order.payment === '银行卡' && (!mode || mode === 'tenant_card'));
+    toggle('cardId', bank && (!mode || mode === 'tenant_card' || (mode === 'pool_card' && cardPoolProduct(order.product))));
     toggle('proPoolCardId', mode === 'pool_card');
     toggle('cardTypeId', order.payment === '银行卡');
     toggle('proMaterialMode', bank);

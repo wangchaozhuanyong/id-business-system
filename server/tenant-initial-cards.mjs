@@ -73,7 +73,12 @@ export function stageInitialTenantCards(previous, next, existing = [], makeId = 
       const number = tenantCardNumber(item?.number);
       const label = typeof item?.label === 'string' ? item.label.trim() : '';
       if (!item || Object.keys(item).some(key => !['number', 'label'].includes(key)) ||
-          !number || label.length > 80 || /[\x00-\x1f\x7f]/.test(label))
+          (item.number != null && typeof item.number !== 'string') ||
+          (item.label != null && typeof item.label !== 'string') ||
+          label.length > 80 || /[\x00-\x1f\x7f]/.test(label))
+        throw new Error(`第 ${index + 1} 张银行卡格式不正确`);
+      if (!label && !item.number?.trim()) continue;
+      if (!number)
         throw new Error(`第 ${index + 1} 张银行卡格式不正确`);
       const matches = tenantCardMatches(number, existing, { ...previous, tenants: next.tenants }, '', archive);
       if (seen.has(number) || matches.length) throw duplicateTenantCard(matches);

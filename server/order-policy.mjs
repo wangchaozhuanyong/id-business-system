@@ -176,8 +176,15 @@ export function normalizeClaudeProMaterials(order, prior, { allowLegacyCreate = 
       return '只有银行卡订单可以填写这组资料';
     return;
   }
-  const { proMaterialMode: mode } = order;
   const claude = isClaudeOrder(order);
+  if (order.source === '管理员手工' && !prior?.cardId && !prior?.proCardNumber && !prior?.paymentId &&
+      !nonempty(order.cardId) && !nonempty(order.proCardNumber) && !nonempty(order.tenantCardNumber) &&
+      (['manual_card', 'pool_card'].includes(order.proMaterialMode) ||
+        (claude && order.proMaterialMode === 'tenant_card'))) {
+    order.proMaterialMode = 'none';
+    if (claude) order.tenantId = prior?.tenantId || '';
+  }
+  const { proMaterialMode: mode } = order;
   const allowSerial = (order.source === '管理员手工' && mode === 'none') || cardMaterialModes.includes(mode) || order.product === 'GPT' || personalProduct(order.product) ||
     (claude && !nonempty(mode) && nonempty(order.cardId));
   if (mode === 'tenant_card') {

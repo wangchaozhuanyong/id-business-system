@@ -16,12 +16,19 @@ test('新增租户与 99 张银行卡生成同一保存计划，原输入字段�
   assert(!Object.hasOwn(next.tenants[0], 'initialCards'));
 });
 test('第 100 张、重复卡号、非法卡号与修改历史租户被拦截，失败前不消除输入', () => {
-  for (const cards of [Array.from({ length: 100 }, (_, i) => card(i)), [card(1), card(1)], [{ number: '123' }]]) {
+  for (const cards of [Array.from({ length: 100 }, (_, i) => card(i)), [card(1), card(1)], [{ number: '123' }],
+    [{ number: '', label: '有名称但没有卡号' }], [{ number: 123 }]]) {
     const next = { tenants: [{ id: 'new', initialCards: cards }] };
     assert.throws(() => stageInitialTenantCards(null, next));
     assert.deepEqual(next.tenants[0].initialCards, cards);
   }
   assert.throws(() => stageInitialTenantCards({ tenants: [{ id: 'old' }] }, { tenants: [{ id: 'old', initialCards: [card(0)] }] }), /已有租户/);
+});
+test('普通新增租户时跳过未填写的银行卡行', () => {
+  const next = { tenants: [{ id: 'new', initialCards: [{ number: ' ', label: ' ' }, card(0)] }] };
+  const result = stageInitialTenantCards(null, next, [], () => 'tenant:one');
+  assert.deepEqual(result.additions, [{ id: 'tenant:one', tenantId: 'new', ...card(0), active: true }]);
+  assert.equal(Object.hasOwn(next.tenants[0], 'initialCards'), false);
 });
 test('多租户计划整体预检，失败不修改前面租户；历史银行卡保持原样', () => {
   const existing = [{ id: 'existing', tenantId: 'old', ...card(0), active: false }];

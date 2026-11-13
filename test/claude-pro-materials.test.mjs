@@ -273,6 +273,77 @@ test('已关联银行卡的历史 Pro 订单可补填序列号并保留原卡', 
   assert.equal(Object.hasOwn(order, 'proMaterialMode'), false);
 });
 
+test('手工订单可省略卡号、池卡或租户卡，选填资料有内容时仍校验', async () => {
+  const store = createLocalBusinessStore(':memory:');
+  try {
+    const input = (id, proMaterialMode, changes) => base(id, {
+      source: '管理员手工', email: '', proMaterialMode, ...changes
+    });
+    const draftRows = [
+      input('empty-manual', 'manual_card', { proCardNumber: '', proCardSerial: ' 00042 ' }),
+      input('empty-pool', 'pool_card'),
+      input('empty-tenant-card', 'tenant_card', { tenantCardNumber: ' ' })
+    ];
+    for (const invalid of [
+      input('short-manual', 'manual_card', { proCardNumber: '4242' }),
+      input('wrong-pool', 'pool_card', { cardId: 'tenant:wrong-source' }),
+      input('short-tenant-card', 'tenant_card', { tenantCardNumber: '4242' })
+    ]) {
+      const failure = await save(store, 0, makeDocument([invalid]));
+      assert.equal(failure.status, 400, invalid.id);
+    }
+    const created = await save(store, 0, makeDocument(draftRows));
+    assert.equal(created.status, 200, created.data.error);
+    for (const row of created.data.data.orders) {
+      assert.equal(row.proMaterialMode, 'none');
+      assert.equal(row.email, '');
+      assert.equal(row.cardId, '');
+      assert.equal(row.paidConfirmed, true);
+      assert.equal(row.receiptConfirmed, true);
+      assert.equal(Object.hasOwn(row, 'tenantCardNumber'), false);
+    }
+    const [previous, ...remaining] = created.data.data.orders;
+    assert.equal(previous.proCardSerial, '00042');
+    const changed = await save(store, 1, {
+      ...created.data.data, orders: [edit(previous, { proMaterialMode: 'manual_card', notes: '补备注' }), ...remaining]
+    }, '更正订单');
+    assert.equal(changed.status, 200, changed.data.error);
+    const [saved] = changed.data.data.orders;
+    assert.equal(saved.notes, '补备注');
+    assert.equal(saved.proMaterialMode, 'none');
+    assert.deepEqual(saved.financialEvidence, previous.financialEvidence);
+  } finally { store.close(); }
+});
+
+test('手工续费未记录银行卡可提交，实际选中的死卡和解封中卡仍受校验', async () => {
+  const store = createLocalBusinessStore(':memory:');
+  try {
+    const id = 'recharge:57';
+    const card = { id, active: true, number: sampleNumber, last4: '4242', usageCount: 0 };
+    const options = { readOrderCards: async () => [card] };
+    const input = (orderId, changes) => base(orderId, {
+      source: '管理员手工', proMaterialMode: 'pool_card', cardId: id, ...changes
+    });
+    const first = await save(store, 0, makeDocument([input('original-paid-card')]), '新增独立订单', options);
+    assert.equal(first.status, 200, first.data.error);
+    const original = first.data.data.orders[0];
+    const update = (orderId, changes) => save(store, 1, {
+      ...first.data.data, orders: [original, input(orderId, changes)]
+    }, '新增独立订单', options);
+    const health = state => ({ items: [], assignments: {}, health: { [id]: { state, revision: 1 } } });
+    store.saveFeatureDocument(cardTypeDocument, 0, health('dead'));
+    assert.match((await update('dead-card')).data.error, /死卡/);
+    store.saveFeatureDocument(cardTypeDocument, 1, health('unlocking'));
+    assert.match((await update('unlocking-card')).data.error, /解封中/);
+    const renewal = await update('card-omitted', { cardId: '', proMaterialMode: 'none' });
+    assert.equal(renewal.status, 200, renewal.data.error);
+    const [, saved] = renewal.data.data.orders;
+    assert.equal(saved.previousOrderId, original.id);
+    assert.equal(saved.paidConfirmed, true);
+    assert.equal(saved.cardId, '');
+  } finally { store.close(); }
+});
+
 test('Pro can save verified pool and tenant cards while keeping paid card and historical return sources fixed', async () => {
   const store = createLocalBusinessStore(':memory:');
   try {

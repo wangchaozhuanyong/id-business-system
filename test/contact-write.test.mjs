@@ -4,9 +4,9 @@ import { mergeContactWrite } from '../server/contact-write.mjs';
 
 const customer = id => ({ id, name: id, phone: id, version: 1 });
 const base = () => ({ customers: [customer('a'), customer('b')], tenants: [], orders: [], operating: [], rentBatches: [], logs: [] });
-function edit(id, source = base()) {
+function edit(id, source = base(), changes = { name: id + ' edited' }) {
   const data = structuredClone(source), before = structuredClone(data.customers.find(row => row.id === id));
-  const after = { ...before, name: id + ' edited', version: 2 };
+  const after = { ...before, ...changes, version: 2 };
   data.customers[data.customers.findIndex(row => row.id === id)] = after;
   const log = { id: 'edit-' + id, entityId: id, type: '修改资料' };
   data.logs.unshift(log);
@@ -36,4 +36,16 @@ test('first contact is supported and concurrent same-name/contact creation is re
   assert.equal(mergeContactWrite(write, { version: 0, data: null }).data.customers.length, 1);
   const current = { ...data, customers: [{ ...after, id: 'other-id' }], logs: [] };
   assert.throws(() => mergeContactWrite(write, { version: 1, data: current }), { status: 409 });
+});
+test('a historical customer collision does not block unrelated changes or removing a contact', () => {
+  const data = base();
+  data.customers = [
+    { id: 'a', name: '合成客户', phone: '+1 202 555 0100', version: 1 },
+    { id: 'b', name: '合成客户', phone: '+1 (202) 555-0100', qq: 'historical', version: 1 }
+  ];
+  const current = { version: 1, data };
+  const update = changes => mergeContactWrite(edit('a', data, changes), current);
+  assert.equal(update({ notes: '补充备注' }).data.customers[0].notes, '补充备注');
+  assert.equal(update({ phone: '' }).data.customers[0].phone, '');
+  assert.throws(() => update({ qq: 'historical' }), { status: 409 });
 });

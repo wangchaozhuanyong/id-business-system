@@ -248,10 +248,15 @@ test('旧微软邮箱可补使用状态，健康状态独立筛选', async t => 
   await row.locator('[data-column="use"] .tag').filter({ hasText: '未登记' }).waitFor();
   await row.getByRole('button', { name: '编辑', exact: true }).click();
   await drawer.getByLabel('使用状态', { exact: true }).selectOption('used');
+  await drawer.locator('#inventory-phone').fill('0123456789');
+  await drawer.locator('#inventory-microsoft-device').fill('历史验证设备');
   await drawer.getByRole('button', { name: '核对并保存' }).click();
   await confirm.locator('[data-action="confirm-accept"]').click();
   await row.locator('[data-column="use"] .tag').filter({ hasText: '已使用' }).waitFor();
-  assert.equal(f.snapshot().mailboxes.find(item => item.id === historical.id).mailboxUsage, 'used');
+  const saved = f.snapshot().mailboxes.find(item => item.id === historical.id);
+  assert.equal(saved.mailboxUsage, 'used');
+  assert.equal(saved.phone, '0123456789');
+  assert.deepEqual(saved.microsoftSecurity, { verificationDevice: '历史验证设备' });
   await row.getByRole('button', { name: '详情', exact: true }).click();
   const usage = drawer.locator('.property-row').filter({ hasText: '使用状态' });
   await usage.getByText('已使用', { exact: true }).waitFor();

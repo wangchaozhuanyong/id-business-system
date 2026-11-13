@@ -2,17 +2,21 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { checkInventoryEntryFields as check } from '../server/inventory-entry-fields.mjs';
 const inventory = row => ({ mailboxes: [row], accounts: [] });
-test('谷歌邮箱的登录设备可留空，国家地区与 Claude 账号各自校验', () => {
+test('谷歌和苹果的电话及注册地区、Claude 的注册资料可留空', () => {
   for (const action of ['inventory_create', 'inventory_edit', 'inventory_import']) {
-    assert.match(check(null, inventory({ type: 'google' }), action), /国家地区必填/);
-    const google = { type: 'google', country: '马来西亚' };
-    assert.equal(check(null, inventory(google), action), undefined);
-    for (const device of ['', null, '设备 1'])
-      assert.equal(check(null, inventory({ ...google, device }), action), undefined);
-    for (const device of [[], '长'.repeat(201)])
-      assert.match(check(null, inventory({ ...google, device }), action), /登录设备.*200/);
-    assert.match(check(null, inventory({ type: 'claude', proxyUrl: 'socks5://127.0.0.1:1080' }), action), /登录设备/);
-    assert.match(check(null, inventory({ type: 'claude', device: '设备' }), action), /注册代理链接/);
+    for (const type of ['google', 'apple', 'gpt', 'claude']) {
+      assert.equal(check(null, inventory({ type }), action), undefined);
+      assert.equal(check(null, inventory({ type, country: '', phone: '' }), action), undefined);
+      assert.match(check(null, inventory({ type, country: {} }), action), /国家地区/);
+    }
+    for (const type of ['google', 'claude']) {
+      for (const device of ['', null, '设备 1'])
+        assert.equal(check(null, inventory({ type, device }), action), undefined);
+      for (const device of [[], '长'.repeat(201)])
+        assert.match(check(null, inventory({ type, device }), action), /登录设备.*200/);
+    }
+    assert.equal(check(null, inventory({ type: 'claude', proxyUrl: 'socks5://proxy.example.test:1080' }), action), undefined);
+    assert.equal(check(null, inventory({ type: 'claude', device: '设备' }), action), undefined);
     assert.equal(check(null, inventory({ type: 'claude', device: '设备', proxyUrl: 'socks5://127.0.0.1:1080' }), action), undefined);
   }
 });
@@ -33,12 +37,14 @@ test('绑定电话可填普通号码或 HTTPS 验证码链接，脚本和含基�
 });
 
 test('历史资料只补齐运行元数据时不强补业务字段；新建及真实编辑仍校验', () => {
-  const old = inventory({ id: 'legacy', type: 'google' });
+  const old = inventory({ id: 'legacy', type: 'google', acquisitionMethod: '旧来源' });
   const normalized = inventory({ ...old.mailboxes[0], version: 1, health: 'normal', status: '正常', usageLinks: [], inventoryHistory: [] });
   assert.equal(check(old, normalized, 'inventory_create'), undefined);
   normalized.mailboxes[0].notes = '修改业务内容';
   assert.equal(check(old, normalized, 'inventory_edit'), undefined);
-  assert.match(check(null, inventory({ type: 'google', country: {}, device: [] }), 'inventory_create'), /必填/);
+  normalized.mailboxes[0].acquisitionMethod = '非有效选项';
+  assert.match(check(old, normalized, 'inventory_edit'), /账号来源/);
+  assert.match(check(null, inventory({ type: 'google', country: {}, device: [] }), 'inventory_create'), /国家地区/);
   assert.match(check(null, inventory({ type: 'claude', device: '设备', proxyUrl: 'not-a-proxy' }), 'inventory_import'), /格式/);
 });
 
@@ -54,7 +60,7 @@ test('微软邮箱密码与无密码模式均可保存，手机号与验证设�
     assert.equal(check(null, inventory(blank), action), undefined);
     delete blank.microsoftSecurity.verificationDevice;
     assert.equal(check(null, inventory(blank), action), undefined);
-    assert.match(check(null, inventory(microsoft({ microsoftSecurity: { verificationDevice: '长'.repeat(201) } })), action), /核对微软邮箱/);
+    assert.match(check(null, inventory(microsoft({ microsoftSecurity: { verificationDevice: '长'.repeat(201) } })), action), /验证设备/);
     assert.match(check(null, inventory(microsoft({ password: '' })), action), /必须填写登录密码/);
     const security = { loginMode: 'passwordless', verificationMethods: ['authenticator', 'passkey'] };
     assert.equal(check(null, inventory(microsoft({ password: '', microsoftSecurity: security })), action), undefined);
@@ -83,4 +89,8 @@ test('微软邮箱库存录入不创建领用状态，也不进入账号库存',
   const historic = inventory({ id: 'ms-old', type: 'microsoft', email: 'OLD@example.test' });
   assert.equal(check(historic, structuredClone(historic), 'inventory_edit'), undefined);
   assert.equal(check(historic, inventory({ ...historic.mailboxes[0], health: 'dead' }), 'inventory_health_change'), undefined);
+  const metadata = { ...historic.mailboxes[0], phone: '0123456789', appPassword: '', microsoftSecurity: { verificationDevice: '设备' } };
+  assert.equal(check(historic, inventory(metadata), 'inventory_edit'), undefined);
+  assert.match(check(historic, inventory({ ...metadata, microsoftSecurity: [] }), 'inventory_edit'), /登录和验证资料/);
+  assert.match(check(historic, inventory({ ...metadata, microsoftSecurity: { loginMode: 'password' } }), 'inventory_edit'), /登录方式/);
 });

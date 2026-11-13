@@ -87,6 +87,7 @@ test('快捷隐藏邮箱单条、批量和失败重试复用正式登记，保�
   const search = page.locator('#relay-search');
   for (const number of [batchCode, batchId]) {
     await search.fill(number);
+    await search.press('Enter');
     assert.equal(await table.locator('tbody tr[data-row-id]').count(), 1);
     assert.equal(await aliasRow.count(), 1);
   }
