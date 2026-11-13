@@ -18,6 +18,7 @@ export function createSheetsStatusHandler({
     resolve(directory) !== resolve(dataDirectory);
   const workerReports = validDirectory(receiptDirectory);
   const collectorReports = validDirectory(collectorDirectory);
+  const startedAt = clock();
 
   return async (request, response, actor) => {
     if (!actor?.id) return json(response, 401, { error: '请先登录', reason: request.localAuthReason || 'invalid' });
@@ -34,7 +35,7 @@ export function createSheetsStatusHandler({
     const { state, reportedAt, verifiedAt, failures } = await readSheetsSyncStatus({
       workerDirectory: workerReports ? receiptDirectory : undefined,
       collectorDirectory: collectorReports ? collectorDirectory : undefined,
-      now: clock(), readCollector: readCollectorReceipt
+      now: clock(), startedAt, readCollector: readCollectorReceipt
     });
     return json(response, 200, { state, reportedAt, verifiedAt, failures, tabs });
   };

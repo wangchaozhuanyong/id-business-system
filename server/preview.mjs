@@ -532,26 +532,27 @@ export async function startPreview(
   function allowsHost(host, port) {
     return publicUrl ? host === publicUrl.host : ['127.0.0.1:' + port, 'localhost:' + port].includes(host);
   }
+  function dataChangeVersions(actor) {
+    const versions = { ...store.changeVersions(actor), operators: auth?.changeVersion() || '0',
+      ...(rechargeActivity && { [rechargeActivityDomain]: rechargeActivity.version(actor) }) };
+    for (const [scope, revision] of Object.entries(rechargeEvents?.versions() || {}))
+      if (Object.hasOwn(versions, scope)) versions[scope] += ':' + revision;
+    if (systemMonitoring && Object.hasOwn(versions, 'system-monitoring'))
+      versions['system-monitoring'] += ':' + systemMonitoring.changeVersion();
+    if (siteObservations && ['admin', 'super'].includes(actor.role)) {
+      versions[siteObservationScope] = siteObservations.versionOf();
+      versions['site-resources'] = siteObservations.resourceVersionOf();
+      versions['site-backups'] = siteObservations.backupVersionOf();
+    }
+    if (rechargeConfig && ['finance', 'super'].includes(actor.role))
+      versions['recharge-card-plans'] = cardPlanEpoch + ':' + cardPlanVersion;
+    return versions;
+  }
   const dataChanges = store ? createDataChangeStream({
     source: dataSource,
     getActor: request => auth?.getActor(request, { throwOnUnavailable: true }) || (!authPath && !publicUrl
       ? { id: 'local-operator', role: 'admin' } : null),
-    getVersions: actor => {
-      const versions = { ...store.changeVersions(actor), operators: auth?.changeVersion() || '0',
-        ...(rechargeActivity && { [rechargeActivityDomain]: rechargeActivity.version(actor) }) };
-      for (const [scope, revision] of Object.entries(rechargeEvents?.versions() || {}))
-        if (Object.hasOwn(versions, scope)) versions[scope] += ':' + revision;
-      if (systemMonitoring && Object.hasOwn(versions, 'system-monitoring'))
-        versions['system-monitoring'] += ':' + systemMonitoring.changeVersion();
-      if (siteObservations && ['admin', 'super'].includes(actor.role)) {
-        versions[siteObservationScope] = siteObservations.versionOf();
-        versions['site-resources'] = siteObservations.resourceVersionOf();
-        versions['site-backups'] = siteObservations.backupVersionOf();
-      }
-      if (rechargeConfig && ['finance', 'super'].includes(actor.role))
-        versions['recharge-card-plans'] = cardPlanEpoch + ':' + cardPlanVersion;
-      return versions;
-    },
+    getVersions: dataChangeVersions,
     subscribe: listener => {
       const stopStore = store.subscribeChanges(listener);
       const stopSamples = systemMonitoring?.subscribeChanges(listener);
@@ -843,6 +844,10 @@ export async function startPreview(
       if (!loginRequired || actor) {
         metadata += `\n<meta name="id-data-source" content="${dataSource}" />`;
         response.setHeader('Cache-Control', 'private, no-store');
+        try {
+          const versions = dataChangeVersions(actor || { id: 'local-operator', role: 'admin' });
+          metadata += `\n<meta name="id-data-versions" content="${encodeURIComponent(JSON.stringify(versions))}" />`;
+        } catch { /* The event stream can still establish versions when the store becomes available. */ }
         let preferences = '';
         try {
           preferences = encodeURIComponent(JSON.stringify(store.loadColumnPreferences(actor)));

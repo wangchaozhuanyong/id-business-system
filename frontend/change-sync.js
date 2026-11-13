@@ -17,7 +17,7 @@
   const source = document.querySelector('meta[name="id-data-source"]')?.content;
   let controller, retry, stopped = false, connected = false, failures = 0, generation = 0;
   let snapshots = 0, changes = 0, scheduled = false, sourceUpdated = false;
-  const blocked = () => stopped || document.hidden || data.writesPending() ||
+  const blocked = () => stopped || document.hidden ||
     document.querySelector('#confirm-dialog[open], .row-action-menu:popover-open');
   const editing = () => document.querySelector('#main form[novalidate], #drawer[open] form:not([onsubmit="return false"])');
   function retryFailed() {
@@ -34,11 +34,13 @@
     queueMicrotask(() => { scheduled = false; flush(); });
   };
   function flush() {
-    if (stopped || !pending.size || blocked()) return;
+    if (stopped || !pending.size) return;
+    if (blocked()) { showStatus(); return; }
     const groups = new Map();
     for (const [scope, job] of pending) {
       const group = groupOf(scope);
       if (activeGroups.has(group) || job.timer !== undefined || job.failures > retryDelays.length) continue;
+      if (!groups.has(group) && data.writesPending(scope => groupOf(scope) === group)) continue;
       if (!groups.has(group)) groups.set(group, []);
       groups.get(group).push([scope, job]);
     }
@@ -269,7 +271,7 @@
     const refreshFailures = failureCount();
     const label = sourceUpdated ? '数据已恢复 · 重新加载' :
       refreshFailures > retryDelays.length ? '更新失败 · 点击重试' : !connected ? '实时连接恢复中' :
-      activeGroups.size || refreshFailures ? '正在同步新数据' : '实时更新已连接';
+      activeGroups.size || refreshFailures ? '正在同步新数据' : pending.size ? '有更新待应用' : '实时更新已连接';
     if (status.textContent !== label) status.textContent = label;
     status.disabled = connected && !refreshFailures;
   }
@@ -283,7 +285,7 @@
   document.addEventListener('visibilitychange', foreground);
   window.addEventListener('online', foreground);
   window.addEventListener('focus', foreground);
-  window.addEventListener('id-data-write-idle', resume);
+  window.addEventListener('id-data-write-settled', resume);
   window.addEventListener('pagehide', () => controller?.abort());
   window.addEventListener('pageshow', foreground);
   window.addEventListener('DOMContentLoaded', () => void connect(), { once: true });

@@ -6,10 +6,10 @@ import test from 'node:test';
 const source = await readFile(new URL('../frontend/change-sync.js', import.meta.url), 'utf8');
 const settle = () => new Promise(resolve => setImmediate(resolve));
 function fixture({ form = false } = {}) {
-  let listener, current = '1', observed = '1', reads = 0, fail = false, writes = false;
+  let listener, current = '1', observed = '1', reads = 0, fail = false, writes = [];
   const timers = new Map(), events = new Map(), notices = [];
   const otherVersions = new Map(), acknowledged = [];
-  const data = { writesPending: () => writes,
+  const data = { writesPending: matches => matches ? writes.some(matches) : Boolean(writes.length),
     pendingChangeVersions: scopes => Object.fromEntries(scopes.flatMap(scope => scope === 'commerce'
       ? current !== observed ? [[scope, current]] : []
       : otherVersions.has(scope) ? [[scope, otherVersions.get(scope)]] : [])),
@@ -28,7 +28,7 @@ function fixture({ form = false } = {}) {
     setTimeout: (fn, ms) => { const id = Symbol(); timers.set(id, { fn, ms }); return id; },
     clearTimeout: id => timers.delete(id) });
   return { api: window.IDChangeSync, design: api, modules: window.IDDesignModules, timers, notices, acknowledged,
-    reads: () => reads, fail: value => { fail = value; }, writes: value => { writes = value; },
+    reads: () => reads, fail: value => { fail = value; }, writes: (...scopes) => { writes = scopes; },
     emit: version => { current = version; listener(['commerce']); },
     emitBehind: () => listener(['commerce'], { behind: true }),
     emitScope: (scope, version) => { otherVersions.set(scope, version); listener([scope]); },
@@ -59,10 +59,16 @@ test('recovery is bounded; an explicit retry resumes pending work without a new 
   f.fail(false); f.api.retry(); await settle();
   assert.equal(f.reads(), 5); assert.equal(f.api.status().pending, 0);
 });
-test('writes defer reads until idle; stopping cancels recovery', async () => {
-  const f = fixture(); f.writes(true); f.emit('2'); await settle();
+test('only the group writing waits, and that group resumes when its write settles', async () => {
+  const f = fixture(), inventories = [];
+  f.design.modules.inventory = { refreshLocalInventory: async () => { inventories.push('read'); return true; } };
+  f.writes('subscription-management'); f.emit('2'); await settle();
   assert.equal(f.reads(), 0);
-  f.writes(false); f.fail(true); f.event('id-data-write-idle'); await settle();
+  f.emitScope('inventory', '2'); await settle();
+  assert.deepEqual(inventories, ['read']);
+  assert.equal(f.api.status().pending, 1);
+  f.writes('order-expense-receipts'); f.fail(true); f.event('id-data-write-settled'); await settle();
+  assert.equal(f.reads(), 1);
   assert.equal(f.timers.size, 1);
   f.api.stop(); assert.equal(f.timers.size, 0);
 });
