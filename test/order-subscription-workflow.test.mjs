@@ -110,7 +110,9 @@ test('续费用卡不改付款记录，复制确认锁定客户、订阅和最�
   assert.equal((await card('copy', { confirmation: preview.data.confirmation })).data.text, syntheticPan);
   assert.equal((await card('bind', { number: '4000000000000002', version: preview.data.version })).status, 200);
   assert.equal((await card('copy', { confirmation: preview.data.confirmation })).status, 409);
-  await request(subscriptions, '/api/local/subscriptions/renewal-settings', { suffix: '方便时请回复是否续费。' });
+  const suffix = await request(subscriptions, '/api/local/subscriptions/renewal-settings', {});
+  assert.equal((await request(subscriptions, '/api/local/subscriptions/renewal-settings',
+    { suffix: '方便时请回复是否续费。', revision: suffix.data.revision })).status, 200);
   const list = await request(subscriptions, '/api/local/subscriptions/list', { product: 'GPT', scope: 'unlinked' });
   assert.equal(list.status, 200);
   assert.deepEqual(list.data.items.find(row => row.series.some(series => series.sourceId === 'qa-bank')).contacts,

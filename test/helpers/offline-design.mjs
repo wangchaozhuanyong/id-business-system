@@ -5,7 +5,7 @@ import { loadCodexdaichongAssets } from '../../modules/recharge/codexdaichong/as
 export const root = fileURLToPath(new URL('../../', import.meta.url));
 export const origin = 'https://design-layout.invalid';
 let rechargeAssets;
-export async function interceptDesign(context, { beforeDirectory, localFixtures, actor, changeEvents = false, skipRechargeAssets = false,
+export async function interceptDesign(context, { beforeDirectory, localFixtures, actor, changeEvents = false, dataVersions, skipRechargeAssets = false,
   scrollbarSelector = '', siteTelemetry = false, localAuthUi = false } = {}) {
   const unavailable = [],
     external = [];
@@ -120,6 +120,8 @@ export async function interceptDesign(context, { beforeDirectory, localFixtures,
           .toString()
           .replace('<head>', siteTelemetry ? '<head><meta name="id-site-observations" content="enabled">' : '<head>')
           .replace('<head>', changeEvents ? '<head><meta name="id-local-data-events" content="enabled">' : '<head>')
+          .replace('<head>', dataVersions
+            ? `<head><meta name="id-data-versions" content="${encodeURIComponent(JSON.stringify(dataVersions))}">` : '<head>')
           .replace('<head>', actor
             ? `<head><meta name="id-local-auth" content="required"><meta name="id-local-actor" content="${encodeURIComponent(JSON.stringify(actor))}">`
             : '<head>')

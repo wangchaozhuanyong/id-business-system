@@ -8,17 +8,54 @@ const overviewSource = await readFile(new URL('../frontend/overview-prototype.js
 const reply = (data, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => structuredClone(data) });
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
-function client(fetch = async () => reply({ success: true }), { signal = AbortSignal, dataSource } = {}) {
+function client(fetch = async () => reply({ success: true }), { signal = AbortSignal, dataSource, baseline } = {}) {
   let locked = 0;
   const window = { fetch, IDLocalAuth: { lock: () => { locked++; } } };
   const actor = { id: 'fixture-actor', role: 'admin', name: '测试操作员' };
   const document = { querySelector: (selector) => ({
     content: selector.includes('id-local-actor') ? encodeURIComponent(JSON.stringify(actor)) :
-      selector.includes('id-data-source') ? dataSource : 'required'
+      selector.includes('id-data-source') ? dataSource :
+      selector.includes('id-data-versions') ? baseline && encodeURIComponent(JSON.stringify(baseline)) : 'required'
   }) };
-  runInNewContext(source, { window, document, structuredClone, AbortSignal: signal });
+  runInNewContext(source, { window, document, structuredClone, AbortSignal: signal, Event });
   return { api: window.IDLocalData, window, document, locked: () => locked };
 }
+
+test('the first stream snapshot announces changes since delivery even when a base read already saw them', async () => {
+  const { api } = client(async () => reply({ version: 4 }), {
+    baseline: { 'subscription-management': '5', commerce: '3', settings: '1' }
+  });
+  await api.load('commerce');
+  const notifications = [];
+  api.subscribeChanges(scopes => notifications.push(...scopes));
+  const next = { 'subscription-management': '6', commerce: '4', settings: '1' };
+  api.acceptChangeVersions(next, { reconcile: true });
+  assert.deepEqual(notifications, ['subscription-management', 'commerce']);
+  assert.equal(api.pendingChangeVersions(['subscription-management'])['subscription-management'], '6');
+  assert.equal(api.pendingChangeVersions(['commerce']).commerce, '4');
+  api.acknowledgeChanges(next);
+  api.acceptChangeVersions(next, { reconcile: true });
+  assert.deepEqual(notifications, ['subscription-management', 'commerce']);
+});
+
+test('an unconfirmed expense save frees its scope without automatically repeating the operation', async () => {
+  const controller = new AbortController();
+  let requests = 0;
+  const { api, window } = client(async (_url, options) => {
+    requests++;
+    return new Promise((_resolve, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason)));
+  }, { signal: { timeout: ms => { assert.equal(ms, 15_000); return controller.signal; } } });
+  let settled = false;
+  window.dispatchEvent = event => { settled = event.type === 'id-data-write-settled'; };
+  const result = assert.rejects(api.saveExpenseReceipt({ version: 1 }), { code: 'WRITE_OUTCOME_UNKNOWN' });
+  assert.equal(api.writesPending(scope => scope === 'inventory'), false);
+  assert.equal(api.writesPending(scope => scope === 'order-expense-receipts'), true);
+  controller.abort();
+  await result;
+  assert.equal(settled, true);
+  assert.equal(api.writesPending(), false);
+  assert.equal(requests, 1);
+});
 
 test('change revisions ignore unchanged snapshots and self writes, then invalidate only related reads', async () => {
   let version = 1;

@@ -43,7 +43,7 @@ export async function readSheetsMonitorReceipt(directory) {
 }
 
 export async function readSheetsSyncStatus({
-  workerDirectory, collectorDirectory, now,
+  workerDirectory, collectorDirectory, now, startedAt = now,
   readWorker = readWorkerReceipt, readCollector = readSheetsMonitorReceipt
 }) {
   const results = await Promise.allSettled([
@@ -54,7 +54,9 @@ export async function readSheetsSyncStatus({
     .map(result => result.value).sort((a, b) => b.at - a.at);
   const receipt = receipts.find(item => item.at <= now + 60_000);
   if (!receipt) return {
-    state: workerDirectory || collectorDirectory ? 'no_receipt' : 'unconfigured',
+    state: workerDirectory || collectorDirectory
+      ? now - startedAt > sheetsReceiptMaxAge ? 'stale' : 'no_receipt'
+      : 'unconfigured',
     reportedAt: null, verifiedAt: null, failures: null, reason: receipts.length ? 'receipt_future' :
       workerDirectory || collectorDirectory ? 'receipt_missing' : 'receipt_disabled'
   };
@@ -63,10 +65,12 @@ export async function readSheetsSyncStatus({
     return { state: 'stale', reportedAt, verifiedAt, failures, reason: 'receipt_stale' };
   if (integrityFailure || failures >= 3)
     return { state: 'failed', reportedAt, verifiedAt, failures, reason: integrityFailure ? 'integrity_failed' : undefined };
+  if (now - (verifiedAt ?? startedAt) > sheetsReceiptMaxAge)
+    return { state: 'stale', reportedAt, verifiedAt, failures, reason: verifiedAt ? 'verification_stale' : 'verification_missing' };
   if (failures > 0) return { state: 'retrying', reportedAt, verifiedAt, failures, reason: 'recovering' };
-  return verifiedAt && now - verifiedAt <= sheetsReceiptMaxAge
+  return verifiedAt
     ? { state: 'healthy', reportedAt, verifiedAt, failures }
-    : { state: 'waiting', reportedAt, verifiedAt, failures, reason: verifiedAt ? 'receipt_stale' : 'verification_missing' };
+    : { state: 'waiting', reportedAt, verifiedAt, failures, reason: 'verification_missing' };
 }
 
 export async function readBackupMonitorReceipt(directory) {

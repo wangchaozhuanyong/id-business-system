@@ -38,6 +38,8 @@
   const scopeOptions = () => Object.keys(scopeLabels).filter(scope => scope !== 'owned' || ['all', 'Claude'].includes(product()));
   const currentSnapshot = () => snapshot?.product === product() && snapshot.scope === selectedScope() ? snapshot : null;
   const currentRow = id => currentSnapshot()?.items.find(row => row.id === id);
+  const confirmationRevision = (row, id) =>
+    row.history.find(item => item.source === 'order' && item.sourceId === id)?.confirmationRevision || snapshot?.revision;
   const filterProduct = () => product() === 'all' ? filters().product || 'all' : product();
   const editorOpen = form => form.isConnected && form.closest('dialog')?.open;
   function scopeCountText(scope) {
@@ -321,7 +323,7 @@
         ? A.modules.commerce?.renewalActions?.(item, row.id) || '' : ''}${item.source === 'order' ? textAction(!item.confirmed && ['Gemini', 'Grok'].includes(row.product) ? '前往订单核对' : '查看订单',
         'subscriptions-order', `data-order-id="${esc(item.sourceId)}"`) : '历史资料'}` +
       `${row.status !== 'dead' && item.source === 'order' && !item.confirmed && !item.missingAssociation && !row.conflict && ['GPT', 'Claude'].includes(row.product) ? textAction('确认开通', 'subscriptions-confirm',
-        `data-id="${esc(row.id)}" data-order-id="${esc(item.sourceId)}" data-revision="${esc(snapshot.revision)}"`) : ''}</div></td></tr>`).join('');
+        `data-id="${esc(row.id)}" data-order-id="${esc(item.sourceId)}" data-revision="${esc(item.confirmationRevision || snapshot.revision)}"`) : ''}</div></td></tr>`).join('');
     A.openDrawer('订阅账号详情', '每次订单独立保留，历史入库不会生成虚构订单。',
       `<div class="property-list"><div class="property-row"><span>邮箱账号</span><strong>${esc(emailAccount(row))}</strong></div>
        ${xAccount ? `<div class="property-row"><span>X 账号</span><strong>${esc(xAccount)}</strong></div>` : ''}
@@ -334,7 +336,7 @@
       button('关闭', 'drawer-close'));
   }
 
-  async function ownerDrawer(row, revision = snapshot?.revision) {
+  async function ownerDrawer(row, revision = row.ownerRevision || snapshot?.revision) {
     if (!row.ownerEligible || !revision) return;
     const key = 'subscription-owner:' + row.id;
     const draft = A.state.drafts.get(key);
@@ -369,7 +371,7 @@
     }
   }
 
-  function confirmDrawer(row, orderId, revision = snapshot?.revision) {
+  function confirmDrawer(row, orderId, revision = confirmationRevision(row, orderId)) {
     const order = row.history.find(item => item.source === 'order' && item.sourceId === orderId);
     if (!revision || !order || order.confirmed || order.missingAssociation || row.conflict ||
         row.status === 'dead' || !['GPT', 'Claude'].includes(row.product)) return false;
@@ -559,7 +561,7 @@
       else if (action === 'subscriptions-owner') { const row = currentRow(node.dataset.id); if (row) void ownerDrawer(row); }
       else if (action === 'subscriptions-confirm') {
         const row = currentRow(node.dataset.id);
-        if (!row || node.dataset.revision !== snapshot?.revision) {
+        if (!row || node.dataset.revision !== confirmationRevision(row, node.dataset.orderId)) {
           if (row) detail(row); else A.closeDrawer();
           A.notify('订单资料已更新，请重新核对。');
         } else confirmDrawer(row, node.dataset.orderId, node.dataset.revision);

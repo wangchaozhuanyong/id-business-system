@@ -298,14 +298,14 @@ test('手工核实与账号归属独立留痕，旧版本重试有幂等回执',
   assert.equal(list.body.items[0].status, 'pending');
   assert.equal((await request(handler, 'list', { product: 'GPT' }, actor)).status, 403);
   assert.equal((await request(handler, 'list', { product: 'GPT' }, admin, { origin: 'https://other.example.test' })).status, 403);
-  const confirmation = { id, orderId: order.id, revision: list.body.revision, confirmed: true,
+  const confirmation = { id, orderId: order.id, revision: list.body.items[0].history[0].confirmationRevision, confirmed: true,
     reason: '已核对平台开通', commandId: 'confirm-1' };
   assert.equal((await request(handler, 'confirm', confirmation)).status, 200);
   assert.equal((await request(handler, 'confirm', confirmation)).body.replayed, true);
   assert.equal((await request(handler, 'confirm', { ...confirmation, reason: '不同依据' })).status, 409);
   list = await request(handler, 'list', { product: 'GPT' });
   assert.equal(list.body.items[0].status, 'active');
-  const assign = { id, ownerId: owner.id, revision: list.body.revision, commandId: 'owner-1' };
+  const assign = { id, ownerId: owner.id, revision: list.body.items[0].ownerRevision, commandId: 'owner-1' };
   assert.equal((await request(handler, 'owner', assign)).status, 200);
   list = await request(handler, 'list', { product: 'GPT' });
   assert.equal(list.body.items[0].ownerName, owner.name);
@@ -320,6 +320,53 @@ test('手工核实与账号归属独立留痕，旧版本重试有幂等回执',
   assert.match(copy.headers['Cache-Control'], /no-store/);
   order.expiry = '2026-12-02 10:00';
   assert.equal(projectSubscriptions(data, now)[0].status, 'pending');
+});
+
+test('different subscriptions can be edited from the same list while stale edits to one target are rejected', async () => {
+  const orders = ['a', 'b'].map(id => makeOrder(id, 'GPT', { email: id + '@example.test', accountId: id, version: 1 }));
+  const data = fixtures(orders);
+  data.inventory.data.accounts = orders.map(({ accountId: id, email, customerId }) =>
+    ({ id, email, type: 'gpt', accountLifecycle: { customerId, disposition: 'in_use' } }));
+  const anotherAdmin = { ...admin, id: 'another-admin' };
+  const handler = createSubscriptionHandler({ store: fakeStore(data), publicOrigin: origin, clock: () => now,
+    readOwners: () => [owner, anotherAdmin] });
+  const list = async user => (await request(handler, 'list', { product: 'GPT' }, user)).body.items;
+  const find = (list, id) => list.find(row => row.history.some(record => record.sourceId === id));
+  const [first, second] = [find(await list(admin), 'a'), find(await list(anotherAdmin), 'b')];
+  const confirm = (row, user, orderId, commandId) => request(handler, 'confirm', { id: row.id, orderId,
+    revision: row.history[0].confirmationRevision, reason: '合成开通核对', confirmed: true, commandId }, user);
+  assert.equal((await confirm(first, admin, 'a', 'confirm-a')).status, 200);
+  orders[1].version++;
+  assert.equal((await confirm(second, anotherAdmin, 'b', 'confirm-b')).status, 409);
+  assert.equal((await confirm(find(await list(anotherAdmin), 'b'), anotherAdmin, 'b', 'confirm-b')).status, 200);
+  const [ownerA, ownerB] = [find(await list(admin), 'a'), find(await list(anotherAdmin), 'b')];
+  const staleA = find(await list(anotherAdmin), 'a');
+  const assign = (row, user, ownerId, commandId) => request(handler, 'owner',
+    { id: row.id, ownerId, revision: row.ownerRevision, commandId }, user);
+  assert.equal((await assign(ownerA, admin, owner.id, 'owner-a')).status, 200);
+  assert.equal((await assign(ownerB, anotherAdmin, anotherAdmin.id, 'owner-b')).status, 200);
+  assert.equal((await assign(staleA, anotherAdmin, anotherAdmin.id, 'owner-a-stale')).status, 409);
+  const saved = await list(admin);
+  assert.equal(find(saved, 'a').ownerId, owner.id);
+  assert.equal(find(saved, 'b').ownerId, anotherAdmin.id);
+});
+
+test('renewal contact text checks the original version and preserves other operators’ settings', async () => {
+  const anotherAdmin = { ...admin, id: 'another-admin' };
+  const handler = createSubscriptionHandler({ store: fakeStore(fixtures()), publicOrigin: origin, clock: () => now });
+  const settings = (user, body = {}) => request(handler, 'renewal-settings', body, user);
+  const { body: initial } = await settings(admin);
+  const { body: other } = await settings(anotherAdmin);
+  assert.equal((await settings(anotherAdmin, { suffix: '另一位的提醒', revision: other.revision })).status, 200);
+  assert.equal((await settings(admin, { suffix: '旧页面没有版本' })).status, 409);
+  const first = await settings(admin, { suffix: '先保存', revision: initial.revision });
+  assert.equal(first.status, 200);
+  assert.equal((await settings(admin, { suffix: '后一个旧表单', revision: initial.revision })).status, 409);
+  assert.equal((await settings(admin)).body.suffix, '先保存');
+  assert.equal((await settings(anotherAdmin)).body.suffix, '另一位的提醒');
+  assert.equal((await settings(admin, { suffix: '', revision: first.body.revision })).status, 200);
+  assert.equal((await settings(admin)).body.suffix, '');
+  assert.equal((await settings(admin, { suffix: '更早的旧表单', revision: initial.revision })).status, 409);
 });
 
 test('未订阅库存不能设置归属，旧档归属不进入新订单', async () => {

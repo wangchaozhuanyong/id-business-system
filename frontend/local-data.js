@@ -13,7 +13,9 @@
   const queryEntries = new Map();
   const mailboxUpdateStops = new Set();
   const observedVersions = new Map(), serverVersions = new Map(), changeListeners = new Set();
-  let pendingWrites = 0, sourceInvalidated = false;
+  const pageBaseline = new Set(), pendingInitialChanges = new Set();
+  const pendingWrites = new Set();
+  let sourceInvalidated = false;
   const dataSource = document.querySelector('meta[name="id-data-source"]')?.content;
   const sourceError = () => Object.assign(new Error('业务数据来源已变化，请重新加载页面后核对'), {
     status: 409, code: 'DATA_SOURCE_CHANGED'
@@ -27,6 +29,15 @@
   const counters = new Set(['inventory', 'commerce', 'settings', 'appleBalance', 'toolbox', expenseScope, 'subscription-management']);
   const numeric = value => typeof value === 'string' && /^\d+$/.test(value);
   const validRevision = version => typeof version === 'string' && version.length > 0 && version.length <= 128;
+  const revisionEntries = versions => versions && typeof versions === 'object' && !Array.isArray(versions)
+    ? Object.entries(versions).filter(([scope, version]) => revisionScopes.has(scope) && validRevision(version)) : [];
+  try {
+    const baseline = document.querySelector('meta[name="id-data-versions"]')?.content;
+    if (baseline) for (const [scope, version] of revisionEntries(JSON.parse(decodeURIComponent(baseline)))) {
+      serverVersions.set(scope, version);
+      pageBaseline.add(scope);
+    }
+  } catch { /* The initial event snapshot provides a baseline if none is embedded. */ }
   const newer = (incoming, observed) => observed === undefined ||
     (/^\d+$/.test(incoming) && /^\d+$/.test(observed)
       ? BigInt(incoming) > BigInt(observed) : incoming !== observed);
@@ -47,8 +58,7 @@
     notifyChanges(scopes);
   }
   function acceptChangeVersions(versions, { reconcile = false } = {}) {
-    if (!versions || typeof versions !== 'object' || Array.isArray(versions)) return;
-    const entries = Object.entries(versions).filter(([scope, version]) => revisionScopes.has(scope) && validRevision(version));
+    const entries = revisionEntries(versions);
     if (entries.some(([scope, version]) => {
       const previous = serverVersions.get(scope);
       return counters.has(scope) && numeric(previous) && numeric(version) && BigInt(version) < BigInt(previous);
@@ -57,8 +67,12 @@
     for (const [scope, version] of entries) {
       const previous = serverVersions.get(scope), observed = observedVersions.get(scope);
       serverVersions.set(scope, version);
+      // A base document may already have been fetched while a dependent list
+      // still holds the older projection. Reconcile that first change as well.
+      if (reconcile && pageBaseline.delete(scope) && version !== previous) pendingInitialChanges.add(scope);
       if (!reconcile && previous === version) continue;
-      if (observed !== undefined ? newer(version, observed) : previous !== undefined && version !== previous) changed.push(scope);
+      if (pendingInitialChanges.has(scope) ||
+          (observed !== undefined ? newer(version, observed) : previous !== undefined && version !== previous)) changed.push(scope);
     }
     publishChanges(changed);
   }
@@ -245,22 +259,27 @@
   }
 
   async function write(scopes, operation) {
-    pendingWrites++;
+    const affected = [...scopes, ...(scopes.includes('inventory') ? ['tools/mailbox-pool', 'appleBalance'] : [])];
+    pendingWrites.add(affected);
     try {
       const result = await operation();
-      queries.invalidate([...scopes, ...(scopes.includes('inventory') ? ['tools/mailbox-pool', 'appleBalance'] : []), 'overview', 'audit']);
+      queries.invalidate([...affected, 'overview', 'audit']);
       return result;
     } finally {
-      pendingWrites--;
-      if (!pendingWrites) Promise.resolve().then(() => window.dispatchEvent?.(new Event('id-data-write-idle')));
+      pendingWrites.delete(affected);
+      void Promise.resolve().then(() => window.dispatchEvent?.(new Event('id-data-write-settled')));
     }
   }
 
   async function request(resource, data, method = 'PUT', {
-    keepalive = false, operationId: suppliedOperation, boundedRead = false, measure, timing, stepUp = false
+    keepalive = false, operationId: suppliedOperation, boundedRead = false, writeTimeout, measure, timing, stepUp = false
   } = {}) {
     if (sourceInvalidated) throw sourceError();
-    let signal = data === undefined || boundedRead ? AbortSignal.timeout(12_000) : undefined;
+    const timeout = data === undefined || boundedRead ? 12_000 : writeTimeout;
+    let signal = timeout ? AbortSignal.timeout(timeout) : undefined;
+    const timeoutError = () => writeTimeout
+      ? Object.assign(new Error('保存结果暂未确认，请读取最新资料核对后再操作'), { code: 'WRITE_OUTCOME_UNKNOWN' })
+      : new Error('读取超时，请重试');
     const options =
       data === undefined
         ? { cache: 'no-store' }
@@ -285,14 +304,14 @@
       let response;
       try { response = await window.fetch('/api/local/' + resource, options); }
       catch (error) {
-        if (signal?.aborted) throw new Error('读取超时，请重试');
+        if (signal?.aborted) throw timeoutError();
         if (operationId && attempt < 1) continue;
         throw error;
       }
       timing?.response(response);
       let result;
       try { result = await response.json(); } catch { result = null; }
-      if (signal?.aborted) throw new Error('读取超时，请重试');
+      if (signal?.aborted) throw timeoutError();
       if (sourceInvalidated) throw sourceError();
       if (!response.ok || result === null) {
         if (operationId && attempt < 1 && (response.status >= 500 || (response.ok && result === null))) continue;
@@ -301,7 +320,7 @@
           confirmed = await window.IDAccountSecurity.verify();
           if (confirmed) {
             if (sourceInvalidated) throw sourceError();
-            if (signal) options.signal = signal = AbortSignal.timeout(12_000);
+            if (signal) options.signal = signal = AbortSignal.timeout(timeout);
             attempt--;
             continue;
           }
@@ -368,20 +387,25 @@
   window.IDLocalData = Object.freeze({
     acceptChangeVersions,
     invalidateDataSource,
-    clearChangeTracking() { observedVersions.clear(); serverVersions.clear(); },
+    clearChangeTracking() { observedVersions.clear(); serverVersions.clear(); pageBaseline.clear(); pendingInitialChanges.clear(); },
     pendingChangeVersions(scopes) {
       return Object.fromEntries(scopes.filter(scope => serverVersions.has(scope) &&
-        newer(serverVersions.get(scope), observedVersions.get(scope))).map(scope => [scope, serverVersions.get(scope)]));
+        (pendingInitialChanges.has(scope) || newer(serverVersions.get(scope), observedVersions.get(scope))))
+        .map(scope => [scope, serverVersions.get(scope)]));
     },
     acknowledgeChanges(versions) {
       for (const [scope, version] of Object.entries(versions)) {
+        if (serverVersions.get(scope) !== version) continue;
+        pendingInitialChanges.delete(scope);
         if (!['inventory', 'commerce', 'settings', 'appleBalance', 'toolbox'].includes(scope) &&
-            serverVersions.get(scope) === version && newer(version, observedVersions.get(scope)))
+            newer(version, observedVersions.get(scope)))
           observedVersions.set(scope, version);
       }
     },
     subscribeChanges(listener) { changeListeners.add(listener); return () => changeListeners.delete(listener); },
-    writesPending: () => pendingWrites > 0,
+    writesPending: matches => matches
+      ? Array.from(pendingWrites).some(scopes => scopes.some(matches))
+      : pendingWrites.size > 0,
     authRequired,
     canApproveRechargeCodes,
     actor: () => actor && ({ ...actor, name: labels.get(actor.id) || actor.name }),
@@ -412,9 +436,9 @@
     subscriptionOwnerLookup: (order) => request('subscriptions/lookup', { order }, 'POST'),
     subscriptionCopy: (command) => request('subscriptions/copy', command, 'POST'),
     renewalContactCopy: command => request('subscriptions/contact-copy', command, 'POST'),
-    renewalContactSettings: (suffix) => suffix === undefined
-      ? request('subscriptions/renewal-settings', {}, 'POST')
-      : write(['subscription-management'], () => request('subscriptions/renewal-settings', { suffix }, 'POST')),
+    renewalContactSettings: command => command === undefined
+      ? readQuery('subscriptions/renewal-settings', {})
+      : write(['subscription-management'], () => request('subscriptions/renewal-settings', command, 'POST', { writeTimeout: 15_000 })),
     renewalCard: command => command.action === 'bind'
       ? write(['subscription-management'], () => request('subscription-renewal-card', command, 'POST', { stepUp: true }))
       : command.action === 'prepare' ? readQuery('subscription-renewal-card', command)
@@ -437,7 +461,7 @@
     copyClaudeGoogleSubscription: (command) => request('claude-google-subscriptions/copy', command, 'POST'),
     claudeGoogleCopySettings: () => request('claude-google-subscriptions/copy-settings'),
     saveClaudeGoogleCopySettings: (command) =>
-      write([], () => request('claude-google-subscriptions/copy-settings', command)),
+      write(['tools/mailbox-delivery'], () => request('claude-google-subscriptions/copy-settings', command)),
     orderOwners: () => request('auth/order-owners'),
     tenantOwnerTransfer: (tenantId) => request('tenant-owner-transfer?tenantId=' + encodeURIComponent(tenantId)),
     transferTenantOwner: (command) => write(['commerce'], () => request('tenant-owner-transfer', command, 'POST')),
@@ -464,7 +488,8 @@
       : write(['order-sync', 'commerce', 'inventory', 'recharge-codes'], () => request('order-sync', command, 'POST')),
     load: (domain, options) => request(domain, undefined, 'GET', options),
     expenseReceipts: () => request('finance/expense-receipts'),
-    saveExpenseReceipt: command => write([expenseScope], () => request('finance/expense-receipts', command, 'POST')),
+    saveExpenseReceipt: command => write([expenseScope],
+      () => request('finance/expense-receipts', command, 'POST', { writeTimeout: 15_000 })),
     siteManagement: (params) => request('site-management?' + new URLSearchParams(params)),
     async siteExport(filter, operationId) {
       if (sourceInvalidated) throw sourceError();
