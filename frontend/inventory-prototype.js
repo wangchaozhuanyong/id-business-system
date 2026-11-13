@@ -1355,7 +1355,7 @@
         {
           id: 'registered',
           label: '注册时间',
-          render: (asset) => esc(String(registrationTime(asset) || '未提供').replace('T', ' '))
+          render: (asset) => api.tableDate(String(registrationTime(asset) || '未提供').replace('T', ' '))
         },
         {
           id: 'createdBy',

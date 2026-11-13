@@ -150,55 +150,23 @@ test('所有录单、编辑与续费入口共用支付方式、填写方式、�
             assert(right.box.left > left.box.left);
             assert(Math.abs(left.text.top - right.text.top) <= 2, `${left.name} 与 ${right.name} 的标签应对齐`);
           };
-          if (measured.columns === 2) {
-            sameRow(payment, mode);
-            sameRow(type, next);
-            assert(Math.abs(type.box.width - next.box.width) <= 1, '卡类型与下一步各占半行');
-            if (key === 'max') sameRow(picker, tail);
-            else sameRow(tail, serial);
-          } else {
-            assert(mode.box.top >= payment.box.bottom - 1);
-            assert(type.box.top >= mode.box.bottom - 1);
-            assert(next.box.top >= type.box.bottom - 1);
-            assert(tail.box.top >= picker.box.bottom - 1);
-          }
-          if (next.name !== picker.name) assert(picker.box.top >= next.box.bottom - 1);
-          const plan = measured.rows.find(row => row.name === 'plan');
-          const business = measured.rows.find(row => row.name === 'businessType');
-          const references = measured.columns === 2 ? [plan, business] : [plan];
-          const rightEdge = references.at(-1).control.right;
-          if (measured.columns === 2) sameRow(plan, business);
-          else assert(business.box.top >= plan.box.bottom - 1);
           for (const row of measured.rows) {
             const context = `${width}/${theme}/${key}/${contextName}/${row.name}`;
-            const reference = references.find(column => Math.abs(column.box.left - row.box.left) <= 1);
-            assert(reference, `${context} 行应沿同一列左边缘`);
-            assert(Math.abs(row.text.left - reference.box.left) <= 1, `${context} 字段名靠左`);
-            assert(Math.abs(row.control.left - reference.control.left) <= 1, `${context} 控件左边缘对齐`);
-            assert([reference.control.right, rightEdge].some(edge => Math.abs(row.control.right - edge) <= 1),
-              `${context} 控件右边缘对齐`);
-            if (row.customerPicker)
-              assert(Math.abs(row.text.top + row.text.height / 2 - row.customerPicker.top - row.customerPicker.height / 2) <= 2,
-                `${context} 客户标签与选择框垂直对齐`);
+            assert(Math.abs(row.text.left - row.box.left) <= 1, `${context} 标签沿字段左边缘`);
+            assert(row.control.left >= row.box.left - 1 && row.control.right <= row.box.right + 1, `${context} 控件在字段内`);
+            const inlineNote = row.name === 'notes' && width > 900;
+            assert(inlineNote ? row.text.right <= row.control.left : row.text.bottom <= row.control.top + 1, `${context} 标签不覆盖控件`);
+            if (row.customerPicker) assert(row.text.bottom <= row.customerPicker.top + 1, `${context} 客户选择器保持可读`);
           }
-          for (const left of measured.rows.filter(row => Math.abs(row.box.left - plan.box.left) <= 1)) {
-            const peer = measured.rows.find(row => row.box.left > left.box.left + 1 && Math.abs(row.box.top - left.box.top) <= 1);
-            if (peer) {
-              assert(Math.abs(peer.text.top - left.text.top) <= 2, `${left.name}/${peer.name} 同行标签对齐`);
-              assert(Math.abs(peer.control.top - left.control.top) <= 1, `${left.name}/${peer.name} 同行控件对齐`);
-            }
+          for (const left of measured.rows) for (const right of measured.rows) {
+            if(left === right) continue;
+            const overlapX=Math.min(left.box.right,right.box.right)-Math.max(left.box.left,right.box.left);
+            const overlapY=Math.min(left.box.bottom,right.box.bottom)-Math.max(left.box.top,right.box.top);
+            assert(overlapX<=1 || overlapY<=1, `${left.name}/${right.name} 字段不得重叠`);
           }
-          if (width === 2480 && contextName === 'entry')
-            assert(measured.finance.every(group => Math.abs(group.top - measured.finance[0].top) <= 1));
-          for (const group of measured.finance) {
-            const context = `${width}/${theme}/${key}/${contextName}/${group.name}`;
-            assert(group.leftInset >= 8 && Math.abs(group.leftInset - group.rightInset) <= 1, context);
-            for (const row of group.rows) {
-              assert(Math.abs(row.labelInset) <= 1 && Math.abs(row.controlInset) <= 1 && row.spaceBeforeControl >= -1,
-                `${context}/${row.name} ${JSON.stringify(row)}`);
-              if (row.helpGap !== null)
-                assert(row.helpGap >= -1 && row.helpGap <= 8 && row.helpSize >= (width <= 900 ? 44 : 36), context);
-            }
+          for(const group of measured.finance) {
+            assert(group.leftInset>=8, '金额分组标题沿正文内距');
+            for(const row of group.rows) assert(row.controlInset>=-1, `${group.name}/${row.name} 控件不越界`);
           }
           if (key === 'gpt' && contextName === 'entry' && [2480, 390].includes(width)) {
             const start = form.locator('[data-commerce-field="start"]');

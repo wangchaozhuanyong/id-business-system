@@ -129,6 +129,7 @@ function runtime() {
     empty: (title) => title,
     pagination: () => '',
     pageRows: (rows) => rows,
+    tableDate: escape,
     table: (columns, rows, scope, id) => {
       captures.push({ columns, rows, scope, id });
       return `<table>${rows.map((row) => `<tr>${columns.map((col) => `<td>${col.render ? col.render(row) : escape(row[col.id] ?? '')}</td>`).join('')}</tr>`).join('')}</table>`;

@@ -114,6 +114,7 @@ function runtime() {
     empty: () => '',
     pagination: () => '',
     pageRows: (rows) => rows,
+    tableDate: escape,
     getSelection: () => new Set(),
     newId: (prefix) => `${prefix}-${++sequence}`,
     nowText: () => '2026-11-03 10:30',

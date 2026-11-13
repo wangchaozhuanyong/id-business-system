@@ -1,0 +1,1453 @@
+{
+  "synthetic": true,
+  "scenes": [
+    {
+      "name": "overview",
+      "width": 1440,
+      "theme": "light",
+      "file": "overview-1440-light.png",
+      "geometry": {
+        "width": 1440,
+        "scroll": 1440,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 0,
+        "findings": []
+      }
+    },
+    {
+      "name": "mailboxes-google",
+      "width": 1440,
+      "theme": "light",
+      "file": "mailboxes-google-1440-light.png",
+      "geometry": {
+        "width": 1440,
+        "scroll": 1440,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 14,
+        "findings": []
+      }
+    },
+    {
+      "name": "customers-new",
+      "width": 1440,
+      "theme": "light",
+      "file": "customers-new-1440-light.png",
+      "geometry": {
+        "width": 1440,
+        "scroll": 1440,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 14,
+        "findings": []
+      }
+    },
+    {
+      "name": "customers-list",
+      "width": 1440,
+      "theme": "light",
+      "file": "customers-list-1440-light.png",
+      "geometry": {
+        "width": 1440,
+        "scroll": 1440,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 5,
+        "findings": []
+      }
+    },
+    {
+      "name": "settings-costs",
+      "width": 1440,
+      "theme": "light",
+      "file": "settings-costs-1440-light.png",
+      "geometry": {
+        "width": 1440,
+        "scroll": 1440,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 5,
+        "findings": []
+      }
+    },
+    {
+      "name": "settings-exchange-rates",
+      "width": 1440,
+      "theme": "light",
+      "file": "settings-exchange-rates-1440-light.png",
+      "geometry": {
+        "width": 1440,
+        "scroll": 1440,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 0,
+        "findings": []
+      }
+    },
+    {
+      "name": "settings-monitoring",
+      "width": 1440,
+      "theme": "light",
+      "file": "settings-monitoring-1440-light.png",
+      "geometry": {
+        "width": 1440,
+        "scroll": 1440,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 1,
+        "findings": []
+      }
+    },
+    {
+      "name": "plugins-mailboxes",
+      "width": 1440,
+      "theme": "light",
+      "file": "plugins-mailboxes-1440-light.png",
+      "geometry": {
+        "width": 1440,
+        "scroll": 1440,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 1,
+        "findings": []
+      }
+    },
+    {
+      "name": "data",
+      "width": 1440,
+      "theme": "light",
+      "file": "data-1440-light.png",
+      "geometry": {
+        "width": 1440,
+        "scroll": 1440,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 5,
+        "findings": []
+      }
+    },
+    {
+      "name": "recharge-start",
+      "width": 1440,
+      "theme": "light",
+      "file": "recharge-start-1440-light.png",
+      "geometry": {
+        "width": 1440,
+        "scroll": 1440,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 7,
+        "findings": []
+      }
+    },
+    {
+      "name": "online-recharge-chatgpt",
+      "width": 1440,
+      "theme": "light",
+      "file": "online-recharge-chatgpt-1440-light.png",
+      "geometry": {
+        "width": 1440,
+        "scroll": 1440,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 1,
+        "findings": []
+      }
+    },
+    {
+      "name": "workspace-recharge-codes",
+      "width": 1440,
+      "theme": "light",
+      "file": "workspace-recharge-codes-1440-light.png",
+      "geometry": {
+        "width": 1440,
+        "scroll": 1440,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 9,
+        "findings": []
+      }
+    },
+    {
+      "name": "public-mailbox",
+      "width": 1440,
+      "theme": "light",
+      "file": "public-mailbox-1440-light.png",
+      "geometry": {
+        "width": 1440,
+        "scroll": 1440,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 0,
+        "findings": []
+      }
+    },
+    {
+      "name": "bitbrowser-standalone",
+      "width": 1440,
+      "theme": "light",
+      "file": "bitbrowser-standalone-1440-light.png",
+      "geometry": {
+        "width": 1440,
+        "scroll": 1440,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 5,
+        "findings": []
+      }
+    },
+    {
+      "name": "login",
+      "width": 1440,
+      "theme": "light",
+      "file": "login-1440-light.png",
+      "geometry": {
+        "width": 1440,
+        "scroll": 1440,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 0,
+        "findings": []
+      }
+    },
+    {
+      "name": "overview",
+      "width": 1440,
+      "theme": "dark",
+      "file": "overview-1440-dark.png",
+      "geometry": {
+        "width": 1440,
+        "scroll": 1440,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 0,
+        "findings": []
+      }
+    },
+    {
+      "name": "mailboxes-google",
+      "width": 1440,
+      "theme": "dark",
+      "file": "mailboxes-google-1440-dark.png",
+      "geometry": {
+        "width": 1440,
+        "scroll": 1440,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 14,
+        "findings": []
+      }
+    },
+    {
+      "name": "customers-new",
+      "width": 1440,
+      "theme": "dark",
+      "file": "customers-new-1440-dark.png",
+      "geometry": {
+        "width": 1440,
+        "scroll": 1440,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 14,
+        "findings": []
+      }
+    },
+    {
+      "name": "customers-list",
+      "width": 1440,
+      "theme": "dark",
+      "file": "customers-list-1440-dark.png",
+      "geometry": {
+        "width": 1440,
+        "scroll": 1440,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 5,
+        "findings": []
+      }
+    },
+    {
+      "name": "settings-costs",
+      "width": 1440,
+      "theme": "dark",
+      "file": "settings-costs-1440-dark.png",
+      "geometry": {
+        "width": 1440,
+        "scroll": 1440,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 5,
+        "findings": []
+      }
+    },
+    {
+      "name": "settings-exchange-rates",
+      "width": 1440,
+      "theme": "dark",
+      "file": "settings-exchange-rates-1440-dark.png",
+      "geometry": {
+        "width": 1440,
+        "scroll": 1440,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 0,
+        "findings": []
+      }
+    },
+    {
+      "name": "settings-monitoring",
+      "width": 1440,
+      "theme": "dark",
+      "file": "settings-monitoring-1440-dark.png",
+      "geometry": {
+        "width": 1440,
+        "scroll": 1440,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 1,
+        "findings": []
+      }
+    },
+    {
+      "name": "plugins-mailboxes",
+      "width": 1440,
+      "theme": "dark",
+      "file": "plugins-mailboxes-1440-dark.png",
+      "geometry": {
+        "width": 1440,
+        "scroll": 1440,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 1,
+        "findings": []
+      }
+    },
+    {
+      "name": "data",
+      "width": 1440,
+      "theme": "dark",
+      "file": "data-1440-dark.png",
+      "geometry": {
+        "width": 1440,
+        "scroll": 1440,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 5,
+        "findings": []
+      }
+    },
+    {
+      "name": "recharge-start",
+      "width": 1440,
+      "theme": "dark",
+      "file": "recharge-start-1440-dark.png",
+      "geometry": {
+        "width": 1440,
+        "scroll": 1440,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 7,
+        "findings": []
+      }
+    },
+    {
+      "name": "online-recharge-chatgpt",
+      "width": 1440,
+      "theme": "dark",
+      "file": "online-recharge-chatgpt-1440-dark.png",
+      "geometry": {
+        "width": 1440,
+        "scroll": 1440,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 1,
+        "findings": []
+      }
+    },
+    {
+      "name": "workspace-recharge-codes",
+      "width": 1440,
+      "theme": "dark",
+      "file": "workspace-recharge-codes-1440-dark.png",
+      "geometry": {
+        "width": 1440,
+        "scroll": 1440,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 9,
+        "findings": []
+      }
+    },
+    {
+      "name": "public-mailbox",
+      "width": 1440,
+      "theme": "dark",
+      "file": "public-mailbox-1440-dark.png",
+      "geometry": {
+        "width": 1440,
+        "scroll": 1440,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 0,
+        "findings": []
+      }
+    },
+    {
+      "name": "bitbrowser-standalone",
+      "width": 1440,
+      "theme": "dark",
+      "file": "bitbrowser-standalone-1440-dark.png",
+      "geometry": {
+        "width": 1440,
+        "scroll": 1440,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 5,
+        "findings": []
+      }
+    },
+    {
+      "name": "login",
+      "width": 1440,
+      "theme": "dark",
+      "file": "login-1440-dark.png",
+      "geometry": {
+        "width": 1440,
+        "scroll": 1440,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 0,
+        "findings": []
+      }
+    },
+    {
+      "name": "overview",
+      "width": 390,
+      "theme": "light",
+      "file": "overview-390-light.png",
+      "geometry": {
+        "width": 390,
+        "scroll": 390,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 0,
+        "findings": []
+      }
+    },
+    {
+      "name": "mailboxes-google",
+      "width": 390,
+      "theme": "light",
+      "file": "mailboxes-google-390-light.png",
+      "geometry": {
+        "width": 390,
+        "scroll": 390,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 4,
+        "findings": []
+      }
+    },
+    {
+      "name": "customers-new",
+      "width": 390,
+      "theme": "light",
+      "file": "customers-new-390-light.png",
+      "geometry": {
+        "width": 390,
+        "scroll": 390,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 2,
+        "findings": []
+      }
+    },
+    {
+      "name": "customers-list",
+      "width": 390,
+      "theme": "light",
+      "file": "customers-list-390-light.png",
+      "geometry": {
+        "width": 390,
+        "scroll": 390,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 2,
+        "findings": []
+      }
+    },
+    {
+      "name": "settings-costs",
+      "width": 390,
+      "theme": "light",
+      "file": "settings-costs-390-light.png",
+      "geometry": {
+        "width": 390,
+        "scroll": 390,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 2,
+        "findings": []
+      }
+    },
+    {
+      "name": "settings-exchange-rates",
+      "width": 390,
+      "theme": "light",
+      "file": "settings-exchange-rates-390-light.png",
+      "geometry": {
+        "width": 390,
+        "scroll": 390,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 0,
+        "findings": []
+      }
+    },
+    {
+      "name": "settings-monitoring",
+      "width": 390,
+      "theme": "light",
+      "file": "settings-monitoring-390-light.png",
+      "geometry": {
+        "width": 390,
+        "scroll": 390,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 1,
+        "findings": []
+      }
+    },
+    {
+      "name": "plugins-mailboxes",
+      "width": 390,
+      "theme": "light",
+      "file": "plugins-mailboxes-390-light.png",
+      "geometry": {
+        "width": 390,
+        "scroll": 390,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 1,
+        "findings": []
+      }
+    },
+    {
+      "name": "data",
+      "width": 390,
+      "theme": "light",
+      "file": "data-390-light.png",
+      "geometry": {
+        "width": 390,
+        "scroll": 390,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 3,
+        "findings": []
+      }
+    },
+    {
+      "name": "recharge-start",
+      "width": 390,
+      "theme": "light",
+      "file": "recharge-start-390-light.png",
+      "geometry": {
+        "width": 390,
+        "scroll": 390,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 5,
+        "findings": []
+      }
+    },
+    {
+      "name": "online-recharge-chatgpt",
+      "width": 390,
+      "theme": "light",
+      "file": "online-recharge-chatgpt-390-light.png",
+      "geometry": {
+        "width": 390,
+        "scroll": 390,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 1,
+        "findings": []
+      }
+    },
+    {
+      "name": "workspace-recharge-codes",
+      "width": 390,
+      "theme": "light",
+      "file": "workspace-recharge-codes-390-light.png",
+      "geometry": {
+        "width": 390,
+        "scroll": 390,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 7,
+        "findings": []
+      }
+    },
+    {
+      "name": "public-mailbox",
+      "width": 390,
+      "theme": "light",
+      "file": "public-mailbox-390-light.png",
+      "geometry": {
+        "width": 390,
+        "scroll": 390,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 0,
+        "findings": []
+      }
+    },
+    {
+      "name": "bitbrowser-standalone",
+      "width": 390,
+      "theme": "light",
+      "file": "bitbrowser-standalone-390-light.png",
+      "geometry": {
+        "width": 390,
+        "scroll": 390,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 5,
+        "findings": []
+      }
+    },
+    {
+      "name": "login",
+      "width": 390,
+      "theme": "light",
+      "file": "login-390-light.png",
+      "geometry": {
+        "width": 390,
+        "scroll": 390,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 0,
+        "findings": []
+      }
+    },
+    {
+      "name": "overview",
+      "width": 390,
+      "theme": "dark",
+      "file": "overview-390-dark.png",
+      "geometry": {
+        "width": 390,
+        "scroll": 390,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 0,
+        "findings": []
+      }
+    },
+    {
+      "name": "mailboxes-google",
+      "width": 390,
+      "theme": "dark",
+      "file": "mailboxes-google-390-dark.png",
+      "geometry": {
+        "width": 390,
+        "scroll": 390,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 4,
+        "findings": []
+      }
+    },
+    {
+      "name": "customers-new",
+      "width": 390,
+      "theme": "dark",
+      "file": "customers-new-390-dark.png",
+      "geometry": {
+        "width": 390,
+        "scroll": 390,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 2,
+        "findings": []
+      }
+    },
+    {
+      "name": "customers-list",
+      "width": 390,
+      "theme": "dark",
+      "file": "customers-list-390-dark.png",
+      "geometry": {
+        "width": 390,
+        "scroll": 390,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 2,
+        "findings": []
+      }
+    },
+    {
+      "name": "settings-costs",
+      "width": 390,
+      "theme": "dark",
+      "file": "settings-costs-390-dark.png",
+      "geometry": {
+        "width": 390,
+        "scroll": 390,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 2,
+        "findings": []
+      }
+    },
+    {
+      "name": "settings-exchange-rates",
+      "width": 390,
+      "theme": "dark",
+      "file": "settings-exchange-rates-390-dark.png",
+      "geometry": {
+        "width": 390,
+        "scroll": 390,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 0,
+        "findings": []
+      }
+    },
+    {
+      "name": "settings-monitoring",
+      "width": 390,
+      "theme": "dark",
+      "file": "settings-monitoring-390-dark.png",
+      "geometry": {
+        "width": 390,
+        "scroll": 390,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 1,
+        "findings": []
+      }
+    },
+    {
+      "name": "plugins-mailboxes",
+      "width": 390,
+      "theme": "dark",
+      "file": "plugins-mailboxes-390-dark.png",
+      "geometry": {
+        "width": 390,
+        "scroll": 390,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 1,
+        "findings": []
+      }
+    },
+    {
+      "name": "data",
+      "width": 390,
+      "theme": "dark",
+      "file": "data-390-dark.png",
+      "geometry": {
+        "width": 390,
+        "scroll": 390,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 3,
+        "findings": []
+      }
+    },
+    {
+      "name": "recharge-start",
+      "width": 390,
+      "theme": "dark",
+      "file": "recharge-start-390-dark.png",
+      "geometry": {
+        "width": 390,
+        "scroll": 390,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 5,
+        "findings": []
+      }
+    },
+    {
+      "name": "online-recharge-chatgpt",
+      "width": 390,
+      "theme": "dark",
+      "file": "online-recharge-chatgpt-390-dark.png",
+      "geometry": {
+        "width": 390,
+        "scroll": 390,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 1,
+        "findings": []
+      }
+    },
+    {
+      "name": "workspace-recharge-codes",
+      "width": 390,
+      "theme": "dark",
+      "file": "workspace-recharge-codes-390-dark.png",
+      "geometry": {
+        "width": 390,
+        "scroll": 390,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 7,
+        "findings": []
+      }
+    },
+    {
+      "name": "public-mailbox",
+      "width": 390,
+      "theme": "dark",
+      "file": "public-mailbox-390-dark.png",
+      "geometry": {
+        "width": 390,
+        "scroll": 390,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 0,
+        "findings": []
+      }
+    },
+    {
+      "name": "bitbrowser-standalone",
+      "width": 390,
+      "theme": "dark",
+      "file": "bitbrowser-standalone-390-dark.png",
+      "geometry": {
+        "width": 390,
+        "scroll": 390,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 5,
+        "findings": []
+      }
+    },
+    {
+      "name": "login",
+      "width": 390,
+      "theme": "dark",
+      "file": "login-390-dark.png",
+      "geometry": {
+        "width": 390,
+        "scroll": 390,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 0,
+        "findings": []
+      }
+    },
+    {
+      "name": "overview",
+      "width": 320,
+      "theme": "light",
+      "file": "overview-320-light.png",
+      "geometry": {
+        "width": 320,
+        "scroll": 320,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 0,
+        "findings": []
+      }
+    },
+    {
+      "name": "mailboxes-google",
+      "width": 320,
+      "theme": "light",
+      "file": "mailboxes-google-320-light.png",
+      "geometry": {
+        "width": 320,
+        "scroll": 320,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 4,
+        "findings": []
+      }
+    },
+    {
+      "name": "customers-new",
+      "width": 320,
+      "theme": "light",
+      "file": "customers-new-320-light.png",
+      "geometry": {
+        "width": 320,
+        "scroll": 320,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 2,
+        "findings": []
+      }
+    },
+    {
+      "name": "customers-list",
+      "width": 320,
+      "theme": "light",
+      "file": "customers-list-320-light.png",
+      "geometry": {
+        "width": 320,
+        "scroll": 320,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 2,
+        "findings": []
+      }
+    },
+    {
+      "name": "settings-costs",
+      "width": 320,
+      "theme": "light",
+      "file": "settings-costs-320-light.png",
+      "geometry": {
+        "width": 320,
+        "scroll": 320,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 2,
+        "findings": []
+      }
+    },
+    {
+      "name": "settings-exchange-rates",
+      "width": 320,
+      "theme": "light",
+      "file": "settings-exchange-rates-320-light.png",
+      "geometry": {
+        "width": 320,
+        "scroll": 320,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 0,
+        "findings": []
+      }
+    },
+    {
+      "name": "settings-monitoring",
+      "width": 320,
+      "theme": "light",
+      "file": "settings-monitoring-320-light.png",
+      "geometry": {
+        "width": 320,
+        "scroll": 320,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 1,
+        "findings": []
+      }
+    },
+    {
+      "name": "plugins-mailboxes",
+      "width": 320,
+      "theme": "light",
+      "file": "plugins-mailboxes-320-light.png",
+      "geometry": {
+        "width": 320,
+        "scroll": 320,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 1,
+        "findings": []
+      }
+    },
+    {
+      "name": "data",
+      "width": 320,
+      "theme": "light",
+      "file": "data-320-light.png",
+      "geometry": {
+        "width": 320,
+        "scroll": 320,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 1,
+        "findings": []
+      }
+    },
+    {
+      "name": "recharge-start",
+      "width": 320,
+      "theme": "light",
+      "file": "recharge-start-320-light.png",
+      "geometry": {
+        "width": 320,
+        "scroll": 320,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 5,
+        "findings": []
+      }
+    },
+    {
+      "name": "online-recharge-chatgpt",
+      "width": 320,
+      "theme": "light",
+      "file": "online-recharge-chatgpt-320-light.png",
+      "geometry": {
+        "width": 320,
+        "scroll": 320,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 1,
+        "findings": []
+      }
+    },
+    {
+      "name": "workspace-recharge-codes",
+      "width": 320,
+      "theme": "light",
+      "file": "workspace-recharge-codes-320-light.png",
+      "geometry": {
+        "width": 320,
+        "scroll": 320,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 7,
+        "findings": []
+      }
+    },
+    {
+      "name": "public-mailbox",
+      "width": 320,
+      "theme": "light",
+      "file": "public-mailbox-320-light.png",
+      "geometry": {
+        "width": 320,
+        "scroll": 320,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 0,
+        "findings": []
+      }
+    },
+    {
+      "name": "bitbrowser-standalone",
+      "width": 320,
+      "theme": "light",
+      "file": "bitbrowser-standalone-320-light.png",
+      "geometry": {
+        "width": 320,
+        "scroll": 320,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 3,
+        "findings": []
+      }
+    },
+    {
+      "name": "login",
+      "width": 320,
+      "theme": "light",
+      "file": "login-320-light.png",
+      "geometry": {
+        "width": 320,
+        "scroll": 320,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 0,
+        "findings": []
+      }
+    },
+    {
+      "name": "overview",
+      "width": 320,
+      "theme": "dark",
+      "file": "overview-320-dark.png",
+      "geometry": {
+        "width": 320,
+        "scroll": 320,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 0,
+        "findings": []
+      }
+    },
+    {
+      "name": "mailboxes-google",
+      "width": 320,
+      "theme": "dark",
+      "file": "mailboxes-google-320-dark.png",
+      "geometry": {
+        "width": 320,
+        "scroll": 320,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 4,
+        "findings": []
+      }
+    },
+    {
+      "name": "customers-new",
+      "width": 320,
+      "theme": "dark",
+      "file": "customers-new-320-dark.png",
+      "geometry": {
+        "width": 320,
+        "scroll": 320,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 2,
+        "findings": []
+      }
+    },
+    {
+      "name": "customers-list",
+      "width": 320,
+      "theme": "dark",
+      "file": "customers-list-320-dark.png",
+      "geometry": {
+        "width": 320,
+        "scroll": 320,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 2,
+        "findings": []
+      }
+    },
+    {
+      "name": "settings-costs",
+      "width": 320,
+      "theme": "dark",
+      "file": "settings-costs-320-dark.png",
+      "geometry": {
+        "width": 320,
+        "scroll": 320,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 2,
+        "findings": []
+      }
+    },
+    {
+      "name": "settings-exchange-rates",
+      "width": 320,
+      "theme": "dark",
+      "file": "settings-exchange-rates-320-dark.png",
+      "geometry": {
+        "width": 320,
+        "scroll": 320,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 0,
+        "findings": []
+      }
+    },
+    {
+      "name": "settings-monitoring",
+      "width": 320,
+      "theme": "dark",
+      "file": "settings-monitoring-320-dark.png",
+      "geometry": {
+        "width": 320,
+        "scroll": 320,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 1,
+        "findings": []
+      }
+    },
+    {
+      "name": "plugins-mailboxes",
+      "width": 320,
+      "theme": "dark",
+      "file": "plugins-mailboxes-320-dark.png",
+      "geometry": {
+        "width": 320,
+        "scroll": 320,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 1,
+        "findings": []
+      }
+    },
+    {
+      "name": "data",
+      "width": 320,
+      "theme": "dark",
+      "file": "data-320-dark.png",
+      "geometry": {
+        "width": 320,
+        "scroll": 320,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 1,
+        "findings": []
+      }
+    },
+    {
+      "name": "recharge-start",
+      "width": 320,
+      "theme": "dark",
+      "file": "recharge-start-320-dark.png",
+      "geometry": {
+        "width": 320,
+        "scroll": 320,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 5,
+        "findings": []
+      }
+    },
+    {
+      "name": "online-recharge-chatgpt",
+      "width": 320,
+      "theme": "dark",
+      "file": "online-recharge-chatgpt-320-dark.png",
+      "geometry": {
+        "width": 320,
+        "scroll": 320,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 1,
+        "findings": []
+      }
+    },
+    {
+      "name": "workspace-recharge-codes",
+      "width": 320,
+      "theme": "dark",
+      "file": "workspace-recharge-codes-320-dark.png",
+      "geometry": {
+        "width": 320,
+        "scroll": 320,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 7,
+        "findings": []
+      }
+    },
+    {
+      "name": "public-mailbox",
+      "width": 320,
+      "theme": "dark",
+      "file": "public-mailbox-320-dark.png",
+      "geometry": {
+        "width": 320,
+        "scroll": 320,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 0,
+        "findings": []
+      }
+    },
+    {
+      "name": "bitbrowser-standalone",
+      "width": 320,
+      "theme": "dark",
+      "file": "bitbrowser-standalone-320-dark.png",
+      "geometry": {
+        "width": 320,
+        "scroll": 320,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 3,
+        "findings": []
+      }
+    },
+    {
+      "name": "login",
+      "width": 320,
+      "theme": "dark",
+      "file": "login-320-dark.png",
+      "geometry": {
+        "width": 320,
+        "scroll": 320,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 0,
+        "findings": []
+      }
+    },
+    {
+      "name": "control-states",
+      "width": 1920,
+      "theme": "light",
+      "file": "control-states-1920-light.png",
+      "geometry": {
+        "width": 1920,
+        "scroll": 1920,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 15,
+        "findings": []
+      }
+    },
+    {
+      "name": "control-states",
+      "width": 1920,
+      "theme": "dark",
+      "file": "control-states-1920-dark.png",
+      "geometry": {
+        "width": 1920,
+        "scroll": 1920,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 15,
+        "findings": []
+      }
+    },
+    {
+      "name": "control-states",
+      "width": 320,
+      "theme": "light",
+      "file": "control-states-320-light.png",
+      "geometry": {
+        "width": 320,
+        "scroll": 320,
+        "theme": "light"
+      },
+      "spacing": {
+        "measurements": 2,
+        "findings": []
+      }
+    },
+    {
+      "name": "control-states",
+      "width": 320,
+      "theme": "dark",
+      "file": "control-states-320-dark.png",
+      "geometry": {
+        "width": 320,
+        "scroll": 320,
+        "theme": "dark"
+      },
+      "spacing": {
+        "measurements": 2,
+        "findings": []
+      }
+    }
+  ],
+  "errors": [],
+  "external": [],
+  "missing": [],
+  "writes": [],
+  "contrast": [
+    {
+      "width": 1920,
+      "theme": "light",
+      "text": 14.445910095646894,
+      "label": 6.288783061356102,
+      "focus": 5.4331400255837075,
+      "restingBorder": 3.2585906520384307
+    },
+    {
+      "width": 1920,
+      "theme": "dark",
+      "text": 13.154559219989332,
+      "label": 8.780548486052226,
+      "focus": 7.538195601075576,
+      "restingBorder": 3.873863042114497
+    },
+    {
+      "width": 320,
+      "theme": "light",
+      "text": 14.445910095646894,
+      "label": 6.288783061356102,
+      "focus": 5.4331400255837075,
+      "restingBorder": 3.2585906520384307
+    },
+    {
+      "width": 320,
+      "theme": "dark",
+      "text": 13.154559219989332,
+      "label": 8.780548486052226,
+      "focus": 7.538195601075576,
+      "restingBorder": 3.873863042114497
+    }
+  ]
+}

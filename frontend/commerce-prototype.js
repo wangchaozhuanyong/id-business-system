@@ -3928,7 +3928,7 @@
       : A.button('取消', 'drawer-close');
     const footer = `${cancel}<button type="submit" form="commerce-contact-form" class="button primary">核对并保存</button>`;
     if (standalone) {
-      return entryWorkspace(`<section class="panel"><div class="form-panel">${body}<div class="form-footer">${footer}</div></div></section>`, tenant ? 'tenant' : 'customer');
+      return entryWorkspace(`<section class="panel form-panel">${body}<div class="form-footer">${footer}</div></section>`, tenant ? 'tenant' : 'customer');
     }
     A.openDrawer(
       `${row ? '编辑' : '新增'}${tenant ? '租户' : '客户'}`,
@@ -4376,7 +4376,11 @@
       customerId = v('customerId'),
       stock = v('businessType') === '成品交付';
     return (
-      `<div class="commerce-span-all order-choice-grid">` +
+      `<div class="commerce-span-all order-identity-grid">` +
+      (lockCustomer ? field('客户资料', 'renewalCustomer', input('renewalCustomer',
+        customers.find(row => row.id === customerId)?.name || (customerId ? '原客户资料待核对' : '客户资料未登记'), 'readonly') +
+        input('customerId', customerId, 'type="hidden"'), true) : orderCustomerField(customerId, quickDraft, existing)) +
+      `<div class="order-choice-grid">` +
       input('product', product, 'type="hidden"') +
       field('开通套餐', 'plan', lockChoices ? input('plan', v('plan'), 'readonly') : select('plan',
         chooseClaudePlan ? [['', '请选择开通套餐'], ...claudePlans] : keepSavedOption(orderPlanChoices(product, v('plan'), existing), v('plan'), existing), v('plan')), !auto) +
@@ -4388,10 +4392,7 @@
           : select('businessType', keepSavedOption(orderBusinessTypes(product), v('businessType'), existing), v('businessType')),
         true
       ) +
-      `</div><div class="commerce-span-all order-wide-fields">` +
-      (lockCustomer ? field('客户资料', 'renewalCustomer', input('renewalCustomer',
-        customers.find(row => row.id === customerId)?.name || (customerId ? '原客户资料待核对' : '客户资料未登记'), 'readonly') +
-        input('customerId', customerId, 'type="hidden"'), true) : orderCustomerField(customerId, quickDraft, existing)) +
+      `</div>` +
       (personalProduct(product) ? personalIdentityFields(v, existing, stock) :
       `<input type="hidden" id="commerce-accountId" name="commerce-accountId" value="${E(v('accountId'))}" />` +
       '<div class="commerce-span-all order-account-fields">' +
@@ -5905,7 +5906,7 @@
   function entryView(kind, product) {
     const key = entryViewKey(kind, product);
     if (!S.drafts.has(key)) S.drafts.set(key, {
-      period: 'all', from: '', to: '', page: 1, pageSize: window.IDPagination.defaultPageSize
+      period: 'all', from: '', to: '', query: '', page: 1, pageSize: window.IDPagination.defaultPageSize
     });
     return S.drafts.get(key);
   }
@@ -5928,6 +5929,7 @@
   }
   function entryRecordList(kind, product) {
     const view = entryView(kind, product);
+    const terms = contactKey(view.query).split(/\s+/).filter(Boolean);
     const grouped = kind === 'order' && isOrderEntry(S.route);
     const rows = entryRecordRows(kind, product, view);
     const contacts = new Map(customers.map(row => [row.id, row]));
@@ -5938,22 +5940,32 @@
       if (!plans.has(id)) plans.set(id, new Set());
       plans.get(id).add([order.product, order.plan].filter(Boolean).join(' · '));
     }
-    const records = rows.map(row => {
+    const records = [];
+    for (const row of rows) {
       const contact = kind === 'order' ? contacts.get(row.customerId) : row;
+      const name = contact?.name || (kind === 'order' ? '待补充客户' : '未命名资料');
+      const plan = kind === 'order' ? [row.product, row.plan].filter(Boolean).join(' · ') : [...(plans.get(row.id) || [])].join('、');
+      const channels = customerChannels.map(([key, label]) => [key, key === 'wechat' ? '微信' : label,
+        kind === 'order' ? orderContactValue(row, contact, key) : String(row[key] ?? '').trim()]);
+      if (terms.length) {
+        const fields = [name, plan, row.notes, ...(kind === 'order' ? [row.orderNo, orderIdentity(row), row.payment] : [])]
+          .map(value => contactKey(value));
+        for (const [key, , value] of channels) {
+          if (value) fields.push(contactKey(value), contactKey(value, key));
+        }
+        if (!terms.every(term => fields.some(value => value.includes(term)))) continue;
+      }
       const timestamp = parseDate(row.createdAt);
-      return {
+      records.push({
         id: row.id,
-        name: contact?.name || (kind === 'order' ? '待补充客户' : '未命名资料'),
-        contact: customerChannels.map(([key, label]) => {
-          const value = kind === 'order' ? orderContactValue(row, contact, key) : String(row[key] ?? '').trim();
-          return value ? `${key === 'wechat' ? '微信' : label}：${maskContact(value)}` : '';
-        }).filter(Boolean).join('；'),
-        plan: kind === 'order' ? [row.product, row.plan].filter(Boolean).join(' · ') : [...(plans.get(row.id) || [])].join('、'),
+        name,
+        contact: channels.filter(([, , value]) => value).map(([, label, value]) => `${label}：${maskContact(value)}`).join('；'),
+        plan,
         ...(kind === 'order' ? { payment: row.payment || '' } : {}),
         notes: row.notes || '',
         submittedAt: Number.isFinite(timestamp) ? beijingClock.format(timestamp) : '时间未记录'
-      };
-    });
+      });
+    }
     const hasContact = records.some(row => row.contact);
     const entryValue = (value, detail, attribute = '') => '<span class="entry-record-primary">' + E(value) + '</span>' +
       (detail ? '<span class="entry-record-secondary" ' + attribute + '>' + E(detail) + '</span>' : '');
@@ -5980,8 +5992,9 @@
     view.page = Math.min(view.page, Math.max(1, Math.ceil(records.length / view.pageSize)));
     return A.table(columns, records.slice((view.page - 1) * view.pageSize, view.page * view.pageSize),
       '', `commerce-entry-${kind}-${currencyFamily(product)}`, {
-        title: view.period === 'all' ? '暂无录入记录' : '所选时间暂无录入记录',
-        description: view.period === 'all' ? '保存资料后可在这里查看。' : '可切换全部或调整日期范围。'
+        title: terms.length ? '没有匹配的记录' : view.period === 'all' ? '暂无录入记录' : '所选时间暂无录入记录',
+        description: terms.length ? '可试试更短的关键词，或调整日期范围。' :
+          view.period === 'all' ? '保存资料后可在这里查看。' : '可切换全部或调整日期范围。'
       }) + window.IDPagination.render({ id: 'commerce-entry-records', ...view, total: records.length });
   }
   function entryRecordFilters(kind, product) {
@@ -6002,7 +6015,10 @@
   }
   function entryWorkspace(form, kind, product = '') {
     const title = kind === 'order' ? '最近订单' : kind === 'tenant' ? '最近租户' : '最近客户';
-    const description = `按北京时间筛选提交时间，默认按最新录入排序。显示当前权限内${kind === 'order' ? currencyFamily(product) + ' 的' : ''}记录，支持分页。列表显示已填写渠道的脱敏值，点击详情查看完整联系方式及快捷操作。刷新和翻页不会清空左侧输入。`;
+    const searchFields = kind === 'order' ? '客户姓名、联系方式、订单号、订阅账号、套餐、支付方式或备注' : '姓名、联系方式、关联套餐或备注';
+    const description = `支持按${searchFields}模糊搜索，可同时按北京时间筛选提交时间。显示当前权限内${kind === 'order' ? currencyFamily(product) + ' 的' : ''}记录，默认按最新录入排序，支持分页。列表显示已填写渠道的脱敏值，点击详情查看完整联系方式及快捷操作。刷新和翻页不会清空左侧输入。`;
+    const searchLabel = `搜索${title}`;
+    const query = entryView(kind, product).query;
     const mobileView = A.state.drafts.get(`mobile-entry:${A.state.route}`)?.view === 'records' ? 'records' : 'form';
     const unified = kind === 'order' && isOrderEntry(S.route);
     const mobileControl = unified
@@ -6015,32 +6031,40 @@
     return `<div class="commerce-entry-layout${unified ? ' order-submission-entry' : ''}" data-mobile-view="${mobileView}">${unified ? '' : mobileControl}
       <div class="commerce-entry-columns">${unified ? mobileControl : ''}${form}
       <aside class="panel entry-records" id="commerce-entry-records" data-kind="${kind}" data-product="${E(product)}" aria-labelledby="entry-records-title">
-        <div class="panel-heading"><div class="section-title-row"><h2 id="entry-records-title">${title}</h2>${A.titleInfo(title, description, 'entry-records-help')}</div>
-          <div class="entry-record-actions">${periods}
+        <div class="panel-heading">
+          <div class="entry-record-context"><div class="section-title-row"><h2 id="entry-records-title">${title}</h2>${A.titleInfo(title, description, 'entry-records-help')}</div>
+            ${periods}</div>
+          <div class="entry-record-actions"><div class="search-field entry-record-search">${A.icon('search')}<input type="search" data-auto-search id="commerce-entry-search" aria-label="${searchLabel}" placeholder="${searchLabel}" value="${E(query)}" autocomplete="off" /></div>
             ${localData ? A.button('刷新', 'commerce-entry-refresh', 'compact', '', 'aria-label="刷新最近录入记录"') : ''}</div></div>
         ${entryRecordDateRange(kind, product)}
         <div class="entry-record-region design-async-region"><div data-entry-progress role="status" hidden></div><div class="entry-record-list">${entryRecordList(kind, product)}</div></div>
         <p class="entry-record-error" data-entry-error role="status" hidden></p>
       </aside></div></div>`;
   }
-  function updateEntryRecords() {
-    const panel = $('#commerce-entry-records');
+  function updateEntryRecords(panel = $('#commerce-entry-records', A.activePageRegion?.())) {
     if (!panel) return;
     const list = panel.querySelector('.entry-record-list');
     const content = entryRecordList(panel.dataset.kind, panel.dataset.product);
     if (list.innerHTML !== content) list.innerHTML = content;
   }
   function bindEntryRecords() {
-    const panel = $('#commerce-entry-records');
+    const panel = $('#commerce-entry-records', A.activePageRegion?.());
     if (!panel || panel.dataset.bound) return;
     panel.dataset.bound = 'true';
+    panel.querySelector('#commerce-entry-search').addEventListener('input', event => {
+      const view = entryView(panel.dataset.kind, panel.dataset.product);
+      if (view.query === event.target.value) return;
+      view.query = event.target.value;
+      view.page = 1;
+      updateEntryRecords(panel);
+    });
     panel.addEventListener('id-pagination-change', event => {
       if (event.detail.id !== 'commerce-entry-records') return;
       event.stopPropagation();
       const view = entryView(panel.dataset.kind, panel.dataset.product);
       view.page = event.detail.page;
       view.pageSize = event.detail.pageSize;
-      updateEntryRecords();
+      updateEntryRecords(panel);
     });
   }
   function applyEntryPeriod(button) {
@@ -6076,7 +6100,7 @@
     view.page = 1;
     panel.querySelector('.entry-record-filters').outerHTML = entryRecordFilters(panel.dataset.kind, panel.dataset.product);
     panel.querySelector('.entry-date-range').outerHTML = entryRecordDateRange(panel.dataset.kind, panel.dataset.product);
-    updateEntryRecords();
+    updateEntryRecords(panel);
     panel.querySelector(`[data-period="${view.period}"]`)?.focus({ preventScroll: true });
   }
   async function refreshEntryRecords(button) {
@@ -6112,7 +6136,7 @@
     );
   }
   function gptOrderListHeading() {
-    return '<div class="gpt-order-origin-bar"><strong>订单列表</strong><div class="gpt-order-origin-legend" aria-label="订单来源颜色">' +
+    return '<div class="gpt-order-origin-bar"><div class="gpt-order-origin-legend" aria-label="订单来源颜色">' +
       '<span data-order-source="recharge">线上代充</span><span data-order-source="manual">手工录单</span></div></div>';
   }
 
@@ -6153,7 +6177,7 @@
       {
         id: 'paidAmount',
         label: '代付金额',
-        render: (row) => E(`${display(row.paidAmount)} ${currencyLabel(row.paidCurrency)}`)
+        render: (row) => `<span class="table-amount">${E(display(row.paidAmount))}</span><span class="table-unit">${E(currencyLabel(row.paidCurrency))}</span>`
       },
       {
         id: 'saleAmount',
@@ -6161,7 +6185,7 @@
         render: (row) =>
           row.saleAmount === ''
             ? A.tag('待补全', 'warning')
-            : E(`${display(row.saleAmount)} ${currencyLabel(row.saleCurrency)}`)
+            : `<span class="table-amount">${E(display(row.saleAmount))}</span><span class="table-unit">${E(currencyLabel(row.saleCurrency))}</span>`
       },
       {
         id: 'netCost', label: `净成本 ${costSettings.currency}`,
@@ -6182,7 +6206,7 @@
         }
       },
       { id: 'start', label: '订阅时间' },
-      { id: 'expiry', label: '到期时间' },
+      { id: 'expiry', label: '到期时间', render: row => A.tableDate(row.expiry) },
       { id: 'expiryReminder', label: '到期提醒', render: expiryTag },
       {
         id: 'paymentStatus',

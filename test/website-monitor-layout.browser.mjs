@@ -52,7 +52,7 @@ test('网站监控的访问记录与检测共用页签，网站统计从数据�
         const controls = [...panel.querySelectorAll('input,select')].filter(node => node.checkVisibility()).map(rect);
         const fieldsLeft = [...panel.querySelectorAll('.field')].filter(node => node.checkVisibility()).every(node => {
           const label = node.querySelector(':scope > label'), control = node.querySelector('.field-control');
-          return !label || !control || rect(label).right <= rect(control).left + 1;
+          return !label || !control || rect(label).bottom <= rect(control).top + 1;
         });
         const textBounds = node => {
           const range = document.createRange(); range.selectNodeContents(node); return range.getBoundingClientRect().toJSON();

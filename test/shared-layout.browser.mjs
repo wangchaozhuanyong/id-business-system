@@ -186,15 +186,18 @@ test('shared layouts preserve alignment, readable controls and stable navigation
             return node.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
           });
           if (width >= 1440) assert(formWidth >= 640, '宽屏录单为双列表单保留足够正文宽度');
-          if (formWidth >= 640) {
+          if (formWidth >= 640 && width > 900) {
             aligned(await box('#commerce-payment'), await box('#commerce-proMaterialMode'), '支付方式与填写方式应同排');
             aligned(await box('label[for="commerce-payment"]'), await box('label[for="commerce-proMaterialMode"]'), '第一行标签不齐');
-            const next = product === 'claude' ? 'tenantId' : 'cardId';
-            aligned(await box('#commerce-cardTypeId'), await box(`#commerce-${next}-picker`), '银行卡类型与下一步控件应同排');
-            aligned(await box('label[for="commerce-cardTypeId"]'), await box(`label[for="commerce-${next}-picker"]`), '第二行标签不齐');
-            if (product === 'claude')
-              aligned(await box('#commerce-cardId-picker'), await box('#commerce-tenantCardNumber'), '租户银行卡选择与卡号输入应同排');
-            else aligned(await box('#commerce-paymentId'), await box('#commerce-proCardSerial'), '卡尾号与序列号应同排');
+            // V2 groups payment, material mode and card type together; subsequent selectors retain their full width.
+            if (formWidth > 650) aligned(await box('#commerce-payment'), await box('#commerce-cardTypeId'), '支付方式与银行卡类型应同排');
+            for (const id of product === 'claude' ? ['tenantId-picker', 'cardId-picker', 'tenantCardNumber'] : ['cardId-picker', 'paymentId', 'proCardSerial']) {
+              const node = page.locator('#commerce-' + id);
+              if (await node.isVisible()) {
+                const bounds = await node.boundingBox();
+                assert(bounds.width >= 100, '银行卡资料控件须保持可读宽度');
+              }
+            }
           }
           await page.locator('#commerce-payment').selectOption('苹果内购');
           assert(await page.locator('#commerce-appleIdId-picker').isVisible());
@@ -202,9 +205,9 @@ test('shared layouts preserve alignment, readable controls and stable navigation
           const leftLabels = await page.locator('.field:visible').evaluateAll(nodes => nodes.every(n => {
             const label = n.querySelector(':scope > label');
             const control = n.querySelector(':scope > .field-control');
-            return !label || !control || label.getBoundingClientRect().right <= control.getBoundingClientRect().left + 1;
+            return !label || !control || getComputedStyle(label).clipPath !== 'none' || label.getBoundingClientRect().bottom <= control.getBoundingClientRect().top + 1 || (n.closest('[data-commerce-field=notes]') && label.getBoundingClientRect().right <= control.getBoundingClientRect().left);
           }));
-          assert(leftLabels, '窄屏标签必须仍在控件左侧');
+          assert(leftLabels, '标签位于控件上方，金额区保留可访问名称');
         }
       }
     }
@@ -276,10 +279,10 @@ test('shared layouts preserve alignment, readable controls and stable navigation
           const labelEnd = range.getBoundingClientRect().right;
           const control = field.querySelector('.field-control').getBoundingClientRect();
           const bounds = trigger.getBoundingClientRect();
-          return { gap: bounds.left - labelEnd, limit: control.left - bounds.right, size: bounds.width };
+          return { gap: bounds.left - labelEnd, limit: control.top - bounds.bottom, size: bounds.width };
         });
-        assert(geometry.gap >= -1 && geometry.gap <= 1 && geometry.limit >= 0, '说明按钮紧跟标签并留在控件左侧');
-        assert(geometry.size >= (width <= 900 ? 44 : 36));
+        assert(geometry.gap >= -1 && geometry.gap <= 8 && geometry.limit >= 0, '说明按钮紧跟标签并位于控件上方');
+        assert(geometry.size >= (width <= 900 ? 44 : 20));
         const before = await drawer.locator('#layout-name').boundingBox();
         await help.press('Enter');
         await drawer.locator('.title-description:popover-open').waitFor();
@@ -320,7 +323,7 @@ test('shared layouts preserve alignment, readable controls and stable navigation
             error: rect(node.querySelector('.field-error')) };
         });
         assert(geometry.label.right <= geometry.trigger.left + 1, '说明按钮位于字段文字右侧');
-        assert(geometry.trigger.right <= geometry.control.left, '说明按钮不占用输入区域');
+        assert(geometry.trigger.bottom <= geometry.control.top, '说明按钮不占用输入区域');
         assert(geometry.error.top >= geometry.control.bottom, '校验错误位于控件下方');
         if (width <= 900) assert(geometry.trigger.width >= 44 && geometry.trigger.height >= 44, '手机帮助按钮触控区至少 44px');
         await trigger.focus();

@@ -195,7 +195,7 @@ html[data-theme='dark'] .local-auth-story-copy span:last-child {
   color: var(--text);
   line-height: 1.5;
 }
-.local-auth-form input:not([type='checkbox']) {
+#local-auth-gate .local-auth-form input:not([type='checkbox']) {
   width: 100%;
   min-width: 0;
   height: 48px;
@@ -209,14 +209,14 @@ html[data-theme='dark'] .local-auth-story-copy span:last-child {
   box-sizing: border-box;
   transition: border-color var(--motion-fast) var(--motion-ease);
 }
-.local-auth-form input::placeholder {
+#local-auth-gate .local-auth-form input::placeholder {
   color: var(--muted);
   opacity: 1;
 }
-.local-auth-form input:not([type='checkbox']):focus {
+#local-auth-gate .local-auth-form input:not([type='checkbox']):focus {
   border-bottom: 2px solid var(--primary);
 }
-.local-auth-form input:not([type='checkbox']):focus-visible {
+#local-auth-gate .local-auth-form input:not([type='checkbox']):focus-visible {
   outline: 2px solid var(--primary);
   outline-offset: 4px;
 }
@@ -452,7 +452,7 @@ dialog > #local-auth-connection {
   .local-auth-card:has(#local-auth-confirmation) h1 { font-size: clamp(24px, 7.2vw, 30px); }
   .local-auth-card .title-help > summary,
   .local-auth-remember-row .field-help > summary { width: 44px; height: 44px; }
-  .local-auth-form input:not([type='checkbox']) { height: 52px; font-size: 16px; }
+  #local-auth-gate .local-auth-form input:not([type='checkbox']) { height: 52px; font-size: 16px; }
   .local-auth-form .local-auth-remember { min-height: 44px; }
   .local-auth-remember input { width: 17px; height: 17px; }
   .local-auth-footnote { font-size: 10px; margin-top: 25px; }

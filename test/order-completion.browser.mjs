@@ -93,11 +93,11 @@ async function checkLayout(page, drawer) {
     const { left, right } = panel.getBoundingClientRect();
     return {
       overflow: panel.scrollWidth > panel.clientWidth + 1 || body.scrollWidth > body.clientWidth + 1,
-      labelLeft: !label || (label.left >= left + 14 && label.left < input.left),
+      labelAbove: !label || (label.left >= left + 14 && label.bottom <= input.top + 1),
       actionsInside: buttons.every((button) => button.left >= left + 14 && button.right <= right - 14)
     };
   });
-  assert.deepEqual(geometry, { overflow: false, labelLeft: true, actionsInside: true });
+  assert.deepEqual(geometry, { overflow: false, labelAbove: true, actionsInside: true });
   const help = drawer.locator('.drawer-title-row .title-help');
   assert.equal(await help.getAttribute('open'), null);
   const firstSection = drawer.locator('.form-section').first();
