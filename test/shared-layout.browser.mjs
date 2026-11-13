@@ -61,7 +61,7 @@ test('shared layouts preserve alignment, readable controls and stable navigation
       await noOverflow();
     };
     const pages = [
-      ['data', 1320], ['data/sheets', 1320], ['plugins/websites', 1320], ['settings/monitoring', 1320],
+      ['data', 1320], ['data/sheets', 1320], ['monitor', Infinity], ['plugins/websites', Infinity], ['settings/monitoring', 1320],
       ['settings/accounts', 1320], ['settings/costs', 1320], ['settings/payment-countries', 1320],
       ['settings/mail-types', 960], ['workspace/order/gpt', Infinity], ['orders/gpt', Infinity]
     ];
@@ -72,7 +72,8 @@ test('shared layouts preserve alignment, readable controls and stable navigation
     await page.locator('#nav-toggle').click();
     for (const width of [390, 320]) {
       await page.setViewportSize({ width, height: 900 });
-      for (const [route, cap] of [pages[0], pages[1], pages[7]]) await check(route, cap);
+      for (const [route, cap] of pages.filter(([path]) => path.startsWith('data') ||
+        ['monitor', 'plugins/websites', 'settings/mail-types'].includes(path))) await check(route, cap);
     }
     await page.setViewportSize({ width: 1440, height: 900 });
   });
