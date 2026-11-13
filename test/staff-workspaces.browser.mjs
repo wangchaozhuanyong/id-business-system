@@ -106,6 +106,76 @@ test('role navigation uses business language and finance order operations remain
   }
 });
 
+test('finance reconciliation loads on demand and keeps dates, rows and page together across slow or failed reads', { timeout: 35_000 }, async t => {
+  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
+  t.after(() => browser.close());
+  const { context, page, errors, access } = await prepare(browser, 'finance');
+  t.after(() => context.close());
+  await page.setViewportSize({ width: 390, height: 844 });
+  const requests = [], assets = [];
+  page.on('request', request => {
+    if (new URL(request.url()).pathname.endsWith('/finance-reconciliation.mjs')) assets.push(request.url());
+  });
+  const oldRequested = Promise.withResolvers(), releaseOld = Promise.withResolvers(), oldCompleted = Promise.withResolvers();
+  const row = reference => ({ items: [{ reference, time: '2026-11-13T05:00:00Z' }], hasMore: true });
+  await context.route(url => url.pathname === '/api/local/staff/finance/reconciliation', async route => {
+    assert.equal(route.request().method(), 'GET');
+    const params = new URL(route.request().url()).searchParams;
+    const from = params.get('from'), to = params.get('to'), pageNumber = Number(params.get('page'));
+    requests.push([from, to, pageNumber]);
+    if (from === '2026-11-01') {
+      oldRequested.resolve();
+      await releaseOld.promise;
+      await route.fulfill({ json: row('第一组账单') });
+      oldCompleted.resolve();
+      return;
+    }
+    if (from === '2026-11-03') return route.fulfill({ status: 503, json: { error: '暂时无法读取' } });
+    return route.fulfill({ json: row(from ? '第二组账单' + pageNumber : '未筛选账单') });
+  });
+
+  await page.goto(origin + '/#/overview');
+  await page.getByRole('heading', { name: '网站总览', exact: true }).waitFor();
+  assert.equal(assets.length, 0);
+  assert.equal(requests.length, 0);
+  await page.evaluate(() => window.IDDesignAPI.go('staff/finance/reconciliation'));
+  await page.getByText('未筛选账单', { exact: true }).waitFor();
+  assert.equal(assets.length, 1);
+  const fromInput = page.getByLabel('开始日期'), toInput = page.getByLabel('结束日期');
+  const submit = page.getByRole('button', { name: '按日期查看' });
+  await fromInput.fill('2026-11-01');
+  await toInput.fill('2026-11-06');
+  await submit.click();
+  await oldRequested.promise;
+  await fromInput.fill('2026-11-02');
+  await toInput.fill('2026-11-08');
+  await submit.click();
+  await page.getByText('第二组账单1', { exact: true }).waitFor();
+  releaseOld.resolve();
+  await oldCompleted.promise;
+  await settle(page);
+  assert.equal(await page.getByText('第一组账单', { exact: true }).count(), 0);
+
+  await fromInput.fill('2026-11-03');
+  await submit.click();
+  await page.getByText('暂时无法读取。这里显示的是上次取得的账单。', { exact: true }).waitFor();
+  assert(await page.getByText('账单日期 2026-11-02 至 2026-11-08', { exact: true }).isVisible());
+  assert(await page.getByText('第二组账单1', { exact: true }).isVisible());
+  await page.getByRole('button', { name: '下一页' }).click();
+  await page.getByText('第二组账单2', { exact: true }).waitFor();
+  assert.deepEqual(requests.at(-1), ['2026-11-02', '2026-11-08', 2]);
+  assert.equal(await fromInput.inputValue(), '2026-11-03');
+  assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+  assert.deepEqual((await separatorSnapshot(page)).findings, []);
+  await page.evaluate(() => window.IDDesignAPI.go('overview'));
+  await page.getByRole('heading', { name: '网站总览', exact: true }).waitFor();
+  await page.evaluate(() => window.IDDesignAPI.go('staff/finance/reconciliation'));
+  await page.getByText('第二组账单2', { exact: true }).waitFor();
+  assert.equal(assets.length, 1);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(access.external, []);
+});
+
 test('finance verifies a card change and staff pages fit narrow screens with readable controls', { timeout: 40_000 }, async t => {
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
   t.after(() => browser.close());

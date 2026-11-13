@@ -1,4 +1,4 @@
-import { inventoryOperationalStatus } from '../frontend/order-opening.mjs';
+import { inventoryOperationalStatus } from '../modules/orders/order-opening.mjs';
 import { isDeepStrictEqual } from 'node:util';
 import { toV2DateTimeInput } from '../modules/time/dateTime.ts';
 

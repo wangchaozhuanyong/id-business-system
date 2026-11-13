@@ -1,11 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { hasRecordedPaymentAmount } from '../modules/finance/accounting.mjs';
 
-import { defaultSubscriptionSort, firstRecordTime, sortByRecordTime } from '../frontend/list-order.mjs';
+import { defaultSubscriptionSort, firstRecordTime, sortByRecordTime } from '../modules/orders/list-order.mjs';
 import {
   orderOpeningConfirmed, orderTerminationTime, subscriptionChainRoot, validOrderEmail, validOrderXHandle,
   rechargeRenewalExpiryPending, subscriptionDuration, subscriptionPeriodState, subscriptionStateLabels, subscriptionTime as instant
-} from '../frontend/order-opening.mjs';
+} from '../modules/orders/order-opening.mjs';
 import { accountMarkedDead, releasedAccountOrders, systemAccount } from './account-lifecycle.mjs';
 import { isClaudeHistoricalSale } from './claude-history-intake.mjs';
 import { personalProduct, subscriptionSeries, targetKey } from './personal-subscriptions.mjs';

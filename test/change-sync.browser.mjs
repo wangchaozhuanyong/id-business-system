@@ -11,7 +11,8 @@ test('版本通知更新相关列表，保留筛选、分页和草稿；心跳�
   const fixture = JSON.parse(await readFile(new URL('../docs/audits/2026-11-06-design-review/visual-fixtures.json', import.meta.url)));
   fixture.commerce.data.customers.forEach((row, index) => { row.name = `stream 客户 ${index}`; });
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  await interceptDesign(context, { localFixtures: fixture, changeEvents: true });
+  await interceptDesign(context, { localFixtures: fixture, changeEvents: true,
+    actor: { id: 'synthetic-admin', name: '合成管理员', role: 'admin' } });
   await context.addInitScript(versions => {
     const original = window.fetch.bind(window);
     window.changeVersions = versions;
@@ -40,7 +41,7 @@ test('版本通知更新相关列表，保留筛选、分页和草稿；心跳�
       } }), { headers: { 'content-type': 'text/event-stream; charset=utf-8' } }));
     };
   }, { inventory: String(fixture.inventory.version), commerce: String(fixture.commerce.version) });
-  const reads = { inventory: 0, commerce: 0 }, writes = [], errors = [];
+  const reads = { inventory: 0, commerce: 0, appleBalance: 0, 'renewal-sidebar': 0 }, writes = [], errors = [];
   await context.route('**/api/local/**', route => {
     const request = route.request(), resource = new URL(request.url()).pathname.split('/').at(-1);
     if (!['GET', 'HEAD'].includes(request.method())) {
@@ -49,7 +50,7 @@ test('版本通知更新相关列表，保留筛选、分页和草稿；心跳�
     }
     if (resource in reads) {
       reads[resource]++;
-      return route.fulfill({ json: fixture[resource] });
+      return route.fulfill({ json: resource === 'renewal-sidebar' ? { count: 2, nextAt: null } : fixture[resource] });
     }
     return route.fallback();
   });
@@ -66,10 +67,22 @@ test('版本通知更新相关列表，保留筛选、分页和草稿；心跳�
     const state = window.IDChangeSync?.status();
     return state?.connected && state.snapshots > 0 && !state.refreshing && !state.pending;
   });
-  await page.goto(origin + '/#/accounts/gpt');
+  await page.goto(origin + '/#/settings/information');
+  await idle();
+  await page.waitForFunction(() => window.IDDesignAPI.modules.commerce.renewalReminderCount() === 2);
+  assert.deepEqual(reads, { inventory: 0, commerce: 0, appleBalance: 0, 'renewal-sidebar': 1 });
+  fixture.inventory.version++;
+  fixture.commerce.version++;
+  await emit({ inventory: String(fixture.inventory.version), commerce: String(fixture.commerce.version) });
+  await idle();
+  assert.equal(reads.inventory + reads.commerce + reads.appleBalance, 0);
+  assert.equal(reads['renewal-sidebar'], 2, '提醒使用单次摘要读取');
+  await go('accounts/gpt');
   await page.locator('#main [data-action="inventory-more"]').first().waitFor();
   await page.waitForFunction(() => window.IDDesignAPI.modules.commerce.listOrders().length > 0);
   await idle();
+  assert.equal(reads.inventory, 1, '回到共享业务页只补读一次库存');
+  assert.equal(reads.commerce, 1, '回到共享业务页只补读一次订单');
   const boot = await page.evaluate(() => window.bootIdentity);
   const baseline = { ...reads };
   const seed = fixture.inventory.data.accounts.find(row => row.type === 'gpt');

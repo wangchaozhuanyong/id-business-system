@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
 import * as orderOpening from './order-opening.mjs';
+import * as renewalReminders from '../modules/orders/renewal-reminders.mjs';
 import { URL } from 'node:url';
 import test from 'node:test';
 
@@ -91,7 +92,7 @@ function runtime(localData) {
     getElementById: () => null
   };
   runInNewContext(source, {
-    window: { IDOrderOpening: orderOpening, IDDesignAPI: api, IDDesignModules: modules, IDLocalData: localData, IDPagination: { defaultPageSize: 10, render: () => '' } },
+    window: { IDOrderOpening: orderOpening, IDRenewalReminders: renewalReminders, IDDesignAPI: api, IDDesignModules: modules, IDLocalData: localData, IDPagination: { defaultPageSize: 10, render: () => '' } },
     document,
     structuredClone: globalThis.structuredClone,
     Date,

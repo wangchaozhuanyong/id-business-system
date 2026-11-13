@@ -3,6 +3,7 @@ import test from 'node:test';
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { calculateConfirmedNetReceipt } from '../modules/finance/accounting.mjs';
+import { applyDocumentDelta, documentDelta } from '../modules/data/document-delta.mjs';
 import { projectSubscriptions } from '../server/subscription-management.mjs';
 import { interceptDesign, origin } from './helpers/offline-design.mjs';
 
@@ -16,16 +17,20 @@ async function setup(browser, slug = 'gpt', width = 1440, seed) {
   fixture['auth/display-names'] = { items: [actor] };
   seed?.(fixture);
   const context = await browser.newContext({ viewport: { width, height: 900 } });
-  const traffic = await interceptDesign(context, { actor, localFixtures: fixture, skipRechargeAssets: true });
+  const traffic = await interceptDesign(context, { actor, localFixtures: fixture, skipRechargeAssets: true, documentDelta: true });
   const writes = [], control = { fail: false, hold: null, started: null };
   await context.route('**/api/local/commerce', async route => {
     if (route.request().method() === 'GET') return route.fulfill({ json: fixture.commerce });
     const body = route.request().postDataJSON();
-    writes.push(body); control.started?.resolve();
+    const data = body.delta ? applyDocumentDelta('commerce', fixture.commerce.data, body.delta) : body.data;
+    assert(data, 'ordinary save payload must reconstruct the current business data');
+    writes.push({ ...body, data }); control.started?.resolve();
     if (control.hold) await control.hold.promise;
     if (control.fail) return route.fulfill({ status: 400, json: { error: '模拟提交失败' } });
-    fixture.commerce = { version: body.version + 1, data: body.data };
-    return route.fulfill({ json: fixture.commerce });
+    const version = body.version + 1;
+    const delta = body.delta && documentDelta('commerce', fixture.commerce.data, data);
+    fixture.commerce = { version, data };
+    return route.fulfill({ json: delta ? { version, delta } : fixture.commerce });
   });
   const page = await context.newPage(), errors = [];
   page.setDefaultTimeout(6000);
@@ -220,6 +225,7 @@ test('旧订单可单独修改备注，保留原来的空值、付款状态与�
   assert.equal(await page.locator('#confirm-dialog[open]').count(), 0);
   const saved = writes[0].data.orders.find(row => row.id === id);
   assert.equal(saved.notes, '补录一条说明');
+  assert(writes[0].delta.some(change => change.collection === 'orders' && change.rows[0].id === id));
   for (const key of ['email', 'cardId', 'paidAmount', 'paidCurrency', 'saleAmount', 'saleCurrency', 'start', 'expiry'])
     assert.equal(saved[key], '', key);
   assert.equal(saved.paidConfirmed || saved.receiptConfirmed, false);

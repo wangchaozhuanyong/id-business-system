@@ -214,8 +214,7 @@ const navigation = [
       ['客户录入', 'customers/new'],
       ['租户录入', 'customers/new/tenant'],
       ['充值码提取', 'workspace/recharge-codes'],
-      ['兑换开通', 'workspace/recharge'],
-      ['客户服务', 'staff/customers']
+      ['兑换开通', 'workspace/recharge']
     ]
   ],
   [
@@ -225,16 +224,13 @@ const navigation = [
       ['账号提取', 'workspace/account-extract'],
       ['邮箱提取', 'workspace/mail-extract'],
       ['提取与归还', 'workspace/extractions'],
-      ['比特登录', 'recharge/start'],
-      ['小组工作', 'staff/team'],
-      ['业务 IP', 'staff/business-proxies']
+      ['比特登录', 'recharge/start']
     ]
   ],
   [
     '邮箱管理',
     'mail',
     [
-      ['注册工作台', 'staff/registration'],
       ['动态验证码', 'staff/authenticator'],
       ['谷歌邮箱', 'mailboxes/google'],
       ['苹果隐藏邮箱', 'mailboxes/relay'],
@@ -283,8 +279,6 @@ const navigation = [
     '线上代充',
     'card',
     [
-      ['自动代充银行卡', 'staff/finance/cards'],
-      ['代充对账', 'staff/finance/reconciliation'],
       ['ChatGPT 充值', 'online-recharge/chatgpt'],
       ['Claude 充值', 'online-recharge/claude', true]
     ]
@@ -319,6 +313,71 @@ const navigation = [
     ]
   ]
 ];
+const registeredPages = new Map();
+
+function registerPage(page, loadPage) {
+  const group = navigation.find(([name]) => name === page.navigation);
+  const occupied = navigation.some(([, , children]) => children.some(([, route]) => route === page.route));
+  if (!group || occupied || window.IDDesignModules.some(module => module.id === page.id || module.matches(page.route)))
+    throw new Error('页面入口重复或未找到所属导航：' + page.route);
+  const children = group[2], relativeTo = page.before || page.after;
+  const anchor = children.findIndex(([, route]) => route === relativeTo);
+  if (relativeTo && anchor < 0) throw new Error('未找到页面的导航位置：' + page.route);
+  const position = relativeTo ? anchor + Number(Boolean(page.after)) : children.length;
+  children.splice(position, 0, [page.label, page.route]);
+  registeredPages.set(page.route, page);
+  let instance, loading, failed = false, attempts = 0;
+  let lifecycle = 0;
+  const isActive = () => state.route === page.route && permittedRoute(page.route) &&
+    activePageRegion().dataset.pageRegion === page.route;
+  function load() {
+    if (instance || loading) return;
+    const generation = lifecycle;
+    const task = loadPage(attempts++).then(module => {
+      if (lifecycle !== generation) return;
+      instance = module.createPage(window.IDDesignAPI, page);
+      if (isActive()) render();
+    }).catch(() => {
+      if (lifecycle !== generation) return;
+      failed = true;
+      if (isActive()) render();
+    }).finally(() => { if (loading === task) loading = undefined; });
+    loading = task;
+  }
+  window.IDDesignModules.push({
+    id: page.id,
+    matches: route => route === page.route,
+    sharedBusinessData: page.sharedBusinessData,
+    render: () => instance?.render() ?? header(page.label, page.description) + '<section class="panel panel-body">' +
+      (failed ? empty('暂时无法打开此页面', '请重试。') + button('重试', 'registered-page-retry')
+        : '<p role="status">正在加载页面…</p>') + '</section>',
+    afterRender(options) {
+      if (instance) instance.afterRender?.(options);
+      else if (!failed) load();
+    },
+    onClick(action, node) {
+      if (!isActive()) return false;
+      if (action !== 'registered-page-retry') return instance?.onClick?.(action, node);
+      failed = false;
+      load();
+      render();
+      return true;
+    },
+    deactivate: region => instance?.deactivate?.(region),
+    clearPageState() {
+      lifecycle++;
+      loading = undefined;
+      instance?.clearPageState?.();
+      instance = undefined;
+      failed = false;
+    },
+    onDataChanges: scopes => instance?.onDataChanges?.(scopes)
+  });
+}
+function usesSharedBusinessData(route) {
+  if (!permittedRoute(route)) return false;
+  return window.IDDesignModules.find(module => module.matches(route))?.sharedBusinessData !== false;
+}
 const mailTypes = [
   ['google', '谷歌邮箱'],
   ['apple', '苹果 ID'],
@@ -1117,19 +1176,13 @@ function matchesNav(route, base) {
 function permittedRoute(route) {
   const role = state.actor?.role;
   const auth = window.IDLocalData?.authRequired;
+  const page = registeredPages.get(route);
+  if (page) return Boolean(auth && page.roles.includes(role));
   if (route === 'workspace/finance-renewals') return Boolean(auth && ['finance', 'super'].includes(role));
   if (route === 'workspace/renewals/reminders') return Boolean(auth && ['super', 'admin'].includes(role));
   if (route === 'workspace/renewals' || route.startsWith('workspace/renewals/') || route.startsWith('workspace/renewal-submit/'))
     return !auth || ['super', 'admin', 'supervisor', 'employee'].includes(role);
-  if (route.startsWith('staff/')) {
-    return Boolean(auth && ({
-      supervisor: ['staff/team', 'staff/business-proxies'],
-      registrar: ['staff/registration', 'staff/authenticator'],
-      employee: ['staff/customers'],
-      finance: ['staff/finance/cards', 'staff/finance/reconciliation'],
-      super: ['staff/finance/cards', 'staff/finance/reconciliation']
-    })[role]?.includes(route));
-  }
+  if (route.startsWith('staff/')) return Boolean(auth && route === 'staff/authenticator' && role === 'registrar');
   if (route === 'settings/security') return Boolean(auth && role === 'super');
   if (!auth || role === 'super') return true;
   if (role === 'admin') return ![
@@ -3616,6 +3669,7 @@ function roundedDivision(numerator, denominator) {
   return negative ? -result : result;
 }
 window.IDDesignAPI = {
+  registerPage,
   beginRegionRead,
   finishRegionRead,
   activePageRegion,
@@ -3676,6 +3730,7 @@ window.IDDesignAPI = {
   modules: {},
   navigation,
   canVisit: permittedRoute,
+  usesSharedBusinessData,
   compactListToolbars,
   legacy: {
     editMailbox,

@@ -12,7 +12,7 @@ permissions:
 jobs:
   quality:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Check out the proposed source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -35,3 +35,14 @@ jobs:
           git -C .upstream/codexdaichong checkout --quiet --detach "$revision"
       - name: Run the isolated test suite
         run: npm test
+      - name: Install the offline browser test runtime
+        run: |
+          npm install --no-save --package-lock=false playwright@1.62.0 typescript@5.9.3
+          npx --no-install playwright install --with-deps chromium
+      - name: Check shared TypeScript rules
+        run: npx --no-install tsc --noEmit
+      - name: Run offline interface and module checks
+        run: |
+          set -euo pipefail
+          node modules/recharge/codexdaichong/assets.mjs "$PWD/.runtime/recharge-assets.json"
+          ID_CODEXDAICHONG_ASSETS_FILE="$PWD/.runtime/recharge-assets.json" node test/check-ui-contract.mjs

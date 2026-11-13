@@ -4,6 +4,7 @@ import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { describeWriteOperation, checkWriteReceipt, WriteOperationError } from './write-operation.mjs';
 import { mergeContactWrite } from './contact-write.mjs';
+import { applyDocumentDelta, documentDelta, validDocumentDelta } from '../modules/data/document-delta.mjs';
 import { matchRechargeRenewal, renewalAssociationIssue, renewalExpiryIssue } from './recharge-renewal.mjs';
 import { validOrderCurrencies, validOrderCurrencyGroups, retainOrderSettings } from './order-currency-settings.mjs';
 import { isDeepStrictEqual } from 'node:util';
@@ -66,6 +67,7 @@ import { applyInventoryUsage, correctInventoryUsage, inspectInventoryUsage, usag
 import { checkRegistrationChanges } from './inventory-registration.mjs';
 import { attributeInventory, defaultInventoryRegistrationTimes } from './inventory-attribution.mjs';
 import { checkAccountLocations } from './inventory-account-location.mjs';
+import { renewalSidebar } from './renewal-sidebar.mjs';
 import { emptyAppleLedger, stageAppleOpenings, stageAppleOrderFunding, stageConfirmedRenewalDebit,
   pendingRenewalPayments, renewalLedgerCommerce } from './apple-funding.mjs';
 import { capturePaidRenewalSource, directRenewalSource, renewalHandoffDomain, renewalRole } from './renewal-handoff.mjs';
@@ -78,7 +80,7 @@ import { legacyOpeningOrderIds, ownerForSubscriptionOrder, subscriptionDomain } 
 import {
   automaticGptOrder, matchOrderCustomer, orderCustomerCreateAction, orderFieldChanged, rechargeOrderOwner, rechargeRenewalExpiryPending,
   subscriptionChainRoot, subscriptionTime, validOrderEmail, validOrderXHandle
-} from '../frontend/order-opening.mjs';
+} from '../modules/orders/order-opening.mjs';
 import {
   assignOrderOwner, assignTenantOwner, checkClaudeProMaterialHistory,
   checkClaudeProRenewalSource, checkManualRenewalLink, checkNewOrder, checkSubscriptionTermination, deriveCardIssueFee, historicalGptCardBackfillError,
@@ -823,17 +825,42 @@ function checkedRelayClaims(priorInventory, write, actor) {
 async function saveHttpWrites(store, entries, actor, operationId, {
   verifyRelayExtraction, readOrderCards, readOrderOwners, requireRenewalHandoff,
   canChangeProtectedSettings
-}) {
-  let writes = checkWrites(entries);
+}, deltaResponse) {
+  const sparse = Array.isArray(entries) && entries.some(entry => entry && Object.hasOwn(entry, 'delta'));
+  let writes;
+  let sparseOperation, sparseSnapshot;
+  if (sparse) {
+    const [entry] = entries;
+    if (actor && !['admin', 'super'].includes(actor.role))
+      throw new LocalDataError(403, '当前账号无权保存此资料');
+    if (entries.length !== 1 || Object.hasOwn(entry, 'data') || Object.hasOwn(entry, 'recordChange') ||
+        !Number.isSafeInteger(entry.version) || entry.version < 1 || !validDocumentDelta(entry.domain, entry.delta))
+      throw new LocalDataError(400, '保存资料格式不正确');
+    const { domain, version, delta } = entry;
+    const action = actionsByDomain[domain].has(entry.action) ? entry.action : 'local_save';
+    sparseOperation = describeWriteOperation(operationId, actor, [{ domain, version, action, delta }]);
+    const replay = sparseOperation && store.replayWrite?.(sparseOperation);
+    if (replay) return replay;
+    sparseSnapshot = store.load(domain);
+    const data = sparseSnapshot.version === version && applyDocumentDelta(domain, sparseSnapshot.data, delta);
+    if (!data) throw new LocalDataError(409, domain === 'commerce'
+      ? '订单已在其他页面更新，请刷新后重试' : '库存资料已在其他页面更新，请刷新后重试');
+    writes = checkWrites([{ domain, version, action, data }]);
+    if (deltaResponse) deltaResponse.before = structuredClone(sparseSnapshot.data);
+  } else {
+    writes = checkWrites(entries);
+  }
   const settings = writes.find(({ domain }) => domain === 'settings');
   if (actor?.role === 'super' && settings && canChangeProtectedSettings && !canChangeProtectedSettings()) {
     const current = store.load('settings').data;
     if (protectedSettingsChanged(retainOrderSettings(settings.data, current), current))
       throw new LocalDataError(403, '请先完成安全确认，再继续这项操作', 'SECURITY_CONFIRMATION_REQUIRED');
   }
-  const operation = describeWriteOperation(operationId, actor, writes);
-  const replay = operation && store.replayWrite?.(operation);
-  if (replay) return replay;
+  const operation = sparse ? sparseOperation : describeWriteOperation(operationId, actor, writes);
+  if (!sparse && operation) {
+    const replay = store.replayWrite?.(operation);
+    if (replay) return replay;
+  }
   let contactSnapshot;
   if (writes.some(write => write.recordChange)) {
     if (writes.length !== 1) throw new WriteOperationError(400, '关联业务必须按整个批次核对版本');
@@ -843,7 +870,7 @@ async function saveHttpWrites(store, entries, actor, operationId, {
   const commerce = writes.find(({ domain }) => domain === 'commerce');
   const orderCards = new Map();
   if (commerce) {
-    const current = contactSnapshot || store.load('commerce');
+    const current = contactSnapshot || sparseSnapshot || store.load('commerce');
     if (current.version !== commerce.version)
       throw new LocalDataError(409, '订单已在其他页面更新，请刷新后重试');
     const previous = new Map((current.data?.orders || []).map((row) => [row.id, row]));
@@ -863,7 +890,7 @@ async function saveHttpWrites(store, entries, actor, operationId, {
   const options = { actor, readOrderOwners, operation, requireRenewalHandoff, [verifiedOrderCards]: orderCards };
   const inventory = writes.find(({ domain }) => domain === 'inventory');
   if (!inventory) return store.saveBatch(writes, options);
-  const current = store.load('inventory');
+  const current = sparseSnapshot || store.load('inventory');
   if (current.version !== inventory.version) {
     throw new LocalDataError(409, '库存资料已在其他页面更新，请刷新后重试');
   }
@@ -2900,6 +2927,13 @@ export async function handleLocalBusiness(
       if (request.headers.origin !== origin) throw new LocalDataError(403, '仅允许从当前页面保存列设置');
       return json(response, 200, store.saveColumnPreference(await readJson(request, 4096), actor));
     }
+    if (domain === 'renewal-sidebar') {
+      response.setHeader('Cache-Control', 'private, no-store');
+      if (actor && !['admin', 'super'].includes(actor.role))
+        throw new LocalDataError(403, '当前账号无权查看续费提醒数量');
+      if (request.method !== 'GET') throw new LocalDataError(405, '续费提醒仅支持读取');
+      return json(response, 200, renewalSidebar(store));
+    }
     if (domain === 'order-completion') {
       response.setHeader('Cache-Control', 'private, no-store');
       requireCompletionActor(actor);
@@ -3087,8 +3121,9 @@ export async function handleLocalBusiness(
     if (domain === bitBrowserAddressDomain) {
       return json(response, 200, store.saveBitBrowserAddresses(body, actor));
     }
+    const deltaResponse = {};
     const [entry, ...related] = await saveHttpWrites(store, [{ ...body, domain }], actor,
-      request.headers['x-id-operation'], writeOptions);
+      request.headers['x-id-operation'], writeOptions, deltaResponse);
     const inventory = related.find(item => item.domain === 'inventory');
     const appleBalance = related.find(item => item.domain === 'appleBalance');
     const result = {
@@ -3098,7 +3133,14 @@ export async function handleLocalBusiness(
       ...(inventory && { inventory }),
       ...(appleBalance && { appleBalance })
     };
-    return json(response, 200, entry.domain === 'commerce' ? commerceForActor(store, result, actor) : result);
+    const snapshot = entry.domain === 'commerce' ? commerceForActor(store, result, actor) : result;
+    const delta = deltaResponse.before && entry.version === body.version + 1 &&
+      documentDelta(domain, deltaResponse.before, snapshot.data);
+    if (delta) {
+      const { data, ...metadata } = snapshot;
+      return json(response, 200, { ...metadata, delta });
+    }
+    return json(response, 200, snapshot);
   } catch (error) {
     if (response.destroyed) return;
     if (error instanceof LocalDataError && error.code === 'SECURITY_CONFIRMATION_REQUIRED')

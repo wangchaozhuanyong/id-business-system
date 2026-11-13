@@ -224,6 +224,6 @@
   }
 
   window.IDAccountSecurity = Object.freeze({ verify, personal, confirmChange });
-  window.IDDesignModules.push({ matches: value => value === route, render, afterRender: activate,
+  window.IDDesignModules.push({ matches: value => value === route, sharedBusinessData: false, render, afterRender: activate,
     deactivate() { loadId++; host = null; } });
 })();

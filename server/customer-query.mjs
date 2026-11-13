@@ -1,5 +1,5 @@
-import { orderOpeningConfirmed, subscriptionPeriodState, subscriptionTime } from '../frontend/order-opening.mjs';
-import { appleBinding, appleFundingIndex, appleRegions } from '../frontend/apple-funding.mjs';
+import { orderOpeningConfirmed, subscriptionPeriodState, subscriptionTime } from '../modules/orders/order-opening.mjs';
+import { appleBinding, appleFundingIndex, appleRegions } from '../modules/finance/apple-funding.mjs';
 import { releasedAccountOrders } from './account-lifecycle.mjs';
 import { blockedOrderCard, cardFreezeDocument, cardTypeDocument, frozenOrderCard, orderCardArchiveDocument,
   orderCardHealth, orderCardHealthReference } from './card-management.mjs';

@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { currencies, usesVirtualBankCard, validCurrencyCode } from '../modules/finance/accounting.mjs';
 import { validApplePaidPrices as validateApplePrices } from './apple-funding.mjs';
 import { personalPlans, personalProduct, samePersonalSubscription, stockTypeForProduct, subscriptionSeries, targetKey } from './personal-subscriptions.mjs';
-import { orderNeedsAccount, orderOpeningConfirmed, orderTerminationTime, subscriptionTime } from '../frontend/order-opening.mjs';
+import { orderNeedsAccount, orderOpeningConfirmed, orderTerminationTime, subscriptionTime } from '../modules/orders/order-opening.mjs';
 
 export const rechargePlanLabels = Object.freeze({
   plus: 'Plus', pro100: 'Pro 100', pro200: 'Pro 200', pro500: 'Pro 500'

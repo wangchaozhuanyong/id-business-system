@@ -1,4 +1,4 @@
-import { appleAmountUnits } from '../../frontend/apple-funding.mjs';
+import { appleAmountUnits } from '../../modules/finance/apple-funding.mjs';
 import { hasRecordedPaymentAmount } from '../../modules/finance/accounting.mjs';
 import { pendingRenewalPayments } from '../apple-funding.mjs';
 

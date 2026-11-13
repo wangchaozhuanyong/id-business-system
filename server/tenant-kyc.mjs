@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
-import { validOrderEmail } from '../frontend/order-opening.mjs';
+import { validOrderEmail } from '../modules/orders/order-opening.mjs';
 import { accountMarkedDead } from './account-lifecycle.mjs';
 
 const rows = value => Array.isArray(value) ? value : [];

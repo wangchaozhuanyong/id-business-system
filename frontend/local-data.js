@@ -17,6 +17,7 @@
   const pendingWrites = new Set();
   let sourceInvalidated = false;
   const dataSource = document.querySelector('meta[name="id-data-source"]')?.content;
+  const supportsDocumentDelta = document.querySelector('meta[name="id-document-delta"]')?.content === 'enabled';
   const sourceError = () => Object.assign(new Error('业务数据来源已变化，请重新加载页面后核对'), {
     status: 409, code: 'DATA_SOURCE_CHANGED'
   });
@@ -25,7 +26,7 @@
     'bitbrowser-connections', 'bitbrowser-proxies', 'bitbrowser-addresses', 'tenant-cards', 'recharge-codes',
     'order-sync', 'tools/mailbox-pool', 'tools/website-visits', 'apple-relay', 'operators', 'audit', 'finance-rates', 'card-types',
     'order-card-freeze', 'subscription-management', 'system-monitoring', 'recharge-card-plans', 'tools/mailbox-delivery',
-    expenseScope, 'site-observations', 'site-resources', 'site-backups', 'renewal-handoffs']);
+    expenseScope, 'site-observations', 'site-resources', 'site-backups', 'renewal-handoffs', 'recharge-billing']);
   const counters = new Set(['inventory', 'commerce', 'settings', 'appleBalance', 'toolbox', expenseScope, 'subscription-management']);
   const numeric = value => typeof value === 'string' && /^\d+$/.test(value);
   const validRevision = version => typeof version === 'string' && version.length > 0 && version.length <= 128;
@@ -54,6 +55,7 @@
     if (scopes.includes('inventory')) { expanded.add('appleBalance'); expanded.add('apple-relay'); expanded.add('tools/mailbox-pool'); }
     if (scopes.includes('operators')) expanded.add('order-owners');
     if (scopes.some(scope => ['commerce', 'inventory', 'order-sync'].includes(scope))) expanded.add('site-data-health');
+    if (scopes.some(scope => ['commerce', 'inventory', 'subscription-management'].includes(scope))) expanded.add('renewal-sidebar');
     queries.invalidate([...expanded]);
     notifyChanges(scopes);
   }
@@ -272,7 +274,8 @@
   }
 
   async function request(resource, data, method = 'PUT', {
-    keepalive = false, operationId: suppliedOperation, boundedRead = false, writeTimeout, measure, timing, stepUp = false
+    keepalive = false, operationId: suppliedOperation, boundedRead = false, writeTimeout, measure, timing, stepUp = false,
+    retryWrite = true
   } = {}) {
     if (sourceInvalidated) throw sourceError();
     const timeout = data === undefined || boundedRead ? 12_000 : writeTimeout;
@@ -295,6 +298,7 @@
       ['commerce', 'inventory', 'settings', 'appleBalance', 'batch'].includes(resource)) ||
       (resource === 'card-types' && data?.action === 'health');
     const operationId = suppliedOperation || (receiptWrite && window.crypto?.randomUUID?.());
+    const retryable = operationId && retryWrite;
     if (operationId) options.headers['X-ID-Operation'] = operationId;
     if (measure) (options.headers ||= {})['X-ID-Measured-Action'] = measure;
     // Retry only the same versioned operation. The server's durable receipt is
@@ -305,7 +309,7 @@
       try { response = await window.fetch('/api/local/' + resource, options); }
       catch (error) {
         if (signal?.aborted) throw timeoutError();
-        if (operationId && attempt < 1) continue;
+        if (retryable && attempt < 1) continue;
         throw error;
       }
       timing?.response(response);
@@ -314,7 +318,7 @@
       if (signal?.aborted) throw timeoutError();
       if (sourceInvalidated) throw sourceError();
       if (!response.ok || result === null) {
-        if (operationId && attempt < 1 && (response.status >= 500 || (response.ok && result === null))) continue;
+        if (retryable && attempt < 1 && (response.status >= 500 || (response.ok && result === null))) continue;
         if (stepUp && !confirmed && response.status === 403 &&
             result?.code === 'SECURITY_CONFIRMATION_REQUIRED' && window.IDAccountSecurity) {
           confirmed = await window.IDAccountSecurity.verify();
@@ -369,6 +373,23 @@
     if (changes.length !== 1 || Object.hasOwn(changes[0].after, 'initialCards') ||
         after.logs?.length !== before.logs?.length + 1 || !same(after.logs.slice(1), before.logs)) return;
     return { ...changes[0], log: after.logs[0] };
+  }
+
+  async function saveDocument(domain, version, data, { action, base, measure, timing } = {}) {
+    const recordChange = domain === 'commerce' && contactChange(action, base, data);
+    let payload = { version, data, action, ...(recordChange && { recordChange }) };
+    let rules;
+    if (supportsDocumentDelta && ['admin', 'super'].includes(actor?.role) && version > 0 && base &&
+        !recordChange && ['commerce', 'inventory'].includes(domain)) {
+      rules = await import('/modules/data/document-delta.mjs').catch(() => undefined);
+      const delta = rules?.documentDelta(domain, base, data);
+      if (delta) payload = { version, action, delta };
+    }
+    const result = await request(domain, payload, 'PUT', { measure, timing, stepUp: domain === 'settings' });
+    if (!result.delta) return result;
+    const committed = rules?.applyDocumentDelta(domain, base, result.delta);
+    if (committed) return { ...result, data: committed };
+    return { ...result, ...await request(domain, undefined, 'GET') };
   }
 
   let labels = new Map();
@@ -444,6 +465,7 @@
       : command.action === 'prepare' ? readQuery('subscription-renewal-card', command)
         : request('subscription-renewal-card', command, 'POST', { stepUp: command.action === 'copy' }),
     renewalHandoffs: (view, id) => request('renewals?' + new URLSearchParams({ view, ...(id && { id }) })),
+    renewalSidebar: () => request('renewal-sidebar'),
     saveRenewalHandoff: (command, options) => write(['renewal-handoffs',
       ...(command.action === 'finish' ? ['commerce', 'appleBalance'] : [])],
       () => request('renewals', command, 'POST', options)),
@@ -487,6 +509,8 @@
       ? request('order-sync', command, 'POST')
       : write(['order-sync', 'commerce', 'inventory', 'recharge-codes'], () => request('order-sync', command, 'POST')),
     load: (domain, options) => request(domain, undefined, 'GET', options),
+    staffWorkspace: (resource, body, operationId) => request('staff/' + resource, body, body === undefined ? 'GET' : 'POST',
+      { operationId, retryWrite: false }),
     expenseReceipts: () => request('finance/expense-receipts'),
     saveExpenseReceipt: command => write([expenseScope],
       () => request('finance/expense-receipts', command, 'POST', { writeTimeout: 15_000 })),
@@ -515,9 +539,7 @@
       ? request('finance/collection', command, 'POST')
       : write(['finance-rates'], () => request('finance/collection', command, 'POST', { stepUp: true })),
     changeAccountLifecycle: (data) => write(['inventory', 'commerce'], () => request('inventory/account-lifecycle', data)),
-    save: (domain, version, data, { action, base, measure, timing } = {}) => write([domain], () => request(domain, {
-      version, data, action, ...(domain === 'commerce' && { recordChange: contactChange(action, base, data) })
-    }, 'PUT', { measure, timing, stepUp: domain === 'settings' })),
+    save: (domain, version, data, options) => write([domain], () => saveDocument(domain, version, data, options)),
     saveBatch: (entries, options) => write(entries.map((entry) => entry.domain), () =>
       request('batch', entries, 'PUT', { ...options, stepUp: entries.some(entry => entry.domain === 'settings') })),
     audit: () => request('audit'),

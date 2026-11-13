@@ -1,27 +1,14 @@
-(() => {
-  'use strict';
-  const A = window.IDDesignAPI, D = window.IDLocalData, Security = window.IDAccountSecurity;
-  if (!A || !D?.authRequired || !Security) return;
+export function createPage(A, definition) {
+  const D = window.IDLocalData, Security = window.IDAccountSecurity;
   const E = A.esc, $ = A.$;
   const plans = [['plus', 'Plus'], ['pro100', 'Pro 100'], ['pro200', 'Pro 200'], ['pro500', 'Pro 500']];
   const currencies = ['CNY', 'MYR', 'USD', 'PHP', 'CLP', 'IDR', 'EGP'].map(value => [value, value]);
   const types = { google: '谷歌邮箱', apple: '苹果邮箱', microsoft: '微软邮箱', relay: '苹果隐藏邮箱',
     gpt: 'GPT 账号', claude: 'Claude 账号', gemini: 'Gemini 账号', grok: 'Grok 账号' };
-  const pages = {
-    'staff/customers': ['客户服务', '查看本人负责的客户和订单，录入新客户或提交续费申请。', 'customer-service', 'commerce'],
-    'staff/team': ['小组工作', '查看直接分配到本组的员工及其订单、客户数量。', 'team', 'renewal-handoffs'],
-    'staff/business-proxies': ['业务 IP', '登记比特执行 IP 或自动代充代理。网站登录网络由超级管理员管理。', 'business-proxies', 'bitbrowser-proxies'],
-    'staff/registration': ['注册工作台', '登记邮箱和平台账号，获取本账号录入邮箱的邮件验证码。', 'registration', 'inventory'],
-    'staff/finance/cards': ['自动代充银行卡', '导入银行卡、配置每张卡允许使用的套餐。影响取卡的操作须完成安全确认。', 'finance/cards', 'recharge-card-plans'],
-    'staff/finance/reconciliation': ['代充对账', '按日期查看自动代充账单，订单成本和实收请到订单统计核对。', 'finance/reconciliation', 'commerce']
-  };
-  const states = new Map();
+  const resource = definition.resource.slice('staff/'.length);
+  const initialState = () => ({ draft: {}, page: 1, reviewPage: { page: 1 }, version: 0 });
+  let state = initialState();
   let active;
-
-  function state(route) {
-    if (!states.has(route)) states.set(route, { draft: {}, page: 1, reviewPage: { page: 1 }, version: 0 });
-    return states.get(route);
-  }
 
   const control = (label, action, attrs = '') => `<button type="button" class="button" data-staff-action="${action}" ${attrs}>${label}</button>`;
   const rowAction = (label, action, id) => control(label, action, `data-id="${E(id)}"`);
@@ -174,33 +161,17 @@
     ], 'staff-card-review-list');
   }
 
-  function reconciliation(current) {
-    const rows = current.result.items || [];
-    return form('billing-filter', input('开始日期', 'from', current.from || '', 'type="date"') +
-      input('结束日期', 'to', current.to || '', 'type="date"'), '按日期查看') +
-      table('代充对账记录', [['time', '扣款时间', row => E(time(row.time))], ['reference', '账单编号'],
-        ['last4', '卡尾号'], ['plan', '套餐', row => E(plans.find(([key]) => key === row.plan)?.[1] || '—')],
-        ['amount', '原币金额'], ['currency', '币种'],
-        ['status', '扣款状态', row => E(({ success: '成功', failed: '失败', pending: '待确认' })[row.status] || row.status || '—')]], rows) +
-      `<div class="toolbar"><div class="toolbar-left">
-        ${control('上一页', 'billing-prev', current.page <= 1 ? 'disabled' : '')}<span>第 ${current.page} 页</span>
-        ${control('下一页', 'billing-next', !current.result.hasMore ? 'disabled' : '')}</div>
-        <div class="toolbar-right"><a class="button" href="#/orders/statistics">查看订单统计</a></div></div>`;
-  }
-
   const content = {
     'staff/customers': customers,
     'staff/team': current => list(current.result.items, current, '小组员工',
       [['name', '员工'], ['orders', '订单数'], ['customers', '客户数']]),
     'staff/business-proxies': proxyView,
     'staff/registration': registration,
-    'staff/finance/cards': cards,
-    'staff/finance/reconciliation': reconciliation
+    'staff/finance/cards': cards
   };
 
   function render() {
-    const [title, help] = pages[A.state.route];
-    return A.header(title, help) + `<section class="panel staff-workspace" data-staff-workspace>
+    return A.header(definition.label, definition.description) + `<section class="panel staff-workspace" data-staff-workspace>
       <div class="toolbar"><div class="toolbar-right">${control('刷新', 'refresh')}</div></div>
       <div class="panel-body"><p data-staff-status role="status" hidden></p><div data-staff-content>正在读取资料…</div></div>
     </section>`;
@@ -213,16 +184,12 @@
 
   async function load(view, paint = true) {
     if (view.loading) return view.loading;
-    const { current, route, host } = view;
-    const path = pages[route][2];
-    const query = route === 'staff/finance/reconciliation'
-      ? '?' + new URLSearchParams({ page: String(current.page), ...(current.from && { from: current.from }),
-        ...(current.to && { to: current.to }) }) : '';
+    const { current, host } = view;
     current.failed = false;
     view.loading = (async () => {
       host.setAttribute('aria-busy', 'true');
       try {
-        const snapshot = await request(path + query);
+        const snapshot = await request(resource);
         if (active !== view || !host.isConnected) return false;
         current.result = snapshot;
         current.version = snapshot.version ?? 0;
@@ -243,15 +210,8 @@
     return view.loading;
   }
 
-  async function request(path, body, operation, prefix = '/api/local/staff/') {
-    const response = await fetch(prefix + path, { cache: 'no-store', credentials: 'same-origin', ...(body && {
-      method: 'POST', headers: { 'Content-Type': 'application/json', ...(operation && { 'X-ID-Operation': operation }) },
-      body: JSON.stringify(body)
-    }) });
-    const data = await response.json().catch(() => null);
-    if (response.status === 401) window.IDLocalAuth?.lock?.(data?.reason);
-    if (!response.ok || !data) throw Object.assign(new Error(data?.error || '暂时无法确认结果，请刷新后核对。'), { status: response.status });
-    return data;
+  function request(path, body, operation) {
+    return D.staffWorkspace(path, body, operation);
   }
 
   function message(view, value) {
@@ -275,7 +235,7 @@
 
   async function write(view, action, payload, formNode) {
     if (view.saving || view.current.failed || active !== view) return;
-    const { current, route } = view;
+    const { current } = view;
     view.saving = true;
     const control = formNode?.querySelector('[type="submit"]');
     if (control) control.disabled = true;
@@ -293,10 +253,9 @@
       }
       if ((action.startsWith('card-') || payload.action === 'recharge') &&
           (!await Security.verify() || active !== view)) return;
-      const path = pages[route][2];
       const result = action === 'alias'
-        ? await request('alias-register', payload, undefined, '/api/local/apple-relay/')
-        : await request(path, body, operation);
+        ? await D.relay('alias-register', payload)
+        : await request(resource, body, operation);
       view.write = undefined;
       delete current.draft[action];
       if (formNode?.isConnected) {
@@ -337,11 +296,6 @@
     const action = formNode.dataset.staffForm;
     const data = values(formNode);
     saveDraft(formNode, current);
-    if (action === 'billing-filter') {
-      if (data.from && data.to && data.from > data.to) return message(view, '开始日期不能晚于结束日期。');
-      Object.assign(current, { page: 1, from: data.from, to: data.to });
-      return load(view);
-    }
     if (action === 'proxy') {
       const { target, ...proxy } = data;
       if (target === 'recharge') return write(view, action, { ...proxy, action: 'recharge' }, formNode);
@@ -439,10 +393,6 @@
       message(view, '');
       return load(view);
     }
-    if (action === 'billing-prev' || action === 'billing-next') {
-      current.page += action === 'billing-prev' ? -1 : 1;
-      return load(view);
-    }
     if (action === 'renewal') return window.IDRenewalHandoff?.select(id);
     if (action === 'order') return orderForm(view, id);
     if (action === 'mail-code') {
@@ -519,8 +469,7 @@
     const region = A.activePageRegion();
     const host = $('[data-staff-workspace]', region);
     if (!host) return;
-    const route = A.state.route;
-    const view = { host, route, current: state(route) };
+    const view = { host, route: definition.route, current: state };
     active = view;
     if (view.current.result) draw(view);
     host.addEventListener('click', event => void onClick(event, view));
@@ -547,11 +496,11 @@
     void load(view);
   }
 
-  window.IDDesignModules.push({ matches: route => Object.hasOwn(pages, route), render, afterRender: activate,
+  return { render, afterRender: activate,
     deactivate() { active = undefined; },
-    clearPageState() { active = undefined; states.clear(); },
+    clearPageState() { active = undefined; state = initialState(); },
     onDataChanges(scopes) {
-      if (!active || active.saving || !scopes.includes(pages[active.route][3])) return;
+      if (!active || active.saving || !scopes.includes(definition.scope)) return;
       const view = active;
       if (view.host.querySelector('form :focus') || [...view.host.querySelectorAll('[data-no-draft]')].some(input => input.value)) {
         message(view, '资料已有更新，填写完成后可刷新核对。');
@@ -559,5 +508,5 @@
       }
       return load(view);
     }
-  });
-})();
+  };
+}

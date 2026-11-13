@@ -6,7 +6,7 @@
   const S = A.state;
   const { manualOrderDetailsMissing, orderOpeningConfirmed, orderTerminationTime, orderNeedsAccount,
     validOrderEmail, validOrderXHandle, subscriptionPeriodState, subscriptionStateLabels, subscriptionTime,
-    matchOrderCustomer, orderCustomerCreateAction, orderFieldChanged, subscriptionChainRoot,
+    matchOrderCustomer, orderCustomerCreateAction, orderFieldChanged,
     automaticGptOrder, orderReceiptRecorded, rechargeOrderCompletion, rechargeRenewalExpiryPending, expiredDuration, subscriptionDuration } = window.IDOrderOpening;
   const localData = window.IDLocalData;
   const M = A.money;
@@ -1774,140 +1774,16 @@
       }
     }));
   }
-  function orderContactKeys(record, order = true) {
-    return orderContactFields.flatMap(([orderField, customerField]) => {
-      const contact = contactKey(record[order ? orderField : customerField], customerField);
-      return contact ? [`${customerField}:${contact}`] : [];
-    });
-  }
-  function subscriptionFamily(order) {
-    if (personalProduct(order.product)) return order.product + ':' + personalSeries(order.product, order.plan);
-    return isClaude(order) ? 'Claude' : order.product;
-  }
-  function subscriptionEmail(order) {
-    const target = orderIdentity(order);
-    return (validOrderEmail(target) || (order.product === 'Grok' && validOrderXHandle(target)))
-      ? target.trim().toLowerCase() : '';
-  }
-  function sameSubscriptionAccount(a, b, requireFamily = true) {
-    return Boolean(subscriptionEmail(a)) && subscriptionEmail(a) === subscriptionEmail(b) &&
-      (requireFamily ? subscriptionFamily(a) === subscriptionFamily(b) : a.product === b.product) &&
-      (!personalProduct(a.product) || !a.platformAccountId || !b.platformAccountId || a.platformAccountId === b.platformAccountId);
-  }
-  function orderCustomerContacts(knownCustomers) {
-    const byContact = new Map();
-    const index = (keys, id) => {
-      for (const key of keys) {
-        if (!byContact.has(key)) byContact.set(key, new Set());
-        byContact.get(key).add(id);
-      }
-    };
-    for (const row of customers) index(orderContactKeys(row, false), row.id);
-    for (const row of orders)
-      if (row.customerId && (!knownCustomers || knownCustomers.has(row.customerId)))
-        index(orderContactKeys(row), row.customerId);
-    return byContact;
-  }
-  function customersMatchingContacts(order, byContact) {
-    return new Set(orderContactKeys(order).flatMap(key => [...(byContact.get(key) || [])]));
-  }
-  function identifyOrderCustomers() {
-    let byContact;
-
-    const identities = new Map(), anonymous = new Map();
-    for (const row of orders) {
-      if (row.customerId) {
-        identities.set(row.id, row.customerId);
-        continue;
-      }
-      const keys = orderContactKeys(row);
-      const matches = customersMatchingContacts(row, byContact ??= orderCustomerContacts());
-      if (matches.size === 1) {
-        identities.set(row.id, [...matches][0]);
-      } else if (!matches.size && keys.length) {
-        const groups = new Set(keys.map((key) => anonymous.get(key)).filter(Boolean));
-        const group = groups.values().next().value || { id: `contact:${row.id}`, keys: new Set(), orders: [] };
-        for (const other of groups) {
-          if (other === group) continue;
-          for (const key of other.keys) group.keys.add(key);
-          group.orders.push(...other.orders);
-        }
-        for (const key of keys) group.keys.add(key);
-        group.orders.push(row.id);
-        for (const key of group.keys) anonymous.set(key, group);
-      }
-    }
-    for (const group of new Set(anonymous.values()))
-      for (const id of group.orders) identities.set(id, group.id);
-    return identities;
-  }
-  function confirmedRenewalOrders(at) {
-    return orders.flatMap((order) => {
-      const start = subscriptionTime(order.start), expiry = subscriptionTime(order.expiry);
-      if (!Object.hasOwn(productPlans, order.product) || !Number.isFinite(start) || !(expiry > start) ||
-          !hasOpeningEvidence(order, at)) return [];
-      return [{ order, start, expiry }];
-    });
-  }
-  function renewalProjection(evaluatedAt = orderEvaluationTime()) {
-    const identities = identifyOrderCustomers();
-    const deadline = evaluatedAt + renewalWarningHours * 3_600_000;
-    const orderIndex = new Map(orders.map(order => [order.id, order]));
-    const rows = confirmedRenewalOrders(evaluatedAt).map((row) => {
-      const { order } = row;
-      const identity = identities.get(order.id);
-      return { ...row, identity, subscription: renewalSubscriptionKey(order, identity, orderIndex) };
-    });
-    const latest = new Map();
-    for (const row of rows) {
-      if (row.order.cancelled || row.order.subscriptionEnded || endedInventoryOrder(row.order)) continue;
-      const prior = latest.get(row.subscription);
-      if (!prior || row.expiry > prior.expiry || (row.expiry === prior.expiry && row.start > prior.start))
-        latest.set(row.subscription, row);
-    }
-    const decisions = new Map(), links = new Map();
-    for (const entry of logs) {
-      if (['拒续费', '恢复续费提醒'].includes(entry.type) && !decisions.has(entry.entityId))
-        decisions.set(entry.entityId, entry);
-      if (entry.type === '关联续费订单') {
-        if (!links.has(entry.entityId)) links.set(entry.entityId, []);
-        links.get(entry.entityId).push(entry.relatedOrderId);
-      }
-    }
-    const byId = new Map(rows.map((row) => [row.order.id, row]));
-    const verifiedRenewals = new Map();
-    for (const order of orders) {
-      if (!rechargeRenewalExpiryPending(order) || endedInventoryOrder(order)) continue;
-      const prior = byId.get(order.previousOrderId);
-      if (prior && order.customerId && order.customerId === prior.order.customerId &&
-          sameSubscriptionAccount(order, prior.order) && subscriptionTime(order.rechargeCompletedAt) <= evaluatedAt)
-        verifiedRenewals.set(prior.order.id, order);
-    }
-    const reminders = [];
-    for (const row of rows) {
-      if (row.order.cancelled || row.order.subscriptionEnded || endedInventoryOrder(row.order) || row.start > evaluatedAt) continue;
-      const isSuccessor = (candidate) => candidate && candidate !== row && !candidate.order.cancelled &&
-        !candidate.order.subscriptionEnded && candidate.expiry > row.expiry && candidate.start >= row.start;
-      const automatic = latest.get(row.subscription);
-      const successor = isSuccessor(automatic) ? automatic : links.get(row.order.id)?.map((id) => byId.get(id))
-        .find((candidate) => isSuccessor(candidate) && candidate.subscription === row.subscription &&
-          (!row.identity || row.identity === candidate.identity));
-      const decision = decisions.get(row.order.id);
-      const refused = decision?.type === '拒续费';
-      const completed = successor?.order || verifiedRenewals.get(row.order.id);
-      const state = completed || refused ? 'processed' :
-        row.expiry <= evaluatedAt ? 'expired' : row.expiry <= deadline ? 'upcoming' : '';
-      if (state) reminders.push({ ...row, state, refused: !completed && refused,
-        completed: completed || null, decision });
-    }
-    return { reminders, rows, latest, identities, evaluatedAt, deadline };
-  }
-  function renewalSubscriptionKey(order, identity, byId = new Map(orders.map(row => [row.id, row]))) {
-    const root = subscriptionChainRoot(order, byId);
-    const account = subscriptionEmail(root);
-    return root.subscriptionAnchor || (identity && account
-      ? JSON.stringify([identity, subscriptionFamily(root), account]) : root.id);
-  }
+  const { contactKey, subscriptionFamily, subscriptionEmail, sameSubscriptionAccount, customersMatchingContacts } =
+    window.IDRenewalReminders;
+  const orderCustomerContacts = known => window.IDRenewalReminders.orderCustomerContacts(orders, customers, known);
+  const identifyOrderCustomers = () => window.IDRenewalReminders.identifyOrderCustomers(orders, customers);
+  const confirmedRenewalOrders = at => window.IDRenewalReminders.confirmedRenewalOrders(orders, at, hasOpeningEvidence);
+  const renewalSubscriptionKey = (order, identity, byId = new Map(orders.map(row => [row.id, row]))) =>
+    window.IDRenewalReminders.renewalSubscriptionKey(order, identity, byId);
+  const renewalProjection = (evaluatedAt = orderEvaluationTime()) => window.IDRenewalReminders.renewalProjection({
+    orders, customers, logs, renewalWarningHours, evaluatedAt, hasOpeningEvidence, endedInventoryOrder
+  });
   function customerForOrder(row, identity) {
     const customer = readContactIndexes().customers.get(identity);
     return {
@@ -8060,16 +7936,6 @@
       (showingExpenseReceipts() ? renderExpenseReceipts(currency, expenseState) : '');
   }
 
-  function contactKey(text, channel) {
-    const normalized = String(text || '')
-      .normalize('NFKC')
-      .trim()
-      .toLowerCase();
-    if (channel === 'telegram') return normalized.replace(/^@/, '');
-    if ((channel === 'phone' || channel === 'whatsapp') && /^\+?[\d\s().-]+$/.test(normalized))
-      return normalized.replace(/[\s().-]/g, '');
-    return normalized;
-  }
   function tenantPhoneKey(phone) {
     return contactKey(String(phone ?? ''), 'phone').replace(/^(?:\+|00)(?=\d+$)/, '');
   }
@@ -11595,8 +11461,10 @@
     getCustomers: () => safeClone(customers),
     getTenants: () => safeClone(tenants),
     getOrder: (id) => safeClone(orders.find((row) => row.id === id) || null),
-    renewalReminderCount: () =>
-      localPhase === 'ready' ? renewalProjection().reminders.filter((row) => row.state !== 'processed').length : 0,
+    renewalReminderCount: () => {
+      if (localData && !A.usesSharedBusinessData(S.route) && sidebarReminder) return sidebarReminder.count;
+      return localPhase === 'ready' ? renewalProjection().reminders.filter(row => row.state !== 'processed').length : 0;
+    },
     getOrderStatuses: (id) => {
       const order = orders.find((row) => row.id === id);
       return order ? independentStatuses(order) : null;
@@ -11617,9 +11485,29 @@
     if (badge && badge.textContent !== String(count)) badge.textContent = String(count);
     if (badge) badge.hidden = count === 0;
   }
-  let commerceDeadlineTimer, timeRefreshPending = false;
+  let commerceDeadlineTimer, sidebarDeadlineTimer, sidebarReminder, timeRefreshPending = false;
+  const usesSidebarSummary = () => localData && ['admin', 'super'].includes(S.actor?.role) &&
+    A.canVisit('workspace/renewals/reminders') && !A.usesSharedBusinessData(S.route);
+  async function refreshSidebarReminder(refresh = false) {
+    if (!usesSidebarSummary()) return true;
+    try {
+      const result = await localData.queries.read('renewal-sidebar', {}, localData.renewalSidebar, { refresh });
+      if (!usesSidebarSummary()) return true;
+      if (!Number.isSafeInteger(result?.count) || result.count < 0) return false;
+      sidebarReminder = result;
+      updateRenewalReminder();
+      window.clearTimeout(sidebarDeadlineTimer);
+      if (Number.isFinite(result.nextAt) && result.nextAt > Date.now()) {
+        sidebarDeadlineTimer = window.setTimeout(() => void refreshSidebarReminder(true),
+          Math.min(2_147_000_000, result.nextAt - Date.now() + 10));
+      }
+      return true;
+    } catch (error) {
+      return error?.code === 'READ_SUPERSEDED' || !usesSidebarSummary();
+    }
+  }
   function refreshTimeDependentView() {
-    if (!timeRefreshPending || document.hidden || $('#confirm-dialog')?.open ||
+    if (!timeRefreshPending || !A.usesSharedBusinessData(S.route) || document.hidden || $('#confirm-dialog')?.open ||
         document.activeElement?.closest('input, select, textarea') || $('#main form[novalidate]')) return;
     timeRefreshPending = false;
     updateRenewalReminder();
@@ -11629,6 +11517,7 @@
   function scheduleCommerceDeadline() {
     if (!localData || !window.setTimeout) return;
     window.clearTimeout(commerceDeadlineTimer);
+    if (!A.usesSharedBusinessData(S.route)) return;
     const at = Date.now();
     let next = Infinity;
     const consider = value => { if (Number.isFinite(value) && value > at) next = Math.min(next, value); };
@@ -11653,12 +11542,6 @@
   document.addEventListener?.('visibilitychange', refreshTimeDependentView);
   document.addEventListener?.('focusout', () => queueMicrotask(refreshTimeDependentView));
   document.addEventListener?.('close', refreshTimeDependentView, true);
-  window.addEventListener?.('DOMContentLoaded', () => {
-    if (localData?.authRequired && !['super', 'admin', 'finance'].includes(S.actor?.role)) return;
-    loadLocalCommerce();
-    updateRenewalReminder();
-    scheduleCommerceDeadline();
-  }, { once: true });
   document.addEventListener?.('toggle', (event) => {
     const popup = event.target;
     if (!popup.matches?.('.commerce-picker-popover')) return;
@@ -11789,6 +11672,8 @@
       orderViewTiming = undefined;
       listDiagnostic = undefined;
       window.clearTimeout?.(commerceDeadlineTimer);
+      window.clearTimeout?.(sidebarDeadlineTimer);
+      sidebarReminder = undefined;
       timeRefreshPending = false;
       clearRenewalCardSecrets();
       subscriptionCardRequestGeneration++;
@@ -11804,6 +11689,14 @@
     render,
     beforeNavigate(route) {
       orderViewTiming = Object.hasOwn(orderListProducts, route) ? window.IDSiteTiming?.start('order-list') : undefined;
+      window.clearTimeout(sidebarDeadlineTimer);
+      if (usesSidebarSummary()) {
+        void refreshSidebarReminder(true);
+      } else if (A.usesSharedBusinessData(route) &&
+          (!localData?.authRequired || ['super', 'admin', 'finance'].includes(S.actor?.role))) {
+        void loadLocalCommerce();
+      }
+      scheduleCommerceDeadline();
     },
     onClick,
     onSubmit,
@@ -11915,7 +11808,10 @@
       }
     },
     async onDataChanges(scopes) {
-      if (scopes.some(scope => ['commerce', 'settings', 'subscription-management'].includes(scope))) scheduleCommerceDeadline();
+      if (scopes.some(scope => ['commerce', 'inventory', 'subscription-management'].includes(scope))) {
+        if (usesSidebarSummary() && !(await refreshSidebarReminder())) return false;
+        scheduleCommerceDeadline();
+      } else if (scopes.includes('settings')) scheduleCommerceDeadline();
       let updated = true;
       if (scopes.includes('appleBalance') && S.route === 'orders/statistics') A.render();
       if (scopes.includes(expenseScope) && (S.route === 'orders/statistics' || Object.hasOwn(orderListProducts, S.route) ||

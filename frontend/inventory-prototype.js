@@ -339,7 +339,7 @@
     inventorySavePending = true;
     const feedback = api.beginActionFeedback?.(null, '正在保存资料…');
     try {
-      saved = await localData.save('inventory', localInventoryVersion, after, { action });
+      saved = await localData.save('inventory', localInventoryVersion, after, { action, base: before });
       applyCommittedInventory(saved);
       if (saved.appleBalance) api.modules.appleBalance?.applyCommittedBalance?.(saved.appleBalance);
     } catch (error) {
@@ -352,10 +352,11 @@
           api.state.actor?.id === viewActorId &&
           api.state.route === route && document.querySelector('#drawer[open]')?.firstElementChild === drawerContent &&
           draftForm?.isConnected && JSON.stringify(api.readDraft(draftForm)) === submittedDraft;
-        const rebased = unchanged ? rebaseGoogleMailboxCreate(before, after, inventoryDocument(), submittedValues) : null;
+        const latest = unchanged ? inventoryDocument() : null;
+        const rebased = latest ? rebaseGoogleMailboxCreate(before, after, latest, submittedValues) : null;
         if (rebased?.data) {
           try {
-            saved = await localData.save('inventory', localInventoryVersion, rebased.data, { action });
+            saved = await localData.save('inventory', localInventoryVersion, rebased.data, { action, base: latest });
             applyCommittedInventory(saved);
           } catch (retryError) {
             const rejected = retryError?.status === 409 || retryError?.statusCode === 409;
@@ -4506,8 +4507,8 @@
   }
 
   function onClick(action, node) {
-    initialize();
     if (!action.startsWith('inventory-')) return false;
+    initialize();
     if (action === 'inventory-reload') {
       if (localData && localInventoryState === 'error') {
         void api.withActionFeedback(node, () => readLocalInventory(),
@@ -5570,7 +5571,6 @@
       return batches.map((batch) => ({ ...batch, counts: batchCounts(batch) }));
     }
   };
-  if (localData && (!localData.authRequired || ['admin', 'super'].includes(currentActor().role))) initialize();
   const drawer = document.querySelector('#drawer');
   drawer?.addEventListener?.('close', () => {
     if (drawer.open || !locationSettingsReturn) return;
@@ -5583,6 +5583,10 @@
 
   window.IDDesignModules.push({
     id: 'inventory',
+    beforeNavigate(route) {
+      if (localData && api.usesSharedBusinessData(route) &&
+          (!localData.authRequired || ['admin', 'super'].includes(currentActor().role))) initialize();
+    },
     matches(route) {
       return /^(mailboxes\/(google|microsoft)|accounts\/(gpt|claude|gemini|grok)|workspace\/(mail-submit|account-submit|mail-extract|account-extract|extractions(?:\/[^/]+)?))$/.test(
         route

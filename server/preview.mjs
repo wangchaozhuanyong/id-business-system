@@ -56,6 +56,7 @@ import { managesBusiness, nativeBrowserVerification, nativeManagerAccess, retail
 import { createStaffWorkspaces, staffPath } from './staff-workspaces.mjs';
 import { createRenewalHandoff, renewalHandoffPath } from './renewal-handoff.mjs';
 import { readBackupMonitorReceipt, readRestoreEvidence } from './monitoring-worker-receipts.mjs';
+import { financeReconciliation, websitePages } from '../modules/website/pages.mjs';
 
 function requireSecurityConfirmation(response) {
   response.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -88,6 +89,8 @@ const files = new Map([
   ['bitbrowser-addresses.css', 'text/css; charset=utf-8'],
   ['order-opening.mjs', 'text/javascript; charset=utf-8'],
   ['list-order.mjs', 'text/javascript; charset=utf-8'],
+  ['apple-funding.mjs', 'text/javascript; charset=utf-8'],
+  ['page-modules.mjs', 'text/javascript; charset=utf-8'],
   ...[
     'prototype',
     'pagination',
@@ -114,7 +117,6 @@ const files = new Map([
     'system-monitoring',
     'site-timing',
     'account-security',
-    'staff-workspaces',
     'renewal-handoff',
     'site-management',
     'bitbrowser-addresses'
@@ -246,8 +248,19 @@ export async function startPreview(
       })
     )
   );
-  assets.set('/apple-funding.mjs', { type: 'text/javascript; charset=utf-8',
-    body: await readFile(new URL('../frontend/apple-funding.mjs', import.meta.url)) });
+  const websiteModuleAssets = [
+    ['/assets/website/pages.mjs', new URL('../modules/website/pages.mjs', import.meta.url)],
+    ['/renewal-reminders.mjs', new URL('../frontend/renewal-reminders.mjs', import.meta.url)],
+    ...['orders/order-opening', 'orders/list-order', 'orders/renewal-reminders', 'finance/apple-funding',
+      'data/document-delta'].map(name =>
+      ['/modules/' + name + '.mjs', new URL('../modules/' + name + '.mjs', import.meta.url)]),
+    ...[...new Set(websitePages.map(page => page.script))].map(script =>
+      ['/assets/website/pages/' + script, new URL('../frontend/' + script, import.meta.url)])
+  ];
+  for (const [route, source] of websiteModuleAssets) {
+    const body = await readFile(source);
+    assets.set(route, { type: 'text/javascript; charset=utf-8', body, publicMetadata: publicAssetMetadata(body) });
+  }
   const localBitAssets = [
     ['/assets/bitbrowser/authorization.mjs', '../modules/recharge/bitbrowser/authorization.mjs'],
     ['/assets/bitbrowser/catalog.mjs', '../modules/recharge/bitbrowser/catalog.mjs'],
@@ -537,6 +550,7 @@ export async function startPreview(
   function dataChangeVersions(actor) {
     const versions = { ...store.changeVersions(actor), operators: auth?.changeVersion() || '0',
       ...(rechargeActivity && { [rechargeActivityDomain]: rechargeActivity.version(actor) }) };
+    if (financeReconciliation.roles.includes(actor.role)) versions[financeReconciliation.scope] = '0';
     for (const [scope, revision] of Object.entries(rechargeEvents?.versions() || {}))
       if (Object.hasOwn(versions, scope)) versions[scope] += ':' + revision;
     if (systemMonitoring && Object.hasOwn(versions, 'system-monitoring'))
@@ -842,6 +856,7 @@ export async function startPreview(
     let body = asset.body;
     if (store && asset === assets.get('/index.html')) {
       let metadata = '<head>\n<meta name="id-local-data-events" content="enabled" />';
+      metadata += '\n<meta name="id-document-delta" content="enabled" />';
       if (publicUrl) metadata += '\n<meta name="id-site-observations" content="enabled" />';
       if (!loginRequired || actor) {
         metadata += `\n<meta name="id-data-source" content="${dataSource}" />`;

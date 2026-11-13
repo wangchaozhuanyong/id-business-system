@@ -1,4 +1,4 @@
-import { inventoryOperationalStatus } from '../frontend/order-opening.mjs';
+import { inventoryOperationalStatus } from '../modules/orders/order-opening.mjs';
 import { inspectInventoryUsage, applyInventoryUsage } from './inventory-usage.mjs';
 import {
   conflictingRegistration, registrationEmail, registrationMailboxCandidates, registrationOccupancy

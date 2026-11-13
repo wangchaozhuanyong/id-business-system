@@ -2,8 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import {
   appleRegion, appleAmountUnits, appleFundingIndex, appleFundingEligibility, appleTarget
-} from '../frontend/apple-funding.mjs';
-import { orderFieldChanged } from '../frontend/order-opening.mjs';
+} from '../modules/finance/apple-funding.mjs';
+import { orderFieldChanged } from '../modules/orders/order-opening.mjs';
 import { toV2DateTimeInput } from '../modules/time/dateTime.ts';
 
 export const emptyAppleLedger = () => ({ wallets: [], allocations: [], movements: [], refunds: [] });

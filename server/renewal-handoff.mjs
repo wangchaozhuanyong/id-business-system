@@ -3,7 +3,7 @@ import { managesBusiness } from './access-roles.mjs';
 import { moneyUnits, validMoney } from './order-policy.mjs';
 import { validCurrencyCode } from '../modules/finance/accounting.mjs';
 import { orderOpeningConfirmed, subscriptionChainRoot, subscriptionTime,
-  validOrderEmail, validOrderXHandle } from '../frontend/order-opening.mjs';
+  validOrderEmail, validOrderXHandle } from '../modules/orders/order-opening.mjs';
 import { personalProduct, subscriptionSeries, targetKey } from './personal-subscriptions.mjs';
 import { describeWriteOperation } from './write-operation.mjs';
 import { readPoolCards } from './order-recharge-client.mjs';
@@ -11,7 +11,7 @@ import { accountMarkedDead, releasedAccountOrders } from './account-lifecycle.mj
 import { legacyOpeningOrderIds, ownerForSubscriptionOrder, subscriptionDomain } from './subscription-management.mjs';
 import { tenantCardUseHistory } from './tenant-initial-cards.mjs';
 import { parseV2DateTimeInput } from '../modules/time/dateTime.ts';
-import { appleFundingEligibility, appleFundingIndex } from '../frontend/apple-funding.mjs';
+import { appleFundingEligibility, appleFundingIndex } from '../modules/finance/apple-funding.mjs';
 import { cardFreezeDocument, blockedOrderCard, frozenOrderCard, orderCardHealth,
   cardTypeDocument, orderCardArchiveDocument, orderCardHealthReference } from './card-management.mjs';
 

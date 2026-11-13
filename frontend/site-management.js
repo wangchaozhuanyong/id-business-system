@@ -381,7 +381,7 @@
 
   A.modules.siteManagement = { monitorResources, mountResources: () => { void read('resources'); } };
   window.IDDesignModules.push({
-    id: 'site-management', matches: route => Object.hasOwn(routes, route), render,
+    id: 'site-management', matches: route => Object.hasOwn(routes, route), sharedBusinessData: false, render,
     afterRender: () => { if (reports[currentView()]) void read(currentView()); },
     clearPageState() {
       for (const key of ['health', 'performance', 'diagnostic', 'export', 'resource-trend']) A.state.drafts.delete(viewKey(key));
