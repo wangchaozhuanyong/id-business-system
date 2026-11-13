@@ -106,6 +106,7 @@ test('买家查询码按页读取，切页复用成功结果，重置或失效�
   const copyCurrent = async id => {
     await page.locator(`[data-action="relay-alias-more"][data-id="${id}"]`).click();
     await page.getByRole('menuitem', { name: '仅复制当前码', exact: true }).click();
+    await page.waitForFunction(code => window.copiedBuyerCode === code, codes.get(id));
   };
   const ready = () => page.waitForFunction(() =>
     document.querySelector('[data-relay-buyer-code]') &&

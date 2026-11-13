@@ -35,7 +35,7 @@ test('租户续费提醒、联系人、独立设置、保存失败和新周期',
       order('previous-cycle', { expiry: '2026-11-08T20:00' }),
       order('expired', { tenantId: 'b', email: 'expired@example.test', expiry: '2026-11-09T20:00' }),
       order('later', { email: 'later@example.test', expiry: '2026-11-14T20:00' }),
-      order('unpaid', { email: 'unpaid@example.test', paidConfirmed: false }),
+      order('unpaid', { email: 'unpaid@example.test', paidConfirmed: false, entitlementStatus: 'pending' }),
       order('missing-account', { email: '' }), order('cancelled', { email: 'cancelled@example.test', cancelled: true }),
       order('unlinked', { tenantId: '', email: 'unlinked@example.test' })],
     operating: [], rentBatches: [], logs: [], renewalWarningHours: 24
