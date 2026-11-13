@@ -12,64 +12,60 @@ const second = { ...source, id: 'fixture-second', number: 'OD-QA-141', account: 
 const orderFixture = { ...source, orderNo: source.number, email: source.account, source: '管理员手工',
   status: '已记录', businessType: '续费', refunds: [] };
 
-test('reviewing a changed paid source preserves drafts, rejects a stale review and requires fresh confirmation', { timeout: 60_000 }, async t => {
+test('finance source review preserves the reason but requires a fresh version and confirmation', { timeout: 60_000 }, async t => {
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
   t.after(() => browser.close());
   for (const [width, theme] of [[1440, 'light'], [1440, 'dark'], [390, 'light'], [320, 'dark']]) {
     const context = await browser.newContext({ viewport: { width, height: 900 } });
     const errors = [], posts = [];
     const requests = await interceptDesign(context, { skipRechargeAssets: true, localAuthUi: true,
-      actor: { id: 'employee-fixture', name: '测试员工', role: 'employee' }, localFixtures: {} });
-    let stamp = 'review-first', complete = false;
+      actor: { id: 'finance-fixture', name: '测试财务', role: 'finance' }, localFixtures: {} });
+    let sourceVersion = 2, reviewed = false;
+    await context.route('**/api/local/auth/security**', route => route.fulfill({ json: {
+      available: true, bound: true, recentlyVerified: true, devices: []
+    } }));
     await context.route('**/api/local/renewals**', route => {
       if (route.request().method() === 'GET') return route.fulfill({ json: { version: 3, candidates: [], items: [{
-        id: 'changed-paid', version: 3, status: complete ? 'complete' : 'paid', order: source,
-        canFinish: true, canReviewSource: true, sourceChanged: true, amount: '21.25', currency: 'USD',
-        currentOrder: { ...source, expiry: '2026-11-15T10:00' }, reviewStamp: stamp,
-        ...(complete && { newOrderNo: 'OD-REVIEW-OK' })
+        id: 'changed-paid', version: 3, status: 'paid', order: source,
+        sourceChanged: !reviewed, amount: '21.25', currency: 'USD',
+        ...(!reviewed && { sourceReview: { version: sourceVersion, expiry: '2026-11-15T10:00', originalLast4: '4242' } })
       }] } });
       const command = route.request().postDataJSON(); posts.push(command);
+      assert.equal(command.action, 'review-source');
+      assert.equal(command.confirmed, true);
       if (posts.length === 1) {
-        stamp = 'review-current';
+        sourceVersion = 3;
         return route.fulfill({ status: 409, json: { error: '原单再次变化，请刷新后核对' } });
       }
-      assert.equal(command.sourceReview, stamp);
-      assert.equal(command.reviewReason, '已核对到期时间更正');
-      assert.equal(command.saleAmount, '160.00');
-      assert.equal(command.amount, undefined);
-      complete = true;
-      return route.fulfill({ json: { saved: true, orderNo: 'OD-REVIEW-OK' } });
+      assert.equal(command.sourceVersion, sourceVersion);
+      assert.equal(command.reason, '已核对到期时间更正');
+      reviewed = true;
+      return route.fulfill({ json: { saved: true } });
     });
     const page = await context.newPage(); page.setDefaultTimeout(6000);
     page.on('pageerror', error => errors.push(error.message));
-    await page.goto(origin + '/#/workspace/renewals/ready');
+    await page.goto(origin + '/#/workspace/finance-renewals');
     await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
-    await page.getByRole('link', { name: '核对原单并补资料' }).click();
-    const form = page.locator('#renewal-finish-form');
-    await form.getByLabel('核对原因').fill('已核对到期时间更正');
-    await form.getByLabel('核对原因').focus();
-    await page.evaluate(() => window.IDDesignModules.find(module => module.matches?.('workspace/renewal-submit/changed-paid'))
-      .onDataChanges(['commerce']));
-    assert.equal(await form.getByLabel('核对原因').evaluate(node => node === document.activeElement), true);
-    await form.getByLabel('客户实收金额').fill('160.00');
-    await form.getByLabel('新到期时间（北京）').fill('2026-12-15T10:00');
-    const confirm = form.getByRole('checkbox', { name: '已核对原单变化，按财务登记时的资料完成本次续费' });
-    const submit = form.getByRole('button', { name: '提交订单' });
-    await submit.click();
-    assert.equal(posts.length, 0);
+    await page.getByRole('tab', { name: '已处理', exact: true }).click();
+    await page.getByRole('button', { name: '核对原单', exact: true }).click();
+    const form = page.locator('#renewal-review-source-form');
+    const confirm = form.getByRole('checkbox');
+    const submit = page.getByRole('button', { name: '确认并交回员工' });
+    await form.getByLabel('原单更正原因').fill('已核对到期时间更正');
+    await submit.click(); assert.equal(posts.length, 0);
     await confirm.check(); await submit.click();
     await form.getByText('原单再次变化，请刷新后核对', { exact: true }).waitFor();
-    assert.equal(await form.getByLabel('客户实收金额').inputValue(), '160.00');
+    await page.getByRole('button', { name: '关闭抽屉', exact: true }).click();
     await page.getByRole('button', { name: '刷新', exact: true }).click();
-    await page.waitForFunction(() => document.querySelector('[name="renewal-sourceReview"]')?.value === 'review-current');
+    await page.getByRole('button', { name: '核对原单', exact: true }).click();
+    assert.equal(await form.getAttribute('data-source-version'), '3');
     assert.equal(await confirm.isChecked(), false);
-    assert.equal(await form.getByLabel('核对原因').inputValue(), '已核对到期时间更正');
-    assert.equal(await form.getByLabel('客户实收金额').inputValue(), '160.00');
+    assert.equal(await form.getByLabel('原单更正原因').inputValue(), '已核对到期时间更正');
     await settle(page);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
     assert.deepEqual((await separatorSnapshot(page)).findings, []);
     await confirm.check(); await submit.click();
-    await page.getByText('OD-REVIEW-OK', { exact: true }).first().waitFor();
+    await page.getByText('原单已核对，员工可以补资料提交订单', { exact: true }).waitFor();
     assert.equal(posts.length, 2);
     assert.deepEqual(errors, []); assert.deepEqual(requests.external, []);
     await context.close();
@@ -117,7 +113,7 @@ test('staff confirms a batch and finance returns a verified replacement for a ne
       const request = route.request();
       if (request.method() === 'GET') {
         const current = rows.map(row => ({ ...row, canTake: role === 'finance' && row.status === 'pending',
-          canFinish: role === 'employee' && row.status === 'paid', assignedToMe: role === 'finance' }));
+          canFinish: role === 'employee' && row.status === 'paid' && !row.sourceChanged, assignedToMe: role === 'finance' }));
         return route.fulfill({ json: { version: actions.length, items: current, candidates: available, reminderHours: 168 } });
       }
       const body = request.postDataJSON();
@@ -149,6 +145,13 @@ test('staff confirms a batch and finance returns a verified replacement for a ne
           assert.equal(body.cardNumber, '4111111111111111');
           assert.equal(body.confirmed, true);
           Object.assign(row, { status: 'paid', amount: body.amount, currency: body.currency, last4: '1111' });
+        }
+        if (body.action === 'review-source') {
+          assert(verified);
+          assert.deepEqual(body, { action: 'review-source', id: row.id, version: 4, sourceVersion: 3,
+            reason: '原到期时间登记更正', confirmed: true });
+          row.sourceChanged = false;
+          delete row.sourceReview;
         }
         if (body.action === 'finish') {
           assert.equal(body.saleAmount, '160.00');
@@ -210,6 +213,17 @@ test('staff confirms a batch and finance returns a verified replacement for a ne
   await settle(finance.page);
   assert.equal(await finance.page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
   assert.deepEqual((await separatorSnapshot(finance.page)).findings, []);
+  Object.assign(rows[0], { version: 4, sourceChanged: true, sourceReview: {
+    version: 3, expiry: '2026-11-15T10:00', originalLast4: '4242'
+  } });
+  await finance.page.evaluate(() => window.renewalChanged(4));
+  await initialFinance.getByRole('button', { name: '核对原单' }).click();
+  await drawer.getByText('2026-11-15 10:00', { exact: true }).waitFor();
+  assert.equal(await finance.page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
+  await drawer.getByLabel('原单更正原因').fill('原到期时间登记更正');
+  await drawer.getByLabel('我已核对本次付款仍对应这张订单').check();
+  await drawer.getByRole('button', { name: '确认并交回员工' }).click();
+  await finance.page.getByText('原单已核对，员工可以补资料提交订单').waitFor();
   await staff.page.evaluate(() => window.IDDesignAPI.go('workspace/renewals/ready'));
   await staff.page.getByText('暂无符合条件的订单', { exact: true }).waitFor();
   await staff.page.waitForFunction(() => window.IDChangeSync?.status().snapshots > 0);
@@ -242,7 +256,7 @@ test('staff confirms a batch and finance returns a verified replacement for a ne
   await admin.page.getByText(source.account, { exact: true }).first().waitFor();
   assert.equal(await admin.page.getByRole('checkbox', { name: '选择当前页' }).count(), 0);
   assert.equal(await admin.page.getByRole('button', { name: '付租批次', exact: true }).count(), 0);
-  assert.deepEqual(actions, ['submit', 'claim', 'paid', 'finish']);
+  assert.deepEqual(actions, ['submit', 'claim', 'paid', 'review-source', 'finish']);
   assert.deepEqual(errors, []);
   for (const { requests } of [staff, finance, admin]) assert.deepEqual(requests.external, []);
 });

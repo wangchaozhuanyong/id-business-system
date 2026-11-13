@@ -111,7 +111,7 @@ test('finance verifies a card change and staff pages fit narrow screens with rea
   t.after(() => browser.close());
   const { context, page, errors } = await prepare(browser, 'finance');
   t.after(() => context.close());
-  let verified = false, writes = 0;
+  let verified = false, writes = 0, pending = false;
   await context.route('**/api/local/auth/security**', route => {
     if (route.request().url().endsWith('/verify')) {
       assert.equal(route.request().postDataJSON().code, '123456');
@@ -121,11 +121,19 @@ test('finance verifies a card change and staff pages fit narrow screens with rea
     return route.fulfill({ json: { available: true, bound: true, recentlyVerified: verified, deviceLock: false, devices: [] } });
   });
   await context.route('**/api/local/staff/finance/cards', async route => {
-    if (route.request().method() === 'GET') return route.fulfill({ json: cards });
+    if (route.request().method() === 'GET') return route.fulfill({ json: { ...cards, pending: pending ?
+      [{ id: 'pending-fixture', label: '设置套餐', at: '2026-11-13T12:00:00Z', submittedBy: '测试账号', canReview: true }] : [] } });
     assert(verified);
-    assert.deepEqual(route.request().postDataJSON(), { version: 7, action: 'plans', cardIds: [11], plans: ['plus', 'pro200'] });
+    const command = route.request().postDataJSON();
+    if (command.action === 'reconcile') {
+      assert.deepEqual(command, { version: 7, action: 'reconcile', id: 'pending-fixture', confirmed: true });
+      pending = false;
+      return route.fulfill({ json: { saved: true, reconciled: true } });
+    }
+    assert.deepEqual(command, { version: 7, action: 'plans', cardIds: [11], plans: ['plus', 'pro200'] });
     writes++;
-    return route.fulfill({ json: { saved: true } });
+    pending = true;
+    return route.fulfill({ status: 503, json: { error: '银行卡维护结果待核对' } });
   });
   await page.goto(origin + '/#/staff/finance/cards');
   await page.getByText('6022', { exact: true }).waitFor();
@@ -141,7 +149,13 @@ test('finance verifies a card change and staff pages fit narrow screens with rea
   await page.getByRole('button', { name: '保存套餐' }).click();
   await page.getByLabel('身份验证器的六位验证码').fill('123456');
   await page.getByRole('button', { name: '验证', exact: true }).click();
-  await page.getByText('保存成功', { exact: true }).waitFor();
+  await page.getByRole('heading', { name: '待核对的银行卡维护' }).waitFor();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
+  await page.locator('#drawer').getByRole('button', { name: '关闭抽屉' }).click();
+  await page.getByRole('button', { name: '核对上次操作' }).click();
+  await page.getByRole('button', { name: '确认', exact: true }).click();
+  await page.getByText('已核对银行卡维护结果', { exact: true }).waitFor();
+  assert.equal(await page.getByRole('heading', { name: '待核对的银行卡维护' }).count(), 0);
   assert.equal(writes, 1);
   assert.deepEqual(errors, []);
 });

@@ -120,7 +120,7 @@ function canFinish(actor, order, context) {
   return Boolean(order) && (managesBusiness(actor) || actor.role === 'employee' && context.owner(order).ownerId === actor.id);
 }
 
-function viewRow(row, actor, fromFinance, source, canFile, currentOrder, reviewStamp) {
+function viewRow(row, actor, fromFinance, source, canFile, review) {
   const funding = row.funding;
   const original = { ...row.order };
   if (fromFinance) {
@@ -138,10 +138,9 @@ function viewRow(row, actor, fromFinance, source, canFile, currentOrder, reviewS
     canTransfer: fromFinance && row.status === 'processing' &&
       (row.processingBy?.id === actor.id || actor.role === 'super'),
     ...(row.paymentReview && { paymentReview: true }),
-    canFinish: row.status === 'paid' && canFile,
-    ...(row.status === 'paid' && !source && row.paidSource && canFile && currentOrder && {
-      canReviewSource: true, currentOrder, reviewStamp
-    }),
+    canFinish: row.status === 'paid' && canFile && Boolean(source),
+    ...(review && { sourceReview: { version: review.version ?? 0, expiry: review.expiry,
+      originalLast4: orderTail(review) } }),
     sourceChanged: !source, paidAt: funding?.at, paidBy: funding?.actor.name, saleCurrency: original.previousSaleCurrency,
     ...(funding && actor.role !== 'supervisor' && { amount: funding.amount, currency: funding.currency }),
     ...(funding?.last4 && actor.role !== 'supervisor' && { last4: funding.last4 }),
@@ -157,7 +156,19 @@ function orderTail(order) {
 
 function sourceFor(row, context) {
   const order = context.byId.get(row.order.id);
-  return context.eligible(order) && context.stamp(order) === row.source ? order : null;
+  if (!context.eligible(order) || (row.accountSource !== undefined && row.accountSource !== (order.accountSource || ''))) return null;
+  return context.stamp(order) === row.source ? order : null;
+}
+
+function reviewSourceFor(row, actor, context, source) {
+  if (source || row.status !== 'paid' || row.submittedBy.id === actor.id ||
+      (row.processingBy?.id !== actor.id && actor.role !== 'super')) return null;
+  const order = context.byId.get(row.order.id);
+  if (!context.eligible(order) || row.funding?.payment !== order.payment) return null;
+  // Recheck all captured order fields using the dates the finance request originally used.
+  if (row.accountSource !== undefined && row.accountSource !== (order.accountSource || '')) return null;
+  const previous = { ...order, start: row.order.start, expiry: row.order.expiry };
+  return row.source === context.stamp(previous) ? order : null;
 }
 
 function cardPermitted(store, id, number) {
@@ -321,12 +332,13 @@ async function readCommand(request) {
   fail(400, '请核对填写的资料');
 }
 
-const actions = new Set(['submit', 'claim', 'paid', 'return', 'finish', 'transfer']);
+const actions = new Set(['submit', 'claim', 'paid', 'return', 'finish', 'transfer', 'review-source']);
 const actionFields = {
   submit: ['confirmed', 'orders'], claim: [],
   paid: ['confirmed', 'amount', 'currency', 'reference', 'cardMode', 'cardId', 'cardNumber', 'cardSerial'],
-  return: ['confirmed', 'reason'], finish: ['start', 'expiry', 'saleAmount', 'saleCurrency', 'email', 'xHandle', 'sourceReview', 'reviewReason'],
-  transfer: ['confirmed', 'review', 'reason']
+  return: ['confirmed', 'reason'], finish: ['start', 'expiry', 'saleAmount', 'saleCurrency', 'email', 'xHandle'],
+  transfer: ['confirmed', 'review', 'reason'],
+  'review-source': ['confirmed', 'reason', 'sourceVersion']
 };
 
 export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clock = Date.now }) {
@@ -381,11 +393,12 @@ export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clo
           });
         const reminderHours = commerce.data?.renewalWarningHours ?? (commerce.data?.renewalWarningDays || 7) * 24;
         return send(response, 200, { version: snapshot.version, reminderHours, candidates,
-          items: visible.map(row => viewRow(row, actor, fromFinance, row.status === 'complete'
-            ? context.byId.get(row.order.id) : sourceFor(row, context),
-            canFinish(actor, context.byId.get(row.order.id), context),
-            context.byId.has(row.order.id) ? publicOrder(context.byId.get(row.order.id), context) : null,
-            context.byId.has(row.order.id) ? context.stamp(context.byId.get(row.order.id)) : null)) });
+          items: visible.map(row => {
+            const order = context.byId.get(row.order.id);
+            const source = row.status === 'complete' ? order : sourceFor(row, context);
+            return viewRow(row, actor, fromFinance, source, canFinish(actor, order, context),
+              fromFinance && reviewSourceFor(row, actor, context, source));
+          }) });
       }
       if (request.method !== 'POST') fail(405, '此操作不可用');
       if (request.headers.origin !== origin) fail(403, '请从当前页面提交');
@@ -413,7 +426,7 @@ export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clo
               items.some(item => item.order.id === row.id && item.status !== 'returned'))
             fail(409, '有订单已送财务或资料已更新，请刷新后核对再提交');
           return { id: randomUUID(), version: 1, status: 'pending', order: publicOrder(source, context),
-            source: context.stamp(source),
+            source: context.stamp(source), accountSource: source.accountSource || '',
             submittedBy: { id: actor.id, name: actor.name }, submittedAt: displayTime(now) };
         });
         store.saveRenewalQueue(snapshot.version, commerce.version, [...additions, ...items],
@@ -446,22 +459,35 @@ export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clo
         delete next.processingBy;
         next.transfers = [...(row.transfers || []), { from: row.processingBy, by: { id: actor.id, name: actor.name },
           reason, paymentReview: next.paymentReview, at: displayTime(now) }];
+      } else if (action === 'review-source') {
+        if (row.processingBy?.id !== actor.id && actor.role !== 'super')
+          fail(403, '仅当前经办人或超级管理员可核对原单');
+        if (!scope.recentlyVerified(request)) fail(403, '请先完成安全确认，再核对原单');
+        const review = reviewSourceFor(row, actor, context, source);
+        if (!review || command.sourceVersion !== (review.version ?? 0))
+          fail(409, '原单已变化或与这笔付款不符，请刷新后核对');
+        const reason = text(command.reason, 160);
+        if (!reason || /(?:\d[ -]?){12}/.test(reason) || command.confirmed !== true)
+          fail(400, '请核对付款凭据并简述原单更正原因，原因中请勿填写卡号');
+        next.order = publicOrder(review, context);
+        next.source = context.stamp(review);
+        next.accountSource = review.accountSource || '';
+        next.sourceReviews = [...(row.sourceReviews || []), { from: row.source, to: next.source,
+          by: { id: actor.id, name: actor.name }, reason, at: displayTime(now) }];
       } else if (action === 'finish') {
-        if (row.status !== 'paid') fail(409, '这笔续费尚未完成财务处理');
-        if (!source) {
-          const reason = text(command.reviewReason, 160);
-          if (!row.paidSource || command.sourceReview !== context.stamp(original) || !reason || /(?:\d[ -]?){12}/.test(reason))
-            fail(409, '原单已变化，请刷新并核对财务登记时的原单资料，填写核对原因');
-          next.completionReview = { source: command.sourceReview, reason, at: displayTime(now),
-            actor: { id: actor.id, name: actor.name } };
-        }
-        const order = newOrder(row.paidSource || source, row, command, actor, context, now);
+        if (row.status !== 'paid' || !source) fail(409, '这笔续费尚未完成财务处理或原单已变化');
+        // Finance may reconcile dates only. Keep the paid identity immutable,
+        // while validating the new expiry against the reviewed current dates.
+        const paidSource = row.paidSource ? { ...row.paidSource, start: source.start, expiry: source.expiry } : source;
+        const order = newOrder(paidSource, row, command, actor, context, now);
         const orderNo = store.finishRenewal({ snapshot, commerce, item: next, order, actor, operation,
           owners: () => scope.orderOwners() });
         return send(response, 200, { saved: true, orderNo });
       } else {
         if (row.status !== 'processing' || row.processingBy.id !== actor.id) fail(409, '请先接手这笔续费');
         if (action === 'return') {
+          if (row.paymentReview && !scope.recentlyVerified(request))
+            fail(403, '请先完成安全确认，再确认这笔续费未付款');
           const reason = text(command.reason, 160);
           if (!reason || /(?:\d[ -]?){12}/.test(reason) || command.confirmed !== true)
             fail(400, '请确认未付款并填写退回原因，原因中请勿填写卡号');
@@ -477,7 +503,7 @@ export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clo
         }
       }
       store.saveRenewalQueue(snapshot.version, commerce.version, items.map(item => item.id === row.id ? next : item),
-        { action: 'renewal_' + action, actor, ids: [row.id], operation });
+        { action: 'renewal_' + action.replace('-', '_'), actor, ids: [row.id], operation });
       return send(response, 200, { saved: true });
     } catch (error) {
       const status = [400, 401, 403, 404, 405, 409, 413, 415, 422].includes(error.status) ? error.status : 503;

@@ -164,6 +164,48 @@ test('verified handoff transfers unfinished work with its payment review and his
   assert.equal(stored.transfers[0].from.id, actors.finance.id);
   assert.equal(stored.processingBy.id, actors.financeOther.id);
   assert.equal(stored.funding, undefined);
+  assert.equal((await send('financeOther', { action: 'return', id: row.id, version: 4, confirmed: true,
+    reason: '待核对时退回' })).status, 403);
+});
+
+test('verified finance can reconcile corrected dates without changing the paid receipt or duplicating the order', async t => {
+  const { store, send, submit } = fixture(t);
+  const verify = { verified: true };
+  assert.equal((await send('employee', submit)).status, 200);
+  const [{ id }] = (await send('finance', null, { view: 'finance' })).data.items;
+  assert.equal((await send('finance', { action: 'claim', id, version: 1 })).status, 200);
+  assert.equal((await send('finance', { action: 'paid', id, version: 2, confirmed: true, amount: '22.25',
+    currency: 'USD', cardMode: 'none', reference: 'synthetic-payment' }, verify)).status, 200);
+  const funding = store.featureDocument(renewalHandoffDomain).data.items[0].funding;
+  const change = (changes, version) => {
+    const commerce = store.load('commerce');
+    Object.assign(commerce.data.orders[0], changes, { version });
+    store.saveBatch([{ domain: 'commerce', ...commerce }]);
+  };
+  change({ expiry: '2026-11-13T11:00', email: 'other@example.test' }, 2);
+  let review = { action: 'review-source', id, version: 3, sourceVersion: 2, confirmed: true, reason: '原单日期录入更正' };
+  assert.equal((await send('finance', null, { view: 'finance' })).data.items[0].sourceReview, undefined);
+  assert.equal((await send('finance', review, verify)).status, 409);
+  change({ email: initialOrder.email }, 3);
+  const row = (await send('finance', null, { view: 'finance' })).data.items[0];
+  assert.deepEqual(row.sourceReview, { version: 3, expiry: '2026-11-13T11:00', originalLast4: '4242' });
+  assert.equal((await send('employee', null)).data.items[0].canFinish, false);
+  assert.equal((await send('finance', review, verify)).status, 409);
+  review = { ...review, sourceVersion: 3 };
+  assert.equal((await send('financeOther', review, verify)).status, 403);
+  assert.equal((await send('finance', review)).status, 403);
+  const operationId = randomUUID();
+  assert.equal((await send('finance', review, { ...verify, operationId })).status, 200);
+  assert.equal((await send('finance', review, { ...verify, operationId })).status, 200);
+  const current = store.featureDocument(renewalHandoffDomain).data.items[0];
+  assert.deepEqual(current.funding, funding);
+  assert.equal(current.sourceReviews.length, 1);
+  assert.equal(store.audit().filter(item => item.action === 'renewal_review_source').length, 1);
+  assert.equal((await send('employee', { action: 'finish', id, version: 4, ...finishFields })).status, 200);
+  const [created, source] = store.load('commerce').data.orders;
+  assert.equal(created.previousOrderId, source.id);
+  assert.equal(created.paidAmount, funding.amount);
+  assert.equal((await send('employee', { action: 'finish', id, version: 4, ...finishFields })).status, 409);
 });
 
 test('finance may return unpaid work to selection and a former version cannot submit', async t => {
@@ -217,10 +259,11 @@ async function databaseFixture(t) {
   return join(directory, 'business.sqlite');
 }
 
-test('paid Apple handoff can finish after an explicit current-source review without another debit', async t => {
+test('paid Apple handoff requires verified finance source review and finishes without another debit', async t => {
   const { store, send, id, payment } = await claimedApple(t);
   assert.equal((await send('finance', payment, { verified: true })).status, 200);
   const paidLedger = store.load('appleBalance').data;
+  const funding = store.featureDocument(renewalHandoffDomain).data.items[0].funding;
   const correction = expiry => {
     const current = store.load('commerce');
     current.data.orders[0].expiry = expiry; current.data.orders[0].version++;
@@ -229,24 +272,34 @@ test('paid Apple handoff can finish after an explicit current-source review with
   correction('2026-11-13T11:00');
   const finish = { action: 'finish', id, version: 3, ...finishFields };
   assert.equal((await send('employee', finish)).status, 409);
-  assert.deepEqual(store.load('appleBalance').data, paidLedger);
-  let row = (await send('employee', null)).data.items[0];
-  assert.equal(row.canReviewSource, true); assert.equal(row.sourceChanged, true);
-  const reviewed = { ...finish, sourceReview: row.reviewStamp, reviewReason: '已核对原到期时间更正，保留本次实付依据' };
-  assert.equal((await send('other', reviewed)).status, 403);
+  assert.equal((await send('employee', null)).data.items[0].canFinish, false);
+  let row = (await send('finance', null, { view: 'finance' })).data.items[0];
+  const reviewed = { action: 'review-source', id, version: 3, sourceVersion: row.sourceReview.version,
+    confirmed: true, reason: '已核对原到期时间更正，保留本次实付依据' };
+  assert.equal((await send('employee', reviewed, { verified: true })).status, 403);
+  assert.equal((await send('finance', reviewed)).status, 403);
   correction('2026-11-14T11:00');
-  assert.equal((await send('employee', reviewed)).status, 409);
-  row = (await send('employee', null)).data.items[0];
-  reviewed.sourceReview = row.reviewStamp;
+  assert.equal((await send('finance', reviewed, { verified: true })).status, 409);
+  assert.deepEqual(store.load('appleBalance').data, paidLedger);
+  row = (await send('finance', null, { view: 'finance' })).data.items[0];
+  reviewed.sourceVersion = row.sourceReview.version;
+  const reviewOperation = randomUUID();
+  assert.equal((await send('finance', reviewed, { verified: true, operationId: reviewOperation })).status, 200);
+  assert.equal((await send('finance', reviewed, { verified: true, operationId: reviewOperation })).status, 200);
+  assert.deepEqual(store.load('appleBalance').data, paidLedger);
+  assert.deepEqual(store.featureDocument(renewalHandoffDomain).data.items[0].funding, funding);
+  const ready = { ...finish, version: 4 };
+  assert.equal((await send('employee', { ...ready, expiry: '2026-11-14T10:00' })).status, 400);
   const operationId = randomUUID();
-  const saved = await send('employee', reviewed, { operationId });
+  const saved = await send('employee', ready, { operationId });
   assert.equal(saved.status, 200, saved.data.error);
-  assert.equal((await send('employee', reviewed, { operationId })).status, 200);
+  assert.equal((await send('employee', ready, { operationId })).status, 200);
   const ledger = store.load('appleBalance').data, handoff = store.featureDocument(renewalHandoffDomain).data.items[0];
   assert.equal(ledger.wallets[0].balance, '3.7500');
   assert.equal(ledger.movements.length, paidLedger.movements.length);
   assert.equal(ledger.allocations.filter(item => item.orderId === 'order-' + id).length, 1);
-  assert.equal(handoff.completionReview.actor.id, actors.employee.id);
+  assert.equal(handoff.sourceReviews.length, 1);
+  assert.equal(handoff.sourceReviews[0].by.id, actors.finance.id);
   assert.equal(handoff.paidSource.expiry, '2026-11-12T11:00');
   assert.equal(store.load('commerce').data.orders[0].paidAmount, '21.25');
 });
