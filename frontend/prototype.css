@@ -113,14 +113,9 @@ textarea:focus-visible {
   flex: none;
   width: 36px;
   height: 36px;
-  display: grid;
-  place-items: center;
-  background: var(--primary);
+  display: block;
+  object-fit: contain;
   border-radius: 10px;
-  color: var(--on-primary);
-  font-size: 17px;
-  font-weight: 750;
-  letter-spacing: -1px;
 }
 .brand-name {
   font-size: 16px;

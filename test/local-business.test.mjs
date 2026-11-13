@@ -79,12 +79,26 @@ test('only local-data mode mounts the persistence client, and browser writes mus
     const home = await fetch(url);
     const html = await home.text();
     assert.match(html, /src="\/local-data\.js"/);
-    assert.match(html, /<title>ID 业务管理 · 独立本机测试<\/title>/);
+    assert.match(html, /<title>AI订阅管理系统 · 独立本机测试<\/title>/);
     assert.equal((await fetch(url + 'local-data.js')).status, 200);
     const publicPage = await fetch(url + 'mailbox-query');
     assert.equal(publicPage.status, 200);
     assert.match(publicPage.headers.get('content-security-policy'), /frame-ancestors 'none'/);
-    assert.match(await publicPage.text(), /apple-relay-public\.js/);
+    assert.match(publicPage.headers.get('content-security-policy'), /img-src 'self'/);
+    const mailboxHtml = await publicPage.text();
+    assert.match(mailboxHtml, /apple-relay-public\.js/);
+    assert.match(mailboxHtml, /src="\/brand\/ai-subscription-mark\.png"/);
+    const bitLogin = await fetch(url + 'integrations/bitbrowser/local-login');
+    assert.equal(bitLogin.status, 200);
+    assert.match(bitLogin.headers.get('content-security-policy'), /img-src 'self'/);
+    assert.match(await bitLogin.text(), /href="\/brand\/favicon-32\.png"/);
+    const [favicon, brandFavicon] = await Promise.all(
+      ['favicon.ico', 'brand/favicon-32.png'].map((path) => fetch(url + path))
+    );
+    assert.equal(favicon.status, 200);
+    assert.equal(brandFavicon.status, 200);
+    assert.equal(favicon.headers.get('content-type'), 'image/png');
+    assert.deepEqual(await favicon.arrayBuffer(), await brandFavicon.arrayBuffer());
     assert.equal(
       (
         await fetch(url + 'api/local/apple-relay/public-query', {

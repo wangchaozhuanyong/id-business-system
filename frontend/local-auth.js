@@ -107,41 +107,52 @@
     gate.id = 'local-auth-gate';
     gate.setAttribute('aria-labelledby', 'local-auth-title');
     gate.innerHTML = `
-      <section class="local-auth-card">
+      <header class="local-auth-header">
         <div class="local-auth-brand">
-          <span class="local-auth-mark" aria-hidden="true">ID</span>
-          <div class="local-auth-brand-text">
-            <span class="local-auth-brand-name">ID 业务管理系统</span>
-            <span class="local-auth-badge"><span class="local-auth-badge-dot" aria-hidden="true"></span>内部专网</span>
-          </div>
+          <img class="local-auth-mark" src="/brand/ai-subscription-mark.png" width="36" height="36" alt="" />
+          <span class="local-auth-brand-name">AI订阅管理系统</span>
         </div>
-        <h1 id="local-auth-title">${setup ? '设置本机管理员密码' : '登录内部工作台'}</h1>
+        <span class="local-auth-badge"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4.5 6v6c0 4.5 7.5 9 7.5 9s7.5-4.5 7.5-9V6z"/><path d="m8.5 12 2.3 2.3 4.7-4.7"/></svg>内部专网</span>
+      </header>
+      <aside class="local-auth-story" aria-label="品牌视觉">
+        <p class="local-auth-story-copy"><span>让工作，</span><span>回到从容。</span></p>
+        <p class="local-auth-story-caption">账号 / 订阅 / 订单</p>
+      </aside>
+      <div class="local-auth-panel"><section class="local-auth-card">
+        <p class="local-auth-kicker">${setup ? 'WELCOME' : 'WELCOME BACK'}</p>
+        <h1 id="local-auth-title">${setup ? '设置本机管理员密码' : '登录工作台'}</h1>
         <p class="local-auth-intro">${setup ? '首次设置只在本机进行。完成后可在系统设置中管理员工。' : '受控内部业务中枢 · 仅限授权人员登录访问。'}</p>
         <form class="local-auth-form">
+          <div class="local-auth-field">
           <label for="local-auth-email">登录邮箱</label>
-          <input id="local-auth-email" name="email" type="email" autocomplete="username" required maxlength="254" ${setup ? 'readonly' : ''} />
+          <input id="local-auth-email" name="email" type="email" autocomplete="username" placeholder="请输入登录邮箱" required maxlength="254" ${setup ? 'readonly' : ''} />
+          </div>
+          <div class="local-auth-field">
           <label for="local-auth-password">${setup ? '新密码' : '密码'}</label>
           <div class="local-auth-password-wrapper">
-            <input id="local-auth-password" name="password" type="password" autocomplete="${setup ? 'new-password' : 'current-password'}" required ${setup ? 'aria-describedby="local-auth-password-hint" maxlength="256"' : ''} />
-            <button type="button" class="local-auth-password-toggle" aria-label="显示或隐藏密码" tabindex="-1">
+            <input id="local-auth-password" name="password" type="password" autocomplete="${setup ? 'new-password' : 'current-password'}" placeholder="${setup ? '请设置密码' : '请输入密码'}" required ${setup ? 'aria-describedby="local-auth-password-hint" maxlength="256"' : ''} />
+            <button type="button" class="local-auth-password-toggle" aria-label="显示密码">
               <svg class="icon icon-eye" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
             </button>
           </div>
-          ${setup ? `<p id="local-auth-password-hint">请输入至少 12 个字符。</p>
+          ${setup ? '<p id="local-auth-password-hint">请输入至少 12 个字符。</p>' : ''}
+          </div>
+          ${setup ? `<div class="local-auth-field">
           <label for="local-auth-confirmation">确认密码</label>
           <div class="local-auth-password-wrapper">
-            <input id="local-auth-confirmation" name="confirmation" type="password" autocomplete="new-password" required maxlength="256" />
-            <button type="button" class="local-auth-password-toggle" aria-label="显示或隐藏密码" tabindex="-1">
+            <input id="local-auth-confirmation" name="confirmation" type="password" autocomplete="new-password" placeholder="请再次输入密码" required maxlength="256" />
+            <button type="button" class="local-auth-password-toggle" aria-label="显示密码">
               <svg class="icon icon-eye" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
             </button>
-          </div>` : ''}
-          <label class="local-auth-remember" for="local-auth-remember"><input id="local-auth-remember" name="remember" type="checkbox" />在此设备保持登录</label>
+          </div></div>` : ''}
+          <div class="local-auth-remember-row"><label class="local-auth-remember" for="local-auth-remember"><input id="local-auth-remember" name="remember" type="checkbox" />在此设备保持登录</label></div>
           <p class="local-auth-reason" role="status" hidden></p>
           <p class="local-auth-error" role="alert" hidden></p>
           <button type="submit" class="button primary">${submitLabel}</button>
         </form>
-        <p class="local-auth-footnote">内部受控专网系统 · 严禁非授权人员操作</p>
-      </section>`;
+        <p class="local-auth-footnote"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="10" width="12" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>仅限授权人员访问</p>
+      </section></div>
+      <footer class="local-auth-footer"><span>账号 · 订阅 · 订单</span><span>内部工作台</span></footer>`;
     document.body.append(gate);
     window.IDTitleHelp.attach($('#local-auth-title', gate), $('.local-auth-intro', gate));
     const help = document.createElement('span');

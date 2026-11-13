@@ -152,7 +152,7 @@ export function boundedCount(value) {
 
 export function telegramText(item, origin) {
   const { code, kind, at, scope, count, summary } = item;
-  if (kind === 'test') return '【ID 业务管理系统】Telegram 渠道测试。此消息不对应真实告警。';
+  if (kind === 'test') return '【AI订阅管理系统】Telegram 渠道测试。此消息不对应真实告警。';
   const { priority, label } = monitorRules[code];
   const prefix = kind === 'recovered' ? '已恢复' : priority === 'P0' ? '紧急' : priority === 'P1' ? '告警' : '摘要';
   const details = summary ? ['成功 ' + summary.success + ' · 失败 ' + summary.failure +
@@ -162,7 +162,7 @@ export function telegramText(item, origin) {
   if (count !== null && count !== undefined)
     details.push((observationLabels[code] || '本次观测') + ' ' + count + (code === 'disk_space' ? '%' : ''));
   if (code === 'recharge_review') details.push('请核对原任务回执，切勿重复充值。');
-  return ['【ID 业务管理系统 · ' + prefix + '】' + label, '北京时间 ' + beijingTime.format(at), ...details,
+  return ['【AI订阅管理系统 · ' + prefix + '】' + label, '北京时间 ' + beijingTime.format(at), ...details,
     '事件编号 ' + item.incidentId, ...(origin ? ['查看监控中心 ' + origin + '/#/monitor'] : [])].join('\n');
 }
 
