@@ -60,7 +60,7 @@ test('加密恢复副本只读对账可复跑，Apple 历史缺项不吞掉已�
   const run = audit(directory, '--strict');
   assert.equal(run.status, 2, run.stderr);
   const report = JSON.parse(run.stdout);
-  assert.deepEqual(report.versions, { inventory: 1, commerce: 1, appleBalance: 1, expenseReceipts: 0 });
+  assert.deepEqual(report.versions, { inventory: 1, commerce: 1, appleBalance: 1, expenseReceipts: 0, renewalHandoffs: 0 });
   assert.deepEqual(report.finance.operating.CNY, { ready: 1, pending: 0, excluded: 0, profit: '550' });
   assert.equal(report.finance.operating.MYR.pending, 1);
   assert.equal(report.finance.orders[0].calculations.CNY.status, 'pending');

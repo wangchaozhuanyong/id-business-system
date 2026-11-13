@@ -299,6 +299,13 @@ export function createCodexdaichongGateway({
     }
     if (!external && !readMethods.has(req.method) && !canMutate(req))
       return respond(res, 403, '请求来源未通过校验');
+    if (req.method === 'DELETE') {
+      let decoded;
+      try { decoded = decodeURIComponent(path.pathname); }
+      catch { return respond(res, 404, '页面不存在'); }
+      if (/^\/api\/admin\/billing(?:\/|$)/i.test(decoded))
+        return respond(res, 403, '账单是历史付款依据，不能删除；可查询或导出核对');
+    }
     if (/^\/api\/admin\/cards\/stop-use\/?$/i.test(path.pathname))
       return respond(res, 404, '页面不存在');
     const deletedCard = req.method === 'DELETE' && /^\/api\/admin\/cards\/([^/]+)\/?$/i.exec(path.pathname);

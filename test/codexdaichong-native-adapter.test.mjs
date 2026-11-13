@@ -25,6 +25,35 @@ async function listen(t, handler) {
   return { server, url: 'http://127.0.0.1:' + server.address().port };
 }
 
+test('direct signed requests cannot delete billing history at the native adapter', async t => {
+  const secret = randomBytes(48).toString('base64url'), forwarded = [];
+  const engine = await listen(t, (req, res) => {
+    forwarded.push([req.method, req.url]);
+    res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: true }));
+  });
+  const adapter = createNativeRechargeAdapter({ nativeUrl: engine.url, secret,
+    getNativeAdminToken: async () => randomBytes(32).toString('hex') });
+  const { url } = await listen(t, adapter.handle);
+  for (const actor of [superUser, admin, customer]) {
+    for (const path of ['/api/admin/billing/7', '/api/admin/billing/failed', '/api/admin/billing/7/',
+      '/api/admin/billing/7?audit=1', '/API/ADMIN/BILLING/7', '/api/admin/b%69lling/%37']) {
+      const response = await fetch(url + path, { method: 'DELETE', headers: {
+        'x-id-recharge-assertion': signRechargeAssertion(secret, 'DELETE', path, actor)
+      } });
+      assert.equal(response.status, 403); await response.arrayBuffer();
+    }
+  }
+  assert.deepEqual(forwarded, []);
+  for (const path of ['/api/admin/billing', '/api/admin/billing/export', '/api/admin/billing/summary/1111']) {
+    const response = await fetch(url + path, { headers: {
+      'x-id-recharge-assertion': signRechargeAssertion(secret, 'GET', path, admin)
+    } });
+    assert.equal(response.status, 200); await response.arrayBuffer();
+  }
+  assert.equal(forwarded.length, 3);
+  assert(forwarded.every(([method]) => method === 'GET'));
+});
+
 test('managed stop leaves active work locked, preserves both kinds of card records, and can retry', async t => {
   const number = '4242424242424242', secret = randomBytes(32).toString('hex');
   const cards = { card_assets: { id: 7, canUse: 1, inUse: 1 }, orbitcard_card_usage: { id: 8, canUse: 1, inUse: 0 } };

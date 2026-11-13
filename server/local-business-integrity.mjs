@@ -10,7 +10,7 @@ import { releasedAccountOrders, stockLinkedToCustomer, systemAccount } from './a
 import { isHistoricallyOpenedClaude } from './inventory-history.mjs';
 import { personalDelivery, personalProduct, sameTarget, stockTypeForProduct } from './personal-subscriptions.mjs';
 import { inventoryOperationalStatus, orderReceiptRecorded } from '../frontend/order-opening.mjs';
-import { hasRecordedPaymentAmount } from '../modules/finance/accounting.mjs';
+import { hasRecordedPaymentAmount, orderExpenseTerms, validCurrencyCode } from '../modules/finance/accounting.mjs';
 
 function units(value) {
   if (typeof value !== 'string' || !/^-?\d{1,16}(?:\.\d{1,4})?$/.test(value)) return null;
@@ -103,6 +103,20 @@ export function checkOrderFinancialHistory(previous, commerce) {
     const existing = Array.isArray(order.refunds) ? order.refunds : [];
     const nextOrder = orders.get(order.id);
     const next = nextOrder?.refunds;
+    for (const field of ['corrections', 'compensations']) {
+      const before = Array.isArray(order[field]) ? order[field] : [];
+      if (before.length && (!Array.isArray(nextOrder?.[field]) ||
+          before.some((entry, index) => !isDeepStrictEqual(entry, nextOrder[field][index]))))
+        return '原订单更正及补偿撤回记录必须保留';
+    }
+    // Payment normalization can group payments ahead of receipts. Preserve the
+    // immutable sequence within each kind instead of depending on that grouping.
+    for (const [kind, before] of Map.groupBy(Array.isArray(order.financialEvidence) ? order.financialEvidence : [], entry => entry?.kind)) {
+      const after = (Array.isArray(nextOrder?.financialEvidence) ? nextOrder.financialEvidence : [])
+        .filter(entry => entry?.kind === kind);
+      if (before.some((entry, index) => !isDeepStrictEqual(entry, after[index])))
+        return '原订单付款和实收凭据必须保留，不能删除或改写';
+    }
     if (
       existing.length &&
       (!Array.isArray(next) ||
@@ -187,6 +201,116 @@ export function checkOrderFinancialHistory(previous, commerce) {
     ) {
       return '客户累计退款不得超过已确认实收金额，已撤单不能登记退款';
     }
+  }
+}
+
+export function checkCustomerReferences(previous, commerce) {
+  const customers = indexRows(commerce.customers, 'id');
+  if (!customers) return '客户编号重复或无效';
+  if (!previous) return;
+  const before = new Set((previous?.customers || []).map(row => row.id));
+  const orders = new Map((previous?.orders || []).map(row => [row.id, row]));
+  for (const row of commerce.orders) {
+    if (customers.has(row.customerId)) continue;
+    const prior = orders.get(row.id);
+    // Leave legacy missing references visible; never invent a customer or make
+    // unrelated maintenance depend on repairing historical records first.
+    if (before.has(row.customerId) || (row.customerId && row.customerId !== prior?.customerId) ||
+        (prior?.customerId && !row.customerId))
+      return '订单关联的客户必须保留，请停用客户或核对订单客户';
+  }
+}
+
+const financialFields = ['paidAmount', 'paidCurrency', 'paidConfirmed', 'saleAmount', 'saleCurrency',
+  'receiptConfirmed', 'costBasis', 'actualCostAmount', 'actualCostCurrency', 'appleRecoverableCostAmount',
+  'emailCostAmount', 'emailCostCurrency'];
+const sameFinancialFields = (left, right) => financialFields.every(field =>
+  isDeepStrictEqual(left?.[field] ?? '', right?.[field] ?? ''));
+
+export function checkOrderFinancialRevision(prior, next, action) {
+  if (!prior || sameFinancialFields(prior, next)) return;
+  if (action !== '补偿撤回更正') {
+    for (const [amount, currency] of [['actualCostAmount', 'actualCostCurrency'], ['emailCostAmount', 'emailCostCurrency']]) {
+      if ((next[amount] ?? '') === (prior[amount] ?? '') && (next[currency] ?? '') === (prior[currency] ?? '')) continue;
+      if ((next[amount] ?? '') !== '' && ((units(next[amount]) ?? -1n) < 0n || !validCurrencyCode(next[currency])))
+        return '成本金额和币种无效，请核对原始凭据';
+    }
+    if (next.costBasis === 'actual' && ((units(next.actualCostAmount) ?? -1n) < 0n || !validCurrencyCode(next.actualCostCurrency)))
+      return '实际总成本必须有有效金额和币种';
+    if (['appleRecoverableCostAmount', 'actualCostAmount', 'actualCostCurrency', 'costBasis']
+        .some(field => (next[field] ?? '') !== (prior[field] ?? '')) &&
+        (next.appleRecoverableCostAmount ?? '') !== '' &&
+        ((units(next.appleRecoverableCostAmount) ?? -1n) < 0n ||
+          units(next.appleRecoverableCostAmount) > (units(next.actualCostAmount) ?? -1n)))
+      return 'Apple 可退成本必须在实际总成本范围内';
+  }
+  const before = prior.corrections || [], after = next.corrections || [];
+  if (!Number.isSafeInteger(prior.version) || next.version !== prior.version + 1)
+    return '修改订单金额必须更新订单版本并保留更正记录';
+  if (action === '更正订单' && Array.isArray(after) && after.length === before.length + 1) {
+    const correction = after.at(-1);
+    if (typeof correction?.id === 'string' && correction.id && !before.some(row => row.id === correction.id) &&
+        typeof correction.reason === 'string' && correction.reason.trim() &&
+        correction.versionAfter === next.version && correction.previous?.version === prior.version &&
+        sameFinancialFields(prior, correction.previous)) return;
+  }
+  if (action === '补偿撤回更正') {
+    const correction = before.at(-1), previous = prior.compensations || [], compensations = next.compensations;
+    const compensation = compensations?.at(-1);
+    if (correction?.versionAfter === prior.version && sameFinancialFields(next, correction.previous) &&
+        Array.isArray(compensations) && compensations.length === previous.length + 1 &&
+        typeof compensation?.id === 'string' && compensation.id && !previous.some(row => row.id === compensation.id) &&
+        compensation.correctionId === correction.id && compensation.fromVersion === prior.version &&
+        compensation.toVersion === next.version && typeof compensation.reason === 'string' && compensation.reason.trim()) return;
+  }
+  return '请通过订单更正或补偿撤回登记金额变化，并保留原因和原金额';
+}
+
+export function checkRentHistory(previous, commerce, action) {
+  const batches = indexRows(commerce.rentBatches, 'id');
+  if (!batches) return '租金批次编号重复或无效';
+  for (const batch of previous?.rentBatches || []) {
+    const next = batches.get(batch.id);
+    const items = Array.isArray(next?.items) && indexRows(next.items, 'id');
+    if (!items || items.size !== (batch.items || []).length)
+      return '历史租金批次和发放明细必须保留';
+    if (Object.keys({ ...batch, ...next }).some(key => key !== 'items' && !isDeepStrictEqual(batch[key], next[key])))
+      return '原租金批次资料必须保留';
+    for (const item of batch.items || []) {
+      const updated = items.get(item.id);
+      if (!updated) return '历史租金发放明细必须保留';
+      if (isDeepStrictEqual(item, updated)) continue;
+      const payments = item.payments || [], nextPayments = updated.payments;
+      if (!Array.isArray(nextPayments) || payments.some((row, index) => !isDeepStrictEqual(row, nextPayments[index])))
+        return '原租金发放记录必须保留';
+      if (['已发放', '已取消'].includes(item.status)) return '已发放或已取消的租金明细不可改写';
+      const entry = nextPayments.at(-1);
+      const unchanged = Object.keys({ ...item, ...updated }).filter(key =>
+        !['status', 'version', 'notes', 'paidAt', 'payments'].includes(key));
+      if (action !== '租金发放登记' || nextPayments.length !== payments.length + 1 ||
+          updated.version !== item.version + 1 || unchanged.some(key => !isDeepStrictEqual(item[key], updated[key])) ||
+          !['已发放', '发放失败', '待发放', '已取消'].includes(updated.status) ||
+          entry?.status !== updated.status || typeof entry.at !== 'string' || !entry.at.trim() ||
+          typeof entry.notes !== 'string' || !entry.notes.trim() || entry.notes !== updated.notes ||
+          updated.paidAt !== (updated.status === '已发放' ? entry.at : ''))
+        return '请通过租金发放登记追加记录，并保留原明细';
+    }
+  }
+}
+
+export function checkOrderExpenseReferences(previous, commerce, receipts = []) {
+  if (!receipts.length) return;
+  const before = new Map((previous?.orders || []).map(row => [row.id, row]));
+  const after = new Map(commerce.orders.map(row => [row.id, row]));
+  const dependencies = [...financialFields, 'payment', 'product', 'status', 'draft', 'entitlementStatus',
+    'cardId', 'cardTypeId', 'cardTypeName', 'proMaterialMode', 'corrections'];
+  for (const [id, linked] of Map.groupBy(receipts.filter(row => row.orderId && !row.voidedAt), row => row.orderId)) {
+    const prior = before.get(id), next = after.get(id);
+    if (!prior) continue;
+    if (!next) return '已有费用凭据关联的订单必须保留';
+    if (dependencies.every(field => isDeepStrictEqual(prior[field], next[field]))) continue;
+    try { orderExpenseTerms(next, linked); }
+    catch { return '订单修改与已登记费用凭据不一致，请先核对费用凭据的核算方式和金额'; }
   }
 }
 
@@ -330,7 +454,7 @@ export function checkStockDeliveries(previousCommerce, commerce, previousInvento
   if (newSales.size) return '成品交付必须与库存使用记录一起保存';
 }
 
-function checkMovements(previous, ledger, appleIds, wallets, orders, allocations, refunds) {
+function checkMovements(previous, ledger, appleIds, wallets, orders, allocations, refunds, completedRenewalId) {
   const balances = new Map();
   const history = new Map();
   const debits = new Map();
@@ -403,6 +527,10 @@ function checkMovements(previous, ledger, appleIds, wallets, orders, allocations
     if (!next) return '原有苹果 ID 余额流水必须保留';
     const { undoneBy, ...values } = next;
     const { undoneBy: previousUndo, ...previousValues } = movement;
+    // The paid handoff already fixed the order id. Only its newly assigned
+    // display number may be attached when the verified handoff completes.
+    if (completedRenewalId && movement.orderId === completedRenewalId && !Object.hasOwn(previousValues, 'orderNo') &&
+        values.orderNo === orders.get(completedRenewalId)?.orderNo) delete values.orderNo;
     if (
       !isDeepStrictEqual(values, previousValues) ||
       (previousUndo && previousUndo !== undoneBy) ||
@@ -436,7 +564,7 @@ function checkMovements(previous, ledger, appleIds, wallets, orders, allocations
   }
 }
 
-export function checkAppleLedger(previous, ledger, inventory, commerce, previousCommerce) {
+export function checkAppleLedger(previous, ledger, inventory, commerce, previousCommerce, { completedRenewalId } = {}) {
   const appleIds = new Set(
     (inventory?.mailboxes || []).filter((row) => row?.type === 'apple').map((row) => row.id)
   );
@@ -452,7 +580,8 @@ export function checkAppleLedger(previous, ledger, inventory, commerce, previous
     wallets,
     orders,
     allocations,
-    refunds
+    refunds,
+    completedRenewalId
   );
   if (movementError) return movementError;
 

@@ -116,10 +116,12 @@ export function createOrderExpenseHandler({ store, publicOrigin, clock = Date.no
       if (current.version !== version) throw invalid('费用凭据已更新，请刷新后重新核对', 409);
       const items = current.data?.items || [];
       const now = clock();
-      let changed, next;
+      let changed, next, commerceVersion;
       if (action === 'record') {
-        const orders = store.load('commerce').data?.orders || [];
+        const commerce = store.load('commerce');
+        const orders = commerce.data?.orders || [];
         changed = buildReceipt(command.entry, items, orders, actor, now);
+        if (changed.orderId) commerceVersion = commerce.version;
         const mode = command.entry.accountingMode;
         if (mode && mode !== 'cash') changed = accountForReceipt(changed, mode, items, orders, actor, now);
         next = [changed, ...items];
@@ -127,7 +129,9 @@ export function createOrderExpenseHandler({ store, publicOrigin, clock = Date.no
         const row = items.find(item => item.id === command.id && !item.voidedAt);
         if (!row) throw invalid('该笔凭据已作废或不存在，请刷新后核对', 409);
         if (action === 'account') {
-          changed = accountForReceipt(row, command.mode, items, store.load('commerce').data?.orders || [], actor, now);
+          const commerce = store.load('commerce');
+          changed = accountForReceipt(row, command.mode, items, commerce.data?.orders || [], actor, now);
+          if (changed.orderId) commerceVersion = commerce.version;
         } else {
           const reason = text(command.reason, 150);
           if (!reason) throw invalid('请填写作废原因');
@@ -136,7 +140,7 @@ export function createOrderExpenseHandler({ store, publicOrigin, clock = Date.no
         next = items.map(item => item.id === row.id ? changed : item);
       }
       const saved = store.saveFeatureDocument(orderExpenseDomain, version, { items: next }, {
-        action: 'order_expense_' + action, actor, targetId: changed.id
+        action: 'order_expense_' + action, actor, targetId: changed.id, commerceVersion
       });
       return send(response, 200, { version: saved.version, items: saved.data.items });
     } catch (error) {

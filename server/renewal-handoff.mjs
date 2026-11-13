@@ -29,6 +29,10 @@ const manualSource = '管理员手工';
 const credit = (value, currency) => validMoney(value) && validCurrencyCode(currency);
 const capturedFields = ['product', 'plan', 'customerId', 'email', 'xHandle', 'loginMethod', 'accountId', 'tenantId',
   'start', 'expiry', 'payment', 'paymentId', 'appleIdId', 'appleStoreRegion', 'platformAccountId', 'cardId', 'billingChannel'];
+export function capturePaidRenewalSource(order) {
+  return Object.fromEntries(['id', 'version', ...capturedFields, 'accountSource', 'xLinkState']
+    .filter(field => Object.hasOwn(order, field) && field !== 'paymentId').map(field => [field, order[field]]));
+}
 const dateInput = value => typeof value === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d$/.test(value) &&
   Boolean(parseV2DateTimeInput(value));
 const displayTime = time => new Date(time).toISOString();
@@ -116,7 +120,7 @@ function canFinish(actor, order, context) {
   return Boolean(order) && (managesBusiness(actor) || actor.role === 'employee' && context.owner(order).ownerId === actor.id);
 }
 
-function viewRow(row, actor, fromFinance, source, canFile) {
+function viewRow(row, actor, fromFinance, source, canFile, currentOrder, reviewStamp) {
   const funding = row.funding;
   const original = { ...row.order };
   if (fromFinance) {
@@ -135,6 +139,9 @@ function viewRow(row, actor, fromFinance, source, canFile) {
       (row.processingBy?.id === actor.id || actor.role === 'super'),
     ...(row.paymentReview && { paymentReview: true }),
     canFinish: row.status === 'paid' && canFile,
+    ...(row.status === 'paid' && !source && row.paidSource && canFile && currentOrder && {
+      canReviewSource: true, currentOrder, reviewStamp
+    }),
     sourceChanged: !source, paidAt: funding?.at, paidBy: funding?.actor.name, saleCurrency: original.previousSaleCurrency,
     ...(funding && actor.role !== 'supervisor' && { amount: funding.amount, currency: funding.currency }),
     ...(funding?.last4 && actor.role !== 'supervisor' && { last4: funding.last4 }),
@@ -253,12 +260,12 @@ function newOrder(source, row, command, actor, context, now) {
     : source.product === 'Grok' ? xHandle && !email ? 'x' : 'email' : undefined);
   const order = { id: 'order-' + row.id, version: 1, product: source.product, plan: ({ 'Claude Pro': { pro: 'Pro' }, 'Claude Max': { max5: 'Max 5x', max20: 'Max 20x' } })[source.product]?.[source.plan] || source.plan,
     source: manualSource, businessType: '续费', accountSource: source.accountSource || '客户自有',
-    customerId: source.customerId, ownerId: context.owner(source).ownerId || actor.id,
+    customerId: source.customerId, ownerId: context.owner(context.byId.get(source.id) || source).ownerId || actor.id,
     start, expiry, saleAmount, saleCurrency, paidAmount: funding.amount, paidCurrency: funding.currency,
     payment: funding.payment, paidConfirmed: true, receiptConfirmed: true, entitlementStatus: 'active',
     costBasis: 'standard', createdAt: displayTime(now), updatedAt: displayTime(now), email,
     ...(xHandle && { xHandle }), ...(loginMethod && { loginMethod }),
-    previousOrderId: source.id, renewalSourceVersion: source.version ?? 0 };
+    previousOrderId: source.id, renewalSourceVersion: (context.byId.get(source.id) || source).version ?? 0 };
   for (const field of ['accountId', 'platformAccountId', 'xLinkState'])
     if (source[field]) order[field] = source[field];
   if (personalProduct(order.product)) {
@@ -318,7 +325,7 @@ const actions = new Set(['submit', 'claim', 'paid', 'return', 'finish', 'transfe
 const actionFields = {
   submit: ['confirmed', 'orders'], claim: [],
   paid: ['confirmed', 'amount', 'currency', 'reference', 'cardMode', 'cardId', 'cardNumber', 'cardSerial'],
-  return: ['confirmed', 'reason'], finish: ['start', 'expiry', 'saleAmount', 'saleCurrency', 'email', 'xHandle'],
+  return: ['confirmed', 'reason'], finish: ['start', 'expiry', 'saleAmount', 'saleCurrency', 'email', 'xHandle', 'sourceReview', 'reviewReason'],
   transfer: ['confirmed', 'review', 'reason']
 };
 
@@ -376,7 +383,9 @@ export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clo
         return send(response, 200, { version: snapshot.version, reminderHours, candidates,
           items: visible.map(row => viewRow(row, actor, fromFinance, row.status === 'complete'
             ? context.byId.get(row.order.id) : sourceFor(row, context),
-            canFinish(actor, context.byId.get(row.order.id), context))) });
+            canFinish(actor, context.byId.get(row.order.id), context),
+            context.byId.has(row.order.id) ? publicOrder(context.byId.get(row.order.id), context) : null,
+            context.byId.has(row.order.id) ? context.stamp(context.byId.get(row.order.id)) : null)) });
       }
       if (request.method !== 'POST') fail(405, '此操作不可用');
       if (request.headers.origin !== origin) fail(403, '请从当前页面提交');
@@ -438,8 +447,15 @@ export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clo
         next.transfers = [...(row.transfers || []), { from: row.processingBy, by: { id: actor.id, name: actor.name },
           reason, paymentReview: next.paymentReview, at: displayTime(now) }];
       } else if (action === 'finish') {
-        if (row.status !== 'paid' || !source) fail(409, '这笔续费尚未完成财务处理或原单已变化');
-        const order = newOrder(source, row, command, actor, context, now);
+        if (row.status !== 'paid') fail(409, '这笔续费尚未完成财务处理');
+        if (!source) {
+          const reason = text(command.reviewReason, 160);
+          if (!row.paidSource || command.sourceReview !== context.stamp(original) || !reason || /(?:\d[ -]?){12}/.test(reason))
+            fail(409, '原单已变化，请刷新并核对财务登记时的原单资料，填写核对原因');
+          next.completionReview = { source: command.sourceReview, reason, at: displayTime(now),
+            actor: { id: actor.id, name: actor.name } };
+        }
+        const order = newOrder(row.paidSource || source, row, command, actor, context, now);
         const orderNo = store.finishRenewal({ snapshot, commerce, item: next, order, actor, operation,
           owners: () => scope.orderOwners() });
         return send(response, 200, { saved: true, orderNo });

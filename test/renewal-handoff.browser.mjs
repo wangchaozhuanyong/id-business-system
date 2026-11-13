@@ -12,6 +12,70 @@ const second = { ...source, id: 'fixture-second', number: 'OD-QA-141', account: 
 const orderFixture = { ...source, orderNo: source.number, email: source.account, source: '管理员手工',
   status: '已记录', businessType: '续费', refunds: [] };
 
+test('reviewing a changed paid source preserves drafts, rejects a stale review and requires fresh confirmation', { timeout: 60_000 }, async t => {
+  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
+  t.after(() => browser.close());
+  for (const [width, theme] of [[1440, 'light'], [1440, 'dark'], [390, 'light'], [320, 'dark']]) {
+    const context = await browser.newContext({ viewport: { width, height: 900 } });
+    const errors = [], posts = [];
+    const requests = await interceptDesign(context, { skipRechargeAssets: true, localAuthUi: true,
+      actor: { id: 'employee-fixture', name: '测试员工', role: 'employee' }, localFixtures: {} });
+    let stamp = 'review-first', complete = false;
+    await context.route('**/api/local/renewals**', route => {
+      if (route.request().method() === 'GET') return route.fulfill({ json: { version: 3, candidates: [], items: [{
+        id: 'changed-paid', version: 3, status: complete ? 'complete' : 'paid', order: source,
+        canFinish: true, canReviewSource: true, sourceChanged: true, amount: '21.25', currency: 'USD',
+        currentOrder: { ...source, expiry: '2026-11-15T10:00' }, reviewStamp: stamp,
+        ...(complete && { newOrderNo: 'OD-REVIEW-OK' })
+      }] } });
+      const command = route.request().postDataJSON(); posts.push(command);
+      if (posts.length === 1) {
+        stamp = 'review-current';
+        return route.fulfill({ status: 409, json: { error: '原单再次变化，请刷新后核对' } });
+      }
+      assert.equal(command.sourceReview, stamp);
+      assert.equal(command.reviewReason, '已核对到期时间更正');
+      assert.equal(command.saleAmount, '160.00');
+      assert.equal(command.amount, undefined);
+      complete = true;
+      return route.fulfill({ json: { saved: true, orderNo: 'OD-REVIEW-OK' } });
+    });
+    const page = await context.newPage(); page.setDefaultTimeout(6000);
+    page.on('pageerror', error => errors.push(error.message));
+    await page.goto(origin + '/#/workspace/renewals/ready');
+    await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+    await page.getByRole('link', { name: '核对原单并补资料' }).click();
+    const form = page.locator('#renewal-finish-form');
+    await form.getByLabel('核对原因').fill('已核对到期时间更正');
+    await form.getByLabel('核对原因').focus();
+    await page.evaluate(() => window.IDDesignModules.find(module => module.matches?.('workspace/renewal-submit/changed-paid'))
+      .onDataChanges(['commerce']));
+    assert.equal(await form.getByLabel('核对原因').evaluate(node => node === document.activeElement), true);
+    await form.getByLabel('客户实收金额').fill('160.00');
+    await form.getByLabel('新到期时间（北京）').fill('2026-12-15T10:00');
+    const confirm = form.getByRole('checkbox', { name: '已核对原单变化，按财务登记时的资料完成本次续费' });
+    const submit = form.getByRole('button', { name: '提交订单' });
+    await submit.click();
+    assert.equal(posts.length, 0);
+    await confirm.check(); await submit.click();
+    await form.getByText('原单再次变化，请刷新后核对', { exact: true }).waitFor();
+    assert.equal(await form.getByLabel('客户实收金额').inputValue(), '160.00');
+    await page.getByRole('button', { name: '刷新', exact: true }).click();
+    await page.waitForFunction(() => document.querySelector('[name="renewal-sourceReview"]')?.value === 'review-current');
+    assert.equal(await confirm.isChecked(), false);
+    assert.equal(await form.getByLabel('核对原因').inputValue(), '已核对到期时间更正');
+    assert.equal(await form.getByLabel('客户实收金额').inputValue(), '160.00');
+    await settle(page);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
+    assert.deepEqual((await separatorSnapshot(page)).findings, []);
+    await confirm.check(); await submit.click();
+    await page.getByText('OD-REVIEW-OK', { exact: true }).first().waitFor();
+    assert.equal(posts.length, 2);
+    assert.deepEqual(errors, []); assert.deepEqual(requests.external, []);
+    await context.close();
+  }
+});
+
 test('staff confirms a batch and finance returns a verified replacement for a new order', { timeout: 60_000 }, async t => {
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
   t.after(() => browser.close());

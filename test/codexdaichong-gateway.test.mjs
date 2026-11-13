@@ -11,6 +11,37 @@ const prefix = '/integrations/codexdaichong';
 const member = { id: 'u-1', email: 'member@example.test', admin: false, sensitive: false };
 const admin = { ...member, id: 'u-2', admin: true, sensitive: true };
 
+test('billing history cannot be deleted through the host gateway; queries and exports remain available', async t => {
+  const forwarded = [], secret = randomBytes(48).toString('base64url');
+  const origin = 'https://billing.example.test';
+  const engine = await listen(t, (req, res) => {
+    forwarded.push([req.method, req.url]);
+    res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ success: true }));
+  });
+  let actor = admin;
+  const gateway = createCodexdaichongGateway({ upstreamUrl: engine, publicOrigin: origin, secret,
+    getUnifiedPrincipal: () => actor });
+  const host = await listen(t, gateway.handle);
+  for (actor of [admin, { ...admin, sensitive: false }, member]) {
+    for (const path of ['/api/admin/billing/7', '/api/admin/billing/failed', '/api/admin/billing/7/',
+      '/api/admin/billing/7?audit=1', '/API/ADMIN/BILLING/7', '/api/admin/b%69lling/%37']) {
+      const response = await fetch(host + prefix + path, { method: 'DELETE', headers: { Origin: origin } });
+      assert.equal(response.status, 403); await response.arrayBuffer();
+    }
+  }
+  assert.deepEqual(forwarded, []);
+  actor = admin;
+  for (const path of ['/api/admin/billing', '/api/admin/billing/export', '/api/admin/billing/summary/1111']) {
+    const response = await fetch(host + prefix + path);
+    assert.equal(response.status, 200); await response.arrayBuffer();
+  }
+  assert.equal(forwarded.length, 3);
+  assert(forwarded.every(([method]) => method === 'GET'));
+  const assets = await loadCodexdaichongAssets();
+  for (const path of ['/admin', '/admin.js'])
+    assert.doesNotMatch(String(assets.get(path).body), /delete(?:Failed)?Billing|\/api\/admin\/billing[^\s]*['"`],?\s*\{\s*method:\s*['"]DELETE/i);
+});
+
 test('only a committed card-plan write publishes its private version', async t => {
   const origin = 'https://cards.example.test', versions = [];
   let status = 409, marker = '8';

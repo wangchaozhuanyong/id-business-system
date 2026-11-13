@@ -1,5 +1,6 @@
 import { appleAmountUnits } from '../../frontend/apple-funding.mjs';
 import { hasRecordedPaymentAmount } from '../../modules/finance/accounting.mjs';
+import { pendingRenewalPayments } from '../apple-funding.mjs';
 
 const validId = value => typeof value === 'string' && /^[\w.-]{1,120}$/.test(value) &&
   !/^\d{12,19}$/.test(value);
@@ -43,7 +44,7 @@ function evidenceIds(rows) {
   return [...new Set(rows.map(row => row.id).filter(validId))];
 }
 
-export function auditAppleWallets({ commerce, appleBalance, inventory } = {}) {
+export function auditAppleWallets({ commerce, appleBalance, inventory, renewalHandoffs } = {}) {
   const coverage = {
     orders: Array.isArray(commerce?.orders),
     inventory: Array.isArray(inventory?.mailboxes),
@@ -59,7 +60,9 @@ export function auditAppleWallets({ commerce, appleBalance, inventory } = {}) {
   const movementRows = coverage.movements ? appleBalance.movements : [];
   const allocationRows = coverage.allocations ? appleBalance.allocations : [];
   const refundRows = coverage.refunds ? appleBalance.refunds : [];
-  const orders = coverage.orders ? commerce.orders : [];
+  const bookedOrders = coverage.orders ? commerce.orders : [];
+  const pendingPayments = pendingRenewalPayments(renewalHandoffs?.items, bookedOrders);
+  const orders = [...bookedOrders, ...pendingPayments];
   const assets = coverage.inventory ? inventory.mailboxes.filter(row => row?.type === 'apple') : [];
   const indexes = [
     ['wallet', walletRows, 'id'], ['movement', movementRows, 'id'], ['allocation', allocationRows, 'orderId'],
@@ -236,6 +239,7 @@ export function auditAppleWallets({ commerce, appleBalance, inventory } = {}) {
     });
   }
 
-  return { coverage, counts: { wallets: wallets.length, orders: orderRows.length, issueCount: issues.length },
+  return { coverage, counts: { wallets: wallets.length, orders: orderRows.length, issueCount: issues.length,
+    ...(pendingPayments.length && { pendingRenewals: pendingPayments.length }) },
     issues, wallets, orders: orderRows };
 }

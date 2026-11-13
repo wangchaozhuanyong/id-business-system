@@ -100,8 +100,9 @@
       if (row.canTransfer) return button('移交', 'transfer', row.id);
       return row.processingBy ? E(row.processingBy) : '—';
     }
-    if (row.canFinish && !row.sourceChanged)
-      return '<a class="button compact primary" href="#/' + finishPrefix + E(row.id) + '">补资料并提交</a>';
+    if (row.canFinish && (!row.sourceChanged || row.canReviewSource))
+      return '<a class="button compact primary" href="#/' + finishPrefix + E(row.id) + '">' +
+        (row.sourceChanged ? '核对原单并补资料' : '补资料并提交') + '</a>';
     return row.newOrderId && A.canVisit('orders/detail/' + row.newOrderId)
       ? '<a class="button compact" href="#/orders/detail/' + E(encodeURIComponent(row.newOrderId)) + '">查看新订单</a>' : '—';
   }
@@ -179,16 +180,25 @@
       '<a class="button" href="#/workspace/renewals/history">查看办理记录</a>' +
       (row.newOrderId && A.canVisit('orders/detail/' + row.newOrderId)
         ? ' <a class="button" href="#/orders/detail/' + E(encodeURIComponent(row.newOrderId)) + '">查看新订单</a>' : '') + '</div>';
-    if (row.sourceChanged || !row.canFinish) return A.empty('这笔续费暂不能提交', '请先核对原单和财务处理结果。');
+    if ((row.sourceChanged && !row.canReviewSource) || !row.canFinish)
+      return A.empty('这笔续费暂不能提交', '请先核对原单和财务处理结果。');
     const draft = A.state.drafts.get(storeKey(view.route + ':form')) || {};
     const { order } = row;
     const date = dateValue(new Date());
+    const review = row.sourceChanged && row.canReviewSource ?
+      '<p class="inline-notice warning" role="status">原单在财务登记实付后发生变化。本次续费保留登记时的客户、账号、套餐和付款资料，请核对下面的当前原单。</p>' +
+      props([['当前客户', row.currentOrder.customer], ['当前订阅账号', row.currentOrder.account],
+        ['当前产品与套餐', row.currentOrder.product + ' · ' + row.currentOrder.plan],
+        ['当前付款方式', row.currentOrder.payment], ['当前原单到期时间', beijing(row.currentOrder.expiry)]]) +
+      '<input type="hidden" name="renewal-sourceReview" value="' + E(row.reviewStamp) + '">' +
+      inputField('核对原因', 'renewal-reviewReason', draft['renewal-reviewReason'] || '', 'required maxlength="160"') +
+      '<label class="checkbox-label"><input type="checkbox" name="renewal-confirmSource" required> 已核对原单变化，按财务登记时的资料完成本次续费</label>' : '';
     return '<div class="form-section panel-body">' + props([['原订单', order.number], ['客户', order.customer],
       ['产品与套餐', order.product + ' · ' + order.plan], ['原到期时间', beijing(order.expiry)],
       ['财务已登记实付', row.amount + ' ' + row.currency], ['本次付款方式', order.payment],
       ...(row.last4 ? [['本次银行卡尾号', row.last4]] : [])]) +
       '<form id="renewal-finish-form" data-renewal-id="' + E(row.id) + '" data-renewal-version="' + row.version +
-      '" data-renewal-draft="' + E(storeKey(view.route + ':form')) + '"><div class="form-grid">' +
+      '" data-renewal-draft="' + E(storeKey(view.route + ':form')) + '">' + review + '<div class="form-grid">' +
       (order.account ? props([['订阅账号', order.account]]) : inputField('订阅邮箱', 'renewal-email', draft['renewal-email'] || '',
         'type="email" maxlength="254"') + (order.product === 'Grok' ? inputField('X 账号', 'renewal-xHandle', draft['renewal-xHandle'] || '',
           'maxlength="16" placeholder="@账号"') : '')) +
@@ -248,7 +258,9 @@
       const openForm = $('#renewal-finish-form', view.host);
       view.data = data;
       if (openForm?.contains(document.activeElement) && data.items.some(row => row.id === openForm.dataset.renewalId &&
-          row.version === Number(openForm.dataset.renewalVersion) && row.canFinish && !row.sourceChanged)) {
+          row.version === Number(openForm.dataset.renewalVersion) && row.canFinish &&
+          (!row.sourceChanged || row.canReviewSource &&
+            row.reviewStamp === openForm.elements['renewal-sourceReview']?.value))) {
         notifyError(view, '');
         return true;
       }
@@ -396,6 +408,8 @@
     delete values['renewal-cardNumber'];
     delete values['renewal-cardSerial'];
     delete values['renewal-confirmed'];
+    delete values['renewal-confirmSource'];
+    delete values['renewal-sourceReview'];
     A.state.drafts.set(form.dataset.renewalDraft, values);
   }
 
@@ -473,8 +487,9 @@
     const view = active, fields = Object.fromEntries(new FormData(form));
     const command = { action, id: form.dataset.renewalId, version: Number(form.dataset.renewalVersion) };
     for (const key of ['email', 'xHandle', 'start', 'expiry', 'saleAmount', 'saleCurrency', 'amount', 'currency',
-      'reference', 'reason', 'cardMode', 'cardId', 'cardNumber', 'cardSerial'])
+      'reference', 'reason', 'cardMode', 'cardId', 'cardNumber', 'cardSerial', 'reviewReason'])
       if (typeof fields['renewal-' + key] === 'string') command[key] = fields['renewal-' + key].trim();
+    if (action === 'finish' && fields['renewal-confirmSource'] === 'on') command.sourceReview = fields['renewal-sourceReview'];
     if (action === 'paid' && command.cardMode === 'pool' && !command.cardId) {
       const notice = $('[data-renewal-form-error]', form);
       notice.textContent = '请选择本次实际使用的银行卡。';
@@ -531,7 +546,7 @@
         view.filter.page = 1;
         drawList(view);
       } else if (node.form?.id === 'renewal-finish-form') {
-        A.state.drafts.set(storeKey(route + ':form'), Object.fromEntries(new FormData(node.form)));
+        preserveForm(node.form);
       }
     });
     host.addEventListener('id-pagination-change', ({ detail }) => {

@@ -78,6 +78,13 @@ export function registrarInventory(snapshot, actor) {
 }
 
 const pick = (source, fields) => Object.fromEntries(fields.filter(key => Object.hasOwn(source, key)).map(key => [key, source[key]]));
+const financeCardSuffix = row => {
+  const references = [row.paymentId, row.proCardNumber];
+  const number = references.find(value => typeof value === 'string' && /^\d{4,19}$/.test(value));
+  // A legacy reference still means a card was recorded, even when its type or
+  // number cannot be read. Do not turn that unknown cost into a cardless fee.
+  return number ? number.slice(-4) : references.some(Boolean) ? '••••' : '';
+};
 const orderFields = ['id', 'version', 'orderNo', 'product', 'plan', 'status', 'cancelled', 'draft', 'businessType', 'source',
   'customerId', 'ownerId', 'owner', 'rechargeOwnerId', 'createdById', 'createdBy', 'createdAt', 'updatedAt', 'start', 'expiry',
   'entitlementStatus', 'subscriptionEnded', 'subscriptionEndedAt', 'previousOrderId', 'payment', 'saleAmount', 'saleCurrency',
@@ -96,8 +103,9 @@ export function financeCommerce(snapshot) {
       ...pick(row, [...orderFields, 'accountId', 'appleIdId', 'cardId', 'costBasis', 'actualCostAmount',
         'actualCostCurrency', 'appleRecoverableCostAmount', 'emailCostAmount', 'emailCostCurrency',
         'externalApplePayment', 'taskId', 'customerSource', 'billingCountry', 'appleStoreRegion', 'cardUsedAt',
-        'loginMethod', 'subscriptionSeries', 'previousSubscriptionOrderId', 'billingChannel', 'cardTypeName']),
-      paymentId: row.payment === '银行卡' ? (/^\d{4,19}$/.test(row.paymentId) ? row.paymentId.slice(-4) : '') : row.paymentId,
+        'loginMethod', 'subscriptionSeries', 'previousSubscriptionOrderId', 'billingChannel', 'cardTypeName',
+        'cardTypeId', 'proMaterialMode', 'kyc', 'proRenewalSourceId', 'claudeRenewalId']),
+      paymentId: row.payment === '银行卡' ? financeCardSuffix(row) : row.paymentId,
       ...Object.fromEntries(['refunds', 'bankReturns', 'financialEvidence'].map(key =>
         [key, (Array.isArray(row[key]) ? row[key] : []).map(item => pick(item, accountingFields))])),
       // Monetary snapshots are used by the same accounting calculation as the orders page.
@@ -105,7 +113,9 @@ export function financeCommerce(snapshot) {
         [key, JSON.parse(JSON.stringify(row[key], (field, value) =>
           /pass|token|secret|credential|cvc|serial|card.?number|session/i.test(field) ? undefined : value))])),
       corrections: (Array.isArray(row.corrections) ? row.corrections : []).filter(item => item?.previous)
-        .map(item => ({ kind: item.kind, previous: pick(item.previous, ['cardId', 'paidConfirmed', 'payment', 'paidAmount', 'paidCurrency']) }))
+        .map(item => ({ kind: item.kind, previous: { ...pick(item.previous, ['cardId', 'paidConfirmed', 'payment',
+          'paidAmount', 'paidCurrency', 'cardTypeId', 'cardTypeName', 'proMaterialMode']),
+          ...(item.previous.payment === '银行卡' && { paymentId: financeCardSuffix(item.previous) }) } }))
     })),
     customers: customers.map(row => pick(row, customerFields)),
     operating: operating.filter(row => Array.isArray(row) && row.length === 2 && row[1]).map(([id, row]) =>
