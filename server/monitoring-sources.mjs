@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { dirname, isAbsolute, resolve } from 'node:path';
 import { beijingDay, monitorPath } from './monitoring-policy.mjs';
 import { projectRechargeMonitoring } from './monitoring-recharge.mjs';
-import { readBackupMonitorReceipt, readWorkerReceipt, sheetsReceiptMaxAge } from './monitoring-worker-receipts.mjs';
+import { readBackupMonitorReceipt, readSheetsSyncStatus, readWorkerReceipt } from './monitoring-worker-receipts.mjs';
 import { managedMailboxQueryRoute, storefrontMailboxQueryRoute } from './tools/mailbox-pool.mjs';
 
 const minute = 60_000;
@@ -31,7 +31,7 @@ function counts(map, at, length = 10) {
 
 export function createMonitoringSources({ monitor, databasePath, externalProbe = false, runtimeProbe, rechargeClient,
   getFinance, syncEnabled, syncViaEvents = false, workerReceiptDirectory, backupReceiptDirectory, clock = Date.now,
-  readDisk = statfs, readReceipt = readWorkerReceipt, readBackupReceipt = readBackupMonitorReceipt }) {
+  readDisk = statfs, readReceipt = readWorkerReceipt, readBackupReceipt = readBackupMonitorReceipt, readSheetsReceipt }) {
   const startedAt = clock();
   const dataDirectory = dirname(databasePath);
   const workerReports = typeof workerReceiptDirectory === 'string' && isAbsolute(workerReceiptDirectory) &&
@@ -140,7 +140,11 @@ export function createMonitoringSources({ monitor, databasePath, externalProbe =
   async function background(now) {
     const results = await Promise.allSettled([
       readDisk(dataDirectory), workerReports && !backupReports && readReceipt(workerReceiptDirectory, 'backup'),
-      workerReports && readReceipt(workerReceiptDirectory, 'sheets'),
+      readSheetsSyncStatus({
+        workerDirectory: workerReports ? workerReceiptDirectory : undefined,
+        collectorDirectory: backupReports ? backupReceiptDirectory : undefined,
+        now, readWorker: readReceipt, readCollector: readSheetsReceipt
+      }),
       backupReports && readBackupReceipt(backupReceiptDirectory)
     ]);
     const [disk, backup, sheets, report] = results.map(row => row.status === 'fulfilled' ? row.value : null);
@@ -156,7 +160,9 @@ export function createMonitoringSources({ monitor, databasePath, externalProbe =
     const output = [
       { code: 'disk_space', status: available === null ? 'unknown' : available < 15 ? 'bad' : 'ok', count: available,
         reason: available === null ? 'disk_unavailable' : undefined },
-      job('sheets', sheets, sheetsReceiptMaxAge),
+      { code: 'sheets', status: sheets?.state === 'unconfigured' ? 'disabled' : sheets?.state === 'healthy' ? 'ok' :
+        ['stale', 'failed'].includes(sheets?.state) ? 'bad' : 'unknown',
+        count: sheets?.failures ?? undefined, reason: sheets?.reason },
       orderSyncSample(now)
     ];
     if (!backupReports) {

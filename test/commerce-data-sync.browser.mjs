@@ -54,9 +54,22 @@ test('银行卡与续费资料跟随版本通知更新，同时保留订单价�
         });
         let detailAmount = '22.30';
         let detailReads = 0;
+        let workbenchAmount = '20.10', workbenchReads = 0, workbenchDelay, failWorkbench = false;
         let failEstimates = false;
-        await context.route('**/api/local/subscription-card-estimates', route => failEstimates
+        await context.route(/\/api\/local\/subscription-card-estimates(?:\?|$)/, route => failEstimates
           ? route.fulfill({ status: 503, json: { error: '合成读取失败' } }) : route.fallback());
+        await context.route('**/api/local/subscription-renewal-card', async route => {
+          const input = route.request().postDataJSON();
+          assert.equal(input.action, 'prepare');
+          if (input.orderId !== order.id)
+            return route.fulfill({ status: 404, json: { error: '合成订单不存在' } });
+          workbenchReads++;
+          const usd = workbenchAmount;
+          const delay = workbenchDelay;
+          if (delay) { workbenchDelay = undefined; delay.started.resolve(); await delay.release.promise; }
+          return failWorkbench ? route.fulfill({ status: 503, json: { error: '合成用卡资料读取失败' } }) :
+            route.fulfill({ json: { orderId: order.id, hasCard: true, last4: '4242', estimate: { usd } } });
+        });
         await context.route('**/api/local/subscription-card-details', route => {
           assert.deepEqual(route.request().postDataJSON(), { orderId: order.id });
           detailReads++;
@@ -83,10 +96,17 @@ test('银行卡与续费资料跟随版本通知更新，同时保留订单价�
           const state = window.IDChangeSync?.status();
           return state?.connected && state.snapshots > 0 && !state.refreshing && !state.pending;
         });
-        await go('data-management/bank-cards');
+        await go('subscriptions/bank-cards');
+        await page.locator('[data-action="commerce-subscription-card-tab"][data-tab="orders"]').click();
         await idle();
         const card = page.locator('table[data-table="commerce-subscription-cards"] [data-row-id="sync-test-order"]');
-        await card.getByText('175.92 USD', { exact: true }).waitFor();
+        const cardData = async label => {
+          const cell = card.getByText(label, { exact: true });
+          await cell.waitFor({ state: 'attached' });
+          if (!await cell.isVisible()) await card.getByRole('button', { name: '更多资料', exact: true }).click();
+          await cell.waitFor();
+        };
+        await cardData('175.92 USD');
         assert.equal(await card.getByText('原银行卡类型', { exact: true }).count(), 1);
 
         fixture.settings.version = 2;
@@ -95,8 +115,8 @@ test('银行卡与续费资料跟随版本通知更新，同时保留订单价�
         fixture['card-types'].items[0].name = '更新后的银行卡类型';
         fixture['subscription-card-estimates'].items[0].usd = '188.88';
         await page.evaluate(() => window.emitRevision({ settings: '2', 'card-types': '2', 'finance-rates': '2' }));
-        await card.getByText('188.88 USD', { exact: true }).waitFor();
-        await card.getByText('更新后的银行卡类型', { exact: true }).waitFor();
+        await cardData('188.88 USD');
+        await cardData('更新后的银行卡类型');
         await idle();
 
         failEstimates = true;
@@ -107,7 +127,7 @@ test('银行卡与续费资料跟随版本通知更新，同时保留订单价�
         await page.getByText('部分银行卡类型或预计金额暂时无法读取').waitFor();
         failEstimates = false;
         await page.evaluate(() => window.emitRevision({ 'finance-rates': '4' }));
-        await card.getByText('199.99 USD', { exact: true }).waitFor();
+        await cardData('199.99 USD');
         await idle();
 
         await go('workspace/order/gpt');
@@ -117,16 +137,37 @@ test('银行卡与续费资料跟随版本通知更新，同时保留订单价�
         await page.keyboard.press('Escape');
 
         await go('workspace/renewals');
-        await page.locator('table[data-table="commerce-renewals"] [data-row-id="sync-test-order"]')
-          .getByRole('button', { name: '银行卡', exact: true }).click();
+        await page.locator('[data-action="commerce-renewal-select"][data-id="sync-test-order"]').click();
+        const workbench = page.locator('.renewal-workbench-detail');
+        await workbench.getByText('20.10 USD', { exact: true }).waitFor();
+        await workbench.getByRole('button', { name: '用卡详情', exact: true }).click();
         const panel = page.locator('#drawer[open] #commerce-renewal-card-panel');
         await panel.getByText('22.30 USD', { exact: true }).waitFor();
-        const previousReads = detailReads;
+        const previousReads = detailReads, previousWorkbench = workbenchReads;
         detailAmount = '33.40';
+        workbenchAmount = '24.70';
         await page.evaluate(() => window.emitRevision({ 'finance-rates': '5' }));
         await panel.getByText('33.40 USD', { exact: true }).waitFor();
+        await workbench.getByText('24.70 USD', { exact: true }).waitFor();
         await idle();
         assert.ok(detailReads > previousReads, '汇率更新后重新读取当前订单的银行卡详情');
+        assert.equal(workbenchReads, previousWorkbench + 1);
+        await page.locator('#drawer[open] [data-action="drawer-close"]').first().click();
+        failWorkbench = true;
+        await page.evaluate(() => window.emitRevision({ 'finance-rates': '6' }));
+        await workbench.getByText('续费用卡资料读取失败。已保留上次读取的资料。').waitFor();
+        assert.equal(await workbench.getByText('24.70 USD', { exact: true }).isVisible(), true);
+        failWorkbench = false;
+        const delayed = workbenchDelay = { started: Promise.withResolvers(), release: Promise.withResolvers() };
+        workbenchAmount = '25.00';
+        await page.evaluate(() => window.emitRevision({ 'finance-rates': '7' }));
+        await delayed.started.promise;
+        workbenchAmount = '26.30';
+        await page.evaluate(() => window.emitRevision({ 'finance-rates': '8' }));
+        delayed.release.resolve();
+        await workbench.getByText('26.30 USD', { exact: true }).waitFor();
+        await idle();
+        assert.equal(await workbench.getByText('25.00 USD', { exact: true }).count(), 0);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
         assert.deepEqual(errors, []);
         assert.deepEqual(mock.external, []);

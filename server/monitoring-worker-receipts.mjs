@@ -41,6 +41,33 @@ export async function readSheetsMonitorReceipt(directory) {
   return validWorkerReceipt(value) ? value : null;
 }
 
+export async function readSheetsSyncStatus({
+  workerDirectory, collectorDirectory, now,
+  readWorker = readWorkerReceipt, readCollector = readSheetsMonitorReceipt
+}) {
+  const results = await Promise.allSettled([
+    Promise.resolve().then(() => workerDirectory && readWorker(workerDirectory, 'sheets')),
+    Promise.resolve().then(() => collectorDirectory && readCollector(collectorDirectory))
+  ]);
+  const receipts = results.filter(result => result.status === 'fulfilled' && validWorkerReceipt(result.value))
+    .map(result => result.value).sort((a, b) => b.at - a.at);
+  const receipt = receipts.find(item => item.at <= now + 60_000);
+  if (!receipt) return {
+    state: workerDirectory || collectorDirectory ? 'no_receipt' : 'unconfigured',
+    reportedAt: null, verifiedAt: null, failures: null, reason: receipts.length ? 'receipt_future' :
+      workerDirectory || collectorDirectory ? 'receipt_missing' : 'receipt_disabled'
+  };
+  const { at: reportedAt, verifiedAt, failures, integrityFailure } = receipt;
+  if (now - reportedAt > sheetsReceiptMaxAge)
+    return { state: 'stale', reportedAt, verifiedAt, failures, reason: 'receipt_stale' };
+  if (integrityFailure || failures >= 3)
+    return { state: 'failed', reportedAt, verifiedAt, failures, reason: integrityFailure ? 'integrity_failed' : undefined };
+  if (failures > 0) return { state: 'retrying', reportedAt, verifiedAt, failures, reason: 'recovering' };
+  return verifiedAt && now - verifiedAt <= sheetsReceiptMaxAge
+    ? { state: 'healthy', reportedAt, verifiedAt, failures }
+    : { state: 'waiting', reportedAt, verifiedAt, failures, reason: verifiedAt ? 'receipt_stale' : 'verification_missing' };
+}
+
 export async function readBackupMonitorReceipt(directory) {
   const report = await readReceiptFile(join(directory, 'backup-status.json'),
     { uid: 0, gid: process.getgid(), mode: 0o640 });

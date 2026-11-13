@@ -40,7 +40,7 @@ import { createCustomerQueryHandler, customerQueryRoutes } from './customer-quer
 import { createRechargeCodeHandler, rechargeCodesRoute } from './recharge-code-requests.mjs';
 import { createRechargeOrderSync, orderSyncRoute } from './recharge-order-sync.mjs';
 import { createRechargeActivity, rechargeActivityDomain, rechargeActivityRoute } from './recharge-activity.mjs';
-import { createDataChangeStream, dataChangeRoute } from './change-sync.mjs';
+import { createDataChangeStream, dataChangeRoute, dataSourceIdentity } from './change-sync.mjs';
 import { createEmployeeStatisticsHandler, employeeStatisticsRoute } from './employee-statistics.mjs';
 import { monitorPath, monitorConfigDomain, monitorReportPath, readyPath } from './monitoring-policy.mjs';
 import { createSystemMonitoring } from './system-monitoring.mjs';
@@ -253,7 +253,7 @@ export async function startPreview(
       : bitLoginHtml
   );
   const localBusiness = databasePath ? await import('./local-business.mjs') : null;
-  let store = null;
+  let store = null, dataSource;
   let handleManagedMailboxQuery;
   let microsoftMailbox;
   let handleWebsiteVisits;
@@ -327,6 +327,7 @@ export async function startPreview(
         };
       }
       store = localBusiness.createLocalBusinessStore(databasePath);
+      dataSource = await dataSourceIdentity(databasePath);
       if (rechargeConfig) rechargeActivity = createRechargeActivity({
         store, client: orderRechargeClient, publicOrigin: secureOrigin, getActor: request => auth?.getActor(request)
       });
@@ -474,6 +475,7 @@ export async function startPreview(
     return publicUrl ? host === publicUrl.host : ['127.0.0.1:' + port, 'localhost:' + port].includes(host);
   }
   const dataChanges = store ? createDataChangeStream({
+    source: dataSource,
     getActor: request => auth?.getActor(request, { throwOnUnavailable: true }) || (!authPath && !publicUrl
       ? { id: 'local-operator', role: 'admin' } : null),
     getVersions: actor => {
@@ -557,6 +559,12 @@ export async function startPreview(
           (request.headers['sec-fetch-site'] && !['same-origin', 'none'].includes(request.headers['sec-fetch-site'])))
         return response.writeHead(403).end();
       return dataChanges.handle(request, response, actor || { id: 'local-operator', role: 'admin' });
+    }
+    const requestSource = request.headers['x-id-data-source'];
+    if (store && route.startsWith('/api/local/') && requestSource && requestSource !== dataSource &&
+        !['GET', 'HEAD'].includes(request.method) && (!loginRequired || actor)) {
+      response.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
+      return response.end(JSON.stringify({ code: 'DATA_SOURCE_CHANGED', error: '业务数据来源已变化，请重新加载页面后核对' }));
     }
     if (store && route.startsWith('/api/local/auth/')) {
       if (publicUrl && route === '/api/local/auth/setup') return response.writeHead(404).end();
@@ -739,6 +747,7 @@ export async function startPreview(
     if (store && asset === assets.get('/index.html')) {
       let metadata = '<head>\n<meta name="id-local-data-events" content="enabled" />';
       if (!loginRequired || actor) {
+        metadata += `\n<meta name="id-data-source" content="${dataSource}" />`;
         response.setHeader('Cache-Control', 'private, no-store');
         let preferences = '';
         try {

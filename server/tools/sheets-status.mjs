@@ -1,6 +1,6 @@
 import { isAbsolute, resolve } from 'node:path';
 import { reportColumns } from '../backup/sheets-source.mjs';
-import { readSheetsMonitorReceipt, readWorkerReceipt, sheetsReceiptMaxAge } from '../monitoring-worker-receipts.mjs';
+import { readSheetsSyncStatus } from '../monitoring-worker-receipts.mjs';
 
 export const sheetsStatusRoute = '/api/local/tools/sheets-status';
 const tabs = Object.entries(reportColumns).map(([name, columns]) => ({ name, columns }));
@@ -12,7 +12,7 @@ function json(response, status, body) {
 
 export function createSheetsStatusHandler({
   receiptDirectory, collectorDirectory, dataDirectory, publicOrigin, clock = Date.now,
-  readCollectorReceipt = readSheetsMonitorReceipt
+  readCollectorReceipt
 }) {
   const validDirectory = directory => dataDirectory && isAbsolute(directory || '') &&
     resolve(directory) !== resolve(dataDirectory);
@@ -31,19 +31,11 @@ export function createSheetsStatusHandler({
       return json(response, 405, { error: '此接口仅可读取同步状态' });
     }
 
-    let receipt = workerReports ? await readWorkerReceipt(receiptDirectory, 'sheets') : null;
-    if (!receipt && collectorReports) receipt = await readCollectorReceipt(collectorDirectory);
-    const now = clock();
-    if (!receipt || receipt.at > now + 60_000) return json(response, 200, {
-      state: workerReports || collectorReports ? 'no_receipt' : 'unconfigured',
-      reportedAt: null, verifiedAt: null, failures: null, tabs
+    const { state, reportedAt, verifiedAt, failures } = await readSheetsSyncStatus({
+      workerDirectory: workerReports ? receiptDirectory : undefined,
+      collectorDirectory: collectorReports ? collectorDirectory : undefined,
+      now: clock(), readCollector: readCollectorReceipt
     });
-
-    const { at, verifiedAt, failures, integrityFailure } = receipt;
-    const state = now - at > sheetsReceiptMaxAge ? 'stale' :
-      integrityFailure || failures >= 3 ? 'failed' :
-      failures > 0 ? 'retrying' :
-      verifiedAt && now - verifiedAt <= sheetsReceiptMaxAge ? 'healthy' : 'waiting';
-    return json(response, 200, { state, reportedAt: at, verifiedAt, failures, tabs });
+    return json(response, 200, { state, reportedAt, verifiedAt, failures, tabs });
   };
 }

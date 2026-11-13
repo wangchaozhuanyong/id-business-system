@@ -457,3 +457,105 @@ test('Apple 回款读取失败仍展示同币成本利润并注明来源，虚�
   assert.equal(await status.count(), 0);
   assert.deepEqual(traffic.external, []);
 });
+
+test('两名管理员的凭据变更推送到同一页面，旧核算草稿必须重新核对', { timeout: 30_000 }, async t => {
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const record = { id: 'expense-sync', category: 'kyc', chargedOn: '2026-11-10', source: '合成来源',
+    reference: 'SYNC-001', amount: '20', currency: 'MYR', recordedAt: new Date(clock).toISOString(), orderId: 'claude', orderNo: 'SYN-CLAUDE' };
+  let state = { version: 4, items: [record] }, unavailable = false;
+  const commands = [];
+  const open = async id => {
+    const context = await browser.newContext({ viewport: { width: 1440, height: 850 } });
+    const localFixtures = { ...fixtures(), 'recharge-codes': { version: 0, pending: 0 },
+      inventory: { version: 0, data: { mailboxes: [], accounts: [], batches: [] } } };
+    const traffic = await interceptDesign(context, { actor: { ...actor, id }, localFixtures, changeEvents: true, skipRechargeAssets: true });
+    await context.route(origin + '/api/local/finance/expense-receipts', async route => {
+      if (route.request().method() === 'GET')
+        return unavailable ? route.fulfill({ status: 503, json: { error: '离线测试读取失败' } }) : route.fulfill({ json: state });
+      const input = route.request().postDataJSON();
+      commands.push({ ...input, operatorId: id });
+      if (input.version !== state.version) return route.fulfill({ status: 409, json: { error: '费用凭据已更新' } });
+      state = { version: state.version + 1, items: [{ ...record, accountingMode: input.mode }] };
+      return route.fulfill({ json: state });
+    });
+    await context.addInitScript(() => {
+      const original = window.fetch.bind(window), path = '/api/local/change-events';
+      window.fetch = (input, options) => {
+        if (new URL(String(input), location.href).pathname !== path) return original(input, options);
+        return Promise.resolve(new Response(new ReadableStream({ start(controller) {
+          const push = (type, version) => controller.enqueue(new TextEncoder().encode(
+            'event: ' + type + '\ndata: ' + JSON.stringify({ schema: 1, versions: { 'order-expense-receipts': version } }) + '\n\n'));
+          push('snapshot', '4');
+          window.expenseRevision = version => push('change', String(version));
+        } }), { headers: { 'content-type': 'text/event-stream' } }));
+      };
+    });
+    const page = await context.newPage(), errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    page.setDefaultTimeout(5000);
+    await page.clock.setFixedTime(new Date(clock));
+    await page.goto(origin + '/#/orders/statistics');
+    await page.getByRole('tab', { name: '费用拆分' }).click();
+    const row = page.locator('[data-table="commerce-expense-receipts"] tr[data-row-id="expense-sync"]');
+    const editor = () => row.getByRole('button', { name: '核对计入', exact: true }).click();
+    await editor();
+    await page.waitForFunction(() => window.IDChangeSync?.status().snapshots > 0);
+    return { page, row, editor, drawer: page.locator('#drawer[open]'), errors, traffic };
+  };
+  const first = await open('expense-operator-a'), second = await open('expense-operator-b');
+  const choose = (session, value) => session.drawer.locator('#commerce-expense-mode').selectOption(value);
+  const submit = session => session.drawer.getByRole('button', { name: '确认核算方式' }).click();
+  await choose(first, 'cash');
+  await choose(second, 'replace-kyc');
+  await submit(second);
+  await second.drawer.waitFor({ state: 'hidden' });
+  assert.equal(state.version, 5);
+  assert.equal(commands.length, 1);
+  await submit(first);
+  const notice = first.drawer.getByRole('alert');
+  await notice.filter({ hasText: /当前输入已保留/ }).waitFor();
+  assert.equal(await first.drawer.locator('#commerce-expense-mode').inputValue(), 'cash');
+  assert.equal(await first.drawer.locator('[name="commerce-expense-version"]').inputValue(), '4');
+  await first.drawer.locator('form').evaluate(form => form.requestSubmit());
+  assert.deepEqual(commands.map(command => command.version), [4, 4]);
+  assert.equal(state.items[0].accountingMode, 'replace-kyc');
+  await first.drawer.getByRole('button', { name: '关闭抽屉' }).click();
+  await first.editor();
+  await notice.filter({ hasText: /当前输入已保留/ }).waitFor();
+  assert.equal(await first.drawer.locator('#commerce-expense-mode').inputValue(), 'cash');
+  await first.drawer.getByRole('button', { name: '重新读取并核对' }).click();
+  await first.page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
+  await first.page.waitForFunction(() => document.querySelector('[name="commerce-expense-version"]')?.value === '5');
+  assert.equal(await first.drawer.locator('#commerce-expense-mode').inputValue(), 'replace-kyc');
+  assert.equal(commands.length, 2, '重新读取不会提交');
+  await first.drawer.getByRole('button', { name: '关闭抽屉' }).click();
+
+  unavailable = true;
+  state = { version: 6, items: [{ ...record, amount: '31' }] };
+  await first.page.evaluate(() => window.expenseRevision(6));
+  await first.page.getByText(/费用凭据读取失败，保留上次凭据用于核算/).waitFor();
+  assert.match(await first.row.locator('[data-column="amount"]').textContent(), /20/);
+  unavailable = false;
+  state.version = 7;
+  await first.page.evaluate(() => window.expenseRevision(7));
+  await first.row.getByText('31.00 MYR', { exact: true }).waitFor();
+  assert.equal(await first.page.getByText(/费用凭据读取失败/).count(), 0);
+
+  const key = { actor: 'expense-operator-a', role: 'admin', finance: true, apple: true, dateBasis: 'created', currency: 'CNY', rechargeRequests: true };
+  const profit = (key) => window.IDLocalData.queries.peek('overview', key)?.data?.['profit:week']?.data?.current?.amount;
+  await first.page.evaluate(() => window.IDDesignAPI.go('overview'));
+  await first.page.waitForFunction(profit, key);
+  const oldProfit = await first.page.evaluate(profit, key);
+  state = { version: 8, items: [{ ...record, amount: '31', accountingMode: 'replace-kyc' }] };
+  await first.page.evaluate(() => window.expenseRevision(8));
+  await first.page.waitForFunction(() => {
+    const state = window.IDChangeSync.status();
+    return state.changes > 0 && !state.pending;
+  });
+  const newProfit = await first.page.evaluate(profit, key);
+  assert.equal(typeof newProfit, 'string');
+  assert.notEqual(newProfit, oldProfit, '费用版本变化推送到总览利润');
+  assert.deepEqual(first.errors.concat(second.errors), []);
+  assert.deepEqual(first.traffic.external.concat(second.traffic.external), []);
+});

@@ -1900,6 +1900,9 @@
     };
   }
   let renewalSelected = '', renewalListTop = 0, renewalMobileDetail = false;
+  const renewalResourceScopes = ['commerce', 'inventory', 'card-types', 'finance-rates', 'settings',
+    'order-cards', 'order-card-freeze', 'tenant-cards', 'subscription-management'];
+  let workbenchRead, workbenchResource, workbenchFailure;
   const renewalFormContexts = new WeakMap();
 
   function subscriptionCenterNav(selected, content = '') {
@@ -1998,7 +2001,7 @@
         ? A.button(order.product === 'Grok' ? '补账号' : '补邮箱', 'commerce-order-fill-details', '', '', `data-id="${E(order.id)}"`)
         : '';
       const tail = bankCardStatus(order)?.last4 || (/^\d{4}(?:\d{2})?$/.test(order.paymentId) ? order.paymentId.slice(-4) : '');
-      const resource = moduleState.renewalResources?.orderId === order.id ? moduleState.renewalResources : null;
+      const resource = workbenchResource?.orderId === order.id ? workbenchResource : null;
       const series = { sourceId: order.id, payment: order.payment, appleIdId: order.appleIdId,
         availability: resource?.availability ?? bankCardStatus(order)?.state,
         hasCard: resource?.hasCard ?? Boolean(order.cardId || tail || order.proCardNumber) };
@@ -2020,6 +2023,9 @@
           label === '银行卡' && canManageOrders() && localData?.subscriptionCardDetails
             ? A.textAction('用卡详情', 'commerce-renewal-card-open', `data-id="${E(order.id)}"`) : '')).join('')}${subscriptionContacts(
           Object.fromEntries(orderContactFields.map(([field, channel]) => [channel, selected[field]])))}</div>
+        ${workbenchFailure === order.id ? `<p class="inline-notice warning" role="status">续费用卡资料读取失败。${
+          resource ? '已保留上次读取的资料。' : ''}${
+          A.textAction('重读用卡资料', 'commerce-renewal-resource-refresh', `data-id="${E(order.id)}"`)}</p>` : ''}
         <div class="toolbar renewal-workbench-actions">${renewalActions(series, '', { processed: selected.state === 'processed', buttons: true })}${fillAccount}${
           A.button('原单', 'commerce-order-detail', '', '', `data-id="${E(order.id)}"`)}${
           completed ? A.button('新订单', 'commerce-order-detail', '', '', `data-id="${E(completed.id)}"`) +
@@ -2073,22 +2079,37 @@
     return { action, orderId: node.dataset.id, subscriptionId: node.dataset.subscriptionId || undefined };
   }
 
-  async function loadWorkbenchResource(id) {
+  function loadWorkbenchResource(id) {
     if (!localData?.renewalCard) return;
     const selected = renewalWorkbenchRows().find(row => row.id === id);
     if (!selected || selected.state === 'processed' || selected.order.payment !== '银行卡') return;
-    const actorId = currentOperator().id;
-    try {
-      const result = await localData.renewalCard({ action: 'prepare', orderId: id });
-      if (S.route === renewalRoute && renewalSelected === id && actorId === currentOperator().id) {
-        moduleState.renewalResources = result;
-        const detail = $('.renewal-workbench-detail');
-        if (!detail) return;
-        const focused = detail.contains(document.activeElement) ? document.activeElement?.dataset?.action : '';
-        detail.innerHTML = renderRenewalDetail(selected, orderEvaluationTime());
-        if (focused) Array.from(detail.querySelectorAll('button')).find(node => node.dataset.action === focused)?.focus();
-      }
-    } catch { /* The resource action shows its read error when requested. */ }
+    const actorId = currentOperator().id, request = {};
+    const currentRow = () => {
+      if (workbenchRead !== request || S.route !== renewalRoute || renewalSelected !== id ||
+          actorId !== currentOperator().id) return;
+      const row = renewalWorkbenchRows().find(row => row.id === id);
+      if (row && row.state !== 'processed' && row.order.payment === '银行卡' && row.order.version === selected.order.version) return row;
+    };
+    workbenchRead = request;
+    return localData.queries.read('renewal-card-resource', id, () =>
+      localData.renewalCard({ action: 'prepare', orderId: id }), { refresh: true }).then(result => {
+      if (!currentRow()) return true;
+      if (result?.orderId !== id) throw new Error('续费用卡回执无效');
+      workbenchFailure = undefined;
+      workbenchResource = result;
+      return true;
+    }).catch(error => {
+      if (!currentRow()) return true;
+      if ([401, 403].includes(error.status)) workbenchResource = undefined;
+      workbenchFailure = id;
+      return false;
+    }).finally(() => {
+      const row = currentRow(), detail = $('.renewal-workbench-detail');
+      if (!row || !detail) return;
+      const focused = detail.contains(document.activeElement) ? document.activeElement.dataset.action : '';
+      detail.innerHTML = renderRenewalDetail(row, orderEvaluationTime());
+      if (focused) Array.from(detail.querySelectorAll('button')).find(node => node.dataset.action === focused)?.focus({ preventScroll: true });
+    });
   }
 
   async function copyRenewalContact(node) {
@@ -3311,6 +3332,8 @@
       const draft = readCommerceDraft(form);
       S.drafts.set(form.dataset.commerceDraft, draft);
     }
+    const expense = $('#drawer[open] form[data-expense-draft]');
+    if (expense) S.drafts.set(expense.dataset.expenseDraft, A.readDraft(expense));
   }
   function tableList(columns, rows, tableId, scope = '', timeOf) {
     return A.table(columns, A.pageRows(rows, timeOf), scope, tableId) + A.pagination(rows.length);
@@ -6730,7 +6753,7 @@
         ([tab, title]) =>
           `<button role="tab" aria-selected="${tab === activeTab}" class="tab ${tab === activeTab ? 'active' : ''}" data-action="commerce-order-detail-tab" data-id="${id}" data-tab="${tab}">${title}</button>`
       )
-      .join('')}</div><div class="form-section">${content}</div>`;
+      .join('')}</div><div class="form-section"${activeTab === 'costs' ? ` data-order-cost-detail="${E(id)}"` : ''}>${content}</div>`;
     const rechargeDetails = localData && automaticGptOrder(order) && !order.cancelled && !order.draft &&
       A.canVisit('workspace/order-completion') ? A.button('补充代充资料', 'commerce-order-complete', '', '', `data-id="${E(id)}"`) : '';
     const actions = rechargeDetails + renewalExpiryAction(order) + (canManageOrders() ? (canBackfillOriginalGptCard(order) ? A.button(
@@ -6827,7 +6850,8 @@
     const inStatistics = S.route === 'orders/statistics';
     const currency = inStatistics ? statisticsCurrency() : costSettings.currency;
     const clock = inStatistics ? moduleState.statsFilters.asOf || orderEvaluationTime() : Date.now();
-    const expenses = statisticsExpenseAccounting(clock);
+    const expenseState = prepareExpenseReceipts();
+    const expenses = statisticsExpenseAccounting(clock, expenseState);
     const { cost: result, revenue: receipt, gain, reasons: pending } = statisticsFact(order, currency, clock, expenses);
     const amount = value => `${display(value)} ${currencyLabel(currency)}`;
     const snapshot = order.fxSnapshot;
@@ -6852,6 +6876,7 @@
       ? '未登记' : `${display(order.paidAmount)} ${currencyLabel(order.paidCurrency)}`;
     const category = result?.cardIssueUnallocated || result?.partial ? '已知部分' : result ? accountingLabel(result.basis) : '计算缺项';
     return panelTitle('本单成本', '净成本 = 费用合计 − 渠道已到账回款。利润 = 客户确认净收款 − 净成本。' + statisticsQuoteHelp) +
+      expenseStatus(expenseState) +
       `<div class="property-list">${property('代付金额', paidAmount)}${property('售卖金额', `${display(order.saleAmount)} ${currencyLabel(order.saleCurrency)}`)}${grossReceipt}${property('成本依据', order.costBasis === 'actual' ? '实际总成本' : '订单冻结的费用规则')}${property('核算类别', category)}${property('费用规则版本', order.costSettings?.version ? `V${order.costSettings.version}` : '待核对')}${feeCorrection ? property('历史付款费率更正', '8% → 0.8% · 原 V2 规则已保留') + property('历史原费用规则', `V2 · 付款费率 8% · 每笔 ${originalFeeRules?.cardPerPaymentUsd || '待核对'} 美元 · 开卡 ${originalFeeRules?.cardIssueUsd || '待核对'} 美元`) + property('更正依据', feeCorrection.reason) : ''}${property('客户累计退款', `${display(sum(order.refunds || [], (row) => row.amount))} ${currencyLabel(order.saleCurrency)}`)}${property('退款后净收款', receipt === null ? '待确认' : amount(receipt))}${output}${property(result?.cardIssueUnallocated ? '已知参考收益' : '本单自动计算利润', gain === null || order.cancelled ? '—' : amount(gain))}${property('计算缺项', [...pending, ...(result?.cardIssueUnallocated ? ['开卡费未分摊'] : [])].join('、') || '无')}${result?.appleLedgerNote ? property('Apple 台账', result.appleLedgerNote) : ''}</div>${canCorrectHistoricalFee(order) ? panelTitle('历史费用规则', '请先核实此订单的实际付款费率，再单独更正。', A.button('更正历史付款费率', 'commerce-order-fee-correction', '', '', `data-id="${E(order.id)}"`)) : ''}${
       panelTitle('订单汇率快照', '每 1 单位外币对应的人民币金额。仅使用本订单记录的汇率。', finance && !snapshot && !order.cancelled
         ? A.button('登记汇率快照', 'commerce-order-fx', 'primary', '', `data-id="${E(order.id)}"`) +
@@ -7273,7 +7298,8 @@
     cash: '单独对账', included: '已含在实际总成本', 'add-fx': '另扣换汇费，加计成本',
     'replace-kyc': '用实付替换本单 KYC', 'replace-card': '用实付替换同卡开卡费'
   };
-  const expenseRoute = '/api/local/finance/expense-receipts';
+  const expenseScope = 'order-expense-receipts';
+  const expenseQuery = 'receipts';
   let expenseReceipts;
   const statisticsAmount = amount => amount == null ? '—' : display(amount);
   const statisticsSum = (rows, get) => {
@@ -7524,12 +7550,7 @@
     ], rows, '', 'commerce-fee-statistics');
   }
 
-  async function expenseRequest(command) {
-    const response = await fetch(expenseRoute, command ? {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(command)
-    } : { cache: 'no-store' });
-    const data = await response.json().catch(() => null);
-    if (!response.ok) throw Object.assign(new Error(data?.error || '读取或保存费用凭据失败'), { status: response.status });
+  function checkExpenseResponse(data) {
     if (!Number.isSafeInteger(data?.version) || !Array.isArray(data?.items)) throw new Error('费用凭据回执无效');
     return data;
   }
@@ -7538,31 +7559,59 @@
     return S.route === 'orders/statistics' && moduleState.statsTab === 'fees';
   }
 
-  async function loadExpenseReceipts() {
-    const state = expenseReceipts;
-    if (!state || state.phase === 'loading') return state?.pending;
-    state.phase = 'loading';
-    try {
-      Object.assign(state, await expenseRequest(), { phase: 'ready' });
-    } catch {
-      state.phase = 'error';
+  const expenseCurrent = state => state === expenseReceipts && state.actorId === currentOperator().id && canManageOrders();
+  function renderExpenseChanges() {
+    if (S.route === 'orders/statistics' || Object.hasOwn(orderListProducts, S.route) || S.route.startsWith('orders/detail/'))
+      A.render();
+    const costs = $('#drawer[open] [data-order-cost-detail]');
+    const order = costs && orders.find(row => row.id === costs.dataset.orderCostDetail);
+    if (order) {
+      const focus = costs.contains(document.activeElement) ? document.activeElement.dataset.action : '';
+      costs.innerHTML = costDetail(order);
+      if (focus) Array.from(costs.querySelectorAll('button')).find(node => node.dataset.action === focus)?.focus({ preventScroll: true });
     }
-    if (matches(S.route) && (S.route === 'orders/statistics' || Object.hasOwn(orderListProducts, S.route)) &&
-        expenseReceipts === state && state.actorId === currentOperator().id) A.render();
-    return state.phase === 'ready';
+  }
+
+  function loadExpenseReceipts(state = expenseReceipts) {
+    if (!state || !expenseCurrent(state)) return;
+    const current = localData.queries.peek(expenseScope, expenseQuery);
+    if (state.pending && current?.pending) return state.pending;
+    const pending = localData.queries.read(expenseScope, expenseQuery,
+      async () => checkExpenseResponse(await localData.expenseReceipts()), { refresh: true }).then(result => {
+      if (!expenseCurrent(state) || state.pending !== pending) return false;
+      const announced = localData.pendingChangeVersions([expenseScope])[expenseScope];
+      if (announced && BigInt(announced) > BigInt(result.version)) {
+        state.phase = 'error';
+        return false;
+      }
+      if (state.version == null || result.version >= state.version) Object.assign(state, result);
+      state.phase = 'ready';
+      return true;
+    }, error => {
+      if (!expenseCurrent(state) || state.pending !== pending) return false;
+      if ([401, 403].includes(error.status)) Object.assign(state, { version: null, items: [] });
+      state.phase = 'error';
+      return false;
+    }).finally(() => {
+      if (!expenseCurrent(state) || state.pending !== pending) return;
+      state.pending = undefined;
+      renderExpenseChanges();
+    });
+    state.pending = pending;
+    return pending;
   }
 
   function prepareExpenseReceipts() {
     const actorId = currentOperator().id;
-    if (!localData || !actorId || !canManageOrders()) return;
+    if (!localData?.expenseReceipts || !actorId || !canManageOrders()) return;
     if (expenseReceipts?.actorId !== actorId)
-      expenseReceipts = { actorId, phase: 'idle', from: '', to: '', version: 0, items: [] };
-    if (expenseReceipts.phase === 'idle') expenseReceipts.pending = loadExpenseReceipts();
+      expenseReceipts = { actorId, phase: 'idle', from: '', to: '', version: null, items: [] };
+    if (!expenseReceipts.pending && ['idle', 'stale'].includes(expenseReceipts.phase)) loadExpenseReceipts(expenseReceipts);
     return expenseReceipts;
   }
 
   function statisticsExpenseAccounting(clock, state = prepareExpenseReceipts()) {
-    if (!state || !finance?.activeExpenseReceipt) return;
+    if (state?.version == null || !finance?.activeExpenseReceipt) return;
     const active = state.items.filter(row => finance.activeExpenseReceipt(row, clock));
     const byOrder = new Map();
     for (const row of active) {
@@ -7574,12 +7623,21 @@
       ? finance.buildCardIssueAllocations(orders, { clock, expenseReceipts: active }) : undefined };
   }
 
+  function expenseStatus(state) {
+    if (!state || (state.phase === 'ready' && !state.pending)) return '';
+    const failed = state.phase === 'error' && !state.pending;
+    const message = failed ? '费用凭据读取失败' : '正在更新费用凭据';
+    return `<div class="panel-body commerce-stat-expense-status"><p class="footnote" role="status">${message}，${state.version === null
+      ? '金额暂按原单核算' : '保留上次凭据用于核算'}。</p>${failed
+      ? A.button('重读费用凭据', 'commerce-expense-refresh') : ''}</div>`;
+  }
+
   function renderExpenseReceipts(currency, state) {
     if (!state) return '';
-    const title = panelTitle('实付凭据', '按北京时间的实际扣款日统计。原币按币种分别加总。统计币金额只汇总同币扣款及有该币结算金额的凭据。产品或套餐筛选显示关联原单的 KYC 和换汇费。发卡费在全部产品中显示为卡级支出。凭据的核算方式决定如何用于套餐成本。', state.phase === 'ready'
+    const title = panelTitle('实付凭据', '按北京时间的实际扣款日统计。原币按币种分别加总。统计币金额只汇总同币扣款及有该币结算金额的凭据。产品或套餐筛选显示关联原单的 KYC 和换汇费。发卡费在全部产品中显示为卡级支出。凭据的核算方式决定如何用于套餐成本。', state.version !== null
       ? A.button('刷新凭据', 'commerce-expense-refresh') + A.button('登记实付凭据', 'commerce-expense-record', 'primary', 'plus')
       : state.phase === 'error' ? A.button('重试', 'commerce-expense-refresh') : '');
-    if (state.phase !== 'ready')
+    if (state.version === null)
       return '<section class="panel commerce-stat-filters">' + title + (state.phase === 'error'
         ? A.empty('费用凭据读取失败', '请重试读取账单记录。')
         : A.empty('正在读取费用凭据', '请稍候。')) + '</section>';
@@ -7644,7 +7702,7 @@
   }
 
   function openExpenseReceipt(id, action) {
-    if (expenseReceipts?.phase !== 'ready' || !canManageOrders()) return;
+    if (!expenseReceipts || expenseReceipts.version === null || !expenseCurrent(expenseReceipts)) return;
     const row = id && expenseReceipts.items.find(item => item.id === id && !item.voidedAt);
     if (id && !row) return;
     const modes = row && finance?.expenseAccountingModes?.[row.category];
@@ -7667,6 +7725,8 @@
         field('计入成本方式', 'expense-accountingMode', select('expense-accountingMode',
           (finance?.expenseAccountingModes?.kyc || ['cash']).map(mode => [mode, expenseModeLabel[mode]]), 'cash'), true);
     const form = 'commerce-expense-form';
+    const key = `expense-receipt:${action}:${id || ''}`;
+    const saved = S.drafts.get(key);
     const summary = row ? '<div class="property-list">' + property('凭据', `${row.source} · ${row.reference}`) +
       property('原币扣款', `${display(row.amount)} ${row.currency}`) +
       (row.settlementAmount ? property('账单结算', `${display(row.settlementAmount)} ${row.settlementCurrency}`) : '') +
@@ -7677,40 +7737,97 @@
       record: '根据已发生的扣款登记。原币和结算金额均以账单为准。' };
     const button = { account: '确认核算方式', void: '确认作废', record: '确认登记' };
     A.openDrawer(title[action], help[action],
-      `${summary}<form id="${form}" data-expense-id="${E(id || '')}" data-expense-action="${action}"><div class="commerce-field-grid">${fields}</div>
+      `${summary}<form id="${form}" data-expense-draft="${E(key)}" data-expense-id="${E(id || '')}" data-expense-action="${action}">
+        <input type="hidden" name="commerce-expense-version" value="${E(saved?.['commerce-expense-version'] ?? expenseReceipts.version)}"><div class="commerce-field-grid">${fields}</div>
         <p class="field-error" role="alert" hidden></p></form>`,
-      A.button('取消', 'drawer-close') + `<button class="button primary" type="submit" form="${form}">${button[action]}</button>`);
+      A.button('取消', 'drawer-close') + '<button type="button" class="button" data-action="commerce-expense-review" hidden>重新读取并核对</button>' +
+      `<button class="button primary" type="submit" form="${form}">${button[action]}</button>`, key);
+    const node = $('#' + form);
+    if (saved) for (const [name, input] of Object.entries(saved)) {
+      const field = node.elements.namedItem(name);
+      if (field) field.value = input;
+    }
+    if (saved && Number(saved['commerce-expense-version']) !== expenseReceipts.version) showExpenseConflict(node);
+  }
+
+  function showExpenseConflict(form, message = '费用凭据已变化。当前输入已保留，请重新核对后提交。') {
+    form.dataset.expenseConflict = 'yes';
+    const notice = form.querySelector('[role="alert"]');
+    notice.hidden = false;
+    notice.textContent = message;
+    const drawer = form.closest('dialog');
+    drawer.querySelector('[data-action="commerce-expense-review"]').hidden = false;
+    drawer.querySelector(`button[form="${form.id}"]`).disabled = true;
+  }
+
+  function reviewExpenseReceipt(trigger) {
+    const form = $('#drawer[open] #commerce-expense-form'), state = expenseReceipts;
+    if (!form || !state) return;
+    A.confirmAction('读取最新费用凭据', '继续会用最新凭据打开表单，并清除这份草稿。', () => {
+      void A.withActionFeedback(trigger, async () => {
+        const ready = await loadExpenseReceipts(state);
+        if (!form.isConnected || !form.closest('dialog')?.open || !expenseCurrent(state)) return;
+        if (!ready) {
+          showExpenseConflict(form, '读取费用凭据失败，已保留当前填写。');
+          return false;
+        }
+        const { expenseId, expenseAction, expenseDraft } = form.dataset;
+        cleanClose(expenseDraft);
+        if (expenseId && !state.items.some(row => row.id === expenseId && !row.voidedAt))
+          return A.notify('该凭据已作废或不可用，请查看最新列表。');
+        openExpenseReceipt(expenseId, expenseAction);
+      }, { pending: '正在读取凭据…' });
+    }, '读取最新凭据');
   }
 
   async function saveExpenseReceipt(form) {
     const state = expenseReceipts;
-    if (state?.phase !== 'ready' || state.saving || state.actorId !== currentOperator().id || !canManageOrders()) return;
+    if (!state || !expenseCurrent(state) || state.saving || form.dataset.expenseConflict) return;
     const raw = A.readForm(form), error = form.querySelector('p[role="alert"]');
     const read = field => value(raw, 'expense-' + field);
     const keys = ['category', 'chargedOn', 'source', 'reference', 'amount', 'currency',
       'settlementAmount', 'settlementCurrency', 'orderNo', 'accountingMode'];
     const { expenseId: id, expenseAction: action } = form.dataset;
-    const command = { action, version: state.version, ...(action === 'account' ? { id, mode: read('mode') }
+    const rawVersion = read('version'), version = Number(rawVersion);
+    if (!rawVersion || version !== state.version) { showExpenseConflict(form); return; }
+    const command = { action, version, ...(action === 'account' ? { id, mode: read('mode') }
       : action === 'void' ? { id, reason: read('reason') }
         : { entry: Object.fromEntries(keys.map(key => [key, read(key)])) }) };
     const submit = form.closest('dialog').querySelector(`button[form="${form.id}"]`);
+    const submitted = JSON.stringify(A.readDraft(form));
     state.saving = true;
     submit.disabled = true;
     error.hidden = true;
     try {
-      Object.assign(state, await expenseRequest(command));
-      if (expenseReceipts !== state || state.actorId !== currentOperator().id) return;
-      if (form.isConnected && form.closest('dialog').open) cleanClose();
-      S.page = 1;
-      if (showingExpenseReceipts()) A.render();
+      const result = checkExpenseResponse(await localData.saveExpenseReceipt(command));
+      if (!expenseCurrent(state)) return;
+      if (state.version === null || result.version >= state.version) Object.assign(state, result, { phase: 'ready' });
+      const key = form.dataset.expenseDraft;
+      const open = form.isConnected && form.closest('dialog').open;
+      const current = open ? A.readDraft(form) : S.drafts.get(key);
+      const unchanged = current && JSON.stringify(current) === submitted;
+      if (unchanged) {
+        if (open) { cleanClose(key); S.page = 1; }
+        else S.drafts.delete(key);
+      } else if (open) {
+        showExpenseConflict(form, '本次已保存，后续输入已保留。请重新核对后提交。');
+      }
+      renderExpenseChanges();
       A.notify({ account: '凭据核算方式已保存', void: '实付凭据已作废', record: '实付凭据已登记' }[action]);
     } catch (failure) {
-      error.textContent = failure.message;
-      error.hidden = false;
-      if (failure.status === 409 && expenseReceipts === state) await loadExpenseReceipts();
+      if (!form.isConnected) return;
+      if (failure.status === 409) {
+        const message = failure.code === 'DATA_SOURCE_CHANGED' ? failure.message
+          : failure.message + '。当前输入已保留，请重新核对后提交。';
+        showExpenseConflict(form, message);
+        if (expenseCurrent(state)) void loadExpenseReceipts(state);
+      } else {
+        error.textContent = failure.message;
+        error.hidden = false;
+      }
     } finally {
       state.saving = false;
-      submit.disabled = false;
+      submit.disabled = Boolean(form.dataset.expenseConflict);
     }
   }
 
@@ -7831,13 +7948,9 @@
       A.modules.appleBalance?.readFailed?.() && selected.some(order => order.payment === '苹果内购');
     const appleStatus = appleReadFailed
       ? '<p class="footnote panel-body overview-warning" role="status">Apple 回款读取失败，利润按现有资料计算。</p>' : '';
-    const expenseFailed = expenseState?.phase === 'error';
-    const retry = expenseFailed ? A.button('重读费用凭据', 'commerce-expense-refresh') : '';
-    const expenseStatus = expenseState && expenseState.phase !== 'ready' ? `<div class="panel-body commerce-stat-expense-status">
-      <p class="footnote" role="status">${expenseFailed ? '费用凭据读取失败，金额暂按原单核算。' : '正在读取费用凭据，金额暂按原单核算。'}</p>${retry}</div>` : '';
     return A.header('订单统计', '默认按北京时间订单录入日期统计，也可切换到实际开通日期。系统按已保存的实收、成本、费用凭据和订单汇率计算。' + statisticsQuoteHelp,
       routeButton('费用设置', 'settings/costs', 'commerce-stat-settings', 'settings')) +
-      expenseStatus + appleStatus +
+      expenseStatus(expenseState) + appleStatus +
       statisticsSummary(facts, currency) + statisticsFilterBar(definitions, invalidDates) +
       (partialCount ? `<p class="footnote panel-body">${partialCount} 笔订单开卡费未分摊，已知费用单列。</p>` : '') +
       `<section class="panel">${statisticsToolbar(controls)}${body}</section>` +
@@ -9716,7 +9829,7 @@
       if (action === 'commerce-renewal-select' && renewalWorkbenchRows().some(row => row.id === id)) {
         renewalSelected = id;
         renewalMobileDetail = true;
-        moduleState.renewalResources = null;
+        workbenchResource = workbenchFailure = undefined;
         void loadWorkbenchResource(id);
       } else {
         renewalSelected = '';
@@ -9730,6 +9843,10 @@
       return true;
     }
     if (action === 'commerce-renewal-card-group') { openBankCardGroup(node.dataset); return true; }
+    if (action === 'commerce-renewal-resource-refresh') {
+      void A.withActionFeedback(node, () => loadWorkbenchResource(id), { pending: '正在读取用卡资料…' });
+      return true;
+    }
     if (action === 'commerce-renewal-suffix') { void openRenewalSuffix(node); return true; }
     if (action === 'commerce-renewal-contact') { void copyRenewalContact(node); return true; }
     if (action === 'commerce-renewal-card-copy' || action === 'commerce-renewal-bind') {
@@ -10387,7 +10504,11 @@
     }
     if (action === 'commerce-expense-refresh') {
       void loadExpenseReceipts();
-      A.render();
+      renderExpenseChanges();
+      return true;
+    }
+    if (action === 'commerce-expense-review') {
+      reviewExpenseReceipt(node);
       return true;
     }
     if (['commerce-expense-record', 'commerce-expense-void', 'commerce-expense-account'].includes(action)) {
@@ -11340,7 +11461,7 @@
           [key, { current: current.activity, previous: previous.activity }]))
       },
       profit: Object.fromEntries(Object.entries(ranges).map(([key, { current, previous }]) =>
-        [key, { current: current.profit, previous: previous.profit }]))
+        [key, expenseReceipts?.phase !== 'ready' ? null : { current: current.profit, previous: previous.profit }]))
     };
   }
   function overviewCustomerSummary(asOf) {
@@ -11410,6 +11531,7 @@
       A.go(renewalOrderPrefix + encodeURIComponent(orderId));
     },
     refreshCustomerTagOptions,
+    refreshCommerce: () => loadLocalCommerce(true, true),
     async refreshOverview() {
       const state = prepareExpenseReceipts();
       const [ready] = await Promise.all([loadLocalCommerce(true, true),
@@ -11625,7 +11747,11 @@
   window.IDDesignModules.push({
     id: 'commerce',
     matches,
-    deactivate() { if (S.route !== customerOrderDraft?.route) customerOrderDraft = undefined; },
+    deactivate(region) {
+      if (S.route !== customerOrderDraft?.route) customerOrderDraft = undefined;
+      if (region?.dataset.pageRegion === renewalRoute && S.route !== renewalRoute)
+        workbenchRead = workbenchResource = workbenchFailure = undefined;
+    },
     clearPageState() {
       customerOrderDraft = undefined;
       window.clearTimeout?.(commerceDeadlineTimer);
@@ -11636,6 +11762,8 @@
       subscriptionEstimateKey = undefined;
       retentionRefreshFailed = false;
       bankCardStatuses.clear();
+      expenseReceipts = undefined;
+      workbenchRead = workbenchResource = workbenchFailure = undefined;
       frozenBankCards = undefined;
       subscriptionEstimateKey = undefined;
     },
@@ -11648,6 +11776,7 @@
     refreshCustomerTagOptions,
     afterRender({ routeChanged } = {}) {
       bindEntryRecords();
+      if (routeChanged && S.route === renewalRoute && renewalSelected) void loadWorkbenchResource(renewalSelected);
       if (paymentSettingsActive()) {
         if (routeChanged) {
           paymentRatesStale = true;
@@ -11743,6 +11872,9 @@
       if (scopes.some(scope => ['commerce', 'settings', 'subscription-management'].includes(scope))) scheduleCommerceDeadline();
       let updated = true;
       if (scopes.includes('appleBalance') && S.route === 'orders/statistics') A.render();
+      if (scopes.includes(expenseScope) && (S.route === 'orders/statistics' || Object.hasOwn(orderListProducts, S.route) ||
+          S.route.startsWith('orders/detail/') ||
+          $('#drawer[open] [data-order-cost-detail]')) && (await loadExpenseReceipts(prepareExpenseReceipts())) === false) updated = false;
       if (scopes.includes('card-types')) {
         bankCardTypesLoaded = false;
         if (paymentSettingsActive() && paymentSettingsView().tab === 'card-types' &&
@@ -11766,8 +11898,13 @@
         'order-cards', 'tenant-cards', 'subscription-management'].some(scope => scopes.includes(scope)) &&
         (await loadSubscriptionCardEstimates(true)) === false) updated = false;
       const panel = $('#commerce-renewal-card-panel');
-      if (renewalCardDrawerCurrent(panel) && ['commerce', 'inventory', 'card-types', 'finance-rates', 'settings', 'order-cards', 'order-card-freeze']
-        .some(scope => scopes.includes(scope)) && (await loadRenewalCardDetails(panel)) === false) updated = false;
+      if (scopes.some(scope => renewalResourceScopes.includes(scope))) {
+        const reads = await Promise.all([
+          S.route === renewalRoute && renewalSelected ? loadWorkbenchResource(renewalSelected) : undefined,
+          renewalCardDrawerCurrent(panel) ? loadRenewalCardDetails(panel) : undefined
+        ]);
+        if (reads.includes(false)) updated = false;
+      }
       const form = $('#drawer[open] #commerce-order-form') || $('#main #commerce-order-form');
       if (form && scopes.some(scope => ['order-card-freeze', 'card-types'].includes(scope))) {
         await Promise.all([updateRenewalCardHint(form, true), loadOrderCards(form, true)]);
@@ -11777,13 +11914,11 @@
       if (!updated) return false;
     }
   });
-  localData?.subscribeChanges?.(scopes => {
-    if (!scopes.includes('order-expense-receipts') || !expenseReceipts) return;
-    const state = expenseReceipts;
-    state.pending = Promise.resolve(state.pending).then(() => expenseReceipts === state && loadExpenseReceipts());
-  });
   // Quote updates change only the displayed estimate, including while an amount is being edited.
-  localData?.subscribeChanges?.(scopes => {
+  localData?.subscribeChanges?.((scopes, { behind = false } = {}) => {
+    if (behind) return;
+    if (scopes.includes(expenseScope) && expenseReceipts) expenseReceipts.phase = 'stale';
+    if (scopes.some(scope => renewalResourceScopes.includes(scope))) localData.queries.invalidate('renewal-card-resource');
     if (!scopes.includes('finance-rates')) return;
     const notice = localData.pendingChangeVersions?.(['finance-rates'])['finance-rates'];
     if (notice && notice === paymentRateNotice) return;

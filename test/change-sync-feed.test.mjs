@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { EventEmitter } from 'node:events';
-import { mkdir, mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
-import { createDataChangeStream, changedVersions } from '../server/change-sync.mjs';
+import { createDataChangeStream, changedVersions, dataSourceIdentity } from '../server/change-sync.mjs';
 
 class Response extends EventEmitter {
   chunks = []; writableLength = 0; destroyed = false;
@@ -17,6 +17,7 @@ const tick = () => new Promise(resolve => setImmediate(resolve));
 test('stream sends only changed revisions; unchanged signals and heartbeats do not refresh data', async t => {
   let versions = { inventory: '1', commerce: '2' }, notify;
   const feed = createDataChangeStream({
+    source: 'fixture-source',
     getVersions: () => versions, getActor: () => ({ id: 'fixture' }),
     subscribe: listener => { notify = listener; return () => { notify = undefined; }; }, heartbeatMs: 10
   });
@@ -25,6 +26,7 @@ test('stream sends only changed revisions; unchanged signals and heartbeats do n
   feed.handle({ method: 'GET' }, response, { id: 'fixture' });
   assert.equal(response.status, 200);
   assert.equal(response.headers['X-Accel-Buffering'], 'no');
+  assert(response.chunks[0].includes('"source":"fixture-source"'));
   notify(); notify();
   await delay(25);
   assert.equal(response.chunks.filter(chunk => chunk.includes('data:')).length, 1);
@@ -36,7 +38,23 @@ test('stream sends only changed revisions; unchanged signals and heartbeats do n
   assert.equal(changed.length, 1);
   assert(changed[0].includes('"inventory":"2"'));
   assert(!changed[0].includes('commerce'));
+  assert(!changed[0].includes('source'));
   assert.deepEqual(changedVersions({ inventory: '1' }, { inventory: '1' }), {});
+});
+
+test('the data source stays stable across writes and changes after a restored file replaces it', async t => {
+  const runtime = new URL('../.runtime/', import.meta.url);
+  await mkdir(runtime, { recursive: true });
+  const directory = await mkdtemp(new URL('data-source-', runtime));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const file = join(directory, 'state.fixture'), replacement = join(directory, 'restored.fixture');
+  await writeFile(file, 'synthetic state 1');
+  const before = await dataSourceIdentity(file);
+  await writeFile(file, 'synthetic state 2');
+  assert.equal(await dataSourceIdentity(file), before);
+  await writeFile(replacement, 'synthetic state 1');
+  await rename(replacement, file);
+  assert.notEqual(await dataSourceIdentity(file), before);
 });
 
 test('stream closes revoked identities and does not turn temporary failures into login revocation', t => {
