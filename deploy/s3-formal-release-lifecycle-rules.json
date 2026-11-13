@@ -1,0 +1,24 @@
+{
+  "Rules": [
+    {
+      "ID": "ExpireRetiredIndependentFormalReleaseArtifacts",
+      "Status": "Enabled",
+      "Filter": {
+        "And": {
+          "Prefix": "release-artifacts/formal/",
+          "Tags": [
+            { "Key": "id-release-retention", "Value": "retired" }
+          ]
+        }
+      },
+      "Expiration": { "Days": 90 },
+      "NoncurrentVersionExpiration": { "NoncurrentDays": 30 }
+    },
+    {
+      "ID": "RemoveExpiredIndependentFormalReleaseDeleteMarkers",
+      "Status": "Enabled",
+      "Filter": { "Prefix": "release-artifacts/formal/" },
+      "Expiration": { "ExpiredObjectDeleteMarker": true }
+    }
+  ]
+}

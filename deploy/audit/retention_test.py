@@ -31,3 +31,21 @@ class RetentionAuditTests(unittest.TestCase):
         changed = [rules[0], rules[1] | {"Filter": {"Prefix": "release-artifacts/"}}]
         with self.assertRaisesRegex(run.AuditError, "legacy_archive_lifecycle_changed"):
             run.check_legacy_archive_rules(changed)
+
+    def test_formal_release_rules_require_the_retirement_tag(self):
+        rules = json.loads(run.FORMAL_RELEASE_POLICY.read_text())["Rules"]
+        run.check_formal_release_rules(rules)
+        broad = [rules[0] | {"Filter": {"Prefix": "release-artifacts/formal/"}}, rules[1]]
+        with self.assertRaisesRegex(run.AuditError, "formal_release_lifecycle_changed"):
+            run.check_formal_release_rules(broad)
+
+    def test_formal_release_rules_reject_an_overlapping_expiration(self):
+        rules = json.loads(run.FORMAL_RELEASE_POLICY.read_text())["Rules"]
+        extra = {"ID": "Unexpected", "Status": "Enabled", "Expiration": {"Days": 90}}
+        for filter_ in ({}, {"Prefix": "release-artifacts/"}, {
+                "And": {"Prefix": "release-artifacts/formal/a/", "Tags": [
+                    {"Key": "cleanup", "Value": "yes"}]}}):
+            with self.subTest(filter_=filter_), self.assertRaisesRegex(
+                    run.AuditError, "unreviewed_expiration_overlaps_formal_releases"):
+                run.check_formal_release_rules(rules + [extra | {"Filter": filter_}])
+        run.check_formal_release_rules(rules + [extra | {"Filter": {"Prefix": "mysql/daily/"}}])
