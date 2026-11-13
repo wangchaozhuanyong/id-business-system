@@ -80,7 +80,10 @@ test('账号与邮箱提交提取工作台：旧路由、双模块、草稿、�
       assert(Math.abs(geometry.leftTitle.top - geometry.rightTitle.top) < 1, '实际标题文字对齐');
       assert(geometry.right.left >= geometry.left.right + 19);
     } else assert(geometry.right.top >= geometry.left.bottom + 19);
-    for (const { label, control } of geometry.fields) assert(label.right <= control.left + 1, '字段标签保持在左侧');
+    for (const { label, control } of geometry.fields) {
+      assert(label.height > 0 && control.height > 0 && label.bottom <= control.top + 1, '字段标签位于控件上方');
+      assert(Math.abs(label.left - control.left) <= 1, '字段标签与控件左侧对齐');
+    }
     const importRows = await page.locator('.inventory-import-records > li').evaluateAll(rows => rows.map(row => {
       const bounds = row.getBoundingClientRect(), action = row.querySelector('button').getBoundingClientRect();
       const fields = [...row.children].map(field => field.getBoundingClientRect());
@@ -279,14 +282,37 @@ test('账号与邮箱提交提取工作台：旧路由、双模块、草稿、�
       assert.equal(await page.getByText('暂无提取批次', { exact: true }).count(), 1);
     }
   }
-  let failRead = true;
-  await context.route(origin + '/api/local/inventory', route => {
-    if (failRead && route.request().method() === 'GET') {
-      failRead = false; return route.fulfill({ status: 503, json: { error: '模拟读取失败' } });
-    }
+  // Mail entry can start a follow-up inventory read on route entry for
+  // relay availability. A success must clear an earlier failure screen.
+  const inventoryApi = origin + '/api/local/inventory';
+  const followupRead = Promise.withResolvers(), releaseRead = Promise.withResolvers();
+  t.after(() => releaseRead.resolve());
+  let reads = 0;
+  const simulateRead = async route => {
+    assert.equal(route.request().method(), 'GET');
+    if (++reads === 1) return route.fulfill({ status: 503, json: { error: '模拟读取失败' } });
+    followupRead.resolve();
+    await releaseRead.promise;
     return route.fallback();
-  });
-  await page.reload(); await page.locator('[data-action="inventory-reload"]').click();
+  };
+  await context.route(inventoryApi, simulateRead);
+  const firstRead = page.waitForResponse(response => response.url() === inventoryApi && response.status() === 503);
+  await page.reload();
+  await firstRead;
+  await page.getByText('本机库存读取失败', { exact: true }).waitFor();
+  await followupRead.promise;
+  const reloaded = page.waitForResponse(response => response.url() === inventoryApi && response.ok());
+  releaseRead.resolve();
+  await reloaded;
+  await page.locator('#inventory-extract-form').waitFor();
+  const retry = page.locator('#main [data-action="inventory-reload"]');
+  assert.equal(await retry.count(), 0);
+  await context.unroute(inventoryApi, simulateRead);
+  await context.route(inventoryApi, route => route.fulfill({
+    status: 503, json: { error: '模拟读取失败' }
+  }), { times: 1 });
+  await page.goto(origin + '/?retry-fixture=1#/workspace/account-extract');
+  await retry.click();
   await page.locator('#inventory-extract-form').waitFor();
   const employee = await browser.newContext();
   const employeeRequests = await interceptDesign(employee, { localFixtures: fixture, actor: { ...actor, role: 'employee' } });
