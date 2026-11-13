@@ -96,9 +96,9 @@ test('手机记录卡、工具入口、表单与草稿使用同一套业务控�
           assert(footer.y >= 0 && footer.y + footer.height <= 845, '保存入口离开手机视口');
           const labels = await page.locator('#commerce-order-form .field:visible').evaluateAll(nodes => nodes.map(n => {
             const label = n.querySelector(':scope > label'), control = n.querySelector(':scope > .field-control');
-            return !label || !control || label.getBoundingClientRect().right <= control.getBoundingClientRect().left + 1;
+            return !label || !control || getComputedStyle(label).clipPath !== 'none' || label.getBoundingClientRect().bottom <= control.getBoundingClientRect().top + 1;
           }));
-          assert(labels.every(Boolean), '标签必须留在控件左侧');
+          assert(labels.every(Boolean), '标签必须位于控件上方');
           const header = await page.locator('.topbar').boundingBox();
           assert(header.height <= 60, '手机顶栏仍占两行');
           await page.locator('#mobile-tools-toggle').click();

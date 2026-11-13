@@ -1,0 +1,80 @@
+{
+  "base": "4f49095e98a45e9de4e0b2b27aec42517918dab4",
+  "status": "release-candidate",
+  "committed": false,
+  "pushed": false,
+  "deployed": false,
+  "mainScenes": 24,
+  "surfaceScenes": 94,
+  "contrast": [
+    {
+      "width": 1920,
+      "theme": "light",
+      "text": 14.445910095646894,
+      "label": 6.288783061356102,
+      "focus": 5.4331400255837075,
+      "restingBorder": 3.2585906520384307
+    },
+    {
+      "width": 1920,
+      "theme": "dark",
+      "text": 13.154559219989332,
+      "label": 8.780548486052226,
+      "focus": 7.538195601075576,
+      "restingBorder": 3.873863042114497
+    },
+    {
+      "width": 320,
+      "theme": "light",
+      "text": 14.445910095646894,
+      "label": 6.288783061356102,
+      "focus": 5.4331400255837075,
+      "restingBorder": 3.2585906520384307
+    },
+    {
+      "width": 320,
+      "theme": "dark",
+      "text": 13.154559219989332,
+      "label": 8.780548486052226,
+      "focus": 7.538195601075576,
+      "restingBorder": 3.873863042114497
+    }
+  ],
+  "normalBorderMeetsOriginal3To1": true,
+  "offlineOnly": true,
+  "releaseBase": "afa5862d6367c1ec17362c97cf9024d88f9a5571",
+  "pending": [
+    "GitHub required quality run",
+    "Main merge, exact-commit production build and read-only verification"
+  ],
+  "localValidation": "passed",
+  "uiGate": [
+    {
+      "name": "unit",
+      "code": 0
+    },
+    {
+      "name": "browser",
+      "code": 0
+    },
+    {
+      "name": "spacing",
+      "code": 0
+    },
+    {
+      "name": "mailbox",
+      "code": 0
+    },
+    {
+      "name": "tabs",
+      "code": 0
+    },
+    {
+      "name": "feedback",
+      "code": 0
+    }
+  ],
+  "actualControls": 110,
+  "targetedTests": 35,
+  "releaseGateTests": 51
+}

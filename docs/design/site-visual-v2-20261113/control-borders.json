@@ -1,0 +1,1005 @@
+{
+  "scenes": [
+    {
+      "route": "workspace/order/gpt",
+      "theme": "light",
+      "controls": [
+        {
+          "id": "commerce-customerId-picker",
+          "tag": "BUTTON",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "commerce-plan",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "commerce-businessType",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "commerce-email",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "commerce-ownerId-picker",
+          "tag": "BUTTON",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "commerce-payment",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "commerce-proMaterialMode",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "commerce-cardTypeId",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "commerce-proCardNumber",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "commerce-proCardSerial",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "commerce-paidCurrency",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "commerce-paidAmount",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "commerce-saleCurrency",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "commerce-saleAmount",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "commerce-start",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "commerce-expiry",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "commerce-notes",
+          "tag": "TEXTAREA",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "commerce-entry-search",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(255, 255, 255)",
+          "ratio": 3.5590114528248096
+        }
+      ]
+    },
+    {
+      "route": "workspace/order/gpt",
+      "theme": "dark",
+      "controls": [
+        {
+          "id": "commerce-customerId-picker",
+          "tag": "BUTTON",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "commerce-plan",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "commerce-businessType",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "commerce-email",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "commerce-ownerId-picker",
+          "tag": "BUTTON",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "commerce-payment",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "commerce-proMaterialMode",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "commerce-cardTypeId",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "commerce-proCardNumber",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "commerce-proCardSerial",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "commerce-paidCurrency",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "commerce-paidAmount",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "commerce-saleCurrency",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "commerce-saleAmount",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "commerce-start",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "commerce-expiry",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "commerce-notes",
+          "tag": "TEXTAREA",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "commerce-entry-search",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(26, 37, 51)",
+          "ratio": 4.546433950844076
+        }
+      ]
+    },
+    {
+      "route": "accounts/gpt",
+      "theme": "light",
+      "controls": [
+        {
+          "id": "inventory-list-query",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "inventory-country",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "inventory-status",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(255, 255, 255)",
+          "ratio": 3.5590114528248096
+        }
+      ]
+    },
+    {
+      "route": "accounts/gpt",
+      "theme": "dark",
+      "controls": [
+        {
+          "id": "inventory-list-query",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "inventory-country",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "inventory-status",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(26, 37, 51)",
+          "ratio": 4.546433950844076
+        }
+      ]
+    },
+    {
+      "route": "orders/gpt",
+      "theme": "light",
+      "controls": [
+        {
+          "id": "commerce-search",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(255, 255, 255)",
+          "ratio": 3.5590114528248096
+        }
+      ]
+    },
+    {
+      "route": "orders/gpt",
+      "theme": "dark",
+      "controls": [
+        {
+          "id": "commerce-search",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(26, 37, 51)",
+          "ratio": 4.546433950844076
+        }
+      ]
+    },
+    {
+      "route": "customers/new",
+      "theme": "light",
+      "controls": [
+        {
+          "id": "commerce-contact-name",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "commerce-contact-source",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "commerce-contact-phone",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "commerce-contact-wechat",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "commerce-contact-qq",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "commerce-contact-whatsapp",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "commerce-contact-telegram",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "commerce-contact-notes",
+          "tag": "TEXTAREA",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "commerce-entry-search",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(255, 255, 255)",
+          "ratio": 3.5590114528248096
+        }
+      ]
+    },
+    {
+      "route": "customers/new",
+      "theme": "dark",
+      "controls": [
+        {
+          "id": "commerce-contact-name",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "commerce-contact-source",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "commerce-contact-phone",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "commerce-contact-wechat",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "commerce-contact-qq",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "commerce-contact-whatsapp",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "commerce-contact-telegram",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "commerce-contact-notes",
+          "tag": "TEXTAREA",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "commerce-entry-search",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(26, 37, 51)",
+          "ratio": 4.546433950844076
+        }
+      ]
+    },
+    {
+      "route": "settings/costs",
+      "theme": "light",
+      "controls": [
+        {
+          "id": "ops-cost-currency",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "ops-cost-claudeBankFeeMyr",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "ops-cost-claudeAccountCostMyr",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "ops-cost-gmailCostCny",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "ops-cost-appleCostCny",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "ops-cost-microsoftCostCny",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "ops-cost-appleDiscount",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "ops-cost-cardIssueUsd",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "ops-cost-cardPercent",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "ops-cost-cardPerPaymentUsd",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        }
+      ]
+    },
+    {
+      "route": "settings/costs",
+      "theme": "dark",
+      "controls": [
+        {
+          "id": "ops-cost-currency",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "ops-cost-claudeBankFeeMyr",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "ops-cost-claudeAccountCostMyr",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "ops-cost-gmailCostCny",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "ops-cost-appleCostCny",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "ops-cost-microsoftCostCny",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "ops-cost-appleDiscount",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "ops-cost-cardIssueUsd",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "ops-cost-cardPercent",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "ops-cost-cardPerPaymentUsd",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        }
+      ]
+    },
+    {
+      "route": "settings/monitoring",
+      "theme": "light",
+      "controls": []
+    },
+    {
+      "route": "settings/monitoring",
+      "theme": "dark",
+      "controls": []
+    },
+    {
+      "route": "recharge/start",
+      "theme": "light",
+      "controls": [
+        {
+          "id": "bit-address-keyword",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(255, 255, 255)",
+          "ratio": 3.5590114528248096
+        }
+      ]
+    },
+    {
+      "route": "recharge/start",
+      "theme": "light",
+      "frame": "/integrations/bitbrowser/local-login",
+      "controls": [
+        {
+          "id": "bit-account-name",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "bit-connection-name",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "bit-local-url",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "bit-local-token",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "bit-execution-proxy",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "bit-authorization-json",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        },
+        {
+          "id": "bit-window-name",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(255, 255, 255)",
+          "ratio": 3.5590114528248096
+        }
+      ]
+    },
+    {
+      "route": "recharge/start",
+      "theme": "dark",
+      "controls": [
+        {
+          "id": "bit-address-keyword",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(26, 37, 51)",
+          "ratio": 4.546433950844076
+        }
+      ]
+    },
+    {
+      "route": "recharge/start",
+      "theme": "dark",
+      "frame": "/integrations/bitbrowser/local-login",
+      "controls": [
+        {
+          "id": "bit-account-name",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "bit-connection-name",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "bit-local-url",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "bit-local-token",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "bit-execution-proxy",
+          "tag": "SELECT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "bit-authorization-json",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        },
+        {
+          "id": "bit-window-name",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(26, 37, 51)",
+          "ratio": 4.546433950844076
+        }
+      ]
+    },
+    {
+      "route": "online-recharge/chatgpt",
+      "theme": "light",
+      "controls": []
+    },
+    {
+      "route": "online-recharge/chatgpt",
+      "theme": "light",
+      "frame": "/integrations/codexdaichong/redeem",
+      "controls": [
+        {
+          "id": "queryInput",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(120, 141, 167)",
+          "background": "rgb(35, 49, 67)",
+          "ratio": 3.873863042114497
+        }
+      ]
+    },
+    {
+      "route": "online-recharge/chatgpt",
+      "theme": "dark",
+      "controls": []
+    },
+    {
+      "route": "online-recharge/chatgpt",
+      "theme": "dark",
+      "frame": "/integrations/codexdaichong/redeem",
+      "controls": [
+        {
+          "id": "queryInput",
+          "tag": "INPUT",
+          "bottomWidth": 1,
+          "border": "rgb(123, 137, 156)",
+          "background": "rgb(243, 245, 248)",
+          "ratio": 3.2585906520384307
+        }
+      ]
+    }
+  ],
+  "failures": []
+}

@@ -274,7 +274,7 @@ test('已选卡池资料删除后仍可编辑，自动订单更正卡号保留�
   assert.deepEqual(errors, []);
 });
 
-test('银行卡输入在深浅主题和宽窄屏不重叠、不溢出，标签位于控件左侧', { timeout: 60_000 }, async t => {
+test('银行卡输入在深浅主题和宽窄屏不重叠、不溢出，标签位于控件上方', { timeout: 60_000 }, async t => {
   const { page, errors } = await setup(t);
   await mkdir(output, { recursive: true });
   for (const entry of ['gpt', 'claude', 'gemini', 'grok']) {
@@ -293,7 +293,7 @@ test('银行卡输入在深浅主题和宽窄屏不重叠、不溢出，标签�
         const labelsLeft = fields.every(node => {
           const label = node.querySelector('label'), control = node.querySelector('input:not([type="hidden"]), select, button');
           if (!label || !control) return true;
-          return label.getBoundingClientRect().right <= control.getBoundingClientRect().left + 1;
+          return getComputedStyle(label).clipPath !== 'none' || label.getBoundingClientRect().bottom <= control.getBoundingClientRect().top + 1;
         });
         const bounds = name => root.querySelector(`[data-commerce-field="${name}"]`).getBoundingClientRect();
         const payment = bounds('payment'), mode = bounds('proMaterialMode');
@@ -301,9 +301,9 @@ test('银行卡输入在深浅主题和宽窄屏不重叠、不溢出，标签�
         const columns = getComputedStyle(root).gridTemplateColumns.split(' ').length;
         const sameRow = (left, right) => Math.abs(left.top - right.top) <= 1 &&
           right.left >= left.right && Math.abs(left.width - right.width) <= 1;
-        const placement = columns === 2
-          ? sameRow(payment, mode) && sameRow(cardType, number) && cardType.top >= payment.bottom &&
-            Math.abs(cardType.left - payment.left) <= 1
+        const rowWithMode = Math.abs(payment.top - mode.top) <= 1;
+        const placement = rowWithMode
+          ? sameRow(payment, mode) && (Math.abs(cardType.top - payment.top) <= 1 || cardType.top >= payment.bottom) && number.top >= cardType.bottom
           : mode.top >= payment.bottom && cardType.top >= mode.bottom && number.top >= cardType.bottom;
         return { overlap, labelsLeft, placement, overflow: document.documentElement.scrollWidth > innerWidth + 1 };
       });

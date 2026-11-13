@@ -115,15 +115,15 @@ async function pageGeometry(page) {
       const control = row.querySelector('input,select');
       if (!label || !control) return null;
       const a = label.getBoundingClientRect(), b = control.getBoundingClientRect();
-      return { label: label.textContent, before: a.left < b.left, overlap: a.right > b.left + 1,
-        row: Math.min(a.bottom, b.bottom) >= Math.max(a.top, b.top) - 1 };
+      return { label: label.textContent, before: a.bottom <= b.top + 1, overlap: a.bottom > b.top + 1,
+        aligned: Math.abs(a.left - b.left) <= 1 };
     }).filter(Boolean),
     metricHeadings: [...root.querySelectorAll('.summary-label')].map(node => textBox(node).top),
     groupHeadings: [...root.querySelectorAll('.system-monitor-group h3')].map(textBox)
   }; });
   assert.equal(geometry.documentOverflow, false, JSON.stringify({ width: geometry.width, overflowing: geometry.overflowing }));
   assert.equal(geometry.clippedActions, false);
-  assert(geometry.controls.every(row => row.before && !row.overlap && row.row), JSON.stringify(geometry.controls));
+  assert(geometry.controls.every(row => row.before && !row.overlap && row.aligned), JSON.stringify(geometry.controls));
   if (page.viewportSize().width >= 1024 && geometry.metricHeadings.length)
     assert(Math.max(...geometry.metricHeadings) - Math.min(...geometry.metricHeadings) < 1);
   if (geometry.groupHeadings.length > 1 && geometry.groupHeadings[0].left !== geometry.groupHeadings[1].left)

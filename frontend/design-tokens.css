@@ -1,18 +1,18 @@
 /* ID 全站视觉规范：后台、登录、公开工具与充值外壳共用。 */
 :root {
   color-scheme: light;
-  --bg: #f3f6fa;
+  --bg: #f3f5f8;
   --surface: #ffffff;
-  --surface-soft: #edf3f9;
-  --text: #1f2a37;
-  --secondary: #526176;
-  --muted: #607087;
-  --line: #d9e2ed;
-  --control-border: #8291a5;
-  --primary: #2563a6;
-  --primary-hover: #1d528b;
-  --primary-active: #174674;
-  --primary-soft: #e9f1fb;
+  --surface-soft: #f3f5f8;
+  --text: #202a3a;
+  --secondary: #536176;
+  --muted: #5f6d82;
+  --line: #e8ecf1;
+  --control-border: #7b899c;
+  --primary: #3166c8;
+  --primary-hover: #2857ad;
+  --primary-active: #204b99;
+  --primary-soft: #edf3fc;
   --on-primary: #ffffff;
   --success: #0f766e;
   --success-soft: #e4f4f0;
@@ -24,10 +24,10 @@
   --danger-soft: #fcebee;
   --warning: #946000;
   --warning-soft: #fff3dc;
-  --blue: #2563a6;
-  --blue-soft: #e9f1fb;
-  --sidebar-surface: #f8faff;
-  --shadow: 0 3px 16px rgb(36 63 99 / 5%);
+  --blue: #3166c8;
+  --blue-soft: #edf3fc;
+  --sidebar-surface: #192533;
+  --shadow: 0 1px 3px rgb(23 37 58 / 2%);
   --shadow-raised: 0 12px 32px rgb(36 63 99 / 12%);
   --radius: 12px;
   --radius-control: 8px;
@@ -36,26 +36,26 @@
   --toolbar-padding-block: 12px;
   --section-gap: 16px;
   --control-gap: 8px;
-  --sidebar-width: 232px;
+  --sidebar-width: 224px;
   --header-height: 64px;
   --motion-fast: 140ms;
   --motion-ease: cubic-bezier(.2, .8, .2, 1);
 }
 html[data-theme='dark'], :root[data-id-theme='dark'] {
   color-scheme: dark;
-  --bg: #111a27;
-  --surface: #192638;
-  --surface-soft: #213249;
-  --text: #e7edf5;
-  --secondary: #b4c0d0;
-  --muted: #a2b2c6;
-  --line: #36475d;
+  --bg: #111922;
+  --surface: #1a2533;
+  --surface-soft: #233143;
+  --text: #e7edf6;
+  --secondary: #b9c4d4;
+  --muted: #9eadc1;
+  --line: #2a384a;
   --control-border: #788da7;
-  --primary: #8ab9f3;
-  --primary-hover: #accdf7;
+  --primary: #8db7f5;
+  --primary-hover: #adcdfa;
   --primary-active: #c4dcfa;
-  --primary-soft: #233d5e;
-  --on-primary: #111a27;
+  --primary-soft: #293e5b;
+  --on-primary: #111922;
   --success: #65cbb8;
   --success-soft: #163c3b;
   --violet: #b4a5f5;
@@ -66,10 +66,10 @@ html[data-theme='dark'], :root[data-id-theme='dark'] {
   --danger-soft: #492b38;
   --warning: #e9c575;
   --warning-soft: #413820;
-  --blue: #8ab9f3;
-  --blue-soft: #233d5e;
-  --sidebar-surface: #152131;
-  --shadow: 0 3px 16px rgb(0 0 0 / 12%);
+  --blue: #8db7f5;
+  --blue-soft: #293e5b;
+  --sidebar-surface: #101922;
+  --shadow: none;
   --shadow-raised: 0 12px 32px rgb(0 0 0 / 26%);
 }
 [data-tone='blue'] { --tone: var(--blue); --tone-soft: var(--blue-soft); }

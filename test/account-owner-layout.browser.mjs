@@ -63,7 +63,8 @@ test('账号归属编辑紧凑布局、文字对齐、说明与草稿在宽窄�
         assert(geometry.drawer.x >= 16 && geometry.drawer.right <= width - 16 && geometry.drawer.top >= 16);
         assert(!geometry.overflow && !geometry.bodyOverflow);
         assert(geometry.labels.every(label => Math.abs(label.x - geometry.labels[0].x) <= 1), '上下文与表单左侧标签对齐');
-        assert(Math.abs(geometry.account.x - geometry.select.x) <= 1 && Math.abs(geometry.current.x - geometry.select.x) <= 1, '只读信息与选择框共用值列');
+        assert(Math.abs(geometry.account.x - geometry.current.x) <= 1, '只读信息值列对齐');
+        assert(Math.abs(geometry.labels[0].x - geometry.select.x) <= 1 && geometry.select.top >= geometry.labels.at(-1).bottom, '上方标签与选择框左边缘对齐');
         assert(Math.abs(geometry.save.right - geometry.select.right) <= 1, '提交与选择框右边缘对齐');
         assert(geometry.save.height >= (width <= 900 ? 44 : 36));
         assert.equal(await page.locator('#subscription-owner-account').textContent(), row.account);

@@ -67,3 +67,9 @@
     height: 44px;
   }
 }
+
+/* Top-labelled form fields keep a single 20px label baseline on desktop. */
+.field > .field-title-help > summary { width: 20px; height: 20px; min-width: 20px; min-height: 20px; padding: 0; }
+@media (max-width: 900px) {
+  .field > .field-title-help > summary { width: 44px; height: 44px; min-width: 44px; min-height: 44px; }
+}

@@ -10,7 +10,7 @@ const luminance = hex => {
     .map(v => v <= 0.04045 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4);
   return values[0] * 0.2126 + values[1] * 0.7152 + values[2] * 0.0722;
 };
-for (const [theme, colors] of Object.entries(themes)) test(theme + ' 文字、状态与输入框对比度', () => {
+for (const [theme, colors] of Object.entries(themes)) test(theme + ' 基础色板文字、状态及交互强调边界对比度', () => {
   const ratio = (a, b) => {
     const x = luminance(colors[a]), y = luminance(colors[b]);
     return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
@@ -20,5 +20,7 @@ for (const [theme, colors] of Object.entries(themes)) test(theme + ' 文字、�
   for (const tone of ['primary', 'success', 'violet', 'cyan', 'warning', 'danger']) pairs.push([tone, tone + '-soft']);
   for (const bg of ['primary', 'primary-hover', 'primary-active']) pairs.push(['on-primary', bg]);
   for (const [fg, bg] of pairs) assert(ratio(fg, bg) >= 4.5, theme + ': ' + fg + '/' + bg + ' = ' + ratio(fg, bg).toFixed(2));
+  // Resting filled controls use this token on the bottom boundary; other edges stay light.
   assert(ratio('control-border', 'surface') >= 3);
+  assert(ratio('control-border', 'surface-soft') >= 3);
 });

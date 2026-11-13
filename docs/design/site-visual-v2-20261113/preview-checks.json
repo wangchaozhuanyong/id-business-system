@@ -1,0 +1,1152 @@
+{
+  "source": "4f49095e98a45e9de4e0b2b27aec42517918dab4",
+  "candidate": true,
+  "syntheticData": true,
+  "errors": [],
+  "scenes": [
+    {
+      "name": "order-entry",
+      "route": "workspace/order/gpt",
+      "width": 1920,
+      "theme": "light",
+      "filename": "after-order-entry-1920-light.png",
+      "pageWidth": 1920,
+      "scrollWidth": 1920,
+      "h1": {
+        "text": "订单提交",
+        "size": "20px"
+      },
+      "tableColumns": [
+        "客户 / 联系方式",
+        "套餐 / 支付方式本条订单实际登记的产品、套餐与支付方式。",
+        "备注",
+        "提交时间",
+        "操作"
+      ],
+      "visibleRows": 16,
+      "titleHelpOpen": false,
+      "entry": {
+        "clientHeight": 805,
+        "scrollHeight": 805,
+        "sideBySide": true
+      },
+      "formMetrics": [
+        {
+          "height": 212,
+          "top": 159,
+          "grid": [
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            },
+            {
+              "class": "commerce-span-all order-account-fields",
+              "gap": "12px 16px"
+            },
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            }
+          ]
+        },
+        {
+          "height": 369,
+          "top": 383,
+          "grid": [
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            },
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            }
+          ]
+        },
+        {
+          "height": 166,
+          "top": 764,
+          "grid": [
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            }
+          ]
+        }
+      ],
+      "spacing": {
+        "measurements": 15,
+        "findings": []
+      }
+    },
+    {
+      "name": "accounts",
+      "route": "accounts/gpt",
+      "width": 1920,
+      "theme": "light",
+      "filename": "after-accounts-1920-light.png",
+      "pageWidth": 1920,
+      "scrollWidth": 1920,
+      "h1": {
+        "text": "GPT 账号",
+        "size": "20px"
+      },
+      "tableColumns": [
+        "选择本页",
+        "邮箱类型",
+        "账号 / 邮箱",
+        "账号来源",
+        "注册国家",
+        "账号状态",
+        "使用状态",
+        "注册时间",
+        "录入人",
+        "备注 1",
+        "操作"
+      ],
+      "visibleRows": 11,
+      "titleHelpOpen": false,
+      "entry": null,
+      "formMetrics": [],
+      "spacing": {
+        "measurements": 11,
+        "findings": []
+      }
+    },
+    {
+      "name": "orders",
+      "route": "orders/gpt",
+      "width": 1920,
+      "theme": "light",
+      "filename": "after-orders-1920-light.png",
+      "pageWidth": 1920,
+      "scrollWidth": 1920,
+      "h1": {
+        "text": "GPT 订单",
+        "size": "20px"
+      },
+      "tableColumns": [
+        "订单编号",
+        "客户",
+        "邮箱账号",
+        "套餐",
+        "支付方式",
+        "代付金额",
+        "售卖金额",
+        "利润 CNY客户净收款减已知净成本。点击金额查看费用明细。",
+        "到期时间",
+        "订阅状态",
+        "操作"
+      ],
+      "visibleRows": 14,
+      "titleHelpOpen": false,
+      "entry": null,
+      "formMetrics": [],
+      "spacing": {
+        "measurements": 6,
+        "findings": []
+      }
+    },
+    {
+      "name": "order-entry",
+      "route": "workspace/order/gpt",
+      "width": 1920,
+      "theme": "dark",
+      "filename": "after-order-entry-1920-dark.png",
+      "pageWidth": 1920,
+      "scrollWidth": 1920,
+      "h1": {
+        "text": "订单提交",
+        "size": "20px"
+      },
+      "tableColumns": [
+        "客户 / 联系方式",
+        "套餐 / 支付方式本条订单实际登记的产品、套餐与支付方式。",
+        "备注",
+        "提交时间",
+        "操作"
+      ],
+      "visibleRows": 16,
+      "titleHelpOpen": false,
+      "entry": {
+        "clientHeight": 805,
+        "scrollHeight": 805,
+        "sideBySide": true
+      },
+      "formMetrics": [
+        {
+          "height": 212,
+          "top": 159,
+          "grid": [
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            },
+            {
+              "class": "commerce-span-all order-account-fields",
+              "gap": "12px 16px"
+            },
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            }
+          ]
+        },
+        {
+          "height": 369,
+          "top": 383,
+          "grid": [
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            },
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            }
+          ]
+        },
+        {
+          "height": 166,
+          "top": 764,
+          "grid": [
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            }
+          ]
+        }
+      ],
+      "spacing": {
+        "measurements": 15,
+        "findings": []
+      }
+    },
+    {
+      "name": "accounts",
+      "route": "accounts/gpt",
+      "width": 1920,
+      "theme": "dark",
+      "filename": "after-accounts-1920-dark.png",
+      "pageWidth": 1920,
+      "scrollWidth": 1920,
+      "h1": {
+        "text": "GPT 账号",
+        "size": "20px"
+      },
+      "tableColumns": [
+        "选择本页",
+        "邮箱类型",
+        "账号 / 邮箱",
+        "账号来源",
+        "注册国家",
+        "账号状态",
+        "使用状态",
+        "注册时间",
+        "录入人",
+        "备注 1",
+        "操作"
+      ],
+      "visibleRows": 11,
+      "titleHelpOpen": false,
+      "entry": null,
+      "formMetrics": [],
+      "spacing": {
+        "measurements": 11,
+        "findings": []
+      }
+    },
+    {
+      "name": "orders",
+      "route": "orders/gpt",
+      "width": 1920,
+      "theme": "dark",
+      "filename": "after-orders-1920-dark.png",
+      "pageWidth": 1920,
+      "scrollWidth": 1920,
+      "h1": {
+        "text": "GPT 订单",
+        "size": "20px"
+      },
+      "tableColumns": [
+        "订单编号",
+        "客户",
+        "邮箱账号",
+        "套餐",
+        "支付方式",
+        "代付金额",
+        "售卖金额",
+        "利润 CNY客户净收款减已知净成本。点击金额查看费用明细。",
+        "到期时间",
+        "订阅状态",
+        "操作"
+      ],
+      "visibleRows": 14,
+      "titleHelpOpen": false,
+      "entry": null,
+      "formMetrics": [],
+      "spacing": {
+        "measurements": 6,
+        "findings": []
+      }
+    },
+    {
+      "name": "order-entry",
+      "route": "workspace/order/gpt",
+      "width": 1440,
+      "theme": "light",
+      "filename": "after-order-entry-1440-light.png",
+      "pageWidth": 1440,
+      "scrollWidth": 1440,
+      "h1": {
+        "text": "订单提交",
+        "size": "20px"
+      },
+      "tableColumns": [
+        "客户 / 联系方式",
+        "套餐 / 支付方式本条订单实际登记的产品、套餐与支付方式。",
+        "备注",
+        "提交时间",
+        "操作"
+      ],
+      "visibleRows": 15,
+      "titleHelpOpen": false,
+      "entry": {
+        "clientHeight": 805,
+        "scrollHeight": 1023,
+        "sideBySide": true
+      },
+      "formMetrics": [
+        {
+          "height": 364,
+          "top": 159,
+          "grid": [
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            },
+            {
+              "class": "commerce-span-all order-account-fields",
+              "gap": "12px 16px"
+            },
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            }
+          ]
+        },
+        {
+          "height": 445,
+          "top": 535,
+          "grid": [
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            },
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            }
+          ]
+        },
+        {
+          "height": 166,
+          "top": 992,
+          "grid": [
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            }
+          ]
+        }
+      ],
+      "spacing": {
+        "measurements": 6,
+        "findings": []
+      }
+    },
+    {
+      "name": "accounts",
+      "route": "accounts/gpt",
+      "width": 1440,
+      "theme": "light",
+      "filename": "after-accounts-1440-light.png",
+      "pageWidth": 1440,
+      "scrollWidth": 1440,
+      "h1": {
+        "text": "GPT 账号",
+        "size": "20px"
+      },
+      "tableColumns": [
+        "选择本页",
+        "邮箱类型",
+        "账号 / 邮箱",
+        "账号来源",
+        "注册国家",
+        "账号状态",
+        "使用状态",
+        "注册时间",
+        "录入人",
+        "备注 1",
+        "操作"
+      ],
+      "visibleRows": 11,
+      "titleHelpOpen": false,
+      "entry": null,
+      "formMetrics": [],
+      "spacing": {
+        "measurements": 11,
+        "findings": []
+      }
+    },
+    {
+      "name": "orders",
+      "route": "orders/gpt",
+      "width": 1440,
+      "theme": "light",
+      "filename": "after-orders-1440-light.png",
+      "pageWidth": 1440,
+      "scrollWidth": 1440,
+      "h1": {
+        "text": "GPT 订单",
+        "size": "20px"
+      },
+      "tableColumns": [
+        "订单编号",
+        "客户",
+        "邮箱账号",
+        "套餐",
+        "支付方式",
+        "代付金额",
+        "售卖金额",
+        "利润 CNY客户净收款减已知净成本。点击金额查看费用明细。",
+        "到期时间",
+        "订阅状态",
+        "操作"
+      ],
+      "visibleRows": 14,
+      "titleHelpOpen": false,
+      "entry": null,
+      "formMetrics": [],
+      "spacing": {
+        "measurements": 6,
+        "findings": []
+      }
+    },
+    {
+      "name": "order-entry",
+      "route": "workspace/order/gpt",
+      "width": 1440,
+      "theme": "dark",
+      "filename": "after-order-entry-1440-dark.png",
+      "pageWidth": 1440,
+      "scrollWidth": 1440,
+      "h1": {
+        "text": "订单提交",
+        "size": "20px"
+      },
+      "tableColumns": [
+        "客户 / 联系方式",
+        "套餐 / 支付方式本条订单实际登记的产品、套餐与支付方式。",
+        "备注",
+        "提交时间",
+        "操作"
+      ],
+      "visibleRows": 15,
+      "titleHelpOpen": false,
+      "entry": {
+        "clientHeight": 805,
+        "scrollHeight": 1023,
+        "sideBySide": true
+      },
+      "formMetrics": [
+        {
+          "height": 364,
+          "top": 159,
+          "grid": [
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            },
+            {
+              "class": "commerce-span-all order-account-fields",
+              "gap": "12px 16px"
+            },
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            }
+          ]
+        },
+        {
+          "height": 445,
+          "top": 535,
+          "grid": [
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            },
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            }
+          ]
+        },
+        {
+          "height": 166,
+          "top": 992,
+          "grid": [
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            }
+          ]
+        }
+      ],
+      "spacing": {
+        "measurements": 6,
+        "findings": []
+      }
+    },
+    {
+      "name": "accounts",
+      "route": "accounts/gpt",
+      "width": 1440,
+      "theme": "dark",
+      "filename": "after-accounts-1440-dark.png",
+      "pageWidth": 1440,
+      "scrollWidth": 1440,
+      "h1": {
+        "text": "GPT 账号",
+        "size": "20px"
+      },
+      "tableColumns": [
+        "选择本页",
+        "邮箱类型",
+        "账号 / 邮箱",
+        "账号来源",
+        "注册国家",
+        "账号状态",
+        "使用状态",
+        "注册时间",
+        "录入人",
+        "备注 1",
+        "操作"
+      ],
+      "visibleRows": 11,
+      "titleHelpOpen": false,
+      "entry": null,
+      "formMetrics": [],
+      "spacing": {
+        "measurements": 11,
+        "findings": []
+      }
+    },
+    {
+      "name": "orders",
+      "route": "orders/gpt",
+      "width": 1440,
+      "theme": "dark",
+      "filename": "after-orders-1440-dark.png",
+      "pageWidth": 1440,
+      "scrollWidth": 1440,
+      "h1": {
+        "text": "GPT 订单",
+        "size": "20px"
+      },
+      "tableColumns": [
+        "订单编号",
+        "客户",
+        "邮箱账号",
+        "套餐",
+        "支付方式",
+        "代付金额",
+        "售卖金额",
+        "利润 CNY客户净收款减已知净成本。点击金额查看费用明细。",
+        "到期时间",
+        "订阅状态",
+        "操作"
+      ],
+      "visibleRows": 14,
+      "titleHelpOpen": false,
+      "entry": null,
+      "formMetrics": [],
+      "spacing": {
+        "measurements": 6,
+        "findings": []
+      }
+    },
+    {
+      "name": "order-entry",
+      "route": "workspace/order/gpt",
+      "width": 390,
+      "theme": "light",
+      "filename": "after-order-entry-390-light.png",
+      "pageWidth": 390,
+      "scrollWidth": 390,
+      "h1": {
+        "text": "订单提交",
+        "size": "16px"
+      },
+      "tableColumns": [
+        "客户 / 联系方式",
+        "套餐 / 支付方式本条订单实际登记的产品、套餐与支付方式。",
+        "备注",
+        "提交时间",
+        "操作"
+      ],
+      "visibleRows": 0,
+      "titleHelpOpen": false,
+      "entry": {
+        "clientHeight": 1919,
+        "scrollHeight": 1919,
+        "sideBySide": false
+      },
+      "formMetrics": [
+        {
+          "height": 549,
+          "top": 279,
+          "grid": [
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            },
+            {
+              "class": "commerce-span-all order-account-fields",
+              "gap": "12px 16px"
+            },
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            }
+          ]
+        },
+        {
+          "height": 914,
+          "top": 844,
+          "grid": [
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            },
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            }
+          ]
+        },
+        {
+          "height": 424.375,
+          "top": 1774,
+          "grid": [
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            }
+          ]
+        }
+      ],
+      "spacing": {
+        "measurements": 2,
+        "findings": []
+      }
+    },
+    {
+      "name": "accounts",
+      "route": "accounts/gpt",
+      "width": 390,
+      "theme": "light",
+      "filename": "after-accounts-390-light.png",
+      "pageWidth": 390,
+      "scrollWidth": 390,
+      "h1": {
+        "text": "GPT 账号",
+        "size": "16px"
+      },
+      "tableColumns": [
+        "选择本页",
+        "邮箱类型",
+        "账号 / 邮箱",
+        "账号来源",
+        "注册国家",
+        "账号状态",
+        "使用状态",
+        "注册时间",
+        "录入人",
+        "备注 1",
+        "操作"
+      ],
+      "visibleRows": 1,
+      "titleHelpOpen": false,
+      "entry": null,
+      "formMetrics": [],
+      "spacing": {
+        "measurements": 3,
+        "findings": []
+      }
+    },
+    {
+      "name": "orders",
+      "route": "orders/gpt",
+      "width": 390,
+      "theme": "light",
+      "filename": "after-orders-390-light.png",
+      "pageWidth": 390,
+      "scrollWidth": 390,
+      "h1": {
+        "text": "GPT 订单",
+        "size": "16px"
+      },
+      "tableColumns": [
+        "订单编号",
+        "客户",
+        "邮箱账号",
+        "套餐",
+        "支付方式",
+        "代付金额",
+        "售卖金额",
+        "利润 CNY客户净收款减已知净成本。点击金额查看费用明细。",
+        "到期时间",
+        "订阅状态",
+        "操作"
+      ],
+      "visibleRows": 2,
+      "titleHelpOpen": false,
+      "entry": null,
+      "formMetrics": [],
+      "spacing": {
+        "measurements": 2,
+        "findings": []
+      }
+    },
+    {
+      "name": "order-entry",
+      "route": "workspace/order/gpt",
+      "width": 390,
+      "theme": "dark",
+      "filename": "after-order-entry-390-dark.png",
+      "pageWidth": 390,
+      "scrollWidth": 390,
+      "h1": {
+        "text": "订单提交",
+        "size": "16px"
+      },
+      "tableColumns": [
+        "客户 / 联系方式",
+        "套餐 / 支付方式本条订单实际登记的产品、套餐与支付方式。",
+        "备注",
+        "提交时间",
+        "操作"
+      ],
+      "visibleRows": 0,
+      "titleHelpOpen": false,
+      "entry": {
+        "clientHeight": 1919,
+        "scrollHeight": 1919,
+        "sideBySide": false
+      },
+      "formMetrics": [
+        {
+          "height": 549,
+          "top": 279,
+          "grid": [
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            },
+            {
+              "class": "commerce-span-all order-account-fields",
+              "gap": "12px 16px"
+            },
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            }
+          ]
+        },
+        {
+          "height": 914,
+          "top": 844,
+          "grid": [
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            },
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            }
+          ]
+        },
+        {
+          "height": 424.375,
+          "top": 1774,
+          "grid": [
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            }
+          ]
+        }
+      ],
+      "spacing": {
+        "measurements": 2,
+        "findings": []
+      }
+    },
+    {
+      "name": "accounts",
+      "route": "accounts/gpt",
+      "width": 390,
+      "theme": "dark",
+      "filename": "after-accounts-390-dark.png",
+      "pageWidth": 390,
+      "scrollWidth": 390,
+      "h1": {
+        "text": "GPT 账号",
+        "size": "16px"
+      },
+      "tableColumns": [
+        "选择本页",
+        "邮箱类型",
+        "账号 / 邮箱",
+        "账号来源",
+        "注册国家",
+        "账号状态",
+        "使用状态",
+        "注册时间",
+        "录入人",
+        "备注 1",
+        "操作"
+      ],
+      "visibleRows": 1,
+      "titleHelpOpen": false,
+      "entry": null,
+      "formMetrics": [],
+      "spacing": {
+        "measurements": 3,
+        "findings": []
+      }
+    },
+    {
+      "name": "orders",
+      "route": "orders/gpt",
+      "width": 390,
+      "theme": "dark",
+      "filename": "after-orders-390-dark.png",
+      "pageWidth": 390,
+      "scrollWidth": 390,
+      "h1": {
+        "text": "GPT 订单",
+        "size": "16px"
+      },
+      "tableColumns": [
+        "订单编号",
+        "客户",
+        "邮箱账号",
+        "套餐",
+        "支付方式",
+        "代付金额",
+        "售卖金额",
+        "利润 CNY客户净收款减已知净成本。点击金额查看费用明细。",
+        "到期时间",
+        "订阅状态",
+        "操作"
+      ],
+      "visibleRows": 2,
+      "titleHelpOpen": false,
+      "entry": null,
+      "formMetrics": [],
+      "spacing": {
+        "measurements": 2,
+        "findings": []
+      }
+    },
+    {
+      "name": "order-entry",
+      "route": "workspace/order/gpt",
+      "width": 320,
+      "theme": "light",
+      "filename": "after-order-entry-320-light.png",
+      "pageWidth": 320,
+      "scrollWidth": 320,
+      "h1": {
+        "text": "订单提交",
+        "size": "16px"
+      },
+      "tableColumns": [
+        "客户 / 联系方式",
+        "套餐 / 支付方式本条订单实际登记的产品、套餐与支付方式。",
+        "备注",
+        "提交时间",
+        "操作"
+      ],
+      "visibleRows": 0,
+      "titleHelpOpen": false,
+      "entry": {
+        "clientHeight": 1943,
+        "scrollHeight": 1943,
+        "sideBySide": false
+      },
+      "formMetrics": [
+        {
+          "height": 573,
+          "top": 279,
+          "grid": [
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            },
+            {
+              "class": "commerce-span-all order-account-fields",
+              "gap": "12px 16px"
+            },
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            }
+          ]
+        },
+        {
+          "height": 914,
+          "top": 868,
+          "grid": [
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            },
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            }
+          ]
+        },
+        {
+          "height": 424.375,
+          "top": 1798,
+          "grid": [
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            }
+          ]
+        }
+      ],
+      "spacing": {
+        "measurements": 2,
+        "findings": []
+      }
+    },
+    {
+      "name": "accounts",
+      "route": "accounts/gpt",
+      "width": 320,
+      "theme": "light",
+      "filename": "after-accounts-320-light.png",
+      "pageWidth": 320,
+      "scrollWidth": 320,
+      "h1": {
+        "text": "GPT 账号",
+        "size": "16px"
+      },
+      "tableColumns": [
+        "选择本页",
+        "邮箱类型",
+        "账号 / 邮箱",
+        "账号来源",
+        "注册国家",
+        "账号状态",
+        "使用状态",
+        "注册时间",
+        "录入人",
+        "备注 1",
+        "操作"
+      ],
+      "visibleRows": 1,
+      "titleHelpOpen": false,
+      "entry": null,
+      "formMetrics": [],
+      "spacing": {
+        "measurements": 3,
+        "findings": []
+      }
+    },
+    {
+      "name": "orders",
+      "route": "orders/gpt",
+      "width": 320,
+      "theme": "light",
+      "filename": "after-orders-320-light.png",
+      "pageWidth": 320,
+      "scrollWidth": 320,
+      "h1": {
+        "text": "GPT 订单",
+        "size": "16px"
+      },
+      "tableColumns": [
+        "订单编号",
+        "客户",
+        "邮箱账号",
+        "套餐",
+        "支付方式",
+        "代付金额",
+        "售卖金额",
+        "利润 CNY客户净收款减已知净成本。点击金额查看费用明细。",
+        "到期时间",
+        "订阅状态",
+        "操作"
+      ],
+      "visibleRows": 1,
+      "titleHelpOpen": false,
+      "entry": null,
+      "formMetrics": [],
+      "spacing": {
+        "measurements": 2,
+        "findings": []
+      }
+    },
+    {
+      "name": "order-entry",
+      "route": "workspace/order/gpt",
+      "width": 320,
+      "theme": "dark",
+      "filename": "after-order-entry-320-dark.png",
+      "pageWidth": 320,
+      "scrollWidth": 320,
+      "h1": {
+        "text": "订单提交",
+        "size": "16px"
+      },
+      "tableColumns": [
+        "客户 / 联系方式",
+        "套餐 / 支付方式本条订单实际登记的产品、套餐与支付方式。",
+        "备注",
+        "提交时间",
+        "操作"
+      ],
+      "visibleRows": 0,
+      "titleHelpOpen": false,
+      "entry": {
+        "clientHeight": 1943,
+        "scrollHeight": 1943,
+        "sideBySide": false
+      },
+      "formMetrics": [
+        {
+          "height": 573,
+          "top": 279,
+          "grid": [
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            },
+            {
+              "class": "commerce-span-all order-account-fields",
+              "gap": "12px 16px"
+            },
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            }
+          ]
+        },
+        {
+          "height": 914,
+          "top": 868,
+          "grid": [
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            },
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            }
+          ]
+        },
+        {
+          "height": 424.375,
+          "top": 1798,
+          "grid": [
+            {
+              "class": "commerce-field-grid",
+              "gap": "12px 16px"
+            }
+          ]
+        }
+      ],
+      "spacing": {
+        "measurements": 2,
+        "findings": []
+      }
+    },
+    {
+      "name": "accounts",
+      "route": "accounts/gpt",
+      "width": 320,
+      "theme": "dark",
+      "filename": "after-accounts-320-dark.png",
+      "pageWidth": 320,
+      "scrollWidth": 320,
+      "h1": {
+        "text": "GPT 账号",
+        "size": "16px"
+      },
+      "tableColumns": [
+        "选择本页",
+        "邮箱类型",
+        "账号 / 邮箱",
+        "账号来源",
+        "注册国家",
+        "账号状态",
+        "使用状态",
+        "注册时间",
+        "录入人",
+        "备注 1",
+        "操作"
+      ],
+      "visibleRows": 1,
+      "titleHelpOpen": false,
+      "entry": null,
+      "formMetrics": [],
+      "spacing": {
+        "measurements": 3,
+        "findings": []
+      }
+    },
+    {
+      "name": "orders",
+      "route": "orders/gpt",
+      "width": 320,
+      "theme": "dark",
+      "filename": "after-orders-320-dark.png",
+      "pageWidth": 320,
+      "scrollWidth": 320,
+      "h1": {
+        "text": "GPT 订单",
+        "size": "16px"
+      },
+      "tableColumns": [
+        "订单编号",
+        "客户",
+        "邮箱账号",
+        "套餐",
+        "支付方式",
+        "代付金额",
+        "售卖金额",
+        "利润 CNY客户净收款减已知净成本。点击金额查看费用明细。",
+        "到期时间",
+        "订阅状态",
+        "操作"
+      ],
+      "visibleRows": 1,
+      "titleHelpOpen": false,
+      "entry": null,
+      "formMetrics": [],
+      "spacing": {
+        "measurements": 2,
+        "findings": []
+      }
+    }
+  ]
+}

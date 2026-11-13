@@ -174,3 +174,9 @@
     min-height: 44px;
   }
 }
+
+.public-mailbox-brand img { border-radius: 8px; object-fit: contain; }
+.public-mailbox-panel h1 { font-size: 20px; font-weight: 600; }
+.public-mailbox-panel h2 { font-size: 16px; font-weight: 600; }
+.public-mailbox-panel { box-shadow: var(--shadow); }
+@media (max-width: 600px) { .public-mailbox-panel h1 { font-size: 16px; } }

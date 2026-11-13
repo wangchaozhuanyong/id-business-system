@@ -178,6 +178,13 @@ function field(label, name, control, required = false, help = '') {
     .replace('class="title-help"', 'class="title-help field-title-help"');
   return `<div class="field"><label for="${name}">${labelHtml}</label>${helpHtml}<div class="field-control">${control}<div class="field-error" id="${name}-error" hidden></div></div></div>`;
 }
+// Split an already formatted business date for scanning; do not parse or change its timezone.
+function tableDate(value) {
+  const text = String(value || '—');
+  const match = /^(\d{4}-\d{2}-\d{2})[ T](.+)$/.exec(text);
+  return match ? `<span class="table-date">${escapeHtml(match[1])}</span><span class="table-time">${escapeHtml(match[2])}</span>` : escapeHtml(text);
+}
+
 function input(name, value = '', attributes = '') {
   return `<input id="${name}" name="${name}" value="${escapeHtml(value)}" ${attributes} />`;
 }
@@ -3568,6 +3575,7 @@ window.IDDesignAPI = {
   openActionMenu,
   options,
   field,
+  tableDate,
   input,
   select,
   header,

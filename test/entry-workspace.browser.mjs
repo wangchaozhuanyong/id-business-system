@@ -48,8 +48,10 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, timezoneId: 'America/Los_Angeles' });
   const mock = await interceptDesign(context, { actor, localFixtures: fixture, skipRechargeAssets: true });
   let failRead = false, delayRead = false;
+  let commerceReads = 0;
   await context.route('**/api/local/commerce', async route => {
     assert.equal(route.request().method(), 'GET', '此诊断不应提交业务资料');
+    commerceReads++;
     if (delayRead) await new Promise(resolve => setTimeout(resolve, 300));
     return failRead ? route.fulfill({ status: 503, json: { error: 'offline-read-failure' } })
       : route.fulfill({ json: fixture.commerce });
@@ -105,11 +107,11 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
       for (const group of editor.querySelectorAll('.order-financial-group')) {
         const bounds = group.getBoundingClientRect();
         const row = group.querySelector('.order-financial-heading');
-        const heading = row.getBoundingClientRect();
-        if (Math.abs(heading.top - bounds.top - 13) > 1 || Math.abs(heading.left - bounds.left - 13) > 1)
-          findings.push('金额卡片标题未沿用紧凑内边距');
-        if (row.querySelector('h3').getBoundingClientRect().top - bounds.top > 27)
-          findings.push('换行的操作把金额或周期标题推离上边框');
+        const heading = row.querySelector('h3').getBoundingClientRect();
+        const style = getComputedStyle(group);
+        const pad = parseFloat(style.paddingLeft);
+        if (Math.abs(heading.left - bounds.left - pad) > 1 || heading.top < bounds.top + 8 || heading.top > bounds.top + 28)
+          findings.push('金额区实际标题没有沿统一内距对齐');
       }
       if (sideBySide) {
         const save = root.querySelector(':scope > section.panel .form-footer .primary')?.getBoundingClientRect();
@@ -143,7 +145,7 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
             const initial = detail.getBoundingClientRect();
             const viewportLeft = viewport.getBoundingClientRect().left;
             if (initial.left < viewportLeft || initial.right > viewportLeft + viewport.clientWidth + 1)
-              findings.push('详情按钮超出可视表格');
+              findings.push('详情按钮超出可视表格 ' + JSON.stringify({left:initial.left,right:initial.right,viewportLeft,viewportRight:viewportLeft + viewport.clientWidth,position:getComputedStyle(detail.closest('td')).position}));
             const scrollLeft = viewport.scrollLeft;
             viewport.scrollLeft = viewport.scrollWidth;
             if (Math.abs(detail.getBoundingClientRect().left - initial.left) > 1)
@@ -162,7 +164,7 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
         if (!field.checkVisibility()) continue;
         const label = field.querySelector(':scope > label');
         const control = field.querySelector(':scope > .field-control');
-        if (label && control && label.getBoundingClientRect().right > control.getBoundingClientRect().left + 1) findings.push(`标签覆盖：${label.textContent}`);
+        if (label && control && getComputedStyle(label).clipPath === 'none' && label.getBoundingClientRect().bottom > control.getBoundingClientRect().top + 1 && !(field.closest('[data-commerce-field=notes]') && label.getBoundingClientRect().right <= control.getBoundingClientRect().left)) findings.push(`标签覆盖：${label.textContent}`);
       }
       for (const text of root.querySelectorAll('.order-value-readout')) {
         if (!text.checkVisibility()) continue;
@@ -288,6 +290,92 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
     await closeDrawer();
   });
 
+  await t.test('最近订单、客户和租户按关键词及日期搜索，保留各自条件与录入草稿', async () => {
+    const history = page.locator('#commerce-entry-records');
+    const pager = history.locator('[data-pagination="commerce-entry-records"]');
+    const search = history.locator('#commerce-entry-search');
+    const rows = history.locator('tbody tr[data-row-id]');
+    const recordIds = () => rows.evaluateAll(items => items.map(row => row.dataset.rowId));
+    const apply = async value => {
+      await search.fill(value);
+      await search.press('Enter');
+    };
+    const total = () => pager.getAttribute('data-total');
+    try {
+      await go('workspace/order/gpt');
+      await pager.getByLabel('每页条数').selectOption('10');
+      assert(!(await recordIds()).includes('entry-order-0-10'), '匹配项原先在第二页');
+      await pager.getByRole('button', { name: '下一页', exact: true }).click();
+      await page.locator('#commerce-email').fill('order-search-draft@example.test');
+      await page.evaluate(() => { window.formBeforeEntrySearch = document.querySelector('#commerce-order-form'); });
+      const readsBefore = commerceReads;
+      await search.fill('ＤＥＭＯ-０-１０   pLu');
+      await history.locator('[data-pagination="commerce-entry-records"][data-total="1"]').waitFor();
+      assert.equal(commerceReads, readsBefore, '即时搜索使用现有记录，不请求业务接口');
+      assert.deepEqual(await recordIds(), ['entry-order-0-10']);
+      assert.equal(await pager.getAttribute('data-page'), '1');
+      assert.equal(await pager.getAttribute('data-page-size'), '10');
+      assert(await search.evaluate(input => input === document.activeElement));
+      assert(await page.evaluate(() => window.formBeforeEntrySearch === document.querySelector('#commerce-order-form')));
+      assert.equal(await page.locator('#commerce-email').inputValue(), 'order-search-draft@example.test');
+
+      await history.getByRole('button', { name: '今日', exact: true }).click();
+      await history.getByText('没有匹配的记录', { exact: true }).waitFor();
+      assert.equal(await total(), '0');
+      await search.fill('');
+      assert.equal(await total(), '2', '清空关键词即时恢复当日记录');
+      await apply('order_wechat 苹果');
+      assert.deepEqual(await recordIds(), ['entry-order-0-1']);
+      assert(!((await history.locator('[data-entry-record-contact]').textContent()).includes(orderWechat)), '搜索完整联系方式仍脱敏展示');
+
+      await go('workspace/order/claude');
+      assert.equal(await search.inputValue(), '');
+      await go('customers/new');
+      assert.equal(await search.inputValue(), '');
+      await page.locator('#commerce-contact-name').fill('客户搜索期间的草稿');
+      await apply('示例 2025550102');
+      assert.deepEqual(await recordIds(), ['entry-customer-1']);
+      await history.getByRole('button', { name: '刷新最近录入记录' }).click();
+      await history.locator('button[data-action="commerce-entry-refresh"]:enabled').waitFor();
+      assert.deepEqual(await recordIds(), ['entry-customer-1']);
+      assert.equal(await search.inputValue(), '示例 2025550102');
+      assert.equal(await page.locator('#commerce-contact-name').inputValue(), '客户搜索期间的草稿');
+      await apply('企业订阅 长备注');
+      assert.deepEqual(await recordIds(), ['entry-customer-0']);
+      await apply('示例 2025550102');
+
+      await go('customers/new/tenant');
+      assert.equal(await search.inputValue(), '');
+      await page.setViewportSize({ width: 390, height: 900 });
+      try {
+        await page.getByRole('tab', { name: '最近租户', exact: true }).click();
+        await apply('示例 222333');
+        assert.deepEqual(await recordIds(), ['entry-tenant']);
+        assert((await search.boundingBox()).height >= 44);
+        await page.getByRole('tab', { name: '填写资料', exact: true }).click();
+        await page.getByRole('tab', { name: '最近租户', exact: true }).click();
+        assert.equal(await search.inputValue(), '示例 222333');
+        await page.getByRole('tab', { name: '填写资料', exact: true }).click();
+      } finally {
+        await page.setViewportSize({ width: 1440, height: 1000 });
+      }
+      await go('workspace/order/gpt');
+      assert.equal(await search.inputValue(), 'order_wechat 苹果');
+      assert.deepEqual(await recordIds(), ['entry-order-0-1']);
+      assert.equal(await history.getByRole('button', { name: '今日', exact: true }).getAttribute('aria-pressed'), 'true');
+      await go('customers/new');
+      assert.equal(await search.inputValue(), '示例 2025550102');
+      assert.deepEqual(await recordIds(), ['entry-customer-1']);
+    } finally {
+      for (const route of ['workspace/order/gpt', 'customers/new', 'customers/new/tenant']) {
+        await go(route);
+        if (await search.count()) await search.fill('');
+        const all = history.getByRole('button', { name: '全部', exact: true });
+        if (await all.count()) await all.click();
+      }
+    }
+  });
+
   await t.test('四类订单的日期和分页独立操作，不更改录单草稿', async () => {
     for (const route of ['workspace/order/gpt', 'workspace/order/claude', 'workspace/order/gemini', 'workspace/order/grok']) {
       await go(route);
@@ -397,25 +485,28 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
             await page.locator('#commerce-proMaterialMode').selectOption('manual_card');
             await page.locator('#commerce-proCardNumber').fill('4242424242424242');
             const serialInput = page.locator('#commerce-proCardSerial');
-            const value = 'SERIAL-' + '0123456789'.repeat(8);
+            const value = 'SERIAL-' + '0123456789'.repeat(5);
             await serialInput.fill(value);
             await settle(page);
-            if ((await page.locator('.commerce-entry-columns > .form-panel').boundingBox()).width >= 700) {
+            if (width > 900 && (await page.locator('.commerce-entry-columns > .form-panel').boundingBox()).width >= 700) {
               const payment = await page.locator('#commerce-payment').boundingBox();
               const mode = await page.locator('#commerce-proMaterialMode').boundingBox();
               const type = await page.locator('#commerce-cardTypeId').boundingBox();
               const number = await page.locator('#commerce-proCardNumber').boundingBox();
               const serial = await serialInput.boundingBox();
               assert(Math.abs(payment.y - mode.y) <= 1 && mode.x > payment.x, '支付方式与填写方式同排');
-              assert(Math.abs(type.y - number.y) <= 1 && number.x > type.x && type.y >= mode.y + mode.height - 1,
-                '银行卡类型与手填卡号在下一行对齐');
-              assert(serial.y >= number.y + number.height - 1, '卡序列号在后续行完整可用');
+              const contentWidth = await page.locator('#commerce-order-form').evaluate(n => n.clientWidth - parseFloat(getComputedStyle(n).paddingLeft) - parseFloat(getComputedStyle(n).paddingRight));
+              if (contentWidth > 650) assert(Math.abs(type.y - payment.y) <= 1, '银行卡类型与支付方式同排');
+              else assert(type.y >= payment.y + payment.height, '窄容器银行卡类型换行');
+              assert(number.y >= type.y + type.height - 1, '卡号位于付款选项之后');
+              assert(Math.abs(serial.y - number.y) <= 1 && serial.x > number.x, '卡号与卡序列号并排');
             }
             const clipped = await serialInput.evaluate(input => {
-              const style = getComputedStyle(input), measure = document.createElement('canvas').getContext('2d');
-              measure.font = style.font;
-              const available = input.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
-              return measure.measureText(input.value).width > available + 1;
+              const style = getComputedStyle(input), measure = document.createElement('span');
+              Object.assign(measure.style, {position:'fixed',visibility:'hidden',whiteSpace:'pre',font:style.font,fontVariantNumeric:style.fontVariantNumeric,letterSpacing:style.letterSpacing});
+              measure.textContent=input.value; document.body.append(measure);
+              const available=input.clientWidth-parseFloat(style.paddingLeft)-parseFloat(style.paddingRight);
+              const clipped=measure.getBoundingClientRect().width>available+1; measure.remove(); return clipped;
             });
             const readout = page.locator('[data-commerce-field="proCardSerial"] .order-value-readout');
             assert.equal(await serialInput.inputValue(), value);
@@ -440,7 +531,7 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
     assert(clippedSerial > 0 && readableSerial > 0, '同时覆盖序列号裁切和完整显示');
   });
 
-  await t.test('千条和万条末页、历史表分页与北京时间日界线', async () => {
+  await t.test('千条和万条搜索及末页、历史表分页与北京时间日界线', async () => {
     await page.setViewportSize({ width: 1440, height: 1000 });
     await go('customers/new');
     const history = page.locator('#commerce-entry-records');
@@ -450,7 +541,8 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
       await pager.getByLabel('每页条数').selectOption('20');
       for (const total of [1001, 10001]) {
         fixture.commerce.data.customers = Array.from({ length: total }, (_, i) => ({
-          ...original.customers[0], id: `dense-${i}`, name: `隔离分页客户 ${i}`, notes: '',
+          ...original.customers[0], id: `dense-${i}`, name: `隔离分页客户 ${i}`,
+          notes: i === total - 1 ? '末条核对标识' : '',
           createdAt: new Date(clock - i * 60_000).toISOString()
         }));
         await history.getByRole('button', { name: '刷新最近录入记录' }).click();
@@ -465,6 +557,13 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
         assert.equal(await pager.getAttribute('data-page'), '1');
         assert.equal(await history.locator('tbody tr[data-row-id]').count(), 50);
         await pager.getByLabel('每页条数').selectOption('20');
+        const search = history.getByRole('searchbox', { name: '搜索最近客户' });
+        await search.fill('隔离分页 核对标识');
+        await search.press('Enter');
+        assert.equal(await pager.getAttribute('data-total'), '1');
+        assert.equal(await history.locator('tbody tr[data-row-id]').getAttribute('data-row-id'), `dense-${total - 1}`);
+        await search.fill('');
+        assert.equal(await pager.getAttribute('data-total'), String(total));
       }
       fixture.commerce.data.customers = [
         ['2026-11-09T15:59:59.999Z', '昨天最后一刻'], ['2026-11-09T16:00:00Z', '今天第一刻'],

@@ -2226,3 +2226,15 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
     grid-template-columns: minmax(74px, 32%) minmax(0, 1fr);
   }
 }
+
+/* Visual v2: gateway-owned presentation only; executor markup and behaviour stay pinned. */
+:root { --input-bg: var(--surface-soft); }
+body[data-recharge-view] :is(input:not([type='checkbox']):not([type='radio']):not([type='range']), select, textarea) {
+  background-color: var(--input-bg); border: 1px solid var(--border); border-bottom-color: var(--control-border); border-radius: 8px;
+  color: var(--text-main); font-variant-numeric: tabular-nums; box-shadow: none;
+}
+body[data-recharge-view] :is(input, select, textarea):focus {
+  outline: none; background-color: var(--card-bg); border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 14%, transparent);
+}
+body[data-recharge-view] :is(.card, .panel) { box-shadow: var(--shadow); }
