@@ -859,83 +859,105 @@
       A.button('关闭', 'drawer-close')
     );
   }
-  const fundingStates = { unused: '未使用', reserved: '待付款占用', used: '已使用', conflict: '待核对', unrecorded: '未登记苹果 ID' };
+  const fundingStates = { unused: '未使用', reserved: '待付款占用', used: '已使用', conflict: '待核对' };
+  const paymentStates = { recorded: '已核实', review: '待核对', missing: '未登记付款 ID' };
+  const subscriptionLabels = { active: '有效期内', upcoming: '即将到期', expired: '已过期',
+    opened: '已开通', scheduled: '未开始', ended: '已终止' };
   const appleHealthLabel = asset => ({ dead: '死号', unlocking: '解封中' })[asset?.health] || asset?.status || '待核对';
   const appleHealthTag = asset => A.tag(appleHealthLabel(asset), asset?.health === 'dead' ? 'danger' :
     appleHealthLabel(asset) === '正常' ? 'success' : 'warning');
   const healthAction = id => A.button('变更账号状态', 'inventory-apple-health', '', '', `data-id="${E(id)}"`);
-  function fundingRows() {
-    const commerce = A.modules.commerce?.appleFundingData?.(), rules = window.IDAppleFunding;
+  function fundingSnapshot(includeSubscriptions = false) {
+    const commerce = A.modules.commerce?.appleFundingData?.({ includeSubscriptions });
+    const rules = window.IDAppleFunding;
     if (!commerce?.ready || !rules) return null;
-    const index = rules.appleFundingIndex(commerce.orders, { allocations: [...allocations.values()], movements });
-    const related = rules.appleRelatedOrders(commerce.orders, { allocations: [...allocations.values()], movements });
-    const history = new Map();
-    for (const order of commerce.orders) {
-      if (order.payment !== '苹果内购' || !order.appleIdId) continue;
-      if (!history.has(order.appleIdId)) history.set(order.appleIdId, []);
-      history.get(order.appleIdId).push(order);
+    const ledger = { allocations: [...allocations.values()], movements };
+    return { commerce, rules, index: rules.appleFundingIndex(commerce.orders, ledger),
+      wallets: includeSubscriptions ? new Map(list().map(wallet => [wallet.id, wallet])) : null,
+      related: includeSubscriptions ? null : rules.appleRelatedOrders(commerce.orders, ledger) };
+  }
+  function walletUsage(wallet, { commerce, rules, index, related }) {
+    const funding = index.byWallet.get(wallet.id);
+    const binding = funding?.bindings[0];
+    const conflict = funding?.used && (!binding || funding.bindings.length !== 1 ||
+      rules.appleBinding(index, binding.order).conflict);
+    const links = (related.get(wallet.id) || []).map(link => ({ ...link,
+      customer: link.order && !link.historical ? commerce.customer(link.order)?.name || '未登记客户' : '待核对',
+      status: link.historical ? '历史余额记录 · 待核对' : link.order.cancelled ?
+        (link.order.paidConfirmed || link.order.appleFunding?.bound ? '已付款 · 已撤单' : '未付款 · 已撤单') :
+        link.order.paidConfirmed || link.order.appleFunding?.bound ?
+          (link.order.subscriptionEnded ? '已付款 · 已终止' : '已付款') : '待付款'
+    }));
+    const accounts = [...new Map(links.flatMap(link => link.accounts.map(account => [
+      JSON.stringify([link.product.startsWith('Claude') ? 'Claude' : link.product, account.trim().toLowerCase()]), account
+    ]))).values()];
+    return { links, accounts, used: Boolean(funding?.used),
+      state: conflict ? 'conflict' : funding?.pending.length ? 'reserved' : funding?.used ? 'used' : 'unused' };
+  }
+  function recordedAppleEmail(order) {
+    return window.IDOrderOpening.validOrderEmail(order.paymentId) ? order.paymentId.trim() : '';
+  }
+  function paymentAppleId(order, wallet) {
+    return wallet?.email || recordedAppleEmail(order) ||
+      (order.appleIdId ? '原付款 ID 待核对' : paymentStates.missing);
+  }
+  function subscriptionOrderTime(row) {
+    return [row.end, row.start, window.IDOrderOpening.subscriptionTime(row.order.createdAt)]
+      .find(Number.isFinite) ?? -Infinity;
+  }
+  function laterSubscription(a, b) {
+    if (!b) return true;
+    const aTime = subscriptionOrderTime(a), bTime = subscriptionOrderTime(b);
+    if (aTime !== bTime) return aTime > bTime;
+    const aStart = a.start || 0, bStart = b.start || 0;
+    return aStart === bStart ? a.order.id > b.order.id : aStart > bStart;
+  }
+  function subscriptionRows(snapshot = fundingSnapshot(true)) {
+    if (!snapshot || (localData && A.modules.inventory.getLocalInventoryState() !== 'ready')) return null;
+    const { commerce, rules, index, wallets: byWallet } = snapshot;
+    const latest = new Map(), groups = new Map();
+    const { subscriptionDuration } = window.IDOrderOpening;
+    for (const row of commerce.subscriptions) {
+      const { key, order } = row;
+      if (!order.cancelled && !['cancelled', '已撤单'].includes(order.status) &&
+          laterSubscription(row, latest.get(key))) latest.set(key, row);
+      if (order.payment !== '苹果内购') continue;
+      const group = groups.get(key) || { current: row, history: [] };
+      group.history.push(row);
+      // Keep the period the customer is using when a future cycle is already saved.
+      const active = row.status === 'active', previousActive = group.current.status === 'active';
+      if ((active && !previousActive) || (active === previousActive && laterSubscription(row, group.current))) group.current = row;
+      groups.set(key, group);
     }
-    const rows = list().map(wallet => {
-      const state = index.byWallet.get(wallet.id);
-      const orders = (history.get(wallet.id) || []).sort((a, b) =>
-        String(b.expiry || b.createdAt || '').localeCompare(String(a.expiry || a.createdAt || '')));
-      const binding = state?.bindings[0];
-      const conflict = state?.used && (!binding || state.bindings.length !== 1 ||
-        rules.appleBinding(index, binding.order).conflict);
-      const latest = binding && (orders.find(order => order.paidConfirmed &&
-        binding.targets.has(rules.appleTarget(order)) && order.customerId === binding.customerId &&
-        !order.cancelled && !order.subscriptionEnded) || binding.order);
-      const order = latest || state?.pending[0];
-      const contact = order && commerce.customer(order);
-      const expiry = order?.expiry || '';
-      const end = window.IDOrderOpening.subscriptionTime(expiry);
-      const distance = end - commerce.now;
-      const duration = order && !order.cancelled && !order.subscriptionEnded
-        ? window.IDOrderOpening.subscriptionDuration(end, commerce.now) : '';
-      const estimate = order && rules.applePrice(commerce.settings, order.product, order.plan, wallet.appStoreRegion);
-      const links = (related.get(wallet.id) || []).map(link => ({ ...link,
-        customer: link.order && !link.historical ? commerce.customer(link.order)?.name || '未登记客户' : '待核对',
-        status: link.historical ? '历史余额记录 · 待核对' : link.order.cancelled ?
-          (link.order.paidConfirmed || link.order.appleFunding?.bound ? '已付款 · 已撤单' : '未付款 · 已撤单') :
-          link.order.paidConfirmed || link.order.appleFunding?.bound ?
-            (link.order.subscriptionEnded ? '已付款 · 已终止' : '已付款') : '待付款'
-      }));
-      const accounts = [...new Map(links.flatMap(link => link.accounts.map(account => [
-        JSON.stringify([link.product.startsWith('Claude') ? 'Claude' : link.product, account.trim().toLowerCase()]), account
-      ]))).values()];
-      return { id: wallet.id, wallet, orders, order, links, accounts, name: contact?.name || '',
-        contact: contact ? ['wechat', 'customerPhone', 'whatsapp', 'telegram', 'qq'].map(key => contact[key]).filter(Boolean).join(' · ') : '',
-        account: order?.email || order?.xHandle || '', apple: wallet.email,
-        plan: order && [order.product, order.plan].filter(Boolean).join(' · '),
-        state: conflict ? 'conflict' : state?.pending.length ? 'reserved' : state?.used ? 'used' : 'unused', used: Boolean(state?.used),
-        subscription: order?.subscriptionEnded || order?.cancelled ? '已终止' :
-          order?.paidConfirmed && ['pending', 'failed'].includes(order.entitlementStatus) ? '订阅待核对' : duration &&
-          (distance <= 0 ? '已过期' : distance <= commerce.renewalWarningHours * 3600000 ? '即将到期' : '有效期内'),
-        expiry: expiry.replace('T', ' '), duration, end,
-        expected: order ? estimate ? estimate + ' USD' : '待核算' : '',
-        canRenew: Boolean(latest && !conflict && !state?.pending.length && !latest.cancelled && !latest.subscriptionEnded &&
-          appleHealthLabel(wallet) === '正常')
+    return [...groups.values()].map(({ current: row, history }) => {
+      const { order, end, key, status } = row;
+      const wallet = byWallet.get(order.appleIdId);
+      const funding = index.byWallet.get(order.appleIdId);
+      const bound = Boolean(wallet && rules.appleBinding(index, order).id === wallet.id);
+      const hasPaymentId = Boolean(order.appleIdId || recordedAppleEmail(order));
+      const payment = bound ? 'recorded' : hasPaymentId ? 'review' : 'missing';
+      const contact = commerce.customer(order);
+      const upcoming = status === 'active' && end - commerce.now <= commerce.renewalWarningHours * 3_600_000;
+      const estimate = rules.applePrice(commerce.settings, order.product, order.plan, wallet?.appStoreRegion || order.appleStoreRegion);
+      const current = row === latest.get(key) && ['active', 'opened', 'expired'].includes(status);
+      const hasPeriod = end > row.start;
+      const linkedRenewal = bound && (hasPeriod || order.paidConfirmed) && ready() &&
+        !funding?.pending.length && appleHealthLabel(wallet) === '正常';
+      const externalRenewal = payment === 'missing' && hasPeriod;
+      const historySearch = history.flatMap(({ order: prior }) =>
+        [prior.orderNo, byWallet.get(prior.appleIdId)?.email, recordedAppleEmail(prior)]);
+      return { id: order.id, order, history, historySearch, wallet, payment, status: upcoming ? 'upcoming' : status, end,
+        account: row.account || order.orderNo || '订阅账号未登记',
+        apple: paymentAppleId(order, wallet),
+        name: contact?.name || '',
+        contact: ['wechat', 'customerPhone', 'whatsapp', 'telegram', 'qq'].map(field => contact?.[field]).filter(Boolean).join(' · '),
+        plan: [order.product, order.plan].filter(Boolean).join(' · '),
+        expiry: row.expiry,
+        duration: ['active', 'expired'].includes(status) ? subscriptionDuration(end, commerce.now) : '',
+        expected: current ? (estimate ? estimate + ' USD' : '待核算') : '',
+        canRenew: Boolean(current && row.account && order.customerId && (linkedRenewal || externalRenewal))
       };
     });
-    const managedIds = new Set(rows.map(row => row.id));
-    const external = (commerce.currentOrders || []).filter(order =>
-      order.payment === '苹果内购' && !managedIds.has(order.appleIdId));
-    for (const order of external) {
-      const contact = commerce.customer(order);
-      const expiry = String(order.expiry || '').replace('T', ' ');
-      const end = /^\d{4}-\d\d-\d\d \d\d:\d\d$/.test(expiry) ?
-        Date.parse(expiry.replace(' ', 'T') + '+08:00') : Date.parse(order.expiry);
-      const estimate = rules.applePrice(commerce.settings, order.product, order.plan, order.appleStoreRegion);
-      rows.push({
-        id: 'unrecorded:' + order.id, order, state: 'unrecorded', apple: '未登记苹果 ID',
-        name: contact?.name || '', contact: contact?.wechat || '', account: order.email || order.xHandle || order.orderNo,
-        plan: [order.product, order.plan].filter(Boolean).join(' · '), expiry, end,
-        subscription: !Number.isFinite(end) ? '' : end <= commerce.now ? '已过期' :
-          end <= commerce.now + commerce.renewalWarningHours * 3_600_000 ? '即将到期' : '有效期内',
-        expected: estimate ? estimate + ' USD' : '待核算', canRenew: Boolean(order.customerId)
-      });
-    }
-    return rows;
   }
   const managementView = () => {
     if (!S.drafts.has(managementRoute)) S.drafts.set(managementRoute, { query: '', state: '', plan: '', sort: 'funding', page: 1, pageSize: window.IDPagination.defaultPageSize });
@@ -962,59 +984,64 @@
     return managementLoad;
   }
   function renderManagement() {
-    const view = managementView(), all = fundingRows();
-    const title = A.header('订阅管理 · 按苹果 ID', '查看内购订阅使用的苹果 ID、余额与到期时间。',
+    const view = managementView(), all = subscriptionRows();
+    const title = A.header('订阅管理 · 按苹果 ID',
+      '查看用 Apple 内购开通的订阅账号、到期时间和付款 ID。查看全部苹果 ID 库存，请到「账号管理 → 苹果 ID 余额」。',
       A.button('列设置', 'column-settings', '', 'columns', 'data-table-id="苹果 ID 管理"') +
       A.button('刷新', 'apple-management-refresh', '', 'return'));
     const available = Boolean(all && (ready() || hasLoaded));
     const plans = [...new Set((all || []).map(row => row.plan).filter(Boolean))].sort();
     const query = view.query.trim().toLowerCase();
-    const matching = (all || []).filter(row => (!view.state || row.state === view.state) && (!view.plan || row.plan === view.plan) &&
-      (!query || [row.name, row.contact, row.account, row.apple, row.order?.orderNo].some(value =>
-        String(value || '').toLowerCase().includes(query))));
+    const inScope = (row, scope) => !scope || (scope === 'missing' ? row.payment === 'missing' : row.status === scope);
+    const matching = (all || []).filter(row => inScope(row, view.state) && (!view.plan || row.plan === view.plan) &&
+      (!query || [row.name, row.contact, row.account, row.apple, ...row.historySearch]
+        .some(value => String(value || '').toLowerCase().includes(query))));
     const rows = view.sort === 'funding'
       ? window.IDListOrder.sortByFundingDeadline(matching, row => row.end,
-        row => ['即将到期', '有效期内'].includes(row.subscription))
+        row => ['upcoming', 'active'].includes(row.status))
       : window.IDListOrder.sortByRecordTime(matching, row => row.end, view.sort);
     if (available) view.page = Math.min(view.page, Math.max(1, Math.ceil(rows.length / view.pageSize)));
     const start = (view.page - 1) * view.pageSize;
-    const choices = [['', '全部状态'], ...Object.entries(fundingStates)];
+    const choices = [['', '全部内购订阅'], ...Object.entries(subscriptionLabels), ['missing', paymentStates.missing]];
     const columns = [
-      { id: 'apple', label: '苹果 ID 账号', fixed: true, long: true, class: 'apple-management-account' },
-      { id: 'health', label: '账号状态', render: row => row.wallet ? appleHealthTag(row.wallet) : '待核对' },
-      { id: 'state', label: '使用状态', class: 'apple-management-status', render: row =>
-        A.tag(fundingStates[row.state], { used: 'success', reserved: 'warning', conflict: 'danger' }[row.state] || '') },
+      { id: 'account', label: '订阅账号', fixed: true, long: true, class: 'apple-management-account' },
+      { id: 'apple', label: '付款苹果 ID', fixed: true, long: true, class: 'apple-management-account' },
       { id: 'name', label: '客户姓名', long: true, class: 'apple-management-customer', render: row => E(row.name || '—') },
-      { id: 'contact', label: '联系方式', long: true, class: 'apple-management-contact', render: row => E(row.contact || '—') },
-      { id: 'account', label: '订阅账号', long: true, class: 'apple-management-account', render: row => E(row.account || '—') },
       { id: 'plan', label: '订阅套餐', long: true, class: 'apple-management-plan', render: row => E(row.plan || '—') },
-      { id: 'subscription', label: '订阅状态', class: 'apple-management-status', render: row => row.subscription ?
-        A.tag(row.subscription, { '有效期内': 'success', '即将到期': 'warning', '订阅待核对': 'warning', '已过期': 'danger' }[row.subscription] || '') : '—' },
+      { id: 'subscription', label: '订阅状态', class: 'apple-management-status', render: row =>
+        A.tag(subscriptionLabels[row.status], { active: 'success', upcoming: 'warning', expired: 'danger' }[row.status] || '') },
       { id: 'expiry', label: '到期时间', render: row => E(row.expiry || '—') },
       { id: 'duration', label: '到期时长', render: row => E(row.duration || '—') },
+      { id: 'contact', label: '联系方式', long: true, class: 'apple-management-contact', render: row => E(row.contact || '—') },
+      { id: 'health', label: '付款 ID 状态', render: row => row.wallet ? appleHealthTag(row.wallet) : '—' },
+      { id: 'state', label: '付款记录', class: 'apple-management-status', render: row => row.payment === 'missing'
+        ? '—' : A.tag(paymentStates[row.payment], row.payment === 'recorded' ? 'success' : 'warning') },
       { id: 'balance', label: '余额（USD）', mobileSummary: true,
-        render: row => E(row.wallet?.balance != null && ready() ? shown(row.wallet.balance) : '未读取') },
+        render: row => E(row.wallet ? ready() || hasLoaded ? shown(row.wallet.balance) : '未读取' : '—') },
       { id: 'expected', label: '预计金额', class: 'apple-management-amount', render: row => E(row.expected || '—') },
       { id: 'actions', label: '操作', action: true, class: 'apple-management-actions', render: row =>
         `<div class="action-links">${A.textAction('更多操作', 'apple-management-more', `data-id="${E(row.id)}"`, '', 'chevron')}</div>` }
     ];
-    const count = state => available ? (state ? all.filter(row => row.state === state).length : all.length) : '—';
-    const statusTabs = `<div class="tabs" role="tablist" aria-label="苹果 ID 使用状态">${choices.map(([state, label]) => {
+    const count = state => available ? all.filter(row => inScope(row, state)).length : '—';
+    const statusTabs = `<div class="tabs" role="tablist" aria-label="苹果内购订阅状态">${choices.map(([state, label]) => {
       const id = 'apple-management-state-' + (state || 'all');
       return `<button type="button" id="${id}" class="tab" role="tab" aria-selected="${view.state === state}"
         aria-label="${label}" aria-describedby="${id}-count" data-action="apple-management-state" data-id="${state}">${label}<span class="tab-count" id="${id}-count">${count(state)}</span></button>`;
     }).join('')}</div>`;
     const overview = A.summary([
-      ['全部苹果 ID', available ? all.filter(row => row.wallet).length : '—', '个', true],
-      ['未使用', count('unused'), '个'], ['已使用', count('used'), '个'], ['未登记付款 ID', count('unrecorded'), '笔']
+      ['内购订阅', count(''), '条', true], ['即将到期', count('upcoming'), '条'],
+      ['已过期', count('expired'), '条'], [paymentStates.missing, count('missing'), '条']
     ]);
-    const emptyState = available ? { title: '暂无符合条件的记录', description: '可调整搜索或筛选条件。' } : {
-      title: managementError || loadState === 'error' ? '苹果 ID 管理读取失败' : '正在读取苹果 ID 管理',
-      description: managementError || loadState === 'error' ? '可点击刷新重试。' : ''
-    };
-    return title + (A.modules.commerce?.subscriptionCenterNav?.('apple-ids', overview) || overview) + (managementError && available ? '<p class="inline-notice warning" role="status">读取失败，已保留上次成功读取的资料。</p>' : '') +
+    const readFailed = managementError || loadState === 'error';
+    let emptyState;
+    if (available) emptyState = all.length
+      ? { title: '暂无符合条件的记录', description: '可调整搜索或筛选条件。' }
+      : { title: '暂无苹果内购订阅', description: '已开通的苹果内购订阅会显示在这里。' };
+    else emptyState = readFailed ? { title: '苹果内购订阅读取失败', description: '可点击刷新重试。' }
+      : { title: '正在读取苹果内购订阅', description: '' };
+    return title + (A.modules.commerce?.subscriptionCenterNav?.('apple-ids', overview) || overview) + (readFailed && available ? '<p class="inline-notice warning" role="status">读取失败，已保留上次成功读取的资料。</p>' : '') +
       `<section class="panel apple-management-list" data-pagination-table>${statusTabs}<div class="toolbar"><div class="toolbar-left"><div class="search-field">
-      ${A.icon('search')}<input data-auto-search id="apple-management-search" aria-label="搜索苹果 ID 使用记录" placeholder="搜索客户、账号或订单" value="${E(view.query)}" /></div>
+      ${A.icon('search')}<input data-auto-search id="apple-management-search" aria-label="搜索苹果内购订阅" placeholder="搜索订阅账号、付款 ID、客户或订单" value="${E(view.query)}" /></div>
       <select id="apple-management-plan" aria-label="订阅套餐">${A.options([['', '全部套餐'], ...plans], view.plan)}</select>
       <select id="apple-management-sort" aria-label="到期排序">${A.options([['funding', '待续费优先'], ['asc', '到期时间升序'], ['desc', '到期时间降序']], view.sort)}</select>
       </div><div class="toolbar-right" data-page-actions></div></div>
@@ -1029,25 +1056,38 @@
   function updateLinkedAccounts() {
     const panel = document.querySelector?.('#drawer[open] [data-apple-linked-id]');
     if (!panel) return;
-    const row = fundingRows()?.find(item => item.id === panel.dataset.appleLinkedId);
+    const id = panel.dataset.appleLinkedId, subscription = panel.hasAttribute('data-apple-linked-subscription');
+    const snapshot = fundingSnapshot(subscription);
+    const wallet = subscription ? null : get(id);
+    const row = subscription ? subscriptionRows(snapshot)?.find(item => item.history.some(record => record.order.id === id))
+      : snapshot && wallet ? { apple: wallet.email, ...walletUsage(wallet, snapshot) } : null;
     const result = $('[data-apple-linked-results]', panel), status = $('[data-apple-linked-status]', panel);
     const error = managementError || loadState === 'error';
     status.innerHTML = error ? '<p class="inline-notice warning" role="status">关联资料读取失败。已读取的记录保留，可点击刷新重试。</p>' : '';
     if (!row) {
       result.innerHTML = A.empty(error ? '关联账号读取失败' : managementLoad || loading || !ready() ||
-        !A.modules.commerce?.appleFundingData?.()?.ready ? '正在读取关联账号' : '未能找到此苹果 ID',
+        !snapshot ? '正在读取关联账号' : subscription ? '未能找到此订阅' : '未能找到此苹果 ID',
         error ? '请点击刷新重试。' : '');
       return;
     }
-    $('[data-apple-linked-identity]', panel).innerHTML = property('苹果 ID', row.apple);
-    const view = linkedView(row.id), query = view.query.trim().toLowerCase();
-    const links = row.links.filter(link => !query ||
-      [link.account, link.customer, link.product, link.plan, link.orderNo].some(value => String(value).toLowerCase().includes(query)));
+    $('[data-apple-linked-identity]', panel).innerHTML = property(subscription ? '付款苹果 ID' : '苹果 ID', row.apple);
+    const view = linkedView(id), query = view.query.trim().toLowerCase();
+    const history = subscription ? window.IDListOrder.sortByRecordTime(row.history.map(record => ({
+      id: record.order.id, order: record.order, orderId: record.order.id, orderNo: record.order.orderNo || record.order.id,
+      account: record.account, customer: snapshot.commerce.customer(record.order)?.name || '未登记客户',
+      apple: paymentAppleId(record.order, snapshot.wallets.get(record.order.appleIdId)),
+      product: record.order.product, plan: record.order.plan, expiry: record.expiry,
+      status: subscriptionLabels[record.status]
+    })), link => [link.expiry, link.order.start, link.order.createdAt]) : row.links;
+    const links = history.filter(link => !query ||
+      [link.account, link.customer, link.product, link.plan, link.orderNo, link.apple]
+        .some(value => String(value || '').toLowerCase().includes(query)));
     view.page = Math.min(view.page, Math.max(1, Math.ceil(links.length / view.pageSize)));
     const start = (view.page - 1) * view.pageSize;
     const columns = [
       { id: 'account', label: '关联账号', render: link => E(link.account || '未登记账号 · 待核对') },
       { id: 'customer', label: '客户' },
+      ...(subscription ? [{ id: 'apple', label: '付款苹果 ID' }] : []),
       { id: 'product', label: '产品 / 套餐', render: link => E([link.product, link.plan].filter(Boolean).join(' · ') || '待核对') },
       { id: 'orderNo', label: '订单编号' },
       { id: 'status', label: '记录状态' },
@@ -1055,9 +1095,10 @@
       { id: 'actions', label: '操作', action: true, render: link => link.order ?
         A.textAction('查看订单', 'apple-management-order', `data-id="${E(link.orderId)}"`) : '原订单缺失' }
     ];
-    result.innerHTML = `<div class="property-list">${property('使用状态', fundingStates[row.state])}${property('关联账号',
+    result.innerHTML = (subscription ? `<div class="property-list">${property('订阅账号', row.account)}${property('关联订单', history.length + ' 条')}</div>`
+      : `<div class="property-list">${property('使用状态', fundingStates[row.state])}${property('关联账号',
       row.accounts.length ? row.accounts.length + ' 个' : row.links.length || row.state !== 'unused' ? '待核对' : '暂无关联')}
-      ${property('关联记录', row.links.length + ' 条')}</div>` +
+      ${property('关联记录', row.links.length + ' 条')}</div>`) +
       (row.state === 'conflict' ? '<p class="inline-notice warning" role="status">使用关联待核对，以下保留全部可追溯记录。</p>' : '') +
       (links.length ? fundingTable(columns, links.slice(start, start + view.pageSize), '苹果 ID 关联账号记录') :
         A.empty(query ? '没有匹配的关联记录' : row.state === 'unused' ? '暂无关联账号' : '关联账号资料缺失',
@@ -1075,18 +1116,20 @@
       if (panel.isConnected && sourceRoute === S.route && sourceActor === localData?.actor?.()?.id) updateLinkedAccounts();
     } finally { feedback.finish(); }
   }
-  function openLinkedAccounts(id) {
-    const wallet = get(id), view = linkedView(id);
-    A.openDrawer('苹果 ID 关联账号', '按原订单与余额使用记录查询。到期、退款或撤单仍保留历史关联；待付款和待核对记录单独标明。',
-      `<section class="design-async-region" data-apple-linked-id="${E(id)}"><div class="property-list" data-apple-linked-identity>${property('苹果 ID', wallet?.email || '读取中')}</div>
+  function openLinkedAccounts(id, subscription) {
+    const wallet = subscription ? subscription.wallet : get(id), view = linkedView(id);
+    A.openDrawer(subscription ? '订阅关联订单' : '苹果 ID 关联账号',
+      subscription ? '查看这个订阅历次开通和续费时登记的付款 ID。' :
+        '按原订单与余额使用记录查询。到期、退款或撤单仍保留历史关联；待付款和待核对记录单独标明。',
+      `<section class="design-async-region" data-apple-linked-id="${E(id)}"${subscription ? ' data-apple-linked-subscription' : ''}><div class="property-list" data-apple-linked-identity>${property(subscription ? '付款苹果 ID' : '苹果 ID', subscription?.apple || wallet?.email || '读取中')}</div>
       <div class="toolbar"><div class="toolbar-left"><div class="search-field">${A.icon('search')}
-      <input data-auto-search id="apple-linked-search" aria-label="搜索关联账号记录" placeholder="搜索账号、客户或订单" value="${E(view.query)}" /></div></div>
+      <input data-auto-search id="apple-linked-search" aria-label="搜索关联账号记录" placeholder="${subscription ? '搜索账号、付款 ID 或订单' : '搜索账号、客户或订单'}" value="${E(view.query)}" /></div></div>
       <div class="toolbar-right">${A.button('刷新', 'apple-linked-refresh')}</div></div>
       <div data-apple-linked-progress role="status" hidden></div><div data-apple-linked-status></div><div data-apple-linked-results></div></section>`,
-      A.button('余额变动', 'apple-ledger', '', '', `data-id="${E(id)}"`) + A.button('关闭', 'drawer-close'),
+      (wallet ? A.button('余额变动', 'apple-ledger', '', '', `data-id="${E(wallet.id)}"`) : '') + A.button('关闭', 'drawer-close'),
       'apple-linked:' + id, { kind: 'apple-ledger' });
     updateLinkedAccounts();
-    if (!fundingRows() || !ready()) return refreshLinkedAccounts($('#drawer[open] [data-apple-linked-id]'));
+    if (!A.modules.commerce?.appleFundingData?.()?.ready || !ready()) return refreshLinkedAccounts($('#drawer[open] [data-apple-linked-id]'));
   }
   function render() {
     if (S.route === managementRoute) return renderManagement();
@@ -1102,7 +1145,8 @@
     const accounts = list();
     const assets = new Map(A.modules.inventory.getAppleIds().map((asset) => [asset.id, asset]));
     const query = String(S.query || '').toLowerCase();
-    const funding = fundingRows(), usages = new Map((funding || []).map(row => [row.id, row]));
+    const funding = fundingSnapshot();
+    const usages = new Map(funding ? accounts.map(wallet => [wallet.id, walletUsage(wallet, funding)]) : []);
     const selected = S.drafts.get('apple-id-view') || 'all';
     const categories = [['all', '全部'], ['unused', '未使用'], ['used', '已使用'], ['dead', '死号'],
       ['unlocking', '解封中'], ['imports', '导入记录']];
@@ -1379,7 +1423,7 @@
       return true;
     }
     if (action === 'apple-management-state') {
-      if (S.route === managementRoute && (id === '' || Object.hasOwn(fundingStates, id))) {
+      if (S.route === managementRoute && (id === '' || id === 'missing' || Object.hasOwn(subscriptionLabels, id))) {
         Object.assign(managementView(), { state: id, page: 1 });
         A.render();
         document.getElementById(node.id)?.focus({ preventScroll: true });
@@ -1395,7 +1439,7 @@
       return true;
     }
     if (action === 'apple-management-refresh') {
-      void A.withActionFeedback(node, refreshManagement, { pending: '正在读取苹果 ID 使用记录…', failure: '读取失败，请重试' });
+      void A.withActionFeedback(node, refreshManagement, { pending: '正在读取苹果内购订阅…', failure: '读取失败，请重试' });
       return true;
     }
     if (action === 'apple-management-order') {
@@ -1405,18 +1449,21 @@
     }
     if (action.startsWith('apple-management-')) {
       if (S.route !== managementRoute) return true;
-      const row = fundingRows()?.find(item => item.id === id);
+      const row = subscriptionRows()?.find(item => item.id === id);
       if (!row) return true;
       const attrs = `data-id="${E(id)}"`;
+      const walletAttrs = row.wallet ? `data-id="${E(row.wallet.id)}"` : '';
       if (action === 'apple-management-more') A.openActionMenu(node,
         (row.canRenew ? A.button('续费', 'apple-management-renew', '', '', attrs) : '') +
-        (row.wallet ? A.button('充值', 'apple-topup', '', '', attrs) + A.button('余额变动', 'apple-ledger', '', '', attrs) : '') +
-        (row.order?.id ? A.button('订单详情', 'apple-management-order', '', '', `data-id="${E(row.order.id)}"`) : '') +
-        (row.wallet ? healthAction(id) + A.button('使用记录', 'apple-management-history', '', '', attrs) + A.button('复制', 'apple-management-copy', '', '', attrs) : ''));
+        A.button('订单详情', 'apple-management-order', '', '', attrs) +
+        A.button('查看关联订单', 'apple-management-history', '', '', attrs) +
+        (row.wallet ? A.button('充值', 'apple-topup', '', '', walletAttrs) + A.button('余额变动', 'apple-ledger', '', '', walletAttrs) +
+          healthAction(row.wallet.id) : '') +
+        A.button('复制', 'apple-management-copy', '', '', attrs));
       else if (action === 'apple-management-renew' && row.canRenew) A.modules.commerce.openAppleRenewal(row.order.id);
-      else if (action === 'apple-management-history' && row.wallet) void openLinkedAccounts(id);
-      else if (action === 'apple-management-copy' && row.wallet) void A.copyText([
-        row.account ? '订阅账号：' + row.account : '', '苹果 ID：' + row.apple, row.expected ? '预计金额：' + row.expected : ''
+      else if (action === 'apple-management-history') void openLinkedAccounts(id, row);
+      else if (action === 'apple-management-copy') void A.copyText([
+        '订阅账号：' + row.account, '付款苹果 ID：' + row.apple, row.expected ? '预计金额：' + row.expected : ''
       ].filter(Boolean).join('\n'));
       return true;
     }

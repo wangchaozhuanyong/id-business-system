@@ -153,34 +153,135 @@ for (const width of [1440, 1024, 901, 900, 768, 390, 320]) for (const theme of [
   });
 }
 
-test('按苹果 ID 使用状态的徽标对应完整分类，搜索只影响列表命中数', async t => {
+test('按苹果 ID 只列已开通的订阅，按账号保留续费和旧单付款缺项', async t => {
   const context = await browser.newContext({ viewport: { width: 390, height: 920 } });
   t.after(() => context.close());
   const fixture = fixtures();
+  const at = Date.parse('2026-11-13T02:00:00Z');
+  const iso = hours => new Date(at + hours * 3_600_000).toISOString();
+  const expiring = fixture.commerce.data.orders.find(row => row.id === 'history-22');
+  for (const row of fixture.commerce.data.orders.filter(row => row.appleIdId === 'used')) row.expiry = iso(1);
+  expiring.expiry = iso(2);
+  fixture.commerce.data.orders.push(order('scheduled', 'used', {
+    start: iso(2), expiry: iso(720)
+  }), order('old-payment-missing', '', {
+    start: iso(-730), expiry: iso(-5), appleFunding: undefined
+  }), order('expired', '', {
+    email: 'old-subscriber@example.test', start: iso(-720), expiry: iso(-1), appleFunding: undefined
+  }), order('recorded-email', '', {
+    email: 'known-subscriber@example.test', paymentId: 'outside-apple@example.test', appleFunding: undefined,
+    source: '历史入库', paidConfirmed: false, entitlementStatus: undefined
+  }), order('missing-wallet', 'no-inventory-record', {
+    email: 'missing-wallet-subscriber@example.test', appleFunding: undefined
+  }), order('paid-not-opened', 'pending', {
+    email: 'not-opened@example.test', entitlementStatus: 'pending'
+  }), order('draft', 'pending', {
+    email: 'draft-subscriber@example.test', draft: true
+  }), order('bank-order', '', {
+    email: 'bank-subscriber@example.test', payment: '银行卡', appleFunding: undefined
+  }), order('opened-without-dates', '', {
+    email: 'opened-subscriber@example.test', start: '', expiry: '', appleFunding: undefined
+  }));
+  Object.assign(fixture.commerce.data.orders.find(row => row.id === 'pending-order'), { entitlementStatus: 'pending' });
   fixture.commerce.data.orders.push(order('unrecorded', '', {
     email: 'unrecorded-subscriber@example.test', appleFunding: undefined
   }));
-  await interceptDesign(context, { localFixtures: fixture, actor, skipRechargeAssets: true });
+  const traffic = await interceptDesign(context, { localFixtures: fixture, actor, skipRechargeAssets: true });
   const page = await context.newPage();
+  await page.clock.setFixedTime(at);
   await page.goto(origin + '/#/subscriptions/apple-ids');
-  const tabs = page.getByRole('tablist', { name: '苹果 ID 使用状态', exact: true });
+  const tabs = page.getByRole('tablist', { name: '苹果内购订阅状态', exact: true });
+  const table = page.locator('table[data-table="苹果 ID 管理"]');
+  const row = id => table.locator(`tr[data-row-id="${id}"]`);
   const pager = page.locator('[data-pagination="apple-management"]');
   await pager.waitFor();
-  const all = tabs.getByRole('tab', { name: '全部状态', exact: true });
-  assert.equal(await all.locator('.tab-count').textContent(), '6');
-  for (const label of ['未使用', '待付款占用', '已使用', '待核对', '未登记苹果 ID']) {
+  assert.equal(await table.getByRole('columnheader').first().textContent(), '订阅账号');
+  assert.equal(await tabs.getByRole('tab', { name: '全部内购订阅', exact: true }).locator('.tab-count').textContent(), '8');
+  for (const label of ['未使用', '待付款占用', '已使用']) assert.equal(await tabs.getByRole('tab', { name: label, exact: true }).count(), 0);
+  for (const id of ['pending-order', 'unused', 'missing-order', 'scheduled', 'draft', 'paid-not-opened', 'bank-order'])
+    assert.equal(await row(id).count(), 0);
+  assert.equal(await row('history-22').locator('[data-column="subscription"]').textContent(), '即将到期');
+  assert.equal(await row('history-22').locator('[data-column="expiry"]').textContent(), '2026-11-13 12:00');
+  assert.equal(await row('expired').locator('[data-column="subscription"]').textContent(), '已过期');
+  assert.equal(await row('opened-without-dates').locator('[data-column="subscription"]').textContent(), '已开通');
+  assert.equal(await row('multi-two').locator('[data-column="subscription"]').textContent(), '已终止');
+  assert.equal(await row('recorded-email').locator('td[data-column="apple"]').textContent(), 'outside-apple@example.test');
+  assert.equal(await row('recorded-email').locator('[data-column="state"]').textContent(), '待核对');
+  assert.equal(await row('missing-wallet').locator('td[data-column="apple"]').textContent(), '原付款 ID 待核对');
+  assert.equal(await row('unrecorded').locator('td[data-column="apple"]').textContent(), '未登记付款 ID');
+  await row('history-22').getByRole('button', { name: '更多操作', exact: true }).click();
+  await page.getByRole('menuitem', { name: '查看关联订单', exact: true }).click();
+  const drawer = page.locator('#drawer[open]');
+  await drawer.getByRole('heading', { name: '订阅关联订单' }).waitFor();
+  await drawer.getByText('SYN-scheduled', { exact: true }).waitFor();
+  const orderSearch = drawer.getByRole('textbox', { name: '搜索关联账号记录' });
+  await orderSearch.fill('SYN-old-payment-missing');
+  await orderSearch.press('Enter');
+  await drawer.getByRole('row').filter({ hasText: 'SYN-old-payment-missing' })
+    .getByText('未登记付款 ID', { exact: true }).waitFor();
+  await orderSearch.fill('SYN-history-0');
+  await orderSearch.press('Enter');
+  await drawer.getByText('SYN-history-0', { exact: true }).waitFor();
+  assert.equal(await drawer.getByRole('button', { name: '查看订单', exact: true }).count(), 1);
+  await drawer.getByRole('button', { name: '关闭', exact: true }).click();
+  for (const label of ['有效期内', '即将到期', '已过期', '已开通', '未开始', '已终止', '未登记付款 ID']) {
     const tab = tabs.getByRole('tab', { name: label, exact: true });
     const count = await tab.locator('.tab-count').textContent();
     await tab.click();
     assert.equal(await tab.getAttribute('aria-selected'), 'true');
     assert.equal(await pager.getAttribute('data-total'), count);
   }
-  const search = page.getByRole('textbox', { name: '搜索苹果 ID 使用记录', exact: true });
+  const search = page.getByRole('textbox', { name: '搜索苹果内购订阅', exact: true });
   await search.fill('no-match-example');
   await search.press('Enter');
   assert.equal(await pager.getAttribute('data-total'), '0');
-  assert.equal(await tabs.getByRole('tab', { name: '未登记苹果 ID', exact: true }).locator('.tab-count').textContent(), '1');
+  assert.equal(await tabs.getByRole('tab', { name: '未登记付款 ID', exact: true }).locator('.tab-count').textContent(), '3');
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  assert.deepEqual(traffic.external, []);
+});
+
+test('跨到期时间后自动更新订阅状态，沿用已读取的订单', async t => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 920 } });
+  t.after(() => context.close());
+  const at = Date.parse('2026-11-13T02:00:00Z');
+  const fixture = fixtures();
+  fixture.commerce.data.orders = [order('expires-now', 'used', { expiry: new Date(at + 60_000).toISOString() })];
+  fixture.appleBalance.data.allocations = [];
+  fixture.appleBalance.data.movements = [];
+  await interceptDesign(context, { localFixtures: fixture, actor, skipRechargeAssets: true });
+  const page = await context.newPage();
+  const reads = [];
+  page.on('request', req => { if (req.url().endsWith('/api/local/commerce')) reads.push(req.method()); });
+  await page.clock.install({ time: at });
+  await page.goto(origin + '/#/subscriptions/apple-ids');
+  const status = page.locator('[data-row-id="expires-now"] [data-column="subscription"]');
+  await status.getByText('即将到期', { exact: true }).waitFor();
+  const before = reads.length;
+  await page.clock.fastForward(62_000);
+  await status.getByText('已过期', { exact: true }).waitFor();
+  assert.equal(reads.length, before);
+});
+
+test('仅有库存时订阅列表为空，未使用仍能在苹果 ID 余额查到', async t => {
+  const context = await browser.newContext({ viewport: { width: 1440, height: 920 } });
+  t.after(() => context.close());
+  const fixture = fixtures();
+  fixture.commerce.data.orders = [];
+  fixture.appleBalance.data.allocations = [];
+  fixture.appleBalance.data.movements = [];
+  await interceptDesign(context, { localFixtures: fixture, actor, skipRechargeAssets: true });
+  const page = await context.newPage();
+  page.setDefaultTimeout(8000);
+  await page.goto(origin + '/#/subscriptions/apple-ids');
+  await page.getByRole('heading', { name: '暂无苹果内购订阅', exact: true }).waitFor();
+  assert.equal(await page.locator('[data-pagination="apple-management"]').getAttribute('data-total'), '0');
+  assert.equal(await page.locator('.subscription-center-content').getByText('未使用', { exact: true }).count(), 0);
+  await page.getByRole('button', { name: '账号管理', exact: true }).click();
+  await page.getByRole('link', { name: '苹果 ID 余额', exact: true }).click();
+  const table = page.locator('table[data-table="苹果ID余额"]');
+  const unused = table.locator('tr[data-row-id="unused"]');
+  await unused.getByText('unused-apple@example.test', { exact: true }).waitFor();
+  assert.equal(await unused.locator('[data-column="usage"]').textContent(), '未使用');
 });
 
 test('关联读取失败可重试，重读失败保留结果，关闭抽屉后迟到响应不重开', async t => {

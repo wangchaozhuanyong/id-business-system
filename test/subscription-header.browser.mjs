@@ -18,12 +18,15 @@ function fixtures(empty) {
     saleAmount: '190', saleCurrency: 'CNY', paidConfirmed: true, receiptConfirmed: true,
     start: record.start, expiry: record.expiry, entitlementStatus: 'active', businessType: '首次开通',
     version: 1, corrections: [], financialEvidence: [] };
+  const appleOrder = { ...order, id: 'header-apple-order', orderNo: 'SYNTHETIC-HEADER-APPLE',
+    email: 'apple-subscriber@example.test', payment: '苹果内购', paymentId: '', cardId: '',
+    appleIdId: 'header-apple', appleFunding: { bound: true, region: 'US', expected: '20' } };
   return {
     inventory: { version: 1, data: { mailboxes: empty ? [] : [{ id: 'header-apple', type: 'apple',
       email: 'wallet@example.test', country: '马来西亚', appStoreRegion: 'US', status: '正常', health: 'normal' }],
       accounts: [], batches: [], returnRecords: [], importRecords: [], registrationRecords: [], tableSettings: [], undo: [] } },
     commerce: { version: 1, data: { customers: empty ? [] : [{ id: 'header-customer', name: '合成客户' }],
-      orders: empty ? [] : [order], tenants: [], operating: [], rentBatches: [], logs: [] } },
+      orders: empty ? [] : [order, appleOrder], tenants: [], operating: [], rentBatches: [], logs: [] } },
     settings: { version: 1, data: {} },
     appleBalance: { version: 1, data: { wallets: empty ? [] : [{ id: 'header-apple', balance: '250', currency: 'USD', version: 1 }],
       allocations: [], refunds: [], movements: [] } },
