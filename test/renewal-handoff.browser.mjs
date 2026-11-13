@@ -53,7 +53,7 @@ test('staff confirms a batch and finance returns a verified replacement for a ne
       const request = route.request();
       if (request.method() === 'GET') {
         const current = rows.map(row => ({ ...row, canTake: role === 'finance' && row.status === 'pending',
-          canFinish: role === 'employee' && row.status === 'paid', assignedToMe: role === 'finance' }));
+          canFinish: role === 'employee' && row.status === 'paid' && !row.sourceChanged, assignedToMe: role === 'finance' }));
         return route.fulfill({ json: { version: actions.length, items: current, candidates: available, reminderHours: 168 } });
       }
       const body = request.postDataJSON();
@@ -85,6 +85,13 @@ test('staff confirms a batch and finance returns a verified replacement for a ne
           assert.equal(body.cardNumber, '4111111111111111');
           assert.equal(body.confirmed, true);
           Object.assign(row, { status: 'paid', amount: body.amount, currency: body.currency, last4: '1111' });
+        }
+        if (body.action === 'review-source') {
+          assert(verified);
+          assert.deepEqual(body, { action: 'review-source', id: row.id, version: 4, sourceVersion: 3,
+            reason: '原到期时间登记更正', confirmed: true });
+          row.sourceChanged = false;
+          delete row.sourceReview;
         }
         if (body.action === 'finish') {
           assert.equal(body.saleAmount, '160.00');
@@ -146,6 +153,17 @@ test('staff confirms a batch and finance returns a verified replacement for a ne
   await settle(finance.page);
   assert.equal(await finance.page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
   assert.deepEqual((await separatorSnapshot(finance.page)).findings, []);
+  Object.assign(rows[0], { version: 4, sourceChanged: true, sourceReview: {
+    version: 3, expiry: '2026-11-15T10:00', originalLast4: '4242'
+  } });
+  await finance.page.evaluate(() => window.renewalChanged(4));
+  await initialFinance.getByRole('button', { name: '核对原单' }).click();
+  await drawer.getByText('2026-11-15 10:00', { exact: true }).waitFor();
+  assert.equal(await finance.page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
+  await drawer.getByLabel('原单更正原因').fill('原到期时间登记更正');
+  await drawer.getByLabel('我已核对本次付款仍对应这张订单').check();
+  await drawer.getByRole('button', { name: '确认并交回员工' }).click();
+  await finance.page.getByText('原单已核对，员工可以补资料提交订单').waitFor();
   await staff.page.evaluate(() => window.IDDesignAPI.go('workspace/renewals/ready'));
   await staff.page.getByText('暂无符合条件的订单', { exact: true }).waitFor();
   await staff.page.waitForFunction(() => window.IDChangeSync?.status().snapshots > 0);
@@ -178,7 +196,7 @@ test('staff confirms a batch and finance returns a verified replacement for a ne
   await admin.page.getByText(source.account, { exact: true }).first().waitFor();
   assert.equal(await admin.page.getByRole('checkbox', { name: '选择当前页' }).count(), 0);
   assert.equal(await admin.page.getByRole('button', { name: '付租批次', exact: true }).count(), 0);
-  assert.deepEqual(actions, ['submit', 'claim', 'paid', 'finish']);
+  assert.deepEqual(actions, ['submit', 'claim', 'paid', 'review-source', 'finish']);
   assert.deepEqual(errors, []);
   for (const { requests } of [staff, finance, admin]) assert.deepEqual(requests.external, []);
 });

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
 import { randomBytes } from 'node:crypto';
 import { createStaffWorkspaces } from '../server/staff-workspaces.mjs';
+import { createLocalBusinessStore } from '../server/local-business.mjs';
 import { createOrderRechargeClient } from '../server/order-recharge-client.mjs';
 import { employeeCommerce, financeCommerce, nativeBrowserVerification, nativeManagerAccess, protectedSettingsChanged, registrarInventory, retailAccess } from '../server/access-roles.mjs';
 import { mailboxRegistrationAssignment, registrationMailboxSource } from '../server/tools/mailbox-pool.mjs';
@@ -33,7 +34,6 @@ appleRelay: { parents: [{ id: 'parent-1', status: 'ACTIVE', email: 'parent@examp
 function fixture() {
   let verified = false;
   const audited = [], writes = [], used = new Map(), upstream = [];
-  const financeOperations = new Map();
   const state = { commerce: structuredClone(commerce), inventory: structuredClone(inventory) };
   const rawCards = { cards: [{ id: 5, last4: '0123', is_active: 1, card_number: 'fixture-number', card_cvc: 'fixture-cvc',
     allowed_plans: ['plus'], usage_count: 2 }], planPolicy: { strict: false, version: 7 } };
@@ -59,18 +59,7 @@ function fixture() {
     },
     loadBitBrowserProxies: () => ({ version: 0, items: [] }),
     saveBitBrowserProxy: (body, actor) => ({ version: body.version + 1, items: [{ actorId: actor.id }] }),
-    recordAuthEvent: event => audited.push(event),
-    startFinanceCardOperation(_actor, operation, _action, expected, actual) {
-      const previous = financeOperations.get(operation.domain);
-      if (previous?.result) return previous.result;
-      if (previous || expected !== actual) throw Object.assign(new Error('请刷新后核对'), { status: 409 });
-      financeOperations.set(operation.domain, { pending: true });
-      return null;
-    },
-    finishFinanceCardOperation(actor, operation, audit, result) {
-      financeOperations.set(operation.domain, { result });
-      this.recordAuthEvent({ action: audit[0], targetId: audit[1], actor });
-    }
+    recordAuthEvent: event => audited.push(event)
   };
   const client = {
     async get(path) {
@@ -87,12 +76,13 @@ function fixture() {
       rawCards.planPolicy.version++;
       return { imported: command.cards?.length || 0, planPolicy: { ...rawCards.planPolicy } };
     },
-    async stopCardUse(refs) { upstream.push({ refs }); return { state: 'stopped' }; },
+    async stopCardUse(refs) { upstream.push({ refs }); rawCards.cards[0].is_active = 0; return { state: 'stopped', refs }; },
     async addBusinessProxy(command) { upstream.push({ proxy: command }); return { added: 1, labeled: 0, skipped: 0 }; }
   };
-  const handler = createStaffWorkspaces({ store, client, publicOrigin: origin, getAuth: () => ({
-    recentlyVerified: () => verified, teamFor: () => [actors.employee]
-  }), readMailbox: async () => [{ body: 'Your verification code is 123456. Private fixture message', receivedAt: '2026-11-13T12:01:00Z' }] });
+  const createHandler = (selectedStore = store) => createStaffWorkspaces({ store: selectedStore, client,
+    publicOrigin: origin, getAuth: () => ({ recentlyVerified: () => verified, teamFor: () => [actors.employee] }),
+    readMailbox: async () => [{ body: 'Your verification code is 123456. Private fixture message', receivedAt: '2026-11-13T12:01:00Z' }] });
+  let handler = createHandler();
   async function call(role, path, body, headers = {}) {
     const request = Readable.from(body ? [Buffer.from(JSON.stringify(body))] : []);
     request.url = '/api/local/staff/' + path;
@@ -104,7 +94,8 @@ function fixture() {
     await handler(request, { writeHead(value) { status = value; }, end(value) { data = JSON.parse(value); } }, route, actors[role]);
     return { status, data };
   }
-  return { call, audited, writes, upstream, verify: () => { verified = true; } };
+  return { call, audited, writes, upstream, client, rawCards, useStore: business => { handler = createHandler(business); },
+    verify: () => { verified = true; } };
 }
 
 test('role policy keeps the business administrator and blocks global settings or scoped role mutations', () => {
@@ -181,8 +172,11 @@ test('financial and proxy commands are signed for the allowed original recharge 
   ]);
 });
 
-test('finance can read cards and statements, and uses explicit verification for narrow writes', async () => {
+test('finance can read cards and statements, and uses explicit verification for narrow writes', async t => {
   const f = fixture();
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  f.useStore(store);
   assert.equal((await f.call('supervisor', 'finance/cards')).status, 403);
   assert.equal((await f.call('admin', 'finance/cards')).status, 403);
   const cards = await f.call('finance', 'finance/cards');
@@ -206,8 +200,79 @@ test('finance can read cards and statements, and uses explicit verification for 
   assert.equal((await f.call('finance', 'finance/cards', { action: 'import', version: 8, plans: ['plus'],
     lines: '0000000000000123 | 10/29 | 001' })).status, 200);
   assert.equal((await f.call('finance', 'finance/cards', { action: 'stop', version: 9, id: 5 })).status, 200);
-  assert.deepEqual(f.audited.map(row => row.action), ['finance_card_plans', 'finance_card_import', 'finance_card_stop']);
-  assert(!JSON.stringify(f.audited).includes('0000000000000123'));
+  const events = store.audit().filter(row => row.action !== 'finance_card_requested').reverse();
+  assert.deepEqual(events.map(row => row.action), ['finance_card_plans', 'finance_card_import', 'finance_card_stop']);
+  assert(!JSON.stringify(events).includes('0000000000000123'));
+});
+
+test('uncertain card write survives a new request, can be checked without another write and is audited once', async t => {
+  const f = fixture();
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  f.useStore(store);
+  f.verify();
+  let writes = 0;
+  f.client.writeCardMaintenance = async () => {
+    writes++;
+    throw new Error('synthetic lost response');
+  };
+  const number = '0000000000006012';
+  const plans = ['pro500'];
+  const command = { action: 'import', version: 7, plans, lines: number + ' | 10/29 | 567' };
+  const op = { 'x-id-operation': 'fixture-finance-card-import' };
+  assert.equal((await f.call('finance', 'finance/cards', command, op)).status, 503);
+  f.useStore(store);
+  const { pending: [pending] } = (await f.call('finance', 'finance/cards')).data;
+  assert.equal(pending.label, '导入银行卡');
+  assert.equal(pending.canReview, true);
+  assert(!JSON.stringify(pending).includes(number));
+  const stored = store.pendingFinanceCardOperations()[0];
+  assert(!JSON.stringify(stored).includes(number));
+  assert.deepEqual(Object.keys(stored.evidence).sort(), ['imported', 'intent', 'plans', 'version']);
+  assert(stored.evidence.imported.every(value => /^[a-f0-9]{64}$/.test(value)));
+  assert.equal((await f.call('finance', 'finance/cards', command)).status, 409);
+  f.client.stopCardUse = async refs => { f.rawCards.cards[0].is_active = 0; return { state: 'stopped', refs }; };
+  assert.equal((await f.call('finance', 'finance/cards', { action: 'stop', version: 7, id: 5 })).status, 200);
+  const check = { action: 'reconcile', version: 7, id: pending.id, confirmed: true };
+  assert.equal((await f.call('finance', 'finance/cards', check)).status, 409);
+  assert.equal(store.audit().filter(row => row.action === 'finance_card_reconciled').length, 0);
+  f.rawCards.cards.push({ id: 7, last4: '6012', card_number: number, card_expiry: '11/29', card_cvc: '567',
+    is_active: 1, allowed_plans: plans });
+  f.rawCards.planPolicy.version = 8;
+  assert.equal((await f.call('finance', 'finance/cards', { ...check, version: 8 })).status, 409);
+  f.rawCards.cards.at(-1).card_expiry = '10/29';
+  const recovered = await f.call('super', 'finance/cards', { ...check, version: 8 });
+  assert.deepEqual(recovered.data, { saved: true, count: 1, reconciled: true });
+  assert.deepEqual((await f.call('finance', 'finance/cards')).data.pending, []);
+  assert.equal((await f.call('finance', 'finance/cards', command, op)).data.count, 1);
+  assert.equal(writes, 1);
+  const audit = store.audit().filter(row => row.action === 'finance_card_reconciled');
+  assert.equal(audit.length, 1);
+  assert.equal(audit[0].actorId, actors.super.id);
+  assert.equal(audit[0].targetId, pending.id);
+  assert.equal(store.audit().filter(row => row.action === 'finance_card_requested' && row.targetId === pending.id).length, 1);
+  assert(!JSON.stringify(audit).includes(number));
+});
+
+test('unconfirmed card result can be documented by its submitter without retrying the bank-card maintenance', async t => {
+  const f = fixture();
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  f.useStore(store);
+  f.verify();
+  let attempts = 0;
+  f.client.writeCardMaintenance = async () => { attempts++; throw new Error('synthetic unavailable response'); };
+  const command = { action: 'strict', strict: true, version: 7 };
+  const op = { 'x-id-operation': 'fixture-card-unconfirmed-result' };
+  assert.equal((await f.call('finance', 'finance/cards', command, op)).status, 503);
+  const { pending: [pending] } = (await f.call('finance', 'finance/cards')).data;
+  const review = { action: 'reconcile', id: pending.id, version: 7, confirmed: true, outcome: 'unconfirmed' };
+  assert.equal((await f.call('finance', 'finance/cards', { ...review, confirmed: false })).status, 409);
+  assert.deepEqual((await f.call('finance', 'finance/cards', review)).data, { saved: true, unconfirmed: true });
+  assert.deepEqual((await f.call('finance', 'finance/cards', command, op)).data, { saved: true, unconfirmed: true });
+  assert.deepEqual((await f.call('finance', 'finance/cards')).data.pending, []);
+  assert.equal(attempts, 1);
+  assert.equal(store.audit().filter(row => row.action === 'finance_card_unconfirmed' && row.targetId === pending.id).length, 1);
 });
 
 test('registration and customer writes use scoped records, replay receipts and only return necessary data', async () => {

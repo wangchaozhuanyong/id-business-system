@@ -215,6 +215,8 @@ const sessionEventLabels = {
   finance_card_plans: '更新自动代充用卡规则',
   finance_card_stop: '停用自动代充银行卡',
   finance_card_requested: '提交自动代充银行卡维护',
+  finance_card_reconciled: '核对自动代充银行卡维护结果',
+  finance_card_unconfirmed: '登记银行卡维护结果未确认',
   supervisor_proxy_add: '登记自动代充业务 IP',
   registration_code_read: '查询登记邮箱验证码',
   registration_totp_read: '查看登记账号动态验证码',
@@ -234,7 +236,8 @@ const orderFeatureDomains = new Set([
 ]);
 const renewalAuditLabels = { renewal_submit: '提交续费给财务', renewal_claim: '领取续费申请',
   renewal_paid: '登记续费实付', renewal_return: '退回续费申请', renewal_finish: '提交续费新订单',
-  renewal_transfer: '移交续费待处理' };
+  renewal_transfer: '移交续费待处理', renewal_review_source: '核对续费原订单与付款' };
+const financeCardPendingDomain = 'finance-card-pending';
 const orderFeatureAuditLabels = {
   order_expense_record: '登记费用实付凭据',
   order_expense_account: '核对费用凭据的入账方式',
@@ -2431,6 +2434,9 @@ export function createLocalBusinessStore(databasePath) {
       });
     },
     loginAuthenticatorKey: () => Buffer.from(hkdfSync('sha256', key, '', 'id-business/login-authenticator/v1', 32)),
+    financeCardIdentity(value) {
+      return createHmac('sha256', key).update('finance-card-import\0').update(value).digest('hex');
+    },
     orderCardFingerprint(number) {
       return typeof number === 'string' && /^\d{12,19}$/.test(number)
         ? createHmac('sha256', key).update('order-card-number\0').update(number).digest('hex') : '';
@@ -2466,28 +2472,46 @@ export function createLocalBusinessStore(databasePath) {
         log.run(new Date().toISOString(), 'site-export', 'site_export', auditSummary(label, actor), 0);
       });
     },
-    startFinanceCardOperation(actor, operation, action, expectedVersion, actualVersion) {
+    pendingFinanceCardOperations() { return readDocument(financeCardPendingDomain).data?.items || []; },
+    financeCardOperation(operation) {
+      const receipt = readDocument(operation.domain).data;
+      if (receipt) checkWriteReceipt(receipt, operation);
+      if (receipt?.result) return receipt.result;
+      if (receipt?.pending)
+        throw new LocalDataError(409, '此笔维护已提交，请先核对处理结果');
+      return null;
+    },
+    startFinanceCardOperation(actor, operation, action, expectedVersion, actualVersion, evidence) {
       return writeTransaction(() => {
-        const prior = readDocument(operation.domain);
-        if (prior.data) {
-          checkWriteReceipt(prior.data, operation);
-          if (prior.data.result) return prior.data.result;
-          throw new LocalDataError(409, '此操作已提交，结果待核对，请刷新银行卡列表');
-        }
+        if (this.financeCardOperation(operation))
+          throw new LocalDataError(409, '此笔维护已提交，请先核对处理结果');
         if (!Number.isSafeInteger(expectedVersion) || expectedVersion !== actualVersion)
           throw new LocalDataError(409, '资料已更新，请刷新后重新核对，输入已保留');
-        putDocument(operation.domain, 1, { fingerprint: operation.fingerprint, domains: [], pending: true });
-        this.recordAuthEvent({ action: 'finance_card_requested', actor, targetId: action });
-        return null;
+        const prior = readDocument(operation.domain);
+        const current = readDocument(financeCardPendingDomain);
+        const items = current.data?.items || [];
+        if (items.some(row => row.action === action && row.evidence.intent === evidence.intent))
+          throw new LocalDataError(409, '相同的银行卡维护仍待核对，请先核对原操作');
+        putDocument(operation.domain, prior.version + 1, { fingerprint: operation.fingerprint, domains: [], pending: true });
+        const id = randomUUID();
+        const item = { id, domain: operation.domain, actorId: actor.id, actorName: actor.name,
+          action, at: new Date().toISOString(), evidence };
+        putDocument(financeCardPendingDomain, current.version + 1, { items: [item, ...items] });
+        this.recordAuthEvent({ action: 'finance_card_requested', actor, targetId: id });
       });
     },
-    finishFinanceCardOperation(actor, operation, audit, result) {
+    finishFinanceCardOperation(actor, domain, { audit, result }) {
       return writeTransaction(() => {
-        const prior = readDocument(operation.domain);
-        if (!prior.data?.pending) throw new LocalDataError(409, '银行卡维护记录已变化，请刷新核对');
-        checkWriteReceipt(prior.data, operation);
-        this.recordAuthEvent({ action: audit[0], actor, targetId: audit[1] });
-        putDocument(operation.domain, prior.version + 1, { fingerprint: operation.fingerprint, domains: [], result });
+        const prior = readDocument(domain);
+        const pending = readDocument(financeCardPendingDomain);
+        const items = pending.data?.items || [];
+        const item = items.find(row => row.domain === domain);
+        if (!prior.data?.pending || !item)
+          throw new LocalDataError(409, '银行卡维护记录已变化，请刷新核对');
+        if (audit) this.recordAuthEvent({ action: audit[0], actor, targetId: item.id, detail: audit[1] });
+        putDocument(domain, prior.version + 1, { fingerprint: prior.data.fingerprint, domains: [],
+          ...(result && { result }) });
+        putDocument(financeCardPendingDomain, pending.version + 1, { items: items.filter(row => row.domain !== domain) });
       });
     },
     auditFeature(domain, version, { action, actor, targetId }) {
@@ -2729,8 +2753,9 @@ export function createLocalBusinessStore(databasePath) {
       const version = domain => String(revision.get(domain)?.version ?? 0);
       const versions = {};
       if (renewalRole(actor))
-        versions[renewalHandoffDomain] = [renewalHandoffDomain, subscriptionDomain, 'inventory',
-          ...(actor.role === 'supervisor' ? ['commerce'] : [])].map(version).join(':');
+        versions[renewalHandoffDomain] = [renewalHandoffDomain, subscriptionDomain, 'inventory', 'commerce'].map(version).join(':');
+      if (['finance', 'super'].includes(actor.role))
+        versions['recharge-card-plans'] = version(financeCardPendingDomain);
       if (['admin', 'super', 'registrar'].includes(actor.role)) versions.inventory = version('inventory');
       if (['admin', 'super', 'employee', 'finance'].includes(actor.role)) versions.commerce = version('commerce');
       if (['admin', 'super', 'employee'].includes(actor.role)) versions['recharge-codes'] = version('recharge-codes');
@@ -2759,13 +2784,13 @@ export function createLocalBusinessStore(databasePath) {
     },
     audit: () => audit.all().map(readAuditRow),
     auditPage: (search) => pageAuditRows(audit.all().map(readAuditRow), search),
-    recordAuthEvent({ action, actor, targetId }) {
+    recordAuthEvent({ action, actor, targetId, detail }) {
       if (sessionEventLabels[action])
         log.run(
           new Date().toISOString(),
           action.startsWith('relay_') ? 'inventory' : 'auth',
           action,
-          auditSummary(sessionEventLabels[action], actor, targetId),
+          auditSummary(sessionEventLabels[action] + (detail ? ' · ' + detail : ''), actor, targetId),
           0
         );
     },

@@ -154,6 +154,48 @@ test('verified handoff transfers unfinished work with its payment review and his
   assert.equal(stored.transfers[0].from.id, actors.finance.id);
   assert.equal(stored.processingBy.id, actors.financeOther.id);
   assert.equal(stored.funding, undefined);
+  assert.equal((await send('financeOther', { action: 'return', id: row.id, version: 4, confirmed: true,
+    reason: '待核对时退回' })).status, 403);
+});
+
+test('verified finance can reconcile corrected dates without changing the paid receipt or duplicating the order', async t => {
+  const { store, send, submit } = fixture(t);
+  const verify = { verified: true };
+  assert.equal((await send('employee', submit)).status, 200);
+  const [{ id }] = (await send('finance', null, { view: 'finance' })).data.items;
+  assert.equal((await send('finance', { action: 'claim', id, version: 1 })).status, 200);
+  assert.equal((await send('finance', { action: 'paid', id, version: 2, confirmed: true, amount: '22.25',
+    currency: 'USD', cardMode: 'none', reference: 'synthetic-payment' }, verify)).status, 200);
+  const funding = store.featureDocument(renewalHandoffDomain).data.items[0].funding;
+  const change = (changes, version) => {
+    const commerce = store.load('commerce');
+    Object.assign(commerce.data.orders[0], changes, { version });
+    store.saveBatch([{ domain: 'commerce', ...commerce }]);
+  };
+  change({ expiry: '2026-11-13T11:00', email: 'other@example.test' }, 2);
+  let review = { action: 'review-source', id, version: 3, sourceVersion: 2, confirmed: true, reason: '原单日期录入更正' };
+  assert.equal((await send('finance', null, { view: 'finance' })).data.items[0].sourceReview, undefined);
+  assert.equal((await send('finance', review, verify)).status, 409);
+  change({ email: initialOrder.email }, 3);
+  const row = (await send('finance', null, { view: 'finance' })).data.items[0];
+  assert.deepEqual(row.sourceReview, { version: 3, expiry: '2026-11-13T11:00', originalLast4: '4242' });
+  assert.equal((await send('employee', null)).data.items[0].canFinish, false);
+  assert.equal((await send('finance', review, verify)).status, 409);
+  review = { ...review, sourceVersion: 3 };
+  assert.equal((await send('financeOther', review, verify)).status, 403);
+  assert.equal((await send('finance', review)).status, 403);
+  const operationId = randomUUID();
+  assert.equal((await send('finance', review, { ...verify, operationId })).status, 200);
+  assert.equal((await send('finance', review, { ...verify, operationId })).status, 200);
+  const current = store.featureDocument(renewalHandoffDomain).data.items[0];
+  assert.deepEqual(current.funding, funding);
+  assert.equal(current.sourceReviews.length, 1);
+  assert.equal(store.audit().filter(item => item.action === 'renewal_review_source').length, 1);
+  assert.equal((await send('employee', { action: 'finish', id, version: 4, ...finishFields })).status, 200);
+  const [created, source] = store.load('commerce').data.orders;
+  assert.equal(created.previousOrderId, source.id);
+  assert.equal(created.paidAmount, funding.amount);
+  assert.equal((await send('employee', { action: 'finish', id, version: 4, ...finishFields })).status, 409);
 });
 
 test('finance may return unpaid work to selection and a former version cannot submit', async t => {
