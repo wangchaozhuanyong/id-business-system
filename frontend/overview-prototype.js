@@ -73,7 +73,7 @@
     const draft = A.state.drafts.get(draftKey);
     return {
       actor: actor?.id || '', role: actor?.role || '', finance,
-      apple: finance && allowed('accounts/apple-balances'),
+      apple: finance && (actor?.role === 'finance' || allowed('accounts/apple-balances')),
       ...(finance ? { dateBasis: draft?.dateBasis || 'created', currency: draft?.currency || 'CNY' } : {}),
       rechargeRequests: finance && Boolean(business?.canApproveRechargeCodes) && allowed(rechargeRequestsRoute),
       ...(finance && draft?.range === 'custom' ? { custom: draft.custom } : {})
@@ -88,8 +88,9 @@
   async function loadOverview(key) {
     const previous = business.queries.peek('overview', key)?.data || {};
     const { commerce, inventory, appleBalance } = A.modules;
+    const stockAllowed = inventories.some(([, , route]) => allowed(route));
     const [inventoryReady, commerceReady, appleReady, rechargeSummary] = await Promise.all([
-      readSource(() => inventory.refreshOverview()),
+      stockAllowed && readSource(() => inventory.refreshOverview()),
       key.finance && readSource(() => commerce.refreshOverview()),
       key.apple && readSource(() => appleBalance.refreshLocalBalance()),
       key.rechargeRequests && readSource(() => business.rechargeCodePendingSummary())
@@ -98,15 +99,15 @@
     const section = (name, data) => data === false || data == null
       ? { ...previous[name], phase: 'error' }
       : { data, updated: asOf, phase: 'ready' };
-    const stock = await readSource(() => inventoryReady && inventory.overviewSummary());
-    const snapshot = { inventory: section('inventory', stock) };
+    const stock = stockAllowed && await readSource(() => inventoryReady && inventory.overviewSummary());
+    const snapshot = stockAllowed ? { inventory: section('inventory', stock) } : {};
     if (key.finance) {
       const [summary, customers] = await Promise.all([
         readSource(() => commerceReady && commerce.overviewSummary(asOf, key)),
-        readSource(() => commerceReady && inventoryReady && commerce.overviewCustomerSummary(asOf))
+        allowed('customers/list') && readSource(() => commerceReady && inventoryReady && commerce.overviewCustomerSummary(asOf))
       ]);
       snapshot.commerce = section('commerce', summary?.commerce);
-      snapshot.customers = section('customers', customers);
+      if (allowed('customers/list')) snapshot.customers = section('customers', customers);
       for (const range of [...ranges.map(([id]) => id), ...(key.custom ? ['custom'] : [])])
         snapshot['profit:' + range] = section('profit:' + range, summary?.profit?.[range]);
     }
@@ -125,7 +126,7 @@
     const id = JSON.stringify(key);
     if (refreshing?.id === id) return refreshing.promise;
     const cached = business.queries.peek('overview', key);
-    const last = cached?.data?.inventory?.updated;
+    const last = (cached?.data?.inventory || cached?.data?.commerce)?.updated;
     if (!refresh && !cached?.stale && last != null &&
         dayFormatter.format(last) === dayFormatter.format(Date.now())) return;
     const ready = snapshot => Object.values(snapshot).every(section => section.phase === 'ready');

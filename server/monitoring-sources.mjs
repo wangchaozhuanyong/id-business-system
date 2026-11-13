@@ -31,7 +31,8 @@ function counts(map, at, length = 10) {
 
 export function createMonitoringSources({ monitor, databasePath, externalProbe = false, runtimeProbe, rechargeClient,
   getFinance, syncEnabled, syncViaEvents = false, workerReceiptDirectory, backupReceiptDirectory, clock = Date.now,
-  readDisk = statfs, readReceipt = readWorkerReceipt, readBackupReceipt = readBackupMonitorReceipt, readSheetsReceipt }) {
+  readDisk = statfs, readReceipt = readWorkerReceipt, readBackupReceipt = readBackupMonitorReceipt,
+  readSheetsReceipt, onResourceSample, readOrderPending }) {
   const startedAt = clock();
   const dataDirectory = dirname(databasePath);
   const workerReports = typeof workerReceiptDirectory === 'string' && isAbsolute(workerReceiptDirectory) &&
@@ -40,7 +41,9 @@ export function createMonitoringSources({ monitor, databasePath, externalProbe =
     resolve(backupReceiptDirectory) !== resolve(dataDirectory);
   const api = new Map(), mailbox = new Map(), logins = new Map(), privateAccess = new Map();
   const refusals = new Map();
-  let orderSync = { failures: 0, at: null };
+  let orderSync = { failures: 0, at: null, lastSuccessAt: null };
+  let mailboxSuccess = null, mailboxFailure = null;
+  let adminSources = { sources: [], externalProbe: null };
   let orderReader = { state: 'waiting', at: startedAt };
   let timer, deliveryTimer, active = false, closed = false;
   let lastDigest;
@@ -53,6 +56,8 @@ export function createMonitoringSources({ monitor, databasePath, externalProbe =
       if (status >= 500) row.failures++;
     }
     if (mailboxPaths.has(path) && (status < 400 || status >= 500)) {
+      if (status >= 500) mailboxFailure = now;
+      else if (status >= 200 && status < 300) mailboxSuccess = now;
       const row = counter(mailbox, now);
       row.total++;
       if (status >= 500) row.failures++;
@@ -91,7 +96,9 @@ export function createMonitoringSources({ monitor, databasePath, externalProbe =
   }
 
   function recordOrderSync(success) {
-    orderSync = { failures: success ? 0 : orderSync.failures + 1, at: clock() };
+    const at = clock();
+    orderSync = { failures: success ? 0 : orderSync.failures + 1, at,
+      lastSuccessAt: success ? at : orderSync.lastSuccessAt };
   }
 
   function recordOrderSyncReader(state) {
@@ -185,14 +192,44 @@ export function createMonitoringSources({ monitor, databasePath, externalProbe =
       output.push({ code: 'recharge_backup', status: reason ? 'bad' : 'ok', reason,
         count: mysql ? Math.max(0, Math.floor(age / minute)) : undefined });
     }
+    let finance;
     try {
-      const finance = getFinance?.()?.read()?.data;
+      finance = getFinance?.()?.read()?.data;
       const enabled = finance?.settings.enabled && finance.settings.provider !== 'disabled';
       output.push({ code: 'exchange_rates', status: !enabled ? 'disabled' : finance.state.failures >= 3 ? 'bad' :
         finance.state.failures === 0 && finance.state.lastSuccessAt ? 'ok' : 'unknown', count: finance?.state.failures,
         reason: !enabled ? 'rates_disabled' : finance.state.failures > 0 && finance.state.failures < 3 ? 'recovering' :
           !finance.state.lastSuccessAt && finance.state.failures < 3 ? 'rates_missing' : undefined });
     } catch { output.push({ code: 'exchange_rates', status: 'unknown', reason: 'rates_unavailable' }); }
+    let pending = null, oldestPendingAt = null, lastImportedAt = null;
+    if (syncEnabled) {
+      try {
+        const result = readOrderPending?.();
+        pending = result?.pending ?? null;
+        oldestPendingAt = result?.oldestPendingAt ?? null;
+        lastImportedAt = result?.lastImportedAt ?? null;
+      } catch { /* Existing status remains available during a read failure. */ }
+    }
+    const status = code => output.find(row => row.code === code)?.status || 'unknown';
+    const oldest = oldestPendingAt && now - oldestPendingAt >= 15 * minute;
+    const orderState = status('order_sync');
+    adminSources = { sources: [
+      { key: 'orders', state: pending > 0 && orderState === 'ok' ? 'watch' : orderState,
+        lastSuccessAt: orderSync.lastSuccessAt || lastImportedAt, pending, oldestPendingAt,
+        problem: orderState === 'bad' ? '最近的订单读取未完成' : oldest ? '有订单资料核对已超过 15 分钟' :
+          pending > 0 ? '有订单资料等待读回' : orderState === 'unknown' ? '等待来源确认' : '' },
+      { key: 'rates', state: status('exchange_rates'), lastSuccessAt: Date.parse(finance?.state?.lastSuccessAt) || null,
+        pending: null, problem: finance?.state?.failures > 0 ? '最近未能取得有效汇率' : '' },
+      { key: 'mailbox', state: usageSamples(now).find(row => row.code === 'mailbox').status, lastSuccessAt: mailboxSuccess,
+        pending: null, problem: mailboxFailure > (mailboxSuccess || 0) ? '最近一次邮箱查询未成功' : '' },
+      { key: 'sheets', state: sheets?.state === 'retrying' ? 'watch' : status('sheets'),
+        lastSuccessAt: sheets?.verifiedAt ?? null, pending: null,
+        problem: sheets?.reason === 'receipt_stale' ? '最近没有收到同步结果' :
+          sheets?.state === 'no_receipt' ? '等待收到首次同步结果' :
+            ['failed', 'retrying'].includes(sheets?.state) ? '表格同步未完成' : '' }
+    ], externalProbe: { at: monitor.probeAt() || null, state: !externalProbe ? 'disabled' :
+      !monitor.probeAt() ? 'unknown' : now - monitor.probeAt() > 4 * minute ? 'stale' : 'connected' } };
+    if (onResourceSample) void Promise.resolve().then(() => onResourceSample(available, report)).catch(() => {});
     return output;
   }
 
@@ -248,7 +285,7 @@ export function createMonitoringSources({ monitor, databasePath, externalProbe =
     } finally { active = false; }
   }
 
-  return { recordHttp, recordAuth, recordRecharge, recordOrderSync, recordOrderSyncReader, tick,
+  return { recordHttp, recordAuth, recordRecharge, recordOrderSync, recordOrderSyncReader, tick, adminView: () => adminSources,
     start() {
       if (closed || timer) return;
       const collect = () => void tick().catch(() => {});

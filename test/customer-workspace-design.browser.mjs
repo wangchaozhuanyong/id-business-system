@@ -211,7 +211,7 @@ test('续费历史按客户与账号隔离，独立分页、原单及切换客�
     page.on('pageerror', error => errors.push(error.message));
     page.setDefaultTimeout(6000);
     await page.clock.setFixedTime(now);
-    await page.goto(origin + '/#/workspace/renewals');
+    await page.goto(origin + '/#/workspace/renewals/reminders');
     if (width === 390) await toggleDesignTheme(page);
     await page.getByRole('tab', { name: /^已到期/ }).click();
     const select = async id => {

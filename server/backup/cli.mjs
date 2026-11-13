@@ -6,6 +6,7 @@ const usage = `用法
   node server/backup/cli.mjs snapshot --source <SQLite文件> --output <新快照目录>
   node server/backup/cli.mjs verify --input <快照目录>
   node server/backup/cli.mjs restore --input <快照目录> --key <单独保管的密钥文件> --output <新恢复目录>
+  node server/backup/cli.mjs rehearse --input <快照目录> --key <单独保管的密钥文件> --output <新恢复目录>
 `;
 
 try {
@@ -23,7 +24,8 @@ try {
   const commands = {
     snapshot: { options: ['source', 'output'], run: createSnapshot },
     verify: { options: ['input'], run: ({ input }) => verifySnapshot(input) },
-    restore: { options: ['input', 'key', 'output'], run: restoreSnapshot }
+    restore: { options: ['input', 'key', 'output'], run: restoreSnapshot },
+    rehearse: { options: ['input', 'key', 'output'], run: values => restoreSnapshot({ ...values, exercise: true }) }
   };
   if (values.help && !positionals.length && Object.keys(values).length === 1) {
     process.stdout.write(usage);

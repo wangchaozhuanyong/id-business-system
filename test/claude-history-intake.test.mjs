@@ -212,9 +212,9 @@ test('历史 Claude 首次补客户经存储事务保存并保留已绑定的 Ap
   const appleIdId = 'apple-history';
   const write = (domain, data, action) => ({ domain, version: store.load(domain).version, data, action });
   const save = (...entries) => store.saveBatch(entries, { actor });
-  save(write('settings', { mailboxTypes: [], costSettings: {},
-    applePaidPrices: { 'Claude Max': { 'Max 20x': { US: '250' } } } }, 'apple_paid_prices_save'),
-    write('inventory', { accounts: [], batches: [], returnRecords: [], importRecords: [], registrationRecords: [],
+  store.saveBatch([write('settings', { mailboxTypes: [], costSettings: {},
+    applePaidPrices: { 'Claude Max': { 'Max 20x': { US: '250' } } } }, 'apple_paid_prices_save')], { actor: { ...actor, role: 'super' } });
+  save(write('inventory', { accounts: [], batches: [], returnRecords: [], importRecords: [], registrationRecords: [],
       tableSettings: [], undo: [], mailboxes: [
         { id: 'google', email: opened.email, type: 'google', status: '正常', country: opened.country },
         { id: appleIdId, email: 'apple-history@example.test', type: 'apple', status: '正常', health: 'normal',

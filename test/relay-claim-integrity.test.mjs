@@ -3,7 +3,7 @@ import { Readable } from 'node:stream';
 import test from 'node:test';
 import { createLocalBusinessStore, handleLocalBusiness } from '../server/local-business.mjs';
 
-const actor = { id: 'relay-manager', name: '邮箱管理员', role: 'admin' };
+const actor = { id: 'relay-manager', name: '邮箱管理员', role: 'super' };
 const time = '2026-11-05 10:30';
 const parentId = 'apple-main-1';
 const settings = { mailboxTypes: [], costSettings: {} };

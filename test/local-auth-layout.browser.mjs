@@ -40,17 +40,17 @@ test('paper login keeps fields, setup, errors and pending submits usable across 
   const geometry = () => page.evaluate(() => {
     const box = selector => document.querySelector(selector).getBoundingClientRect().toJSON();
     const input = document.querySelector('#local-auth-email');
+    const fields = [...document.querySelectorAll('.local-auth-form input:not([type="checkbox"])')]
+      .filter(input => !input.closest('[hidden]'));
     return { overflow: document.documentElement.scrollWidth > innerWidth,
       header: box('.local-auth-header'), brand: box('.local-auth-brand'), badge: box('.local-auth-badge'),
       form: box('.local-auth-card'), footer: box('.local-auth-footer'), submit: box('.local-auth-form button[type="submit"]'),
-      inputs: [...document.querySelectorAll('.local-auth-form input:not([type="checkbox"])')]
-        .map(input => ({ id: input.id, ...input.getBoundingClientRect().toJSON() })),
+      inputs: fields.map(input => ({ id: input.id, ...input.getBoundingClientRect().toJSON() })),
       palette: { background: getComputedStyle(document.querySelector('#local-auth-gate')).backgroundColor,
         surface: getComputedStyle(input).backgroundColor,
         text: getComputedStyle(input).color, placeholder: getComputedStyle(input, '::placeholder').color,
         footer: getComputedStyle(document.querySelector('.local-auth-footer')).color,
-        borders: [...document.querySelectorAll('.local-auth-form input:not([type="checkbox"])')]
-          .map(input => getComputedStyle(input).borderBottomColor) } };
+        borders: fields.map(input => getComputedStyle(input).borderBottomColor) } };
   });
   const contrast = (a, b) => {
     const luminance = value => {

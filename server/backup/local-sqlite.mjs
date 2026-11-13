@@ -229,16 +229,17 @@ async function readRecoveryKey(path) {
   }
 }
 
-function verifyRecoveredDocuments(path, documents, key) {
+function verifyRecoveredDocuments(path, documents, key, options) {
   if (!documents.length) throw new BackupError('快照没有加密业务文档，无法验证密钥匹配');
   try {
-    verifyBusinessDocumentPayloads(path, key);
+    return verifyBusinessDocumentPayloads(path, key, options);
   } catch {
     throw new BackupError('业务回读失败，请核对配套密钥和快照版本');
   }
 }
 
-export async function restoreSnapshot({ input, key, output }) {
+export async function restoreSnapshot({ input, key, output, exercise = false }) {
+  const started = performance.now();
   const source = await checkedPackage(input);
   const target = await projectBackupPath(output);
   const keyPath = await projectBackupPath(key);
@@ -254,8 +255,12 @@ export async function restoreSnapshot({ input, key, output }) {
     await copyFile(source.database, database, constants.COPYFILE_EXCL);
     await chmod(database, 0o600);
     const details = await verifyFile(database, source.manifest);
-    verifyRecoveredDocuments(database, details.documents, recoveryKey);
+    const checkedRecords = verifyRecoveredDocuments(database, details.documents, recoveryKey, { countBusinessRecords: exercise });
+    if (exercise && checkedRecords < 1) throw new BackupError('没有读到可核对的业务记录');
     await writeFile(database + '.key', recoveryKey, { flag: 'wx', mode: 0o600 });
+    if (exercise) return { version: 1, database: 'business', result: 'passed', isolated: true,
+      capturedAt: Date.parse(source.manifest.createdAt), finishedAt: Date.now(),
+      durationMs: Math.max(1, Math.round(performance.now() - started)), checkedRecords };
     return { restored: true, documents: details.documents.length, auditEntries: details.auditEntries };
   } catch (error) {
     if (created) await removeAttempt(target);

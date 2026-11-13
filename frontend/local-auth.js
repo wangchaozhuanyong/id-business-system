@@ -5,7 +5,16 @@
   const required = document.querySelector('meta[name="id-local-auth"]')?.content === 'required';
   const setupEmail = document.querySelector('meta[name="id-local-admin-setup"]')?.content;
   const actorMeta = document.querySelector('meta[name="id-local-actor"]')?.content;
-  const roles = { super: '超级管理员', admin: '普通管理员', employee: '普通员工' };
+  const challengeSiteKey = document.querySelector('meta[name="id-turnstile-site-key"]')?.content;
+  const roles = { super: '超级管理员', admin: '管理员', supervisor: '主管', finance: '财务', registrar: '注册员', employee: '员工' };
+  const roleAccess = {
+    super: '员工权限、登录安全、系统设置与日常管理',
+    admin: '日常业务管理、数据与监控、操作记录',
+    supervisor: '本组工作汇总、登记业务 IP',
+    finance: '充值银行卡、套餐用卡、对账，查看订单与统计',
+    registrar: '邮箱及账号登记、查询邮件验证码、保存动态验证码',
+    employee: '快速操作与本人负责的客户业务'
+  };
   let actor = null;
   if (required && actorMeta) {
     try {
@@ -43,12 +52,12 @@
   function lock(reason = 'invalid') {
     if (state.status !== 'signed-in' || reloading) return;
     const url = new URL(window.location.href);
-    url.searchParams.set('auth_reason', ['expired', 'revoked', 'logout'].includes(reason) ? reason : 'invalid');
+    url.searchParams.set('auth_reason', ['expired', 'revoked', 'logout', 'network', 'device'].includes(reason) ? reason : 'invalid');
     window.history.replaceState(null, '', url);
     reload();
   }
 
-  async function request(path, method = 'GET', body) {
+  async function request(path, method = 'GET', body, timing) {
     const response = await window.fetch(prefix + path, {
       method,
       cache: 'no-store',
@@ -58,6 +67,7 @@
         ? {}
         : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
     });
+    timing?.response(response);
     const result = await response.json().catch(() => null);
     if (!response.ok || result === null) {
       if (response.status === 401 && path !== 'login') lock(result?.reason);
@@ -124,6 +134,7 @@
         <h1 id="local-auth-title">${setup ? '设置本机管理员密码' : '登录工作台'}</h1>
         <p class="local-auth-intro">${setup ? '首次设置只在本机进行。完成后可在系统设置中管理员工。' : '受控内部业务中枢 · 仅限授权人员登录访问。'}</p>
         <form class="local-auth-form">
+          <fieldset class="local-auth-stage" id="local-auth-credentials">
           <div class="local-auth-field">
           <label for="local-auth-email">登录邮箱</label>
           <input id="local-auth-email" name="email" type="email" autocomplete="username" placeholder="请输入登录邮箱" required maxlength="254" ${setup ? 'readonly' : ''} />
@@ -147,6 +158,13 @@
             </button>
           </div></div>` : ''}
           <div class="local-auth-remember-row"><label class="local-auth-remember" for="local-auth-remember"><input id="local-auth-remember" name="remember" type="checkbox" />在此设备保持登录</label></div>
+          ${challengeSiteKey ? '<div id="local-auth-challenge" aria-label="真人验证"><p role="status">正在载入真人验证…</p></div>' : ''}
+          </fieldset>
+          <fieldset class="local-auth-stage" id="local-auth-second-factor" hidden>
+            <label for="local-auth-code">六位动态验证码或恢复码</label>
+            <input id="local-auth-code" name="code" type="text" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" maxlength="32" disabled />
+            <button type="button" class="button" id="local-auth-back">返回邮箱和密码</button>
+          </fieldset>
           <p class="local-auth-reason" role="status" hidden></p>
           <p class="local-auth-error" role="alert" hidden></p>
           <button type="submit" class="button primary">${submitLabel}</button>
@@ -155,16 +173,17 @@
       </section></div>
       <footer class="local-auth-footer"><span>账号 · 订阅 · 订单</span><span>内部工作台</span></footer>`;
     document.body.append(gate);
-    window.IDTitleHelp.attach($('#local-auth-title', gate), $('.local-auth-intro', gate));
+    window.IDTitleHelp?.attach($('#local-auth-title', gate), $('.local-auth-intro', gate));
     const help = document.createElement('span');
     help.textContent = '保持登录后，实际操作时自动续期；闲置30天或首次登录满90天需重新登录。未勾选时登录有效期为8小时。更新网站不会主动退出。';
-    window.IDTitleHelp.attach($('.local-auth-remember', gate), help, 'field-help');
+    window.IDTitleHelp?.attach($('.local-auth-remember', gate), help, 'field-help');
     const reasons = { expired: '登录已到期，请重新登录。', revoked: '账号密码、权限或启用状态已变化，请重新登录。',
-      invalid: '登录已失效或已在其他设备退出，请重新登录。', logout: '已安全退出登录。' };
+      invalid: '登录已失效或已在其他设备退出，请重新登录。', logout: '已安全退出登录。',
+      network: '当前网络尚未获准访问，请连接允许的网络。', device: '这台设备的登录许可已变化，请重新登录。' };
     const reason = reasons[new URL(window.location.href).searchParams.get('auth_reason')];
     if (reason) { $('.local-auth-reason', gate).textContent = reason; $('.local-auth-reason', gate).hidden = false; }
 
-    const form = $('form', gate);
+    const form = $('.local-auth-form', gate);
     gate.querySelectorAll('.local-auth-password-toggle').forEach(btn => {
       btn.addEventListener('click', () => {
         const input = btn.closest('.local-auth-password-wrapper')?.querySelector('input');
@@ -181,43 +200,131 @@
     const confirmation = $('#local-auth-confirmation', form);
     if (setup) email.value = setupEmail;
     const notice = $('.local-auth-error', form);
+    const credentials = $('#local-auth-credentials', form);
+    const secondFactor = $('#local-auth-second-factor', form);
+    const code = $('#local-auth-code', form);
+    const challenge = $('#local-auth-challenge', form);
+    let widget, challengeToken = '', verification, timing, pendingDevice = false;
+    if (challenge) {
+      submit.disabled = true;
+      const script = document.createElement('script');
+      script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+      script.async = true;
+      const challengeError = () => {
+        challengeToken = '';
+        if (!verification) {
+          submit.disabled = true;
+          notice.textContent = '真人验证暂时无法加载，请刷新页面后重试。';
+          notice.hidden = false;
+        }
+      };
+      script.addEventListener('error', challengeError);
+      script.addEventListener('load', () => {
+        if (!window.turnstile) return challengeError();
+        window.turnstile.ready(() => {
+          challenge.replaceChildren();
+          widget = window.turnstile.render(challenge, {
+            sitekey: challengeSiteKey, action: 'login', language: 'zh-cn',
+            size: challenge.clientWidth < 300 ? 'compact' : 'flexible',
+            callback(token) {
+              challengeToken = token;
+              if (!pendingDevice && !form.hasAttribute('aria-busy')) submit.disabled = false;
+            },
+            'expired-callback'() {
+              challengeToken = '';
+              if (!verification) submit.disabled = true;
+            },
+            'error-callback': challengeError
+          });
+        });
+      });
+      document.head.append(script);
+    }
+    function showCredentials() {
+      verification = undefined;
+      pendingDevice = false;
+      timing?.finish();
+      timing = undefined;
+      code.disabled = true;
+      code.value = '';
+      secondFactor.hidden = true;
+      credentials.hidden = false;
+      credentials.disabled = false;
+      submit.disabled = Boolean(challenge && !challengeToken);
+      submit.textContent = submitLabel;
+      password.focus();
+    }
+    $('#local-auth-back', form).addEventListener('click', () => {
+      notice.hidden = true;
+      showCredentials();
+    });
     form.addEventListener('submit', async (event) => {
       event.preventDefault();
-      if (submit.disabled) return;
+      if (submit.disabled || pendingDevice || !verification && challenge && !challengeToken) return;
       notice.hidden = true;
       form.setAttribute('aria-busy', 'true');
       submit.disabled = true;
-      submit.textContent = setup ? '正在设置密码…' : '正在登录…';
+      submit.textContent = setup ? '正在设置密码…' : verification ? '正在验证…' : '正在登录…';
+      const verifyingCode = Boolean(verification);
       let configured = false;
       try {
         if (setup) {
           await request('setup', 'POST', { password: password.value, confirmation: confirmation.value });
           configured = true;
         }
-        const result = await request('login', 'POST', {
+        timing = window.IDSiteTiming?.start('login');
+        const result = verifyingCode
+          ? await request('login/verify', 'POST', { verification, code: code.value.trim() }, timing)
+          : await request('login', 'POST', {
           email: email.value.trim(),
           password: password.value,
-          remember: $('#local-auth-remember', form).checked
-        });
+          remember: $('#local-auth-remember', form).checked,
+          ...(challenge ? { challenge: challengeToken } : {})
+        }, timing);
+        if (result.needsCode) {
+          verification = result.verification;
+          credentials.disabled = true;
+          credentials.hidden = true;
+          secondFactor.hidden = false;
+          code.disabled = false;
+          return;
+        }
+        if (result.pendingDevice) {
+          pendingDevice = true;
+          code.disabled = true;
+          notice.textContent = '已提交设备申请。请在已批准的设备上确认，或请超级管理员批准，再在这里登录。';
+          notice.hidden = false;
+          timing?.finish();
+          return;
+        }
         if (!result.actor?.id) throw new Error('登录未完成，请重试。');
+        timing?.finish();
         const url = new URL(window.location.href);
         url.searchParams.delete('auth_reason');
         window.history.replaceState(null, '', url);
         reload();
       } catch (error) {
+        const diagnostic = timing?.finish(error);
+        if (verifyingCode && error.status === 410) showCredentials();
         if (configured || (setup && error.status === 409 && error.message.includes('请直接登录'))) reload();
         else {
-          notice.textContent = error.message || '登录未完成，请重试。';
+          notice.textContent = error.status ? error.message || '登录未完成，请重试。' : '暂时无法连接网站，请检查网络后重试。';
           notice.hidden = false;
+          window.IDSiteTiming?.show(notice, diagnostic);
         }
       } finally {
         password.value = '';
+        code.value = '';
         if (confirmation) confirmation.value = '';
+        if (!verifyingCode && widget !== undefined && !reloading) {
+          challengeToken = '';
+          window.turnstile.reset(widget);
+        }
         if (!reloading) {
-          submit.disabled = false;
-          submit.textContent = submitLabel;
           form.removeAttribute('aria-busy');
-          password.focus();
+          submit.disabled = pendingDevice || Boolean(!verification && challenge && !challengeToken);
+          submit.textContent = pendingDevice ? '等待设备批准' : verification ? '验证并登录' : submitLabel;
+          if (!pendingDevice) (verification ? code : password).focus();
         }
       }
     });
@@ -229,13 +336,14 @@
     if (!actor || !api) return;
     const nickname = actor.nicknameSet ? '' : `<form id="local-auth-nickname" class="form-section">${api.field('设置昵称', 'self-nickname', api.input('self-nickname', '', 'required maxlength="80" autocomplete="off"'), true, '首次保存后由管理员修改。')}<div class="form-footer"><button type="submit" class="button primary">保存昵称</button></div></form>`;
     api.openDrawer(
-      '当前登录账户',
+      '我的账号',
       '登录设备只显示本账号的会话。保持登录会在实际操作时续期，闲置30天或登录满90天需重新登录；退出某个设备会立即撤销该设备的访问权限。',
-      `<div class="property-list"><div class="property-row"><span>昵称</span><strong>${api.esc(actor.name)}</strong></div><div class="property-row"><span>登录邮箱</span><strong>${api.esc(actor.email)}</strong></div><div class="property-row"><span>角色</span><strong>${roles[actor.role]}</strong></div></div>${nickname}<section class="local-auth-devices" aria-labelledby="local-auth-devices-title"><div class="section-heading"><h3 id="local-auth-devices-title">登录设备</h3><button type="button" class="button" id="local-auth-devices-refresh">刷新</button></div><div id="local-auth-device-list" aria-live="polite"></div></section>`,
+      `<div class="property-list"><div class="property-row"><span>昵称</span><strong>${api.esc(actor.name)}</strong></div><div class="property-row"><span>登录邮箱</span><strong>${api.esc(actor.email)}</strong></div><div class="property-row"><span>角色</span><strong>${roles[actor.role]}</strong></div></div>${nickname}<section class="local-auth-devices"><div class="section-title-row"><h3>账号安全</h3>${api.titleInfo('账号安全', '两步验证用于登录和重要操作。启用设备限制后，每台新电脑和浏览器都需要批准。', 'local-profile-security-help')}</div><div id="local-auth-personal-security" aria-live="polite"></div></section><section class="local-auth-devices" aria-labelledby="local-auth-devices-title"><div class="section-heading"><h3 id="local-auth-devices-title">登录设备</h3><button type="button" class="button" id="local-auth-devices-refresh">刷新</button></div><div id="local-auth-device-list" aria-live="polite"></div></section>`,
       `${api.button('关闭', 'drawer-close')}<button type="button" id="local-auth-sign-out" class="button danger">退出登录</button>`
     );
     const deviceList = $('#local-auth-device-list');
     const deviceRefresh = $('#local-auth-devices-refresh');
+    void window.IDAccountSecurity?.personal($('#local-auth-personal-security'));
     async function loadDevices() {
       if (deviceRefresh.disabled) return;
       deviceRefresh.disabled = true;
@@ -399,13 +507,7 @@
             { id: 'access', label: '本机权限' }
           ],
           [
-            {
-              id: 'super',
-              name: roles.super,
-              access: '管理业务、查看操作记录、维护员工账户与角色'
-            },
-            { id: 'admin', name: roles.admin, access: '管理业务、查看操作记录' },
-            { id: 'employee', name: roles.employee, access: '查看可用的库存及订单页面' }
+            ...Object.entries(roles).map(([id, name]) => ({ id, name, access: roleAccess[id] }))
           ],
           '',
           'local-employee-roles'
@@ -486,14 +588,15 @@
           ? input('local-staff-role', roles.super, 'readonly')
           : select(
               'local-staff-role',
-              [
-                ['employee', roles.employee],
-                ['admin', roles.admin]
-              ],
+              Object.entries(roles).filter(([role]) => role !== 'super'),
               draft?.['local-staff-role'] ?? original?.role ?? 'employee'
             ),
         true
       ) +
+      (superAccount ? '' : field('所属主管', 'local-staff-team-lead',
+        select('local-staff-team-lead', [['', '暂不分配'],
+          ...staff.rows.filter(row => row.role === 'supervisor' && row.active).map(row => [row.id, row.name])],
+        draft?.['local-staff-team-lead'] ?? original?.teamLeadId ?? ''), false, '用于分配员工所属小组。')) +
       field(
         original ? '新密码' : '登录密码',
         'local-staff-password',
@@ -522,7 +625,8 @@
       version: Number(value('staff-version')),
       name: value('local-staff-name').trim(),
       email: value('local-staff-email').trim(),
-      role: value('local-staff-role')
+      role: value('local-staff-role'),
+      teamLeadId: value('local-staff-team-lead')
     };
   }
 
@@ -546,6 +650,7 @@
     const submit = $('button[form="ops-local-staff-form"]');
     if (submit) submit.disabled = true;
     try {
+      if (window.IDAccountSecurity && !await window.IDAccountSecurity.verify({ whenAvailable: true })) return;
       const path = original ? 'employees/' + encodeURIComponent(original.id) : 'employees';
       const { employee } = await request(path, original ? 'PATCH' : 'POST', payload);
       if (!employee?.id) throw new Error('未收到已保存的员工账户。');
@@ -589,13 +694,14 @@
       : length >= 12 && length <= 128 && !/[\0\r\n]/u.test(password);
     const validEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(details.email);
     const role = original?.role === 'super' ? 'super' : details.role;
-    const validRole = role === 'admin' || role === 'employee' || original?.role === 'super';
+    const validRole = Object.hasOwn(roles, role) && (role !== 'super' || original?.role === 'super');
     api.setError('local-staff-name', details.name ? '' : '请填写员工昵称');
     api.setError('local-staff-email', validEmail ? '' : '请输入有效邮箱');
     api.setError('local-staff-password', validPassword ? '' : '密码需为 12–128 个字符');
     api.setError('local-staff-role', validRole ? '' : '请选择有效角色');
     if (!details.name || !validEmail || !validPassword || !validRole) return;
-    const fields = { name: details.name, role, ...(password ? { password } : {}) };
+    const fields = { name: details.name, role, ...(role === 'employee' && { teamLeadId: details.teamLeadId }),
+      ...(password ? { password } : {}) };
     const payload = original
       ? { ...fields, version: details.version, active: original.active }
       : { ...fields, email: details.email };
@@ -644,6 +750,7 @@
     refresh,
     logout,
     openProfile,
+    accountRequest: request,
     renderEmployees,
     loadEmployees,
     submitEmployee,

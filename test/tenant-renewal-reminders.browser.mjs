@@ -151,7 +151,7 @@ test('租户续费提醒、联系人、独立设置、保存失败和新周期',
   await pending.getByText('later@example.test', { exact: true }).waitFor();
   assert.equal(snapshot.data.tenantRenewalWarningHours, 96);
   assert.equal(snapshot.data.renewalWarningHours, 24);
-  await page.goto(origin + '/#/workspace/renewals');
+  await page.goto(origin + '/#/workspace/renewals/reminders');
   await page.getByText('提前 1 天提醒', { exact: true }).waitFor();
   await page.goto(origin + '/#/customers/tenants');
   await pending.getByText('later@example.test', { exact: true }).waitFor();

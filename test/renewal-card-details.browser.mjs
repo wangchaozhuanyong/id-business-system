@@ -4,7 +4,7 @@ import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { interceptDesign, origin, settle } from './helpers/offline-design.mjs';
 
-const entry = '/#/workspace/renewals';
+const entry = '/#/workspace/renewals/reminders';
 const api = '/api/local/subscription-card-';
 const fixturePath = new URL('../docs/audits/2026-11-06-design-review/visual-fixtures.json', import.meta.url);
 const actor = { id: 'synthetic-renewal-admin', name: '合成管理员', role: 'admin' };

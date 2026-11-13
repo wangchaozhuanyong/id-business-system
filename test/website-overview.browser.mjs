@@ -883,7 +883,7 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     await context.close();
   });
 
-  await t.test('员工只读取并显示获准的库存', async () => {
+  await t.test('员工不能打开全站总览或读取全站库存', async () => {
     const session = await open({ id: 'employee-fixture', name: '测试员工', role: 'employee' }, {
       inventory: { version: 1, data: inventoryFixture },
       commerce: { version: 1, data: commerceFixture },
@@ -891,16 +891,12 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     });
     const { page, context, requests } = session;
     await page.goto(origin + '/#/overview');
-    await page.locator('[data-stock-type="microsoft"] [data-stock-column="registered"]').getByText('1', { exact: true }).waitFor();
-    await refreshed(page);
+    await page.getByRole('heading', { name: '访问受限', exact: true }).waitFor();
     assert.equal(await page.locator('.overview-metrics, .overview-chart-tools, #overview-customers, #overview-tasks').count(), 0);
-    assert.equal(await page.getByRole('link', { name: '苹果隐藏邮箱', exact: true }).count(), 0);
-    assert.deepEqual(await page.locator('.overview-stock-table tbody th a').evaluateAll(nodes =>
-      nodes.map(node => node.getAttribute('href'))), [
-      '#/mailboxes/google', '#/mailboxes/microsoft', '#/accounts/gpt', '#/accounts/claude',
-      '#/accounts/gemini', '#/accounts/grok'
-    ]);
-    assert.deepEqual(requests.filter(({ path }) => ['/api/local/commerce', '/api/local/appleBalance', '/api/local/recharge-codes'].includes(path)), []);
+    assert.equal(await page.locator('.overview-stock-table').count(), 0);
+    assert.deepEqual(requests.filter(({ path }) => [
+      '/api/local/commerce', '/api/local/inventory', '/api/local/appleBalance', '/api/local/recharge-codes'
+    ].includes(path)), []);
     checkTransport(session);
     await context.close();
   });

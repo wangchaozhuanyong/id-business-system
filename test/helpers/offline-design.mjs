@@ -5,7 +5,8 @@ import { loadCodexdaichongAssets } from '../../modules/recharge/codexdaichong/as
 export const root = fileURLToPath(new URL('../../', import.meta.url));
 export const origin = 'https://design-layout.invalid';
 let rechargeAssets;
-export async function interceptDesign(context, { beforeDirectory, localFixtures, actor, changeEvents = false, skipRechargeAssets = false, scrollbarSelector = '' } = {}) {
+export async function interceptDesign(context, { beforeDirectory, localFixtures, actor, changeEvents = false, skipRechargeAssets = false,
+  scrollbarSelector = '', siteTelemetry = false, localAuthUi = false } = {}) {
   const unavailable = [],
     external = [];
   if (!skipRechargeAssets) rechargeAssets ??= await loadCodexdaichongAssets();
@@ -66,11 +67,15 @@ export async function interceptDesign(context, { beforeDirectory, localFixtures,
     }
     if (url.pathname.startsWith('/api/')) {
       const resource = url.pathname.slice('/api/local/'.length);
+      if (resource === 'auth/session' && localAuthUi) return json({ configured: true, actor: actor || null });
+      if (resource === 'auth/activity' && localAuthUi) return json({ expiresAt: Date.now() + 3_600_000, remembered: false });
       if (resource === 'apple-relay/status')
         return json(localFixtures?.[resource] ?? { configured: true, codeQueryConfigured: true, parentIds: [], aliasIds: [] });
       if (resource === 'audit') return json([]);
       if (resource === 'subscriptions/lookup' && !localFixtures?.[resource])
         return json({ ownerId: '', ownerName: '' });
+      if (resource === 'renewals' && !localFixtures?.[resource])
+        return json({ version: 0, candidates: [], items: [] });
       return json(localFixtures?.[resource] ?? { version: 0, data: null, items: [] });
     }
     let file = path.join(
@@ -113,13 +118,16 @@ export async function interceptDesign(context, { beforeDirectory, localFixtures,
       if (url.pathname === '/' && localFixtures)
         body = body
           .toString()
+          .replace('<head>', siteTelemetry ? '<head><meta name="id-site-observations" content="enabled">' : '<head>')
           .replace('<head>', changeEvents ? '<head><meta name="id-local-data-events" content="enabled">' : '<head>')
           .replace('<head>', actor
             ? `<head><meta name="id-local-auth" content="required"><meta name="id-local-actor" content="${encodeURIComponent(JSON.stringify(actor))}">`
             : '<head>')
           .replace(
             '    <script src="./prototype.js',
-            '    <script src="/local-data.js" defer></script><script src="/toolbox-local.js" defer></script>\n    <script src="./prototype.js'
+            '    <link rel="stylesheet" href="/local-auth.css">\n' +
+              '    <script src="/local-data.js" defer></script><script src="/toolbox-local.js" defer></script>' +
+              (localAuthUi ? '<script src="/local-auth.js" defer></script>' : '') + '\n    <script src="./prototype.js'
           )
           .replace(
             '</head>',

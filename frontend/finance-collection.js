@@ -212,6 +212,8 @@
       command.action === 'collect' ? '正在采集汇率…' : '正在保存采集设置…');
     for (const button of document.querySelectorAll('#main button[data-action="fx-collect"], #fx-settings-form [type="submit"]')) button.disabled = true;
     try {
+      if (window.IDAccountSecurity && !await window.IDAccountSecurity.verify({ whenAvailable: true })) return;
+      if (epoch !== lifetime) return;
       const result = await D.financeCollectionAction(command);
       if (epoch !== lifetime) return;
       await success?.(result);
@@ -296,6 +298,7 @@
       node.setAttribute('aria-expanded', String(popup.matches(':popover-open')));
     } else if (action === 'fx-cleanup-preview') {
       try {
+        if (window.IDAccountSecurity && !await window.IDAccountSecurity.verify({ whenAvailable: true })) return true;
         const preview = await D.financeCollectionAction({ action: 'cleanup-preview' });
         A.confirmAction('确认清理过期采集记录', '本次清理 ' + preview.quoteCount + ' 批非引用报价、' + preview.runCount + ' 条采集记录。不会删除订单和订单快照。范围变化后需要重新预览。',
           () => perform({ action: 'cleanup', preview, confirm: true }, () => A.notify('过期采集记录已清理')), '确认清理');

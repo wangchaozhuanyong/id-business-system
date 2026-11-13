@@ -81,7 +81,7 @@ test('preview media uses unified login, preserves media groups and authorizes ea
   }, cookie);
   assert.ok(added.ok);
   const another = await login('another-media-test@example.test', employeePassword);
-  assert.equal((await fetch(download, { headers: { Cookie: another } })).status, 400);
+  assert.equal((await fetch(download, { headers: { Cookie: another } })).status, 403);
   const file = await fetch(download, { headers: { Cookie: cookie } });
   assert.equal(file.status, 200);
   assert.match(file.headers.get('content-disposition'), /attachment; filename="media.m4a"/);

@@ -16,6 +16,7 @@ import { historicalFeeAction } from '../server/finance/snapshot-integrity.mjs';
 const origin = 'https://orders.example.test';
 const route = '/api/local/commerce';
 const admin = { id: 'admin', name: '合成管理员', role: 'admin' };
+const supervisor = { id: 'super', name: '合成超级管理员', role: 'super' };
 const employee = { id: 'employee', name: '合成员工', role: 'employee' };
 const sampleNumber = '4242424242424242';
 const sampleSerial = '00042-FIXTURE-CARD-SERIAL';
@@ -57,7 +58,7 @@ const people = (id, changes = {}) => base(id, {
   proMaterialMode: 'people', phone: '+60123456780', ...changes
 });
 
-async function request(store, method, data, { actor = admin, path = route, readOrderCards } = {}) {
+async function request(store, method, data, { actor = admin, path = route, readOrderCards, owners } = {}) {
   const body = data ? [Buffer.from(JSON.stringify(data))] : [];
   const request = Object.assign(Readable.from(body), {
     method, url: path, headers: { host: 'orders.example.test', origin, 'content-type': 'application/json' }
@@ -69,7 +70,9 @@ async function request(store, method, data, { actor = admin, path = route, readO
     writeHead(code) { status = code; },
     end(value) { parsed = JSON.parse(value); }
   };
-  await handleLocalBusiness(request, response, path, store, actor, { publicOrigin: origin, readOrderCards });
+  await handleLocalBusiness(request, response, path, store, actor, {
+    publicOrigin: origin, readOrderCards, ...(owners && { readOrderOwners: () => owners })
+  });
   return { status, data: parsed, headers };
 }
 
@@ -130,9 +133,9 @@ test('Pro manual cards are normalized, excluded from pool, and exposed only to m
   const store = createLocalBusinessStore(':memory:');
   try {
     const input = manual('manual-order', {
-      proCardNumber: '4242 4242-4242 4242', paymentId: '9999', paidConfirmed: true
+      proCardNumber: '4242 4242-4242 4242', paymentId: '9999', paidConfirmed: true, ownerId: employee.id
     });
-    const saved = await save(store, 0, makeDocument([input]));
+    const saved = await save(store, 0, makeDocument([input]), '新增独立订单', { owners: [employee] });
     assert.equal(saved.status, 200);
     assert.equal(saved.data.data.orders[0].proCardNumber, sampleNumber);
     assert.equal(saved.data.data.orders[0].proCardSerial, sampleSerial);
@@ -145,7 +148,8 @@ test('Pro manual cards are normalized, excluded from pool, and exposed only to m
     assert.equal(full.data.data.orders[0].proCardNumber, sampleNumber);
     const masked = await request(store, 'GET', undefined, { actor: employee });
     assert.equal(masked.headers['Cache-Control'], 'private, no-store');
-    assert.equal(masked.data.data.orders[0].proCardNumber, '•••• 4242');
+    assert.equal(masked.data.data.orders[0].paymentId, undefined);
+    assert.equal(Object.hasOwn(masked.data.data.orders[0], 'proCardNumber'), false);
     assert.equal(Object.hasOwn(masked.data.data.orders[0], 'proCardSerial'), false);
     const stale = await save(store, 0, makeDocument([input]));
     assert.equal(stale.status, 409);
@@ -157,7 +161,8 @@ test('Pro manual cards are normalized, excluded from pool, and exposed only to m
 test('Pro can correct unconfirmed material mode and retains the original encrypted-history fields', async () => {
   const store = createLocalBusinessStore(':memory:');
   try {
-    const created = await save(store, 0, makeDocument([manual('switch', { businessType: '首次开通' })], [tenant]));
+    const created = await save(store, 0, makeDocument([manual('switch', { businessType: '首次开通', ownerId: employee.id })],
+      [tenant]), '新增独立订单', { owners: [employee] });
     assert.equal(created.status, 200);
     const before = created.data.data.orders[0];
     const amended = edit(before, {
@@ -165,8 +170,9 @@ test('Pro can correct unconfirmed material mode and retains the original encrypt
       claudeVerifierId: tenant.id, verifier: '伪造认证人', verifierPhone: '99999', kyc: 'KYC 认证'
     });
     const nextDoc = { ...created.data.data, orders: [amended] };
-    assert.equal((await save(store, 1, nextDoc, '退款登记')).status, 409);
-    const corrected = await save(store, 1, nextDoc, '更正订单');
+    const options = { owners: [employee] };
+    assert.equal((await save(store, 1, nextDoc, '退款登记', options)).status, 409);
+    const corrected = await save(store, 1, nextDoc, '更正订单', options);
     assert.equal(corrected.status, 200);
     const order = corrected.data.data.orders[0];
     assert.equal(order.proMaterialMode, 'people');
@@ -176,9 +182,10 @@ test('Pro can correct unconfirmed material mode and retains the original encrypt
     assert.deepEqual(order.costSettings, before.costSettings);
     assert.equal(order.corrections[0].previous.proCardNumber, sampleNumber);
     const tampered = { ...order, version: order.version + 1, corrections: [] };
-    assert.equal((await save(store, 2, { ...corrected.data.data, orders: [tampered] }, '更正订单')).status, 409);
+    assert.equal((await save(store, 2, { ...corrected.data.data, orders: [tampered] }, '更正订单', options)).status, 409);
     const redacted = await request(store, 'GET', undefined, { actor: employee });
-    assert.equal(redacted.data.data.orders[0].corrections[0].previous.proCardNumber, '•••• 4242');
+    assert.equal(redacted.data.data.orders[0].id, order.id);
+    assert.equal(Object.hasOwn(redacted.data.data.orders[0], 'corrections'), false);
     assert.doesNotMatch(JSON.stringify(redacted.data), /4242424242424242|00042-FIXTURE-CARD-SERIAL/);
   } finally { store.close(); }
 });
@@ -853,7 +860,7 @@ test('historical GPT fee correction preserves the original rule and rejects late
       cardIssueUsd: '0.5', cardPercent: '0.08', cardPerPaymentUsd: '0.3' };
     const settings = { mailboxTypes: [], costSettings: rules };
     const firstSettings = await request(store, 'PUT', { version: 0, data: settings, action: 'fee_rules_save' },
-      { path: '/api/local/settings' });
+      { path: '/api/local/settings', actor: supervisor });
     assert.equal(firstSettings.status, 200);
     const created = await save(store, 0, makeDocument([base('gpt-fee-history', {
       product: 'GPT', plan: 'Plus', source: '管理员手工', paidConfirmed: true, receiptConfirmed: true
@@ -862,7 +869,7 @@ test('historical GPT fee correction preserves the original rule and rejects late
     const prior = created.data.data.orders[0];
     const correctedRules = { ...rules, version: 3, cardPercent: '0.008' };
     const secondSettings = await request(store, 'PUT', { version: 1, data: { ...settings, costSettings: correctedRules },
-      action: 'fee_rules_save' }, { path: '/api/local/settings' });
+      action: 'fee_rules_save' }, { path: '/api/local/settings', actor: supervisor });
     assert.equal(secondSettings.status, 200);
     const previous = structuredClone(prior);
     delete previous.corrections; delete previous.refunds; delete previous.bankReturns;

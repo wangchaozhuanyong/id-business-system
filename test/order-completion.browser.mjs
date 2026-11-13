@@ -256,6 +256,7 @@ test('手工旧单从补全和续费提醒进入原单，独立补邮箱并保�
   await drawer.getByRole('button', { name: '取消', exact: true }).click();
 
   await page.goto(origin + '/#/workspace/renewals');
+  await page.getByRole('link', { name: '续费提醒', exact: true }).click();
   await page.getByRole('tab', { name: /^已到期/ }).click();
   await page.locator('[data-action="commerce-renewal-select"][data-id="manual"]').click();
   await page.getByRole('region', { name: '当前选中客户' }).getByRole('button', { name: '补邮箱', exact: true }).click();

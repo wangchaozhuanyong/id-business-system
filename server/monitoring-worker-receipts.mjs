@@ -25,7 +25,8 @@ async function readReceiptFile(path, { uid, mode, gid }) {
 function validWorkerReceipt(value) {
   return value && timestamp(value.at) && Number.isSafeInteger(value.failures) && value.failures >= 0 &&
     typeof value.integrityFailure === 'boolean' &&
-    (value.verifiedAt === null || (timestamp(value.verifiedAt) && value.verifiedAt <= value.at));
+    (value.verifiedAt === null || (timestamp(value.verifiedAt) && value.verifiedAt <= value.at)) &&
+    (value.capturedAt === undefined || (timestamp(value.capturedAt) && value.capturedAt <= value.verifiedAt));
 }
 
 export async function readWorkerReceipt(directory, name) {
@@ -69,6 +70,7 @@ export async function readSheetsSyncStatus({
 }
 
 export async function readBackupMonitorReceipt(directory) {
+  if (!isAbsolute(directory || '')) return null;
   const report = await readReceiptFile(join(directory, 'backup-status.json'),
     { uid: 0, gid: process.getgid(), mode: 0o640 });
   if (!report || !timestamp(report.at) || typeof report.mysqlTimerActive !== 'boolean' ||
@@ -80,12 +82,19 @@ export async function readBackupMonitorReceipt(directory) {
   return report;
 }
 
+export async function readRestoreEvidence(directory) {
+  if (!isAbsolute(directory || '')) return {};
+  const results = await Promise.all(['business', 'recharge'].map(async key => [key, await readReceiptFile(
+    join(directory, 'restore-' + key + '.json'), { uid: 0, gid: process.getgid(), mode: 0o640 })]));
+  return Object.fromEntries(results);
+}
+
 export function createWorkerReceipt(directory, name, dataDirectory, clock = Date.now) {
   if (!isAbsolute(directory || '') || !workers.has(name) || typeof dataDirectory !== 'string' ||
       resolve(directory) === resolve(dataDirectory))
     return async () => {};
   let current;
-  return async ({ failures = 0, verified = false, integrityFailure = false } = {}) => {
+  return async ({ failures = 0, verified = false, integrityFailure = false, capturedAt } = {}) => {
     let temp;
     try {
       const at = clock();
@@ -95,7 +104,9 @@ export function createWorkerReceipt(directory, name, dataDirectory, clock = Date
       const root = await lstat(directory);
       if (!root.isDirectory() || root.uid !== process.getuid() || (root.mode & 0o777) !== 0o700 ||
           await realpath(directory) !== directory) return;
+      const capture = verified ? capturedAt : current?.capturedAt;
       const next = { at, failures, integrityFailure, verifiedAt: verified ? at : current?.verifiedAt ?? null };
+      if (name === 'backup' && timestamp(capture) && capture <= next.verifiedAt) next.capturedAt = capture;
       temp = join(directory, '.monitoring-' + randomUUID());
       const file = await open(temp, 'wx', 0o600);
       try { await file.writeFile(JSON.stringify(next)); } finally { await file.close(); }

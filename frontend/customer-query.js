@@ -169,7 +169,7 @@
     }, Math.min(2_147_000_000, Math.min(...deadlines) - now + 25));
   }
 
-  async function read(refresh = false, refreshTab = '') {
+  async function read(refresh = false, refreshTab = '', measure = false) {
     const state = view(), region = document.querySelector('[data-customer-query-region]');
     if (!active() || !region || !state.query) return true;
     const token = ++sequence;
@@ -178,10 +178,11 @@
     const errorBox = region.querySelector('[data-customer-query-error]');
     errorBox.hidden = true;
     readFailed = false;
+    const timing = measure ? window.IDSiteTiming?.start('customer-search') : undefined;
     try {
       if (!data?.customerQuery) throw new Error('客户查询服务尚未连接');
       const load = async (action, command) => {
-        const fetch = () => data.customerQuery(action, command);
+        const fetch = () => data.customerQuery(action, command, { timing: action === 'search' || command.tab === 'accounts' ? timing : undefined });
         const result = await (data.queries?.read('customer-query', JSON.stringify([action, command]), fetch,
           { refresh: refresh || command.tab === refreshTab }) || fetch());
         if (!Array.isArray(result?.items) || (action === 'detail' && result.customer?.id !== command.customerId))
@@ -195,6 +196,7 @@
         state.pages.search = { page: result.page, pageSize: result.pageSize };
         if (result.total !== 1 || result.items.length !== 1) {
           renderResult(region, result, state);
+          timing?.finish();
           return true;
         }
         state.customerId = result.items[0].id;
@@ -210,6 +212,7 @@
       }
       snapshot = sections.get('accounts');
       renderResult(region, snapshot, state);
+      timing?.finish();
       return true;
     } catch (error) {
       if (!current() || error?.code === 'READ_SUPERSEDED') return true;
@@ -219,10 +222,12 @@
       errorBox.textContent = error.message || '客户资料读取失败，请重试';
       errorBox.insertAdjacentHTML('beforeend', button('重试', 'customer-query-retry'));
       errorBox.hidden = false;
+      window.IDSiteTiming?.show(errorBox, timing?.finish(error));
       return false;
     } finally { progress.finish(); }
   }
 
+  let measureNextSearch = false;
   function changeSelection() {
     sequence++;
     snapshot = undefined;
@@ -248,6 +253,7 @@
     state.expanded = { accounts: true, orders: false, records: false };
     for (const id of Object.keys(state.pages)) state.pages[id] = page();
     searchSnapshot = undefined;
+    measureNextSearch = true;
     changeSelection();
   }
   function pasteQuery(node) {
@@ -284,7 +290,9 @@
     afterRender({ routeChanged } = {}) {
       if (!view().query) return;
       const region = document.querySelector('[data-customer-query-region]');
-      if (routeChanged || !(view().customerId ? snapshot : searchSnapshot)) void read(routeChanged);
+      const measure = measureNextSearch;
+      measureNextSearch = false;
+      if (routeChanged || !(view().customerId ? snapshot : searchSnapshot)) void read(routeChanged, '', measure);
       else if (region) scheduleDuration(region);
     },
     deactivate(region) {
@@ -292,7 +300,7 @@
       if (region?.dataset.pageRegion !== S.route) { snapshot = searchSnapshot = undefined; sections.clear(); }
       window.clearTimeout(expiryTimer);
     },
-    clearPageState() { sequence++; snapshot = searchSnapshot = undefined; sections.clear(); window.clearTimeout(expiryTimer); },
+    clearPageState() { measureNextSearch = false; sequence++; snapshot = searchSnapshot = undefined; sections.clear(); window.clearTimeout(expiryTimer); },
     onDataChanges(scopes) {
       if (active() && scopes.some(scope => ['commerce', 'inventory', 'card-types', 'subscription-management'].includes(scope))) {
         for (const id of Object.keys(tabs)) if (!view().expanded[id]) sections.delete(id);
@@ -318,7 +326,7 @@
     onClick(action, node) {
       if (!active() || !action.startsWith('customer-query-')) return false;
       const state = view();
-      if (action === 'customer-query-retry') void read(true);
+      if (action === 'customer-query-retry') void read(true, '', true);
       else if (action === 'customer-query-paste') void pasteQuery(node);
       else if (action === 'customer-query-reset') {
         state.input = state.query = state.customerId = '';

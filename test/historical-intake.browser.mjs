@@ -40,9 +40,7 @@ test('Claude Pro 和 Max 通过实际表单保存独立空邮箱订单', { timeo
     await page.goto(origin + '/#/workspace/order/claude');
     await page.locator('#commerce-plan').selectOption(plan);
     const email = page.locator('#commerce-email');
-    assert.equal(await email.getAttribute('aria-required'), 'false');
-    await page.locator('#commerce-businessType').selectOption('成品交付');
-    assert.equal(await email.getAttribute('aria-required'), 'true');
+    assert.equal(await email.evaluate(input => input.required || input.getAttribute('aria-required') === 'true'), false);
     await page.locator('#commerce-businessType').selectOption('续费');
     await page.locator('#commerce-customerId-picker').click();
     await page.locator('#commerce-customerId-popover [data-value="fixture-customer"]').click();
@@ -53,8 +51,7 @@ test('Claude Pro 和 Max 通过实际表单保存独立空邮箱订单', { timeo
     await email.fill('');
     await page.locator('#commerce-saleAmount').fill('120');
     await page.locator('#commerce-paidAmount').fill('21');
-    await page.getByRole('button', { name: '核对并保存', exact: true }).click();
-    await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
+    await page.getByRole('button', { name: '确认提交', exact: true }).click();
     await page.locator('#toast').filter({ hasText: '订单提交成功' }).waitFor();
     assert.equal(page.url(), origin + '/#/workspace/order/claude');
     await page.goto(origin + '/#/orders/claude');
@@ -72,11 +69,13 @@ test('Claude Pro 和 Max 通过实际表单保存独立空邮箱订单', { timeo
   assert.equal(new Set(saved.map(row => row.id)).size, 2);
   local.commerce.data.orders.push({ ...local.commerce.data.orders.find(row => row.id === saved[0].id),
     id: 'tracked-claude', orderNo: 'QA-TRACKED', email: 'tracked@example.test' });
-  await page.goto(origin + '/#/workspace/renewals');
+  await page.goto(origin + '/#/workspace/renewals/reminders');
   await page.reload();
   await page.getByRole('tab', { name: /^已到期/ }).click();
-  await page.getByText('tracked@example.test', { exact: true }).first().waitFor();
-  for (const order of saved) assert.equal(await page.getByText(order.orderNo, { exact: true }).count(), 0);
+  const reminders = page.getByRole('region', { name: '续费待办' });
+  await reminders.getByRole('button', { name: /tracked@example\.test/ }).waitFor();
+  for (const order of saved)
+    await reminders.locator('[data-action="commerce-renewal-select"][data-id="' + order.id + '"]').waitFor();
   await page.goto(origin + '/#/orders/exclusive');
   await page.getByText('tracked@example.test', { exact: true }).first().waitFor();
   assert.equal(await page.evaluate(() => window.IDDesignAPI.modules.commerce.getCurrentSubscription('')), null);
@@ -131,7 +130,9 @@ test('隐藏邮箱历史入库预检、冲突保留输入和刷新回读', { tim
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(origin + '/#/mailboxes/relay');
   await page.getByRole('tab', { name: '隐藏邮箱管理', exact: true }).click();
-  await page.getByRole('button', { name: '历史入库', exact: true }).click();
+  const tools = page.locator('[data-action="relay-alias-tools"]');
+  await tools.click();
+  await page.getByRole('menuitem', { name: '历史入库', exact: true }).click();
   const editor = page.locator('#relay-intake-content');
   const header = (await editor.inputValue()).trimEnd();
   const content = header + '\nsold@example.test\t2025/1/12\tfixture-wechat\tPlus\t2025/2/1 12:34\t2025/3/1 12:34\t银行卡\t合成来源\nregistered@example.test\t2025/1/18';
@@ -237,8 +238,10 @@ test('隐藏邮箱历史入库预检、冲突保留输入和刷新回读', { tim
   await page.getByRole('tab', { name: /^已使用/ }).click();
   await page.getByRole('row').filter({ hasText: 'sold@example.test' }).getByText('合成旧客户', { exact: true }).waitFor();
   await page.goto(origin + '/#/orders/gpt');
+  await page.getByRole('tab', { name: /^待补全/ }).click();
   const order = page.getByRole('row').filter({ hasText: 'QA-HISTORY-01' });
-  await order.getByText('2025-03-01T12:34', { exact: true }).waitFor();
+  await order.locator('[data-column="expiry"]').getByText('2025-03-01', { exact: true }).waitFor();
+  await order.locator('[data-column="expiry"]').getByText('12:34', { exact: true }).waitFor();
   await order.getByText('待补全', { exact: true }).first().waitFor();
   await page.goto(origin + '/#/workspace/order/gpt');
   await page.locator('#commerce-businessType').selectOption('成品交付');

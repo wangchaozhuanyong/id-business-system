@@ -22,6 +22,7 @@ test('银行卡与续费资料跟随版本通知更新，同时保留订单价�
         accountSource: '客户自有', paidConfirmed: true, paidAmount: '10000', paidCurrency: 'PHP',
         start: new Date(instant - 48 * 3600_000).toISOString(),
         expiry: new Date(instant + 24 * 3600_000).toISOString(), version: 1,
+        source: '管理员手工', entitlementStatus: 'active',
         cancelled: false, corrections: [], financialEvidence: [] };
       fixture.commerce.data.orders = [order];
       fixture.commerce.data.renewalWarningHours = 72;
@@ -97,13 +98,16 @@ test('银行卡与续费资料跟随版本通知更新，同时保留订单价�
           return state?.connected && state.snapshots > 0 && !state.refreshing && !state.pending;
         });
         await go('subscriptions/bank-cards');
-        await page.locator('[data-action="commerce-subscription-card-tab"][data-tab="orders"]').click();
+        await page.getByRole('tab', { name: /^订阅用卡明细/ }).click();
         await idle();
         const card = page.locator('table[data-table="commerce-subscription-cards"] [data-row-id="sync-test-order"]');
         const cardData = async label => {
           const cell = card.getByText(label, { exact: true });
           await cell.waitFor({ state: 'attached' });
-          if (!await cell.isVisible()) await card.getByRole('button', { name: '更多资料', exact: true }).click();
+          await idle();
+          const expand = card.getByRole('button', { name: '更多资料', exact: true });
+          if (!await cell.isVisible() && await expand.isVisible() &&
+              await expand.getAttribute('aria-expanded') === 'false') await expand.click();
           await cell.waitFor();
         };
         await cardData('175.92 USD');
@@ -136,7 +140,7 @@ test('银行卡与续费资料跟随版本通知更新，同时保留订单价�
           .getByRole('menuitem', { name: '使用预设 202 CNY', exact: true }).waitFor();
         await page.keyboard.press('Escape');
 
-        await go('workspace/renewals');
+        await go('workspace/renewals/reminders');
         await page.locator('[data-action="commerce-renewal-select"][data-id="sync-test-order"]').click();
         const workbench = page.locator('.renewal-workbench-detail');
         await workbench.getByText('20.10 USD', { exact: true }).waitFor();

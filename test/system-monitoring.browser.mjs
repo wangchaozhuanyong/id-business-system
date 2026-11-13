@@ -580,7 +580,7 @@ test('监控中心入口、全量筛选、键盘和大表格视口保持可用',
   await page.goto(origin + '/#/monitor');
   await page.locator('[data-monitor-check]').first().waitFor();
   const navigation = await page.evaluate(() => window.IDDesignAPI.navigation);
-  assert.deepEqual(navigation.find(group => group[0] === '监控中心')[2].map(item => item[0]), ['网站监控', '监控通知']);
+  assert.deepEqual(navigation.find(group => group[0] === '监控中心')[2].map(item => item[0]), ['网站监控', '性能与错误', '监控通知']);
   assert(!navigation.find(group => group[0] === '插件管理')[2].some(item => item[1] === 'plugins/websites'));
   assert(!navigation.find(group => group[0] === '系统设置')[2].some(item => item[1] === 'settings/monitoring'));
   assert.equal(await page.locator('#breadcrumbs').innerText(), '监控中心');

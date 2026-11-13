@@ -204,25 +204,25 @@ test('银行卡管理与续费共用复制、筛选、分组和预计金额', { 
         await page.getByText('暂无符合条件的记录').waitFor();
         assert.equal(await amountHelp.count(), 1);
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 1), false);
-        await page.goto(origin + '/#/workspace/renewals');
-        await page.locator('[data-action="commerce-renewal-select"][data-id="upcoming"]').click();
-        const renewal = page.getByRole('region', { name: '当前选中客户', exact: true });
-        await renewal.getByText('175.92 USD', { exact: true }).waitFor();
-        const renewalCopy = renewal.getByRole('button', { name: '复制银行卡', exact: true });
-        await renewalCopy.click();
-        await confirm.getByText(/upcoming@example.test.*卡尾号 4242/).waitFor();
-        assert.deepEqual(copied, ['upcoming']);
-        await confirm.getByRole('button', { name: '确认复制', exact: true }).click();
-        await page.waitForFunction(() => window.qaCopies === 2);
-        assert.deepEqual(copied, ['upcoming', 'upcoming']);
         if (width === 1440 && !dark) {
+          await page.getByLabel('搜索当前列表').fill('');
+          await copyButton.click();
+          await confirm.getByRole('button', { name: '确认复制', exact: true }).click();
+          await page.waitForFunction(() => window.qaCopies === 2);
+          assert.deepEqual(copied, ['upcoming', 'upcoming']);
           await page.evaluate(() => { window.qaRejectClipboard = true; });
-          await renewalCopy.click();
+          await copyButton.click();
           await confirm.getByRole('button', { name: '确认复制', exact: true }).click();
           await page.locator('#toast').getByText('合成剪贴板权限拒绝', { exact: true }).waitFor();
           assert.equal(await page.evaluate(() => window.qaCopies), 2);
-          assert.ok(!(await page.locator('#main').innerText()).includes(pan));
         }
+        await page.goto(origin + '/#/workspace/renewals/reminders');
+        await page.locator('[data-action="commerce-renewal-select"][data-id="upcoming"]').click();
+        const renewal = page.getByRole('region', { name: '当前选中客户', exact: true });
+        await renewal.getByText('175.92 USD', { exact: true }).waitFor();
+        assert.equal(await renewal.getByRole('button', { name: '复制银行卡', exact: true }).count(), 0);
+        await renewal.getByRole('button', { name: '提交给财务', exact: true }).waitFor();
+        assert.ok(!(await renewal.innerText()).includes(pan));
         assert.deepEqual(errors, []);
         assert.deepEqual(mock.external, []);
       } finally { await context.close(); }
@@ -230,7 +230,7 @@ test('银行卡管理与续费共用复制、筛选、分组和预计金额', { 
   }
 });
 
-test('冻结银行卡后两个续费账号都收到提示并可选择新卡', { timeout: 40_000 }, async t => {
+test('冻结银行卡后日常录单提示风险，旧快捷续费引导送财务', { timeout: 40_000 }, async t => {
   const playwright = process.env.ID_RECHARGE_QA_PLAYWRIGHT;
   const { chromium } = await import(playwright ? pathToFileURL(playwright).href : 'playwright');
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
@@ -243,7 +243,7 @@ test('冻结银行卡后两个续费账号都收到提示并可选择新卡', { 
   const counts = { GPT: 3 };
   const frozen = { id: 'frozen-card', orderId: 'upcoming', typeName: 'wise潘', last4: '4242',
     counts, frozenAt: new Date().toISOString(), frozenBy: actor.name, reason: '冻结测试', poolState: 'pending' };
-  let isFrozen = false, submitted;
+  let isFrozen = false;
   await context.route('**/api/local/subscription-card-status*', route => {
     const orderId = new URL(route.request().url()).searchParams.get('orderId');
     if (orderId) {
@@ -279,7 +279,6 @@ test('冻结银行卡后两个续费账号都收到提示并可选择新卡', { 
   await context.route('**/api/local/commerce', route => {
     if (route.request().method() === 'GET') return route.fulfill({ json: localFixtures.commerce });
     const { data, version } = route.request().postDataJSON();
-    submitted = data.orders.find(row => !localFixtures.commerce.data.orders.some(old => row.id === old.id));
     localFixtures.commerce = { data, version: version + 1 };
     return route.fulfill({ json: localFixtures.commerce });
   });
@@ -316,24 +315,12 @@ test('冻结银行卡后两个续费账号都收到提示并可选择新卡', { 
   await page.locator('[data-order-renewal-card]').getByText('已冻结', { exact: true }).waitFor();
   for (const id of ['expired', 'upcoming']) {
     await page.goto(origin + '/#/workspace/order/renew/' + id);
-    const hint = page.locator('[data-order-renewal-card]');
-    await hint.getByText('已冻结', { exact: true }).waitFor();
-    assert.match(await hint.innerText(), /4242/);
-    await page.locator('#commerce-proMaterialMode').selectOption('');
-    await page.locator('#commerce-cardId option[value="recharge:9"]').waitFor({ state: 'attached' });
-    assert.equal(await page.locator('#commerce-cardId option[value="recharge:7"]').count(), 0);
+    await page.getByRole('button', { name: '打开续费管理', exact: true }).waitFor();
+    assert.equal(await page.locator('#main #commerce-order-form').count(), 0);
   }
-  const picker = page.locator('#commerce-cardId-picker');
-  await page.getByRole('button', { name: '换用银行卡', exact: true }).click();
-  assert.equal(await picker.evaluate(node => document.activeElement === node), true);
-  await picker.click();
-  await page.locator('#commerce-cardId-options').getByRole('option', { name: /0009/ }).click();
-  await page.locator('#commerce-paidAmount').fill('20');
-  await page.locator('#commerce-saleAmount').fill('120');
-  await page.getByRole('button', { name: '确认提交', exact: true }).click();
-  await page.locator('#toast').filter({ hasText: '订单提交成功' }).waitFor();
-  assert.equal(submitted.cardId, 'recharge:9');
-  assert.equal(submitted.previousOrderId, 'upcoming');
+  await page.getByRole('button', { name: '打开续费管理', exact: true }).click();
+  await page.getByRole('heading', { name: '续费管理', exact: true }).waitFor();
+  assert(localFixtures.commerce.data.orders.every(row => row.cardId !== 'recharge:9'));
   assert.deepEqual(errors, []);
   assert.deepEqual(mock.external, []);
 });

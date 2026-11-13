@@ -965,7 +965,7 @@ async function renewalCardAction(store, client, command, actor, now) {
   });
 }
 
-export function createCardManagementHandler({ store, client, publicOrigin, clock = Date.now }) {
+export function createCardManagementHandler({ store, client, publicOrigin, authorizeSensitive, clock = Date.now }) {
   return async (request, response, route, actor) => {
     if (!actor?.id || !['admin', 'super'].includes(actor.role)) return send(response, 403, { error: '没有管理订单用卡的权限' });
     const origin = publicOrigin || `http://${request.headers.host}`;
@@ -1011,6 +1011,9 @@ export function createCardManagementHandler({ store, client, publicOrigin, clock
       if (request.headers.origin !== origin || !/^application\/json(?:;|$)/i.test(request.headers['content-type'] || ''))
         throw error(403, '请求来源未通过校验');
       const command = await readCommand(request, route === '/api/local/card-types' ? 20 * 1024 : undefined);
+      if (authorizeSensitive && route !== detailsRoute &&
+          !(route === renewalCardRoute && command.action === 'prepare') && !authorizeSensitive(request))
+        return send(response, 403, { error: '请先完成安全确认，再继续这项操作', code: 'SECURITY_CONFIRMATION_REQUIRED' });
       let result;
       if (route === '/api/local/card-types') result = command.action === 'health'
         ? writeHealth(store, command, actor, request.headers['x-id-operation'], clock())

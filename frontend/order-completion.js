@@ -440,8 +440,9 @@
       } else if (action === 'completion-view-saved') {
         const row = find(node.dataset.id);
         if (row?.state === 'complete') {
-          if (A.canVisit('orders/detail/' + encodeURIComponent(row.id))) A.go('orders/detail/' + encodeURIComponent(row.id));
-          else show(row);
+          const detail = 'orders/detail/' + encodeURIComponent(row.id);
+          if (S.actor?.role === 'employee' || !A.canVisit(detail)) show(row);
+          else A.go(detail);
         }
       } else if (action === 'completion-original') {
         if (snapshot?.manualItems?.some(row => row.id === node.dataset.id))

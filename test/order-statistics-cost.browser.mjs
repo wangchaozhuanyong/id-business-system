@@ -74,7 +74,7 @@ test('订单统计页签共用右侧操作区，切换时表格紧接页签栏',
       const context = await browser.newContext({ viewport: { width, height: 900 } });
       const data = fixtures();
       if (empty) data.commerce.data.orders = [];
-      const traffic = await interceptDesign(context, { actor, localFixtures: data, skipRechargeAssets: true });
+      const traffic = await interceptDesign(context, { actor: { ...actor, role: 'super' }, localFixtures: data, skipRechargeAssets: true });
       const page = await context.newPage();
       await page.goto(origin + '/#/orders/statistics');
       if (dark) await toggleDesignTheme(page);

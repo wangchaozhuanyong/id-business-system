@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, randomBytes, randomUUID } from 'node:crypto';
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -7,6 +7,7 @@ import { mergeContactWrite } from './contact-write.mjs';
 import { matchRechargeRenewal, renewalAssociationIssue, renewalExpiryIssue } from './recharge-renewal.mjs';
 import { validOrderCurrencies, validOrderCurrencyGroups, retainOrderSettings } from './order-currency-settings.mjs';
 import { isDeepStrictEqual } from 'node:util';
+import { employeeCommerce, financeCommerce, protectedSettingsChanged, registrarInventory } from './access-roles.mjs';
 import {
   applyOrderCompletion, assignMissingManualOrderOwners, fillManualOrderDetails,
   OrderCompletionError, readOrderCompletion, rechargeOrderEmailConflict, rechargePriceSnapshot, requireCompletionActor
@@ -64,7 +65,8 @@ import { applyInventoryUsage, correctInventoryUsage, inspectInventoryUsage, usag
 import { checkRegistrationChanges } from './inventory-registration.mjs';
 import { attributeInventory, defaultInventoryRegistrationTimes } from './inventory-attribution.mjs';
 import { checkAccountLocations } from './inventory-account-location.mjs';
-import { emptyAppleLedger, stageAppleOpenings, stageAppleOrderFunding } from './apple-funding.mjs';
+import { emptyAppleLedger, stageAppleOpenings, stageAppleOrderFunding, stageConfirmedRenewalDebit } from './apple-funding.mjs';
+import { directRenewalSource, renewalHandoffDomain, renewalRole } from './renewal-handoff.mjs';
 import {
   bankRenewalSource, cardFreezeDocument, cardTypeDocument, cardTypeSnapshot, frozenOrderCard, frozenRenewalCard,
   orderCardArchiveDocument, blockedOrderCard, orderCardHealth, orderCardHealthReference
@@ -200,6 +202,20 @@ const sessionEventLabels = {
   auth_session_revoke: '退出登录设备',
   auth_employee_create: '新增员工账号',
   auth_employee_update: '修改员工账号',
+  auth_mfa_bind: '绑定两步验证',
+  auth_mfa_replace: '更换两步验证',
+  auth_step_up: '通过安全确认',
+  auth_recovery_used: '使用登录恢复码',
+  auth_device_requested: '申请新的登录设备',
+  auth_device_policy: '更新允许登录的设备',
+  auth_network_policy: '更新允许登录的网络',
+  auth_security_recovered: '恢复账号登录权限',
+  finance_card_import: '导入自动代充银行卡',
+  finance_card_plans: '更新自动代充用卡规则',
+  finance_card_stop: '停用自动代充银行卡',
+  supervisor_proxy_add: '登记自动代充业务 IP',
+  registration_code_read: '查询登记邮箱验证码',
+  registration_totp_read: '查看登记账号动态验证码',
   relay_test: '测试苹果主邮箱连接',
   relay_test_failed: '苹果主邮箱连接测试失败',
   relay_sync: '同步苹果隐藏邮箱邮件',
@@ -212,8 +228,10 @@ const sessionEventLabels = {
 };
 const orderFeatureDomains = new Set([
   'recharge-codes', 'recharge-activity', 'tenant-cards', 'order-sync', 'finance-rates', cardTypeDocument, orderCardArchiveDocument,
-  cardFreezeDocument, 'system-monitoring-config', 'system-monitoring-state', subscriptionDomain, orderExpenseDomain
+  cardFreezeDocument, 'system-monitoring-config', 'system-monitoring-state', subscriptionDomain, orderExpenseDomain, renewalHandoffDomain
 ]);
+const renewalAuditLabels = { renewal_submit: '提交续费给财务', renewal_claim: '领取续费申请',
+  renewal_paid: '登记续费实付', renewal_return: '退回续费申请', renewal_finish: '提交续费新订单' };
 const orderFeatureAuditLabels = {
   order_expense_record: '登记费用实付凭据',
   order_expense_account: '核对费用凭据的入账方式',
@@ -237,6 +255,7 @@ const orderFeatureAuditLabels = {
   recharge_code_returned: '确认充值码归还'
 };
 const verifiedOrderCards = Symbol('verifiedOrderCards');
+const verifiedRenewalHandoff = Symbol('verifiedRenewalHandoff');
 const rechargeEvidenceFields = [
   'source', 'taskId', 'email', 'product', 'plan', 'businessType', 'payment', 'paymentId',
   'cardId', 'paidAmount', 'paidCurrency', 'start', 'expiry', 'paidConfirmed', 'rechargeCompletedAt', 'entitlementStatus',
@@ -284,7 +303,9 @@ const auditDomainLabels = {
   'finance-rates': '汇率采集',
   'subscription-management': '订阅管理',
   'system-monitoring-config': '监控与通知',
-  'system-monitoring-state': '监控中心'
+  'system-monitoring-state': '监控中心',
+  [renewalHandoffDomain]: '续费管理',
+  'site-export': '数据中心'
 };
 const auditActionLabels = {
   customer_tags_save: '保存客户标签设置',
@@ -292,6 +313,11 @@ const auditActionLabels = {
   mailbox_category_save: '保存邮箱分类',
   mailbox_category_reorder: '调整邮箱分类顺序',
   fee_rules_save: '保存费用规则',
+  monitor_settings: '保存监控通知设置',
+  order_prices_save: '保存套餐售价',
+  order_currencies_save: '保存订单币种设置',
+  site_export: '下载资料',
+  ...renewalAuditLabels,
   statistics_currency_save: '修改统计币种'
 };
 const auditDate = new Intl.DateTimeFormat('sv-SE', {
@@ -317,7 +343,7 @@ export function pageAuditRows(rows, search) {
   const snapshot = Math.min(currentSnapshot, requestedSnapshot);
   const matches = rows.filter(({ id, domain, action }) =>
     id <= snapshot && (view === 'audit' ||
-      (domain === 'auth' && ['auth_login', 'auth_logout'].includes(action))))
+      (domain === 'auth' && action.startsWith('auth_'))))
     .map(({ id, at, domain, action, summary, actorName }) => {
       const date = new Date(at);
       return {
@@ -587,14 +613,22 @@ function decrypt(key, domain, version, value) {
   return JSON.parse(Buffer.concat([decipher.update(bytes.subarray(28)), decipher.final()]));
 }
 
-export function verifyBusinessDocumentPayloads(databasePath, key) {
+export function verifyBusinessDocumentPayloads(databasePath, key, { countBusinessRecords = false } = {}) {
+  let checkedRecords = 0;
   const db = new DatabaseSync(databasePath, { readOnly: true, timeout: 4000 });
   try {
     const documents = db.prepare('SELECT domain, version, payload FROM business_document');
     for (const { domain, version, payload } of documents.iterate()) {
       const data = decrypt(key, domain, version, payload);
       if (!data || typeof data !== 'object') throw new Error('无效的业务文档');
+      if (countBusinessRecords) {
+        const names = domain === 'commerce' ? ['customers', 'tenants', 'orders'] :
+          domain === 'inventory' ? ['accounts', 'mailboxes'] : [];
+        for (const name of names) if (Array.isArray(data[name]))
+          checkedRecords += data[name].filter(row => typeof row?.id === 'string' && row.id).length;
+      }
     }
+    return checkedRecords;
   } finally {
     db.close();
   }
@@ -768,7 +802,9 @@ function checkedRelayClaims(priorInventory, write, actor) {
   return pendingRelayClaimIds(priorInventory, write.data, { action: write.action, actor });
 }
 
-async function saveHttpWrites(store, entries, actor, verifyRelayExtraction, readOrderCards, readOrderOwners, operationId) {
+async function saveHttpWrites(store, entries, actor, operationId, {
+  verifyRelayExtraction, readOrderCards, readOrderOwners, requireRenewalHandoff
+}) {
   let writes = checkWrites(entries);
   const operation = describeWriteOperation(operationId, actor, writes);
   const replay = operation && store.replayWrite?.(operation);
@@ -799,7 +835,7 @@ async function saveHttpWrites(store, entries, actor, verifyRelayExtraction, read
       }
     }
   }
-  const options = { actor, readOrderOwners, operation, [verifiedOrderCards]: orderCards };
+  const options = { actor, readOrderOwners, operation, requireRenewalHandoff, [verifiedOrderCards]: orderCards };
   const inventory = writes.find(({ domain }) => domain === 'inventory');
   if (!inventory) return store.saveBatch(writes, options);
   const current = store.load('inventory');
@@ -824,21 +860,11 @@ async function saveHttpWrites(store, entries, actor, verifyRelayExtraction, read
 }
 
 function commerceForActor(store, snapshot, actor) {
+  if (actor?.role === 'finance') return financeCommerce(snapshot);
   const profiles = store.featureDocument(subscriptionDomain).data;
   const result = redactClaudeProOrderMaterials(snapshot, actor);
   if (actor?.role === 'employee' && Array.isArray(result.data?.orders)) {
-    const hidden = result.data.orders.filter(row => automaticGptOrder(row) && rechargeOrderOwner(row) !== actor.id);
-    if (hidden.length) {
-      const hiddenIds = new Set(hidden.map(row => row.id));
-      const hiddenCustomers = new Set(hidden.map(row => row.customerId).filter(Boolean));
-      const orders = result.data.orders.filter(row => !hiddenIds.has(row.id));
-      const visibleCustomers = new Set(orders.map(row => row.customerId));
-      const { customers, logs } = result.data;
-      result.data = { ...result.data, orders,
-        ...(customers && { customers: customers.filter(row => !hiddenCustomers.has(row.id) || visibleCustomers.has(row.id)) }),
-        ...(logs && { logs: logs.filter(row => !hiddenIds.has(row.entityId) && !hiddenIds.has(row.relatedOrderId)) })
-      };
-    }
+    return employeeCommerce(result, actor);
   }
   return { ...result, legacyOpeningOrderIds: legacyOpeningOrderIds(result.data?.orders, profiles) };
 }
@@ -1420,6 +1446,24 @@ export function createLocalBusinessStore(databasePath) {
     findManagedMailbox(code, clock) {
       return findMailboxQuery(readDocument(managedMailboxDomain), code, clock);
     },
+    registrationMailbox(assetId, actor) {
+      const asset = readDocument('inventory').data?.mailboxes?.find(row => row.id === assetId &&
+        row.createdById === actor.id && !row.deleted && !row.relayDeleted && !row.used &&
+        (row.inventoryState ?? 'available') === 'available' && (row.health ?? 'normal') === 'normal' &&
+        (row.status ?? '正常') === '正常');
+      if (!asset) return null;
+      if (asset.type === 'relay') return { asset };
+      const snapshot = readDocument(managedMailboxDomain);
+      const matches = mailboxPoolItems(snapshot).filter(row => row.email.toLowerCase() === asset.email.toLowerCase());
+      if (matches.length === 1 && matches[0].active && !matches[0].authFailed)
+        return { asset, item: { ...matches[0], revision: snapshot.version } };
+      if (asset.appPassword && ['google', 'apple'].includes(asset.type)) {
+        const provider = /@(?:gmail|googlemail)\.com$/i.test(asset.email) ? 'google'
+          : /@(?:icloud|mac|me)\.com$/i.test(asset.email) ? 'apple' : null;
+        if (provider) return { asset, item: { provider, email: asset.email, appPassword: asset.appPassword } };
+      }
+      return { asset };
+    },
     rotateMicrosoftRefreshToken(id, expectedVersion, refreshToken) {
       return writeTransaction(() => {
         const current = readDocument(managedMailboxDomain);
@@ -1724,9 +1768,38 @@ export function createLocalBusinessStore(databasePath) {
       });
     },
     replayWrite,
+    saveRenewalQueue(version, commerceVersion, items, { action, actor, ids, operation }) {
+      return writeTransaction(() => {
+        if (replayWrite(operation)) return;
+        if (readDocument(renewalHandoffDomain).version !== version || readDocument('commerce').version !== commerceVersion)
+          throw new LocalDataError(409, '续费或订单资料已更新，请刷新后核对');
+        const next = version + 1;
+        putDocument(renewalHandoffDomain, next, { items });
+        for (const id of ids) log.run(new Date().toISOString(), renewalHandoffDomain, action,
+          auditSummary(renewalAuditLabels[action], actor, id), next);
+        putDocument(operation.domain, 1, { fingerprint: operation.fingerprint, domains: [renewalHandoffDomain] });
+      });
+    },
+    finishRenewal({ snapshot, commerce, item, order, actor, operation, owners }) {
+      const { version, data } = readDocument('appleBalance');
+      const ledger = stageConfirmedRenewalDebit(data, order, item.funding.actor, item.funding.at);
+      const writes = [{ domain: 'commerce', version: commerce.version, action: '新增独立订单',
+        data: { ...commerce.data, orders: [order, ...commerce.data.orders] } }];
+      if (ledger) writes.push({ domain: 'appleBalance', version, action: 'apple_order_charge', data: ledger });
+      const card = item.funding.card;
+      const updated = this.saveBatch(writes, { actor, readOrderOwners: owners, operation,
+        [verifiedOrderCards]: new Map(card ? [[card.id, card]] : []), [verifiedRenewalHandoff]: { version: snapshot.version, item, id: order.id } });
+      return updated.find(entry => entry.domain === 'commerce')?.data.orders.find(row => row.id === order.id)?.orderNo;
+    },
+    saveStaffOrder(write, actor, operation) {
+      if (actor?.role !== 'employee' || write.domain !== 'commerce' || write.action !== '新增独立订单')
+        throw new LocalDataError(403, '当前账号无权登记这类订单');
+      return this.saveBatch([write], { actor, operation, requireRenewalHandoff: true, [verifiedOrderCards]: new Map() });
+    },
     saveBatch(entries, {
-      actor, verifyAutomaticSnapshot, readOrderOwners, operation, [verifiedRelayClaimIds]: verifiedIds,
-      [verifiedAppleRelayPrimaries]: primaryTargets, [verifiedOrderCards]: cards, [stagedRelayIntake]: relayIntake
+      actor, verifyAutomaticSnapshot, readOrderOwners, operation, requireRenewalHandoff, [verifiedRelayClaimIds]: verifiedIds,
+      [verifiedAppleRelayPrimaries]: primaryTargets, [verifiedOrderCards]: cards, [stagedRelayIntake]: relayIntake,
+      [verifiedRenewalHandoff]: handoff
     } = {}) {
       // Preserve the caller's retry snapshot when normalizing transient input.
       let writes = checkWrites(entries).map(write => (write.domain === 'commerce' &&
@@ -1739,6 +1812,9 @@ export function createLocalBusinessStore(databasePath) {
       return writeTransaction(() => {
         const replay = replayWrite(operation);
         if (replay) return replay;
+        const renewals = handoff && readDocument(renewalHandoffDomain);
+        if (handoff && renewals.version !== handoff.version)
+          throw new LocalDataError(409, '续费已在其他页面更新，请刷新后核对');
         if (writes.some(write => write.recordChange)) {
           if (writes.length !== 1) throw new WriteOperationError(400, '关联业务必须按整个批次核对版本');
           writes = writes.map(write => mergeContactWrite(write, readDocument(write.domain)));
@@ -1763,6 +1839,9 @@ export function createLocalBusinessStore(databasePath) {
               settings.data = { ...settings.data, [key]: savedSettings[key] };
             }
           }
+          if (actor?.role === 'admin' && (['mailbox_category_save', 'mailbox_category_reorder'].includes(settings.action) ||
+              protectedSettingsChanged(settings.data, savedSettings)))
+            throw new LocalDataError(403, '只有超级管理员可以修改邮箱分类或代付国家设置');
         }
         const incoming = new Map(writes.map(({ domain, data }) => [domain, data]));
         const checksStock = incoming.has('inventory') || incoming.has('commerce');
@@ -1877,6 +1956,15 @@ export function createLocalBusinessStore(databasePath) {
               !['admin', 'super'].includes(actor.role)))
             throw new LocalDataError(403, '历史费率更正须由管理员单独核对');
           const oldOrders = priorCommerce?.orders || [];
+          if (requireRenewalHandoff && actor && !handoff) {
+            const oldIds = new Set(oldOrders.map(row => row.id));
+            const confirmed = new Set(legacyOpeningOrderIds(oldOrders, subscriptions));
+            if (commerce.orders.some(row => !oldIds.has(row.id) && directRenewalSource(oldOrders, row, confirmed)))
+              throw new LocalDataError(409, '请先从续费管理提交给财务，登记实付后再提交续费订单');
+          }
+          const oldRentBatches = new Set((priorCommerce?.rentBatches || []).map(row => row.id));
+          if (actor && (action === '建立租金发放批次' || commerce.rentBatches.some(row => !oldRentBatches.has(row.id))))
+            throw new LocalDataError(403, '请从续费管理提交给财务');
           tenantCardArchive = stagedTenantCards.length || commerce.tenants.some(row => row.initialCards?.length) ||
             commerce.orders.some(row => Object.hasOwn(row, 'tenantCardNumber')) ? current(orderCardArchiveDocument) : null;
           try {
@@ -2199,7 +2287,7 @@ export function createLocalBusinessStore(databasePath) {
           if (incoming.has('commerce')) {
             const error = stageAppleOrderFunding(priorCommerce?.orders, commerce.orders, previous,
               inventory, current('settings'), writes.find(write => write.domain === 'commerce').action, commerce.customers,
-              completedCustomerOrders);
+              completedCustomerOrders, handoff?.id);
             if (error) throw new LocalDataError(409, error);
           }
           const error = checkAppleLedger(
@@ -2285,6 +2373,17 @@ export function createLocalBusinessStore(databasePath) {
             ...(domain === 'inventory' && { accountSummaries: accountLifecycleSummaries(data, commerce),
               commerceVersion: writes.find(write => write.domain === 'commerce')?.version + 1 || readDocument('commerce').version }) });
         }
+        if (handoff) {
+          const order = commerce.orders.find(row => row.id === handoff.id);
+          // The finalized order holds the encrypted card record; retain only the handoff receipt.
+          const { number, serial, card, ...funding } = handoff.item.funding;
+          const completed = { ...handoff.item, funding, status: 'complete', newOrderId: order.id, newOrderNo: order.orderNo,
+            completedAt: now, completedBy: { id: actor.id, name: actor.name } };
+          putDocument(renewalHandoffDomain, renewals.version + 1,
+            { items: renewals.data.items.map(row => row.id === completed.id ? completed : row) });
+          log.run(now, renewalHandoffDomain, 'renewal_finish', auditSummary(renewalAuditLabels.renewal_finish, actor, completed.id),
+            renewals.version + 1);
+        }
         if (!isDeepStrictEqual(existingTenantCards, nextTenantCards)) {
           const version = tenantCardDocument.version + 1;
           const data = { ...tenantCardDocument.data, items: nextTenantCards };
@@ -2301,6 +2400,7 @@ export function createLocalBusinessStore(databasePath) {
         return result;
       });
     },
+    loginAuthenticatorKey: () => Buffer.from(hkdfSync('sha256', key, '', 'id-business/login-authenticator/v1', 32)),
     orderCardFingerprint(number) {
       return typeof number === 'string' && /^\d{12,19}$/.test(number)
         ? createHmac('sha256', key).update('order-card-number\0').update(number).digest('hex') : '';
@@ -2327,6 +2427,13 @@ export function createLocalBusinessStore(databasePath) {
         if (action) log.run(new Date().toISOString(), domain, action,
           auditSummary(orderFeatureAuditLabels[action] || action, actor, targetId), next);
         return { version: next, data };
+      });
+    },
+    recordSiteExport(actor, operation, label) {
+      return writeTransaction(() => {
+        if (checkWriteReceipt(readDocument(operation.domain).data, operation)) return;
+        putDocument(operation.domain, 1, { fingerprint: operation.fingerprint, domains: ['site-export'] });
+        log.run(new Date().toISOString(), 'site-export', 'site_export', auditSummary(label, actor), 0);
       });
     },
     auditFeature(domain, version, { action, actor, targetId }) {
@@ -2566,7 +2673,20 @@ export function createLocalBusinessStore(databasePath) {
     notifyChanges,
     changeVersions(actor) {
       const version = domain => String(revision.get(domain)?.version ?? 0);
-      const versions = { inventory: version('inventory'), commerce: version('commerce'), 'recharge-codes': version('recharge-codes') };
+      const versions = {};
+      if (renewalRole(actor))
+        versions[renewalHandoffDomain] = [renewalHandoffDomain, subscriptionDomain, 'inventory',
+          ...(actor.role === 'supervisor' ? ['commerce'] : [])].map(version).join(':');
+      if (['admin', 'super', 'registrar'].includes(actor.role)) versions.inventory = version('inventory');
+      if (['admin', 'super', 'employee', 'finance'].includes(actor.role)) versions.commerce = version('commerce');
+      if (['admin', 'super', 'employee'].includes(actor.role)) versions['recharge-codes'] = version('recharge-codes');
+      if (actor.role === 'finance') {
+        versions.settings = version('settings');
+        versions['finance-rates'] = version('finance-rates');
+        versions.appleBalance = version('appleBalance');
+        versions[orderExpenseDomain] = version(orderExpenseDomain);
+      }
+      if (actor.role === 'registrar') versions['apple-relay'] = String(relayRevision.get().version);
       for (const scope of ['toolbox', savedTotpDomain, bitBrowserConnectionDomain, bitBrowserProxyDomain, bitBrowserAddressDomain])
         versions[scope] = version(`${scope}:${actor.id}`);
       if (['admin', 'super'].includes(actor.role)) {
@@ -2643,8 +2763,9 @@ export async function handleLocalBusiness(
   route,
   store,
   actor,
-  { verifyRelayExtraction, verifyManagedMailbox, publicOrigin, readOrderCards, readOrderOwners } = {}
+  options = {}
 ) {
+  const { verifyManagedMailbox, publicOrigin, readOrderOwners } = options;
   try {
     const domain = route.slice('/api/local/'.length);
     if (domain === 'commerce' || domain === 'batch') response.setHeader('Cache-Control', 'private, no-store');
@@ -2788,9 +2909,17 @@ export async function handleLocalBusiness(
       }
       if (domain === 'inventory') {
         response.setHeader('Cache-Control', 'private, no-store');
+        if (actor?.role === 'registrar') return json(response, 200, registrarInventory(store.load(domain), actor));
         return json(response, 200, store.inventorySnapshot(actor));
       }
       if (domain === 'commerce') return json(response, 200, commerceForActor(store, store.load(domain), actor));
+      if (domain === 'appleBalance' && actor?.role === 'finance') {
+        const { version, data } = store.load(domain);
+        const allocations = (data?.allocations || []).map(({ orderId, appleIdId, amount, returned }) =>
+          ({ orderId, appleIdId, amount, returned }));
+        const refunds = (data?.refunds || []).map(({ id, orderId, amount, status }) => ({ id, orderId, amount, status }));
+        return json(response, 200, { version, data: { allocations, refunds, wallets: [], movements: [] } });
+      }
       return json(response, 200, domain === 'audit' ? store.audit() : store.load(domain));
     }
     if (request.method !== 'PUT') throw new LocalDataError(405, '本机接口不支持此操作');
@@ -2799,8 +2928,7 @@ export async function handleLocalBusiness(
     }
     const body = await readJson(request);
     if (domain === 'batch') {
-      const entries = await saveHttpWrites(store, body, actor, verifyRelayExtraction, readOrderCards, readOrderOwners,
-        request.headers['x-id-operation']);
+      const entries = await saveHttpWrites(store, body, actor, request.headers['x-id-operation'], options);
       return json(response, 200, entries.map((entry) =>
         entry.domain === 'commerce' ? commerceForActor(store, entry, actor) : entry));
     }
@@ -2819,8 +2947,8 @@ export async function handleLocalBusiness(
     if (domain === bitBrowserAddressDomain) {
       return json(response, 200, store.saveBitBrowserAddresses(body, actor));
     }
-    const [entry, ...related] = await saveHttpWrites(store, [{ ...body, domain }], actor, verifyRelayExtraction, readOrderCards, readOrderOwners,
-      request.headers['x-id-operation']);
+    const [entry, ...related] = await saveHttpWrites(store, [{ ...body, domain }], actor,
+      request.headers['x-id-operation'], options);
     const inventory = related.find(item => item.domain === 'inventory');
     const appleBalance = related.find(item => item.domain === 'appleBalance');
     const result = {
