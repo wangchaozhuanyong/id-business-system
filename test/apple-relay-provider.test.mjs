@@ -239,6 +239,32 @@ test('binds a previously recorded alias without replacing its identity, usage, p
   assert.equal(store.load('inventory').data.mailboxes.length, 1);
 });
 
+test('registrars can bind only a new alias confirmed for their own registration', async (t) => {
+  const state = fixture();
+  const saved = [];
+  state.savePrimaries = (_parents, actor, aliases) => {
+    saved.push(...aliases.map(row => ({ ...row, createdById: actor.id })));
+    return { data: {} };
+  };
+  const request = await listen(t, state);
+  const register = (email, extra = {}) => request('alias-register', {
+    parentId: 'one', parentVersion: 1, days: 30, batch: false, rows: [{ email, note: '' }], ...extra
+  }, undefined, 'registrar-a', 'registrar');
+
+  assert.equal((await register('unbound@example.test')).status, 409);
+  assert.equal((await register('new@example.test', { batch: true })).status, 403);
+  assert.equal(state.upstream.calls.some(({ query }) => query.includes('mutation')), false);
+  assert.deepEqual(saved, []);
+
+  state.upstream.registrationReceiptId = 'unrelated-receipt';
+  assert.equal((await register('not-confirmed@example.test')).status, 409);
+  assert.deepEqual(saved, []);
+  state.upstream.registrationReceiptId = undefined;
+  assert.deepEqual((await register('new@example.test')).body, { registered: 1 });
+  assert.equal(saved[0].createdById, 'registrar-a');
+  assert.equal(saved[0].email, 'new@example.test');
+});
+
 function fakeVendure() {
   const primaries = [
     primary('vp-one', 'one@example.test', 'MSTR-ONE'),
@@ -318,7 +344,7 @@ function fakeVendure() {
     };
     if (query.includes('createIcloudVirtualEmail')) {
       const { id } = register(variables.input);
-      return Response.json({ data: { result: { id } } });
+      return Response.json({ data: { result: { id: state.registrationReceiptId ?? id } } });
     }
     if (query.includes('batchCreateIcloudVirtualEmails')) {
       const lines = variables.input.rawInput.split('\n');
@@ -915,6 +941,7 @@ test('admin reset is bound to a reviewed alias and invalidates the previous publ
       validityDays: 90
     });
   assert.equal((await verify('BUY-FIRST')).status, 200);
+  assert.equal((await request('code-reset-prepare', { kind: 'alias', id: 'first', validityDays: 0 })).status, 400);
   assert.equal((await prepare('unknown')).status, 409);
   const result = await prepare();
   assert.equal(result.status, 200);

@@ -1236,8 +1236,8 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
           else if (!boundedId(actor.id)) throw new RelayError(401, '请先登录');
           if (!primaryManagement) throw new RelayError(503, '原收件服务未连接，暂无法登记隐藏邮箱');
           const input = await readBody(request, 512 * 1024);
-          if (actor.role === 'registrar' && Object.hasOwn(input, 'existingId'))
-            throw new RelayError(403, '已有资料的收信连接由管理员维护');
+          if (actor.role === 'registrar' && (input.batch !== false || Object.hasOwn(input, 'existingId')))
+            throw new RelayError(403, '注册员可登记单个新隐藏邮箱，已有资料或批量入库请联系管理员');
           const result = await primaryManagement.registerAliases(input, actor);
           return writeJson(response, 200, actor.role === 'registrar' ? { registered: result.registered } : result);
         }
