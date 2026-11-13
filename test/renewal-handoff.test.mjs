@@ -2,6 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash, randomUUID } from 'node:crypto';
 import { Readable } from 'node:stream';
+import { DatabaseSync } from 'node:sqlite';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
+import { auditAppleWallets } from '../server/finance/apple-wallet-audit.mjs';
 import { createLocalBusinessStore, handleLocalBusiness } from '../server/local-business.mjs';
 import { stageConfirmedRenewalDebit } from '../server/apple-funding.mjs';
 import { cardTypeDocument } from '../server/card-management.mjs';
@@ -30,16 +35,22 @@ const emptyCommerce = { customers: [{ id: 'customer', name: '测试客户', acti
   tenants: [], operating: [], rentBatches: [], logs: [] };
 const finishFields = { start: '2026-11-13T12:00', expiry: '2026-12-13T11:00', saleAmount: '160.00', saleCurrency: 'CNY' };
 
-function fixture(t, orders = [initialOrder], setup) {
-  const store = createLocalBusinessStore(':memory:');
-  t.after(() => store.close());
+function fixture(t, orders = [initialOrder], setup, database = ':memory:') {
+  const store = createLocalBusinessStore(database);
+  let closed = false;
+  const close = () => { if (!closed) { closed = true; store.close(); } };
+  t.after(close);
   const data = { ...structuredClone(emptyCommerce), orders: structuredClone(orders) };
   if (setup) setup(store, data);
   else store.saveBatch([{ domain: 'commerce', version: 0, data }]);
+  return { store, close, send: sender(store), submit: { action: 'submit', confirmed: true, orders: [{ id: orders[0].id, version: 1 }] } };
+}
+
+function sender(store) {
   const handler = createRenewalHandoff({ store, publicOrigin: origin, clock: () => Date.UTC(2026, 10, 13, 5),
     getAuth: () => ({ recentlyVerified: request => request.readVerified, orderOwners: () => Object.values(actors),
       teamFor: () => [actors.employee] }), client: { get: async () => ({ cards: [] }) } });
-  async function send(actor, value, { view = 'staff', itemId, operationId = randomUUID(), verified = false, source = origin } = {}) {
+  return async function send(actor, value, { view = 'staff', itemId, operationId = randomUUID(), verified = false, source = origin } = {}) {
     const request = Readable.from(value ? [Buffer.from(JSON.stringify(value))] : []);
     request.method = value ? 'POST' : 'GET';
     request.url = renewalHandoffPath + (value ? '' : '?' + new URLSearchParams({ view, ...(itemId && { id: itemId }) }));
@@ -49,7 +60,6 @@ function fixture(t, orders = [initialOrder], setup) {
     await handler(request, { writeHead(code) { status = code; }, end(value) { data = JSON.parse(value); } }, actors[actor]);
     return { status, data };
   }
-  return { store, send, submit: { action: 'submit', confirmed: true, orders: [{ id: orders[0].id, version: 1 }] } };
 }
 
 test('confirmed staff handoff, exclusive finance claim, verified card replacement and one new order', async t => {
@@ -213,13 +223,13 @@ test('finance may return unpaid work to selection and a former version cannot su
 });
 
 
-test('finance checks the original Apple wallet and completion writes one debit against the new order', async t => {
+function appleFixture(t, database = ':memory:') {
   const appleId = 'renewal-wallet';
   const source = { ...initialOrder, product: 'Gemini', plan: 'Google AI Pro', subscriptionSeries: 'google_ai',
     loginMethod: 'google', businessType: '首次开通', payment: '苹果内购', appleIdId: appleId, appleStoreRegion: 'US', appleGoogleVerified: true,
     billingChannel: 'app_store',
     proCardNumber: undefined, proMaterialMode: undefined, proCardSerial: undefined, paymentId: undefined };
-  const { store, send, submit } = fixture(t, [source], (store, data) => {
+  const result = fixture(t, [source], (store, data) => {
     const inventory = { accounts: [], batches: [], returnRecords: [], importRecords: [], registrationRecords: [],
       tableSettings: [], undo: [], mailboxes: [{ id: appleId, type: 'apple', email: 'wallet@example.test',
         status: '正常', health: 'normal', appStoreRegion: 'US', appleOpeningBalance: '45' }] };
@@ -229,7 +239,166 @@ test('finance checks the original Apple wallet and completion writes one debit a
     const ledger = store.load('appleBalance');
     store.saveBatch([{ domain: 'commerce', version: 0, data }, { domain: 'appleBalance', version: ledger.version,
       action: 'apple_order_charge', data: stageConfirmedRenewalDebit(ledger.data, source, actors.finance, '2026-10-12T03:00:00Z') }]);
-  });
+  }, database);
+  return { ...result, appleId, source };
+}
+
+async function claimedApple(t, database) {
+  const result = appleFixture(t, database);
+  assert.equal((await result.send('employee', result.submit)).status, 200);
+  const [{ id }] = (await result.send('finance', null, { view: 'finance' })).data.items;
+  assert.equal((await result.send('finance', { action: 'claim', id, version: 1 })).status, 200);
+  return { ...result, id, payment: { action: 'paid', id, version: 2, confirmed: true, amount: '21.25', currency: 'USD' } };
+}
+
+async function databaseFixture(t) {
+  const root = fileURLToPath(new URL('../.runtime/', import.meta.url));
+  await mkdir(root, { recursive: true });
+  const directory = await mkdtemp(join(root, 'renewal-atomic-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  return join(directory, 'business.sqlite');
+}
+
+test('paid Apple handoff requires verified finance source review and finishes without another debit', async t => {
+  const { store, send, id, payment } = await claimedApple(t);
+  assert.equal((await send('finance', payment, { verified: true })).status, 200);
+  const paidLedger = store.load('appleBalance').data;
+  const funding = store.featureDocument(renewalHandoffDomain).data.items[0].funding;
+  const correction = expiry => {
+    const current = store.load('commerce');
+    current.data.orders[0].expiry = expiry; current.data.orders[0].version++;
+    store.saveBatch([{ domain: 'commerce', ...current, action: '更正订单' }]);
+  };
+  correction('2026-11-13T11:00');
+  const finish = { action: 'finish', id, version: 3, ...finishFields };
+  assert.equal((await send('employee', finish)).status, 409);
+  assert.equal((await send('employee', null)).data.items[0].canFinish, false);
+  let row = (await send('finance', null, { view: 'finance' })).data.items[0];
+  const reviewed = { action: 'review-source', id, version: 3, sourceVersion: row.sourceReview.version,
+    confirmed: true, reason: '已核对原到期时间更正，保留本次实付依据' };
+  assert.equal((await send('employee', reviewed, { verified: true })).status, 403);
+  assert.equal((await send('finance', reviewed)).status, 403);
+  correction('2026-11-14T11:00');
+  assert.equal((await send('finance', reviewed, { verified: true })).status, 409);
+  assert.deepEqual(store.load('appleBalance').data, paidLedger);
+  row = (await send('finance', null, { view: 'finance' })).data.items[0];
+  reviewed.sourceVersion = row.sourceReview.version;
+  const reviewOperation = randomUUID();
+  assert.equal((await send('finance', reviewed, { verified: true, operationId: reviewOperation })).status, 200);
+  assert.equal((await send('finance', reviewed, { verified: true, operationId: reviewOperation })).status, 200);
+  assert.deepEqual(store.load('appleBalance').data, paidLedger);
+  assert.deepEqual(store.featureDocument(renewalHandoffDomain).data.items[0].funding, funding);
+  const ready = { ...finish, version: 4 };
+  assert.equal((await send('employee', { ...ready, expiry: '2026-11-14T10:00' })).status, 400);
+  const operationId = randomUUID();
+  const saved = await send('employee', ready, { operationId });
+  assert.equal(saved.status, 200, saved.data.error);
+  assert.equal((await send('employee', ready, { operationId })).status, 200);
+  const ledger = store.load('appleBalance').data, handoff = store.featureDocument(renewalHandoffDomain).data.items[0];
+  assert.equal(ledger.wallets[0].balance, '3.7500');
+  assert.equal(ledger.movements.length, paidLedger.movements.length);
+  assert.equal(ledger.allocations.filter(item => item.orderId === 'order-' + id).length, 1);
+  assert.equal(handoff.sourceReviews.length, 1);
+  assert.equal(handoff.sourceReviews[0].by.id, actors.finance.id);
+  assert.equal(handoff.paidSource.expiry, '2026-11-12T11:00');
+  assert.equal(store.load('commerce').data.orders[0].paidAmount, '21.25');
+});
+
+test('a lost paid response remains idempotent after reopening the SQLite store', async t => {
+  const database = await databaseFixture(t);
+  const { store, send, close, id, payment } = await claimedApple(t, database);
+  const operationId = randomUUID();
+  assert.equal((await send('finance', payment, { verified: true, operationId })).status, 200);
+  const ledger = store.load('appleBalance');
+  close();
+  const recovered = createLocalBusinessStore(database); t.after(() => recovered.close());
+  const again = sender(recovered);
+  assert.equal((await again('finance', payment, { verified: true, operationId })).status, 200);
+  assert.deepEqual(recovered.load('appleBalance'), ledger);
+  assert.equal((await again('finance', payment, { verified: true })).status, 409);
+  const result = await again('employee', { action: 'finish', id, version: 3, ...finishFields });
+  assert.equal(result.status, 200, result.data.error);
+  assert.equal(recovered.load('appleBalance').data.wallets[0].balance, '3.7500');
+  assert.equal(recovered.load('appleBalance').data.movements.length, ledger.data.movements.length);
+});
+
+test('failure after the debit write rolls the ledger and paid receipt back together', async t => {
+  const database = await databaseFixture(t);
+  const { store, send, payment } = await claimedApple(t, database);
+  const ledger = store.load('appleBalance'), queue = store.featureDocument(renewalHandoffDomain), audit = store.audit();
+  const fault = new DatabaseSync(database); t.after(() => fault.close());
+  fault.exec("CREATE TRIGGER synthetic_renewal_failure BEFORE UPDATE ON business_document WHEN NEW.domain='renewal-handoffs' BEGIN SELECT RAISE(ABORT, 'synthetic renewal persistence failure'); END");
+  const operationId = randomUUID();
+  assert.equal((await send('finance', payment, { verified: true, operationId })).status, 503);
+  assert.deepEqual(store.load('appleBalance'), ledger);
+  assert.deepEqual(store.featureDocument(renewalHandoffDomain), queue);
+  assert.deepEqual(store.audit(), audit);
+  fault.exec('DROP TRIGGER synthetic_renewal_failure');
+  assert.equal((await send('finance', payment, { verified: true, operationId })).status, 200);
+  assert.equal(store.load('appleBalance').data.wallets[0].balance, '3.7500');
+});
+
+test('competing payment registrations produce only one debit and one paid receipt', async t => {
+  const { store, send, payment } = await claimedApple(t);
+  const responses = await Promise.all([send('finance', payment, { verified: true }), send('finance', payment, { verified: true })]);
+  assert.deepEqual(responses.map(item => item.status).sort(), [200, 409]);
+  assert.equal(store.load('appleBalance').data.wallets[0].balance, '3.7500');
+  assert.equal(store.load('appleBalance').data.movements.filter(row => row.orderId === 'order-' + payment.id).length, 1);
+});
+
+test('paid registration uses a concurrent wallet topup and retains its immutable history', async t => {
+  const database = await databaseFixture(t);
+  const { store, send, payment, appleId } = await claimedApple(t, database);
+  const other = createLocalBusinessStore(database); t.after(() => other.close());
+  const originalSave = store.saveRenewalQueue.bind(store);
+  store.saveRenewalQueue = (...args) => {
+    const ledger = other.load('appleBalance'), wallet = ledger.data.wallets[0];
+    const before = wallet.balance;
+    wallet.balance = '35'; wallet.version++;
+    ledger.data.movements.push({ id: 'concurrent-topup', appleIdId: appleId, kind: 'topup', amount: '10',
+      before, after: wallet.balance, versionAfter: wallet.version, reason: '合成到账凭据' });
+    other.saveBatch([{ domain: 'appleBalance', ...ledger, action: 'apple_topup' }], { actor: actors.finance });
+    return originalSave(...args);
+  };
+  const paid = await send('finance', payment, { verified: true });
+  assert.equal(paid.status, 200, paid.data.error);
+  const ledger = store.load('appleBalance');
+  assert.equal(ledger.data.wallets[0].balance, '13.7500');
+  assert.equal(ledger.data.movements.at(-2).id, 'concurrent-topup');
+  const changed = structuredClone(ledger);
+  const wallet = changed.data.wallets[0];
+  wallet.balance = '23.7500'; wallet.version++;
+  changed.data.movements.push({ id: 'after-paid-topup', appleIdId: appleId, kind: 'topup', amount: '10',
+    before: '13.7500', after: wallet.balance, versionAfter: wallet.version, reason: '合成后续到账' });
+  changed.data.movements.at(-2).actorId = actors.financeOther.id;
+  assert.throws(() => store.saveBatch([{ domain: 'appleBalance', ...changed, action: 'apple_topup' }]), /流水/);
+  assert.deepEqual(store.load('appleBalance'), ledger);
+  changed.data.movements.at(-2).actorId = actors.finance.id;
+  store.saveBatch([{ domain: 'appleBalance', ...changed, action: 'apple_topup' }], { actor: actors.finance });
+  const result = await send('employee', { action: 'finish', id: payment.id, version: 3, ...finishFields });
+  assert.equal(result.status, 200, result.data.error);
+  assert.equal(store.load('appleBalance').data.wallets[0].balance, '23.7500');
+});
+
+test('an older unposted paid handoff completes with exactly one debit', async t => {
+  const { store, send, id, appleId } = await claimedApple(t);
+  const queue = store.featureDocument(renewalHandoffDomain);
+  Object.assign(queue.data.items[0], { status: 'paid', version: 3, funding: {
+    payment: '苹果内购', amount: '21.25', currency: 'USD', appleIdId: appleId, appleStoreRegion: 'US',
+    actor: { id: actors.finance.id, name: actors.finance.name }, at: '2026-11-13T05:00:00.000Z'
+  } });
+  store.saveFeatureDocument(renewalHandoffDomain, queue.version, queue.data);
+  assert.equal(store.load('appleBalance').data.wallets[0].balance, '25.0000');
+  const operationId = randomUUID(), command = { action: 'finish', id, version: 3, ...finishFields };
+  const result = await send('employee', command, { operationId });
+  assert.equal(result.status, 200, result.data.error);
+  assert.equal((await send('employee', command, { operationId })).status, 200);
+  assert.equal(store.load('appleBalance').data.wallets[0].balance, '3.7500');
+  assert.equal(store.load('appleBalance').data.movements.filter(row => row.orderId === 'order-' + id).length, 1);
+});
+
+test('finance posts the Apple debit when paid and completing the order does not debit again', async t => {
+  const { store, send, submit, appleId, source } = appleFixture(t);
   assert.equal((await send('employee', submit)).status, 200);
   const [{ id }] = (await send('finance', null, { view: 'finance' })).data.items;
   assert.equal((await send('finance', { action: 'claim', id, version: 1 })).status, 200);
@@ -239,7 +408,14 @@ test('finance checks the original Apple wallet and completion writes one debit a
   assert.match(shortage.data.error, /余额不足/);
   const paid = await send('finance', { ...payment, amount: '21.25' }, { verified: true });
   assert.equal(paid.status, 200, paid.data.error);
-  assert.equal(store.load('appleBalance').data.wallets[0].balance, '25.0000');
+  assert.equal(store.load('appleBalance').data.wallets[0].balance, '3.7500');
+  const pending = store.featureDocument(renewalHandoffDomain).data;
+  assert.equal(pending.items[0].funding.ledgerPosted, true);
+  assert.equal(store.load('commerce').data.orders.length, 1);
+  assert.equal(auditAppleWallets({ commerce: store.load('commerce').data, inventory: store.load('inventory').data,
+    appleBalance: store.load('appleBalance').data, renewalHandoffs: pending }).counts.issueCount, 0);
+  assert(auditAppleWallets({ commerce: store.load('commerce').data, inventory: store.load('inventory').data,
+    appleBalance: store.load('appleBalance').data }).counts.issueCount > 0);
   const finish = { action: 'finish', id, version: 3, ...finishFields };
   const operationId = randomUUID();
   const completed = await send('employee', finish, { operationId });

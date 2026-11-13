@@ -30,7 +30,7 @@ const inventory = (accounts) => ({
   tableSettings: [],
   undo: []
 });
-const commerce = (orders, customers = []) => ({
+const commerce = (orders, customers = [{ id: 'buyer-1', name: 'Synthetic buyer', active: true }]) => ({
   customers,
   tenants: [],
   orders,
@@ -345,7 +345,7 @@ test('customer refunds remain append-only and cannot exceed the recorded receipt
       assert.equal(store.audit().length, 3);
     }
 
-    const unrelated = commerce([current], [{ id: 'customer-1', name: '测试客户' }]);
+    const unrelated = commerce([current], [...twoRefunds.customers, { id: 'customer-1', name: '测试客户' }]);
     store.saveBatch([commerceWrite(3, unrelated, '新增资料')]);
     assert.deepEqual(store.load('commerce'), { version: 4, data: unrelated });
   } finally {

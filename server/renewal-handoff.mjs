@@ -29,6 +29,10 @@ const manualSource = '管理员手工';
 const credit = (value, currency) => validMoney(value) && validCurrencyCode(currency);
 const capturedFields = ['product', 'plan', 'customerId', 'email', 'xHandle', 'loginMethod', 'accountId', 'tenantId',
   'start', 'expiry', 'payment', 'paymentId', 'appleIdId', 'appleStoreRegion', 'platformAccountId', 'cardId', 'billingChannel'];
+export function capturePaidRenewalSource(order) {
+  return Object.fromEntries(['id', 'version', ...capturedFields, 'accountSource', 'xLinkState']
+    .filter(field => Object.hasOwn(order, field) && field !== 'paymentId').map(field => [field, order[field]]));
+}
 const dateInput = value => typeof value === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d$/.test(value) &&
   Boolean(parseV2DateTimeInput(value));
 const displayTime = time => new Date(time).toISOString();
@@ -267,12 +271,12 @@ function newOrder(source, row, command, actor, context, now) {
     : source.product === 'Grok' ? xHandle && !email ? 'x' : 'email' : undefined);
   const order = { id: 'order-' + row.id, version: 1, product: source.product, plan: ({ 'Claude Pro': { pro: 'Pro' }, 'Claude Max': { max5: 'Max 5x', max20: 'Max 20x' } })[source.product]?.[source.plan] || source.plan,
     source: manualSource, businessType: '续费', accountSource: source.accountSource || '客户自有',
-    customerId: source.customerId, ownerId: context.owner(source).ownerId || actor.id,
+    customerId: source.customerId, ownerId: context.owner(context.byId.get(source.id) || source).ownerId || actor.id,
     start, expiry, saleAmount, saleCurrency, paidAmount: funding.amount, paidCurrency: funding.currency,
     payment: funding.payment, paidConfirmed: true, receiptConfirmed: true, entitlementStatus: 'active',
     costBasis: 'standard', createdAt: displayTime(now), updatedAt: displayTime(now), email,
     ...(xHandle && { xHandle }), ...(loginMethod && { loginMethod }),
-    previousOrderId: source.id, renewalSourceVersion: source.version ?? 0 };
+    previousOrderId: source.id, renewalSourceVersion: (context.byId.get(source.id) || source).version ?? 0 };
   for (const field of ['accountId', 'platformAccountId', 'xLinkState'])
     if (source[field]) order[field] = source[field];
   if (personalProduct(order.product)) {
@@ -472,7 +476,10 @@ export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clo
           by: { id: actor.id, name: actor.name }, reason, at: displayTime(now) }];
       } else if (action === 'finish') {
         if (row.status !== 'paid' || !source) fail(409, '这笔续费尚未完成财务处理或原单已变化');
-        const order = newOrder(source, row, command, actor, context, now);
+        // Finance may reconcile dates only. Keep the paid identity immutable,
+        // while validating the new expiry against the reviewed current dates.
+        const paidSource = row.paidSource ? { ...row.paidSource, start: source.start, expiry: source.expiry } : source;
+        const order = newOrder(paidSource, row, command, actor, context, now);
         const orderNo = store.finishRenewal({ snapshot, commerce, item: next, order, actor, operation,
           owners: () => scope.orderOwners() });
         return send(response, 200, { saved: true, orderNo });

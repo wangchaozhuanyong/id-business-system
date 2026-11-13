@@ -125,6 +125,13 @@ export function createNativeRechargeAdapter({ nativeUrl, secret, getNativeAdminT
     if (path.startsWith('/api/admin/cdks/returns') && actor.id !== 'order-reconciliation')
       return reply(res, 403, '归还接口仅供受管业务服务调用');
     if ((admin || external) && !actor.admin) return reply(res, 403, '没有充值管理权限');
+    if (req.method === 'DELETE') {
+      let decoded;
+      try { decoded = decodeURIComponent(path); }
+      catch { return reply(res, 404, '接口不存在'); }
+      if (/^\/api\/admin\/billing(?:\/|$)/i.test(decoded))
+        return reply(res, 403, '账单是历史付款依据，不能删除；可查询或导出核对');
+    }
     if (sensitivePaths.test(path) && !actor.sensitive) return reply(res, 403, '没有敏感资料权限');
     if (path === cardStopPath) {
       if (actor.id !== 'order-reconciliation') return reply(res, 403, '仅供银行卡管理服务调用');

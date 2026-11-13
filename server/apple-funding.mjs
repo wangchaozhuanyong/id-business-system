@@ -8,6 +8,24 @@ import { toV2DateTimeInput } from '../modules/time/dateTime.ts';
 
 export const emptyAppleLedger = () => ({ wallets: [], allocations: [], movements: [], refunds: [] });
 
+// A paid handoff already owns a debit, even before staff finish its order.
+// The eventual order uses this same id; these references are never new sales.
+export function pendingRenewalPayments(items = [], orders = []) {
+  const existing = new Set(orders.map(order => order.id));
+  return (Array.isArray(items) ? items : []).filter(row => row.status === 'paid' && row.funding?.ledgerPosted === true &&
+    row.paidSource?.id === row.order?.id && !existing.has('order-' + row.id)).map(row => ({
+    id: 'order-' + row.id, source: '管理员手工', payment: '苹果内购', paidConfirmed: true,
+    paidAmount: row.funding.amount, paidCurrency: row.funding.currency, appleIdId: row.funding.appleIdId,
+    email: row.paidSource.email || '', customerId: row.paidSource.customerId, refunds: [],
+    renewalHandoffId: row.id
+  }));
+}
+
+export function renewalLedgerCommerce(commerce, items) {
+  const orders = commerce?.orders || [];
+  return { ...commerce, orders: [...orders, ...pendingRenewalPayments(items, orders)] };
+}
+
 export function validApplePaidPrices(prices, plans) {
   const object = value => value && typeof value === 'object' && !Array.isArray(value);
   return object(prices) && Object.entries(prices).every(([product, rows]) =>
@@ -64,6 +82,8 @@ const sameAppleTarget = (a, b) => appleTarget(a) === appleTarget(b) &&
 export function stageConfirmedRenewalDebit(ledger, order, payer, at) {
   if (!usesApple(order)) return null;
   const data = structuredClone(ledger || emptyAppleLedger());
+  if (data.allocations.some(row => row.orderId === order.id) || data.movements.some(row => row.orderId === order.id))
+    throw Object.assign(new Error('本次续费付款已有记录，请刷新后核对'), { status: 409 });
   const wallet = data.wallets.find(row => row.id === order.appleIdId);
   const before = appleAmountUnits(wallet?.balance), paid = appleAmountUnits(order.paidAmount);
   if (!wallet || wallet.currency !== 'USD' || before === null || paid === null || paid <= 0n || before < paid)
@@ -91,7 +111,7 @@ function conflictsWithAppleBinding(order, other) {
     ? !sameTarget || Boolean(other.customerId && other.customerId !== order.customerId) : sameTarget;
 }
 
-export function stageAppleOrderFunding(previous, next, ledger, inventory, settings, action, customers, completedCustomerOrders, paidRenewalId) {
+export function stageAppleOrderFunding(previous, next, ledger, inventory, settings, action, customers, completedCustomerOrders, paidRenewalId, postedRenewalId) {
   const prior = new Map((previous || []).map(row => [row.id, row]));
   const staged = new Map(prior);
   const nextIds = new Set((next || []).map(row => row.id));
@@ -142,6 +162,15 @@ export function stageAppleOrderFunding(previous, next, ledger, inventory, settin
       continue;
     }
     if (!usesApple(order)) continue;
+    if (order.id === postedRenewalId && order.paidConfirmed) {
+      const allocation = ledger?.allocations?.find(row => row.orderId === order.id);
+      if (order.paidCurrency !== 'USD' || allocation?.appleIdId !== order.appleIdId ||
+          appleAmountUnits(allocation.amount) !== appleAmountUnits(order.paidAmount))
+        return '续费实付与已登记的 Apple 扣款不一致';
+      order.appleFunding = { region: order.appleStoreRegion, expected: order.paidAmount, bound: true };
+      staged.set(order.id, order);
+      continue;
+    }
     if (isDraft(order)) {
       if (wasReserved || order.paidConfirmed) return '已占用的苹果 ID 不能转回草稿';
       continue;

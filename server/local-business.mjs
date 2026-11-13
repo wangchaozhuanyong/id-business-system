@@ -66,8 +66,9 @@ import { applyInventoryUsage, correctInventoryUsage, inspectInventoryUsage, usag
 import { checkRegistrationChanges } from './inventory-registration.mjs';
 import { attributeInventory, defaultInventoryRegistrationTimes } from './inventory-attribution.mjs';
 import { checkAccountLocations } from './inventory-account-location.mjs';
-import { emptyAppleLedger, stageAppleOpenings, stageAppleOrderFunding, stageConfirmedRenewalDebit } from './apple-funding.mjs';
-import { directRenewalSource, renewalHandoffDomain, renewalRole } from './renewal-handoff.mjs';
+import { emptyAppleLedger, stageAppleOpenings, stageAppleOrderFunding, stageConfirmedRenewalDebit,
+  pendingRenewalPayments, renewalLedgerCommerce } from './apple-funding.mjs';
+import { capturePaidRenewalSource, directRenewalSource, renewalHandoffDomain, renewalRole } from './renewal-handoff.mjs';
 import {
   bankRenewalSource, cardFreezeDocument, cardTypeDocument, cardTypeSnapshot, frozenOrderCard, frozenRenewalCard,
   orderCardArchiveDocument, blockedOrderCard, orderCardHealth, orderCardHealthReference
@@ -93,7 +94,11 @@ import {
 import {
   checkAppleLedger,
   checkBankReturns,
+  checkCustomerReferences,
   checkOrderFinancialHistory,
+  checkOrderFinancialRevision,
+  checkOrderExpenseReferences,
+  checkRentHistory,
   checkRelayInventory,
   checkStockDeliveries
 } from './local-business-integrity.mjs';
@@ -650,9 +655,9 @@ export function verifyBusinessDocumentPayloads(databasePath, key, { countBusines
 export function readBusinessAuditDocuments(databasePath, key) {
   const db = new DatabaseSync(databasePath, { readOnly: true, timeout: 4000 });
   const domains = { inventory: 'inventory', commerce: 'commerce', appleBalance: 'appleBalance',
-    expenseReceipts: orderExpenseDomain };
+    expenseReceipts: orderExpenseDomain, renewalHandoffs: renewalHandoffDomain };
   try {
-    const rows = db.prepare('SELECT domain, version, payload FROM business_document WHERE domain IN (?, ?, ?, ?)')
+    const rows = db.prepare('SELECT domain, version, payload FROM business_document WHERE domain IN (?, ?, ?, ?, ?)')
       .all(...Object.values(domains));
     const byDomain = new Map(rows.map(row => [row.domain, row]));
     return Object.fromEntries(Object.entries(domains).map(([name, domain]) => {
@@ -1804,18 +1809,44 @@ export function createLocalBusinessStore(databasePath) {
     saveRenewalQueue(version, commerceVersion, items, { action, actor, ids, operation }) {
       return writeTransaction(() => {
         if (replayWrite(operation)) return;
-        if (readDocument(renewalHandoffDomain).version !== version || readDocument('commerce').version !== commerceVersion)
+        const renewals = readDocument(renewalHandoffDomain), commerce = readDocument('commerce');
+        if (renewals.version !== version || commerce.version !== commerceVersion)
           throw new LocalDataError(409, '续费或订单资料已更新，请刷新后核对');
+        items = structuredClone(items);
+        const domains = [renewalHandoffDomain];
+        if (action === 'renewal_paid') {
+          const paid = items.find(row => row.id === ids[0]);
+          const previous = renewals.data?.items?.find(row => row.id === paid?.id);
+          const source = commerce.data?.orders?.find(row => row.id === paid?.order?.id);
+          if (ids.length !== 1 || !source || previous?.status !== 'processing' || paid.status !== 'paid' ||
+              paid.version !== previous.version + 1 || paid.funding?.actor.id !== actor.id)
+            throw new LocalDataError(409, '续费付款资料已变化，请刷新后核对');
+          paid.paidSource = capturePaidRenewalSource(source);
+          if (paid.funding.payment === '苹果内购' && paid.funding.appleIdId) {
+            paid.funding.ledgerPosted = true;
+            const ledger = readDocument('appleBalance');
+            const payment = pendingRenewalPayments([paid])[0];
+            const nextLedger = stageConfirmedRenewalDebit(ledger.data, payment, paid.funding.actor, paid.funding.at);
+            const issue = checkAppleLedger(ledger.data, nextLedger, readDocument('inventory').data,
+              renewalLedgerCommerce(commerce.data, items), renewalLedgerCommerce(commerce.data, renewals.data?.items));
+            if (issue) throw new LocalDataError(409, issue);
+            putDocument('appleBalance', ledger.version + 1, nextLedger);
+            log.run(paid.funding.at, 'appleBalance', 'apple_order_charge',
+              auditSummary('登记续费实付及余额扣款', actor, paid.id), ledger.version + 1);
+            domains.push('appleBalance');
+          }
+        }
         const next = version + 1;
         putDocument(renewalHandoffDomain, next, { items });
         for (const id of ids) log.run(new Date().toISOString(), renewalHandoffDomain, action,
           auditSummary(renewalAuditLabels[action], actor, id), next);
-        putDocument(operation.domain, 1, { fingerprint: operation.fingerprint, domains: [renewalHandoffDomain] });
+        putDocument(operation.domain, 1, { fingerprint: operation.fingerprint, domains });
       });
     },
     finishRenewal({ snapshot, commerce, item, order, actor, operation, owners }) {
       const { version, data } = readDocument('appleBalance');
-      const ledger = stageConfirmedRenewalDebit(data, order, item.funding.actor, item.funding.at);
+      const ledger = item.funding.ledgerPosted === true ? structuredClone(data)
+        : stageConfirmedRenewalDebit(data, order, item.funding.actor, item.funding.at);
       const writes = [{ domain: 'commerce', version: commerce.version, action: '新增独立订单',
         data: { ...commerce.data, orders: [order, ...commerce.data.orders] } }];
       if (ledger) writes.push({ domain: 'appleBalance', version, action: 'apple_order_charge', data: ledger });
@@ -2062,18 +2093,22 @@ export function createLocalBusinessStore(databasePath) {
                 row.subscriptionAnchor = subscriptionChainRoot(prior, priorById).id;
               }
             }
-            if (cards && prior && action === '更正订单' && row.source !== '线上代充') {
+            if (cards && prior && action !== '补偿撤回更正') {
               if (orderFieldChanged(row, prior, 'paidAmount', 'paidCurrency') &&
                   (!positiveOrderAmount(row.paidAmount) || !validCurrencyCode(row.paidCurrency)))
                 throw new LocalDataError(400, '请填写有效的实际代付及币种');
               if (orderFieldChanged(row, prior, 'saleAmount', 'saleCurrency') &&
                   (!validMoney(row.saleAmount) || !validCurrencyCode(row.saleCurrency)))
                 throw new LocalDataError(400, '请填写有效的客户实收及币种');
-              if (orderFieldChanged(row, prior, 'start', 'expiry') &&
+              if (action === '更正订单' && orderFieldChanged(row, prior, 'start', 'expiry') &&
                   (['start', 'expiry'].some(field => orderFieldChanged(row, prior, field) &&
                     !Number.isFinite(subscriptionTime(row[field]))) ||
                    (row.start && row.expiry && !(subscriptionTime(row.expiry) > subscriptionTime(row.start)))))
                 throw new LocalDataError(400, '请填写有效的订阅起止时间');
+            }
+            if (cards && prior) {
+              const issue = checkOrderFinancialRevision(prior, row, action);
+              if (issue) throw new LocalDataError(409, issue);
             }
             if (personalProduct(row.product) || personalProduct(prior?.product)) {
               if (prior && prior.product !== row.product) throw new LocalDataError(409, '原订单产品不可更换');
@@ -2143,14 +2178,6 @@ export function createLocalBusinessStore(databasePath) {
                 }
                 if (prior.product && row.product !== prior.product)
                   throw new LocalDataError(409, '原订单产品不可更换');
-              }
-              if (prior && row.costBasis === 'actual' &&
-                  ['costBasis', 'actualCostAmount', 'actualCostCurrency', 'appleRecoverableCostAmount']
-                    .some((field) => (prior[field] ?? '') !== (row[field] ?? ''))) {
-                const correction = row.corrections?.at(-1);
-                if (action !== '更正订单' || typeof correction?.reason !== 'string' ||
-                    !correction.reason.trim() || correction.previous?.version !== prior.version)
-                  throw new LocalDataError(400, '实际总成本需要有依据的订单更正记录');
               }
               if (!prior) {
                 if (!row.product || !['银行卡', '苹果内购'].includes(row.payment))
@@ -2267,8 +2294,11 @@ export function createLocalBusinessStore(databasePath) {
             }
           }
           const error =
+            checkCustomerReferences(priorCommerce, commerce) ||
+            checkRentHistory(priorCommerce, commerce, action) ||
             checkBankReturns(priorCommerce, commerce) ||
             checkOrderFinancialHistory(priorCommerce, commerce) ||
+            checkOrderExpenseReferences(priorCommerce, commerce, current(orderExpenseDomain)?.items) ||
             checkFinanceSnapshots(priorCommerce, commerce, { action, verifyAutomaticSnapshot, actor, verifiedCardBackfillId,
               currentCostSettings: action === historicalFeeAction ? orderCostSnapshot(current('settings')?.costSettings) : undefined });
           if (error) throw new LocalDataError(409, error);
@@ -2320,15 +2350,16 @@ export function createLocalBusinessStore(databasePath) {
           if (incoming.has('commerce')) {
             const error = stageAppleOrderFunding(priorCommerce?.orders, commerce.orders, previous,
               inventory, current('settings'), writes.find(write => write.domain === 'commerce').action, commerce.customers,
-              completedCustomerOrders, handoff?.id);
+              completedCustomerOrders, handoff?.id, handoff?.item.funding.ledgerPosted === true ? handoff.id : undefined);
             if (error) throw new LocalDataError(409, error);
           }
           const error = checkAppleLedger(
             previous,
             ledger,
             checksStock ? inventory : current('inventory'),
-            checksStock ? commerce : current('commerce'),
-            checksStock ? priorCommerce : current('commerce')
+            renewalLedgerCommerce(checksStock ? commerce : current('commerce'), current(renewalHandoffDomain)?.items),
+            renewalLedgerCommerce(checksStock ? priorCommerce : current('commerce'), current(renewalHandoffDomain)?.items),
+            { completedRenewalId: handoff?.item.funding.ledgerPosted === true ? handoff.id : undefined }
           );
           if (error) throw new LocalDataError(409, error);
         }
@@ -2457,6 +2488,8 @@ export function createLocalBusinessStore(databasePath) {
           throw new LocalDataError(409, '订单已变化，请刷新后核对用卡');
         if (domain === 'tenant-cards' && commerceVersion !== undefined && readDocument('commerce').version !== commerceVersion)
           throw new LocalDataError(409, '订单已变化，请重新查询卡号');
+        if (domain === orderExpenseDomain && commerceVersion !== undefined && readDocument('commerce').version !== commerceVersion)
+          throw new LocalDataError(409, '原订单或成本已变化，请刷新后重新核对费用凭据');
         const next = version + 1;
         put.run(domain, next, encrypt(key, domain, next, JSON.stringify(data)));
         if (operation) putDocument(operation.domain, 1, { fingerprint: operation.fingerprint, domains: [domain] });

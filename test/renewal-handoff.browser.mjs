@@ -12,6 +12,66 @@ const second = { ...source, id: 'fixture-second', number: 'OD-QA-141', account: 
 const orderFixture = { ...source, orderNo: source.number, email: source.account, source: '管理员手工',
   status: '已记录', businessType: '续费', refunds: [] };
 
+test('finance source review preserves the reason but requires a fresh version and confirmation', { timeout: 60_000 }, async t => {
+  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
+  t.after(() => browser.close());
+  for (const [width, theme] of [[1440, 'light'], [1440, 'dark'], [390, 'light'], [320, 'dark']]) {
+    const context = await browser.newContext({ viewport: { width, height: 900 } });
+    const errors = [], posts = [];
+    const requests = await interceptDesign(context, { skipRechargeAssets: true, localAuthUi: true,
+      actor: { id: 'finance-fixture', name: '测试财务', role: 'finance' }, localFixtures: {} });
+    let sourceVersion = 2, reviewed = false;
+    await context.route('**/api/local/auth/security**', route => route.fulfill({ json: {
+      available: true, bound: true, recentlyVerified: true, devices: []
+    } }));
+    await context.route('**/api/local/renewals**', route => {
+      if (route.request().method() === 'GET') return route.fulfill({ json: { version: 3, candidates: [], items: [{
+        id: 'changed-paid', version: 3, status: 'paid', order: source,
+        sourceChanged: !reviewed, amount: '21.25', currency: 'USD',
+        ...(!reviewed && { sourceReview: { version: sourceVersion, expiry: '2026-11-15T10:00', originalLast4: '4242' } })
+      }] } });
+      const command = route.request().postDataJSON(); posts.push(command);
+      assert.equal(command.action, 'review-source');
+      assert.equal(command.confirmed, true);
+      if (posts.length === 1) {
+        sourceVersion = 3;
+        return route.fulfill({ status: 409, json: { error: '原单再次变化，请刷新后核对' } });
+      }
+      assert.equal(command.sourceVersion, sourceVersion);
+      assert.equal(command.reason, '已核对到期时间更正');
+      reviewed = true;
+      return route.fulfill({ json: { saved: true } });
+    });
+    const page = await context.newPage(); page.setDefaultTimeout(6000);
+    page.on('pageerror', error => errors.push(error.message));
+    await page.goto(origin + '/#/workspace/finance-renewals');
+    await page.evaluate(value => { document.documentElement.dataset.theme = value; }, theme);
+    await page.getByRole('tab', { name: '已处理', exact: true }).click();
+    await page.getByRole('button', { name: '核对原单', exact: true }).click();
+    const form = page.locator('#renewal-review-source-form');
+    const confirm = form.getByRole('checkbox');
+    const submit = page.getByRole('button', { name: '确认并交回员工' });
+    await form.getByLabel('原单更正原因').fill('已核对到期时间更正');
+    await submit.click(); assert.equal(posts.length, 0);
+    await confirm.check(); await submit.click();
+    await form.getByText('原单再次变化，请刷新后核对', { exact: true }).waitFor();
+    await page.getByRole('button', { name: '关闭抽屉', exact: true }).click();
+    await page.getByRole('button', { name: '刷新', exact: true }).click();
+    await page.getByRole('button', { name: '核对原单', exact: true }).click();
+    assert.equal(await form.getAttribute('data-source-version'), '3');
+    assert.equal(await confirm.isChecked(), false);
+    assert.equal(await form.getByLabel('原单更正原因').inputValue(), '已核对到期时间更正');
+    await settle(page);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
+    assert.deepEqual((await separatorSnapshot(page)).findings, []);
+    await confirm.check(); await submit.click();
+    await page.getByText('原单已核对，员工可以补资料提交订单', { exact: true }).waitFor();
+    assert.equal(posts.length, 2);
+    assert.deepEqual(errors, []); assert.deepEqual(requests.external, []);
+    await context.close();
+  }
+});
+
 test('staff confirms a batch and finance returns a verified replacement for a new order', { timeout: 60_000 }, async t => {
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
   t.after(() => browser.close());
