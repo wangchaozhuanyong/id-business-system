@@ -122,6 +122,19 @@ test('只读 CLI 标准输入输出，严格模式区分待处理与无效输入
   const eligible = run(JSON.stringify(docs([mail('eligible')], [account('eligible-account', 'eligible')])), '--strict');
   assert.equal(eligible.status, 2);
   assert.equal(JSON.parse(eligible.stdout).counts.eligible, 1);
+  const oneSided = run(JSON.stringify(docs([
+    mail('legacy', { inventoryState: 'used',
+      usageLinks: [{ kind: 'registration', accountId: 'legacy-account', product: 'gpt' }] })
+  ], [account('legacy-account', 'legacy')], [{ id: 'order-without-email', product: 'GPT' }])), '--strict');
+  assert.equal(oneSided.status, 0);
+  assert.deepEqual(JSON.parse(oneSided.stdout).counts,
+    { eligible: 0, review: 0, oneSided: 1, inconsistent: 0, legacyFreeze: 0 });
+  const inconsistent = run(JSON.stringify(docs([
+    mail('legacy', { inventoryState: 'used',
+      usageLinks: [{ kind: 'registration', accountId: 'missing-account', product: 'gpt' }] })
+  ])), '--strict');
+  assert.equal(inconsistent.status, 2);
+  assert.equal(JSON.parse(inconsistent.stdout).counts.inconsistent, 1);
   const invalid = run('{"secret":"must-not-leak"}', '--strict');
   assert.equal(invalid.status, 1);
   assert.equal(invalid.stdout, '');

@@ -260,9 +260,8 @@ test('手工及历史单按缺项列给管理员，空白归属补给在用超�
   const data = payload(empty, assigned, named, automatic, manual('draft', { draft: true }),
     manual('one-off', { product: 'Claude Pro', businessType: '续费', ownerId: a.id }));
   const managerRows = view(data, admin).manualItems;
-  assert.deepEqual(managerRows.find(row => row.id === empty.id).missing, ['邮箱账号', '归属人']);
-  assert.deepEqual(managerRows.find(row => row.id === 'one-off').missing, ['邮箱账号']);
-  assert.equal(managerRows.some(row => ['automatic', 'draft'].includes(row.id)), false);
+  assert.deepEqual(managerRows.find(row => row.id === empty.id).missing, ['归属人']);
+  assert.equal(managerRows.some(row => ['employee', 'named', 'one-off', 'automatic', 'draft'].includes(row.id)), false);
   assert.equal(view(data, a).manualItems, undefined);
   const command = { action: 'assign-manual-owners' };
   const superAdmin = { id: 'primary', role: 'super', name: '合成超级管理员' };

@@ -43,7 +43,7 @@ const fixtures = () => ({
         refunds: [{ id: 'refund-legacy', amount: '15', currency: 'CNY' }]
       }),
       order('unlinked', 7, {
-        source: '历史入库', cardId: '', paymentId: '',
+        source: '历史入库', email: '', cardId: '', paymentId: '',
         issueFeeSnapshot: { cardId: '', applied: false, pending: true }
       }),
       order('claude', 8, {
@@ -147,7 +147,8 @@ test('按套餐独立汇总实收、成本、分摊及费用来源，并用原�
       const list = page.locator('table[data-table="commerce-orders-GPT"]');
       assert.equal(await list.locator('tr[data-row-id="b"] [data-column="profit"]').textContent(), '30.00');
       assert.equal(await list.locator('tr[data-row-id="c"] [data-column="profit"]').textContent(), '—');
-      assert.match(await list.locator('tr[data-row-id="unlinked"] [data-column="profit"]').textContent(), /11\.84.*开卡费未分摊/);
+      assert.equal(await list.locator('tr[data-row-id="unlinked"] [data-column="profit"]').textContent(), '8.24');
+      assert.equal(await list.locator('tr[data-row-id="unlinked"] [data-column="email"]').textContent(), '');
       assert.equal(await list.getByText('计算缺项', { exact: true }).count(), 0);
 
       await page.goto(origin + '/#/orders/statistics');
@@ -166,18 +167,18 @@ test('按套餐独立汇总实收、成本、分摊及费用来源，并用原�
       await apple.getByText('543.40', { exact: true }).waitFor();
       assert.match(await pro200.locator('[data-column="netCost"]').textContent(), /110\.00.*单均 110\.00/s);
       assert.equal(await pro200.locator('[data-column="profit"]').textContent(), '30.00');
-      assert.match(await plus.locator('[data-column="netCost"]').textContent(), /515\.0397.*4 笔.*2 笔开卡费未分摊/s);
-      assert.equal(await plus.locator('[data-column="profit"]').textContent(), '34.3198');
+      assert.match(await plus.locator('[data-column="netCost"]').textContent(), /518\.6397.*4 笔.*1 笔开卡费未分摊/s);
+      assert.equal(await plus.locator('[data-column="profit"]').textContent(), '30.7198');
       assert.match(await claude.locator('[data-column="netCost"]').textContent(), /399\.00/);
       assert.equal(await claude.locator('[data-column="profit"]').textContent(), '51.00');
       assert.equal(await apple.locator('[data-column="profit"]').textContent(), '96.60');
       assert.match(await summary.locator('[data-stat-metric="revenue"]').textContent(), /1775\.00/);
-      assert.match(await summary.locator('[data-stat-metric="net-cost"]').textContent(), /1567\.4397/);
-      assert.match(await summary.locator('[data-stat-metric="profit"]').textContent(), /211\.9198/);
+      assert.match(await summary.locator('[data-stat-metric="net-cost"]').textContent(), /1571\.0397/);
+      assert.match(await summary.locator('[data-stat-metric="profit"]').textContent(), /208\.3198/);
       assert.match(await summary.locator('[data-stat-metric="pending"] .summary-number').textContent(), /^2/);
       assert.equal(await plus.locator('[data-column="revenue"]').textContent(), '545.00');
       assert.equal(await plus.locator('[data-column="pending"]').textContent(), '2');
-      await page.getByText('2 笔订单开卡费未分摊，已知费用单列。', { exact: true }).waitFor();
+      await page.getByText('1 笔订单开卡费未分摊，已知费用单列。', { exact: true }).waitFor();
       await settle(page);
       assert.deepEqual((await spacingSnapshot(page)).findings, []);
       const metric = summary.locator('[data-stat-metric="net-cost"]');
@@ -196,7 +197,7 @@ test('按套餐独立汇总实收、成本、分摊及费用来源，并用原�
 
       await plus.getByRole('button', { name: '展开渠道' }).click();
       const channel = planTable.locator('tr[data-row-id="GPT:Plus:银行卡 · PHP"]');
-      assert.match(await channel.locator('[data-column="netCost"]').textContent(), /515\.0397/);
+      assert.match(await channel.locator('[data-column="netCost"]').textContent(), /518\.6397/);
       await channel.getByRole('button', { name: '查看订单' }).click();
       const sourceTable = page.locator('table[data-table="commerce-stat-detail"]');
       assert.equal(await sourceTable.locator('tr[data-row-id="b"]').count(), 0);
@@ -217,7 +218,7 @@ test('按套餐独立汇总实收、成本、分摊及费用来源，并用原�
       await kyc.getByRole('note').filter({ hasText: /有本单 KYC 记录/ }).waitFor();
       await page.keyboard.press('Escape');
       assert.match(await fees.locator('tr[data-row-id="service"] [data-column="reference"]').textContent(), /160\.00 CNY.*100\.00 MYR/);
-      assert.match(await fees.locator('tr[data-row-id="card-issue"] [data-column="reference"]').textContent(), /2\.3997 CNY.*0\.3333 USD/);
+      assert.match(await fees.locator('tr[data-row-id="card-issue"] [data-column="reference"]').textContent(), /5\.9997 CNY.*0\.8333 USD/);
       assert.match(await fees.locator('tr[data-row-id="actual-total"] [data-column="actual"]').textContent(), /110\.00 CNY/);
       assert.match(await fees.locator('tr[data-row-id="recovery"] [data-column="reference"]').textContent(), /-57\.60 CNY.*-8\.00 USD/);
       await kyc.getByRole('button', { name: '查看参考KYC 认证成本订单' }).click();
@@ -245,15 +246,20 @@ test('按套餐独立汇总实收、成本、分摊及费用来源，并用原�
       await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
       await page.locator('#commerce-search').fill('SYN-UNLINKED');
       const unlinked = page.locator('tr[data-row-id="unlinked"]');
-      assert.match(await unlinked.locator('[data-column="reason"]').textContent(), /开卡费未分摊/);
-      assert.match(await unlinked.locator('[data-column="amount"]').textContent(), /11\.84/);
+      assert.equal(await unlinked.locator('[data-column="reason"]').textContent(), '参考核算 · 一次性虚拟卡');
+      assert.equal(await unlinked.locator('[data-column="amount"]').textContent(), '8.24');
+      assert.equal(await unlinked.locator('[data-column="cardIssue"]').textContent(), '3.60');
       await unlinked.getByRole('button', { name: '查看原单', exact: true }).click();
-      await drawer.getByText('原付款卡未记录，开卡费未分摊', { exact: true }).waitFor();
+      await drawer.getByText('一次性虚拟卡开卡费', { exact: true }).waitFor();
+      await drawer.getByLabel('查看一次性虚拟卡开卡费说明').click();
+      await drawer.getByRole('note').filter({ hasText: /按原单冻结的费用规则计一次开卡费 0\.5000 USD/ }).waitFor();
+      await page.keyboard.press('Escape');
       await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
       await page.locator('#commerce-search').fill('');
       await page.getByRole('tab', { name: '计算缺项' }).click();
       assert.equal(await page.locator('tr[data-row-id="b"]').count(), 0, '已录入金额的旧单不进入计算缺项');
       assert.equal(await page.locator('tr[data-row-id="unverified"]').count(), 0);
+      assert.equal(await page.locator('tr[data-row-id="unlinked"]').count(), 0, '留空邮箱和一次性卡号的订单照常计算');
       assert.match(await page.locator('tr[data-row-id="c"] [data-column="reason"]').textContent(), /缺少已登记的收款金额/);
       const legacyReason = await page.locator('tr[data-row-id="legacy"] [data-column="reason"]').textContent();
       assert.match(legacyReason, /缺少有效汇率快照/);
@@ -283,8 +289,9 @@ test('按套餐独立汇总实收、成本、分摊及费用来源，并用原�
       const compactRange = page.getByRole('combobox', { name: '统计时间范围' });
       if (await compactRange.isVisible()) await compactRange.selectOption({ label: '近 30 天' });
       else await page.getByRole('button', { name: '近 30 天', exact: true }).click();
-      await profitMetric.getByText(/2 笔开卡费未分摊/).waitFor();
-      await profitMetric.getByText(/211\.9198/).waitFor();
+      await profitMetric.getByText(/1 笔开卡费未分摊/).waitFor();
+      await profitMetric.getByText(/1 笔按一次性虚拟卡规则计费/).waitFor();
+      await profitMetric.getByText(/208\.3198/).waitFor();
       await profitMetric.getByText('已计算 6 笔 · 计算缺项 2 笔', { exact: true }).waitFor();
       assert.deepEqual(errors, []);
       assert.deepEqual(traffic.external, []);
@@ -438,6 +445,9 @@ test('Apple 回款读取失败仍展示同币成本利润并注明来源，虚�
   data.commerce.data.orders = [pro, max];
   const traffic = await interceptDesign(context, { actor, localFixtures: data, skipRechargeAssets: true });
   let fail = true;
+  await context.route(origin + '/api/local/finance/expense-receipts', route => fail
+    ? route.fulfill({ status: 503, json: { error: '合成读取失败' } })
+    : route.fulfill({ json: { version: 0, items: [] } }));
   await context.route(origin + '/api/local/appleBalance', route => fail
     ? route.fulfill({ status: 503, json: { error: '合成读取失败' } })
     : route.fulfill({ json: data.appleBalance }));
@@ -450,8 +460,28 @@ test('Apple 回款读取失败仍展示同币成本利润并注明来源，虚�
   await page.goto(origin + '/#/orders/statistics');
   await status.waitFor();
   assert.equal(await appleProfit.textContent(), '550.00');
-  assert.match(await proProfit.textContent(), /35\.4157/);
+  assert.equal(await proProfit.textContent(), '32.0727');
+  await page.getByRole('combobox', { name: '统计币种' }).selectOption('MYR');
+  assert.equal(await appleProfit.textContent(), '—', '仅切到马币时需要原单汇率');
+  assert.equal(await page.locator('[data-stat-metric="count"] .summary-number').textContent(), '2笔');
+  assert.equal(await page.locator('[data-stat-metric="profit"] .summary-number').textContent(), '—', '人民币利润不计入马币汇总');
+  await page.getByRole('tab', { name: '计算缺项' }).click();
+  const appleOrder = page.locator('tr[data-row-id="apple-actual"]');
+  assert.equal(await appleOrder.locator('[data-column="amount"]').textContent(), '原币利润 550.00 CNY');
+  await appleOrder.getByRole('button', { name: '查看原单' }).click();
+  const drawer = page.locator('#drawer[open]');
+  await drawer.locator('.property-row').filter({ hasText: '原币利润' })
+    .getByText('550.00 人民币 CNY', { exact: true }).waitFor();
+  await drawer.getByRole('button', { name: '关闭抽屉' }).click();
+  await page.goto(origin + '/#/overview');
+  const overviewProfit = page.locator('[data-overview-metric="profit"]');
+  await overviewProfit.getByText('费用凭据读取失败，金额暂按原单核算。', { exact: true }).waitFor();
+  await overviewProfit.getByText('582.0727', { exact: true }).waitFor();
   fail = false;
+  await page.getByRole('button', { name: '刷新数据', exact: true }).click();
+  await overviewProfit.getByText(/费用凭据读取失败/).waitFor({ state: 'hidden' });
+  await overviewProfit.getByText('582.0727', { exact: true }).waitFor();
+  await page.goto(origin + '/#/orders/statistics');
   await page.reload();
   await appleProfit.getByText('550.00', { exact: true }).waitFor();
   assert.equal(await status.count(), 0);

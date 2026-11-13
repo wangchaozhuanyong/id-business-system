@@ -231,7 +231,7 @@ test('管理员待归属，归属员工可快捷新增客户并随原单保存',
   assert.deepEqual(employee.traffic.external, []);
 });
 
-test('手工旧单从补全和续费提醒进入原单，独立补邮箱并保留实际收付款', { timeout: 35_000 }, async t => {
+test('手工旧单空白归属补齐后退出待补列表，仍可从续费提醒独立补邮箱', { timeout: 35_000 }, async t => {
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
   const data = model();
@@ -243,13 +243,12 @@ test('手工旧单从补全和续费提醒进入原单，独立补邮箱并保�
   await page.getByRole('button', { name: '手工与历史单', exact: true }).click();
   const row = page.locator('tr[data-row-id="manual"]');
   await row.getByText('SYN-manual', { exact: true }).waitFor();
-  assert.match(await row.innerText(), /邮箱账号/);
-  assert.doesNotMatch(await row.innerText(), /客户实收/);
+  assert.match(await row.innerText(), /归属人/);
+  assert.doesNotMatch(await row.innerText(), /邮箱账号|客户实收/);
   await page.getByRole('button', { name: '补齐空白归属', exact: true }).click();
   await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
-  await row.getByText(superAdmin.name, { exact: true }).waitFor();
-  await row.getByRole('button', { name: '查看原单', exact: true }).click();
-  await page.waitForURL('**/#/orders/detail/manual');
+  await row.waitFor({ state: 'detached' });
+  await page.goto(origin + '/#/orders/detail/manual');
   await page.getByRole('button', { name: '补齐资料', exact: true }).click();
   await drawer.getByRole('heading', { name: '补齐原单资料', exact: true }).waitFor();
   assert.equal(await drawer.locator('[name="commerce-completionFullReceipt"]').count(), 0);

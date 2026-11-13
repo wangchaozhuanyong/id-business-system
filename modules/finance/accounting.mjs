@@ -181,12 +181,15 @@ const stableCardId = (order) => {
   const id = originalCardPayment(order).cardId;
   return typeof id === 'string' && id.trim() === id && id.length > 0 && !/^\d{4,19}$/.test(id) ? id : '';
 };
+const manualBankOrder = order => order.payment === '银行卡' &&
+  ['管理员手工', '历史入库'].includes(order.source);
 function bankCardKind(order) {
-  const { cardTypeId, cardTypeName, cardId, proMaterialMode } = originalCardPayment(order);
+  const { cardTypeId, cardTypeName, cardId, proMaterialMode, proCardNumber, paymentId } = originalCardPayment(order);
   if (cardTypeId === 'card-type-real' || cardTypeName?.trim() === '真实卡') return 'real';
   if (cardTypeId || cardTypeName) return 'virtual';
   if (proMaterialMode === 'tenant_card' || cardId?.startsWith('tenant:')) return 'real';
-  if (!isClaude(order) || proMaterialMode === 'pool_card' || /^(recharge|orbitcard):/.test(cardId || '')) return 'virtual';
+  if (!isClaude(order) || proMaterialMode === 'pool_card' || /^(recharge|orbitcard):/.test(cardId || '') ||
+      (manualBankOrder(order) && !cardId && !proCardNumber && !paymentId)) return 'virtual';
   return 'unknown';
 }
 export const usesVirtualBankCard = order => bankCardKind(order) === 'virtual';
@@ -263,13 +266,14 @@ function confirmedCardOpening(order, clock) {
   return { order, cardId, at, state: at > clock ? 'future' : 'opened' };
 }
 
-function canUseUnlinkedCardReference(order, clock, opening) {
-  if (order.cardId || !usesVirtualBankCard(order) || order.payment !== '银行卡' || order.costBasis !== 'standard' ||
-      !['管理员手工', '历史入库'].includes(order.source) ||
-      !hasRecordedPaymentAmount(order) ||
-      order.cancelled || order.draft || unavailableOrders.includes(order.status)) return false;
-  const { cardId, state } = opening || confirmedCardOpening(order, clock);
-  return !cardId && state === 'opened';
+function singleUseCardFeeUsd(order) {
+  if (!manualBankOrder(order) || !usesVirtualBankCard(order) || order.costBasis !== 'standard' ||
+      originalCardPayment(order).cardId || !hasRecordedPaymentAmount(order) ||
+      order.cancelled || order.draft || unavailableOrders.includes(order.status) || order.entitlementStatus === 'failed') return null;
+  const fee = order.issueFeeSnapshot;
+  // Existing per-order expense evidence takes precedence over the frozen rule.
+  if (fee?.applied === true) return fee.amountUsd ?? null;
+  return order.costSettings?.cardIssueUsd ?? null;
 }
 
 // Use the complete order set, including successful orders later refunded or
@@ -310,8 +314,10 @@ export function buildCardIssueAllocations(orders, { clock = Date.now(), expenseR
   for (const item of candidates) {
     if (sameTask.has(item.order.id) || !usesVirtualBankCard(item.order)) continue;
     if (!item.cardId) {
-      if (canUseUnlinkedCardReference(item.order, clock, item)) result.set(item.order.id, { status: 'unlinked' });
-      else result.set(item.order.id, pending('缺少原付款银行卡的稳定编号'));
+      if (singleUseCardFeeUsd(item.order) === null) {
+        result.set(item.order.id, pending(manualBankOrder(item.order) && !originalCardPayment(item.order).cardId
+          ? '原单缺少适用的开卡费用规则' : '缺少原付款银行卡的稳定编号'));
+      }
       continue;
     }
     if (item.state === 'failed') {
@@ -408,8 +414,8 @@ function calculateOrderAmounts(order, { appleLedger, cardIssueAllocations, expen
     if (!targets.includes(currency)) throw new Error('统计币种无效');
     const allocation = cardIssueAllocations?.get(order.id);
     if (allocation?.status === 'duplicate') throw new Error(allocation.reason);
-    const unallocatedCard = allocation?.status === 'unlinked' || allocation?.status === 'pending' ||
-      (!cardIssueAllocations && canUseUnlinkedCardReference(order, clock));
+    const singleUseFee = singleUseCardFeeUsd(order);
+    const unallocatedCard = allocation?.status === 'pending';
     const expenseTerms = orderExpenseTerms(order, expenseReceipts.filter(row => activeExpenseReceipt(row, clock)));
     let snapshot, snapshotError, usedFx = false;
     try { snapshot = readSnapshot(order, clock); }
@@ -493,11 +499,11 @@ function calculateOrderAmounts(order, { appleLedger, cardIssueAllocations, expen
       if (bankKind === 'virtual' && allocation?.status === 'ready') {
         item('card-issue', '开卡成本分摊', unsigned(allocation.amount ?? allocation.amountUsd),
           allocation.currency || 'USD', one, allocation.expenseReceipt);
+      } else if (bankKind === 'virtual' && singleUseFee !== null) {
+        item('card-issue', order.issueFeeSnapshot?.applied ? '原单已登记开卡费' : '一次性虚拟卡开卡费',
+          unsigned(singleUseFee), 'USD');
       } else if (bankKind === 'virtual' && unallocatedCard) {
-        const fee = order.issueFeeSnapshot;
-        if (allocation?.status !== 'pending' && fee?.applied)
-          item('card-issue', '原单已登记开卡费', unsigned(fee.amountUsd), 'USD');
-        else cardIssueUnallocated = true;
+        cardIssueUnallocated = true;
       }
       if (bankKind === 'real' && claude)
         item('service', '代付服务费', unsigned(rules.claudeBankFeeMyr), 'MYR');
@@ -508,7 +514,7 @@ function calculateOrderAmounts(order, { appleLedger, cardIssueAllocations, expen
         if (bankKind === 'unknown') gaps.push('缺少原付款卡类型');
       }
       if (bankKind === 'virtual') {
-        if (!cardIssueAllocations && !unallocatedCard) {
+        if (!cardIssueAllocations && singleUseFee === null) {
           const fee = order.issueFeeSnapshot;
           if (!fee || fee.pending) cardIssueUnallocated = true;
           else if (fee.applied) item('card-issue', '本卡首次开卡费', unsigned(fee.amountUsd), 'USD');
@@ -544,7 +550,8 @@ function calculateOrderAmounts(order, { appleLedger, cardIssueAllocations, expen
       basis: actual && (!usedFx || snapshot?.basis === 'settlement') ? 'actual' : 'reference',
       ...paymentRequirement,
       ...(bankKind === 'virtual' && allocation?.status === 'ready' && { cardIssue: allocation }),
-      ...(appleLedgerNote && { appleLedgerNote }),
+      ...(singleUseFee !== null && { singleUseCardFee: true }),
+    ...(appleLedgerNote && { appleLedgerNote }),
       ...(cardIssueUnallocated && { cardIssueUnallocated,
         ...(allocation?.reason && { cardIssueUnallocatedReason: allocation.reason }) }),
       items: original.map((row) => ({ ...row, amount: toMoney(row.amount) }))
@@ -570,7 +577,8 @@ export function requiredQuoteCurrencies(order) {
     if (typeof order.emailCostAmount === 'string' && /[1-9]/.test(order.emailCostAmount))
       required.add(order.emailCostCurrency || 'CNY');
     if (order.payment === '银行卡' && usesVirtualBankCard(order) &&
-        (/[1-9]/.test(order.costSettings?.cardPerPaymentUsd || '') || order.issueFeeSnapshot?.applied)) required.add('USD');
+        (/[1-9]/.test(order.costSettings?.cardPerPaymentUsd || '') || order.issueFeeSnapshot?.applied ||
+          /[1-9]/.test(singleUseCardFeeUsd(order) || ''))) required.add('USD');
   }
   return [...new Set([...currencies, ...required])].filter(code => code !== 'CNY' && validCurrencyCode(code) && required.has(code));
 }

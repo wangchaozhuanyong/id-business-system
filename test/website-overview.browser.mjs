@@ -650,6 +650,8 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     commerce = structuredClone(commerceFixture);
     const unlinked = commerce.orders.find(item => item.id === current.id);
     unlinked.cardId = '';
+    unlinked.paymentId = '';
+    unlinked.email = '';
     unlinked.source = '管理员手工';
     delete unlinked.issueFeeSnapshot;
     await selectRange(page, '近 7 天');
@@ -660,8 +662,9 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     await page.keyboard.press('Escape');
     await page.getByRole('button', { name: '刷新数据', exact: true }).click();
     await refreshed(page);
-    assert.equal(await value(page, 'profit'), '71.84');
-    assert.match(await metric(page, 'profit').innerText(), /1 笔开卡费未分摊/);
+    assert.equal(await value(page, 'profit'), '68.24');
+    assert.match(await metric(page, 'profit').innerText(), /1 笔按一次性虚拟卡规则计费/);
+    assert.doesNotMatch(await metric(page, 'profit').innerText(), /开卡费未分摊/);
 
     commerce.orders.push(
       order('equal-current-myr', '2026-11-10T09:00:00', { saleAmount: '0.33', saleCurrency: 'MYR' }),

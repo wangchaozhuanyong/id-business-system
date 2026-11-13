@@ -99,7 +99,6 @@ function manualOrderView(order, customer, names) {
   const needsOwner = !hasRecordedOwner(order);
   const missing = [
     details.customer && (order.customerId ? '客户关联待核对' : '客户'),
-    details.account && '邮箱账号',
     details.period && '订阅周期',
     details.cost && '实际总成本',
     !hasRecordedPaymentAmount(order) && '实际代付',
