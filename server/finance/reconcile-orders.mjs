@@ -1,12 +1,13 @@
 import { addDecimalStrings } from '../../modules/contracts/decimal.ts';
-import { buildCardIssueAllocations, calculateOrder, currencies, hasRecordedPaymentAmount } from '../../modules/finance/accounting.mjs';
+import { activeExpenseReceipt, buildCardIssueAllocations, calculateOrder, calculateOrderCost, currencies, hasRecordedPaymentAmount } from '../../modules/finance/accounting.mjs';
 import { checkBankReturns } from '../local-business-integrity.mjs';
 import { migrationInputSchema } from './migration-input.mjs';
 import { orderReceiptRecorded } from '../../frontend/order-opening.mjs';
 
 const reportCurrencies = ['CNY', 'MYR'];
 const amountPattern = /^\d{1,20}(?:\.\d{1,4})?$/;
-const safeId = (value) => typeof value === 'string' && /^[\w.-]{1,120}$/.test(value) ? value : null;
+const safeId = (value) => typeof value === 'string' && /^[\w.-]{1,120}$/.test(value) &&
+  !/^\d{12,19}$/.test(value) ? value : null;
 const decimal = (value) => typeof value === 'string' && amountPattern.test(value) ? value : null;
 const currency = (value) => currencies.includes(value) ? value : null;
 const money = (amount, code) => ({ amount: decimal(amount), currency: currency(code) });
@@ -74,11 +75,12 @@ function inspectApple(order, indexes, issues) {
   const [allocations, refunds, movements] = indexes.map(({ byOrder }) => byOrder.get(order.id) || []);
   const ambiguous = indexes.some(({ duplicates }) => duplicates.has(order.id));
   if (ambiguous) issues.add('Apple 账本编号缺失或重复');
+  const ledgerIssues = new Set();
   const allocation = allocations.length === 1 ? allocations[0] : null;
   const paid = decimal(order.paidAmount);
   if (!allocation || !safeId(order.appleIdId) || allocation.appleIdId !== order.appleIdId ||
       !paid || equal(paid, '0') || !decimal(allocation.amount) || !equal(allocation.amount, paid))
-    issues.add('Apple 扣款分配缺失或与原订单不一致');
+    ledgerIssues.add('Apple 扣款分配缺失或与原订单不一致');
 
   const customerRefunds = new Set(Array.isArray(order.refunds) ? order.refunds.map((row) => row?.id) : []);
   const linked = new Map(refunds.map((row) => [row.id, row]));
@@ -114,13 +116,13 @@ function inspectApple(order, indexes, issues) {
   if ([...customerRefunds].some((id) => !linked.has(id)) ||
       [...receipts.keys()].some((id) => !linked.has(id)))
     complete = false;
-  if (!complete) issues.add('Apple 回款状态与客户退款或实际到账流水无法对应');
+  if (!complete) ledgerIssues.add('Apple 回款状态与客户退款或实际到账流水无法对应');
   const receivedTotal = sum(received);
   const pendingTotal = sum(pending);
   if (allocation && (!decimal(allocation.returned) || !equal(allocation.returned, receivedTotal)))
-    issues.add('Apple 已到账流水合计与扣款分配的已回款金额不一致');
+    ledgerIssues.add('Apple 已到账流水合计与扣款分配的已回款金额不一致');
   if (paid && greater(sum([receivedTotal, pendingTotal]), paid))
-    issues.add('Apple 实际到账和待回款合计超过原扣款');
+    ledgerIssues.add('Apple 实际到账和待回款合计超过原扣款');
 
   const debits = new Map();
   let validDebits = true;
@@ -138,8 +140,9 @@ function inspectApple(order, indexes, issues) {
   }
   if (!validDebits || !paid || !equal(debits.get(order.appleIdId) || '0', paid) ||
       [...debits].some(([id, debit]) => id !== order.appleIdId && !equal(debit, '0')))
-    issues.add('Apple 原扣款与冲正流水净额无法对平');
+    ledgerIssues.add('Apple 原扣款与冲正流水净额无法对平');
 
+  for (const issue of ledgerIssues) issues.add(issue);
   return {
     facts: {
       allocation: allocation ? {
@@ -149,11 +152,26 @@ function inspectApple(order, indexes, issues) {
       received: complete ? money(receivedTotal, 'USD') : null,
       records
     },
-    ledger: allocation
+    ledger: !ambiguous && !ledgerIssues.size ? allocation : null
   };
 }
 
-function checkOrder(order, indexes, clock, migrationGaps, cardIssueAllocations) {
+function safeTotals(result, includeItems = false) {
+  if (result.status === 'pending') {
+    const { knownCost, ...pending } = result;
+    return { ...pending, ...(knownCost && { knownCost: safeTotals(knownCost, includeItems) }) };
+  }
+  const { items, cardIssue, ...totals } = result;
+  if (includeItems) totals.items = items.map(({ key, label, amount, originalAmount, originalCurrency }) =>
+    ({ key, label, amount, originalAmount, originalCurrency }));
+  if (cardIssue) {
+    const { expenseReceipt, ...allocation } = cardIssue;
+    totals.cardIssue = allocation;
+  }
+  return totals;
+}
+
+function checkOrder(order, indexes, clock, migrationGaps, cardIssueAllocations, expenses) {
   const issues = new Set(migrationGaps);
   const paid = money(order.paidAmount, order.paidCurrency);
   const sold = money(order.saleAmount, order.saleCurrency);
@@ -196,10 +214,24 @@ function checkOrder(order, indexes, clock, migrationGaps, cardIssueAllocations) 
     refunds: customerRefunds.total ? order.refunds : [],
     bankReturns: bankReturns?.total ? order.bankReturns : []
   };
-  const currencyResults = {};
+  const currencyResults = {}, operatingCalculations = {};
   const pendingReasons = new Set(issues);
   for (const target of reportCurrencies) {
-    const result = calculateOrder(financialOrder, { currency: target, appleLedger: apple?.ledger, clock, cardIssueAllocations });
+    const options = { currency: target, appleLedger: apple?.ledger, clock, cardIssueAllocations, expenseReceipts: expenses };
+    const result = calculateOrder(financialOrder, options);
+    if (order.cancelled === true || order.draft || order.entitlementStatus === 'failed' ||
+        ['cancelled', '已撤单', 'draft', 'failed', '草稿', '失败'].includes(order.status)) {
+      operatingCalculations[target] = { status: 'excluded' };
+    } else {
+      const operating = (order.refunds === financialOrder.refunds && order.bankReturns === financialOrder.bankReturns)
+        ? result : calculateOrder(order, options);
+      if (operating.status === 'pending' && !operating.knownCost) {
+        const cost = calculateOrderCost(order, options);
+        const knownCost = cost.status === 'ready' ? cost : cost.knownCost;
+        if (knownCost) operatingCalculations[target] = safeTotals({ ...operating, knownCost }, true);
+      }
+      operatingCalculations[target] ??= safeTotals(operating, true);
+    }
     if (result.status === 'pending')
       for (const reason of [result.reason, ...(result.additionalReasons || [])]) pendingReasons.add(reason);
     if (order.cancelled === true) {
@@ -208,8 +240,7 @@ function checkOrder(order, indexes, clock, migrationGaps, cardIssueAllocations) 
       currencyResults[target] = { status: 'pending' };
       if (result.status === 'pending') currencyResults[target].reason = result.reason;
     } else {
-      const { items, ...totals } = result;
-      currencyResults[target] = totals;
+      currencyResults[target] = safeTotals(result);
     }
   }
 
@@ -219,8 +250,16 @@ function checkOrder(order, indexes, clock, migrationGaps, cardIssueAllocations) 
   return {
     orderId: order.id, orderNo: safeId(order.orderNo), cancelled: order.cancelled === true,
     ...(allocation && { cardIssueAllocation: {
-      ...allocation, previousUsd: legacyFee,
-      differenceUsd: allocation.status === 'ready' && legacyFee !== null ? difference(allocation.amountUsd, legacyFee) : null
+      status: allocation.status, ...(allocation.reason && { reason: allocation.reason }),
+      ...(allocation.status === 'ready' && {
+        amount: allocation.amount ?? allocation.amountUsd,
+        currency: allocation.currency || 'USD',
+        ...(allocation.amountUsd && { amountUsd: allocation.amountUsd }),
+        count: allocation.count, asOf: allocation.asOf
+      }),
+      previousUsd: legacyFee,
+      differenceUsd: allocation.status === 'ready' && allocation.amountUsd != null && legacyFee !== null
+        ? difference(allocation.amountUsd, legacyFee) : null
     } }),
     status: order.cancelled === true ? 'excluded' : pendingReasons.size ? 'pending' : 'ready',
     feeRuleVersion: Number.isSafeInteger(feeVersion) && feeVersion > 0 ? feeVersion : null,
@@ -233,7 +272,7 @@ function checkOrder(order, indexes, clock, migrationGaps, cardIssueAllocations) 
       customerRefunds, bankReturns, apple: apple?.facts ?? null
     },
     pendingReasons: [...pendingReasons],
-    calculations: currencyResults
+    calculations: currencyResults, operatingCalculations
   };
 }
 
@@ -282,12 +321,23 @@ export function reconcileOrders(input, { clock = Date.now(), fullCardHistory = f
     });
     if (excludedLegacy.length) issues.add('本批含旧 ID 通用业务订单，需另行核对');
   }
-  const allocations = fullCardHistory ? buildCardIssueAllocations(orders, { clock }) : undefined;
-  const checked = orders.map((order) => checkOrder(order, indexes, clock, migrationGaps.get(order.id), allocations));
+  const rawExpenses = input.expenseReceipts?.items;
+  const expenses = Array.isArray(rawExpenses) ? rawExpenses.filter(receipt => receipt && activeExpenseReceipt(receipt, clock)) : [];
+  const expensesByOrder = Map.groupBy(expenses, row => row.orderId);
+  const allocations = fullCardHistory ? buildCardIssueAllocations(orders, { clock, expenseReceipts: expenses }) : undefined;
+  const checked = orders.map((order) => checkOrder(order, indexes, clock, migrationGaps.get(order.id),
+    allocations, expensesByOrder.get(order.id)));
   const counts = { ready: 0, pending: 0, excluded: 0 };
+  const operating = Object.fromEntries(reportCurrencies.map(target => {
+    const rows = checked.map(order => order.operatingCalculations[target]);
+    const ready = rows.filter(row => row.status === 'ready');
+    const pending = rows.filter(row => row.status === 'pending');
+    return [target, { ready: ready.length, pending: pending.length, excluded: rows.length - ready.length - pending.length,
+      profit: ready.length ? sum(ready.map(row => row.profit)) : null }];
+  }));
   for (const order of checked) counts[order.status]++;
   return {
-    asOf: new Date(clock).toISOString(), counts, batchIssues: [...issues], orders: checked,
+    asOf: new Date(clock).toISOString(), counts, operating, batchIssues: [...issues], orders: checked,
     ...(excludedLegacy && { excludedLegacy })
   };
 }

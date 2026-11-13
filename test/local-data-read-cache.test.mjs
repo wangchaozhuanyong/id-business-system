@@ -313,7 +313,7 @@ test('overview reuses a clean visit, refreshes explicitly and preserves failed s
     await flush();
   };
   const key = {
-    actor: 'fixture-actor', role: 'admin', finance: true, apple: true, rechargeRequests: true
+    actor: 'fixture-actor', role: 'admin', finance: true, apple: true, rechargeRequests: true, dateBasis: 'created', currency: 'CNY'
   };
   await revisit();
   assert.deepEqual(calls, { inventory: 1, commerce: 1, apple: 1 });

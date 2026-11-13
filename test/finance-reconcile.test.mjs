@@ -83,7 +83,10 @@ test('汇率窗口、缺币种、原始证据和孤立流水各自报告', () =>
   const partial = find(report, 'QA-IDR');
   assert.equal(partial.calculations.CNY.status, 'ready');
   assert.match(partial.calculations.MYR.reason, /缺少 MYR/);
-  assert.match(find(report, apple.id).pendingReasons.join(), /缺少已登记的实收金额或币种/);
+  const appleWithoutReceipt = find(report, apple.id);
+  assert.match(appleWithoutReceipt.pendingReasons.join(), /缺少已登记的实收金额或币种/);
+  assert.equal(appleWithoutReceipt.operatingCalculations.CNY.status, 'pending');
+  assert.equal(appleWithoutReceipt.operatingCalculations.CNY.knownCost.netCost, '130.2000');
   assert.match(report.batchIssues.join(), /未导出的原订单/);
   assert.doesNotMatch(JSON.stringify(report), /do-not-export-this|fixture-wallet|fixture-card/);
 });

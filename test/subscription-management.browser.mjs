@@ -115,7 +115,7 @@ test('四类订阅页面使用独立状态、真实复制入口与历史兼容�
         const days = subscriptionRow.locator('td[data-column="days"]');
         if (!(await days.isVisible())) await subscriptionRow.getByRole('button', { name: '更多资料', exact: true }).click();
         assert.equal(await days.getAttribute('data-label'), '到期倒计时');
-        assert.equal(await days.innerText(), name === 'claude' ? '—' : '剩余 21 天 2 小时');
+        assert.equal(await days.innerText(), '剩余 21 天 2 小时');
         if (name === 'gpt' && width === 1440 && theme === 'light') {
           const reads = listReads;
           await page.clock.fastForward(31 * 60_000);

@@ -27,7 +27,7 @@ const bank = () => ({
 const calculate = (order, options) => calculateOrder(order, { clock, ...options });
 
 test('实付替换 KYC 和另扣换汇费按原单快照复算，旧凭据和作废凭据保留原口径', () => {
-  const order = { ...bank(), product: 'Claude Pro', paidConfirmed: true };
+  const order = { ...bank(), product: 'Claude Pro', paidConfirmed: true, cardTypeId: 'card-type-real', kyc: 'KYC 认证' };
   order.fxSnapshot = createOrderSnapshot(quote, order, clock);
   const kyc = { id: 'kyc-a', orderId: order.id, category: 'kyc', chargedOn: '2026-11-04',
     amount: '20', currency: 'MYR', settlementAmount: '32.12', settlementCurrency: 'CNY',
@@ -164,7 +164,7 @@ test('历史成品销售扣除客户退款，跨币种和渠道回款使用原�
   assert.equal(calculate(order, { currency: 'MYR' }).profit, '62.5000');
   assert.equal(calculate(order).basis, 'actual');
   assert.match(calculate({ ...order, refunds: [{ amount: '1501', currency: 'CNY' }] }).reason, /客户退款超过原实收/);
-  assert.match(calculate(historicalClaudeSale({ businessType: '续费' })).reason, /缺少有效汇率快照/);
+  assert.equal(calculate(historicalClaudeSale({ businessType: '续费' })).profit, '150.0000');
 
   const withReturn = historicalClaudeSale({ paidAmount: '100', paidCurrency: 'USD', paidConfirmed: true,
     bankReturns: [{ amount: '10', currency: 'USD' }] });
@@ -174,7 +174,8 @@ test('历史成品销售扣除客户退款，跨币种和渠道回款使用原�
   const apple = historicalClaudeSale({ payment: '苹果内购', appleIdId: 'linked-apple',
     paidConfirmed: true, paidAmount: '100', paidCurrency: 'USD' });
   apple.fxSnapshot = createOrderSnapshot(quote, apple, clock);
-  assert.match(calculate(apple).reason, /Apple 实际扣款及回款台账待核对/);
+  assert.equal(calculate(apple).profit, '150.0000');
+  assert.match(calculate(apple).appleLedgerNote, /Apple 扣款或回款未匹配/);
 });
 
 test('Claude Apple 待回款不计收益，实际到账按折扣回收并保留邮箱成本', () => {
@@ -186,7 +187,8 @@ test('Claude Apple 待回款不计收益，实际到账按折扣回收并保留�
   };
   order.fxSnapshot = createOrderSnapshot(quote, order, clock);
   const ledger = { orderId: order.id, appleIdId: 'apple-a', amount: '20', returned: '0' };
-  assert.equal(calculate(order).status, 'pending', '没有实际扣款证据时不能核算');
+  assert.equal(calculate(order).profit, '9.8000');
+  assert.match(calculate(order).appleLedgerNote, /Apple 扣款或回款未匹配/);
   assert.equal(calculate(order, { appleLedger: ledger }).profit, '9.8000');
   ledger.returned = '7';
   const result = calculate(order, { appleLedger: ledger });
@@ -194,7 +196,7 @@ test('Claude Apple 待回款不计收益，实际到账按折扣回收并保留�
   assert.equal(result.recoveredCost, '40.3200');
   assert.equal(result.netCost, '89.8800');
   assert.equal(result.profit, '50.1200');
-  assert.equal(calculate(order, { appleLedger: { ...ledger, amount: '21' } }).status, 'pending');
+  assert.equal(calculate(order, { appleLedger: { ...ledger, amount: '21' } }).profit, '9.8000');
 });
 
 test('实际 Apple 成本按明确可收回部分分摊，精确小数到最后才舍入', () => {
@@ -271,4 +273,44 @@ test('服务端契约仅接受独立登记动作、有效快照与原订单版�
   const refund = structuredClone(next);
   refund.orders[0].refunds.push({ amount: '30', currency: 'CNY' });
   assert.equal(checkFinanceSnapshots(next, refund, { action: '退款登记', clock }), '');
+});
+
+test('Claude 虚拟卡按普通费率，真实卡只计服务费，续费不继承 KYC', () => {
+  const order = { ...bank(), product: 'Claude Pro', cardTypeId: 'card-type-virtual', businessType: '续费', kyc: true };
+  order.fxSnapshot = createOrderSnapshot(quote, order, clock);
+  assert.equal(calculate(order).netCost, '131.7600');
+  assert.deepEqual(calculate(order).items.filter(item => ['kyc', 'service'].includes(item.key)), []);
+  const real = { ...order, cardTypeId: 'card-type-real' };
+  assert.equal(calculate(real).netCost, '285.0000');
+  assert.deepEqual(calculate(real).items.filter(item => item.key.startsWith('payment-') || item.key === 'card-issue'), []);
+  const unknown = calculate({ ...order, cardTypeId: '' });
+  assert.match(unknown.reason, /缺少原付款卡类型/);
+  assert.equal(unknown.knownCost.netCost, '125.0000');
+});
+
+test('历史 Apple Max 同币实收与实付自动计利润，外币缺汇率只展示已知成本', () => {
+  const order = historicalClaudeSale({ payment: '苹果内购', appleIdId: 'apple-a', paidConfirmed: true,
+    paidAmount: '200', paidCurrency: 'USD', saleAmount: '2100', actualCostAmount: '1550' });
+  assert.equal(calculate(order).profit, '550.0000');
+  const fx = { orderId: order.id, category: 'fx-fee', chargedOn: '2026-11-04',
+    amount: '1', currency: 'MYR', accountingMode: 'add-fx' };
+  const missing = calculate(order, { expenseReceipts: [fx] });
+  assert.equal(missing.status, 'pending');
+  assert.equal(missing.knownCost.netCost, '1550.0000');
+  assert.equal(missing.knownCost.profit, undefined);
+});
+
+test('Claude Pro 虚拟卡复算 190 元实收的历史样例', () => {
+  const order = { ...bank(), product: 'Claude Pro', businessType: '续费', cardTypeId: 'card-type-vccwc999',
+    paidAmount: '21.13', paidCurrency: 'USD', saleAmount: '190', issueFeeSnapshot: { applied: false } };
+  order.fxSnapshot = createOrderSnapshot({ ...quote, rates: { USD: '6.68605623' } }, order, clock);
+  const result = calculate(order);
+  assert.equal(result.netCost, '144.4124');
+  assert.equal(result.profit, '45.5876');
+
+  const historicalRules = { ...order.costSettings, version: 2, cardPercent: '0.08' };
+  const historicalResult = calculate({ ...order, costSettings: historicalRules });
+  assert.equal(historicalResult.netCost, '154.5843');
+  assert.equal(historicalResult.profit, '35.4157');
+  assert.deepEqual(historicalResult.items.map(item => item.key), ['subscription', 'payment-percent', 'payment-fixed', 'email']);
 });

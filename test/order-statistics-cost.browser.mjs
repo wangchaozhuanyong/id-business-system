@@ -47,7 +47,8 @@ const fixtures = () => ({
         issueFeeSnapshot: { cardId: '', applied: false, pending: true }
       }),
       order('claude', 8, {
-        product: 'Claude Pro', plan: 'pro', cardId: '', paymentId: '', issueFeeSnapshot: null,
+        product: 'Claude Pro', plan: 'pro', cardTypeId: 'card-type-real', businessType: '首次开通', kyc: 'KYC 认证',
+        cardId: '', paymentId: '', issueFeeSnapshot: null,
         paidAmount: '20', paidCurrency: 'USD', saleAmount: '450',
         emailCostAmount: '15', emailCostCurrency: 'CNY'
       }),
@@ -64,6 +65,68 @@ const fixtures = () => ({
   appleBalance: { version: 1, data: { wallets: [], refunds: [], movements: [],
     allocations: [{ orderId: 'apple', appleIdId: 'fixture-apple-id', amount: '100', returned: '10' }] } },
   settings: { version: 1, data: { costSettings: rules } }
+});
+
+test('订单统计页签共用右侧操作区，切换时表格紧接页签栏', { timeout: 40_000 }, async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    for (const [width, dark, empty] of [[1440, false, false], [901, true, false], [390, true, false], [320, false, true]]) {
+      const context = await browser.newContext({ viewport: { width, height: 900 } });
+      const data = fixtures();
+      if (empty) data.commerce.data.orders = [];
+      const traffic = await interceptDesign(context, { actor, localFixtures: data, skipRechargeAssets: true });
+      const page = await context.newPage();
+      await page.goto(origin + '/#/orders/statistics');
+      if (dark) await toggleDesignTheme(page);
+      const tabs = page.getByRole('tablist', { name: '订单统计视图' });
+      const bar = tabs.locator('..');
+      const actions = bar.locator('[data-page-actions]');
+      const height = (await bar.boundingBox()).height;
+      const sameCenter = (a, b) => Math.abs(a.y + a.height / 2 - b.y - b.height / 2) <= 1;
+      for (const [tab, title] of [['统计概览', '套餐成本'], ['费用拆分', '费用构成'], ['来源订单', ''],
+        ['计算缺项', ''], ['汇率来源', '订单汇率来源']]) {
+        const active = tabs.getByRole('tab', { name: tab, exact: true });
+        await active.click();
+        await settle(page);
+        const control = title ? actions.getByLabel(`查看${title}说明`) : actions.getByRole('textbox');
+        if (title) await actions.getByRole('heading', { name: title, exact: true }).waitFor();
+        const nav = await tabs.boundingBox(), box = await control.boundingBox();
+        const selected = await active.boundingBox();
+        const settings = await actions.getByRole('button', { name: '费用设置' }).boundingBox();
+        const label = `${width}px ${tab}`;
+        assert.equal(await active.getAttribute('aria-selected'), 'true', label);
+        assert(selected.x >= nav.x - 1 && selected.x + selected.width <= nav.x + nav.width + 1, label);
+        assert(sameCenter(box, settings) && box.x + box.width <= settings.x, label);
+        if (width >= 901) assert(sameCenter(nav, box) && nav.x + nav.width <= box.x, label);
+        else assert(box.height >= 44 && settings.height >= 44, label);
+        assert.equal((await bar.boundingBox()).height, height, label);
+        assert(await bar.evaluate(el => el.nextElementSibling.matches('.table-viewport, .empty-state')), label);
+        const spacing = await spacingSnapshot(page);
+        assert.equal(spacing.overflow, false, label);
+        assert.deepEqual(spacing.findings, [], label);
+      }
+      await tabs.getByRole('tab', { name: '统计概览' }).click();
+      const help = actions.getByLabel('查看套餐成本说明');
+      assert.equal(await actions.locator('details[open]').count(), 0);
+      await help.focus();
+      await help.press('Enter');
+      await actions.getByRole('note').waitFor();
+      assert.equal((await bar.boundingBox()).height, height);
+      await page.keyboard.press('Escape');
+      assert.equal(await actions.locator('details[open]').count(), 0);
+      if (!empty) {
+        await page.locator('table[data-table="commerce-plan-statistics"] tr[data-row-id="GPT:Plus"]')
+          .getByRole('button', { name: '查看订单' }).click();
+        assert.equal((await bar.boundingBox()).height, height);
+        await actions.getByRole('button', { name: '清除定位' }).click();
+        assert.equal(await actions.getByRole('button', { name: '清除定位' }).count(), 0);
+      }
+      assert.deepEqual(traffic.external, []);
+      await context.close();
+    }
+  } finally {
+    await browser.close();
+  }
 });
 
 test('按套餐独立汇总实收、成本、分摊及费用来源，并用原单汇率复算', { timeout: 80_000 }, async (t) => {
@@ -85,7 +148,7 @@ test('按套餐独立汇总实收、成本、分摊及费用来源，并用原�
       assert.equal(await list.locator('tr[data-row-id="b"] [data-column="profit"]').textContent(), '30.00');
       assert.equal(await list.locator('tr[data-row-id="c"] [data-column="profit"]').textContent(), '—');
       assert.match(await list.locator('tr[data-row-id="unlinked"] [data-column="profit"]').textContent(), /11\.84.*开卡费未分摊/);
-      assert.equal(await list.getByText('待核算', { exact: true }).count(), 0);
+      assert.equal(await list.getByText('计算缺项', { exact: true }).count(), 0);
 
       await page.goto(origin + '/#/orders/statistics');
       await page.getByRole('heading', { name: '订单统计', exact: true }).waitFor();
@@ -151,7 +214,7 @@ test('按套餐独立汇总实收、成本、分摊及费用来源，并用原�
       assert.match(await kyc.locator('[data-column="reference"]').textContent(), /80\.00 CNY.*50\.00 MYR/);
       assert.equal(await kyc.locator('[data-column="total"]').textContent(), '80.00');
       await kyc.getByLabel('查看KYC 认证成本说明').click();
-      await kyc.getByRole('note').filter({ hasText: /冻结的 KYC 成本/ }).waitFor();
+      await kyc.getByRole('note').filter({ hasText: /有本单 KYC 记录/ }).waitFor();
       await page.keyboard.press('Escape');
       assert.match(await fees.locator('tr[data-row-id="service"] [data-column="reference"]').textContent(), /160\.00 CNY.*100\.00 MYR/);
       assert.match(await fees.locator('tr[data-row-id="card-issue"] [data-column="reference"]').textContent(), /2\.3997 CNY.*0\.3333 USD/);
@@ -188,8 +251,8 @@ test('按套餐独立汇总实收、成本、分摊及费用来源，并用原�
       await drawer.getByText('原付款卡未记录，开卡费未分摊', { exact: true }).waitFor();
       await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
       await page.locator('#commerce-search').fill('');
-      await page.getByRole('tab', { name: '待核算' }).click();
-      assert.equal(await page.locator('tr[data-row-id="b"]').count(), 0, '已录入金额的旧单不进入待核算');
+      await page.getByRole('tab', { name: '计算缺项' }).click();
+      assert.equal(await page.locator('tr[data-row-id="b"]').count(), 0, '已录入金额的旧单不进入计算缺项');
       assert.equal(await page.locator('tr[data-row-id="unverified"]').count(), 0);
       assert.match(await page.locator('tr[data-row-id="c"] [data-column="reason"]').textContent(), /缺少已登记的收款金额/);
       const legacyReason = await page.locator('tr[data-row-id="legacy"] [data-column="reason"]').textContent();
@@ -199,8 +262,8 @@ test('按套餐独立汇总实收、成本、分摊及费用来源，并用原�
       await page.getByRole('tab', { name: '统计概览' }).click();
       await page.getByLabel('产品', { exact: true }).selectOption('GPT');
       await page.getByLabel('套餐', { exact: true }).selectOption('GPT:Plus');
-      await page.getByLabel('开通起日').fill('2026-11-03');
-      await page.getByLabel('开通止日').fill('2026-11-03');
+      await page.getByLabel('开始日期').fill('2026-11-03');
+      await page.getByLabel('结束日期').fill('2026-11-03');
       await page.getByLabel('统计币种').selectOption('MYR');
       assert.match(await plus.locator('[data-column="netCost"]').textContent(), /80\.8502.*单均 80\.8502/s);
       await plus.getByRole('button', { name: '查看订单' }).click();
@@ -209,8 +272,8 @@ test('按套餐独立汇总实收、成本、分摊及费用来源，并用原�
       await drawer.getByText(/同卡已确认开通 3 单.*本单份额 0\.1667 USD/).waitFor();
       await drawer.getByText('80.8502 马币 MYR', { exact: true }).first().waitFor();
       await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
-      await page.getByLabel('开通止日').fill('2026-11-02');
-      await page.getByText('开通起日须早于或等于止日。', { exact: true }).waitFor();
+      await page.getByLabel('结束日期').fill('2026-11-02');
+      await page.getByText('开始日期须早于或等于结束日期。', { exact: true }).waitFor();
       await page.getByRole('button', { name: '重置筛选' }).click();
       assert.equal(await page.getByLabel('统计币种').inputValue(), 'CNY');
       await settle(page);
@@ -222,7 +285,7 @@ test('按套餐独立汇总实收、成本、分摊及费用来源，并用原�
       else await page.getByRole('button', { name: '近 30 天', exact: true }).click();
       await profitMetric.getByText(/2 笔开卡费未分摊/).waitFor();
       await profitMetric.getByText(/211\.9198/).waitFor();
-      await profitMetric.getByText('已核算 6 笔 · 待核算 2 笔', { exact: true }).waitFor();
+      await profitMetric.getByText('已计算 6 笔 · 计算缺项 2 笔', { exact: true }).waitFor();
       assert.deepEqual(errors, []);
       assert.deepEqual(traffic.external, []);
     });
@@ -280,7 +343,7 @@ test('实付凭据按扣款日和原币汇总，登记及作废后可逐单核�
       assert.equal(await cell('card-issue', 'converted').textContent(), '—');
       assert.equal(await cell('card-issue', 'pending').textContent(), '1');
       assert.equal(await cell('fx-fee', 'converted').textContent(), '4.15');
-      await page.getByLabel('开通起日').fill('2026-11-10');
+      await page.getByLabel('开始日期').fill('2026-11-10');
       assert.equal(await cell('card-issue', 'count').textContent(), '1');
       await page.getByLabel('扣款起日').fill('2026-11-09');
       assert.equal(await cell('card-issue', 'count').textContent(), '0');
@@ -313,7 +376,7 @@ test('实付凭据按扣款日和原币汇总，登记及作废后可逐单核�
       await page.getByLabel('套餐', { exact: true }).selectOption('Claude Pro:Pro');
       assert.equal(await cell('kyc', 'count').textContent(), '1');
       const saved = receiptTable.locator('tr[data-row-id="new-kyc"]');
-      await page.getByLabel('开通起日').fill('');
+      await page.getByLabel('开始日期').fill('');
       await page.getByRole('tab', { name: '统计概览' }).click();
       const plan = page.locator('table[data-table="commerce-plan-statistics"] tr[data-row-id="Claude Pro:Pro"]');
       assert.match(await plan.locator('[data-column="netCost"]').textContent(), /249\.375/);
@@ -350,4 +413,47 @@ test('实付凭据按扣款日和原币汇总，登记及作废后可逐单核�
       assert.deepEqual(traffic.external, []);
     });
   }
+});
+
+test('Apple 回款读取失败仍展示同币成本利润并注明来源，虚拟卡续费用原单费率', { timeout: 30_000 }, async t => {
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const context = await browser.newContext({ viewport: { width: 390, height: 900 } });
+  const data = fixtures();
+  const pro = order('virtual-renewal', 8, {
+    product: 'Claude Pro', plan: 'Pro', cardTypeId: 'card-type-vccwc999',
+    cardId: '', paymentId: '', paidConfirmed: false, paidAmount: '21.13', paidCurrency: 'USD',
+    saleAmount: '190', costSettings: { ...rules, version: 2, cardPercent: '0.08' }
+  });
+  pro.fxSnapshot = createOrderSnapshot({
+    source: '隔离结算凭据 QA-V2', at: '2026-11-08T00:00', expiresAt: '2026-11-08T23:59',
+    rates: { USD: '6.68605623' }
+  }, pro, clock);
+  const max = order('apple-actual', 9, {
+    product: 'Claude Max', plan: 'Max 20x', cardId: '', paymentId: '', issueFeeSnapshot: null,
+    payment: '苹果内购', appleIdId: 'fixture-apple-id', paidAmount: '250', paidCurrency: 'USD',
+    saleAmount: '2100', costBasis: 'actual', actualCostAmount: '1550', actualCostCurrency: 'CNY',
+    fxSnapshot: null
+  });
+  data.commerce.data.orders = [pro, max];
+  const traffic = await interceptDesign(context, { actor, localFixtures: data, skipRechargeAssets: true });
+  let fail = true;
+  await context.route(origin + '/api/local/appleBalance', route => fail
+    ? route.fulfill({ status: 503, json: { error: '合成读取失败' } })
+    : route.fulfill({ json: data.appleBalance }));
+  const page = await context.newPage();
+  await page.clock.setFixedTime(clock);
+  page.setDefaultTimeout(5500);
+  const status = page.getByText('Apple 回款读取失败，利润按现有资料计算。', { exact: true });
+  const appleProfit = page.locator('tr[data-row-id="Claude Max:Max 20x"] [data-column="profit"]');
+  const proProfit = page.locator('tr[data-row-id="Claude Pro:Pro"] [data-column="profit"]');
+  await page.goto(origin + '/#/orders/statistics');
+  await status.waitFor();
+  assert.equal(await appleProfit.textContent(), '550.00');
+  assert.match(await proProfit.textContent(), /35\.4157/);
+  fail = false;
+  await page.reload();
+  await appleProfit.getByText('550.00', { exact: true }).waitFor();
+  assert.equal(await status.count(), 0);
+  assert.deepEqual(traffic.external, []);
 });

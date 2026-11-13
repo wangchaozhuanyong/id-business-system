@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { calculateOrder } from '../modules/finance/accounting.mjs';
+import { projectSubscriptions } from '../server/subscription-management.mjs';
 import { createLocalBusinessStore } from '../server/local-business.mjs';
+import { checkRegistrationChanges } from '../server/inventory-registration.mjs';
 import { applyInventoryUsage, inspectInventoryUsage } from '../server/inventory-usage.mjs';
 
 const actor = { id: 'operator-a', name: '测试员甲', role: 'admin' };
@@ -19,8 +22,8 @@ const commerce = (orders = [], customers = []) => ({
   orders, customers, tenants: [], operating: [], rentBatches: [], logs: []
 });
 const order = (email, options = {}) => ({
-  id: 'order-1', orderNo: 'ORD-1', businessType: '续费', product: 'GPT',
-  accountSource: '客户自有', email, start: occurred, expiry: '2026-02-01T11:30',
+  id: 'order-1', orderNo: 'ORD-1', businessType: '首次开通', product: 'GPT',
+  accountSource: '库存', email, start: occurred, expiry: '2026-02-01T11:30',
   paidConfirmed: true, paidAmount: '20', createdById: actor.id, refunds: [], ...options
 });
 function extract(data, rows, kind, purpose = '') {
@@ -84,7 +87,30 @@ test('批量登记六个账号同步六条邮箱用量，原十条提取批次�
   assert.equal(saved.mailboxes[0].usageLinks.length, 1);
 });
 
-test('确认付款的订单目标邮箱在同一事务消费，客户自有续费不消费同邮箱库存账号', (t) => {
+test('原账号来源与同址的其他注册记录冲突时拒绝重复使用邮箱', () => {
+  const google = stock('google', 'google');
+  const relay = stock('relay', 'relay', google.email);
+  const account = { ...stock('gpt', 'gpt', google.email), sourceMailboxId: google.id,
+    emailType: 'google', registered: occurred };
+  const before = document([google, relay], [account]);
+  const conflicting = structuredClone(before);
+  const registration = { id: 'registration', accountId: account.id, assetId: relay.id,
+    product: 'gpt', state: '成功', time: occurred };
+  conflicting.registrationRecords.push(registration);
+  assert.ok(checkRegistrationChanges(before, conflicting, 'inventory_registration_result', actor));
+  const matches = inspectInventoryUsage(conflicting, commerce(), new Date('2026-02-01T00:00:00Z').getTime());
+  assert.deepEqual([...matches.values()].map(row => [row.asset.id, row.status, row.registrationConflict]),
+    [[google.id, 'review', true], [relay.id, 'review', true]]);
+  assert.equal(applyInventoryUsage(matches, actor, new Date('2026-02-01T00:00:00Z'), conflicting), false);
+  assert.deepEqual(conflicting.mailboxes, before.mailboxes);
+
+  registration.assetId = google.id;
+  assert.equal(checkRegistrationChanges(before, conflicting, 'inventory_registration_result', actor), undefined);
+  assert.deepEqual([...inspectInventoryUsage(conflicting, commerce(), new Date('2026-02-01T00:00:00Z').getTime())]
+    .filter(([, row]) => row.status === 'used').map(([id]) => id), [google.id]);
+});
+
+test('确认付款的库存来源订单在同一事务消费目标邮箱', (t) => {
   const store = createLocalBusinessStore(':memory:');
   t.after(() => store.close());
   const mail = stock('mail', 'google');
@@ -104,6 +130,19 @@ test('确认付款的订单目标邮箱在同一事务消费，客户自有续�
   assert.deepEqual(used.mailboxes.map((row) => row.inventoryState), ['used', 'claimed', 'claimed']);
   assert.ok(used.accounts.every((row) => row.inventoryState === 'claimed'));
   assert.equal(used.batches[0].items[0].orderId, 'order-1');
+});
+
+test('客户自有续费与已领取邮箱同地址时保留库存和批次', (t) => {
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  const mail = stock('mail', 'google');
+  const initial = document([mail]);
+  extract(initial, [mail], 'mail');
+  save(store, 'inventory', initial, 'inventory_extract');
+  const renewal = order(mail.email, { businessType: '续费', accountSource: '客户自有' });
+  const results = save(store, 'commerce', commerce([renewal]), '新增独立订单');
+  assert.deepEqual(results.map(entry => entry.domain), ['commerce']);
+  assert.equal(store.load('inventory').data.batches[0].items[0].status, 'pending');
 });
 
 test('未确认订单锁定归还，撤销未执行订单后可以归还', (t) => {
@@ -148,6 +187,37 @@ test('成品订单只能由本领取人交付已提取账号，订单和原提�
   store.saveBatch(entries, { actor });
   assert.equal(store.load('inventory').data.batches[0].items[0].status, 'used');
   assert.equal(store.load('commerce').data.orders[0].accountId, stockAccount.id);
+});
+
+test('已登记邮箱、账号、成品订单及实收在同一业务链自动回读', (t) => {
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  const mail = stock('registered-mail', 'google');
+  save(store, 'inventory', document([mail]), 'inventory_import');
+  const account = { ...stock('registered-account', 'gpt', mail.email), emailType: 'google',
+    acquisitionMethod: 'self_registered', registered: occurred };
+  const inventory = store.load('inventory');
+  inventory.data.accounts.push(account);
+  save(store, 'inventory', inventory.data, 'inventory_import');
+  const registered = store.load('inventory');
+  assert.equal(registered.data.mailboxes[0].inventoryState, 'used');
+  assert.equal(registered.data.accounts[0].sourceMailboxId, mail.id);
+  assert.equal(registered.data.accounts[0].inventoryState, 'available');
+  Object.assign(registered.data.accounts[0], { inventoryState: 'used', used: true,
+    usageLinks: [{ kind: 'order-sale', orderId: 'order-1', time: occurred }] });
+  const recorded = order(mail.email, { accountId: account.id, source: '管理员手工', businessType: '成品交付',
+    customerId: 'customer-1', payment: '银行卡', paidCurrency: 'CNY', paidConfirmed: false,
+    costBasis: 'actual', actualCostAmount: '20', actualCostCurrency: 'CNY', saleAmount: '100', saleCurrency: 'CNY' });
+  store.saveBatch([
+    { domain: 'commerce', version: 0, data: commerce([recorded], [{ id: 'customer-1', name: '测试客户' }]), action: '新增独立订单' },
+    { domain: 'inventory', version: registered.version, data: registered.data, action: 'inventory_order_sale' }
+  ], { actor });
+  const saved = store.load('commerce');
+  const records = projectSubscriptions({ commerce: saved, inventory: store.load('inventory') },
+    Date.parse('2026-01-10T00:00:00Z'));
+  assert.equal(records[0].status, 'active');
+  assert.equal(records[0].history[0].orderNo, recorded.orderNo);
+  assert.equal(calculateOrder(saved.data.orders[0]).profit, '80.0000');
 });
 
 test('历史补录邮箱引用原账号，不凭空生成领取批次', (t) => {

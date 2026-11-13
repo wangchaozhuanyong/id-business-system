@@ -94,7 +94,7 @@ test('管理员核对费用归属，限制重复替换和原单已含费用合�
   assert.equal(store.audit().filter(row => row.domain === orderExpenseDomain && row.action === 'order_expense_account').length, 4);
 });
 
-test('发卡实付绑定原付款卡，拒绝同卡多份及开通历史未核全的凭据', async t => {
+test('发卡实付绑定原付款卡，拒绝同卡多份，实付凭据可补无开卡费快照的原卡', async t => {
   const { send } = setup(t);
   const entry = { category: 'card-issue', chargedOn: '2026-11-02', source: '合成卡商',
     reference: 'CARD-1', amount: '1.0001', currency: 'USD', orderNo: 'SYN-CARD' };
@@ -105,9 +105,12 @@ test('发卡实付绑定原付款卡，拒绝同卡多份及开通历史未核�
   assert.equal(applied.body.items[0].accountingCardId, 'recharge:7');
   const duplicate = await send({ action: 'record', version: 2, entry: { ...entry, reference: 'CARD-2', orderNo: 'SYN-CARD-2' } });
   assert.equal((await send({ ...account, version: 3, id: duplicate.body.items[0].id })).status, 409);
-  const missing = await send({ action: 'record', version: 3,
-    entry: { ...entry, reference: 'CARD-3', currency: 'CNY', orderNo: 'SYN-CARD-INCOMPLETE' } });
-  assert.match((await send({ ...account, version: 4, id: missing.body.items[0].id })).body.error, /核对该卡开通记录/);
+  const missing = await send({ action: 'record', version: 3, entry: {
+    ...entry, reference: 'CARD-3', currency: 'CNY', orderNo: 'SYN-CARD-INCOMPLETE', accountingMode: 'replace-card'
+  } });
+  assert.equal(missing.status, 200, missing.body.error);
+  assert.equal(missing.body.items[0].accountingMode, 'replace-card');
+  assert.equal(missing.body.version, 4);
 });
 
 test('越权、跨站、无效金额和日期被拒，竞争提交保留一次有效写入', async t => {

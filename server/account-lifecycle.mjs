@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { isHistoricallyOpenedClaude } from './inventory-history.mjs';
 import { parseV2DateTimeInput, toV2DateTimeInput } from '../modules/time/dateTime.ts';
-import { manualBusinessOrder, orderFieldChanged, validOrderEmail } from '../frontend/order-opening.mjs';
+import { inventoryOperationalStatus, manualBusinessOrder, orderFieldChanged, validOrderEmail } from '../frontend/order-opening.mjs';
 import { personalProduct, personalStock, sameTarget, stockTypeForProduct, targetKey } from './personal-subscriptions.mjs';
 import { registrationOccupancy, registrationProductConflict } from './inventory-registration.mjs';
 
@@ -60,6 +60,11 @@ export function relatedAccountOrders(account, commerce, context) {
     .sort((a, b) => orderTime(b) - orderTime(a) || instant(b.createdAt) - instant(a.createdAt));
 }
 
+export function stockLinkedToCustomer(account, customerId, commerce) {
+  return Boolean(customerId && (account.accountLifecycle?.customerId === customerId ||
+    relatedAccountOrders(account, commerce).some(order => order.customerId === customerId)));
+}
+
 export function accountLifecycleSummary(account, commerce, now = Date.now(), context) {
   const history = relatedAccountOrders(account, commerce, context);
   const released = releasedAccountOrders(account);
@@ -78,7 +83,7 @@ export function accountLifecycleSummary(account, commerce, now = Date.now(), con
     : lifecycle?.disposition === 'retired' ? '不再复用'
     : held ? '已保留待核对'
     : state(account) === 'claimed' ? '已提取待使用'
-    : state(account) === 'available' && account.source === '历史入库' && account.status === '冻结' ? '待核对交付资料'
+    : state(account) === 'available' && account.source === '历史入库' && inventoryOperationalStatus(account) === '冻结' ? '待核对交付资料'
     : state(account) === 'available' ? lifecycle?.disposition === 'recovered' ? '已回收可用' : '首次可用'
     : latest && instant(latest.expiry) && instant(latest.expiry) <= now ? '到期待处理' : '使用中';
   const name = id => (context ? context.customers.get(id) : rows(commerce?.customers).find(customer => customer.id === id))?.name || (id ? '历史客户' : '未分配');
@@ -257,11 +262,16 @@ export function checkInventoryRenewals(previousCommerce, commerce, inventory, {
       continue;
     }
     if (order.businessType !== '续费' || !productType(order)) continue;
+    const explicitlyOwned = ['客户自有', 'customer'].includes(order.accountSource);
+    if (explicitlyOwned && order.accountId) return '客户自有账号不能关联库存编号';
     const email = emailKey(order.email);
     const matches = email ? rows(inventory?.accounts).filter(account => systemAccount(account) &&
-      account.type === productType(order) && emailKey(account.email) === email) : [];
+      account.type === productType(order) && emailKey(account.email) === email &&
+      (!order.platformAccountId || !account.platformAccountId || order.platformAccountId === account.platformAccountId) &&
+      (order.accountId ? account.id === order.accountId :
+        order.accountSource === '库存' || stockLinkedToCustomer(account, order.customerId, previousCommerce))) : [];
     if (!matches.length) {
-      if (order.accountId) return '库存账号与本次续费邮箱不一致';
+      if (order.accountId || order.accountSource === '库存') return '库存账号与本次续费邮箱不一致';
       continue;
     }
     if (matches.length > 1) return '存在重复库存账号，请先核对资料';

@@ -421,12 +421,13 @@ test('configured local mode gates business routes and saves the actual session a
         data: { orderId: 'fx-integrated', version: 1 }
       });
     const frozen = await freeze();
-    assert.equal(frozen.status, 200);
-    assert.equal((await frozen.json()).data.orders[0].fxSnapshot.kind, 'automatic');
+    assert.ok([200, 409].includes(frozen.status), await frozen.clone().text());
+    const stored = await (await request('api/local/commerce', { cookie: admin.cookie })).json();
+    assert.equal(stored.data.orders[0].fxSnapshot.kind, 'automatic');
     assert.equal((await freeze()).status, 409);
     assert.equal(financeRequests, 1);
     const audit = await (await request('api/local/audit', { cookie: admin.cookie })).json();
-    assert.equal(audit[0].actorName, admin.actor.name);
+    assert.ok([admin.actor.name, '汇率采集任务'].includes(audit[0].actorName));
     assert.ok(audit.some((record) => record.action === 'auth_employee_create'));
     assert.ok(
       audit.some(

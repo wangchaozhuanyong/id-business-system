@@ -6,10 +6,10 @@ import {
 } from '../modules/inventory/inventory-claude-aging.ts';
 import { parseV2DateTimeInput } from '../modules/time/dateTime.ts';
 import { claimAllowsDelivery, pendingInventoryClaim } from './inventory-usage.mjs';
-import { releasedAccountOrders, systemAccount } from './account-lifecycle.mjs';
+import { releasedAccountOrders, stockLinkedToCustomer, systemAccount } from './account-lifecycle.mjs';
 import { isHistoricallyOpenedClaude } from './inventory-history.mjs';
 import { personalDelivery, personalProduct, sameTarget, stockTypeForProduct } from './personal-subscriptions.mjs';
-import { orderReceiptRecorded } from '../frontend/order-opening.mjs';
+import { inventoryOperationalStatus, orderReceiptRecorded } from '../frontend/order-opening.mjs';
 import { hasRecordedPaymentAmount } from '../modules/finance/accounting.mjs';
 
 function units(value) {
@@ -245,8 +245,10 @@ export function checkStockDeliveries(previousCommerce, commerce, previousInvento
     if (order.businessType === '首次开通' && stockTypeForProduct(order.product) === 'claude' &&
         (!prior || prior.email !== order.email || prior.accountId !== order.accountId || prior.businessType !== order.businessType)) {
       const email = String(order.email || '').trim().toLowerCase();
-      if (order.accountId || accounts.some(account => account?.type === 'claude' && systemAccount(account) &&
-          email && email === String(account.email || '').trim().toLowerCase()))
+      if (order.accountId || order.accountSource === '库存' ||
+          (email && accounts.some(account => account?.type === 'claude' && systemAccount(account) &&
+            email === String(account.email || '').trim().toLowerCase() &&
+            stockLinkedToCustomer(account, order.customerId, previousCommerce))))
         return '该账号来自系统库存，请使用成品交付或续费';
     }
     if (order.businessType !== '成品交付') continue;
@@ -272,7 +274,7 @@ export function checkStockDeliveries(previousCommerce, commerce, previousInvento
       if (!account || !before || account.type !== stockTypeForProduct(order.product) ||
           account.source === '客户提供' || ['客户自有', 'customer'].includes(account.accountSource) ||
           !sameTarget(order, account) || state(account) !== state(before) ||
-          (!prior && ((before.health || 'normal') !== 'normal' || (before.status || '正常') !== '正常' ||
+          (!prior && ((before.health || 'normal') !== 'normal' || inventoryOperationalStatus(before) !== '正常' ||
             (before.usageLinks?.length && before.accountLifecycle?.disposition !== 'recovered'))) ||
           account.claimId !== before.claimId || (state(before) !== 'available' &&
             (!claim || nextClaim?.item.id !== claim.item.id || (!prior && !claimAllowsDelivery(claim, actor)))))
@@ -305,7 +307,7 @@ export function checkStockDeliveries(previousCommerce, commerce, previousInvento
         !prior ||
         (priorState !== 'available' && !validClaimDelivery) ||
         (prior.health || 'normal') !== 'normal' ||
-        (prior.status || '正常') !== '正常' ||
+        inventoryOperationalStatus(prior) !== '正常' ||
         (previousLinks.length && prior.accountLifecycle?.disposition !== 'recovered') ||
         links.length !== 1 ||
         account.inventoryState !== 'used' ||

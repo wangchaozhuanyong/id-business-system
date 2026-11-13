@@ -17,14 +17,14 @@
   const revisionScopes = new Set(['inventory', 'commerce', 'settings', 'appleBalance', 'toolbox', 'saved-totp',
     'bitbrowser-connections', 'bitbrowser-proxies', 'bitbrowser-addresses', 'tenant-cards', 'recharge-codes',
     'order-sync', 'tools/mailbox-pool', 'tools/website-visits', 'apple-relay', 'operators', 'audit', 'finance-rates', 'card-types',
-    'order-card-freeze', 'subscription-management', 'system-monitoring', 'recharge-card-plans', 'tools/mailbox-delivery']);
+    'order-card-freeze', 'order-expense-receipts', 'subscription-management', 'system-monitoring', 'recharge-card-plans', 'tools/mailbox-delivery']);
   const newer = (incoming, observed) => observed === undefined ||
     (/^\d+$/.test(incoming) && /^\d+$/.test(observed)
       ? BigInt(incoming) > BigInt(observed) : incoming !== observed);
   function publishChanges(scopes) {
     if (!scopes.length) return;
     const expanded = new Set(scopes);
-    if (scopes.some(scope => ['inventory', 'commerce', 'settings', 'appleBalance'].includes(scope)) ||
+    if (scopes.some(scope => ['inventory', 'commerce', 'settings', 'appleBalance', 'apple-relay', 'finance-rates', 'order-expense-receipts'].includes(scope)) ||
         (canApproveRechargeCodes && scopes.includes('recharge-codes'))) expanded.add('overview');
     if (scopes.includes('inventory')) { expanded.add('appleBalance'); expanded.add('apple-relay'); expanded.add('tools/mailbox-pool'); }
     if (scopes.includes('operators')) expanded.add('order-owners');

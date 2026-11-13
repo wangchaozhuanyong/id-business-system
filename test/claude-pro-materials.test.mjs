@@ -306,7 +306,9 @@ test('Pro can save verified pool and tenant cards while keeping paid card and hi
     const [poolSaved, tenantSaved, noneSaved] = created.data.data.orders;
     assert.equal(poolSaved.paymentId, '1919');
     assert.equal(poolSaved.financialEvidence[0].cardId, poolCardId);
-    assert.equal(poolSaved.issueFeeSnapshot, undefined);
+    assert.equal(poolSaved.issueFeeSnapshot.applied, true);
+    assert.equal(poolSaved.issueFeeSnapshot.amountUsd, '0.5');
+    assert.equal(tenantSaved.issueFeeSnapshot, undefined);
     assert.equal(tenantSaved.paymentId, '4242');
     assert.equal(tenantSaved.tenantId, tenant.id);
     assert.equal(tenantSaved.verifier, undefined);
@@ -464,7 +466,7 @@ test('Claude uses distinct certifiers and keeps one-time tenant cards attached t
         device: '合成设备', proxyUrl: 'socks5://proxy.example.test:1080' }],
       mailboxes: [], batches: [], returnRecords: [], importRecords: [], registrationRecords: [],
       tableSettings: [], undo: [] } }]);
-    const stockConflict = await save(store, 0, makeDocument([{ ...first, email: 'QA-IN-STOCK@example.test' }], people));
+    const stockConflict = await save(store, 0, makeDocument([{ ...first, email: 'QA-IN-STOCK@example.test', accountId: 'qa-stock', accountSource: '库存' }], people));
     assert.equal(stockConflict.status, 409);
     assert.match(stockConflict.data.error, /系统库存/);
     assert.equal(store.load('commerce').version, 0);

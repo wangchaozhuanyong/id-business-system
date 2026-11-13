@@ -120,7 +120,7 @@ export function stageClaudeHistoryIntake(plan, inventoryVersion, inventory, acto
     return {
       id, type: 'claude', email: row.email, emailType: /@(?:gmail|googlemail)\.com$/.test(row.email) ? 'google' : '',
       ...row.details, claudeHistory: row.history, source: '历史入库',
-      status: '冻结', health: row.health, inventoryState: used ? 'used' : 'available', used,
+      status: '正常', health: row.health, inventoryState: used ? 'used' : 'available', used,
       ...(used && { actualUsedAt: row.history.start.replace('T', ' ') }), usageLinks: [],
       importId: batchId, importedAt: recordedAt, createdAt: recordedAt, createdById: actor.id, createdBy: actor.name,
       lastOperatedAt: recordedAt, lastOperatedById: actor.id, lastOperatedBy: actor.name, version: 1,

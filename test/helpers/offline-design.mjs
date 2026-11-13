@@ -67,7 +67,7 @@ export async function interceptDesign(context, { beforeDirectory, localFixtures,
     if (url.pathname.startsWith('/api/')) {
       const resource = url.pathname.slice('/api/local/'.length);
       if (resource === 'apple-relay/status')
-        return json({ configured: true, parentIds: [], aliasIds: [] });
+        return json(localFixtures?.[resource] ?? { configured: true, codeQueryConfigured: true, parentIds: [], aliasIds: [] });
       if (resource === 'audit') return json([]);
       if (resource === 'subscriptions/lookup' && !localFixtures?.[resource])
         return json({ ownerId: '', ownerName: '' });

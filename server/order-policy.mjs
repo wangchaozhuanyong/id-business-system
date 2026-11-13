@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
-import { currencies, validCurrencyCode } from '../modules/finance/accounting.mjs';
+import { currencies, usesVirtualBankCard, validCurrencyCode } from '../modules/finance/accounting.mjs';
 import { validApplePaidPrices as validateApplePrices } from './apple-funding.mjs';
 import { personalPlans, personalProduct, samePersonalSubscription, stockTypeForProduct, subscriptionSeries, targetKey } from './personal-subscriptions.mjs';
 import { orderNeedsAccount, orderOpeningConfirmed, orderTerminationTime, subscriptionTime } from '../frontend/order-opening.mjs';
@@ -471,7 +471,8 @@ export function checkAppleOrder(order, prior, priorOrders, ledger, inventory, al
 export function deriveCardIssueFee(order, prior, orders, card) {
   if (prior?.issueFeeSnapshot?.applied && prior.cardId === order.cardId)
     return prior.issueFeeSnapshot;
-  if ((order.product !== 'GPT' && !personalProduct(order.product)) || order.payment !== '银行卡' || !order.paidConfirmed) return;
+  if ((order.product !== 'GPT' && !personalProduct(order.product) && !isClaudeOrder(order)) ||
+      order.payment !== '银行卡' || !order.paidConfirmed || !usesVirtualBankCard(order)) return;
   const previouslyUsed = orders.some((row) => row.id !== order.id &&
     (row.cardId === order.cardId && (row.paidConfirmed || row.issueFeeSnapshot?.applied) ||
       (row.financialEvidence || []).some((entry) => entry.kind === 'payment' && entry.cardId === order.cardId)));

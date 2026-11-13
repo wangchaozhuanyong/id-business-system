@@ -24,7 +24,7 @@ test('库存使用状态、归还核对和成品选单使用同一份本机资�
   const used = { ...mailbox('used-mail'), health: 'dead' };
   const unused = mailbox('unused-mail');
   const relay = { ...mailbox('hidden-mail', 'relay'), parentMailboxId: 'parent-1', relayStatus: 'ACTIVE' };
-  const stock = { ...mailbox('claimed-account', 'gpt'), emailType: 'google' };
+  const stock = { ...mailbox('claimed-account', 'gpt'), emailType: 'google', country: '马来西亚' };
   function batch(id, kind, purpose, rows) {
     return { id, kind, purpose, actorId: 'local-operator', actorName: '本机操作员',
       time: '2026-01-01 10:30', items: rows.map((row) => {
@@ -44,7 +44,7 @@ test('库存使用状态、归还核对和成品选单使用同一份本机资�
   };
   await save('inventory', 0, initial, 'inventory_extract');
   initial.accounts.push(...[used, relay].map((row) => ({
-    ...mailbox('registered-' + row.id, 'gpt'), email: row.email, emailType: row.type,
+    ...mailbox('registered-' + row.id, 'gpt'), email: row.email, emailType: row.type, country: '马来西亚',
     registered: '2026-01-01 11:30', createdById: 'local-operator'
   })));
   await save('inventory', 1, initial, 'inventory_import');
@@ -83,7 +83,7 @@ test('库存使用状态、归还核对和成品选单使用同一份本机资�
   assert.deepEqual(data.data.batches[0].items.map((item) => item.status), ['used', 'returned']);
 
   await page.goto(host.url + '#/workspace/order');
-  await page.locator('#commerce-product').selectOption('GPT');
+  assert.equal(await page.locator('#commerce-product').inputValue(), 'GPT');
   await page.locator('#commerce-businessType').selectOption({ label: '成品交付' });
   await page.locator('#commerce-emailHistory-picker').click();
   await page.getByRole('searchbox', { name: '搜索可用账号' }).fill('claimed-account');
@@ -93,14 +93,15 @@ test('库存使用状态、归还核对和成品选单使用同一份本机资�
   await page.locator('#commerce-customerId-picker').click();
   await page.locator('#commerce-customerId-options [data-value="customer-1"]').click();
   await page.locator('#commerce-payment').selectOption({ label: '银行卡' });
-  await page.locator('#commerce-cardId').fill('card-test');
-  await page.locator('#commerce-paymentId').fill('000001');
+  await page.locator('#commerce-proMaterialMode').selectOption('manual_card');
+  await page.locator('#commerce-proCardNumber').fill('4111111111111111');
   await page.locator('#commerce-paidAmount').fill('20');
   await page.locator('#commerce-saleAmount').fill('100');
   await page.locator('#commerce-start').fill('2026-01-01T11:30');
+  await page.locator('#commerce-expiry').fill('2026-02-01T11:30');
   const entryUrl = page.url();
-  await page.getByRole('button', { name: '核对并保存', exact: true }).click();
-  await page.locator('#confirm-dialog[open]').getByRole('button', { name: '确认保存', exact: true }).click();
+  await page.locator('button[form="commerce-order-form"][type="submit"]').click();
+  assert.equal(await page.locator('#confirm-dialog[open]').count(), 0);
   await page.locator('#toast').filter({ hasText: '订单提交成功' }).waitFor();
   assert.equal(page.url(), entryUrl);
   await page.goto(host.url + '#/orders/gpt');
@@ -122,7 +123,7 @@ test('库存使用状态、归还核对和成品选单使用同一份本机资�
   await page.getByRole('button', { name: '已使用 1', exact: true }).click();
   await correct(page.getByRole('row').filter({ hasText: relay.email }));
   await page.locator('#drawer[open]').getByRole('button', { name: '关闭', exact: true }).click();
-  await page.getByRole('button', { name: '库存 1', exact: true }).click();
+  await page.getByRole('button', { name: '未使用 1', exact: true }).click();
   await page.getByRole('cell', { name: relay.email, exact: true }).waitFor();
 
   await page.goto(host.url + '#/mailboxes/google');

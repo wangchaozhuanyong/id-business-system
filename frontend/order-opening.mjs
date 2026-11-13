@@ -167,6 +167,18 @@ export function orderOpeningConfirmed(order, now, legacyConfirmed = false) {
       subscriptionTime(order.expiry) > subscriptionTime(order.start));
 }
 
+// Old Claude imports wrote 冻结 for all rows. Interpret only untouched
+// import defaults; subsequent status changes take precedence.
+export function inventoryOperationalStatus(asset) {
+  const imported = asset?.type === 'claude' && asset.source === '历史入库' &&
+    asset.status === '冻结' && asset.health === 'normal' &&
+    ['aging', 'opened'].includes(asset.claudeHistory?.phase) && asset.importId &&
+    !asset.healthChangedAt && !asset.inventoryHistory?.some(event =>
+      ['健康状态变化', '修改资料', '撤回修改'].includes(event.action)) &&
+    asset.inventoryHistory?.some(event => event.action === 'Claude 历史入库');
+  return imported ? '正常' : asset?.status || '正常';
+}
+
 export function subscriptionPeriodState({ start, expiry, confirmed, ended, cancelled, failed }, now) {
   if (ended) return 'ended';
   if (cancelled) return 'pending';
@@ -182,5 +194,5 @@ if (typeof window !== 'undefined') window.IDOrderOpening = Object.freeze({
   orderOpeningConfirmed, orderTerminationTime, orderNeedsAccount, manualOrderDetailsMissing,
   validOrderEmail, validOrderXHandle, subscriptionPeriodState, subscriptionStateLabels, subscriptionTime,
   matchOrderCustomer, orderCustomerCreateAction, orderFieldChanged, subscriptionChainRoot,
-  automaticGptOrder, orderReceiptRecorded, rechargeOrderOwner, rechargeOrderCompletion, rechargeRenewalExpiryPending, expiredDuration, subscriptionDuration
+  inventoryOperationalStatus, automaticGptOrder, orderReceiptRecorded, rechargeOrderOwner, rechargeOrderCompletion, rechargeRenewalExpiryPending, expiredDuration, subscriptionDuration
 });

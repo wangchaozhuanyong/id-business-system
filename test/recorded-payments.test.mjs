@@ -13,7 +13,7 @@ const rules = { version: 1, appleDiscount: '0.8', claudeBankFeeMyr: '0', claudeA
   cardPercent: '0.008', cardPerPaymentUsd: '0.3', cardIssueUsd: '0.5' };
 function legacy(changes = {}) {
   const order = {
-    id: 'synthetic-payment', orderNo: 'SYN-PAYMENT', source: '管理员手工', product: 'Claude Pro',
+    id: 'synthetic-payment', orderNo: 'SYN-PAYMENT', source: '管理员手工', product: 'Claude Pro', cardTypeId: 'card-type-real',
     businessType: '续费', customerId: 'customer', email: 'payment@example.test', payment: '银行卡',
     start: '2026-11-08T02:32', expiry: '2026-12-08T00:00',
     paidAmount: '21.13', paidCurrency: 'USD', paidConfirmed: false,
@@ -79,14 +79,15 @@ test('自动代充的预填金额不代表实际扣款，实收也必须来自�
   assert.match(calculate({ ...order, receiptConfirmed: false }).reason, /收款金额/);
 });
 
-test('旧标记不绕过已绑定苹果 ID 的实际扣款流水核对', () => {
+test('Apple 只按匹配的实际回款抵扣，已登记代付可计算', () => {
   const order = legacy({ payment: '苹果内购', appleIdId: 'synthetic-apple' });
   const appleLedger = { orderId: order.id, appleIdId: order.appleIdId, amount: '21.13', returned: '0' };
   for (const ledger of [undefined, { ...appleLedger, amount: '20' },
     { ...appleLedger, appleIdId: 'another-apple' }, { ...appleLedger, orderId: 'another-order' }]) {
     const result = calculate(order, { appleLedger: ledger });
     assert.equal(result.requiresPaymentConfirmation, false);
-    assert.match(result.reason, /实际扣款及回款台账待核对/);
+    assert.match(result.appleLedgerNote, /Apple 扣款或回款未匹配/);
+    assert.equal(result.profit, '71.6720');
   }
   const before = structuredClone({ order, appleLedger });
   assert.equal(calculate(order, { appleLedger }).profit, '71.6720');
@@ -94,7 +95,7 @@ test('旧标记不绕过已绑定苹果 ID 的实际扣款流水核对', () => {
 });
 
 test('同卡已登记旧单参加开卡费分摊，缺金额和草稿不冒充已付款', () => {
-  const a = legacy({ id: 'a', product: 'GPT', cardId: 'synthetic-card',
+  const a = legacy({ id: 'a', product: 'GPT', cardTypeId: '', cardId: 'synthetic-card',
     issueFeeSnapshot: { applied: true, cardId: 'synthetic-card', amountUsd: '0.5' } });
   const b = { ...a, id: 'b', issueFeeSnapshot: { applied: false, cardId: a.cardId } };
   const empty = { ...b, id: 'empty', paidAmount: '' };
