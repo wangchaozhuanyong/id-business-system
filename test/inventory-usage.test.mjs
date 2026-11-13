@@ -110,6 +110,37 @@ test('原账号来源与同址的其他注册记录冲突时拒绝重复使用�
     .filter(([, row]) => row.status === 'used').map(([id]) => id), [google.id]);
 });
 
+test('历史账号缺注册时点时可补关联已有成功登记，保留已用批次并拒绝无证据或归还冲突', () => {
+  const mail = stock('mail', 'google');
+  const account = { ...stock('claude', 'claude', mail.email), source: '历史入库',
+    claudeHistory: { phase: 'dead' }, health: 'dead', status: '死号', importedAt: '2026-01-02T00:00' };
+  const data = document([mail], [account]);
+  const batch = extract(data, [mail], 'mail', '注册 CLAUDE');
+  const [item] = batch.items;
+  Object.assign(mail, { inventoryState: 'used', actualUsedAt: occurred, usageLinks: [{
+    kind: 'registration', registrationId: 'record', product: 'claude', claimId: item.id, batchId: batch.id
+  }] });
+  Object.assign(item, { status: 'used', usedAt: occurred });
+  data.registrationRecords.push({ id: 'record', assetId: mail.id, product: 'CLAUDE', state: '成功', time: occurred });
+  const at = new Date('2026-02-01T00:00:00Z');
+  const inspect = inventory => inspectInventoryUsage(inventory, commerce(), at.getTime());
+  const noProof = structuredClone(data);
+  noProof.registrationRecords.length = 0;
+  assert.notEqual(inspect(noProof).get(mail.id)?.status, 'used');
+  const returnedLater = structuredClone(data);
+  returnedLater.batches.push({ id: 'another', items: [{ assetId: mail.id, status: 'returned', returnedAt: '2026-01-01T12:00' }] });
+  assert.equal(inspect(returnedLater).get(mail.id).status, 'review');
+  const batchBefore = structuredClone(batch);
+  assert.equal(applyInventoryUsage(inspect(data), actor, at, data), true);
+  assert.equal(account.sourceMailboxId, mail.id);
+  assert.equal(account.registered, undefined);
+  assert.equal(mail.actualUsedAt, occurred);
+  assert.deepEqual(batch, batchBefore);
+  assert.equal(mail.usageLinks[0].registrationId, 'record');
+  assert.equal(mail.usageLinks[1].accountId, account.id);
+  assert.equal(applyInventoryUsage(inspect(data), actor, at, data), false);
+});
+
 test('确认付款的库存来源订单在同一事务消费目标邮箱', (t) => {
   const store = createLocalBusinessStore(':memory:');
   t.after(() => store.close());

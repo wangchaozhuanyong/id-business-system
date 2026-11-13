@@ -38,9 +38,12 @@ try {
   const apple = auditAppleWallets(input);
   const versions = Object.fromEntries(Object.entries(documents).map(([key, document]) => [key, document.version]));
   const { eligible, review, oneSided, inconsistent } = inventory.counts;
+  const unallocatedCardFees = finance.orders.filter(({ operatingCalculations }) =>
+    Object.values(operatingCalculations).some(({ cardIssueUnallocated, knownCost }) =>
+      cardIssueUnallocated || knownCost?.cardIssueUnallocated)).length;
   const outstanding = Boolean(eligible || review || oneSided || inconsistent || inventory.simulation.changedOnRepeat ||
-    finance.operating.CNY.pending || finance.operating.MYR.pending || finance.batchIssues.length || apple.counts.issueCount);
-  process.stdout.write(JSON.stringify({ asOf: finance.asOf, versions, outstanding, finance, inventory, apple }, null, 2) + '\n');
+    unallocatedCardFees || finance.operating.CNY.pending || finance.operating.MYR.pending || finance.batchIssues.length || apple.counts.issueCount);
+  process.stdout.write(JSON.stringify({ asOf: finance.asOf, versions, outstanding, unallocatedCardFees, finance, inventory, apple }, null, 2) + '\n');
   if (values.strict && outstanding) process.exitCode = 2;
 } catch {
   process.stderr.write('核对失败。请检查 --data-dir 的绝对路径、SQLite 业务库和原密钥，以及 --as-of 的 UTC ISO 格式。\n');
