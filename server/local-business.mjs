@@ -388,6 +388,7 @@ function checkTenantWrites(tenants, previous = []) {
 
 export function attributeCommerce(data, previous, actor, owners, subscriptions, inventory) {
   checkTenantWrites(data.tenants, previous?.tenants);
+  let ownerDirectory = Array.isArray(owners) ? owners : undefined;
   const attributeNew = (rows = [], before = []) => {
     const known = new Set(Array.isArray(before) ? before.map((row) => row?.id) : []);
     for (const row of rows) {
@@ -411,7 +412,12 @@ export function attributeCommerce(data, previous, actor, owners, subscriptions, 
           row.owner = accountOwner.ownerName;
         }
         const assign = key === 'tenants' ? assignTenantOwner : assignOrderOwner;
-        const error = assign(row, prior, actor, owners);
+        if (!prior && typeof row.ownerId === 'string' && row.ownerId && row.ownerId !== actor.id &&
+            ['admin', 'super'].includes(actor.role) && !ownerDirectory) {
+          try { ownerDirectory = owners?.() || []; }
+          catch { throw new LocalDataError(503, '暂时无法核对归属人，请稍后重试'); }
+        }
+        const error = assign(row, prior, actor, ownerDirectory);
         if (error) throw new LocalDataError(error.status, error.message);
       }
       if (!prior && (key === 'orders' || key === 'tenants' || 'createdById' in row)) {
@@ -1970,12 +1976,8 @@ export function createLocalBusinessStore(databasePath) {
             action, actor, priorInventory, completedCustomerOrders
           });
           if (renewalError) throw new LocalDataError(409, renewalError);
-          if (actor) {
-            let owners = [];
-            try { owners = readOrderOwners?.() || []; }
-            catch { throw new LocalDataError(503, '暂时无法核对归属人，请稍后重试'); }
-            attributeCommerce(commerce, priorCommerce, actor, owners, subscriptions, inventory);
-          } else checkTenantWrites(commerce.tenants, priorCommerce?.tenants);
+          if (actor) attributeCommerce(commerce, priorCommerce, actor, readOrderOwners, subscriptions, inventory);
+          else checkTenantWrites(commerce.tenants, priorCommerce?.tenants);
           if (action === historicalFeeAction && (writes.length !== 1 || !actor?.id ||
               !['admin', 'super'].includes(actor.role)))
             throw new LocalDataError(403, '历史费率更正须由管理员单独核对');
@@ -1989,6 +1991,9 @@ export function createLocalBusinessStore(databasePath) {
           const oldRentBatches = new Set((priorCommerce?.rentBatches || []).map(row => row.id));
           if (actor && (action === '建立租金发放批次' || commerce.rentBatches.some(row => !oldRentBatches.has(row.id))))
             throw new LocalDataError(403, '请从续费管理提交给财务');
+          for (const row of commerce.orders) {
+            if (typeof row.tenantCardNumber === 'string' && !row.tenantCardNumber.trim()) delete row.tenantCardNumber;
+          }
           tenantCardArchive = stagedTenantCards.length || commerce.tenants.some(row => row.initialCards?.length) ||
             commerce.orders.some(row => Object.hasOwn(row, 'tenantCardNumber')) ? current(orderCardArchiveDocument) : null;
           try {
@@ -2200,7 +2205,8 @@ export function createLocalBusinessStore(databasePath) {
                   (!prior || prior.payment !== row.payment || row.cardId !== prior.cardId ||
                     (row.proMaterialMode === 'manual_card' && row.proCardNumber !== prior.proCardNumber) ||
                     (row.paidConfirmed && !hasBankPayment(prior)))) {
-                const originalCard = orderCardHealthReference(renewal, { archive: current(orderCardArchiveDocument), tenantCards });
+                const originalCard = row.source === '管理员手工' ? {}
+                  : orderCardHealthReference(renewal, { archive: current(orderCardArchiveDocument), tenantCards });
                 const verifiedNumber = row.proMaterialMode === 'manual_card' ? row.proCardNumber
                   : cards.get(row.cardId)?.number || tenantCards.find(item => item.id === row.cardId)?.number ||
                     (row.cardId && row.cardId === prior?.cardId ? prior.proCardNumber : '');

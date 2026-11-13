@@ -375,7 +375,7 @@
         '<div class="commerce-span-all" data-renewal-card-fields></div>' : '') +
       inputField('付款凭据编号（选填）', 'renewal-reference', draft['renewal-reference'] || '', 'maxlength="120"');
     const label = returning ? '确认退回' : '提交实付给员工';
-    const check = returning ? '我已确认本次尚未付款' : bank ? '我已核对付款成功及本次用卡'
+    const check = returning ? '我已确认本次尚未付款' : bank ? '我已确认付款成功，已填写的用卡资料与本次付款一致'
       : '我已核对苹果付款成功，并确认付款对应上方订阅账号';
     A.openDrawer(returning ? '退回续费申请' : '登记续费实付', '', props([
       ['原订单', row.order.number], ['客户', row.order.customer], ['订阅账号', row.order.account], ['付款方式', row.order.payment],

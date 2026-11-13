@@ -5,7 +5,7 @@ import { pathToFileURL, fileURLToPath } from 'node:url';
 import { interceptDesign, origin } from './helpers/offline-design.mjs';
 
 const number = '4242424242424242', replacement = '4000000000000002';
-const actor = { id: 'card-qa-admin', name: '合成管理员', role: 'admin' };
+const actor = { id: 'card-qa-admin', name: '合成超管', role: 'super' };
 const output = fileURLToPath(new URL('../.runtime/order-card-snapshots-20261110/', import.meta.url));
 const cases = [
   ['GPT', 'gpt', 'gpt'], ['Claude Pro', 'claude', 'pro'], ['Claude Max', 'claude', 'max'],

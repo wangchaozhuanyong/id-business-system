@@ -40,17 +40,19 @@ export function checkAccountLocations(previous, next) {
     const product = accountTypes.get(row?.type);
     if (!product) continue;
     const prior = priorById.get(row.id);
-    if (prior?.type === row.type && prior.email === row.email &&
-        (prior.country ?? '') === (row.country ?? '') &&
+    const sameCountry = prior?.type === row.type && prior.email === row.email &&
+        (prior.country ?? '') === (row.country ?? '');
+    if (sameCountry &&
         (row.type === 'gpt' || (prior.city ?? '') === (row.city ?? ''))) continue;
 
-    if (row.acquisitionMethod === 'purchased' && !row.country && !row.city) continue;
+    const city = row.type === 'claude' ? row.city : '';
+    if (!row.country && !city) continue;
     const config = settings.get(row.type);
-    if (!row.country || !(config?.countries ?? [...defaultLocations.keys()]).includes(row.country))
+    if (!row.country || (!sameCountry && !(config?.countries ?? [...defaultLocations.keys()]).includes(row.country)))
       return `请选择 ${product} 账号设置中的注册国家`;
-    if (row.type === 'gpt') continue;
+    if (!city) continue;
     const cities = config?.cities.get(row.country) ?? defaultLocations.get(row.country) ?? [];
-    if ((!row.city && row.acquisitionMethod !== 'purchased') || (row.city && !cities.includes(row.city)))
+    if (!cities.includes(city))
       return `请选择 ${product} 账号所选国家下的地区／城市`;
   }
 }

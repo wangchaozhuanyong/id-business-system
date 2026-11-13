@@ -134,7 +134,7 @@ test('staff confirms a batch and finance returns a verified replacement for a ne
   await drawer.getByLabel('实际付款金额').fill('22.25');
   await drawer.getByLabel('本次使用的卡').selectOption('manual');
   await drawer.getByLabel('本次银行卡号').fill('4111111111111111');
-  await drawer.getByLabel('我已核对付款成功及本次用卡').check();
+  await drawer.getByLabel('我已确认付款成功，已填写的用卡资料与本次付款一致').check();
   await drawer.getByRole('button', { name: '提交实付给员工' }).click();
   await finance.page.getByLabel('身份验证器的六位验证码').fill('123456');
   await finance.page.getByRole('button', { name: '验证', exact: true }).click();

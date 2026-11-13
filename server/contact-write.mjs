@@ -27,9 +27,17 @@ export function mergeContactWrite(write, current) {
   const latest = rows.find(row => row.id === after.id) ?? null;
   if (!isDeepStrictEqual(before, latest)) fail('这条资料已被其他操作更新，本次未保存，输入已保留，请重新核对');
   if (data.logs.some(row => row.id === change.log.id)) fail('操作记录已存在，请核对原保存结果');
-  if (change.list === 'customers' && rows.some(row => row.id !== after.id && contactKey(row.name) === contactKey(after.name) &&
-      ['phone', 'wechat', 'qq', 'whatsapp', 'telegram'].some(key => contactKey(after[key], key) &&
-        contactKey(row[key], key) === contactKey(after[key], key)))) fail('相同姓名和联系方式的客户已存在，请核对原客户');
+  if (change.list === 'customers') {
+    const nameKey = contactKey(after.name);
+    const nameChanged = nameKey !== contactKey(before?.name);
+    const duplicate = rows.some(row => row.id !== after.id && contactKey(row.name) === nameKey &&
+      ['phone', 'wechat', 'qq', 'whatsapp', 'telegram'].some(key => {
+        const normalized = contactKey(after[key], key);
+        return normalized && normalized === contactKey(row[key], key) &&
+          (nameChanged || normalized !== contactKey(before?.[key], key));
+      }));
+    if (duplicate) fail('相同姓名和联系方式的客户已存在，请核对原客户');
+  }
   if (before) rows[rows.findIndex(row => row.id === after.id)] = structuredClone(after);
   else rows.unshift(structuredClone(after));
   data.logs.unshift(structuredClone(change.log));

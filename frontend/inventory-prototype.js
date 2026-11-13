@@ -1944,7 +1944,7 @@
           original ? '创建后不可更改资料类型。' : '请按实际用途人工确认，邮箱域名不会自动改变类型。'
         );
     if (account) fields += field('账号来源', 'inventory-acquisitionMethod',
-      select('inventory-acquisitionMethod', [...(original ? [['', '未登记']] : []), ...acquisitionChoices], acquisition),
+      select('inventory-acquisitionMethod', choicesWithCurrent([...(original ? [['', '未登记']] : []), ...acquisitionChoices], acquisition), acquisition),
       !original, '自注册可选择系统邮箱，也可独立录入。购买账号保留已知的注册资料。');
     fields += wide(
       fundingApple ? '苹果 ID' : type === 'gemini' ? 'Google 账号邮箱' : account ? '账号邮箱' : '邮箱账号',
@@ -1963,8 +1963,7 @@
       fields += field(
         '邮箱类型',
         'inventory-emailType',
-        select('inventory-emailType', enabledTypes(), val('emailType') || 'google'),
-        true
+        select('inventory-emailType', choicesWithCurrent([['', '未登记'], ...enabledTypes()], val('emailType')), val('emailType'))
       );
     if (personal) {
       fields += type === 'gemini'
@@ -2006,8 +2005,7 @@
       fields += wide(
         '绑定电话',
         'inventory-phone',
-        `<div class="option-entry-controls">${input('inventory-phone', val('phone'), 'placeholder="电话号码或 HTTP(S) 验证码链接"')}<a id="inventory-phone-code-link" class="button" href="${esc(phoneCodeUrl(val('phone')) || '#')}" target="_blank" rel="noopener noreferrer nofollow" ${phoneCodeUrl(val('phone')) ? '' : 'hidden'}>查看验证码</a></div><label class="checkbox-label"><input type="checkbox" id="inventory-no-phone" name="inventory-no-phone" ${(api.state.drafts.has(key) ? Boolean(d['inventory-no-phone']) : original && !original.phone) ? 'checked' : ''} />确认未绑定电话</label>`,
-        true
+        `<div class="option-entry-controls">${input('inventory-phone', val('phone'), 'placeholder="电话号码或 HTTP(S) 验证码链接"')}<a id="inventory-phone-code-link" class="button" href="${esc(phoneCodeUrl(val('phone')) || '#')}" target="_blank" rel="noopener noreferrer nofollow" ${phoneCodeUrl(val('phone')) ? '' : 'hidden'}>查看验证码</a></div>`
       );
     if (microsoft)
       fields += field('绑定手机号', 'inventory-phone', input('inventory-phone', val('phone')));
@@ -2022,8 +2020,7 @@
       account
         ? `<div class="option-entry-controls">${countrySelect}${locationSettingsButton(type, 'asset', id)}</div>`
         : countrySelect,
-      (usesAccountLocation(type) && !purchased && (!original || Boolean(original.country))) ||
-        (['google', 'apple'].includes(type) && (!original || Boolean(original.country))),
+      false,
       type === 'apple' ? '记录注册这个苹果 ID 时所在的国家或地区，与当前设置的 Id地区分别保存。' : ''
     );
     if (fundingApple && window.IDAppleFunding) {
@@ -2039,7 +2036,7 @@
         '注册城市',
         'inventory-city',
         select('inventory-city', accountCityChoices(type, country, original, val('city')), val('city')),
-        !purchased && (!original || Boolean(original.city)),
+        false,
         '请先选国家。地区／城市可在本账号的国家地区设置中维护。'
       );
     fields +=
@@ -2086,7 +2083,7 @@
         '系统生成，编辑资料不会改变。'
       ) +
       field('登录设备', 'inventory-device',
-        input('inventory-device', val('device'), type === 'google' ? 'maxlength="200"' : ''), type === 'claude' && !purchased && (!original || Boolean(original.device)));
+        input('inventory-device', val('device'), ['google', 'claude'].includes(type) ? 'maxlength="200"' : ''));
     if (type === 'google' || type === 'gpt' || microsoft || personal)
       fields += wide(
         '2FA 密钥',
@@ -2160,7 +2157,7 @@
             d['inventory-proxy-url'] ?? original?.proxyUrl ?? '',
             'placeholder="粘贴代理链接，自动填入下方四项"'
           ),
-          !purchased && (!original || Boolean(original.proxyUrl)),
+          false,
           '支持代理链接、主机:端口或主机:端口:账号:密码；带协议时自动识别。'
         ) +
         field(
@@ -2237,10 +2234,9 @@
   }
   function accountLocationError(type, country, city, original) {
     if (original && (original.country || '') === country && (!usesRegistrationCity(type) || (original.city || '') === city)) return '';
-    if (!country) return '缺少注册国家';
-    if (!settingsFor(type).countries.includes(country)) return '注册国家未在本账号的国家地区设置启用';
-    if (!usesRegistrationCity(type)) return '';
-    if (!city) return '缺少地区／城市';
+    if (!country) return city ? '填写注册城市前请选择注册国家' : '';
+    if (country !== original?.country && !settingsFor(type).countries.includes(country)) return '注册国家未在本账号的国家地区设置启用';
+    if (!usesRegistrationCity(type) || !city) return '';
     return cityOptions(type, country).includes(city) ? '' : '地区／城市不在所选国家的设置中';
   }
   function settingsCountries(values, config) {
@@ -2906,12 +2902,11 @@
       ? '<input type="hidden" name="inventory-import-type" value="microsoft" />' + field('资料类型', 'inventory-import-type-display', input('inventory-import-type-display', '微软邮箱', 'readonly'))
       : field('默认资料类型', 'inventory-import-type', select('inventory-import-type', choices, d['inventory-import-type']), true);
     const sourceOptions = microsoft ? settingsFor('microsoft').sources : ['自己注册', '线上购买', '客户提供'];
-    const noPhoneField = microsoft ? '' : wide('无绑定电话', 'inventory-import-no-phone', `<label class="checkbox-label"><input id="inventory-import-no-phone" name="inventory-import-no-phone" type="checkbox" ${d['inventory-import-no-phone'] ? 'checked' : ''} />确认空电话资料均未绑定电话号码</label>`);
     showDrawer(
       '批量导入预检',
       microsoft ? '仅导入微软邮箱。可录入邮箱和登录密码两列，也可按示例表头补齐验证资料。多种验证方式用分号分隔。'
         : '逐行确认最终类型和注册时间后再导入；地址识别仅作建议，不会自动更改类型。',
-      `<form id="inventory-import-form" data-inventory-draft="${key}" novalidate><div class="form-grid">${typeField}${field('来源渠道', 'inventory-import-source', select('inventory-import-source', sourceOptions, d['inventory-import-source'] || sourceOptions[0]), true)}${field('CSV 文件', 'inventory-import-file', '<input id="inventory-import-file" type="file" accept=".csv,text/csv" />')}${wide('导入内容', 'inventory-import-content', area('inventory-import-content', d['inventory-import-content'] || '', example, 6), true)}${noPhoneField}</div></form><div id="inventory-import-results"></div>`,
+      `<form id="inventory-import-form" data-inventory-draft="${key}" novalidate><div class="form-grid">${typeField}${field('来源渠道', 'inventory-import-source', select('inventory-import-source', sourceOptions, d['inventory-import-source'] || sourceOptions[0]), true)}${field('CSV 文件', 'inventory-import-file', '<input id="inventory-import-file" type="file" accept=".csv,text/csv" />')}${wide('导入内容', 'inventory-import-content', area('inventory-import-content', d['inventory-import-content'] || '', example, 6), true)}</div></form><div id="inventory-import-results"></div>`,
       (microsoft ? button('复制示例 CSV', 'inventory-copy-microsoft-template', '', 'copy') : '') + button('取消', 'inventory-close') +
         '<button class="button primary" form="inventory-import-form" type="submit">检查并预览</button>',
       key
@@ -3056,10 +3051,9 @@
             'inventory-import-email-type',
             select(
               'inventory-import-email-type',
-              enabledTypes(),
-              d['inventory-import-email-type'] || 'google'
-            ),
-            true
+              [['', '未登记'], ...enabledTypes()],
+              d['inventory-import-email-type'] || ''
+            )
           )) +
       field(
         'CSV 文件',
@@ -3071,15 +3065,8 @@
         'inventory-import-content',
         area('inventory-import-content', d['inventory-import-content'] || '', example, 7),
         true,
-        `${usesRegistrationCity(type) ? '注册国家和城市必填，使用本账号设置中的选项。' : type === 'gpt' ? '注册国家必填。' : ''}支持带表头 CSV 和旧版七列。注册时间可留空，按录入时间保存。余额、使用状态、KYC 和养号结果不接受导入。`
-      ) +
-      (type === 'apple'
-        ? wide(
-            '无绑定电话',
-            'inventory-import-no-phone',
-            `<label class="checkbox-label"><input id="inventory-import-no-phone" name="inventory-import-no-phone" type="checkbox" ${d['inventory-import-no-phone'] ? 'checked' : ''} />确认空电话资料均未绑定电话号码</label>`
-          )
-        : '');
+        '支持带表头 CSV 和旧版七列。注册时间可留空，按录入时间保存。余额、使用状态、KYC 和养号结果不接受导入。'
+      );
     showDrawer(
       `批量导入${typeLabel(type)}`,
       '每批只提交一种账号资料，逐行检查后整批确认；不注册账号，不改变任何余额或业务使用状态。',
@@ -3119,7 +3106,7 @@
       d['inventory-import-content'] || '',
       d['inventory-import-source'] || '',
       d['inventory-import-email-type'] || '',
-      Boolean(d['inventory-import-no-phone']),
+      d['inventory-import-acquisition'] || '',
       results.map((row) => [row.line, d[`inventory-import-row-type-${row.line}`] ?? context.type]),
       Object.entries(d)
         .filter(
@@ -3221,22 +3208,15 @@
       if (!error && existing.has(key)) error = '相同类型邮箱重复，不覆盖原资料';
       existing.add(key);
       if (!error && context.type === 'apple' && !values.password) error = '缺少密码';
-      if (!error && context.type === 'apple' && !values.phone && !d['inventory-import-no-phone'])
-        error = '需确认未绑定电话';
-      if (!error && context.type === 'apple' && !values.country) error = '缺少国家';
       if (context.type !== 'apple' && !microsoft) {
         try {
           values.acquisitionMethod = csvChoice(values.acquisitionMethod, acquisitionChoices,
             d['inventory-import-acquisition'] || 'self_registered', '账号来源');
         } catch (issue) { error ||= issue.message; }
       }
-      const purchased = values.acquisitionMethod === 'purchased';
-      if (!error && context.type === 'claude' && !purchased && !values.device) error = '缺少登录设备';
-      if (!error && context.type === 'claude' && !purchased && !values.proxyUrl) error = '缺少注册代理链接';
       if (!error && values.phone && /^[a-z][a-z0-9+.-]*:/i.test(values.phone) && !phoneCodeUrl(values.phone)) error = '验证码链接仅支持有效的 HTTP(S) 地址';
-      if (!error && usesAccountLocation(context.type) && (!purchased || values.country || values.city))
-        error = accountLocationError(context.type, values.country, values.city,
-          purchased && !values.city ? { country: values.country, city: '' } : null);
+      if (!error && usesAccountLocation(context.type))
+        error = accountLocationError(context.type, values.country || '', values.city || '');
       if (!error && values.registered && !validRegisteredDate(values.registered))
         error = '注册时间无效或晚于当前时间，请按北京时间填写';
       if (!error && values.birthday && !validCalendarDate(values.birthday))
@@ -3270,7 +3250,7 @@
           enabledTypes().find(([id, label]) =>
             [id, label].some((value) => csvFieldName(value) === csvFieldName(emailType))
           )?.[0] || '';
-        if (!error && !values.emailType) error = '请确认有效邮箱类型，不按邮箱地址自动推算';
+        if (!error && emailType && !values.emailType) error = '请选择有效的邮箱类型';
       }
       if (context.type === 'claude') {
         try {
@@ -3455,11 +3435,6 @@
     let first = '';
     const required = type === 'grok' ? [] : ['inventory-email'];
     if (['google', 'apple'].includes(type) && (!previous || previous.password)) required.push('inventory-password');
-    if (['google', 'apple'].includes(type) && (!previous || previous.country)) required.push('inventory-country-edit');
-    if (type === 'claude' && !purchased) {
-      if (!previous || previous.device) required.push('inventory-device');
-      if (!previous || previous.proxyUrl) required.push('inventory-proxy-url');
-    }
     for (const name of required) {
       const error = !String(data[name] || '').trim() ? '请填写此项资料' : '';
       api.setError(name, error);
@@ -3499,15 +3474,8 @@
       api.setError('inventory-email', '相同类型中已经存在该账号');
       first ||= 'inventory-email';
     }
-    if (
-      ['google', 'apple'].includes(type) &&
-      !data['inventory-phone']?.trim() &&
-      !data['inventory-no-phone']
-    ) {
-      api.setError('inventory-phone', '填写电话，或明确确认未绑定电话');
-      first ||= 'inventory-phone';
-    }
     const phone = String(data['inventory-phone'] || '').trim();
+    api.setError('inventory-phone', '');
     if (phone && phone !== previous?.phone && /^[a-z][a-z0-9+.-]*:/i.test(phone) && !phoneCodeUrl(phone)) {
       api.setError('inventory-phone', '验证码链接仅支持有效的 HTTP(S) 地址');
       first ||= 'inventory-phone';
@@ -3518,7 +3486,8 @@
     }
     if (
       accountEntry &&
-      type !== 'apple' && !personal && (data['inventory-emailType'] || !purchased) &&
+      type !== 'apple' && !personal && data['inventory-emailType'] &&
+      data['inventory-emailType'] !== previous?.emailType &&
       !enabledTypes().some(([value]) => value === data['inventory-emailType'])
     ) {
       api.setError('inventory-emailType', '请选择有效邮箱类型');
@@ -3569,9 +3538,7 @@
     if (usesAccountLocation(type)) {
       const country = data['inventory-country-edit'] || '';
       const city = data['inventory-city'] || '';
-      const issue = purchased && !city
-        ? country && !settingsFor(type).countries.includes(country) && country !== original?.country ? '请选择有效注册国家' : ''
-        : accountLocationError(type, country, city, original);
+      const issue = accountLocationError(type, country, city, original);
       const locationField = usesRegistrationCity(type) && settingsFor(type).countries.includes(country)
         ? 'inventory-city'
         : 'inventory-country-edit';
@@ -3600,7 +3567,8 @@
       for (const field of ['inventory-password', 'inventory-auxiliary', 'inventory-totp', 'inventory-appPassword',
         'inventory-source', 'inventory-phone', 'inventory-microsoft-device', 'inventory-microsoft-methods'])
         api.setError(field, '');
-      if (!String(data['inventory-source'] || '').trim()) {
+      const source = String(data['inventory-source'] || '').trim();
+      if ((!original || source !== (original.source || '')) && (!source || source.length > 200)) {
         api.setError('inventory-source', '请选择来源渠道');
         return;
       }
@@ -3614,19 +3582,29 @@
         verificationDevice: String(data['inventory-microsoft-device'] || '').trim()
       };
       const changesSecurity = !original ||
-        ['password', 'phone', 'auxiliary', 'totp', 'appPassword'].some(key =>
+        ['password', 'auxiliary', 'totp'].some(key =>
           String(data['inventory-' + key] || '').trim() !== String(original[key] || '').trim()) ||
         security.loginMode !== (savedSecurity?.loginMode || 'password') ||
         security.recoveryAccess !== (savedSecurity?.recoveryAccess || 'unknown') ||
         security.twoStep !== (savedSecurity?.twoStep || 'unknown') ||
-        security.verificationDevice !== (savedSecurity?.verificationDevice || '') ||
         security.verificationMethods.length !== (savedSecurity?.verificationMethods?.length || 0) ||
         security.verificationMethods.some(method => !savedSecurity?.verificationMethods?.includes(method));
       try {
-        microsoftSecurity = changesSecurity ? readMicrosoftSecurity({
-          email, phone, password: data['inventory-password'], auxiliary: data['inventory-auxiliary'],
-          totp: data['inventory-totp']?.trim(), appPassword: data['inventory-appPassword'], source: data['inventory-source']
-        }, security) : savedSecurity;
+        for (const [field, label] of [['inventory-phone', '绑定手机号'], ['inventory-appPassword', '应用专用密码']]) {
+          const value = String(data[field] || '');
+          if (value.length > 4096 && value !== original?.[field.slice('inventory-'.length)])
+            throw new Error(`${label}超过长度限制`, { cause: field });
+        }
+        if (changesSecurity) {
+          microsoftSecurity = readMicrosoftSecurity({ email, password: data['inventory-password'],
+            auxiliary: data['inventory-auxiliary'], totp: data['inventory-totp']?.trim() }, security);
+        } else if (security.verificationDevice !== (savedSecurity?.verificationDevice || '')) {
+          if (security.verificationDevice.length > 200)
+            throw new Error('验证设备最多 200 个字符', { cause: 'inventory-microsoft-device' });
+          microsoftSecurity = { ...savedSecurity, verificationDevice: security.verificationDevice };
+        } else {
+          microsoftSecurity = savedSecurity;
+        }
       } catch (issue) {
         const field = issue.cause || 'inventory-microsoft-methods';
         api.setError(field, issue.message);
@@ -3635,16 +3613,18 @@
       }
     }
     let proxyFields;
-    if (type === 'claude') {
-      const link = data['inventory-proxy-url']?.trim() || '';
-      const protocol = data['inventory-proxy-protocol'] || '';
+    const proxyLink = data['inventory-proxy-url'] || '';
+    const proxyProtocol = data['inventory-proxy-protocol'] || '';
+    if (type === 'claude' && (!original || proxyLink !== (original.proxyUrl || '') ||
+        proxyProtocol !== (original.proxyProtocol || '') ||
+        [['host', 'proxyHost'], ['port', 'proxyPort'], ['user', 'proxyUser'], ['pass', 'proxyPassword']]
+          .some(([id, key]) => (data['inventory-proxy-' + id] || '') !== String(original[key] || '')))) {
+      const link = proxyLink.trim();
       try {
-        if (link && !protocol) throw new Error('请先选择代理协议');
-        proxyFields = link
-          ? parseRegistrationProxy(link, protocol)
+        proxyFields = link ? parseRegistrationProxy(link, proxyProtocol)
           : {
               proxyUrl: '',
-              proxyProtocol: protocol,
+              proxyProtocol: data['inventory-proxy-host'] ? proxyProtocol : '',
               proxyHost: data['inventory-proxy-host'] || '',
               proxyPort: data['inventory-proxy-port'] || '',
               proxyUser: data['inventory-proxy-user'] || '',
@@ -4260,20 +4240,10 @@
                 ? '相同类型邮箱重复，不覆盖原资料'
                 : '';
           if (!error && ['google', 'apple'].includes(finalType) && !password) error = '缺少密码';
-          if (
-            !error &&
-            ['google', 'apple'].includes(finalType) &&
-            !phone &&
-            !d['inventory-import-no-phone']
-          )
-            error = '需确认未绑定电话';
           if (!error && columns.length > 9) error = '存在多余列，请按模板填写';
-          if (!error && ['apple', 'google'].includes(finalType) && !country) error = '缺少国家';
           if (!error && finalType === 'google' && device.length > 200) error = '登录设备最多 200 个字符';
-          if (!error && finalType === 'claude' && !device) error = '缺少登录设备';
-          if (!error && finalType === 'claude' && !proxyUrl) error = '缺少注册代理链接';
           if (!error && phone && /^[a-z][a-z0-9+.-]*:/i.test(phone) && !phoneCodeUrl(phone)) error = '验证码链接仅支持有效的 HTTP(S) 地址';
-          if (!error && finalType === 'claude') {
+          if (!error && finalType === 'claude' && proxyUrl) {
             try { parseRegistrationProxy(proxyUrl); } catch (issue) { error = issue.message; }
           }
           if (!error && usesAccountLocation(finalType))
@@ -4461,7 +4431,7 @@
             !validAccountImportContext(form, current, entryContext) ||
             (!protectPreview && accountImportFingerprint(current, entryContext, results) !== previewSource)
           ) {
-            api.notify('确认期间导入内容、来源、无电话确认或账号类型已变化，本次未导入');
+            api.notify('确认期间导入内容、来源或账号类型已变化，本次未导入');
             return;
           }
         }

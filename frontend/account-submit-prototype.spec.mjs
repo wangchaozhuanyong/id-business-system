@@ -322,7 +322,6 @@ test('Apple资料批导保留密保生日且新ID余额为零，不修改演示�
   const r = runtime();
   r.open('apple');
   r.preview({
-    'inventory-import-no-phone': 'on',
     'inventory-import-content':
       '邮箱,密码,国家地区,密保1,密保2,密保3,密保生日,应用专用密码\nnew.apple@example.test,Demo-Only,美国,一,二,三,1990-02-01,APP-DEMO'
   });
@@ -399,25 +398,23 @@ for (const [name, csv] of [
     assert([...r.errors.values()].some(Boolean));
   });
 
-test('Apple生日无效或没有确认空电话时均不能批量入库', () => {
-  for (const [birthday, noPhone] of [
-    ['1990-02-30', 'on'],
-    ['1990-02-01', '']
-  ]) {
-    const r = runtime();
-    r.open('apple');
-    const before = r.mailboxes.length;
-    r.preview({
-      'inventory-import-no-phone': noPhone,
-      'inventory-import-content': `邮箱,密码,国家地区,生日\ninvalid.apple@example.test,Demo,美国,${birthday}`
-    });
-    r.requestImport();
-    assert.equal(r.pending, false);
-    assert.equal(r.mailboxes.length, before);
-  }
+test('Apple 批量入库允许空电话和注册地区，拒绝无效生日', () => {
+  const r = runtime();
+  r.open('apple');
+  const before = r.mailboxes.length;
+  r.preview({ 'inventory-import-content': '邮箱,密码,生日\ninvalid.apple@example.test,Demo,1990-02-30' });
+  r.requestImport();
+  assert.equal(r.pending, false);
+  assert.equal(r.mailboxes.length, before);
+  r.preview({ 'inventory-import-content': '邮箱,密码,生日\noptional.apple@example.test,Demo,1990-02-01' });
+  r.requestImport(); r.confirm();
+  const saved = r.mailboxes.find(row => row.email === 'optional.apple@example.test');
+  assert.equal(saved.birthday, '1990-02-01');
+  assert.equal(saved.country || '', '');
+  assert.equal(saved.phone || '', '');
 });
 
-test('GPT 保留旧七列导入；Claude 旧模板缺设备和代理时明确拒绝', () => {
+test('GPT 和 Claude 均保留旧七列导入；设备和代理可留空', () => {
   const r = runtime();
   r.open('gpt');
   r.preview({ 'inventory-import-content': 'legacy.gpt@example.test,Demo,,美国,纽约,2026-10-01T10:30,GPT账号' });
@@ -426,10 +423,11 @@ test('GPT 保留旧七列导入；Claude 旧模板缺设备和代理时明确拒
   assert.equal(r.accounts[0].registered, '2026-10-01T10:30');
   r.open('claude');
   r.preview({ 'inventory-import-content': 'legacy.claude@example.test,Demo,,美国,纽约,2026-10-01T10:30,Claude账号' });
-  r.requestImport();
-  assert.equal(r.pending, false);
-  assert.equal(r.accounts.length, 1);
-  assert([...r.errors.values()].some(Boolean));
+  r.requestImport(); r.confirm();
+  const saved = r.accounts.find(row => row.type === 'claude');
+  assert.equal(saved.city, '纽约');
+  assert.equal(saved.device || '', '');
+  assert.equal(saved.proxyUrl || '', '');
 });
 
 for (const header of ['余额', '使用状态', '养号时长', 'KYC', '录入时间', '未知字段'])
@@ -470,10 +468,10 @@ test('确认窗口打开后修改内容，旧确认不能导入后来输入的�
   assert.equal(r.accounts.length, 0);
 });
 
-test('默认来源或无电话确认发生变化后，之前的预览必须重新核对', () => {
+test('默认来源或账号来源发生变化后，之前的预览必须重新核对', () => {
   for (const changes of [
     { 'inventory-import-source': '线上购买' },
-    { 'inventory-import-no-phone': 'on' }
+    { 'inventory-import-acquisition': 'purchased' }
   ]) {
     const r = runtime();
     r.open('gpt');

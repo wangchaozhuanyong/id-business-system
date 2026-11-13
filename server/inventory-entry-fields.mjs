@@ -14,20 +14,20 @@ const useState = (row) => row?.inventoryState || (row?.used ? 'used' : 'availabl
 const microsoftMethods = new Set(['email', 'authenticator', 'totp', 'passkey', 'sms']);
 const microsoftSecurityKeys = new Set(['loginMode', 'recoveryAccess', 'twoStep', 'verificationMethods',
   'verificationDevice', 'recoveryMailboxId']);
+const microsoftLoginFields = ({ verificationDevice, ...fields } = {}) => fields;
+const validMicrosoftSecurityObject = value => value && typeof value === 'object' && !Array.isArray(value) &&
+  Object.keys(value).every(key => microsoftSecurityKeys.has(key));
 
 function checkMicrosoftFields(row, recoveryMailboxes) {
   const email = emailKey(row.email);
   const auxiliary = emailKey(row.auxiliary);
   if (!validEmail(email)) return '微软邮箱地址格式不正确';
-  if (!text(row.source, 200) || !['正常', '冻结', '封控中'].includes(row.status))
-    return '请选择有效的微软邮箱来源渠道和账号状态';
-  for (const key of ['password', 'phone', 'auxiliary', 'totp', 'appPassword']) {
+  for (const key of ['password', 'auxiliary', 'totp']) {
     if (row[key] !== undefined && (typeof row[key] !== 'string' || row[key].length > 4096))
       return '微软邮箱登录或验证资料格式不正确';
   }
   const security = row.microsoftSecurity;
-  if (!security || typeof security !== 'object' || Array.isArray(security) ||
-      Object.keys(security).some(key => !microsoftSecurityKeys.has(key)))
+  if (!validMicrosoftSecurityObject(security))
     return '请填写微软邮箱登录和验证资料';
   const { loginMode, recoveryAccess, twoStep, verificationMethods, verificationDevice, recoveryMailboxId } = security;
   if (!['password', 'passwordless'].includes(loginMode) ||
@@ -80,7 +80,7 @@ export function checkInventoryEntryFields(previous, next, action) {
     if (!row) continue;
     const old = prior.get(row.id);
     const changed = key => !old || (old[key] ?? '') !== (row[key] ?? '');
-    if (row.acquisitionMethod && !['self_registered', 'purchased'].includes(row.acquisitionMethod))
+    if (changed('acquisitionMethod') && row.acquisitionMethod && !['self_registered', 'purchased'].includes(row.acquisitionMethod))
       return '请选择有效的账号来源';
     if (changed('acquisitionMethod') && row.acquisitionMethod === 'purchased' && row.sourceMailboxId)
       return '已关联注册邮箱的账号须保留原来源记录';
@@ -96,8 +96,17 @@ export function checkInventoryEntryFields(previous, next, action) {
       if ((changed('source') && !text(row.source, 200)) ||
           (changed('status') && !['正常', '冻结', '封控中'].includes(row.status)))
         return '请选择有效的微软邮箱来源渠道和账号状态';
-      const changesSecurity = !old || ['password', 'phone', 'auxiliary', 'totp', 'appPassword'].some(changed) ||
-        !isDeepStrictEqual(old.microsoftSecurity, row.microsoftSecurity);
+      if (['phone', 'appPassword'].some(key => changed(key) && !optionalText(row[key], 4096)))
+        return '微软邮箱登录或验证资料格式不正确';
+      if (row.microsoftSecurity != null && !validMicrosoftSecurityObject(row.microsoftSecurity) &&
+          !isDeepStrictEqual(old?.microsoftSecurity, row.microsoftSecurity))
+        return '请填写微软邮箱登录和验证资料';
+      if (!optionalText(row.microsoftSecurity?.verificationDevice, 200) &&
+          row.microsoftSecurity.verificationDevice !== old?.microsoftSecurity?.verificationDevice)
+        return '微软邮箱验证设备须为不超过 200 个字符的文字';
+      const changesSecurity = !old || ['password', 'auxiliary', 'totp'].some(changed) ||
+        !isDeepStrictEqual(microsoftLoginFields(old.microsoftSecurity ?? undefined),
+          microsoftLoginFields(row.microsoftSecurity ?? undefined));
       if (changesSecurity) {
         const issue = checkMicrosoftFields(row, recoveryMailboxes);
         if (issue) return issue;
@@ -106,13 +115,12 @@ export function checkInventoryEntryFields(previous, next, action) {
     } else {
       if (!entryAction || (old && (old.version || 1) === (row.version || 1) && sameEntryFields(old, row))) continue;
     }
-    if (row.type === 'google') {
-      if (changed('country') && !text(row.country, 100)) return '谷歌邮箱的国家地区必填';
-      if (changed('device') && !optionalText(row.device, 200)) return '谷歌邮箱的登录设备须为不超过 200 个字符的文字';
-    }
-    if (row.type === 'claude' && row.acquisitionMethod !== 'purchased' &&
-        ((changed('device') && !text(row.device, 200)) || (changed('proxyUrl') && !text(row.proxyUrl, 2048))))
-      return 'Claude 账号的登录设备和注册代理链接必填';
+    if (['google', 'apple', 'gpt', 'claude'].includes(row.type) && changed('country') && !optionalText(row.country, 100))
+      return '国家地区须为不超过 100 个字符的文字';
+    if (['google', 'claude'].includes(row.type) && changed('device') && !optionalText(row.device, 200))
+      return '登录设备须为不超过 200 个字符的文字';
+    if (row.type === 'claude' && changed('proxyUrl') && !optionalText(row.proxyUrl, 2048))
+      return '注册代理链接格式不正确';
     if (row.type === 'claude' && row.proxyUrl && changed('proxyUrl')) {
       try {
         const proxy = new URL(row.proxyUrl);

@@ -12,11 +12,11 @@ test('下拉设置晚到保存不重绘新表单，跨页签草稿及失败重�
   const traffic = await interceptDesign(context, { localFixtures: snapshots, skipRechargeAssets: true });
   const release = Promise.withResolvers(), acknowledged = Promise.withResolvers();
   t.after(() => release.resolve());
-  let delayFirst = true, failNext = false;
+  let delayFirst = true, failNext = 0;
   await context.route('**/api/local/settings', async route => {
     if (route.request().method() !== 'PUT') return route.fulfill({ json: snapshots.settings });
-    if (failNext) {
-      failNext = false;
+    if (failNext > 0) {
+      failNext--;
       return route.fulfill({ status: 503, json: { error: '合成保存失败' } });
     }
     const body = route.request().postDataJSON();
@@ -69,7 +69,7 @@ test('下拉设置晚到保存不重绘新表单，跨页签草稿及失败重�
   assert(snapshots.settings.data.customerSources.includes('晚到后新增来源'));
   await tab('标签设置');
   assert.equal(await tagForm.locator('[name="ops-customer-tags-version"]').inputValue(), '2', '保存其他配置后保留该页签草稿并更新文档版本');
-  failNext = true;
+  failNext = 2;
   await save('标签');
   await page.getByText('本机设置未保存，请重试', { exact: true }).waitFor();
   assert(await tagForm.getByRole('button', { name: '移除标签 保留重试标签', exact: true }).isVisible());
