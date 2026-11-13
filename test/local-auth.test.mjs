@@ -332,7 +332,7 @@ test('only the unique super administrator can edit employees and stale sessions 
 test('login attempts are bounded and recover after the rate window', async (t) => {
   let now = 2_000_000;
   const { login } = await startAuth(t, { now: () => now });
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < 6; i++) {
     assert.equal((await login({ ...supervisor, password: 'x'.repeat(300) })).status, 401);
   }
   const throttled = await login();

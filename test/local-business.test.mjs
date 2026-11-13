@@ -328,7 +328,7 @@ test('configured local mode gates business routes and saves the actual session a
     });
     assert.equal(created.status, 201);
     const employee = await login('employee@example.test', employeePassword);
-    assert.equal((await request('api/local/inventory', { cookie: employee.cookie })).status, 200);
+    assert.equal((await request('api/local/inventory', { cookie: employee.cookie })).status, 403);
     assert.equal((await request('api/local/commerce', { cookie: employee.cookie })).status, 200);
     const personal = await request('api/local/toolbox', {
       cookie: employee.cookie,

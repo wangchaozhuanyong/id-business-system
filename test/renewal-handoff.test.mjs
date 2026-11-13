@@ -222,21 +222,25 @@ test('finance sees only unused authorized tenant cards and cannot register the a
 test('ordinary order writes cannot create a second renewal or a new historical rent batch', async t => {
   const { store } = fixture(t);
   const snapshot = store.load('commerce');
-  async function put(data, action) {
-    const request = Readable.from([Buffer.from(JSON.stringify({ version: snapshot.version, data, action }))]);
-    request.url = '/api/local/commerce';
+  async function put(data, action, domain = 'commerce') {
+    const change = { domain: 'commerce', version: snapshot.version, data, action };
+    const request = Readable.from([Buffer.from(JSON.stringify(domain === 'batch' ? [change] : change))]);
+    request.url = '/api/local/' + domain;
     request.method = 'PUT';
     request.headers = { origin, 'content-type': 'application/json' };
     let status, result;
     await handleLocalBusiness(request, { setHeader() {}, writeHead(code) { status = code; },
       end(response) { result = JSON.parse(response); } }, request.url, store, actors.super,
-      { publicOrigin: origin, readOrderCards: async () => [], readOrderOwners: () => Object.values(actors) });
+      { publicOrigin: origin, requireRenewalHandoff: true, readOrderCards: async () => [], readOrderOwners: () => Object.values(actors) });
     return { status, result };
   }
-  const bypass = await put({ ...snapshot.data, orders: [...snapshot.data.orders,
-    { ...initialOrder, id: 'direct-copy', ...finishFields, previousOrderId: initialOrder.id }] }, '新增独立订单');
-  assert.equal(bypass.status, 409);
-  assert.match(bypass.result.error, /先从续费管理提交给财务/);
+  const repeated = { ...snapshot.data, orders: [...snapshot.data.orders,
+    { ...initialOrder, id: 'direct-copy', ...finishFields, previousOrderId: initialOrder.id }] };
+  for (const domain of ['commerce', 'batch']) {
+    const bypass = await put(repeated, '新增独立订单', domain);
+    assert.equal(bypass.status, 409);
+    assert.match(bypass.result.error, /先从续费管理提交给财务/);
+  }
   const batch = await put({ ...snapshot.data, rentBatches: [{ id: 'new-batch', items: [] }] }, '更新订单表头');
   assert.equal(batch.status, 403);
   assert.equal(store.load('commerce').version, snapshot.version);

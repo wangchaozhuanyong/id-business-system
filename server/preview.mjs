@@ -765,6 +765,7 @@ export async function startPreview(
       if (loginRequired && !actor) return forbidden();
       return void localBusiness.handleLocalBusiness(request, response, route, store, actor, {
         publicOrigin: secureOrigin,
+        requireRenewalHandoff: Boolean(handleRenewalHandoff && auth),
         readOrderCards: () => readPoolCards(orderRechargeClient, { includeNumbers: true }),
         readOrderOwners: () => auth?.orderOwners() || [],
         verifyManagedMailbox: readManagedMailbox || verifyMailboxImap,

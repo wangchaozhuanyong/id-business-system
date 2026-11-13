@@ -802,7 +802,9 @@ function checkedRelayClaims(priorInventory, write, actor) {
   return pendingRelayClaimIds(priorInventory, write.data, { action: write.action, actor });
 }
 
-async function saveHttpWrites(store, entries, actor, verifyRelayExtraction, readOrderCards, readOrderOwners, operationId) {
+async function saveHttpWrites(store, entries, actor, operationId, {
+  verifyRelayExtraction, readOrderCards, readOrderOwners, requireRenewalHandoff
+}) {
   let writes = checkWrites(entries);
   const operation = describeWriteOperation(operationId, actor, writes);
   const replay = operation && store.replayWrite?.(operation);
@@ -833,7 +835,7 @@ async function saveHttpWrites(store, entries, actor, verifyRelayExtraction, read
       }
     }
   }
-  const options = { actor, readOrderOwners, operation, [verifiedOrderCards]: orderCards };
+  const options = { actor, readOrderOwners, operation, requireRenewalHandoff, [verifiedOrderCards]: orderCards };
   const inventory = writes.find(({ domain }) => domain === 'inventory');
   if (!inventory) return store.saveBatch(writes, options);
   const current = store.load('inventory');
@@ -1792,10 +1794,10 @@ export function createLocalBusinessStore(databasePath) {
     saveStaffOrder(write, actor, operation) {
       if (actor?.role !== 'employee' || write.domain !== 'commerce' || write.action !== '新增独立订单')
         throw new LocalDataError(403, '当前账号无权登记这类订单');
-      return this.saveBatch([write], { actor, operation, [verifiedOrderCards]: new Map() });
+      return this.saveBatch([write], { actor, operation, requireRenewalHandoff: true, [verifiedOrderCards]: new Map() });
     },
     saveBatch(entries, {
-      actor, verifyAutomaticSnapshot, readOrderOwners, operation, [verifiedRelayClaimIds]: verifiedIds,
+      actor, verifyAutomaticSnapshot, readOrderOwners, operation, requireRenewalHandoff, [verifiedRelayClaimIds]: verifiedIds,
       [verifiedAppleRelayPrimaries]: primaryTargets, [verifiedOrderCards]: cards, [stagedRelayIntake]: relayIntake,
       [verifiedRenewalHandoff]: handoff
     } = {}) {
@@ -1954,7 +1956,7 @@ export function createLocalBusinessStore(databasePath) {
               !['admin', 'super'].includes(actor.role)))
             throw new LocalDataError(403, '历史费率更正须由管理员单独核对');
           const oldOrders = priorCommerce?.orders || [];
-          if (cards && actor && !handoff) {
+          if (requireRenewalHandoff && actor && !handoff) {
             const oldIds = new Set(oldOrders.map(row => row.id));
             const confirmed = new Set(legacyOpeningOrderIds(oldOrders, subscriptions));
             if (commerce.orders.some(row => !oldIds.has(row.id) && directRenewalSource(oldOrders, row, confirmed)))
@@ -2761,8 +2763,9 @@ export async function handleLocalBusiness(
   route,
   store,
   actor,
-  { verifyRelayExtraction, verifyManagedMailbox, publicOrigin, readOrderCards, readOrderOwners } = {}
+  options = {}
 ) {
+  const { verifyManagedMailbox, publicOrigin, readOrderOwners } = options;
   try {
     const domain = route.slice('/api/local/'.length);
     if (domain === 'commerce' || domain === 'batch') response.setHeader('Cache-Control', 'private, no-store');
@@ -2925,8 +2928,7 @@ export async function handleLocalBusiness(
     }
     const body = await readJson(request);
     if (domain === 'batch') {
-      const entries = await saveHttpWrites(store, body, actor, verifyRelayExtraction, readOrderCards, readOrderOwners,
-        request.headers['x-id-operation']);
+      const entries = await saveHttpWrites(store, body, actor, request.headers['x-id-operation'], options);
       return json(response, 200, entries.map((entry) =>
         entry.domain === 'commerce' ? commerceForActor(store, entry, actor) : entry));
     }
@@ -2945,8 +2947,8 @@ export async function handleLocalBusiness(
     if (domain === bitBrowserAddressDomain) {
       return json(response, 200, store.saveBitBrowserAddresses(body, actor));
     }
-    const [entry, ...related] = await saveHttpWrites(store, [{ ...body, domain }], actor, verifyRelayExtraction, readOrderCards, readOrderOwners,
-      request.headers['x-id-operation']);
+    const [entry, ...related] = await saveHttpWrites(store, [{ ...body, domain }], actor,
+      request.headers['x-id-operation'], options);
     const inventory = related.find(item => item.domain === 'inventory');
     const appleBalance = related.find(item => item.domain === 'appleBalance');
     const result = {
