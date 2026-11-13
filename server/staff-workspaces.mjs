@@ -184,6 +184,39 @@ function importCommand(body) {
   return { cards, allowedPlans: allowedPlans(body.plans), planVersion: body.version };
 }
 
+const samePlans = (actual, expected) => Array.isArray(actual) && expected.length === actual.length &&
+  expected.every(plan => actual.includes(plan));
+const cardActions = { import: '导入银行卡', plans: '设置套餐', strict: '修改取卡规则', stop: '停用银行卡' };
+const uncertainCardWrite = '银行卡维护结果待核对，请刷新列表并使用「核对上次操作」';
+const cardIdentity = (row, store) => store.financeCardIdentity(
+  JSON.stringify([row.card_number, row.card_expiry, String(row.card_holder || '').trim()]));
+
+function finishCardWrite(store, actor, domain, audit, count) {
+  const result = { saved: true, ...(count !== undefined && { count }) };
+  store.finishFinanceCardOperation(actor, domain, { audit, result });
+  return result;
+}
+
+function reconcileCards(pending, raw, current, store) {
+  const expected = pending.evidence;
+  const cards = new Map(current.items.map(card => [card.id, card]));
+  if (pending.action === 'stop') return { matches: cards.get(expected.id)?.active === false };
+  if (pending.action !== 'import' && expected.needsChange && current.version <= expected.version)
+    return { matches: false };
+  if (pending.action === 'strict') return { matches: current.strict === expected.strict };
+  if (pending.action === 'plans')
+    return { matches: expected.ids.every(id => samePlans(cards.get(id)?.plans, expected.plans)) };
+  if (pending.action !== 'import') return { matches: false };
+  if (!expected.imported.length) return { matches: true, count: 0 };
+  if (current.version <= expected.version) return { matches: false };
+  const outstanding = new Set(expected.imported);
+  for (const row of raw.cards) {
+    if (/^\d{12,19}$/.test(row.card_number || '') && samePlans(cards.get(Number(row.id))?.plans, expected.plans))
+      outstanding.delete(cardIdentity(row, store));
+  }
+  return outstanding.size === 0 ? { matches: true, count: expected.imported.length } : { matches: false };
+}
+
 export function createStaffWorkspaces({ store, client, publicOrigin, getAuth, readMailbox, readRelayCodes, cardChanged }) {
   const inProgress = new Set();
   const lastMailRead = new Map();
@@ -205,26 +238,70 @@ export function createStaffWorkspaces({ store, client, publicOrigin, getAuth, re
       const items = billingRows(data);
       return { items, hasMore: Number.isSafeInteger(Number(data.total)) ? Number(data.total) > page * 20 : items.length === 20 };
     }
-    if (route === 'finance/cards' && isReadable(request.method))
-      return cardsView(await client.get('/api/admin/cards'));
+    if (route === 'finance/cards' && isReadable(request.method)) {
+      const current = cardsView(await client.get('/api/admin/cards'));
+      const pending = store.pendingFinanceCardOperations().map(row => ({ id: row.id, at: row.at,
+        label: cardActions[row.action], submittedBy: row.actorName, canReview: actor.role === 'super' || row.actorId === actor.id }));
+      return { ...current, pending };
+    }
     if (route !== 'finance/cards' || request.method !== 'POST') fail(405, '此操作不可用');
     requireRecent(getAuth(), request);
     const operation = describeWriteOperation(request.headers['x-id-operation'], actor, [route, body]);
-    if (!operation) fail(400, '请从当前页面提交银行卡维护');
+    const reconciling = body.action === 'reconcile';
+    if (!reconciling && !operation) fail(400, '请从当前页面提交银行卡维护');
     if (inProgress.has('cards')) fail(409, '已有银行卡操作正在处理，请稍后重试');
     inProgress.add('cards');
     try {
-      const current = cardsView(await client.get('/api/admin/cards'));
+      if (!reconciling) {
+        const prior = store.financeCardOperation(operation);
+        if (prior) return prior;
+      }
+      const raw = await client.get('/api/admin/cards');
+      const current = cardsView(raw);
+      if (reconciling) {
+        const pending = store.pendingFinanceCardOperations().find(row => row.id === body.id);
+        if (!pending) fail(409, '该操作已核对或已变化，请刷新列表');
+        if (actor.role !== 'super' && pending.actorId !== actor.id)
+          fail(403, '仅提交人或超级管理员可以核对这次维护');
+        if (body.version !== current.version || body.confirmed !== true)
+          fail(409, '请刷新列表并核对当前银行卡资料');
+        const actual = reconcileCards(pending, raw, current, store);
+        if (!actual.matches) fail(409, '当前银行卡资料与上次提交不一致，结果仍待核对');
+        const result = finishCardWrite(store, actor, pending.domain, ['finance_card_reconciled', cardActions[pending.action]], actual.count);
+        cardChanged?.();
+        return { ...result, reconciled: true };
+      }
       let audit, count;
-      const start = () => store.startFinanceCardOperation(actor, operation, body.action, body.version, current.version);
+      const start = evidence => store.startFinanceCardOperation(actor, operation, body.action, body.version, current.version, evidence);
+      const sendToCardPool = async callback => {
+        try { return await callback(); }
+        catch (error) {
+          if ([400, 409].includes(error.upstreamStatus)) {
+            store.finishFinanceCardOperation(actor, operation.domain, {});
+            fail(409, '银行卡维护未提交，请刷新后核对');
+          }
+          fail(503, uncertainCardWrite);
+        }
+      };
       if (body.action === 'import') {
         const command = importCommand(body);
         checkFrozenCardPoolWrite(store, { kind: 'import', data: command });
-        const replay = start();
-        if (replay) return replay;
-        const result = await client.writeCardMaintenance('POST', '/api/admin/cards/import', command, actor);
+        const existing = new Set(raw.cards.map(row => row.card_number));
+        const seen = new Set();
+        const imported = [];
+        const numbers = [];
+        for (const row of command.cards) {
+          const number = row.card_number;
+          if (seen.has(number)) continue;
+          seen.add(number);
+          numbers.push(store.orderCardFingerprint(number));
+          if (!existing.has(number)) imported.push(cardIdentity(row, store));
+        }
+        const intent = store.financeCardIdentity(JSON.stringify([numbers.sort(), [...command.allowedPlans].sort()]));
+        start({ intent, imported, plans: command.allowedPlans, version: current.version });
+        const result = await sendToCardPool(() => client.writeCardMaintenance('POST', '/api/admin/cards/import', command, actor));
         if (!Number.isSafeInteger(result.imported) || result.imported < 0 || result.imported > command.cards.length)
-          fail(503, '导入结果待核对，请刷新银行卡列表');
+          fail(503, uncertainCardWrite);
         count = result.imported;
         audit = ['finance_card_import', '导入 ' + count + ' 张'];
       } else if (body.action === 'plans' || body.action === 'strict') {
@@ -239,27 +316,31 @@ export function createStaffWorkspaces({ store, client, publicOrigin, getAuth, re
           command.cardIds = [...new Set(ids)];
           command.allowedPlans = allowedPlans(body.plans);
         }
-        const replay = start();
-        if (replay) return replay;
-        const result = await client.writeCardMaintenance('PUT', '/api/admin/cards/plan-policy', command, actor);
+        const evidence = body.action === 'strict' ? { strict: command.strict } :
+          { ids: [...command.cardIds].sort((a, b) => a - b), plans: [...command.allowedPlans].sort() };
+        const needsChange = body.action === 'strict' ? command.strict !== current.strict :
+          current.items.some(card => evidence.ids.includes(card.id) && !samePlans(card.plans, evidence.plans));
+        start({ ...evidence, intent: JSON.stringify(evidence), version: current.version, needsChange });
+        const result = await sendToCardPool(() => client.writeCardMaintenance('PUT', '/api/admin/cards/plan-policy', command, actor));
         if (!Number.isSafeInteger(result.planPolicy?.version) || result.planPolicy.version < current.version)
-          fail(503, '套餐设置结果待核对，请刷新银行卡列表');
+          fail(503, uncertainCardWrite);
         audit = ['finance_card_plans', command.cardIds?.length ? '设置 ' + command.cardIds.length + ' 张' : '修改取卡规则'];
       } else if (body.action === 'stop') {
         const card = current.items.find(row => row.id === body.id);
         if (!card) fail(404, '未找到该银行卡');
-        const replay = start();
-        if (replay) return replay;
+        start({ id: card.id, intent: String(card.id) });
         if (card.active) {
-          const result = await client.stopCardUse(['recharge:' + body.id]);
-          if (result.state === 'pending') fail(409, '这张卡正在使用，请在本笔充值结束后再试');
-          if (result.state !== 'stopped') fail(503, '停用结果待核对，请刷新银行卡列表');
+          const result = await sendToCardPool(() => client.stopCardUse(['recharge:' + body.id]));
+          if (result.state === 'pending') {
+            store.finishFinanceCardOperation(actor, operation.domain, {});
+            fail(409, '这张卡正在使用，请在本笔充值结束后再试');
+          }
+          if (result.state !== 'stopped' || !result.refs?.includes('recharge:' + body.id)) fail(503, uncertainCardWrite);
         }
-        audit = ['finance_card_stop', 'recharge:' + body.id];
+        audit = ['finance_card_stop', '卡尾 ' + card.last4];
       } else fail(400, '请选择可用的银行卡操作');
+      const result = finishCardWrite(store, actor, operation.domain, audit, count);
       cardChanged?.();
-      const result = { saved: true, ...(count !== undefined && { count }) };
-      store.finishFinanceCardOperation(actor, operation, audit, result);
       return result;
     } finally {
       inProgress.delete('cards');

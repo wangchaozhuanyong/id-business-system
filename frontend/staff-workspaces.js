@@ -19,7 +19,7 @@
   let active;
 
   function state(route) {
-    if (!states.has(route)) states.set(route, { draft: {}, page: 1, version: 0 });
+    if (!states.has(route)) states.set(route, { draft: {}, page: 1, reviewPage: { page: 1 }, version: 0 });
     return states.get(route);
   }
 
@@ -44,11 +44,11 @@
   const table = (title, columns, rows) => rows.length
     ? A.table(fields(columns), rows, '', title) : A.empty('暂无记录', '');
 
-  function list(rows, current, tableId, columns) {
+  function list(rows, current, tableId, columns, paginationId = 'staff-list') {
     const size = 20;
     current.page = Math.max(1, Math.min(current.page, Math.ceil(rows.length / size)));
     return table(tableId, columns, rows.slice((current.page - 1) * size, current.page * size)) +
-      (rows.length > size ? window.IDPagination.render({ id: 'staff-list', page: current.page, pageSize: size,
+      (rows.length > size ? window.IDPagination.render({ id: paginationId, page: current.page, pageSize: size,
         pageSizes: [20], total: rows.length }) : '');
   }
 
@@ -149,14 +149,28 @@
     ]);
   }
 
+  function cardReviewSection(current) {
+    const pending = current.result.pending || [];
+    return !pending.length ? '' : '<section class="panel-body">' +
+      heading('待核对的银行卡维护', '核对只读取现有银行卡资料。与提交时的资料一致后，系统会补记结果。', 'staff-card-review') +
+      '<div data-staff-card-reviews>' + cardReviews(current) + '</div></section>';
+  }
+
   function cards(current) {
-    return heading('导入银行卡', '每行一张卡，按卡号、有效期、安全码、持卡人填写，用空格或竖线分隔。持卡人可留空。', 'staff-import-help') +
+    return cardReviewSection(current) + heading('导入银行卡', '每行一张卡，按卡号、有效期、安全码、持卡人填写，用空格或竖线分隔。持卡人可留空。', 'staff-import-help') +
       form('card-import', A.field('银行卡资料', 'staff-lines',
         '<textarea id="staff-lines" name="staff-lines" rows="5" required autocomplete="off" spellcheck="false" data-no-draft></textarea>', true) +
         optionPlans('staff-import-plan', current.draft['card-import']?.plans), '核对并导入') +
       `<div class="toolbar"><div class="toolbar-left"><span>${current.result.strict ? '仅使用已配置套餐的卡' : '未配置套餐的卡按现有规则使用'}</span></div>
       <div class="toolbar-right">${control(current.result.strict ? '取消严格取卡' : '仅使用已配置套餐的卡', 'card-strict')}</div></div>` +
       search('按尾号查找银行卡') + `<div data-staff-list>${cardList(current)}</div>`;
+  }
+
+  function cardReviews(current) {
+    return list(current.result.pending, current.reviewPage, '待核对的银行卡维护', [
+      ['label', '操作'], ['submittedBy', '提交人'], ['at', '提交时间', row => E(time(row.at))],
+      ['actions', '处理', row => row.canReview ? rowAction('核对上次操作', 'card-reconcile', row.id) : '请提交人核对']
+    ], 'staff-card-review-list');
   }
 
   function reconciliation(current) {
@@ -264,7 +278,8 @@
     view.saving = true;
     const control = formNode?.querySelector('[type="submit"]');
     if (control) control.disabled = true;
-    const safeRetry = ['customer', 'renewal', 'manual-order', 'registration'].includes(action) || action.startsWith('card-');
+    const safeRetry = ['customer', 'renewal', 'manual-order', 'registration'].includes(action) ||
+      action.startsWith('card-') && payload.action !== 'reconcile';
     const submittedVersion = payload.version ?? current.version;
     try {
       const body = { ...payload, version: submittedVersion };
@@ -287,14 +302,21 @@
         formNode.reset();
         for (const input of formNode.querySelectorAll('[data-no-draft]')) input.value = '';
       }
-      const changed = await load(view);
-      const text = result.count === undefined ? '保存成功' : '已导入 ' + result.count + ' 张银行卡';
+      const changed = await load(view, payload.action !== 'reconcile');
+      if (changed && payload.action === 'reconcile') {
+        drawCardReviews(view);
+        drawList(view);
+      }
+      const text = result.reconciled ? '已核对银行卡维护结果' :
+        result.count === undefined ? '保存成功' : '已导入 ' + result.count + ' 张银行卡';
       message(view, changed ? text : text + '，列表刷新失败，请点击刷新。');
       return true;
     } catch (error) {
       if (error.status < 500 && !action.startsWith('card-')) view.write = undefined;
       message(view, error.message);
       if (!formNode) A.notify(error.message);
+      if (action.startsWith('card-') && payload.action !== 'reconcile' && error.status >= 500 &&
+          await load(view, false) && current.result?.pending?.length) drawCardReviews(view);
       return false;
     } finally {
       view.saving = false;
@@ -452,6 +474,14 @@
         await write(view, action, { action: 'strict', strict });
       return;
     }
+    if (action === 'card-reconcile') {
+      const pending = current.result.pending?.find(row => row.id === id);
+      if (pending?.canReview && await Security.confirmChange('核对上次操作',
+        '系统将查看当前银行卡和用卡规则。如与上次提交一致，会补记结果。')) {
+        await write(view, action, { action: 'reconcile', id: pending.id, confirmed: true });
+      }
+      return;
+    }
     const card = current.result.items?.find(row => String(row.id) === id);
     if (!card) return;
     if (action === 'card-plan') return cardPlan(view, card);
@@ -467,6 +497,18 @@
         'staff/registration': () => registrationList(view.current), 'staff/finance/cards': () => cardList(view.current) };
       node.innerHTML = builder[view.route]();
     } else draw(view);
+  }
+
+  function drawCardReviews(view) {
+    const host = $('[data-staff-content]', view.host);
+    const section = $('[data-staff-card-reviews]', host);
+    if (!view.current.result.pending.length) {
+      section?.closest('section')?.remove();
+    } else if (section) {
+      section.innerHTML = cardReviews(view.current);
+    } else {
+      host.insertAdjacentHTML('afterbegin', cardReviewSection(view.current));
+    }
   }
 
   function activate() {
@@ -489,6 +531,11 @@
       }
     });
     host.addEventListener('id-pagination-change', event => {
+      if (event.detail.id === 'staff-card-review-list') {
+        view.current.reviewPage.page = event.detail.page;
+        $('[data-staff-card-reviews]', view.host).innerHTML = cardReviews(view.current);
+        return;
+      }
       if (event.detail.id !== 'staff-list') return;
       view.current.page = event.detail.page;
       drawList(view);

@@ -93,6 +93,7 @@
 
   function rowActions(view, row) {
     if (view.finance) {
+      if (row.sourceReview) return button('核对原单', 'review-source', row.id, 'primary');
       if (row.canTake) return button('接手', 'claim', row.id);
       if (row.status === 'processing' && row.assignedToMe)
         return (row.sourceChanged ? '' : button(row.paymentReview ? '核对并登记实付' : '登记实付', 'payment', row.id, 'primary')) +
@@ -301,14 +302,20 @@
     }
     let feedback, timing;
     try {
-      if (['paid', 'transfer'].includes(command.action) && !(await Security?.verify())) return;
+      if ((['paid', 'transfer', 'review-source'].includes(command.action) || form?.hasAttribute('data-verify-return')) &&
+          !(await Security?.verify())) return;
       if (active !== view || (form && !form.isConnected)) return;
       if (form) form.inert = true;
       feedback = A.beginActionFeedback(submitter, '正在登记…');
       const measure = command.action === 'finish' ? 'order-save' : undefined;
       timing = measure ? window.IDSiteTiming?.start(measure) : undefined;
-      const result = await D.saveRenewalHandoff(command, { operationId: crypto.randomUUID(), measure, timing });
+      const review = command.action === 'review-source' ? JSON.stringify(command) : '';
+      if (review && view.sourceReview?.command !== review)
+        view.sourceReview = { command: review, operationId: crypto.randomUUID() };
+      const operationId = review ? view.sourceReview.operationId : crypto.randomUUID();
+      const result = await D.saveRenewalHandoff(command, { operationId, measure, timing });
       if (!result.saved) throw new Error('保存结果待核对，请刷新');
+      if (review) view.sourceReview = undefined;
       timing?.finish();
       if (active !== view) return;
       if (form?.closest('dialog')) {
@@ -327,7 +334,8 @@
         if (!updated) notifyError(view, '已保存，列表暂未刷新。请点击刷新。');
       }
       const messages = { submit: '已提交给财务', claim: '已接手这笔续费', paid: '已交回续费管理，等待员工补资料',
-        return: '已退回业务人员', finish: '订单提交成功', transfer: '已移交，其他财务可接手' };
+        return: '已退回业务人员', finish: '订单提交成功', transfer: '已移交，其他财务可接手',
+        'review-source': '原单已核对，员工可以补资料提交订单' };
       A.notify(messages[command.action] + (result.orderNo ? ' · ' + result.orderNo : ''), { kind: 'success' });
       return true;
     } catch (error) {
@@ -381,7 +389,8 @@
       ['原订单', row.order.number], ['客户', row.order.customer], ['订阅账号', row.order.account], ['付款方式', row.order.payment],
       ...(row.order.originalLast4 ? [['原用卡尾号', row.order.originalLast4]] : [])
     ]) + '<form id="' + id + '" data-renewal-id="' + E(row.id) + '" data-renewal-version="' + row.version +
-      '" data-renewal-draft="' + E(draftKey) + '"><div class="form-grid">' + details +
+      '" data-renewal-draft="' + E(draftKey) + '"' + (returning && row.paymentReview ? ' data-verify-return' : '') +
+      '><div class="form-grid">' + details +
       '</div><div class="form-section"><label class="checkbox-label"><input id="renewal-confirmed" name="renewal-confirmed" type="checkbox" required> ' +
       check + '</label></div><p class="field-error" role="alert" data-renewal-form-error hidden></p></form>',
       A.button('取消', 'drawer-close') + '<button type="submit" class="button primary" form="' + id + '">' + label + '</button>', draftKey);
@@ -409,6 +418,25 @@
         'review') + '</div><label class="checkbox-label"><input name="renewal-confirmed" type="checkbox" required> 已核对以上资料</label>' +
       '<p class="field-error" role="alert" data-renewal-form-error hidden></p></form>',
     A.button('取消', 'drawer-close') + '<button type="submit" class="button primary" form="' + id + '">确认移交</button>');
+  }
+
+  function reviewSourceForm(row) {
+    const id = 'renewal-review-source-form';
+    const review = row.sourceReview;
+    const key = storeKey(id + ':' + row.id);
+    const draft = A.state.drafts.get(key) || {};
+    A.openDrawer('核对原订单', '请核对原订单更正前后的资料和本次付款凭据。确认后员工可以继续补资料。', props([
+      ['原订单', row.order.number], ['客户', row.order.customer], ['订阅账号', row.order.account],
+      ['原到期时间', beijing(row.order.expiry)], ['最新到期时间', beijing(review.expiry)],
+      ...(row.order.payment === '银行卡' ? [['原单用卡尾号', review.originalLast4], ['本次付款用卡尾号', row.last4]] : []),
+      ['已登记实付', [row.amount, row.currency].filter(Boolean).join(' ')], ['付款凭据编号', row.reference]
+    ]) + '<form id="' + id + '" data-renewal-id="' + E(row.id) + '" data-renewal-version="' + row.version +
+      '" data-source-version="' + review.version + '" data-renewal-draft="' + E(key) + '"><div class="form-grid">' +
+      inputField('原单更正原因', 'renewal-reason', draft['renewal-reason'] || '', 'required maxlength="160"') +
+      '</div><div class="form-section"><label class="checkbox-label"><input name="renewal-confirmed" type="checkbox" required> ' +
+      '我已核对本次付款仍对应这张订单</label></div><p class="field-error" role="alert" data-renewal-form-error hidden></p></form>',
+    A.button('取消', 'drawer-close') + '<button type="submit" class="button primary" form="' + id + '">确认并交回员工</button>', key);
+    $('#' + id, $('#drawer')).addEventListener('input', event => preserveForm(event.currentTarget));
   }
 
   function updateCardFields(form, readPool) {
@@ -460,13 +488,14 @@
       if (row && command === 'claim') await save(view, { action: 'claim', id: row.id, version: row.version }, node);
       if (row && ['payment', 'return'].includes(command)) paymentForm(view, row, command === 'return');
       if (row?.canTransfer && command === 'transfer') transferForm(row);
+      if (row?.sourceReview && command === 'review-source') reviewSourceForm(row);
     }
     return true;
   }
 
   function onSubmit(form) {
     const actions = { 'renewal-finish-form': 'finish', 'renewal-payment-form': 'paid', 'renewal-return-form': 'return',
-      'renewal-transfer-form': 'transfer' };
+      'renewal-transfer-form': 'transfer', 'renewal-review-source-form': 'review-source' };
     const action = actions[form.id];
     if (!active || !action) return false;
     if (!form.reportValidity()) return true;
@@ -483,6 +512,7 @@
     }
     if (action !== 'finish') command.confirmed = fields['renewal-confirmed'] === 'on';
     if (action === 'transfer') command.review = fields['renewal-review'] === 'review';
+    if (action === 'review-source') command.sourceVersion = Number(form.dataset.sourceVersion);
     const submitter = form.querySelector('[type="submit"]') || document.querySelector('[form="' + form.id + '"][type="submit"]');
     void save(view, command, submitter, form);
     return true;

@@ -547,7 +547,7 @@ export async function startPreview(
       versions['site-backups'] = siteObservations.backupVersionOf();
     }
     if (rechargeConfig && ['finance', 'super'].includes(actor.role))
-      versions['recharge-card-plans'] = cardPlanEpoch + ':' + cardPlanVersion;
+      versions['recharge-card-plans'] = [cardPlanEpoch, cardPlanVersion, versions['recharge-card-plans']].join(':');
     return versions;
   }
   const dataChanges = store ? createDataChangeStream({
