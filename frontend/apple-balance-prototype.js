@@ -257,7 +257,7 @@
         return fail('请填写大于零的苹果内购代付金额');
       const amount = canonical(order.paidAmount);
       if (prior && prior.appleIdId !== targetId) {
-        if (!reversalAllowed) return fail('已扣款订单更换苹果 ID 需明确冲正原因并确认原余额退回');
+        if (!reversalAllowed) return fail('更换付款 Apple ID 前，请核对原 ID 应加回的金额，确认加回余额并填写原因');
         if (M.compare(M.add(prior.returned, pendingTotal(id)), '0') > 0)
           return fail('原扣款已有待回款或实际回款，不能更换苹果 ID');
         changes.push({
@@ -283,7 +283,7 @@
         const priorAmount = prior?.amount || '0.0000';
         const difference = M.subtract(amount, priorAmount);
         if (M.compare(difference, '0') < 0 && !reversalAllowed)
-          return fail('减少已确认代付金额需明确冲正原因并确认 Apple 余额已退回');
+          return fail('减少代付金额前，请核对原 Apple ID 应加回的金额，确认加回余额并填写原因');
         if (prior && M.compare(amount, M.add(prior.returned, pendingTotal(id))) < 0)
           return fail('更正后的代付金额不能低于已回款和待回款合计');
         if (M.compare(difference, '0') !== 0)
@@ -306,7 +306,7 @@
       next.email = order.email || '';
     } else if (prior) {
       if (!reversalAllowed)
-        return fail('已扣余额的订单更换支付方式需明确冲正，撤单本身不自动恢复余额');
+        return fail('更换付款方式前，请核对原 Apple ID 应加回的金额，确认加回余额并填写原因。撤单会保留原扣款。');
       if (localData && M.compare(M.add(prior.returned, pendingTotal(id)), '0') > 0)
         return fail('原扣款已有待回款或实际回款，不能更换支付方式');
       const remaining = net(prior);

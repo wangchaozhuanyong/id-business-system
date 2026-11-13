@@ -84,32 +84,204 @@
   font-size: 13px;
 }
 
-[data-recharge-view='admin'] :is(.card-plan-toolbar, .card-plan-cell, .card-plan-options) {
+[data-recharge-view='admin'] .card-plan-toolbar {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px 12px;
-}
-
-[data-recharge-view='admin'] .card-plan-toolbar {
   padding-block: var(--toolbar-padding-block, 12px);
 }
 
-[data-recharge-view='admin'] .card-plan-options {
-  margin-block: 12px;
+[data-recharge-view='admin'] #card_plan_mode[aria-pressed='true'] {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+  color: var(--primary);
 }
 
-[data-recharge-view='admin'] .card-plan-cell button {
+[data-recharge-view='admin'] #card_plan_summary {
+  flex: 1 1 18rem;
+  color: var(--text-secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+[data-recharge-view='admin'] .card-plan-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-inline-size: 11rem;
+  max-inline-size: 22rem;
+}
+
+[data-recharge-view='admin'] .card-plan-cell > .btn {
+  min-inline-size: 6rem;
+  padding: 6px 12px !important;
+  line-height: 1.5;
   white-space: normal;
 }
 
-[data-recharge-view='admin'] .card-plan-editor {
-  width: min(420px, calc(100% - 24px));
-  padding: 16px;
-  background: var(--bg-secondary);
-  color: var(--text-primary);
+[data-recharge-view='admin'] .card-plan-select {
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  min-inline-size: 44px;
+  min-block-size: 44px;
+  margin: 0;
+  cursor: pointer;
+}
+
+[data-recharge-view='admin'] :is(.card-plan-select, .card-plan-choice) > input {
+  flex: none;
+  inline-size: 16px;
+  block-size: 16px;
+  margin: 0;
+  accent-color: var(--primary);
+}
+
+[data-recharge-view='admin'] .card-plan-options {
+  --card-plan-label-width: 80px;
+  position: relative;
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0 0 0 calc(var(--card-plan-label-width) + 12px);
+  border: 0;
+}
+
+[data-recharge-view='admin'] .card-plan-options > legend {
+  position: absolute;
+  inset: 0 auto auto 0;
+  inline-size: var(--card-plan-label-width);
+  padding: 12px 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+[data-recharge-view='admin'] .card-plan-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  min-inline-size: 0;
+}
+
+[data-recharge-view='admin'] .card-plan-choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-inline-size: 0;
+  min-block-size: 44px;
+  margin: 0;
+  padding: 8px 12px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text-main);
+  font-size: 13px;
+  line-height: 20px;
+  cursor: pointer;
+}
+
+[data-recharge-view='admin'] .card-plan-choice:has(:checked) {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+  color: var(--primary);
+}
+
+[data-recharge-view='admin'] .card-plan-choice:has(:focus-visible) {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+[data-recharge-view='admin'] .card-plan-options:disabled .card-plan-choice {
+  opacity: .6;
+  cursor: not-allowed;
+}
+
+[data-recharge-view='admin'] #card_pool_import_plans {
+  --card-plan-label-width: 10rem;
+  margin-block-end: 12px;
+}
+
+[data-recharge-view='admin'] #card_pool_import_plans .card-plan-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 116px), 1fr));
+  max-inline-size: 40rem;
+}
+
+[data-recharge-view='admin'] .card-plan-editor {
+  position: fixed;
+  inset: calc(var(--embed-visible-top, 0px) + var(--embed-visible-height, 100dvh) / 2) 0 auto;
+  margin: 0 auto;
+  transform: translateY(-50%);
+  width: min(520px, calc(100% - 24px));
+  max-height: calc(var(--embed-visible-height, 100dvh) - 24px);
+  padding: 0;
+  overflow: hidden;
+  background: var(--surface);
+  color: var(--text-main);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+
+[data-recharge-view='admin'] .card-plan-editor::backdrop {
+  background: rgb(15 23 42 / 32%);
+}
+
+[data-recharge-view='admin'] .card-plan-editor > form {
+  display: flex;
+  flex-direction: column;
+  max-height: calc(var(--embed-visible-height, 100dvh) - 26px);
+}
+
+[data-recharge-view='admin'] .card-plan-editor-header {
+  flex: none;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+[data-recharge-view='admin'] .card-plan-editor-header h3 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 24px;
+}
+
+[data-recharge-view='admin'] .card-plan-editor-body {
+  min-height: 0;
+  padding: 20px;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+[data-recharge-view='admin'] #card_plan_result {
+  margin: 12px 0 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+[data-recharge-view='admin'] #card_plan_result:empty {
+  display: none;
+}
+
+[data-recharge-view='admin'] .card-plan-editor-actions {
+  display: flex;
+  flex: none;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+}
+
+@media (max-width: 600px) {
+  [data-recharge-view='admin'] #card_pool_import_plans {
+    --card-plan-label-width: max(74px, 32%);
+  }
+}
+
+@media (max-width: 380px) {
+  [data-recharge-view='admin'] .card-plan-editor .card-plan-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 [data-recharge-view='admin'] .card-pool-type-feedback:has(#card_pool_type_status:not(:empty)) {
   margin-bottom: 8px;
@@ -122,6 +294,33 @@
 }
 [data-recharge-view='admin'] .card-pool-import-type {
   margin-block-end: 12px;
+}
+[data-recharge-view='admin'] .embedded-field.card-pool-import-type > .title-with-help {
+  grid-column: 1;
+  grid-row: 1;
+  min-block-size: var(--control-height);
+  color: var(--text-secondary);
+}
+[data-recharge-view='admin'] .card-pool-import-type > .title-with-help > label {
+  margin: 0;
+  font-weight: 500;
+}
+@media (max-width: 600px) {
+  [data-recharge-view='admin'] .embedded-field.card-pool-import-type {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  [data-recharge-view='admin'] .card-pool-import-type > #card_pool_import_type {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  [data-recharge-view='admin'] #card_pool_import_plans {
+    padding: 0;
+  }
+  [data-recharge-view='admin'] #card_pool_import_plans > legend {
+    position: static;
+    inline-size: auto;
+    padding: 0 0 8px;
+  }
 }
 [data-recharge-view='admin'] [data-recharge-card-type] > select {
   width: 100%;

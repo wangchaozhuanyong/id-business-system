@@ -4,19 +4,172 @@ import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 const runtime = process.env.ID_RECHARGE_QA_PLAYWRIGHT;
 const { chromium } = await import(runtime ? pathToFileURL(runtime).href : 'playwright');
-import { accountLifecycleSummaries } from '../server/account-lifecycle.mjs';
+import { accountLifecycleSummaries, checkInventoryRenewals } from '../server/account-lifecycle.mjs';
+import { stageAppleOrderFunding } from '../server/apple-funding.mjs';
+import { checkAppleLedger, checkOrderFinancialHistory, checkStockDeliveries } from '../server/local-business-integrity.mjs';
+import { handleLocalBusiness } from '../server/local-business.mjs';
 import {
   claudeHistoricalSales, claudeHistoryPreview, planClaudeHistoryIntake, recordClaudeHistoricalSale, stageClaudeHistoryIntake
 } from '../server/claude-history-intake.mjs';
 import { projectSubscriptions } from '../server/subscription-management.mjs';
 import { fillManualOrderDetails } from '../server/order-completion.mjs';
 import { interceptDesign, origin, separatorSnapshot, toggleDesignTheme } from './helpers/offline-design.mjs';
+import { Readable } from 'node:stream';
 
 const actor = { id: 'fixture-admin', name: '合成管理员', role: 'super' };
 const at = new Date('2026-11-10T08:00:00Z');
 const historyRows = [
   ['ready-history@example.test', '已开通', '', 'Max 20x', '2026-10-31 22:00', '2026-11-30 22:00', '马来西亚']
 ];
+
+test('历史 Claude 苹果内购原单通过编辑保存日期、金额、备注及首位客户', { timeout: 40_000 }, async t => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const email = 'legacy-order@example.test';
+  const appleIdId = 'original-apple';
+  const buyer = { id: 'original-buyer', name: '原买家', active: true, version: 1 };
+  const account = { id: 'legacy-stock', type: 'claude', email, source: '历史入库',
+    inventoryState: 'used', used: true, health: 'normal', status: '冻结',
+    claudeHistory: { phase: 'opened', plan: 'Max 20x', start: '2026-10-31', expiry: '2026-11-30' } };
+  const apple = { id: appleIdId, type: 'apple', email: 'apple@example.test',
+    status: '正常', health: 'normal', appStoreRegion: 'US' };
+  const order = { id: 'legacy-sale', orderNo: 'QA-LEGACY-SALE', accountId: account.id, accountSource: '库存',
+    product: 'Claude Max', plan: 'Max 20x', email, businessType: '成品交付', source: '历史入库',
+    start: '2026-10-31T22:00', expiry: '2026-11-30T22:00', entitlementStatus: 'active',
+    payment: '苹果内购', appleIdId, appleStoreRegion: 'US', paidConfirmed: true, paidAmount: '250', paidCurrency: 'USD',
+    appleFunding: { region: 'US', expected: '250', bound: true }, receiptConfirmed: true,
+    saleAmount: '2100', saleCurrency: 'CNY', costBasis: 'actual', actualCostAmount: '1550', actualCostCurrency: 'CNY',
+    ownerId: actor.id, owner: actor.name, createdById: actor.id, createdBy: actor.name, createdAt: at.toISOString(),
+    financialEvidence: [{ kind: 'payment', payment: '苹果内购', amount: '250', currency: 'USD', cardId: '', at: at.toISOString() },
+      { kind: 'receipt', amount: '2100', currency: 'CNY', at: at.toISOString() }],
+    refunds: [], bankReturns: [], corrections: [], compensations: [], cancellationEvents: [], version: 1 };
+  const ledger = { wallets: [{ id: appleIdId, currency: 'USD', balance: '250', version: 3 }],
+    movements: [{ id: 'opening', kind: 'opening', appleIdId, amount: '500', before: '0', after: '500',
+      versionAfter: 2, reason: '原余额' },
+    { id: 'debit', kind: 'order-charge', orderId: order.id, appleIdId, amount: '-250', before: '500', after: '250',
+      versionAfter: 3 }],
+    allocations: [{ orderId: order.id, appleIdId, amount: '250', returned: '0', version: 1 }], refunds: [] };
+
+  for (const [width, theme] of [[1440, 'light'], [390, 'dark']]) {
+    const oldOrder = structuredClone(order);
+    if (width === 390) {
+      delete oldOrder.version;
+      delete oldOrder.source;
+    }
+    const local = {
+      inventory: { version: 1, data: { accounts: [account], mailboxes: [apple] } },
+      commerce: { version: 1, data: { orders: [oldOrder], customers: [buyer],
+        tenants: [], logs: [], operating: [], rentBatches: [] } },
+      settings: { version: 1, data: { applePaidPrices: { 'Claude Max': { 'Max 20x': { US: '250' } } } } },
+      appleBalance: { version: 1, data: ledger }
+    };
+    const context = await browser.newContext({ viewport: { width, height: 900 } });
+    t.after(() => context.close());
+    const traffic = await interceptDesign(context, { localFixtures: local, actor, skipRechargeAssets: true });
+    const writes = [];
+    const store = {
+      load: domain => structuredClone(local[domain]),
+      featureDocument: () => ({ data: null }),
+      saveBatch(entries, { actor: currentActor }) {
+        assert.equal(currentActor.id, actor.id);
+        assert.deepEqual(entries.map(entry => [entry.domain, entry.action]), [['commerce', '更正订单']]);
+        const [entry] = entries;
+        const prior = local.commerce.data;
+        const next = entry.data;
+        const inventory = local.inventory.data;
+        const completedCustomerOrders = new Set();
+        const error = checkInventoryRenewals(prior, next, inventory, { action: entry.action, actor, completedCustomerOrders }) ||
+          checkStockDeliveries(prior, next, inventory, inventory, actor) ||
+          checkOrderFinancialHistory(prior, next) ||
+          stageAppleOrderFunding(prior.orders, next.orders, ledger, inventory, local.settings.data,
+            entry.action, next.customers, completedCustomerOrders) ||
+          checkAppleLedger(ledger, ledger, inventory, next, prior);
+        if (error) throw Object.assign(new Error(error), { status: 409 });
+        local.commerce = { version: entry.version + 1, data: structuredClone(next) };
+        writes.push(entry.action);
+        return [{ domain: 'commerce', ...local.commerce }];
+      }
+    };
+    await context.route(origin + '/api/local/commerce', async route => {
+      const http = route.request();
+      const request = Readable.from(http.postData() ? [Buffer.from(http.postData())] : []);
+      Object.assign(request, { method: http.method(), url: http.url(), headers: http.headers() });
+      let status, body;
+      await handleLocalBusiness(request, {
+        setHeader() {},
+        writeHead(value) { status = value; },
+        end(value) { body = JSON.parse(value); }
+      }, '/api/local/commerce', store, actor, { publicOrigin: origin });
+      return route.fulfill({ status, json: body });
+    });
+    const page = await context.newPage();
+    page.setDefaultTimeout(5000);
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.goto(origin + '/#/orders/claude');
+    if (theme === 'dark') await toggleDesignTheme(page);
+    const edit = async () => {
+      const row = page.locator('tr[data-row-id="legacy-sale"]');
+      await row.waitFor();
+      await row.locator('[data-action="commerce-order-edit"]').click();
+      return page.locator('#drawer[open] #commerce-order-form');
+    };
+    const save = async () => {
+      const response = page.waitForResponse(res => res.url() === origin + '/api/local/commerce' && res.request().method() === 'PUT');
+      await page.locator('#drawer[open] button[form="commerce-order-form"]').click();
+      const result = await response;
+      assert.equal(result.status(), 200, JSON.stringify(await result.json()));
+      await page.locator('#drawer').waitFor({ state: 'hidden' });
+    };
+
+    let form = await edit();
+    await form.locator('#commerce-expiry').fill('2026-12-01T22:00');
+    await form.locator('#commerce-notes').fill('保留原扣款，先改日期和备注');
+    await form.locator('#commerce-correctionReason').fill('核对原订阅周期');
+    await save();
+    const [edited] = local.commerce.data.orders;
+    assert.equal(edited.customerId ?? '', '');
+    assert.equal(edited.expiry, '2026-12-01T22:00');
+    assert.equal(edited.notes, '保留原扣款，先改日期和备注');
+
+    form = await edit();
+    await form.locator('#commerce-customerId-picker').click();
+    await page.locator('#commerce-customerId-popover [data-value="original-buyer"]').click();
+    await form.locator('#commerce-saleAmount').fill('2150');
+    await form.getByText('订单花费（用于算利润）', { exact: true }).click();
+    await form.locator('#commerce-actualCostAmount').fill('1560');
+    await form.locator('#commerce-correctionReason').fill('按原收款和成本记录补客户并更正金额');
+    await save();
+    const [saved] = local.commerce.data.orders;
+    assert.equal(saved.customerId, buyer.id);
+    assert.equal(saved.accountId, account.id);
+    assert.equal(saved.appleIdId, appleIdId);
+    assert.equal(saved.paidAmount, '250');
+    assert.equal(saved.saleAmount, '2150');
+    assert.equal(saved.actualCostAmount, '1560');
+    assert.equal(saved.expiry, edited.expiry);
+    assert.equal(saved.corrections.at(-1).previous.customerId ?? '', '');
+    assert.equal(saved.source, oldOrder.source);
+    assert.equal(saved.corrections.at(-1).reason, '按原收款和成本记录补客户并更正金额');
+    assert.ok(order.financialEvidence.every(entry => saved.financialEvidence.some(row =>
+      row.kind === entry.kind && row.amount === entry.amount && row.currency === entry.currency)));
+    assert.deepEqual(writes, ['更正订单', '更正订单']);
+    await page.reload();
+    form = await edit();
+    assert.equal(await form.locator('#commerce-renewalCustomer').inputValue(), buyer.name);
+    assert.equal(await form.locator('#commerce-renewalCustomer').getAttribute('readonly'), '');
+    assert.equal(await form.locator('#commerce-customerId-picker').count(), 0);
+    assert.equal(await form.locator('#commerce-saleAmount').inputValue(), '2150');
+    assert.equal(await form.locator('#commerce-expiry').inputValue(), '2026-12-01T22:00');
+    await form.locator('#commerce-notes').fill('已复核原单资料');
+    await save();
+    assert.equal(local.commerce.data.orders[0].customerId, buyer.id);
+    assert.equal(local.commerce.data.orders[0].notes, '已复核原单资料');
+    assert.equal(Object.hasOwn(local.commerce.data.orders[0], 'renewalCustomer'), false);
+    assert.deepEqual(errors, []);
+    assert.deepEqual(traffic.external, []);
+  }
+});
 
 test('Claude 账号历史入口预检、冲突重试、保存和刷新回读', { timeout: 30_000 }, async t => {
   const browser = await chromium.launch();

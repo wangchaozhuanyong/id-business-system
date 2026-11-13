@@ -141,7 +141,7 @@ test('renewal workbench persists decisions, creates a new order and projects cus
     await select('QA-EXPIRED');
     await detail.getByText('@qa_customer').waitFor();
     await page.getByRole('button', { name: '续费提醒话术' }).click();
-    await drawer.getByLabel('提醒话术').fill('合成续费询问。');
+    await drawer.getByLabel('提醒话术', { exact: true }).fill('合成续费询问。');
     await drawer.getByRole('button', { name: '保存话术' }).click();
     await detail.getByRole('button', { name: '复制订阅信息' }).click();
     await page.locator('#toast').getByText('已复制订阅信息', { exact: true }).waitFor();
@@ -234,7 +234,7 @@ test('renewal workbench persists decisions, creates a new order and projects cus
     await page.getByLabel('产品', { exact: true }).selectOption('');
     await row('QA-REFUSE').getByText('剩余 1 天 1 小时', { exact: true }).waitFor();
     await select('QA-REFUSE');
-    await detail.getByText('2026-11-07 17:00', { exact: true }).waitFor();
+    await detail.locator('.renewal-workbench-fields').getByText('2026-11-07 17:00', { exact: true }).waitFor();
     await detail.getByText('@qa_order_only').waitFor();
     await detail.getByRole('button', { name: '返回待办' }).click();
     await row('QA-REFUSE').waitFor();

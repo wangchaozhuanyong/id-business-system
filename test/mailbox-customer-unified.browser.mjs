@@ -68,7 +68,7 @@ test('客户查询显示历史 Apple ID 和当前死卡，Claude 只复制账号
     await page.getByRole('searchbox', { name: '客户姓名或微信' }).fill('合成同名客户');
     await page.getByRole('button', { name: '查询', exact: true }).click();
     await page.getByText('lookup-a', { exact: true }).waitFor();
-    const first = page.locator(`tr[data-row-id="${a.id}"]`);
+    const first = page.locator(`[data-customer-query-candidate="${a.id}"]`);
     await first.getByRole('button', { name: '查看客户', exact: true }).click();
     const summary = page.locator('.customer-query-warnings');
     await summary.getByText('死卡', { exact: true }).waitFor();
@@ -81,8 +81,8 @@ test('客户查询显示历史 Apple ID 和当前死卡，Claude 只复制账号
     }
     await action(page, 'customer-query-copy').click();
     await page.waitForFunction(() => window.fixtureCopiedText === 'lookup-claude@example.test----合成租户');
-    await page.getByRole('tab', { name: '订单历史', exact: true }).click();
-    const oldRow = page.locator('tr[data-row-id="lookup-old"]');
+    await page.getByRole('button', { name: '展开订单历史', exact: true }).click();
+    const oldRow = page.locator('[data-customer-query-row="lookup-old"]');
     await oldRow.getByRole('button', { name: '采用此单提交订单' }).click();
     await page.locator('#commerce-email').waitFor();
     assert.equal(await page.locator('#commerce-email').inputValue(), current.email);

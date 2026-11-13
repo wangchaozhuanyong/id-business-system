@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 import {
   appleRegion, appleAmountUnits, appleFundingIndex, appleFundingEligibility, appleTarget
 } from '../frontend/apple-funding.mjs';
+import { orderFieldChanged } from '../frontend/order-opening.mjs';
 import { toV2DateTimeInput } from '../modules/time/dateTime.ts';
 
 export const emptyAppleLedger = () => ({ wallets: [], allocations: [], movements: [], refunds: [] });
@@ -57,11 +58,21 @@ export function stageAppleOpenings(previous, next, ledger, actor, now = new Date
 
 const usesApple = order => order?.payment === '苹果内购' && Boolean(order.appleIdId);
 const isDraft = order => order?.draft || ['draft', '草稿'].includes(order?.status);
-const sameAppleTarget = (a, b) => appleTarget(a) === appleTarget(b) && a.customerId === b.customerId &&
+const sameAppleTarget = (a, b) => appleTarget(a) === appleTarget(b) &&
   (!a.platformAccountId || a.platformAccountId === b.platformAccountId);
-const immutablePayment = (a, b) => usesApple(b) && a.appleIdId === b.appleIdId && sameAppleTarget(a, b);
 
-export function stageAppleOrderFunding(previous, next, ledger, inventory, settings, action, customers) {
+function conflictsWithAppleBinding(order, other) {
+  if (other.id === order.id || !other.appleIdId || !usesApple(other)) return false;
+  const bound = other.appleFunding?.bound || other.paidConfirmed;
+  const reserved = !isDraft(other) && (!other.cancelled ||
+    other.cancellationEvents?.at(-1)?.appleUnpaidConfirmed !== true);
+  if (!bound && !reserved) return false;
+  const sameTarget = appleTarget(other) === appleTarget(order);
+  return other.appleIdId === order.appleIdId
+    ? !sameTarget || Boolean(other.customerId && other.customerId !== order.customerId) : sameTarget;
+}
+
+export function stageAppleOrderFunding(previous, next, ledger, inventory, settings, action, customers, completedCustomerOrders) {
   const prior = new Map((previous || []).map(row => [row.id, row]));
   const staged = new Map(prior);
   const nextIds = new Set((next || []).map(row => row.id));
@@ -79,9 +90,17 @@ export function stageAppleOrderFunding(previous, next, ledger, inventory, settin
     else delete order.appleFunding;
     if (isDeepStrictEqual(old, order)) continue;
     if (!usesApple(order) && !usesApple(old)) continue;
+    const buyerCompleted = completedCustomerOrders?.has(order.id) && !old?.customerId && customerIds?.has(order.customerId);
+    if (buyerCompleted && orderFieldChanged(order, old, 'payment', 'appleIdId', 'paidConfirmed'))
+      return '补登记客户时请保留原付款方式、Apple ID 和付款状态';
+    const unchangedPaymentTarget = old && usesApple(order) && old.appleIdId === order.appleIdId &&
+      sameAppleTarget(old, order) && ((old.customerId ?? '') === (order.customerId ?? '') || buyerCompleted);
+    if (buyerCompleted && unchangedPaymentTarget && [previous, next].some(orders =>
+      (orders || []).some(other => conflictsWithAppleBinding(order, other))))
+      return '该 Apple ID 或订阅账号已有其他绑定，请核对原付款记录';
     const used = usesApple(old) && (old.paidConfirmed || old.appleFunding?.bound);
     if (used) {
-      if (!immutablePayment(old, order) || (old.appleStoreRegion && old.appleStoreRegion !== order.appleStoreRegion))
+      if (!unchangedPaymentTarget || (old.appleStoreRegion && old.appleStoreRegion !== order.appleStoreRegion))
         return '已使用的苹果 ID 和订阅账号绑定不能改写';
       if (!order.appleFunding && old.paidConfirmed && !order.paidConfirmed)
         order.appleFunding = { region: old.appleStoreRegion || assets.get(old.appleIdId)?.appStoreRegion || '', expected: '', bound: true };
@@ -89,7 +108,7 @@ export function stageAppleOrderFunding(previous, next, ledger, inventory, settin
       continue;
     }
     const wasReserved = usesApple(old) && !old.cancelled && !isDraft(old);
-    if (wasReserved && (!immutablePayment(old, order) || old.plan !== order.plan ||
+    if (wasReserved && (!unchangedPaymentTarget || old.plan !== order.plan ||
         (old.appleStoreRegion && order.appleStoreRegion !== old.appleStoreRegion)))
       return '待付款苹果 ID 已占用，请先确认未付款并取消原订单';
     if (order.cancelled) {
@@ -106,6 +125,11 @@ export function stageAppleOrderFunding(previous, next, ledger, inventory, settin
     if (!usesApple(order)) continue;
     if (isDraft(order)) {
       if (wasReserved || order.paidConfirmed) return '已占用的苹果 ID 不能转回草稿';
+      continue;
+    }
+    if (wasReserved && !order.paidConfirmed && !old.customerId && (!order.customerId || buyerCompleted) &&
+        !orderFieldChanged(order, old, 'paidAmount', 'paidCurrency', 'appleStoreRegion')) {
+      staged.set(order.id, order);
       continue;
     }
     if (customerIds && !customerIds.has(order.customerId)) return '请核对苹果内购订单的实际客户';

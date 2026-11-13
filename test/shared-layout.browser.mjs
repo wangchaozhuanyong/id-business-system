@@ -155,12 +155,7 @@ test('shared layouts preserve alignment, readable controls and stable navigation
     for (const width of [1440, 390, 320]) {
       await page.setViewportSize({ width, height: 900 });
       await go('customers/new');
-      const entryTabs = page.locator('.panel > .tabs[aria-label="录入类型"]');
-      {
-        const tabs = await entryTabs.boundingBox();
-        const first = await box('#commerce-contact-name');
-        assert(first.y - tabs.y - tabs.height >= 16, '表单页签与首行资料应保留间距');
-      }
+      assert.equal(await page.locator('.tabs[aria-label="录入类型"]').count(), 0, '客户与租户通过独立侧栏入口访问');
       const before = await box('#commerce-contact-name');
       await page.locator('summary[aria-label="查看联系方式说明"]').click();
       await page.locator('.title-description:popover-open').waitFor();

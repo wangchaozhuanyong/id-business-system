@@ -204,19 +204,20 @@ test('客户和租户展示明确录入、修改字段，旧记录不冒充当�
   for (const key of ['qq', 'tags', 'services']) assert(c.columns.some((col) => col.id === key));
 });
 
-test('客户与租户录入草稿独立，保存后留在当前页签并更新最近记录', () => {
+test('客户与租户录入独立页面保留草稿，保存后留在当前页面并更新最近记录', () => {
   const r = runtime();
   r.api.state.route = 'customers/new';
   r.api.state.drafts.set('commerce-contact:customer:new', { 'commerce-name': '客户草稿' });
   const customer = r.module.render();
-  assert.match(customer, /aria-selected="true"[^>]*data-tab="customer">客户录入/);
+  assert.doesNotMatch(customer, /aria-label="录入类型"/);
+  assert.match(customer, /name="commerce-kind" value="customer"/);
   assert.match(customer, /value="客户草稿"/);
 
-  r.module.onClick('commerce-contact-entry-tab', { dataset: { tab: 'tenant' } });
+  r.api.state.route = 'customers/new/tenant';
   assert.equal(r.api.state.route, 'customers/new/tenant');
   assert.equal(r.module.matches(r.api.state.route), true);
   const tenant = r.module.render();
-  assert.match(tenant, /aria-selected="true"[^>]*data-tab="tenant">租户录入/);
+  assert.doesNotMatch(tenant, /aria-label="录入类型"/);
   assert.match(tenant, /name="commerce-kind" value="tenant"/);
   assert.doesNotMatch(tenant, /客户草稿/);
   r.contact({ name: '工作台租户' }, 'tenant');
@@ -226,7 +227,7 @@ test('客户与租户录入草稿独立，保存后留在当前页签并更新�
   r.module.render();
   assert.equal(r.tables.at(-1).rows[0].name, '工作台租户');
 
-  r.module.onClick('commerce-contact-entry-tab', { dataset: { tab: 'customer' } });
+  r.api.state.route = 'customers/new';
   assert.match(r.module.render(), /value="客户草稿"/);
   r.contact({ name: '工作台客户', phone: '60123456789' });
   r.confirm();

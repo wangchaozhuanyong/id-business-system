@@ -204,6 +204,7 @@ const navigation = [
       ...orderSubmissionViews,
       ['续费管理', 'workspace/renewals'],
       ['客户录入', 'customers/new'],
+      ['租户录入', 'customers/new/tenant'],
       ['充值码提取', 'workspace/recharge-codes'],
       ['兑换开通', 'workspace/recharge']
     ]
@@ -1089,6 +1090,7 @@ function pageRows(rows, timeOf, direction) {
   return ordered.slice((state.page - 1) * state.pageSize, state.page * state.pageSize);
 }
 function matchesNav(route, base) {
+  if (base === 'customers/new' || base === 'customers/new/tenant') return route === base;
   if (route === 'monitor' && base === 'plugins/websites') return true;
   if (route === 'workspace/order' && base === 'workspace/order/gpt') return true;
   return route === base || route.startsWith(base + '/');

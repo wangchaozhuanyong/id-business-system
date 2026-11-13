@@ -194,10 +194,9 @@ try {
         const box = await drawer.boundingBox();
         const overflow = await drawer.evaluate((el) => el.scrollWidth > el.clientWidth + 1);
         assert(!overflow, `${width} ${theme} ${label} overflow`);
-        if (['totp', 'mail'].includes(label)) {
-          assert.equal(Math.round(box.height), 900, '2FA 使用整高右侧抽屉');
-          assert.equal(Math.round(box.x + box.width), width, '2FA 贴齐视口右侧');
-        } else assert(box.height < 650, `${label} unexpectedly tall: ${box.height}`);
+        assert.equal(Math.round(box.y), 0, `${name} 贴齐视口顶部`);
+        assert.equal(Math.round(box.height), 900, `${name} 使用整高右侧抽屉`);
+        assert.equal(Math.round(box.x + box.width), width, `${name} 贴齐视口右侧`);
         results.push({ viewportWidth: width, theme, tool: label, ...box, overflow });
         await page.screenshot({ path: path.join(output, `after-${label}-${width}-${theme}.png`) });
         if (name === '计算 2FA 验证码') {
@@ -262,13 +261,13 @@ try {
           const saved = drawer.locator('#ops-saved-totp');
           assert.equal(await saved.getByText('未填写签发方', { exact: true }).count(), 0);
           assert.equal(await saved.locator('tbody tr').first().locator('.totp-account-name small').count(), 0);
-          assert.equal(await saved.locator('tbody tr').nth(1).locator('.totp-account-name small').innerText(), 'RFC');
+          assert.equal(await saved.locator('tbody tr').filter({ has: page.locator(`[data-saved-totp-code][data-id="${totpAccounts[1].id}"]`) }).locator('.totp-account-name small').innerText(), 'RFC');
           assert.equal(secretReads.length, 0, 'Listing accounts must not reveal secrets');
           await saved.locator('[data-action="ops-saved-totp-edit"]').first().click();
           const secretField = saved.locator('#ops-totp-save-secret');
           await page.waitForFunction(key => document.querySelector('#ops-totp-save-secret')?.value === key, publicTotpKey);
           assert.equal(await secretField.getAttribute('type'), 'text');
-          assert.equal(secretReads[0].id, totpAccounts[0].id);
+          assert.equal(secretReads[0].id, totpAccounts.at(-1).id);
           assert.equal(await page.evaluate(() => JSON.stringify([...window.IDDesignAPI.state.drafts.values()]).includes('GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ')), false);
           const labelGeometry = await drawer.locator('label[for="ops-totp-secret"],label[for="ops-totp-save-secret"]').evaluateAll(labels => labels.map(label => {
             const range = document.createRange(); range.selectNodeContents(label);
@@ -301,11 +300,11 @@ try {
           await saved.locator('[data-action="ops-saved-totp-edit"]').first().click();
           await saved.locator('[data-action="ops-saved-totp-edit"]').nth(1).click();
           await page.waitForFunction(key => document.querySelector('#ops-totp-save-secret')?.value === key, publicTotpKey);
-          const oldResponse = page.waitForResponse(response => response.url().endsWith('/saved-totp/secret') && response.request().postDataJSON().id === totpAccounts[0].id);
+          const oldResponse = page.waitForResponse(response => response.url().endsWith('/saved-totp/secret') && response.request().postDataJSON().id === totpAccounts.at(-1).id);
           releaseSecret();
           await oldResponse;
           await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-          assert.equal(await saved.locator('#ops-totp-name').inputValue(), totpAccounts[1].name);
+          assert.equal(await saved.locator('#ops-totp-name').inputValue(), totpAccounts.at(-2).name);
           await saved.getByRole('button', { name: '取消', exact: true }).click();
           await saved.getByRole('button', { name: '下一页', exact: true }).click();
           await saved.locator('[data-saved-totp-code] .ops-code').waitFor();
@@ -337,7 +336,8 @@ try {
           await saved.locator('tbody').getByText('从临时查询新增的账号', { exact: true }).waitFor();
           assert.equal(await saved.locator('#ops-saved-totp-form').count(), 0);
           assert.equal(await saved.locator('#ops-saved-totp-search').inputValue(), '');
-          assert.equal(await saved.locator('tbody tr').count(), 2, 'New account must be visible on the final page');
+          assert.equal(await saved.locator('tbody tr').count(), 20, 'New account must be visible on the first page');
+          assert.equal(await saved.locator('tbody tr').first().locator('.totp-account-name strong').innerText(), '从临时查询新增的账号');
           assert.equal(totpWrites.at(-1).secret, saveUri);
           assert.equal(totpWrites.filter(body => body.action === 'create').length, 2, 'Only explicit submit/retry may save');
           assert.equal(await drawer.locator('#ops-totp-secret').inputValue(), saveUri);
@@ -401,14 +401,14 @@ try {
           );
           rows = 24;
           await drawer.getByRole('button', { name: '刷新', exact: true }).click();
-          await drawer.getByText('合成验收-0@example.test', { exact: true }).waitFor();
+          await drawer.getByText('合成验收-23@example.test', { exact: true }).waitFor();
           await drawer
             .locator('[data-mailbox-code]')
             .first()
             .filter({ hasText: 'SYNTHETIC-CODE-ONLY' })
             .waitFor();
           await drawer.getByRole('button', { name: '下一页', exact: true }).click();
-          await drawer.getByText('合成验收-23@example.test', { exact: true }).waitFor();
+          await drawer.getByText('合成验收-0@example.test', { exact: true }).waitFor();
           await drawer.getByRole('tab', { name: '邮件查询', exact: true }).click();
           assert((await drawer.boundingBox()).width <= 860);
           const query = drawer.locator('#ops-managed-mail-query');
@@ -420,19 +420,21 @@ try {
           assert.equal(await query.locator('a[href="https://example.test/verify"]').count(), 6);
           assert.equal(await query.locator('a[href^="javascript:"],img,script').count(), 0);
           assert.equal(await page.evaluate(() => window.mailInjected), undefined);
-          await query.getByRole('button', { name: '一键复制', exact: true }).first().click();
-          assert.equal(await page.evaluate(() => navigator.clipboard.readText()), '123456');
-          await query.getByRole('button', { name: '复制邮件正文', exact: true }).first().click();
-          assert.match(await page.evaluate(() => navigator.clipboard.readText()), /验证码 123456/);
+          const openedMail = query.locator('.mailbox-message[open]').first();
+          await openedMail.getByRole('button', { name: '复制验证码', exact: true }).click();
+          await page.waitForFunction(async () => await navigator.clipboard.readText() === '123456');
+          await openedMail.getByRole('button', { name: '复制邮件正文', exact: true }).click();
+          await page.waitForFunction(async () => /验证码 123456/.test(await navigator.clipboard.readText()));
           await query.locator('#ops-mail-alias-filter').selectOption('alias-1');
           await query.getByText('共 3 封邮件', { exact: true }).waitFor();
           mailFailure = true;
           await query.getByRole('button', { name: '立即刷新', exact: true }).click();
           await query.getByText('合成取信失败，请重试', { exact: false }).waitFor();
-          assert.equal(await query.locator('.guide-item').count(), 3);
+          assert.equal(await query.locator('.mailbox-message').count(), 3);
           mailFailure = false;
           await query.getByRole('button', { name: '重试', exact: true }).click();
-          await query.getByText('共 6 封邮件', { exact: true }).waitFor();
+          await query.getByText('共 3 封邮件', { exact: true }).waitFor();
+          assert.equal(await query.locator('#ops-mail-alias-filter').inputValue(), 'alias-1', '相同结果重试保留已选虚拟邮箱');
           await page.screenshot({
             path: path.join(output, `after-mail-result-${width}-${theme}.png`)
           });
@@ -448,7 +450,7 @@ try {
           assert.equal(await page.locator('#ops-managed-email').inputValue(), 'draft@example.test');
         }
         const populated = await drawer.boundingBox();
-        assert(populated.height <= (['totp', 'mail'].includes(label) ? 900 : 876), `${label} does not constrain populated content`);
+        assert.deepEqual(populated, box, `${name} 展示结果后仍保持右侧抽屉尺寸`);
         assert(
           !(await drawer.evaluate((el) => el.scrollWidth > el.clientWidth + 1)),
           `${label} populated overflow`
@@ -473,7 +475,7 @@ try {
           });
         await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
       }
-      // Opening a different drawer must not inherit the compact tool geometry.
+      // Opening a different drawer must not inherit tool-specific geometry.
       await page.evaluate(() =>
         window.IDDesignAPI.openDrawer(
           '普通详情',

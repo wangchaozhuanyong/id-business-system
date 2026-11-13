@@ -4,6 +4,7 @@ import { accountLifecycleSummary, changeAccountLifecycle, checkInventoryRenewals
 import { checkStockDeliveries, checkOrderFinancialHistory } from '../server/local-business-integrity.mjs';
 import { checkInventoryHistory } from '../server/inventory-history.mjs';
 import { inspectInventoryUsage } from '../server/inventory-usage.mjs';
+import { stageAppleOrderFunding } from '../server/apple-funding.mjs';
 
 const actor = { id: 'admin', name: '隔离管理员', role: 'admin' };
 const now = new Date('2026-11-07T08:00:00Z');
@@ -188,6 +189,88 @@ test('原库存订单不能通过普通更正换邮箱、客户或库存身份�
   const next = structuredClone(f.commerce);
   next.orders.push({ ...next.orders[0], id: 'resale-1' }, { ...next.orders[0], id: 'resale-2' });
   assert.match(checkStockDeliveries(f.commerce, next, f.inventory, f.inventory, actor), /不能重复交付/);
+});
+
+test('Claude 历史成品单可在更正时补首位客户，原库存、期限和财务证据保留', () => {
+  const { commerce, inventory } = lifecycleFixture();
+  const [prior] = commerce.orders;
+  Object.assign(prior, { source: '历史入库', product: 'Claude Max', plan: 'Max 20x', payment: '苹果内购' });
+  delete prior.customerId;
+  const { corrections, refunds, bankReturns, ...previous } = structuredClone(prior);
+  const next = structuredClone(commerce);
+  Object.assign(next.orders[0], {
+    customerId: 'customer-a', notes: '按原销售记录补客户', version: 2,
+    corrections: [{ previous, versionAfter: 2, reason: '按原销售记录核对' }]
+  });
+  const completedCustomerOrders = new Set();
+  const options = { action: '更正订单', actor, completedCustomerOrders };
+  const originalInventory = structuredClone(inventory);
+  assert.equal(checkInventoryRenewals(commerce, next, inventory, options), undefined);
+  assert.deepEqual([...completedCustomerOrders], [prior.id]);
+  assert.equal(checkStockDeliveries(commerce, next, inventory, inventory, actor), undefined);
+  assert.equal(applyAccountOrderLifecycle(commerce, next, inventory, actor, now), false);
+  assert.deepEqual(inventory, originalInventory);
+  assert.equal(checkOrderFinancialHistory(commerce, next), undefined);
+  assert.equal(accountLifecycleSummary(inventory.accounts[0], next, now.getTime()).customerId, 'customer-a');
+
+  for (const unsafe of [
+    { customerId: '不存在' },
+    { customerId: 'customer-b', accountId: '其他账号' },
+    { corrections: [] },
+    { corrections: [{ previous: { ...previous, email: 'other@example.test' }, versionAfter: 2, reason: '错误的原单' }] },
+    { version: 1 }
+  ]) {
+    const rejected = structuredClone(next);
+    Object.assign(rejected.orders[0], unsafe);
+    assert.ok(checkInventoryRenewals(commerce, rejected, inventory, options));
+  }
+  assert.ok(checkInventoryRenewals(commerce, next, inventory, { ...options, actor: { ...actor, role: 'employee' } }));
+  const conflicting = structuredClone(commerce);
+  conflicting.orders.push({ ...prior, id: 'other-order', customerId: 'customer-b' });
+  assert.ok(checkInventoryRenewals(conflicting, next, inventory, options));
+  assert.ok(checkInventoryRenewals(commerce, { ...next, orders: [...next.orders, conflicting.orders.at(-1)] }, inventory, options));
+  const duplicateStock = structuredClone(inventory);
+  duplicateStock.accounts.push({ ...duplicateStock.accounts[0], id: 'duplicate-stock' });
+  assert.match(checkInventoryRenewals(commerce, next, duplicateStock, options), /多个账号/);
+  const reassigned = structuredClone(next);
+  reassigned.orders[0].customerId = 'customer-b';
+  assert.ok(checkInventoryRenewals(next, reassigned, inventory, options));
+});
+
+test('旧库存订单空客户字段的不同写法不拦截无关资料更正', () => {
+  const { commerce, inventory } = lifecycleFixture();
+  delete commerce.orders[0].customerId;
+  const next = structuredClone(commerce);
+  Object.assign(next.orders[0], { customerId: '', notes: '已核对原单' });
+  assert.equal(checkInventoryRenewals(commerce, next, inventory), undefined);
+});
+
+test('历史订单补客户继续使用原 Apple ID，余额记录与其他订单绑定受保护', () => {
+  const { commerce, inventory } = lifecycleFixture();
+  const prior = { ...commerce.orders[0], customerId: undefined, payment: '苹果内购', appleIdId: 'original-wallet',
+    appleStoreRegion: 'US', appleFunding: { region: 'US', expected: '20', bound: true } };
+  const ledger = { wallets: [{ id: prior.appleIdId, currency: 'USD', balance: '30' }],
+    allocations: [{ orderId: prior.id, appleIdId: prior.appleIdId, amount: '20', returned: '0' }] };
+  const originalLedger = structuredClone(ledger);
+  const order = { ...prior, customerId: 'customer-a', notes: '补登记买家' };
+  const accepted = new Set([order.id]);
+  const check = (previous, next, approved) => stageAppleOrderFunding(previous, next, ledger, inventory, {}, '更正订单',
+    commerce.customers, approved);
+  assert.equal(check([prior], [order], accepted), undefined);
+  assert.deepEqual(ledger, originalLedger);
+  assert.match(check([prior], [order]), /绑定不能改写/);
+  assert.match(check([order], [{ ...order, customerId: 'customer-b' }], accepted), /绑定不能改写/);
+  assert.match(check([prior], [{ ...order, appleIdId: 'other-wallet' }], accepted), /保留原付款/);
+  assert.match(check([{ ...prior, appleIdId: '' }], [order], accepted), /保留原付款/);
+  const conflicting = { ...prior, id: 'other-order', email: 'other@example.test', customerId: 'customer-b' };
+  assert.match(check([prior, conflicting], [order, conflicting], accepted), /已有其他绑定/);
+  assert.match(check([prior, conflicting], [order], accepted), /必须保留原订单/);
+
+  const pending = { ...prior, paidConfirmed: false, appleFunding: undefined };
+  assert.equal(check([pending], [{ ...pending, customerId: '', notes: '补备注' }]), undefined);
+  assert.equal(check([pending], [{ ...pending, customerId: 'customer-a' }], accepted), undefined);
+  assert.match(check([pending], [{ ...pending, paidAmount: '1' }]), /实际客户/);
+  assert.deepEqual(ledger, originalLedger);
 });
 
 test('历史订单已结束或撤单时，专用回收仍关闭原交付占用，不删除原状态', () => {

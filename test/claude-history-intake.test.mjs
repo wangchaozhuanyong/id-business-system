@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
+import { createCipheriv, randomBytes } from 'node:crypto';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { Readable } from 'node:stream';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { claudeHistoryPreview, planClaudeHistoryIntake, stageClaudeHistoryIntake } from '../server/claude-history-intake.mjs';
 import { createLocalBusinessStore, handleLocalBusiness } from '../server/local-business.mjs';
 import { accountLifecycleSummary } from '../server/account-lifecycle.mjs';
@@ -185,6 +190,116 @@ test('Claude 历史销售从原库存生成订单，买家可补齐，死号保�
   } finally {
     store.close();
   }
+});
+
+test('历史 Claude 首次补客户经存储事务保存并保留已绑定的 Apple 扣款', { skip: process.env.CI !== 'true' }, async t => {
+  const runtime = fileURLToPath(new URL('../.runtime/', import.meta.url));
+  await mkdir(runtime, { recursive: true });
+  const directory = await mkdtemp(join(runtime, 'historical-claude-buyer-'));
+  const path = join(directory, 'business.sqlite');
+  let store = createLocalBusinessStore(path);
+  t.after(async () => {
+    store?.close();
+    await rm(directory, { recursive: true });
+  });
+  const buyer = { id: 'buyer', name: '合成买家', active: true };
+  const other = { id: 'other-buyer', name: '合成其他客户', active: true };
+  const tenant = { id: 'supplier', name: '合成出租方', active: true };
+  const appleIdId = 'apple-history';
+  const write = (domain, data, action) => ({ domain, version: store.load(domain).version, data, action });
+  const save = (...entries) => store.saveBatch(entries, { actor });
+  save(write('settings', { mailboxTypes: [], costSettings: {},
+    applePaidPrices: { 'Claude Max': { 'Max 20x': { US: '250' } } } }, 'apple_paid_prices_save'),
+    write('inventory', { accounts: [], batches: [], returnRecords: [], importRecords: [], registrationRecords: [],
+      tableSettings: [], undo: [], mailboxes: [
+        { id: 'google', email: opened.email, type: 'google', status: '正常' },
+        { id: appleIdId, email: 'apple-history@example.test', type: 'apple', status: '正常',
+          appStoreRegion: 'US', appleOpeningBalance: '500' }
+      ] }, 'inventory_create'),
+    write('commerce', { orders: [], tenants: [tenant], customers: [buyer, other],
+      operating: [], rentBatches: [], logs: [] }, '新增资料'));
+  store.saveClaudeHistory({ rows: [opened], inventoryVersion: store.load('inventory').version }, actor);
+  const { accounts: [account], inventoryVersion, commerceVersion } = store.claudeHistoricalSales();
+  const { orderId } = store.saveClaudeHistoricalSale({ inventoryVersion, commerceVersion, accountId: account.id,
+    tenantId: tenant.id, customerId: buyer.id, payment: '苹果内购', saleAmount: '2100', saleCurrency: 'CNY',
+    actualCostAmount: '1550', actualCostCurrency: 'CNY' }, actor);
+
+  const commerce = store.load('commerce').data;
+  const [order] = commerce.orders;
+  Object.assign(order, { appleIdId, appleStoreRegion: 'US', paidAmount: '250', paidCurrency: 'USD', paidConfirmed: true,
+    financialEvidence: [{ kind: 'payment', payment: '苹果内购', amount: '250', currency: 'USD', cardId: '', at: at.toISOString() }],
+    version: 2 });
+  const ledger = store.load('appleBalance').data;
+  ledger.wallets[0] = { ...ledger.wallets[0], balance: '250', version: 3 };
+  ledger.movements.push({ id: 'historical-charge', kind: 'order-charge', appleIdId, orderId, amount: '-250',
+    before: '500', after: '250', versionAfter: 3 });
+  ledger.allocations.push({ orderId, appleIdId, amount: '250', returned: '0', version: 1 });
+  save(write('commerce', commerce, '更正订单'), write('appleBalance', ledger, 'apple_order_charge'));
+
+  // Reproduce an older imported document that already had the original Apple debit but lacked the buyer.
+  const oldCommerce = store.load('commerce');
+  delete oldCommerce.data.orders[0].customerId;
+  const nonce = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', await readFile(path + '.key'), nonce);
+  cipher.setAAD(Buffer.from(`commerce:${oldCommerce.version}`));
+  const ciphertext = Buffer.concat([cipher.update(JSON.stringify(oldCommerce.data), 'utf8'), cipher.final()]);
+  const fixture = new DatabaseSync(path);
+  try {
+    fixture.prepare('UPDATE business_document SET payload = ? WHERE domain = ?').run(
+      Buffer.concat([nonce, cipher.getAuthTag(), ciphertext]), 'commerce');
+  } finally {
+    fixture.close();
+  }
+
+  const beforeBalance = store.load('appleBalance');
+  const beforeInventory = store.load('inventory');
+  const correction = (snapshot, customerId) => {
+    const { corrections, refunds, bankReturns, ...previous } = snapshot.data.orders[0];
+    const next = structuredClone(snapshot.data);
+    const version = previous.version + 1;
+    Object.assign(next.orders[0], { customerId, version, notes: '按原账单补资料', expiry: '2026-12-01T22:00',
+      saleAmount: '2150', actualCostAmount: '1560', corrections: [...corrections, {
+        id: 'correction-' + version, previous, versionAfter: version, reason: '核对原单和实际买家', actorId: actor.id
+      }] });
+    return { domain: 'commerce', action: '更正订单', version: snapshot.version, data: next };
+  };
+  const change = correction(store.load('commerce'), buyer.id);
+  const auditCount = store.audit().length;
+  const origin = 'https://history.fixture.test';
+  const request = Readable.from([Buffer.from(JSON.stringify(change))]);
+  Object.assign(request, { method: 'PUT', url: '/api/local/commerce',
+    headers: { origin, 'content-type': 'application/json' } });
+  let status, response;
+  await handleLocalBusiness(request, {
+    setHeader() {},
+    writeHead(value) { status = value; },
+    end(value) { response = JSON.parse(value); }
+  }, '/api/local/commerce', store, actor, { publicOrigin: origin });
+  assert.equal(status, 200, response?.error);
+  const saved = store.load('commerce');
+  assert.equal(response.version, saved.version);
+  const [after] = saved.data.orders;
+  assert.deepEqual([after.id, after.orderNo, after.accountId, after.customerId, after.appleIdId],
+    [orderId, order.orderNo, account.id, buyer.id, appleIdId]);
+  assert.deepEqual([after.expiry, after.saleAmount, after.actualCostAmount, after.notes],
+    ['2026-12-01T22:00', '2150', '1560', '按原账单补资料']);
+  assert.deepEqual(after.appleFunding, { region: 'US', expected: '250', bound: true });
+  assert.deepEqual(after.financialEvidence, oldCommerce.data.orders[0].financialEvidence);
+  assert.equal(after.corrections.at(-1).reason, '核对原单和实际买家');
+  assert.deepEqual(after.corrections.at(-1).previous, change.data.orders[0].corrections.at(-1).previous);
+  assert.equal(store.audit().length, auditCount + 1);
+  assert.throws(() => save(change), { status: 409, message: /已在其他页面更新/ });
+  assert.throws(() => save(correction(saved, other.id)), { status: 409, message: /已登记的客户/ });
+  assert.deepEqual(store.load('commerce'), saved);
+  assert.deepEqual(store.load('appleBalance'), beforeBalance);
+  assert.deepEqual(store.load('inventory'), beforeInventory);
+  assert.equal(store.audit().length, auditCount + 1);
+
+  store.close();
+  store = null;
+  store = createLocalBusinessStore(path);
+  assert.deepEqual(store.load('commerce'), saved);
+  assert.deepEqual(store.load('appleBalance'), beforeBalance);
 });
 
 test('历史入库接口仅接受管理员同源预检和确认', async () => {

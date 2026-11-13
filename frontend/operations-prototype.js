@@ -1932,7 +1932,7 @@
         const search = panel.querySelector('#ops-saved-totp-search');
         search.value = '';
         search.dispatchEvent(new Event('input', { bubbles: true }));
-        paintSavedTotp(panel, snapshot, Math.ceil(snapshot.items.length / (getDraft('saved-totp-page').pageSize || defaultPageSize)));
+        paintSavedTotp(panel, snapshot, 1);
         panel.querySelector('[data-saved-totp-list]').scrollIntoView({ block: 'nearest' });
       } else paintSavedTotp(panel, snapshot);
       notify('已保存 2FA 账号变更');
