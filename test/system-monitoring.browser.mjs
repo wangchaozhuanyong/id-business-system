@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
-import { interceptDesign, origin, settle, spacingSnapshot, toggleDesignTheme } from './helpers/offline-design.mjs';
+import { interceptDesign, origin, separatorSnapshot, settle, spacingSnapshot, toggleDesignTheme } from './helpers/offline-design.mjs';
 import { monitorChannels, monitorRules, monitorCheckDetail } from '../server/monitoring-policy.mjs';
 
 const { chromium } = await import(process.env.ID_RECHARGE_QA_PLAYWRIGHT
@@ -136,7 +136,7 @@ test('监控配置和告警使用实际路由并兼容桌面、手机及深浅�
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
   if (output) await mkdir(output, { recursive: true });
-  for (const width of [1440, 1024, 901, 900, 768, 390, 320]) for (const theme of ['light', 'dark']) {
+  for (const width of [1920, 1440, 1024, 901, 900, 768, 390, 320]) for (const theme of ['light', 'dark']) {
     const { page, context, offline, errors } = await prepare(browser, width);
     await page.goto(origin + route);
     if (theme === 'dark') await toggleDesignTheme(page);
@@ -160,6 +160,54 @@ test('监控配置和告警使用实际路由并兼容桌面、手机及深浅�
     await page.evaluate(() => { location.hash = '#/monitor'; });
     await page.locator('[data-monitor-check]').first().waitFor();
     await pageGeometry(page);
+    const toolbar = page.locator('.system-monitor-check-toolbar');
+    const layout = await toolbar.evaluate(node => {
+      const rect = element => element.getBoundingClientRect();
+      const box = rect(node);
+      const controls = [...node.querySelectorAll('h2, summary, select, button, .system-monitor-read-time')]
+        .filter(element => element.checkVisibility() && rect(element).width > 0);
+      const bounds = controls.map(rect);
+      const centers = bounds.map(({ top, height }) => top + height / 2);
+      return {
+        hasReadTime: controls.some(control => control.matches('.system-monitor-read-time')),
+        hasActions: controls.some(control => control.matches('[data-page-actions] button')),
+        aligned: Math.max(...centers) - Math.min(...centers) <= 2,
+        toolbarWidth: box.width,
+        ...(Math.max(...centers) - Math.min(...centers) > 2 && {
+          controls: bounds.map(({ left, top, width }, index) => [controls[index].tagName, left, top, width])
+        }),
+        fits: bounds.every(({ left, right }) => left >= box.left && right <= box.right + 1),
+        gap: rect(node.nextElementSibling).top - Math.max(...bounds.map(({ bottom }) => bottom))
+      };
+    });
+    assert(layout.hasReadTime && layout.hasActions && layout.fits && layout.gap >= 8, JSON.stringify({ width, theme, ...layout }));
+    if (width >= 1440) assert(layout.aligned, `监控项目工具栏在 ${width}px 下应排成一行：${JSON.stringify(layout)}`);
+    assert.deepEqual((await separatorSnapshot(page)).findings, []);
+    if ([1440, 390].includes(width) && theme === 'light') {
+      const help = toolbar.locator('.title-help'), trigger = help.locator('summary');
+      const table = page.locator('.system-monitor-check-list');
+      assert.equal(await help.getAttribute('open'), null);
+      assert(await trigger.evaluate(node => {
+        const title = node.closest('.section-title-row').querySelector('h2').getBoundingClientRect();
+        const button = node.getBoundingClientRect();
+        return button.left >= title.right && button.left - title.right <= 16 &&
+          Math.abs(button.top + button.height / 2 - title.top - title.height / 2) <= 2;
+      }));
+      if (width === 390) assert((await trigger.boundingBox()).height >= 40);
+      await trigger.focus();
+      const top = await table.evaluate(node => node.getBoundingClientRect().top);
+      await trigger.press('Enter');
+      await help.locator('.title-description').waitFor();
+      assert.equal(await table.evaluate(node => node.getBoundingClientRect().top), top);
+      await page.keyboard.press('Escape');
+      assert.equal(await help.getAttribute('open'), null);
+      const category = toolbar.getByLabel('分类');
+      await category.selectOption('运行');
+      await toolbar.getByText(/^[0-9]+ 项 · 最近更新/).waitFor();
+      assert.equal(await category.inputValue(), '运行');
+      await category.selectOption('');
+      if (output) await toolbar.screenshot({ path: join(output, 'checks-toolbar-' + width + '.png') });
+    }
     if (output && [1440, 390].includes(width)) await page.screenshot({ path: join(output, 'checks-' + width + '-' + theme + '.png') });
     await page.getByRole('tab', { name: '告警记录', exact: true }).click();
     const incident = page.locator('[data-monitor-card="monitor-fixture-1"]:visible, [data-row-id="monitor-fixture-1"]:visible');
