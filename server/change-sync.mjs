@@ -1,7 +1,15 @@
+import { createHash, randomUUID } from 'node:crypto';
 import { watch } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
 export const dataChangeRoute = '/api/local/change-events';
+
+export async function dataSourceIdentity(databasePath) {
+  if (databasePath === ':memory:') return randomUUID();
+  const { dev, ino, birthtimeNs } = await stat(databasePath, { bigint: true });
+  return createHash('sha256').update(`${dev}:${ino}:${birthtimeNs}`).digest('hex');
+}
 
 export function changedVersions(previous, next) {
   return Object.fromEntries(Object.entries(next).filter(([scope, version]) => previous[scope] !== version));
@@ -9,7 +17,7 @@ export function changedVersions(previous, next) {
 
 // Only scope revisions cross the stream. Business records and credentials stay
 // behind their existing read endpoints and permissions.
-export function createDataChangeStream({ getVersions, getActor, subscribe, watchPaths = [], heartbeatMs = 20_000 }) {
+export function createDataChangeStream({ getVersions, getActor, subscribe, source, watchPaths = [], heartbeatMs = 20_000 }) {
   const clients = new Set(), watchers = [];
   let queued = false, closed = false;
   const send = (client, initial = false) => {
@@ -26,7 +34,9 @@ export function createDataChangeStream({ getVersions, getActor, subscribe, watch
       client.versions = versions;
       if (!initial && !Object.keys(changes).length) return;
       if (client.response.writableLength > 64 * 1024) return client.response.end();
-      client.response.write(`event: ${initial ? 'snapshot' : 'change'}\ndata: ${JSON.stringify({ schema: 1, versions: changes })}\n\n`);
+      client.response.write(`event: ${initial ? 'snapshot' : 'change'}\ndata: ${JSON.stringify({
+        schema: 1, ...(initial && source && { source }), versions: changes
+      })}\n\n`);
     } catch {
       // A temporary read failure must not revoke a valid browser session.
       client.response.end();

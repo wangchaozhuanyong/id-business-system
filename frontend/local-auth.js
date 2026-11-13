@@ -53,6 +53,7 @@
       method,
       cache: 'no-store',
       credentials: 'same-origin',
+      ...(method === 'GET' && { signal: AbortSignal.timeout(12_000) }),
       ...(body === undefined
         ? {}
         : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })

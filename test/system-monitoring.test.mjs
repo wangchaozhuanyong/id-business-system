@@ -383,6 +383,37 @@ test('backup and Sheets monitoring reserve their own mount and skip business dat
   assert.match(checks.find(row => row.code === 'api_errors').detail, /样本不足/);
 });
 
+test('Sheets monitoring follows the collector with fresh, missing, recovering and failed receipts', async t => {
+  const { monitor, clock, tick } = fixture(t);
+  let worker, collector;
+  const sources = createMonitoringSources({ monitor, databasePath: '/fixture/state/local-business.sqlite', clock,
+    workerReceiptDirectory: '/fixture/worker', backupReceiptDirectory: '/fixture/collector',
+    readDisk: async () => ({ blocks: 100, bavail: 50 }), readBackupReceipt: async () => null,
+    readReceipt: async () => worker, readSheetsReceipt: async () => collector });
+  t.after(() => sources.close());
+  const status = async () => {
+    tick(1);
+    await sources.tick();
+    return monitor.view().checks.find(row => row.code === 'sheets').status;
+  };
+  const receipt = (fields = {}) => ({ at: clock(), verifiedAt: clock(), failures: 0, integrityFailure: false, ...fields });
+  assert.equal(await status(), 'unknown');
+  worker = receipt({ at: clock() - 20 * minute, verifiedAt: null });
+  collector = receipt();
+  assert.equal(await status(), 'ok');
+  tick(minute); collector = receipt({ failures: 1 });
+  assert.equal(await status(), 'unknown');
+  tick(minute); collector = receipt({ integrityFailure: true });
+  assert.equal(await status(), 'bad');
+  tick(minute); collector = receipt({ verifiedAt: clock() - 20 * minute });
+  assert.equal(await status(), 'unknown');
+  tick(minute); collector = receipt();
+  assert.equal(await status(), 'bad', '事件待确认恢复');
+  assert.equal(await status(), 'ok');
+  tick(16 * minute);
+  assert.equal(await status(), 'bad');
+});
+
 test('reader heartbeats keep quiet order sync healthy without clearing failed imports or review stops', async t => {
   const { monitor, clock, tick } = fixture(t);
   const sources = createMonitoringSources({ monitor, databasePath: '/fixture/data.sqlite', clock,

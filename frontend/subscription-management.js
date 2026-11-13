@@ -9,6 +9,8 @@
     auth_failed: '授权失败', conflict: '资料冲突', not_applicable: '不适用' };
   const scopes = ['inventory', 'commerce', 'tools/mailbox-pool', 'subscription-management'];
   const tableId = 'subscription-accounts';
+  const reviewNotice = '资料在填写期间已更新。当前输入已保留，请重新核对后提交。';
+  const reviewButton = () => `<button class="button" type="button" data-action="subscriptions-review" hidden>重新读取并核对</button>`;
   const scopeLabels = { all: '全部订阅', customer: '客户订阅', owned: '自有订阅',
     upcoming: '即将到期', expired: '已到期', dead: '死号', unlinked: '无邮箱' };
   const recentSortLabels = { dead: '最新死号优先', unlinked: '最新订单优先' };
@@ -37,6 +39,7 @@
   const currentSnapshot = () => snapshot?.product === product() && snapshot.scope === selectedScope() ? snapshot : null;
   const currentRow = id => currentSnapshot()?.items.find(row => row.id === id);
   const filterProduct = () => product() === 'all' ? filters().product || 'all' : product();
+  const editorOpen = form => form.isConnected && form.closest('dialog')?.open;
   function scopeCountText(scope) {
     const count = snapshot?.filterProduct === filterProduct() ? snapshot.scopeCounts?.[scope] : undefined;
     return Number.isSafeInteger(count) && count >= 0 ? count.toLocaleString('zh-CN') : '—';
@@ -318,7 +321,7 @@
         ? A.modules.commerce?.renewalActions?.(item, row.id) || '' : ''}${item.source === 'order' ? textAction(!item.confirmed && ['Gemini', 'Grok'].includes(row.product) ? '前往订单核对' : '查看订单',
         'subscriptions-order', `data-order-id="${esc(item.sourceId)}"`) : '历史资料'}` +
       `${row.status !== 'dead' && item.source === 'order' && !item.confirmed && !item.missingAssociation && !row.conflict && ['GPT', 'Claude'].includes(row.product) ? textAction('确认开通', 'subscriptions-confirm',
-        `data-id="${esc(row.id)}" data-order-id="${esc(item.sourceId)}"`) : ''}</div></td></tr>`).join('');
+        `data-id="${esc(row.id)}" data-order-id="${esc(item.sourceId)}" data-revision="${esc(snapshot.revision)}"`) : ''}</div></td></tr>`).join('');
     A.openDrawer('订阅账号详情', '每次订单独立保留，历史入库不会生成虚构订单。',
       `<div class="property-list"><div class="property-row"><span>邮箱账号</span><strong>${esc(emailAccount(row))}</strong></div>
        ${xAccount ? `<div class="property-row"><span>X 账号</span><strong>${esc(xAccount)}</strong></div>` : ''}
@@ -332,31 +335,32 @@
   }
 
   async function ownerDrawer(row, revision = snapshot?.revision) {
-    if (!row.ownerEligible) return;
+    if (!row.ownerEligible || !revision) return;
     const key = 'subscription-owner:' + row.id;
-    const context = ownerContext = { row, revision, route: A.state.route, actor: D.actor?.()?.id || '' };
+    const draft = A.state.drafts.get(key);
+    const context = ownerContext = { row, route: A.state.route, actor: D.actor?.()?.id || '' };
     const current = () => ownerContext === context && A.state.route === context.route &&
       (D.actor?.()?.id || '') === context.actor;
     A.openDrawer('账号归属人', '归属人与订单录入人分别记录，历史订单保持原值。',
       `<dl class="compact-form-context">
         <div class="field"><dt class="field-label">当前账号</dt><dd class="field-label compact-form-value" id="subscription-owner-account">${esc(row.account || '未登记')}</dd></div>
         <div class="field"><dt class="field-label">当前归属</dt><dd class="field-label compact-form-value" id="subscription-current-owner">${esc(row.ownerName || (row.ownerId ? '姓名待读取' : '未设置'))}</dd></div>
-       </dl><form id="subscription-owner-form" data-subscription-draft="${esc(key)}"><input type="hidden" name="commandId" value="${esc(A.state.drafts.get(key)?.commandId || crypto.randomUUID())}">${A.field('归属人',
+       </dl><form id="subscription-owner-form" data-subscription-draft="${esc(key)}"><input type="hidden" name="revision" value="${esc(draft?.revision || revision)}"><input type="hidden" name="commandId" value="${esc(draft?.commandId || crypto.randomUUID())}">${A.field('归属人',
         'subscription-owner', '<select id="subscription-owner" name="ownerId" required disabled><option value="">正在读取员工…</option></select>', true)}
         <p id="subscription-owner-error" class="inline-notice warning" role="alert" hidden></p><div class="form-footer">${button('取消', 'drawer-close')}
-        <button class="button primary" type="submit" disabled>保存归属</button></div></form>`, '', key, { kind: 'compact-form' });
+        ${reviewButton()}<button class="button primary" type="submit" disabled>保存归属</button></div></form>`, '', key, { kind: 'compact-form' });
     const form = $('#subscription-owner-form'), select = $('#subscription-owner', form);
     try {
       const response = await D.orderOwners();
-      if (!form.isConnected || !current()) return;
+      if (!editorOpen(form) || !current()) return;
       const people = Array.isArray(response.items) ? response.items : [];
-      const draft = A.state.drafts.get(key);
       $('#subscription-current-owner').textContent = row.ownerName || people.find(person => person.id === row.ownerId)?.name || (row.ownerId ? '未找到对应员工' : '未设置');
-      select.innerHTML = A.options([['', people.length ? '请选择员工' : '暂无可选员工'], ...people.map(person => [person.id, person.name])], draft?.ownerId || row.ownerId);
+      select.innerHTML = A.options([['', people.length ? '请选择员工' : '暂无可选员工'], ...people.map(person => [person.id, person.name])], draft?.ownerId ?? row.ownerId);
       select.disabled = !people.length;
       form.querySelector('[type="submit"]').disabled = !people.length;
+      if (draft?.revision && draft.revision !== revision) showReview(form);
     } catch {
-      if (form.isConnected && current()) {
+      if (editorOpen(form) && current()) {
         if (!row.ownerName && row.ownerId) $('#subscription-current-owner').textContent = '暂时无法读取';
         select.innerHTML = '<option value="">员工列表读取失败</option>';
         $('#subscription-owner-error', form).hidden = false;
@@ -365,46 +369,90 @@
     }
   }
 
-  function confirmDrawer(row, orderId) {
+  function confirmDrawer(row, orderId, revision = snapshot?.revision) {
+    const order = row.history.find(item => item.source === 'order' && item.sourceId === orderId);
+    if (!revision || !order || order.confirmed || order.missingAssociation || row.conflict ||
+        row.status === 'dead' || !['GPT', 'Claude'].includes(row.product)) return false;
     const key = `subscription-confirm:${row.id}:${orderId}`;
     const saved = A.state.drafts.get(key) || {};
     A.openDrawer('确认订阅已开通', '请先核对平台实际开通记录；仅有付款记录不能证明开通。',
-      `<form id="subscription-confirm-form" data-subscription-draft="${esc(key)}" data-id="${esc(row.id)}" data-order-id="${esc(orderId)}"><input type="hidden" name="commandId" value="${esc(saved.commandId || crypto.randomUUID())}">
+      `<div class="property-list"><div class="property-row"><span>订单及套餐</span><strong>${esc(order.orderNo || orderId)} · ${esc(order.plan || '待核对')}</strong></div>
+       <div class="property-row"><span>订阅时间</span><strong>${esc(displayDate(order.start))} 至 ${esc(displayDate(order.expiry))}</strong></div></div>
+       <form id="subscription-confirm-form" data-subscription-draft="${esc(key)}" data-id="${esc(row.id)}" data-order-id="${esc(orderId)}">
+       <input type="hidden" name="revision" value="${esc(saved.revision || revision)}"><input type="hidden" name="commandId" value="${esc(saved.commandId || crypto.randomUUID())}">
        <div class="form-grid">${A.field('核对依据', 'subscription-reason', `<textarea id="subscription-reason" name="reason" maxlength="300" required>${esc(saved.reason || '')}</textarea>`, true)}</div>
        <label class="checkbox-label"><input type="checkbox" name="confirmed" ${saved.confirmed ? 'checked' : ''}> <span>已核实该订单实际开通</span></label>
-       <p id="subscription-confirm-error" class="inline-notice warning" hidden></p><div class="form-footer">${button('取消', 'drawer-close')}
-       <button class="button primary" type="submit">确认开通</button></div></form>`, '', key);
+       <p id="subscription-confirm-error" class="inline-notice warning" role="alert" hidden></p><div class="form-footer">${button('取消', 'drawer-close')}
+       ${reviewButton()}<button class="button primary" type="submit">确认开通</button></div></form>`, '', key);
+    if (saved.revision && saved.revision !== revision) showReview($('#subscription-confirm-form'));
+    return true;
   }
 
-  async function settingsDrawer() {
+  async function settingsDrawer(latest) {
     const key = 'subscription-claude-settings';
+    const saved = A.state.drafts.get(key);
+    const draft = /^\d+$/.test(saved?.version || '') ? saved : null;
     A.openDrawer('复制后缀设置', '分别设置邮箱和查询码、完整资料的个人复制后缀。',
-      `<form id="subscription-settings-form" data-subscription-draft="${key}"><input type="hidden" name="version" value="">
+      `<form id="subscription-settings-form" data-subscription-draft="${key}"><input type="hidden" name="version" value="${esc(draft?.version ?? '')}">
        <div id="subscription-settings-status" role="status" hidden></div>
-       <div class="form-grid">${A.field('邮箱和查询码后缀', 'subscription-copy1', '<textarea id="subscription-copy1" name="copy1" maxlength="2000"></textarea>')}
-       ${A.field('完整资料后缀', 'subscription-copy2', '<textarea id="subscription-copy2" name="copy2" maxlength="2000"></textarea>')}</div>
-       <p id="subscription-settings-error" class="inline-notice warning" hidden></p><div class="form-footer">${button('取消', 'drawer-close')}
-       <button class="button primary" type="submit" disabled>保存设置</button></div></form>`, '', key);
+       <div class="form-grid">${A.field('邮箱和查询码后缀', 'subscription-copy1', `<textarea id="subscription-copy1" name="copy1" maxlength="2000" readonly>${esc(draft?.copy1 ?? '')}</textarea>`)}
+       ${A.field('完整资料后缀', 'subscription-copy2', `<textarea id="subscription-copy2" name="copy2" maxlength="2000" readonly>${esc(draft?.copy2 ?? '')}</textarea>`)}</div>
+       <p id="subscription-settings-error" class="inline-notice warning" role="alert" hidden></p><div class="form-footer">${button('取消', 'drawer-close')}
+       ${reviewButton()}<button class="button primary" type="submit" disabled>保存设置</button></div></form>`, '', key);
     const form = $('#subscription-settings-form');
     const read = A.beginRegionRead(form, $('#subscription-settings-status', form), { loadingText: '正在读取复制设置…' });
     try {
-      const result = await D.claudeGoogleCopySettings();
+      const result = latest ?? await D.claudeGoogleCopySettings();
       if (!read.current() || !active()) return;
-      const draft = A.state.drafts.get(key);
-      form.elements.version.value = result.version;
+      if (!Number.isSafeInteger(result?.version)) throw new Error('invalid settings response');
+      form.elements.version.value = draft?.version ?? result.version;
       form.elements.copy1.value = draft?.copy1 ?? result.copy1;
       form.elements.copy2.value = draft?.copy2 ?? result.copy2;
+      form.elements.copy1.readOnly = form.elements.copy2.readOnly = false;
       form.querySelector('[type="submit"]').disabled = false;
+      if (draft && Number(draft.version) !== result.version) showReview(form);
     } catch {
-      if (form.isConnected) { $('#subscription-settings-error', form).hidden = false; $('#subscription-settings-error', form).textContent = '读取设置失败，请关闭后重试。'; }
+      if (editorOpen(form)) showReview(form, '读取设置失败，请重新读取。');
     } finally { read.finish(); }
   }
 
-  async function submit(form) {
-    const key = form.dataset.subscriptionDraft, values = A.readDraft(form), saved = snapshot;
-    const submit = form.querySelector('[type="submit"]');
+  function showReview(form, message = reviewNotice) {
     const notice = form.querySelector('.inline-notice');
-    if (notice) { notice.hidden = true; notice.textContent = ''; }
+    notice.hidden = !message;
+    notice.textContent = message;
+    form.querySelector('[data-action="subscriptions-review"]').hidden = !message;
+  }
+
+  async function reviewLatest(form, trigger) {
+    try {
+      await A.withActionFeedback(trigger, async () => {
+        const settings = form.id === 'subscription-settings-form';
+        const route = A.state.route, id = form.dataset.id || ownerContext?.row.id;
+        const latest = settings ? await D.claudeGoogleCopySettings() : await load();
+        if (!editorOpen(form) || A.state.route !== route) return;
+        if (settings ? !Number.isSafeInteger(latest?.version) : !latest) throw new Error('读取最新资料失败，请重试');
+        const key = form.dataset.subscriptionDraft;
+        A.closeDrawer();
+        A.state.drafts.delete(key);
+        if (settings) return settingsDrawer(latest);
+        const row = currentRow(id);
+        if (row && form.id === 'subscription-owner-form' && row.ownerEligible) return ownerDrawer(row);
+        if (row && form.id === 'subscription-confirm-form') {
+          if (!confirmDrawer(row, form.dataset.orderId)) detail(row);
+        } else A.notify('该账号当前不在列表中，请调整筛选后查看。');
+      }, { pending: '正在读取最新资料…' });
+    } catch {
+      if (editorOpen(form)) showReview(form, '读取最新资料失败，已保留当前输入。');
+    }
+  }
+
+  async function submit(form) {
+    const key = form.dataset.subscriptionDraft, values = A.readDraft(form);
+    const submit = form.querySelector('[type="submit"]');
+    if (submit.disabled) return;
+    let nextReview;
+    const notice = form.querySelector('.inline-notice');
+    showReview(form, '');
     try {
       await A.withActionFeedback(submit, async () => {
         let result;
@@ -413,21 +461,28 @@
           if (!row || context.route !== A.state.route || context.actor !== (D.actor?.()?.id || '') || !values.ownerId)
             throw new Error('请选择归属人并重新核对账号');
           result = await D.subscriptionOwner({ id: row.id, accountId: row.accountId || '', ownerId: values.ownerId,
-            revision: context.revision, commandId: values.commandId });
+            revision: values.revision, commandId: values.commandId });
         } else if (form.id === 'subscription-confirm-form') {
           if (!values.reason?.trim() || !values.confirmed) throw new Error('请填写核对依据并确认实际开通');
           result = await D.subscriptionConfirm({ id: form.dataset.id, orderId: form.dataset.orderId,
-            reason: values.reason, confirmed: true, revision: saved.revision, commandId: values.commandId });
+            reason: values.reason, confirmed: true, revision: values.revision, commandId: values.commandId });
         } else {
           result = await D.saveClaudeGoogleCopySettings({ version: Number(values.version), copy1: values.copy1, copy2: values.copy2 });
         }
         const stillCurrent = form.id === 'subscription-owner-form'
           ? ownerContext?.route === A.state.route && ownerContext.actor === (D.actor?.()?.id || '') : active();
-        if (!form.isConnected || !stillCurrent) return;
-        const unchanged = JSON.stringify(A.readDraft(form)) === JSON.stringify(values);
-        if (unchanged) { A.closeDrawer(); A.state.drafts.delete(key); }
-        else {
-          if (form.elements.commandId) form.elements.commandId.value = crypto.randomUUID();
+        if (!stillCurrent) return;
+        const open = editorOpen(form);
+        const current = open ? A.readDraft(form) : A.state.drafts.get(key);
+        const unchanged = current && JSON.stringify(current) === JSON.stringify(values);
+        if (unchanged) {
+          if (open) A.closeDrawer();
+          A.state.drafts.delete(key);
+        } else if (open) {
+          if (form.elements.commandId) {
+            form.elements.commandId.value = crypto.randomUUID();
+            nextReview = '本次已保存，后续输入已保留。请重新核对后提交。';
+          }
           if (form.id === 'subscription-settings-form' && Number.isSafeInteger(result?.version))
             form.elements.version.value = result.version;
           A.state.drafts.set(key, A.readDraft(form));
@@ -436,7 +491,17 @@
         if (form.id !== 'subscription-settings-form' && active()) void load();
       }, { pending: '正在保存…' });
     } catch (issue) {
-      if (form.isConnected && notice) { notice.hidden = false; notice.textContent = issue.message || '保存失败，请重试'; }
+      if (editorOpen(form)) {
+        if (issue.status === 409) nextReview = issue.code === 'DATA_SOURCE_CHANGED' ? issue.message : reviewNotice;
+        else {
+          notice.hidden = false;
+          notice.textContent = issue.message || '保存失败，请重试';
+        }
+      }
+    }
+    if (editorOpen(form) && nextReview) {
+      submit.disabled = true;
+      showReview(form, nextReview);
     }
   }
 
@@ -480,13 +545,25 @@
       else if (action === 'subscriptions-copy') void copy(node);
       else if (action === 'subscriptions-copy-short') void copy(node, 'short');
       else if (action === 'subscriptions-settings') void settingsDrawer();
+      else if (action === 'subscriptions-review') {
+        const form = node.closest('form');
+        if (form) A.confirmAction('读取最新资料', '继续会用最新资料打开表单，并清除这份草稿。', () => {
+          if (editorOpen(form)) void reviewLatest(form, node);
+        }, '读取最新资料');
+      }
       else if (action === 'subscriptions-contacts') {
         const row = currentRow(node.dataset.id), contacts = A.modules.commerce?.subscriptionContacts?.(row?.contacts);
         if (contacts) A.openDrawer('客户联系方式', '', `<div class="property-list">${contacts}</div>`, button('关闭', 'drawer-close'));
       }
       else if (action === 'subscriptions-detail') { const row = currentRow(node.dataset.id); if (row) detail(row); }
       else if (action === 'subscriptions-owner') { const row = currentRow(node.dataset.id); if (row) void ownerDrawer(row); }
-      else if (action === 'subscriptions-confirm') { const row = currentRow(node.dataset.id); if (row) confirmDrawer(row, node.dataset.orderId); }
+      else if (action === 'subscriptions-confirm') {
+        const row = currentRow(node.dataset.id);
+        if (!row || node.dataset.revision !== snapshot?.revision) {
+          if (row) detail(row); else A.closeDrawer();
+          A.notify('订单资料已更新，请重新核对。');
+        } else confirmDrawer(row, node.dataset.orderId, node.dataset.revision);
+      }
       else if (action === 'subscriptions-order') { A.closeDrawer(); A.go('orders/detail/' + encodeURIComponent(node.dataset.orderId)); }
       else if (action === 'subscriptions-more') {
         const row = currentRow(node.dataset.id);

@@ -8,14 +8,15 @@ const overviewSource = await readFile(new URL('../frontend/overview-prototype.js
 const reply = (data, status = 200) => ({ ok: status >= 200 && status < 300, status, json: async () => structuredClone(data) });
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
-function client(fetch = async () => reply({ success: true })) {
+function client(fetch = async () => reply({ success: true }), { signal = AbortSignal, dataSource } = {}) {
   let locked = 0;
   const window = { fetch, IDLocalAuth: { lock: () => { locked++; } } };
   const actor = { id: 'fixture-actor', role: 'admin', name: '测试操作员' };
   const document = { querySelector: (selector) => ({
-    content: selector.includes('id-local-actor') ? encodeURIComponent(JSON.stringify(actor)) : 'required'
+    content: selector.includes('id-local-actor') ? encodeURIComponent(JSON.stringify(actor)) :
+      selector.includes('id-data-source') ? dataSource : 'required'
   }) };
-  runInNewContext(source, { window, document, structuredClone });
+  runInNewContext(source, { window, document, structuredClone, AbortSignal: signal });
   return { api: window.IDLocalData, window, document, locked: () => locked };
 }
 
@@ -60,6 +61,62 @@ test('a snapshot reconciles missed writes and an old HTTP result cannot hide a n
   api.acceptChangeVersions({ commerce: '3' }, { reconcile: true });
   assert.deepEqual(Object.keys(api.pendingChangeVersions(['commerce'])), []);
   assert(changes.every(scopes => scopes.length === 1 && scopes[0] === 'commerce'));
+});
+
+test('only a regression from the authoritative stream identifies a restored counter', async () => {
+  const { api } = client(async () => reply({ version: 20, data: {} }));
+  await api.load('commerce');
+  assert.notEqual(api.acceptChangeVersions({ commerce: '19' }, { reconcile: true }), false,
+    'a snapshot can be buffered before a newer HTTP read');
+  assert.equal(api.acceptChangeVersions({ commerce: '7' }, { reconcile: true }), false);
+  assert.notEqual(api.acceptChangeVersions({ commerce: '19' }, { reconcile: true }), false);
+});
+
+test('bounded reads abort even while the document body is still arriving', async () => {
+  const controller = new AbortController();
+  let fetches = 0;
+  const { api } = client(async (url, options) => {
+    fetches++;
+    assert.equal(url, '/api/local/subscriptions/list');
+    return { ok: true, json: () => new Promise((_resolve, reject) => {
+      options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true });
+    }) };
+  }, { signal: { timeout: ms => { assert.equal(ms, 12_000); return controller.signal; } } });
+  const result = assert.rejects(api.subscriptions({ page: 1 }), /读取超时/);
+  await flush();
+  controller.abort();
+  await result;
+  assert.equal(fetches, 1);
+});
+
+test('an outdated page carries its source on writes and stops submitting after a restore rejection', async () => {
+  let requestCount = 0, noticeCount = 0;
+  const { api, window } = client(async (_url, options) => {
+    requestCount++;
+    assert.equal(options.headers['X-ID-Data-Source'], 'fixture-previous-source');
+    return reply({ code: 'DATA_SOURCE_CHANGED' }, 409);
+  }, { dataSource: 'fixture-previous-source' });
+  window.IDChangeSync = { sourceChanged: () => noticeCount++ };
+  await assert.rejects(api.save('commerce', 3, {}), { code: 'DATA_SOURCE_CHANGED' });
+  await assert.rejects(api.saveExpenseReceipt({ action: 'void', version: 4 }), { code: 'DATA_SOURCE_CHANGED' });
+  assert.equal(requestCount, 1);
+  assert.equal(noticeCount, 1);
+  assert.equal(api.writesPending(), false);
+});
+
+test('expense revisions invalidate both the receipt view and the overview profit cache', async () => {
+  let version = 2;
+  const { api } = client(async () => reply({ version, items: [] }));
+  await api.queries.read('overview', 'fixture', async () => ({}));
+  await api.queries.read('order-expense-receipts', 'receipts', () => api.expenseReceipts());
+  api.acceptChangeVersions({ 'order-expense-receipts': '2' }, { reconcile: true });
+  assert.equal(api.queries.peek('overview', 'fixture').stale, false);
+  api.acceptChangeVersions({ 'order-expense-receipts': '3' });
+  assert.equal(api.queries.peek('overview', 'fixture').stale, true);
+  assert.equal(api.queries.peek('order-expense-receipts', 'receipts').stale, true);
+  version = 3;
+  await api.queries.read('order-expense-receipts', 'receipts', () => api.expenseReceipts());
+  assert.deepEqual(Object.keys(api.pendingChangeVersions(['order-expense-receipts'])), []);
 });
 
 test('metadata revisions are acknowledged without accepting a later unseen change', () => {

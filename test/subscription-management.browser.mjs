@@ -24,7 +24,9 @@ test('四类订阅页面使用独立状态、真实复制入口与历史兼容�
         id: 'synthetic-unlinked-order', orderNo: 'TEST-UNLINKED', email: '', entitlementStatus: 'active' };
       fixtures.commerce.data.orders.push(old);
       const intercepted = await interceptDesign(context, { localFixtures: fixtures, actor, skipRechargeAssets: true });
-      let confirmed = false, owner = '', version = 1, listReads = 0;
+      const conflictCases = width === 1440 && theme === 'light';
+      let confirmed = false, owner = '', version = 1, listReads = 0, plan;
+      let copySettings = { version: 1, copy1: '原短后缀', copy2: '原完整后缀' };
       const commands = [];
       await context.route('**/api/local/subscriptions/list', route => {
         listReads++;
@@ -39,7 +41,7 @@ test('四类订阅页面使用独立状态、真实复制入口与历史兼容�
             total: 1, accountCount: 0, page: 1, pageSize: request.pageSize, counts: {}, scopeCounts: { all: 1, unlinked: 1 },
             revision: 'unlinked-revision', now: '2026-11-10T02:00:00Z' } });
         }
-        const record = { source: 'order', sourceId: 'synthetic-order', orderNo: 'TEST-ORDER', plan: plans[request.product],
+        const record = { source: 'order', sourceId: 'synthetic-order', orderNo: 'TEST-ORDER', plan: plan || plans[request.product],
           start: '2026-11-01 10:00', expiry: '2026-12-01 12:30', status, remainingDays: 21,
           operatorName: actor.name, confirmed: status !== 'pending' };
         const row = { id: 'synthetic-account', product: request.product, account: request.product === 'Grok' ? '@synthetic' : 'synthetic@example.test',
@@ -60,15 +62,30 @@ test('四类订阅页面使用独立状态、真实复制入口与历史兼容�
         return route.fulfill({ json: { text: '邮箱账号：synthetic@example.test\n邮箱密码：SYNTHETIC', omitted: ['邮箱 2FA'] } });
       });
       await context.route('**/api/local/subscriptions/confirm', route => {
-        commands.push(route.request().postDataJSON()); confirmed = true; version++;
+        const command = route.request().postDataJSON();
+        commands.push(command);
+        if (command.revision !== 'revision-' + version)
+          return route.fulfill({ status: 409, json: { error: '订阅已变化' } });
+        confirmed = true; version++;
         return route.fulfill({ json: { saved: true } });
       });
       await context.route('**/api/local/subscriptions/owner', route => {
-        commands.push(route.request().postDataJSON()); owner = 'synthetic-owner'; version++;
+        const command = route.request().postDataJSON();
+        commands.push(command);
+        if (command.revision !== 'revision-' + version)
+          return route.fulfill({ status: 409, json: { error: '归属已变化' } });
+        owner = command.ownerId; version++;
         return route.fulfill({ json: { saved: true } });
       });
-      await context.route('**/api/local/claude-google-subscriptions/copy-settings', route =>
-        route.fulfill({ json: { version: 1, copy1: '原短后缀', copy2: '原完整后缀' } }));
+      await context.route('**/api/local/claude-google-subscriptions/copy-settings', route => {
+        if (route.request().method() === 'GET') return route.fulfill({ json: copySettings });
+        const command = route.request().postDataJSON();
+        commands.push(command);
+        if (command.version !== copySettings.version)
+          return route.fulfill({ status: 409, json: { error: '设置已变化' } });
+        copySettings = { ...command, version: copySettings.version + 1 };
+        return route.fulfill({ json: copySettings });
+      });
       await context.addInitScript(() => {
         window.syntheticCopies = [];
         Object.defineProperty(navigator, 'clipboard', { value: { writeText: async value => window.syntheticCopies.push(value) } });
@@ -77,6 +94,11 @@ test('四类订阅页面使用独立状态、真实复制入口与历史兼容�
       page.on('pageerror', error => errors.push(error.message));
       page.setDefaultTimeout(8000);
       await page.clock.install({ time: new Date('2026-11-10T02:00:00Z') });
+      const close = () => page.locator('#drawer[open] [data-action="drawer-close"]').first().click();
+      const reread = async form => {
+        await form.getByRole('button', { name: '重新读取并核对' }).click();
+        await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
+      };
       await page.goto(origin + '/#/data-management/claude-google-subscriptions');
       await page.waitForURL('**/#/subscriptions/claude');
       await page.locator('#subscription-list tbody tr[data-row-id]').waitFor();
@@ -153,12 +175,58 @@ test('四类订阅页面使用独立状态、真实复制入口与历史兼容�
       await page.locator('#drawer [data-action="subscriptions-confirm"]').click();
       await page.locator('#subscription-reason').fill('合成核对依据');
       await page.locator('#subscription-confirm-form input[name="confirmed"]').check();
+      if (conflictCases) {
+        const form = page.locator('#subscription-confirm-form');
+        const original = version;
+        version++; plan = 'Max 5x';
+        await page.evaluate(() => window.IDDesignModules.find(module => module.id === 'subscription-management')
+          .onDataChanges(['commerce']));
+        await form.locator('[type="submit"]').click();
+        await form.getByRole('alert').filter({ hasText: /当前输入已保留/ }).waitFor();
+        assert.equal(commands.at(-1).revision, 'revision-' + original);
+        assert.equal(await page.locator('#subscription-reason').inputValue(), '合成核对依据');
+        assert.equal(confirmed, false);
+        await form.evaluate(node => node.requestSubmit());
+        assert.equal(commands.filter(command => command.confirmed).length, 1);
+        await reread(form);
+        await page.waitForFunction(revision => document.querySelector('#subscription-confirm-form [name="revision"]')?.value === revision,
+          'revision-' + version);
+        await page.locator('#drawer').getByText('TEST-ORDER · Max 5x', { exact: true }).waitFor();
+        assert.equal(await form.locator('[name="confirmed"]').isChecked(), false);
+        await page.locator('#subscription-reason').fill('合成核对依据');
+        await form.locator('[name="confirmed"]').check();
+      }
       await page.locator('#subscription-confirm-form [type="submit"]').click();
       await page.locator('#subscription-list').getByText('有效', { exact: true }).waitFor();
-      await page.locator('[data-action="subscriptions-more"]').click();
-      await page.getByRole('menuitem', { name: '设置归属人' }).click();
+      const openOwner = async () => {
+        await page.locator('[data-action="subscriptions-more"]').click();
+        await page.getByRole('menuitem', { name: '设置归属人' }).click();
+      };
+      await openOwner();
       await page.locator('#subscription-owner:not([disabled])').waitFor();
       await page.locator('#subscription-owner').selectOption('synthetic-owner');
+      if (conflictCases) {
+        const form = page.locator('#subscription-owner-form');
+        const original = version;
+        await close();
+        version++; owner = actor.id;
+        await page.evaluate(() => window.IDDesignModules.find(module => module.id === 'subscription-management')
+          .onDataChanges(['subscription-management']));
+        await openOwner();
+        await form.getByRole('alert').filter({ hasText: /当前输入已保留/ }).waitFor();
+        assert.equal(await form.locator('[name="revision"]').inputValue(), 'revision-' + original);
+        assert.equal(await form.locator('select').inputValue(), 'synthetic-owner');
+        await form.locator('[type="submit"]').click();
+        await form.locator('[type="submit"]:disabled').waitFor();
+        assert.equal(commands.at(-1).revision, 'revision-' + original);
+        assert.equal(owner, actor.id);
+        await reread(form);
+        await page.waitForFunction(revision => document.querySelector('#subscription-owner-form [name="revision"]')?.value === revision,
+          'revision-' + version);
+        await form.locator('select:not([disabled])').waitFor();
+        assert.equal(await form.locator('select').inputValue(), actor.id);
+        await form.locator('select').selectOption('synthetic-owner');
+      }
       await page.locator('#subscription-owner-form [type="submit"]').click();
       const ownerName = page.locator('#subscription-list').getByText('合成归属人', { exact: true });
       await ownerName.waitFor({ state: 'attached' });
@@ -167,6 +235,29 @@ test('四类订阅页面使用独立状态、真实复制入口与历史兼容�
       await ownerName.waitFor();
       assert.ok(commands.some(command => command.confirmed && command.reason === '合成核对依据'));
       assert.ok(commands.some(command => command.ownerId === 'synthetic-owner'));
+      if (conflictCases) {
+        const form = page.locator('#subscription-settings-form');
+        const openSettings = () => page.locator('[data-action="subscriptions-settings"]').click();
+        await openSettings();
+        await form.locator('textarea:not([readonly])').first().waitFor();
+        await form.locator('[name="copy1"]').fill('本人未保存短后缀');
+        await form.locator('[name="copy2"]').fill('本人未保存完整后缀');
+        await close();
+        copySettings = { version: 2, copy1: '另一窗口短后缀', copy2: '另一窗口完整后缀' };
+        await openSettings();
+        await form.getByRole('alert').filter({ hasText: /当前输入已保留/ }).waitFor();
+        assert.equal(await form.locator('[name="version"]').inputValue(), '1');
+        assert.equal(await form.locator('[name="copy2"]').inputValue(), '本人未保存完整后缀');
+        await form.locator('[type="submit"]').click();
+        await form.locator('[type="submit"]:disabled').waitFor();
+        assert.equal(commands.at(-1).version, 1);
+        assert.equal(copySettings.copy1, '另一窗口短后缀');
+        await reread(form);
+        await page.waitForFunction(() => document.querySelector('#subscription-settings-form [name="version"]')?.value === '2');
+        assert.equal(await form.locator('[name="copy1"]').inputValue(), '另一窗口短后缀');
+        assert.equal(await form.locator('[name="copy2"]').inputValue(), '另一窗口完整后缀');
+        await close();
+      }
       await page.evaluate(() => { location.hash = '#/subscriptions/all'; });
       const all = page.locator('#subscription-list tbody tr[data-row-id="synthetic-unlinked"]');
       await all.getByText('邮箱未登记', { exact: true }).waitFor();

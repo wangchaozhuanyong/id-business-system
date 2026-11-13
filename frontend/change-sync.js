@@ -3,35 +3,80 @@
   'use strict';
   const data = window.IDLocalData, A = window.IDDesignAPI;
   if (!data || !A || document.querySelector('meta[name="id-local-data-events"]')?.content !== 'enabled') return;
-  const pending = new Set();
-  const failedVersions = new Map();
-  let refreshRetry, refreshFailures = 0;
+  const pending = new Map(), activeGroups = new Set();
+  const retryDelays = [500, 1500, 4500];
+  // Coalesce scopes that refresh the same records. Other groups can finish
+  // and retry independently while one is still reading.
+  const groupOf = scope => {
+    if (['commerce', 'subscription-management'].includes(scope)) return 'commerce';
+    if (['inventory', 'tools/mailbox-pool', 'apple-relay'].includes(scope)) return 'inventory';
+    if (['finance-rates', 'card-types', 'order-card-freeze', 'tenant-cards'].includes(scope)) return 'renewal-resources';
+    return scope;
+  };
+  const failureCount = () => Math.max(0, ...Array.from(pending.values(), job => job.failures));
+  const source = document.querySelector('meta[name="id-data-source"]')?.content;
   let controller, retry, stopped = false, connected = false, failures = 0, generation = 0;
-  let snapshots = 0, changes = 0;
-  let refreshing = false, changeGeneration = 0, scheduled = false;
-  const blocked = () => document.hidden || data.writesPending() ||
+  let snapshots = 0, changes = 0, scheduled = false, sourceUpdated = false;
+  const blocked = () => stopped || document.hidden || data.writesPending() ||
     document.querySelector('#confirm-dialog[open], .row-action-menu:popover-open');
   const editing = () => document.querySelector('#main form[novalidate], #drawer[open] form:not([onsubmit="return false"])');
   function retryFailed() {
-    clearTimeout(refreshRetry);
-    refreshRetry = undefined;
-    refreshFailures = 0;
+    for (const job of pending.values()) {
+      clearTimeout(job.timer);
+      job.timer = undefined;
+      job.failures = 0;
+    }
     resume();
   }
   const resume = () => {
     if (scheduled || stopped) return;
     scheduled = true;
-    queueMicrotask(() => { scheduled = false; void flush(); });
+    queueMicrotask(() => { scheduled = false; flush(); });
   };
-  async function flush() {
-    if (stopped || refreshing || refreshRetry !== undefined || refreshFailures > 3 || !pending.size || blocked()) return;
-    // A successful base read must not hide a failed dependent view update.
-    const versions = { ...Object.fromEntries(failedVersions), ...data.pendingChangeVersions([...pending]) };
-    const scopes = Object.keys(versions), seen = changeGeneration, route = A.state.route;
-    pending.clear();
-    if (!scopes.length) return;
-    refreshing = true;
+  function flush() {
+    if (stopped || !pending.size || blocked()) return;
+    const groups = new Map();
+    for (const [scope, job] of pending) {
+      const group = groupOf(scope);
+      if (activeGroups.has(group) || job.timer !== undefined || job.failures > retryDelays.length) continue;
+      if (!groups.has(group)) groups.set(group, []);
+      groups.get(group).push([scope, job]);
+    }
+    for (const [group, jobs] of groups) {
+      activeGroups.add(group);
+      void refreshGroup(group, jobs);
+    }
     showStatus();
+  }
+  async function refreshGroup(group, jobs) {
+    for (const [, job] of jobs) job.active = true;
+    const versions = Object.fromEntries(jobs.map(([scope, job]) => [scope, job.version]));
+    const failed = !await applyChanges(versions);
+    activeGroups.delete(group);
+    if (stopped) return;
+    const acknowledged = {};
+    for (const [scope, job] of jobs) {
+      job.active = false;
+      if (pending.get(scope) !== job) continue;
+      if (failed || (job.recheck && data.pendingChangeVersions([scope])[scope] === job.version)) {
+        job.recheck = false;
+        job.failures++;
+        if (job.failures <= retryDelays.length) job.timer = setTimeout(() => {
+          job.timer = undefined;
+          resume();
+        }, retryDelays[job.failures - 1]);
+        if (job.failures === 1) A.notify('新数据暂未更新，已保留当前内容，正在重试。');
+      } else {
+        acknowledged[scope] = job.version;
+        pending.delete(scope);
+      }
+    }
+    data.acknowledgeChanges(acknowledged);
+    showStatus();
+    resume();
+  }
+  async function applyChanges(versions) {
+    const scopes = Object.keys(versions), route = A.state.route;
     let failed = false;
     const has = scope => scopes.includes(scope);
     const refreshCommerce = has('commerce') || has('subscription-management');
@@ -49,12 +94,13 @@
       } else {
         await Promise.all([
           refreshInventory ? run(() => A.modules.inventory?.refreshLocalInventory({ keepContent: true })) : null,
-          refreshCommerce ? run(() => A.modules.commerce?.refreshOverview()) : null
+          refreshCommerce ? run(() => A.modules.commerce?.refreshCommerce()) : null
         ]);
         if (refreshInventory && A.state.route === route && inventoryPage && !blocked()) A.render();
       }
       if ((has('inventory') || has('apple-relay')) && A.state.route === 'mailboxes/relay')
         await run(() => A.modules.appleRelay?.refreshConnection());
+      if (stopped) return false;
       if (has('settings') && A.state.route === route && route.startsWith('settings/') && !blocked()) A.render();
       if (has('toolbox')) {
         await run(() => window.IDLocalToolbox?.load({ refresh: true }));
@@ -62,14 +108,18 @@
       }
       if (has('operators')) {
         await run(() => window.IDLocalAuth?.refresh());
-        const labelsChanged = await data.refreshOperatorLabels();
+        let labelsChanged;
+        await run(async () => { labelsChanged = await data.refreshOperatorLabels({ strict: true }); });
         if (A.state.route === 'settings/accounts') await run(() => window.IDLocalAuth?.loadEmployees(A, true));
         else if (labelsChanged && !blocked()) A.render();
       }
-      await run(() => A.modules.operations?.refreshLiveReads(scopes));
-      for (const module of window.IDDesignModules) if (module.onDataChanges)
-        await run(() => module.onDataChanges(scopes));
-      if (has('audit') && A.state.route === 'settings/audit') await run(() => A.modules.operations?.refreshAudit());
+      if (stopped) return false;
+      await Promise.all([
+        run(() => A.modules.operations?.refreshLiveReads(scopes)),
+        ...window.IDDesignModules.filter(module => module.onDataChanges).map(module => run(() => module.onDataChanges(scopes))),
+        ...(has('audit') && A.state.route === 'settings/audit' ? [run(() => A.modules.operations?.refreshAudit())] : [])
+      ]);
+      if (stopped) return false;
       for (const frame of document.querySelectorAll('iframe')) {
         try {
           if (new URL(frame.src, location.href).origin === location.origin)
@@ -79,35 +129,19 @@
       }
     } catch {
       failed = true;
-    } finally {
-      if (stopped) { refreshing = false; return; }
-      if (failed) {
-        for (const scope of scopes) { pending.add(scope); failedVersions.set(scope, versions[scope]); }
-        refreshFailures++;
-        if (refreshFailures <= 3) refreshRetry = setTimeout(() => {
-          refreshRetry = undefined;
-          resume();
-        }, [500, 1500, 4500][refreshFailures - 1]);
-        if (refreshFailures === 1) A.notify('新数据暂未更新，已保留当前内容，正在重试。');
-        // A revision received during the final failed attempt must not get
-        // stranded behind the retry limit for an older revision.
-        if (refreshFailures > 3 && Object.entries(data.pendingChangeVersions([...pending]))
-          .some(([scope, version]) => versions[scope] !== version)) refreshFailures = 0;
-      } else {
-        for (const scope of scopes) failedVersions.delete(scope);
-        refreshFailures = 0;
-        data.acknowledgeChanges(versions);
-      }
-      refreshing = false;
-      showStatus();
-      if (changeGeneration !== seen && pending.size) resume();
     }
+    return !failed;
   }
-  const unsubscribe = data.subscribeChanges(scopes => {
-    for (const scope of scopes) pending.add(scope);
-    changeGeneration++;
-    // A new revision is new work, independent of an exhausted older retry.
-    if (refreshFailures > 3) refreshFailures = 0;
+  const unsubscribe = data.subscribeChanges((scopes, { behind = false } = {}) => {
+    for (const [scope, version] of Object.entries(data.pendingChangeVersions(scopes))) {
+      const current = pending.get(scope);
+      if (current?.version === version) {
+        if (behind && current.active) current.recheck = true;
+        continue;
+      }
+      clearTimeout(current?.timer);
+      pending.set(scope, { version, failures: 0 });
+    }
     resume();
   });
   function applyFrame(frame) {
@@ -120,16 +154,22 @@
     if (type === 'auth-expired') { stop(); window.IDLocalAuth?.lock?.(); return; }
     if (!['snapshot', 'change'].includes(type) || !parts.length) return;
     const payload = JSON.parse(parts.join('\n'));
-    if (payload.schema === 1) {
-      if (type === 'snapshot') snapshots++; else changes++;
+    if (payload?.schema === 1 && payload.versions && typeof payload.versions === 'object' && !Array.isArray(payload.versions)) {
+      if (type === 'snapshot' && source && payload.source && payload.source !== source) { sourceChanged(); return; }
+      if (data.acceptChangeVersions(payload.versions, { reconcile: type === 'snapshot' }) === false) {
+        sourceChanged();
+        return;
+      }
+      if (type === 'snapshot') { snapshots++; connected = true; showStatus(); }
+      else changes++;
       window.IDRechargeActivity?.onVersion(payload.versions?.['recharge-activity']);
-      data.acceptChangeVersions(payload.versions, { reconcile: type === 'snapshot' });
     }
   }
   async function connect() {
     if (stopped || controller || document.hidden) return;
     const current = ++generation;
     const started = Date.now();
+    const startingSnapshots = snapshots;
     const connection = new AbortController();
     controller = connection;
     let reader, deadline;
@@ -147,8 +187,6 @@
       if (response.status === 401) { stop(); window.IDLocalAuth?.lock?.(); return; }
       if (!response.ok || !response.headers.get('content-type')?.startsWith('text/event-stream') || !response.body)
         throw new Error('Change stream unavailable');
-      connected = true;
-      showStatus();
       reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
@@ -174,7 +212,7 @@
         controller = undefined;
         connected = false;
         showStatus();
-        if (Date.now() - started > 30_000) failures = 0;
+        if (snapshots > startingSnapshots && Date.now() - started > 30_000) failures = 0;
         if (!stopped) retry = setTimeout(connect, Math.min(30_000, 1000 * 2 ** Math.min(failures++, 5)));
       }
     }
@@ -186,12 +224,24 @@
     controller?.abort();
     controller = undefined;
     clearTimeout(retry);
-    clearTimeout(refreshRetry);
-    failedVersions.clear();
+    for (const job of pending.values()) clearTimeout(job.timer);
     pending.clear();
+    activeGroups.clear();
     unsubscribe();
     data.clearChangeTracking();
     document.getElementById?.('data-sync-status')?.remove();
+  }
+  function sourceChanged() {
+    if (stopped) return;
+    sourceUpdated = true;
+    data.invalidateDataSource();
+    stop();
+    if (!editing() && !A.state.drafts?.size && !data.writesPending() && !document.querySelector('#confirm-dialog[open]')) {
+      window.location.reload();
+    } else {
+      showStatus();
+      A.notify('业务数据来源已变化，当前填写已保留。请先记录未保存的内容，再重新加载核对。', { kind: 'error', duration: 0 });
+    }
   }
   const foreground = () => {
     if (document.hidden || stopped) return;
@@ -200,27 +250,35 @@
   };
   function showStatus() {
     const footer = document.querySelector('.workspace-footer');
-    if (!footer || stopped) return;
+    if (!footer || (stopped && !sourceUpdated)) return;
     let status = document.getElementById('data-sync-status');
     if (!status) {
       status = document.createElement('button');
       status.id = 'data-sync-status';
       status.type = 'button';
       status.className = 'text-action';
-      status.setAttribute('aria-live', 'polite');
-      status.addEventListener('click', foreground);
+      status.setAttribute('aria-live', sourceUpdated ? 'assertive' : 'polite');
+      status.addEventListener('click', () => sourceUpdated ? window.location.reload() : foreground());
       footer.prepend(status);
     }
-    const label = refreshFailures > 3 ? '更新失败 · 点击重试' : !connected ? '实时连接恢复中' :
-      refreshing || refreshFailures ? '正在同步新数据' : '实时更新已连接';
+    if (sourceUpdated) {
+      const host = document.querySelector('#confirm-dialog[open]') || document.querySelector('#drawer[open] .drawer-footer') ||
+        document.querySelector('#drawer[open] .drawer-body') || footer;
+      if (!host.contains(status)) host.append(status);
+    }
+    const refreshFailures = failureCount();
+    const label = sourceUpdated ? '数据已恢复 · 重新加载' :
+      refreshFailures > retryDelays.length ? '更新失败 · 点击重试' : !connected ? '实时连接恢复中' :
+      activeGroups.size || refreshFailures ? '正在同步新数据' : '实时更新已连接';
     if (status.textContent !== label) status.textContent = label;
     status.disabled = connected && !refreshFailures;
   }
-  window.IDChangeSync = Object.freeze({ resume, retry: retryFailed, stop,
-    preserveEditor: () => refreshing && Boolean(editing()),
-    status: () => ({ connected, snapshots, changes, pending: pending.size, refreshing, refreshFailures }) });
+  window.IDChangeSync = Object.freeze({ resume, retry: retryFailed, stop, sourceChanged,
+    preserveEditor: () => (sourceUpdated || activeGroups.size > 0) && Boolean(editing()),
+    status: () => ({ connected, snapshots, changes, pending: pending.size, refreshing: activeGroups.size > 0, refreshFailures: failureCount() }) });
   window.IDDesignModules.push({ id: 'change-sync', matches: () => false, clearPageState: stop });
   document.addEventListener('close', resume, true);
+  document.addEventListener('close', () => { if (sourceUpdated) showStatus(); }, true);
   document.addEventListener('toggle', resume, true);
   document.addEventListener('visibilitychange', foreground);
   window.addEventListener('online', foreground);

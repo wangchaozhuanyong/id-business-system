@@ -13,31 +13,46 @@
   const queryEntries = new Map();
   const mailboxUpdateStops = new Set();
   const observedVersions = new Map(), serverVersions = new Map(), changeListeners = new Set();
-  let pendingWrites = 0;
+  let pendingWrites = 0, sourceInvalidated = false;
+  const dataSource = document.querySelector('meta[name="id-data-source"]')?.content;
+  const sourceError = () => Object.assign(new Error('业务数据来源已变化，请重新加载页面后核对'), {
+    status: 409, code: 'DATA_SOURCE_CHANGED'
+  });
+  const expenseScope = 'order-expense-receipts';
   const revisionScopes = new Set(['inventory', 'commerce', 'settings', 'appleBalance', 'toolbox', 'saved-totp',
     'bitbrowser-connections', 'bitbrowser-proxies', 'bitbrowser-addresses', 'tenant-cards', 'recharge-codes',
     'order-sync', 'tools/mailbox-pool', 'tools/website-visits', 'apple-relay', 'operators', 'audit', 'finance-rates', 'card-types',
-    'order-card-freeze', 'order-expense-receipts', 'subscription-management', 'system-monitoring', 'recharge-card-plans', 'tools/mailbox-delivery']);
+    'order-card-freeze', 'subscription-management', 'system-monitoring', 'recharge-card-plans', 'tools/mailbox-delivery', expenseScope]);
+  const counters = new Set(['inventory', 'commerce', 'settings', 'appleBalance', 'toolbox', expenseScope, 'subscription-management']);
+  const numeric = value => typeof value === 'string' && /^\d+$/.test(value);
+  const validRevision = version => typeof version === 'string' && version.length > 0 && version.length <= 128;
   const newer = (incoming, observed) => observed === undefined ||
     (/^\d+$/.test(incoming) && /^\d+$/.test(observed)
       ? BigInt(incoming) > BigInt(observed) : incoming !== observed);
+  function notifyChanges(scopes, details) {
+    for (const listener of changeListeners) {
+      try { listener([...scopes], details); } catch { /* Notifications cannot fail a completed operation. */ }
+    }
+  }
   function publishChanges(scopes) {
     if (!scopes.length) return;
     const expanded = new Set(scopes);
-    if (scopes.some(scope => ['inventory', 'commerce', 'settings', 'appleBalance', 'apple-relay', 'finance-rates', 'order-expense-receipts'].includes(scope)) ||
+    if (scopes.some(scope => ['inventory', 'commerce', 'settings', 'appleBalance', 'apple-relay', 'finance-rates', expenseScope].includes(scope)) ||
         (canApproveRechargeCodes && scopes.includes('recharge-codes'))) expanded.add('overview');
     if (scopes.includes('inventory')) { expanded.add('appleBalance'); expanded.add('apple-relay'); expanded.add('tools/mailbox-pool'); }
     if (scopes.includes('operators')) expanded.add('order-owners');
     queries.invalidate([...expanded]);
-    for (const listener of changeListeners) {
-      try { listener([...scopes]); } catch { /* Notifications cannot fail a completed operation. */ }
-    }
+    notifyChanges(scopes);
   }
   function acceptChangeVersions(versions, { reconcile = false } = {}) {
     if (!versions || typeof versions !== 'object' || Array.isArray(versions)) return;
+    const entries = Object.entries(versions).filter(([scope, version]) => revisionScopes.has(scope) && validRevision(version));
+    if (entries.some(([scope, version]) => {
+      const previous = serverVersions.get(scope);
+      return counters.has(scope) && numeric(previous) && numeric(version) && BigInt(version) < BigInt(previous);
+    })) return false;
     const changed = [];
-    for (const [scope, version] of Object.entries(versions)) {
-      if (!revisionScopes.has(scope) || typeof version !== 'string' || !version || version.length > 128) continue;
+    for (const [scope, version] of entries) {
       const previous = serverVersions.get(scope), observed = observedVersions.get(scope);
       serverVersions.set(scope, version);
       if (!reconcile && previous === version) continue;
@@ -59,7 +74,11 @@
     const version = String(result.version), previous = observedVersions.get(resource);
     if (previous === undefined || !/^\d+$/.test(previous) || !newer(previous, version))
       observedVersions.set(resource, version);
-    if (expected !== undefined && newer(expected, observedVersions.get(resource))) publishChanges([resource]);
+    if (expected !== undefined && newer(expected, observedVersions.get(resource))) {
+      // The stream already invalidated these caches. Let the dispatcher retry
+      // this version without invalidating the read that just reported it.
+      notifyChanges([resource], { behind: true });
+    }
   }
   let queryEpoch = 0;
   function queryKey(value) {
@@ -235,7 +254,9 @@
     }
   }
 
-  async function request(resource, data, method = 'PUT', { keepalive = false, operationId: suppliedOperation } = {}) {
+  async function request(resource, data, method = 'PUT', { keepalive = false, operationId: suppliedOperation, boundedRead = false } = {}) {
+    if (sourceInvalidated) throw sourceError();
+    const signal = data === undefined || boundedRead ? AbortSignal.timeout(12_000) : undefined;
     const options =
       data === undefined
         ? { cache: 'no-store' }
@@ -245,6 +266,8 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(data)
           };
+    if (signal) options.signal = signal;
+    if (data !== undefined && dataSource) options.headers['X-ID-Data-Source'] = dataSource;
     const receiptWrite = (data !== undefined && method === 'PUT' &&
       ['commerce', 'inventory', 'settings', 'appleBalance', 'batch'].includes(resource)) ||
       (resource === 'card-types' && data?.action === 'health');
@@ -256,25 +279,41 @@
       let response;
       try { response = await window.fetch('/api/local/' + resource, options); }
       catch (error) {
+        if (signal?.aborted) throw new Error('读取超时，请重试');
         if (operationId && attempt < 1) continue;
         throw error;
       }
       let result;
       try { result = await response.json(); } catch { result = null; }
+      if (signal?.aborted) throw new Error('读取超时，请重试');
+      if (sourceInvalidated) throw sourceError();
       if (!response.ok || result === null) {
         if (operationId && attempt < 1 && (response.status >= 500 || (response.ok && result === null))) continue;
         if (response.status === 401) {
           queries.clear();
           window.IDLocalAuth?.lock?.(result?.reason);
         }
+        if (response.status === 409 && result?.code === 'DATA_SOURCE_CHANGED') {
+          invalidateDataSource();
+          window.IDChangeSync?.sourceChanged();
+          throw sourceError();
+        }
         const error = new Error(result?.error || result?.message || '本机数据接口未响应，请重试');
         error.status = response.status;
         if (Array.isArray(result?.matches)) error.matches = result.matches;
         throw error;
       }
-      observeResult(resource.startsWith('finance/collection') ? 'finance-rates' : resource, result);
+      const scope = resource === 'finance/expense-receipts' ? expenseScope :
+        resource.startsWith('finance/collection') ? 'finance-rates' : resource;
+      observeResult(scope, result);
       return result;
     }
+  }
+
+  const readQuery = (resource, params) => request(resource, params, 'POST', { boundedRead: true });
+  function invalidateDataSource() {
+    sourceInvalidated = true;
+    queries.invalidate();
   }
 
   function contactChange(action, before, after) {
@@ -297,19 +336,20 @@
 
   let labels = new Map();
   let labelsRequest;
-  function refreshOperatorLabels() {
+  function refreshOperatorLabels({ strict = false } = {}) {
     if (!authRequired || !actor) return Promise.resolve(false);
     labelsRequest ??= request('auth/display-names').then(({ items }) => {
       if (!Array.isArray(items)) return false;
       const changed = items.some(({ id, name }) => labels.get(id) !== name) || labels.size !== items.length;
       labels = new Map(items.map(({ id, name }) => [id, name]));
       return changed;
-    }).catch(() => false).finally(() => { labelsRequest = undefined; });
-    return labelsRequest;
+    }).finally(() => { labelsRequest = undefined; });
+    return strict ? labelsRequest : labelsRequest.catch(() => false);
   }
 
   window.IDLocalData = Object.freeze({
     acceptChangeVersions,
+    invalidateDataSource,
     clearChangeTracking() { observedVersions.clear(); serverVersions.clear(); },
     pendingChangeVersions(scopes) {
       return Object.fromEntries(scopes.filter(scope => serverVersions.has(scope) &&
@@ -342,12 +382,12 @@
     subscriptionCardAccounts: (command) => request('subscription-card-status', { action: 'accounts', ...command }, 'POST'),
     subscriptionCardFreeze: (command) => write(['order-card-freeze', 'order-cards', 'tenant-cards'],
       () => request('subscription-card-status', command, 'POST')),
-    subscriptionCardDetails: (command) => request('subscription-card-details', command, 'POST'),
+    subscriptionCardDetails: (command) => readQuery('subscription-card-details', command),
     revealSubscriptionCard: (orderId, version) => request('subscription-card-reveal', { orderId, version }, 'POST'),
     copySubscriptionCard: (orderId, cardId, { context, version } = {}) =>
       request('subscription-card-copy', { orderId, cardId, context, version }, 'POST'),
-    claudeGoogleSubscriptions: (params) => request('claude-google-subscriptions/list', params, 'POST'),
-    subscriptions: (params) => request('subscriptions/list', params, 'POST'),
+    claudeGoogleSubscriptions: (params) => readQuery('claude-google-subscriptions/list', params),
+    subscriptions: (params) => readQuery('subscriptions/list', params),
     subscriptionOwnerLookup: (order) => request('subscriptions/lookup', { order }, 'POST'),
     subscriptionCopy: (command) => request('subscriptions/copy', command, 'POST'),
     renewalContactCopy: command => request('subscriptions/contact-copy', command, 'POST'),
@@ -356,7 +396,8 @@
       : write(['subscription-management'], () => request('subscriptions/renewal-settings', { suffix }, 'POST')),
     renewalCard: command => command.action === 'bind'
       ? write(['subscription-management'], () => request('subscription-renewal-card', command, 'POST'))
-      : request('subscription-renewal-card', command, 'POST'),
+      : command.action === 'prepare' ? readQuery('subscription-renewal-card', command)
+        : request('subscription-renewal-card', command, 'POST'),
     subscriptionConfirm: (command) => write(['subscription-management'], () => request('subscriptions/confirm', command, 'POST')),
     subscriptionOwner: (command) => write(['subscription-management'], () => request('subscriptions/owner', command, 'POST')),
     claudeHistoryIntake: (command) => command.mode === 'preview'
@@ -397,6 +438,8 @@
       ? request('order-sync', command, 'POST')
       : write(['order-sync', 'commerce', 'inventory', 'recharge-codes'], () => request('order-sync', command, 'POST')),
     load: (domain) => request(domain),
+    expenseReceipts: () => request('finance/expense-receipts'),
+    saveExpenseReceipt: command => write([expenseScope], () => request('finance/expense-receipts', command, 'POST')),
     financeCollection: (params) => request('finance/collection?' + new URLSearchParams(params)),
     financeCollectionAction: (command) => command.action === 'cleanup-preview'
       ? request('finance/collection', command, 'POST')
@@ -417,7 +460,7 @@
     saveBitBrowserAddresses: (data) => write(['bitbrowser-addresses'], () => request('bitbrowser-addresses', data)),
     startMicrosoftMailbox: (data) => request('tools/mailbox-microsoft/start', data, 'POST'),
     finishMicrosoftMailbox: (authorizationId) => write(['tools/mailbox-pool'], () => request('tools/mailbox-microsoft/finish', { authorizationId }, 'POST')),
-    customerQuery: (action, command) => request('customer-query/' + action, command, 'POST'),
+    customerQuery: (action, command) => readQuery('customer-query/' + action, command),
     mailboxDeliverySettings: () => request('tools/mailbox-delivery'),
     saveMailboxDeliverySettings: (data) => write(['tools/mailbox-delivery'], () => request('tools/mailbox-delivery', data)),
     copyGoogleMailboxCredentials: (data) => request('tools/mailbox-delivery', data, 'POST'),
@@ -426,7 +469,7 @@
       : write(['tools/mailbox-pool'], () => request('tools/mailbox-pool', { action: 'rotate-delivery', scope, ...data }, 'PUT', { operationId })),
     managedMailboxPool: () => request('tools/mailbox-pool'),
     managedMailboxCode: (id) => request('tools/mailbox-pool', { id }, 'POST'),
-    managedMailboxCodePage: (ids, version) => request('tools/mailbox-pool', { ids, version }, 'POST'),
+    managedMailboxCodePage: (ids, version) => readQuery('tools/mailbox-pool', { ids, version }),
     saveManagedMailboxPool: (data) => write(['tools/mailbox-pool'], () => request('tools/mailbox-pool', data)),
     async queryManagedMailbox(queryCode, limit) {
       const legacy = /^[ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789]{20}$/.test(queryCode);
@@ -447,9 +490,9 @@
     watchManagedMailbox,
     savedTotp: () => request('saved-totp'),
     saveTotp: (data) => write(['saved-totp'], () => request('saved-totp', data)),
-    savedTotpCodePage: (ids, version) => request('saved-totp/code', { ids, version }, 'POST'),
+    savedTotpCodePage: (ids, version) => readQuery('saved-totp/code', { ids, version }),
     savedTotpSecret: (id, version) => request('saved-totp/secret', { id, version }, 'POST'),
-    websiteVisits: (filters) => request('tools/website-visits/search', filters, 'POST'),
+    websiteVisits: (filters) => readQuery('tools/website-visits/search', filters),
     websiteVisitIp: (id) => request('tools/website-visits/reveal', { id }, 'POST'),
     websiteAnalytics: (days, site) => request('tools/website-analytics?' + new URLSearchParams(site ? { days, site } : { days })),
     sheetsStatus: () => request('tools/sheets-status'),

@@ -166,7 +166,7 @@ async function fixture({ auth = true, role = 'admin', configured = true } = {}) 
     },
     querySelectorAll: () => []
   };
-  const context = { window, document, structuredClone, crypto };
+  const context = { window, document, structuredClone, crypto, AbortSignal };
   const sandbox = runInNewContext(dataSource + '\nwindow.IDLocalData;', context);
   assert.equal(sandbox.authRequired, auth);
   runInNewContext(inventorySource, context);

@@ -232,3 +232,74 @@ test('版本通知更新相关列表，保留筛选、分页和草稿；心跳�
   assert.deepEqual(errors, []);
   await page.evaluate(() => window.IDChangeSync.stop());
 });
+
+test('数据恢复后空闲页自动重载，正在填写的旧页保留输入并停止提交', { timeout: 30_000 }, async t => {
+  const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
+  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
+  t.after(() => browser.close());
+  const fixture = JSON.parse(await readFile(new URL('../docs/audits/2026-11-06-design-review/visual-fixtures.json', import.meta.url)));
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const original = fixture.inventory.data.accounts.find(row => row.type === 'gpt');
+  const previous = structuredClone(fixture.inventory);
+  previous.version = 12;
+  previous.data.accounts = [{ ...original, id: 'before-source', email: 'before-source@example.test' }];
+  fixture.inventory = previous;
+  let source = 'before-source', posts = 0;
+  const traffic = await interceptDesign(context, { localFixtures: fixture, changeEvents: true, skipRechargeAssets: true });
+  const index = await readFile(new URL('../frontend/index.html', import.meta.url), 'utf8');
+  await context.route(origin + '/', route => route.fulfill({ contentType: 'text/html; charset=utf-8',
+    body: index.replace('<head>', `<head><meta name="id-local-data-events" content="enabled"><meta name="id-data-source" content="${source}">`)
+      .replace('    <script src="./prototype.js', '    <script src="/local-data.js" defer></script><script src="/toolbox-local.js" defer></script>\n    <script src="./prototype.js') }));
+  await context.route('**/api/local/inventory', route => {
+    if (route.request().method() === 'GET') return route.fulfill({ json: fixture.inventory });
+    posts++;
+    return route.fulfill({ status: 409, json: { code: 'DATA_SOURCE_CHANGED' } });
+  });
+  await context.addInitScript(() => {
+    const fetchOriginal = window.fetch.bind(window);
+    window.fetch = (input, options) => {
+      if (new URL(String(input), location.href).pathname !== '/api/local/change-events') return fetchOriginal(input, options);
+      const source = document.querySelector('meta[name="id-data-source"]').content;
+      window.bootIdentity = crypto.randomUUID();
+      return Promise.resolve(new Response(new ReadableStream({ start(controller) {
+        window.pushSnapshot = (source, version) => controller.enqueue(new TextEncoder().encode(
+          'event: snapshot\ndata: ' + JSON.stringify({ schema: 1, source, versions: { inventory: String(version) } }) + '\n\n'));
+        window.pushSnapshot(source, source === 'before-source' ? 12 : 3);
+        options.signal.addEventListener('abort', () => {
+          try { controller.error(new DOMException('aborted', 'AbortError')); } catch {}
+        }, { once: true });
+      } }), { headers: { 'content-type': 'text/event-stream; charset=utf-8' } }));
+    };
+  });
+  const idle = await context.newPage(), editing = await context.newPage();
+  const errors = [];
+  for (const page of [idle, editing]) {
+    page.setDefaultTimeout(6000);
+    page.on('pageerror', issue => errors.push(issue.message));
+  }
+  await idle.goto(origin + '/#/accounts/gpt');
+  await editing.goto(origin + '/#/workspace/order/gpt');
+  await idle.locator('tr[data-row-id="before-source"]').waitFor();
+  const idleBoot = await idle.evaluate(() => window.bootIdentity);
+  const draft = editing.locator('#commerce-email');
+  await draft.fill('retained-draft@example.test');
+  source = 'restored-source';
+  fixture.inventory = { ...previous, version: 3, data: {
+    ...previous.data, accounts: [{ ...original, id: 'restored-account', email: 'restored@example.test' }]
+  } };
+  await editing.evaluate(() => window.pushSnapshot('restored-source', 3));
+  await editing.getByText(/业务数据来源已变化，当前填写已保留/).waitFor();
+  assert.equal(await draft.inputValue(), 'retained-draft@example.test');
+  assert.equal(await editing.evaluate(async () => window.IDLocalData.save('inventory', 12, {}).then(
+    () => '', error => error.code)), 'DATA_SOURCE_CHANGED');
+  assert.equal(posts, 0);
+  await idle.evaluate(() => window.pushSnapshot('restored-source', 3));
+  await idle.locator('tr[data-row-id="restored-account"]').waitFor();
+  assert.notEqual(await idle.evaluate(() => window.bootIdentity), idleBoot);
+  assert.equal(await idle.locator('tr[data-row-id="before-source"]').count(), 0);
+  await editing.getByRole('button', { name: '数据已恢复 · 重新加载' }).click();
+  await editing.waitForFunction(() => document.querySelector('meta[name="id-data-source"]').content === 'restored-source' &&
+    window.IDChangeSync?.status().connected);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(traffic.external, []);
+});
