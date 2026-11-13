@@ -94,12 +94,34 @@ export function createLoginThrottle(now) {
   return (kind, account, source) => {
     const at = now();
     while (events.length && events[0].at <= at - minute) events.shift();
-    if (events.length >= 80 ||
+    if ((!source && events.filter(row => row.kind === kind && !row.source).length >= 80) ||
+        events.length >= 4096 ||
         events.filter(row => row.kind === kind && row.account === account).length >= 8 ||
         (source && (events.filter(row => row.kind === kind && row.source === source).length >= 24 ||
           events.filter(row => row.kind === kind && row.source === source && row.account === account).length >= 6)))
       return false;
     events.push({ at, kind, account, source });
+    return true;
+  };
+}
+
+export function createSourceLimit({ maximum, windowMs, clock = Date.now }) {
+  const counts = new Map();
+  let pruneAt = 0;
+  return key => {
+    const now = clock();
+    if (now >= pruneAt || counts.size >= 2048) {
+      for (const [source, count] of counts) if (count.until <= now) counts.delete(source);
+      pruneAt = now + windowMs;
+    }
+    const slot = counts.get(key);
+    if (slot?.until > now) {
+      if (slot.count >= maximum) return false;
+      slot.count++;
+    } else {
+      if (!slot && counts.size >= 2048) return false;
+      counts.set(key, { count: 1, until: now + windowMs });
+    }
     return true;
   };
 }

@@ -120,7 +120,7 @@ export async function createSiteObservations({ path, version, clock = Date.now }
     storageWritable = false;
     return loadRows(null, first, first);
   });
-  const listeners = new Set(), recentRequests = new Map();
+  const listeners = new Set(), recentRequests = new Map(), connectionSamples = new Map();
   let pendingVersion = 0, observedVersion = 0, write, diskDirty = false, storageRetryAt = 0;
   let latest = null, acceptedInMinute = 0, sampleMinute, priorCpu;
   let resourceVersion = 0, backupVersion = epoch;
@@ -179,9 +179,16 @@ export async function createSiteObservations({ path, version, clock = Date.now }
     if (acceptedInMinute >= 300) return false;
     const linked = recentRequests.get(body.id);
     if (linked && (linked.used || at - linked.at > 5 * minute || linked.activity !== body.activity)) return false;
-    if (body.activity === 'login') {
-      if (!linked || linked.result !== body.result) return false;
-    } else if (!actorId || (linked ? linked.actorId !== actorId : body.result === 'blocked')) return false;
+    if (linked) {
+      if (linked.result !== body.result || (body.activity !== 'login' && (!actorId || linked.actorId !== actorId)))
+        return false;
+    } else {
+      if (!actorId || body.activity === 'login' || body.result !== 'connection') return false;
+      const used = connectionSamples.get(actorId);
+      if (used?.frame === frame && used.count >= 3) return false;
+      for (const [id, quota] of connectionSamples) if (quota.frame !== frame) connectionSamples.delete(id);
+      connectionSamples.set(actorId, { frame, count: used?.frame === frame ? used.count + 1 : 1 });
+    }
     if (linked) linked.used = true;
     else {
       recentRequests.set(body.id, { at, activity: body.activity, used: true });

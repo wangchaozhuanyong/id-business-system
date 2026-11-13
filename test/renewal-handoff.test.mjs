@@ -109,6 +109,25 @@ test('confirmed staff handoff, exclusive finance claim, verified card replacemen
   assert(!JSON.stringify(store.audit()).includes(replacement));
 });
 
+test('verified handoff transfers unfinished work with its payment review and history intact', async t => {
+  const { store, send, submit } = fixture(t);
+  await send('employee', submit);
+  const [row] = (await send('finance', null, { view: 'finance' })).data.items;
+  await send('finance', { action: 'claim', id: row.id, version: 1 });
+  const transfer = { action: 'transfer', id: row.id, version: 2, confirmed: true, review: true, reason: '交给下一班核对' };
+  assert.equal((await send('financeOther', transfer, { verified: true })).status, 403);
+  assert.equal((await send('finance', transfer)).status, 403);
+  assert.equal((await send('finance', transfer, { verified: true })).status, 200);
+  const [pending] = (await send('financeOther', null, { view: 'finance' })).data.items;
+  assert.equal(pending.paymentReview, true);
+  assert.equal(pending.canTake, true);
+  assert.equal((await send('financeOther', { action: 'claim', id: pending.id, version: pending.version })).status, 200);
+  const [stored] = store.featureDocument(renewalHandoffDomain).data.items;
+  assert.equal(stored.transfers[0].from.id, actors.finance.id);
+  assert.equal(stored.processingBy.id, actors.financeOther.id);
+  assert.equal(stored.funding, undefined);
+});
+
 test('finance may return unpaid work to selection and a former version cannot submit', async t => {
   const { send, submit } = fixture(t);
   assert.equal((await send('supervisor', submit)).status, 200);

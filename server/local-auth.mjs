@@ -17,7 +17,7 @@ import { promisify } from 'node:util';
 import { openLocalSessionStore } from './local-auth-sessions.mjs';
 import { staffRoles } from './access-roles.mjs';
 import {
-  allowsNetwork, bindAuthenticator, browserLifetime, createLoginThrottle, newAuthenticator,
+  allowsNetwork, bindAuthenticator, browserLifetime, createLoginThrottle, createSourceLimit, newAuthenticator,
   readNetwork, useAuthenticator, verificationLifetime, verifiedAddress, verifyTurnstile
 } from './login-security.mjs';
 
@@ -422,6 +422,7 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
   const browserCookie = publicUrl ? '__Host-id_approved_browser' : 'id_local_approved_browser';
   const sessions = publicUrl ? openLocalSessionStore(accountPath + '.sessions') : new Map();
   const allowAttempt = createLoginThrottle(now);
+  const allowChallenge = createSourceLimit({ maximum: 30, windowMs: 60_000, clock: now });
   const loginChecks = new Map();
   const enrollmentChecks = new Map();
   const challengeTokens = new Map();
@@ -576,10 +577,9 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
     return employee;
   }
 
-  function requireVerifiedSuper(request, accounts, { required = false } = {}) {
+  function requireVerifiedSuper(request, accounts) {
     const employee = requireSuper(request, accounts);
-    return security?.mfaKey && (required || employee.mfa || typeof security.mfaKey !== 'function')
-      ? requireVerified(request, accounts) : employee;
+    return publicUrl || security?.mfaKey ? requireVerified(request, accounts) : employee;
   }
 
   function withAuthenticatorKey(use) {
@@ -589,9 +589,8 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
     finally { if (derive) key.fill(0); }
   }
 
-  function shouldVerify(request) {
-    return Boolean(security?.mfaKey &&
-      (typeof security.mfaKey !== 'function' || actorRecord(request)?.mfa));
+  function shouldVerify() {
+    return Boolean(publicUrl || security?.mfaKey);
   }
 
   function report(action, employee, targetId = employee.id) {
@@ -612,7 +611,11 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
     const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
     const password = typeof body.password === 'string' ? body.password : '';
     const address = checkNetwork(request, readAccounts(accountPath));
-    throttle(response, 'password', email.slice(0, 254), address);
+    if (security?.siteKey && !allowChallenge(address || 'unverified')) {
+      protectionEvent('limited');
+      response.setHeader('Retry-After', '60');
+      throw new AuthError(429, '登录尝试过于频繁，请稍后再试');
+    }
     if (validatingChallenge >= 8 || verifying >= 2) {
       protectionEvent('limited');
       monitor('limited', email);
@@ -643,6 +646,7 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
       monitor('rejected', email);
       throw new AuthError(403, '请完成真人验证后重试');
     }
+    throttle(response, 'password', email.slice(0, 254), address);
     if (email.length > 254 || password.length > 256 || Buffer.byteLength(password, 'utf8') > 512) {
       monitor('rejected', email);
       throw new AuthError(401, '邮箱或密码不正确');
@@ -686,6 +690,8 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
       }
       if (sessions.size >= 1024) sessions.delete(sessions.keys().next().value);
     }
+    // Privileged staff can enroll while unbound, without a persistent password-only session.
+    if (publicUrl && !employee.mfa && ['super', 'admin', 'finance'].includes(employee.role)) remember = false;
     const token = randomBytes(32).toString('hex');
     const createdAt = now();
     const lifetime = remember ? rememberedIdleLifetime : sessionLifetime;
@@ -909,7 +915,7 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
         throw new AuthError(409, '当前网络还不在名单中，请先登记并核对当前登录地址');
       policy.version++;
       return actor;
-    }, (request, accounts) => requireVerifiedSuper(request, accounts, { required: true }));
+    }, requireVerifiedSuper);
     report('auth_network_policy', operator, '登录网络');
     return sendJson(response, 200, { saved: true });
   }
@@ -1085,7 +1091,7 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
         const employee = requireActor(request, accounts);
         return sendJson(response, 200, { available: Boolean(security?.mfaKey), bound: Boolean(employee.mfa),
           recoveryRemaining: employee.mfa?.recovery.length ?? 0, recentlyVerified: recentlyVerified(request),
-          canRebind: recentlyRecovered(request), requiredForExistingActions: shouldVerify(request),
+          canRebind: recentlyRecovered(request), requiredForExistingActions: shouldVerify(),
           deviceLock: employee.deviceLock === true, devices: publicDevices(employee, request) });
       }
       const operation = route.match(/^\/api\/local\/auth\/security\/(start|confirm|verify)$/)?.[1];
@@ -1166,6 +1172,10 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
 
   return {
     getActor, orderOwners, handle, recentlyVerified, shouldVerify,
+    isRegistrar(employeeId) {
+      return Boolean(readAccounts(accountPath)?.employees.some(row =>
+        row.id === employeeId && row.active && row.role === 'registrar'));
+    },
     teamFor(employeeId) {
       return readAccounts(accountPath).employees.filter(row => row.active && row.role === 'employee' && row.teamLeadId === employeeId)
         .map(({ id, name }) => ({ id, name }));

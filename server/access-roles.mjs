@@ -24,12 +24,37 @@ export function managesCards(actor) {
   return actor?.role === 'finance' || actor?.role === 'super';
 }
 
+const rechargeManagerReads = [
+  /^\/api\/admin\/(?:session|data|task-logs|activation-manual-holds|billing|addresses|proxies|pool-emails|products|region)$/,
+  /^\/api\/admin\/(?:task-logs|checkout\/status|billing\/summary)\/[^/]+$/,
+  /^\/api\/admin\/(?:checkout\/plans|orbitcard\/products|recharge-routing|subscription\/batch-renewal-status)$/
+];
+
+const rechargeManagerWrites = {
+  POST: [
+    /^\/api\/admin\/(?:checkout\/generate|subscription\/batch-renewal-status|proxy\/test|proxies|addresses(?:\/generate-random-us)?|recharge-routing\/proxies)$/,
+    /^\/api\/admin\/proxies\/[^/]+\/test$/
+  ],
+  PUT: [/^\/api\/admin\/(?:proxies|addresses)\/[^/]+$/],
+  DELETE: [/^\/api\/admin\/(?:proxies|addresses)\/[^/]+$/]
+};
+
 export function nativeManagerAccess(actor, path, method) {
-  if (actor?.role !== 'admin') return true;
-  if (['GET', 'HEAD'].includes(method))
-    return !/^\/api\/admin\/(?:security|hcaptcha|ip-bans|telegram|runtime-logs)(?:\/|$)/i.test(path);
-  return !(/^\/api\/admin\/(?:config|region|checkout\/plans|cards|orbitcard\/(?:cards|sync|config|product-strategy)|security|2fa|ip-bans|change-password|hcaptcha|telegram)(?:\/|$)/i.test(path) ||
-    /^\/api\/admin\/recharge-routing(?:\/?$|\/proxies\/[^/]+\/country\/?$)/i.test(path));
+  const route = path.toLowerCase().replace(/\/+$/, '');
+  if (!route.startsWith('/api/admin/')) return managesBusiness(actor);
+  if (method === 'DELETE' && /^\/api\/admin\/(?:billing|task-logs)(?:\/|$)/.test(route)) return false;
+  if (actor?.role === 'super') return true;
+  if (actor?.role !== 'admin') return false;
+  const permitted = ['GET', 'HEAD'].includes(method) ? rechargeManagerReads : rechargeManagerWrites[method];
+  return Boolean(permitted?.some(pattern => pattern.test(route)));
+}
+
+export function nativeBrowserVerification(path, method) {
+  const route = path.toLowerCase();
+  const read = method === 'GET' || method === 'HEAD';
+  if (read) return /^\/api\/admin\/(?:sessions|runtime-logs|screenshots|video|cdks|products\/export|billing\/export)(?:\/|$)/.test(route);
+  if (/^\/api\/admin\/(?:subscription\/batch-renewal-status|proxy\/test|proxies\/[^/]+\/test)(?:\/|$)/.test(route)) return false;
+  return /^\/api\/(?:external\/cards|admin\/(?:cards|config|region|recharge-routing|proxies|security|2fa|hcaptcha|telegram|ip-bans|orbitcard|subscription|activation-manual-holds|trigger-activation|cdks|products|pool-emails))(?:\/|$)/.test(route);
 }
 
 export function protectedSettingsChanged(next, previous) {

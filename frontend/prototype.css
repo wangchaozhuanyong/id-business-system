@@ -5561,10 +5561,15 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
 .mailbox-query-controls .field {
   margin: 0;
   grid-template-columns: max-content minmax(68px, 100px);
+  align-items: center;
 }
+.mailbox-query-controls .field > .field-control { grid-area: 1 / 2; }
+.mailbox-query-controls .toolbar-left,
 .mailbox-query-controls .toolbar-right {
   width: auto;
   flex: 0 1 auto;
+}
+.mailbox-query-controls .toolbar-right {
   margin-inline-start: auto;
 }
 .mailbox-query-refresh:not([hidden]), .mailbox-message-actions, .mailbox-provider-links {

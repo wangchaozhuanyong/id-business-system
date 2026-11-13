@@ -136,7 +136,7 @@ test('production requires initialized staff and authenticates only the canonical
   const security = await (await request('/api/local/auth/security', { session })).json();
   assert.equal(security.available, true);
   assert.equal(security.bound, false);
-  assert.equal(security.requiredForExistingActions, false);
+  assert.equal(security.requiredForExistingActions, true);
   assert.equal((await request('/api/local/auth/security/network', { session, method: 'POST', origin: publicOrigin,
     body: { action: 'add', version: 0 } })).status, 403);
   assert.equal((await request('/api/local/inventory', { session })).status, 200);

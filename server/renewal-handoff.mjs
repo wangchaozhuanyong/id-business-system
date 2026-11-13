@@ -131,6 +131,9 @@ function viewRow(row, actor, fromFinance, source, canFile) {
     submittedAt: row.submittedAt, submittedBy: row.submittedBy.name,
     processingBy: row.processingBy?.name, assignedToMe: row.processingBy?.id === actor.id,
     canTake: fromFinance && row.status === 'pending' && row.submittedBy.id !== actor.id,
+    canTransfer: fromFinance && row.status === 'processing' &&
+      (row.processingBy?.id === actor.id || actor.role === 'super'),
+    ...(row.paymentReview && { paymentReview: true }),
     canFinish: row.status === 'paid' && canFile,
     sourceChanged: !source, paidAt: funding?.at, paidBy: funding?.actor.name, saleCurrency: original.previousSaleCurrency,
     ...(funding && actor.role !== 'supervisor' && { amount: funding.amount, currency: funding.currency }),
@@ -317,11 +320,12 @@ async function readCommand(request) {
   fail(400, '请核对填写的资料');
 }
 
-const actions = new Set(['submit', 'claim', 'paid', 'return', 'finish']);
+const actions = new Set(['submit', 'claim', 'paid', 'return', 'finish', 'transfer']);
 const actionFields = {
   submit: ['confirmed', 'orders'], claim: [],
   paid: ['confirmed', 'amount', 'currency', 'reference', 'cardMode', 'cardId', 'cardNumber', 'cardSerial'],
-  return: ['confirmed', 'reason'], finish: ['start', 'expiry', 'saleAmount', 'saleCurrency', 'email', 'xHandle']
+  return: ['confirmed', 'reason'], finish: ['start', 'expiry', 'saleAmount', 'saleCurrency', 'email', 'xHandle'],
+  transfer: ['confirmed', 'review', 'reason']
 };
 
 export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clock = Date.now }) {
@@ -417,7 +421,7 @@ export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clo
       if (!row || !states.has(row.status)) fail(404, '未找到该续费申请');
       const original = context.byId.get(row.order.id);
       if (action === 'finish' ? !original || !canFinish(actor, original, context)
-        : !financeRole(actor) || row.submittedBy.id === actor.id)
+        : !financeRole(actor) || action !== 'transfer' && row.submittedBy.id === actor.id)
         fail(403, '当前账号无权办理这笔续费');
       if (row.version !== command.version) fail(409, '这笔续费已更新，请重新核对');
       const source = sourceFor(row, context);
@@ -426,6 +430,19 @@ export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clo
         if (row.status !== 'pending') fail(409, '这笔续费已有人办理');
         next.status = 'processing';
         next.processingBy = { id: actor.id, name: actor.name };
+      } else if (action === 'transfer') {
+        if (row.status !== 'processing' || !row.processingBy ||
+            (row.processingBy.id !== actor.id && actor.role !== 'super'))
+          fail(403, '仅当前经办人或超级管理员可交接');
+        if (!scope.recentlyVerified(request)) fail(403, '请先完成安全确认，再移交续费');
+        const reason = text(command.reason, 160);
+        if (!reason || /(?:\d[ -]?){12}/.test(reason) || command.confirmed !== true || typeof command.review !== 'boolean')
+          fail(400, '请填写交接原因并确认付款状态，原因中请勿填写卡号');
+        next.status = 'pending';
+        next.paymentReview = Boolean(row.paymentReview || command.review);
+        delete next.processingBy;
+        next.transfers = [...(row.transfers || []), { from: row.processingBy, by: { id: actor.id, name: actor.name },
+          reason, paymentReview: next.paymentReview, at: displayTime(now) }];
       } else if (action === 'finish') {
         if (row.status !== 'paid' || !source) fail(409, '这笔续费尚未完成财务处理或原单已变化');
         const order = newOrder(source, row, command, actor, context, now);
@@ -439,11 +456,13 @@ export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clo
           if (!reason || /(?:\d[ -]?){12}/.test(reason) || command.confirmed !== true)
             fail(400, '请确认未付款并填写退回原因，原因中请勿填写卡号');
           next.status = 'returned';
+          next.paymentReview = false;
           next.returned = reason;
         } else {
           if (!source) fail(409, '原单已变化，请核对付款及原单');
           if (!scope.recentlyVerified(request)) fail(403, '请先完成安全确认，再登记实付和用卡');
           next.status = 'paid';
+          next.paymentReview = false;
           next.funding = await fundingFor(store, client, context, inventory, items, source, command, actor, now);
         }
       }

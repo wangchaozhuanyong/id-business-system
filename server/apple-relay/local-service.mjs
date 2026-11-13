@@ -8,6 +8,7 @@ import { historicalIntakePreview, requireHistoricalIntake } from './historical-i
 import { RelayError, createVendureMailboxProvider } from './vendure-provider.mjs';
 import { registrationEmail, registrationOccupancy } from '../inventory-registration.mjs';
 import { createRelayMailUpdates, supportsRelayUpdates } from './mail-updates.mjs';
+import { createSourceLimit } from '../login-security.mjs';
 
 const prefix = '/api/local/apple-relay/';
 const timingScope = new AsyncLocalStorage();
@@ -369,7 +370,8 @@ async function readBody(request, maximumBytes = 4096) {
   return body;
 }
 
-export function createAppleRelayService({ config, readInventory, savePrimaries, planIntake, fetchImpl, recordAction, recordActions, publicOrigin, subscribeChanges, deliveryJournal }) {
+export function createAppleRelayService({ config, readInventory, savePrimaries, planIntake, fetchImpl, recordAction, recordActions,
+  publicOrigin, subscribeChanges, deliveryJournal, readSource = () => undefined }) {
   const provider = config ? createVendureMailboxProvider(config, fetchImpl) : null;
   const primaryBindings = loadBindings(config?.primaryBindings);
   const aliasBindings = loadBindings(config?.aliasBindings);
@@ -379,7 +381,7 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
     throw new RelayError(503, '指定隐藏邮箱导入编号无效');
   const syncing = new Map();
   const historyPreviews = new Set();
-  const publicAttempts = [];
+  const allowPublicSource = createSourceLimit({ maximum: publicQueryAttemptLimit, windowMs: publicQueryWindowMs });
   let activePublicQueries = 0;
   const mailUpdates = createRelayMailUpdates({ shopUrl: config?.shopUrl, fetchImpl, subscribeChanges,
     authorize: code => lookupQueryCode(code),
@@ -1074,19 +1076,14 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
     };
   }
 
-  function reservePublicQuery(response) {
-    const now = Date.now();
-    while (publicAttempts.length && publicAttempts[0] <= now - publicQueryWindowMs) {
-      publicAttempts.shift();
-    }
-    if (publicAttempts.length >= publicQueryAttemptLimit) {
-      response.setHeader(
-        'Retry-After',
-        Math.ceil((publicAttempts[0] + publicQueryWindowMs - now) / 1000)
-      );
+  function checkPublicSource(request, response) {
+    if (!allowPublicSource(readSource(request) || 'unverified')) {
+      response.setHeader('Retry-After', '60');
       throw new RelayError(429, '查询次数过多，请稍后再试');
     }
-    publicAttempts.push(now);
+  }
+
+  function reservePublicQuery(response) {
     if (activePublicQueries >= publicQueryConcurrentLimit) {
       response.setHeader('Retry-After', '5');
       throw new RelayError(429, '查询繁忙，请稍后再试');
@@ -1137,14 +1134,15 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
         }
         if (!provider?.supportsCodeQuery) throw new RelayError(503, '邮箱查询服务尚未配置');
 
-        reservePublicQuery(response);
-        reserved = true;
+        checkPublicSource(request, response);
         const input = await readBody(request);
         if (request.headers.accept === 'text/event-stream') {
           if (typeof input.queryCode !== 'string' || Object.keys(input).length !== 1)
             throw new RelayError(400, '请输入有效的邮箱查询码');
           return await mailUpdates.handle(request, response, normalizeCode(input.queryCode));
         }
+        reservePublicQuery(response);
+        reserved = true;
         const result = await publicQueryMails(input);
         writeJson(response, 200, result);
       } catch (error) {
