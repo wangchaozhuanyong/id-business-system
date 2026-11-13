@@ -265,7 +265,17 @@ export function createStaffWorkspaces({ store, client, publicOrigin, getAuth, re
           fail(403, '仅提交人或超级管理员可以核对这次维护');
         if (body.version !== current.version || body.confirmed !== true)
           fail(409, '请刷新列表并核对当前银行卡资料');
+        if (body.outcome !== undefined && body.outcome !== 'unconfirmed')
+          fail(400, '请选择要登记的核对结果');
         const actual = reconcileCards(pending, raw, current, store);
+        if (body.outcome === 'unconfirmed') {
+          if (actual.matches) fail(409, '当前资料与上次提交一致，请选择核对上次操作');
+          const result = { saved: true, unconfirmed: true };
+          store.finishFinanceCardOperation(actor, pending.domain, {
+            audit: ['finance_card_unconfirmed', cardActions[pending.action]], result
+          });
+          return result;
+        }
         if (!actual.matches) fail(409, '当前银行卡资料与上次提交不一致，结果仍待核对');
         const result = finishCardWrite(store, actor, pending.domain, ['finance_card_reconciled', cardActions[pending.action]], actual.count);
         cardChanged?.();

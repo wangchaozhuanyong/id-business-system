@@ -169,7 +169,8 @@
   function cardReviews(current) {
     return list(current.result.pending, current.reviewPage, '待核对的银行卡维护', [
       ['label', '操作'], ['submittedBy', '提交人'], ['at', '提交时间', row => E(time(row.at))],
-      ['actions', '处理', row => row.canReview ? rowAction('核对上次操作', 'card-reconcile', row.id) : '请提交人核对']
+      ['actions', '处理', row => row.canReview ? rowAction('核对上次操作', 'card-reconcile', row.id) +
+        rowAction('登记未确认', 'card-unconfirmed', row.id) : '请提交人核对']
     ], 'staff-card-review-list');
   }
 
@@ -307,7 +308,8 @@
         drawCardReviews(view);
         drawList(view);
       }
-      const text = result.reconciled ? '已核对银行卡维护结果' :
+      const text = result.unconfirmed ? '已记录结果未确认，请以当前卡池资料为准' :
+        result.reconciled ? '已核对银行卡维护结果' :
         result.count === undefined ? '保存成功' : '已导入 ' + result.count + ' 张银行卡';
       message(view, changed ? text : text + '，列表刷新失败，请点击刷新。');
       return true;
@@ -474,11 +476,13 @@
         await write(view, action, { action: 'strict', strict });
       return;
     }
-    if (action === 'card-reconcile') {
+    if (action === 'card-reconcile' || action === 'card-unconfirmed') {
       const pending = current.result.pending?.find(row => row.id === id);
-      if (pending?.canReview && await Security.confirmChange('核对上次操作',
-        '系统将查看当前银行卡和用卡规则。如与上次提交一致，会补记结果。')) {
-        await write(view, action, { action: 'reconcile', id: pending.id, confirmed: true });
+      const unconfirmed = action === 'card-unconfirmed';
+      if (pending?.canReview && await Security.confirmChange(unconfirmed ? '登记未确认' : '核对上次操作',
+        unconfirmed ? '请先核对列表。这一步只记录结果未确认。后续维护请以卡池当前资料为准。' :
+          '系统将查看当前银行卡和用卡规则。如与上次提交一致，会补记结果。')) {
+        await write(view, action, { action: 'reconcile', id: pending.id, confirmed: true, ...(unconfirmed && { outcome: 'unconfirmed' }) });
       }
       return;
     }

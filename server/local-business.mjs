@@ -216,6 +216,7 @@ const sessionEventLabels = {
   finance_card_stop: '停用自动代充银行卡',
   finance_card_requested: '提交自动代充银行卡维护',
   finance_card_reconciled: '核对自动代充银行卡维护结果',
+  finance_card_unconfirmed: '登记银行卡维护结果未确认',
   supervisor_proxy_add: '登记自动代充业务 IP',
   registration_code_read: '查询登记邮箱验证码',
   registration_totp_read: '查看登记账号动态验证码',

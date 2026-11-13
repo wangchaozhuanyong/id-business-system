@@ -226,8 +226,10 @@ test('uncertain card write survives a new request, can be checked without anothe
   assert.equal(pending.label, '导入银行卡');
   assert.equal(pending.canReview, true);
   assert(!JSON.stringify(pending).includes(number));
-  assert(!JSON.stringify(store.pendingFinanceCardOperations()).includes(number));
-  assert(!JSON.stringify(store.pendingFinanceCardOperations()).includes('567'));
+  const stored = store.pendingFinanceCardOperations()[0];
+  assert(!JSON.stringify(stored).includes(number));
+  assert.deepEqual(Object.keys(stored.evidence).sort(), ['imported', 'intent', 'plans', 'version']);
+  assert(stored.evidence.imported.every(value => /^[a-f0-9]{64}$/.test(value)));
   assert.equal((await f.call('finance', 'finance/cards', command)).status, 409);
   f.client.stopCardUse = async refs => { f.rawCards.cards[0].is_active = 0; return { state: 'stopped', refs }; };
   assert.equal((await f.call('finance', 'finance/cards', { action: 'stop', version: 7, id: 5 })).status, 200);
@@ -250,6 +252,27 @@ test('uncertain card write survives a new request, can be checked without anothe
   assert.equal(audit[0].targetId, pending.id);
   assert.equal(store.audit().filter(row => row.action === 'finance_card_requested' && row.targetId === pending.id).length, 1);
   assert(!JSON.stringify(audit).includes(number));
+});
+
+test('unconfirmed card result can be documented by its submitter without retrying the bank-card maintenance', async t => {
+  const f = fixture();
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  f.useStore(store);
+  f.verify();
+  let attempts = 0;
+  f.client.writeCardMaintenance = async () => { attempts++; throw new Error('synthetic unavailable response'); };
+  const command = { action: 'strict', strict: true, version: 7 };
+  const op = { 'x-id-operation': 'fixture-card-unconfirmed-result' };
+  assert.equal((await f.call('finance', 'finance/cards', command, op)).status, 503);
+  const { pending: [pending] } = (await f.call('finance', 'finance/cards')).data;
+  const review = { action: 'reconcile', id: pending.id, version: 7, confirmed: true, outcome: 'unconfirmed' };
+  assert.equal((await f.call('finance', 'finance/cards', { ...review, confirmed: false })).status, 409);
+  assert.deepEqual((await f.call('finance', 'finance/cards', review)).data, { saved: true, unconfirmed: true });
+  assert.deepEqual((await f.call('finance', 'finance/cards', command, op)).data, { saved: true, unconfirmed: true });
+  assert.deepEqual((await f.call('finance', 'finance/cards')).data.pending, []);
+  assert.equal(attempts, 1);
+  assert.equal(store.audit().filter(row => row.action === 'finance_card_unconfirmed' && row.targetId === pending.id).length, 1);
 });
 
 test('registration and customer writes use scoped records, replay receipts and only return necessary data', async () => {
