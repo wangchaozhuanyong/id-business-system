@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
+import { Readable } from 'node:stream';
 import test from 'node:test';
 import { chromium } from 'playwright';
 import { interceptDesign, origin, separatorSnapshot, settle } from './helpers/offline-design.mjs';
 import { checkInventoryEntryFields } from '../server/inventory-entry-fields.mjs';
 import { attributeInventory, defaultInventoryRegistrationTimes } from '../server/inventory-attribution.mjs';
 import { checkInventoryHistory } from '../server/inventory-history.mjs';
+import { createStaffWorkspaces, staffPath } from '../server/staff-workspaces.mjs';
 
 const route = '/#/mailboxes/microsoft';
 const actor = { id: 'ms-fixture-admin', name: '离线验收员', role: 'admin' };
@@ -14,9 +16,9 @@ const recovery = { id: 'google-fixture', type: 'google', email: 'recovery@exampl
 const security = { loginMode: 'password', recoveryAccess: 'unknown', twoStep: 'unknown',
   verificationMethods: [], verificationDevice: '' };
 
-async function fixture(browser, width, rows = [], operator = actor) {
+async function fixture(browser, width, rows = []) {
   const context = await browser.newContext({ viewport: { width, height: 900 }, serviceWorkers: 'block' });
-  const requests = await interceptDesign(context, { localFixtures: {}, actor: operator });
+  const requests = await interceptDesign(context, { localFixtures: {}, actor });
   let version = 1;
   let data = { mailboxes: [recovery, ...rows], accounts: [], batches: [], returnRecords: [],
     importRecords: [], registrationRecords: [], tableSettings: [], undo: [] };
@@ -30,7 +32,7 @@ async function fixture(browser, width, rows = [], operator = actor) {
       if (version !== write.version)
         return requestRoute.fulfill({ status: 409, json: { error: '库存版本已变化' } });
       const issue = checkInventoryEntryFields(data, write.data, write.action) ||
-        attributeInventory(data, write.data, operator, write.action) || checkInventoryHistory(data, write.data);
+        attributeInventory(data, write.data, actor, write.action) || checkInventoryHistory(data, write.data);
       if (issue) return requestRoute.fulfill({ status: 400, json: { error: issue } });
       defaultInventoryRegistrationTimes(data, write.data);
       data = write.data;
@@ -327,17 +329,86 @@ test('微软邮箱桌面与手机的列表和抽屉布局', { timeout: 50000 }, 
   }
 });
 
-test('微软邮箱沿用员工库存只读权限', async (t) => {
+test('普通员工不能从导航或直达地址读取微软邮箱库存', async (t) => {
   const browser = await chromium.launch();
   t.after(() => browser.close());
-  const { main, drawer, actions } = await fixture(browser, 1440, [{
-    id: 'ms-read-fixture', type: 'microsoft', email: 'read@example.test',
-    password: loginFixture, source: '自己注册', status: '正常', microsoftSecurity: security
-  }], { id: 'ms-fixture-employee', name: '合成普通员工', role: 'employee' });
-  assert.equal(await main.getByRole('button', { name: '新增邮箱' }).count(), 0);
-  assert.equal(await main.getByRole('button', { name: '批量导入' }).count(), 0);
-  assert.equal(await main.getByRole('button', { name: '编辑', exact: true }).count(), 0);
-  await main.getByRole('button', { name: 'read@example.test', exact: true }).click();
-  assert.match(await drawer.innerText(), /登录密码/);
-  assert.deepEqual(actions, []);
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, serviceWorkers: 'block' });
+  const operator = { id: 'ms-fixture-employee', name: '合成普通员工', role: 'employee' };
+  const traffic = await interceptDesign(context, { localFixtures: {}, actor: operator, skipRechargeAssets: true });
+  const page = await context.newPage();
+  const inventoryRequests = [];
+  page.on('request', request => {
+    if (new URL(request.url()).pathname === '/api/local/inventory') inventoryRequests.push(request.method());
+  });
+  await page.goto(origin + route);
+  await page.getByRole('heading', { name: '访问受限', exact: true }).waitFor();
+  assert.equal(await page.getByRole('navigation', { name: '业务模块导航' })
+    .getByText('微软邮箱', { exact: true }).count(), 0);
+  assert.equal(await page.locator('#main').getByRole('button', { name: '新增邮箱' }).count(), 0);
+  assert.deepEqual(inventoryRequests, []);
+  assert.deepEqual(traffic.external, []);
+});
+
+test('注册员从注册工作台录入微软邮箱并只读取本人登记', async (t) => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const context = await browser.newContext({ viewport: { width: 390, height: 900 }, serviceWorkers: 'block' });
+  const operator = { id: 'ms-fixture-registrar', name: '合成注册员', role: 'registrar' };
+  const own = { id: 'ms-own', type: 'microsoft', email: 'own@example.test', status: '正常',
+    password: loginFixture, createdById: operator.id, microsoftSecurity: security };
+  const other = { ...own, id: 'ms-other', email: 'other@example.test', createdById: 'another-registrar' };
+  let inventory = { version: 1, data: { mailboxes: [own, other], accounts: [] } };
+  const traffic = await interceptDesign(context, {
+    localFixtures: {}, actor: operator, localAuthUi: true, skipRechargeAssets: true
+  });
+  const path = staffPath + 'registration';
+  const store = {
+    load: () => inventory,
+    replayWrite: () => null,
+    saveBatch([write]) {
+      assert.equal(write.domain, 'inventory');
+      assert.equal(write.version, inventory.version);
+      const issue = checkInventoryEntryFields(inventory.data, write.data, write.action);
+      assert.equal(issue, undefined);
+      inventory = { version: inventory.version + 1, data: write.data };
+    }
+  };
+  const register = createStaffWorkspaces({ store, publicOrigin: origin });
+  const responses = [];
+  await context.route(origin + path, async intercepted => {
+    const request = intercepted.request();
+    const incoming = Readable.from(request.postDataBuffer() ? [request.postDataBuffer()] : []);
+    incoming.method = request.method();
+    incoming.headers = { ...request.headers(), origin };
+    let status, responseBody;
+    await register(incoming, {
+      writeHead(code) { status = code; },
+      end(body) { responseBody = JSON.parse(body); }
+    }, path, operator);
+    responses.push({ method: incoming.method, status, body: responseBody });
+    return intercepted.fulfill({ status, json: responseBody });
+  });
+  const page = await context.newPage();
+  page.setDefaultTimeout(6000);
+  await page.goto(origin + '/#/staff/registration');
+  const main = page.locator('#main');
+  const list = main.locator('table[data-table="本人登记记录"]');
+  await list.getByText(own.email, { exact: true }).waitFor();
+  assert.equal(await list.getByText(other.email, { exact: true }).count(), 0);
+  await list.getByRole('button', { name: '查邮箱验证码' }).waitFor();
+  const form = main.locator('[data-staff-form="registration"]');
+  const address = 'new-registrar@example.test';
+  await form.getByLabel('资料类型').selectOption('microsoft');
+  await form.locator('#staff-email').fill(address);
+  await form.getByLabel('登录密码').fill(loginFixture);
+  await form.getByRole('button', { name: '保存登记' }).click();
+  await list.getByText(address, { exact: true }).waitFor();
+  const saved = inventory.data.mailboxes.find(row => row.email === address);
+  assert.deepEqual([saved.type, saved.createdById, saved.country, saved.device, saved.proxyUrl],
+    ['microsoft', operator.id, '', '', '']);
+  assert.deepEqual(responses.map(({ method, status }) => [method, status]), [['GET', 200], ['POST', 200], ['GET', 200]]);
+  const latest = responses.at(-1).body.data.mailboxes;
+  assert.deepEqual(latest.map(row => row.email), [address, own.email]);
+  assert(latest.every(row => !Object.hasOwn(row, 'password')));
+  assert.deepEqual(traffic.external, []);
 });

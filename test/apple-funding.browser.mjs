@@ -54,6 +54,11 @@ fixture.inventory.data.mailboxes.push({
   id: 'unused-fixture', email: 'unused-wallet@example.test', type: 'apple',
   status: '正常', country: '美国', appStoreRegion: 'US'
 });
+const renewalCandidates = fixture.commerce.data.orders.filter(order => order.appleIdId).map(order => ({
+  id: order.id, version: order.version, number: order.orderNo, customer: fixture.commerce.data.customers[0].name,
+  account: order.email, product: order.product, plan: order.plan, payment: order.payment, start: order.start,
+  expiry: order.expiry, owner: '离线操作员', previousPaidCurrency: order.paidCurrency
+}));
 const browser = await chromium.launch({ headless: true });
 const withinWidth = locator => locator.evaluate(el => el.scrollWidth <= el.clientWidth + 1);
 const output = process.env.ID_LAYOUT_QA_OUTPUT;
@@ -63,8 +68,21 @@ assert.ok(widths.every(width => Number.isInteger(width) && width >= 320));
 try {
   for (const width of widths) for (const theme of ['light', 'dark']) {
     const context = await browser.newContext({ viewport: { width, height: 900 } });
+    // The price settings at the end of this scenario are available to super administrators.
     const requests = await interceptDesign(context, { localFixtures: fixture,
-      actor: { id: 'browser-admin', name: '离线操作员', role: 'admin' }, skipRechargeAssets: true });
+      actor: { id: 'browser-super', name: '离线操作员', role: 'super' }, skipRechargeAssets: true });
+    const renewalWrites = [];
+    await context.route(origin + '/api/local/renewals?view=staff', route => {
+      if (route.request().method() !== 'GET') {
+        renewalWrites.push(route.request().method());
+        return route.fulfill({ status: 405, json: { error: '离线页面核验不写入续费' } });
+      }
+      return route.fulfill({ json: { version: 1, candidates: renewalCandidates, items: [], reminderHours: 168 } });
+    });
+    await context.route(origin + '/api/local/renewals', route => {
+      renewalWrites.push(route.request().method());
+      return route.fulfill({ status: 405, json: { error: '离线页面核验不写入续费' } });
+    });
     const page = await context.newPage(), errors = [];
     page.on('pageerror', error => errors.push(error.message));
     page.setDefaultTimeout(8000);
@@ -139,12 +157,19 @@ try {
     await drawer.locator('#apple-reason').waitFor();
     await drawer.getByRole('button', { name: '取消', exact: true }).click();
     await boundRow.getByRole('button', { name: '更多操作' }).click();
-    await page.getByText('续费', { exact: true }).filter({ visible: true }).last().click();
-    await settle(page);
-    assert.equal(await page.locator('#commerce-appleIdId').inputValue(), id);
-    assert.equal(await page.getByLabel('Id地区', { exact: true }).inputValue(), 'US');
+    await page.getByRole('menuitem', { name: '续费', exact: true }).click();
+    await page.waitForURL('**/#/workspace/renewals');
+    const candidate = main.getByRole('row').filter({ hasText: 'SYNTHETIC-APPLE-ORDER-123456' });
+    await candidate.getByText(email, { exact: true }).waitFor();
+    assert.equal(await candidate.getByText('苹果内购', { exact: true }).count(), 1);
+    assert.equal(await candidate.getByRole('checkbox').isChecked(), true);
+    assert.equal(await main.getByRole('button', { name: '提交给财务（1）', exact: true }).isEnabled(), true);
+    assert.equal(await page.locator('#commerce-order-form').count(), 0);
     await page.reload();
-    await page.waitForFunction(id => document.querySelector('#commerce-appleIdId')?.value === id, id);
+    await page.waitForURL('**/#/workspace/renewals');
+    await page.getByRole('heading', { name: '续费管理', exact: true }).waitFor();
+    await main.getByRole('table', { name: '待续费订单' }).waitFor();
+    assert.deepEqual(renewalWrites, []);
     await page.evaluate(() => location.hash = '#/data-management/apple-ids');
     await table.waitFor();
     await main.getByRole('button', { name: '下一页', exact: true }).click();

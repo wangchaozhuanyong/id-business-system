@@ -266,6 +266,7 @@
   let inventoryLoad;
   function readLocalInventory({ keepContent = false } = {}) {
     if (inventoryLoad) return inventoryLoad;
+    const hadContent = localInventoryState === 'ready';
     if (!keepContent) localInventoryState = 'loading';
     inventoryLoad = localData.load('inventory').then(result => {
       applyCommittedInventory(result);
@@ -275,7 +276,7 @@
       return false;
     }).finally(() => {
       inventoryLoad = undefined;
-      if (inventoryRoute() && !keepContent) {
+      if (inventoryRoute() && (!keepContent || (!hadContent && localInventoryState === 'ready'))) {
         saveDrafts();
         api.render();
       }
