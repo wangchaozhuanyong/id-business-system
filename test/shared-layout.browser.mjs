@@ -43,39 +43,97 @@ test('shared layouts preserve alignment, readable controls and stable navigation
   const aligned = (a, b, message) => assert(Math.abs(a.y - b.y) <= 1, message);
   const noOverflow = async () => assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), page.url());
   const frame = () => page.frameLocator('#main > [data-page-region]:not([hidden]) .recharge-integration__content iframe:not([hidden])');
+  const region = page.locator('#main > .design-page-region:visible');
+  const centeredPages = new Set([
+    'data', 'data/sheets', 'settings/monitoring', 'settings/accounts',
+    'settings/mail-types', 'settings/costs', 'settings/payment-countries'
+  ]);
+  const checkPageWidth = async route => {
+    const bounds = await region.evaluate(node => {
+      const main = node.parentElement;
+      const shell = main.getBoundingClientRect(), body = node.getBoundingClientRect();
+      const style = getComputedStyle(main);
+      const start = shell.left + parseFloat(style.paddingLeft);
+      const end = shell.right - parseFloat(style.paddingRight);
+      return { width: body.width, usable: end - start, start: body.left - start, end: end - body.right };
+    });
+    const width = centeredPages.has(route) ? Math.min(1320, bounds.usable) : bounds.usable;
+    const inset = (bounds.usable - width) / 2;
+    const label = `${route} 预期宽度 ${width}px，实际 ${JSON.stringify(bounds)}`;
+    assert(Math.abs(bounds.width - width) <= 1, label);
+    assert(Math.abs(bounds.start - inset) <= 1 && Math.abs(bounds.end - inset) <= 1, label);
+    await noOverflow();
+  };
   await page.goto(origin + '/#/workspace/order/gpt');
 
-  await t.test('page widths stay centered within the right workspace', async () => {
-    const check = async (route, cap) => {
+  await t.test('page widths use either the full workspace or the common centered width', async () => {
+    const check = async route => {
       await go(route);
-      const bounds = await page.locator('#main > .design-page-region:visible').evaluate(node => {
-        const main = node.parentElement;
-        const shell = main.getBoundingClientRect(), body = node.getBoundingClientRect();
-        const style = getComputedStyle(main);
-        const start = shell.left + parseFloat(style.paddingLeft);
-        const end = shell.right - parseFloat(style.paddingRight);
-        return { width: body.width, usable: end - start, start: body.left - start, end: end - body.right };
-      });
-      assert(Math.abs(bounds.width - Math.min(cap, bounds.usable)) <= 1, route + ' 容器宽度');
-      assert(Math.abs(bounds.start - bounds.end) <= 1, route + ' 居中');
-      await noOverflow();
+      await checkPageWidth(route);
     };
-    const pages = [
-      ['data', 1320], ['data/sheets', 1320], ['monitor', Infinity], ['plugins/websites', Infinity], ['settings/monitoring', 1320],
-      ['settings/accounts', 1320], ['settings/costs', 1320], ['settings/payment-countries', 1320],
-      ['settings/mail-types', 960], ['workspace/order/gpt', Infinity], ['orders/gpt', Infinity]
-    ];
+    const routes = await page.evaluate(() => window.IDDesignAPI.navigation.flatMap(group => group[2].map(item => item[1])));
     await page.setViewportSize({ width: 1920, height: 960 });
-    for (const [route, cap] of pages) await check(route, cap);
+    for (const route of new Set([...routes, ...centeredPages, 'monitor'])) await check(route);
     await page.locator('#nav-toggle').click();
-    await check('data', 1320);
+    await check('data');
     await page.locator('#nav-toggle').click();
     for (const width of [390, 320]) {
       await page.setViewportSize({ width, height: 900 });
-      for (const [route, cap] of pages.filter(([path]) => path.startsWith('data') ||
-        ['monitor', 'plugins/websites', 'settings/mail-types'].includes(path))) await check(route, cap);
+      for (const route of [...centeredPages, 'monitor', 'plugins/websites', 'orders/gpt']) await check(route);
     }
     await page.setViewportSize({ width: 1440, height: 900 });
+  });
+
+  await t.test('mailbox category loading, errors and result counts keep the same width', { skip: !offline }, async () => {
+    const route = 'settings/mail-types';
+    const settingsEndpoint = '**/api/local/settings';
+    const release = Promise.withResolvers();
+    const mailboxTypes = Array.from({ length: 25 }, (_, index) => ({
+      id: `layout-category-${index + 1}`, label: `布局测试分类 ${index + 1}`, enabled: true
+    }));
+    let response = { status: 503, json: { error: '布局测试读取失败' } };
+    const serveSettings = async request => {
+      assert.equal(request.request().method(), 'GET');
+      await release.promise;
+      await request.fulfill(response);
+    };
+    const check = async () => {
+      await settled();
+      await checkPageWidth(route);
+      const card = await region.locator(':scope > .panel').boundingBox();
+      const outer = await region.boundingBox();
+      assert(Math.abs(card.x - outer.x) <= 1 && Math.abs(card.width - outer.width) <= 1, '邮箱分类卡片应与居中容器等宽');
+    };
+    await go(route);
+    await page.route(settingsEndpoint, serveSettings);
+    try {
+      await page.setViewportSize({ width: 1920, height: 960 });
+      await page.reload();
+      await region.getByText('正在读取本机设置', { exact: true }).waitFor();
+      await check();
+      release.resolve();
+      await region.getByText('本机设置读取失败', { exact: true }).waitFor();
+      await check();
+      response = { json: { version: 1, data: { mailboxTypes } } };
+      await region.getByRole('button', { name: '重新读取', exact: true }).click();
+      const search = region.getByRole('textbox', { name: '搜索当前列表' });
+      for (const width of [1920, 1440, 390, 320]) {
+        await page.setViewportSize({ width, height: 900 });
+        for (const dark of [false, true]) {
+          await theme(dark);
+          for (const [query, count] of [['', 20], ['layout-category-25', 1], ['没有匹配的分类', 0]]) {
+            await search.fill(query);
+            await page.waitForFunction(count => document.querySelectorAll('#main tr[data-row-id]').length === count, count);
+            await check();
+          }
+        }
+      }
+    } finally {
+      release.resolve();
+      await page.unroute(settingsEndpoint, serveSettings);
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await theme(false);
+    }
   });
 
   await t.test('the sidebar expands at most one group on selection and navigation', async () => {
