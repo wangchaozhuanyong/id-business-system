@@ -122,10 +122,9 @@ test('插件导航、Claude 待授权、授权后取码与可点击邮件链接'
     if ([1440, 390].includes(width)) await page.screenshot({ path: `${output}/mailboxes-${width}-${theme}.png` });
   }
   await page.goto(origin + '/#/plugins/websites');
-  await page.getByRole('tab', { name: '访问统计', exact: true }).click();
-  await page.getByRole('heading', { name: '数据中心', exact: true }).waitFor();
-  assert.equal(new URL(page.url()).hash, '#/data');
-  await page.goto(origin + '/#/plugins/websites');
+  const monitorTabs = page.getByRole('tablist', { name: '网站监控功能' });
+  await monitorTabs.waitFor();
+  assert.deepEqual(await monitorTabs.getByRole('tab').allTextContents(), ['运行状态', '告警记录', '访问记录与 IP', '网站检测']);
   await page.getByRole('tab', { name: '访问记录与 IP', exact: true }).click();
   await page.locator('[data-visits-result] table tbody tr').waitFor();
   assert.equal(await page.locator('[data-visits-result] td').nth(1).evaluate(node => getComputedStyle(node).whiteSpace), 'nowrap');

@@ -899,7 +899,7 @@ function header(title, description, actions = '', label = '') {
 function websiteMonitorTabs(active) {
   const managed = !window.IDLocalData?.authRequired || ['admin', 'super'].includes(state.actor?.role);
   const views = managed ? [
-    ['checks', '运行状态'], ['incidents', '告警记录'], ['ops-website-analytics', '访问统计'],
+    ['checks', '运行状态'], ['incidents', '告警记录'],
     ['ops-website-visits', '访问记录与 IP'], ['ops-website-check', '网站检测']
   ] : [['ops-website-check', '网站检测']];
   return `<div class="tabs monitor-navigation" role="tablist" aria-label="网站监控功能">${views.map(([key, label]) =>

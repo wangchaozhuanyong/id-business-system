@@ -586,7 +586,9 @@ test('监控中心入口、全量筛选、键盘和大表格视口保持可用',
   assert.equal(await page.locator('#breadcrumbs').innerText(), '监控中心');
   assert.equal(await page.locator('#page-title h1').innerText(), '网站监控');
   assert.equal(await page.getByRole('link', { name: '网站监控', exact: true }).getAttribute('href'), '#/monitor');
-  await page.getByRole('tab', { name: '运行状态', exact: true }).press('ArrowRight');
+  const tabs = page.getByRole('tablist', { name: '网站监控功能' });
+  assert.deepEqual(await tabs.getByRole('tab').allTextContents(), ['运行状态', '告警记录', '访问记录与 IP', '网站检测']);
+  await tabs.getByRole('tab', { name: '运行状态', exact: true }).press('ArrowRight');
   await page.getByRole('tab', { name: '告警记录', exact: true, selected: true }).waitFor();
   await page.locator('[data-row-id="monitor-fixture-1"]').waitFor();
   const geometry = await page.locator('.system-monitor-list > .table-viewport').evaluate(view => {
@@ -620,7 +622,11 @@ test('监控中心入口、全量筛选、键盘和大表格视口保持可用',
   await page.getByRole('tab', { name: '运行状态', exact: true }).click();
   await page.getByRole('tab', { name: '告警记录', exact: true }).click();
   assert.equal(await page.locator('#system-monitor-days').inputValue(), '7');
-  await page.getByRole('tab', { name: '告警记录', exact: true }).press('End');
+  await tabs.getByRole('tab', { name: '告警记录', exact: true }).press('ArrowRight');
+  await page.waitForURL('**/#/plugins/websites');
+  await tabs.getByRole('tab', { name: '访问记录与 IP', exact: true, selected: true }).waitFor();
+  await page.locator('#ops-website-visits-form').waitFor();
+  await tabs.getByRole('tab', { name: '访问记录与 IP', exact: true }).press('End');
   await page.locator('#ops-monitor-url').waitFor();
   assert.equal(await page.locator('#sidebar a[aria-current="page"]').innerText(), '网站监控');
   await page.getByRole('tab', { name: '网站检测', exact: true }).press('Home');
