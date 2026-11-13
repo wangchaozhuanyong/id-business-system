@@ -1742,8 +1742,12 @@
     const section = sections.some(([id]) => id === selected) ? selected : sections[0]?.[0] || '';
     const toolbar = tabs || lead ? `<div class="tool-header-row">${tabs}${lead}</div>` : '';
     const page = pluginPages[state.route]?.tool === name ? $('#plugin-tool-host') : null;
-    if (page) page.innerHTML = (name === '网站监控' ? `<div class="tool-header-row">${api.websiteMonitorTabs(section || 'ops-website-check')}</div>` : toolbar) + `<div class="drawer-body plugin-tool-body">${body}</div>`;
-    else openDrawer(titles[name] || name, description, toolbar + body, '', context, { kind: 'online-tool', tool: name, section });
+    if (page) {
+      const navigation = name === '网站监控'
+        ? `<div class="content-toolbar">${api.websiteMonitorTabs(section || 'ops-website-check')}</div>`
+        : toolbar;
+      page.innerHTML = navigation + `<div class="drawer-body plugin-tool-body">${body}</div>`;
+    } else openDrawer(titles[name] || name, description, toolbar + body, '', context, { kind: 'online-tool', tool: name, section });
     const drawer = page || $('#drawer');
     drawer.dataset.tool = name;
     if (sections.length && !page) {

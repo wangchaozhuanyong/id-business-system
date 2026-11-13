@@ -364,9 +364,10 @@ main {
 .design-page-region[hidden] {
   display: none !important;
 }
+/* A tab group uses one width across all of its routes. Pages are full width by default. */
 .design-page-region:is(
   [data-page-region='data'], [data-page-region='data/sheets'],
-  [data-page-region='plugins/websites'], [data-page-region='settings/monitoring'],
+  [data-page-region='settings/monitoring'],
   [data-page-region='settings/accounts'], [data-page-region='settings/costs'],
   [data-page-region='settings/payment-countries']
 ) {
@@ -4145,6 +4146,9 @@ details.toolbox-phrase-more[open] > summary {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 /* Monitoring pages share navigation and full-width query workspaces. */
+@media (min-width: 901px) {
+  html:has(#main:is([data-layout-route='monitor'], [data-layout-route='plugins/websites'])) { scrollbar-gutter: stable; }
+}
 .monitor-navigation { max-width: 100%; overflow-x: auto; flex-wrap: nowrap; }
 .monitor-navigation .tab { flex: none; white-space: nowrap; }
 .system-monitor-workspace { min-width: 0; }
@@ -4221,8 +4225,7 @@ details.toolbox-phrase-more[open] > summary {
 .system-monitor-rule-table .section-title-row > label { min-width: 0; }
 .system-monitor-rule-table .checkbox-label { min-height: 36px; white-space: nowrap; margin: 0; }
 [data-plugin-tool][data-tool='网站监控'] { padding: 0; }
-[data-plugin-tool][data-tool='网站监控'] > .tool-header-row { padding-inline: var(--panel-padding-inline); margin-bottom: 0; }
-[data-plugin-tool][data-tool='网站监控'] .monitor-navigation { width: 100%; }
+[data-plugin-tool][data-tool='网站监控'] > .content-toolbar { padding-inline: var(--panel-padding-inline); }
 [data-plugin-tool][data-tool='网站监控'] > .plugin-tool-body { padding: 16px var(--panel-padding-inline); }
 @media (max-width: 1250px) {
   .system-monitor-channel-layout { grid-template-columns: minmax(0, 1fr); gap: 20px; }
