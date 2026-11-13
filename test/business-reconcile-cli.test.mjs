@@ -106,6 +106,31 @@ test('有利润但缺少开卡费分摊时严格模式报告待处理，并按�
   assert.deepEqual(await readFile(database), before);
 });
 
+test('邮箱和卡号可空，一次性卡费用计入两币利润且严格核对通过', async t => {
+  const { directory, database } = await createSnapshot(t, [{
+    ...cardOrder, costSettings: { ...cardOrder.costSettings, cardIssueUsd: '0.5' }
+  }]);
+  const store = createLocalBusinessStore(database);
+  try {
+    const current = store.load('commerce');
+    const [order] = current.data.orders;
+    order.fxSnapshot = createOrderSnapshot({
+      source: '核对凭据 QA-02', at: '2026-11-08T00:00', expiresAt: '2026-11-09T00:00', rates: { MYR: '2', USD: '7' }
+    }, order, Date.parse(asOf));
+    Object.assign(order, { version: order.version + 1, updatedAt: '', updatedBy: '', updatedById: '' });
+    current.data.logs.unshift({ id: 'fixture-fx', type: snapshotAction, entityId: order.id });
+    store.saveBatch([{ domain: 'commerce', ...current, action: snapshotAction }]);
+  } finally {
+    store.close();
+  }
+  const run = audit(directory, '--strict');
+  assert.equal(run.status, 0, run.stderr);
+  const report = JSON.parse(run.stdout);
+  assert.equal(report.unallocatedCardFees, 0);
+  assert.equal(report.finance.operating.CNY.profit, '95.7');
+  assert.equal(report.finance.operating.MYR.profit, '47.85');
+});
+
 test('利润缺汇率时仍统计已知成本里的开卡费缺项', async t => {
   const { directory } = await createSnapshot(t, [{ ...cardOrder, saleCurrency: 'USD' }]);
   const run = audit(directory, '--strict');

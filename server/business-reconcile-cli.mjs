@@ -37,11 +37,11 @@ try {
   const finance = reconcileOrders(input, { clock, fullCardHistory: true });
   const apple = auditAppleWallets(input);
   const versions = Object.fromEntries(Object.entries(documents).map(([key, document]) => [key, document.version]));
-  const { eligible, review, oneSided, inconsistent } = inventory.counts;
+  const { eligible, review, inconsistent } = inventory.counts;
   const unallocatedCardFees = finance.orders.filter(({ operatingCalculations }) =>
     Object.values(operatingCalculations).some(({ cardIssueUnallocated, knownCost }) =>
       cardIssueUnallocated || knownCost?.cardIssueUnallocated)).length;
-  const outstanding = Boolean(eligible || review || oneSided || inconsistent || inventory.simulation.changedOnRepeat ||
+  const outstanding = Boolean(eligible || review || inconsistent || inventory.simulation.changedOnRepeat ||
     unallocatedCardFees || finance.operating.CNY.pending || finance.operating.MYR.pending || finance.batchIssues.length || apple.counts.issueCount);
   process.stdout.write(JSON.stringify({ asOf: finance.asOf, versions, outstanding, unallocatedCardFees, finance, inventory, apple }, null, 2) + '\n');
   if (values.strict && outstanding) process.exitCode = 2;

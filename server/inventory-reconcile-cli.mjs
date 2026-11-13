@@ -16,8 +16,8 @@ try {
     throw new Error('--as-of 必须是标准 UTC ISO 时点，如 2026-11-13T06:00:00.000Z');
   const report = auditInventoryLinkage(await readInput(), { clock });
   process.stdout.write(JSON.stringify(report, null, 2) + '\n');
-  const { eligible, review, oneSided, inconsistent } = report.counts;
-  if (values.strict && (eligible || review || oneSided || inconsistent || report.simulation.changedOnRepeat))
+  const { eligible, review, inconsistent } = report.counts;
+  if (values.strict && (eligible || review || inconsistent || report.simulation.changedOnRepeat))
     process.exitCode = 2;
 } catch {
   process.stderr.write('核对失败。请检查参数、UTC 时点及库存和订单 JSON 的完整性。\n');

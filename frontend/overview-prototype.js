@@ -27,7 +27,7 @@
   const metrics = [
     ['orders', '订单数', '按所选北京时间日期口径统计。已撤单另列，续费新单计入订单量。'],
     ['receipts', '订单实收', '已录入的实收按所选订单日期归集，按原币分列，无需再次确认。客户退款按登记时间另列。'],
-    ['profit', '自动计算利润', '与订单统计使用相同日期口径、费用和历史汇率。逐单计算净收款减已知净成本。开卡费未分摊时，仍计入已知部分。'],
+    ['profit', '自动计算利润', '与订单统计使用相同日期口径、费用和历史汇率。逐单计算净收款减已知净成本。留空邮箱或一次性虚拟卡号的订单照常计入。'],
     ['customers', '新增客户', '按客户创建时间和客户编号去重统计。']
   ];
   const timezone = 'Asia/Shanghai';
@@ -129,7 +129,8 @@
     const last = (cached?.data?.inventory || cached?.data?.commerce)?.updated;
     if (!refresh && !cached?.stale && last != null &&
         dayFormatter.format(last) === dayFormatter.format(Date.now())) return;
-    const ready = snapshot => Object.values(snapshot).every(section => section.phase === 'ready');
+    const ready = snapshot => Object.values(snapshot).every(section =>
+      section.phase === 'ready' && !section.data?.expenseReadFailed);
     const read = () => business.queries.read('overview', key, () => loadOverview(key), {
       refresh: true, isFresh: ready
     });
@@ -234,7 +235,10 @@
       ${metricCard('profit', metricValue(moneyText(profitValue(currentProfit)), currency), profitChange,
         currentProfit ? `<span class="${currentProfit.pending ? 'overview-warning' : ''}">已计算 ${countText(currentProfit.accounted)} 笔 · 计算缺项 ${countText(currentProfit.pending)} 笔</span>
           ${currentProfit.reference ? `<span>含参考核算 ${countText(currentProfit.reference)} 笔</span>` : ''}
+          ${currentProfit.singleUseCardFees ? `<span>${countText(currentProfit.singleUseCardFees)} 笔按一次性虚拟卡规则计费</span>` : ''}
           ${currentProfit.unallocatedCardFees ? `<span>${countText(currentProfit.unallocatedCardFees)} 笔开卡费未分摊</span>` : ''}
+          ${earnings.expenseReadFailed ? `<span class="overview-warning">费用凭据读取失败，${earnings.hasExpenseSnapshot
+            ? '保留上次凭据用于核算' : '金额暂按原单核算'}。</span>` : ''}
           ${profit?.phase === 'error' ? `<span class="overview-warning">${E(sectionStatus(profit))}</span>` : ''}` : '')}
       ${metricCard('customers', metricValue(countText(current?.customers), current ? '位' : ''),
         current ? '较上期' + changeText(current.customers - previous.customers, '位') : status)}

@@ -5525,7 +5525,7 @@
         '按邮箱费实际用的币种选。比如邮箱花费是 15 元，就选「人民币 CNY」。没有邮箱花费可跳过。'
       ) +
       (v('product') === 'GPT' && v('payment') === '银行卡'
-        ? '<p class="footnote commerce-span-all">开卡费按卡记录，并按该卡已确认开通的订单分摊。</p>' : '') +
+        ? '<p class="footnote commerce-span-all">一次性虚拟卡的卡号可留空，开卡费按本单规则计一次。已记录的共用卡按成功开通订单分摊。</p>' : '') +
       '</div></details>'
     );
   }
@@ -6286,10 +6286,10 @@
         render: (row) => {
           const accounting = localData ? fact(row) : null;
           const p = localData ? accounting.gain : shownProfit(row);
-          if (p === null) return '—';
-          const amount = E(display(p));
+          if (p === null && !accounting?.originalProfit) return '—';
+          const amount = E(p === null ? originalProfitText(accounting.originalProfit) : display(p));
           return A.textAction(amount, 'commerce-order-detail', `data-id="${E(row.id)}" data-tab="costs"`) +
-            (accounting?.basis === 'partial' ? '<small class="footnote"> 开卡费未分摊</small>' : '');
+            (accounting?.cost?.cardIssueUnallocated ? '<small class="footnote"> 开卡费未分摊</small>' : '');
         }
       },
       { id: 'start', label: '订阅时间' },
@@ -6865,6 +6865,10 @@
       const fee = `${order.paidAmount} ${order.paidCurrency} × ${percent}%`;
       conversionBase = `（${fee}）`;
       equation = `${fee} = ${original}。`;
+    } else if (row.key === 'card-issue' && result.singleUseCardFee) {
+      equation = row.label === '原单已登记开卡费'
+        ? `使用本单已登记的开卡费 ${original}。`
+        : `一次性虚拟卡按原单冻结的费用规则计一次开卡费 ${original}。`;
     } else if (row.key === 'card-issue' && result.cardIssue) {
       const { count, total, totalUsd } = result.cardIssue;
       equation = `${total ?? totalUsd} ${currency} ÷ 同卡成功开通 ${count} 单，分摊尾差后本单为 ${original}。`;
@@ -6893,7 +6897,7 @@
     const clock = inStatistics ? moduleState.statsFilters.asOf || orderEvaluationTime() : Date.now();
     const expenseState = prepareExpenseReceipts();
     const expenses = statisticsExpenseAccounting(clock, expenseState);
-    const { cost: result, revenue: receipt, gain, reasons: pending } = statisticsFact(order, currency, clock, expenses);
+    const { cost: result, revenue: receipt, gain, originalProfit, reasons: pending } = statisticsFact(order, currency, clock, expenses);
     const amount = value => `${display(value)} ${currencyLabel(currency)}`;
     const snapshot = order.fxSnapshot;
     const issue = result?.cardIssue;
@@ -6918,7 +6922,7 @@
     const category = result?.cardIssueUnallocated || result?.partial ? '已知部分' : result ? accountingLabel(result.basis) : '计算缺项';
     return panelTitle('本单成本', '净成本 = 费用合计 − 渠道已到账回款。利润 = 客户确认净收款 − 净成本。' + statisticsQuoteHelp) +
       expenseStatus(expenseState) +
-      `<div class="property-list">${property('代付金额', paidAmount)}${property('售卖金额', `${display(order.saleAmount)} ${currencyLabel(order.saleCurrency)}`)}${grossReceipt}${property('成本依据', order.costBasis === 'actual' ? '实际总成本' : '订单冻结的费用规则')}${property('核算类别', category)}${property('费用规则版本', order.costSettings?.version ? `V${order.costSettings.version}` : '待核对')}${feeCorrection ? property('历史付款费率更正', '8% → 0.8% · 原 V2 规则已保留') + property('历史原费用规则', `V2 · 付款费率 8% · 每笔 ${originalFeeRules?.cardPerPaymentUsd || '待核对'} 美元 · 开卡 ${originalFeeRules?.cardIssueUsd || '待核对'} 美元`) + property('更正依据', feeCorrection.reason) : ''}${property('客户累计退款', `${display(sum(order.refunds || [], (row) => row.amount))} ${currencyLabel(order.saleCurrency)}`)}${property('退款后净收款', receipt === null ? '待确认' : amount(receipt))}${output}${property(result?.cardIssueUnallocated ? '已知参考收益' : '本单自动计算利润', gain === null || order.cancelled ? '—' : amount(gain))}${property('计算缺项', [...pending, ...(result?.cardIssueUnallocated ? ['开卡费未分摊'] : [])].join('、') || '无')}${result?.appleLedgerNote ? property('Apple 台账', result.appleLedgerNote) : ''}</div>${canCorrectHistoricalFee(order) ? panelTitle('历史费用规则', '请先核实此订单的实际付款费率，再单独更正。', A.button('更正历史付款费率', 'commerce-order-fee-correction', '', '', `data-id="${E(order.id)}"`)) : ''}${
+      `<div class="property-list">${property('代付金额', paidAmount)}${property('售卖金额', `${display(order.saleAmount)} ${currencyLabel(order.saleCurrency)}`)}${grossReceipt}${property('成本依据', order.costBasis === 'actual' ? '实际总成本' : '订单冻结的费用规则')}${property('核算类别', category)}${property('费用规则版本', order.costSettings?.version ? `V${order.costSettings.version}` : '待核对')}${feeCorrection ? property('历史付款费率更正', '8% → 0.8% · 原 V2 规则已保留') + property('历史原费用规则', `V2 · 付款费率 8% · 每笔 ${originalFeeRules?.cardPerPaymentUsd || '待核对'} 美元 · 开卡 ${originalFeeRules?.cardIssueUsd || '待核对'} 美元`) + property('更正依据', feeCorrection.reason) : ''}${property('客户累计退款', `${display(sum(order.refunds || [], (row) => row.amount))} ${currencyLabel(order.saleCurrency)}`)}${property('退款后净收款', receipt === null ? '待确认' : amount(receipt))}${output}${property(result?.cardIssueUnallocated ? '已知参考收益' : '本单自动计算利润', gain === null || order.cancelled ? '—' : amount(gain))}${originalProfit && !order.cancelled ? property('原币利润', `${display(originalProfit.amount)} ${currencyLabel(originalProfit.currency)}`) : ''}${property('计算缺项', [...pending, ...(result?.cardIssueUnallocated ? ['开卡费未分摊'] : [])].join('、') || '无')}${result?.appleLedgerNote ? property('Apple 台账', result.appleLedgerNote) : ''}</div>${canCorrectHistoricalFee(order) ? panelTitle('历史费用规则', '请先核实此订单的实际付款费率，再单独更正。', A.button('更正历史付款费率', 'commerce-order-fee-correction', '', '', `data-id="${E(order.id)}"`)) : ''}${
       panelTitle('订单汇率快照', '每 1 单位外币对应的人民币金额。仅使用本订单记录的汇率。', canManageOrders() && finance && !snapshot && !order.cancelled
         ? A.button('登记汇率快照', 'commerce-order-fx', 'primary', '', `data-id="${E(order.id)}"`) +
           (finance.requestAutomaticSnapshot && S.actor?.role !== 'employee'
@@ -7298,7 +7302,7 @@
     ['subscription', '订阅代付', '银行卡取本单确认的代付金额。Claude 苹果内购取订阅面额 × 本单冻结的苹果内购折扣。'],
     ['kyc', 'KYC 认证成本', '有本单 KYC 记录才计费。已核对的实付凭据可以替换规则金额，或从实际总成本中拆出。'],
     ['service', '代付服务费', 'Claude 真实卡订单按原单冻结的代付服务费（MYR）逐笔折算。'],
-    ['card-issue', '开卡费分摊', '原卡的一次开卡费 ÷ 截至核算时点同卡成功开通笔数。已核对的实付凭据可以替换原卡规则金额。筛选只改变展示范围。'],
+    ['card-issue', '开卡费', '一次性虚拟卡按原单规则逐单计费。共用卡的开卡费按同卡成功开通笔数分摊。已登记的发卡实付可替换原卡规则金额。'],
     ['payment-percent', '比例手续费', '银行卡订阅代付金额 × 本单冻结的付款费率，适用于虚拟卡等使用通用费用规则的订单。'],
     ['payment-fixed', '固定手续费', '每笔按本单冻结的固定手续费（USD）折算，适用于使用通用银行卡费用规则的订单。'],
     ['email', '邮箱成本', '按本单确认的邮箱成本金额和原币折算。费用设置在有明确邮箱来源时用于录单，历史统计取原单金额。'],
@@ -7319,6 +7323,7 @@
   const expenseQuery = 'receipts';
   let expenseReceipts;
   const statisticsAmount = amount => amount == null ? '—' : display(amount);
+  const originalProfitText = ({ amount, currency }) => `原币利润 ${display(amount)} ${currency}`;
   const statisticsSum = (rows, get) => {
     const values = rows.map(get).filter(amount => amount != null);
     return values.length ? sum(values, amount => amount) : null;
@@ -7378,7 +7383,7 @@
   }
 
   function statisticsFact(order, currency, clock, expenses) {
-    let cost = null, gain = null, revenue, reasons;
+    let cost = null, gain = null, originalProfit, revenue, reasons;
     if (localData) {
       revenue = finance?.calculateConfirmedNetReceipt(order, { currency, clock }) ?? null;
       const result = localAccounting(order, currency, clock, { costOnly: revenue === null, expenses });
@@ -7391,6 +7396,14 @@
         const knownCost = revenue === null ? result : localAccounting(order, currency, clock, { costOnly: true, expenses });
         if (knownCost.status === 'ready' && !paymentPendingForAccounting(order, knownCost)) cost = knownCost;
         else cost = knownCost.knownCost ?? null;
+      }
+      const originalCurrency = order.saleCurrency;
+      if (gain === null && orderReceiptRecorded(order) && order.costBasis === 'actual' &&
+          originalCurrency === order.actualCostCurrency && originalCurrency !== currency &&
+          ['CNY', 'MYR'].includes(originalCurrency) && reasons.some(reason => /汇率/.test(reason))) {
+        const original = localAccounting(order, originalCurrency, clock, { expenses });
+        if (original.status === 'ready' && original.profit != null)
+          originalProfit = { amount: original.profit, currency: originalCurrency };
       }
     } else {
       const rates = order.rates || fxRates;
@@ -7415,7 +7428,7 @@
     const plan = statisticsPlan(order);
     const basis = cost?.cardIssueUnallocated || cost?.partial ? 'partial' : cost?.basis;
     return { order, plan, group: statisticsPlanKey(order.product, plan), channel: statisticsChannel(order),
-      cost, basis, gain, revenue, reasons, pending: gain === null };
+      cost, basis, gain, originalProfit, revenue, reasons, pending: gain === null };
   }
 
   function statisticsTotals(rows) {
@@ -7458,9 +7471,9 @@
       ['count', '订单数', String(rows.length), '笔', '筛选范围内已入账的订单笔数。'],
       ['revenue', '净收款', statisticsSum(rows, row => row.revenue), currency, '客户实收减客户退款，再按各单汇率折算。'],
       ['net-cost', '已知净成本', totals.netCost, currency, '把各项已知费用换成统计币种，加总后减去已到账的渠道回款。' + statisticsQuoteHelp],
-      ['profit', '自动计算利润', totals.profit, currency, '逐单用净收款减已知净成本，再加总。原卡费用未分摊时，仍计入已知部分。'],
-      ['card-unallocated', '开卡费未分摊', String(rows.filter(row => row.cost?.cardIssueUnallocated).length), '笔', '这些订单的已知费用和利润已计入。开卡费需有原卡依据才能分摊。'],
-      ['pending', '计算缺项', String(rows.filter(row => row.pending).length), '笔', '缺少能计算利润的金额、成本或汇率。可在「计算缺项」逐笔查看原因。']
+      ['profit', '自动计算利润', totals.profit, currency, '逐单用净收款减已知净成本，再加总。一次性虚拟卡按原单规则计算，留空卡号的订单照常计入。'],
+      ['card-unallocated', '开卡费未分摊', String(rows.filter(row => row.cost?.cardIssueUnallocated).length), '笔', '共用卡或代充记录的开卡费暂未分摊，其余费用和利润照常计入。'],
+      ['pending', '计算缺项', String(rows.filter(row => row.pending).length), '笔', '缺少能计算利润的金额、成本或汇率。「计算缺项」逐笔显示原因，并保留可计算的原币利润。']
     ];
     return `<div class="summary-strip commerce-stat-summary">${metrics.map(([id, title, amount, unit, help]) =>
       `<div class="summary-item" data-stat-metric="${id}"><div class="summary-label"><span>${title}</span>${A.titleInfo(title, help, 'stat-metric-' + id)}</div><div class="summary-number">${unit === '笔' ? amount : statisticsAmount(amount)}${amount === null ? '' : `<small>${unit}</small>`}</div></div>`).join('')}</div>`;
@@ -7886,7 +7899,8 @@
       { id: 'email', label: '账号' },
       { id: 'product', label: '套餐' },
       { id: 'reason', label: pending ? '缺少的计算资料' : '计算依据', mobileSummary: true, render: row =>
-        E(row.reasons.join('、') || row.cost?.appleLedgerNote || (row.cost?.cardIssueUnallocated ? '已计算 · 开卡费未分摊' : accountingLabel(row.basis))) },
+        E(row.reasons.join('、') || row.cost?.appleLedgerNote || (row.cost?.cardIssueUnallocated ? '已计算 · 开卡费未分摊'
+          : row.cost?.singleUseCardFee ? '参考核算 · 一次性虚拟卡' : accountingLabel(row.basis))) },
       ...(feeScope ? [{ id: 'feeAmount', label: `${feeScope[1]}（${currency}）`, mobileSummary: true, render: row =>
         statisticsAmount(row.feeAmount) }] : []),
       { id: 'cardIssue', label: `开卡费（${currency}）`, headerHelp: statisticsFeeTypes.find(([key]) => key === 'card-issue')[2],
@@ -7898,7 +7912,8 @@
         E(statisticsAmount(row.cost?.netCost)) },
       { id: 'revenue', label: `确认净收款（${currency}）`, render: row => statisticsAmount(row.revenue) },
       { id: 'amount', label: `利润（${currency}）`, render: row =>
-        E(statisticsAmount(row.gain) + (row.basis === 'partial' && row.gain !== null ? ' · 参考' : '')) },
+        E(row.originalProfit ? originalProfitText(row.originalProfit)
+          : statisticsAmount(row.gain) + (row.basis === 'partial' && row.gain !== null ? ' · 参考' : '')) },
       { id: 'actions', label: '操作', action: true, render: row =>
         A.textAction('查看原单', 'commerce-order-detail', `data-id="${E(row.id)}" data-tab="costs"`) }
     ], records, 'commerce-stat-detail', '', row => orderListTime(row.order)) };
@@ -11286,7 +11301,7 @@
     const hour = 3_600_000;
     const day = 24 * hour;
     const midnight = parseDate(beijingClock.format(asOf).slice(0, 10) + 'T00:00');
-    const accountingTotal = () => ({ amount: '0', accounted: 0, pending: 0, reference: 0, unallocatedCardFees: 0 });
+    const accountingTotal = () => ({ amount: '0', accounted: 0, pending: 0, reference: 0, unallocatedCardFees: 0, singleUseCardFees: 0 });
     const period = (start, end, step) => {
       const slots = step ? Array.from({ length: Math.floor((end - start) / step) + 1 },
         (_, index) => start + index * step) : [];
@@ -11336,6 +11351,7 @@
         total.accounted++;
         if (accounting.basis !== 'actual') total.reference++;
         if (accounting.cardIssueUnallocated) total.unallocatedCardFees++;
+        if (accounting.singleUseCardFee) total.singleUseCardFees++;
         total.amount = M.add(total.amount, gain);
       }
     };
@@ -11391,8 +11407,11 @@
         ranges: Object.fromEntries(Object.entries(ranges).map(([key, { current, previous }]) =>
           [key, { current: current.activity, previous: previous.activity }]))
       },
-      profit: Object.fromEntries(Object.entries(ranges).map(([key, { current, previous }]) =>
-        [key, expenseReceipts?.phase !== 'ready' ? null : { current: current.profit, previous: previous.profit }]))
+      profit: Object.fromEntries(Object.entries(ranges).map(([key, { current, previous }]) => [key, {
+        current: current.profit, previous: previous.profit,
+        expenseReadFailed: expenseReceipts?.phase === 'error',
+        hasExpenseSnapshot: expenseReceipts?.version != null
+      }]))
     };
   }
   function overviewCustomerSummary(asOf) {
