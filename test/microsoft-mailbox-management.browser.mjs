@@ -46,7 +46,7 @@ async function fixture(browser, width, rows = [], operator = actor) {
   await page.goto(origin + route);
   const main = page.locator('#main'), drawer = page.locator('#drawer'), confirm = page.locator('#confirm-dialog');
   await page.locator('#main[data-layout-route="mailboxes/microsoft"]').waitFor();
-  await main.getByRole('tab', { name: /库存/ }).waitFor();
+  await main.getByRole('tab', { name: /未使用/ }).waitFor();
   return { context, page, main, drawer, confirm, requests, errors, actions,
     snapshot: () => data, failSaves: (fail) => { unavailable = fail; } };
 }
@@ -295,6 +295,7 @@ test('微软邮箱桌面与手机的列表和抽屉布局', { timeout: 50000 }, 
       }
       const search = main.getByRole('textbox', { name: '搜索库存资料' });
       await search.fill('不存在的邮箱');
+      await page.waitForFunction(() => !document.querySelector('#main tbody tr[data-row-id]'));
       assert.equal(await main.locator('tbody tr[data-row-id]').count(), 0);
       await measure('#main');
       await main.getByRole('button', { name: '新增邮箱' }).click();
