@@ -212,8 +212,8 @@ test('历史 Claude 首次补客户经存储事务保存并保留已绑定的 Ap
     applePaidPrices: { 'Claude Max': { 'Max 20x': { US: '250' } } } }, 'apple_paid_prices_save'),
     write('inventory', { accounts: [], batches: [], returnRecords: [], importRecords: [], registrationRecords: [],
       tableSettings: [], undo: [], mailboxes: [
-        { id: 'google', email: opened.email, type: 'google', status: '正常' },
-        { id: appleIdId, email: 'apple-history@example.test', type: 'apple', status: '正常',
+        { id: 'google', email: opened.email, type: 'google', status: '正常', country: opened.country },
+        { id: appleIdId, email: 'apple-history@example.test', type: 'apple', status: '正常', health: 'normal',
           appStoreRegion: 'US', appleOpeningBalance: '500' }
       ] }, 'inventory_create'),
     write('commerce', { orders: [], tenants: [tenant], customers: [buyer, other],
@@ -233,7 +233,7 @@ test('历史 Claude 首次补客户经存储事务保存并保留已绑定的 Ap
   ledger.wallets[0] = { ...ledger.wallets[0], balance: '250', version: 3 };
   ledger.movements.push({ id: 'historical-charge', kind: 'order-charge', appleIdId, orderId, amount: '-250',
     before: '500', after: '250', versionAfter: 3 });
-  ledger.allocations.push({ orderId, appleIdId, amount: '250', returned: '0', version: 1 });
+  ledger.allocations.push({ orderId, appleIdId, amount: '250', returned: '0' });
   save(write('commerce', commerce, '更正订单'), write('appleBalance', ledger, 'apple_order_charge'));
 
   // Reproduce an older imported document that already had the original Apple debit but lacked the buyer.
