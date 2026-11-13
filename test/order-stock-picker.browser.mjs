@@ -27,7 +27,7 @@ test('成品账号下拉顶部搜索、模糊匹配、选择回填与草稿恢�
   const search = popup.getByRole('searchbox', { name: '搜索可用账号' });
   await page.locator('#commerce-emailHistory option[value="stock-candidate-35@example.test"]').waitFor({ state: 'attached' });
   assert.equal(await page.locator('datalist').count(), 0);
-  assert.equal(await page.locator('#commerce-email').isVisible(), false);
+  assert.equal(await page.locator('#commerce-email').isEditable(), true, '仍可录入系统外账号');
   for (const width of [1440, 1024, 901, 900, 768, 390]) for (const dark of [false, true]) {
     await page.setViewportSize({ width, height: 900 });
     await page.evaluate(dark => { document.documentElement.dataset.theme = dark ? 'dark' : 'light'; }, dark);
@@ -54,7 +54,7 @@ test('成品账号下拉顶部搜索、模糊匹配、选择回填与草稿恢�
     assert.equal(await page.locator('#commerce-email').inputValue(), 'stock-candidate-35@example.test');
     assert.equal(await page.locator('#commerce-accountId').inputValue(), 'picker-35');
     assert.match(await trigger.innerText(), /stock-candidate-35@example.test/);
-    assert.equal(await trigger.evaluate(node => node === document.activeElement), true);
+    assert.equal(await page.locator('#commerce-email').evaluate(node => node === document.activeElement), true);
   }
   const submitted = await page.locator('#commerce-order-form').evaluate(form => Object.fromEntries(new FormData(form)));
   assert.equal(submitted['commerce-email'], 'stock-candidate-35@example.test');
@@ -62,6 +62,9 @@ test('成品账号下拉顶部搜索、模糊匹配、选择回填与草稿恢�
   await page.goto(origin + '/#/workspace/order/claude');
   await page.goto(origin + '/#/workspace/order/gpt');
   assert.match(await trigger.innerText(), /stock-candidate-35@example.test/, '切页返回恢复选择');
+  assert.equal(await page.locator('#commerce-accountId').inputValue(), 'picker-35');
+  await page.locator('#commerce-email').fill('external-account@example.test');
+  assert.equal(await page.locator('#commerce-accountId').inputValue(), '', '手填外部账号应解除原库存关联');
   await page.locator('#commerce-businessType').selectOption('续费');
   assert.equal(await page.locator('#commerce-email').isVisible(), true);
   assert.deepEqual(errors, []);

@@ -104,7 +104,7 @@ test('订单按 GPT、Claude 隔离客户历史邮箱，支持切换、手填和
   await page.locator('#commerce-businessType').selectOption('成品交付');
   assert.equal(await email.inputValue(), '');
   assert.equal(await trigger.isVisible(), true);
-  assert.equal(await email.isVisible(), false);
+  assert.equal(await email.isEditable(), true, '成品交付允许录入系统外账号');
   assert.equal(await email.getAttribute('list'), null);
   assert.match(await page.locator('[data-commerce-field="email"] .field-title-help .title-description').textContent(), /可用|未使用/);
   await page.locator('#commerce-businessType').selectOption('续费');
@@ -158,12 +158,16 @@ test('订单按 GPT、Claude 隔离客户历史邮箱，支持切换、手填和
   await customer('beta');
   assert.equal(await email.inputValue(), 'older@example.test', '更换原单客户仍保留原邮箱');
   await page.locator('#drawer [data-action="drawer-close"]').first().click();
-  await page.locator('[data-action="commerce-order-edit"][data-id="auto"]').click();
+  await page.getByRole('tab', { name: '待补全', exact: true }).click();
+  await page.locator('[data-action="commerce-order-detail"][data-id="auto"]').click();
+  await page.getByRole('dialog', { name: '订单详情', exact: true })
+    .getByRole('button', { name: '编辑资料', exact: true }).click();
   await customer('alpha');
   assert.equal(await email.inputValue(), 'automatic@example.test');
   assert.equal(await email.getAttribute('readonly'), '');
   assert.equal(await trigger.isVisible(), false);
   await page.locator('#drawer [data-action="drawer-close"]').first().click();
+  await page.getByRole('tab', { name: '当前订单', exact: true }).click();
   await page.locator('[data-action="commerce-order-edit"][data-id="stock"]').click();
   assert.equal(await email.inputValue(), 'delivered@example.test');
   assert.equal(await email.getAttribute('readonly'), '');

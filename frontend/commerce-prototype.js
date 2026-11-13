@@ -9799,16 +9799,16 @@
       select.value = node.dataset.value;
       const email = picker.querySelector('#commerce-email');
       const directEmail = email && !personalProduct(select.form?.elements['commerce-product']?.value);
+      const stock = directEmail && select.form.elements['commerce-businessType'].value === '成品交付';
       if (directEmail) {
         email.value = select.value;
         const history = select.form.elements['order-customer-history-email'];
-        if (history && select.form.elements['commerce-businessType'].value !== '成品交付')
-          history.value = select.value;
+        if (history && !stock) history.value = select.value;
       }
       filterPicker(picker.querySelector('[data-commerce-picker]'));
       picker.querySelector('.commerce-picker-popover').hidePopover();
       (email && !email.hidden ? email : picker.querySelector('.commerce-picker-trigger')).focus({ preventScroll: true });
-      (directEmail ? email : select).dispatchEvent(new Event('change', { bubbles: true }));
+      (directEmail && !stock ? email : select).dispatchEvent(new Event('change', { bubbles: true }));
       return true;
     }
     if (!canManageOrders() && /^commerce-(?:new-product-order|order-(?:edit|refund|more|renew|pending|auto-fx|fx|fee-correction|card-backfill)|subscription-state|rent-|tenant-card)/.test(action)) return true;
