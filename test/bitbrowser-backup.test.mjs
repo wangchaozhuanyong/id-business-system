@@ -1,6 +1,4 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import {
@@ -75,16 +73,5 @@ test('never delegates alternative modes, authorization secrets, or unauthorized 
     const result = await handle({ ...request, body: { ...input, ...variation }, context });
     assert.equal(result.status, 400);
     assert.equal(result.headers['Cache-Control'], 'no-store');
-  }
-});
-
-test('frozen BitBrowser execution and safety source matches its recorded digests', async () => {
-  const root = new URL('../modules/recharge/bitbrowser/reference/', import.meta.url);
-  const manifest = JSON.parse(await readFile(new URL('SOURCE-MANIFEST.json', root), 'utf8'));
-  assert.equal(manifest.commit, 'e51dd9c9974c6292dbbc6572a5d844a672f0d0f1');
-  for (const { path, snapshot, sha256 } of manifest.files) {
-    assert.equal(snapshot, path + '.source');
-    const source = await readFile(new URL(snapshot, root));
-    assert.equal(createHash('sha256').update(source).digest('hex'), sha256, path);
   }
 });

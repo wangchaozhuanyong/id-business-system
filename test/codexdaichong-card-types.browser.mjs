@@ -159,7 +159,9 @@ test('card pool renders, imports and edits shared card types', { timeout: 35_000
   const submit = importBox.getByRole('button', { name: '解析并导入', exact: true });
   const input = importBox.getByRole('textbox', { name: '待导入银行卡资料', exact: true });
   const receipt = importBox.getByRole('status');
+  await importBox.locator('summary[aria-label="查看批量导入银行卡说明"]').click();
   await importBox.getByText('卡号 有效期 CVC 持卡人', { exact: true }).waitFor();
+  await page.keyboard.press('Escape');
   assert.equal(await input.getAttribute('placeholder'), '卡号 10/30 CVC\n卡号 10/30 CVC 持卡人');
   await type.locator('option[value="type-b"]').waitFor({ state: 'attached' });
   assert.equal(await type.locator('option[value="type-disabled"]').count(), 0);
@@ -169,7 +171,7 @@ test('card pool renders, imports and edits shared card types', { timeout: 35_000
     const control = node.getBoundingClientRect();
     const label = node.labels[0].getBoundingClientRect();
     const input = document.getElementById('card_pool_import_text').getBoundingClientRect();
-    return label.right <= control.left && control.bottom < input.top;
+    return (innerWidth <= 600 ? label.bottom <= control.top : label.right <= control.left) && control.bottom < input.top;
   });
   assert.equal(placement, true);
   await type.selectOption(otherType.id);

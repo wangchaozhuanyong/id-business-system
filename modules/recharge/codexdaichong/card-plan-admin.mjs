@@ -1,9 +1,9 @@
 const labels = Object.freeze({ plus: 'Plus', pro100: 'Pro 100', pro200: 'Pro 200', pro500: 'Pro 500' });
 const choices = Object.entries(labels).map(([value, label]) =>
-  '<label><input type="checkbox" value="' + value + '"> ' + label + '</label>').join('');
+  '<label class="card-plan-choice"><input type="checkbox" value="' + value + '"><span>' + label + '</span></label>').join('');
 
 export const cardPlanImportFields = '<fieldset id="card_pool_import_plans" class="card-plan-options" disabled>' +
-  '<legend>允许套餐</legend>' + choices + '</fieldset>';
+  '<legend>允许套餐</legend><div class="card-plan-grid">' + choices + '</div></fieldset>';
 
 export const cardPlanToolbar = `
   <div class="card-plan-toolbar" aria-label="银行卡套餐规则" role="group">
@@ -11,15 +11,19 @@ export const cardPlanToolbar = `
     <button type="button" class="btn btn-secondary" id="card_plan_batch" disabled>批量设置套餐</button>
     <span id="card_plan_summary" role="status">正在读取套餐设置…</span>
   </div>
-  <dialog class="card-plan-editor" id="card_plan_editor" aria-labelledby="card_plan_title">
+  <dialog class="card-plan-editor" id="card_plan_editor" aria-labelledby="card_plan_title" aria-describedby="card_plan_result">
     <form>
-      <h3 id="card_plan_title">设置允许套餐</h3>
-      <fieldset id="card_plan_options" class="card-plan-options"><legend>允许套餐</legend>${choices}</fieldset>
-      <p id="card_plan_result" role="status"></p>
-      <div class="import-actions">
+      <header class="card-plan-editor-header"><h3 id="card_plan_title">设置允许套餐</h3></header>
+      <div class="card-plan-editor-body">
+        <fieldset id="card_plan_options" class="card-plan-options">
+          <legend>允许套餐</legend><div class="card-plan-grid">${choices}</div>
+        </fieldset>
+        <p id="card_plan_result" role="status"></p>
+      </div>
+      <footer class="card-plan-editor-actions">
         <button type="button" class="btn btn-secondary" id="card_plan_cancel">取消</button>
         <button type="submit" class="btn btn-primary">保存</button>
-      </div>
+      </footer>
     </form>
   </dialog>`;
 
@@ -36,6 +40,19 @@ export function createCardPlanAdmin({ labels, request, loadCards, onImportChange
   const save = dialog.querySelector('[type="submit"]');
   const selected = new Set();
   let snapshot = null, rows = new Map(), editing = null, writing = false;
+
+  function attachImportHelp() {
+    for (const [title, hint, control] of [
+      [element('card_pool_import_box')?.querySelector('.import-box-title'), element('card_pool_import_hint'), element('card_pool_import_text')],
+      [document.querySelector('label[for="card_pool_import_type"]'), element('card_pool_import_type_hint'), element('card_pool_import_type')]
+    ]) {
+      if (!title || !hint || !window.IDTitleHelp) continue;
+      window.IDTitleHelp.attach(title, hint);
+      control?.setAttribute('aria-describedby', title.parentElement.querySelector('.title-description').id);
+    }
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', attachImportHelp, { once: true });
+  else attachImportHelp();
 
   const readChoices = group => [...group.querySelectorAll('input:checked')].map(input => input.value);
   const setChoices = (group, values) => {
@@ -87,8 +104,8 @@ export function createCardPlanAdmin({ labels, request, loadCards, onImportChange
       ? card.allowed_plans.filter(plan => Object.hasOwn(labels, plan)).map(plan => labels[plan]).join(' / ')
       : '未设置';
     const tail = /^\d{4}$/.test(card.last4) ? '尾号 ' + card.last4 : '编号 ' + id;
-    return '<div class="card-plan-cell"><input type="checkbox" data-card-plan-select value="' + id +
-      '" aria-label="选择银行卡' + tail + '">' +
+    return '<div class="card-plan-cell"><label class="card-plan-select"><input type="checkbox" data-card-plan-select value="' + id +
+      '" aria-label="选择银行卡' + tail + '"></label>' +
       '<button type="button" class="btn btn-secondary" data-card-plan-edit="' + id +
       '" aria-haspopup="dialog" aria-label="设置银行卡' + tail + '的允许套餐">' +
       (allowed || '待核对') + '</button></div>';

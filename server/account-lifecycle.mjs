@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { isHistoricallyOpenedClaude } from './inventory-history.mjs';
 import { parseV2DateTimeInput, toV2DateTimeInput } from '../modules/time/dateTime.ts';
+import { manualBusinessOrder, orderFieldChanged, validOrderEmail } from '../frontend/order-opening.mjs';
 import { personalProduct, personalStock, sameTarget, stockTypeForProduct, targetKey } from './personal-subscriptions.mjs';
+import { registrationOccupancy, registrationProductConflict } from './inventory-registration.mjs';
 
 const rows = value => Array.isArray(value) ? value : [];
 const emailKey = value => String(value || '').trim().toLowerCase();
@@ -171,16 +173,73 @@ export function changeAccountLifecycle(inventory, commerce, command, actor, now 
   return { changed: true, account };
 }
 
-export function checkInventoryRenewals(previousCommerce, commerce, inventory) {
+const legacyBuyerSources = new Set(['历史入库', '管理员手工', '', null, undefined]);
+
+function canFillHistoricalStockBuyer(order, account) {
+  return manualBusinessOrder(order) && productType(order) === 'claude' && order.businessType === '成品交付' &&
+    !order.customerId && !order.taskId && legacyBuyerSources.has(order.source) &&
+    systemAccount(account) && account.type === 'claude' && order.accountId === account.id &&
+    validOrderEmail(order.email) && emailKey(order.email) === emailKey(account.email) &&
+    (account.source === '历史入库' || ['opened', 'dead'].includes(account.claudeHistory?.phase) ||
+      rows(account.usageLinks).some(link => link.kind === 'order-sale' && link.orderId === order.id));
+}
+
+function isRecordedOrderCorrection(prior, order) {
+  const before = rows(prior.corrections), after = rows(order.corrections);
+  const correction = after.at(-1);
+  const { corrections, refunds, bankReturns, ...snapshot } = prior;
+  return (order.source ?? '') === (prior.source ?? '') && order.version === (Number(prior.version) || 0) + 1 &&
+    after.length === before.length + 1 &&
+    correction?.versionAfter === order.version && typeof correction.reason === 'string' && correction.reason.trim() &&
+    isDeepStrictEqual(correction.previous, snapshot) &&
+    before.every((entry, index) => isDeepStrictEqual(entry, after[index]));
+}
+
+export function checkInventoryRenewals(previousCommerce, commerce, inventory, {
+  action, actor, priorInventory = inventory, completedCustomerOrders
+} = {}) {
   const previous = new Map(rows(previousCommerce?.orders).map(order => [order.id, order]));
   const accountsById = firstById(inventory?.accounts);
+  const priorAccountsById = priorInventory === inventory ? accountsById : firstById(priorInventory?.accounts);
+  let originalClaudeOrders, proposedClaudeOrders, activeCustomers, registrations;
   for (const order of rows(commerce?.orders)) {
     const prior = previous.get(order.id);
     if (prior) {
-      const account = accountsById.get(prior.accountId);
-      if (systemAccount(account) && (['accountId', 'email', 'product', 'businessType', 'customerId'].some(field => order[field] !== prior[field]) ||
-          (personalStock(account.type) && !sameTarget(order, prior))))
-        return '原库存账号及客户关联必须保留，不能通过普通订单更正重新分配';
+      const account = priorAccountsById.get(prior.accountId) ?? accountsById.get(prior.accountId);
+      if (systemAccount(account)) {
+        if (orderFieldChanged(order, prior, 'accountId', 'email', 'product', 'businessType') ||
+            (personalStock(account.type) && !sameTarget(order, prior)))
+          return '原库存账号及客户关联必须保留，不能通过普通订单更正重新分配';
+        if (orderFieldChanged(order, prior, 'customerId')) {
+          if (prior.customerId)
+            return '原库存账号及客户关联必须保留，已登记的客户不能通过普通订单更正更换';
+          if (action !== '更正订单' || !actor?.id || !['admin', 'super'].includes(actor.role) ||
+              !canFillHistoricalStockBuyer(prior, account))
+            return '原库存账号及客户关联必须保留，请从订单详情核对原客户资料';
+          if (!activeCustomers) {
+            const originalCustomers = firstById(previousCommerce?.customers);
+            activeCustomers = new Set(rows(commerce.customers).filter(customer => customer.id &&
+              customer.active !== false && originalCustomers.has(customer.id) &&
+              originalCustomers.get(customer.id).active !== false).map(customer => customer.id));
+          }
+          if (!activeCustomers.has(order.customerId))
+            return '请选择原订单对应的有效客户';
+          originalClaudeOrders ??= lifecycleReadContext(previousCommerce).ordersByTarget.get('claude') || new Map();
+          proposedClaudeOrders ??= lifecycleReadContext(commerce).ordersByTarget.get('claude') || new Map();
+          const email = emailKey(prior.email);
+          registrations ??= registrationOccupancy(priorInventory);
+          if (registrationProductConflict(registrations.get(email), account.type, account.id))
+            return '此邮箱关联多个账号或平台，请先核对原库存账号';
+          const currentCustomer = account.accountLifecycle?.customerId;
+          if ((currentCustomer && currentCustomer !== order.customerId) ||
+              [originalClaudeOrders, proposedClaudeOrders].some(index => index.get(email)?.some(other =>
+                other.id !== prior.id && !other.cancelled && !other.draft && !other.subscriptionEnded &&
+                other.customerId && other.customerId !== order.customerId)))
+            return '此账号已有其他客户的记录，请先核对原订单的客户';
+          if (!isRecordedOrderCorrection(prior, order)) return '请填写补登记客户的更正原因';
+          completedCustomerOrders?.add(order.id);
+        }
+      }
       if (!personalProduct(order.product) || prior.entitlementStatus === 'active' ||
           order.entitlementStatus !== 'active') continue;
     }

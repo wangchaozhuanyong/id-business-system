@@ -60,8 +60,6 @@ import { personalOrderError, personalProduct, preparePersonalInventory } from '.
 import { stageInitialTenantCards, stageOrderTenantCard, stageTenantCardUses, TenantCardError } from './tenant-initial-cards.mjs';
 import { checkTenantKycRecovery, checkTenantKycWrite, isDeadAccountCorrection } from './tenant-kyc.mjs';
 import { AccountLifecycleError, accountLifecycleSummaries, changeAccountLifecycle, checkInventoryRenewals, applyAccountOrderLifecycle } from './account-lifecycle.mjs';
-import { planLegacyMailboxImport } from './tools/legacy-mailbox-import.mjs';
-import { planLegacyTotpImport } from './tools/legacy-totp-import.mjs';
 import { applyInventoryUsage, correctInventoryUsage, inspectInventoryUsage, usageReviewRows } from './inventory-usage.mjs';
 import { checkRegistrationChanges } from './inventory-registration.mjs';
 import { attributeInventory, defaultInventoryRegistrationTimes } from './inventory-attribution.mjs';
@@ -1314,21 +1312,6 @@ export function createLocalBusinessStore(databasePath) {
     loadManagedMailboxPool() {
       return mailboxPoolView(readDocument(managedMailboxDomain));
     },
-    importLegacyManagedMailboxPool(bundle, secrets, expectedVersion) {
-      return writeTransaction(() => {
-        const current = readDocument(managedMailboxDomain);
-        if (current.version !== expectedVersion)
-          throw new MailboxPoolError(409, '邮箱池版本已变化，请重新核对目标');
-        const { items, defaultValidDays, imported, unchanged } = planLegacyMailboxImport(current, bundle, secrets);
-        if (!imported) return { version: current.version, imported, unchanged };
-        const version = current.version + 1;
-        const data = { items, defaultValidDays };
-        put.run(managedMailboxDomain, version, encrypt(key, managedMailboxDomain, version, JSON.stringify(data)));
-        log.run(new Date().toISOString(), managedMailboxDomain, 'managed_mailbox_legacy_import',
-          auditSummary(`导入旧邮箱池 ${imported} 条`, localToolboxActor), version);
-        return { version, imported, unchanged };
-      });
-    },
     saveManagedMailboxPool(body, actor, microsoftRefreshToken) {
       return writeTransaction(() => {
         const current = readDocument(managedMailboxDomain);
@@ -1439,23 +1422,6 @@ export function createLocalBusinessStore(databasePath) {
         readSnapshot: readDocument,
         recordView: (id, version) => log.run(new Date().toISOString(), savedTotpDomain, 'saved_totp_view',
           auditSummary('查看 2FA 密钥', actor, id), version)
-      });
-    },
-    async importLegacySavedTotp(bundle, secrets, actor, expectedVersion) {
-      const domain = `${savedTotpDomain}:${actor.id}`;
-      const before = readDocument(domain);
-      if (before.version !== expectedVersion)
-        throw new SavedTotpError(409, '2FA 账号已更新，请重新核对');
-      const { items, imported, unchanged } = await planLegacyTotpImport(before, bundle, secrets);
-      return writeTransaction(() => {
-        if (readDocument(domain).version !== before.version)
-          throw new SavedTotpError(409, '2FA 账号已更新，请重新核对');
-        if (!imported) return { version: before.version, imported, unchanged, total: items.length };
-        const version = before.version + 1;
-        put.run(domain, version, encrypt(key, domain, version, JSON.stringify(items)));
-        log.run(new Date().toISOString(), savedTotpDomain, 'saved_totp_legacy_import',
-          auditSummary(`导入旧 2FA 账号 ${imported} 条`, actor), version);
-        return { version, imported, unchanged, total: items.length };
       });
     },
     async saveSavedTotp(body, actor) {
@@ -1856,6 +1822,7 @@ export function createLocalBusinessStore(databasePath) {
             }
           }
         }
+        const completedCustomerOrders = new Set();
         if (incoming.has('commerce')) {
           if (!('renewalWarningHours' in commerce) && priorCommerce?.renewalWarningHours !== undefined)
             commerce.renewalWarningHours = priorCommerce.renewalWarningHours;
@@ -1873,7 +1840,9 @@ export function createLocalBusinessStore(databasePath) {
           checkCustomerTagAssignments(
             priorCommerce, commerce, (incoming.get('settings') ?? current('settings'))?.customerTags
           );
-          const renewalError = checkInventoryRenewals(priorCommerce, commerce, inventory);
+          const renewalError = checkInventoryRenewals(priorCommerce, commerce, inventory, {
+            action, actor, priorInventory, completedCustomerOrders
+          });
           if (renewalError) throw new LocalDataError(409, renewalError);
           if (actor) {
             let owners = [];
@@ -2206,7 +2175,8 @@ export function createLocalBusinessStore(databasePath) {
           }
           if (incoming.has('commerce')) {
             const error = stageAppleOrderFunding(priorCommerce?.orders, commerce.orders, previous,
-              inventory, current('settings'), writes.find(write => write.domain === 'commerce').action, commerce.customers);
+              inventory, current('settings'), writes.find(write => write.domain === 'commerce').action, commerce.customers,
+              completedCustomerOrders);
             if (error) throw new LocalDataError(409, error);
           }
           const error = checkAppleLedger(
