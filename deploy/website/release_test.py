@@ -315,6 +315,21 @@ class WebsiteReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_approval_mismatch"):
                 remote.require_asset_digest(changed, after)
 
+    def test_security_canary_enrolls_a_factor_before_sensitive_actions(self):
+        source = """  const login = await send('/api/local/auth/login', {method:'POST',body:credentials});
+  assert.equal(login.status,200);
+  const session = login.headers['set-cookie'][0].split(';')[0];
+  await send('/api/local/auth/employees',{method:'POST',session,body:isolatedStaff});
+"""
+        configured = remote.wire_canary_authenticator(source)
+        self.assertIn("assert.equal(JSON.parse(beforeSecurity.body).bound,false);", configured)
+        self.assertIn("assert.equal(JSON.parse(verified.body).recentlyVerified,true);", configured)
+        self.assertLess(configured.index("'/api/local/auth/security/confirm'"),
+                        configured.index("'/api/local/auth/employees'"))
+        self.assertEqual(remote.wire_canary_authenticator(configured), configured)
+        with self.assertRaisesRegex(remote.ReleaseError, "isolated_login_contract_changed"):
+            remote.wire_canary_authenticator("different login flow")
+
     def test_stages_active_website_launchers_and_switches_to_the_prepared_path(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)

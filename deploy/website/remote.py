@@ -195,6 +195,37 @@ def update_canary_asset_refs(content, previous_index, target_index):
     return content
 
 
+def wire_canary_authenticator(content):
+    marker = "  // Enrollment for the synthetic canary administrator.\n"
+    if marker in content:
+        return content
+    credentials = "  const login = await send('/api/local/auth/login', {method:'POST',body:credentials});\n"
+    previous = credentials + """  assert.equal(login.status,200);
+  const session = login.headers['set-cookie'][0].split(';')[0];
+"""
+    require(content.count(previous) == 1, "isolated_login_contract_changed")
+    updated = credentials + """  assert.equal(login.status,200);
+  const enrollmentSession = login.headers['set-cookie'][0].split(';')[0];
+""" + marker + """  const beforeSecurity = await send('/api/local/auth/security', {session:enrollmentSession});
+  assert.equal(beforeSecurity.status,200);
+  assert.equal(JSON.parse(beforeSecurity.body).bound,false);
+  const start = await send('/api/local/auth/security/start', {method:'POST',session:enrollmentSession,
+    body:{password:credentials.password}});
+  assert.equal(start.status,200);
+  const {enrollment,setupKey} = JSON.parse(start.body);
+  const {calculateTotp} = await import('/app/modules/tools/totp.mjs');
+  const {code} = await calculateTotp(setupKey, Date.now());
+  const bound = await send('/api/local/auth/security/confirm', {method:'POST',session:enrollmentSession,
+    body:{enrollment,code}});
+  assert.equal(bound.status,200);
+  const session = bound.headers['set-cookie'][0].split(';')[0];
+  const verified = await send('/api/local/auth/security', {session});
+  assert.equal(verified.status,200);
+  assert.equal(JSON.parse(verified.body).recentlyVerified,true);
+"""
+    return content.replace(previous, updated)
+
+
 def mount_backup_monitoring(content):
     original = '  state=(--mount "type=bind,src=$formal/data,dst=/state")'
     mounted = original[:-1] + "\n" + MONITORING_MOUNT + f'\n  -e "{MONITORING_ENV}")'
@@ -413,6 +444,8 @@ def stage(plan, release):
         elif name == "check-app.mjs":
             content = update_canary_asset_refs(content, (live / "source/frontend/index.html").read_text(),
                                                (source / "frontend/index.html").read_text())
+            if scope == "securityPresentation":
+                content = wire_canary_authenticator(content)
         if plan.get('externalEvents'):
             if name == 'run-app':
                 content = wire_event_launcher(content)
