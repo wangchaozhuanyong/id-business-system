@@ -177,10 +177,28 @@ export function inspectInventoryUsage(inventory, commerce, now = Date.now()) {
       for (const source of sources) {
         const dated = account.registered || account.claudeHistory?.start || (!account.claudeHistory && account.createdAt);
         const establishedWithoutClaim = !source.claimId && !source.claimBatchId && !lastReturn.has(source.id);
+        let occurred = instant(dated || (establishedWithoutClaim && account.claudeHistory && account.importedAt));
+        if (!Number.isFinite(occurred) && account.source === '历史入库' && account.claudeHistory) {
+          // A successful registration already consumed this batch item. Its
+          // recorded time can date the supplemental link without rewriting use.
+          const claim = pendingInventoryClaim(inventory, source, 'used');
+          const links = list(source.usageLinks).filter(link => link.kind === 'registration' &&
+            link.registrationId && !link.accountId &&
+            (!link.claimId || link.claimId === claim?.item.id) &&
+            (!link.batchId || link.batchId === claim?.batch.id));
+          if (claim && links.length === 1) {
+            const records = registrations.filter(record => record.id === links[0].registrationId);
+            const [record] = records;
+            if (records.length === 1 && record.assetId === source.id && record.state === '成功' &&
+                aiRegistrationProduct(record.product) === account.type &&
+                (!record.accountId || record.accountId === account.id))
+              occurred = instant(record.time);
+          }
+        }
         consider(source, {
           kind: 'registration', accountId: account.id, product: account.type,
           actorId: account.createdById,
-          occurred: instant(dated || (establishedWithoutClaim && account.claudeHistory && account.importedAt)),
+          occurred,
           label: `账号登记 · ${account.id}`
         }, ambiguous);
       }
