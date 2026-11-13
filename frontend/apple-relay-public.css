@@ -10,15 +10,13 @@
   gap: 10px;
   align-items: center;
 }
-.public-mailbox-brand span {
-  display: grid;
-  place-items: center;
+.public-mailbox-brand img {
+  display: block;
+  flex: none;
   width: 32px;
   height: 32px;
   border-radius: 8px;
-  background: var(--primary-soft);
-  color: var(--primary);
-  font-weight: 750;
+  object-fit: contain;
 }
 .public-mailbox-main {
   max-width: 760px;

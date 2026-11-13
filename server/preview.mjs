@@ -50,10 +50,13 @@ import { createLegacyRechargeNotifications } from './monitoring-recharge.mjs';
 import { probeCodexdaichongRuntime } from '../modules/recharge/codexdaichong/runtime-health.mjs';
 import { createRechargeEvents } from './recharge-events.mjs';
 
-const publicAssetTypes = new Set(['text/css; charset=utf-8', 'text/javascript; charset=utf-8']);
+const publicAssetTypes = new Set(['text/css; charset=utf-8', 'text/javascript; charset=utf-8', 'image/png']);
 
 const files = new Map([
   ['index.html', 'text/html; charset=utf-8'],
+  ['brand/ai-subscription-mark.png', 'image/png'],
+  ['brand/favicon-32.png', 'image/png'],
+  ['brand/apple-touch-icon.png', 'image/png'],
   ['prototype.css', 'text/css; charset=utf-8'],
   ['design-tokens.css', 'text/css; charset=utf-8'],
   ['tabs.css', 'text/css; charset=utf-8'],
@@ -426,10 +429,10 @@ export async function startPreview(
       )
       .replace('20261105-bit-login" />', '20261106-local-inventory-settings" />')
       .replace(
-        '<title>ID 业务管理 · 新版交互设计</title>',
-        publicUrl ? '<title>ID 业务管理系统</title>' : '<title>ID 业务管理 · 独立本机测试</title>'
+        '<title>AI订阅管理系统 · 设计预览</title>',
+        publicUrl ? '<title>AI订阅管理系统</title>' : '<title>AI订阅管理系统 · 独立本机测试</title>'
       )
-      .replace('页面设计预览 · 所有资料均为虚构示例', publicUrl ? '业务管理系统' : '本机业务模式 · 未接入的模块仍为演示');
+      .replace('页面设计预览 · 所有资料均为虚构示例', publicUrl ? '内部工作台' : '本机业务模式 · 未接入的模块仍为演示');
     index.body = Buffer.from(localIndex);
     try {
       financeCollection = createFinanceCollection({ store, provider: financeProvider, fetchQuote: financeFetch });
@@ -693,7 +696,7 @@ export async function startPreview(
         'Content-Type': 'text/html; charset=utf-8',
         'Content-Length': localBitCheck.length,
         'Content-Security-Policy':
-          "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; frame-ancestors 'self'; base-uri 'none'; form-action 'none'"
+          "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; frame-ancestors 'self'; base-uri 'none'; form-action 'none'"
       });
       return response.end(request.method === 'HEAD' ? undefined : localBitCheck);
     }
@@ -716,13 +719,10 @@ export async function startPreview(
       response.writeHead(302, { Location: '/', 'Cache-Control': 'no-store' }).end();
       return;
     }
-    if (path === '/favicon.ico') {
-      response.writeHead(204).end();
-      return;
-    }
     if (publicUrl && path === '/design-preview.html') return response.writeHead(404).end();
     const asset = assets.get(
-      path === '/' || path === '/design-preview.html' ? '/index.html' : path
+      path === '/favicon.ico' ? '/brand/favicon-32.png' :
+        path === '/' || path === '/design-preview.html' ? '/index.html' : path
     );
     if (!asset) {
       response.writeHead(404).end();
@@ -732,7 +732,7 @@ export async function startPreview(
     if (path === '/mailbox-query') {
       response.setHeader(
         'Content-Security-Policy',
-        "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
+        "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"
       );
     }
     let body = asset.body;
@@ -888,8 +888,8 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
       microsoftMailboxConfig
     });
     console.log(
-      (publicOrigin ? 'ID 业务管理系统 · 正式站内网监听：' :
-        databasePath ? 'ID 业务管理系统 · 本机业务模式：' : 'ID 业务管理系统 · 独立新版设计预览：') +
+      (publicOrigin ? 'AI订阅管理系统 · 正式站内网监听：' :
+        databasePath ? 'AI订阅管理系统 · 本机业务模式：' : 'AI订阅管理系统 · 独立新版设计预览：') +
         url
     );
     console.log(databasePath ? '本机数据存储已启用。' : '此入口使用虚构演示资料。');

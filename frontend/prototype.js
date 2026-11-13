@@ -1247,7 +1247,7 @@ function renderSidebar(openCurrent = false) {
   const renewalCount = permittedRoute('workspace/renewals')
     ? window.IDDesignAPI.modules.commerce?.renewalReminderCount?.() || 0 : 0;
   $('#sidebar').innerHTML =
-    `<a class="brand" href="#/mailboxes/google" aria-label="ID 业务管理首页"><span class="brand-mark">ID</span><span class="brand-name">业务管理系统</span></a><nav class="sidebar-navigation" tabindex="0" aria-label="业务模块导航">${allowedNavigation
+    `<a class="brand" href="#/mailboxes/google" aria-label="AI订阅管理系统首页" title="AI订阅管理系统"><img class="brand-mark" src="/brand/ai-subscription-mark.png" width="36" height="36" alt="" /><span class="brand-name">AI订阅管理系统</span></a><nav class="sidebar-navigation" tabindex="0" aria-label="业务模块导航">${allowedNavigation
       .map(([group, iconName, children]) => {
         const direct = children.length === 1 && group !== '监控中心';
         const active = currentGroup?.[0] === group;
