@@ -320,7 +320,7 @@
     const setting = settingsPage();
     const title = setting ? '监控通知' : '网站监控';
     const description = setting ? '设置 Telegram 接收人、通知规则并查询投递回执。测试与启用分别操作。'
-      : '查看服务运行状态、告警记录与各网站访问统计。没有有效观测时显示未知。';
+      : '查看服务运行状态和告警记录。没有有效观测时显示未知。';
     if (!local() || (setting && !superAdmin()))
       return A.header(title, description) + `<section class="panel">${A.empty('监控资料不可用', D ? '请使用有权限的管理账号。' : '设计预览尚未接入实际监控。')}</section>`;
     const tab = queryTab(), snapshot = snapshots.get(tab)?.data, error = errors.get(tab);
@@ -392,8 +392,6 @@
         A.state.drafts.set(viewKey, view);
         if (A.state.route === 'monitor') { A.render(); void load(); }
         else location.hash = '#/monitor';
-      } else if (view === 'ops-website-analytics') {
-        if (local()) location.hash = '#/data';
       } else if (['ops-website-visits', 'ops-website-check'].includes(view)) {
         if (view !== 'ops-website-check' && !local()) return true;
         A.state.drafts.set('operations:tool-section:网站监控', { panel: view });

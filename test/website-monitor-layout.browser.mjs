@@ -4,7 +4,7 @@ import test from 'node:test';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { interceptDesign, origin, toggleDesignTheme } from './helpers/offline-design.mjs';
 
-test('网站监控的访问记录与检测页签共享布局，并保留统计入口和草稿', { timeout: 90_000 }, async t => {
+test('网站监控的访问记录与检测共用页签，网站统计从数据中心进入', { timeout: 90_000 }, async t => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
   const browser = await chromium.launch();
   t.after(() => browser.close());
@@ -34,9 +34,10 @@ test('网站监控的访问记录与检测页签共享布局，并保留统计�
     await page.goto(origin + '/#/plugins/websites');
     if (theme === 'dark') await toggleDesignTheme(page);
     const host = page.locator('#plugin-tool-host');
-    const entry = host.getByRole('tab', { name: '访问统计', exact: true });
-    await entry.waitFor();
     await host.getByRole('button', { name: '每日统计', exact: true }).waitFor();
+    const navigation = host.getByRole('tablist', { name: '网站监控功能' });
+    if (phase === 'after')
+      assert.deepEqual(await navigation.getByRole('tab').allTextContents(), ['运行状态', '告警记录', '访问记录与 IP', '网站检测']);
     const tabs = [['访问记录与 IP', 'ops-website-visits'], ['网站检测', 'ops-website-check']];
     const titlePositions = [];
     for (const [label, id] of tabs) {
@@ -109,8 +110,11 @@ test('网站监控的访问记录与检测页签共享布局，并保留统计�
       assert.equal(await page.locator('#ops-monitor-url').inputValue(), 'https://example.test/synthetic');
       await host.getByRole('tab', { name: '访问记录与 IP', exact: true }).click();
       assert.equal(await page.locator('#ops-visits-sort').inputValue(), 'oldest');
-      await entry.click();
+      if (width <= 900) await page.locator('#nav-toggle').click();
+      await page.locator('#sidebar').getByRole('link', { name: '数据中心', exact: true }).click();
       await page.getByRole('heading', { name: '数据中心', exact: true }).waitFor();
+      const statistics = page.getByRole('navigation', { name: '数据中心栏目' }).getByRole('link', { name: '网站统计', exact: true });
+      assert.equal(await statistics.getAttribute('aria-current'), 'page');
     }
     assert.deepEqual(errors, []);
     await context.close();
