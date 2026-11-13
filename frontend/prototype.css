@@ -4161,7 +4161,12 @@ details.toolbox-phrase-more[open] > summary {
 .system-monitor-toolbar { justify-content: space-between; padding-block: var(--toolbar-padding-block); }
 .system-monitor-toolbar [data-page-actions] { margin-left: auto; }
 .system-monitor-choice { display: flex; align-items: center; gap: 8px; color: var(--secondary); font-size: 12px; min-width: 0; }
-.system-monitor-read-time { padding: 0 var(--panel-padding-inline) 12px; color: var(--secondary); font-size: 12px; line-height: 1.7; }
+.system-monitor-check-filters { display: flex; gap: 9px; min-width: 0; }
+.system-monitor-check-filters .system-monitor-choice { white-space: nowrap; }
+.system-monitor-read-time { color: var(--secondary); font-size: 12px; line-height: 1.7; font-variant-numeric: tabular-nums; }
+.system-monitor-check-toolbar .section-title-row { gap: 6px; }
+.system-monitor-check-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 9px 16px; }
+.system-monitor-check-actions [data-page-actions] { width: auto; }
 .system-monitor-check-table { table-layout: fixed; min-width: 0; width: 100%; }
 .system-monitor-check-table th:nth-child(1) { width: 18%; }
 .system-monitor-check-table th:nth-child(2) { width: 100px; }
@@ -4269,8 +4274,9 @@ details.toolbox-phrase-more[open] > summary {
   .system-monitor-rule-table td[colspan] { grid-column: 1 / -1; }
 }
 @media (max-width: 640px) {
-  .system-monitor-check-toolbar .toolbar-left { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); flex: 1 1 100%; width: 100%; gap: 12px; }
-  .system-monitor-check-toolbar .section-title-row { grid-column: 1 / -1; }
+  .system-monitor-check-toolbar .toolbar-left { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .system-monitor-check-actions { flex-basis: 100%; justify-content: space-between; gap: 8px; }
+  .system-monitor-check-filters .system-monitor-choice { flex: 1; }
   .system-monitor-choice select { flex: 1; width: 0; min-width: 0; }
   .system-monitor-filters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; width: 100%; }
   .system-monitor-filters .system-monitor-search { grid-column: 1 / -1; max-width: none; }

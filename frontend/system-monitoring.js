@@ -240,13 +240,13 @@
     const rows = (data.checks || []).filter(row => (!category || row.category === category) && (checkFilter() === 'all' ||
       (checkFilter() === 'normal' ? row.status === 'ok' : row.status !== 'ok'))).sort((a, b) => severity[a.status] - severity[b.status]);
     return `<div class="toolbar system-monitor-toolbar system-monitor-check-toolbar"><div class="toolbar-left">
-      <div class="section-title-row"><h2>监控项目</h2>${A.titleInfo('监控项目', '按系统、安全、代充和后台任务分类。默认显示需关注项目，未知和未接入不会视为正常。时间均为北京时间。页面可见时每 60 秒更新。', 'system-monitor-checks-help')}</div>
-      <label class="system-monitor-choice">状态<select id="system-monitor-check-filter">${A.options([
+      <div class="section-title-row"><h2>监控项目</h2>${A.titleInfo('监控项目', '默认显示需要关注的项目。可按状态和分类筛选，点「查看详情」核对结果。时间为北京时间。', 'system-monitor-checks-help')}</div>
+      <div class="system-monitor-check-filters"><label class="system-monitor-choice">状态<select id="system-monitor-check-filter">${A.options([
         ['attention', '需关注'], ['all', '全部状态'], ['normal', '正常项目']], checkFilter())}</select></label>
       <label class="system-monitor-choice">分类<select id="system-monitor-category">${A.options([
-        ['', '全部分类'], ['运行', '系统运行'], ['安全', '访问安全'], ['代充', '代充服务'], ['后台任务', '后台任务']], category)}</select></label>
-      </div><div class="toolbar-right" data-page-actions></div></div>
-      <div class="system-monitor-read-time">${rows.length} 项 · 最近更新 ${e(time(data.generatedAt))}</div>
+        ['', '全部分类'], ['运行', '系统运行'], ['安全', '访问安全'], ['代充', '代充服务'], ['后台任务', '后台任务']], category)}</select></label></div>
+      </div><div class="system-monitor-check-actions"><span class="system-monitor-read-time">${rows.length} 项 · 最近更新 ${e(time(data.generatedAt))}</span>
+      <div class="toolbar-right" data-page-actions></div></div></div>
       <div class="system-monitor-check-list" data-pagination-table><div class="table-viewport" tabindex="0" role="region" aria-label="监控项目列表">
         <table class="system-monitor-check-table" data-table="system-monitor-checks"><thead><tr><th scope="col">监控项目</th><th scope="col">状态</th><th scope="col">检测结果</th><th scope="col">最近检查（北京）</th><th scope="col">操作</th></tr></thead>
         <tbody>${rows.map(row => `<tr class="system-monitor-check" data-monitor-check="${e(row.code)}" data-row-id="${e(row.code)}">
