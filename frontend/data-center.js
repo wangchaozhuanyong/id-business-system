@@ -54,12 +54,17 @@
     </div>`;
   }
 
+  A.modules.siteDataNavigation = () => {
+    const items = [[trafficRoute, '网站统计'], [sheetsRoute, '谷歌表格同步'],
+      ['data/health', '数据健康'], ['data/backups', '备份与恢复'], ['data/export', '导出与保留']];
+    return '<div class="panel"><nav class="tabs data-center-tabs" aria-label="数据中心栏目">' +
+      items.map(([route, label]) => '<a class="tab" href="#/' + route + '"' + (A.state.route === route ? ' aria-current="page"' : '') +
+        '>' + label + '</a>').join('') + '</nav></div>';
+  };
   function render() {
-    const items = [[trafficRoute, '网站统计'], [sheetsRoute, '谷歌表格同步']];
     return A.header('数据中心', '查看各个网站的访问统计，以及业务报表同步到 Google 表格的状态。') +
       `<div class="data-center-workspace">
-        <div class="panel"><nav class="tabs data-center-tabs" aria-label="数据中心栏目">${items.map(([route, label]) =>
-          `<a class="tab" href="#/${route}"${A.state.route === route ? ' aria-current="page"' : ''}>${label}</a>`).join('')}</nav></div>
+        ${A.modules.siteDataNavigation()}
         ${A.state.route === sheetsRoute ? sheets.render() : renderTraffic()}
       </div>`;
   }

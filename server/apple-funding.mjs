@@ -61,6 +61,25 @@ const isDraft = order => order?.draft || ['draft', '草稿'].includes(order?.sta
 const sameAppleTarget = (a, b) => appleTarget(a) === appleTarget(b) &&
   (!a.platformAccountId || a.platformAccountId === b.platformAccountId);
 
+export function stageConfirmedRenewalDebit(ledger, order, payer, at) {
+  if (!usesApple(order)) return null;
+  const data = structuredClone(ledger || emptyAppleLedger());
+  const wallet = data.wallets.find(row => row.id === order.appleIdId);
+  const before = appleAmountUnits(wallet?.balance), paid = appleAmountUnits(order.paidAmount);
+  if (!wallet || wallet.currency !== 'USD' || before === null || paid === null || paid <= 0n || before < paid)
+    throw Object.assign(new Error('原苹果 ID 余额待核对，请联系财务'), { status: 409 });
+  const priorBalance = wallet.balance;
+  const remaining = (before - paid).toString().padStart(5, '0');
+  wallet.balance = remaining.slice(0, -4) + '.' + remaining.slice(-4);
+  wallet.version++;
+  data.allocations.push({ orderId: order.id, appleIdId: wallet.id, amount: order.paidAmount, returned: '0',
+    version: 1, email: order.email });
+  data.movements.push({ id: randomUUID(), appleIdId: wallet.id, orderId: order.id, kind: 'order-charge',
+    label: '续费内购扣款', amount: '-' + order.paidAmount, before: priorBalance, after: wallet.balance,
+    versionAfter: wallet.version, actor: payer.name, actorId: payer.id, at: toV2DateTimeInput(at).replace('T', ' ') });
+  return data;
+}
+
 function conflictsWithAppleBinding(order, other) {
   if (other.id === order.id || !other.appleIdId || !usesApple(other)) return false;
   const bound = other.appleFunding?.bound || other.paidConfirmed;
@@ -72,7 +91,7 @@ function conflictsWithAppleBinding(order, other) {
     ? !sameTarget || Boolean(other.customerId && other.customerId !== order.customerId) : sameTarget;
 }
 
-export function stageAppleOrderFunding(previous, next, ledger, inventory, settings, action, customers, completedCustomerOrders) {
+export function stageAppleOrderFunding(previous, next, ledger, inventory, settings, action, customers, completedCustomerOrders, paidRenewalId) {
   const prior = new Map((previous || []).map(row => [row.id, row]));
   const staged = new Map(prior);
   const nextIds = new Set((next || []).map(row => row.id));
@@ -147,7 +166,8 @@ export function stageAppleOrderFunding(previous, next, ledger, inventory, settin
       status: asset.status, health: asset.health, deleted: asset.deleted, appStoreRegion: asset.appStoreRegion } : null;
     const index = appleFundingIndex([...staged.values()].filter(item => item.id !== order.id), ledger);
     const check = appleFundingEligibility(wallet, order, index, settings, {
-      actual: Boolean(wasReserved && order.paidConfirmed), quotedPrice: wasReserved ? old.appleFunding?.expected : ''
+      actual: Boolean((wasReserved || order.id === paidRenewalId) && order.paidConfirmed),
+      quotedPrice: wasReserved ? old.appleFunding?.expected : ''
     });
     if (check.error) return check.error;
     if (order.paidConfirmed) {

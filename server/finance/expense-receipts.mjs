@@ -91,7 +91,8 @@ function accountForReceipt(row, mode, items, orders, actor, now) {
 export function createOrderExpenseHandler({ store, publicOrigin, clock = Date.now }) {
   return async (request, response, actor) => {
     if (!actor?.id) return send(response, 401, { error: '请先登录' });
-    if (!['admin', 'super'].includes(actor.role)) return send(response, 403, { error: '当前账号无权管理费用凭据' });
+    if (!['admin', 'super'].includes(actor.role) && !(actor.role === 'finance' && request.method === 'GET'))
+      return send(response, 403, { error: '当前账号无权管理费用凭据' });
     const origin = publicOrigin || 'http://' + request.headers.host;
     if ((request.headers.origin && request.headers.origin !== origin) ||
         (request.headers['sec-fetch-site'] && !['same-origin', 'none'].includes(request.headers['sec-fetch-site'])))

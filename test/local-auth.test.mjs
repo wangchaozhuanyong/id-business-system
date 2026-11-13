@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { createLocalAuth, initializeLocalAdmin, localAdminEmail } from '../server/local-auth.mjs';
+import { calculateTotp } from '../modules/tools/totp.mjs';
 import { startPreview } from '../server/preview.mjs';
 import { productionDataPaths } from '../server/production-data.mjs';
 
@@ -132,6 +133,12 @@ test('production requires initialized staff and authenticates only the canonical
   assert.equal(authenticated.status, 200);
   const session = cookie(authenticated);
   assert.match(authenticated.headers.get('set-cookie'), /^__Host-id_session_v2=.*; Path=\/; HttpOnly; SameSite=Strict;.*; Secure$/);
+  const security = await (await request('/api/local/auth/security', { session })).json();
+  assert.equal(security.available, true);
+  assert.equal(security.bound, false);
+  assert.equal(security.requiredForExistingActions, false);
+  assert.equal((await request('/api/local/auth/security/network', { session, method: 'POST', origin: publicOrigin,
+    body: { action: 'add', version: 0 } })).status, 403);
   assert.equal((await request('/api/local/inventory', { session })).status, 200);
   assert.equal((await request('/api/local/inventory', {
     session, method: 'PUT', origin: 'http://' + host, body: {}
@@ -158,6 +165,28 @@ test('production requires initialized staff and authenticates only the canonical
   const persisted = await request('/api/local/toolbox', { session: newSession });
   assert.equal(persisted.status, 200);
   assert.equal((await persisted.json()).version, 1);
+  const securityCommand = (action, body, session) => request('/api/local/auth/security/' + action, {
+    method: 'POST', origin: publicOrigin, session, body
+  });
+  const start = await securityCommand('start', { password: supervisor.password }, newSession);
+  assert.equal(start.status, 200);
+  const { enrollment, setupKey } = await start.json();
+  const { code } = await calculateTotp(setupKey, Date.now());
+  const enrolled = await securityCommand('confirm', { enrollment, code }, newSession);
+  assert.equal(enrolled.status, 200);
+  const { recoveryCodes } = await enrolled.json();
+  await stop();
+  ({ server, url } = await startPreview(0, options));
+  const pending = await login(publicOrigin);
+  assert.equal(pending.status, 202);
+  const { verification } = await pending.json();
+  const verified = await request('/api/local/auth/login/verify', { method: 'POST', origin: publicOrigin,
+    body: { verification, code: recoveryCodes[0] } });
+  assert.equal(verified.status, 200);
+  const bound = await (await request('/api/local/auth/security', { session: cookie(verified) })).json();
+  assert.equal(bound.bound, true);
+  assert.equal(bound.requiredForExistingActions, true);
+  assert.equal(bound.recoveryRemaining, 7);
 });
 
 test('opt-in browser setup creates the fixed local admin once and protects the business API', async (t) => {

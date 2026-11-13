@@ -193,7 +193,7 @@
       '<div class="property-list">' + fields.map(([label, value]) =>
         `<div class="property-row"><span>${e(label)}</span><strong>${e(value)}</strong></div>`).join('') + '</div>' +
       `<p class="system-monitor-guidance">${e(row.guidance || '请核对采集来源及相关运行记录。')}</p>`,
-      (link ? A.button(link[0], 'goto', 'primary', '', `data-route="${e(link[1])}"`) : '') +
+      (link && A.canVisit(link[1]) ? A.button(link[0], 'goto', 'primary', '', `data-route="${e(link[1])}"`) : '') +
       (code === 'order_sync' && !['ok', 'disabled'].includes(row.status)
         ? A.button('重试入单', 'system-monitor-order-retry', 'primary') : '') +
       A.button('关闭', 'drawer-close'));
@@ -343,7 +343,7 @@
     return A.header(title, description, actions) +
       `<section class="panel system-monitor-workspace ${!setting && monitorView() === 'incidents' ? 'system-monitor-incidents' : ''}" data-system-monitor-region>
         <div class="content-toolbar">${nav}${setting && tab === 'config' ? '<div class="toolbar-right" data-page-actions></div>' : ''}</div>
-        <div id="system-monitor-progress" role="status" hidden></div><div id="system-monitor-view-content" role="tabpanel" aria-labelledby="${setting ? 'tab-notification-' + settingsTab() : 'tab-' + monitorView()}">${content}</div></section>`;
+        <div id="system-monitor-progress" role="status" hidden></div><div id="system-monitor-view-content" role="tabpanel" aria-labelledby="${setting ? 'tab-notification-' + settingsTab() : 'tab-' + monitorView()}">${content}${!setting && monitorView() === 'checks' ? A.modules.siteManagement?.monitorResources?.() || '' : ''}</div></section>`;
   }
 
   async function act(command, success, form) {
@@ -355,6 +355,9 @@
     if (fieldset) fieldset.disabled = true;
     form?.setAttribute('aria-busy', 'true');
     try {
+      if (command.action !== 'acknowledge' &&
+          window.IDAccountSecurity && !await window.IDAccountSecurity.verify({ whenAvailable: true })) return false;
+      if (generation !== epoch) return false;
       const result = await D.systemMonitoringAction(command);
       if (generation !== epoch) return false;
       if (command.action === 'settings' && A.state.drafts.get(submittedKey) === submittedDraft)
@@ -537,6 +540,7 @@
     id: namespace, matches: route => ['monitor', settingsRoute].includes(route), render, onClick, onChange, onSubmit,
     afterRender({ routeChanged } = {}) {
       bindRead(queryTab());
+      if (!settingsPage() && monitorView() === 'checks') A.modules.siteManagement?.mountResources?.();
       frameObserver?.disconnect();
       const frame = $('[data-monitor-list-frame]');
       if (frame) {

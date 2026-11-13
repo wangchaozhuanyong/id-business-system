@@ -1,0 +1,111 @@
+.site-management-grid,
+.site-management-card {
+  display: grid;
+  min-inline-size: 0;
+  gap: var(--section-gap);
+}
+.site-management-card h2 { margin: 0; }
+.site-management-card > .tag { justify-self: start; }
+.site-management-card > .panel-heading { padding-block: var(--toolbar-padding-block); }
+.site-management-toolbar { padding-block: var(--toolbar-padding-block); }
+.site-management-toolbar .toolbar-left,
+.site-management-filters,
+.site-diagnostic-form,
+.site-management-actions,
+.site-diagnostic-reference {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--control-gap);
+  min-inline-size: 0;
+}
+.site-management-field, .site-management-filters label { display: inline-flex; align-items: center; gap: 8px; min-inline-size: 0; }
+.site-management-toolbar select,
+.site-management-filters input,
+.site-management-filters select { width: auto; min-inline-size: 0; }
+.site-diagnostic-form { max-inline-size: 720px; }
+.site-diagnostic-form input { flex: 1 1 225px; width: auto; }
+.site-management-metrics,
+.site-management-split {
+  display: grid;
+  gap: var(--section-gap);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.site-management-metrics { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.site-management-resources { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.site-management-metric {
+  display: grid;
+  align-content: start;
+  gap: 6px;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+.site-management-metric span, .site-management-time { color: var(--secondary); font-size: 0.875rem; }
+.site-management-metric strong { font-size: clamp(1rem, 2vw, 1.35rem); font-variant-numeric: tabular-nums; }
+.site-management-properties { display: grid; gap: 8px; margin: 0; min-inline-size: 0; }
+.site-management-properties div {
+  display: grid;
+  grid-template-columns: minmax(8.5rem, 0.4fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+  padding-block: 6px;
+}
+.site-management-properties div + div { border-top: 1px solid var(--line); }
+.site-management-properties dt { color: var(--secondary); }
+.site-management-properties dd { margin: 0; overflow-wrap: anywhere; }
+.site-management-time, .site-management-details > summary { margin: 0; line-height: 1.6; }
+.site-management-details > summary { cursor: pointer; padding: 6px 0; }
+.site-management-table td small { display: block; color: var(--secondary); }
+.site-management-table td { overflow-wrap: anywhere; }
+.site-table-panel { gap: 0; }
+.site-table-panel .table-viewport { min-block-size: 0; }
+#site-export-form { padding-block-end: var(--toolbar-padding-block); }
+.site-management-grid .data-center-tabs { max-width: 100%; overflow-x: auto; flex-wrap: nowrap; }
+.site-management-grid .data-center-tabs .tab { white-space: nowrap; }
+.site-diagnostic-reference {
+  margin-block-start: 8px;
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+.site-diagnostic-reference .button { border-color: currentColor; }
+
+.renewal-progress-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 10rem;
+  align-items: start;
+  gap: var(--section-gap);
+}
+.renewal-progress-layout > [data-renewal-handoff] { grid-area: 1 / 1; min-inline-size: 0; }
+.renewal-progress-navigation {
+  grid-area: 1 / 2;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px;
+}
+.renewal-progress-navigation > .button { justify-content: flex-start; }
+
+@media (max-width: 900px) {
+  .renewal-progress-layout { display: flex; flex-direction: column; align-items: stretch; }
+  .renewal-progress-navigation { flex-direction: row; flex-wrap: wrap; }
+}
+
+@media (max-width: 760px) {
+  .site-management-split { grid-template-columns: minmax(0, 1fr); }
+  .site-management-metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .site-management-properties div { grid-template-columns: minmax(7rem, .8fr) minmax(0, 1fr); }
+  .site-management-filters > label, .site-management-filters > .site-management-field { flex: 1 1 140px; }
+  .site-management-filters :is(input, select) { flex: 1; }
+  .site-management-card .button, .site-diagnostic-reference .button { min-block-size: 44px; }
+  .site-management-table table, .site-management-table tbody, .site-management-table tr { display: block; width: 100%; }
+  .site-management-table thead { position: absolute; clip-path: inset(100%); }
+  .site-management-table tr { padding: 8px 12px; }
+  .site-management-table tr + tr { border-top: 1px solid var(--line); }
+  .site-management-table td { display: grid; grid-template-columns: minmax(5.75rem, .42fr) minmax(0, 1fr); gap: 6px; padding: 5px 0; text-align: start; }
+  .site-management-table td::before { content: attr(data-label); color: var(--secondary); font-weight: normal; }
+  .site-management-table td .button { justify-self: start; }
+  .renewal-progress-navigation > .button { min-block-size: 44px; }
+}

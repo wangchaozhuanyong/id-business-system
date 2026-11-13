@@ -528,6 +528,9 @@
   ];
   const loginLogsRoute = 'settings/login-logs';
   const rechargeLoginLogsView = ['admin_login_logs', '充值登录日志与 IP 封禁'];
+  const rechargeRestrictedViews = new Set(['config', 'checkout_debug', 'cards', 'cdks', 'sessions', 'runtime_logs']);
+  const canOpenRechargeView = id => !localData?.authRequired ||
+    (id === 'runtime_logs' ? false : state.actor?.role === 'super' || !rechargeRestrictedViews.has(id));
   let loginLogTab = 'system';
   const workspaceRechargeRoute = 'workspace/recharge';
   const workspaceRechargeView = ['redeem', '兑换开通', 'workspace'];
@@ -598,6 +601,7 @@
   }
   function integrationNavigation() {
     const actions = onlineRechargeViews
+      .filter(([id]) => canOpenRechargeView(id))
       .map(([id, label, publicPath]) => `<button type="button" class="tab${id === activeOnlineView ? ' active' : ''}" data-action="ops-integrated-view" data-view="${id}" aria-pressed="${id === activeOnlineView}" ${onlineAdmin === false && !publicPath ? 'disabled' : ''}>${esc(label)}</button>`)
       .join('');
     return `<nav class="recharge-integration__nav tabs" aria-label="ChatGPT 充值功能">${actions}</nav>`;
@@ -1473,15 +1477,16 @@
       `<section class="panel"><div class="toolbar"><div class="toolbar-left">${search('搜索操作人、操作、对象或编号（最近 1,000 条）', auditViews.audit.query)}<span class="toolbar-meta">可查最近 1,000 条</span></div><div class="toolbar-right" data-page-actions>${button('列设置', 'column-settings', '', 'columns', `data-table-id="${tableId}"`)}${button(auditViews.audit.error ? '重试读取' : '刷新日志', 'ops-audit-refresh')}</div></div>${auditPageContent('audit', columns, tableId)}</section>`;
   }
   function renderLoginLogs() {
-    const title = header('登录日志', '统一账号的登录与退出记录。检索范围为最近 1,000 条业务日志；充值服务原有记录和 IP 封禁可在对应页签查看。');
+    const canManageSecurity = !localData?.authRequired || state.actor?.role === 'super';
+    const title = header('登录记录', '查看员工账号近期的登录、退出和安全操作。');
     if (!isAdmin()) return title + `<section class="panel">${empty('无权查看登录日志', '请使用管理员账号。')}</section>`;
-    const tabs = `<div class="tabs" role="tablist" aria-label="登录日志来源" data-page-actions="tabs">${[
+    const tabs = canManageSecurity ? `<div class="tabs" role="tablist" aria-label="登录日志来源" data-page-actions="tabs">${[
       ['system', '系统登录'],
       ['recharge', '充值登录与 IP 封禁']
     ].map(([id, label]) =>
       `<button type="button" class="tab ${loginLogTab === id ? 'active' : ''}" role="tab" aria-selected="${loginLogTab === id}" data-action="ops-login-log-tab" data-tab="${id}">${label}</button>`
-    ).join('')}</div>`;
-    if (loginLogTab === 'recharge')
+    ).join('')}</div>` : '';
+    if (loginLogTab === 'recharge' && canManageSecurity)
       return title + tabs + `<p class="inline-notice">此处的 IP 封禁仅作用于充值服务。</p>` +
         renderRechargeRegion('login-logs');
     if (!localData?.authRequired)
@@ -1733,7 +1738,7 @@
     );
   }
   function isAdmin() {
-    return !['employee', 'staff', '普通员工'].includes(state.actor?.role);
+    return !localData?.authRequired || ['admin', 'super'].includes(state.actor?.role);
   }
   function openToolDrawer(name, description, body, context = '', sections = [], lead = '') {
     const tabs = sections.length ? `<div class="tabs online-tool-sections" role="tablist" aria-label="${esc(name)}功能">${sections.map(([id, label]) => `<button type="button" id="tab-${id}" class="tab" role="tab" data-action="ops-tool-section" data-panel="${id}" aria-controls="${id}" aria-selected="false" tabindex="-1">${esc(label)}</button>`).join('')}</div>` : '';
@@ -1741,7 +1746,8 @@
     const selected = getDraft(`tool-section:${name}`).panel;
     const section = sections.some(([id]) => id === selected) ? selected : sections[0]?.[0] || '';
     const toolbar = tabs || lead ? `<div class="tool-header-row">${tabs}${lead}</div>` : '';
-    const page = pluginPages[state.route]?.tool === name ? $('#plugin-tool-host') : null;
+    const page = pluginPages[state.route]?.tool === name ||
+      state.route === 'staff/authenticator' && name === '计算 2FA 验证码' ? $('#plugin-tool-host') : null;
     if (page) {
       const navigation = name === '网站监控'
         ? `<div class="content-toolbar">${api.websiteMonitorTabs(section || 'ops-website-check')}</div>`
@@ -3833,7 +3839,7 @@
     }
     if (action === 'ops-integrated-view' && state.route === onlineRechargeRoute) {
       const view = node.dataset.view;
-      if (onlineRechargeViews.some(([id]) => id === view) && view !== activeOnlineView) {
+      if (canOpenRechargeView(view) && onlineRechargeViews.some(([id]) => id === view) && view !== activeOnlineView) {
         if (blockRechargeNavigation()) return true;
         selectOnlineView(node.closest('nav'), view);
         void loadIntegratedRecharge();
@@ -3842,7 +3848,8 @@
       const host = $('#bit-addresses-host', integrationRoot());
       host?.focus({ preventScroll: true });
       host?.scrollIntoView({ block: 'start' });
-    } else if (action === 'ops-login-log-tab' && state.route === loginLogsRoute && isAdmin()) {
+    } else if (action === 'ops-login-log-tab' && state.route === loginLogsRoute &&
+        (!localData?.authRequired || state.actor?.role === 'super')) {
       loginLogTab = node.dataset.tab;
       state.page = 1;
       state.query = '';
@@ -4352,8 +4359,9 @@
         'settings/costs',
         loginLogsRoute,
         'settings/audit'
-      ].includes(route) || Object.hasOwn(pluginPages, route),
+      ].includes(route) || route === 'staff/authenticator' || Object.hasOwn(pluginPages, route),
     afterRender() {
+      if (state.route === 'staff/authenticator') { openTotp(); return; }
       const settingsTabs = $('.dropdown-settings [role="tablist"]');
       settingsTabs?.addEventListener('keydown', event => {
         if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
@@ -4380,7 +4388,10 @@
         void window.IDLocalAuth?.loadEmployees(api);
       else void loadIntegratedRecharge();
     },
-    render: renderPage,
+    render: () => state.route === 'staff/authenticator'
+      ? header('动态验证码', '保存注册工作使用的账号验证器，随时查看最新验证码。') +
+        '<div id="plugin-tool-host" class="panel" data-plugin-tool="计算 2FA 验证码"></div>'
+      : renderPage(),
     onClick,
     onSubmit,
     onChange,

@@ -274,13 +274,14 @@ test('续费待办不展示银行卡余额，保留原来的用卡与备款资�
     const page = await context.newPage();
     page.setDefaultTimeout(7000);
     await page.clock.setFixedTime(cardDisplayTime);
-    await page.goto(origin + '/#/workspace/renewals');
+    await page.goto(origin + '/#/workspace/renewals/reminders');
     await page.locator('[data-action="commerce-renewal-tab"][data-tab="expired"]').click();
     await page.locator('[data-action="commerce-renewal-select"][data-id="manual"]').click();
     const detail = page.locator('.renewal-workbench-detail');
     await detail.getByText('22.30 USD', { exact: true }).waitFor();
     assert(!/余额|78\.20/.test(await detail.innerText()));
-    assert(await detail.getByRole('button', { name: '复制银行卡', exact: true }).isVisible());
+    assert.equal(await detail.getByRole('button', { name: '复制银行卡', exact: true }).count(), 0);
+    assert(await detail.getByRole('button', { name: '提交给财务', exact: true }).isVisible());
     await context.close();
   }
 });

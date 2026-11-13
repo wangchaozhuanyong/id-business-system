@@ -27,7 +27,7 @@ async function readBoundedJson(response) {
 
 export function createOrderRechargeClient(config, fetchImpl = fetch) {
   const upstream = config && new URL(config.upstreamUrl);
-  async function request(method, path, body, actor = service, monitoring = false) {
+  async function request(method, path, body, actor = service, monitoring = false, maintenance = false) {
     if (!upstream || upstream.protocol !== 'http:' || upstream.hostname !== '127.0.0.1' ||
         upstream.pathname !== '/' || upstream.username || upstream.password || !upstream.port ||
         typeof config.secret !== 'string' || Buffer.byteLength(config.secret) < 32)
@@ -40,11 +40,16 @@ export function createOrderRechargeClient(config, fetchImpl = fetch) {
     const storefrontVerify = actor.id === 'vendure-admission' && method === 'POST' && path === '/api/verify-cdk';
     const storefrontLookup = actor.id === 'vendure-admission' && method === 'GET' && target.pathname === '/api/cdk/query' &&
       target.searchParams.size === 1 && storefrontRechargeCode(target.searchParams.get('cdk'));
+    const maintenanceWrite = maintenance && (
+      method === 'POST' && path === '/api/admin/cards/import' ||
+      method === 'PUT' && path === '/api/admin/cards/plan-policy' ||
+      method === 'POST' && path === '/api/admin/recharge-routing/proxies'
+    );
     if (target.origin !== upstream.origin || target.hash ||
         !(method === 'GET' && readPaths.test(target.pathname) && orbitRead ||
           method === 'POST' && /^\/api\/admin\/cdks\/returns\/(check|commit|receipt)$/.test(path) ||
           method === 'POST' && path === '/api/admin/cards/stop-use' ||
-          monitoringPath || storefrontVerify || storefrontLookup))
+          monitoringPath || storefrontVerify || storefrontLookup || maintenanceWrite))
       throw new Error('不支持此代充资料操作');
     const response = await fetchImpl(target, {
       method, redirect: 'error', signal: AbortSignal.timeout(6000),
@@ -64,6 +69,16 @@ export function createOrderRechargeClient(config, fetchImpl = fetch) {
   }
   return Object.freeze({
     get: (path) => request('GET', path),
+    writeCardMaintenance(method, path, body, actor) {
+      if (!['finance', 'super'].includes(actor.role) || path === '/api/admin/recharge-routing/proxies')
+        throw new Error('当前账号无权维护银行卡');
+      return request(method, path, body, { id: actor.id, email: actor.email, admin: true, sensitive: true }, false, true);
+    },
+    addBusinessProxy(body, actor) {
+      if (actor.role !== 'supervisor') throw new Error('当前账号无权登记业务 IP');
+      return request('POST', '/api/admin/recharge-routing/proxies', body,
+        { id: actor.id, email: actor.email, admin: true, sensitive: false }, false, true);
+    },
     ...(upstream && { async stopCardUse(refs, number) {
       const result = await request('POST', '/api/admin/cards/stop-use', { refs, number });
       if (!['pending', 'stopped', 'not_used'].includes(result.state) || !Array.isArray(result.refs) ||

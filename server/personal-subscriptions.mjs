@@ -201,7 +201,9 @@ export function preparePersonalInventory(previous, next, action, actor, now = ne
         claim.batch.actorId !== actor.id || claim.batch.kind !== 'mail' || claim.item.orderId ||
         claim.item.taskId || claim.item.registrationId || savedClaim?.item.id !== claim.item.id))
       return '请使用本人尚未完成的原邮箱领用批次';
-    if (inventoryState(mailbox) !== 'claimed' && (mailbox.type === 'relay' || row.sourceClaimId))
+    const registeredByOperator = actor.role === 'registrar' && mailbox.type === 'relay' &&
+      mailbox.createdById === actor.id && mailbox.relayStatus === 'ACTIVE' && Boolean(mailbox.remoteAliasId);
+    if (inventoryState(mailbox) !== 'claimed' && ((mailbox.type === 'relay' && !registeredByOperator) || row.sourceClaimId))
       return '苹果隐藏邮箱请先从已核验的库存领用';
     const purpose = registrationPurposeProduct(claim?.batch.purpose);
     if (purpose && purpose !== row.type) return '原领用用途与本次注册产品不一致';

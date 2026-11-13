@@ -7,7 +7,8 @@
 .data-center-workspace {
   container-type: inline-size;
 }
-.data-center-tabs { border-bottom: 0; }
+.data-center-tabs { border-bottom: 0; max-inline-size: 100%; overflow-x: auto; flex-wrap: nowrap; }
+.data-center-tabs .tab { white-space: nowrap; }
 .data-traffic-heading { padding-block: var(--toolbar-padding-block); }
 .data-traffic-filters,
 .data-traffic-site,

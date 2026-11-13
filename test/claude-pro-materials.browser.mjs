@@ -10,7 +10,7 @@ const fixturePath = new URL('../docs/audits/2026-11-06-design-review/visual-fixt
 const actor = { id: 'claude-qa-admin', name: '合成管理员', role: 'admin' };
 const sampleCard = '4000000000000003';
 
-test('统一 Claude 列表、三档套餐、租户银行卡录入与续费', { timeout: 90_000 }, async t => {
+test('统一 Claude 列表、三档套餐、租户银行卡录入与送财务', { timeout: 90_000 }, async t => {
   const playwright = process.env.ID_RECHARGE_QA_PLAYWRIGHT;
   const { chromium } = await import(playwright ? pathToFileURL(playwright).href : 'playwright');
   const browser = await chromium.launch();
@@ -116,7 +116,8 @@ test('统一 Claude 列表、三档套餐、租户银行卡录入与续费', { t
     await table.waitFor();
     assert.equal(page.url(), origin + ordersPath);
   }
-  await page.getByRole('button', { name: '付租批次', exact: true }).click();
+  assert.equal(await page.getByRole('button', { name: '付租批次', exact: true }).count(), 0);
+  await page.goto(origin + '/#/orders/claude/rentals');
   await page.getByText('合成付租批次', { exact: true }).waitFor();
   await page.getByRole('button', { name: '逐项处理', exact: true }).click();
   await page.getByRole('heading', { name: '租金发放批次详情', exact: true }).waitFor();
@@ -290,59 +291,30 @@ test('统一 Claude 列表、三档套餐、租户银行卡录入与续费', { t
   const more = id => row(id).locator('[data-action="commerce-order-more"]').click();
   const menu = page.locator('.row-action-menu:popover-open');
   await more(max.id);
-  await menu.getByRole('menuitem', { name: '续费', exact: true }).click();
-  const renewal = page.locator('#drawer[open] #commerce-order-form');
-  await renewal.waitFor();
-  assert.equal(await renewal.locator('#commerce-plan').inputValue(), 'Max 20x');
-  assert.equal(await renewal.locator('#commerce-email').inputValue(), max.email);
-  assert.equal(await renewal.locator('#commerce-claudeVerifierId-picker').isVisible(), false);
-  assert.equal(await renewal.locator('#commerce-cardId').inputValue(), '');
-  await renewal.locator('#commerce-proMaterialMode').selectOption('tenant_card');
-  await choose(renewal, 'tenantId', payer.id);
-  await renewal.locator('#commerce-cardId option[value="' + unusedCard.id + '"]').waitFor({ state: 'attached' });
-  await renewal.locator('#commerce-cardId-picker').click();
-  const popup = renewal.locator('#commerce-cardId-popover');
-  const usedChoice = popup.getByRole('option', { name: /使用中/ });
-  await usedChoice.waitFor();
-  assert.equal(await usedChoice.isDisabled(), true);
-  assert.equal(await popup.getByRole('option', { name: /未使用/ }).isEnabled(), true);
-  await popup.getByRole('searchbox', { name: '搜索租户银行卡' }).fill(unusedCard.last4);
-  assert.equal(await usedChoice.count(), 0);
-  assert.equal(await popup.getByRole('option', { name: /未使用/ }).count(), 1);
-  await page.keyboard.press('Escape');
-  assert.equal(await renewal.locator('#commerce-expiry').inputValue(), '2027-01-11T12:00');
-  await renewal.locator('#commerce-proMaterialMode').selectOption('manual_card');
-  assert.equal(await renewal.locator('#commerce-cardTypeId').inputValue(), '');
-  await renewal.locator('#commerce-proCardNumber').fill(sampleCard);
-  await renewal.locator('#commerce-paidAmount').fill('200');
-  await renewal.locator('#commerce-saleAmount').fill('900');
-  await submit(renewal);
-  const after = writes.at(-1).data.orders;
-  const renewed = after.find(order => order.claudeRenewalId === max.id);
-  assert.equal(renewed.proRenewalSourceVersion, max.version);
-  assert.equal(renewed.email, max.email);
-  assert.equal(Boolean(renewed.verifier || renewed.verifierPhone || renewed.kyc), false);
-  assert.equal(after.find(order => order.id === max.id).verifier, maxVerifier.name);
-  await row(renewed.id).waitFor();
-  assert.equal(await rows.count(), 2);
+  await context.route('**/api/local/renewals?view=staff', route => route.fulfill({ json: { version: 0, items: [],
+    candidates: [{ id: max.id, version: max.version, number: max.orderNo, customer: customer.name, account: max.email,
+      start: max.start, expiry: max.expiry, product: max.product, plan: max.plan, payment: max.payment }] } }));
+  const beforeHandoff = writes.length;
+  await menu.getByRole('menuitem', { name: '提交给财务', exact: true }).click();
+  await page.getByRole('heading', { name: '续费管理', exact: true }).waitFor();
+  await page.getByRole('button', { name: '提交给财务（1）', exact: true }).waitFor();
+  assert.equal(writes.length, beforeHandoff);
+  assert.equal(await page.locator('#main #commerce-order-form, #drawer[open] #commerce-order-form').count(), 0);
+  await page.goto(origin + ordersPath);
+  await table.waitFor();
+  await search.fill(max.email);
+  await row(max.id).waitFor();
   assert.equal(await row(max.id).locator('input[data-select]').count(), 0);
-  assert.equal(await row(renewed.id).locator('input[data-select]').count(), 1);
   await more(max.id);
   assert.equal(await menu.getByRole('menuitem', { name: '续费', exact: true }).count(), 0);
-  await page.keyboard.press('Escape');
-  await more(renewed.id);
   await menu.getByRole('menuitem', { name: '冻结', exact: true }).click();
   await page.locator('#confirm-dialog[open]').getByRole('button', { name: '确认操作' }).click();
-  await row(renewed.id).locator('[data-column="accountStatus"]').getByText('冻结', { exact: true }).waitFor();
-  await more(renewed.id);
+  await row(max.id).locator('[data-column="accountStatus"]').getByText('冻结', { exact: true }).waitFor();
+  await more(max.id);
   await menu.getByRole('menuitem', { name: '恢复使用', exact: true }).click();
   await page.locator('#confirm-dialog[open]').getByRole('button', { name: '确认操作' }).click();
-  await row(renewed.id).locator('[data-column="accountStatus"]').getByText('使用中', { exact: true }).waitFor();
-  await row(renewed.id).locator('input[data-select]').check();
-  await page.getByRole('button', { name: '生成付租批次', exact: true }).click();
-  const rental = page.locator('#drawer[open] #commerce-rent-create-form');
-  assert.equal(await rental.locator('[name="commerce-ids"]').inputValue(), renewed.id);
-  await page.locator('#drawer [data-action="drawer-close"]').first().click();
+  await row(max.id).locator('[data-column="accountStatus"]').getByText('使用中', { exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: '生成付租批次', exact: true }).count(), 0);
 
   for (const [width, theme] of [[1440, 'light'], [390, 'dark']]) {
     await page.setViewportSize({ width, height: 900 });

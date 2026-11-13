@@ -44,7 +44,11 @@ def drive_fields(receipt):
     if (not timestamp(at) or type(failures) is not int or failures < 0 or type(integrity) is not bool or
             (verified is not None and (not timestamp(verified) or verified > at))):
         return None
-    return {"at": at, "verifiedAt": verified, "failures": failures, "integrityFailure": integrity}
+    summary = {"at": at, "verifiedAt": verified, "failures": failures, "integrityFailure": integrity}
+    captured = receipt.get("capturedAt")
+    if timestamp(captured) and verified is not None and captured <= verified:
+        summary["capturedAt"] = captured
+    return summary
 
 
 def mysql_fields(receipt):

@@ -210,10 +210,12 @@ const navigation = [
     [
       ...orderSubmissionViews,
       ['续费管理', 'workspace/renewals'],
+      ['财务续费', 'workspace/finance-renewals'],
       ['客户录入', 'customers/new'],
       ['租户录入', 'customers/new/tenant'],
       ['充值码提取', 'workspace/recharge-codes'],
-      ['兑换开通', 'workspace/recharge']
+      ['兑换开通', 'workspace/recharge'],
+      ['客户服务', 'staff/customers']
     ]
   ],
   [
@@ -223,13 +225,17 @@ const navigation = [
       ['账号提取', 'workspace/account-extract'],
       ['邮箱提取', 'workspace/mail-extract'],
       ['提取与归还', 'workspace/extractions'],
-      ['比特登录', 'recharge/start']
+      ['比特登录', 'recharge/start'],
+      ['小组工作', 'staff/team'],
+      ['业务 IP', 'staff/business-proxies']
     ]
   ],
   [
     '邮箱管理',
     'mail',
     [
+      ['注册工作台', 'staff/registration'],
+      ['动态验证码', 'staff/authenticator'],
       ['谷歌邮箱', 'mailboxes/google'],
       ['苹果隐藏邮箱', 'mailboxes/relay'],
       ['微软邮箱', 'mailboxes/microsoft']
@@ -277,6 +283,8 @@ const navigation = [
     '线上代充',
     'card',
     [
+      ['自动代充银行卡', 'staff/finance/cards'],
+      ['代充对账', 'staff/finance/reconciliation'],
       ['ChatGPT 充值', 'online-recharge/chatgpt'],
       ['Claude 充值', 'online-recharge/claude', true]
     ]
@@ -292,6 +300,7 @@ const navigation = [
   ['数据中心', 'database', [['数据中心', 'data']]],
   ['监控中心', 'monitor', [
     ['网站监控', 'plugins/websites'],
+    ['性能与错误', 'monitor/performance'],
     ['监控通知', 'settings/monitoring']
   ]],
   [
@@ -299,11 +308,13 @@ const navigation = [
     'settings',
     [
       ['员工与权限', 'settings/accounts'],
+      ['登录安全', 'settings/security'],
       ['邮箱分类', 'settings/mail-types'],
       ['下拉设置', 'settings/costs'],
       ['代付国家', 'settings/payment-countries'],
       ['汇率采集', 'settings/exchange-rates'],
-      ['登录日志', 'settings/login-logs'],
+      ['系统信息', 'settings/information'],
+      ['登录记录', 'settings/login-logs'],
       ['操作记录', 'settings/audit']
     ]
   ]
@@ -463,7 +474,7 @@ function resumeFeedbackTimer() {
   toastExpiresAt = Date.now() + toastRemaining;
   toastTimer = setTimeout(dismissFeedback, toastRemaining);
 }
-function notify(message, { kind = 'info', duration } = {}) {
+function notify(message, { kind = 'info', duration, diagnostic } = {}) {
   const text = String(message ?? '').trim();
   if (!text) return toastRevision;
   toastRevision++;
@@ -476,6 +487,7 @@ function notify(message, { kind = 'info', duration } = {}) {
   actionToast.innerHTML = icon(kind === 'success' ? 'check' : kind === 'loading' ? 'clock' : 'info') +
     `<span data-feedback-message>${escapeHtml(text)}</span><button type="button" class="toast-dismiss" aria-label="关闭提示">${icon('close')}</button>`;
   actionToast.querySelector('button').addEventListener('click', dismissFeedback);
+  if (diagnostic) window.IDSiteTiming?.show(actionToast.querySelector('[data-feedback-message]'), diagnostic);
   actionToast.hidden = false;
   positionFeedback();
   toastRemaining = duration ?? (kind === 'loading' ? 0 : kind === 'error' || kind === 'warning' ? 8000 : 3800);
@@ -1103,11 +1115,37 @@ function matchesNav(route, base) {
   return route === base || route.startsWith(base + '/');
 }
 function permittedRoute(route) {
-  if (route === 'settings/monitoring' && window.IDLocalData?.authRequired) return state.actor?.role === 'super';
-  if (!window.IDLocalData?.authRequired || state.actor?.role !== 'employee') return true;
-  return /^(overview$|plugins\/(mailboxes|websites)$|workspace\/(recharge-codes|my-recharge-codes|order-completion)$|mailboxes\/(google|microsoft)$|accounts\/(gpt|claude|gemini|grok)$|orders\/(gpt|claude|gemini|grok)$)/.test(
-    route
-  );
+  const role = state.actor?.role;
+  const auth = window.IDLocalData?.authRequired;
+  if (route === 'workspace/finance-renewals') return Boolean(auth && ['finance', 'super'].includes(role));
+  if (route === 'workspace/renewals/reminders') return Boolean(auth && ['super', 'admin'].includes(role));
+  if (route === 'workspace/renewals' || route.startsWith('workspace/renewals/') || route.startsWith('workspace/renewal-submit/'))
+    return !auth || ['super', 'admin', 'supervisor', 'employee'].includes(role);
+  if (route.startsWith('staff/')) {
+    return Boolean(auth && ({
+      supervisor: ['staff/team', 'staff/business-proxies'],
+      registrar: ['staff/registration', 'staff/authenticator'],
+      employee: ['staff/customers'],
+      finance: ['staff/finance/cards', 'staff/finance/reconciliation'],
+      super: ['staff/finance/cards', 'staff/finance/reconciliation']
+    })[role]?.includes(route));
+  }
+  if (route === 'settings/security') return Boolean(auth && role === 'super');
+  if (!auth || role === 'super') return true;
+  if (role === 'admin') return ![
+    'settings/accounts', 'settings/monitoring', 'settings/mail-types', 'settings/costs',
+    'settings/payment-countries', 'settings/exchange-rates'
+  ].includes(route);
+  if (role === 'finance') return route === 'overview' ||
+    /^orders\/(?:gpt|claude|gemini|grok|statistics|detail\/[^/]+)$/.test(route);
+  if (role === 'employee') return ['workspace/order-completion', 'workspace/recharge-codes', 'plugins/websites', 'plugins/mailboxes'].includes(route) ||
+    /^orders\/(?:gpt|claude|gemini|grok|detail\/[^/]+)$/.test(route);
+  return false;
+}
+function startingRoute() {
+  if (!window.IDLocalData?.authRequired) return 'mailboxes/google';
+  return ({ supervisor: 'staff/team', finance: 'overview', registrar: 'staff/registration',
+    employee: 'staff/customers' })[state.actor?.role] || 'mailboxes/google';
 }
 function orderSubmissionNavigation() {
   const active = orderSubmissionRoute(state.route);
@@ -1683,6 +1721,7 @@ function preserveMainDraft() {
   }
 }
 let pendingPageScroll = null;
+let mobileSidebarScroll = null;
 let layoutRenderVersion = 0;
 const entryFormSelector = '.commerce-entry-columns .form-panel > form';
 const retainedPageRegions = new Map();
@@ -1706,7 +1745,8 @@ function restorePageScroll(top) {
   window.scrollTo({ top: Math.min(top, maxScroll), behavior: 'instant' });
 }
 function restorePendingPageScroll() {
-  if (pendingPageScroll?.route === state.route) restorePageScroll(pendingPageScroll.top);
+  if (mobileSidebarScroll !== null) restorePageScroll(mobileSidebarScroll);
+  else if (pendingPageScroll?.route === state.route) restorePageScroll(pendingPageScroll.top);
 }
 // A sidebar closing, a late font or a data region can change the available
 // height after the first paint. Keep the navigation target until user input;
@@ -1745,15 +1785,15 @@ function render() {
   }
   if (!sameRoute)
     pendingPageScroll = { route: state.route, top: state.viewDrafts.get(state.route)?.scrollY || 0 };
-  const scrollTarget = pendingPageScroll?.route === state.route
-    ? pendingPageScroll.top : window.scrollY;
+  const scrollTarget = mobileSidebarScroll ?? (pendingPageScroll?.route === state.route
+    ? pendingPageScroll.top : window.scrollY);
   let content;
   const allowed = permittedRoute(state.route);
   const extension = allowed && window.IDDesignModules.find((module) => module.matches(state.route));
   if (!allowed)
     content =
       header('访问受限', '') +
-      `<section class="panel">${empty('当前账号无权打开此页面', '可从左侧导航查看已授权的库存与订单。')}</section>`;
+      `<section class="panel">${empty('当前账号无权打开此页面', '请从左侧菜单选择你可使用的功能。')}</section>`;
   else if (extension) content = extension.render();
   else if (
     (state.route.startsWith('mailboxes/') && !state.route.endsWith('microsoft')) ||
@@ -1845,7 +1885,7 @@ function render() {
   );
 }
 function navigate(event) {
-  let next = location.hash.replace(/^#\/?/, '') || 'mailboxes/google';
+  let next = location.hash.replace(/^#\/?/, '') || startingRoute();
   const statisticsQuery = next.startsWith('orders/statistics?') ? next.slice('orders/statistics?'.length) : '';
   if (statisticsQuery) next = 'orders/statistics';
   const currentHash = '#/' + state.route;
@@ -1897,7 +1937,7 @@ function navigate(event) {
     !navigation.some((group) => group[2].some((item) => item[1] === next)) &&
     !window.IDDesignModules.some((module) => module.matches(next))
   ) {
-    location.hash = '/mailboxes/google';
+    location.hash = '/' + startingRoute();
     return;
   }
   // A hash navigation can emit both popstate and hashchange.
@@ -1915,10 +1955,11 @@ function navigate(event) {
         status: state.status,
         mailTab: state.mailTab,
         claudeTab: state.claudeTab,
-        scrollY: window.scrollY,
+        scrollY: mobileSidebarScroll ?? window.scrollY,
         entryFormScroll: $(entryFormSelector, activePageRegion())?.scrollTop
       });
     state.route = next;
+    for (const module of window.IDDesignModules) module.beforeNavigate?.(next);
     state.previewMode = 'normal';
     Object.assign(
       state,
@@ -1930,6 +1971,7 @@ function navigate(event) {
   if (legacyRechargeSync) { state.page = 1; state.query = ''; }
   window.IDDesignAPI.modules.commerce?.applyStatisticsLink(
     next === 'orders/statistics' && permittedRoute(next) ? statisticsQuery : '');
+  mobileSidebarScroll = null;
   document.body.classList.remove('nav-open');
   $('#sidebar-shade').hidden = true;
   if ($('#drawer').open) closeDrawer();
@@ -2476,10 +2518,10 @@ function openToolboxPanel(tab, body, footer = '') {
   openDrawer(tab, '', body, footer, '', { kind: 'workspace-tools' });
 }
 function onlineToolItems() {
-  return [
-    ['key', '计算 2FA 验证码', '临时计算验证码，或管理当前账号的常用验证器。'],
-    ['play', '抖音解析', '粘贴公开作品链接，解析后选择视频、原声或图片。'],
-  ];
+  const tools = [['key', '计算 2FA 验证码', '临时计算验证码，或管理当前账号的常用验证器。']];
+  if (!window.IDLocalData?.authRequired || ['super', 'admin'].includes(state.actor?.role))
+    tools.push(['play', '抖音解析', '粘贴公开作品链接，解析后选择视频、原声或图片。']);
+  return tools;
 }
 function showTools(tab = state.toolsTab) {
   state.toolsTab = tab;
@@ -2896,6 +2938,7 @@ document.addEventListener('click', async (event) => {
       if (item.top < bounds.top) navigation.scrollTop += item.top - bounds.top;
       else if (item.bottom > bounds.bottom) navigation.scrollTop += item.bottom - bounds.bottom;
     }
+    if (mobileSidebarScroll !== null) restorePageScroll(mobileSidebarScroll);
     return;
   }
   if (action === 'mail-tab') {
@@ -3427,8 +3470,13 @@ $('#theme-toggle').addEventListener('click', () => {
 });
 $('#nav-toggle').addEventListener('click', () => {
   if (window.innerWidth <= 900) {
-    document.body.classList.toggle('nav-open');
-    $('#sidebar-shade').hidden = !document.body.classList.contains('nav-open');
+    const open = document.body.classList.toggle('nav-open');
+    $('#sidebar-shade').hidden = !open;
+    if (open) mobileSidebarScroll = window.scrollY;
+    else if (mobileSidebarScroll !== null) {
+      restorePageScroll(mobileSidebarScroll);
+      mobileSidebarScroll = null;
+    }
   } else {
     state.collapsed = !state.collapsed;
     document.body.classList.toggle('is-collapsed', state.collapsed);
@@ -3445,6 +3493,10 @@ $('#sidebar-shade').addEventListener('click', () => {
   $('#sidebar-shade').hidden = true;
   $('#nav-toggle').setAttribute('aria-expanded', 'false');
   $('#nav-toggle').focus({ preventScroll: true });
+  if (mobileSidebarScroll !== null) {
+    restorePageScroll(mobileSidebarScroll);
+    mobileSidebarScroll = null;
+  }
 });
 if (window.IDLocalData) {
   const profile = $('#profile-button');
@@ -3474,6 +3526,7 @@ window.addEventListener('hashchange', navigate);
 window.addEventListener('popstate', navigate);
 window.addEventListener('resize', () => {
   if (window.innerWidth > 900) {
+    mobileSidebarScroll = null;
     document.body.classList.remove('nav-open');
     $('#sidebar-shade').hidden = true;
   }

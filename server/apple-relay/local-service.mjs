@@ -1160,6 +1160,15 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
         if (reserved) activePublicQueries -= 1;
       }
     },
+    async registrationCodes(asset, actor) {
+      if (actor?.role !== 'registrar' || asset?.createdById !== actor.id || !asset.parentMailboxId || !provider)
+        throw new RelayError(403, '当前账号无权读取该邮箱验证码');
+      const target = localMailTarget(await current(), asset.parentMailboxId, asset.id);
+      const state = await scopedTargets(await current(), 'alias', [asset.id]);
+      await sync(selectMailTarget(state, target).parent);
+      const { items } = await readScopedMails(target, { unassignedOnly: false, limit: 12 });
+      return items.filter(row => row.code).map(({ code, receivedAt }) => ({ code, receivedAt }));
+    },
     handle: withRelayTimings(async (request, response, route, actor) => {
       const action = route.slice(prefix.length);
       try {
@@ -1225,11 +1234,14 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
           return writeJson(response, 200, result);
         }
         if (action === 'alias-register') {
-          requireAdministrator(actor, '只有管理员可以登记隐藏邮箱');
+          if (actor?.role !== 'registrar') requireAdministrator(actor, '当前账号无权登记隐藏邮箱');
+          else if (!boundedId(actor.id)) throw new RelayError(401, '请先登录');
           if (!primaryManagement) throw new RelayError(503, '原收件服务未连接，暂无法登记隐藏邮箱');
           const input = await readBody(request, 512 * 1024);
+          if (actor.role === 'registrar' && Object.hasOwn(input, 'existingId'))
+            throw new RelayError(403, '已有资料的收信连接由管理员维护');
           const result = await primaryManagement.registerAliases(input, actor);
-          return writeJson(response, 200, result);
+          return writeJson(response, 200, actor.role === 'registrar' ? { registered: result.registered } : result);
         }
         if (action === 'alias-intake-preview' || action === 'alias-intake-confirm') {
           requireAdministrator(actor, '只有管理员可以历史入库');

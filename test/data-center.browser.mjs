@@ -66,10 +66,10 @@ test('data center navigation, four website reports, reporting dates and responsi
   assert.deepEqual(groups.slice(pluginIndex, pluginIndex + 3), ['插件管理', '数据中心', '监控中心']);
   assert.equal(await side.getByRole('link', { name: '插件管理', exact: true }).getAttribute('href'), '#/plugins/mailboxes');
   await side.getByRole('button', { name: '监控中心', exact: true }).click();
-  assert.deepEqual(await side.locator('.nav-children a').allTextContents(), ['网站监控']);
+  assert.deepEqual(await side.locator('.nav-children a').allTextContents(), ['网站监控', '性能与错误']);
   await side.getByRole('link', { name: '数据中心', exact: true }).click();
   const tabs = page.getByRole('navigation', { name: '数据中心栏目', exact: true });
-  assert.deepEqual(await tabs.getByRole('link').allTextContents(), ['网站统计', '谷歌表格同步']);
+  assert.deepEqual(await tabs.getByRole('link').allTextContents(), ['网站统计', '谷歌表格同步', '数据健康', '备份与恢复', '导出与保留']);
   assert.equal(await tabs.getByRole('link', { name: '网站统计', exact: true }).getAttribute('aria-current'), 'page');
   const workspace = page.locator('[data-traffic]');
   const select = workspace.getByLabel('网站', { exact: true });
@@ -118,8 +118,9 @@ test('data center navigation, four website reports, reporting dates and responsi
       const tooltip = workspace.locator('.design-chart-tooltip');
       await points.first().focus();
       assert.match(await tooltip.innerText(), /2026-11-06.*浏览量 170 次/);
-      await page.keyboard.press('ArrowRight');
-      assert.match(await tooltip.innerText(), /2026-11-07.*浏览量 未取得 次/);
+      await points.first().press('ArrowRight');
+      await tooltip.filter({ hasText: /2026-11-07.*浏览量 未取得 次/ }).waitFor();
+      assert.equal(await points.nth(1).evaluate(point => point === document.activeElement), true);
       const tipBounds = await tooltip.boundingBox();
       assert(tipBounds.x >= 0 && tipBounds.x + tipBounds.width <= width + 1, '共享浮层不越过视口');
       await page.keyboard.press('Escape');

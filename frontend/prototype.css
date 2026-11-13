@@ -353,7 +353,8 @@ main {
 }
 /* Centered pages share one cap. Other pages fill the workspace. */
 .design-page-region:is(
-  [data-page-region='data'], [data-page-region='data/sheets'],
+  [data-page-region='data'], [data-page-region='data/sheets'], [data-page-region='data/health'],
+  [data-page-region='data/backups'], [data-page-region='data/export'], [data-page-region='settings/information'],
   [data-page-region='settings/monitoring'], [data-page-region='settings/accounts'],
   [data-page-region='settings/mail-types'], [data-page-region='settings/costs'],
   [data-page-region='settings/payment-countries']

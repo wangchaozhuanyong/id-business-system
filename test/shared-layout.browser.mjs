@@ -45,7 +45,8 @@ test('shared layouts preserve alignment, readable controls and stable navigation
   const frame = () => page.frameLocator('#main > [data-page-region]:not([hidden]) .recharge-integration__content iframe:not([hidden])');
   const region = page.locator('#main > .design-page-region:visible');
   const centeredPages = new Set([
-    'data', 'data/sheets', 'settings/monitoring', 'settings/accounts',
+    'data', 'data/sheets', 'data/health', 'data/backups', 'data/export',
+    'settings/monitoring', 'settings/accounts', 'settings/information',
     'settings/mail-types', 'settings/costs', 'settings/payment-countries'
   ]);
   const checkPageWidth = async route => {

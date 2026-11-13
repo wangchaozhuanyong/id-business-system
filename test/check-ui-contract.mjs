@@ -11,10 +11,11 @@ if (rel.startsWith('..') || isAbsolute(rel)) throw new Error('验收输出必须
 await mkdir(output, { recursive: true });
 const frontend = (await readdir(join(root, 'frontend'))).filter(name => name.endsWith('.spec.mjs')).map(name => 'frontend/' + name);
 const units = ['local-data-read-cache', 'change-sync-client', 'change-sync-feed', 'contact-write', 'write-operation',
-  'system-monitoring', 'account-lifecycle', 'account-lifecycle-performance', 'personal-subscriptions', 'inventory-usage',
+  'system-monitoring', 'site-management', 'login-security', 'staff-workspaces', 'renewal-handoff',
+  'account-lifecycle', 'account-lifecycle-performance', 'personal-subscriptions', 'inventory-usage',
   'mailbox-updates', 'mailbox-query-content', 'relay-mail-updates', 'recharge-events', 'recharge-activity'];
-const browsers = ['search-input', 'ui-idle-contract', 'change-sync', 'performance-read-index', 'system-monitoring',
-  'shared-layout', 'page-lifecycle', 'order-completion', 'mobile-navigation-layout', 'design-list-boundaries', 'global-pagination',
+const browsers = ['search-input', 'ui-idle-contract', 'change-sync', 'performance-read-index', 'system-monitoring', 'site-management',
+  'staff-workspaces', 'renewal-handoff', 'shared-layout', 'page-lifecycle', 'order-completion', 'mobile-navigation-layout', 'design-list-boundaries', 'global-pagination',
   'recharge-layout-transitions', 'mailbox-updates'];
 const groups = [
   ['unit', ['--test', ...frontend, ...units.map(name => `test/${name}.test.mjs`)]],

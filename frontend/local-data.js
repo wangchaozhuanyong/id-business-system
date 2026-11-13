@@ -22,7 +22,8 @@
   const revisionScopes = new Set(['inventory', 'commerce', 'settings', 'appleBalance', 'toolbox', 'saved-totp',
     'bitbrowser-connections', 'bitbrowser-proxies', 'bitbrowser-addresses', 'tenant-cards', 'recharge-codes',
     'order-sync', 'tools/mailbox-pool', 'tools/website-visits', 'apple-relay', 'operators', 'audit', 'finance-rates', 'card-types',
-    'order-card-freeze', 'subscription-management', 'system-monitoring', 'recharge-card-plans', 'tools/mailbox-delivery', expenseScope]);
+    'order-card-freeze', 'subscription-management', 'system-monitoring', 'recharge-card-plans', 'tools/mailbox-delivery',
+    expenseScope, 'site-observations', 'site-resources', 'site-backups', 'renewal-handoffs']);
   const counters = new Set(['inventory', 'commerce', 'settings', 'appleBalance', 'toolbox', expenseScope, 'subscription-management']);
   const numeric = value => typeof value === 'string' && /^\d+$/.test(value);
   const validRevision = version => typeof version === 'string' && version.length > 0 && version.length <= 128;
@@ -41,6 +42,7 @@
         (canApproveRechargeCodes && scopes.includes('recharge-codes'))) expanded.add('overview');
     if (scopes.includes('inventory')) { expanded.add('appleBalance'); expanded.add('apple-relay'); expanded.add('tools/mailbox-pool'); }
     if (scopes.includes('operators')) expanded.add('order-owners');
+    if (scopes.some(scope => ['commerce', 'inventory', 'order-sync'].includes(scope))) expanded.add('site-data-health');
     queries.invalidate([...expanded]);
     notifyChanges(scopes);
   }
@@ -254,9 +256,11 @@
     }
   }
 
-  async function request(resource, data, method = 'PUT', { keepalive = false, operationId: suppliedOperation, boundedRead = false } = {}) {
+  async function request(resource, data, method = 'PUT', {
+    keepalive = false, operationId: suppliedOperation, boundedRead = false, measure, timing, stepUp = false
+  } = {}) {
     if (sourceInvalidated) throw sourceError();
-    const signal = data === undefined || boundedRead ? AbortSignal.timeout(12_000) : undefined;
+    let signal = data === undefined || boundedRead ? AbortSignal.timeout(12_000) : undefined;
     const options =
       data === undefined
         ? { cache: 'no-store' }
@@ -273,8 +277,10 @@
       (resource === 'card-types' && data?.action === 'health');
     const operationId = suppliedOperation || (receiptWrite && window.crypto?.randomUUID?.());
     if (operationId) options.headers['X-ID-Operation'] = operationId;
+    if (measure) (options.headers ||= {})['X-ID-Measured-Action'] = measure;
     // Retry only the same versioned operation. The server's durable receipt is
     // committed atomically, so a lost response never produces a second write.
+    let confirmed = false;
     for (let attempt = 0; ; attempt++) {
       let response;
       try { response = await window.fetch('/api/local/' + resource, options); }
@@ -283,12 +289,23 @@
         if (operationId && attempt < 1) continue;
         throw error;
       }
+      timing?.response(response);
       let result;
       try { result = await response.json(); } catch { result = null; }
       if (signal?.aborted) throw new Error('读取超时，请重试');
       if (sourceInvalidated) throw sourceError();
       if (!response.ok || result === null) {
         if (operationId && attempt < 1 && (response.status >= 500 || (response.ok && result === null))) continue;
+        if (stepUp && !confirmed && response.status === 403 &&
+            result?.code === 'SECURITY_CONFIRMATION_REQUIRED' && window.IDAccountSecurity) {
+          confirmed = await window.IDAccountSecurity.verify();
+          if (confirmed) {
+            if (sourceInvalidated) throw sourceError();
+            if (signal) options.signal = signal = AbortSignal.timeout(12_000);
+            attempt--;
+            continue;
+          }
+        }
         if (response.status === 401) {
           queries.clear();
           window.IDLocalAuth?.lock?.(result?.reason);
@@ -300,6 +317,7 @@
         }
         const error = new Error(result?.error || result?.message || '本机数据接口未响应，请重试');
         error.status = response.status;
+        if (typeof result?.code === 'string') error.code = result.code;
         if (Array.isArray(result?.matches)) error.matches = result.matches;
         throw error;
       }
@@ -310,7 +328,7 @@
     }
   }
 
-  const readQuery = (resource, params) => request(resource, params, 'POST', { boundedRead: true });
+  const readQuery = (resource, params, options) => request(resource, params, 'POST', { ...options, boundedRead: true });
   function invalidateDataSource() {
     sourceInvalidated = true;
     queries.invalidate();
@@ -373,19 +391,22 @@
     saveColumnPreference: (change) => request('column-preferences', { ...change, actorId: actor?.id }, 'PATCH', { keepalive: true }),
     orderCards: () => request('order-cards'),
     cardTypes: () => request('card-types'),
-    cardTypeAction: (command) => write(['card-types'], () => request('card-types', command, 'POST')),
+    cardTypeAction: (command) => write(['card-types'], () => request('card-types', command, 'POST', { stepUp: true })),
     subscriptionCardEstimates: () => request('subscription-card-estimates?includeNext=1'),
-    subscriptionCardStatus: () => request('subscription-card-status?includeDetails=1'),
+    subscriptionCardStatus: ({ stepUp = false } = {}) =>
+      request('subscription-card-status?includeDetails=1', undefined, 'GET', { stepUp }),
     renewalCardStatus: (orderId, version) => request('subscription-card-status?' + new URLSearchParams({
       orderId, ...(version !== undefined && { version })
     })),
-    subscriptionCardAccounts: (command) => request('subscription-card-status', { action: 'accounts', ...command }, 'POST'),
+    subscriptionCardAccounts: (command) =>
+      request('subscription-card-status', { action: 'accounts', ...command }, 'POST', { stepUp: true }),
     subscriptionCardFreeze: (command) => write(['order-card-freeze', 'order-cards', 'tenant-cards'],
-      () => request('subscription-card-status', command, 'POST')),
+      () => request('subscription-card-status', command, 'POST', { stepUp: true })),
     subscriptionCardDetails: (command) => readQuery('subscription-card-details', command),
-    revealSubscriptionCard: (orderId, version) => request('subscription-card-reveal', { orderId, version }, 'POST'),
+    revealSubscriptionCard: (orderId, version) =>
+      request('subscription-card-reveal', { orderId, version }, 'POST', { stepUp: true }),
     copySubscriptionCard: (orderId, cardId, { context, version } = {}) =>
-      request('subscription-card-copy', { orderId, cardId, context, version }, 'POST'),
+      request('subscription-card-copy', { orderId, cardId, context, version }, 'POST', { stepUp: true }),
     claudeGoogleSubscriptions: (params) => readQuery('claude-google-subscriptions/list', params),
     subscriptions: (params) => readQuery('subscriptions/list', params),
     subscriptionOwnerLookup: (order) => request('subscriptions/lookup', { order }, 'POST'),
@@ -395,9 +416,13 @@
       ? request('subscriptions/renewal-settings', {}, 'POST')
       : write(['subscription-management'], () => request('subscriptions/renewal-settings', { suffix }, 'POST')),
     renewalCard: command => command.action === 'bind'
-      ? write(['subscription-management'], () => request('subscription-renewal-card', command, 'POST'))
+      ? write(['subscription-management'], () => request('subscription-renewal-card', command, 'POST', { stepUp: true }))
       : command.action === 'prepare' ? readQuery('subscription-renewal-card', command)
-        : request('subscription-renewal-card', command, 'POST'),
+        : request('subscription-renewal-card', command, 'POST', { stepUp: command.action === 'copy' }),
+    renewalHandoffs: (view, id) => request('renewals?' + new URLSearchParams({ view, ...(id && { id }) })),
+    saveRenewalHandoff: (command, options) => write(['renewal-handoffs',
+      ...(command.action === 'finish' ? ['commerce', 'appleBalance'] : [])],
+      () => request('renewals', command, 'POST', options)),
     subscriptionConfirm: (command) => write(['subscription-management'], () => request('subscriptions/confirm', command, 'POST')),
     subscriptionOwner: (command) => write(['subscription-management'], () => request('subscriptions/owner', command, 'POST')),
     claudeHistoryIntake: (command) => command.mode === 'preview'
@@ -437,18 +462,38 @@
     orderSync: (command) => command.mode === 'preview'
       ? request('order-sync', command, 'POST')
       : write(['order-sync', 'commerce', 'inventory', 'recharge-codes'], () => request('order-sync', command, 'POST')),
-    load: (domain) => request(domain),
+    load: (domain, options) => request(domain, undefined, 'GET', options),
     expenseReceipts: () => request('finance/expense-receipts'),
     saveExpenseReceipt: command => write([expenseScope], () => request('finance/expense-receipts', command, 'POST')),
+    siteManagement: (params) => request('site-management?' + new URLSearchParams(params)),
+    async siteExport(filter, operationId) {
+      if (sourceInvalidated) throw sourceError();
+      const response = await window.fetch('/api/local/site-management/export', {
+        method: 'POST', cache: 'no-store', headers: { 'Content-Type': 'application/json', 'X-ID-Operation': operationId,
+          ...(dataSource && { 'X-ID-Data-Source': dataSource }) },
+        body: JSON.stringify(filter)
+      });
+      if (!response.ok || !response.headers.get('Content-Type')?.startsWith('text/csv')) {
+        const result = await response.json().catch(() => null);
+        if (response.status === 401) window.IDLocalAuth?.lock?.(result?.reason);
+        if (response.status === 409 && result?.code === 'DATA_SOURCE_CHANGED') {
+          invalidateDataSource();
+          window.IDChangeSync?.sourceChanged();
+          throw sourceError();
+        }
+        throw Object.assign(new Error(result?.error || '资料暂时无法下载，请重试'), { status: response.status });
+      }
+      return { content: await response.blob(), count: Number(response.headers.get('X-ID-Export-Count')) };
+    },
     financeCollection: (params) => request('finance/collection?' + new URLSearchParams(params)),
     financeCollectionAction: (command) => command.action === 'cleanup-preview'
       ? request('finance/collection', command, 'POST')
       : write(['finance-rates'], () => request('finance/collection', command, 'POST')),
     changeAccountLifecycle: (data) => write(['inventory', 'commerce'], () => request('inventory/account-lifecycle', data)),
-    save: (domain, version, data, { action, base } = {}) => write([domain], () => request(domain, {
+    save: (domain, version, data, { action, base, measure, timing } = {}) => write([domain], () => request(domain, {
       version, data, action, ...(domain === 'commerce' && { recordChange: contactChange(action, base, data) })
-    })),
-    saveBatch: (entries) => write(entries.map((entry) => entry.domain), () => request('batch', entries)),
+    }, 'PUT', { measure, timing })),
+    saveBatch: (entries, options) => write(entries.map((entry) => entry.domain), () => request('batch', entries, 'PUT', options)),
     audit: () => request('audit'),
     auditPage: (params) => request('audit/page?' + new URLSearchParams(params)),
     relay(operation, data) {
@@ -460,7 +505,7 @@
     saveBitBrowserAddresses: (data) => write(['bitbrowser-addresses'], () => request('bitbrowser-addresses', data)),
     startMicrosoftMailbox: (data) => request('tools/mailbox-microsoft/start', data, 'POST'),
     finishMicrosoftMailbox: (authorizationId) => write(['tools/mailbox-pool'], () => request('tools/mailbox-microsoft/finish', { authorizationId }, 'POST')),
-    customerQuery: (action, command) => readQuery('customer-query/' + action, command),
+    customerQuery: (action, command, options) => readQuery('customer-query/' + action, command, options),
     mailboxDeliverySettings: () => request('tools/mailbox-delivery'),
     saveMailboxDeliverySettings: (data) => write(['tools/mailbox-delivery'], () => request('tools/mailbox-delivery', data)),
     copyGoogleMailboxCredentials: (data) => request('tools/mailbox-delivery', data, 'POST'),

@@ -314,6 +314,19 @@ export function createRechargeOrderSync({ store, client, publicOrigin, quoteServ
     }
   }
   return { handle, run,
+    healthView() {
+      const stored = store.featureDocument(domain).data;
+      if (!stored) return null;
+      let pending = 0, oldestPendingAt = null, lastImportedAt = null;
+      for (const row of stored.rows || []) {
+        if (row.excluded) continue;
+        if (!row.orderNo || hasReadbackNeeds(row)) {
+          pending++;
+          if (row.checkedAt && (!oldestPendingAt || row.checkedAt < oldestPendingAt)) oldestPendingAt = row.checkedAt;
+        } else if (row.checkedAt > (lastImportedAt || 0)) lastImportedAt = row.checkedAt;
+      }
+      return { pending, oldestPendingAt, lastImportedAt };
+    },
     eventBoundary() {
       let current = store.featureDocument(domain);
       if (!current.data) current = store.saveFeatureDocument(domain, current.version, { since: startAt, rows: [] });

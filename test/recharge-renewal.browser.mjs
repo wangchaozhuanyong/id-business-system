@@ -32,7 +32,7 @@ test('充值码成功后原提醒进入已处理，并可补录实际到期时�
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.clock.setFixedTime(new Date('2026-11-12T07:00:00Z'));
-  await page.goto(origin + '/#/workspace/renewals');
+  await page.goto(origin + '/#/workspace/renewals/reminders');
   const tab = name => page.getByRole('tab', { name });
   const row = page.locator('[data-renewal-scroll] button[data-id="qa-old"]');
   await tab(/^已到期/).click();
@@ -55,7 +55,7 @@ test('充值码成功后原提醒进入已处理，并可补录实际到期时�
   assert.equal(commands.length, 0);
   await expiry.fill('2026-12-12T14:00');
   await drawer.getByRole('button', { name: '保存到期时间' }).click();
-  await detail.getByText('2026-12-12 14:00', { exact: true }).waitFor();
+  await detail.locator('.renewal-workbench-fields').getByText('2026-12-12 14:00', { exact: true }).waitFor();
   assert.deepEqual(commands, [{ action: 'confirm-renewal-expiry', orderId: successor.id, version: 1,
     expiry: '2026-12-12T14:00' }]);
   assert.equal(data.orders.find(order => order.id === old.id), old);

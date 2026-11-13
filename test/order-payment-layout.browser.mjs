@@ -14,7 +14,7 @@ const products = [
 const actor = { id: 'payment-layout-admin', name: '合成管理员', role: 'admin' };
 const output = process.env.ID_LAYOUT_QA_OUTPUT || root + '/.runtime/order-payment-layout-20261110';
 
-test('所有录单、编辑与续费入口共用支付方式、填写方式、银行卡类型顺序', { timeout: 150_000 }, async t => {
+test('录单、编辑入口共用支付方式、填写方式、银行卡类型顺序', { timeout: 150_000 }, async t => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
@@ -216,12 +216,11 @@ test('所有录单、编辑与续费入口共用支付方式、填写方式、�
           await inspect(edit, key, 'edit', card);
           await page.locator('#drawer [data-action="drawer-close"]').first().click();
           await go('workspace/order/renew/layout-' + key);
-          await form.locator('#commerce-cardTypeId').waitFor();
-          await form.locator('#commerce-proMaterialMode').selectOption(mode);
-          await inspect(form, key, 'renewal', card);
+          await page.getByRole('button', { name: '打开续费管理', exact: true }).waitFor();
+          assert.equal(await form.count(), 0);
         }
         assert.deepEqual(errors, []);
-        assert.deepEqual([...prepared].sort(), products.map(([key]) => 'layout-' + key).sort(), '续费录单只读核对原用卡');
+        assert.deepEqual([...prepared], [], '旧续费入口不再读取原卡');
         assert.deepEqual(writes, [], '布局验证不写入业务数据');
         assert.deepEqual(traffic.external, []);
         assert.deepEqual(traffic.unavailable, []);

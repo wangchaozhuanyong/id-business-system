@@ -189,7 +189,6 @@ test('员工审批边界及 GPT 代充原单、来源颜色和跨页关联', { t
     await page.getByRole('heading', { name: 'GPT 订单', exact: true }).waitFor();
     const search = page.locator('#commerce-search');
     const legend = main.locator('.gpt-order-origin-bar');
-    await legend.getByText('订单列表', { exact: true }).waitFor();
     await legend.getByText('线上代充', { exact: true }).waitFor();
     await legend.getByText('手工录单', { exact: true }).waitFor();
     assert.equal(await main.getByText('代充订单同步', { exact: true }).count(), 0);
@@ -197,13 +196,13 @@ test('员工审批边界及 GPT 代充原单、来源颜色和跨页关联', { t
     const manualRow = main.locator(`tr[data-row-id="${manual.id}"]`);
     assert.equal(await automaticRow.count(), 0);
     if (role === 'super') {
-      const heading = await legend.evaluate(node => {
+      const spacing = await legend.evaluate(node => {
         const box = node.getBoundingClientRect();
-        const title = node.firstElementChild.getBoundingClientRect();
-        const key = node.lastElementChild.getBoundingClientRect();
-        return { right: key.left > title.right, sameRow: key.top < title.bottom, gap: box.bottom - key.bottom };
+        const labels = [...node.querySelectorAll('[data-order-source]')].map(label => label.getBoundingClientRect());
+        return { top: Math.min(...labels.map(label => label.top)) - box.top,
+          bottom: box.bottom - Math.max(...labels.map(label => label.bottom)) };
       });
-      assert(heading.right && heading.sameRow && heading.gap >= 8);
+      assert(spacing.top >= 8 && spacing.bottom >= 8);
       await page.goto(origin + '/#/orders/gpt/recharge-sync');
       await page.waitForURL('**/#/orders/gpt');
       await automaticRow.locator('.gpt-order-origin-label').filter({ hasText: '线上代充' }).waitFor();
@@ -246,7 +245,7 @@ test('员工审批边界及 GPT 代充原单、来源颜色和跨页关联', { t
       await page.locator('#commerce-customerId-popover input').fill(customer.name);
       await page.locator(`#commerce-customerId-options [data-value="${customer.id}"]`).click();
       assert.equal(await page.locator('#commerce-email').inputValue(), synced.email);
-      await page.goto(origin + '/#/workspace/renewals');
+      await page.goto(origin + '/#/workspace/renewals/reminders');
       await search.fill(synced.email);
       await main.locator(`[data-action="commerce-renewal-select"][data-id="${synced.id}"]`).click();
       await main.getByRole('region', { name: '当前选中客户' }).getByText(synced.email, { exact: true }).waitFor();

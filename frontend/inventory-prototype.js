@@ -5599,7 +5599,7 @@
       return batches.map((batch) => ({ ...batch, counts: batchCounts(batch) }));
     }
   };
-  if (localData) initialize();
+  if (localData && (!localData.authRequired || ['admin', 'super'].includes(currentActor().role))) initialize();
   const drawer = document.querySelector('#drawer');
   drawer?.addEventListener?.('close', () => {
     if (drawer.open || !locationSettingsReturn) return;

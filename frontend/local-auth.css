@@ -465,3 +465,36 @@ dialog > #local-auth-connection {
   .local-auth-badge { font-size: 9px; }
   .local-auth-form .local-auth-remember { gap: 7px; font-size: 11px; }
 }
+.local-auth-stage {
+  display: grid;
+  gap: 16px;
+  min-inline-size: 0;
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+.local-auth-stage[hidden] { display: none; }
+#local-auth-credentials { gap: 28px; }
+#local-auth-challenge { min-width: 0; max-width: 100%; }
+#local-auth-back { justify-self: start; }
+.local-auth-confirmation {
+  width: min(440px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+  margin: auto;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--text);
+  background: var(--surface);
+}
+.local-auth-confirmation::backdrop { background: rgb(15 23 42 / 55%); }
+.local-auth-dialog-form h2 { margin: 0 0 16px; font-size: 18px; }
+.local-auth-verification-fields { display: grid; gap: 8px; }
+.local-auth-verification-fields input,
+.local-auth-verification-fields textarea { width: 100%; }
+.local-auth-verification-fields p { margin: 0 0 6px; }
+.staff-workspace :is(.section-title-row, .form-section, [data-staff-list]) + .section-title-row { margin-top: 20px; }
+.staff-workspace .section-title-row h2 { font-size: 16px; }
+.staff-plan-picker { margin: 0; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--radius); }
+.staff-workspace [data-staff-status]:not([hidden]) { margin: 0 0 12px; color: var(--secondary); }

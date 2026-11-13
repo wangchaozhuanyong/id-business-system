@@ -54,6 +54,7 @@ export async function createCloudBackupWorker({
       if (value?.source !== source ||
           (value.lastSha !== undefined && !digest.test(value.lastSha)) ||
           (pending && (!uuid.test(pending.batch) || !digest.test(pending.snapshotSha) ||
+            (pending.capturedAt !== undefined && (!Number.isSafeInteger(pending.capturedAt) || pending.capturedAt <= 0)) ||
             (pending.remoteId !== undefined && !driveId.test(pending.remoteId)))))
         throw new Error('BACKUP_CHECKPOINT_INVALID');
       return value;
@@ -100,7 +101,7 @@ export async function createCloudBackupWorker({
     await drive.uploadBatch({ ...pending, ...blob, source }, pathFor(pending.batch));
     await save({ source, lastSha: pending.snapshotSha });
     await rm(pathFor(pending.batch));
-    return { captured: true, bytes: blob.size, sha256: blob.sha256 };
+    return { captured: true, capturedAt: pending.capturedAt, bytes: blob.size, sha256: blob.sha256 };
   }
   async function capture(state, revision) {
     const { bavail, bsize } = await statfs(outbox, { bigint: true });
@@ -120,7 +121,7 @@ export async function createCloudBackupWorker({
         seen = revision;
         return { captured: false };
       }
-      state.pending = { batch, snapshotSha: manifest.sha256 };
+      state.pending = { batch, snapshotSha: manifest.sha256, capturedAt: Date.parse(manifest.createdAt) };
       await save(state);
       await sealSnapshot({ input: snapshot, output: archive, recipient, source, batch });
       await rename(archive, pathFor(batch));

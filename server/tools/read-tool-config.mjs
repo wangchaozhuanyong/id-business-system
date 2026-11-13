@@ -11,6 +11,7 @@ const labels = new Map([
   ['website-cloudflare', 'Cloudflare 商城访问统计'],
   ['website-visits', '网站访问采集'],
   ['microsoft-mailbox', 'Microsoft 邮箱授权'],
+  ['login-security', '登录安全'],
   ['vendure-task-service', '商城代充任务服务'],
   ['legacy-mailbox-export', '旧邮箱池导出'],
   ['legacy-mailbox-key', '旧邮箱池密钥']

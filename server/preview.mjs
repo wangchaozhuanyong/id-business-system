@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { gzipSync } from 'node:zlib';
-import { readFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { lstat, readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 import { installFinanceAssets } from './finance/preview-assets.mjs';
@@ -49,6 +49,18 @@ import { createMonitoringHandler, createMonitoringReadiness, createProbeReportHa
 import { createLegacyRechargeNotifications } from './monitoring-recharge.mjs';
 import { probeCodexdaichongRuntime } from '../modules/recharge/codexdaichong/runtime-health.mjs';
 import { createRechargeEvents } from './recharge-events.mjs';
+import { createSiteObservations, measuredActivity } from './site-observations.mjs';
+import { createSiteManagement, siteManagementPath, siteObservationScope, siteReleaseInfo, siteBackupView } from './site-management.mjs';
+import { loadLoginSecurity, turnstileLoginPage } from './login-security.mjs';
+import { managesBusiness, nativeManagerAccess, retailAccess } from './access-roles.mjs';
+import { createStaffWorkspaces, staffPath } from './staff-workspaces.mjs';
+import { createRenewalHandoff, renewalHandoffPath } from './renewal-handoff.mjs';
+import { readBackupMonitorReceipt, readRestoreEvidence } from './monitoring-worker-receipts.mjs';
+
+function requireSecurityConfirmation(response) {
+  response.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+  return response.end(JSON.stringify({ error: '请先完成安全确认，再继续这项操作', code: 'SECURITY_CONFIRMATION_REQUIRED' }));
+}
 
 const publicAssetTypes = new Set(['text/css; charset=utf-8', 'text/javascript; charset=utf-8', 'image/png']);
 
@@ -67,6 +79,7 @@ const files = new Map([
   ['pagination.css', 'text/css; charset=utf-8'],
   ['title-help.css', 'text/css; charset=utf-8'],
   ['overview-prototype.css', 'text/css; charset=utf-8'],
+  ['site-management.css', 'text/css; charset=utf-8'],
   ['data-center.css', 'text/css; charset=utf-8'],
   ['sheets-status.css', 'text/css; charset=utf-8'],
   ['finance-collection.css', 'text/css; charset=utf-8'],
@@ -99,6 +112,11 @@ const files = new Map([
     'data-center',
     'sheets-status',
     'system-monitoring',
+    'site-timing',
+    'account-security',
+    'staff-workspaces',
+    'renewal-handoff',
+    'site-management',
     'bitbrowser-addresses'
   ].map((name) => [name + '.js', 'text/javascript; charset=utf-8'])
 ]);
@@ -172,6 +190,13 @@ export async function startPreview(
   } = {}
 ) {
   const publicUrl = parseToolPublicOrigin(publicOrigin);
+  const securityPath = publicUrl && authPath ? authPath + '.security.json' : undefined;
+  const securityFile = securityPath && await lstat(securityPath).catch(error => {
+    if (error.code !== 'ENOENT') throw error;
+    return null;
+  });
+  const storedSecurity = securityFile ? await readToolConfig(securityPath, 'login-security') : undefined;
+  const loginSecurity = authPath ? loadLoginSecurity({ ...process.env, ...storedSecurity }, publicUrl) : {};
   const secureOrigin = publicUrl?.origin;
   if (publicUrl && (!databasePath || !authPath || bootstrapLocalAdmin || codexdaichong))
     throw new Error('正式站必须使用独立业务库、预先初始化的员工账号和统一登录');
@@ -269,11 +294,13 @@ export async function startPreview(
   let handleOrderAuxiliary, handleCardManagement, handleClaudeGoogleSubscriptions, handleSubscriptions, handleRechargeCodes, orderSync;
   let rechargeActivity, rechargeEvents;
   let handleEmployeeStatistics, handleCustomerQuery;
-  let systemMonitoring, monitoringSources, handleMonitoring, handleProbeReport, handleReadiness;
+  let handleStaffWorkspaces, handleRenewalHandoff;
+  let systemMonitoring, monitoringSources, handleMonitoring, handleProbeReport, handleReadiness, siteObservations, handleSiteManagement;
   const orderRechargeClient = createOrderRechargeClient(rechargeConfig);
   const gateways = new Map();
   const cardPlanEpoch = Date.now().toString(36);
   let cardPlanVersion = 0;
+  let nativeCardPlanVersion = -1;
   function gatewayFor(host) {
     if (!rechargeConfig) return codexdaichong;
     if (!gateways.has(host)) {
@@ -294,8 +321,9 @@ export async function startPreview(
             checkFrozenCardPoolWrite(store, command);
           },
           onCardPlanChange(version) {
-            if (version <= cardPlanVersion) return;
-            cardPlanVersion = version;
+            if (version <= nativeCardPlanVersion) return;
+            nativeCardPlanVersion = version;
+            cardPlanVersion++;
             store?.notifyChanges();
           },
           onRechargeOutcome: outcome => queueMicrotask(() => {
@@ -311,11 +339,13 @@ export async function startPreview(
   if (localBusiness) {
     try {
       if (authPath) {
+        if (publicUrl && !loginSecurity.mfaKey)
+          loginSecurity.mfaKey = () => store.loginAuthenticatorKey();
         const { createLocalAuth, createLocalAdminSetup, localAdminEmail } = await import('./local-auth.mjs');
         loadAuth = () => createLocalAuth(authPath, {
           onEvent: (event) => store.recordAuthEvent(event),
           onMonitoring: publicUrl ? (event) => queueMicrotask(() => monitoringSources?.recordAuth(event)) : undefined,
-          publicUrl
+          publicUrl, security: loginSecurity
         });
         auth = loadAuth();
         if (publicUrl && !auth) throw new Error('正式站管理员尚未初始化');
@@ -328,13 +358,26 @@ export async function startPreview(
       }
       store = localBusiness.createLocalBusinessStore(databasePath);
       dataSource = await dataSourceIdentity(databasePath);
+      const release = siteReleaseInfo(publicUrl ? await readFile(new URL('./.website-version.json', import.meta.url), 'utf8')
+        .then(JSON.parse).catch(() => null) : null);
+      siteObservations = await createSiteObservations({
+        path: publicUrl ? join(dirname(databasePath), 'site-observations.json') : undefined, version: release.version
+      });
+      handleSiteManagement = createSiteManagement({ store, observations: siteObservations, origin: secureOrigin, release,
+        official: Boolean(publicUrl), readBackups: () => readBackupMonitorReceipt(monitoringBackupReceiptsDirectory),
+        readRecoveries: () => readRestoreEvidence(monitoringBackupReceiptsDirectory),
+        authorizeBusinessExport: request => auth?.recentlyVerified(request),
+        readSources: () => monitoringSources?.adminView() || { sources: [], externalProbe: null }
+      });
       if (rechargeConfig) rechargeActivity = createRechargeActivity({
         store, client: orderRechargeClient, publicOrigin: secureOrigin, getActor: request => auth?.getActor(request)
       });
       systemMonitoring = createSystemMonitoring({ store, origin: secureOrigin,
         native: rechargeConfig ? createLegacyRechargeNotifications(orderRechargeClient) : undefined,
         send: publicUrl ? undefined : async () => ({ status: 'failed', reason: 'configuration' }) });
-      handleMonitoring = createMonitoringHandler({ monitor: systemMonitoring, publicOrigin: secureOrigin });
+      const confirmProtectedAction = request => !auth?.shouldVerify(request) || auth.recentlyVerified(request);
+      handleMonitoring = createMonitoringHandler({ monitor: systemMonitoring, publicOrigin: secureOrigin,
+        confirmSettings: confirmProtectedAction });
       if (publicUrl) {
         const externalProbe = typeof monitoringProbeSecret === 'string' && Buffer.byteLength(monitoringProbeSecret) >= 32;
         handleReadiness = createMonitoringReadiness({ check() {
@@ -348,10 +391,17 @@ export async function startPreview(
           backupReceiptDirectory: monitoringBackupReceiptsDirectory,
           runtimeProbe: rechargeConfig ? () => probeCodexdaichongRuntime(rechargeConfig) : undefined,
           rechargeClient: orderRechargeClient, getFinance: () => financeCollection,
+          async onResourceSample(available, report) {
+            const recoveries = await readRestoreEvidence(monitoringBackupReceiptsDirectory);
+            const { collector, databases } = siteBackupView(report, recoveries);
+            await siteObservations.collect(available, { collector, databases });
+          },
+          readOrderPending: () => orderSync?.healthView(),
           syncEnabled: Boolean(rechargeConfig && rechargeOrderSync), syncViaEvents: Boolean(rechargeEventsConfig) });
       }
       handleOrderAuxiliary = createOrderAuxiliaryHandler({ store, client: orderRechargeClient, publicOrigin: secureOrigin });
-      handleCardManagement = createCardManagementHandler({ store, client: orderRechargeClient, publicOrigin: secureOrigin });
+      handleCardManagement = createCardManagementHandler({ store, client: orderRechargeClient, publicOrigin: secureOrigin,
+        authorizeSensitive: confirmProtectedAction });
       handleClaudeGoogleSubscriptions = createClaudeGoogleSubscriptionsHandler({ store, publicOrigin: secureOrigin });
       handleSubscriptions = createSubscriptionHandler({ store, publicOrigin: secureOrigin,
         readOwners: () => auth?.orderOwners() || [] });
@@ -395,6 +445,11 @@ export async function startPreview(
         recordActions: events => store.recordAuthEvents(events.map(({ action, actor, parentId, aliasId }) =>
           ({ action: 'relay_' + action, actor, targetId: aliasId || parentId })))
       });
+      handleStaffWorkspaces = createStaffWorkspaces({ store, client: orderRechargeClient, publicOrigin: secureOrigin,
+        getAuth: () => auth, readMailbox: microsoftMailbox.readMailbox, readRelayCodes: relay.registrationCodes,
+        cardChanged: () => { cardPlanVersion++; store.notifyChanges(); } });
+      handleRenewalHandoff = createRenewalHandoff({ store, client: orderRechargeClient, publicOrigin: secureOrigin,
+        getAuth: () => auth });
       for (const [name, type] of [
         ['local-data.js', 'text/javascript; charset=utf-8'],
         ['toolbox-local.js', 'text/javascript; charset=utf-8'],
@@ -423,10 +478,10 @@ export async function startPreview(
       .toString('utf8')
       .replace(
         '    <script src="./prototype.js',
-        '    <link rel="stylesheet" href="/local-auth.css" />\n' +
+        '    <link rel="stylesheet" href="/local-auth.css?v=site-foundation" />\n' +
           '    <script src="/local-data.js" defer></script>\n' +
           '    <script src="/toolbox-local.js" defer></script>\n' +
-          '    <script src="/local-auth.js" defer></script>\n    <script src="./prototype.js'
+          '    <script src="/local-auth.js?v=site-foundation" defer></script>\n    <script src="./prototype.js'
       )
       .replace('20261105-bit-login" />', '20261106-local-inventory-settings" />')
       .replace(
@@ -452,13 +507,14 @@ export async function startPreview(
       await installFinanceAssets(assets, { automaticQuotes: true });
     } catch (error) {
       financeCollection?.close();
-      store.close();
+      store?.close();
       throw error;
     }
     if (loadAuth) {
       signedOutIndex = Buffer.from(
-        localIndex
-          .replace('<head>', '<head>\n    <meta name="id-local-auth" content="required" />')
+        turnstileLoginPage(localIndex, loginSecurity.siteKey)
+          .replace('<head>', '<head>\n    <meta name="id-local-auth" content="required" />' +
+            (publicUrl ? '\n    <meta name="id-site-observations" content="enabled" />' : ''))
           .replace(/^ *<script src="\.\/[^"\n]+" defer><\/script>\n/gm, '')
           .replace('<div class="app-shell">', '<div class="app-shell" hidden>')
           .replace('<a class="skip-link"', '<a hidden class="skip-link"')
@@ -485,14 +541,20 @@ export async function startPreview(
         if (Object.hasOwn(versions, scope)) versions[scope] += ':' + revision;
       if (systemMonitoring && Object.hasOwn(versions, 'system-monitoring'))
         versions['system-monitoring'] += ':' + systemMonitoring.changeVersion();
-      if (rechargeConfig && actor.role === 'super')
+      if (siteObservations && ['admin', 'super'].includes(actor.role)) {
+        versions[siteObservationScope] = siteObservations.versionOf();
+        versions['site-resources'] = siteObservations.resourceVersionOf();
+        versions['site-backups'] = siteObservations.backupVersionOf();
+      }
+      if (rechargeConfig && ['finance', 'super'].includes(actor.role))
         versions['recharge-card-plans'] = cardPlanEpoch + ':' + cardPlanVersion;
       return versions;
     },
     subscribe: listener => {
       const stopStore = store.subscribeChanges(listener);
       const stopSamples = systemMonitoring?.subscribeChanges(listener);
-      return () => { stopStore(); stopSamples?.(); };
+      const stopSite = siteObservations?.subscribe(listener);
+      return () => { stopStore(); stopSamples?.(); stopSite?.(); };
     },
     watchPaths: [
       ...(databasePath && databasePath !== ':memory:' ? [databasePath, databasePath + '-wal', databasePath + '-journal'] : []),
@@ -531,6 +593,11 @@ export async function startPreview(
       }
     }
     const actor = auth?.getActor(request);
+    if (publicUrl && siteObservations && (request.headers.origin === secureOrigin || !request.headers.origin) &&
+        !['cross-site', 'same-site'].includes(request.headers['sec-fetch-site'])) {
+      const activity = measuredActivity(route, request.method, request.headers['x-id-measured-action']);
+      if (actor || activity === 'login') siteObservations.request(response, activity, actor?.id);
+    }
     if (monitoringSources && (route.startsWith('/api/') || route.startsWith('/integrations/codexdaichong/api/')))
       response.once('finish', () => monitoringSources.recordHttp(route, response.statusCode, actor));
     if (request.localAuthUnavailable) {
@@ -545,7 +612,7 @@ export async function startPreview(
       return void handleManagedMailboxQuery(request, response);
     }
     const loginRequired = Boolean(publicUrl || auth || setupAdmin);
-    const canManage = !loginRequired || ['admin', 'super'].includes(actor?.role);
+    const canManage = !loginRequired || managesBusiness(actor);
     const forbidden = () => {
       const code = actor ? 403 : 401;
       response.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8' });
@@ -580,6 +647,17 @@ export async function startPreview(
       }
       return response.writeHead(503).end();
     }
+    const scopedRole = actor && !canManage;
+    const readable = request.method === 'GET' || request.method === 'HEAD';
+    if (route === renewalHandoffPath && handleRenewalHandoff) return void handleRenewalHandoff(request, response, actor);
+    const publicQuery = [managedMailboxQueryRoute, '/api/local/apple-relay/public-query'].includes(route);
+    if (scopedRole && route.startsWith('/api/local/') && !publicQuery && route !== siteManagementPath + '/timing' &&
+        route !== localBusiness?.columnPreferencesRoute && !retailAccess(actor, route, request.method))
+      return forbidden();
+    if (store && route.startsWith(staffPath)) {
+      if (!actor) return forbidden();
+      return void handleStaffWorkspaces(request, response, route, actor);
+    }
     if (store && route.startsWith(microsoftMailboxPrefix)) {
       const operation = route.slice(microsoftMailboxPrefix.length);
       if (operation !== 'callback' && (!actor || !canManage)) return forbidden();
@@ -597,17 +675,24 @@ export async function startPreview(
       return void relay.handlePublicQuery(request, response);
     }
     if (store && route.startsWith('/api/local/apple-relay/')) {
-      if (!canManage || (!auth && relayConfig)) return forbidden();
+      if ((!canManage && !(actor?.role === 'registrar' && route === '/api/local/apple-relay/alias-register')) ||
+          (!auth && relayConfig)) return forbidden();
       return void relay.handle(request, response, route, actor);
     }
     if (store && route === financeCollectionRoute) {
-      if (!canManage || (loginRequired && !actor)) return forbidden();
+      if (!canManage || (loginRequired && !actor) || (actor?.role === 'admin' && (!readable ||
+          ['settings', 'settings-history'].includes(new URL(request.url, 'http://localhost').searchParams.get('tab')))))
+        return forbidden();
+      if (actor?.role === 'super' && !readable && auth.shouldVerify(request) && !auth.recentlyVerified(request))
+        return requireSecurityConfirmation(response);
       return void handleFinanceCollection(request, response, actor || { id: 'local-operator', name: '本机操作员', role: 'admin' });
     }
     if (store && route === orderExpenseRoute) {
-      if (!canManage || (loginRequired && !actor)) return forbidden();
+      if ((!canManage && !(actor?.role === 'finance' && readable)) || (loginRequired && !actor)) return forbidden();
       return void handleOrderExpense(request, response, actor || { id: 'local-operator', name: '本机操作员', role: 'admin' });
     }
+    if (handleSiteManagement && (route === siteManagementPath || route.startsWith(siteManagementPath + '/')))
+      return void handleSiteManagement(request, response, actor);
     if (route === monitorPath && handleMonitoring) return void handleMonitoring(request, response, actor);
     if (store && route === automaticSnapshotRoute) {
       if (!canManage) return forbidden();
@@ -632,6 +717,10 @@ export async function startPreview(
     if (store && cardManagementRoutes.has(route)) {
       response.setHeader('Cache-Control', 'private, no-store');
       if (!actor || !canManage) return forbidden();
+      if (readable && auth.shouldVerify(request) && !auth.recentlyVerified(request) &&
+          route === '/api/local/subscription-card-status' &&
+          new URL(request.url, 'http://localhost').searchParams.get('includeDetails') === '1')
+        return requireSecurityConfirmation(response);
       return void handleCardManagement(request, response, route, actor);
     }
     if (store && claudeGoogleSubscriptionRoutes.has(route)) {
@@ -674,15 +763,6 @@ export async function startPreview(
     }
     if (store && route.startsWith('/api/local/')) {
       if (loginRequired && !actor) return forbidden();
-      if (
-        !canManage &&
-        route !== '/api/local/toolbox' &&
-        route !== localBusiness.columnPreferencesRoute &&
-        route !== '/api/local/order-completion' &&
-        !['/api/local/saved-totp', '/api/local/saved-totp/code', '/api/local/saved-totp/secret'].includes(route) &&
-        (request.method !== 'GET' || !['inventory', 'commerce'].includes(route.split('/').at(-1)))
-      )
-        return forbidden();
       return void localBusiness.handleLocalBusiness(request, response, route, store, actor, {
         publicOrigin: secureOrigin,
         readOrderCards: () => readPoolCards(orderRechargeClient, { includeNumbers: true }),
@@ -710,6 +790,11 @@ export async function startPreview(
     }
     if (route.startsWith('/integrations/codexdaichong/')) {
       if (!canManage || (rechargeConfig && !actor)) return forbidden();
+      const nativeRoute = route.slice('/integrations/codexdaichong'.length);
+      const sensitive = /^\/api\/(?:external\/cards|admin\/(?:cards|config|region|recharge-routing|proxies|security|2fa|hcaptcha|telegram|ip-bans|orbitcard\/(?:cards|sync|config|product-strategy)))(?:\/|$)/i.test(nativeRoute);
+      if (sensitive && !readable && actor?.role === 'super' && auth.shouldVerify(request) && !auth.recentlyVerified(request))
+        return requireSecurityConfirmation(response);
+      if (!nativeManagerAccess(actor, nativeRoute, request.method)) return forbidden();
       const gateway = gatewayFor(request.headers.host);
       if (gateway) return gateway.handle(request, response);
       if (route === '/integrations/codexdaichong/status' && request.method === 'GET') {
@@ -746,6 +831,7 @@ export async function startPreview(
     let body = asset.body;
     if (store && asset === assets.get('/index.html')) {
       let metadata = '<head>\n<meta name="id-local-data-events" content="enabled" />';
+      if (publicUrl) metadata += '\n<meta name="id-site-observations" content="enabled" />';
       if (!loginRequired || actor) {
         metadata += `\n<meta name="id-data-source" content="${dataSource}" />`;
         response.setHeader('Cache-Control', 'private, no-store');
@@ -775,6 +861,12 @@ export async function startPreview(
   });
   if (financeCollection) server.once('close', () => financeCollection.close());
   if (systemMonitoring) server.once('close', () => { monitoringSources?.close(); systemMonitoring.close(); });
+  if (siteObservations && !monitoringSources) {
+    const collect = () => void siteObservations.collect().catch(() => {});
+    const timer = setInterval(collect, 60_000);
+    timer.unref();
+    server.once('close', () => clearInterval(timer));
+  }
   if (rechargeActivity) server.once('close', () => rechargeActivity.close());
   if (rechargeEvents) server.once('close', () => rechargeEvents.close());
   if (store) server.once('close', () => { relay?.close(); handleManagedMailboxQuery?.close(); store.close(); });

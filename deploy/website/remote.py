@@ -418,6 +418,11 @@ def stage(plan, release):
     return source, ops
 
 
+def write_website_version(source, sha):
+    path = source / "server/.website-version.json"
+    write_new(path, json.dumps({"version": sha, "updatedAt": time.time_ns() // 1_000_000}) + "\n", 0o444)
+
+
 def read_canary_log(path):
     with path.open("rb") as file:
         size = path.stat().st_size
@@ -703,6 +708,13 @@ console.log(JSON.stringify(Object.fromEntries(hashes)));
                 require(hashlib.sha256(response.read()).hexdigest() == expected, "live_website_asset_mismatch")
     protected_reads = ("/api/local/settings", "/api/local/inventory", "/api/local/commerce", "/api/local/order-sync",
                        "/api/local/system-monitoring", "/api/local/recharge-activity")
+    if (source / "server/site-management.mjs").is_file():
+        protected_reads += ("/api/local/site-management?view=information", "/api/local/site-management?view=backups",
+                            "/api/local/renewals?view=finance", "/api/local/staff/finance/cards",
+                            "/api/local/auth/security/network")
+        version = json.loads(run(["docker", "exec", "id-business-independent-app", "cat", "/app/server/.website-version.json"]))
+        require(version == json.loads((source / "server/.website-version.json").read_text()) and
+                version.get("version") == plan["sha"], "website_version_receipt_mismatch")
     if adapter:
         protected_reads += ("/api/local/subscription-card-status",)
     for path in protected_reads:
@@ -751,6 +763,8 @@ def release_website(plan):
     if plan.get('externalEvents'):
         new = wire_event_credential(new)
     require_main(sha)
+    if (source / "server/site-management.mjs").is_file():
+        write_website_version(source, sha)
     install_backup_monitoring(source, sha)
     with core.cutover() if core else nullcontext() as native:
         adapter = switch_adapter(plan, source, ops, native) if native else (

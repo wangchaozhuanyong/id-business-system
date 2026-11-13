@@ -5,20 +5,25 @@ import { pathToFileURL } from 'node:url';
 import { createLocalBusinessStore, handleLocalBusiness } from '../server/local-business.mjs';
 import { createCardManagementHandler } from '../server/card-management.mjs';
 import { createSubscriptionHandler } from '../server/subscription-management.mjs';
+import { createRenewalHandoff } from '../server/renewal-handoff.mjs';
 import { interceptDesign, origin, toggleDesignTheme } from './helpers/offline-design.mjs';
 
-test('renewal workbench persists decisions, creates a new order and projects customer loss', { timeout: 45000 }, async () => {
+test('renewal reminder persists decisions, hands off to finance and projects customer loss', { timeout: 45000 }, async () => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
   const store = createLocalBusinessStore(':memory:');
   const actor = { id: 'renewal-qa', name: '合成管理员', role: 'admin' };
+  const finance = { id: 'finance-qa', name: '合成财务', role: 'finance' };
   const api = '/api/local/commerce';
   const clock = () => Date.parse('2026-11-06T08:00:00Z');
   const cards = createCardManagementHandler({ store, publicOrigin: origin, clock });
   const subscriptions = createSubscriptionHandler({ store, publicOrigin: origin, clock });
   const commerce = (req, res, path, user) => handleLocalBusiness(req, res, path, store, user, { publicOrigin: origin });
-  const commerceRequest = async (method, data, path = api, handler = commerce) => {
+  const renew = createRenewalHandoff({ store, publicOrigin: origin, clock,
+    getAuth: () => ({ recentlyVerified: () => true, orderOwners: () => [actor] }) });
+  const renewal = (req, res, path, user) => renew(req, res, user);
+  const commerceRequest = async (method, data, path = api, handler = commerce, user = actor, operation) => {
     const request = Object.assign(Readable.from(data ? [Buffer.from(JSON.stringify(data))] : []), {
-      method, url: path, headers: { origin, 'content-type': 'application/json' }
+      method, url: path, headers: { origin, 'content-type': 'application/json', 'x-id-operation': operation }
     });
     let status, json;
     const response = {
@@ -26,7 +31,7 @@ test('renewal workbench persists decisions, creates a new order and projects cus
       writeHead(code) { status = code; },
       end(body) { json = JSON.parse(body); }
     };
-    await handler(request, response, new URL(path, origin).pathname, actor);
+    await handler(request, response, new URL(path, origin).pathname, user);
     return { status, json };
   };
   let browser;
@@ -36,11 +41,13 @@ test('renewal workbench persists decisions, creates a new order and projects cus
     const offline = await interceptDesign(context, { localFixtures: {}, actor, skipRechargeAssets: true });
     await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
     for (const [pattern, handler] of [[api, commerce], ['/api/local/subscriptions/*', subscriptions],
-      ['/api/local/subscription-renewal-card', cards], ['/api/local/subscription-card-status*', cards]]) {
+      ['/api/local/subscription-renewal-card', cards], ['/api/local/subscription-card-status*', cards],
+      ['/api/local/renewals**', renewal]]) {
       await context.route('**' + pattern, async route => {
         const request = route.request();
         const url = new URL(request.url());
-        await route.fulfill(await commerceRequest(request.method(), request.postDataJSON(), url.pathname + url.search, handler));
+        await route.fulfill(await commerceRequest(request.method(), request.postDataJSON(), url.pathname + url.search, handler,
+          actor, request.headers()['x-id-operation']));
       });
     }
     const page = await context.newPage();
@@ -83,7 +90,7 @@ test('renewal workbench persists decisions, creates a new order and projects cus
       tenants: [], operating: [], rentBatches: [], logs: [], renewalWarningDays: 1
     });
     await page.clock.setFixedTime(new Date('2026-11-06T08:00:00Z'));
-    await page.goto(origin + '/#/workspace/renewals');
+    await page.goto(origin + '/#/workspace/renewals/reminders');
     const drawer = page.locator('#drawer');
     const confirm = page.locator('#confirm-dialog');
     const list = page.locator('[data-renewal-scroll]');
@@ -148,45 +155,34 @@ test('renewal workbench persists decisions, creates a new order and projects cus
     const reminderText = await page.evaluate(() => navigator.clipboard.readText());
     assert.match(reminderText, /订阅套餐：Plus[\s\S]*合成续费询问/);
     assert.doesNotMatch(reminderText, /续费客户甲|客户：|微信：|Telegram/);
-    const bind = detail.getByRole('button', { name: '绑定银行卡' });
-    assert.equal(await detail.getByRole('button', { name: '复制银行卡' }).count(), 0);
-    await bind.click();
-    await drawer.getByLabel('或输入银行卡号').fill('4242424242424242');
-    await drawer.getByRole('button', { name: '保存绑定' }).click();
-    await detail.getByRole('button', { name: '复制银行卡' }).click();
-    await confirm.getByText(/续费客户甲.*QA-EXPIRED@example.test.*卡尾号 4242/i).waitFor();
-    assert.equal((await page.evaluate(() => navigator.clipboard.readText())).includes('4242424242424242'), false);
-    await confirm.getByRole('button', { name: '确认复制' }).click();
-    await page.locator('#toast').getByText(/已复制.*银行卡/).waitFor();
-    assert.equal(await page.evaluate(() => navigator.clipboard.readText()), '4242424242424242');
-    await detail.getByRole('button', { name: '续费', exact: true }).click();
-    const form = page.locator('#commerce-order-form');
-    await form.waitFor();
-    assert.equal(await form.locator('#commerce-customerId').inputValue(), 'qa-renew');
-    assert.equal(await form.locator('#commerce-email').inputValue(), 'QA-EXPIRED@example.test');
-    const period = async (start, end) => {
-      const input = form.locator('#commerce-start');
-      await input.fill(start);
-      await input.dispatchEvent('change');
-      assert.equal(await form.locator('#commerce-expiry').inputValue(), end);
+    await detail.getByRole('button', { name: '提交给财务', exact: true }).click();
+    await page.getByRole('button', { name: '提交给财务（1）' }).click();
+    await confirm.getByRole('button', { name: '确认送财务' }).click();
+    await page.waitForURL('**/#/workspace/renewals/sent');
+    const path = '/api/local/renewals';
+    const task = (await commerceRequest('GET', undefined, path + '?view=finance', renewal, finance)).json.items[0];
+    assert.equal(task.order.id, 'QA-EXPIRED');
+    const financeStep = async (input, operation) => {
+      const result = await commerceRequest('POST', { id: task.id, ...input }, path, renewal, finance, operation);
+      assert.equal(result.status, 200, JSON.stringify(result.json));
     };
-    await period('2026-10-13T14:35', '2026-11-13T14:35');
-    await period('2028-01-31T14:35', '2028-02-29T14:35');
-    await period('2026-11-06T15:59', '2026-12-06T15:59');
-    assert.equal(await page.getByRole('button', { name: '保留待补全' }).count(), 0);
-    assert.equal(await form.locator('#commerce-cardId').inputValue(), '');
-    await form.locator('#commerce-paidAmount').fill('20');
-    await form.locator('#commerce-saleAmount').fill('180');
-    assert.equal(await form.locator('[name="commerce-paidConfirmed"], [name="commerce-receiptConfirmed"]').count(), 0);
-    await page.getByRole('button', { name: '确认提交', exact: true }).click();
-    assert.equal(await page.locator('#confirm-dialog[open]').count(), 0);
+    await financeStep({ action: 'claim', version: task.version }, '00000000-0000-4000-8000-000000000031');
+    await financeStep({ action: 'paid', version: task.version + 1, amount: '20', currency: 'USD', cardMode: 'none',
+      confirmed: true }, '00000000-0000-4000-8000-000000000032');
+    await page.getByRole('link', { name: '待补资料', exact: true }).click();
+    await page.getByRole('button', { name: '刷新', exact: true }).click();
+    await page.getByRole('link', { name: '补资料并提交', exact: true }).click();
+    const form = page.locator('#renewal-finish-form');
+    await form.getByLabel('开通时间（北京）').fill('2026-11-06T15:59');
+    await form.getByLabel('新到期时间（北京）').fill('2026-12-06T15:59');
+    await form.getByLabel('客户实收金额').fill('180');
+    await form.getByRole('button', { name: '提交订单' }).click();
     await page.locator('#toast').filter({ hasText: '订单提交成功' }).waitFor().catch(async issue => {
       const fieldErrors = await form.locator('.field-error:not([hidden])').allTextContents();
       throw new Error(JSON.stringify({ responses, fieldErrors, toast: await page.locator('#toast').textContent(), errors }), { cause: issue });
     });
-    assert(new URL(page.url()).hash.startsWith('#/workspace/order/renew/'));
-    await page.getByRole('button', { name: '返回续费管理', exact: true }).click();
-    await form.waitFor({ state: 'hidden' });
+    await page.getByRole('link', { name: '返回待补资料', exact: true }).click();
+    await page.getByRole('link', { name: '续费提醒', exact: true }).click();
     await completed();
     const snapshot = await read();
     const newOrder = snapshot.data.orders.find((item) => item.id !== 'QA-EXPIRED' && item.customerId === 'qa-renew' && item.paidConfirmed);
@@ -215,6 +211,7 @@ test('renewal workbench persists decisions, creates a new order and projects cus
     assert.equal(await loss.getByText('换号客户丙', { exact: true }).count(), 0);
     await sidebar.getByRole('button', { name: '快速操作', exact: true }).click();
     await sidebar.getByRole('link', { name: /^续费管理/ }).click();
+    await page.getByRole('link', { name: '续费提醒', exact: true }).click();
     await page.getByText('提前 1 天 1 小时提醒', { exact: true }).waitFor();
     await completed();
     await tab(/^即将到期/);

@@ -26,7 +26,7 @@ const setup = t => {
   t.after(() => store.close());
   const write = (domain, data, action) => ({ domain, version: store.load(domain).version, data, action });
   const save = (...entries) => store.saveBatch(entries, { actor });
-  save(write('settings', settings, 'apple_paid_prices_save'));
+  store.saveBatch([write('settings', settings, 'apple_paid_prices_save')], { actor: { ...actor, role: 'super' } });
   return { store, write, save };
 };
 
@@ -148,7 +148,7 @@ test('价目调整不更改占用快照，已核实的实际付款可按原单�
   const original = draftOrder('pending');
   save(write('commerce', commerce([original]), '新增独立订单'));
   const changedSettings = { ...settings, applePaidPrices: { Gemini: { 'Google AI Pro': { US: '28' } } } };
-  save(write('settings', changedSettings, 'apple_paid_prices_save'));
+  store.saveBatch([write('settings', changedSettings, 'apple_paid_prices_save')], { actor: { ...actor, role: 'super' } });
   const second = draftOrder('new', { appleIdId: 'apple-b', email: 'other@example.test', customerId: 'two' });
   assert.throws(() => save(write('commerce', commerce([original, second]), '新增独立订单')), /余额不足/);
   const third = { ...second, appleStoreRegion: 'MY' };

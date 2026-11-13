@@ -80,7 +80,7 @@ async function run(config) {
         const result = await worker.tick();
         if (result.captured) process.stdout.write(JSON.stringify({ status: 'verified', ...result }) + '\n');
         failures = 0;
-        await report({ verified: result.captured });
+        await report({ verified: result.captured, capturedAt: result.capturedAt });
       } catch (error) {
         failures = Math.min(failures + 1, 6);
         process.stderr.write(JSON.stringify({ status: 'retry', code: message(error) }) + '\n');

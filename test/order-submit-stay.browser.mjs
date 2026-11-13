@@ -137,6 +137,8 @@ test('五类订单提交后留在录入页，刷新最近记录并可连续录�
         if (product === 'GPT') assert.equal(await cardType.inputValue(), '', '手动选未填写后返回草稿仍保留');
         await page.setViewportSize({ width: 1440, height: 900 });
         await page.goto(origin + '/#/customers/list');
+        const customerName = fixture.commerce.data.customers.find(row => row.id === saved.customerId).name;
+        await page.locator('#commerce-search').fill(customerName);
         const customer = page.locator(`#main tr[data-row-id="${saved.customerId}"]`);
         const drawer = page.locator('#drawer[open]');
         await customer.locator('[data-action="commerce-contact-orders"]').click();
@@ -173,38 +175,26 @@ test('邮箱和银行卡留空时，预填金额与周期可直接提交', { tim
     ['', '', '1000', '130', start, expiry]);
 });
 
-test('续费提交保留当前页，已完成提醒只能主动返回续费管理', { timeout: 20_000 }, async t => {
+test('旧续费录单地址引导到续费管理，不直接写订单', { timeout: 20_000 }, async t => {
   const browser = await chromium.launch();
   t.after(() => browser.close());
-  const { context, page, writes, errors, traffic } = await setup(browser, 'renew/stay-renewal', 1440, fixture => {
-    fixture.commerce.data.orders.push({
-      id: 'stay-renewal', orderNo: 'QA-RENEW-STAY', product: 'GPT', plan: 'Plus',
-      businessType: '新购', email: 'renewal@example.test', customerId: fixture.commerce.data.customers[0].id,
-      ownerId: actor.id, owner: actor.name, start: '2026-09-01T10:00', expiry: '2026-10-01T10:00',
-      payment: '银行卡', paidAmount: '20', paidCurrency: 'USD', saleAmount: '100', saleCurrency: 'CNY',
-      paidConfirmed: true, receiptConfirmed: true, entitlementStatus: 'active', version: 1, refunds: [], corrections: [], bankReturns: []
-    });
-  });
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   t.after(() => context.close());
-  const url = page.url();
-  await page.locator('#commerce-order-form').waitFor();
-  await page.locator('#commerce-paidAmount').fill('20');
-  await page.locator('#commerce-saleAmount').fill('100');
-  assert.equal(await page.locator('#main [name="commerce-paidConfirmed"]').count(), 0);
-  await page.locator('#main button[form="commerce-order-form"][type="submit"]').click();
-  assert.equal(await page.locator('#confirm-dialog[open]').count(), 0);
-  await page.locator('#main').getByRole('button', { name: '查看此订单', exact: true }).waitFor();
-  assert.equal(page.url(), url);
-  assert.equal(writes.length, 1);
-  const renewed = writes[0].data.orders[0];
-  assert.equal(renewed.paidConfirmed, true);
-  assert.equal(renewed.receiptConfirmed, true);
-  assert.equal(renewed.costConfirmed, true);
-  assert(writes[0].data.logs.some(row => row.type === '关联续费订单' &&
-    row.entityId === 'stay-renewal' && row.relatedOrderId === renewed.id));
-  await page.getByRole('button', { name: '返回续费管理', exact: true }).click();
-  assert.equal(new URL(page.url()).hash, '#/workspace/renewals');
-  assert.deepEqual(errors, []); assert.deepEqual(traffic.external, []);
+  const traffic = await interceptDesign(context, { actor, localFixtures: {}, skipRechargeAssets: true });
+  const page = await context.newPage();
+  const errors = [], writes = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await context.route('**/api/local/commerce', route => {
+    if (route.request().method() !== 'GET') writes.push(route.request().method());
+    return route.fallback();
+  });
+  await page.goto(origin + '/#/workspace/order/renew/stay-renewal');
+  assert.equal(await page.locator('#main #commerce-order-form').count(), 0);
+  await page.getByRole('button', { name: '打开续费管理' }).click();
+  await page.waitForURL('**/#/workspace/renewals');
+  assert.equal(writes.length, 0);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(traffic.external, []);
 });
 
 test('旧订单可单独修改备注，保留原来的空值、付款状态与成本', { timeout: 25_000 }, async t => {
