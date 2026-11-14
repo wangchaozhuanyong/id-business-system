@@ -36,6 +36,7 @@ test('orders and stock request only the visible page, preserve mobile navigation
       changeEvents: true, dataVersions: { commerce: '1', inventory: '1' },
       localFixtures: { commerce, inventory, 'renewal-sidebar': { count: 0 }, 'auth/display-names': { items: [actor] } } });
     const requests = [], writes = [], errors = [];
+    let fullInventoryRead;
     const respond = (route, json, status = 200) => route.fulfill({ json, status }).catch(() => {});
     await context.route(origin + '/api/local/**', async route => {
       const request = route.request();
@@ -56,6 +57,11 @@ test('orders and stock request only the visible page, preserve mobile navigation
       if (path === 'inventory/page') {
         const page = readInventoryPage(body, inventory, commerce.data, now());
         return respond(route, { ...page, mailboxPool: { version: 1, inventoryVersion: inventory.version, items: [] }, mailboxTotal: 55 });
+      }
+      if (path === 'inventory' && fullInventoryRead) {
+        const pending = fullInventoryRead;
+        await pending;
+        return respond(route, { error: '库存读取暂时失败' }, 503);
       }
       if (path !== 'commerce') return route.fallback();
       if (request.method() === 'GET') return respond(route, commerce);
@@ -121,6 +127,19 @@ test('orders and stock request only the visible page, preserve mobile navigation
     }));
     assertNoBulkReads();
     assert.equal(requests.filter(row => row.path.endsWith('/page')).every(row => row.method === 'POST'), true);
+
+    const pendingInventory = Promise.withResolvers();
+    fullInventoryRead = pendingInventory.promise;
+    const inventoryRequested = page.waitForRequest(req => req.url().endsWith('/api/local/inventory'));
+    await page.locator('#main .mobile-records [data-action="inventory-detail"]').first().click();
+    await inventoryRequested;
+    await page.evaluate(() => { location.hash = '#/workspace/extractions'; });
+    await page.getByRole('heading', { name: '正在读取本机库存' }).waitFor();
+    pendingInventory.resolve();
+    await page.getByRole('heading', { name: '本机库存读取失败' }).waitFor();
+    fullInventoryRead = undefined;
+    await page.getByRole('button', { name: '重新读取' }).click();
+    await page.getByRole('heading', { name: '本机库存读取失败' }).waitFor({ state: 'hidden' });
 
     await page.setViewportSize({ width: 1440, height: 850 });
     await page.evaluate(() => { location.hash = '#/orders/gpt'; });

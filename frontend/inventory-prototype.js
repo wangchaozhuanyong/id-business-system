@@ -243,11 +243,11 @@
       applyCommittedInventory(result);
       return true;
     }).catch(() => {
-      if (!keepContent) localInventoryState = 'error';
+      if (!keepContent || !hadContent) localInventoryState = 'error';
       return false;
     }).finally(() => {
       inventoryLoad = undefined;
-      if (!silent && inventoryRoute() && (!keepContent || (!hadContent && localInventoryState === 'ready'))) {
+      if ((!silent || !pagedInventory()) && inventoryRoute() && (!keepContent || !hadContent)) {
         saveDrafts();
         api.render();
       }
@@ -4460,8 +4460,8 @@
       else {
         void api.withActionFeedback(node, async () => {
           const route = api.state.route, actor = currentActor().id, context = api.state.drawerContext;
-          initialized = true;
           const ready = await readLocalInventory({ keepContent: true, silent: true });
+          if (ready) initialized = true;
           if (!node.isConnected || route !== api.state.route || actor !== currentActor().id ||
               context !== api.state.drawerContext) return;
           if (!ready) return false;
