@@ -394,17 +394,13 @@
     }
   }
 
-  function confirmSubmission(view, submitter) {
+  function submitSelected(view, submitter) {
     const orders = view.data.candidates.filter(row => selected(view).has(row.id));
     if (!orders.length || orders.length > 50) {
       notifyError(view, orders.length ? '每次最多提交 50 笔，请分批办理。' : '请先勾选需要续费的订单。');
       return;
     }
-    const preview = orders.slice(0, 4).map(row => row.number || row.customer).join('、');
-    A.confirmAction('确认提交给财务', '已选 ' + orders.length + ' 笔。' + preview + (orders.length > 4 ? ' 等' : '') +
-      '。请确认客户需要续费，提交后由财务办理。', () => {
-      void save(view, { action: 'submit', confirmed: true, orders: orders.map(({ id, version }) => ({ id, version })) }, submitter);
-    }, '确认送财务');
+    void save(view, { action: 'submit', orders: orders.map(({ id, version }) => ({ id, version })) }, submitter);
   }
 
   function paymentForm(view, row, returning) {
@@ -421,17 +417,14 @@
         ['pool', '从系统选卡'], ['manual', '填写本次卡号']], mode) +
         '<div class="commerce-span-all" data-renewal-card-fields></div>' : '') +
       inputField('付款凭据编号（选填）', 'renewal-reference', draft['renewal-reference'] || '', 'maxlength="120"');
-    const label = returning ? '确认退回' : '提交实付给员工';
-    const check = returning ? '我已确认本次尚未付款' : bank ? '我已确认付款成功，已填写的用卡资料与本次付款一致'
-      : '我已核对苹果付款成功，并确认付款对应上方订阅账号';
+    const label = returning ? '登记未付款并退回' : '保存实付';
     A.openDrawer(returning ? '退回续费申请' : '登记续费实付', '', props([
       ['原订单', row.order.number], ['客户', row.order.customer], ['订阅账号', row.order.account], ['付款方式', row.order.payment],
       ...(row.order.originalLast4 ? [['原用卡尾号', row.order.originalLast4]] : [])
     ]) + '<form id="' + id + '" data-renewal-id="' + E(row.id) + '" data-renewal-version="' + row.version +
       '" data-renewal-draft="' + E(draftKey) + '"' + (returning && row.paymentReview ? ' data-verify-return' : '') +
       '><div class="form-grid">' + details +
-      '</div><div class="form-section"><label class="checkbox-label"><input id="renewal-confirmed" name="renewal-confirmed" type="checkbox" required> ' +
-      check + '</label></div><p class="field-error" role="alert" data-renewal-form-error hidden></p></form>',
+      '</div><p class="field-error" role="alert" data-renewal-form-error hidden></p></form>',
       A.button('取消', 'drawer-close') + '<button type="submit" class="button primary" form="' + id + '">' + label + '</button>', draftKey);
     const form = $('#' + id, $('#drawer'));
     if (!returning && bank) updateCardFields(form, false);
@@ -443,7 +436,6 @@
     const values = Object.fromEntries(new FormData(form));
     delete values['renewal-cardNumber'];
     delete values['renewal-cardSerial'];
-    delete values['renewal-confirmed'];
     A.state.drafts.set(form.dataset.renewalDraft, values);
   }
 
@@ -454,7 +446,7 @@
     ]) + '<form id="' + id + '" data-renewal-id="' + E(row.id) + '" data-renewal-version="' + row.version +
       '"><div class="form-grid">' + inputField('交接原因', 'renewal-reason', '', 'required maxlength="160"') +
       selectField('付款情况', 'renewal-review', [['review', '已付款或待核对'], ['unpaid', '已确认未付款']],
-        'review') + '</div><label class="checkbox-label"><input name="renewal-confirmed" type="checkbox" required> 已核对以上资料</label>' +
+        'review') + '</div>' +
       '<p class="field-error" role="alert" data-renewal-form-error hidden></p></form>',
     A.button('取消', 'drawer-close') + '<button type="submit" class="button primary" form="' + id + '">确认移交</button>');
   }
@@ -472,8 +464,7 @@
     ]) + '<form id="' + id + '" data-renewal-id="' + E(row.id) + '" data-renewal-version="' + row.version +
       '" data-source-version="' + review.version + '" data-renewal-draft="' + E(key) + '"><div class="form-grid">' +
       inputField('原单更正原因', 'renewal-reason', draft['renewal-reason'] || '', 'required maxlength="160"') +
-      '</div><div class="form-section"><label class="checkbox-label"><input name="renewal-confirmed" type="checkbox" required> ' +
-      '我已核对本次付款仍对应这张订单</label></div><p class="field-error" role="alert" data-renewal-form-error hidden></p></form>',
+      '</div><p class="field-error" role="alert" data-renewal-form-error hidden></p></form>',
     A.button('取消', 'drawer-close') + '<button type="submit" class="button primary" form="' + id + '">确认并交回员工</button>', key);
     $('#' + id, $('#drawer')).addEventListener('input', event => preserveForm(event.currentTarget));
   }
@@ -520,7 +511,7 @@
       view.filter.status = node.dataset.id;
       view.filter.page = 1;
       draw(view);
-    } else if (command === 'submit') confirmSubmission(view, node);
+    } else if (command === 'submit') submitSelected(view, node);
     else if (command === 'cards') await loadCards(node.closest('form'), node);
     else {
       const row = view.data?.items.find(item => item.id === node.dataset.id);
@@ -549,7 +540,6 @@
       notice.hidden = false;
       return true;
     }
-    if (action !== 'finish') command.confirmed = fields['renewal-confirmed'] === 'on';
     if (action === 'transfer') command.review = fields['renewal-review'] === 'review';
     if (action === 'review-source') command.sourceVersion = Number(form.dataset.sourceVersion);
     const submitter = form.querySelector('[type="submit"]') || document.querySelector('[form="' + form.id + '"][type="submit"]');

@@ -46,7 +46,7 @@ test('快捷隐藏邮箱单条、批量和失败重试复用正式登记，保�
   assert.equal(await drawer.locator('#relay-email').inputValue(), 'single@example.test');
   async function save() {
     await page.locator('button[form="relay-alias-form"][type="submit"]').click();
-    await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
+    assert.equal(await page.locator('#confirm-dialog[open]').count(), 0);
   }
   await save(); await page.getByText('合成登记失败，请重试', { exact: true }).waitFor();
   assert.equal(await drawer.locator('#relay-note').inputValue(), '快捷单条合成资料');
@@ -61,9 +61,7 @@ test('快捷隐藏邮箱单条、批量和失败重试复用正式登记，保�
   await page.locator('button[form="relay-import-form"][type="submit"]').click();
   assert.equal(writes.length, 2, '整批错误不会写入');
   await drawer.locator('#relay-content').fill('batch@example.test,合成批次');
-  await drawer.locator('[data-action="relay-import-preview"]').click();
   await page.locator('button[form="relay-import-form"][type="submit"]').click();
-  await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
   await page.locator('table[data-table="快捷隐藏邮箱录入结果"] tbody tr').nth(1).waitFor();
   assert.equal(writes[2].batch, true);
   assert.equal(writes[2].rows.length, 1);

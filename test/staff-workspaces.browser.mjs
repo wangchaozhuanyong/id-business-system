@@ -299,7 +299,7 @@ test('finance lists keep filters, status and pagination readable across widths a
   assert.deepEqual(access.external, []);
 });
 
-test('card drawers preserve plan choices, clear private input and keep existing confirmation and write contracts', { timeout: 30_000 }, async t => {
+test('card drawers preserve plan choices, clear private input and submit imports once and preserve write contracts', { timeout: 30_000 }, async t => {
   const browser = await chromium.launch();
   t.after(() => browser.close());
   const { context, page, errors, access } = await prepare(browser, 'finance');
@@ -335,12 +335,10 @@ test('card drawers preserve plan choices, clear private input and keep existing 
   const drawer = page.locator('#drawer');
   await openImport();
   await page.getByLabel('银行卡资料', { exact: false }).fill('isolated-fixture-only');
-  await page.getByRole('button', { name: '核对并导入' }).click();
+  await page.getByRole('button', { name: '保存导入' }).click();
   await drawer.getByText('请至少选择一个套餐。', { exact: true }).waitFor();
   assert.equal(writes.length, 0);
   await drawer.getByLabel('Plus', { exact: true }).check();
-  await page.getByRole('button', { name: '核对并导入' }).click();
-  await page.getByRole('button', { name: '取消', exact: true }).click();
   assert.equal(writes.length, 0);
   assert.equal(await page.getByLabel('银行卡资料', { exact: false }).inputValue(), 'isolated-fixture-only');
   await page.getByRole('button', { name: '关闭抽屉' }).click();
@@ -351,8 +349,8 @@ test('card drawers preserve plan choices, clear private input and keep existing 
   assert.equal(await page.getByLabel('银行卡资料', { exact: false }).inputValue(), '');
   await page.getByLabel('银行卡资料', { exact: false }).fill('isolated-fixture-only');
   assert.deepEqual((await separatorSnapshot(page)).findings, []);
-  await page.getByRole('button', { name: '核对并导入' }).click();
-  await page.getByRole('button', { name: '确认', exact: true }).click();
+  await page.getByRole('button', { name: '保存导入' }).click();
+  assert.equal(await page.locator('#confirm-dialog[open]').count(), 0);
   await page.getByText('已导入 1 张银行卡', { exact: true }).waitFor();
   assert.deepEqual(writes, [{ action: 'import', lines: 'isolated-fixture-only', plans: ['plus'], version: 7 }]);
   assert.equal(await drawer.evaluate(node => node.open), false);

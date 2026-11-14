@@ -377,15 +377,14 @@
         row.status === 'dead' || !['GPT', 'Claude'].includes(row.product)) return false;
     const key = `subscription-confirm:${row.id}:${orderId}`;
     const saved = A.state.drafts.get(key) || {};
-    A.openDrawer('确认订阅已开通', '请先核对平台实际开通记录；仅有付款记录不能证明开通。',
+    A.openDrawer('登记订阅开通', '',
       `<div class="property-list"><div class="property-row"><span>订单及套餐</span><strong>${esc(order.orderNo || orderId)} · ${esc(order.plan || '待核对')}</strong></div>
        <div class="property-row"><span>订阅时间</span><strong>${esc(displayDate(order.start))} 至 ${esc(displayDate(order.expiry))}</strong></div></div>
        <form id="subscription-confirm-form" data-subscription-draft="${esc(key)}" data-id="${esc(row.id)}" data-order-id="${esc(orderId)}">
        <input type="hidden" name="revision" value="${esc(saved.revision || revision)}"><input type="hidden" name="commandId" value="${esc(saved.commandId || crypto.randomUUID())}">
-       <div class="form-grid">${A.field('核对依据', 'subscription-reason', `<textarea id="subscription-reason" name="reason" maxlength="300" required>${esc(saved.reason || '')}</textarea>`, true)}</div>
-       <label class="checkbox-label"><input type="checkbox" name="confirmed" ${saved.confirmed ? 'checked' : ''}> <span>已核实该订单实际开通</span></label>
+       <div class="form-grid">${A.field('备注', 'subscription-reason', `<textarea id="subscription-reason" name="reason" maxlength="300">${esc(saved.reason || '')}</textarea>`)}</div>
        <p id="subscription-confirm-error" class="inline-notice warning" role="alert" hidden></p><div class="form-footer">${button('取消', 'drawer-close')}
-       ${reviewButton()}<button class="button primary" type="submit">确认开通</button></div></form>`, '', key);
+       ${reviewButton()}<button class="button primary" type="submit">保存开通记录</button></div></form>`, '', key);
     if (saved.revision && saved.revision !== revision) showReview($('#subscription-confirm-form'));
     return true;
   }
@@ -465,9 +464,8 @@
           result = await D.subscriptionOwner({ id: row.id, accountId: row.accountId || '', ownerId: values.ownerId,
             revision: values.revision, commandId: values.commandId });
         } else if (form.id === 'subscription-confirm-form') {
-          if (!values.reason?.trim() || !values.confirmed) throw new Error('请填写核对依据并确认实际开通');
           result = await D.subscriptionConfirm({ id: form.dataset.id, orderId: form.dataset.orderId,
-            reason: values.reason, confirmed: true, revision: values.revision, commandId: values.commandId });
+            reason: values.reason, revision: values.revision, commandId: values.commandId });
         } else {
           result = await D.saveClaudeGoogleCopySettings({ version: Number(values.version), copy1: values.copy1, copy2: values.copy2 });
         }

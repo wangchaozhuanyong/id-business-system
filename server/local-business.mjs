@@ -30,6 +30,7 @@ import { checkTenantTransferHistory, planTenantOwnerTransfer, tenantOwnerTransfe
 import { prepareTenantRenewalWrite, tenantRenewalHandledAction, tenantRenewalSettingsAction } from './tenant-renewal-reminders.mjs';
 import { toV2DateTimeInput } from '../modules/time/dateTime.ts';
 import { validCurrencyCode, snapshotAction } from '../modules/finance/accounting.mjs';
+import { appleAmountUnits } from '../modules/finance/apple-funding.mjs';
 import { checkFinanceSnapshots, historicalFeeAction } from './finance/snapshot-integrity.mjs';
 import { orderExpenseDomain } from './finance/expense-receipts.mjs';
 import { appendWebsiteVisit, getWebsiteVisitIp, reportWebsiteVisits, websiteVisitsDomain } from './tools/website-visits.mjs';
@@ -81,7 +82,7 @@ import { checkRegistrationChanges } from './inventory-registration.mjs';
 import { attributeInventory, defaultInventoryRegistrationTimes } from './inventory-attribution.mjs';
 import { checkAccountLocations } from './inventory-account-location.mjs';
 import { renewalSidebar } from './renewal-sidebar.mjs';
-import { emptyAppleLedger, stageAppleOpenings, stageAppleOrderFunding, stageConfirmedRenewalDebit,
+import { emptyAppleLedger, stageAppleOpenings, stageAppleOrderFunding, stageConfirmedAppleDebit, stageConfirmedRenewalDebit,
   pendingRenewalPayments, renewalLedgerCommerce } from './apple-funding.mjs';
 import { capturePaidRenewalSource, directRenewalSource, renewalHandoffDomain, renewalRole } from './renewal-handoff.mjs';
 import {
@@ -91,7 +92,7 @@ import {
 import { claudeGoogleCopyDomainPrefix, validateClaudeGoogleCopySettings } from './claude-google-subscriptions.mjs';
 import { legacyOpeningOrderIds, ownerForSubscriptionOrder, subscriptionDomain } from './subscription-management.mjs';
 import {
-  automaticGptOrder, matchOrderCustomer, orderCustomerCreateAction, orderFieldChanged, rechargeOrderOwner, rechargeRenewalExpiryPending,
+  automaticGptOrder, manualBusinessOrder, matchOrderCustomer, orderCustomerCreateAction, orderFieldChanged, rechargeOrderOwner, rechargeRenewalExpiryPending,
   subscriptionChainRoot, subscriptionTime, validOrderEmail, validOrderXHandle
 } from '../modules/orders/order-opening.mjs';
 import {
@@ -1303,6 +1304,26 @@ export function createLocalBusinessStore(databasePath) {
     });
   }
 
+  function postManualApplePayment(order, commerce, inventory, actor, at, label) {
+    const ledger = readDocument('appleBalance');
+    const previous = ledger.data ?? emptyAppleLedger();
+    const settings = readDocument('settings').data;
+    const nextCommerce = { ...commerce, orders: commerce.orders.some(row => row.id === order.id)
+      ? commerce.orders.map(row => row.id === order.id ? order : row) : [order, ...commerce.orders] };
+    const pending = readDocument(renewalHandoffDomain).data?.items;
+    const before = renewalLedgerCommerce(commerce, pending), after = renewalLedgerCommerce(nextCommerce, pending);
+    const fundingError = stageAppleOrderFunding(before.orders, after.orders, previous,
+      inventory, settings, label, commerce.customers);
+    if (fundingError) throw new LocalDataError(409, fundingError);
+    const asset = inventory?.mailboxes?.find(row => row.id === order.appleIdId && row.type === 'apple');
+    if (asset) order.paymentId = asset.email;
+    const next = stageConfirmedAppleDebit(previous, order, actor, at);
+    const ledgerError = checkAppleLedger(previous, next, inventory, after, before);
+    if (ledgerError) throw new LocalDataError(409, ledgerError);
+    putDocument('appleBalance', ledger.version + 1, next);
+    log.run(at, 'appleBalance', 'apple_order_charge', auditSummary(label, actor, order.id), ledger.version + 1);
+  }
+
   return {
     relayDeliveryJournal: createRelayDeliveryJournal({ read: readDocument, write: putDocument, transaction: writeTransaction,
       inventoryVersion: () => revision.get('inventory')?.version ?? 0,
@@ -1493,12 +1514,15 @@ export function createLocalBusinessStore(databasePath) {
     saveClaudeHistoricalSale(input, actor) {
       return writeTransaction(() => {
         const commerce = readDocument('commerce');
+        const inventory = readDocument('inventory');
         const time = new Date();
-        const { order, created } = recordClaudeHistoricalSale(input, readDocument('inventory'), commerce, actor,
+        const { order, created } = recordClaudeHistoricalSale(input, inventory, commerce, actor,
           time, orderCostSnapshot(readDocument('settings').data?.costSettings));
         const version = commerce.version + Number(created);
         if (created) {
           const label = '补录 Claude 历史销售';
+          normalizePaymentEvidence(order, null, false);
+          if (order.appleIdId) postManualApplePayment(order, commerce.data, inventory.data, actor, time.toISOString(), label);
           commerce.data.orders.unshift(order);
           (commerce.data.logs ||= []).unshift({
             id: 'commerce-log-' + randomUUID(), type: label, entityId: order.id, detail: order.orderNo,
@@ -2332,12 +2356,6 @@ export function createLocalBusinessStore(databasePath) {
               !['admin', 'super'].includes(actor.role)))
             throw new LocalDataError(403, '历史费率更正须由管理员单独核对');
           const oldOrders = priorCommerce?.orders || [];
-          if (requireRenewalHandoff && actor && !handoff) {
-            const oldIds = new Set(oldOrders.map(row => row.id));
-            const confirmed = new Set(legacyOpeningOrderIds(oldOrders, subscriptions));
-            if (commerce.orders.some(row => !oldIds.has(row.id) && directRenewalSource(oldOrders, row, confirmed)))
-              throw new LocalDataError(409, '请先从续费管理提交给财务，登记实付后再提交续费订单');
-          }
           const oldRentBatches = new Set((priorCommerce?.rentBatches || []).map(row => row.id));
           if (actor && (action === '建立租金发放批次' || commerce.rentBatches.some(row => !oldRentBatches.has(row.id))))
             throw new LocalDataError(403, '请从续费管理提交给财务');
@@ -2397,12 +2415,29 @@ export function createLocalBusinessStore(databasePath) {
               row.entitlementStatus = 'active';
               if (row.payment === '苹果内购' && !row.appleIdId && row.paidCurrency === 'USD') row.externalApplePayment = true;
               else delete row.externalApplePayment;
+              if (requireRenewalHandoff && !handoff) {
+                const sourceId = directRenewalSource(oldOrders, row, new Set(legacyOpened));
+                if (sourceId) {
+                  const items = (current(renewalHandoffDomain)?.items || []).filter(item =>
+                    item.order?.id === sourceId && ['pending', 'processing', 'paid'].includes(item.status));
+                  if (items.length) throw new LocalDataError(409, '原单已有进行中的续费，请在已有记录上继续办理');
+                  if (row.businessType !== '续费') throw new LocalDataError(409, '该订阅已有原单，请选择续费');
+                  row.previousOrderId = sourceId;
+                  row.renewalSourceVersion ??= priorById.get(sourceId)?.version ?? 0;
+                }
+              }
               const renewalIssue = checkManualRenewalLink(row, priorById, nextById, checkedAt, legacyOpened);
               if (renewalIssue) throw new LocalDataError(409, renewalIssue);
             } else if (cards && !personalProduct(row.product) && row.source !== '线上代充' && prior?.source !== '线上代充') {
               retainOrderField(row, prior, 'entitlementStatus');
             }
-            if (!manualCreate && cards) retainOrderField(row, prior, 'externalApplePayment');
+            if (!manualCreate && cards) {
+              const manualPaymentEntry = action === '更正订单' && manualBusinessOrder(prior) && !prior.paidConfirmed &&
+                !prior.taskId && row.paidConfirmed && row.payment === '苹果内购' && !row.appleIdId &&
+                row.paidCurrency === 'USD' && positiveOrderAmount(row.paidAmount);
+              if (manualPaymentEntry) row.externalApplePayment = true;
+              else retainOrderField(row, prior, 'externalApplePayment');
+            }
             if (cards || action === manualOrderDetailsAction) {
               retainOrderField(row, prior, 'subscriptionAnchor');
               const hadIdentity = prior && (validOrderEmail(prior.email) || validOrderXHandle(prior.xHandle));
@@ -2668,7 +2703,7 @@ export function createLocalBusinessStore(databasePath) {
           if (incoming.has('commerce') && !recordEdit) {
             const error = stageAppleOrderFunding(priorCommerce?.orders, commerce.orders, previous,
               inventory, current('settings'), writes.find(write => write.domain === 'commerce').action, commerce.customers,
-              completedCustomerOrders, handoff?.id, handoff?.item.funding.ledgerPosted === true ? handoff.id : undefined);
+              completedCustomerOrders, handoff?.item.funding.ledgerPosted === true ? handoff.id : undefined);
             if (error) throw new LocalDataError(409, error);
           }
           const error = checkAppleLedger(
@@ -2901,6 +2936,50 @@ export function createLocalBusinessStore(databasePath) {
         const data = current.data;
         const at = new Date().toISOString();
         const version = current.version + 1;
+        if (command?.action === 'record-apple-payment') {
+          if (!['admin', 'super'].includes(actor?.role) || !actor.id)
+            throw new LocalDataError(403, '当前账号无权登记历史订单实付');
+          const { orderId, version: expectedVersion, amount } = command;
+          if (Object.keys(command).some(key => !['action', 'orderId', 'version', 'amount'].includes(key)) ||
+              typeof orderId !== 'string' || !Number.isSafeInteger(expectedVersion) ||
+              typeof amount !== 'string' || !positiveOrderAmount(amount))
+            throw new LocalDataError(400, '请填写大于零的实际扣款金额');
+          const prior = data?.orders?.find(row => row.id === orderId);
+          if (!manualBusinessOrder(prior) || prior.payment !== '苹果内购' || !prior.appleIdId ||
+              prior.taskId || prior.taskEvidenceId || prior.rechargeCompletedAt)
+            throw new LocalDataError(404, '没有找到关联 Apple ID 的手工订单');
+          if (prior.paidConfirmed || prior.appleFunding?.bound) {
+            const ledger = readDocument('appleBalance').data;
+            const allocation = ledger?.allocations?.find(row => row.orderId === prior.id);
+            if (prior.paidConfirmed && allocation?.appleIdId === prior.appleIdId &&
+                appleAmountUnits(allocation.amount) === appleAmountUnits(amount) &&
+                appleAmountUnits(prior.paidAmount) === appleAmountUnits(amount) &&
+                ledger?.movements?.some(row => row.orderId === prior.id && row.appleIdId === prior.appleIdId && row.kind === 'order-charge'))
+              return { orderId, version: current.version };
+            throw new LocalDataError(409, '原单已有付款记录，请在订单详情查看');
+          }
+          if (expectedVersion !== (prior.version ?? 0))
+            throw new LocalDataError(409, '订单已更新，请重新打开原单，当前输入已保留');
+          const label = '登记 Apple 实付';
+          const order = { ...prior, paidAmount: amount, paidCurrency: 'USD', paidConfirmed: true,
+            version: expectedVersion + 1, updatedAt: at, updatedById: actor.id, updatedBy: actor.name };
+          if (order.product === 'Gemini') order.appleGoogleVerified = true;
+          const { corrections, refunds, bankReturns, compensations, ...previous } = prior;
+          order.corrections = [...(corrections || []), { id: randomUUID(), kind: 'apple-payment-entry',
+            at, previous: { ...previous, version: expectedVersion }, reason: label, versionAfter: order.version,
+            actor: actor.name, actorId: actor.id }];
+          normalizePaymentEvidence(order, prior, false);
+          const financeError = checkOrderFinancialHistory({ orders: [prior] }, { orders: [order] });
+          if (financeError) throw new LocalDataError(409, financeError);
+          postManualApplePayment(order, data, readDocument('inventory').data, actor, at, label);
+          const detail = `${order.orderNo} · ${amount} USD`;
+          data.orders = data.orders.map(row => row.id === order.id ? order : row);
+          data.logs = [{ id: 'commerce-log-' + randomUUID(), type: label, entityId: orderId, detail,
+            at: auditDate.format(new Date(at)).slice(0, 16), actor: actor.name, actorId: actor.id }, ...(data.logs || [])];
+          putDocument('commerce', version, data);
+          log.run(at, 'commerce', 'order_completion_record_apple_payment', auditSummary(label, actor, order.id), version);
+          return { orderId, version };
+        }
         if (command?.action === 'assign-manual-owners') {
           const assigned = assignMissingManualOrderOwners(data, actor, command, readOrderOwners, at);
           if (!assigned.length) return { assigned: 0, version: current.version };

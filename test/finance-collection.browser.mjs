@@ -180,7 +180,8 @@ test('汇率四栏目、设置草稿、版本冲突、采集记录与事件更�
   await page.keyboard.press('Escape');
 
   delaySettings = true;
-  await page.getByRole('button', { name: '保存采集设置', exact: true }).click(); await confirm();
+  await page.getByRole('button', { name: '保存采集设置', exact: true }).click();
+  assert.equal(await page.locator('#confirm-dialog[open]').count(), 0);
   await page.waitForFunction(() => document.querySelector('#fx-settings-form [type="submit"]')?.disabled);
   while (!releaseSettings) await new Promise(resolve => setTimeout(resolve, 10));
   await page.locator('#fx-interval').fill('120');
@@ -191,7 +192,7 @@ test('汇率四栏目、设置草稿、版本冲突、采集记录与事件更�
   const interruptedRefresh = { started: Promise.withResolvers(), release: Promise.withResolvers() };
   t.after(interruptedRefresh.release.resolve);
   settingsRefreshInterruption = interruptedRefresh;
-  await page.getByRole('button', { name: '保存采集设置', exact: true }).click(); await confirm();
+  await page.getByRole('button', { name: '保存采集设置', exact: true }).click();
   await interruptedRefresh.started.promise;
   const changesBefore = await page.evaluate(() => window.IDChangeSync.status().changes);
   await page.evaluate(version => window.emitFxVersion(version), document.version);
@@ -205,7 +206,7 @@ test('汇率四栏目、设置草稿、版本冲突、采集记录与事件更�
   const { version, ...settings } = document.data.settings;
   collection.saveSettings(version, { ...settings, intervalMinutes: 180 }, actor);
   await page.locator('#fx-interval').fill('240');
-  await page.getByRole('button', { name: '保存采集设置', exact: true }).click(); await confirm();
+  await page.getByRole('button', { name: '保存采集设置', exact: true }).click();
   await page.locator('#fx-settings-error').getByText(/设置已更新/).waitFor();
   assert.equal(await page.locator('#fx-interval').inputValue(), '240');
   await page.getByRole('button', { name: '核对最新设置', exact: true }).click(); await confirm();

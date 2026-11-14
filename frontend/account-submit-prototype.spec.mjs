@@ -201,11 +201,11 @@ function runtime() {
     },
     preview(changes = {}) {
       Object.assign(form.raw, changes);
-      inventory.onSubmit(form);
+      inventory.onClick('inventory-import-preview', { dataset: {} });
       return captures.at(-1);
     },
     requestImport() {
-      inventory.onClick('inventory-import-confirm', { dataset: {} });
+      inventory.onSubmit(form);
     },
     confirm() {
       assert(callback, notices.at(-1) || JSON.stringify([...errors]));
@@ -243,7 +243,6 @@ for (const type of ['gpt', 'claude', 'apple'])
     assert.equal(r.accounts.length + r.mailboxes.length, before);
     r.preview();
     r.requestImport();
-    r.confirm();
     assert.equal(r.accounts.length + r.mailboxes.length, before + 1);
   });
 
@@ -278,7 +277,6 @@ test('单条 GPT 直接进入账号库存，空白注册时间采用录入时间
     'inventory-registered': ''
   });
   r.inventory.onSubmit(r.form);
-  r.confirm();
   const row = r.accounts.find((asset) => asset.email === 'single.gpt@example.test');
   assert(row);
   assert.equal(row.type, 'gpt');
@@ -294,7 +292,6 @@ test('完整表头GPT导入保留邮箱类型、2FA、时间、设备和备注�
   r.preview({ 'inventory-import-content': gptCsv });
   assert.equal(r.accounts.length, 0);
   r.requestImport();
-  r.confirm();
   const row = r.accounts.find((asset) => asset.email === 'new.gpt@example.test');
   assert(row);
   assert.equal(row.totp, 'DEMO-TOTP');
@@ -327,7 +324,6 @@ test('Apple资料批导保留密保生日且新ID余额为零，不修改演示�
       '邮箱,密码,国家地区,密保1,密保2,密保3,密保生日,应用专用密码\nnew.apple@example.test,Demo-Only,美国,一,二,三,1990-02-01,APP-DEMO'
   });
   r.requestImport();
-  r.confirm();
   const asset = r.mailboxes.find((row) => row.email === 'new.apple@example.test');
   assert(asset);
   assert.equal(asset.security2, '二');
@@ -345,7 +341,6 @@ test('Claude批导保留国家城市和代理资料，注册时间与录入时�
       '邮箱,邮箱类型,注册国家,注册城市,注册时间,代理类型,代理主机,代理端口,代理账号,代理密码,登录设备,注册代理链接\nnew.claude@example.test,苹果隐藏邮箱,美国,纽约,2026-10-01T10:30,socks5,proxy.example.test,1080,demo,DEMO-PROXY,合成设备,socks5://demo:DEMO-PROXY@proxy.example.test:1080'
   });
   r.requestImport();
-  r.confirm();
   const row = r.accounts.find((asset) => asset.type === 'claude');
   assert(row);
   assert.equal(row.city, '纽约');
@@ -379,7 +374,6 @@ test('错误CSV修正并减少行数后可生成新预览，不被旧逐行控�
   assert.equal(preview.rows[0].email, 'new.gpt@example.test');
   assert.equal(preview.rows[0].error, '');
   r.requestImport();
-  r.confirm();
   assert.equal(r.accounts.length, 1);
   assert.equal(r.accounts[0].email, 'new.gpt@example.test');
 });
@@ -408,7 +402,7 @@ test('Apple 批量入库允许空电话和注册地区，拒绝无效生日', ()
   assert.equal(r.pending, false);
   assert.equal(r.mailboxes.length, before);
   r.preview({ 'inventory-import-content': '邮箱,密码,生日\noptional.apple@example.test,Demo,1990-02-01' });
-  r.requestImport(); r.confirm();
+  r.requestImport();
   const saved = r.mailboxes.find(row => row.email === 'optional.apple@example.test');
   assert.equal(saved.birthday, '1990-02-01');
   assert.equal(saved.country || '', '');
@@ -419,12 +413,12 @@ test('GPT 和 Claude 均保留旧七列导入；设备和代理可留空', () =>
   const r = runtime();
   r.open('gpt');
   r.preview({ 'inventory-import-content': 'legacy.gpt@example.test,Demo,,美国,纽约,2026-10-01T10:30,GPT账号' });
-  r.requestImport(); r.confirm();
+  r.requestImport();
   assert.equal(r.accounts[0].type, 'gpt');
   assert.equal(r.accounts[0].registered, '2026-10-01T10:30');
   r.open('claude');
   r.preview({ 'inventory-import-content': 'legacy.claude@example.test,Demo,,美国,纽约,2026-10-01T10:30,Claude账号' });
-  r.requestImport(); r.confirm();
+  r.requestImport();
   const saved = r.accounts.find(row => row.type === 'claude');
   assert.equal(saved.city, '纽约');
   assert.equal(saved.device || '', '');
@@ -458,39 +452,32 @@ for (const [key, value] of [
     assert.equal(r.mailboxes.length, before);
   });
 
-test('确认窗口打开后修改内容，旧确认不能导入后来输入的账号', () => {
+test('预览后修改原文，保存按当前内容导入一次', () => {
   const r = runtime();
   r.open('gpt');
   r.preview({ 'inventory-import-content': gptCsv });
-  r.requestImport();
-  assert(r.pending);
   r.form.raw['inventory-import-content'] = gptCsv.replace('new.gpt@', 'changed@');
-  r.confirm();
-  assert.equal(r.accounts.length, 0);
+  r.requestImport();
+  assert.equal(r.pending, false);
+  assert.deepEqual(r.accounts.map(row => row.email), ['changed@example.test']);
 });
 
-test('默认来源或账号来源发生变化后，之前的预览必须重新核对', () => {
-  for (const changes of [
-    { 'inventory-import-source': '线上购买' },
-    { 'inventory-import-acquisition': 'purchased' }
-  ]) {
-    const r = runtime();
-    r.open('gpt');
-    r.preview({ 'inventory-import-content': gptCsv });
-    Object.assign(r.form.raw, changes);
-    r.requestImport();
-    assert.equal(r.pending, false);
-    assert.equal(r.accounts.length, 0);
-  }
-});
-
-test('确认窗口打开后出现重复账号，不覆盖现有资料也不追加重复记录', () => {
+test('默认来源改变后保存使用当前来源', () => {
   const r = runtime();
   r.open('gpt');
   r.preview({ 'inventory-import-content': gptCsv });
+  r.form.raw['inventory-import-source'] = '线上购买';
   r.requestImport();
+  assert.equal(r.accounts.length, 1);
+  assert.equal(r.accounts[0].source, '线上购买');
+});
+
+test('预览后出现重复账号，提交保留原资料', () => {
+  const r = runtime();
+  r.open('gpt');
+  r.preview({ 'inventory-import-content': gptCsv });
   r.accounts.push({ type: 'gpt', email: 'new.gpt@example.test', password: 'Keep-Original' });
-  r.confirm();
+  r.requestImport();
   assert.equal(r.accounts.length, 1);
   assert.equal(r.accounts[0].password, 'Keep-Original');
 });

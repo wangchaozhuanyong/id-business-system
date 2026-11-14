@@ -320,7 +320,6 @@ test('库存、隐藏邮箱和苹果余额表单保留草稿、隔离类型并�
     await action('inventory', 'inventory-edit', { id: 'qa-google' });
     await page.locator('#inventory-notes').fill('本次提交说明');
     await page.locator('[form="inventory-asset-form"][type="submit"]').click();
-    await page.locator('[data-action="confirm-accept"]').click();
     await saved;
     await page.locator('#inventory-notes').fill('保存等待时继续填写的说明');
     releaseSave();
@@ -335,7 +334,6 @@ test('库存、隐藏邮箱和苹果余额表单保留草稿、隔离类型并�
     assert.equal(firstSaved.notes, '本次提交说明');
     assert.equal(await page.locator('[name="inventory-version"]').inputValue(), String(firstSaved.version));
     await page.locator('[form="inventory-asset-form"][type="submit"]').click();
-    await page.locator('[data-action="confirm-accept"]').click();
     await page.locator('#inventory-asset-form').waitFor({ state: 'hidden' });
     const final = await (await page.request.get(host.url + 'api/local/inventory')).json();
     const finalAsset = final.data.mailboxes.find(row => row.id === 'qa-google');

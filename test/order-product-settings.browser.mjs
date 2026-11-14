@@ -107,9 +107,8 @@ test('GPT、Claude Pro、Claude Max、Gemini、Grok 的币种、代付和售价�
   }
   async function save(formId, status = 200) {
     const paidProduct = formId === 'commerce-paid-prices-form' && await page.locator('#commerce-paid-product').inputValue();
-    await page.locator(`button[form="${formId}"][type="submit"]:visible, #${formId} button[type="submit"]:visible`).click();
     const response = page.waitForResponse(r => r.request().method() === 'PUT' && new URL(r.url()).pathname === '/api/local/settings');
-    await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
+    await page.locator(`button[form="${formId}"][type="submit"]:visible, #${formId} button[type="submit"]:visible`).click();
     assert.equal((await response).status(), status);
     if (status === 200 && paidProduct)
       await page.getByText(paidProduct + ' 代付价格已保存', { exact: true }).waitFor();
@@ -162,7 +161,6 @@ test('GPT、Claude Pro、Claude Max、Gemini、Grok 的币种、代付和售价�
   assert((await currencies()).includes('英镑 GBP'));
   const before = writes.length;
   await page.locator('button[form="commerce-currencies-form"][type="submit"]').click();
-  await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
   await page.getByText('币种设置已变化，输入已保留；请读取最新清单后重新编辑', { exact: true }).waitFor();
   assert.equal(writes.length, before, '旧版本不能覆盖另一页刚保存的设置');
   await page.locator('[data-action="commerce-currency-reload"]').click();

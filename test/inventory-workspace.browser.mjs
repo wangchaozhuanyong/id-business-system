@@ -216,12 +216,10 @@ test('账号与邮箱提交提取工作台：旧路由、双模块、草稿、�
   const stock = page.locator('.inventory-availability > span').filter({ hasText: /^GPT 账号/ }).locator('strong');
   await page.locator('[data-action="inventory-import"][data-type="gpt"]').click();
   await page.locator('#inventory-import-content').fill('邮箱,密码,邮箱类型,2FA密钥,国家地区,地区,注册时间,登录设备,备注1,备注2\nworkspace-new@example.test,Fixture-Only,谷歌邮箱,DEMO-TOTP,美国,纽约,2026-10-01T10:30,测试设备,合并工作台,合成资料');
-  await page.locator('button[form="inventory-import-form"][type="submit"]').click();
   fail = true;
   const saveImport = async status => {
-    await page.locator('[data-action="inventory-import-confirm"]').click();
     const response = page.waitForResponse(r => r.request().method() === 'PUT' && new URL(r.url()).pathname === '/api/local/inventory');
-    await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
+    await page.locator('button[form="inventory-import-form"][type="submit"]').click();
     assert.equal((await response).status(), status); await settle(page);
   };
   const countBefore = Number(await stock.innerText());

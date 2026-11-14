@@ -306,7 +306,7 @@
     }
     return true;
   }
-  async function onSubmit(form) {
+  function onSubmit(form) {
     if (form.id !== 'fx-settings-form' || !active()) return false;
     if (saving) return true;
     preserveDraft();
@@ -317,26 +317,22 @@
     if (!raw.currencies.length) { A.setError('fx-currencies', '至少选择一个采集币种'); return true; }
     const settings = { provider: raw['fx-provider'], enabled: raw.enabled, schedule: raw['fx-schedule'], intervalMinutes: Number(raw['fx-interval']),
       currencies: raw.currencies, quoteRetentionDays: Number(raw['fx-quotes-days']), runRetentionDays: Number(raw['fx-runs-days']), retryAttempts: Number(raw['fx-retries']) };
-    const serialized = JSON.stringify(raw), epoch = lifetime;
-    A.confirmAction('保存汇率采集设置', '设置只影响后续采集。未采集的订单所需币种将保留待核算；保留期限变化不会自动删除订单依据，清理需另行预览确认。',
-      () => {
-        if (epoch !== lifetime) return;
-        return perform({ action: 'settings', version: Number(raw['fx-version']), settings }, result => {
-          if (data && result.settings.version >= data.settings.version) {
-            data = { ...data, settings: result.settings };
-          }
-          const currentForm = $('#fx-settings-form');
-          const current = currentForm ? readSettings(currentForm) : A.state.drafts.get(draftKey);
-          if (JSON.stringify(current) === serialized) A.state.drafts.delete(draftKey);
-          else if (current?.['fx-version'] === raw['fx-version']) {
-            current['fx-version'] = String(result.settings.version); A.state.drafts.set(draftKey, current);
-          }
-          if (currentForm) currentForm.elements['fx-version'].value = String(result.settings.version);
-          // The next read must not capture the already-saved old form again.
-          if (currentForm && JSON.stringify(current) === serialized) currentForm.dataset.fxSaved = 'true';
-          A.notify('采集设置已保存');
-        });
-      }, '确认保存');
+    const serialized = JSON.stringify(raw);
+    void perform({ action: 'settings', version: Number(raw['fx-version']), settings }, result => {
+      if (data && result.settings.version >= data.settings.version) {
+        data = { ...data, settings: result.settings };
+      }
+      const currentForm = $('#fx-settings-form');
+      const current = currentForm ? readSettings(currentForm) : A.state.drafts.get(draftKey);
+      if (JSON.stringify(current) === serialized) A.state.drafts.delete(draftKey);
+      else if (current?.['fx-version'] === raw['fx-version']) {
+        current['fx-version'] = String(result.settings.version); A.state.drafts.set(draftKey, current);
+      }
+      if (currentForm) currentForm.elements['fx-version'].value = String(result.settings.version);
+      // The next read must not capture the already-saved old form again.
+      if (currentForm && JSON.stringify(current) === serialized) currentForm.dataset.fxSaved = 'true';
+      A.notify('采集设置已保存');
+    });
     return true;
   }
   function onChange(node) {

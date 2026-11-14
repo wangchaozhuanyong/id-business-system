@@ -51,7 +51,7 @@ test('Claude Pro 和 Max 通过实际表单保存独立空邮箱订单', { timeo
     await email.fill('');
     await page.locator('#commerce-saleAmount').fill('120');
     await page.locator('#commerce-paidAmount').fill('21');
-    await page.getByRole('button', { name: '确认提交', exact: true }).click();
+    await page.locator('button[form="commerce-order-form"][type="submit"]').click();
     await page.locator('#toast').filter({ hasText: '订单提交成功' }).waitFor();
     assert.equal(page.url(), origin + '/#/workspace/order/claude');
     await page.goto(origin + '/#/orders/claude');
@@ -148,27 +148,20 @@ test('隐藏邮箱历史入库预检、冲突保留输入和刷新回读', { tim
     await pending.waitFor();
   };
   await inspectPreview();
-  await editor.fill(content + '\t合成更改');
-  await page.locator('button[form="relay-intake-form"][type="submit"]').click();
-  assert.equal(writes, 0);
-  assert.equal(await page.locator('#confirm-dialog[open]').count(), 0);
-  await editor.fill(content);
   await page.setViewportSize({ width: 390, height: 900 });
   await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
   await preview.click();
   await inspectPreview();
   await settle(page);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-  const confirm = async () => {
+  const save = async () => {
     await page.locator('button[form="relay-intake-form"][type="submit"]').click();
-    await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
+    assert.equal(await page.locator('#confirm-dialog[open]').count(), 0);
   };
-  await confirm();
+  await save();
   await page.getByText('合成资料版本冲突，请重新预检', { exact: true }).waitFor();
   assert.equal(await editor.inputValue(), content);
-  await preview.click();
-  await inspectPreview();
-  await confirm();
+  await save();
   await page.locator('#drawer[open]').waitFor({ state: 'hidden' });
   assert.equal(writes, 2);
   await page.reload();
@@ -211,7 +204,6 @@ test('隐藏邮箱历史入库预检、冲突保留输入和刷新回读', { tim
   await page.locator('#inventory-password').fill(enteredCredentials.password);
   await page.locator('#inventory-totp').fill(enteredCredentials.totp);
   await page.locator('button[form="inventory-asset-form"][type="submit"]').click();
-  await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
   await page.locator('#drawer[open]').waitFor({ state: 'hidden' });
   assert.equal(edits, 1);
 

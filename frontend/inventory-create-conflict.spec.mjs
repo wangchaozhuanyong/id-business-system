@@ -92,9 +92,8 @@ async function fixture() {
 
 test('the real Google form saves once after an unrelated concurrent update', { timeout: 2000 }, async () => {
   const f = await fixture();
-  f.publicSubmit();
   f.external(data => data.accounts.push({ id: 'concurrent-account', type: 'gpt' }));
-  f.confirm();
+  f.publicSubmit();
   await f.done;
   assert.equal(f.attempts.length, 2);
   assert.equal(f.stored.data.accounts[0].id, 'concurrent-account');
@@ -103,16 +102,18 @@ test('the real Google form saves once after an unrelated concurrent update', { t
   assert.equal(f.stored.data.mailboxes[0].inventoryHistory[0].action, '新增资料');
 });
 
-test('changes made after form review cannot be replaced by the older confirmed input', async () => {
+test('typing after submit leaves a newer draft in place when the original request conflicts', async () => {
   const f = await fixture();
+  const hold = Promise.withResolvers();
+  f.setOnSave(() => hold.promise);
   f.publicSubmit();
   f.form.values['inventory-password'] = 'NEW-TEST-VALUE';
-  f.confirm();
+  f.external(data => data.accounts.push({ id: 'concurrent-account', type: 'gpt' }));
+  hold.resolve();
   await new Promise(resolve => setImmediate(resolve));
-  assert.equal(f.attempts.length, 0);
+  assert.equal(f.attempts.length, 1);
   assert.equal(f.stored.data.mailboxes.some(item => item.email === 'new@example.test'), false);
   assert.equal(f.form.values['inventory-password'], 'NEW-TEST-VALUE');
-  assert(f.notices.some(message => /输入.*变化/.test(message)));
 });
 
 test('new Google mailbox retries a stale inventory version without overwriting concurrent data', async () => {

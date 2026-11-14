@@ -553,7 +553,6 @@
   }
   function receiveRefund(id, options) {
     return saveLocal('apple_refund_receive', () => {
-      if (options.confirmed !== true) return fail('请确认 Apple 余额已实际到账');
       const check = verifyPendingRefund(id, options);
       if (!check.ok) return check;
       const { refund, allocation } = check;
@@ -724,7 +723,7 @@
         true
       )}${A.field('金额（美元）', 'apple-amount', A.input('apple-amount', d['apple-amount'] || '', 'inputmode="decimal"'), true)}${A.field(topup ? '到账依据' : '变动原因', 'apple-reason', `<textarea id="apple-reason" name="apple-reason" rows="3">${E(d['apple-reason'] || '')}</textarea>`, !topup).replace('class="field"', 'class="field form-field-wide"')}</div></form>`,
       A.button('取消', 'drawer-close') +
-        '<button class="button primary" type="submit" form="apple-adjust-form">核对变动</button>',
+        '<button class="button primary" type="submit" form="apple-adjust-form">保存余额变动</button>',
       key
     );
   }
@@ -749,11 +748,11 @@
       key = `apple-return:${orderId}`,
       d = S.drafts.get(key) || {};
     A.openDrawer(
-      '确认 Apple 余额退回',
+      '登记 Apple 余额退回',
       '仅在 Apple 已实际退回账户余额后登记；客户退款不会自动增加本余额，也不请求外部退款。',
-      `<div class="property-list">${property('苹果 ID', wallet.email)}${property('订单编号', allocation.orderNo)}${property('客户账号', allocation.email)}${property('扣款来源', allocation.openingIncluded ? '演示期初已计的历史订阅' : '本期订单确认扣款')}${property('最多退回', `${shown(allocation.netAmount)} USD · 美元`)}</div><form id="apple-return-form" data-apple-draft="${E(key)}" novalidate><input type="hidden" name="apple-order-id" value="${E(orderId)}" /><input type="hidden" name="apple-ledger-version" value="${E(d['apple-ledger-version'] ?? allocation.version)}" /><input type="hidden" name="apple-wallet-version" value="${E(d['apple-wallet-version'] ?? wallet.version)}" /><div class="form-grid">${A.field('退回金额（美元）', 'apple-return-amount', A.input('apple-return-amount', d['apple-return-amount'] || '', 'inputmode="decimal"'), true)}${A.field('已实际退回', 'apple-return-confirmed', `<label class="checkbox-label"><input type="checkbox" id="apple-return-confirmed" name="apple-return-confirmed" ${d['apple-return-confirmed'] ? 'checked' : ''} />已核对 Apple 余额到账</label>`, true)}${A.field('到账依据或备注', 'apple-return-reason', `<textarea id="apple-return-reason" name="apple-return-reason" rows="3">${E(d['apple-return-reason'] || '')}</textarea>`, true).replace('class="field"', 'class="field form-field-wide"')}</div></form>`,
+      `<div class="property-list">${property('苹果 ID', wallet.email)}${property('订单编号', allocation.orderNo)}${property('客户账号', allocation.email)}${property('扣款来源', allocation.openingIncluded ? '演示期初已计的历史订阅' : '本期订单确认扣款')}${property('最多退回', `${shown(allocation.netAmount)} USD · 美元`)}</div><form id="apple-return-form" data-apple-draft="${E(key)}" novalidate><input type="hidden" name="apple-order-id" value="${E(orderId)}" /><input type="hidden" name="apple-ledger-version" value="${E(d['apple-ledger-version'] ?? allocation.version)}" /><input type="hidden" name="apple-wallet-version" value="${E(d['apple-wallet-version'] ?? wallet.version)}" /><div class="form-grid">${A.field('退回金额（美元）', 'apple-return-amount', A.input('apple-return-amount', d['apple-return-amount'] || '', 'inputmode="decimal"'), true)}${A.field('到账依据或备注', 'apple-return-reason', `<textarea id="apple-return-reason" name="apple-return-reason" rows="3">${E(d['apple-return-reason'] || '')}</textarea>`, true).replace('class="field"', 'class="field form-field-wide"')}</div></form>`,
       A.button('取消', 'drawer-close') +
-        '<button class="button primary" type="submit" form="apple-return-form">核对实际退回</button>',
+        '<button class="button primary" type="submit" form="apple-return-form">登记到账</button>',
       key
     );
   }
@@ -809,7 +808,7 @@
     }
     const key = `apple-pending:${isCorrection ? 'edit' : 'receive'}:${id}`;
     const draft = S.drafts.get(key) || {};
-    const title = isCorrection ? '更正 Apple 待回款' : '确认 Apple 回款到账';
+    const title = isCorrection ? '更正 Apple 待回款' : '登记 Apple 回款到账';
     const fields = isCorrection
       ? A.field(
           '更正后金额（美元）',
@@ -821,12 +820,7 @@
           ),
           true
         )
-      : A.field(
-          '到账确认',
-          'apple-pending-confirmed',
-          `<label class="checkbox-label"><input type="checkbox" id="apple-pending-confirmed" name="apple-pending-confirmed" ${draft['apple-pending-confirmed'] ? 'checked' : ''} />已核对 Apple 余额到账</label>`,
-          true
-        );
+      : '';
     A.openDrawer(
       title,
       isCorrection
@@ -834,7 +828,7 @@
         : '按已登记金额入账。实际金额有差异时请先更正。',
       `<div class="property-list">${property('订单编号', refund.orderNo)}${property('原付款苹果 ID', wallet.email)}${property('已登记回款', `${shown(refund.amount)} USD · 美元`)}</div><form id="apple-pending-form" data-apple-draft="${E(key)}" novalidate><input type="hidden" name="apple-pending-id" value="${E(id)}" /><input type="hidden" name="apple-pending-action" value="${isCorrection ? 'edit' : 'receive'}" /><input type="hidden" name="apple-pending-version" value="${E(draft['apple-pending-version'] ?? refund.version)}" /><input type="hidden" name="apple-pending-ledger-version" value="${E(draft['apple-pending-ledger-version'] ?? allocation.version)}" /><input type="hidden" name="apple-pending-wallet-version" value="${E(draft['apple-pending-wallet-version'] ?? wallet.version)}" /><div class="form-grid">${fields}${A.field(isCorrection ? '更正原因' : '到账依据', 'apple-pending-reason', `<textarea id="apple-pending-reason" name="apple-pending-reason" rows="3">${E(draft['apple-pending-reason'] || '')}</textarea>`, true).replace('class="field"', 'class="field form-field-wide"')}</div></form>`,
       A.button('取消', 'drawer-close') +
-        '<button class="button primary" type="submit" form="apple-pending-form">核对</button>',
+        `<button class="button primary" type="submit" form="apple-pending-form">${isCorrection ? '保存更正' : '登记到账'}</button>`,
       key
     );
   }
@@ -1305,33 +1299,18 @@
       version: data['apple-pending-version'],
       ledgerVersion: data['apple-pending-ledger-version'],
       walletVersion: data['apple-pending-wallet-version'],
-      confirmed: Boolean(data['apple-pending-confirmed']),
       reason: String(data['apple-pending-reason'] || '').trim()
     };
-    const missing = isCorrection
-      ? !valid(amount) && 'apple-pending-amount'
-      : !options.confirmed && 'apple-pending-confirmed';
-    A.setError(
-      isCorrection ? 'apple-pending-amount' : 'apple-pending-confirmed',
-      missing ? (isCorrection ? '请填写有效金额' : '请确认 Apple 余额已实际到账') : ''
-    );
+    const invalidAmount = isCorrection && !valid(amount);
+    A.setError('apple-pending-amount', invalidAmount ? '请填写有效金额' : '');
     A.setError('apple-pending-reason', options.reason ? '' : '请填写依据或原因');
-    if (missing || !options.reason) return;
-    A.confirmAction(
-      isCorrection ? '确认更正待回款金额' : '确认 Apple 回款到账',
-      isCorrection
-        ? `${refund.orderNo} · ${shown(refund.amount)} → ${shown(amount)} USD · 美元。`
-        : `${refund.orderNo} · 向原付款苹果 ID 余额登记到账 ${shown(refund.amount)} USD · 美元。`,
-      () =>
-        void finishLocal(
-          form,
-          isCorrection ? correctRefund(id, amount, options) : receiveRefund(id, options),
-          () => openOrderRefund(refund.orderId)
-        )
-    );
+    if (invalidAmount || !options.reason) return;
+    void finishLocal(form, isCorrection ? correctRefund(id, amount, options) : receiveRefund(id, options),
+      () => openOrderRefund(refund.orderId));
   }
   function onSubmit(form) {
     if (!form.id.startsWith('apple-')) return false;
+    if (saving) return true;
     saveDrafts();
     const d = A.readForm(form);
     if (localData && form.id === 'apple-pending-form') {
@@ -1354,29 +1333,18 @@
       A.setError('apple-reason', topup || reason ? '' : '请填写变动原因');
       if (!valid(amount) || M.compare(amount, '0') <= 0 || (!topup && !reason)) return true;
       const signed = !topup && d['apple-direction'] === 'debit' ? M.subtract('0', amount) : amount;
-      A.confirmAction(
-        topup ? '确认登记充值到账' : '确认登记余额变动',
-        `${wallet.email} · ${M.compare(signed, '0') > 0 ? '+' : ''}${shown(signed)} USD · 美元。`,
-        () => {
-          const options = {
-            reason,
-            expectedVersion: d['apple-version'], topup, commandId: d['apple-command']
-          };
-          if (localData) {
-            void finishLocal(form, saveAdjustment(d['apple-id'], signed, options), () =>
-              openLedger(d['apple-id'])
-            );
-            return;
-          }
-          const result = adjust(d['apple-id'], signed, options);
-          if (!result.ok) {
-            A.notify(result.error);
-            return;
-          }
-          finish(form);
-          openLedger(d['apple-id']);
-        }
-      );
+      const options = { reason, expectedVersion: d['apple-version'], topup, commandId: d['apple-command'] };
+      if (localData) {
+        void finishLocal(form, saveAdjustment(d['apple-id'], signed, options), () => openLedger(d['apple-id']));
+        return true;
+      }
+      const result = adjust(d['apple-id'], signed, options);
+      if (!result.ok) {
+        A.notify(result.error);
+        return true;
+      }
+      finish(form);
+      openLedger(d['apple-id']);
     } else if (!localData && form.id === 'apple-return-form') {
       const amount = d['apple-return-amount'],
         reason = String(d['apple-return-reason'] || '').trim(),
@@ -1388,28 +1356,16 @@
         M.compare(amount, allocation.netAmount) <= 0;
       A.setError('apple-return-amount', amountOk ? '' : '金额需大于零且不超过本单净扣款');
       A.setError('apple-return-reason', reason ? '' : '请填写实际到账依据');
-      A.setError(
-        'apple-return-confirmed',
-        d['apple-return-confirmed'] ? '' : '请确认 Apple 余额已实际到账'
-      );
-      if (!amountOk || !reason || !d['apple-return-confirmed']) return true;
-      A.confirmAction(
-        '确认 Apple 余额已退回',
-        `${allocation.orderNo} · ${shown(amount)} USD · 美元。此记录独立于客户退款，不会自动向客户退款。`,
-        () => {
-          const result = refundToApple(d['apple-order-id'], amount, {
-            reason,
-            expectedVersion: d['apple-ledger-version'],
-            expectedWalletVersion: d['apple-wallet-version']
-          });
-          if (!result.ok) {
-            A.notify(result.error);
-            return;
-          }
-          finish(form);
-          openLedger(allocation.appleIdId);
-        }
-      );
+      if (!amountOk || !reason) return true;
+      const result = refundToApple(d['apple-order-id'], amount, {
+        reason, expectedVersion: d['apple-ledger-version'], expectedWalletVersion: d['apple-wallet-version']
+      });
+      if (!result.ok) {
+        A.notify(result.error);
+        return true;
+      }
+      finish(form);
+      openLedger(allocation.appleIdId);
     }
     return true;
   }
@@ -1454,7 +1410,7 @@
       const attrs = `data-id="${E(id)}"`;
       const walletAttrs = row.wallet ? `data-id="${E(row.wallet.id)}"` : '';
       if (action === 'apple-management-more') A.openActionMenu(node,
-        (row.canRenew ? A.button('续费', 'apple-management-renew', '', '', attrs) : '') +
+        (row.canRenew ? A.button(localData ? '登记已完成续费' : '续费', 'apple-management-renew', '', '', attrs) : '') +
         A.button('订单详情', 'apple-management-order', '', '', attrs) +
         A.button('查看关联订单', 'apple-management-history', '', '', attrs) +
         (row.wallet ? A.button('充值', 'apple-topup', '', '', walletAttrs) + A.button('余额变动', 'apple-ledger', '', '', walletAttrs) +

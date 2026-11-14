@@ -58,7 +58,6 @@ test('下拉设置页签支持来源标签持久化、历史选项和客户草�
   await sourceSettings.getByPlaceholder('请输入来源').fill('门店咨询');
   await sourceSettings.getByRole('button', { name: '添加', exact: true }).click();
   await page.getByRole('button', { name: '保存来源设置', exact: true }).click();
-  await page.locator('[data-action="confirm-accept"]').click();
   await page.getByText('客户来源设置已保存', { exact: true }).waitFor();
   assert.equal(new URL(page.url()).hash, '#/settings/costs');
   await go('customers/new');
@@ -70,14 +69,13 @@ test('下拉设置页签支持来源标签持久化、历史选项和客户草�
     await settings.getByPlaceholder('请输入标签').fill(name);
     await settings.getByRole('button', { name: '添加', exact: true }).click();
   }
-  await page.getByRole('button', { name: '保存标签设置' }).click();
   const settingsSaved = page.waitForResponse(
     (response) =>
       response.url().endsWith('/api/local/settings') &&
       response.request().method() !== 'GET' &&
       response.ok()
   );
-  await page.locator('[data-action="confirm-accept"]').click();
+  await page.getByRole('button', { name: '保存标签设置' }).click();
   await settingsSaved;
   await page.getByText('客户标签设置已保存', { exact: true }).waitFor();
 
@@ -110,7 +108,6 @@ test('下拉设置页签支持来源标签持久化、历史选项和客户草�
   const today = recent.getByRole('button', { name: '今日', exact: true });
   await today.click();
   await page.getByRole('button', { name: '核对并保存' }).click();
-  await page.locator('[data-action="confirm-accept"]').click();
   await recent.getByText('多标签测试客户', { exact: true }).waitFor();
   assert.equal(new URL(page.url()).hash, '#/customers/new');
   assert.equal(await today.getAttribute('aria-pressed'), 'true');
@@ -140,7 +137,6 @@ test('下拉设置页签支持来源标签持久化、历史选项和客户草�
   await openSettings('来源设置');
   await sourceSettings.getByRole('button', { name: '移除来源 门店咨询' }).click();
   await page.getByRole('button', { name: '保存来源设置' }).click();
-  await page.locator('[data-action="confirm-accept"]').click();
   await page.getByText('客户来源设置已保存', { exact: true }).waitFor();
   await reopenCustomer();
   assert.equal(await form.getByLabel('客户姓名').inputValue(), '保留中的客户草稿');
@@ -149,7 +145,6 @@ test('下拉设置页签支持来源标签持久化、历史选项和客户草�
   await openSettings('标签设置');
   await settings.getByRole('button', { name: '移除标签 企业客户' }).click();
   await page.getByRole('button', { name: '保存标签设置' }).click();
-  await page.locator('[data-action="confirm-accept"]').click();
   await page.getByText('客户标签设置已保存', { exact: true }).waitFor();
 
   await reopenCustomer();
@@ -202,7 +197,6 @@ test('下拉设置页签支持来源标签持久化、历史选项和客户草�
   const drawer = page.locator('#drawer[open]');
   const saveCustomer = drawer.getByRole('button', { name: '核对并保存', exact: true });
   await saveCustomer.click();
-  await page.locator('#confirm-dialog[open] [data-action="confirm-accept"]').click();
   await drawer.waitFor({ state: 'hidden' });
   const quickCustomer = (await readCommerce()).data.customers.find(row => row.name === '订单快捷客户');
   assert.ok(quickCustomer);
@@ -242,7 +236,6 @@ test('下拉设置页签支持来源标签持久化、历史选项和客户草�
   assert.equal(await form.getByLabel('来源渠道').inputValue(), '咸鱼');
   await form.getByLabel('客户姓名').fill('默认来源测试客户');
   await page.getByRole('button', { name: '核对并保存' }).click();
-  await page.locator('#confirm-dialog[open] [data-action="confirm-accept"]').click();
   await page.locator('#drawer[open]').waitFor({ state: 'hidden' });
   const newCustomer = (await readCommerce()).data.customers.find(row => row.name === '默认来源测试客户');
   assert.equal(newCustomer?.source, '咸鱼');
@@ -256,7 +249,6 @@ test('下拉设置页签支持来源标签持久化、历史选项和客户草�
   await identity.waitFor();
   await form.getByLabel('来源渠道').selectOption('');
   await saveCustomer.click();
-  await page.locator('#confirm-dialog[open] [data-action="confirm-accept"]').click();
   await drawer.waitFor({ state: 'hidden' });
   const nameOnly = (await readCommerce()).data.customers.find(row => row.name === '仅填姓名的快捷客户');
   assert.deepEqual([nameOnly.phone, nameOnly.wechat, nameOnly.source, nameOnly.tags], ['', '', '', []]);

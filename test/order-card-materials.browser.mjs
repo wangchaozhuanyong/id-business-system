@@ -41,17 +41,14 @@ async function setup(t) {
   page.setDefaultTimeout(5000);
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
-  const submit = async (scope, completed = false, confirmCorrection = false) => {
+  const submit = async (scope, completed = false) => {
     const before = writes.length;
     const soundCount = await page.evaluate(() => window.qaOrderSounds.length);
     const url = page.url();
     const existing = await scope.locator('#commerce-id').inputValue();
     await scope.locator('button[form="commerce-order-form"][type="submit"]').click();
     const dialog = page.locator('#confirm-dialog[open]');
-    if (confirmCorrection) {
-      await dialog.getByText('确认更正独立订单', { exact: true }).waitFor();
-      await dialog.locator('[data-action="confirm-accept"]').click();
-    } else assert.equal(await dialog.count(), 0);
+    assert.equal(await dialog.count(), 0);
     await page.waitForFunction(start => window.qaOrderSounds.length > start, soundCount);
     await page.locator('#toast').filter({ hasText: existing ? '订单修改成功' : '订单提交成功' }).waitFor();
     assert.equal(page.url(), url);
@@ -254,7 +251,7 @@ test('已选卡池资料删除后仍可编辑，自动订单更正卡号保留�
   let drawer = page.locator('#drawer[open]');
   await drawer.locator('#commerce-notes').fill('卡池删除后补充备注');
   await drawer.locator('#commerce-correctionReason').fill('核对订单备注');
-  await submit(drawer, false, true);
+  await submit(drawer);
   let saved = writes.at(-1).data.orders.find(row => row.id === order.id);
   assert.equal(saved.proCardNumber, number);
   assert.equal(saved.paymentId, '4242');
@@ -264,7 +261,7 @@ test('已选卡池资料删除后仍可编辑，自动订单更正卡号保留�
   assert.equal(await drawer.locator('#commerce-proCardNumber').inputValue(), number);
   await drawer.locator('#commerce-proCardNumber').fill(replacement);
   await drawer.locator('#commerce-correctionReason').fill('核对登记卡号');
-  await submit(drawer, false, true);
+  await submit(drawer);
   saved = writes.at(-1).data.orders.find(row => row.id === order.id);
   assert.equal(saved.proCardNumber, replacement);
   assert.equal(saved.taskId, order.taskId);

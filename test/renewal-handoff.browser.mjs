@@ -154,7 +154,7 @@ test('renewal countdown uses Beijing dates, updates across expiry and keeps the 
   assert.deepEqual(traffic.external, []);
 });
 
-test('finance source review preserves the reason but requires a fresh version and confirmation', { timeout: 60_000 }, async t => {
+test('finance source review preserves the reason after stale versions without another checkbox', { timeout: 60_000 }, async t => {
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
   t.after(() => browser.close());
   for (const [width, theme] of [[1440, 'light'], [1440, 'dark'], [390, 'light'], [320, 'dark']]) {
@@ -174,7 +174,7 @@ test('finance source review preserves the reason but requires a fresh version an
       }] } });
       const command = route.request().postDataJSON(); posts.push(command);
       assert.equal(command.action, 'review-source');
-      assert.equal(command.confirmed, true);
+      assert.equal(command.confirmed, undefined);
       if (posts.length === 1) {
         sourceVersion = 3;
         return route.fulfill({ status: 409, json: { error: '原单再次变化，请刷新后核对' } });
@@ -191,22 +191,20 @@ test('finance source review preserves the reason but requires a fresh version an
     await page.getByRole('tab', { name: '已处理', exact: true }).click();
     await page.getByRole('button', { name: '核对原单', exact: true }).click();
     const form = page.locator('#renewal-review-source-form');
-    const confirm = form.getByRole('checkbox');
     const submit = page.getByRole('button', { name: '确认并交回员工' });
     await form.getByLabel('原单更正原因').fill('已核对到期时间更正');
-    await submit.click(); assert.equal(posts.length, 0);
-    await confirm.check(); await submit.click();
+    assert.equal(await form.getByRole('checkbox').count(), 0);
+    await submit.click();
     await form.getByText('原单再次变化，请刷新后核对', { exact: true }).waitFor();
     await page.getByRole('button', { name: '关闭抽屉', exact: true }).click();
     await page.getByRole('button', { name: '刷新', exact: true }).click();
     await page.getByRole('button', { name: '核对原单', exact: true }).click();
     assert.equal(await form.getAttribute('data-source-version'), '3');
-    assert.equal(await confirm.isChecked(), false);
     assert.equal(await form.getByLabel('原单更正原因').inputValue(), '已核对到期时间更正');
     await settle(page);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
     assert.deepEqual((await separatorSnapshot(page)).findings, []);
-    await confirm.check(); await submit.click();
+    await submit.click();
     await page.getByText('原单已核对，员工可以补资料提交订单', { exact: true }).waitFor();
     assert.equal(posts.length, 2);
     assert.deepEqual(errors, []); assert.deepEqual(requests.external, []);
@@ -270,7 +268,7 @@ test('staff confirms a batch and finance returns a verified replacement for a ne
       }
       actions.push(body.action);
       if (body.action === 'submit') {
-        assert.equal(body.confirmed, true);
+        assert.equal(body.confirmed, undefined);
         assert.deepEqual(body.orders, [{ id: source.id, version: 2 }, { id: second.id, version: 2 }]);
         rows = available.map((order, index) => ({ id: 'case-' + index, version: 1, status: 'pending', order,
           submittedAt: '2026-11-13T05:00:00Z', submittedBy: '客服甲' }));
@@ -285,13 +283,13 @@ test('staff confirms a batch and finance returns a verified replacement for a ne
           assert.equal(body.cardMode, 'manual');
           assert.equal(body.amount, '22.25');
           assert.equal(body.cardNumber, '4111111111111111');
-          assert.equal(body.confirmed, true);
+          assert.equal(body.confirmed, undefined);
           Object.assign(row, { status: 'paid', amount: body.amount, currency: body.currency, last4: '1111' });
         }
         if (body.action === 'review-source') {
           assert(verified);
           assert.deepEqual(body, { action: 'review-source', id: row.id, version: 4, sourceVersion: 3,
-            reason: '原到期时间登记更正', confirmed: true });
+            reason: '原到期时间登记更正' });
           row.sourceChanged = false;
           delete row.sourceReview;
         }
@@ -325,10 +323,7 @@ test('staff confirms a batch and finance returns a verified replacement for a ne
   await staff.page.setViewportSize({ width: 390, height: 900 });
   await staff.page.getByRole('checkbox', { name: '选择当前页' }).check();
   await staff.page.getByRole('button', { name: '提交给财务（2）' }).click();
-  await staff.page.getByRole('button', { name: '取消', exact: true }).click();
-  assert.equal(actions.length, 0);
-  await staff.page.getByRole('button', { name: '提交给财务（2）' }).click();
-  await staff.page.getByRole('button', { name: '确认送财务' }).click();
+  assert.equal(await staff.page.locator('#confirm-dialog[open]').count(), 0);
   await staff.page.waitForURL('**/#/workspace/renewals/sent');
   await staff.page.getByText('待财务', { exact: true }).first().waitFor();
   await staff.page.evaluate(() => window.IDDesignAPI.go('workspace/finance-renewals'));
@@ -343,8 +338,8 @@ test('staff confirms a batch and finance returns a verified replacement for a ne
   await drawer.getByLabel('实际付款金额').fill('22.25');
   await drawer.getByLabel('本次使用的卡').selectOption('manual');
   await drawer.getByLabel('本次银行卡号').fill('4111111111111111');
-  await drawer.getByLabel('我已确认付款成功，已填写的用卡资料与本次付款一致').check();
-  await drawer.getByRole('button', { name: '提交实付给员工' }).click();
+  assert.equal(await drawer.locator('#renewal-confirmed').count(), 0);
+  await drawer.getByRole('button', { name: '保存实付' }).click();
   await finance.page.getByLabel('身份验证器的六位验证码').fill('123456');
   await finance.page.getByRole('button', { name: '验证', exact: true }).click();
   await finance.page.getByText('已交回续费管理，等待员工补资料').waitFor();
@@ -363,7 +358,6 @@ test('staff confirms a batch and finance returns a verified replacement for a ne
   await drawer.getByText('2026-11-15 10:00', { exact: true }).waitFor();
   assert.equal(await finance.page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
   await drawer.getByLabel('原单更正原因').fill('原到期时间登记更正');
-  await drawer.getByLabel('我已核对本次付款仍对应这张订单').check();
   await drawer.getByRole('button', { name: '确认并交回员工' }).click();
   await finance.page.getByText('原单已核对，员工可以补资料提交订单').waitFor();
   await staff.page.evaluate(() => window.IDDesignAPI.go('workspace/renewals/ready'));

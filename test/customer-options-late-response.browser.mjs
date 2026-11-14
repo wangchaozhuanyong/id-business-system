@@ -41,7 +41,6 @@ test('下拉设置晚到保存不重绘新表单，跨页签草稿及失败重�
   };
   const save = async label => {
     await page.getByRole('button', { name: '保存' + label + '设置', exact: true }).click();
-    await page.locator('#confirm-dialog[open] [data-action="confirm-accept"]').click();
   };
   await page.goto(origin + '/#/customers/new');
   await page.locator('#commerce-contact-name').fill('待录入客户');
@@ -80,8 +79,7 @@ test('下拉设置晚到保存不重绘新表单，跨页签草稿及失败重�
   assert.deepEqual(snapshots.settings.data.customerTags, ['保留重试标签']);
   await tab('费用规则');
   assert.equal(await page.locator('#ops-cost-gmailCostCny').inputValue(), '0.25');
-  await page.getByRole('button', { name: '核对费用规则', exact: true }).click();
-  await page.locator('#confirm-dialog[open] [data-action="confirm-accept"]').click();
+  await page.locator('#ops-cost-form button[type="submit"]').click();
   await page.getByText('费用规则已保存到本机', { exact: true }).waitFor();
   assert.equal(snapshots.settings.version, 4);
   assert.equal(snapshots.settings.data.costSettings.gmailCostCny, '0.25');

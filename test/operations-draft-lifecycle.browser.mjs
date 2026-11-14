@@ -86,7 +86,6 @@ test('运营表单关闭和切页保留普通草稿，提交快照及敏感字�
   assert.equal(await page.locator('#ops-type-label').inputValue(), '分类未提交草稿');
   assert.equal(await page.locator('[name="ops-type-version"]').inputValue(), originalVersion);
   await drawer.getByRole('button', { name: '核对并保存', exact: true }).click();
-  await page.locator('[data-action="confirm-accept"]').click();
   await drawer.waitFor({ state: 'hidden' });
   await page.getByRole('button', { name: '新增分类', exact: true }).click();
   assert.equal(await page.locator('#ops-type-label').inputValue(), '', '新增不串用编辑分类草稿');

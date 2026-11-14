@@ -44,11 +44,7 @@ test('全局外点收起与切页草稿保留', { timeout: 90_000 }, async (t) =
     await settings.getByRole('button', { name: '添加', exact: true }).click();
   }
   await page.getByRole('button', { name: '保存标签设置', exact: true }).click();
-  await page.mouse.click(10, 500);
-  await page.locator('#confirm-dialog').waitFor({ state: 'hidden' });
-  assert(await settings.isVisible(), '点击确认框遮罩只取消确认，保留待保存设置');
-  await page.getByRole('button', { name: '保存标签设置', exact: true }).click();
-  await page.locator('[data-action="confirm-accept"]').click();
+  assert.equal(await page.locator('#confirm-dialog[open]').count(), 0);
   await page.getByText('客户标签设置已保存', { exact: true }).waitFor();
   await go('customers/new');
   await picker.locator('summary').click();
@@ -167,7 +163,6 @@ test('客户保存迟到响应不清除随后输入', { timeout: 30_000 }, async
   await page.locator('#commerce-contact-name:visible').fill('首次提交客户');
   await page.locator('#commerce-contact-phone').fill('5550199');
   await page.locator('button[form="commerce-contact-form"]').click();
-  await page.locator('[data-action="confirm-accept"]').click();
   await sent;
   await page.locator('#commerce-contact-name:visible').fill('保存期间继续编辑');
   release();
@@ -194,16 +189,14 @@ test('客户保存迟到响应不清除随后输入', { timeout: 30_000 }, async
     await route.fulfill({ response });
   });
   await page.locator('button[form="commerce-contact-form"]').click();
-  await page.locator('[data-action="confirm-accept"]').click();
   await editSent;
   await page.locator('#commerce-contact-name:visible').fill('已有客户的后续编辑');
   releaseEdit();
   await page.waitForFunction(() => document.querySelector('#drawer [name="commerce-version"]').value === '2');
   assert.equal(await page.locator('#commerce-contact-name:visible').inputValue(), '已有客户的后续编辑');
-  await page.locator('button[form="commerce-contact-form"]').click();
   const nextSave = page.waitForResponse(response => response.url().endsWith('/api/local/commerce') &&
     response.request().method() === 'PUT');
-  await page.locator('[data-action="confirm-accept"]').click();
+  await page.locator('button[form="commerce-contact-form"]').click();
   assert.equal((await nextSave).status(), 200, '本次保存推进的版本应支持后续编辑继续保存');
   await page.locator('#drawer').waitFor({ state: 'hidden' });
   const persisted = await (await page.request.get(host.url + 'api/local/commerce')).json();

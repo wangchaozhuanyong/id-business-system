@@ -66,6 +66,7 @@ test('confirmed staff handoff, exclusive finance claim, verified card replacemen
   const { store, send, submit } = fixture(t);
   const original = structuredClone(store.load('commerce').data.orders[0]);
   assert.equal((await send('employee', { ...submit, confirmed: false })).status, 400);
+  assert.equal((await send('employee', { ...submit, confirmed: 'false' })).status, 400);
   assert.equal((await send('other', submit)).status, 404);
   assert.equal((await send('registrar', null)).status, 403);
   assert.equal((await send('employee', null, { view: 'finance' })).status, 403);
@@ -213,8 +214,8 @@ test('finance may return unpaid work to selection and a former version cannot su
   assert.equal((await send('supervisor', submit)).status, 200);
   const [{ id }] = (await send('finance', null, { view: 'finance' })).data.items;
   assert.equal((await send('finance', { action: 'claim', id, version: 1 })).status, 200);
-  assert.equal((await send('finance', { action: 'return', id, version: 2, reason: '客户需再次确认' })).status, 400);
-  assert.equal((await send('finance', { action: 'return', id, version: 2, reason: '客户需再次确认', confirmed: true })).status, 200);
+  assert.equal((await send('finance', { action: 'return', id, version: 2, reason: '客户尚未决定', confirmed: false })).status, 400);
+  assert.equal((await send('finance', { action: 'return', id, version: 2, reason: '客户尚未决定' })).status, 200);
   const staff = (await send('employee', null)).data;
   assert.equal(staff.candidates.length, 1);
   assert.equal(staff.items[0].status, 'returned');
@@ -484,11 +485,10 @@ test('finance sees only unused authorized tenant cards and cannot register the a
   assert.equal(moved.firstUse.orderId, store.load('commerce').data.orders[0].id);
 });
 
-test('ordinary order writes cannot create a second renewal or a new historical rent batch', async t => {
-  const { store } = fixture(t);
-  const snapshot = store.load('commerce');
+test('已完成的续费可直接入账，有进行中记录或已有同一期续费时不会重复建单', async t => {
+  const { store, send, submit } = fixture(t);
   async function put(data, action, domain = 'commerce') {
-    const change = { domain: 'commerce', version: snapshot.version, data, action };
+    const change = { domain: 'commerce', version: store.load('commerce').version, data, action };
     const request = Readable.from([Buffer.from(JSON.stringify(domain === 'batch' ? [change] : change))]);
     request.url = '/api/local/' + domain;
     request.method = 'PUT';
@@ -499,20 +499,39 @@ test('ordinary order writes cannot create a second renewal or a new historical r
       { publicOrigin: origin, requireRenewalHandoff: true, readOrderCards: async () => [], readOrderOwners: () => Object.values(actors) });
     return { status, result };
   }
-  const repeated = { ...snapshot.data, orders: [...snapshot.data.orders,
-    { ...initialOrder, id: 'direct-copy', ...finishFields, previousOrderId: initialOrder.id }] };
+  const snapshot = store.load('commerce');
+  const direct = { ...initialOrder, id: 'direct-copy', orderNo: 'OD-DIRECT-RENEWAL', ...finishFields,
+    previousOrderId: undefined, paidConfirmed: false, receiptConfirmed: false };
+  const repeated = { ...snapshot.data, orders: [...snapshot.data.orders, direct] };
+  const queued = await send('employee', { action: submit.action, orders: submit.orders });
+  assert.equal(queued.status, 200);
   for (const domain of ['commerce', 'batch']) {
     const bypass = await put(repeated, '新增独立订单', domain);
     assert.equal(bypass.status, 409);
-    assert.match(bypass.result.error, /先从续费管理提交给财务/);
+    assert.match(bypass.result.error, /已有进行中的续费/);
   }
+  const [{ id }] = (await send('finance', null, { view: 'finance' })).data.items;
+  assert.equal((await send('finance', { action: 'claim', id, version: 1 })).status, 200);
+  assert.equal((await send('finance', { action: 'return', id, version: 2, reason: '实际付款已在线下完成' })).status, 200);
   const batch = await put({ ...snapshot.data, rentBatches: [{ id: 'new-batch', items: [] }] }, '更新订单表头');
   assert.equal(batch.status, 403);
   assert.equal(store.load('commerce').version, snapshot.version);
+  const registered = await put(repeated, '新增独立订单');
+  assert.equal(registered.status, 200, registered.result.error);
+  const latest = store.load('commerce').data;
+  const linked = latest.orders.find(row => row.id === direct.id);
+  assert.equal(linked.previousOrderId, initialOrder.id);
+  assert.equal(linked.paidConfirmed, true);
+  assert.equal(linked.receiptConfirmed, true);
+  assert.equal(linked.entitlementStatus, 'active');
+  const replay = await put({ ...latest, orders: [...latest.orders, { ...direct, id: 'another-renewal',
+    orderNo: 'OD-DUPLICATE-RENEWAL', previousOrderId: initialOrder.id }] }, '新增独立订单');
+  assert.equal(replay.status, 409);
+  assert.match(replay.result.error, /已有续费订单/);
   const { proCardNumber, proCardSerial, ...ordinary } = initialOrder;
   const newOrder = { ...ordinary, ...finishFields, id: 'manual-without-email-or-card',
-    ownerId: actors.super.id, email: '', paymentId: '', proMaterialMode: 'none' };
-  const saved = await put({ ...snapshot.data, orders: [...snapshot.data.orders, newOrder] }, '新增独立订单');
+    orderNo: 'OD-MISSING-MATERIALS', ownerId: actors.super.id, email: '', paymentId: '', proMaterialMode: 'none' };
+  const saved = await put({ ...latest, orders: [...latest.orders, newOrder] }, '新增独立订单');
   assert.equal(saved.status, 200, saved.result.error);
   const order = saved.result.data.orders.find(row => row.id === newOrder.id);
   assert.equal(order.email, '');

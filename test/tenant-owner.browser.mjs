@@ -73,14 +73,9 @@ test('租户普通新增及录单快捷新增复用员工归属，保存重试�
       await search.fill(id === staff.id ? '员工 甲' : '代录管理员');
       await popup.locator(`[data-value="${id}"]`).click();
     }
-    async function save(status, beforeConfirm) {
-      await page.locator('button[form="commerce-contact-form"][type="submit"]:visible').click();
-      if (beforeConfirm) {
-        await page.locator('#confirm-dialog[open]').waitFor();
-        await beforeConfirm();
-      }
+    async function save(status) {
       const response = page.waitForResponse(r => r.request().method() === 'PUT' && new URL(r.url()).pathname === '/api/local/commerce');
-      await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
+      await page.locator('button[form="commerce-contact-form"][type="submit"]:visible').click();
       assert.equal((await response).status(), status);
       if (status === 503) await page.getByText('暂时无法确认服务器保存结果，请刷新核对记录后再提交', { exact: true }).waitFor();
       if (status === 409) await page.getByText(/本次未保存，请重新打开并核对当前数据/).waitFor();
@@ -191,10 +186,9 @@ test('租户普通新增及录单快捷新增复用员工归属，保存重试�
     await page.locator('[data-action="commerce-contact-edit"][data-id="no-phone"]').click();
     assert.equal(await phone.inputValue(), '');
     await form.locator('#commerce-contact-notes').fill('无电话也可编辑');
-    await save(200, async () => {
-      fixture.commerce.version++;
-      assert.equal(await page.evaluate(() => window.IDDesignAPI.modules.commerce.refreshCommerce()), true);
-    });
+    fixture.commerce.version++;
+    assert.equal(await page.evaluate(() => window.IDDesignAPI.modules.commerce.refreshCommerce()), true);
+    await save(200);
     await page.locator('#drawer:not([open])').waitFor({ state: 'attached' });
     const noPhone = fixture.commerce.data.tenants.find(row => row.id === 'no-phone');
     assert.equal(noPhone.notes, '无电话也可编辑');

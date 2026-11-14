@@ -34,7 +34,11 @@ function orderRecoveryBlock(order, mode, orders, handoffs) {
   if (['running', 'processing', 'payment_unknown'].includes(order.status) || order.paymentStatus === 'unknown')
     return '订单仍在处理中或付款结果待核对。';
   if (hasOrderRecoveryDependent(order.id, orders, handoffs)) return '已有后续订单或续费申请，请到原单核对。';
-  if (mode === 'undo') return order.cancelled ? '订单已撤单，请先核对当前业务状态。' : '';
+  if (mode === 'undo') {
+    if (latest(order, 'corrections')?.kind === 'apple-payment-entry')
+      return '已登记 Apple 实付，请从原单查看付款及余额明细。';
+    return order.cancelled ? '订单已撤单，请先核对当前业务状态。' : '';
+  }
   if (hasConfirmedMoney(order) || list(order.refunds).length || list(order.bankReturns).length)
     return '已有付款、实收、退款或回款记录，请从原单或财务入口核对。';
   return '';

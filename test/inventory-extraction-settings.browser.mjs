@@ -56,10 +56,8 @@ test('邮箱提取用途设置支持增删、草稿、失败重试、旧版本�
     const close = async () => { await page.locator('#drawer [data-action="drawer-close"]').click(); await page.locator('#drawer:not([open])').waitFor({ state: 'attached' }); };
     const add = async text => { await pending.fill(text); await form.locator('[data-action="option-add"]').click(); };
     const save = async (status = 200) => {
-      await page.locator('button[form="inventory-purpose-settings-form"][type="submit"]').click();
-      await page.locator('#confirm-dialog[open]').waitFor();
       const response = page.waitForResponse(r => new URL(r.url()).pathname === '/api/local/inventory' && r.request().method() === 'PUT');
-      await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
+      await page.locator('button[form="inventory-purpose-settings-form"][type="submit"]').click();
       assert.equal((await response).status(), status);
       if (status === 200) await page.locator('#drawer:not([open])').waitFor({ state: 'attached' });
     };

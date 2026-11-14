@@ -180,24 +180,35 @@ test('邮箱和银行卡留空时，预填金额与周期可直接提交', { tim
     ['', '', '1000', '130', start, expiry]);
 });
 
-test('旧续费录单地址引导到续费管理，不直接写订单', { timeout: 20_000 }, async t => {
+test('从原单进入已完成续费登记，仅在提交时新建一笔', { timeout: 20_000 }, async t => {
   const browser = await chromium.launch();
   t.after(() => browser.close());
-  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  t.after(() => context.close());
-  const traffic = await interceptDesign(context, { actor, localFixtures: {}, skipRechargeAssets: true });
-  const page = await context.newPage();
-  const errors = [], writes = [];
-  page.on('pageerror', error => errors.push(error.message));
-  await context.route('**/api/local/commerce', route => {
-    if (route.request().method() !== 'GET') writes.push(route.request().method());
-    return route.fallback();
+  const id = 'stay-renewal', email = 'renewal-fixture@example.test';
+  const { context, page, fixture, writes, errors, traffic, submit, success } = await setup(browser, 'gpt', 1440, fixture => {
+    const date = offset => new Date(Date.now() + 8 * 3_600_000 + offset * 86_400_000).toISOString().slice(0, 16);
+    fixture.commerce.data.orders.push({ id, orderNo: 'QA-RENEWAL-ORIGINAL', version: 1,
+      product: 'GPT', plan: 'Plus', businessType: '续费', source: '管理员手工',
+      customerId: fixture.commerce.data.customers[0].id, email, payment: '银行卡', proMaterialMode: 'none',
+      start: date(-31), expiry: date(-1), paidAmount: '20', paidCurrency: 'USD', saleAmount: '100', saleCurrency: 'CNY',
+      paidConfirmed: true, receiptConfirmed: true, entitlementStatus: 'active',
+      refunds: [], bankReturns: [], corrections: [] });
   });
-  await page.goto(origin + '/#/workspace/order/renew/stay-renewal');
-  assert.equal(await page.locator('#main #commerce-order-form').count(), 0);
-  await page.getByRole('button', { name: '打开续费管理' }).click();
-  await page.waitForURL('**/#/workspace/renewals');
+  t.after(() => context.close());
+  const original = structuredClone(fixture.commerce.data.orders[0]);
+  await page.goto(origin + '/#/workspace/order/renew/' + id);
+  const form = page.locator('#main #commerce-order-form');
+  await form.waitFor();
+  assert.equal(await form.locator('#commerce-customerId').inputValue(), original.customerId);
+  assert.equal(await form.locator('#commerce-email').inputValue(), email);
   assert.equal(writes.length, 0);
+  await submit();
+  await success();
+  assert.equal(writes.length, 1);
+  const [saved, retained] = writes[0].data.orders;
+  assert.equal(saved.previousOrderId, id);
+  assert.equal(saved.paidConfirmed, true);
+  assert.equal(saved.receiptConfirmed, true);
+  assert.deepEqual(retained, original);
   assert.deepEqual(errors, []);
   assert.deepEqual(traffic.external, []);
 });

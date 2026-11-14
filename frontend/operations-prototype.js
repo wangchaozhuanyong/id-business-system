@@ -1387,29 +1387,27 @@
       refreshSettingsPage();
       notify(localData ? '邮箱分类已保存到本机' : '演示邮箱分类已更新');
     };
-    confirmAction('确认更新邮箱分类', `${label}。修改分类配置不迁移或删除现有资料。`, () => {
-      if (!form.isConnected || JSON.stringify(readForm(form)) !== submitted) return;
-      const rows = mailboxTypes.map((row) => ({ ...row }));
-      const row = rows.find((item) => item.id === id);
-      if (row) {
-        row.label = label;
-        row.enabled =
-          ['google', 'apple', 'relay'].includes(id) && values['ops-type-enabled'] === '启用';
-      } else rows.push({ id: uid('mail-type'), label, enabled: false });
-      if (localData) {
-        void commitSettings(
-          'mailbox_category_save',
-          { ...settingsSnapshot(), mailboxTypes: rows },
-          expectedVersion
-        ).then((saved) => {
-          if (saved) apply();
-        });
-        return;
-      }
-      mailboxTypes.splice(0, mailboxTypes.length, ...rows);
-      recordAudit('配置邮箱分类', label);
-      apply();
-    });
+    if (!form.isConnected || JSON.stringify(readForm(form)) !== submitted) return;
+    const rows = mailboxTypes.map((row) => ({ ...row }));
+    const row = rows.find((item) => item.id === id);
+    if (row) {
+      row.label = label;
+      row.enabled =
+        ['google', 'apple', 'relay'].includes(id) && values['ops-type-enabled'] === '启用';
+    } else rows.push({ id: uid('mail-type'), label, enabled: false });
+    if (localData) {
+      void commitSettings(
+        'mailbox_category_save',
+        { ...settingsSnapshot(), mailboxTypes: rows },
+        expectedVersion
+      ).then((saved) => {
+        if (saved) apply();
+      });
+      return;
+    }
+    mailboxTypes.splice(0, mailboxTypes.length, ...rows);
+    recordAudit('配置邮箱分类', label);
+    apply();
   }
   function customerOptionConfig(kind) {
     const sources = kind === 'sources';
@@ -1474,7 +1472,7 @@
     }
     const submitted = JSON.stringify(values);
     const key = draftKey(config.key);
-    confirmAction(`确认保存客户${config.label}`, '设置仅更新可选清单，已保存的客户资料继续保留。', async () => {
+    (async () => {
       if (!form.isConnected || JSON.stringify(readForm(form)) !== submitted) return;
       const submit = document.querySelector(`button[form="${config.formId}"][type="submit"]`);
       if (submit) submit.disabled = true;
@@ -1508,7 +1506,7 @@
         if (submit?.isConnected) submit.disabled = false;
         form.removeAttribute('aria-busy');
       }
-    });
+    })();
   }
   const costFields = [
     ['claudeBankFeeMyr', 'Claude 代付服务费', 'Claude 真实银行卡按每笔登记的马币服务费计入，跨币种按原单汇率折算。'],
@@ -1539,7 +1537,7 @@
           draft['ops-cost-currency'] ?? config.currency
         ),
         true,
-        esc('点「核对费用规则」并确认后，订单统计的净收款、利润合计及订单列表的收益按所选币种折算。' +
+        esc('保存费用规则后，订单统计的净收款、利润合计及订单列表的收益按所选币种折算。' +
           'Claude 代付和 KYC 成本按马币填写，邮箱成本按人民币填写，开卡费和每笔固定手续费按美元填写。折扣和费率按比例填写。' +
           '历史订单按各自保存的汇率折算。缺少所需汇率时，跨币种收款暂不计入合计，相关利润显示为待核算。')
       ) +
@@ -1622,29 +1620,23 @@
       refreshSettingsPage();
       notify(localData ? '费用规则已保存到本机' : '演示费用规则已保存');
     }
-    confirmAction(
-      '确认保存费用规则',
-      '新订单将采用新配置版本，历史订单及已冻结费用快照保持原值。',
-      () => {
-        if (localData) {
-          void commitSettings(
-            'fee_rules_save',
-            { ...settingsSnapshot(), costSettings: { ...next, version: config.version + 1 } },
-            expectedVersion
-          ).then((saved) => {
-            if (saved) afterSave();
-          });
-          return;
-        }
-        const result = service.updateCostSettings(next);
-        if (!result.ok) {
-          notify(result.message || '配置未保存');
-          return;
-        }
-        recordAudit('修改费用规则', `配置版本 ${result.settings?.version || '已更新'}`);
-        afterSave();
-      }
-    );
+    if (localData) {
+      void commitSettings(
+        'fee_rules_save',
+        { ...settingsSnapshot(), costSettings: { ...next, version: config.version + 1 } },
+        expectedVersion
+      ).then((saved) => {
+        if (saved) afterSave();
+      });
+      return;
+    }
+    const result = service.updateCostSettings(next);
+    if (!result.ok) {
+      notify(result.message || '配置未保存');
+      return;
+    }
+    recordAudit('修改费用规则', `配置版本 ${result.settings?.version || '已更新'}`);
+    afterSave();
   }
   function renderAudit() {
     const columns = [
@@ -1843,28 +1835,21 @@
     setError('ops-phrase-title', titleError);
     setError('ops-phrase-text', textError);
     if (titleError || textError) return;
-    confirmAction(
-      toolbox ? '确认保存话术' : '确认保存演示话术',
-      title,
-      () => {
-        const rowId = id || values['ops-phrase-new-id'] || uid('PHRASE');
-        void changePhrases(
-          Number(values['ops-phrase-version']),
-          (rows) => {
-            const row = rows.find((item) => item.id === rowId);
-            if (row?.deleted) throw new Error('请先恢复这条话术。');
-            if (row) Object.assign(row, { title, text, updatedAt: new Date().toISOString() });
-            else if (id) throw new Error('找不到这条话术。');
-            else rows.push({ id: rowId, title, text, deleted: false, updatedAt: new Date().toISOString() });
-          },
-          id ? '更新话术' : '新增话术',
-          () => {
-            finishDrawer();
-            showPhrases();
-          }
-        );
+    const rowId = id || values['ops-phrase-new-id'] || uid('PHRASE');
+    void changePhrases(
+      Number(values['ops-phrase-version']),
+      (rows) => {
+        const row = rows.find((item) => item.id === rowId);
+        if (row?.deleted) throw new Error('请先恢复这条话术。');
+        if (row) Object.assign(row, { title, text, updatedAt: new Date().toISOString() });
+        else if (id) throw new Error('找不到这条话术。');
+        else rows.push({ id: rowId, title, text, deleted: false, updatedAt: new Date().toISOString() });
       },
-      '确认保存'
+      id ? '更新话术' : '新增话术',
+      () => {
+        finishDrawer();
+        showPhrases();
+      }
     );
   }
   async function changePhrases(version, change, action, done = showPhrases) {
