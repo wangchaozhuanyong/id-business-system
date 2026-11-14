@@ -30,7 +30,9 @@ function closeServer(server) {
 
 export async function startVendureTaskService({
   directory, vendurePort, workerPort, storageKey, vendureKey, workerSecret, codes,
-  acceptSubmissions = false, legacyReceipts, admissionSocket = process.env.ID_VENDURE_ADMISSION_SOCKET
+  acceptSubmissions = false, legacyReceipts, approvedRetryTaskIds,
+  approvedRetryTaskDigest = process.env.ID_VENDURE_RETRY_RECEIPT_SHA256,
+  admissionSocket = process.env.ID_VENDURE_ADMISSION_SOCKET
 }) {
   const validPort = (value) => Number.isInteger(value) && value >= 0 && value <= 65535;
   if (!validPort(vendurePort) || !validPort(workerPort) || (vendurePort !== 0 && vendurePort === workerPort) ||
@@ -90,7 +92,8 @@ export async function startVendureTaskService({
   }
   try {
     bridge = createLoopbackVendureRechargeBridge({
-      codes, vendureKey, workerSecret, store, acceptSubmissions, legacyReceipts, lookupAdmission,
+      codes, vendureKey, workerSecret, store, acceptSubmissions, legacyReceipts,
+      approvedRetryTaskIds, approvedRetryTaskDigest, lookupAdmission,
       ...(acceptanceMarker && { acceptStorefrontSubmissions })
     });
     const vendureUrl = await startListener(vendureRechargePrefix, vendurePort);
