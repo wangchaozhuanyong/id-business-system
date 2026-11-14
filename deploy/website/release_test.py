@@ -554,6 +554,35 @@ class WebsiteReleaseTests(unittest.TestCase):
         self.assertTrue(new.endswith("\n  node\n"))
         with self.assertRaisesRegex(remote.ReleaseError, "gateway_launcher_changed"):
             vendure_admission.stage_launcher(new, target, before)
+        self.assertEqual(vendure_admission.stage_launcher(new, target, before, refresh=True),
+                         new.replace(f"sha={target}", f"sha={before}"))
+        with self.assertRaisesRegex(remote.ReleaseError, "gateway_launcher_changed"):
+            vendure_admission.stage_launcher(old, before, target, refresh=True)
+        with self.assertRaisesRegex(remote.ReleaseError, "gateway_launcher_changed"):
+            vendure_admission.stage_launcher(new.replace("readonly", "rw"), target, before, refresh=True)
+
+    def test_gateway_refresh_restores_intake_only_before_switch_or_after_success(self):
+        runtime = Path(__file__).resolve().parents[2] / ".runtime"
+        runtime.mkdir(exist_ok=True)
+        sha = "b" * 40
+        with TemporaryDirectory(dir=runtime) as directory, patch.object(
+                vendure_admission, "ADMISSION", Path(directory)), patch.object(
+                vendure_admission, "UID", os.getuid()):
+            marker = Path(directory) / "accept-submissions"
+            marker.touch(mode=0o600)
+            for failure_after_switch in (False, True):
+                with self.assertRaisesRegex(remote.ReleaseError, "simulated_gate_failure"):
+                    with vendure_admission.paused_submission_marker(sha, True) as progress:
+                        self.assertFalse(marker.exists())
+                        progress["switch_started"] = failure_after_switch
+                        raise remote.ReleaseError("simulated_gate_failure")
+                self.assertEqual(marker.exists(), not failure_after_switch)
+            paused = Path(directory) / (".accept-submissions-paused-" + sha[:12])
+            paused.rename(marker)
+            with vendure_admission.paused_submission_marker(sha, True):
+                self.assertFalse(marker.exists())
+            self.assertTrue(marker.exists())
+            self.assertFalse(paused.exists())
 
     def test_gateway_drain_fences_writers_and_preserves_tasks(self):
         runtime = Path(__file__).resolve().parents[2] / ".runtime"

@@ -10,7 +10,7 @@ const vendureFields = new Map([
   ['config', []],
   ['verify', ['code']],
   ['query', ['code']],
-  ['submit', ['code', 'session']],
+  ['submit', ['code', 'session', 'afterFailedTask']],
   ['task', ['id', 'taskToken']]
 ]);
 const progressLabels = new Map([
@@ -40,6 +40,7 @@ const workerOutcomes = new Map([
 const legacyTaskStates = new Set(['succeeded', 'failed', 'awaiting_review']);
 const legacyCodeStates = new Set(['used', 'reserved']);
 const hexFingerprint = /^[a-f0-9]{64}$/;
+const taskIdPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const signatureWindowMs = 30_000;
 const queuedLifetimeMs = 10 * 60_000;
 const leaseLifetimeMs = 5 * 60_000;
@@ -131,6 +132,7 @@ export function createLoopbackVendureRechargeBridge({
   lookupAdmission,
   acceptSubmissions = true,
   acceptStorefrontSubmissions = () => true,
+  approvedRetryTaskIds = [],
   legacyReceipts = [],
   now = Date.now
 }) {
@@ -140,6 +142,10 @@ export function createLoopbackVendureRechargeBridge({
     throw new TypeError('商城代充受理开关无效');
   if (lookupAdmission !== undefined && typeof lookupAdmission !== 'function')
     throw new TypeError('商城准入查询配置无效');
+  if (!Array.isArray(approvedRetryTaskIds) || approvedRetryTaskIds.some(id =>
+    typeof id !== 'string' || !taskIdPattern.test(id)))
+    throw new TypeError('商城充值重试复核清单无效');
+  const approvedRetries = new Set(approvedRetryTaskIds);
   if (!store && legacyReceipts?.length) throw new TypeError('商城历史回执需要正式任务存储密钥');
 
   const memoryKey = store ? null : randomBytes(32);
@@ -260,9 +266,26 @@ export function createLoopbackVendureRechargeBridge({
     const codeRef = fingerprint('code', nativeCode || codeKey(body.code));
     const lastTask = () => legacy.byCode.get(codeRef) ?? [...tasks.values()].findLast(task => task.codeRef === codeRef);
     const recover = task => task && (useAdmission || task.status !== 'failed' || legacy.byCode.has(codeRef));
+    // A reviewed failure is tied to this exact receipt, not every failure of the code.
+    const approvedFailure = task => useAdmission && approvedRetries.has(task?.id) &&
+      task.status === 'failed' && task.result?.status === 'failed' &&
+      !task.upstreamJobId && !task.result.upstreamJobId &&
+      ['route', 'cards'].some(type => secureEqual(
+        fingerprint('evidence', 'codexdaichong:' + type + ':' + task.id), task.result.evidenceRef
+      ));
     let prior = lastTask();
+    const checkedTaskId = prior?.id;
+    const explicitRetry = body.afterFailedTask !== undefined;
+    const canCheckRetry = () => approvedFailure(prior) && (action !== 'submit' || body.afterFailedTask === prior.id);
     if (action === 'submit') {
-      if (recover(prior)) return send(res, 200, taskView(prior, true));
+      if (explicitRetry && (!useAdmission || typeof body.afterFailedTask !== 'string' ||
+          !taskIdPattern.test(body.afterFailedTask))) return send(res, 400, { error: '重试回执编号无效' });
+      if (explicitRetry) {
+        const previous = tasks.get(body.afterFailedTask);
+        if (!approvedFailure(previous) || previous.codeRef !== codeRef)
+          return send(res, 200, { rejected: true });
+      }
+      if (recover(prior) && !canCheckRetry()) return send(res, 200, taskView(prior, true));
       if (!accepting() || !acceptedSession(body.session)) return send(res, 200, { rejected: true });
     }
     const registered = registry.get(codeRef);
@@ -270,7 +293,7 @@ export function createLoopbackVendureRechargeBridge({
       plan: registered.plan, status: registered.disabled ? 'disabled' : 'available', upstreamCode: registered.upstreamCode
     };
     // Existing receipts remain readable even when the issuer is unavailable.
-    if (useAdmission && !prior && nativeCode && !registered?.disabled &&
+    if (useAdmission && (!prior || canCheckRetry()) && nativeCode && !registered?.disabled &&
         (!assignedCodes.has(nativeCode) || registered?.upstreamCode === nativeCode)) {
       let admitted;
       try {
@@ -278,19 +301,22 @@ export function createLoopbackVendureRechargeBridge({
       } catch (error) {
         if (action === 'submit') {
           const current = lastTask();
-          return send(res, 200, recover(current) ? taskView(current, true) : { rejected: true });
+          return send(res, 200, recover(current) && current.id !== body.afterFailedTask
+            ? taskView(current, true) : { rejected: true });
         }
-        throw error;
+        if (!prior) throw error;
       }
       if (closed || needsRecovery) return send(res, 503, { error: '隔离联调暂不可用' });
       at = now();
       expire(at);
       prior = lastTask();
-      if (admitted) record = { ...admitted, upstreamCode: nativeCode };
+      if (admitted && (!checkedTaskId || (prior?.id === checkedTaskId && prior.plan === admitted.plan)))
+        record = { ...admitted, upstreamCode: nativeCode };
     }
     if (action === 'submit') {
       // Lookup yields to concurrent requests. Reuse their task before claiming this code.
-      if (recover(prior)) return send(res, 200, taskView(prior, true));
+      if (recover(prior) && (!canCheckRetry() || prior.id !== checkedTaskId))
+        return send(res, 200, taskView(prior, true));
       if (!accepting() || record?.status !== 'available')
         return send(res, 200, { rejected: true });
       const task = {
@@ -300,7 +326,7 @@ export function createLoopbackVendureRechargeBridge({
         clientIp,
         queuedUntil: at + queuedLifetimeMs,
         status: 'queued',
-        updatedAt: at
+        updatedAt: explicitRetry ? Math.max(at, prior.updatedAt + 1) : at
       };
       commit(new Map(tasks).set(task.id, task));
       sessions.set(task.id, { session: body.session, executionCode: record.upstreamCode });
@@ -309,13 +335,15 @@ export function createLoopbackVendureRechargeBridge({
 
     if (!record && !prior)
       return send(res, 400, useAdmission ? { reason: 'storefront_code_not_admitted' } : { error: '兑换码不可用' });
-    const status = prior?.codeStatus ?? (prior
+    const reviewed = approvedFailure(prior) && prior.id === checkedTaskId;
+    const status = reviewed && record ? record.status : prior?.codeStatus ?? (prior
       ? prior.status === 'succeeded'
         ? 'used'
         : prior.status === 'failed' && !legacy.byCode.has(codeRef) && !useAdmission && !registered?.disabled
           ? 'available' : 'reserved'
       : record.status);
     const result = { plan: prior?.plan ?? record.plan, status };
+    if (reviewed && status === 'available') result.reason = 'verified_retry_available';
     if (useAdmission && status === 'reserved' &&
         (prior?.status === 'awaiting_review' || record?.reason === rechargeManualReviewReason))
       result.reason = rechargeManualReviewReason;
