@@ -15,3 +15,19 @@ export const routingAdminPanel = `
   <p id="route_local_status" role="status"></p>
   <p id="route_config_history"></p>
 </div>`;
+
+export const checkoutServerDiagnostic = `
+<section id="checkout-server-diagnostic" class="checkout-server-diagnostic" aria-labelledby="checkout-server-title">
+  <div class="checkout-server-toolbar embedded-control-row">
+    <h2 class="panel-title" id="checkout-server-title">服务器直连诊断</h2>
+    <p>实测充值服务器的公网出口，并与当前套餐和代理池状态核对。无需 Session，检测不会创建浏览器调试任务。</p>
+    <button type="button" class="btn btn-secondary" id="checkout-server-check" onclick="checkCheckoutServer()">检测服务器直连</button>
+  </div>
+  <dl class="checkout-server-facts">
+    <div><dt>套餐要求</dt><dd id="checkout-server-required">—</dd></div>
+    <div><dt>代理池</dt><dd id="checkout-server-pool">—</dd></div>
+    <div><dt>服务器出口</dt><dd id="checkout-server-exit">—</dd></div>
+    <div><dt>检测时间</dt><dd id="checkout-server-checked">—</dd></div>
+  </dl>
+  <p class="checkout-server-result" id="checkout-server-result" role="status">尚未检测服务器出口。</p>
+</section>`;

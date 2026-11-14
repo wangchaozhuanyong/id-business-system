@@ -276,6 +276,21 @@ class WebsiteReleaseTests(unittest.TestCase):
     @patch("release.require_presentation_approval")
     @patch("release.require_ancestor")
     @patch("release.git")
+    def test_checkout_diagnostic_release_verifies_its_four_presentation_sources(self, git, ancestor, approval):
+        files = remote.CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES
+        git.return_value = "\n".join(files)
+        self.assertEqual(release.require_website_scope(BASE, TARGET),
+                         ("checkoutDiagnosticPresentation", approval.return_value))
+        approval.assert_called_once_with(BASE, TARGET, "checkout-diagnostic-20261114.json", files)
+        for changed in (files[1:], (*files, "modules/recharge/codexdaichong/native-routing.mjs")):
+            git.return_value = "\n".join(changed)
+            with self.assertRaisesRegex(RuntimeError, "recharge_core_or_runtime_changed"):
+                release.require_website_scope(BASE, TARGET)
+        self.assertEqual(approval.call_count, 1)
+
+    @patch("release.require_presentation_approval")
+    @patch("release.require_ancestor")
+    @patch("release.git")
     def test_table_actions_release_only_accepts_the_reviewed_stylesheet(self, git, ancestor, approval):
         git.return_value = remote.TABLE_ACTIONS_STYLESHEET
         self.assertEqual(release.require_website_scope(BASE, TARGET),
@@ -427,6 +442,11 @@ class WebsiteReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_bundle_scope_mismatch"):
             remote.verify_presentation_bundle(bundle(previous), bundle(changed | {"/redeem": {"body": "new"}}),
                                               card_plan_assets)
+        checkout_assets = remote.PRESENTATION_SCOPES["checkoutDiagnosticPresentation"][1]
+        remote.verify_presentation_bundle(bundle(previous), bundle(changed), checkout_assets)
+        with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_bundle_scope_mismatch"):
+            remote.verify_presentation_bundle(bundle(previous), bundle(changed | {"/workspace": {"body": "new"}}),
+                                              checkout_assets)
 
     def test_ssm_payload_is_one_quoted_program(self):
         shell = release.script_for({"operation": "preflight", "sha": TARGET})

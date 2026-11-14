@@ -536,9 +536,66 @@ test('shared layouts preserve alignment, readable controls and stable navigation
       assert(Math.abs(batch.gap) <= 2 && batch.height >= 400 && !batch.overflow, JSON.stringify(batch));
       await frame().getByRole('tab', { name: '单个查询', exact: true }).click();
 
+      await select('checkout_debug');
+      const checkout = frame().locator('#checkout_debug.active');
+      const checkoutBounds = () => checkout.evaluate(node => {
+        const rect = element => element.getBoundingClientRect().toJSON();
+        const parameters = node.querySelector('#checkout_session_input').closest('.panel');
+        const reader = node.querySelector('.runtime-log-pre-wrap');
+        const logs = reader.closest('.panel');
+        const titleTop = panel => {
+          const range = document.createRange();
+          range.selectNodeContents(panel.querySelector('h2').firstChild);
+          return range.getBoundingClientRect().top;
+        };
+        return {
+          width: innerWidth, overflow: document.documentElement.scrollWidth > innerWidth,
+          parameters: rect(parameters), logs: rect(logs), reader: rect(reader),
+          result: rect(node.querySelector('#checkout_result_box')),
+          titleGap: Math.abs(titleTop(parameters) - titleTop(logs)),
+          scrolls: reader.scrollHeight > reader.clientHeight
+        };
+      });
+      for (const viewport of [desktop, { width: 390, height: 844 }]) {
+        await page.setViewportSize(viewport);
+        for (const dark of [false, true]) {
+          await theme(dark);
+          await checkout.evaluate(() => window.clearCheckoutDebugForm());
+          await settled();
+          const idle = await checkoutBounds();
+          assert(!idle.overflow && idle.reader.height >= 200, JSON.stringify(idle));
+          if (idle.width >= 1024) {
+            assert(idle.logs.right + 15 <= idle.parameters.left, '运行日志应独占左列');
+            assert(Math.abs(idle.logs.top - idle.parameters.top) <= 1 && idle.titleGap <= 1,
+              '两列卡片及实际标题文字应对齐');
+          } else {
+            assert(idle.logs.top >= idle.parameters.bottom + 8, '窄屏日志应排在参数下方');
+          }
+          await checkout.evaluate(() => window.renderCheckoutDebugStatus({
+            status: 'running', email: 'layout@example.test', screenshots: []
+          }));
+          await settled();
+          const running = await checkoutBounds();
+          assert(Math.abs(running.result.left - running.parameters.left) <= 1 &&
+            Math.abs(running.result.width - running.parameters.width) <= 1 &&
+            running.result.top >= running.parameters.bottom + 8, '任务状态应在参数下方并与其等宽');
+          await checkout.locator('#checkout_debug_log_pre').evaluate(node => {
+            node.textContent = Array.from({ length: 120 }, (_, i) =>
+              `离线调试日志 ${i + 1}：${'长日志内容 '.repeat(24)}`).join('\n');
+          });
+          await settled();
+          const populated = await checkoutBounds();
+          assert(!populated.overflow && populated.scrolls, '长日志应在独立阅读区内滚动');
+          assert.deepEqual(populated.reader, running.reader, '日志增长不能改变阅读区尺寸');
+          await noOverflow();
+        }
+      }
+      await checkout.evaluate(() => window.clearCheckoutDebugForm());
+      await page.setViewportSize(desktop);
+      await theme(false);
+
       for (const [view, selector, minimum] of [
         ['dashboard', '#dashboard.active', 700],
-        ['checkout_debug', '#checkout_debug.active .runtime-log-pre-wrap', 270],
         ['cancel_renewal', '#cancel_renewal.active #cancel_renewal_session', 550],
         ['runtime_logs', '#runtime_logs.active .runtime-log-pre-wrap', 650]
       ]) {
