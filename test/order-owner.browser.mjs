@@ -102,7 +102,6 @@ test('管理员代录订单可指定员工，草稿、列表与实际录入人�
     await page.locator('#commerce-ownerId option[value="staff"]:not([disabled])').waitFor({state:'attached'});
     const response = page.waitForResponse(r=>r.request().method()==='PUT'&&new URL(r.url()).pathname==='/api/local/commerce');
     await page.locator('button[form="commerce-order-form"][type="submit"]').click();
-    await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
     await response;
     assert.equal(writes.length, 1);
     const saved = writes[0].data.orders.find(row=>row.ownerId===staff.id);

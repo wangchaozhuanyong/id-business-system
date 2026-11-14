@@ -191,8 +191,8 @@ function tenantFunding(store, context, source, items) {
 
 async function fundingFor(store, client, context, inventory, items, source, input, actor, now) {
   const amount = input.amount, currency = input.currency;
-  if (!credit(amount, currency) || moneyUnits(amount) <= 0n || input.confirmed !== true)
-    fail(400, '请填写实际付款金额、币种，并确认付款成功');
+  if (!credit(amount, currency) || moneyUnits(amount) <= 0n)
+    fail(400, '请填写实际付款金额和币种');
   const reference = text(input.reference);
   if (input.reference && (!reference || /(?:\d[ -]?){12}/.test(reference)))
     fail(400, '请填写简短的凭据编号，银行卡信息请填入对应字段');
@@ -306,10 +306,12 @@ export function directRenewalSource(orders, order, legacy) {
   if (previousId) return previousId;
   const target = targetKey(order) || order.accountId;
   if (!target) return undefined;
-  return orders.find(row => row.customerId === order.customerId && !row.cancelled && !row.subscriptionEnded &&
+  return orders.filter(row => row.customerId === order.customerId && !row.cancelled && !row.subscriptionEnded &&
     (row.product === order.product || row.product?.startsWith('Claude') && order.product?.startsWith('Claude')) &&
     (!personalProduct(order.product) || (subscriptionSeries(row) === subscriptionSeries(order))) &&
-    (targetKey(row) || row.accountId) === target && orderOpeningConfirmed(row, Date.now(), legacy?.has(row.id)))?.id;
+    (targetKey(row) || row.accountId) === target && orderOpeningConfirmed(row, Date.now(), legacy?.has(row.id)))
+    .sort((a, b) => (subscriptionTime(b.expiry) || 0) - (subscriptionTime(a.expiry) || 0) ||
+      (subscriptionTime(b.start) || 0) - (subscriptionTime(a.start) || 0))[0]?.id;
 }
 
 function send(response, status, data) {
@@ -407,6 +409,8 @@ export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clo
       if (!actions.has(action)) fail(400, '请选择可用的续费操作');
       if (Object.keys(command).some(key => !['action', 'id', 'version', ...actionFields[action]].includes(key)))
         fail(400, '请通过对应的续费操作填写资料');
+      if (Object.hasOwn(command, 'confirmed') && command.confirmed !== true)
+        fail(400, '请选择与当前办理状态一致的续费操作');
       const operation = describeWriteOperation(request.headers['x-id-operation'], actor, ['renewal', command]);
       if (!operation) fail(400, '请从当前工作台提交');
       if (store.replayWrite(operation)) {
@@ -415,10 +419,10 @@ export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clo
       }
       if (action === 'submit') {
         if (actor.role === 'finance') fail(403, '请由业务人员送财务');
-        if (command.confirmed !== true || !Array.isArray(command.orders) || !command.orders.length || command.orders.length > 50 ||
+        if (!Array.isArray(command.orders) || !command.orders.length || command.orders.length > 50 ||
             command.orders.some(row => typeof row?.id !== 'string' || row.id.length > 256 || !Number.isSafeInteger(row.version)) ||
             new Set(command.orders.map(row => row?.id)).size !== command.orders.length)
-          fail(400, '请选择要续费的订单并再次确认，单次最多 50 笔');
+          fail(400, '请选择 1 至 50 笔续费订单');
         const additions = command.orders.map(row => {
           const source = context.byId.get(row?.id);
           if (!source || !canSend(actor, source, team, context)) fail(404, '所选订单不存在或不在你的工作范围内');
@@ -452,8 +456,8 @@ export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clo
           fail(403, '仅当前经办人或超级管理员可交接');
         if (!scope.recentlyVerified(request)) fail(403, '请先完成安全确认，再移交续费');
         const reason = text(command.reason, 160);
-        if (!reason || /(?:\d[ -]?){12}/.test(reason) || command.confirmed !== true || typeof command.review !== 'boolean')
-          fail(400, '请填写交接原因并确认付款状态，原因中请勿填写卡号');
+        if (!reason || /(?:\d[ -]?){12}/.test(reason) || typeof command.review !== 'boolean')
+          fail(400, '请填写交接原因，选择付款状态。银行卡号请勿填入原因');
         next.status = 'pending';
         next.paymentReview = Boolean(row.paymentReview || command.review);
         delete next.processingBy;
@@ -467,8 +471,8 @@ export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clo
         if (!review || command.sourceVersion !== (review.version ?? 0))
           fail(409, '原单已变化或与这笔付款不符，请刷新后核对');
         const reason = text(command.reason, 160);
-        if (!reason || /(?:\d[ -]?){12}/.test(reason) || command.confirmed !== true)
-          fail(400, '请核对付款凭据并简述原单更正原因，原因中请勿填写卡号');
+        if (!reason || /(?:\d[ -]?){12}/.test(reason))
+          fail(400, '请填写原单更正原因，银行卡号请勿填入原因');
         next.order = publicOrder(review, context);
         next.source = context.stamp(review);
         next.accountSource = review.accountSource || '';
@@ -489,8 +493,8 @@ export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clo
           if (row.paymentReview && !scope.recentlyVerified(request))
             fail(403, '请先完成安全确认，再确认这笔续费未付款');
           const reason = text(command.reason, 160);
-          if (!reason || /(?:\d[ -]?){12}/.test(reason) || command.confirmed !== true)
-            fail(400, '请确认未付款并填写退回原因，原因中请勿填写卡号');
+          if (!reason || /(?:\d[ -]?){12}/.test(reason))
+            fail(400, '请填写未付款的退回原因，银行卡号请勿填入原因');
           next.status = 'returned';
           next.paymentReview = false;
           next.returned = reason;

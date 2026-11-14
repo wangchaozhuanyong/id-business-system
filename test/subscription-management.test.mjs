@@ -284,7 +284,7 @@ test('账号已转给其他客户时，旧订阅不能复制当前账号资料',
   }
 });
 
-test('手工核实与账号归属独立留痕，旧版本重试有幂等回执', async () => {
+test('登记开通与账号归属独立留痕，旧版本重试有幂等回执', async () => {
   const order = makeOrder('manual', 'GPT', { accountId: 'gpt-account' });
   const data = fixtures([order]);
   data.inventory.data.accounts.push({ id: 'gpt-account', type: 'gpt', email, password: 'synthetic-account-password',
@@ -298,15 +298,17 @@ test('手工核实与账号归属独立留痕，旧版本重试有幂等回执',
   assert.equal(list.body.items[0].status, 'pending');
   assert.equal((await request(handler, 'list', { product: 'GPT' }, actor)).status, 403);
   assert.equal((await request(handler, 'list', { product: 'GPT' }, admin, { origin: 'https://other.example.test' })).status, 403);
-  const confirmation = { id, orderId: order.id, revision: list.body.items[0].history[0].confirmationRevision, confirmed: true,
-    reason: '已核对平台开通', commandId: 'confirm-1' };
+  const confirmation = { id, orderId: order.id, revision: list.body.items[0].history[0].confirmationRevision,
+    commandId: 'confirm-1' };
+  assert.equal((await request(handler, 'confirm', { ...confirmation, confirmed: false })).status, 400);
   assert.equal((await request(handler, 'confirm', confirmation)).status, 200);
-  assert.equal((await request(handler, 'confirm', confirmation)).body.replayed, true);
+  assert.equal((await request(handler, 'confirm', { ...confirmation, confirmed: true })).body.replayed, true);
   assert.equal((await request(handler, 'confirm', { ...confirmation, reason: '不同依据' })).status, 409);
   list = await request(handler, 'list', { product: 'GPT' });
   assert.equal(list.body.items[0].status, 'active');
   const assign = { id, ownerId: owner.id, revision: list.body.items[0].ownerRevision, commandId: 'owner-1' };
   assert.equal((await request(handler, 'owner', assign)).status, 200);
+  assert.equal((await request(handler, 'owner', assign)).body.replayed, true);
   list = await request(handler, 'list', { product: 'GPT' });
   assert.equal(list.body.items[0].ownerName, owner.name);
   assert.equal(list.body.items[0].operatorName, admin.name);

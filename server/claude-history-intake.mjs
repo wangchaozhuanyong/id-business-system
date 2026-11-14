@@ -179,7 +179,7 @@ export function claudeHistoricalSales(inventory, commerce, now = Date.now()) {
 }
 
 const saleFields = ['accountId', 'tenantId', 'customerId', 'payment', 'saleAmount', 'saleCurrency',
-  'actualCostAmount', 'actualCostCurrency', 'subscriptionEndedAt', 'notes'];
+  'actualCostAmount', 'actualCostCurrency', 'subscriptionEndedAt', 'notes', 'appleIdId', 'paidAmount', 'paidCurrency'];
 
 export function recordClaudeHistoricalSale(input, inventory, commerce, actor, time, costSettings) {
   if (!actor?.id || !['admin', 'super'].includes(actor.role))
@@ -190,6 +190,7 @@ export function recordClaudeHistoricalSale(input, inventory, commerce, actor, ti
     throw new ClaudeHistoryIntakeError('请核对历史销售资料');
   const sale = Object.fromEntries(saleFields.map(key => [key, input[key]?.trim() || '']));
   if (!sale.actualCostAmount) sale.actualCostCurrency = '';
+  if (!sale.paidAmount) sale.paidCurrency = '';
   const data = inventory.data || {};
   const account = (data.accounts || []).find(row => row.id === sale.accountId);
   const candidate = historicalSaleCandidate(account, data, time.getTime());
@@ -198,7 +199,8 @@ export function recordClaudeHistoricalSale(input, inventory, commerce, actor, ti
   const existing = historicalSaleOrders(orders, candidate);
   if (existing.length) {
     const [order] = existing;
-    const stable = ['tenantId', 'payment', 'saleAmount', 'saleCurrency', 'actualCostAmount', 'actualCostCurrency'];
+    const stable = ['tenantId', 'payment', 'saleAmount', 'saleCurrency', 'actualCostAmount', 'actualCostCurrency',
+      'appleIdId', 'paidAmount', 'paidCurrency'];
     if (existing.length === 1 && isClaudeHistoricalSale(order, account) && !order.cancelled &&
         stable.every(key => (order[key] || '') === sale[key]) &&
         (!sale.customerId || sale.customerId === order.customerId) &&
@@ -218,6 +220,11 @@ export function recordClaudeHistoricalSale(input, inventory, commerce, actor, ti
   if (!validMoney(sale.saleAmount) || !validCurrencyCode(sale.saleCurrency) ||
       (sale.actualCostAmount && (!validMoney(sale.actualCostAmount) || !validCurrencyCode(sale.actualCostCurrency))))
     throw new ClaudeHistoryIntakeError('请核对原售价、实际总成本和币种');
+  const paid = Boolean(sale.paidAmount);
+  if ((paid && (!validMoney(sale.paidAmount) || !/[1-9]/.test(sale.paidAmount) || !validCurrencyCode(sale.paidCurrency))) ||
+      (paid && sale.payment === '苹果内购' && sale.paidCurrency !== 'USD') ||
+      (sale.appleIdId && (!paid || sale.payment !== '苹果内购')))
+    throw new ClaudeHistoryIntakeError('请填写实际代付金额和币种，苹果内购使用美元');
   if (sale.subscriptionEndedAt && (!candidate.ended || !historyDate(sale.subscriptionEndedAt)))
     throw new ClaudeHistoryIntakeError('请按死号记录填写实际终止时间');
 
@@ -236,7 +243,8 @@ export function recordClaudeHistoricalSale(input, inventory, commerce, actor, ti
     expiry: candidate.expiry,
     entitlementStatus: 'active',
     subscriptionEnded: candidate.ended,
-    paidAmount: '', paidCurrency: '', paidConfirmed: false, receiptConfirmed: false,
+    paidConfirmed: paid, receiptConfirmed: true,
+    ...(paid && sale.payment === '苹果内购' && !sale.appleIdId && { externalApplePayment: true }),
     ...(sale.payment === '银行卡' && { proMaterialMode: 'none' }),
     ...(sale.actualCostAmount && { costBasis: 'actual' }),
     ...(customer && { customerSource: customer.source || '', wechat: customer.wechat || '',

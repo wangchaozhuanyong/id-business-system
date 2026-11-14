@@ -97,14 +97,13 @@ test('离线页面逐单核对费率后保存并保留原规则', { timeout: 300
   await f.page.getByRole('button', { name: '更正历史付款费率', exact: true }).click();
   await f.page.locator('#commerce-fee-correction-form').waitFor();
   await checkLayout(f.page, '#commerce-fee-correction-form');
-  await f.page.locator('#commerce-fee-reason').fill('根据原付款记录逐单核对');
   await f.page.locator('button[form="commerce-fee-correction-form"]').click();
   assert.equal(f.writes.length, 0);
-  await f.page.locator('#commerce-fee-verified').check();
-  await f.page.locator('button[form="commerce-fee-correction-form"]').click();
+  await f.page.locator('#commerce-fee-reason').fill('根据原付款记录逐单核对');
   const saved = f.page.waitForResponse(response => response.url() === origin + '/api/local/commerce' &&
     response.request().method() === 'PUT');
-  await f.page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
+  await f.page.locator('button[form="commerce-fee-correction-form"]').click();
+  assert.equal(await f.page.locator('#confirm-dialog[open]').count(), 0);
   assert.equal((await saved).status(), 200, JSON.stringify(f.rejected));
   await f.page.getByText('8% → 0.8% · 原 V2 规则已保留', { exact: true }).waitFor();
   const order = f.stored.data.orders[0];
@@ -123,12 +122,10 @@ test('历史费率更正遇到订单并发变更时保留输入并拒绝保存',
   await f.page.getByRole('tab', { name: '成本与汇率' }).click();
   await f.page.getByRole('button', { name: '更正历史付款费率', exact: true }).click();
   await f.page.locator('#commerce-fee-reason').fill('核对依据待重试');
-  await f.page.locator('#commerce-fee-verified').check();
   f.externalVersionChange();
-  await f.page.locator('button[form="commerce-fee-correction-form"]').click();
   const rejected = f.page.waitForResponse(response => response.url() === origin + '/api/local/commerce' &&
     response.request().method() === 'PUT');
-  await f.page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
+  await f.page.locator('button[form="commerce-fee-correction-form"]').click();
   assert.equal((await rejected).status(), 409);
   await f.page.getByText(/本次未保存，请重新打开并核对当前数据/).waitFor();
   assert.equal(await f.page.locator('#commerce-fee-reason').inputValue(), '核对依据待重试');
@@ -144,14 +141,13 @@ test('离线页面只在明确核对后补原付款卡，保留已有付款证�
   await f.page.getByRole('button', { name: '补录原付款卡', exact: true }).click();
   await checkLayout(f.page, '#commerce-card-backfill-form');
   await f.page.locator('#commerce-backfill-card').selectOption(card.id);
-  await f.page.locator('#commerce-backfill-reason').fill('根据原付款记录核对');
   await f.page.locator('button[form="commerce-card-backfill-form"]').click();
   assert.equal(f.writes.length, 0);
-  await f.page.locator('#commerce-backfill-verified').check();
-  await f.page.locator('button[form="commerce-card-backfill-form"]').click();
+  await f.page.locator('#commerce-backfill-reason').fill('根据原付款记录核对');
   const saved = f.page.waitForResponse(response => response.url() === origin + '/api/local/commerce' &&
     response.request().method() === 'PUT');
-  await f.page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
+  await f.page.locator('button[form="commerce-card-backfill-form"]').click();
+  assert.equal(await f.page.locator('#confirm-dialog[open]').count(), 0);
   assert.equal((await saved).status(), 200, JSON.stringify(f.rejected));
   const order = f.stored.data.orders[0];
   assert.equal(order.cardId, card.id);

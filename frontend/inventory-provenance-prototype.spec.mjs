@@ -203,7 +203,7 @@ function runtime() {
     },
     preview(changes = {}) {
       Object.assign(form.raw, changes);
-      inventory.onSubmit(form);
+      inventory.onClick('inventory-import-preview', { dataset: {} });
       return captures.at(-1);
     },
     requestImport() {
@@ -231,7 +231,6 @@ function addGpt(r, email = 'provenance@example.test') {
     'inventory-lastOperatedBy': '伪造最近操作人'
   });
   r.inventory.onSubmit(r.form);
-  r.confirm();
   return r.accounts.find((row) => row.email === email);
 }
 
@@ -257,7 +256,6 @@ test('换操作人编辑保留原录入人，只更新最近操作和事件来�
   r.form.raw['inventory-notes'] = '第二位编辑';
   r.form.raw['inventory-createdBy'] = '篡改录入人';
   r.inventory.onSubmit(r.form);
-  r.confirm();
   assert.equal(row.createdById, 'test-actor');
   assert.equal(row.createdBy, '演示测试员');
   assert.equal(row.createdAt, '2026-11-03 10:30');
@@ -285,7 +283,6 @@ test('批量导入同时记录每条资产来源和批次操作人，不从CSV�
   r.open('gpt');
   r.preview({ 'inventory-import-content': '邮箱,密码,国家,城市\nimport.actor@example.test,Demo,美国,纽约' });
   r.requestImport();
-  r.confirm();
   const row = r.accounts.find((entry) => entry.email === 'import.actor@example.test');
   assert.equal(row.createdBy, '演示测试员');
   assert.equal(row.createdById, 'test-actor');
@@ -349,13 +346,11 @@ test('注册结果首次登记与再次核对分别记录实际人员，不覆�
     'inventory-registration-result': '待核对'
   });
   r.inventory.onSubmit(r.form);
-  r.confirm();
   r.api.state.actor = { id: 'reviewer', name: '结果核对员', role: 'admin' };
   r.api.nowText = () => '2026-11-03 12:00';
   r.inventory.onClick('inventory-register', { dataset: { id: row.id } });
   r.form.raw['inventory-registration-result'] = '成功';
   r.inventory.onSubmit(r.form);
-  r.confirm();
   r.api.state.route = 'mailboxes/google';
   r.inventory.onClick('inventory-tab', { dataset: { tab: 'registrations' } });
   r.inventory.render();

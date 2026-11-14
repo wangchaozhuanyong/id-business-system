@@ -490,8 +490,9 @@ export function createSubscriptionHandler({ store, publicOrigin, readOwners = ()
         if (action === 'owner' || action === 'confirm') {
           if (typeof body.commandId !== 'string' || !/^[a-zA-Z0-9_-]{1,120}$/.test(body.commandId))
             throw failure(400, '请重新打开操作并核对资料');
+          const submitted = body.confirmed === true || (action === 'confirm' && body.confirmed === undefined);
           commandFingerprint = digest(JSON.stringify([action, actor.id, body.id, body.accountId || '', body.ownerId || '',
-            body.orderId || '', body.reason || '', body.confirmed === true]));
+            body.orderId || '', body.reason || '', submitted]));
           const receipt = priorProfile.commands?.[body.commandId];
           if (receipt) {
             if (receipt.fingerprint !== commandFingerprint) throw failure(409, '操作内容已变化，请重新核对');
@@ -670,9 +671,10 @@ export function createSubscriptionHandler({ store, publicOrigin, readOwners = ()
           const record = row._records.find(item => item.source === 'order' && item.sourceId === body.orderId);
           const order = orders.get(body.orderId);
           if (row.status === 'dead' || !record || !order || personalProduct(order.product) || record.confirmed || order.cancelled ||
-              !paid(order) || body.confirmed !== true)
-            throw failure(400, '请先核对实际开通及付款记录');
-          if (!text(body.reason) || text(body.reason).length > 300) throw failure(400, '请填写核对依据');
+              (body.confirmed !== undefined && body.confirmed !== true))
+            throw failure(400, '当前订单无法登记为已开通');
+          if (body.reason !== undefined && (typeof body.reason !== 'string' || body.reason.trim().length > 300))
+            throw failure(400, '备注最多 300 字');
           const previous = profile.confirmations[order.id] || null;
           profile.confirmations[order.id] = { fingerprint: orderFingerprint(order), reason: text(body.reason),
             actorId: actor.id, at: new Date(now).toISOString() };

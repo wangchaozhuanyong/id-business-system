@@ -2220,59 +2220,52 @@ function saveMailbox(form) {
     notify('资料版本已变化，请重新核对后修改');
     return;
   }
-  confirmAction(
-    original ? '确认修改资料' : '确认新增资料',
-    `将${original ? '修改' : '新增'} ${values['mail-email']} 的演示资料。本操作只影响当前原型。`,
-    () => {
-      const updated = { type, email: values['mail-email'].trim() };
-      for (const key of [
-        'password',
-        'phone',
-        'country',
-        'city',
-        'proxy',
-        'status',
-        'source',
-        'registered',
-        'totp',
-        'auxiliary',
-        'appPassword',
-        'device',
-        'notes',
-        'notes2',
-        'security1',
-        'security2',
-        'security3',
-        'birthday'
-      ])
-        if (values[`mail-${key}`] !== undefined) updated[key] = values[`mail-${key}`];
-      if (original) {
-        state.mailUndo.set(original.id, {
-          snapshot: structuredClone(original),
-          version: original.version + 1
-        });
-        Object.assign(original, updated, { version: original.version + 1 });
-        original.history.push({ action: '修改资料' });
-      } else {
-        const target = ['gpt', 'claude'].includes(type) ? accounts : mailboxes;
-        target.unshift({
-          ...updated,
-          id: `demo-${Date.now()}`,
-          used: false,
-          health: 'normal',
-          version: 1,
-          history: [],
-          password: updated.password || ''
-        });
-      }
-      state.drafts.delete(state.drawerContext);
-      $('#drawer').close();
-      state.drawerContext = '';
-      render();
-      notify('演示资料已更新');
-    },
-    '确认保存'
-  );
+  const updated = { type, email: values['mail-email'].trim() };
+  for (const key of [
+    'password',
+    'phone',
+    'country',
+    'city',
+    'proxy',
+    'status',
+    'source',
+    'registered',
+    'totp',
+    'auxiliary',
+    'appPassword',
+    'device',
+    'notes',
+    'notes2',
+    'security1',
+    'security2',
+    'security3',
+    'birthday'
+  ])
+    if (values[`mail-${key}`] !== undefined) updated[key] = values[`mail-${key}`];
+  if (original) {
+    state.mailUndo.set(original.id, {
+      snapshot: structuredClone(original),
+      version: original.version + 1
+    });
+    Object.assign(original, updated, { version: original.version + 1 });
+    original.history.push({ action: '修改资料' });
+  } else {
+    const target = ['gpt', 'claude'].includes(type) ? accounts : mailboxes;
+    target.unshift({
+      ...updated,
+      id: `demo-${Date.now()}`,
+      used: false,
+      health: 'normal',
+      version: 1,
+      history: [],
+      password: updated.password || ''
+    });
+  }
+  state.drafts.delete(state.drawerContext);
+  $('#drawer').close();
+  state.drawerContext = '';
+  render();
+  notify('演示资料已更新');
 }
 function returnRecords(ids) {
   const rows = ids.map(findRecord).filter((row) => row?.used);
@@ -2431,36 +2424,29 @@ function validateImport(form) {
     return;
   }
   setError('import-content', '');
-  confirmAction(
-    '确认批量导入',
-    `已检查 ${checked.length} 条邮箱。将全部加入当前演示库存，刷新页面后重置。`,
-    () => {
-      checked.forEach((row, index) =>
-        mailboxes.unshift({
-          ...row,
-          id: `imported-${Date.now()}-${index}`,
-          type: v['import-type'],
-          country: '马来西亚',
-          status: '正常',
-          health: 'normal',
-          used: false,
-          source: v['import-source'],
-          registered: '2026-11-03T10:30',
-          device: '',
-          notes: '',
-          notes2: '',
-          version: 1,
-          history: []
-        })
-      );
-      state.drafts.delete('mail-import');
-      $('#drawer').close();
-      state.drawerContext = '';
-      render();
-      notify(`已导入 ${checked.length} 条演示邮箱`);
-    },
-    '确认导入'
+  checked.forEach((row, index) =>
+    mailboxes.unshift({
+      ...row,
+      id: `imported-${Date.now()}-${index}`,
+      type: v['import-type'],
+      country: '马来西亚',
+      status: '正常',
+      health: 'normal',
+      used: false,
+      source: v['import-source'],
+      registered: '2026-11-03T10:30',
+      device: '',
+      notes: '',
+      notes2: '',
+      version: 1,
+      history: []
+    })
   );
+  state.drafts.delete('mail-import');
+  $('#drawer').close();
+  state.drawerContext = '';
+  render();
+  notify(`已导入 ${checked.length} 条演示邮箱`);
 }
 function submitExtraction(form) {
   preserveMainDraft();
@@ -2683,10 +2669,7 @@ function savePersonalTool(form) {
     notify('个人工具已达到 20 个上限');
     return;
   }
-  confirmAction(
-    id ? '确认修改个人工具' : '确认新增个人工具',
-    `${name} · ${url}`,
-    async () => {
+  (async () => {
       const rowId = id || values['shortcut-new-id'] || `shortcut-demo-${Date.now()}`;
       const context = state.drawerContext;
       await changePersonalTools(
@@ -2705,9 +2688,7 @@ function savePersonalTool(form) {
           showPersonalToolManager();
         }
       );
-    },
-    '确认保存'
-  );
+    })();
 }
 async function changePersonalTools(version, change, action, done = showPersonalToolManager) {
   const drawer = $('#drawer');
@@ -2853,37 +2834,31 @@ function saveOrder(form, renewal = false) {
     document.getElementById(invalid).focus();
     return;
   }
-  confirmAction(
-    renewal ? '确认创建续费订单' : '确认登记演示订单',
-    `${v['order-email']} · ${v['order-plan']}，到期 ${v['order-expiry'].replace('T', ' ')}。原型不执行付款，利润待实际汇率核算。`,
-    () => {
-      const sourceId = v.sourceOrderId;
-      const sourceOrder = state.demoOrders.find((order) => order.id === sourceId);
-      const savedOrder = {
-        id: sourceOrder?.id || `ORDER-DEMO-${state.demoOrders.length + 1}`,
-        product: v['order-product'],
-        email: v['order-email'],
-        plan: v['order-plan'],
-        status: '演示已登记',
-        profit: '待核算'
-      };
-      if (sourceOrder) Object.assign(sourceOrder, savedOrder);
-      else state.demoOrders.push(savedOrder);
-      if (renewal) {
-        const row = subscriptions.find((entry) => entry.id === v.subscriptionId);
-        row.expiry = v['order-expiry'].replace('T', ' ');
-        row.history.push({ title: '续费', detail: `演示续费至 ${row.expiry}，历史订单保留` });
-        state.drafts.delete(state.drawerContext);
-        $('#drawer').close();
-        state.drawerContext = '';
-      } else {
-        state.drafts.delete('order-page');
-        form.reset();
-      }
-      render();
-      notify(renewal ? '演示续费订单已登记' : '演示订单已登记，利润仍待核算');
-    }
-  );
+  const sourceId = v.sourceOrderId;
+  const sourceOrder = state.demoOrders.find((order) => order.id === sourceId);
+  const savedOrder = {
+    id: sourceOrder?.id || `ORDER-DEMO-${state.demoOrders.length + 1}`,
+    product: v['order-product'],
+    email: v['order-email'],
+    plan: v['order-plan'],
+    status: '演示已登记',
+    profit: '待核算'
+  };
+  if (sourceOrder) Object.assign(sourceOrder, savedOrder);
+  else state.demoOrders.push(savedOrder);
+  if (renewal) {
+    const row = subscriptions.find((entry) => entry.id === v.subscriptionId);
+    row.expiry = v['order-expiry'].replace('T', ' ');
+    row.history.push({ title: '续费', detail: `演示续费至 ${row.expiry}，历史订单保留` });
+    state.drafts.delete(state.drawerContext);
+    $('#drawer').close();
+    state.drawerContext = '';
+  } else {
+    state.drafts.delete('order-page');
+    form.reset();
+  }
+  render();
+  notify(renewal ? '演示续费订单已登记' : '演示订单已登记，利润仍待核算');
 }
 document.addEventListener('pointerover', (event) => {
   const target = event.target.closest('[data-table-value-preview]');
@@ -3379,14 +3354,12 @@ document.addEventListener('submit', async (event) => {
       $('#rental-notes').focus();
       return;
     }
-    confirmAction('确认登记付款完毕', '请确认线下付款已完成。本原型只演示登记状态。', () => {
-      const batch = state.rentals.find((entry) => entry.id === v.batchId);
-      batch.paid = true;
-      batch.notes = v['rental-notes'];
-      closeDrawer();
-      render();
-      notify('演示付款记录已登记');
-    });
+    const batch = state.rentals.find((entry) => entry.id === v.batchId);
+    batch.paid = true;
+    batch.notes = v['rental-notes'];
+    closeDrawer();
+    render();
+    notify('演示付款记录已登记');
   }
 });
 document.addEventListener('change', async (event) => {

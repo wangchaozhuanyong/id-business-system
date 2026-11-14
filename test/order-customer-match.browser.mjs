@@ -67,8 +67,6 @@ test('四个录单入口匹配客户和历史账号，随单建档未提交不�
       const email = form.locator('#commerce-email');
       const dialog = page.locator('#confirm-dialog[open]');
       const submit = page.locator('button[form="commerce-order-form"][type="submit"]');
-      const confirm = () => dialog.locator('[data-action="confirm-accept"]').click();
-      const cancel = () => dialog.locator('[data-action="confirm-cancel"]').click();
       await select.locator('option[value="known"]').waitFor({ state: 'attached' });
       if (slug === 'claude') await form.locator('#commerce-plan').selectOption(plan);
       await form.locator('.order-quick-customer-disclosure > summary').click();
@@ -129,9 +127,6 @@ test('四个录单入口匹配客户和历史账号，随单建档未提交不�
         await wechat.fill('distinct_wechat');
         assert(await add.isEnabled());
         await add.click();
-        await page.locator('#drawer[open] button[form="commerce-contact-form"]').click();
-        await dialog.getByText(/请确认这是另一位客户/).waitFor();
-        await cancel();
         await page.locator('#drawer[open] [data-action="drawer-close"]').first().click();
         await name.fill('微信未登记');
         assert(await add.isDisabled());
@@ -147,7 +142,6 @@ test('四个录单入口匹配客户和历史账号，随单建档未提交不�
         await contactWechat.fill('full_customer');
         await drawer.locator('#commerce-contact-phone').fill('+1 202 555 0102');
         await drawer.locator('button[form="commerce-contact-form"]').click();
-        await confirm();
         await drawer.waitFor({ state: 'hidden' });
         const saved = fixture.commerce.data.customers.find(row => row.name === '全量建档客户');
         assert.equal(saved.wechat, 'full_customer');

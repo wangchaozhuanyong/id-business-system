@@ -341,9 +341,9 @@ function runtime(store, { relayConfigured = true } = {}) {
         note: '演示备注',
         ...values
       });
-      output.submit();
+      return output.submit();
     },
-    newAlias(values = {}, parentId = 'parent-demo-1') {
+    openNewAlias(values = {}, parentId = 'parent-demo-1') {
       output.click('relay-alias-add', { parentId });
       output.set({
         email: 'new-hidden@icloud.example.test',
@@ -351,7 +351,10 @@ function runtime(store, { relayConfigured = true } = {}) {
         note: '演示隐藏地址',
         ...values
       });
-      output.submit();
+    },
+    newAlias(values, parentId) {
+      output.openNewAlias(values, parentId);
+      return output.submit();
     },
     preview(content, parentId = 'parent-demo-1') {
       output.click('relay-import', { parentId });
@@ -403,8 +406,8 @@ test('本机主邮箱与批量登记归属于同一库存版本，重开后读�
   t.after(() => store.close());
   const browser = runtime(store);
   assert.equal(browser.parents().length, 0);
-  browser.newParent({ email: 'local-main@example.test', appPassword: 'not-a-real-secret' });
-  const pendingParent = browser.confirm();
+  const pendingParent = browser.newParent({ email: 'local-main@example.test', appPassword: 'not-a-real-secret' });
+  assert.equal(browser.hasConfirm(), false);
   assert.equal(browser.parents().length, 0);
   await pendingParent;
   const parent = browser.parents()[0];
@@ -413,8 +416,8 @@ test('本机主邮箱与批量登记归属于同一库存版本，重开后读�
   assert.equal(JSON.stringify(store.load('inventory')).includes('not-a-real-secret'), false);
 
   browser.preview('hidden1@example.test,备注\nhidden2@example.test', parent.id);
-  browser.submit();
-  await browser.confirm();
+  await browser.submit();
+  assert.equal(browser.hasConfirm(), false);
   const reopened = runtime(store, { relayConfigured: false });
   assert.deepEqual(
     reopened.assets.map((row) => row.parentMailboxId),
@@ -437,11 +440,9 @@ test('本机隐藏邮箱的资料状态独立于使用状态，重新打开后�
   const store = createLocalBusinessStore(':memory:');
   t.after(() => store.close());
   let browser = runtime(store);
-  browser.newParent();
-  await browser.confirm();
+  await browser.newParent();
   const [parent] = browser.parents();
-  browser.newAlias({}, parent.id);
-  await browser.confirm();
+  await browser.newAlias({}, parent.id);
   const [initial] = browser.assets;
 
   browser.click('relay-alias-more', { id: initial.id });
@@ -486,14 +487,12 @@ test('旧窗口登记隐藏邮箱遇到库存冲突时保留草稿且不报告�
   const store = createLocalBusinessStore(':memory:');
   t.after(() => store.close());
   const first = runtime(store);
-  first.newParent();
-  await first.confirm();
+  await first.newParent();
   const id = first.parents()[0].id;
   const second = runtime(store);
-  second.newAlias({ email: 'collision@example.test' }, id);
-  first.newAlias({ email: 'collision@example.test' }, id);
-  await first.confirm();
-  await second.confirm();
+  second.openNewAlias({ email: 'collision@example.test' }, id);
+  await first.newAlias({ email: 'collision@example.test' }, id);
+  await second.submit();
 
   assert.equal(store.load('inventory').data.mailboxes.length, 1);
   assert.equal(second.drawer.open, true);
@@ -508,12 +507,10 @@ test('既有未接入的隐藏邮箱可从原记录补接收件服务并保留�
   const store = createLocalBusinessStore(':memory:');
   t.after(() => store.close());
   const first = runtime(store);
-  first.newParent();
-  await first.confirm();
+  await first.newParent();
   const parentId = first.parents()[0].id;
   const prior = runtime(store, { relayConfigured: false });
-  prior.newAlias({ email: 'previous@example.test', note: '原备注' }, parentId);
-  await prior.confirm();
+  await prior.newAlias({ email: 'previous@example.test', note: '原备注' }, parentId);
   const original = structuredClone(store.load('inventory').data.mailboxes[0]);
   const browser = runtime(store);
   await setImmediate();
@@ -586,7 +583,6 @@ test('主邮箱创建自动生成稳定编号与主查询码，专用密码不�
   r.module.preserveDraft();
   assert(!JSON.stringify([...r.api.state.drafts]).includes('Fictional-App-Pass'));
   r.submit();
-  r.confirm();
   const p = r.parents().find((entry) => entry.email === 'new-main@example.test');
   assert(p.id);
   assert(p.queryCode.startsWith('DEMO-MAIN-'));
@@ -648,7 +644,6 @@ test('登记隐藏地址无需独立密码，查询码与人员不能由表单�
     createdBy: '伪造人',
     createdById: 'fake'
   });
-  r.confirm();
   const a = r.assets.find((row) => row.email === 'new-hidden@icloud.example.test');
   assert.equal(a.parentMailboxId, 'parent-demo-1');
   assert.equal(a.id, a.aliasId);
@@ -689,7 +684,6 @@ test('编辑保留稳定主邮箱关联，已提取或使用的地址不可替�
 test('编辑只更新最近操作人，录入人、时间与隐藏编号不覆盖', () => {
   const r = runtime();
   r.newAlias();
-  r.confirm();
   const a = r.assets.find((entry) => entry.email === 'new-hidden@icloud.example.test'),
     id = a.id,
     time = a.createdAt;
@@ -698,7 +692,6 @@ test('编辑只更新最近操作人，录入人、时间与隐藏编号不覆�
   r.api.modules.appleRelay.openAliasEditor(id);
   r.set({ note: '修改后', status: 'ACTIVE' });
   r.submit();
-  r.confirm();
   assert.equal(a.id, id);
   assert.equal(a.aliasId, id);
   assert.equal(a.createdById, 'actor-a');
@@ -711,7 +704,6 @@ test('编辑只更新最近操作人，录入人、时间与隐藏编号不覆�
 test('隐藏邮箱列表与详情读取共享库存最近操作人，不能停留在上次编辑者', () => {
   const r = runtime();
   r.newAlias();
-  r.confirm();
   const row = r.assets.find((item) => item.email === 'new-hidden@icloud.example.test');
   row.lastOperatedBy = '演示提取员';
   row.lastOperatedById = 'inventory-actor';
@@ -731,7 +723,6 @@ test('隐藏邮箱列表与详情读取共享库存最近操作人，不能停�
 test('隐藏邮箱详情保留共享库存的提取归还历史，不另建割裂操作记录', () => {
   const r = runtime();
   r.newAlias();
-  r.confirm();
   const row = r.assets.find((item) => item.email === 'new-hidden@icloud.example.test');
   row.inventoryHistory.push({
     id: 'returned-fixture',
@@ -751,7 +742,6 @@ test('隐藏邮箱详情保留共享库存的提取归还历史，不另建割�
 test('主邮箱与隐藏邮箱表单字段均有独立列，凭据仅显示配置状态', () => {
   const r = runtime();
   r.newParent({ days: '90' });
-  r.confirm();
   r.tab('parents');
   const parentTable = r.table('relay-parents');
   assert(parentTable.columns.some((column) => column.id === 'days'));
@@ -761,7 +751,6 @@ test('主邮箱与隐藏邮箱表单字段均有独立列，凭据仅显示配�
   assert.equal(savedParent.appPassword, undefined);
   r.preview('visible.fields@example.test,fixture');
   r.submit();
-  r.confirm();
   r.tab('aliases');
   const table = r.table('relay-aliases');
   for (const id of [
@@ -790,13 +779,13 @@ test('主邮箱与隐藏邮箱表单字段均有独立列，凭据仅显示配�
   assert(r.opened.body.includes('有效天数'));
 });
 
-test('批量先预检，正确两列 CSV 全部登记并继承主邮箱、批次和操作人', () => {
+test('批量可直接保存，正确两列 CSV 全部登记并继承主邮箱、批次和操作人', () => {
   const r = runtime();
-  r.preview('邮箱,备注\nimport.a@icloud.example.test,一号\nimport.b@icloud.example.test,二号');
+  r.click('relay-import', { parentId: 'parent-demo-1' });
+  r.set({ content: '邮箱,备注\nimport.a@icloud.example.test,一号\nimport.b@icloud.example.test,二号' });
   assert.equal(r.assets.length, 3);
   r.submit();
-  assert.equal(r.assets.length, 3);
-  r.confirm();
+  assert.equal(r.hasConfirm(), false);
   const list = r.assets.filter((a) => a.importId);
   assert.equal(list.length, 2);
   assert(list.every((a) => a.parentMailboxId === 'parent-demo-1' && a.createdById === 'actor-a'));
@@ -823,42 +812,37 @@ test('错误行、文件内重复、库存重复或伪造列阻止整批登记',
   }
 });
 
-test('批量内容在预检后或确认期间变化、父级变化均零写入', () => {
+test('批量提交校验当前内容，旧的主邮箱版本不得写入', () => {
   const changed = runtime();
   changed.preview('a@example.test');
   changed.set({ content: 'b@example.test' });
   changed.submit();
   assert.equal(changed.hasConfirm(), false);
-  assert.equal(changed.assets.length, 3);
-  const late = runtime();
-  late.preview('a@example.test');
-  late.submit();
-  late.set({ content: 'b@example.test' });
-  late.confirm();
-  assert.equal(late.assets.length, 3);
+  assert.equal(changed.assets.length, 4);
+  assert(changed.assets.some(row => row.email === 'b@example.test'));
+  assert(!changed.assets.some(row => row.email === 'a@example.test'));
   const parentChanged = runtime();
   parentChanged.preview('a@example.test');
-  parentChanged.submit();
   parentChanged.parent().version++;
-  parentChanged.confirm();
+  parentChanged.submit();
   assert.equal(parentChanged.assets.length, 3);
 });
 
-test('单条确认期间身份、主邮箱状态或库存重复变化阻止写入', () => {
+test('单条保存仍检查登录身份、主邮箱状态和库存重复', () => {
   const identity = runtime();
-  identity.newAlias();
-  identity.api.state.actor = { id: 'actor-b', name: '乙' };
-  identity.confirm();
+  identity.openNewAlias();
+  identity.api.state.actor = {};
+  identity.submit();
   assert.equal(identity.assets.length, 3);
   const parentChanged = runtime();
-  parentChanged.newAlias();
+  parentChanged.openNewAlias();
   parentChanged.parent().status = 'DISABLED';
-  parentChanged.confirm();
+  parentChanged.submit();
   assert.equal(parentChanged.assets.length, 3);
   const duplicate = runtime();
-  duplicate.newAlias();
+  duplicate.openNewAlias();
   duplicate.assets.push({ id: 'other', type: 'relay', email: 'new-hidden@icloud.example.test' });
-  duplicate.confirm();
+  duplicate.submit();
   assert.equal(duplicate.assets.length, 4);
 });
 
@@ -1115,7 +1099,6 @@ test('导入记录或已归还领用历史仍是引用，不能删除别名后�
   const imported = runtime();
   imported.preview('history.alias@example.test');
   imported.submit();
-  imported.confirm();
   const a = imported.assets.find((row) => row.email === 'history.alias@example.test');
   imported.click('relay-delete', { kind: 'alias', id: a.id });
   imported.confirm();
@@ -1123,7 +1106,6 @@ test('导入记录或已归还领用历史仍是引用，不能删除别名后�
   assert.match(imported.notices.at(-1), /不能删除/);
   const history = runtime();
   history.newAlias();
-  history.confirm();
   const b = history.assets.find((row) => row.email === 'new-hidden@icloud.example.test');
   history.api.modules.inventory = { hasMailboxHistory: (id) => id === b.id };
   history.click('relay-delete', { kind: 'alias', id: b.id });
@@ -1135,7 +1117,7 @@ test('导入记录或已归还领用历史仍是引用，不能删除别名后�
   assert.equal(table.columns.find((c) => c.id === 'status').render(history.parent()), '授权异常');
 });
 
-test('CSV 文件读取后仍需预检，文件名与人员不会进入导入草稿', async () => {
+test('CSV 读取后可直接保存，文件名与人员不会进入导入草稿', async () => {
   const r = runtime();
   r.click('relay-import', { parentId: 'parent-demo-1' });
   r.module.onChange({
@@ -1151,11 +1133,8 @@ test('CSV 文件读取后仍需预检，文件名与人员不会进入导入草�
   await setImmediate();
   assert.match(r.form.raw['relay-content'], /file.hidden/);
   assert(!r.api.state.drafts.get(r.form.dataset.relayDraft)['relay-file']);
-  r.submit();
-  assert(!r.hasConfirm(), '文件读取不代替预检');
-  r.click('relay-import-preview');
-  r.submit();
-  r.confirm();
+  await r.submit();
+  assert(!r.hasConfirm());
   assert(r.assets.some((row) => row.email === 'file.hidden@icloud.example.test'));
 });
 

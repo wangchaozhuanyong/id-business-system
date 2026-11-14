@@ -218,7 +218,7 @@ test('四类订阅页面使用独立状态、真实复制入口与历史兼容�
       await page.locator('[data-action="subscriptions-detail"]').click();
       await page.locator('#drawer [data-action="subscriptions-confirm"]').click();
       await page.locator('#subscription-reason').fill('合成核对依据');
-      await page.locator('#subscription-confirm-form input[name="confirmed"]').check();
+      assert.equal(await page.locator('#subscription-confirm-form input[name="confirmed"]').count(), 0);
       if (conflictCases) {
         const form = page.locator('#subscription-confirm-form');
         const original = version;
@@ -231,14 +231,12 @@ test('四类订阅页面使用独立状态、真实复制入口与历史兼容�
         assert.equal(await page.locator('#subscription-reason').inputValue(), '合成核对依据');
         assert.equal(confirmed, false);
         await form.evaluate(node => node.requestSubmit());
-        assert.equal(commands.filter(command => command.confirmed).length, 1);
+        assert.equal(commands.filter(command => command.reason === '合成核对依据').length, 1);
         await reread(form);
         await page.waitForFunction(revision => document.querySelector('#subscription-confirm-form [name="revision"]')?.value === revision,
           'revision-' + version);
         await page.locator('#drawer').getByText('TEST-ORDER · Max 5x', { exact: true }).waitFor();
-        assert.equal(await form.locator('[name="confirmed"]').isChecked(), false);
         await page.locator('#subscription-reason').fill('合成核对依据');
-        await form.locator('[name="confirmed"]').check();
       }
       await page.locator('#subscription-confirm-form [type="submit"]').click();
       await page.locator('#subscription-list').getByText('有效', { exact: true }).waitFor();
@@ -277,7 +275,7 @@ test('四类订阅页面使用独立状态、真实复制入口与历史兼容�
       if (!(await ownerName.isVisible()))
         await page.locator('#subscription-list').getByRole('button', { name: '更多资料', exact: true }).click();
       await ownerName.waitFor();
-      assert.ok(commands.some(command => command.confirmed && command.reason === '合成核对依据'));
+      assert.ok(commands.some(command => command.reason === '合成核对依据'));
       assert.ok(commands.some(command => command.ownerId === 'synthetic-owner'));
       if (conflictCases) {
         const form = page.locator('#subscription-settings-form');

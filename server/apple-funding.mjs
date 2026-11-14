@@ -79,25 +79,31 @@ const isDraft = order => order?.draft || ['draft', '草稿'].includes(order?.sta
 const sameAppleTarget = (a, b) => appleTarget(a) === appleTarget(b) &&
   (!a.platformAccountId || a.platformAccountId === b.platformAccountId);
 
-export function stageConfirmedRenewalDebit(ledger, order, payer, at) {
+export function stageConfirmedAppleDebit(ledger, order, payer, at, label = '订单订阅扣减') {
   if (!usesApple(order)) return null;
   const data = structuredClone(ledger || emptyAppleLedger());
   if (data.allocations.some(row => row.orderId === order.id) || data.movements.some(row => row.orderId === order.id))
-    throw Object.assign(new Error('本次续费付款已有记录，请刷新后核对'), { status: 409 });
+    throw Object.assign(new Error('本单已有 Apple 余额记录，请刷新订单'), { status: 409 });
   const wallet = data.wallets.find(row => row.id === order.appleIdId);
   const before = appleAmountUnits(wallet?.balance), paid = appleAmountUnits(order.paidAmount);
   if (!wallet || wallet.currency !== 'USD' || before === null || paid === null || paid <= 0n || before < paid)
-    throw Object.assign(new Error('原苹果 ID 余额待核对，请联系财务'), { status: 409 });
+    throw Object.assign(new Error('苹果 ID 账面美元余额不足或未建立，请核对当前台账余额'), { status: 409 });
   const priorBalance = wallet.balance;
   const remaining = (before - paid).toString().padStart(5, '0');
   wallet.balance = remaining.slice(0, -4) + '.' + remaining.slice(-4);
   wallet.version++;
-  data.allocations.push({ orderId: order.id, appleIdId: wallet.id, amount: order.paidAmount, returned: '0',
+  const orderReference = { orderId: order.id, ...(order.orderNo && { orderNo: order.orderNo }) };
+  data.allocations.push({ ...orderReference, appleIdId: wallet.id, amount: order.paidAmount, returned: '0',
     version: 1, email: order.email });
-  data.movements.push({ id: randomUUID(), appleIdId: wallet.id, orderId: order.id, kind: 'order-charge',
-    label: '续费内购扣款', amount: '-' + order.paidAmount, before: priorBalance, after: wallet.balance,
+  data.movements.push({ id: randomUUID(), appleIdId: wallet.id, ...orderReference, kind: 'order-charge',
+    label, amount: '-' + order.paidAmount,
+    before: priorBalance, after: wallet.balance,
     versionAfter: wallet.version, actor: payer.name, actorId: payer.id, at: toV2DateTimeInput(at).replace('T', ' ') });
   return data;
+}
+
+export function stageConfirmedRenewalDebit(ledger, order, payer, at) {
+  return stageConfirmedAppleDebit(ledger, order, payer, at, '续费内购扣款');
 }
 
 function conflictsWithAppleBinding(order, other) {
@@ -111,7 +117,7 @@ function conflictsWithAppleBinding(order, other) {
     ? !sameTarget || Boolean(other.customerId && other.customerId !== order.customerId) : sameTarget;
 }
 
-export function stageAppleOrderFunding(previous, next, ledger, inventory, settings, action, customers, completedCustomerOrders, paidRenewalId, postedRenewalId) {
+export function stageAppleOrderFunding(previous, next, ledger, inventory, settings, action, customers, completedCustomerOrders, postedRenewalId) {
   const prior = new Map((previous || []).map(row => [row.id, row]));
   const staged = new Map(prior);
   const nextIds = new Set((next || []).map(row => row.id));
@@ -180,7 +186,9 @@ export function stageAppleOrderFunding(previous, next, ledger, inventory, settin
       staged.set(order.id, order);
       continue;
     }
-    if (customerIds && !customerIds.has(order.customerId)) return '请核对苹果内购订单的实际客户';
+    const historicalWithoutBuyer = order.source === '历史入库' && !order.customerId && order.paidConfirmed === true;
+    if (customerIds && !customerIds.has(order.customerId) && !historicalWithoutBuyer)
+      return '请核对苹果内购订单的实际客户';
     // Old pending orders without a resource configuration remain readable. A newly
     // selected resource or payment confirmation always goes through the new checks.
     if (wasReserved && !order.paidConfirmed && !old.appleFunding &&
@@ -195,7 +203,8 @@ export function stageAppleOrderFunding(previous, next, ledger, inventory, settin
       status: asset.status, health: asset.health, deleted: asset.deleted, appStoreRegion: asset.appStoreRegion } : null;
     const index = appleFundingIndex([...staged.values()].filter(item => item.id !== order.id), ledger);
     const check = appleFundingEligibility(wallet, order, index, settings, {
-      actual: Boolean((wasReserved || order.id === paidRenewalId) && order.paidConfirmed),
+      actual: order.paidConfirmed === true,
+      allowMissingCustomer: historicalWithoutBuyer,
       quotedPrice: wasReserved ? old.appleFunding?.expected : ''
     });
     if (check.error) return check.error;
@@ -206,7 +215,8 @@ export function stageAppleOrderFunding(previous, next, ledger, inventory, settin
     }
     order.appleStoreRegion = check.region;
     order.appleFunding = {
-      region: check.region, expected: old?.appleFunding?.expected || check.expected, bound: order.paidConfirmed === true
+      region: check.region, expected: old?.appleFunding?.expected || check.expected || order.paidAmount,
+      bound: order.paidConfirmed === true
     };
     staged.set(order.id, order);
   }

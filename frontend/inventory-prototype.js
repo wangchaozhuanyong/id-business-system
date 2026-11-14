@@ -413,39 +413,29 @@
   }
 
   const inventoryActionCodes = {
-    确认修改资料: 'inventory_edit',
-    确认新增资料: 'inventory_create',
     确认提取: 'inventory_extract',
     确认归还: 'inventory_return',
-    确认实际使用: 'inventory_use',
-    确认批量导入: 'inventory_import',
     确认账号状态变化: 'inventory_health_change',
     撤回最近资料修改: 'inventory_undo',
-    确认本表设置: 'inventory_table_settings',
-    确认登记注册结果: 'inventory_registration_result'
   };
 
+  function saveInventoryChange(action, mutate, options) {
+    if (localData) return void persistInventory(action, mutate, options);
+    inventoryReadIndex = undefined;
+    const finish = mutate();
+    inventoryReadIndex = undefined;
+    finish?.();
+  }
+
   function confirmInventoryChange(title, detail, mutate, label, options) {
-    const confirmedVersion = localInventoryVersion;
-    api.confirmAction(
-      title,
-      detail,
-      () => {
-        if (!localData) {
-          inventoryReadIndex = undefined;
-          const finish = mutate();
-          inventoryReadIndex = undefined;
-          finish?.();
-          return;
-        }
-        if (confirmedVersion !== localInventoryVersion) {
-          api.notify('确认期间库存已变化，请重新打开并核对');
-          return;
-        }
-        void persistInventory(inventoryActionCodes[title], mutate, options);
-      },
-      label
-    );
+    const version = localInventoryVersion;
+    api.confirmAction(title, detail, () => {
+      if (localData && version !== localInventoryVersion) {
+        api.notify('库存已更新，请重新打开后保存');
+        return;
+      }
+      saveInventoryChange(inventoryActionCodes[title], mutate, options);
+    }, label);
   }
 
   function copyAssetLine(asset) {
@@ -2233,7 +2223,7 @@
         mailboxPlatformChoices(asset).some(([key]) => key === product) ? asset : null;
     };
     if (!eligible()) { api.notify('邮箱或平台标记已变化，请重新核对；输入已保留'); return; }
-    confirmInventoryChange('确认登记注册结果', `确认此邮箱已注册 ${choice[1]}，保存后保留原有使用记录。`, () => {
+    saveInventoryChange("inventory_registration_result", () => {
       const asset = eligible();
       if (!asset) { api.notify('确认期间邮箱已变化，请重新核对'); return; }
       asset.usageLinks.push({ kind: 'registration', product, label: `人工登记 · 已注册 ${choice[1]}`, time: inventoryNow() });
@@ -2745,7 +2735,7 @@
           '',
           '导入记录'
         )
-      : empty('暂无导入记录', '完成预检与确认导入后保留批次。');
+      : empty('暂无导入记录', '导入成功后会在这里保留批次。');
   }
   function openEntryImports() {
     saveDrafts();
@@ -2786,7 +2776,7 @@
           subscription ? '按表头粘贴表格或 CSV，仅登记已开通账号，填写套餐及开通、到期时间。' : '按表头粘贴表格或 CSV，登记状态填写养号中或死号。订阅历史请到订阅管理登记。')
       }</div><div id="${claudeHistoryKey}-review" class="section-gap" aria-live="polite"></div></form>`,
       button('取消', 'inventory-close') + button('预检资料', 'inventory-claude-history-preview') +
-      `<button class="button primary" form="${claudeHistoryKey}-form" type="submit" disabled>确认入库</button>`,
+      `<button class="button primary" form="${claudeHistoryKey}-form" type="submit">保存入库</button>`,
       draftKey);
   }
   function claudeHistoryFormCurrent(form, content) {
@@ -2797,13 +2787,12 @@
   function claudeHistorySubmitButton() {
     return document.querySelector('button[form="' + claudeHistoryKey + '-form"][type="submit"]');
   }
-  async function previewClaudeHistory(form) {
+  async function previewClaudeHistory(form, save = false) {
     if (!form || form.dataset.checking || inventorySavePending) return;
     const content = form.elements.namedItem(claudeHistoryContentId).value;
     const review = form.querySelector('#' + claudeHistoryKey + '-review');
     const submit = claudeHistorySubmitButton();
     preparedClaudeHistory = null;
-    submit.disabled = true;
     review.textContent = '';
     let lines;
     try {
@@ -2828,6 +2817,7 @@
         ? '订阅历史只登记已开通账号' : '账号历史只登记养号中或死号');
     api.setError(claudeHistoryContentId, '');
     form.dataset.checking = 'true';
+    submit.disabled = true;
     review.textContent = '正在预检历史资料…';
     try {
       const result = await localData.claudeHistoryIntake({ mode: 'preview', rows });
@@ -2842,6 +2832,7 @@
       ], result.rows, '', 'claude-history-preview');
       const invalid = result.rows.some(row => row.error);
       submit.disabled = invalid || !result.pending;
+      if (save && !invalid && result.pending) return await commitClaudeHistory(form, preparedClaudeHistory);
       api.notify(invalid ? '请修正问题后重新预检' :
         result.pending ? '预检通过，待入库 ' + result.pending + ' 条' : '这些账号已登记');
     } catch (error) {
@@ -2851,46 +2842,48 @@
       }
     } finally {
       delete form.dataset.checking;
+      if (submit.isConnected && !preparedClaudeHistory) submit.disabled = false;
+    }
+  }
+  async function commitClaudeHistory(form, prepared) {
+    const actor = currentActor();
+    if (inventorySavePending || preparedClaudeHistory !== prepared ||
+        !claudeHistoryFormCurrent(form, prepared.content)) return;
+    inventorySavePending = true;
+    const submit = claudeHistorySubmitButton();
+    submit.disabled = true;
+    const input = form.elements.namedItem(claudeHistoryContentId);
+    input.readOnly = true;
+    try {
+      const result = await localData.claudeHistoryIntake({ mode: 'confirm',
+        rows: prepared.inputRows, inventoryVersion: prepared.inventoryVersion });
+      if (currentActor().id !== actor.id) return;
+      applyCommittedInventory(result.inventory);
+      if (claudeHistoryFormCurrent(form, prepared.content)) {
+        finishDrawer(form.dataset.inventoryDraft);
+        api.render();
+      } else if (api.state.drafts.get(form.dataset.inventoryDraft)?.[claudeHistoryContentId] === prepared.content) {
+        api.state.drafts.delete(form.dataset.inventoryDraft);
+      }
+      api.notify('Claude 历史入库 ' + result.imported + ' 条，已有 ' + result.reused + ' 条');
+    } catch (error) {
+      if (claudeHistoryFormCurrent(form, prepared.content)) {
+        form.querySelector('#' + claudeHistoryKey + '-review').textContent = '';
+        api.setError(claudeHistoryContentId, error.message + '，请重新预检');
+      } else api.notify(error.message);
+    } finally {
+      inventorySavePending = false;
+      input.readOnly = false;
+      if (submit.isConnected) submit.disabled = false;
+      if (preparedClaudeHistory === prepared) preparedClaudeHistory = null;
     }
   }
   function submitClaudeHistory(form) {
     const prepared = preparedClaudeHistory;
-    if (!prepared || prepared.form !== form || !claudeHistoryFormCurrent(form, prepared.content) ||
-        !prepared.pending || prepared.rows.some(row => row.error))
-      return api.setError(claudeHistoryContentId, '请先按当前内容完成预检');
-    const actor = currentActor();
-    api.confirmAction('确认 Claude 历史入库', '将按预检结果保存 ' + prepared.pending + ' 条 Claude 账号历史。',
-      async () => {
-        if (inventorySavePending || preparedClaudeHistory !== prepared ||
-            !claudeHistoryFormCurrent(form, prepared.content)) return;
-        inventorySavePending = true;
-        const submit = claudeHistorySubmitButton();
-        submit.disabled = true;
-        const input = form.elements.namedItem(claudeHistoryContentId);
-        input.readOnly = true;
-        try {
-          const result = await localData.claudeHistoryIntake({ mode: 'confirm',
-            rows: prepared.inputRows, inventoryVersion: prepared.inventoryVersion });
-          if (currentActor().id !== actor.id) return;
-          applyCommittedInventory(result.inventory);
-          if (claudeHistoryFormCurrent(form, prepared.content)) {
-            finishDrawer(form.dataset.inventoryDraft);
-            api.render();
-          } else if (api.state.drafts.get(form.dataset.inventoryDraft)?.[claudeHistoryContentId] === prepared.content) {
-            api.state.drafts.delete(form.dataset.inventoryDraft);
-          }
-          api.notify('Claude 历史入库 ' + result.imported + ' 条，已有 ' + result.reused + ' 条');
-        } catch (error) {
-          if (claudeHistoryFormCurrent(form, prepared.content)) {
-            form.querySelector('#' + claudeHistoryKey + '-review').textContent = '';
-            api.setError(claudeHistoryContentId, error.message + '，请重新预检');
-          } else api.notify(error.message);
-        } finally {
-          inventorySavePending = false;
-          input.readOnly = false;
-          if (preparedClaudeHistory === prepared) preparedClaudeHistory = null;
-        }
-      });
+    if (prepared?.form === form && claudeHistoryFormCurrent(form, prepared.content) &&
+        prepared.pending && !prepared.rows.some(row => row.error))
+      void commitClaudeHistory(form, prepared);
+    else void previewClaudeHistory(form, true);
   }
   function importEditor(type = '') {
     const routeType = api.state.route.split('/')[1];
@@ -2933,12 +2926,13 @@
       : field('默认资料类型', 'inventory-import-type', select('inventory-import-type', choices, d['inventory-import-type']), true);
     const sourceOptions = microsoft ? settingsFor('microsoft').sources : ['自己注册', '线上购买', '客户提供'];
     showDrawer(
-      '批量导入预检',
+      '批量导入',
       microsoft ? '仅导入微软邮箱。可录入邮箱和登录密码两列，也可按示例表头补齐验证资料。多种验证方式用分号分隔。'
-        : '逐行确认最终类型和注册时间后再导入；地址识别仅作建议，不会自动更改类型。',
+        : '可先预览每行类型和注册时间，也可直接保存导入。',
       `<form id="inventory-import-form" data-inventory-draft="${key}" novalidate><div class="form-grid">${typeField}${field('来源渠道', 'inventory-import-source', select('inventory-import-source', sourceOptions, d['inventory-import-source'] || sourceOptions[0]), true)}${field('CSV 文件', 'inventory-import-file', '<input id="inventory-import-file" type="file" accept=".csv,text/csv" />')}${wide('导入内容', 'inventory-import-content', area('inventory-import-content', d['inventory-import-content'] || '', example, 6), true)}</div></form><div id="inventory-import-results"></div>`,
       (microsoft ? button('复制示例 CSV', 'inventory-copy-microsoft-template', '', 'copy') : '') + button('取消', 'inventory-close') +
-        '<button class="button primary" form="inventory-import-form" type="submit">检查并预览</button>',
+        button('预览资料', 'inventory-import-preview') +
+        '<button class="button primary" form="inventory-import-form" type="submit">保存导入</button>',
       key
     );
     const form = document.getElementById('inventory-import-form');
@@ -3099,10 +3093,11 @@
       );
     showDrawer(
       `批量导入${typeLabel(type)}`,
-      '每批只提交一种账号资料，逐行检查后整批确认；不注册账号，不改变任何余额或业务使用状态。',
+      '每批导入一种账号资料。可先预览每行，也可直接保存导入。',
       `<form id="inventory-import-form" data-inventory-draft="${key}" novalidate><div class="form-grid">${fields}</div><div class="toolbar">${usesAccountLocation(type) ? locationSettingsButton(type, 'import') : ''}${localData ? '' : button('填入示例 CSV', 'inventory-import-example', '', 'copy')}</div></form><div id="inventory-import-results"></div>`,
       button('取消', 'inventory-close') +
-        '<button class="button primary" form="inventory-import-form" type="submit">检查并预览</button>',
+        button('预览资料', 'inventory-import-preview') +
+        '<button class="button primary" form="inventory-import-form" type="submit">保存导入</button>',
       key
     );
     const form = document.getElementById('inventory-import-form');
@@ -3670,10 +3665,7 @@
       api.notify('资料版本已变化，请重新核对');
       return;
     }
-    confirmInventoryChange(
-      original ? '确认修改资料' : '确认新增资料',
-      `${displayIdentity(identity)} · ${typeLabel(type)}，${sourceMailbox ? '保存账号并登记所选邮箱实际使用' : localData ? '保存到服务器数据库' : '当前为离线演示，内容仅保留在本页内存'}。`,
-      () => {
+    saveInventoryChange(original ? 'inventory_edit' : 'inventory_create', () => {
         if (type === 'google' && !original && (api.state.route !== route || !form.isConnected ||
             formFingerprint(api.readForm(form)) !== inputSnapshot)) {
           api.notify('确认期间谷歌邮箱输入已变化，请重新核对');
@@ -3819,9 +3811,7 @@
           api.render();
           api.notify(localData ? '资料已保存到服务器' : '演示资料已保存');
         };
-      },
-      '确认保存'
-    );
+      });
   }
 
   function localRelayCandidate(asset) {
@@ -4129,10 +4119,7 @@
       api.notify('领用或业务状态已变化，请重新核对');
       return;
     }
-    confirmInventoryChange(
-      '确认实际使用',
-      `确认 ${claims.length} 条已用于${d['inventory-use-purpose']}。这些资料不再进入通用可提取库存。`,
-      () => {
+    saveInventoryChange("inventory_use", () => {
         if (claims.some((claim) => !useAllowed(claim))) {
           api.notify('确认期间领用或业务状态已变化，本次未登记');
           return;
@@ -4149,10 +4136,10 @@
           api.getSelection('inventory-claims').clear();
           api.render();
         };
-      }
-    );
+      });
   }
   function submitImport(form, commit = false, restored = null, recordFailure = false) {
+    if (!form) return;
     const d = { ...(restored || api.readForm(form)) },
       type = d['inventory-import-type'];
     const route = api.state.route;
@@ -4425,7 +4412,7 @@
       );
       if (fundingApple && recordFailure && hasPreviousPreview) {
         const snapshot = formFingerprint(api.readForm(form));
-        confirmInventoryChange('确认批量导入', `保存 ${errors.length} 行预检失败的原因。本批不会导入邮箱。`, () => {
+        saveInventoryChange("inventory_import", () => {
           if (!form.isConnected || formFingerprint(api.readForm(form)) !== snapshot) return;
           const operator = currentActor();
           importRecords.unshift({ id: uid('IMPORT'), type: 'apple', time: inventoryNow(), actor: operator.name, actorId: operator.id,
@@ -4434,20 +4421,13 @@
               result: row.error || '本批未导入'
             })) });
           return () => { finishDrawer(form.dataset.inventoryDraft); api.render(); api.notify('已保存本次导入记录'); };
-        }, '保存失败记录');
+        });
       }
       return;
     }
     api.setError('inventory-import-content', '');
     if (!commit) return;
-    if (!hasPreviousPreview) {
-      api.notify('导入内容或默认类型已变化，请核对新的逐行预览后再确认');
-      return;
-    }
-    confirmInventoryChange(
-      '确认批量导入',
-      `确认导入 ${results.length} 条资料。已填写的注册时间按原值保存，空白取录入时间。`,
-      () => {
+    saveInventoryChange("inventory_import", () => {
         if (protectPreview && (!form.isConnected || (microsoft && (api.state.route !== route || !microsoftEntryAllowed(route))) ||
             formFingerprint(api.readForm(form)) !== snapshot ||
             protectedImportPreviews.get(form)?.id !== previewSource)) {
@@ -4533,8 +4513,7 @@
           api.render();
           api.notify('导入完成，可在导入记录查询原批次');
         };
-      }
-    );
+      });
   }
 
   function onClick(action, node, hydrated = false) {
@@ -4666,6 +4645,8 @@
       updateReturnSelection(form);
     } else if (action === 'inventory-copy-microsoft-template' && microsoftEntryAllowed())
       void api.copyText(accountCsvTemplate('microsoft'));
+    else if (action === 'inventory-import-preview')
+      submitImport(document.getElementById('inventory-import-form'));
     else if (action === 'inventory-import-confirm')
       submitImport(document.getElementById('inventory-import-form'), true);
     else if (action === 'inventory-import-record-failure')
@@ -4952,7 +4933,7 @@
       });
     }
     else if (form.id === claudeHistoryKey + '-form') submitClaudeHistory(form);
-    else if (form.id === 'inventory-import-form') submitImport(form);
+    else if (form.id === 'inventory-import-form') submitImport(form, true);
     else if (form.id === 'inventory-quick-form') {
       void reviewQuickReturn(form);
     } else if (form.id === 'inventory-purpose-settings-form') {
@@ -4982,7 +4963,7 @@
         api.notify('请保留 1–100 个不重复的用途，每项不超过 100 个字且不含控制字符');
         return true;
       }
-      confirmInventoryChange('确认本表设置', '更新邮箱提取用途，历史批次和账号提取用途保持原值。', () => {
+      saveInventoryChange("inventory_table_settings", () => {
         tableSettings.set(mailExtractionSettingsKey, { purposes });
         return () => {
           finishDrawer(key);
@@ -5032,17 +5013,13 @@
         api.notify('请至少保留一个国家和来源，养号时间需为 1–8760 的整数小时');
         return true;
       }
-      confirmInventoryChange(
-        '确认本表设置',
-        '仅影响此资料表的后续选择和养号计算，不改历史记录。',
-        () => {
+      saveInventoryChange("inventory_table_settings", () => {
           tableSettings.set(type, { countries, sources, hours, ...(cities ? { cities } : {}) });
           return () => {
             finishDrawer(form.dataset.inventoryDraft);
             api.render();
           };
-        }
-      );
+        });
     } else if (form.id === 'inventory-registration-form') {
       const data = api.readForm(form),
         asset = assetById(data['inventory-registration-asset']);
@@ -5080,10 +5057,7 @@
         return true;
       }
       const registrationVersion = asset.version;
-      confirmInventoryChange(
-        '确认登记注册结果',
-        `${asset.email} · ${data['inventory-registration-product'].toUpperCase()} · ${data['inventory-registration-result']}。不执行真实注册。`,
-        () => {
+      saveInventoryChange("inventory_registration_result", () => {
           if (
             asset.version !== registrationVersion ||
             asset.inventoryState === 'used' ||
@@ -5153,8 +5127,7 @@
                   : '演示注册结果已记录'
             );
           };
-        }
-      );
+        });
     }
     return true;
   }
@@ -5349,7 +5322,7 @@
       previewRegistrationProxy(node);
     } else if (node.id === claudeHistoryContentId) {
       preparedClaudeHistory = null;
-      claudeHistorySubmitButton().disabled = true;
+      claudeHistorySubmitButton().disabled = Boolean(node.form.dataset.checking || inventorySavePending);
       node.form.querySelector('#' + claudeHistoryKey + '-review').textContent = '';
     }
     saveDrafts();

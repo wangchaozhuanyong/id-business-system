@@ -30,6 +30,41 @@ const setup = t => {
   return { store, write, save };
 };
 
+test('在原订单补登记实付时同时入账，余额不足时不写入，重试不会多扣', t => {
+  const { store, write, save } = setup(t);
+  save(write('inventory', inventory(asset('apple-a', '250')), 'inventory_create'));
+  const order = draftOrder('old-unposted', { orderNo: 'OD-FIXTURE-APPLE', paidAmount: '250',
+    financialEvidence: [{ kind: 'receipt', amount: '2100', currency: 'CNY', at: '2026-10-13T09:30:00Z' }] });
+  save(write('commerce', commerce([order]), '新增独立订单'));
+  const original = store.load('commerce');
+  const ledger = store.load('appleBalance');
+  const command = { action: 'record-apple-payment', orderId: order.id, version: 1, amount: '250' };
+  assert.throws(() => store.saveOrderCompletion({ ...actor, role: 'employee' }, command), /无权/);
+  assert.throws(() => store.saveOrderCompletion(actor, { ...command, version: 0 }), /订单已更新/);
+  assert.throws(() => store.saveOrderCompletion(actor, { ...command, amount: '251' }), /余额不足/);
+  assert.deepEqual(store.load('commerce'), original);
+  assert.deepEqual(store.load('appleBalance'), ledger);
+
+  const saved = store.saveOrderCompletion(actor, command);
+  const updated = store.load('commerce');
+  const [actual] = updated.data.orders;
+  const balance = store.load('appleBalance');
+  assert.deepEqual([actual.paidConfirmed, actual.paidAmount, actual.paidCurrency, actual.appleFunding.bound, actual.version],
+    [true, '250', 'USD', true, 2]);
+  assert.equal(actual.corrections.at(-1).previous.paidConfirmed, false);
+  assert.deepEqual(actual.financialEvidence.find(row => row.kind === 'receipt'), order.financialEvidence[0]);
+  assert.equal(actual.financialEvidence.find(row => row.kind === 'payment').amount, '250');
+  assert.deepEqual(balance.data.allocations.map(row => [row.orderId, row.orderNo, row.appleIdId, row.amount]),
+    [[order.id, order.orderNo, 'apple-a', '250']]);
+  assert.deepEqual(balance.data.movements.filter(row => row.kind === 'order-charge').map(row =>
+    [row.orderId, row.orderNo, row.amount, row.before, row.after]), [[order.id, order.orderNo, '-250', '250', '0.0000']]);
+  assert.equal(balance.data.wallets[0].balance, '0.0000');
+  assert.deepEqual(store.saveOrderCompletion(actor, { ...command, amount: '250.00' }), saved);
+  assert.throws(() => store.saveOrderCompletion(actor, { ...command, amount: '249' }), /已有付款记录/);
+  assert.deepEqual(store.load('commerce'), updated);
+  assert.deepEqual(store.load('appleBalance'), balance);
+});
+
 test('期初余额和苹果 ID 同时提交；充值留痕，重复请求不重复加款', t => {
   const { store, write, save } = setup(t);
   const invalid = write('inventory', inventory(asset('apple-a', '25'), asset('apple-b', '-1')), 'inventory_create');

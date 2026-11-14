@@ -41,7 +41,6 @@ async function setup(t) {
     external(change) { const data = structuredClone(stored.data); change(data); stored = { version: stored.version + 1, data }; },
     async confirm() {
       await page.locator('button[form="inventory-asset-form"][type="submit"]').click();
-      await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
     }
   };
 }

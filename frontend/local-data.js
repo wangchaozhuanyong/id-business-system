@@ -629,7 +629,7 @@
       ? request('claude-history-intake', command, 'POST')
       : write(['inventory'], () => request('claude-history-intake', command, 'POST')),
     claudeHistoricalSaleAccounts: () => request('claude-history-intake', { mode: 'sales-candidates' }, 'POST'),
-    saveClaudeHistoricalSale: (command) => write(['commerce'],
+    saveClaudeHistoricalSale: (command) => write(command.appleIdId ? ['commerce', 'appleBalance'] : ['commerce'],
       () => request('claude-history-intake', { ...command, mode: 'record-sale' }, 'POST')),
     employeeStatistics: (params) => request('employee-statistics?' + new URLSearchParams(params)),
     systemMonitoring: (params) => request('system-monitoring?' + new URLSearchParams(params)),
@@ -658,7 +658,8 @@
       request('recharge-activity/' + encodeURIComponent(id) + '/read?event=' + encodeURIComponent(event), {}, 'POST'),
     rechargeCodeAction: (command) => write(['recharge-codes'], () => request('recharge-codes', command, 'POST')),
     orderCompletion: (params) => request('order-completion' + (params ? '?' + new URLSearchParams(params) : '')),
-    saveOrderCompletion: (command) => write(['commerce'], () => request('order-completion', command, 'POST')),
+    saveOrderCompletion: (command) => write(command.action === 'record-apple-payment' ? ['commerce', 'appleBalance'] : ['commerce'],
+      () => request('order-completion', command, 'POST')),
     orderSync: (command) => command.mode === 'preview'
       ? request('order-sync', command, 'POST')
       : write(['order-sync', 'commerce', 'inventory', 'recharge-codes'], () => request('order-sync', command, 'POST')),

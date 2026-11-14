@@ -128,7 +128,6 @@ test('订单下拉框在展开后搜索，保留联动、草稿与快捷新增',
   await page.locator('#order-quick-customer-wechat').fill('qa_new_customer');
   await page.locator('[data-action="commerce-quick-customer"]').click();
   await page.locator('#drawer').getByRole('button', { name: '核对并保存', exact: true }).click();
-  await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
   await page.locator('#commerce-contact-form').waitFor({ state: 'hidden' });
   assert.equal(writes.length, 1);
   assert.match(await trigger.innerText(), /快捷新增合成客户/);

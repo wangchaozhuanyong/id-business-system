@@ -178,16 +178,13 @@ test('本表设置使用两组完整项目编辑器，按资料表登记独立�
   assert(r.editors.every((editor) => editor.minItems === 1));
 });
 
-test('设置确认后生效且只清当前草稿，其他资料表的配置不受影响', () => {
+test('设置保存后生效且只清当前草稿，其他资料表的配置不受影响', () => {
   const r = runtime();
   r.open();
   const form = r.form();
   r.api.state.drafts.set('inventory-settings:claude', { marker: 'keep' });
   r.inventory.onSubmit(form);
-  assert.equal(r.pendingConfirmation(), true);
-  r.open();
-  assert(Array.from(r.editors.at(-2).values).includes('美国'));
-  r.confirm();
+  assert.equal(r.pendingConfirmation(), false);
   assert.equal(r.api.state.drafts.has('inventory-settings:google'), false);
   assert.equal(r.api.state.drafts.get('inventory-settings:claude').marker, 'keep');
   r.open();
@@ -249,7 +246,6 @@ test('无效列表、空配置和越界养号小时数不会写入配置', () =>
 test('移除国家或来源后，编辑旧资料仍保留原值，不静默改到首项', () => {
   const r = runtime();
   r.inventory.onSubmit(r.form());
-  r.confirm();
   r.api.state.route = 'mailboxes/google';
   r.inventory.onClick('inventory-edit', { dataset: { id: 'google-12' } });
   const country = r.selects.findLast((entry) => entry.id === 'inventory-country-edit');
@@ -274,7 +270,6 @@ test('被移除的当前筛选国家仍在下拉显示，筛选条件与实际�
   r.inventory.render();
   r.inventory.onChange({ id: 'inventory-country', value: '美国' });
   r.inventory.onSubmit(r.form());
-  r.confirm();
   const html = r.inventory.render();
   assert.match(html, /value="美国" selected>美国（已有值）/);
   assert(r.tables.at(-1).rows.length);
@@ -291,7 +286,6 @@ test('旧换行文本兼容且8760小时上限可保存，重新打开仍正确�
       'inventory-settings-hours': '8760'
     })
   );
-  r.confirm();
   const drawer = r.open();
   assert.deepEqual(Array.from(r.editors.at(-2).values), ['日本', '德国']);
   assert.match(drawer.body, /value="8760"/);
@@ -316,7 +310,6 @@ test('邮箱提取用途设置更新后续选项，保留历史批次并与账�
     '注册 Claude', '注册 GPT', '业务备用', '其他', '注册 Gemini', '注册 Grok'
   ]);
   r.inventory.onSubmit(purposeForm(['员工测试', '其他']));
-  r.confirm();
   r.inventory.render();
   assert.deepEqual(Array.from(r.selects.findLast(s => s.id === 'inventory-purpose').choices), ['员工测试', '其他']);
   assert.equal(JSON.stringify(r.api.modules.inventory.getBatches()), history);
@@ -341,7 +334,6 @@ test('已删除用途的提取草稿提示重选，不能静默换首项或继�
   r.api.setError = (id, message) => errors.set(id, message);
   r.api.state.drafts.set('inventory-extract:mail', { 'inventory-purpose': '注册 Claude' });
   r.inventory.onSubmit(purposeForm(['业务备用']));
-  r.confirm();
   const html = r.inventory.render();
   assert.match(html, /原用途已移除，请重新选择/);
   assert.equal(r.selects.findLast(s => s.id === 'inventory-purpose').selected, '');

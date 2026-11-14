@@ -68,8 +68,8 @@ test('苹果 ID 的候选、到账依据和地区区分覆盖桌面手机及深�
       assert.equal(await drawer.locator('label[for="apple-reason"]').innerText(), '到账依据');
       await drawer.locator('#apple-amount').fill('250');
       assert.equal(await drawer.locator('#apple-reason').inputValue(), '');
-      await drawer.getByRole('button', { name: '核对变动', exact: true }).click();
-      await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
+      await drawer.getByRole('button', { name: '保存余额变动', exact: true }).click();
+      assert.equal(await page.locator('#confirm-dialog[open]').count(), 0);
       await page.waitForFunction(() => document.querySelector('#drawer')?.textContent.includes('500.00'));
       assert.equal(writes.length, 1);
       assert.equal(writes[0].data.movements.at(-1).reason, '');
@@ -87,7 +87,7 @@ test('苹果 ID 的候选、到账依据和地区区分覆盖桌面手机及深�
         await orderPage.locator('#commerce-appleIdId-picker').click();
         await orderPage.locator('#commerce-appleIdId-options').getByRole('option', { name: /synthetic-wallet@example\.test/ }).click();
         assert.equal(await orderPage.locator('#commerce-appleIdId').inputValue(), id);
-        assert.match(await orderPage.locator('[data-apple-match-notice]').innerText(), /预计代付 250 USD/);
+        assert.match(await orderPage.locator('[data-apple-match-notice]').innerText(), /参考代付 250 USD/);
         assert.deepEqual(orderSession.writes, []);
         assert.deepEqual(orderSession.errors, []);
         assert.deepEqual(orderSession.requests.external, []);

@@ -235,7 +235,6 @@ test('旧版配置读出默认城市，同一抽屉添加国家后立即出现�
   delete raw[`${japan.id}-pending`];
   raw[canada.id] = '["多伦多","温哥华"]';
   app.inventory.onSubmit(form);
-  app.confirm();
   await flush();
   assert.equal(app.saved.action, 'inventory_table_settings');
   assert.deepEqual(json(app.saved.data.tableSettings[0][1].cities), [
@@ -255,13 +254,11 @@ test('切换注册国家不代选，移除选项后只允许原账号保留原�
   const raw = settingsFields(['日本']);
   raw[editorFor(app, '日本').id] = '["札幌"]';
   app.inventory.onSubmit(app.form('inventory-settings-form', raw));
-  app.confirm();
 
   const saved = app.click('inventory-edit', { id: original.id });
   assert.match(saved.body, /旧城（已有值）/);
   const edit = app.form('inventory-asset-form', assetFields('美国', '旧城', original));
   app.inventory.onSubmit(edit);
-  app.confirm();
   assert.equal(app.accounts.find((row) => row.id === original.id).city, '旧城');
 
   app.click('inventory-add-type', { type: 'claude' });
@@ -277,7 +274,6 @@ test('切换注册国家不代选，移除选项后只允许原账号保留原�
   assert.match(app.errors.get('inventory-city'), /不在所选国家/);
   form.values['inventory-city'] = '札幌';
   app.inventory.onSubmit(form);
-  app.confirm();
   assert.equal(app.accounts.find((row) => row.email === 'new@example.test').city, '札幌');
 });
 
@@ -287,7 +283,6 @@ test('工作台和 Claude 本表批导共用城市配置，代理拆分不更改
   const settings = settingsFields(['美国']);
   settings[editorFor(app, '美国').id] = '["Washington, D.C.","芝加哥"]';
   app.inventory.onSubmit(app.form('inventory-settings-form', settings));
-  app.confirm();
 
   const fromTable = app.click('inventory-import', { type: 'claude' });
   assert.match(fromTable.body, /inventory-import-form/);

@@ -223,7 +223,6 @@ test('客户与租户录入独立页面保留草稿，保存后留在当前页�
   assert.match(tenant, /name="commerce-kind" value="tenant"/);
   assert.doesNotMatch(tenant, /客户草稿/);
   r.contact({ name: '工作台租户' }, 'tenant');
-  r.confirm();
   assert.equal(r.tenants()[0].name, '工作台租户');
   assert.equal(r.api.state.route, 'customers/new/tenant');
   r.module.render();
@@ -232,7 +231,6 @@ test('客户与租户录入独立页面保留草稿，保存后留在当前页�
   r.api.state.route = 'customers/new';
   assert.match(r.module.render(), /value="客户草稿"/);
   r.contact({ name: '工作台客户', phone: '60123456789' });
-  r.confirm();
   assert.equal(r.customers()[0].name, '工作台客户');
   assert.equal(r.api.state.route, 'customers/new');
   assert.equal(r.api.state.drafts.has('commerce-contact:customer:new'), false);
@@ -249,7 +247,6 @@ test('新增客户保存QQ和标签，录入身份由会话生成而非表单填
     createdAt: '2000-01-01',
     updatedBy: '伪造修改人'
   });
-  r.confirm();
   const c = r.customers()[0];
   assert.equal(c.qq, '演示QQ新增');
   assert.deepEqual(Array.from(c.tags), ['长期客户', '企业客户']);
@@ -269,12 +266,10 @@ test('姓名必填而客户联系方式可空，失败保留草稿且不写入',
   assert.equal(r.customers().length, 3);
   assert(r.api.state.drafts.has(key));
   r.contact({ phone: '', qq: 'qq-only' });
-  r.confirm();
   assert.equal(r.customers()[0].qq, 'qq-only');
   assert(!r.api.state.drafts.has(key));
   const before = r.customers().length;
   r.contact({ name: '网站下单无联系方式客户', phone: '', qq: '', wechat: '', whatsapp: '', telegram: '' });
-  r.confirm();
   assert.equal(r.customers().length, before + 1);
   assert.equal(r.customers()[0].phone, '');
 });
@@ -292,7 +287,6 @@ test('按同渠道核对重复客户，覆盖停用记录、格式差异和编�
   assert.match(r.errors.get('commerce-contact-telegram'), /已停用.*恢复/);
   assert.equal(r.customers().length, 3);
   r.contact({ name: '同名客户', phone: '+60 (12) 345-6789' });
-  r.confirm();
   r.contact({ name: '同名客户', phone: '+60123456789' });
   assert.match(r.errors.get('commerce-contact-phone'), /已有同名客户/);
   const saved = r.customers()[0];
@@ -303,21 +297,17 @@ test('按同渠道核对重复客户，覆盖停用记录、格式差异和编�
     phone: saved.phone,
     notes: '可正常修改'
   });
-  r.confirm();
   assert.equal(r.customers()[0].notes, '可正常修改');
   r.contact({ id: saved.id, version: '2', name: '陈女士', phone: '', wechat: 'demo_chen' });
   assert.match(r.errors.get('commerce-contact-wechat'), /已有同名客户/);
   assert.equal(r.customers()[0].version, 2);
 });
 
-test('同名不同联系方式可区分；共享联系方式只在核对后分别保存', () => {
+test('同名不同联系方式和共享联系方式分别保存', () => {
   const r = runtime();
   r.contact({ name: '林先生', phone: '', qq: '独立演示QQ' });
-  r.confirm();
   r.contact({ name: '另一位演示客户', phone: '', wechat: 'demo_lin' });
-  assert.match(r.confirmation(), /其他客户已使用此客户微信.*不会合并/);
-  assert.equal(r.customers().length, 4);
-  r.confirm();
+  assert.equal(r.confirmation(), undefined);
   assert.equal(r.customers().length, 5);
   assert.equal(r.customers().find((c) => c.id === 'customer-demo-1').name, '林先生');
 });
@@ -325,7 +315,6 @@ test('同名不同联系方式可区分；共享联系方式只在核对后分�
 test('另一人编辑只更新最近修改，录入人和时间保持不变', () => {
   const r = runtime();
   r.contact();
-  r.confirm();
   const initial = r.customers()[0];
   r.api.state.actor = { id: 'actor-b', name: '演示修改员' };
   r.time('2026-11-04 11:30');
@@ -336,7 +325,6 @@ test('另一人编辑只更新最近修改，录入人和时间保持不变', ()
     tags: '["复购客户"]',
     createdBy: '伪造'
   });
-  r.confirm();
   const changed = r.customers()[0];
   assert.equal(changed.createdById, 'actor-a');
   assert.equal(changed.createdBy, '演示录入员');
@@ -354,12 +342,10 @@ test('另一人编辑只更新最近修改，录入人和时间保持不变', ()
 test('编辑历史记录不补造录入人，租户业务归属人与录入人分开', () => {
   const r = runtime();
   r.contact({ id: 'customer-demo-1', version: '1' });
-  r.confirm();
   const c = r.customers().find((entry) => entry.id === 'customer-demo-1');
   assert.equal(c.createdBy, undefined);
   assert.equal(c.updatedById, 'actor-a');
   r.contact({ name: '新租户', owner: '业务负责人' }, 'tenant');
-  r.confirm();
   const t = r.tenants()[0];
   assert.equal(t.owner, '演示录入员', '新增租户不再信任自由填写的归属人文字');
   assert.equal(t.ownerId, 'actor-a');
@@ -367,7 +353,6 @@ test('编辑历史记录不补造录入人，租户业务归属人与录入人�
   const historical = r.tenants().find(row => row.id === 'tenant-demo-1');
   r.contact({ id: historical.id, version: String(historical.version), phone: historical.phone,
     owner: '冒名修改', ownerId: 'actor-a' }, 'tenant');
-  r.confirm();
   assert.equal(historical.owner, '林负责人');
   assert.equal(Object.hasOwn(historical, 'ownerId'), false, '历史文字归属不猜测员工编号');
 });
@@ -412,7 +397,6 @@ test('历史业务按明确客户编号汇总次数、首末开通及来源单�
   assert(service.orderNos.includes('SYNCED'));
   assert(!service.orderNos.includes('NO-OPENING'));
   r.contact();
-  r.confirm();
   r.records(r.customers()[0].id);
   assert.equal(r.tables.find((t) => t.id === 'commerce-contact-services').rows.length, 0);
 });
@@ -420,7 +404,6 @@ test('历史业务按明确客户编号汇总次数、首末开通及来源单�
 test('列表搜索覆盖标签、历史业务、QQ、备注、录入人', () => {
   const r = runtime();
   r.contact({ qq: 'QQ-FIND', notes: '备注关键字' });
-  r.confirm();
   for (const query of ['企业客户', 'QQ-find', '备注关键字', '演示录入员']) {
     r.api.state.query = query;
     assert.equal(r.table().rows.length, 1);
@@ -456,15 +439,11 @@ test('非法、重复或未配置的标签阻止保存', () => {
   assert.equal(r.customers().length, 3);
 });
 
-test('版本冲突、确认期间身份变化和未登录时不写资料或人员', () => {
+test('版本冲突和未登录时不写资料或人员', () => {
   const r = runtime();
   r.contact({ id: 'customer-demo-1', version: '0' });
   assert.match(r.notices.at(-1), /变化/);
-  r.contact();
-  r.api.state.actor = { id: 'actor-b', name: '另一人' };
-  r.confirm();
   assert.equal(r.customers().length, 3);
-  assert.match(r.notices.at(-1), /身份已变化/);
   r.api.state.actor = null;
   r.contact();
   assert.match(r.notices.at(-1), /身份不可用/);

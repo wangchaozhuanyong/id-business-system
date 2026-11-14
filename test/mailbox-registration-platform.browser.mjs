@@ -64,7 +64,6 @@ try {
     };
     const save = async () => {
       await drawer.getByRole('button', { name: '保存标记', exact: true }).click();
-      await page.locator('[data-action="confirm-accept"]').click();
     };
     const measure = async state => {
       await settle(page);
@@ -197,7 +196,6 @@ try {
       await drawer.locator('#inventory-use-purpose').selectOption('注册 Gemini');
       await drawer.locator('#inventory-use-result').fill('已核实外部注册成功');
       await drawer.getByRole('button', { name: '核对使用结果', exact: true }).click();
-      await page.locator('[data-action="confirm-accept"]').click();
       await drawer.waitFor({ state: 'hidden' });
       assert.equal(document.mailboxes.find(row => row.id === claimed.id).usageLinks[0].product, 'gemini');
       assert.equal(document.batches.at(-1).items[0].status, 'used');

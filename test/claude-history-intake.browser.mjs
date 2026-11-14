@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 const runtime = process.env.ID_RECHARGE_QA_PLAYWRIGHT;
 const { chromium } = await import(runtime ? pathToFileURL(runtime).href : 'playwright');
 import { accountLifecycleSummaries, checkInventoryRenewals } from '../server/account-lifecycle.mjs';
-import { stageAppleOrderFunding } from '../server/apple-funding.mjs';
+import { stageAppleOrderFunding, stageConfirmedAppleDebit } from '../server/apple-funding.mjs';
 import { checkAppleLedger, checkOrderFinancialHistory, checkStockDeliveries } from '../server/local-business-integrity.mjs';
 import { handleLocalBusiness } from '../server/local-business.mjs';
 import {
@@ -21,6 +21,59 @@ const at = new Date('2026-11-10T08:00:00Z');
 const historyRows = [
   ['ready-history@example.test', '已开通', '', 'Max 20x', '2026-10-31 22:00', '2026-11-30 22:00', '马来西亚']
 ];
+
+test('原订单保存 Apple 实付后可直接从订单打开对应扣款明细', { timeout: 25_000 }, async t => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const context = await browser.newContext({ viewport: { width: 1360, height: 900 } });
+  const appleIdId = 'apple-payment-fixture';
+  const apple = { id: appleIdId, email: 'apple-wallet@example.test', type: 'apple', appStoreRegion: 'US', status: '正常', health: 'normal' };
+  const order = { id: 'old-unposted', orderNo: 'QA-UNPOSTED', product: 'Claude Max', plan: 'Max 20x',
+    businessType: '成品交付', source: '历史入库', accountId: 'claude-fixture', email: 'claude@example.test',
+    payment: '苹果内购', appleIdId, paymentId: apple.email, appleStoreRegion: 'US', paidAmount: '250', paidCurrency: 'USD',
+    paidConfirmed: false, appleFunding: { region: 'US', expected: '250', bound: false },
+    start: '2026-10-13T10:00', expiry: '2026-11-13T10:00', entitlementStatus: 'active',
+    saleAmount: '2100', saleCurrency: 'CNY', receiptConfirmed: true, version: 5,
+    refunds: [], bankReturns: [], corrections: [], cancellationEvents: [] };
+  const local = {
+    inventory: { version: 1, data: { accounts: [], mailboxes: [apple] } },
+    commerce: { version: 2, data: { orders: [order], customers: [], tenants: [], logs: [], operating: [], rentBatches: [] } },
+    appleBalance: { version: 1, data: { wallets: [{ id: appleIdId, currency: 'USD', balance: '250', version: 2 }],
+      movements: [{ id: 'opening', kind: 'opening', label: '期初余额', appleIdId,
+        amount: '250', before: '0', after: '250', versionAfter: 2 }], allocations: [], refunds: [] } }
+  };
+  const traffic = await interceptDesign(context, { localFixtures: local, actor, skipRechargeAssets: true });
+  const saves = [];
+  await context.route(origin + '/api/local/order-completion', route => {
+    const command = route.request().postDataJSON();
+    saves.push(command);
+    assert.deepEqual(command, { action: 'record-apple-payment', orderId: order.id, version: 5, amount: '250' });
+    const saved = { ...order, paidConfirmed: true, version: 6, appleFunding: { ...order.appleFunding, bound: true } };
+    local.appleBalance = { version: 2, data: stageConfirmedAppleDebit(local.appleBalance.data, saved, actor, at.toISOString()) };
+    local.commerce = { version: 3, data: { ...local.commerce.data, orders: [saved] } };
+    return route.fulfill({ json: { orderId: saved.id, version: 3 } });
+  });
+  const page = await context.newPage();
+  page.setDefaultTimeout(6500);
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.goto(origin + '/#/orders/claude');
+  await page.locator('[data-row-id="old-unposted"] [data-action="commerce-order-detail"]').first().click();
+  const drawer = page.locator('#drawer[open]');
+  await drawer.getByRole('button', { name: '登记 Apple 实付', exact: true }).click();
+  assert.equal(await drawer.locator('#commerce-apple-payment-form #commerce-paidAmount').inputValue(), '250');
+  await drawer.getByRole('button', { name: '保存实付', exact: true }).click();
+  await drawer.getByText('已保留实际付款记录', { exact: true }).waitFor();
+  assert.equal(await page.locator('#confirm-dialog[open]').count(), 0);
+  assert.equal(await drawer.getByRole('button', { name: '登记 Apple 实付', exact: true }).count(), 0);
+  await drawer.getByText('查看余额变动', { exact: true }).click();
+  const debit = drawer.getByRole('row').filter({ hasText: order.orderNo });
+  await debit.getByText('-250.00', { exact: true }).waitFor();
+  assert.equal(await debit.count(), 1);
+  assert.equal(saves.length, 1);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(traffic.external, []);
+});
 
 test('历史 Claude 苹果内购原单通过编辑保存日期、金额、备注及首位客户', { timeout: 40_000 }, async t => {
   const browser = await chromium.launch();
@@ -219,23 +272,22 @@ test('Claude 账号历史入口预检、冲突重试、保存和刷新回读', {
   const header = (await content.inputValue()).trim();
   const input = header + '\n' + historyRows.map(row => row.join('\t')).join('\n');
   const preview = page.getByRole('button', { name: '预检资料', exact: true });
-  const submit = page.getByRole('button', { name: '确认入库', exact: true });
-  const confirm = () => page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
+  const submit = page.getByRole('button', { name: '保存入库', exact: true });
   await content.fill(input);
   await preview.click();
   await page.locator('#inventory-claude-history-review').getByText('已开通', { exact: true }).waitFor();
   await content.fill(input + '\n');
-  assert.equal(await submit.isDisabled(), true);
+  assert.equal(await submit.isDisabled(), false);
   await content.fill(input);
   await preview.click();
   await submit.click();
-  await confirm();
+  assert.equal(await page.locator('#confirm-dialog[open]').count(), 0);
   await page.getByText('库存已变化，请重新预检', { exact: true }).waitFor();
   assert.equal(await content.inputValue(), input);
   assert.equal(local.inventory.data.accounts.length, 0);
   await preview.click();
   await submit.click();
-  await confirm();
+  assert.equal(await page.locator('#confirm-dialog[open]').count(), 0);
   await page.locator('#drawer').waitFor({ state: 'hidden' });
   assert.equal(local.inventory.data.accounts.length, 1);
   assert.equal(confirmations, 2);
@@ -272,7 +324,7 @@ test('Claude 账号历史入口预检、冲突重试、保存和刷新回读', {
   await page.locator('#inventory-claude-history-review').getByText('死号', { exact: true }).waitFor();
   assert.equal(await page.locator('#inventory-claude-history-review').getByText('到期时间', { exact: true }).count(), 0);
   await submit.click();
-  await confirm();
+  assert.equal(await page.locator('#confirm-dialog[open]').count(), 0);
   await page.locator('#drawer').waitFor({ state: 'hidden' });
   assert.equal(local.inventory.data.accounts.length, 3);
   await page.getByRole('tab', { name: /^死号/ }).click();
@@ -369,7 +421,7 @@ test('Claude 订单补录复用原账号，保留租户并在订阅显示来源�
     await drawer.getByLabel(/历史账号/).selectOption(account.id);
     await drawer.getByRole('combobox', { name: '租户*', exact: true }).selectOption(tenant.id);
     await drawer.getByLabel(/原开通方式/).selectOption('银行卡');
-    await drawer.getByLabel(/^售价\*?$/).fill('1500');
+    await drawer.getByLabel(/^客户实收\*?$/).fill('1500');
     await drawer.getByRole('button', { name: '保存历史订单', exact: true }).click();
     await drawer.waitFor({ state: 'hidden' });
     const [order] = local.commerce.data.orders;
@@ -397,7 +449,7 @@ test('Claude 订单补录复用原账号，保留租户并在订阅显示来源�
     assert.equal(await detailValue('本单自动计算利润').textContent(), '150.00 人民币 CNY');
     const [updated] = local.commerce.data.orders;
     assert.deepEqual([updated.id, updated.actualCostAmount, updated.customerId, updated.paidAmount, updated.receiptConfirmed],
-      [order.id, '1350', '', '', false]);
+      [order.id, '1350', '', '', true]);
     assert.equal(await detailValue('客户实收（退款前）').textContent(), '1500.00 人民币 CNY');
     assert.equal(await detailValue('计算缺项').textContent(), '无');
     assert.equal(await detailValue('代付金额').textContent(), '未登记');

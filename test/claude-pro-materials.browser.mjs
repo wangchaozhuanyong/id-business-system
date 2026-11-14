@@ -261,7 +261,6 @@ test('统一 Claude 列表、三档套餐、租户银行卡录入与送财务', 
   await quick.locator('#commerce-contact-name').fill('合成新银行卡租户');
   await quick.locator('#commerce-contact-phone').fill('+60123456783');
   await page.locator('#drawer[open] button[form="commerce-contact-form"][type="submit"]').click();
-  await page.locator('#confirm-dialog[open]').getByRole('button', { name: '确认保存', exact: true }).click();
   await quick.waitFor({ state: 'hidden' });
   const cardOwner = fixture.commerce.data.tenants.find(row => row.name === '合成新银行卡租户');
   assert.equal(await field('tenantId').inputValue(), cardOwner.id);
@@ -352,7 +351,6 @@ test('统一 Claude 列表、三档套餐、租户银行卡录入与送财务', 
   await quick.locator('#commerce-initial-card-0-number').fill(tenantNumber);
   await quick.getByRole('button', { name: /查看合成用卡人银行卡/ }).waitFor();
   await drawer.locator('button[form="commerce-contact-form"][type="submit"]').click();
-  await page.locator('#confirm-dialog[open]').getByRole('button', { name: '确认保存', exact: true }).click();
   await usedCard.waitFor();
   assert.equal(fixture.commerce.data.tenants.some(row => row.name === '合成重复登记租户'), false);
   assert.deepEqual(errors, []);

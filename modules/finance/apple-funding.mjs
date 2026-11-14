@@ -173,7 +173,9 @@ export function appleBinding(index, order) {
     ? { id } : { id: '', conflict: true };
 }
 
-export function appleFundingEligibility(wallet, order, index, settings, { actual = false, quotedPrice, forSelection = false } = {}) {
+export function appleFundingEligibility(wallet, order, index, settings, {
+  actual = false, quotedPrice, forSelection = false, allowMissingCustomer = false
+} = {}) {
   const targets = appleTargets(order);
   const binding = appleBinding(index, order);
   const state = index.byWallet.get(wallet?.id);
@@ -185,7 +187,8 @@ export function appleFundingEligibility(wallet, order, index, settings, { actual
   const balance = appleAmountUnits(wallet?.balance);
   // The picker may show unused candidates before a new customer is saved.
   // Order writes use the default strict check after resolving the customer.
-  if ((!targets.length || !order.customerId) && !forSelection) return { error: '请先核对客户和订阅账号' };
+  if ((!targets.length || (!order.customerId && !allowMissingCustomer)) && !forSelection)
+    return { error: '请先核对客户和订阅账号' };
   if (binding.conflict) return { error: '历史苹果 ID 绑定存在冲突，请核对原订单' };
   if (order.businessType === '续费' && !binding.id)
     return { error: '未找到原订阅的苹果 ID 绑定，请核对历史付款记录' };
@@ -201,6 +204,7 @@ export function appleFundingEligibility(wallet, order, index, settings, { actual
     return { error: '该订阅账号已有待付款订单，请先核对原单' };
   if (!binding.id && state?.used) return { error: '首次分配只能使用未使用的苹果 ID' };
   if (!actual && (estimate === null || estimate <= 0n)) return { error: '请先配置此地区的苹果内购代付价' };
+  if (actual && forSelection && !order.paidAmount && balance !== null) return { region, expected, amount, balance };
   if (amount === null || amount <= 0n || balance === null) return { error: '请核对苹果内购金额和余额' };
   if (balance < amount) return { error: '苹果 ID 余额不足', shortage: amount - balance };
   return { region, expected, amount, balance };

@@ -344,7 +344,6 @@ export function createPage(A, definition) {
     if (action === 'card-import') {
       const chosen = selection(formNode);
       if (!chosen.length) return message(view, '请至少选择一个套餐。');
-      if (!await Security.confirmChange('确认导入银行卡', '导入后，符合条件的银行卡会参与所选套餐的自动取卡。')) return;
       return write(view, action, { action: 'import', lines: data.lines, plans: chosen, version }, formNode);
     }
     if (action === 'customer') return write(view, action, { ...data, action: 'customer' }, formNode);
@@ -417,7 +416,7 @@ export function createPage(A, definition) {
     A.openDrawer('导入银行卡', '每行一张卡，按卡号、有效期、安全码、持卡人填写，用空格或竖线分隔。持卡人可留空。',
       form('card-import', A.field('银行卡资料', 'staff-lines',
         '<textarea id="staff-lines" name="staff-lines" rows="7" required autocomplete="off" spellcheck="false" data-no-draft></textarea>', true) +
-        optionPlans('staff-import-plan', view.current.draft['card-import']?.plans), '核对并导入') +
+        optionPlans('staff-import-plan', view.current.draft['card-import']?.plans), '保存导入') +
       '<p class="field-error" data-staff-dialog-status role="alert" hidden></p>', '', 'staff-card-import');
     const drawer = $('#drawer'), formNode = $('[data-staff-form]', drawer);
     formNode.classList.add('finance-card-import');

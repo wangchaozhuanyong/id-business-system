@@ -118,9 +118,11 @@ test('Claude 历史销售从原库存生成订单，买家可补齐，死号保�
   const subscriptionRows = () => store.withSubscriptions(actor, snapshots => projectSubscriptions(snapshots, clock));
   try {
     store.saveBatch([{ domain: 'inventory', version: 0, data: {
-      mailboxes: [opened, dead].map(({ email }, i) => ({ id: 'google-' + i, email, type: 'google', status: '正常' })),
+      mailboxes: [...[opened, dead].map(({ email }, i) => ({ id: 'google-' + i, email, type: 'google', status: '正常' })),
+        { id: 'apple-history', email: 'historical-payment@example.test', type: 'apple', status: '正常',
+          health: 'normal', appStoreRegion: 'US', appleOpeningBalance: '250' }],
       accounts: [], batches: [], returnRecords: [], importRecords: [], registrationRecords: [], tableSettings: [], undo: []
-    } }, { domain: 'commerce', version: 0, data: {
+    }, action: 'inventory_create' }, { domain: 'commerce', version: 0, data: {
       orders: [], tenants: [tenant], customers: [buyer], operating: [], rentBatches: [], logs: []
     } }]);
     store.saveClaudeHistory({ rows: [opened, dead], inventoryVersion: 1 }, actor);
@@ -143,19 +145,29 @@ test('Claude 历史销售从原库存生成订单，买家可补齐，死号保�
     assert.deepEqual(store.saveClaudeHistoricalSale(input, actor), { ...first, created: false });
     assert.throws(() => store.saveClaudeHistoricalSale({ ...input, saleAmount: '2100' }, actor), /已有订单/);
     const endedInput = { ...versions, accountId: endedAccount.id, tenantId: tenant.id,
-      payment: '苹果内购', saleAmount: '2100', saleCurrency: 'CNY', subscriptionEndedAt: '2026-11-06T19:20' };
+      payment: '苹果内购', appleIdId: 'apple-history', paidAmount: '250', paidCurrency: 'USD',
+      saleAmount: '2100', saleCurrency: 'CNY', subscriptionEndedAt: '2026-11-06T19:20' };
     assert.throws(() => store.saveClaudeHistoricalSale(endedInput, actor), /已变化/);
+    const originalLedger = store.load('appleBalance');
+    assert.throws(() => store.saveClaudeHistoricalSale({ ...endedInput,
+      commerceVersion: first.version, paidAmount: '251' }, actor), /余额不足/);
+    assert.deepEqual(store.load('appleBalance'), originalLedger);
+    assert.equal(store.load('commerce').version, first.version);
     const ended = store.saveClaudeHistoricalSale({ ...endedInput, commerceVersion: first.version }, actor);
     assert.equal(ended.orderNo, 'OD-LOCAL-0002');
+    assert.deepEqual(store.saveClaudeHistoricalSale(endedInput, actor), { ...ended, created: false });
     assert.deepEqual(store.load('inventory'), originalInventory);
     assert.deepEqual(store.claudeHistoricalSales().accounts, []);
     const [firstOrder, endedOrder] = [first, ended].map(result =>
       store.load('commerce').data.orders.find(order => order.id === result.orderId));
     assert.deepEqual([firstOrder.customerId, firstOrder.tenantId, firstOrder.saleAmount, firstOrder.actualCostAmount],
       ['', tenant.id, '1500', '1350']);
-    assert.deepEqual([firstOrder.paidConfirmed, firstOrder.receiptConfirmed, endedOrder.actualCostAmount], [false, false, '']);
+    assert.deepEqual([firstOrder.paidConfirmed, firstOrder.receiptConfirmed, endedOrder.actualCostAmount], [false, true, '']);
     assert.deepEqual([endedOrder.start, endedOrder.expiry, endedOrder.subscriptionEndedAt],
       ['2026-10-27', '2026-11-26', '2026-11-06T19:20']);
+    assert.deepEqual([endedOrder.paidConfirmed, endedOrder.appleFunding.bound, endedOrder.customerId], [true, true, '']);
+    assert.deepEqual(store.load('appleBalance').data.movements.filter(row => row.kind === 'order-charge').map(row =>
+      [row.orderId, row.orderNo, row.amount, row.after]), [[ended.orderId, ended.orderNo, '-250', '0.0000']]);
     const cost = { action: 'fill-manual-details', orderId: endedOrder.id, version: endedOrder.version,
       details: { actualCost: { amount: '1234.50', currency: 'CNY', reason: '按原销售凭据核对' } } };
     assert.throws(() => store.saveOrderCompletion({ ...actor, role: 'employee' }, cost), /只有管理员/);

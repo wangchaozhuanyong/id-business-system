@@ -230,7 +230,7 @@ test('银行卡管理与续费共用复制、筛选、分组和预计金额', { 
   }
 });
 
-test('冻结银行卡后日常录单提示风险，旧快捷续费引导送财务', { timeout: 40_000 }, async t => {
+test('冻结银行卡后日常录单和已完成续费都保留原卡提示', { timeout: 40_000 }, async t => {
   const playwright = process.env.ID_RECHARGE_QA_PLAYWRIGHT;
   const { chromium } = await import(playwright ? pathToFileURL(playwright).href : 'playwright');
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
@@ -313,13 +313,13 @@ test('冻结银行卡后日常录单提示风险，旧快捷续费引导送财�
   await email.fill('upcoming@example.test');
   await email.blur();
   await page.locator('[data-order-renewal-card]').getByText('已冻结', { exact: true }).waitFor();
-  for (const id of ['expired', 'upcoming']) {
-    await page.goto(origin + '/#/workspace/order/renew/' + id);
-    await page.getByRole('button', { name: '打开续费管理', exact: true }).waitFor();
-    assert.equal(await page.locator('#main #commerce-order-form').count(), 0);
-  }
-  await page.getByRole('button', { name: '打开续费管理', exact: true }).click();
-  await page.getByRole('heading', { name: '续费管理', exact: true }).waitFor();
+  await page.goto(origin + '/#/workspace/order/renew/upcoming');
+  const renewal = page.locator('#main #commerce-order-form');
+  await renewal.waitFor();
+  assert.equal(await renewal.locator('#commerce-businessType').inputValue(), '续费');
+  assert.equal(await renewal.locator('#commerce-email').inputValue(), 'upcoming@example.test');
+  await renewal.locator('[data-order-renewal-card]').getByText('已冻结', { exact: true }).waitFor();
+  assert.equal(await renewal.locator('#commerce-proMaterialMode').inputValue(), 'none');
   assert(localFixtures.commerce.data.orders.every(row => row.cardId !== 'recharge:9'));
   assert.deepEqual(errors, []);
   assert.deepEqual(mock.external, []);

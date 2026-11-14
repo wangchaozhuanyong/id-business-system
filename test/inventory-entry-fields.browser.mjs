@@ -30,9 +30,10 @@ test('邮箱和账号按最少实际资料新增、导入及编辑', { timeout: 
   const mailbox = email => fixture.inventory.data.mailboxes.find(row => row.email === email);
   const account = email => fixture.inventory.data.accounts.find(row => row.email === email);
   const submit = page.locator('button[form="inventory-asset-form"][type="submit"]');
-  async function confirmSave() {
+  async function save(button = submit) {
     const response = page.waitForResponse(result => result.url() === origin + '/api/local/inventory' && result.request().method() === 'PUT');
-    await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
+    await button.click();
+    assert.equal(await page.locator('#confirm-dialog[open]').count(), 0);
     assert.equal((await response).status(), 200);
     await drawer.waitFor({ state: 'hidden' });
   }
@@ -76,8 +77,7 @@ test('邮箱和账号按最少实际资料新增、导入及编辑', { timeout: 
     const email = `new-${type}@example.test`;
     await drawer.locator('#inventory-email').fill(email);
     if (type === 'gpt') await page.setViewportSize({ width: 390, height: 900 });
-    await submit.click();
-    await confirmSave();
+    await save();
     const saved = (['google', 'apple'].includes(type) ? mailbox : account)(email);
     assert.equal(saved.country, '');
     assert.equal(saved.device, '');
@@ -94,11 +94,7 @@ test('邮箱和账号按最少实际资料新增、导入及编辑', { timeout: 
   const importedBlank = 'import-without-device@example.test', importedDevice = 'import-with-device@example.test';
   await content.fill(csvHeader + `${importedBlank},Fixture only\n` +
     `${importedDevice},Fixture only,0123,马来西亚,吉隆坡,,谷歌邮箱,合成设备,`);
-  await page.locator('button[form="inventory-import-form"][type="submit"]').click();
-  await drawer.getByText('可导入', { exact: true }).last().waitFor();
-  assert.equal(await drawer.getByText('可导入', { exact: true }).count(), 2);
-  await drawer.locator('[data-action="inventory-import-confirm"]').click();
-  await confirmSave();
+  await save(page.locator('button[form="inventory-import-form"][type="submit"]'));
   assert.equal(mailbox(importedBlank).device, '');
   assert.equal(mailbox(importedBlank).phone, '');
   assert.equal(mailbox(importedBlank).country, '');
@@ -110,23 +106,18 @@ test('邮箱和账号按最少实际资料新增、导入及编辑', { timeout: 
   const device = drawer.locator('#inventory-device');
   assert.equal(await device.inputValue(), '合成设备');
   await device.fill('');
-  await submit.click();
-  await confirmSave();
+  await save();
   assert.equal(mailbox(importedDevice).device, '');
   await page.goto(origin + '/#/workspace/account-submit');
   await page.locator('[data-action="inventory-import"][data-type="claude"]').click();
   await drawer.locator('#inventory-import-content').fill('账号邮箱\nimported-claude@example.test');
-  await page.locator('button[form="inventory-import-form"][type="submit"]').click();
-  await drawer.getByText('可导入', { exact: true }).waitFor();
-  await drawer.locator('[data-action="inventory-import-confirm"]').click();
-  await confirmSave();
+  await save(page.locator('button[form="inventory-import-form"][type="submit"]'));
   assert.equal(account('imported-claude@example.test').emailType, '');
   await page.goto(origin + '/#/accounts/claude');
   await page.locator('#inventory-list-query').fill('legacy-claude@example.test');
   await page.locator('[data-action="inventory-edit"][data-id="legacy-claude-entry"]').click();
   await drawer.locator('#inventory-notes').fill('历史补充备注');
-  await submit.click();
-  await confirmSave();
+  await save();
   const historical = account('legacy-claude@example.test');
   assert.equal(historical.notes, '历史补充备注');
   assert.equal(historical.proxyUrl, '旧代理资料');
