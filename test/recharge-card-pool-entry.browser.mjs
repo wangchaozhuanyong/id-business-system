@@ -217,7 +217,21 @@ test('完整银行卡入口在深浅主题、宽窄屏和空结果下保持可�
         assert.deepEqual(await page.locator(frameSelector).boundingBox(), before);
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
         assert(await frame.locator('body').evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
-        await frame.locator('[data-card-plan-edit="1"]').click();
+        const table = frame.locator('#cards [data-switch-panel="local"] .table-container');
+        const planButton = frame.locator('[data-card-plan-edit="1"]');
+        if (width <= 768) {
+          const planHit = await planButton.evaluate(button => {
+            const scroller = button.closest('.table-container');
+            const edge = scroller.getBoundingClientRect().right;
+            scroller.scrollLeft += button.getBoundingClientRect().right - edge + 12;
+            const rect = button.getBoundingClientRect();
+            return button.contains(document.elementFromPoint(rect.right - 8, rect.top + rect.height / 2));
+          });
+          assert(planHit, 'card actions must leave the scrolled plan button clickable');
+          await planButton.tap();
+        } else {
+          await planButton.click();
+        }
         const dialog = frame.getByRole('dialog', { name: '设置允许套餐' });
         const geometry = await dialog.evaluate(node => {
           const rect = node.getBoundingClientRect();
@@ -230,11 +244,20 @@ test('完整银行卡入口在深浅主题、宽窄屏和空结果下保持可�
         if (output && [1920, 1440, 390].includes(width))
           await page.screenshot({ path: join(output, theme + '-' + width + '-dialog.png') });
         await dialog.getByRole('button', { name: '关闭套餐设置', exact: true }).click();
+        if (width <= 768) {
+          const actionsReachable = await table.evaluate(scroller => {
+            scroller.scrollLeft = scroller.scrollWidth;
+            const button = scroller.querySelector('#card_pool_list_body tr td:last-child button');
+            const rect = button.getBoundingClientRect();
+            return button.contains(document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2));
+          });
+          assert(actionsReachable, 'row actions must be reachable at the end of the table');
+        }
         await frame.getByRole('button', { name: '批量导入', exact: true }).click();
         await frame.locator('#card_pool_import_box').getByRole('checkbox', { name: 'Pro 500', exact: true }).check();
         await frame.getByRole('button', { name: '批量导入', exact: true }).click();
         if (output && [1920, 1440, 390].includes(width)) {
-          await frame.locator('#cards [data-switch-panel="local"] .table-container').evaluate(node => { node.scrollLeft = 0; });
+          await table.evaluate(node => { node.scrollLeft = 0; });
           await page.evaluate(() => window.scrollTo(0, 0));
           await page.screenshot({ path: join(output, theme + '-' + width + '.png') });
         }

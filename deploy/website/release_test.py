@@ -310,7 +310,7 @@ class WebsiteReleaseTests(unittest.TestCase):
         git.return_value = remote.TABLE_ACTIONS_STYLESHEET
         self.assertEqual(release.require_website_scope(BASE, TARGET),
                          ("tableActionsPresentation", approval.return_value))
-        approval.assert_called_once_with(BASE, TARGET, "table-actions-20261112.json",
+        approval.assert_called_once_with(BASE, TARGET, "card-pool-touch-20261114.json",
                                          (remote.TABLE_ACTIONS_STYLESHEET,))
         git.return_value += "\nmodules/recharge/codexdaichong/shell.js"
         with self.assertRaisesRegex(RuntimeError, "recharge_core_or_runtime_changed"):
