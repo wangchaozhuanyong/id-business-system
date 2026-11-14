@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { createOrderSnapshot, snapshotAction } from '../../modules/finance/accounting.mjs';
 
 export const historicalFeeAction = '更正历史付款费率';
-const historicalFeeKind = 'historical-card-fee';
+export const historicalFeeKind = 'historical-card-fee';
 const rateIs = (value, fraction) => typeof value === 'string' &&
   new RegExp(`^0\\.${fraction}0*$`).test(value);
 

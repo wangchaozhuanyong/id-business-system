@@ -346,8 +346,12 @@
             result?.code === 'SECURITY_CONFIRMATION_REQUIRED' && window.IDAccountSecurity) {
           confirmed = await window.IDAccountSecurity.verify();
           if (confirmed) {
+            if (readSignal?.aborted) throw supersededQuery();
             if (sourceInvalidated) throw sourceError();
-            if (signal) options.signal = signal = AbortSignal.timeout(timeout);
+            if (timeout) {
+              const deadline = AbortSignal.timeout(timeout);
+              options.signal = signal = readSignal ? AbortSignal.any([deadline, readSignal]) : deadline;
+            }
             attempt--;
             continue;
           }
@@ -693,7 +697,19 @@
     saveBatch: (entries, options) => write(entries.map((entry) => entry.domain), () =>
       request('batch', entries, 'PUT', { ...options, stepUp: entries.some(entry => entry.domain === 'settings') })),
     audit: () => request('audit'),
-    auditPage: (params) => request('audit/page?' + new URLSearchParams(params)),
+    auditPage: (params, { refresh = false } = {}) => queries.read('audit', params,
+      () => request('audit/page?' + new URLSearchParams(params)), { refresh: refresh || params.view === 'recovery' }),
+    auditRecoveryPreview: (id, signal) => request('audit/' + encodeURIComponent(id) + '/recovery', undefined, 'GET',
+      { readSignal: signal }),
+    recoverAuditContact: (id, command, operationId, signal, scope = 'commerce') => write([scope, 'audit'],
+      () => request('audit/' + encodeURIComponent(id) + '/recovery', command, 'POST', {
+        operationId, stepUp: true, writeTimeout: 15_000, readSignal: signal
+      })),
+    inventoryArchivePreview: (id, signal) => request('inventory/archive?' + new URLSearchParams({ id }), undefined, 'GET',
+      { readSignal: signal }),
+    archiveInventory: (command, operationId, signal) => write(['inventory', 'audit'],
+      () => request('inventory/archive', command, 'POST',
+        { operationId, stepUp: true, writeTimeout: 15_000, readSignal: signal })),
     relay(operation, data) {
       const send = () => request('apple-relay/' + operation, data, 'POST');
       if (operation === 'alias-intake-confirm') return write(['inventory', 'commerce', 'apple-relay'], send);

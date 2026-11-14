@@ -189,7 +189,9 @@ test('未确认订单锁定归还，撤销未执行订单后可以归还', (t) =
   const returned = store.load('inventory').data;
   returnRows(returned, returned.batches[0], returned.batches[0].items);
   assert.throws(() => save(store, 'inventory', returned, 'inventory_return'), { status: 409 });
-  save(store, 'commerce', commerce([{ ...pending, cancelled: true }]), '业务撤单');
+  const cancelled = { ...store.load('commerce').data.orders[0], cancelled: true, version: 1,
+    cancellationEvents: [{ id: 'cancel-unpaid', action: '业务撤单', reason: '已核对未付款' }] };
+  save(store, 'commerce', commerce([cancelled]), '业务撤单');
   save(store, 'inventory', returned, 'inventory_return');
   assert.equal(store.load('inventory').data.batches[0].items[0].status, 'returned');
 });
