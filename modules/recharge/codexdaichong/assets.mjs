@@ -9,7 +9,7 @@ import { workspaceGuide, workspaceIcon } from './workspace-guide.mjs';
 import { normalizeRechargeProxyInput } from './proxy-input.mjs';
 import { proxyTypeLabels } from '../bitbrowser/proxy-types.mjs';
 import { RECHARGE_STAGE_LABELS, RECHARGE_STEP_LABELS } from './progress-presentation.mjs';
-import { routingAdminPanel } from './routing-admin-ui.mjs';
+import { checkoutServerDiagnostic, routingAdminPanel } from './routing-admin-ui.mjs';
 import { createRechargeCardTypeOverlay } from './card-type-overlay.mjs';
 import { cardPlanAdminScript, cardPlanImportFields, cardPlanLabels, cardPlanToolbar } from './card-plan-admin.mjs';
 
@@ -1640,6 +1640,8 @@ function adaptHtml(source, kind) {
       'id="checkout_plan_name" class="asset-input" placeholder="chatgptplusplan" autocomplete="off" aria-describedby="checkout-plan-help">\n' +
         '<p id="checkout-plan-help" class="embedded-field-hint">自动跟随套餐，可手动修改。</p>'
     );
+    const checkoutRouteHint = '<p id="checkout_region_hint" style="font-size: 12px; color: var(--text-dim); margin-top: 10px;"></p>';
+    source = replaceOne(source, checkoutRouteHint, checkoutRouteHint + '\n' + checkoutServerDiagnostic);
     source = source.replace(
       /\s*<div class="nav-item" onclick="logoutAdmin\(\)">[\s\S]*?<\/div>/,
       ''

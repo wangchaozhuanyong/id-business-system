@@ -6,6 +6,9 @@ let rechargeRoutingChecking = false;
 let rechargeProxyCountryEdit;
 let rechargeProxyTypeEdit;
 const routingPlanLabels = { plus: 'Plus', pro100: 'Pro 100', pro200: 'Pro 200', pro500: 'Pro 500' };
+let checkoutServerCheck;
+let checkoutServerObservation;
+let checkoutServerNotice = '';
 
 async function rechargeRoutingRequest(path = '', options = {}) {
     const response = await authFetch('/api/admin/recharge-routing' + path, options);
@@ -66,6 +69,105 @@ async function checkRechargeLocal(button) {
     catch (error) { showMessage(error.message, 'error'); await loadRechargeRouting().catch(() => {}); }
     finally { button.disabled = false; }
 }
+function renderCheckoutServerDiagnostic() {
+    const panel = document.getElementById('checkout-server-diagnostic');
+    if (!panel) return;
+    const view = rechargeRoutingView;
+    const plan = document.getElementById('checkout_plan_type').value;
+    const country = view?.plans?.[plan];
+    const region = view?.regions?.[country];
+    const required = region ? region.label + '（' + country + '）' : '';
+    const count = Array.isArray(view?.proxyLabels) ? view.proxyLabels.length : null;
+    const saved = view?.checks?.find(item => item.proxyId === 0);
+    const exit = checkoutServerObservation || (saved?.status === 'verified' ? saved : null);
+    const checkedAt = exit?.checkedAt || saved?.checkedAt;
+    const time = checkedAt ? new Date(checkedAt) : null;
+    const fields = {
+        required: required ? required + '／' + region.currency : '—',
+        pool: count === null ? '—' : count + ' 条',
+        exit: exit ? proxyCountryLabel(exit.countryCode) + ' · ' + exit.ip : '—',
+        checked: time && Number.isFinite(time.getTime())
+            ? new Intl.DateTimeFormat('zh-CN', { dateStyle: 'short', timeStyle: 'medium', timeZone: 'Asia/Shanghai' }).format(time) : '—'
+    };
+    for (const [key, value] of Object.entries(fields))
+        document.getElementById('checkout-server-' + key).textContent = value;
+
+    const result = document.getElementById('checkout-server-result');
+    const button = document.getElementById('checkout-server-check');
+    button.disabled = Boolean(checkoutServerCheck);
+    button.textContent = checkoutServerCheck ? '检测中…' : '检测服务器直连';
+    panel.setAttribute('aria-busy', String(Boolean(checkoutServerCheck)));
+    let message = '尚未检测服务器出口。';
+    let tone = 'neutral';
+    if (checkoutServerCheck) message = '正在检测服务器出口并读取选路配置…';
+    else if (checkoutServerNotice) {
+        message = checkoutServerNotice;
+        tone = 'error';
+    } else if (checkoutServerObservation) {
+        if (!region || count === null) {
+            message = '无法确认套餐或代理池配置，请重新检测。';
+            tone = 'error';
+        } else {
+            const reasons = [];
+            if (count > 0) reasons.push('代理池非空，当前规则不允许直连');
+            if (exit.countryCode !== country) reasons.push('出口国家不符，套餐要求' + required);
+            message = reasons.length ? reasons.join('。') + '。' : '本次检测符合直连条件。启动浏览器调试时会再次核对。';
+            tone = reasons.length ? 'warning' : 'success';
+        }
+    } else if (exit) message = '上方为最近一次记录，点击检测可重新核对。';
+    else if (saved?.status === 'failed') {
+        message = '最近一次服务器直连检测失败，可以重新检测。';
+        tone = 'error';
+    }
+    result.dataset.tone = tone;
+    result.textContent = message;
+}
+
+function resetCheckoutServerDiagnostic() {
+    checkoutServerCheck?.abort();
+    checkoutServerCheck = undefined;
+    checkoutServerObservation = undefined;
+    checkoutServerNotice = '';
+    renderCheckoutServerDiagnostic();
+}
+
+async function checkCheckoutServer() {
+    if (checkoutServerCheck || window.idRechargeVisible === false ||
+        !document.getElementById('checkout_debug').classList.contains('active')) return;
+    const controller = new AbortController();
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(20000)]);
+    checkoutServerCheck = controller;
+    checkoutServerNotice = '';
+    renderCheckoutServerDiagnostic();
+    let measured = false;
+    try {
+        const result = await rechargeRoutingRequest('/check-local', { method: 'POST', signal });
+        if (controller.signal.aborted) return;
+        if (result.ok !== true || !/^[A-Z]{2}$/.test(result.countryCode) || typeof result.ip !== 'string' || !result.ip ||
+            typeof result.checkedAt !== 'string' || !Number.isFinite(Date.parse(result.checkedAt)))
+            throw new Error('出口检测结果不完整');
+        checkoutServerObservation = result;
+        measured = true;
+        const view = await rechargeRoutingRequest('', { signal });
+        if (controller.signal.aborted) return;
+        if (!rechargeRoutingView || view.version >= rechargeRoutingView.version) {
+            rechargeRoutingView = view;
+            renderRechargeRouting();
+        }
+    } catch {
+        if (controller.signal.aborted) return;
+        const hasPrevious = checkoutServerObservation || rechargeRoutingView?.checks?.some(item => item.proxyId === 0 && item.status === 'verified');
+        checkoutServerNotice = measured
+            ? '已测得出口，但套餐和代理池未能重新读取，暂时无法判断直连条件。'
+            : '服务器直连检测失败，请重试。' + (hasPrevious ? '上方保留上次成功结果。' : '');
+    } finally {
+        if (checkoutServerCheck === controller) {
+            checkoutServerCheck = undefined;
+            renderCheckoutServerDiagnostic();
+        }
+    }
+}
+
 function syncRechargeCheckoutRoute() {
     const plan = document.getElementById('checkout_plan_type')?.value || 'plus';
     const select = document.getElementById('checkout_region_selector');
@@ -80,6 +182,7 @@ function syncRechargeCheckoutRoute() {
     const country = rechargeRoutingView?.plans[plan];
     const hint = document.getElementById('checkout_region_hint');
     if (hint) hint.textContent = country ? '按套餐自动选路：' + rechargeRoutingView.regions[country].label + ' / ' + rechargeRoutingView.regions[country].currency : '套餐线路配置尚未载入';
+    renderCheckoutServerDiagnostic();
 }
 function proxyCountryLabel(code) {
     const name = rechargeRoutingView?.proxyCountries?.find(country => country.code === code)?.name;
@@ -329,6 +432,13 @@ renderProxyPoolTable = function () { originalRoutingRenderProxies(); renderRecha
 const originalRoutingSyncPlan = syncCheckoutPlanName;
 syncCheckoutPlanName = function () { originalRoutingSyncPlan(); syncRechargeCheckoutRoute(); };
 onCheckoutRegionChange = syncRechargeCheckoutRoute;
+const originalRoutingSwitchPage = switchPage;
+switchPage = function (page, item) {
+    if (page !== 'checkout_debug' && (checkoutServerCheck || checkoutServerObservation || checkoutServerNotice))
+        resetCheckoutServerDiagnostic();
+    return originalRoutingSwitchPage(page, item);
+};
+window.idRechargeClearTransient = resetCheckoutServerDiagnostic;
 loadCheckoutDebugPage = async function () {
     await loadRechargeRouting(); await loadCheckoutPlans(); syncRechargeCheckoutRoute(); lucide.createIcons();
 };
