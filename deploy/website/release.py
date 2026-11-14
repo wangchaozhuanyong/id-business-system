@@ -161,7 +161,7 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False):
             base, sha, "workspace-progress-20261113.json", WORKSPACE_PROGRESS_PRESENTATION_FILES)
     elif changed == {TABLE_ACTIONS_STYLESHEET}:
         return "tableActionsPresentation", require_presentation_approval(
-            base, sha, "table-actions-20261112.json", (TABLE_ACTIONS_STYLESHEET,))
+            base, sha, "card-pool-touch-20261114.json", (TABLE_ACTIONS_STYLESHEET,))
     elif changed == {*TASK_HISTORY_PRESENTATION_FILES, TASK_HISTORY_MANIFEST_PATH}:
         return "taskHistoryPresentation", require_presentation_approval(
             base, sha, TASK_HISTORY_MANIFEST, TASK_HISTORY_PRESENTATION_FILES)

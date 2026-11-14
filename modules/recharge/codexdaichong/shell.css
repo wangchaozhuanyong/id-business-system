@@ -1153,6 +1153,14 @@ body[data-recharge-view='admin']:not([data-standalone]) .main-content {
   white-space: nowrap;
 }
 
+@media (max-width: 768px) {
+  /* Scroll the card actions with their row so they cannot cover the plan controls. */
+  [data-recharge-view='admin'] .card-pool-table :is(th:last-child, td:last-child) {
+    position: static;
+    box-shadow: none;
+  }
+}
+
 [data-recharge-view='admin'] .task-records-table th:nth-child(4) {
   width: auto;
   min-width: 270px;

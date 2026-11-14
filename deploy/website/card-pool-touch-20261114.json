@@ -1,0 +1,10 @@
+{
+  "beforeAssetsSha256": "ec854600b1e35cadfcb457383fb3a9454010c45364c21a70d1396673544aca3d",
+  "assetsSha256": "3d9877bc51b23b368a44f423101d26e83168c05effbf7bb0262666a2ccf0832f",
+  "files": {
+    "modules/recharge/codexdaichong/shell.css": {
+      "before": "6c62e5c86e4285212e3f44a7a18fbc8df284f2a5ecf17cf532d6ced2c38a1733",
+      "after": "440ec2a15fbe3d2f85ec6cfbc0aa103b1e450aee8e22d73dbcc4218c95b051b1"
+    }
+  }
+}
