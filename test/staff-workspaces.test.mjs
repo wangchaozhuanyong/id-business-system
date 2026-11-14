@@ -186,7 +186,8 @@ test('finance can read cards and statements, and uses explicit verification for 
   const billing = await f.call('finance', 'finance/reconciliation?page=1&from=2026-11-13&to=2026-11-13');
   assert.equal(billing.status, 200);
   assert.deepEqual(billing.data.items[0], { reference: 'bill-1', time: '2026-11-13T12:00:00Z',
-    amount: '20', currency: 'USD', plan: 'plus', status: 'success', last4: '0123' });
+    amount: '20', currency: 'USD', plan: 'plus', status: 'success', last4: '0123', cardNumber: '',
+    cardType: '', cardTypeState: 'missing-number', email: '', paymentReference: '', errorCode: '' });
   assert.equal(billing.data.hasMore, true);
   const statementQuery = new URL(f.upstream.at(-1).path, origin).searchParams;
   assert.equal(statementQuery.get('start_date'), '2026-11-12 16:00:00.000');
@@ -203,6 +204,20 @@ test('finance can read cards and statements, and uses explicit verification for 
   const events = store.audit().filter(row => row.action !== 'finance_card_requested').reverse();
   assert.deepEqual(events.map(row => row.action), ['finance_card_plans', 'finance_card_import', 'finance_card_stop']);
   assert(!JSON.stringify(events).includes('0000000000000123'));
+});
+
+test('billing revision tracks card classification and archives only for the existing finance readers', t => {
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  const scope = 'recharge-billing';
+  assert.equal(store.changeVersions(actors.finance)[scope], '0:0');
+  store.saveFeatureDocument('card-types', 0, { items: [], assignments: {} }, { actor: actors.super });
+  assert.equal(store.changeVersions(actors.finance)[scope], '1:0');
+  store.saveFeatureDocument('order-card-archive', 0, { cards: {} }, { actor: actors.super });
+  assert.equal(store.changeVersions(actors.finance)[scope], '1:1');
+  assert.equal(store.changeVersions(actors.super)[scope], '1:1');
+  assert.equal(store.changeVersions(actors.admin)[scope], undefined);
+  assert.equal(store.changeVersions(actors.employee)[scope], undefined);
 });
 
 test('uncertain card write survives a new request, can be checked without another write and is audited once', async t => {

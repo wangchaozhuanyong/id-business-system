@@ -56,7 +56,7 @@ import { managesBusiness, nativeBrowserVerification, nativeManagerAccess, retail
 import { createStaffWorkspaces, staffPath } from './staff-workspaces.mjs';
 import { createRenewalHandoff, renewalHandoffPath } from './renewal-handoff.mjs';
 import { readBackupMonitorReceipt, readRestoreEvidence } from './monitoring-worker-receipts.mjs';
-import { financeReconciliation, websitePages } from '../modules/website/pages.mjs';
+import { websitePages } from '../modules/website/pages.mjs';
 
 function requireSecurityConfirmation(response) {
   response.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -495,10 +495,10 @@ export async function startPreview(
       .toString('utf8')
       .replace(
         '    <script src="./prototype.js',
-        '    <link rel="stylesheet" href="/local-auth.css?v=site-foundation" />\n' +
+        '    <link rel="stylesheet" href="/local-auth.css?v=20261114-login-refresh" />\n' +
           '    <script src="/local-data.js" defer></script>\n' +
           '    <script src="/toolbox-local.js" defer></script>\n' +
-          '    <script src="/local-auth.js?v=site-foundation" defer></script>\n    <script src="./prototype.js'
+          '    <script src="/local-auth.js?v=20261114-login-refresh" defer></script>\n    <script src="./prototype.js'
       )
       .replace('20261105-bit-login" />', '20261106-local-inventory-settings" />')
       .replace(
@@ -532,7 +532,7 @@ export async function startPreview(
         turnstileLoginPage(localIndex, loginSecurity.siteKey)
           .replace('<head>', '<head>\n    <meta name="id-local-auth" content="required" />' +
             (publicUrl ? '\n    <meta name="id-site-observations" content="enabled" />' : ''))
-          .replace(/^ *<script src="\.\/[^"\n]+" defer><\/script>\n/gm, '')
+          .replace(/^ *<script (?:type="module" )?src="\.\/[^"\n]+"(?: defer)?><\/script>\n/gm, '')
           .replace('<div class="app-shell">', '<div class="app-shell" hidden>')
           .replace('<a class="skip-link"', '<a hidden class="skip-link"')
       );
@@ -550,7 +550,6 @@ export async function startPreview(
   function dataChangeVersions(actor) {
     const versions = { ...store.changeVersions(actor), operators: auth?.changeVersion() || '0',
       ...(rechargeActivity && { [rechargeActivityDomain]: rechargeActivity.version(actor) }) };
-    if (financeReconciliation.roles.includes(actor.role)) versions[financeReconciliation.scope] = '0';
     for (const [scope, revision] of Object.entries(rechargeEvents?.versions() || {}))
       if (Object.hasOwn(versions, scope)) versions[scope] += ':' + revision;
     if (systemMonitoring && Object.hasOwn(versions, 'system-monitoring'))

@@ -12,11 +12,11 @@ await mkdir(output, { recursive: true });
 const frontend = (await readdir(join(root, 'frontend'))).filter(name => name.endsWith('.spec.mjs')).map(name => 'frontend/' + name);
 const units = ['local-data-read-cache', 'change-sync-client', 'change-sync-feed', 'contact-write', 'write-operation',
   'module-boundaries', 'document-delta', 'business-lists', 'renewal-sidebar',
-  'system-monitoring', 'site-management', 'login-security', 'staff-workspaces', 'renewal-handoff',
+  'system-monitoring', 'site-management', 'login-security', 'staff-workspaces', 'finance-reconciliation', 'renewal-handoff',
   'account-lifecycle', 'account-lifecycle-performance', 'personal-subscriptions', 'inventory-usage', 'operation-recovery',
   'mailbox-updates', 'mailbox-query-content', 'relay-mail-updates', 'recharge-events', 'recharge-activity'];
 const browsers = ['search-input', 'ui-idle-contract', 'change-sync', 'performance-read-index', 'system-monitoring', 'site-management',
-  'staff-workspaces', 'renewal-handoff', 'shared-layout', 'page-lifecycle', 'order-completion', 'order-submit-stay', 'contact-recovery', 'operation-recovery',
+  'staff-workspaces', 'finance-reconciliation', 'renewal-handoff', 'shared-layout', 'page-lifecycle', 'order-completion', 'order-submit-stay', 'contact-recovery', 'operation-recovery',
   'mobile-navigation-layout', 'design-list-boundaries', 'global-pagination', 'business-lists', 'site-visual-v2-border',
   'recharge-layout-transitions', 'recharge-cell-overflow', 'recharge-server-diagnostic', 'mailbox-updates'];
 const groups = [

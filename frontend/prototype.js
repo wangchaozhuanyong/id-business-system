@@ -348,6 +348,7 @@ function registerPage(page, loadPage) {
     id: page.id,
     matches: route => route === page.route,
     sharedBusinessData: page.sharedBusinessData,
+    retainPage: () => instance?.retainPage?.() === true,
     render: () => instance?.render() ?? header(page.label, page.description) + '<section class="panel panel-body">' +
       (failed ? empty('暂时无法打开此页面', '请重试。') + button('重试', 'registered-page-retry')
         : '<p role="status">正在加载页面…</p>') + '</section>',

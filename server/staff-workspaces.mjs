@@ -221,7 +221,7 @@ function reconcileCards(pending, raw, current, store) {
 }
 
 export function createStaffWorkspaces({ store, client, publicOrigin, getAuth, readMailbox, readRelayCodes, cardChanged }) {
-  const readReconciliation = createFinanceReconciliation(client);
+  const readReconciliation = createFinanceReconciliation(client, store);
   const inProgress = new Set();
   const lastMailRead = new Map();
   async function manageCards(request, route, actor, body) {

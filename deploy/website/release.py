@@ -161,7 +161,7 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False):
             base, sha, "card-import-20261113.json", CARD_IMPORT_PRESENTATION_FILES)
     elif changed == set(CARD_PLAN_PRESENTATION_FILES):
         return "cardPlanPresentation", require_presentation_approval(
-            base, sha, "card-plan-ui-20261113.json", CARD_PLAN_PRESENTATION_FILES)
+            base, sha, "card-plan-ui-20261114.json", CARD_PLAN_PRESENTATION_FILES)
     elif changed == set(CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES):
         return "checkoutDiagnosticPresentation", require_presentation_approval(
             base, sha, "checkout-diagnostic-20261114.json", CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES)

@@ -17,6 +17,9 @@ async function editorLayout(dialog) {
       background: getComputedStyle(node).backgroundColor,
       expectedBackground: getComputedStyle(document.querySelector('#cards .panel')).backgroundColor,
       overflow: node.scrollWidth > node.clientWidth + 1,
+      target: rect(node.querySelector('.card-plan-target')),
+      header: rect(node.querySelector('header')),
+      close: rect(node.querySelector('#card_plan_close')),
       choices: [...node.querySelectorAll('label')].map(rect),
       footer: rect(footer), buttons: [...footer.querySelectorAll('button')].map(rect)
     };
@@ -31,6 +34,10 @@ async function editorLayout(dialog) {
   assert(Math.abs((layout.rect.top + layout.rect.bottom) / 2 - layout.top - layout.height / 2) < 2,
     '长嵌入页滚动后仍在可见区域居中');
   assert(layout.choices.every(rect => rect.height >= 44), '套餐整块选项至少 44px');
+  assert(layout.close.top - layout.header.top >= 8 && layout.header.bottom - layout.close.bottom >= 8,
+    '关闭按钮与标题分隔线保持距离');
+  assert(layout.target.left > layout.rect.left && layout.target.right < layout.rect.right, '银行卡摘要没有裁切');
+  assert(layout.rect.height < 520, '少量设置按内容高度显示，不拉成长页面');
   assert(layout.buttons.every(rect => rect.top - layout.footer.top >= 8 &&
     layout.footer.bottom - rect.bottom >= 8 && rect.bottom <= layout.rect.bottom - 8),
   '底部按钮不裁切，且与分隔线保持间距');
@@ -57,7 +64,7 @@ test('银行卡套餐可单张或批量保存，冲突保留草稿，严格模�
         { id: 3, last4: '3333', allowed_plans: null }
       ];
       const writes = [];
-      let reads = 0;
+      let reads = 0, pending, received;
       await context.route(prefix, route => {
         reads++;
         return route.fulfill({ json: { success: true, cards, planPolicy: policy } });
@@ -66,6 +73,7 @@ test('银行卡套餐可单张或批量保存，冲突保留草稿，严格模�
         assert.equal(route.request().method(), 'PUT');
         const command = route.request().postDataJSON();
         writes.push(command);
+        if (pending) { received.resolve(); await pending.promise; }
         if (command.version !== policy.version)
           return route.fulfill({ status: 409, json: { success: false, message: '套餐设置已更新' } });
         if (command.cardIds) for (const id of command.cardIds)
@@ -86,9 +94,27 @@ test('银行卡套餐可单张或批量保存，冲突保留草稿，严格模�
       await frame.getByRole('button', { name: '设置所选 2 张卡' }).click();
       const dialog = frame.getByRole('dialog', { name: '设置允许套餐' });
       await editorLayout(dialog);
-      await dialog.getByRole('checkbox', { name: 'Pro 500' }).check();
-      policy = { ...policy, version: 1 };
+      assert.equal(await dialog.locator('#card_plan_target').textContent(), '已选 2 张银行卡');
+      assert.match(await dialog.locator('#card_plan_target_detail').textContent(), /1111.*2222/);
+      assert.equal(await dialog.locator('#card_plan_selection').textContent(), '已选 0 / 4');
       await dialog.getByRole('button', { name: '保存', exact: true }).click();
+      assert.equal(writes.length, 0, '空选择不发送保存请求');
+      assert.equal(await dialog.locator('#card_plan_result').getAttribute('data-state'), 'error');
+      await dialog.getByRole('checkbox', { name: 'Pro 500' }).check();
+      assert.equal(await dialog.locator('#card_plan_selection').textContent(), '已选 1 / 4');
+      policy = { ...policy, version: 1 };
+      pending = Promise.withResolvers(); received = Promise.withResolvers();
+      await dialog.getByRole('button', { name: '保存', exact: true }).click();
+      await received.promise;
+      assert(await dialog.getByRole('button', { name: '保存中…', exact: true }).isDisabled());
+      assert(await dialog.getByRole('button', { name: '取消', exact: true }).isDisabled());
+      assert(await dialog.getByRole('button', { name: '关闭套餐设置', exact: true }).isDisabled());
+      assert(await dialog.getByRole('checkbox', { name: 'Pro 500' }).isDisabled());
+      await dialog.locator('form').dispatchEvent('submit');
+      await page.keyboard.press('Escape');
+      assert(await dialog.isVisible(), '保存中不会被 Escape 关闭');
+      assert.equal(writes.length, 1, '保存中防止重复提交');
+      pending.resolve(); pending = undefined;
       await dialog.getByText(/套餐设置已更新/).waitFor();
       assert.equal(await dialog.getByRole('checkbox', { name: 'Pro 500' }).isChecked(), true);
       await dialog.getByRole('button', { name: '取消' }).click();
@@ -100,6 +126,8 @@ test('银行卡套餐可单张或批量保存，冲突保留草稿，严格模�
       await frame.locator('[data-card-plan-edit="3"]').getByText('未设置').waitFor();
       assert.deepEqual(writes[1], { version: 1, cardIds: [1, 2], allowedPlans: ['pro500'] });
       await frame.locator('[data-card-plan-edit="2"]').click();
+      assert.equal(await dialog.locator('#card_plan_target').textContent(), '•••• 2222');
+      assert(await dialog.locator('#card_plan_target_detail').isHidden());
       await dialog.getByRole('checkbox', { name: 'Pro 500' }).uncheck();
       await dialog.getByRole('checkbox', { name: 'Plus', exact: true }).check();
       await dialog.getByRole('button', { name: '保存', exact: true }).click();
@@ -136,7 +164,8 @@ test('套餐弹层和导入共用控件覆盖深浅主题、嵌入与独立页�
   if (output) await mkdir(output, { recursive: true });
   const evidence = [];
   for (const embedded of [true, false]) for (const theme of ['light', 'dark'])
-    for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 },
+    for (const viewport of [{ width: 1440, height: 900 }, { width: 1024, height: 900 },
+      { width: 901, height: 900 }, { width: 900, height: 900 }, { width: 768, height: 900 }, { width: 390, height: 844 },
       { width: 320, height: 640 }, { width: 844, height: 390 }]) {
       const name = `${embedded ? 'embedded' : 'standalone'}-${theme}-${viewport.width}`;
       await t.test(name, async t => {
@@ -169,9 +198,29 @@ test('套餐弹层和导入共用控件覆盖深浅主题、嵌入与独立页�
         await trigger.click();
         await settle(page);
         const first = await editorLayout(dialog);
+        assert.equal(await dialog.locator('#card_plan_target').textContent(), '•••• 1111');
+        const help = dialog.getByLabel('查看设置允许套餐说明');
+        assert.equal(await dialog.locator('.title-help').getAttribute('open'), null);
+        const beforeHelp = await dialog.locator('#card_plan_options').boundingBox();
+        await help.click();
+        await dialog.locator('.title-description:popover-open').waitFor();
+        assert.deepEqual(await dialog.locator('#card_plan_options').boundingBox(), beforeHelp, '标题说明不推动套餐选项');
+        await page.keyboard.press('Escape');
+        assert(await dialog.isVisible(), '有说明时 Escape 先关闭说明');
+        assert.equal(await dialog.locator('.title-help').getAttribute('open'), null);
+        if (viewport.width <= 900) {
+          const helpBox = await help.boundingBox(), closeBox = await dialog.locator('#card_plan_close').boundingBox();
+          assert(helpBox.width >= 44 && helpBox.height >= 44 && closeBox.width >= 44 && closeBox.height >= 44);
+        }
         const plus = dialog.getByRole('checkbox', { name: 'Plus', exact: true });
         await dialog.locator('label').filter({ hasText: /^Plus$/ }).click();
         assert.equal(await plus.isChecked(), true, '选项整块可点击');
+        if (viewport.height < 400) {
+          const last = dialog.getByRole('checkbox', { name: 'Pro 500', exact: true });
+          await last.check();
+          assert(await last.isChecked(), '横屏下滚动内容区后仍能操作最后一个套餐');
+          await last.uncheck();
+        }
         await plus.focus();
         await page.keyboard.press('Tab');
         assert.equal(await dialog.evaluate(node => node.contains(document.activeElement)), true, 'Tab 导航到弹层内下一个控件');
@@ -180,8 +229,14 @@ test('套餐弹层和导入共用控件覆盖深浅主题、嵌入与独立页�
         assert.equal(await trigger.evaluate(node => node === document.activeElement), true, '关闭后焦点回到入口');
         await trigger.click();
         if (embedded) assert.equal(await plus.isChecked(), true, '宿主草稿保留 Escape 关闭前的选择');
-        if (output) await page.screenshot({ path: join(output, name + '-editor.png') });
-        await dialog.getByRole('button', { name: '取消', exact: true }).click();
+        if (output) {
+          await dialog.evaluate(() => document.activeElement?.blur());
+          await page.screenshot({ path: join(output, name + '-editor.png') });
+          await dialog.screenshot({ path: join(output, name + '-dialog.png') });
+        }
+        await dialog.getByRole('button', { name: '关闭套餐设置', exact: true }).click();
+        await dialog.waitFor({ state: 'hidden' });
+        assert.equal(await trigger.evaluate(node => node === document.activeElement), true);
 
         await scope.getByRole('button', { name: '批量导入', exact: true }).click();
         const plans = scope.locator('#card_pool_import_plans');

@@ -217,7 +217,7 @@ test('银行卡池操作列修改旧卡类型并在原页回读', { timeout: 40_
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
   t.after(() => browser.close());
-  const actor = { id: 'card-edit-fixture', name: '离线验收管理员', role: 'admin' };
+  const actor = { id: 'card-edit-fixture', name: '离线验收超级管理员', role: 'super' };
   for (const width of [1440, 390]) await t.test(String(width), async () => {
     const context = await browser.newContext({ viewport: { width, height: 900 }, hasTouch: width === 390 });
     try {

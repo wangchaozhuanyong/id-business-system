@@ -725,6 +725,7 @@
   const bitLoginRoute = 'recharge/start';
   const bitLoginView = ['bit-login', '比特登录', '/integrations/bitbrowser/local-login'];
   const onlineRechargeRoute = 'online-recharge/chatgpt';
+  const rechargeCardsRoute = 'staff/finance/cards';
   const onlineRechargeMount = '/integrations/codexdaichong/';
   let activeOnlineView = 'query';
   let onlineAdmin;
@@ -732,7 +733,8 @@
   const currentIntegrationRequest = new WeakMap();
   const integrationRoot = () => api.activePageRegion?.() || document;
   function visibleRechargeCardFrame() {
-    if (state.route !== onlineRechargeRoute || activeOnlineView !== 'cards') return null;
+    if (state.route !== rechargeCardsRoute &&
+        (state.route !== onlineRechargeRoute || activeOnlineView !== 'cards')) return null;
     return $('iframe[data-view="cards"][data-view-group="admin"]:not([hidden])', integrationRoot());
   }
   function openRechargeTaskLog(jobKey, returnFocus) {
@@ -1010,8 +1012,14 @@
     const root = frame.contentDocument?.documentElement;
     if (!root) return;
     const bounds = frame.getBoundingClientRect();
-    const top = Math.max(0, -bounds.top);
-    const height = Math.min(window.innerHeight, bounds.bottom) - Math.max(0, bounds.top);
+    const topbar = $('.topbar');
+    const header = topbar?.getBoundingClientRect();
+    const pinned = topbar && ['fixed', 'sticky'].includes(getComputedStyle(topbar).position);
+    // The pinned host navigation covers part of a scrolled iframe, including its top layer.
+    const viewportTop = pinned && header.top <= 0 ? Math.max(0, header.bottom) : 0;
+    const visibleTop = Math.max(viewportTop, bounds.top);
+    const top = Math.max(0, visibleTop - bounds.top);
+    const height = Math.min(window.innerHeight, bounds.bottom) - visibleTop;
     if (height <= 0) return;
     root.style.setProperty('--embed-visible-top', `${top}px`);
     root.style.setProperty('--embed-visible-height', `${height}px`);
@@ -1032,12 +1040,13 @@
     const bit = state.route === bitLoginRoute;
     const workspace = state.route === workspaceRechargeRoute;
     const loginLogs = state.route === loginLogsRoute;
-    const module = bit ? 'bit' : workspace ? 'workspace' : loginLogs ? 'login-logs' : 'online';
+    const cards = state.route === rechargeCardsRoute;
+    const module = bit ? 'bit' : workspace ? 'workspace' : loginLogs ? 'login-logs' : cards ? 'cards' : 'online';
     const panel = $(`[data-recharge-module="${module}"]`, integrationRoot());
     const view = panel?.querySelector('.recharge-integration__view');
     if (!view) return;
     const selected = bit ? bitLoginView : workspace ? workspaceRechargeView :
-      loginLogs ? rechargeLoginLogsView : onlineRechargeViews.find(([id]) => id === activeOnlineView);
+      loginLogs ? rechargeLoginLogsView : onlineRechargeViews.find(([id]) => id === (cards ? 'cards' : activeOnlineView));
     const group = bit ? 'bit' : workspace ? 'workspace' : selected[2] ? 'public' : 'admin';
     const existingFrame = view.querySelector('iframe:not([hidden])');
     const key = `${module}:${group}:${selected[0]}`;
@@ -1081,7 +1090,7 @@
     const needsAccessCheck = !bit && (refresh || onlineAdmin === undefined);
     request.read = api.beginRegionRead(view, progress, {
       loadingText: needsAccessCheck && !refresh && !existingFrame ? '正在检查充值服务' : '',
-      refreshButton: panel.querySelector('.recharge-integration__toolbar > [data-action="ops-integrated-refresh"]')
+      refreshButton: panel.querySelector('.recharge-integration__toolbar :is([data-action="ops-integrated-refresh"], [data-action="staff-card-pool-refresh"])')
     });
 
     if (needsAccessCheck) {
@@ -4071,6 +4080,10 @@
     }
     if (action === 'ops-integrated-view' && state.route === onlineRechargeRoute) {
       const view = node.dataset.view;
+      if (view === 'cards' && state.actor?.role === 'super') {
+        if (!blockRechargeNavigation()) api.go(rechargeCardsRoute);
+        return true;
+      }
       if (canOpenRechargeView(view) && onlineRechargeViews.some(([id]) => id === view) && view !== activeOnlineView) {
         if (blockRechargeNavigation()) return true;
         selectOnlineView(node.closest('nav'), view);
@@ -4089,7 +4102,7 @@
     } else if (action === 'ops-integrated-login') {
       window.location.reload();
     } else if (action === 'ops-integrated-refresh') {
-      if ([onlineRechargeRoute, workspaceRechargeRoute, loginLogsRoute, bitLoginRoute].includes(state.route)) {
+      if ([onlineRechargeRoute, rechargeCardsRoute, workspaceRechargeRoute, loginLogsRoute, bitLoginRoute].includes(state.route)) {
         if (blockRechargeNavigation()) return true;
         void loadIntegratedRecharge({ refresh: true });
       }
@@ -4539,6 +4552,14 @@
     }
   });
   api.modules.operations = {
+    cardPool: {
+      render: () => renderRechargeRegion('cards', `<div class="recharge-integration__toolbar content-toolbar">
+        <div class="toolbar-right">${button('刷新', 'staff-card-pool-refresh')}</div>
+      </div>`),
+      afterRender: () => void loadIntegratedRecharge(),
+      refresh: () => void loadIntegratedRecharge({ refresh: true }),
+      deactivate: deactivateIntegration
+    },
     openRecoveryRecord(id, module) {
       if (!localData?.authRequired || !isAdmin() || !/^\d+$/.test(id)) return;
       auditFilter = 'recovery';

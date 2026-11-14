@@ -126,8 +126,43 @@
         <span class="local-auth-badge"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4.5 6v6c0 4.5 7.5 9 7.5 9s7.5-4.5 7.5-9V6z"/><path d="m8.5 12 2.3 2.3 4.7-4.7"/></svg>内部专网</span>
       </header>
       <aside class="local-auth-story" aria-label="品牌视觉">
+        <p class="local-auth-story-eyebrow">AI SUBSCRIPTION / WORKSPACE</p>
         <p class="local-auth-story-copy"><span>让工作，</span><span>回到从容。</span></p>
-        <p class="local-auth-story-caption">账号 / 订阅 / 订单</p>
+        <svg class="local-auth-art" viewBox="0 0 520 340" fill="none" aria-hidden="true">
+          <defs>
+            <linearGradient id="auth-orbit-jade" x1="98" y1="70" x2="410" y2="280" gradientUnits="userSpaceOnUse">
+              <stop stop-color="#9eafa0"/><stop offset=".23" stop-color="#567865"/><stop offset=".52" stop-color="#264b3c"/><stop offset=".78" stop-color="#739381"/><stop offset="1" stop-color="#b7c8b4"/>
+            </linearGradient>
+            <linearGradient id="auth-orbit-sage" x1="165" y1="50" x2="360" y2="300" gradientUnits="userSpaceOnUse">
+              <stop stop-color="#e0e2c7"/><stop offset=".28" stop-color="#9ea98a"/><stop offset=".6" stop-color="#5c7258"/><stop offset="1" stop-color="#bec5a9"/>
+            </linearGradient>
+            <radialGradient id="auth-orbit-shadow">
+              <stop stop-color="#203e2f" stop-opacity=".16"/><stop offset="1" stop-color="#203e2f" stop-opacity="0"/>
+            </radialGradient>
+          </defs>
+          <g class="local-auth-art-guide" stroke="currentColor" stroke-width=".7">
+            <circle cx="260" cy="162" r="145"/><circle cx="260" cy="162" r="170" stroke-dasharray="2 8"/>
+            <path d="M260 4v24m0 268v24M78 162h24m316 0h24M91 33v14H77m352-14v14h14M91 291v-14H77m352 14v-14h14"/>
+          </g>
+          <ellipse cx="262" cy="293" rx="178" ry="31" fill="url(#auth-orbit-shadow)"/>
+          <g transform="rotate(-28 260 158)">
+            <ellipse cx="260" cy="158" rx="163" ry="86" stroke="#203f31" stroke-width="31"/>
+            <ellipse cx="260" cy="154" rx="163" ry="86" stroke="url(#auth-orbit-jade)" stroke-width="28"/>
+            <ellipse cx="260" cy="154" rx="150" ry="73" stroke="#e5ebdb" stroke-opacity=".46" stroke-width="1"/>
+          </g>
+          <g transform="rotate(48 260 158)">
+            <ellipse cx="260" cy="158" rx="134" ry="78" stroke="#53674c" stroke-width="24"/>
+            <ellipse cx="260" cy="154" rx="134" ry="78" stroke="url(#auth-orbit-sage)" stroke-width="21"/>
+            <ellipse cx="260" cy="152" rx="134" ry="69" stroke="#f4f3de" stroke-opacity=".6" stroke-width="1"/>
+          </g>
+          <g transform="rotate(-28 260 158)">
+            <path d="M97 158a163 86 0 0 0 326 0" stroke="#203f31" stroke-width="31"/>
+            <path d="M97 154a163 86 0 0 0 326 0" stroke="url(#auth-orbit-jade)" stroke-width="28"/>
+            <path d="M110 154a150 73 0 0 0 300 0" stroke="#d7e4d2" stroke-opacity=".45" stroke-width="1"/>
+          </g>
+          <circle cx="413" cy="86" r="5" fill="#8e9a77"/><circle cx="109" cy="242" r="3" fill="#8e9a77"/>
+        </svg>
+        <div class="local-auth-story-bottom"><p class="local-auth-story-caption">账号 / 订阅 / 订单</p><span aria-hidden="true">有序连接 · 从容掌握</span></div>
       </aside>
       <div class="local-auth-panel"><section class="local-auth-card">
         <p class="local-auth-kicker">${setup ? 'WELCOME' : 'WELCOME BACK'}</p>
@@ -169,11 +204,31 @@
           <p class="local-auth-error" role="alert" hidden></p>
           <button type="submit" class="button primary">${submitLabel}</button>
         </form>
+        <button type="button" class="local-auth-tool-entry" id="local-auth-totp-open" aria-haspopup="dialog" aria-controls="local-auth-totp-dialog">
+          <span class="local-auth-tool-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="3" width="14" height="18" rx="3"/><path d="M9 8h6M9 12h2m2 0h2m-6 4h2m2 0h2"/></svg></span>
+          <span class="local-auth-tool-label">2FA 验证码查询<span>无需登录，即时获取动态验证码</span></span>
+          <svg class="icon local-auth-tool-arrow" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14m-6-6 6 6-6 6"/></svg>
+        </button>
         <p class="local-auth-footnote"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="10" width="12" height="10" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>仅限授权人员访问</p>
       </section></div>
-      <footer class="local-auth-footer"><span>账号 · 订阅 · 订单</span><span>内部工作台</span></footer>`;
+      <footer class="local-auth-footer"><span>账号 · 订阅 · 订单</span><span>内部工作台</span></footer>
+      <dialog class="local-auth-totp-dialog" id="local-auth-totp-dialog" aria-labelledby="local-auth-totp-title">
+        <header class="local-auth-totp-heading"><h2 id="local-auth-totp-title">2FA 验证码查询</h2><button type="button" class="local-auth-totp-close" aria-label="关闭验证码查询"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6"/></svg></button></header>
+        <p class="local-auth-totp-intro">输入 Base32 密钥或 otpauth:// 验证器链接，验证码会按有效期自动更新。密钥仅在当前浏览器计算，不上传、不保存，关闭窗口即清空。已保存的个人验证器请登录后使用。</p>
+        <form class="local-auth-totp-form" autocomplete="off" novalidate>
+          <div class="local-auth-field"><label for="local-auth-totp-secret">2FA 密钥</label><textarea id="local-auth-totp-secret" rows="3" maxlength="2048" placeholder="粘贴密钥或 otpauth:// 链接" autocomplete="off" autocapitalize="off" spellcheck="false" data-no-draft aria-describedby="local-auth-totp-error"></textarea><p class="local-auth-error" id="local-auth-totp-error" role="alert" hidden></p></div>
+          <button type="submit" class="button primary">获取验证码</button>
+        </form>
+        <div class="local-auth-totp-result" hidden>
+          <div class="local-auth-totp-result-heading"><span>当前验证码</span><span>剩余 <span data-totp-countdown>—</span> 秒</span></div>
+          <div class="local-auth-totp-code-row"><output class="local-auth-totp-code" aria-label="当前验证码">—</output><button type="button" class="button" data-totp-copy disabled>复制验证码</button></div>
+        </div>
+        <p class="local-auth-totp-status" role="status"></p>
+        <p class="local-auth-totp-privacy"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4.5 6v6c0 4.5 7.5 9 7.5 9s7.5-4.5 7.5-9V6z"/><path d="m8.5 12 2.3 2.3 4.7-4.7"/></svg>仅在此浏览器计算</p>
+      </dialog>`;
     document.body.append(gate);
     window.IDTitleHelp?.attach($('#local-auth-title', gate), $('.local-auth-intro', gate));
+    bindLoginTotp(gate);
     const help = document.createElement('span');
     help.textContent = '保持登录后，实际操作时自动续期；闲置30天或首次登录满90天需重新登录。未勾选时登录有效期为8小时。更新网站不会主动退出。';
     window.IDTitleHelp?.attach($('.local-auth-remember', gate), help, 'field-help');
@@ -329,6 +384,140 @@
       }
     });
     (setup ? password : email).focus();
+  }
+
+  function bindLoginTotp(gate) {
+    const dialog = $('#local-auth-totp-dialog', gate);
+    const opener = $('#local-auth-totp-open', gate);
+    const form = $('.local-auth-totp-form', dialog);
+    const input = $('#local-auth-totp-secret', form);
+    const submit = $('button[type="submit"]', form);
+    const notice = $('#local-auth-totp-error', form);
+    const result = $('.local-auth-totp-result', dialog);
+    const code = $('.local-auth-totp-code', result);
+    const countdown = $('[data-totp-countdown]', result);
+    const copy = $('[data-totp-copy]', result);
+    const status = $('.local-auth-totp-status', dialog);
+    let module, attempt = 0, revision = 0, timer, generate, current;
+    window.IDTitleHelp?.attach($('#local-auth-totp-title', dialog), $('.local-auth-totp-intro', dialog));
+
+    function clearResult() {
+      revision++;
+      window.clearTimeout(timer);
+      generate = current = undefined;
+      result.hidden = true;
+      code.textContent = countdown.textContent = '—';
+      copy.disabled = true;
+      notice.hidden = true;
+      input.removeAttribute('aria-invalid');
+      status.textContent = '';
+      submit.disabled = false;
+      submit.textContent = '获取验证码';
+      form.removeAttribute('aria-busy');
+    }
+    function clear() {
+      clearResult();
+      input.value = '';
+      for (const help of dialog.querySelectorAll('details[open]')) help.open = false;
+    }
+    function showError(message) {
+      notice.textContent = message;
+      notice.hidden = false;
+      input.setAttribute('aria-invalid', 'true');
+    }
+    const active = version => version === revision && dialog.open;
+    async function update(version) {
+      if (!active(version) || !generate) return;
+      try {
+        if (!current || current.expiresAt <= Date.now()) {
+          copy.disabled = true;
+          code.textContent = '—';
+          const next = await generate(Date.now());
+          if (!active(version)) return;
+          current = next;
+          code.textContent = next.code;
+        }
+        const remaining = Math.max(0, Math.ceil((current.expiresAt - Date.now()) / 1000));
+        countdown.textContent = String(remaining);
+        result.hidden = false;
+        copy.disabled = remaining === 0;
+        timer = window.setTimeout(() => void update(version), 250);
+      } catch {
+        if (!active(version)) return;
+        clearResult();
+        showError('无法更新验证码，请重新获取。');
+      }
+    }
+    opener.addEventListener('click', () => {
+      clear();
+      dialog.showModal();
+      input.focus();
+    });
+    $('.local-auth-totp-close', dialog).addEventListener('click', () => dialog.close());
+    dialog.addEventListener('click', event => {
+      if (event.target !== dialog) return;
+      const bounds = dialog.getBoundingClientRect();
+      if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) dialog.close();
+    });
+    dialog.addEventListener('close', clear);
+    window.addEventListener('pagehide', () => { clear(); if (dialog.open) dialog.close(); });
+    input.addEventListener('input', clearResult);
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (submit.disabled) return;
+      clearResult();
+      const version = revision;
+      let source = input.value.trim();
+      if (!source) { showError('请输入 2FA 密钥或验证器链接。'); input.focus(); return; }
+      submit.disabled = true;
+      submit.textContent = '正在计算…';
+      form.setAttribute('aria-busy', 'true');
+      try {
+        module ??= import(`/assets/tools/totp.mjs?v=20261108&login-attempt=${++attempt}`).catch(() => {
+          module = undefined;
+          throw new Error('验证码组件加载失败，请重新点击获取验证码。');
+        });
+        const { prepareTotpBatch } = await module;
+        if (!active(version)) return;
+        // This uses the existing calculator only; saved accounts remain behind login.
+        const { accounts, errors } = await prepareTotpBatch(source);
+        source = '';
+        if (!active(version)) return;
+        if (errors.length) throw new Error(errors[0].replace(/^第 \d+ 行：/, ''));
+        if (accounts.length !== 1) throw new Error('每次请输入一个密钥或验证器链接。');
+        generate = accounts[0].generate;
+        await update(version);
+      } catch (error) {
+        if (active(version)) showError(error.message || '无法计算验证码，请核对密钥后重试。');
+      } finally {
+        source = '';
+        if (active(version)) {
+          submit.disabled = false;
+          submit.textContent = '获取验证码';
+          form.removeAttribute('aria-busy');
+        }
+      }
+    });
+    copy.addEventListener('click', async () => {
+      if (copy.disabled || !generate) return;
+      const version = revision;
+      copy.disabled = true;
+      status.textContent = '';
+      try {
+        // Check expiry at the user's click, including after a suspended tab resumes.
+        const next = await generate(Date.now());
+        if (!active(version)) return;
+        current = next;
+        code.textContent = next.code;
+        countdown.textContent = String(Math.max(0, Math.ceil((next.expiresAt - Date.now()) / 1000)));
+        await navigator.clipboard.writeText(next.code);
+        if (active(version)) status.textContent = '验证码已复制。';
+      } catch {
+        if (active(version)) status.textContent = '复制未完成，请选择验证码手动复制。';
+      } finally {
+        if (active(version)) copy.disabled = !current || current.expiresAt <= Date.now();
+      }
+    });
   }
 
   function openProfile() {
