@@ -17,7 +17,7 @@ const units = ['local-data-read-cache', 'change-sync-client', 'change-sync-feed'
   'mailbox-updates', 'mailbox-query-content', 'relay-mail-updates', 'recharge-events', 'recharge-activity'];
 const browsers = ['search-input', 'ui-idle-contract', 'change-sync', 'performance-read-index', 'system-monitoring', 'site-management',
   'staff-workspaces', 'renewal-handoff', 'shared-layout', 'page-lifecycle', 'order-completion', 'order-submit-stay',
-  'mobile-navigation-layout', 'design-list-boundaries', 'global-pagination',
+  'mobile-navigation-layout', 'design-list-boundaries', 'global-pagination', 'site-visual-v2-border',
   'recharge-layout-transitions', 'mailbox-updates'];
 const groups = [
   ['unit', ['--test', ...frontend, ...units.map(name => `test/${name}.test.mjs`)]],
