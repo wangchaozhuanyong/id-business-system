@@ -2956,6 +2956,9 @@ export function createLocalBusinessStore(databasePath) {
     rechargePartnerTicket(requestId) {
       return createHmac('sha256', key).update('recharge-partner-ticket\0').update(requestId).digest('base64url');
     },
+    rechargePartnerKeyHash(apiKey) {
+      return createHmac('sha256', key).update('recharge-partner-api-key\0').update(apiKey).digest('hex');
+    },
     saveRechargePartnerBatch(version, inventoryVersion, batch, actor) {
       return writeTransaction(() => {
         const partners = readDocument('recharge-partners');

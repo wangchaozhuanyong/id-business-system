@@ -33,6 +33,7 @@ async function fixture(t) {
   const store = {
     featureDocument: read,
     rechargePartnerTicket: id => createHmac('sha256', 'synthetic-ticket-signing-key').update(id).digest('base64url'),
+    rechargePartnerKeyHash: apiKey => createHmac('sha256', 'synthetic-partner-key-hash').update(apiKey).digest('hex'),
     saveFeatureDocument(name, version, data) {
       if (read(name).version !== version) throw conflict();
       documents.set(name, { version: version + 1, data: copies(data) });

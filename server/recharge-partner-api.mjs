@@ -1,4 +1,4 @@
-import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createSourceLimit } from './login-security.mjs';
 import { unassignedRechargeStock } from './recharge-code-requests.mjs';
 import { numberedRechargeRequests } from './recharge-code-numbers.mjs';
@@ -23,11 +23,8 @@ const minute = 60_000;
 const systemActor = { id: 'partner-recharge', name: '合作方充值' };
 
 const secret = () => randomBytes(32).toString('base64url');
-const digest = (value) => createHash('sha256').update(value).digest('hex');
 const time = (now) => new Date(now).toISOString();
 const normalizeCode = (value) => typeof value === 'string' ? value.trim().toUpperCase() : '';
-const equalHash = (hash, value) => typeof hash === 'string' && /^[a-f0-9]{64}$/.test(hash) &&
-  timingSafeEqual(Buffer.from(hash, 'hex'), Buffer.from(digest(value), 'hex'));
 
 class RequestError extends Error {
   constructor(status, code, message) {
@@ -200,7 +197,8 @@ export function createRechargePartnerHandlers({
       if (partners.some(row => row.name === name && !row.disabledAt)) throw conflict('已有同名合作方');
       const id = 'rp_' + randomBytes(12).toString('hex');
       const apiKey = id + '.' + secret();
-      const partner = { id, name, keyHash: digest(apiKey), operation, createdBy: actor.id, createdAt: time(clock()) };
+      const partner = { id, name, keyHash: store.rechargePartnerKeyHash(apiKey), operation,
+        createdBy: actor.id, createdAt: time(clock()) };
       store.saveFeatureDocument('recharge-partners', initial.version, { ...initial.data, partners: [...partners, partner] },
         { action: 'recharge_partner_create', actor, targetId: id });
       return json(res, 201, { partner: publicPartner(partner), apiKey });
@@ -263,7 +261,8 @@ export function createRechargePartnerHandlers({
     const match = /^Bearer (\S+)$/i.exec(req.headers.authorization || '');
     const apiKey = match?.[1];
     const partner = apiKey && partnerFor(keyPattern.exec(apiKey)?.[1]);
-    if (!partner || !equalHash(partner.keyHash, apiKey)) throw new RequestError(401, 'invalid_api_key');
+    if (!partner || !/^[a-f0-9]{64}$/.test(partner.keyHash) || !timingSafeEqual(Buffer.from(partner.keyHash, 'hex'),
+        Buffer.from(store.rechargePartnerKeyHash(apiKey), 'hex'))) throw new RequestError(401, 'invalid_api_key');
     const partnerId = partner.id;
     throttle(partnerLimit, partnerId);
     if (route === '/config' && req.method === 'GET') {
