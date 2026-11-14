@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { interceptDesign, origin, separatorSnapshot, settle } from './helpers/offline-design.mjs';
+import { interceptDesign, origin, separatorSnapshot, settle, spacingSnapshot, toggleDesignTheme } from './helpers/offline-design.mjs';
 
 const { chromium } = await import(process.env.ID_RECHARGE_QA_PLAYWRIGHT
   ? pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href : 'playwright');
@@ -11,6 +11,148 @@ const source = { id: 'fixture-subscription', version: 2, number: 'OD-QA-140', cu
 const second = { ...source, id: 'fixture-second', number: 'OD-QA-141', account: 'second@example.test' };
 const orderFixture = { ...source, orderNo: source.number, email: source.account, source: '管理员手工',
   status: '已记录', businessType: '续费', refunds: [] };
+
+test('renewal page controls share one row when they fit and wrap within the panel', { timeout: 60_000 }, async t => {
+  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
+  t.after(() => browser.close());
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  const traffic = await interceptDesign(context, { skipRechargeAssets: true,
+    actor: { id: 'renewal-layout', name: '合成管理员', role: 'super' }, localFixtures: {
+      commerce: { version: 1, data: { customers: [], orders: [], operating: [], tenants: [], logs: [], rentBatches: [] } },
+      renewals: { version: 1, candidates: [source], items: [] }
+    } });
+  const page = await context.newPage(), errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.setDefaultTimeout(6000);
+  const routes = ['renewals', 'renewals/sent', 'renewals/ready', 'renewals/history', 'renewals/reminders', 'finance-renewals'];
+  await page.goto(origin + '/#/workspace/renewals');
+  for (const theme of ['light', 'dark']) {
+    if (theme === 'dark') await toggleDesignTheme(page);
+    for (const width of [1440, 1024, 390, 320]) {
+      await page.setViewportSize({ width, height: 900 });
+      for (const path of routes) {
+        const route = 'workspace/' + path;
+        const region = page.locator(`#main[data-layout-route="${route}"]`);
+        const toolbar = region.locator('.renewal-toolbar');
+        await page.evaluate(route => { location.hash = '#/' + route; }, route);
+        await toolbar.locator('input').waitFor();
+        await settle(page);
+        const reminder = path === 'renewals/reminders';
+        const hasTabs = reminder || path === 'finance-renewals';
+        const row = hasTabs ? region.locator('.renewal-controls') : toolbar;
+        const layout = await row.evaluate(node => {
+          const controls = [...node.querySelectorAll('button, a, input, select, label, .footnote')]
+            .filter(control => control.checkVisibility()).map(control => {
+              const box = control.getBoundingClientRect();
+              return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, height: box.height };
+            });
+          const panel = node.closest('.panel').getBoundingClientRect();
+          return { controls, panel: { left: panel.left, right: panel.right } };
+        });
+        const label = `${route} ${width}px ${theme}`;
+        for (const [i, control] of layout.controls.entries()) {
+          assert(control.left >= layout.panel.left + 10 && control.right <= layout.panel.right - 10, label);
+          assert(layout.controls.slice(i + 1).every(other => control.right <= other.left + 1 ||
+            other.right <= control.left + 1 || control.bottom <= other.top + 1 || other.bottom <= control.top + 1), label);
+        }
+        if (width === 1440) {
+          const centers = layout.controls.map(control => (control.top + control.bottom) / 2);
+          assert(Math.max(...centers) - Math.min(...centers) <= 1, `${label} 顶部控件应在同一行`);
+        }
+        if (hasTabs) assert.equal(await row.getByRole('tab').count(), 3, label);
+        if (!reminder) assert(await row.getByRole('button', { name: '刷新', exact: true }).isVisible(), label);
+        if (path === 'renewals') assert(await row.getByRole('button', { name: '提交给财务', exact: true }).isDisabled(), label);
+        if (path.startsWith('renewals') && !reminder)
+          assert(await row.getByRole('link', { name: '续费提醒', exact: true }).isVisible(), label);
+        const spacing = await spacingSnapshot(page);
+        assert.equal(spacing.overflow, false, label);
+        assert.deepEqual(spacing.findings, [], label);
+      }
+    }
+  }
+  assert.deepEqual(errors, []);
+  assert.deepEqual(traffic.unavailable, []);
+  assert.deepEqual(traffic.external, []);
+});
+
+test('renewal countdown uses Beijing dates, updates across expiry and keeps the current selection', { timeout: 60_000 }, async t => {
+  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
+  t.after(() => browser.close());
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, timezoneId: 'America/Los_Angeles' });
+  const traffic = await interceptDesign(context, { skipRechargeAssets: true, localFixtures: {},
+    actor: { id: 'countdown-employee', name: '合成员工', role: 'employee' } });
+  const candidates = [
+    ['future', '2026-11-17T15:30', '剩余 3 天 5 小时'],
+    ['expired', '2026-11-12 08:30', '已到期 2 天 1 小时'],
+    ['soon', '2026-11-14T10:01', '剩余不足 1 小时'],
+    ['just-expired', '2026-11-14T10:00', '已到期不足 1 小时'],
+    ['utc', '2026-11-17T07:30:00Z', '剩余 3 天 5 小时'],
+    ['offset', '2026-11-17T07:30:00+0000', '剩余 3 天 5 小时'],
+    ['missing', '', '未登记到期时间'],
+    ['invalid', 'invalid', '到期时间待核对']
+  ].map(([id, expiry, expected]) => ({ ...source, id, number: 'OD-QA-' + id, expiry, expected }));
+  let reads = 0;
+  await context.route('**/api/local/renewals**', route => {
+    assert.equal(route.request().method(), 'GET');
+    reads++;
+    return route.fulfill({ json: { version: 1, candidates, items: [] } });
+  });
+  const page = await context.newPage(), errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+  await page.clock.install({ time: new Date('2026-11-14T02:00:00Z') });
+  await page.goto(origin + '/#/workspace/renewals');
+  const counter = id => page.locator(`tr[data-row-id="${id}"] [data-column="days"]`);
+  const header = page.getByRole('columnheader', { name: '到期倒计时', exact: true });
+  await header.waitFor();
+  assert.equal(await header.evaluate(node => node.previousElementSibling.textContent), '原到期时间');
+  for (const row of candidates) await counter(row.id).getByText(row.expected, { exact: true }).waitFor();
+  const selection = page.getByRole('checkbox', { name: '选择 future', exact: true });
+  await selection.check();
+  const initialReads = reads;
+  const originalCheckbox = await selection.elementHandle();
+  await page.clock.fastForward(61_000);
+  await counter('soon').getByText('已到期不足 1 小时', { exact: true }).waitFor();
+  assert(await counter('soon').locator('.tag.danger').isVisible());
+  await page.clock.fastForward(30 * 60_000);
+  await counter('future').getByText('剩余 3 天 4 小时', { exact: true }).waitFor();
+  await counter('expired').getByText('已到期 2 天 2 小时', { exact: true }).waitFor();
+  assert.equal(reads, initialReads, '倒计时更新不请求业务列表');
+  assert(await originalCheckbox.evaluate(node => node.isConnected && node.checked), '更新文字保留已勾选的订单');
+  await page.getByRole('button', { name: '提交给财务（1）', exact: true }).waitFor();
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    assert(await counter('future').isVisible(), '手机默认显示到期倒计时');
+    const bounds = await counter('future').evaluate(cell => {
+      const text = cell.querySelector('[data-renewal-countdown]').getBoundingClientRect();
+      const card = cell.closest('tr').getBoundingClientRect();
+      return text.left >= card.left && text.right <= card.right;
+    });
+    assert(bounds, '倒计时留在手机卡片内');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
+  }
+  const beforeHidden = await counter('future').innerText();
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await page.clock.fastForward(3_600_000);
+  assert.equal(await counter('future').innerText(), beforeHidden, '后台暂停倒计时');
+  await page.evaluate(() => {
+    delete document.hidden;
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await counter('future').getByText('剩余 3 天 3 小时', { exact: true }).waitFor();
+  const detachedCounter = await counter('future').elementHandle();
+  const lastText = await counter('future').innerText();
+  await page.getByRole('link', { name: '已送财务', exact: true }).click();
+  await page.locator('#main[data-layout-route="workspace/renewals/sent"]').waitFor();
+  await page.clock.fastForward(3_600_000);
+  assert.equal(await detachedCounter.evaluate(node => node.textContent), lastText, '离页后停止旧倒计时');
+  assert.equal(reads, initialReads);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(traffic.unavailable, []);
+  assert.deepEqual(traffic.external, []);
+});
 
 test('finance source review preserves the reason but requires a fresh version and confirmation', { timeout: 60_000 }, async t => {
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
