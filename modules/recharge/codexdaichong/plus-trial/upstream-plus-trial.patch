@@ -1,0 +1,148 @@
+diff --git a/pricing-checkout.js b/pricing-checkout.js
+index 17d5982..1daed6e 100644
+--- a/pricing-checkout.js
++++ b/pricing-checkout.js
+@@ -55,6 +55,14 @@ const PLAN_UPGRADE_PATTERNS = {
+     pro_20x: [/升级至\s*Pro/i, /Upgrade to Pro/i, /Get Pro/i, /^Upgrade$/i]
+ };
+ 
++// 0 元试用（free trial）在 Plus 与 Pro 上处理不同：Plus 试用账号不能继续充值，
++// Pro 试用按正常开通继续，识别特征集中在这里。
++const PLUS_FREE_TRIAL_BANNER = /Try\s+Plus\s+free\s+for\s+\d+\s*months?/i;
++const FREE_TRIAL_CLAIM_BUTTON = /^(?:Claim\s+(?:your\s+)?free\s+offer|Claim\s+offer)$/i;
++const FREE_TRIAL_ZERO_PRICE = /(?:₱|PHP|S\$|SGD|\$|MYR|RM|EGP|E£)\s*0(?:\.0{1,2})?\s*(?:\/\s*(?:mo(?:nth)?|月)|每月|per\s*month)/i;
++const PRO_ACTION_PATTERN = /^(?:立即体验|Start now|升级至\s*Pro|Upgrade to Pro|Get Pro|Claim\s+(?:your\s+)?free\s+offer|Claim\s+offer)$/i;
++const PLUS_TRIAL_REFUSAL = '该账号为 Plus 0 元试用资格账号，不能继续充值 Plus，请转人工核对';
++
+ const PRO_TIERS = Object.freeze({ pro100: '100', pro200: '200', pro500: '500' });
+ const CURRENCY_MARKS = Object.freeze({ EGP: ['EGP', 'E£', 'ج.م'], MYR: ['MYR', 'RM'], PHP: ['PHP', '₱'], SGD: ['SGD', 'S$'], USD: ['USD', 'US$', '$'] });
+ 
+@@ -88,6 +96,30 @@ async function findPlusStartNowButton(page) {
+     return null;
+ }
+ 
++// Plus 0 元试用：卡片出现 "Try Plus free for 1 month"、"Claim free offer" 或 0 元月费。
++async function findPlusFreeTrialOffer(page) {
++    const banner = page.getByText(PLUS_FREE_TRIAL_BANNER).first();
++    if (await banner.isVisible({ timeout: 800 }).catch(() => false)) {
++        return normalizeOptionText(await banner.innerText().catch(() => '')) || 'Plus free trial';
++    }
++
++    const titles = page.getByText(/^(?:ChatGPT\\s+)?Plus$/i);
++    for (let index = 0; index < await titles.count(); index++) {
++        const title = titles.nth(index);
++        if (!(await title.isVisible().catch(() => false))) continue;
++
++        const card = title.locator('xpath=ancestor::*[self::div or self::section or self::article][.//button][1]');
++        const button = card.getByRole('button', { name: FREE_TRIAL_CLAIM_BUTTON });
++        if (await button.count() && await button.first().isVisible().catch(() => false)) {
++            return normalizeOptionText(await button.first().innerText().catch(() => '')) || 'Claim free offer';
++        }
++
++        const cardText = normalizeOptionText(await card.innerText().catch(() => ''));
++        if (FREE_TRIAL_ZERO_PRICE.test(cardText)) return '0 / month';
++    }
++    return '';
++}
++
+ async function isBusinessTabActive(page) {
+     const businessTab = page.getByRole('tab', { name: /^Business$/i }).first();
+     if (await businessTab.isVisible({ timeout: 800 }).catch(() => false)) {
+@@ -677,21 +709,44 @@ function moneyPattern(currency, monthly = false) {
+     return `(?<![\\w$])(?:${marks.map(escapeRegExp).join('|')})\\s*(\\d+(?:,\\d{3})*(?:\\.\\d{1,2})?)(?![\\d,.])${monthly ? '\\s*(?:/\\s*(?:月|month|mo\\b)|每月|per month)' : ''}`;
+ }
+ 
+-function readMoneyCents(text, currency, monthly = false) {
++function readMoneyCents(text, currency, monthly = false, { allowZero = false } = {}) {
+     const matches = [...normalizeOptionText(text).matchAll(new RegExp(moneyPattern(currency, monthly), 'gi'))];
+     if (matches.length !== 1) return null;
+     const amount = Math.round(Number(matches[0][1].replace(/,/g, '')) * 100);
+-    return Number.isSafeInteger(amount) && amount > 0 ? amount : null;
++    if (!Number.isSafeInteger(amount) || amount < 0) return null;
++    return amount > 0 || allowZero ? amount : null;
++}
++
++// 0 元试用把月费写成 0，正常付费路径的金额读取保持 reject 0 的旧行为。
++function readZeroMonthlyAmount(text, currency) {
++    const marks = CURRENCY_MARKS[currency];
++    if (!marks) return null;
++    const normalized = normalizeOptionText(text);
++    if (!/(?:\/\s*(?:月|month|mo\b)|每月|per month)/i.test(normalized)) return null;
++    const zero = new RegExp(`(?<![\\w$])(?:${marks.map(escapeRegExp).join('|')})\\s*0(?:\\.0{1,2})?(?![\\d,.])`, 'i');
++    return zero.test(normalized) ? 0 : null;
+ }
+ 
+-async function readProMonthlyAmount(card, currency) {
++async function readProMonthlyAmount(card, currency, { allowZero = false } = {}) {
+     const priceBlock = card.locator('.pricing-column-price-block').filter({ visible: true });
+     const blocks = await priceBlock.count();
+-    if (!blocks) return readMoneyCents(await card.innerText(), currency, true);
+-    if (blocks !== 1 || !/(?:\/\s*(?:月|month|mo\b)|每月|per month)/i.test(await priceBlock.innerText())) return null;
++    if (!blocks) {
++        const cardText = await card.innerText();
++        const amount = readMoneyCents(cardText, currency, true, { allowZero });
++        if (amount !== null) return amount;
++        return allowZero ? readZeroMonthlyAmount(cardText, currency) : null;
++    }
++    const blockText = await priceBlock.innerText().catch(() => '');
++    if (blocks !== 1 || !/(?:\/\s*(?:月|month|mo\b)|每月|per month)/i.test(blockText)) {
++        return allowZero ? readZeroMonthlyAmount(blockText, currency) : null;
++    }
+     // The animated digits repeat in innerText; the accessible amount is a single label.
+     const amounts = await priceBlock.locator('.sr-only').filter({ hasText: new RegExp(moneyPattern(currency), 'i') }).allTextContents();
+-    return amounts.length === 1 ? readMoneyCents(amounts[0], currency) : null;
++    if (amounts.length === 1) {
++        const amount = readMoneyCents(amounts[0], currency, false, { allowZero });
++        if (amount !== null) return amount;
++    }
++    return allowZero ? readZeroMonthlyAmount(await priceBlock.innerText().catch(() => ''), currency) : null;
+ }
+ 
+ async function selectAndOpenProTier(page, tier, currency) {
+@@ -720,10 +775,12 @@ async function selectAndOpenProTier(page, tier, currency) {
+         throw new Error(`未确认 Pro ${tier} 档位已选中，已停止开通`);
+     });
+     await requireVisibleOne(group.getByRole('radio', { checked: true }), '已选中的 Pro 档位');
+-    const amount = await readProMonthlyAmount(card, currency);
++    let amount = await readProMonthlyAmount(card, currency);
++    if (amount === null) amount = await readProMonthlyAmount(card, currency, { allowZero: true });
+     if (amount === null) throw new Error(`无法确认 Pro ${tier} 的 ${currency} 月费，已停止开通`);
++    if (amount === 0) console.log(`ℹ️ [步骤] Pro ${tier} 显示 0 元试用，按正常开通继续`);
+     const action = await requireVisibleOne(card.getByRole('button', {
+-        name: /^(?:立即体验|Start now|升级至\s*Pro|Upgrade to Pro|Get Pro)$/i
++        name: PRO_ACTION_PATTERN
+     }), ` Pro ${tier} 的开通按钮`);
+     if (!(await action.isEnabled())) throw new Error(`Pro ${tier} 开通按钮不可用，已停止开通`);
+     await action.click({ timeout: 10000 });
+@@ -742,6 +799,10 @@ async function verifyProPricingCheckout(page, { tier, currency, amount }) {
+     const amounts = page.getByRole('radio').filter({ hasText: new RegExp(moneyPattern(currency), 'i') });
+     const group = await requireVisibleOne(page.getByRole('radiogroup').filter({ has: amounts }), '结账页的 Pro 档位选择器');
+     const selected = await requireVisibleOne(group.getByRole('radio', { checked: true }), '结账页已选中的 Pro 档位');
++    if (amount === 0) {
++        console.log(`✅ [步骤] 已核对 Pro ${tier} 结账档位（0 元试用，继续开通）`);
++        return;
++    }
+     const visibleOptions = await group.getByRole('radio').filter({ visible: true }).allTextContents();
+     const label = await requireVisibleOne(page.getByText(/^(?:今日应付金额|Total due today|Total today|Amount due today)$/i), '结账页今日应付金额标签');
+     if (readMoneyCents(await selected.innerText(), currency) !== amount
+@@ -767,6 +828,12 @@ async function clickPlanUpgrade(page, planType, { currency } = {}) {
+     if (PRO_TIERS[plan]) return selectAndOpenProTier(page, PRO_TIERS[plan], currency);
+ 
+     if (plan === 'plus') {
++        const trialOffer = await findPlusFreeTrialOffer(page);
++        if (trialOffer) {
++            const error = new Error(PLUS_TRIAL_REFUSAL);
++            error.code = 'PLUS_FREE_TRIAL_ACCOUNT';
++            throw error;
++        }
+         const startNow = await findPlusStartNowButton(page);
+         if (startNow) {
+             await startNow.scrollIntoViewIfNeeded().catch(() => {});
+@@ -891,6 +958,7 @@ module.exports = {
+     selectPricingRegion,
+     switchToPersonalPlans,
+     clickPlanUpgrade,
++    findPlusFreeTrialOffer,
+     verifyProPricingCheckout,
+     waitForCheckoutPage,
+     pageShowsTargetRegionPricing
