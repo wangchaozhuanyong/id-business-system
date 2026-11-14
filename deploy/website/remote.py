@@ -323,6 +323,8 @@ def wire_event_launcher(content):
         "  else printf disabled; fi"
     )
     state = f'  state+=(-e "{ADMISSION_ENV}")'
+    if PARTNER_API_ENV in content:
+        state += f'\n  state+=(-e "{PARTNER_API_ENV}")'
     mounted = state + '\n  state+=(\n' + \
         '    --mount "type=bind,src=$root/releases/$sha/runtime/external-events,dst=/external-events-runtime,readonly"\n' + \
         '    --mount "type=bind,src=$root/releases/$sha/runtime/mysql-ca.pem,dst=/run/recharge-mysql-ca.pem,readonly")'
