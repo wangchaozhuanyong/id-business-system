@@ -59,9 +59,10 @@ function visibleRequest(row, actorId) {
   };
 }
 
-function unassignedStock(stock, rows) {
+export function unassignedRechargeStock(stock, rows, reservedCodes = []) {
   // Keep former assignments and the original codes of interrupted batches excluded.
   const assigned = new Set(rows.flatMap(row => (row.codes || []).map(code => code.toUpperCase())));
+  for (const code of reservedCodes) assigned.add(code);
   return stock.filter(({ code }) => !assigned.has(code));
 }
 
@@ -81,7 +82,7 @@ export function createRechargeCodeHandler({ store, transport, publicOrigin, cloc
       const snapshot = await store.load();
       // Fix legacy display numbers before adding a request; the versioned save persists both together.
       const previous = numberedRechargeRequests(snapshot.data?.requests ?? []);
-      const { row, action } = await prepare(previous);
+      const { row, action } = await prepare(previous, snapshot.data?.partnerReservedCodes ?? []);
       if (!action) return row;
       const requests = numberedRechargeRequests(previous.some(entry => entry.id === row.id)
         ? previous.map(entry => entry.id === row.id ? row : entry)
@@ -109,8 +110,8 @@ export function createRechargeCodeHandler({ store, transport, publicOrigin, cloc
     throw new RequestError(503, '暂时无法核对充值码库存，请刷新后重试');
   }
 
-  async function codesFor(rows, plan, count) {
-    const available = unassignedStock(await readStock(), rows).filter(item => item.plan === plan);
+  async function codesFor(rows, reservedCodes, plan, count) {
+    const available = unassignedRechargeStock(await readStock(), rows, reservedCodes).filter(item => item.plan === plan);
     if (available.length < count)
       throw new RequestError(409, `该套餐当前可提取 ${available.length} 个，库存不足`);
     return available.slice(0, count).map(item => item.code);
@@ -128,7 +129,7 @@ export function createRechargeCodeHandler({ store, transport, publicOrigin, cloc
       typeof body.requestKey !== 'string' || !requestKeyPattern.test(body.requestKey)
     ) throw new RequestError(400, '请选择套餐并填写 1 至 100 的申请数量');
     let created = false;
-    const row = await change(actor, async rows => {
+    const row = await change(actor, async (rows, reservedCodes) => {
       const existing = rows.find(entry => entry.applicantId === actor.id && entry.requestKey === body.requestKey);
       created = !existing;
       if (existing) {
@@ -136,7 +137,7 @@ export function createRechargeCodeHandler({ store, transport, publicOrigin, cloc
           throw new RequestError(409, '同一申请编号的套餐或数量已变化，请重新发起申请');
         return { row: existing };
       }
-      await codesFor(rows, body.plan, body.count);
+      await codesFor(rows, reservedCodes, body.plan, body.count);
       const at = time();
       return {
         row: {
@@ -183,7 +184,7 @@ export function createRechargeCodeHandler({ store, transport, publicOrigin, cloc
   }
 
   function approveRequest({ id, action }, actor) {
-    return change(actor, async rows => {
+    return change(actor, async (rows, reservedCodes) => {
       const row = findRequest(rows, id);
       if (row.status === 'issued') return { row };
       let codes;
@@ -195,7 +196,7 @@ export function createRechargeCodeHandler({ store, transport, publicOrigin, cloc
       } else {
         if (row.status !== 'pending' || action !== 'approve')
           throw new RequestError(409, '这条申请不在待审核状态');
-        codes = await codesFor(rows, row.plan, row.count);
+        codes = await codesFor(rows, reservedCodes, row.plan, row.count);
       }
       const at = time();
       return {
@@ -227,7 +228,7 @@ export function createRechargeCodeHandler({ store, transport, publicOrigin, cloc
           returns.view(rows, actor.id),
           readStock().then(codes => {
             const counts = Object.fromEntries([...plans].map(plan => [plan, 0]));
-            for (const { plan } of unassignedStock(codes, requests)) counts[plan]++;
+            for (const { plan } of unassignedRechargeStock(codes, requests, data?.partnerReservedCodes)) counts[plan]++;
             return counts;
           }).catch(() => null)
         ]);

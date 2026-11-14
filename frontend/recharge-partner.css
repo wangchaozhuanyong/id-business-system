@@ -1,0 +1,64 @@
+:root { color-scheme: light dark; }
+body { margin: 0; color: CanvasText; background: Canvas; }
+
+.partner-authorization {
+  box-sizing: border-box;
+  width: min(100% - 2rem, 38rem);
+  margin: 2rem auto;
+  padding: clamp(1rem, 4vw, 2rem);
+  border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
+  border-radius: .85rem;
+  background: Canvas;
+  color: CanvasText;
+  font: 1rem/1.55 "Inter", system-ui, sans-serif;
+}
+.partner-authorization h1 { margin: 0; font-size: 1.55rem; }
+.partner-authorization-heading { display: flex; align-items: center; gap: .5rem; position: relative; }
+.partner-authorization-heading summary { cursor: pointer; list-style: none; padding: .4rem; }
+.partner-authorization-heading details p {
+  position: absolute;
+  inset-inline: 0;
+  z-index: 1;
+  margin: .15rem 0 0;
+  padding: .7rem;
+  border-radius: var(--radius-control);
+  background: Canvas;
+  box-shadow: var(--shadow-raised);
+  border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
+}
+.partner-authorization dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: .4rem 1rem;
+  margin: 1rem 0 1.5rem;
+}
+.partner-authorization [hidden] { display: none; }
+.partner-authorization dd { margin: 0; overflow-wrap: anywhere; }
+.partner-authorization form { display: grid; gap: .8rem; }
+.partner-authorization-field { display: flex; justify-content: space-between; gap: .5rem; flex-wrap: wrap; }
+.partner-authorization #authorization-account { margin: 0; overflow-wrap: anywhere; }
+.partner-authorization textarea {
+  box-sizing: border-box;
+  width: 100%;
+  padding: .65rem;
+  resize: vertical;
+  color: inherit;
+  background: Field;
+  border: 1px solid color-mix(in srgb, CanvasText 35%, transparent);
+  border-radius: .45rem;
+  font: inherit;
+}
+.partner-authorization-confirm { display: flex; align-items: flex-start; gap: .5rem; }
+.partner-authorization button {
+  justify-self: start;
+  min-height: 2.75rem;
+  padding: .55rem .9rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  background: var(--primary);
+  color: var(--on-primary);
+  font: inherit;
+}
+.partner-authorization button:disabled { opacity: .6; }
+.partner-authorization :focus-visible { outline: 2px solid Highlight; outline-offset: 2px; }
+.partner-authorization [role="alert"] { color: var(--danger); }

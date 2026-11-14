@@ -257,7 +257,7 @@ const sessionEventLabels = {
   relay_history_preview: '预检苹果邮箱历史邮件归属'
 };
 const orderFeatureDomains = new Set([
-  'recharge-codes', 'recharge-activity', 'tenant-cards', 'order-sync', 'finance-rates', cardTypeDocument, orderCardArchiveDocument,
+  'recharge-codes', 'recharge-partners', 'recharge-partner-requests', 'recharge-activity', 'tenant-cards', 'order-sync', 'finance-rates', cardTypeDocument, orderCardArchiveDocument,
   cardFreezeDocument, 'system-monitoring-config', 'system-monitoring-state', subscriptionDomain, orderExpenseDomain, renewalHandoffDomain
 ]);
 const renewalAuditLabels = { renewal_submit: '提交续费给财务', renewal_claim: '领取续费申请',
@@ -276,6 +276,9 @@ const orderFeatureAuditLabels = {
   monitor_legacy_finish: '确认接管原代充通知',
   monitor_verified: '登记已核实的监控事件',
   recharge_code_request: '申请充值码',
+  recharge_partner_create: '发放合作方 API 凭证',
+  recharge_partner_disable: '停用合作方 API 凭证',
+  recharge_partner_issue: '发放合作方兑换码',
   recharge_code_approve: '批准充值码申请',
   recharge_code_reject: '驳回充值码申请',
   recharge_code_import_started: '提交充值码批次',
@@ -349,6 +352,7 @@ const auditDomainLabels = {
   toolbox: '个人工具箱',
   appleBalance: '苹果 ID 余额',
   'recharge-codes': '充值码审核',
+  'recharge-partners': '充值 API 合作方',
   'tenant-cards': '租户银行卡',
   [orderCardArchiveDocument]: '订单银行卡留存',
   [cardFreezeDocument]: '银行卡冻结',
@@ -2949,6 +2953,23 @@ export function createLocalBusinessStore(databasePath) {
       if (!orderFeatureDomains.has(domain)) throw new TypeError('未知订单附属资料');
       return readDocument(domain);
     },
+    rechargePartnerTicket(requestId) {
+      return createHmac('sha256', key).update('recharge-partner-ticket\0').update(requestId).digest('base64url');
+    },
+    saveRechargePartnerBatch(version, inventoryVersion, batch, actor) {
+      return writeTransaction(() => {
+        const partners = readDocument('recharge-partners');
+        const inventory = readDocument('recharge-codes');
+        if (partners.version !== version || inventory.version !== inventoryVersion)
+          throw new LocalDataError(409, '合作方或充值码库存已更新，请重试');
+        putDocument('recharge-partners', version + 1,
+          { ...partners.data, batches: [...(partners.data?.batches ?? []), batch] });
+        putDocument('recharge-codes', inventoryVersion + 1, { ...inventory.data,
+          partnerReservedCodes: [...(inventory.data?.partnerReservedCodes ?? []), ...batch.codes.map(row => row.nativeCode)] });
+        log.run(new Date().toISOString(), 'recharge-partners', 'recharge_partner_issue',
+          auditSummary(orderFeatureAuditLabels.recharge_partner_issue, actor, batch.id), version + 1);
+      });
+    },
     saveFeatureDocument(domain, version, data, { action, actor, targetId, commerceVersion, operation } = {}) {
       if (!orderFeatureDomains.has(domain)) throw new TypeError('未知订单附属资料');
       return writeTransaction(() => {
@@ -3311,6 +3332,7 @@ export function createLocalBusinessStore(databasePath) {
       if (['admin', 'super', 'registrar'].includes(actor.role)) versions.inventory = version('inventory');
       if (['admin', 'super', 'employee', 'finance'].includes(actor.role)) versions.commerce = version('commerce');
       if (['admin', 'super', 'employee'].includes(actor.role)) versions['recharge-codes'] = version('recharge-codes');
+      if (actor.role === 'super') versions['recharge-partners'] = version('recharge-partners');
       if (actor.role === 'finance') {
         versions.settings = version('settings');
         versions['finance-rates'] = version('finance-rates');

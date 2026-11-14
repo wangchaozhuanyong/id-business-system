@@ -50,7 +50,14 @@ export const financeReconciliation = workspace({
   methods: ['GET'],
   script: 'finance-reconciliation.mjs'
 });
+const rechargePartners = workspace({
+  id: 'recharge-partners', route: 'online-recharge/partners', label: '充值 API 接入',
+  description: '为合作方发放独立的 API 密钥和指定套餐的兑换码。合作方只能查询和使用发给本方的码。',
+  navigation: '线上代充', after: 'online-recharge/chatgpt', roles: ['super'],
+  resource: 'recharge-partners', scope: 'recharge-partners', script: 'recharge-partners.mjs',
+  feature: 'recharge-partner-api'
+});
 
 export const websitePages = Object.freeze([
-  customerService, team, businessProxies, registration, financeCards, financeReconciliation
+  customerService, team, businessProxies, registration, financeCards, financeReconciliation, rechargePartners
 ]);

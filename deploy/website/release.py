@@ -49,6 +49,8 @@ PLUS_TRIAL_PATCH_FILES = {
     for name in ("manifest.json", "upstream-plus-trial.patch")
 }
 PLUS_TRIAL_SCOPE = PLUS_TRIAL_PATCH_FILES | {"modules/recharge/codexdaichong/plus-trial.test.mjs"}
+PLUS_TRIAL_MERGE = "f8c72030d2a820a62d35ad0fbfe588dd72c4a08b"
+PLUS_TRIAL_BUILD_INPUTS = PLUS_TRIAL_SCOPE | {"modules/recharge/codexdaichong/prepare.mjs"}
 NATIVE_CORE_SCOPE = NATIVE_PATCH_FILES | PLUS_TRIAL_SCOPE | {
     "deploy/recharge-core/README.md", "deploy/recharge-core/canary.py", "deploy/recharge-core/health.mjs",
     "deploy/recharge-core/card-plans-canary.mjs", "deploy/recharge-core/check-provider-cutover.mjs",
@@ -79,6 +81,11 @@ VENDURE_REFRESH_FILES = (
     "modules/recharge/codexdaichong/native-code-returns.mjs",
     "server/tools/read-tool-config.mjs",
     "server/vendure-task-service.mjs",
+)
+PARTNER_API_FILES = (
+    "server/recharge-partner-api.mjs", "server/recharge-partner-gateway.mjs", "server/recharge-code-requests.mjs",
+    "frontend/recharge-partners.mjs", "frontend/recharge-partner-authorize.html",
+    "frontend/recharge-partner-authorize.js", "frontend/recharge-partner.css",
 )
 
 
@@ -147,12 +154,24 @@ def require_redeem_presentation(base, sha):
     return require_presentation_approval(base, sha, "redeem-log-20261111.json", REDEEM_PRESENTATION_FILES)
 
 
-def require_website_scope(base, sha, include_adapter=False, include_core=False):
+def require_website_scope(base, sha, include_adapter=False, include_core=False, partner_api=False):
     require_ancestor(base, sha)
     changed = set(git("diff", "--name-only", base, sha, "--", *CORE_PATHS).splitlines())
     # The host backup timer is managed independently from the immutable payment
     # image. This exact path is installed and read back by the website release.
     changed.discard(BACKUP_OPERATION)
+    if partner_api and changed:
+        # The trial policy is already on main. Its only executable change is
+        # applied when a native image is built. Keep the current native image
+        # and verify the exact reviewed inputs before publishing the website.
+        if (changed != PLUS_TRIAL_BUILD_INPUTS or include_adapter or include_core or
+                git("diff", "--name-only", PLUS_TRIAL_MERGE + "^1", base, "--",
+                    *sorted(PLUS_TRIAL_BUILD_INPUTS)).strip() or
+                git("diff", "--name-only", PLUS_TRIAL_MERGE, sha, "--",
+                    *sorted(PLUS_TRIAL_BUILD_INPUTS)).strip()):
+            raise RuntimeError("partner_api_release_contains_unreviewed_native_inputs")
+        require_ancestor(PLUS_TRIAL_MERGE, sha)
+        return
     if include_core:
         approved_patches = any(required <= changed <= NATIVE_CORE_SCOPE
                                for required in (NATIVE_PATCH_FILES, PLUS_TRIAL_PATCH_FILES))
@@ -306,6 +325,9 @@ def main():
     include_adapter = os.environ.get("RELEASE_RECHARGE_ADAPTER") == "true"
     include_core = os.environ.get("RELEASE_RECHARGE_CORE") == "true"
     retry_receipt = os.environ.get("VENDURE_RETRY_RECEIPT_SHA256", "")
+    partner_api = os.environ.get("RELEASE_RECHARGE_PARTNER_API") == "true"
+    if partner_api and (include_adapter or include_core or attempt or inspect_command or retry_receipt):
+        raise RuntimeError("partner_api_release_requires_its_own_operation")
     if retry_receipt and (not SHA256.fullmatch(retry_receipt) or
                           include_adapter or include_core or attempt or inspect_command):
         raise RuntimeError("vendure_gateway_refresh_requires_one_reviewed_receipt")
@@ -328,7 +350,8 @@ def main():
     print(f"Live website: {base}; free bytes: {before['freeBytes']}", flush=True)
     if base == sha:
         raise RuntimeError("requested_revision_already_running_read_back_the_existing_release")
-    presentation_scope, presentation = require_website_scope(base, sha, include_adapter, include_core) or (None, None)
+    presentation_scope, presentation = require_website_scope(base, sha, include_adapter, include_core,
+                                                             partner_api=partner_api) or (None, None)
     if include_adapter or include_core:
         for name in ("recharge", "recharge-native"):
             require_ancestor(before["components"][name]["revision"], sha)
@@ -394,8 +417,10 @@ def main():
                   *ADAPTER_FILES)
     if include_core:
         files = tuple(dict.fromkeys((*files, *NATIVE_RELEASE_FILES)))
-    if retry_receipt:
+    if retry_receipt or partner_api:
         files += VENDURE_REFRESH_FILES
+    if partner_api:
+        files += PARTNER_API_FILES
     plan = {"operation": "release", "sha": sha, "before": before, "artifacts": artifacts,
             "files": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in files},
             "qualityRun": quality_run, "preflightCommand": preflight_id, 'externalEvents': True}
@@ -406,6 +431,8 @@ def main():
         plan["adapter"] = {"runtimeFiles": ADAPTER_RUNTIME_FILES}
     if retry_receipt:
         plan["vendureRetryReceipt"] = retry_receipt
+    if partner_api:
+        plan["rechargePartnerApi"] = True
     if presentation_scope:
         plan[presentation_scope] = presentation
     require_main(sha)
@@ -431,6 +458,12 @@ def main():
                 gateway.get("originalRuntimeUnchanged") is not True or
                 gateway.get("workerPollingObserved") is not True):
             raise RuntimeError(f"vendure_gateway_release_receipt_mismatch: {command_id}")
+    if partner_api:
+        gateway = receipt.get("vendureGateway", {})
+        if (gateway.get("gatewaySha") != sha or gateway.get("partnerSocketVerified") is not True or
+                gateway.get("accepting") is not True or gateway.get("workerPollingObserved") is not True or
+                gateway.get("originalRuntimeUnchanged") is not True):
+            raise RuntimeError(f"recharge_partner_api_release_receipt_mismatch: {command_id}")
     if presentation_scope and (receipt.get(presentation_scope + "Verified") is not True or
                                receipt.get("liveAssetsSha256") != expected_assets or
                                receipt.get("protectedComponentsUnchanged") is not True):

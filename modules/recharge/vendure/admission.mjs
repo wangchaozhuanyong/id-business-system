@@ -6,8 +6,13 @@ import { generatedCdkPattern } from '../codexdaichong/native-code-returns.mjs';
 
 export const moyaoRechargeChannel = 'moyao-ai';
 export const storefrontAdmissionSocketName = 'lookup.sock';
+export const partnerTaskDirectoryName = 'partner';
+export const partnerTaskSocketName = 'tasks.sock';
 export const rechargeManualReviewReason = 'manual_review_required';
+export const rechargePartnerIdPattern = /^rp_[a-f0-9]{24}$/;
+export const rechargeRequestIdPattern = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
 const route = '/lookup';
+const issueRoute = '/issue';
 const historicalCodePattern = /^KC-[A-F0-9]{28}$/;
 const supportedPlans = new Map([
   ['plus', 'plus'], ['pro100', 'pro_5x'], ['pro_5x', 'pro_5x'], ['pro200', 'pro_20x'], ['pro_20x', 'pro_20x']
@@ -31,8 +36,8 @@ function validResult(result) {
 
 export function createStorefrontAdmissionClient(socketPath) {
   if (!isAbsolute(socketPath)) throw new TypeError('商城准入套接字路径无效');
-  return (code, clientIp) => new Promise((resolve, reject) => {
-    const body = JSON.stringify({ code, clientIp });
+  return (code, clientIp, partnerId) => new Promise((resolve, reject) => {
+    const body = JSON.stringify({ code, clientIp, partnerId });
     const outgoing = request({
       socketPath, path: route, method: 'POST', signal: AbortSignal.timeout(8000),
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
@@ -61,6 +66,22 @@ export function createStorefrontAdmissionClient(socketPath) {
   });
 }
 
+export function commitPartnerIssue(socketPath, batchId, codes) {
+  const body = JSON.stringify({ batchId, codes });
+  return new Promise((resolve, reject) => {
+    const outgoing = request({
+      socketPath, path: issueRoute, method: 'POST', signal: AbortSignal.timeout(6000),
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
+    }, response => {
+      response.resume();
+      response.once('end', () => resolve(response.statusCode));
+      response.once('error', reject);
+    });
+    outgoing.on('error', reject);
+    outgoing.end(body);
+  });
+}
+
 async function clearStaleSocket(path) {
   const before = await lstat(path).catch(error => {
     if (error.code !== 'ENOENT') throw error;
@@ -83,44 +104,17 @@ async function clearStaleSocket(path) {
   await unlink(path);
 }
 
-export async function listenStorefrontAdmission(directory, lookup) {
-  if (!isAbsolute(directory) || typeof lookup !== 'function') throw new TypeError('商城准入监听配置无效');
+export async function listenPrivateRechargeSocket(directory, name, listener) {
+  if (!isAbsolute(directory)) throw new TypeError('代充套接字监听目录无效');
   await mkdir(directory, { mode: 0o700 }).catch(error => {
     if (error.code !== 'EEXIST') throw error;
   });
   const state = await lstat(directory);
   if (!state.isDirectory() || state.uid !== process.getuid() || (state.mode & 0o777) !== 0o700 ||
       await realpath(directory) !== directory) throw new Error('商城准入目录须为服务账号持有的私有目录');
-  const path = join(directory, storefrontAdmissionSocketName);
+  const path = join(directory, name);
   await clearStaleSocket(path);
-  const server = createServer({ requestTimeout: 9000, headersTimeout: 2000 }, async (incoming, response) => {
-    const send = (status, value) => {
-      if (response.destroyed || response.headersSent) return;
-      response.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-      response.end(JSON.stringify(value));
-    };
-    if (incoming.url !== route || incoming.method !== 'POST' || incoming.headers.origin || incoming.headers.cookie)
-      return send(404, {});
-    try {
-      let raw = '';
-      for await (const chunk of incoming.setEncoding('utf8').iterator({ destroyOnReturn: false })) {
-        raw += chunk;
-        if (raw.length > 512) {
-          incoming.resume();
-          return send(400, {});
-        }
-      }
-      const body = JSON.parse(raw);
-      const code = storefrontRechargeCode(body?.code);
-      if (!code || !isIP(body?.clientIp ?? '')) return send(404, {});
-      const result = await lookup(code, body.clientIp);
-      if (result === null) return send(404, {});
-      if (!validResult(result)) return send(503, {});
-      return send(200, { plan: result.plan, status: result.status, reason: result.reason });
-    } catch {
-      return send(503, {});
-    }
-  });
+  const server = createServer({ requestTimeout: 15000, headersTimeout: 2000 }, listener);
   await new Promise((resolve, reject) => {
     server.once('error', reject);
     server.listen(path, () => {
@@ -135,4 +129,39 @@ export async function listenStorefrontAdmission(directory, lookup) {
     server.close();
     throw error;
   }
+}
+
+export function listenStorefrontAdmission(directory, lookup, issue) {
+  return listenPrivateRechargeSocket(directory, storefrontAdmissionSocketName, async (incoming, response) => {
+    const send = (status, value) => {
+      if (response.destroyed || response.headersSent) return;
+      response.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      response.end(JSON.stringify(value));
+    };
+    const isIssue = incoming.url === issueRoute && typeof issue === 'function';
+    if ((!isIssue && incoming.url !== route) || incoming.method !== 'POST' || incoming.headers.origin || incoming.headers.cookie)
+      return send(404, {});
+    try {
+      let raw = '';
+      for await (const chunk of incoming.setEncoding('utf8').iterator({ destroyOnReturn: false })) {
+        raw += chunk;
+        if (raw.length > (isIssue ? 8192 : 512)) {
+          incoming.resume();
+          return send(400, {});
+        }
+      }
+      const body = JSON.parse(raw);
+      if (isIssue) return send(issue(body.batchId, body.codes), {});
+      const code = storefrontRechargeCode(body?.code);
+      if (!code || !isIP(body?.clientIp ?? '') ||
+          (body.partnerId !== undefined &&
+            (typeof body.partnerId !== 'string' || !rechargePartnerIdPattern.test(body.partnerId)))) return send(404, {});
+      const result = await lookup(code, body.clientIp, body.partnerId);
+      if (result === null) return send(404, {});
+      if (!validResult(result)) return send(503, {});
+      return send(200, { plan: result.plan, status: result.status, reason: result.reason });
+    } catch {
+      return send(503, {});
+    }
+  });
 }
