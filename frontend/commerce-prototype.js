@@ -1952,11 +1952,18 @@
       (localData?.authRequired ? routeButton('返回续费管理', renewalHome, '', 'return') : '') +
       A.button('提醒设置', 'commerce-renewal-settings', '', 'settings') +
       (localData?.renewalContactSettings ? A.button('续费提醒话术', 'commerce-renewal-suffix', '', 'settings') : '')) +
-      `<section class="panel">${tabs(counts, moduleState.renewalTab, 'commerce-renewal-tab', 'aria-label="续费状态"')}
-      ${toolbar('搜索客户、联系方式、账号或订单编号', `<label for="commerce-renewal-product">产品</label>${
-        select('renewal-product', [['', '全部产品'], ...Object.keys(productPlans)], S.status)}
-        <span class="footnote">提前 ${formatRenewalWarning(renewalWarningHours)}提醒</span>`)}
-      ${renderRenewalWorkspace(renewalWorkbenchRows(), evaluatedAt)}</section>`;
+      `<section class="panel"><div class="list-controls renewal-controls">
+        ${tabs(counts, moduleState.renewalTab, 'commerce-renewal-tab', 'aria-label="续费状态"')}
+        <div class="toolbar toolbar--inline renewal-toolbar">
+          <div class="toolbar-left">
+            ${searchField('搜索客户、联系方式、账号或订单编号')}
+            <div class="renewal-filter"><label for="commerce-renewal-product">产品</label>${
+              select('renewal-product', [['', '全部产品'], ...Object.keys(productPlans)], S.status)}</div>
+            <span class="footnote">提前 ${formatRenewalWarning(renewalWarningHours)}提醒</span>
+          </div>
+          <div class="toolbar-right" data-page-actions></div>
+        </div>
+      </div>${renderRenewalWorkspace(renewalWorkbenchRows(), evaluatedAt)}</section>`;
   }
 
   function currentRenewalAction(node) {

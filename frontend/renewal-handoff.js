@@ -3,6 +3,7 @@
   const A = window.IDDesignAPI, D = window.IDLocalData, Security = window.IDAccountSecurity;
   if (!A || !D?.authRequired) return;
   const E = A.esc, $ = A.$;
+  const { subscriptionTime, subscriptionDuration } = window.IDOrderOpening;
   const scope = 'renewal-handoffs';
   const staffRoot = 'workspace/renewals';
   const financeRoute = 'workspace/finance-renewals';
@@ -14,8 +15,8 @@
   const currencies = ['CNY', 'MYR', 'USD', 'PHP', 'CLP', 'IDR', 'EGP'].map(value => [value, value]);
   const dates = new Intl.DateTimeFormat('sv-SE', { dateStyle: 'short', timeStyle: 'short', timeZone: 'Asia/Shanghai' });
   const beijing = value => {
-    const date = value && new Date(/(?:Z|[+-]\d\d:\d\d)$/i.test(value) ? value : value.replace(' ', 'T') + '+08:00');
-    return date && Number.isFinite(date.getTime()) ? dates.format(date) : '—';
+    const time = subscriptionTime(value);
+    return Number.isFinite(time) ? dates.format(time) : '—';
   };
   const dateValue = date => dates.format(date).replace(' ', 'T');
   const currentRole = () => A.state.actor?.role;
@@ -42,10 +43,9 @@
     '"' + (current ? ' aria-current="page"' : '') + '>' + label + '</a>';
   const navigation = route => '<nav class="panel renewal-progress-navigation" aria-label="续费办理进度">' +
     staffTabs.map(([path, label]) => tab(label, staffRoot + path, route === staffRoot + path)).join('') + '</nav>';
-  const financeNavigation = current => '<div class="tabs" role="tablist" aria-label="财务续费状态">' +
-    financeTabs.map(label => '<button type="button" class="tab' + (label === current ? ' active' : '') +
-      '" role="tab" data-action="renewal-handoff-finance-tab" data-id="' + label + '" aria-selected="' +
-      String(label === current) + '">' + label + '</button>').join('') + '</div>';
+  const financeNavigation = () => '<div class="tabs" role="tablist" aria-label="财务续费状态" data-renewal-statuses hidden>' +
+    financeTabs.map(label => '<button type="button" class="tab" role="tab" data-action="renewal-handoff-finance-tab" data-id="' +
+      label + '" aria-selected="false">' + label + '</button>').join('') + '</div>';
 
   function render() {
     const route = A.state.route;
@@ -54,10 +54,16 @@
     const help = finance ? '请先接手要办理的订单。核对实际付款后登记金额及用卡，交回员工完成新订单。'
       : finishing ? '根据财务已登记的实付资料，补齐客户实收和新的订阅周期。'
       : '选中需要续费的订单，确认后交给财务。财务办结后，请在「待补资料」提交新订单。';
-    const back = finishing ? '<a class="button" href="#/workspace/renewals/ready">返回待补资料</a>'
-      : !finance && canViewOrder() ? '<a class="button" href="#/workspace/renewals/reminders">续费提醒</a>' : '';
+    const back = finishing ? '<a class="button" href="#/workspace/renewals/ready">返回待补资料</a>' : '';
+    const reminder = !finance && !finishing && canViewOrder()
+      ? '<a class="button" href="#/workspace/renewals/reminders">续费提醒</a>' : '';
+    const submit = route === staffRoot
+      ? A.button('提交给财务', 'renewal-handoff-submit', 'primary', '', 'hidden disabled') : '';
+    const toolbar = '<div class="toolbar toolbar--inline renewal-toolbar">' +
+      (finishing ? '' : '<div class="toolbar-left" data-renewal-filters hidden></div>') +
+      '<div class="toolbar-right" data-page-actions>' + button('刷新', 'refresh') + reminder + submit + '</div></div>';
     const panel = '<section class="panel staff-workspace" data-renewal-handoff>' +
-      '<div class="toolbar"><div class="toolbar-right">' + button('刷新', 'refresh') + '</div></div>' +
+      (finance ? '<div class="list-controls renewal-controls">' + financeNavigation() + toolbar + '</div>' : toolbar) +
       '<p class="panel-body inline-notice warning" role="status" data-renewal-error hidden></p>' +
       '<div data-renewal-body></div><span data-renewal-progress></span></section>';
     return A.header(title, help, back) + (finance || finishing ? panel
@@ -79,8 +85,7 @@
     const now = Date.now();
     return rows.filter(row => {
       const { order } = row;
-      const expiry = Date.parse(order.expiry && /(?:Z|[+-]\d\d:\d\d)$/.test(order.expiry)
-        ? order.expiry : String(order.expiry || '').replace(' ', 'T') + '+08:00');
+      const expiry = subscriptionTime(order.expiry);
       return (choosing || accepted?.includes(row.status)) && (!view.filter.product || order.product === view.filter.product) &&
         (!choosing || view.filter.period === 'all' || (view.filter.period === 'expired' ? expiry <= now :
           expiry > now && expiry <= now + (view.data.reminderHours || 168) * 3_600_000)) &&
@@ -113,12 +118,19 @@
     const { pageSize } = view.filter;
     view.filter.page = Math.max(1, Math.min(view.filter.page, Math.ceil(rows.length / pageSize)));
     const start = (view.filter.page - 1) * pageSize;
+    const now = Date.now();
     const columns = [
       ['orderNo', '原订单', row => E(row.order.number || '—')],
       ['customer', '客户', row => E(row.order.customer)],
       ['account', '订阅账号', row => E(row.order.account || '待补资料')],
       ['plan', '产品与套餐', row => E([row.order.product, row.order.plan].join(' · '))],
       ['expiry', '原到期时间', row => E(beijing(row.order.expiry))],
+      ['days', '到期倒计时', row => {
+        const expiry = subscriptionTime(row.order.expiry);
+        if (!Number.isFinite(expiry)) return row.order.expiry ? '到期时间待核对' : '未登记到期时间';
+        return '<span class="tag ' + (expiry <= now ? 'danger' : 'success') + '" data-renewal-countdown="' +
+          expiry + '">' + E(subscriptionDuration(expiry, now)) + '</span>';
+      }],
       ['payment', '付款方式', row => E(row.order.payment)]
     ];
     if (choosing) {
@@ -137,7 +149,7 @@
           ['reference', '付款凭据编号', row => E(row.reference || '—')]] : []),
         ['newOrderNo', '结果', row => E(row.newOrderNo || row.returned || '—')], ['actions', '操作', row => rowActions(view, row)]);
     }
-    return A.table(columns.map(([id, label, render]) => ({ id, label, render, action: id === 'actions' })),
+    return A.table(columns.map(([id, label, render]) => ({ id, label, render, action: id === 'actions', mobileSummary: id === 'days' })),
       rows.slice(start, start + pageSize), choosing ? 'renewal-handoff' : '', choosing ? '待续费订单' :
         view.finance ? '财务续费订单' : '续费办理记录', { title: '暂无符合条件的订单', description: '可切换筛选或稍后刷新。' }) +
       window.IDPagination.render({ id: 'renewal-handoff-pagination', page: view.filter.page, pageSize, total: rows.length });
@@ -149,6 +161,7 @@
     const count = selected(view).size;
     anchor.textContent = count ? '提交给财务（' + count + '）' : '提交给财务';
     anchor.disabled = count === 0 || view.saving;
+    anchor.hidden = false;
   }
 
   function drawList(view) {
@@ -156,6 +169,23 @@
     if (!host) return;
     host.innerHTML = list(view);
     selectionButton(view);
+    updateCountdowns(view);
+  }
+
+  function updateCountdowns(view) {
+    clearTimeout(view.countdownTimer);
+    if (active !== view || !view.host.isConnected || document.hidden) return;
+    const now = Date.now(), hour = 3_600_000;
+    let next = Infinity;
+    for (const counter of view.host.querySelectorAll('[data-renewal-countdown]')) {
+      const expiry = Number(counter.dataset.renewalCountdown), remaining = expiry - now;
+      counter.textContent = subscriptionDuration(expiry, now);
+      counter.classList.toggle('danger', remaining <= 0);
+      counter.classList.toggle('success', remaining > 0);
+      next = Math.min(next, remaining > 0 ? remaining % hour : hour - (-remaining % hour));
+    }
+    if (Number.isFinite(next))
+      view.countdownTimer = setTimeout(() => updateCountdowns(view), Math.max(50, next + 50));
   }
 
   function inputField(label, id, value, attrs = '') {
@@ -204,23 +234,32 @@
 
   function draw(view) {
     const body = $('[data-renewal-body]', view.host);
-    window.IDSearchInput?.suspend(body);
     if (view.route.startsWith(finishPrefix)) {
       body.innerHTML = finishForm(view);
       return;
     }
-    body.innerHTML = (view.finance ? financeNavigation(view.filter.status) : '') +
-      '<div class="toolbar"><div class="toolbar-left"><div class="search-field">' + A.icon('search') +
+    const filters = $('[data-renewal-filters]', view.host);
+    window.IDSearchInput?.suspend(filters);
+    filters.innerHTML = '<div class="search-field">' + A.icon('search') +
       '<input id="renewal-handoff-search" data-auto-search aria-label="搜索续费订单" placeholder="搜索客户、账号或原订单编号" value="' +
       E(view.filter.query) + '"></div>' +
-      '<label for="renewal-handoff-product">产品</label><select id="renewal-handoff-product">' +
-      A.options([['', '全部产品'], 'GPT', 'Claude Pro', 'Claude Max', 'Gemini', 'Grok'], view.filter.product) + '</select>' +
-      (view.route === staffRoot ? '<label for="renewal-handoff-period">到期时间</label><select id="renewal-handoff-period">' +
-        A.options([['all', '全部可续费'], ['upcoming', '即将到期'], ['expired', '已到期']], view.filter.period) + '</select>' : '') +
-      '</div><div class="toolbar-right" data-page-actions>' + (view.route === staffRoot ? button('提交给财务', 'submit', '', 'primary') : '') +
-      '</div></div><div data-renewal-list></div>';
+      '<div class="renewal-filter"><label for="renewal-handoff-product">产品</label><select id="renewal-handoff-product">' +
+      A.options([['', '全部产品'], 'GPT', 'Claude Pro', 'Claude Max', 'Gemini', 'Grok'], view.filter.product) + '</select></div>' +
+      (view.route === staffRoot ? '<div class="renewal-filter"><label for="renewal-handoff-period">到期时间</label><select id="renewal-handoff-period">' +
+        A.options([['all', '全部可续费'], ['upcoming', '即将到期'], ['expired', '已到期']], view.filter.period) + '</select></div>' : '');
+    filters.hidden = false;
+    if (view.finance) {
+      const tabs = $('[data-renewal-statuses]', view.host);
+      for (const tab of tabs.children) {
+        const selected = tab.dataset.id === view.filter.status;
+        tab.classList.toggle('active', selected);
+        tab.setAttribute('aria-selected', String(selected));
+      }
+      tabs.hidden = false;
+    }
+    body.innerHTML = '<div data-renewal-list></div>';
     drawList(view);
-    window.IDSearchInput?.restore(body);
+    window.IDSearchInput?.restore(filters);
   }
 
   function notifyError(view, text) {
@@ -579,9 +618,10 @@
     if (active?.route === staffRoot) void load(active);
     else A.go(staffRoot);
   } };
+  document.addEventListener('visibilitychange', () => { if (active) updateCountdowns(active); });
   window.IDDesignModules.push({ matches, render, afterRender: activate, onClick, onSubmit, onChange,
-    deactivate() { active = undefined; },
-    clearPageState() { active = preferredOrder = undefined; },
+    deactivate() { clearTimeout(active?.countdownTimer); active = undefined; },
+    clearPageState() { clearTimeout(active?.countdownTimer); active = preferredOrder = undefined; },
     onDataChanges(scopes) {
       if (!active || active.saving || !scopes.some(key => [scope, 'commerce'].includes(key))) return;
       const view = active;
