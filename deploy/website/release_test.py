@@ -158,10 +158,24 @@ class WebsiteReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "recharge_core_or_runtime_changed"):
             release.require_website_scope(BASE, TARGET)
         for paths in (approved + ["deploy/recharge-core/Dockerfile"],
-                      sorted(set(approved) - release.NATIVE_PATCH_FILES)):
+                      sorted(set(approved) - release.NATIVE_PATCH_FILES - release.PLUS_TRIAL_PATCH_FILES)):
             git.return_value = "\n".join(paths)
             with self.assertRaisesRegex(RuntimeError, "recharge_native_release_scope_mismatch"):
                 release.require_website_scope(BASE, TARGET, include_core=True)
+
+    @patch("release.require_ancestor")
+    @patch("release.git")
+    def test_plus_trial_batch_is_its_own_reviewed_native_scope(self, git, _ancestor):
+        scope = release.PLUS_TRIAL_SCOPE
+        git.return_value = "\n".join(sorted(scope))
+        self.assertIsNone(release.require_website_scope(BASE, TARGET, include_core=True))
+        for missing in sorted(release.PLUS_TRIAL_PATCH_FILES):
+            git.return_value = "\n".join(sorted(scope - {missing}))
+            with self.assertRaisesRegex(RuntimeError, "recharge_native_release_scope_mismatch"):
+                release.require_website_scope(BASE, TARGET, include_core=True)
+        git.return_value = "\n".join(sorted(scope | {"deploy/recharge-core/Dockerfile"}))
+        with self.assertRaisesRegex(RuntimeError, "recharge_native_release_scope_mismatch"):
+            release.require_website_scope(BASE, TARGET, include_core=True)
 
     @patch("release.require_ancestor")
     @patch("release.git")

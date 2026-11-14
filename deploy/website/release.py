@@ -43,7 +43,13 @@ NATIVE_PATCH_FILES = {
                           ("provider-retirement", "upstream-provider-retirement.patch"))
     for name in ("manifest.json", patch)
 }
-NATIVE_CORE_SCOPE = NATIVE_PATCH_FILES | {
+# 0 元试用补丁只改 pricing-checkout.js，作为独立审查批次，不与银行卡套餐或供应商退役批次绑定。
+PLUS_TRIAL_PATCH_FILES = {
+    f"modules/recharge/codexdaichong/plus-trial/{name}"
+    for name in ("manifest.json", "upstream-plus-trial.patch")
+}
+PLUS_TRIAL_SCOPE = PLUS_TRIAL_PATCH_FILES | {"modules/recharge/codexdaichong/plus-trial.test.mjs"}
+NATIVE_CORE_SCOPE = NATIVE_PATCH_FILES | PLUS_TRIAL_SCOPE | {
     "deploy/recharge-core/README.md", "deploy/recharge-core/canary.py", "deploy/recharge-core/health.mjs",
     "deploy/recharge-core/card-plans-canary.mjs", "deploy/recharge-core/check-provider-cutover.mjs",
     "modules/recharge/codexdaichong/assets.mjs", "modules/recharge/codexdaichong/card-plan-admin.mjs",
@@ -148,7 +154,8 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False):
     # image. This exact path is installed and read back by the website release.
     changed.discard(BACKUP_OPERATION)
     if include_core:
-        approved_patches = NATIVE_PATCH_FILES <= changed <= NATIVE_CORE_SCOPE
+        approved_patches = any(required <= changed <= NATIVE_CORE_SCOPE
+                               for required in (NATIVE_PATCH_FILES, PLUS_TRIAL_PATCH_FILES))
         if include_adapter or (not approved_patches and changed != PROXY_TYPE_CORE_SCOPE):
             raise RuntimeError("recharge_native_release_scope_mismatch")
     elif include_adapter:
