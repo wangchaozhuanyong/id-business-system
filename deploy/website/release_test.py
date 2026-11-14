@@ -585,6 +585,28 @@ class WebsiteReleaseTests(unittest.TestCase):
         self.assertEqual(report["verifiedAt"] - report["capturedAt"], 4000)
         self.assertIsNone(backup_monitoring.mysql_fields(receipt | {"manifestVersionId": "null"}))
         self.assertIsNone(backup_monitoring.mysql_fields(receipt | {"verifiedAt": "2026-11-11T07:29:59+00:00"}))
+        recovery = {"key": receipt["key"].removesuffix("manifest.json") + "recovery-state.idbackup",
+                    "versionId": "fixture-capsule-version", "cipherSha256": "c" * 64, "cipherBytes": 4096}
+        paired = receipt | {"recoveryStateStatus": "verified", "recoveryState": recovery}
+        self.assertEqual(backup_monitoring.mysql_fields(paired)["recoveryStatus"], "verified")
+        self.assertEqual(backup_monitoring.mysql_fields(receipt | {"recoveryStateStatus": "capture_failed"})[
+            "recoveryStatus"], "capture_failed")
+        for changes in ({"key": "unrelated/recovery-state.idbackup"}, {"versionId": "null"},
+                        {"cipherBytes": 0}, {"cipherBytes": True}, {"cipherSha256": "bad"}):
+            self.assertEqual(backup_monitoring.mysql_fields(paired | {"recoveryState": recovery | changes})[
+                "recoveryStatus"], "missing")
+
+    def test_recovery_receipt_limit_is_bounded_and_projection_stays_small(self):
+        runtime = Path(__file__).resolve().parents[2] / ".runtime"
+        runtime.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=runtime) as directory:
+            file = Path(directory) / "receipt.json"
+            file.write_text(json.dumps({"fixture": "x" * 2048}))
+            file.chmod(0o600)
+            self.assertIsNone(backup_monitoring.read_receipt(file, os.geteuid()))
+            self.assertIsNotNone(backup_monitoring.read_receipt(file, os.geteuid(), 16384))
+            file.write_text(json.dumps({"fixture": "x" * 16384}))
+            self.assertIsNone(backup_monitoring.read_receipt(file, os.geteuid(), 16384))
 
     def test_sheets_projection_uses_timestamped_worker_outcomes(self):
         verified = '{"status":"verified","writes":0,"rows":{"邮箱管理":1,"账号管理":2,"订单管理":3,"客户管理":4}}'

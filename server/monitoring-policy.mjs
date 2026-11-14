@@ -77,7 +77,7 @@ export const monitorCheckInfo = {
   exchange_rates: ['汇率采集', '汇率采集任务状态', '连续 3 次采集失败告警。', '查看汇率采集配置、最近成功时间及失败记录。'],
   mailbox: ['邮箱查询', '当前服务进程的查询统计', '近 10 分钟至少 3 次服务端错误；至少 2 次成功且无错误才显示正常。', '打开邮箱查询与邮箱池，核对连接及查询结果。'],
   backup: ['业务 SQLite 备份', 'Google Drive 上传校验回执', '完整性失败、连续 3 次失败或回执超过 20 分钟未更新。', '请运维检查最近一次上传、待传批次及远端校验回执。'],
-  recharge_backup: ['充值 MySQL 备份', 'S3 异机回执与定时任务状态', '任务失败、定时器未运行或最近已验证的恢复点超过 35 分钟时告警。', '请运维检查半小时备份任务和最新 S3 回执。'],
+  recharge_backup: ['充值 MySQL 备份', 'S3 异机回执与定时任务状态', '检查任务状态、35 分钟内的恢复点和配套恢复包校验。', '请运维检查半小时备份任务和最新 S3 回执。'],
   sheets: ['Google 表格同步', '表格同步核对及只读采集回执', '完整性失败、连续 3 次失败，或 15 分钟以上没有有效回执或成功校验时告警。', '请运维检查表格同步回执，并核对同步目标及写入结果。']
 };
 
@@ -92,6 +92,7 @@ export const monitorReasons = {
   mysql_timer_inactive: '充值 MySQL 备份定时器未运行。',
   mysql_attempt_failed: '最近一次充值 MySQL 备份任务失败。',
   mysql_backup_stale: '最近通过异机校验的恢复点已超过 35 分钟。',
+  recovery_state_missing: 'MySQL 异机备份已验证，但配套登录配置和同步状态恢复包尚未验证。',
   integrity_failed: '最近回执报告完整性校验失败。',
   verification_missing: '已有运行回执，但尚无成功校验依据。',
   verification_stale: '最近一次成功校验已超过 15 分钟，请核对同步结果。',

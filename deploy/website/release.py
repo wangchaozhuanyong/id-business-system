@@ -9,7 +9,7 @@ import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from remote import (CARD_IMPORT_ASSET_SOURCE, CARD_IMPORT_PRESENTATION_FILES, CARD_PLAN_PRESENTATION_FILES,
+from remote import (BACKUP_OPERATION, CARD_IMPORT_ASSET_SOURCE, CARD_IMPORT_PRESENTATION_FILES, CARD_PLAN_PRESENTATION_FILES,
                     CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES, PRESENTATION_SCOPES, SECURITY_PRESENTATION_FILES,
                     REDEEM_PRESENTATION_FILES, TABLE_ACTIONS_STYLESHEET, WORKSPACE_PROGRESS_PRESENTATION_FILES)
 
@@ -131,6 +131,9 @@ def require_redeem_presentation(base, sha):
 def require_website_scope(base, sha, include_adapter=False, include_core=False):
     require_ancestor(base, sha)
     changed = set(git("diff", "--name-only", base, sha, "--", *CORE_PATHS).splitlines())
+    # The host backup timer is managed independently from the immutable payment
+    # image. This exact path is installed and read back by the website release.
+    changed.discard(BACKUP_OPERATION)
     if include_core:
         approved_patches = NATIVE_PATCH_FILES <= changed <= NATIVE_CORE_SCOPE
         if include_adapter or (not approved_patches and changed != PROXY_TYPE_CORE_SCOPE):
@@ -345,6 +348,8 @@ def main():
              "server/monitoring-sources.mjs", "server/monitoring-worker-receipts.mjs", "server/system-monitoring.mjs",
              "deploy/website/backup_monitoring.py", "deploy/website/id-business-independent-backup-monitoring.service",
              "deploy/website/id-business-independent-backup-monitoring.timer")
+    files += (BACKUP_OPERATION, "deploy/website/recovery_capsule.py",
+              "server/backup/recovery-archive.mjs", "server/backup/recovery-archive-cli.mjs")
     files += tuple(path for path in ("frontend/order-opening.mjs", "server/recharge-order-sync.mjs")
                    if (ROOT / path).is_file())
     files += ('server/recharge-events.mjs', 'server/apple-relay/mail-updates.mjs',
@@ -376,6 +381,9 @@ def main():
     command_id, receipt = remote(plan)
     if receipt.get("mainSha") != sha or not receipt.get("appCanaryPassed"):
         raise RuntimeError(f"website_release_receipt_mismatch: {command_id}")
+    recovery = receipt.get("portableRecoveryBackup", {})
+    if recovery.get("sourceRevision") != sha or recovery.get("programSha256") != plan["files"][BACKUP_OPERATION]:
+        raise RuntimeError(f"backup_program_release_receipt_mismatch: {command_id}")
     if include_adapter and (receipt.get("adapter", {}).get("revision") != sha or
                             not receipt.get("adapterCanaryPassed") or not receipt.get("nativeEngineUnchanged")):
         raise RuntimeError(f"adapter_release_receipt_mismatch: {command_id}")

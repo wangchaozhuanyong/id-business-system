@@ -1,7 +1,7 @@
 """Stage, verify and switch the website and its explicitly selected adapter on the SSM host."""
 
 import fcntl
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 import hashlib
 import json
 import os
@@ -75,6 +75,7 @@ MONITORING = FORMAL / "backup-monitoring"
 MONITORING_RECEIPTS = MONITORING / "receipts"
 MONITORING_UNIT = "id-business-independent-backup-monitoring"
 MONITORING_ENV = "ID_MONITOR_BACKUP_RECEIPTS_DIR=/run/id-backup-monitoring"
+BACKUP_OPERATION = "deploy/recharge-core/scheduled-backup.py"
 MONITORING_MOUNT = '  --mount "type=bind,src=$formal/backup-monitoring/receipts,dst=/run/id-backup-monitoring,readonly"'
 ADMISSION_ENV = "ID_VENDURE_ADMISSION_DIRECTORY=/state/vendure-admission"
 MONITORING_FILES = ("backup_monitoring.py", MONITORING_UNIT + ".service", MONITORING_UNIT + ".timer")
@@ -683,6 +684,55 @@ console.log(JSON.stringify(states));
     return status
 
 
+@contextmanager
+def prepare_backup_recovery(source, operations, base, sha):
+    """Verify the host baseline and reserve its lock before the website cutover."""
+    target = FORMAL / "ops/recharge-core/scheduled-backup.py"
+    previous = ROOT / "releases" / base / "source" / BACKUP_OPERATION
+    candidate = source / BACKUP_OPERATION
+    before, after = digest(previous), digest(candidate)
+    receipt = {"sourceRevision": sha, "programSha256": after, "previousProgramSha256": before}
+    content = candidate.read_text()
+    compile(content, str(candidate), "exec")
+
+    def current_program():
+        info = target.lstat()
+        require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and stat.S_IMODE(info.st_mode) == 0o644 and
+                target.resolve() == target, "backup_program_baseline_changed")
+        current = digest(target)
+        require(current in (before, after), "backup_program_baseline_changed")
+        return current
+
+    def confirm_installed():
+        require(digest(target) == after, "backup_program_readback_mismatch")
+        return receipt
+
+    if current_program() == after:
+        yield confirm_installed
+        return
+    lock_path = ROOT / "backups/scheduled-recharge/.lock"
+    lock_fd = os.open(lock_path, os.O_WRONLY | os.O_NOFOLLOW)
+    with os.fdopen(lock_fd, "w") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ReleaseError("backup_upload_in_progress_retry_installation") from None
+        require(current_program() == before, "backup_program_changed_during_release")
+        write_new(operations / "scheduled-backup.py.before", target.read_text(), 0o600)
+        pending = target.with_name(f".scheduled-backup.{sha[:12]}.py")
+        write_new(pending, content, 0o644)
+
+        def install():
+            require(current_program() == before, "backup_program_changed_during_release")
+            os.replace(pending, target)
+            return confirm_installed()
+
+        try:
+            yield install
+        finally:
+            pending.unlink(missing_ok=True)
+
+
 def http(path):
     request = urllib.request.Request("http://127.0.0.1:44572" + path, headers={"Host": SITE_HOST})
     return urllib.request.urlopen(request, timeout=5)
@@ -825,8 +875,9 @@ def release_website(plan):
     require_main(sha)
     if (source / "server/site-management.mjs").is_file():
         write_website_version(source, sha)
-    install_backup_monitoring(source, sha)
-    with core.cutover() if core else nullcontext() as native:
+    backup = prepare_backup_recovery(source, ops, base, sha)
+    with backup as install_recovery, (core.cutover() if core else nullcontext()) as native:
+        install_backup_monitoring(source, sha)
         adapter = switch_adapter(plan, source, ops, native) if native else (
             switch_adapter(plan, source, ops) if include_adapter else None)
         require_main(sha)
@@ -839,6 +890,7 @@ def release_website(plan):
         run(["systemctl", "restart", UNIT], timeout=55)
         live = read_website(plan, release, source, adapter, core) if core else read_website(plan, release, source, adapter)
         events = read_event_runtime() if plan.get('externalEvents') else None
+        recovery = install_recovery()
         monitoring = read_backup_monitoring(inspect("app"))
         if core:
             core.finish()
@@ -850,6 +902,7 @@ def release_website(plan):
               "protectedComponentsUnchanged": not include_adapter,
               "liveAssetsSha256": digest(release / "assets.json"),
               "backupMonitoring": monitoring,
+              "portableRecoveryBackup": recovery,
               "unauthenticatedProtectedReadsRejected": True, "productionBusinessTestWrites": False}
     if events:
         result['externalEvents'] = events

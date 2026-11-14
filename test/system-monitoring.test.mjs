@@ -498,6 +498,22 @@ test('two backup checks use the verified capture time, report failure and recove
     await sources.tick();
   }
   assert.equal(read('recharge_backup').status, 'ok');
+  for (const recoveryStatus of ['missing', 'capture_failed']) {
+    tick();
+    report = clean();
+    report.mysql.recoveryStatus = recoveryStatus;
+    await sources.tick();
+    assert.equal(read('backup').status, 'ok');
+    assert.equal(read('recharge_backup').status, 'bad');
+    assert.match(read('recharge_backup').detail, /配套登录配置和同步状态恢复包尚未验证/);
+  }
+  for (let n = 0; n < 2; n++) {
+    tick();
+    report = clean();
+    report.mysql.recoveryStatus = 'verified';
+    await sources.tick();
+  }
+  assert.equal(read('recharge_backup').status, 'ok');
   tick(4 * minute);
   await sources.tick();
   assert.match(read('backup').detail, /采集回执缺失或已超时/);
