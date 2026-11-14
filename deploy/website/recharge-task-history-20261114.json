@@ -1,10 +1,10 @@
 {
-  "beforeAssetsSha256": "402daa635bc30d1ea2a4f0629a3667eb6c21308782630360a44382ccd059eb62",
-  "assetsSha256": "e0c85bb0a637c8ec2c2cc50db0edfdd99fbafdc2bacaee9f6ea681829e9a7090",
+  "beforeAssetsSha256": "e0c85bb0a637c8ec2c2cc50db0edfdd99fbafdc2bacaee9f6ea681829e9a7090",
+  "assetsSha256": "efda7404746a546044042712f746f4a2d823d83e2aa619499763a63722fac8b6",
   "files": {
     "modules/recharge/codexdaichong/assets.mjs": {
-      "before": "6151758d41d3c9a7af0109141285a64d1244653a5b0dbb1e93476c4ad04ef144",
-      "after": "752d0b877db636b9e9a96f4e9da79352e342d94984c779543d4e281174b6f21f"
+      "before": "752d0b877db636b9e9a96f4e9da79352e342d94984c779543d4e281174b6f21f",
+      "after": "8c46d60d9e31d99b28ba408dc321bfe9ff1bdf30272213081fbdbb0d6543e527"
     }
   }
 }

@@ -189,8 +189,15 @@ function adaptRemoteAdminPagination(source) {
     `            loadSessions(false, { page: 1 }).catch(() => { });`);
   source = replaceOne(source, '        async function loadSessions(showToast = false, options = {}) {',
     `        let sessionPageRequestId = 0;
+        function showSessionListStatus(message) {
+            const status = document.getElementById('session_list_status');
+            status.textContent = message;
+            status.hidden = !message;
+        }
+
         async function loadSessions(showToast = false, options = {}) {
-            const requestId = ++sessionPageRequestId;`);
+            const requestId = ++sessionPageRequestId;
+            if (!sessionList.length) showSessionListStatus('正在读取 Session 记录…');`);
   source = replaceOne(source, `            state.page = page;
             const query = new URLSearchParams({
                 limit: String(state.pageSize),
@@ -204,10 +211,19 @@ function adaptRemoteAdminPagination(source) {
                 if (!parsed.ok) {
                     throw new Error(parsed.message);
                 }`,
-    `                const res = await authFetch(\`/api/admin/sessions?\${query.toString()}\`);
+    `                const res = await authFetch(\`/api/admin/sessions?\${query.toString()}\`, {
+                    securityConfirmation: showToast || options.page != null
+                });
                 const parsed = await readJsonResponse(res);
                 if (requestId !== sessionPageRequestId) return;
-                if (!res.ok || !parsed.ok) throw new Error(parsed.message || '加载 Session 失败');`);
+                if (!res.ok && parsed.data?.code === 'SECURITY_CONFIRMATION_REQUIRED') {
+                    showSessionListStatus('请点击「刷新」完成安全确认，再查看 Session 记录。');
+                    return;
+                }
+                if (!res.ok || !parsed.ok) {
+                    throw new Error(parsed.data?.error || parsed.data?.message || parsed.message || '加载 Session 失败');
+                }
+                showSessionListStatus('');`);
   source = replaceOne(source, `                sessionTotal = Math.max(0, Number(data.total) || nextList.length);
                 const totalPages = Math.max(1, Math.ceil(sessionTotal / state.pageSize));
                 if (state.page > totalPages) {
@@ -224,8 +240,8 @@ function adaptRemoteAdminPagination(source) {
                 sessionTotal = total;`);
   source = replaceOne(source, `                if (showToast) {
                     showMessage(error.message || '加载 Session 失败', 'error');`,
-    `                if (requestId === sessionPageRequestId && (showToast || options.page != null)) {
-                    showMessage(error.message || '加载 Session 失败', 'error');`);
+    `                if (requestId === sessionPageRequestId) {
+                    showSessionListStatus(error.message || '加载 Session 失败');`);
   source = replaceOne(source, '        const orbitcardUsageState = {\n            page: 1,\n            pageSize: 20,',
     '        const orbitcardUsageState = {\n            page: 1,\n            pageSize: window.IDPagination.defaultPageSize,');
   source = replaceOne(source, 'page = orbitcardUsageState.page) {', 'page = orbitcardUsageState.page, options = {}) {');
@@ -429,6 +445,7 @@ function adaptAdminScript(source, routingScript) {
     'function redirectToLogin()',
     'async function loadAdminSecurityStatus()',
     `
+        let pendingReadVerification;
         async function authFetch(url, options = {}) {
             const { securityConfirmation, ...requestOptions } = options;
             const request = () => fetch(url, { ...requestOptions, credentials: 'same-origin' });
@@ -436,8 +453,15 @@ function adaptAdminScript(source, routingScript) {
             if (response.status === 403 && (options.method && !['GET', 'HEAD'].includes(options.method) ||
                 securityConfirmation === true)) {
                 const detail = await response.clone().json().catch(() => null);
-                if (detail?.code === 'SECURITY_CONFIRMATION_REQUIRED' &&
-                    await window.parent.IDAccountSecurity?.verify()) response = await request();
+                if (detail?.code === 'SECURITY_CONFIRMATION_REQUIRED') {
+                    const verify = () => window.parent.IDAccountSecurity?.verify();
+                    const confirmed = securityConfirmation
+                        ? await (pendingReadVerification ??= Promise.resolve(verify()).finally(() => {
+                            pendingReadVerification = null;
+                        }))
+                        : await verify();
+                    if (confirmed) response = await request();
+                }
             }
             if (response.status === 401) {
                 window.idRechargeReport('session-expired');
@@ -1551,6 +1575,9 @@ function adaptHtml(source, kind) {
         : '<body data-recharge-view="' + kind + '"'
     );
   if (kind === 'admin') {
+    source = replaceOne(source, '<div class="table-container session-table-container">',
+      '<p id="session_list_status" role="status" hidden></p>\n' +
+        '                <div class="table-container session-table-container">');
     source = replaceOne(source,
       '可在表格中删除单条任务记录。',
       '已转入人工确认的任务，可在「待人工确认」中核对。');
