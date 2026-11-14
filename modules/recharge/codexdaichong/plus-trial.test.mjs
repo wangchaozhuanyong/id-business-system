@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 const exec = promisify(execFile);
 const manifestUrl = new URL('./plus-trial/manifest.json', import.meta.url);
 const patchUrl = new URL('./plus-trial/upstream-plus-trial.patch', import.meta.url);
-const fixtureUrl = new URL('../../../test/fixtures/pricing-checkout.post-routing.js', import.meta.url);
+const fixtureUrl = new URL('../../../test/fixtures/pricing-checkout.post-routing.js.txt', import.meta.url);
 const prepareUrl = new URL('./prepare.mjs', import.meta.url);
 const patchPath = fileURLToPath(patchUrl);
 
