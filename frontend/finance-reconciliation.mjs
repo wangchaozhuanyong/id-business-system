@@ -5,22 +5,23 @@ export function createPage(A, definition) {
 
   const note = ({ from, to }) => from && to ? from + ' 至 ' + to :
     from ? from + ' 起' : to ? '截至 ' + to : '全部日期';
-  const statuses = { success: '成功', failed: '失败', pending: '待确认' };
+  const statuses = { success: '扣款成功', failed: '扣款失败', pending: '待确认' };
+  const statusKinds = { success: 'success', failed: 'danger', pending: 'warning' };
   const plans = { plus: 'Plus', pro100: 'Pro 100', pro200: 'Pro 200', pro500: 'Pro 500' };
   const clock = new Intl.DateTimeFormat('zh-CN', {
     timeZone: 'Asia/Shanghai', dateStyle: 'short', timeStyle: 'medium', hourCycle: 'h23'
   });
   const date = value => Number.isFinite(Date.parse(value)) ? clock.format(new Date(value)) : '—';
   const render = () => A.header(definition.label, definition.description) +
-    '<section class="panel design-async-region staff-workspace" data-finance-reconciliation>' +
-    '<div class="toolbar"><div class="toolbar-right">' + A.button('刷新', 'billing-refresh') + '</div></div>' +
-    '<div class="panel-body"><form class="form-section" data-billing-filter>' +
-    '<div class="form-grid">' +
+    '<section class="panel design-async-region finance-workspace" data-finance-reconciliation>' +
+    '<form class="toolbar toolbar--inline finance-toolbar finance-date-filter" data-billing-filter><div class="toolbar-left">' +
     A.field('开始日期', 'staff-from', A.input('staff-from', draft.from, 'type="date"')) +
     A.field('结束日期', 'staff-to', A.input('staff-to', draft.to, 'type="date"')) +
-    '</div><div class="form-footer"><button type="submit" class="button primary">按日期查看</button></div></form>' +
-    '<p data-billing-progress role="status" hidden></p><p data-billing-error role="status" hidden></p>' +
-    '<div data-billing-result></div></div></section>';
+    '</div><div class="toolbar-right"><button type="submit" class="button primary">按日期查看</button>' + A.button('刷新', 'billing-refresh') +
+    '<a class="button" href="#/orders/statistics">查看订单统计</a></div></form>' +
+    '<p class="finance-feedback" data-billing-progress role="status" hidden></p>' +
+    '<p class="finance-feedback field-error" data-billing-error role="alert" hidden></p>' +
+    '<div data-billing-result></div></section>';
 
   function showResult(view) {
     const target = view.region.querySelector('[data-billing-result]');
@@ -31,20 +32,23 @@ export function createPage(A, definition) {
     const { query, result } = applied;
     const columns = [
       { id: 'reference', label: '账单编号' },
-      { id: 'time', label: '扣款时间', render: row => A.esc(date(row.time)) },
-      { id: 'last4', label: '卡尾号' },
+      { id: 'time', label: '扣款时间（北京）', render: row => A.esc(date(row.time)) },
+      { id: 'last4', label: '卡尾号', mobileSummary: true, render: row => `<span class="mono">${A.esc(row.last4 || '—')}</span>` },
       { id: 'plan', label: '套餐', render: row => A.esc(plans[row.plan] || '—') },
-      { id: 'amount', label: '原币金额' },
-      { id: 'currency', label: '币种' },
-      { id: 'status', label: '扣款状态', render: row => A.esc(statuses[row.status] || row.status || '—') }
+      { id: 'amount', label: '原币金额', mobileSummary: true, class: 'finance-amount', render: row =>
+        `<span>${A.esc(row.amount ?? '—')}</span> <span class="finance-muted">${A.esc(row.currency || '')}</span>` },
+      { id: 'status', label: '扣款状态', mobileSummary: true,
+        render: row => A.tag(statuses[row.status] || row.status || '—', statusKinds[row.status] || '') }
     ];
-    target.innerHTML = '<p class="inline-notice">账单日期 ' + A.esc(note(query)) + '</p>' +
-      (result.items.length ? A.table(columns, result.items, '', '代充对账记录') : A.empty('暂无记录', '可调整日期后重新查询。')) +
-      '<div class="toolbar"><div class="toolbar-left">' +
+    target.innerHTML = '<div class="finance-list-meta"><span>账单日期 ' + A.esc(note(query)) + '</span>' +
+      '<span class="finance-muted">北京时间</span></div>' +
+      A.table(columns, result.items, '', '代充对账记录', { title: '暂无扣款记录', description: '可调整日期后重新查询。' }) +
+      '<nav class="toolbar toolbar--inline finance-pagination" aria-label="对账记录分页" data-pagination-footer><div class="toolbar-left">' +
+      '<span class="finance-muted">本页 ' + result.items.length + ' 笔</span></div><div class="toolbar-right">' +
       A.button('上一页', 'billing-prev', '', '', query.page <= 1 ? 'disabled' : '') +
-      '<span>第 ' + query.page + ' 页</span>' +
+      '<span aria-live="polite">第 ' + query.page + ' 页</span>' +
       A.button('下一页', 'billing-next', '', '', result.hasMore && query.page < 5000 ? '' : 'disabled') +
-      '</div><div class="toolbar-right"><a class="button" href="#/orders/statistics">查看订单统计</a></div></div>';
+      '</div></nav>';
   }
 
   async function read(view, query, refresh = false) {

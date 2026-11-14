@@ -6,6 +6,7 @@ export function createPage(A, definition) {
   const types = { google: '谷歌邮箱', apple: '苹果邮箱', microsoft: '微软邮箱', relay: '苹果隐藏邮箱',
     gpt: 'GPT 账号', claude: 'Claude 账号', gemini: 'Gemini 账号', grok: 'Grok 账号' };
   const resource = definition.resource.slice('staff/'.length);
+  const isCards = definition.route === 'staff/finance/cards';
   const initialState = () => ({ draft: {}, page: 1, reviewPage: { page: 1 }, version: 0 });
   let state = initialState();
   let active;
@@ -78,11 +79,10 @@ export function createPage(A, definition) {
         [['name', '名称'], ['endpoint', '地址'], ['countryCode', '国家或地区'], ['protocol', '连接方式']]);
   }
 
-  function search(placeholder) {
-    return `<div class="toolbar"><div class="toolbar-left"><div class="search-field">${A.icon('search')}
-      <input type="search" id="staff-list-search" data-auto-search data-staff-query aria-label="${E(placeholder)}" value="${E(active.current.query || '')}"
-      placeholder="${E(placeholder)}" /></div></div></div>`;
-  }
+  const searchField = (placeholder, current) => `<div class="search-field">${A.icon('search')}
+    <input type="search" id="staff-list-search" data-auto-search data-staff-query aria-label="${E(placeholder)}" value="${E(current.query || '')}"
+    placeholder="${E(placeholder)}" /></div>`;
+  const search = placeholder => `<div class="toolbar"><div class="toolbar-left">${searchField(placeholder, active.current)}</div></div>`;
 
   function registrationList(current) {
     const { mailboxes = [], accounts = [] } = current.result.data || {};
@@ -127,30 +127,56 @@ export function createPage(A, definition) {
   }
 
   function cardList(current) {
-    const rows = (current.result.items || []).filter(row => !current.query || row.last4.includes(current.query.trim()));
-    return list(rows, current, '银行卡和套餐', [
-      ['last4', '银行卡尾号'], ['active', '状态', row => E(row.state || (row.active ? '可用' : '已停用'))],
-      ['uses', '使用次数'], ['plans', '允许套餐', row => row.plans?.map(key => plans.find(([value]) => key === value)?.[1]).filter(Boolean).join('、') || '未设置'],
-      ['actions', '操作', row => rowAction('设置套餐', 'card-plan', row.id) +
-        (row.active ? rowAction('停用', 'card-stop', row.id) : '')]
-    ]);
+    const all = current.result.items || [];
+    const rows = all.filter(row => (!current.query || row.last4.includes(current.query.trim())) &&
+      (!current.cardStatus || cardState(row) === current.cardStatus) &&
+      (!current.cardPlan || (current.cardPlan === 'unconfigured' ? !row.plans?.length : row.plans?.includes(current.cardPlan))));
+    const size = current.pageSize || 20;
+    current.page = Math.max(1, Math.min(current.page, Math.ceil(rows.length / size)));
+    const columns = [
+      { id: 'last4', label: '银行卡尾号', render: row => `<strong>${E(row.last4)}</strong>` },
+      { id: 'active', label: '状态', mobileSummary: true, render: row => {
+        const value = cardState(row);
+        return A.tag(value, value === '可用' ? 'success' : value === '暂缓使用' ? 'warning' : value === '不可用' ? 'danger' : '');
+      } },
+      { id: 'plans', label: '允许套餐', mobileSummary: true, render: row => row.plans?.length
+        ? `<span class="finance-card-plans">${row.plans.map(key => A.tag(plans.find(([value]) => key === value)?.[1] || key)).join('')}</span>`
+        : '<span class="finance-muted">未配置套餐</span>' },
+      { id: 'uses', label: '使用次数', mobileSummary: true },
+      { id: 'lastUsedAt', label: '最近使用（北京）', render: row => E(time(row.lastUsedAt)) },
+      { id: 'actions', label: '操作', action: true, render: row => `<div class="action-links">${rowAction('设置套餐', 'card-plan', row.id)}${
+        row.active ? rowAction('停用', 'card-stop', row.id) : ''}</div>` }
+    ];
+    return A.table(columns, rows.slice((current.page - 1) * size, current.page * size), '', '银行卡和套餐', {
+      title: all.length ? '没有符合条件的银行卡' : '暂无银行卡',
+      description: all.length ? '可调整尾号、状态或套餐筛选。' : '点击「导入银行卡」添加，并选择允许使用的套餐。'
+    }) + window.IDPagination.render({ id: 'staff-list', page: current.page, pageSize: size, total: rows.length });
+  }
+
+  const cardState = row => row.state || (row.active ? '可用' : '已停用');
+  const cardPolicyLabel = current => current.result.strict ? '仅使用已配置套餐的卡' : '未配置套餐的卡按现有规则使用';
+
+  function cardToolbar() {
+    const filter = (label, key, choices, selected) => `<label class="finance-filter">${label}${
+      A.select('staff-card-' + key, choices, selected).replace('<select', `<select data-card-filter="${key}" aria-label="${key === 'status' ? '银行卡状态' : '允许套餐'}"`)}</label>`;
+    return `<div class="toolbar toolbar--inline finance-toolbar"><div class="toolbar-left">${searchField('按尾号查找银行卡', state)}${
+      filter('状态', 'status', [['', '全部状态'], ...['可用', '暂缓使用', '已停用', '不可用'].map(value => [value, value])], state.cardStatus || '')}${
+      filter('套餐', 'plan', [['', '全部套餐'], ...plans, ['unconfigured', '未配置套餐']], state.cardPlan || '')}</div>
+      <div class="toolbar-right">${control('刷新', 'refresh')}${control('取卡设置', 'card-settings', 'disabled')}
+      <button type="button" class="button primary" data-staff-action="card-import-open" disabled>导入银行卡</button></div></div>`;
   }
 
   function cardReviewSection(current) {
     const pending = current.result.pending || [];
-    return !pending.length ? '' : '<section class="panel-body">' +
+    return !pending.length ? '' : '<section class="finance-card-review">' +
       heading('待核对的银行卡维护', '核对只读取现有银行卡资料。与提交时的资料一致后，系统会补记结果。', 'staff-card-review') +
       '<div data-staff-card-reviews>' + cardReviews(current) + '</div></section>';
   }
 
   function cards(current) {
-    return cardReviewSection(current) + heading('导入银行卡', '每行一张卡，按卡号、有效期、安全码、持卡人填写，用空格或竖线分隔。持卡人可留空。', 'staff-import-help') +
-      form('card-import', A.field('银行卡资料', 'staff-lines',
-        '<textarea id="staff-lines" name="staff-lines" rows="5" required autocomplete="off" spellcheck="false" data-no-draft></textarea>', true) +
-        optionPlans('staff-import-plan', current.draft['card-import']?.plans), '核对并导入') +
-      `<div class="toolbar"><div class="toolbar-left"><span>${current.result.strict ? '仅使用已配置套餐的卡' : '未配置套餐的卡按现有规则使用'}</span></div>
-      <div class="toolbar-right">${control(current.result.strict ? '取消严格取卡' : '仅使用已配置套餐的卡', 'card-strict')}</div></div>` +
-      search('按尾号查找银行卡') + `<div data-staff-list>${cardList(current)}</div>`;
+    return cardReviewSection(current) + `<div class="finance-list-meta"><span data-card-policy>取卡规则：${E(cardPolicyLabel(current))}</span>${
+      A.titleInfo('取卡规则', '已配置套餐的卡只参与所选套餐。未配置套餐的卡是否参与取卡，由「取卡设置」控制。', 'staff-card-policy-help')
+    }</div><div data-staff-list>${cardList(current)}</div>`;
   }
 
   function cardReviews(current) {
@@ -171,6 +197,10 @@ export function createPage(A, definition) {
   };
 
   function render() {
+    if (isCards) return A.header(definition.label, definition.description) +
+      `<section class="panel staff-workspace finance-workspace" data-staff-workspace>${cardToolbar()}
+      <p class="finance-feedback" data-staff-status role="status" hidden></p>
+      <div data-staff-content><p class="finance-feedback">正在读取银行卡…</p></div></section>`;
     return A.header(definition.label, definition.description) + `<section class="panel staff-workspace" data-staff-workspace>
       <div class="toolbar"><div class="toolbar-right">${control('刷新', 'refresh')}</div></div>
       <div class="panel-body"><p data-staff-status role="status" hidden></p><div data-staff-content>正在读取资料…</div></div>
@@ -188,6 +218,7 @@ export function createPage(A, definition) {
     current.failed = false;
     view.loading = (async () => {
       host.setAttribute('aria-busy', 'true');
+      if (isCards) for (const button of host.querySelectorAll('.finance-toolbar [data-staff-action]')) button.disabled = true;
       try {
         const snapshot = await request(resource);
         if (active !== view || !host.isConnected) return false;
@@ -205,6 +236,8 @@ export function createPage(A, definition) {
       } finally {
         host.removeAttribute('aria-busy');
         view.loading = undefined;
+        if (isCards) for (const button of host.querySelectorAll('.finance-toolbar [data-staff-action]'))
+          button.disabled = button.dataset.staffAction !== 'refresh' && (!current.result || current.failed);
       }
     })();
     return view.loading;
@@ -285,7 +318,7 @@ export function createPage(A, definition) {
     }
   }
 
-  async function onSubmit(event, view) {
+  async function onSubmit(event, view, version = view.current.version) {
     const formNode = event.target.closest('[data-staff-form]');
     if (!formNode) return;
     event.preventDefault();
@@ -312,7 +345,7 @@ export function createPage(A, definition) {
       const chosen = selection(formNode);
       if (!chosen.length) return message(view, '请至少选择一个套餐。');
       if (!await Security.confirmChange('确认导入银行卡', '导入后，符合条件的银行卡会参与所选套餐的自动取卡。')) return;
-      return write(view, action, { action: 'import', lines: data.lines, plans: chosen }, formNode);
+      return write(view, action, { action: 'import', lines: data.lines, plans: chosen, version }, formNode);
     }
     if (action === 'customer') return write(view, action, { ...data, action: 'customer' }, formNode);
     return write(view, action, data, formNode);
@@ -379,6 +412,57 @@ export function createPage(A, definition) {
     });
   }
 
+  function cardImport(view) {
+    const version = view.current.version;
+    A.openDrawer('导入银行卡', '每行一张卡，按卡号、有效期、安全码、持卡人填写，用空格或竖线分隔。持卡人可留空。',
+      form('card-import', A.field('银行卡资料', 'staff-lines',
+        '<textarea id="staff-lines" name="staff-lines" rows="7" required autocomplete="off" spellcheck="false" data-no-draft></textarea>', true) +
+        optionPlans('staff-import-plan', view.current.draft['card-import']?.plans), '核对并导入') +
+      '<p class="field-error" data-staff-dialog-status role="alert" hidden></p>', '', 'staff-card-import');
+    const drawer = $('#drawer'), formNode = $('[data-staff-form]', drawer);
+    formNode.classList.add('finance-card-import');
+    formNode.addEventListener('input', () => saveDraft(formNode, view.current));
+    formNode.addEventListener('submit', async event => {
+      const error = $('[data-staff-dialog-status]', drawer);
+      error.hidden = true;
+      message(view, '');
+      if (await onSubmit(event, view, version)) {
+        if (formNode.isConnected) A.closeDrawer();
+      } else if (formNode.isConnected && $('[data-staff-status]', view.host)?.textContent) {
+        error.textContent = $('[data-staff-status]', view.host).textContent;
+        error.hidden = false;
+      }
+    });
+    drawer.addEventListener('id-view-deactivate', () => {
+      for (const input of formNode.querySelectorAll('[data-no-draft]')) input.value = '';
+    }, { once: true });
+  }
+
+  function cardSettings(view) {
+    const version = view.current.version;
+    A.openDrawer('取卡设置', '已配置套餐的银行卡只用于所选套餐。这里决定未配置套餐的银行卡是否参与自动取卡。',
+      `<div class="property-list"><div class="property-row"><span>当前规则</span><strong>${E(cardPolicyLabel(view.current))}</strong></div></div>` +
+      '<p class="field-error" data-staff-dialog-status role="alert" hidden></p>',
+      control(view.current.result.strict ? '取消严格取卡' : '仅使用已配置套餐的卡', 'card-strict'), 'staff-card-settings');
+    const drawer = $('#drawer'), button = $('[data-staff-action="card-strict"]', drawer);
+    const strict = !view.current.result.strict;
+    button.addEventListener('click', async () => {
+      if (button.disabled) return;
+      button.disabled = true;
+      try {
+        if (!await Security.confirmChange('更改取卡规则', strict
+          ? '没有配置套餐的银行卡将暂停自动使用。' : '没有配置套餐的银行卡会按现有规则参与自动取卡。')) return;
+        if (await write(view, 'card-strict', { action: 'strict', strict, version })) {
+          if (button.isConnected) A.closeDrawer();
+        } else if (button.isConnected) {
+          const error = $('[data-staff-dialog-status]', drawer);
+          error.textContent = $('[data-staff-status]', view.host)?.textContent || '';
+          error.hidden = !error.textContent;
+        }
+      } finally { button.disabled = false; }
+    });
+  }
+
   async function onClick(event, view) {
     const button = event.target.closest('[data-staff-action]');
     if (!button || button.disabled) return;
@@ -394,6 +478,8 @@ export function createPage(A, definition) {
       return load(view);
     }
     if (action === 'renewal') return window.IDRenewalHandoff?.select(id);
+    if (action === 'card-import-open') return cardImport(view);
+    if (action === 'card-settings') return cardSettings(view);
     if (action === 'order') return orderForm(view, id);
     if (action === 'mail-code') {
       button.disabled = true;
@@ -419,13 +505,6 @@ export function createPage(A, definition) {
       finally { button.disabled = false; }
       return;
     }
-    if (action === 'card-strict') {
-      const strict = !current.result.strict;
-      if (await Security.confirmChange('更改取卡规则', strict
-        ? '没有配置套餐的银行卡将暂停自动使用。' : '没有配置套餐的银行卡会按现有规则参与自动取卡。'))
-        await write(view, action, { action: 'strict', strict });
-      return;
-    }
     if (action === 'card-reconcile' || action === 'card-unconfirmed') {
       const pending = current.result.pending?.find(row => row.id === id);
       const unconfirmed = action === 'card-unconfirmed';
@@ -445,6 +524,8 @@ export function createPage(A, definition) {
   }
 
   function drawList(view) {
+    const policy = $('[data-card-policy]', view.host);
+    if (policy) policy.textContent = '取卡规则：' + cardPolicyLabel(view.current);
     const node = $('[data-staff-list]', view.host);
     if (node) {
       const builder = { 'staff/customers': () => customerTable(view.current.result, view.current),
@@ -480,8 +561,15 @@ export function createPage(A, definition) {
       if (event.target.matches('[data-staff-query]')) {
         view.current.query = event.target.value;
         view.current.page = 1;
-        drawList(view);
+        if (view.current.result) drawList(view);
       }
+    });
+    host.addEventListener('change', event => {
+      const key = event.target.dataset.cardFilter;
+      if (!key) return;
+      view.current[key === 'status' ? 'cardStatus' : 'cardPlan'] = event.target.value;
+      view.current.page = 1;
+      if (view.current.result) drawList(view);
     });
     host.addEventListener('id-pagination-change', event => {
       if (event.detail.id === 'staff-card-review-list') {
@@ -491,6 +579,7 @@ export function createPage(A, definition) {
       }
       if (event.detail.id !== 'staff-list') return;
       view.current.page = event.detail.page;
+      if (isCards) view.current.pageSize = event.detail.pageSize;
       drawList(view);
     });
     void load(view);
