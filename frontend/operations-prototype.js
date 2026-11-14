@@ -137,8 +137,8 @@
     `<div class="form-grid${paired ? ' form-grid--paired' : ''}">${html}</div>`;
   const formFooter = (form, label = '核对并保存', durable = false) =>
     `<span class="footnote">${durable ? '保存到数据库' : '仅更新演示内存，刷新重置'}</span>${button('取消', 'drawer-close')}<button class="button primary" form="${form}" type="submit">${esc(label)}</button>`;
-  const search = (placeholder = '搜索名称、备注或编号', query = state.query || '') =>
-    `<div class="search-field">${icon('search')}<input data-auto-search id="ops-list-search" aria-label="搜索当前列表" value="${esc(query)}" placeholder="${esc(placeholder)}" /></div>`;
+  const search = (placeholder = '搜索名称、备注或编号', query = state.query || '', id = 'ops-list-search') =>
+    `<div class="search-field">${icon('search')}<input data-auto-search id="${id}" aria-label="搜索当前列表" value="${esc(query)}" placeholder="${esc(placeholder)}" /></div>`;
   const { defaultPageSize, pageSizes } = window.IDPagination || {};
   const renderPagination = (options) => window.IDPagination?.render(options) || '';
   function finishDrawer() {
@@ -238,8 +238,12 @@
   let settingsSaving = false;
   const auditViews = {
     audit: { query: '', pageSize: defaultPageSize, dirty: true },
+    recovery: { query: '', pageSize: defaultPageSize, dirty: true },
     login: { query: '', pageSize: defaultPageSize, dirty: true }
   };
+  let auditFilter = 'audit';
+  let auditModule = '';
+  let recoveryDetail;
 
   function settingsSnapshot() {
     return {
@@ -361,19 +365,24 @@
   }
   function activeAuditView() {
     if (!localData || !isAdmin()) return;
-    if (state.route === 'settings/audit') return 'audit';
+    if (state.route === 'settings/audit') return auditFilter;
     if (state.route === loginLogsRoute && loginLogTab === 'system' && localData.authRequired) return 'login';
   }
+  const auditSearchId = view => view === 'recovery' ? 'ops-audit-recovery-search' : 'ops-list-search';
   function resetAuditViews() {
+    auditFilter = 'audit';
+    auditModule = '';
     for (const list of Object.values(auditViews)) Object.assign(list, {
       query: '', pageSize: defaultPageSize, dirty: true, pending: null, failedRequest: null,
-      result: undefined, resultQuery: undefined, error: false
+      result: undefined, resultQuery: undefined, resultModule: undefined, error: false
     });
   }
   function renderAuditRead(view) {
     if (activeAuditView() !== view) return;
     const focused = document.activeElement;
-    const editingSearch = focused?.id === 'ops-list-search';
+    const searchId = auditSearchId(view);
+    const editingSearch = focused?.id === searchId;
+    const editingFilter = ['ops-audit-filter', 'ops-audit-module'].includes(focused?.id);
     const paging = focused?.closest?.(`[data-pagination="operations-${view}"]`);
     const pageControl = paging && (focused.hasAttribute('data-pagination-size') ? '[data-pagination-size]'
       : focused.dataset.paginationNav ? `[data-pagination-nav="${focused.dataset.paginationNav}"]`
@@ -382,9 +391,11 @@
     const end = editingSearch ? focused.selectionEnd : null;
     render();
     if (editingSearch) {
-      const next = $('#ops-list-search');
+      const next = $('#' + searchId);
       next?.focus({ preventScroll: true });
       if (start !== null && end !== null) next?.setSelectionRange(start, end);
+    } else if (editingFilter) {
+      $('#' + focused.id)?.focus({ preventScroll: true });
     } else if (pageControl) {
       const pager = $(`[data-pagination="operations-${view}"]`);
       const target = pager?.querySelector(pageControl);
@@ -400,7 +411,9 @@
       page: page ?? list.pending?.page ?? list.result?.page ?? 1,
       pageSize: pageSize ?? list.pageSize,
       query: list.query,
-      ...(!fresh && list.result && list.resultQuery === list.query ? { snapshot: list.result.snapshot } : {})
+      ...(view === 'recovery' && auditModule && { module: auditModule }),
+      ...(!fresh && list.result && list.resultQuery === list.query && list.resultModule === (view === 'recovery' ? auditModule : '')
+        ? { snapshot: list.result.snapshot } : {})
     };
     list.dirty = false;
     list.error = false;
@@ -410,17 +423,26 @@
     const status = $('[data-audit-read-status]');
     if (activeAuditView() === view && status) status.innerHTML = auditReadStatus(list);
     try {
-      const result = await localData.auditPage(request);
+      const result = await localData.auditPage(request, { refresh: fresh });
       if (list.pending !== request) return;
       list.result = result;
       list.resultQuery = request.query;
+      list.resultModule = request.module || '';
       return true;
     } catch (error) {
       if (list.pending !== request) return;
+      if (error?.code === 'READ_SUPERSEDED') {
+        list.dirty = true;
+        return false;
+      }
       if (error?.status === 401 || error?.status === 403) {
         resetAuditViews();
-        list.pending = request;
-        list.dirty = false;
+        const visible = activeAuditView();
+        if (visible) {
+          Object.assign(auditViews[visible], { error: true, dirty: false });
+          renderAuditRead(visible);
+        }
+        return false;
       } else list.failedRequest = request;
       list.error = true;
       return false;
@@ -450,6 +472,171 @@
     const result = list.result;
     return `<div data-audit-read-status>${auditReadStatus(list)}</div>${result ? table(columns, result.items, '', tableId) +
       renderPagination({ id: `operations-${view}`, page: result.page, pageSize: result.pageSize, total: result.total }) : ''}`;
+  }
+  function auditRecordFields(record) {
+    return [['日志编号', record.id], ['时间', record.time], ['操作人', record.actor],
+      ['操作类型', record.action], ['对象', record.subject],
+      ...(record.orderNo ? [['订单编号', record.orderNo]] :
+        record.targetId ? [['资料编号', record.targetId]] : []), ['结果', record.result]];
+  }
+
+  function auditDefinition(fields) {
+    return `<dl class="definition-list">${fields.map(([label, value]) =>
+      `<dt>${esc(label)}</dt><dd>${esc(value)}</dd>`).join('')}</dl>`;
+  }
+
+  const recoveryValue = value => value === true ? '启用' : value === false ? '停用'
+    : (Array.isArray(value) ? value.join('、') : value) || '未填写';
+
+  function recoveryReceipt(receipt, isOriginal) {
+    const action = receipt.restoreInventory ? '恢复' : '撤回';
+    return `<section class="guide-item stack"><h3>${isOriginal ? '已' + action : '恢复回执'}</h3>${auditDefinition([
+      [action + '编号', receipt.record.id], [action + '人', receipt.record.actor],
+      [action + '时间', receipt.record.time], [action + '原因', receipt.reason]
+    ])}${textAction(isOriginal ? '查看恢复回执' : '查看原操作', 'ops-audit-related',
+      actionData(isOriginal ? receipt.record.id : receipt.originalId))}</section>`;
+  }
+
+  const orderRecoveryActions = { cancel: '业务撤单', restore: '恢复已撤订单', undo: '补偿撤回本次更正' };
+
+  function updateRecoveryDetail(detail) {
+    if (!currentRecoveryDetail(detail)) return;
+    const { preview, region } = detail;
+    const record = preview?.record || detail.record;
+    let content;
+    if (preview?.status === 'available') {
+      const fields = preview.changes.map(({ label, current, restore }) =>
+        `<section class="guide-item"><h3>${esc(label)}</h3>${auditDefinition([
+          ['当前值', recoveryValue(current)], ['恢复为', recoveryValue(restore)]
+        ])}</section>`).join('');
+      const reason = detail.attempt?.command.reason || detail.reason || '';
+      content = `<form id="ops-audit-recovery-form" class="stack">
+        <div class="guide-list">${fields}</div>
+        ${field(preview.restoreInventory ? '恢复原因' : '撤回原因', 'ops-audit-recovery-reason',
+          select('ops-audit-recovery-reason', [['', '请选择原因'], ...preview.reasons], reason), true)}
+        <p data-recovery-error class="inline-notice warning" role="alert" hidden></p>
+        <div class="form-footer"><button class="button primary" type="submit">${preview.restoreInventory ? '确认恢复' : '确认撤回'}</button></div></form>`;
+    } else if (preview?.status === 'business') {
+      content = `${preview.message ? `<p class="inline-notice" role="status">${esc(preview.message)}</p>` : ''}
+        <div class="form-footer">${preview.order ? button('查看原订单', 'ops-audit-order', '', '', 'data-mode="view"') : ''}
+        ${orderRecoveryActions[preview.order?.mode] ? button(orderRecoveryActions[preview.order.mode],
+          'ops-audit-order', 'primary', '', 'data-mode="reversal"') : ''}</div>`;
+    } else if (preview?.status === 'recovered' || preview?.status === 'receipt') {
+      content = recoveryReceipt(preview.receipt || preview, preview.status === 'recovered');
+    } else if (preview?.status === 'unavailable') {
+      content = `<p class="inline-notice" role="status">${esc(preview.message)}</p>`;
+    } else if (detail.error) {
+      content = `<p class="inline-notice warning" role="alert">${esc(detail.error)}</p>` +
+        button('重试读取', 'ops-audit-preview-retry');
+    } else content = '<p class="inline-notice" role="status">正在读取恢复详情…</p>';
+    const fields = record ? auditRecordFields(record) : [];
+    if (preview?.targetName) fields.push(['当前资料姓名', preview.targetName]);
+    if (preview?.archiveReason) fields.push(['归档原因', preview.archiveReason]);
+    region.innerHTML = (fields.length ? auditDefinition(fields) : '') + content;
+    region.setAttribute('aria-busy', String(!preview && !detail.error));
+    if (detail.focusResult) {
+      const result = region.querySelector('h3, [role="status"]');
+      result?.setAttribute('tabindex', '-1');
+      result?.focus();
+    }
+  }
+
+  function currentRecoveryDetail(detail) {
+    return recoveryDetail === detail && detail.region.isConnected &&
+      detail.region.closest('dialog')?.open && state.route === 'settings/audit' && state.actor?.id === detail.actorId;
+  }
+
+  async function loadRecoveryDetail(detail) {
+    if (!currentRecoveryDetail(detail)) return;
+    detail.preview = undefined;
+    detail.error = '';
+    updateRecoveryDetail(detail);
+    try {
+      const result = await localData.auditRecoveryPreview(detail.id, detail.controller.signal);
+      if (!currentRecoveryDetail(detail)) return;
+      detail.preview = result;
+    } catch (error) {
+      if (!currentRecoveryDetail(detail) || error?.code === 'READ_SUPERSEDED') return;
+      detail.error = error.status === 403 ? '当前账号无权读取恢复详情。' : '恢复详情读取失败，请重试。';
+    }
+    updateRecoveryDetail(detail);
+  }
+
+  function openAuditDetail(id, record) {
+    if (!localData?.authRequired || (record && !record.recovery)) {
+      if (!record) return;
+      openDrawer('操作详情', '', auditDefinition(auditRecordFields(record)) +
+        (localData?.authRequired ? '<p class="inline-notice">这条操作没有可恢复的资料。</p>' : ''),
+        button('关闭', 'drawer-close'));
+      return;
+    }
+    if (!isAdmin()) return;
+    openDrawer('操作详情', '核对本次操作、可恢复的字段及恢复回执。',
+      '<div class="stack" data-audit-recovery-detail></div>', button('关闭', 'drawer-close'));
+    const detail = { id, record, actorId: state.actor.id, controller: new AbortController(),
+      region: $('#drawer [data-audit-recovery-detail]') };
+    recoveryDetail = detail;
+    $('#drawer').addEventListener('id-view-deactivate', () => {
+      detail.controller.abort();
+      detail.region.replaceChildren();
+      if (recoveryDetail === detail) recoveryDetail = undefined;
+    }, { once: true });
+    void loadRecoveryDetail(detail);
+  }
+
+  async function submitAuditRecovery(form) {
+    const detail = recoveryDetail;
+    if (!detail || !currentRecoveryDetail(detail) || detail.busy || detail.preview?.status !== 'available') return;
+    const reason = form.elements['ops-audit-recovery-reason'];
+    const errorLine = form.querySelector('[data-recovery-error]');
+    if (!reason.value) {
+      errorLine.textContent = detail.preview.restoreInventory ? '请选择恢复原因。' : '请选择撤回原因。';
+      errorLine.hidden = false;
+      reason.focus();
+      return;
+    }
+    const submit = form.querySelector('button[type="submit"]');
+    const attempt = detail.attempt ||= {
+      command: { version: detail.preview.version, reason: reason.value }, operationId: crypto.randomUUID()
+    };
+    detail.reason = attempt.command.reason;
+    detail.busy = reason.disabled = true;
+    errorLine.hidden = true;
+    const restoring = detail.preview.restoreInventory === true;
+    const feedback = api.beginActionFeedback(submit, restoring ? '正在恢复库存资料…' : '正在撤回操作…');
+    try {
+      const result = await localData.recoverAuditContact(detail.id, attempt.command, attempt.operationId, detail.controller.signal,
+        restoring ? 'inventory' : 'commerce');
+      if (!currentRecoveryDetail(detail)) return;
+      detail.preview = result;
+      detail.focusResult = true;
+      updateRecoveryDetail(detail);
+      notify(restoring ? '库存资料已恢复' : '操作已撤回', { kind: 'success' });
+      void loadAudit(activeAuditView(), { fresh: true });
+    } catch (error) {
+      if (!currentRecoveryDetail(detail) || error?.code === 'READ_SUPERSEDED') return;
+      if (error?.status === 409 && error.code !== 'DATA_SOURCE_CHANGED') {
+        detail.attempt = undefined;
+        detail.focusResult = true;
+        await loadRecoveryDetail(detail);
+        if (currentRecoveryDetail(detail) && detail.preview?.status === 'available') {
+          const currentError = detail.region.querySelector('[data-recovery-error]');
+          currentError.textContent = '恢复状态已更新，请核对此次预览再提交。';
+          currentError.hidden = false;
+        }
+      } else {
+        const uncertain = !error?.status || error.status >= 500;
+        if (!uncertain) detail.attempt = undefined;
+        errorLine.textContent = uncertain ? (restoring ? '暂时无法确认恢复结果，可重试核对原请求。' :
+          '暂时无法确认撤回结果，可重试核对原请求。') : error.message;
+        errorLine.hidden = false;
+        submit.textContent = restoring ? (uncertain ? '重试恢复' : '确认恢复') : (uncertain ? '重试撤回' : '确认撤回');
+      }
+    } finally {
+      detail.busy = false;
+      if (!detail.attempt) reason.disabled = false;
+      feedback.finish();
+    }
   }
   const staff = [
     {
@@ -1464,17 +1651,27 @@
       { id: 'time', label: '时间' },
       { id: 'actor', label: '操作人' },
       { id: 'action', label: '操作类型' },
-      { id: 'subject', label: '对象' },
+      { id: 'subject', label: '对象', render: row => esc(row.orderNo ? row.subject + ' · ' + row.orderNo : row.subject) },
       { id: 'result', label: '结果' },
       {
         id: 'actions', label: '操作', action: true,
-        render: (row) => textAction('查看详情', 'ops-audit-detail', actionData(row.id))
+        render: (row) => textAction(row.recovery === 'original' && localData?.authRequired ? '查看恢复' : '查看详情',
+          'ops-audit-detail', actionData(row.id))
       }
     ];
     if (!localData) return listPanel('审计日志', '仅记录当前原型中的演示操作，不包含密码、Session、安全码或生产日志。', columns, audit);
     const tableId = '运营审计日志';
-    return header('审计日志', '按北京时间记录业务操作及实际操作账号。本地可查询最近 1,000 条业务日志。') +
-      `<section class="panel"><div class="toolbar"><div class="toolbar-left">${search('搜索操作人、操作、对象或编号（最近 1,000 条）', auditViews.audit.query)}<span class="toolbar-meta">可查最近 1,000 条</span></div><div class="toolbar-right" data-page-actions>${button('列设置', 'column-settings', '', 'columns', `data-table-id="${tableId}"`)}${button(auditViews.audit.error ? '重试读取' : '刷新日志', 'ops-audit-refresh')}</div></div>${auditPageContent('audit', columns, tableId)}</section>`;
+    const view = activeAuditView() || 'audit';
+    const list = auditViews[view];
+    const filter = localData.authRequired ? `<select id="ops-audit-filter" aria-label="日志范围">
+      <option value="audit"${view === 'audit' ? ' selected' : ''}>全部操作</option>
+      <option value="recovery"${view === 'recovery' ? ' selected' : ''}>恢复记录</option>
+      </select>` : '';
+    const scopeLabel = view === 'recovery' ? '近 30 天及库存归档' : '最近 1,000 条';
+    const modules = view === 'recovery' ? `<select id="ops-audit-module" aria-label="恢复模块">${options(
+      [['', '全部模块'], ['order', '订单'], ['account', '账号库存'], ['mailbox', '邮箱库存'], ['customer', '客户资料'], ['tenant', '租户资料']], auditModule)}</select>` : '';
+    return header('操作记录', '按北京时间查询业务操作和恢复回执。输入 # 加日志编号可以定位单条记录。') +
+      `<section class="panel"><div class="toolbar list-filters"><div class="toolbar-left">${filter}${modules}${search('搜索操作人、操作、订单号或资料编号', list.query, auditSearchId(view))}<span class="toolbar-meta">${scopeLabel}</span></div><div class="toolbar-right" data-page-actions>${button('列设置', 'column-settings', '', 'columns', `data-table-id="${tableId}"`)}${button(list.error ? '重试读取' : '刷新日志', 'ops-audit-refresh')}</div></div>${auditPageContent(view, columns, tableId)}</section>`;
   }
   function renderLoginLogs() {
     const canManageSecurity = !localData?.authRequired || state.actor?.role === 'super';
@@ -4064,23 +4261,17 @@
         render();
       });
     } else if (action === 'ops-audit-detail') {
-      const row = (localData ? auditViews.audit.result?.items || [] : audit).find((item) => item.id === id);
-      if (!row) return true;
-      openDrawer(
-        '审计详情',
-        localData ? '本机业务操作摘要。' : '仅包含本原型的普通操作摘要，不记录原始凭据。',
-        `<dl class="definition-list">${[
-          ['日志编号', row.id],
-          ['时间', row.time],
-          ['操作人', row.actor],
-          ['操作类型', row.action],
-          ['对象', row.subject],
-          ['结果', row.result]
-        ]
-          .map(([label, value]) => `<dt>${label}</dt><dd>${esc(value)}</dd>`)
-          .join('')}</dl>`,
-        button('关闭', 'drawer-close')
-      );
+      const row = (localData ? auditViews[activeAuditView()]?.result?.items || [] : audit).find(item => item.id === id);
+      if (row) openAuditDetail(id, row);
+    } else if (action === 'ops-audit-related') {
+      openAuditDetail(id);
+    } else if (action === 'ops-audit-order') {
+      const detail = recoveryDetail;
+      const order = detail?.preview?.order;
+      if (order && currentRecoveryDetail(detail))
+        void api.modules.commerce?.openAuditOrder(order, node.dataset.mode === 'reversal', node);
+    } else if (action === 'ops-audit-preview-retry') {
+      if (recoveryDetail) void loadRecoveryDetail(recoveryDetail);
     } else if (action === 'ops-phrases') showPhrases();
     else if (action === 'ops-phrases-retry' && toolbox) {
       void api.withActionFeedback(node, async () => { await toolbox.load({ refresh: true }); return true; },
@@ -4123,7 +4314,8 @@
   }
   function onSubmit(form) {
     if (!form.id.startsWith('ops-')) return false;
-    if (localData && form.id === 'ops-local-staff-form')
+    if (form.id === 'ops-audit-recovery-form') void submitAuditRecovery(form);
+    else if (localData && form.id === 'ops-local-staff-form')
       window.IDLocalAuth?.submitEmployee(api, form);
     else if (form.id === 'ops-staff-form') saveStaff(form);
     else if (form.id === 'ops-mail-type-form') saveMailboxType(form);
@@ -4267,7 +4459,16 @@
       return true;
     }
     if (!node.id?.startsWith('ops-')) return false;
-    if (node.id === 'ops-phrase-sort') {
+    if (node.id === 'ops-audit-filter') {
+      if (!localData?.authRequired || state.route !== 'settings/audit' || !['audit', 'recovery'].includes(node.value)) return true;
+      auditFilter = node.value;
+      render();
+      $('#ops-audit-filter')?.focus({ preventScroll: true });
+    } else if (node.id === 'ops-audit-module') {
+      if (activeAuditView() !== 'recovery') return true;
+      auditModule = node.value;
+      void loadAudit('recovery', { page: 1, fresh: true });
+    } else if (node.id === 'ops-phrase-sort') {
       local.phraseSort = node.value;
       local.phrasePage = 1;
       showPhrases();
@@ -4283,9 +4484,10 @@
     return true;
   }
   function onInput(node) {
-    if (node.id === 'ops-list-search') {
+    if (node.id === 'ops-list-search' || node.id === 'ops-audit-recovery-search') {
       const view = activeAuditView();
       if (view) {
+        if (node.id !== auditSearchId(view)) return true;
         if (auditViews[view].query === node.value) return true;
         auditViews[view].query = node.value;
         void loadAudit(view, { page: 1, fresh: true });
@@ -4351,6 +4553,14 @@
     }
   });
   api.modules.operations = {
+    openRecoveryRecord(id, module) {
+      if (!localData?.authRequired || !isAdmin() || !/^\d+$/.test(id)) return;
+      auditFilter = 'recovery';
+      auditModule = ['account', 'mailbox'].includes(module) ? module : '';
+      Object.assign(auditViews.recovery, { query: '#' + id, dirty: true });
+      api.go('settings/audit');
+      openAuditDetail(id);
+    },
     refreshRechargeCardTypes() {
       visibleRechargeCardFrame()?.contentWindow?.postMessage(
         { source: 'id-recharge-shell', type: 'data-change', scopes: ['card-types'] }, window.location.origin
@@ -4368,10 +4578,14 @@
     showPhrases,
     getAudit: () => (localData ? auditViews.audit.result?.items || [] : audit).map((row) => ({ ...row })),
     loadSettings,
-    refreshAudit: () => loadAudit('audit', { fresh: true }),
+    refreshAudit: () => loadAudit(activeAuditView(), { fresh: true }),
     async refreshLiveReads(scopes) {
       const jobs = [];
-      if (scopes.includes('audit') && activeAuditView() === 'login') jobs.push(loadAudit('login', { fresh: true }));
+      if (scopes.includes('audit')) {
+        const view = activeAuditView();
+        for (const [key, list] of Object.entries(auditViews)) if (key !== view) list.dirty = true;
+        if (view === 'login') jobs.push(loadAudit('login', { fresh: true }));
+      }
       const totp = $('#ops-saved-totp'), pool = $('#ops-mailbox-pool'), visits = $('#ops-website-visits-form');
       if (scopes.includes('saved-totp') && totp?.checkVisibility()) jobs.push(loadSavedTotp(totp, { refresh: true }));
       if (scopes.some(scope => ['inventory', 'tools/mailbox-pool'].includes(scope)) && pool?.checkVisibility()) jobs.push(loadManagedPool(pool, { refresh: true }));
@@ -4396,6 +4610,11 @@
     clearPageState() {
       deactivateIntegration(document.getElementById('main'));
       onlineAdmin = undefined;
+      if (recoveryDetail) {
+        recoveryDetail.controller.abort();
+        recoveryDetail.region.replaceChildren();
+        recoveryDetail = undefined;
+      }
       resetAuditViews();
     },
     matches: (route) =>

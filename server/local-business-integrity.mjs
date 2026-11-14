@@ -80,7 +80,7 @@ export function checkBankReturns(previous, commerce) {
   }
 }
 
-function hasConfirmedMoney(order) {
+export function hasConfirmedMoney(order) {
   const confirmed = (row) =>
     hasRecordedPaymentAmount(row) ||
     (row?.paidConfirmed === true && (units(row.paidAmount) ?? 0n) > 0n) ||
