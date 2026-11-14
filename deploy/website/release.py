@@ -65,6 +65,15 @@ NATIVE_RELEASE_FILES = tuple(sorted(NATIVE_CORE_SCOPE | PROXY_TYPE_CORE_SCOPE | 
     "deploy/website/recharge_core.py", "deploy/website/remote.py", "deploy/website/vendure_admission.py",
     "modules/recharge/vendure/codexdaichong-worker.mjs",
 }))
+VENDURE_REFRESH_FILES = (
+    "deploy/website/vendure_admission.py",
+    "modules/recharge/vendure/admission.mjs",
+    "modules/recharge/vendure/isolated-task-store.mjs",
+    "modules/recharge/vendure/loopback-bridge.mjs",
+    "modules/recharge/codexdaichong/native-code-returns.mjs",
+    "server/tools/read-tool-config.mjs",
+    "server/vendure-task-service.mjs",
+)
 
 
 class AwsError(RuntimeError):
@@ -289,6 +298,10 @@ def main():
     inspect_command = os.environ.get("INSPECT_RELEASE_COMMAND")
     include_adapter = os.environ.get("RELEASE_RECHARGE_ADAPTER") == "true"
     include_core = os.environ.get("RELEASE_RECHARGE_CORE") == "true"
+    retry_receipt = os.environ.get("VENDURE_RETRY_RECEIPT_SHA256", "")
+    if retry_receipt and (not SHA256.fullmatch(retry_receipt) or
+                          include_adapter or include_core or attempt or inspect_command):
+        raise RuntimeError("vendure_gateway_refresh_requires_one_reviewed_receipt")
     if inspect_command and not attempt:
         raise RuntimeError("inspection_requires_attempt_revision")
     if include_core and (include_adapter or attempt):
@@ -374,6 +387,8 @@ def main():
                   *ADAPTER_FILES)
     if include_core:
         files = tuple(dict.fromkeys((*files, *NATIVE_RELEASE_FILES)))
+    if retry_receipt:
+        files += VENDURE_REFRESH_FILES
     plan = {"operation": "release", "sha": sha, "before": before, "artifacts": artifacts,
             "files": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in files},
             "qualityRun": quality_run, "preflightCommand": preflight_id, 'externalEvents': True}
@@ -382,6 +397,8 @@ def main():
     if include_core:
         plan["rechargeCore"] = {"assetsSha256": expected_assets}
         plan["adapter"] = {"runtimeFiles": ADAPTER_RUNTIME_FILES}
+    if retry_receipt:
+        plan["vendureRetryReceipt"] = retry_receipt
     if presentation_scope:
         plan[presentation_scope] = presentation
     require_main(sha)
@@ -400,6 +417,13 @@ def main():
                 core.get("workerSourceRevision") != sha or core.get("ingressResumed") is not True or
                 core.get("nativeCanaryPassed") is not True or receipt.get("liveAssetsSha256") != expected_assets):
             raise RuntimeError(f"recharge_core_release_receipt_mismatch: {command_id}")
+    if retry_receipt:
+        gateway = receipt.get("vendureGateway", {})
+        if (gateway.get("gatewaySha") != sha or gateway.get("accepting") is not True or
+                gateway.get("singleRetryReceiptVerified") is not True or
+                gateway.get("originalRuntimeUnchanged") is not True or
+                gateway.get("workerPollingObserved") is not True):
+            raise RuntimeError(f"vendure_gateway_release_receipt_mismatch: {command_id}")
     if presentation_scope and (receipt.get(presentation_scope + "Verified") is not True or
                                receipt.get("liveAssetsSha256") != expected_assets or
                                receipt.get("protectedComponentsUnchanged") is not True):

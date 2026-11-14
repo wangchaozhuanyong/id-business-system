@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHmac, randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 import test from 'node:test';
 import {
   createLoopbackVendureRechargeBridge,
@@ -17,12 +17,12 @@ const session = JSON.stringify({
   accessToken: 'synthetic-authorization-for-offline-test'
 });
 
-function fixture(t, codes = [{ code: 'synthetic-code', plan: 'plus' }], store) {
+function fixture(t, codes = [{ code: 'synthetic-code', plan: 'plus' }], store, options = {}) {
   const vendureKey = randomBytes(32).toString('hex');
   const workerSecret = randomBytes(32).toString('hex');
   let at = Date.now();
   const bridge = createLoopbackVendureRechargeBridge({
-    codes, vendureKey, workerSecret, store, now: () => at
+    codes, vendureKey, workerSecret, store, now: () => at, ...options
   });
   t.after(() => bridge.close());
   async function post(path, body = {}, headers = {}) {
@@ -40,7 +40,8 @@ function fixture(t, codes = [{ code: 'synthetic-code', plan: 'plus' }], store) {
     return response;
   }
   const vendure = (action, body = {}) => post(vendureRechargePrefix + '/' + action, body, {
-    'x-vendure-recharge-key': vendureKey, 'x-vendure-client-ip': '203.0.113.10'
+    'x-vendure-recharge-key': vendureKey, 'x-vendure-client-ip': '203.0.113.10',
+    ...(options.lookupAdmission && { 'x-vendure-recharge-channel': 'moyao-ai' })
   });
   const worker = (action, body = {}) => {
     const path = rechargeWorkerPrefix + '/' + action;
@@ -76,6 +77,114 @@ function memoryStore() {
     }
   };
 }
+
+test('a reviewed pre-execution failure needs fresh native admission and creates at most one new receipt', async (t) => {
+  const code = 'KC-' + 'A'.repeat(15);
+  const store = memoryStore();
+  const previousId = '21111111-1111-4111-8111-111111111111';
+  const previous = {
+    id: previousId, codeRef: store.fingerprint('code', code), plan: 'plus',
+    status: 'failed', updatedAt: Date.now(),
+    result: {
+      status: 'failed',
+      evidenceRef: store.fingerprint('evidence', 'codexdaichong:route:' + previousId)
+    }
+  };
+  store.commit(0, { tasks: [previous], nonces: [] });
+  let native = { plan: 'plus', status: 'available' };
+  let lookups = 0;
+  let open = true;
+  const f = fixture(t, [], store, {
+    approvedRetryTaskDigest: createHash('sha256').update(previousId).digest('hex'),
+    acceptStorefrontSubmissions: () => open,
+    lookupAdmission: async () => {
+      ++lookups;
+      if (native instanceof Error) throw native;
+      return native;
+    }
+  });
+  const retry = { code, session, afterFailedTask: previousId };
+  const lookup = () => f.vendure('query', { code });
+  const check = (task) => f.vendure('task', { id: task.id, taskToken: task.taskToken });
+  const initial = (await lookup()).body;
+  assert.equal(initial.reason, 'verified_retry_available');
+  assert.equal(initial.status, 'available');
+  assert.equal(initial.task.id, previousId);
+  assert.equal((await f.vendure('submit', { code, session })).body.id, previousId);
+  assert.deepEqual((await f.vendure('submit', { ...retry, code: 'KC-' + 'Z'.repeat(15) })).body,
+    { rejected: true });
+  for (const blocked of [
+    { plan: 'plus', status: 'reserved', reason: 'manual_review_required' },
+    { plan: 'plus', status: 'used' },
+    { plan: 'plus', status: 'disabled' },
+    { plan: 'pro_5x', status: 'available' },
+    null, new Error('offline')
+  ]) {
+    native = blocked;
+    const blockedLookup = (await lookup()).body;
+    assert.equal(blockedLookup.task.id, previousId);
+    assert.notEqual(blockedLookup.status, 'available');
+    assert.equal(blockedLookup.reason, blocked?.reason);
+    assert.deepEqual((await f.vendure('submit', retry)).body, { rejected: true });
+  }
+  native = { plan: 'plus', status: 'available' };
+  open = false;
+  assert.deepEqual((await f.vendure('submit', retry)).body, { rejected: true });
+  open = true;
+  const next = await Promise.all([
+    f.vendure('submit', retry), f.vendure('submit', retry), f.vendure('submit', retry)
+  ]);
+  const accepted = next[0].body;
+  assert.equal(accepted.status, 'queued');
+  assert.notEqual(accepted.id, previousId);
+  assert(next.every(res => res.body.id === accepted.id));
+  assert(lookups >= 4);
+  assert.equal((await lookup()).body.task.id, accepted.id);
+  assert.equal((await check(initial.task)).body.status, 'failed');
+  assert.deepEqual(store.load().state.tasks.find(item => item.id === previousId), previous);
+
+  const lease = (await f.worker('claim')).body.task;
+  assert.equal(lease.id, accepted.id);
+  await f.worker('result', {
+    id: lease.id, leaseToken: lease.leaseToken, outcome: 'confirmed_failure',
+    evidenceId: 'codexdaichong:route:' + lease.id
+  });
+  assert.equal((await lookup()).body.status, 'reserved');
+  assert.equal((await f.vendure('submit', retry)).body.id, accepted.id);
+  assert.equal((await f.worker('claim')).body.task, null);
+});
+
+test('approval cannot replay an unknown result or a failure that reached the native executor', async (t) => {
+  const makeCode = (letter) => 'KC-' + letter.repeat(15);
+  const codeForIndex = ['B', 'C', 'D', 'E'].map(makeCode);
+  const store = memoryStore();
+  const tasks = codeForIndex.map((code, i) => {
+    const id = `${i + 1}1111111-1111-4111-8111-111111111111`;
+    const outcome = ['awaiting_review', 'failed', 'failed', 'failed'][i];
+    return {
+      id, codeRef: store.fingerprint('code', code), plan: 'plus', status: outcome,
+      updatedAt: Date.now(),
+      ...(i === 1 && { upstreamJobId: 'started-upstream-job' }),
+      result: {
+        status: outcome,
+        evidenceRef: store.fingerprint('evidence', 'codexdaichong:' + (i === 2 ? 'unproven' : 'route') + ':' + id)
+      }
+    };
+  });
+  store.commit(0, { tasks, nonces: [] });
+  const f = fixture(t, [], store, {
+    approvedRetryTaskIds: tasks.slice(0, -1).map(task => task.id),
+    lookupAdmission: async () => assert.fail('cannot look up admission without an approved pre-execution failure')
+  });
+  for (const [index, code] of codeForIndex.entries()) {
+    const response = (await f.vendure('query', { code })).body;
+    assert.equal(response.status, 'reserved');
+    assert.equal(response.task.id, tasks[index].id);
+    assert.deepEqual((await f.vendure('submit', { code, session, afterFailedTask: tasks[index].id })).body,
+      { rejected: true });
+  }
+  assert.equal((await f.worker('claim')).body.task, null);
+});
 
 test('progress is a fixed safe projection and renews observation without changing the original task', async (t) => {
   const f = fixture(t);

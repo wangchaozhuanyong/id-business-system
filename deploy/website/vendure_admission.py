@@ -2,6 +2,8 @@
 
 import argparse
 import fcntl
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -25,15 +27,28 @@ UID, GID = 993, 992
 PROTECTED = ("recharge", "recharge-native")
 LAUNCHER_ANCHOR = '  --mount "type=bind,src=$formal/operations,dst=/operations,readonly" ' + chr(92)
 SQLITE_FILENAME = "vendure-recharge-isolated.sqlite"
+RETRY_ENV = "ID_VENDURE_RETRY_RECEIPT_SHA256"
+STORAGE_CREDENTIAL = "independent-vendure-storage"
 
 
-def stage_launcher(content, previous, target):
-    require(content.count("sha=" + previous) == 1 and content.count(LAUNCHER_ANCHOR) == 1 and
-            "ID_VENDURE_ADMISSION_SOCKET" not in content, "gateway_launcher_changed")
+def stage_launcher(content, previous, target, refresh=False, retry_receipt=None):
     mount = f'  --mount "type=bind,src=$formal/data/vendure-admission,dst={TARGET},readonly" ' + chr(92)
     env = f'  -e "ID_VENDURE_ADMISSION_SOCKET={TARGET}/lookup.sock" ' + chr(92)
-    return content.replace("sha=" + previous, "sha=" + target).replace(
-        LAUNCHER_ANCHOR, LAUNCHER_ANCHOR + "\n" + mount + "\n" + env)
+    anchor = LAUNCHER_ANCHOR + "\n" + mount + "\n" + env
+    require(content.count("sha=" + previous) == 1 and content.count(LAUNCHER_ANCHOR) == 1 and
+            content.count("ID_VENDURE_ADMISSION_SOCKET") == int(refresh) and
+            content.count(TARGET + ",readonly") == int(refresh) and
+            (not refresh or content.count(anchor) == 1), "gateway_launcher_changed")
+    candidate = content.replace("sha=" + previous, "sha=" + target)
+    if retry_receipt:
+        require(refresh and re.fullmatch(r"[a-f0-9]{64}", retry_receipt), "gateway_retry_receipt_invalid")
+        approval = '  -e "' + RETRY_ENV + '=' + retry_receipt + '" ' + chr(92)
+        if RETRY_ENV in candidate:
+            require(candidate.count(RETRY_ENV) == 1 and candidate.count(anchor + "\n" + approval) == 1,
+                    "gateway_retry_launcher_changed")
+        else:
+            candidate = candidate.replace(anchor, anchor + "\n" + approval)
+    return candidate if refresh else candidate.replace(LAUNCHER_ANCHOR, anchor)
 
 
 def idle_snapshot(db):
@@ -47,7 +62,7 @@ def idle_snapshot(db):
 
 
 @contextmanager
-def lock_idle_queue(path):
+def lock_idle_queue(path, retry_receipt=None):
     require(path.is_file() and not path.is_symlink(), "gateway_task_store_unavailable")
     with closing(sqlite3.connect(path.as_uri() + "?mode=rw", uri=True, timeout=8)) as db:
         # Hold the writer lock until the old service stops. A concurrent submit cannot
@@ -55,6 +70,8 @@ def lock_idle_queue(path):
         db.execute("BEGIN IMMEDIATE")
         try:
             _, count = idle_snapshot(db)
+            if retry_receipt:
+                require_reviewed_receipt(db, retry_receipt)
             yield count
         finally:
             db.rollback()
@@ -63,6 +80,32 @@ def lock_idle_queue(path):
 def read_idle_queue(path):
     with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=3)) as db:
         return idle_snapshot(db)
+
+
+def require_reviewed_receipt(db, receipt):
+    revision, payload, integrity = db.execute(
+        "SELECT revision, payload, integrity FROM vendure_recharge_isolated_state WHERE id = 1").fetchone()
+    key = run(["systemd-creds", "decrypt", "--name=" + STORAGE_CREDENTIAL,
+               str(FORMAL / "private" / (STORAGE_CREDENTIAL + ".cred")), "-"]).strip()
+    require(re.fullmatch(rb"[a-f0-9]{64}", key), "gateway_retry_storage_identity_invalid")
+    key = bytes.fromhex(key.decode("ascii"))
+
+    def fingerprint(purpose, value):
+        return hmac.new(key, (purpose + "\0" + value).encode(), hashlib.sha256).hexdigest()
+
+    snapshot = json.dumps([revision, payload], ensure_ascii=False, separators=(",", ":"))
+    require(hmac.compare_digest(integrity, fingerprint("snapshot", snapshot)), "gateway_retry_snapshot_mismatch")
+    tasks = json.loads(payload)["tasks"]
+    matches = [task for task in tasks if hashlib.sha256(task["id"].encode()).hexdigest() == receipt]
+    require(len(matches) == 1, "gateway_retry_receipt_missing")
+    task, = matches
+    outcome = task.get("result") or {}
+    require(task["status"] == "failed" and outcome.get("status") == "failed" and
+            not task.get("upstreamJobId") and not outcome.get("upstreamJobId") and
+            any(hmac.compare_digest(str(outcome.get("evidenceRef", "")),
+                                    fingerprint("evidence", "codexdaichong:" + kind + ":" + task["id"]))
+                for kind in ("route", "cards")), "gateway_retry_failure_not_confirmed")
+    require(sum(item["codeRef"] == task["codeRef"] for item in tasks) == 1, "gateway_retry_code_has_other_attempt")
 
 
 def worker_binding():
@@ -109,7 +152,7 @@ def source_mount(container, path):
                for m in container["Mounts"])
 
 
-def read_gateway(sha, source, expected_image=None):
+def read_gateway(sha, source, expected_image=None, retry_receipt=None):
     container = inspect("vendure")
     current = identity(container)
     require(current["running"] and source_mount(container, source) and current["revision"] == sha and
@@ -117,6 +160,9 @@ def read_gateway(sha, source, expected_image=None):
     require(container["Config"]["User"] == f"{UID}:{GID}" and
             any(m["Destination"] == TARGET and m["Source"] == str(ADMISSION) and not m["RW"]
                 for m in container["Mounts"]), "gateway_admission_mount_mismatch")
+    if retry_receipt:
+        matching = [value for value in container["Config"]["Env"] if value.startswith(RETRY_ENV + "=")]
+        require(matching == [RETRY_ENV + "=" + retry_receipt], "gateway_retry_config_not_live")
     return current
 
 
@@ -128,7 +174,55 @@ def ready_socket():
             "id_private_admission_socket_unavailable")
 
 
-def cutover(sha, release):
+@contextmanager
+def paused_submission_marker(sha, enabled):
+    marker = ADMISSION / "accept-submissions"
+    paused = ADMISSION / (".accept-submissions-paused-" + sha[:12])
+    if enabled:
+        require(not os.path.lexists(paused), "storefront_pause_marker_already_present")
+        state = marker.lstat()
+        require(stat.S_ISREG(state.st_mode) and state.st_uid == UID and
+                stat.S_IMODE(state.st_mode) == 0o600, "storefront_acceptance_marker_invalid")
+        marker.rename(paused)
+    else:
+        require(not os.path.lexists(marker), "storefront_acceptance_marker_already_present")
+
+    # Never reopen intake if the service may have switched but hasn't been verified.
+    progress = {"switch_started": False}
+    try:
+        yield progress
+    except Exception:
+        if enabled and not progress["switch_started"]:
+            os.link(paused, marker)
+            paused.unlink()
+        raise
+    else:
+        if enabled:
+            os.link(paused, marker)
+            paused.unlink()
+
+
+def check_refresh_baseline(sha, retry_receipt):
+    ready_socket()
+    before = inspect("vendure")
+    previous = identity(before)["revision"]
+    require(isinstance(previous, str) and re.fullmatch(r"[a-f0-9]{40}", previous) and previous != sha,
+            "gateway_revision_invalid")
+    read_gateway(previous, ROOT / "releases" / previous / "source")
+    launcher = ROOT / "releases" / previous / "operations/run-vendure"
+    require(DROP.read_text().count("ExecStart=" + str(launcher)) == 1, "gateway_service_launcher_mismatch")
+    stage_launcher(launcher.read_text(), previous, sha, refresh=True, retry_receipt=retry_receipt)
+    marker = (ADMISSION / "accept-submissions").lstat()
+    require(stat.S_ISREG(marker.st_mode) and marker.st_uid == UID and
+            stat.S_IMODE(marker.st_mode) == 0o600, "storefront_acceptance_marker_invalid")
+    worker_binding()
+    worker_runtime(inspect("vendure-worker"))
+    with closing(sqlite3.connect((STATE / SQLITE_FILENAME).as_uri() + "?mode=ro", uri=True, timeout=3)) as db:
+        idle_snapshot(db)
+        require_reviewed_receipt(db, retry_receipt)
+
+
+def cutover(sha, release, refresh=False, retry_receipt=None):
     require_main(sha)
     require(identity(inspect("app"))["revision"] == sha, "id_app_release_not_live")
     ops = release / "operations"
@@ -136,18 +230,20 @@ def cutover(sha, release):
     require(receipt["mainSha"] == sha and receipt["appCanaryPassed"] is True,
             "id_app_release_receipt_missing")
     ready_socket()
-    require(not os.path.lexists(ADMISSION / "accept-submissions"), "storefront_acceptance_marker_already_present")
     source = release / "source"
     before = identity(inspect("vendure"))
     previous = before["revision"]
     require(before["running"] and isinstance(previous, str) and previous != sha and
             re.fullmatch(r"[a-f0-9]{40}", previous), "gateway_revision_invalid")
     require(source_mount(inspect("vendure"), ROOT / "releases" / previous / "source"), "gateway_source_mismatch")
+    if refresh:
+        require(read_gateway(previous, ROOT / "releases" / previous / "source") == before,
+                "gateway_baseline_changed")
     old_launcher = ROOT / "releases" / previous / "operations/run-vendure"
     launcher = ops / "run-vendure"
     old_drop = DROP.read_text()
     require(old_drop.count("ExecStart=" + str(old_launcher)) == 1, "gateway_service_launcher_mismatch")
-    candidate = stage_launcher(old_launcher.read_text(), previous, sha)
+    candidate = stage_launcher(old_launcher.read_text(), previous, sha, refresh=refresh, retry_receipt=retry_receipt)
     if launcher.exists():
         require(not launcher.is_symlink() and launcher.read_text() == candidate, "gateway_candidate_launcher_changed")
     else:
@@ -158,29 +254,35 @@ def cutover(sha, release):
     require(all(item["running"] for item in protected.values()), "original_recharge_runtime_not_ready")
     worker = worker_runtime(inspect("vendure-worker"))
     binding = worker_binding()
-    with lock_idle_queue(STATE / SQLITE_FILENAME) as retained_tasks:
-        require_main(sha)
-        run(["systemctl", "stop", UNIT], timeout=45)
-        require(not (STATE / "vendure-task-service.lock").exists(), "old_gateway_did_not_close_cleanly")
-        require(DROP.read_text() == old_drop, "gateway_service_launcher_changed")
-        write_new(pending, old_drop.replace(str(old_launcher), str(launcher)), 0o644)
-        os.replace(pending, DROP)
-        run(["systemctl", "daemon-reload"])
-    run(["systemctl", "start", UNIT], timeout=45)
-    for _ in range(12):
-        try:
-            current = read_gateway(sha, source, before["image"])
-            break
-        except (ReleaseError, subprocess.CalledProcessError):
-            time.sleep(1)
-    else:
-        raise ReleaseError("new_gateway_readback_failed")
-    resume_worker(binding, worker, retained_tasks)
-    require(all(identity(inspect(name)) == value for name, value in protected.items()),
-            "original_recharge_runtime_changed")
+    with paused_submission_marker(sha, refresh) as progress:
+        with lock_idle_queue(STATE / SQLITE_FILENAME, retry_receipt) as retained_tasks:
+            require_main(sha)
+            require(DROP.read_text() == old_drop and identity(inspect("vendure")) == before,
+                    "gateway_service_launcher_changed")
+            progress["switch_started"] = True
+            run(["systemctl", "stop", UNIT], timeout=45)
+            require(not (STATE / "vendure-task-service.lock").exists(), "old_gateway_did_not_close_cleanly")
+            write_new(pending, old_drop.replace(str(old_launcher), str(launcher)), 0o644)
+            os.replace(pending, DROP)
+            run(["systemctl", "daemon-reload"])
+        run(["systemctl", "start", UNIT], timeout=45)
+        for _ in range(12):
+            try:
+                current = read_gateway(sha, source, before["image"], retry_receipt)
+                break
+            except (ReleaseError, subprocess.CalledProcessError):
+                time.sleep(1)
+        else:
+            raise ReleaseError("new_gateway_readback_failed")
+        resume_worker(binding, worker, retained_tasks)
+        require(all(identity(inspect(name)) == value for name, value in protected.items()),
+                "original_recharge_runtime_changed")
+        ready_socket()
     record = {"mainSha": sha, "gatewaySha": current["revision"], "previousGatewaySha": previous,
               "retainedTaskCount": retained_tasks, "originalRuntimeUnchanged": True,
-              "workerSourceUnchanged": True, "workerPollingObserved": True, "accepting": False}
+              "workerSourceUnchanged": True, "workerPollingObserved": True, "accepting": refresh}
+    if retry_receipt:
+        record["singleRetryReceiptVerified"] = True
     write_new(ops / "vendure-admission.receipt.json", json.dumps(record) + "\n", 0o600)
     return record
 
@@ -205,7 +307,7 @@ def open_submissions(sha, release):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("cutover", "open"))
+    parser.add_argument("operation", choices=("cutover", "open", "refresh"))
     parser.add_argument("sha")
     options = parser.parse_args()
     require(re.fullmatch(r"[a-f0-9]{40}", options.sha), "invalid_release_revision")
@@ -213,5 +315,6 @@ if __name__ == "__main__":
     require(Path(__file__).resolve().parent == release / "source/deploy/website", "gateway_release_source_mismatch")
     with LOCK.open("r") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        operation = cutover if options.operation == "cutover" else open_submissions
-        print(json.dumps(operation(options.sha, release), sort_keys=True), flush=True)
+        result = open_submissions(options.sha, release) if options.operation == "open" else cutover(
+            options.sha, release, refresh=options.operation == "refresh")
+        print(json.dumps(result, sort_keys=True), flush=True)

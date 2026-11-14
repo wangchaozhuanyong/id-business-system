@@ -846,14 +846,14 @@ console.log(JSON.stringify(Object.fromEntries(hashes)));
     return states
 
 
-def release_website(plan):
+def release_website(plan, staged=None):
     sha = plan["sha"]
     before = plan["before"]
     base = before["components"]["app"]["revision"]
     include_adapter = bool(plan.get("adapter"))
     check_baseline(snapshot(include_adapter), before)
     release = ROOT / "releases" / sha
-    source, ops = stage(plan, release)
+    source, ops = staged or stage(plan, release)
     core = None
     if plan.get("rechargeCore"):
         sys.path.insert(0, str(source / "deploy/website"))
@@ -921,6 +921,29 @@ def release_website(plan):
     return result
 
 
+def release_with_optional_vendure_refresh(plan):
+    retry_receipt = plan.get("vendureRetryReceipt")
+    if not retry_receipt:
+        return release_website(plan)
+    require(not plan.get("adapter") and not plan.get("rechargeCore") and
+            isinstance(retry_receipt, str) and re.fullmatch(r"[a-f0-9]{64}", retry_receipt),
+            "invalid_vendure_gateway_refresh")
+    # Validate the old runtime and signed receipt before restarting the website.
+    sha = plan["sha"]
+    release = ROOT / "releases" / sha
+    check_baseline(snapshot(False), plan["before"])
+    source, operations = stage(plan, release)
+    sys.path.insert(0, str(source / "deploy/website"))
+    try:
+        from vendure_admission import check_refresh_baseline, cutover
+    finally:
+        sys.path.pop(0)
+    check_refresh_baseline(sha, retry_receipt)
+    result = release_website(plan, staged=(source, operations))
+    result["vendureGateway"] = cutover(sha, release, refresh=True, retry_receipt=retry_receipt)
+    return result
+
+
 def main(plan):
     try:
         require(re.fullmatch(r"[a-f0-9]{40}", plan["sha"]), "invalid_release_revision")
@@ -933,7 +956,7 @@ def main(plan):
                 result = inspect_canary(plan["attemptSha"])
             else:
                 require(plan["operation"] == "release", "invalid_release_operation")
-                result = release_website(plan)
+                result = release_with_optional_vendure_refresh(plan)
             print(json.dumps(result, sort_keys=True), flush=True)
     except ReleaseError as error:
         sys.exit(str(error))
