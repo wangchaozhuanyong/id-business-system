@@ -28,9 +28,27 @@ test(
     }));
     const holds = [{ id: 1, accountEmail: 'test@example.test', reason: message }];
     const denied = '当前账号无权执行此操作';
+    const sessionConfirmation = '请点击「刷新」完成安全确认，再查看 Session 记录。';
+    let sessionVerified = false;
+    let verificationRequests = 0;
+    let sessionReadError = '';
     let resolveAttempts = 0;
     let taskRows = tasks;
-    await interceptDesign(page.context(), { localFixtures: {} });
+    await interceptDesign(page.context(), {
+      localFixtures: {},
+      localAuthUi: true,
+      actor: { id: 'fixture-admin', name: '测试管理员', role: 'super' }
+    });
+    await page.route('**/api/local/auth/security', (route) => route.fulfill({
+      json: { available: true, bound: true, recentlyVerified: sessionVerified }
+    }));
+    await page.route('**/api/local/auth/security/verify', (route) => {
+      assert.equal(route.request().method(), 'POST');
+      assert.deepEqual(route.request().postDataJSON(), { code: '654321' });
+      verificationRequests += 1;
+      sessionVerified = true;
+      return route.fulfill({ json: { success: true } });
+    });
     await page.route('**/integrations/codexdaichong/api/admin/**', (route) => {
       const pathname = new URL(route.request().url()).pathname;
       const path = pathname.split('/').pop();
@@ -52,7 +70,12 @@ test(
         holds.length = 0;
         return route.fulfill({ json: { success: true, message: '人工审核已解除，该卡密可重新提交' } });
       }
-      if (path === 'sessions')
+      if (path === 'sessions') {
+        if (!sessionVerified) return route.fulfill({
+          status: 403,
+          json: { error: '请先完成安全确认，再继续这项操作', code: 'SECURITY_CONFIRMATION_REQUIRED' }
+        });
+        if (sessionReadError) return route.fulfill({ status: 503, json: { error: sessionReadError } });
         return route.fulfill({
           json: {
             items: [
@@ -66,6 +89,7 @@ test(
             total: 1
           }
         });
+      }
       return route.fallback();
     });
     await page.goto(origin + '/#/online-recharge/chatgpt');
@@ -122,12 +146,29 @@ test(
     await frame.getByRole('button', { name: '上一页', exact: true }).click();
 
     await select('sessions');
+    const sessionStatus = frame.locator('#session_list_status');
+    const refreshSessions = frame.locator('#sessions').getByRole('button', { name: '刷新', exact: true });
+    const verification = page.getByRole('dialog', { name: '确认是你本人' });
+    await frame.getByText(sessionConfirmation, { exact: true }).waitFor();
+    assert.equal(await verification.count(), 0);
+    await refreshSessions.click();
+    await verification.getByRole('button', { name: '取消', exact: true }).click();
+    await frame.getByText(sessionConfirmation, { exact: true }).waitFor();
+    assert.equal(verificationRequests, 0);
+    await refreshSessions.click();
+    await verification.getByLabel('身份验证器的六位验证码').fill('654321');
+    await verification.getByRole('button', { name: '验证', exact: true }).click();
     await checkRow('session_body');
+    await sessionStatus.waitFor({ state: 'hidden' });
+    assert.equal(verificationRequests, 1);
     assert.equal(await frame.locator('#session_body [data-delete-task]').count(), 0);
     assert.equal(await frame.locator('#session_body [data-copy-session]').count(), 1);
     assert.equal(await frame.locator('#session_body [data-export-session]').count(), 1);
     await page.locator('#theme-toggle').click();
     await page.setViewportSize({ width: 390, height: 844 });
+    sessionReadError = '暂时无法读取代充资料';
+    await refreshSessions.click();
+    await frame.getByText(sessionReadError, { exact: true }).waitFor();
     await checkRow('session_body');
     await select('logs');
     const taskPreview = await checkRow('log_body');
