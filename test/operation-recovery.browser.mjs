@@ -1,7 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
+import { Readable } from 'node:stream';
 import { createLocalBusinessStore } from '../server/local-business.mjs';
+import { createRenewalHandoff, renewalHandoffDomain } from '../server/renewal-handoff.mjs';
+import { createOrderExpenseHandler } from '../server/finance/expense-receipts.mjs';
+import { describeWriteOperation } from '../server/write-operation.mjs';
 import { localBusinessRequest } from './helpers/local-business-request.mjs';
 import { interceptDesign, origin, separatorSnapshot, toggleDesignTheme } from './helpers/offline-design.mjs';
 
@@ -14,7 +18,7 @@ const seedOrder = (id, extra = {}) => ({
   paidConfirmed: false, receiptConfirmed: false, version: 1, ...extra
 });
 
-async function environment(context) {
+async function environment(context, { actor: acting = actor, setup } = {}) {
   const store = createLocalBusinessStore(':memory:');
   const { version, data } = store.load('commerce');
   const empty = { customers: [], tenants: [], orders: [], operating: [], rentBatches: [], logs: [] };
@@ -36,20 +40,33 @@ async function environment(context) {
     mailboxes: [mailbox], accounts: [], batches: [], returnRecords: [], importRecords: [importRecord],
     registrationRecords: [], tableSettings: [], undo: []
   } }], { actor });
-  await interceptDesign(context, { actor, skipRechargeAssets: true, businessLists: true, documentDelta: true,
-    localFixtures: { 'auth/session': { actor, configured: true } } });
+  await setup?.(store);
+  await interceptDesign(context, { actor: acting, skipRechargeAssets: true, businessLists: true, documentDelta: true,
+    localFixtures: { 'auth/session': { actor: acting, configured: true } } });
   const requests = [];
   let verified = false, confirmationCount = 0, lostArchive = 0, lostRecovery = 0;
+  const renewals = createRenewalHandoff({ store, publicOrigin: origin, getAuth: () => ({
+    recentlyVerified: () => verified, orderOwners: () => [acting]
+  }) });
+  const expenses = createOrderExpenseHandler({ store, publicOrigin: origin });
   await context.route(base + '**', async route => {
     const request = route.request(), url = new URL(request.url());
     const path = url.pathname.slice('/api/local/'.length);
-    if (!/^(commerce|inventory)(?:\/page)?$|^inventory\/archive$|^audit\/page$|^audit\/\d+\/recovery$/.test(path))
+    const businessHandler = path === 'renewals' ? renewals : path === 'finance/expense-receipts' ? expenses : undefined;
+    if (!businessHandler && !/^(commerce|inventory|appleBalance)(?:\/page)?$|^inventory\/archive$|^audit\/page$|^audit\/\d+\/recovery$/.test(path))
       return route.fallback();
     const method = request.method(), body = request.postDataJSON() ?? undefined;
     const operationId = request.headers()['x-id-operation'];
     requests.push({ path, method, body, operationId, query: Object.fromEntries(url.searchParams) });
+    if (businessHandler) {
+      const stream = Readable.from(body === undefined ? [] : [Buffer.from(JSON.stringify(body))]);
+      Object.assign(stream, { method, url: url.pathname + url.search, headers: { ...request.headers(), origin } });
+      let status, data;
+      await businessHandler(stream, { writeHead(code) { status = code; }, end(result) { data = JSON.parse(result); } }, acting);
+      return route.fulfill({ status, json: data });
+    }
     const result = await localBusinessRequest(store, path + url.search, {
-      method, body, operationId, actor, publicOrigin: origin, authorizeSensitive: () => verified
+      method, body, operationId, actor: acting, publicOrigin: origin, authorizeSensitive: () => verified
     });
     if (method === 'POST' && path === 'inventory/archive' && result.status === 200 && lostArchive > 0) {
       lostArchive--;
@@ -209,6 +226,104 @@ test('手机与桌面通过原库存入口误标状态，再从原日志预览�
       assert.deepEqual(errors, []);
     } finally { await context.close(); store.close(); }
   }
+});
+
+test('从操作日志打开续费办理、费用作废和苹果余额补偿的原入口', { timeout: 50_000 }, async t => {
+  const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
+  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
+  t.after(() => browser.close());
+  const acting = { ...actor, role: 'super' };
+  const context = await browser.newContext({ viewport: { width: 390, height: 900 }, serviceWorkers: 'block' });
+  const order = { id: 'order-paid', number: 'WD-002', customer: '合成客户', account: 'source@example.test',
+    product: 'GPT', plan: 'Plus', payment: '银行卡', expiry: '2026-11-18T10:00', start: '2026-10-18T10:00' };
+  const seed = { id: 'renewal-target', version: 2, status: 'processing', order,
+    source: 'synthetic-original-order', submittedBy: { id: 'another-user', name: '合成员工' },
+    submittedAt: '2026-11-14T04:00:00Z', processingBy: { id: actor.id, name: actor.name }, paymentReview: true };
+  const { page, store, errors, requests, confirmations } = await environment(context, { actor: acting, setup(store) {
+    const unrelated = { ...seed, id: 'renewal-other', order: { ...order, number: 'WD-OTHER', id: 'other-order' } };
+    store.saveRenewalQueue(0, store.load('commerce').version, [unrelated, seed], {
+      action: 'renewal_claim', actor: acting, ids: [seed.id], operation: describeWriteOperation('synthetic-renewal-receipt', acting, [seed.id])
+    });
+    const expense = { id: 'expense-synthetic', category: 'kyc', chargedOn: '2026-11-14',
+      source: '合成账单', reference: 'FIXTURE-FEE-1', amount: '22.5', currency: 'MYR', recordedAt: '2026-11-14T04:00:00Z' };
+    store.saveFeatureDocument('order-expense-receipts', 0, { items: [expense] },
+      { action: 'order_expense_record', actor: acting, targetId: expense.id });
+    const { version, data } = store.load('inventory');
+    const wallet = { id: 'wallet-synthetic', type: 'apple', email: 'balance@example.test', appStoreRegion: 'US',
+      source: '线上购买', status: '正常', health: 'normal', inventoryState: 'available', version: 1 };
+    store.saveBatch([{ domain: 'inventory', version, action: 'inventory_create', data: {
+      ...data, mailboxes: [wallet, ...data.mailboxes]
+    } }], { actor: acting });
+    store.saveBatch([{ domain: 'appleBalance', version: 0, action: 'apple_adjust', data: {
+      wallets: [{ id: wallet.id, currency: 'USD', version: 2, balance: '10' }], allocations: [], refunds: [],
+      movements: [{ id: 'manual-synthetic', appleIdId: wallet.id, kind: 'manual', label: '人工余额入账',
+        amount: '10', before: '0', after: '10', versionAfter: 2, orderId: '', orderNo: '', reason: '合成余额',
+        actor: actor.name, at: '2026-11-14 12:00' }]
+    } }], { actor: acting });
+  } });
+  const originalOrders = store.load('commerce');
+  const main = page.locator('#main'), drawer = page.locator('#drawer');
+  async function openLog(action, module) {
+    const { id } = store.audit().find(row => row.action === action);
+    await page.goto(origin + '/#/settings/audit');
+    await main.getByRole('combobox', { name: '日志范围' }).selectOption('recovery');
+    await main.getByRole('combobox', { name: '恢复模块' }).selectOption(module);
+    const search = main.getByRole('textbox', { name: '搜索当前列表' });
+    const received = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return url.pathname.endsWith('/audit/page') && url.searchParams.get('module') === module &&
+        url.searchParams.get('query') === '#' + id;
+    });
+    await search.fill('#' + id);
+    await search.press('Enter');
+    assert.equal((await (await received).json()).items[0].id, String(id));
+    await main.getByRole('button', { name: '查看恢复', exact: true }).click();
+  }
+  try {
+    await openLog('renewal_claim', 'renewal');
+    await drawer.getByText('付款结果待核对，请由经办人核对付款凭证。').waitFor();
+    await drawer.getByRole('button', { name: '查看续费办理记录' }).click();
+    await main.getByText('WD-002', { exact: true }).waitFor();
+    assert.equal(await main.getByText('WD-OTHER', { exact: true }).count(), 0);
+    const reads = requests.filter(row => row.path === 'renewals' && row.method === 'GET').length;
+    await page.evaluate(() => window.IDDesignAPI.render());
+    await main.getByRole('button', { name: '查看全部续费', exact: true }).waitFor();
+    await main.getByText('WD-002', { exact: true }).waitFor();
+    assert.equal(requests.filter(row => row.path === 'renewals' && row.method === 'GET').length, reads);
+    await main.getByRole('button', { name: '退回', exact: true }).click();
+    await drawer.getByLabel('退回原因').fill('合成退回测试');
+    await drawer.getByRole('button', { name: '登记未付款并退回', exact: true }).click();
+    await main.getByText('财务已退回', { exact: true }).waitFor();
+    assert.equal(store.featureDocument(renewalHandoffDomain).data.items.find(row => row.id === seed.id).returned, '合成退回测试');
+    assert.equal(confirmations(), 1);
+    await main.getByRole('button', { name: '查看全部续费', exact: true }).click();
+    await main.getByRole('tab', { name: '处理中', exact: true }).click();
+    await main.locator('tr[data-row-id="renewal-other"]').waitFor();
+    await openLog('order_expense_record', 'finance');
+    await drawer.getByRole('button', { name: '查看费用凭据' }).click();
+    await drawer.getByText('合成账单 · FIXTURE-FEE-1', { exact: true }).waitFor();
+    await drawer.getByRole('button', { name: '作废凭据', exact: true }).click();
+    await drawer.getByLabel('作废原因').fill('合成作废原因');
+    await drawer.getByRole('button', { name: '确认作废', exact: true }).click();
+    await drawer.waitFor({ state: 'hidden' });
+    await openLog('order_expense_void', 'finance');
+    await drawer.getByRole('button', { name: '查看费用凭据' }).click();
+    await drawer.getByText('合成作废原因', { exact: true }).waitFor();
+    assert.equal(await drawer.getByRole('button', { name: '作废凭据', exact: true }).count(), 0);
+    await page.keyboard.press('Escape');
+    await openLog('apple_adjust', 'finance');
+    await drawer.getByRole('button', { name: '查看余额流水' }).click();
+    await drawer.getByRole('button', { name: '补偿撤回', exact: true }).click();
+    await drawer.getByLabel('撤回原因').fill('合成补偿原因');
+    await drawer.getByRole('button', { name: '核对补偿撤回' }).click();
+    await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
+    await drawer.getByText('合成补偿原因', { exact: true }).waitFor();
+    assert.equal(store.load('appleBalance').data.movements.length, 2);
+    assert.equal(store.load('appleBalance').data.wallets[0].balance, '0.0000');
+    assert.deepEqual(store.load('commerce'), originalOrders);
+    assert.equal(requests.filter(row => row.method === 'POST' && /^audit\/\d+\/recovery$/.test(row.path)).length, 0);
+    assert.deepEqual(errors, []);
+  } finally { await context.close(); store.close(); }
 });
 
 test('订单日志打开原单操作，结算记录保持只读，撤单和恢复走原确认与服务器事务', { timeout: 35_000 }, async t => {
