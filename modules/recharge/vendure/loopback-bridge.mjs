@@ -133,6 +133,7 @@ export function createLoopbackVendureRechargeBridge({
   acceptSubmissions = true,
   acceptStorefrontSubmissions = () => true,
   approvedRetryTaskIds = [],
+  approvedRetryTaskDigest,
   legacyReceipts = [],
   now = Date.now
 }) {
@@ -145,7 +146,13 @@ export function createLoopbackVendureRechargeBridge({
   if (!Array.isArray(approvedRetryTaskIds) || approvedRetryTaskIds.some(id =>
     typeof id !== 'string' || !taskIdPattern.test(id)))
     throw new TypeError('商城充值重试复核清单无效');
+  if (approvedRetryTaskDigest && !hexFingerprint.test(approvedRetryTaskDigest))
+    throw new TypeError('商城充值重试回执摘要无效');
   const approvedRetries = new Set(approvedRetryTaskIds);
+  const isReviewed = id => typeof id === 'string' && (
+    approvedRetries.has(id) ||
+    (Boolean(approvedRetryTaskDigest) && secureEqual(createHash('sha256').update(id).digest('hex'), approvedRetryTaskDigest))
+  );
   if (!store && legacyReceipts?.length) throw new TypeError('商城历史回执需要正式任务存储密钥');
 
   const memoryKey = store ? null : randomBytes(32);
@@ -267,7 +274,7 @@ export function createLoopbackVendureRechargeBridge({
     const lastTask = () => legacy.byCode.get(codeRef) ?? [...tasks.values()].findLast(task => task.codeRef === codeRef);
     const recover = task => task && (useAdmission || task.status !== 'failed' || legacy.byCode.has(codeRef));
     // A reviewed failure is tied to this exact receipt, not every failure of the code.
-    const approvedFailure = task => useAdmission && approvedRetries.has(task?.id) &&
+    const approvedFailure = task => useAdmission && isReviewed(task?.id) &&
       task.status === 'failed' && task.result?.status === 'failed' &&
       !task.upstreamJobId && !task.result.upstreamJobId &&
       ['route', 'cards'].some(type => secureEqual(

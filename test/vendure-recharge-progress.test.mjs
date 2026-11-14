@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHmac, randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes } from 'node:crypto';
 import test from 'node:test';
 import {
   createLoopbackVendureRechargeBridge,
@@ -95,7 +95,8 @@ test('a reviewed pre-execution failure needs fresh native admission and creates 
   let lookups = 0;
   let open = true;
   const f = fixture(t, [], store, {
-    approvedRetryTaskIds: [previousId], acceptStorefrontSubmissions: () => open,
+    approvedRetryTaskDigest: createHash('sha256').update(previousId).digest('hex'),
+    acceptStorefrontSubmissions: () => open,
     lookupAdmission: async () => {
       ++lookups;
       if (native instanceof Error) throw native;

@@ -15,6 +15,10 @@ on:
         description: 同版本发布原生代充、适配器、商城执行器和网站
         default: false
         type: boolean
+      vendure_retry_receipt_sha256:
+        description: 同版更新网站、商城网关并登记一笔已核对旧回执的 SHA-256，其他发布留空
+        required: false
+        type: string
       inspect_canary_sha:
         description: 只读检查指定失败版本的金丝雀日志，发布时留空
         required: false
@@ -47,6 +51,7 @@ jobs:
       INSPECT_RELEASE_COMMAND: ${{ inputs.inspect_release_command }}
       RELEASE_RECHARGE_ADAPTER: ${{ inputs.include_recharge_adapter }}
       RELEASE_RECHARGE_CORE: ${{ inputs.include_recharge_core }}
+      VENDURE_RETRY_RECEIPT_SHA256: ${{ inputs.vendure_retry_receipt_sha256 }}
     steps:
       - name: Check out main
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683

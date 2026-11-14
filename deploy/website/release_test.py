@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 import json
 import os
 import sqlite3
@@ -6,7 +7,7 @@ import subprocess
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 import release
 import remote
@@ -560,6 +561,70 @@ class WebsiteReleaseTests(unittest.TestCase):
             vendure_admission.stage_launcher(old, before, target, refresh=True)
         with self.assertRaisesRegex(remote.ReleaseError, "gateway_launcher_changed"):
             vendure_admission.stage_launcher(new.replace("readonly", "rw"), target, before, refresh=True)
+        receipt = "c" * 64
+        approved = vendure_admission.stage_launcher(new, target, before, refresh=True, retry_receipt=receipt)
+        self.assertIn(f'"ID_VENDURE_RETRY_RECEIPT_SHA256={receipt}"', approved)
+        self.assertEqual(vendure_admission.stage_launcher(approved, before, target, refresh=True, retry_receipt=receipt),
+                         approved.replace(f"sha={before}", f"sha={target}"))
+        with self.assertRaisesRegex(remote.ReleaseError, "gateway_retry_launcher_changed"):
+            vendure_admission.stage_launcher(approved, before, target, refresh=True, retry_receipt="d" * 64)
+
+    def test_gateway_accepts_only_the_signed_single_pre_execution_failure(self):
+        key = bytes(range(32))
+        task_id = "11111111-1111-4111-8111-111111111111"
+
+        def fingerprint(purpose, value):
+            return hmac.new(key, (purpose + "\0" + value).encode(), hashlib.sha256).hexdigest()
+
+        task = {"id": task_id, "codeRef": "code-reference", "status": "failed", "result": {
+            "status": "failed", "evidenceRef": fingerprint("evidence", "codexdaichong:route:" + task_id)}}
+        receipt = hashlib.sha256(task_id.encode()).hexdigest()
+        db = Mock()
+
+        def set_snapshot(tasks, valid=True):
+            payload = json.dumps({"tasks": tasks}, separators=(",", ":"))
+            signature = fingerprint("snapshot", json.dumps([3, payload], separators=(",", ":")))
+            db.execute.return_value.fetchone.return_value = (3, payload, signature if valid else "e" * 64)
+
+        with patch.object(vendure_admission, "run", return_value=key.hex().encode()):
+            set_snapshot([task])
+            vendure_admission.require_reviewed_receipt(db, receipt)
+            with self.assertRaisesRegex(remote.ReleaseError, "gateway_retry_receipt_missing"):
+                vendure_admission.require_reviewed_receipt(db, "f" * 64)
+            for tasks, error in (
+                ([task | {"upstreamJobId": "started"}], "gateway_retry_failure_not_confirmed"),
+                ([task | {"result": {"status": "failed", "evidenceRef": "d" * 64}}],
+                 "gateway_retry_failure_not_confirmed"),
+                ([task, task | {"id": "a-second-attempt"}], "gateway_retry_code_has_other_attempt"),
+            ):
+                set_snapshot(tasks)
+                with self.assertRaisesRegex(remote.ReleaseError, error):
+                    vendure_admission.require_reviewed_receipt(db, receipt)
+            set_snapshot([task], valid=False)
+            with self.assertRaisesRegex(remote.ReleaseError, "gateway_retry_snapshot_mismatch"):
+                vendure_admission.require_reviewed_receipt(db, receipt)
+
+    def test_gateway_release_validates_before_cutover_and_returns_both_receipts(self):
+        receipt = "e" * 64
+        before = {key: None for key in (
+            "components", "gatewaySha256", "unitSha256", "assetsSha256", "launchers", "monitoring")}
+        plan = {"sha": TARGET, "before": before, "vendureRetryReceipt": receipt}
+        release_dir = remote.ROOT / "releases" / TARGET
+        staged = (release_dir / "source", release_dir / "operations")
+        calls = Mock()
+        calls.stage.return_value = staged
+        calls.website.return_value = {"mainSha": TARGET}
+        calls.gateway.return_value = {"gatewaySha": TARGET}
+        with patch.object(remote, "snapshot", return_value=plan["before"]), \
+                patch.object(remote, "stage", calls.stage), patch.object(remote, "release_website", calls.website), \
+                patch.object(vendure_admission, "check_refresh_baseline", calls.baseline), \
+                patch.object(vendure_admission, "cutover", calls.gateway):
+            self.assertEqual(remote.release_with_optional_vendure_refresh(plan),
+                             {"mainSha": TARGET, "vendureGateway": {"gatewaySha": TARGET}})
+        self.assertEqual(calls.mock_calls, [
+            call.stage(plan, release_dir), call.baseline(TARGET, receipt),
+            call.website(plan, staged=staged), call.gateway(TARGET, release_dir, refresh=True, retry_receipt=receipt),
+        ])
 
     def test_gateway_refresh_restores_intake_only_before_switch_or_after_success(self):
         runtime = Path(__file__).resolve().parents[2] / ".runtime"
