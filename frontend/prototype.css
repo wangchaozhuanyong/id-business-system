@@ -6468,6 +6468,9 @@ body { -webkit-font-smoothing: antialiased; }
 .sidebar-navigation .nav-child.active::before { background: #8fb5ef; width: 4px; height: 4px; }
 .sidebar-navigation :is(.nav-heading,.nav-child):not([aria-current='page']):is(:hover,:focus-visible) { background: #26364a; color: #f2f5fa; }
 .sidebar-navigation .nav-child small { color: #abbcd3; }
+@media (max-width: 900px) {
+  .sidebar-navigation :is(.nav-heading, .nav-child) { min-height: 44px; }
+}
 .sidebar-bottom { border-color: #ffffff14; color: #aebcd0; margin-inline: 20px; }
 .sidebar-bottom .dot { background: #8fb5ef; }
 .topbar { box-shadow: none; border-bottom-color: var(--line); }

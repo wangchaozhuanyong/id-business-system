@@ -64,12 +64,12 @@ async function soundSettings(page) {
   return panel;
 }
 
-test('sidebar stays silent and opt-in outcomes use real browser audio', { timeout: 50_000 }, async t => {
+test('interaction sounds use real browser audio after opt-in', { timeout: 50_000 }, async t => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
   t.after(() => browser.close());
 
-  await t.test('desktop navigation stays silent, outcomes respect rate limit and volume', async () => {
+  await t.test('desktop navigation and buttons play a single tone per hover, outcomes retain priority', async () => {
     const { page, context } = await observeAudio(browser, { viewport: { width: 1440, height: 900 }, reducedMotion: 'no-preference' });
     try {
       const first = page.locator('#sidebar .nav-heading').first();
@@ -89,47 +89,53 @@ test('sidebar stays silent and opt-in outcomes use real browser audio', { timeou
       const panel = await soundSettings(page);
       await panel.getByLabel('开启轻音效').check();
       await page.locator('#interaction-preferences[data-enabled="true"]').waitFor({ state: 'attached' });
-      assert.match(await panel.locator('#sound-state').textContent(), /订单保存和代充结果/);
+      assert.match(await panel.locator('#sound-state').textContent(), /鼠标移入导航或按钮/);
       await page.keyboard.press('Escape');
       await panel.waitFor({ state: 'hidden' });
 
       await first.hover();
+      await page.waitForFunction(() => window.audioFeedback.tones[0]?.peak > 0.005);
       await first.locator('.icon').first().hover();
       await first.locator('.nav-text').hover();
       await page.evaluate(() => window.IDDesignAPI.render());
       await settle(page);
-      assert.equal(await countTones(page), 0, '悬停和重绘保持静音');
-      await second.hover();
+      assert.equal(await countTones(page), 1, '移过同一控件的内容、原地重绘均不重复播放');
       await second.click();
       const child = page.locator('#sidebar .nav-children a').first();
       await child.waitFor();
+      await waitForCooldown(page);
+      const beforeChild = await countTones(page);
       await child.hover();
+      await waitForTone(page, beforeChild + 1);
       await page.waitForFunction(() => {
         const item = document.querySelector('#sidebar .nav-child:hover');
         return item && getComputedStyle(item).transform !== 'none';
       });
 
-      for (let index = 0; index < 12; index++) await (index % 2 ? first : second).hover();
-      assert.equal(await countTones(page), 0);
+      await waitForCooldown(page);
+      const beforeButton = await countTones(page);
+      await page.locator('.topbar-tools button').first().hover();
+      await page.waitForFunction(index => window.audioFeedback.tones[index]?.peak > 0.005, beforeButton);
+      const beforeResult = await countTones(page);
       await page.evaluate(() => {
         for (let index = 0; index < 12; index++) window.IDInteractionSound.play('success');
       });
-      await page.waitForFunction(() => window.audioFeedback.tones[0]?.peak > 0.005);
-      assert.equal(await countTones(page), 1, '重复结果受限流约束');
+      assert.equal(await countTones(page), beforeResult + 1, '悬停不会压过业务提示，重复结果受限流约束');
       await waitForCooldown(page);
       await page.evaluate(() => window.IDInteractionSound.play('error'));
-      await waitForTone(page, 2);
+      await waitForTone(page, beforeResult + 2);
 
       await toggleDesignTheme(page);
       await page.locator('#nav-toggle').click();
       await page.locator('body.is-collapsed').waitFor();
+      await waitForCooldown(page);
       const beforeCollapsed = await countTones(page);
       await first.hover();
+      await waitForTone(page, beforeCollapsed + 1);
       await page.waitForFunction(() => {
         const item = document.querySelector('#sidebar .nav-heading');
         return item.matches(':hover') && new DOMMatrixReadOnly(getComputedStyle(item).transform).a > 1.02;
       });
-      assert.equal(await countTones(page), beforeCollapsed);
 
       await page.emulateMedia({ reducedMotion: 'reduce' });
       await second.hover();
@@ -139,6 +145,8 @@ test('sidebar stays silent and opt-in outcomes use real browser audio', { timeou
       assert.match(await reopened.locator('#sound-state').textContent(), /音量为 0/);
       await page.keyboard.press('Escape');
       const beforeMute = await countTones(page);
+      await first.hover();
+      await settle(page);
       await page.evaluate(() => window.IDInteractionSound.play('success'));
       assert.equal(await countTones(page), beforeMute);
 

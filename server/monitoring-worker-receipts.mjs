@@ -82,7 +82,8 @@ export async function readBackupMonitorReceipt(directory) {
       (report.drive !== null && !validWorkerReceipt(report.drive))) return null;
   const mysql = report.mysql;
   if (mysql !== null && (!timestamp(mysql?.capturedAt) || !timestamp(mysql.verifiedAt) ||
-      mysql.capturedAt > mysql.verifiedAt)) return null;
+      mysql.capturedAt > mysql.verifiedAt || (mysql.recoveryStatus !== undefined &&
+        !['verified', 'capture_failed', 'missing'].includes(mysql.recoveryStatus)))) return null;
   return report;
 }
 

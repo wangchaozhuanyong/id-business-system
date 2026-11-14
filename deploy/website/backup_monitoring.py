@@ -21,7 +21,7 @@ SHEETS_INTEGRITY_CODES = {
 }
 
 
-def read_receipt(path, uid):
+def read_receipt(path, uid, limit=1024):
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
         with os.fdopen(fd, "rb") as file:
@@ -29,8 +29,8 @@ def read_receipt(path, uid):
             if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != uid or
                     stat.S_IMODE(info.st_mode) != 0o600):
                 return None
-            raw = file.read(1025)
-            value = json.loads(raw) if len(raw) <= 1024 else None
+            raw = file.read(limit + 1)
+            value = json.loads(raw) if len(raw) <= limit else None
             return value if isinstance(value, dict) else None
     except (OSError, ValueError):
         return None
@@ -78,7 +78,18 @@ def mysql_fields(receipt):
         verify_time = dt.datetime.fromisoformat(verified)
         if verify_time.tzinfo is None or capture_time > verify_time:
             return None
-        return {"capturedAt": int(capture_time.timestamp() * 1000), "verifiedAt": int(verify_time.timestamp() * 1000)}
+        result = {"capturedAt": int(capture_time.timestamp() * 1000), "verifiedAt": int(verify_time.timestamp() * 1000)}
+        if "recoveryStateStatus" not in receipt:
+            return result
+        recovery = receipt.get("recoveryState")
+        recovery_status = "capture_failed" if receipt.get("recoveryStateStatus") == "capture_failed" else "missing"
+        if (receipt.get("recoveryStateStatus") == "verified" and isinstance(recovery, dict) and
+                recovery.get("key") == receipt["key"].removesuffix("manifest.json") + "recovery-state.idbackup" and
+                isinstance(recovery.get("versionId"), str) and recovery["versionId"] not in ("", "null") and
+                re.fullmatch(r"[a-f0-9]{64}", str(recovery.get("cipherSha256"))) and
+                type(recovery.get("cipherBytes")) is int and recovery["cipherBytes"] > 0):
+            recovery_status = "verified"
+        return {**result, "recoveryStatus": recovery_status}
     except (ValueError, OverflowError):
         return None
 
@@ -167,7 +178,7 @@ def collect():
             stat.S_IMODE(directory.st_mode) != 0o750):
         raise RuntimeError("backup_monitor_directory_invalid")
     drive = drive_fields(read_receipt(FORMAL / "google-drive-backup/outbox/monitoring-backup.json", site.st_uid))
-    mysql = mysql_fields(read_receipt(ROOT / "backups/scheduled-recharge/last-upload.json", 0))
+    mysql = mysql_fields(read_receipt(ROOT / "backups/scheduled-recharge/last-upload.json", 0, limit=16384))
     timer = unit_status(RECHARGE + ".timer")
     service = unit_status(RECHARGE + ".service")
     report = {

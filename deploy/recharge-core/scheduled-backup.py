@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import re
+import runpy
 import secrets
 import stat
 import subprocess
@@ -19,6 +20,7 @@ PREFIX = 'mysql/daily/independent-recharge'
 NATIVE = 'id-business-independent-recharge-native'
 MANIFEST = 'manifest.json'
 KEY_WRAP = 'RSA-OAEP-SHA256'
+RECOVERY_FILENAME = 'recovery-state.idbackup'
 
 
 class BackupError(Exception):
@@ -134,6 +136,22 @@ def wrap_backup_key(recipient, expected_digest):
                  'ciphertext': base64.b64encode(encrypted).decode('ascii')}
 
 
+def capture_recovery_state(target, native_revision, destination):
+    try:
+        status = subprocess.check_output(['docker', 'inspect', '--format',
+            '{{.State.Running}} {{index .Config.Labels "org.opencontainers.image.revision"}} {{.Image}}',
+            'id-business-independent-app'], text=True, timeout=15).strip()
+        app = re.fullmatch(r'true ([a-f0-9]{40}) (sha256:[a-f0-9]{64})', status)
+        if not app:
+            raise BackupError('Could not identify the running website recovery source')
+        source = ROOT / 'releases' / app[1] / 'source'
+        collector = runpy.run_path(str(source / 'deploy/website/recovery_capsule.py'))['capture']
+        return collector(ROOT, source, app[1], native_revision, destination,
+                         target['recipientSha256'], app[2])
+    except Exception:
+        raise BackupError('Portable recovery state capture failed; existing pending backups are retained') from None
+
+
 def capture(target, pending):
     release_lock = ROOT / 'formal' / '.application-release.lock'
     with release_lock.open('r') as lock:
@@ -150,8 +168,25 @@ def capture(target, pending):
             stage = Path(temporary) / 'backup'
             recipient = ROOT / 'formal' / 'google-drive-backup' / 'recipient.pem'
             key, wrapped = wrap_backup_key(recipient, target['recipientSha256'])
+            capsule = Path(temporary) / RECOVERY_FILENAME
+            try:
+                recovery = capture_recovery_state(target, match[1], capsule)
+            except BackupError:
+                # Auxiliary capture cannot suppress the existing MySQL backup.
+                # Its failure is recorded separately and monitored.
+                recovery = None
+            mysql_started = utc_now().isoformat()
             manifest = take_snapshot(match[1], stage, backup_key=key)
+            mysql_finished = utc_now().isoformat()
             manifest.update(capturedAt=captured_at, wrappedKey=wrapped)
+            if recovery:
+                capsule.rename(stage / RECOVERY_FILENAME)
+                manifest.update(recoveryState=recovery,
+                    recoveryWindow={'consistency': 'ordered-reconciliation-required',
+                                    'mysqlStartedAt': mysql_started, 'mysqlFinishedAt': mysql_finished})
+                sync_file(stage / RECOVERY_FILENAME)
+            else:
+                manifest['recoveryStateError'] = 'capture_failed'
             (stage / MANIFEST).write_text(json.dumps(manifest, indent=2) + '\n')
             sync_file(stage / BACKUP_FILENAME)
             sync_file(stage / MANIFEST)
@@ -182,9 +217,43 @@ def publish(target, pending):
     if len(base64.b64decode(wrapped['ciphertext'], validate=True)) < 384:
         raise BackupError('Invalid wrapped recovery key')
     key = f'{PREFIX}/{captured_at}/{revision}'
+    recovery = manifest.get('recoveryState')
+    recovery_error = manifest.get('recoveryStateError')
+    if recovery_error not in (None, 'capture_failed') or (recovery is not None and recovery_error is not None):
+        raise BackupError('Pending recovery status is invalid')
+    if recovery is not None:
+        capsule = pending / RECOVERY_FILENAME
+        info = capsule.lstat()
+        window = manifest.get('recoveryWindow', {})
+        try:
+            ordered = [datetime.fromisoformat(value) for value in
+                       (recovery['startedAt'], recovery['finishedAt'], window['mysqlStartedAt'], window['mysqlFinishedAt'])]
+            valid = (all(value.tzinfo is not None for value in ordered) and ordered == sorted(ordered) and
+                window.get('consistency') == 'ordered-reconciliation-required' and
+                recovery['nativeRevision'] == revision and re.fullmatch('[a-f0-9]{40}', recovery['appRevision']) and
+                recovery['recipientSha256'] == target['recipientSha256'] and
+                recovery['sessionPolicy'] == 'revoke' and stat.S_ISREG(info.st_mode) and
+                not info.st_mode & 0o077 and info.st_uid == os.geteuid() and
+                info.st_size == recovery['cipherBytes'] and file_digest(capsule) == recovery['cipherSha256'])
+        except (KeyError, ValueError, TypeError):
+            valid = False
+        if not valid:
+            raise BackupError('Pending recovery capsule or capture interval failed validation')
+    elif (pending / RECOVERY_FILENAME).exists() or manifest.get('recoveryWindow') is not None:
+        raise BackupError('Pending recovery capsule has no matching manifest')
     blob_version = upload_verified(target, f'{key}/{BACKUP_FILENAME}', blob, manifest['cipherSha256'])
+    recovery_receipt = None
+    if recovery is not None:
+        recovery_key = f'{key}/{RECOVERY_FILENAME}'
+        try:
+            version = upload_verified(target, recovery_key, capsule, recovery['cipherSha256'])
+        except BackupError:
+            # The MySQL copy is already verified. Preserve its exact version and
+            # retry this pending capsule without recapturing or replacing either object.
+            raise BackupError('MySQL copy verified; pending recovery capsule upload will be retried') from None
+        recovery_receipt = {**recovery, 'key': recovery_key, 'versionId': version}
     manifest_version = upload_verified(target, f'{key}/{MANIFEST}', manifest_path, file_digest(manifest_path))
-    return {
+    receipt = {
         'capturedAt': captured_at,
         'verifiedAt': utc_now().isoformat(),
         'key': f'{key}/{MANIFEST}',
@@ -192,6 +261,11 @@ def publish(target, pending):
         'blobVersionId': blob_version,
         'manifestVersionId': manifest_version,
     }
+    if recovery_receipt:
+        receipt.update(recoveryStateStatus='verified', recoveryState=recovery_receipt)
+    elif recovery_error:
+        receipt['recoveryStateStatus'] = recovery_error
+    return receipt
 
 
 def save_receipt(path, receipt):
@@ -209,7 +283,7 @@ def save_receipt(path, receipt):
 
 def remove_uploaded(directory):
     if directory.is_dir() and not directory.is_symlink():
-        for name in (MANIFEST, BACKUP_FILENAME):
+        for name in (MANIFEST, BACKUP_FILENAME, RECOVERY_FILENAME):
             (directory / name).unlink(missing_ok=True)
         directory.rmdir()
 

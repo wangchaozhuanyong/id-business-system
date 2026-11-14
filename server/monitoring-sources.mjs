@@ -188,7 +188,8 @@ export function createMonitoringSources({ monitor, databasePath, externalProbe =
         report.mysqlAttemptFailed ? 'mysql_attempt_failed' :
         !mysql ? 'receipt_missing' :
         mysql.verifiedAt > now + minute ? 'receipt_future' :
-        age > 35 * minute ? 'mysql_backup_stale' : undefined;
+        age > 35 * minute ? 'mysql_backup_stale' :
+        mysql.recoveryStatus && mysql.recoveryStatus !== 'verified' ? 'recovery_state_missing' : undefined;
       output.push({ code: 'recharge_backup', status: reason ? 'bad' : 'ok', reason,
         count: mysql ? Math.max(0, Math.floor(age / minute)) : undefined });
     }

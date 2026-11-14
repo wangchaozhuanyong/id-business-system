@@ -25,7 +25,7 @@ const groups = [
   ['spacing', ['test/site-spacing.browser.mjs']],
   ['mailbox', ['test/mailbox-query-layout.browser.mjs']],
   ['tabs', ['test/tab-layout.browser.mjs']],
-  ['feedback', ['test/action-feedback.browser.mjs']]
+  ['feedback', ['--test', '--test-concurrency=1', 'test/action-feedback.browser.mjs', 'test/sidebar-interaction.browser.mjs']]
 ];
 const selected = process.argv.slice(2);
 if (selected.some(name => !groups.some(([group]) => group === name))) throw new Error('未知检查组');
