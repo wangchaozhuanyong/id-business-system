@@ -12,6 +12,7 @@ import { stageConfirmedRenewalDebit } from '../server/apple-funding.mjs';
 import { cardTypeDocument } from '../server/card-management.mjs';
 import { subscriptionDomain, subscriptionAccountId } from '../server/subscription-management.mjs';
 import { createRenewalHandoff, renewalHandoffDomain, renewalHandoffPath } from '../server/renewal-handoff.mjs';
+import { localBusinessRequest } from './helpers/local-business-request.mjs';
 
 const origin = 'https://renewal.example.test';
 const actors = {
@@ -61,6 +62,45 @@ function sender(store) {
     return { status, data };
   }
 }
+
+test('续费日志定位同一笔申请和订单，沿用原接口退回且保留原申请', async t => {
+  const { store, send, submit } = fixture(t);
+  const audit = (resource, options = {}) => localBusinessRequest(store, resource, {
+    actor: actors.super, publicOrigin: origin, ...options
+  });
+  const submitted = await send('employee', submit);
+  assert.equal(submitted.status, 200, submitted.data.error);
+  const [row] = (await send('finance', null, { view: 'finance' })).data.items;
+  const firstLog = store.audit().find(log => log.action === 'renewal_submit');
+  const url = 'audit/' + firstLog.id + '/recovery';
+  const page = await audit('audit/page?view=recovery&module=renewal&query=' + initialOrder.orderNo);
+  assert.deepEqual(page.body.items.map(item => [item.id, item.targetId, item.orderNo]),
+    [[String(firstLog.id), row.id, initialOrder.orderNo]]);
+  const preview = await audit(url);
+  assert.equal(preview.body.status, 'business');
+  assert.deepEqual(preview.body.renewal, { id: row.id, state: 'pending' });
+  assert.deepEqual(preview.body.order, { id: initialOrder.id });
+  assert(!JSON.stringify(preview.body).includes(firstCard));
+  assert(!JSON.stringify(preview.body).includes(initialOrder.email));
+  assert.equal((await audit(url, { actor: actors.employee })).status, 403);
+  assert.equal((await audit(url, { body: { version: 1, reason: 'wrong_record' }, operationId: randomUUID() })).status, 409);
+  const before = store.load('commerce');
+  const ledger = store.load('appleBalance');
+  assert.equal((await send('finance', { action: 'claim', id: row.id, version: 1 })).status, 200);
+  const returned = { action: 'return', id: row.id, version: 2, confirmed: true, reason: '合成误送' };
+  const operationId = randomUUID();
+  assert.equal((await send('finance', returned, { operationId })).status, 200);
+  assert.equal((await send('finance', returned, { operationId })).status, 200);
+  const returnLogs = store.audit().filter(log => log.action === 'renewal_return');
+  assert.equal(returnLogs.length, 1);
+  for (const id of [firstLog.id, returnLogs[0].id]) {
+    const result = await audit('audit/' + id + '/recovery');
+    assert.deepEqual(result.body.renewal, { id: row.id, state: 'returned' });
+    assert.match(result.body.message, /已退回/);
+  }
+  assert.deepEqual(store.load('commerce'), before);
+  assert.deepEqual(store.load('appleBalance'), ledger);
+});
 
 test('confirmed staff handoff, exclusive finance claim, verified card replacement and one new order', async t => {
   const { store, send, submit } = fixture(t);
@@ -177,6 +217,14 @@ test('verified finance can reconcile corrected dates without changing the paid r
   assert.equal((await send('finance', { action: 'claim', id, version: 1 })).status, 200);
   assert.equal((await send('finance', { action: 'paid', id, version: 2, confirmed: true, amount: '22.25',
     currency: 'USD', cardMode: 'none', reference: 'synthetic-payment' }, verify)).status, 200);
+  const paidLog = store.audit().find(log => log.action === 'renewal_paid');
+  const auditUrl = 'audit/' + paidLog.id + '/recovery';
+  const audit = (options = {}) => localBusinessRequest(store, auditUrl, { actor: actors.super, publicOrigin: origin, ...options });
+  const paidPreview = await audit();
+  assert.deepEqual(paidPreview.body.renewal, { id, state: 'paid' });
+  assert.match(paidPreview.body.message, /已有实付记录/);
+  assert(!JSON.stringify(paidPreview.body).includes('synthetic-payment'));
+  assert.equal((await audit({ body: { version: 3, reason: 'wrong_record' }, operationId: randomUUID() })).status, 409);
   const funding = store.featureDocument(renewalHandoffDomain).data.items[0].funding;
   const change = (changes, version) => {
     const commerce = store.load('commerce');

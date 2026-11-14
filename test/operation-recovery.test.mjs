@@ -3,9 +3,11 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { Readable } from 'node:stream';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createLocalBusinessStore } from '../server/local-business.mjs';
+import { createOrderExpenseHandler, orderExpenseDomain } from '../server/finance/expense-receipts.mjs';
 import { localBusinessRequest } from './helpers/local-business-request.mjs';
 
 const admin = { id: 'synthetic-a', name: '合成管理员甲', role: 'admin' };
@@ -38,6 +40,14 @@ const beforeArchive = (snapshot, id, reason = 'wrong_import') => {
   const asset = [...snapshot.data.mailboxes, ...snapshot.data.accounts].find(row => row.id === id);
   return { id, version: snapshot.version, assetVersion: asset.version, reason };
 };
+async function expenseRequest(store, body) {
+  const handler = createOrderExpenseHandler({ store, publicOrigin: STAGING });
+  const stream = Readable.from([Buffer.from(JSON.stringify(body))]);
+  Object.assign(stream, { method: 'POST', headers: { 'content-type': 'application/json', origin: STAGING } });
+  let status, data;
+  await handler(stream, { writeHead(code) { status = code; }, end(response) { data = JSON.parse(response); } }, admin);
+  return { status, data };
+}
 const restoreBody = read => ({ version: read.body.version, reason: 'accidental_archive' });
 const restoreHealthBody = read => ({ version: read.body.version, reason: 'wrong_status' });
 const writeOrder = (store, action, update, { operationId = uuid(), actor = admin, snapshot = store.load('commerce') } = {}) => {
@@ -396,6 +406,63 @@ test('库存状态的原操作和恢复分别原子提交，回执可在数据�
     assert.equal(store.load('inventory').data.mailboxes[0].health, 'normal');
     assert(!(await readFile(path)).includes(Buffer.from(fixtureMaterial)));
   } finally { control.close(); store.close(); }
+});
+
+test('费用恢复日志定位原凭据，作废由原接口处理且保留原金额与作废原因', async t => {
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  const recorded = await expenseRequest(store, { action: 'record', version: 0, entry: {
+    category: 'kyc', chargedOn: '2026-11-01', source: '合成账单', reference: 'expense-synthetic-id', amount: '20.45', currency: 'USD'
+  } });
+  assert.equal(recorded.status, 200, recorded.data.error);
+  const [row] = recorded.data.items;
+  const originalId = auditId(store);
+  const url = recovery(originalId);
+  store.recordAuthEvents(Array.from({ length: 1001 }, () => ({ action: 'auth_login', actor: employee })));
+  assert(!store.audit().some(record => String(record.id) === originalId));
+  const page = await request(store, 'audit/page?view=recovery&module=finance&query=' + encodeURIComponent('#' + originalId));
+  assert.deepEqual(page.body.items.map(record => [record.id, record.subject]), [[originalId, '费用凭据']]);
+  const preview = await request(store, url);
+  assert.equal(preview.body.status, 'business');
+  assert.deepEqual(preview.body.expense, { id: row.id });
+  assert(!JSON.stringify(preview.body).includes(row.reference));
+  assert.equal((await request(store, url, { actor: employee })).status, 403);
+  assert.equal((await request(store, url, { body: { version: 1, reason: 'wrong_status' }, operationId: uuid() })).status, 409);
+  assert.deepEqual(store.featureDocument(orderExpenseDomain).data.items, [row]);
+  const voided = await expenseRequest(store, { action: 'void', version: 1, id: row.id, reason: '合成误登原因' });
+  assert.equal(voided.status, 200, voided.data.error);
+  assert.equal(voided.data.items[0].amount, row.amount);
+  assert.equal(voided.data.items[0].voidReason, '合成误登原因');
+  assert.match((await request(store, url)).body.message, /已作废/);
+  assert.deepEqual((await request(store, recovery(auditId(store)))).body.expense, { id: row.id });
+  assert.equal((await expenseRequest(store, { action: 'void', version: 2, id: row.id, reason: '重复提交' })).status, 409);
+});
+
+test('余额补偿日志指向原人工流水或反向流水，交易和旧日志无通用恢复入口', async t => {
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  const appleId = asset('test-wallet', 'apple', { source: '线上购买', appStoreRegion: 'US' });
+  save(store, 'inventory', stock([appleId]), 'inventory_create');
+  const entry = { id: 'manual-item', appleIdId: appleId.id, kind: 'manual', label: '人工余额入账',
+    reason: '合成余额更正', amount: '10', before: '0', after: '10', versionAfter: 2, orderId: '', orderNo: '' };
+  const ledger = { wallets: [{ id: appleId.id, currency: 'USD', version: 2, balance: '10' }],
+    allocations: [], refunds: [], movements: [entry] };
+  save(store, 'appleBalance', ledger, 'apple_adjust');
+  const originalId = auditId(store);
+  const preview = await request(store, recovery(originalId));
+  assert.equal(preview.body.status, 'business');
+  assert.deepEqual(preview.body.apple, { id: entry.id });
+  assert(!JSON.stringify(preview.body).includes(entry.reason));
+  const compensation = { ...entry, id: 'reverse-item', kind: 'manual-undo', label: '人工变动补偿撤回',
+    reason: '合成补偿', amount: '-10', before: '10', after: '0', versionAfter: 3, originalEntryId: entry.id };
+  save(store, 'appleBalance', { ...ledger, wallets: [{ ...ledger.wallets[0], balance: '0', version: 3 }],
+    movements: [{ ...entry, undoneBy: compensation.id }, compensation] }, 'apple_adjust_undo');
+  assert.deepEqual((await request(store, recovery(auditId(store)))).body.apple, { id: compensation.id });
+  assert.match((await request(store, recovery(originalId))).body.message, /已补偿/);
+  assert.equal(store.load('appleBalance').data.movements.length, 2);
+  const unchanged = store.load('appleBalance');
+  save(store, 'appleBalance', unchanged.data, 'apple_adjust');
+  assert.equal((await request(store, recovery(auditId(store)))).body.status, 'unavailable');
 });
 
 test('订单日志定位原单、独立登记撤单及恢复；状态不能从一般保存更改', async t => {

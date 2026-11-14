@@ -649,17 +649,20 @@
       `<tr>${columns.map(column => `<td${column.action ? ' class="table-actions"' : ''}><span class="apple-cell-label" aria-hidden="true">${E(column.label)}</span><div>${
         column.render ? column.render(row) : E(row[column.id] || '—')}</div></td>`).join('')}</tr>`).join('')}</tbody></table>`;
   }
-  function openLedger(id) {
+  function openLedger(id, movementId) {
     if (!ready()) {
       void ensureReady().then((ok) => {
-        if (ok) openLedger(id);
+        if (ok) openLedger(id, movementId);
         else A.notify('苹果 ID 余额读取失败，请重试');
       });
       return;
     }
     const wallet = get(id);
     if (!wallet) return;
-    const rows = entries(id);
+    const history = entries(id);
+    const target = movementId && history.find(row => row.id === movementId);
+    const rows = target ? history.filter(row => [target.id, target.originalEntryId, target.undoneBy].includes(row.id)) : history;
+    const canCompensate = row => ['manual', 'topup'].includes(row.kind) && !row.undoneBy;
     const columns = [
       { id: 'at', label: '变动时间' },
       { id: 'label', label: '变动类型' },
@@ -678,11 +681,11 @@
         label: '操作',
         action: true,
         render: (row) =>
-          ['manual', 'topup'].includes(row.kind) && !row.undoneBy
+          canCompensate(row) && (!target || wallet.version === row.versionAfter)
             ? A.textAction('补偿撤回', 'apple-undo', `data-id="${E(row.id)}"`)
             : row.undoneBy
               ? A.tag('已补偿撤回')
-              : '—'
+              : target && canCompensate(row) ? '后续已有余额变动' : '—'
       }
     ];
     const hasRefunds = localData
@@ -695,9 +698,24 @@
       localData
         ? '付款确认后登记扣减，回款到账后登记增加余额。'
         : '演示余额随付款、Apple 实际退回和补偿撤回变化。',
-      `<div class="property-list">${property('苹果 ID', wallet.email)}${property('当前余额', `${shown(wallet.balance)} USD · 美元`)}</div><div class="toolbar"><div class="toolbar-right">${A.button(localData ? '登记余额变动' : '充值或更正', 'apple-adjust', '', 'plus', `data-id="${E(id)}"`)}${hasRefunds ? A.button(localData ? '查看 Apple 回款' : '确认 Apple 退回', 'apple-return-select', '', 'return', `data-id="${E(id)}"`) : ''}</div></div>${fundingTable(columns, rows, '苹果 ID 余额变动')}`,
+      `<div class="property-list">${property('苹果 ID', wallet.email)}${property('当前余额', `${shown(wallet.balance)} USD · 美元`)}</div><div class="toolbar"><div class="toolbar-right">${target
+        ? A.button('查看全部流水', 'apple-ledger', '', '', `data-id="${E(id)}"`)
+        : A.button(localData ? '登记余额变动' : '充值或更正', 'apple-adjust', '', 'plus', `data-id="${E(id)}"`) +
+          (hasRefunds ? A.button(localData ? '查看 Apple 回款' : '确认 Apple 退回', 'apple-return-select', '', 'return', `data-id="${E(id)}"`) : '')}</div></div>${fundingTable(columns, rows, '苹果 ID 余额变动')}`,
       A.button('关闭', 'drawer-close'), '', { kind: 'apple-ledger' }
     );
+  }
+  async function openAuditMovement(id, node, current) {
+    if (!localData?.authRequired || S.route !== 'settings/audit' || !['admin', 'super'].includes(S.actor?.role)) return;
+    const loaded = await A.withActionFeedback(node, async () => {
+      const results = await Promise.all([refreshLocalBalance(),
+        A.modules.inventory.refreshLocalInventory({ keepContent: true })]);
+      return results.every(Boolean);
+    }, { pending: '正在读取余额流水…', failure: '余额流水暂时无法读取，请重试' });
+    if (!loaded || !current()) return;
+    const matches = movements.filter(row => row.id === id && ['manual', 'topup', 'manual-undo'].includes(row.kind));
+    if (matches.length !== 1 || !get(matches[0].appleIdId)) return A.notify('找不到对应的苹果 ID 余额流水，请核对原操作。');
+    openLedger(matches[0].appleIdId, id);
   }
   function adjustmentEditor(id, topup = false) {
     const wallet = get(id);
@@ -1573,6 +1591,7 @@
     applyCommittedBalance,
     refreshLocalBalance,
     openLedger,
+    openAuditMovement,
     openSubscriptionFunding: openLinkedAccounts,
     openOrderRefund
   };
