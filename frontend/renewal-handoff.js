@@ -10,6 +10,8 @@
   const finishPrefix = 'workspace/renewal-submit/';
   const staffTabs = [['', '选订单'], ['/sent', '已送财务'], ['/ready', '待补资料'], ['/history', '办理记录']];
   const financeTabs = ['待处理', '处理中', '已处理'];
+  const staffStages = { pending: '/sent', processing: '/sent', paid: '/ready', returned: '/history', complete: '/history' };
+  const financeStages = { pending: '待处理', processing: '处理中', paid: '已处理', returned: '已处理', complete: '已处理' };
   const statuses = { pending: '待财务', processing: '财务处理中', paid: '待员工补资料',
     returned: '财务已退回', complete: '已续费' };
   const currencies = ['CNY', 'MYR', 'USD', 'PHP', 'CLP', 'IDR', 'EGP'].map(value => [value, value]);
@@ -25,6 +27,7 @@
   const defaults = () => ({ page: 1, pageSize: 20, status: '待处理', period: 'all', product: '', query: '' });
   let active;
   let preferredOrder;
+  let auditNavigation;
 
   function matches(route) {
     return staffTabs.some(([segment]) => route === staffRoot + segment) ||
@@ -59,9 +62,11 @@
       ? '<a class="button" href="#/workspace/renewals/reminders">续费提醒</a>' : '';
     const submit = route === staffRoot
       ? A.button('提交给财务', 'renewal-handoff-submit', 'primary', '', 'hidden disabled') : '';
+    const auditTarget = auditNavigation?.route === route || (active?.route === route && active.auditId);
     const toolbar = '<div class="toolbar toolbar--inline renewal-toolbar">' +
       (finishing ? '' : '<div class="toolbar-left" data-renewal-filters hidden></div>') +
-      '<div class="toolbar-right" data-page-actions>' + button('刷新', 'refresh') + reminder + submit + '</div></div>';
+      '<div class="toolbar-right" data-page-actions>' + button('刷新', 'refresh') + reminder + submit +
+      (auditTarget ? button('查看全部续费', 'show-all', '', 'primary') : '') + '</div></div>';
     const panel = '<section class="panel staff-workspace" data-renewal-handoff>' +
       (finance ? '<div class="list-controls renewal-controls">' + financeNavigation() + toolbar + '</div>' : toolbar) +
       '<p class="panel-body inline-notice warning" role="status" data-renewal-error hidden></p>' +
@@ -78,15 +83,13 @@
     const query = view.filter.query.trim().toLowerCase();
     const choosing = view.route === staffRoot;
     const rows = choosing ? view.data.candidates.map(order => ({ id: order.id, order })) : view.data.items;
-    const routeStatuses = { [staffRoot + '/sent']: ['pending', 'processing'], [staffRoot + '/ready']: ['paid'],
-      [staffRoot + '/history']: ['returned', 'complete'] };
-    const financeStatuses = { 待处理: ['pending'], 处理中: ['processing'], 已处理: ['paid', 'returned', 'complete'] };
-    const accepted = view.finance ? financeStatuses[view.filter.status] : routeStatuses[view.route];
+    if (view.auditId) return rows.filter(row => row.id === view.auditId);
     const now = Date.now();
     return rows.filter(row => {
       const { order } = row;
       const expiry = subscriptionTime(order.expiry);
-      return (choosing || accepted?.includes(row.status)) && (!view.filter.product || order.product === view.filter.product) &&
+      const inStage = view.finance ? financeStages[row.status] === view.filter.status : staffRoot + staffStages[row.status] === view.route;
+      return (choosing || inStage) && (!view.filter.product || order.product === view.filter.product) &&
         (!choosing || view.filter.period === 'all' || (view.filter.period === 'expired' ? expiry <= now :
           expiry > now && expiry <= now + (view.data.reminderHours || 168) * 3_600_000)) &&
         (!query || [order.number, order.account, order.customer, order.wechat, order.owner, row.submittedBy]
@@ -149,7 +152,8 @@
           ['reference', '付款凭据编号', row => E(row.reference || '—')]] : []),
         ['newOrderNo', '结果', row => E(row.newOrderNo || row.returned || '—')], ['actions', '操作', row => rowActions(view, row)]);
     }
-    return A.table(columns.map(([id, label, render]) => ({ id, label, render, action: id === 'actions', mobileSummary: id === 'days' })),
+    return A.table(columns.map(([id, label, render]) => ({ id, label, render, action: id === 'actions',
+      mobileSummary: id === 'days' || (Boolean(view.auditId) && ['orderNo', 'status', 'newOrderNo'].includes(id)) })),
       rows.slice(start, start + pageSize), choosing ? 'renewal-handoff' : '', choosing ? '待续费订单' :
         view.finance ? '财务续费订单' : '续费办理记录', { title: '暂无符合条件的订单', description: '可切换筛选或稍后刷新。' }) +
       window.IDPagination.render({ id: 'renewal-handoff-pagination', page: view.filter.page, pageSize, total: rows.length });
@@ -247,7 +251,7 @@
       A.options([['', '全部产品'], 'GPT', 'Claude Pro', 'Claude Max', 'Gemini', 'Grok'], view.filter.product) + '</select></div>' +
       (view.route === staffRoot ? '<div class="renewal-filter"><label for="renewal-handoff-period">到期时间</label><select id="renewal-handoff-period">' +
         A.options([['all', '全部可续费'], ['upcoming', '即将到期'], ['expired', '已到期']], view.filter.period) + '</select></div>' : '');
-    filters.hidden = false;
+    filters.hidden = Boolean(view.auditId);
     if (view.finance) {
       const tabs = $('[data-renewal-statuses]', view.host);
       for (const tab of tabs.children) {
@@ -255,7 +259,7 @@
         tab.classList.toggle('active', selected);
         tab.setAttribute('aria-selected', String(selected));
       }
-      tabs.hidden = false;
+      tabs.hidden = Boolean(view.auditId);
     }
     body.innerHTML = '<div data-renewal-list></div>';
     drawList(view);
@@ -276,7 +280,7 @@
     const cached = D.queries.peek(scope, key)?.data;
     const body = $('[data-renewal-body]', view.host);
     const latest = () => active === view && view.host.isConnected && view.request === id;
-    if (!view.data && cached) {
+    if (!view.data && cached && !view.auditId) {
       view.data = cached;
       draw(view);
     }
@@ -287,6 +291,13 @@
       if (!latest()) return true;
       const openForm = $('#renewal-finish-form', view.host);
       view.data = data;
+      if (view.auditId) {
+        const target = data.items.find(row => row.id === view.auditId);
+        if (target && view.finance) view.filter.status = financeStages[target.status] || view.filter.status;
+        draw(view);
+        notifyError(view, target ? '' : '这笔续费目前无法读取，请核对原操作。');
+        return true;
+      }
       if (openForm?.contains(document.activeElement) && data.items.some(row => row.id === openForm.dataset.renewalId &&
           row.version === Number(openForm.dataset.renewalVersion) && row.canFinish && !row.sourceChanged)) {
         notifyError(view, '');
@@ -507,7 +518,12 @@
     if (!view || !action.startsWith('renewal-handoff-')) return false;
     const command = action.slice('renewal-handoff-'.length);
     if (command === 'refresh') await load(view, true);
-    else if (command === 'finance-tab') {
+    else if (command === 'show-all' && view.auditId) {
+      auditNavigation = undefined;
+      view.auditId = undefined;
+      A.render();
+      $('#renewal-handoff-search', A.activePageRegion())?.focus({ preventScroll: true });
+    } else if (command === 'finance-tab') {
       view.filter.status = node.dataset.id;
       view.filter.page = 1;
       draw(view);
@@ -581,7 +597,10 @@
     const host = $('[data-renewal-handoff]', A.activePageRegion());
     if (!host || active?.host === host) return;
     const route = A.state.route;
-    const view = { route, finance: route === financeRoute, filter: filters(route), host };
+    if (auditNavigation && (auditNavigation.route !== route || auditNavigation.actorId !== A.state.actor?.id))
+      auditNavigation = undefined;
+    const auditId = auditNavigation?.id;
+    const view = { route, finance: route === financeRoute, filter: auditId ? defaults() : filters(route), host, auditId };
     active = view;
     host.addEventListener('input', event => {
       const node = event.target;
@@ -598,7 +617,9 @@
       Object.assign(view.filter, { page: detail.page, pageSize: detail.pageSize });
       drawList(view);
     });
-    void load(view);
+    const refresh = auditNavigation?.refresh === true;
+    if (refresh) auditNavigation.refresh = false;
+    void load(view, refresh);
   }
 
   window.IDRenewalHandoff = { select(id) {
@@ -607,11 +628,21 @@
     Object.assign(filter, { query: '', period: 'all', product: '', page: 1 });
     if (active?.route === staffRoot) void load(active);
     else A.go(staffRoot);
+  }, openAuditRecord({ id, state }) {
+    if (!id || A.state.route !== 'settings/audit' || !canViewOrder()) return;
+    const route = A.canVisit(financeRoute) ? financeRoute : staffRoot + (staffStages[state] || '/history');
+    auditNavigation = { id, route, actorId: A.state.actor.id, refresh: true };
+    A.go(route);
+    if (A.state.route !== route) auditNavigation = undefined;
   } };
   document.addEventListener('visibilitychange', () => { if (active) updateCountdowns(active); });
   window.IDDesignModules.push({ matches, render, afterRender: activate, onClick, onSubmit, onChange,
-    deactivate() { clearTimeout(active?.countdownTimer); active = undefined; },
-    clearPageState() { clearTimeout(active?.countdownTimer); active = preferredOrder = undefined; },
+    deactivate() {
+      clearTimeout(active?.countdownTimer);
+      if (auditNavigation && A.state.route !== auditNavigation.route) auditNavigation = undefined;
+      active = undefined;
+    },
+    clearPageState() { clearTimeout(active?.countdownTimer); active = preferredOrder = auditNavigation = undefined; },
     onDataChanges(scopes) {
       if (!active || active.saving || !scopes.some(key => [scope, 'commerce'].includes(key))) return;
       const view = active;

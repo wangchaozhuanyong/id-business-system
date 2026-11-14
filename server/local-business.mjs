@@ -286,6 +286,11 @@ const orderFeatureAuditLabels = {
   recharge_code_return_pending: '核对充值码归还结果',
   recharge_code_returned: '确认充值码归还'
 };
+const linkedAuditDomains = {
+  [renewalHandoffDomain]: { kind: 'renewal', actions: Object.keys(renewalAuditLabels) },
+  [orderExpenseDomain]: { kind: 'finance', actions: ['order_expense_record', 'order_expense_account', 'order_expense_void'] },
+  appleBalance: { kind: 'finance', actions: ['apple_adjust', 'apple_topup', 'apple_adjust_undo'] }
+};
 const verifiedOrderCards = Symbol('verifiedOrderCards');
 const verifiedRenewalHandoff = Symbol('verifiedRenewalHandoff');
 const singleRecordEdit = Symbol('singleRecordEdit');
@@ -314,9 +319,22 @@ function auditSummary(label, actor, targetId, metadata) {
     : label;
 }
 
+const auditOrderNumber = orderNo => typeof orderNo === 'string' && /^[A-Za-z\d_-]{1,60}$/.test(orderNo) ? { orderNo } : undefined;
+
+function auditedBalanceMovement(previous, data, action) {
+  const kinds = { apple_adjust: 'manual', apple_topup: 'topup', apple_adjust_undo: 'manual-undo' };
+  const before = previous?.movements || [];
+  if (data.movements.length !== before.length + 1) return;
+  const ids = new Set(before.map(row => row.id));
+  const added = data.movements.filter(row => !ids.has(row.id));
+  if (added.length === 1 && added[0].kind === kinds[action]) return added[0].id;
+}
+
 function readAuditRow(row) {
   if (!row.summary.startsWith('{')) return row;
-  const { label, actorId, actorName, targetId, recoveryKind, recoveryOf, orderNo, eventId, targetVersion } = JSON.parse(row.summary);
+  const { label, actorId, actorName, targetId, recoveryKind: savedKind, recoveryOf, orderNo, eventId, targetVersion } = JSON.parse(row.summary);
+  const link = linkedAuditDomains[row.domain];
+  const recoveryKind = savedKind || (targetId && link?.actions.includes(row.action) ? link.kind : undefined);
   return { ...row, summary: label, actorId, actorName, targetId,
     ...(recoveryKind && { recoveryKind }), ...(recoveryOf && { recoveryOf }),
     ...(orderNo && { orderNo }), ...(eventId && { eventId }), ...(targetVersion && { targetVersion }) };
@@ -340,6 +358,7 @@ const auditDomainLabels = {
   'system-monitoring-config': '监控与通知',
   'system-monitoring-state': '监控中心',
   [renewalHandoffDomain]: '续费管理',
+  [orderExpenseDomain]: '费用凭据',
   'site-export': '数据中心'
 };
 const auditActionLabels = {
@@ -373,7 +392,8 @@ function requireRecoveryManager(actor) {
     throw new LocalDataError(403, '只有管理员可以查看或撤回资料操作');
 }
 
-const recoverySubjects = { customer: '客户资料', tenant: '租户资料', account: '账号库存', mailbox: '邮箱库存', order: '订单' };
+const recoverySubjects = { customer: '客户资料', tenant: '租户资料', account: '账号库存', mailbox: '邮箱库存',
+  order: '订单', renewal: '续费管理', finance: '财务' };
 
 function auditPageItem({ id, at, domain, action, summary, actorName, targetId, recoveryKind, recoveryOf, orderNo }) {
   const date = new Date(at);
@@ -382,7 +402,7 @@ function auditPageItem({ id, at, domain, action, summary, actorName, targetId, r
     time: Number.isNaN(date.valueOf()) ? '未知' : auditDate.format(date),
     actor: actorName || '本机操作',
     action: auditActionLabels[action] || summary || '保存资料',
-    subject: recoverySubjects[recoveryKind] ||
+    subject: (recoveryKind === 'finance' ? auditDomainLabels[domain] : recoverySubjects[recoveryKind]) ||
       auditDomainLabels[domain] || domain,
     result: recoveryOf ? (action === restoreArchiveAction ? '已恢复归档 #' : '已撤回原操作 #') + recoveryOf : summary || '已保存',
     ...(recoveryKind && { targetId, recovery: recoveryOf ? 'receipt' : 'original' }),
@@ -1011,12 +1031,16 @@ export function createLocalBusinessStore(databasePath) {
     'SELECT id, at, domain, action, summary, version FROM business_audit ORDER BY id DESC LIMIT 1000'
   );
   const auditById = db.prepare('SELECT id, at, domain, action, summary, version FROM business_audit WHERE id = ?');
+  const auditJson = 'CASE WHEN json_valid(summary) THEN summary END';
+  const linkedAudit = Object.entries(linkedAuditDomains).map(([domain, { actions }]) =>
+    `(domain = '${domain}' AND action IN (${actions.map(action => `'${action}'`).join(', ')}))`).join(' OR ');
   const recoveryAudit = db.prepare(`
     SELECT id, at, domain, action, summary, version FROM business_audit
-    WHERE ((at >= ? AND (domain = 'commerce' OR (domain = 'inventory' AND
-             action IN ('${inventoryHealthAction}', '${restoreInventoryHealthAction}'))))
-          OR (domain = 'inventory' AND action IN ('${archiveAction}', '${restoreArchiveAction}')))
-      AND json_extract(CASE WHEN json_valid(summary) THEN summary END, '$.recoveryKind') IN ('customer', 'tenant', 'account', 'mailbox', 'order')
+    WHERE (json_extract(${auditJson}, '$.recoveryKind') IN ('customer', 'tenant', 'account', 'mailbox', 'order')
+      AND ((domain = 'inventory' AND action IN ('${archiveAction}', '${restoreArchiveAction}'))
+        OR (at >= ?1 AND (domain = 'commerce' OR (domain = 'inventory' AND
+          action IN ('${inventoryHealthAction}', '${restoreInventoryHealthAction}'))))))
+      OR (at >= ?1 AND json_type(${auditJson}, '$.targetId') = 'text' AND (${linkedAudit}))
     ORDER BY id DESC
   `);
   const revision = db.prepare('SELECT version FROM business_document WHERE domain = ?');
@@ -1238,12 +1262,50 @@ export function createLocalBusinessStore(databasePath) {
     return receipt;
   }
 
+  function previewLinkedAudit(auditRow, record) {
+    const unavailable = message => ({ status: 'unavailable', record, message });
+    if (auditRow.at < recoveryCutoff(new Date())) return unavailable('这条操作已超过 30 天，请到原业务页面核对。');
+    const { targetId, domain } = auditRow;
+    const data = readDocument(domain).data;
+    if (domain === renewalHandoffDomain) {
+      const matches = (data?.items || []).filter(row => row.id === targetId);
+      const row = matches.length === 1 && matches[0];
+      if (!row?.order?.id || !['pending', 'processing', 'paid', 'returned', 'complete'].includes(row.status))
+        return unavailable('找不到唯一的续费办理记录，请到续费管理核对。');
+      const orders = readDocument('commerce').data?.orders || [];
+      const matchingOrder = orders.filter(order => order.id === row.order.id);
+      const message = row.status === 'returned' ? '这笔申请已退回，可查看退回记录。'
+        : row.status === 'complete' ? '这笔续费已生成新订单，可查看办理记录。'
+          : row.status === 'paid' ? '这笔申请已有实付记录，请在财务续费核对原单和付款依据。'
+            : row.paymentReview === true ? '付款结果待核对，请由经办人核对付款凭证。'
+            : '请在财务续费核对付款情况，确认未付款后可由经办人退回。';
+      return { status: 'business', record, message, renewal: { id: row.id, state: row.status },
+        ...(matchingOrder.length === 1 && { order: { id: row.order.id } }) };
+    }
+    if (domain === orderExpenseDomain) {
+      const matches = (data?.items || []).filter(row => row.id === targetId);
+      const row = matches.length === 1 && matches[0];
+      if (!row) return unavailable('找不到唯一的费用凭据，请到费用拆分核对。');
+      return { status: 'business', record, expense: { id: row.id },
+        message: row.voidedAt ? '这笔凭据已作废，可查看原金额和作废原因。'
+          : '请核对原费用凭据。确认误登时，可从凭据详情作废。' };
+    }
+    const matches = (data?.movements || []).filter(row => row.id === targetId &&
+      ['manual', 'topup', 'manual-undo'].includes(row.kind));
+    const row = matches.length === 1 && matches[0];
+    if (!row) return unavailable('找不到唯一的余额变动，请到苹果 ID 余额核对。');
+    return { status: 'business', record, apple: { id: row.id },
+      message: row.undoneBy || row.kind === 'manual-undo' ? '这笔变动已补偿，可查看原流水和反向流水。'
+        : '请查看原流水。仅最近一笔符合条件的变动可登记反向补偿。' };
+  }
+
   function previewAuditRecovery(id) {
     const auditRow = readRecoveryAudit(id);
     const record = auditPageItem(auditRow);
     const unavailable = message => ({ status: 'unavailable', record, message });
     if (!auditRow.recoveryKind) return unavailable('这条操作没有可恢复的资料。');
     if (auditRow.action === archiveAction || auditRow.action === restoreArchiveAction) return previewArchivedInventory(auditRow, record);
+    if (['renewal', 'finance'].includes(auditRow.recoveryKind)) return previewLinkedAudit(auditRow, record);
     if (auditRow.recoveryKind === 'order') {
       const orders = readDocument('commerce').data?.orders || [];
       const matching = orders.filter(row => row.id === auditRow.targetId);
@@ -1288,6 +1350,8 @@ export function createLocalBusinessStore(databasePath) {
     return writeTransaction(() => {
       const auditRow = readRecoveryAudit(id);
       if (auditRow.recoveryKind === 'order') throw new LocalDataError(409, '请从原订单的专用业务入口处理。');
+      if (['renewal', 'finance'].includes(auditRow.recoveryKind))
+        throw new LocalDataError(409, '请从对应的续费或财务业务入口处理。');
       const archived = auditRow.action === archiveAction;
       const stock = auditRow.action === inventoryHealthAction;
       const action = archived ? restoreArchiveAction : stock ? restoreInventoryHealthAction : contactRecoveryAction;
@@ -2196,8 +2260,12 @@ export function createLocalBusinessStore(databasePath) {
         }
         const next = version + 1;
         putDocument(renewalHandoffDomain, next, { items });
-        for (const id of ids) log.run(new Date().toISOString(), renewalHandoffDomain, action,
-          auditSummary(renewalAuditLabels[action], actor, id), next);
+        const byId = new Map(items.map(row => [row.id, row]));
+        for (const id of ids) {
+          const orderNo = byId.get(id)?.order?.number;
+          log.run(new Date().toISOString(), renewalHandoffDomain, action,
+            auditSummary(renewalAuditLabels[action], actor, id, auditOrderNumber(orderNo)), next);
+        }
         putDocument(operation.domain, 1, { fingerprint: operation.fingerprint, domains });
       });
     },
@@ -2813,6 +2881,8 @@ export function createLocalBusinessStore(databasePath) {
           const label =
             actionLabels[domain]?.[action] ||
             (action === 'local_save' ? `保存${domainLabels[domain]}资料` : action);
+          const movementId = canCaptureRecovery && domain === 'appleBalance' && linkedAuditDomains.appleBalance.actions.includes(action)
+            ? auditedBalanceMovement(current('appleBalance'), data, action) : undefined;
           put.run(domain, next, encrypt(key, domain, next, JSON.stringify(data)));
           if (domain === 'inventory' && primaryTargets) {
             for (const target of primaryTargets)
@@ -2825,7 +2895,7 @@ export function createLocalBusinessStore(databasePath) {
             else if (canCaptureRecovery && domain === 'commerce' && isDeepStrictEqual(existingTenantCards, nextTenantCards))
               recoverable = captureContactRecovery(priorCommerce, commerce, action, contactFingerprint);
             const orderRecord = actor?.id && domain === 'commerce' && captureOrderAudit(priorCommerce, data, action);
-            const summary = auditSummary(label, actor, recoverable?.targetId ?? orderRecord?.targetId ?? recordEdit?.edit.id,
+            const summary = auditSummary(label, actor, recoverable?.targetId ?? orderRecord?.targetId ?? recordEdit?.edit.id ?? movementId,
               recoverable ? { recoveryKind: recoverable.kind } : orderRecord || undefined);
             const logged = log.run(now, domain, action, summary, next);
             if (recoverable) {
@@ -2848,8 +2918,8 @@ export function createLocalBusinessStore(databasePath) {
             completedAt: now, completedBy: { id: actor.id, name: actor.name } };
           putDocument(renewalHandoffDomain, renewals.version + 1,
             { items: renewals.data.items.map(row => row.id === completed.id ? completed : row) });
-          log.run(now, renewalHandoffDomain, 'renewal_finish', auditSummary(renewalAuditLabels.renewal_finish, actor, completed.id),
-            renewals.version + 1);
+          log.run(now, renewalHandoffDomain, 'renewal_finish',
+            auditSummary(renewalAuditLabels.renewal_finish, actor, completed.id, auditOrderNumber(order.orderNo)), renewals.version + 1);
         }
         if (!isDeepStrictEqual(existingTenantCards, nextTenantCards)) {
           const version = tenantCardDocument.version + 1;

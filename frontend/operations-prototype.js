@@ -517,10 +517,13 @@
         <p data-recovery-error class="inline-notice warning" role="alert" hidden></p>
         <div class="form-footer"><button class="button primary" type="submit">${preview.restoreInventory ? '确认恢复' : '确认撤回'}</button></div></form>`;
     } else if (preview?.status === 'business') {
+      const linkedAction = preview.renewal ? ['查看续费办理记录', 'renewal'] : preview.expense
+        ? ['查看费用凭据', 'expense'] : preview.apple ? ['查看余额流水', 'apple'] : undefined;
       content = `${preview.message ? `<p class="inline-notice" role="status">${esc(preview.message)}</p>` : ''}
         <div class="form-footer">${preview.order ? button('查看原订单', 'ops-audit-order', '', '', 'data-mode="view"') : ''}
         ${orderRecoveryActions[preview.order?.mode] ? button(orderRecoveryActions[preview.order.mode],
-          'ops-audit-order', 'primary', '', 'data-mode="reversal"') : ''}</div>`;
+          'ops-audit-order', 'primary', '', 'data-mode="reversal"') : ''}
+        ${linkedAction ? button(linkedAction[0], 'ops-audit-business', 'primary', '', 'data-kind="' + linkedAction[1] + '"') : ''}</div>`;
     } else if (preview?.status === 'recovered' || preview?.status === 'receipt') {
       content = recoveryReceipt(preview.receipt || preview, preview.status === 'recovered');
     } else if (preview?.status === 'unavailable') {
@@ -1671,7 +1674,8 @@
       </select>` : '';
     const scopeLabel = view === 'recovery' ? '近 30 天及库存归档' : '最近 1,000 条';
     const modules = view === 'recovery' ? `<select id="ops-audit-module" aria-label="恢复模块">${options(
-      [['', '全部模块'], ['order', '订单'], ['account', '账号库存'], ['mailbox', '邮箱库存'], ['customer', '客户资料'], ['tenant', '租户资料']], auditModule)}</select>` : '';
+      [['', '全部模块'], ['order', '订单'], ['account', '账号库存'], ['mailbox', '邮箱库存'], ['customer', '客户资料'], ['tenant', '租户资料'],
+        ['renewal', '续费管理'], ['finance', '财务']], auditModule)}</select>` : '';
     return header('操作记录', '按北京时间查询业务操作和恢复回执。输入 # 加日志编号可以定位单条记录。') +
       `<section class="panel"><div class="toolbar list-filters"><div class="toolbar-left">${filter}${modules}${search('搜索操作人、操作、订单号或资料编号', list.query, auditSearchId(view))}<span class="toolbar-meta">${scopeLabel}</span></div><div class="toolbar-right" data-page-actions>${button('列设置', 'column-settings', '', 'columns', `data-table-id="${tableId}"`)}${button(list.error ? '重试读取' : '刷新日志', 'ops-audit-refresh')}</div></div>${auditPageContent(view, columns, tableId)}</section>`;
   }
@@ -4269,6 +4273,14 @@
       const order = detail?.preview?.order;
       if (order && currentRecoveryDetail(detail))
         void api.modules.commerce?.openAuditOrder(order, node.dataset.mode === 'reversal', node);
+    } else if (action === 'ops-audit-business') {
+      const detail = recoveryDetail;
+      if (!detail || !currentRecoveryDetail(detail)) return true;
+      const { renewal, expense, apple } = detail.preview || {};
+      const current = () => currentRecoveryDetail(detail) && node.isConnected;
+      if (node.dataset.kind === 'renewal' && renewal) window.IDRenewalHandoff?.openAuditRecord(renewal);
+      if (node.dataset.kind === 'expense' && expense) void api.modules.commerce?.openAuditExpense(expense.id, node, current);
+      if (node.dataset.kind === 'apple' && apple) void api.modules.appleBalance?.openAuditMovement(apple.id, node, current);
     } else if (action === 'ops-audit-preview-retry') {
       if (recoveryDetail) void loadRecoveryDetail(recoveryDetail);
     } else if (action === 'ops-phrases') showPhrases();

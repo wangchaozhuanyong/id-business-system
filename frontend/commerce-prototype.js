@@ -7742,6 +7742,27 @@
     if (saved && Number(saved['commerce-expense-version']) !== expenseReceipts.version) showExpenseConflict(node);
   }
 
+  async function openAuditExpense(id, node, current) {
+    if (!canManageOrders() || S.route !== 'settings/audit') return;
+    const state = prepareExpenseReceipts();
+    const loaded = state && await A.withActionFeedback(node, () => loadExpenseReceipts(state),
+      { pending: '正在读取费用凭据…', failure: '费用凭据暂时无法读取，请重试' });
+    if (!loaded || !current() || !expenseCurrent(state)) return;
+    const matches = state.items.filter(row => row.id === id);
+    if (matches.length !== 1) return A.notify('找不到唯一的费用凭据，请核对原操作。');
+    const [row] = matches;
+    const body = '<div class="property-list">' +
+      property('凭据', row.source + ' · ' + row.reference) +
+      property('扣款日', row.chargedOn) + property('扣款金额', display(row.amount) + ' ' + row.currency) +
+      (row.settlementAmount ? property('账单结算', display(row.settlementAmount) + ' ' + row.settlementCurrency) : '') +
+      (row.orderNo ? property('关联订单', row.orderNo) : '') +
+      property('状态', row.voidedAt ? '已作废' : '已登记') +
+      (row.voidedAt ? property('作废人', row.voidedBy) + property('作废时间', beijingClock.format(new Date(row.voidedAt))) +
+        property('作废原因', row.voidReason) : '') + '</div>';
+    A.openDrawer('费用凭据', '', body, A.button('关闭', 'drawer-close') +
+      (row.voidedAt ? '' : A.button('作废凭据', 'commerce-expense-void', 'primary', '', `data-id="${E(row.id)}"`)));
+  }
+
   function showExpenseConflict(form, message = '费用凭据已变化。当前输入已保留，请重新核对后提交。') {
     form.dataset.expenseConflict = 'yes';
     const notice = form.querySelector('[role="alert"]');
@@ -11422,7 +11443,7 @@
   }
   let requestedAccountLifecycle = false, accountLifecycleReading = false;
   A.modules.commerce = {
-    openBankCardTypeAssignment, subscriptionCenterNav, renewalActions, subscriptionContacts,
+    openBankCardTypeAssignment, subscriptionCenterNav, renewalActions, subscriptionContacts, openAuditExpense,
     async openAuditOrder(reference, reverse, node) {
       if (!localData?.authRequired || !canManageOrders() || !reference?.id) return;
       const actorId = currentOperator().id;
