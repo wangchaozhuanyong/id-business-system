@@ -261,6 +261,21 @@ class WebsiteReleaseTests(unittest.TestCase):
     @patch("release.require_presentation_approval")
     @patch("release.require_ancestor")
     @patch("release.git")
+    def test_task_history_approval_cannot_include_changes_to_the_recharge_runtime(self, git, ancestor, approval):
+        files = remote.TASK_HISTORY_PRESENTATION_FILES
+        manifest = release.TASK_HISTORY_MANIFEST_PATH
+        git.return_value = "\n".join((*files, manifest))
+        self.assertEqual(release.require_website_scope(BASE, TARGET),
+                         ("taskHistoryPresentation", approval.return_value))
+        approval.assert_called_once_with(BASE, TARGET, release.TASK_HISTORY_MANIFEST, files)
+        for changed in ((manifest,), (*files, manifest, "modules/recharge/codexdaichong/native-adapter.mjs")):
+            git.return_value = "\n".join(changed)
+            with self.assertRaisesRegex(RuntimeError, "recharge_core_or_runtime_changed"):
+                release.require_website_scope(BASE, TARGET)
+
+    @patch("release.require_presentation_approval")
+    @patch("release.require_ancestor")
+    @patch("release.git")
     def test_card_plan_ui_release_verifies_both_presentation_sources(self, git, ancestor, approval):
         files = remote.CARD_PLAN_PRESENTATION_FILES
         git.return_value = "\n".join(files)
@@ -447,6 +462,12 @@ class WebsiteReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_bundle_scope_mismatch"):
             remote.verify_presentation_bundle(bundle(previous), bundle(changed | {"/workspace": {"body": "new"}}),
                                               checkout_assets)
+        task_history_assets = remote.PRESENTATION_SCOPES["taskHistoryPresentation"][1]
+        task_history = previous | {path: {"body": "new"} for path in ("/admin", "/admin.js")}
+        remote.verify_presentation_bundle(bundle(previous), bundle(task_history), task_history_assets)
+        with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_bundle_scope_mismatch"):
+            remote.verify_presentation_bundle(bundle(previous), bundle(task_history | {"/workspace": {"body": "new"}}),
+                                              task_history_assets)
 
     def test_ssm_payload_is_one_quoted_program(self):
         shell = release.script_for({"operation": "preflight", "sha": TARGET})

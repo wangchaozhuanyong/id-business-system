@@ -11,7 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from remote import (BACKUP_OPERATION, CARD_IMPORT_ASSET_SOURCE, CARD_IMPORT_PRESENTATION_FILES, CARD_PLAN_PRESENTATION_FILES,
                     CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES, PRESENTATION_SCOPES, SECURITY_PRESENTATION_FILES,
-                    REDEEM_PRESENTATION_FILES, TABLE_ACTIONS_STYLESHEET, WORKSPACE_PROGRESS_PRESENTATION_FILES)
+                    REDEEM_PRESENTATION_FILES, TABLE_ACTIONS_STYLESHEET, TASK_HISTORY_PRESENTATION_FILES,
+                    WORKSPACE_PROGRESS_PRESENTATION_FILES)
 
 ACCOUNT = "098208446664"
 REGION = "ap-northeast-1"
@@ -22,7 +23,10 @@ OUTPUT = ROOT / ".runtime/website-release"
 SHA = re.compile(r"[a-f0-9]{40}\Z")
 SHA256 = re.compile(r"[a-f0-9]{64}\Z")
 PROXY_TYPE_CATALOG = "modules/recharge/bitbrowser/proxy-types.mjs"
-CORE_PATHS = ("deploy/recharge-core", "deploy/caddy", "modules/recharge/codexdaichong", "package.json", PROXY_TYPE_CATALOG)
+TASK_HISTORY_MANIFEST = "recharge-task-history-20261114.json"
+TASK_HISTORY_MANIFEST_PATH = f"deploy/website/{TASK_HISTORY_MANIFEST}"
+CORE_PATHS = ("deploy/recharge-core", "deploy/caddy", "modules/recharge/codexdaichong", "package.json",
+              PROXY_TYPE_CATALOG, TASK_HISTORY_MANIFEST_PATH)
 ADAPTER_SCOPE = {
     "modules/recharge/codexdaichong/gateway.mjs", "modules/recharge/codexdaichong/local-gateway.mjs",
     "modules/recharge/codexdaichong/native-adapter.mjs", "modules/recharge/codexdaichong/runtime.mjs",
@@ -149,6 +153,9 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False):
     elif changed == {TABLE_ACTIONS_STYLESHEET}:
         return "tableActionsPresentation", require_presentation_approval(
             base, sha, "table-actions-20261112.json", (TABLE_ACTIONS_STYLESHEET,))
+    elif changed == {*TASK_HISTORY_PRESENTATION_FILES, TASK_HISTORY_MANIFEST_PATH}:
+        return "taskHistoryPresentation", require_presentation_approval(
+            base, sha, TASK_HISTORY_MANIFEST, TASK_HISTORY_PRESENTATION_FILES)
     elif changed == {CARD_IMPORT_ASSET_SOURCE}:
         return "cardImportPresentation", require_presentation_approval(
             base, sha, "card-import-20261113.json", CARD_IMPORT_PRESENTATION_FILES)

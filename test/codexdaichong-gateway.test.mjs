@@ -435,6 +435,12 @@ test('upstream pages retain the signed-in operations without their own login or 
   assert.doesNotMatch(assets.get('/admin').body, /修改后台密码|绑定 Google Authenticator/);
   assert.match(assets.get('/admin').body, /Session 管理|CDK 管理/);
   const script = assets.get('/admin.js').body;
+  assert.doesNotMatch(assets.get('/admin').body, /可在表格中删除单条任务记录/);
+  assert.match(assets.get('/admin').body, /已转入人工确认的任务，可在「待人工确认」中核对/);
+  assert.doesNotMatch(script, /data-delete-task|deleteAdminTaskLog/);
+  assert.match(script, /data-copy-session=/);
+  assert.match(script, /data-export-session=/);
+  assert.match(script, /onclick="resolveActivationManualHold\(/);
   assert.doesNotMatch(script, /plus_admin_token|localStorage\./);
   assert.doesNotThrow(() => new Script(script));
 });
