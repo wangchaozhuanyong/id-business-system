@@ -18,7 +18,7 @@ const units = ['local-data-read-cache', 'change-sync-client', 'change-sync-feed'
 const browsers = ['search-input', 'ui-idle-contract', 'change-sync', 'performance-read-index', 'system-monitoring', 'site-management',
   'staff-workspaces', 'renewal-handoff', 'shared-layout', 'page-lifecycle', 'order-completion', 'order-submit-stay',
   'mobile-navigation-layout', 'design-list-boundaries', 'global-pagination', 'business-lists', 'site-visual-v2-border',
-  'recharge-layout-transitions', 'mailbox-updates'];
+  'recharge-layout-transitions', 'recharge-server-diagnostic', 'mailbox-updates'];
 const groups = [
   ['unit', ['--test', ...frontend, ...units.map(name => `test/${name}.test.mjs`)]],
   ['browser', ['--test', '--test-concurrency=1', ...browsers.map(name => `test/${name}.browser.mjs`)]],

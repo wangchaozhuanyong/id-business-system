@@ -1,0 +1,22 @@
+{
+  "beforeAssetsSha256": "4bb22c496d6b90ba09278ca25c9a7b0c37931ce97d370b876fa979733d5d6c28",
+  "assetsSha256": "402daa635bc30d1ea2a4f0629a3667eb6c21308782630360a44382ccd059eb62",
+  "files": {
+    "modules/recharge/codexdaichong/assets.mjs": {
+      "before": "0dd5daf5417fcda9b58f31e37bbbe642a1e7ac38aba9f6419e7b88803177252c",
+      "after": "6151758d41d3c9a7af0109141285a64d1244653a5b0dbb1e93476c4ad04ef144"
+    },
+    "modules/recharge/codexdaichong/routing-admin-ui.mjs": {
+      "before": "2f4bc038880bdd692b1d8d4b775aacfe6ce42119ce158c5eb14a9d0ad7f9808e",
+      "after": "1e57892d88a7df4c4fca992275b39bb19405fbd1a784b464fce1c7373a99ce02"
+    },
+    "modules/recharge/codexdaichong/routing-admin.js": {
+      "before": "708bedb634f9c31300cb18bc64aa8cf24a1a4fb8f38dd40f2bc1afb5da45bc74",
+      "after": "614afcbdc69ef7bdf38689b1734cb600ae11aab2435db026d9481455b6a7b0ab"
+    },
+    "modules/recharge/codexdaichong/shell.css": {
+      "before": "23a644c65ebd9b69a29b19bed49af32b06b0683e7bfe9e06aab2ea86c5d76607",
+      "after": "cf8a93546caf67558a2dcae68df6ffe3dd205fc7fc59215924c0061355333d40"
+    }
+  }
+}
