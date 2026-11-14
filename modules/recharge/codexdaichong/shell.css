@@ -2230,7 +2230,7 @@ body[data-recharge-workspace][data-recharge-view='redeem'] .tab-nav {
 /* Visual v2: gateway-owned presentation only; executor markup and behaviour stay pinned. */
 :root { --input-bg: var(--surface-soft); }
 body[data-recharge-view] :is(input:not([type='checkbox']):not([type='radio']):not([type='range']), select, textarea) {
-  background-color: var(--input-bg); border: 1px solid var(--border); border-bottom-color: var(--control-border); border-radius: 8px;
+  background-color: var(--input-bg); border: 1px solid var(--border); border-radius: 8px;
   color: var(--text-main); font-variant-numeric: tabular-nums; box-shadow: none;
 }
 body[data-recharge-view] :is(input, select, textarea):focus {

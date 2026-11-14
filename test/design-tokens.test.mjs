@@ -20,7 +20,7 @@ for (const [theme, colors] of Object.entries(themes)) test(theme + ' 基础色�
   for (const tone of ['primary', 'success', 'violet', 'cyan', 'warning', 'danger']) pairs.push([tone, tone + '-soft']);
   for (const bg of ['primary', 'primary-hover', 'primary-active']) pairs.push(['on-primary', bg]);
   for (const [fg, bg] of pairs) assert(ratio(fg, bg) >= 4.5, theme + ': ' + fg + '/' + bg + ' = ' + ratio(fg, bg).toFixed(2));
-  // Resting filled controls use this token on the bottom boundary; other edges stay light.
+  // Hover emphasis uses this token on every edge; resting controls use the shared light boundary.
   assert(ratio('control-border', 'surface') >= 3);
   assert(ratio('control-border', 'surface-soft') >= 3);
 });
