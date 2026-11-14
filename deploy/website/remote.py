@@ -80,6 +80,7 @@ MONITORING_ENV = "ID_MONITOR_BACKUP_RECEIPTS_DIR=/run/id-backup-monitoring"
 BACKUP_OPERATION = "deploy/recharge-core/scheduled-backup.py"
 MONITORING_MOUNT = '  --mount "type=bind,src=$formal/backup-monitoring/receipts,dst=/run/id-backup-monitoring,readonly"'
 ADMISSION_ENV = "ID_VENDURE_ADMISSION_DIRECTORY=/state/vendure-admission"
+PARTNER_API_ENV = "ID_RECHARGE_PARTNER_API=1"
 MONITORING_FILES = ("backup_monitoring.py", MONITORING_UNIT + ".service", MONITORING_UNIT + ".timer")
 VERSIONED_ASSET = re.compile(r'\b(?:src|href)="(?:\./|/)?([a-zA-Z0-9.-]+\.(?:m?js|css))\?v=([a-zA-Z0-9.-]+)"')
 
@@ -254,6 +255,19 @@ def mount_storefront_admission(content):
     require(content.count(monitored) == 1 and "ID_VENDURE_ADMISSION_DIRECTORY" not in content,
             "unexpected_storefront_admission_launcher")
     return content.replace(monitored, configured)
+
+
+def wire_partner_api(content, enable):
+    anchor = f'  state+=(-e "{ADMISSION_ENV}")'
+    configured = anchor + f'\n  state+=(-e "{PARTNER_API_ENV}")'
+    if PARTNER_API_ENV in content:
+        require(content.count(configured) == 1 and content.count(PARTNER_API_ENV) == 1,
+                "unexpected_partner_api_launcher")
+        return content
+    if not enable:
+        return content
+    require(content.count(anchor) == 1, "partner_api_requires_admission")
+    return content.replace(anchor, configured)
 
 
 def wire_storefront_analytics(content):
@@ -449,6 +463,7 @@ def stage(plan, release):
             require(content.count("sha=" + base) == 1, "live_launcher_revision_mismatch")
             content = normalize_tools_credential_stream(mount_storefront_admission(
                 mount_backup_monitoring(content.replace("sha=" + base, "sha=" + sha))))
+            content = wire_partner_api(content, plan.get("rechargePartnerApi"))
         elif name == "app-entry.mjs":
             content = wire_storefront_analytics(content)
         elif name == "check-app.mjs":
@@ -801,6 +816,8 @@ console.log(JSON.stringify(Object.fromEntries(hashes)));
     module_paths = {
         "frontend/staff-workspaces.mjs": "/assets/website/pages/staff-workspaces.mjs",
         "frontend/finance-reconciliation.mjs": "/assets/website/pages/finance-reconciliation.mjs",
+        "frontend/recharge-partners.mjs": "/assets/website/pages/recharge-partners.mjs",
+        "frontend/recharge-partner-authorize.html": "/recharge/authorize",
         "modules/website/pages.mjs": "/assets/website/pages.mjs",
         **{name: "/" + name for name in (
             "modules/orders/order-opening.mjs", "modules/orders/list-order.mjs",
@@ -923,10 +940,12 @@ def release_website(plan, staged=None):
 
 def release_with_optional_vendure_refresh(plan):
     retry_receipt = plan.get("vendureRetryReceipt")
-    if not retry_receipt:
+    partner_api = plan.get("rechargePartnerApi") is True
+    require(not (partner_api and retry_receipt), "partner_api_and_retry_review_require_separate_releases")
+    if not retry_receipt and not partner_api:
         return release_website(plan)
     require(not plan.get("adapter") and not plan.get("rechargeCore") and
-            isinstance(retry_receipt, str) and re.fullmatch(r"[a-f0-9]{64}", retry_receipt),
+            (not retry_receipt or isinstance(retry_receipt, str) and re.fullmatch(r"[a-f0-9]{64}", retry_receipt)),
             "invalid_vendure_gateway_refresh")
     # Validate the old runtime and signed receipt before restarting the website.
     sha = plan["sha"]
@@ -938,10 +957,28 @@ def release_with_optional_vendure_refresh(plan):
         from vendure_admission import check_refresh_baseline, cutover
     finally:
         sys.path.pop(0)
-    check_refresh_baseline(sha, retry_receipt)
+    partner_options = {"partner_api": True} if partner_api else {}
+    check_refresh_baseline(sha, retry_receipt, **partner_options)
     result = release_website(plan, staged=(source, operations))
-    result["vendureGateway"] = cutover(sha, release, refresh=True, retry_receipt=retry_receipt)
+    if partner_api:
+        verify_partner_ingress()
+    result["vendureGateway"] = cutover(sha, release, refresh=True, retry_receipt=retry_receipt, **partner_options)
+    if partner_api:
+        receipt_path = release / "operations/release.receipt.json"
+        revised_receipt = receipt_path.with_suffix(".complete.json")
+        write_new(revised_receipt, json.dumps(result, indent=2) + "\n", 0o600)
+        os.replace(revised_receipt, receipt_path)
     return result
+
+
+def verify_partner_ingress():
+    endpoint = "https://" + SITE_HOST + "/api/recharge/v1/config"
+    try:
+        with urllib.request.urlopen(endpoint, timeout=8):
+            raise ReleaseError("partner_api_anonymous_request_not_rejected")
+    except urllib.error.HTTPError as error:
+        require(error.code == 401 and error.geturl() == endpoint and json.loads(error.read(1024)).get("code") == "invalid_api_key",
+                "partner_api_ingress_not_verified")
 
 
 def main(plan):

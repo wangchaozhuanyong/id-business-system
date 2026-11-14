@@ -19,6 +19,10 @@ on:
         description: 同版更新网站、商城网关并登记一笔已核对旧回执的 SHA-256，其他发布留空
         required: false
         type: string
+      include_recharge_partner_api:
+        description: 同版部署合作方 API 和商城任务网关，沿用原版执行器
+        default: false
+        type: boolean
       inspect_canary_sha:
         description: 只读检查指定失败版本的金丝雀日志，发布时留空
         required: false
@@ -52,6 +56,7 @@ jobs:
       RELEASE_RECHARGE_ADAPTER: ${{ inputs.include_recharge_adapter }}
       RELEASE_RECHARGE_CORE: ${{ inputs.include_recharge_core }}
       VENDURE_RETRY_RECEIPT_SHA256: ${{ inputs.vendure_retry_receipt_sha256 }}
+      RELEASE_RECHARGE_PARTNER_API: ${{ inputs.include_recharge_partner_api }}
     steps:
       - name: Check out main
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683

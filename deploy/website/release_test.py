@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import io
 import json
 import os
 import sqlite3
@@ -176,6 +177,22 @@ class WebsiteReleaseTests(unittest.TestCase):
         git.return_value = "\n".join(sorted(scope | {"deploy/recharge-core/Dockerfile"}))
         with self.assertRaisesRegex(RuntimeError, "recharge_native_release_scope_mismatch"):
             release.require_website_scope(BASE, TARGET, include_core=True)
+
+    @patch("release.require_ancestor")
+    @patch("release.git")
+    def test_partner_release_preserves_native_runtime_with_only_the_exact_pending_trial_patch(self, git, ancestor):
+        reviewed = "\n".join(sorted(release.PLUS_TRIAL_BUILD_INPUTS))
+        git.side_effect = [reviewed, "", ""]
+        self.assertIsNone(release.require_website_scope(BASE, TARGET, partner_api=True))
+        ancestor.assert_called_with(release.PLUS_TRIAL_MERGE, TARGET)
+        for differences in ([reviewed + "\ndeploy/recharge-core/Dockerfile"], [reviewed, "unexpected"],
+                            [reviewed, "", "unexpected"]):
+            git.side_effect = differences
+            with self.assertRaisesRegex(RuntimeError, "partner_api_release_contains_unreviewed_native_inputs"):
+                release.require_website_scope(BASE, TARGET, partner_api=True)
+        git.side_effect = [reviewed]
+        with self.assertRaisesRegex(RuntimeError, "recharge_core_or_runtime_changed"):
+            release.require_website_scope(BASE, TARGET)
 
     @patch("release.require_ancestor")
     @patch("release.git")
@@ -639,6 +656,38 @@ class WebsiteReleaseTests(unittest.TestCase):
             call.stage(plan, release_dir), call.baseline(TARGET, receipt),
             call.website(plan, staged=staged), call.gateway(TARGET, release_dir, refresh=True, retry_receipt=receipt),
         ])
+
+    def test_partner_api_wiring_preserves_existing_admission_and_reviewed_receipt(self):
+        before, target = "a" * 40, "b" * 40
+        old = f"sha={before}\n" + vendure_admission.LAUNCHER_ANCHOR + "\n  node\n"
+        mounted = vendure_admission.stage_launcher(old, before, target)
+        receipt = "c" * 64
+        approved = vendure_admission.stage_launcher(mounted, target, before, refresh=True, retry_receipt=receipt)
+        partner = vendure_admission.stage_launcher(approved, before, target, refresh=True, partner_api=True)
+        self.assertIn('dst=/run/id-vendure-admission,readonly', partner)
+        self.assertIn('dst=/run/id-vendure-admission/partner"', partner)
+        self.assertEqual(partner.count(vendure_admission.PARTNER_ENV), 1)
+        self.assertIn(f'ID_VENDURE_RETRY_RECEIPT_SHA256={receipt}', partner)
+        self.assertEqual(vendure_admission.stage_launcher(partner, target, before, refresh=True, retry_receipt=receipt),
+                         partner.replace(f"sha={target}", f"sha={before}"))
+        live = '  state=(--mount "type=bind,src=$formal/data,dst=/state")'
+        canary = '  state=(--tmpfs "/state:rw,size=32m")'
+        admission = remote.mount_storefront_admission(remote.mount_backup_monitoring(live + "\n" + canary))
+        enabled = remote.wire_partner_api(admission, True)
+        self.assertIn(remote.PARTNER_API_ENV, enabled)
+        self.assertEqual(remote.wire_partner_api(enabled, False), enabled)
+        self.assertTrue(enabled.endswith(canary))
+
+    def test_partner_ingress_requires_a_rejection_from_the_expected_api(self):
+        def error(code, payload):
+            return remote.urllib.error.HTTPError(
+                f"https://{remote.SITE_HOST}/api/recharge/v1/config", code, "test", {}, io.BytesIO(json.dumps(payload).encode()))
+
+        with patch.object(remote.urllib.request, "urlopen", side_effect=error(401, {"code": "invalid_api_key"})):
+            remote.verify_partner_ingress()
+        with patch.object(remote.urllib.request, "urlopen", side_effect=error(403, {"code": "forbidden"})):
+            with self.assertRaisesRegex(remote.ReleaseError, "partner_api_ingress_not_verified"):
+                remote.verify_partner_ingress()
 
     def test_gateway_refresh_restores_intake_only_before_switch_or_after_success(self):
         runtime = Path(__file__).resolve().parents[2] / ".runtime"

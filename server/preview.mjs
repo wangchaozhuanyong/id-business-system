@@ -38,6 +38,10 @@ import { claudeGoogleSubscriptionRoutes, createClaudeGoogleSubscriptionsHandler 
 import { createSubscriptionHandler, subscriptionRoutes } from './subscription-management.mjs';
 import { createCustomerQueryHandler, customerQueryRoutes } from './customer-query.mjs';
 import { createRechargeCodeHandler, rechargeCodesRoute } from './recharge-code-requests.mjs';
+import {
+  createRechargePartnerHandlers, partnerAdminRoute, partnerApiPrefix, partnerAuthorizationPage, partnerAuthorizationRoute
+} from './recharge-partner-api.mjs';
+import { rechargePartnerGateway } from './recharge-partner-gateway.mjs';
 import { createRechargeOrderSync, orderSyncRoute } from './recharge-order-sync.mjs';
 import { createRechargeActivity, rechargeActivityDomain, rechargeActivityRoute } from './recharge-activity.mjs';
 import { createDataChangeStream, dataChangeRoute, dataSourceIdentity } from './change-sync.mjs';
@@ -187,6 +191,7 @@ export async function startPreview(
     microsoftMailboxConfig,
     microsoftMailboxFetch,
     storefrontAdmissionDirectory = process.env.ID_VENDURE_ADMISSION_DIRECTORY,
+    rechargePartnerEnabled = process.env.ID_RECHARGE_PARTNER_API === '1',
     rechargeOrderSync = Boolean(publicOrigin && rechargeConfig),
     monitoringProbeSecret = process.env.ID_MONITOR_PROBE_SECRET,
     monitoringWorkerReceiptsDirectory = process.env.ID_MONITOR_WORKER_RECEIPTS_DIR,
@@ -215,6 +220,8 @@ export async function startPreview(
     throw new Error('本机线上代充需要本机业务模式和统一会话');
   if (storefrontAdmissionDirectory && (!databasePath || !rechargeConfig))
     throw new Error('商城准入查询需要业务发码记录和原版代充连接');
+  if (rechargePartnerEnabled && (!storefrontAdmissionDirectory || !secureOrigin || !loginSecurity.proxyKey))
+    throw new Error('合作方接口需要正式域名、受信网关和商城任务服务');
   const rechargeAssets = publicUrl && rechargeConfig
     ? await loadCodexdaichongAssets({ requireBundle: true })
     : undefined;
@@ -307,6 +314,7 @@ export async function startPreview(
   let handleAutomaticSnapshot = null;
   let financeCollection = null, handleFinanceCollection = null, handleOrderExpense = null;
   let handleOrderAuxiliary, handleCardManagement, handleClaudeGoogleSubscriptions, handleSubscriptions, handleRechargeCodes, orderSync;
+  let partnerRecharge, partnerPage;
   let rechargeActivity, rechargeEvents;
   let handleEmployeeStatistics, handleCustomerQuery;
   let handleStaffWorkspaces, handleRenewalHandoff;
@@ -391,6 +399,19 @@ export async function startPreview(
         native: rechargeConfig ? createLegacyRechargeNotifications(orderRechargeClient) : undefined,
         send: publicUrl ? undefined : async () => ({ status: 'failed', reason: 'configuration' }) });
       const confirmProtectedAction = request => !auth?.shouldVerify() || auth.recentlyVerified(request);
+      if (storefrontAdmissionDirectory) partnerRecharge = createRechargePartnerHandlers({
+        store, transport: orderRechargeClient, origin: secureOrigin, authorizeAdmin: confirmProtectedAction,
+        readSource: request => verifiedAddress(request, loginSecurity),
+        gateway: rechargePartnerEnabled ? rechargePartnerGateway(storefrontAdmissionDirectory) : undefined
+      });
+      if (rechargePartnerEnabled) {
+        partnerPage = await readFile(new URL('../frontend/recharge-partner-authorize.html', import.meta.url));
+        for (const file of ['recharge-partner-authorize.js', 'recharge-partner.css']) {
+          const body = await readFile(new URL('../frontend/' + file, import.meta.url));
+          assets.set('/' + file, { type: file.endsWith('.js') ? 'text/javascript; charset=utf-8' : 'text/css; charset=utf-8',
+            body, publicMetadata: publicAssetMetadata(body) });
+        }
+      }
       handleMonitoring = createMonitoringHandler({ monitor: systemMonitoring, publicOrigin: secureOrigin,
         confirmSettings: confirmProtectedAction });
       if (publicUrl) {
@@ -600,6 +621,18 @@ export async function startPreview(
     if (route === monitorReportPath && handleProbeReport) return void handleProbeReport(request, response);
     if (vendureRehearsal && route.startsWith(vendureRechargePrefix + '/'))
       return void vendureRehearsal.handle(request, response);
+    if (route === partnerApiPrefix || route.startsWith(partnerApiPrefix + '/'))
+      return rechargePartnerEnabled ? void partnerRecharge.api(request, response, route.slice(partnerApiPrefix.length))
+        : response.writeHead(404).end();
+    if (route === partnerAuthorizationRoute)
+      return rechargePartnerEnabled ? void partnerRecharge.authorization(request, response) : response.writeHead(404).end();
+    if (route === partnerAuthorizationPage) {
+      if (!partnerPage || !['GET', 'HEAD'].includes(request.method)) return response.writeHead(404).end();
+      response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'X-Frame-Options': 'DENY',
+        'X-Robots-Tag': 'noindex, nofollow',
+        'Content-Security-Policy': "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'" });
+      return response.end(request.method === 'HEAD' ? undefined : partnerPage);
+    }
     if (handleLegacyToolRoute && [legacyMicrosoftMailboxCallback, legacyWebsiteVisitIngest].includes(route)) {
       return void handleLegacyToolRoute(request, response).catch(() => {
         if (!response.headersSent) response.writeHead(502);
@@ -724,6 +757,8 @@ export async function startPreview(
       if (!actor) return forbidden();
       return void handleRechargeCodes(request, response, actor);
     }
+    if (route === partnerAdminRoute)
+      return rechargePartnerEnabled ? void partnerRecharge.admin(request, response, actor) : response.writeHead(404).end();
     if (rechargeActivity && (route === rechargeActivityRoute || route.startsWith(rechargeActivityRoute + '/'))) {
       if (!actor) return forbidden();
       return void rechargeActivity.handle(request, response, actor);
@@ -861,6 +896,7 @@ export async function startPreview(
       if (publicUrl) metadata += '\n<meta name="id-site-observations" content="enabled" />';
       if (!loginRequired || actor) {
         metadata += `\n<meta name="id-data-source" content="${dataSource}" />`;
+        if (rechargePartnerEnabled) metadata += '\n<meta name="id-recharge-partner-api" content="enabled" />';
         response.setHeader('Cache-Control', 'private, no-store');
         try {
           const versions = dataChangeVersions(actor || { id: 'local-operator', role: 'admin' });
@@ -926,8 +962,8 @@ export async function startPreview(
   let storefrontAdmission;
   if (storefrontAdmissionDirectory) {
     try {
-      storefrontAdmission = await listenStorefrontAdmission(storefrontAdmissionDirectory, (code, ip) =>
-        orderRechargeClient.verifyStorefrontCode(code, ip));
+      storefrontAdmission = await listenStorefrontAdmission(storefrontAdmissionDirectory,
+        partnerRecharge.lookupAdmission, rechargePartnerEnabled ? partnerRecharge.issueBatch : undefined);
       server.once('close', () => storefrontAdmission.close());
     } catch (error) {
       financeCollection?.close();

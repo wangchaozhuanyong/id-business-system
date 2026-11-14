@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <title>充值授权</title>
+    <link rel="stylesheet" href="/design-tokens.css">
+    <link rel="stylesheet" href="/recharge-partner.css">
+    <script src="/recharge-partner-authorize.js" defer></script>
+  </head>
+  <body>
+    <main class="partner-authorization">
+      <div class="partner-authorization-heading">
+        <h1>充值授权</h1>
+        <details>
+          <summary aria-label="充值授权说明">ⓘ</summary>
+          <p>请在已登录目标 ChatGPT 账号的浏览器获取完整授权资料，只在此页提交。</p>
+        </details>
+      </div>
+      <p id="authorization-status" role="status">正在读取充值请求…</p>
+      <p id="authorization-error" role="alert" hidden></p>
+      <dl id="authorization-details" hidden>
+        <dt>合作方</dt><dd id="authorization-partner"></dd>
+        <dt>套餐</dt><dd id="authorization-plan"></dd>
+        <dt>请求编号</dt><dd id="authorization-reference"></dd>
+      </dl>
+      <form id="authorization-form" autocomplete="off" hidden>
+        <div class="partner-authorization-field">
+          <label for="authorization-session">目标 ChatGPT 账号授权资料</label>
+          <a href="https://chatgpt.com/api/auth/session" target="_blank" rel="noopener noreferrer">获取授权资料</a>
+        </div>
+        <textarea id="authorization-session" autocomplete="off" autocapitalize="off" spellcheck="false"
+          rows="7" maxlength="256000" required></textarea>
+        <p id="authorization-account" hidden></p>
+        <label class="partner-authorization-confirm">
+          <input id="authorization-confirm" type="checkbox" required>
+          <span>我确认这是本人有权操作的账号，并同意使用上方套餐充值。</span>
+        </label>
+        <button type="submit">授权并提交充值</button>
+      </form>
+      <button id="authorization-refresh" type="button" hidden>查询进度</button>
+    </main>
+  </body>
+</html>

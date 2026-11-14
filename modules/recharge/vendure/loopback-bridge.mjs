@@ -1,6 +1,9 @@
 import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
-import { moyaoRechargeChannel, rechargeManualReviewReason, storefrontRechargeCode } from './admission.mjs';
+import {
+  moyaoRechargeChannel, rechargeManualReviewReason, rechargePartnerIdPattern, rechargeRequestIdPattern,
+  storefrontRechargeCode
+} from './admission.mjs';
 
 export const vendureRechargePrefix = '/api/id-business-v2/online-recharge/integrations/vendure';
 export const rechargeWorkerPrefix = '/integrations/recharge-worker';
@@ -130,6 +133,7 @@ export function createLoopbackVendureRechargeBridge({
   workerSecret,
   store,
   lookupAdmission,
+  commitPartnerBatch,
   acceptSubmissions = true,
   acceptStorefrontSubmissions = () => true,
   approvedRetryTaskIds = [],
@@ -179,6 +183,8 @@ export function createLoopbackVendureRechargeBridge({
   const legacy = indexLegacyReceipts(legacyReceipts, tasks, registry);
   // The authorization never enters the durable snapshot, even during a failed commit.
   const sessions = new Map();
+  const issuing = new Set();
+  const admissionReads = new Map();
   let closed = false;
   let needsRecovery = false;
 
@@ -249,8 +255,8 @@ export function createLoopbackVendureRechargeBridge({
   }, signatureWindowMs);
   timer.unref();
 
-  async function handleVendure(action, body, res, at, clientIp, storefrontChannel) {
-    const useAdmission = Boolean(lookupAdmission && storefrontChannel === moyaoRechargeChannel);
+  async function handleVendure(action, body, res, at, clientIp, storefrontChannel, partnerId) {
+    const useAdmission = Boolean(lookupAdmission && (partnerId || storefrontChannel === moyaoRechargeChannel));
     const accepting = () => acceptSubmissions && (!lookupAdmission || (useAdmission && acceptStorefrontSubmissions()));
     if (lookupAdmission && storefrontChannel !== undefined && !useAdmission) {
       if (action === 'config') return send(res, 200, { maintenance: true });
@@ -264,14 +270,20 @@ export function createLoopbackVendureRechargeBridge({
       const supplied = body.taskToken;
       const oldTokenMatches = task?.oldTokenRef && typeof supplied === 'string' && supplied.length <= 100 &&
         secureEqual(task.oldTokenRef, fingerprint('legacy-task', supplied.trim()));
-      if (!task || (!oldTokenMatches && !secureEqual(fingerprint('task', task.id), supplied)))
+      if (!task || task.partnerId !== partnerId ||
+          (!oldTokenMatches && !secureEqual(fingerprint('task', task.id), supplied)))
         return send(res, 404, { error: '任务不可用' });
       return send(res, 200, taskView(task));
     }
 
     const nativeCode = useAdmission ? storefrontRechargeCode(body.code) : '';
     const codeRef = fingerprint('code', nativeCode || codeKey(body.code));
+    const issuanceInProgress = () => action === 'submit'
+      ? send(res, 200, { rejected: true }) : send(res, 503, {});
+    if (issuing.has(codeRef)) return issuanceInProgress();
     const lastTask = () => legacy.byCode.get(codeRef) ?? [...tasks.values()].findLast(task => task.codeRef === codeRef);
+    const sameOwner = task => !task || task.partnerId === partnerId;
+    const differentOwner = () => send(res, 400, { reason: 'storefront_code_not_admitted' });
     const recover = task => task && (useAdmission || task.status !== 'failed' || legacy.byCode.has(codeRef));
     // A reviewed failure is tied to this exact receipt, not every failure of the code.
     const approvedFailure = task => useAdmission && isReviewed(task?.id) &&
@@ -281,6 +293,7 @@ export function createLoopbackVendureRechargeBridge({
         fingerprint('evidence', 'codexdaichong:' + type + ':' + task.id), task.result.evidenceRef
       ));
     let prior = lastTask();
+    if (!sameOwner(prior)) return differentOwner();
     const checkedTaskId = prior?.id;
     const explicitRetry = body.afterFailedTask !== undefined;
     const canCheckRetry = () => approvedFailure(prior) && (action !== 'submit' || body.afterFailedTask === prior.id);
@@ -292,7 +305,9 @@ export function createLoopbackVendureRechargeBridge({
         if (!approvedFailure(previous) || previous.codeRef !== codeRef)
           return send(res, 200, { rejected: true });
       }
-      if (recover(prior) && !canCheckRetry()) return send(res, 200, taskView(prior, true));
+      if (recover(prior) && !canCheckRetry())
+        return send(res, 200, partnerId && prior.partnerRequestId !== body.requestId
+          ? { rejected: true } : taskView(prior, true));
       if (!accepting() || !acceptedSession(body.session)) return send(res, 200, { rejected: true });
     }
     const registered = registry.get(codeRef);
@@ -303,32 +318,45 @@ export function createLoopbackVendureRechargeBridge({
     if (useAdmission && (!prior || canCheckRetry()) && nativeCode && !registered?.disabled &&
         (!assignedCodes.has(nativeCode) || registered?.upstreamCode === nativeCode)) {
       let admitted;
+      // A batch can allocate this code while native admission is awaiting its reply.
+      const readers = admissionReads.get(codeRef) ?? new Set();
+      const read = { stale: false };
+      readers.add(read);
+      admissionReads.set(codeRef, readers);
       try {
-        admitted = await lookupAdmission(nativeCode, clientIp);
+        admitted = await lookupAdmission(nativeCode, clientIp, partnerId);
       } catch (error) {
         if (action === 'submit') {
           const current = lastTask();
-          return send(res, 200, recover(current) && current.id !== body.afterFailedTask
+          return send(res, 200, sameOwner(current) && recover(current) && current.id !== body.afterFailedTask &&
+            (!partnerId || current.partnerRequestId === body.requestId)
             ? taskView(current, true) : { rejected: true });
         }
         if (!prior) throw error;
+      } finally {
+        readers.delete(read);
+        if (!readers.size) admissionReads.delete(codeRef);
       }
       if (closed || needsRecovery) return send(res, 503, { error: '隔离联调暂不可用' });
       at = now();
       expire(at);
       prior = lastTask();
+      if (!sameOwner(prior)) return differentOwner();
+      if (issuing.has(codeRef) || read.stale) return issuanceInProgress();
       if (admitted && (!checkedTaskId || (prior?.id === checkedTaskId && prior.plan === admitted.plan)))
         record = { ...admitted, upstreamCode: nativeCode };
     }
     if (action === 'submit') {
       // Lookup yields to concurrent requests. Reuse their task before claiming this code.
       if (recover(prior) && (!canCheckRetry() || prior.id !== checkedTaskId))
-        return send(res, 200, taskView(prior, true));
+        return send(res, 200, partnerId && prior.partnerRequestId !== body.requestId
+          ? { rejected: true } : taskView(prior, true));
       if (!accepting() || record?.status !== 'available')
         return send(res, 200, { rejected: true });
       const task = {
         id: randomUUID(),
         codeRef,
+        ...(partnerId && { partnerId, partnerRequestId: body.requestId }),
         plan: record.plan,
         clientIp,
         queuedUntil: at + queuedLifetimeMs,
@@ -512,6 +540,63 @@ export function createLoopbackVendureRechargeBridge({
         if (!res.headersSent && !res.destroyed) send(res, 503, { error: '隔离联调暂不可用' });
       });
     },
+    async handlePartner(req, res) {
+      const action = /^\/(config|query|submit|task|issue)$/.exec(req.url)?.[1];
+      if (!lookupAdmission || !action || req.method !== 'POST' || req.headers.origin || req.headers.cookie)
+        return send(res, 404, {});
+      if (closed || needsRecovery) return send(res, 503, {});
+      try {
+        const raw = await readBody(req, action === 'submit' ? 1_600_000 : action === 'issue' ? 131_072 : 1024);
+        if (!raw) return send(res, 413, {});
+        const body = JSON.parse(raw);
+        const { partnerId, clientIp, requestId, code, session } = body;
+        if (typeof partnerId !== 'string' || !rechargePartnerIdPattern.test(partnerId) || !isIP(clientIp ?? '') ||
+            (['submit', 'query'].includes(action) && !storefrontRechargeCode(code)) ||
+            (['submit', 'task', 'issue'].includes(action) &&
+              (typeof requestId !== 'string' || !rechargeRequestIdPattern.test(requestId))) ||
+            (action === 'submit' && !acceptedSession(session)))
+          return send(res, 400, {});
+        const at = now();
+        expire(at);
+        if (action === 'issue') {
+          if (!commitPartnerBatch || !Array.isArray(body.codes) || body.codes.length > 4000 ||
+              !Number.isSafeInteger(body.count) || body.count < 1 || body.count > 100 ||
+              new Set(body.codes).size !== body.codes.length ||
+              !body.codes.every(code => typeof code === 'string' && storefrontRechargeCode(code) === code))
+            return send(res, 400, {});
+          const occupied = new Set([...tasks.values()].map(row => row.codeRef));
+          const selected = [];
+          for (const code of body.codes) {
+            const ref = fingerprint('code', code);
+            if (occupied.has(ref) || legacy.byCode.has(ref) || registry.has(ref) ||
+                issuing.has(ref) || assignedCodes.has(code)) continue;
+            selected.push({ code, ref });
+            if (selected.length === body.count) break;
+          }
+          if (selected.length < body.count) return send(res, 409, {});
+          for (const { ref } of selected) {
+            issuing.add(ref);
+            for (const read of admissionReads.get(ref) ?? []) read.stale = true;
+          }
+          try {
+            const status = await commitPartnerBatch(requestId, selected.map(row => row.code));
+            return send(res, [200, 409].includes(status) ? status : 503, {});
+          } finally {
+            for (const { ref } of selected) issuing.delete(ref);
+          }
+        }
+        if (action === 'task') {
+          const task = [...tasks.values()].find(row => row.partnerId === partnerId && row.partnerRequestId === requestId);
+          return task ? send(res, 200, taskView(task)) : send(res, 404, {});
+        }
+        // The app has authorized the partner and owns request recovery. The same executor store
+        // arbitrates native codes for the legacy shop and this socket.
+        return await handleVendure(action, { code, session, requestId, afterFailedTask: body.afterFailedTask },
+          res, at, clientIp, undefined, partnerId);
+      } catch {
+        if (!res.headersSent && !res.destroyed) return send(res, 503, {});
+      }
+    },
     close() {
       closed = true;
       clearInterval(timer);
@@ -519,6 +604,8 @@ export function createLoopbackVendureRechargeBridge({
       registry.clear();
       nonces.clear();
       sessions.clear();
+      issuing.clear();
+      admissionReads.clear();
       legacy.byId.clear();
       legacy.byCode.clear();
       memoryKey?.fill(0);

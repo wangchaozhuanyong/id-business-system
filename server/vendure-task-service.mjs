@@ -10,7 +10,9 @@ import {
 import {
   isolatedRechargeFilename, openIsolatedRechargeStore
 } from '../modules/recharge/vendure/isolated-task-store.mjs';
-import { createStorefrontAdmissionClient } from '../modules/recharge/vendure/admission.mjs';
+import {
+  commitPartnerIssue, createStorefrontAdmissionClient, listenPrivateRechargeSocket, partnerTaskSocketName
+} from '../modules/recharge/vendure/admission.mjs';
 
 const runtimeRoot = fileURLToPath(new URL('../.runtime/', import.meta.url));
 
@@ -32,7 +34,8 @@ export async function startVendureTaskService({
   directory, vendurePort, workerPort, storageKey, vendureKey, workerSecret, codes,
   acceptSubmissions = false, legacyReceipts, approvedRetryTaskIds,
   approvedRetryTaskDigest = process.env.ID_VENDURE_RETRY_RECEIPT_SHA256,
-  admissionSocket = process.env.ID_VENDURE_ADMISSION_SOCKET
+  admissionSocket = process.env.ID_VENDURE_ADMISSION_SOCKET,
+  partnerTaskDirectory = process.env.ID_RECHARGE_PARTNER_TASK_DIRECTORY
 }) {
   const validPort = (value) => Number.isInteger(value) && value >= 0 && value <= 65535;
   if (!validPort(vendurePort) || !validPort(workerPort) || (vendurePort !== 0 && vendurePort === workerPort) ||
@@ -41,6 +44,8 @@ export async function startVendureTaskService({
       !Array.isArray(codes) || typeof acceptSubmissions !== 'boolean')
     throw new Error('商城任务服务需要独立端口、私有目录、存储密钥和兑换码配置');
   const lookupAdmission = admissionSocket ? createStorefrontAdmissionClient(admissionSocket) : undefined;
+  if (partnerTaskDirectory && !lookupAdmission)
+    throw new Error('合作方充值使用商城准入和同一执行队列');
   const acceptanceMarker = lookupAdmission && join(dirname(admissionSocket), 'accept-submissions');
   const acceptStorefrontSubmissions = () => {
     const marker = lstatSync(acceptanceMarker, { throwIfNoEntry: false });
@@ -94,10 +99,14 @@ export async function startVendureTaskService({
     bridge = createLoopbackVendureRechargeBridge({
       codes, vendureKey, workerSecret, store, acceptSubmissions, legacyReceipts,
       approvedRetryTaskIds, approvedRetryTaskDigest, lookupAdmission,
+      ...(partnerTaskDirectory && { commitPartnerBatch: (id, codes) => commitPartnerIssue(admissionSocket, id, codes) }),
       ...(acceptanceMarker && { acceptStorefrontSubmissions })
     });
     const vendureUrl = await startListener(vendureRechargePrefix, vendurePort);
     const workerUrl = await startListener(rechargeWorkerPrefix, workerPort);
+    if (partnerTaskDirectory)
+      servers.push(await listenPrivateRechargeSocket(partnerTaskDirectory, partnerTaskSocketName,
+        (request, response) => void bridge.handlePartner(request, response)));
     return { vendureUrl, workerUrl, close };
   } catch (error) {
     await close();
