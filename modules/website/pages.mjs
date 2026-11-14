@@ -33,7 +33,7 @@ const registration = workspace({
 });
 export const financeCards = workspace({
   id: 'staff-finance-cards', route: 'staff/finance/cards', label: '自动代充银行卡',
-  description: '与 ChatGPT 充值中的银行卡池共用资料。可导入银行卡、配置允许套餐或停用；影响取卡的操作须完成安全确认。',
+  description: '与 ChatGPT 充值共用银行卡池。超级管理员可管理银行卡、允许套餐、Orbitcard 用卡记录与开卡策略；财务账号按已授权范围维护银行卡。',
   navigation: '线上代充', before: 'online-recharge/chatgpt', roles: ['finance', 'super'],
   resource: 'staff/finance/cards', scope: 'recharge-card-plans'
 });
@@ -41,7 +41,7 @@ export const financeReconciliation = workspace({
   id: 'finance-reconciliation',
   route: 'staff/finance/reconciliation',
   label: '代充对账',
-  description: '按北京时间查询系统记录的扣款账单，结合银行流水人工核对。扣款成功表示付款结果；订单成本和实收可在订单统计查看。',
+  description: '按北京时间、银行卡后四位、套餐与扣款状态查询账单，查看完整卡号、卡类型、充值邮箱和支付单号，结合银行流水核对。卡类型为当前分类；扣款成功表示付款结果，订阅开通和实收请另核对。',
   navigation: '线上代充',
   after: 'staff/finance/cards',
   roles: financeCards.roles,

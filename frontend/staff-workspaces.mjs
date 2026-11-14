@@ -7,6 +7,9 @@ export function createPage(A, definition) {
     gpt: 'GPT 账号', claude: 'Claude 账号', gemini: 'Gemini 账号', grok: 'Grok 账号' };
   const resource = definition.resource.slice('staff/'.length);
   const isCards = definition.route === 'staff/finance/cards';
+  // Super administrators use the original card pool; finance keeps its existing
+  // scoped commands. Pending staff maintenance receipts remain visible in both.
+  const cardPool = isCards && A.state.actor?.role === 'super' ? A.modules.operations.cardPool : null;
   const initialState = () => ({ draft: {}, page: 1, reviewPage: { page: 1 }, version: 0 });
   let state = initialState();
   let active;
@@ -197,6 +200,10 @@ export function createPage(A, definition) {
   };
 
   function render() {
+    if (cardPool) return A.header(definition.label, definition.description) +
+      `<section class="panel staff-workspace finance-workspace" data-staff-workspace hidden>
+        <p class="finance-feedback" data-staff-status role="status" hidden></p>
+        <div data-staff-content></div></section>` + cardPool.render();
     if (isCards) return A.header(definition.label, definition.description) +
       `<section class="panel staff-workspace finance-workspace" data-staff-workspace>${cardToolbar()}
       <p class="finance-feedback" data-staff-status role="status" hidden></p>
@@ -209,6 +216,11 @@ export function createPage(A, definition) {
 
   function draw(view) {
     const body = $('[data-staff-content]', view.host);
+    if (cardPool) {
+      body.innerHTML = view.current.result ? cardReviewSection(view.current) : '';
+      view.host.hidden = !body.childElementCount && $('[data-staff-status]', view.host).hidden;
+      return;
+    }
     body.innerHTML = view.current.result ? content[view.route](view.current) : A.empty('资料未能读取', '请点击刷新重试。');
   }
 
@@ -252,6 +264,7 @@ export function createPage(A, definition) {
     const status = $('[data-staff-status]', view.host);
     status.textContent = value;
     status.hidden = !value;
+    if (cardPool) view.host.hidden = !value && !view.current.result?.pending?.length;
   }
 
   function values(form) {
@@ -523,6 +536,7 @@ export function createPage(A, definition) {
   }
 
   function drawList(view) {
+    if (cardPool) return;
     const policy = $('[data-card-policy]', view.host);
     if (policy) policy.textContent = '取卡规则：' + cardPolicyLabel(view.current);
     const node = $('[data-staff-list]', view.host);
@@ -549,11 +563,14 @@ export function createPage(A, definition) {
     const region = A.activePageRegion();
     const host = $('[data-staff-workspace]', region);
     if (!host) return;
-    const view = { host, route: definition.route, current: state };
+    if (active?.host === host) { cardPool?.afterRender(); return; }
+    const controller = new AbortController();
+    const listenerOptions = { signal: controller.signal };
+    const view = { host, route: definition.route, current: state, controller };
     active = view;
     if (view.current.result) draw(view);
-    host.addEventListener('click', event => void onClick(event, view));
-    host.addEventListener('submit', event => void onSubmit(event, view));
+    host.addEventListener('click', event => void onClick(event, view), listenerOptions);
+    host.addEventListener('submit', event => void onSubmit(event, view), listenerOptions);
     host.addEventListener('input', event => {
       const form = event.target.closest('[data-staff-form]');
       if (form) saveDraft(form, view.current);
@@ -562,14 +579,14 @@ export function createPage(A, definition) {
         view.current.page = 1;
         if (view.current.result) drawList(view);
       }
-    });
+    }, listenerOptions);
     host.addEventListener('change', event => {
       const key = event.target.dataset.cardFilter;
       if (!key) return;
       view.current[key === 'status' ? 'cardStatus' : 'cardPlan'] = event.target.value;
       view.current.page = 1;
       if (view.current.result) drawList(view);
-    });
+    }, listenerOptions);
     host.addEventListener('id-pagination-change', event => {
       if (event.detail.id === 'staff-card-review-list') {
         view.current.reviewPage.page = event.detail.page;
@@ -580,13 +597,23 @@ export function createPage(A, definition) {
       view.current.page = event.detail.page;
       if (isCards) view.current.pageSize = event.detail.pageSize;
       drawList(view);
-    });
+    }, listenerOptions);
     void load(view);
+    cardPool?.afterRender();
   }
 
-  return { render, afterRender: activate,
-    deactivate() { active = undefined; },
-    clearPageState() { active = undefined; state = initialState(); },
+  return { render, afterRender: activate, retainPage: () => Boolean(cardPool),
+    onClick(action) {
+      if (!cardPool || action !== 'staff-card-pool-refresh') return false;
+      if (active && !active.saving) {
+        message(active, '');
+        void load(active);
+        cardPool.refresh();
+      }
+      return true;
+    },
+    deactivate(region) { active?.controller.abort(); active = undefined; cardPool?.deactivate(region); },
+    clearPageState() { active?.controller.abort(); active = undefined; state = initialState(); },
     onDataChanges(scopes) {
       if (!active || active.saving || !scopes.includes(definition.scope)) return;
       const view = active;

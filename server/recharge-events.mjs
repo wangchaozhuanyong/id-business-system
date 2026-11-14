@@ -47,6 +47,7 @@ export function createRechargeEvents({ config, store, orderSync, activity, onRea
     if (scopes.includes('billing_records')) domains.add(financeReconciliation.scope);
     if (scopes.some(scope => ['card_assets', 'orbitcard_card_usage', 'orbitcard_card_recharges'].includes(scope))) {
       domains.add('tenant-cards'); domains.add('card-types');
+      domains.add(financeReconciliation.scope);
     }
     for (const domain of domains) versions.set(domain, event.receipt);
     if (domains.size) store.notifyChanges();

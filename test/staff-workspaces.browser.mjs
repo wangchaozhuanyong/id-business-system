@@ -118,6 +118,13 @@ test('finance reconciliation loads on demand and keeps dates, rows and page toge
   });
   const oldRequested = Promise.withResolvers(), releaseOld = Promise.withResolvers(), oldCompleted = Promise.withResolvers();
   const row = reference => ({ items: [{ reference, time: '2026-11-13T05:00:00Z' }], hasMore: true });
+  const showReference = async reference => {
+    const value = page.getByText(reference, { exact: true });
+    await value.waitFor({ state: 'attached' });
+    const details = value.locator('xpath=ancestor::tr').getByRole('button', { name: '更多资料', exact: true });
+    if (await details.isVisible()) await details.click();
+    await value.waitFor();
+  };
   await context.route(url => url.pathname === '/api/local/staff/finance/reconciliation', async route => {
     assert.equal(route.request().method(), 'GET');
     const params = new URL(route.request().url()).searchParams;
@@ -139,10 +146,10 @@ test('finance reconciliation loads on demand and keeps dates, rows and page toge
   assert.equal(assets.length, 0);
   assert.equal(requests.length, 0);
   await page.evaluate(() => window.IDDesignAPI.go('staff/finance/reconciliation'));
-  await page.getByText('未筛选账单', { exact: true }).waitFor();
+  await showReference('未筛选账单');
   assert.equal(assets.length, 1);
   const fromInput = page.getByLabel('开始日期'), toInput = page.getByLabel('结束日期');
-  const submit = page.getByRole('button', { name: '按日期查看' });
+  const submit = page.getByRole('button', { name: '查询账单' });
   await fromInput.fill('2026-11-01');
   await toInput.fill('2026-11-06');
   await submit.click();
@@ -150,7 +157,7 @@ test('finance reconciliation loads on demand and keeps dates, rows and page toge
   await fromInput.fill('2026-11-02');
   await toInput.fill('2026-11-08');
   await submit.click();
-  await page.getByText('第二组账单1', { exact: true }).waitFor();
+  await showReference('第二组账单1');
   releaseOld.resolve();
   await oldCompleted.promise;
   await settle(page);
@@ -162,7 +169,7 @@ test('finance reconciliation loads on demand and keeps dates, rows and page toge
   assert(await page.getByText('账单日期 2026-11-02 至 2026-11-08', { exact: true }).isVisible());
   assert(await page.getByText('第二组账单1', { exact: true }).isVisible());
   await page.getByRole('button', { name: '下一页' }).click();
-  await page.getByText('第二组账单2', { exact: true }).waitFor();
+  await showReference('第二组账单2');
   assert.deepEqual(requests.at(-1), ['2026-11-02', '2026-11-08', 2]);
   assert.equal(await fromInput.inputValue(), '2026-11-03');
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
@@ -170,7 +177,7 @@ test('finance reconciliation loads on demand and keeps dates, rows and page toge
   await page.evaluate(() => window.IDDesignAPI.go('overview'));
   await page.getByRole('heading', { name: '网站总览', exact: true }).waitFor();
   await page.evaluate(() => window.IDDesignAPI.go('staff/finance/reconciliation'));
-  await page.getByText('第二组账单2', { exact: true }).waitFor();
+  await showReference('第二组账单2');
   assert.equal(assets.length, 1);
   assert.deepEqual(errors, []);
   assert.deepEqual(access.external, []);
@@ -294,7 +301,7 @@ test('finance lists keep filters, status and pagination readable across widths a
     assert.equal(await help.evaluate(node => node.parentElement.open), false);
   }
   assert(await page.getByText('20 USD', { exact: false }).isVisible());
-  assert(await page.getByText('扣款成功', { exact: true }).isVisible());
+  assert(await page.locator('[data-table="代充对账记录"]').getByText('扣款成功', { exact: true }).isVisible());
   assert.deepEqual(errors, []);
   assert.deepEqual(access.external, []);
 });
@@ -377,7 +384,7 @@ test('sign-in waits for a human check and then requests the authenticator code',
     const body = turnstileLoginPage(source, 'fixture-site').replace('<head>', '<head><meta name="id-local-auth" content="required">' +
       '<link rel="stylesheet" href="/local-auth.css">')
       .replace('    <script src="./prototype.js', '    <script src="/local-auth.js" defer></script>\n    <script src="./prototype.js')
-      .replace(/^ *<script src="\.\/[^"]+" defer><\/script>\n/gm, '');
+      .replace(/^ *<script (?:type="module" )?src="\.\/[^"\n]+"(?: defer)?><\/script>\n/gm, '');
     return route.fulfill({ contentType: 'text/html', body });
   });
   await context.route('https://challenges.cloudflare.com/**', route => route.fulfill({ contentType: 'text/javascript',
@@ -415,7 +422,7 @@ test('sign-in waits for a human check and then requests the authenticator code',
   });
   assert.equal(await page.getByRole('button', { name: '完成真人验证' }).getAttribute('data-turnstile-size'), 'compact');
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
-  assert(await page.locator('#local-auth-gate button[type="submit"]').isDisabled());
+  assert(await page.locator('.local-auth-form button[type="submit"]').isDisabled());
   await page.getByRole('button', { name: '完成真人验证' }).click();
   await page.getByRole('button', { name: '登录', exact: true }).click();
   await page.getByLabel('六位动态验证码或恢复码').fill('123456');
@@ -424,4 +431,5 @@ test('sign-in waits for a human check and then requests the authenticator code',
   await page.getByRole('button', { name: '验证并登录' }).click();
   await page.getByText('已提交设备申请。', { exact: false }).waitFor();
   assert.equal(factorChecks, 1);
+  assert.deepEqual(browserErrors, []);
 });

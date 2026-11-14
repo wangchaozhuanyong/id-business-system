@@ -2,6 +2,7 @@ import { createCipheriv, createDecipheriv, createHash, createHmac, hkdfSync, ran
 import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
+import { financeReconciliation } from '../modules/website/pages.mjs';
 import { describeWriteOperation, checkWriteReceipt, WriteOperationError } from './write-operation.mjs';
 import { checkCustomerContactDuplicate, mergeContactWrite } from './contact-write.mjs';
 import {
@@ -3235,6 +3236,8 @@ export function createLocalBusinessStore(databasePath) {
         versions[renewalHandoffDomain] = [renewalHandoffDomain, subscriptionDomain, 'inventory', 'commerce'].map(version).join(':');
       if (['finance', 'super'].includes(actor.role))
         versions['recharge-card-plans'] = version(financeCardPendingDomain);
+      if (financeReconciliation.roles.includes(actor.role))
+        versions[financeReconciliation.scope] = [cardTypeDocument, orderCardArchiveDocument].map(version).join(':');
       if (['admin', 'super', 'registrar'].includes(actor.role)) versions.inventory = version('inventory');
       if (['admin', 'super', 'employee', 'finance'].includes(actor.role)) versions.commerce = version('commerce');
       if (['admin', 'super', 'employee'].includes(actor.role)) versions['recharge-codes'] = version('recharge-codes');

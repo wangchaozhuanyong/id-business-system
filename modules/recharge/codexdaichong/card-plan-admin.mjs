@@ -13,14 +13,23 @@ export const cardPlanToolbar = `
   </div>
   <dialog class="card-plan-editor" id="card_plan_editor" aria-labelledby="card_plan_title" aria-describedby="card_plan_result">
     <form>
-      <header class="card-plan-editor-header"><h3 id="card_plan_title">设置允许套餐</h3></header>
+      <header class="card-plan-editor-header">
+        <h3 id="card_plan_title">设置允许套餐</h3>
+        <p id="card_plan_help">选择银行卡允许使用的套餐，可多选，至少选择一项。保存后，已设置的卡只用于所选套餐；批量设置会统一替换所选银行卡的允许套餐。</p>
+        <button type="button" class="btn btn-secondary card-plan-editor-close" id="card_plan_close" aria-label="关闭套餐设置"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6"/></svg></button>
+      </header>
       <div class="card-plan-editor-body">
+        <div class="card-plan-target">
+          <span class="card-plan-target-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 10h18M7 15h4"/></svg></span>
+          <div class="card-plan-target-copy"><span id="card_plan_target_label">当前银行卡</span><strong id="card_plan_target"></strong><p id="card_plan_target_detail" hidden></p></div>
+        </div>
         <fieldset id="card_plan_options" class="card-plan-options">
           <legend>允许套餐</legend><div class="card-plan-grid">${choices}</div>
         </fieldset>
         <p id="card_plan_result" role="status"></p>
       </div>
       <footer class="card-plan-editor-actions">
+        <span id="card_plan_selection" role="status" aria-live="polite"></span>
         <button type="button" class="btn btn-secondary" id="card_plan_cancel">取消</button>
         <button type="submit" class="btn btn-primary">保存</button>
       </footer>
@@ -41,8 +50,9 @@ export function createCardPlanAdmin({ labels, request, loadCards, onImportChange
   const selected = new Set();
   let snapshot = null, rows = new Map(), editing = null, writing = false;
 
-  function attachImportHelp() {
+  function attachCardPlanHelp() {
     for (const [title, hint, control] of [
+      [element('card_plan_title'), element('card_plan_help')],
       [element('card_pool_import_box')?.querySelector('.import-box-title'), element('card_pool_import_hint'), element('card_pool_import_text')],
       [document.querySelector('label[for="card_pool_import_type"]'), element('card_pool_import_type_hint'), element('card_pool_import_type')]
     ]) {
@@ -51,8 +61,8 @@ export function createCardPlanAdmin({ labels, request, loadCards, onImportChange
       control?.setAttribute('aria-describedby', title.parentElement.querySelector('.title-description').id);
     }
   }
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', attachImportHelp, { once: true });
-  else attachImportHelp();
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', attachCardPlanHelp, { once: true });
+  else attachCardPlanHelp();
 
   const readChoices = group => [...group.querySelectorAll('input:checked')].map(input => input.value);
   const setChoices = (group, values) => {
@@ -117,11 +127,23 @@ export function createCardPlanAdmin({ labels, request, loadCards, onImportChange
     let draft;
     try { draft = JSON.parse(readDraft().card_pool_plan_editor || 'null'); } catch { /* Invalid drafts are discarded. */ }
     editing = { ids, key, version: snapshot.version };
+    const cardLabel = id => /^\d{4}$/.test(rows.get(id).last4) ? '•••• ' + rows.get(id).last4 : '银行卡编号 ' + id;
+    element('card_plan_target_label').textContent = ids.length > 1 ? '批量设置' : '当前银行卡';
+    element('card_plan_target').textContent = ids.length > 1 ? '已选 ' + ids.length + ' 张银行卡' : cardLabel(ids[0]);
+    const detail = element('card_plan_target_detail');
+    detail.textContent = ids.length > 1 ? ids.slice(0, 4).map(cardLabel).join(' · ') + (ids.length > 4 ? ' 等' : '') : '';
+    detail.hidden = ids.length === 1;
+    result.dataset.state = 'info';
     result.textContent = ids.length > 1 ? '将替换这 ' + ids.length + ' 张卡的允许套餐。' : '';
     setChoices(options, draft?.key === key && Array.isArray(draft.plans) ? draft.plans :
       (ids.length === 1 ? rows.get(ids[0]).allowed_plans || [] : []));
+    paintSelection();
     save.disabled = false;
     dialog.showModal();
+  }
+
+  function paintSelection() {
+    element('card_plan_selection').textContent = '已选 ' + readChoices(options).length + ' / ' + Object.keys(labels).length;
   }
 
   async function write(command) {
@@ -171,23 +193,29 @@ export function createCardPlanAdmin({ labels, request, loadCards, onImportChange
     finally { writing = false; paint(); }
   });
   element('card_plan_cancel').addEventListener('click', () => dialog.close());
+  element('card_plan_close').addEventListener('click', () => { if (!writing) dialog.close(); });
   dialog.addEventListener('cancel', event => { if (writing) event.preventDefault(); });
   options.addEventListener('change', () => {
+    paintSelection();
     if (editing) writeDraft({ ...readDraft(),
       card_pool_plan_editor: JSON.stringify({ key: editing.key, plans: readChoices(options) }) });
   });
   dialog.addEventListener('close', () => {
     editing = null;
+    for (const help of dialog.querySelectorAll('details[open]')) help.open = false;
   });
   dialog.querySelector('form').addEventListener('submit', async event => {
     event.preventDefault();
     if (writing || !editing) return;
     const allowedPlans = readChoices(options);
-    if (!allowedPlans.length) { result.textContent = '请选择至少一个允许套餐。'; return; }
+    if (!allowedPlans.length) { result.dataset.state = 'error'; result.textContent = '请选择至少一个允许套餐。'; return; }
     const { ids, version } = editing;
     writing = true;
     save.disabled = true;
+    save.textContent = '保存中…';
+    dialog.querySelector('form').setAttribute('aria-busy', 'true');
     element('card_plan_cancel').disabled = true;
+    element('card_plan_close').disabled = true;
     options.disabled = true;
     paint();
     try {
@@ -200,11 +228,15 @@ export function createCardPlanAdmin({ labels, request, loadCards, onImportChange
       dialog.close();
       notify('允许套餐已保存。', 'success');
     } catch (error) {
+      result.dataset.state = 'error';
       result.textContent = error.message;
     } finally {
       writing = false;
       save.disabled = false;
+      save.textContent = '保存';
+      dialog.querySelector('form').removeAttribute('aria-busy');
       element('card_plan_cancel').disabled = false;
+      element('card_plan_close').disabled = false;
       options.disabled = false;
       paint();
     }

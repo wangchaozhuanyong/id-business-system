@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { join, relative, isAbsolute } from 'node:path';
 import { interceptDesign, origin, root } from './helpers/offline-design.mjs';
 
-test('paper login keeps fields, setup, errors and pending submits usable across viewport sizes', { timeout: 90_000 }, async t => {
+test('login redesign keeps fields, setup, errors, 2FA entry and pending submits usable across viewport sizes', { timeout: 90_000 }, async t => {
   assert(process.env.ID_RECHARGE_QA_PLAYWRIGHT, '请指定已有 Playwright 模块入口');
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
   const browser = await chromium.launch();
@@ -74,6 +74,9 @@ test('paper login keeps fields, setup, errors and pending submits usable across 
     assert(contrast(bounds.palette.footer, bounds.palette.background) >= 4.5, label + ': footer contrast');
     assert(bounds.palette.borders.every(color => contrast(color, bounds.palette.surface) >= 3), label + ': input border contrast ' + JSON.stringify(bounds.palette));
     assert.equal(await page.locator('.local-auth-brand-name').textContent(), 'AI订阅管理系统');
+    const tool = await page.locator('#local-auth-totp-open').boundingBox();
+    assert(tool && tool.width >= 180 && tool.height >= 44, label + ': visible 2FA entry');
+    assert(tool.x >= 0 && tool.x + tool.width <= page.viewportSize().width, label + ': clipped 2FA entry');
     assert.equal(await page.getByRole('button', { name: setup ? '设置密码并登录' : '登录', exact: true }).count(), 1);
     for (const button of await page.locator('.local-auth-password-toggle').all()) {
       const box = await button.boundingBox();
@@ -96,6 +99,25 @@ test('paper login keeps fields, setup, errors and pending submits usable across 
       await page.evaluate(() => scrollTo(0,0));
       const bounds = await check(`${mode} ${width} ${theme}`);
       assert.equal(await page.locator('.local-auth-story').isVisible(), width > 900);
+      assert.equal(await page.locator('.local-auth-art').isVisible(), width > 900);
+      const input = page.locator(setup ? '#local-auth-password' : '#local-auth-email');
+      await input.evaluate(node => node.blur());
+      const fieldBefore = await input.boundingBox();
+      await input.click();
+      await page.evaluate(() => Promise.all(document.getAnimations().filter(animation =>
+        animation.effect.getComputedTiming().endTime !== Infinity).map(animation => animation.finished.catch(() => {}))));
+      const focus = await input.evaluate(node => {
+        const css = getComputedStyle(node);
+        return { outline: css.outlineStyle, shadow: css.boxShadow, radius: css.borderRadius,
+          borders: [css.borderTopWidth, css.borderRightWidth, css.borderBottomWidth, css.borderLeftWidth] };
+      });
+      assert.deepEqual(await input.boundingBox(), fieldBefore, 'focusing does not move or resize the input');
+      assert.equal(focus.outline, 'none', 'no second rectangular outline');
+      assert.notEqual(focus.shadow, 'none', 'focus remains visible');
+      assert.notEqual(focus.radius, '0px');
+      assert(focus.borders.every(width => width === '1px'), 'one consistent border on all sides');
+      if (output && !setup && width === 1440 && theme === 'light')
+        await page.screenshot({ path: join(output, 'login-focused.png'), fullPage: true });
       if (setup) {
         assert.equal(await page.locator('#local-auth-email').inputValue(), 'setup@example.test');
         assert(await page.locator('#local-auth-email').evaluate(input => input.readOnly));

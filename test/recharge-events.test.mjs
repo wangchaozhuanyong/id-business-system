@@ -68,6 +68,16 @@ test('committed billing changes publish a revision only for recharge reconciliat
   assert.deepEqual(f.runtime.versions(), { 'recharge-billing': billing.receipt });
 });
 
+test('committed card changes also invalidate reconciliation card classifications', async t => {
+  const f = runtime(t), child = f.children[0];
+  const cards = { ...event, jobs: [], scopes: ['card_assets'], reconcile: true };
+  child.stdout.write(JSON.stringify(cards) + '\n');
+  await turn();
+  assert.deepEqual(f.runtime.versions(), {
+    'tenant-cards': cards.receipt, 'card-types': cards.receipt, 'recharge-billing': cards.receipt
+  });
+});
+
 test('startup alone does not confirm the connection; native heartbeats do not import orders', async t => {
   const f = runtime(t), child = f.children[0];
   child.stderr.write('recharge_event_subscriber_ready\n');

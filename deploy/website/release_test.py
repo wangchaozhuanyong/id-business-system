@@ -281,7 +281,7 @@ class WebsiteReleaseTests(unittest.TestCase):
         git.return_value = "\n".join(files)
         self.assertEqual(release.require_website_scope(BASE, TARGET),
                          ("cardPlanPresentation", approval.return_value))
-        approval.assert_called_once_with(BASE, TARGET, "card-plan-ui-20261113.json", files)
+        approval.assert_called_once_with(BASE, TARGET, "card-plan-ui-20261114.json", files)
         for changed in (files[:1], (*files, "modules/recharge/codexdaichong/native-adapter.mjs")):
             git.return_value = "\n".join(changed)
             with self.assertRaisesRegex(RuntimeError, "recharge_core_or_runtime_changed"):

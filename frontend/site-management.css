@@ -105,6 +105,32 @@
 .finance-amount { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .finance-workspace :is([data-billing-result], [data-staff-list]) > .table-viewport { min-height: 0; }
 
+[data-finance-reconciliation] .finance-date-filter .field { flex-basis: 150px; }
+[data-finance-reconciliation] .finance-date-filter .field:has(#billing-last4, #billing-plan, #billing-status) { flex-basis: 112px; }
+[data-finance-reconciliation] .finance-card-number { min-width: 182px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+[data-finance-reconciliation] .finance-copy-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  min-height: 36px;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+[data-finance-reconciliation] .finance-copy-value .icon { width: 15px; height: 15px; flex: none; color: var(--secondary); }
+[data-finance-reconciliation] .finance-copy-value:hover { color: var(--primary); }
+
+@media (max-width: 760px) {
+  [data-finance-reconciliation] .finance-card-number { min-width: 0; }
+  [data-finance-reconciliation] .mobile-records td.finance-card-number { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  [data-finance-reconciliation] .finance-copy-value { min-height: 44px; }
+}
+
 @media (max-width: 600px) {
   .finance-toolbar > .toolbar-left { flex-basis: 100%; }
   .finance-toolbar .search-field { flex-basis: 100%; max-width: none; }
