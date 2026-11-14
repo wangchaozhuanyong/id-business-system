@@ -18,6 +18,8 @@ const providerRetirementPatch = new URL('./provider-retirement/upstream-provider
 const providerRetirementFiles = ['mysql-store.js', 'server.js'];
 const cardPlanPatch = new URL('./card-plans/upstream-card-plans.patch', import.meta.url);
 const cardPlanFiles = ['mysql-store.js', 'payment-retry.js', 'server.js'];
+const plusTrialPatch = new URL('./plus-trial/upstream-plus-trial.patch', import.meta.url);
+const plusTrialFiles = ['pricing-checkout.js'];
 
 async function approvedRouting() {
   const manifest = JSON.parse(await readFile(new URL('manifest.json', routingDirectory), 'utf8'));
@@ -72,6 +74,19 @@ async function approvedCardPlans(retirement) {
   return manifest;
 }
 
+async function approvedPlusTrial(routing) {
+  const manifest = JSON.parse(await readFile(new URL('./plus-trial/manifest.json', import.meta.url), 'utf8'));
+  const patch = await readFile(plusTrialPatch);
+  const names = [...patch.toString().matchAll(/^diff --git a\/(\S+) b\/\1$/gm)].map(match => match[1]).sort();
+  if (manifest.revision !== CODEXDAICHONG_REVISION ||
+      JSON.stringify(Object.keys(manifest.files).sort()) !== JSON.stringify(plusTrialFiles) ||
+      JSON.stringify(names) !== JSON.stringify(plusTrialFiles) ||
+      plusTrialFiles.some(name => manifest.files[name].original !== routing.files[name]?.approved) ||
+      createHash('sha256').update(patch).digest('hex') !== manifest.patchSha256)
+    throw new Error('0 元试用补丁与审查清单不符');
+  return manifest;
+}
+
 async function verifyPatchPreimage(directory, manifest) {
   for (const [name, expected] of Object.entries(manifest.files)) {
     const file = resolve(directory, name), stat = await lstat(file);
@@ -88,6 +103,7 @@ export async function applyApprovedRechargeRouting(directory) {
   const returnManifest = await approvedReturns(routing);
   const retirement = await approvedProviderRetirement(returnManifest);
   const cardPlans = await approvedCardPlans(retirement);
+  const plusTrial = await approvedPlusTrial(routing);
   const args = ['--git-dir=' + resolve(sourceRoot, '.git'), '--work-tree=' + await realpath(directory),
     'apply'];
   const patch = fileURLToPath(new URL('upstream-routing.patch', routingDirectory));
@@ -107,6 +123,10 @@ export async function applyApprovedRechargeRouting(directory) {
   const cardPlanPath = fileURLToPath(cardPlanPatch);
   await exec('git', [...args, '--check', cardPlanPath], { cwd: directory });
   await exec('git', [...args, cardPlanPath], { cwd: directory });
+  await verifyPatchPreimage(directory, plusTrial);
+  const plusTrialPath = fileURLToPath(plusTrialPatch);
+  await exec('git', [...args, '--check', plusTrialPath], { cwd: directory });
+  await exec('git', [...args, plusTrialPath], { cwd: directory });
 }
 
 function isDescendant(base, target) {
@@ -134,6 +154,7 @@ export async function verifyCodexdaichongSource(directory) {
   const returns = await approvedReturns(routing);
   const retirement = await approvedProviderRetirement(returns);
   const cardPlans = await approvedCardPlans(retirement);
+  const plusTrial = await approvedPlusTrial(routing);
   const { stdout } = await exec('git', ['-C', sourceRoot, 'ls-tree', '-rz', CODEXDAICHONG_REVISION], {
     maxBuffer: 8 * 1024 * 1024
   });
@@ -150,7 +171,10 @@ export async function verifyCodexdaichongSource(directory) {
     const previous = retirement.files[name]?.approved || returnFile?.approved || approved?.approved || original;
     const cardPlan = cardPlans.files[name];
     if (cardPlan && cardPlan.original !== previous) throw new Error('银行卡套餐补丁基准不符：' + name);
-    const expected = cardPlan?.approved || previous;
+    const afterCardPlans = cardPlan?.approved || previous;
+    const plusTrialFile = plusTrial.files[name];
+    if (plusTrialFile && plusTrialFile.original !== afterCardPlans) throw new Error('0 元试用补丁基准不符：' + name);
+    const expected = plusTrialFile?.approved || afterCardPlans;
     if (type !== 'blob' || !['100644', '100755', '120000'].includes(mode))
       throw new Error('锁定仓库包含不支持的文件类型');
     const path = resolve(destination, name);
@@ -169,11 +193,12 @@ export async function verifyCodexdaichongSource(directory) {
   }
   if (!files) throw new Error('锁定充值仓库没有可核验的源码');
   return { revision: CODEXDAICHONG_REVISION, files,
-    originalFiles: files - new Set([...routingFiles, ...Object.keys(returns.files), ...cardPlanFiles]).size,
+    originalFiles: files - new Set([...routingFiles, ...Object.keys(returns.files), ...cardPlanFiles, ...plusTrialFiles]).size,
     routingFiles: [...routingFiles], returnFiles: Object.keys(returns.files), returnPatchSha256: returns.patchSha256,
     routingPatchSha256: routing.patchSha256, providerRetirementFiles: [...providerRetirementFiles],
     providerRetirementPatchSha256: retirement.patchSha256, cardPlanFiles: [...cardPlanFiles],
-    cardPlanPatchSha256: cardPlans.patchSha256 };
+    cardPlanPatchSha256: cardPlans.patchSha256, plusTrialFiles: [...plusTrialFiles],
+    plusTrialPatchSha256: plusTrial.patchSha256 };
 }
 
 export async function prepareCodexdaichong(outputDir = resolve(runtimeRoot, 'codexdaichong')) {

@@ -1,0 +1,10 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "patchSha256": "5744993126bf1bc508a4d8002978e1b63fe2b80d23203ead12078c9c8fc3f726",
+  "files": {
+    "pricing-checkout.js": {
+      "original": "17d5982142eec44b1d9aa56adff5db50617df9fe",
+      "approved": "1daed6e9ef154ffd7dc26e6a2575fac7c1a4d577"
+    }
+  }
+}
