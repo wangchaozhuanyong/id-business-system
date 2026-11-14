@@ -531,6 +531,7 @@
     } else content = '<p class="inline-notice" role="status">正在读取恢复详情…</p>';
     const fields = record ? auditRecordFields(record) : [];
     if (preview?.targetName) fields.push(['当前资料姓名', preview.targetName]);
+    if (preview?.targetLabel) fields.push(['账号 / 邮箱', preview.targetLabel]);
     if (preview?.archiveReason) fields.push(['归档原因', preview.archiveReason]);
     region.innerHTML = (fields.length ? auditDefinition(fields) : '') + content;
     region.setAttribute('aria-busy', String(!preview && !detail.error));

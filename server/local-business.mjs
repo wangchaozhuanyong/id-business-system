@@ -6,13 +6,17 @@ import { describeWriteOperation, checkWriteReceipt, WriteOperationError } from '
 import { checkCustomerContactDuplicate, mergeContactWrite } from './contact-write.mjs';
 import {
   captureContactRecovery, contactRecoveryAction, contactRecoveryLabel, contactRecoveryPreview,
-  contactRecoveryReasons, contactRecoveryWindow, prepareContactRecovery, recoveryReasonOptions
+  contactRecoveryWindow, prepareContactRecovery, recoveryReasonOptions
 } from './contact-recovery.mjs';
 import {
   archiveAction, archiveDomain, archivePreview, archiveReasons, archiveReceiptDomain, archiveRestoreProblem,
   checkInventoryArchiveChanges, InventoryArchiveError, prepareArchive, restoreArchiveAction, restoreArchivedInventory,
   restoreArchiveReasons
 } from './inventory-archive.mjs';
+import {
+  captureInventoryHealthRecovery, inventoryHealthAction, inventoryHealthRecoveryLabel, inventoryHealthRecoveryPreview,
+  inventoryHealthRecoveryReasons, prepareInventoryHealthRecovery, recordInventoryHealthRecovery, restoreInventoryHealthAction
+} from './inventory-health-recovery.mjs';
 import { captureOrderAudit, checkOrderReversal, isOrderReversalAction, orderAuditDecision } from './order-recovery.mjs';
 import { applyDocumentDelta, documentDelta, validDocumentDelta } from '../modules/data/document-delta.mjs';
 import { recordFingerprintInput, validRecordEdit } from '../modules/data/record-edit.mjs';
@@ -145,7 +149,7 @@ const inventoryActions = {
   inventory_return: '归还库存',
   inventory_use: '确认使用库存',
   inventory_import: '批量导入库存',
-  inventory_health_change: '变更库存状态',
+  [inventoryHealthAction]: '变更库存状态',
   inventory_undo: '撤回库存修改',
   inventory_delete: '删除库存资料',
   inventory_table_settings: '保存库存表设置',
@@ -349,6 +353,7 @@ const auditActionLabels = {
   site_export: '下载资料',
   [archiveAction]: '归档库存资料',
   [restoreArchiveAction]: '恢复归档资料',
+  [restoreInventoryHealthAction]: inventoryHealthRecoveryLabel,
   ...renewalAuditLabels,
   statistics_currency_save: '修改统计币种'
 };
@@ -358,6 +363,7 @@ const auditDate = new Intl.DateTimeFormat('sv-SE', {
   timeStyle: 'medium'
 });
 const recoveryDocument = id => 'contact-recovery:' + id;
+const inventoryHealthRecoveryDocument = id => 'inventory-health-recovery:' + id;
 const recoveryCutoff = now => new Date(now.getTime() - contactRecoveryWindow).toISOString();
 
 function requireRecoveryManager(actor) {
@@ -1006,8 +1012,9 @@ export function createLocalBusinessStore(databasePath) {
   const auditById = db.prepare('SELECT id, at, domain, action, summary, version FROM business_audit WHERE id = ?');
   const recoveryAudit = db.prepare(`
     SELECT id, at, domain, action, summary, version FROM business_audit
-    WHERE ((at >= ? AND domain = 'commerce')
-          OR (domain = 'inventory' AND action IN ('inventory_archive', 'inventory_restore_archive')))
+    WHERE ((at >= ? AND (domain = 'commerce' OR (domain = 'inventory' AND
+             action IN ('${inventoryHealthAction}', '${restoreInventoryHealthAction}'))))
+          OR (domain = 'inventory' AND action IN ('${archiveAction}', '${restoreArchiveAction}')))
       AND json_extract(CASE WHEN json_valid(summary) THEN summary END, '$.recoveryKind') IN ('customer', 'tenant', 'account', 'mailbox', 'order')
     ORDER BY id DESC
   `);
@@ -1122,7 +1129,12 @@ export function createLocalBusinessStore(databasePath) {
       .update(recordFingerprintInput('commerce', row)).digest('hex');
   }
 
-  function readContactAudit(id) {
+  function inventoryHealthFingerprint(row) {
+    return createHmac('sha256', key).update('inventory-health-recovery\0')
+      .update(recordFingerprintInput('inventory', row)).digest('hex');
+  }
+
+  function readRecoveryAudit(id) {
     const row = auditById.get(Number(id));
     if (!row) throw new LocalDataError(404, '操作记录不存在，请刷新日志');
     return readAuditRow(row);
@@ -1141,12 +1153,17 @@ export function createLocalBusinessStore(databasePath) {
     }
   }
 
-  function requireRecentContactAudit(row, now) {
+  function requireRecentRecoveryAudit(row, now) {
     if (row.at < recoveryCutoff(now)) throw new LocalDataError(409, '这条操作已超过 30 天的撤回期限。');
   }
 
   function archiveDependencies() {
     return [readDocument('commerce').data, mailboxPoolItems(readDocument(managedMailboxDomain))];
+  }
+
+  function prepareStockRecovery(inventory, entry) {
+    return prepareInventoryHealthRecovery(inventory, entry, inventoryHealthFingerprint, ...archiveDependencies(),
+      readDocument(subscriptionDomain).data?.owners);
   }
 
   function recordInventoryArchive(command, actor, operationId) {
@@ -1212,7 +1229,7 @@ export function createLocalBusinessStore(databasePath) {
     const logged = log.run(now.toISOString(), 'inventory', restoreArchiveAction,
       auditSummary(auditActionLabels[restoreArchiveAction], actor, row.targetId,
         { recoveryKind: row.recoveryKind, recoveryOf: originalId }), version);
-    const receipt = { status: 'receipt', record: auditPageItem(readContactAudit(String(logged.lastInsertRowid))),
+    const receipt = { status: 'receipt', record: auditPageItem(readRecoveryAudit(String(logged.lastInsertRowid))),
       originalId, restoreInventory: true, reason: restoreArchiveReasons[command.reason] };
     putDocument('inventory', version, restoreArchivedInventory(entry, snapshot.data, actor, now));
     putDocument(domain, entryVersion + 1, { restored: true });
@@ -1220,8 +1237,8 @@ export function createLocalBusinessStore(databasePath) {
     return receipt;
   }
 
-  function previewContactRecovery(id) {
-    const auditRow = readContactAudit(id);
+  function previewAuditRecovery(id) {
+    const auditRow = readRecoveryAudit(id);
     const record = auditPageItem(auditRow);
     const unavailable = message => ({ status: 'unavailable', record, message });
     if (!auditRow.recoveryKind) return unavailable('这条操作没有可恢复的资料。');
@@ -1236,7 +1253,9 @@ export function createLocalBusinessStore(databasePath) {
       return { status: 'business', record, ...(order && { order: { id: order.id, ...decision } }),
         ...(decision.message && { message: decision.message }) };
     }
-    const { data: entry } = readDocument(recoveryDocument(auditRow.recoveryOf || id));
+    const stock = [inventoryHealthAction, restoreInventoryHealthAction].includes(auditRow.action);
+    const document = stock ? inventoryHealthRecoveryDocument : recoveryDocument;
+    const { data: entry } = readDocument(document(auditRow.recoveryOf || id));
     if (!entry) return unavailable('找不到这条操作的恢复资料，请到原业务页面核对。');
     if (auditRow.recoveryOf) {
       if (entry.receipt?.record.id === id) return entry.receipt;
@@ -1244,7 +1263,12 @@ export function createLocalBusinessStore(databasePath) {
     }
     if (entry.receipt) return { status: 'recovered', record, receipt: entry.receipt };
     try {
-      requireRecentContactAudit(auditRow, new Date());
+      requireRecentRecoveryAudit(auditRow, new Date());
+      if (stock) {
+        const { prior } = prepareStockRecovery(readDocument('inventory').data, entry);
+        return { status: 'available', record, version: entry.version, restoreInventory: true,
+          ...inventoryHealthRecoveryPreview(entry, prior), reasons: Object.entries(inventoryHealthRecoveryReasons) };
+      }
       const { prior } = prepareContactRecovery(readDocument('commerce').data, entry, contactFingerprint, validateRecoveredContact);
       return { status: 'available', record, targetName: prior.name, version: entry.version, changes: contactRecoveryPreview(entry),
         reasons: recoveryReasonOptions(auditRow.action) };
@@ -1255,51 +1279,60 @@ export function createLocalBusinessStore(databasePath) {
     }
   }
 
-  function recoverContact(id, command, actor, operationId) {
+  function recoverAuditOperation(id, command, actor, operationId) {
     if (!command || typeof command !== 'object' || Array.isArray(command) || Object.keys(command).length !== 2 ||
         !Number.isSafeInteger(command.version) || command.version < 1 ||
         typeof command.reason !== 'string' || !operationId)
       throw new LocalDataError(400, '请预览原操作，选择撤回原因后再提交');
     return writeTransaction(() => {
-      const auditRow = readContactAudit(id);
+      const auditRow = readRecoveryAudit(id);
       if (auditRow.recoveryKind === 'order') throw new LocalDataError(409, '请从原订单的专用业务入口处理。');
-      const restoringInventory = auditRow.action === archiveAction;
-      const operation = describeWriteOperation(operationId, actor,
-        { action: restoringInventory ? restoreArchiveAction : contactRecoveryAction, id, ...command });
+      const archived = auditRow.action === archiveAction;
+      const stock = auditRow.action === inventoryHealthAction;
+      const action = archived ? restoreArchiveAction : stock ? restoreInventoryHealthAction : contactRecoveryAction;
+      const operation = describeWriteOperation(operationId, actor, { action, id, ...command });
       const previousReceipt = readDocument(operation.domain).data;
       if (checkWriteReceipt(previousReceipt, operation)) return previousReceipt.result;
-      if (restoringInventory) {
+      if (archived) {
         const result = restoreArchive(auditRow, command, actor);
         putDocument(operation.domain, 1, { fingerprint: operation.fingerprint, domains: ['inventory'], result });
         return result;
       }
-      if (!['customer', 'tenant'].includes(auditRow.recoveryKind) || auditRow.recoveryOf)
+      const kinds = stock ? ['account', 'mailbox'] : ['customer', 'tenant'];
+      if (!kinds.includes(auditRow.recoveryKind) || auditRow.recoveryOf)
         throw new LocalDataError(409, '这条操作没有可恢复的资料。');
-      const historyDomain = recoveryDocument(id);
+      const historyDomain = stock ? inventoryHealthRecoveryDocument(id) : recoveryDocument(id);
       const history = readDocument(historyDomain);
       const entry = history.data;
       if (!entry || entry.version !== command.version)
         throw new LocalDataError(409, '恢复资料已变化，请重新预览。');
       if (entry.receipt) throw new LocalDataError(409, '这条操作已撤回，请查看恢复回执。');
       const now = new Date();
-      requireRecentContactAudit(auditRow, now);
-      if (!recoveryReasonOptions(auditRow.action).some(([code]) => code === command.reason))
+      requireRecentRecoveryAudit(auditRow, now);
+      const reasons = stock ? Object.entries(inventoryHealthRecoveryReasons) : recoveryReasonOptions(auditRow.action);
+      const reason = reasons.find(([code]) => code === command.reason)?.[1];
+      if (!reason)
         throw new LocalDataError(400, '请选择适用于这条操作的撤回原因');
-      const { version, data: previous } = readDocument('commerce');
-      const { data, next } = prepareContactRecovery(previous, entry, contactFingerprint, validateRecoveredContact);
-      const at = now.toISOString();
-      const businessTime = toV2DateTimeInput(now).replace('T', ' ');
-      Object.assign(next, { version: next.version + 1, updatedAt: businessTime, updatedById: actor.id, updatedBy: actor.name });
-      const summary = auditSummary(contactRecoveryLabel, actor, entry.targetId, { recoveryKind: entry.kind, recoveryOf: id });
-      const logged = log.run(at, 'commerce', contactRecoveryAction, summary, version + 1);
+      const domain = stock ? 'inventory' : 'commerce';
+      const label = stock ? inventoryHealthRecoveryLabel : contactRecoveryLabel;
+      const { version, data: previous } = readDocument(domain);
+      const { data, next } = stock ? prepareStockRecovery(previous, entry)
+        : prepareContactRecovery(previous, entry, contactFingerprint, validateRecoveredContact);
+      const summary = auditSummary(label, actor, entry.targetId, { recoveryKind: entry.kind, recoveryOf: id });
+      const logged = log.run(now.toISOString(), domain, action, summary, version + 1);
       const receiptId = String(logged.lastInsertRowid);
-      data.logs = [{ id: 'contact-recovery-' + receiptId, type: contactRecoveryLabel, entityId: entry.targetId,
-        detail: '撤回原操作 #' + id, at: businessTime, actorId: actor.id, actor: actor.name }, ...previous.logs];
-      const receipt = { status: 'receipt', record: auditPageItem(readContactAudit(receiptId)), originalId: id,
-        reason: contactRecoveryReasons[command.reason] };
-      putDocument('commerce', version + 1, data);
+      if (stock) recordInventoryHealthRecovery(next, actor, now, reason, id);
+      else {
+        const businessTime = toV2DateTimeInput(now).replace('T', ' ');
+        Object.assign(next, { version: next.version + 1, updatedAt: businessTime, updatedById: actor.id, updatedBy: actor.name });
+        data.logs = [{ id: 'contact-recovery-' + receiptId, type: label, entityId: entry.targetId,
+          detail: '撤回原操作 #' + id, at: businessTime, actorId: actor.id, actor: actor.name }, ...previous.logs];
+      }
+      const receipt = { status: 'receipt', record: auditPageItem(readRecoveryAudit(receiptId)), originalId: id,
+        reason, ...(stock && { restoreInventory: true }) };
+      putDocument(domain, version + 1, data);
       putDocument(historyDomain, history.version + 1, { version: entry.version, receipt });
-      putDocument(operation.domain, 1, { fingerprint: operation.fingerprint, domains: ['commerce'], result: receipt });
+      putDocument(operation.domain, 1, { fingerprint: operation.fingerprint, domains: [domain], result: receipt });
       return receipt;
     });
   }
@@ -2772,9 +2805,7 @@ export function createLocalBusinessStore(databasePath) {
               priorCommerce?.orders || [], commerce.orders, now, tenantCardArchive);
           } catch (error) { throw new LocalDataError(409, error.message); }
         }
-        const recoverable = actor?.id && !handoff && writes.length === 1 && writes[0].domain === 'commerce' &&
-          isDeepStrictEqual(existingTenantCards, nextTenantCards)
-          ? captureContactRecovery(priorCommerce, commerce, writes[0].action, contactFingerprint) : undefined;
+        const canCaptureRecovery = actor?.id && !handoff && writes.length === 1;
         const result = [];
         for (const { domain, version, data, action } of writes) {
           const next = version + 1;
@@ -2786,11 +2817,20 @@ export function createLocalBusinessStore(databasePath) {
             for (const target of primaryTargets)
               log.run(now, domain, target.action, auditSummary(inventoryActions[target.action], actor, target.id), next);
           } else {
+            const stock = domain === 'inventory' && action === inventoryHealthAction;
+            let recoverable;
+            if (canCaptureRecovery && stock)
+              recoverable = captureInventoryHealthRecovery(priorInventory, data, inventoryHealthFingerprint);
+            else if (canCaptureRecovery && domain === 'commerce' && isDeepStrictEqual(existingTenantCards, nextTenantCards))
+              recoverable = captureContactRecovery(priorCommerce, commerce, action, contactFingerprint);
             const orderRecord = actor?.id && domain === 'commerce' && captureOrderAudit(priorCommerce, data, action);
             const summary = auditSummary(label, actor, recoverable?.targetId ?? orderRecord?.targetId ?? recordEdit?.edit.id,
               recoverable ? { recoveryKind: recoverable.kind } : orderRecord || undefined);
             const logged = log.run(now, domain, action, summary, next);
-            if (recoverable) putDocument(recoveryDocument(logged.lastInsertRowid), 1, recoverable);
+            if (recoverable) {
+              const document = stock ? inventoryHealthRecoveryDocument : recoveryDocument;
+              putDocument(document(logged.lastInsertRowid), 1, recoverable);
+            }
           }
           const review = domain === 'inventory'
             ? usageReviewRows(inspectInventoryUsage(inventory, commerce, Date.parse(now)))
@@ -3226,13 +3266,13 @@ export function createLocalBusinessStore(databasePath) {
       const rows = search.get('view') === 'recovery' ? recoveryAudit.all(recoveryCutoff(new Date())) : audit.all();
       return pageAuditRows(rows.map(readAuditRow), search);
     },
-    previewContactRecovery(id, actor) {
+    previewAuditRecovery(id, actor) {
       requireRecoveryManager(actor);
-      return previewContactRecovery(id);
+      return previewAuditRecovery(id);
     },
-    recoverContact(id, command, actor, operationId) {
+    recoverAuditOperation(id, command, actor, operationId) {
       requireRecoveryManager(actor);
-      return recoverContact(id, command, actor, operationId);
+      return recoverAuditOperation(id, command, actor, operationId);
     },
     previewInventoryArchive(id, actor) {
       requireRecoveryManager(actor);
@@ -3324,11 +3364,11 @@ export async function handleLocalBusiness(
       response.setHeader('Cache-Control', 'private, no-store');
       const id = /^audit\/([1-9]\d*)\/recovery$/.exec(domain)?.[1];
       if (!id || !Number.isSafeInteger(Number(id))) throw new LocalDataError(400, '操作记录编号无效');
-      if (request.method === 'GET') return json(response, 200, store.previewContactRecovery(id, actor));
+      if (request.method === 'GET') return json(response, 200, store.previewAuditRecovery(id, actor));
       if (request.method !== 'POST') throw new LocalDataError(405, '此接口只支持预览或撤回操作');
       if (request.headers.origin !== origin) throw new LocalDataError(403, '请从当前页面操作');
       if (authorizeSensitive && !authorizeSensitive(request)) return sendSensitiveConfirmation(response);
-      return json(response, 200, store.recoverContact(id, await readJson(request, 4096), actor, request.headers['x-id-operation']));
+      return json(response, 200, store.recoverAuditOperation(id, await readJson(request, 4096), actor, request.headers['x-id-operation']));
     }
     if (domain === 'inventory/archive') {
       requireRecoveryManager(actor);
