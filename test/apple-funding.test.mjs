@@ -62,9 +62,11 @@ test('按地区预算筛选，占用、取消与正式绑定受事务保护；�
   assert.throws(() => save(write('commerce', commerce([first, duplicate]), '新增独立订单')), /占用/);
   assert.throws(() => save(write('commerce', commerce([first, { ...duplicate, email: first.email, appleIdId: 'apple-b', customerId: 'one' }]),
     '新增独立订单')), /已有待付款订单/);
-  assert.throws(() => save(write('commerce', commerce([{ ...first, cancelled: true }]), '业务撤单')), /未付款/);
-  const cancelled = { ...first, cancelled: true, version: 2,
-    cancellationEvents: [{ id: 'cancel-a', action: '业务撤单', reason: '已核对', appleUnpaidConfirmed: true }] };
+  const pending = store.load('commerce').data.orders[0];
+  const cancelled = { ...pending, cancelled: true, version: 2,
+    cancellationEvents: [{ id: 'cancel-a', action: '业务撤单', reason: '测试撤单' }] };
+  assert.throws(() => save(write('commerce', commerce([cancelled]), '业务撤单')), /未付款/);
+  cancelled.cancellationEvents[0].appleUnpaidConfirmed = true;
   save(write('commerce', commerce([cancelled]), '业务撤单'));
   save(write('commerce', commerce([cancelled, duplicate]), '新增独立订单'));
   const ledger = store.load('appleBalance').data;

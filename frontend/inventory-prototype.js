@@ -82,6 +82,7 @@
   const usageReview = new Map();
   let accountAssetContext = null;
   let accountImportContext = null;
+  let archiveReview;
   let locationSettingsReturn = null;
   let importFileReadVersion = 0;
   const claudeHistoryStates = { opened: '已开通', aging: '养号中', dead: '死号' };
@@ -420,7 +421,6 @@
     确认批量导入: 'inventory_import',
     确认账号状态变化: 'inventory_health_change',
     撤回最近资料修改: 'inventory_undo',
-    '永久删除 1 条库存资料': 'inventory_delete',
     确认本表设置: 'inventory_table_settings',
     确认登记注册结果: 'inventory_registration_result'
   };
@@ -2566,8 +2566,108 @@
     const queryActions = mailbox && !mailbox.authorizationPending && !mailbox.associationConflict
       ? button('仅复制当前码', 'inventory-google-current-code', '', 'copy', `data-id="${esc(id)}"`) +
         button('重置查询码', 'inventory-google-query-reset', '', 'refresh', `data-id="${esc(id)}" ${delivery.canRotate(mailbox) && asset.health === 'normal' && asset.status === '正常' ? '' : 'disabled'}`) : '';
-    api.openActionMenu(node, queryActions + mailboxPlatformButton(asset) + `<div class="property-list"><div class="property-row"><span>邮箱 / 账号</span><strong>${esc(displayIdentity(asset))}</strong></div></div><div class="guide-list"><div class="guide-item"><h3>账号状态</h3><div class="toolbar">${asset.health === 'normal' ? button('移入死号', 'inventory-health', 'danger', '', `data-id="${id}" data-health="dead"`) + button('移入解封中', 'inventory-health', '', '', `data-id="${id}" data-health="unlocking"`) : button('恢复资料', 'inventory-health', '', 'return', `data-id="${id}" data-health="normal"`)}</div></div><div class="guide-item"><h3>使用与归还</h3><div class="toolbar">${accountLifecycleActions(asset)}${asset.inventoryState === 'claimed' ? button('归还资料', 'inventory-return-asset', '', 'return', `data-id="${id}"`) : ''}${asset.type === 'relay' || asset.type === 'google' || asset.type === 'apple' ? button('登记注册结果', 'inventory-register', '', 'play', `data-id="${id}"`) : ''}${button('查看记录', 'inventory-detail', '', 'orders', `data-id="${id}"`)}</div></div><div class="guide-item"><h3>资料更正</h3><div class="toolbar">${button('撤回最近修改', 'inventory-undo', '', 'return', `data-id="${id}" ${undo.has(id) ? '' : 'disabled'}`)}${asset.health === 'dead' && asset.type !== 'relay' ? button('永久删除', 'inventory-delete', 'danger', '', `data-id="${id}"`) : ''}</div></div>${asset.type === 'relay' ? `<div class="guide-item"><h3>邮箱操作</h3><div class="toolbar">${button('查看邮件', 'inventory-mail-read', '', 'mail', `data-id="${id}"`)}${button('复制查询码', 'inventory-copy-query', '', 'copy', `data-id="${id}"`)}</div></div>` : ''}</div>`);
+    api.openActionMenu(node, queryActions + mailboxPlatformButton(asset) + `<div class="property-list"><div class="property-row"><span>邮箱 / 账号</span><strong>${esc(displayIdentity(asset))}</strong></div></div><div class="guide-list"><div class="guide-item"><h3>账号状态</h3><div class="toolbar">${asset.health === 'normal' ? button('移入死号', 'inventory-health', 'danger', '', `data-id="${id}" data-health="dead"`) + button('移入解封中', 'inventory-health', '', '', `data-id="${id}" data-health="unlocking"`) : button('恢复资料', 'inventory-health', '', 'return', `data-id="${id}" data-health="normal"`)}</div></div><div class="guide-item"><h3>使用与归还</h3><div class="toolbar">${accountLifecycleActions(asset)}${asset.inventoryState === 'claimed' ? button('归还资料', 'inventory-return-asset', '', 'return', `data-id="${id}"`) : ''}${asset.type === 'relay' || asset.type === 'google' || asset.type === 'apple' ? button('登记注册结果', 'inventory-register', '', 'play', `data-id="${id}"`) : ''}${button('查看记录', 'inventory-detail', '', 'orders', `data-id="${id}"`)}</div></div><div class="guide-item"><h3>资料更正</h3><div class="toolbar">${button('撤回最近修改', 'inventory-undo', '', 'return', `data-id="${id}" ${undo.has(id) ? '' : 'disabled'}`)}${canReviewArchive(asset) ? button('归档资料', 'inventory-archive', '', '', `data-id="${esc(id)}"`) : ''}</div></div>${asset.type === 'relay' ? `<div class="guide-item"><h3>邮箱操作</h3><div class="toolbar">${button('查看邮件', 'inventory-mail-read', '', 'mail', `data-id="${id}"`)}${button('复制查询码', 'inventory-copy-query', '', 'copy', `data-id="${id}"`)}</div></div>` : ''}</div>`);
   }
+  function canReviewArchive(asset) {
+    return localData?.authRequired && admin() && asset?.inventoryState === 'available' &&
+      (stockType(asset.type) || ['google', 'microsoft'].includes(asset.type)) && asset.type !== 'apple';
+  }
+
+  function openArchiveReview(id) {
+    if (!canReviewArchive(assetById(id))) return;
+    showDrawer('归档库存资料', '归档资料退出库存。可从「系统设置 → 操作记录」恢复原状态。',
+      '<div class="stack" data-inventory-archive-review></div>', button('关闭', 'drawer-close'));
+    const drawer = document.getElementById('drawer');
+    const review = { id, actor: currentActor().id, route: api.state.route,
+      region: drawer.querySelector('[data-inventory-archive-review]'), controller: new AbortController() };
+    archiveReview = review;
+    drawer.addEventListener('id-view-deactivate', () => {
+      review.controller.abort();
+      if (archiveReview === review) archiveReview = undefined;
+    }, { once: true });
+    void loadArchiveReview(review);
+  }
+
+  function currentArchiveReview(review) {
+    return archiveReview === review && review.region.isConnected && review.region.closest('dialog')?.open &&
+      currentActor().id === review.actor && api.state.route === review.route;
+  }
+
+  async function loadArchiveReview(review) {
+    if (!currentArchiveReview(review)) return;
+    const region = review.region;
+    region.innerHTML = '<p class="inline-notice" role="status">正在核对库存资料…</p>';
+    try {
+      const preview = await localData.inventoryArchivePreview(review.id, review.controller.signal);
+      if (!currentArchiveReview(review)) return;
+      review.preview = preview;
+      const health = ({ normal: '正常', dead: '死号', unlocking: '解封中' })[preview.health] || preview.health;
+      region.innerHTML = `<dl class="definition-list"><dt>资料</dt><dd>${esc(preview.identity || preview.id)}</dd>
+        <dt>健康状态</dt><dd>${esc(health)}</dd></dl>` +
+        (preview.status === 'available' ? `<form id="inventory-archive-form" class="stack">
+          ${field('归档原因', 'inventory-archive-reason',
+            select('inventory-archive-reason', [['', '请选择原因'], ...preview.reasons], review.reason || ''), true)}
+          <p class="inline-notice warning" role="alert" data-archive-error hidden></p>
+          <div class="form-footer"><button type="submit" class="button primary">确认归档</button></div></form>` :
+          `<p class="inline-notice" role="status">${esc(preview.message)}</p>`);
+    } catch (error) {
+      if (!currentArchiveReview(review)) return;
+      region.innerHTML = `<p class="inline-notice warning" role="alert">${esc(error.message || '归档预览读取失败。')}</p>` +
+        button('重新核对', 'inventory-archive-retry');
+    }
+  }
+
+  async function submitArchive(form) {
+    const review = archiveReview;
+    if (!review || !currentArchiveReview(review) || review.busy || review.preview?.status !== 'available') return;
+    const reason = form.elements.namedItem('inventory-archive-reason');
+    const notice = form.querySelector('[data-archive-error]');
+    if (!reason.value) {
+      notice.textContent = '请选择归档原因。';
+      notice.hidden = false;
+      reason.focus();
+      return;
+    }
+    const { id, version, assetVersion } = review.preview;
+    const attempt = review.attempt ||= { command: { id, version, assetVersion, reason: reason.value }, id: crypto.randomUUID() };
+    review.reason = attempt.command.reason;
+    review.busy = reason.disabled = true;
+    notice.hidden = true;
+    const submit = form.querySelector('button[type="submit"]');
+    const feedback = api.beginActionFeedback(submit, '正在归档库存资料…');
+    try {
+      const receipt = await localData.archiveInventory(attempt.command, attempt.id, review.controller.signal);
+      if (!currentArchiveReview(review)) return;
+      const module = stockType(review.preview.type) ? 'account' : 'mailbox';
+      review.region.innerHTML = `<p class="inline-notice" role="status">资料已归档。</p>${
+        button('查看归档记录', 'inventory-archive-record', '', '', `data-id="${esc(receipt.auditId)}" data-module="${module}"`)}`;
+      api.notify('库存资料已归档');
+      if (pagedInventory()) void stockPage.read(true);
+      else void readLocalInventory().then(ok => { if (ok && currentArchiveReview(review)) api.render(); });
+    } catch (error) {
+      if (!currentArchiveReview(review)) return;
+      if (error.status === 409 && error.code !== 'DATA_SOURCE_CHANGED') {
+        review.attempt = undefined;
+        await loadArchiveReview(review);
+        const updated = review.region.querySelector('[data-archive-error]');
+        if (currentArchiveReview(review) && updated) {
+          updated.textContent = '库存已变化，请核对新预览后再提交。';
+          updated.hidden = false;
+        }
+      } else {
+        const uncertain = !error.status || error.status >= 500;
+        if (!uncertain) review.attempt = undefined;
+        notice.textContent = uncertain ? '暂时无法确认归档结果，可重试核对原请求。' : error.message;
+        notice.hidden = false;
+        submit.textContent = uncertain ? '重试归档' : '确认归档';
+      }
+    } finally {
+      review.busy = false;
+      if (!review.attempt) reason.disabled = false;
+      feedback.finish();
+    }
+  }
+
   function googleMailboxDelivery(asset) {
     return pagedInventory()
       ? stockPage.view().result?.mailboxPool?.items.find(row => row.email.trim().toLowerCase() === asset.email?.trim().toLowerCase())
@@ -4378,6 +4478,7 @@
         }
         const importId = uid('IMPORT'),
           createdAt = inventoryNow();
+        const assetIds = new Map();
         for (const row of results) {
           const asset = normalize({
             ...(row.fields || {}),
@@ -4401,6 +4502,7 @@
             used: false
           });
           collection(stockType(row.type) ? 'account' : 'mail').unshift(asset);
+          assetIds.set(row.id, asset.id);
           log(asset, '导入资料', importId);
         }
         const importedTypes = [...new Set(results.map((row) => row.type))];
@@ -4417,6 +4519,7 @@
           status: '已导入',
           results: results.map(({ id: rowId, line, email, type: rowType, registered }) => ({
             id: rowId,
+            assetId: assetIds.get(rowId),
             line,
             email: email || results.find(row => row.id === rowId)?.xHandle || '',
             type: rowType,
@@ -4663,46 +4766,17 @@
           }
         );
     } else if (action === 'inventory-delete') {
+      // An older view may still dispatch this action. Only the reviewed paths can remove stock.
       const asset = assetById(id);
-      if (!asset) return true;
-      if (stockRegistration(asset) && registrationAddress(asset.email)) {
-        api.notify('已登记的注册邮箱和原账号必须保留');
-        return true;
-      }
-      if (asset.type === 'relay') {
-        api.notify('隐藏邮箱需在专用管理中核对主邮箱、邮件与历史引用后移除');
-        api.modules.appleRelay?.openAliasDetail(id);
-        return true;
-      }
-      const deletionBlocked = () =>
-        assetById(id) !== asset ||
-        asset.inventoryState !== 'available' ||
-        asset.usageLinks.length ||
-        batches.some((batch) => batch.items.some((item) => item.assetId === id)) ||
-        (asset.type === 'apple' &&
-          (api.modules.appleBalance?.entries(id).length ||
-            api.money.compare(api.modules.appleBalance?.get(id)?.balance || '0', '0') !== 0));
-      if (deletionBlocked())
-        api.notify('资料存在使用、提取或余额台账，禁止永久删除；可冻结资料并保留历史');
-      else
-        confirmInventoryChange(
-          localData ? '永久删除 1 条库存资料' : '永久删除 1 条演示资料',
-          localData
-            ? `将永久移除 ${asset.email}，请核对所选资料。`
-            : `将移除 ${asset.email}，此操作仅影响原型内存；实际系统仍需独立的影响核验。`,
-          () => {
-            if (deletionBlocked()) {
-              api.notify('确认期间资料或余额台账已变化，禁止永久删除');
-              return;
-            }
-            const data = isAccount(asset) ? accounts : mailboxes;
-            data.splice(data.indexOf(asset), 1);
-            return () => {
-              finishDrawer();
-              api.render();
-            };
-          }
-        );
+      if (asset?.type === 'relay') api.modules.appleRelay?.openAliasDetail(id);
+      else if (asset?.type === 'apple') api.notify('苹果 ID 的余额台账需从专用入口核对。');
+      else if (asset) openArchiveReview(id);
+    } else if (action === 'inventory-archive') {
+      openArchiveReview(id);
+    } else if (action === 'inventory-archive-record') {
+      api.modules.operations?.openRecoveryRecord(id, node.dataset.module);
+    } else if (action === 'inventory-archive-retry' && archiveReview) {
+      void loadArchiveReview(archiveReview);
     } else if (action === 'inventory-claude-history') openClaudeHistoryIntake();
     else if (action === 'inventory-claude-history-preview')
       void previewClaudeHistory(document.getElementById(claudeHistoryKey + '-form'));
@@ -4726,7 +4800,13 @@
         api.modules.appleRelay.openImportDetail(id);
         return true;
       }
-      if (record)
+      if (record) {
+        const legacy = new Map();
+        for (const asset of allAssets()) {
+          if (asset.importId !== record.id || !identityKey(asset)) continue;
+          const key = asset.type + ':' + identityKey(asset);
+          legacy.set(key, legacy.has(key) ? null : asset);
+        }
         showDrawer(
           '导入批次详情',
           '',
@@ -4743,7 +4823,13 @@
                       render: (row) => esc(row.registered || '未提供')
                     },
                     { id: 'createdAt', label: '录入时间' },
-                    { id: 'result', label: '导入结果' }
+                    { id: 'result', label: '导入结果' },
+                    { id: 'actions', label: '操作', action: true, render: row => {
+                      const asset = row.assetId ? assetById(row.assetId) :
+                        legacy.get(row.type + ':' + identityKey(row));
+                      return asset?.importId === record.id && canReviewArchive(asset)
+                        ? textAction('核对归档', 'inventory-archive', `data-id="${esc(asset.id)}"`) : '';
+                    } }
                   ],
                   record.results,
                   '',
@@ -4752,6 +4838,7 @@
               : empty('历史导入摘要', `${record.success} 条成功。演示历史不伪造逐行原始文件。`)),
           button('关闭', 'inventory-close')
         );
+      }
     } else if (action === 'inventory-purpose-settings') {
       openMailPurposeSettings();
     } else if (action === 'inventory-purpose-settings-reload') {
@@ -4834,6 +4921,7 @@
 
   function onSubmit(form) {
     if (!form.id.startsWith('inventory-')) return false;
+    if (form.id === 'inventory-archive-form') { void submitArchive(form); return true; }
     if (localData && (localInventoryState !== 'ready' || inventorySavePending)) {
       api.notify('库存尚未就绪或仍在保存，请稍候重试');
       return true;
@@ -5543,7 +5631,11 @@
     deactivate() {
       if (!pagedInventory()) stockPage?.clear();
     },
-    clearPageState() { stockPage?.clear(); },
+    clearPageState() {
+      stockPage?.clear();
+      archiveReview?.controller.abort();
+      archiveReview = undefined;
+    },
     beforeNavigate(route) {
       if (localData && api.usesSharedBusinessData(route) &&
           (!localData.authRequired || ['admin', 'super'].includes(currentActor().role))) initialize();

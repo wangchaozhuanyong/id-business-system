@@ -8176,18 +8176,15 @@
         const editedAt = now();
         const snapshot = {
           name,
-          ...contacts,
+          ...(tenant ? { phone } : { ...contacts, tags, source: value(raw, 'source') }),
           notes: value(raw, 'notes'),
-          ...(tenant ? current
-            ? Object.fromEntries(['ownerId', 'owner'].filter(key => Object.hasOwn(current, key)).map(key => [key, current[key]]))
-            : { ownerId, owner: ownerId === operator.id ? operator.name : orderOwners.find(row => row.id === ownerId)?.name || '' }
-            : { owner: value(raw, 'owner') }),
-          ...(tenant ? {} : { tags }),
+          ...(tenant && !current && {
+            ownerId, owner: ownerId === operator.id ? operator.name : orderOwners.find(row => row.id === ownerId)?.name || ''
+          }),
           ...(tenant && !current && initialCards.length ? { initialCards } : {}),
           updatedById: operator.id,
           updatedBy: operator.name,
-          updatedAt: editedAt,
-          source: value(raw, 'source')
+          updatedAt: editedAt
         };
         let saved;
         persistCommerce(
@@ -9235,10 +9232,16 @@
       ? '本单 Apple 余额台账在更正后已有退回或调整，不能按旧快照撤回；请登记独立更正并保留后续流水。'
       : '';
   }
-  function reversalEditor(id, mode) {
+  function reversalEditor(id, mode, expected) {
     const order = orders.find((row) => row.id === id);
     if (!order) return;
     const change = order.corrections.at(-1);
+    const eventId = mode === 'undo' ? change?.id : order.cancellationEvents?.at(-1)?.id;
+    if ((mode === 'cancel' && order.cancelled) || (mode === 'restore' && !order.cancelled) ||
+        (expected && (expected.version !== order.version || (expected.eventId && expected.eventId !== eventId)))) {
+      A.notify('订单已变化，请重新核对原操作');
+      return;
+    }
     if (mode === 'undo' && [historicalFeeKind, 'historical-card-backfill'].includes(change?.kind)) {
       A.notify('历史费率或原付款卡更正不能通过普通撤回覆盖，请保留更正记录');
       return;
@@ -9265,7 +9268,8 @@
     const title =
       mode === 'undo' ? '补偿撤销最近更正' : mode === 'restore' ? '恢复已撤业务订单' : '业务撤单';
     const key = `commerce-reversal:${mode}:${id}`,
-      draft = S.drafts.get(key) || {};
+      cachedDraft = S.drafts.get(key),
+      draft = cachedDraft && (!expected || String(cachedDraft['commerce-version']) === String(expected.version)) ? cachedDraft : {};
     A.openDrawer(
       title,
       '操作分别记账，保留付款、退款、原更正和资源引用，不自动归还库存。',
@@ -9300,6 +9304,7 @@
       });
       return;
     }
+    const route = S.route, actorId = currentOperator().id;
     const check = () => {
       if (
         orders.find((row) => row.id === order.id) !== order ||
@@ -9347,6 +9352,8 @@
           : '确认恢复业务订单',
       `${order.orderNo} · 原因：${reason}。${initial.changes?.length ? `Apple 余额补偿 ${display(initial.balanceBefore)} → ${display(initial.balanceAfter)} ${currencyLabel('USD')}。` : '不自动退回余额或库存。'}原付款、客户退款和全部流水保留。`,
       () => {
+        if (form.isConnected === false || form.closest?.('dialog')?.open === false ||
+            S.route !== route || currentOperator().id !== actorId) return;
         const conflict = check();
         if (conflict) {
           A.notify(conflict);
@@ -9422,7 +9429,9 @@
             cleanClose(form.dataset.commerceDraft);
             A.render();
           },
-          localData ? [result] : []
+          localData ? [result] : [],
+          undefined,
+          document.querySelector('button[form="commerce-reversal-form"][type="submit"]')
         );
       }
     );
@@ -11472,6 +11481,20 @@
   let requestedAccountLifecycle = false, accountLifecycleReading = false;
   A.modules.commerce = {
     openBankCardTypeAssignment, subscriptionCenterNav, renewalActions, subscriptionContacts,
+    async openAuditOrder(reference, reverse, node) {
+      if (!localData?.authRequired || !canManageOrders() || !reference?.id) return;
+      const actorId = currentOperator().id;
+      const current = () => S.route === 'settings/audit' && currentOperator().id === actorId && node.isConnected;
+      const result = await A.withActionFeedback(node, async () => {
+        if (!await loadLocalCommerce(true, true)) return false;
+        return true;
+      }, { pending: '正在读取原订单…', failure: '原订单暂时无法读取，请重试' });
+      if (!result || !current()) return;
+      if (!orders.some(row => row.id === reference.id)) { A.notify('原订单已不存在，请核对原操作'); return; }
+      if (reverse && ['cancel', 'restore', 'undo'].includes(reference.mode))
+        reversalEditor(reference.id, reference.mode, reference);
+      else orderDetail(reference.id, 'history');
+    },
     openCustomerOrder(result, orderId) {
       const values = result?.values;
       const product = values?.product;
