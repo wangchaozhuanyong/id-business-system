@@ -139,6 +139,24 @@ class EventReleaseTests(unittest.TestCase):
             self.assertEqual(output.splitlines()[-1], 'e' * 64)
             self.assertEqual(json.loads(output.splitlines()[2]), {'mailboxApiKey': 'synthetic'})
 
+    def test_partner_api_composes_with_existing_external_event_launchers(self):
+        admission = f'  state+=(-e "{remote.ADMISSION_ENV}")'
+        initial = (
+            f'{admission}\n'
+            '  cat "$CREDENTIALS_DIRECTORY/independent-vendure-integrations"\n'
+        )
+        previous = remote.wire_event_launcher(initial)
+        candidate = remote.wire_event_launcher(remote.wire_partner_api(previous, True))
+        self.assertEqual(candidate, remote.wire_event_launcher(remote.wire_partner_api(initial, True)))
+        later = remote.wire_event_launcher(remote.wire_partner_api(candidate, False))
+        self.assertEqual(later, candidate)
+        self.assertEqual(candidate.count(remote.PARTNER_API_ENV), 1)
+        for expected in ('independent-recharge-events', 'dst=/external-events-runtime,readonly',
+                         'dst=/run/recharge-mysql-ca.pem,readonly'):
+            self.assertEqual(candidate.count(expected), 1)
+            with self.assertRaisesRegex(remote.ReleaseError, 'unexpected_event_launcher'):
+                remote.wire_event_launcher(candidate.replace(expected, 'unexpected'))
+
     def test_entry_only_enables_cdc_for_live_and_rejects_partial_wiring(self):
         before = "const [toolConfig, vendureConfig] = input.split('\\n');\nconst service = await startPreview(44572, {\n  relayConfig,\n});\n"
         after = remote.wire_event_entry(before)
