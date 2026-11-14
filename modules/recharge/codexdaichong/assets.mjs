@@ -449,6 +449,25 @@ function adaptAdminScript(source, routingScript) {
   );
   source = replaceOne(source,
     '                            <button type="button" class="btn-delete" title="删除此任务记录" data-delete-task="${escapeHtml(l.id)}"><i data-lucide="trash-2"></i></button>\n', '');
+  source = replaceOne(source,
+    '                            <button type="button" class="btn-delete" title="删除此任务记录" data-delete-task="${jobKey}">\n' +
+      '                                <i data-lucide="trash-2"></i>\n' +
+      '                            </button>\n', '');
+  source = replaceOne(source,
+    `            const deleteBtn = event.target.closest('[data-delete-task]');
+            if (deleteBtn) {
+                event.preventDefault();
+                deleteAdminTaskLog(deleteBtn.getAttribute('data-delete-task') || '');
+                return;
+            }
+`, '');
+  source = replaceSection(source,
+    '\n        async function deleteAdminTaskLog(jobKey)', 'let cdkPlanTypeFilter = ', '');
+  source = replaceOne(source,
+    `                const data = await res.json();
+                if (!res.ok || !data.success) throw new Error(data.message || '解除失败');`,
+    `                const data = await res.json().catch(() => null);
+                if (!res.ok || !data?.success) throw new Error(data?.message || data?.error || '解除失败');`);
   source = replaceSection(
     source,
     'async function ensureAdminSession()',
@@ -1532,6 +1551,12 @@ function adaptHtml(source, kind) {
         : '<body data-recharge-view="' + kind + '"'
     );
   if (kind === 'admin') {
+    source = replaceOne(source,
+      '可在表格中删除单条任务记录。',
+      '已转入人工确认的任务，可在「待人工确认」中核对。');
+    source = replaceOne(source,
+      '失败后该卡密会被锁定，任何账号都不能再次使用；确认处理后在这里解除。',
+      '这里只显示已转入人工确认的记录。确认未扣款、未开通后，可解除锁定，让对应的兑换码重新提交。');
     source = replaceSection(source, '<!-- 第三方代充 API 设置 -->', '<div class="config-grid">', `
             <div class="panel">
                 <h2 class="panel-title">Orbitcard 卡片管理</h2>

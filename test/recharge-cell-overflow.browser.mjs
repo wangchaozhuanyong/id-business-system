@@ -27,10 +27,13 @@ test(
       status: 'failed'
     }));
     const holds = [{ id: 1, accountEmail: 'test@example.test', reason: message }];
+    const denied = '当前账号无权执行此操作';
+    let resolveAttempts = 0;
     let taskRows = tasks;
     await interceptDesign(page.context(), { localFixtures: {} });
     await page.route('**/integrations/codexdaichong/api/admin/**', (route) => {
-      const path = new URL(route.request().url()).pathname.split('/').pop();
+      const pathname = new URL(route.request().url()).pathname;
+      const path = pathname.split('/').pop();
       if (path === 'data')
         return route.fulfill({
           json: {
@@ -43,6 +46,12 @@ test(
       if (path === 'task-logs') return route.fulfill({ json: { tasks: taskRows } });
       if (path === 'activation-manual-holds')
         return route.fulfill({ json: { success: true, holds } });
+      if (pathname.endsWith('/activation-manual-holds/1/resolve') && route.request().method() === 'POST') {
+        resolveAttempts += 1;
+        if (resolveAttempts === 1) return route.fulfill({ status: 403, json: { error: denied } });
+        holds.length = 0;
+        return route.fulfill({ json: { success: true, message: '人工审核已解除，该卡密可重新提交' } });
+      }
       if (path === 'sessions')
         return route.fulfill({
           json: {
@@ -104,6 +113,8 @@ test(
 
     await select('logs');
     await frame.getByRole('button', { name: '停止自动刷新' }).click();
+    await frame.getByText('已转入人工确认的任务，可在「待人工确认」中核对。', { exact: false }).waitFor();
+    assert.equal(await frame.locator('#log_body [data-delete-task]').count(), 0);
     await checkRow('log_body');
     await frame.getByRole('button', { name: '下一页', exact: true }).click();
     assert.equal(await frame.locator('#log_body tr').count(), 3);
@@ -112,6 +123,9 @@ test(
 
     await select('sessions');
     await checkRow('session_body');
+    assert.equal(await frame.locator('#session_body [data-delete-task]').count(), 0);
+    assert.equal(await frame.locator('#session_body [data-copy-session]').count(), 1);
+    assert.equal(await frame.locator('#session_body [data-export-session]').count(), 1);
     await page.locator('#theme-toggle').click();
     await page.setViewportSize({ width: 390, height: 844 });
     await checkRow('session_body');
@@ -131,6 +145,17 @@ test(
     assert.equal(await dialog.locator('.recharge-cell-full-text').textContent(), message);
     await dialog.getByRole('button', { name: '关闭' }).click();
     await dialog.waitFor({ state: 'hidden' });
+
+    const resolveHold = frame.getByRole('button', { name: '解除', exact: true });
+    const confirmHold = frame.locator('#admin_confirm_ok');
+    await resolveHold.click();
+    await confirmHold.click();
+    await frame.locator('#message_container').getByText(denied, { exact: true }).waitFor();
+    await resolveHold.click();
+    await confirmHold.click();
+    await frame.getByText('暂无待人工确认记录', { exact: true }).waitFor();
+    assert.equal(resolveAttempts, 2);
+
     await frame.getByRole('tab', { name: '任务管理', exact: true }).click();
     taskRows = [];
     await frame.getByRole('button', { name: '立即刷新' }).click();
