@@ -876,24 +876,25 @@ def release_website(plan):
     if (source / "server/site-management.mjs").is_file():
         write_website_version(source, sha)
     backup = prepare_backup_recovery(source, ops, base, sha)
-    with backup as install_recovery, (core.cutover() if core else nullcontext()) as native:
+    with backup as install_recovery:
         install_backup_monitoring(source, sha)
-        adapter = switch_adapter(plan, source, ops, native) if native else (
-            switch_adapter(plan, source, ops) if include_adapter else None)
-        require_main(sha)
-        require(digest(DROP) == before["unitSha256"], "live_service_override_changed")
-        write_new(ops / "id-business-independent-app.service.before.conf", old, 0o600)
-        pending = DROP.with_name(f".{DROP.name}.{sha[:12]}")
-        write_new(pending, new, DROP.stat().st_mode & 0o777)
-        os.replace(pending, DROP)
-        run(["systemctl", "daemon-reload"])
-        run(["systemctl", "restart", UNIT], timeout=55)
-        live = read_website(plan, release, source, adapter, core) if core else read_website(plan, release, source, adapter)
-        events = read_event_runtime() if plan.get('externalEvents') else None
-        recovery = install_recovery()
-        monitoring = read_backup_monitoring(inspect("app"))
-        if core:
-            core.finish()
+        with core.cutover() if core else nullcontext() as native:
+            adapter = switch_adapter(plan, source, ops, native) if native else (
+                switch_adapter(plan, source, ops) if include_adapter else None)
+            require_main(sha)
+            require(digest(DROP) == before["unitSha256"], "live_service_override_changed")
+            write_new(ops / "id-business-independent-app.service.before.conf", old, 0o600)
+            pending = DROP.with_name(f".{DROP.name}.{sha[:12]}")
+            write_new(pending, new, DROP.stat().st_mode & 0o777)
+            os.replace(pending, DROP)
+            run(["systemctl", "daemon-reload"])
+            run(["systemctl", "restart", UNIT], timeout=55)
+            live = read_website(plan, release, source, adapter, core) if core else read_website(plan, release, source, adapter)
+            events = read_event_runtime() if plan.get('externalEvents') else None
+            monitoring = read_backup_monitoring(inspect("app"))
+            recovery = install_recovery()
+            if core:
+                core.finish()
     result = {"mainSha": sha, "previousWebsiteSha": base, "website": live["app"],
               "sidecars": {name: live[name] for name in WEBSITE[1:]},
               "sourceFilesVerified": len(plan["files"]), "artifacts": plan["artifacts"],
