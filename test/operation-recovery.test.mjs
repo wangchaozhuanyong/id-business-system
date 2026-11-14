@@ -39,12 +39,26 @@ const beforeArchive = (snapshot, id, reason = 'wrong_import') => {
   return { id, version: snapshot.version, assetVersion: asset.version, reason };
 };
 const restoreBody = read => ({ version: read.body.version, reason: 'accidental_archive' });
+const restoreHealthBody = read => ({ version: read.body.version, reason: 'wrong_status' });
 const writeOrder = (store, action, update, { operationId = uuid(), actor = admin, snapshot = store.load('commerce') } = {}) => {
   const { version, data } = structuredClone(snapshot.data ? snapshot : { ...snapshot, data: sales() });
   update(data.orders);
   return request(store, 'commerce', { method: 'PUT', body: { version, data, action }, operationId, actor });
 };
 const auditId = store => String(store.audit()[0].id);
+function updateHealth(row, health) {
+  row.health = health;
+  row.healthChangedAt = '2026-11-14 11:00';
+  row.version = (row.version || 1) + 1;
+  row.inventoryHistory = [...(row.inventoryHistory || []), {
+    id: uuid(), action: '健康状态变化', detail: health, time: row.healthChangedAt, actorId: 'untrusted', actor: '客户端值'
+  }];
+}
+const writeHealth = (store, update, { operationId = uuid(), actor = admin } = {}) => {
+  const { version, data } = store.load('inventory');
+  update(data);
+  return request(store, 'inventory', { method: 'PUT', body: { version, data, action: 'inventory_health_change' }, operationId, actor });
+};
 const changeCancellation = (row, cancelled, eventId) => {
   row.cancelled = cancelled;
   row.version++;
@@ -224,6 +238,163 @@ test('归档与恢复写入失败时都回滚库存、日志和回执，重启�
     assert.deepEqual(await request(store, archive, command), success);
     assert.deepEqual(await request(store, url, restore), receipt);
     assert.equal(store.audit().filter(row => row.action === 'inventory_restore_archive').length, 1);
+  } finally { control.close(); store.close(); }
+});
+
+test('从原日志恢复普通账号和邮箱的健康状态，保留其他库存、登记与财务记录', async t => {
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  const mailbox = asset('health-google', 'google', { health: 'unlocking', inventoryHistory: [] });
+  const registered = asset('health-account', 'gpt', { email: 'registered@example.test', source: '自己注册',
+    inventoryHistory: [{ id: 'import-original', action: '资料录入' }] });
+  save(store, 'inventory', stock([mailbox], [registered]), 'inventory_create');
+  save(store, 'commerce', sales([order('unrelated-order', {
+    paidConfirmed: true, paidAmount: '20', paidCurrency: 'USD', saleAmount: '160', saleCurrency: 'CNY'
+  })]));
+  store.saveFeatureDocument('order-expense-receipts', 0, { items: [{ id: 'unrelated-expense', value: '15' }] });
+  const unaffected = () => [store.load('commerce'), store.load('appleBalance'), store.featureDocument('order-expense-receipts')];
+  const original = unaffected();
+
+  const changed = await writeHealth(store, ({ accounts }) => updateHealth(accounts[0], 'dead'));
+  assert.equal(changed.status, 200, changed.body.error);
+  const accountId = auditId(store), accountUrl = recovery(accountId);
+  const readAccount = await request(store, accountUrl);
+  assert.equal(readAccount.status, 200);
+  assert.equal(readAccount.body.status, 'available');
+  assert.deepEqual(readAccount.body.changes, [{ label: '健康状态', current: '死号', restore: '正常' }]);
+  assert.equal(readAccount.body.targetLabel, 'ChatGPT · r***@example.test');
+  assert(!JSON.stringify(readAccount.body).includes(fixtureMaterial));
+  assert(!JSON.stringify(readAccount.body).includes(registered.email));
+  assert.equal((await request(store, accountUrl, { actor: employee })).status, 403);
+
+  const later = await writeHealth(store, ({ mailboxes }) => updateHealth(mailboxes[0], 'normal'));
+  assert.equal(later.status, 200, later.body.error);
+  const mailboxId = auditId(store), mailboxUrl = recovery(mailboxId);
+  const readMailbox = await request(store, mailboxUrl);
+  assert.equal(readMailbox.body.status, 'available');
+  assert.equal(readMailbox.body.targetLabel, '谷歌邮箱 · h***@example.test');
+  assert.deepEqual(readMailbox.body.changes, [{ label: '健康状态', current: '正常', restore: '解封中' }]);
+  const inventory = store.load('inventory');
+  store.recordAuthEvents(Array.from({ length: 1100 }, () => ({ action: 'auth_login', actor: employee })));
+  assert(!store.audit().some(row => String(row.id) === accountId));
+  const filtered = await request(store, 'audit/page?view=recovery&module=account&query=' + encodeURIComponent('#' + accountId));
+  assert.deepEqual(filtered.body.items.map(row => row.id), [accountId]);
+
+  const attempt = { body: restoreHealthBody(readAccount), operationId: uuid() };
+  assert.equal((await request(store, accountUrl, { ...attempt, authorizeSensitive: () => false })).status, 403);
+  assert.equal((await request(store, accountUrl, { ...attempt, actor: employee })).status, 403);
+  assert.equal((await request(store, accountUrl, { ...attempt, body: { ...attempt.body, restore: 'normal' } })).status, 400);
+  const [receipt, competitor] = await Promise.all([request(store, accountUrl, attempt),
+    request(store, accountUrl, { ...attempt, operationId: uuid(), actor: other })]);
+  assert.deepEqual([receipt.status, competitor.status], [200, 409]);
+  assert.equal(receipt.body.record.action, '撤回库存状态变更');
+  assert.equal(receipt.body.reason, '状态标错');
+  assert.deepEqual(await request(store, accountUrl, attempt), receipt);
+  assert.deepEqual((await request(store, recovery(receipt.body.record.id))).body, receipt.body);
+  assert.deepEqual((await request(store, accountUrl)).body.receipt, receipt.body);
+  const { version, data } = store.load('inventory');
+  assert.equal(version, inventory.version + 1);
+  const [row] = data.accounts;
+  const prior = inventory.data.accounts[0];
+  assert.deepEqual(row, { ...prior, health: 'normal', version: prior.version + 1, healthChangedAt: row.lastOperatedAt,
+    lastOperatedAt: row.lastOperatedAt, inventoryHistory: [...prior.inventoryHistory, row.inventoryHistory.at(-1)] });
+  assert.deepEqual(row.inventoryHistory.at(-1), { id: row.inventoryHistory.at(-1).id, action: '健康状态变化',
+    detail: 'normal', reason: '状态标错', recoveryOf: accountId, actorId: admin.id, actor: admin.name, time: row.lastOperatedAt });
+  assert.deepEqual(data, { ...inventory.data, accounts: [row] });
+  assert.equal((await request(store, mailboxUrl, { body: restoreHealthBody(readMailbox), operationId: uuid() })).status, 200);
+  assert.equal(store.load('inventory').data.mailboxes[0].health, 'unlocking');
+  assert.deepEqual(unaffected(), original);
+});
+
+test('库存状态撤回拒绝历史缺值、期满、二次编辑和新出现的业务关联', async t => {
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  t.mock.timers.enable({ apis: ['Date'], now: Date.parse('2026-11-14T03:00:00Z') });
+  const accounts = ['pending', 'edited', 'expired', 'batch'].map(id => asset(id, 'gpt', { source: '线上购买' }));
+  const usedMailbox = asset('used-mail', 'microsoft', { source: '线上购买', mailboxUsage: 'used',
+    microsoftSecurity: { loginMode: 'password', recoveryAccess: 'unknown', twoStep: 'unknown', verificationMethods: [] } });
+  save(store, 'inventory', stock([usedMailbox], accounts), 'inventory_create');
+  const oldId = auditId(store);
+  assert.equal((await request(store, recovery(oldId))).body.status, 'unavailable');
+  const batch = await writeHealth(store, ({ accounts }) => {
+    updateHealth(accounts[3], 'dead');
+    accounts[2].notes = '同一保存另改资料';
+  });
+  assert.equal(batch.status, 200, batch.body.error);
+  assert.equal((await request(store, recovery(auditId(store)))).body.status, 'unavailable');
+
+  for (const [index, health] of [[0, 'dead'], [1, 'unlocking'], [2, 'dead']]) {
+    const changed = await writeHealth(store, ({ accounts }) => updateHealth(accounts[index], health));
+    assert.equal(changed.status, 200, changed.body.error);
+    accounts[index].auditId = auditId(store);
+  }
+  const used = await writeHealth(store, ({ mailboxes }) => updateHealth(mailboxes[0], 'dead'));
+  assert.equal(used.status, 200, used.body.error);
+  assert.match((await request(store, recovery(auditId(store)))).body.message, /已使用/);
+
+  const [pending, edited, expired] = accounts.map(row => recovery(row.auditId));
+  const readPending = await request(store, pending);
+  assert.equal(readPending.body.status, 'available');
+  const readEdited = await request(store, edited);
+  const revised = store.load('inventory').data;
+  Object.assign(revised.accounts[1], { notes: '原资料后来更新', version: 3 });
+  save(store, 'inventory', revised, 'inventory_edit');
+  save(store, 'commerce', sales([order('new-relation', { email: accounts[0].email })]));
+  const blocked = store.load('inventory');
+  const beforeExpiry = await request(store, expired);
+  assert.equal(beforeExpiry.body.status, 'available');
+  assert.match((await request(store, pending)).body.message, /关联订单或订阅/);
+  assert.equal((await request(store, pending, { body: restoreHealthBody(readPending), operationId: uuid() })).status, 409);
+  assert.match((await request(store, edited)).body.message, /已有更新/);
+  assert.equal((await request(store, edited, { body: restoreHealthBody(readEdited), operationId: uuid() })).status, 409);
+  t.mock.timers.tick(30 * 24 * 60 * 60 * 1000 + 1);
+  assert.match((await request(store, expired)).body.message, /超过 30 天/);
+  assert.equal((await request(store, expired, { body: restoreHealthBody(beforeExpiry), operationId: uuid() })).status, 409);
+  assert.equal((await request(store, 'audit/page?view=recovery')).body.total, 0);
+  assert.deepEqual(store.load('inventory'), blocked);
+});
+
+test('库存状态的原操作和恢复分别原子提交，回执可在数据库重开后重试', async t => {
+  const runtime = fileURLToPath(new URL('../.runtime/', import.meta.url));
+  await mkdir(runtime, { recursive: true });
+  const dir = await mkdtemp(join(runtime, 'stock-health-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const path = join(dir, 'synthetic.sqlite');
+  let store = createLocalBusinessStore(path);
+  const control = new DatabaseSync(path);
+  try {
+    save(store, 'inventory', stock([asset('atomic-mail', 'google')]), 'inventory_create');
+    const original = store.load('inventory'), audit = store.audit();
+    control.exec(`CREATE TRIGGER stock_health_capture_error BEFORE INSERT ON business_document
+      WHEN NEW.domain LIKE 'inventory-health-recovery:%' BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END`);
+    const setDead = ({ mailboxes }) => updateHealth(mailboxes[0], 'dead');
+    assert.equal((await writeHealth(store, setDead)).status, 500);
+    assert.deepEqual(store.load('inventory'), original);
+    assert.deepEqual(store.audit(), audit);
+    control.exec('DROP TRIGGER stock_health_capture_error');
+    assert.equal((await writeHealth(store, setDead)).status, 200);
+    const url = recovery(auditId(store)), preview = await request(store, url);
+    assert.equal(preview.body.status, 'available');
+    const attempt = { body: restoreHealthBody(preview), operationId: uuid() };
+    const changed = store.load('inventory'), changedAudit = store.audit();
+    control.exec(`CREATE TRIGGER stock_health_recovery_error BEFORE INSERT ON business_document
+      WHEN NEW.domain LIKE 'write-receipt:%' BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END`);
+    assert.equal((await request(store, url, attempt)).status, 500);
+    assert.deepEqual(store.load('inventory'), changed);
+    assert.deepEqual(store.audit(), changedAudit);
+    assert.equal((await request(store, url)).body.status, 'available');
+    control.exec('DROP TRIGGER stock_health_recovery_error');
+    const otherConnection = createLocalBusinessStore(path);
+    const [receipt, rival] = await Promise.all([request(store, url, attempt),
+      request(otherConnection, url, { ...attempt, operationId: uuid(), actor: other })]).finally(() => otherConnection.close());
+    assert.equal(receipt.status, 200, receipt.body.error);
+    assert.equal(rival.status, 409);
+    store.close();
+    store = createLocalBusinessStore(path);
+    assert.deepEqual(await request(store, url, attempt), receipt);
+    assert.equal(store.audit().filter(row => row.action === 'inventory_restore_health').length, 1);
+    assert.equal(store.load('inventory').data.mailboxes[0].health, 'normal');
+    assert(!(await readFile(path)).includes(Buffer.from(fixtureMaterial)));
   } finally { control.close(); store.close(); }
 });
 

@@ -22,7 +22,7 @@ function assetKind(asset) {
   if (mailboxes.has(asset?.type)) return 'mailbox';
 }
 
-function archiveProblem(asset, inventory, commerce, managedMailboxes) {
+function archiveProblem(asset, inventory, commerce, managedMailboxes, { keepRegistration = false } = {}) {
   const kind = assetKind(asset);
   if (!kind || !idValid(asset.id) || !Number.isSafeInteger(versionOf(asset) + 1) || versionOf(asset) < 0)
     return '此资料需通过所属业务的专用入口处理。';
@@ -32,13 +32,14 @@ function archiveProblem(asset, inventory, commerce, managedMailboxes) {
       asset.deleted || asset.relayDeleted || asset.claudeHistory || asset.accountLifecycle || asset.usedAt || asset.actualUsedAt ||
       list(asset.accountLifecycleEvents).length || list(asset.usageLinks).length || list(asset.usageCorrections).length)
     return '资料已使用、领用、占用或有历史关联，请核对原业务。';
-  if (isMailboxRegistration(asset) || asset.sourceMailboxId || asset.sourceClaimId)
+  if (!keepRegistration && (isMailboxRegistration(asset) || asset.sourceMailboxId || asset.sourceClaimId))
     return '此账号已登记注册来源，请保留账号与来源邮箱。';
   const id = asset.id, address = registrationAddress(asset.email);
   const identity = registrationAddress(listIdentity(asset));
   if (list(inventory.batches).some(batch => list(batch.items).some(item => item.assetId === id)) ||
       list(inventory.returnRecords).some(row => row.assetId === id) ||
-      list(inventory.registrationRecords).some(row => row.assetId === id || row.accountId === id))
+      list(inventory.registrationRecords).some(row => row.assetId === id ||
+        (row.accountId === id && (!keepRegistration || row.state !== '成功'))))
     return '资料已有领用、归还或注册记录，请保留原记录。';
   if (kind === 'mailbox' &&
       (asset.microsoftSecurity?.recoveryMailboxId || asset.microsoftSecurity?.recoveryAccess === 'inventory' ||
@@ -54,6 +55,17 @@ function archiveProblem(asset, inventory, commerce, managedMailboxes) {
       (address && registrationAddress(row.email) === address)))
     return '资料已关联订单或订阅，请保留原记录。';
   return '';
+}
+
+export function inventoryHealthRecoveryProblem(asset, inventory, commerce, managedMailboxes) {
+  if (asset.source === '客户提供' || ['客户自有', 'customer'].includes(asset.accountSource))
+    return '客户自有账号请到原账号页面核对。';
+  const identity = registrationAddress(listIdentity(asset));
+  if (identity && records(inventory).some(row =>
+    row?.id !== asset.id && row?.type === asset.type && registrationAddress(listIdentity(row)) === identity))
+    return '同类型库存已有相同资料，请到库存页面核对。';
+  // A health-only change leaves the source mailbox and the completed registration intact.
+  return archiveProblem(asset, inventory, commerce, managedMailboxes, { keepRegistration: true });
 }
 
 function archiveFailure(message, status = 409) {
