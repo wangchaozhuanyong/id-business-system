@@ -85,6 +85,7 @@ function browser(store, appleAsset = null) {
     options: (items) => JSON.stringify(items),
     render() {},
     button() {},
+    textAction() {},
     titleInfo() {},
     table() {},
     openDrawer() {},
@@ -155,7 +156,7 @@ function browser(store, appleAsset = null) {
       this.submit('commerce-contact-form', { kind: 'customer', name, phone });
     },
     confirm() {
-      assert.equal(typeof confirm, 'function', `等待有效表单进入确认步骤：${[...errors.values()].join('、')}`);
+      assert.equal(typeof confirm, 'function', `等待撤回确认：${[...errors.values()].join('、')}`);
       const callback = confirm;
       confirm = undefined;
       callback();
@@ -194,13 +195,11 @@ test('客户和银行卡独立订单在本机保存、重开后可读，旧标�
     assert.equal(first.getCustomers().length, 0);
     assert.equal(first.listOrders().length, 0);
     first.submitCustomer('本地测试客户', '111');
-    first.confirm();
     assert.equal(first.getCustomers().length, 0, '持久化响应之前不显示成功记录');
     await turn();
     assert.equal(first.getCustomers()[0].createdBy, '本机操作员');
 
     stale.submitCustomer('并发标签页客户', '222');
-    stale.confirm();
     await turn();
     assert.match(stale.notices.at(-1), /本次未保存/);
     assert.equal(stale.getCustomers()[0].name, '本地测试客户');
@@ -231,7 +230,6 @@ test('客户和银行卡独立订单在本机保存、重开后可读，旧标�
       refundReason: '已退给客户',
       refundAt: '2026-11-05T10:30'
     });
-    reopened.confirm();
     await turn();
     const afterCustomerRefund = reopened.getOrder(order.id);
     const bankFields = {
@@ -242,7 +240,6 @@ test('客户和银行卡独立订单在本机保存、重开后可读，旧标�
       bankReturnAt: '2026-11-05T11:30'
     };
     reopened.submit('commerce-bank-return-form', bankFields);
-    reopened.confirm();
     await turn();
     reopened.submit('commerce-bank-return-form', bankFields);
     assert.match(reopened.notices.at(-1), /订单版本已变化/);
@@ -273,7 +270,6 @@ test('成品订单和库存占用一起提交，库存版本冲突时两边都�
     const tab = browser(store);
     await tab.load();
     tab.submitCustomer('成品客户', '333');
-    tab.confirm();
     await turn();
     const account = {
       id: 'stock-local-a',
@@ -399,7 +395,6 @@ test('苹果内购和余额一起提交，客户退款独立登记待回款，�
     await first.load();
     await ledger.ensureReady();
     first.submitCustomer('苹果内购测试客户', '111');
-    first.confirm();
     await turn();
     assert.equal((await ledger.adjust(asset.id, '250', { reason: '核实期初余额' })).ok, true);
 
@@ -450,8 +445,6 @@ test('苹果内购和余额一起提交，客户退款独立登记待回款，�
       refundReason: '客户实际退款',
       refundAt: '2026-11-05T10:30'
     });
-    await turn();
-    first.confirm();
     await turn();
     const [refund] = first.getOrder(order.id).refunds;
     const [pending] = ledger.listRefunds(order.id);

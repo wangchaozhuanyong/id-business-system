@@ -61,7 +61,6 @@ function fixture() {
 function browser(localData, route = 'settings/mail-types') {
   let seq = 0;
   let costs = { ...initialCosts };
-  let confirmation;
   const notices = [];
   const state = { route, drafts: new Map(), query: '', page: 1 };
   const modules = [];
@@ -99,9 +98,7 @@ function browser(localData, route = 'settings/mail-types') {
     newId: (prefix) => prefix + '-' + ++seq,
     readForm: (form) => form.values,
     readDraft: (form) => ({ ...form.values }),
-    confirmAction: (_title, _message, cb) => {
-      confirmation = cb;
-    },
+    confirmAction: () => assert.fail('保存录入的配置时无需再次确认'),
     closeDrawer: () => {},
     withActionFeedback: (_node, operation) => operation(),
     render: () => {}
@@ -121,10 +118,6 @@ function browser(localData, route = 'settings/mail-types') {
     paginate: (detail) => listeners.get('id-pagination-change')?.({ detail }),
     get costs() {
       return costs;
-    },
-    accept: async () => {
-      confirmation();
-      await flush();
     }
   };
 }
@@ -192,7 +185,7 @@ test('mailbox classification and cost rules survive reload, with local audit rec
       'ops-type-enabled': '启用'
     })
   );
-  await first.accept();
+  await flush();
   assert.equal(store.stored.version, 1);
   assert.equal(
     first.operations.getMailboxTypes().find((item) => item.id === 'google').label,
@@ -207,7 +200,7 @@ test('mailbox classification and cost rules survive reload, with local audit rec
     ])
   );
   first.module.onSubmit(form('ops-cost-form', values));
-  await first.accept();
+  await flush();
   assert.equal(store.stored.version, 2);
   assert.equal(first.costs.claudeBankFeeMyr, '125');
 
@@ -236,7 +229,7 @@ test('a stale settings page cannot overwrite a newer version', async () => {
       'ops-type-enabled': '启用'
     })
   );
-  await first.accept();
+  await flush();
   stale.module.onSubmit(
     form('ops-mail-type-form', {
       'ops-type-id': 'google',
@@ -245,7 +238,7 @@ test('a stale settings page cannot overwrite a newer version', async () => {
       'ops-type-enabled': '启用'
     })
   );
-  await stale.accept();
+  await flush();
   assert.equal(store.stored.version, 1);
   assert.equal(
     stale.operations.getMailboxTypes().find((item) => item.id === 'google').label,
