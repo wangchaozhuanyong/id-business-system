@@ -543,6 +543,13 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
     return readAccounts(accountPath).employees.filter(row => row.active)
       .map(({ id, name, role }) => ({ id, name, role }));
   }
+  function operatorLabels(actor) {
+    const employees = readAccounts(accountPath).employees;
+    const teamOnly = actor.role === 'supervisor' || actor.role === 'registrar';
+    const visible = teamOnly ? employees.filter(row =>
+      row.id === actor.id || actor.role === 'supervisor' && row.teamLeadId === actor.id) : employees;
+    return visible.map(({ id, name }) => ({ id, name }));
+  }
 
   function requireActor(request, accounts) {
     const employee = actorRecord(request, accounts);
@@ -1134,12 +1141,7 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
         return sendJson(response, 200, { actor: null });
       }
       if (route === '/api/local/auth/display-names' && method === 'GET') {
-        const accounts = readAccounts(accountPath);
-        const actor = requireActor(request, accounts);
-        const teamOnly = actor.role === 'supervisor' || actor.role === 'registrar';
-        const visible = teamOnly ? accounts.employees.filter(row =>
-          row.id === actor.id || actor.role === 'supervisor' && row.teamLeadId === actor.id) : accounts.employees;
-        return sendJson(response, 200, { items: visible.map(({ id, name }) => ({ id, name })) });
+        return sendJson(response, 200, { items: operatorLabels(requireActor(request)) });
       }
       if (route === '/api/local/auth/order-owners' && method === 'GET') {
         const actor = requireActor(request);
@@ -1171,7 +1173,7 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
   }
 
   return {
-    getActor, orderOwners, handle, recentlyVerified, shouldVerify,
+    getActor, orderOwners, operatorLabels, handle, recentlyVerified, shouldVerify,
     isRegistrar(employeeId) {
       return Boolean(readAccounts(accountPath)?.employees.some(row =>
         row.id === employeeId && row.active && row.role === 'registrar'));

@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import * as inventoryList from '../modules/inventory/list.mjs';
 import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
 import { prepareMailboxPlatformMarks } from '../server/mailbox-registration-platform.mjs';
@@ -30,7 +31,7 @@ function presentation(data) {
   const api = { collections: data, modules: {}, state: { drafts: new Map(), actor } };
   const instrumented = source.replace('  api.modules.inventory = {',
     '  window.fixtureRecords = registrationRecords;\n  api.modules.inventory = {');
-  const window = { IDDesignAPI: api, IDDesignModules: [] };
+  const window = { IDInventoryList: inventoryList, IDDesignAPI: api, IDDesignModules: [] };
   runInNewContext(instrumented, { window, document: { querySelector: () => null }, Map, Set });
   window.fixtureRecords.push(...data.registrationRecords);
   return api.modules.inventory.mailboxPlatformLabel;

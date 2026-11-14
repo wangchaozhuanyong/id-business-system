@@ -5,6 +5,9 @@ import { DatabaseSync } from 'node:sqlite';
 import { describeWriteOperation, checkWriteReceipt, WriteOperationError } from './write-operation.mjs';
 import { mergeContactWrite } from './contact-write.mjs';
 import { applyDocumentDelta, documentDelta, validDocumentDelta } from '../modules/data/document-delta.mjs';
+import { validRecordEdit } from '../modules/data/record-edit.mjs';
+import { mergeRecordEdit } from './record-edit.mjs';
+import { businessListQuery, inventoryPageDomain, ordersPageDomain, ordersPageRoles, readInventoryPage, readOrdersPage } from './business-lists.mjs';
 import { matchRechargeRenewal, renewalAssociationIssue, renewalExpiryIssue } from './recharge-renewal.mjs';
 import { validOrderCurrencies, validOrderCurrencyGroups, retainOrderSettings } from './order-currency-settings.mjs';
 import { isDeepStrictEqual } from 'node:util';
@@ -269,6 +272,7 @@ const orderFeatureAuditLabels = {
 };
 const verifiedOrderCards = Symbol('verifiedOrderCards');
 const verifiedRenewalHandoff = Symbol('verifiedRenewalHandoff');
+const singleRecordEdit = Symbol('singleRecordEdit');
 const rechargeEvidenceFields = [
   'source', 'taskId', 'email', 'product', 'plan', 'businessType', 'payment', 'paymentId',
   'cardId', 'paidAmount', 'paidCurrency', 'start', 'expiry', 'paidConfirmed', 'rechargeCompletedAt', 'entitlementStatus',
@@ -826,6 +830,17 @@ async function saveHttpWrites(store, entries, actor, operationId, {
   verifyRelayExtraction, readOrderCards, readOrderOwners, requireRenewalHandoff,
   canChangeProtectedSettings
 }, deltaResponse) {
+  if (Array.isArray(entries) && entries.some(entry => entry && Object.hasOwn(entry, 'recordEdit'))) {
+    if (actor && !['admin', 'super'].includes(actor.role)) throw new LocalDataError(403, '当前账号无权保存此资料');
+    if (!deltaResponse || entries.length !== 1) throw new LocalDataError(400, '此资料须单独保存');
+    const [{ domain, version, action, recordEdit, ...extra }] = entries;
+    if (Object.keys(extra).length || !Number.isSafeInteger(version) ||
+        version < 1 || !validRecordEdit(domain, action, recordEdit))
+      throw new LocalDataError(400, '保存资料格式不正确');
+    const operation = describeWriteOperation(operationId, actor, [{ domain, version, action, recordEdit }]);
+    return store.saveBatch([], { actor: actor || localToolboxActor, operation, readOrderOwners, requireRenewalHandoff,
+      [verifiedOrderCards]: new Map(), [singleRecordEdit]: { domain, action, edit: recordEdit, version } });
+  }
   const sparse = Array.isArray(entries) && entries.some(entry => entry && Object.hasOwn(entry, 'delta'));
   let writes;
   let sparseOperation, sparseSnapshot;
@@ -1187,6 +1202,35 @@ export function createLocalBusinessStore(databasePath) {
       }
       return { ...snapshot, ...(review.length && { usageReview: review }), commerceVersion: commerce.version,
         accountSummaries: accountLifecycleSummaries(snapshot.data, commerce.data) };
+    },
+    businessList(domain, params, actor, owners) {
+      if (domain === inventoryPageDomain) {
+        const inventory = readDocument('inventory');
+        const page = readInventoryPage(params, inventory, readDocument('commerce').data);
+        if (params.type === 'google') {
+          const pool = inventoryMailboxPool(mailboxPoolMetadata(readDocument(managedMailboxDomain)), inventory);
+          const addresses = new Set(page.rows.map(row => String(row.email || '').trim().toLowerCase()).filter(Boolean));
+          page.mailboxPool = { version: pool.version, inventoryVersion: inventory.version,
+            items: pool.items.filter(row => addresses.has(row.email.trim().toLowerCase())).map(({ id, email, active, authFailed,
+              authorizationPending, associationConflict, expiresAt }) =>
+              ({ id, email, active, authFailed, authorizationPending, associationConflict, expiresAt })) };
+          page.mailboxTotal = (inventory.data?.mailboxes || []).filter(row => row.type === 'google' && !row.deleted).length;
+        }
+        if (actor?.id && params.type === 'microsoft' && params.tab !== 'imports' && page.rows.length)
+          log.run(new Date().toISOString(), 'inventory', 'inventory_microsoft_read',
+            auditSummary('读取微软邮箱库存资料', actor), inventory.version);
+        return page;
+      }
+      const managers = !actor || ['admin', 'super'].includes(actor.role);
+      const accounting = managers || actor?.role === 'finance';
+      const snapshot = commerceForActor(this, readDocument('commerce'), actor);
+      const settings = accounting ? readDocument('settings').data : null;
+      return readOrdersPage(params, {
+        snapshot, managers, inventory: managers ? readDocument('inventory').data : undefined, owners: owners?.() || [],
+        currency: settings?.costSettings?.currency === 'MYR' ? 'MYR' : 'CNY',
+        expenseReceipts: accounting ? readDocument(orderExpenseDomain).data?.items || [] : [],
+        appleLedger: accounting ? readDocument('appleBalance').data : undefined
+      });
     },
     saveAccountLifecycle(body, actor) {
       return writeTransaction(() => {
@@ -1890,10 +1934,10 @@ export function createLocalBusinessStore(databasePath) {
     saveBatch(entries, {
       actor, verifyAutomaticSnapshot, readOrderOwners, operation, requireRenewalHandoff, [verifiedRelayClaimIds]: verifiedIds,
       [verifiedAppleRelayPrimaries]: primaryTargets, [verifiedOrderCards]: cards, [stagedRelayIntake]: relayIntake,
-      [verifiedRenewalHandoff]: handoff
+      [verifiedRenewalHandoff]: handoff, [singleRecordEdit]: recordEdit
     } = {}) {
       // Preserve the caller's retry snapshot when normalizing transient input.
-      let writes = checkWrites(entries).map(write => (write.domain === 'commerce' &&
+      let writes = recordEdit ? [] : checkWrites(entries).map(write => (write.domain === 'commerce' &&
         (write.action === orderCustomerCreateAction ||
           write.data.tenants.some(row => Object.hasOwn(row, 'initialCards')) ||
           write.data.orders.some(row => Object.hasOwn(row, 'tenantCardNumber')))) ||
@@ -1903,6 +1947,14 @@ export function createLocalBusinessStore(databasePath) {
       return writeTransaction(() => {
         const replay = replayWrite(operation);
         if (replay) return replay;
+        if (recordEdit) {
+          const { domain, action, version, edit } = recordEdit;
+          const latest = readDocument(domain);
+          if (version > latest.version) throw new LocalDataError(409, '资料版本已变化，请重新读取');
+          writes = checkWrites([mergeRecordEdit(domain, action, edit, latest, actor,
+            domain === 'commerce' ? readDocument('appleBalance').data : undefined)]);
+          if (domain === 'inventory') requireVerifiedRelayClaimIds(checkedRelayClaims(latest.data, writes[0], actor), []);
+        }
         const renewals = handoff && readDocument(renewalHandoffDomain);
         if (handoff && renewals.version !== handoff.version)
           throw new LocalDataError(409, '续费已在其他页面更新，请刷新后核对');
@@ -2080,7 +2132,9 @@ export function createLocalBusinessStore(databasePath) {
           let verifiedCardBackfillId;
           let cardTypes;
           const legacyOpened = legacyOpeningOrderIds(oldOrders, current(subscriptionDomain));
-          for (const row of commerce.orders) {
+          // A note-only edit has no payment, identity or subscription changes to normalize.
+          const ordersToValidate = recordEdit ? [] : commerce.orders;
+          for (const row of ordersToValidate) {
             const prior = priorById.get(row.id);
             if (prior && isDeepStrictEqual(row, prior)) continue;
             if (Object.hasOwn(row, 'tenantCardNumber')) {
@@ -2182,7 +2236,7 @@ export function createLocalBusinessStore(databasePath) {
             const settledThisWrite = [];
             const tenantCards = stagedTenantCards;
             const freezes = current(cardFreezeDocument);
-            for (const row of commerce.orders) {
+            for (const row of ordersToValidate) {
               const prior = priorById.get(row.id);
               if (prior && isDeepStrictEqual(row, prior)) continue;
               const automatic = prior?.source === '线上代充';
@@ -2374,7 +2428,7 @@ export function createLocalBusinessStore(databasePath) {
                 data: ledger, action: 'apple_opening' });
             }
           }
-          if (incoming.has('commerce')) {
+          if (incoming.has('commerce') && !recordEdit) {
             const error = stageAppleOrderFunding(priorCommerce?.orders, commerce.orders, previous,
               inventory, current('settings'), writes.find(write => write.domain === 'commerce').action, commerce.customers,
               completedCustomerOrders, handoff?.id, handoff?.item.funding.ledgerPosted === true ? handoff.id : undefined);
@@ -2391,7 +2445,7 @@ export function createLocalBusinessStore(databasePath) {
           if (error) throw new LocalDataError(409, error);
         }
         const now = new Date().toISOString();
-        if (inventory && (inventoryWrite || incoming.has('commerce')) && !isolatedHistoricalOrderCorrection) {
+        if (inventory && (inventoryWrite || incoming.has('commerce')) && !isolatedHistoricalOrderCorrection && !recordEdit) {
           const next = inventoryWrite ? inventory : structuredClone(inventory);
           const matches = inspectInventoryUsage(next, commerce, Date.parse(now));
           const oldRegistrationIds = new Set((priorInventory?.registrationRecords || []).map(row => row.id));
@@ -2440,7 +2494,7 @@ export function createLocalBusinessStore(databasePath) {
           }
         }
         let nextTenantCards = existingTenantCards;
-        if (tenantCardDocument) {
+        if (tenantCardDocument && !recordEdit) {
           try {
             nextTenantCards = stageTenantCardUses(stagedTenantCards,
               priorCommerce?.orders || [], commerce.orders, now, tenantCardArchive);
@@ -2456,7 +2510,7 @@ export function createLocalBusinessStore(databasePath) {
           if (domain === 'inventory' && primaryTargets) {
             for (const target of primaryTargets)
               log.run(now, domain, target.action, auditSummary(inventoryActions[target.action], actor, target.id), next);
-          } else log.run(now, domain, action, auditSummary(label, actor), next);
+          } else log.run(now, domain, action, auditSummary(label, actor, recordEdit?.edit.id), next);
           const review = domain === 'inventory'
             ? usageReviewRows(inspectInventoryUsage(inventory, commerce, Date.parse(now)))
             : [];
@@ -2910,7 +2964,7 @@ export async function handleLocalBusiness(
   actor,
   options = {}
 ) {
-  const { verifyManagedMailbox, publicOrigin, readOrderOwners, authorizeSensitive, isRegistrar } = options;
+  const { verifyManagedMailbox, publicOrigin, readOrderOwners, readOperatorLabels, authorizeSensitive, isRegistrar } = options;
   try {
     const domain = route.slice('/api/local/'.length);
     if (domain === 'commerce' || domain === 'batch') response.setHeader('Cache-Control', 'private, no-store');
@@ -2926,6 +2980,16 @@ export async function handleLocalBusiness(
       if (request.method !== 'PATCH') throw new LocalDataError(405, '列设置接口不支持此操作');
       if (request.headers.origin !== origin) throw new LocalDataError(403, '仅允许从当前页面保存列设置');
       return json(response, 200, store.saveColumnPreference(await readJson(request, 4096), actor));
+    }
+    if (domain === ordersPageDomain || domain === inventoryPageDomain) {
+      response.setHeader('Cache-Control', 'private, no-store');
+      const roles = domain === ordersPageDomain ? ordersPageRoles : ['admin', 'super'];
+      if (actor && !roles.includes(actor.role)) throw new LocalDataError(403, '当前账号无权查看此列表');
+      if (request.method !== 'POST') throw new LocalDataError(405, '此接口仅支持分页查询');
+      if (request.headers.origin !== origin) throw new LocalDataError(403, '仅允许从当前页面查询');
+      const params = businessListQuery(domain, await readJson(request, 8192));
+      if (!params) throw new LocalDataError(400, '请核对列表筛选条件');
+      return json(response, 200, store.businessList(domain, params, actor, readOperatorLabels));
     }
     if (domain === 'renewal-sidebar') {
       response.setHeader('Cache-Control', 'private, no-store');

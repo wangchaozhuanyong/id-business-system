@@ -135,6 +135,8 @@ export function employeeCommerce(snapshot, actor) {
 
 export function retailAccess(actor, route, method) {
   const readable = method === 'GET' || method === 'HEAD';
+  if (route === '/api/local/commerce/page')
+    return method === 'POST' && ['employee', 'finance'].includes(actor?.role);
   const page = workspaces.get(route.slice('/api/local/'.length));
   if (page && route.startsWith('/api/local/')) return page.roles.includes(actor?.role) && page.methods.includes(method);
   if (staffRoles.has(actor?.role) && route === '/api/local/toolbox') return readable || method === 'PUT';

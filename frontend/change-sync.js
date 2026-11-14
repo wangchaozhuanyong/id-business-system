@@ -62,6 +62,7 @@
   async function refreshGroup(group, jobs) {
     for (const [, job] of jobs) job.active = true;
     const versions = Object.fromEntries(jobs.map(([scope, job]) => [scope, job.version]));
+    const projected = data.isBusinessListRoute?.(A.state.route);
     const failed = !await applyChanges(versions);
     activeGroups.delete(group);
     if (stopped) return;
@@ -82,7 +83,7 @@
         pending.delete(scope);
       }
     }
-    data.acknowledgeChanges(acknowledged);
+    data.acknowledgeChanges(acknowledged, { projected });
     showStatus();
     resume();
   }

@@ -746,7 +746,8 @@ console.log(JSON.stringify(Object.fromEntries(hashes)));
         **{name: "/" + name for name in (
             "modules/orders/order-opening.mjs", "modules/orders/list-order.mjs",
             "modules/orders/renewal-reminders.mjs", "modules/finance/apple-funding.mjs",
-            "modules/data/document-delta.mjs"
+            "modules/data/document-delta.mjs", "modules/orders/order-list.mjs", "modules/inventory/list.mjs",
+            "modules/finance/accounting.mjs", "modules/data/record-edit.mjs"
         )},
     }
     for name, expected in plan["files"].items():

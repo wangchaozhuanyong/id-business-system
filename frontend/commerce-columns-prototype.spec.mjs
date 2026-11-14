@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import * as listOrder from './list-order.mjs';
 import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
 import * as orderOpening from './order-opening.mjs';
@@ -62,7 +63,7 @@ function runtime() {
     openDrawer: (title, description, body) => drawers.push({ title, description, body })
   };
   runInNewContext(source, {
-    window: { IDOrderOpening: orderOpening, IDRenewalReminders: renewalReminders, IDDesignAPI: api, IDDesignModules: modules, IDPagination: { defaultPageSize: 10, render: () => '' } },
+    window: { IDListOrder: listOrder, IDOrderOpening: orderOpening, IDRenewalReminders: renewalReminders, IDDesignAPI: api, IDDesignModules: modules, IDPagination: { defaultPageSize: 10, render: () => '' } },
     document: { querySelector: () => null, querySelectorAll: () => [] },
     structuredClone: globalThis.structuredClone,
     Date,

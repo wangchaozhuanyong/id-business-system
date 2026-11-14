@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import * as inventoryList from '../modules/inventory/list.mjs';
 import * as listOrder from './list-order.mjs';
 import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
@@ -173,7 +174,7 @@ function runtime() {
     }
   };
   const modules = [];
-  const context = { window: { IDDesignAPI: api, IDListOrder: listOrder, IDDesignModules: modules }, document, URL };
+  const context = { window: { IDInventoryList: inventoryList, IDDesignAPI: api, IDListOrder: listOrder, IDDesignModules: modules }, document, URL };
   runInNewContext(source, context);
   runInNewContext(apple, context);
   const inventory = modules.find((module) => module.id === 'inventory');

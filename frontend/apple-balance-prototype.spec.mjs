@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import * as inventoryList from '../modules/inventory/list.mjs';
 import * as listOrder from './list-order.mjs';
 import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
@@ -53,7 +54,7 @@ function runtime(localData) {
     modules: { inventory: { getAppleIds: () => assets } }
   };
   runInNewContext(source, {
-    window: { IDDesignAPI: api, IDListOrder: listOrder, IDDesignModules: [], IDLocalData: localData },
+    window: { IDInventoryList: inventoryList, IDDesignAPI: api, IDListOrder: listOrder, IDDesignModules: [], IDLocalData: localData },
     document: {},
     crypto
   });
@@ -419,7 +420,7 @@ function inventoryRuntime() {
   };
   const modules = [];
   runInNewContext(inventorySource, {
-    window: { IDDesignAPI: api, IDListOrder: listOrder, IDDesignModules: modules },
+    window: { IDInventoryList: inventoryList, IDDesignAPI: api, IDListOrder: listOrder, IDDesignModules: modules },
     document: {
       querySelectorAll: () => [],
       querySelector: () => null,
@@ -599,7 +600,7 @@ ${coreSource.slice(coreSource.indexOf('function showColumns('), coreSource.index
     return shared.table(columns, rows, scope, id);
   };
   const modules = [];
-  runInNewContext(source, { window: { IDDesignAPI: api, IDListOrder: listOrder, IDDesignModules: modules }, document: {} });
+  runInNewContext(source, { window: { IDInventoryList: inventoryList, IDDesignAPI: api, IDListOrder: listOrder, IDDesignModules: modules }, document: {} });
   return {
     ...context,
     ledger: api.modules.appleBalance,

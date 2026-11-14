@@ -5,7 +5,8 @@ import { loadCodexdaichongAssets } from '../../modules/recharge/codexdaichong/as
 export const root = fileURLToPath(new URL('../../', import.meta.url));
 export const origin = 'https://design-layout.invalid';
 let rechargeAssets;
-export async function interceptDesign(context, { beforeDirectory, localFixtures, actor, changeEvents = false, dataVersions, documentDelta = false, skipRechargeAssets = false,
+export async function interceptDesign(context, { beforeDirectory, localFixtures, actor, changeEvents = false, dataVersions,
+  documentDelta = false, businessLists = false, skipRechargeAssets = false,
   scrollbarSelector = '', siteTelemetry = false, localAuthUi = false } = {}) {
   const unavailable = [],
     external = [];
@@ -103,7 +104,8 @@ export async function interceptDesign(context, { beforeDirectory, localFixtures,
     if (url.pathname.startsWith('/assets/website/pages/'))
       file = path.join(root, 'frontend', path.basename(url.pathname));
     if (['/modules/orders/order-opening.mjs', '/modules/orders/list-order.mjs', '/modules/orders/renewal-reminders.mjs',
-      '/modules/data/document-delta.mjs',
+      '/modules/orders/order-list.mjs', '/modules/inventory/list.mjs', '/modules/data/document-delta.mjs',
+      '/modules/data/record-edit.mjs', '/modules/finance/accounting.mjs',
       '/modules/finance/apple-funding.mjs'].includes(url.pathname)) file = path.join(root, url.pathname);
     if (url.pathname === '/assets/tools/totp.mjs') file = path.join(root, 'modules/tools/totp.mjs');
     if (
@@ -127,6 +129,7 @@ export async function interceptDesign(context, { beforeDirectory, localFixtures,
           .replace('<head>', siteTelemetry ? '<head><meta name="id-site-observations" content="enabled">' : '<head>')
           .replace('<head>', changeEvents ? '<head><meta name="id-local-data-events" content="enabled">' : '<head>')
           .replace('<head>', documentDelta ? '<head><meta name="id-document-delta" content="enabled">' : '<head>')
+          .replace('<head>', businessLists ? '<head><meta name="id-business-lists" content="enabled">' : '<head>')
           .replace('<head>', dataVersions
             ? `<head><meta name="id-data-versions" content="${encodeURIComponent(JSON.stringify(dataVersions))}">` : '<head>')
           .replace('<head>', actor
