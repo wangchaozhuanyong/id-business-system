@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { createHmac } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
 import { createServer } from 'node:http';
@@ -28,12 +28,16 @@ const copies = value => structuredClone(value);
 
 async function fixture(t) {
   const documents = new Map();
+  const keyDigests = new Map();
   const read = name => copies(documents.get(name) ?? { version: 0, data: null });
   const conflict = () => Object.assign(new Error('version conflict'), { status: 409 });
   const store = {
     featureDocument: read,
     rechargePartnerTicket: id => createHmac('sha256', 'synthetic-ticket-signing-key').update(id).digest('base64url'),
-    rechargePartnerKeyHash: apiKey => createHmac('sha256', 'synthetic-partner-key-hash').update(apiKey).digest('hex'),
+    rechargePartnerKeyHash(value) {
+      if (!keyDigests.has(value)) keyDigests.set(value, randomBytes(32).toString('hex'));
+      return keyDigests.get(value);
+    },
     saveFeatureDocument(name, version, data) {
       if (read(name).version !== version) throw conflict();
       documents.set(name, { version: version + 1, data: copies(data) });
