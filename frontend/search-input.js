@@ -2,6 +2,7 @@
 (() => {
   'use strict';
   const pending = new Map(), compositions = new Set();
+  let focusedSearch;
   let applied = new WeakMap();
   let applying = 0, deferredRender = false;
   const matches = node => node?.matches?.('input[data-auto-search]');
@@ -98,6 +99,9 @@
       return false;
     },
     suspend(root) {
+      const focused = document.activeElement;
+      focusedSearch = matches(focused) && root.contains(focused)
+        ? { key: owner(focused), start: focused.selectionStart, end: focused.selectionEnd } : undefined;
       for (const entry of pending.values()) if (root.contains(entry.node)) {
         clearTimeout(entry.timer);
         entry.focused = document.activeElement === entry.node;
@@ -108,10 +112,20 @@
       }
     },
     restore(root) {
+      const focus = focusedSearch;
+      focusedSearch = undefined;
       for (const node of root.querySelectorAll('input[data-auto-search]')) {
-        const entry = pending.get(owner(node));
+        const key = owner(node);
+        const entry = pending.get(key);
         applied.set(node, entry?.appliedValue ?? node.value);
-        if (!entry || !visible(node)) continue;
+        if (!visible(node)) continue;
+        if (!entry) {
+          if (focus?.key === key) {
+            node.focus({ preventScroll: true });
+            if (focus.start !== null) node.setSelectionRange(focus.start, focus.end);
+          }
+          continue;
+        }
         entry.node = node;
         node.value = entry.value;
         if (entry.focused) {
@@ -124,6 +138,7 @@
     clear() {
       for (const entry of pending.values()) clearTimeout(entry.timer);
       pending.clear(); compositions.clear(); deferredRender = false;
+      focusedSearch = undefined;
       applied = new WeakMap();
     }
   };

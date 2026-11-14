@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import * as listOrder from './list-order.mjs';
 import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
 import * as orderOpening from './order-opening.mjs';
@@ -92,7 +93,7 @@ function runtime(localData) {
     getElementById: () => null
   };
   runInNewContext(source, {
-    window: { IDOrderOpening: orderOpening, IDRenewalReminders: renewalReminders, IDDesignAPI: api, IDDesignModules: modules, IDLocalData: localData, IDPagination: { defaultPageSize: 10, render: () => '' } },
+    window: { IDListOrder: listOrder, IDOrderOpening: orderOpening, IDRenewalReminders: renewalReminders, IDDesignAPI: api, IDDesignModules: modules, IDLocalData: localData, IDPagination: { defaultPageSize: 10, render: () => '' } },
     document,
     structuredClone: globalThis.structuredClone,
     Date,

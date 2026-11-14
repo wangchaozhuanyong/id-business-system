@@ -34,7 +34,8 @@ export function measuredActivity(route, method, intent) {
   if (['/api/local/auth/login', '/api/local/auth/login/verify'].includes(route) && method === 'POST') return 'login';
   if (['/api/local/customer-query/search', '/api/local/customer-query/detail'].includes(route) && method === 'POST')
     return 'customer-search';
-  if (route === '/api/local/commerce' && method === 'GET' && intent === 'order-list') return intent;
+  if (intent === 'order-list' && (route === '/api/local/commerce' && method === 'GET' ||
+      route === '/api/local/commerce/page' && method === 'POST')) return intent;
   if (['/api/local/commerce', '/api/local/batch'].includes(route) && method === 'PUT' && intent === 'order-save')
     return intent;
   if (route === '/api/local/renewals' && method === 'POST' && intent === 'order-save') return intent;

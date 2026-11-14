@@ -329,6 +329,8 @@ def main():
              "frontend/apple-funding.mjs", "frontend/list-order.mjs",
              "modules/website/pages.mjs", "modules/orders/order-opening.mjs", "modules/orders/list-order.mjs",
              "modules/finance/apple-funding.mjs", "modules/orders/renewal-reminders.mjs", "modules/data/document-delta.mjs",
+             "modules/orders/order-list.mjs", "modules/inventory/list.mjs", "modules/finance/accounting.mjs",
+             "modules/data/record-edit.mjs", "server/business-lists.mjs", "server/record-edit.mjs",
              "server/renewal-sidebar.mjs", "server/account-lifecycle.mjs", "server/finance/recharge-reconciliation.mjs",
              "server/site-management.mjs", "server/site-observations.mjs", "server/access-roles.mjs",
              "server/local-auth.mjs", "server/login-security.mjs", "server/staff-workspaces.mjs",

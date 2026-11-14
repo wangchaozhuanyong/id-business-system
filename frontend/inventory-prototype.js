@@ -3,6 +3,12 @@
   'use strict';
 
   const api = window.IDDesignAPI;
+  const { normalizeInventoryAsset: normalize, historicallyOpened, displayInventoryState, mailHealth, mailUse,
+    inventoryHealthTime: healthChangeTime, inventoryListTime, inventoryRegistrationTime: registrationTime,
+    inventoryRegistrationInstant: registrationInstant, inventoryIdentityIndex, defaultInventorySettings,
+    registrationPlatforms, registrationAddress, registrationProduct, stockRegistration, registeredPlatforms,
+    registrationConflict, inventoryPlatformLabel,
+    inventoryMatches, claudeInventoryIssue, inventoryCanExtract } = window.IDInventoryList;
   const operationalStatus = asset => window.IDOrderOpening?.inventoryOperationalStatus?.(asset) ?? (asset.status || '正常');
   const {
     esc,
@@ -30,40 +36,12 @@
   const returnRecords = [];
   const importRecords = [];
   const registrationRecords = [];
-  const registrationPlatforms = [
-    ['gpt', 'ChatGPT'], ['claude', 'Claude'], ['gemini', 'Gemini'], ['grok', 'Grok'], ['apple', 'Apple ID']
-  ];
   const relayRegistrationPlatforms = registrationPlatforms.filter(([key]) => ['gpt', 'claude', 'grok'].includes(key));
   const actualUsePurposes = ['注册 GPT', ...registrationPlatforms.slice(1).map(([, label]) => `注册 ${label}`), '客户交付', '其他'];
   const mailboxType = type => ['google', 'relay', 'microsoft'].includes(type);
-  function registrationProduct(value) {
-    const key = String(value || '').trim().toLowerCase();
-    return ({ chatgpt: 'gpt', codex: 'gpt', 'apple id': 'apple' })[key] || key;
-  }
-  function mailboxPlatforms(asset) {
-    const found = new Set();
-    const add = value => {
-      const key = registrationProduct(value);
-      if (registrationPlatforms.some(([id]) => id === key)) found.add(key);
-    };
-    for (const record of readInventoryIndex().registrations.get(asset.id) || []) add(record.product);
-    for (const link of asset.usageLinks || []) {
-      if (!['registration', 'manual-use'].includes(link.kind)) continue;
-      add(link.product);
-      if (link.kind === 'registration' && link.accountId)
-        add(readInventoryIndex().accountsById.get(link.accountId)?.type);
-    }
-    return registrationPlatforms.filter(([id]) => found.has(id));
-  }
-  function mailboxPlatformLabel(asset) {
-    const platforms = mailboxPlatforms(asset);
-    if (mailboxRegistrationConflict(asset, platforms)) return '待核对';
-    return platforms.map(([, label]) => label).join('、') ||
-      (asset.inventoryState === 'used' ? '平台未登记' : '未登记');
-  }
-  const registrationAddress = value => String(value || '').trim().toLowerCase();
-  const stockRegistration = row => stockType(row?.type) && row.source !== '客户提供' &&
-    !['客户自有', 'customer'].includes(row.accountSource);
+  const mailboxPlatforms = asset => registeredPlatforms(asset, readInventoryIndex());
+  const mailboxPlatformLabel = asset => asset.list?.platformLabel ??
+    inventoryPlatformLabel(asset, readInventoryIndex(), usageReview.get(asset.id));
   function registeredAccounts(asset) {
     const ids = new Set((asset.usageLinks || []).filter(link => link.kind === 'registration').map(link => link.accountId));
     const index = readInventoryIndex();
@@ -71,12 +49,7 @@
     return (index.stockByEmail.get(registrationAddress(asset.email)) || []).filter(account => ids.has(account.id));
   }
   function mailboxRegistrationConflict(asset, platforms = mailboxPlatforms(asset)) {
-    if (usageReview.get(asset.id)?.registrationConflict) return true;
-    const known = new Set(platforms.map(([key]) => key).filter(key => key !== 'apple'));
-    if (known.size > 1 || (asset.type === 'relay' && known.has('gemini'))) return true;
-    const address = registrationAddress(asset.email);
-    const related = address ? readInventoryIndex().stockByEmail.get(address) || [] : [];
-    return related.length > 1 || related.some(account => known.size && !known.has(account.type));
+    return registrationConflict(asset, platforms, readInventoryIndex(), usageReview.get(asset.id));
   }
   function mailboxRegistrationAccount(asset) {
     return mailboxRegistrationConflict(asset) ? null : registeredAccounts(asset)[0] || null;
@@ -137,25 +110,7 @@
   const displayIdentity = row => row?.loginMethod === 'x' && row.xHandle ? row.xHandle : row?.email || row?.xHandle || '';
   const identityKey = row => displayIdentity(row).trim().toLowerCase();
   function readInventoryIndex() {
-    if (!inventoryReadIndex) {
-      const byIdentity = new Map(), accountsById = new Map(), stockByEmail = new Map(), registrations = new Map();
-      const append = (index, key, row) => {
-        if (index.has(key)) index.get(key).push(row); else index.set(key, [row]);
-      };
-      for (const asset of accounts) {
-        let identities = byIdentity.get(asset.type);
-        if (!identities) byIdentity.set(asset.type, identities = new Map());
-        const key = identityKey(asset);
-        // Ambiguous identities must retain the existing "no unique account" result.
-        identities.set(key, identities.has(key) ? null : asset);
-        if (!accountsById.has(asset.id)) accountsById.set(asset.id, asset);
-        if (stockRegistration(asset)) append(stockByEmail, registrationAddress(asset.email), asset);
-      }
-      for (const record of registrationRecords)
-        if (record.state === '成功') append(registrations, record.assetId, record);
-      inventoryReadIndex = { byIdentity, accountsById, stockByEmail, registrations };
-    }
-    return inventoryReadIndex;
+    return inventoryReadIndex ??= inventoryIdentityIndex(accounts, registrationRecords);
   }
   const proxyProtocols = [['socks5', 'SOCKS5'], ['http', 'HTTP'], ['https', 'HTTPS']];
   const proxyDefaults = { socks5: '1080', http: '80', https: '443' };
@@ -187,6 +142,22 @@
   ]);
   let initialized = false;
   const localData = window.IDLocalData;
+  const pagedInventory = () => localData?.isBusinessListRoute?.(api.state.route) &&
+    /^(accounts|mailboxes)\//.test(api.state.route) && api.canVisit(api.state.route);
+  const stockPage = localData?.createBusinessList?.('inventory-page', {
+    params() {
+      if (!pagedInventory()) return;
+      const { tab, query, country, status, usage } = view();
+      return { type: api.state.route.split('/')[1], tab, query, country, status, usage,
+        page: api.state.page, pageSize: api.state.pageSize };
+    },
+    render: api.render,
+    progress() {
+      const indicator = document.querySelector('#main [data-business-list-progress="inventory"]');
+      if (indicator) return api.beginRegionRead(indicator.parentElement, indicator, { loadingText: '正在读取库存…' });
+    },
+    canRefresh: () => !document.querySelector('#confirm-dialog[open], .row-action-menu:popover-open')
+  });
   let localInventoryVersion = 0;
   let localInventoryState = 'loading';
   let inventorySavePending = false;
@@ -264,7 +235,7 @@
   }
 
   let inventoryLoad;
-  function readLocalInventory({ keepContent = false } = {}) {
+  function readLocalInventory({ keepContent = false, silent = false } = {}) {
     if (inventoryLoad) return inventoryLoad;
     const hadContent = localInventoryState === 'ready';
     if (!keepContent) localInventoryState = 'loading';
@@ -276,7 +247,7 @@
       return false;
     }).finally(() => {
       inventoryLoad = undefined;
-      if (inventoryRoute() && (!keepContent || (!hadContent && localInventoryState === 'ready'))) {
+      if (!silent && inventoryRoute() && (!keepContent || (!hadContent && localInventoryState === 'ready'))) {
         saveDrafts();
         api.render();
       }
@@ -535,7 +506,7 @@
     if (!asset.auxiliary) return '未绑定';
     const security = asset.microsoftSecurity;
     if (security?.recoveryAccess === 'inventory' &&
-        !microsoftRecoveryMailbox(asset)) return '需核对关联';
+        !(asset.list?.recoveryLinked ?? microsoftRecoveryMailbox(asset))) return '需核对关联';
     return choiceLabel(microsoftRecoveryOptions, security?.recoveryAccess, '未核验');
   }
   function microsoftRecoveryMailbox(asset) {
@@ -635,29 +606,13 @@
         ?.label || '未记录'
     );
   }
+  const listSummary = asset => asset.list ? asset.list.summary : accountSummaries.get(asset.id);
+  const listUsageReview = asset => asset.list ? asset.list.review : usageReview.get(asset.id)?.status;
   function accountKyc(asset) {
-    if (accountSummaries.get(asset.id)?.latestKyc) return 'KYC 认证（历史）';
+    if (listSummary(asset)?.latestKyc) return 'KYC 认证（历史）';
     if (asset.kyc === true || ['KYC 认证', 'KYC认证'].includes(asset.kyc)) return 'KYC 认证';
     if (asset.kyc === false || asset.kyc === '未认证') return '未认证';
     return '未记录';
-  }
-  function healthChangeTime(asset) {
-    const label = asset.health === 'dead' ? '死号' : '解封中';
-    const event = [...(asset.inventoryHistory || [])]
-      .reverse()
-      .find(
-        (entry) =>
-          (entry.action === '健康状态变化' && entry.detail === asset.health) ||
-          (entry.action === '归还' && String(entry.detail || '').endsWith(` · ${label}`))
-      );
-    return event?.time || asset.healthChangedAt || '历史未记录';
-  }
-  function inventoryListTime(asset, tab) {
-    const recorded = [asset.createdAt, asset.importedAt, asset.registered];
-    if (tab === 'claimed') return [asset.claimedAt, ...recorded];
-    if (tab === 'used') return [asset.actualUsedAt, asset.claudeHistory?.start, asset.usedAt, ...recorded];
-    if (tab === 'dead' || tab === 'unlocking') return [healthChangeTime(asset), ...recorded];
-    return recorded;
   }
   function wide(label, id, control, required = false, help = '') {
     return field(label, id, control, required, help).replace(
@@ -667,17 +622,6 @@
   }
   function area(id, value = '', placeholder = '', rows = 3) {
     return `<textarea id="${id}" name="${id}" rows="${rows}" placeholder="${esc(placeholder)}">${esc(value)}</textarea>`;
-  }
-  function normalize(asset) {
-    if (!asset.inventoryState) asset.inventoryState = asset.used ? 'used' : 'available';
-    if (!asset.inventoryHistory) asset.inventoryHistory = [];
-    if (!asset.usageLinks) asset.usageLinks = [];
-    if (!asset.version) asset.version = 1;
-    if (!asset.createdAt && asset.importedAt) asset.createdAt = asset.importedAt;
-    if (!asset.health) asset.health = 'normal';
-    if (!asset.status) asset.status = '正常';
-    asset.used = asset.inventoryState !== 'available';
-    return asset;
   }
   function allAssets() {
     return [...mailboxes, ...accounts]
@@ -697,16 +641,6 @@
     const date = registrationInstant(registrationTime(asset));
     const now = Date.parse(inventoryNow().replace(' ', 'T') + ':00+08:00');
     return Number.isFinite(date) && date <= now ? Math.floor((now - date) / 3600000) : null;
-  }
-  function registrationTime(asset) {
-    return String(asset.registered || '').trim() ||
-      (asset.claudeHistory ? '' : asset.createdAt || asset.importedAt || '');
-  }
-  function registrationInstant(value) {
-    const text = String(value || '').trim().replace(' ', 'T');
-    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return Date.parse(`${text}T00:00+08:00`);
-    if (/T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(text)) return Date.parse(`${text}+08:00`);
-    return /(?:Z|[+-]\d{2}:?\d{2})$/i.test(text) ? Date.parse(text) : NaN;
   }
   function registrationInput(asset) {
     const instant = registrationInstant(registrationTime(asset));
@@ -765,38 +699,28 @@
     return personalAccount(asset.type) && (accountSummaries.get(asset.id)?.label === '已保留待核对' ||
       api.modules.commerce?.hasPendingPersonalDelivery?.(asset.id));
   }
-  const historicallyOpened = asset => asset.type === 'claude' && asset.claudeHistory?.phase === 'opened';
-  const displayInventoryState = asset => historicallyOpened(asset) ? 'used' : asset.inventoryState;
   const acquisitionChoices = [['self_registered', '自己邮箱注册'], ['purchased', '网上购买']];
   const acquisitionLabel = value => acquisitionChoices.find(([id]) => id === value)?.[1] || '未登记';
-  const mailHealth = asset => ({ dead: '死号', unlocking: '解封中' }[asset.health] || asset.status || '未登记');
-  const mailUse = asset => asset.type === 'microsoft' && asset.inventoryState === 'available'
-    ? asset.mailboxUsage || 'unknown' : displayInventoryState(asset);
   const mailUseLabels = { available: '未使用', claimed: '已提取', used: '已使用', unknown: '未登记' };
   const claudeAgingHours = () => settingsFor('claude').hours ?? 72;
-  function claudeReadiness(asset) {
+  function claudeReadiness(asset, agingHours = claudeAgingHours()) {
     if (asset.health === 'dead') return tag('死号', 'warning');
     if (historicallyOpened(asset)) return tag('历史已开通', 'success');
-    if (asset.health !== 'normal' || operationalStatus(asset) !== '正常' || usageReview.get(asset.id)?.status === 'review') return tag('资料异常', 'warning');
+    if (asset.health !== 'normal' || (asset.list?.operationalStatus ?? operationalStatus(asset)) !== '正常' || listUsageReview(asset) === 'review') return tag('资料异常', 'warning');
     if (asset.inventoryState === 'used') return tag('已使用', 'success');
     if (asset.inventoryState === 'claimed') return tag('已提取', 'warning');
     const hours = age(asset);
     if (hours === null) return tag('注册时间待核对', 'warning');
-    return hours >= claudeAgingHours() ? tag('可使用', 'success') : tag('养号中', 'warning');
+    return hours >= agingHours ? tag('可使用', 'success') : tag('养号中', 'warning');
   }
   function available(asset, forDelivery = false) {
     normalize(asset);
-    if (historicallyOpened(asset) || personalCustomerOwned(asset) ||
-        (!forDelivery && personalDeliveryPending(asset))) return false;
-    if (asset.type === 'relay' && (localData || !api.modules.appleRelay?.isAvailable(asset)))
-      return false;
-    return (
-      asset.inventoryState === 'available' &&
-      !usageReview.has(asset.id) &&
-      asset.health === 'normal' &&
-      operationalStatus(asset) === '正常' &&
-      (asset.type !== 'claude' || (age(asset) !== null && age(asset) >= claudeAgingHours()))
-    );
+    if (asset.type === 'relay') return !localData && api.modules.appleRelay?.isAvailable(asset) &&
+      asset.inventoryState === 'available' && !usageReview.has(asset.id) && asset.health === 'normal' &&
+      operationalStatus(asset) === '正常';
+    return inventoryCanExtract(asset, { review: usageReview.get(asset.id),
+      pendingDelivery: !forDelivery && personalDeliveryPending(asset), agingHours: claudeAgingHours(),
+      at: Date.parse(inventoryNow().replace(' ', 'T') + ':00+08:00') });
   }
   function availableForDelivery(asset) {
     if (historicallyOpened(asset) || personalCustomerOwned(asset)) return false;
@@ -839,11 +763,7 @@
   }
   function settingsFor(type) {
     if (!tableSettings.has(type))
-      tableSettings.set(type, {
-        countries: ['马来西亚', '美国', '日本', '新加坡'],
-        sources: ['自己注册', '线上购买', '客户提供'],
-        hours: 72
-      });
+      tableSettings.set(type, defaultInventorySettings());
     return tableSettings.get(type);
   }
   function mailExtractionPurposes(type) {
@@ -1021,7 +941,6 @@
     if (initialized) return;
     initialized = true;
     if (localData) {
-      applyInventoryDocument(null);
       void readLocalInventory();
       return;
     }
@@ -1160,11 +1079,14 @@
     const googleDelivery = type === 'google' && delivery?.enabled();
     const canManage = (!microsoft && !personalAccount(type)) || !localData || admin();
     const v = view();
-    const assets = collection(kind)
-      .map(normalize)
-      .filter((asset) => asset.type === type);
+    const paged = pagedInventory();
+    const { result, error, stale } = paged ? stockPage.view() : {};
+    const deliverySnapshot = paged ? result?.mailboxPool : delivery?.currentPool();
+    const deliveryRows = new Map((paged && deliverySnapshot?.items || []).map(row => [row.email.trim().toLowerCase(), row]));
+    const deliveryRow = asset => paged ? deliveryRows.get(asset.email?.trim().toLowerCase()) : delivery.google(asset.email);
+    const assets = paged ? [] : collection(kind).map(normalize).filter(asset => asset.type === type);
     const useState = kind === 'mail' ? mailUse : displayInventoryState;
-    const counts = {
+    const counts = paged ? result?.counts || {} : {
       available: assets.filter(asset => useState(asset) === 'available' && asset.health === 'normal').length,
       claimed: assets.filter(asset => useState(asset) === 'claimed' && asset.health === 'normal').length,
       used: assets.filter(asset => useState(asset) === 'used').length,
@@ -1175,28 +1097,21 @@
     const actions = canManage ?
       (googleDelivery ? button('复制设置', 'mailbox-delivery-settings', '', 'settings') +
         button('查询码设置', 'mailbox-delivery-validity', '', 'key') : '') +
-      (microsoft ? '' : usageReviewButton()) + button('本表设置', 'inventory-settings', '', 'settings') +
+      (microsoft ? '' : paged ? result?.hasReview ? button('核对使用关联', 'inventory-usage-review', '', 'check') : '' : usageReviewButton()) +
+      button('本表设置', 'inventory-settings', '', 'settings') +
       (type === 'claude' && localData && admin() ? button('历史账号入库', 'inventory-claude-history', '', 'upload') : '') +
       button('批量导入', 'inventory-import', '', 'upload') +
       button(kind === 'account' ? '新增账号' : '新增邮箱', 'inventory-add', 'primary', 'plus') : '';
     let body;
-    if (v.tab === 'imports') body = importList(type);
+    const pageControls = result ? pagination(result.total, { page: result.page, pageSize: result.pageSize, disabled: stale }) : '';
+    const unavailable = error ? empty('库存暂时无法读取', stale ? '下方保留上一次的查询结果。' : '') + button('重试', 'inventory-reload')
+      : empty('正在读取库存', '');
+    if (v.tab === 'imports') body = paged ? result ? importList(type, '', result.rows) + pageControls : unavailable : importList(type);
     else if (v.tab === 'registrations') body = registrationList();
     else {
-      const rows = assets.filter(
-        (asset) =>
-          (v.tab === 'all' || (['dead', 'unlocking'].includes(v.tab)
-            ? asset.health === v.tab
-            : (v.tab === 'used' || asset.health === 'normal') &&
-              useState(asset) === v.tab)) &&
-          (!v.query ||
-            `${displayIdentity(asset)} ${asset.email || ''} ${asset.notes || ''} ${asset.purpose || ''} ${kind === 'mail' ? mailboxPlatformLabel(asset) : ''} ${microsoft ? asset.auxiliary || '' : ''}`
-              .toLowerCase()
-              .includes(v.query.toLowerCase())) &&
-          (!v.country || asset.country === v.country) &&
-          (!v.status || (kind === 'mail' ? mailHealth(asset) : asset.status) === v.status) &&
-          (kind !== 'mail' || !v.usage || mailUse(asset) === v.usage)
-      );
+      const rows = paged ? result?.rows || [] : assets.filter(asset => inventoryMatches(asset, v, {
+        mail: kind === 'mail', platformLabel: kind === 'mail' ? mailboxPlatformLabel(asset) : ''
+      }));
       const totpColumn = {
         id: 'totp', label: '2FA 密钥', class: 'mono wide-cell', long: true,
         render: (asset) => esc(asset.totp || '未录入')
@@ -1226,7 +1141,7 @@
           render: asset => esc(acquisitionLabel(asset.acquisitionMethod)) }] : []),
         ...(mailboxType(type) ? [{ id: 'registrationPlatform', label: '注册平台',
           render: asset => esc(mailboxPlatformLabel(asset)) }] : []),
-        ...(type === 'claude' && assets.some(asset => asset.claudeHistory) ? [
+        ...(type === 'claude' && (result?.history ?? assets.some(asset => asset.claudeHistory)) ? [
           { id: 'claudeHistoryState', label: '历史登记状态', render: asset => esc(claudeHistoryStates[asset.claudeHistory?.phase] || '—') }
         ] : []),
         {
@@ -1239,7 +1154,7 @@
         },
         ...(personalAccount(type) ? [
           { id: 'loginMethod', label: '登录方式', render: asset => esc(choiceLabel(grokLoginOptions, asset.loginMethod)) },
-          { id: 'customer', label: '当前客户', render: asset => esc(accountSummaries.get(asset.id)?.customer || '未分配') }
+          { id: 'customer', label: '当前客户', render: asset => esc(listSummary(asset)?.customer || '未分配') }
         ] : []),
         ...(microsoft ? [
           { id: 'loginMode', label: '登录方式', render: (asset) => esc(choiceLabel(microsoftLoginModes, asset.microsoftSecurity?.loginMode)) },
@@ -1275,11 +1190,11 @@
           label: '使用状态',
           render: (asset) => kind === 'mail'
             ? tag(mailUseLabels[mailUse(asset)] || '未登记', mailUse(asset) === 'used' ? 'success' : '')
-            : usageReview.has(asset.id)
-            ? tag(usageReview.get(asset.id).status === 'used' ? '检测到已使用' : '待核对', 'warning')
+            : listUsageReview(asset)
+            ? tag(listUsageReview(asset) === 'used' ? '检测到已使用' : '待核对', 'warning')
             :
             tag(
-              (historicallyOpened(asset) ? '历史已开通' : accountSummaries.get(asset.id)?.label) ||
+              (historicallyOpened(asset) ? '历史已开通' : listSummary(asset)?.label) ||
               { available: '未使用', claimed: '已提取待使用', used: '已实际使用' }[
                 displayInventoryState(asset)
               ],
@@ -1291,9 +1206,9 @@
             )
         },
         ...(usesAccountLocation(type) ? [
-          { id: 'currentCustomer', label: '当前客户', render: asset => esc(accountSummaries.get(asset.id)?.customer || '未分配') },
-          { id: 'reuseState', label: '库存用途', render: asset => esc(asset.accountLifecycle?.disposition === 'retired' ? '不再复用' : accountSummaries.get(asset.id)?.lastRecoveredAt ? '回收复用' : '常规库存') },
-          { id: 'lastRecoveredAt', label: '最近回收时间', render: asset => esc(accountSummaries.get(asset.id)?.lastRecoveredAt || '—') }
+          { id: 'currentCustomer', label: '当前客户', render: asset => esc(listSummary(asset)?.customer || '未分配') },
+          { id: 'reuseState', label: '库存用途', render: asset => esc(asset.accountLifecycle?.disposition === 'retired' ? '不再复用' : listSummary(asset)?.lastRecoveredAt ? '回收复用' : '常规库存') },
+          { id: 'lastRecoveredAt', label: '最近回收时间', render: asset => esc(listSummary(asset)?.lastRecoveredAt || '—') }
         ] : []),
         ...(type === 'claude'
           ? [
@@ -1316,7 +1231,7 @@
               {
                 id: 'ready',
                 label: '是否可用',
-                render: claudeReadiness
+                render: asset => claudeReadiness(asset, result?.agingHours)
               },
               { id: 'kyc', label: 'KYC 状态', render: (asset) => esc(accountKyc(asset)) }
             ]
@@ -1337,7 +1252,8 @@
               { id: 'usedAt', label: '提取时间', render: (asset) => esc(asset.claimedAt || asset.usedAt || '未记录') },
               ...(v.tab === 'used' ? [{
                 id: 'actualUsedAt', label: '实际使用时间',
-                render: (asset) => esc(asset.actualUsedAt || (historicallyOpened(asset) && String(asset.claudeHistory.start || '').replace('T', ' ')) || pendingClaim(asset)?.item.usedAt || '未记录')
+                render: (asset) => esc(asset.actualUsedAt || (historicallyOpened(asset) && String(asset.claudeHistory.start || '').replace('T', ' ')) ||
+                  (asset.list ? asset.list.claimUsedAt : pendingClaim(asset)?.item.usedAt) || '未记录')
               }, {
                 id: 'usedHealth', label: '健康状态',
                 render: (asset) => esc({ dead: '死号', unlocking: '解封中' }[asset.health] || '正常')
@@ -1350,7 +1266,7 @@
               {
                 id: 'healthChangedAt',
                 label: v.tab === 'dead' ? '死号时间' : '进入解封中时间',
-                render: (asset) => esc(healthChangeTime(asset))
+                render: (asset) => esc(asset.list?.healthChangeTime ?? healthChangeTime(asset))
               }
             ]
           : []),
@@ -1384,9 +1300,9 @@
         { id: 'notes', label: '备注 1', class: 'wide-cell', long: true },
         { id: 'notes2', label: '备注 2', class: 'wide-cell', long: true },
         ...(googleDelivery ? [
-          { id: 'mailboxBinding', label: '查询授权', render: asset => esc(!delivery.currentPool() ? googlePoolError ? '读取失败' : '正在读取…' : delivery.connection(delivery.google(asset.email))) },
-          { id: 'queryExpiry', label: '查询码到期', render: asset => esc(delivery.date(delivery.google(asset.email)?.expiresAt)) },
-          { id: 'queryRemaining', label: '剩余有效天数', render: asset => esc(delivery.remaining(delivery.google(asset.email))) }
+          { id: 'mailboxBinding', label: '查询授权', render: asset => esc(!deliverySnapshot ? googlePoolError ? '读取失败' : '正在读取…' : delivery.connection(deliveryRow(asset), true)) },
+          { id: 'queryExpiry', label: '查询码到期', render: asset => esc(delivery.date(deliveryRow(asset)?.expiresAt)) },
+          { id: 'queryRemaining', label: '剩余有效天数', render: asset => esc(delivery.remaining(deliveryRow(asset))) }
         ] : []),
         {
           id: 'actions',
@@ -1394,7 +1310,7 @@
           action: true,
           render: (asset) => {
             const attrs = `data-id="${esc(asset.id)}"`;
-            const row = googleDelivery && delivery.google(asset.email);
+            const row = googleDelivery && deliveryRow(asset);
             const ready = delivery?.canRotate(row) && asset.health === 'normal' && asset.status === '正常';
             return `<div class="action-links">${googleDelivery ? textAction('复制账密', 'inventory-google-credentials', attrs) +
               textAction('复制查询', 'inventory-google-query-copy', `${attrs} ${ready ? 'title="生成新码并复制，旧码失效"' : 'disabled'}`) : ''}${canManage ? textAction('编辑', 'inventory-edit', attrs) : ''}${textAction('详情', 'inventory-detail', attrs)}${canManage ? textAction('更多操作', 'inventory-more', `${attrs} aria-haspopup="menu" aria-expanded="false"`, '', 'down') : ''}</div>`;
@@ -1402,11 +1318,18 @@
         }
       ];
       const selection = api.getSelection('inventory-module-assets');
-      body = `<div class="toolbar list-filters"><div class="toolbar-left"><div class="search-field">${icon('search')}<input data-auto-search id="inventory-list-query" aria-label="搜索库存资料" placeholder="${microsoft ? '搜索邮箱、辅助邮箱或备注' : '搜索账号、备注或用途'}" value="${esc(v.query)}" /></div><select id="inventory-country" aria-label="筛选国家">${options(choicesWithCurrent([['', '全部国家'], ...settingsFor(type).countries], v.country), v.country)}</select><select id="inventory-status" aria-label="筛选${kind === 'mail' ? '邮箱' : '账号'}状态">${options([['', '全部状态'], '正常', '冻结', '封控中', ...(kind === 'mail' ? ['死号', '解封中'] : [])], v.status)}</select>${kind === 'mail' ?
-        `<select id="inventory-usage-filter" aria-label="筛选使用状态">${options([['', '全部使用状态'], ...Object.entries(mailUseLabels)], v.usage)}</select>` : ''}</div><div class="toolbar-right">${googleDelivery ? button('批量重置', 'inventory-google-batch', '', 'refresh', delivery.currentPool() ? '' : 'disabled') : ''}${button('列设置', 'column-settings', '', 'columns', `data-table-id="${esc(title)}库存"`)}${microsoft ? '' : button('提取与归还', 'inventory-center', '', 'return')}${button(microsoft ? '复制邮箱地址' : '复制所选', 'inventory-copy-selected', '', 'copy', selection.size ? '' : 'disabled')}${!microsoft && v.tab === 'claimed' ? button('归还所选', 'inventory-return-selected', '', 'return', selection.size ? '' : 'disabled') : ''}</div></div>${googleDelivery && googlePoolError ? `<p class="inline-notice warning" role="status">${esc(googlePoolError)} ${button('重试', 'inventory-google-refresh')}</p>` : ''}${table(columns, pageRows(rows, asset => inventoryListTime(asset, v.tab)), 'inventory-module-assets', `${title}库存`)}${pagination(rows.length)}`;
+      const countries = paged ? result?.countries || [] : settingsFor(type).countries;
+      const list = paged ? (error ? unavailable : '') + (result
+        ? table(columns, rows, 'inventory-module-assets', `${title}库存`) + pageControls
+        : error ? '' : unavailable)
+        : table(columns, pageRows(rows, asset => inventoryListTime(asset, v.tab)), 'inventory-module-assets', `${title}库存`) + pagination(rows.length);
+      body = `<div class="toolbar list-filters"><div class="toolbar-left"><div class="search-field">${icon('search')}<input data-auto-search id="inventory-list-query" aria-label="搜索库存资料" maxlength="500" placeholder="${microsoft ? '搜索邮箱、辅助邮箱或备注' : '搜索账号、备注或用途'}" value="${esc(v.query)}" /></div><select id="inventory-country" aria-label="筛选国家">${options(choicesWithCurrent([['', '全部国家'], ...countries], v.country), v.country)}</select><select id="inventory-status" aria-label="筛选${kind === 'mail' ? '邮箱' : '账号'}状态">${options([['', '全部状态'], '正常', '冻结', '封控中', ...(kind === 'mail' ? ['死号', '解封中'] : [])], v.status)}</select>${kind === 'mail' ?
+        `<select id="inventory-usage-filter" aria-label="筛选使用状态">${options([['', '全部使用状态'], ...Object.entries(mailUseLabels)], v.usage)}</select>` : ''}</div><div class="toolbar-right">${googleDelivery ? button('批量重置', 'inventory-google-batch', '', 'refresh', deliverySnapshot ? '' : 'disabled') : ''}${button('列设置', 'column-settings', '', 'columns', `data-table-id="${esc(title)}库存"`)}${microsoft ? '' : button('提取与归还', 'inventory-center', '', 'return')}${button(microsoft ? '复制邮箱地址' : '复制所选', 'inventory-copy-selected', '', 'copy', selection.size ? '' : 'disabled')}${!microsoft && v.tab === 'claimed' ? button('归还所选', 'inventory-return-selected', '', 'return', selection.size ? '' : 'disabled') : ''}</div></div>${googleDelivery && googlePoolError ? `<p class="inline-notice warning" role="status">${esc(googlePoolError)} ${button('重试', 'inventory-google-refresh')}</p>` : ''}${list}`;
     }
+    const stockTotal = paged ? result?.stockTotal : assets.length;
+    const stockAvailable = paged ? result?.available : microsoft ? counts.available : assets.filter(available).length;
     const tabItems = [
-      ...(kind === 'mail' ? [['all', '全部', assets.length]] : []),
+      ...(kind === 'mail' ? [['all', '全部', stockTotal]] : []),
       ['available', ['google', 'microsoft'].includes(type) ? '未使用' : usesAccountLocation(type) ? '可用库存' : '库存', counts.available],
       ['claimed', '已提取', counts.claimed],
       ['used', '已使用', counts.used],
@@ -1419,12 +1342,12 @@
         : type === 'claude' ? '历史登记状态保留原记录。是否可用按注册时间、养号门槛及账号状态判定。'
         : '资料只保存一份，提取、实际使用、归还与异常记录分别追溯。', actions) +
       summary([
-        ['全部资料', assets.length, '条'],
-        [microsoft ? '未使用' : '当前可提取', microsoft ? counts.available : assets.filter(available).length, '条', true],
-        ['待使用', counts.claimed, '条'],
-        ['已实际使用', counts.used, '条']
+        ['全部资料', stockTotal ?? '—', '条'],
+        [microsoft ? '未使用' : '当前可提取', stockAvailable ?? '—', '条', true],
+        ['待使用', counts.claimed ?? '—', '条'],
+        ['已实际使用', counts.used ?? '—', '条']
       ]) +
-      `<section class="panel"><div class="tabs" role="tablist" aria-label="库存视图" data-page-actions="tabs">${tabItems.map(([id, label, count]) => `<button class="tab ${v.tab === id ? 'active' : ''}" role="tab" aria-selected="${v.tab === id}" data-action="inventory-tab" data-tab="${id}">${label}${count !== '' ? `<span class="tab-count">${count}</span>` : ''}</button>`).join('')}</div>${body}</section>`
+      `<section class="panel"><div class="tabs" role="tablist" aria-label="库存视图" data-page-actions="tabs">${tabItems.map(([id, label, count]) => `<button class="tab ${v.tab === id ? 'active' : ''}" role="tab" aria-selected="${v.tab === id}" data-action="inventory-tab" data-tab="${id}">${label}${count !== undefined && count !== '' ? `<span class="tab-count">${count}</span>` : ''}</button>`).join('')}</div>${paged ? '<div data-business-list-progress="inventory" role="status" hidden></div>' : ''}${body}</section>`
     );
   }
 
@@ -2639,11 +2562,16 @@
     const asset = assetById(id);
     if (!asset) return;
     const delivery = api.modules.mailboxDelivery;
-    const mailbox = asset.type === 'google' && delivery?.enabled() && delivery.google(asset.email);
+    const mailbox = asset.type === 'google' && delivery?.enabled() && googleMailboxDelivery(asset);
     const queryActions = mailbox && !mailbox.authorizationPending && !mailbox.associationConflict
       ? button('仅复制当前码', 'inventory-google-current-code', '', 'copy', `data-id="${esc(id)}"`) +
         button('重置查询码', 'inventory-google-query-reset', '', 'refresh', `data-id="${esc(id)}" ${delivery.canRotate(mailbox) && asset.health === 'normal' && asset.status === '正常' ? '' : 'disabled'}`) : '';
     api.openActionMenu(node, queryActions + mailboxPlatformButton(asset) + `<div class="property-list"><div class="property-row"><span>邮箱 / 账号</span><strong>${esc(displayIdentity(asset))}</strong></div></div><div class="guide-list"><div class="guide-item"><h3>账号状态</h3><div class="toolbar">${asset.health === 'normal' ? button('移入死号', 'inventory-health', 'danger', '', `data-id="${id}" data-health="dead"`) + button('移入解封中', 'inventory-health', '', '', `data-id="${id}" data-health="unlocking"`) : button('恢复资料', 'inventory-health', '', 'return', `data-id="${id}" data-health="normal"`)}</div></div><div class="guide-item"><h3>使用与归还</h3><div class="toolbar">${accountLifecycleActions(asset)}${asset.inventoryState === 'claimed' ? button('归还资料', 'inventory-return-asset', '', 'return', `data-id="${id}"`) : ''}${asset.type === 'relay' || asset.type === 'google' || asset.type === 'apple' ? button('登记注册结果', 'inventory-register', '', 'play', `data-id="${id}"`) : ''}${button('查看记录', 'inventory-detail', '', 'orders', `data-id="${id}"`)}</div></div><div class="guide-item"><h3>资料更正</h3><div class="toolbar">${button('撤回最近修改', 'inventory-undo', '', 'return', `data-id="${id}" ${undo.has(id) ? '' : 'disabled'}`)}${asset.health === 'dead' && asset.type !== 'relay' ? button('永久删除', 'inventory-delete', 'danger', '', `data-id="${id}"`) : ''}</div></div>${asset.type === 'relay' ? `<div class="guide-item"><h3>邮箱操作</h3><div class="toolbar">${button('查看邮件', 'inventory-mail-read', '', 'mail', `data-id="${id}"`)}${button('复制查询码', 'inventory-copy-query', '', 'copy', `data-id="${id}"`)}</div></div>` : ''}</div>`);
+  }
+  function googleMailboxDelivery(asset) {
+    return pagedInventory()
+      ? stockPage.view().result?.mailboxPool?.items.find(row => row.email.trim().toLowerCase() === asset.email?.trim().toLowerCase())
+      : api.modules.mailboxDelivery?.google(asset.email);
   }
   const workspaceRecordTimeFormat = new Intl.DateTimeFormat('sv-SE', {
     timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
@@ -4506,8 +4434,48 @@
     );
   }
 
-  function onClick(action, node) {
+  function onClick(action, node, hydrated = false) {
     if (!action.startsWith('inventory-')) return false;
+    if (pagedInventory() && node.closest('[data-page-region]') && !hydrated) {
+      if (action === 'inventory-tab') {
+        view().tab = node.dataset.tab;
+        api.state.page = 1;
+        api.getSelection('inventory-module-assets').clear();
+        api.render();
+      } else if (action === 'inventory-reload') void stockPage.read(true);
+      else if (action === 'inventory-google-refresh') void stockPage.read(true);
+      else if (action === 'inventory-google-credentials' || action === 'inventory-google-query-copy' || action === 'inventory-google-batch') {
+        const result = stockPage.view().result, delivery = api.modules.mailboxDelivery;
+        if (!delivery?.enabled() || !result?.mailboxPool) return true;
+        const id = node.dataset.id;
+        const asset = result.rows.find(row => row.id === id);
+        const reset = (mode, ids, count, trigger, copyQuery = false) => delivery.reset('google', mode, ids, count, trigger,
+          { snapshot: result.mailboxPool, copyQuery, done: () => void stockPage.read(true) });
+        if (action === 'inventory-google-batch') delivery.batchMenu(node, 'google', result.mailboxTotal, reset);
+        else if (asset?.type === 'google' && action === 'inventory-google-credentials') void delivery.copyCredentials(asset, node);
+        else if (asset?.type === 'google') reset('single', [id], 1, node, true);
+      }
+      else if (action === 'inventory-center') api.go('workspace/extractions');
+      else if (inventorySavePending) api.notify('资料正在保存，请稍候重试');
+      else {
+        void api.withActionFeedback(node, async () => {
+          const route = api.state.route, actor = currentActor().id, context = api.state.drawerContext;
+          initialized = true;
+          const ready = await readLocalInventory({ keepContent: true, silent: true });
+          if (!node.isConnected || route !== api.state.route || actor !== currentActor().id ||
+              context !== api.state.drawerContext) return;
+          if (!ready) return false;
+          const id = node.dataset.id;
+          if (id && ['inventory-edit', 'inventory-detail', 'inventory-more'].includes(action) && !assetById(id)) {
+            api.notify('资料已变化，请刷新后核对');
+            void stockPage.read(true);
+            return;
+          }
+          onClick(action, node, true);
+        }, { pending: '正在读取资料…', failure: '库存资料暂时无法读取，请重试' });
+      }
+      return true;
+    }
     initialize();
     if (action === 'inventory-reload') {
       if (localData && localInventoryState === 'error') {
@@ -4525,9 +4493,10 @@
     if (action.startsWith('inventory-google-')) {
       const delivery = api.modules.mailboxDelivery;
       if (!delivery?.enabled() || api.state.route !== 'mailboxes/google') return true;
-      const asset = assetById(id), mailbox = asset && delivery.google(asset.email);
+      const asset = assetById(id), mailbox = asset && googleMailboxDelivery(asset);
       const reset = (mode, ids, count, trigger, copyQuery = false) => delivery.reset('google', mode, ids, count, trigger,
-        { copyQuery, done: () => api.render() });
+        { snapshot: pagedInventory() ? stockPage.view().result?.mailboxPool : delivery.currentPool(), copyQuery,
+          done: () => pagedInventory() ? void stockPage.read(true) : api.render() });
       if (action === 'inventory-google-refresh') void refreshGooglePool(true);
       else if (action === 'inventory-google-batch') delivery.batchMenu(node, 'google',
         mailboxes.filter(row => row.type === 'google' && !row.deleted).length, reset);
@@ -5310,19 +5279,7 @@
       const matched = readInventoryIndex().byIdentity.get(type)?.get(String(email || '').trim().toLowerCase());
       return matched ? accountSummaries.get(matched.id) : null;
     },
-    claudeOrderAccountIssue(order) {
-      const identity = String(order.email || '').trim().toLowerCase();
-      if (!identity || ['客户自有', 'customer'].includes(order.accountSource)) return '';
-      const { accountsById, byIdentity } = readInventoryIndex();
-      const asset = order.accountId ? accountsById.get(order.accountId) : byIdentity.get('claude')?.get(identity);
-      if (asset?.type !== 'claude' || identityKey(asset) !== identity ||
-          (order.platformAccountId && asset.platformAccountId && order.platformAccountId !== asset.platformAccountId)) return '';
-      if (asset.health === 'dead' || (!asset.health && (asset.status === '死号' || asset.claudeHistory?.phase === 'dead')))
-        return '死号';
-      if (asset.health === 'unlocking' || (!asset.health && asset.status === '解封中')) return '解封中';
-      if (asset.status === '封控中') return '封控中';
-      return operationalStatus(asset) === '冻结' ? '冻结' : '';
-    },
+    claudeOrderAccountIssue: order => claudeInventoryIssue(order, readInventoryIndex()),
     usageReviewButton,
     usageReviewFor: (id) => usageReview.get(id),
     async refreshOverview() {
@@ -5583,6 +5540,10 @@
 
   window.IDDesignModules.push({
     id: 'inventory',
+    deactivate() {
+      if (!pagedInventory()) stockPage?.clear();
+    },
+    clearPageState() { stockPage?.clear(); },
     beforeNavigate(route) {
       if (localData && api.usesSharedBusinessData(route) &&
           (!localData.authRequired || ['admin', 'super'].includes(currentActor().role))) initialize();
@@ -5593,8 +5554,9 @@
       );
     },
     render() {
-      initialize();
       const route = api.state.route;
+      if (pagedInventory()) return inventoryPage();
+      initialize();
       if (localData && localInventoryState !== 'ready') {
         const failed = localInventoryState === 'error';
         return (
@@ -5614,14 +5576,19 @@
     onChange,
     onInput,
     preserveDraft: saveDrafts,
-    onDataChanges(scopes) {
+    async onDataChanges(scopes) {
       if (api.state.route === 'workspace/mail-extract' && scopes.some(scope => ['inventory', 'apple-relay'].includes(scope)))
         void refreshRelayOverview();
-      if (scopes.some(scope => ['inventory', 'tools/mailbox-pool'].includes(scope))) return refreshGooglePool(true);
+      const results = await Promise.all([
+        stockPage?.changes(scopes),
+        !pagedInventory() && scopes.some(scope => ['inventory', 'tools/mailbox-pool'].includes(scope)) ? refreshGooglePool(true) : true
+      ]);
+      return !results.includes(false);
     },
     afterRender({ routeChanged } = {}) {
+      if (pagedInventory()) void stockPage.read();
       if (routeChanged) {
-        void refreshGooglePool();
+        if (!pagedInventory()) void refreshGooglePool();
         if (api.state.route === 'workspace/mail-extract' && canExtractLocalRelay())
           void readLocalInventory({ keepContent: true }).then(ready => ready && refreshRelayOverview());
       }

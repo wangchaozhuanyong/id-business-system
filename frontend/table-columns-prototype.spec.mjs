@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import * as inventoryList from '../modules/inventory/list.mjs';
 import * as listOrder from './list-order.mjs';
 import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
@@ -144,7 +145,7 @@ function runtime() {
   };
   const modules = [];
   const context = {
-    window: { IDDesignAPI: api, IDListOrder: listOrder, IDDesignModules: modules },
+    window: { IDInventoryList: inventoryList, IDDesignAPI: api, IDListOrder: listOrder, IDDesignModules: modules },
     document: { querySelector: () => null, querySelectorAll: () => [] }
   };
   runInNewContext(inventorySource, context);

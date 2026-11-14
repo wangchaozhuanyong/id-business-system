@@ -376,6 +376,7 @@ function registerPage(page, loadPage) {
 }
 function usesSharedBusinessData(route) {
   if (!permittedRoute(route)) return false;
+  if (window.IDLocalData?.isBusinessListRoute?.(route)) return false;
   return window.IDDesignModules.find(module => module.matches(route))?.sharedBusinessData !== false;
 }
 const mailTypes = [

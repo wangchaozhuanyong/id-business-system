@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import * as inventoryList from '../modules/inventory/list.mjs';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
@@ -136,7 +137,7 @@ function setup(snapshot) {
     : undefined;
   const modules = [];
   runInNewContext(source, {
-    window: { IDDesignAPI: api, IDDesignModules: modules, IDLocalData: localData },
+    window: { IDInventoryList: inventoryList, IDDesignAPI: api, IDDesignModules: modules, IDLocalData: localData },
     document,
     structuredClone,
     URL
