@@ -9,6 +9,8 @@
     matchOrderCustomer, orderCustomerCreateAction, orderFieldChanged,
     automaticGptOrder, orderReceiptRecorded, rechargeOrderCompletion, rechargeRenewalExpiryPending, expiredDuration, subscriptionDuration } = window.IDOrderOpening;
   const localData = window.IDLocalData;
+  const { claudeListPlan, listPaymentStatus, listSubscriptionStatus, matchesOrderQuery, normalizedListPlan,
+    orderAccountingFact, orderListMissing, orderListTime, validListAmount } = window.IDListOrder;
   const M = A.money;
   const $ = (selector, root = document) => root.querySelector(selector);
   const E = A.esc;
@@ -460,7 +462,7 @@
   const claudePlans = [...productPlans['Claude Pro'], ...productPlans['Claude Max']];
   const claudeProductForPlan = plan => plan === 'Pro' ? 'Claude Pro'
     : productPlans['Claude Max'].includes(plan) ? 'Claude Max' : '';
-  const claudeOrderPlan = (product, plan) => product === 'Claude Pro' && plan === 'pro' ? 'Pro' : normalizedPlan(plan);
+  const claudeOrderPlan = claudeListPlan;
   const orderBusinessTypes = product => isClaude({ product })
     ? ['首次开通', '续费', '成品交付'] : ['续费', '成品交付'];
   const claudeOrdersRoute = 'orders/claude';
@@ -469,6 +471,25 @@
     'orders/gpt': 'GPT', [claudeOrdersRoute]: 'Claude',
     'orders/gemini': 'Gemini', 'orders/grok': 'Grok'
   };
+  const pagedOrders = () => localData?.isBusinessListRoute?.(S.route) && Object.hasOwn(orderListProducts, S.route) &&
+    A.canVisit(S.route);
+  const orderPage = localData?.createBusinessList?.('order-page', {
+    params() {
+      if (!pagedOrders()) return;
+      const product = orderListProducts[S.route], filters = orderListFilters(product);
+      return { product, tab: filters.tab || 'all', plan: filters.plan, operation: filters.operation, payment: filters.payment,
+        expiry: filters.expiry, query: S.query || '', page: S.page, pageSize: S.pageSize };
+    },
+    render: A.render,
+    timing: () => window.IDSiteTiming?.start('order-list'),
+    progress() {
+      const indicator = $('#main [data-business-list-progress="orders"]');
+      if (indicator) return A.beginRegionRead(indicator.parentElement, indicator, { loadingText: '正在读取订单…' });
+    },
+    canRefresh: () => !$('#confirm-dialog[open], .row-action-menu:popover-open')
+  });
+  const independentOrderNotes = order => Boolean(localData?.saveOrderNotes) && canManageOrders() &&
+    order && !order.cancelled && !order.draft;
   const customerChannels = [
     ['phone', '联系电话'],
     ['wechat', '客户微信'],
@@ -595,9 +616,7 @@
   };
 
   function amountValid(input, optional = false) {
-    return optional && input === ''
-      ? true
-      : /^\d+(?:\.\d{1,4})?$/.test(String(input)) && M.compare(String(input), '0') >= 0;
+    return (optional && input === '') || validListAmount(input);
   }
   function normalized(input = '0') {
     return M.formatUnits(M.units(String(input), 4), 4);
@@ -658,7 +677,7 @@
       return Promise.resolve(localPhase === 'ready');
     const hadData = localPhase === 'ready';
     const syncRead = orderSyncRead, listRoute = S.route;
-    const measure = Object.hasOwn(orderListProducts, listRoute) && window.IDSiteTiming ? 'order-list' : undefined;
+    const measure = !pagedOrders() && Object.hasOwn(orderListProducts, listRoute) && window.IDSiteTiming ? 'order-list' : undefined;
     const timing = measure && !orderViewTiming ? window.IDSiteTiming.start(measure) : orderViewTiming;
     if (!hadData) localPhase = 'loading';
     commerceLoad = localData
@@ -684,7 +703,7 @@
       .finally(() => {
         commerceLoad = undefined;
         updateRenewalReminder();
-        if (matches(S.route) && !(S.route === customerLossRoute && retentionRefresh) &&
+        if (matches(S.route) && !pagedOrders() && !(S.route === customerLossRoute && retentionRefresh) &&
             (!hadData || !$('#main form[data-commerce-draft]'))) A.render();
         if (localPhase === 'ready' && S.route === listRoute) {
           timing?.finish();
@@ -694,7 +713,16 @@
     return commerceLoad;
   }
   async function refreshAfterOrderSync() {
-    orderSyncRead = Symbol();
+    const sync = orderSyncRead = Symbol();
+    if (pagedOrders()) {
+      const ready = await orderPage.read(true);
+      if (ready && orderSyncRead === sync) {
+        orderSyncRead = undefined;
+        if ($('#drawer[open]') && localPhase === 'ready') await loadLocalCommerce(true, true);
+        if (pagedOrders()) A.render();
+      }
+      return ready;
+    }
     await commerceLoad;
     return !orderSyncRead || loadLocalCommerce(true, true);
   }
@@ -890,26 +918,7 @@
     return logs[0];
   }
   function normalizedPlan(plan) {
-    return (
-      {
-        plus: 'Plus',
-        pro: 'Pro 100',
-        pro100: 'Pro 100',
-        pro200: 'Pro 200',
-        pro500: 'Pro 500',
-        'Pro 5x': 'Pro 100',
-        'Pro 20x': 'Pro 200',
-        'Pro 50x': 'Pro 500',
-        go: 'Go',
-        max5: 'Max 5x',
-        max20: 'Max 20x',
-        pro_5x: 'Pro 100',
-        pro_20x: 'Pro 200',
-        pro_50x: 'Pro 500'
-      }[plan] ||
-      plan ||
-      'Plus'
-    );
+    return normalizedListPlan(plan);
   }
   function isExternal(source) {
     return /vendure|兑换码|cdk|redeem/i.test(String(source));
@@ -1052,7 +1061,7 @@
     return `<div class="tabs" role="tablist"${attributes ? ` ${attributes}` : ''}>${items.join('')}</div>`;
   }
   function searchField(placeholder) {
-    return `<div class="search-field">${A.icon('search')}<input data-auto-search id="commerce-search" aria-label="搜索当前列表" placeholder="${E(placeholder)}" value="${E(S.query || '')}" /></div>`;
+    return `<div class="search-field">${A.icon('search')}<input data-auto-search id="commerce-search" aria-label="搜索当前列表" maxlength="500" placeholder="${E(placeholder)}" value="${E(S.query || '')}" /></div>`;
   }
   function toolbar(placeholder, actions = '', actionAttributes = '') {
     return `<div class="toolbar"><div class="toolbar-left">${searchField(placeholder)}</div><div class="toolbar-right"${actionAttributes ? ` ${actionAttributes}` : ''}>${actions}</div></div>`;
@@ -1314,18 +1323,7 @@
     };
   }
   function completenessReasons(order) {
-    if (automaticGptOrder(order)) return rechargeOrderCompletion(order, customers.find(row => row.id === order.customerId)).missing;
-    const reasons = [];
-    const missing = manualOrderDetailsMissing(order, customers, orderEvaluationTime());
-    if (!order.customerId || missing?.customer) reasons.push('客户待补充');
-    if (!amountValid(order.saleAmount || '')) reasons.push('售卖金额待补充');
-    if (!amountValid(order.paidAmount || '') || !order.paidCurrency) reasons.push('代付金额或币种待核对');
-    if (!order.start || !order.expiry || missing?.period) reasons.push('订阅周期待补充');
-    if (missing?.end) reasons.push('实际终止时间待补充');
-    if (missing?.cost) reasons.push('实际总成本待补充');
-    if (proMaterialMode(order) === 'people' && !hasProPeople(order)) reasons.push('人员资料待补充');
-
-    return reasons;
+    return orderListMissing(order, customers, orderEvaluationTime());
   }
   let accountingFrameClock;
   function accountingReadClock() {
@@ -1335,16 +1333,19 @@
     }
     return accountingFrameClock;
   }
-  function localAccounting(order, currency = costSettings.currency, clock = accountingReadClock(), { costOnly = false, expenses } = {}) {
-    if (!finance) return { status: 'pending', reason: '汇率核算模块尚未接入' };
+  function localAccountingOptions(order, currency, clock, expenses) {
     if (cardIssueContext?.clock !== clock)
       cardIssueContext = { clock, allocations: finance.buildCardIssueAllocations(orders, { clock }) };
-    const calculate = costOnly ? finance.calculateOrderCost : finance.calculateOrder;
-    return calculate(order, {
+    return {
       currency, clock, cardIssueAllocations: expenses?.allocations || cardIssueContext.allocations,
       expenseReceipts: expenses?.byOrder.get(order.id),
       appleLedger: order.payment === '苹果内购' ? A.modules.appleBalance?.getOrderLedger?.(order.id) : undefined
-    });
+    };
+  }
+  function localAccounting(order, currency = costSettings.currency, clock = accountingReadClock(), { costOnly = false, expenses } = {}) {
+    if (!finance) return { status: 'pending', reason: '汇率核算模块尚未接入' };
+    const calculate = costOnly ? finance.calculateOrderCost : finance.calculateOrder;
+    return calculate(order, localAccountingOptions(order, currency, clock, expenses));
   }
   const paymentRecordedForAccounting = order => finance?.hasRecordedPaymentAmount(order) ?? Boolean(order.paidConfirmed);
   const paymentPendingForAccounting = (order, result) =>
@@ -1361,25 +1362,16 @@
     return [...new Set([...completenessReasons(order), ...financialPendingReasons(order, accounting)])];
   }
   function paymentStatus(order) {
-    return order.paidConfirmed || hasPaymentHistory(order)
-      ? '已付款'
-      : paymentRecordedForAccounting(order) ? '已登记付款'
-      : amountValid(order.paidAmount || '')
-        ? '付款待核对'
-        : '未登记付款';
+    return order.list?.payment || listPaymentStatus(order);
   }
   function hasOpeningEvidence(order, at) {
     return orderOpeningConfirmed(order, at, legacyOpeningOrders.has(order.id));
   }
   const orderEvaluationTime = () => localData ? Date.now() : parseDate(now());
   function subscriptionStatus(order) {
-    const at = orderEvaluationTime();
-    return subscriptionStateLabels[subscriptionPeriodState({
-      start: order.start, expiry: order.expiry, confirmed: hasOpeningEvidence(order, at),
-      ended: order.subscriptionEnded || endedInventoryOrder(order),
-      cancelled: order.cancelled || ['cancelled', '已撤单'].includes(order.status),
-      failed: order.entitlementStatus === 'failed' || ['failed', '失败'].includes(order.status)
-    }, at)];
+    return order.list?.expiry || listSubscriptionStatus(order, orderEvaluationTime(), {
+      legacy: legacyOpeningOrders.has(order.id), released: endedInventoryOrder(order)
+    });
   }
   function refundStatus(order) {
     const total = sum(order.refunds || [], (row) => row.amount);
@@ -1390,6 +1382,7 @@
         : '部分退款';
   }
   function accountStatus(order) {
+    if (order.list) return order.list.operation;
     if (personalProduct(order.product)) {
       const summary = order.accountId && A.modules.inventory?.accountSummary?.(order.accountId);
       return summary?.label || labelOf(openingChoices, order.entitlementStatus);
@@ -1633,8 +1626,9 @@
     return amount === null || localData ? amount : shownCurrency(amount, costSettings.currency, order.rates);
   }
   function orderStatus(order) {
-    return completenessReasons(order).length ? '待补全' : '资料完整';
+    return orderIsIncomplete(order) ? '待补全' : '资料完整';
   }
+  const orderIsIncomplete = order => order.list?.pending ?? Boolean(completenessReasons(order).length);
   function orderNumber() {
     const maximum = localData ? orders.reduce((current, row) =>
       Math.max(current, Number(/^OD-LOCAL-(\d{1,12})$/.exec(row.orderNo)?.[1] || 0)), 0) : orders.length;
@@ -3315,6 +3309,7 @@
     return !localData?.authRequired || ['admin', 'super'].includes(currentOperator().role);
   }
   function orderOwnerName(row) {
+    if (row.list) return row.list.owner;
     const id = row.ownerId || row.rechargeOwnerId || row.createdById;
     const fallback = row.owner || (row.ownerId ? '历史未记录' : traceName(row, 'createdBy'));
     return localData?.operatorLabel?.(id, fallback) || fallback;
@@ -5651,6 +5646,11 @@
     if (form && v('payment') === '银行卡') void loadOrderCardType(form);
     if (form) void updateRenewalCardHint(form);
     if (form) void loadPrices(form);
+    if (form && independentOrderNotes(existing) && !Object.keys(draft).length) {
+      const read = () => Object.fromEntries(Object.entries(A.readForm(form)).filter(([key]) =>
+        !['commerce-notes', 'commerce-correctionReason'].includes(key)));
+      orderNoteFields.set(form, { version: localVersion, order: safeClone(existing), fields: read(), read });
+    }
     return '';
   }
   function orderFromForm(form, confirmPayment = false, newCustomer = null) {
@@ -6179,9 +6179,10 @@
       ? `<small class="gpt-order-origin-label" data-order-source="${source[0]}">${source[1]}</small>` : '');
   }
 
-  function orderColumns(product = '') {
-    const clock = orderEvaluationTime();
-    const expenses = localData ? statisticsExpenseAccounting(clock) : undefined;
+  function orderColumns(product = '', page) {
+    const clock = page?.at ?? orderEvaluationTime();
+    const expenses = localData && !page ? statisticsExpenseAccounting(clock) : undefined;
+    const currency = page?.currency || costSettings.currency;
     const facts = new Map();
     const fact = row => {
       if (!facts.has(row.id)) facts.set(row.id, statisticsFact(row, costSettings.currency, clock, expenses));
@@ -6190,7 +6191,7 @@
     return [
       { id: 'orderNo', label: '订单编号', ...(product === 'GPT' && { render: gptOrderNumber, mobileSummary: true }) },
       { id: 'owner', label: '归属人', render: (row) => E(orderOwnerName(row)) },
-      { id: 'customerId', label: '客户', render: (row) => E(customerLabel(row.customerId)) },
+      { id: 'customerId', label: '客户', render: row => E(row.list?.customer ?? customerLabel(row.customerId)) },
       { id: 'email', label: personalProduct(product) ? '订阅账号' : '邮箱账号', class: 'email-cell', render: row => E(orderIdentity(row)) },
       { id: 'plan', label: '套餐' },
       ...(personalProduct(product) ? [
@@ -6220,30 +6221,30 @@
             : `<span class="table-amount">${E(display(row.saleAmount))}</span><span class="table-unit">${E(currencyLabel(row.saleCurrency))}</span>`
       },
       {
-        id: 'netCost', label: `净成本 ${costSettings.currency}`,
+        id: 'netCost', label: `净成本 ${currency}`,
         headerHelp: '已知费用折算合计，减去渠道已到账回款。',
-        render: row => statisticsAmount(localData ? fact(row).cost?.netCost : costsFor(row).total)
+        render: row => statisticsAmount(row.list ? row.list.netCost : localData ? fact(row).cost?.netCost : costsFor(row).total)
       },
       {
         id: 'profit',
-        label: `利润 ${costSettings.currency}`,
+        label: `利润 ${currency}`,
         headerHelp: '客户净收款减已知净成本。点击金额查看费用明细。',
         render: (row) => {
-          const accounting = localData ? fact(row) : null;
+          const accounting = row.list || (localData ? fact(row) : null);
           const p = localData ? accounting.gain : shownProfit(row);
           if (p === null && !accounting?.originalProfit) return '—';
           const amount = E(p === null ? originalProfitText(accounting.originalProfit) : display(p));
           return A.textAction(amount, 'commerce-order-detail', `data-id="${E(row.id)}" data-tab="costs"`) +
-            (accounting?.cost?.cardIssueUnallocated ? '<small class="footnote"> 开卡费未分摊</small>' : '');
+            ((accounting?.cardIssueUnallocated || accounting?.cost?.cardIssueUnallocated) ? '<small class="footnote"> 开卡费未分摊</small>' : '');
         }
       },
       { id: 'start', label: '订阅时间' },
       { id: 'expiry', label: '到期时间', render: row => A.tableDate(row.expiry) },
-      { id: 'expiryReminder', label: '到期提醒', render: expiryTag },
+      { id: 'expiryReminder', label: '到期提醒', render: row => expiryTag(row, clock) },
       {
         id: 'paymentStatus',
         label: '付款状态',
-        render: (row) => A.tag(paymentStatus(row), paymentRecordedForAccounting(row) ? 'success' : 'warning')
+        render: (row) => A.tag(paymentStatus(row), (row.list?.paymentRecorded ?? paymentRecordedForAccounting(row)) ? 'success' : 'warning')
       },
       {
         id: 'expiryStatus',
@@ -6254,7 +6255,7 @@
       {
         id: 'refundStatus',
         label: '退款状态',
-        render: (row) => A.tag(refundStatus(row), row.refunds.length ? 'warning' : '')
+        render: (row) => A.tag(refundStatus(row), row.refunds?.length ? 'warning' : '')
       },
       {
         id: 'accountStatus',
@@ -6274,7 +6275,7 @@
         id: 'status',
         label: '资料完整性',
         render: (row) =>
-          A.tag(orderStatus(row), completenessReasons(row).length ? 'warning' : 'success')
+          A.tag(orderStatus(row), orderIsIncomplete(row) ? 'warning' : 'success')
       },
       { id: 'wechat', label: '客户微信' },
       { id: 'customerPhone', label: '客户电话' },
@@ -6293,7 +6294,7 @@
             {
               id: 'tenantId',
               label: '租户',
-              render: (row) => E(row.tenantId ? tenantLabel(row.tenantId) : '未记录')
+              render: (row) => E(row.tenantId ? row.list?.tenant ?? tenantLabel(row.tenantId) : '未记录')
             }
           ]
         : []),
@@ -6308,11 +6309,11 @@
           const id = `data-id="${E(row.id)}"`;
           const detail = A.textAction('详情', 'commerce-order-detail', id);
           const fill = localData && automaticGptOrder(row) && !row.cancelled && !row.draft &&
-            completenessReasons(row).length && A.canVisit('workspace/order-completion');
+            orderIsIncomplete(row) && A.canVisit('workspace/order-completion');
           const edit = fill ? A.textAction('补全资料', 'commerce-order-complete', id)
             : canManageOrders() ? A.textAction('编辑', 'commerce-order-edit', id + (row.cancelled ? ' disabled' : '')) : '';
           const manage = canManageOrders() ? A.textAction('退款', 'commerce-order-refund',
-            id + (row.cancelled || !orderReceiptRecorded(row) ? ' disabled' : '')) +
+            id + (row.cancelled || !(row.list?.receiptRecorded ?? orderReceiptRecorded(row)) ? ' disabled' : '')) +
             A.textAction(product === 'Claude' ? '更多操作' : '更多', 'commerce-order-more',
               id + ' aria-haspopup="menu" aria-expanded="false"', 'secondary', 'down') : '';
           return `<div class="action-links">${detail}${edit}${manage}</div>`;
@@ -6320,11 +6321,11 @@
       }
     ];
   }
-  function expiryTag(order) {
+  function expiryTag(order, at = orderEvaluationTime()) {
     const state = subscriptionStatus(order);
     if (state === '已开通') return A.tag('到期时间未登记', 'warning');
     if (state !== '有效' && state !== '已过期') return A.tag(state, state === '待确认' ? 'warning' : '');
-    const expiry = subscriptionTime(order.expiry), at = orderEvaluationTime();
+    const expiry = subscriptionTime(order.expiry);
     return A.tag(formatExpiryDuration(expiry, at), expiry - at <= 2 * 86_400_000 ? 'warning' : 'success');
   }
   function orderListFilters(product) {
@@ -6333,14 +6334,29 @@
   function setOrderListTab(product, tab) {
     S.drafts.set('commerce-order-filters:' + product, { ...orderListFilters(product), tab });
   }
-  function orderListTime(row, tab) {
-    const dates = [row.createdAt, row.start];
-    if (tab === 'cancelled') return [row.cancellationEvents?.at(-1)?.at, ...dates];
-    if (tab === 'refunded') {
-      const latest = row.refunds.reduce((time, refund) => Math.max(time, parseDate(refund.at) || -Infinity), -Infinity);
-      return [latest, ...dates];
+  function orderListRows(product, filters, orderTab) {
+    const claude = product === 'Claude';
+    const productOrders = orders.filter(row => claude ? isClaude(row) : row.product === product);
+    const buckets = { all: [], pending: [], refunded: [], cancelled: [] };
+    for (const row of productOrders) {
+      if (row.refunds?.length) buckets.refunded.push(row);
+      if (row.cancelled) buckets.cancelled.push(row);
+      else {
+        const pending = orderIsIncomplete(row);
+        if (pending) buckets.pending.push(row);
+        if (!automaticGptOrder(row) || !pending) buckets.all.push(row);
+      }
     }
-    return dates;
+    const filtered = (buckets[orderTab] || buckets.all).filter(row =>
+      (!S.query || matchesOrderQuery(row, S.query, {
+        customer: customerLabel(row.customerId), owner: orderOwnerName(row), tenant: tenantLabel(row.tenantId)
+      })) &&
+      (!filters.plan || row.plan === filters.plan || (claude && claudeOrderPlan(row.product, row.plan) === filters.plan)) &&
+      (!filters.operation || accountStatus(row) === filters.operation) &&
+      (!filters.payment || paymentStatus(row) === filters.payment) &&
+      (!filters.expiry || subscriptionStatus(row) === filters.expiry));
+    return { rows: A.pageRows(filtered, row => orderListTime(row, orderTab)), total: filtered.length,
+      productTotal: productOrders.length, counts: Object.fromEntries(Object.entries(buckets).map(([key, rows]) => [key, rows.length])) };
   }
   function renderOrders(product) {
     const personal = personalProduct(product);
@@ -6359,36 +6375,24 @@
         claude ? `aria-label="${E(label)}"` : '');
       return claude ? control : `<label for="commerce-order-filter-${key}">${label}</label>${control}`;
     }).join('');
-    const productOrders = orders.filter(row => claude ? isClaude(row) : row.product === product);
-    const buckets = { all: [], pending: [], refunded: [], cancelled: [] };
-    for (const row of productOrders) {
-      if (row.refunds?.length) buckets.refunded.push(row);
-      if (row.cancelled) buckets.cancelled.push(row);
-      else {
-        const pending = completenessReasons(row).length > 0;
-        if (pending) buckets.pending.push(row);
-        if (!automaticGptOrder(row) || !pending) buckets.all.push(row);
-      }
-    }
-    const filtered = (buckets[orderTab] || buckets.all).filter(
-      (row) =>
-        (!S.query || orderMatchesSearch(row, S.query)) &&
-        (!filters.plan || row.plan === filters.plan || (claude && claudeOrderPlan(row.product, row.plan) === filters.plan)) &&
-        (!filters.operation || accountStatus(row) === filters.operation) &&
-        (!filters.payment || paymentStatus(row) === filters.payment) &&
-        (!filters.expiry || subscriptionStatus(row) === filters.expiry)
-    );
+    const paged = pagedOrders();
+    const { result, error, stale } = paged ? orderPage.view() : { result: orderListRows(product, filters, orderTab) };
+    const counts = result?.counts || {};
     const tableId = `commerce-orders-${product}`;
     const historicalSale = claude && canManageOrders() && localData?.claudeHistoricalSaleAccounts
       ? A.button('补录历史销售', 'commerce-claude-historical-sale') : '';
-    const noOrders = claude && !productOrders.length;
+    const noOrders = claude && result?.productTotal === 0;
     const emptyState = noOrders ? {
       title: '暂无 Claude 订单', description: '历史入库的开通和到期记录可在 Claude 订阅管理查看。'
     } : undefined;
     const viewSubscriptions = noOrders && A.canVisit('subscriptions/claude')
       ? routeButton('查看 Claude 订阅', 'subscriptions/claude') : '';
-    const list = A.table(orderColumns(product), A.pageRows(filtered, row => orderListTime(row, orderTab)), '', tableId, emptyState) +
-      A.pagination(filtered.length);
+    const notice = error ? A.empty('订单暂时无法读取', stale ? '下方保留上一次的查询结果。' : '') + A.button('重试', 'commerce-sync-orders-refresh') +
+      '<span data-order-list-diagnostic></span>' : '';
+    const list = notice + (result
+      ? A.table(orderColumns(product, paged ? result : undefined), result.rows, '', tableId, emptyState) +
+        A.pagination(result.total, paged ? { page: result.page, pageSize: result.pageSize, disabled: stale } : undefined)
+      : error ? '' : A.empty('正在读取订单', ''));
     return (
       A.header(
         `${product} 订单`,
@@ -6403,30 +6407,18 @@
       ) +
       `<section class="panel">${product === 'GPT' ? gptOrderListHeading() : ''}${tabs(
         [
-          ['all', '当前订单', buckets.all.length],
-          ['pending', '待补全', buckets.pending.length],
-          ['refunded', '有退款记录', buckets.refunded.length],
-          ['cancelled', '已撤单', buckets.cancelled.length]
+          ['all', '当前订单', counts.all ?? ''],
+          ['pending', '待补全', counts.pending ?? ''],
+          ['refunded', '有退款记录', counts.refunded ?? ''],
+          ['cancelled', '已撤单', counts.cancelled ?? '']
         ],
         orderTab,
         'commerce-order-tab'
       )}${toolbar(claude ? '搜索订单编号、邮箱、客户、卡号或序列号' : personal ? '搜索订单编号、账号、客户或账单' : '搜索订单编号、邮箱或客户',
         filterControls + columnSettingsButton(tableId) + (claude ? historicalSale + viewSubscriptions :
           routeButton('订单统计', 'orders/statistics')),
-        'data-page-actions')}${product === 'GPT' ? syncedOrderReadNotice() : ''}${list}</section>`
+        'data-page-actions')}${product === 'GPT' ? syncedOrderReadNotice() : ''}${paged ? '<div data-business-list-progress="orders" role="status" hidden></div>' : ''}${list}</section>`
     );
-  }
-
-  function orderMatchesSearch(row, query) {
-    const base = `${row.email} ${row.orderNo} ${customerLabel(row.customerId)} ${orderOwnerName(row)} ${row.cardTypeName || ''} ${row.proCardNumber || ''} ${row.proCardSerial || ''}`;
-    if (personalProduct(row.product)) return [base, orderIdentity(row), row.xHandle, row.plan, row.billingReceipt]
-      .join(' ').toLowerCase().includes(query.toLowerCase());
-    if (!isClaude(row)) return base.includes(query);
-    const fields = [base, row.paymentId, row.proCardNumber, row.proCardSerial, row.verifier,
-      row.verifierPhone, row.phone, row.tenantId ? tenantLabel(row.tenantId) : ''];
-    if (fields.some(value => String(value ?? '').toLowerCase().includes(query.toLowerCase()))) return true;
-    const digits = query.replace(/[\s-]/g, '');
-    return /^\d+$/.test(digits) && String(row.proCardNumber || '').includes(digits);
   }
 
   async function openClaudeHistoricalSale(button) {
@@ -6751,7 +6743,8 @@
       'primary',
       '',
       `data-id="${id}" ${order.cancelled ? 'disabled' : ''}`
-    ) : '');
+    ) + (independentOrderNotes(order)
+      ? A.button('修改备注', 'commerce-order-notes', '', '', `data-id="${E(id)}"`) : '') : '');
     if (asPage)
       return (
         A.header(
@@ -7329,27 +7322,16 @@
 
   function statisticsFact(order, currency, clock, expenses) {
     let cost = null, gain = null, originalProfit, revenue, reasons;
-    if (localData) {
-      revenue = finance?.calculateConfirmedNetReceipt(order, { currency, clock }) ?? null;
-      const result = localAccounting(order, currency, clock, { costOnly: revenue === null, expenses });
+    if (localData && finance) {
+      const fact = orderAccountingFact(order, localAccountingOptions(order, currency, clock, expenses));
+      ({ cost, gain, originalProfit, revenue } = fact);
+      const { result } = fact;
       reasons = financialPendingReasons(order, result);
       if (revenue === null && orderReceiptRecorded(order)) reasons.push('净收款缺有效金额或折算汇率');
-      if (result.status === 'ready' && !paymentPendingForAccounting(order, result)) {
-        cost = result;
-        gain = revenue === null ? null : result.profit ?? null;
-      } else {
-        const knownCost = revenue === null ? result : localAccounting(order, currency, clock, { costOnly: true, expenses });
-        if (knownCost.status === 'ready' && !paymentPendingForAccounting(order, knownCost)) cost = knownCost;
-        else cost = knownCost.knownCost ?? null;
-      }
-      const originalCurrency = order.saleCurrency;
-      if (gain === null && orderReceiptRecorded(order) && order.costBasis === 'actual' &&
-          originalCurrency === order.actualCostCurrency && originalCurrency !== currency &&
-          ['CNY', 'MYR'].includes(originalCurrency) && reasons.some(reason => /汇率/.test(reason))) {
-        const original = localAccounting(order, originalCurrency, clock, { expenses });
-        if (original.status === 'ready' && original.profit != null)
-          originalProfit = { amount: original.profit, currency: originalCurrency };
-      }
+    } else if (localData) {
+      revenue = null;
+      reasons = financialPendingReasons(order);
+      if (orderReceiptRecorded(order)) reasons.push('净收款缺有效金额或折算汇率');
     } else {
       const rates = order.rates || fxRates;
       const toDisplayCurrency = amount => shownCurrency(amount, currency, rates);
@@ -8495,6 +8477,13 @@
     }
     const raw = A.readForm(form);
     const existing = orders.find((row) => row.id === value(raw, 'id'));
+    const onlyNotes = orderNoteFields.get(form);
+    if (onlyNotes && String(onlyNotes.order.version || 0) === value(raw, 'version') &&
+        value(raw, 'notes') !== (onlyNotes.order.notes || '') &&
+        JSON.stringify(onlyNotes.fields) === JSON.stringify(onlyNotes.read())) {
+      void saveOrderNotes(form, onlyNotes);
+      return;
+    }
     const submission = form.elements['commerce-submissionId'] || { value: '' };
     const alreadySaved = !existing && submission.value && orders.find(row => row.id === submission.value);
     if (alreadySaved) {
@@ -9437,6 +9426,7 @@
     const ledger = A.modules.appleBalance?.getOrderLedger?.(id);
     const current = isClaude(order) && currentSubscriptions().find(row => row.id === id);
     const claude = current ? claudeOrderOperations(current) : '';
+    const notes = independentOrderNotes(order) ? A.button('修改备注', 'commerce-order-notes', '', '', `data-id="${E(id)}"`) : '';
     const apple = localData
       ? order.payment === '苹果内购'
         ? `<div class="guide-item"><h3>Apple ID 回款</h3><div class="toolbar">${A.button('处理 Apple ID 回款', 'commerce-apple-refund', '', 'return', `data-id="${E(id)}"`)}</div></div>`
@@ -9444,7 +9434,70 @@
       : ledger
         ? `<div class="guide-item"><h3>Apple 余额退回</h3><p>本单可确认退回 ${display(ledger.netAmount)} ${currencyLabel('USD')}，仅在 Apple 已实际返还时登记。</p><div class="toolbar">${A.button('确认 Apple 余额退回', 'commerce-apple-refund', '', 'return', `data-id="${id}" ${M.compare(ledger.netAmount, '0') <= 0 ? 'disabled' : ''}`)}</div></div>`
         : '';
-    A.openActionMenu(node, `<div class="property-list">${property('订单编号', order.orderNo)}</div><div class="guide-list">${claude}<div class="guide-item"><h3>更正与补偿</h3><div class="toolbar">${A.button('更正订单资料', 'commerce-order-edit', '', '', `data-id="${id}" ${order.cancelled ? 'disabled' : ''}`)}${A.button('补偿撤回最近更正', 'commerce-order-undo', '', 'return', `data-id="${id}" ${order.corrections.length ? '' : 'disabled'}`)}</div></div><div class="guide-item"><h3>客户退款</h3><div class="toolbar">${A.button('登记客户实际退款', 'commerce-order-refund', '', '', `data-id="${id}" ${!orderReceiptRecorded(order) ? 'disabled' : ''}`)}</div></div>${apple}<div class="guide-item"><div class="section-title-row"><h3>业务撤单</h3>${A.titleInfo('业务撤单', '已有实付、实收、退款或任务时不能通过撤单抹账；不自动归还库存或苹果余额。', 'commerce-more-cancel')}</div><div class="toolbar">${A.button(order.cancelled ? '恢复业务订单' : '业务撤单', 'commerce-order-cancel', order.cancelled ? '' : 'danger', '', `data-id="${id}"`)}</div></div></div>`);
+    A.openActionMenu(node, `<div class="property-list">${property('订单编号', order.orderNo)}</div><div class="guide-list">${claude}<div class="guide-item"><h3>更正与补偿</h3><div class="toolbar">${A.button('更正订单资料', 'commerce-order-edit', '', '', `data-id="${id}" ${order.cancelled ? 'disabled' : ''}`)}${notes}${A.button('补偿撤回最近更正', 'commerce-order-undo', '', 'return', `data-id="${id}" ${order.corrections?.length ? '' : 'disabled'}`)}</div></div><div class="guide-item"><h3>客户退款</h3><div class="toolbar">${A.button('登记客户实际退款', 'commerce-order-refund', '', '', `data-id="${id}" ${!orderReceiptRecorded(order) ? 'disabled' : ''}`)}</div></div>${apple}<div class="guide-item"><div class="section-title-row"><h3>业务撤单</h3>${A.titleInfo('业务撤单', '已有实付、实收、退款或任务时不能通过撤单抹账；不自动归还库存或苹果余额。', 'commerce-more-cancel')}</div><div class="toolbar">${A.button(order.cancelled ? '恢复业务订单' : '业务撤单', 'commerce-order-cancel', order.cancelled ? '' : 'danger', '', `data-id="${id}"`)}</div></div></div>`);
+  }
+
+  const notesFormId = 'commerce-order-notes-form';
+  const notesBases = new WeakMap(), orderNoteFields = new WeakMap();
+  function editOrderNotes(id, { review = false } = {}) {
+    const order = orders.find(row => row.id === id);
+    if (!independentOrderNotes(order)) return;
+    const key = 'commerce-order-notes:' + id, draft = S.drafts.get(key) || {};
+    const version = String(order.version || 0);
+    const changed = review || (draft['commerce-version'] !== undefined && version !== draft['commerce-version']);
+    const notice = changed ? '<p class="inline-notice warning" role="status">请核对当前备注和已保留的输入，再保存。</p>' +
+      property('当前备注', order.notes || '未填写') : '';
+    A.openDrawer('修改订单备注', order.orderNo, `<form id="${notesFormId}" data-commerce-draft="${key}" novalidate>
+      ${input('version', version, 'type="hidden"')}${notice}
+      ${field('备注', 'notes', `<textarea id="commerce-notes" name="commerce-notes" rows="3" maxlength="4096">${E(draft['commerce-notes'] ?? order.notes ?? '')}</textarea>`)}
+      ${field('修改原因', 'correctionReason', input('correctionReason', draft['commerce-correctionReason'] || '', 'maxlength="300"'), true)}
+      </form>`, A.button('取消', 'drawer-close') +
+      `<button type="submit" form="${notesFormId}" class="button primary">保存备注</button>`, key);
+    const form = document.getElementById(notesFormId);
+    if (form) notesBases.set(form, { order: safeClone(order), version: localVersion });
+  }
+
+  async function saveOrderNotes(form, base = notesBases.get(form)) {
+    if (saving || !base || !independentOrderNotes(base.order)) return;
+    const raw = A.readForm(form), notes = value(raw, 'notes'), reason = value(raw, 'correctionReason');
+    A.setError('commerce-correctionReason', reason && reason.length <= 300 ? '' : '请填写修改原因，最多 300 字', form);
+    if (!reason || reason.length > 300 || notes.length > 4096) return;
+    if (notes === (base.order.notes || '')) return A.notify('备注没有变化');
+    const button = document.querySelector(`#drawer [form="${form.id}"]`);
+    const actor = currentOperator().id, key = form.dataset.commerceDraft;
+    const current = () => form.isConnected && currentOperator().id === actor && S.drawerContext === key;
+    saveDrafts();
+    saving = true;
+    form.inert = true;
+    try {
+      await A.withActionFeedback(button, async () => {
+        const timing = window.IDSiteTiming?.start('order-save');
+        let result;
+        try {
+          result = await localData.saveOrderNotes(base.version, base.order, notes, reason, { measure: 'order-save', timing });
+          timing?.finish();
+        } catch (error) {
+          error.diagnostic = timing?.finish(error);
+          throw error;
+        }
+        if (currentOperator().id !== actor) return;
+        acceptLocalCommerce(result);
+        if (current()) {
+          cleanClose(key);
+          A.render();
+          if (form.id === notesFormId) orderDetail(base.order.id);
+          A.notify('备注已保存', { kind: 'success' });
+        }
+      }, { pending: '正在保存备注…' });
+    } catch (error) {
+      if (!current()) return;
+      if (error.status === 409 && await loadLocalCommerce(true, true) && current() && form.id === notesFormId)
+        editOrderNotes(base.order.id, { review: true });
+      A.notify(error.message || '备注暂未保存，输入已保留', { kind: 'error', diagnostic: error.diagnostic });
+    } finally {
+      form.inert = false;
+      saving = false;
+    }
   }
   function canShortcutRenew(row) {
     return row.operation.status === 'active' && claudeProductForPlan(claudeOrderPlan(row.product, row.plan)) === row.product &&
@@ -9703,6 +9756,33 @@
       return true;
     }
     if (!action.startsWith('commerce-')) return false;
+    if (pagedOrders() && node.closest('[data-page-region]') &&
+        ['commerce-order-detail', 'commerce-order-edit', 'commerce-order-refund',
+          'commerce-order-more', 'commerce-claude-historical-sale'].includes(action)) {
+      void A.withActionFeedback(node, async () => {
+        const route = S.route, actor = currentOperator().id, context = S.drawerContext;
+        const seen = orderPage.view().result?.rows.find(row => row.id === id);
+        const [commerceReady, inventoryReady] = await Promise.all([
+          loadLocalCommerce(true, true),
+          canManageOrders() ? A.modules.inventory?.refreshLocalInventory?.({ keepContent: true, silent: true }) : true,
+          seen?.payment === '苹果内购' && (canManageOrders() || currentOperator().role === 'finance')
+            ? A.modules.appleBalance?.ensureReady?.() : true
+        ]);
+        if (!node.isConnected || route !== S.route || actor !== currentOperator().id || context !== S.drawerContext) return;
+        if (!commerceReady || (action !== 'commerce-order-detail' && inventoryReady === false)) return false;
+        if (id && !orders.some(row => row.id === id)) {
+          A.notify('订单已变化，请刷新后核对');
+          void orderPage.read(true);
+          return;
+        }
+        if (action === 'commerce-order-detail') orderDetail(id, node.dataset.tab);
+        else if (action === 'commerce-order-edit') orderEditor(id);
+        else if (action === 'commerce-order-refund') refundEditor(id);
+        else if (action === 'commerce-order-more') moreOrder(id, node);
+        else await openClaudeHistoricalSale(node);
+      }, { pending: '正在读取原单…', failure: '订单资料暂时无法读取，请重试' });
+      return true;
+    }
     if (action === 'commerce-renewal-history-scope') {
       if (S.route === renewalRoute && renewalSelected && ['account', 'customer'].includes(node.dataset.scope)) {
         const view = renewalHistoryView(renewalSelected);
@@ -10005,7 +10085,7 @@
     }
     if (action === 'commerce-sync-orders-refresh') {
       void A.withActionFeedback(node, async () => {
-        const ready = await loadLocalCommerce(true, true);
+        const ready = pagedOrders() ? await refreshAfterOrderSync() : await loadLocalCommerce(true, true);
         if (S.route === 'orders/gpt') A.render();
         return ready;
       }, { pending: '正在读取订单…', success: '订单已刷新', failure: '订单暂时无法读取，请重试' });
@@ -10262,12 +10342,17 @@
       return true;
     }
     if (action === 'commerce-order-complete') {
-      if (orders.some(row => row.id === id && automaticGptOrder(row) && !row.cancelled && !row.draft))
+      const source = pagedOrders() && node.closest('[data-page-region]') ? orderPage.view().result?.rows : orders;
+      if (source?.some(row => row.id === id && automaticGptOrder(row) && !row.cancelled && !row.draft))
         A.modules.orderCompletion?.open(id);
       return true;
     }
     if (action === 'commerce-order-edit') {
       orderEditor(id);
+      return true;
+    }
+    if (action === 'commerce-order-notes') {
+      editOrderNotes(id);
       return true;
     }
     if (action === 'commerce-order-fill-details') {
@@ -10440,6 +10525,7 @@
     return false;
   }
   function onSubmit(form) {
+    if (form.id === notesFormId) { void saveOrderNotes(form); return true; }
     if (['commerce-renewal-suffix-form', 'commerce-renewal-bind-form'].includes(form.id)) {
       void saveRenewalForm(form);
       return true;
@@ -11192,6 +11278,7 @@
   }
   function render() {
     if (S.route === paymentSettingsRoute) return renderPaymentSettings();
+    if (pagedOrders()) return renderOrders(orderListProducts[S.route]);
     const lossPage = S.route === customerLossRoute;
     const tenantPage = S.route === tenantRoute;
     if (localData && localPhase !== 'ready') {
@@ -11663,11 +11750,13 @@
     id: 'commerce',
     matches,
     deactivate(region) {
+      if (!pagedOrders()) orderPage?.clear();
       if (S.route !== customerOrderDraft?.route) customerOrderDraft = undefined;
       if (region?.dataset.pageRegion === renewalRoute && S.route !== renewalRoute)
         workbenchRead = workbenchResource = workbenchFailure = undefined;
     },
     clearPageState() {
+      orderPage?.clear();
       customerOrderDraft = undefined;
       orderViewTiming = undefined;
       listDiagnostic = undefined;
@@ -11688,7 +11777,7 @@
     },
     render,
     beforeNavigate(route) {
-      orderViewTiming = Object.hasOwn(orderListProducts, route) ? window.IDSiteTiming?.start('order-list') : undefined;
+      orderViewTiming = !pagedOrders() && Object.hasOwn(orderListProducts, route) ? window.IDSiteTiming?.start('order-list') : undefined;
       window.clearTimeout(sidebarDeadlineTimer);
       if (usesSidebarSummary()) {
         void refreshSidebarReminder(true);
@@ -11705,6 +11794,11 @@
     preserveDraft: saveDrafts,
     refreshCustomerTagOptions,
     afterRender({ routeChanged } = {}) {
+      if (pagedOrders()) {
+        void orderPage.read();
+        window.IDSiteTiming?.show(document.querySelector('[data-order-list-diagnostic]'), orderPage.view().error?.diagnostic);
+        if (!$('#drawer[open]')) { updateRenewalReminder(); return; }
+      }
       bindEntryRecords();
       if (routeChanged && S.route === renewalRoute && renewalSelected) void loadWorkbenchResource(renewalSelected);
       if (paymentSettingsActive()) {
@@ -11745,10 +11839,10 @@
         orderViewTiming.finish();
         orderViewTiming = undefined;
       }
-      loadLocalCommerce(false, routeChanged && Boolean(orderSyncRead));
+      if (!pagedOrders()) loadLocalCommerce(false, routeChanged && Boolean(orderSyncRead));
       if (localPhase === 'error' && Object.hasOwn(orderListProducts, S.route))
         window.IDSiteTiming?.show(document.querySelector('[data-order-list-diagnostic]'), listDiagnostic);
-      if (localData && canManageOrders() && !requestedAccountLifecycle && !A.modules.inventory?.accountLifecycleReady?.()) {
+      if (localData && !pagedOrders() && canManageOrders() && !requestedAccountLifecycle && !A.modules.inventory?.accountLifecycleReady?.()) {
         requestedAccountLifecycle = true;
         accountLifecycleReading = true;
         const route = S.route;
@@ -11808,13 +11902,13 @@
       }
     },
     async onDataChanges(scopes) {
+      let updated = await orderPage?.changes(scopes) !== false;
       if (scopes.some(scope => ['commerce', 'inventory', 'subscription-management'].includes(scope))) {
-        if (usesSidebarSummary() && !(await refreshSidebarReminder())) return false;
+        if (usesSidebarSummary() && !(await refreshSidebarReminder())) updated = false;
         scheduleCommerceDeadline();
       } else if (scopes.includes('settings')) scheduleCommerceDeadline();
-      let updated = true;
       if (scopes.includes('appleBalance') && S.route === 'orders/statistics') A.render();
-      if (scopes.includes(expenseScope) && (S.route === 'orders/statistics' || Object.hasOwn(orderListProducts, S.route) ||
+      if (scopes.includes(expenseScope) && (S.route === 'orders/statistics' || (!pagedOrders() && Object.hasOwn(orderListProducts, S.route)) ||
           S.route.startsWith('orders/detail/') ||
           $('#drawer[open] [data-order-cost-detail]')) && (await loadExpenseReceipts(prepareExpenseReceipts())) === false) updated = false;
       if (scopes.includes('card-types')) {

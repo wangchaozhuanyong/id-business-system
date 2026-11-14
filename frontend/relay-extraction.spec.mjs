@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import * as inventoryList from '../modules/inventory/list.mjs';
 import * as listOrder from './list-order.mjs';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
@@ -154,6 +155,7 @@ async function fixture({ auth = true, role = 'admin', configured = true } = {}) 
   };
   window.IDDesignAPI = api;
   window.IDListOrder = listOrder;
+  window.IDInventoryList = inventoryList;
   const document = {
     querySelector(selector) {
       if (selector === 'meta[name="id-local-auth"]') return auth ? { content: 'required' } : null;

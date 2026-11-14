@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import * as listOrder from './list-order.mjs';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
@@ -24,7 +25,7 @@ test('银行卡价格与类型的变动触发重新读取，失败时通知同�
     cardTypes: async () => { reads.types++; return { version: reads.types, items: [], assignments: {} }; }
   };
   runInNewContext(source, {
-    window: { IDOrderOpening: orderOpening, IDRenewalReminders: renewalReminders, IDDesignAPI: api, IDDesignModules: modules, IDLocalData: data },
+    window: { IDListOrder: listOrder, IDOrderOpening: orderOpening, IDRenewalReminders: renewalReminders, IDDesignAPI: api, IDDesignModules: modules, IDLocalData: data },
     document: { querySelector: () => null },
     structuredClone: globalThis.structuredClone,
     Date, Map, Set, WeakMap, Promise, Intl

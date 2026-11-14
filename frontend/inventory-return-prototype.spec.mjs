@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import * as inventoryList from '../modules/inventory/list.mjs';
 import { readFile } from 'node:fs/promises';
 import { runInNewContext } from 'node:vm';
 import { URL } from 'node:url';
@@ -183,7 +184,7 @@ function runtime(kind = 'account') {
   );
   assert.notEqual(vmSource, source, 'VM test export injection point must exist');
   runInNewContext(vmSource, {
-    window: { IDDesignAPI: api, IDDesignModules: modules },
+    window: { IDInventoryList: inventoryList, IDDesignAPI: api, IDDesignModules: modules },
     document
   });
   const T = api.modules.returnTest;

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import * as inventoryList from '../modules/inventory/list.mjs';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
@@ -69,7 +70,7 @@ async function fixture() {
     },
     querySelectorAll: () => drawer.open && form.isConnected ? [form] : []
   };
-  const window = { IDDesignAPI: api, IDDesignModules: [], IDLocalData: localData };
+  const window = { IDInventoryList: inventoryList, IDDesignAPI: api, IDDesignModules: [], IDLocalData: localData };
   runInNewContext(instrumented, { window, document, structuredClone, crypto: globalThis.crypto });
   await api.modules.inventoryConflictTest.readLocalInventory();
   let completed = 0;

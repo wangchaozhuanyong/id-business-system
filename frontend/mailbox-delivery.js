@@ -34,8 +34,8 @@
     if (identity() !== actor || sessionVersion !== session) throw new Error('登录身份已变化');
     return rememberPool(snapshot);
   }
-  function connection(row) {
-    if (!row) return pool ? '未绑定' : '待核对';
+  function connection(row, read = Boolean(pool)) {
+    if (!row) return read ? '未绑定' : '待核对';
     if (row.associationConflict) return '待核对';
     if (row.authorizationPending) return '未绑定';
     if (row.authFailed) return '授权失效';

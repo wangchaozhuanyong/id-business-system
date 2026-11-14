@@ -251,8 +251,8 @@ export async function startPreview(
   const websiteModuleAssets = [
     ['/assets/website/pages.mjs', new URL('../modules/website/pages.mjs', import.meta.url)],
     ['/renewal-reminders.mjs', new URL('../frontend/renewal-reminders.mjs', import.meta.url)],
-    ...['orders/order-opening', 'orders/list-order', 'orders/renewal-reminders', 'finance/apple-funding',
-      'data/document-delta'].map(name =>
+    ...['orders/order-opening', 'orders/list-order', 'orders/renewal-reminders', 'orders/order-list',
+      'inventory/list', 'finance/apple-funding', 'finance/accounting', 'data/document-delta', 'data/record-edit'].map(name =>
       ['/modules/' + name + '.mjs', new URL('../modules/' + name + '.mjs', import.meta.url)]),
     ...[...new Set(websitePages.map(page => page.script))].map(script =>
       ['/assets/website/pages/' + script, new URL('../frontend/' + script, import.meta.url)])
@@ -793,6 +793,7 @@ export async function startPreview(
         requireRenewalHandoff: Boolean(handleRenewalHandoff && auth),
         readOrderCards: () => readPoolCards(orderRechargeClient, { includeNumbers: true }),
         readOrderOwners: () => auth?.orderOwners() || [],
+        readOperatorLabels: () => auth && actor ? auth.operatorLabels(actor) : [],
         verifyManagedMailbox: readManagedMailbox || verifyMailboxImap,
         async verifyRelayExtraction(aliasIds, operator) {
           const { items } = await relay.checkExtractionEligibility(aliasIds, operator);
@@ -857,6 +858,7 @@ export async function startPreview(
     if (store && asset === assets.get('/index.html')) {
       let metadata = '<head>\n<meta name="id-local-data-events" content="enabled" />';
       metadata += '\n<meta name="id-document-delta" content="enabled" />';
+      metadata += '\n<meta name="id-business-lists" content="enabled" />';
       if (publicUrl) metadata += '\n<meta name="id-site-observations" content="enabled" />';
       if (!loginRequired || actor) {
         metadata += `\n<meta name="id-data-source" content="${dataSource}" />`;

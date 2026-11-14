@@ -14,10 +14,22 @@
   const mailboxUpdateStops = new Set();
   const observedVersions = new Map(), serverVersions = new Map(), changeListeners = new Set();
   const pageBaseline = new Set(), pendingInitialChanges = new Set();
+  // A bounded page can satisfy a push notification without hydrating the write snapshot.
+  const projectedChanges = new Map();
   const pendingWrites = new Set();
   let sourceInvalidated = false;
   const dataSource = document.querySelector('meta[name="id-data-source"]')?.content;
   const supportsDocumentDelta = document.querySelector('meta[name="id-document-delta"]')?.content === 'enabled';
+  const supportsBusinessLists = document.querySelector('meta[name="id-business-lists"]')?.content === 'enabled';
+  const isBusinessListRoute = route => supportsBusinessLists &&
+    /^(orders\/(gpt|claude|gemini|grok)|accounts\/(gpt|claude|gemini|grok)|mailboxes\/(google|microsoft))$/.test(route);
+  const orderPageDependencies = ['commerce', 'inventory', 'subscription-management', 'appleBalance', 'settings',
+    'operators', 'order-expense-receipts', 'order-sync'];
+  const inventoryPageDependencies = ['inventory', 'commerce', 'tools/mailbox-pool'];
+  const listQueryScopes = scopes => [
+    ...(orderPageDependencies.some(scope => scopes.includes(scope)) ? ['order-page'] : []),
+    ...(inventoryPageDependencies.some(scope => scopes.includes(scope)) ? ['inventory-page'] : [])
+  ];
   const sourceError = () => Object.assign(new Error('业务数据来源已变化，请重新加载页面后核对'), {
     status: 409, code: 'DATA_SOURCE_CHANGED'
   });
@@ -56,7 +68,7 @@
     if (scopes.includes('operators')) expanded.add('order-owners');
     if (scopes.some(scope => ['commerce', 'inventory', 'order-sync'].includes(scope))) expanded.add('site-data-health');
     if (scopes.some(scope => ['commerce', 'inventory', 'subscription-management'].includes(scope))) expanded.add('renewal-sidebar');
-    queries.invalidate([...expanded]);
+    queries.invalidate([...expanded, ...listQueryScopes(scopes)]);
     notifyChanges(scopes);
   }
   function acceptChangeVersions(versions, { reconcile = false } = {}) {
@@ -168,11 +180,18 @@
         entry.pending = null;
       }
     },
+    discard(scope) {
+      for (const [id, entry] of queryEntries) if (entry.scope === scope) {
+        entry.generation++;
+        queryEntries.delete(id);
+      }
+    },
     clear() {
       queryEpoch++;
       for (const stop of [...mailboxUpdateStops]) stop(true);
       queryEntries.clear();
       observedVersions.clear();
+      projectedChanges.clear();
     }
   });
 
@@ -265,7 +284,7 @@
     pendingWrites.add(affected);
     try {
       const result = await operation();
-      queries.invalidate([...affected, 'overview', 'audit']);
+      queries.invalidate([...affected, 'overview', 'audit', ...listQueryScopes(affected)]);
       return result;
     } finally {
       pendingWrites.delete(affected);
@@ -275,11 +294,13 @@
 
   async function request(resource, data, method = 'PUT', {
     keepalive = false, operationId: suppliedOperation, boundedRead = false, writeTimeout, measure, timing, stepUp = false,
+    readSignal,
     retryWrite = true
   } = {}) {
     if (sourceInvalidated) throw sourceError();
     const timeout = data === undefined || boundedRead ? 12_000 : writeTimeout;
     let signal = timeout ? AbortSignal.timeout(timeout) : undefined;
+    if (readSignal) signal = signal ? AbortSignal.any([signal, readSignal]) : readSignal;
     const timeoutError = () => writeTimeout
       ? Object.assign(new Error('保存结果暂未确认，请读取最新资料核对后再操作'), { code: 'WRITE_OUTCOME_UNKNOWN' })
       : new Error('读取超时，请重试');
@@ -308,6 +329,7 @@
       let response;
       try { response = await window.fetch('/api/local/' + resource, options); }
       catch (error) {
+        if (readSignal?.aborted) throw supersededQuery();
         if (signal?.aborted) throw timeoutError();
         if (retryable && attempt < 1) continue;
         throw error;
@@ -315,6 +337,7 @@
       timing?.response(response);
       let result;
       try { result = await response.json(); } catch { result = null; }
+      if (readSignal?.aborted) throw supersededQuery();
       if (signal?.aborted) throw timeoutError();
       if (sourceInvalidated) throw sourceError();
       if (!response.ok || result === null) {
@@ -352,6 +375,100 @@
   }
 
   const readQuery = (resource, params, options) => request(resource, params, 'POST', { ...options, boundedRead: true });
+  function createBusinessList(scope, { params, render, timing, progress, canRefresh }) {
+    const order = scope === 'order-page';
+    const resource = order ? 'commerce/page' : 'inventory/page';
+    const dependencies = order ? orderPageDependencies : inventoryPageDependencies;
+    let active, displayed, timer, deferredDeadline = false;
+    function deadline(entry) {
+      if (current() !== entry) return;
+      if (document.hidden || canRefresh?.() === false) { deferredDeadline = true; return; }
+      deferredDeadline = false;
+      void read(true);
+    }
+    function clear({ keepDisplay = false } = {}) {
+      active?.controller?.abort();
+      active?.progress?.finish();
+      window.clearTimeout(timer);
+      queries.discard(scope);
+      active = undefined;
+      if (!keepDisplay) displayed = undefined;
+      deferredDeadline = false;
+    }
+    function current() {
+      const input = params();
+      if (!input || sourceInvalidated) {
+        if (active) clear();
+        return;
+      }
+      const key = queryKey(input);
+      if (key !== active?.key) {
+        const sameList = active?.input.product === input.product && active?.input.type === input.type &&
+          active?.input.tab === input.tab;
+        clear({ keepDisplay: sameList });
+        active = { key, input };
+      }
+      return active;
+    }
+    function schedule(entry, data) {
+      window.clearTimeout(timer);
+      if (!Number.isFinite(data.refreshAt)) return;
+      timer = window.setTimeout(() => {
+        if (Date.now() >= data.refreshAt) deadline(entry);
+        else if (current() === entry) schedule(entry, data);
+      }, Math.max(20, Math.min(2_147_000_000, data.refreshAt - Date.now() + 10)));
+    }
+    function view() {
+      const entry = current();
+      if (!entry) return {};
+      const cached = queries.peek(scope, entry.input);
+      return { result: cached?.data || displayed, stale: !cached?.data && Boolean(displayed), error: entry.error };
+    }
+    function read(refresh = false) {
+      const entry = current();
+      if (!entry) return Promise.resolve(true);
+      const cached = queries.peek(scope, entry.input);
+      if (cached?.pending && entry.reading) return entry.reading;
+      if (!refresh && (entry.error || (cached?.data && !cached.stale))) return Promise.resolve(!entry.error);
+      entry.controller?.abort();
+      const controller = entry.controller = new AbortController();
+      entry.error = undefined;
+      const running = order ? timing?.() : undefined;
+      const indicator = entry.progress = progress?.();
+      const reading = queries.read(scope, entry.input, async () => {
+        const result = await readQuery(resource, entry.input, {
+          readSignal: controller.signal, ...(order && { measure: 'order-list', timing: running })
+        });
+        if (!Array.isArray(result.rows) || !Number.isSafeInteger(result.total) || result.total < 0 ||
+            !Number.isSafeInteger(result.version) || result.version < 0 ||
+            !Number.isSafeInteger(result.page) || result.pageSize !== entry.input.pageSize || result.rows.length > result.pageSize)
+          throw new Error('暂时无法读取列表，请重试');
+        const published = serverVersions.get(order ? 'commerce' : 'inventory');
+        if (numeric(published) && BigInt(result.version) < BigInt(published))
+          throw new Error('列表资料正在更新，请重试');
+        return result;
+      }, { refresh }).then(data => {
+        if (current() !== entry || entry.controller !== controller) return true;
+        displayed = data;
+        schedule(entry, data);
+        running?.finish();
+        render();
+        return true;
+      }, error => {
+        if (current() !== entry || entry.controller !== controller) return true;
+        if (error.status === 401 || error.status === 403) displayed = undefined;
+        if (error.code === 'READ_SUPERSEDED') return true;
+        entry.error = { message: error.message, diagnostic: running?.finish(error) };
+        render();
+        return false;
+      });
+      entry.reading = reading.finally(() => indicator?.finish());
+      return entry.reading;
+    }
+    const resumeDeadline = () => { if (deferredDeadline && active) deadline(active); };
+    for (const event of ['visibilitychange', 'close', 'toggle']) document.addEventListener?.(event, resumeDeadline, true);
+    return { clear, view, read, changes: scopes => dependencies.some(scope => scopes.includes(scope)) ? read(true) : true };
+  }
   function invalidateDataSource() {
     sourceInvalidated = true;
     queries.invalidate();
@@ -375,12 +492,31 @@
     return { ...changes[0], log: after.logs[0] };
   }
 
+  async function saveRecordEdit(domain, version, action, prior, edit, options) {
+    const rules = await import('/modules/data/record-edit.mjs');
+    if (!window.crypto?.subtle) return;
+    const hash = await window.crypto.subtle.digest('SHA-256',
+      new TextEncoder().encode(rules.recordFingerprintInput(domain, prior)));
+    const expectedFingerprint = [...new Uint8Array(hash)].map(byte => byte.toString(16).padStart(2, '0')).join('');
+    const recordEdit = { ...edit, expectedFingerprint };
+    if (!rules.validRecordEdit(domain, action, recordEdit)) return;
+    return request(domain, { version, action, recordEdit }, 'PUT', options);
+  }
+
   async function saveDocument(domain, version, data, { action, base, measure, timing } = {}) {
     const recordChange = domain === 'commerce' && contactChange(action, base, data);
     let payload = { version, data, action, ...(recordChange && { recordChange }) };
     let rules;
     if (supportsDocumentDelta && ['admin', 'super'].includes(actor?.role) && version > 0 && base &&
         !recordChange && ['commerce', 'inventory'].includes(domain)) {
+      if (supportsBusinessLists && (action === 'inventory_edit' || action === '更正订单')) {
+        const assets = await import('/modules/data/record-edit.mjs').catch(() => undefined);
+        const candidate = assets?.recordEditCandidate(domain, action, base, data);
+        if (candidate) {
+          const result = await saveRecordEdit(domain, version, action, candidate.prior, candidate.edit, { measure, timing });
+          if (result) return result;
+        }
+      }
       rules = await import('/modules/data/document-delta.mjs').catch(() => undefined);
       const delta = rules?.documentDelta(domain, base, data);
       if (delta) payload = { version, action, delta };
@@ -408,16 +544,20 @@
   window.IDLocalData = Object.freeze({
     acceptChangeVersions,
     invalidateDataSource,
-    clearChangeTracking() { observedVersions.clear(); serverVersions.clear(); pageBaseline.clear(); pendingInitialChanges.clear(); },
+    clearChangeTracking() {
+      observedVersions.clear(); serverVersions.clear(); pageBaseline.clear(); pendingInitialChanges.clear(); projectedChanges.clear();
+    },
     pendingChangeVersions(scopes) {
       return Object.fromEntries(scopes.filter(scope => serverVersions.has(scope) &&
-        (pendingInitialChanges.has(scope) || newer(serverVersions.get(scope), observedVersions.get(scope))))
+        (pendingInitialChanges.has(scope) || (serverVersions.get(scope) !== projectedChanges.get(scope) &&
+          newer(serverVersions.get(scope), observedVersions.get(scope)))))
         .map(scope => [scope, serverVersions.get(scope)]));
     },
-    acknowledgeChanges(versions) {
+    acknowledgeChanges(versions, { projected = false } = {}) {
       for (const [scope, version] of Object.entries(versions)) {
         if (serverVersions.get(scope) !== version) continue;
         pendingInitialChanges.delete(scope);
+        if (projected && orderPageDependencies.includes(scope)) projectedChanges.set(scope, version);
         if (!['inventory', 'commerce', 'settings', 'appleBalance', 'toolbox'].includes(scope) &&
             newer(version, observedVersions.get(scope)))
           observedVersions.set(scope, version);
@@ -429,6 +569,16 @@
       : pendingWrites.size > 0,
     authRequired,
     canApproveRechargeCodes,
+    isBusinessListRoute,
+    createBusinessList,
+    ...(supportsBusinessLists && { saveOrderNotes: (version, prior, notes, reason, options) => write(['commerce'], async () => {
+      const result = await saveRecordEdit('commerce', version, '更正订单', prior, {
+        collection: 'orders', id: prior.id, expectedVersion: prior.version || 0,
+        changes: { notes }, reason, eventId: crypto.randomUUID(), logId: crypto.randomUUID()
+      }, options);
+      if (!result) throw new Error('备注或修改原因格式无效，请重新核对');
+      return result;
+    }) }),
     actor: () => actor && ({ ...actor, name: labels.get(actor.id) || actor.name }),
     queries,
     operatorLabel: (id, fallback) => labels.get(id) || fallback || '',
