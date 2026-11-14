@@ -39,7 +39,7 @@ async function environment(context) {
   await interceptDesign(context, { actor, skipRechargeAssets: true, businessLists: true, documentDelta: true,
     localFixtures: { 'auth/session': { actor, configured: true } } });
   const requests = [];
-  let verified = false, confirmationCount = 0, lostArchive = 0;
+  let verified = false, confirmationCount = 0, lostArchive = 0, lostRecovery = 0;
   await context.route(base + '**', async route => {
     const request = route.request(), url = new URL(request.url());
     const path = url.pathname.slice('/api/local/'.length);
@@ -55,6 +55,10 @@ async function environment(context) {
       lostArchive--;
       return route.abort('connectionreset');
     }
+    if (method === 'POST' && path.startsWith('audit/') && result.status === 200 && lostRecovery > 0) {
+      lostRecovery--;
+      return route.abort('connectionreset');
+    }
     return route.fulfill({ status: result.status, json: result.body });
   });
   const page = await context.newPage();
@@ -64,6 +68,7 @@ async function environment(context) {
   await page.exposeFunction('testVerifyArchive', () => { confirmationCount++; verified = true; return true; });
   await page.addInitScript(() => { window.IDAccountSecurity = { verify: () => window.testVerifyArchive() }; });
   return { page, store, mailbox, requests, errors, lostArchive: count => { lostArchive = count; },
+    lostRecovery: count => { lostRecovery = count; },
     confirmations: () => confirmationCount };
 }
 
@@ -132,6 +137,75 @@ test('导入批次可逐条归档，手机和桌面都能从原归档恢复，�
       const filteredRows = await (await filtered).json();
       assert.equal(filteredRows.total, 2);
       assert(filteredRows.items.every(row => row.subject === '邮箱库存'));
+      assert.deepEqual(errors, []);
+    } finally { await context.close(); store.close(); }
+  }
+});
+
+test('手机与桌面通过原库存入口误标状态，再从原日志预览、确认及重试', { timeout: 50_000 }, async t => {
+  const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
+  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
+  t.after(() => browser.close());
+  for (const [width, dark] of [[1440, false], [390, true]]) {
+    const context = await browser.newContext({ viewport: { width, height: 900 }, serviceWorkers: 'block' });
+    const { page, store, mailbox, requests, errors, lostRecovery, confirmations } = await environment(context);
+    try {
+      await page.goto(origin + '/#/mailboxes/google');
+      if (dark) await toggleDesignTheme(page);
+      const main = page.locator('#main'), drawer = page.locator('#drawer');
+      const more = main.locator('[data-action="inventory-more"][data-id="' + mailbox.id + '"]');
+      await more.click();
+      await page.locator('.row-action-menu:popover-open').getByRole('menuitem', { name: '移入死号', exact: true }).click();
+      const confirm = page.locator('#confirm-dialog[open]');
+      await confirm.getByRole('heading', { name: '确认账号状态变化' }).waitFor();
+      const saved = page.waitForResponse(response =>
+        response.url() === base + 'inventory' && response.request().method() === 'PUT');
+      await confirm.locator('[data-action="confirm-accept"]').click();
+      assert.equal((await saved).status(), 200);
+      assert.equal(store.load('inventory').data.mailboxes[0].health, 'dead');
+      const { id } = store.audit().find(record => record.action === 'inventory_health_change');
+      await page.goto(origin + '/#/settings/audit');
+      await main.getByRole('combobox', { name: '日志范围' }).selectOption('recovery');
+      await main.getByRole('combobox', { name: '恢复模块' }).selectOption('mailbox');
+      const search = main.getByRole('textbox', { name: '搜索当前列表' });
+      const filtered = page.waitForResponse(response => {
+        const url = new URL(response.url());
+        return url.pathname.endsWith('/audit/page') && url.searchParams.get('module') === 'mailbox' &&
+          url.searchParams.get('query') === '#' + id;
+      });
+      await search.fill('#' + id);
+      await search.press('Enter');
+      assert.deepEqual((await (await filtered).json()).items.map(row => row.id), [String(id)]);
+      await main.getByRole('button', { name: '查看恢复', exact: true }).click();
+      await drawer.getByRole('heading', { name: '健康状态' }).waitFor();
+      assert.equal(await drawer.getByText('死号', { exact: true }).count(), 1);
+      assert.equal(await drawer.getByText('正常', { exact: true }).count(), 1);
+      assert.equal(await drawer.getByText('谷歌邮箱 · a***@example.test', { exact: true }).count(), 1);
+      assert.equal(await drawer.getByText(mailbox.email, { exact: true }).count(), 0);
+      assert.deepEqual((await separatorSnapshot(page)).findings, []);
+      const bounds = await drawer.locator('.drawer-body').evaluate(node => [node.scrollWidth, node.clientWidth]);
+      assert(bounds[0] <= bounds[1] + 1);
+      await drawer.getByRole('button', { name: '确认恢复', exact: true }).click();
+      await drawer.getByText('请选择恢复原因。').waitFor();
+      await drawer.getByLabel('恢复原因').selectOption('wrong_record');
+      lostRecovery(2);
+      await drawer.getByRole('button', { name: '确认恢复', exact: true }).click();
+      await drawer.getByText(/暂时无法确认恢复结果/).waitFor();
+      assert.equal(store.load('inventory').data.mailboxes[0].health, 'normal');
+      await drawer.getByRole('button', { name: '重试恢复', exact: true }).click();
+      await drawer.getByRole('heading', { name: '恢复回执' }).waitFor();
+      await drawer.getByText('选错库存资料', { exact: true }).waitFor();
+      const writes = requests.filter(row => row.path === 'audit/' + id + '/recovery' && row.method === 'POST');
+      assert.equal(writes.length, 4);
+      assert.deepEqual(writes[0].body, { version: 2, reason: 'wrong_record' });
+      assert.match(writes[0].operationId, /^[\da-f-]{36}$/);
+      assert.deepEqual(writes, Array(writes.length).fill(writes[0]));
+      assert.equal(confirmations(), 1);
+      assert.equal(store.audit().filter(record => record.action === 'inventory_restore_health').length, 1);
+      await drawer.getByRole('button', { name: '查看原操作', exact: true }).click();
+      await drawer.getByRole('heading', { name: '已恢复', exact: true }).waitFor();
+      await drawer.getByRole('button', { name: '查看恢复回执', exact: true }).click();
+      await drawer.getByRole('heading', { name: '恢复回执' }).waitFor();
       assert.deepEqual(errors, []);
     } finally { await context.close(); store.close(); }
   }
