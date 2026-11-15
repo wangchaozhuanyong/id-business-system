@@ -28,13 +28,14 @@ const mailboxTypes = new Map([
   ['relay', 'relay'], ['苹果隐藏邮箱', 'relay'],
   ['microsoft', 'microsoft'], ['微软邮箱', 'microsoft']
 ]);
+export const registrationMailboxType = value => mailboxTypes.get(value);
 
 export function registrationMailboxCandidates(account, mailboxes, recordedSourceId) {
   if (!isMailboxRegistration(account)) return [];
-  const type = mailboxTypes.get(account.emailType);
+  const type = registrationMailboxType(account.emailType);
   const sourceId = account.sourceMailboxId || recordedSourceId;
   return mailboxes.filter(row => {
-    if (row.relayDeleted || row.deleted || !['google', 'relay'].includes(row.type) ||
+    if (row.relayDeleted || row.deleted || !['google', 'relay', 'microsoft'].includes(row.type) ||
         registrationEmail(row.email) !== registrationEmail(account.email) ||
         (account.type === 'gemini' && row.type !== 'google')) return false;
     return sourceId ? row.id === sourceId : !account.emailType || row.type === type;
@@ -159,7 +160,7 @@ export function checkRegistrationChanges(previous, next, action, actor) {
         return 'Gemini 请使用谷歌邮箱';
       if (account?.type === 'gemini' && (account.sourceMailboxId
         ? mailboxes.get(account.sourceMailboxId)?.type !== 'google'
-        : isMailboxRegistration(account) && (['relay', '苹果隐藏邮箱'].includes(account.emailType) ||
+        : isMailboxRegistration(account) && (['relay', 'microsoft'].includes(registrationMailboxType(account.emailType)) ||
           (otherEmails.has(email) && !googleEmails.has(email))))) return 'Gemini 请使用谷歌邮箱';
       if (fact.key.startsWith('account:') && account?.sourceMailboxId &&
           registrationEmail(mailboxes.get(account.sourceMailboxId)?.email) !== email)

@@ -5,6 +5,9 @@ const platforms = new Map([
   ['gpt', 'ChatGPT'], ['claude', 'Claude'], ['gemini', 'Gemini'], ['grok', 'Grok'], ['apple', 'Apple ID']
 ]);
 const list = value => Array.isArray(value) ? value : [];
+export const isPlatformOnlyMark = link => link?.kind === 'registration' && !link.registrationId && !link.accountId &&
+  !link.orderId && !link.taskId && !link.batchId && !link.claimId && !link.occurredAt;
+const useState = row => row.inventoryState || (row.used ? 'used' : 'available');
 const productKey = value => {
   const key = String(value || '').trim().toLowerCase();
   return ({ chatgpt: 'gpt', codex: 'gpt', 'apple id': 'apple' })[key] || key;
@@ -21,10 +24,10 @@ export function prepareMailboxPlatformMarks(previous, next, action, actor, now =
     const added = list(row?.usageLinks).slice(list(prior?.usageLinks).length);
     const marks = added.filter(link => link?.kind === 'registration' && !link.registrationId && !link.accountId);
     if (!marks.length) continue;
+    const manuallyUsed = prior?.type === 'microsoft' && prior.mailboxUsage === 'used' && useState(prior) === 'available';
     if (action !== 'inventory_registration_result' || !prior ||
         !['google', 'relay', 'microsoft'].includes(prior.type) || row.type !== prior.type ||
-        row.email !== prior.email || (prior.inventoryState || (prior.used ? 'used' : 'available')) !== 'used' ||
-        row.inventoryState !== 'used')
+        row.email !== prior.email || (!manuallyUsed && useState(prior) !== 'used') || useState(row) !== useState(prior))
       return '注册平台补录仅适用于已使用邮箱，请从标记注册平台入口登记';
     if (['actualUsedAt', 'claimedAt', 'claimId', 'claimBatchId'].some(key => row[key] !== prior[key]))
       return '补录注册平台必须保留原使用时间和领用关联';
@@ -37,10 +40,12 @@ export function prepareMailboxPlatformMarks(previous, next, action, actor, now =
       if (link.kind === 'registration' && link.accountId) known.add(productKey(accounts.get(link.accountId)?.type));
     }
     for (const mark of marks) {
+      if (!isPlatformOnlyMark(mark)) return '补录注册平台必须保留原使用依据';
       if (!platforms.has(mark.product)) return '请选择有效的注册平台';
       if (known.has(mark.product)) return '该邮箱已登记此注册平台，请勿重复保存';
       if (prior.type === 'relay' && !['gpt', 'claude', 'grok'].includes(mark.product))
         return '隐藏邮箱仅可登记 ChatGPT、Claude 或 Grok';
+      if (prior.type === 'microsoft' && mark.product === 'gemini') return 'Gemini 请使用谷歌邮箱';
       if (aiRegistrationProduct(mark.product) && [...known].some(aiRegistrationProduct))
         return '该邮箱已有注册平台，请核对原账号';
       known.add(mark.product);

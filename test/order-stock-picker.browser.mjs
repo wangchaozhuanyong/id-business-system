@@ -9,13 +9,13 @@ test('成品账号下拉顶部搜索、模糊匹配、选择回填与草稿恢�
   const seed = fixture.inventory.data.accounts.find(row => row.type === 'gpt');
   fixture.inventory.data.accounts = Array.from({ length: 36 }, (_, index) => ({
     ...seed, id: `picker-${index}`, email: `stock-candidate-${index}@example.test`,
-    emailType: 'google', inventoryState: 'available', usageLinks: [], used: false
+    emailType: index === 35 ? 'relay' : 'google', inventoryState: 'available', usageLinks: [], used: false
   }));
   fixture.inventory.data.accounts.push({ ...seed, id: 'unavailable', email: 'unavailable@example.test', health: 'dead' });
   const browser = await chromium.launch();
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  const { external } = await interceptDesign(context, { localFixtures: fixture });
+  const { external } = await interceptDesign(context, { localFixtures: fixture, skipRechargeAssets: true });
   const page = await context.newPage();
   page.setDefaultTimeout(5000);
   const errors = [];
@@ -25,6 +25,8 @@ test('成品账号下拉顶部搜索、模糊匹配、选择回填与草稿恢�
   const trigger = page.locator('#commerce-emailHistory-picker');
   const popup = page.locator('#commerce-emailHistory-popover');
   const search = popup.getByRole('searchbox', { name: '搜索可用账号' });
+  const cost = page.locator('#commerce-emailCostAmount');
+  const currency = page.locator('#commerce-emailCostCurrency');
   await page.locator('#commerce-emailHistory option[value="stock-candidate-35@example.test"]').waitFor({ state: 'attached' });
   assert.equal(await page.locator('datalist').count(), 0);
   assert.equal(await page.locator('#commerce-email').isEditable(), true, '仍可录入系统外账号');
@@ -63,10 +65,28 @@ test('成品账号下拉顶部搜索、模糊匹配、选择回填与草稿恢�
   await page.goto(origin + '/#/workspace/order/gpt');
   assert.match(await trigger.innerText(), /stock-candidate-35@example.test/, '切页返回恢复选择');
   assert.equal(await page.locator('#commerce-accountId').inputValue(), 'picker-35');
+  assert.equal(await cost.inputValue(), '25');
   await page.locator('#commerce-email').fill('external-account@example.test');
   assert.equal(await page.locator('#commerce-accountId').inputValue(), '', '手填外部账号应解除原库存关联');
+  assert.equal(await cost.inputValue(), '0', '解除库存关联应清除自动带入的苹果邮箱费用');
+  const chooseStock = async () => {
+    await trigger.click();
+    await popup.getByRole('option', { name: /^stock-candidate-35@example\.test/ }).click();
+  };
+  await chooseStock();
+  assert.equal(await cost.inputValue(), '25');
   await page.locator('#commerce-businessType').selectOption('续费');
+  assert.equal(await cost.inputValue(), '0', '切换业务类型后清除库存自动费用');
   assert.equal(await page.locator('#commerce-email').isVisible(), true);
+
+  await page.locator('#commerce-businessType').selectOption('成品交付');
+  await chooseStock();
+  await page.getByText('订单花费（用于算利润）', { exact: true }).click();
+  await cost.fill('12');
+  await currency.selectOption('USD');
+  await page.locator('#commerce-email').fill('another-external-account@example.test');
+  assert.equal(await cost.inputValue(), '12', '更换账号应保留已手填的金额');
+  assert.equal(await currency.inputValue(), 'USD');
   assert.deepEqual(errors, []);
   assert.deepEqual(external, []);
 });

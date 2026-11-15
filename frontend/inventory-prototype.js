@@ -465,6 +465,9 @@
       .filter((type) => type.enabled !== false && type.id !== 'microsoft')
       .map((type) => [type.id, type.label]);
   }
+  function accountEmailTypes() {
+    return [...enabledTypes(), ['microsoft', typeLabel('microsoft')]];
+  }
   function canExtractLocalRelay() {
     return Boolean(localData?.authRequired && admin() && localData.relay);
   }
@@ -730,10 +733,11 @@
   }
   function personalSourceMailboxes(type) {
     return allAssets().filter(row => {
-      if (!['google', 'relay'].includes(row.type) || row.relayDeleted || row.health !== 'normal' ||
+      if (!mailboxType(row.type) || row.relayDeleted || row.deleted || row.health !== 'normal' ||
         row.status !== '正常' || usageReview.has(row.id) || row.usageLinks.length) return false;
+      if (row.type === 'microsoft' && localData && !admin()) return false;
       if (type === 'gemini' && row.type !== 'google') return false;
-      if (row.type === 'google' && row.inventoryState === 'available') return true;
+      if (row.type !== 'relay' && row.inventoryState === 'available') return mailUse(row) !== 'used';
       if (row.inventoryState !== 'claimed') return false;
       const claim = pendingClaim(row);
       if (!claim || claim.batch.kind !== 'mail' || claim.batch.actorId !== currentActor().id ||
@@ -1087,7 +1091,7 @@
     const actions = canManage ?
       (googleDelivery ? button('复制设置', 'mailbox-delivery-settings', '', 'settings') +
         button('查询码设置', 'mailbox-delivery-validity', '', 'key') : '') +
-      (microsoft ? '' : paged ? result?.hasReview ? button('核对使用关联', 'inventory-usage-review', '', 'check') : '' : usageReviewButton()) +
+      (paged ? result?.hasReview ? button('核对使用关联', 'inventory-usage-review', '', 'check') : '' : usageReviewButton()) +
       button('本表设置', 'inventory-settings', '', 'settings') +
       (type === 'claude' && localData && admin() ? button('历史账号入库', 'inventory-claude-history', '', 'upload') : '') +
       button('批量导入', 'inventory-import', '', 'upload') +
@@ -1835,6 +1839,7 @@
     const val = (name) => d[`inventory-${name}`] ?? d[name] ?? '';
     const acquisition = val('acquisitionMethod') || (original ? '' : 'self_registered');
     const purchased = acquisition === 'purchased';
+    const linked = original?.sourceMailboxId && assetById(original.sourceMailboxId);
     const config = settingsFor(type);
     const country = d['inventory-country-edit'] ?? d.country ?? '';
     const typeChoices = microsoft
@@ -1878,7 +1883,9 @@
       fields += field(
         '邮箱类型',
         'inventory-emailType',
-        select('inventory-emailType', choicesWithCurrent([['', '未登记'], ...enabledTypes()], val('emailType')), val('emailType'))
+        linked?.type === 'microsoft'
+          ? input('inventory-emailType', typeLabel(linked.type), 'readonly disabled')
+          : select('inventory-emailType', choicesWithCurrent([['', '未登记'], ...accountEmailTypes()], val('emailType')), val('emailType'))
       );
     if (personal) {
       fields += type === 'gemini'
@@ -1890,7 +1897,6 @@
       fields += field('平台账号编号', 'inventory-platformAccountId', input('inventory-platformAccountId', val('platformAccountId'), 'maxlength="120"'));
     }
     if (account) {
-      const linked = original?.sourceMailboxId && assetById(original.sourceMailboxId);
       const choices = [['', '独立录入'], ...personalSourceMailboxes(type)
         .map(row => [row.id, `${row.email} · ${row.inventoryState === 'claimed' ? '本人已领用' : '可用库存'}`])];
       fields += original ? field('来源邮箱', 'inventory-sourceMailboxDisplay',
@@ -1898,10 +1904,15 @@
         : field('来源邮箱', 'inventory-sourceMailboxId',
           select('inventory-sourceMailboxId', choicesWithCurrent(choices, val('sourceMailboxId')), val('sourceMailboxId'))
             .replace('<select ', purchased ? '<select disabled ' : '<select '),
-          false, '仅在选中本系统邮箱时登记实际使用。');
+          false, '可指定来源库存。独立录入时，系统会核对自注册账号与同地址的邮箱库存。');
     }
-    if (microsoft) fields += field('使用状态', 'inventory-mailboxUsage',
-      select('inventory-mailboxUsage', [['', '未登记'], ['available', '未使用'], ['used', '已使用']], val('mailboxUsage')));
+    if (microsoft) {
+      const verifiedUse = original && mailUse(original) === 'used' &&
+        (original.inventoryState === 'used' || original.usageLinks.some(link => link.kind === 'registration'));
+      fields += field('使用状态', 'inventory-mailboxUsage', verifiedUse
+        ? input('inventory-mailboxUsage', '已使用', 'readonly disabled')
+        : select('inventory-mailboxUsage', [['', '未登记'], ['available', '未使用'], ['used', '已使用']], val('mailboxUsage')));
+    }
     const security = original?.microsoftSecurity || {};
     if (microsoft)
       fields += field(
@@ -2189,10 +2200,11 @@
     const known = new Set(mailboxPlatforms(asset).map(([key]) => key));
     const hasAi = [...known].some(key => key !== 'apple');
     return (asset.type === 'relay' ? relayRegistrationPlatforms : registrationPlatforms)
-      .filter(([key]) => !known.has(key) && (key === 'apple' || !hasAi));
+      .filter(([key]) => !known.has(key) && (key === 'apple' || !hasAi) &&
+        (asset.type !== 'microsoft' || key !== 'gemini'));
   }
   function mailboxPlatformButton(asset) {
-    return mailboxType(asset?.type) && asset.inventoryState === 'used' && (!localData || admin()) && mailboxPlatformChoices(asset).length
+    return mailboxType(asset?.type) && mailUse(asset) === 'used' && (!localData || admin()) && mailboxPlatformChoices(asset).length
       ? button('标记注册平台', 'inventory-mailbox-platform', '', 'edit', `data-id="${esc(asset.id)}"`)
       : '';
   }
@@ -3075,7 +3087,7 @@
             'inventory-import-email-type',
             select(
               'inventory-import-email-type',
-              [['', '未登记'], ...enabledTypes()],
+              [['', '未登记'], ...(stockType(type) ? accountEmailTypes() : enabledTypes())],
               d['inventory-import-email-type'] || ''
             )
           )) +
@@ -3272,7 +3284,7 @@
       if (context.type !== 'apple' && !microsoft && !personal) {
         const emailType = values.emailType || d['inventory-import-email-type'];
         values.emailType =
-          enabledTypes().find(([id, label]) =>
+          (stockType(context.type) ? accountEmailTypes() : enabledTypes()).find(([id, label]) =>
             [id, label].some((value) => csvFieldName(value) === csvFieldName(emailType))
           )?.[0] || '';
         if (!error && emailType && !values.emailType) error = '请选择有效的邮箱类型';
@@ -3513,7 +3525,7 @@
       accountEntry &&
       type !== 'apple' && !personal && data['inventory-emailType'] &&
       data['inventory-emailType'] !== previous?.emailType &&
-      !enabledTypes().some(([value]) => value === data['inventory-emailType'])
+      !accountEmailTypes().some(([value]) => value === data['inventory-emailType'])
     ) {
       api.setError('inventory-emailType', '请选择有效邮箱类型');
       return;
@@ -3747,7 +3759,7 @@
         if (sourceMailbox) Object.assign(update, { sourceMailboxId: sourceMailbox.id,
           sourceClaimId: sourceMailbox.claimId || '', emailType: sourceMailbox.type });
         if (microsoft) {
-          update.mailboxUsage = data['inventory-mailboxUsage'] || '';
+          if (data['inventory-mailboxUsage'] !== undefined) update.mailboxUsage = data['inventory-mailboxUsage'];
           update.auxiliary = (update.auxiliary || '').trim().toLowerCase();
           update.totp = (update.totp || '').trim();
           if (microsoftSecurity) update.microsoftSecurity = microsoftSecurity;
@@ -5166,8 +5178,11 @@
     if (node.id === 'inventory-sourceMailboxId') {
       const mailbox = assetById(node.value);
       const email = document.getElementById('inventory-email');
+      const emailType = node.form.elements['inventory-emailType'];
       const confirmed = document.getElementById('inventory-source-confirmed');
       if (mailbox && email && !email.value.trim()) email.value = mailbox.email;
+      if (mailbox && emailType && Array.from(emailType.options).some(option => option.value === mailbox.type))
+        emailType.value = mailbox.type;
       if (confirmed) confirmed.checked = false;
       saveDrafts();
       return true;
@@ -5372,7 +5387,8 @@
           registered: assets.length,
           available: type === 'relay' ? relayOverview?.available ?? null :
             type === 'microsoft' ? null : assets.filter(asset => available(asset)).length,
-          used: assets.filter(asset => displayInventoryState(asset) === 'used' || usageReview.get(asset.id)?.status === 'used').length,
+          used: assets.filter(asset => type === 'microsoft' ? mailUse(asset) === 'used'
+            : displayInventoryState(asset) === 'used' || usageReview.get(asset.id)?.status === 'used').length,
           claimed: type === 'microsoft' ? null : assets.filter(asset => asset.inventoryState === 'claimed' && usageReview.get(asset.id)?.status !== 'used').length,
           ...(type === 'relay' && relayOverview && { checkedAt: relayOverview.checkedAt, availabilityStale: relayOverview.availabilityStale }),
           issues

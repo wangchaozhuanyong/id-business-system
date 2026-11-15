@@ -1341,7 +1341,7 @@
         {
           id: 'enabled',
           label: '状态',
-          render: (row) => tag(row.id === 'microsoft' ? '仅库存' : row.enabled ? '启用' : '停用', row.enabled ? 'success' : '')
+          render: (row) => tag(row.id === 'microsoft' ? '可关联账号' : row.enabled ? '启用' : '停用', row.enabled ? 'success' : '')
         },
         {
           id: 'usage',
@@ -1373,7 +1373,7 @@
       context = `mail-type:${id || 'new'}`;
     openDrawer(
       row ? '编辑邮箱分类' : '新增邮箱分类',
-      id === 'microsoft' ? '可在邮箱管理登记微软邮箱库存。快捷提交、提取和下游选用接通后再开放此开关。'
+      id === 'microsoft' ? '微软邮箱支持库存登记和账号注册关联。提取开关随提取功能开放。'
         : '修改显示名称不改变资料归属。新增分类需接入对应业务后启用。',
       `<form id="ops-mail-type-form" novalidate><input type="hidden" name="ops-type-id" value="${esc(id)}" /><input type="hidden" name="ops-type-version" value="${settingsVersion}" />${grid(field('分类名称', 'ops-type-label', input('ops-type-label', row?.label || '', 'maxlength="30"'), true) + field('状态', 'ops-type-enabled', select('ops-type-enabled', supported ? ['启用', '停用'] : ['停用'], row?.enabled ? '启用' : '停用'), true))}</form>`,
       (localData ? button('重新读取', 'ops-mail-type-reload', '', '', actionData(id)) : '') +

@@ -3,17 +3,14 @@ import { hasRecordedPaymentAmount } from '../modules/finance/accounting.mjs';
 import { parseV2DateTimeInput, toV2DateTimeInput } from '../modules/time/dateTime.ts';
 import {
   aiRegistrationProduct, conflictingRegistration, isMailboxRegistration, isStockRegistration,
-  registrationEmail as emailKey, registrationMailboxCandidates, registrationOccupancy, registrationOccupancyMessage,
+  registrationEmail as emailKey, registrationMailboxCandidates, registrationMailboxType, registrationOccupancy, registrationOccupancyMessage,
   registrationPurposeProduct
 } from './inventory-registration.mjs';
 
-const mailboxTypes = new Map([
-  ['google', 'google'], ['谷歌邮箱', 'google'],
-  ['relay', 'relay'], ['苹果隐藏邮箱', 'relay']
-]);
 const accountTypes = new Set(['gpt', 'claude', 'gemini', 'grok']);
 const state = (row) => row.inventoryState || (row.used ? 'used' : 'available');
 const list = (value) => Array.isArray(value) ? value : [];
+const manuallyUsedMicrosoft = asset => asset.type === 'microsoft' && asset.mailboxUsage === 'used';
 
 export function isCorrectableUsage(link) {
   return Boolean(link?.occurredAt && (
@@ -89,7 +86,7 @@ function orderEvidence(order, now) {
 
 export function inspectInventoryUsage(inventory, commerce, now = Date.now()) {
   const mail = indexByEmail(list(inventory?.mailboxes).filter((row) =>
-    row && ['google', 'relay'].includes(row.type) && !row.relayDeleted
+    row && ['google', 'relay', 'microsoft'].includes(row.type) && !row.relayDeleted && !row.deleted
   ));
   const accounts = indexByEmail(list(inventory?.accounts).filter((row) => accountTypes.has(row?.type)));
   const orders = indexByEmail(list(commerce?.orders).filter((row) =>
@@ -120,13 +117,16 @@ export function inspectInventoryUsage(inventory, commerce, now = Date.now()) {
       originalLink.registrationId === evidence.registrationId
     )) return;
     const usage = list(asset.usageLinks);
-    const supplement = state(asset) === 'used' && evidence.kind === 'registration' && evidence.accountId &&
+    const inventoryState = state(asset);
+    const previouslyUsed = inventoryState === 'used' || manuallyUsedMicrosoft(asset);
+    const supplement = previouslyUsed && evidence.kind === 'registration' && evidence.accountId &&
       !usage.some(link => link.kind === 'registration' && link.accountId) &&
       (facts.some(fact => !fact.key.startsWith('account:') && fact.assetId === asset.id &&
         fact.product === evidence.product && !fact.pending) ||
-        registrations.some(record => record?.assetId === asset.id && record.state === '成功' && !record.product) ||
-        usage.some(link => link.kind === 'order-use'));
-    if ((state(asset) === 'used' || usage.length) && !supplement) return;
+        (inventoryState === 'used' && (
+          registrations.some(record => record?.assetId === asset.id && record.state === '成功' && !record.product) ||
+          usage.some(link => link.kind === 'order-use'))));
+    if ((previouslyUsed || usage.length) && !supplement) return;
     const existing = matches.get(asset.id);
     const claim = pendingInventoryClaim(inventory, asset, supplement ? 'used' : 'pending');
     const claimedAt = instant(claim?.item.claimedAt || claim?.batch.time);
@@ -138,7 +138,7 @@ export function inspectInventoryUsage(inventory, commerce, now = Date.now()) {
       (claim?.item.registrationId && claim.item.registrationId !== evidence.registrationId) ||
       (claim?.item.orderId && claim.item.orderId !== evidence.orderId))))
       reason = '订单、任务或注册结果待确认';
-    else if (state(asset) === 'claimed' && !claim) reason = '提取批次关联待核对';
+    else if (inventoryState === 'claimed' && !claim) reason = '提取批次关联待核对';
     else if (!supplement && claim && (!evidence.actorId || claim.batch.actorId !== evidence.actorId))
       reason = '业务来源与领取人需核对';
     else if (!supplement && purpose && purpose !== evidence.product) reason = '业务产品与提取用途不一致';
@@ -160,6 +160,7 @@ export function inspectInventoryUsage(inventory, commerce, now = Date.now()) {
     const asset = mailById.get(record?.assetId);
     if (!asset || !record.id || !['待核对', '成功'].includes(record.state)) continue;
     const product = aiRegistrationProduct(record.product) || String(record.product || '').toLowerCase();
+    if (asset.type === 'microsoft' && (!record.accountId || product === 'gemini')) continue;
     consider(asset, {
       kind: 'registration', registrationId: record.id, product,
       ...(record.accountId && { accountId: record.accountId }),
@@ -206,7 +207,7 @@ export function inspectInventoryUsage(inventory, commerce, now = Date.now()) {
   }
 
   for (const [email, rows] of orders) {
-    const mailboxes = mail.get(email) || [];
+    const mailboxes = (mail.get(email) || []).filter(row => row.type !== 'microsoft');
     const matchingAccounts = accounts.get(email) || [];
     for (const order of rows) {
       const evidence = orderEvidence(order, now);
@@ -215,7 +216,7 @@ export function inspectInventoryUsage(inventory, commerce, now = Date.now()) {
       const productAccounts = matchingAccounts.filter((row) =>
         row.type === evidence.product && (!order.accountId || row.id === order.accountId)
       );
-      const sourceType = productAccounts.length === 1 && mailboxTypes.get(productAccounts[0].emailType);
+      const sourceType = productAccounts.length === 1 && registrationMailboxType(productAccounts[0].emailType);
       const sources = sourceType ? mailboxes.filter((row) => row.type === sourceType) : mailboxes;
       for (const mailbox of sources) {
         const explicitAccount = productAccounts.find(row => row.id === order.accountId);
@@ -244,7 +245,7 @@ export function inspectInventoryUsage(inventory, commerce, now = Date.now()) {
         const unresolvedFacts = facts.filter(fact => !list(asset.usageCorrections).some(({ originalLink }) =>
           fact.accountId && originalLink?.kind === 'registration' && originalLink.accountId === fact.accountId));
         if (unresolvedFacts.length) matches.set(asset.id, { asset, status: 'review', evidence: {},
-          message: registrationOccupancyMessage(unresolvedFacts) });
+          message: manuallyUsedMicrosoft(asset) ? '邮箱已手动标记使用，原注册用途待核对' : registrationOccupancyMessage(unresolvedFacts) });
       }
     }
   }
