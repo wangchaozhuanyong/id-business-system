@@ -170,6 +170,9 @@ class WebsiteReleaseTests(unittest.TestCase):
         changed = ["modules/recharge/codexdaichong/shell.js", "modules/recharge/codexdaichong/assets.mjs"]
         git.side_effect = ["\n".join(changed), ""]
         self.assertIsNone(release.require_website_scope(BASE, TARGET, include_core=True))
+        # 网站基线已含全部补丁、native 仍落后时，本次 diff 可以为空，仍允许重建镜像。
+        git.side_effect = ["", ""]
+        self.assertIsNone(release.require_website_scope(BASE, TARGET, include_core=True))
         adapted = changed + ["modules/recharge/codexdaichong/plus-trial/manifest.json"]
         git.side_effect = ["\n".join(adapted), "modules/recharge/codexdaichong/plus-trial/manifest.json"]
         with self.assertRaisesRegex(RuntimeError, "recharge_native_release_scope_mismatch"):
