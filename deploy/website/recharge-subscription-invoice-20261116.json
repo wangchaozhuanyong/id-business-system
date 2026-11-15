@@ -1,0 +1,10 @@
+{
+  "beforeAssetsSha256": "3a3fbf7d37227ba4bb633f1971e35ea560d9da196ef7e765cfb1a1a4444205cd",
+  "assetsSha256": "ebbe7f312a6ca3cf496a9abfa0054cedcb80f6564fedfb94b3b0fb5db828f74d",
+  "files": {
+    "modules/recharge/codexdaichong/assets.mjs": {
+      "before": "63cdcbe84660335893164329ea1eb5201f060d577c1988bdcaa068e80870c6bc",
+      "after": "d5f51afb9ca4ca95ca51dcb034e40f56ca93fc0f8072b4a69634ffe6f29d5dee"
+    }
+  }
+}

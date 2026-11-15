@@ -1738,10 +1738,119 @@ function adaptWorkspaceRechargeScript(source) {
   `);
 }
 
+function adaptSubscriptionPage(source) {
+  // Keep the pinned validator and subscription request contract. Only adapt the browser lifecycle.
+  source = replaceOne(source, '<textarea id="sessionInput"',
+    '<textarea id="sessionInput" autocomplete="off" spellcheck="false"');
+  source = replaceOne(source, '<div id="statusMessage" class="status-message"></div>',
+    '<div id="statusMessage" class="status-message" role="status"></div>');
+  source = replaceOne(source, '查询完成后可在下方打开官方账单页面。', '也可以直接使用下方的官方账单入口。');
+  source = replaceSection(source, '            <section id="resultSection"', '            <details class="subscription-guide-panel">', `
+            <section id="resultSection" class="subscription-result" style="display: none;">
+                <div class="subscription-result-head">
+                    <h2>订阅信息</h2>
+                    <span id="activeBadge" class="flow-badge"></span>
+                </div>
+                <div id="resultCard" class="query-result-card"></div>
+            </section>
+            <div class="subscription-actions subscription-billing-actions">
+                <a id="billingLink" href="https://chatgpt.com/account/manage" target="_blank" rel="noopener noreferrer"
+                    class="btn-secondary action-link-btn">
+                    <svg class="icon" aria-hidden="true"><use href="#i-external-link"></use></svg>
+                    打开 OpenAI 账单页面
+                </a>
+            </div>
+  `);
+  source = replaceOne(source, "        const billingLink = document.getElementById('billingLink');", `
+        let subscriptionRequest;
+
+        function clearSubscriptionQuery() {
+            subscriptionRequest?.abort();
+            subscriptionRequest = undefined;
+            resultSection.style.display = 'none';
+            resultCard.replaceChildren();
+            activeBadge.textContent = '';
+            showStatus('');
+            setLoading(false);
+        }
+
+        sessionInput.addEventListener('input', clearSubscriptionQuery);
+        window.idRechargeClearTransient = () => {
+            sessionInput.value = '';
+            clearSubscriptionQuery();
+        };
+        window.addEventListener('pagehide', window.idRechargeClearTransient);
+  `);
+  source = replaceOne(source, '            const sessionCheck = validateSessionInput(sessionInput.value);',
+    '            if (subscriptionRequest) return;\n            const sessionCheck = validateSessionInput(sessionInput.value);');
+  source = replaceOne(source, '            setLoading(true);',
+    '            const request = new AbortController();\n            subscriptionRequest = request;\n            setLoading(true);');
+  source = replaceOne(source, "fetch('/api/public/subscription/check', {\n                    method: 'POST',",
+    "fetch('/api/public/subscription/check', {\n                    method: 'POST',\n                    signal: AbortSignal.any([request.signal, AbortSignal.timeout(50000)]),");
+  source = replaceOne(source, '                if (!parsed.ok) {\n                    throw new Error(parsed.message);',
+    '                if (subscriptionRequest !== request) return;\n                if (!parsed.ok) {\n                    throw new Error(parsed.message);');
+  source = replaceOne(source, "                    throw new Error(payload.message || '查询失败');", `
+                    if (response.status === 401) {
+                        if (payload.message === '请通过统一账号登录') {
+                            window.idRechargeClearTransient();
+                            showStatus('ID 系统登录已失效，请重新登录后再查询。', 'error');
+                            window.idRechargeReport('session-expired');
+                            return;
+                        }
+                        if (payload.message === '服务认证无效')
+                            throw new Error('充值服务认证失败，请联系管理员。');
+                        if (payload.message === 'Session 无效或已过期，请重新获取 Session') {
+                            showStatus('OpenAI 拒绝了本次订阅查询（401）。请在 ChatGPT 退出并重新登录，再点「获取 Session」复制新的 Session 后查询。', 'error');
+                            const chatgptLink = document.createElement('a');
+                            chatgptLink.href = 'https://chatgpt.com/';
+                            chatgptLink.target = '_blank';
+                            chatgptLink.rel = 'noopener noreferrer';
+                            chatgptLink.textContent = '打开 ChatGPT';
+                            statusMessage.append(' ', chatgptLink);
+                            return;
+                        }
+                        throw new Error('订阅查询未获授权（401），请核对登录状态。');
+                    }
+                    throw new Error(payload.message || '查询失败');
+  `);
+  source = replaceOne(source, "                showStatus(error.message || '查询失败，请稍后重试', 'error');\n            } finally {\n                setLoading(false);", `
+                if (subscriptionRequest === request) {
+                    const message = error.name === 'TimeoutError'
+                        ? '订阅查询超时，可以重新查询或打开官方账单页面。'
+                        : (error.message || '查询失败，请稍后重试');
+                    showStatus(message, 'error');
+                }
+            } finally {
+                if (subscriptionRequest === request) {
+                    subscriptionRequest = undefined;
+                    setLoading(false);
+                }
+  `);
+  source = replaceOne(source, "            billingLink.href = data.billingPageUrl || 'https://chatgpt.com/account/manage';", '');
+  source = replaceOne(source, '                const snippet = text.replace(/\\s+/g, \' \').slice(0, 120);\n', '');
+  source = replaceOne(source, 'message: `服务器响应异常 (${response.status})${snippet ? `：${snippet}` : \'\'}`',
+    'message: `订阅查询服务响应异常（${response.status}），请稍后重试。`');
+  source = replaceSection(source, '        function renderRow(', 'function renderResult(data)', `        function renderRow(label, value) {
+            const row = document.createElement('div');
+            const title = document.createElement('span');
+            const detail = document.createElement('strong');
+            row.className = 'query-row';
+            title.textContent = label;
+            detail.textContent = value;
+            row.append(title, detail);
+            return row;
+        }
+  `);
+  source = replaceOne(source, "resultCard.innerHTML = rows.map(([label, value]) => renderRow(label, value)).join('');",
+    'resultCard.replaceChildren(...rows.map(([label, value]) => renderRow(label, value)));');
+  return source;
+}
+
 function adaptHtml(source, kind) {
   if (kind === 'redeem' || kind === 'workspace') source = adaptRedeemHtml(source);
   if (kind === 'workspace') source = adaptWorkspaceRecharge(source);
   if (kind === 'redeem' || kind === 'workspace') source = adaptRechargeProgress(source, kind === 'workspace');
+  if (kind === 'subscription') source = adaptSubscriptionPage(source);
   source = source
     .replace(/^[ \t]*<link\b[^>]*https:\/\/fonts\.(?:googleapis|gstatic)\.com[^>]*>\s*$/gm, '')
     .replaceAll('src="https://unpkg.com/lucide@latest"', 'src="' + prefix + '/lucide.js"')

@@ -414,6 +414,48 @@ test('gateway preserves unified-session JSON requests and blocks the retired pro
   assert.equal(upstreamRequests.length, forwardedCount);
 });
 
+test('invoice queries preserve the Session body and original checker outcome across the gateway and adapter', async t => {
+  const path = '/api/public/subscription/check';
+  const origin = 'https://invoice.example.test';
+  const secret = randomBytes(48).toString('base64url');
+  const body = JSON.stringify({ session: '{"accessToken":"synthetic-invoice-fixture"}', timezone_offset_min: 480 });
+  const accepted = { success: true, data: { plan: 'ChatGPT Plus', hasActiveSubscription: true } };
+  const rejected = { success: false, message: 'Session 无效或已过期，请重新获取 Session' };
+  let reply = { status: 200, json: accepted };
+  let nativeRequests = 0;
+  const engine = await listen(t, async (req, res) => {
+    nativeRequests++;
+    assert.equal(req.method, 'POST');
+    assert.equal(req.url, path);
+    assert.equal(req.headers.cookie, undefined);
+    assert.equal(req.headers.authorization, undefined);
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    assert.equal(Buffer.concat(chunks).toString(), body);
+    res.writeHead(reply.status, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(reply.json));
+  });
+  const adapter = await listen(t, createNativeRechargeAdapter({ nativeUrl: engine, secret,
+    getNativeAdminToken: () => { throw new Error('invoice query uses no admin token'); } }).handle);
+  const gateway = await listen(t, createCodexdaichongGateway({
+    upstreamUrl: adapter, publicOrigin: origin, secret,
+    getUnifiedPrincipal: req => req.headers.cookie === 'id=member' ? member : null
+  }).handle);
+  const query = (cookie, from = origin) => fetch(gateway + prefix + path, {
+    method: 'POST', headers: { Origin: from, Cookie: cookie, 'Content-Type': 'application/json' }, body
+  });
+  assert.equal((await query('id=unknown')).status, 401);
+  assert.equal((await query('id=member', 'https://other.example.test')).status, 403);
+  assert.equal(nativeRequests, 0);
+  for (const receipt of [reply, { status: 401, json: rejected }]) {
+    reply = receipt;
+    const response = await query('id=member');
+    assert.equal(response.status, receipt.status);
+    assert.deepEqual(await response.json(), receipt.json);
+  }
+  assert.equal(nativeRequests, 2);
+});
+
 test('upstream pages retain the signed-in operations without their own login or external runtime assets', async () => {
   const assets = await loadCodexdaichongAssets();
   assert.equal(assets.has('/admin-login.html'), false);

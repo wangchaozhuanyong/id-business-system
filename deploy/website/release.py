@@ -11,7 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from remote import (BACKUP_OPERATION, CARD_IMPORT_ASSET_SOURCE, CARD_IMPORT_PRESENTATION_FILES, CARD_PLAN_PRESENTATION_FILES,
                     CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES, PRESENTATION_SCOPES, SECURITY_PRESENTATION_FILES,
-                    REDEEM_PRESENTATION_FILES, TABLE_ACTIONS_STYLESHEET, TASK_HISTORY_PRESENTATION_FILES,
+                    REDEEM_PRESENTATION_FILES, SUBSCRIPTION_INVOICE_PRESENTATION_FILES,
+                    TABLE_ACTIONS_STYLESHEET, TASK_HISTORY_PRESENTATION_FILES,
                     WORKSPACE_PROGRESS_PRESENTATION_FILES)
 
 ACCOUNT = "098208446664"
@@ -27,8 +28,11 @@ TASK_HISTORY_MANIFEST = "recharge-task-history-20261114.json"
 TASK_HISTORY_MANIFEST_PATH = f"deploy/website/{TASK_HISTORY_MANIFEST}"
 ADMIN_WORKSPACE_MANIFEST = "recharge-admin-workspace-20261115.json"
 ADMIN_WORKSPACE_MANIFEST_PATH = f"deploy/website/{ADMIN_WORKSPACE_MANIFEST}"
+SUBSCRIPTION_INVOICE_MANIFEST = "recharge-subscription-invoice-20261116.json"
+SUBSCRIPTION_INVOICE_MANIFEST_PATH = f"deploy/website/{SUBSCRIPTION_INVOICE_MANIFEST}"
 CORE_PATHS = ("deploy/recharge-core", "deploy/caddy", "modules/recharge/codexdaichong", "package.json",
-              PROXY_TYPE_CATALOG, TASK_HISTORY_MANIFEST_PATH, ADMIN_WORKSPACE_MANIFEST_PATH)
+              PROXY_TYPE_CATALOG, TASK_HISTORY_MANIFEST_PATH, ADMIN_WORKSPACE_MANIFEST_PATH,
+              SUBSCRIPTION_INVOICE_MANIFEST_PATH)
 ADAPTER_SCOPE = {
     "modules/recharge/codexdaichong/gateway.mjs", "modules/recharge/codexdaichong/local-gateway.mjs",
     "modules/recharge/codexdaichong/native-adapter.mjs", "modules/recharge/codexdaichong/runtime.mjs",
@@ -202,6 +206,9 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False, 
     elif changed == {*TASK_HISTORY_PRESENTATION_FILES, TASK_HISTORY_MANIFEST_PATH}:
         return "taskHistoryPresentation", require_presentation_approval(
             base, sha, TASK_HISTORY_MANIFEST, TASK_HISTORY_PRESENTATION_FILES)
+    elif changed == {*SUBSCRIPTION_INVOICE_PRESENTATION_FILES, SUBSCRIPTION_INVOICE_MANIFEST_PATH}:
+        return "subscriptionInvoicePresentation", require_presentation_approval(
+            base, sha, SUBSCRIPTION_INVOICE_MANIFEST, SUBSCRIPTION_INVOICE_PRESENTATION_FILES)
     elif changed == {CARD_IMPORT_ASSET_SOURCE}:
         return "cardImportPresentation", require_presentation_approval(
             base, sha, "card-import-20261113.json", CARD_IMPORT_PRESENTATION_FILES)
