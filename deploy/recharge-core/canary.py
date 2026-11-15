@@ -244,10 +244,11 @@ class Canary:
                   'console.log(JSON.stringify(await verifyCodexdaichongSource("/candidate/.runtime/codexdaichong")));')
         result = json.loads(self.command(['docker', 'exec', identity, 'node', '--input-type=module', '-e', script], timeout=30))
         if (result.get('revision') != REVISION or result.get('files') != 203 or
-            result.get('originalFiles') != 198 or result.get('routingFiles') !=
+            result.get('originalFiles') != 197 or result.get('routingFiles') !=
             ['pricing-checkout.js', 'region-config.js', 'server.js'] or result.get('returnFiles') != ['mysql-store.js', 'server.js'] or
             result.get('providerRetirementFiles') != ['mysql-store.js', 'server.js'] or
-            result.get('cardPlanFiles') != ['mysql-store.js', 'payment-retry.js', 'server.js']):
+            result.get('cardPlanFiles') != ['mysql-store.js', 'payment-retry.js', 'server.js'] or
+            result.get('plusTrialFiles') != ['pricing-checkout.js', 'stripe-payment.js']):
             raise CanaryError('pristine_source_mismatch')
         self.checks.append(code)
 
