@@ -246,7 +246,7 @@ index 17d5982..a2a0fc6 100644
      waitForCheckoutPage,
      pageShowsTargetRegionPricing
 diff --git a/session-auth.js b/session-auth.js
-index e186977..b0e2265 100644
+index e186977..3f6ff78 100644
 --- a/session-auth.js
 +++ b/session-auth.js
 @@ -345,16 +345,18 @@ function collectCookieSpecs(sessionData, sessionJson) {
@@ -273,6 +273,15 @@ index e186977..b0e2265 100644
          let data = null;
          try {
              data = JSON.parse(bodyText);
+@@ -383,8 +385,6 @@ async function verifyRealSessionApi(context) {
+         };
+     } catch (err) {
+         return { ok: false, error: `无法验证 session Cookie: ${err.message}` };
+-    } finally {
+-        await probe.close().catch(() => {});
+     }
+ }
+ 
 diff --git a/stripe-payment.js b/stripe-payment.js
 index cd7ff9d..ca16373 100644
 --- a/stripe-payment.js
