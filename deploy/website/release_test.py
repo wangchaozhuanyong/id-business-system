@@ -166,6 +166,23 @@ class WebsiteReleaseTests(unittest.TestCase):
 
     @patch("release.require_ancestor")
     @patch("release.git")
+    def test_native_rebuild_is_allowed_when_reviewed_patches_are_already_in_the_baseline(self, git, _ancestor):
+        changed = ["modules/recharge/codexdaichong/shell.js", "modules/recharge/codexdaichong/assets.mjs"]
+        git.side_effect = ["\n".join(changed), ""]
+        self.assertIsNone(release.require_website_scope(BASE, TARGET, include_core=True))
+        adapted = changed + ["modules/recharge/codexdaichong/plus-trial/manifest.json"]
+        git.side_effect = ["\n".join(adapted), ""]
+        with self.assertRaisesRegex(RuntimeError, "recharge_native_release_scope_mismatch"):
+            release.require_website_scope(BASE, TARGET, include_core=True)
+        git.side_effect = ["\n".join(changed), "modules/recharge/codexdaichong/plus-trial/upstream-plus-trial.patch"]
+        with self.assertRaisesRegex(RuntimeError, "recharge_native_release_scope_mismatch"):
+            release.require_website_scope(BASE, TARGET, include_core=True)
+        git.side_effect = ["\n".join(changed + ["deploy/recharge-core/Dockerfile"]), ""]
+        with self.assertRaisesRegex(RuntimeError, "recharge_native_release_scope_mismatch"):
+            release.require_website_scope(BASE, TARGET, include_core=True)
+
+    @patch("release.require_ancestor")
+    @patch("release.git")
     def test_plus_trial_batch_is_its_own_reviewed_native_scope(self, git, _ancestor):
         scope = release.PLUS_TRIAL_SCOPE
         git.return_value = "\n".join(sorted(scope))
