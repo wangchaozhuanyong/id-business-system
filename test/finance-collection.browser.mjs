@@ -116,8 +116,10 @@ test('汇率四栏目、设置草稿、版本冲突、采集记录与事件更�
   await page.evaluate(version => window.emitFxVersion(version), document.version);
   await settle(); assert.equal(reads, stable, '相同版本不重读');
 
+  await page.locator('#fx-query').fill('这段搜索不应进入另一个栏目');
   await tab('采集记录');
   await page.locator('table[data-table="fx-runs"] tbody tr[data-row-id="fxr-fixture-0"]').waitFor();
+  assert.equal(await page.locator('#fx-query').inputValue(), '', '切换栏目须取消上一栏待发出的搜索');
   assert.equal(await financePager.locator('[data-pagination-size]').inputValue(), '20');
   const firstFrame = await page.locator('table[data-table="fx-runs"]').locator('..').boundingBox();
   delayLastRunPage = true;
@@ -232,9 +234,10 @@ test('汇率四栏目、设置草稿、版本冲突、采集记录与事件更�
     const fieldsAligned = await page.locator('#fx-settings-form .field').evaluateAll(fields => fields.every(field => {
       const label = field.querySelector(':scope > label'), control = field.querySelector(':scope > .field-control');
       if (!label || !control) return true;
-      return label.getBoundingClientRect().right <= control.getBoundingClientRect().left + 1;
+      const a = label.getBoundingClientRect(), b = control.getBoundingClientRect();
+      return a.bottom <= b.top + 1 && Math.abs(a.left - b.left) <= 1;
     }));
-    assert(fieldsAligned, '窄屏字段标签仍在控件左侧');
+    assert(fieldsAligned, '表单标签在控件上方并左对齐');
     const overviewAligned = await page.locator('.fx-overview > div').evaluateAll(cards => {
       const textTop = node => { const range = document.createRange(); range.selectNodeContents(node); return range.getBoundingClientRect().top; };
       return cards.every((card, i) => !cards.slice(0, i).some(previous =>

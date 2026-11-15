@@ -197,7 +197,7 @@
   }
   function switchTab(tab) {
     preserveDraft();
-    clearTimeout(searchTimer);
+    window.IDSearchInput?.discardPage(route, 'fx-query');
     const v = view(), { query, currency, status, mode, from, to, page, pageSize, total } = v;
     (v.tabs ||= {})[v.tab] = { query, currency, status, mode, from, to, page, pageSize, total };
     Object.assign(v, { query: '', currency: '', status: '', mode: '', from: '', to: '', page: 1, pageSize: defaultPageSize, total: 0 },
