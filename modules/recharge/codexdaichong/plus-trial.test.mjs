@@ -121,6 +121,11 @@ test('调试模式接受无卡结账页', async () => {
   const cardWaitIndex = chatgptText.indexOf('const cardSelector = [');
   assert.ok(summaryIndex > 0, '调试必须包含无卡结账页判据');
   assert.ok(cardWaitIndex > 0, '卡号输入框判据仍需保留');
+  // API 建单成功后，Plus 的 0 元结账页同样必须中止。
+  assert.match(chatgptText, /async function isPlusZeroAmountCheckout\(page\) \{/);
+  assert.match(chatgptText, /code: 'PLUS_ZERO_AMOUNT_ACCOUNT'/);
+  const guardIndex = chatgptText.indexOf("if (String(planType).toLowerCase() === 'plus' && await isPlusZeroAmountCheckout(page)) {");
+  assert.ok(guardIndex > 0, 'API 建单成功后的 Plus 优惠拦截缺失');
 });
 
 test('准备脚本与发布核验已覆盖三个文件', async () => {
