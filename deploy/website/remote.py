@@ -60,6 +60,7 @@ TASK_HISTORY_PRESENTATION_FILES = ("modules/recharge/codexdaichong/assets.mjs",)
 PRESENTATION_SCOPES = {
     "redeemPresentation": (REDEEM_PRESENTATION_FILES, REDEEM_PRESENTATION_ASSETS),
     "workspaceProgressPresentation": (WORKSPACE_PROGRESS_PRESENTATION_FILES, REDEEM_PRESENTATION_ASSETS),
+    "rechargeAdminWorkspacePresentation": (WORKSPACE_PROGRESS_PRESENTATION_FILES, {"/admin", "/admin.js", "/shell.js", "/shell.css"}),
     "tableActionsPresentation": ((TABLE_ACTIONS_STYLESHEET,), {"/shell.css"}),
     "cardImportPresentation": (CARD_IMPORT_PRESENTATION_FILES, {"/admin", "/admin.js", "/shell.css"}),
     "cardPlanPresentation": (CARD_PLAN_PRESENTATION_FILES, {"/admin", "/admin.js", "/shell.css"}),
@@ -235,6 +236,21 @@ def wire_canary_authenticator(content):
   assert.equal(JSON.parse(verified.body).recentlyVerified,true);
 """
     return content.replace(previous, updated)
+
+
+def wire_canary_action_password(content):
+    marker = "  // Password confirmation for the synthetic canary administrator.\n"
+    if marker in content:
+        return content
+    content = wire_canary_authenticator(content)
+    previous = "  assert.equal(JSON.parse(verified.body).recentlyVerified,true);\n"
+    require(content.count(previous) == 1, "isolated_action_password_contract_changed")
+    return content.replace(previous, previous + marker + """  assert.equal(JSON.parse(verified.body).passwordConfirmed,false);
+  const actionPassword = await send('/api/local/auth/security/confirm-password', {method:'POST',session,
+    body:{password:credentials.password}});
+  assert.equal(actionPassword.status,200);
+  assert.equal(JSON.parse(actionPassword.body).confirmed,true);
+""")
 
 
 def mount_backup_monitoring(content):
@@ -473,6 +489,8 @@ def stage(plan, release):
                                                (source / "frontend/index.html").read_text())
             if scope == "securityPresentation":
                 content = wire_canary_authenticator(content)
+            elif scope == "rechargeAdminWorkspacePresentation":
+                content = wire_canary_action_password(content)
         if plan.get('externalEvents'):
             if name == 'run-app':
                 content = wire_event_launcher(content)

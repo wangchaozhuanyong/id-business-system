@@ -460,5 +460,5 @@ export function createStaffWorkspaces({ store, client, publicOrigin, getAuth, re
 }
 
 function requireRecent(auth, request) {
-  if (!auth?.recentlyVerified(request)) fail(403, '请先完成安全确认，再提交这项操作');
+  if (!auth?.recentlyPasswordConfirmed(request)) fail(403, '请用当前登录密码确认这项操作');
 }

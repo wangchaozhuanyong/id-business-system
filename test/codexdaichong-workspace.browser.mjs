@@ -237,7 +237,15 @@ test(
     await frame.locator('body[data-recharge-view="subscription"]').waitFor();
 
     for (const [id, name] of pageNames) {
-      await select(name);
+      if (id === 'cards') {
+        assert.equal(await nav.getByRole('button', { name, exact: true }).count(), 0);
+        await page.getByRole('link', { name: '自动代充银行卡', exact: true }).click();
+      } else if (id === 'runtime_logs') {
+        await select('支付链接调试');
+        await frame.getByRole('button', { name: '打开完整运行日志', exact: true }).click();
+      } else {
+        await select(name);
+      }
       await frame.locator('#' + id + '.active').waitFor();
       if (id === 'cdks') {
         await frame.locator('#cdk_body').getByText(cdk, { exact: true }).waitFor();
@@ -247,8 +255,10 @@ test(
           .waitFor();
         assert.equal(await frame.locator('#cdk_body img[src="x"]').count(), 0);
       }
-      if (id === 'cards')
+      if (id === 'cards') {
         await frame.locator('#card_pool_list_body').getByText('演示持卡人').waitFor();
+        await page.getByRole('link', { name: 'ChatGPT 充值', exact: true }).click();
+      }
       if (id === 'logs') await frame.locator('#log_body').getByText('模拟后台任务').waitFor();
     }
     await select('任务管理');

@@ -58,17 +58,24 @@
   }
 
   async function request(path, method = 'GET', body, timing) {
-    const response = await window.fetch(prefix + path, {
+    const serialized = body === undefined ? undefined : JSON.stringify(body);
+    const send = () => window.fetch(prefix + path, {
       method,
       cache: 'no-store',
       credentials: 'same-origin',
       ...(method === 'GET' && { signal: AbortSignal.timeout(12_000) }),
       ...(body === undefined
         ? {}
-        : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+        : { headers: { 'Content-Type': 'application/json' }, body: serialized })
     });
+    let response = await send();
+    let result = await response.json().catch(() => null);
+    if (method !== 'GET' && response.status === 403 && result?.code === 'SECURITY_CONFIRMATION_REQUIRED' &&
+        await window.IDAccountSecurity?.verify()) {
+      response = await send();
+      result = await response.json().catch(() => null);
+    }
     timing?.response(response);
-    const result = await response.json().catch(() => null);
     if (!response.ok || result === null) {
       if (response.status === 401 && path !== 'login') lock(result?.reason);
       const error = new Error(result?.error || '本机账户服务暂不可用，请重试。');
@@ -839,7 +846,6 @@
     const submit = $('button[form="ops-local-staff-form"]');
     if (submit) submit.disabled = true;
     try {
-      if (window.IDAccountSecurity && !await window.IDAccountSecurity.verify({ whenAvailable: true })) return;
       const path = original ? 'employees/' + encodeURIComponent(original.id) : 'employees';
       const { employee } = await request(path, original ? 'PATCH' : 'POST', payload);
       if (!employee?.id) throw new Error('未收到已保存的员工账户。');

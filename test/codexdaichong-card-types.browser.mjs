@@ -246,9 +246,8 @@ test('银行卡池操作列修改旧卡类型并在原页回读', { timeout: 40_
       const page = await context.newPage();
       page.on('pageerror', error => errors.push(error.message));
       page.setDefaultTimeout(6000);
-      await page.goto(origin + '/#/online-recharge/chatgpt');
+      await page.goto(origin + '/#/staff/finance/cards');
       if (width === 390) await toggleDesignTheme(page);
-      await page.locator('button[data-view="cards"]').click();
       const frame = page.frameLocator('#main iframe[data-view="cards"]:not([hidden])');
       const pager = frame.locator('nav[data-pagination="recharge-card_pool"]');
       await pager.getByRole('button', { name: '下一页' }).click();

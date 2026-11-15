@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { interceptDesign, origin, settle, toggleDesignTheme } from './helpers/offline-design.mjs';
+import { nativeBrowserVerification } from '../server/access-roles.mjs';
 
 test('server direct diagnostic compares the live exit, plan and full proxy pool without submitting a checkout', { timeout: 40_000 }, async t => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
@@ -25,6 +26,8 @@ test('server direct diagnostic compares the live exit, plan and full proxy pool 
     await page.route('**/integrations/codexdaichong/api/**', async route => {
       const request = route.request();
       const pathname = new URL(request.url()).pathname;
+      if (nativeBrowserVerification(pathname.replace('/integrations/codexdaichong', ''), request.method()))
+        return route.fulfill({ status: 403, json: { code: 'SECURITY_CONFIRMATION_REQUIRED' } });
       if (request.method() === 'POST' && pathname === path + '/check-local') {
         writes.push({ pathname, body: request.postData() });
         const pending = deferred;
@@ -132,4 +135,130 @@ test('server direct diagnostic compares the live exit, plan and full proxy pool 
     assert.deepEqual(external, []);
     assert.deepEqual(unavailable, []);
   });
+});
+
+test('支付链接调试直接读取当前任务日志并保留读取失败前的内容', { timeout: 40_000 }, async t => {
+  const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
+  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
+  t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 1560, height: 960 }, serviceWorkers: 'block' });
+  const actor = { id: 'debug-fixture', name: '离线验收管理员', role: 'super' };
+  const traffic = await interceptDesign(page.context(), { actor, localFixtures: {}, localAuthUi: true });
+  page.setDefaultTimeout(6500);
+  const errors = [];
+  page.on('pageerror', error => errors.push(error.message));
+
+  let readFailure = false, securityRequests = 0, starts = 0, statusReads = 0;
+  let taskStatus = 'running', jobKey, hold;
+  const entries = [];
+  const append = (jobKey, text) => entries.push({ id: entries.length + 1, ts: Date.now(), jobKey, source: 'task', text });
+  append('other-job', '其他任务的日志');
+  const api = '**/integrations/codexdaichong/api/admin/';
+  await page.route('**/api/local/auth/security**', route => {
+    securityRequests++;
+    return route.fulfill({ json: { available: true, bound: true, passwordConfirmed: false } });
+  });
+  await page.route(api + 'checkout/generate', route => {
+    assert.equal(route.request().method(), 'POST');
+    jobKey = 'debug-job-' + ++starts;
+    taskStatus = 'running';
+    append(jobKey, '调试任务已创建 ' + jobKey);
+    return route.fulfill({ json: { success: true, jobKey } });
+  });
+  await page.route(api + 'checkout/status/*', route => {
+    statusReads++;
+    return route.fulfill({ json: { success: true, jobKey, status: taskStatus, screenshots: [] } });
+  });
+  await page.route(api + 'runtime-logs?*', async route => {
+    assert.equal(route.request().method(), 'GET');
+    if (nativeBrowserVerification('/api/admin/runtime-logs', route.request().method()))
+      return route.fulfill({ status: 403, json: { code: 'SECURITY_CONFIRMATION_REQUIRED' } });
+    if (readFailure) return route.fulfill({ status: 503, json: { success: false } });
+    const params = new URL(route.request().url()).searchParams;
+    const after = Number(params.get('after')), limit = Number(params.get('limit'));
+    const rows = params.has('tail') ? entries.slice(-limit) : entries.filter(entry => entry.id > after).slice(0, limit);
+    const gate = hold;
+    if (gate && !params.has('tail')) {
+      hold = undefined;
+      gate.started.resolve();
+      await gate.release.promise;
+      try {
+        await route.fulfill({ json: { success: true, entries: [...rows,
+          { id: 500, ts: Date.now(), jobKey, source: 'task', text: '离页后到达的旧响应' }], nextAfter: 500 } });
+      } catch { /* The hidden iframe cancels the read. */ }
+      gate.done.resolve();
+      return;
+    }
+    return route.fulfill({ json: { success: true, entries: rows, nextAfter: rows.at(-1)?.id ?? after } });
+  });
+
+  await page.goto(origin + '/#/online-recharge/chatgpt');
+  const select = view => page.locator(`button[data-view="${view}"]`).click();
+  await select('checkout_debug');
+  const frame = page.frameLocator('.recharge-integration__content iframe:not([hidden])');
+  const checkout = frame.locator('#checkout_debug.active');
+  const startButton = checkout.locator('#checkout_generate_btn');
+  const refresh = checkout.getByRole('button', { name: '刷新', exact: true });
+  const log = checkout.locator('#checkout_debug_log_pre');
+  const notice = checkout.locator('#checkout_debug_log_pre_status');
+  const runningStatus = checkout.locator('#checkout_result_status');
+  const start = async () => {
+    await checkout.locator('#checkout_session_input').fill('{"user":{"email":"fixture@example.test"}}');
+    await startButton.click();
+  };
+
+  await start();
+  await log.getByText('调试任务已创建 debug-job-1').waitFor();
+  assert.equal(starts, 1);
+  assert.match(await runningStatus.textContent(), /调试进行中/);
+  const statusBeforeRefresh = statusReads;
+  await page.waitForResponse(response => response.url().includes('/checkout/status/') && response.ok());
+  assert(statusReads > statusBeforeRefresh);
+
+  await refresh.click();
+  await log.getByText('调试任务已创建 debug-job-1').waitFor();
+  await notice.waitFor({ state: 'hidden' });
+  append(jobKey, '浏览器已开始调试');
+  await log.getByText('浏览器已开始调试').waitFor();
+  assert.doesNotMatch(await log.textContent(), /其他任务的日志/);
+  assert.equal((await log.textContent()).match(/调试任务已创建/g)?.length, 1);
+
+  const saved = await log.textContent();
+  readFailure = true;
+  await refresh.click();
+  await notice.getByText('暂时无法读取运行日志，可点击「刷新」重试。', { exact: true }).waitFor();
+  assert.equal(await log.textContent(), saved);
+  readFailure = false;
+  append(jobKey, '读取恢复后继续更新');
+  await log.getByText('读取恢复后继续更新').waitFor();
+  assert.equal(starts, 1, '日志读取失败不会重复提交任务');
+
+  const delayed = hold = { started: Promise.withResolvers(), release: Promise.withResolvers(), done: Promise.withResolvers() };
+  const retained = page.locator('iframe[data-view="checkout_debug"]:visible');
+  try {
+    await delayed.started.promise;
+    await select('query');
+    await frame.locator('#querySection').waitFor();
+    await retained.waitFor({ state: 'hidden' });
+  } finally { delayed.release.resolve(); }
+  await delayed.done.promise;
+  append(jobKey, '切页期间实际记录');
+  await select('checkout_debug');
+  await log.getByText('切页期间实际记录').waitFor();
+  assert.doesNotMatch(await log.textContent(), /离页后到达的旧响应/);
+
+  taskStatus = 'success';
+  await checkout.locator('#checkout_generate_btn:enabled').waitFor();
+  await start();
+  await log.getByText('调试任务已创建 debug-job-2').waitFor();
+  assert.doesNotMatch(await log.textContent(), /debug-job-1|其他任务的日志/);
+  assert.equal(starts, 2);
+  await checkout.getByRole('button', { name: '打开完整运行日志', exact: true }).click();
+  const full = frame.locator('#runtime_logs.active');
+  await full.locator('#runtime_log_pre').getByText('其他任务的日志').waitFor();
+  assert.equal(starts, 2);
+  assert.equal(securityRequests, 0);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(traffic.external, []);
+  assert.deepEqual(traffic.unavailable, []);
 });

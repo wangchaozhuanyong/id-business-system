@@ -279,6 +279,22 @@ class WebsiteReleaseTests(unittest.TestCase):
     @patch("release.require_presentation_approval")
     @patch("release.require_ancestor")
     @patch("release.git")
+    def test_recharge_admin_workspace_release_requires_exact_scope(self, git, ancestor, approval):
+        files = remote.WORKSPACE_PROGRESS_PRESENTATION_FILES
+        manifest = release.ADMIN_WORKSPACE_MANIFEST_PATH
+        git.return_value = "\n".join((*files, manifest))
+        self.assertEqual(release.require_website_scope(BASE, TARGET),
+                         ("rechargeAdminWorkspacePresentation", approval.return_value))
+        approval.assert_called_once_with(BASE, TARGET, release.ADMIN_WORKSPACE_MANIFEST, files)
+        for changed in ((*files[:-1], manifest), (*files, manifest, "modules/recharge/codexdaichong/native-routing.mjs")):
+            git.return_value = "\n".join(changed)
+            with self.assertRaisesRegex(RuntimeError, "recharge_core_or_runtime_changed"):
+                release.require_website_scope(BASE, TARGET)
+        self.assertEqual(approval.call_count, 1)
+
+    @patch("release.require_presentation_approval")
+    @patch("release.require_ancestor")
+    @patch("release.git")
     def test_card_import_release_checks_the_adapter_and_shared_asset_inputs(self, git, ancestor, approval):
         git.return_value = remote.CARD_IMPORT_ASSET_SOURCE
         self.assertEqual(release.require_website_scope(BASE, TARGET),
@@ -391,6 +407,11 @@ class WebsiteReleaseTests(unittest.TestCase):
         self.assertEqual(remote.wire_canary_authenticator(configured), configured)
         with self.assertRaisesRegex(remote.ReleaseError, "isolated_login_contract_changed"):
             remote.wire_canary_authenticator("different login flow")
+        confirmed = remote.wire_canary_action_password(configured)
+        self.assertEqual(remote.wire_canary_action_password(source), confirmed)
+        self.assertEqual(remote.wire_canary_action_password(confirmed), confirmed)
+        self.assertLess(confirmed.index("passwordConfirmed,false"), confirmed.index("'/api/local/auth/security/confirm-password'"))
+        self.assertLess(confirmed.index("actionPassword.status,200"), confirmed.index("'/api/local/auth/employees'"))
 
     def test_stages_active_website_launchers_and_switches_to_the_prepared_path(self):
         with TemporaryDirectory() as directory:
@@ -500,6 +521,12 @@ class WebsiteReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_bundle_scope_mismatch"):
             remote.verify_presentation_bundle(bundle(previous), bundle(task_history | {"/workspace": {"body": "new"}}),
                                               task_history_assets)
+        admin_workspace_assets = remote.PRESENTATION_SCOPES["rechargeAdminWorkspacePresentation"][1]
+        admin_workspace = previous | {path: {"body": "new"} for path in ("/admin", "/admin.js", "/shell.js", "/shell.css")}
+        remote.verify_presentation_bundle(bundle(previous), bundle(admin_workspace), admin_workspace_assets)
+        with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_bundle_scope_mismatch"):
+            remote.verify_presentation_bundle(bundle(previous), bundle(admin_workspace | {"/workspace": {"body": "new"}}),
+                                              admin_workspace_assets)
 
     def test_ssm_payload_is_one_quoted_program(self):
         shell = release.script_for({"operation": "preflight", "sha": TARGET})

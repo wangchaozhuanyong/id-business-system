@@ -3,6 +3,8 @@
   const standalone = window.parent === window;
   const root = document.documentElement;
   const search = new URLSearchParams(window.location.search);
+  const cardTabs = window.frameElement?.closest('[data-recharge-module="cards"]')?.querySelector('[data-recharge-card-tabs]');
+  if (cardTabs) root.dataset.rechargeCardTabs = '';
   const taskLog = search.get('taskLog');
   const telegramSettings = !standalone && window.location.pathname.endsWith('/admin') &&
     search.get('section') === 'telegram' && !taskLog;
@@ -18,7 +20,9 @@
   let telegramStatus;
   window.idRechargeVisible = standalone;
   function setVisible(visible) {
+    const changed = window.idRechargeVisible !== visible;
     window.idRechargeVisible = visible;
+    if (changed) window.idRechargeSyncAdminLogs?.();
     if (!visible && root.dataset.rechargeNavigationLocked !== 'true') {
       window.idRechargeClearTransient?.();
       for (const input of document.querySelectorAll('input[type="password"], #checkout_session_input, #tokenInput, #cdkInput, #queryInput, #batchQueryInput')) {
@@ -27,6 +31,7 @@
       }
     }
     if (visible && reportType === 'ready') {
+      syncCardPoolSection();
       report('view-context');
       report('resize');
     }
@@ -301,6 +306,15 @@
       );
     }
   };
+  function syncCardPoolSection() {
+    const selected = cardTabs?.querySelector('[aria-pressed="true"]')?.dataset.cardSection;
+    if (!selected) return;
+    const tab = [...document.querySelectorAll('#cards.active [data-switcher="card-assets"] [data-switcher-tab]')]
+      .find(item => item.dataset.switcherTab === selected);
+    if (tab?.getAttribute('aria-selected') !== 'false') return;
+    tab.click();
+    if (reportType === 'ready') report('view-context');
+  }
   window.idRechargeSelect = (view) => {
     if (typeof view !== 'string' || !/^[a-z_]+$/.test(view)) return;
     if (document.body.dataset.rechargeView === 'admin') {
@@ -308,6 +322,7 @@
         item.getAttribute('onclick').startsWith("switchPage('" + view + "',")
       );
       nav?.click();
+      if (view === 'cards') syncCardPoolSection();
       return;
     }
     if (['query', 'redeem'].includes(view) ||
@@ -330,6 +345,8 @@
       setVisible(message.visible);
     } else if (message.type === 'select-view') {
       window.idRechargeSelect(message.view);
+    } else if (message.type === 'select-card-section') {
+      syncCardPoolSection();
     } else if (!standalone && message.type === 'data-change' && Array.isArray(message.scopes)) {
       if (message.scopes.includes('card-types')) window.idRechargeCardTypesChanged?.();
       if (message.scopes.includes('recharge-card-plans'))

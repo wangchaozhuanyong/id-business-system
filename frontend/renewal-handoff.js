@@ -497,7 +497,6 @@
     if (!form?.isConnected || !node) return;
     const container = $('[data-renewal-card-fields]', form);
     try {
-      if (!(await Security?.verify())) return;
       node.disabled = true;
       const { items, poolUnavailable } = await D.renewalHandoffs('cards', form.dataset.renewalId);
       if (node.isConnected && form.elements['renewal-cardMode']?.value === 'pool') {

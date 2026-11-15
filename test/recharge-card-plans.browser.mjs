@@ -84,9 +84,8 @@ test('银行卡套餐可单张或批量保存，冲突保留草稿，严格模�
       const page = await context.newPage();
       const errors = [];
       page.on('pageerror', error => errors.push(error.message));
-      await page.goto(origin + '/#/online-recharge/chatgpt');
+      await page.goto(origin + '/#/staff/finance/cards');
       if (width === 390) await toggleDesignTheme(page);
-      await page.locator('[data-action="ops-integrated-view"][data-view="cards"]').click();
       const frame = page.frameLocator('iframe[data-view="cards"]:visible');
       await frame.locator('#card_plan_summary').getByText(/未设置 2 张/).waitFor();
       await frame.locator('[data-card-plan-select][value="1"]').check();
@@ -186,12 +185,11 @@ test('套餐弹层和导入共用控件覆盖深浅主题、嵌入与独立页�
         page.setDefaultTimeout(8000);
         const errors = [];
         page.on('pageerror', error => errors.push(error.message));
-        await page.goto(origin + (embedded ? '/#/online-recharge/chatgpt' : '/integrations/codexdaichong/admin?view=cards'));
+        await page.goto(origin + (embedded ? '/#/staff/finance/cards' : '/integrations/codexdaichong/admin?view=cards'));
         if (theme === 'dark') {
           if (embedded) await toggleDesignTheme(page);
           else await page.evaluate(() => { document.documentElement.dataset.idTheme = 'dark'; });
         }
-        if (embedded) await page.locator('[data-action="ops-integrated-view"][data-view="cards"]').click();
         const scope = embedded ? page.frameLocator('iframe[data-view="cards"]:visible') : page;
         const trigger = scope.locator('[data-card-plan-edit="1"]');
         const dialog = scope.getByRole('dialog', { name: '设置允许套餐' });

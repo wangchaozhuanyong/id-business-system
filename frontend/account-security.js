@@ -47,10 +47,8 @@
     });
   }
 
-  async function verify({ whenAvailable = false } = {}) {
-    const info = await request('security');
-    if (info.recentlyVerified || (whenAvailable && (!info.available || info.requiredForExistingActions === false)))
-      return true;
+  async function verifyAuthenticator(info) {
+    if (info.recentlyVerified) return true;
     if (!info.available) throw new Error('两步验证尚未启用，请联系超级管理员。');
     if (!info.bound) {
       A.notify('请先在「我的账号」绑定两步验证');
@@ -64,9 +62,26 @@
     });
   }
 
+  let passwordPrompt;
+  async function verify({ whenAvailable = false } = {}) {
+    const info = await request('security');
+    if (info.passwordConfirmed || (whenAvailable && info.requiredForExistingActions === false)) return true;
+    if (info.requiredForExistingActions && info.bound === false) {
+      A.notify('请先在「我的账号」绑定两步验证，再确认重要操作');
+      return false;
+    }
+    passwordPrompt ??= confirmation('确认重要操作',
+      '<label for="local-action-password">当前登录密码</label><input id="local-action-password" name="password" type="password" autocomplete="current-password" maxlength="256" required />',
+      '确认', async fields => {
+        await request('security/confirm-password', 'POST', fields);
+        return true;
+      }).finally(() => { passwordPrompt = undefined; });
+    return passwordPrompt;
+  }
+
   async function bindFactor(info, host) {
     const { bound, canRebind } = info;
-    if (bound && !canRebind && !(await verify())) return;
+    if (bound && !canRebind && !(await verifyAuthenticator(info))) return;
     let enrollment, completed = false;
     await confirmation(bound ? '更换身份验证器' : '绑定两步验证',
       '<label for="local-security-password">当前登录密码</label><input id="local-security-password" name="password" type="password" autocomplete="current-password" required />',

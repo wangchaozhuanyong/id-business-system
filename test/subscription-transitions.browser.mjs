@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 import { interceptDesign, origin, root, settle, toggleDesignTheme } from './helpers/offline-design.mjs';
 
 const subscription = 'subscriptions/claude';
-const recharge = 'online-recharge/chatgpt';
+const recharge = 'staff/finance/cards';
 const panelSelector = '#subscriptions-panel';
 const frameSelector = '#main > [data-page-region]:not([hidden]) iframe:not([hidden])';
 const actor = { id: 'transition-admin', name: '隔离验收管理员', role: 'super' };
@@ -101,7 +101,6 @@ test('订阅与银行卡池切换保留几何框架、清除敏感资料并隔�
         await navigate(recharge);
         assert(!await oldPanel.evaluate(node => node.textContent.includes('SYNTHETIC-')), '离页后的旧 DOM 应清除资料');
         await oldPanel.dispose();
-        await page.locator('[data-view="cards"]').first().click();
         await page.frameLocator(frameSelector).locator('#cards.active').waitFor(); await settle(page);
         const cardHeight = await page.locator(frameSelector).evaluate(node => node.getBoundingClientRect().height);
         for (let i = 0; i < 2; i++) {
@@ -166,9 +165,11 @@ test('订阅与银行卡池切换保留几何框架、清除敏感资料并隔�
         const input = page.locator('#subscription-copy1'), bounds = await input.boundingBox();
         await page.locator('#subscription-settings-status:not([hidden])').waitFor();
         assert.deepEqual(await input.boundingBox(), bounds, '抽屉加载反馈不移动输入');
-        await input.fill('读取期间的新输入'); settingsGate.released.resolve();
+        assert.equal(await input.isEditable(), false, '初次读取版本时保持只读');
+        settingsGate.released.resolve();
         await page.locator('#subscription-settings-form [type="submit"]:enabled').waitFor();
-        assert.equal(await input.inputValue(), '读取期间的新输入');
+        await input.fill('读取设置后的输入');
+        assert.equal(await input.inputValue(), '读取设置后的输入');
         await page.keyboard.press('Escape');
         await page.locator('#drawer').waitFor({ state: 'hidden' });
         if (width === 1440 && theme === 'light' && total) {

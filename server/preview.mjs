@@ -64,7 +64,7 @@ import { websitePages } from '../modules/website/pages.mjs';
 
 function requireSecurityConfirmation(response) {
   response.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-  return response.end(JSON.stringify({ error: '请先完成安全确认，再继续这项操作', code: 'SECURITY_CONFIRMATION_REQUIRED' }));
+  return response.end(JSON.stringify({ error: '请用当前登录密码确认这项操作', code: 'SECURITY_CONFIRMATION_REQUIRED' }));
 }
 
 const publicAssetTypes = new Set(['text/css; charset=utf-8', 'text/javascript; charset=utf-8', 'image/png']);
@@ -306,6 +306,7 @@ export async function startPreview(
   let handleWebsiteVisits;
   let handleLegacyToolRoute;
   let auth = null;
+  const confirmProtectedAction = request => !auth?.shouldVerify() || auth.recentlyPasswordConfirmed(request);
   let loadAuth = null;
   let setupAdmin = null;
   let relay = null;
@@ -389,7 +390,7 @@ export async function startPreview(
       handleSiteManagement = createSiteManagement({ store, observations: siteObservations, origin: secureOrigin, release,
         official: Boolean(publicUrl), readBackups: () => readBackupMonitorReceipt(monitoringBackupReceiptsDirectory),
         readRecoveries: () => readRestoreEvidence(monitoringBackupReceiptsDirectory),
-        authorizeBusinessExport: request => auth?.recentlyVerified(request),
+        authorizeBusinessExport: request => auth?.recentlyPasswordConfirmed(request),
         readSources: () => monitoringSources?.adminView() || { sources: [], externalProbe: null }
       });
       if (rechargeConfig) rechargeActivity = createRechargeActivity({
@@ -398,7 +399,6 @@ export async function startPreview(
       systemMonitoring = createSystemMonitoring({ store, origin: secureOrigin,
         native: rechargeConfig ? createLegacyRechargeNotifications(orderRechargeClient) : undefined,
         send: publicUrl ? undefined : async () => ({ status: 'failed', reason: 'configuration' }) });
-      const confirmProtectedAction = request => !auth?.shouldVerify() || auth.recentlyVerified(request);
       if (storefrontAdmissionDirectory) partnerRecharge = createRechargePartnerHandlers({
         store, transport: orderRechargeClient, origin: secureOrigin, authorizeAdmin: confirmProtectedAction,
         readSource: request => verifiedAddress(request, loginSecurity),
@@ -530,7 +530,8 @@ export async function startPreview(
     index.body = Buffer.from(localIndex);
     try {
       financeCollection = createFinanceCollection({ store, provider: financeProvider, fetchQuote: financeFetch });
-      handleFinanceCollection = createFinanceCollectionHandler({ collection: financeCollection, publicOrigin: secureOrigin });
+      handleFinanceCollection = createFinanceCollectionHandler({ collection: financeCollection, publicOrigin: secureOrigin,
+        authorizeSensitive: confirmProtectedAction });
       handleOrderExpense = createOrderExpenseHandler({ store, publicOrigin: secureOrigin });
       const quoteService = createFinanceQuoteService({
         provider: financeProvider,
@@ -738,8 +739,6 @@ export async function startPreview(
       if (!canManage || (loginRequired && !actor) || (actor?.role === 'admin' && (!readable ||
           ['settings', 'settings-history'].includes(new URL(request.url, 'http://localhost').searchParams.get('tab')))))
         return forbidden();
-      if (actor?.role === 'super' && !readable && auth.shouldVerify() && !auth.recentlyVerified(request))
-        return requireSecurityConfirmation(response);
       return void handleFinanceCollection(request, response, actor || { id: 'local-operator', name: '本机操作员', role: 'admin' });
     }
     if (store && route === orderExpenseRoute) {
@@ -774,7 +773,7 @@ export async function startPreview(
     if (store && cardManagementRoutes.has(route)) {
       response.setHeader('Cache-Control', 'private, no-store');
       if (!actor || !canManage) return forbidden();
-      if (readable && auth.shouldVerify() && !auth.recentlyVerified(request) &&
+      if (readable && auth.shouldVerify() && !auth.recentlyPasswordConfirmed(request) &&
           route === '/api/local/subscription-card-status' &&
           new URL(request.url, 'http://localhost').searchParams.get('includeDetails') === '1')
         return requireSecurityConfirmation(response);
@@ -822,7 +821,7 @@ export async function startPreview(
       if (loginRequired && !actor) return forbidden();
       return void localBusiness.handleLocalBusiness(request, response, route, store, actor, {
         publicOrigin: secureOrigin,
-        authorizeSensitive: auth?.shouldVerify() ? request => auth.recentlyVerified(request) : undefined,
+        authorizeSensitive: auth?.shouldVerify() ? request => auth.recentlyPasswordConfirmed(request) : undefined,
         isRegistrar: auth?.isRegistrar,
         requireRenewalHandoff: Boolean(handleRenewalHandoff && auth),
         readOrderCards: () => readPoolCards(orderRechargeClient, { includeNumbers: true }),
@@ -853,7 +852,7 @@ export async function startPreview(
       if (!canManage || (rechargeConfig && !actor)) return forbidden();
       const nativeRoute = route.slice('/integrations/codexdaichong'.length);
       if (!nativeManagerAccess(actor, nativeRoute, request.method)) return forbidden();
-      if (auth?.shouldVerify() && nativeBrowserVerification(nativeRoute, request.method) && !auth.recentlyVerified(request))
+      if (auth?.shouldVerify() && nativeBrowserVerification(nativeRoute, request.method) && !auth.recentlyPasswordConfirmed(request))
         return requireSecurityConfirmation(response);
       const gateway = gatewayFor(request.headers.host);
       if (gateway) return gateway.handle(request, response);

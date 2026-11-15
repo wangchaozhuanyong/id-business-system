@@ -355,8 +355,6 @@
     if (fieldset) fieldset.disabled = true;
     form?.setAttribute('aria-busy', 'true');
     try {
-      if (command.action !== 'acknowledge' &&
-          window.IDAccountSecurity && !await window.IDAccountSecurity.verify({ whenAvailable: true })) return false;
       if (generation !== epoch) return false;
       const result = await D.systemMonitoringAction(command);
       if (generation !== epoch) return false;

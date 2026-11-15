@@ -35,9 +35,10 @@ const scryptOptions = { N: 65536, r: 8, p: 1, maxmem: 128 * 1024 * 1024 };
 const dummyCredential = { salt: randomBytes(24).toString('hex'), hash: '0'.repeat(128) };
 
 class AuthError extends Error {
-  constructor(status, message) {
+  constructor(status, message, code) {
     super(message);
     this.status = status;
+    this.code = code;
   }
 }
 
@@ -577,6 +578,14 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
       recoveredAt <= now() && now() - recoveredAt < verificationLifetime);
   }
 
+  function recentlyPasswordConfirmed(request) {
+    const token = sessionToken(request);
+    const session = token && sessions.get(token);
+    const at = now();
+    return Boolean(session?.expiresAt > at && Number.isSafeInteger(session.passwordConfirmedAt) &&
+      session.passwordConfirmedAt <= at && at - session.passwordConfirmedAt < verificationLifetime);
+  }
+
   function requireVerified(request, accounts) {
     const employee = requireActor(request, accounts);
     if (!employee.mfa) throw new AuthError(403, '请先在「我的账号」绑定两步验证');
@@ -584,9 +593,16 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
     return employee;
   }
 
-  function requireVerifiedSuper(request, accounts) {
+  function requireActionPassword(request, accounts) {
+    const employee = requireActor(request, accounts);
+    if (!recentlyPasswordConfirmed(request))
+      throw new AuthError(403, '请用当前登录密码确认这项操作', 'SECURITY_CONFIRMATION_REQUIRED');
+    return employee;
+  }
+
+  function requireConfirmedSuper(request, accounts) {
     const employee = requireSuper(request, accounts);
-    return publicUrl || security?.mfaKey ? requireVerified(request, accounts) : employee;
+    return shouldVerify() ? requireActionPassword(request, accounts) : employee;
   }
 
   function withAuthenticatorKey(use) {
@@ -847,9 +863,36 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
     }
   }
 
+  async function confirmActionPassword(request, response) {
+    const initial = requireActor(request);
+    if (shouldVerify() && !initial.mfa)
+      throw new AuthError(403, '请先在「我的账号」绑定两步验证，再确认重要操作');
+    const { password } = await parseJson(request);
+    throttle(response, 'password', initial.email, verifiedAddress(request, security));
+    if (verifying >= 2) throw new AuthError(429, '尝试过于频繁，请等 1 分钟再试');
+    verifying++;
+    try {
+      if (typeof password !== 'string' || !password || password.length > 256 ||
+          Buffer.byteLength(password, 'utf8') > 512 || !await matchesCredential(password, initial.credential))
+        throw new AuthError(400, '当前登录密码不正确');
+    } finally {
+      verifying--;
+    }
+    const employee = requireActor(request);
+    const at = now();
+    const confirmed = updateSession(sessionToken(request), row =>
+      employee.id === initial.id && row.employeeId === initial.id &&
+      employee.sessionVersion === initial.sessionVersion && row.version === employee.sessionVersion && row.expiresAt > at
+        ? { ...sessionMetadata(row), passwordConfirmedAt: at } : undefined);
+    if (!confirmed) throw new AuthError(401, '登录已失效，请重新登录');
+    report('auth_action_password', employee);
+    return sendJson(response, 200, { confirmed: true });
+  }
+
   async function updateTrustedDevice(request, response) {
     const body = await parseJson(request);
     const { employee: result, operator } = mutate(request, (employees, actor) => {
+      if (!actor.mfa) throw new AuthError(403, '请先在「我的账号」绑定两步验证');
       const employee = body.employeeId && body.employeeId !== actor.id
         ? employees.find(row => row.id === body.employeeId && actor.role === 'super') : actor;
       if (!employee?.active) throw new AuthError(404, '未找到可管理的账号');
@@ -885,7 +928,7 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
         return { employee, removed: devices.splice(index, 1)[0] };
       }
       throw new AuthError(400, '请选择可用的设备操作');
-    }, requireVerified);
+    }, requireActionPassword);
     if (result.token) {
       if (!updateSession(sessionToken(request), row => ({ ...sessionMetadata(row), deviceDigest: result.deviceDigest })))
         throw new AuthError(401, '登录已失效，请重新登录');
@@ -922,13 +965,13 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
         throw new AuthError(409, '当前网络还不在名单中，请先登记并核对当前登录地址');
       policy.version++;
       return actor;
-    }, requireVerifiedSuper);
+    }, requireConfirmedSuper);
     report('auth_network_policy', operator, '登录网络');
     return sendJson(response, 200, { saved: true });
   }
 
   async function createEmployee(request, response) {
-    requireVerifiedSuper(request);
+    requireConfirmedSuper(request);
     const body = await parseJson(request);
     const email = validatedEmail(body.email);
     const name = validatedName(body.name);
@@ -955,14 +998,14 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
       setTeamLead(employees, row, body.teamLeadId);
       employees.push(row);
       return row;
-    }, requireVerifiedSuper);
+    }, requireConfirmedSuper);
     report('auth_employee_create', operator, employee.id);
     if (employee.role === 'admin' && employee.active) monitor('admin_access');
     sendJson(response, 201, { employee: publicEmployee(employee) });
   }
 
   async function updateEmployee(request, response, employeeId) {
-    requireVerifiedSuper(request);
+    requireSuper(request);
     const body = await parseJson(request);
     if (!Number.isSafeInteger(body.version) || body.version < 1) {
       throw new AuthError(400, '请选择最新的员工资料后保存');
@@ -975,6 +1018,7 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
     }
     const nameValue = body.nickname === undefined ? body.name : body.nickname;
     const name = nameValue === undefined ? undefined : validatedName(nameValue);
+    if (body.password !== undefined) requireConfirmedSuper(request);
     const credential =
       body.password === undefined ? undefined : await createCredential(body.password);
     let accessChanged = false;
@@ -996,6 +1040,7 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
       setTeamLead(employees, row, body.teamLeadId);
       accessChanged = Boolean(role !== previousRole ||
         active !== row.active || credential || previousTeamLead !== row.teamLeadId);
+      if (accessChanged && shouldVerify()) requireActionPassword(request);
       if (accessChanged) row.sessionVersion++;
       if (body.nickname !== undefined || (name !== undefined && name !== row.name)) row.nicknameSet = true;
       row.name = name ?? row.name;
@@ -1004,7 +1049,7 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
       row.version++;
       row.updatedAt = new Date(now()).toISOString();
       return row;
-    }, requireVerifiedSuper);
+    }, requireSuper);
     report('auth_employee_update', operator, employee.id);
     if (accessChanged) monitor('admin_access');
     sendJson(response, 200, { employee: publicEmployee(employee) });
@@ -1098,11 +1143,14 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
         const employee = requireActor(request, accounts);
         return sendJson(response, 200, { available: Boolean(security?.mfaKey), bound: Boolean(employee.mfa),
           recoveryRemaining: employee.mfa?.recovery.length ?? 0, recentlyVerified: recentlyVerified(request),
+          passwordConfirmed: recentlyPasswordConfirmed(request),
           canRebind: recentlyRecovered(request), requiredForExistingActions: shouldVerify(),
           deviceLock: employee.deviceLock === true, devices: publicDevices(employee, request) });
       }
       const operation = route.match(/^\/api\/local\/auth\/security\/(start|confirm|verify)$/)?.[1];
       if (operation && method === 'POST') return await updateSecurity(request, response, operation);
+      if (route === '/api/local/auth/security/confirm-password' && method === 'POST')
+        return await confirmActionPassword(request, response);
       if (route === '/api/local/auth/security/device' && method === 'POST')
         return await updateTrustedDevice(request, response);
       if (route === '/api/local/auth/security/device-requests' && method === 'GET') {
@@ -1167,13 +1215,14 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
       if (response.destroyed || response.headersSent) return;
       sendJson(response, error instanceof AuthError ? error.status : 500, {
         error: error instanceof AuthError ? error.message : '账户服务暂时无法处理请求，请稍后重试',
+        ...(error instanceof AuthError && error.code ? { code: error.code } : {}),
         ...(error instanceof AuthError && error.status === 401 ? { reason: request.localAuthReason || 'invalid' } : {})
       });
     }
   }
 
   return {
-    getActor, orderOwners, operatorLabels, handle, recentlyVerified, shouldVerify,
+    getActor, orderOwners, operatorLabels, handle, recentlyPasswordConfirmed, shouldVerify,
     isRegistrar(employeeId) {
       return Boolean(readAccounts(accountPath)?.employees.some(row =>
         row.id === employeeId && row.active && row.role === 'registrar'));

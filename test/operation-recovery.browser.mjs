@@ -46,7 +46,7 @@ async function environment(context, { actor: acting = actor, setup } = {}) {
   const requests = [];
   let verified = false, confirmationCount = 0, lostArchive = 0, lostRecovery = 0;
   const renewals = createRenewalHandoff({ store, publicOrigin: origin, getAuth: () => ({
-    recentlyVerified: () => verified, orderOwners: () => [acting]
+    recentlyPasswordConfirmed: () => verified, orderOwners: () => [acting]
   }) });
   const expenses = createOrderExpenseHandler({ store, publicOrigin: origin });
   await context.route(base + '**', async route => {
