@@ -86,6 +86,9 @@ test('Plus 的 0 元购与半价优惠分别中止并说明原因', async () => 
   assert.ok(startNowIndex > offerIndex, '优惠账号检测必须先于点击升级按钮');
   assert.match(branch, /error\.code = discount \? 'PLUS_DISCOUNT_ACCOUNT' : 'PLUS_FREE_TRIAL_ACCOUNT';/);
   assert.match(pricingText, /if \(prices\.length >= 2\) \{/);
+  // 定价页当前主按钮文案是 Buy now，Plus 与 Pro 匹配都必须覆盖。
+  assert.match(pricingText, /const PRO_ACTION_PATTERN = \/\^\(\?:立即体验\|Buy now\|/);
+  assert.match(pricingText, /const button = card\.getByRole\('button', \{ name: \/\^\(\?:Start now\|Buy now\)\$\/i \}\);/);
 });
 
 test('Pro 0 元试用继续开通：允许 0 元金额与 Claim free offer 按钮', async () => {
@@ -93,7 +96,7 @@ test('Pro 0 元试用继续开通：允许 0 元金额与 Claim free offer 按�
   assert.match(pricingText, /function readMoneyCents\(text, currency, monthly = false, \{ allowZero = false \} = \{\}\)/);
   assert.match(pricingText, /return amount > 0 \|\| allowZero \? amount : null;/);
   assert.match(pricingText, /async function readProMonthlyAmount\(card, currency, \{ allowZero = false \} = \{\}\)/);
-  assert.match(pricingText, /const PRO_ACTION_PATTERN = \/\^\(\?:立即体验\|Start now\|升级至\\s\*Pro\|Upgrade to Pro\|Get Pro\|Claim\\s\+\(\?:your\\s\+\)\?free\\s\+offer\|Claim\\s\+offer\)\$\/i;/);
+  assert.match(pricingText, /const PRO_ACTION_PATTERN = \/\^\(\?:立即体验\|Buy now\|Start now\|升级至\\s\*Pro\|Upgrade to Pro\|Get Pro\|Claim\\s\+\(\?:your\\s\+\)\?free\\s\+offer\|Claim\\s\+offer\)\$\/i;/);
   assert.match(pricingText, /if \(amount === 0\) console\.log\(`ℹ️ \[步骤\] Pro \$\{tier\} 显示 0 元试用，按正常开通继续`\);/);
 });
 
@@ -107,7 +110,7 @@ test('0 元结账页不填卡：无卡号输入框且应付为 0 时直接提交
   const skipIndex = stripeText.indexOf('if (await isZeroAmountCheckout(page)) {');
   const fillIndex = stripeText.indexOf('const fillResult = await fillCardFieldsOpenAiCheckout(page, cardInfo, ELEMENT_TIMEOUT);');
   assert.ok(skipIndex > 0 && fillIndex > skipIndex, '0 元跳过点必须早于填卡');
-  assert.match(stripeText, /Claim\\s\+\(\?:your\\s\+\)\?free\\s\+offer\|Claim\\s\+offer\|Start trial\|Start free trial\|Continue\|Confirm\|Get started/);
+  assert.match(stripeText, /Claim\\s\+\(\?:your\\s\+\)\?free\\s\+offer\|Claim\\s\+offer\|Start trial\|Start free trial\|Continue\|Confirm\|Get started\|Buy now/);
 });
 
 test('准备脚本已覆盖两个文件并保持全量核验', async () => {
