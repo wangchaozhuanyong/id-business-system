@@ -45,12 +45,12 @@ test('all 203 upstream files match the original and five exact patches', async (
   assert.equal(result.files, 203);
   await exec(process.execPath, ['--check', join(prepared, 'server.js')]);
   await exec(process.execPath, ['--check', join(prepared, 'mysql-store.js')]);
-  assert.equal(result.originalFiles, 198);
+  assert.equal(result.originalFiles, 197);
   assert.deepEqual(result.routingFiles, ['pricing-checkout.js', 'region-config.js', 'server.js']);
   assert.deepEqual(result.returnFiles, ['mysql-store.js', 'server.js']);
   assert.deepEqual(result.providerRetirementFiles, ['mysql-store.js', 'server.js']);
   assert.deepEqual(result.cardPlanFiles, ['mysql-store.js', 'payment-retry.js', 'server.js']);
-  assert.deepEqual(result.plusTrialFiles, ['pricing-checkout.js']);
+  assert.deepEqual(result.plusTrialFiles, ['pricing-checkout.js', 'stripe-payment.js']);
   const mysql = await readFile(join(prepared, 'mysql-store.js'), 'utf8');
   const previousMysql = await readFile(join(previous, 'mysql-store.js'), 'utf8');
   assert.equal(previousMysql.replace('module.exports = {\n    withTransaction,', 'module.exports = {'), await original('mysql-store.js'));
@@ -58,8 +58,7 @@ test('all 203 upstream files match the original and five exact patches', async (
     ['async function markCdkUsed(', 'async function deletePhoneAsset('],
     ['async function releaseCard(', 'async function importCards(']
   ]) assert.equal(section(mysql, start, end), section(previousMysql, start, end), start);
-  for (const name of ['index.js', 'stripe-payment.js',
-    'tax-free-address.js', 'package-lock.json'])
+  for (const name of ['index.js', 'tax-free-address.js', 'package-lock.json'])
     assert.equal(await readFile(join(prepared, name), 'utf8'), await original(name), name);
   assert.equal((await readFile(join(prepared, 'payment-retry.js'), 'utf8'))
     .replace('store.reserveCard(ownerKey, planType)', 'store.reserveCard(ownerKey)'), await original('payment-retry.js'));

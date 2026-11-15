@@ -1,8 +1,8 @@
 diff --git a/pricing-checkout.js b/pricing-checkout.js
-index 17d5982..1daed6e 100644
+index 17d5982..d09f52d 100644
 --- a/pricing-checkout.js
 +++ b/pricing-checkout.js
-@@ -55,6 +55,14 @@ const PLAN_UPGRADE_PATTERNS = {
+@@ -55,6 +55,17 @@ const PLAN_UPGRADE_PATTERNS = {
      pro_20x: [/升级至\s*Pro/i, /Upgrade to Pro/i, /Get Pro/i, /^Upgrade$/i]
  };
  
@@ -12,20 +12,32 @@ index 17d5982..1daed6e 100644
 +const FREE_TRIAL_CLAIM_BUTTON = /^(?:Claim\s+(?:your\s+)?free\s+offer|Claim\s+offer)$/i;
 +const FREE_TRIAL_ZERO_PRICE = /(?:₱|PHP|S\$|SGD|\$|MYR|RM|EGP|E£)\s*0(?:\.0{1,2})?\s*(?:\/\s*(?:mo(?:nth)?|月)|每月|per\s*month)/i;
 +const PRO_ACTION_PATTERN = /^(?:立即体验|Start now|升级至\s*Pro|Upgrade to Pro|Get Pro|Claim\s+(?:your\s+)?free\s+offer|Claim\s+offer)$/i;
-+const PLUS_TRIAL_REFUSAL = '该账号为 Plus 0 元试用资格账号，不能继续充值 Plus，请转人工核对';
++const DISCOUNT_OFFER_TEXT = /(?:\b\d{1,2}\s*%\s*off\b|半价|五折|半折|\bSave\s+\d{1,2}\s*%\b)/i;
++// 停止原因要能区分：0 元购与半价优惠账号都不允许继续充值 Plus。
++const PLUS_TRIAL_REFUSAL = '该账号为 Plus 0 元购优惠账号，不能继续充值 Plus，请转人工核对';
++const PLUS_DISCOUNT_REFUSAL = '该账号为 Plus 半价优惠账号，不能继续充值 Plus，请转人工核对';
 +
  const PRO_TIERS = Object.freeze({ pro100: '100', pro200: '200', pro500: '500' });
  const CURRENCY_MARKS = Object.freeze({ EGP: ['EGP', 'E£', 'ج.م'], MYR: ['MYR', 'RM'], PHP: ['PHP', '₱'], SGD: ['SGD', 'S$'], USD: ['USD', 'US$', '$'] });
  
-@@ -88,6 +96,30 @@ async function findPlusStartNowButton(page) {
+@@ -88,6 +99,49 @@ async function findPlusStartNowButton(page) {
      return null;
  }
  
 +// Plus 0 元试用：卡片出现 "Try Plus free for 1 month"、"Claim free offer" 或 0 元月费。
-+async function findPlusFreeTrialOffer(page) {
++function cardPrices(text, currency) {
++    const marks = CURRENCY_MARKS[currency];
++    if (!marks) return [];
++    const pattern = new RegExp('(?<![\\w$])(?:' + marks.map(escapeRegExp).join('|') + ')\\s*(\\d+(?:,\\d{3})*(?:\\.\\d{1,2})?)', 'gi');
++    return [...String(text || '').matchAll(pattern)]
++        .map((match) => Number(String(match[1]).replace(/,/g, '')))
++        .filter((value) => Number.isFinite(value) && value > 0);
++}
++
++async function findPlusOffer(page, currency) {
 +    const banner = page.getByText(PLUS_FREE_TRIAL_BANNER).first();
 +    if (await banner.isVisible({ timeout: 800 }).catch(() => false)) {
-+        return normalizeOptionText(await banner.innerText().catch(() => '')) || 'Plus free trial';
++        return { kind: 'free', detail: normalizeOptionText(await banner.innerText().catch(() => '')) || 'Plus free trial' };
 +    }
 +
 +    const titles = page.getByText(/^(?:ChatGPT\\s+)?Plus$/i);
@@ -36,19 +48,29 @@ index 17d5982..1daed6e 100644
 +        const card = title.locator('xpath=ancestor::*[self::div or self::section or self::article][.//button][1]');
 +        const button = card.getByRole('button', { name: FREE_TRIAL_CLAIM_BUTTON });
 +        if (await button.count() && await button.first().isVisible().catch(() => false)) {
-+            return normalizeOptionText(await button.first().innerText().catch(() => '')) || 'Claim free offer';
++            return { kind: 'free', detail: normalizeOptionText(await button.first().innerText().catch(() => '')) || 'Claim free offer' };
 +        }
 +
 +        const cardText = normalizeOptionText(await card.innerText().catch(() => ''));
-+        if (FREE_TRIAL_ZERO_PRICE.test(cardText)) return '0 / month';
++        if (FREE_TRIAL_ZERO_PRICE.test(cardText)) return { kind: 'free', detail: '0 / month' };
++        const discountText = DISCOUNT_OFFER_TEXT.exec(cardText);
++        if (discountText) return { kind: 'discount', detail: discountText[0] };
++
++        // 原价与折扣价同时出现，且较低价约为较高价的一半。
++        const prices = cardPrices(cardText, currency);
++        if (prices.length >= 2) {
++            const max = Math.max(...prices);
++            const min = Math.min(...prices);
++            if (max >= min * 1.7 && max <= min * 2.3) return { kind: 'discount', detail: min + '/' + max };
++        }
 +    }
-+    return '';
++    return null;
 +}
 +
  async function isBusinessTabActive(page) {
      const businessTab = page.getByRole('tab', { name: /^Business$/i }).first();
      if (await businessTab.isVisible({ timeout: 800 }).catch(() => false)) {
-@@ -677,21 +709,44 @@ function moneyPattern(currency, monthly = false) {
+@@ -677,21 +731,44 @@ function moneyPattern(currency, monthly = false) {
      return `(?<![\\w$])(?:${marks.map(escapeRegExp).join('|')})\\s*(\\d+(?:,\\d{3})*(?:\\.\\d{1,2})?)(?![\\d,.])${monthly ? '\\s*(?:/\\s*(?:月|month|mo\\b)|每月|per month)' : ''}`;
  }
  
@@ -99,7 +121,7 @@ index 17d5982..1daed6e 100644
  }
  
  async function selectAndOpenProTier(page, tier, currency) {
-@@ -720,10 +775,12 @@ async function selectAndOpenProTier(page, tier, currency) {
+@@ -720,10 +797,12 @@ async function selectAndOpenProTier(page, tier, currency) {
          throw new Error(`未确认 Pro ${tier} 档位已选中，已停止开通`);
      });
      await requireVisibleOne(group.getByRole('radio', { checked: true }), '已选中的 Pro 档位');
@@ -114,7 +136,7 @@ index 17d5982..1daed6e 100644
      }), ` Pro ${tier} 的开通按钮`);
      if (!(await action.isEnabled())) throw new Error(`Pro ${tier} 开通按钮不可用，已停止开通`);
      await action.click({ timeout: 10000 });
-@@ -742,6 +799,10 @@ async function verifyProPricingCheckout(page, { tier, currency, amount }) {
+@@ -742,6 +821,10 @@ async function verifyProPricingCheckout(page, { tier, currency, amount }) {
      const amounts = page.getByRole('radio').filter({ hasText: new RegExp(moneyPattern(currency), 'i') });
      const group = await requireVisibleOne(page.getByRole('radiogroup').filter({ has: amounts }), '结账页的 Pro 档位选择器');
      const selected = await requireVisibleOne(group.getByRole('radio', { checked: true }), '结账页已选中的 Pro 档位');
@@ -125,24 +147,75 @@ index 17d5982..1daed6e 100644
      const visibleOptions = await group.getByRole('radio').filter({ visible: true }).allTextContents();
      const label = await requireVisibleOne(page.getByText(/^(?:今日应付金额|Total due today|Total today|Amount due today)$/i), '结账页今日应付金额标签');
      if (readMoneyCents(await selected.innerText(), currency) !== amount
-@@ -767,6 +828,12 @@ async function clickPlanUpgrade(page, planType, { currency } = {}) {
+@@ -767,6 +850,13 @@ async function clickPlanUpgrade(page, planType, { currency } = {}) {
      if (PRO_TIERS[plan]) return selectAndOpenProTier(page, PRO_TIERS[plan], currency);
  
      if (plan === 'plus') {
-+        const trialOffer = await findPlusFreeTrialOffer(page);
-+        if (trialOffer) {
-+            const error = new Error(PLUS_TRIAL_REFUSAL);
-+            error.code = 'PLUS_FREE_TRIAL_ACCOUNT';
++        const offer = await findPlusOffer(page, currency);
++        if (offer) {
++            const discount = offer.kind === 'discount';
++            const error = new Error(discount ? PLUS_DISCOUNT_REFUSAL : PLUS_TRIAL_REFUSAL);
++            error.code = discount ? 'PLUS_DISCOUNT_ACCOUNT' : 'PLUS_FREE_TRIAL_ACCOUNT';
 +            throw error;
 +        }
          const startNow = await findPlusStartNowButton(page);
          if (startNow) {
              await startNow.scrollIntoViewIfNeeded().catch(() => {});
-@@ -891,6 +958,7 @@ module.exports = {
+@@ -891,6 +981,7 @@ module.exports = {
      selectPricingRegion,
      switchToPersonalPlans,
      clickPlanUpgrade,
-+    findPlusFreeTrialOffer,
++    findPlusOffer,
      verifyProPricingCheckout,
      waitForCheckoutPage,
      pageShowsTargetRegionPricing
+diff --git a/stripe-payment.js b/stripe-payment.js
+index cd7ff9d..03d9eff 100644
+--- a/stripe-payment.js
++++ b/stripe-payment.js
+@@ -295,6 +295,23 @@ function isOpenAiCustomCheckout(page) {
+     return /checkout\/openai_llc/i.test(page.url());
+ }
+ 
++function isZeroAmountCheckoutText(text) {
++    return /(?:Total due today|Due today|今日应付|应付)[^\n]{0,48}?(?<![\d.,])0(?:\.00)?(?![\d])/i.test(text)
++        || /\b(?:Free trial|Start your free|No charge today)\b/i.test(text);
++}
++
++// 0 元结账页没有信用卡与账单表单，不能等卡号输入框，否则填卡步骤必然超时。
++async function isZeroAmountCheckout(page) {
++    const cardSelector = ['input[autocomplete="cc-number"]', 'input[name="cardnumber"]',
++        'input[name="number"]', 'input[data-elements-stable-field-name="cardNumber"]'].join(', ');
++    for (const frame of page.frames()) {
++        const count = await frame.locator(cardSelector).count().catch(() => 0);
++        if (count) return false;
++    }
++    const body = String(await page.textContent('body', { timeout: 8000 }).catch(() => '') || '');
++    return isZeroAmountCheckoutText(body);
++}
++
+ /**
+  * 从 Checkout 页面读取「今日应付」金额（随汇率浮动）
+  * @returns {Promise<{ amount: number, currency: string }|null>}
+@@ -506,6 +523,11 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {})
+         await prepareCheckoutCardSection(page);
+         await page.waitForTimeout(1000);
+ 
++        if (await isZeroAmountCheckout(page)) {
++            console.log('[Stripe] 检测到 0 元结账页，跳过信用卡与账单填写，直接提交...');
++            return finalizeCheckoutPayment(page, (cardInfo && cardInfo.holder) || '');
++        }
++
+         const openAiCheckout = isOpenAiCustomCheckout(page);
+         if (!openAiCheckout) {
+             // 仅 Stripe hosted 页需要选择支付方式 tab
+@@ -2465,6 +2487,9 @@ async function clickCheckoutSubmitButton(page) {
+     };
+ 
+     const strategies = [
++        () => tryClick(page.getByRole('button', {
++            name: /^(?:Claim\s+(?:your\s+)?free\s+offer|Claim\s+offer|Start trial|Start free trial|Continue|Confirm|Get started)$/i
++        }), 'role=优惠开通'),
+         () => tryClick(page.getByRole('button', { name: /^Subscribe$/i }), 'role=Subscribe'),
+         () => tryClick(page.getByRole('button', { name: /^订阅$/ }), 'role=订阅'),
+         () => tryClick(page.getByRole('button', { name: /subscribe|订阅|pay/i }), 'role=subscribe'),

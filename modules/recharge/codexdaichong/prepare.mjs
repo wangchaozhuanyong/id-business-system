@@ -19,7 +19,7 @@ const providerRetirementFiles = ['mysql-store.js', 'server.js'];
 const cardPlanPatch = new URL('./card-plans/upstream-card-plans.patch', import.meta.url);
 const cardPlanFiles = ['mysql-store.js', 'payment-retry.js', 'server.js'];
 const plusTrialPatch = new URL('./plus-trial/upstream-plus-trial.patch', import.meta.url);
-const plusTrialFiles = ['pricing-checkout.js'];
+const plusTrialFiles = ['pricing-checkout.js', 'stripe-payment.js'];
 
 async function approvedRouting() {
   const manifest = JSON.parse(await readFile(new URL('manifest.json', routingDirectory), 'utf8'));
@@ -81,7 +81,8 @@ async function approvedPlusTrial(routing) {
   if (manifest.revision !== CODEXDAICHONG_REVISION ||
       JSON.stringify(Object.keys(manifest.files).sort()) !== JSON.stringify(plusTrialFiles) ||
       JSON.stringify(names) !== JSON.stringify(plusTrialFiles) ||
-      plusTrialFiles.some(name => manifest.files[name].original !== routing.files[name]?.approved) ||
+      // stripe-payment.js 未被前序补丁修改，其基准就是锁定上游文件，由全量核验串联。
+      plusTrialFiles.some(name => routing.files[name] && manifest.files[name].original !== routing.files[name].approved) ||
       createHash('sha256').update(patch).digest('hex') !== manifest.patchSha256)
     throw new Error('0 元试用补丁与审查清单不符');
   return manifest;
