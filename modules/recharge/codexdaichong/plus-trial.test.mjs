@@ -14,6 +14,7 @@ const patchUrl = new URL('./plus-trial/upstream-plus-trial.patch', import.meta.u
 const pricingFixture = new URL('../../../test/fixtures/pricing-checkout.post-routing.js.txt', import.meta.url);
 const stripeFixture = new URL('../../../test/fixtures/stripe-payment.upstream.js.txt', import.meta.url);
 const chatgptFixture = new URL('../../../test/fixtures/chatgpt.upstream.js.txt', import.meta.url);
+const sessionAuthFixture = new URL('../../../test/fixtures/session-auth.upstream.js.txt', import.meta.url);
 const prepareUrl = new URL('./prepare.mjs', import.meta.url);
 const patchPath = fileURLToPath(patchUrl);
 
@@ -24,7 +25,8 @@ const normalize = (buffer) => Buffer.from(buffer.toString('utf8').replace(/\r\n/
 const fixtures = {
   'pricing-checkout.js': normalize(await readFile(pricingFixture)),
   'stripe-payment.js': normalize(await readFile(stripeFixture)),
-  'chatgpt.js': normalize(await readFile(chatgptFixture))
+  'chatgpt.js': normalize(await readFile(chatgptFixture)),
+  'session-auth.js': normalize(await readFile(sessionAuthFixture))
 };
 
 function blobSha1(content) {
@@ -51,10 +53,10 @@ async function appliedSources() {
 test('优惠账号补丁清单与内容一致', () => {
   assert.equal(manifest.revision, '4e9bb201cf481d4bcc85da34970fc26c63ab818a');
   assert.deepEqual(Object.keys(manifest.files).sort(),
-    ['chatgpt.js', 'pricing-checkout.js', 'stripe-payment.js']);
+    ['chatgpt.js', 'pricing-checkout.js', 'session-auth.js', 'stripe-payment.js']);
   assert.equal(createHash('sha256').update(patch).digest('hex'), manifest.patchSha256);
   const names = [...patch.toString().matchAll(/^diff --git a\/(\S+) b\/\1$/gm)].map((match) => match[1]).sort();
-  assert.deepEqual(names, ['chatgpt.js', 'pricing-checkout.js', 'stripe-payment.js']);
+  assert.deepEqual(names, ['chatgpt.js', 'pricing-checkout.js', 'session-auth.js', 'stripe-payment.js']);
 });
 
 test('三个基准分别是选路补丁结果与锁定上游文件', () => {
@@ -128,9 +130,19 @@ test('调试模式接受无卡结账页', async () => {
   assert.ok(guardIndex > 0, 'API 建单成功后的 Plus 优惠拦截缺失');
 });
 
-test('准备脚本与发布核验已覆盖三个文件', async () => {
+test('会话在线校验改用 API 请求而不是页面导航', async () => {
+  const { 'session-auth.js': sessionText } = await appliedSources();
+  const start = sessionText.indexOf('async function verifyRealSessionApi(context) {');
+  assert.ok(start > 0, '缺少 verifyRealSessionApi');
+  const body = sessionText.slice(start, start + 900);
+  assert.match(body, /context\.request\.get\(`\$\{CHATGPT_COOKIE_URL\}\/api\/auth\/session`/);
+  assert.ok(!/probe\.goto\(/.test(body), '不得再用页面导航校验会话');
+  assert.match(body, /maxRetries: 0/);
+});
+
+test('准备脚本与发布核验已覆盖四个文件', async () => {
   const prepare = (await readFile(prepareUrl, 'utf8')).replace(/\r\n/g, '\n');
-  assert.match(prepare, /const plusTrialFiles = \['chatgpt\.js', 'pricing-checkout\.js', 'stripe-payment\.js'\];/);
+  assert.match(prepare, /const plusTrialFiles = \['chatgpt\.js', 'pricing-checkout\.js', 'session-auth\.js', 'stripe-payment\.js'\];/);
   assert.match(prepare, /plusTrialFiles\.some\(name => routing\.files\[name\] && manifest\.files\[name\]\.original !== routing\.files\[name\]\.approved\)/);
 });
 
