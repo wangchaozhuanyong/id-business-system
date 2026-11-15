@@ -245,6 +245,34 @@ index 17d5982..a2a0fc6 100644
      verifyProPricingCheckout,
      waitForCheckoutPage,
      pageShowsTargetRegionPricing
+diff --git a/session-auth.js b/session-auth.js
+index e186977..b0e2265 100644
+--- a/session-auth.js
++++ b/session-auth.js
+@@ -345,16 +345,18 @@ function collectCookieSpecs(sessionData, sessionJson) {
+ }
+ 
+ async function verifyRealSessionApi(context) {
+-    const probe = await context.newPage();
++    // 用 API 请求校验登录态，不用页面导航：Cloudflare 对 document 导航会强制核对
++    // cf_clearance 与出口 IP 的绑定，而对 xhr/fetch 宽松，导航式校验会把有效 cookie 误判为 403。
+     try {
+-        const response = await probe.goto(`${CHATGPT_COOKIE_URL}/api/auth/session`, {
+-            waitUntil: 'domcontentloaded',
+-            timeout: 60000
++        const response = await context.request.get(`${CHATGPT_COOKIE_URL}/api/auth/session`, {
++            headers: { Accept: 'application/json' },
++            timeout: 30000,
++            maxRetries: 0
+         });
+         const status = response?.status() || 0;
+         const headers = response?.headers?.() || {};
+         const headerText = Object.keys(headers).map((k) => `${k}:${headers[k]}`).join('\n').toLowerCase();
+-        const bodyText = await probe.evaluate(() => document.body?.innerText || '').catch(() => '');
++        const bodyText = await response.text().catch(() => '');
+         let data = null;
+         try {
+             data = JSON.parse(bodyText);
 diff --git a/stripe-payment.js b/stripe-payment.js
 index cd7ff9d..ca16373 100644
 --- a/stripe-payment.js
