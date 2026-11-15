@@ -1,8 +1,19 @@
 diff --git a/chatgpt.js b/chatgpt.js
-index 8a7cba7..3bd5dda 100644
+index 8a7cba7..6884a91 100644
 --- a/chatgpt.js
 +++ b/chatgpt.js
-@@ -483,6 +483,20 @@ async function openApiCheckout(page, { accessToken, sessionData, planType, count
+@@ -467,6 +467,10 @@ async function openApiCheckout(page, { accessToken, sessionData, planType, count
+             throw new Error(err);
+         }
+ 
++        if (String(planType).toLowerCase() === 'plus' && await isPlusZeroAmountCheckout(page)) {
++            throw checkoutError('该账号为 Plus 0 元购优惠账号，不能继续充值 Plus，请转人工核对',
++                { phase: 'checkout-page', code: 'PLUS_ZERO_AMOUNT_ACCOUNT', type: 'page' }, [accessToken, token, url]);
++        }
+         const currentUrl = await assertCheckoutPageReady(page);
+ 
+         await assertChatGptLoggedIn(page, 'Checkout');
+@@ -483,6 +487,34 @@ async function openApiCheckout(page, { accessToken, sessionData, planType, count
      }
  }
  
@@ -20,10 +31,24 @@ index 8a7cba7..3bd5dda 100644
 +    return true;
 +}
 +
++// Plus 优惠账号判定：API 建单成功后，结账页如果是 0 元（免费试用）同样必须中止。
++async function isPlusZeroAmountCheckout(page) {
++    const body = String(await page.textContent('body', { timeout: 8000 }).catch(() => '') || '');
++    const zeroDue = /(?:Total due today|Due today|今日应付|应付)[^\n]{0,48}?(?<![\d.,])0(?:\.00)?(?![\d])/i.test(body)
++        || /\b(?:Free trial|Start your free|No charge today)\b/i.test(body);
++    if (!zeroDue) return false;
++    const cardSelector = ['input[autocomplete="cc-number"]', 'input[name="cardnumber"]', 'input[name="number"]'].join(', ');
++    for (const frame of page.frames()) {
++        const count = await frame.locator(cardSelector).count().catch(() => 0);
++        if (count) return false;
++    }
++    return true;
++}
++
  /** Passive debug check: observe the card form without filling or submitting it. */
  async function verifyCheckoutDebugPage(page, { checkoutUrl, timeoutMs = 60000 } = {}) {
      const { assertChatGptLoggedIn } = require('./session-auth');
-@@ -520,6 +534,10 @@ async function verifyCheckoutDebugPage(page, { checkoutUrl, timeoutMs = 60000 }
+@@ -520,6 +552,10 @@ async function verifyCheckoutDebugPage(page, { checkoutUrl, timeoutMs = 60000 }
          if (!isPaymentUrl(page.url())) {
              throw new Error('支付页面发生非 Checkout 跳转，调试已停止');
          }
