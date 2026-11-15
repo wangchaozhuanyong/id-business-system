@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { parseV2DateTimeInput, toV2DateTimeInput } from '../modules/time/dateTime.ts';
 import { orderFieldChanged } from '../modules/orders/order-opening.mjs';
 import { pendingInventoryClaim } from './inventory-usage.mjs';
-import { registrationPurposeProduct } from './inventory-registration.mjs';
+import { registrationEmail, registrationMailboxType, registrationPurposeProduct } from './inventory-registration.mjs';
 
 export const personalPlans = {
   Gemini: ['Google AI Plus', 'Google AI Pro', 'Google AI Ultra 5x', 'Google AI Ultra 20x'],
@@ -172,6 +172,9 @@ export function preparePersonalInventory(previous, next, action, actor, now = ne
         (!nonempty(row.source, 200) || !['正常', '冻结', '封控中'].includes(row.status)))
       return '请核对账号来源与状态';
     if (old) {
+      if (row.emailType !== old.emailType && oldMail.get(old.sourceMailboxId)?.type === 'microsoft' &&
+          registrationMailboxType(row.emailType) !== 'microsoft')
+        return '已关联的微软邮箱类型须保留';
       if (inventoryState(old) !== 'used' && inventoryState(row) === 'used' && action !== 'inventory_order_sale')
         return '产品账号请通过对应的成品交付登记实际使用';
       continue;
@@ -186,12 +189,14 @@ export function preparePersonalInventory(previous, next, action, actor, now = ne
     const saved = nextMail.get(row.sourceMailboxId);
     if (row.type === 'gemini' && mailbox && mailbox.type !== 'google') return 'Gemini 请使用谷歌邮箱';
     if (row.acquisitionMethod === 'purchased' || !personalStockOwner(row) || !actor?.id || !mailbox || !saved ||
-        !['google', 'relay'].includes(mailbox.type) || mailbox.relayDeleted || saved.relayDeleted ||
-        mailbox.email?.toLowerCase() !== row.email?.toLowerCase() || saved.email !== mailbox.email ||
+        !['google', 'relay', 'microsoft'].includes(mailbox.type) || mailbox.relayDeleted || saved.relayDeleted ||
+        mailbox.deleted || saved.deleted || registrationEmail(mailbox.email) !== registrationEmail(row.email) ||
+        saved.email !== mailbox.email ||
         saved.type !== mailbox.type || inventoryState(saved) !== inventoryState(mailbox) ||
         (mailbox.health || 'normal') !== 'normal' || (mailbox.status || '正常') !== '正常' ||
         (saved.health || 'normal') !== 'normal' || (saved.status || '正常') !== '正常' ||
-        inventoryState(mailbox) === 'used' || list(mailbox.usageLinks).length || sources.has(mailbox.id) ||
+        inventoryState(mailbox) === 'used' || (mailbox.type === 'microsoft' && mailbox.mailboxUsage === 'used') ||
+        list(mailbox.usageLinks).length || sources.has(mailbox.id) ||
         previousUsage.has(mailbox.id) ||
         list(next.registrationRecords).some(record => record.assetId === mailbox.id && record.state === '待核对'))
       return '来源邮箱已变化或已有实际使用，请重新核对';

@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from 'node:util';
+import { isPlatformOnlyMark } from './mailbox-registration-platform.mjs';
 
 const entryKeys = ['type', 'email', 'password', 'phone', 'country', 'city', 'source', 'registered', 'device',
   'emailType', 'totp', 'auxiliary', 'appPassword', 'security1', 'security2', 'security3', 'birthday',
@@ -85,11 +86,20 @@ export function checkInventoryEntryFields(previous, next, action) {
     if (changed('acquisitionMethod') && row.acquisitionMethod === 'purchased' && row.sourceMailboxId)
       return '已关联注册邮箱的账号须保留原来源记录';
     if (row.type === 'microsoft') {
+      const verifiedUse = old && (useState(old) === 'used' ||
+        (old.mailboxUsage === 'used' && old.usageLinks?.some(isPlatformOnlyMark)));
+      if (verifiedUse && changed('mailboxUsage'))
+        return '实际使用状态请通过使用关联核对';
       if (changed('mailboxUsage') && (!entryAction || !['', 'available', 'used'].includes(row.mailboxUsage || '')))
         return '请在微软邮箱资料中登记已知的使用状态';
       if (old && row.email !== old.email) return '邮箱地址创建后不可修改';
+      const existingLinks = old?.usageLinks ?? [];
+      const links = row.usageLinks ?? [];
+      const marksOnly = action === 'inventory_registration_result' && Array.isArray(links) && links.length > existingLinks.length &&
+        isDeepStrictEqual(links.slice(0, existingLinks.length), existingLinks) &&
+        links.slice(existingLinks.length).every(isPlatformOnlyMark);
       if (useState(row) !== useState(old) || row.claimId !== old?.claimId || row.claimBatchId !== old?.claimBatchId ||
-          !isDeepStrictEqual(row.usageLinks ?? [], old?.usageLinks ?? []))
+          (!marksOnly && !isDeepStrictEqual(links, existingLinks)))
         return '微软邮箱库存暂未接入提取、归还和使用流程';
       if (old && sameEntryFields(old, row)) continue;
       if (!entryAction && (action !== 'inventory_undo' || !old)) return '请从微软邮箱管理录入或编辑资料';

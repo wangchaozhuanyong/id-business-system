@@ -6,6 +6,9 @@ import { interceptDesign, origin, separatorSnapshot, settle } from './helpers/of
 import { checkInventoryEntryFields } from '../server/inventory-entry-fields.mjs';
 import { attributeInventory, defaultInventoryRegistrationTimes } from '../server/inventory-attribution.mjs';
 import { checkInventoryHistory } from '../server/inventory-history.mjs';
+import { checkRegistrationChanges } from '../server/inventory-registration.mjs';
+import { applyInventoryUsage, inspectInventoryUsage, usageReviewRows } from '../server/inventory-usage.mjs';
+import { preparePersonalInventory } from '../server/personal-subscriptions.mjs';
 import { createStaffWorkspaces, staffPath } from '../server/staff-workspaces.mjs';
 
 const route = '/#/mailboxes/microsoft';
@@ -18,7 +21,7 @@ const security = { loginMode: 'password', recoveryAccess: 'unknown', twoStep: 'u
 
 async function fixture(browser, width, rows = []) {
   const context = await browser.newContext({ viewport: { width, height: 900 }, serviceWorkers: 'block' });
-  const requests = await interceptDesign(context, { localFixtures: {}, actor });
+  const requests = await interceptDesign(context, { localFixtures: {}, actor, skipRechargeAssets: true });
   let version = 1;
   let data = { mailboxes: [recovery, ...rows], accounts: [], batches: [], returnRecords: [],
     importRecords: [], registrationRecords: [], tableSettings: [], undo: [] };
@@ -32,14 +35,17 @@ async function fixture(browser, width, rows = []) {
       if (version !== write.version)
         return requestRoute.fulfill({ status: 409, json: { error: '库存版本已变化' } });
       const issue = checkInventoryEntryFields(data, write.data, write.action) ||
-        attributeInventory(data, write.data, actor, write.action) || checkInventoryHistory(data, write.data);
+        preparePersonalInventory(data, write.data, write.action, actor, new Date(), inspectInventoryUsage(data)) ||
+        attributeInventory(data, write.data, actor, write.action) || checkInventoryHistory(data, write.data) ||
+        checkRegistrationChanges(data, write.data, write.action, actor);
       if (issue) return requestRoute.fulfill({ status: 400, json: { error: issue } });
       defaultInventoryRegistrationTimes(data, write.data);
       data = write.data;
+      applyInventoryUsage(inspectInventoryUsage(data), actor, new Date(), data);
       version++;
       actions.push(write.action);
     }
-    await requestRoute.fulfill({ json: { version, data, usageReview: [], accountSummaries: [] } });
+    await requestRoute.fulfill({ json: { version, data, usageReview: usageReviewRows(inspectInventoryUsage(data)), accountSummaries: [] } });
   });
   const page = await context.newPage();
   page.setDefaultTimeout(6000);
@@ -83,13 +89,11 @@ test('微软库存录入、失败重试、回读、编辑、关联、状态及�
   assert.equal(await drawer.locator('#inventory-microsoft-method-authenticator').isChecked(), true);
   f.failSaves(true);
   await save();
-  await accept();
   await page.getByText('本次操作未保存，请检查本机服务后重试', { exact: true }).waitFor();
   assert.equal(stock(), undefined);
   assert.equal(await drawer.locator('#inventory-microsoft-device').inputValue(), '离线确认手机');
   f.failSaves(false);
   await save();
-  await accept();
   await drawer.waitFor({ state: 'hidden' });
   await detail(address);
   assert.equal(stock().phone, '');
@@ -109,7 +113,6 @@ test('微软库存录入、失败重试、回读、编辑、关联、状态及�
   await drawer.locator('#inventory-microsoft-login').selectOption('password');
   await drawer.locator('#inventory-password').fill(loginFixture);
   await save();
-  await accept();
   await drawer.waitFor({ state: 'hidden' });
   assert.equal(stock().password, loginFixture);
   await row.getByRole('button', { name: '更多操作' }).click();
@@ -121,7 +124,7 @@ test('微软库存录入、失败重试、回读、编辑、关联、状态及�
 
   await main.getByRole('button', { name: '批量导入' }).click();
   const csv = drawer.locator('#inventory-import-content');
-  const preview = () => drawer.getByRole('button', { name: '检查并预览' }).click();
+  const preview = () => drawer.getByRole('button', { name: '预览资料', exact: true }).click();
   const importButton = drawer.getByRole('button', { name: '确认导入', exact: true });
   assert.equal(await drawer.getByRole('button', { name: '复制示例 CSV' }).isVisible(), true);
   await csv.fill(`邮箱,登录密码\n${address.toUpperCase()},${loginFixture}\nnew@example.test,${loginFixture}`);
@@ -136,8 +139,6 @@ test('微软库存录入、失败重试、回读、编辑、关联、状态及�
   await drawer.locator('#inventory-import-source').selectOption('线上购买');
   await importButton.click();
   assert.equal(await confirm.isVisible(), false);
-  await importButton.click();
-  await accept();
   await drawer.waitFor({ state: 'hidden' });
   const imported = f.snapshot().mailboxes.find(row => row.email === 'import-ms@example.test');
   assert.equal(imported.password, rowPassword);
@@ -170,17 +171,17 @@ test('邮箱工作台录入和导入微软邮箱，共用库存及录入草稿',
   const browser = await chromium.launch();
   t.after(() => browser.close());
   const f = await fixture(browser, 390);
-  const { page, main, drawer, confirm } = f;
+  const { page, main, drawer } = f;
   const workspace = 'workspace/mail-extract';
   const go = async path => {
     await page.evaluate(path => window.IDDesignAPI.go(path), path);
     await page.locator(`#main[data-layout-route="${path}"]`).waitFor();
   };
   const close = () => drawer.getByRole('button', { name: '关闭抽屉' }).click();
-  const save = async () => {
+  const save = async name => {
     const response = page.waitForResponse(r =>
       r.request().method() === 'PUT' && new URL(r.url()).pathname === '/api/local/inventory');
-    await confirm.locator('[data-action="confirm-accept"]').click();
+    await drawer.getByRole('button', { name, exact: true }).click();
     assert.equal((await response).status(), 200);
     await drawer.waitFor({ state: 'hidden' });
   };
@@ -206,8 +207,7 @@ test('邮箱工作台录入和导入微软邮箱，共用库存及录入草稿',
   await close();
   await go(workspace);
   await add();
-  await drawer.getByRole('button', { name: '核对并保存' }).click();
-  await save();
+  await save('核对并保存');
   const created = f.snapshot().mailboxes.find(row => row.email === address);
   assert.equal(created.type, 'microsoft');
   assert.equal(created.microsoftSecurity.verificationDevice, '');
@@ -216,9 +216,8 @@ test('邮箱工作台录入和导入微软邮箱，共用库存及录入草稿',
   assert.equal(await drawer.locator('#inventory-import-type-display').inputValue(), '微软邮箱');
   assert.equal(await drawer.getByRole('button', { name: '复制示例 CSV' }).isVisible(), true);
   await drawer.locator('#inventory-import-content').fill(`邮箱,登录密码\n${importedAddress},${loginFixture}`);
-  await drawer.getByRole('button', { name: '检查并预览' }).click();
-  await drawer.getByRole('button', { name: '确认导入', exact: true }).click();
-  await save();
+  await drawer.getByRole('button', { name: '预览资料', exact: true }).click();
+  await save('确认导入');
   assert.equal(f.snapshot().importRecords[0].type, 'microsoft');
   assert.equal(f.snapshot().importRecords[0].success, 1);
   const recent = main.getByRole('region', { name: '提交资料' }).locator('.inventory-workspace-records li');
@@ -245,7 +244,7 @@ test('旧微软邮箱可补使用状态，健康状态独立筛选', async t => 
     source: '自己注册', status: '封控中' };
   const f = await fixture(browser, 1440, [historical]);
   t.after(() => f.context.close());
-  const { main, drawer, confirm } = f;
+  const { main, drawer } = f;
   const row = main.locator('tr[data-row-id="old-ms"]');
   await row.locator('[data-column="use"] .tag').filter({ hasText: '未登记' }).waitFor();
   await row.getByRole('button', { name: '编辑', exact: true }).click();
@@ -253,7 +252,6 @@ test('旧微软邮箱可补使用状态，健康状态独立筛选', async t => 
   await drawer.locator('#inventory-phone').fill('0123456789');
   await drawer.locator('#inventory-microsoft-device').fill('历史验证设备');
   await drawer.getByRole('button', { name: '核对并保存' }).click();
-  await confirm.locator('[data-action="confirm-accept"]').click();
   await row.locator('[data-column="use"] .tag').filter({ hasText: '已使用' }).waitFor();
   const saved = f.snapshot().mailboxes.find(item => item.id === historical.id);
   assert.equal(saved.mailboxUsage, 'used');
@@ -269,6 +267,44 @@ test('旧微软邮箱可补使用状态，健康状态独立筛选', async t => 
   await main.getByLabel('筛选使用状态').selectOption('unknown');
   assert.equal(await row.count(), 0);
   assert.deepEqual(f.errors, []);
+});
+
+test('GPT 保存微软来源邮箱后，库存计数和两侧详情随保存回读', { timeout: 20000 }, async t => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const mailbox = { id: 'ms-source', type: 'microsoft', email: 'stock-outlook@example.test', source: '自己注册',
+    mailboxUsage: 'available', status: '正常', inventoryState: 'available', microsoftSecurity: security };
+  const f = await fixture(browser, 1440, [mailbox]);
+  const { page, main, drawer } = f;
+  await main.getByRole('tab', { name: /未使用\s*1$/ }).waitFor();
+  await page.evaluate(() => window.IDDesignAPI.go('accounts/gpt'));
+  await main.getByRole('button', { name: '新增账号', exact: true }).click();
+  await drawer.locator('#inventory-sourceMailboxId').selectOption(mailbox.id);
+  assert.equal(await drawer.locator('#inventory-email').inputValue(), mailbox.email);
+  assert.equal(await drawer.locator('#inventory-emailType').inputValue(), 'microsoft');
+  await drawer.locator('#inventory-country-edit').selectOption('马来西亚');
+  await drawer.getByRole('button', { name: '核对并保存', exact: true }).click();
+  await drawer.waitFor({ state: 'hidden' });
+  const account = f.snapshot().accounts[0];
+  assert.equal(account.sourceMailboxId, mailbox.id);
+  await main.getByRole('button', { name: mailbox.email, exact: true }).click();
+  await drawer.getByRole('button', { name: '查看来源邮箱', exact: true }).click();
+  await drawer.getByRole('button', { name: '查看关联账号', exact: true }).waitFor();
+  await drawer.getByText('已使用', { exact: true }).waitFor();
+  await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
+  await main.locator(`tr[data-row-id="${account.id}"]`).getByRole('button', { name: '编辑', exact: true }).click();
+  assert.equal(await drawer.getByLabel('邮箱类型', { exact: true }).inputValue(), '微软邮箱');
+  assert.equal(await drawer.getByLabel('邮箱类型', { exact: true }).isDisabled(), true);
+  await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
+  await page.evaluate(() => window.IDDesignAPI.go('mailboxes/microsoft'));
+  await main.getByRole('tab', { name: /已使用\s*1$/ }).click();
+  await main.getByRole('tab', { name: /未使用\s*0$/ }).waitFor();
+  const row = main.locator('tr[data-row-id="ms-source"]');
+  await row.getByRole('button', { name: '编辑', exact: true }).click();
+  assert.equal(await drawer.getByLabel('使用状态', { exact: true }).inputValue(), '已使用');
+  assert.equal(await drawer.getByLabel('使用状态', { exact: true }).isDisabled(), true);
+  assert.deepEqual(f.errors, []);
+  assert.deepEqual(f.requests.external, []);
 });
 
 test('微软邮箱桌面与手机的列表和抽屉布局', { timeout: 50000 }, async (t) => {

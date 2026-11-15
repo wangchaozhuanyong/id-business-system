@@ -54,7 +54,7 @@ try {
     page.setDefaultTimeout(5000);
     await page.goto(origin + '/#/mailboxes/relay');
     await page.locator('[data-action="relay-tab"][data-tab="aliases"]').click();
-    await page.locator('[data-action="relay-alias-more"][data-id="relay-used"]:visible').waitFor();
+    await page.locator('[data-action="relay-alias-more"]:visible').first().waitFor();
     await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
     const drawer = page.locator('#drawer');
     const open = async id => {
@@ -75,27 +75,35 @@ try {
           const a = label.getBoundingClientRect(), b = control.getBoundingClientRect();
           const range = document.createRange(); range.selectNodeContents(label);
           const text = range.getBoundingClientRect();
-          return { label: label.textContent, leftOfControl: a.right <= b.left + 1,
-            labelCenter: text.y + text.height / 2, controlCenter: b.y + b.height / 2 };
+          return { label: label.textContent, verticalGap: b.top - Math.max(a.bottom, text.bottom),
+            leftOffset: Math.abs(text.left - b.left), controlRight: b.right, containerRight: form.getBoundingClientRect().right };
         }).filter(Boolean);
         return { overflow: document.documentElement.scrollWidth > innerWidth + 1, fields };
       });
       assert.equal(geometry.overflow, false, `${width}/${theme}/${state}: 横向溢出`);
       await writeFile(output + '/latest-geometry.json', JSON.stringify({ width, theme, state, ...geometry }, null, 2));
       await page.screenshot({ path: output + '/latest.png' });
+      if (state === 'platform-drawer') assert.equal(geometry.fields.length, 3);
       for (const field of geometry.fields) {
-        assert(field.leftOfControl, `${width}/${theme}/${state}: 标签必须在控件左侧`);
-        assert(Math.abs(field.labelCenter - field.controlCenter) <= 2, '首行控件与标签对齐：' + JSON.stringify(field));
+        assert(field.verticalGap >= -1, `${width}/${theme}/${state}: 标签应位于控件上方`);
+        assert(field.leftOffset <= 2 && field.controlRight <= field.containerRight + 1, JSON.stringify(field));
       }
       results.push({ width, theme, state, ...geometry });
     };
+    const row = id => page.locator('tr').filter({ has: page.locator(`[data-action="relay-alias-more"][data-id="${id}"]`) });
+    const search = async id => {
+      const control = page.locator('#relay-search');
+      await control.fill(id + '@example.test');
+      await row(id).locator('[data-action="relay-alias-more"]:visible').waitFor();
+      await page.waitForFunction(() => document.querySelectorAll('[data-action="relay-alias-more"]').length === 1);
+    };
     assert(await page.locator('th').filter({ hasText: '注册平台' }).count());
     assert(await page.getByText('平台未登记', { exact: true }).count());
-    const row = id => page.locator('tr').filter({ has: page.locator(`[data-action="relay-alias-more"][data-id="${id}"]`) });
     const expand = async id => {
       const control = row(id).locator('[data-action="table-mobile-toggle"]');
       if (await control.isVisible() && await control.getAttribute('aria-expanded') === 'false') await control.click();
     };
+    await search('relay-known');
     await expand('relay-known');
     await row('relay-known').getByRole('button', { name: 'gpt-known', exact: true }).click();
     await drawer.getByRole('button', { name: '查看邮箱领用批次', exact: true }).waitFor();
@@ -104,6 +112,7 @@ try {
     assert.match(await drawer.innerText(), /账号状态\s*死号/);
     assert.match(await drawer.innerText(), /账号状态变更时间\s*2026-10-02 12:00/);
     await drawer.locator('[data-action="drawer-close"]').last().click();
+    await search('relay-used');
     await measure('used-list');
     await open('relay-used');
     assert.equal(await drawer.locator('option[value="gemini"]').count(), 0);
@@ -137,8 +146,14 @@ try {
     await page.keyboard.press('Escape');
     await measure('single-platform');
     if ([1440, 390].includes(width)) await page.screenshot({ path: `${output}/list-${width}-${theme}.png` });
+    await page.locator('#relay-search').fill('');
+    await page.getByRole('button', { name: '下一页', exact: true }).waitFor();
+    const listIds = () => page.locator('[data-action="relay-alias-more"]').evaluateAll(buttons => buttons.map(button => button.dataset.id));
+    const firstPage = await listIds();
     await page.getByRole('button', { name: '下一页', exact: true }).click();
-    await page.locator('[data-action="relay-alias-more"][data-id="relay-page-21"]:visible').waitFor();
+    const lastPage = await listIds();
+    assert(lastPage.length > 0 && lastPage.every(id => !firstPage.includes(id)));
+    assert.equal(firstPage.length + lastPage.length, 24);
     await measure('last-page');
     await page.getByRole('button', { name: '上一页', exact: true }).click();
     await page.locator('#relay-search').fill('Claude');
@@ -147,11 +162,10 @@ try {
     await page.locator('#relay-search').fill('no-such-platform-fixture');
     await page.waitForFunction(() => document.querySelectorAll('[data-action="relay-alias-more"]').length === 0);
     await measure('empty-search');
-    await page.locator('#relay-search').fill('');
-    await page.locator('[data-action="relay-alias-more"][data-id="relay-used"]:visible').waitFor();
 
     if (width === 1440 && theme === 'light') {
       // A late response may not clear edits made after its submission snapshot.
+      await search('relay-page-0');
       await open('relay-page-0');
       await drawer.locator('#inventory-platform-product').selectOption('gpt');
       let release;
@@ -168,6 +182,7 @@ try {
       // A real reload reads the saved synthetic document, rather than a view-only label.
       await page.reload();
       await page.locator('[data-action="relay-tab"][data-tab="aliases"]').click();
+      await search('relay-page-0');
       await row('relay-page-0').getByText('ChatGPT', { exact: true }).waitFor();
       assert.equal(document.mailboxes.find(row => row.id === 'relay-page-0').usageLinks.length, 1);
       for (const type of ['google', 'microsoft']) {
@@ -210,8 +225,8 @@ try {
       await drawer.locator('[data-action="inventory-close"]').click();
       await page.locator('#main [data-action="inventory-import"]').click();
       await drawer.locator('#inventory-import-content').fill('邮箱,账号登录方式\nrelay-known@example.test,邮箱登录');
-      await drawer.getByRole('button', { name: '检查并预览', exact: true }).click();
-      await drawer.getByText(duplicateMessage, { exact: true }).waitFor();
+      await drawer.getByRole('button', { name: '预览资料', exact: true }).click();
+      await drawer.locator('#inventory-import-results').getByText(duplicateMessage, { exact: true }).waitFor();
       assert.equal(await drawer.locator('[data-action="inventory-import-confirm"]').isDisabled(), true);
       assert.equal(saves, writesBeforeDuplicates);
     }

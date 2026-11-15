@@ -5,6 +5,7 @@ import { projectSubscriptions } from '../server/subscription-management.mjs';
 import { createLocalBusinessStore } from '../server/local-business.mjs';
 import { checkRegistrationChanges } from '../server/inventory-registration.mjs';
 import { applyInventoryUsage, inspectInventoryUsage } from '../server/inventory-usage.mjs';
+import { readInventoryPage } from '../server/business-lists.mjs';
 
 const actor = { id: 'operator-a', name: '测试员甲', role: 'admin' };
 const other = { id: 'operator-b', name: '测试员乙', role: 'admin' };
@@ -13,6 +14,10 @@ const occurred = '2026-01-01T11:30';
 const stock = (id, type, email = `${id}@example.test`) => ({
   id, type, email, ...(['google', 'claude'].includes(type) ? { country: '马来西亚', device: '合成设备' } : {}),
   ...(type === 'claude' ? { proxyUrl: 'socks5://proxy.example.test:1080' } : {}), inventoryState: 'available', health: 'normal', status: '正常', usageLinks: [], version: 1
+});
+const microsoftStock = (id, email = `${id}@example.test`, mailboxUsage = 'available') => ({
+  ...stock(id, 'microsoft', email), source: '自己注册', mailboxUsage,
+  microsoftSecurity: { loginMode: 'passwordless', recoveryAccess: 'unknown', twoStep: 'enabled', verificationMethods: ['passkey'] }
 });
 const document = (mailboxes = [], accounts = []) => ({
   mailboxes, accounts, batches: [], returnRecords: [], importRecords: [], registrationRecords: [],
@@ -251,6 +256,108 @@ test('已登记邮箱、账号、成品订单及实收在同一业务链自动�
   assert.equal(records[0].status, 'active');
   assert.equal(records[0].history[0].orderNo, recorded.orderNo);
   assert.equal(calculateOrder(saved.data.orders[0]).profit, '80.0000');
+});
+
+test('微软库存单条登记和批导实时回写账号、平台与统计，更正后保留原手工状态', (t) => {
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  const mail = microsoftStock('outlook');
+  const explicit = microsoftStock('hotmail');
+  const listMail = (tab = 'all') => readInventoryPage({ type: 'microsoft', tab, page: 1, pageSize: 20 },
+    store.inventorySnapshot(), store.load('commerce').data);
+  save(store, 'inventory', document([mail, explicit]), 'inventory_import');
+  assert.equal(listMail().counts.available, 2);
+
+  const afterIntake = store.load('inventory').data;
+  afterIntake.accounts.push({
+    ...stock('outlook-gpt', 'gpt', mail.email.toUpperCase()), source: '自己注册',
+    acquisitionMethod: 'self_registered', emailType: '微软邮箱', registered: occurred
+  });
+  save(store, 'inventory', afterIntake, 'inventory_import');
+  const afterImport = store.load('inventory').data;
+  assert.equal(afterImport.accounts[0].sourceMailboxId, mail.id);
+  assert.equal(afterImport.accounts[0].emailType, 'microsoft');
+  assert.equal(afterImport.accounts[0].inventoryState, 'available');
+  assert.equal(afterImport.mailboxes[0].usageLinks[0].accountId, 'outlook-gpt');
+  assert.equal(afterImport.mailboxes[0].mailboxUsage, 'available');
+  assert.equal(listMail().counts.available, 1);
+  assert.equal(listMail().counts.used, 1);
+  assert.deepEqual(listMail('used').rows.map(row => [row.id, row.list.platformLabel]), [[mail.id, 'ChatGPT']]);
+  const mismatch = structuredClone(afterImport);
+  mismatch.accounts[0].emailType = 'google';
+  assert.throws(() => save(store, 'inventory', mismatch, 'inventory_edit'), /已关联的微软邮箱类型须保留/);
+
+  afterImport.accounts.push({
+    ...stock('hotmail-claude', 'claude', explicit.email), source: '自己注册', acquisitionMethod: 'self_registered',
+    emailType: 'microsoft', sourceMailboxId: explicit.id, registered: occurred
+  });
+  save(store, 'inventory', afterImport, 'inventory_create');
+  const afterCreate = store.inventorySnapshot();
+  assert.equal(afterCreate.data.mailboxes[1].usageLinks[0].accountId, 'hotmail-claude');
+  assert.equal(afterCreate.data.registrationRecords[0].assetId, explicit.id);
+  assert.equal(listMail().counts.used, 2);
+  afterCreate.data.mailboxes[0].mailboxUsage = 'used';
+  assert.throws(() => save(store, 'inventory', afterCreate.data, 'inventory_edit'), /实际使用状态请通过使用关联核对/);
+
+  store.saveInventoryUsageCorrection({ version: afterCreate.version,
+    data: { assetId: mail.id, linkIndex: 0, reason: '测试更正误关联' } }, actor);
+  const corrected = store.inventorySnapshot();
+  assert.equal(corrected.data.mailboxes[0].usageCorrections[0].originalLink.accountId, 'outlook-gpt');
+  assert.equal(corrected.data.accounts[0].sourceMailboxId, undefined);
+  assert.equal(listMail().counts.used, 1);
+  assert.equal(listMail().counts.available, 1);
+  save(store, 'inventory', corrected.data, 'inventory_reconcile_usage');
+  assert.equal(store.load('inventory').data.mailboxes[0].usageLinks.length, 0);
+});
+
+test('已有微软注册资料等核对才补链，手工已使用和订单地址不被自动消耗', (t) => {
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  const mail = microsoftStock('outlook-history');
+  const otherMail = microsoftStock('hotmail-manual', undefined, 'used');
+  const existing = [mail, otherMail].map(row => ({
+    ...stock(row.id + '-gpt', 'gpt', row.email), emailType: 'microsoft', registered: occurred
+  }));
+  save(store, 'inventory', document([], existing), 'inventory_import');
+  const next = store.load('inventory').data;
+  next.mailboxes.push(mail, otherMail);
+  save(store, 'inventory', next, 'inventory_import');
+  const review = store.inventorySnapshot();
+  assert.equal(review.data.mailboxes[0].inventoryState, 'available');
+  assert.equal(review.data.mailboxes[1].inventoryState, 'available');
+  assert.equal(review.usageReview.find(row => row.assetId === mail.id)?.status, 'used');
+  assert.equal(review.usageReview.find(row => row.assetId === otherMail.id)?.status, 'review');
+  save(store, 'inventory', review.data, 'inventory_reconcile_usage');
+  const confirmed = store.inventorySnapshot();
+  assert.equal(confirmed.data.mailboxes[0].usageLinks[0].accountId, existing[0].id);
+  assert.equal(confirmed.data.mailboxes[1].usageLinks.length, 0);
+  assert.equal(confirmed.data.batches.length, 0);
+  save(store, 'inventory', confirmed.data, 'inventory_reconcile_usage');
+  assert.equal(store.load('inventory').data.mailboxes[0].usageLinks.length, 1);
+
+  const marked = store.load('inventory').data;
+  marked.mailboxes[1].usageLinks.push({ kind: 'registration', product: 'gpt' });
+  save(store, 'inventory', marked, 'inventory_registration_result');
+  const verified = store.inventorySnapshot();
+  assert.equal(verified.data.mailboxes[1].usageLinks.length, 1);
+  assert.equal(verified.usageReview.find(row => row.assetId === otherMail.id)?.status, 'used');
+  const incorrectEdit = structuredClone(verified.data);
+  incorrectEdit.mailboxes[1].mailboxUsage = 'available';
+  assert.throws(() => save(store, 'inventory', incorrectEdit, 'inventory_edit'), /实际使用状态请通过使用关联核对/);
+  save(store, 'inventory', verified.data, 'inventory_reconcile_usage');
+  const linked = store.load('inventory').data;
+  assert.equal(linked.mailboxes[1].usageLinks[1].accountId, existing[1].id);
+  assert.equal(linked.mailboxes[1].mailboxUsage, 'used');
+  assert.equal(linked.batches.length, 0);
+
+  const orderMail = microsoftStock('outlook-order-only');
+  const unregistered = { ...stock('purchased-gpt', 'gpt', orderMail.email), emailType: 'microsoft',
+    acquisitionMethod: 'purchased', registered: occurred };
+  const inventory = document([orderMail], [unregistered]);
+  assert.equal(inspectInventoryUsage(inventory, commerce([order(orderMail.email,
+    { accountId: unregistered.id })])).has(orderMail.id), false);
+  const customerOwned = { ...unregistered, acquisitionMethod: 'self_registered', source: '客户提供' };
+  assert.equal(inspectInventoryUsage(document([orderMail], [customerOwned]), commerce()).has(orderMail.id), false);
 });
 
 test('历史补录邮箱引用原账号，不凭空生成领取批次', (t) => {

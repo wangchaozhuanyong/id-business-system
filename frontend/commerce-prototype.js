@@ -5681,8 +5681,9 @@
       if (order.accountId) order.accountSource = '库存';
     }
     if (!existingOrder) {
-      order.emailCostAmount ||= '0';
-      order.emailCostCurrency ||= 'CNY';
+      const preserveCost = order.accountId || order.claudeRenewalId || raw['commerce-emailCostManual'];
+      order.emailCostAmount = (preserveCost && order.emailCostAmount) || '0';
+      order.emailCostCurrency = (preserveCost && order.emailCostCurrency) || 'CNY';
     } else {
       for (const key of ['start', 'expiry']) {
         if (order[key] === dateInput(existingOrder[key])) order[key] = existingOrder[key] ?? '';
@@ -10754,8 +10755,11 @@
     if (personalProduct(form.elements['commerce-product'].value)) return refreshPersonalAccounts(form);
     const email = form.querySelector('#commerce-email');
     if (!email) return;
-    const stock = form.elements['commerce-businessType'].value === '成品交付';
-    const existing = orders.find((row) => row.id === form.elements['commerce-id'].value);
+    const controls = form.elements;
+    const stock = controls['commerce-businessType'].value === '成品交付';
+    const existing = orders.find((row) => row.id === controls['commerce-id'].value);
+    const account = controls['commerce-accountId'];
+    let selected;
     if (stock && !existing) {
       if (localData && !stockForms.has(form)) {
         stockForms.add(form);
@@ -10765,21 +10769,20 @@
         });
       }
       email.placeholder = '选填，可搜索库存或录入系统外账号';
-      const account = form.elements['commerce-accountId'];
-      const selected = availableStock(form.elements['commerce-product'].value).find(
+      selected = availableStock(controls['commerce-product'].value).find(
         row => row.id === account.value && row.email.toLowerCase() === email.value.trim().toLowerCase()
       );
       if (!selected) account.value = '';
-      const cost = form.elements['commerce-emailCostAmount'];
-      if (selected && !form.elements['commerce-emailCostManual']?.value && cost) {
-        const key = emailCostRule[selected.emailType];
-        cost.value = (key && costSettings[key]) || '0';
-        form.elements['commerce-emailCostCurrency'].value = 'CNY';
-      }
     } else {
       email.removeAttribute('list');
       email.placeholder = '选填，可选择历史邮箱或手动填写';
-      if (!existing?.accountId) form.elements['commerce-accountId'].value = '';
+      if (!existing?.accountId) account.value = '';
+    }
+    const cost = controls['commerce-emailCostAmount'];
+    if (!existing && !controls['commerce-claudeRenewalId'].value && !controls['commerce-emailCostManual']?.value && cost) {
+      const key = selected && emailCostRule[selected.emailType];
+      cost.value = (key && costSettings[key]) || '0';
+      controls['commerce-emailCostCurrency'].value = 'CNY';
     }
     updateCustomerEmailHistory(form);
   }

@@ -2838,8 +2838,14 @@ export function createLocalBusinessStore(databasePath) {
             for (const id of matches.keys()) if (!relayIntake.aliasIds.has(id)) matches.delete(id);
           } else if (inventoryWrite?.action !== 'inventory_reconcile_usage') {
             const originalMailboxes = new Map((priorInventory?.mailboxes || []).map(asset => [asset.id, asset]));
+            const originalAccounts = new Set((priorInventory?.accounts || []).map(account => account.id));
             for (const [id, match] of matches) {
               const prior = priorUsage.get(id);
+              if (match.asset.type === 'microsoft' && match.evidence.kind === 'registration' &&
+                  originalAccounts.has(match.evidence.accountId)) {
+                matches.delete(id);
+                continue;
+              }
               if (match.evidence.kind === 'registration' && match.status === 'used' &&
                   !originalMailboxes.get(id)?.usageLinks?.some(link => link.kind === 'registration' && link.accountId === match.evidence.accountId))
                 continue;
