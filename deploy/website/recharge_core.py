@@ -90,7 +90,9 @@ def ready_native(sha, image, expected_mounts):
                     sources = json.loads(run(["docker", "exec", state["id"], "node", "--input-type=module",
                                               "-e", script], timeout=30))
                     require(sources.get("revision") == PINNED_UPSTREAM and sources.get("files") == 203 and
-                            sources.get("originalFiles") == 198, "running_native_sources_mismatch")
+                            sources.get("originalFiles") == 197 and
+                            sources.get("plusTrialFiles") == ['pricing-checkout.js', 'stripe-payment.js'],
+                            "running_native_sources_mismatch")
                     return state
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
             pass
