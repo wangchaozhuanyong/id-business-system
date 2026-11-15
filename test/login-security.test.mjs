@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { Readable } from 'node:stream';
 import { randomBytes } from 'node:crypto';
 import { createLocalAuth, initializeLocalAdmin, recoverLocalLogin } from '../server/local-auth.mjs';
+import { nativeBrowserVerification, nativeManagerAccess } from '../server/access-roles.mjs';
 import { createLoginThrottle, loadLoginSecurity, verifiedAddress } from '../server/login-security.mjs';
 import { calculateTotp } from '../modules/tools/totp.mjs';
 
@@ -142,6 +143,9 @@ test('one-time login needs the second factor, recovery codes are consumed, and s
 test('approved browsers and verified networks constrain existing sessions and recover independently', async t => {
   const f = await fixture(t);
   const enrolled = await enroll(f);
+  assert.equal((await f.call('/security/confirm-password', {
+    cookie: enrolled.cookie, body: { password: credentials.password }
+  })).status, 200);
   const approved = await f.call('/security/device', { cookie: enrolled.cookie, body: { action: 'add-current' } });
   assert.equal(approved.status, 200);
   assert.match(approved.headers['Set-Cookie'], /HttpOnly; SameSite=Strict; Max-Age=7776000; Secure/);
@@ -175,4 +179,63 @@ test('approved browsers and verified networks constrain existing sessions and re
   assert.equal(result.data.lastRecovery.action, 'network');
   assert.equal((await f.call('/security', { cookie: firstBrowser })).data.deviceLock, true);
   assert.equal(verifiedAddress({ headers: { 'cf-connecting-ip': f.address }, socket: { remoteAddress: '127.0.0.1' } }, f.security), null);
+});
+
+test('routine recharge reads and probes only require the existing session and role', () => {
+  const ordinary = [
+    ['POST', '/api/admin/recharge-routing/check-local'],
+    ['POST', '/api/admin/recharge-routing/proxies/1/check'],
+    ['POST', '/api/admin/proxy/test'], ['POST', '/api/admin/proxies/1/test'],
+    ['POST', '/api/admin/hcaptcha/test'], ['POST', '/api/admin/subscription/batch-renewal-status'],
+    ['POST', '/api/admin/checkout/generate'], ['GET', '/api/admin/runtime-logs'],
+    ['GET', '/api/admin/sessions'], ['GET', '/api/admin/recharge-routing']
+  ];
+  const protectedActions = [
+    ['PUT', '/api/admin/recharge-routing'], ['PUT', '/api/admin/recharge-routing/proxies/1/country'],
+    ['DELETE', '/api/admin/cards/1'], ['DELETE', '/api/admin/cdks/1'],
+    ['POST', '/api/admin/runtime-logs/clear'], ['POST', '/api/admin/subscription/cancel-auto-renew'],
+    ['POST', '/api/admin/recharge-routing/proxies'], ['POST', '/api/admin/cdks/generate'],
+    ['GET', '/api/admin/sessions/fixture-job'], ['HEAD', '/api/admin/billing/export'],
+    ['GET', '/api/admin/cdks'], ['GET', '/api/admin/screenshots'], ['HEAD', '/api/admin/video']
+  ];
+  for (const [method, path] of ordinary) assert.equal(nativeBrowserVerification(path, method), false, path);
+  for (const [method, path] of protectedActions) assert.equal(nativeBrowserVerification(path, method), true, path);
+  assert.equal(nativeManagerAccess({ role: 'super' }, '/api/admin/billing/1', 'DELETE'), false);
+  assert.equal(nativeManagerAccess({ role: 'admin' }, '/api/admin/sessions', 'GET'), false);
+  assert.equal(nativeManagerAccess({ role: 'employee' }, '/api/admin/proxy/test', 'POST'), false);
+});
+
+test('important changes require a correct password on the current session, separately from the login factor', async t => {
+  const f = await fixture(t);
+  const enrolled = await enroll(f);
+  const change = {
+    cookie: enrolled.cookie, body: { action: 'add', name: '测试网络', network: '192.0.2.0/24', version: 0 }
+  };
+  const confirm = (password, cookie = enrolled.cookie, origin = domain) =>
+    f.call('/security/confirm-password', { cookie, origin, body: { password } });
+  assert.equal((await f.call('/security', { cookie: enrolled.cookie })).data.recentlyVerified, true);
+  assert.equal((await f.call('/security/network', change)).data.code, 'SECURITY_CONFIRMATION_REQUIRED');
+  assert.equal((await confirm(credentials.password, enrolled.cookie, 'https://other.test')).status, 403);
+  assert.equal((await confirm('wrong-fixture-value')).status, 400);
+  assert.equal((await f.call('/security', { cookie: enrolled.cookie })).data.passwordConfirmed, false);
+  f.advance(301_000);
+  assert.equal((await confirm(credentials.password)).status, 200);
+  const verified = (await f.call('/security', { cookie: enrolled.cookie })).data;
+  assert.equal(verified.passwordConfirmed, true);
+  assert.equal(verified.recentlyVerified, false);
+  assert.equal((await f.call('/security/start', {
+    cookie: enrolled.cookie, body: { password: credentials.password }
+  })).status, 403, '密码确认不授权更换验证器');
+  const login = await f.call('/login', { body: credentials });
+  const next = await f.call('/login/verify', {
+    body: { verification: login.data.verification, code: (await calculateTotp(enrolled.key, f.now())).code }
+  });
+  assert.equal(next.status, 200);
+  assert.equal((await f.call('/security', { cookie: next.cookie })).data.passwordConfirmed, false);
+  assert.equal((await f.call('/security/network', change)).status, 200);
+  f.advance(301_000);
+  assert.equal((await f.call('/security', { cookie: enrolled.cookie })).data.passwordConfirmed, false);
+  assert.equal((await f.call('/security/network', { ...change, body: { ...change.body, version: 1 } })).status, 403);
+  assert(f.events.some(event => event.action === 'auth_action_password'));
+  assert(!JSON.stringify(f.events).includes(credentials.password));
 });

@@ -565,7 +565,7 @@ test('shared layouts preserve alignment, readable controls and stable navigation
           const idle = await checkoutBounds();
           assert(!idle.overflow && idle.reader.height >= 200, JSON.stringify(idle));
           if (idle.width >= 1024) {
-            assert(idle.logs.right + 15 <= idle.parameters.left, '运行日志应独占左列');
+            assert(idle.parameters.right + 15 <= idle.logs.left, '生成参数在左，运行日志在右');
             assert(Math.abs(idle.logs.top - idle.parameters.top) <= 1 && idle.titleGap <= 1,
               '两列卡片及实际标题文字应对齐');
           } else {
@@ -579,6 +579,7 @@ test('shared layouts preserve alignment, readable controls and stable navigation
           assert(Math.abs(running.result.left - running.parameters.left) <= 1 &&
             Math.abs(running.result.width - running.parameters.width) <= 1 &&
             running.result.top >= running.parameters.bottom + 8, '任务状态应在参数下方并与其等宽');
+          if (running.width < 1024) assert(running.logs.top >= running.result.bottom + 8, '窄屏日志在任务状态下方');
           await checkout.locator('#checkout_debug_log_pre').evaluate(node => {
             node.textContent = Array.from({ length: 120 }, (_, i) =>
               `离线调试日志 ${i + 1}：${'长日志内容 '.repeat(24)}`).join('\n');

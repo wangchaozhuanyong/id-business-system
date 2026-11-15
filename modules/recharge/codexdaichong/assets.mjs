@@ -211,15 +211,9 @@ function adaptRemoteAdminPagination(source) {
                 if (!parsed.ok) {
                     throw new Error(parsed.message);
                 }`,
-    `                const res = await authFetch(\`/api/admin/sessions?\${query.toString()}\`, {
-                    securityConfirmation: showToast || options.page != null
-                });
+    `                const res = await authFetch(\`/api/admin/sessions?\${query.toString()}\`);
                 const parsed = await readJsonResponse(res);
                 if (requestId !== sessionPageRequestId) return;
-                if (!res.ok && parsed.data?.code === 'SECURITY_CONFIRMATION_REQUIRED') {
-                    showSessionListStatus('请点击「刷新」完成安全确认，再查看 Session 记录。');
-                    return;
-                }
                 if (!res.ok || !parsed.ok) {
                     throw new Error(parsed.data?.error || parsed.data?.message || parsed.message || '加载 Session 失败');
                 }
@@ -269,6 +263,183 @@ function adaptRemoteAdminPagination(source) {
             renderSharedAdminPagination(document.getElementById('orbitcard_usage_pagination'), 'orbitcard', orbitcardUsageState);
         }
   `);
+}
+
+function adaptAdminRuntimeLogs(source) {
+  source = replaceSection(source,
+    '        const RUNTIME_LOG_TEXT_CAP',
+    '        /** 后台定时 loadData',
+    '        let runtimeLogPollTimer = null;');
+  source = replaceSection(source,
+    '        function appendRuntimeLogEntries(',
+    '        function updateAdminDataRefreshButton()',
+    String.raw`
+        function createAdminRuntimeLogReader({ viewId, preId, followId, tailLimit, pageSize, textCap, retainedText, include }) {
+            const view = document.getElementById(viewId);
+            const pre = document.getElementById(preId);
+            const follow = document.getElementById(followId);
+            const status = document.getElementById(preId + '_status');
+            const visible = () => view.classList.contains('active') &&
+                !document.hidden && window.idRechargeVisible !== false;
+            let after = 0;
+            let text = '';
+            let pending;
+            let blocked = false;
+
+            function showStatus(message) {
+                if (status.textContent !== message) status.textContent = message;
+                status.hidden = !message;
+            }
+
+            function cancel() {
+                pending?.controller.abort();
+                pending = undefined;
+                blocked = false;
+            }
+
+            async function read({ tail = false, manual = false } = {}) {
+                if (!visible() || (!manual && blocked) || (pending && (!manual || pending.manual))) return false;
+                pending?.controller.abort();
+                const request = { controller: new AbortController(), manual };
+                pending = request;
+                const current = () => pending === request && visible();
+                try {
+                    const query = tail ? 'tail=1&limit=' + tailLimit : 'after=' + after + '&limit=' + pageSize;
+                    const response = await authFetch('/api/admin/runtime-logs?' + query, {
+                        signal: request.controller.signal
+                    });
+                    const data = await response.json().catch(() => null);
+                    if (!current()) return false;
+                    if (response.status === 403) {
+                        blocked = true;
+                        showStatus('当前无法读取运行日志，请核对账号权限。');
+                        return false;
+                    }
+                    const nextAfter = Number(data?.nextAfter);
+                    if (!response.ok || data?.success !== true || !Array.isArray(data.entries) ||
+                        !Number.isSafeInteger(nextAfter) || nextAfter < 0) {
+                        throw new Error('日志读取失败');
+                    }
+                    const entries = include ? data.entries.filter(include) : data.entries;
+                    let nextText = tail ? '' : text;
+                    if (entries.length) nextText += entries.map(formatRuntimeLogLine).join('\n') + '\n';
+                    if (nextText.length > textCap) nextText = nextText.slice(-retainedText);
+                    if (text !== nextText) {
+                        text = nextText;
+                        pre.textContent = text;
+                    }
+                    after = nextAfter;
+                    blocked = false;
+                    showStatus('');
+                    if (follow.checked && (tail || entries.length)) pre.parentElement.scrollTop = pre.parentElement.scrollHeight;
+                    return true;
+                } catch {
+                    if (current()) showStatus('暂时无法读取运行日志，可点击「刷新」重试。');
+                    return false;
+                } finally {
+                    if (pending === request) pending = undefined;
+                }
+            }
+
+            return { visible, read, cancel, clear() {
+                cancel();
+                after = 0;
+                text = '';
+                pre.textContent = '';
+                showStatus('');
+            } };
+        }
+
+        const runtimeLogReader = createAdminRuntimeLogReader({
+            viewId: 'runtime_logs', preId: 'runtime_log_pre', followId: 'runtime_log_autoscroll',
+            tailLimit: 1500, pageSize: 1000, textCap: 1_200_000, retainedText: 1_020_000
+        });
+
+        function stopRuntimeLogStream() {
+            clearInterval(runtimeLogPollTimer);
+            runtimeLogPollTimer = null;
+            runtimeLogReader.cancel();
+        }
+
+        function startRuntimeLogStream() {
+            stopRuntimeLogStream();
+            if (!runtimeLogReader.visible()) return;
+            void runtimeLogReader.read({ tail: true });
+            runtimeLogPollTimer = setInterval(() => {
+                if (!document.getElementById('runtime_log_pause').checked) void runtimeLogReader.read();
+            }, 2000);
+        }
+
+        async function refreshRuntimeLogsManual() {
+            if (await runtimeLogReader.read({ tail: true, manual: true })) showMessage('运行日志已刷新', 'success');
+        }
+  `);
+  source = replaceSection(source, "                runtimeLogText = '';",
+    "                showMessage(data.message || '已清空', 'success');",
+    `                runtimeLogReader.clear();
+                await runtimeLogReader.read({ tail: true });`);
+  source = replaceSection(source, '        let checkoutDebugLogAfter', '        function renderCheckoutDebugStatus(',
+    `        let checkoutDebugLogPollTimer = null;
+        let checkoutDebugStatusPollTimer = null;
+        const checkoutLogReader = createAdminRuntimeLogReader({
+            viewId: 'checkout_debug', preId: 'checkout_debug_log_pre', followId: 'checkout_log_autoscroll',
+            tailLimit: 2000, pageSize: 500, textCap: 120_000, retainedText: 100_000,
+            include: entry => entry.jobKey === checkoutDebugJobKey
+        });
+
+        function clearCheckoutDebugForm() {
+            document.getElementById('checkout_session_input').value = '';
+            document.getElementById('checkout_result_box').style.display = 'none';
+            checkoutLogReader.clear();
+        }
+
+        function stopCheckoutDebugLogStream() {
+            clearInterval(checkoutDebugLogPollTimer);
+            clearInterval(checkoutDebugStatusPollTimer);
+            checkoutDebugLogPollTimer = checkoutDebugStatusPollTimer = null;
+            checkoutLogReader.cancel();
+        }
+
+        function startCheckoutDebugLogStream() {
+            stopCheckoutDebugLogStream();
+            if (!checkoutDebugJobKey || !checkoutLogReader.visible()) return;
+            void checkoutLogReader.read({ tail: true });
+            checkoutDebugLogPollTimer = setInterval(() => void checkoutLogReader.read(), 1500);
+            checkoutDebugStatusPollTimer = setInterval(() => {
+                if (checkoutLogReader.visible()) void pollCheckoutDebugStatus(false);
+            }, 2000);
+        }
+
+        async function refreshCheckoutDebugLogs() {
+            if (!checkoutDebugJobKey) return;
+            if (await checkoutLogReader.read({ tail: true, manual: true })) {
+                await pollCheckoutDebugStatus(true);
+                showMessage('日志已刷新', 'success');
+            }
+        }
+
+        window.idRechargeSyncAdminLogs = () => {
+            if (checkoutLogReader.visible()) startCheckoutDebugLogStream();
+            else if (runtimeLogReader.visible()) startRuntimeLogStream();
+            else {
+                stopCheckoutDebugLogStream();
+                stopRuntimeLogStream();
+            }
+        };
+        document.addEventListener('visibilitychange', window.idRechargeSyncAdminLogs);
+  `);
+  source = replaceOne(source,
+    '        async function pollCheckoutDebugStatus(forceToast) {\n            if (!checkoutDebugJobKey) return;',
+    '        async function pollCheckoutDebugStatus(forceToast) {\n            const jobKey = checkoutDebugJobKey;\n            if (!jobKey) return;');
+  source = replaceOne(source,
+    'encodeURIComponent(checkoutDebugJobKey)}`);\n                const data = await res.json();\n                if (!data.success) return;',
+    'encodeURIComponent(jobKey)}`);\n                const data = await res.json();\n                if (checkoutDebugJobKey !== jobKey || !data.success) return;');
+  source = replaceSection(source, "            checkoutDebugLogText = '';",
+    "            try {\n                const res = await authFetch('/api/admin/checkout/generate',",
+    `            stopCheckoutDebugLogStream();
+            checkoutDebugJobKey = '';
+            checkoutLogReader.clear();`);
+  return source;
 }
 
 function adaptAdminScript(source, routingScript) {
@@ -453,14 +624,14 @@ function adaptAdminScript(source, routingScript) {
             if (response.status === 403 && (options.method && !['GET', 'HEAD'].includes(options.method) ||
                 securityConfirmation === true)) {
                 const detail = await response.clone().json().catch(() => null);
-                if (detail?.code === 'SECURITY_CONFIRMATION_REQUIRED') {
+                if (detail?.code === 'SECURITY_CONFIRMATION_REQUIRED' && !requestOptions.signal?.aborted) {
                     const verify = () => window.parent.IDAccountSecurity?.verify();
                     const confirmed = securityConfirmation
                         ? await (pendingReadVerification ??= Promise.resolve(verify()).finally(() => {
                             pendingReadVerification = null;
                         }))
                         : await verify();
-                    if (confirmed) response = await request();
+                    if (confirmed && !requestOptions.signal?.aborted) response = await request();
                 }
             }
             if (response.status === 401) {
@@ -492,6 +663,21 @@ function adaptAdminScript(source, routingScript) {
                 if (!res.ok || !data.success) throw new Error(data.message || '解除失败');`,
     `                const data = await res.json().catch(() => null);
                 if (!res.ok || !data?.success) throw new Error(data?.message || data?.error || '解除失败');`);
+  source = replaceOne(source,
+    'const res = await authFetch(`/api/admin/sessions/${encodeURIComponent(jobKey)}`);',
+    'const res = await authFetch(`/api/admin/sessions/${encodeURIComponent(jobKey)}`, { securityConfirmation: true });');
+  source = replaceOne(source,
+    "throw new Error(data.message || '加载 Session 失败');",
+    "throw new Error(data.error || data.message || '加载 Session 失败');");
+  source = replaceOne(source,
+    "if (pId === 'cdks') {\n                loadCdkList().catch",
+    "if (pId === 'cdks') {\n                loadCdkList(true).catch");
+  source = replaceOne(source,
+    '                    await loadCdkList();\n                } catch (cdkError)',
+    "                    if (document.getElementById('cdks')?.classList.contains('active')) await loadCdkList();\n                } catch (cdkError)");
+  source = replaceOne(source,
+    "async function loadCdkList() {\n            const cdkRes = await authFetch('/api/admin/cdks');",
+    "async function loadCdkList(securityConfirmation = false) {\n            const cdkRes = await authFetch('/api/admin/cdks', { securityConfirmation });");
   source = replaceSection(
     source,
     'async function ensureAdminSession()',
@@ -571,9 +757,7 @@ function adaptAdminScript(source, routingScript) {
             }`
   );
   source = replaceOne(source, '                loadAdminSecurityStatus().catch(() => { });', '');
-  for (const call of ['fetchRuntimeLogsIncremental();', 'fetchCheckoutDebugLogsIncremental();', 'pollCheckoutDebugStatus(false);'])
-    source = replaceOne(source, '                ' + call,
-      '                if (!document.hidden && window.idRechargeVisible !== false) ' + call);
+  source = adaptAdminRuntimeLogs(source);
   source = replaceOne(source, 'uptimeTickTimer = setInterval(renderUptimeTick, 1000);',
     'uptimeTickTimer = setInterval(() => { if (!document.hidden && window.idRechargeVisible !== false) renderUptimeTick(); }, 1000);');
   // The host must keep the last working iframe when its replacement cannot load.
@@ -1694,6 +1878,11 @@ function adaptHtml(source, kind) {
     );
     const checkoutRouteHint = '<p id="checkout_region_hint" style="font-size: 12px; color: var(--text-dim); margin-top: 10px;"></p>';
     source = replaceOne(source, checkoutRouteHint, checkoutRouteHint + '\n' + checkoutServerDiagnostic);
+    for (const id of ['checkout_debug_log_pre', 'runtime_log_pre']) {
+      const pre = '<pre id="' + id + '"';
+      source = replaceOne(source, pre,
+        '<p id="' + id + '_status" class="runtime-log-status" role="status" hidden></p>\n' + pre);
+    }
     source = source.replace(
       /\s*<div class="nav-item" onclick="logoutAdmin\(\)">[\s\S]*?<\/div>/,
       ''

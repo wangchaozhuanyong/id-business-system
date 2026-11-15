@@ -364,7 +364,7 @@ export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clo
         const params = new URL(request.url, origin).searchParams;
         const view = params.get('view');
         if (view === 'cards') {
-          if (!financeRole(actor) || !scope.recentlyVerified(request)) fail(403, '请先完成安全确认再选卡');
+          if (!financeRole(actor)) fail(403, '当前账号无权选择续费用卡');
           const row = items.find(item => item.id === params.get('id') && item.status === 'processing' &&
             item.processingBy.id === actor.id);
           const source = row && sourceFor(row, context);
@@ -454,7 +454,7 @@ export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clo
         if (row.status !== 'processing' || !row.processingBy ||
             (row.processingBy.id !== actor.id && actor.role !== 'super'))
           fail(403, '仅当前经办人或超级管理员可交接');
-        if (!scope.recentlyVerified(request)) fail(403, '请先完成安全确认，再移交续费');
+        if (!scope.recentlyPasswordConfirmed(request)) fail(403, '请用当前登录密码确认续费移交');
         const reason = text(command.reason, 160);
         if (!reason || /(?:\d[ -]?){12}/.test(reason) || typeof command.review !== 'boolean')
           fail(400, '请填写交接原因，选择付款状态。银行卡号请勿填入原因');
@@ -466,7 +466,7 @@ export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clo
       } else if (action === 'review-source') {
         if (row.processingBy?.id !== actor.id && actor.role !== 'super')
           fail(403, '仅当前经办人或超级管理员可核对原单');
-        if (!scope.recentlyVerified(request)) fail(403, '请先完成安全确认，再核对原单');
+        if (!scope.recentlyPasswordConfirmed(request)) fail(403, '请用当前登录密码确认原单更正');
         const review = reviewSourceFor(row, actor, context, source);
         if (!review || command.sourceVersion !== (review.version ?? 0))
           fail(409, '原单已变化或与这笔付款不符，请刷新后核对');
@@ -490,8 +490,8 @@ export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clo
       } else {
         if (row.status !== 'processing' || row.processingBy.id !== actor.id) fail(409, '请先接手这笔续费');
         if (action === 'return') {
-          if (row.paymentReview && !scope.recentlyVerified(request))
-            fail(403, '请先完成安全确认，再确认这笔续费未付款');
+          if (row.paymentReview && !scope.recentlyPasswordConfirmed(request))
+            fail(403, '请用当前登录密码确认这笔续费未付款');
           const reason = text(command.reason, 160);
           if (!reason || /(?:\d[ -]?){12}/.test(reason))
             fail(400, '请填写未付款的退回原因，银行卡号请勿填入原因');
@@ -500,7 +500,7 @@ export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clo
           next.returned = reason;
         } else {
           if (!source) fail(409, '原单已变化，请核对付款及原单');
-          if (!scope.recentlyVerified(request)) fail(403, '请先完成安全确认，再登记实付和用卡');
+          if (!scope.recentlyPasswordConfirmed(request)) fail(403, '请用当前登录密码确认实付和用卡');
           next.status = 'paid';
           next.paymentReview = false;
           next.funding = await fundingFor(store, client, context, inventory, items, source, command, actor, now);

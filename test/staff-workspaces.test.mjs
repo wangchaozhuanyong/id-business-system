@@ -80,7 +80,7 @@ function fixture() {
     async addBusinessProxy(command) { upstream.push({ proxy: command }); return { added: 1, labeled: 0, skipped: 0 }; }
   };
   const createHandler = (selectedStore = store) => createStaffWorkspaces({ store: selectedStore, client,
-    publicOrigin: origin, getAuth: () => ({ recentlyVerified: () => verified, teamFor: () => [actors.employee] }),
+    publicOrigin: origin, getAuth: () => ({ recentlyPasswordConfirmed: () => verified, teamFor: () => [actors.employee] }),
     readMailbox: async () => [{ body: 'Your verification code is 123456. Private fixture message', receivedAt: '2026-11-13T12:01:00Z' }] });
   let handler = createHandler();
   async function call(role, path, body, headers = {}) {
@@ -109,6 +109,7 @@ test('role policy keeps the business administrator and blocks global settings or
   assert.equal(nativeManagerAccess(actors.admin, '/api/admin/task-logs/fixture', 'DELETE'), false);
   assert.equal(nativeManagerAccess(actors.admin, '/api/admin/unknown-future-operation', 'POST'), false);
   assert.equal(nativeBrowserVerification('/api/admin/proxies', 'POST'), true);
+  assert.equal(nativeBrowserVerification('/api/admin/proxies/fixture/test', 'POST'), false);
   assert.equal(nativeBrowserVerification('/api/admin/task-logs/fixture', 'GET'), false);
   assert.equal(protectedSettingsChanged({ mailboxTypes: ['new'] }, { mailboxTypes: ['old'] }), true);
   assert.equal(protectedSettingsChanged({ mailboxTypes: ['old'], orderPrices: { a: 1 } }, { mailboxTypes: ['old'] }), false);

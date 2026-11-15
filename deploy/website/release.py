@@ -25,8 +25,10 @@ SHA256 = re.compile(r"[a-f0-9]{64}\Z")
 PROXY_TYPE_CATALOG = "modules/recharge/bitbrowser/proxy-types.mjs"
 TASK_HISTORY_MANIFEST = "recharge-task-history-20261114.json"
 TASK_HISTORY_MANIFEST_PATH = f"deploy/website/{TASK_HISTORY_MANIFEST}"
+ADMIN_WORKSPACE_MANIFEST = "recharge-admin-workspace-20261115.json"
+ADMIN_WORKSPACE_MANIFEST_PATH = f"deploy/website/{ADMIN_WORKSPACE_MANIFEST}"
 CORE_PATHS = ("deploy/recharge-core", "deploy/caddy", "modules/recharge/codexdaichong", "package.json",
-              PROXY_TYPE_CATALOG, TASK_HISTORY_MANIFEST_PATH)
+              PROXY_TYPE_CATALOG, TASK_HISTORY_MANIFEST_PATH, ADMIN_WORKSPACE_MANIFEST_PATH)
 ADAPTER_SCOPE = {
     "modules/recharge/codexdaichong/gateway.mjs", "modules/recharge/codexdaichong/local-gateway.mjs",
     "modules/recharge/codexdaichong/native-adapter.mjs", "modules/recharge/codexdaichong/runtime.mjs",
@@ -185,6 +187,9 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False, 
     elif changed == set(WORKSPACE_PROGRESS_PRESENTATION_FILES):
         return "workspaceProgressPresentation", require_presentation_approval(
             base, sha, "workspace-progress-20261113.json", WORKSPACE_PROGRESS_PRESENTATION_FILES)
+    elif changed == {*WORKSPACE_PROGRESS_PRESENTATION_FILES, ADMIN_WORKSPACE_MANIFEST_PATH}:
+        return "rechargeAdminWorkspacePresentation", require_presentation_approval(
+            base, sha, ADMIN_WORKSPACE_MANIFEST, WORKSPACE_PROGRESS_PRESENTATION_FILES)
     elif changed == {TABLE_ACTIONS_STYLESHEET}:
         return "tableActionsPresentation", require_presentation_approval(
             base, sha, "card-pool-touch-20261114.json", (TABLE_ACTIONS_STYLESHEET,))
@@ -408,6 +413,9 @@ def main():
               'modules/external-events/requirements.txt')
     if presentation_scope:
         files += PRESENTATION_SCOPES[presentation_scope][0]
+    if presentation_scope == "rechargeAdminWorkspacePresentation":
+        files += ("frontend/finance-collection.js", "server/finance/collection-route.mjs", "server/card-management.mjs",
+                  "deploy/website/check-business-action.mjs")
     if presentation_scope == "redeemPresentation":
         files += ("modules/finance/accounting.mjs",)
     if include_adapter:

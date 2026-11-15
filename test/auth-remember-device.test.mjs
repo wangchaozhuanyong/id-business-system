@@ -47,9 +47,8 @@ async function fixture(t) {
     streamActor: request => auth.getActor(request, { throwOnUnavailable: true }),
     restart: () => { auth = createLocalAuth(path, options); },
     login,
-    async verify(cookie) {
-      time += 30_000;
-      assert.equal((await call('/security/verify', { cookie, body: { code: await codeAt() } })).status, 200);
+    async confirmPassword(cookie) {
+      assert.equal((await call('/security/confirm-password', { cookie, body: { password: credentials.password } })).status, 200);
     }
   };
 }
@@ -103,7 +102,7 @@ test('devices expose only safe metadata; revoking another device preserves this 
 });
 test('device IDs never authorize another account; password, role and disable revoke remembered sessions', async t => {
   const f = await fixture(t), owner = (await f.login(true)).cookie;
-  await f.verify(owner);
+  await f.confirmPassword(owner);
   const staff = { email: 'employee@example.test', name: '测试员工', role: 'employee', password: 'fixture-employee-password' };
   let employee = (await f.call('/employees', { cookie: owner, body: staff })).data.employee;
   for (const change of [{ password: 'fixture-changed-password' }, { role: 'admin' }, { active: false }]) {

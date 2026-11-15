@@ -232,6 +232,7 @@ const sessionEventLabels = {
   auth_mfa_bind: '绑定两步验证',
   auth_mfa_replace: '更换两步验证',
   auth_step_up: '通过安全确认',
+  auth_action_password: '通过重要操作密码确认',
   auth_recovery_used: '使用登录恢复码',
   auth_device_requested: '申请新的登录设备',
   auth_device_policy: '更新允许登录的设备',

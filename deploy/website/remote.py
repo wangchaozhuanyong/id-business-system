@@ -60,6 +60,7 @@ TASK_HISTORY_PRESENTATION_FILES = ("modules/recharge/codexdaichong/assets.mjs",)
 PRESENTATION_SCOPES = {
     "redeemPresentation": (REDEEM_PRESENTATION_FILES, REDEEM_PRESENTATION_ASSETS),
     "workspaceProgressPresentation": (WORKSPACE_PROGRESS_PRESENTATION_FILES, REDEEM_PRESENTATION_ASSETS),
+    "rechargeAdminWorkspacePresentation": (WORKSPACE_PROGRESS_PRESENTATION_FILES, {"/admin", "/admin.js", "/shell.js", "/shell.css"}),
     "tableActionsPresentation": ((TABLE_ACTIONS_STYLESHEET,), {"/shell.css"}),
     "cardImportPresentation": (CARD_IMPORT_PRESENTATION_FILES, {"/admin", "/admin.js", "/shell.css"}),
     "cardPlanPresentation": (CARD_PLAN_PRESENTATION_FILES, {"/admin", "/admin.js", "/shell.css"}),
@@ -235,6 +236,18 @@ def wire_canary_authenticator(content):
   assert.equal(JSON.parse(verified.body).recentlyVerified,true);
 """
     return content.replace(previous, updated)
+
+
+def wire_canary_business_confirmation(content):
+    marker = "  // Verify business action confirmation with the isolated account.\n"
+    if marker in content:
+        return content
+    content = wire_canary_authenticator(content)
+    previous = "  assert.equal(JSON.parse(verified.body).recentlyVerified,true);\n"
+    require(content.count(previous) == 1, "isolated_action_password_contract_changed")
+    return content.replace(previous, previous + marker + """  const { confirmSyntheticBusinessAction } = await import('/app/deploy/website/check-business-action.mjs');
+  await confirmSyntheticBusinessAction(send, session, credentials, JSON.parse(verified.body));
+""")
 
 
 def mount_backup_monitoring(content):
@@ -473,6 +486,8 @@ def stage(plan, release):
                                                (source / "frontend/index.html").read_text())
             if scope == "securityPresentation":
                 content = wire_canary_authenticator(content)
+            elif scope == "rechargeAdminWorkspacePresentation":
+                content = wire_canary_business_confirmation(content)
         if plan.get('externalEvents'):
             if name == 'run-app':
                 content = wire_event_launcher(content)

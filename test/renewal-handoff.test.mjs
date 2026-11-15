@@ -49,7 +49,7 @@ function fixture(t, orders = [initialOrder], setup, database = ':memory:') {
 
 function sender(store) {
   const handler = createRenewalHandoff({ store, publicOrigin: origin, clock: () => Date.UTC(2026, 10, 13, 5),
-    getAuth: () => ({ recentlyVerified: request => request.readVerified, orderOwners: () => Object.values(actors),
+    getAuth: () => ({ recentlyPasswordConfirmed: request => request.readVerified, orderOwners: () => Object.values(actors),
       teamFor: () => [actors.employee] }), client: { get: async () => ({ cards: [] }) } });
   return async function send(actor, value, { view = 'staff', itemId, operationId = randomUUID(), verified = false, source = origin } = {}) {
     const request = Readable.from(value ? [Buffer.from(JSON.stringify(value))] : []);
@@ -516,12 +516,14 @@ test('finance sees only unused authorized tenant cards and cannot register the a
   assert.equal((await send('employee', submit)).status, 200);
   const [{ id }] = (await send('finance', null, { view: 'finance' })).data.items;
   assert.equal((await send('finance', { action: 'claim', id, version: 1 })).status, 200);
-  const cards = () => ({ view: 'cards', itemId: id, verified: true });
-  assert.equal((await send('financeOther', null, cards())).status, 404);
-  assert.equal((await send('finance', null, { ...cards(), verified: false })).status, 403);
-  assert.deepEqual((await send('finance', null, cards())).data.items,
+  const cards = { view: 'cards', itemId: id, verified: false };
+  assert.equal((await send('financeOther', null, cards)).status, 404);
+  const available = await send('finance', null, cards);
+  assert.equal(available.status, 200);
+  assert.deepEqual(available.data.items,
     [{ id: 'tenant:unused', last4: '1111', label: '租户卡' }]);
   const payment = { action: 'paid', id, version: 2, confirmed: true, amount: '20', currency: 'USD' };
+  assert.equal((await send('finance', { ...payment, cardMode: 'pool', cardId: 'tenant:unused' })).status, 403);
   const used = await send('finance', { ...payment, cardMode: 'original' }, { verified: true });
   assert.equal(used.status, 409);
   const paid = await send('finance', { ...payment, cardMode: 'pool', cardId: 'tenant:unused' }, { verified: true });

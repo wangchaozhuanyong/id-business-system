@@ -1011,9 +1011,11 @@ export function createCardManagementHandler({ store, client, publicOrigin, autho
       if (request.headers.origin !== origin || !/^application\/json(?:;|$)/i.test(request.headers['content-type'] || ''))
         throw error(403, '请求来源未通过校验');
       const command = await readCommand(request, route === '/api/local/card-types' ? 20 * 1024 : undefined);
-      if (authorizeSensitive && route !== detailsRoute &&
-          !(route === renewalCardRoute && command.action === 'prepare') && !authorizeSensitive(request))
-        return send(response, 403, { error: '请先完成安全确认，再继续这项操作', code: 'SECURITY_CONFIRMATION_REQUIRED' });
+      const routine = route === detailsRoute || (route === renewalCardRoute && command.action === 'prepare') ||
+        (route === cardStatusRoute && command.action === 'accounts') ||
+        (route === '/api/local/card-types' && ['add', 'rename', 'assign'].includes(command.action));
+      if (authorizeSensitive && !routine && !authorizeSensitive(request))
+        return send(response, 403, { error: '请用当前登录密码确认这项操作', code: 'SECURITY_CONFIRMATION_REQUIRED' });
       let result;
       if (route === '/api/local/card-types') result = command.action === 'health'
         ? writeHealth(store, command, actor, request.headers['x-id-operation'], clock())

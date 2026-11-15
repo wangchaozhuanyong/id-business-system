@@ -190,12 +190,12 @@ test('finance verifies a card change and staff pages fit narrow screens with rea
   t.after(() => context.close());
   let verified = false, writes = 0, pending = false;
   await context.route('**/api/local/auth/security**', route => {
-    if (route.request().url().endsWith('/verify')) {
-      assert.equal(route.request().postDataJSON().code, '123456');
+    if (route.request().url().endsWith('/confirm-password')) {
+      assert.deepEqual(route.request().postDataJSON(), { password: 'fixture-action-only' });
       verified = true;
       return route.fulfill({ json: { confirmed: true } });
     }
-    return route.fulfill({ json: { available: true, bound: true, recentlyVerified: verified, deviceLock: false, devices: [] } });
+    return route.fulfill({ json: { available: true, bound: true, passwordConfirmed: verified, deviceLock: false, devices: [] } });
   });
   await context.route('**/api/local/staff/finance/cards', async route => {
     if (route.request().method() === 'GET') return route.fulfill({ json: { ...cards, pending: pending ?
@@ -224,8 +224,9 @@ test('finance verifies a card change and staff pages fit narrow screens with rea
   await page.getByRole('button', { name: '设置套餐', exact: true }).click();
   await page.locator('#staff-edit-plan-pro200').check();
   await page.getByRole('button', { name: '保存套餐' }).click();
-  await page.getByLabel('身份验证器的六位验证码').fill('123456');
-  await page.getByRole('button', { name: '验证', exact: true }).click();
+  const important = page.getByRole('dialog', { name: '确认重要操作' });
+  await important.getByLabel('当前登录密码').fill('fixture-action-only');
+  await important.getByRole('button', { name: '确认', exact: true }).click();
   await page.getByRole('heading', { name: '待核对的银行卡维护' }).waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
   await page.locator('#drawer').getByRole('button', { name: '关闭抽屉' }).click();
@@ -314,7 +315,7 @@ test('card drawers preserve plan choices, clear private input and submit imports
   const writes = [];
   let strict = false, failFirstRead = true;
   await context.route('**/api/local/auth/security**', route => route.fulfill({ json: {
-    available: true, bound: true, recentlyVerified: true, deviceLock: false, devices: []
+    available: true, bound: true, passwordConfirmed: true, deviceLock: false, devices: []
   } }));
   await context.route('**/api/local/staff/finance/cards', route => {
     if (route.request().method() === 'GET') {

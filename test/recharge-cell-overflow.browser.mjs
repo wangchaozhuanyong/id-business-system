@@ -28,9 +28,9 @@ test(
     }));
     const holds = [{ id: 1, accountEmail: 'test@example.test', reason: message }];
     const denied = '当前账号无权执行此操作';
-    const sessionConfirmation = '请点击「刷新」完成安全确认，再查看 Session 记录。';
     let sessionVerified = false;
     let verificationRequests = 0;
+    let codeListRequests = 0;
     let sessionReadError = '';
     let resolveAttempts = 0;
     let taskRows = tasks;
@@ -40,11 +40,11 @@ test(
       actor: { id: 'fixture-admin', name: '测试管理员', role: 'super' }
     });
     await page.route('**/api/local/auth/security', (route) => route.fulfill({
-      json: { available: true, bound: true, recentlyVerified: sessionVerified }
+      json: { available: true, bound: true, passwordConfirmed: sessionVerified }
     }));
-    await page.route('**/api/local/auth/security/verify', (route) => {
+    await page.route('**/api/local/auth/security/confirm-password', (route) => {
       assert.equal(route.request().method(), 'POST');
-      assert.deepEqual(route.request().postDataJSON(), { code: '654321' });
+      assert.deepEqual(route.request().postDataJSON(), { password: 'fixture-action-only' });
       verificationRequests += 1;
       sessionVerified = true;
       return route.fulfill({ json: { success: true } });
@@ -62,6 +62,14 @@ test(
           }
         });
       if (path === 'task-logs') return route.fulfill({ json: { tasks: taskRows } });
+      if (path === 'cdks') {
+        codeListRequests += 1;
+        if (!sessionVerified) return route.fulfill({
+          status: 403,
+          json: { error: '请用当前登录密码确认这项操作', code: 'SECURITY_CONFIRMATION_REQUIRED' }
+        });
+        return route.fulfill({ json: [{ code: 'FIXTURE-REDEEMABLE-CODE', type: '自助' }] });
+      }
       if (path === 'activation-manual-holds')
         return route.fulfill({ json: { success: true, holds } });
       if (pathname.endsWith('/activation-manual-holds/1/resolve') && route.request().method() === 'POST') {
@@ -71,10 +79,6 @@ test(
         return route.fulfill({ json: { success: true, message: '人工审核已解除，该卡密可重新提交' } });
       }
       if (path === 'sessions') {
-        if (!sessionVerified) return route.fulfill({
-          status: 403,
-          json: { error: '请先完成安全确认，再继续这项操作', code: 'SECURITY_CONFIRMATION_REQUIRED' }
-        });
         if (sessionReadError) return route.fulfill({ status: 503, json: { error: sessionReadError } });
         return route.fulfill({
           json: {
@@ -82,6 +86,7 @@ test(
               {
                 job_key: 'fixture-session',
                 token_preview: 'test@example.test',
+                has_session: true,
                 message,
                 status: 'failed'
               }
@@ -89,6 +94,13 @@ test(
             total: 1
           }
         });
+      }
+      if (pathname.endsWith('/sessions/fixture-session')) {
+        if (!sessionVerified) return route.fulfill({
+          status: 403,
+          json: { error: '请用当前登录密码确认这项操作', code: 'SECURITY_CONFIRMATION_REQUIRED' }
+        });
+        return route.fulfill({ json: { success: true, session: { session_payload: '{"note":"隔离测试资料"}' } } });
       }
       return route.fallback();
     });
@@ -148,25 +160,36 @@ test(
     await select('sessions');
     const sessionStatus = frame.locator('#session_list_status');
     const refreshSessions = frame.locator('#sessions').getByRole('button', { name: '刷新', exact: true });
-    const verification = page.getByRole('dialog', { name: '确认是你本人' });
-    await frame.getByText(sessionConfirmation, { exact: true }).waitFor();
-    assert.equal(await verification.count(), 0);
-    await refreshSessions.click();
-    await verification.getByRole('button', { name: '取消', exact: true }).click();
-    await frame.getByText(sessionConfirmation, { exact: true }).waitFor();
-    assert.equal(verificationRequests, 0);
-    await refreshSessions.click();
-    await verification.getByLabel('身份验证器的六位验证码').fill('654321');
-    await verification.getByRole('button', { name: '验证', exact: true }).click();
+    const verification = page.getByRole('dialog', { name: '确认重要操作' });
     await checkRow('session_body');
+    await refreshSessions.click();
     await sessionStatus.waitFor({ state: 'hidden' });
+    assert.equal(await verification.count(), 0);
+    const sessionLink = frame.locator('#session_body [data-view-session]');
+    const sessionBody = frame.locator('#session_modal_body');
+    const closeSession = frame.locator('#session_modal_overlay button[onclick="closeSessionModal()"]').first();
+    await sessionLink.click();
+    await verification.getByRole('button', { name: '取消', exact: true }).click();
+    await sessionBody.getByText(/请用当前登录密码确认/).waitFor();
+    await closeSession.click();
+    assert.equal(verificationRequests, 0);
+    await sessionLink.click();
+    await verification.getByLabel('当前登录密码').fill('fixture-action-only');
+    await verification.getByRole('button', { name: '确认', exact: true }).click();
+    await sessionBody.getByText(/隔离测试资料/).waitFor();
+    await closeSession.click();
     assert.equal(verificationRequests, 1);
     assert.equal(await frame.locator('#session_body [data-delete-task]').count(), 0);
     assert.equal(await frame.locator('#session_body [data-copy-session]').count(), 1);
     assert.equal(await frame.locator('#session_body [data-export-session]').count(), 1);
+    assert.equal(codeListRequests, 0, '浏览其它页面没有在后台读取完整充值码');
+    await select('cdks');
+    await frame.locator('#cdk_body').getByText('FIXTURE-REDEEMABLE-CODE', { exact: true }).waitFor();
+    assert.equal(verificationRequests, 1, '当前会话已确认密码时，查看完整充值码无需重复输入');
     await page.locator('#theme-toggle').click();
     await page.setViewportSize({ width: 390, height: 844 });
     sessionReadError = '暂时无法读取代充资料';
+    await select('sessions');
     await refreshSessions.click();
     await frame.getByText(sessionReadError, { exact: true }).waitFor();
     await checkRow('session_body');

@@ -633,7 +633,8 @@
       () => request('claude-history-intake', { ...command, mode: 'record-sale' }, 'POST')),
     employeeStatistics: (params) => request('employee-statistics?' + new URLSearchParams(params)),
     systemMonitoring: (params) => request('system-monitoring?' + new URLSearchParams(params)),
-    systemMonitoringAction: (command) => write(['system-monitoring'], () => request('system-monitoring', command, 'POST')),
+    systemMonitoringAction: (command) => write(['system-monitoring'],
+      () => request('system-monitoring', command, 'POST', { stepUp: true })),
     copyClaudeGoogleSubscription: (command) => request('claude-google-subscriptions/copy', command, 'POST'),
     claudeGoogleCopySettings: () => request('claude-google-subscriptions/copy-settings'),
     saveClaudeGoogleCopySettings: (command) =>

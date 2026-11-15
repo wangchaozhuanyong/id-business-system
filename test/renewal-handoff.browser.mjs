@@ -164,7 +164,7 @@ test('finance source review preserves the reason after stale versions without an
       actor: { id: 'finance-fixture', name: '测试财务', role: 'finance' }, localFixtures: {} });
     let sourceVersion = 2, reviewed = false;
     await context.route('**/api/local/auth/security**', route => route.fulfill({ json: {
-      available: true, bound: true, recentlyVerified: true, devices: []
+      available: true, bound: true, passwordConfirmed: true, devices: []
     } }));
     await context.route('**/api/local/renewals**', route => {
       if (route.request().method() === 'GET') return route.fulfill({ json: { version: 3, candidates: [], items: [{
@@ -243,11 +243,12 @@ test('staff confirms a batch and finance returns a verified replacement for a ne
       };
     });
     await context.route('**/api/local/auth/security**', route => {
-      if (route.request().url().endsWith('/verify')) {
+      if (route.request().url().endsWith('/confirm-password')) {
+        assert.deepEqual(route.request().postDataJSON(), { password: 'fixture-action-only' });
         verified = true;
         return route.fulfill({ status: 200, json: { verified: true } });
       }
-      return route.fulfill({ status: 200, json: { available: true, bound: true, recentlyVerified: verified, devices: [] } });
+      return route.fulfill({ status: 200, json: { available: true, bound: true, passwordConfirmed: verified, devices: [] } });
     });
     await context.route('**/api/local/renewals**', route => {
       const request = route.request();
@@ -340,8 +341,9 @@ test('staff confirms a batch and finance returns a verified replacement for a ne
   await drawer.getByLabel('本次银行卡号').fill('4111111111111111');
   assert.equal(await drawer.locator('#renewal-confirmed').count(), 0);
   await drawer.getByRole('button', { name: '保存实付' }).click();
-  await finance.page.getByLabel('身份验证器的六位验证码').fill('123456');
-  await finance.page.getByRole('button', { name: '验证', exact: true }).click();
+  const important = finance.page.getByRole('dialog', { name: '确认重要操作' });
+  await important.getByLabel('当前登录密码').fill('fixture-action-only');
+  await important.getByRole('button', { name: '确认', exact: true }).click();
   await finance.page.getByText('已交回续费管理，等待员工补资料').waitFor();
   await finance.page.getByRole('tab', { name: '已处理' }).click();
   await finance.page.getByText('1111', { exact: true }).waitFor();

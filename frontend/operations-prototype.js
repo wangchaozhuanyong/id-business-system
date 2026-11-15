@@ -719,9 +719,9 @@
   ];
   const loginLogsRoute = 'settings/login-logs';
   const rechargeLoginLogsView = ['admin_login_logs', '充值登录日志与 IP 封禁'];
-  const rechargeRestrictedViews = new Set(['config', 'checkout_debug', 'cards', 'cdks', 'sessions', 'runtime_logs']);
+  const rechargeRestrictedViews = new Set(['config', 'checkout_debug', 'cdks', 'sessions']);
   const canOpenRechargeView = id => !localData?.authRequired ||
-    (id === 'runtime_logs' ? false : state.actor?.role === 'super' || !rechargeRestrictedViews.has(id));
+    (id !== 'cards' && id !== 'runtime_logs' && (state.actor?.role === 'super' || !rechargeRestrictedViews.has(id)));
   let loginLogTab = 'system';
   const workspaceRechargeRoute = 'workspace/recharge';
   const workspaceRechargeView = ['redeem', '兑换开通', 'workspace'];
@@ -729,6 +729,7 @@
   const bitLoginView = ['bit-login', '比特登录', '/integrations/bitbrowser/local-login'];
   const onlineRechargeRoute = 'online-recharge/chatgpt';
   const rechargeCardsRoute = 'staff/finance/cards';
+  const cardPoolSections = [['local', '银行卡列表'], ['orbitcard', 'Orbitcard 用卡记录'], ['orbitcard-strategy', 'Orbitcard 开卡策略']];
   const onlineRechargeMount = '/integrations/codexdaichong/';
   let activeOnlineView = 'query';
   let onlineAdmin;
@@ -4082,12 +4083,23 @@
       window.IDLocalAuth?.employeeAction(api, action, id);
       return true;
     }
+    if (action === 'ops-card-pool-section' && state.route === rechargeCardsRoute) {
+      const tabs = node.closest('[data-recharge-card-tabs]');
+      if (!tabs || node.getAttribute('aria-pressed') === 'true') return true;
+      for (const tab of tabs.querySelectorAll('[data-card-section]')) {
+        tab.setAttribute('aria-pressed', String(tab === node));
+        tab.classList.toggle('active', tab === node);
+      }
+      api.revealActiveTab(tabs);
+      for (const frame of tabs.closest('.recharge-integration').querySelectorAll('iframe.recharge-integration__frame')) {
+        frame.contentWindow?.postMessage(
+          { source: 'id-recharge-shell', type: 'select-card-section' }, window.location.origin
+        );
+      }
+      return true;
+    }
     if (action === 'ops-integrated-view' && state.route === onlineRechargeRoute) {
       const view = node.dataset.view;
-      if (view === 'cards' && state.actor?.role === 'super') {
-        if (!blockRechargeNavigation()) api.go(rechargeCardsRoute);
-        return true;
-      }
       if (canOpenRechargeView(view) && onlineRechargeViews.some(([id]) => id === view) && view !== activeOnlineView) {
         if (blockRechargeNavigation()) return true;
         selectOnlineView(node.closest('nav'), view);
@@ -4566,7 +4578,10 @@
   api.modules.operations = {
     cardPool: {
       render: () => renderRechargeRegion('cards', `<div class="recharge-integration__toolbar content-toolbar">
-        <div class="toolbar-right">${button('刷新', 'staff-card-pool-refresh')}</div>
+        <nav class="recharge-integration__nav tabs" aria-label="银行卡池功能" data-recharge-card-tabs>
+          ${cardPoolSections.map(([id, label]) => `<button type="button" class="tab${id === 'local' ? ' active' : ''}" data-action="ops-card-pool-section" data-card-section="${id}" aria-pressed="${id === 'local'}">${label}</button>`).join('')}
+        </nav>
+        ${button('刷新', 'staff-card-pool-refresh')}
       </div>`),
       afterRender: () => void loadIntegratedRecharge(),
       refresh: () => void loadIntegratedRecharge({ refresh: true }),

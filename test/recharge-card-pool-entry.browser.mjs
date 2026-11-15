@@ -9,6 +9,7 @@ const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYW
   join(root, 'node_modules/playwright/index.mjs')).href);
 const route = 'staff/finance/cards';
 const frameSelector = '[data-page-region="staff/finance/cards"] iframe[data-view="cards"]:visible';
+const poolTabs = page => page.getByRole('navigation', { name: '银行卡池功能' });
 const output = process.env.ID_LAYOUT_QA_OUTPUT;
 const sampleCards = [
   { id: 1, last4: '2468', card_number: '****2468', card_expiry: '10/31', is_active: 1,
@@ -64,7 +65,7 @@ function healthy(fixture) {
   assert.deepEqual(fixture.traffic.unavailable, []);
 }
 
-test('自动代充银行卡复用完整卡池，旧页签回到同一个运行页面并保留编辑状态', { timeout: 45_000 }, async t => {
+test('银行卡池从左侧子导航进入并保留完整功能和编辑状态', { timeout: 45_000 }, async t => {
   const browser = await chromium.launch();
   t.after(() => browser.close());
   const fixture = await prepare(browser);
@@ -74,8 +75,10 @@ test('自动代充银行卡复用完整卡池，旧页签回到同一个运行�
   assert.equal(await page.getByRole('heading', { name: '自动代充银行卡', exact: true }).count(), 1);
   assert.equal(await page.locator('[data-staff-action="card-import-open"]').count(), 0);
   assert.equal(await frame.locator('#cards [data-switch-panel="local"] th').count(), 12);
+  const tabsInCardPool = poolTabs(page);
   for (const name of ['银行卡列表', 'Orbitcard 用卡记录', 'Orbitcard 开卡策略'])
-    await frame.getByRole('tab', { name, exact: true }).waitFor();
+    await tabsInCardPool.getByRole('button', { name, exact: true }).waitFor({ state: 'attached' });
+  assert.equal(await frame.locator('#cards .admin-switcher-tabs').isVisible(), false);
   await frame.getByRole('button', { name: '批量导入', exact: true }).click();
   const importBox = frame.locator('#card_pool_import_box');
   await importBox.getByRole('combobox', { name: '银行卡类型', exact: true }).waitFor();
@@ -89,9 +92,13 @@ test('自动代充银行卡复用完整卡池，旧页签回到同一个运行�
   await dialog.getByRole('checkbox', { name: 'Pro 500', exact: true }).check();
   await dialog.getByRole('button', { name: '取消', exact: true }).click();
   await page.locator(frameSelector).evaluate(node => { node.contentWindow.cardEntryIdentity = 'same-runtime'; });
+  const sidebar = page.getByRole('navigation', { name: '业务模块导航' });
+  const tabs = page.getByRole('navigation', { name: 'ChatGPT 充值功能' });
   for (let index = 0; index < 3; index++) {
-    await page.evaluate(() => window.IDDesignAPI.go('online-recharge/chatgpt'));
-    await page.locator('[data-action="ops-integrated-view"][data-view="cards"]:visible').click();
+    await sidebar.getByRole('link', { name: 'ChatGPT 充值', exact: true }).click();
+    await tabs.getByRole('button', { name: '支付链接调试', exact: true }).waitFor();
+    assert.equal(await tabs.getByRole('button', { name: '银行卡池', exact: true }).count(), 0);
+    await sidebar.getByRole('link', { name: '自动代充银行卡', exact: true }).click();
     await page.waitForURL('**/#/' + route);
     await frame.locator('#card_pool_list_body tr').first().waitFor();
   }
@@ -109,17 +116,20 @@ test('自动代充银行卡复用完整卡池，旧页签回到同一个运行�
   await frame.locator('#admin_confirm_cancel').click();
   await frame.getByRole('button', { name: '仅使用已设置套餐的卡' }).click();
   await frame.locator('#admin_confirm_cancel').click();
-  await frame.getByRole('tab', { name: 'Orbitcard 用卡记录', exact: true }).click();
+  await tabsInCardPool.getByRole('button', { name: 'Orbitcard 用卡记录', exact: true }).click();
   await frame.locator('#orbitcard_usage_filters').waitFor();
-  await frame.getByRole('tab', { name: 'Orbitcard 开卡策略', exact: true }).click();
+  const strategy = tabsInCardPool.getByRole('button', { name: 'Orbitcard 开卡策略', exact: true });
+  await strategy.click();
   await frame.locator('#orbitcard_strategy_product_code').waitFor();
-  await frame.getByRole('tab', { name: '银行卡列表', exact: true }).click();
   const reads = fixture.reads.length;
   const reloaded = page.waitForResponse(response => new URL(response.url()).pathname ===
     '/integrations/codexdaichong/api/admin/cards');
   await page.getByRole('button', { name: '刷新', exact: true }).click();
   await reloaded;
   await page.locator('[data-recharge-module="cards"] .recharge-integration__view[aria-busy="false"]').waitFor();
+  await frame.locator('#orbitcard_strategy_product_code').waitFor();
+  assert.equal(await strategy.getAttribute('aria-pressed'), 'true');
+  await tabsInCardPool.getByRole('button', { name: '银行卡列表', exact: true }).click();
   await frame.locator('#card_pool_list_body tr').first().waitFor();
   assert(fixture.reads.length > reads);
   assert.equal(await page.locator('iframe[data-view="cards"]').count(), 1);
@@ -210,6 +220,45 @@ test('完整银行卡入口在深浅主题、宽窄屏和空结果下保持可�
         const { page, state } = fixture;
         const frame = await open(page);
         if (theme === 'dark') await toggleDesignTheme(page);
+        const tabs = poolTabs(page);
+        const toolbar = await tabs.evaluate(nav => {
+          const refresh = nav.nextElementSibling;
+          const row = nav.parentElement;
+          const button = refresh.getBoundingClientRect();
+          const strip = nav.getBoundingClientRect();
+          const bar = row.getBoundingClientRect();
+          const center = node => {
+            const range = document.createRange();
+            range.selectNodeContents(node);
+            const rect = range.getBoundingClientRect();
+            return rect.top + rect.height / 2;
+          };
+          return {
+            width: strip.width, height: bar.height, scrolls: nav.scrollWidth > nav.clientWidth,
+            textOffsets: [...nav.querySelectorAll('button')].map(tab => Math.abs(center(tab) - center(refresh))),
+            rightAligned: strip.right < button.left && button.right < bar.right,
+            buttonClearance: Math.min(button.top - bar.top, bar.bottom - button.bottom),
+            dividers: [getComputedStyle(row).borderBottomWidth, getComputedStyle(nav).borderBottomWidth]
+          };
+        });
+        assert(toolbar.rightAligned && toolbar.width > 0 && toolbar.buttonClearance >= 8, JSON.stringify(toolbar));
+        assert(toolbar.textOffsets.every(offset => offset <= 2), '页签与刷新文字在同一行');
+        assert.deepEqual(toolbar.dividers, ['1px', '0px']);
+        assert(toolbar.height <= (width <= 900 ? 70 : 62), JSON.stringify(toolbar));
+        if (width <= 390) {
+          assert(toolbar.scrolls, '窄屏页签横向滚动');
+          const strategy = tabs.getByRole('button', { name: 'Orbitcard 开卡策略', exact: true });
+          await strategy.focus();
+          await strategy.press('Enter');
+          await frame.locator('#orbitcard_strategy_product_code').waitFor();
+          assert(await strategy.evaluate(node => {
+            const tab = node.getBoundingClientRect();
+            const nav = node.parentElement.getBoundingClientRect();
+            return tab.left >= nav.left - 1 && tab.right <= nav.right + 1;
+          }), '选中页签完整显示在可滚动区域内');
+          await tabs.getByRole('button', { name: '银行卡列表', exact: true }).click();
+          await frame.locator('#card_pool_list_body tr').first().waitFor();
+        }
         const help = page.getByLabel('查看自动代充银行卡说明', { exact: true });
         const before = await page.locator(frameSelector).boundingBox();
         await help.click();
@@ -240,7 +289,7 @@ test('完整银行卡入口在深浅主题、宽窄屏和空结果下保持可�
         });
         assert.equal(geometry.overflow, false);
         assert(geometry.choices.every(height => height >= 44));
-        measurements.push({ theme, width, ...geometry });
+        measurements.push({ theme, width, ...geometry, toolbar });
         if (output && [1920, 1440, 390].includes(width))
           await page.screenshot({ path: join(output, theme + '-' + width + '-dialog.png') });
         await dialog.getByRole('button', { name: '关闭套餐设置', exact: true }).click();

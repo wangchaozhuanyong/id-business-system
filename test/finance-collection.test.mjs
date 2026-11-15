@@ -259,7 +259,9 @@ test('查询分页、日期与结果筛选、状态汇总保留成功无变化�
 
 test('管理接口拒绝员工、跨站、非法参数和未经预览确认的清理，不启动HTTP服务', async () => {
   const f = fixture();
-  const handle = createFinanceCollectionHandler({ collection: f.collection, publicOrigin: 'https://fixture.invalid' });
+  let passwordConfirmed = false;
+  const handle = createFinanceCollectionHandler({ collection: f.collection, publicOrigin: 'https://fixture.invalid',
+    authorizeSensitive: () => passwordConfirmed });
   const call = async ({ actor: user = actor, method = 'GET', body, headers = {}, query = '' } = {}) => {
     const request = Readable.from(body ? [Buffer.from(JSON.stringify(body))] : []);
     Object.assign(request, { method, url: '/api/local/finance/collection' + query, headers: { host: 'fixture.invalid', ...headers } });
@@ -275,9 +277,9 @@ test('管理接口拒绝员工、跨站、非法参数和未经预览确认的�
   const egypt = await call({ query: '?currency=EGP' });
   assert.equal(egypt.status, 200);
   assert.deepEqual(egypt.result.rows.map(row => row.currency), ['EGP']);
-  const defaults = await call();
-  assert.equal(defaults.status, 200);
-  assert.equal(defaults.result.pageSize, 8);
+  const defaultView = await call();
+  assert.equal(defaultView.status, 200);
+  assert.equal(defaultView.result.pageSize, 8);
   for (const pageSize of [8, 10, 16, 20, 32, 50]) {
     const response = await call({ query: `?pageSize=${pageSize}` });
     assert.equal(response.status, 200);
@@ -286,8 +288,23 @@ test('管理接口拒绝员工、跨站、非法参数和未经预览确认的�
   assert.equal((await call({ query: '?pageSize=11' })).status, 400);
   const headers = { origin: 'https://fixture.invalid', 'content-type': 'application/json' };
   assert.equal((await call({ method: 'POST', body: { action: 'collect' } })).status, 403);
-  assert.equal((await call({ method: 'POST', headers, body: { action: 'cleanup', confirm: false } })).status, 400);
   assert.equal(f.calls(), 0);
+  const action = (action, fields) => call({ method: 'POST', headers, body: { action, ...fields } });
+  assert.equal((await action('collect')).status, 200, '手动采集无需再次确认');
+  assert.equal(f.calls(), 1);
+  const preview = await action('cleanup-preview');
+  assert.equal(preview.status, 200, '仅核对清理范围无需再次确认');
+  const settings = { version: 1, settings: { ...input(defaults(automaticProvider.id)), intervalMinutes: 360 } };
+  const cleanup = { preview: preview.result, confirm: true };
+  for (const response of [await action('settings', settings), await action('cleanup', cleanup)]) {
+    assert.equal(response.status, 403);
+    assert.equal(response.result.code, 'SECURITY_CONFIRMATION_REQUIRED');
+  }
+  assert.equal(f.collection.read().data.settings.version, 1);
+  passwordConfirmed = true;
+  assert.equal((await action('cleanup', { ...cleanup, confirm: false })).status, 400);
+  assert.equal((await action('cleanup', cleanup)).status, 200);
+  assert.equal((await action('settings', settings)).status, 200);
 });
 
 test('后台定时器无需浏览器即可执行首轮采集，关闭后不再读取或写入', async () => {

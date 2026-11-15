@@ -46,12 +46,28 @@ export function nativeManagerAccess(actor, path, method) {
   return Boolean(permitted?.some(pattern => pattern.test(route)));
 }
 
+const nativeProtectedPosts = new Set([
+  'config', 'runtime-logs/clear', 'browser-pool/mode', 'browser-pool/reload',
+  'telegram', 'hcaptcha', 'ip-bans', 'cards/import', 'proxies', 'recharge-routing/proxies',
+  'orbitcard/product-strategy', 'orbitcard/config', 'cdks/generate', 'cdks/import',
+  'subscription/cancel-auto-renew', 'subscription/enable-auto-renew', 'trigger-activation',
+  'products/generate', 'products/resume', 'products/export'
+]);
+
 export function nativeBrowserVerification(path, method) {
-  const route = path.toLowerCase();
-  const read = method === 'GET' || method === 'HEAD';
-  if (read) return /^\/api\/admin\/(?:sessions|runtime-logs|screenshots|video|cdks|products\/export|billing\/export)(?:\/|$)/.test(route);
-  if (/^\/api\/admin\/(?:subscription\/batch-renewal-status|proxy\/test|proxies\/[^/]+\/test)(?:\/|$)/.test(route)) return false;
-  return /^\/api\/(?:external\/cards|admin\/(?:cards|config|region|recharge-routing|proxies|security|2fa|hcaptcha|telegram|ip-bans|orbitcard|subscription|activation-manual-holds|trigger-activation|cdks|products|pool-emails))(?:\/|$)/.test(route);
+  const route = path.toLowerCase().replace(/\/+$/, '');
+  if (method === 'GET' || method === 'HEAD')
+    return /^\/api\/admin\/(?:sessions\/[^/]+|cdks|video|screenshots(?:\/[^/]+\/[^/]+)?|(?:products|billing)\/export)$/.test(route);
+  if (route.startsWith('/api/external/cards/')) return true;
+  const adminPrefix = '/api/admin/';
+  if (!route.startsWith(adminPrefix)) return false;
+  const action = route.slice(adminPrefix.length);
+  if (method === 'DELETE') return true;
+  if (method === 'PUT' || method === 'PATCH')
+    return /^(?:region|cards\/plan-policy|proxies\/[^/]+|recharge-routing(?:\/proxies\/[^/]+\/(?:country|type))?)$/.test(action);
+  if (method !== 'POST') return false;
+  return nativeProtectedPosts.has(action) ||
+    /^(?:orbitcard\/cards\/[^/]+\/(?:restore|plan)|activation-manual-holds\/[^/]+\/resolve|cdks\/[^/]+\/ship)$/.test(action);
 }
 
 export function protectedSettingsChanged(next, previous) {

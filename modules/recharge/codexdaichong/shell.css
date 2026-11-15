@@ -636,7 +636,7 @@ body[data-recharge-view='admin']:not([data-standalone]) .main-content {
   flex: 1;
 }
 
-/* 调试工作区：日志独占左列，参数与任务状态沿右列排列。 */
+/* 调试工作区：参数与任务状态在左，运行日志在右。 */
 @media (min-width: 1024px) {
   [data-recharge-viewport] [data-recharge-view='admin'] #checkout_debug.page-view.active {
     display: grid;
@@ -651,17 +651,17 @@ body[data-recharge-view='admin']:not([data-standalone]) .main-content {
   }
 
   [data-recharge-viewport] #checkout_debug > .panel:has(#checkout_session_input) {
-    grid-column: 2;
+    grid-column: 1;
     grid-row: 1;
   }
 
   [data-recharge-viewport] #checkout_debug #checkout_result_box {
-    grid-column: 2;
+    grid-column: 1;
     grid-row: 2;
   }
 
   [data-recharge-viewport] #checkout_debug > .panel:has(#checkout_debug_log_pre) {
-    grid-column: 1;
+    grid-column: 2;
     grid-row: 1 / 3;
     align-self: stretch;
   }
@@ -1057,6 +1057,10 @@ body[data-recharge-view='admin']:not([data-standalone]) .main-content {
   margin-bottom: 16px;
 }
 
+[data-recharge-card-tabs] #cards [data-switcher='card-assets'] > .admin-switcher-tabs {
+  display: none;
+}
+
 [data-recharge-view='admin'] .table-container {
   min-width: 0;
   max-width: 100%;
@@ -1247,9 +1251,23 @@ body[data-recharge-view='admin']:not([data-standalone]) .main-content {
   font-family: ui-monospace, 'SF Mono', monospace;
 }
 
+[data-recharge-view='admin'] .runtime-log-status {
+  position: sticky;
+  inset-block-start: 0;
+  margin: 0;
+  padding: 14px 16px;
+  background: var(--surface-soft);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
 [data-recharge-view='admin'] .runtime-log-pre:empty::before {
   content: '暂无运行日志';
   color: var(--text-secondary);
+}
+
+[data-recharge-view='admin'] .runtime-log-status:not([hidden]) + .runtime-log-pre:empty::before {
+  content: none;
 }
 
 [data-recharge-view='admin'] .runtime-log-toolbar .panel-title {
