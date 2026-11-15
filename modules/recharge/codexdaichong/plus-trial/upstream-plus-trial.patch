@@ -1,8 +1,14 @@
 diff --git a/pricing-checkout.js b/pricing-checkout.js
-index 17d5982..d09f52d 100644
+index 17d5982..2fb8dab 100644
 --- a/pricing-checkout.js
 +++ b/pricing-checkout.js
-@@ -55,6 +55,17 @@ const PLAN_UPGRADE_PATTERNS = {
+@@ -50,11 +50,22 @@ const REGION_CURRENT_COUNTRY_HINTS = {
+ const SKIP_REGION_BUTTON_TEXT = /^(Upgrade|Personal|Business|Free|Plus|Pro|Subscribe|Close|Your current plan|升级|订阅|关闭)$/i;
+ 
+ const PLAN_UPGRADE_PATTERNS = {
+-    plus: [/升级至\s*Plus/i, /Upgrade to Plus/i, /Get Plus/i, /Subscribe to Plus/i, /^Upgrade$/i],
++    plus: [/升级至\s*Plus/i, /Upgrade to Plus/i, /Get Plus/i, /Subscribe to Plus/i, /^Upgrade$/i, /^Buy now$/i],
+     pro_5x: [/升级至\s*Pro/i, /Upgrade to Pro/i, /Get Pro/i, /^Upgrade$/i],
      pro_20x: [/升级至\s*Pro/i, /Upgrade to Pro/i, /Get Pro/i, /^Upgrade$/i]
  };
  
@@ -11,7 +17,7 @@ index 17d5982..d09f52d 100644
 +const PLUS_FREE_TRIAL_BANNER = /Try\s+Plus\s+free\s+for\s+\d+\s*months?/i;
 +const FREE_TRIAL_CLAIM_BUTTON = /^(?:Claim\s+(?:your\s+)?free\s+offer|Claim\s+offer)$/i;
 +const FREE_TRIAL_ZERO_PRICE = /(?:₱|PHP|S\$|SGD|\$|MYR|RM|EGP|E£)\s*0(?:\.0{1,2})?\s*(?:\/\s*(?:mo(?:nth)?|月)|每月|per\s*month)/i;
-+const PRO_ACTION_PATTERN = /^(?:立即体验|Start now|升级至\s*Pro|Upgrade to Pro|Get Pro|Claim\s+(?:your\s+)?free\s+offer|Claim\s+offer)$/i;
++const PRO_ACTION_PATTERN = /^(?:立即体验|Buy now|Start now|升级至\s*Pro|Upgrade to Pro|Get Pro|Claim\s+(?:your\s+)?free\s+offer|Claim\s+offer)$/i;
 +const DISCOUNT_OFFER_TEXT = /(?:\b\d{1,2}\s*%\s*off\b|半价|五折|半折|\bSave\s+\d{1,2}\s*%\b)/i;
 +// 停止原因要能区分：0 元购与半价优惠账号都不允许继续充值 Plus。
 +const PLUS_TRIAL_REFUSAL = '该账号为 Plus 0 元购优惠账号，不能继续充值 Plus，请转人工核对';
@@ -20,6 +26,15 @@ index 17d5982..d09f52d 100644
  const PRO_TIERS = Object.freeze({ pro100: '100', pro200: '200', pro500: '500' });
  const CURRENCY_MARKS = Object.freeze({ EGP: ['EGP', 'E£', 'ج.م'], MYR: ['MYR', 'RM'], PHP: ['PHP', '₱'], SGD: ['SGD', 'S$'], USD: ['USD', 'US$', '$'] });
  
+@@ -78,7 +89,7 @@ async function findPlusStartNowButton(page) {
+         const otherPlans = card.getByText(/^(?:ChatGPT\s+)?(?:Free|Go|Pro|Business|Team|Enterprise)$/i);
+         if (await otherPlans.count()) continue;
+ 
+-        const button = card.getByRole('button', { name: /^Start now$/i });
++        const button = card.getByRole('button', { name: /^(?:Start now|Buy now)$/i });
+         if (await button.count() !== 1) continue;
+         if (await button.isVisible().catch(() => false)
+             && await button.isEnabled().catch(() => false)) {
 @@ -88,6 +99,49 @@ async function findPlusStartNowButton(page) {
      return null;
  }
@@ -170,7 +185,7 @@ index 17d5982..d09f52d 100644
      waitForCheckoutPage,
      pageShowsTargetRegionPricing
 diff --git a/stripe-payment.js b/stripe-payment.js
-index cd7ff9d..03d9eff 100644
+index cd7ff9d..ca16373 100644
 --- a/stripe-payment.js
 +++ b/stripe-payment.js
 @@ -295,6 +295,23 @@ function isOpenAiCustomCheckout(page) {
@@ -214,7 +229,7 @@ index cd7ff9d..03d9eff 100644
  
      const strategies = [
 +        () => tryClick(page.getByRole('button', {
-+            name: /^(?:Claim\s+(?:your\s+)?free\s+offer|Claim\s+offer|Start trial|Start free trial|Continue|Confirm|Get started)$/i
++            name: /^(?:Claim\s+(?:your\s+)?free\s+offer|Claim\s+offer|Start trial|Start free trial|Continue|Confirm|Get started|Buy now)$/i
 +        }), 'role=优惠开通'),
          () => tryClick(page.getByRole('button', { name: /^Subscribe$/i }), 'role=Subscribe'),
          () => tryClick(page.getByRole('button', { name: /^订阅$/ }), 'role=订阅'),

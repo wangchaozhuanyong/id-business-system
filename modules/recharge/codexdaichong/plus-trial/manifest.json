@@ -1,14 +1,14 @@
 {
   "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
-  "patchSha256": "1eb7eb152f24f50789939c668703ada77954eaf251018cafb2ab17b4b56ab113",
+  "patchSha256": "a0f448d8a8070224dd70f8ff83bfbd309ee5a267cf2dc1a56bfc41aded4afdfa",
   "files": {
     "pricing-checkout.js": {
       "original": "17d5982142eec44b1d9aa56adff5db50617df9fe",
-      "approved": "d09f52d51c9be33af454c948e71fa0c3e71c4a32"
+      "approved": "2fb8dab3dfb9f6a2e9caf0cf39d15deb720da1f8"
     },
     "stripe-payment.js": {
       "original": "cd7ff9d4497915b8a5e7c3e7d3babd13e6603ad2",
-      "approved": "03d9effa70356daf4540557ffe9a4bf8b01f54ff"
+      "approved": "ca163735afaf5837bd5f46653211fcb79bcce75f"
     }
   }
 }
