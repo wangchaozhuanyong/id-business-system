@@ -19,7 +19,7 @@ const providerRetirementFiles = ['mysql-store.js', 'server.js'];
 const cardPlanPatch = new URL('./card-plans/upstream-card-plans.patch', import.meta.url);
 const cardPlanFiles = ['mysql-store.js', 'payment-retry.js', 'server.js'];
 const plusTrialPatch = new URL('./plus-trial/upstream-plus-trial.patch', import.meta.url);
-const plusTrialFiles = ['pricing-checkout.js', 'stripe-payment.js'];
+const plusTrialFiles = ['chatgpt.js', 'pricing-checkout.js', 'stripe-payment.js'];
 
 async function approvedRouting() {
   const manifest = JSON.parse(await readFile(new URL('manifest.json', routingDirectory), 'utf8'));

@@ -1,5 +1,41 @@
+diff --git a/chatgpt.js b/chatgpt.js
+index 8a7cba7..3bd5dda 100644
+--- a/chatgpt.js
++++ b/chatgpt.js
+@@ -483,6 +483,20 @@ async function openApiCheckout(page, { accessToken, sessionData, planType, count
+     }
+ }
+ 
++// Pro 与 0 元结账页没有卡号输入框，只能按结账摘要判定页面已就绪。
++async function isCheckoutSummaryReady(page) {
++    const body = String(await page.textContent('body', { timeout: 5000 }).catch(() => '') || '');
++    if (!/(?:Total due today|Due today|Subscribe|Start trial|Start free trial|Get started|Buy now|Claim)/i.test(body)) {
++        return false;
++    }
++    const cardSelector = ['input[autocomplete="cc-number"]', 'input[name="cardnumber"]', 'input[name="number"]'].join(', ');
++    for (const frame of page.frames()) {
++        const count = await frame.locator(cardSelector).count().catch(() => 0);
++        if (count) return false;
++    }
++    return true;
++}
++
+ /** Passive debug check: observe the card form without filling or submitting it. */
+ async function verifyCheckoutDebugPage(page, { checkoutUrl, timeoutMs = 60000 } = {}) {
+     const { assertChatGptLoggedIn } = require('./session-auth');
+@@ -520,6 +534,10 @@ async function verifyCheckoutDebugPage(page, { checkoutUrl, timeoutMs = 60000 }
+         if (!isPaymentUrl(page.url())) {
+             throw new Error('支付页面发生非 Checkout 跳转，调试已停止');
+         }
++        if (await isCheckoutSummaryReady(page)) {
++            console.log('✅ [调试] 无卡结账页已加载，调试已停止（未填卡、未付款）');
++            return { checkoutUrl: page.url() };
++        }
+         for (const frame of page.frames()) {
+             const inputs = frame.locator(cardSelector);
+             const count = await inputs.count().catch(() => 0);
 diff --git a/pricing-checkout.js b/pricing-checkout.js
-index 17d5982..2fb8dab 100644
+index 17d5982..a2a0fc6 100644
 --- a/pricing-checkout.js
 +++ b/pricing-checkout.js
 @@ -50,11 +50,22 @@ const REGION_CURRENT_COUNTRY_HINTS = {
@@ -7,7 +43,7 @@ index 17d5982..2fb8dab 100644
  
  const PLAN_UPGRADE_PATTERNS = {
 -    plus: [/升级至\s*Plus/i, /Upgrade to Plus/i, /Get Plus/i, /Subscribe to Plus/i, /^Upgrade$/i],
-+    plus: [/升级至\s*Plus/i, /Upgrade to Plus/i, /Get Plus/i, /Subscribe to Plus/i, /^Upgrade$/i, /^Buy now$/i],
++    plus: [/升级至\s*Plus/i, /Upgrade to Plus/i, /Get Plus/i, /Subscribe to Plus/i, /^Upgrade$/i, /^Buy now$/i, /^Get started$/i],
      pro_5x: [/升级至\s*Pro/i, /Upgrade to Pro/i, /Get Pro/i, /^Upgrade$/i],
      pro_20x: [/升级至\s*Pro/i, /Upgrade to Pro/i, /Get Pro/i, /^Upgrade$/i]
  };
@@ -17,7 +53,7 @@ index 17d5982..2fb8dab 100644
 +const PLUS_FREE_TRIAL_BANNER = /Try\s+Plus\s+free\s+for\s+\d+\s*months?/i;
 +const FREE_TRIAL_CLAIM_BUTTON = /^(?:Claim\s+(?:your\s+)?free\s+offer|Claim\s+offer)$/i;
 +const FREE_TRIAL_ZERO_PRICE = /(?:₱|PHP|S\$|SGD|\$|MYR|RM|EGP|E£)\s*0(?:\.0{1,2})?\s*(?:\/\s*(?:mo(?:nth)?|月)|每月|per\s*month)/i;
-+const PRO_ACTION_PATTERN = /^(?:立即体验|Buy now|Start now|升级至\s*Pro|Upgrade to Pro|Get Pro|Claim\s+(?:your\s+)?free\s+offer|Claim\s+offer)$/i;
++const PRO_ACTION_PATTERN = /^(?:立即体验|Buy now|Start now|Get started|升级至\s*Pro|Upgrade to Pro|Get Pro|Claim\s+(?:your\s+)?free\s+offer|Claim\s+offer)$/i;
 +const DISCOUNT_OFFER_TEXT = /(?:\b\d{1,2}\s*%\s*off\b|半价|五折|半折|\bSave\s+\d{1,2}\s*%\b)/i;
 +// 停止原因要能区分：0 元购与半价优惠账号都不允许继续充值 Plus。
 +const PLUS_TRIAL_REFUSAL = '该账号为 Plus 0 元购优惠账号，不能继续充值 Plus，请转人工核对';
@@ -31,7 +67,7 @@ index 17d5982..2fb8dab 100644
          if (await otherPlans.count()) continue;
  
 -        const button = card.getByRole('button', { name: /^Start now$/i });
-+        const button = card.getByRole('button', { name: /^(?:Start now|Buy now)$/i });
++        const button = card.getByRole('button', { name: /^(?:Start now|Buy now|Get started)$/i });
          if (await button.count() !== 1) continue;
          if (await button.isVisible().catch(() => false)
              && await button.isEnabled().catch(() => false)) {
