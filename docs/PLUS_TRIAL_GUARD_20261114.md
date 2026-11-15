@@ -44,6 +44,12 @@
 - `test/codexdaichong-upstream-parity.test.mjs` 已同步为五份补丁并新增 `plusTrialFiles` 断言；本机缺少 `.upstream/codexdaichong`，该全量测试未在本机执行。
 - `test/check-ui-contract.mjs` 本机因缺少 `playwright` 依赖无法执行；本次未改前端。
 
+## 2026-11-15 修订
+
+- Plus 的停止条件扩展为两类优惠账号：0 元购（试用横幅、Claim free offer、0 元月费）与半价优惠（50% off 等文案，或卡片内同时出现原价与约一半的折扣价）。两者都中止并分别提示「0 元购」与「半价优惠」。
+- Pro 的 0 元结账页没有信用卡与账单表单：`stripe-payment.js` 在填卡前检测「无卡号输入框且应付为 0」，命中则跳过填卡与账单，直接点击开通并等待结果；提交按钮策略增加 `Claim free offer`、`Start trial`、`Continue`、`Confirm` 等优惠文案。
+- 补丁覆盖 `pricing-checkout.js` 与 `stripe-payment.js`：基准 `17d59821…` / `cd7ff9d4…`，结果 `d09f52d5…` / `03d9effa…`，补丁 SHA-256 `1eb7eb15…`。`originalFiles` 由 198 变为 197。
+
 ## 待现场确认
 
 Pro 的 0 元试用结账页是否仍要求填写银行卡（Stripe 0 元是否需要 payment method）。若结账页不出现卡号表单，`Stripe Step 0～2` 的填卡步骤会超时，需要另行决定是否对 0 元任务跳过填卡。验证方式：以 Pro 套餐跑一次 `CHECKOUT_DEBUG_ONLY=1` 调试任务，停在支付表单截图，不填卡不付款。
