@@ -175,9 +175,15 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False, 
         require_ancestor(PLUS_TRIAL_MERGE, sha)
         return
     if include_core:
+        reviewed_patches = NATIVE_PATCH_FILES | PLUS_TRIAL_PATCH_FILES
         approved_patches = any(required <= changed <= NATIVE_CORE_SCOPE
                                for required in (NATIVE_PATCH_FILES, PLUS_TRIAL_PATCH_FILES))
-        if include_adapter or (not approved_patches and changed != PROXY_TYPE_CORE_SCOPE):
+        # 原生容器可能落后于网站：受审查补丁已进入线上网站基线时不会出现在本次 diff，
+        # 重建原生镜像是让这些输入生效的唯一途径，此时要求补丁集合完全未变。
+        carried_patches = approved_patches or (
+            bool(changed) and changed <= NATIVE_CORE_SCOPE
+            and not git("diff", "--name-only", base, sha, "--", *sorted(reviewed_patches)).strip())
+        if include_adapter or (not carried_patches and changed != PROXY_TYPE_CORE_SCOPE):
             raise RuntimeError("recharge_native_release_scope_mismatch")
     elif include_adapter:
         if not changed <= ADAPTER_SCOPE or not changed.intersection(ADAPTER_RUNTIME_FILES):
