@@ -1,6 +1,6 @@
 {
   "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
-  "patchSha256": "8e9acb27b9501ff0d19866ee317c0f9d16bffdc7a38e01705177dfd04ab06d5d",
+  "patchSha256": "b75971d09d70146353a800b5b6e75a2ea680ff35a044b227c28dd42c29e46b65",
   "files": {
     "chatgpt.js": {
       "original": "8a7cba757cd7121d1fcb76aa3711e632c132a9cd",
@@ -16,7 +16,7 @@
     },
     "session-auth.js": {
       "original": "e186977d149f3d6e57d1cc8f2888a1a06df1cd0b",
-      "approved": "b0e2265e6b3155693fba502a5fdd3351c98a7b29"
+      "approved": "3f6ff7860098b80ece01cc758996ecb815102437"
     }
   }
 }
