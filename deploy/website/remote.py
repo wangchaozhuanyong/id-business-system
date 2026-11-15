@@ -238,18 +238,15 @@ def wire_canary_authenticator(content):
     return content.replace(previous, updated)
 
 
-def wire_canary_action_password(content):
-    marker = "  // Password confirmation for the synthetic canary administrator.\n"
+def wire_canary_business_confirmation(content):
+    marker = "  // Verify business action confirmation with the isolated account.\n"
     if marker in content:
         return content
     content = wire_canary_authenticator(content)
     previous = "  assert.equal(JSON.parse(verified.body).recentlyVerified,true);\n"
     require(content.count(previous) == 1, "isolated_action_password_contract_changed")
-    return content.replace(previous, previous + marker + """  assert.equal(JSON.parse(verified.body).passwordConfirmed,false);
-  const actionPassword = await send('/api/local/auth/security/confirm-password', {method:'POST',session,
-    body:{password:credentials.password}});
-  assert.equal(actionPassword.status,200);
-  assert.equal(JSON.parse(actionPassword.body).confirmed,true);
+    return content.replace(previous, previous + marker + """  const { confirmSyntheticBusinessAction } = await import('/app/deploy/website/check-business-action.mjs');
+  await confirmSyntheticBusinessAction(send, session, credentials, JSON.parse(verified.body));
 """)
 
 
@@ -490,7 +487,7 @@ def stage(plan, release):
             if scope == "securityPresentation":
                 content = wire_canary_authenticator(content)
             elif scope == "rechargeAdminWorkspacePresentation":
-                content = wire_canary_action_password(content)
+                content = wire_canary_business_confirmation(content)
         if plan.get('externalEvents'):
             if name == 'run-app':
                 content = wire_event_launcher(content)

@@ -414,7 +414,8 @@ def main():
     if presentation_scope:
         files += PRESENTATION_SCOPES[presentation_scope][0]
     if presentation_scope == "rechargeAdminWorkspacePresentation":
-        files += ("frontend/finance-collection.js", "server/finance/collection-route.mjs", "server/card-management.mjs")
+        files += ("frontend/finance-collection.js", "server/finance/collection-route.mjs", "server/card-management.mjs",
+                  "deploy/website/check-business-action.mjs")
     if presentation_scope == "redeemPresentation":
         files += ("modules/finance/accounting.mjs",)
     if include_adapter:

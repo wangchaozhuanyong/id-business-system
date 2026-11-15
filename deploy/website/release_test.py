@@ -407,11 +407,11 @@ class WebsiteReleaseTests(unittest.TestCase):
         self.assertEqual(remote.wire_canary_authenticator(configured), configured)
         with self.assertRaisesRegex(remote.ReleaseError, "isolated_login_contract_changed"):
             remote.wire_canary_authenticator("different login flow")
-        confirmed = remote.wire_canary_action_password(configured)
-        self.assertEqual(remote.wire_canary_action_password(source), confirmed)
-        self.assertEqual(remote.wire_canary_action_password(confirmed), confirmed)
-        self.assertLess(confirmed.index("passwordConfirmed,false"), confirmed.index("'/api/local/auth/security/confirm-password'"))
-        self.assertLess(confirmed.index("actionPassword.status,200"), confirmed.index("'/api/local/auth/employees'"))
+        confirmed = remote.wire_canary_business_confirmation(configured)
+        self.assertEqual(remote.wire_canary_business_confirmation(source), confirmed)
+        self.assertEqual(remote.wire_canary_business_confirmation(confirmed), confirmed)
+        self.assertLess(confirmed.index("recentlyVerified,true"), confirmed.index("/app/deploy/website/check-business-action.mjs"))
+        self.assertLess(confirmed.index("await confirmSyntheticBusinessAction("), confirmed.index("'/api/local/auth/employees'"))
 
     def test_stages_active_website_launchers_and_switches_to_the_prepared_path(self):
         with TemporaryDirectory() as directory:
