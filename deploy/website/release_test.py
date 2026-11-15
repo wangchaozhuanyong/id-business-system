@@ -171,7 +171,7 @@ class WebsiteReleaseTests(unittest.TestCase):
         git.side_effect = ["\n".join(changed), ""]
         self.assertIsNone(release.require_website_scope(BASE, TARGET, include_core=True))
         adapted = changed + ["modules/recharge/codexdaichong/plus-trial/manifest.json"]
-        git.side_effect = ["\n".join(adapted), ""]
+        git.side_effect = ["\n".join(adapted), "modules/recharge/codexdaichong/plus-trial/manifest.json"]
         with self.assertRaisesRegex(RuntimeError, "recharge_native_release_scope_mismatch"):
             release.require_website_scope(BASE, TARGET, include_core=True)
         git.side_effect = ["\n".join(changed), "modules/recharge/codexdaichong/plus-trial/upstream-plus-trial.patch"]
