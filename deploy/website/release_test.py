@@ -344,6 +344,23 @@ class WebsiteReleaseTests(unittest.TestCase):
     @patch("release.require_presentation_approval")
     @patch("release.require_ancestor")
     @patch("release.git")
+    def test_subscription_invoice_release_requires_its_manifest_and_excludes_native_changes(self, git, ancestor, approval):
+        files = remote.SUBSCRIPTION_INVOICE_PRESENTATION_FILES
+        manifest = release.SUBSCRIPTION_INVOICE_MANIFEST_PATH
+        git.return_value = "\n".join((*files, manifest))
+        self.assertEqual(release.require_website_scope(BASE, TARGET),
+                         ("subscriptionInvoicePresentation", approval.return_value))
+        approval.assert_called_once_with(BASE, TARGET, release.SUBSCRIPTION_INVOICE_MANIFEST, files)
+        with self.assertRaisesRegex(RuntimeError, "recharge_native_release_scope_mismatch"):
+            release.require_website_scope(BASE, TARGET, include_core=True)
+        for changed in ((manifest,), (*files, manifest, "modules/recharge/codexdaichong/native-adapter.mjs")):
+            git.return_value = "\n".join(changed)
+            with self.assertRaisesRegex(RuntimeError, "recharge_core_or_runtime_changed"):
+                release.require_website_scope(BASE, TARGET)
+
+    @patch("release.require_presentation_approval")
+    @patch("release.require_ancestor")
+    @patch("release.git")
     def test_card_plan_ui_release_verifies_both_presentation_sources(self, git, ancestor, approval):
         files = remote.CARD_PLAN_PRESENTATION_FILES
         git.return_value = "\n".join(files)
@@ -518,6 +535,13 @@ class WebsiteReleaseTests(unittest.TestCase):
         remote.verify_presentation_bundle(bundle(base), bundle(base | {"/shell.css": {"body": "new"}}), table_assets)
         with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_bundle_scope_mismatch"):
             remote.verify_presentation_bundle(bundle(base), bundle(candidate), table_assets)
+        invoice_assets = remote.PRESENTATION_SCOPES["subscriptionInvoicePresentation"][1]
+        previous = base | {"/subscription": {"body": "old"}}
+        updated = previous | {"/subscription": {"body": "invoice"}}
+        remote.verify_presentation_bundle(bundle(previous), bundle(updated), invoice_assets)
+        with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_bundle_scope_mismatch"):
+            remote.verify_presentation_bundle(bundle(previous), bundle(updated | {"/admin": {"body": "changed"}}),
+                                              invoice_assets)
         card_assets = remote.PRESENTATION_SCOPES["cardImportPresentation"][1]
         previous = base | {"/admin.js": {"body": "old"}}
         changed = previous | {name: {"body": "new"} for name in card_assets}
