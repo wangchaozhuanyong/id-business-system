@@ -6,6 +6,7 @@ import os
 import sqlite3
 import subprocess
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import Mock, call, patch
@@ -130,6 +131,112 @@ class WebsiteReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "recharge_core_or_runtime_changed"):
             release.require_website_scope(BASE, TARGET)
         git.assert_called_once_with("diff", "--name-only", BASE, TARGET, "--", *release.CORE_PATHS)
+
+    @patch("release.require_deferred_debug_inputs", return_value={"reviewed": True})
+    @patch("release.require_ancestor")
+    @patch("release.git")
+    def test_website_carries_only_the_exact_pending_debug_build_inputs(self, git, ancestor, approval):
+        git.return_value = "\n".join(sorted(release.DEFERRED_DEBUG_FILES))
+        self.assertEqual(release.require_website_scope(release.DEFERRED_DEBUG_BASE, TARGET),
+                         ("deferredNativeBuildInputs", approval.return_value))
+        approval.assert_called_once_with(release.DEFERRED_DEBUG_BASE, TARGET)
+        for changed in (release.DEFERRED_DEBUG_FILES | {"modules/recharge/codexdaichong/runtime.mjs"},
+                        release.DEFERRED_DEBUG_FILES | {"deploy/recharge-core/entry.mjs"},
+                        {next(iter(release.DEFERRED_DEBUG_FILES))}):
+            git.return_value = "\n".join(sorted(changed))
+            with self.assertRaisesRegex(RuntimeError, "recharge_core_or_runtime_changed"):
+                release.require_website_scope(release.DEFERRED_DEBUG_BASE, TARGET)
+        git.return_value = "\n".join(sorted(release.DEFERRED_DEBUG_FILES))
+        with self.assertRaisesRegex(RuntimeError, "recharge_core_or_runtime_changed"):
+            release.require_website_scope(BASE, TARGET)
+
+    @patch("release.require_ancestor")
+    @patch("release.subprocess.check_output")
+    def test_deferred_debug_approval_checks_old_new_and_reviewed_source_bytes(self, output, ancestor):
+        approval = {"baseWebsiteSha": release.DEFERRED_DEBUG_BASE,
+                    "reviewedCommit": release.DEFERRED_DEBUG_MERGE,
+                    "assetsSha256": "c" * 64,
+                    "files": {name: {"before": hashlib.sha256(b"old\n").hexdigest(),
+                                      "after": hashlib.sha256(b"new\n").hexdigest()}
+                              for name in release.DEFERRED_DEBUG_FILES}}
+        with TemporaryDirectory() as directory, patch("release.ROOT", Path(directory)):
+            manifest = Path(directory) / "deploy/website/deferred-checkout-debug-20261116.json"
+            manifest.parent.mkdir(parents=True)
+            manifest.write_text(json.dumps(approval))
+            def content(args, **kwargs):
+                return b"old\n" if args[-1].startswith(release.DEFERRED_DEBUG_BASE + ":") else b"new\n"
+            output.side_effect = content
+            self.assertEqual(release.require_deferred_debug_inputs(release.DEFERRED_DEBUG_BASE, TARGET), approval)
+            ancestor.assert_called_with(release.DEFERRED_DEBUG_MERGE, TARGET)
+            for revision in (release.DEFERRED_DEBUG_BASE, TARGET, release.DEFERRED_DEBUG_MERGE):
+                output.side_effect = lambda args, **kwargs: b"drift" if args[-1].startswith(revision + ":") else content(args)
+                with self.subTest(revision=revision), self.assertRaisesRegex(
+                        RuntimeError, "deferred_native_inputs_source_mismatch"):
+                    release.require_deferred_debug_inputs(release.DEFERRED_DEBUG_BASE, TARGET)
+            output.side_effect = content
+            for change in ({"reviewedCommit": BASE}, {"baseWebsiteSha": BASE}, {"assetsSha256": "invalid"},
+                           {"files": {}}, {"files": {name: {"before": "invalid", "after": "c" * 64}
+                                                    for name in release.DEFERRED_DEBUG_FILES}}):
+                manifest.write_text(json.dumps(approval | change))
+                with self.subTest(change=change), self.assertRaisesRegex(
+                        RuntimeError, "deferred_native_inputs_approval_invalid"):
+                    release.require_deferred_debug_inputs(release.DEFERRED_DEBUG_BASE, TARGET)
+
+    def test_deferred_debug_receipt_requires_unchanged_native_components_and_assets(self):
+        approval = {"reviewedCommit": release.DEFERRED_DEBUG_MERGE, "assetsSha256": "c" * 64}
+        before = {"components": {"recharge-native": {"revision": BASE}}}
+        receipt = {"protectedComponentsUnchanged": True, "liveAssetsSha256": "c" * 64}
+        self.assertEqual(release.verify_deferred_native_receipt(receipt, approval, before), {
+            "reviewedCommit": release.DEFERRED_DEBUG_MERGE, "nativeDeploymentPending": True,
+            "nativeRevisionUnchanged": BASE, "assetsSha256": "c" * 64})
+        for changed in ({"protectedComponentsUnchanged": False}, {"liveAssetsSha256": "d" * 64},
+                        {"adapter": {}}, {"rechargeCore": {}},
+                        {"adapter": {"revision": TARGET}}, {"rechargeCore": {"native": {"revision": TARGET}}}):
+            with self.subTest(changed=changed), self.assertRaisesRegex(RuntimeError, "deferred_native_runtime_changed"):
+                release.verify_deferred_native_receipt(receipt | changed, approval, before)
+
+    @patch("release.put_artifact", return_value={"sha256": "d" * 64})
+    @patch("release.require_main")
+    @patch("release.require_website_scope")
+    @patch("release.remote")
+    def test_deferred_inputs_dispatch_only_website_and_reject_asset_or_retry_drift(self, remote_call, scope, main, put):
+        bundle = b"unchanged recharge assets"
+        digest = hashlib.sha256(bundle).hexdigest()
+        approval = {"reviewedCommit": release.DEFERRED_DEBUG_MERGE, "assetsSha256": digest}
+        before = {"components": {"app": {"revision": release.DEFERRED_DEBUG_BASE},
+                                  "recharge-native": {"revision": BASE}},
+                  "assetsSha256": digest, "freeBytes": 20 * 1024**3}
+        scope.return_value = ("deferredNativeBuildInputs", approval)
+        plans = []
+        def dispatch(plan):
+            if plan["operation"] == "preflight":
+                self.assertIs(plan["adapter"], False)
+                return "preflight", before
+            plans.append(plan)
+            for forbidden in ("adapter", "rechargeCore", "rechargePartnerApi", "vendureRetryReceipt",
+                              "deferredNativeBuildInputs"):
+                self.assertNotIn(forbidden, plan)
+            self.assertIn("frontend/recharge-partners.mjs", plan["files"])
+            return "release", {"mainSha": TARGET, "appCanaryPassed": True,
+                "protectedComponentsUnchanged": True, "liveAssetsSha256": digest,
+                "portableRecoveryBackup": {"sourceRevision": TARGET,
+                                          "programSha256": plan["files"][release.BACKUP_OPERATION]}}
+        remote_call.side_effect = dispatch
+        with TemporaryDirectory() as directory, patch("release.OUTPUT", Path(directory)), redirect_stdout(io.StringIO()):
+            (Path(directory) / f"independent-assets-{TARGET}.json").write_bytes(bundle)
+            env = {"RELEASE_SHA": TARGET, "QUALITY_RUN_ID": "123", "GITHUB_STEP_SUMMARY": str(Path(directory) / "summary")}
+            with patch.dict(os.environ, env, clear=True):
+                release.main()
+            self.assertEqual(len(plans), 1)
+            for changes in ({"VENDURE_RETRY_RECEIPT_SHA256": "e" * 64}, {}):
+                if not changes:
+                    before["assetsSha256"] = "f" * 64
+                put.reset_mock()
+                with patch.dict(os.environ, env | changes, clear=True), self.assertRaisesRegex(
+                        RuntimeError, "deferred_native_inputs_live_baseline_mismatch"):
+                    release.main()
+                put.assert_not_called()
+                self.assertEqual(len(plans), 1)
 
     @patch("release.require_ancestor")
     @patch("release.git")
