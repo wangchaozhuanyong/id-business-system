@@ -297,7 +297,7 @@ export function createPage(A, definition) {
         if (!view.write || view.write.digest !== digest) view.write = { digest, id: crypto.randomUUID() };
         operation = view.write.id;
       }
-      if ((action.startsWith('card-') || payload.action === 'recharge') &&
+      if (action.startsWith('card-') && payload.action !== 'reconcile' &&
           (!await Security.verify() || active !== view)) return;
       const result = action === 'alias'
         ? await D.relay('alias-register', payload)

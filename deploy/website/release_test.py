@@ -315,6 +315,22 @@ class WebsiteReleaseTests(unittest.TestCase):
     @patch("release.require_presentation_approval")
     @patch("release.require_ancestor")
     @patch("release.git")
+    def test_password_release_requires_the_exact_approved_admin_script_change(self, git, ancestor, approval):
+        files = remote.ACTION_PASSWORD_PRESENTATION_FILES
+        manifest = release.ACTION_PASSWORD_MANIFEST_PATH
+        git.return_value = "\n".join((*files, manifest))
+        self.assertEqual(release.require_website_scope(BASE, TARGET),
+                         ("actionPasswordPresentation", approval.return_value))
+        approval.assert_called_once_with(BASE, TARGET, release.ACTION_PASSWORD_MANIFEST, files)
+        for changed in ((manifest,), (*files, manifest, "modules/recharge/codexdaichong/native-adapter.mjs")):
+            git.return_value = "\n".join(changed)
+            with self.assertRaisesRegex(RuntimeError, "recharge_core_or_runtime_changed"):
+                release.require_website_scope(BASE, TARGET)
+        self.assertEqual(approval.call_count, 1)
+
+    @patch("release.require_presentation_approval")
+    @patch("release.require_ancestor")
+    @patch("release.git")
     def test_card_import_release_checks_the_adapter_and_shared_asset_inputs(self, git, ancestor, approval):
         git.return_value = remote.CARD_IMPORT_ASSET_SOURCE
         self.assertEqual(release.require_website_scope(BASE, TARGET),
@@ -559,6 +575,12 @@ class WebsiteReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_bundle_scope_mismatch"):
             remote.verify_presentation_bundle(bundle(previous), bundle(changed | {"/workspace": {"body": "new"}}),
                                               checkout_assets)
+        password_assets = remote.PRESENTATION_SCOPES["actionPasswordPresentation"][1]
+        password_candidate = previous | {"/admin.js": {"body": "one-hour confirmation"}}
+        remote.verify_presentation_bundle(bundle(previous), bundle(password_candidate), password_assets)
+        with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_bundle_scope_mismatch"):
+            remote.verify_presentation_bundle(
+                bundle(previous), bundle(password_candidate | {"/subscription": {"body": "changed"}}), password_assets)
         task_history_assets = remote.PRESENTATION_SCOPES["taskHistoryPresentation"][1]
         task_history = previous | {path: {"body": "new"} for path in ("/admin", "/admin.js")}
         remote.verify_presentation_bundle(bundle(previous), bundle(task_history), task_history_assets)

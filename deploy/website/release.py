@@ -9,7 +9,7 @@ import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from remote import (BACKUP_OPERATION, CARD_IMPORT_ASSET_SOURCE, CARD_IMPORT_PRESENTATION_FILES, CARD_PLAN_PRESENTATION_FILES,
+from remote import (ACTION_PASSWORD_PRESENTATION_FILES, BACKUP_OPERATION, CARD_IMPORT_ASSET_SOURCE, CARD_IMPORT_PRESENTATION_FILES, CARD_PLAN_PRESENTATION_FILES,
                     CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES, PRESENTATION_SCOPES, SECURITY_PRESENTATION_FILES,
                     REDEEM_PRESENTATION_FILES, SUBSCRIPTION_INVOICE_PRESENTATION_FILES,
                     TABLE_ACTIONS_STYLESHEET, TASK_HISTORY_PRESENTATION_FILES,
@@ -30,9 +30,11 @@ ADMIN_WORKSPACE_MANIFEST = "recharge-admin-workspace-20261115.json"
 ADMIN_WORKSPACE_MANIFEST_PATH = f"deploy/website/{ADMIN_WORKSPACE_MANIFEST}"
 SUBSCRIPTION_INVOICE_MANIFEST = "recharge-subscription-invoice-20261116.json"
 SUBSCRIPTION_INVOICE_MANIFEST_PATH = f"deploy/website/{SUBSCRIPTION_INVOICE_MANIFEST}"
+ACTION_PASSWORD_MANIFEST = "action-password-20261116.json"
+ACTION_PASSWORD_MANIFEST_PATH = f"deploy/website/{ACTION_PASSWORD_MANIFEST}"
 CORE_PATHS = ("deploy/recharge-core", "deploy/caddy", "modules/recharge/codexdaichong", "package.json",
               PROXY_TYPE_CATALOG, TASK_HISTORY_MANIFEST_PATH, ADMIN_WORKSPACE_MANIFEST_PATH,
-              SUBSCRIPTION_INVOICE_MANIFEST_PATH)
+              SUBSCRIPTION_INVOICE_MANIFEST_PATH, ACTION_PASSWORD_MANIFEST_PATH)
 ADAPTER_SCOPE = {
     "modules/recharge/codexdaichong/gateway.mjs", "modules/recharge/codexdaichong/local-gateway.mjs",
     "modules/recharge/codexdaichong/native-adapter.mjs", "modules/recharge/codexdaichong/runtime.mjs",
@@ -209,6 +211,9 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False, 
     elif changed == {*SUBSCRIPTION_INVOICE_PRESENTATION_FILES, SUBSCRIPTION_INVOICE_MANIFEST_PATH}:
         return "subscriptionInvoicePresentation", require_presentation_approval(
             base, sha, SUBSCRIPTION_INVOICE_MANIFEST, SUBSCRIPTION_INVOICE_PRESENTATION_FILES)
+    elif changed == {*ACTION_PASSWORD_PRESENTATION_FILES, ACTION_PASSWORD_MANIFEST_PATH}:
+        return "actionPasswordPresentation", require_presentation_approval(
+            base, sha, ACTION_PASSWORD_MANIFEST, ACTION_PASSWORD_PRESENTATION_FILES)
     elif changed == {CARD_IMPORT_ASSET_SOURCE}:
         return "cardImportPresentation", require_presentation_approval(
             base, sha, "card-import-20261113.json", CARD_IMPORT_PRESENTATION_FILES)
@@ -429,6 +434,9 @@ def main():
     if presentation_scope == "rechargeAdminWorkspacePresentation":
         files += ("frontend/finance-collection.js", "server/finance/collection-route.mjs", "server/card-management.mjs",
                   "deploy/website/check-business-action.mjs")
+    if presentation_scope == "actionPasswordPresentation":
+        files += ("server/finance/collection-route.mjs", "server/card-management.mjs",
+                  "server/recharge-partner-api.mjs", "deploy/website/check-business-action.mjs")
     if presentation_scope == "redeemPresentation":
         files += ("modules/finance/accounting.mjs",)
     if include_adapter:

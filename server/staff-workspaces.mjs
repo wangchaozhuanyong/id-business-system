@@ -233,7 +233,7 @@ export function createStaffWorkspaces({ store, client, publicOrigin, getAuth, re
       return { ...current, pending };
     }
     if (route !== 'finance/cards' || request.method !== 'POST') fail(405, '此操作不可用');
-    requireRecent(getAuth(), request);
+    if (Object.hasOwn(cardActions, body.action)) requireRecent(getAuth(), request);
     const operation = describeWriteOperation(request.headers['x-id-operation'], actor, [route, body]);
     const reconciling = body.action === 'reconcile';
     if (!reconciling && !operation) fail(400, '请从当前页面提交银行卡维护');
@@ -404,7 +404,6 @@ export function createStaffWorkspaces({ store, client, publicOrigin, getAuth, re
       }
       if (route === 'business-proxies') {
         if (!read && body.action === 'recharge') {
-          requireRecent(getAuth(), request);
           const countryCode = clean(body.countryCode, 2).toUpperCase();
           if (!/^[A-Z]{2}$/.test(countryCode) || !isProxyType(body.kind))
             fail(400, '请填写代理国家代码并选择类型');

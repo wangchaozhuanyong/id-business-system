@@ -9,6 +9,7 @@ import { createLocalAuth, initializeLocalAdmin, recoverLocalLogin } from '../ser
 import { nativeBrowserVerification, nativeManagerAccess } from '../server/access-roles.mjs';
 import { createLoginThrottle, loadLoginSecurity, verifiedAddress } from '../server/login-security.mjs';
 import { calculateTotp } from '../modules/tools/totp.mjs';
+import { localBusinessRequest } from './helpers/local-business-request.mjs';
 
 const domain = 'https://fixture.example.test';
 const credentials = { email: 'security-fixture@example.test', name: '隔离测试', password: 'fixture-only-password' };
@@ -89,14 +90,17 @@ test('validated login challenge matches the domain and action and is consumed be
   assert.equal(f.challengeCount(), 4);
 });
 
-test('unbound official staff can enroll but cannot change employees without confirmation', async t => {
+test('employee maintenance keeps the super role check without a second password', async t => {
   const f = await fixture(t);
   const session = await f.call('/login', { body: { ...credentials, remember: true } });
   assert.equal(session.status, 200);
   assert.equal((await f.call('/security', { cookie: session.cookie })).data.requiredForExistingActions, true);
-  const response = await f.call('/employees', { cookie: session.cookie,
-    body: { name: '隔离注册员', email: 'registrar@example.test', password: 'synthetic-password-only', role: 'registrar' } });
-  assert.equal(response.status, 403);
+  const body = { name: '隔离注册员', email: 'registrar@example.test', password: 'synthetic-password-only', role: 'registrar' };
+  assert.equal((await f.call('/employees', { body })).status, 401);
+  const response = await f.call('/employees', { cookie: session.cookie, body });
+  assert.equal(response.status, 201);
+  assert.equal((await f.call('/employees/' + response.data.employee.id, { cookie: session.cookie, method: 'PATCH',
+    body: { version: 1, active: false } })).status, 200);
 });
 
 test('account checks, source checks and temporary limits are bounded', () => {
@@ -181,22 +185,27 @@ test('approved browsers and verified networks constrain existing sessions and re
   assert.equal(verifiedAddress({ headers: { 'cf-connecting-ip': f.address }, socket: { remoteAddress: '127.0.0.1' } }, f.security), null);
 });
 
-test('routine recharge reads and probes only require the existing session and role', () => {
+test('only own card pool changes, auto-renewal switches and IP bans need the action password', () => {
   const ordinary = [
     ['POST', '/api/admin/recharge-routing/check-local'],
     ['POST', '/api/admin/recharge-routing/proxies/1/check'],
     ['POST', '/api/admin/proxy/test'], ['POST', '/api/admin/proxies/1/test'],
     ['POST', '/api/admin/hcaptcha/test'], ['POST', '/api/admin/subscription/batch-renewal-status'],
     ['POST', '/api/admin/checkout/generate'], ['GET', '/api/admin/runtime-logs'],
-    ['GET', '/api/admin/sessions'], ['GET', '/api/admin/recharge-routing']
+    ['GET', '/api/admin/sessions'], ['GET', '/api/admin/recharge-routing'],
+    ['GET', '/api/admin/sessions/fixture-job'], ['HEAD', '/api/admin/billing/export'],
+    ['GET', '/api/admin/cdks'], ['GET', '/api/admin/screenshots'], ['HEAD', '/api/admin/video'],
+    ['GET', '/api/admin/cards'], ['GET', '/api/admin/ip-bans'], ['POST', '/api/admin/cdks/generate'],
+    ['DELETE', '/api/admin/cdks/1'], ['POST', '/api/admin/config'], ['POST', '/api/admin/runtime-logs/clear'],
+    ['PUT', '/api/admin/recharge-routing'], ['POST', '/api/admin/recharge-routing/proxies'],
+    ['PUT', '/api/admin/recharge-routing/proxies/1/country'], ['POST', '/api/admin/proxies'],
+    ['DELETE', '/api/admin/addresses/1'], ['POST', '/api/admin/orbitcard/cards/1/restore'],
+    ['POST', '/api/external/cards/push']
   ];
   const protectedActions = [
-    ['PUT', '/api/admin/recharge-routing'], ['PUT', '/api/admin/recharge-routing/proxies/1/country'],
-    ['DELETE', '/api/admin/cards/1'], ['DELETE', '/api/admin/cdks/1'],
-    ['POST', '/api/admin/runtime-logs/clear'], ['POST', '/api/admin/subscription/cancel-auto-renew'],
-    ['POST', '/api/admin/recharge-routing/proxies'], ['POST', '/api/admin/cdks/generate'],
-    ['GET', '/api/admin/sessions/fixture-job'], ['HEAD', '/api/admin/billing/export'],
-    ['GET', '/api/admin/cdks'], ['GET', '/api/admin/screenshots'], ['HEAD', '/api/admin/video']
+    ['POST', '/api/admin/cards/import'], ['PUT', '/api/admin/cards/plan-policy'], ['DELETE', '/api/admin/cards/1'],
+    ['POST', '/api/admin/subscription/cancel-auto-renew'], ['POST', '/api/admin/subscription/enable-auto-renew'],
+    ['POST', '/api/admin/ip-bans'], ['DELETE', '/api/admin/ip-bans/1']
   ];
   for (const [method, path] of ordinary) assert.equal(nativeBrowserVerification(path, method), false, path);
   for (const [method, path] of protectedActions) assert.equal(nativeBrowserVerification(path, method), true, path);
@@ -213,12 +222,14 @@ test('important changes require a correct password on the current session, separ
   };
   const confirm = (password, cookie = enrolled.cookie, origin = domain) =>
     f.call('/security/confirm-password', { cookie, origin, body: { password } });
-  assert.equal((await f.call('/security', { cookie: enrolled.cookie })).data.recentlyVerified, true);
+  const afterEnrollment = (await f.call('/security', { cookie: enrolled.cookie })).data;
+  assert.equal(afterEnrollment.recentlyVerified, true);
+  assert.equal(afterEnrollment.passwordConfirmed, true);
+  f.advance(3_600_000);
   assert.equal((await f.call('/security/network', change)).data.code, 'SECURITY_CONFIRMATION_REQUIRED');
   assert.equal((await confirm(credentials.password, enrolled.cookie, 'https://other.test')).status, 403);
   assert.equal((await confirm('wrong-fixture-value')).status, 400);
   assert.equal((await f.call('/security', { cookie: enrolled.cookie })).data.passwordConfirmed, false);
-  f.advance(301_000);
   assert.equal((await confirm(credentials.password)).status, 200);
   const verified = (await f.call('/security', { cookie: enrolled.cookie })).data;
   assert.equal(verified.passwordConfirmed, true);
@@ -232,10 +243,61 @@ test('important changes require a correct password on the current session, separ
   });
   assert.equal(next.status, 200);
   assert.equal((await f.call('/security', { cookie: next.cookie })).data.passwordConfirmed, false);
+  f.advance(3_599_999);
+  f.restart();
   assert.equal((await f.call('/security/network', change)).status, 200);
-  f.advance(301_000);
+  f.advance(1);
   assert.equal((await f.call('/security', { cookie: enrolled.cookie })).data.passwordConfirmed, false);
   assert.equal((await f.call('/security/network', { ...change, body: { ...change.body, version: 1 } })).status, 403);
+  assert.equal((await confirm(credentials.password)).status, 200);
+  assert.equal((await f.call('/logout', { cookie: enrolled.cookie, body: {} })).status, 200);
+  assert.equal((await f.call('/security', { cookie: enrolled.cookie })).status, 401);
+  const afterLogout = await f.call('/login', { body: credentials });
+  const signedInAgain = await f.call('/login/verify', { body: {
+    verification: afterLogout.data.verification, code: (await calculateTotp(enrolled.key, f.now())).code
+  } });
+  assert.equal(signedInAgain.status, 200);
+  assert.equal((await f.call('/security', { cookie: signedInAgain.cookie })).data.passwordConfirmed, false);
   assert(f.events.some(event => event.action === 'auth_action_password'));
   assert(!JSON.stringify(f.events).includes(credentials.password));
+});
+
+test('replacing the authenticator reuses the existing password confirmation and its original deadline', async t => {
+  const f = await fixture(t);
+  const enrolled = await enroll(f);
+  f.advance(31_000);
+  const step = await f.call('/security/start', { cookie: enrolled.cookie, body: {} });
+  assert.equal(step.status, 200);
+  const replacement = await f.call('/security/confirm', { cookie: enrolled.cookie, body: {
+    enrollment: step.data.enrollment, code: (await calculateTotp(step.data.setupKey, f.now())).code
+  } });
+  assert.equal(replacement.status, 200);
+  assert.equal((await f.call('/security', { cookie: enrolled.cookie })).status, 401);
+  assert.equal((await f.call('/security', { cookie: replacement.cookie })).data.passwordConfirmed, true);
+  f.advance(3_600_000 - 31_000);
+  assert.equal((await f.call('/security', { cookie: replacement.cookie })).data.passwordConfirmed, false);
+});
+
+test('ordinary settings save directly while changing fee rules or prices requires current confirmation', async () => {
+  const actor = { id: 'fixture-super', name: '隔离管理员', role: 'super' };
+  const costSettings = { version: 3, cardPercent: '0.008' };
+  const snapshot = { version: 1, data: { mailboxTypes: [], costSettings, customerTags: ['旧标签'] } };
+  let writes = 0;
+  const store = {
+    load: key => { assert.equal(key, 'settings'); return snapshot; },
+    saveBatch: entries => { writes++; return entries.map(entry => ({ ...entry, version: 2 })); }
+  };
+  const submit = (data, confirmed = false, resource = 'settings') => localBusinessRequest(store, resource, {
+    method: 'PUT', body: resource === 'settings' ? { version: 1, data } : [{ domain: 'settings', version: 1, data }],
+    actor, publicOrigin: domain, confirmFeeAndPriceSettings: () => confirmed
+  });
+  assert.equal((await submit({ mailboxTypes: [], customerTags: ['新标签'], customerSources: ['转介绍'] })).status, 200);
+  assert.equal((await submit({ mailboxTypes: [{ id: 'fixt', name: '归类' }], costSettings })).status, 200);
+  const feeChange = { mailboxTypes: [], costSettings: { ...costSettings, cardPercent: '0.009' } };
+  assert.equal((await submit({ mailboxTypes: [], orderPrices: { GPT: { Plus: { CNY: '99' } } } })).status, 200);
+  const priceChange = { mailboxTypes: [], gptPaidPrices: { Plus: { CNY: '85' } } };
+  assert.equal((await submit(feeChange)).body.code, 'SECURITY_CONFIRMATION_REQUIRED');
+  assert.equal((await submit(priceChange, false, 'batch')).body.code, 'SECURITY_CONFIRMATION_REQUIRED');
+  assert.equal(writes, 3);
+  assert.equal((await submit(feeChange, true)).status, 200);
 });

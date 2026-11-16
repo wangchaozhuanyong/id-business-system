@@ -82,23 +82,26 @@
   async function bindFactor(info, host) {
     const { bound, canRebind } = info;
     if (bound && !canRebind && !(await verifyAuthenticator(info))) return;
-    let enrollment, completed = false;
+    const enrollmentFields = data => `<p>在身份验证器选择手动输入，填写下列密钥，再输入当前的六位验证码。</p>
+      <label for="local-security-key">绑定密钥</label><input id="local-security-key" readonly value="${E(data.setupKey)}" />
+      <label for="local-security-enrollment-code">六位动态验证码</label>
+      <input id="local-security-enrollment-code" name="code" autocomplete="one-time-code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required />`;
+    if (bound && !await verify()) return;
+    let enrollment = bound ? await request('security/start', 'POST', {}) : null;
+    let completed = false;
     await confirmation(bound ? '更换身份验证器' : '绑定两步验证',
-      '<label for="local-security-password">当前登录密码</label><input id="local-security-password" name="password" type="password" autocomplete="current-password" required />',
-      '下一步', async (fields, container, submit) => {
+      enrollment ? enrollmentFields(enrollment)
+        : '<label for="local-security-password">当前登录密码</label><input id="local-security-password" name="password" type="password" autocomplete="current-password" required />',
+      enrollment ? '确认绑定' : '下一步', async (fields, container, submit) => {
         if (completed) return true;
         if (!enrollment) {
-          const data = await request('security/start', 'POST', { password: fields.password });
-          enrollment = data.enrollment;
-          container.innerHTML = `<p>在身份验证器选择手动输入，填写下列密钥，再输入当前的六位验证码。</p>
-            <label for="local-security-key">绑定密钥</label><input id="local-security-key" readonly value="${E(data.setupKey)}" />
-            <label for="local-security-enrollment-code">六位动态验证码</label>
-            <input id="local-security-enrollment-code" name="code" autocomplete="one-time-code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" required />`;
+          enrollment = await request('security/start', 'POST', { password: fields.password });
+          container.innerHTML = enrollmentFields(enrollment);
           $('#local-security-key').select();
           submit.textContent = '确认绑定';
           return;
         }
-        const data = await request('security/confirm', 'POST', { enrollment, code: fields.code });
+        const data = await request('security/confirm', 'POST', { enrollment: enrollment.enrollment, code: fields.code });
         completed = true;
         container.innerHTML = `<p>请把恢复码保存到安全地点。每个恢复码只能使用一次，关闭后无法再次查看。</p>
           <label for="local-security-recovery-codes">恢复码</label>
@@ -138,7 +141,7 @@
         try {
           if (action === 'bind') return await bindFactor(info, host);
           if (!(await verify())) return;
-          if (action === 'verify') return A.notify('安全确认通过，5 分钟内可继续重要操作');
+          if (action === 'verify') return A.notify('安全确认通过，当前登录会话可在确认后 1 小时内继续重要操作');
           await request('security/device', 'POST', { action, id: control.dataset.id, enabled: !info.deviceLock });
           await personal(host);
           A.notify('设置已保存');

@@ -59,6 +59,7 @@ SECURITY_PRESENTATION_FILES = (
 TASK_HISTORY_PRESENTATION_FILES = ("modules/recharge/codexdaichong/assets.mjs",)
 SUBSCRIPTION_INVOICE_PRESENTATION_FILES = ("modules/recharge/codexdaichong/assets.mjs",)
 SUBSCRIPTION_INVOICE_ASSET = "/subscription"
+ACTION_PASSWORD_PRESENTATION_FILES = ("modules/recharge/codexdaichong/assets.mjs",)
 PRESENTATION_SCOPES = {
     "redeemPresentation": (REDEEM_PRESENTATION_FILES, REDEEM_PRESENTATION_ASSETS),
     "workspaceProgressPresentation": (WORKSPACE_PROGRESS_PRESENTATION_FILES, REDEEM_PRESENTATION_ASSETS),
@@ -70,6 +71,7 @@ PRESENTATION_SCOPES = {
     "securityPresentation": (SECURITY_PRESENTATION_FILES, {"/admin.js"}),
     "taskHistoryPresentation": (TASK_HISTORY_PRESENTATION_FILES, {"/admin", "/admin.js"}),
     "subscriptionInvoicePresentation": (SUBSCRIPTION_INVOICE_PRESENTATION_FILES, {SUBSCRIPTION_INVOICE_ASSET}),
+    "actionPasswordPresentation": (ACTION_PASSWORD_PRESENTATION_FILES, {"/admin.js"}),
 }
 ADAPTER_MOUNTS = ("modules", "deploy/recharge-core")
 LAUNCHERS = ("run-app", "app-entry.mjs", "check-app.mjs")

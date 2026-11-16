@@ -23,6 +23,7 @@ import {
 
 export const localAdminEmail = 'ppfzj1314@gmail.com';
 const localCookieName = 'id_local_session';
+const actionPasswordLifetime = 60 * 60 * 1000;
 const sessionLifetime = 8 * 60 * 60 * 1000;
 const day = 24 * 60 * 60 * 1000;
 const rememberedIdleLifetime = 30 * day;
@@ -583,7 +584,7 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
     const session = token && sessions.get(token);
     const at = now();
     return Boolean(session?.expiresAt > at && Number.isSafeInteger(session.passwordConfirmedAt) &&
-      session.passwordConfirmedAt <= at && at - session.passwordConfirmedAt < verificationLifetime);
+      session.passwordConfirmedAt <= at && at - session.passwordConfirmedAt < actionPasswordLifetime);
   }
 
   function requireVerified(request, accounts) {
@@ -702,7 +703,7 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
     return finishLogin(request, response, employee, body.remember === true);
   }
 
-  function finishLogin(request, response, employee, remember, verifiedMethod, recoveryCodes) {
+  function finishLogin(request, response, employee, remember, verifiedMethod, recoveryCodes, passwordConfirmedAt) {
     const at = now();
     removeBrowserSessions(request);
     if (publicUrl) {
@@ -729,6 +730,7 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
       expiresAt: createdAt + lifetime,
       ...(recoveryCodes && verifiedMethod === 'authenticator' ? { verifiedAt: createdAt } : {}),
       ...(verifiedMethod === 'recovery' ? { recoveredAt: createdAt } : {}),
+      ...(passwordConfirmedAt !== undefined && { passwordConfirmedAt }),
       ...(deviceDigest ? { deviceDigest } : {})
     });
     // The server enforces rolling idle expiry; the browser cookie lasts only
@@ -807,23 +809,29 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
     throttle(response, 'security', initial.id, address);
     if (!security?.mfaKey) throw new AuthError(503, '两步验证尚未启用，请联系管理员');
     if (operation === 'start') {
-      const password = typeof body.password === 'string' ? body.password : '';
-      if (verifying >= 2) throw new AuthError(429, '尝试过于频繁，请等 1 分钟再试');
-      let valid = false;
-      verifying++;
-      try {
-        valid = Buffer.byteLength(password, 'utf8') <= 512 && await matchesCredential(password, initial.credential);
-      } finally {
-        verifying--;
+      const activeConfirmation = initial.mfa && recentlyPasswordConfirmed(request);
+      let passwordConfirmedAt = activeConfirmation ? sessions.get(sessionToken(request))?.passwordConfirmedAt : undefined;
+      if (passwordConfirmedAt === undefined) {
+        const password = typeof body.password === 'string' ? body.password : '';
+        if (initial.mfa && !password) requireActionPassword(request);
+        if (verifying >= 2) throw new AuthError(429, '尝试过于频繁，请等 1 分钟再试');
+        let valid = false;
+        verifying++;
+        try {
+          valid = Buffer.byteLength(password, 'utf8') <= 512 && await matchesCredential(password, initial.credential);
+        } finally {
+          verifying--;
+        }
+        if (!valid) throw new AuthError(400, '密码不正确');
+        passwordConfirmedAt = now();
       }
-      if (!valid) throw new AuthError(400, '密码不正确');
       const employee = requireActor(request);
       if (employee.sessionVersion !== initial.sessionVersion) throw new AuthError(409, '账号资料已变化，请重试');
       if (employee.mfa && !recentlyVerified(request) && !recentlyRecovered(request))
         throw new AuthError(403, '更换验证器前请先完成安全确认');
       const { seed, setupKey, uri } = newAuthenticator(employee.email);
       const enrollment = newCheck(enrollmentChecks, {
-        employeeId: employee.id, version: employee.sessionVersion, session: sessionToken(request), seed
+        employeeId: employee.id, version: employee.sessionVersion, session: sessionToken(request), seed, passwordConfirmedAt
       });
       return sendJson(response, 200, { enrollment, setupKey, uri });
     }
@@ -845,7 +853,7 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
       enrollmentChecks.delete(body.enrollment);
       const remember = sessions.get(sessionToken(request))?.remembered === true;
       report(replacing ? 'auth_mfa_replace' : 'auth_mfa_bind', operator);
-      finishLogin(request, response, operator, remember, 'authenticator', recoveryCodes);
+      finishLogin(request, response, operator, remember, 'authenticator', recoveryCodes, check.passwordConfirmedAt);
       return;
     }
     if (operation === 'verify') {
@@ -971,7 +979,7 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
   }
 
   async function createEmployee(request, response) {
-    requireConfirmedSuper(request);
+    requireSuper(request);
     const body = await parseJson(request);
     const email = validatedEmail(body.email);
     const name = validatedName(body.name);
@@ -998,7 +1006,7 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
       setTeamLead(employees, row, body.teamLeadId);
       employees.push(row);
       return row;
-    }, requireConfirmedSuper);
+    }, requireSuper);
     report('auth_employee_create', operator, employee.id);
     if (employee.role === 'admin' && employee.active) monitor('admin_access');
     sendJson(response, 201, { employee: publicEmployee(employee) });
@@ -1018,7 +1026,6 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
     }
     const nameValue = body.nickname === undefined ? body.name : body.nickname;
     const name = nameValue === undefined ? undefined : validatedName(nameValue);
-    if (body.password !== undefined) requireConfirmedSuper(request);
     const credential =
       body.password === undefined ? undefined : await createCredential(body.password);
     let accessChanged = false;
@@ -1040,7 +1047,6 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
       setTeamLead(employees, row, body.teamLeadId);
       accessChanged = Boolean(role !== previousRole ||
         active !== row.active || credential || previousTeamLead !== row.teamLeadId);
-      if (accessChanged && shouldVerify()) requireActionPassword(request);
       if (accessChanged) row.sessionVersion++;
       if (body.nickname !== undefined || (name !== undefined && name !== row.name)) row.nicknameSet = true;
       row.name = name ?? row.name;
