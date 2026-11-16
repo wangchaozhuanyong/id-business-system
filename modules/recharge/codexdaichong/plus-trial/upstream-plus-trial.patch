@@ -1,5 +1,5 @@
 diff --git a/chatgpt.js b/chatgpt.js
-index 8a7cba7..aca61d2 100644
+index 8a7cba7..965d5d8 100644
 --- a/chatgpt.js
 +++ b/chatgpt.js
 @@ -467,6 +467,10 @@ async function openApiCheckout(page, { accessToken, sessionData, planType, count
@@ -55,13 +55,35 @@ index 8a7cba7..aca61d2 100644
      const { assertChatGptLoggedIn } = require('./session-auth');
      const { hasVisibleLoginChrome } = require('./auth-page-detect');
      const isPaymentUrl = (raw) => {
-@@ -520,6 +556,10 @@ async function verifyCheckoutDebugPage(page, { checkoutUrl, timeoutMs = 60000 }
+@@ -520,6 +556,32 @@ async function verifyCheckoutDebugPage(page, { checkoutUrl, timeoutMs = 60000 }
          if (!isPaymentUrl(page.url())) {
              throw new Error('支付页面发生非 Checkout 跳转，调试已停止');
          }
 +        if (await isCheckoutSummaryReady(page)) {
 +            console.log('✅ [调试] 无卡结账页已加载，调试已停止（未填卡、未付款）');
 +            return { checkoutUrl: page.url() };
++        }
++        const cardSelectorForFill = ['input[autocomplete="cc-number"]', 'input[name="cardnumber"]', 'input[name="number"]'].join(', ');
++        let cardPresent = false;
++        for (const frame of page.frames()) {
++            if (await frame.locator(cardSelectorForFill).count().catch(() => 0)) { cardPresent = true; break; }
++        }
++        if (cardPresent && process.env.CHECKOUT_DEBUG_FILL === '1') {
++            const { fillCheckoutForDebug } = require('./stripe-payment');
++            let debugCard = null;
++            try { debugCard = JSON.parse(process.env.DEBUG_CARD_JSON || ''); } catch (_) { debugCard = null; }
++            if (debugCard) {
++                const filled = await fillCheckoutForDebug(page, {
++                    cardInfo: { number: debugCard.number, expMonth: debugCard.expMonth, expYear: debugCard.expYear,
++                        cvc: debugCard.cvc, holder: debugCard.holder },
++                    address: debugCard.address,
++                    holderName: debugCard.holder
++                });
++                console.log(`[调试] 填卡结果: card=${filled.card} billing=${filled.billing} ${filled.error || ''}`);
++                await page.waitForTimeout(1500);
++                console.log('✅ [调试] 已填写银行卡与账单地址，按要求停在提交前（未点击付款）');
++                return { checkoutUrl: page.url(), filled };
++            }
 +        }
          for (const frame of page.frames()) {
              const inputs = frame.locator(cardSelector);
@@ -290,7 +312,7 @@ index e186977..3f6ff78 100644
  }
  
 diff --git a/stripe-payment.js b/stripe-payment.js
-index cd7ff9d..ca16373 100644
+index cd7ff9d..53ec164 100644
 --- a/stripe-payment.js
 +++ b/stripe-payment.js
 @@ -295,6 +295,23 @@ function isOpenAiCustomCheckout(page) {
@@ -339,3 +361,36 @@ index cd7ff9d..ca16373 100644
          () => tryClick(page.getByRole('button', { name: /^Subscribe$/i }), 'role=Subscribe'),
          () => tryClick(page.getByRole('button', { name: /^订阅$/ }), 'role=订阅'),
          () => tryClick(page.getByRole('button', { name: /subscribe|订阅|pay/i }), 'role=subscribe'),
+@@ -2762,8 +2787,32 @@ async function selectCountry(page, selectors, countryCode) {
+ 
+ // ==================== Exports ====================
+ 
++// 调试专用：填卡与账单地址后立即停止，绝不点击提交按钮。
++async function fillCheckoutForDebug(page, { cardInfo, address, holderName } = {}) {
++    const result = { card: false, billing: false, error: '' };
++    if (!cardInfo || !cardInfo.number) {
++        return { ...result, error: 'missing_card' };
++    }
++    console.log('  [调试] 开始填写银行卡（不会提交付款）...');
++    const cardFiled = await fillCardFieldsOpenAiCheckout(page, cardInfo, 60000);
++    result.card = Boolean(cardFiled && cardFiled.ok !== false);
++    if (!result.card) {
++        return { ...result, error: 'card_fields_not_filled' };
++    }
++    if (address && address.line1) {
++        console.log('  [调试] 开始填写账单地址（不会提交付款）...');
++        const billing = await fillOpenAiCheckoutBilling(page, address, holderName || cardInfo.holder || '');
++        result.billing = Boolean(billing && billing.ok !== false);
++        if (!result.billing) result.error = (billing && billing.error) || 'billing_not_filled';
++    } else {
++        result.billing = true;
++    }
++    return result;
++}
++
+ module.exports = {
+     completeStripeCardPayment,
++    fillCheckoutForDebug,
+     humanType,
+     generateRandomName,
+     getTypingDelay,

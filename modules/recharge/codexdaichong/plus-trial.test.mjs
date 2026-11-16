@@ -15,6 +15,7 @@ const pricingFixture = new URL('../../../test/fixtures/pricing-checkout.post-rou
 const stripeFixture = new URL('../../../test/fixtures/stripe-payment.upstream.js.txt', import.meta.url);
 const chatgptFixture = new URL('../../../test/fixtures/chatgpt.upstream.js.txt', import.meta.url);
 const sessionAuthFixture = new URL('../../../test/fixtures/session-auth.upstream.js.txt', import.meta.url);
+
 const prepareUrl = new URL('./prepare.mjs', import.meta.url);
 const patchPath = fileURLToPath(patchUrl);
 
@@ -138,6 +139,14 @@ test('会话在线校验改用 API 请求而不是页面导航', async () => {
   assert.match(body, /context\.request\.get\(`\$\{CHATGPT_COOKIE_URL\}\/api\/auth\/session`/);
   assert.ok(!/probe\.goto\(/.test(body), '不得再用页面导航校验会话');
   assert.match(body, /maxRetries: 0/);
+});
+
+test('调试模式填卡与账单地址后停在提交前', async () => {
+  const { 'stripe-payment.js': stripeText, 'chatgpt.js': chatgptText } = await appliedSources();
+  assert.match(stripeText, /async function fillCheckoutForDebug\(page, \{ cardInfo, address, holderName \} = \{\}\) \{/);
+  assert.match(stripeText, /fillCheckoutForDebug,/);
+  assert.match(chatgptText, /process\.env\.CHECKOUT_DEBUG_FILL === '1'/);
+  assert.match(chatgptText, /已填写银行卡与账单地址，按要求停在提交前/);
 });
 
 test('准备脚本与发布核验已覆盖四个文件', async () => {
