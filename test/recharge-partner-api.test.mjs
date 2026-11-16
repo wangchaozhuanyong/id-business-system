@@ -125,6 +125,7 @@ async function fixture(t) {
   };
   partnerHandlers = createRechargePartnerHandlers({
     store, transport, gateway, origin: publicOrigin, readSource: () => '203.0.113.2',
+    authorizeStorefrontRelease: request => request.headers['x-test-unverified'] !== '1',
     clock: () => now
   });
   const call = async (path, body, headers = {}) => {

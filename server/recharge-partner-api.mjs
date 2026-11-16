@@ -107,7 +107,7 @@ function validAccountSession(source, now) {
 }
 
 export function createRechargePartnerHandlers({
-  store, transport, gateway, origin, readSource, clock = Date.now
+  store, transport, gateway, origin, authorizeStorefrontRelease = () => false, readSource, clock = Date.now
 }) {
   const readPartners = () => store.featureDocument('recharge-partners');
   const readRequests = () => store.featureDocument('recharge-partner-requests');
@@ -179,7 +179,7 @@ export function createRechargePartnerHandlers({
     const release = body.action === 'release';
     if (release) {
       if (actor.role !== 'super') throw new RequestError(403, 'forbidden', '请使用超级管理员账号');
-      if (!authorizeAdmin(req))
+      if (!authorizeStorefrontRelease(req))
         throw new RequestError(403, 'SECURITY_CONFIRMATION_REQUIRED', '请先完成安全确认，再继续这项操作');
       if (!rechargeRequestIdPattern.test(body.id ?? '') || typeof body.updatedAt !== 'string' ||
           body.verifiedNoChargeOrActivation !== true) throw invalid();
