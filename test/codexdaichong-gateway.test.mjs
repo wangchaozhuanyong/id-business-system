@@ -11,6 +11,45 @@ const prefix = '/integrations/codexdaichong';
 const member = { id: 'u-1', email: 'member@example.test', admin: false, sensitive: false };
 const admin = { ...member, id: 'u-2', admin: true, sensitive: true };
 
+test('task records show safe summaries without exposing recharge codes, authorization or raw errors', async t => {
+  const code = 'KC-SYNTHETIC-HOLD1234';
+  const privateData = 'https://checkout.example.test/SECRET-FIXTURE';
+  const rows = [
+    { jobKey: 'manual-job', status: 'manual', progress: 90, cdk: code, token: 'private-fixture-token',
+      message: '付款结果待核实，已转人工确认 ' + privateData, rawOutput: privateData },
+    { jobKey: 'failed-job', status: 'failed', progress: 20, message: '未找到套餐升级按钮 ' + privateData },
+    { jobKey: 'running-job', status: 'running', progress: 40, cdk: '[checkout-debug]', message: '正在填写账单资料' }
+  ];
+  const engine = await listen(t, (req, res) => {
+    const body = req.url === '/api/admin/data' ? { success: true, logs: rows, manual_holds: [{ cdkCode: code }] }
+      : req.url === '/api/admin/task-logs' ? { success: true, tasks: rows }
+      : { success: true, task: rows[0], runtimeEntries: [{ text: privateData }] };
+    res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(body));
+  });
+  const gateway = createCodexdaichongGateway({ upstreamUrl: engine, publicOrigin: 'https://fixture.example.test',
+    secret: randomBytes(48).toString('base64url'), getUnifiedPrincipal: () => admin });
+  const host = await listen(t, gateway.handle);
+  const get = async path => {
+    const data = await (await fetch(host + prefix + '/api/admin/' + path)).json();
+    for (const value of [code, privateData, 'private-fixture-token']) assert(!JSON.stringify(data).includes(value));
+    return data;
+  };
+  const overview = await get('data');
+  assert(!Object.hasOwn(overview.logs[0], 'cdk'));
+  assert(!Object.hasOwn(overview.manual_holds[0], 'cdkCode'));
+  const { tasks } = await get('task-logs');
+  assert.equal(tasks[0].cdk, '尾号 1234');
+  assert.equal(tasks[0].token, '已记录（隐藏）');
+  assert.equal(tasks[0].message, '当时的付款结果未确认');
+  assert.equal(tasks[1].message, '定价页未找到套餐升级按钮');
+  assert(!Object.hasOwn(tasks[1], 'cdk') && !Object.hasOwn(tasks[1], 'token'));
+  assert.equal(tasks[2].cdk, '支付链接调试');
+  assert.equal(tasks[2].message, '正在填写支付资料');
+  const detail = await get('task-logs/manual-job');
+  assert.equal(detail.task.message, tasks[0].message);
+  assert.deepEqual(detail.runtimeEntries, []);
+});
+
 test('billing history cannot be deleted through the host gateway; queries and exports remain available', async t => {
   const forwarded = [], secret = randomBytes(48).toString('base64url');
   const origin = 'https://billing.example.test';
