@@ -442,7 +442,108 @@ function adaptAdminRuntimeLogs(source) {
   return source;
 }
 
+function adaptAdminTaskRecords(source) {
+  source = replaceSection(source, '        const statusMap = {', 'const CANONICAL_PLAN_TYPES', `
+        const statusMap = {
+            success: { class: 'status-success', label: '成功' },
+            failed: { class: 'status-failed', label: '失败' },
+            running: { class: 'status-running', label: '处理中' },
+            manual: { class: 'status-warning', label: '曾转人工' },
+            card_invalid: { class: 'status-warning', label: '银行卡无效' },
+            maintenance: { class: 'status-warning', label: '维护中断' }
+        };
+  `);
+  source = replaceSection(source, '        function renderStatus(status) {', 'document.addEventListener', `
+        function renderStatus(status) {
+            const key = String(status ?? '').trim().toLowerCase();
+            const cfg = Object.hasOwn(statusMap, key) ? statusMap[key] : { class: '', label: '未知状态' };
+            return '<span class="status-badge ' + cfg.class + '">' + cfg.label + '</span>';
+        }
+  `);
+  source = replaceOne(source, `
+                window.__adminLogs = data.logs || [];
+                renderLogTable(window.__adminLogs);
+                activationManualHolds = Array.isArray(data.manual_holds) ? data.manual_holds : [];
+                renderActivationManualHolds();
+                updateActivationManualHoldCount();
+`, '');
+  source = replaceOne(source,
+    "            if (group === 'task-records' && target === 'holds') {\n                loadActivationManualHolds(false).catch(() => { });\n            }",
+    "            if (group === 'task-records') void loadActiveTaskRecords();");
+  source = replaceOne(source,
+    "                await loadTaskLogs(false);\n                showMessage('数据已刷新', 'success');",
+    "                await loadTaskLogs(true);");
+  source = replaceSection(source, "            if (pId === 'logs') {", 'async function switchPage(pId, el)', `
+            if (pId === 'logs') void loadActiveTaskRecords();
+        }
+  `);
+  source = replaceSection(source, 'async function loadTaskLogs(showToast = false)', 'function renderCDKTable()', `
+        function taskRecordReader(path, field, bodyId, paint, successMessage) {
+            let pending;
+            let loaded = false;
+            function showTableStatus(message) {
+                document.getElementById(bodyId).innerHTML =
+                    '<tr><td colspan="7" style="text-align:center;padding:28px 0">' + escapeHtml(message) + '</td></tr>';
+            }
+            return {
+                invalidate() { pending = undefined; },
+                async load(showToast = false) {
+                    if (!pending) {
+                        const read = pending = {};
+                        if (!document.getElementById(bodyId).childElementCount) showTableStatus('正在加载记录…');
+                        read.result = (async () => {
+                            try {
+                                const response = await authFetch(path);
+                                const data = await response.json();
+                                if (!response.ok || data.success === false || !Array.isArray(data[field]))
+                                    throw new Error('加载记录失败，请刷新重试');
+                                if (pending !== read) return;
+                                paint(data[field]);
+                                loaded = true;
+                                return { ok: true };
+                            } catch {
+                                if (pending !== read) return;
+                                const message = loaded ? '刷新失败，已保留上次记录' : '加载记录失败，请刷新重试';
+                                if (!loaded) showTableStatus(message);
+                                return { ok: false, message };
+                            } finally {
+                                if (pending === read) pending = undefined;
+                            }
+                        })();
+                    }
+                    const result = await pending.result;
+                    if (showToast && result)
+                        showMessage(result.ok ? successMessage : result.message, result.ok ? 'success' : 'error');
+                }
+            };
+        }
+        const taskLogReader = taskRecordReader('/api/admin/task-logs', 'tasks', 'log_body', rows => {
+            window.__adminLogs = rows;
+            renderLogTable(rows);
+        }, '任务列表已刷新');
+        const manualHoldReader = taskRecordReader('/api/admin/activation-manual-holds?limit=200', 'holds',
+            'activation_manual_hold_body', rows => {
+                activationManualHolds = rows;
+                renderActivationManualHolds();
+                updateActivationManualHoldCount();
+            }, '人工确认列表已刷新');
+        const loadTaskLogs = (showToast = false) => taskLogReader.load(showToast);
+        const loadActivationManualHolds = (showToast = false) => manualHoldReader.load(showToast);
+
+        function loadActiveTaskRecords() {
+            const panel = document.querySelector('#logs.active [data-switch-panel]:not([hidden])');
+            if (panel?.dataset.switchPanel === 'holds') return loadActivationManualHolds();
+            if (panel?.dataset.switchPanel === 'tasks') return loadTaskLogs();
+        }
+  `);
+  source = replaceSection(source, 'async function loadActivationManualHolds(showToast = false)',
+    'async function resolveActivationManualHold(id)', '');
+  return replaceOne(source, "                showMessage(data.message || '人工审核已解除', 'success');\n                await loadActivationManualHolds(false);",
+    "                showMessage(data.message || '人工审核已解除', 'success');\n                manualHoldReader.invalidate();\n                await loadActivationManualHolds(false);");
+}
+
 function adaptAdminScript(source, routingScript) {
+  source = adaptAdminTaskRecords(source);
   source = adaptAdminPagination(source);
   source = replaceSection(source, '        // ─── 第三方代充 API 配置', 'const US_TAX_FREE_STATE_NAMES', `
         async function loadOrbitcardConfig() {
@@ -703,8 +804,10 @@ function adaptAdminScript(source, routingScript) {
                 await loadOrbitcardConfig();
                 if (adminDataRefreshTimer) clearInterval(adminDataRefreshTimer);
                 adminDataRefreshTimer = setInterval(() => {
-                    if (!document.hidden && window.idRechargeVisible !== false && !adminDataRefreshPaused)
-                        loadData(false).catch(() => { });
+                    if (!document.hidden && window.idRechargeVisible !== false && !adminDataRefreshPaused) {
+                        void loadData(false);
+                        void loadActiveTaskRecords();
+                    }
                 }, 3000);
                 updateAdminDataRefreshButton();
                 lucide.createIcons();
