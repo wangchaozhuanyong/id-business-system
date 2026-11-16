@@ -1,4 +1,5 @@
 import { setTimeout as sleep } from 'node:timers/promises';
+import { customerFacts } from './customer-progress.mjs';
 import { isIP } from 'node:net';
 import { pathToFileURL } from 'node:url';
 import { signRechargeAssertion } from '../assertion.mjs';
@@ -81,18 +82,43 @@ export function createVendureCodexdaichongWorker({
       if (accepted?.success !== true || typeof accepted.jobKey !== 'string' || !jobIdPattern.test(accepted.jobKey))
         return unknown;
       jobKey = accepted.jobKey;
+      let facts = [];
+      let lastFacts = '';
+      let collecting;
+      const logsAbort = new AbortController();
+      // Read one bound job only, with a short-lived assertion scoped to this GET.
+      // No executor request, payment behavior or result is changed by this observer.
+      const collectFacts = () => {
+        if (collecting || logsAbort.signal.aborted) return;
+        const path = '/api/admin/task-logs/' + jobKey;
+        collecting = (async () => {
+          const response = await fetch(upstream + path, { method: 'GET', redirect: 'error',
+            signal: AbortSignal.any([logsAbort.signal, AbortSignal.timeout(2500)]),
+            headers: { 'x-id-recharge-assertion': signRechargeAssertion(upstreamSecret, 'GET', path,
+              { ...actor, admin: true, sensitive: false }) } });
+          if (!response.ok || !response.body) { await response.body?.cancel(); return; }
+          const chunks = []; let size = 0;
+          for await (const chunk of response.body) {
+            size += chunk.byteLength; if (size > 4 * 1024 * 1024) throw new Error('Oversized progress');
+            chunks.push(chunk);
+          }
+          facts = customerFacts(JSON.parse(Buffer.concat(chunks)), jobKey, task.executionCode);
+        })().catch(() => {}).finally(() => { collecting = undefined; });
+      };
       let lastStage;
       let heartbeatAt = 0;
       const collectProgress = async (stage) => {
-        if (lastStage === stage && Date.now() < heartbeatAt) return;
+        const signature = JSON.stringify(facts);
+        if (lastStage === stage && lastFacts === signature && Date.now() < heartbeatAt) return;
         try {
           const progress = await workerRequest('progress', {
-            id: task.id, leaseToken: task.leaseToken, upstreamJobId: jobKey, stage
+            id: task.id, leaseToken: task.leaseToken, upstreamJobId: jobKey, stage, facts
           });
           if (progress.response.ok && progress.data?.id === task.id &&
               Number.isSafeInteger(progress.data.leaseUntil)) {
             task.leaseUntil = progress.data.leaseUntil;
             lastStage = stage;
+            lastFacts = signature;
             heartbeatAt = Date.now() + 60_000;
           }
         } catch {
@@ -100,11 +126,14 @@ export function createVendureCodexdaichongWorker({
         }
       };
       await collectProgress('started');
+      try {
       while (canContinue()) {
+        collectFacts();
         const { data: receipt } = await upstreamRequest('/api/task-status/' + jobKey, undefined, task.clientIp);
         const status = receipt?.data;
         if (receipt?.success !== true || status?.jobKey !== jobKey || status.cdkCode !== task.executionCode)
           break;
+        if (status.isTerminal === true) { await collecting; if (facts.length) await collectProgress(lastStage ?? 'processing'); }
         if (status.status === 'success' && status.isTerminal === true)
           return { outcome: 'confirmed_success', evidenceId: 'codexdaichong:' + jobKey, upstreamJobId: jobKey };
         if (status.status === 'failed' && status.isTerminal === true &&
@@ -116,6 +145,7 @@ export function createVendureCodexdaichongWorker({
         await collectProgress(originalRechargeStage(status.message));
         await sleep(pollIntervalMs);
       }
+      } finally { logsAbort.abort(); await collecting; }
     } catch {
       // A timeout or unreadable receipt cannot determine whether payment happened.
     }
