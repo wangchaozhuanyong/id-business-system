@@ -897,6 +897,23 @@ class WebsiteReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(remote.ReleaseError, "gateway_retry_launcher_changed"):
             vendure_admission.stage_launcher(approved, before, target, refresh=True, retry_receipt="d" * 64)
 
+    def test_gateway_worker_binding_stays_stable_when_the_same_worker_stops(self):
+        started = (b"{ path=/operations/worker ; argv[]=/operations/worker --serve ; ignore_errors=no ; "
+                   b"start_time=[Mon 2026-11-16] ; stop_time=[n/a] ; pid=451 ; code=(null) ; status=0/0 }\n")
+        stopped = started.replace(b"stop_time=[n/a] ; pid=451 ; code=(null)",
+                                  b"stop_time=[Mon 2026-11-16] ; pid=451 ; code=killed")
+
+        def binding(command, launcher_digest="launcher"):
+            with patch("vendure_admission.run", side_effect=[vendure_admission.UNIT.encode(), command]), \
+                    patch("vendure_admission.digest", return_value=launcher_digest):
+                return vendure_admission.worker_binding()
+
+        self.assertEqual(binding(started), binding(stopped))
+        self.assertNotEqual(binding(started), binding(stopped.replace(b"--serve", b"--changed")))
+        self.assertNotEqual(binding(started), binding(stopped, "modified-launcher"))
+        with self.assertRaisesRegex(remote.ReleaseError, "gateway_worker_command_ambiguous"):
+            binding(started.strip() + b" ; " + stopped)
+
     def test_gateway_accepts_only_the_signed_single_pre_execution_failure(self):
         key = bytes(range(32))
         task_id = "11111111-1111-4111-8111-111111111111"

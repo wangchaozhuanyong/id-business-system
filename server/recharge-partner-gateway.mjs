@@ -19,9 +19,9 @@ export function rechargePartnerGateway(directory) {
           if (bytes > 4096) throw new Error('Invalid gateway response');
           chunks.push(chunk);
         }
-        if (response.statusCode === 404 && action === 'task') return resolve(null);
+        if (response.statusCode === 404 && ['task', 'review-lookup', 'review-release'].includes(action)) return resolve(null);
         if (response.statusCode === 400 && action === 'query') return resolve(null);
-        if (response.statusCode === 409 && action === 'issue') return resolve(false);
+        if (response.statusCode === 409 && ['issue', 'review-release'].includes(action)) return resolve(false);
         if (response.statusCode !== 200) throw new Error('Partner gateway unavailable');
         resolve(JSON.parse(Buffer.concat(chunks)));
       } catch (error) {
