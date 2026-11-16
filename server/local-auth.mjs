@@ -26,8 +26,8 @@ const localCookieName = 'id_local_session';
 const actionPasswordLifetime = 60 * 60 * 1000;
 const sessionLifetime = 8 * 60 * 60 * 1000;
 const day = 24 * 60 * 60 * 1000;
-const rememberedIdleLifetime = 30 * day;
-const rememberedMaximumLifetime = 90 * day;
+const rememberedLifetime = 10 * day;
+const legacyRememberedIdleLifetime = 30 * day;
 const employeeRoles = staffRoles;
 const tokenPattern = /^[0-9a-f]{64}$/;
 const idPattern = /^[0-9a-f-]{36}$/;
@@ -718,12 +718,12 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
     if (publicUrl && !employee.mfa && ['super', 'admin', 'finance'].includes(employee.role)) remember = false;
     const token = randomBytes(32).toString('hex');
     const createdAt = now();
-    const lifetime = remember ? rememberedIdleLifetime : sessionLifetime;
+    const lifetime = remember ? rememberedLifetime : sessionLifetime;
     const deviceDigest = requestToken(request, browserCookie);
     sessions.set(createHash('sha256').update(token).digest('hex'), {
       id: randomUUID(), remembered: remember,
       createdAt, lastUsedAt: createdAt,
-      absoluteExpiresAt: createdAt + (remember ? rememberedMaximumLifetime : sessionLifetime),
+      absoluteExpiresAt: createdAt + lifetime,
       device: browserName(request),
       employeeId: employee.id,
       version: employee.sessionVersion,
@@ -733,9 +733,8 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
       ...(passwordConfirmedAt !== undefined && { passwordConfirmedAt }),
       ...(deviceDigest ? { deviceDigest } : {})
     });
-    // The server enforces rolling idle expiry; the browser cookie lasts only
-    // until the absolute cap. Activity responses cannot overwrite a later login.
-    setCookie(response, token, remember ? rememberedMaximumLifetime : lifetime, cookieName, Boolean(publicUrl));
+    // New sessions use the same fixed deadline in the browser and on the server.
+    setCookie(response, token, lifetime, cookieName, Boolean(publicUrl));
     if (!recoveryCodes) report('auth_login', employee);
     sendJson(response, 200, { actor: publicEmployee(employee), ...(recoveryCodes ? { recoveryCodes } : {}) });
   }
@@ -1096,8 +1095,11 @@ export function createLocalAuth(accountPath, { onEvent, onMonitoring, now = Date
         const session = updateSession(digest, current => {
           const row = sessionMetadata(current);
           if (row.expiresAt <= at) return undefined;
-          return { ...row, lastUsedAt: at,
-            expiresAt: row.remembered ? Math.min(at + rememberedIdleLifetime, row.absoluteExpiresAt) : row.expiresAt };
+          // Only previously issued remembered sessions have a separate idle deadline.
+          const expiresAt = row.remembered && row.expiresAt < row.absoluteExpiresAt
+            ? Math.min(at + legacyRememberedIdleLifetime, row.absoluteExpiresAt)
+            : row.expiresAt;
+          return { ...row, lastUsedAt: at, expiresAt };
         });
         if (!session) throw new AuthError(401, '登录已过期，请重新登录');
         // Previously issued cookies retain rolling renewal under their old name.
