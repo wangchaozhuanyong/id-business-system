@@ -1,5 +1,7 @@
-import { createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
+import { openProgressStream } from './progress-stream.mjs';
+import { customerEmail, projectCustomerProgress } from './customer-progress.mjs';
 import {
   moyaoRechargeChannel, rechargeManualReviewReason, rechargePartnerIdPattern, rechargeRequestIdPattern,
   storefrontRechargeCode
@@ -31,7 +33,7 @@ const progressLabels = new Map([
 const workerProgressStages = new Set(['started', 'processing', 'payment_details', 'paying', 'paid', 'subscription_check']);
 const workerFields = new Map([
   ['claim', []],
-  ['progress', ['id', 'leaseToken', 'stage', 'upstreamJobId']],
+  ['progress', ['id', 'leaseToken', 'stage', 'upstreamJobId', 'facts']],
   ['result', ['id', 'leaseToken', 'outcome', 'evidenceId', 'upstreamJobId']]
 ]);
 const upstreamJobPattern = /^[A-Za-z0-9_-]{1,128}$/;
@@ -185,9 +187,38 @@ export function createLoopbackVendureRechargeBridge({
   const sessions = new Map();
   const issuing = new Set();
   const admissionReads = new Map();
+  const progressListeners = new Map();
+  let streamCount = 0;
+  function streamTask(task, res) {
+    const listeners = progressListeners.get(task.id) ?? new Set();
+    if (streamCount >= 128 || listeners.size >= 8) return send(res, 429, {});
+    const stream = openProgressStream(res);
+    listeners.add(stream); progressListeners.set(task.id, listeners); streamCount++;
+    stream.cleanup(() => {
+      listeners.delete(stream); streamCount--;
+      if (!listeners.size) progressListeners.delete(task.id);
+    });
+    stream.send(taskView(task));
+  }
   let closed = false;
   let needsRecovery = false;
 
+  function accountEmail(task, value) {
+    const key = Buffer.from(fingerprint('customer-email-key', task.id), 'hex');
+    try {
+      if (value !== undefined) {
+        const iv = randomBytes(12); const cipher = createCipheriv('aes-256-gcm', key, iv);
+        cipher.setAAD(Buffer.from(task.id));
+        const encrypted = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
+        return [iv, cipher.getAuthTag(), encrypted].map(part => part.toString('base64url')).join('.');
+      }
+      if (!task.accountEmailSealed) return undefined;
+      const [iv, tag, encrypted] = task.accountEmailSealed.split('.').map(part => Buffer.from(part, 'base64url'));
+      const decipher = createDecipheriv('aes-256-gcm', key, iv);
+      decipher.setAAD(Buffer.from(task.id)); decipher.setAuthTag(tag);
+      return Buffer.concat([decipher.update(encrypted), decipher.final()]).toString('utf8');
+    } catch { return undefined; } finally { key.fill(0); }
+  }
   function taskView(task, includeToken = false) {
     const stage = task.status === 'running'
       ? workerProgressStages.has(task.stage) ? task.stage : 'processing'
@@ -197,6 +228,8 @@ export function createLoopbackVendureRechargeBridge({
       plan: task.plan,
       status: task.status,
       stage,
+      ...(task.progress && { progress: task.progress }),
+      ...(task.accountEmailSealed && { accountEmail: accountEmail(task) }),
       message: progressLabels.get(stage) ?? '处理中',
       updatedAt: new Date(task.updatedAt).toISOString(),
       ...(includeToken ? { taskToken: fingerprint('task', task.id) } : {})
@@ -205,7 +238,7 @@ export function createLoopbackVendureRechargeBridge({
 
   function transition(task, status, at) {
     // Vendure ignores snapshots with a timestamp no later than the last receipt.
-    return { ...task, status, updatedAt: Math.max(at, task.updatedAt + 1) };
+    return projectCustomerProgress({ ...task, status, updatedAt: Math.max(at, task.updatedAt + 1) }, task, at);
   }
 
   function rejectedBeforeExecution(task) {
@@ -270,12 +303,21 @@ export function createLoopbackVendureRechargeBridge({
         } catch {
           needsRecovery = true;
         }
-        if (needsRecovery) sessions.clear();
+        if (needsRecovery) {
+          sessions.clear();
+          for (const listeners of progressListeners.values()) for (const stream of [...listeners]) stream.close();
+        }
         throw error;
       }
     }
+    const previous = tasks;
     tasks = nextTasks;
     nonces = nextNonces;
+    for (const [id, listeners] of progressListeners) {
+      const task = tasks.get(id);
+      if (task && (task.progress?.version !== previous.get(id)?.progress?.version || task.status !== previous.get(id)?.status))
+        for (const stream of [...listeners]) stream.send(taskView(task));
+    }
   }
 
   function expire(at, afterRestart = false) {
@@ -304,7 +346,7 @@ export function createLoopbackVendureRechargeBridge({
   }, signatureWindowMs);
   timer.unref();
 
-  async function handleVendure(action, body, res, at, clientIp, storefrontChannel, partnerId) {
+  async function handleVendure(action, body, res, at, clientIp, storefrontChannel, partnerId, streaming = false) {
     const useAdmission = Boolean(lookupAdmission && (partnerId || storefrontChannel === moyaoRechargeChannel));
     const accepting = () => acceptSubmissions && (!lookupAdmission || (useAdmission && acceptStorefrontSubmissions()));
     if (lookupAdmission && storefrontChannel !== undefined && !useAdmission) {
@@ -322,7 +364,7 @@ export function createLoopbackVendureRechargeBridge({
       if (!task || task.partnerId !== partnerId ||
           (!oldTokenMatches && !secureEqual(fingerprint('task', task.id), supplied)))
         return send(res, 404, { error: '任务不可用' });
-      return send(res, 200, taskView(task));
+      return streaming ? streamTask(task, res) : send(res, 200, taskView(task));
     }
 
     const nativeCode = useAdmission ? storefrontRechargeCode(body.code) : '';
@@ -400,7 +442,7 @@ export function createLoopbackVendureRechargeBridge({
           ? { rejected: true } : taskView(prior, true));
       if (!accepting() || record?.status !== 'available')
         return send(res, 200, { rejected: true });
-      const task = {
+      const task = projectCustomerProgress({
         id: randomUUID(),
         codeRef,
         ...(partnerId && { partnerId, partnerRequestId: body.requestId }),
@@ -409,7 +451,9 @@ export function createLoopbackVendureRechargeBridge({
         queuedUntil: at + queuedLifetimeMs,
         status: 'queued',
         updatedAt: explicitRetry ? Math.max(at, prior.updatedAt + 1) : at
-      };
+      }, null, at);
+      const email = customerEmail(body.session);
+      if (email) task.accountEmailSealed = accountEmail(task, email);
       commit(new Map(tasks).set(task.id, task));
       sessions.set(task.id, { session: body.session, executionCode: record.upstreamCode });
       return send(res, 200, taskView(task, true));
@@ -482,12 +526,12 @@ export function createLoopbackVendureRechargeBridge({
           !upstreamJobPattern.test(body.upstreamJobId) ||
           (task.upstreamJobId && task.upstreamJobId !== body.upstreamJobId))
         return finish(400, { error: '进度格式无效' });
-      const progressed = {
+      const progressed = projectCustomerProgress({
         ...transition(task, 'running', at),
         stage: body.stage,
         upstreamJobId: body.upstreamJobId,
         leaseUntil: at + leaseLifetimeMs
-      };
+      }, task, at, body.facts);
       nextTasks.set(task.id, progressed);
       return finish(200, { ...taskView(progressed), leaseUntil: progressed.leaseUntil });
     }
@@ -577,7 +621,7 @@ export function createLoopbackVendureRechargeBridge({
     expire(at);
     if (worker && nonces.has(nonceRef)) return send(res, 409, { error: '执行请求已接收' });
     return vendure
-      ? handleVendure(vendure[1], body, res, at, headers['x-vendure-client-ip'], headers['x-vendure-recharge-channel'])
+      ? handleVendure(vendure[1], body, res, at, headers['x-vendure-client-ip'], headers['x-vendure-recharge-channel'], undefined, headers.accept === 'text/event-stream')
       : handleWorker(worker[1], body, res, at, nonceRef, nonceUntil);
   }
 
@@ -636,7 +680,7 @@ export function createLoopbackVendureRechargeBridge({
         }
         if (action === 'task') {
           const task = [...tasks.values()].find(row => row.partnerId === partnerId && row.partnerRequestId === requestId);
-          return task ? send(res, 200, taskView(task)) : send(res, 404, {});
+          return task ? req.headers.accept === 'text/event-stream' ? streamTask(task, res) : send(res, 200, taskView(task)) : send(res, 404, {});
         }
         // The app has authorized the partner and owns request recovery. The same executor store
         // arbitrates native codes for the legacy shop and this socket.
@@ -649,6 +693,7 @@ export function createLoopbackVendureRechargeBridge({
     close() {
       closed = true;
       clearInterval(timer);
+      for (const listeners of progressListeners.values()) for (const stream of [...listeners]) stream.close();
       tasks.clear();
       registry.clear();
       nonces.clear();

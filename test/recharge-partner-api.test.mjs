@@ -8,6 +8,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createRechargePartnerHandlers, partnerApiPrefix, storefrontReviewRoute } from '../server/recharge-partner-api.mjs';
 import { rechargePartnerGateway } from '../server/recharge-partner-gateway.mjs';
+import { readProgressStream } from '../modules/recharge/vendure/progress-stream.mjs';
 import {
   commitPartnerIssue, createStorefrontAdmissionClient, listenPrivateRechargeSocket, listenStorefrontAdmission,
   moyaoRechargeChannel, partnerTaskDirectoryName, partnerTaskSocketName, storefrontAdmissionSocketName
@@ -114,6 +115,14 @@ async function fixture(t) {
     assert.equal(res.status, 200);
     return value;
   };
+  gateway.watch = async (data, signal, onTask) => {
+    const res = await fetch(address(partnerServer) + '/task', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      body: JSON.stringify(data), signal
+    });
+    assert.equal(res.status, 200);
+    await readProgressStream(res.body, onTask);
+  };
   partnerHandlers = createRechargePartnerHandlers({
     store, transport, gateway, origin: publicOrigin, readSource: () => '203.0.113.2',
     authorizeAdmin: req => req.headers['x-test-unverified'] !== '1',
@@ -131,6 +140,9 @@ async function fixture(t) {
     originalTasks, nativeHolds,
     storefrontReview: (body, headers) => call(storefrontReviewRoute, body, { origin: publicOrigin, ...headers }),
     documents, advance: ms => { now += ms; }, setMaintenance: flag => { maintenance = flag; },
+    stream: (key, id, signal) => fetch(address(server) + partnerApiPrefix + '/redemptions/' + id, {
+      headers: { authorization: 'Bearer ' + key, Accept: 'text/event-stream' }, signal
+    }),
     rejectSubmit: flag => { rejectSubmit = flag; },
     onNativeLookup: fn => { beforeNativeLookup = fn; },
     loseResponse: flag => { loseResponse = flag; },
@@ -225,6 +237,44 @@ const authorizationInput = request => {
   const [id, ticket] = new URL(request.authorizationUrl).hash.slice(1).split('.');
   return { id, ticket };
 };
+
+test('partner progress stream binds the public request, rejects another owner and closes at completion', async t => {
+  const f = await fixture(t);
+  const owner = await enrollment(f, 'stream-owner');
+  const other = await enrollment(f, 'stream-other');
+  const created = (await f.api(owner.apiKey, '/redemptions', { code: owner.codes[0] }, 'stream-order')).body;
+  const ticket = authorizationInput(created);
+  assert.equal((await f.stream(other.apiKey, ticket.id)).status, 404);
+  assert.equal((await f.stream(owner.apiKey, ticket.id)).status, 409);
+  await f.authorize({ ...ticket, session });
+  const running = (await f.worker('claim')).body.task;
+  const abort = new AbortController();
+  t.after(() => abort.abort());
+  const response = await f.stream(owner.apiKey, ticket.id, abort.signal);
+  assert.equal(response.status, 200);
+  assert.match(response.headers.get('content-type'), /text\/event-stream/);
+  assert.match(response.headers.get('cache-control'), /no-store/);
+  const events = [];
+  let receivedInitial;
+  const initial = new Promise(resolve => { receivedInitial = resolve; });
+  const reader = readProgressStream(response.body, task => { events.push(task); receivedInitial(); });
+  await initial;
+  f.advance(1000);
+  const update = await f.worker('progress', { id: running.id, leaseToken: running.leaseToken,
+    upstreamJobId: 'synthetic-stream-job', stage: 'payment_details',
+    facts: [{ key: 'billing', state: 'complete', at: Date.now(), attempt: 1 }] });
+  assert.equal(update.status, 200);
+  f.advance(1000);
+  await f.worker('result', { id: running.id, leaseToken: running.leaseToken,
+    upstreamJobId: 'synthetic-stream-job', outcome: 'confirmed_success', evidenceId: 'synthetic-stream-receipt' });
+  await reader;
+  assert(events.length >= 3);
+  assert(events.every(task => task.id === ticket.id && task.accountEmail === 'synthetic@example.test'));
+  assert.equal(events.at(-1).status, 'succeeded');
+  assert.equal(events.at(-1).progress.milestones.find(step => step.key === 'billing')?.state, 'complete');
+  assert(!JSON.stringify(events).includes(running.leaseToken));
+  assert(!JSON.stringify(events).includes('synthetic-not-a-real-session'));
+});
 
 test('partner keys, inventory and task receipts stay private across both storefront routes', async t => {
   const f = await fixture(t);
@@ -377,4 +427,14 @@ test('the private task socket uses the same admission listener and returns only 
     assert.deepEqual(issued, { id: input.requestId, codes: [input.code] });
     assert.equal((await queue('submit', { ...input, session })).status, 'queued');
     assert.equal((await queue('task', input)).status, 'queued');
+    const abort = new AbortController();
+    const snapshots = [];
+    await queue.watch(input, abort.signal, task => { snapshots.push(task); abort.abort(); }).catch(error => {
+      if (error.name !== 'AbortError') throw error;
+    });
+    assert.equal(snapshots.length, 1);
+    assert.equal(snapshots[0].status, 'queued');
+    assert.equal(snapshots[0].accountEmail, 'synthetic@example.test');
+    assert.equal(snapshots[0].progress.milestones[0].key, 'accepted');
+    assert.equal(snapshots[0].taskToken, undefined);
 });

@@ -193,8 +193,8 @@ test(
           hasTouch: true,
           embedded: true
         });
-        const frameGeometry = async (key, total) => {
-          const result = await page.waitForFunction(({ key, total }) => {
+        const frameGeometry = async (key, total, expectedHeight) => {
+          const result = await page.waitForFunction(({ key, total, expectedHeight }) => {
             const frame = document.querySelector('.recharge-integration__content iframe:not([hidden])');
             const doc = frame?.contentDocument;
             const pager = doc?.querySelector(`nav[data-pagination="recharge-${key}"]`);
@@ -204,20 +204,21 @@ test(
             const availableBottom = innerHeight - main.nextElementSibling.offsetHeight - parseFloat(getComputedStyle(main).paddingBottom);
             if (Math.abs(availableBottom - panel.bottom) > 2 || frame.clientHeight + 1 < doc.body.offsetHeight) return false;
             const footer = pager.closest('.table-footer'), viewport = footer.previousElementSibling;
+            const tableHeight = viewport.clientHeight;
+            if (expectedHeight !== undefined && Math.abs(tableHeight - expectedHeight) > 2) return false;
             const style = node => doc.defaultView.getComputedStyle(node);
             return {
-              tableHeight: viewport.clientHeight,
+              tableHeight,
               tableBorder: style(viewport).borderBottomWidth,
               footerBorder: style(footer).borderTopWidth,
               pagerBorder: style(pager).borderTopWidth
             };
-          }, { key, total });
+          }, { key, total, expectedHeight });
           return result.jsonValue();
         };
         const original = await frameGeometry('cdk', cdks.length);
         await page.setViewportSize({ width: 1440, height: 1080 });
-        const taller = await frameGeometry('cdk', cdks.length);
-        assert(Math.abs(taller.tableHeight - original.tableHeight - 180) <= 2);
+        const taller = await frameGeometry('cdk', cdks.length, original.tableHeight + 180);
         await page.getByRole('navigation', { name: 'ChatGPT 充值功能' }).getByRole('button', { name: '免税地址' }).click();
         const addresses = await frameGeometry('address', 22);
         for (const geometry of [taller, addresses]) {
