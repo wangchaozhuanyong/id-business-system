@@ -91,6 +91,12 @@ VENDURE_REFRESH_FILES = (
     "server/tools/read-tool-config.mjs",
     "server/vendure-task-service.mjs",
 )
+CUSTOMER_PROGRESS_FILES = (
+    "modules/recharge/vendure/codexdaichong-worker.mjs",
+    "modules/recharge/vendure/customer-progress.mjs", "modules/recharge/vendure/progress-stream.mjs",
+    "modules/recharge/codexdaichong/progress-presentation.mjs", "deploy/website/recharge_core.py",
+    "deploy/website/customer_progress.py",
+)
 PARTNER_API_FILES = (
     "server/recharge-partner-api.mjs", "server/recharge-partner-gateway.mjs", "server/recharge-code-requests.mjs",
     "frontend/recharge-partners.mjs", "frontend/recharge-partner-authorize.html",
@@ -388,6 +394,9 @@ def main():
     include_core = os.environ.get("RELEASE_RECHARGE_CORE") == "true"
     retry_receipt = os.environ.get("VENDURE_RETRY_RECEIPT_SHA256", "")
     partner_api = os.environ.get("RELEASE_RECHARGE_PARTNER_API") == "true"
+    customer_progress = os.environ.get("RELEASE_CUSTOMER_PROGRESS") == "true"
+    if customer_progress and (include_adapter or include_core or partner_api or attempt or inspect_command or retry_receipt):
+        raise RuntimeError("customer_progress_release_requires_its_own_operation")
     if partner_api and (include_adapter or include_core or attempt or inspect_command or retry_receipt):
         raise RuntimeError("partner_api_release_requires_its_own_operation")
     if retry_receipt and (not SHA256.fullmatch(retry_receipt) or
@@ -487,10 +496,12 @@ def main():
                   *ADAPTER_FILES)
     if include_core:
         files = tuple(dict.fromkeys((*files, *NATIVE_RELEASE_FILES)))
-    if retry_receipt or partner_api:
+    if retry_receipt or partner_api or customer_progress:
         files += VENDURE_REFRESH_FILES
-    if partner_api:
+    if partner_api or customer_progress:
         files += PARTNER_API_FILES
+    if customer_progress:
+        files += CUSTOMER_PROGRESS_FILES
     if deferred_native:
         files += ("frontend/recharge-partners.mjs",)
     plan = {"operation": "release", "sha": sha, "before": before, "artifacts": artifacts,
@@ -505,6 +516,8 @@ def main():
         plan["vendureRetryReceipt"] = retry_receipt
     if partner_api:
         plan["rechargePartnerApi"] = True
+    if customer_progress:
+        plan["customerProgress"] = True
     if presentation_scope:
         plan[presentation_scope] = presentation
     require_main(sha)
@@ -536,6 +549,13 @@ def main():
                 gateway.get("accepting") is not True or gateway.get("workerPollingObserved") is not True or
                 gateway.get("originalRuntimeUnchanged") is not True):
             raise RuntimeError(f"recharge_partner_api_release_receipt_mismatch: {command_id}")
+    if customer_progress:
+        gateway = receipt.get("vendureGateway", {})
+        if (gateway.get("gatewaySha") != sha or gateway.get("workerSourceRevision") != sha or
+                gateway.get("workerFilesVerified") is not True or gateway.get("workerPollingObserved") is not True or
+                gateway.get("originalRuntimeUnchanged") is not True or gateway.get("partnerSocketVerified") is not True or
+                gateway.get("accepting") is not True):
+            raise RuntimeError(f"customer_progress_release_receipt_mismatch: {command_id}")
     if presentation_scope and (receipt.get(presentation_scope + "Verified") is not True or
                                receipt.get("liveAssetsSha256") != expected_assets or
                                receipt.get("protectedComponentsUnchanged") is not True):

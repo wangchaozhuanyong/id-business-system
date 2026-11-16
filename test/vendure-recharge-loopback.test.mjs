@@ -291,6 +291,10 @@ test('worker follows the original task without a patched plan lock or extra acti
     if (req.url === '/api/task-status/synthetic-job-' + starts.length) return reply({
       success: true, data: { jobKey: 'synthetic-job-' + starts.length, status: outcome, isTerminal: true, cdkCode: starts.at(-1).cdk }
     });
+    if (req.url.startsWith('/api/admin/task-logs/')) {
+      assert.equal(req.method, 'GET'); assert.equal(claim.actor.sensitive, false);
+      return reply({ success: false });
+    }
     assert.equal(req.url, '/api/run-process');
     const raw = [];
     for await (const chunk of req) raw.push(chunk);
@@ -387,9 +391,11 @@ test('Vendure verify, submit, query and task preserve one receipt across concurr
   assert.equal(accepted.plan, 'plus');
   assert.equal(accepted.status, 'queued');
   assert.deepEqual(Object.keys(accepted).sort(), [
+    'accountEmail',
     'id',
     'message',
     'plan',
+    'progress',
     'stage',
     'status',
     'taskToken',

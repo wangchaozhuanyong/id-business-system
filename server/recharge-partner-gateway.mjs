@@ -1,10 +1,11 @@
 import { request } from 'node:http';
+import { readProgressStream } from '../modules/recharge/vendure/progress-stream.mjs';
 import { join } from 'node:path';
 import { partnerTaskDirectoryName, partnerTaskSocketName } from '../modules/recharge/vendure/admission.mjs';
 
 export function rechargePartnerGateway(directory) {
   const socketPath = join(directory, partnerTaskDirectoryName, partnerTaskSocketName);
-  return (action, input) => new Promise((resolve, reject) => {
+  const gateway = (action, input) => new Promise((resolve, reject) => {
     const body = JSON.stringify(input);
     const req = request({
       socketPath, path: '/' + action, method: 'POST', signal: AbortSignal.timeout(10_000),
@@ -31,4 +32,22 @@ export function rechargePartnerGateway(directory) {
     req.on('error', reject);
     req.end(body);
   });
+  gateway.watch = (input, signal, onTask) => new Promise((resolve, reject) => {
+    const body = JSON.stringify(input);
+    const req = request({ socketPath, path: '/task', method: 'POST', signal,
+      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream', 'Content-Length': Buffer.byteLength(body) }
+    }, async response => {
+      clearTimeout(connectTimeout);
+      response.setTimeout(45000, () => response.destroy(new Error('Progress heartbeat timeout')));
+      try {
+        if (response.statusCode !== 200 || !response.headers['content-type']?.startsWith('text/event-stream'))
+          throw new Error('Progress stream unavailable');
+        await readProgressStream(response, onTask); resolve();
+      } catch (error) { response.destroy(); reject(error); }
+    });
+    const connectTimeout = setTimeout(() => req.destroy(new Error('Progress connection timeout')), 10000);
+    req.once('error', error => { clearTimeout(connectTimeout); reject(error); });
+    req.end(body);
+  });
+  return gateway;
 }
