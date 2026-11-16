@@ -1,13 +1,85 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { interceptDesign, origin } from './helpers/offline-design.mjs';
+import { interceptDesign, origin, root, settle, spacingSnapshot, toggleDesignTheme } from './helpers/offline-design.mjs';
 
 const { chromium } = await import(process.env.ID_RECHARGE_QA_PLAYWRIGHT
   ? pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href : 'playwright');
 const fixtureReference = '11111111-1111-4111-8111-111111111111';
 const fixtureTicket = 'a'.repeat(43);
+
+test('partner workspace keeps desktop forms in one row and readable lists across themes and screen sizes',
+  { timeout: 60_000 }, async t => {
+    const browser = await chromium.launch();
+    t.after(() => browser.close());
+    const output = (process.env.ID_LAYOUT_QA_OUTPUT || root + '/.runtime/recharge-partner-layout-20261116') + '/partners';
+    await mkdir(output, { recursive: true });
+    const measurements = [];
+    for (const width of [2250, 1920, 1440, 1024, 901, 900, 768, 390, 320]) for (const theme of ['light', 'dark']) {
+      const context = await browser.newContext({ viewport: { width, height: 1000 } });
+      try {
+        const access = await interceptDesign(context, { actor: { id: 'fixture-super', role: 'super', name: '管理员' },
+          localFixtures: {}, rechargePartnerApi: true, skipRechargeAssets: true });
+        const partners = [
+          { id: 'rp_' + 'a'.repeat(24), name: '演示合作方 A', disabledAt: '2026-11-14T00:00:00Z' },
+          { id: 'rp_' + 'b'.repeat(24), name: '演示合作方 B' }
+        ];
+        const source = { apiBase: 'https://api.example.test/api/recharge/v1', partners, batches: [], page: 1, pages: 1 };
+        await context.route('**/api/local/recharge-partners*', route => {
+          assert.equal(route.request().method(), 'GET');
+          return route.fulfill({ json: source });
+        });
+        const page = await context.newPage();
+        await page.goto(origin + '/#/online-recharge/partners');
+        await page.locator('[data-partner-content]:visible').waitFor();
+        if (theme === 'dark') await toggleDesignTheme(page);
+        for (const state of ['initial', 'long-records', 'empty']) {
+          if (state === 'long-records') {
+            partners[1].name = '离线合成长名称合作方'.repeat(8);
+            source.apiBase = 'https://' + 'long-api-host-'.repeat(5) + '.example.test/api/recharge/v1';
+            source.batches = Array.from({ length: 20 }, (_, index) => ({ id: 'batch-' + index, batchNo: 'PO' + String(index + 1).padStart(6, '0'),
+              partnerId: partners[1].id, plan: 'pro200', codes: ['synthetic-code'] }));
+            source.pages = 2;
+          } else if (state === 'empty') {
+            source.partners = []; source.batches = []; source.pages = 1;
+          }
+          if (state !== 'initial') {
+            const response = page.waitForResponse(response => response.url().includes('/api/local/recharge-partners'));
+            await page.locator('[data-action="recharge-partner-refresh"]').click();
+            await response;
+          }
+          await settle(page);
+          const spacing = await spacingSnapshot(page);
+          const geometry = await page.locator('[data-partner-page]').evaluate(host => {
+            const controls = selector => [...host.querySelectorAll(selector)].map(node => {
+              const box = node.getBoundingClientRect();
+              return { x: box.x, y: box.y, right: box.right, width: box.width, height: box.height };
+            });
+            return { setup: controls('.recharge-partner-setup :is(input, button)'),
+              issue: controls('[data-partner-form="issue"] :is(input, select, button)'),
+              actions: controls('.table-actions .button'), viewport: innerWidth };
+          });
+          const label = JSON.stringify({ width, theme, state });
+          assert.equal(spacing.overflow, false, label);
+          assert.deepEqual(spacing.findings, [], label);
+          assert.equal(await page.locator('[data-partner-batches] td[data-column="plan"]:visible').count(), source.batches.length,
+            label + ' 发码套餐应直接可见');
+          if (width >= 1440) assert(Math.max(...geometry.setup.map(box => box.y)) - Math.min(...geometry.setup.map(box => box.y)) <= 1, label + ' API 与合作方必须同排');
+          if (width >= 1024) assert(Math.max(...geometry.issue.map(box => box.y)) - Math.min(...geometry.issue.map(box => box.y)) <= 1, label + ' 发码控件必须同排');
+          assert(geometry.actions.every(box => box.width > 0 && box.x >= 0 && box.right <= geometry.viewport), label + ' 操作按钮不可裁切');
+          assert(geometry.setup.concat(geometry.issue).every(box => box.height >= (width <= 900 ? 44 : 36)), label + ' 控件高度');
+          assert.equal(await page.getByText('可调整搜索或筛选条件。', { exact: true }).count(), 0);
+          measurements.push({ width, theme, state, geometry, spacing });
+          if (state === 'initial' && [1920, 1440, 390].includes(width)) {
+            await page.screenshot({ path: output + `/after-${width}-${theme}.png`, fullPage: true, animations: 'disabled' });
+          }
+        }
+        assert.deepEqual(access.external, []);
+      } finally { await context.close(); }
+    }
+    await writeFile(output + '/layout-results.json', JSON.stringify(measurements, null, 2));
+  });
 
 test('partner admin issues and copies only the scoped key and codes with the shared navigation and mobile layout',
   { timeout: 30_000 }, async t => {

@@ -9,7 +9,7 @@ export function createPage(A, definition) {
   let busy = false;
 
   function render() {
-    return `<section class="panel" data-partner-page>
+    return `<section class="panel recharge-partner-page" data-partner-page>
       <div class="panel-heading">
         <div class="section-title-row"><h2>${e(definition.label)}</h2>${A.titleInfo(definition.label, definition.description, pageId + '-help')}</div>
         ${A.button('刷新', 'recharge-partner-refresh', '', 'return')}
@@ -17,29 +17,49 @@ export function createPage(A, definition) {
       <p class="finance-feedback" data-partner-progress role="status" hidden></p>
       <p class="finance-feedback field-error" data-partner-error role="alert" hidden></p>
       <div data-partner-content hidden>
-        <div class="toolbar"><span data-partner-endpoint></span> ${A.button('复制 API 地址', 'recharge-partner-endpoint')}</div>
-        <form data-partner-form="create" class="toolbar toolbar--inline">
-          <div class="toolbar-left"><label for="recharge-partner-name">合作方名称</label>
-            <input id="recharge-partner-name" name="name" maxlength="80" required value="${e(draft.name)}"></div>
-          <div class="toolbar-right"><button class="btn primary" type="submit">创建合作方</button></div>
-        </form>
-        <div data-partner-secret hidden>
+        <div class="toolbar recharge-partner-setup">
+          <div class="recharge-partner-endpoint">
+            <label for="recharge-partner-endpoint">API 地址</label>
+            <input id="recharge-partner-endpoint" data-partner-endpoint readonly>
+            ${A.button('复制 API 地址', 'recharge-partner-endpoint')}
+          </div>
+          <form data-partner-form="create" class="recharge-partner-create">
+            <label for="recharge-partner-name">合作方名称</label>
+            <input id="recharge-partner-name" name="name" maxlength="80" required placeholder="输入合作方名称" value="${e(draft.name)}">
+            <button class="button primary" type="submit">创建合作方</button>
+          </form>
+        </div>
+        <div class="panel-body recharge-partner-secret" data-partner-secret hidden>
           <p>API 密钥仅显示一次，请复制给该合作方。</p>
           <input aria-label="API 密钥" type="password" autocomplete="off" data-no-draft readonly>
           ${A.button('复制接入资料', 'recharge-partner-secret')} ${A.button('关闭', 'recharge-partner-close')}
         </div>
-        <form data-partner-form="issue" class="toolbar toolbar--inline">
-          <div class="toolbar-left">
-            <label for="recharge-partner-recipient">合作方</label><select id="recharge-partner-recipient" name="partnerId" required></select>
-            <label for="recharge-partner-plan">套餐</label><select id="recharge-partner-plan" name="plan">${Object.entries(planNames)
-              .map(([id, label]) => `<option value="${id}" ${id === draft.plan ? 'selected' : ''}>${label}</option>`).join('')}</select>
-            <label for="recharge-partner-quantity">数量</label><input id="recharge-partner-quantity" name="count" type="number"
-              min="1" max="100" required value="${e(draft.count)}">
+        <form data-partner-form="issue" class="toolbar recharge-partner-issue">
+          <div class="recharge-partner-field recharge-partner-recipient">
+            <label for="recharge-partner-recipient">合作方</label>
+            <select id="recharge-partner-recipient" name="partnerId" required></select>
           </div>
-          <div class="toolbar-right"><button class="btn" type="submit">发放兑换码</button></div>
+          <div class="recharge-partner-field">
+            <label for="recharge-partner-plan">套餐</label>
+            <select id="recharge-partner-plan" name="plan">${Object.entries(planNames)
+              .map(([id, label]) => `<option value="${id}" ${id === draft.plan ? 'selected' : ''}>${label}</option>`).join('')}</select>
+          </div>
+          <div class="recharge-partner-field recharge-partner-quantity">
+            <label for="recharge-partner-quantity">数量</label>
+            <input id="recharge-partner-quantity" name="count" type="number" min="1" max="100" required value="${e(draft.count)}">
+          </div>
+          <button class="button primary" type="submit">发放兑换码</button>
         </form>
-        <div data-partner-list></div>
-        <h3>发码批次</h3><div data-partner-batches></div>
+        <div class="recharge-partner-records">
+          <section class="recharge-partner-section" aria-labelledby="recharge-partner-list-title">
+            <div class="panel-heading"><h3 id="recharge-partner-list-title">合作方列表</h3></div>
+            <div data-partner-list></div>
+          </section>
+          <section class="recharge-partner-section" aria-labelledby="recharge-partner-batches-title">
+            <div class="panel-heading"><h3 id="recharge-partner-batches-title">发码批次</h3></div>
+            <div data-partner-batches></div>
+          </section>
+        </div>
       </div>
     </section>`;
   }
@@ -54,7 +74,7 @@ export function createPage(A, definition) {
     const content = view.host.querySelector('[data-partner-content]');
     content.hidden = !data;
     if (!data) return;
-    view.host.querySelector('[data-partner-endpoint]').textContent = data.apiBase;
+    view.host.querySelector('[data-partner-endpoint]').value = data.apiBase;
     const select = view.host.querySelector('[name="partnerId"]');
     const enabled = data.partners.filter(row => !row.disabledAt);
     select.innerHTML = '<option value="">请选择</option>' + enabled.map(row =>
@@ -62,21 +82,23 @@ export function createPage(A, definition) {
     select.value = draft.partnerId;
     if (!select.value && draft.partnerId) draft.partnerId = '';
     view.host.querySelector('[data-partner-list]').innerHTML = A.table([
-      { id: 'name', label: '合作方', mobileSummary: true, long: true },
-      { id: 'id', label: '合作方编号', long: true },
-      { id: 'state', label: '凭证状态', mobileSummary: true, render: row => row.disabledAt ? '已停用' : '已启用' },
+      { id: 'name', label: '合作方', class: 'recharge-partner-name-cell', mobileSummary: true, long: true },
+      { id: 'id', label: '合作方编号', class: 'recharge-partner-id-cell', long: true, render: row => `<span class="mono">${e(row.id)}</span>` },
+      { id: 'state', label: '凭证状态', mobileSummary: true, render: row =>
+        `<span class="tag${row.disabledAt ? '' : ' success'}">${row.disabledAt ? '已停用' : '已启用'}</span>` },
       { id: 'actions', label: '操作', action: true, render: row => !row.disabledAt ?
         A.button('停用', 'recharge-partner-disable', '', '', `data-partner-id="${e(row.id)}"`) : '' }
-    ], data.partners, '', '充值 API 合作方', { title: '暂无合作方' });
+    ], data.partners, '', '充值 API 合作方', { title: '暂无合作方', description: '在上方填写名称，创建第一个合作方。' });
+    const partnerNames = new Map(data.partners.map(row => [row.id, row.name]));
+    const batches = data.batches.map(row => ({ ...row, partnerName: partnerNames.get(row.partnerId) || row.partnerId }));
     view.host.querySelector('[data-partner-batches]').innerHTML = A.table([
-      { id: 'batchNo', label: '发码批次', mobileSummary: true },
-      { id: 'partnerId', label: '合作方', render: row =>
-        e(data.partners.find(partner => partner.id === row.partnerId)?.name || row.partnerId) },
+      { id: 'batchNo', label: '发码批次' },
+      { id: 'partnerName', label: '合作方', long: true, mobileSummary: true },
       { id: 'plan', label: '套餐', render: row => e(planNames[row.plan] || row.plan) },
-      { id: 'count', label: '数量', render: row => String(row.codes.length) },
+      { id: 'count', label: '数量', mobileSummary: true, render: row => String(row.codes.length) },
       { id: 'actions', label: '操作', action: true, render: row =>
         A.button('复制兑换码', 'recharge-partner-codes', '', '', `data-batch-id="${e(row.id)}"`) }
-    ], data.batches, '', '合作方发码记录', { title: '暂无发码批次' }) +
+    ], batches, '', '合作方发码记录', { title: '暂无发码批次', description: '选择合作方、套餐和数量，发放后将在这里显示记录。' }) +
       (data.pages > 1 ? '<nav class="toolbar toolbar--inline" aria-label="发码批次分页" data-pagination-footer>' +
         '<div class="toolbar-left">第 ' + e(data.page) + ' / ' + e(data.pages) + ' 页</div><div class="toolbar-right">' +
         A.button('上一页', 'recharge-partner-previous', '', '', data.page === 1 ? 'disabled' : '') +
