@@ -965,8 +965,10 @@ def release_website(plan, staged=None):
 def release_with_optional_vendure_refresh(plan):
     retry_receipt = plan.get("vendureRetryReceipt")
     partner_api = plan.get("rechargePartnerApi") is True
+    customer_progress = plan.get("customerProgress") is True
+    require(not (customer_progress and (partner_api or retry_receipt)), "customer_progress_release_scope_mixed")
     require(not (partner_api and retry_receipt), "partner_api_and_retry_review_require_separate_releases")
-    if not retry_receipt and not partner_api:
+    if not retry_receipt and not partner_api and not customer_progress:
         return release_website(plan)
     require(not plan.get("adapter") and not plan.get("rechargeCore") and
             (not retry_receipt or isinstance(retry_receipt, str) and re.fullmatch(r"[a-f0-9]{64}", retry_receipt)),
@@ -979,20 +981,22 @@ def release_with_optional_vendure_refresh(plan):
     sys.path.insert(0, str(source / "deploy/website"))
     try:
         from vendure_admission import check_refresh_baseline, cutover
+        partner_options = {"partner_api": True} if partner_api or customer_progress else {}
+        if customer_progress:
+            partner_options["customer_progress"] = True
+        check_refresh_baseline(sha, retry_receipt, **partner_options)
+        result = release_website(plan, staged=(source, operations))
+        if partner_api or customer_progress:
+            verify_partner_ingress()
+        result["vendureGateway"] = cutover(sha, release, refresh=True, retry_receipt=retry_receipt, **partner_options)
+        if partner_api or customer_progress:
+            receipt_path = release / "operations/release.receipt.json"
+            revised_receipt = receipt_path.with_suffix(".complete.json")
+            write_new(revised_receipt, json.dumps(result, indent=2) + "\n", 0o600)
+            os.replace(revised_receipt, receipt_path)
+        return result
     finally:
         sys.path.pop(0)
-    partner_options = {"partner_api": True} if partner_api else {}
-    check_refresh_baseline(sha, retry_receipt, **partner_options)
-    result = release_website(plan, staged=(source, operations))
-    if partner_api:
-        verify_partner_ingress()
-    result["vendureGateway"] = cutover(sha, release, refresh=True, retry_receipt=retry_receipt, **partner_options)
-    if partner_api:
-        receipt_path = release / "operations/release.receipt.json"
-        revised_receipt = receipt_path.with_suffix(".complete.json")
-        write_new(revised_receipt, json.dumps(result, indent=2) + "\n", 0o600)
-        os.replace(revised_receipt, receipt_path)
-    return result
 
 
 def verify_partner_ingress():

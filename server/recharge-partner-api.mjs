@@ -1,3 +1,4 @@
+import { openProgressStream } from '../modules/recharge/vendure/progress-stream.mjs';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { createSourceLimit } from './login-security.mjs';
 import { unassignedRechargeStock } from './recharge-code-requests.mjs';
@@ -84,6 +85,8 @@ function taskView(row, task, now) {
     stage: status === 'running' ? (stages.has(source.stage) ? source.stage : 'processing') : status,
     updatedAt: source ? time(Math.max(Date.parse(source.updatedAt), Date.parse(row.updatedAt) + 1))
       : status === 'expired' ? time(row.expiresAt) : row.updatedAt,
+    ...(source?.progress && { progress: source.progress }),
+    ...(source?.accountEmail && { accountEmail: source.accountEmail }),
     expiresAt: time(row.expiresAt)
   };
 }
@@ -271,6 +274,19 @@ export function createRechargePartnerHandlers({
     if (rechargeRequestIdPattern.test(requestId) && req.method === 'GET') {
       const row = readRequests().data?.requests?.find(row => row.id === requestId && row.partnerId === partnerId);
       if (!row) throw notFound();
+      if (req.headers.accept === 'text/event-stream') {
+        if (row.state === 'open' || !gateway?.watch) return json(res, 409, { code: 'stream_unavailable' });
+        const initial = await requestTask(row, clientIp);
+        if (!initial) throw notFound();
+        const abort = new AbortController();
+        const stream = openProgressStream(res);
+        stream.cleanup(() => abort.abort());
+        try {
+          await gateway.watch({ partnerId, requestId: row.id, clientIp }, abort.signal, task =>
+            stream.send(requestView(row, task)));
+        } finally { stream.close(); }
+        return;
+      }
       return json(res, 200, requestView(row, await requestTask(row, clientIp)));
     }
     if (req.method !== 'POST' || !['/codes/verify', '/codes/query', '/redemptions'].includes(route)) throw notFound();
