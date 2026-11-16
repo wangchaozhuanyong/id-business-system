@@ -19,21 +19,25 @@ test(
     const message = '结账阶段等待超时。' + '长文字'.repeat(100) + ' <img src=x> "末尾"';
     const tasks = Array.from({ length: 23 }, (_, index) => ({
       id: `fixture-${index}`,
-      cdk: 'KC-FIXTURE',
-      token: 'test@example.test',
+      cdk: '尾号 1234',
+      token: '已记录（隐藏）',
       message,
       automation: { phase: '准备订阅' },
       progress: 20,
-      status: 'failed'
+      status: ['manual', 'failed', 'running', 'success', 'card_invalid', 'maintenance', 'fixture-unknown'][index] ?? 'failed'
     }));
-    const holds = [{ id: 1, accountEmail: 'test@example.test', reason: message }];
+    const holdCode = 'KC-FIXTURE-REVIEW1234';
+    const holds = [{ id: 1, failedJobKey: 'fixture-session', cdkCode: holdCode, accountEmail: 'test@example.test', reason: message }];
     const denied = '当前账号无权执行此操作';
     let sessionVerified = false;
     let verificationRequests = 0;
     let codeListRequests = 0;
     let sessionReadError = '';
+    let sessionRecordStatus = 'manual';
     let resolveAttempts = 0;
     let taskRows = tasks;
+    let taskReadFailed = false;
+    let deferHoldSnapshot;
     await interceptDesign(page.context(), {
       localFixtures: {},
       localAuthUi: true,
@@ -49,7 +53,7 @@ test(
       sessionVerified = true;
       return route.fulfill({ json: { success: true } });
     });
-    await page.route('**/integrations/codexdaichong/api/admin/**', (route) => {
+    await page.route('**/integrations/codexdaichong/api/admin/**', async (route) => {
       const pathname = new URL(route.request().url()).pathname;
       const path = pathname.split('/').pop();
       if (path === 'data')
@@ -57,11 +61,13 @@ test(
           json: {
             stats: { total: taskRows.length, success: 0, failed: taskRows.length },
             config: {},
-            logs: taskRows,
+            logs: taskRows.map(({ id, status, progress }) => ({ id, status, progress })),
             manual_holds: []
           }
         });
-      if (path === 'task-logs') return route.fulfill({ json: { tasks: taskRows } });
+      if (path === 'task-logs') return taskReadFailed
+        ? route.fulfill({ status: 503, json: { success: false } })
+        : route.fulfill({ json: { tasks: taskRows } });
       if (path === 'cdks') {
         codeListRequests += 1;
         if (!sessionVerified) return route.fulfill({
@@ -70,8 +76,13 @@ test(
         });
         return route.fulfill({ json: [{ code: 'FIXTURE-REDEEMABLE-CODE', type: '自助' }] });
       }
-      if (path === 'activation-manual-holds')
-        return route.fulfill({ json: { success: true, holds } });
+      if (path === 'activation-manual-holds') {
+        const snapshot = [...holds];
+        const defer = deferHoldSnapshot;
+        deferHoldSnapshot = undefined;
+        if (defer) await defer();
+        return route.fulfill({ json: { success: true, holds: snapshot } });
+      }
       if (pathname.endsWith('/activation-manual-holds/1/resolve') && route.request().method() === 'POST') {
         resolveAttempts += 1;
         if (resolveAttempts === 1) return route.fulfill({ status: 403, json: { error: denied } });
@@ -88,7 +99,7 @@ test(
                 token_preview: 'test@example.test',
                 has_session: true,
                 message,
-                status: 'failed'
+                status: sessionRecordStatus
               }
             ],
             total: 1
@@ -152,6 +163,13 @@ test(
     await frame.getByText('已转入人工确认的任务，可在「待人工确认」中核对。', { exact: false }).waitFor();
     assert.equal(await frame.locator('#log_body [data-delete-task]').count(), 0);
     await checkRow('log_body');
+    await frame.locator('#log_body').getByText('尾号 1234', { exact: true }).first().waitFor();
+    await frame.locator('#log_body').getByText('已记录（隐藏）', { exact: true }).first().waitFor();
+    await frame.locator('#log_body').getByText('曾转人工', { exact: true }).waitFor();
+    assert.deepEqual((await frame.locator('#log_body .status-badge').allTextContents()).slice(0, 7),
+      ['曾转人工', '失败', '处理中', '成功', '银行卡无效', '维护中断', '未知状态']);
+    await frame.locator('body').evaluate(() => window.loadData(false));
+    await checkRow('log_body');
     await frame.getByRole('button', { name: '下一页', exact: true }).click();
     assert.equal(await frame.locator('#log_body tr').count(), 3);
     await checkRow('log_body');
@@ -162,6 +180,7 @@ test(
     const refreshSessions = frame.locator('#sessions').getByRole('button', { name: '刷新', exact: true });
     const verification = page.getByRole('dialog', { name: '确认重要操作' });
     await checkRow('session_body');
+    await frame.locator('#session_body').getByText('曾转人工', { exact: true }).waitFor();
     await refreshSessions.click();
     await sessionStatus.waitFor({ state: 'hidden' });
     assert.equal(await verification.count(), 0);
@@ -203,8 +222,19 @@ test(
     await dialog.getByRole('button', { name: '关闭' }).press('Escape');
     await dialog.waitFor({ state: 'hidden' });
 
+    await frame.getByRole('button', { name: '恢复自动刷新', exact: true }).click();
     await frame.getByRole('tab', { name: '待人工确认', exact: true }).click();
     const holdPreview = await checkRow('activation_manual_hold_body');
+    const holdRows = frame.locator('#activation_manual_hold_body');
+    await holdRows.getByText(holdCode, { exact: true }).waitFor();
+    await frame.locator('body').evaluate(() => window.loadData(false));
+    await holdRows.getByText(holdCode, { exact: true }).waitFor();
+    await Promise.all([
+      page.waitForResponse(response => response.url().endsWith('/api/admin/data')),
+      page.waitForResponse(response => response.url().includes('/api/admin/activation-manual-holds?')
+        && response.request().method() === 'GET')
+    ]);
+    await holdRows.getByText(holdCode, { exact: true }).waitFor();
     await holdPreview.tap();
     assert.equal(await dialog.locator('.recharge-cell-full-text').textContent(), message);
     await dialog.getByRole('button', { name: '关闭' }).click();
@@ -215,14 +245,42 @@ test(
     await resolveHold.click();
     await confirmHold.click();
     await frame.locator('#message_container').getByText(denied, { exact: true }).waitFor();
+
+    let releaseOldRead;
+    const oldReadStarted = new Promise(start => {
+      deferHoldSnapshot = () => new Promise(resume => { releaseOldRead = resume; start(); });
+    });
+    t.after(() => releaseOldRead?.());
+    await frame.locator('[data-switch-panel="holds"]').getByRole('button', { name: '刷新', exact: true }).click();
+    await oldReadStarted;
     await resolveHold.click();
     await confirmHold.click();
     await frame.getByText('暂无待人工确认记录', { exact: true }).waitFor();
+    const oldResponse = page.waitForResponse(response => response.url().includes('/api/admin/activation-manual-holds?'));
+    releaseOldRead();
+    const oldResult = await (await oldResponse).json();
+    assert.equal(oldResult.holds.length, 1);
+    await frame.locator('body').evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    assert.equal(await holdRows.getByText(holdCode, { exact: true }).count(), 0);
     assert.equal(resolveAttempts, 2);
+    await select('sessions');
+    await frame.locator('#session_body').getByText('曾转人工', { exact: true }).waitFor();
+    sessionReadError = '';
+    sessionRecordStatus = 'FAILED';
+    await refreshSessions.click();
+    await frame.locator('#session_body').getByText('失败', { exact: true }).waitFor();
+    await select('logs');
 
     await frame.getByRole('tab', { name: '任务管理', exact: true }).click();
+    await frame.locator('#log_body').getByText('尾号 1234', { exact: true }).first().waitFor();
+    const refreshTasks = frame.getByRole('button', { name: '立即刷新' });
+    taskReadFailed = true;
+    await refreshTasks.click();
+    await frame.locator('#message_container').getByText('刷新失败，已保留上次记录', { exact: true }).waitFor();
+    await frame.locator('#log_body').getByText('尾号 1234', { exact: true }).first().waitFor();
+    taskReadFailed = false;
     taskRows = [];
-    await frame.getByRole('button', { name: '立即刷新' }).click();
+    await refreshTasks.click();
     await frame.getByText('暂无任务记录', { exact: true }).waitFor();
     assert.equal(await frame.locator('#log_body .recharge-cell-text').count(), 0);
     assert.deepEqual(errors, []);
