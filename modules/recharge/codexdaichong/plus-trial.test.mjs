@@ -147,7 +147,14 @@ test('调试模式填卡与账单地址后停在提交前', async () => {
   assert.match(stripeText, /pickBillingAddressForCheckout\(null\)/);
   assert.match(stripeText, /fillCheckoutForDebug,/);
   assert.match(chatgptText, /process\.env\.CHECKOUT_DEBUG_FILL === '1'/);
-  assert.match(chatgptText, /已填写银行卡与账单地址，按要求停在提交前/);
+  // 调试复用真实支付流程：dryRun 在提交前返回，不点击付款。
+  assert.match(stripeText, /if \(options\.dryRun\) \{/);
+  assert.match(stripeText, /dry_run_stopped_before_submit/);
+  assert.match(chatgptText, /dryRun: true/);
+  assert.match(chatgptText, /已按真实支付流程填完卡与地址，停在提交前/);
+  // 结果不明时用账号套餐核实，避免把未扣费误判成待核实。
+  assert.match(stripeText, /function verifyAccountPlan\(accessToken\) \{/);
+  assert.match(stripeText, /付款未成立，账号未扣费/);
 });
 
 test('准备脚本与发布核验已覆盖四个文件', async () => {
