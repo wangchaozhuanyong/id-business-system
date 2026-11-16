@@ -212,6 +212,11 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False, 
     # The host backup timer is managed independently from the immutable payment
     # image. This exact path is installed and read back by the website release.
     changed.discard(BACKUP_OPERATION)
+    if include_core and base == DEFERRED_DEBUG_BASE and changed == DEFERRED_DEBUG_FILES:
+        require_deferred_debug_inputs(base, sha)
+        # A failed native preflight still stages releases/<sha>. Publish the
+        # reviewed website first, before another native retry can reserve it.
+        raise RuntimeError("publish_reviewed_website_before_deferred_native_retry")
     password_inputs = {*ACTION_PASSWORD_PRESENTATION_FILES, ACTION_PASSWORD_MANIFEST_PATH}
     if partner_api and changed:
         # The trial policy is already on main. Its only executable change is
@@ -436,7 +441,8 @@ def main():
     elif presentation:
         presentation = dict(presentation)
         deferred_native = presentation.pop("deferredNativeInputs", None)
-    if deferred_native and (retry_receipt or before["assetsSha256"] != deferred_native["assetsSha256"]):
+    if deferred_native and (retry_receipt or customer_progress or
+                            before["assetsSha256"] != deferred_native["assetsSha256"]):
         raise RuntimeError("deferred_native_inputs_live_baseline_mismatch")
     if include_adapter or include_core:
         for name in ("recharge", "recharge-native"):
