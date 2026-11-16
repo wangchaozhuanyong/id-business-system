@@ -1170,6 +1170,60 @@ input[type='radio'] {
   width: auto;
   margin-inline-start: auto;
 }
+.recharge-partner-page { container-type: inline-size; }
+.recharge-partner-page .toolbar { padding-block: var(--toolbar-padding-block); }
+.recharge-partner-setup {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 16px 24px;
+}
+.recharge-partner-endpoint,
+.recharge-partner-create,
+.recharge-partner-field {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+}
+.recharge-partner-page label { flex: 0 0 auto; color: var(--secondary); white-space: nowrap; }
+.recharge-partner-endpoint > input,
+.recharge-partner-create > input { flex: 1; min-width: 0; }
+.recharge-partner-endpoint > input { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.recharge-partner-issue { gap: 12px 20px; border-top: 1px solid var(--line); }
+.recharge-partner-field > select { flex: none; width: 132px; }
+.recharge-partner-recipient > select { width: 180px; }
+.recharge-partner-quantity > input { width: 88px; }
+.recharge-partner-secret { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; }
+.recharge-partner-secret > p { flex-basis: 100%; margin: 0; }
+.recharge-partner-secret > input { flex: 1 1 220px; min-width: 0; }
+.recharge-partner-records { display: grid; border-top: 1px solid var(--line); }
+.recharge-partner-section { min-width: 0; }
+.recharge-partner-section + .recharge-partner-section { border-top: 1px solid var(--line); }
+.recharge-partner-section .panel-heading { padding-block: var(--toolbar-padding-block); }
+.recharge-partner-section h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.recharge-partner-section th { border-top: 0; }
+.recharge-partner-name-cell { width: 28%; }
+.recharge-partner-id-cell { width: 44%; }
+.recharge-partner-section .empty-state { min-height: 140px; }
+@container (min-width: 1400px) {
+  .recharge-partner-records { grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); }
+  .recharge-partner-section + .recharge-partner-section { border-top: 0; border-left: 1px solid var(--line); }
+}
+@container (max-width: 979px) {
+  .recharge-partner-setup { grid-template-columns: minmax(0, 1fr); }
+}
+@container (max-width: 599px) {
+  .recharge-partner-endpoint,
+  .recharge-partner-create { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+  .recharge-partner-endpoint > label,
+  .recharge-partner-create > label { grid-column: 1 / -1; }
+  .recharge-partner-page .recharge-partner-issue { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+  .recharge-partner-field { display: grid; gap: 8px; }
+  .recharge-partner-recipient,
+  .recharge-partner-issue > .button { grid-column: 1 / -1; }
+  .recharge-partner-field > :is(input, select) { width: 100%; min-width: 0; }
+}
 .toolbar-date,
 .toolbar-date-shortcuts,
 .toolbar-select-filters {

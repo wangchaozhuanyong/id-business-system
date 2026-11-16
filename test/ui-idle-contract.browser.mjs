@@ -8,8 +8,11 @@ import { interceptDesign, origin, root } from './helpers/offline-design.mjs';
 test('every registered navigation route stays idle without data changes', { timeout: 120_000 }, async t => {
   const browser = await chromium.launch(); t.after(() => browser.close());
   const fixture = JSON.parse(await readFile(new URL('../docs/audits/2026-11-06-design-review/visual-fixtures.json', import.meta.url)));
+  fixture['card-types'] = { version: 1, items: [{ id: 'idle-fixture-card-type', name: '离线测试类型', active: true }], assignments: {} };
+  fixture['recharge-partners'] = { apiBase: origin + '/api/recharge/v1', partners: [], batches: [], page: 1, pages: 1 };
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  const intercepted = await interceptDesign(context, { localFixtures: fixture, actor: { id: 'contract-admin', name: '合成管理员', role: 'super' } });
+  const intercepted = await interceptDesign(context, { localFixtures: fixture, rechargePartnerApi: true,
+    actor: { id: 'contract-admin', name: '合成管理员', role: 'super' } });
   const page = await context.newPage(), requests = [], errors = [], results = [], inFlight = new Set();
   page.setDefaultTimeout(6000);
   page.on('pageerror', e => errors.push(e.message));
@@ -38,6 +41,13 @@ test('every registered navigation route stays idle without data changes', { time
     await page.clock.runFor(350);
     const integration = page.locator('#main > [data-page-region]:not([hidden]) .recharge-integration__view');
     if (await integration.count()) await page.locator('#main > [data-page-region]:not([hidden]) .recharge-integration__view[aria-busy="false"]').waitFor();
+    if (route === 'staff/finance/cards') {
+      // The host can report ready before the card frame has selected its view
+      // and started the first local type read. Network quiet alone is not ready.
+      await page.frameLocator('#main > [data-page-region]:not([hidden]) iframe[data-view="cards"]:not([hidden])')
+        .locator('#card_pool_import_type option[value="idle-fixture-card-type"]').waitFor({ state: 'attached' });
+    }
+    if (route === 'online-recharge/partners') await page.locator('[data-partner-content]:visible').waitFor();
     // Finish iframe code and its initial dependent reads before measuring idle.
     await settleReads();
     const before = requests.length;
