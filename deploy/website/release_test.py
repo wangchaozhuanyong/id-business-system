@@ -135,6 +135,30 @@ class WebsiteReleaseTests(unittest.TestCase):
     @patch("release.require_deferred_debug_inputs", return_value={"reviewed": True})
     @patch("release.require_ancestor")
     @patch("release.git")
+    def test_pending_debug_core_retry_waits_for_website_without_reserving_its_revision(self, git, ancestor, approval):
+        git.return_value = "\n".join(sorted(release.DEFERRED_DEBUG_FILES))
+        with self.assertRaisesRegex(RuntimeError, "publish_reviewed_website_before_deferred_native_retry"):
+            release.require_website_scope(release.DEFERRED_DEBUG_BASE, TARGET, include_core=True)
+        approval.assert_called_once_with(release.DEFERRED_DEBUG_BASE, TARGET)
+        # Once the website has moved off the exact old baseline, the existing
+        # native release rules and idle-database preflight still apply.
+        approval.reset_mock()
+        self.assertIsNone(release.require_website_scope(BASE, TARGET, include_core=True))
+        approval.assert_not_called()
+        before = {"components": {"app": {"revision": release.DEFERRED_DEBUG_BASE}}, "freeBytes": 20 * 1024**3}
+        env = {"RELEASE_SHA": TARGET, "QUALITY_RUN_ID": "123", "RELEASE_RECHARGE_CORE": "true"}
+        with patch.dict(os.environ, env, clear=True), patch("release.require_main"), \
+                patch("release.put_artifact") as put, \
+                patch("release.remote", return_value=("preflight", before)) as dispatch, \
+                redirect_stdout(io.StringIO()), self.assertRaisesRegex(
+                    RuntimeError, "publish_reviewed_website_before_deferred_native_retry"):
+            release.main()
+        put.assert_not_called()
+        dispatch.assert_called_once_with({"operation": "preflight", "sha": TARGET, "adapter": True})
+
+    @patch("release.require_deferred_debug_inputs", return_value={"reviewed": True})
+    @patch("release.require_ancestor")
+    @patch("release.git")
     def test_website_carries_only_the_exact_pending_debug_build_inputs(self, git, ancestor, approval):
         git.return_value = "\n".join(sorted(release.DEFERRED_DEBUG_FILES))
         self.assertEqual(release.require_website_scope(release.DEFERRED_DEBUG_BASE, TARGET),
@@ -214,7 +238,7 @@ class WebsiteReleaseTests(unittest.TestCase):
                 return "preflight", before
             plans.append(plan)
             for forbidden in ("adapter", "rechargeCore", "rechargePartnerApi", "vendureRetryReceipt",
-                              "deferredNativeBuildInputs"):
+                              "deferredNativeBuildInputs", "customerProgress"):
                 self.assertNotIn(forbidden, plan)
             self.assertIn("frontend/recharge-partners.mjs", plan["files"])
             return "release", {"mainSha": TARGET, "appCanaryPassed": True,
@@ -228,7 +252,8 @@ class WebsiteReleaseTests(unittest.TestCase):
             with patch.dict(os.environ, env, clear=True):
                 release.main()
             self.assertEqual(len(plans), 1)
-            for changes in ({"VENDURE_RETRY_RECEIPT_SHA256": "e" * 64}, {}):
+            for changes in ({"VENDURE_RETRY_RECEIPT_SHA256": "e" * 64},
+                            {"RELEASE_CUSTOMER_PROGRESS": "true"}, {}):
                 if not changes:
                     before["assetsSha256"] = "f" * 64
                 put.reset_mock()
@@ -483,7 +508,7 @@ class WebsiteReleaseTests(unittest.TestCase):
                 return "preflight", before
             self.assertEqual(plan["actionPasswordPresentation"], assets)
             self.assertTrue(release.DEFERRED_DEBUG_FILES <= plan["files"].keys())
-            for forbidden in ("adapter", "rechargeCore", "rechargePartnerApi", "vendureRetryReceipt"):
+            for forbidden in ("adapter", "rechargeCore", "rechargePartnerApi", "vendureRetryReceipt", "customerProgress"):
                 self.assertNotIn(forbidden, plan)
             return "release", {"mainSha": TARGET, "appCanaryPassed": True, "actionPasswordPresentationVerified": True,
                 "protectedComponentsUnchanged": True, "liveAssetsSha256": digest,
@@ -498,6 +523,14 @@ class WebsiteReleaseTests(unittest.TestCase):
         receipt = json.loads(logs.getvalue().splitlines()[-1])
         self.assertEqual(receipt["deferredNativeBuildInputs"]["nativeRevisionUnchanged"], BASE)
         self.assertEqual(receipt["deferredNativeBuildInputs"]["assetsSha256"], digest)
+        put.reset_mock()
+        remote_call.reset_mock()
+        with patch.dict(os.environ, env | {"RELEASE_CUSTOMER_PROGRESS": "true"}, clear=True), \
+                redirect_stdout(io.StringIO()), self.assertRaisesRegex(
+                    RuntimeError, "deferred_native_inputs_live_baseline_mismatch"):
+            release.main()
+        put.assert_not_called()
+        remote_call.assert_called_once_with({"operation": "preflight", "sha": TARGET, "adapter": False})
 
     @patch("release.require_presentation_approval")
     @patch("release.require_ancestor")
