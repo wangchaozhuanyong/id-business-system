@@ -1,5 +1,5 @@
 diff --git a/chatgpt.js b/chatgpt.js
-index 8a7cba7..3d1ff39 100644
+index 8a7cba7..4c55f90 100644
 --- a/chatgpt.js
 +++ b/chatgpt.js
 @@ -467,6 +467,10 @@ async function openApiCheckout(page, { accessToken, sessionData, planType, count
@@ -61,7 +61,7 @@ index 8a7cba7..3d1ff39 100644
      const { assertChatGptLoggedIn } = require('./session-auth');
      const { hasVisibleLoginChrome } = require('./auth-page-detect');
      const isPaymentUrl = (raw) => {
-@@ -520,6 +562,53 @@ async function verifyCheckoutDebugPage(page, { checkoutUrl, timeoutMs = 60000 }
+@@ -520,6 +562,64 @@ async function verifyCheckoutDebugPage(page, { checkoutUrl, timeoutMs = 60000 }
          if (!isPaymentUrl(page.url())) {
              throw new Error('支付页面发生非 Checkout 跳转，调试已停止');
          }
@@ -93,18 +93,29 @@ index 8a7cba7..3d1ff39 100644
 +        }
 +        // 有卡号表单时优先走填卡分支：先填卡与地址，再停在提交前。
 +        if (cardPresent && process.env.CHECKOUT_DEBUG_FILL === '1') {
-+            const { fillCheckoutForDebug } = require('./stripe-payment');
++            // 调试走与真实充值相同的支付流程，只是传 dryRun：填卡、填地址、读税额全做，点提交前停下。
++            const { completeStripeCardPayment } = require('./stripe-payment');
++            const { pickBillingAddressForCheckout } = require('./tax-free-address');
 +            let debugCard = null;
 +            try { debugCard = JSON.parse(process.env.DEBUG_CARD_JSON || ''); } catch (_) { debugCard = null; }
 +            if (debugCard) {
-+                const filled = await fillCheckoutForDebug(page, {
-+                    cardInfo: { number: debugCard.number, expMonth: debugCard.expMonth, expYear: debugCard.expYear,
-+                        cvc: debugCard.cvc, holder: debugCard.holder },
-+                    holderName: debugCard.holder
-+                });
-+                console.log(`[调试] 填卡结果: card=${filled.card} billing=${filled.billing} ${filled.error || ''}`);
-+                await page.waitForTimeout(1500);
-+                console.log('✅ [调试] 已填写银行卡与账单地址，按要求停在提交前（未点击付款）');
++                const expiry = `${String(debugCard.expMonth || '').padStart(2, '0')}/${String(debugCard.expYear || '').slice(-2)}`;
++                let debugAddress = null;
++                try {
++                    debugAddress = await pickBillingAddressForCheckout(null);
++                    console.log('[调试] 已选取美国免税账单地址: ' + [debugAddress.line1, debugAddress.city, debugAddress.state, debugAddress.postal_code || debugAddress.postal].filter(Boolean).join(', '));
++                } catch (error) {
++                    console.log('[调试] 免税地址池不可用: ' + String(error.message).slice(0, 60));
++                }
++                const filled = await completeStripeCardPayment(page, {
++                    number: debugCard.number, expiry, cvc: debugCard.cvc, holder: debugCard.holder
++                }, debugAddress, { dryRun: true, holderName: debugCard.holder });
++                console.log('[调试] 结果: card=' + (filled && filled.cardLast4 ? 'true' : 'false') + ' billing=' + Boolean(debugAddress) + ' ' + (filled && filled.error ? filled.error : ''));
++                if (filled && filled.dueAmount) {
++                    console.log('[调试] 提交前应付: ' + filled.dueAmount + ' ' + (filled.dueCurrency || ''));
++                }
++                await page.waitForTimeout(1000);
++                console.log('✅ [调试] 已按真实支付流程填完卡与地址，停在提交前（未点击付款）');
 +                return { checkoutUrl: page.url(), filled };
 +            }
 +        }
@@ -339,7 +350,7 @@ index e186977..3f6ff78 100644
  }
  
 diff --git a/stripe-payment.js b/stripe-payment.js
-index cd7ff9d..eda7d06 100644
+index cd7ff9d..bc89cf1 100644
 --- a/stripe-payment.js
 +++ b/stripe-payment.js
 @@ -295,6 +295,23 @@ function isOpenAiCustomCheckout(page) {
@@ -366,7 +377,45 @@ index cd7ff9d..eda7d06 100644
  /**
   * 从 Checkout 页面读取「今日应付」金额（随汇率浮动）
   * @returns {Promise<{ amount: number, currency: string }|null>}
-@@ -506,6 +523,11 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {})
+@@ -459,6 +476,37 @@ async function fillLocatedInput(target, text) {
+  * @param {object} [options] - { cardAttempt?: number, holderName?: string }
+  * @returns {Promise<{ success: boolean, error?: string, screenshot?: string, declined?: boolean, canRetryCard?: boolean }>}
+  */
++// 提交后结果不明时，直接查账号套餐，避免把「未扣费」误判成「待核实」。
++function verifyAccountPlan(accessToken) {
++    const https = require('https');
++    const token = String(accessToken || '').trim();
++    if (!token) return Promise.resolve(null);
++    return new Promise((resolve) => {
++        const request = https.request({
++            host: 'chatgpt.com',
++            path: '/backend-api/accounts/check/v4-2023-04-27',
++            method: 'GET',
++            headers: { Authorization: 'Bearer ' + token, Accept: 'application/json' }
++        }, (response) => {
++            let body = '';
++            response.on('data', (chunk) => { body += chunk; });
++            response.on('end', () => {
++                try {
++                    const parsed = JSON.parse(body);
++                    const plans = Object.values(parsed.accounts || {})
++                        .map((item) => item && item.account && item.account.plan_type)
++                        .filter(Boolean);
++                    const paid = plans.find((plan) => plan && plan !== 'free');
++                    resolve({ planType: paid || 'free', plans });
++                } catch (_) { resolve(null); }
++            });
++        });
++        request.on('error', () => resolve(null));
++        request.setTimeout(15000, () => { request.destroy(); resolve(null); });
++        request.end();
++    });
++}
++
+ async function completeStripeCardPayment(page, cardInfo, address, options = {}) {
+     const ELEMENT_TIMEOUT = 45000;
+     const cardAttempt = Number(options.cardAttempt) || 1;
+@@ -506,6 +554,11 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {})
          await prepareCheckoutCardSection(page);
          await page.waitForTimeout(1000);
  
@@ -378,7 +427,47 @@ index cd7ff9d..eda7d06 100644
          const openAiCheckout = isOpenAiCustomCheckout(page);
          if (!openAiCheckout) {
              // 仅 Stripe hosted 页需要选择支付方式 tab
-@@ -2465,6 +2487,9 @@ async function clickCheckoutSubmitButton(page) {
+@@ -649,11 +702,39 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {})
+             console.log(`[Stripe] 提交前确认应付: ${checkoutDue.currency || ''} ${checkoutDue.amount}`);
+         }
+ 
++        if (options.dryRun) {
++            console.log('[Stripe][调试] 已完成填卡与账单地址，按要求停在提交前（未点击付款）');
++            const dryShot = await saveDebugScreenshot(page, 'dry_run_ready');
++            return {
++                success: false,
++                dryRun: true,
++                error: 'dry_run_stopped_before_submit',
++                cardLast4: String(cardInfo && cardInfo.number ? cardInfo.number : '').slice(-4),
++                holderName,
++                dueAmount: checkoutDue,
++                screenshot: dryShot
++            };
++        }
+         const payResult = await finalizeCheckoutPayment(page, holderName);
+         if (checkoutDue?.amount) {
+             payResult.dueAmount = checkoutDue.amount;
+             payResult.dueCurrency = checkoutDue.currency;
+         }
++        if (payResult && payResult.resultUnknown) {
++            const planCheck = await verifyAccountPlan(process.env.CHATGPT_TOKEN);
++            if (planCheck && planCheck.planType && planCheck.planType !== 'free') {
++                console.log(`[Stripe] ✅ 账号套餐已核实为 ${planCheck.planType}，判定支付成功`);
++                return { success: true, cardLast4: String(cardInfo && cardInfo.number ? cardInfo.number : '').slice(-4),
++                    holderName, verifiedPlan: planCheck.planType, screenshot: payResult.screenshot };
++            }
++            if (planCheck && planCheck.planType === 'free') {
++                const reason = '提交后触发人机验证（hCaptcha），付款未成立，账号未扣费（已核实账号仍为免费版）';
++                console.log('[Stripe] ⚠️ ' + reason);
++                return { success: false, error: reason, captchaRequired: true, resultUnknown: false,
++                    cardLast4: String(cardInfo && cardInfo.number ? cardInfo.number : '').slice(-4),
++                    holderName, screenshot: payResult.screenshot };
++            }
++        }
+         return payResult;
+ 
+     } catch (error) {
+@@ -2465,6 +2546,9 @@ async function clickCheckoutSubmitButton(page) {
      };
  
      const strategies = [
@@ -388,7 +477,7 @@ index cd7ff9d..eda7d06 100644
          () => tryClick(page.getByRole('button', { name: /^Subscribe$/i }), 'role=Subscribe'),
          () => tryClick(page.getByRole('button', { name: /^订阅$/ }), 'role=订阅'),
          () => tryClick(page.getByRole('button', { name: /subscribe|订阅|pay/i }), 'role=subscribe'),
-@@ -2762,8 +2787,115 @@ async function selectCountry(page, selectors, countryCode) {
+@@ -2762,8 +2846,115 @@ async function selectCountry(page, selectors, countryCode) {
  
  // ==================== Exports ====================
  
