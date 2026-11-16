@@ -6,7 +6,10 @@ import { loadCodexdaichongAssets } from './assets.mjs';
 import { probeCodexdaichongRuntime } from './runtime-health.mjs';
 import { normalizeRechargeProxyInput } from './proxy-input.mjs';
 import { isProxyType } from '../bitbrowser/proxy-types.mjs';
-import { isPlanCardRejection, readsRechargePresentation, rechargeBrowserPresentation, rechargeTaskStepHistory } from './progress-presentation.mjs';
+import {
+  isPlanCardRejection, originalRechargeNeedsReview, originalRechargeStage, readsRechargePresentation,
+  rechargeBrowserPresentation, rechargeTaskStepHistory, RECHARGE_STAGE_LABELS
+} from './progress-presentation.mjs';
 
 export const CODEXDAICHONG_PREFIX = '/integrations/codexdaichong';
 const allowedMethods = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']);
@@ -83,6 +86,44 @@ function browserTaskRow(value) {
     cardLast4: /^\d{4}$/.test(row.cardLast4) ? row.cardLast4 : '' };
 }
 
+const taskFailureSummaries = [
+  [/未找到.*升级按钮|没有.*升级按钮/i, '定价页未找到套餐升级按钮'],
+  [/等待 Checkout 页面超时|未跳转到 Checkout/i, '等待结账页超时'],
+  [/无法(?:创建|打开)(?:官方)?\s*Checkout|API 创建 Checkout 失败|无法获取支付链接/i, '未能打开官方结账页'],
+  [/金额校验失败/, '付款金额校验失败'],
+  [/Session.*(?:无效|过期|未生效|登录失败|响应异常)|缺少 AccessToken/i, 'Session 未通过验证'],
+  [/代理.*(?:失败|超时|异常)|浏览器连接被代理.*关闭/i, '代理连接异常'],
+  [/未满足资格|不具备.*资格|无法升级/, '账号未满足套餐升级条件'],
+  [/0 元购|半价优惠|0 元试用/, '账号触发优惠套餐限制']
+];
+
+function browserTaskMessage(task) {
+  const message = typeof task?.message === 'string' ? task.message : '';
+  if (task?.status === 'running') return RECHARGE_STAGE_LABELS[originalRechargeStage(message)] ?? '正在处理';
+  if (task?.status === 'success') return message.startsWith('开通成功，但自动续订取消状态未确认')
+    ? '开通成功，自动续订状态待核对' : '开通成功';
+  if (task?.status === 'manual' || (task?.status === 'failed' && originalRechargeNeedsReview(message))) {
+    if (/(?:支付|付款|扣款)结果(?:待核实|未确认|无法确认|未知)/.test(message)) return '当时的付款结果未确认';
+    return taskFailureSummaries.find(([pattern]) => pattern.test(message))?.[1] ?? '任务曾转人工核对';
+  }
+  if (task?.status === 'failed')
+    return taskFailureSummaries.find(([pattern]) => pattern.test(message))?.[1] ?? '本次开通未完成';
+  return task?.status === 'maintenance' ? '任务因维护结束' : undefined;
+}
+
+function browserTaskListRow(value) {
+  const row = value || {};
+  const code = typeof row.cdk === 'string' ? row.cdk.trim() : '';
+  const cdk = code === '[checkout-debug]' ? '支付链接调试'
+    : /^[A-Za-z0-9_-]{8,32}$/.test(code) ? '尾号 ' + code.slice(-4)
+    : code ? '已记录' : undefined;
+  return {
+    ...browserTaskRow(row), cdk,
+    token: typeof row.token === 'string' && row.token.trim() ? '已记录（隐藏）' : undefined,
+    message: browserTaskMessage(row)
+  };
+}
+
 function browserAdminData(route, body, actor) {
   if (route === '/api/admin/cards') {
     return { ...body, cards: Array.isArray(body.cards) ? body.cards.map(({ card_cvc, card_number, ...card }) => ({
@@ -101,8 +142,9 @@ function browserAdminData(route, body, actor) {
     };
   }
   if (route === '/api/admin/task-logs')
-    return { success: body.success, tasks: Array.isArray(body.tasks) ? body.tasks.map(browserTaskRow) : [] };
-  return { success: body.success, task: browserTaskRow(body.task), runtimeEntries: [] };
+    return { success: body.success, tasks: Array.isArray(body.tasks) ? body.tasks.map(browserTaskListRow) : [] };
+  return { success: body.success,
+    task: { ...browserTaskRow(body.task), message: browserTaskMessage(body.task) }, runtimeEntries: [] };
 }
 
 function browserAdminProjection(method, path) {
