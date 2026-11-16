@@ -63,6 +63,8 @@ test('partner workspace keeps desktop forms in one row and readable lists across
           const label = JSON.stringify({ width, theme, state });
           assert.equal(spacing.overflow, false, label);
           assert.deepEqual(spacing.findings, [], label);
+          assert.equal(await page.locator('[data-partner-batches] td[data-column="plan"]:visible').count(), source.batches.length,
+            label + ' 发码套餐应直接可见');
           if (width >= 1440) assert(Math.max(...geometry.setup.map(box => box.y)) - Math.min(...geometry.setup.map(box => box.y)) <= 1, label + ' API 与合作方必须同排');
           if (width >= 1024) assert(Math.max(...geometry.issue.map(box => box.y)) - Math.min(...geometry.issue.map(box => box.y)) <= 1, label + ' 发码控件必须同排');
           assert(geometry.actions.every(box => box.width > 0 && box.x >= 0 && box.right <= geometry.viewport), label + ' 操作按钮不可裁切');

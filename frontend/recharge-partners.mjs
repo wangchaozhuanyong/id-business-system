@@ -92,7 +92,7 @@ export function createPage(A, definition) {
     const partnerNames = new Map(data.partners.map(row => [row.id, row.name]));
     const batches = data.batches.map(row => ({ ...row, partnerName: partnerNames.get(row.partnerId) || row.partnerId }));
     view.host.querySelector('[data-partner-batches]').innerHTML = A.table([
-      { id: 'batchNo', label: '发码批次', mobileSummary: true },
+      { id: 'batchNo', label: '发码批次' },
       { id: 'partnerName', label: '合作方', long: true, mobileSummary: true },
       { id: 'plan', label: '套餐', render: row => e(planNames[row.plan] || row.plan) },
       { id: 'count', label: '数量', mobileSummary: true, render: row => String(row.codes.length) },
