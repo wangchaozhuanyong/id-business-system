@@ -11,7 +11,7 @@ test('remember login, own-device controls and reconnect states work without loca
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   await interceptDesign(context, { localFixtures: {}, actor });
   let signedIn = false, fail = false, expired = false, activityCount = 0, submitted;
-  let devices = [{ id: '11111111-1111-1111-1111-111111111111', current: true, remembered: true, device: 'Chrome · macOS', createdAt: Date.now(), lastUsedAt: Date.now(), expiresAt: Date.now() + 2592000000 },
+  let devices = [{ id: '11111111-1111-1111-1111-111111111111', current: true, remembered: true, device: 'Chrome · macOS', createdAt: Date.now(), lastUsedAt: Date.now(), expiresAt: Date.now() + 864000000 },
     { id: '22222222-2222-2222-2222-222222222222', current: false, remembered: false, device: 'Safari · iOS', createdAt: Date.now(), lastUsedAt: Date.now(), expiresAt: Date.now() + 28800000 }];
   await context.route('**/api/local/auth/**', async route => {
     const req = route.request(), path = new URL(req.url()).pathname;
@@ -36,17 +36,17 @@ test('remember login, own-device controls and reconnect states work without loca
     await page.setViewportSize({ width, height: 900 });
     await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
     assert(await page.locator('#local-auth-remember').isVisible());
+    assert(await page.locator('#local-auth-remember').isChecked());
     const before = await page.locator('#local-auth-password').boundingBox();
     const help = page.getByLabel('查看在此设备保持登录说明');
     await help.click();
-    await page.getByText('保持登录后，实际操作时自动续期；', { exact: false }).waitFor({ state: 'visible' });
+    await page.getByText('勾选后从登录起保持10天', { exact: false }).waitFor({ state: 'visible' });
     await page.keyboard.press('Escape');
     assert.deepEqual(await page.locator('#local-auth-password').boundingBox(), before);
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   }
   await page.locator('#local-auth-email').fill(actor.email);
   await page.locator('#local-auth-password').fill('fixture-only-password');
-  await page.locator('#local-auth-remember').check();
   await page.locator('.local-auth-form button[type=submit]').click();
   await page.waitForFunction(() => window.IDDesignAPI && window.IDLocalAuth?.getState().status === 'signed-in');
   await page.locator('#profile-button').waitFor({ state: 'visible' });
