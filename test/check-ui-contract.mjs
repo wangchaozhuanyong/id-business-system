@@ -19,7 +19,7 @@ const browsers = ['search-input', 'ui-idle-contract', 'change-sync', 'performanc
   'staff-workspaces', 'finance-reconciliation', 'renewal-handoff', 'shared-layout', 'page-lifecycle', 'order-completion', 'order-submit-stay', 'contact-recovery', 'operation-recovery',
   'mobile-navigation-layout', 'design-list-boundaries', 'global-pagination', 'business-lists', 'site-visual-v2-border',
   'recharge-layout-transitions', 'recharge-cell-overflow', 'recharge-server-diagnostic', 'recharge-partner',
-  'recharge-invoice-subscription', 'mailbox-updates'];
+  'recharge-invoice-subscription', 'mailbox-updates', 'initial-loading-layout'];
 const groups = [
   ['unit', ['--test', ...frontend, ...units.map(name => `test/${name}.test.mjs`)]],
   ['browser', ['--test', '--test-concurrency=1', ...browsers.map(name => `test/${name}.browser.mjs`)]],

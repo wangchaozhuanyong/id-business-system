@@ -67,8 +67,10 @@
     const shown = A.pageRows(rows);
     const emptyTitle = query ? '未找到符合条件的订单'
       : current === 'complete' ? '暂无已补全订单' : current === 'unassigned' ? '暂无待分配订单' : '暂无待补全订单';
-    const contents = snapshot ? A.table(columns, shown, '', manual ? '手工与历史单' : '订单补全', { title: emptyTitle, description: '' }) +
-      A.pagination(rows.length) : '';
+    const contents = A.table(columns, shown, '', manual ? '手工与历史单' : '订单补全', {
+      title: snapshot ? emptyTitle : loadError ? '暂时无法读取订单' : '正在读取订单…',
+      description: !snapshot && loadError ? '请点击刷新重试。' : ''
+    }) + (snapshot ? A.pagination(rows.length) : '');
     const assignOwners = manual && sourceRows.some(row => row.needsOwner)
       ? button('补齐空白归属', 'completion-assign-manual') : '';
     const saved = find(savedId);
@@ -83,7 +85,7 @@
       '</div>' + button('刷新', 'completion-refresh', '', 'refresh') +
       '</div>' + (assignOwners ? '<div class="toolbar-right">' + assignOwners + '</div>' : '') +
       '</div></div><div role="status" id="completion-list-progress" hidden></div>' +
-      (loadError ? '<div class="panel-body"><p class="inline-notice warning" role="status">' +
+      (loadError && snapshot ? '<div class="panel-body"><p class="inline-notice warning" role="status">' +
         (snapshot ? '刷新失败，已保留上次订单。' : '暂时无法读取订单，请刷新重试。') + '</p></div>' : '') +
       savedNotice + contents + '</section>';
   }

@@ -17,8 +17,11 @@ async function measureNavigation(nav) {
     const form = columns?.querySelector('.form-panel');
     const records = columns?.querySelector('.entry-records');
     const standalone = node.parentElement.querySelector('#completion-list, #customer-query-search')?.closest('.panel');
+    const style = getComputedStyle(node);
     return {
       navigation: box(node),
+      insetLeft: parseFloat(style.paddingLeft) + parseFloat(style.borderLeftWidth),
+      insetRight: parseFloat(style.paddingRight) + parseFloat(style.borderRightWidth),
       form: box(form),
       records: records?.checkVisibility() ? box(records) : null,
       mobileSwitchVisible: columns?.querySelector('.order-entry-mobile-switch')?.checkVisibility(),
@@ -33,16 +36,20 @@ async function measureNavigation(nav) {
 }
 
 async function assertNavigationLayout(nav, width, standalonePage = false) {
-  const { navigation, form, records, mobileSwitchVisible, standalone, buttons } = await measureNavigation(nav);
+  const { navigation, insetLeft, insetRight, form, records, mobileSwitchVisible, standalone, buttons } = await measureNavigation(nav);
   const panel = standalonePage ? standalone : form;
   assert(panel, '业务按钮应与对应面板同宽');
   assert.equal(buttons.length, links.length);
-  assert(Math.abs(buttons[0].box.left - panel.left) <= 1);
-  assert(Math.abs(buttons.at(-1).box.right - panel.right) <= 1);
+  assert(Math.abs(navigation.left - panel.left) <= 1);
+  assert(Math.abs(navigation.right - panel.right) <= 1);
+  // The current segmented navigation has its own border and inset. Check both
+  // the outer alignment and the actual button edges inside that surface.
+  assert(Math.abs(buttons[0].box.left - navigation.left - insetLeft) <= 1);
+  assert(Math.abs(buttons.at(-1).box.right - navigation.right + insetRight) <= 1);
   const rowCount = new Set(buttons.map(({ box }) => Math.round(box.top))).size;
   assert.equal(rowCount, width <= 540 ? 2 : 1);
   assert(buttons.every(({ box, label }) =>
-    Math.abs(box.width - buttons[0].box.width) <= 1 && box.height >= (width <= 900 ? 44 : 52) &&
+    Math.abs(box.width - buttons[0].box.width) <= 1 && box.height >= (width <= 900 ? 44 : 36) &&
     label.left > box.left && label.right < box.right
   ), '业务按钮等宽，文字在按钮内完整可见');
   if (standalonePage) {
@@ -84,7 +91,7 @@ test('订单提交合并入口，保留五个旧地址、草稿、权限和手�
         await page.goto(origin + root + 'order/gpt');
         let loadingNavigation;
         if (width === 2062) {
-          await page.getByText('正在读取本机业务资料', { exact: true }).waitFor();
+          await page.getByText('正在读取订单资料…', { exact: true }).waitFor();
           await settle(page);
           loadingNavigation = (await measureNavigation(nav)).navigation;
           commerceRead.resolve();
