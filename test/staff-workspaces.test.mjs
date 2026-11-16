@@ -108,7 +108,7 @@ test('role policy keeps the business administrator and blocks global settings or
   assert.equal(nativeManagerAccess(actors.super, '/api/admin/billing/fixture', 'DELETE'), false);
   assert.equal(nativeManagerAccess(actors.admin, '/api/admin/task-logs/fixture', 'DELETE'), false);
   assert.equal(nativeManagerAccess(actors.admin, '/api/admin/unknown-future-operation', 'POST'), false);
-  assert.equal(nativeBrowserVerification('/api/admin/proxies', 'POST'), true);
+  assert.equal(nativeBrowserVerification('/api/admin/proxies', 'POST'), false);
   assert.equal(nativeBrowserVerification('/api/admin/proxies/fixture/test', 'POST'), false);
   assert.equal(nativeBrowserVerification('/api/admin/task-logs/fixture', 'GET'), false);
   assert.equal(protectedSettingsChanged({ mailboxTypes: ['new'] }, { mailboxTypes: ['old'] }), true);
@@ -320,7 +320,6 @@ test('registration and customer writes use scoped records, replay receipts and o
   assert.equal(gemini.status, 200);
   assert.equal(f.writes[2].data.orders[0].loginMethod, 'google');
   assert.equal((await f.call('supervisor', 'business-proxies', { version: 0, id: 'unowned' })).status, 403);
-  f.verify();
   assert.equal((await f.call('supervisor', 'business-proxies', { action: 'recharge', countryCode: 'PH',
     kind: 'static_residential', link: 'proxy.example.test:1000' })).status, 200);
 });

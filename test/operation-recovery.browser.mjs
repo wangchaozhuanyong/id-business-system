@@ -44,9 +44,9 @@ async function environment(context, { actor: acting = actor, setup } = {}) {
   await interceptDesign(context, { actor: acting, skipRechargeAssets: true, businessLists: true, documentDelta: true,
     localFixtures: { 'auth/session': { actor: acting, configured: true } } });
   const requests = [];
-  let verified = false, confirmationCount = 0, lostArchive = 0, lostRecovery = 0;
+  let confirmationCount = 0, lostArchive = 0, lostRecovery = 0;
   const renewals = createRenewalHandoff({ store, publicOrigin: origin, getAuth: () => ({
-    recentlyPasswordConfirmed: () => verified, orderOwners: () => [acting]
+    orderOwners: () => [acting]
   }) });
   const expenses = createOrderExpenseHandler({ store, publicOrigin: origin });
   await context.route(base + '**', async route => {
@@ -66,7 +66,7 @@ async function environment(context, { actor: acting = actor, setup } = {}) {
       return route.fulfill({ status, json: data });
     }
     const result = await localBusinessRequest(store, path + url.search, {
-      method, body, operationId, actor: acting, publicOrigin: origin, authorizeSensitive: () => verified
+      method, body, operationId, actor: acting, publicOrigin: origin
     });
     if (method === 'POST' && path === 'inventory/archive' && result.status === 200 && lostArchive > 0) {
       lostArchive--;
@@ -82,7 +82,7 @@ async function environment(context, { actor: acting = actor, setup } = {}) {
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   page.setDefaultTimeout(7000);
-  await page.exposeFunction('testVerifyArchive', () => { confirmationCount++; verified = true; return true; });
+  await page.exposeFunction('testVerifyArchive', () => { confirmationCount++; return true; });
   await page.addInitScript(() => { window.IDAccountSecurity = { verify: () => window.testVerifyArchive() }; });
   return { page, store, mailbox, requests, errors, lostArchive: count => { lostArchive = count; },
     lostRecovery: count => { lostRecovery = count; },
@@ -126,10 +126,10 @@ test('导入批次可逐条归档，手机和桌面都能从原归档恢复，�
       await dialog.getByText('误导入', { exact: true }).waitFor();
       await dialog.getByText('已归档', { exact: true }).waitFor();
       const writes = requests.filter(row => row.path === 'inventory/archive' && row.method === 'POST');
-      assert.equal(writes.length, 4);
+      assert.equal(writes.length, 3);
       assert.match(writes[0].operationId, /^[\da-f-]{36}$/);
       assert.deepEqual(writes, Array(writes.length).fill(writes[0]));
-      assert.equal(confirmations(), 1);
+      assert.equal(confirmations(), 0);
       assert.deepEqual((await separatorSnapshot(page)).findings, []);
       const bounds = await dialog.locator('.drawer-body').evaluate(node => [node.scrollWidth, node.clientWidth]);
       assert(bounds[0] <= bounds[1] + 1);
@@ -213,11 +213,11 @@ test('手机与桌面通过原库存入口误标状态，再从原日志预览�
       await drawer.getByRole('heading', { name: '恢复回执' }).waitFor();
       await drawer.getByText('选错库存资料', { exact: true }).waitFor();
       const writes = requests.filter(row => row.path === 'audit/' + id + '/recovery' && row.method === 'POST');
-      assert.equal(writes.length, 4);
+      assert.equal(writes.length, 3);
       assert.deepEqual(writes[0].body, { version: 2, reason: 'wrong_record' });
       assert.match(writes[0].operationId, /^[\da-f-]{36}$/);
       assert.deepEqual(writes, Array(writes.length).fill(writes[0]));
-      assert.equal(confirmations(), 1);
+      assert.equal(confirmations(), 0);
       assert.equal(store.audit().filter(record => record.action === 'inventory_restore_health').length, 1);
       await drawer.getByRole('button', { name: '查看原操作', exact: true }).click();
       await drawer.getByRole('heading', { name: '已恢复', exact: true }).waitFor();
@@ -295,7 +295,7 @@ test('从操作日志打开续费办理、费用作废和苹果余额补偿的�
     await drawer.getByRole('button', { name: '登记未付款并退回', exact: true }).click();
     await main.getByText('财务已退回', { exact: true }).waitFor();
     assert.equal(store.featureDocument(renewalHandoffDomain).data.items.find(row => row.id === seed.id).returned, '合成退回测试');
-    assert.equal(confirmations(), 1);
+    assert.equal(confirmations(), 0);
     await main.getByRole('button', { name: '查看全部续费', exact: true }).click();
     await main.getByRole('tab', { name: '处理中', exact: true }).click();
     await main.locator('tr[data-row-id="renewal-other"]').waitFor();

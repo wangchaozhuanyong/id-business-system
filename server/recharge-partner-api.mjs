@@ -106,7 +106,7 @@ function validAccountSession(source, now) {
 }
 
 export function createRechargePartnerHandlers({
-  store, transport, gateway, origin, readSource, authorizeAdmin, clock = Date.now
+  store, transport, gateway, origin, readSource, clock = Date.now
 }) {
   const readPartners = () => store.featureDocument('recharge-partners');
   const readRequests = () => store.featureDocument('recharge-partner-requests');
@@ -185,8 +185,6 @@ export function createRechargePartnerHandlers({
     if (req.method !== 'POST' || req.headers.origin !== origin ||
         (req.headers['sec-fetch-site'] && req.headers['sec-fetch-site'] !== 'same-origin'))
       throw new RequestError(403, 'forbidden', '请在 ID 后台操作');
-    if (!authorizeAdmin(req))
-      throw new RequestError(403, 'SECURITY_CONFIRMATION_REQUIRED', '请先完成安全确认，再继续这项操作');
     const body = await readBody(req, ['action', 'operationId', 'name', 'partnerId', 'plan', 'count']);
     const operation = operationId(body.operationId);
     if (body.action === 'create') {

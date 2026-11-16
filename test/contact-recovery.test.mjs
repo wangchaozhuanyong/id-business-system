@@ -39,7 +39,7 @@ function seed(store) {
 }
 
 async function request(store, resource, {
-  body, method = body === undefined ? 'GET' : 'POST', operationId, actor = admin, source = origin, authorizeSensitive
+  body, method = body === undefined ? 'GET' : 'POST', operationId, actor = admin, source = origin
 } = {}) {
   const url = '/api/local/' + resource;
   const msg = Readable.from(body === undefined ? [] : [Buffer.from(JSON.stringify(body))]);
@@ -51,7 +51,7 @@ async function request(store, resource, {
     setHeader: (key, value) => { response[key] = value; },
     writeHead: status => { response.status = status; },
     end: text => { response.body = JSON.parse(text); }
-  }, url.split('?')[0], store, actor, { publicOrigin: origin, authorizeSensitive });
+  }, url.split('?')[0], store, actor, { publicOrigin: origin });
   return response;
 }
 
@@ -74,7 +74,6 @@ async function edit(store, list, index, changes, { action = '修改资料', tran
 }
 
 const resource = id => 'audit/' + id + '/recovery';
-const requiredConfirmation = { authorizeSensitive: () => true };
 
 async function preview(store, id, options) {
   const result = await request(store, resource(id), options);
@@ -116,7 +115,7 @@ test('restores only the supported fields of a saved edit, even after unrelated w
   ]);
   assert(!JSON.stringify(diff).includes('synthetic-note'));
   const operationId = randomUUID(), body = { version: diff.version, reason: 'wrong_value' };
-  const saved = await request(store, resource(originalId), { body, operationId, ...requiredConfirmation });
+  const saved = await request(store, resource(originalId), { body, operationId });
   assert.equal(saved.status, 200);
   assert.equal(saved.body.reason, '资料填错');
   const after = store.load('commerce');
@@ -191,7 +190,7 @@ test('blocks stale targets, duplicate restored contacts and labels removed from 
   assert.equal(store.audit().filter(row => row.action === 'contact_recover').length, 0);
 });
 
-test('requires role, origin, security confirmation and a recovery idempotency key', async t => {
+test('requires role, origin and a recovery idempotency key', async t => {
   const store = storeFixture(t);
   seed(store);
   const id = await edit(store, 'tenants', 0, { name: '合成租户新名称', phone: '9090' });
@@ -204,12 +203,9 @@ test('requires role, origin, security confirmation and a recovery idempotency ke
   assert.equal((await request(store, resource(id), { actor: null })).status, 401);
   assert.equal((await request(store, resource(id), { body, operationId, actor: employee })).status, 403);
   assert.equal((await request(store, resource(id), { body, operationId, source: 'https://unrelated.test' })).status, 403);
-  const stepUp = await request(store, resource(id), { body, operationId, authorizeSensitive: () => false });
-  assert.equal(stepUp.status, 403);
-  assert.equal(stepUp.body.code, 'SECURITY_CONFIRMATION_REQUIRED');
   assert.equal((await request(store, resource(id), { body })).status, 400);
   assert.equal((await request(store, resource(id), { body: { ...body, phone: '123' }, operationId })).status, 400);
-  assert.equal((await request(store, resource(id), { body, operationId, ...requiredConfirmation })).status, 200);
+  assert.equal((await request(store, resource(id), { body, operationId })).status, 200);
   assert.equal(store.load('commerce').data.tenants[0].name, '合成租户');
 });
 

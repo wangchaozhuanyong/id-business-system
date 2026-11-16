@@ -616,22 +616,14 @@ function adaptAdminScript(source, routingScript) {
     'function redirectToLogin()',
     'async function loadAdminSecurityStatus()',
     `
-        let pendingReadVerification;
         async function authFetch(url, options = {}) {
-            const { securityConfirmation, ...requestOptions } = options;
-            const request = () => fetch(url, { ...requestOptions, credentials: 'same-origin' });
+            const request = () => fetch(url, { ...options, credentials: 'same-origin' });
             let response = await request();
-            if (response.status === 403 && (options.method && !['GET', 'HEAD'].includes(options.method) ||
-                securityConfirmation === true)) {
+            if (response.status === 403 && options.method && !['GET', 'HEAD'].includes(options.method)) {
                 const detail = await response.clone().json().catch(() => null);
-                if (detail?.code === 'SECURITY_CONFIRMATION_REQUIRED' && !requestOptions.signal?.aborted) {
-                    const verify = () => window.parent.IDAccountSecurity?.verify();
-                    const confirmed = securityConfirmation
-                        ? await (pendingReadVerification ??= Promise.resolve(verify()).finally(() => {
-                            pendingReadVerification = null;
-                        }))
-                        : await verify();
-                    if (confirmed && !requestOptions.signal?.aborted) response = await request();
+                if (detail?.code === 'SECURITY_CONFIRMATION_REQUIRED' && !options.signal?.aborted) {
+                    const confirmed = await window.parent.IDAccountSecurity?.verify();
+                    if (confirmed && !options.signal?.aborted) response = await request();
                 }
             }
             if (response.status === 401) {
@@ -664,20 +656,11 @@ function adaptAdminScript(source, routingScript) {
     `                const data = await res.json().catch(() => null);
                 if (!res.ok || !data?.success) throw new Error(data?.message || data?.error || '解除失败');`);
   source = replaceOne(source,
-    'const res = await authFetch(`/api/admin/sessions/${encodeURIComponent(jobKey)}`);',
-    'const res = await authFetch(`/api/admin/sessions/${encodeURIComponent(jobKey)}`, { securityConfirmation: true });');
-  source = replaceOne(source,
     "throw new Error(data.message || '加载 Session 失败');",
     "throw new Error(data.error || data.message || '加载 Session 失败');");
   source = replaceOne(source,
-    "if (pId === 'cdks') {\n                loadCdkList().catch",
-    "if (pId === 'cdks') {\n                loadCdkList(true).catch");
-  source = replaceOne(source,
     '                    await loadCdkList();\n                } catch (cdkError)',
     "                    if (document.getElementById('cdks')?.classList.contains('active')) await loadCdkList();\n                } catch (cdkError)");
-  source = replaceOne(source,
-    "async function loadCdkList() {\n            const cdkRes = await authFetch('/api/admin/cdks');",
-    "async function loadCdkList(securityConfirmation = false) {\n            const cdkRes = await authFetch('/api/admin/cdks', { securityConfirmation });");
   source = replaceSection(
     source,
     'async function ensureAdminSession()',

@@ -46,34 +46,30 @@ export function nativeManagerAccess(actor, path, method) {
   return Boolean(permitted?.some(pattern => pattern.test(route)));
 }
 
-const nativeProtectedPosts = new Set([
-  'config', 'runtime-logs/clear', 'browser-pool/mode', 'browser-pool/reload',
-  'telegram', 'hcaptcha', 'ip-bans', 'cards/import', 'proxies', 'recharge-routing/proxies',
-  'orbitcard/product-strategy', 'orbitcard/config', 'cdks/generate', 'cdks/import',
-  'subscription/cancel-auto-renew', 'subscription/enable-auto-renew', 'trigger-activation',
-  'products/generate', 'products/resume', 'products/export'
-]);
-
 export function nativeBrowserVerification(path, method) {
   const route = path.toLowerCase().replace(/\/+$/, '');
-  if (method === 'GET' || method === 'HEAD')
-    return /^\/api\/admin\/(?:sessions\/[^/]+|cdks|video|screenshots(?:\/[^/]+\/[^/]+)?|(?:products|billing)\/export)$/.test(route);
-  if (route.startsWith('/api/external/cards/')) return true;
-  const adminPrefix = '/api/admin/';
-  if (!route.startsWith(adminPrefix)) return false;
-  const action = route.slice(adminPrefix.length);
-  if (method === 'DELETE') return true;
-  if (method === 'PUT' || method === 'PATCH')
-    return /^(?:region|cards\/plan-policy|proxies\/[^/]+|recharge-routing(?:\/proxies\/[^/]+\/(?:country|type))?)$/.test(action);
-  if (method !== 'POST') return false;
-  return nativeProtectedPosts.has(action) ||
-    /^(?:orbitcard\/cards\/[^/]+\/(?:restore|plan)|activation-manual-holds\/[^/]+\/resolve|cdks\/[^/]+\/ship)$/.test(action);
+  switch (method) {
+    case 'POST':
+      return /^\/api\/admin\/(?:cards\/import|ip-bans|subscription\/(?:cancel|enable)-auto-renew)$/.test(route);
+    case 'PUT':
+      return route === '/api/admin/cards/plan-policy';
+    case 'DELETE':
+      return /^\/api\/admin\/(?:cards|ip-bans)\/[^/]+$/.test(route);
+    default:
+      return false;
+  }
+}
+
+const feeSettings = ['costSettings', 'orderCurrencies', 'orderCurrenciesByProduct',
+  'applePaidPrices', 'gptPaidPrices', 'claudePaidPrices', 'personalPaidPrices'];
+
+export function feeAndPriceSettingsChanged(next, previous) {
+  return feeSettings.some(key => !isDeepStrictEqual(next[key], previous?.[key]));
 }
 
 export function protectedSettingsChanged(next, previous) {
   if (!previous) return true;
-  return ['mailboxTypes', 'customerTags', 'customerSources', 'costSettings', 'orderCurrencies',
-    'orderCurrenciesByProduct', 'applePaidPrices', 'gptPaidPrices', 'claudePaidPrices', 'personalPaidPrices']
+  return ['mailboxTypes', 'customerTags', 'customerSources', ...feeSettings]
     .some(key => !isDeepStrictEqual(next[key], previous[key]));
 }
 
