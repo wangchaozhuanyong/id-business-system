@@ -1,0 +1,19 @@
+{
+  "baseWebsiteSha": "18ca7897c494352f5ab0ce0217d11b294ac645b8",
+  "reviewedCommit": "47447e73c6562b43f27f9e1f80f82573b81ec00d",
+  "assetsSha256": "ebbe7f312a6ca3cf496a9abfa0054cedcb80f6564fedfb94b3b0fb5db828f74d",
+  "files": {
+    "modules/recharge/codexdaichong/plus-trial/manifest.json": {
+      "before": "1e1aaa57973702a9775cb69a1a9df6bcec23913b8b4e93ddeb88fb54fb8e18ff",
+      "after": "bafe55ae42fda7a976c7a67ff2ceb43001827ea61c67d040dfc59c9c2f333c90"
+    },
+    "modules/recharge/codexdaichong/plus-trial/upstream-plus-trial.patch": {
+      "before": "2264f54a620676155b6683ac3e1441d3c8a93253acfbcceb8d1ad65379ff55b0",
+      "after": "2131d64706732186d4362d4dcf7967c157dbcb7edf981581c0b019f6ae7cede2"
+    },
+    "modules/recharge/codexdaichong/plus-trial.test.mjs": {
+      "before": "9115365bc9793a73e5508e79aaab4e5d035c4e8c542b475dc9c55b21db7f97fc",
+      "after": "d8e887f00320e3631531b2ced2fa0dc39f43b548c5e20934246451b02fb1000a"
+    }
+  }
+}
