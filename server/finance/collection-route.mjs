@@ -39,7 +39,7 @@ function queryParameters(url) {
   if (input.from && input.to && input.from > input.to) throw collectionError(400, '开始日期不能晚于结束日期');
   return input;
 }
-export function createFinanceCollectionHandler({ collection, publicOrigin, authorizeSensitive }) {
+export function createFinanceCollectionHandler({ collection, publicOrigin }) {
   return async (request, response, actor) => {
     if (!actor?.id) return send(response, 401, { error: '请先登录' });
     if (!['admin', 'super'].includes(actor.role)) return send(response, 403, { error: '当前账号无权管理汇率采集' });
@@ -56,8 +56,6 @@ export function createFinanceCollectionHandler({ collection, publicOrigin, autho
       const keys = { settings: ['action', 'version', 'settings'], collect: ['action'],
         'cleanup-preview': ['action'], cleanup: ['action', 'preview', 'confirm'] }[input.action];
       if (!keys || Object.keys(input).some(key => !keys.includes(key))) throw collectionError(400, '采集操作格式无效');
-      if (['settings', 'cleanup'].includes(input.action) && authorizeSensitive && !authorizeSensitive(request))
-        return send(response, 403, { error: '请用当前登录密码确认这项操作', code: 'SECURITY_CONFIRMATION_REQUIRED' });
       if (input.action === 'settings') {
         if (!Number.isSafeInteger(input.version) || input.version < 1) throw collectionError(400, '设置版本无效');
         return send(response, 200, { settings: collection.saveSettings(input.version, input.settings, actor) });

@@ -215,7 +215,7 @@ test('finance source review preserves the reason after stale versions without an
 test('staff confirms a batch and finance returns a verified replacement for a new order', { timeout: 60_000 }, async t => {
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
   t.after(() => browser.close());
-  let rows = [], available = [source, second], verified = false;
+  let rows = [], available = [source, second];
   const actions = [], errors = [];
   const timing = [];
   const diagnostic = 'ac6cc6fd-707d-49c4-9d1c-37eee88a7bf8';
@@ -241,14 +241,6 @@ test('staff confirms a batch and finance returns a verified replacement for a ne
           window.renewalChanged = value => revision('change', value);
         } }), { headers: { 'Content-Type': 'text/event-stream' } }));
       };
-    });
-    await context.route('**/api/local/auth/security**', route => {
-      if (route.request().url().endsWith('/confirm-password')) {
-        assert.deepEqual(route.request().postDataJSON(), { password: 'fixture-action-only' });
-        verified = true;
-        return route.fulfill({ status: 200, json: { verified: true } });
-      }
-      return route.fulfill({ status: 200, json: { available: true, bound: true, passwordConfirmed: verified, devices: [] } });
     });
     await context.route('**/api/local/renewals**', route => {
       const request = route.request();
@@ -280,7 +272,6 @@ test('staff confirms a batch and finance returns a verified replacement for a ne
         row.version++;
         if (body.action === 'claim') row.status = 'processing';
         if (body.action === 'paid') {
-          assert(verified);
           assert.equal(body.cardMode, 'manual');
           assert.equal(body.amount, '22.25');
           assert.equal(body.cardNumber, '4111111111111111');
@@ -288,7 +279,6 @@ test('staff confirms a batch and finance returns a verified replacement for a ne
           Object.assign(row, { status: 'paid', amount: body.amount, currency: body.currency, last4: '1111' });
         }
         if (body.action === 'review-source') {
-          assert(verified);
           assert.deepEqual(body, { action: 'review-source', id: row.id, version: 4, sourceVersion: 3,
             reason: '原到期时间登记更正' });
           row.sourceChanged = false;
@@ -342,9 +332,8 @@ test('staff confirms a batch and finance returns a verified replacement for a ne
   assert.equal(await drawer.locator('#renewal-confirmed').count(), 0);
   await drawer.getByRole('button', { name: '保存实付' }).click();
   const important = finance.page.getByRole('dialog', { name: '确认重要操作' });
-  await important.getByLabel('当前登录密码').fill('fixture-action-only');
-  await important.getByRole('button', { name: '确认', exact: true }).click();
   await finance.page.getByText('已交回续费管理，等待员工补资料').waitFor();
+  assert.equal(await important.count(), 0);
   await finance.page.getByRole('tab', { name: '已处理' }).click();
   await finance.page.getByText('1111', { exact: true }).waitFor();
   await finance.page.setViewportSize({ width: 320, height: 850 });

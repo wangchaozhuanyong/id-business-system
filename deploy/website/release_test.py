@@ -422,6 +422,86 @@ class WebsiteReleaseTests(unittest.TestCase):
     @patch("release.require_presentation_approval")
     @patch("release.require_ancestor")
     @patch("release.git")
+    def test_password_release_requires_the_exact_approved_admin_script_change(self, git, ancestor, approval):
+        files = remote.ACTION_PASSWORD_PRESENTATION_FILES
+        manifest = release.ACTION_PASSWORD_MANIFEST_PATH
+        git.return_value = "\n".join((*files, manifest))
+        self.assertEqual(release.require_website_scope(BASE, TARGET),
+                         ("actionPasswordPresentation", approval.return_value))
+        approval.assert_called_once_with(BASE, TARGET, release.ACTION_PASSWORD_MANIFEST, files)
+        for changed in ((manifest,), (*files, manifest, "modules/recharge/codexdaichong/native-adapter.mjs")):
+            git.return_value = "\n".join(changed)
+            with self.assertRaisesRegex(RuntimeError, "recharge_core_or_runtime_changed"):
+                release.require_website_scope(BASE, TARGET)
+        self.assertEqual(approval.call_count, 1)
+
+    @patch("release.require_deferred_debug_inputs")
+    @patch("release.require_presentation_approval")
+    @patch("release.require_ancestor")
+    @patch("release.git")
+    def test_password_release_with_pending_native_inputs_enforces_both_approvals(self, git, ancestor, assets, deferred):
+        base = release.DEFERRED_DEBUG_BASE
+        files = remote.ACTION_PASSWORD_PRESENTATION_FILES
+        scope = {*files, release.ACTION_PASSWORD_MANIFEST_PATH, *release.DEFERRED_DEBUG_FILES}
+        git.return_value = "\n".join(sorted(scope))
+        assets.return_value = {"beforeAssetsSha256": "a" * 64, "assetsSha256": "b" * 64}
+        self.assertEqual(release.require_website_scope(base, TARGET),
+                         ("actionPasswordPresentation", {**assets.return_value,
+                                                         "deferredNativeInputs": deferred.return_value}))
+        assets.assert_called_once_with(base, TARGET, release.ACTION_PASSWORD_MANIFEST, files)
+        deferred.assert_called_once_with(base, TARGET)
+        for wrong_base, changed in ((BASE, scope), (base, scope | {"modules/recharge/codexdaichong/runtime.mjs"})):
+            git.return_value = "\n".join(sorted(changed))
+            with self.assertRaisesRegex(RuntimeError, "recharge_core_or_runtime_changed"):
+                release.require_website_scope(wrong_base, TARGET)
+        git.return_value = "\n".join(sorted(scope))
+        for flags, reason in (({"include_core": True}, "recharge_native_release_scope_mismatch"),
+                              ({"include_adapter": True}, "recharge_adapter_release_scope_mismatch"),
+                              ({"partner_api": True}, "partner_api_release_contains_unreviewed_native_inputs")):
+            with self.assertRaisesRegex(RuntimeError, reason):
+                release.require_website_scope(base, TARGET, **flags)
+        self.assertEqual(assets.call_count, 1)
+        self.assertEqual(deferred.call_count, 1)
+
+    @patch("release.put_artifact", return_value={"sha256": "d" * 64})
+    @patch("release.require_main")
+    @patch("release.require_website_scope")
+    @patch("release.remote")
+    def test_password_release_can_change_admin_assets_while_deferring_native_inputs(self, remote_call, scope, main, put):
+        candidate = b"approved admin.js change"
+        digest = hashlib.sha256(candidate).hexdigest()
+        before = {"components": {"app": {"revision": release.DEFERRED_DEBUG_BASE},
+                                  "recharge-native": {"revision": BASE}},
+                  "assetsSha256": "a" * 64, "freeBytes": 20 * 1024**3}
+        assets = {"beforeAssetsSha256": before["assetsSha256"], "assetsSha256": digest}
+        scope.return_value = ("actionPasswordPresentation", {
+            **assets, "deferredNativeInputs": {"reviewedCommit": release.DEFERRED_DEBUG_MERGE,
+                                               "assetsSha256": before["assetsSha256"]}})
+        def dispatch(plan):
+            if plan["operation"] == "preflight":
+                self.assertIs(plan["adapter"], False)
+                return "preflight", before
+            self.assertEqual(plan["actionPasswordPresentation"], assets)
+            self.assertTrue(release.DEFERRED_DEBUG_FILES <= plan["files"].keys())
+            for forbidden in ("adapter", "rechargeCore", "rechargePartnerApi", "vendureRetryReceipt"):
+                self.assertNotIn(forbidden, plan)
+            return "release", {"mainSha": TARGET, "appCanaryPassed": True, "actionPasswordPresentationVerified": True,
+                "protectedComponentsUnchanged": True, "liveAssetsSha256": digest,
+                "portableRecoveryBackup": {"sourceRevision": TARGET,
+                                          "programSha256": plan["files"][release.BACKUP_OPERATION]}}
+        remote_call.side_effect = dispatch
+        with TemporaryDirectory() as directory, patch("release.OUTPUT", Path(directory)), redirect_stdout(io.StringIO()) as logs:
+            (Path(directory) / f"independent-assets-{TARGET}.json").write_bytes(candidate)
+            env = {"RELEASE_SHA": TARGET, "QUALITY_RUN_ID": "123", "GITHUB_STEP_SUMMARY": str(Path(directory) / "summary")}
+            with patch.dict(os.environ, env, clear=True):
+                release.main()
+        receipt = json.loads(logs.getvalue().splitlines()[-1])
+        self.assertEqual(receipt["deferredNativeBuildInputs"]["nativeRevisionUnchanged"], BASE)
+        self.assertEqual(receipt["deferredNativeBuildInputs"]["assetsSha256"], digest)
+
+    @patch("release.require_presentation_approval")
+    @patch("release.require_ancestor")
+    @patch("release.git")
     def test_card_import_release_checks_the_adapter_and_shared_asset_inputs(self, git, ancestor, approval):
         git.return_value = remote.CARD_IMPORT_ASSET_SOURCE
         self.assertEqual(release.require_website_scope(BASE, TARGET),
@@ -666,6 +746,12 @@ class WebsiteReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_bundle_scope_mismatch"):
             remote.verify_presentation_bundle(bundle(previous), bundle(changed | {"/workspace": {"body": "new"}}),
                                               checkout_assets)
+        password_assets = remote.PRESENTATION_SCOPES["actionPasswordPresentation"][1]
+        password_candidate = previous | {"/admin.js": {"body": "one-hour confirmation"}}
+        remote.verify_presentation_bundle(bundle(previous), bundle(password_candidate), password_assets)
+        with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_bundle_scope_mismatch"):
+            remote.verify_presentation_bundle(
+                bundle(previous), bundle(password_candidate | {"/subscription": {"body": "changed"}}), password_assets)
         task_history_assets = remote.PRESENTATION_SCOPES["taskHistoryPresentation"][1]
         task_history = previous | {path: {"body": "new"} for path in ("/admin", "/admin.js")}
         remote.verify_presentation_bundle(bundle(previous), bundle(task_history), task_history_assets)

@@ -182,7 +182,7 @@ function send(response, status, data) {
 }
 
 export function createSiteManagement({ store, observations, origin, release, readBackups, readRecoveries, readSources,
-  authorizeBusinessExport, official = false, clock = Date.now }) {
+  official = false, clock = Date.now }) {
   return async (request, response, actor) => {
     const expectedOrigin = origin || 'http://' + request.headers.host;
     const url = new URL(request.url, expectedOrigin);
@@ -204,8 +204,6 @@ export function createSiteManagement({ store, observations, origin, release, rea
           return response.writeHead(204, { 'Cache-Control': 'private, no-store' }).end();
         }
         const filter = filters(body);
-        if (filter.detail === 'business' && !authorizeBusinessExport?.(request, actor))
-          return send(response, 403, { error: '下载含联系方式或金额的资料前，请完成安全确认' });
         const { content, count, label } = siteExport(store.load('commerce').data, filter);
         const digest = createHash('sha256').update(content).digest('hex');
         const operation = describeWriteOperation(request.headers['x-id-operation'], actor, { filter, digest });

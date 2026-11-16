@@ -115,7 +115,6 @@ async function fixture(t) {
   };
   partnerHandlers = createRechargePartnerHandlers({
     store, transport, gateway, origin: publicOrigin, readSource: () => '203.0.113.2',
-    authorizeAdmin: req => req.headers['x-test-unverified'] !== '1',
     clock: () => now
   });
   const call = async (path, body, headers = {}) => {
@@ -208,7 +207,6 @@ test('partner keys, inventory and task receipts stay private across both storefr
   const f = await fixture(t);
   const denied = { action: 'create', name: 'denied', operationId: 'test-denied' };
   assert.equal((await f.admin(denied, { 'x-test-role': 'admin' })).status, 403);
-  assert.equal((await f.admin(denied, { 'x-test-unverified': '1' })).status, 403);
   const a = await enrollment(f, 'merchant-a');
   const b = await enrollment(f, 'merchant-b');
   const [code] = a.codes;

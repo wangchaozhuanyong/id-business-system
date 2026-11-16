@@ -259,9 +259,7 @@ test('查询分页、日期与结果筛选、状态汇总保留成功无变化�
 
 test('管理接口拒绝员工、跨站、非法参数和未经预览确认的清理，不启动HTTP服务', async () => {
   const f = fixture();
-  let passwordConfirmed = false;
-  const handle = createFinanceCollectionHandler({ collection: f.collection, publicOrigin: 'https://fixture.invalid',
-    authorizeSensitive: () => passwordConfirmed });
+  const handle = createFinanceCollectionHandler({ collection: f.collection, publicOrigin: 'https://fixture.invalid' });
   const call = async ({ actor: user = actor, method = 'GET', body, headers = {}, query = '' } = {}) => {
     const request = Readable.from(body ? [Buffer.from(JSON.stringify(body))] : []);
     Object.assign(request, { method, url: '/api/local/finance/collection' + query, headers: { host: 'fixture.invalid', ...headers } });
@@ -296,12 +294,7 @@ test('管理接口拒绝员工、跨站、非法参数和未经预览确认的�
   assert.equal(preview.status, 200, '仅核对清理范围无需再次确认');
   const settings = { version: 1, settings: { ...input(defaults(automaticProvider.id)), intervalMinutes: 360 } };
   const cleanup = { preview: preview.result, confirm: true };
-  for (const response of [await action('settings', settings), await action('cleanup', cleanup)]) {
-    assert.equal(response.status, 403);
-    assert.equal(response.result.code, 'SECURITY_CONFIRMATION_REQUIRED');
-  }
   assert.equal(f.collection.read().data.settings.version, 1);
-  passwordConfirmed = true;
   assert.equal((await action('cleanup', { ...cleanup, confirm: false })).status, 400);
   assert.equal((await action('cleanup', cleanup)).status, 200);
   assert.equal((await action('settings', settings)).status, 200);
