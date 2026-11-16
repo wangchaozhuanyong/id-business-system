@@ -1,5 +1,5 @@
 diff --git a/chatgpt.js b/chatgpt.js
-index 8a7cba7..73ba71e 100644
+index 8a7cba7..3d1ff39 100644
 --- a/chatgpt.js
 +++ b/chatgpt.js
 @@ -467,6 +467,10 @@ async function openApiCheckout(page, { accessToken, sessionData, planType, count
@@ -61,7 +61,7 @@ index 8a7cba7..73ba71e 100644
      const { assertChatGptLoggedIn } = require('./session-auth');
      const { hasVisibleLoginChrome } = require('./auth-page-detect');
      const isPaymentUrl = (raw) => {
-@@ -520,6 +562,32 @@ async function verifyCheckoutDebugPage(page, { checkoutUrl, timeoutMs = 60000 }
+@@ -520,6 +562,53 @@ async function verifyCheckoutDebugPage(page, { checkoutUrl, timeoutMs = 60000 }
          if (!isPaymentUrl(page.url())) {
              throw new Error('支付页面发生非 Checkout 跳转，调试已停止');
          }
@@ -69,6 +69,27 @@ index 8a7cba7..73ba71e 100644
 +        let cardPresent = false;
 +        for (const frame of page.frames()) {
 +            if (await frame.locator(cardSelectorForFill).count().catch(() => 0)) { cardPresent = true; break; }
++        }
++        // Stripe 支付区是懒加载：调试填卡时先滚动到支付区，等卡号框渲染出来（最多 60 秒）。
++        if (!cardPresent && process.env.CHECKOUT_DEBUG_FILL === '1') {
++            for (let waited = 0; waited < 60000 && !cardPresent; waited += 3000) {
++                await page.evaluate(() => {
++                    const target = Array.from(document.querySelectorAll('h2, h3, div, span'))
++                        .find((node) => /Payment method|付款方式/i.test(node.textContent || ''));
++                    if (target && typeof target.scrollIntoView === 'function') {
++                        target.scrollIntoView({ block: 'center' });
++                    } else {
++                        window.scrollBy(0, 600);
++                    }
++                }).catch(() => {});
++                await page.waitForTimeout(1500);
++                for (const frame of page.frames()) {
++                    if (await frame.locator(cardSelectorForFill).count().catch(() => 0)) { cardPresent = true; break; }
++                }
++                if (!cardPresent) {
++                    console.log('  [调试] 等待支付表单渲染... ' + Math.round(waited / 1000) + 's');
++                }
++            }
 +        }
 +        // 有卡号表单时优先走填卡分支：先填卡与地址，再停在提交前。
 +        if (cardPresent && process.env.CHECKOUT_DEBUG_FILL === '1') {
