@@ -339,7 +339,7 @@ index e186977..3f6ff78 100644
  }
  
 diff --git a/stripe-payment.js b/stripe-payment.js
-index cd7ff9d..f9775c9 100644
+index cd7ff9d..e848f25 100644
 --- a/stripe-payment.js
 +++ b/stripe-payment.js
 @@ -295,6 +295,23 @@ function isOpenAiCustomCheckout(page) {
@@ -388,12 +388,34 @@ index cd7ff9d..f9775c9 100644
          () => tryClick(page.getByRole('button', { name: /^Subscribe$/i }), 'role=Subscribe'),
          () => tryClick(page.getByRole('button', { name: /^订阅$/ }), 'role=订阅'),
          () => tryClick(page.getByRole('button', { name: /subscribe|订阅|pay/i }), 'role=subscribe'),
-@@ -2762,8 +2787,38 @@ async function selectCountry(page, selectors, countryCode) {
+@@ -2762,8 +2787,65 @@ async function selectCountry(page, selectors, countryCode) {
  
  // ==================== Exports ====================
  
 +// 调试专用：填卡与账单地址后立即停止，绝不点击提交按钮。
 +// 账单地址取自系统免税地址池（与真实付款同一来源），不从银行卡记录读取。
++// Pro 结账页的账单地址区块默认折叠，填地址前先尝试展开。
++async function expandBillingSectionForDebug(page) {
++    const triggers = [
++        page.getByText(/Add billing address|添加账单地址/i).first(),
++        page.getByRole('button', { name: /Billing address|账单地址/i }).first(),
++        page.getByText(/^Billing address$|^账单地址$/i).first()
++    ];
++    for (const trigger of triggers) {
++        try {
++            if (!(await trigger.isVisible({ timeout: 3000 }).catch(() => false))) continue;
++            await trigger.scrollIntoViewIfNeeded().catch(() => {});
++            await trigger.click({ timeout: 5000 }).catch(() => {});
++            await page.waitForTimeout(1500);
++            console.log('  [调试] 已尝试展开账单地址区块');
++            return true;
++        } catch (_) { /* 下一个触发器 */ }
++    }
++    await page.evaluate(() => window.scrollBy(0, 500)).catch(() => {});
++    console.log('  [调试] 未找到账单地址入口，直接尝试填写');
++    return false;
++}
++
 +async function fillCheckoutForDebug(page, { cardInfo, holderName } = {}) {
 +    const result = { card: false, billing: false, error: '', addressSource: '' };
 +    if (!cardInfo || !cardInfo.number) {
@@ -415,7 +437,12 @@ index cd7ff9d..f9775c9 100644
 +    result.addressSource = address && address.generated ? 'generated' : 'pool#' + (address && address.id);
 +    console.log('  [调试] 已选取美国免税账单地址: ' + [address.line1, address.city, address.state, address.postal_code || address.postal]
 +        .filter(Boolean).join(', '));
-+    const billing = await fillOpenAiCheckoutBilling(page, address, holderName || cardInfo.holder || '');
++    await expandBillingSectionForDebug(page);
++    // 地址填写加总超时，避免个别字段定位失败把整个任务拖死。
++    const billing = await Promise.race([
++        fillOpenAiCheckoutBilling(page, address, holderName || cardInfo.holder || '').catch((error) => ({ ok: false, error: String(error.message).slice(0, 80) })),
++        new Promise((resolve) => setTimeout(() => resolve({ ok: false, error: 'billing_timeout' }), 90000))
++    ]);
 +    result.billing = Boolean(billing && billing.ok !== false);
 +    if (!result.billing) result.error = (billing && billing.error) || 'billing_not_filled';
 +    return result;
