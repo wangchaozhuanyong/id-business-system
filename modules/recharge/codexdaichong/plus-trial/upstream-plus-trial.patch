@@ -1,5 +1,5 @@
 diff --git a/chatgpt.js b/chatgpt.js
-index 8a7cba7..6884a91 100644
+index 8a7cba7..aca61d2 100644
 --- a/chatgpt.js
 +++ b/chatgpt.js
 @@ -467,6 +467,10 @@ async function openApiCheckout(page, { accessToken, sessionData, planType, count
@@ -13,14 +13,18 @@ index 8a7cba7..6884a91 100644
          const currentUrl = await assertCheckoutPageReady(page);
  
          await assertChatGptLoggedIn(page, 'Checkout');
-@@ -483,6 +487,34 @@ async function openApiCheckout(page, { accessToken, sessionData, planType, count
+@@ -483,8 +487,40 @@ async function openApiCheckout(page, { accessToken, sessionData, planType, count
      }
  }
  
 +// Pro 与 0 元结账页没有卡号输入框，只能按结账摘要判定页面已就绪。
 +async function isCheckoutSummaryReady(page) {
 +    const body = String(await page.textContent('body', { timeout: 5000 }).catch(() => '') || '');
-+    if (!/(?:Total due today|Due today|Subscribe|Start trial|Start free trial|Get started|Buy now|Claim)/i.test(body)) {
++    // 加载过渡页（Getting your plan ready / Loading checkout）内容不全，不能当作已就绪。
++    if (/Getting your plan ready|Loading checkout|Just a moment/i.test(body)) {
++        return false;
++    }
++    if (!/(?:Total due today|Due today|Subscribe|Start trial|Start free trial|Claim\s+(?:your\s+)?free\s+offer)/i.test(body)) {
 +        return false;
 +    }
 +    const cardSelector = ['input[autocomplete="cc-number"]', 'input[name="cardnumber"]', 'input[name="number"]'].join(', ');
@@ -46,9 +50,12 @@ index 8a7cba7..6884a91 100644
 +}
 +
  /** Passive debug check: observe the card form without filling or submitting it. */
- async function verifyCheckoutDebugPage(page, { checkoutUrl, timeoutMs = 60000 } = {}) {
+-async function verifyCheckoutDebugPage(page, { checkoutUrl, timeoutMs = 60000 } = {}) {
++async function verifyCheckoutDebugPage(page, { checkoutUrl, timeoutMs = 120000 } = {}) {
      const { assertChatGptLoggedIn } = require('./session-auth');
-@@ -520,6 +552,10 @@ async function verifyCheckoutDebugPage(page, { checkoutUrl, timeoutMs = 60000 }
+     const { hasVisibleLoginChrome } = require('./auth-page-detect');
+     const isPaymentUrl = (raw) => {
+@@ -520,6 +556,10 @@ async function verifyCheckoutDebugPage(page, { checkoutUrl, timeoutMs = 60000 }
          if (!isPaymentUrl(page.url())) {
              throw new Error('支付页面发生非 Checkout 跳转，调试已停止');
          }
