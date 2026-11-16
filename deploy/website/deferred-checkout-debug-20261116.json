@@ -1,0 +1,15 @@
+{
+  "baseWebsiteSha": "18ca7897c494352f5ab0ce0217d11b294ac645b8",
+  "reviewedCommit": "f277a802b38a97b2d5a819b32eeb80a97461f745",
+  "assetsSha256": "ebbe7f312a6ca3cf496a9abfa0054cedcb80f6564fedfb94b3b0fb5db828f74d",
+  "files": {
+    "modules/recharge/codexdaichong/plus-trial/manifest.json": {
+      "before": "1e1aaa57973702a9775cb69a1a9df6bcec23913b8b4e93ddeb88fb54fb8e18ff",
+      "after": "3191969139de7b5f9504dd8be65df4f42079ab3320a782a1e1db43019078f732"
+    },
+    "modules/recharge/codexdaichong/plus-trial/upstream-plus-trial.patch": {
+      "before": "2264f54a620676155b6683ac3e1441d3c8a93253acfbcceb8d1ad65379ff55b0",
+      "after": "8098399ac6287e9d89b28aa86cab583a72a4a84f3438e69e3a67fa9e3cdc6a09"
+    }
+  }
+}
