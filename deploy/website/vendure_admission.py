@@ -224,7 +224,7 @@ def paused_submission_marker(sha, enabled):
             paused.unlink()
 
 
-def check_refresh_baseline(sha, retry_receipt, partner_api=False):
+def check_refresh_baseline(sha, retry_receipt, partner_api=False, customer_progress=False):
     ready_socket()
     before = inspect("vendure")
     previous = identity(before)["revision"]
@@ -239,6 +239,9 @@ def check_refresh_baseline(sha, retry_receipt, partner_api=False):
             stat.S_IMODE(marker.st_mode) == 0o600, "storefront_acceptance_marker_invalid")
     worker_binding()
     worker_runtime(inspect("vendure-worker"))
+    if customer_progress:
+        from customer_progress import check_worker_source
+        check_worker_source()
     with closing(sqlite3.connect((STATE / SQLITE_FILENAME).as_uri() + "?mode=ro", uri=True, timeout=3)) as db:
         idle_snapshot(db)
         if retry_receipt:
@@ -254,7 +257,7 @@ def prepare_partner_socket_directory():
             "gateway_partner_directory_invalid")
 
 
-def cutover(sha, release, refresh=False, retry_receipt=None, partner_api=False):
+def cutover(sha, release, refresh=False, retry_receipt=None, partner_api=False, customer_progress=False):
     require_main(sha)
     require(identity(inspect("app"))["revision"] == sha, "id_app_release_not_live")
     ops = release / "operations"
@@ -287,6 +290,10 @@ def cutover(sha, release, refresh=False, retry_receipt=None, partner_api=False):
     require(all(item["running"] for item in protected.values()), "original_recharge_runtime_not_ready")
     worker = worker_runtime(inspect("vendure-worker"))
     binding = worker_binding()
+    worker_plan = None
+    if customer_progress:
+        from customer_progress import stage_worker, activate_worker, verify_worker
+        worker_plan = stage_worker(source, ops)
     if partner_api:
         prepare_partner_socket_directory()
     with paused_submission_marker(sha, refresh) as progress:
@@ -296,6 +303,8 @@ def cutover(sha, release, refresh=False, retry_receipt=None, partner_api=False):
                     "gateway_service_launcher_changed")
             progress["switch_started"] = True
             run(["systemctl", "stop", UNIT], timeout=45)
+            if worker_plan:
+                activate_worker(worker_plan)
             require(not (STATE / "vendure-task-service.lock").exists(), "old_gateway_did_not_close_cleanly")
             write_new(pending, old_drop.replace(str(old_launcher), str(launcher)), 0o644)
             os.replace(pending, DROP)
@@ -309,13 +318,21 @@ def cutover(sha, release, refresh=False, retry_receipt=None, partner_api=False):
                 time.sleep(1)
         else:
             raise ReleaseError("new_gateway_readback_failed")
+        if worker_plan:
+            binding = worker_binding()
+            require(str(worker_plan["launcher"]).encode() in binding[0], "customer_progress_worker_binding_not_live")
+            worker = worker_plan["runtime"]
         resume_worker(binding, worker, retained_tasks)
+        if worker_plan:
+            verify_worker(worker_plan)
         require(all(identity(inspect(name)) == value for name, value in protected.items()),
                 "original_recharge_runtime_changed")
         ready_socket()
     record = {"mainSha": sha, "gatewaySha": current["revision"], "previousGatewaySha": previous,
               "retainedTaskCount": retained_tasks, "originalRuntimeUnchanged": True,
               "workerSourceUnchanged": True, "workerPollingObserved": True, "accepting": refresh}
+    if worker_plan:
+        record.update(workerSourceUnchanged=False, workerSourceRevision=sha, workerFilesVerified=True)
     if retry_receipt:
         record["singleRetryReceiptVerified"] = True
     if partner_api:

@@ -206,7 +206,7 @@ test('progress is a fixed safe projection and renews observation without changin
   const view = (await f.vendure('task', identity)).body;
   assert.equal(view.status, 'running');
   assert.equal(view.message, '处理中');
-  assert.deepEqual(Object.keys(view).sort(), ['id', 'message', 'plan', 'stage', 'status', 'updatedAt']);
+  assert.deepEqual(Object.keys(view).sort(), ['accountEmail', 'id', 'message', 'plan', 'progress', 'stage', 'status', 'updatedAt']);
   assert.equal((await f.worker('progress', { ...update, upstreamJobId: 'another-job' })).status, 400);
   assert.deepEqual((await f.worker('claim')).body, { task: null });
   const result = await f.worker('result', {
@@ -257,7 +257,7 @@ test('confirmed failure stays bound to the observed original job and exposes onl
   assert.equal(failed.body.status, 'failed');
   assert.equal(failed.body.stage, 'failed');
   assert.equal(failed.body.message, '执行失败，请联系客服处理。');
-  assert.deepEqual(Object.keys(failed.body).sort(), ['id', 'message', 'plan', 'stage', 'status', 'updatedAt']);
+  assert.deepEqual(Object.keys(failed.body).sort(), ['accountEmail', 'id', 'message', 'plan', 'progress', 'stage', 'status', 'updatedAt']);
 });
 
 test('only explicit route and plan-card rejections before execution are definitive', async t => {
@@ -349,6 +349,7 @@ test('collector failure and ambiguous activation never cancel or resend the orig
       activationCount++;
       return Response.json({ success: true, jobKey: 'original-job' });
     }
+    if (url.pathname === '/api/admin/task-logs/original-job') return Response.json({ success: false });
     statusCount++;
     return Response.json({ success: true, data: {
       jobKey: 'original-job', cdkCode: 'synthetic-code', status: 'manual', isTerminal: true,
@@ -366,7 +367,8 @@ test('collector failure and ambiguous activation never cancel or resend the orig
   assert.equal(JSON.stringify(view).includes('synthetic-private-diagnostic'), false);
   assert.deepEqual(await run(), { status: 'idle' });
   assert.equal(activationCount, 1);
-  assert.equal(paths.some((path) => /cancel|retry|cards|admin/.test(path)), false);
+  assert.equal(paths.some((path) => /cancel|retry|cards/.test(path)), false);
+  assert(paths.filter(path => path.includes('/admin/')).every(path => path === '/api/admin/task-logs/original-job'));
 });
 
 test('Session shape is delegated unchanged and customer IP reaches the signed original request', async t => {
@@ -465,7 +467,7 @@ test('a failed progress-table commit cannot cancel, change or resubmit a success
   }]);
   const view = (await f.vendure('task', { id: submitted.id, taskToken: submitted.taskToken })).body;
   assert.equal(view.message, '开通成功');
-  assert.deepEqual(Object.keys(view).sort(), ['id', 'message', 'plan', 'stage', 'status', 'updatedAt']);
+  assert.deepEqual(Object.keys(view).sort(), ['accountEmail', 'id', 'message', 'plan', 'progress', 'stage', 'status', 'updatedAt']);
   for (const value of privateValues) assert.equal(JSON.stringify(view).includes(value), false);
   assert.equal(JSON.stringify(store.load()).includes(session), false);
   assert.deepEqual(await run(), { status: 'idle' });
@@ -510,4 +512,114 @@ test('a lost committed result is recovered from the same receipt without deliver
   assert.deepEqual((await reopened.worker('claim')).body, { task: null });
   assert.equal(activations, 1);
   assert.equal(JSON.stringify(store.load()).includes(session), false);
+});
+
+test('customer steps require complete card evidence, distinguish page URL from opened page, and reset on retry', async () => {
+  const { customerFacts, projectCustomerProgress } = await import('../modules/recharge/vendure/customer-progress.mjs');
+  const base = Date.now() - 10000;
+  const texts = [
+    '✅ [步骤] Session 登录成功: customer@example.test',
+    'CHECKOUT_SOURCE: api',
+    '✅ [步骤] Checkout 页面已打开，开始信用卡支付流程...',
+    '[Stripe] ✅ 卡号已填写 (iframe[0])',
+    '[Stripe] ✅ 有效期已填写 (iframe[1])',
+    '[Stripe] ✅ CVC 已填写 (iframe[2])',
+    '[Stripe] ✅ 账单地址已填写',
+    '[Stripe] ✅ 已点击提交按钮 (订阅)'
+  ];
+  const payload = count => ({ success: true, task: { jobKey: 'safe-job', cdk: 'synthetic-code', status: 'running' },
+    runtimeEntries: texts.slice(0, count).map((text, index) => ({ text, id: index + 1, ts: base + index, jobKey: 'safe-job', source: 'spawn/a1/stdout' })) });
+  assert.equal(customerFacts(payload(2), 'safe-job', 'synthetic-code').find(step => step.key === 'checkout').state, 'active');
+  assert(!customerFacts(payload(5), 'safe-job', 'synthetic-code').some(step => step.key === 'card' && step.state === 'complete'));
+  const facts = customerFacts(payload(8), 'safe-job', 'synthetic-code');
+  for (const key of ['account', 'checkout', 'card', 'billing']) assert.equal(facts.find(step => step.key === key).state, 'complete');
+  assert.equal(facts.find(step => step.key === 'payment').state, 'waiting');
+  assert(!JSON.stringify(facts).includes('customer@example.test'));
+  assert.deepEqual(customerFacts(payload(8), 'wrong-job', 'synthetic-code'), []);
+  assert.deepEqual(customerFacts(payload(8), 'safe-job', 'wrong-code'), []);
+  const initial = projectCustomerProgress({ id: '11111111-1111-4111-8111-111111111111', status: 'queued' }, null, base);
+  const running = projectCustomerProgress({ ...initial, status: 'running', stage: 'processing' }, initial, base + 10, facts);
+  const heartbeat = projectCustomerProgress(running, running, base + 100, facts);
+  assert.deepEqual(heartbeat.progress, running.progress);
+  const retry = payload(8);
+  retry.runtimeEntries.push({ id: 9, text: '[Stripe] 换卡重试 #1：更换卡号并重新提交...', ts: base + 20, jobKey: 'safe-job', source: 'spawn/a1/stdout' });
+  const retried = projectCustomerProgress(running, running, base + 30, customerFacts(retry, 'safe-job', 'synthetic-code'));
+  assert.equal(retried.progress.milestones.find(step => step.key === 'card').state, 'active');
+  assert(!retried.progress.milestones.some(step => step.key === 'billing' || step.key === 'payment'));
+  assert(retried.progress.retryAt);
+  const late = projectCustomerProgress(retried, retried, base + 40, facts);
+  assert.deepEqual(late.progress, retried.progress);
+});
+
+test('private task stream sends committed progress once, ignores heartbeat, and closes at the terminal receipt', async t => {
+  const { createServer } = await import('node:http');
+  const { once } = await import('node:events');
+  const { readProgressStream } = await import('../modules/recharge/vendure/progress-stream.mjs');
+  const vendureKey = randomBytes(32).toString('hex'), workerSecret = randomBytes(32).toString('hex');
+  const bridge = createLoopbackVendureRechargeBridge({ codes: [{ code: 'stream-code', plan: 'plus' }], vendureKey, workerSecret });
+  const server = createServer((req, res) => void bridge.handle(req, res));
+  server.listen(0, '127.0.0.1'); await once(server, 'listening');
+  const origin = 'http://127.0.0.1:' + server.address().port;
+  t.after(() => { bridge.close(); server.closeAllConnections(); server.close(); });
+  const post = (action, body = {}, worker = false, extra = {}) => {
+    const path = (worker ? rechargeWorkerPrefix : vendureRechargePrefix) + '/' + action;
+    return fetch(origin + path, { method: 'POST', body: JSON.stringify(body), headers: { 'content-type': 'application/json',
+      ...(worker ? signRechargeWorkerRequest(workerSecret, path, JSON.stringify(body)) : {
+        'x-vendure-recharge-key': vendureKey, 'x-vendure-client-ip': '203.0.113.10' }), ...extra } });
+  };
+  const task = await (await post('submit', { code: 'stream-code', session })).json();
+  const denied = await post('task', { id: task.id, taskToken: 'incorrect' }, false, { accept: 'text/event-stream' });
+  assert.equal(denied.status, 404); await denied.body.cancel();
+  const stream = await post('task', { id: task.id, taskToken: task.taskToken }, false, { accept: 'text/event-stream' });
+  assert.match(stream.headers.get('content-type'), /text\/event-stream/);
+  const snapshots = [];
+  const consuming = readProgressStream(stream.body, snapshot => snapshots.push(snapshot));
+  const lease = (await (await post('claim', {}, true)).json()).task;
+  const update = { id: lease.id, leaseToken: lease.leaseToken, upstreamJobId: 'stream-job', stage: 'processing',
+    facts: [{ key: 'card', state: 'complete', at: Date.now(), attempt: 1 }] };
+  await (await post('progress', update, true)).body.cancel();
+  await (await post('progress', update, true)).body.cancel();
+  await (await post('result', { id: lease.id, leaseToken: lease.leaseToken, upstreamJobId: 'stream-job', outcome: 'confirmed_success', evidenceId: 'synthetic-receipt' }, true)).body.cancel();
+  await consuming;
+  assert.equal(snapshots.at(-1).status, 'succeeded');
+  assert.equal(snapshots.filter(snapshot => snapshot.progress?.milestones.some(step => step.key === 'card') && snapshot.status === 'running').length, 1);
+  assert(snapshots.every(snapshot => !Object.hasOwn(snapshot, 'taskToken')));
+  assert.equal(snapshots[0].accountEmail, 'synthetic@example.test');
+});
+
+test('worker reads the pinned admin task-detail shape and sends only verified customer milestones', async t => {
+  const f = fixture(t);
+  const accepted = (await f.vendure('submit', { code: 'synthetic-code', session })).body;
+  let activations = 0, reads = 0;
+  const at = Date.now() - 100;
+  const records = ['✅ [步骤] Session 登录成功: synthetic@example.test',
+    '✅ [步骤] Checkout 页面已打开，开始信用卡支付流程...',
+    '[Stripe] ✅ 卡号/有效期/CVC 已填写 (单 iframe 多 input)',
+    '[Stripe] ✅ 账单地址已填写', '[Stripe] ✅ 已点击提交按钮 (订阅)'];
+  t.mock.method(globalThis, 'fetch', async (input, options) => {
+    const path = new URL(input).pathname;
+    if (new URL(input).port === '31992') {
+      const reply = await f.post(path, JSON.parse(options.body), options.headers);
+      return Response.json(reply.body, { status: reply.status });
+    }
+    if (path === '/api/public/runtime') return Response.json({ success: true });
+    if (path === '/api/run-process') { activations++; return Response.json({ success: true, jobKey: 'observed-job' }); }
+    if (path === '/api/admin/task-logs/observed-job') {
+      const claims = JSON.parse(Buffer.from(options.headers['x-id-recharge-assertion'].split('.')[0], 'base64url'));
+      assert.equal(claims.method, 'GET'); assert.equal(claims.path, path); assert.equal(claims.actor.sensitive, false);
+      return Response.json({ success: true, task: { jobKey: 'observed-job', cdk: 'synthetic-code', status: 'running', rawOutput: 'synthetic-private-debug' },
+        runtimeEntries: records.map((text, index) => ({ jobKey: 'observed-job', source: 'spawn/a1/stdout', ts: at + index, id: index + 1, text })) });
+    }
+    assert.equal(path, '/api/task-status/observed-job');
+    return Response.json({ success: true, data: { jobKey: 'observed-job', cdkCode: 'synthetic-code',
+      status: ++reads > 1 ? 'success' : 'running', isTerminal: reads > 1, message: '处理中' } });
+  });
+  const run = createVendureCodexdaichongWorker({ bridgeUrl: 'http://127.0.0.1:31992', upstreamUrl: 'http://127.0.0.1:31993',
+    workerSecret: f.workerSecret, upstreamSecret: randomBytes(32).toString('hex'), pollIntervalMs: 1 });
+  assert.equal((await run()).status, 'succeeded');
+  const task = (await f.vendure('task', { id: accepted.id, taskToken: accepted.taskToken })).body;
+  for (const key of ['account', 'checkout', 'card', 'billing']) assert.equal(task.progress.milestones.find(step => step.key === key)?.state, 'complete');
+  assert.equal(task.progress.milestones.find(step => step.key === 'payment').state, 'waiting');
+  assert.equal(task.status, 'succeeded'); assert.equal(activations, 1);
+  assert(!JSON.stringify(task).includes('synthetic-private-debug'));
 });
