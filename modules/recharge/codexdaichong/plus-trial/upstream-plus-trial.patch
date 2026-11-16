@@ -339,7 +339,7 @@ index e186977..3f6ff78 100644
  }
  
 diff --git a/stripe-payment.js b/stripe-payment.js
-index cd7ff9d..75b6169 100644
+index cd7ff9d..eda7d06 100644
 --- a/stripe-payment.js
 +++ b/stripe-payment.js
 @@ -295,6 +295,23 @@ function isOpenAiCustomCheckout(page) {
@@ -388,7 +388,7 @@ index cd7ff9d..75b6169 100644
          () => tryClick(page.getByRole('button', { name: /^Subscribe$/i }), 'role=Subscribe'),
          () => tryClick(page.getByRole('button', { name: /^订阅$/ }), 'role=订阅'),
          () => tryClick(page.getByRole('button', { name: /subscribe|订阅|pay/i }), 'role=subscribe'),
-@@ -2762,8 +2787,116 @@ async function selectCountry(page, selectors, countryCode) {
+@@ -2762,8 +2787,115 @@ async function selectCountry(page, selectors, countryCode) {
  
  // ==================== Exports ====================
  
@@ -461,41 +461,40 @@ index cd7ff9d..75b6169 100644
 +    result.addressSource = address && address.generated ? 'generated' : 'pool#' + (address && address.id);
 +    console.log('  [调试] 已选取美国免税账单地址: ' + [address.line1, address.city, address.state, address.postal_code || address.postal]
 +        .filter(Boolean).join(', '));
-+    await expandBillingSectionForDebug(page);
-+    if (process.env.DEBUG_DUMP_DOM === '1') {
-+        const dumpFrame = async (frame, index) => {
-+            try {
-+                const items = await frame.evaluate(() => {
-+                    const nodes = Array.from(document.querySelectorAll('input, select, textarea'));
-+                    return nodes.slice(0, 60).map((node) => ({
-+                        tag: node.tagName.toLowerCase(),
-+                        type: node.getAttribute('type'),
-+                        name: node.getAttribute('name'),
-+                        id: node.id,
-+                        ph: node.getAttribute('placeholder'),
-+                        aria: node.getAttribute('aria-label'),
-+                        auto: node.getAttribute('autocomplete'),
-+                        vis: Boolean(node.offsetWidth || node.offsetHeight)
-+                    })).filter((item) => item.vis || item.name || item.ph || item.aria);
-+                });
-+                console.log('  [调试][DOM] frame' + index + ' url=' + String(frame.url()).slice(0, 90) + ' fields=' + JSON.stringify(items).slice(0, 1200));
-+            } catch (error) {
-+                console.log('  [调试][DOM] frame' + index + ' 读取失败: ' + String(error.message).slice(0, 60));
-+            }
-+        };
-+        let frameIndex = 0;
-+        for (const frame of page.frames()) {
-+            await dumpFrame(frame, frameIndex);
-+            frameIndex += 1;
-+        }
-+    }
-+    // 地址填写加总超时，避免个别字段定位失败把整个任务拖死。
++    // 与真实付款流程完全一致：填卡完成后立即填地址，中间不插入任何耗时操作。
++    // 卡号填完后地址区才会渲染：先等它出现，再填，避免过早查找导致全部字段定位失败。
++    const billingReady = await page.waitForFunction(() => {
++        const bodyText = document.body && document.body.innerText ? document.body.innerText : '';
++        if (/Billing address|账单地址|County|City|Postal/i.test(bodyText)) return true;
++        return Boolean(document.querySelector(
++            'input[autocomplete="address-line1"], input[name*="address" i], input[name*="postal" i], input[name*="city" i]'
++        ));
++    }, { timeout: 90000 }).then(() => true).catch(() => false);
++    console.log('  [调试] 地址区是否已渲染: ' + billingReady);
 +    const billing = await Promise.race([
-+        fillOpenAiCheckoutBilling(page, address, holderName || cardInfo.holder || '').catch((error) => ({ ok: false, error: String(error.message).slice(0, 80) })),
-+        new Promise((resolve) => setTimeout(() => resolve({ ok: false, error: 'billing_timeout' }), 90000))
++        fillOpenAiCheckoutBilling(page, address, holderName || cardInfo.holder || '')
++            .catch((error) => ({ ok: false, error: String(error.message).slice(0, 80) })),
++        new Promise((resolve) => setTimeout(() => resolve({ ok: false, error: 'billing_timeout' }), 120000))
 +    ]);
 +    result.billing = Boolean(billing && billing.ok !== false);
 +    if (!result.billing) result.error = (billing && billing.error) || 'billing_not_filled';
++    if (process.env.DEBUG_DUMP_DOM === '1') {
++        let index = 0;
++        for (const frame of page.frames()) {
++            try {
++                const items = await frame.evaluate(() => {
++                    const nodes = Array.from(document.querySelectorAll('input, select, textarea'));
++                    return nodes.slice(0, 40).map((node) => ({
++                        name: node.getAttribute('name'),
++                        ph: node.getAttribute('placeholder'),
++                        aria: node.getAttribute('aria-label')
++                    })).filter((item) => item.name || item.ph || item.aria);
++                });
++                console.log('  [调试][DOM] after frame' + index + ' fields=' + JSON.stringify(items).slice(0, 700));
++            } catch (_) { /* ignore */ }
++            index += 1;
++        }
++    }
 +    return result;
 +}
 +
