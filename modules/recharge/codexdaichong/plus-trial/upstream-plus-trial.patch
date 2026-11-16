@@ -1,5 +1,5 @@
 diff --git a/chatgpt.js b/chatgpt.js
-index 8a7cba7..9286dee 100644
+index 8a7cba7..73ba71e 100644
 --- a/chatgpt.js
 +++ b/chatgpt.js
 @@ -467,6 +467,10 @@ async function openApiCheckout(page, { accessToken, sessionData, planType, count
@@ -13,13 +13,19 @@ index 8a7cba7..9286dee 100644
          const currentUrl = await assertCheckoutPageReady(page);
  
          await assertChatGptLoggedIn(page, 'Checkout');
-@@ -483,8 +487,40 @@ async function openApiCheckout(page, { accessToken, sessionData, planType, count
+@@ -483,8 +487,46 @@ async function openApiCheckout(page, { accessToken, sessionData, planType, count
      }
  }
  
 +// Pro 与 0 元结账页没有卡号输入框，只能按结账摘要判定页面已就绪。
 +async function isCheckoutSummaryReady(page) {
 +    const body = String(await page.textContent('body', { timeout: 5000 }).catch(() => '') || '');
++    // 结账服务明确失败：不能当成"无卡结账页"，必须报错（通常是出口 IP 被风控）。
++    if (/could not be completed|Something went wrong|checkout session has expired/i.test(body)) {
++        const failure = new Error('结账页返回错误：Checkout could not be completed（出口 IP 可能被风控，请更换代理后重试）');
++        failure.checkoutPageError = true;
++        throw failure;
++    }
 +    // 加载过渡页（Getting your plan ready / Loading checkout）内容不全，不能当作已就绪。
 +    if (/Getting your plan ready|Loading checkout|Just a moment/i.test(body)) {
 +        return false;
@@ -55,7 +61,7 @@ index 8a7cba7..9286dee 100644
      const { assertChatGptLoggedIn } = require('./session-auth');
      const { hasVisibleLoginChrome } = require('./auth-page-detect');
      const isPaymentUrl = (raw) => {
-@@ -520,6 +556,32 @@ async function verifyCheckoutDebugPage(page, { checkoutUrl, timeoutMs = 60000 }
+@@ -520,6 +562,32 @@ async function verifyCheckoutDebugPage(page, { checkoutUrl, timeoutMs = 60000 }
          if (!isPaymentUrl(page.url())) {
              throw new Error('支付页面发生非 Checkout 跳转，调试已停止');
          }
