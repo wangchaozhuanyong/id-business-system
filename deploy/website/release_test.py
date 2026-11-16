@@ -135,6 +135,30 @@ class WebsiteReleaseTests(unittest.TestCase):
     @patch("release.require_deferred_debug_inputs", return_value={"reviewed": True})
     @patch("release.require_ancestor")
     @patch("release.git")
+    def test_pending_debug_core_retry_waits_for_website_without_reserving_its_revision(self, git, ancestor, approval):
+        git.return_value = "\n".join(sorted(release.DEFERRED_DEBUG_FILES))
+        with self.assertRaisesRegex(RuntimeError, "publish_reviewed_website_before_deferred_native_retry"):
+            release.require_website_scope(release.DEFERRED_DEBUG_BASE, TARGET, include_core=True)
+        approval.assert_called_once_with(release.DEFERRED_DEBUG_BASE, TARGET)
+        # Once the website has moved off the exact old baseline, the existing
+        # native release rules and idle-database preflight still apply.
+        approval.reset_mock()
+        self.assertIsNone(release.require_website_scope(BASE, TARGET, include_core=True))
+        approval.assert_not_called()
+        before = {"components": {"app": {"revision": release.DEFERRED_DEBUG_BASE}}, "freeBytes": 20 * 1024**3}
+        env = {"RELEASE_SHA": TARGET, "QUALITY_RUN_ID": "123", "RELEASE_RECHARGE_CORE": "true"}
+        with patch.dict(os.environ, env, clear=True), patch("release.require_main"), \
+                patch("release.put_artifact") as put, \
+                patch("release.remote", return_value=("preflight", before)) as dispatch, \
+                redirect_stdout(io.StringIO()), self.assertRaisesRegex(
+                    RuntimeError, "publish_reviewed_website_before_deferred_native_retry"):
+            release.main()
+        put.assert_not_called()
+        dispatch.assert_called_once_with({"operation": "preflight", "sha": TARGET, "adapter": True})
+
+    @patch("release.require_deferred_debug_inputs", return_value={"reviewed": True})
+    @patch("release.require_ancestor")
+    @patch("release.git")
     def test_website_carries_only_the_exact_pending_debug_build_inputs(self, git, ancestor, approval):
         git.return_value = "\n".join(sorted(release.DEFERRED_DEBUG_FILES))
         self.assertEqual(release.require_website_scope(release.DEFERRED_DEBUG_BASE, TARGET),
