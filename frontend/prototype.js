@@ -1054,8 +1054,15 @@ function mountPageContext(region = $('#main')) {
 function summary(items) {
   return `<div class="summary-strip">${items.map(([label, count, note, accent]) => `<div class="summary-item ${accent ? 'accent' : ''}"><div class="summary-label">${escapeHtml(label)}</div><div class="summary-number">${escapeHtml(count)}<small>${escapeHtml(note || '条')}</small></div></div>`).join('')}</div>`;
 }
-function empty(title, description) {
-  return `<div class="empty-state">${icon('database')}<h2>${escapeHtml(title)}</h2><p>${escapeHtml(description)}</p></div>`;
+function empty(title, description, actions = '') {
+  return `<div class="empty-state">${icon('database')}<h2>${escapeHtml(title)}</h2><p>${escapeHtml(description)}</p>${actions ? `<div class="toolbar">${actions}</div>` : ''}</div>`;
+}
+function loadingState(title, { failed = false, actions = '', rows = 4 } = {}) {
+  return `<div class="design-loading-state" data-initial-state="${failed ? 'error' : 'loading'}" aria-busy="${!failed}">
+    <p role="status">${escapeHtml(title)}</p>
+    <div class="design-loading-rows">${Array.from({ length: rows - 1 }, () =>
+      '<div class="design-loading-row" aria-hidden="true"></div>').join('')}
+      <div class="design-loading-action-slot">${actions || '<div class="design-loading-row" aria-hidden="true"></div>'}</div></div></div>`;
 }
 function hiddenTableColumns(tableId) {
   return state.columns.get(tableId) ?? new Set();
@@ -1094,7 +1101,8 @@ function table(columns, rows, scope = '', tableId = 'default', emptyState, selec
   const emptyContent = rows.length ? '' : empty(
     emptyState?.title ?? '暂无符合条件的记录',
     emptyState?.description ??
-      (window.IDLocalData ? '可调整搜索或筛选条件。' : '调整搜索和筛选条件，或新增一条演示资料。')
+      (window.IDLocalData ? '可调整搜索或筛选条件。' : '调整搜索和筛选条件，或新增一条演示资料。'),
+    emptyState?.actions
   );
   const selectableRows = scope ? rows.filter(selectable) : [];
   const check = scope
@@ -3668,6 +3676,7 @@ window.IDDesignAPI = {
   websiteMonitorTabs,
   summary,
   empty,
+  loadingState,
   table,
   hiddenTableColumns,
   saveColumnPreference,

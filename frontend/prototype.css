@@ -4009,6 +4009,25 @@ details.toolbox-phrase-more[open] > summary {
   border: 1px solid var(--line);
   border-radius: 5px;
 }
+.design-loading-state {
+  min-width: 0;
+  padding: var(--panel-padding-block, 12px) var(--panel-padding-inline, 16px);
+}
+.design-loading-state > p {
+  margin: 0;
+  min-block-size: 48px;
+  color: var(--secondary);
+  line-height: 24px;
+  overflow-wrap: anywhere;
+}
+.design-loading-state > .design-loading-rows { padding: 20px 0; }
+.design-loading-state .design-loading-row { height: 40px; }
+.design-loading-state .design-loading-row:nth-child(even) { width: 72%; }
+.design-loading-action-slot { display: flex; align-items: center; min-height: 44px; }
+.design-loading-action-slot > .design-loading-row { width: 72%; }
+.renewal-toolbar .footnote { min-inline-size: 7em; }
+.entry-loading-form { min-block-size: 0; overflow: auto; }
+.commerce-entry-columns > .form-panel:has(> .entry-loading-form) { padding: 0; }
 .section-gap {
   margin-top: 22px;
 }

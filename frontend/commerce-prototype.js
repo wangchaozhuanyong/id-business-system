@@ -1936,26 +1936,30 @@
   }
 
   function renderRenewals() {
-    const { reminders, evaluatedAt } = renewalProjection();
+    const pending = localData && localPhase !== 'ready';
+    const { reminders, evaluatedAt } = pending ? { reminders: [] } : renewalProjection();
     const states = [['upcoming', '即将到期'], ['expired', '已到期'], ['processed', '已处理']];
     const productRows = reminders.filter(row => !S.status || row.order.product === S.status);
-    const counts = states.map(([key, label]) => [key, label, productRows.filter(row => row.state === key).length]);
+    const counts = states.map(([key, label]) => [key, label, pending ? '—' : productRows.filter(row => row.state === key).length]);
     return A.header(localData?.authRequired ? '续费提醒' : '续费管理', '查看到期客户和提醒记录。提醒使用北京时间。',
       (localData?.authRequired ? routeButton('返回续费管理', renewalHome, '', 'return') : '') +
-      A.button('提醒设置', 'commerce-renewal-settings', '', 'settings') +
-      (localData?.renewalContactSettings ? A.button('续费提醒话术', 'commerce-renewal-suffix', '', 'settings') : '')) +
-      `<section class="panel"><div class="list-controls renewal-controls">
+      A.button('提醒设置', 'commerce-renewal-settings', '', 'settings', pending ? 'disabled' : '') +
+      (localData?.renewalContactSettings ? A.button('续费提醒话术', 'commerce-renewal-suffix', '', 'settings', pending ? 'disabled' : '') : '')) +
+      `<section class="panel"><div class="list-controls renewal-controls" ${pending ? 'inert' : ''}>
         ${tabs(counts, moduleState.renewalTab, 'commerce-renewal-tab', 'aria-label="续费状态"')}
         <div class="toolbar toolbar--inline renewal-toolbar">
           <div class="toolbar-left">
             ${searchField('搜索客户、联系方式、账号或订单编号')}
             <div class="renewal-filter"><label for="commerce-renewal-product">产品</label>${
               select('renewal-product', [['', '全部产品'], ...Object.keys(productPlans)], S.status)}</div>
-            <span class="footnote">提前 ${formatRenewalWarning(renewalWarningHours)}提醒</span>
+            <span class="footnote">${pending ? '提前 — 提醒' : `提前 ${formatRenewalWarning(renewalWarningHours)}提醒`}</span>
           </div>
           <div class="toolbar-right" data-page-actions></div>
         </div>
-      </div>${renderRenewalWorkspace(renewalWorkbenchRows(), evaluatedAt)}</section>`;
+      </div>${pending ? `<div class="renewal-workbench" data-renewal-workbench>
+        <div class="renewal-workbench-queue"><div class="renewal-workbench-items">${entryLoadingState('续费待办')}</div></div>
+        <section class="renewal-workbench-detail" aria-label="当前选中客户">${entryLoadingState('续费资料')}</section>
+      </div>` : renderRenewalWorkspace(renewalWorkbenchRows(), evaluatedAt)}</section>`;
   }
 
   function currentRenewalAction(node) {
@@ -6000,6 +6004,7 @@
       </div>`;
   }
   function entryWorkspace(form, kind, product = '') {
+    const pending = localData && localPhase !== 'ready';
     const title = kind === 'order' ? '最近订单' : kind === 'tenant' ? '最近租户' : '最近客户';
     const searchFields = kind === 'order' ? '客户姓名、联系方式、订单号、订阅账号、套餐、支付方式或备注' : '姓名、联系方式、关联套餐或备注';
     const description = `支持按${searchFields}模糊搜索，可同时按北京时间筛选提交时间。显示当前权限内${kind === 'order' ? currencyFamily(product) + ' 的' : ''}记录，默认按最新录入排序，支持分页。列表显示已填写渠道的脱敏值，点击详情查看完整联系方式及快捷操作。刷新和翻页不会清空左侧输入。`;
@@ -6017,25 +6022,32 @@
     return `<div class="commerce-entry-layout${unified ? ' order-submission-entry' : ''}" data-mobile-view="${mobileView}">${unified ? '' : mobileControl}
       <div class="commerce-entry-columns">${unified ? mobileControl : ''}${form}
       <aside class="panel entry-records" id="commerce-entry-records" data-kind="${kind}" data-product="${E(product)}" aria-labelledby="entry-records-title">
-        <div class="panel-heading">
+        <div class="panel-heading" ${pending ? 'inert' : ''}>
           <div class="entry-record-context"><div class="section-title-row"><h2 id="entry-records-title">${title}</h2>${A.titleInfo(title, description, 'entry-records-help')}</div>
             ${periods}</div>
           <div class="entry-record-actions"><div class="search-field entry-record-search">${A.icon('search')}<input type="search" data-auto-search id="commerce-entry-search" aria-label="${searchLabel}" placeholder="${searchLabel}" value="${E(query)}" autocomplete="off" /></div>
             ${localData ? A.button('刷新', 'commerce-entry-refresh', 'compact', '', 'aria-label="刷新最近录入记录"') : ''}</div></div>
-        ${entryRecordDateRange(kind, product)}
-        <div class="entry-record-region design-async-region"><div data-entry-progress role="status" hidden></div><div class="entry-record-list">${entryRecordList(kind, product)}</div></div>
+        ${pending ? '' : entryRecordDateRange(kind, product)}
+        <div class="entry-record-region design-async-region"><div data-entry-progress role="status" hidden></div><div class="entry-record-list">${pending
+          ? entryLoadingState(title) : entryRecordList(kind, product)}</div></div>
         <p class="entry-record-error" data-entry-error role="status" hidden></p>
       </aside></div></div>`;
   }
+  function entryLoadingState(label) {
+    const failed = localPhase === 'error';
+    return A.loadingState(failed ? `${label}读取失败，请重试。` : `正在读取${label}…`, {
+      failed, actions: failed ? A.button('重新读取', 'commerce-local-retry', 'primary') : ''
+    });
+  }
   function updateEntryRecords(panel = $('#commerce-entry-records', A.activePageRegion?.())) {
-    if (!panel) return;
+    if (!panel || panel.querySelector('[data-initial-state]')) return;
     const list = panel.querySelector('.entry-record-list');
     const content = entryRecordList(panel.dataset.kind, panel.dataset.product);
     if (list.innerHTML !== content) list.innerHTML = content;
   }
   function bindEntryRecords() {
     const panel = $('#commerce-entry-records', A.activePageRegion?.());
-    if (!panel || panel.dataset.bound) return;
+    if (!panel || panel.dataset.bound || localData && localPhase !== 'ready') return;
     panel.dataset.bound = 'true';
     panel.querySelector('#commerce-entry-search').addEventListener('input', event => {
       const view = entryView(panel.dataset.kind, panel.dataset.product);
@@ -6341,12 +6353,12 @@
     } : undefined;
     const viewSubscriptions = noOrders && A.canVisit('subscriptions/claude')
       ? routeButton('查看 Claude 订阅', 'subscriptions/claude') : '';
-    const notice = error ? A.empty('订单暂时无法读取', stale ? '下方保留上一次的查询结果。' : '') + A.button('重试', 'commerce-sync-orders-refresh') +
+    const notice = error && result ? A.empty('订单暂时无法读取', stale ? '下方保留上一次的查询结果。' : '') + A.button('重试', 'commerce-sync-orders-refresh') +
       '<span data-order-list-diagnostic></span>' : '';
-    const list = notice + (result
-      ? A.table(orderColumns(product, paged ? result : undefined), result.rows, '', tableId, emptyState) +
-        A.pagination(result.total, paged ? { page: result.page, pageSize: result.pageSize, disabled: stale } : undefined)
-      : error ? '' : A.empty('正在读取订单', ''));
+    const list = notice + A.table(orderColumns(product, paged ? result || {} : undefined), result?.rows || [], '', tableId,
+      result ? emptyState : { title: error ? '订单暂时无法读取' : '正在读取订单', description: '',
+        actions: error ? A.button('重试', 'commerce-sync-orders-refresh') + '<span data-order-list-diagnostic></span>' : '' }) + (result
+      ? A.pagination(result.total, paged ? { page: result.page, pageSize: result.pageSize, disabled: stale } : undefined) : '');
     return (
       A.header(
         `${product} 订单`,
@@ -10052,9 +10064,12 @@
       return true;
     }
     if (action === 'commerce-local-retry') {
-      void A.withActionFeedback(node, () => loadLocalCommerce(true),
+      void A.withActionFeedback(node, () => {
+        const reading = loadLocalCommerce(true);
+        A.render();
+        return reading;
+      },
         { pending: '正在读取业务资料…', success: '业务资料已重新读取', failure: '业务资料读取失败，请重试' });
-      A.render();
       return true;
     }
     if (action === 'commerce-sync-orders-refresh') {
@@ -11261,21 +11276,27 @@
   function render() {
     if (S.route === paymentSettingsRoute) return renderPaymentSettings();
     if (pagedOrders()) return renderOrders(orderListProducts[S.route]);
+    if (S.route === renewalRoute) return renderRenewals();
     const lossPage = S.route === customerLossRoute;
     const tenantPage = S.route === tenantRoute;
     if (localData && localPhase !== 'ready') {
       const gptOrdersPage = S.route === 'orders/gpt';
       const orderEntryPage = isOrderEntry(S.route);
+      const contactEntryPage = ['customers/new', 'customers/new/tenant'].includes(S.route);
+      if (orderEntryPage || contactEntryPage) {
+        const tenant = S.route === 'customers/new/tenant';
+        const kind = orderEntryPage ? 'order' : tenant ? 'tenant' : 'customer';
+        const product = personalEntries[S.route] || (S.route === claudeOrderRoute ? 'Claude Pro' : 'GPT');
+        const title = orderEntryPage ? '订单提交' : tenant ? '租户录入' : '客户录入';
+        return A.header(title, '') + entryWorkspace(
+          `<section class="panel form-panel"><div class="entry-loading-form">${entryLoadingState(orderEntryPage ? '订单资料' : tenant ? '租户资料' : '客户资料')}</div></section>`,
+          kind, orderEntryPage ? product : '');
+      }
       const notice = localPhase === 'error'
         ? A.empty(lossPage ? '无法读取业务资料' : '无法读取本机业务资料',
           lossPage ? '请重试读取客户与订单资料。' : '请确认本机服务后重试。') +
           A.button('重试', 'commerce-local-retry', 'primary') + '<span data-order-list-diagnostic></span>'
         : A.empty(lossPage ? '正在读取客户与订单资料' : '正在读取本机业务资料', '请稍候。');
-      if (orderEntryPage)
-        return A.header('订单提交', '') +
-          `<div class="commerce-entry-layout order-submission-entry">
-            <div class="commerce-entry-columns"><section class="panel form-panel">${notice}</section></div>
-          </div>`;
       return (
         A.header(orderListProducts[S.route] ? orderListProducts[S.route] + ' 订单' :
           lossPage ? '客户流失' : tenantPage ? '租户数据' : '本机业务资料', '') +
@@ -11296,7 +11317,6 @@
     if (S.route === 'customers/list') return renderContacts(false);
     if (tenantPage) return renderContacts(true);
     if (isOrderEntry(S.route) || S.route.startsWith(renewalOrderPrefix)) return renderOrderPage();
-    if (S.route === renewalRoute) return renderRenewals();
     if (S.route === subscriptionCardsRoute) return renderSubscriptionCards();
     if (lossPage) {
       if (localData && (!requestedAccountLifecycle || accountLifecycleReading) &&

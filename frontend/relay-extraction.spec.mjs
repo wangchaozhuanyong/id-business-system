@@ -125,6 +125,7 @@ async function fixture({ auth = true, role = 'admin', configured = true } = {}) 
     header: (title) => title,
     summary: () => '',
     empty: (title) => title,
+    loadingState: (title) => title,
     table: (columns, rows) =>
       rows
         .map((row) => columns.map((column) => (column.render ? column.render(row) : '')).join(''))
