@@ -136,17 +136,17 @@ class WebsiteReleaseTests(unittest.TestCase):
     @patch("release.require_ancestor")
     @patch("release.git")
     def test_website_carries_only_the_exact_pending_debug_build_inputs(self, git, ancestor, approval):
-        git.return_value = "\n".join(sorted(release.PLUS_TRIAL_PATCH_FILES))
+        git.return_value = "\n".join(sorted(release.DEFERRED_DEBUG_FILES))
         self.assertEqual(release.require_website_scope(release.DEFERRED_DEBUG_BASE, TARGET),
                          ("deferredNativeBuildInputs", approval.return_value))
         approval.assert_called_once_with(release.DEFERRED_DEBUG_BASE, TARGET)
-        for changed in (release.PLUS_TRIAL_PATCH_FILES | {"modules/recharge/codexdaichong/runtime.mjs"},
-                        release.PLUS_TRIAL_PATCH_FILES | {"deploy/recharge-core/entry.mjs"},
-                        {next(iter(release.PLUS_TRIAL_PATCH_FILES))}):
+        for changed in (release.DEFERRED_DEBUG_FILES | {"modules/recharge/codexdaichong/runtime.mjs"},
+                        release.DEFERRED_DEBUG_FILES | {"deploy/recharge-core/entry.mjs"},
+                        {next(iter(release.DEFERRED_DEBUG_FILES))}):
             git.return_value = "\n".join(sorted(changed))
             with self.assertRaisesRegex(RuntimeError, "recharge_core_or_runtime_changed"):
                 release.require_website_scope(release.DEFERRED_DEBUG_BASE, TARGET)
-        git.return_value = "\n".join(sorted(release.PLUS_TRIAL_PATCH_FILES))
+        git.return_value = "\n".join(sorted(release.DEFERRED_DEBUG_FILES))
         with self.assertRaisesRegex(RuntimeError, "recharge_core_or_runtime_changed"):
             release.require_website_scope(BASE, TARGET)
 
@@ -158,7 +158,7 @@ class WebsiteReleaseTests(unittest.TestCase):
                     "assetsSha256": "c" * 64,
                     "files": {name: {"before": hashlib.sha256(b"old\n").hexdigest(),
                                       "after": hashlib.sha256(b"new\n").hexdigest()}
-                              for name in release.PLUS_TRIAL_PATCH_FILES}}
+                              for name in release.DEFERRED_DEBUG_FILES}}
         with TemporaryDirectory() as directory, patch("release.ROOT", Path(directory)):
             manifest = Path(directory) / "deploy/website/deferred-checkout-debug-20261116.json"
             manifest.parent.mkdir(parents=True)
@@ -176,7 +176,7 @@ class WebsiteReleaseTests(unittest.TestCase):
             output.side_effect = content
             for change in ({"reviewedCommit": BASE}, {"baseWebsiteSha": BASE}, {"assetsSha256": "invalid"},
                            {"files": {}}, {"files": {name: {"before": "invalid", "after": "c" * 64}
-                                                    for name in release.PLUS_TRIAL_PATCH_FILES}}):
+                                                    for name in release.DEFERRED_DEBUG_FILES}}):
                 manifest.write_text(json.dumps(approval | change))
                 with self.subTest(change=change), self.assertRaisesRegex(
                         RuntimeError, "deferred_native_inputs_approval_invalid"):

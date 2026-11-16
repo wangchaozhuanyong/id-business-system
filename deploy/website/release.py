@@ -57,7 +57,8 @@ PLUS_TRIAL_PATCH_FILES = {
 PLUS_TRIAL_SCOPE = PLUS_TRIAL_PATCH_FILES | {"modules/recharge/codexdaichong/plus-trial.test.mjs"}
 PLUS_TRIAL_MERGE = "f8c72030d2a820a62d35ad0fbfe588dd72c4a08b"
 DEFERRED_DEBUG_BASE = "18ca7897c494352f5ab0ce0217d11b294ac645b8"
-DEFERRED_DEBUG_MERGE = "f277a802b38a97b2d5a819b32eeb80a97461f745"
+DEFERRED_DEBUG_MERGE = "47447e73c6562b43f27f9e1f80f82573b81ec00d"
+DEFERRED_DEBUG_FILES = frozenset(PLUS_TRIAL_SCOPE)
 PLUS_TRIAL_BUILD_INPUTS = PLUS_TRIAL_SCOPE | {"modules/recharge/codexdaichong/prepare.mjs"}
 NATIVE_CORE_SCOPE = NATIVE_PATCH_FILES | PLUS_TRIAL_SCOPE | {
     "deploy/recharge-core/README.md", "deploy/recharge-core/canary.py", "deploy/recharge-core/health.mjs",
@@ -170,7 +171,7 @@ def require_deferred_debug_inputs(base, sha):
                 approval["reviewedCommit"] != DEFERRED_DEBUG_MERGE or
                 not SHA256.fullmatch(approval["assetsSha256"]) or
                 not isinstance(approval["files"], dict) or
-                set(approval["files"]) != PLUS_TRIAL_PATCH_FILES or
+                set(approval["files"]) != DEFERRED_DEBUG_FILES or
                 any(not isinstance(pair, dict) or set(pair) != {"before", "after"} or
                     any(not isinstance(value, str) or not SHA256.fullmatch(value) for value in pair.values())
                     for pair in approval["files"].values())):
@@ -257,7 +258,7 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False, 
     elif changed == set(SECURITY_PRESENTATION_FILES):
         return "securityPresentation", require_presentation_approval(
             base, sha, "security-ui-20261114.json", SECURITY_PRESENTATION_FILES)
-    elif base == DEFERRED_DEBUG_BASE and changed == PLUS_TRIAL_PATCH_FILES:
+    elif base == DEFERRED_DEBUG_BASE and changed == DEFERRED_DEBUG_FILES:
         return "deferredNativeBuildInputs", require_deferred_debug_inputs(base, sha)
     elif changed:
         raise RuntimeError("recharge_core_or_runtime_changed")
