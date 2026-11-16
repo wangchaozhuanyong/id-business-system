@@ -143,7 +143,8 @@ test('会话在线校验改用 API 请求而不是页面导航', async () => {
 
 test('调试模式填卡与账单地址后停在提交前', async () => {
   const { 'stripe-payment.js': stripeText, 'chatgpt.js': chatgptText } = await appliedSources();
-  assert.match(stripeText, /async function fillCheckoutForDebug\(page, \{ cardInfo, address, holderName \} = \{\}\) \{/);
+  assert.match(stripeText, /async function fillCheckoutForDebug\(page, \{ cardInfo, holderName \} = \{\}\) \{/);
+  assert.match(stripeText, /pickBillingAddressForCheckout\(null\)/);
   assert.match(stripeText, /fillCheckoutForDebug,/);
   assert.match(chatgptText, /process\.env\.CHECKOUT_DEBUG_FILL === '1'/);
   assert.match(chatgptText, /已填写银行卡与账单地址，按要求停在提交前/);
