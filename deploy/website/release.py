@@ -56,6 +56,9 @@ PLUS_TRIAL_PATCH_FILES = {
 }
 PLUS_TRIAL_SCOPE = PLUS_TRIAL_PATCH_FILES | {"modules/recharge/codexdaichong/plus-trial.test.mjs"}
 PLUS_TRIAL_MERGE = "f8c72030d2a820a62d35ad0fbfe588dd72c4a08b"
+DEFERRED_DEBUG_BASE = "18ca7897c494352f5ab0ce0217d11b294ac645b8"
+DEFERRED_DEBUG_MERGE = "47447e73c6562b43f27f9e1f80f82573b81ec00d"
+DEFERRED_DEBUG_FILES = frozenset(PLUS_TRIAL_SCOPE)
 PLUS_TRIAL_BUILD_INPUTS = PLUS_TRIAL_SCOPE | {"modules/recharge/codexdaichong/prepare.mjs"}
 NATIVE_CORE_SCOPE = NATIVE_PATCH_FILES | PLUS_TRIAL_SCOPE | {
     "deploy/recharge-core/README.md", "deploy/recharge-core/canary.py", "deploy/recharge-core/health.mjs",
@@ -160,6 +163,40 @@ def require_redeem_presentation(base, sha):
     return require_presentation_approval(base, sha, "redeem-log-20261111.json", REDEEM_PRESENTATION_FILES)
 
 
+def require_deferred_debug_inputs(base, sha):
+    """Carry only reviewed build inputs; never switch the native runtime."""
+    try:
+        approval = json.loads((ROOT / "deploy/website/deferred-checkout-debug-20261116.json").read_bytes())
+        if (base != DEFERRED_DEBUG_BASE or approval["baseWebsiteSha"] != base or
+                approval["reviewedCommit"] != DEFERRED_DEBUG_MERGE or
+                not SHA256.fullmatch(approval["assetsSha256"]) or
+                not isinstance(approval["files"], dict) or
+                set(approval["files"]) != DEFERRED_DEBUG_FILES or
+                any(not isinstance(pair, dict) or set(pair) != {"before", "after"} or
+                    any(not isinstance(value, str) or not SHA256.fullmatch(value) for value in pair.values())
+                    for pair in approval["files"].values())):
+            raise ValueError("invalid scope")
+    except (KeyError, OSError, TypeError, ValueError) as error:
+        raise RuntimeError("deferred_native_inputs_approval_invalid") from error
+    require_ancestor(DEFERRED_DEBUG_MERGE, sha)
+    for name, hashes in approval["files"].items():
+        for side, revision in (("before", base), ("after", sha), ("after", DEFERRED_DEBUG_MERGE)):
+            content = subprocess.check_output(["git", "show", f"{revision}:{name}"], cwd=ROOT, timeout=30)
+            if hashlib.sha256(content).hexdigest() != hashes[side]:
+                raise RuntimeError("deferred_native_inputs_source_mismatch")
+    return approval
+
+
+def verify_deferred_native_receipt(receipt, approval, before):
+    if (receipt.get("protectedComponentsUnchanged") is not True or
+            receipt.get("liveAssetsSha256") != approval["assetsSha256"] or
+            "rechargeCore" in receipt or "adapter" in receipt):
+        raise RuntimeError("deferred_native_runtime_changed")
+    return {"reviewedCommit": approval["reviewedCommit"], "nativeDeploymentPending": True,
+            "nativeRevisionUnchanged": before["components"]["recharge-native"]["revision"],
+            "assetsSha256": approval["assetsSha256"]}
+
+
 def require_website_scope(base, sha, include_adapter=False, include_core=False, partner_api=False):
     require_ancestor(base, sha)
     changed = set(git("diff", "--name-only", base, sha, "--", *CORE_PATHS).splitlines())
@@ -221,6 +258,8 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False, 
     elif changed == set(SECURITY_PRESENTATION_FILES):
         return "securityPresentation", require_presentation_approval(
             base, sha, "security-ui-20261114.json", SECURITY_PRESENTATION_FILES)
+    elif base == DEFERRED_DEBUG_BASE and changed == DEFERRED_DEBUG_FILES:
+        return "deferredNativeBuildInputs", require_deferred_debug_inputs(base, sha)
     elif changed:
         raise RuntimeError("recharge_core_or_runtime_changed")
 
@@ -370,6 +409,11 @@ def main():
         raise RuntimeError("requested_revision_already_running_read_back_the_existing_release")
     presentation_scope, presentation = require_website_scope(base, sha, include_adapter, include_core,
                                                              partner_api=partner_api) or (None, None)
+    deferred_native = presentation if presentation_scope == "deferredNativeBuildInputs" else None
+    if deferred_native:
+        presentation_scope, presentation = None, None
+        if retry_receipt or before["assetsSha256"] != deferred_native["assetsSha256"]:
+            raise RuntimeError("deferred_native_inputs_live_baseline_mismatch")
     if include_adapter or include_core:
         for name in ("recharge", "recharge-native"):
             require_ancestor(before["components"][name]["revision"], sha)
@@ -442,6 +486,8 @@ def main():
         files += VENDURE_REFRESH_FILES
     if partner_api:
         files += PARTNER_API_FILES
+    if deferred_native:
+        files += ("frontend/recharge-partners.mjs",)
     plan = {"operation": "release", "sha": sha, "before": before, "artifacts": artifacts,
             "files": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in files},
             "qualityRun": quality_run, "preflightCommand": preflight_id, 'externalEvents': True}
@@ -489,6 +535,8 @@ def main():
                                receipt.get("liveAssetsSha256") != expected_assets or
                                receipt.get("protectedComponentsUnchanged") is not True):
         raise RuntimeError(f"recharge_presentation_release_receipt_mismatch: {command_id}")
+    if deferred_native:
+        receipt["deferredNativeBuildInputs"] = verify_deferred_native_receipt(receipt, deferred_native, before)
     receipt["releaseCommand"] = command_id
     print(json.dumps(receipt, sort_keys=True), flush=True)
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
