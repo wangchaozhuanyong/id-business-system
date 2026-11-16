@@ -126,7 +126,13 @@ def require_reviewed_receipt(db, receipt):
 def worker_binding():
     require(UNIT in run(["systemctl", "show", "-p", "PartOf", "--value", WORKER_UNIT]).decode().split(),
             "gateway_worker_dependency_changed")
-    return run(["systemctl", "show", "-p", "ExecStart", "--value", WORKER_UNIT]), digest(WORKER_LAUNCHER)
+    state = run(["systemctl", "show", "-p", "ExecStart", "--value", WORKER_UNIT]).strip()
+    command = re.fullmatch(
+        rb"\{ (path=[^;{}\r\n]+ ; argv\[\]=[^;{}\r\n]+ ; ignore_errors=(?:yes|no) ;)"
+        rb" start_time=\[[^\]\r\n]*\] ; stop_time=\[[^\]\r\n]*\] ; pid=\d+ ;"
+        rb" code=[^;{}\r\n]+ ; status=[^;{}\r\n]+ \}", state)
+    require(command is not None, "gateway_worker_command_ambiguous")
+    return command[1], digest(WORKER_LAUNCHER)
 
 
 def worker_runtime(container):
