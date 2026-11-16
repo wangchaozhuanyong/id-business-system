@@ -339,7 +339,7 @@ index e186977..3f6ff78 100644
  }
  
 diff --git a/stripe-payment.js b/stripe-payment.js
-index cd7ff9d..e848f25 100644
+index cd7ff9d..93f09cd 100644
 --- a/stripe-payment.js
 +++ b/stripe-payment.js
 @@ -295,6 +295,23 @@ function isOpenAiCustomCheckout(page) {
@@ -388,7 +388,7 @@ index cd7ff9d..e848f25 100644
          () => tryClick(page.getByRole('button', { name: /^Subscribe$/i }), 'role=Subscribe'),
          () => tryClick(page.getByRole('button', { name: /^订阅$/ }), 'role=订阅'),
          () => tryClick(page.getByRole('button', { name: /subscribe|订阅|pay/i }), 'role=subscribe'),
-@@ -2762,8 +2787,65 @@ async function selectCountry(page, selectors, countryCode) {
+@@ -2762,8 +2787,82 @@ async function selectCountry(page, selectors, countryCode) {
  
  // ==================== Exports ====================
  
@@ -438,6 +438,23 @@ index cd7ff9d..e848f25 100644
 +    console.log('  [调试] 已选取美国免税账单地址: ' + [address.line1, address.city, address.state, address.postal_code || address.postal]
 +        .filter(Boolean).join(', '));
 +    await expandBillingSectionForDebug(page);
++    if (process.env.DEBUG_DUMP_DOM === '1') {
++        const dump = await page.evaluate(() => {
++            const nodes = Array.from(document.querySelectorAll('input, select, textarea, button'));
++            return nodes.slice(0, 80).map((node) => ({
++                tag: node.tagName.toLowerCase(),
++                type: node.getAttribute('type'),
++                name: node.getAttribute('name'),
++                id: node.id,
++                ph: node.getAttribute('placeholder'),
++                aria: node.getAttribute('aria-label'),
++                vis: Boolean(node.offsetWidth || node.offsetHeight),
++                text: (node.textContent || '').trim().slice(0, 24)
++            })).filter((item) => item.vis || item.name || item.ph || item.aria);
++        }).catch(() => []);
++        console.log('  [调试][DOM] fields=' + JSON.stringify(dump));
++        console.log('  [调试][DOM] frames=' + JSON.stringify(page.frames().map((frame) => frame.url()).slice(0, 8)));
++    }
 +    // 地址填写加总超时，避免个别字段定位失败把整个任务拖死。
 +    const billing = await Promise.race([
 +        fillOpenAiCheckoutBilling(page, address, holderName || cardInfo.holder || '').catch((error) => ({ ok: false, error: String(error.message).slice(0, 80) })),
