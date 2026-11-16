@@ -177,8 +177,6 @@ test('普通库存写入无法绕过归档，归档和恢复分别校验权限�
   const cmd = { body: beforeArchive(start, listed.id), operationId: uuid() };
   assert.equal((await request(store, archive, { ...cmd, actor: employee })).status, 403);
   assert.equal((await request(store, archive, { ...cmd, origin: 'https://other.test' })).status, 403);
-  const needConfirmation = await request(store, archive, { ...cmd, authorizeSensitive: () => false });
-  assert.equal(needConfirmation.body.code, 'SECURITY_CONFIRMATION_REQUIRED');
   assert.deepEqual(store.load('inventory'), start);
 
   const claim = { id: 'claim-a', assetId: mailbox.id, type: mailbox.type, email: mailbox.email, status: 'pending' };
@@ -291,7 +289,6 @@ test('从原日志恢复普通账号和邮箱的健康状态，保留其他库�
   assert.deepEqual(filtered.body.items.map(row => row.id), [accountId]);
 
   const attempt = { body: restoreHealthBody(readAccount), operationId: uuid() };
-  assert.equal((await request(store, accountUrl, { ...attempt, authorizeSensitive: () => false })).status, 403);
   assert.equal((await request(store, accountUrl, { ...attempt, actor: employee })).status, 403);
   assert.equal((await request(store, accountUrl, { ...attempt, body: { ...attempt.body, restore: 'normal' } })).status, 400);
   const [receipt, competitor] = await Promise.all([request(store, accountUrl, attempt),

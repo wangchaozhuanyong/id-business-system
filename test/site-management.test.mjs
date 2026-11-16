@@ -149,4 +149,8 @@ test('protects administrative data and exports the filtered redacted snapshot wi
   assert.match(file.value, /customer-a.*张＊＊.*2026-11-13/);
   assert.doesNotMatch(file.value, /三|customer-b|9012345678|private/);
   assert.match([...receipts.values()][0], /2026-11-13 至 2026-11-13.*使用中.*1 条/);
+  const business = await reply(handler, { ...exp, actor: admin, id: randomUUID(), body: { ...exp.body, detail: 'business' } });
+  assert.equal(business.code, 200);
+  assert.match(business.value, /9012345678/);
+  assert.doesNotMatch(business.value, /customer-b|private/);
 });

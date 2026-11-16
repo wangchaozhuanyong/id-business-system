@@ -1,6 +1,6 @@
 (() => {
   'use strict';
-  const A = window.IDDesignAPI, D = window.IDLocalData, Security = window.IDAccountSecurity;
+  const A = window.IDDesignAPI, D = window.IDLocalData;
   if (!A || !D?.authRequired) return;
   const E = A.esc, $ = A.$;
   const { subscriptionTime, subscriptionDuration } = window.IDOrderOpening;
@@ -352,8 +352,6 @@
     }
     let feedback, timing;
     try {
-      if ((['paid', 'transfer', 'review-source'].includes(command.action) || form?.hasAttribute('data-verify-return')) &&
-          !(await Security?.verify())) return;
       if (active !== view || (form && !form.isConnected)) return;
       if (form) form.inert = true;
       feedback = A.beginActionFeedback(submitter, '正在登记…');
@@ -433,7 +431,7 @@
       ['原订单', row.order.number], ['客户', row.order.customer], ['订阅账号', row.order.account], ['付款方式', row.order.payment],
       ...(row.order.originalLast4 ? [['原用卡尾号', row.order.originalLast4]] : [])
     ]) + '<form id="' + id + '" data-renewal-id="' + E(row.id) + '" data-renewal-version="' + row.version +
-      '" data-renewal-draft="' + E(draftKey) + '"' + (returning && row.paymentReview ? ' data-verify-return' : '') +
+      '" data-renewal-draft="' + E(draftKey) + '"' +
       '><div class="form-grid">' + details +
       '</div><p class="field-error" role="alert" data-renewal-form-error hidden></p></form>',
       A.button('取消', 'drawer-close') + '<button type="submit" class="button primary" form="' + id + '">' + label + '</button>', draftKey);

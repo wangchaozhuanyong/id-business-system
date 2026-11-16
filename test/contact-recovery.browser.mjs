@@ -26,7 +26,7 @@ test('administrator can preview and restore on desktop and phone, and a lost res
     try {
       await interceptDesign(context, fixtures(actor));
       const writes = [], reads = [];
-      let committed = false, verification = false, verificationCount = 0, loseResponses = 2, denyPreview = true;
+      let committed = false, verificationCount = 0, loseResponses = 2, denyPreview = true;
       await context.route(auditUrl + 'page?*', route => {
         const params = new URL(route.request().url()).searchParams;
         reads.push(Object.fromEntries(params));
@@ -47,8 +47,6 @@ test('administrator can preview and restore on desktop and phone, and a lost res
             committed ? { status: 'recovered', record: original, receipt } : preview });
         }
         writes.push({ id: request.headers()['x-id-operation'], body: request.postDataJSON() });
-        if (!verification)
-          return route.fulfill({ status: 403, json: { code: 'SECURITY_CONFIRMATION_REQUIRED' } });
         committed = true;
         if (loseResponses-- > 0) return route.abort('connectionreset');
         return route.fulfill({ json: receipt });
@@ -57,7 +55,7 @@ test('administrator can preview and restore on desktop and phone, and a lost res
       page.setDefaultTimeout(7000);
       const errors = [];
       page.on('pageerror', error => errors.push(error.message));
-      await page.exposeFunction('testVerify', () => { verificationCount++; verification = true; return true; });
+      await page.exposeFunction('testVerify', () => { verificationCount++; return true; });
       await page.addInitScript(() => { window.IDAccountSecurity = { verify: () => window.testVerify() }; });
       await page.goto(origin + '/#/settings/audit');
       if (colorScheme === 'dark') await toggleDesignTheme(page);
@@ -92,8 +90,8 @@ test('administrator can preview and restore on desktop and phone, and a lost res
       assert(await dialog.getByText('资料填错', { exact: true }).isVisible());
       assert.match(writes[0].id, /^[a-f\d-]{36}$/);
       assert.deepEqual(writes[0].body, { version: 2, reason: 'wrong_value' });
-      assert.deepEqual(writes, Array(4).fill(writes[0]));
-      assert.equal(verificationCount, 1);
+      assert.deepEqual(writes, Array(3).fill(writes[0]));
+      assert.equal(verificationCount, 0);
       await dialog.getByRole('button', { name: '查看原操作' }).click();
       await dialog.getByRole('heading', { name: '已撤回' }).waitFor();
       await dialog.getByRole('button', { name: '查看恢复回执' }).click();

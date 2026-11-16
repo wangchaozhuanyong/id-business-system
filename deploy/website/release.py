@@ -9,7 +9,7 @@ import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from remote import (BACKUP_OPERATION, CARD_IMPORT_ASSET_SOURCE, CARD_IMPORT_PRESENTATION_FILES, CARD_PLAN_PRESENTATION_FILES,
+from remote import (ACTION_PASSWORD_PRESENTATION_FILES, BACKUP_OPERATION, CARD_IMPORT_ASSET_SOURCE, CARD_IMPORT_PRESENTATION_FILES, CARD_PLAN_PRESENTATION_FILES,
                     CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES, PRESENTATION_SCOPES, SECURITY_PRESENTATION_FILES,
                     REDEEM_PRESENTATION_FILES, SUBSCRIPTION_INVOICE_PRESENTATION_FILES,
                     TABLE_ACTIONS_STYLESHEET, TASK_HISTORY_PRESENTATION_FILES,
@@ -30,9 +30,11 @@ ADMIN_WORKSPACE_MANIFEST = "recharge-admin-workspace-20261115.json"
 ADMIN_WORKSPACE_MANIFEST_PATH = f"deploy/website/{ADMIN_WORKSPACE_MANIFEST}"
 SUBSCRIPTION_INVOICE_MANIFEST = "recharge-subscription-invoice-20261116.json"
 SUBSCRIPTION_INVOICE_MANIFEST_PATH = f"deploy/website/{SUBSCRIPTION_INVOICE_MANIFEST}"
+ACTION_PASSWORD_MANIFEST = "action-password-20261116.json"
+ACTION_PASSWORD_MANIFEST_PATH = f"deploy/website/{ACTION_PASSWORD_MANIFEST}"
 CORE_PATHS = ("deploy/recharge-core", "deploy/caddy", "modules/recharge/codexdaichong", "package.json",
               PROXY_TYPE_CATALOG, TASK_HISTORY_MANIFEST_PATH, ADMIN_WORKSPACE_MANIFEST_PATH,
-              SUBSCRIPTION_INVOICE_MANIFEST_PATH)
+              SUBSCRIPTION_INVOICE_MANIFEST_PATH, ACTION_PASSWORD_MANIFEST_PATH)
 ADAPTER_SCOPE = {
     "modules/recharge/codexdaichong/gateway.mjs", "modules/recharge/codexdaichong/local-gateway.mjs",
     "modules/recharge/codexdaichong/native-adapter.mjs", "modules/recharge/codexdaichong/runtime.mjs",
@@ -193,14 +195,15 @@ def require_deferred_debug_inputs(base, sha):
     return approval
 
 
-def verify_deferred_native_receipt(receipt, approval, before):
+def verify_deferred_native_receipt(receipt, approval, before, expected_assets=None):
+    assets_sha = approval["assetsSha256"] if expected_assets is None else expected_assets
     if (receipt.get("protectedComponentsUnchanged") is not True or
-            receipt.get("liveAssetsSha256") != approval["assetsSha256"] or
+            receipt.get("liveAssetsSha256") != assets_sha or
             "rechargeCore" in receipt or "adapter" in receipt):
         raise RuntimeError("deferred_native_runtime_changed")
     return {"reviewedCommit": approval["reviewedCommit"], "nativeDeploymentPending": True,
             "nativeRevisionUnchanged": before["components"]["recharge-native"]["revision"],
-            "assetsSha256": approval["assetsSha256"]}
+            "assetsSha256": assets_sha}
 
 
 def require_website_scope(base, sha, include_adapter=False, include_core=False, partner_api=False):
@@ -209,6 +212,7 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False, 
     # The host backup timer is managed independently from the immutable payment
     # image. This exact path is installed and read back by the website release.
     changed.discard(BACKUP_OPERATION)
+    password_inputs = {*ACTION_PASSWORD_PRESENTATION_FILES, ACTION_PASSWORD_MANIFEST_PATH}
     if partner_api and changed:
         # The trial policy is already on main. Its only executable change is
         # applied when a native image is built. Keep the current native image
@@ -252,6 +256,13 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False, 
     elif changed == {*SUBSCRIPTION_INVOICE_PRESENTATION_FILES, SUBSCRIPTION_INVOICE_MANIFEST_PATH}:
         return "subscriptionInvoicePresentation", require_presentation_approval(
             base, sha, SUBSCRIPTION_INVOICE_MANIFEST, SUBSCRIPTION_INVOICE_PRESENTATION_FILES)
+    elif changed == password_inputs:
+        return "actionPasswordPresentation", require_presentation_approval(
+            base, sha, ACTION_PASSWORD_MANIFEST, ACTION_PASSWORD_PRESENTATION_FILES)
+    elif base == DEFERRED_DEBUG_BASE and changed == password_inputs | DEFERRED_DEBUG_FILES:
+        deferred = require_deferred_debug_inputs(base, sha)
+        assets = require_presentation_approval(base, sha, ACTION_PASSWORD_MANIFEST, ACTION_PASSWORD_PRESENTATION_FILES)
+        return "actionPasswordPresentation", {**assets, "deferredNativeInputs": deferred}
     elif changed == {CARD_IMPORT_ASSET_SOURCE}:
         return "cardImportPresentation", require_presentation_approval(
             base, sha, "card-import-20261113.json", CARD_IMPORT_PRESENTATION_FILES)
@@ -418,11 +429,15 @@ def main():
         raise RuntimeError("requested_revision_already_running_read_back_the_existing_release")
     presentation_scope, presentation = require_website_scope(base, sha, include_adapter, include_core,
                                                              partner_api=partner_api) or (None, None)
-    deferred_native = presentation if presentation_scope == "deferredNativeBuildInputs" else None
-    if deferred_native:
+    deferred_native = None
+    if presentation_scope == "deferredNativeBuildInputs":
+        deferred_native = presentation
         presentation_scope, presentation = None, None
-        if retry_receipt or before["assetsSha256"] != deferred_native["assetsSha256"]:
-            raise RuntimeError("deferred_native_inputs_live_baseline_mismatch")
+    elif presentation:
+        presentation = dict(presentation)
+        deferred_native = presentation.pop("deferredNativeInputs", None)
+    if deferred_native and (retry_receipt or before["assetsSha256"] != deferred_native["assetsSha256"]):
+        raise RuntimeError("deferred_native_inputs_live_baseline_mismatch")
     if include_adapter or include_core:
         for name in ("recharge", "recharge-native"):
             require_ancestor(before["components"][name]["revision"], sha)
@@ -482,6 +497,9 @@ def main():
     if presentation_scope == "rechargeAdminWorkspacePresentation":
         files += ("frontend/finance-collection.js", "server/finance/collection-route.mjs", "server/card-management.mjs",
                   "deploy/website/check-business-action.mjs")
+    if presentation_scope == "actionPasswordPresentation":
+        files += ("server/finance/collection-route.mjs", "server/card-management.mjs",
+                  "server/recharge-partner-api.mjs", "deploy/website/check-business-action.mjs")
     if presentation_scope == "redeemPresentation":
         files += ("modules/finance/accounting.mjs",)
     if include_adapter:
@@ -498,7 +516,7 @@ def main():
     if customer_progress:
         files += CUSTOMER_PROGRESS_FILES
     if deferred_native:
-        files += ("frontend/recharge-partners.mjs",)
+        files += ("frontend/recharge-partners.mjs", *sorted(DEFERRED_DEBUG_FILES))
     plan = {"operation": "release", "sha": sha, "before": before, "artifacts": artifacts,
             "files": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in files},
             "qualityRun": quality_run, "preflightCommand": preflight_id, 'externalEvents': True}
@@ -556,7 +574,8 @@ def main():
                                receipt.get("protectedComponentsUnchanged") is not True):
         raise RuntimeError(f"recharge_presentation_release_receipt_mismatch: {command_id}")
     if deferred_native:
-        receipt["deferredNativeBuildInputs"] = verify_deferred_native_receipt(receipt, deferred_native, before)
+        receipt["deferredNativeBuildInputs"] = verify_deferred_native_receipt(
+            receipt, deferred_native, before, expected_assets=expected_assets)
     receipt["releaseCommand"] = command_id
     print(json.dumps(receipt, sort_keys=True), flush=True)
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:

@@ -19,7 +19,7 @@ test('renewal reminder persists decisions, hands off to finance and projects cus
   const subscriptions = createSubscriptionHandler({ store, publicOrigin: origin, clock });
   const commerce = (req, res, path, user) => handleLocalBusiness(req, res, path, store, user, { publicOrigin: origin });
   const renew = createRenewalHandoff({ store, publicOrigin: origin, clock,
-    getAuth: () => ({ recentlyPasswordConfirmed: () => true, orderOwners: () => [actor] }) });
+    getAuth: () => ({ orderOwners: () => [actor] }) });
   const renewal = (req, res, path, user) => renew(req, res, user);
   const commerceRequest = async (method, data, path = api, handler = commerce, user = actor, operation) => {
     const request = Object.assign(Readable.from(data ? [Buffer.from(JSON.stringify(data))] : []), {

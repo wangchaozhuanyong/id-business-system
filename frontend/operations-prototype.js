@@ -249,8 +249,7 @@
     return {
       mailboxTypes: mailboxTypes.map((item) => ({ ...item })),
       customerTags: [...customerTags],
-      customerSources: [...customerSources],
-      costSettings: api.modules.commerce?.getCostSettings?.() || null
+      customerSources: [...customerSources]
     };
   }
   function applySettings({ version, data }) {

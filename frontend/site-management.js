@@ -197,7 +197,7 @@
     const { collection, start, end, status, product, detail } = exportView(), orders = collection === 'orders';
     const states = orders ? [['recorded', '已登记'], ['cancelled', '已撤销']] : [['active', '使用中'], ['inactive', '已停用']];
     return '<div class="site-management-grid"><section class="panel panel-body site-management-card">' +
-      title('下载资料', '按北京时间的录入日期筛选。含联系方式或金额的下载需要安全确认，每次下载均留记录。', 'site-export-help') +
+      title('下载资料', '按北京时间的录入日期筛选。每次下载均留记录。', 'site-export-help') +
       '<form id="site-export-form"><div class="site-management-filters">' +
       selection('site-export-collection', '资料类型', [['customers', '客户'], ['orders', '订单']], collection) +
       selection('site-export-detail', '表格内容', [['masked', '简表（隐藏个人信息）'], ['business', '业务明细']], detail || 'masked') +
@@ -359,7 +359,6 @@
     const request = attempt;
     const progress = A.beginActionFeedback($('button[type="submit"]', form), '正在准备下载…');
     try {
-      if (filter.detail === 'business' && !await window.IDAccountSecurity?.verify()) return;
       if (!form.isConnected) return;
       const { content, count: total } = await D.siteExport(filter, request.id);
       if (attempt === request) attempt = undefined;

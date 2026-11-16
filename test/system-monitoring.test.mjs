@@ -264,8 +264,7 @@ async function http(handler, { url = monitorPath, method = 'GET', body, headers 
 
 test('monitor APIs enforce roles, same-origin writes, and explicit verified evidence', async t => {
   const { monitor } = fixture(t);
-  let passwordConfirmed = false;
-  const handler = createMonitoringHandler({ monitor, publicOrigin: origin, confirmSettings: () => passwordConfirmed });
+  const handler = createMonitoringHandler({ monitor, publicOrigin: origin });
   const config = monitorPath + '?tab=config';
   assert.equal((await http(handler, { url: config, actor: null })).status, 401);
   assert.equal((await http(handler, { url: config, actor: admin })).status, 403);
@@ -282,16 +281,11 @@ test('monitor APIs enforce roles, same-origin writes, and explicit verified evid
   assert.equal((await http(handler, { method: 'POST', body, headers: { ...headers, origin: 'https://unrelated.test' } })).status, 403);
   assert.equal((await http(handler, { method: 'POST', body, headers, actor: admin })).status, 403);
   const save = { action: 'settings', version: 0, settings: { enabled: false, token, channels: { operations: ops }, rules: {} } };
-  const blocked = await http(handler, { method: 'POST', body: save, headers });
-  assert.equal(blocked.status, 403);
-  assert.equal(JSON.parse(blocked.body).code, 'SECURITY_CONFIRMATION_REQUIRED');
-  passwordConfirmed = true;
   assert.equal((await http(handler, { method: 'POST', body: save, headers })).status, 200);
   assert.equal(JSON.parse((await http(handler, { method: 'POST', body, headers })).body).recorded, true);
   assert.equal(JSON.parse((await http(handler, { method: 'POST', body, headers })).body).recorded, false);
   const incident = monitor.view().items[0];
   assert.equal(incident.priority, 'P0');
-  passwordConfirmed = false;
   const testChannel = { action: 'test', version: monitor.configView().version, target: 'operations' };
   assert.equal((await http(handler, { method: 'POST', body: testChannel, headers, actor: admin })).status, 403);
   assert.equal((await http(handler, { method: 'POST', body: testChannel, headers })).status, 202);

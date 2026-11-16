@@ -26,7 +26,7 @@ import { businessListQuery, inventoryPageDomain, ordersPageDomain, ordersPageRol
 import { matchRechargeRenewal, renewalAssociationIssue, renewalExpiryIssue } from './recharge-renewal.mjs';
 import { validOrderCurrencies, validOrderCurrencyGroups, retainOrderSettings } from './order-currency-settings.mjs';
 import { isDeepStrictEqual } from 'node:util';
-import { employeeCommerce, financeCommerce, managesBusiness, protectedSettingsChanged, registrarInventory } from './access-roles.mjs';
+import { employeeCommerce, feeAndPriceSettingsChanged, financeCommerce, managesBusiness, protectedSettingsChanged, registrarInventory } from './access-roles.mjs';
 import {
   applyOrderCompletion, assignMissingManualOrderOwners, fillManualOrderDetails,
   OrderCompletionError, readOrderCompletion, rechargeOrderEmailConflict, rechargePriceSnapshot, requireCompletionActor
@@ -839,7 +839,7 @@ function checkWrite(entry) {
         data.renewalWarningHours > 365 * 24))
     throw new LocalDataError(400, '提前提醒小时数必须是 1 至 8760 的整数');
   if (
-    domain === 'settings' &&
+    domain === 'settings' && Object.hasOwn(data, 'costSettings') &&
     (!data.costSettings ||
       typeof data.costSettings !== 'object' ||
       Array.isArray(data.costSettings))
@@ -895,7 +895,7 @@ function checkedRelayClaims(priorInventory, write, actor) {
 
 async function saveHttpWrites(store, entries, actor, operationId, {
   verifyRelayExtraction, readOrderCards, readOrderOwners, requireRenewalHandoff,
-  canChangeProtectedSettings
+  confirmFeeAndPriceSettings
 }, deltaResponse) {
   if (Array.isArray(entries) && entries.some(entry => entry && Object.hasOwn(entry, 'recordEdit'))) {
     if (actor && !['admin', 'super'].includes(actor.role)) throw new LocalDataError(403, '当前账号无权保存此资料');
@@ -933,9 +933,9 @@ async function saveHttpWrites(store, entries, actor, operationId, {
     writes = checkWrites(entries);
   }
   const settings = writes.find(({ domain }) => domain === 'settings');
-  if (actor?.role === 'super' && settings && canChangeProtectedSettings && !canChangeProtectedSettings()) {
+  if (actor?.role === 'super' && settings && confirmFeeAndPriceSettings && !confirmFeeAndPriceSettings()) {
     const current = store.load('settings').data;
-    if (protectedSettingsChanged(retainOrderSettings(settings.data, current), current))
+    if (feeAndPriceSettingsChanged(retainSettingsForWrite(settings.data, current), current))
       throw new LocalDataError(403, '请先完成安全确认，再继续这项操作', 'SECURITY_CONFIRMATION_REQUIRED');
   }
   const operation = sparse ? sparseOperation : describeWriteOperation(operationId, actor, writes);
@@ -2336,12 +2336,7 @@ export function createLocalBusinessStore(databasePath) {
         const settings = writes.find(({ domain }) => domain === 'settings');
         if (settings) {
           const savedSettings = current('settings');
-          settings.data = retainOrderSettings(settings.data, savedSettings);
-          for (const key of ['customerTags', 'customerSources', 'orderPrices', 'stockOrderPrices', 'gptPaidPrices', 'claudePaidPrices', 'applePaidPrices']) {
-            if (!Object.hasOwn(settings.data, key) && savedSettings && Object.hasOwn(savedSettings, key)) {
-              settings.data = { ...settings.data, [key]: savedSettings[key] };
-            }
-          }
+          settings.data = retainSettingsForWrite(settings.data, savedSettings);
           if (actor?.role === 'admin' && (['mailbox_category_save', 'mailbox_category_reorder'].includes(settings.action) ||
               protectedSettingsChanged(settings.data, savedSettings)))
             throw new LocalDataError(403, '只有超级管理员可以修改邮箱分类或代付国家设置');
@@ -3432,6 +3427,15 @@ function json(response, status, body) {
   response.end(JSON.stringify(body));
 }
 
+function retainSettingsForWrite(data, previous) {
+  const next = retainOrderSettings(data, previous);
+  for (const key of ['customerTags', 'customerSources', 'costSettings', 'orderPrices', 'stockOrderPrices',
+    'gptPaidPrices', 'claudePaidPrices', 'applePaidPrices']) {
+    if (!Object.hasOwn(next, key) && previous && Object.hasOwn(previous, key)) next[key] = previous[key];
+  }
+  return next;
+}
+
 function sendSensitiveConfirmation(response) {
   return json(response, 403, { error: '请先完成安全确认，再继续这项操作', code: 'SECURITY_CONFIRMATION_REQUIRED' });
 }
@@ -3453,7 +3457,7 @@ export async function handleLocalBusiness(
   actor,
   options = {}
 ) {
-  const { verifyManagedMailbox, publicOrigin, readOrderOwners, readOperatorLabels, authorizeSensitive, isRegistrar } = options;
+  const { verifyManagedMailbox, publicOrigin, readOrderOwners, readOperatorLabels, isRegistrar } = options;
   try {
     const domain = route.slice('/api/local/'.length);
     if (domain === 'commerce' || domain === 'batch') response.setHeader('Cache-Control', 'private, no-store');
@@ -3472,7 +3476,6 @@ export async function handleLocalBusiness(
       if (request.method === 'GET') return json(response, 200, store.previewAuditRecovery(id, actor));
       if (request.method !== 'POST') throw new LocalDataError(405, '此接口只支持预览或撤回操作');
       if (request.headers.origin !== origin) throw new LocalDataError(403, '请从当前页面操作');
-      if (authorizeSensitive && !authorizeSensitive(request)) return sendSensitiveConfirmation(response);
       return json(response, 200, store.recoverAuditOperation(id, await readJson(request, 4096), actor, request.headers['x-id-operation']));
     }
     if (domain === 'inventory/archive') {
@@ -3482,7 +3485,6 @@ export async function handleLocalBusiness(
         return json(response, 200, store.previewInventoryArchive(new URL(request.url, origin).searchParams.get('id'), actor));
       if (request.method !== 'POST') throw new LocalDataError(405, '此接口只支持预览或归档资料');
       if (request.headers.origin !== origin) throw new LocalDataError(403, '请从当前页面操作');
-      if (authorizeSensitive && !authorizeSensitive(request)) return sendSensitiveConfirmation(response);
       return json(response, 200, store.archiveInventory(await readJson(request, 4096), actor, request.headers['x-id-operation']));
     }
     if (route === columnPreferencesRoute) {
@@ -3550,7 +3552,6 @@ export async function handleLocalBusiness(
       if (request.headers.origin !== origin) throw new LocalDataError(403, '仅允许从当前页面操作');
       if (request.method === 'PUT') return json(response, 200, store.saveMailboxDeliverySettings(await readJson(request), actor));
       if (request.method === 'POST') {
-        if (authorizeSensitive && !authorizeSensitive(request)) return sendSensitiveConfirmation(response);
         return json(response, 200, store.copyGoogleMailboxCredentials(await readJson(request), actor));
       }
       throw new LocalDataError(405, '不支持此邮箱复制操作');
@@ -3565,7 +3566,6 @@ export async function handleLocalBusiness(
       }
       if (request.method !== 'POST') throw new LocalDataError(405, '请从邮箱池操作');
       if (request.headers.origin !== origin) throw new LocalDataError(403, '请从当前页面操作');
-      if (!authorizeSensitive?.(request)) return sendSensitiveConfirmation(response);
       const body = await readJson(request, 4096);
       if (!body || typeof body.id !== 'string' || (body.assetId !== null && typeof body.assetId !== 'string'))
         throw new LocalDataError(400, '请核对邮箱和收信授权');
@@ -3605,7 +3605,6 @@ export async function handleLocalBusiness(
         return json(response, 200, await store.useSavedTotp(body?.id, actor));
       }
       if (domain === savedTotpDomain + '/secret' && request.method === 'POST') {
-        if (authorizeSensitive && !authorizeSensitive(request)) return sendSensitiveConfirmation(response);
         return json(response, 200, store.revealSavedTotp(await readJson(request), actor));
       }
       throw new LocalDataError(405, '本机接口不支持此操作');
@@ -3678,7 +3677,7 @@ export async function handleLocalBusiness(
       throw new LocalDataError(403, '仅允许从本机页面保存');
     }
     const body = await readJson(request);
-    const writeOptions = authorizeSensitive ? { ...options, canChangeProtectedSettings: () => authorizeSensitive(request) } : options;
+    const writeOptions = { ...options, confirmFeeAndPriceSettings: () => options.confirmFeeAndPriceSettings?.(request) ?? true };
     if (domain === 'batch') {
       const entries = await saveHttpWrites(store, body, actor, request.headers['x-id-operation'], writeOptions);
       return json(response, 200, entries.map((entry) =>

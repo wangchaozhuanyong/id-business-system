@@ -2447,22 +2447,20 @@
   }
   let subscriptionEstimates = new Map();
   let subscriptionEstimateRequest, subscriptionEstimateKey, subscriptionEstimateError, subscriptionStatusError;
-  let subscriptionCardVerificationNeeded = false;
   let subscriptionCardRequestGeneration = 0;
-  function loadSubscriptionCardEstimates(force = false, stepUp = false) {
+  function loadSubscriptionCardEstimates(force = false) {
     if (!localData?.subscriptionCardEstimates || S.route !== subscriptionCardsRoute) return;
     const actorId = currentOperator().id;
     const key = [actorId, localVersion, Math.floor(Date.now() / 60_000)].join(':');
     if (subscriptionEstimateRequest)
-      return force ? subscriptionEstimateRequest.then(() => loadSubscriptionCardEstimates(true, stepUp)) : subscriptionEstimateRequest;
+      return force ? subscriptionEstimateRequest.then(() => loadSubscriptionCardEstimates(true)) : subscriptionEstimateRequest;
     if (!force && subscriptionEstimateKey === key) return;
     subscriptionEstimateKey = key;
     subscriptionEstimateError = '';
     subscriptionStatusError = '';
-    subscriptionCardVerificationNeeded = false;
     const generation = ++subscriptionCardRequestGeneration;
     subscriptionEstimateRequest = Promise.allSettled([
-      localData.subscriptionCardEstimates(), readBankCardTypes(force), localData.subscriptionCardStatus({ stepUp })
+      localData.subscriptionCardEstimates(), readBankCardTypes(force), localData.subscriptionCardStatus()
     ]).then(([estimate, types, statuses]) => {
       if (actorId !== currentOperator().id || generation !== subscriptionCardRequestGeneration) return;
       const ready = estimate.status === 'fulfilled' && Array.isArray(estimate.value.items);
@@ -2478,8 +2476,7 @@
           bankCardStatuses.clear();
           frozenBankCards = undefined;
         }
-        subscriptionCardVerificationNeeded = statuses.reason?.code === 'SECURITY_CONFIRMATION_REQUIRED';
-        subscriptionStatusError = subscriptionCardVerificationNeeded ? '查看完整银行卡资料需要安全确认。' : '银行卡资料暂未更新';
+        subscriptionStatusError = '银行卡资料暂未更新';
       }
       return !subscriptionEstimateError && !subscriptionStatusError;
     }).finally(() => {
@@ -2644,7 +2641,7 @@
       'aria-label="银行卡列表"')) + `<section class="panel">${toolbar(frozen ? '搜索卡号、卡类型、序列号、冻结原因或操作人'
         : '搜索客户、账号、订单、卡号、卡类型或序列号', frozen ? '' : filters)}${
       subscriptionStatusError ? `<p class="footnote" role="status">${E(subscriptionStatusError)} ${
-        A.textAction(subscriptionCardVerificationNeeded ? '安全确认后查看' : '重试', 'commerce-subscription-card-refresh')}</p>` : ''}${
+        A.textAction('重试', 'commerce-subscription-card-refresh')}</p>` : ''}${
       subscriptionEstimateError ? `<p class="footnote" role="status">${E(subscriptionEstimateError)} ${
         A.textAction('重试', 'commerce-subscription-card-refresh')}</p>` :
         localData?.subscriptionCardEstimates && (!subscriptionEstimateKey || subscriptionEstimateRequest)
@@ -9918,7 +9915,7 @@
       return true;
     }
     if (action === 'commerce-subscription-card-refresh') {
-      loadSubscriptionCardEstimates(true, subscriptionCardVerificationNeeded);
+      loadSubscriptionCardEstimates(true);
       return true;
     }
     if (action === 'commerce-subscription-card-tab') {
