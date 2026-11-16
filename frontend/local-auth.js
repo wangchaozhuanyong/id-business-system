@@ -199,7 +199,7 @@
               <svg class="icon icon-eye" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
             </button>
           </div></div>` : ''}
-          <div class="local-auth-remember-row"><label class="local-auth-remember" for="local-auth-remember"><input id="local-auth-remember" name="remember" type="checkbox" />在此设备保持登录</label></div>
+          <div class="local-auth-remember-row"><label class="local-auth-remember" for="local-auth-remember"><input id="local-auth-remember" name="remember" type="checkbox" checked />在此设备保持登录</label></div>
           ${challengeSiteKey ? '<div id="local-auth-challenge" aria-label="真人验证"><p role="status">正在载入真人验证…</p></div>' : ''}
           </fieldset>
           <fieldset class="local-auth-stage" id="local-auth-second-factor" hidden>
@@ -237,7 +237,7 @@
     window.IDTitleHelp?.attach($('#local-auth-title', gate), $('.local-auth-intro', gate));
     bindLoginTotp(gate);
     const help = document.createElement('span');
-    help.textContent = '保持登录后，实际操作时自动续期；闲置30天或首次登录满90天需重新登录。未勾选时登录有效期为8小时。更新网站不会主动退出。';
+    help.textContent = '勾选后从登录起保持10天，闲置或关闭浏览器不会提前到期。取消勾选时登录有效期为8小时。';
     window.IDTitleHelp?.attach($('.local-auth-remember', gate), help, 'field-help');
     const reasons = { expired: '登录已到期，请重新登录。', revoked: '账号密码、权限或启用状态已变化，请重新登录。',
       invalid: '登录已失效或已在其他设备退出，请重新登录。', logout: '已安全退出登录。',
@@ -533,7 +533,7 @@
     const nickname = actor.nicknameSet ? '' : `<form id="local-auth-nickname" class="form-section">${api.field('设置昵称', 'self-nickname', api.input('self-nickname', '', 'required maxlength="80" autocomplete="off"'), true, '首次保存后由管理员修改。')}<div class="form-footer"><button type="submit" class="button primary">保存昵称</button></div></form>`;
     api.openDrawer(
       '我的账号',
-      '登录设备只显示本账号的会话。保持登录会在实际操作时续期，闲置30天或登录满90天需重新登录；退出某个设备会立即撤销该设备的访问权限。',
+      '登录设备只显示本账号的会话。新签发的保持登录会话有效10天，普通登录有效8小时。退出某个设备会立即撤销该设备的访问权限。',
       `<div class="property-list"><div class="property-row"><span>昵称</span><strong>${api.esc(actor.name)}</strong></div><div class="property-row"><span>登录邮箱</span><strong>${api.esc(actor.email)}</strong></div><div class="property-row"><span>角色</span><strong>${roles[actor.role]}</strong></div></div>${nickname}<section class="local-auth-devices"><div class="section-title-row"><h3>账号安全</h3>${api.titleInfo('账号安全', '两步验证用于登录和重要操作。启用设备限制后，每台新电脑和浏览器都需要批准。', 'local-profile-security-help')}</div><div id="local-auth-personal-security" aria-live="polite"></div></section><section class="local-auth-devices" aria-labelledby="local-auth-devices-title"><div class="section-heading"><h3 id="local-auth-devices-title">登录设备</h3><button type="button" class="button" id="local-auth-devices-refresh">刷新</button></div><div id="local-auth-device-list" aria-live="polite"></div></section>`,
       `${api.button('关闭', 'drawer-close')}<button type="button" id="local-auth-sign-out" class="button danger">退出登录</button>`
     );

@@ -52,10 +52,37 @@ async function fixture(t) {
     }
   };
 }
-test('remembered activity renews 30-day idle expiry, survives restart and stops at 90 days', async t => {
+function usePreviousExpiry(f, cookie) {
+  const digest = createHash('sha256').update(cookie.split('=')[1]).digest('hex');
+  const store = openLocalSessionStore(f.path + '.sessions');
+  store.update(digest, row => ({
+    ...row, expiresAt: row.createdAt + 30 * day, absoluteExpiresAt: row.createdAt + 90 * day
+  }));
+}
+
+test('new remembered login survives ten days without activity and expires on the fixed deadline', async t => {
   const f = await fixture(t), login = await f.login(true), cookie = login.cookie;
   assert.equal(login.status, 200);
-  assert.match(login.headers['Set-Cookie'], /__Host-id_session_v2=.*HttpOnly; SameSite=Strict; Max-Age=7776000; Secure$/);
+  assert.match(login.headers['Set-Cookie'], /__Host-id_session_v2=.*HttpOnly; SameSite=Strict; Max-Age=864000; Secure$/);
+  const expiresAt = f.at() + 10 * day;
+  f.advance(10 * day - 1);
+  f.restart();
+  assert((await f.call('/session', { cookie })).data.actor);
+  const { items: [device] } = (await f.call('/devices', { cookie })).data;
+  assert.equal(device.expiresAt, expiresAt);
+  assert.equal(device.lastUsedAt, device.createdAt);
+  const activity = await f.call('/activity', { cookie, body: {} });
+  assert.equal(activity.status, 200);
+  assert.equal(activity.data.expiresAt, expiresAt);
+  assert.equal(activity.headers['Set-Cookie'], undefined);
+  f.advance(1);
+  assert.equal((await f.call('/session', { cookie })).data.reason, 'expired');
+  assert.equal((await f.call('/activity', { cookie, body: {} })).status, 401);
+});
+
+test('previously issued remembered sessions keep their 30-day idle and 90-day maximum limits', async t => {
+  const f = await fixture(t), cookie = (await f.login(true)).cookie;
+  usePreviousExpiry(f, cookie);
   const created = f.at();
   for (const days of [29, 29, 29]) {
     f.advance(days * day); f.restart();
@@ -70,12 +97,13 @@ test('remembered activity renews 30-day idle expiry, survives restart and stops 
 });
 test('reads and background polling never renew idle expiry, normal login stays eight hours', async t => {
   const f = await fixture(t), remembered = (await f.login(true)).cookie;
+  usePreviousExpiry(f, remembered);
   f.advance(29 * day);
   for (let n = 0; n < 3; n++) assert((await f.call('/session', { cookie: remembered })).data.actor);
   assert.equal((await f.call('/devices', { cookie: remembered })).data.items[0].expiresAt, f.at() + day);
   f.advance(day);
   assert.equal((await f.call('/session', { cookie: remembered })).data.actor, null);
-  const normal = await f.login();
+  const normal = await f.login(false);
   assert.match(normal.headers['Set-Cookie'], /Max-Age=28800/);
   f.advance(7 * 3600000);
   const activity = await f.call('/activity', { cookie: normal.cookie, body: {} });
@@ -171,6 +199,7 @@ test('temporary account or session-directory outage is an error and never clears
 test('legacy cookies keep renewal; new cookies win and logout cannot resurrect a legacy identity', async t => {
   const f = await fixture(t);
   const old = (await f.login(true)).cookie.replace('__Host-id_session_v2=', '__Host-id_session=');
+  usePreviousExpiry(f, old);
   f.advance(29 * day);
   const renewal = await f.call('/activity', { cookie: old, body: {} });
   assert.equal(renewal.status, 200);
