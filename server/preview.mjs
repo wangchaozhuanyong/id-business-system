@@ -39,7 +39,8 @@ import { createSubscriptionHandler, subscriptionRoutes } from './subscription-ma
 import { createCustomerQueryHandler, customerQueryRoutes } from './customer-query.mjs';
 import { createRechargeCodeHandler, rechargeCodesRoute } from './recharge-code-requests.mjs';
 import {
-  createRechargePartnerHandlers, partnerAdminRoute, partnerApiPrefix, partnerAuthorizationPage, partnerAuthorizationRoute
+  createRechargePartnerHandlers, partnerAdminRoute, partnerApiPrefix, partnerAuthorizationPage, partnerAuthorizationRoute,
+  storefrontReviewRoute
 } from './recharge-partner-api.mjs';
 import { rechargePartnerGateway } from './recharge-partner-gateway.mjs';
 import { createRechargeOrderSync, orderSyncRoute } from './recharge-order-sync.mjs';
@@ -519,7 +520,7 @@ export async function startPreview(
         '    <link rel="stylesheet" href="/local-auth.css?v=20261114-login-refresh" />\n' +
           '    <script src="/local-data.js" defer></script>\n' +
           '    <script src="/toolbox-local.js" defer></script>\n' +
-          '    <script src="/local-auth.js?v=20261114-login-refresh" defer></script>\n    <script src="./prototype.js'
+          '    <script src="/local-auth.js?v=20261116-remember-10-days" defer></script>\n    <script src="./prototype.js'
       )
       .replace('20261105-bit-login" />', '20261106-local-inventory-settings" />')
       .replace(
@@ -758,6 +759,8 @@ export async function startPreview(
     }
     if (route === partnerAdminRoute)
       return rechargePartnerEnabled ? void partnerRecharge.admin(request, response, actor) : response.writeHead(404).end();
+    if (route === storefrontReviewRoute)
+      return rechargePartnerEnabled ? void partnerRecharge.storefrontReview(request, response, actor) : response.writeHead(404).end();
     if (rechargeActivity && (route === rechargeActivityRoute || route.startsWith(rechargeActivityRoute + '/'))) {
       if (!actor) return forbidden();
       return void rechargeActivity.handle(request, response, actor);
