@@ -6,7 +6,7 @@ import { createServer } from 'node:http';
 import { join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { createRechargePartnerHandlers, partnerApiPrefix, storefrontReviewRoute } from '../server/recharge-partner-api.mjs';
+import { createRechargePartnerHandlers, partnerApiPrefix } from '../server/recharge-partner-api.mjs';
 import { rechargePartnerGateway } from '../server/recharge-partner-gateway.mjs';
 import { readProgressStream } from '../modules/recharge/vendure/progress-stream.mjs';
 import {
@@ -58,19 +58,12 @@ async function fixture(t) {
   };
   let now = Date.now();
   const stock = nativeCodes.map(code => ({ code, plan: 'plus' }));
-  const originalTasks = new Map();
-  const nativeHolds = new Set();
   let beforeNativeLookup;
   const transport = {
     listCodeStock: async () => stock,
-    get: async path => ({ task: originalTasks.get(path.split('/').at(-1)) }),
     async verifyStorefrontCode(code) {
       await beforeNativeLookup?.(code);
-      return stock.some(row => row.code === code) ? { plan: 'plus',
-        ...(nativeHolds.has(code)
-          ? { status: 'reserved', reason: 'manual_review_required' }
-          : { status: 'available' })
-      } : null;
+      return stock.some(row => row.code === code) ? { plan: 'plus', status: 'available' } : null;
     }
   };
   let partnerHandlers;
@@ -82,8 +75,6 @@ async function fixture(t) {
   const partnerServer = createServer(bridge.handlePartner);
   const server = createServer((req, res) => {
     const url = req.url;
-    if (url === storefrontReviewRoute) return void partnerHandlers.storefrontReview(req, res, req.headers['x-test-role']
-      ? { ...admin, role: req.headers['x-test-role'] } : admin);
     if (url === '/admin') return void partnerHandlers.admin(req, res, req.headers['x-test-role']
       ? { ...admin, role: req.headers['x-test-role'] } : admin);
     if (url === '/authorize') return void partnerHandlers.authorization(req, res);
@@ -107,9 +98,8 @@ async function fixture(t) {
     const res = await fetch(address(partnerServer) + '/' + action, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
     });
-    if (['issue', 'review-release'].includes(action) && res.status === 409) return false;
-    if ((action === 'query' && res.status === 400) ||
-        (['task', 'review-lookup', 'review-release'].includes(action) && res.status === 404)) return null;
+    if (action === 'issue' && res.status === 409) return false;
+    if ((action === 'query' && res.status === 400) || (action === 'task' && res.status === 404)) return null;
     const value = await res.json();
     if (action === 'submit' && loseResponse) throw new Error('synthetic lost response');
     assert.equal(res.status, 200);
@@ -125,7 +115,6 @@ async function fixture(t) {
   };
   partnerHandlers = createRechargePartnerHandlers({
     store, transport, gateway, origin: publicOrigin, readSource: () => '203.0.113.2',
-    authorizeStorefrontRelease: request => request.headers['x-test-unverified'] !== '1',
     clock: () => now
   });
   const call = async (path, body, headers = {}) => {
@@ -137,8 +126,6 @@ async function fixture(t) {
     return { status: res.status, body: await res.json() };
   };
   return {
-    originalTasks, nativeHolds,
-    storefrontReview: (body, headers) => call(storefrontReviewRoute, body, { origin: publicOrigin, ...headers }),
     documents, advance: ms => { now += ms; }, setMaintenance: flag => { maintenance = flag; },
     stream: (key, id, signal) => fetch(address(server) + partnerApiPrefix + '/redemptions/' + id, {
       headers: { authorization: 'Bearer ' + key, Accept: 'text/event-stream' }, signal
@@ -161,66 +148,6 @@ async function fixture(t) {
     }
   };
 }
-
-test('an already unlocked original failure can be reviewed in ID and retried once with the same storefront code', async t => {
-  const f = await fixture(t);
-  const [code, uncertainCode] = nativeCodes;
-  const upstreamJobId = 'original-upgrade-failure';
-  const first = (await f.legacy('submit', { code, session })).body;
-  const { task } = (await f.worker('claim')).body;
-  const lease = { id: task.id, leaseToken: task.leaseToken };
-  await f.worker('progress', { ...lease, upstreamJobId, stage: 'started' });
-  assert.equal((await f.worker('result', { ...lease, upstreamJobId, outcome: 'unknown' })).body.status, 'awaiting_review');
-  f.originalTasks.set(upstreamJobId, { jobKey: upstreamJobId, cdk: code, status: 'failed',
-    rawOutput: 'private-original-output' });
-  assert.equal((await f.legacy('query', { code })).body.reason, 'manual_review_required');
-  assert.equal((await f.legacy('submit', { code, session })).body.id, first.id);
-
-  const lookup = { action: 'lookup', code };
-  const { receipt } = (await f.storefrontReview(lookup)).body;
-  assert.equal(receipt.canRelease, true);
-  assert.equal(receipt.originalTaskId, upstreamJobId);
-  assert(!JSON.stringify(receipt).includes('private-original-output'));
-  const release = { action: 'release', code, id: receipt.id, updatedAt: receipt.updatedAt,
-    verifiedNoChargeOrActivation: true };
-  assert.equal((await f.storefrontReview(release, { origin: 'https://other.example.test' })).status, 403);
-  assert.equal((await f.storefrontReview(release, { 'x-test-role': 'admin' })).status, 403);
-  assert.equal((await f.storefrontReview(release, { 'x-test-unverified': '1' })).body.code, 'SECURITY_CONFIRMATION_REQUIRED');
-  assert.equal((await f.storefrontReview({ ...release, verifiedNoChargeOrActivation: false })).status, 400);
-  assert.equal((await f.legacy('review-release', release)).status, 404);
-
-  f.nativeHolds.add(code);
-  assert.equal((await f.storefrontReview(release)).status, 409);
-  f.nativeHolds.delete(code);
-  f.originalTasks.get(upstreamJobId).status = 'success';
-  assert.equal((await f.storefrontReview(release)).status, 409);
-  f.originalTasks.get(upstreamJobId).status = 'failed';
-  assert.equal((await f.storefrontReview({ ...release, updatedAt: first.updatedAt })).status, 409);
-
-  const cleared = await f.storefrontReview(release);
-  assert.equal(cleared.status, 200);
-  assert.equal(cleared.body.receipt.released, true);
-  assert.deepEqual(await f.storefrontReview(release), cleared);
-  const current = (await f.legacy('query', { code })).body;
-  assert.equal(current.status, 'available');
-  assert.equal(current.reason, 'verified_retry_available');
-  assert.equal(current.task.id, first.id);
-  assert.equal(current.task.status, 'failed');
-  assert.equal((await f.worker('claim')).body.task, null);
-
-  const submissions = await Promise.all(Array.from({ length: 2 },
-    () => f.legacy('submit', { code, session, afterFailedTask: first.id })));
-  assert.notEqual(submissions[0].body.id, first.id);
-  assert.equal(submissions[0].body.id, submissions[1].body.id);
-  assert.equal((await f.legacy('task', { id: first.id, taskToken: first.taskToken })).body.status, 'failed');
-  assert.equal((await f.storefrontReview(release)).status, 409);
-
-  await f.worker('claim');
-  await f.legacy('submit', { code: uncertainCode, session });
-  const uncertain = (await f.worker('claim')).body.task;
-  await f.worker('result', { id: uncertain.id, leaseToken: uncertain.leaseToken, outcome: 'unknown' });
-  assert.equal((await f.storefrontReview({ ...lookup, code: uncertainCode })).body.receipt.canRelease, false);
-});
 
 async function enrollment(f, name, count = 1) {
   const result = await f.admin({ action: 'create', name, operationId: 'create-' + name });

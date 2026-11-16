@@ -8,7 +8,6 @@ import {
 } from '../modules/recharge/vendure/admission.mjs';
 
 export const partnerAdminRoute = '/api/local/recharge-partners';
-export const storefrontReviewRoute = '/integrations/codexdaichong/api/admin/storefront-recharge-review';
 export const partnerApiPrefix = '/api/recharge/v1';
 export const partnerAuthorizationPage = '/recharge/authorize';
 export const partnerAuthorizationRoute = partnerAuthorizationPage + '/request';
@@ -107,7 +106,7 @@ function validAccountSession(source, now) {
 }
 
 export function createRechargePartnerHandlers({
-  store, transport, gateway, origin, authorizeStorefrontRelease = () => false, readSource, clock = Date.now
+  store, transport, gateway, origin, readSource, clock = Date.now
 }) {
   const readPartners = () => store.featureDocument('recharge-partners');
   const readRequests = () => store.featureDocument('recharge-partner-requests');
@@ -166,58 +165,6 @@ export function createRechargePartnerHandlers({
     return { ...taskView(row, task, clock()), ...(includeAuthorization && { authorizationUrl:
       origin + partnerAuthorizationPage + '#' + row.id + '.' + store.rechargePartnerTicket(row.id) }) };
   }
-
-  const storefrontReview = handleErrors(async (req, res, actor) => {
-    if (!actor?.id || actor.active !== true || !['super', 'admin'].includes(actor.role))
-      throw new RequestError(actor ? 403 : 401, 'forbidden', '请使用充值管理员账号');
-    if (req.method !== 'POST' || req.headers.origin !== origin ||
-        (req.headers['sec-fetch-site'] && req.headers['sec-fetch-site'] !== 'same-origin'))
-      throw new RequestError(403, 'forbidden', '请在 ID 后台操作');
-    const body = await readBody(req, ['action', 'code', 'id', 'updatedAt', 'verifiedNoChargeOrActivation']);
-    const code = storefrontRechargeCode(body.code);
-    if (!code || !['lookup', 'release'].includes(body.action)) throw invalid();
-    const release = body.action === 'release';
-    if (release) {
-      if (actor.role !== 'super') throw new RequestError(403, 'forbidden', '请使用超级管理员账号');
-      if (!authorizeStorefrontRelease(req))
-        throw new RequestError(403, 'SECURITY_CONFIRMATION_REQUIRED', '请先完成安全确认，再继续这项操作');
-      if (!rechargeRequestIdPattern.test(body.id ?? '') || typeof body.updatedAt !== 'string' ||
-          body.verifiedNoChargeOrActivation !== true) throw invalid();
-    }
-
-    const row = await queue('review-lookup', { code });
-    if (!row) {
-      if (release) throw conflict('商城回执已变化，请重新查询');
-      return json(res, 200, { receipt: null });
-    }
-    const projection = (task, canRelease = false) => ({
-      id: task.id, updatedAt: task.updatedAt, plan: task.plan, status: task.status,
-      originalTaskId: task.upstreamJobId, released: task.released, canRelease
-    });
-    if (release && (row.id !== body.id || (!row.released && row.updatedAt !== body.updatedAt)))
-      throw conflict('商城回执已变化，请重新查询');
-
-    let confirmedFailure = row.reviewable && !row.released;
-    if (confirmedFailure && row.upstreamJobId) {
-      if (!/^[A-Za-z0-9_-]{1,128}$/.test(row.upstreamJobId)) throw unavailable();
-      const original = await transport.get('/api/admin/task-logs/' + row.upstreamJobId)
-        .catch(error => { if (error?.upstreamStatus !== 404) throw error; });
-      confirmedFailure = original?.task?.jobKey === row.upstreamJobId &&
-        original.task.cdk === code && original.task.status === 'failed';
-    }
-    if (!release)
-      return json(res, 200, { receipt: projection(row, confirmedFailure && actor.role === 'super') });
-    if (!row.released && !confirmedFailure)
-      throw conflict('原任务的失败结果无法确认，暂不能解除');
-    const clientIp = readSource(req);
-    if (!clientIp) throw invalid();
-    const reviewed = await queue('review-release', { code, id: row.id, updatedAt: body.updatedAt,
-      actorId: actor.id, clientIp });
-    if (!reviewed?.released)
-      throw conflict('回执已变化或兑换码仍不可用。请核对原任务和执行器的人工锁，再重新查询');
-    return json(res, 200, { receipt: projection(reviewed) });
-  });
-
   const admin = handleErrors(async (req, res, actor) => {
     if (!actor?.id || actor.active !== true || actor.role !== 'super')
       throw new RequestError(actor ? 403 : 401, 'forbidden', '请使用超级管理员账号');
@@ -492,5 +439,5 @@ export function createRechargePartnerHandlers({
     }
   }
 
-  return { admin, api, authorization, lookupAdmission, issueBatch, storefrontReview };
+  return { admin, api, authorization, lookupAdmission, issueBatch };
 }

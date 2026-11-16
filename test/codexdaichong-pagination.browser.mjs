@@ -26,10 +26,10 @@ const holds = fixtureRows(23, (id) => ({
   reason: `合成原因 ${id}`
 }));
 
-async function openFixture(browser, t, view, { embedded = false, rechargePartnerApi = false, ...options } = {}) {
+async function openFixture(browser, t, view, { embedded = false, ...options } = {}) {
   const context = await browser.newContext(options);
   t.after(() => context.close());
-  const offline = await interceptDesign(context, { rechargePartnerApi, ...(rechargePartnerApi && { localFixtures: {} }) });
+  const offline = await interceptDesign(context);
   const page = await context.newPage();
   page.setDefaultTimeout(6000);
   const errors = [];
@@ -112,7 +112,7 @@ async function openFixture(browser, t, view, { embedded = false, rechargePartner
     await page.goto(origin + '/#/online-recharge/chatgpt');
     await page
       .getByRole('navigation', { name: 'ChatGPT 充值功能' })
-      .getByRole('button', { name: view === 'logs' ? '任务管理' : 'CDK 管理' })
+      .getByRole('button', { name: 'CDK 管理' })
       .tap();
   } else {
     await page.goto(base + '/admin?view=' + view);
@@ -193,8 +193,8 @@ test(
           hasTouch: true,
           embedded: true
         });
-        const frameGeometry = async (key, total, expectedHeight) => {
-          const result = await page.waitForFunction(({ key, total, expectedHeight }) => {
+        const frameGeometry = async (key, total) => {
+          const result = await page.waitForFunction(({ key, total }) => {
             const frame = document.querySelector('.recharge-integration__content iframe:not([hidden])');
             const doc = frame?.contentDocument;
             const pager = doc?.querySelector(`nav[data-pagination="recharge-${key}"]`);
@@ -204,21 +204,20 @@ test(
             const availableBottom = innerHeight - main.nextElementSibling.offsetHeight - parseFloat(getComputedStyle(main).paddingBottom);
             if (Math.abs(availableBottom - panel.bottom) > 2 || frame.clientHeight + 1 < doc.body.offsetHeight) return false;
             const footer = pager.closest('.table-footer'), viewport = footer.previousElementSibling;
-            const tableHeight = viewport.clientHeight;
-            if (expectedHeight !== undefined && Math.abs(tableHeight - expectedHeight) > 2) return false;
             const style = node => doc.defaultView.getComputedStyle(node);
             return {
-              tableHeight,
+              tableHeight: viewport.clientHeight,
               tableBorder: style(viewport).borderBottomWidth,
               footerBorder: style(footer).borderTopWidth,
               pagerBorder: style(pager).borderTopWidth
             };
-          }, { key, total, expectedHeight });
+          }, { key, total });
           return result.jsonValue();
         };
         const original = await frameGeometry('cdk', cdks.length);
         await page.setViewportSize({ width: 1440, height: 1080 });
-        const taller = await frameGeometry('cdk', cdks.length, original.tableHeight + 180);
+        const taller = await frameGeometry('cdk', cdks.length);
+        assert(Math.abs(taller.tableHeight - original.tableHeight - 180) <= 2);
         await page.getByRole('navigation', { name: 'ChatGPT 充值功能' }).getByRole('button', { name: '免税地址' }).click();
         const addresses = await frameGeometry('address', 22);
         for (const geometry of [taller, addresses]) {
@@ -344,55 +343,6 @@ test(
         assert.deepEqual(reads.find((read) => read.key === 'addresses').query, { region: 'US' });
         assert.deepEqual(reads.find((read) => read.key === 'login-logs').query, { limit: '100' });
         assert.equal(await page.locator('#ip_ban_body button[data-unban-id="21"]').count(), 1);
-      }
-    );
-
-    await t.test(
-      'storefront review finds a failed receipt even with no native hold and requires confirmation',
-      async t => {
-        const { page } = await openFixture(browser, t, 'logs', {
-          embedded: true, rechargePartnerApi: true, hasTouch: true, viewport: { width: 390, height: 844 }
-        });
-        const code = 'KC-' + 'A'.repeat(15);
-        const receipt = { id: '21111111-1111-4111-8111-111111111111', updatedAt: '2026-11-16T08:00:00.000Z',
-          plan: 'plus', status: 'awaiting_review', originalTaskId: 'fixture-original-job', canRelease: true };
-        const requests = [];
-        await page.route(base + '/api/admin/storefront-recharge-review', route => {
-          const data = route.request().postDataJSON();
-          requests.push(data);
-          return route.fulfill({ json: { receipt: data.action === 'lookup' ? receipt
-            : { ...receipt, status: 'failed', canRelease: false, released: true } } });
-        });
-        await page.route(base + '/api/admin/activation-manual-holds?*', route =>
-          route.fulfill({ json: { success: true, holds: [] } }));
-        const frame = page.frameLocator('iframe[data-view="logs"]:not([hidden])');
-        await frame.getByRole('tab', { name: '待人工确认' }).click();
-        await frame.getByText('暂无待人工确认记录', { exact: true }).waitFor();
-        const findReceipt = frame.getByRole('button', { name: '查商城回执' });
-        const gap = await findReceipt.evaluate(button => {
-          const table = button.closest('[data-switch-panel="holds"]').querySelector('.table-container');
-          return table.getBoundingClientRect().top - button.getBoundingClientRect().bottom;
-        });
-        assert(gap >= 8, '商城回执入口与人工确认表格分隔线需保留至少 8px');
-        await findReceipt.click();
-        const form = page.locator('#storefront-recharge-review');
-        const release = form.getByRole('button', { name: '解除商城锁定' });
-        assert.equal(await release.isVisible(), false);
-        await form.getByLabel('商城兑换码').fill(code);
-        await form.getByLabel('商城兑换码').press('Enter');
-        await form.getByText(/原任务 fixture-original-job/).waitFor();
-        const fits = await form.evaluate(element => element.scrollWidth <= element.clientWidth + 1);
-        assert(fits, '手机上商城回执查询及操作应留在表单可视范围内');
-        await release.click();
-        await page.getByText(/确认已核对这笔原任务未扣款、未开通/).waitFor();
-        await page.locator('#confirm-dialog').getByRole('button', { name: '取消' }).click();
-        assert.deepEqual(requests, [{ action: 'lookup', code }]);
-        await release.click();
-        await page.locator('#confirm-dialog').getByRole('button', { name: '确认解除' }).click();
-        await form.getByText(/已解除商城锁定/).waitFor();
-        assert.deepEqual(requests[1], { action: 'release', code, id: receipt.id, updatedAt: receipt.updatedAt,
-          verifiedNoChargeOrActivation: true });
-        assert.equal(await release.isVisible(), false);
       }
     );
 

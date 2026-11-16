@@ -754,100 +754,6 @@
     }
     drawer.addEventListener('close', releaseLog);
   }
-  function mountStorefrontReview(frame) {
-    if (frame.dataset.viewGroup !== 'admin' ||
-        !document.querySelector('meta[name="id-recharge-partner-api"][content="enabled"]')) return;
-    const toolbar = frame.contentDocument?.querySelector('[data-switch-panel="holds"] .log-page-toolbar');
-    if (!toolbar || toolbar.querySelector('[data-storefront-review]')) return;
-    const trigger = frame.contentDocument.createElement('button');
-    trigger.type = 'button';
-    trigger.className = 'btn btn-secondary';
-    trigger.dataset.storefrontReview = '';
-    trigger.textContent = '查商城回执';
-    trigger.addEventListener('click', () => {
-      if (frame.isConnected && !frame.hidden && state.route === onlineRechargeRoute && activeOnlineView === 'logs' && isAdmin())
-        openStorefrontReview(trigger);
-    });
-    toolbar.append(trigger);
-  }
-  function openStorefrontReview(trigger) {
-    openDrawer('商城充值回执', '当执行器的待人工确认列表为空，但商城仍显示待核对时，用原兑换码查询。',
-      `<form class="drawer-form" id="storefront-recharge-review" autocomplete="off">
-        ${field('商城兑换码', 'storefront-review-code',
-          input('storefront-review-code', '', 'required maxlength="64" spellcheck="false" data-no-draft'), true)}
-        <div class="form-footer"><button type="submit" class="button primary">查询商城回执</button>
-        <button type="button" class="button" data-release-review hidden>解除商城锁定</button></div>
-        <p class="footnote" role="status"></p>
-      </form>`);
-    const form = $('#storefront-recharge-review');
-    const drawer = form.closest('dialog');
-    const inputNode = form.elements['storefront-review-code'];
-    const query = form.querySelector('[type="submit"]');
-    const release = form.querySelector('[data-release-review]');
-    const status = form.querySelector('[role="status"]');
-    const lifecycle = new AbortController();
-    let receipt;
-    drawer.addEventListener('id-view-deactivate', () => lifecycle.abort(), { once: true, signal: lifecycle.signal });
-    drawer.addEventListener('close', () => {
-      lifecycle.abort();
-      inputNode.value = '';
-      status.textContent = '';
-      if (!drawer.open && trigger.isConnected) trigger.focus({ preventScroll: true });
-    }, { once: true });
-    inputNode.addEventListener('input', () => {
-      receipt = null;
-      release.hidden = true;
-      status.textContent = '';
-    });
-    async function run(action, code, details = {}) {
-      if (query.disabled || lifecycle.signal.aborted || !drawer.open || !form.isConnected || inputNode.value.trim() !== code) return;
-      inputNode.disabled = query.disabled = release.disabled = true;
-      status.textContent = action === 'lookup' ? '正在查询商城回执…' : '正在解除商城锁定…';
-      try {
-        const send = () => fetch(onlineRechargeMount + 'api/admin/storefront-recharge-review', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ action, code, ...details }),
-          signal: AbortSignal.any([lifecycle.signal, AbortSignal.timeout(15000)])
-        });
-        let response = await send();
-        let result = await response.json().catch(() => ({}));
-        if (response.status === 403 && result.code === 'SECURITY_CONFIRMATION_REQUIRED' &&
-            await window.IDAccountSecurity?.verify() && !lifecycle.signal.aborted) {
-          response = await send();
-          result = await response.json().catch(() => ({}));
-        }
-        if (!response.ok) throw new Error(result.error || '商城回执处理失败，请重试。');
-        if (lifecycle.signal.aborted) return;
-        receipt = result.receipt;
-        release.hidden = !receipt?.canRelease;
-        if (!receipt) {
-          status.textContent = '未找到该码的商城回执。若仍待核对，请查看执行器的人工确认记录。';
-          return;
-        }
-        const label = receipt.released ? '已解除商城锁定。请让客户用原兑换码重新查询。'
-          : receipt.canRelease ? '原任务已失败。请先核对扣款、订阅和执行器人工锁。'
-          : ({ queued: '商城任务正在等待执行。', running: '商城任务执行中。', succeeded: '商城任务已开通。',
-              failed: '商城任务已失败。', awaiting_review: '商城回执待核对。' }[receipt.status] || '商城回执暂不可处理。');
-        status.textContent = label + (receipt.originalTaskId ? ' 原任务 ' + receipt.originalTaskId : '');
-      } catch (error) {
-        if (!lifecycle.signal.aborted) status.textContent = error.message || '未能确认操作结果，请重新查询。';
-      } finally {
-        inputNode.disabled = query.disabled = release.disabled = false;
-      }
-    }
-    form.addEventListener('submit', event => {
-      event.preventDefault();
-      release.hidden = true;
-      void run('lookup', inputNode.value.trim());
-    });
-    release.addEventListener('click', () => {
-      if (!receipt?.canRelease) return;
-      const code = inputNode.value.trim();
-      const { id, updatedAt } = receipt;
-      confirmAction('解除商城锁定', '确认已核对这笔原任务未扣款、未开通。解除后客户可用原码重新提交，原记录会保留。',
-        () => run('release', code, { id, updatedAt, verifiedNoChargeOrActivation: true }), '确认解除');
-    });
-  }
   function setFrameVisible(frame, visible) {
     frame.contentWindow?.postMessage(
       { source: 'id-recharge-shell', type: 'visibility', visible }, window.location.origin
@@ -1008,7 +914,6 @@
     }
     frame.dataset.description = description || '';
     frame.hidden = false;
-    mountStorefrontReview(frame);
     setFrameVisible(frame, true);
     api.restorePendingPageScroll();
     updateRechargeDescription(description);
