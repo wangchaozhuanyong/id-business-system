@@ -1051,36 +1051,55 @@ h1 {
   min-width: min(100%, 180px);
 }
 .relay-alias-toolbar {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 8px;
+  display: block;
+  container-type: inline-size;
   padding-block: var(--toolbar-padding-block);
 }
-.relay-alias-row {
+.relay-alias-toolbar .relay-alias-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px 14px;
+  flex-wrap: nowrap;
+  gap: 8px;
   min-width: 0;
 }
-.relay-alias-row > :is(.toolbar-left, .toolbar-right) {
-  flex: 0 1 auto;
-  margin-inline-start: auto;
+.relay-alias-toolbar .toolbar-left {
+  flex: 1 1 auto;
+  min-width: 0;
+  flex-wrap: nowrap;
 }
-.relay-alias-row .search-field { width: clamp(180px, 18vw, 280px); }
-.relay-alias-row select { max-width: 180px; text-overflow: ellipsis; }
-.relay-status-group {
+.relay-alias-toolbar .toolbar-right {
+  flex: 0 0 auto;
+  width: auto;
+  flex-wrap: nowrap;
+}
+.relay-alias-toolbar .search-field {
+  width: auto;
+  min-width: 60px;
+  flex: 1 1 180px;
+}
+.relay-alias-toolbar select { max-width: 150px; text-overflow: ellipsis; }
+.relay-status-tabs, .relay-status-group, .relay-secondary-actions, .relay-primary-action {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
+  flex: 0 0 auto;
   gap: 4px;
-}
-.relay-status-group .footnote {
   white-space: nowrap;
 }
-.relay-status-group .button {
-  padding-inline: 8px;
+.relay-status-group .button { padding-inline: 8px; }
+.relay-alias-toolbar .relay-state-compact { display: none; }
+@container (max-width: 1320px) {
+  .relay-alias-toolbar .relay-secondary-actions { display: none; }
+}
+@container (max-width: 960px) {
+  .relay-alias-toolbar .relay-status-tabs { display: none; }
+  .relay-alias-toolbar .relay-state-compact { display: block; flex: 0 0 auto; width: 115px; }
+}
+@container (max-width: 620px) {
+  .relay-alias-toolbar #relay-filter-parent { display: none; }
+}
+@container (max-width: 440px) {
+  .relay-alias-toolbar .relay-primary-action { display: none; }
+  .relay-alias-toolbar .relay-state-compact { width: 100px; }
 }
 .search-field {
   position: relative;
@@ -3667,12 +3686,6 @@ dialog::backdrop {
   }
   .toolbar select {
     flex: 1;
-  }
-  .relay-alias-row > .toolbar-left,
-  .relay-alias-row > .toolbar-right {
-    flex-basis: 100%;
-    margin-inline-start: 0;
-    justify-content: flex-end;
   }
   .panel-heading {
     padding: var(--panel-padding-block) var(--panel-padding-inline);

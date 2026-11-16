@@ -389,7 +389,7 @@ test('shared layouts preserve alignment, readable controls and stable navigation
     assert(form.width > main.width - 70, '空侧栏仍挤压费用表单');
   });
 
-  await t.test('relay filters and actions align in two rows and empty guidance stays inside the table', async () => {
+  await t.test('relay unified filters and overflow actions align in one row and empty guidance stays inside the table', async () => {
     await page.setViewportSize({ width: 1591, height: 900 });
     await go('mailboxes/relay');
     await page.getByRole('tab', { name: '隐藏邮箱管理' }).click();
@@ -432,14 +432,19 @@ test('shared layouts preserve alignment, readable controls and stable navigation
             };
           });
         });
-        if (width >= 1440) {
-          const centers = [0, 1].map(row => controls.filter(c => c.row === row).map(c => c.y));
-          assert(centers.every(row => row.length && Math.max(...row) - Math.min(...row) <= 2), '每行按钮和状态文字应居中对齐');
-          assert(Math.min(...centers[1]) > Math.max(...centers[0]) + 28, '使用和资料状态应在两行');
-          const parent = await box('#relay-filter-parent');
-          const action = await box('[data-action="relay-parent-add"]');
-          assert(Math.abs(parent.x + parent.width - action.x - action.width) <= 1, '主邮箱筛选与末个操作右边缘应对齐');
+        const centers = controls.map(c => c.y);
+        assert(Math.max(...centers) - Math.min(...centers) <= 2, '状态、搜索及操作始终同排居中');
+        for (let i = 1; i < controls.length; i++)
+          assert(controls[i].left >= controls[i - 1].right - 1, '工具栏控件不得重叠');
+        await toolbar.locator('[data-action="relay-alias-tools"]').click();
+        const menu = page.locator('[role="menu"]');
+        const secondaryVisible = await toolbar.locator('.relay-secondary-actions').isVisible();
+        await menu.getByRole('menuitem', { name: '列设置', exact: true }).waitFor({ state: secondaryVisible ? 'hidden' : 'visible' });
+        if (width <= 390) {
+          await menu.getByRole('menuitem', { name: '新增主邮箱', exact: true }).waitFor();
+          await menu.getByRole('menuitem', { name: '筛选主邮箱', exact: true }).waitFor();
         }
+        await page.keyboard.press('Escape');
         assert(controls.every(c => c.left >= 0 && c.right <= width), '工具栏控件越过视口');
         if (width <= 390)
           assert(controls.filter(c => !c.label).every(c => c.height >= 44), '手机控件触控高度不足');

@@ -436,7 +436,7 @@ test('本机主邮箱与批量登记归属于同一库存版本，重开后读�
   assert.match(reopened.html, /查询服务待接入/);
 });
 
-test('本机隐藏邮箱的资料状态独立于使用状态，重新打开后仍可筛选及恢复', async (t) => {
+test('隐藏邮箱统一状态互斥筛选，异常恢复保留原使用记录', async (t) => {
   const store = createLocalBusinessStore(':memory:');
   t.after(() => store.close());
   let browser = runtime(store);
@@ -461,9 +461,11 @@ test('本机隐藏邮箱的资料状态独立于使用状态，重新打开后�
   assert.equal(dead.lastOperatedById, 'local-operator');
   assert.equal(dead.inventoryHistory.at(-1).detail, '正常 → 死号');
   browser.tab('aliases');
-  browser.click('relay-inventory-status', { filter: 'health', value: 'dead' });
-  browser.click('relay-inventory-status', { filter: 'inventory', value: 'available' });
+  browser.click('relay-inventory-status', { filter: 'inventory', value: 'dead' });
   assert.equal(browser.table('relay-aliases').rows.length, 1);
+  assert.doesNotMatch(browser.html, /资料状态|使用状态/);
+  browser.click('relay-inventory-status', { filter: 'inventory', value: 'available' });
+  assert.equal(browser.table('relay-aliases').rows.length, 0);
   browser.click('relay-inventory-status', { filter: 'inventory', value: 'used' });
   assert.equal(browser.table('relay-aliases').rows.length, 0);
 
@@ -472,6 +474,8 @@ test('本机隐藏邮箱的资料状态独立于使用状态，重新打开后�
     browser.click('relay-health', { id: initial.id, health });
     await browser.confirm();
     assert.equal(store.load('inventory').data.mailboxes[0].health, health);
+    browser.click('relay-inventory-status', { filter: 'inventory', value: health === 'normal' ? 'available' : health });
+    assert.equal(browser.table('relay-aliases').rows.length, 1);
   }
   const current = store.load('inventory').data;
   assert.equal(current.batches.length, 0);
@@ -481,6 +485,43 @@ test('本机隐藏邮箱的资料状态独立于使用状态，重新打开后�
       .map((entry) => entry.note),
     ['解封中 → 正常', '死号 → 解封中', '正常 → 死号']
   );
+});
+
+test('统一状态优先显示异常，全部分类数量不重复，详情与列表一致', () => {
+  const r = runtime();
+  const row = r.assets.find(item => item.type === 'relay');
+  let review;
+  r.api.modules.inventory = { usageReviewFor: id => id === row.id ? review : null };
+  for (const [health, status, usage, expected, reviewStatus] of [
+    ['normal', '正常', 'available', 'available'],
+    ['normal', '正常', 'claimed', 'claimed'],
+    ['normal', '正常', 'used', 'used'],
+    ['dead', '正常', 'used', 'dead'],
+    ['dead', '正常', 'available', 'dead'],
+    ['unlocking', '正常', 'claimed', 'unlocking'],
+    ['normal', '封控中', 'used', 'restricted'],
+    ['normal', '冻结', 'available', 'frozen'],
+    ['normal', '正常', 'unknown', 'unknown'],
+    ['normal', '正常', 'available', 'used', 'used'],
+    ['normal', '正常', 'claimed', 'review', 'review'],
+    ['dead', '正常', 'used', 'dead', 'review']
+  ]) {
+    review = reviewStatus ? { status: reviewStatus, message: '合成核对原因' } : null;
+    Object.assign(row, { health, status, inventoryState: usage });
+    let appearances = 0;
+    for (const value of ['available', 'claimed', 'used', 'dead', 'unlocking', 'restricted', 'frozen', 'unknown', 'review']) {
+      r.click('relay-inventory-status', { filter: 'inventory', value });
+      const found = r.table('relay-aliases').rows.some(item => item.id === row.id);
+      assert.equal(found, value === expected, `${health}/${status}/${usage}: ${value}`);
+      appearances += Number(found);
+    }
+    assert.equal(appearances, 1);
+    r.click('relay-inventory-status', { filter: 'inventory', value: expected });
+    const columns = r.table('relay-aliases').columns;
+    const label = columns.find(item => item.id === 'inventoryState').render(row);
+    r.click('relay-alias-detail', { id: row.id });
+    assert(r.opened.body.includes(`状态</span><strong>${label}`));
+  }
 });
 
 test('旧窗口登记隐藏邮箱遇到库存冲突时保留草稿且不报告保存成功', async (t) => {

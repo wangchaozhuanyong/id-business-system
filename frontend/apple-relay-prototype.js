@@ -66,7 +66,6 @@
     parentId: '',
     aliasId: '',
     inventory: '',
-    health: '',
     assignment: '',
     query: '',
     result: null
@@ -95,7 +94,18 @@
     ['used', '已使用'],
     ['unknown', '未登记']
   ];
-  const aliasUse = row => useOptions.some(([id]) => id === row.inventoryState) ? row.inventoryState : 'unknown';
+  const stateOptions = [
+    ...useOptions.slice(0, 3), ['dead', '死号'],
+    ...healthOptions.slice(2), useOptions[3], ['review', '待核对']
+  ];
+  function aliasState(row) {
+    const health = aliasHealth(row);
+    if (health !== 'normal') return health;
+    const review = A.modules.inventory?.usageReviewFor?.(row.id);
+    if (review?.status === 'review' || review?.status === 'used') return review.status;
+    return useOptions.some(([id]) => id === row.inventoryState) ? row.inventoryState : 'unknown';
+  }
+  const stateLabel = row => stateOptions.find(([key]) => key === aliasState(row))?.[1] || '未登记';
   const beijingTime = new Intl.DateTimeFormat('sv-SE', {
     timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', hourCycle: 'h23'
@@ -266,15 +276,6 @@
       return '正常';
     return '待核对';
   }
-  function usedLabel(row) {
-    const review = A.modules.inventory?.usageReviewFor?.(row.id);
-    if (review?.status === 'review') return '待核对';
-    if (review?.status === 'used' && row.inventoryState !== 'used') return '检测到已使用';
-    return (
-      { available: '未使用', claimed: '已提取待使用', used: '已实际使用' }[row.inventoryState] ||
-      '未登记'
-    );
-  }
   function healthLabel(row) {
     return (
       healthOptions.find(([key]) => key !== 'normal' && key === row.health)?.[1] ||
@@ -416,7 +417,7 @@
     const placeholder = statusGroups ? '搜索邮箱、编号或备注' : '搜索邮箱、编号、备注或录入人';
     const search = `<div class="toolbar-left"><div class="search-field">${A.icon('search')}<input data-auto-search id="relay-search" aria-label="搜索苹果邮箱资料" value="${E(view.q)}" placeholder="${placeholder}" /></div>${filters}</div>`;
     return statusGroups
-      ? `<div class="toolbar list-filters relay-alias-toolbar"><div class="relay-alias-row">${statusGroups[0]}${search}</div><div class="relay-alias-row">${statusGroups[1]}<div class="toolbar-right">${actions}</div></div></div>`
+      ? `<div class="toolbar list-filters relay-alias-toolbar"><div class="relay-alias-row">${statusGroups}${search}<div class="toolbar-right">${actions}</div></div></div>`
       : `<div class="toolbar list-filters">${search}<div class="toolbar-right">${columnButton(id)}${actions}</div></div>`;
   }
   function renderRelayPage() {
@@ -762,29 +763,25 @@
         (!query || `${r.email} ${r.id} ${displayId('alias', r)} ${r.parentMailboxId || ''} ${displayId('parent', r.parentMailboxId)} ${parentEmail(r.parentMailboxId)} ${r.notes || ''} ${r.createdBy || ''} ${r.importId || ''} ${displayImportId(r.importId)} ${platformLabel(r)} ${A.modules.inventory?.mailboxRegistrationAccount?.(r)?.id || ''}`
           .toLowerCase().includes(query))
     );
-    const matchesUse = row => !view.inventory || aliasUse(row) === view.inventory;
-    const matchesHealth = (row) => !view.health || aliasHealth(row) === view.health;
-    const rows = matching.filter((row) => matchesUse(row) && matchesHealth(row));
+    const counts = new Map([['', matching.length]]);
+    const rows = matching.filter(row => {
+      const state = aliasState(row);
+      counts.set(state, (counts.get(state) || 0) + 1);
+      return !view.inventory || state === view.inventory;
+    });
     const filters = `<select id="relay-filter-parent" aria-label="筛选所属主邮箱">${A.options([['', '全部主邮箱'], ...parents.filter((p) => !p.deleted).map((p) => [p.id, p.email])], view.parentId)}</select>`;
-    const usage = statusButtons(
-      'inventory',
-      '使用状态',
-      useOptions,
-      matching.filter(matchesHealth),
-      aliasUse
-    );
-    const health = statusButtons(
-      'health',
-      '资料状态',
-      healthOptions,
-      matching.filter(matchesUse),
-      aliasHealth
-    );
+    const [available, claimed, used, dead, ...otherStates] = stateOptions;
+    const commonStates = [['', '全部'], available, claimed, used, dead];
+    const counted = options => options.map(([key, label]) => [key, `${label} ${counts.get(key) || 0}`]);
+    const usage = `<div class="relay-status-tabs">
+      ${statusButtons(counted(commonStates))}
+      <select id="relay-state-other" aria-label="其他状态">${A.options([['', '其他状态'], ...counted(otherStates)], view.inventory)}</select>
+    </div><select class="relay-state-compact" id="relay-state-select" aria-label="筛选邮箱状态">${A.options(counted([...commonStates, ...otherStates]), view.inventory)}</select>`;
     const hasParent = parents.some((p) => !p.deleted && p.status === 'ACTIVE');
     const actions = hasParent
       ? A.button('登记隐藏邮箱', 'relay-alias-add', 'primary', 'plus')
       : A.button('新增主邮箱', 'relay-parent-add', 'primary', 'plus');
-    const hasDetailFilter = view.q || view.parentId || view.health;
+    const hasDetailFilter = view.q || view.parentId;
     const emptyState = !hasParent && !allAliases.length
       ? { title: '请先添加 Apple 主邮箱', description: '添加后即可登记或批量导入该主邮箱下已开通的隐藏邮箱。' }
       : view.inventory === 'claimed' && !hasDetailFilter
@@ -793,10 +790,10 @@
           ? { title: '暂无隐藏邮箱', description: '可在上方登记或批量导入已开通的隐藏邮箱。' }
           : undefined;
     return (
-      toolbar((delivery ? A.button('复制设置', 'mailbox-delivery-settings', '', 'settings') +
+      toolbar(`<span class="relay-secondary-actions">` + (delivery ? A.button('复制设置', 'mailbox-delivery-settings', '', 'settings') +
         A.button('批量操作', 'relay-delivery-batch', '', 'refresh', `aria-haspopup="menu" ${remote.status?.configured ? '' : 'disabled'}`) : '') +
-        columnButton('relay-aliases') + A.button('更多', 'relay-alias-tools', '', 'more', 'aria-haspopup="menu"') + actions,
-        'relay-aliases', filters, [usage, health]) +
+        columnButton('relay-aliases') + `</span><span class="relay-primary-action">${actions}</span>` + A.button('更多', 'relay-alias-tools', '', 'more', 'aria-haspopup="menu"'),
+        'relay-aliases', filters, usage) +
       list(
         [
           { id: 'aliasId', label: '隐藏邮箱编号', class: 'mono', render: (r) => E(displayId('alias', r)) },
@@ -808,8 +805,7 @@
             render: (r) => E(parentEmail(r.parentMailboxId))
           },
           { id: 'relayStatus', label: '邮箱启用状态', render: (r) => E(status(r)) },
-          { id: 'health', label: '邮箱状态', render: row => E(healthOptions.find(([key]) => key === aliasHealth(row))?.[1]) },
-          { id: 'inventoryState', label: '邮箱使用状态', render: (r) => E(usedLabel(r)) },
+          { id: 'inventoryState', label: '状态', mobileSummary: true, render: row => E(stateLabel(row)) },
           { id: 'registrationPlatform', label: '注册平台', render: (r) => E(platformLabel(r)) },
           { id: 'registrationAccount', label: '关联账号', render: registrationAccountCell },
           { id: 'queryCode', label: '买家查询码', class: 'relay-buyer-code-column', render: buyerCodeCell },
@@ -846,18 +842,12 @@
       )
     );
   }
-  function statusButtons(key, label, options, rows, valueOf) {
-    const buttons = [['', '全部'], ...options].map(([value, text]) => {
-      const count = value ? rows.filter((row) => valueOf(row) === value).length : rows.length;
-      return A.button(
-        `${text} ${count}`,
-        'relay-inventory-status',
-        view[key] === value ? 'primary' : '',
-        '',
-        `data-filter="${key}" data-value="${value}" aria-pressed="${view[key] === value}"`
-      );
-    });
-    return `<div class="relay-status-group" role="group" aria-label="${label}"><span class="footnote">${label}</span>${buttons.join('')}</div>`;
+  function statusButtons(options) {
+    const buttons = options.map(([value, label]) => A.button(
+      label, 'relay-inventory-status', view.inventory === value ? 'primary' : '', '',
+      `data-filter="inventory" data-value="${value}" aria-pressed="${view.inventory === value}"`
+    ));
+    return `<div class="relay-status-group" role="group" aria-label="状态"><span class="footnote">状态</span>${buttons.join('')}</div>`;
   }
   function renderMails() {
     if (local && !remote.status?.configured)
@@ -1918,7 +1908,7 @@
     A.openDrawer(
       'Apple 隐藏邮箱详情',
       '隐藏邮箱从所属 Apple 主邮箱收信；库存使用和平台注册记录分别保留。',
-      `<div class="property-list">${prop('隐藏邮箱编号', displayId('alias', a))}${prop('主邮箱编号', displayId('parent', a.parentMailboxId))}${prop('所属主邮箱', parentEmail(a.parentMailboxId))}${prop('隐藏邮箱地址', a.email)}${prop('邮箱启用状态', status(a))}${prop('邮箱资料状态', healthLabel(a))}${prop('邮箱资料状态变更时间', timeText(a.healthChangedAt))}${prop('邮箱使用状态', usedLabel(a))}${prop('买家查询码', a.queryCode)}${prop('查询码到期', codeExpiryText(codeExpiry))}${prop('剩余有效天数', remainingDaysText(codeExpiry))}${prop('最近查询时间', aliasLastQueried(a))}${prop('邮件数量', aliasMailCount(a))}${prop('最近收件时间', aliasLastReceived(a))}${prop('来源导入批次', sourceBatchLabel(a))}${prop('备注', a.notes)}${trace(a)}</div>${registration}${history}`,
+      `<div class="property-list">${prop('隐藏邮箱编号', displayId('alias', a))}${prop('主邮箱编号', displayId('parent', a.parentMailboxId))}${prop('所属主邮箱', parentEmail(a.parentMailboxId))}${prop('隐藏邮箱地址', a.email)}${prop('邮箱启用状态', status(a))}${prop('状态', stateLabel(a))}${prop('邮箱资料状态变更时间', timeText(a.healthChangedAt))}${prop('买家查询码', a.queryCode)}${prop('查询码到期', codeExpiryText(codeExpiry))}${prop('剩余有效天数', remainingDaysText(codeExpiry))}${prop('最近查询时间', aliasLastQueried(a))}${prop('邮件数量', aliasMailCount(a))}${prop('最近收件时间', aliasLastReceived(a))}${prop('来源导入批次', sourceBatchLabel(a))}${prop('备注', a.notes)}${trace(a)}</div>${registration}${history}`,
       A.button('关闭', 'drawer-close') +
         (A.modules.inventory?.mailboxPlatformButton?.(a) || '') +
         A.button('查看邮件', 'relay-mails', '', 'mail', `data-id="${E(a.id)}"`) +
@@ -1942,8 +1932,8 @@
     const drawer = document.querySelector('#drawer');
     const drawerContent = drawer?.firstElementChild;
     A.confirmAction(
-      '确认调整邮箱资料状态',
-      `${row.email}：${healthLabel(row)} → ${label}。已有领用、实际使用、注册和收件记录均保留。`,
+      '确认调整邮箱状态',
+      `${row.email}：${stateLabel(row)} → ${health === 'normal' ? stateLabel({ ...row, health: 'normal' }) : label}。已有领用、实际使用、注册和收件记录均保留。`,
       async () => {
         function apply() {
           const current = alias(id);
@@ -2790,13 +2780,26 @@
       kind = node.dataset.kind;
     if (action === 'relay-alias-tools') {
       const hasParent = parents.some(p => !p.deleted && p.status === 'ACTIVE');
-      A.openActionMenu(node, (hasParent ? A.button('批量导入', 'relay-import', '', 'upload') : '') +
+      const toolbar = node.closest?.('.relay-alias-toolbar');
+      const visible = selector => Boolean(toolbar?.querySelector(selector)?.getClientRects().length);
+      const secondary = !visible('.relay-secondary-actions')
+        ? (A.modules.mailboxDelivery?.enabled() ? A.button('复制设置', 'mailbox-delivery-settings', '', 'settings') + A.button('批量操作', 'relay-delivery-batch', '', 'refresh', remote.status?.configured ? '' : 'disabled') : '') + columnButton('relay-aliases') : '';
+      const primary = !visible('.relay-primary-action') ? (hasParent ? A.button('登记隐藏邮箱', 'relay-alias-add', '', 'plus') : A.button('新增主邮箱', 'relay-parent-add', '', 'plus')) : '';
+      const parentFilter = !visible('#relay-filter-parent') ? A.button(view.parentId ? `主邮箱：${parentEmail(view.parentId)}` : '筛选主邮箱', 'relay-parent-filter', '', 'down') : '';
+      A.openActionMenu(node, secondary + primary + parentFilter + (hasParent ? A.button('批量导入', 'relay-import', '', 'upload') : '') +
         A.button('导入记录', 'relay-tab', '', '', 'data-tab="imports"') +
         (local && remote.status?.configured && ['admin', 'super'].includes(actor().role)
           ? A.button('历史入库', 'relay-intake', '', 'upload') : '') +
         (A.modules.inventory?.usageReviewButton?.() || '') +
         (view.inventory === 'claimed' ? A.button('查看提取与归还', 'relay-extraction-history', '', 'work') : ''),
       { label: '隐藏邮箱管理' });
+    } else if (action === 'relay-parent-filter') {
+      A.openActionMenu(node, [['', '全部主邮箱'], ...parents.filter(p => !p.deleted).map(p => [p.id, p.email])].map(([id, label]) => A.button(label, 'relay-parent-filter-select', view.parentId === id ? 'primary' : '', '', `data-id="${E(id)}"`)).join(''), { label: '筛选所属主邮箱' });
+    } else if (action === 'relay-parent-filter-select') {
+      view.parentId = id;
+      view.aliasId = '';
+      A.state.page = 1;
+      A.render();
     } else if (['relay-delivery-copy', 'relay-delivery-reset', 'relay-delivery-batch'].includes(action)) {
       const delivery = A.modules.mailboxDelivery;
       if (!delivery?.enabled()) return true;
@@ -2880,7 +2883,7 @@
     } else if (action === 'relay-inventory-status') {
       const { filter, value } = node.dataset;
       const allowed =
-        filter === 'inventory' ? useOptions : filter === 'health' ? healthOptions : null;
+        filter === 'inventory' ? stateOptions : null;
       if (!allowed || (value !== '' && !allowed.some(([key]) => key === value))) return true;
       view[filter] = value;
       A.state.page = 1;
@@ -3058,6 +3061,12 @@
       void readImportFile(node);
     } else if (node.id === 'relay-parent-choice') {
       updateParentChoice(node, true);
+    } else if (['relay-state-select', 'relay-state-other'].includes(node.id)) {
+      if (node.value && !stateOptions.some(([key]) => key === node.value)) return true;
+      view.inventory = node.value;
+      A.state.page = 1;
+      A.render();
+      document.getElementById(node.id)?.focus({ preventScroll: true });
     } else if (node.id === 'relay-filter-parent') {
       view.parentId = node.value;
       view.aliasId = '';
