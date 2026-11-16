@@ -238,7 +238,7 @@ class WebsiteReleaseTests(unittest.TestCase):
                 return "preflight", before
             plans.append(plan)
             for forbidden in ("adapter", "rechargeCore", "rechargePartnerApi", "vendureRetryReceipt",
-                              "deferredNativeBuildInputs"):
+                              "deferredNativeBuildInputs", "customerProgress"):
                 self.assertNotIn(forbidden, plan)
             self.assertIn("frontend/recharge-partners.mjs", plan["files"])
             return "release", {"mainSha": TARGET, "appCanaryPassed": True,
@@ -252,7 +252,8 @@ class WebsiteReleaseTests(unittest.TestCase):
             with patch.dict(os.environ, env, clear=True):
                 release.main()
             self.assertEqual(len(plans), 1)
-            for changes in ({"VENDURE_RETRY_RECEIPT_SHA256": "e" * 64}, {}):
+            for changes in ({"VENDURE_RETRY_RECEIPT_SHA256": "e" * 64},
+                            {"RELEASE_CUSTOMER_PROGRESS": "true"}, {}):
                 if not changes:
                     before["assetsSha256"] = "f" * 64
                 put.reset_mock()

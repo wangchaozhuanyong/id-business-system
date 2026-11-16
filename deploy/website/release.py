@@ -426,7 +426,7 @@ def main():
     deferred_native = presentation if presentation_scope == "deferredNativeBuildInputs" else None
     if deferred_native:
         presentation_scope, presentation = None, None
-        if retry_receipt or before["assetsSha256"] != deferred_native["assetsSha256"]:
+        if retry_receipt or customer_progress or before["assetsSha256"] != deferred_native["assetsSha256"]:
             raise RuntimeError("deferred_native_inputs_live_baseline_mismatch")
     if include_adapter or include_core:
         for name in ("recharge", "recharge-native"):
