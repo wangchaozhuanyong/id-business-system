@@ -1,5 +1,5 @@
 diff --git a/chatgpt.js b/chatgpt.js
-index 8a7cba7..965d5d8 100644
+index 8a7cba7..b0c3fdd 100644
 --- a/chatgpt.js
 +++ b/chatgpt.js
 @@ -467,6 +467,10 @@ async function openApiCheckout(page, { accessToken, sessionData, planType, count
@@ -55,19 +55,16 @@ index 8a7cba7..965d5d8 100644
      const { assertChatGptLoggedIn } = require('./session-auth');
      const { hasVisibleLoginChrome } = require('./auth-page-detect');
      const isPaymentUrl = (raw) => {
-@@ -520,6 +556,32 @@ async function verifyCheckoutDebugPage(page, { checkoutUrl, timeoutMs = 60000 }
+@@ -520,6 +556,33 @@ async function verifyCheckoutDebugPage(page, { checkoutUrl, timeoutMs = 60000 }
          if (!isPaymentUrl(page.url())) {
              throw new Error('支付页面发生非 Checkout 跳转，调试已停止');
          }
-+        if (await isCheckoutSummaryReady(page)) {
-+            console.log('✅ [调试] 无卡结账页已加载，调试已停止（未填卡、未付款）');
-+            return { checkoutUrl: page.url() };
-+        }
 +        const cardSelectorForFill = ['input[autocomplete="cc-number"]', 'input[name="cardnumber"]', 'input[name="number"]'].join(', ');
 +        let cardPresent = false;
 +        for (const frame of page.frames()) {
 +            if (await frame.locator(cardSelectorForFill).count().catch(() => 0)) { cardPresent = true; break; }
 +        }
++        // 有卡号表单时优先走填卡分支：先填卡与地址，再停在提交前。
 +        if (cardPresent && process.env.CHECKOUT_DEBUG_FILL === '1') {
 +            const { fillCheckoutForDebug } = require('./stripe-payment');
 +            let debugCard = null;
@@ -84,6 +81,10 @@ index 8a7cba7..965d5d8 100644
 +                console.log('✅ [调试] 已填写银行卡与账单地址，按要求停在提交前（未点击付款）');
 +                return { checkoutUrl: page.url(), filled };
 +            }
++        }
++        if (await isCheckoutSummaryReady(page)) {
++            console.log('✅ [调试] 无卡结账页已加载，调试已停止（未填卡、未付款）');
++            return { checkoutUrl: page.url() };
 +        }
          for (const frame of page.frames()) {
              const inputs = frame.locator(cardSelector);
