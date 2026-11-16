@@ -1,10 +1,10 @@
 {
   "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
-  "patchSha256": "2b8f611e99aea07796520a55dc937ce35623e11419e30e531ec495de6648d552",
+  "patchSha256": "98cbaf294b14dcb59c9f2f549e9ead3edd72537b4fa75f4a405b96da0038ea26",
   "files": {
     "chatgpt.js": {
       "original": "8a7cba757cd7121d1fcb76aa3711e632c132a9cd",
-      "approved": "b0c3fdd9f042facc39ad7878d6464ba949565ac5"
+      "approved": "9286deef378e82f420e30263187250f8911fe912"
     },
     "pricing-checkout.js": {
       "original": "17d5982142eec44b1d9aa56adff5db50617df9fe",
@@ -12,7 +12,7 @@
     },
     "stripe-payment.js": {
       "original": "cd7ff9d4497915b8a5e7c3e7d3babd13e6603ad2",
-      "approved": "53ec1640500be0adec78d369320d0f7c2ac095aa"
+      "approved": "f9775c9a82264f7d06212989f5633f98992ccad0"
     },
     "session-auth.js": {
       "original": "e186977d149f3d6e57d1cc8f2888a1a06df1cd0b",
