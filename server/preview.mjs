@@ -391,7 +391,6 @@ export async function startPreview(
       handleSiteManagement = createSiteManagement({ store, observations: siteObservations, origin: secureOrigin, release,
         official: Boolean(publicUrl), readBackups: () => readBackupMonitorReceipt(monitoringBackupReceiptsDirectory),
         readRecoveries: () => readRestoreEvidence(monitoringBackupReceiptsDirectory),
-        authorizeBusinessExport: request => auth?.recentlyPasswordConfirmed(request),
         readSources: () => monitoringSources?.adminView() || { sources: [], externalProbe: null }
       });
       if (rechargeConfig) rechargeActivity = createRechargeActivity({
@@ -401,7 +400,7 @@ export async function startPreview(
         native: rechargeConfig ? createLegacyRechargeNotifications(orderRechargeClient) : undefined,
         send: publicUrl ? undefined : async () => ({ status: 'failed', reason: 'configuration' }) });
       if (storefrontAdmissionDirectory) partnerRecharge = createRechargePartnerHandlers({
-        store, transport: orderRechargeClient, origin: secureOrigin, authorizeAdmin: confirmProtectedAction,
+        store, transport: orderRechargeClient, origin: secureOrigin,
         readSource: request => verifiedAddress(request, loginSecurity),
         gateway: rechargePartnerEnabled ? rechargePartnerGateway(storefrontAdmissionDirectory) : undefined
       });
@@ -413,8 +412,7 @@ export async function startPreview(
             body, publicMetadata: publicAssetMetadata(body) });
         }
       }
-      handleMonitoring = createMonitoringHandler({ monitor: systemMonitoring, publicOrigin: secureOrigin,
-        confirmSettings: confirmProtectedAction });
+      handleMonitoring = createMonitoringHandler({ monitor: systemMonitoring, publicOrigin: secureOrigin });
       if (publicUrl) {
         const externalProbe = typeof monitoringProbeSecret === 'string' && Buffer.byteLength(monitoringProbeSecret) >= 32;
         handleReadiness = createMonitoringReadiness({ check() {
@@ -437,8 +435,7 @@ export async function startPreview(
           syncEnabled: Boolean(rechargeConfig && rechargeOrderSync), syncViaEvents: Boolean(rechargeEventsConfig) });
       }
       handleOrderAuxiliary = createOrderAuxiliaryHandler({ store, client: orderRechargeClient, publicOrigin: secureOrigin });
-      handleCardManagement = createCardManagementHandler({ store, client: orderRechargeClient, publicOrigin: secureOrigin,
-        authorizeSensitive: confirmProtectedAction });
+      handleCardManagement = createCardManagementHandler({ store, client: orderRechargeClient, publicOrigin: secureOrigin });
       handleClaudeGoogleSubscriptions = createClaudeGoogleSubscriptionsHandler({ store, publicOrigin: secureOrigin });
       handleSubscriptions = createSubscriptionHandler({ store, publicOrigin: secureOrigin,
         readOwners: () => auth?.orderOwners() || [] });
@@ -531,8 +528,7 @@ export async function startPreview(
     index.body = Buffer.from(localIndex);
     try {
       financeCollection = createFinanceCollection({ store, provider: financeProvider, fetchQuote: financeFetch });
-      handleFinanceCollection = createFinanceCollectionHandler({ collection: financeCollection, publicOrigin: secureOrigin,
-        authorizeSensitive: confirmProtectedAction });
+      handleFinanceCollection = createFinanceCollectionHandler({ collection: financeCollection, publicOrigin: secureOrigin });
       handleOrderExpense = createOrderExpenseHandler({ store, publicOrigin: secureOrigin });
       const quoteService = createFinanceQuoteService({
         provider: financeProvider,
@@ -776,10 +772,6 @@ export async function startPreview(
     if (store && cardManagementRoutes.has(route)) {
       response.setHeader('Cache-Control', 'private, no-store');
       if (!actor || !canManage) return forbidden();
-      if (readable && auth.shouldVerify() && !auth.recentlyPasswordConfirmed(request) &&
-          route === '/api/local/subscription-card-status' &&
-          new URL(request.url, 'http://localhost').searchParams.get('includeDetails') === '1')
-        return requireSecurityConfirmation(response);
       return void handleCardManagement(request, response, route, actor);
     }
     if (store && claudeGoogleSubscriptionRoutes.has(route)) {
@@ -824,7 +816,7 @@ export async function startPreview(
       if (loginRequired && !actor) return forbidden();
       return void localBusiness.handleLocalBusiness(request, response, route, store, actor, {
         publicOrigin: secureOrigin,
-        authorizeSensitive: auth?.shouldVerify() ? request => auth.recentlyPasswordConfirmed(request) : undefined,
+        confirmFeeAndPriceSettings: confirmProtectedAction,
         isRegistrar: auth?.isRegistrar,
         requireRenewalHandoff: Boolean(handleRenewalHandoff && auth),
         readOrderCards: () => readPoolCards(orderRechargeClient, { includeNumbers: true }),

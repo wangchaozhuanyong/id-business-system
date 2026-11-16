@@ -590,22 +590,21 @@
     saveColumnPreference: (change) => request('column-preferences', { ...change, actorId: actor?.id }, 'PATCH', { keepalive: true }),
     orderCards: () => request('order-cards'),
     cardTypes: () => request('card-types'),
-    cardTypeAction: (command) => write(['card-types'], () => request('card-types', command, 'POST', { stepUp: true })),
+    cardTypeAction: (command) => write(['card-types'], () => request('card-types', command, 'POST')),
     subscriptionCardEstimates: () => request('subscription-card-estimates?includeNext=1'),
-    subscriptionCardStatus: ({ stepUp = false } = {}) =>
-      request('subscription-card-status?includeDetails=1', undefined, 'GET', { stepUp }),
+    subscriptionCardStatus: () => request('subscription-card-status?includeDetails=1'),
     renewalCardStatus: (orderId, version) => request('subscription-card-status?' + new URLSearchParams({
       orderId, ...(version !== undefined && { version })
     })),
     subscriptionCardAccounts: (command) =>
-      request('subscription-card-status', { action: 'accounts', ...command }, 'POST', { stepUp: true }),
+      request('subscription-card-status', { action: 'accounts', ...command }, 'POST'),
     subscriptionCardFreeze: (command) => write(['order-card-freeze', 'order-cards', 'tenant-cards'],
-      () => request('subscription-card-status', command, 'POST', { stepUp: true })),
+      () => request('subscription-card-status', command, 'POST')),
     subscriptionCardDetails: (command) => readQuery('subscription-card-details', command),
     revealSubscriptionCard: (orderId, version) =>
-      request('subscription-card-reveal', { orderId, version }, 'POST', { stepUp: true }),
+      request('subscription-card-reveal', { orderId, version }, 'POST'),
     copySubscriptionCard: (orderId, cardId, { context, version } = {}) =>
-      request('subscription-card-copy', { orderId, cardId, context, version }, 'POST', { stepUp: true }),
+      request('subscription-card-copy', { orderId, cardId, context, version }, 'POST'),
     claudeGoogleSubscriptions: (params) => readQuery('claude-google-subscriptions/list', params),
     subscriptions: (params) => readQuery('subscriptions/list', params),
     subscriptionOwnerLookup: (order) => request('subscriptions/lookup', { order }, 'POST'),
@@ -615,9 +614,9 @@
       ? readQuery('subscriptions/renewal-settings', {})
       : write(['subscription-management'], () => request('subscriptions/renewal-settings', command, 'POST', { writeTimeout: 15_000 })),
     renewalCard: command => command.action === 'bind'
-      ? write(['subscription-management'], () => request('subscription-renewal-card', command, 'POST', { stepUp: true }))
+      ? write(['subscription-management'], () => request('subscription-renewal-card', command, 'POST'))
       : command.action === 'prepare' ? readQuery('subscription-renewal-card', command)
-        : request('subscription-renewal-card', command, 'POST', { stepUp: command.action === 'copy' }),
+        : request('subscription-renewal-card', command, 'POST'),
     renewalHandoffs: (view, id) => request('renewals?' + new URLSearchParams({ view, ...(id && { id }) })),
     renewalSidebar: () => request('renewal-sidebar'),
     saveRenewalHandoff: (command, options) => write(['renewal-handoffs',
@@ -634,7 +633,7 @@
     employeeStatistics: (params) => request('employee-statistics?' + new URLSearchParams(params)),
     systemMonitoring: (params) => request('system-monitoring?' + new URLSearchParams(params)),
     systemMonitoringAction: (command) => write(['system-monitoring'],
-      () => request('system-monitoring', command, 'POST', { stepUp: true })),
+      () => request('system-monitoring', command, 'POST')),
     copyClaudeGoogleSubscription: (command) => request('claude-google-subscriptions/copy', command, 'POST'),
     claudeGoogleCopySettings: () => request('claude-google-subscriptions/copy-settings'),
     saveClaudeGoogleCopySettings: (command) =>
@@ -660,7 +659,7 @@
     rechargeCodeAction: (command) => write(['recharge-codes'], () => request('recharge-codes', command, 'POST')),
     rechargePartnerAction: (command) => write(
       command.action === 'issue' ? ['recharge-partners', 'recharge-codes'] : ['recharge-partners'],
-      () => request('recharge-partners', command, 'POST', { stepUp: true, writeTimeout: 35_000 })),
+      () => request('recharge-partners', command, 'POST', { writeTimeout: 35_000 })),
     orderCompletion: (params) => request('order-completion' + (params ? '?' + new URLSearchParams(params) : '')),
     saveOrderCompletion: (command) => write(command.action === 'record-apple-payment' ? ['commerce', 'appleBalance'] : ['commerce'],
       () => request('order-completion', command, 'POST')),
@@ -696,7 +695,7 @@
     financeCollection: (params) => request('finance/collection?' + new URLSearchParams(params)),
     financeCollectionAction: (command) => command.action === 'cleanup-preview'
       ? request('finance/collection', command, 'POST')
-      : write(['finance-rates'], () => request('finance/collection', command, 'POST', { stepUp: true })),
+      : write(['finance-rates'], () => request('finance/collection', command, 'POST')),
     changeAccountLifecycle: (data) => write(['inventory', 'commerce'], () => request('inventory/account-lifecycle', data)),
     save: (domain, version, data, options) => write([domain], () => saveDocument(domain, version, data, options)),
     saveBatch: (entries, options) => write(entries.map((entry) => entry.domain), () =>
@@ -708,13 +707,13 @@
       { readSignal: signal }),
     recoverAuditContact: (id, command, operationId, signal, scope = 'commerce') => write([scope, 'audit'],
       () => request('audit/' + encodeURIComponent(id) + '/recovery', command, 'POST', {
-        operationId, stepUp: true, writeTimeout: 15_000, readSignal: signal
+        operationId, writeTimeout: 15_000, readSignal: signal
       })),
     inventoryArchivePreview: (id, signal) => request('inventory/archive?' + new URLSearchParams({ id }), undefined, 'GET',
       { readSignal: signal }),
     archiveInventory: (command, operationId, signal) => write(['inventory', 'audit'],
       () => request('inventory/archive', command, 'POST',
-        { operationId, stepUp: true, writeTimeout: 15_000, readSignal: signal })),
+        { operationId, writeTimeout: 15_000, readSignal: signal })),
     relay(operation, data) {
       const send = () => request('apple-relay/' + operation, data, 'POST');
       if (operation === 'alias-intake-confirm') return write(['inventory', 'commerce', 'apple-relay'], send);
@@ -727,7 +726,7 @@
     customerQuery: (action, command, options) => readQuery('customer-query/' + action, command, options),
     mailboxDeliverySettings: () => request('tools/mailbox-delivery'),
     saveMailboxDeliverySettings: (data) => write(['tools/mailbox-delivery'], () => request('tools/mailbox-delivery', data)),
-    copyGoogleMailboxCredentials: (data) => request('tools/mailbox-delivery', data, 'POST', { stepUp: true }),
+    copyGoogleMailboxCredentials: (data) => request('tools/mailbox-delivery', data, 'POST'),
     resetMailboxDelivery: (scope, data, operationId) => scope === 'relay'
       ? write(['apple-relay'], () => request('apple-relay/code-delivery-reset', data, 'POST', { operationId }))
       : write(['tools/mailbox-pool'], () => request('tools/mailbox-pool', { action: 'rotate-delivery', scope, ...data }, 'PUT', { operationId })),
@@ -737,7 +736,7 @@
     saveManagedMailboxPool: (data) => write(['tools/mailbox-pool'], () => request('tools/mailbox-pool', data)),
     registrationMailboxChoices: (id) => request('tools/mailbox-pool/registration-access?' + new URLSearchParams({ id })),
     assignRegistrationMailbox: (data) => write(['tools/mailbox-pool', 'inventory'],
-      () => request('tools/mailbox-pool/registration-access', data, 'POST', { stepUp: true })),
+      () => request('tools/mailbox-pool/registration-access', data, 'POST')),
     async queryManagedMailbox(queryCode, limit) {
       const legacy = /^[ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789]{20}$/.test(queryCode);
       if (legacy || queryCode.startsWith('MBX-')) {
@@ -758,7 +757,7 @@
     savedTotp: () => request('saved-totp'),
     saveTotp: (data) => write(['saved-totp'], () => request('saved-totp', data)),
     savedTotpCodePage: (ids, version) => readQuery('saved-totp/code', { ids, version }),
-    savedTotpSecret: (id, version) => request('saved-totp/secret', { id, version }, 'POST', { stepUp: true }),
+    savedTotpSecret: (id, version) => request('saved-totp/secret', { id, version }, 'POST'),
     websiteVisits: (filters) => readQuery('tools/website-visits/search', filters),
     websiteVisitIp: (id) => request('tools/website-visits/reveal', { id }, 'POST'),
     websiteAnalytics: (days, site) => request('tools/website-analytics?' + new URLSearchParams(site ? { days, site } : { days })),

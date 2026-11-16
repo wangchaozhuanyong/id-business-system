@@ -42,7 +42,7 @@ function viewQuery(request, origin) {
   return { tab, status, page: Number(page), pageSize: Number(pageSize), q: q.trim(), days: Number(days), priority };
 }
 
-export function createMonitoringHandler({ monitor, publicOrigin, confirmSettings }) {
+export function createMonitoringHandler({ monitor, publicOrigin }) {
   return async (request, response, actor) => {
     const origin = publicOrigin || 'http://' + request.headers.host;
     if (!actor?.id) return json(response, 401, { error: '请先登录' });
@@ -66,9 +66,6 @@ export function createMonitoringHandler({ monitor, publicOrigin, confirmSettings
       if (known(body, ['action', 'id']) && body.action === 'acknowledge' && typeof body.id === 'string' && uuid.test(body.id))
         return json(response, 200, monitor.acknowledge(body.id, actor));
       if (actor.role !== 'super') return json(response, 403, { error: '仅超级管理员可以管理通知' });
-      if (['settings', 'verified', 'legacy-import', 'legacy-takeover'].includes(body?.action) &&
-          confirmSettings && !confirmSettings(request))
-        return json(response, 403, { error: '请用当前登录密码确认这项操作', code: 'SECURITY_CONFIRMATION_REQUIRED' });
       if (known(body, ['action', 'code', 'reference']) && body.action === 'verified' &&
           ['payment_duplicate', 'security_confirmed'].includes(body.code) &&
           typeof body.reference === 'string' && uuid.test(body.reference)) {

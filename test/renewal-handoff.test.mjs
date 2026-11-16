@@ -49,13 +49,12 @@ function fixture(t, orders = [initialOrder], setup, database = ':memory:') {
 
 function sender(store) {
   const handler = createRenewalHandoff({ store, publicOrigin: origin, clock: () => Date.UTC(2026, 10, 13, 5),
-    getAuth: () => ({ recentlyPasswordConfirmed: request => request.readVerified, orderOwners: () => Object.values(actors),
+    getAuth: () => ({ orderOwners: () => Object.values(actors),
       teamFor: () => [actors.employee] }), client: { get: async () => ({ cards: [] }) } });
-  return async function send(actor, value, { view = 'staff', itemId, operationId = randomUUID(), verified = false, source = origin } = {}) {
+  return async function send(actor, value, { view = 'staff', itemId, operationId = randomUUID(), source = origin } = {}) {
     const request = Readable.from(value ? [Buffer.from(JSON.stringify(value))] : []);
     request.method = value ? 'POST' : 'GET';
     request.url = renewalHandoffPath + (value ? '' : '?' + new URLSearchParams({ view, ...(itemId && { id: itemId }) }));
-    request.readVerified = verified;
     request.headers = { origin: source, 'content-type': 'application/json', 'x-id-operation': operationId };
     let status, data;
     await handler(request, { writeHead(code) { status = code; }, end(value) { data = JSON.parse(value); } }, actors[actor]);
@@ -123,9 +122,8 @@ test('confirmed staff handoff, exclusive finance claim, verified card replacemen
   assert.equal((await send('employee', { action: 'finish', id: row.id, version: 2, ...finishFields })).status, 409);
   const payment = { action: 'paid', id: row.id, version: 2, confirmed: true, amount: '22.25', currency: 'USD',
     cardMode: 'manual', cardNumber: replacement, cardSerial: 'fixture-replacement', reference: 'fixture-receipt' };
-  assert.equal((await send('finance', payment)).status, 403);
-  assert.equal((await send('financeOther', payment, { verified: true })).status, 409);
-  assert.equal((await send('finance', payment, { verified: true })).status, 200);
+  assert.equal((await send('financeOther', payment)).status, 409);
+  assert.equal((await send('finance', payment)).status, 200);
   assert.equal(store.load('commerce').data.orders.length, 1);
   const teamRow = (await send('supervisor', null)).data.items[0];
   assert.equal(teamRow.last4, undefined);
@@ -139,7 +137,7 @@ test('confirmed staff handoff, exclusive finance claim, verified card replacemen
   assert(!JSON.stringify(staff).includes(firstCard));
   const finish = { action: 'finish', id: row.id, version: 3, ...finishFields };
   assert.equal((await send('employee', { ...finish, amount: '0.01', cardNumber: firstCard })).status, 400);
-  assert.equal((await send('finance', finish, { verified: true })).status, 403);
+  assert.equal((await send('finance', finish)).status, 403);
   assert.equal((await send('supervisor', finish)).status, 403);
   const operationId = randomUUID();
   const completed = await send('employee', finish, { operationId });
@@ -171,11 +169,10 @@ test('财务续费暂不登记卡号时可提交实付，明确沿用死卡仍�
   const [{ id }] = (await send('finance', null, { view: 'finance' })).data.items;
   assert.equal((await send('finance', { action: 'claim', id, version: 1 })).status, 200);
   const payment = { action: 'paid', id, version: 2, confirmed: true, amount: '22.25', currency: 'USD' };
-  const invalid = await send('finance', { ...payment, cardMode: 'original' }, { verified: true });
+  const invalid = await send('finance', { ...payment, cardMode: 'original' });
   assert.equal(invalid.status, 409);
   assert.match(invalid.data.error, /这张卡的状态需要核对/);
-  assert.equal((await send('finance', { ...payment, cardMode: 'none' })).status, 403);
-  const paid = await send('finance', { ...payment, cardMode: 'none' }, { verified: true });
+  const paid = await send('finance', { ...payment, cardMode: 'none' });
   assert.equal(paid.status, 200, paid.data.error);
   const finished = await send('employee', { action: 'finish', id, version: 3, ...finishFields });
   assert.equal(finished.status, 200, finished.data.error);
@@ -194,9 +191,8 @@ test('verified handoff transfers unfinished work with its payment review and his
   const [row] = (await send('finance', null, { view: 'finance' })).data.items;
   await send('finance', { action: 'claim', id: row.id, version: 1 });
   const transfer = { action: 'transfer', id: row.id, version: 2, confirmed: true, review: true, reason: '交给下一班核对' };
-  assert.equal((await send('financeOther', transfer, { verified: true })).status, 403);
-  assert.equal((await send('finance', transfer)).status, 403);
-  assert.equal((await send('finance', transfer, { verified: true })).status, 200);
+  assert.equal((await send('financeOther', transfer)).status, 403);
+  assert.equal((await send('finance', transfer)).status, 200);
   const [pending] = (await send('financeOther', null, { view: 'finance' })).data.items;
   assert.equal(pending.paymentReview, true);
   assert.equal(pending.canTake, true);
@@ -206,17 +202,16 @@ test('verified handoff transfers unfinished work with its payment review and his
   assert.equal(stored.processingBy.id, actors.financeOther.id);
   assert.equal(stored.funding, undefined);
   assert.equal((await send('financeOther', { action: 'return', id: row.id, version: 4, confirmed: true,
-    reason: '待核对时退回' })).status, 403);
+    reason: '待核对时退回' })).status, 200);
 });
 
 test('verified finance can reconcile corrected dates without changing the paid receipt or duplicating the order', async t => {
   const { store, send, submit } = fixture(t);
-  const verify = { verified: true };
   assert.equal((await send('employee', submit)).status, 200);
   const [{ id }] = (await send('finance', null, { view: 'finance' })).data.items;
   assert.equal((await send('finance', { action: 'claim', id, version: 1 })).status, 200);
   assert.equal((await send('finance', { action: 'paid', id, version: 2, confirmed: true, amount: '22.25',
-    currency: 'USD', cardMode: 'none', reference: 'synthetic-payment' }, verify)).status, 200);
+    currency: 'USD', cardMode: 'none', reference: 'synthetic-payment' })).status, 200);
   const paidLog = store.audit().find(log => log.action === 'renewal_paid');
   const auditUrl = 'audit/' + paidLog.id + '/recovery';
   const audit = (options = {}) => localBusinessRequest(store, auditUrl, { actor: actors.super, publicOrigin: origin, ...options });
@@ -234,18 +229,17 @@ test('verified finance can reconcile corrected dates without changing the paid r
   change({ expiry: '2026-11-13T11:00', email: 'other@example.test' }, 2);
   let review = { action: 'review-source', id, version: 3, sourceVersion: 2, confirmed: true, reason: '原单日期录入更正' };
   assert.equal((await send('finance', null, { view: 'finance' })).data.items[0].sourceReview, undefined);
-  assert.equal((await send('finance', review, verify)).status, 409);
+  assert.equal((await send('finance', review)).status, 409);
   change({ email: initialOrder.email }, 3);
   const row = (await send('finance', null, { view: 'finance' })).data.items[0];
   assert.deepEqual(row.sourceReview, { version: 3, expiry: '2026-11-13T11:00', originalLast4: '4242' });
   assert.equal((await send('employee', null)).data.items[0].canFinish, false);
-  assert.equal((await send('finance', review, verify)).status, 409);
+  assert.equal((await send('finance', review)).status, 409);
   review = { ...review, sourceVersion: 3 };
-  assert.equal((await send('financeOther', review, verify)).status, 403);
-  assert.equal((await send('finance', review)).status, 403);
+  assert.equal((await send('financeOther', review)).status, 403);
   const operationId = randomUUID();
-  assert.equal((await send('finance', review, { ...verify, operationId })).status, 200);
-  assert.equal((await send('finance', review, { ...verify, operationId })).status, 200);
+  assert.equal((await send('finance', review, { operationId })).status, 200);
+  assert.equal((await send('finance', review, { operationId })).status, 200);
   const current = store.featureDocument(renewalHandoffDomain).data.items[0];
   assert.deepEqual(current.funding, funding);
   assert.equal(current.sourceReviews.length, 1);
@@ -310,7 +304,7 @@ async function databaseFixture(t) {
 
 test('paid Apple handoff requires verified finance source review and finishes without another debit', async t => {
   const { store, send, id, payment } = await claimedApple(t);
-  assert.equal((await send('finance', payment, { verified: true })).status, 200);
+  assert.equal((await send('finance', payment)).status, 200);
   const paidLedger = store.load('appleBalance').data;
   const funding = store.featureDocument(renewalHandoffDomain).data.items[0].funding;
   const correction = expiry => {
@@ -325,16 +319,15 @@ test('paid Apple handoff requires verified finance source review and finishes wi
   let row = (await send('finance', null, { view: 'finance' })).data.items[0];
   const reviewed = { action: 'review-source', id, version: 3, sourceVersion: row.sourceReview.version,
     confirmed: true, reason: '已核对原到期时间更正，保留本次实付依据' };
-  assert.equal((await send('employee', reviewed, { verified: true })).status, 403);
-  assert.equal((await send('finance', reviewed)).status, 403);
+  assert.equal((await send('employee', reviewed)).status, 403);
   correction('2026-11-14T11:00');
-  assert.equal((await send('finance', reviewed, { verified: true })).status, 409);
+  assert.equal((await send('finance', reviewed)).status, 409);
   assert.deepEqual(store.load('appleBalance').data, paidLedger);
   row = (await send('finance', null, { view: 'finance' })).data.items[0];
   reviewed.sourceVersion = row.sourceReview.version;
   const reviewOperation = randomUUID();
-  assert.equal((await send('finance', reviewed, { verified: true, operationId: reviewOperation })).status, 200);
-  assert.equal((await send('finance', reviewed, { verified: true, operationId: reviewOperation })).status, 200);
+  assert.equal((await send('finance', reviewed, { operationId: reviewOperation })).status, 200);
+  assert.equal((await send('finance', reviewed, { operationId: reviewOperation })).status, 200);
   assert.deepEqual(store.load('appleBalance').data, paidLedger);
   assert.deepEqual(store.featureDocument(renewalHandoffDomain).data.items[0].funding, funding);
   const ready = { ...finish, version: 4 };
@@ -357,14 +350,14 @@ test('a lost paid response remains idempotent after reopening the SQLite store',
   const database = await databaseFixture(t);
   const { store, send, close, id, payment } = await claimedApple(t, database);
   const operationId = randomUUID();
-  assert.equal((await send('finance', payment, { verified: true, operationId })).status, 200);
+  assert.equal((await send('finance', payment, { operationId })).status, 200);
   const ledger = store.load('appleBalance');
   close();
   const recovered = createLocalBusinessStore(database); t.after(() => recovered.close());
   const again = sender(recovered);
-  assert.equal((await again('finance', payment, { verified: true, operationId })).status, 200);
+  assert.equal((await again('finance', payment, { operationId })).status, 200);
   assert.deepEqual(recovered.load('appleBalance'), ledger);
-  assert.equal((await again('finance', payment, { verified: true })).status, 409);
+  assert.equal((await again('finance', payment)).status, 409);
   const result = await again('employee', { action: 'finish', id, version: 3, ...finishFields });
   assert.equal(result.status, 200, result.data.error);
   assert.equal(recovered.load('appleBalance').data.wallets[0].balance, '3.7500');
@@ -378,18 +371,18 @@ test('failure after the debit write rolls the ledger and paid receipt back toget
   const fault = new DatabaseSync(database); t.after(() => fault.close());
   fault.exec("CREATE TRIGGER synthetic_renewal_failure BEFORE UPDATE ON business_document WHEN NEW.domain='renewal-handoffs' BEGIN SELECT RAISE(ABORT, 'synthetic renewal persistence failure'); END");
   const operationId = randomUUID();
-  assert.equal((await send('finance', payment, { verified: true, operationId })).status, 503);
+  assert.equal((await send('finance', payment, { operationId })).status, 503);
   assert.deepEqual(store.load('appleBalance'), ledger);
   assert.deepEqual(store.featureDocument(renewalHandoffDomain), queue);
   assert.deepEqual(store.audit(), audit);
   fault.exec('DROP TRIGGER synthetic_renewal_failure');
-  assert.equal((await send('finance', payment, { verified: true, operationId })).status, 200);
+  assert.equal((await send('finance', payment, { operationId })).status, 200);
   assert.equal(store.load('appleBalance').data.wallets[0].balance, '3.7500');
 });
 
 test('competing payment registrations produce only one debit and one paid receipt', async t => {
   const { store, send, payment } = await claimedApple(t);
-  const responses = await Promise.all([send('finance', payment, { verified: true }), send('finance', payment, { verified: true })]);
+  const responses = await Promise.all([send('finance', payment), send('finance', payment)]);
   assert.deepEqual(responses.map(item => item.status).sort(), [200, 409]);
   assert.equal(store.load('appleBalance').data.wallets[0].balance, '3.7500');
   assert.equal(store.load('appleBalance').data.movements.filter(row => row.orderId === 'order-' + payment.id).length, 1);
@@ -409,7 +402,7 @@ test('paid registration uses a concurrent wallet topup and retains its immutable
     other.saveBatch([{ domain: 'appleBalance', ...ledger, action: 'apple_topup' }], { actor: actors.finance });
     return originalSave(...args);
   };
-  const paid = await send('finance', payment, { verified: true });
+  const paid = await send('finance', payment);
   assert.equal(paid.status, 200, paid.data.error);
   const ledger = store.load('appleBalance');
   assert.equal(ledger.data.wallets[0].balance, '13.7500');
@@ -452,10 +445,10 @@ test('finance posts the Apple debit when paid and completing the order does not 
   const [{ id }] = (await send('finance', null, { view: 'finance' })).data.items;
   assert.equal((await send('finance', { action: 'claim', id, version: 1 })).status, 200);
   const payment = { action: 'paid', id, version: 2, confirmed: true, amount: '25.01', currency: 'USD' };
-  const shortage = await send('finance', payment, { verified: true });
+  const shortage = await send('finance', payment);
   assert.equal(shortage.status, 409);
   assert.match(shortage.data.error, /余额不足/);
-  const paid = await send('finance', { ...payment, amount: '21.25' }, { verified: true });
+  const paid = await send('finance', { ...payment, amount: '21.25' });
   assert.equal(paid.status, 200, paid.data.error);
   assert.equal(store.load('appleBalance').data.wallets[0].balance, '3.7500');
   const pending = store.featureDocument(renewalHandoffDomain).data;
@@ -495,7 +488,7 @@ test('subscription reassignment controls staff access and final order ownership'
   const [{ id }] = (await send('finance', null, { view: 'finance' })).data.items;
   assert.equal((await send('finance', { action: 'claim', id, version: 1 })).status, 200);
   assert.equal((await send('finance', { action: 'paid', id, version: 2, confirmed: true,
-    amount: '20', currency: 'USD', cardMode: 'none' }, { verified: true })).status, 200);
+    amount: '20', currency: 'USD', cardMode: 'none' })).status, 200);
   const completed = await send('other', { action: 'finish', id, version: 3, ...finishFields });
   assert.equal(completed.status, 200, completed.data.error);
   assert.equal(store.load('commerce').data.orders[0].ownerId, actors.other.id);
@@ -516,17 +509,16 @@ test('finance sees only unused authorized tenant cards and cannot register the a
   assert.equal((await send('employee', submit)).status, 200);
   const [{ id }] = (await send('finance', null, { view: 'finance' })).data.items;
   assert.equal((await send('finance', { action: 'claim', id, version: 1 })).status, 200);
-  const cards = { view: 'cards', itemId: id, verified: false };
+  const cards = { view: 'cards', itemId: id };
   assert.equal((await send('financeOther', null, cards)).status, 404);
   const available = await send('finance', null, cards);
   assert.equal(available.status, 200);
   assert.deepEqual(available.data.items,
     [{ id: 'tenant:unused', last4: '1111', label: '租户卡' }]);
   const payment = { action: 'paid', id, version: 2, confirmed: true, amount: '20', currency: 'USD' };
-  assert.equal((await send('finance', { ...payment, cardMode: 'pool', cardId: 'tenant:unused' })).status, 403);
-  const used = await send('finance', { ...payment, cardMode: 'original' }, { verified: true });
+  const used = await send('finance', { ...payment, cardMode: 'original' });
   assert.equal(used.status, 409);
-  const paid = await send('finance', { ...payment, cardMode: 'pool', cardId: 'tenant:unused' }, { verified: true });
+  const paid = await send('finance', { ...payment, cardMode: 'pool', cardId: 'tenant:unused' });
   assert.equal(paid.status, 200, paid.data.error);
   const completed = await send('employee', { action: 'finish', id, version: 3, ...finishFields });
   assert.equal(completed.status, 200, completed.data.error);
