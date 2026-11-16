@@ -339,7 +339,7 @@ index e186977..3f6ff78 100644
  }
  
 diff --git a/stripe-payment.js b/stripe-payment.js
-index cd7ff9d..47a4bbf 100644
+index cd7ff9d..75b6169 100644
 --- a/stripe-payment.js
 +++ b/stripe-payment.js
 @@ -295,6 +295,23 @@ function isOpenAiCustomCheckout(page) {
@@ -388,7 +388,7 @@ index cd7ff9d..47a4bbf 100644
          () => tryClick(page.getByRole('button', { name: /^Subscribe$/i }), 'role=Subscribe'),
          () => tryClick(page.getByRole('button', { name: /^订阅$/ }), 'role=订阅'),
          () => tryClick(page.getByRole('button', { name: /subscribe|订阅|pay/i }), 'role=subscribe'),
-@@ -2762,8 +2787,92 @@ async function selectCountry(page, selectors, countryCode) {
+@@ -2762,8 +2787,116 @@ async function selectCountry(page, selectors, countryCode) {
  
  // ==================== Exports ====================
  
@@ -418,6 +418,30 @@ index cd7ff9d..47a4bbf 100644
 +
 +async function fillCheckoutForDebug(page, { cardInfo, holderName } = {}) {
 +    const result = { card: false, billing: false, error: '', addressSource: '' };
++    const dumpFrames = async (label) => {
++        let index = 0;
++        for (const frame of page.frames()) {
++            try {
++                const items = await frame.evaluate(() => {
++                    const nodes = Array.from(document.querySelectorAll('input, select, textarea'));
++                    return nodes.slice(0, 60).map((node) => ({
++                        tag: node.tagName.toLowerCase(),
++                        type: node.getAttribute('type'),
++                        name: node.getAttribute('name'),
++                        ph: node.getAttribute('placeholder'),
++                        aria: node.getAttribute('aria-label'),
++                        auto: node.getAttribute('autocomplete'),
++                        vis: Boolean(node.offsetWidth || node.offsetHeight)
++                    })).filter((item) => item.vis || item.name || item.ph || item.aria);
++                });
++                console.log('  [调试][DOM] ' + label + ' frame' + index + ' url=' + String(frame.url()).slice(0, 80) + ' fields=' + JSON.stringify(items).slice(0, 900));
++            } catch (_) { /* ignore */ }
++            index += 1;
++        }
++    };
++    if (process.env.DEBUG_DUMP_DOM === '1') {
++        await dumpFrames('before');
++    }
 +    if (!cardInfo || !cardInfo.number) {
 +        return { ...result, error: 'missing_card' };
 +    }
