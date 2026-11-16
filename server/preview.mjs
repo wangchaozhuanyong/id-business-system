@@ -401,6 +401,7 @@ export async function startPreview(
         send: publicUrl ? undefined : async () => ({ status: 'failed', reason: 'configuration' }) });
       if (storefrontAdmissionDirectory) partnerRecharge = createRechargePartnerHandlers({
         store, transport: orderRechargeClient, origin: secureOrigin,
+        authorizeStorefrontRelease: confirmProtectedAction,
         readSource: request => verifiedAddress(request, loginSecurity),
         gateway: rechargePartnerEnabled ? rechargePartnerGateway(storefrontAdmissionDirectory) : undefined
       });
