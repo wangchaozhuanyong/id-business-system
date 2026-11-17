@@ -126,15 +126,13 @@ def require_reviewed_receipt(db, receipt):
 def worker_binding():
     require(UNIT in run(["systemctl", "show", "-p", "PartOf", "--value", WORKER_UNIT]).decode().split(),
             "gateway_worker_dependency_changed")
-    state = run(["systemctl", "show", "-p", "ExecStart", "--value", WORKER_UNIT])
-    # ExecStart also contains PID, stop time and exit status. Those necessarily
-    # change when the queue is drained; compare only the configured command.
-    fields = []
-    for name in (b"path", b"argv[]", b"ignore_errors"):
-        matches = re.findall(rb"(?:^|[ {;])" + re.escape(name) + rb"=([^;]+)", state)
-        require(len(matches) == 1 and matches[0].strip(), "gateway_worker_command_ambiguous")
-        fields.append(name + b"=" + matches[0].strip() + b" ;")
-    return b" ".join(fields), digest(WORKER_LAUNCHER)
+    state = run(["systemctl", "show", "-p", "ExecStart", "--value", WORKER_UNIT]).strip()
+    command = re.fullmatch(
+        rb"\{ (path=[^;{}\r\n]+ ; argv\[\]=[^;{}\r\n]+ ; ignore_errors=(?:yes|no) ;)"
+        rb" start_time=\[[^\]\r\n]*\] ; stop_time=\[[^\]\r\n]*\] ; pid=\d+ ;"
+        rb" code=[^;{}\r\n]+ ; status=[^;{}\r\n]+ \}", state)
+    require(command is not None, "gateway_worker_command_ambiguous")
+    return command[1], digest(WORKER_LAUNCHER)
 
 
 def worker_runtime(container):

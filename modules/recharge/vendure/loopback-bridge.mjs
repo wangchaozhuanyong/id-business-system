@@ -241,6 +241,55 @@ export function createLoopbackVendureRechargeBridge({
     return projectCustomerProgress({ ...task, status, updatedAt: Math.max(at, task.updatedAt + 1) }, task, at);
   }
 
+  function rejectedBeforeExecution(task) {
+    return task?.status === 'failed' && task.result?.status === 'failed' &&
+      !task.upstreamJobId && !task.result.upstreamJobId &&
+      ['route', 'cards'].some(kind => secureEqual(
+        fingerprint('evidence', 'codexdaichong:' + kind + ':' + task.id), task.result.evidenceRef
+      ));
+  }
+
+  function reviewableFailure(task) {
+    return rejectedBeforeExecution(task) || Boolean(
+      ['failed', 'awaiting_review'].includes(task.status) && upstreamJobPattern.test(task.upstreamJobId ?? '')
+    );
+  }
+
+  async function handleStorefrontReview(action, body, res) {
+    const code = storefrontRechargeCode(body.code);
+    if (!code) return send(res, 400, {});
+    const codeRef = fingerprint('code', code);
+    const latest = () => [...tasks.values()].findLast(task => task.codeRef === codeRef);
+    const task = latest();
+    if (!task || task.partnerId || legacy.byCode.has(codeRef)) return send(res, 404, {});
+    const view = row => ({
+      ...taskView(row),
+      upstreamJobId: row.upstreamJobId,
+      reviewable: reviewableFailure(row),
+      released: Boolean(row.retryReview)
+    });
+    if (action === 'review-lookup') return send(res, 200, view(task));
+
+    if (task.id !== body.id || !reviewableFailure(task) ||
+        typeof body.actorId !== 'string' || !body.actorId || body.actorId.length > 128 ||
+        !isIP(body.clientIp ?? '')) return send(res, 409, {});
+    if (task.retryReview?.previousVersion === body.updatedAt) return send(res, 200, view(task));
+    if (task.retryReview || taskView(task).updatedAt !== body.updatedAt) return send(res, 409, {});
+
+    const admitted = await lookupAdmission(code, body.clientIp);
+    if (closed || needsRecovery) return send(res, 503, {});
+    if (latest() !== task || issuing.has(codeRef) ||
+        admitted?.status !== 'available' || admitted.plan !== task.plan) return send(res, 409, {});
+
+    const at = now();
+    const reviewed = {
+      ...transition(task, 'failed', at),
+      retryReview: { at, by: body.actorId, previousStatus: task.status, previousVersion: body.updatedAt }
+    };
+    commit(new Map(tasks).set(task.id, reviewed));
+    return send(res, 200, view(reviewed));
+  }
+
   function commit(nextTasks, nextNonces = nonces) {
     if (store) {
       try {
@@ -328,12 +377,10 @@ export function createLoopbackVendureRechargeBridge({
     const differentOwner = () => send(res, 400, { reason: 'storefront_code_not_admitted' });
     const recover = task => task && (useAdmission || task.status !== 'failed' || legacy.byCode.has(codeRef));
     // A reviewed failure is tied to this exact receipt, not every failure of the code.
-    const approvedFailure = task => useAdmission && isReviewed(task?.id) &&
-      task.status === 'failed' && task.result?.status === 'failed' &&
-      !task.upstreamJobId && !task.result.upstreamJobId &&
-      ['route', 'cards'].some(type => secureEqual(
-        fingerprint('evidence', 'codexdaichong:' + type + ':' + task.id), task.result.evidenceRef
-      ));
+    const approvedFailure = task => useAdmission && (
+      (task?.status === 'failed' && Boolean(task.retryReview)) ||
+      (isReviewed(task?.id) && rejectedBeforeExecution(task))
+    );
     let prior = lastTask();
     if (!sameOwner(prior)) return differentOwner();
     const checkedTaskId = prior?.id;
@@ -585,7 +632,7 @@ export function createLoopbackVendureRechargeBridge({
       });
     },
     async handlePartner(req, res) {
-      const action = /^\/(config|query|submit|task|issue)$/.exec(req.url)?.[1];
+      const action = /^\/(config|query|submit|task|issue|review-lookup|review-release)$/.exec(req.url)?.[1];
       if (!lookupAdmission || !action || req.method !== 'POST' || req.headers.origin || req.headers.cookie)
         return send(res, 404, {});
       if (closed || needsRecovery) return send(res, 503, {});
@@ -593,6 +640,8 @@ export function createLoopbackVendureRechargeBridge({
         const raw = await readBody(req, action === 'submit' ? 1_600_000 : action === 'issue' ? 131_072 : 1024);
         if (!raw) return send(res, 413, {});
         const body = JSON.parse(raw);
+        if (action === 'review-lookup' || action === 'review-release')
+          return await handleStorefrontReview(action, body, res);
         const { partnerId, clientIp, requestId, code, session } = body;
         if (typeof partnerId !== 'string' || !rechargePartnerIdPattern.test(partnerId) || !isIP(clientIp ?? '') ||
             (['submit', 'query'].includes(action) && !storefrontRechargeCode(code)) ||
