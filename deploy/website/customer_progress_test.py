@@ -10,6 +10,30 @@ import vendure_admission
 
 
 class CustomerProgressReleaseTests(unittest.TestCase):
+    def test_worker_binding_ignores_process_lifecycle_but_keeps_command_and_launcher_integrity(self):
+        command = b"{ path=/bin/bash ; argv[]=/bin/bash /known/run-vendure-worker ; ignore_errors=no ; "
+        running = command + b"start_time=[first] ; stop_time=[n/a] ; pid=123 ; code=(null) ; status=0/0 }"
+        stopped = command + b"start_time=[first] ; stop_time=[later] ; pid=123 ; code=killed ; status=15/TERM }"
+        restarted = command + b"start_time=[new] ; stop_time=[n/a] ; pid=456 ; code=(null) ; status=0/0 }"
+        with patch.object(vendure_admission, "digest", return_value="launcher-hash") as digest, \
+                patch.object(vendure_admission, "run") as run:
+            def binding(state):
+                run.side_effect = [vendure_admission.UNIT.encode(), state]
+                return vendure_admission.worker_binding()
+
+            expected = binding(running)
+            self.assertEqual(binding(stopped), expected)
+            self.assertEqual(binding(restarted), expected)
+            for field, replacement in ((b"path=/bin/bash", b"path=/bin/sh"),
+                                       (b"/known/run-vendure-worker", b"/other/run-vendure-worker"),
+                                       (b"ignore_errors=no", b"ignore_errors=yes")):
+                self.assertNotEqual(binding(stopped.replace(field, replacement)), expected)
+            digest.return_value = "different-launcher-hash"
+            self.assertNotEqual(binding(stopped), expected)
+            for invalid in (b"", stopped + stopped, stopped.replace(b"argv[]=", b"other=")):
+                with self.assertRaisesRegex(remote.ReleaseError, "gateway_worker_command_ambiguous"):
+                    binding(invalid)
+
     def test_only_the_active_project_worker_launcher_can_be_rewritten(self):
         with TemporaryDirectory(dir=Path(__file__).resolve().parents[2] / ".runtime") as directory:
             root = Path(directory)
