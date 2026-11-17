@@ -16,7 +16,7 @@ test('scheduled backup commits only a verified versioned S3 copy and safely retr
   t.after(() => rmSync(fixture, { recursive: true, force: true }));
   const result = spawnSync('python3', ['-c', String.raw`
 from pathlib import Path
-import base64, importlib.util, json, os, subprocess, sys
+import base64, fcntl, importlib.util, json, os, subprocess, sys
 from unittest.mock import patch
 
 sys.path.insert(0, sys.argv[1])
@@ -143,9 +143,36 @@ assert operations == saved_operations
 # A failed auxiliary capture must still produce and publish the MySQL batch.
 isolation = pending / 'isolated-capture'
 (isolation / 'formal').mkdir(parents=True)
-(isolation / 'formal/.application-release.lock').write_text('fixture-lock')
+release_lock = isolation / 'formal/.application-release.lock'
+release_lock.write_text('fixture-lock')
 new_pending = isolation / 'spool/pending'
 new_pending.parent.mkdir()
+with patch.object(backup, 'ROOT', isolation), release_lock.open('r') as lock:
+    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        backup.capture(target, new_pending)
+    except backup.ReleaseDeferred:
+        pass
+    else:
+        raise AssertionError('capture should defer while the release lock is held')
+assert not new_pending.exists()
+
+class FixtureRecoveryError(RuntimeError):
+    pass
+
+def failed_recovery(*args):
+    raise FixtureRecoveryError('recovery_service_definition_unavailable')
+
+with patch.object(backup.subprocess, 'check_output', return_value='true ' + 'a'*40 + ' sha256:' + 'b'*64), \
+        patch.object(backup.runpy, 'run_path', return_value={'capture':failed_recovery, 'RecoveryError':FixtureRecoveryError}):
+    try:
+        backup.capture_recovery_state(target, 'a'*40, new_pending)
+    except backup.RecoveryCaptureError as error:
+        assert error.stage == 'services'
+        assert 'recovery_service_definition_unavailable' not in str(error)
+    else:
+        raise AssertionError('capture stage was not mapped')
+
 def fake_snapshot(revision, stage, backup_key):
     assert revision == 'a'*40 and backup_key == key
     stage.mkdir()
@@ -156,7 +183,7 @@ def fake_snapshot(revision, stage, backup_key):
 with patch.object(backup, 'ROOT', isolation), \
         patch.object(backup.subprocess, 'check_output', return_value='true ' + 'a'*40), \
         patch.object(backup, 'wrap_backup_key', return_value=(key, wrapped_key)), \
-        patch.object(backup, 'capture_recovery_state', side_effect=backup.BackupError('fixture failure')), \
+        patch.object(backup, 'capture_recovery_state', side_effect=backup.RecoveryCaptureError('services')), \
         patch.object(backup, 'take_snapshot', side_effect=fake_snapshot), \
         patch.object(backup, 'utc_now', return_value=backup.datetime(2026,11,11,tzinfo=backup.timezone.utc)):
     backup.capture(target, new_pending)
@@ -167,7 +194,17 @@ assert not (new_pending / backup.RECOVERY_FILENAME).exists()
 stored.clear(); operations.clear()
 fallback_receipt = backup.publish(target, new_pending)
 assert fallback_receipt['recoveryStateStatus'] == 'capture_failed'
+assert fallback_receipt['recoveryStateFailureStage'] == 'services'
 assert fallback_receipt['blobVersionId'] and fallback_receipt['manifestVersionId']
+
+receipt_file = new_pending.parent / 'last-upload.json'
+backup.save_receipt(receipt_file, {'recoveryStateStatus':'verified','capturedAt':'20261110T233000Z'})
+backup.save_upload_receipt(receipt_file, fallback_receipt)
+assert backup.private_json(receipt_file)['lastCompleteCapturedAt'] == '20261110T233000Z'
+backup.save_upload_receipt(receipt_file, {**fallback_receipt, 'capturedAt':'20261111T003000Z'})
+assert backup.private_json(receipt_file)['lastCompleteCapturedAt'] == '20261110T233000Z'
+backup.save_upload_receipt(receipt_file, {'recoveryStateStatus':'verified','capturedAt':'20261111T010000Z'})
+assert backup.private_json(receipt_file)['lastCompleteCapturedAt'] == '20261111T010000Z'
 
 backup.aws_json = lambda *args: {'Account':target['account'], 'Arn':f"arn:aws:iam::{target['account']}:root"}
 try:

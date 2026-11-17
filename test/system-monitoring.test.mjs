@@ -513,7 +513,8 @@ test('two backup checks use the verified capture time, report failure and recove
     await sources.tick();
     assert.equal(read('backup').status, 'ok');
     assert.equal(read('recharge_backup').status, 'bad');
-    assert.match(read('recharge_backup').detail, /配套登录配置和同步状态恢复包尚未验证/);
+    assert.match(read('recharge_backup').detail, recoveryStatus === 'missing'
+      ? /配套恢复包尚未验证/ : /配套恢复包采集失败/);
   }
   for (let n = 0; n < 2; n++) {
     tick();
@@ -527,6 +528,69 @@ test('two backup checks use the verified capture time, report failure and recove
   assert.match(read('backup').detail, /采集回执缺失或已超时/);
   assert.equal(read('recharge_backup').status, 'bad');
   assert.equal(sent.length, 0);
+});
+
+test('release deferral observes through the freshness boundary and explains a partial recovery in both notices', async t => {
+  const f = fixture(t);
+  await enable(f, { operations: ops });
+  const { monitor, sent, clock, tick } = f;
+  let capturedAt = clock() - 31 * minute;
+  let deferred = true, timerActive = true, recoveryStatus = 'verified', stage, completeAt = capturedAt;
+  const sources = createMonitoringSources({ monitor, databasePath: '/fixture/state/local-business.sqlite', clock,
+    backupReceiptDirectory: '/fixture/backup-monitoring', readDisk: async () => ({ blocks: 100, bavail: 60 }),
+    readBackupReceipt: async () => ({
+      at: clock(), drive: { at: clock(), verifiedAt: clock(), failures: 0, integrityFailure: false },
+      mysqlTimerActive: timerActive, mysqlAttemptFailed: deferred, mysqlAttemptDeferred: deferred,
+      mysql: { capturedAt, verifiedAt: capturedAt + 1000, recoveryStatus, completeAt, recoveryStage: stage }
+    }) });
+  t.after(() => sources.close());
+  const check = () => monitor.view().checks.find(row => row.code === 'recharge_backup');
+  const event = () => monitor.view({ status: 'open' }).items.find(row => row.label === '充值 MySQL 备份异常');
+
+  await sources.tick();
+  assert.equal(check().status, 'watch');
+  assert.match(check().detail, /发布占用备份锁，等待自动重试/);
+  assert.equal(event(), undefined);
+  tick(4 * minute);
+  await sources.tick();
+  assert.equal(check().status, 'watch');
+  tick(1);
+  await sources.tick();
+  assert.equal(check().status, 'bad');
+  assert.match(event().backup.detail, /超过 35 分钟/);
+  assert.equal(await monitor.dispatch(), true);
+  assert.match(sent.at(-1).text, /超过 35 分钟/);
+
+  tick();
+  deferred = false;
+  capturedAt = completeAt = clock() - 1000;
+  await sources.tick();
+  assert.equal(check().status, 'bad');
+  tick();
+  await sources.tick();
+  assert.equal(check().status, 'ok');
+  assert.equal(await monitor.dispatch(), true);
+  assert.match(sent.at(-1).text, /已恢复[\s\S]*最近完整恢复点/);
+
+  tick(30 * minute);
+  capturedAt = clock() - minute;
+  recoveryStatus = 'capture_failed';
+  stage = 'sqlite';
+  deferred = true;
+  await sources.tick();
+  assert.equal(check().status, 'bad');
+  assert.equal(event().backup.completeAt, completeAt);
+  assert.match(event().backup.detail, /MySQL 异机备份已校验，配套恢复包采集失败.*采集 SQLite 快照/);
+  assert.equal(await monitor.dispatch(), true);
+  assert.match(sent.at(-1).text, /配套恢复包采集失败[\s\S]*最近完整恢复点/);
+  assert.equal(event().count, 1);
+
+  tick();
+  stage = 'unfiltered private error';
+  timerActive = false;
+  await sources.tick();
+  assert.match(check().detail, /定时器未运行/);
+  assert.doesNotMatch(JSON.stringify(monitor.view()), /unfiltered private error/);
 });
 
 test('check evidence exposes fixed reasons and freshness without carrying arbitrary source text', t => {

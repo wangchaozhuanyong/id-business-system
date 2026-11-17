@@ -19,11 +19,14 @@ const config = () => ({
   legacy: { available: true, phase: 'native', imported: false, recipients: [] }
 });
 const fixtures = Array.from({ length: 24 }, (_, index) => ({
-  id: 'monitor-fixture-' + (index + 1), label: index === 0 ? '代充付款待核实' : '业务接口异常',
+  id: 'monitor-fixture-' + (index + 1), label: index === 0 ? '代充付款待核实' :
+    index === 1 ? '充值 MySQL 备份异常' : '业务接口异常',
   category: '运行', priority: 'P1', kind: 'incident', at, count: 5, accepted: index === 0,
   deliveryStatus: index === 0 ? 'accepted' : 'no_record',
   taskId: index === 0 ? 'synthetic-job-4821' : undefined,
-  taskTail: index === 0 ? '4821' : undefined
+  taskTail: index === 0 ? '4821' : undefined,
+  backup: index === 1 ? { detail: 'MySQL 异机备份已校验，配套恢复包采集失败。 失败阶段：采集 SQLite 快照。',
+    completeAt: at - 30 * 60_000 } : undefined
 }));
 const output = process.env.ID_MONITORING_QA_OUTPUT;
 const checkStates = {
@@ -213,6 +216,15 @@ test('监控配置和告警使用实际路由并兼容桌面、手机及深浅�
     const incident = page.locator('[data-monitor-card="monitor-fixture-1"]:visible, [data-row-id="monitor-fixture-1"]:visible');
     await incident.getByText('代充付款待核实', { exact: true }).waitFor();
     assert.equal(await incident.count(), 1);
+    if ([1440, 390].includes(width)) {
+      const backupIncident = page.locator('[data-monitor-card="monitor-fixture-2"]:visible, [data-row-id="monitor-fixture-2"]:visible');
+      await backupIncident.getByRole('button', { name: '查看详情', exact: true }).click();
+      const drawer = page.locator('#drawer');
+      await drawer.getByText('触发原因', { exact: true }).waitFor();
+      await drawer.getByText(/配套恢复包采集失败.*采集 SQLite 快照/).waitFor();
+      await drawer.getByText('最近完整恢复点', { exact: true }).waitFor();
+      await drawer.getByRole('button', { name: '关闭', exact: true }).click();
+    }
     await pageGeometry(page);
     if (output && [1440, 390].includes(width)) {
       await page.screenshot({ path: join(output, 'incidents-' + width + '-' + theme + '.png') });

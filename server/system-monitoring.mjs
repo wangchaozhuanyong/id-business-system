@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import {
   monitorRules, monitorChannels, monitorConfigDomain, monitorStateDomain, legacyRules, initialMonitoringConfig,
   taskMonitorRules, scopePattern, chatIdPattern, botTokenPattern, boundedCount, monitoringError, telegramText, sendTelegram,
-  monitorReasons, monitorCheckDetail
+  monitorReasons, monitorCheckDetail, recoveryStageLabels, monitorReasonText
 } from './monitoring-policy.mjs';
 
 const limit = 1000;
@@ -124,7 +124,7 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
     });
   }
 
-  function enqueue(data, settings, incident, kind, at) {
+  function enqueue(data, settings, incident, kind, at, backup = incident.backup) {
     if (data.deliveries.filter(row => transient.has(row.status)).length >= limit) {
       incident.queueFull = true;
       return;
@@ -136,7 +136,8 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
           row.kind === 'opened' && ['accepted', 'queued', 'sending', 'unknown'].includes(row.status))) continue;
       data.deliveries.unshift({
         id: randomUUID(), incidentId: incident.id, code: incident.code, scope: incident.scope,
-        count: kind === 'opened' ? incident.count : null, summary: incident.summary, kind, target, binding: settings.bindings[target],
+        count: kind === 'opened' ? incident.count : null, summary: incident.summary, backup,
+        kind, target, binding: settings.bindings[target],
         status: 'queued', attempts: 0, at, due: at
       });
     }
@@ -152,10 +153,17 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
     const summary = code === 'digest' && input.summary &&
       ['success', 'failure', 'review', 'open'].every(key => boundedCount(input.summary[key]) !== null)
       ? Object.fromEntries(['success', 'failure', 'review', 'open'].map(key => [key, input.summary[key]])) : undefined;
+    const reason = typeof input.reason === 'string' && Object.hasOwn(monitorReasons, input.reason)
+      ? input.reason : undefined;
+    const backup = code === 'recharge_backup' ? { reason,
+      completeAt: Number.isSafeInteger(input.completeAt) && input.completeAt > 0 && input.completeAt <= at
+        ? input.completeAt : null,
+      stage: reason === 'recovery_state_capture_failed' && typeof input.recoveryStage === 'string' &&
+        Object.hasOwn(recoveryStageLabels, input.recoveryStage) ? input.recoveryStage : undefined
+    } : undefined;
     return { code, scope, status, at, external, confirmed: external && confirmed,
       accepted: external && input.accepted === true, externalId: external ? input.externalId : undefined,
-      count, summary, reason: typeof input.reason === 'string' && Object.hasOwn(monitorReasons, input.reason)
-        ? input.reason : undefined, rule, key: code + ':' + scope };
+      count, summary, reason, backup, rule, key: code + ':' + scope };
   }
 
   function observe(inputs, audit) {
@@ -167,11 +175,11 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
     const changed = updateState(data => {
       let dirty = false;
       for (const item of current) {
-        const { key, code, scope, status, count, at, external, confirmed, accepted, externalId, rule, summary, reason } = item;
+        const { key, code, scope, status, count, at, external, confirmed, accepted, externalId, rule, summary, reason, backup } = item;
         const last = nextSamples.get(key);
         if (last && at <= last.at && !confirmed) continue;
         const streak = last?.status === status && at - last.at <= 3 * minute ? last.streak + 1 : 1;
-        if (!rule.oneShot && (!last || at > last.at)) nextSamples.set(key, { code, status, streak, at, count, reason });
+        if (!rule.oneShot && (!last || at > last.at)) nextSamples.set(key, { code, status, streak, at, count, reason, backup });
         if (legacyRules.includes(code) && settings.legacy.phase !== 'managed') continue;
         if (rule.oneShot && !settings.rules[code] && ['digest', ...legacyRules].includes(code)) continue;
         const active = data.incidents.find(row => row.code === code && row.scope === scope &&
@@ -183,9 +191,9 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
           }
           if (!rule.oneShot && !active.resolvedAt && status === 'ok' && (confirmed || streak >= 2)) {
             active.resolvedAt = at;
-            if (!external) enqueue(data, settings, active, 'recovered', at);
+            if (!external) enqueue(data, settings, active, 'recovered', at, backup);
             dirty = true;
-          } else if (status === 'bad' && count !== null && active.count !== count) {
+          } else if (status === 'bad' && !active.backup && count !== null && active.count !== count) {
             active.count = count;
             dirty = true;
           }
@@ -193,7 +201,7 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
         }
         if (status !== 'bad' || (!confirmed && streak < rule.failures)) continue;
         const id = externalId && !data.incidents.some(row => row.id === externalId) ? externalId : randomUUID();
-        const incident = { id, code, scope, at, count, summary, external, externalAccepted: accepted };
+        const incident = { id, code, scope, at, count, summary, backup, external, externalAccepted: accepted };
         data.incidents.unshift(incident);
         if (!external) enqueue(data, settings, incident, 'opened', at);
         dirty = true;
@@ -455,8 +463,9 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
       const observed = readings.sort((a, b) => b.at - a.at)[0];
       const open = data.incidents.some(row => row.code === code && !row.resolvedAt);
       const stale = observed && clock() - observed.at > 5 * minute;
-      const status = !observed || stale || observed.status === 'unknown' ? 'unknown' :
-        open ? 'bad' : observed.status === 'bad' ? 'watch' : observed.status;
+      const waitingForBackup = code === 'recharge_backup' && observed?.reason === 'mysql_release_deferred';
+      const status = !observed || stale || (observed.status === 'unknown' && !waitingForBackup) ? 'unknown' :
+        open ? 'bad' : waitingForBackup || observed.status === 'bad' ? 'watch' : observed.status;
       return { code, label: rule.label, category: rule.category, at: observed?.at ?? null, status,
         ...monitorCheckDetail(code, status, observed, { stale, open }) };
     });
@@ -470,6 +479,7 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
       category: monitorRules[row.code].category, kind: monitorRules[row.code].oneShot ? 'event' : 'incident',
       taskTail: taskMonitorRules.has(row.code) ? row.scope.slice(-6) : '',
       taskId: taskMonitorRules.has(row.code) ? row.scope : undefined,
+      backup: row.backup && { detail: monitorReasonText(row.backup.reason, row.backup.stage), completeAt: row.backup.completeAt },
       count: row.count, summary: row.summary, at: row.at, resolvedAt: row.resolvedAt, ackAt: row.ackAt, ackBy: row.ackBy,
       queueFull: row.queueFull, external: row.external, deliveryStatus: incidentDelivery(data, row),
       accepted: row.externalAccepted || data.deliveries.some(item => item.incidentId === row.id &&

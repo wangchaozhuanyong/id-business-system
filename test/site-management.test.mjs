@@ -102,6 +102,10 @@ test('latest verified backup and a separate passed restore are displayed indepen
   assert.equal(databases[0].capturedAt, null);
   assert.equal(databases[0].exercise, null);
   assert.equal(databases[1].exercise.durationMs, 11_000);
+  const deferred = { ...report, mysqlAttemptFailed: true, mysqlAttemptDeferred: true };
+  assert.equal(siteBackupView(deferred, {}, at).databases[1].state, 'retrying');
+  assert.equal(siteBackupView({ ...deferred, mysql: { ...report.mysql, capturedAt: at - 36 * minute } },
+    {}, at).databases[1].state, 'stale');
   databases = siteBackupView({ ...report, at: at - 4 * minute, drive: { ...report.drive, capturedAt: capture } },
     { recharge: { ...restore, isolated: false } }, at).databases;
   assert.equal(databases[0].state, 'unknown');

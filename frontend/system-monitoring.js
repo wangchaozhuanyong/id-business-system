@@ -108,10 +108,15 @@
 
   function details(row) {
     const fields = [['事件编号', row.id], ['级别', row.priority], ['发生时间', time(row.at)],
-      ['本次观测', row.count ?? '—'], ['任务尾号', row.taskTail || '—'],
+      [row.backup ? 'MySQL 恢复点距今分钟' : '本次观测', row.count ?? '—']];
+    if (row.backup) {
+      if (row.backup.detail) fields.push(['触发原因', row.backup.detail]);
+      fields.push(['最近完整恢复点', row.backup.completeAt ? time(row.backup.completeAt) : '未取得']);
+    } else fields.push(['任务尾号', row.taskTail || '—']);
+    fields.push(
       ['投递', receiptLabel(row)],
       ['人工确认', row.ackAt ? time(row.ackAt) + ' · ' + row.ackBy : '待确认'],
-      ['恢复', row.kind === 'event' ? '单次事件' : row.resolvedAt ? time(row.resolvedAt) : '尚无恢复证据']];
+      ['恢复', row.kind === 'event' ? '单次事件' : row.resolvedAt ? time(row.resolvedAt) : '尚无恢复证据']);
     if (row.summary) fields.push(['日报', '成功 ' + row.summary.success + ' · 失败 ' + row.summary.failure +
       ' · 待核实 ' + row.summary.review + ' · 未恢复 ' + row.summary.open]);
     const actions = (row.taskId ? A.button('查看原任务', 'system-monitor-task', '', '', `data-id="${e(row.id)}"`) : '') +

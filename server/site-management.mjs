@@ -93,9 +93,10 @@ export function siteBackupView(report, recoveries, now = Date.now()) {
   }
   if (recent) {
     if (!report.mysqlTimerActive) rechargeStatus = 'paused';
-    else if (report.mysqlAttemptFailed) rechargeStatus = 'failed';
+    else if (report.mysqlAttemptFailed && !report.mysqlAttemptDeferred) rechargeStatus = 'failed';
     else if (timestamp(mysql?.capturedAt, now) && timestamp(mysql?.verifiedAt, now))
-      rechargeStatus = now - mysql.capturedAt > 35 * minute ? 'stale' : 'verified';
+      rechargeStatus = now - mysql.capturedAt > 35 * minute ? 'stale' :
+        report.mysqlAttemptDeferred ? 'retrying' : 'verified';
   }
   return { sampledAt, collector: recent ? 'connected' : sampledAt ? 'stale' : 'unknown',
     databases: [

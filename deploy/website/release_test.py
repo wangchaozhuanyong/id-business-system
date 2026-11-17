@@ -1080,13 +1080,32 @@ class WebsiteReleaseTests(unittest.TestCase):
         recovery = {"key": receipt["key"].removesuffix("manifest.json") + "recovery-state.idbackup",
                     "versionId": "fixture-capsule-version", "cipherSha256": "c" * 64, "cipherBytes": 4096}
         paired = receipt | {"recoveryStateStatus": "verified", "recoveryState": recovery}
-        self.assertEqual(backup_monitoring.mysql_fields(paired)["recoveryStatus"], "verified")
-        self.assertEqual(backup_monitoring.mysql_fields(receipt | {"recoveryStateStatus": "capture_failed"})[
-            "recoveryStatus"], "capture_failed")
+        self.assertEqual(backup_monitoring.mysql_fields(paired), {
+            **report, "recoveryStatus": "verified", "completeAt": report["capturedAt"]
+        })
+        partial = receipt | {"recoveryStateStatus": "capture_failed",
+                             "lastCompleteCapturedAt": "20261111T070000Z",
+                             "recoveryStateFailureStage": "services"}
+        self.assertEqual(backup_monitoring.mysql_fields(partial), {
+            **report, "recoveryStatus": "capture_failed", "recoveryStage": "services",
+            "completeAt": report["capturedAt"] - 30 * 60_000
+        })
+        for invalid in ("20261111T080000Z", "20261131T070000Z", "20261111T073000Z"):
+            self.assertNotIn("completeAt", backup_monitoring.mysql_fields(partial | {"lastCompleteCapturedAt": invalid}))
+        self.assertNotIn("recoveryStage", backup_monitoring.mysql_fields(
+            partial | {"recoveryStateFailureStage": "private source error"}))
         for changes in ({"key": "unrelated/recovery-state.idbackup"}, {"versionId": "null"},
                         {"cipherBytes": 0}, {"cipherBytes": True}, {"cipherSha256": "bad"}):
             self.assertEqual(backup_monitoring.mysql_fields(paired | {"recoveryState": recovery | changes})[
                 "recoveryStatus"], "missing")
+
+    def test_only_an_actively_scheduled_release_deferral_enters_retry_observation(self):
+        service = {"LoadState": "loaded", "ActiveState": "activating", "SubState": "auto-restart",
+                   "Result": "exit-code", "ExecMainStatus": "75"}
+        self.assertTrue(backup_monitoring.release_retry_pending(service))
+        for changes in ({"SubState": "failed"}, {"ActiveState": "failed"}, {"ExecMainStatus": "1"},
+                        {"Result": "start-limit-hit"}, {"LoadState": "not-found"}):
+            self.assertFalse(backup_monitoring.release_retry_pending(service | changes))
 
     def test_recovery_receipt_limit_is_bounded_and_projection_stays_small(self):
         runtime = Path(__file__).resolve().parents[2] / ".runtime"

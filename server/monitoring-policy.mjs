@@ -77,7 +77,7 @@ export const monitorCheckInfo = {
   exchange_rates: ['汇率采集', '汇率采集任务状态', '连续 3 次采集失败告警。', '查看汇率采集配置、最近成功时间及失败记录。'],
   mailbox: ['邮箱查询', '当前服务进程的查询统计', '近 10 分钟至少 3 次服务端错误；至少 2 次成功且无错误才显示正常。', '打开邮箱查询与邮箱池，核对连接及查询结果。'],
   backup: ['业务 SQLite 备份', 'Google Drive 上传校验回执', '完整性失败、连续 3 次失败或回执超过 20 分钟未更新。', '请运维检查最近一次上传、待传批次及远端校验回执。'],
-  recharge_backup: ['充值 MySQL 备份', 'S3 异机回执与定时任务状态', '检查任务状态、35 分钟内的恢复点和配套恢复包校验。', '请运维检查半小时备份任务和最新 S3 回执。'],
+  recharge_backup: ['充值 MySQL 备份', 'S3 异机回执与定时任务状态', '恢复点须在 35 分钟内。发布占锁且自动重试已排程时观察，配套恢复包单独核验。', '请运维检查半小时备份任务和最新 S3 回执。'],
   sheets: ['Google 表格同步', '表格同步核对及只读采集回执', '完整性失败、连续 3 次失败，或 15 分钟以上没有有效回执或成功校验时告警。', '请运维检查表格同步回执，并核对同步目标及写入结果。']
 };
 
@@ -92,7 +92,9 @@ export const monitorReasons = {
   mysql_timer_inactive: '充值 MySQL 备份定时器未运行。',
   mysql_attempt_failed: '最近一次充值 MySQL 备份任务失败。',
   mysql_backup_stale: '最近通过异机校验的恢复点已超过 35 分钟。',
-  recovery_state_missing: 'MySQL 异机备份已验证，但配套登录配置和同步状态恢复包尚未验证。',
+  mysql_release_deferred: '发布占用备份锁，等待自动重试。最近一次 MySQL 异机恢复点仍在 35 分钟内。',
+  recovery_state_missing: 'MySQL 异机备份已校验，配套恢复包尚未验证。',
+  recovery_state_capture_failed: 'MySQL 异机备份已校验，配套恢复包采集失败。',
   integrity_failed: '最近回执报告完整性校验失败。',
   verification_missing: '已有运行回执，但尚无成功校验依据。',
   verification_stale: '最近一次成功校验已超过 15 分钟，请核对同步结果。',
@@ -117,10 +119,30 @@ export const monitorReasons = {
   probe_stale: '超过 4 分钟没有收到站外探针回传。'
 };
 
+export const recoveryStageLabels = Object.freeze({
+  application: '识别运行中的网站',
+  collector: '加载恢复包采集程序',
+  source: '读取或核对源文件',
+  sqlite: '采集 SQLite 快照',
+  credentials: '读取服务凭据',
+  services: '采集服务定义',
+  size_limit: '超过采集大小上限',
+  encryption: '加密恢复包',
+  verification: '校验恢复包',
+  unknown: '未取得具体阶段'
+});
+
+export function monitorReasonText(reason, stage) {
+  if (!Object.hasOwn(monitorReasons, reason)) return undefined;
+  const detail = monitorReasons[reason];
+  return reason === 'recovery_state_capture_failed' && Object.hasOwn(recoveryStageLabels, stage)
+    ? detail + ' 失败阶段：' + recoveryStageLabels[stage] + '。' : detail;
+}
+
 export function monitorCheckDetail(code, status, observed, { stale = false, open = false } = {}) {
   const info = monitorCheckInfo[code];
   let detail = stale ? '最近检测结果已超过 5 分钟，请刷新或核查采集来源。'
-    : observed?.reason && monitorReasons[observed.reason];
+    : monitorReasonText(observed?.reason, observed?.backup?.stage);
   if (!detail) detail = !observed ? '尚未取得有效检测结果。' :
     status === 'unknown' ? '当前证据不足，暂时无法判断。' :
     open && observed.status === 'ok' ? '已出现成功观测，正在等待满足恢复条件。' :
@@ -130,6 +152,8 @@ export function monitorCheckDetail(code, status, observed, { stale = false, open
   const count = observed?.count;
   const measurement = !stale && observed?.status !== 'disabled' && count !== null && count !== undefined && observationLabels[code]
     ? observationLabels[code] + '：' + count + (code === 'disk_space' ? '%' : '') : '';
+  if (!stale && observed?.backup?.completeAt)
+    detail += ' 最近完整恢复点：' + beijingTime.format(observed.backup.completeAt) + '。';
   return { title: info[0], source: info[1], threshold: info[2], guidance: info[3], detail, measurement };
 }
 
@@ -153,12 +177,18 @@ export function boundedCount(value) {
 }
 
 export function telegramText(item, origin) {
-  const { code, kind, at, scope, count, summary } = item;
+  const { code, kind, at, scope, count, summary, backup } = item;
   if (kind === 'test') return '【AI订阅管理系统】Telegram 渠道测试。此消息不对应真实告警。';
   const { priority, label } = monitorRules[code];
   const prefix = kind === 'recovered' ? '已恢复' : priority === 'P0' ? '紧急' : priority === 'P1' ? '告警' : '摘要';
   const details = summary ? ['成功 ' + summary.success + ' · 失败 ' + summary.failure +
     ' · 待核实 ' + summary.review + ' · 未恢复告警 ' + summary.open] : [];
+  if (code === 'recharge_backup' && backup) {
+    const detail = kind === 'opened' && monitorReasonText(backup.reason, backup.stage);
+    if (detail) details.push(detail);
+    if (backup.completeAt) details.push('最近完整恢复点 ' + beijingTime.format(backup.completeAt));
+    else if (kind === 'opened') details.push('最近完整恢复点 未取得');
+  }
   if (taskMonitorRules.has(code) && scopePattern.test(scope))
     details.push('任务尾号 ' + scope.slice(-6));
   if (count !== null && count !== undefined)

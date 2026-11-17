@@ -185,12 +185,15 @@ export function createMonitoringSources({ monitor, databasePath, externalProbe =
       const mysql = report.mysql;
       const age = mysql && now - mysql.capturedAt;
       const reason = !report.mysqlTimerActive ? 'mysql_timer_inactive' :
-        report.mysqlAttemptFailed ? 'mysql_attempt_failed' :
+        report.mysqlAttemptFailed && !report.mysqlAttemptDeferred ? 'mysql_attempt_failed' :
         !mysql ? 'receipt_missing' :
         mysql.verifiedAt > now + minute ? 'receipt_future' :
         age > 35 * minute ? 'mysql_backup_stale' :
-        mysql.recoveryStatus && mysql.recoveryStatus !== 'verified' ? 'recovery_state_missing' : undefined;
-      output.push({ code: 'recharge_backup', status: reason ? 'bad' : 'ok', reason,
+        mysql.recoveryStatus === 'capture_failed' ? 'recovery_state_capture_failed' :
+        mysql.recoveryStatus === 'missing' ? 'recovery_state_missing' :
+        report.mysqlAttemptDeferred ? 'mysql_release_deferred' : undefined;
+      output.push({ code: 'recharge_backup', status: reason === 'mysql_release_deferred' ? 'unknown' : reason ? 'bad' : 'ok',
+        reason, completeAt: mysql?.completeAt, recoveryStage: mysql?.recoveryStage,
         count: mysql ? Math.max(0, Math.floor(age / minute)) : undefined });
     }
     let finance;
