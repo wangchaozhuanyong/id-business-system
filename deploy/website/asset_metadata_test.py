@@ -48,7 +48,7 @@ class CurrentAssetMetadataTests(unittest.TestCase):
         contexts = (
             patch.multiple(remote, ROOT=self.root, FORMAL=self.formal, DROP=drop,
                            ASSET_METADATA_REPAIR_BASE=self.base, ASSET_METADATA_REPAIR_DIGEST=self.expected,
-                           snapshot=self.snapshot, run=self.run),
+                           snapshot=self.snapshot, mounted_asset_bytes=self.run),
             patch.object(Path, "lstat", metadata),
             patch.object(remote.os, "geteuid", return_value=0),
             patch.object(remote.os, "chown"),

@@ -103,27 +103,41 @@ class WebsiteReleaseTests(unittest.TestCase):
                 self.assertIsNone(result["entries"])
                 self.assertNotIn("synthetic-private-text", json.dumps(result))
 
-    def test_mounted_asset_digest_handles_a_missing_setting_or_unreadable_file(self):
-        runtime = Path(__file__).resolve().parents[2] / ".runtime"
-        runtime.mkdir(exist_ok=True)
-        with TemporaryDirectory(dir=runtime) as directory:
-            path = Path(directory) / "assets.json"
-            path.write_text('{"synthetic": true}')
-            environment = {key: value for key, value in os.environ.items() if key != "ID_CODEXDAICHONG_ASSETS_FILE"}
-
-            def run_node(command):
-                self.assertEqual(command[:4], ["docker", "exec", "id-business-independent-app", "node"])
-                return subprocess.check_output(command[3:], env=environment)
-
-            with patch.object(remote, "run", run_node):
+    def test_mounted_asset_digest_reads_only_the_current_readonly_public_mount(self):
+        public = b'{"synthetic":true}'
+        mount = {"Source": str(remote.ROOT / "releases" / BASE / "assets.json"),
+                 "Destination": "/run/public-assets.json", "RW": False}
+        container = {"Config": {"Labels": {"org.opencontainers.image.revision": BASE}}, "Mounts": [mount]}
+        with patch.object(remote, "inspect", return_value=container), patch.object(remote, "run", return_value=public) as run:
+            self.assertEqual(remote.mounted_assets_digest(), {
+                "available": True, "sha256": hashlib.sha256(public).hexdigest(), "bytes": len(public)
+            })
+            run.assert_called_once_with(["docker", "exec", "id-business-independent-app", "cat", "/run/public-assets.json"])
+            container["Mounts"] = [mount | {"Source": str(remote.ROOT / "releases" / TARGET / "assets.json")}]
+            self.assertEqual(remote.mounted_assets_digest()["sha256"], hashlib.sha256(public).hexdigest())
+            for invalid in (mount | {"RW": True}, mount | {"Source": "/private.json"},
+                            mount | {"Destination": "/run/../private.json"}):
+                container["Mounts"] = [invalid]
                 self.assertEqual(remote.mounted_assets_digest(), {"available": False})
-                environment["ID_CODEXDAICHONG_ASSETS_FILE"] = str(path)
-                self.assertEqual(remote.mounted_assets_digest(), {
-                    "available": True, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-                    "bytes": path.stat().st_size
-                })
-                environment["ID_CODEXDAICHONG_ASSETS_FILE"] = str(path.with_name("absent.json"))
-                self.assertEqual(remote.mounted_assets_digest(), {"available": False})
+            container["Mounts"] = [mount, mount]
+            self.assertEqual(remote.mounted_assets_digest(), {"available": False})
+            container["Mounts"] = []
+            self.assertEqual(remote.mounted_assets_digest(), {"available": False})
+            self.assertEqual(run.call_count, 2)
+
+    def test_command_failures_identify_the_readonly_step_without_raw_errors(self):
+        cases = (
+            (["docker", "inspect", "id-business-independent-app"], "container_metadata_read_failed"),
+            (["docker", "exec", "id-business-independent-app", "cat", "/run/public-assets.json"],
+             "mounted_public_asset_read_failed"),
+            (["git", "-c", "credential.helper=", "ls-remote"], "release_repository_read_failed"),
+        )
+        for command, reason in cases:
+            failure = subprocess.CalledProcessError(1, command, stderr=b"private error details")
+            with patch.object(remote.subprocess, "check_output", side_effect=failure):
+                with self.assertRaises(remote.ReleaseError) as error:
+                    remote.run(command)
+                self.assertEqual(str(error.exception), reason)
 
     def test_native_diagnostic_uses_only_release_phases_and_fixed_error_codes(self):
         invocation = {"Status": "Failed",
