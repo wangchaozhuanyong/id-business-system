@@ -170,3 +170,43 @@ test('清单篡改会被拒绝', () => {
     && createHash('sha256').update(patch).digest('hex') === manifest.patchSha256;
   assert.equal(accepted, false);
 });
+
+test('国家与州选择带硬超时和键盘兜底，避免整轮卡死', async () => {
+  const { 'stripe-payment.js': stripeText } = await appliedSources();
+  // 国家：25 秒硬超时 + 键盘兜底
+  assert.match(stripeText, /选择国家超时（25s），继续填后续字段/);
+  assert.match(stripeText, /改走键盘选择国家/);
+  assert.match(stripeText, /United States/);
+  // 州：20 秒硬超时 + 键盘兜底
+  assert.match(stripeText, /选择州超时（20s），继续后续步骤/);
+  assert.match(stripeText, /改走键盘选择州/);
+  // 两处都用 Promise.race 包裹，保证不会无限等待
+  const raceCount = (stripeText.match(/return Promise\.race\(\[attempt, timed\]\);/g) || []).length;
+  assert.equal(raceCount, 2);
+});
+
+test('无卡结账页判定必须金额为零，Pro 不会被误判为免费', async () => {
+  const { 'chatgpt.js': chatgptText } = await appliedSources();
+  // 只有金额为 0 才算 0 元试用
+  assert.match(chatgptText, /只有金额为 0 才是真正的 0 元试用/);
+  assert.match(chatgptText, /isZeroAmount/);
+  assert.match(chatgptText, /0 元试用结账页已加载（无需填卡）/);
+  // 金额非 0 却无卡号框时报「支付表单未渲染」，不再当成无卡
+  assert.match(chatgptText, /支付表单未渲染/);
+  assert.match(chatgptText, /paymentFormMissing: true/);
+  // 旧的「无卡结账页已加载」措辞不再单独出现
+  assert.doesNotMatch(chatgptText, /无卡结账页已加载，调试已停止（未填卡、未付款）/);
+});
+
+test('续费提示：已有未到期订阅给出明确失败原因', async () => {
+  const { 'chatgpt.js': chatgptText } = await appliedSources();
+  // API 侧：把 already_subscribed / active_subscription 转成中文失败原因
+  assert.match(chatgptText, /already_subscription|has_active_subscription/);
+  assert.match(chatgptText, /reason: 'already_subscribed'/);
+  assert.match(chatgptText, /该账号已有未到期的订阅，无法重复购买，请到期后再充值/);
+  // 不符合套餐/地区条件也给出明确原因
+  assert.match(chatgptText, /reason: 'not_eligible'/);
+  assert.match(chatgptText, /该账号不符合当前套餐或地区的订阅条件/);
+  // 无权开通
+  assert.match(chatgptText, /reason: 'no_permission'/);
+});
