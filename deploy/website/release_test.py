@@ -113,6 +113,8 @@ class WebsiteReleaseTests(unittest.TestCase):
                 "available": True, "sha256": hashlib.sha256(public).hexdigest(), "bytes": len(public)
             })
             run.assert_called_once_with(["docker", "exec", "id-business-independent-app", "cat", "/run/public-assets.json"])
+            container["Mounts"] = [mount | {"Source": str(remote.ROOT / "releases" / TARGET / "assets.json")}]
+            self.assertEqual(remote.mounted_assets_digest()["sha256"], hashlib.sha256(public).hexdigest())
             for invalid in (mount | {"RW": True}, mount | {"Source": "/private.json"},
                             mount | {"Destination": "/run/../private.json"}):
                 container["Mounts"] = [invalid]
@@ -121,7 +123,7 @@ class WebsiteReleaseTests(unittest.TestCase):
             self.assertEqual(remote.mounted_assets_digest(), {"available": False})
             container["Mounts"] = []
             self.assertEqual(remote.mounted_assets_digest(), {"available": False})
-            self.assertEqual(run.call_count, 1)
+            self.assertEqual(run.call_count, 2)
 
     def test_command_failures_identify_the_readonly_step_without_raw_errors(self):
         cases = (

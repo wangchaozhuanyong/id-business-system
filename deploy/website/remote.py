@@ -150,8 +150,8 @@ def mounted_asset_bytes():
     revision = (container["Config"].get("Labels") or {}).get("org.opencontainers.image.revision")
     if not isinstance(revision, str) or not re.fullmatch(r"[a-f0-9]{40}", revision):
         return None
-    source = str(ROOT / "releases" / revision / "assets.json")
-    mounts = [mount for mount in container["Mounts"] if mount["Source"] == source and not mount["RW"]]
+    source = re.escape(str(ROOT / "releases")) + r"/[a-f0-9]{40}/assets\.json"
+    mounts = [mount for mount in container["Mounts"] if re.fullmatch(source, mount["Source"]) and not mount["RW"]]
     if len(mounts) != 1:
         return None
     destination = mounts[0]["Destination"]
