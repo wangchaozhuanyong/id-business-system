@@ -1089,6 +1089,31 @@ class WebsiteReleaseTests(unittest.TestCase):
             remote.release_website({"sha": TARGET, "before": before})
         stage.assert_not_called()
 
+    def test_website_readback_waits_for_the_restarting_container(self):
+        container = {"Id": "synthetic", "Image": "image", "State": {"Running": True, "StartedAt": "now"},
+                     "Config": {"Labels": {"org.opencontainers.image.revision": TARGET}}}
+        plan = {"sha": TARGET, "before": {"components": {name: {"image": "image"} for name in remote.WEBSITE}}}
+        with patch.object(remote, "inspect", side_effect=[remote.ReleaseError("container_metadata_read_failed")] +
+                          [container] * len(remote.WEBSITE)), \
+                patch.object(remote, "mount_matches", side_effect=RuntimeError("startup readback reached")), \
+                patch.object(remote.time, "sleep") as sleep:
+            with self.assertRaisesRegex(RuntimeError, "startup readback reached"):
+                remote.read_website(plan, Path("/synthetic"), Path("/synthetic/source"))
+            sleep.assert_called_once_with(1)
+
+    def test_website_readback_bounds_missing_containers_and_propagates_other_failures(self):
+        with patch.object(remote, "inspect", side_effect=remote.ReleaseError("container_metadata_read_failed")), \
+                patch.object(remote.time, "monotonic", side_effect=[0, 0, 66]), \
+                patch.object(remote.time, "sleep") as sleep:
+            with self.assertRaisesRegex(remote.ReleaseError, "website_or_sidecar_readback_failed"):
+                remote.read_website({}, Path("/synthetic"), Path("/synthetic/source"))
+            sleep.assert_called_once_with(1)
+        with patch.object(remote, "inspect", side_effect=remote.ReleaseError("synthetic_permanent_failure")), \
+                patch.object(remote.time, "sleep") as sleep:
+            with self.assertRaisesRegex(remote.ReleaseError, "synthetic_permanent_failure"):
+                remote.read_website({}, Path("/synthetic"), Path("/synthetic/source"))
+            sleep.assert_not_called()
+
     @patch("remote.switch_adapter")
     @patch("remote.install_backup_monitoring")
     @patch("remote.adapter_canary", side_effect=remote.ReleaseError("adapter_canary_failed"))

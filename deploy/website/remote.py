@@ -93,6 +93,7 @@ VERSIONED_ASSET = re.compile(r'\b(?:src|href)="(?:\./|/)?([a-zA-Z0-9.-]+\.(?:m?j
 ASSET_METADATA_REPAIR_BASE = "b4c42f63bc0b06570feea30e821fa3750d33ad83"
 ASSET_METADATA_REPAIR_DIGEST = "a67d83372c40fe5ca94d41ca075a889aa5b5bbeecb5202ae562e1a554728b1df"
 ASSET_METADATA_RELEASE_RUN = 43927104206
+INTERRUPTED_BACKUP_INSTALL_BASE = "75dc2e3c858d0689cd5429d9b254631a2f791a63"
 
 
 class ReleaseError(RuntimeError):
@@ -1058,15 +1059,28 @@ def prepare_backup_recovery(source, operations, base, sha):
         info = target.lstat()
         require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and stat.S_IMODE(info.st_mode) == 0o644 and
                 target.resolve() == target, "backup_program_baseline_changed")
-        current = digest(target)
-        require(current in (before, after), "backup_program_baseline_changed")
-        return current
+        return digest(target)
 
     def confirm_installed():
         require(digest(target) == after, "backup_program_readback_mismatch")
         return receipt
 
-    if current_program() == after:
+    current = current_program()
+    if current not in (before, after) and base == INTERRUPTED_BACKUP_INSTALL_BASE:
+        previous_ops = ROOT / "releases" / base / "operations"
+        saved = previous_ops / "scheduled-backup.py.before"
+        completed = previous_ops / "release.receipt.json"
+        require(not completed.exists() and not completed.is_symlink(), "backup_program_baseline_changed")
+        info = saved.lstat()
+        original = ROOT / "releases" / ASSET_METADATA_REPAIR_BASE / "source" / BACKUP_OPERATION
+        require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and info.st_nlink == 1 and
+                stat.S_IMODE(info.st_mode) == 0o600 and digest(saved) == digest(original) == current,
+                "backup_program_baseline_changed")
+        before = current
+        receipt["previousProgramSha256"] = before
+        receipt["resumedBackupBaseline"] = {"websiteSha": base, "programSourceSha": ASSET_METADATA_REPAIR_BASE}
+    require(current in (before, after), "backup_program_baseline_changed")
+    if current == after:
         yield confirm_installed
         return
     lock_path = ROOT / "backups/scheduled-recharge/.lock"
@@ -1138,6 +1152,9 @@ def read_website(plan, release, source, adapter=None, core=None):
                 break
         except (subprocess.CalledProcessError, urllib.error.URLError, TimeoutError):
             pass
+        except ReleaseError as error:
+            if str(error) != "container_metadata_read_failed":
+                raise
         time.sleep(1)
     else:
         raise ReleaseError("website_or_sidecar_readback_failed")
