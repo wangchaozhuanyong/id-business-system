@@ -21,10 +21,43 @@ NATIVE = 'id-business-independent-recharge-native'
 MANIFEST = 'manifest.json'
 KEY_WRAP = 'RSA-OAEP-SHA256'
 RECOVERY_FILENAME = 'recovery-state.idbackup'
+CAPTURE_TIME = re.compile(r'[0-9]{8}T[0-9]{6}Z')
+RECOVERY_STAGES = {'application', 'collector', 'source', 'sqlite', 'credentials', 'services',
+                   'size_limit', 'encryption', 'verification', 'unknown'}
+RECOVERY_ERROR_STAGES = {
+    'recovery_sqlite_snapshot_failed': 'sqlite',
+    'recovery_sqlite_replaced': 'sqlite',
+    'recovery_snapshot_runtime_required': 'sqlite',
+    'recovery_credential_name_invalid': 'credentials',
+    'recovery_credential_unavailable': 'credentials',
+    'recovery_credential_binding_requires_review': 'credentials',
+    'recovery_service_inventory_unavailable': 'services',
+    'recovery_service_definition_unavailable': 'services',
+    'recovery_active_operations_missing': 'source',
+    'recovery_source_changed': 'source',
+    'recovery_regular_file_required': 'source',
+    'recovery_directory_invalid': 'source',
+    'recovery_required_directory_missing': 'source',
+    'recovery_symlink_forbidden': 'source',
+    'recovery_state_too_large': 'size_limit',
+    'recovery_recipient_changed': 'encryption',
+    'recovery_capsule_encryption_failed': 'encryption',
+    'recovery_capsule_digest_mismatch': 'verification',
+}
 
 
 class BackupError(Exception):
     pass
+
+
+class ReleaseDeferred(BackupError):
+    pass
+
+
+class RecoveryCaptureError(BackupError):
+    def __init__(self, stage):
+        super().__init__('Portable recovery state capture failed')
+        self.stage = stage
 
 
 def private_json(path):
@@ -141,21 +174,33 @@ def capture_recovery_state(target, native_revision, destination):
         status = subprocess.check_output(['docker', 'inspect', '--format',
             '{{.State.Running}} {{index .Config.Labels "org.opencontainers.image.revision"}} {{.Image}}',
             'id-business-independent-app'], text=True, timeout=15).strip()
-        app = re.fullmatch(r'true ([a-f0-9]{40}) (sha256:[a-f0-9]{64})', status)
-        if not app:
-            raise BackupError('Could not identify the running website recovery source')
-        source = ROOT / 'releases' / app[1] / 'source'
-        collector = runpy.run_path(str(source / 'deploy/website/recovery_capsule.py'))['capture']
-        return collector(ROOT, source, app[1], native_revision, destination,
-                         target['recipientSha256'], app[2])
+    except (OSError, ValueError, subprocess.SubprocessError):
+        raise RecoveryCaptureError('application') from None
+    app = re.fullmatch(r'true ([a-f0-9]{40}) (sha256:[a-f0-9]{64})', status)
+    if not app:
+        raise RecoveryCaptureError('application')
+    source = ROOT / 'releases' / app[1] / 'source'
+    try:
+        collector = runpy.run_path(str(source / 'deploy/website/recovery_capsule.py'))
+        capture_state, recovery_error = collector['capture'], collector['RecoveryError']
     except Exception:
-        raise BackupError('Portable recovery state capture failed; existing pending backups are retained') from None
+        raise RecoveryCaptureError('collector') from None
+    try:
+        return capture_state(ROOT, source, app[1], native_revision, destination,
+                             target['recipientSha256'], app[2])
+    except recovery_error as error:
+        raise RecoveryCaptureError(RECOVERY_ERROR_STAGES.get(str(error), 'unknown')) from None
+    except Exception:
+        raise RecoveryCaptureError('unknown') from None
 
 
 def capture(target, pending):
     release_lock = ROOT / 'formal' / '.application-release.lock'
     with release_lock.open('r') as lock:
-        fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        try:
+            fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ReleaseDeferred('Formal release is in progress. Backup deferred.') from None
         status = subprocess.check_output(
             ['docker', 'inspect', '--format',
              '{{.State.Running}} {{index .Config.Labels "org.opencontainers.image.revision"}}', NATIVE],
@@ -169,12 +214,14 @@ def capture(target, pending):
             recipient = ROOT / 'formal' / 'google-drive-backup' / 'recipient.pem'
             key, wrapped = wrap_backup_key(recipient, target['recipientSha256'])
             capsule = Path(temporary) / RECOVERY_FILENAME
+            recovery_stage = 'unknown'
             try:
                 recovery = capture_recovery_state(target, match[1], capsule)
-            except BackupError:
+            except RecoveryCaptureError as error:
                 # Auxiliary capture cannot suppress the existing MySQL backup.
                 # Its failure is recorded separately and monitored.
                 recovery = None
+                recovery_stage = error.stage
             mysql_started = utc_now().isoformat()
             manifest = take_snapshot(match[1], stage, backup_key=key)
             mysql_finished = utc_now().isoformat()
@@ -187,6 +234,7 @@ def capture(target, pending):
                 sync_file(stage / RECOVERY_FILENAME)
             else:
                 manifest['recoveryStateError'] = 'capture_failed'
+                manifest['recoveryStateFailureStage'] = recovery_stage
             (stage / MANIFEST).write_text(json.dumps(manifest, indent=2) + '\n')
             sync_file(stage / BACKUP_FILENAME)
             sync_file(stage / MANIFEST)
@@ -210,7 +258,7 @@ def publish(target, pending):
             or not isinstance(wrapped, dict) or wrapped.get('algorithm') != KEY_WRAP
             or wrapped.get('recipientSha256') != target['recipientSha256']
             or not isinstance(wrapped.get('ciphertext'), str)
-            or not isinstance(captured_at, str) or not re.fullmatch(r'[0-9]{8}T[0-9]{6}Z', captured_at)
+            or not isinstance(captured_at, str) or not CAPTURE_TIME.fullmatch(captured_at)
             or not isinstance(revision, str) or not re.fullmatch(r'[a-f0-9]{40}', revision)
             or manifest.get('cipherSha256') != file_digest(blob)):
         raise BackupError('Pending encrypted backup failed local validation')
@@ -219,6 +267,7 @@ def publish(target, pending):
     key = f'{PREFIX}/{captured_at}/{revision}'
     recovery = manifest.get('recoveryState')
     recovery_error = manifest.get('recoveryStateError')
+    recovery_stage = manifest.get('recoveryStateFailureStage')
     if recovery_error not in (None, 'capture_failed') or (recovery is not None and recovery_error is not None):
         raise BackupError('Pending recovery status is invalid')
     if recovery is not None:
@@ -265,6 +314,8 @@ def publish(target, pending):
         receipt.update(recoveryStateStatus='verified', recoveryState=recovery_receipt)
     elif recovery_error:
         receipt['recoveryStateStatus'] = recovery_error
+        if isinstance(recovery_stage, str) and recovery_stage in RECOVERY_STAGES:
+            receipt['recoveryStateFailureStage'] = recovery_stage
     return receipt
 
 
@@ -279,6 +330,23 @@ def save_receipt(path, receipt):
             sync_directory(path.parent)
         finally:
             temporary.unlink(missing_ok=True)
+
+
+def save_upload_receipt(path, receipt):
+    # Keep the complete recovery point when a newer batch contains only MySQL.
+    # Both times advance together in the same atomic receipt.
+    if receipt.get('recoveryStateStatus') == 'verified':
+        receipt['lastCompleteCapturedAt'] = receipt['capturedAt']
+    else:
+        try:
+            previous = private_json(path)
+        except (OSError, BackupError, ValueError):
+            previous = {}
+        complete = (previous.get('capturedAt') if previous.get('recoveryStateStatus') == 'verified'
+                    else previous.get('lastCompleteCapturedAt'))
+        if isinstance(complete, str) and CAPTURE_TIME.fullmatch(complete) and complete <= receipt['capturedAt']:
+            receipt['lastCompleteCapturedAt'] = complete
+    save_receipt(path, receipt)
 
 
 def remove_uploaded(directory):
@@ -308,7 +376,7 @@ def main():
         if not pending.is_dir() or pending.is_symlink():
             raise BackupError('Invalid pending backup directory')
         receipt = publish(target, pending)
-        save_receipt(spool / 'last-upload.json', receipt)
+        save_upload_receipt(spool / 'last-upload.json', receipt)
         pending.rename(uploaded)
         sync_directory(spool)
         remove_uploaded(uploaded)
@@ -318,8 +386,11 @@ def main():
 if __name__ == '__main__':
     try:
         main()
+    except ReleaseDeferred as error:
+        print(str(error), file=sys.stderr)
+        sys.exit(os.EX_TEMPFAIL)
     except BlockingIOError:
-        sys.exit('Backup or formal release is in progress. Backup deferred.')
+        sys.exit('Backup is already in progress.')
     except BackupError as error:
         sys.exit(str(error))
     except (OSError, ValueError, subprocess.SubprocessError):

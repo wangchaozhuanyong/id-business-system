@@ -1080,13 +1080,66 @@ class WebsiteReleaseTests(unittest.TestCase):
         recovery = {"key": receipt["key"].removesuffix("manifest.json") + "recovery-state.idbackup",
                     "versionId": "fixture-capsule-version", "cipherSha256": "c" * 64, "cipherBytes": 4096}
         paired = receipt | {"recoveryStateStatus": "verified", "recoveryState": recovery}
-        self.assertEqual(backup_monitoring.mysql_fields(paired)["recoveryStatus"], "verified")
-        self.assertEqual(backup_monitoring.mysql_fields(receipt | {"recoveryStateStatus": "capture_failed"})[
-            "recoveryStatus"], "capture_failed")
+        self.assertEqual(backup_monitoring.mysql_fields(paired), {
+            **report, "recoveryStatus": "verified", "completeAt": report["capturedAt"]
+        })
+        partial = receipt | {"recoveryStateStatus": "capture_failed",
+                             "lastCompleteCapturedAt": "20261111T070000Z",
+                             "recoveryStateFailureStage": "services"}
+        self.assertEqual(backup_monitoring.mysql_fields(partial), {
+            **report, "recoveryStatus": "capture_failed", "recoveryStage": "services",
+            "completeAt": report["capturedAt"] - 30 * 60_000
+        })
+        for invalid in ("20261111T080000Z", "20261131T070000Z", "20261111T073000Z"):
+            self.assertNotIn("completeAt", backup_monitoring.mysql_fields(partial | {"lastCompleteCapturedAt": invalid}))
+        self.assertNotIn("recoveryStage", backup_monitoring.mysql_fields(
+            partial | {"recoveryStateFailureStage": "private source error"}))
         for changes in ({"key": "unrelated/recovery-state.idbackup"}, {"versionId": "null"},
                         {"cipherBytes": 0}, {"cipherBytes": True}, {"cipherSha256": "bad"}):
             self.assertEqual(backup_monitoring.mysql_fields(paired | {"recoveryState": recovery | changes})[
                 "recoveryStatus"], "missing")
+
+    def test_only_an_actively_scheduled_release_deferral_enters_retry_observation(self):
+        service = {"LoadState": "loaded", "ActiveState": "activating", "SubState": "auto-restart",
+                   "Result": "exit-code", "ExecMainStatus": "75"}
+        self.assertTrue(backup_monitoring.release_retry_pending(service))
+        for changes in ({"SubState": "failed"}, {"ActiveState": "failed"}, {"ExecMainStatus": "1"},
+                        {"Result": "start-limit-hit"}, {"LoadState": "not-found"}):
+            self.assertFalse(backup_monitoring.release_retry_pending(service | changes))
+
+    def test_backup_resources_read_only_fixed_metadata_and_keep_unknown_memory_distinct(self):
+        runtime = Path(__file__).resolve().parents[2] / ".runtime"
+        runtime.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=runtime) as directory:
+            root = Path(directory)
+            formal = root / "formal"
+            private = formal / "private"
+            private.mkdir(parents=True)
+            (private / "fixture.cred").write_text("synthetic-private-content")
+            (formal / "data").mkdir()
+            (formal / "data/local-business.sqlite").write_bytes(b"fixture")
+            spool = root / "backups/scheduled-recharge"
+            for folder in ("pending", ".capture-fixture"):
+                (spool / folder).mkdir(parents=True)
+                (spool / folder / "encrypted").write_bytes(b"blob")
+            unit = b"MemoryPeak=18446744073709551615\nCPUUsageNSec=20\nExecMainStartTimestampMonotonic=30\n"
+
+            def read_memory(path):
+                self.assertEqual(str(path), "/proc/meminfo")
+                return "MemTotal: 1024 kB\nMemAvailable: 768 kB\n"
+
+            with patch.multiple(remote, ROOT=root, FORMAL=formal, run=Mock(return_value=unit)), \
+                    patch.object(Path, "read_text", read_memory):
+                report = remote.backup_resource_summary()
+            self.assertEqual(report["hostMemoryBytes"]["MemAvailable"], 768 * 1024)
+            self.assertIsNone(report["backupService"]["MemoryPeak"])
+            self.assertEqual(report["backupService"]["CPUUsageNSec"], 20)
+            self.assertEqual(report["spool"]["pending"], {"exists": True, "files": 1, "bytes": 4})
+            self.assertEqual(report["spool"][".uploaded"], {"exists": False})
+            self.assertEqual(report["spool"]["captureBytes"], 4)
+            self.assertEqual(report["recoverySourceBytes"]["private"]["files"], 1)
+            self.assertEqual(report["sqliteFileBytes"], 7)
+            self.assertNotIn("synthetic-private-content", json.dumps(report))
 
     def test_recovery_receipt_limit_is_bounded_and_projection_stays_small(self):
         runtime = Path(__file__).resolve().parents[2] / ".runtime"
@@ -1193,6 +1246,19 @@ class WebsiteReleaseTests(unittest.TestCase):
         expected = check.replace("'prototype.css?v=old'", "'prototype.css?v=new'") \
             .replace(r"subscription-management\.js\?v=old", r"subscription-management\.js\?v=new")
         self.assertEqual(remote.update_canary_asset_refs(check, old, new), expected)
+
+    def test_canary_repairs_inherited_stale_versions_when_the_index_is_unchanged(self):
+        index = '<script src="./prototype.js?v=20261116-loading-layout"></script>'
+        stale = ("assert(index.includes('prototype.js?v=20261114-business-recovery'));\n"
+                 r"assert.match(index, /prototype\.js\?v=20261114-business-recovery/);" "\n"
+                 "assert(index.includes('overview-prototype.js?v=20261114-business-recovery'));\n"
+                 "assert.equal(response.status, 200);")
+        expected = stale.replace("'prototype.js?v=20261114-business-recovery'",
+                                 "'prototype.js?v=20261116-loading-layout'") \
+            .replace(r"prototype\.js\?v=20261114-business-recovery", r"prototype\.js\?v=20261116-loading-layout")
+        actual = remote.update_canary_asset_refs(stale, index, index)
+        self.assertEqual(actual, expected)
+        self.assertEqual(remote.update_canary_asset_refs(actual, index, index), expected)
 
 
 if __name__ == "__main__":

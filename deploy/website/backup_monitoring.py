@@ -14,6 +14,9 @@ ROOT = Path("/opt/id-business-independent")
 FORMAL = ROOT / "formal"
 DIRECTORY = FORMAL / "backup-monitoring/receipts"
 RECHARGE = "id-business-independent-recharge-backup"
+RELEASE_DEFERRED_STATUS = str(os.EX_TEMPFAIL)
+RECOVERY_STAGES = {"application", "collector", "source", "sqlite", "credentials", "services",
+                   "size_limit", "encryption", "verification", "unknown"}
 SHEETS_WORKER = "id-business-independent-sheets-sync"
 SHEETS_INTEGRITY_CODES = {
     "SHEETS_HEADER_MISMATCH", "SHEETS_TAB_MISSING", "SHEETS_TARGET_INVALID",
@@ -89,7 +92,22 @@ def mysql_fields(receipt):
                 re.fullmatch(r"[a-f0-9]{64}", str(recovery.get("cipherSha256"))) and
                 type(recovery.get("cipherBytes")) is int and recovery["cipherBytes"] > 0):
             recovery_status = "verified"
-        return {**result, "recoveryStatus": recovery_status}
+        result["recoveryStatus"] = recovery_status
+        if recovery_status == "verified":
+            result["completeAt"] = result["capturedAt"]
+        elif recovery_status == "capture_failed":
+            complete = receipt.get("lastCompleteCapturedAt")
+            if isinstance(complete, str) and re.fullmatch(r"[0-9]{8}T[0-9]{6}Z", complete):
+                try:
+                    complete_time = dt.datetime.strptime(complete, "%Y%m%dT%H%M%SZ").replace(tzinfo=dt.timezone.utc)
+                    if complete_time < capture_time:
+                        result["completeAt"] = int(complete_time.timestamp() * 1000)
+                except (ValueError, OverflowError):
+                    pass
+            stage = receipt.get("recoveryStateFailureStage")
+            if isinstance(stage, str) and stage in RECOVERY_STAGES:
+                result["recoveryStage"] = stage
+        return result
     except (ValueError, OverflowError):
         return None
 
@@ -162,12 +180,18 @@ def write_receipt(name, report, group):
 
 def unit_status(name):
     result = subprocess.run(
-        ["/usr/bin/systemctl", "show", name, "-p", "LoadState,ActiveState,UnitFileState,Result,ExecMainStatus"],
+        ["/usr/bin/systemctl", "show", name, "-p", "LoadState,ActiveState,SubState,UnitFileState,Result,ExecMainStatus"],
         capture_output=True, text=True, timeout=5,
     )
     if result.returncode:
         return {}
     return dict(line.split("=", 1) for line in result.stdout.splitlines())
+
+
+def release_retry_pending(service):
+    return (service.get("LoadState"), service.get("ActiveState"), service.get("SubState"),
+            service.get("Result"), service.get("ExecMainStatus")) == (
+                "loaded", "activating", "auto-restart", "exit-code", RELEASE_DEFERRED_STATUS)
 
 
 def collect():
@@ -188,6 +212,7 @@ def collect():
         "mysqlTimerActive": timer.get("ActiveState") == "active" and timer.get("UnitFileState") == "enabled",
         "mysqlAttemptFailed": (service.get("LoadState"), service.get("Result"), service.get("ExecMainStatus")) !=
                               ("loaded", "success", "0"),
+        "mysqlAttemptDeferred": release_retry_pending(service),
     }
     write_receipt("backup-status.json", report, site.st_gid)
     collect_sheets(site.st_gid)

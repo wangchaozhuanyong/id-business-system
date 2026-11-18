@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { lstat, open, realpath, rename, unlink } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
+import { recoveryStageLabels } from './monitoring-policy.mjs';
 
 const workers = new Set(['backup', 'sheets']);
 const receiptPath = (directory, name) => join(directory, 'monitoring-' + name + '.json');
@@ -79,11 +80,16 @@ export async function readBackupMonitorReceipt(directory) {
     { uid: 0, gid: process.getgid(), mode: 0o640 });
   if (!report || !timestamp(report.at) || typeof report.mysqlTimerActive !== 'boolean' ||
       typeof report.mysqlAttemptFailed !== 'boolean' ||
+      (report.mysqlAttemptDeferred !== undefined && (typeof report.mysqlAttemptDeferred !== 'boolean' ||
+        (report.mysqlAttemptDeferred && !report.mysqlAttemptFailed))) ||
       (report.drive !== null && !validWorkerReceipt(report.drive))) return null;
   const mysql = report.mysql;
   if (mysql !== null && (!timestamp(mysql?.capturedAt) || !timestamp(mysql.verifiedAt) ||
       mysql.capturedAt > mysql.verifiedAt || (mysql.recoveryStatus !== undefined &&
-        !['verified', 'capture_failed', 'missing'].includes(mysql.recoveryStatus)))) return null;
+        !['verified', 'capture_failed', 'missing'].includes(mysql.recoveryStatus)) ||
+      (mysql.completeAt !== undefined && (!timestamp(mysql.completeAt) || mysql.completeAt > mysql.capturedAt)) ||
+      (mysql.recoveryStage !== undefined && (mysql.recoveryStatus !== 'capture_failed' ||
+        typeof mysql.recoveryStage !== 'string' || !Object.hasOwn(recoveryStageLabels, mysql.recoveryStage))))) return null;
   return report;
 }
 
