@@ -103,7 +103,16 @@ def require(condition, message):
 
 
 def run(args, timeout=25):
-    return subprocess.check_output(args, stderr=subprocess.PIPE, timeout=timeout)
+    try:
+        return subprocess.check_output(args, stderr=subprocess.PIPE, timeout=timeout)
+    except subprocess.CalledProcessError:
+        if args[:2] == ["docker", "inspect"]:
+            raise ReleaseError("container_metadata_read_failed") from None
+        if args[:4] == ["docker", "exec", "id-business-independent-app", "cat"]:
+            raise ReleaseError("mounted_public_asset_read_failed") from None
+        if args[:3] == ["git", "-c", "credential.helper="]:
+            raise ReleaseError("release_repository_read_failed") from None
+        raise
 
 
 def digest(path):
@@ -136,22 +145,27 @@ def asset_bundle_summary(path):
     return summary
 
 
+def mounted_asset_bytes():
+    container = inspect("app")
+    revision = (container["Config"].get("Labels") or {}).get("org.opencontainers.image.revision")
+    if not isinstance(revision, str) or not re.fullmatch(r"[a-f0-9]{40}", revision):
+        return None
+    source = str(ROOT / "releases" / revision / "assets.json")
+    mounts = [mount for mount in container["Mounts"] if mount["Source"] == source and not mount["RW"]]
+    if len(mounts) != 1:
+        return None
+    destination = mounts[0]["Destination"]
+    if (not isinstance(destination, str) or not destination.startswith("/") or
+            not destination.endswith(".json") or ".." in Path(destination).parts):
+        return None
+    return run(["docker", "exec", "id-business-independent-app", "cat", destination])
+
+
 def mounted_assets_digest():
-    script = """
-import { readFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
-const path = process.env.ID_CODEXDAICHONG_ASSETS_FILE;
-let report = {available:false};
-if (path?.startsWith('/') && path.endsWith('.json')) {
-  try {
-    const raw = readFileSync(path);
-    report = {available:true,sha256:createHash('sha256').update(raw).digest('hex'),bytes:raw.length};
-  } catch {}
-}
-console.log(JSON.stringify(report));
-"""
-    return json.loads(run(["docker", "exec", "id-business-independent-app", "node",
-                           "--input-type=module", "-e", script]))
+    content = mounted_asset_bytes()
+    if content is None:
+        return {"available": False}
+    return {"available": True, "sha256": hashlib.sha256(content).hexdigest(), "bytes": len(content)}
 
 
 def require_main(sha):
@@ -258,15 +272,8 @@ def repair_current_asset_metadata(plan):
             "asset_metadata_file_identity_invalid")
     if current["assetsSha256"] == expected:
         return {"before": current, "repair": {"repaired": False, "baseWebsiteSha": base}}
-    script = """
-import { readFileSync } from 'node:fs';
-const path = process.env.ID_CODEXDAICHONG_ASSETS_FILE;
-if (!path?.startsWith('/') || !path.endsWith('.json')) throw Error('asset_path_invalid');
-process.stdout.write(readFileSync(path));
-"""
-    content = run(["docker", "exec", "id-business-independent-app", "node",
-                   "--input-type=module", "-e", script])
-    require(len(content) == plan["expectedAssetsBytes"] and
+    content = mounted_asset_bytes()
+    require(content is not None and len(content) == plan["expectedAssetsBytes"] and
             hashlib.sha256(content).hexdigest() == expected, "asset_metadata_recovery_bytes_mismatch")
     require(digest(asset) == current["assetsSha256"], "asset_metadata_changed_during_recovery")
     archive = FORMAL / "backups" / ("asset-metadata-" + plan["sha"][:12] + "-" + str(time.time_ns()))
