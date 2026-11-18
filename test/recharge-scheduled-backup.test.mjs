@@ -160,6 +160,9 @@ assert not new_pending.exists()
 class FixtureRecoveryError(RuntimeError):
     pass
 
+for code in ('recovery_native_launcher_unavailable', 'recovery_native_source_mismatch', 'recovery_native_runtime_changed'):
+    assert backup.RECOVERY_ERROR_STAGES[code] == 'source'
+
 def failed_recovery(*args):
     raise FixtureRecoveryError('recovery_service_definition_unavailable')
 

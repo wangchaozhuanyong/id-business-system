@@ -1057,7 +1057,7 @@ class WebsiteReleaseTests(unittest.TestCase):
                   "adapterUnit": {"commandSha256": "previous"}}
         snapshot.return_value = before
         plan = {"sha": TARGET, "before": before, "adapter": {"runtimeFiles": []}}
-        with self.assertRaisesRegex(remote.ReleaseError, "adapter_canary_failed"):
+        with patch.object(remote, "check_native_recovery_source"), self.assertRaisesRegex(remote.ReleaseError, "adapter_canary_failed"):
             remote.release_website(plan)
         snapshot.assert_called_once_with(True)
         canary.assert_called_once_with(TARGET, Path("/stage/operations"))
@@ -1377,6 +1377,111 @@ class WebsiteReleaseTests(unittest.TestCase):
             self.assertEqual(report["recoverySourceBytes"]["private"]["files"], 1)
             self.assertEqual(report["sqliteFileBytes"], 7)
             self.assertNotIn("synthetic-private-content", json.dumps(report))
+
+    def test_native_recovery_source_is_verified_before_the_website_switch(self):
+        class FixtureRecoveryError(RuntimeError):
+            pass
+
+        runtime = Path(__file__).resolve().parents[2] / ".runtime"
+        runtime.mkdir(exist_ok=True)
+        plan = {"before": {"components": {"recharge-native": {"revision": BASE}}}}
+        verify = Mock()
+        module = {"NATIVE_UNIT": "id-business-independent-recharge-native.service",
+                  "RecoveryError": FixtureRecoveryError, "native_source_launcher": verify}
+        with TemporaryDirectory(dir=runtime) as directory:
+            root = Path(directory)
+            with patch.multiple(remote, ROOT=root, run=Mock(return_value=b"captured-unit")), \
+                    patch.object(remote.runpy, "run_path", return_value=module) as load:
+                remote.check_native_recovery_source(plan, root / "source")
+                verify.assert_called_once_with(root, BASE, b"captured-unit")
+                verify.side_effect = FixtureRecoveryError("recovery_native_source_mismatch")
+                with self.assertRaisesRegex(remote.ReleaseError, "recovery_native_source_mismatch"):
+                    remote.check_native_recovery_source(plan, root / "source")
+                load.reset_mock()
+                remote.check_native_recovery_source(plan | {"rechargeCore": {"assetsSha256": "fixture"}}, root / "source")
+                load.assert_not_called()
+
+    def test_process_peak_reads_v1_v2_and_avoids_global_or_traversing_cgroups(self):
+        files = {"/proc/123/status": "Name: private-content\nVmHWM: 8 kB\n",
+                 "/proc/123/cgroup": "0::/system.slice/fixture\n",
+                 "/sys/fs/cgroup/system.slice/fixture/memory.peak": "20480\n"}
+
+        def read(path):
+            if str(path) not in files:
+                raise FileNotFoundError()
+            return files[str(path)]
+
+        with patch.object(Path, "read_text", read):
+            self.assertEqual(remote.read_process_memory(123), {"rssPeakBytes": 8192, "cgroupPeakBytes": 20480})
+            files["/proc/123/cgroup"] = "5:cpu,memory:/docker/fixture\n"
+            files["/sys/fs/cgroup/memory/docker/fixture/memory.max_usage_in_bytes"] = "30720\n"
+            self.assertEqual(remote.read_process_memory(123)["cgroupPeakBytes"], 30720)
+            for value in ("0::/\n", "0::/../private\n"):
+                files["/proc/123/cgroup"] = value
+                self.assertIsNone(remote.read_process_memory(123)["cgroupPeakBytes"])
+        self.assertNotIn("private-content", json.dumps(remote.read_process_memory(0)))
+
+    def test_resource_window_records_only_owned_containers_and_preserves_zero_available_memory(self):
+        snapshot_id, capsule_id = "a" * 12, "b" * 12
+        rows = (snapshot_id + " id-recovery-snapshot-" + "c" * 16 + "\n" +
+                capsule_id + " id-recovery-capsule-" + "d" * 16 + "\n" +
+                "e" * 12 + " unrelated-container\n").encode()
+        scans = iter([rows, b""])
+
+        def command(args, **kwargs):
+            if args[0] == "systemctl":
+                return b"123\n"
+            if args[:2] == ["docker", "ps"]:
+                return next(scans)
+            self.assertEqual(args[:2], ["docker", "inspect"])
+            return b"456\n"
+
+        measurements = [{"rssPeakBytes": value, "cgroupPeakBytes": value * 2} for value in (100, 20, 50, 120)]
+        with patch.object(remote, "run", side_effect=command), \
+                patch.object(remote, "read_process_memory", side_effect=measurements), \
+                patch.object(Path, "read_text", side_effect=["MemAvailable: 0 kB\n", "MemAvailable: 64 kB\n"]), \
+                patch.object(remote.time, "monotonic", side_effect=[0, 0, 1, 2]), \
+                patch.object(remote.time, "sleep"):
+            report = remote.observe_backup_resources(2)
+        self.assertTrue(report["backupObserved"])
+        self.assertTrue(report["peakObserved"])
+        self.assertEqual(report["samples"], 2)
+        self.assertEqual(report["minHostAvailableBytes"], 0)
+        self.assertEqual(report["backupService"][0]["rssPeakBytes"], 120)
+        self.assertEqual({row["role"] for row in report["containers"]}, {"snapshot", "capsule"})
+        self.assertEqual(report["lastActiveContainers"], 0)
+        with self.assertRaisesRegex(remote.ReleaseError, "invalid_backup_observation_window"):
+            remote.observe_backup_resources(61)
+
+    @patch("release.require_main")
+    @patch("release.require_ancestor")
+    @patch("release.remote", return_value=("command", {"synthetic": True}))
+    def test_resource_window_is_available_only_in_the_readonly_operation(self, dispatch, ancestor, main):
+        env = {"RELEASE_SHA": TARGET, "QUALITY_RUN_ID": "123", "INSPECT_CANARY_SHA": BASE}
+        with patch.dict(os.environ, env, clear=True), redirect_stdout(io.StringIO()):
+            release.main(sample_backup_resources=True)
+        self.assertEqual(dispatch.call_args.args[0], {"operation": "inspect", "sha": TARGET,
+            "attemptSha": BASE, "sampleBackupResources": True})
+        for change in ({"INSPECT_CANARY_SHA": ""}, {"RELEASE_RECHARGE_CORE": "true"},
+                       {"RELEASE_CUSTOMER_PROGRESS": "true"}, {"INSPECT_RELEASE_COMMAND": "existing-command"}):
+            dispatch.reset_mock()
+            with patch.dict(os.environ, env | change, clear=True), self.assertRaisesRegex(
+                    RuntimeError, "backup_observation_requires_readonly_inspection"):
+                release.main(sample_backup_resources=True)
+            dispatch.assert_not_called()
+
+    def test_readonly_inspection_shares_the_backup_lock_and_releases_remain_exclusive(self):
+        runtime = Path(__file__).resolve().parents[2] / ".runtime"
+        runtime.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=runtime) as directory:
+            lock = Path(directory) / "release.lock"
+            lock.touch()
+            with patch.multiple(remote, LOCK=lock, require_main=Mock(), inspect_canary=Mock(return_value={}), snapshot=Mock(return_value={})), \
+                    patch.object(remote.fcntl, "flock") as acquire, redirect_stdout(io.StringIO()):
+                remote.main({"operation": "inspect", "sha": TARGET, "attemptSha": BASE, "sampleBackupResources": True})
+                self.assertEqual(acquire.call_args.args[1], remote.fcntl.LOCK_SH | remote.fcntl.LOCK_NB)
+                remote.main({"operation": "preflight", "sha": TARGET})
+                self.assertEqual(acquire.call_args.args[1], remote.fcntl.LOCK_EX | remote.fcntl.LOCK_NB)
 
     def test_recovery_receipt_limit_is_bounded_and_projection_stays_small(self):
         runtime = Path(__file__).resolve().parents[2] / ".runtime"
