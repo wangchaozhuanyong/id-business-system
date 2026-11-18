@@ -1213,6 +1213,19 @@ class WebsiteReleaseTests(unittest.TestCase):
             .replace(r"subscription-management\.js\?v=old", r"subscription-management\.js\?v=new")
         self.assertEqual(remote.update_canary_asset_refs(check, old, new), expected)
 
+    def test_canary_repairs_inherited_stale_versions_when_the_index_is_unchanged(self):
+        index = '<script src="./prototype.js?v=20261116-loading-layout"></script>'
+        stale = ("assert(index.includes('prototype.js?v=20261114-business-recovery'));\n"
+                 r"assert.match(index, /prototype\.js\?v=20261114-business-recovery/);" "\n"
+                 "assert(index.includes('overview-prototype.js?v=20261114-business-recovery'));\n"
+                 "assert.equal(response.status, 200);")
+        expected = stale.replace("'prototype.js?v=20261114-business-recovery'",
+                                 "'prototype.js?v=20261116-loading-layout'") \
+            .replace(r"prototype\.js\?v=20261114-business-recovery", r"prototype\.js\?v=20261116-loading-layout")
+        actual = remote.update_canary_asset_refs(stale, index, index)
+        self.assertEqual(actual, expected)
+        self.assertEqual(remote.update_canary_asset_refs(actual, index, index), expected)
+
 
 if __name__ == "__main__":
     unittest.main()

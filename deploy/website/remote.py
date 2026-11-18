@@ -202,12 +202,11 @@ def update_canary_asset_refs(content, previous_index, target_index):
     previous = dict(VERSIONED_ASSET.findall(previous_index))
     target = dict(VERSIONED_ASSET.findall(target_index))
     for name in previous.keys() & target.keys():
-        if previous[name] == target[name]:
-            continue
         for asset, query in ((name, "?"), (name.replace(".", r"\."), r"\?")):
-            old = f"{asset}{query}v={previous[name]}"
             new = f"{asset}{query}v={target[name]}"
-            pattern = rf"(?<![\w.-]){re.escape(old)}(?![\w.-])"
+            # The inherited checker can predate the active index. Bind its
+            # known asset assertions to the exact prepared index each time.
+            pattern = rf"(?<![\w.-]){re.escape(asset + query)}v=[a-zA-Z0-9.-]+(?![\w.-])"
             content = re.sub(pattern, lambda _: new, content)
     return content
 
