@@ -37,7 +37,8 @@ class ManagedBackupInstall(unittest.TestCase):
         original_lstat = Path.lstat
         def metadata(path, **kwargs):
             info = original_lstat(path, **kwargs)
-            return SimpleNamespace(st_mode=info.st_mode, st_uid=0) if path == self.target else info
+            return (SimpleNamespace(st_mode=info.st_mode, st_uid=0, st_nlink=info.st_nlink)
+                    if path == self.target or path.name == 'scheduled-backup.py.before' else info)
         for context in (patch.object(remote, 'ROOT', self.root), patch.object(remote, 'FORMAL', self.formal),
                         patch.object(Path, 'lstat', metadata)):
             context.start()
@@ -79,6 +80,52 @@ class ManagedBackupInstall(unittest.TestCase):
             with self.assertRaisesRegex(remote.ReleaseError, 'upload_in_progress'):
                 self.install()
         self.assertEqual(self.target.read_text(), 'version = 1\n')
+
+    def interrupted_release(self):
+        previous = self.root / 'releases' / BASE / 'source' / remote.BACKUP_OPERATION
+        previous.write_text('version = 2\n')
+        original = self.root / 'releases' / ('c' * 40) / 'source' / remote.BACKUP_OPERATION
+        original.parent.mkdir(parents=True)
+        original.write_text('version = 1\n')
+        saved = self.root / 'releases' / BASE / 'operations/scheduled-backup.py.before'
+        saved.parent.mkdir(parents=True)
+        saved.write_text('version = 1\n')
+        saved.chmod(0o600)
+        return saved, original
+
+    def test_finishes_only_the_verified_interrupted_backup_install(self):
+        saved, _ = self.interrupted_release()
+        with patch.multiple(remote, INTERRUPTED_BACKUP_INSTALL_BASE=BASE, ASSET_METADATA_REPAIR_BASE='c' * 40):
+            receipt = self.install()
+        self.assertEqual(self.target.read_text(), 'version = 2\n')
+        self.assertEqual(saved.read_text(), 'version = 1\n')
+        self.assertEqual(receipt['resumedBackupBaseline'], {'websiteSha': BASE, 'programSourceSha': 'c' * 40})
+        self.assertEqual((self.ops / 'scheduled-backup.py.before').read_text(), 'version = 1\n')
+
+    def test_interrupted_install_rejects_a_completed_release_and_unverified_programs(self):
+        saved, original = self.interrupted_release()
+        completed = saved.parent / 'release.receipt.json'
+        with patch.multiple(remote, INTERRUPTED_BACKUP_INSTALL_BASE=BASE, ASSET_METADATA_REPAIR_BASE='c' * 40):
+            for failure in ('completed', 'saved', 'original', 'permissions'):
+                with self.subTest(failure=failure):
+                    if failure == 'completed':
+                        completed.write_text('{}')
+                    elif failure == 'saved':
+                        saved.write_text('unreviewed = True\n')
+                    elif failure == 'original':
+                        original.write_text('unreviewed = True\n')
+                    else:
+                        saved.chmod(0o644)
+                    with self.assertRaisesRegex(remote.ReleaseError, 'baseline_changed'):
+                        self.install()
+                    completed.unlink(missing_ok=True)
+                    saved.write_text('version = 1\n')
+                    saved.chmod(0o600)
+                    original.write_text('version = 1\n')
+        self.assertEqual(self.target.read_text(), 'version = 1\n')
+        self.assertFalse((self.ops / 'scheduled-backup.py.before').exists())
+        with self.assertRaisesRegex(remote.ReleaseError, 'baseline_changed'):
+            self.install()
 
     @patch('release.require_ancestor')
     @patch('release.git')
