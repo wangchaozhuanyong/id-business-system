@@ -65,6 +65,28 @@ class WebsiteReleaseTests(unittest.TestCase):
                 self.assertIsNone(result["entries"])
                 self.assertNotIn("synthetic-private-text", json.dumps(result))
 
+    def test_mounted_asset_digest_handles_a_missing_setting_or_unreadable_file(self):
+        runtime = Path(__file__).resolve().parents[2] / ".runtime"
+        runtime.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=runtime) as directory:
+            path = Path(directory) / "assets.json"
+            path.write_text('{"synthetic": true}')
+            environment = {key: value for key, value in os.environ.items() if key != "ID_CODEXDAICHONG_ASSETS_FILE"}
+
+            def run_node(command):
+                self.assertEqual(command[:4], ["docker", "exec", "id-business-independent-app", "node"])
+                return subprocess.check_output(command[3:], env=environment)
+
+            with patch.object(remote, "run", run_node):
+                self.assertEqual(remote.mounted_assets_digest(), {"available": False})
+                environment["ID_CODEXDAICHONG_ASSETS_FILE"] = str(path)
+                self.assertEqual(remote.mounted_assets_digest(), {
+                    "available": True, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                    "bytes": path.stat().st_size
+                })
+                environment["ID_CODEXDAICHONG_ASSETS_FILE"] = str(path.with_name("absent.json"))
+                self.assertEqual(remote.mounted_assets_digest(), {"available": False})
+
     def test_native_diagnostic_uses_only_release_phases_and_fixed_error_codes(self):
         invocation = {"Status": "Failed",
                       "StandardOutputContent": '{"rechargePreflight": {"readOnly": true}}\n'

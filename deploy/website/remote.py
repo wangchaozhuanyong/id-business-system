@@ -139,9 +139,14 @@ def mounted_assets_digest():
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 const path = process.env.ID_CODEXDAICHONG_ASSETS_FILE;
-if (!path?.startsWith('/') || !path.endsWith('.json')) throw Error('asset_path_invalid');
-const raw = readFileSync(path);
-console.log(JSON.stringify({sha256:createHash('sha256').update(raw).digest('hex'),bytes:raw.length}));
+let report = {available:false};
+if (path?.startsWith('/') && path.endsWith('.json')) {
+  try {
+    const raw = readFileSync(path);
+    report = {available:true,sha256:createHash('sha256').update(raw).digest('hex'),bytes:raw.length};
+  } catch {}
+}
+console.log(JSON.stringify(report));
 """
     return json.loads(run(["docker", "exec", "id-business-independent-app", "node",
                            "--input-type=module", "-e", script]))
