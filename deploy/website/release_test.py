@@ -1058,6 +1058,26 @@ class WebsiteReleaseTests(unittest.TestCase):
         body, end = shell.split("\n", 2)[2].rsplit("\nID_WEBSITE_RELEASE\n", 1)
         self.assertEqual(end, "")
         compile(body, "<ssm-release>", "exec")
+        plan = {"operation": "release", "sha": TARGET,
+                "files": {f"server/synthetic-module-{i}.mjs": hashlib.sha256(str(i).encode()).hexdigest()
+                          for i in range(250)}}
+        parameters = json.dumps({"commands": [release.script_for(plan)], "executionTimeout": ["600"]})
+        self.assertLess(len(parameters.encode()), 48 * 1024)
+
+    def test_ssm_program_roundtrips_the_full_plan_and_rejects_a_digest_mismatch(self):
+        source = "import sys,json\ndef main(value):\n    global captured\n    captured=value\n"
+        plan = {"operation": "inspect", "sha": TARGET, "text": "中文\n'\" $(synthetic) ID_WEBSITE_RELEASE"}
+        with patch.object(release.Path, "read_text", return_value=source):
+            shell = release.script_for(plan)
+        body = shell.split("\n", 2)[2].rsplit("\nID_WEBSITE_RELEASE\n", 1)[0]
+        namespace = {"__name__": "remote"}
+        exec(compile(body, "<synthetic-ssm>", "exec"), namespace)
+        self.assertEqual(namespace["captured"], plan)
+        checksum = hashlib.sha256(namespace["program"]).hexdigest()
+        rejected = {"__name__": "remote"}
+        with self.assertRaisesRegex(RuntimeError, "release_program_digest_mismatch"):
+            exec(compile(body.replace(checksum, "0" * 64), "<synthetic-ssm>", "exec"), rejected)
+        self.assertNotIn("captured", rejected)
 
     @patch("remote.stage")
     @patch("remote.snapshot")
