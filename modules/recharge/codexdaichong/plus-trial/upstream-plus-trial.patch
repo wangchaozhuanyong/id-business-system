@@ -1,5 +1,5 @@
 diff --git a/chatgpt.js b/chatgpt.js
-index 8a7cba7..4c55f90 100644
+index 8a7cba7..7fa3043 100644
 --- a/chatgpt.js
 +++ b/chatgpt.js
 @@ -467,6 +467,10 @@ async function openApiCheckout(page, { accessToken, sessionData, planType, count
@@ -61,7 +61,7 @@ index 8a7cba7..4c55f90 100644
      const { assertChatGptLoggedIn } = require('./session-auth');
      const { hasVisibleLoginChrome } = require('./auth-page-detect');
      const isPaymentUrl = (raw) => {
-@@ -520,6 +562,64 @@ async function verifyCheckoutDebugPage(page, { checkoutUrl, timeoutMs = 60000 }
+@@ -520,6 +562,83 @@ async function verifyCheckoutDebugPage(page, { checkoutUrl, timeoutMs = 60000 }
          if (!isPaymentUrl(page.url())) {
              throw new Error('支付页面发生非 Checkout 跳转，调试已停止');
          }
@@ -120,8 +120,27 @@ index 8a7cba7..4c55f90 100644
 +            }
 +        }
 +        if (await isCheckoutSummaryReady(page)) {
-+            console.log('✅ [调试] 无卡结账页已加载，调试已停止（未填卡、未付款）');
-+            return { checkoutUrl: page.url() };
++            // 只有金额为 0 才是真正的 0 元试用（Plus 可能触发）；Pro 各档不存在 0 元。
++            let dueAmount = null;
++            try {
++                const due = await captureCheckoutDueAmount(page, null);
++                dueAmount = due && due.amount ? due : null;
++            } catch (_) { dueAmount = null; }
++            const numeric = dueAmount ? Number(String(dueAmount.amount).replace(/[^0-9.]/g, '')) : NaN;
++            const isZeroAmount = Number.isFinite(numeric) && numeric === 0;
++            if (isZeroAmount) {
++                console.log('✅ [调试] 0 元试用结账页已加载（无需填卡），调试已停止');
++                return { checkoutUrl: page.url(), zeroAmount: true };
++            }
++            // 金额非 0 却没有卡号框：是支付表单没渲染，不能当无卡。
++            console.log('⚠️ [调试] 支付表单未渲染（应付 ' + (dueAmount ? dueAmount.amount + ' ' + (dueAmount.currency || '') : '未知')
++                + '，且无卡号输入框），判定为需要重试而不是无卡结账');
++            return {
++                checkoutUrl: page.url(),
++                paymentFormMissing: true,
++                dueAmount: dueAmount ? dueAmount.amount : null,
++                dueCurrency: dueAmount ? dueAmount.currency : null
++            };
 +        }
          for (const frame of page.frames()) {
              const inputs = frame.locator(cardSelector);
@@ -350,7 +369,7 @@ index e186977..3f6ff78 100644
  }
  
 diff --git a/stripe-payment.js b/stripe-payment.js
-index cd7ff9d..bc89cf1 100644
+index cd7ff9d..e4454ec 100644
 --- a/stripe-payment.js
 +++ b/stripe-payment.js
 @@ -295,6 +295,23 @@ function isOpenAiCustomCheckout(page) {
@@ -467,7 +486,155 @@ index cd7ff9d..bc89cf1 100644
          return payResult;
  
      } catch (error) {
-@@ -2465,6 +2546,9 @@ async function clickCheckoutSubmitButton(page) {
+@@ -1741,55 +1822,106 @@ async function fillBillingControl(page, labelPatterns, value, logLabel) {
+ 
+ async function selectBillingCountry(page, optionLabels) {
+     console.log('  [Stripe] 选择国家...');
+-    const ok = await selectFirstVisibleSelect(
+-        page,
+-        OPENAI_BILLING_FIELD_SELECTORS.country,
+-        optionLabels,
+-        '国家'
+-    );
+-    if (ok) return true;
++    // Stripe 的国家控件是自定义 combobox，原有路径可能长时间无响应；加硬超时避免整轮卡死。
++    const attempt = (async () => {
++        try {
++            const ok = await selectFirstVisibleSelect(
++                page,
++                OPENAI_BILLING_FIELD_SELECTORS.country,
++                optionLabels,
++                '国家'
++            );
++            if (ok) return true;
+ 
+-    const patterns = [/country or region/i, /国家或地区/i, /^country$/i, /国家/];
+-    let field = null;
+-    for (const pat of patterns) {
+-        field = await findBillingControl(page, pat, 'combobox');
+-        if (field) break;
+-    }
+-    if (!field) {
+-        field = await findBillingControl(page, patterns, 'textbox');
+-    }
+-    if (!field) {
+-        console.log('  [Stripe] ⚠️ 国家字段未找到');
+-        return false;
+-    }
++            const patterns = [/country or region/i, /国家或地区/i, /^country$/i, /国家/];
++            let field = null;
++            for (const pat of patterns) {
++                field = await findBillingControl(page, pat, 'combobox');
++                if (field) break;
++            }
++            if (!field) {
++                field = await findBillingControl(page, patterns, 'textbox');
++            }
++            if (!field) {
++                console.log('  [Stripe] ⚠️ 国家字段未找到');
++                return false;
++            }
++            const picked = await selectBillingComboboxItem(page, { el: field }, optionLabels, '国家');
++            if (picked) return true;
+ 
+-    return selectBillingComboboxItem(page, { el: field }, optionLabels, '国家');
++            // 兜底：点开控件后用键盘搜索并回车，适配只响应键入的 combobox。
++            console.log('  [Stripe] 改走键盘选择国家...');
++            await field.click({ timeout: 5000 }).catch(() => {});
++            await page.waitForTimeout(400);
++            await page.keyboard.type('United States', { delay: 60 }).catch(() => {});
++            await page.waitForTimeout(600);
++            await page.keyboard.press('ArrowDown').catch(() => {});
++            await page.waitForTimeout(200);
++            await page.keyboard.press('Enter').catch(() => {});
++            await page.waitForTimeout(800);
++            const now = await getCurrentBillingCountryValue(page).catch(() => ({ value: '', label: '' }));
++            const done = now.value === 'US' || /united states/i.test(now.label) || /美国/.test(now.label);
++            console.log('  [Stripe] 键盘选择国家结果: ' + (done ? '成功' : '未确认') + ' (' + (now.label || now.value || '空') + ')');
++            return done;
++        } catch (error) {
++            console.log('  [Stripe] ⚠️ 选择国家异常: ' + String(error.message).slice(0, 60));
++            return false;
++        }
++    })();
++    const timed = new Promise((resolve) => setTimeout(() => {
++        console.log('  [Stripe] ⚠️ 选择国家超时（25s），继续填后续字段');
++        resolve(false);
++    }, 25000));
++    return Promise.race([attempt, timed]);
+ }
+-
+ async function selectBillingState(page, stateFullName, stateRaw) {
+     console.log('  [Stripe] 选择州...');
+-    const options = [stateFullName, stateRaw].filter(Boolean);
+-    const ok = await selectFirstVisibleSelect(
+-        page,
+-        OPENAI_BILLING_FIELD_SELECTORS.state,
+-        options,
+-        '州/省'
+-    );
+-    if (ok) return true;
++    // 州的 combobox 同样可能长时间无响应，加硬超时让流程继续。
++    const attempt = (async () => {
++        try {
++            const options = [stateFullName, stateRaw].filter(Boolean);
++            const ok = await selectFirstVisibleSelect(
++                page,
++                OPENAI_BILLING_FIELD_SELECTORS.state,
++                options,
++                '州/省'
++            );
++            if (ok) return true;
+ 
+-    const patterns = [/^state$/i, /^province$/i, /^州$/i, /^省$/i, /address-level1/i];
+-    let field = await findBillingControl(page, patterns, 'combobox');
+-    if (!field) {
+-        field = await findBillingControl(page, patterns, 'textbox');
+-    }
+-    if (!field) {
+-        console.log('  [Stripe] ⚠️ 州字段未找到');
+-        return false;
+-    }
++            const patterns = [/^state$/i, /^province$/i, /^州$/i, /^省$/i, /address-level1/i];
++            let field = await findBillingControl(page, patterns, 'combobox');
++            if (!field) {
++                field = await findBillingControl(page, patterns, 'textbox');
++            }
++            if (!field) {
++                console.log('  [Stripe] ⚠️ 州字段未找到');
++                return false;
++            }
++            const picked = await selectBillingComboboxItem(page, { el: field }, [stateFullName, stateRaw].filter(Boolean), '州/省');
++            if (picked) return true;
+ 
+-    return selectBillingComboboxItem(page, { el: field }, options, '州');
++            console.log('  [Stripe] 改走键盘选择州...');
++            await field.click({ timeout: 5000 }).catch(() => {});
++            await page.waitForTimeout(400);
++            await page.keyboard.type(String(stateFullName || stateRaw || 'Oregon'), { delay: 60 }).catch(() => {});
++            await page.waitForTimeout(600);
++            await page.keyboard.press('ArrowDown').catch(() => {});
++            await page.waitForTimeout(200);
++            await page.keyboard.press('Enter').catch(() => {});
++            await page.waitForTimeout(800);
++            console.log('  [Stripe] 键盘选择州完成');
++            return true;
++        } catch (error) {
++            console.log('  [Stripe] ⚠️ 选择州异常: ' + String(error.message).slice(0, 60));
++            return false;
++        }
++    })();
++    const timed = new Promise((resolve) => setTimeout(() => {
++        console.log('  [Stripe] ⚠️ 选择州超时（20s），继续后续步骤');
++        resolve(false);
++    }, 20000));
++    return Promise.race([attempt, timed]);
+ }
+-
+ async function locateOpenAiBillingHeading(page) {
+     const heading = page.getByText(/^Billing address$|^账单地址$/i).first();
+     await heading.waitFor({ state: 'visible', timeout: 10000 });
+@@ -2465,6 +2597,9 @@ async function clickCheckoutSubmitButton(page) {
      };
  
      const strategies = [
@@ -477,7 +644,7 @@ index cd7ff9d..bc89cf1 100644
          () => tryClick(page.getByRole('button', { name: /^Subscribe$/i }), 'role=Subscribe'),
          () => tryClick(page.getByRole('button', { name: /^订阅$/ }), 'role=订阅'),
          () => tryClick(page.getByRole('button', { name: /subscribe|订阅|pay/i }), 'role=subscribe'),
-@@ -2762,8 +2846,115 @@ async function selectCountry(page, selectors, countryCode) {
+@@ -2762,8 +2897,115 @@ async function selectCountry(page, selectors, countryCode) {
  
  // ==================== Exports ====================
  
