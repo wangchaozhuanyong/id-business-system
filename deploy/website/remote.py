@@ -158,7 +158,17 @@ def mounted_asset_bytes():
     if (not isinstance(destination, str) or not destination.startswith("/") or
             not destination.endswith(".json") or ".." in Path(destination).parts):
         return None
-    return run(["docker", "exec", "id-business-independent-app", "cat", destination])
+    pid = container["State"].get("Pid")
+    require(container["State"]["Running"] and type(pid) is int and pid > 0,
+            "mounted_public_asset_runtime_unavailable")
+    try:
+        content = (Path("/proc") / str(pid) / "root" / destination.lstrip("/")).read_bytes()
+    except OSError:
+        raise ReleaseError("mounted_public_asset_namespace_read_failed") from None
+    after = inspect("app")
+    require(identity(after) == identity(container) and after["State"].get("Pid") == pid,
+            "mounted_public_asset_container_changed")
+    return content
 
 
 def mounted_assets_digest():
@@ -166,6 +176,36 @@ def mounted_assets_digest():
     if content is None:
         return {"available": False}
     return {"available": True, "sha256": hashlib.sha256(content).hexdigest(), "bytes": len(content)}
+
+
+def native_publication_state():
+    native = identity(inspect("recharge-native"))
+    labels = json.loads(run(["docker", "image", "inspect", "--format", "{{json .Config.Labels}}", native["image"]])) or {}
+    return {"identity": native, "imageLabelsVerified": native["running"] and
+            labels.get("org.opencontainers.image.revision") == native["revision"] and
+            labels.get("org.id-business.upstream.revision") == PINNED_UPSTREAM}
+
+
+def app_exec_status():
+    report = {"pidsLimit": inspect("app").get("HostConfig", {}).get("PidsLimit")}
+    for name, options in (("default", []), ("root", ["--workdir", "/"])):
+        try:
+            result = subprocess.run(["docker", "exec", *options, "id-business-independent-app", "/bin/true"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=5)
+            detail = result.stderr.decode(errors="replace").lower()
+            report[name] = {"exitCode": result.returncode, "indicators": [code for code, pattern in (
+                ("working_directory", r"working directory|chdir"),
+                ("program_missing", r"executable file not found|no such file"),
+                ("resource_limit", "resource temporarily unavailable"), ("permission", "permission denied"),
+                ("runtime_exec", "unable to start container process")) if re.search(pattern, detail)]}
+        except (OSError, subprocess.TimeoutExpired):
+            report[name] = {"unavailable": True}
+    try:
+        value = run(["docker", "stats", "--no-stream", "--format", "{{.PIDs}}", "id-business-independent-app"], timeout=5)
+        report["pidsCurrent"] = int(value.strip())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        report["pidsCurrent"] = None
+    return report
 
 
 def require_main(sha):
@@ -228,10 +268,13 @@ def snapshot(include_adapter=False):
     state = {"components": components, "unitSha256": digest(DROP), "gatewaySha256": digest(GATEWAY),
              "assetsSha256": digest(live / "assets.json"), "assetsSummary": asset_bundle_summary(live / "assets.json"),
              "mountedAssets": mounted_assets_digest(),
+             "nativePublication": native_publication_state(),
              "freeBytes": free,
              "launchers": {name: digest(live_operations / name) for name in LAUNCHERS}}
     if include_adapter:
         state["adapterUnit"] = adapter_unit_state(components)
+    require(state["nativePublication"]["identity"] == components["recharge-native"],
+            "native_publication_changed_during_read")
     return state
 
 
@@ -666,6 +709,9 @@ def inspect_canary(sha):
     size, log = read_canary_log(ops / (CANARY_RETRY_LOG if retried else CANARY_LOG))
     live = identity(inspect("app"))["revision"]
     return {"attemptSha": sha, "liveWebsiteSha": live,
+            "nativePublication": native_publication_state(),
+            "coreReleaseGateActive": "# BEGIN ID CORE RELEASE " in GATEWAY.read_text(),
+            "appExec": app_exec_status(),
             "liveAssets": {"host": asset_bundle_summary(ROOT / "releases" / live / "assets.json"),
                            "mounted": mounted_assets_digest()},
             "bytes": size, "retried": retried, "backupResources": backup_resource_summary(),
@@ -820,7 +866,7 @@ await source.tick();
 source.close();
 console.log(JSON.stringify(states));
 """
-    status = json.loads(run(["docker", "exec", "id-business-independent-app", "node", "--input-type=module", "-e", check]))
+    status = json.loads(run(["docker", "exec", "--workdir", "/", "id-business-independent-app", "node", "--input-type=module", "-e", check]))
     require(set(status) == {"backup", "recharge_backup"} and all(value != "disabled" for value in status.values()),
             "backup_monitor_check_missing")
     return status
@@ -829,6 +875,21 @@ console.log(JSON.stringify(states));
 def backup_resource_summary():
     """Read resource metadata without collecting backup or credential contents."""
     report = {"at": time.time_ns() // 1_000_000}
+    try:
+        receipt = json.loads((ROOT / "backups/scheduled-recharge/last-upload.json").read_bytes())
+        if not isinstance(receipt, dict):
+            raise ValueError("invalid receipt")
+        report["lastUpload"] = {}
+        for name in ("capturedAt", "verifiedAt", "lastCompleteCapturedAt"):
+            value = receipt.get(name)
+            report["lastUpload"][name] = value if isinstance(value, str) and re.fullmatch(r"[0-9TZ:+.\-]{1,40}", value) else None
+        report["lastUpload"]["recoveryStateStatus"] = (receipt.get("recoveryStateStatus")
+            if receipt.get("recoveryStateStatus") in {"verified", "capture_failed", "unavailable"} else None)
+        report["lastUpload"]["recoveryStateFailureStage"] = (receipt.get("recoveryStateFailureStage")
+            if receipt.get("recoveryStateFailureStage") in {"application", "collector", "source", "sqlite",
+                "credentials", "services", "size_limit", "encryption", "verification", "unknown"} else None)
+    except (OSError, ValueError, TypeError):
+        report["lastUpload"] = None
     try:
         memory = {}
         for line in Path("/proc/meminfo").read_text().splitlines():
@@ -857,6 +918,19 @@ def backup_resource_summary():
                  if not path.is_symlink() and path.is_file()]
         return {"exists": True, "files": len(files), "bytes": sum(files)}
 
+    try:
+        report["releaseOperations"] = {}
+        for name in ("app", "recharge-native"):
+            revision = (inspect(name)["Config"].get("Labels") or {}).get("org.opencontainers.image.revision")
+            if not isinstance(revision, str) or not re.fullmatch(r"[a-f0-9]{40}", revision):
+                raise ValueError("invalid release identity")
+            release = ROOT / "releases" / revision
+            report["releaseOperations"][name] = {"revision": revision,
+                "operations": directory_summary(release / "operations"),
+                "variants": {path.name: directory_summary(path) for path in release.glob("operations-*")
+                    if re.fullmatch(r"operations-[a-zA-Z0-9_-]+", path.name) and path.is_dir() and not path.is_symlink()}}
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError, ReleaseError):
+        report["releaseOperations"] = None
     try:
         spool = ROOT / "backups/scheduled-recharge"
         report["spool"] = {name: directory_summary(spool / name) for name in ("pending", ".uploaded")}
@@ -986,7 +1060,7 @@ const files = JSON.parse(process.argv[1]);
 const hashes = files.map(name => [name, createHash('sha256').update(readFileSync('/app/' + name)).digest('hex')]);
 console.log(JSON.stringify(Object.fromEntries(hashes)));
 """
-    running_hashes = json.loads(run(["docker", "exec", "id-business-independent-app", "node", "--input-type=module",
+    running_hashes = json.loads(run(["docker", "exec", "--workdir", "/", "id-business-independent-app", "node", "--input-type=module",
                                     "-e", hash_files, json.dumps(list(plan["files"]))]))
     require(running_hashes == plan["files"], "running_source_mismatch")
     module_paths = {
@@ -1015,7 +1089,7 @@ console.log(JSON.stringify(Object.fromEntries(hashes)));
         protected_reads += ("/api/local/site-management?view=information", "/api/local/site-management?view=backups",
                             "/api/local/renewals?view=finance", "/api/local/staff/finance/cards",
                             "/api/local/auth/security/network")
-        version = json.loads(run(["docker", "exec", "id-business-independent-app", "cat", "/app/server/.website-version.json"]))
+        version = json.loads(run(["docker", "exec", "--workdir", "/", "id-business-independent-app", "cat", "/app/server/.website-version.json"]))
         require(version == json.loads((source / "server/.website-version.json").read_text()) and
                 version.get("version") == plan["sha"], "website_version_receipt_mismatch")
     if (source / "modules/website/pages.mjs").is_file():
@@ -1046,6 +1120,15 @@ def release_website(plan, staged=None):
     before = plan["before"]
     base = before["components"]["app"]["revision"]
     include_adapter = bool(plan.get("adapter"))
+    if plan.get("deployedNativeBuildInputs"):
+        native = before.get("nativePublication", {})
+        require(not any(name in plan for name in ("adapter", "rechargeCore", "vendureRetryReceipt",
+                                                  "rechargePartnerApi", "customerProgress")) and
+                native.get("imageLabelsVerified") is True and
+                native["identity"] == before["components"]["recharge-native"] and
+                plan["deployedNativeBuildInputs"] == {"nativeRevision": native["identity"]["revision"],
+                                                       "image": native["identity"]["image"]},
+                "deployed_native_inputs_not_verified")
     check_baseline(snapshot(include_adapter), before)
     release = ROOT / "releases" / sha
     source, ops = staged or stage(plan, release)
@@ -1105,6 +1188,8 @@ def release_website(plan, staged=None):
               "unauthenticatedProtectedReadsRejected": True, "productionBusinessTestWrites": False}
     if plan.get("assetMetadataRepair"):
         result["assetMetadataRepair"] = plan["assetMetadataRepair"]
+    if plan.get("deployedNativeBuildInputs"):
+        result["deployedNativeBuildInputs"] = plan["deployedNativeBuildInputs"]
     if events:
         result['externalEvents'] = events
     scope = presentation_scope(plan)
