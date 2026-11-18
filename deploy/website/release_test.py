@@ -40,6 +40,44 @@ await startPreview(port, {
 
 
 class WebsiteReleaseTests(unittest.TestCase):
+    def test_website_repairs_metadata_only_after_the_mounted_bundle_matches_the_candidate(self):
+        content = b"synthetic public bundle"
+        expected = hashlib.sha256(content).hexdigest()
+        before = {"components": {"app": {"revision": BASE}}, "freeBytes": 20 * 1024**3,
+                  "assetsSha256": "c" * 64, "mountedAssets": {"available": True, "sha256": expected}}
+        plans = []
+
+        def dispatch(plan):
+            plans.append(plan)
+            if plan["operation"] == "preflight":
+                return "preflight", before
+            self.assertEqual(plan["operation"], "repair-assets")
+            self.assertEqual(plan["expectedAssetsSha256"], expected)
+            self.assertEqual(plan["expectedAssetsBytes"], len(content))
+            return "repair", {"before": before | {"assetsSha256": expected}, "repair": {"repaired": True}}
+
+        environment = {"RELEASE_SHA": TARGET, "QUALITY_RUN_ID": "123", "INSPECT_CANARY_SHA": "",
+                       "INSPECT_RELEASE_COMMAND": "", "RELEASE_RECHARGE_ADAPTER": "false",
+                       "RELEASE_RECHARGE_CORE": "false", "RELEASE_RECHARGE_PARTNER_API": "false",
+                       "RELEASE_CUSTOMER_PROGRESS": "false", "VENDURE_RETRY_RECEIPT_SHA256": ""}
+        runtime = Path(__file__).resolve().parents[2] / ".runtime"
+        runtime.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=runtime) as directory, patch.dict(os.environ, environment), \
+                patch.multiple(release, OUTPUT=Path(directory), ASSET_METADATA_REPAIR_BASE=BASE,
+                    ASSET_METADATA_REPAIR_DIGEST=expected, require_main=Mock(), require_website_scope=Mock(),
+                    remote=dispatch, put_artifact=Mock(side_effect=RuntimeError("fixture upload boundary"))), \
+                redirect_stdout(io.StringIO()):
+            release.require_website_scope.return_value = None
+            (Path(directory) / f"independent-assets-{TARGET}.json").write_bytes(content)
+            with self.assertRaisesRegex(RuntimeError, "fixture upload boundary"):
+                release.main()
+            self.assertEqual([plan["operation"] for plan in plans], ["preflight", "repair-assets"])
+            plans.clear()
+            before["mountedAssets"]["sha256"] = "d" * 64
+            with self.assertRaisesRegex(RuntimeError, "website_release_would_change_recharge_assets"):
+                release.main()
+            self.assertEqual([plan["operation"] for plan in plans], ["preflight"])
+
     def test_asset_diagnostics_expose_digests_and_allowlisted_routes(self):
         runtime = Path(__file__).resolve().parents[2] / ".runtime"
         runtime.mkdir(exist_ok=True)

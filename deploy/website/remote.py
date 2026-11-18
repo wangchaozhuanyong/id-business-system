@@ -89,6 +89,8 @@ ADMISSION_ENV = "ID_VENDURE_ADMISSION_DIRECTORY=/state/vendure-admission"
 PARTNER_API_ENV = "ID_RECHARGE_PARTNER_API=1"
 MONITORING_FILES = ("backup_monitoring.py", MONITORING_UNIT + ".service", MONITORING_UNIT + ".timer")
 VERSIONED_ASSET = re.compile(r'\b(?:src|href)="(?:\./|/)?([a-zA-Z0-9.-]+\.(?:m?js|css))\?v=([a-zA-Z0-9.-]+)"')
+ASSET_METADATA_REPAIR_BASE = "b4c42f63bc0b06570feea30e821fa3750d33ad83"
+ASSET_METADATA_REPAIR_DIGEST = "a67d83372c40fe5ca94d41ca075a889aa5b5bbeecb5202ae562e1a554728b1df"
 
 
 class ReleaseError(RuntimeError):
@@ -211,6 +213,7 @@ def snapshot(include_adapter=False):
     live = ROOT / "releases" / base
     state = {"components": components, "unitSha256": digest(DROP), "gatewaySha256": digest(GATEWAY),
              "assetsSha256": digest(live / "assets.json"), "assetsSummary": asset_bundle_summary(live / "assets.json"),
+             "mountedAssets": mounted_assets_digest(),
              "freeBytes": free,
              "launchers": {name: digest(live_operations / name) for name in LAUNCHERS}}
     if include_adapter:
@@ -231,6 +234,61 @@ def write_new(path, value, mode):
         file.write(value)
         file.flush()
         os.fsync(file.fileno())
+
+
+def repair_current_asset_metadata(plan):
+    """Recover the current release's public bundle from its verified live mount."""
+    before = plan["before"]
+    current = snapshot()
+    check_baseline(current, before)
+    base = current["components"]["app"]["revision"]
+    expected = plan["expectedAssetsSha256"]
+    require(base == ASSET_METADATA_REPAIR_BASE and expected == ASSET_METADATA_REPAIR_DIGEST,
+            "asset_metadata_repair_outside_reviewed_baseline")
+    require(current["mountedAssets"].get("available") is True and
+            current["mountedAssets"].get("sha256") == expected, "asset_metadata_live_mount_mismatch")
+    operations = Path(website_launcher(DROP.read_text(), base)["path"]).parent
+    published = json.loads((operations / "release.receipt.json").read_text())
+    require(published.get("mainSha") == base and published.get("appCanaryPassed") is True and
+            published.get("liveAssetsSha256") == expected, "asset_metadata_published_receipt_mismatch")
+    asset = ROOT / "releases" / base / "assets.json"
+    info = asset.lstat()
+    require(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid() == 0 and
+            info.st_nlink == 1 and stat.S_IMODE(info.st_mode) == 0o644,
+            "asset_metadata_file_identity_invalid")
+    if current["assetsSha256"] == expected:
+        return {"before": current, "repair": {"repaired": False, "baseWebsiteSha": base}}
+    script = """
+import { readFileSync } from 'node:fs';
+const path = process.env.ID_CODEXDAICHONG_ASSETS_FILE;
+if (!path?.startsWith('/') || !path.endsWith('.json')) throw Error('asset_path_invalid');
+process.stdout.write(readFileSync(path));
+"""
+    content = run(["docker", "exec", "id-business-independent-app", "node",
+                   "--input-type=module", "-e", script])
+    require(len(content) == plan["expectedAssetsBytes"] and
+            hashlib.sha256(content).hexdigest() == expected, "asset_metadata_recovery_bytes_mismatch")
+    require(digest(asset) == current["assetsSha256"], "asset_metadata_changed_during_recovery")
+    archive = FORMAL / "backups" / ("asset-metadata-" + plan["sha"][:12] + "-" + str(time.time_ns()))
+    archive.mkdir(mode=0o700)
+    prepared, previous = archive / "assets.prepared.json", archive / "assets.previous.json"
+    write_new(prepared, content.decode("utf8"), 0o644)
+    os.chown(prepared, info.st_uid, info.st_gid)
+    require(digest(prepared) == expected, "asset_metadata_prepared_digest_mismatch")
+    os.replace(asset, previous)
+    try:
+        os.replace(prepared, asset)
+    except OSError:
+        os.replace(previous, asset)
+        raise
+    after = snapshot()
+    check_baseline(after, current | {"assetsSha256": expected})
+    require(after["mountedAssets"].get("sha256") == expected, "asset_metadata_mount_changed")
+    receipt = {"repaired": True, "baseWebsiteSha": base, "beforeSha256": current["assetsSha256"],
+               "afterSha256": expected, "archive": str(archive.relative_to(ROOT)),
+               "runtimeIdentityUnchanged": True}
+    write_new(archive / "receipt.json", json.dumps(receipt, indent=2) + "\n", 0o600)
+    return {"before": after, "repair": receipt}
 
 
 def update_canary_asset_refs(content, previous_index, target_index):
@@ -1038,6 +1096,8 @@ def release_website(plan, staged=None):
               "backupResources": backup_resource_summary(),
               "portableRecoveryBackup": recovery,
               "unauthenticatedProtectedReadsRejected": True, "productionBusinessTestWrites": False}
+    if plan.get("assetMetadataRepair"):
+        result["assetMetadataRepair"] = plan["assetMetadataRepair"]
     if events:
         result['externalEvents'] = events
     scope = presentation_scope(plan)
@@ -1109,6 +1169,8 @@ def main(plan):
                 result = snapshot(plan.get("adapter") is True)
             elif plan["operation"] == "inspect":
                 result = inspect_canary(plan["attemptSha"])
+            elif plan["operation"] == "repair-assets":
+                result = repair_current_asset_metadata(plan)
             else:
                 require(plan["operation"] == "release", "invalid_release_operation")
                 result = release_with_optional_vendure_refresh(plan)

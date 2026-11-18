@@ -9,7 +9,8 @@ import subprocess
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from remote import (ACTION_PASSWORD_PRESENTATION_FILES, BACKUP_OPERATION, CARD_IMPORT_ASSET_SOURCE, CARD_IMPORT_PRESENTATION_FILES, CARD_PLAN_PRESENTATION_FILES,
+from remote import (ACTION_PASSWORD_PRESENTATION_FILES, ASSET_METADATA_REPAIR_BASE, ASSET_METADATA_REPAIR_DIGEST,
+                    BACKUP_OPERATION, CARD_IMPORT_ASSET_SOURCE, CARD_IMPORT_PRESENTATION_FILES, CARD_PLAN_PRESENTATION_FILES,
                     CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES, PRESENTATION_SCOPES, SECURITY_PRESENTATION_FILES,
                     REDEEM_PRESENTATION_FILES, SUBSCRIPTION_INVOICE_PRESENTATION_FILES,
                     TABLE_ACTIONS_STYLESHEET, TASK_HISTORY_PRESENTATION_FILES,
@@ -450,12 +451,24 @@ def main():
     names = (f"independent-source-{sha}.tar.gz", f"independent-assets-{sha}.json", f"independent-event-runtime-{sha}.tar.gz")
     expected_assets = before["assetsSha256"]
     actual_assets = hashlib.sha256((OUTPUT / names[1]).read_bytes()).hexdigest()
+    asset_repair = None
     if include_core:
         expected_assets = actual_assets
     if presentation:
         if presentation["beforeAssetsSha256"] != expected_assets:
             raise RuntimeError("recharge_presentation_live_baseline_mismatch")
         expected_assets = presentation["assetsSha256"]
+    if (actual_assets != expected_assets and base == ASSET_METADATA_REPAIR_BASE and
+            actual_assets == ASSET_METADATA_REPAIR_DIGEST and not any((include_core, include_adapter, presentation,
+            partner_api, customer_progress, retry_receipt, deferred_native)) and
+            before.get("mountedAssets", {}).get("available") is True and
+            before["mountedAssets"].get("sha256") == actual_assets):
+        repair_id, repaired = remote({"operation": "repair-assets", "sha": sha, "before": before,
+                                     "expectedAssetsSha256": actual_assets,
+                                     "expectedAssetsBytes": (OUTPUT / names[1]).stat().st_size})
+        before = repaired["before"]
+        expected_assets = before["assetsSha256"]
+        asset_repair = {"command": repair_id, **repaired["repair"]}
     if actual_assets != expected_assets:
         print(json.dumps({"assetVerification": {
             "baseWebsiteSha": base, "expectedSha256": expected_assets,
@@ -531,6 +544,8 @@ def main():
     plan = {"operation": "release", "sha": sha, "before": before, "artifacts": artifacts,
             "files": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in files},
             "qualityRun": quality_run, "preflightCommand": preflight_id, 'externalEvents': True}
+    if asset_repair:
+        plan["assetMetadataRepair"] = asset_repair
     if include_adapter:
         plan["adapter"] = {"runtimeFiles": ADAPTER_RUNTIME_FILES}
     if include_core:
