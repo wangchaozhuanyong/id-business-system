@@ -92,6 +92,7 @@ MONITORING_FILES = ("backup_monitoring.py", MONITORING_UNIT + ".service", MONITO
 VERSIONED_ASSET = re.compile(r'\b(?:src|href)="(?:\./|/)?([a-zA-Z0-9.-]+\.(?:m?js|css))\?v=([a-zA-Z0-9.-]+)"')
 ASSET_METADATA_REPAIR_BASE = "b4c42f63bc0b06570feea30e821fa3750d33ad83"
 ASSET_METADATA_REPAIR_DIGEST = "a67d83372c40fe5ca94d41ca075a889aa5b5bbeecb5202ae562e1a554728b1df"
+ASSET_METADATA_RELEASE_RUN = 43927104206
 
 
 class ReleaseError(RuntimeError):
@@ -386,10 +387,10 @@ def repair_current_asset_metadata(plan):
             "asset_metadata_repair_outside_reviewed_baseline")
     require(current["mountedAssets"].get("available") is True and
             current["mountedAssets"].get("sha256") == expected, "asset_metadata_live_mount_mismatch")
-    operations = Path(website_launcher(DROP.read_text(), base)["path"]).parent
-    published = json.loads((operations / "release.receipt.json").read_text())
-    require(published.get("mainSha") == base and published.get("appCanaryPassed") is True and
-            published.get("liveAssetsSha256") == expected, "asset_metadata_published_receipt_mismatch")
+    published = plan.get("publishedAssetReceipt")
+    require(published == {"runId": ASSET_METADATA_RELEASE_RUN, "mainSha": base,
+                          "appCanaryPassed": True, "liveAssetsSha256": expected},
+            "asset_metadata_published_receipt_mismatch")
     asset = ROOT / "releases" / base / "assets.json"
     info = asset.lstat()
     require(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid() == 0 and
@@ -401,7 +402,10 @@ def repair_current_asset_metadata(plan):
     require(content is not None and len(content) == plan["expectedAssetsBytes"] and
             hashlib.sha256(content).hexdigest() == expected, "asset_metadata_recovery_bytes_mismatch")
     require(digest(asset) == current["assetsSha256"], "asset_metadata_changed_during_recovery")
-    archive = FORMAL / "backups" / ("asset-metadata-" + plan["sha"][:12] + "-" + str(time.time_ns()))
+    parent = FORMAL / "backups"
+    require(not parent.is_symlink(), "asset_metadata_archive_directory_invalid")
+    parent.mkdir(mode=0o700, exist_ok=True)
+    archive = parent / ("asset-metadata-" + plan["sha"][:12] + "-" + str(time.time_ns()))
     archive.mkdir(mode=0o700)
     prepared, previous = archive / "assets.prepared.json", archive / "assets.previous.json"
     write_new(prepared, content.decode("utf8"), 0o644)
@@ -418,6 +422,7 @@ def repair_current_asset_metadata(plan):
     require(after["mountedAssets"].get("sha256") == expected, "asset_metadata_mount_changed")
     receipt = {"repaired": True, "baseWebsiteSha": base, "beforeSha256": current["assetsSha256"],
                "afterSha256": expected, "archive": str(archive.relative_to(ROOT)),
+               "publishedAssetReceipt": published,
                "runtimeIdentityUnchanged": True}
     write_new(archive / "receipt.json", json.dumps(receipt, indent=2) + "\n", 0o600)
     return {"before": after, "repair": receipt}

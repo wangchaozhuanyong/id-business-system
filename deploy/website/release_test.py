@@ -40,6 +40,29 @@ await startPreview(port, {
 
 
 class WebsiteReleaseTests(unittest.TestCase):
+    def test_asset_recovery_reads_the_exact_successful_original_github_release(self):
+        metadata = {"databaseId": release.ASSET_METADATA_RELEASE_RUN, "workflowDatabaseId": 414321281,
+                    "headSha": release.ASSET_METADATA_REPAIR_BASE, "headBranch": "main", "event": "workflow_dispatch",
+                    "status": "completed", "conclusion": "success"}
+        receipt = {"mainSha": release.ASSET_METADATA_REPAIR_BASE, "appCanaryPassed": True,
+                   "liveAssetsSha256": release.ASSET_METADATA_REPAIR_DIGEST}
+        log = "release\tSSM\t2026-11-16T00:00:00Z " + json.dumps({"appCanaryPassed": True, **receipt})
+        with patch.object(release.subprocess, "check_output", side_effect=[json.dumps(metadata), log]) as read:
+            self.assertEqual(release.published_asset_receipt(), {"runId": release.ASSET_METADATA_RELEASE_RUN, **receipt})
+            self.assertEqual(read.call_args_list[0].args[0][:7], ["gh", "run", "view",
+                str(release.ASSET_METADATA_RELEASE_RUN), "--repo", "wangchaozhuanyong/id-business-system", "--json"])
+        for field, value in (("conclusion", "failure"), ("headSha", TARGET), ("headBranch", "other"),
+                             ("event", "pull_request"), ("workflowDatabaseId", 1)):
+            with self.subTest(field=field), patch.object(release.subprocess, "check_output",
+                    return_value=json.dumps(metadata | {field: value})) as read:
+                with self.assertRaisesRegex(RuntimeError, "original_release_unverified"):
+                    release.published_asset_receipt()
+                self.assertEqual(read.call_count, 1)
+        for invalid in ("", log + "\n" + log, log.replace(release.ASSET_METADATA_REPAIR_DIGEST, "c" * 64)):
+            with patch.object(release.subprocess, "check_output", side_effect=[json.dumps(metadata), invalid]):
+                with self.assertRaisesRegex(RuntimeError, "original_receipt_mismatch"):
+                    release.published_asset_receipt()
+
     def test_website_repairs_metadata_only_after_the_mounted_bundle_matches_the_candidate(self):
         content = b"synthetic public bundle"
         expected = hashlib.sha256(content).hexdigest()
@@ -54,6 +77,7 @@ class WebsiteReleaseTests(unittest.TestCase):
             self.assertEqual(plan["operation"], "repair-assets")
             self.assertEqual(plan["expectedAssetsSha256"], expected)
             self.assertEqual(plan["expectedAssetsBytes"], len(content))
+            self.assertEqual(plan["publishedAssetReceipt"], {"synthetic": True})
             return "repair", {"before": before | {"assetsSha256": expected}, "repair": {"repaired": True}}
 
         environment = {"RELEASE_SHA": TARGET, "QUALITY_RUN_ID": "123", "INSPECT_CANARY_SHA": "",
@@ -65,6 +89,7 @@ class WebsiteReleaseTests(unittest.TestCase):
         with TemporaryDirectory(dir=runtime) as directory, patch.dict(os.environ, environment), \
                 patch.multiple(release, OUTPUT=Path(directory), ASSET_METADATA_REPAIR_BASE=BASE,
                     ASSET_METADATA_REPAIR_DIGEST=expected, require_main=Mock(), require_website_scope=Mock(),
+                    published_asset_receipt=Mock(return_value={"synthetic": True}),
                     remote=dispatch, put_artifact=Mock(side_effect=RuntimeError("fixture upload boundary"))), \
                 redirect_stdout(io.StringIO()):
             release.require_website_scope.return_value = None

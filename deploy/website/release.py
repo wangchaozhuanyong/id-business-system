@@ -11,6 +11,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from remote import (ACTION_PASSWORD_PRESENTATION_FILES, ASSET_METADATA_REPAIR_BASE, ASSET_METADATA_REPAIR_DIGEST,
+                    ASSET_METADATA_RELEASE_RUN,
                     BACKUP_OPERATION, CARD_IMPORT_ASSET_SOURCE, CARD_IMPORT_PRESENTATION_FILES, CARD_PLAN_PRESENTATION_FILES,
                     CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES, PRESENTATION_SCOPES, SECURITY_PRESENTATION_FILES,
                     REDEEM_PRESENTATION_FILES, SUBSCRIPTION_INVOICE_PRESENTATION_FILES,
@@ -408,6 +409,31 @@ def put_artifact(path, sha):
     return {"sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data), "version": head["VersionId"]}
 
 
+def published_asset_receipt():
+    command = ["gh", "run", "view", str(ASSET_METADATA_RELEASE_RUN), "--repo",
+               "wangchaozhuanyong/id-business-system"]
+    fields = "databaseId,workflowDatabaseId,headSha,headBranch,event,status,conclusion"
+    run = json.loads(subprocess.check_output(command + ["--json", fields], text=True, timeout=30))
+    expected = {"databaseId": ASSET_METADATA_RELEASE_RUN, "workflowDatabaseId": 414321281,
+                "headSha": ASSET_METADATA_REPAIR_BASE, "headBranch": "main", "event": "workflow_dispatch",
+                "status": "completed", "conclusion": "success"}
+    if run != expected:
+        raise RuntimeError("asset_metadata_original_release_unverified")
+    log = subprocess.check_output(command + ["--log"], text=True, timeout=60)
+    receipts = []
+    for line in log.splitlines():
+        start = line.find('{"appCanaryPassed":')
+        if start >= 0:
+            value = json.loads(line[start:])
+            receipts.append({name: value.get(name) for name in
+                             ("mainSha", "appCanaryPassed", "liveAssetsSha256")})
+    expected_receipt = {"mainSha": ASSET_METADATA_REPAIR_BASE, "appCanaryPassed": True,
+                        "liveAssetsSha256": ASSET_METADATA_REPAIR_DIGEST}
+    if receipts != [expected_receipt]:
+        raise RuntimeError("asset_metadata_original_receipt_mismatch")
+    return {"runId": ASSET_METADATA_RELEASE_RUN, **expected_receipt}
+
+
 def main(sample_backup_resources=False):
     sha = os.environ["RELEASE_SHA"]
     quality_run = os.environ["QUALITY_RUN_ID"]
@@ -488,6 +514,7 @@ def main(sample_backup_resources=False):
             before.get("mountedAssets", {}).get("available") is True and
             before["mountedAssets"].get("sha256") == actual_assets):
         repair_id, repaired = remote({"operation": "repair-assets", "sha": sha, "before": before,
+                                     "publishedAssetReceipt": published_asset_receipt(),
                                      "expectedAssetsSha256": actual_assets,
                                      "expectedAssetsBytes": (OUTPUT / names[1]).stat().st_size})
         before = repaired["before"]
