@@ -28,10 +28,8 @@ class CurrentAssetMetadataTests(unittest.TestCase):
         self.previous = b'{"assets":{"/admin":{"body":"previous public metadata"}}}'
         self.asset.write_bytes(self.previous)
         self.asset.chmod(0o644)
-        self.receipt = operations / "release.receipt.json"
-        self.receipt.write_text(json.dumps({
-            "mainSha": self.base, "appCanaryPassed": True, "liveAssetsSha256": self.expected
-        }))
+        self.published = {"runId": remote.ASSET_METADATA_RELEASE_RUN, "mainSha": self.base,
+                          "appCanaryPassed": True, "liveAssetsSha256": self.expected}
         drop = self.formal / "current-release.conf"
         drop.write_text("[Service]\nExecStart=" + str(operations / "run-app") + " live\n")
         self.mounted = {"available": True, "sha256": self.expected}
@@ -57,6 +55,7 @@ class CurrentAssetMetadataTests(unittest.TestCase):
             context.start()
             self.addCleanup(context.stop)
         self.plan = {"sha": self.target, "before": self.snapshot(),
+                     "publishedAssetReceipt": self.published,
                      "expectedAssetsSha256": self.expected, "expectedAssetsBytes": len(self.public)}
 
     def snapshot(self):
@@ -72,16 +71,18 @@ class CurrentAssetMetadataTests(unittest.TestCase):
         archive = self.root / result["repair"]["archive"]
         self.assertEqual((archive / "assets.previous.json").read_bytes(), self.previous)
         self.assertTrue((archive / "receipt.json").is_file())
+        self.assertEqual(json.loads((archive / "receipt.json").read_text())["publishedAssetReceipt"], self.published)
         repeated = remote.repair_current_asset_metadata(self.plan | {"before": self.snapshot()})
         self.assertFalse(repeated["repair"]["repaired"])
         self.assertEqual(self.run.call_count, 1)
 
     def test_rejects_unverified_receipts_mounts_bytes_and_concurrent_runtime_changes(self):
-        original = self.receipt.read_text()
-        self.receipt.write_text(json.dumps({"mainSha": self.base, "liveAssetsSha256": self.expected}))
+        for field, value in (("runId", 1), ("mainSha", "c" * 40),
+                             ("appCanaryPassed", False), ("liveAssetsSha256", "c" * 64)):
+            with self.subTest(field=field), self.assertRaisesRegex(remote.ReleaseError, "published_receipt"):
+                remote.repair_current_asset_metadata(self.plan | {"publishedAssetReceipt": self.published | {field: value}})
         with self.assertRaisesRegex(remote.ReleaseError, "published_receipt"):
-            remote.repair_current_asset_metadata(self.plan)
-        self.receipt.write_text(original)
+            remote.repair_current_asset_metadata(self.plan | {"publishedAssetReceipt": None})
         self.mounted["sha256"] = "c" * 64
         with self.assertRaisesRegex(remote.ReleaseError, "live_mount"):
             remote.repair_current_asset_metadata(self.plan)
@@ -94,6 +95,18 @@ class CurrentAssetMetadataTests(unittest.TestCase):
             remote.repair_current_asset_metadata(self.plan)
         self.assertEqual(self.asset.read_bytes(), self.previous)
         self.assertEqual(list((self.formal / "backups").iterdir()), [])
+
+    def test_creates_the_missing_recovery_parent_and_rejects_a_symlink(self):
+        parent = self.formal / "backups"
+        parent.rmdir()
+        result = remote.repair_current_asset_metadata(self.plan)
+        self.assertEqual((self.root / result["repair"]["archive"] / "assets.previous.json").read_bytes(), self.previous)
+        self.asset.write_bytes(self.previous)
+        real = self.formal / "real-backups"
+        parent.rename(real)
+        parent.symlink_to(real, target_is_directory=True)
+        with self.assertRaisesRegex(remote.ReleaseError, "archive_directory"):
+            remote.repair_current_asset_metadata(self.plan)
 
     def test_restores_the_original_file_if_atomic_install_fails(self):
         replace = os.replace
