@@ -197,3 +197,16 @@ test('无卡结账页判定必须金额为零，Pro 不会被误判为免费', a
   // 旧的「无卡结账页已加载」措辞不再单独出现
   assert.doesNotMatch(chatgptText, /无卡结账页已加载，调试已停止（未填卡、未付款）/);
 });
+
+test('续费提示：已有未到期订阅给出明确失败原因', async () => {
+  const { 'chatgpt.js': chatgptText } = await appliedSources();
+  // API 侧：把 already_subscribed / active_subscription 转成中文失败原因
+  assert.match(chatgptText, /already_subscription|has_active_subscription/);
+  assert.match(chatgptText, /reason: 'already_subscribed'/);
+  assert.match(chatgptText, /该账号已有未到期的订阅，无法重复购买，请到期后再充值/);
+  // 不符合套餐/地区条件也给出明确原因
+  assert.match(chatgptText, /reason: 'not_eligible'/);
+  assert.match(chatgptText, /该账号不符合当前套餐或地区的订阅条件/);
+  // 无权开通
+  assert.match(chatgptText, /reason: 'no_permission'/);
+});

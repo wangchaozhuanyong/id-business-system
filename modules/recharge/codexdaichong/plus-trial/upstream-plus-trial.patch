@@ -1,8 +1,35 @@
 diff --git a/chatgpt.js b/chatgpt.js
-index 8a7cba7..7fa3043 100644
+index 8a7cba7..a2fcdf5 100644
 --- a/chatgpt.js
 +++ b/chatgpt.js
-@@ -467,6 +467,10 @@ async function openApiCheckout(page, { accessToken, sessionData, planType, count
+@@ -216,10 +216,24 @@ class ChatGPTService {
+                 const detail = parsed.error;
+                 console.error(`[-] 订单创建失败 (Status: ${parsed.status})`);
+                 console.error(`    响应: ${detail}`);
++                // 把可判定的业务原因转成明确中文，直接进入任务失败原因，而不是只写日志。
+                 if (String(detail).includes('not_eligible') || String(detail).includes('Offer not found')) {
+                     console.error("❌ [提示] 该账号不符合当前套餐/地区订阅条件");
+-                } else if (String(detail).includes('permission') || String(detail).includes('already_subscribed')) {
+-                    console.error("❌ [提示] 该账号可能已订阅或无权重复开通");
++                    return { sessionId: null, checkoutUrl: null, reason: 'not_eligible',
++                        error: '该账号不符合当前套餐或地区的订阅条件，请更换账号或地区后重试',
++                        diagnostic: parsed.diagnostic };
++                }
++                if (/already_subscribed|already\s*subscribed|active_subscription|has_active_subscription/i.test(String(detail))) {
++                    console.error("❌ [提示] 该账号已有未到期的订阅，无法重复购买");
++                    return { sessionId: null, checkoutUrl: null, reason: 'already_subscribed',
++                        error: '该账号已有未到期的订阅，无法重复购买，请到期后再充值',
++                        diagnostic: parsed.diagnostic };
++                }
++                if (String(detail).includes('permission')) {
++                    console.error("❌ [提示] 该账号无权开通此套餐");
++                    return { sessionId: null, checkoutUrl: null, reason: 'no_permission',
++                        error: '该账号无权开通此套餐，请确认账号状态后重试',
++                        diagnostic: parsed.diagnostic };
+                 }
+                 return { sessionId: null, checkoutUrl: null, error: detail, diagnostic: parsed.diagnostic };
+             }
+@@ -467,6 +481,10 @@ async function openApiCheckout(page, { accessToken, sessionData, planType, count
              throw new Error(err);
          }
  
@@ -13,7 +40,7 @@ index 8a7cba7..7fa3043 100644
          const currentUrl = await assertCheckoutPageReady(page);
  
          await assertChatGptLoggedIn(page, 'Checkout');
-@@ -483,8 +487,46 @@ async function openApiCheckout(page, { accessToken, sessionData, planType, count
+@@ -483,8 +501,46 @@ async function openApiCheckout(page, { accessToken, sessionData, planType, count
      }
  }
  
@@ -61,7 +88,7 @@ index 8a7cba7..7fa3043 100644
      const { assertChatGptLoggedIn } = require('./session-auth');
      const { hasVisibleLoginChrome } = require('./auth-page-detect');
      const isPaymentUrl = (raw) => {
-@@ -520,6 +562,83 @@ async function verifyCheckoutDebugPage(page, { checkoutUrl, timeoutMs = 60000 }
+@@ -520,6 +576,83 @@ async function verifyCheckoutDebugPage(page, { checkoutUrl, timeoutMs = 60000 }
          if (!isPaymentUrl(page.url())) {
              throw new Error('支付页面发生非 Checkout 跳转，调试已停止');
          }

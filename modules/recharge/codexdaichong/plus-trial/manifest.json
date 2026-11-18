@@ -1,10 +1,10 @@
 {
   "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
-  "patchSha256": "ed000b876f331462245df0aedb73bebf5a2b9ba279df7736bcc45bc3c5d50b32",
+  "patchSha256": "dc05259ce545a51135130d88c180c214fae2ff1d417557c0ebdd0d7ed83a7abe",
   "files": {
     "chatgpt.js": {
       "original": "8a7cba757cd7121d1fcb76aa3711e632c132a9cd",
-      "approved": "7fa30437780958fc8258db1852992afd0d0a7725"
+      "approved": "a2fcdf5a5206ff5e1b4841e12af5eb808b74e7d7"
     },
     "pricing-checkout.js": {
       "original": "17d5982142eec44b1d9aa56adff5db50617df9fe",
