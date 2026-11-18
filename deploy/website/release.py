@@ -6,6 +6,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -407,7 +408,7 @@ def put_artifact(path, sha):
     return {"sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data), "version": head["VersionId"]}
 
 
-def main():
+def main(sample_backup_resources=False):
     sha = os.environ["RELEASE_SHA"]
     quality_run = os.environ["QUALITY_RUN_ID"]
     require_main(sha)
@@ -418,6 +419,9 @@ def main():
     retry_receipt = os.environ.get("VENDURE_RETRY_RECEIPT_SHA256", "")
     partner_api = os.environ.get("RELEASE_RECHARGE_PARTNER_API") == "true"
     customer_progress = os.environ.get("RELEASE_CUSTOMER_PROGRESS") == "true"
+    if sample_backup_resources and (not attempt or inspect_command or include_adapter or include_core or
+                                    retry_receipt or partner_api or customer_progress):
+        raise RuntimeError("backup_observation_requires_readonly_inspection")
     if customer_progress and (include_adapter or include_core or partner_api or attempt or inspect_command or retry_receipt):
         raise RuntimeError("customer_progress_release_requires_its_own_operation")
     if partner_api and (include_adapter or include_core or attempt or inspect_command or retry_receipt):
@@ -436,7 +440,10 @@ def main():
         if inspect_command:
             print(json.dumps(inspect_release_command(attempt, inspect_command), sort_keys=True), flush=True)
             return
-        command_id, diagnostic = remote({"operation": "inspect", "sha": sha, "attemptSha": attempt})
+        plan = {"operation": "inspect", "sha": sha, "attemptSha": attempt}
+        if sample_backup_resources:
+            plan["sampleBackupResources"] = True
+        command_id, diagnostic = remote(plan)
         print(json.dumps({"command": command_id, "diagnostic": diagnostic}), flush=True)
         return
     preflight_id, before = remote({"operation": "preflight", "sha": sha, "adapter": include_adapter or include_core})
@@ -634,4 +641,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if sys.argv[1:] not in ([], ["--sample-backup-resources"]):
+        raise RuntimeError("unsupported_release_argument")
+    main(sample_backup_resources=bool(sys.argv[1:]))

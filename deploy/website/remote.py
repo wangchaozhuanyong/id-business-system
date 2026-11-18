@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import runpy
 import shutil
 import stat
 import subprocess
@@ -205,6 +206,87 @@ def app_exec_status():
         report["pidsCurrent"] = int(value.strip())
     except (OSError, ValueError, subprocess.SubprocessError):
         report["pidsCurrent"] = None
+    return report
+
+
+def read_process_memory(pid):
+    report = {"rssPeakBytes": None, "cgroupPeakBytes": None}
+    if type(pid) is not int or pid <= 0:
+        return report
+    process = Path("/proc") / str(pid)
+    try:
+        match = re.search(r"(?m)^VmHWM:\s+([0-9]+)\s+kB$", (process / "status").read_text())
+        if match:
+            report["rssPeakBytes"] = int(match[1]) * 1024
+        groups = (process / "cgroup").read_text().splitlines()
+    except OSError:
+        return report
+    for group in groups:
+        parts = group.split(":", 2)
+        if len(parts) != 3 or not parts[2].startswith("/") or parts[2] == "/" or ".." in Path(parts[2]).parts:
+            continue
+        if parts[:2] == ["0", ""]:
+            peak = Path("/sys/fs/cgroup") / parts[2].lstrip("/") / "memory.peak"
+        elif "memory" in parts[1].split(","):
+            peak = Path("/sys/fs/cgroup/memory") / parts[2].lstrip("/") / "memory.max_usage_in_bytes"
+        else:
+            continue
+        try:
+            value = peak.read_text().strip()
+            if value.isdecimal() and int(value) < 2**63:
+                report["cgroupPeakBytes"] = int(value)
+        except OSError:
+            pass
+    return report
+
+
+def observe_backup_resources(seconds=60):
+    require(type(seconds) is int and 1 <= seconds <= 60, "invalid_backup_observation_window")
+    report = {"startedAt": time.time_ns() // 1_000_000, "samples": 0, "readFailures": 0,
+              "minHostAvailableBytes": None, "lastActiveContainers": None}
+    services, containers = {}, {}
+
+    def remember(group, key, role, pid):
+        measured = read_process_memory(pid)
+        entry = group.setdefault(key, {"id": key, "role": role, **measured})
+        for name, value in measured.items():
+            if value is not None:
+                entry[name] = max(entry.get(name) or 0, value)
+
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        try:
+            available = re.search(r"(?m)^MemAvailable:\s+([0-9]+)\s+kB$", Path("/proc/meminfo").read_text())
+            if available:
+                value = int(available[1]) * 1024
+                minimum = report["minHostAvailableBytes"]
+                report["minHostAvailableBytes"] = value if minimum is None else min(minimum, value)
+            pid = run(["systemctl", "show", "--property=MainPID", "--value",
+                       "id-business-independent-recharge-backup.service"], timeout=3).strip()
+            if pid.isdigit() and int(pid) > 0:
+                remember(services, pid.decode(), "backup-service", int(pid))
+        except (OSError, ValueError, subprocess.SubprocessError, ReleaseError):
+            report["readFailures"] += 1
+        try:
+            rows = run(["docker", "ps", "--filter", "label=org.id-business.backup=portable-recovery",
+                        "--format", "{{.ID}} {{.Names}}"], timeout=3).decode().splitlines()
+            report["lastActiveContainers"] = 0
+            for row in rows:
+                match = re.fullmatch(r"([a-f0-9]{12,64}) id-recovery-(snapshot|capsule)-[a-f0-9]{16}", row)
+                if not match:
+                    continue
+                report["lastActiveContainers"] += 1
+                pid = run(["docker", "inspect", "--format", "{{.State.Pid}}", match[1]], timeout=3).strip()
+                if pid.isdigit() and int(pid) > 0:
+                    remember(containers, match[1], match[2], int(pid))
+        except (OSError, ValueError, subprocess.SubprocessError, ReleaseError):
+            report["readFailures"] += 1
+        report["samples"] += 1
+        time.sleep(1)
+    report.update(finishedAt=time.time_ns() // 1_000_000, backupService=list(services.values()),
+                  containers=list(containers.values()), backupObserved=bool(services or containers))
+    report["peakObserved"] = any(row[name] is not None for row in (*services.values(), *containers.values())
+                                 for name in ("rssPeakBytes", "cgroupPeakBytes"))
     return report
 
 
@@ -702,13 +784,13 @@ def canary_diagnostics(text):
             "assets": sorted(set(assets))[:20]}
 
 
-def inspect_canary(sha):
+def inspect_canary(sha, sample_backup_resources=False):
     require(re.fullmatch(r"[a-f0-9]{40}", sha), "invalid_canary_revision")
     ops = ROOT / "releases" / sha / "operations"
     retried = (ops / CANARY_RETRY_LOG).is_file()
     size, log = read_canary_log(ops / (CANARY_RETRY_LOG if retried else CANARY_LOG))
     live = identity(inspect("app"))["revision"]
-    return {"attemptSha": sha, "liveWebsiteSha": live,
+    result = {"attemptSha": sha, "liveWebsiteSha": live,
             "nativePublication": native_publication_state(),
             "coreReleaseGateActive": "# BEGIN ID CORE RELEASE " in GATEWAY.read_text(),
             "appExec": app_exec_status(),
@@ -716,6 +798,11 @@ def inspect_canary(sha):
                            "mounted": mounted_assets_digest()},
             "bytes": size, "retried": retried, "backupResources": backup_resource_summary(),
             **canary_diagnostics(log)}
+    if sample_backup_resources:
+        result["backupResourcesBefore"] = result["backupResources"]
+        result["backupObservation"] = observe_backup_resources()
+        result["backupResources"] = backup_resource_summary()
+    return result
 
 
 def mount_matches(container, source, destination=None):
@@ -1115,6 +1202,25 @@ console.log(JSON.stringify(Object.fromEntries(hashes)));
     return states
 
 
+def check_native_recovery_source(plan, source):
+    if plan.get("rechargeCore"):
+        return
+    revision = plan["before"]["components"]["recharge-native"]["revision"]
+    require(isinstance(revision, str) and re.fullmatch(r"[a-f0-9]{40}", revision), "invalid_native_recovery_revision")
+    operations = ROOT / "releases" / revision / "operations"
+    if operations.is_dir() and not operations.is_symlink():
+        return
+    require(not operations.exists() and not operations.is_symlink(), "recovery_active_operations_missing")
+    collector = runpy.run_path(str(source / "deploy/website/recovery_capsule.py"))
+    try:
+        definition = run(["systemctl", "cat", collector["NATIVE_UNIT"]])
+        collector["native_source_launcher"](ROOT, revision, definition)
+    except collector["RecoveryError"] as error:
+        raise ReleaseError(str(error)) from None
+    except subprocess.CalledProcessError:
+        raise ReleaseError("recovery_service_definition_unavailable") from None
+
+
 def release_website(plan, staged=None):
     sha = plan["sha"]
     before = plan["before"]
@@ -1132,6 +1238,7 @@ def release_website(plan, staged=None):
     check_baseline(snapshot(include_adapter), before)
     release = ROOT / "releases" / sha
     source, ops = staged or stage(plan, release)
+    check_native_recovery_source(plan, source)
     core = None
     if plan.get("rechargeCore"):
         sys.path.insert(0, str(source / "deploy/website"))
@@ -1255,12 +1362,13 @@ def main(plan):
     try:
         require(re.fullmatch(r"[a-f0-9]{40}", plan["sha"]), "invalid_release_revision")
         with LOCK.open("r") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            mode = fcntl.LOCK_SH if plan["operation"] == "inspect" else fcntl.LOCK_EX
+            fcntl.flock(lock, mode | fcntl.LOCK_NB)
             require_main(plan["sha"])
             if plan["operation"] == "preflight":
                 result = snapshot(plan.get("adapter") is True)
             elif plan["operation"] == "inspect":
-                result = inspect_canary(plan["attemptSha"])
+                result = inspect_canary(plan["attemptSha"], plan.get("sampleBackupResources") is True)
             elif plan["operation"] == "repair-assets":
                 result = repair_current_asset_metadata(plan)
             else:
