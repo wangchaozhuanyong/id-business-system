@@ -40,6 +40,31 @@ await startPreview(port, {
 
 
 class WebsiteReleaseTests(unittest.TestCase):
+    def test_asset_diagnostics_expose_digests_and_allowlisted_routes(self):
+        runtime = Path(__file__).resolve().parents[2] / ".runtime"
+        runtime.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=runtime) as directory:
+            path = Path(directory) / "assets.json"
+            value = {"revision": "a" * 40, "assets": {
+                "/admin": {"body": "synthetic-private-text", "type": "text/html"},
+                "/unexpected-fixture": {"body": "synthetic-private-text"}}}
+            path.write_text(json.dumps(value))
+            first = remote.asset_bundle_summary(path)
+            self.assertEqual(set(first["entries"]), {"/admin"})
+            self.assertNotIn("synthetic-private-text", json.dumps(first))
+            path.write_text(json.dumps(value, sort_keys=True, indent=2))
+            second = remote.asset_bundle_summary(path)
+            self.assertNotEqual(first["sha256"], second["sha256"])
+            self.assertEqual(first["entries"], second["entries"])
+            value["assets"]["/admin"]["body"] = "changed"
+            path.write_text(json.dumps(value))
+            self.assertNotEqual(first["entries"], remote.asset_bundle_summary(path)["entries"])
+            for invalid in ("synthetic-private-text", "[]", '{"assets": false}'):
+                path.write_text(invalid)
+                result = remote.asset_bundle_summary(path)
+                self.assertIsNone(result["entries"])
+                self.assertNotIn("synthetic-private-text", json.dumps(result))
+
     def test_native_diagnostic_uses_only_release_phases_and_fixed_error_codes(self):
         invocation = {"Status": "Failed",
                       "StandardOutputContent": '{"rechargePreflight": {"readOnly": true}}\n'

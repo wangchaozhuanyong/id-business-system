@@ -118,6 +118,35 @@ def identity(container):
             "revision": (container["Config"].get("Labels") or {}).get("org.opencontainers.image.revision")}
 
 
+def asset_bundle_summary(path):
+    raw = path.read_bytes()
+    summary = {"sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw), "entries": None}
+    try:
+        bundle = json.loads(raw)
+    except ValueError:
+        return summary
+    routes = ("/redeem", "/workspace", "/admin", "/subscription", "/admin.js", "/admin.css",
+              "/style.css", "/favicon.svg", "/lucide.js", "/shell.js", "/shell.css")
+    assets = bundle.get("assets") if isinstance(bundle, dict) else None
+    if isinstance(assets, dict):
+        summary["entries"] = {name: hashlib.sha256(json.dumps(assets[name], sort_keys=True, ensure_ascii=False,
+                             separators=(",", ":")).encode()).hexdigest() for name in routes if name in assets}
+    return summary
+
+
+def mounted_assets_digest():
+    script = """
+import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+const path = process.env.ID_CODEXDAICHONG_ASSETS_FILE;
+if (!path?.startsWith('/') || !path.endsWith('.json')) throw Error('asset_path_invalid');
+const raw = readFileSync(path);
+console.log(JSON.stringify({sha256:createHash('sha256').update(raw).digest('hex'),bytes:raw.length}));
+"""
+    return json.loads(run(["docker", "exec", "id-business-independent-app", "node",
+                           "--input-type=module", "-e", script]))
+
+
 def require_main(sha):
     remote = run(["git", "-c", "credential.helper=", "ls-remote", REPOSITORY, "refs/heads/main"])
     require(remote.decode().split() == [sha, "refs/heads/main"], "remote_main_changed")
@@ -176,7 +205,8 @@ def snapshot(include_adapter=False):
     require(free > 12 * 1024**3, "insufficient_free_space")
     live = ROOT / "releases" / base
     state = {"components": components, "unitSha256": digest(DROP), "gatewaySha256": digest(GATEWAY),
-             "assetsSha256": digest(live / "assets.json"), "freeBytes": free,
+             "assetsSha256": digest(live / "assets.json"), "assetsSummary": asset_bundle_summary(live / "assets.json"),
+             "freeBytes": free,
              "launchers": {name: digest(live_operations / name) for name in LAUNCHERS}}
     if include_adapter:
         state["adapterUnit"] = adapter_unit_state(components)
@@ -564,7 +594,10 @@ def inspect_canary(sha):
     ops = ROOT / "releases" / sha / "operations"
     retried = (ops / CANARY_RETRY_LOG).is_file()
     size, log = read_canary_log(ops / (CANARY_RETRY_LOG if retried else CANARY_LOG))
-    return {"attemptSha": sha, "liveWebsiteSha": identity(inspect("app"))["revision"],
+    live = identity(inspect("app"))["revision"]
+    return {"attemptSha": sha, "liveWebsiteSha": live,
+            "liveAssets": {"host": asset_bundle_summary(ROOT / "releases" / live / "assets.json"),
+                           "mounted": mounted_assets_digest()},
             "bytes": size, "retried": retried, "backupResources": backup_resource_summary(),
             **canary_diagnostics(log)}
 

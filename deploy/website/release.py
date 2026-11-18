@@ -13,7 +13,7 @@ from remote import (ACTION_PASSWORD_PRESENTATION_FILES, BACKUP_OPERATION, CARD_I
                     CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES, PRESENTATION_SCOPES, SECURITY_PRESENTATION_FILES,
                     REDEEM_PRESENTATION_FILES, SUBSCRIPTION_INVOICE_PRESENTATION_FILES,
                     TABLE_ACTIONS_STYLESHEET, TASK_HISTORY_PRESENTATION_FILES,
-                    WORKSPACE_PROGRESS_PRESENTATION_FILES)
+                    WORKSPACE_PROGRESS_PRESENTATION_FILES, asset_bundle_summary)
 
 ACCOUNT = "098208446664"
 REGION = "ap-northeast-1"
@@ -457,6 +457,11 @@ def main():
             raise RuntimeError("recharge_presentation_live_baseline_mismatch")
         expected_assets = presentation["assetsSha256"]
     if actual_assets != expected_assets:
+        print(json.dumps({"assetVerification": {
+            "baseWebsiteSha": base, "expectedSha256": expected_assets,
+            "live": before.get("assetsSummary"),
+            "candidate": asset_bundle_summary(OUTPUT / names[1])
+        }}, sort_keys=True), flush=True)
         raise RuntimeError("website_release_would_change_recharge_assets")
     require_main(sha)
     artifacts = {name: put_artifact(OUTPUT / name, sha) for name in names}
