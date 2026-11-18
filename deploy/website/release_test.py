@@ -1107,6 +1107,40 @@ class WebsiteReleaseTests(unittest.TestCase):
                         {"Result": "start-limit-hit"}, {"LoadState": "not-found"}):
             self.assertFalse(backup_monitoring.release_retry_pending(service | changes))
 
+    def test_backup_resources_read_only_fixed_metadata_and_keep_unknown_memory_distinct(self):
+        runtime = Path(__file__).resolve().parents[2] / ".runtime"
+        runtime.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=runtime) as directory:
+            root = Path(directory)
+            formal = root / "formal"
+            private = formal / "private"
+            private.mkdir(parents=True)
+            (private / "fixture.cred").write_text("synthetic-private-content")
+            (formal / "data").mkdir()
+            (formal / "data/local-business.sqlite").write_bytes(b"fixture")
+            spool = root / "backups/scheduled-recharge"
+            for folder in ("pending", ".capture-fixture"):
+                (spool / folder).mkdir(parents=True)
+                (spool / folder / "encrypted").write_bytes(b"blob")
+            unit = b"MemoryPeak=18446744073709551615\nCPUUsageNSec=20\nExecMainStartTimestampMonotonic=30\n"
+
+            def read_memory(path):
+                self.assertEqual(str(path), "/proc/meminfo")
+                return "MemTotal: 1024 kB\nMemAvailable: 768 kB\n"
+
+            with patch.multiple(remote, ROOT=root, FORMAL=formal, run=Mock(return_value=unit)), \
+                    patch.object(Path, "read_text", read_memory):
+                report = remote.backup_resource_summary()
+            self.assertEqual(report["hostMemoryBytes"]["MemAvailable"], 768 * 1024)
+            self.assertIsNone(report["backupService"]["MemoryPeak"])
+            self.assertEqual(report["backupService"]["CPUUsageNSec"], 20)
+            self.assertEqual(report["spool"]["pending"], {"exists": True, "files": 1, "bytes": 4})
+            self.assertEqual(report["spool"][".uploaded"], {"exists": False})
+            self.assertEqual(report["spool"]["captureBytes"], 4)
+            self.assertEqual(report["recoverySourceBytes"]["private"]["files"], 1)
+            self.assertEqual(report["sqliteFileBytes"], 7)
+            self.assertNotIn("synthetic-private-content", json.dumps(report))
+
     def test_recovery_receipt_limit_is_bounded_and_projection_stays_small(self):
         runtime = Path(__file__).resolve().parents[2] / ".runtime"
         runtime.mkdir(exist_ok=True)

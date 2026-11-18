@@ -565,7 +565,8 @@ def inspect_canary(sha):
     retried = (ops / CANARY_RETRY_LOG).is_file()
     size, log = read_canary_log(ops / (CANARY_RETRY_LOG if retried else CANARY_LOG))
     return {"attemptSha": sha, "liveWebsiteSha": identity(inspect("app"))["revision"],
-            "bytes": size, "retried": retried, **canary_diagnostics(log)}
+            "bytes": size, "retried": retried, "backupResources": backup_resource_summary(),
+            **canary_diagnostics(log)}
 
 
 def mount_matches(container, source, destination=None):
@@ -720,6 +721,57 @@ console.log(JSON.stringify(states));
     require(set(status) == {"backup", "recharge_backup"} and all(value != "disabled" for value in status.values()),
             "backup_monitor_check_missing")
     return status
+
+
+def backup_resource_summary():
+    """Read resource metadata without collecting backup or credential contents."""
+    report = {"at": time.time_ns() // 1_000_000}
+    try:
+        memory = {}
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            name, _, value = line.partition(":")
+            if name in {"MemTotal", "MemAvailable", "SwapTotal", "SwapFree"}:
+                memory[name] = int(value.split()[0]) * 1024
+        report["hostMemoryBytes"] = memory
+    except (OSError, ValueError):
+        report["hostMemoryBytes"] = None
+    try:
+        fields = run(["systemctl", "show", "id-business-independent-recharge-backup.service",
+                      "--property=MemoryPeak,CPUUsageNSec,ExecMainStartTimestampMonotonic,ExecMainExitTimestampMonotonic"],
+                     timeout=5).decode()
+        values = dict(line.split("=", 1) for line in fields.splitlines() if "=" in line)
+        report["backupService"] = {name: int(value) if value.isdecimal() and int(value) < 2**64 - 1 else None
+                                   for name, value in values.items()}
+    except (OSError, ValueError, subprocess.SubprocessError):
+        report["backupService"] = None
+
+    def directory_summary(directory):
+        if not directory.exists():
+            return {"exists": False}
+        if directory.is_symlink() or not directory.is_dir():
+            raise OSError("backup_resource_directory_invalid")
+        files = [path.stat().st_size for path in directory.rglob("*")
+                 if not path.is_symlink() and path.is_file()]
+        return {"exists": True, "files": len(files), "bytes": sum(files)}
+
+    try:
+        spool = ROOT / "backups/scheduled-recharge"
+        report["spool"] = {name: directory_summary(spool / name) for name in ("pending", ".uploaded")}
+        captures = [path for path in spool.glob(".capture-*") if path.is_dir() and not path.is_symlink()]
+        report["spool"]["captureDirectories"] = len(captures)
+        captured = [directory_summary(path) for path in captures]
+        report["spool"]["captureBytes"] = (sum(item["bytes"] for item in captured)
+                                         if all(item["exists"] for item in captured) else None)
+    except OSError:
+        report["spool"] = None
+    try:
+        categories = ("operations", "ops", "private", "vendure-state", "data/vendure-admission",
+                      "recharge-data/product_files", "recharge-data/data", "google-drive-backup/outbox")
+        report["recoverySourceBytes"] = {name: directory_summary(FORMAL / name) for name in categories}
+        report["sqliteFileBytes"] = (FORMAL / "data/local-business.sqlite").stat().st_size
+    except OSError:
+        report["recoverySourceBytes"] = None
+    return report
 
 
 @contextmanager
@@ -945,6 +997,7 @@ def release_website(plan, staged=None):
               "protectedComponentsUnchanged": not include_adapter,
               "liveAssetsSha256": digest(release / "assets.json"),
               "backupMonitoring": monitoring,
+              "backupResources": backup_resource_summary(),
               "portableRecoveryBackup": recovery,
               "unauthenticatedProtectedReadsRejected": True, "productionBusinessTestWrites": False}
     if events:
