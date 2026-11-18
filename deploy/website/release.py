@@ -207,12 +207,23 @@ def verify_deferred_native_receipt(receipt, approval, before, expected_assets=No
             "assetsSha256": assets_sha}
 
 
-def require_website_scope(base, sha, include_adapter=False, include_core=False, partner_api=False):
+def require_website_scope(base, sha, include_adapter=False, include_core=False, partner_api=False, native_publication=None):
     require_ancestor(base, sha)
     changed = set(git("diff", "--name-only", base, sha, "--", *CORE_PATHS).splitlines())
     # The host backup timer is managed independently from the immutable payment
     # image. This exact path is installed and read back by the website release.
     changed.discard(BACKUP_OPERATION)
+    native = native_publication or {}
+    native_revision = native.get("identity", {}).get("revision")
+    if (changed == PLUS_TRIAL_SCOPE and
+            not any((include_adapter, include_core, partner_api)) and
+            native.get("imageLabelsVerified") is True and
+            isinstance(native_revision, str) and re.fullmatch(r"[a-f0-9]{40}", native_revision) and
+            native["identity"].get("running") is True):
+        require_ancestor(native_revision, sha)
+        if git("diff", "--name-only", native_revision, sha, "--", *sorted(PLUS_TRIAL_SCOPE)).strip():
+            raise RuntimeError("deployed_native_inputs_source_mismatch")
+        return "deployedNativeBuildInputs", {"nativeRevision": native_revision, "image": native["identity"]["image"]}
     if include_core and base == DEFERRED_DEBUG_BASE and changed == DEFERRED_DEBUG_FILES:
         require_deferred_debug_inputs(base, sha)
         # A failed native preflight still stages releases/<sha>. Publish the
@@ -434,8 +445,14 @@ def main():
     if base == sha:
         raise RuntimeError("requested_revision_already_running_read_back_the_existing_release")
     presentation_scope, presentation = require_website_scope(base, sha, include_adapter, include_core,
-                                                             partner_api=partner_api) or (None, None)
+        partner_api=partner_api, native_publication=before.get("nativePublication")) or (None, None)
     deferred_native = None
+    deployed_native = None
+    if presentation_scope == "deployedNativeBuildInputs":
+        deployed_native = presentation
+        presentation_scope, presentation = None, None
+        if retry_receipt or customer_progress:
+            raise RuntimeError("deployed_native_inputs_require_plain_website")
     if presentation_scope == "deferredNativeBuildInputs":
         deferred_native = presentation
         presentation_scope, presentation = None, None
@@ -541,11 +558,15 @@ def main():
         files += CUSTOMER_PROGRESS_FILES
     if deferred_native:
         files += ("frontend/recharge-partners.mjs", *sorted(DEFERRED_DEBUG_FILES))
+    if deployed_native:
+        files += tuple(sorted(PLUS_TRIAL_SCOPE))
     plan = {"operation": "release", "sha": sha, "before": before, "artifacts": artifacts,
             "files": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in files},
             "qualityRun": quality_run, "preflightCommand": preflight_id, 'externalEvents': True}
     if asset_repair:
         plan["assetMetadataRepair"] = asset_repair
+    if deployed_native:
+        plan["deployedNativeBuildInputs"] = deployed_native
     if include_adapter:
         plan["adapter"] = {"runtimeFiles": ADAPTER_RUNTIME_FILES}
     if include_core:
@@ -602,6 +623,10 @@ def main():
     if deferred_native:
         receipt["deferredNativeBuildInputs"] = verify_deferred_native_receipt(
             receipt, deferred_native, before, expected_assets=expected_assets)
+    if deployed_native and (receipt.get("deployedNativeBuildInputs") != deployed_native or
+            receipt.get("protectedComponentsUnchanged") is not True or
+            any(name in receipt for name in ("adapter", "rechargeCore"))):
+        raise RuntimeError("deployed_native_runtime_changed")
     receipt["releaseCommand"] = command_id
     print(json.dumps(receipt, sort_keys=True), flush=True)
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:

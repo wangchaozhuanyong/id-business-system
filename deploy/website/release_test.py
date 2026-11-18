@@ -107,12 +107,13 @@ class WebsiteReleaseTests(unittest.TestCase):
         public = b'{"synthetic":true}'
         mount = {"Source": str(remote.ROOT / "releases" / BASE / "assets.json"),
                  "Destination": "/run/public-assets.json", "RW": False}
-        container = {"Config": {"Labels": {"org.opencontainers.image.revision": BASE}}, "Mounts": [mount]}
-        with patch.object(remote, "inspect", return_value=container), patch.object(remote, "run", return_value=public) as run:
+        container = {"Id": "synthetic", "Image": "image", "State": {"Pid": 123, "Running": True, "StartedAt": "start"},
+                     "Config": {"Labels": {"org.opencontainers.image.revision": BASE}}, "Mounts": [mount]}
+        with patch.object(remote, "inspect", return_value=container), patch.object(Path, "read_bytes", autospec=True, return_value=public) as read:
             self.assertEqual(remote.mounted_assets_digest(), {
                 "available": True, "sha256": hashlib.sha256(public).hexdigest(), "bytes": len(public)
             })
-            run.assert_called_once_with(["docker", "exec", "id-business-independent-app", "cat", "/run/public-assets.json"])
+            read.assert_called_once_with(Path("/proc/123/root/run/public-assets.json"))
             container["Mounts"] = [mount | {"Source": str(remote.ROOT / "releases" / TARGET / "assets.json")}]
             self.assertEqual(remote.mounted_assets_digest()["sha256"], hashlib.sha256(public).hexdigest())
             for invalid in (mount | {"RW": True}, mount | {"Source": "/private.json"},
@@ -123,7 +124,55 @@ class WebsiteReleaseTests(unittest.TestCase):
             self.assertEqual(remote.mounted_assets_digest(), {"available": False})
             container["Mounts"] = []
             self.assertEqual(remote.mounted_assets_digest(), {"available": False})
-            self.assertEqual(run.call_count, 2)
+            self.assertEqual(read.call_count, 2)
+
+        changed = container | {"Id": "replaced", "Mounts": [mount]}
+        container["Mounts"] = [mount]
+        with patch.object(remote, "inspect", side_effect=[container, changed]), patch.object(Path, "read_bytes", return_value=public):
+            with self.assertRaisesRegex(remote.ReleaseError, "mounted_public_asset_container_changed"):
+                remote.mounted_asset_bytes()
+        with patch.object(remote, "inspect", return_value=container), patch.object(Path, "read_bytes", side_effect=PermissionError("private detail")):
+            with self.assertRaisesRegex(remote.ReleaseError, "mounted_public_asset_namespace_read_failed"):
+                remote.mounted_asset_bytes()
+
+    @unittest.skipUnless(Path("/proc/self/root").exists(), "Linux namespace filesystem required")
+    def test_public_asset_can_be_read_without_executing_a_program_in_the_container(self):
+        runtime = Path(__file__).resolve().parents[2] / ".runtime"
+        runtime.mkdir(exist_ok=True)
+        with TemporaryDirectory(dir=runtime) as directory:
+            asset = Path(directory) / "assets.json"
+            asset.write_bytes(b'{"synthetic":true}')
+            container = {"Id": "synthetic", "Image": "image", "State": {"Pid": os.getpid(), "Running": True, "StartedAt": "start"},
+                "Config": {"Labels": {"org.opencontainers.image.revision": BASE}},
+                "Mounts": [{"Source": str(remote.ROOT / "releases" / BASE / "assets.json"),
+                            "Destination": str(asset), "RW": False}]}
+            with patch.object(remote, "inspect", return_value=container):
+                self.assertEqual(remote.mounted_asset_bytes(), asset.read_bytes())
+
+    def test_native_publication_uses_running_identity_and_both_image_labels(self):
+        container = {"Id": "native", "Image": "image", "State": {"Running": True, "StartedAt": "start"},
+                     "Config": {"Labels": {"org.opencontainers.image.revision": TARGET}}}
+        labels = {"org.opencontainers.image.revision": TARGET, "org.id-business.upstream.revision": remote.PINNED_UPSTREAM}
+        with patch.object(remote, "inspect", return_value=container), patch.object(remote, "run") as run:
+            run.return_value = json.dumps(labels).encode()
+            self.assertTrue(remote.native_publication_state()["imageLabelsVerified"])
+            run.return_value = json.dumps(labels | {"org.opencontainers.image.revision": BASE}).encode()
+            self.assertFalse(remote.native_publication_state()["imageLabelsVerified"])
+            run.return_value = json.dumps(labels | {"org.id-business.upstream.revision": BASE}).encode()
+            self.assertFalse(remote.native_publication_state()["imageLabelsVerified"])
+
+    def test_execution_diagnostics_return_fixed_codes_and_resource_metadata(self):
+        with patch.object(remote, "inspect", return_value={"HostConfig": {"PidsLimit": 64}}), \
+                patch.object(remote, "run", return_value=b"64\n"), \
+                patch.object(remote.subprocess, "run", side_effect=[
+                    Mock(returncode=126, stderr=b"chdir: private-content; unable to start container process"),
+                    Mock(returncode=0, stderr=b"")]):
+            report = remote.app_exec_status()
+        self.assertEqual(report["default"]["indicators"], ["working_directory", "runtime_exec"])
+        self.assertEqual(report["root"]["exitCode"], 0)
+        self.assertEqual(report["pidsCurrent"], 64)
+        self.assertEqual(report["pidsLimit"], 64)
+        self.assertNotIn("private-content", json.dumps(report))
 
     def test_command_failures_identify_the_readonly_step_without_raw_errors(self):
         cases = (
@@ -230,6 +279,87 @@ class WebsiteReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "recharge_core_or_runtime_changed"):
             release.require_website_scope(BASE, TARGET)
         git.assert_called_once_with("diff", "--name-only", BASE, TARGET, "--", *release.CORE_PATHS)
+
+    @patch("release.require_ancestor")
+    @patch("release.git")
+    def test_website_carries_only_exact_inputs_from_the_verified_running_native(self, git, ancestor):
+        native = {"identity": {"revision": TARGET, "image": "image", "running": True},
+                  "imageLabelsVerified": True}
+        git.side_effect = ["\n".join(sorted(release.PLUS_TRIAL_SCOPE)), ""]
+        scope, evidence = release.require_website_scope(remote.ASSET_METADATA_REPAIR_BASE, TARGET,
+                                                       native_publication=native)
+        self.assertEqual(scope, "deployedNativeBuildInputs")
+        self.assertEqual(evidence, {"nativeRevision": TARGET, "image": "image"})
+        for invalid in (native | {"imageLabelsVerified": False},
+                        native | {"identity": native["identity"] | {"running": False}},
+                        native | {"identity": native["identity"] | {"revision": "invalid"}}):
+            git.side_effect = None
+            git.return_value = "\n".join(sorted(release.PLUS_TRIAL_SCOPE))
+            with self.assertRaisesRegex(RuntimeError, "recharge_core_or_runtime_changed"):
+                release.require_website_scope(remote.ASSET_METADATA_REPAIR_BASE, TARGET, native_publication=invalid)
+        git.side_effect = ["\n".join(sorted(release.PLUS_TRIAL_SCOPE)), "changed"]
+        with self.assertRaisesRegex(RuntimeError, "deployed_native_inputs_source_mismatch"):
+            release.require_website_scope(remote.ASSET_METADATA_REPAIR_BASE, TARGET, native_publication=native)
+
+    def test_host_rejects_native_carry_when_provenance_or_selected_operations_differ(self):
+        native = {"revision": TARGET, "image": "image", "running": True}
+        evidence = {"nativeRevision": TARGET, "image": "image"}
+        before = {"components": {"app": {"revision": BASE}, "recharge-native": native},
+                  "unitSha256": "unit", "gatewaySha256": "gateway", "assetsSha256": "assets", "launchers": {},
+                  "nativePublication": {"identity": native, "imageLabelsVerified": True}}
+        plan = {"sha": TARGET, "before": before, "deployedNativeBuildInputs": evidence}
+        with patch.object(remote, "snapshot", return_value=before), patch.object(remote, "stage", side_effect=RuntimeError("fixture stage boundary")) as stage:
+            with self.assertRaisesRegex(RuntimeError, "fixture stage boundary"):
+                remote.release_website(plan)
+            stage.assert_called_once()
+            stage.reset_mock()
+            for changed in (plan | {"customerProgress": True},
+                            plan | {"deployedNativeBuildInputs": evidence | {"image": "different"}},
+                            plan | {"before": before | {"nativePublication": {"identity": native, "imageLabelsVerified": False}}}):
+                with self.assertRaisesRegex(remote.ReleaseError, "deployed_native_inputs_not_verified"):
+                    remote.release_website(changed)
+            stage.assert_not_called()
+
+    @patch("release.put_artifact", return_value={"sha256": "d" * 64})
+    @patch("release.require_main")
+    @patch("release.require_website_scope")
+    @patch("release.remote")
+    def test_already_deployed_inputs_dispatch_only_the_website_and_require_the_receipt(self, dispatch, scope, main, put):
+        bundle = b"synthetic public bundle"
+        digest = hashlib.sha256(bundle).hexdigest()
+        evidence = {"nativeRevision": TARGET, "image": "image"}
+        before = {"components": {"app": {"revision": BASE}}, "assetsSha256": digest, "freeBytes": 20 * 1024**3}
+        scope.return_value = ("deployedNativeBuildInputs", evidence)
+        omit_receipt = False
+
+        def remote_call(plan):
+            if plan["operation"] == "preflight":
+                return "preflight", before
+            self.assertEqual(plan["deployedNativeBuildInputs"], evidence)
+            self.assertTrue(release.PLUS_TRIAL_SCOPE <= set(plan["files"]))
+            for name in ("adapter", "rechargeCore", "rechargePartnerApi", "customerProgress", "vendureRetryReceipt"):
+                self.assertNotIn(name, plan)
+            receipt = {"mainSha": TARGET, "appCanaryPassed": True, "protectedComponentsUnchanged": True,
+                       "deployedNativeBuildInputs": evidence,
+                       "portableRecoveryBackup": {"sourceRevision": TARGET, "programSha256": plan["files"][release.BACKUP_OPERATION]}}
+            if omit_receipt:
+                receipt.pop("deployedNativeBuildInputs")
+            return "release", receipt
+
+        dispatch.side_effect = remote_call
+        with TemporaryDirectory() as directory, patch("release.OUTPUT", Path(directory)), redirect_stdout(io.StringIO()):
+            (Path(directory) / f"independent-assets-{TARGET}.json").write_bytes(bundle)
+            env = {"RELEASE_SHA": TARGET, "QUALITY_RUN_ID": "123", "GITHUB_STEP_SUMMARY": str(Path(directory) / "summary")}
+            with patch.dict(os.environ, env, clear=True):
+                release.main()
+            omit_receipt = True
+            with patch.dict(os.environ, env, clear=True), self.assertRaisesRegex(RuntimeError, "deployed_native_runtime_changed"):
+                release.main()
+            put.reset_mock()
+            with patch.dict(os.environ, env | {"RELEASE_CUSTOMER_PROGRESS": "true"}, clear=True), self.assertRaisesRegex(
+                    RuntimeError, "deployed_native_inputs_require_plain_website"):
+                release.main()
+            put.assert_not_called()
 
     @patch("release.require_deferred_debug_inputs", return_value={"reviewed": True})
     @patch("release.require_ancestor")
@@ -1218,6 +1348,10 @@ class WebsiteReleaseTests(unittest.TestCase):
             (formal / "data").mkdir()
             (formal / "data/local-business.sqlite").write_bytes(b"fixture")
             spool = root / "backups/scheduled-recharge"
+            spool.mkdir(parents=True)
+            (spool / "last-upload.json").write_text(json.dumps({"capturedAt": "20261118T073006Z",
+                "verifiedAt": "synthetic-private-content", "recoveryStateStatus": "capture_failed",
+                "recoveryStateFailureStage": "source", "wrappedKey": "synthetic-private-content"}))
             for folder in ("pending", ".capture-fixture"):
                 (spool / folder).mkdir(parents=True)
                 (spool / folder / "encrypted").write_bytes(b"blob")
@@ -1232,6 +1366,10 @@ class WebsiteReleaseTests(unittest.TestCase):
                 report = remote.backup_resource_summary()
             self.assertEqual(report["hostMemoryBytes"]["MemAvailable"], 768 * 1024)
             self.assertIsNone(report["backupService"]["MemoryPeak"])
+            self.assertEqual(report["lastUpload"]["capturedAt"], "20261118T073006Z")
+            self.assertEqual(report["lastUpload"]["recoveryStateStatus"], "capture_failed")
+            self.assertEqual(report["lastUpload"]["recoveryStateFailureStage"], "source")
+            self.assertIsNone(report["lastUpload"]["verifiedAt"])
             self.assertEqual(report["backupService"]["CPUUsageNSec"], 20)
             self.assertEqual(report["spool"]["pending"], {"exists": True, "files": 1, "bytes": 4})
             self.assertEqual(report["spool"][".uploaded"], {"exists": False})
