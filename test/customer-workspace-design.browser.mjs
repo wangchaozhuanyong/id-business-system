@@ -36,14 +36,26 @@ test('单客户档案：唯一匹配、候选分页、粘贴失败、空结果�
       id: `query-person-${i}`, name: '同名客户', wechat: `unique-contact-${String(i).padStart(2, '0')}`, active: true,
       notes: '仅用于离线验收', version: 1
     }));
-    fixture.commerce.data.orders = [];
+    const currentCard = '4242424242424242', previousCard = '5555555555554444';
+    const order = { customerId: 'query-person-0', product: 'GPT', plan: 'Plus', email: 'subscription@example.test',
+      start: at(-10), expiry: at(20), paidConfirmed: true, receiptConfirmed: true, entitlementStatus: 'active',
+      payment: '银行卡', proMaterialMode: 'manual_card', cardId: '' };
+    fixture.commerce.data.orders = [
+      { ...order, id: 'current-card', proCardNumber: currentCard, paymentId: currentCard.slice(-4) },
+      { ...order, id: 'previous-card', start: at(-40), expiry: at(-10),
+        proCardNumber: previousCard, paymentId: previousCard.slice(-4) },
+      { ...order, id: 'no-card', product: 'Claude Pro', plan: 'Pro', proCardNumber: '', paymentId: '1111' }
+    ];
     const context = await browser.newContext({ viewport: { width, height: 900 } });
     t.after(() => context.close());
     const traffic = await interceptDesign(context, { actor, localFixtures: fixture, skipRechargeAssets: true });
-    await context.addInitScript(() => Object.defineProperty(navigator, 'clipboard', { value: { async readText() {
-      if (window.failClipboard) throw new Error('合成剪贴板拒绝');
-      return window.clipboardValue || '';
-    } } }));
+    await context.addInitScript(() => Object.defineProperty(navigator, 'clipboard', { value: {
+      async readText() {
+        if (window.failClipboard) throw new Error('合成剪贴板拒绝');
+        return window.clipboardValue || '';
+      },
+      async writeText(value) { window.copiedCard = value; }
+    } }));
     let forbidden = false, failNext = false, delayed = false;
     const pending = Promise.withResolvers(), release = Promise.withResolvers();
     t.after(() => release.resolve());
@@ -78,6 +90,23 @@ test('单客户档案：唯一匹配、候选分页、粘贴失败、空结果�
     await page.evaluate(() => { window.clipboardValue = ' unique-contact-00 '; });
     await page.getByRole('button', { name: '粘贴查询', exact: true }).click();
     await page.locator('.customer-query-profile').getByText('query-person-0', { exact: true }).waitFor();
+    const accounts = page.locator('#customer-query-accounts-content');
+    const cardField = (section, id) => section.locator(`[data-customer-query-row="${id}"] dl > div`)
+      .filter({ has: page.getByText('银行卡号', { exact: true }) });
+    const current = cardField(accounts, 'current-card');
+    await current.getByText(currentCard, { exact: true }).waitFor();
+    await current.getByRole('button', { name: '复制卡号', exact: true }).click();
+    assert.equal(await page.evaluate(() => window.copiedCard), currentCard);
+    const noCard = cardField(accounts, 'no-card');
+    await noCard.getByText('无', { exact: true }).waitFor();
+    assert.equal(await noCard.getByRole('button').count(), 0);
+    await page.getByRole('button', { name: '展开订单历史', exact: true }).click();
+    const previous = cardField(page.locator('#customer-query-orders-content'), 'previous-card');
+    await previous.getByText(previousCard, { exact: true }).waitFor();
+    await previous.getByRole('button', { name: '复制卡号', exact: true }).click();
+    assert.equal(await page.evaluate(() => window.copiedCard), previousCard);
+    await page.getByRole('button', { name: '收起订单历史', exact: true }).click();
+    assert.equal(await page.getByText(previousCard, { exact: true }).count(), 0);
     assert.equal(await page.locator('[data-customer-query-candidate]').count(), 0);
     assert.equal(await page.locator('[data-customer-query-content] table').count(), 0);
     await page.evaluate(() => { window.failClipboard = true; });
@@ -90,6 +119,7 @@ test('单客户档案：唯一匹配、候选分页、粘贴失败、空结果�
     await query('同名客户');
     const candidates = page.locator('[data-customer-query-candidate]');
     await candidates.first().waitFor();
+    assert.equal(await page.getByText(currentCard, { exact: true }).count(), 0);
     assert.equal(await candidates.count(), 20);
     await capture(page, 'customer-candidates-' + width);
     const pager = page.locator('[data-pagination="customer-query-search"]');

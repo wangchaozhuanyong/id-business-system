@@ -201,12 +201,17 @@ test('客户查询按客户编号隔离，保留死号 Apple ID 原绑定，Clau
   assert.equal(details.items.length, 2);
   const gpt = details.items.find(row => row.product === 'GPT');
   assert.equal(gpt.status, 'active');
+  assert.equal(gpt.bankNumber, bank.proCardNumber);
   assert.deepEqual(gpt.appleBindings.map(({ account, state, historical }) => ({ account, state, historical })),
     [{ account: 'one+tag@example.test', state: 'dead', historical: true }]);
   const row = details.items.find(row => row.product === 'Claude Pro');
   assert.deepEqual(row.bank, { state: 'dead', private: true });
   assert.equal(row.payment, '');
-  assert.doesNotMatch(JSON.stringify(details), /internal-(?:task|tenant-phone|order-phone|card-serial)|4242424242424242|other@example.test/);
+  assert.equal(row.bankNumber, claude.proCardNumber);
+  assert.doesNotMatch(JSON.stringify(details), /internal-(?:task|tenant-phone|order-phone|card-serial)|other@example.test/);
+  const history = run('detail', { customerId: 'customer-a', tab: 'orders' });
+  assert.equal(history.items.find(row => row.id === old.id).bankNumber, undefined);
+  assert.equal(history.items.find(row => row.id === bank.id).bankNumber, bank.proCardNumber);
   assert.deepEqual(run('copy-claude', { customerId: 'customer-a', orderId: claude.id }), { text: 'claude@example.test----合成租户' });
   assert.throws(() => run('prefill', { customerId: 'customer-a', orderId: 'other' }), { status: 404 });
   const prefill = run('prefill', { customerId: 'customer-a', orderId: old.id }).values;
@@ -226,6 +231,24 @@ test('客户查询按客户编号隔离，保留死号 Apple ID 原绑定，Clau
     appleBalance: { data: { wallets: [{ id: 'apple', currency: 'USD', balance: '50' }],
       allocations: [{ orderId: old.id, appleIdId: 'apple' }] } } };
   assert.equal(customerQuery(readyApple, {}, 'prefill', { customerId: 'customer-a', orderId: old.id }, now).values.appleIdId, 'apple');
+});
+
+test('客户查询只显示已关联原订单的完整卡号，缺失、草稿和关联冲突不返回卡号', () => {
+  const recorded = { ...bank, proCardNumber: '' };
+  const tenant = { ...claude, proCardNumber: '' };
+  const orders = [recorded, tenant, { ...bank, id: 'tail-only', cardId: '', proCardNumber: '' },
+    { ...bank, id: 'wrong-tail', paymentId: '1111' }, { ...bank, id: 'cancelled', status: '已撤单' },
+    { ...bank, id: 'draft', draft: true }, { ...bank, id: 'wrong-owner', accountId: 'other-owned-account' }];
+  const snapshots = { ...data, commerce: { data: { ...data.commerce.data, orders } },
+    inventory: { data: { accounts: [{ id: 'other-owned-account', accountLifecycle: { customerId: 'customer-b' } }] } } };
+  const context = { archive: { cards: { [bank.cardId]: { number: bank.proCardNumber } } },
+    tenantCards: [{ id: claude.cardId, tenantId: claude.tenantId, number: claude.proCardNumber }] };
+  const result = customerQuery(snapshots, {}, 'detail', { customerId: 'customer-a', tab: 'orders' }, now, context);
+  assert.equal(result.items.find(row => row.id === recorded.id).bankNumber, bank.proCardNumber);
+  assert.equal(result.items.find(row => row.id === tenant.id).bankNumber, claude.proCardNumber);
+  assert.equal(result.items.find(row => row.id === 'cancelled').bankNumber, bank.proCardNumber);
+  for (const id of ['tail-only', 'wrong-tail', 'draft', 'wrong-owner'])
+    assert.equal(result.items.find(row => row.id === id).bankNumber, undefined, id);
 });
 
 test('客户查询按现有订阅终止规则选当前记录，Claude 租户关联冲突时不可复制', () => {
@@ -260,7 +283,7 @@ test('客户查询按同一平台编号关联登录变更后的订单和原苹�
   assert.deepEqual(row.appleBindings.map(({ id, historical }) => ({ id, historical })), [{ id: 'apple', historical: true }]);
 });
 
-test('客户查询接口拒绝跨站及跨客户复制，Claude 成功回执只审计订单编号', async () => {
+test('完整卡号只发给已授权的同源客户查询，查看和 Claude 复制只审计订单编号', async () => {
   const origin = 'https://customers.example.test', audit = [];
   const handler = createCustomerQueryHandler({
     publicOrigin: origin, clock: () => now, store: {
@@ -268,21 +291,32 @@ test('客户查询接口拒绝跨站及跨客户复制，Claude 成功回执只�
       withSubscriptions: (_, run) => run(data, (action, ids) => audit.push({ action, ids }))
     }
   });
-  const copy = (body, who = actor, headers = {}) => new Promise(resolve => {
+  const request = (action, body, who = actor, headers = {}) => new Promise(resolve => {
     const input = Object.assign(Readable.from([Buffer.from(JSON.stringify(body))]), {
       method: 'POST', headers: { origin, 'content-type': 'application/json', ...headers }
     });
-    let status;
-    void handler(input, { writeHead: code => { status = code; },
-      end: output => resolve({ status, data: JSON.parse(output) }) }, '/api/local/customer-query/copy-claude', who);
+    let status, responseHeaders;
+    void handler(input, { writeHead: (code, headers) => { status = code; responseHeaders = headers; },
+      end: output => resolve({ status, data: JSON.parse(output), headers: responseHeaders }) },
+      '/api/local/customer-query/' + action, who);
   });
   const command = { customerId: 'customer-a', orderId: claude.id };
+  const copy = (...args) => request('copy-claude', ...args);
+  const detail = (...args) => request('detail', { customerId: 'customer-a', tab: 'accounts' }, ...args);
   assert.equal((await copy(command, { ...actor, role: 'employee' })).status, 403);
   assert.equal((await copy(command, actor, { 'sec-fetch-site': 'cross-site' })).status, 403);
   assert.equal((await copy({ ...command, customerId: 'customer-b' })).status, 404);
+  assert.equal((await detail({ ...actor, role: 'employee' })).status, 403);
+  assert.equal((await detail(actor, { 'sec-fetch-site': 'cross-site' })).status, 403);
   assert.deepEqual(audit, []);
-  assert.deepEqual(await copy(command), { status: 200, data: { text: 'claude@example.test----合成租户' } });
-  assert.deepEqual(audit, [{ action: 'copy', ids: [claude.id] }]);
+  const copied = await copy(command);
+  assert.equal(copied.status, 200);
+  assert.deepEqual(copied.data, { text: 'claude@example.test----合成租户' });
+  const viewed = await detail();
+  assert.equal(viewed.status, 200);
+  assert.equal(viewed.headers['Cache-Control'], 'private, no-store');
+  assert.equal(viewed.data.items.find(row => row.id === bank.id).bankNumber, bank.proCardNumber);
+  assert.deepEqual(audit, [{ action: 'copy', ids: [claude.id] }, { action: 'view', ids: [bank.id, claude.id] }]);
 });
 
 test('卡片状态按稳定关联或完整手填卡号生效，拒绝同尾号、过期版本和重放修改', async () => {
