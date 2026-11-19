@@ -1,7 +1,9 @@
 """Stage, verify and switch the website and its explicitly selected adapter on the SSM host."""
 
+import base64
 import fcntl
 from contextlib import contextmanager, nullcontext
+from datetime import datetime, timedelta, timezone
 import hashlib
 import json
 import os
@@ -808,6 +810,7 @@ def inspect_canary(sha, sample_backup_resources=False):
         result["backupResourcesBefore"] = result["backupResources"]
         result["backupObservation"] = observe_backup_resources()
         result["backupResources"] = backup_resource_summary()
+    result["recentRecoveryFailures"] = recent_recovery_failures()
     return result
 
 
@@ -965,6 +968,83 @@ console.log(JSON.stringify(states));
     return status
 
 
+RECOVERY_FAILURE_STAGES = {"application", "collector", "source", "sqlite", "credentials",
+                           "services", "size_limit", "encryption", "verification", "unknown"}
+BACKUP_HISTORY_KEY = re.compile(r"mysql/daily/independent-recharge/([0-9]{8}T[0-9]{6}Z)/"
+                                r"([a-f0-9]{40})/(manifest.json|mysql.sql.aes256gcm|recovery-state.idbackup)")
+
+
+def read_backup_failure_manifest(key, listed):
+    """Read a bounded manifest in anonymous memory; return only validated safe metadata."""
+    match = BACKUP_HISTORY_KEY.fullmatch(key)
+    require(match and match[3] == "manifest.json", "backup_history_manifest_key")
+    require(type(listed.get("Size")) is int and 0 < listed["Size"] <= 16384,
+            "backup_history_manifest_size")
+    etag = listed.get("ETag")
+    require(isinstance(etag, str) and re.fullmatch(r'"[a-f0-9]{32}"', etag), "backup_history_etag")
+    fd = os.memfd_create("id-backup-history", flags=0)
+    try:
+        os.fchmod(fd, 0o600)
+        outcome = subprocess.run(["aws", "s3api", "get-object", "--bucket", BUCKET, "--key", key,
+            "--expected-bucket-owner", "098208446664", "--region", "ap-northeast-1",
+            "--checksum-mode", "ENABLED", "--if-match", etag,
+            f"/proc/self/fd/{fd}"], pass_fds=(fd,), capture_output=True, check=True, timeout=15)
+        metadata = json.loads(outcome.stdout)
+        os.lseek(fd, 0, os.SEEK_SET)
+        raw = os.read(fd, 16385)
+    finally:
+        os.close(fd)
+    digest = hashlib.sha256(raw).digest()
+    version = metadata.get("VersionId")
+    require(len(raw) == listed["Size"] == metadata.get("ContentLength") and
+            metadata.get("ChecksumSHA256") == base64.b64encode(digest).decode() and
+            isinstance(version, str) and re.fullmatch(r"[a-zA-Z0-9_./+=\-]{1,1024}", version) and version != "null",
+            "backup_history_manifest_unverified")
+    manifest = json.loads(raw)
+    require(isinstance(manifest, dict) and match and match[3] == "manifest.json" and
+            manifest.get("capturedAt") == match[1] and manifest.get("revision") == match[2],
+            "backup_history_manifest_identity")
+    if manifest.get("recoveryStateError") != "capture_failed":
+        return None
+    stage = manifest.get("recoveryStateFailureStage")
+    return {"capturedAt": match[1], "nativeRevision": match[2],
+            "failureStage": stage if isinstance(stage, str) and stage in RECOVERY_FAILURE_STAGES else "unknown",
+            "manifestVersionId": version, "manifestSha256": digest.hex()}
+
+
+def recent_recovery_failures():
+    """Inspect at most three incomplete finalized batches from two UTC calendar days."""
+    unavailable = {"available": False, "reason": "backup_history_unavailable"}
+    if not hasattr(os, "memfd_create"):
+        return unavailable
+    try:
+        groups = {}
+        today = datetime.now(timezone.utc)
+        for day in (today, today - timedelta(days=1)):
+            prefix = "mysql/daily/independent-recharge/" + day.strftime("%Y%m%d")
+            listing = json.loads(run(["aws", "s3api", "list-objects-v2", "--bucket", BUCKET,
+                "--prefix", prefix, "--expected-bucket-owner", "098208446664", "--region", "ap-northeast-1",
+                "--max-keys", "1000", "--no-paginate"], timeout=15))
+            require(isinstance(listing, dict) and not listing.get("IsTruncated"), "backup_history_listing")
+            for item in listing.get("Contents", []):
+                key = item.get("Key")
+                match = BACKUP_HISTORY_KEY.fullmatch(key) if isinstance(key, str) else None
+                if match and key.startswith(prefix):
+                    groups.setdefault((match[1], match[2]), {})[match[3]] = item
+        candidates = sorted((identity for identity, files in groups.items()
+            if "manifest.json" in files and "mysql.sql.aes256gcm" in files and
+            "recovery-state.idbackup" not in files), reverse=True)
+        failures = []
+        for captured, revision in candidates[:3]:
+            listed = groups[(captured, revision)]["manifest.json"]
+            failure = read_backup_failure_manifest(listed["Key"], listed)
+            if failure:
+                failures.append(failure)
+        return {"available": True, "listedIncompleteBatches": len(candidates), "failures": failures}
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, subprocess.SubprocessError, ReleaseError):
+        return unavailable
+
+
 def backup_resource_summary():
     """Read resource metadata without collecting backup or credential contents."""
     report = {"at": time.time_ns() // 1_000_000}
@@ -979,8 +1059,7 @@ def backup_resource_summary():
         report["lastUpload"]["recoveryStateStatus"] = (receipt.get("recoveryStateStatus")
             if receipt.get("recoveryStateStatus") in {"verified", "capture_failed", "unavailable"} else None)
         report["lastUpload"]["recoveryStateFailureStage"] = (receipt.get("recoveryStateFailureStage")
-            if receipt.get("recoveryStateFailureStage") in {"application", "collector", "source", "sqlite",
-                "credentials", "services", "size_limit", "encryption", "verification", "unknown"} else None)
+            if receipt.get("recoveryStateFailureStage") in RECOVERY_FAILURE_STAGES else None)
     except (OSError, ValueError, TypeError):
         report["lastUpload"] = None
     try:
