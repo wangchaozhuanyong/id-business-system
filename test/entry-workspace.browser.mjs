@@ -687,7 +687,7 @@ test('录单币种完整可见，长名称回显与金额输入和价格按钮�
       await sale.selectOption('CNY');
       const paid = page.locator('#commerce-paidCurrency');
       await paid.selectOption('CNY');
-      for (const width of [2480, 1440, 768, 390, 320]) {
+      for (const width of [2480, 1440, 1024, 768, 390, 320]) {
         await page.setViewportSize({ width, height: 960 });
         const dark = width === 1440 || width === 390;
         if (await page.evaluate(() => document.documentElement.dataset.theme === 'dark') !== dark) await toggleDesignTheme(page);
@@ -703,13 +703,14 @@ test('录单币种完整可见，长名称回显与金额输入和价格按钮�
             label: currency.selectedOptions[0].textContent, extra: extra?.textContent,
             fits: !readout || (readout.top >= box(currency).bottom && readout.bottom <= amount.top &&
               readout.left >= bounds.left && readout.right <= bounds.right + 1 && extra.scrollWidth <= extra.clientWidth + 1),
+            controlsInside: [box(currency), amount, price].every(rect => rect.left >= bounds.left && rect.right <= bounds.right + 1),
             amountTop: amount.top, groupTop: bounds.top, priceVisible: price.top >= amount.bottom && price.bottom <= bounds.bottom + 1
           };
         }));
         assert.equal(cards.length, 2);
         for (const card of cards) {
           assert.equal(card.extra, long ? card.label : undefined, product + ' ' + width + 'px ' + card.label);
-          assert(card.fits && card.priceVisible, JSON.stringify({ product, width, card }));
+          assert(card.fits && card.controlsInside && card.priceVisible, JSON.stringify({ product, width, card }));
         }
         if (Math.abs(cards[0].groupTop - cards[1].groupTop) < 1)
           assert(Math.abs(cards[0].amountTop - cards[1].amountTop) <= 1, '并排金额框应对齐');

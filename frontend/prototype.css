@@ -6845,14 +6845,14 @@ td { color: var(--text); border-color: var(--line); }
   /* Both amount cards share rows. A stacked currency field uses the otherwise empty second row. */
   grid-row: span 4;
   grid-template-rows: subgrid;
-  grid-template-columns: minmax(max-content,1fr) fit-content(230px);
+  grid-template-columns: minmax(0,1fr) minmax(0,min(60%,230px));
   padding: 12px 18px;
   gap: 0 8px;
 }
 .order-submission-entry .order-financial-groups--amounts .order-financial-heading { display: contents; }
 .order-submission-entry .order-financial-heading > .title-with-help { grid-area: 1 / 1; align-self: start; white-space: nowrap; }
 .order-submission-entry .order-financial-heading > .order-financial-actions { grid-area: 4 / 1 / auto / -1; justify-content: flex-end; margin-block-start: 4px; }
-#commerce-order-form .order-financial-groups--amounts [data-commerce-field$='Currency'] { grid-area: 1 / 2; display: block; }
+#commerce-order-form .order-financial-groups--amounts [data-commerce-field$='Currency'] { grid-area: 1 / 2; display: block; justify-self: end; width: max-content; max-width: 100%; min-width: 0; }
 #commerce-order-form .order-financial-groups--amounts [data-commerce-field$='Amount'] { grid-area: 3 / 1 / auto / -1; display: block; margin-block-start: 4px; }
 .order-financial-groups--amounts [data-commerce-field] > label {
   position: absolute; inset-inline-start: 0; width: 1px; height: 1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
@@ -6875,7 +6875,7 @@ td { color: var(--text); border-color: var(--line); }
 @container order-amounts (width <= 346px) or (640px <= width <= 692px) {
   .order-submission-entry .order-financial-groups--amounts .order-financial-group { grid-template-columns: minmax(0,1fr); }
   .order-submission-entry .order-financial-heading > .title-with-help { grid-column: 1 / -1; }
-  #commerce-order-form .order-financial-groups--amounts [data-commerce-field$='Currency'] { grid-area: 2 / 1 / auto / -1; margin-block-start: 4px; }
+  #commerce-order-form .order-financial-groups--amounts [data-commerce-field$='Currency'] { grid-area: 2 / 1 / auto / -1; width: 100%; margin-block-start: 4px; }
   #commerce-order-form .order-financial-groups--amounts select { width: 100%; max-width: none; }
 }
 
