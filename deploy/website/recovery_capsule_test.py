@@ -1,8 +1,11 @@
 import base64
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
 import tempfile
+import subprocess
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -51,6 +54,7 @@ class PortableRecovery(unittest.TestCase):
             if command[:2] == ['systemctl', 'list-unit-files']:
                 return type('Result', (), {'returncode': 0,
                     'stdout': 'id-business-independent-app.service enabled\n'
+                              'id-business-independent-recharge-native.service enabled\n'
                               'id-business-independent-google-drive-backup.service enabled\n'})()
             self.assertEqual(command[:2], ['systemctl', 'cat'])
             return type('Result', (), {'returncode': 0, 'stdout': b'[Service]\n'})()
@@ -104,6 +108,102 @@ class PortableRecovery(unittest.TestCase):
         (self.root / capsule.REQUIRED[0]).unlink()
         with self.assertRaises(FileNotFoundError):
             self.collect()
+
+    def test_native_only_release_captures_its_verified_host_launcher(self):
+        revision = 'b' * 40
+        operations = self.root / 'releases' / revision / 'operations'
+        operations.rmdir()
+        launcher = self.root / 'releases' / revision / 'source/deploy/recharge-core/run-recharge.py'
+        launcher.parent.mkdir(parents=True)
+        content = b'synthetic-public-launcher'
+        launcher.write_bytes(content)
+        digest = hashlib.sha256(content).hexdigest()
+        with patch.object(capsule, 'native_source_launcher', return_value=(launcher, digest)) as verify:
+            state = self.collect()
+        verify.assert_called_once()
+        entry = next(row for row in state['entries'] if row['path'] == launcher.relative_to(self.root).as_posix())
+        self.assertEqual(base64.b64decode(entry['data']), content)
+        self.assertTrue(any(row['path'] == 'services/' + capsule.NATIVE_UNIT for row in state['entries']))
+        self.assertFalse(operations.exists())
+        script = """
+import { generateKeyPairSync } from 'node:crypto';
+const { sealRecoveryState, openRecoveryState } = await import(process.argv[1]);
+let input = '';
+for await (const chunk of process.stdin) input += chunk;
+const state = JSON.parse(input);
+const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 3072,
+  publicKeyEncoding: { type: 'spki', format: 'pem' }, privateKeyEncoding: { type: 'pkcs8', format: 'pem' } });
+const { archive } = sealRecoveryState(state, publicKey);
+const restored = openRecoveryState(archive, privateKey);
+console.log(JSON.stringify({ matched: JSON.stringify(state) === JSON.stringify(restored.state) }));
+"""
+        module = HERE.parents[1] / 'server/backup/recovery-archive.mjs'
+        roundtrip = subprocess.run(['node', '--input-type=module', '-e', script, module.as_uri()],
+            input=json.dumps(state).encode(), capture_output=True, timeout=20)
+        self.assertEqual(roundtrip.returncode, 0)
+        self.assertTrue(json.loads(roundtrip.stdout)['matched'])
+        with patch.object(capsule, 'native_source_launcher', return_value=(launcher, '0' * 64)):
+            with self.assertRaisesRegex(capsule.RecoveryError, 'native_source_mismatch'):
+                self.collect()
+
+    def test_missing_website_operations_and_operation_symlinks_still_fail(self):
+        app_operations = self.root / 'releases' / ('a' * 40) / 'operations'
+        app_operations.rmdir()
+        with self.assertRaisesRegex(capsule.RecoveryError, 'active_operations_missing'):
+            self.collect()
+        app_operations.mkdir()
+        (app_operations / 'linked-directory').symlink_to(self.root / 'formal/private', target_is_directory=True)
+        with self.assertRaisesRegex(capsule.RecoveryError, 'symlink_forbidden'):
+            self.collect()
+
+    def test_native_launcher_requires_captured_service_image_source_and_stable_runtime(self):
+        revision = 'b' * 40
+        identity = 'a' * 64 + ' sha256:' + 'c' * 64 + ' true 123 ' + revision + '\n'
+        content = b'synthetic-public-launcher'
+        def result(value):
+            return SimpleNamespace(returncode=0, stdout=value)
+        paths = (self.root / 'releases' / revision / 'source/deploy/recharge-core/run-recharge.py',
+                 self.root / 'formal/ops/recharge-core/run-recharge.py')
+        for path in paths:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+            definition = ('[Service]\nExecStart=/obsolete\nExecStart=\nExecStart=/usr/bin/python3 ' + str(path) +
+                          ' native ' + revision + '\n').encode()
+            responses = [result(identity), result(revision + ' ' + capsule.UPSTREAM_REVISION), result(identity)]
+            with patch.object(capsule.subprocess, 'run', side_effect=responses), \
+                    patch.object(Path, 'read_bytes', autospec=True, return_value=content) as read:
+                actual, digest = capsule.native_source_launcher(self.root, revision, definition)
+            self.assertEqual(actual, path)
+            self.assertEqual(digest, hashlib.sha256(content).hexdigest())
+            read.assert_called_once_with(Path('/proc/123/root/candidate/deploy/recharge-core/run-recharge.py'))
+        definition = ('ExecStart=/usr/bin/python3 ' + str(paths[0]) + ' native ' + revision).encode()
+        with patch.object(capsule.subprocess, 'run') as run:
+            with self.assertRaisesRegex(capsule.RecoveryError, 'native_launcher_unavailable'):
+                capsule.native_source_launcher(self.root, revision, b'ExecStart=/unmanaged')
+            run.assert_not_called()
+        with patch.object(capsule.subprocess, 'run', side_effect=[result(identity), result('unreviewed image')]):
+            with self.assertRaisesRegex(capsule.RecoveryError, 'native_source_mismatch'):
+                capsule.native_source_launcher(self.root, revision, definition)
+        with patch.object(capsule.subprocess, 'run', side_effect=[result(identity),
+                result(revision + ' ' + capsule.UPSTREAM_REVISION), result(identity.replace(' 123 ', ' 456 '))]), \
+                patch.object(Path, 'read_bytes', return_value=content):
+            with self.assertRaisesRegex(capsule.RecoveryError, 'native_runtime_changed'):
+                capsule.native_source_launcher(self.root, revision, definition)
+
+    def test_capsule_timeout_stops_only_its_named_temporary_container(self):
+        recipient = b'synthetic-public-recipient'
+        failure = subprocess.TimeoutExpired('synthetic docker capture', 90)
+        with patch.object(capsule, 'read_file', return_value=(recipient, ())), \
+                patch.object(capsule, 'collect', return_value={'synthetic': True}), \
+                patch.object(capsule.subprocess, 'run', side_effect=[failure, SimpleNamespace(returncode=0)]) as run:
+            with self.assertRaisesRegex(capsule.RecoveryError, 'capsule_encryption_failed'):
+                capsule.capture(self.root, self.root, 'a' * 40, 'b' * 40, self.root / 'encrypted-output',
+                                hashlib.sha256(recipient).hexdigest(), 'sha256:' + 'c' * 64)
+        command = run.call_args_list[0].args[0]
+        name = command[command.index('--name') + 1]
+        self.assertRegex(name, r'^id-recovery-capsule-[a-f0-9]{16}$')
+        self.assertIn(capsule.BACKUP_CONTAINER_LABEL, command)
+        self.assertEqual(run.call_args_list[1].args[0], ['docker', 'stop', '--time', '1', name])
 
 
 if __name__ == '__main__':

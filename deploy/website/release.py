@@ -1,15 +1,18 @@
 """Dispatch the independent website release from the checked main revision."""
 
 import base64
+import gzip
 import hashlib
 import json
 import os
 import re
 import subprocess
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from remote import (ACTION_PASSWORD_PRESENTATION_FILES, ASSET_METADATA_REPAIR_BASE, ASSET_METADATA_REPAIR_DIGEST,
+                    ASSET_METADATA_RELEASE_RUN,
                     BACKUP_OPERATION, CARD_IMPORT_ASSET_SOURCE, CARD_IMPORT_PRESENTATION_FILES, CARD_PLAN_PRESENTATION_FILES,
                     CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES, PRESENTATION_SCOPES, SECURITY_PRESENTATION_FILES,
                     REDEEM_PRESENTATION_FILES, SUBSCRIPTION_INVOICE_PRESENTATION_FILES,
@@ -207,12 +210,23 @@ def verify_deferred_native_receipt(receipt, approval, before, expected_assets=No
             "assetsSha256": assets_sha}
 
 
-def require_website_scope(base, sha, include_adapter=False, include_core=False, partner_api=False):
+def require_website_scope(base, sha, include_adapter=False, include_core=False, partner_api=False, native_publication=None):
     require_ancestor(base, sha)
     changed = set(git("diff", "--name-only", base, sha, "--", *CORE_PATHS).splitlines())
     # The host backup timer is managed independently from the immutable payment
     # image. This exact path is installed and read back by the website release.
     changed.discard(BACKUP_OPERATION)
+    native = native_publication or {}
+    native_revision = native.get("identity", {}).get("revision")
+    if (changed == PLUS_TRIAL_SCOPE and
+            not any((include_adapter, include_core, partner_api)) and
+            native.get("imageLabelsVerified") is True and
+            isinstance(native_revision, str) and re.fullmatch(r"[a-f0-9]{40}", native_revision) and
+            native["identity"].get("running") is True):
+        require_ancestor(native_revision, sha)
+        if git("diff", "--name-only", native_revision, sha, "--", *sorted(PLUS_TRIAL_SCOPE)).strip():
+            raise RuntimeError("deployed_native_inputs_source_mismatch")
+        return "deployedNativeBuildInputs", {"nativeRevision": native_revision, "image": native["identity"]["image"]}
     if include_core and base == DEFERRED_DEBUG_BASE and changed == DEFERRED_DEBUG_FILES:
         require_deferred_debug_inputs(base, sha)
         # A failed native preflight still stages releases/<sha>. Publish the
@@ -289,8 +303,16 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False, 
 
 def script_for(plan):
     script = Path(__file__).with_name("remote.py").read_text()
-    return "set -eu\npython3 - <<'ID_WEBSITE_RELEASE'\n" + script + \
-        f"\nsys.modules['remote'] = sys.modules[__name__]\nmain(json.loads({json.dumps(plan)!r}))\nID_WEBSITE_RELEASE\n"
+    program = (script + "\nsys.modules['remote'] = sys.modules[__name__]\n" +
+               f"main(json.loads({json.dumps(plan)!r}))\n").encode("utf8")
+    encoded = base64.b64encode(gzip.compress(program, mtime=0)).decode("ascii")
+    checksum = hashlib.sha256(program).hexdigest()
+    return ("set -eu\npython3 - <<'ID_WEBSITE_RELEASE'\n" +
+            "import base64, gzip, hashlib\n" +
+            f"program = gzip.decompress(base64.b64decode({encoded!r}, validate=True))\n" +
+            f"if hashlib.sha256(program).hexdigest() != {checksum!r}:\n" +
+            "    raise RuntimeError('release_program_digest_mismatch')\n" +
+            "exec(compile(program, '<id-website-release>', 'exec'))\nID_WEBSITE_RELEASE\n")
 
 
 def release_failure_diagnostic(invocation):
@@ -396,7 +418,32 @@ def put_artifact(path, sha):
     return {"sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data), "version": head["VersionId"]}
 
 
-def main():
+def published_asset_receipt():
+    command = ["gh", "run", "view", str(ASSET_METADATA_RELEASE_RUN), "--repo",
+               "wangchaozhuanyong/id-business-system"]
+    fields = "databaseId,workflowDatabaseId,headSha,headBranch,event,status,conclusion"
+    run = json.loads(subprocess.check_output(command + ["--json", fields], text=True, timeout=30))
+    expected = {"databaseId": ASSET_METADATA_RELEASE_RUN, "workflowDatabaseId": 414321281,
+                "headSha": ASSET_METADATA_REPAIR_BASE, "headBranch": "main", "event": "workflow_dispatch",
+                "status": "completed", "conclusion": "success"}
+    if run != expected:
+        raise RuntimeError("asset_metadata_original_release_unverified")
+    log = subprocess.check_output(command + ["--log"], text=True, timeout=60)
+    receipts = []
+    for line in log.splitlines():
+        start = line.find('{"appCanaryPassed":')
+        if start >= 0:
+            value = json.loads(line[start:])
+            receipts.append({name: value.get(name) for name in
+                             ("mainSha", "appCanaryPassed", "liveAssetsSha256")})
+    expected_receipt = {"mainSha": ASSET_METADATA_REPAIR_BASE, "appCanaryPassed": True,
+                        "liveAssetsSha256": ASSET_METADATA_REPAIR_DIGEST}
+    if receipts != [expected_receipt]:
+        raise RuntimeError("asset_metadata_original_receipt_mismatch")
+    return {"runId": ASSET_METADATA_RELEASE_RUN, **expected_receipt}
+
+
+def main(sample_backup_resources=False):
     sha = os.environ["RELEASE_SHA"]
     quality_run = os.environ["QUALITY_RUN_ID"]
     require_main(sha)
@@ -407,6 +454,9 @@ def main():
     retry_receipt = os.environ.get("VENDURE_RETRY_RECEIPT_SHA256", "")
     partner_api = os.environ.get("RELEASE_RECHARGE_PARTNER_API") == "true"
     customer_progress = os.environ.get("RELEASE_CUSTOMER_PROGRESS") == "true"
+    if sample_backup_resources and (not attempt or inspect_command or include_adapter or include_core or
+                                    retry_receipt or partner_api or customer_progress):
+        raise RuntimeError("backup_observation_requires_readonly_inspection")
     if customer_progress and (include_adapter or include_core or partner_api or attempt or inspect_command or retry_receipt):
         raise RuntimeError("customer_progress_release_requires_its_own_operation")
     if partner_api and (include_adapter or include_core or attempt or inspect_command or retry_receipt):
@@ -425,7 +475,10 @@ def main():
         if inspect_command:
             print(json.dumps(inspect_release_command(attempt, inspect_command), sort_keys=True), flush=True)
             return
-        command_id, diagnostic = remote({"operation": "inspect", "sha": sha, "attemptSha": attempt})
+        plan = {"operation": "inspect", "sha": sha, "attemptSha": attempt}
+        if sample_backup_resources:
+            plan["sampleBackupResources"] = True
+        command_id, diagnostic = remote(plan)
         print(json.dumps({"command": command_id, "diagnostic": diagnostic}), flush=True)
         return
     preflight_id, before = remote({"operation": "preflight", "sha": sha, "adapter": include_adapter or include_core})
@@ -434,8 +487,14 @@ def main():
     if base == sha:
         raise RuntimeError("requested_revision_already_running_read_back_the_existing_release")
     presentation_scope, presentation = require_website_scope(base, sha, include_adapter, include_core,
-                                                             partner_api=partner_api) or (None, None)
+        partner_api=partner_api, native_publication=before.get("nativePublication")) or (None, None)
     deferred_native = None
+    deployed_native = None
+    if presentation_scope == "deployedNativeBuildInputs":
+        deployed_native = presentation
+        presentation_scope, presentation = None, None
+        if retry_receipt or customer_progress:
+            raise RuntimeError("deployed_native_inputs_require_plain_website")
     if presentation_scope == "deferredNativeBuildInputs":
         deferred_native = presentation
         presentation_scope, presentation = None, None
@@ -464,6 +523,7 @@ def main():
             before.get("mountedAssets", {}).get("available") is True and
             before["mountedAssets"].get("sha256") == actual_assets):
         repair_id, repaired = remote({"operation": "repair-assets", "sha": sha, "before": before,
+                                     "publishedAssetReceipt": published_asset_receipt(),
                                      "expectedAssetsSha256": actual_assets,
                                      "expectedAssetsBytes": (OUTPUT / names[1]).stat().st_size})
         before = repaired["before"]
@@ -541,11 +601,15 @@ def main():
         files += CUSTOMER_PROGRESS_FILES
     if deferred_native:
         files += ("frontend/recharge-partners.mjs", *sorted(DEFERRED_DEBUG_FILES))
+    if deployed_native:
+        files += tuple(sorted(PLUS_TRIAL_SCOPE))
     plan = {"operation": "release", "sha": sha, "before": before, "artifacts": artifacts,
             "files": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in files},
             "qualityRun": quality_run, "preflightCommand": preflight_id, 'externalEvents': True}
     if asset_repair:
         plan["assetMetadataRepair"] = asset_repair
+    if deployed_native:
+        plan["deployedNativeBuildInputs"] = deployed_native
     if include_adapter:
         plan["adapter"] = {"runtimeFiles": ADAPTER_RUNTIME_FILES}
     if include_core:
@@ -602,6 +666,10 @@ def main():
     if deferred_native:
         receipt["deferredNativeBuildInputs"] = verify_deferred_native_receipt(
             receipt, deferred_native, before, expected_assets=expected_assets)
+    if deployed_native and (receipt.get("deployedNativeBuildInputs") != deployed_native or
+            receipt.get("protectedComponentsUnchanged") is not True or
+            any(name in receipt for name in ("adapter", "rechargeCore"))):
+        raise RuntimeError("deployed_native_runtime_changed")
     receipt["releaseCommand"] = command_id
     print(json.dumps(receipt, sort_keys=True), flush=True)
     with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
@@ -609,4 +677,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if sys.argv[1:] not in ([], ["--sample-backup-resources"]):
+        raise RuntimeError("unsupported_release_argument")
+    main(sample_backup_resources=bool(sys.argv[1:]))

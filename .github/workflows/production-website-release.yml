@@ -35,6 +35,10 @@ on:
         description: 与 inspect_canary_sha 同用，只读检查该提交原有的 SSM 发布回执
         required: false
         type: string
+      inspect_backup_resources:
+        description: 与 inspect_canary_sha 同用，只读观测 60 秒自然备份资源
+        default: false
+        type: boolean
 
 concurrency:
   group: independent-production-website-release
@@ -123,4 +127,10 @@ jobs:
               {"Effect":"Allow","Action":["s3:GetObject","s3:PutObject"],"Resource":"arn:aws:s3:::id-business-v2-backups-098208446664-ap-northeast-1/release-artifacts/formal/${{ github.sha }}/*"}
             ]}
       - name: Run the selected operation through SSM
+        if: ${{ !inputs.inspect_backup_resources }}
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: python3 deploy/website/release.py
+      - name: Observe the natural backup resource window
+        if: inputs.inspect_backup_resources
+        run: python3 deploy/website/release.py --sample-backup-resources

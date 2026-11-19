@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import runpy
 import shutil
 import stat
 import subprocess
@@ -91,6 +92,8 @@ MONITORING_FILES = ("backup_monitoring.py", MONITORING_UNIT + ".service", MONITO
 VERSIONED_ASSET = re.compile(r'\b(?:src|href)="(?:\./|/)?([a-zA-Z0-9.-]+\.(?:m?js|css))\?v=([a-zA-Z0-9.-]+)"')
 ASSET_METADATA_REPAIR_BASE = "b4c42f63bc0b06570feea30e821fa3750d33ad83"
 ASSET_METADATA_REPAIR_DIGEST = "a67d83372c40fe5ca94d41ca075a889aa5b5bbeecb5202ae562e1a554728b1df"
+ASSET_METADATA_RELEASE_RUN = 43927104206
+INTERRUPTED_BACKUP_INSTALL_BASE = "75dc2e3c858d0689cd5429d9b254631a2f791a63"
 
 
 class ReleaseError(RuntimeError):
@@ -158,7 +161,17 @@ def mounted_asset_bytes():
     if (not isinstance(destination, str) or not destination.startswith("/") or
             not destination.endswith(".json") or ".." in Path(destination).parts):
         return None
-    return run(["docker", "exec", "id-business-independent-app", "cat", destination])
+    pid = container["State"].get("Pid")
+    require(container["State"]["Running"] and type(pid) is int and pid > 0,
+            "mounted_public_asset_runtime_unavailable")
+    try:
+        content = (Path("/proc") / str(pid) / "root" / destination.lstrip("/")).read_bytes()
+    except OSError:
+        raise ReleaseError("mounted_public_asset_namespace_read_failed") from None
+    after = inspect("app")
+    require(identity(after) == identity(container) and after["State"].get("Pid") == pid,
+            "mounted_public_asset_container_changed")
+    return content
 
 
 def mounted_assets_digest():
@@ -166,6 +179,117 @@ def mounted_assets_digest():
     if content is None:
         return {"available": False}
     return {"available": True, "sha256": hashlib.sha256(content).hexdigest(), "bytes": len(content)}
+
+
+def native_publication_state():
+    native = identity(inspect("recharge-native"))
+    labels = json.loads(run(["docker", "image", "inspect", "--format", "{{json .Config.Labels}}", native["image"]])) or {}
+    return {"identity": native, "imageLabelsVerified": native["running"] and
+            labels.get("org.opencontainers.image.revision") == native["revision"] and
+            labels.get("org.id-business.upstream.revision") == PINNED_UPSTREAM}
+
+
+def app_exec_status():
+    report = {"pidsLimit": inspect("app").get("HostConfig", {}).get("PidsLimit")}
+    for name, options in (("default", []), ("root", ["--workdir", "/"])):
+        try:
+            result = subprocess.run(["docker", "exec", *options, "id-business-independent-app", "/bin/true"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=5)
+            detail = result.stderr.decode(errors="replace").lower()
+            report[name] = {"exitCode": result.returncode, "indicators": [code for code, pattern in (
+                ("working_directory", r"working directory|chdir"),
+                ("program_missing", r"executable file not found|no such file"),
+                ("resource_limit", "resource temporarily unavailable"), ("permission", "permission denied"),
+                ("runtime_exec", "unable to start container process")) if re.search(pattern, detail)]}
+        except (OSError, subprocess.TimeoutExpired):
+            report[name] = {"unavailable": True}
+    try:
+        value = run(["docker", "stats", "--no-stream", "--format", "{{.PIDs}}", "id-business-independent-app"], timeout=5)
+        report["pidsCurrent"] = int(value.strip())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        report["pidsCurrent"] = None
+    return report
+
+
+def read_process_memory(pid):
+    report = {"rssPeakBytes": None, "cgroupPeakBytes": None}
+    if type(pid) is not int or pid <= 0:
+        return report
+    process = Path("/proc") / str(pid)
+    try:
+        match = re.search(r"(?m)^VmHWM:\s+([0-9]+)\s+kB$", (process / "status").read_text())
+        if match:
+            report["rssPeakBytes"] = int(match[1]) * 1024
+        groups = (process / "cgroup").read_text().splitlines()
+    except OSError:
+        return report
+    for group in groups:
+        parts = group.split(":", 2)
+        if len(parts) != 3 or not parts[2].startswith("/") or parts[2] == "/" or ".." in Path(parts[2]).parts:
+            continue
+        if parts[:2] == ["0", ""]:
+            peak = Path("/sys/fs/cgroup") / parts[2].lstrip("/") / "memory.peak"
+        elif "memory" in parts[1].split(","):
+            peak = Path("/sys/fs/cgroup/memory") / parts[2].lstrip("/") / "memory.max_usage_in_bytes"
+        else:
+            continue
+        try:
+            value = peak.read_text().strip()
+            if value.isdecimal() and int(value) < 2**63:
+                report["cgroupPeakBytes"] = int(value)
+        except OSError:
+            pass
+    return report
+
+
+def observe_backup_resources(seconds=60):
+    require(type(seconds) is int and 1 <= seconds <= 60, "invalid_backup_observation_window")
+    report = {"startedAt": time.time_ns() // 1_000_000, "samples": 0, "readFailures": 0,
+              "minHostAvailableBytes": None, "lastActiveContainers": None}
+    services, containers = {}, {}
+
+    def remember(group, key, role, pid):
+        measured = read_process_memory(pid)
+        entry = group.setdefault(key, {"id": key, "role": role, **measured})
+        for name, value in measured.items():
+            if value is not None:
+                entry[name] = max(entry.get(name) or 0, value)
+
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        try:
+            available = re.search(r"(?m)^MemAvailable:\s+([0-9]+)\s+kB$", Path("/proc/meminfo").read_text())
+            if available:
+                value = int(available[1]) * 1024
+                minimum = report["minHostAvailableBytes"]
+                report["minHostAvailableBytes"] = value if minimum is None else min(minimum, value)
+            pid = run(["systemctl", "show", "--property=MainPID", "--value",
+                       "id-business-independent-recharge-backup.service"], timeout=3).strip()
+            if pid.isdigit() and int(pid) > 0:
+                remember(services, pid.decode(), "backup-service", int(pid))
+        except (OSError, ValueError, subprocess.SubprocessError, ReleaseError):
+            report["readFailures"] += 1
+        try:
+            rows = run(["docker", "ps", "--filter", "label=org.id-business.backup=portable-recovery",
+                        "--format", "{{.ID}} {{.Names}}"], timeout=3).decode().splitlines()
+            report["lastActiveContainers"] = 0
+            for row in rows:
+                match = re.fullmatch(r"([a-f0-9]{12,64}) id-recovery-(snapshot|capsule)-[a-f0-9]{16}", row)
+                if not match:
+                    continue
+                report["lastActiveContainers"] += 1
+                pid = run(["docker", "inspect", "--format", "{{.State.Pid}}", match[1]], timeout=3).strip()
+                if pid.isdigit() and int(pid) > 0:
+                    remember(containers, match[1], match[2], int(pid))
+        except (OSError, ValueError, subprocess.SubprocessError, ReleaseError):
+            report["readFailures"] += 1
+        report["samples"] += 1
+        time.sleep(1)
+    report.update(finishedAt=time.time_ns() // 1_000_000, backupService=list(services.values()),
+                  containers=list(containers.values()), backupObserved=bool(services or containers))
+    report["peakObserved"] = any(row[name] is not None for row in (*services.values(), *containers.values())
+                                 for name in ("rssPeakBytes", "cgroupPeakBytes"))
+    return report
 
 
 def require_main(sha):
@@ -228,10 +352,13 @@ def snapshot(include_adapter=False):
     state = {"components": components, "unitSha256": digest(DROP), "gatewaySha256": digest(GATEWAY),
              "assetsSha256": digest(live / "assets.json"), "assetsSummary": asset_bundle_summary(live / "assets.json"),
              "mountedAssets": mounted_assets_digest(),
+             "nativePublication": native_publication_state(),
              "freeBytes": free,
              "launchers": {name: digest(live_operations / name) for name in LAUNCHERS}}
     if include_adapter:
         state["adapterUnit"] = adapter_unit_state(components)
+    require(state["nativePublication"]["identity"] == components["recharge-native"],
+            "native_publication_changed_during_read")
     return state
 
 
@@ -261,10 +388,10 @@ def repair_current_asset_metadata(plan):
             "asset_metadata_repair_outside_reviewed_baseline")
     require(current["mountedAssets"].get("available") is True and
             current["mountedAssets"].get("sha256") == expected, "asset_metadata_live_mount_mismatch")
-    operations = Path(website_launcher(DROP.read_text(), base)["path"]).parent
-    published = json.loads((operations / "release.receipt.json").read_text())
-    require(published.get("mainSha") == base and published.get("appCanaryPassed") is True and
-            published.get("liveAssetsSha256") == expected, "asset_metadata_published_receipt_mismatch")
+    published = plan.get("publishedAssetReceipt")
+    require(published == {"runId": ASSET_METADATA_RELEASE_RUN, "mainSha": base,
+                          "appCanaryPassed": True, "liveAssetsSha256": expected},
+            "asset_metadata_published_receipt_mismatch")
     asset = ROOT / "releases" / base / "assets.json"
     info = asset.lstat()
     require(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid() == 0 and
@@ -276,7 +403,10 @@ def repair_current_asset_metadata(plan):
     require(content is not None and len(content) == plan["expectedAssetsBytes"] and
             hashlib.sha256(content).hexdigest() == expected, "asset_metadata_recovery_bytes_mismatch")
     require(digest(asset) == current["assetsSha256"], "asset_metadata_changed_during_recovery")
-    archive = FORMAL / "backups" / ("asset-metadata-" + plan["sha"][:12] + "-" + str(time.time_ns()))
+    parent = FORMAL / "backups"
+    require(not parent.is_symlink(), "asset_metadata_archive_directory_invalid")
+    parent.mkdir(mode=0o700, exist_ok=True)
+    archive = parent / ("asset-metadata-" + plan["sha"][:12] + "-" + str(time.time_ns()))
     archive.mkdir(mode=0o700)
     prepared, previous = archive / "assets.prepared.json", archive / "assets.previous.json"
     write_new(prepared, content.decode("utf8"), 0o644)
@@ -293,6 +423,7 @@ def repair_current_asset_metadata(plan):
     require(after["mountedAssets"].get("sha256") == expected, "asset_metadata_mount_changed")
     receipt = {"repaired": True, "baseWebsiteSha": base, "beforeSha256": current["assetsSha256"],
                "afterSha256": expected, "archive": str(archive.relative_to(ROOT)),
+               "publishedAssetReceipt": published,
                "runtimeIdentityUnchanged": True}
     write_new(archive / "receipt.json", json.dumps(receipt, indent=2) + "\n", 0o600)
     return {"before": after, "repair": receipt}
@@ -659,17 +790,25 @@ def canary_diagnostics(text):
             "assets": sorted(set(assets))[:20]}
 
 
-def inspect_canary(sha):
+def inspect_canary(sha, sample_backup_resources=False):
     require(re.fullmatch(r"[a-f0-9]{40}", sha), "invalid_canary_revision")
     ops = ROOT / "releases" / sha / "operations"
     retried = (ops / CANARY_RETRY_LOG).is_file()
     size, log = read_canary_log(ops / (CANARY_RETRY_LOG if retried else CANARY_LOG))
     live = identity(inspect("app"))["revision"]
-    return {"attemptSha": sha, "liveWebsiteSha": live,
+    result = {"attemptSha": sha, "liveWebsiteSha": live,
+            "nativePublication": native_publication_state(),
+            "coreReleaseGateActive": "# BEGIN ID CORE RELEASE " in GATEWAY.read_text(),
+            "appExec": app_exec_status(),
             "liveAssets": {"host": asset_bundle_summary(ROOT / "releases" / live / "assets.json"),
                            "mounted": mounted_assets_digest()},
             "bytes": size, "retried": retried, "backupResources": backup_resource_summary(),
             **canary_diagnostics(log)}
+    if sample_backup_resources:
+        result["backupResourcesBefore"] = result["backupResources"]
+        result["backupObservation"] = observe_backup_resources()
+        result["backupResources"] = backup_resource_summary()
+    return result
 
 
 def mount_matches(container, source, destination=None):
@@ -820,7 +959,7 @@ await source.tick();
 source.close();
 console.log(JSON.stringify(states));
 """
-    status = json.loads(run(["docker", "exec", "id-business-independent-app", "node", "--input-type=module", "-e", check]))
+    status = json.loads(run(["docker", "exec", "--workdir", "/", "id-business-independent-app", "node", "--input-type=module", "-e", check]))
     require(set(status) == {"backup", "recharge_backup"} and all(value != "disabled" for value in status.values()),
             "backup_monitor_check_missing")
     return status
@@ -829,6 +968,21 @@ console.log(JSON.stringify(states));
 def backup_resource_summary():
     """Read resource metadata without collecting backup or credential contents."""
     report = {"at": time.time_ns() // 1_000_000}
+    try:
+        receipt = json.loads((ROOT / "backups/scheduled-recharge/last-upload.json").read_bytes())
+        if not isinstance(receipt, dict):
+            raise ValueError("invalid receipt")
+        report["lastUpload"] = {}
+        for name in ("capturedAt", "verifiedAt", "lastCompleteCapturedAt"):
+            value = receipt.get(name)
+            report["lastUpload"][name] = value if isinstance(value, str) and re.fullmatch(r"[0-9TZ:+.\-]{1,40}", value) else None
+        report["lastUpload"]["recoveryStateStatus"] = (receipt.get("recoveryStateStatus")
+            if receipt.get("recoveryStateStatus") in {"verified", "capture_failed", "unavailable"} else None)
+        report["lastUpload"]["recoveryStateFailureStage"] = (receipt.get("recoveryStateFailureStage")
+            if receipt.get("recoveryStateFailureStage") in {"application", "collector", "source", "sqlite",
+                "credentials", "services", "size_limit", "encryption", "verification", "unknown"} else None)
+    except (OSError, ValueError, TypeError):
+        report["lastUpload"] = None
     try:
         memory = {}
         for line in Path("/proc/meminfo").read_text().splitlines():
@@ -857,6 +1011,19 @@ def backup_resource_summary():
                  if not path.is_symlink() and path.is_file()]
         return {"exists": True, "files": len(files), "bytes": sum(files)}
 
+    try:
+        report["releaseOperations"] = {}
+        for name in ("app", "recharge-native"):
+            revision = (inspect(name)["Config"].get("Labels") or {}).get("org.opencontainers.image.revision")
+            if not isinstance(revision, str) or not re.fullmatch(r"[a-f0-9]{40}", revision):
+                raise ValueError("invalid release identity")
+            release = ROOT / "releases" / revision
+            report["releaseOperations"][name] = {"revision": revision,
+                "operations": directory_summary(release / "operations"),
+                "variants": {path.name: directory_summary(path) for path in release.glob("operations-*")
+                    if re.fullmatch(r"operations-[a-zA-Z0-9_-]+", path.name) and path.is_dir() and not path.is_symlink()}}
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError, ReleaseError):
+        report["releaseOperations"] = None
     try:
         spool = ROOT / "backups/scheduled-recharge"
         report["spool"] = {name: directory_summary(spool / name) for name in ("pending", ".uploaded")}
@@ -892,15 +1059,28 @@ def prepare_backup_recovery(source, operations, base, sha):
         info = target.lstat()
         require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and stat.S_IMODE(info.st_mode) == 0o644 and
                 target.resolve() == target, "backup_program_baseline_changed")
-        current = digest(target)
-        require(current in (before, after), "backup_program_baseline_changed")
-        return current
+        return digest(target)
 
     def confirm_installed():
         require(digest(target) == after, "backup_program_readback_mismatch")
         return receipt
 
-    if current_program() == after:
+    current = current_program()
+    if current not in (before, after) and base == INTERRUPTED_BACKUP_INSTALL_BASE:
+        previous_ops = ROOT / "releases" / base / "operations"
+        saved = previous_ops / "scheduled-backup.py.before"
+        completed = previous_ops / "release.receipt.json"
+        require(not completed.exists() and not completed.is_symlink(), "backup_program_baseline_changed")
+        info = saved.lstat()
+        original = ROOT / "releases" / ASSET_METADATA_REPAIR_BASE / "source" / BACKUP_OPERATION
+        require(stat.S_ISREG(info.st_mode) and info.st_uid == 0 and info.st_nlink == 1 and
+                stat.S_IMODE(info.st_mode) == 0o600 and digest(saved) == digest(original) == current,
+                "backup_program_baseline_changed")
+        before = current
+        receipt["previousProgramSha256"] = before
+        receipt["resumedBackupBaseline"] = {"websiteSha": base, "programSourceSha": ASSET_METADATA_REPAIR_BASE}
+    require(current in (before, after), "backup_program_baseline_changed")
+    if current == after:
         yield confirm_installed
         return
     lock_path = ROOT / "backups/scheduled-recharge/.lock"
@@ -972,6 +1152,9 @@ def read_website(plan, release, source, adapter=None, core=None):
                 break
         except (subprocess.CalledProcessError, urllib.error.URLError, TimeoutError):
             pass
+        except ReleaseError as error:
+            if str(error) != "container_metadata_read_failed":
+                raise
         time.sleep(1)
     else:
         raise ReleaseError("website_or_sidecar_readback_failed")
@@ -986,7 +1169,7 @@ const files = JSON.parse(process.argv[1]);
 const hashes = files.map(name => [name, createHash('sha256').update(readFileSync('/app/' + name)).digest('hex')]);
 console.log(JSON.stringify(Object.fromEntries(hashes)));
 """
-    running_hashes = json.loads(run(["docker", "exec", "id-business-independent-app", "node", "--input-type=module",
+    running_hashes = json.loads(run(["docker", "exec", "--workdir", "/", "id-business-independent-app", "node", "--input-type=module",
                                     "-e", hash_files, json.dumps(list(plan["files"]))]))
     require(running_hashes == plan["files"], "running_source_mismatch")
     module_paths = {
@@ -1015,7 +1198,7 @@ console.log(JSON.stringify(Object.fromEntries(hashes)));
         protected_reads += ("/api/local/site-management?view=information", "/api/local/site-management?view=backups",
                             "/api/local/renewals?view=finance", "/api/local/staff/finance/cards",
                             "/api/local/auth/security/network")
-        version = json.loads(run(["docker", "exec", "id-business-independent-app", "cat", "/app/server/.website-version.json"]))
+        version = json.loads(run(["docker", "exec", "--workdir", "/", "id-business-independent-app", "cat", "/app/server/.website-version.json"]))
         require(version == json.loads((source / "server/.website-version.json").read_text()) and
                 version.get("version") == plan["sha"], "website_version_receipt_mismatch")
     if (source / "modules/website/pages.mjs").is_file():
@@ -1041,14 +1224,43 @@ console.log(JSON.stringify(Object.fromEntries(hashes)));
     return states
 
 
+def check_native_recovery_source(plan, source):
+    if plan.get("rechargeCore"):
+        return
+    revision = plan["before"]["components"]["recharge-native"]["revision"]
+    require(isinstance(revision, str) and re.fullmatch(r"[a-f0-9]{40}", revision), "invalid_native_recovery_revision")
+    operations = ROOT / "releases" / revision / "operations"
+    if operations.is_dir() and not operations.is_symlink():
+        return
+    require(not operations.exists() and not operations.is_symlink(), "recovery_active_operations_missing")
+    collector = runpy.run_path(str(source / "deploy/website/recovery_capsule.py"))
+    try:
+        definition = run(["systemctl", "cat", collector["NATIVE_UNIT"]])
+        collector["native_source_launcher"](ROOT, revision, definition)
+    except collector["RecoveryError"] as error:
+        raise ReleaseError(str(error)) from None
+    except subprocess.CalledProcessError:
+        raise ReleaseError("recovery_service_definition_unavailable") from None
+
+
 def release_website(plan, staged=None):
     sha = plan["sha"]
     before = plan["before"]
     base = before["components"]["app"]["revision"]
     include_adapter = bool(plan.get("adapter"))
+    if plan.get("deployedNativeBuildInputs"):
+        native = before.get("nativePublication", {})
+        require(not any(name in plan for name in ("adapter", "rechargeCore", "vendureRetryReceipt",
+                                                  "rechargePartnerApi", "customerProgress")) and
+                native.get("imageLabelsVerified") is True and
+                native["identity"] == before["components"]["recharge-native"] and
+                plan["deployedNativeBuildInputs"] == {"nativeRevision": native["identity"]["revision"],
+                                                       "image": native["identity"]["image"]},
+                "deployed_native_inputs_not_verified")
     check_baseline(snapshot(include_adapter), before)
     release = ROOT / "releases" / sha
     source, ops = staged or stage(plan, release)
+    check_native_recovery_source(plan, source)
     core = None
     if plan.get("rechargeCore"):
         sys.path.insert(0, str(source / "deploy/website"))
@@ -1105,6 +1317,8 @@ def release_website(plan, staged=None):
               "unauthenticatedProtectedReadsRejected": True, "productionBusinessTestWrites": False}
     if plan.get("assetMetadataRepair"):
         result["assetMetadataRepair"] = plan["assetMetadataRepair"]
+    if plan.get("deployedNativeBuildInputs"):
+        result["deployedNativeBuildInputs"] = plan["deployedNativeBuildInputs"]
     if events:
         result['externalEvents'] = events
     scope = presentation_scope(plan)
@@ -1170,12 +1384,13 @@ def main(plan):
     try:
         require(re.fullmatch(r"[a-f0-9]{40}", plan["sha"]), "invalid_release_revision")
         with LOCK.open("r") as lock:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            mode = fcntl.LOCK_SH if plan["operation"] == "inspect" else fcntl.LOCK_EX
+            fcntl.flock(lock, mode | fcntl.LOCK_NB)
             require_main(plan["sha"])
             if plan["operation"] == "preflight":
                 result = snapshot(plan.get("adapter") is True)
             elif plan["operation"] == "inspect":
-                result = inspect_canary(plan["attemptSha"])
+                result = inspect_canary(plan["attemptSha"], plan.get("sampleBackupResources") is True)
             elif plan["operation"] == "repair-assets":
                 result = repair_current_asset_metadata(plan)
             else:

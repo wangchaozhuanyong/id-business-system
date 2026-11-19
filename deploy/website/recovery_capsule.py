@@ -23,6 +23,9 @@ REQUIRED = ('formal/data/local-auth.json', 'formal/data/local-auth.json.security
 TREES = ('formal/operations', 'formal/ops', 'formal/private', 'formal/vendure-state',
          'formal/data/vendure-admission',
          'formal/recharge-data/product_files', 'formal/recharge-data/data')
+UPSTREAM_REVISION = '4e9bb201cf481d4bcc85da34970fc26c63ab818a'
+BACKUP_CONTAINER_LABEL = 'org.id-business.backup=portable-recovery'
+NATIVE_UNIT = 'id-business-independent-recharge-native.service'
 
 
 class RecoveryError(RuntimeError):
@@ -72,7 +75,7 @@ process.stdout.write(await readFile('/snapshot/database.sqlite'));
     name = 'id-recovery-snapshot-' + uuid.uuid4().hex[:16]
     owner = path.stat()
     command = ['docker', 'run', '--rm', '--pull=never', '--name', name,
-        '--log-driver', 'none', '--network', 'none', '--read-only',
+        '--label', BACKUP_CONTAINER_LABEL, '--log-driver', 'none', '--network', 'none', '--read-only',
         '--user', f'{owner.st_uid}:{owner.st_gid}',
         '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--pids-limit', '32',
         '--memory', '384m', '--memory-swap', '384m', '--cpus', '0.5', '--entrypoint', 'node',
@@ -115,6 +118,54 @@ def service_units():
     return names
 
 
+def native_source_launcher(root, revision, definition):
+    commands = []
+    for line in (definition or b'').decode().splitlines():
+        line = line.strip()
+        if line.startswith('ExecStart='):
+            value = line.partition('=')[2].strip()
+            if not value:
+                commands.clear()
+            else:
+                commands.append(value)
+    launchers = (root / 'releases' / revision / 'source/deploy/recharge-core/run-recharge.py',
+                 root / 'formal/ops/recharge-core/run-recharge.py')
+    matches = [path for path in launchers if len(commands) == 1 and re.fullmatch(
+        r'/usr/bin/python3(?: -B)? ' + re.escape(str(path)) + ' native ' + revision, commands[0])]
+    if len(matches) != 1:
+        raise RecoveryError('recovery_native_launcher_unavailable')
+    identity_format = '{{.Id}} {{.Image}} {{.State.Running}} {{.State.Pid}} {{index .Config.Labels "org.opencontainers.image.revision"}}'
+    command = ['docker', 'inspect', '--format', identity_format, 'id-business-independent-recharge-native']
+    before = subprocess.run(command, capture_output=True, text=True, timeout=10)
+    match = re.fullmatch(r'([a-f0-9]{64}) (sha256:[a-f0-9]{64}) true ([1-9][0-9]*) ' + revision, before.stdout.strip())
+    if before.returncode or not match:
+        raise RecoveryError('recovery_native_launcher_unavailable')
+    labels = subprocess.run(['docker', 'image', 'inspect', '--format',
+        '{{index .Config.Labels "org.opencontainers.image.revision"}} {{index .Config.Labels "org.id-business.upstream.revision"}}',
+        match[2]], capture_output=True, text=True, timeout=10)
+    if labels.returncode or labels.stdout.strip() != revision + ' ' + UPSTREAM_REVISION:
+        raise RecoveryError('recovery_native_source_mismatch')
+    try:
+        source = Path('/proc') / match[3] / 'root/candidate/deploy/recharge-core/run-recharge.py'
+        expected = hashlib.sha256(source.read_bytes()).hexdigest()
+    except OSError:
+        raise RecoveryError('recovery_native_launcher_unavailable') from None
+    launcher = matches[0]
+    if (launcher.is_symlink() or not launcher.resolve().is_relative_to(root) or
+            any(parent.is_symlink() for parent in launcher.parents if parent.is_relative_to(root))):
+        raise RecoveryError('recovery_symlink_forbidden')
+    try:
+        content, _ = read_file(launcher)
+    except OSError:
+        raise RecoveryError('recovery_native_launcher_unavailable') from None
+    if hashlib.sha256(content).hexdigest() != expected:
+        raise RecoveryError('recovery_native_source_mismatch')
+    after = subprocess.run(command, capture_output=True, text=True, timeout=10)
+    if after.returncode or after.stdout != before.stdout:
+        raise RecoveryError('recovery_native_runtime_changed')
+    return launcher, expected
+
+
 def collect(root, app_revision, native_revision, *, image=None):
     root = Path(root)
     if root.resolve() != root or not all(re.fullmatch('[a-f0-9]{40}', sha)
@@ -153,7 +204,7 @@ def collect(root, app_revision, native_revision, *, image=None):
                                  'uid': info.st_uid, 'gid': info.st_gid}
             path = path.parent
 
-    def include(path):
+    def include(path, expected_sha256=None):
         if runtime_path(path):
             return
         relative = path.relative_to(root).as_posix()
@@ -169,6 +220,8 @@ def collect(root, app_revision, native_revision, *, image=None):
             stable[path] = stamp(path)
         else:
             data, before = read_file(path)
+            if expected_sha256 and hashlib.sha256(data).hexdigest() != expected_sha256:
+                raise RecoveryError('recovery_native_source_mismatch')
             add(relative, data, mode=stat.S_IMODE(before[-1]), uid=before[4], gid=before[5])
             # The CDC checkpoint is intentionally captured BEFORE SQLite. Its
             # subsequent advance is safe: replay may duplicate, never skip, work.
@@ -211,11 +264,14 @@ def collect(root, app_revision, native_revision, *, image=None):
         if path.name == 'checkpoint.json' or path.name.endswith('.idbackup'):
             include(path)
 
+    native_definition = None
     for unit in service_units():
         result = subprocess.run(['systemctl', 'cat', unit], capture_output=True, timeout=10)
         if result.returncode:
             raise RecoveryError('recovery_service_definition_unavailable')
         add('services/' + unit, result.stdout, 'service')
+        if unit == NATIVE_UNIT:
+            native_definition = result.stdout
         for line in result.stdout.decode().splitlines():
             if not line.startswith('LoadCredentialEncrypted='):
                 continue
@@ -233,9 +289,15 @@ def collect(root, app_revision, native_revision, *, image=None):
             stable[path] = stamp(path)
     for revision in {app_revision, native_revision}:
         operations = root / 'releases' / revision / 'operations'
+        if revision != app_revision and not operations.exists() and not operations.is_symlink():
+            launcher, expected = native_source_launcher(root, revision, native_definition)
+            include(launcher, expected)
+            continue
         if not operations.is_dir() or operations.is_symlink():
             raise RecoveryError('recovery_active_operations_missing')
         for path in sorted(operations.rglob('*')):
+            if path.is_symlink():
+                raise RecoveryError('recovery_symlink_forbidden')
             if not path.is_dir():
                 include(path)
     for path, before in stable.items():
@@ -255,19 +317,28 @@ def capture(root, source, app_revision, native_revision, destination, recipient_
     if hashlib.sha256(recipient).hexdigest() != recipient_sha256:
         raise RecoveryError('recovery_recipient_changed')
     state = collect(root, app_revision, native_revision, image=image)
-    command = ['docker', 'run', '--rm', '--pull=never', '-i', '--log-driver', 'none',
+    name = 'id-recovery-capsule-' + uuid.uuid4().hex[:16]
+    command = ['docker', 'run', '--rm', '--pull=never', '-i', '--name', name,
+               '--label', BACKUP_CONTAINER_LABEL, '--log-driver', 'none',
                '--network', 'none', '--read-only',
                '--user', '0:0',
                '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--pids-limit', '32',
                '--memory', '384m', '--memory-swap', '384m', '--cpus', '0.5', '--entrypoint', 'node',
                '--mount', f'type=bind,src={source},dst=/app,readonly', image,
                '/app/server/backup/recovery-archive-cli.mjs', 'seal']
-    with destination.open('xb') as output:
-        os.chmod(destination, 0o600)
-        result = subprocess.run(command, input=json.dumps({'state': state,
-            'recipient': recipient.decode('ascii')}).encode(), stdout=output, stderr=subprocess.PIPE, timeout=90)
-        output.flush()
-        os.fsync(output.fileno())
+    try:
+        with destination.open('xb') as output:
+            os.chmod(destination, 0o600)
+            result = subprocess.run(command, input=json.dumps({'state': state,
+                'recipient': recipient.decode('ascii')}).encode(), stdout=output, stderr=subprocess.PIPE, timeout=90)
+            output.flush()
+            os.fsync(output.fileno())
+    except (OSError, subprocess.SubprocessError):
+        try:
+            subprocess.run(['docker', 'stop', '--time', '1', name], capture_output=True, timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            pass
+        raise RecoveryError('recovery_capsule_encryption_failed') from None
     if result.returncode:
         code = result.stderr.decode('ascii', errors='ignore').strip()
         safe = {'RECOVERY_STATE_INVALID', 'RECOVERY_DIRECTORY_INVALID', 'RECOVERY_ENTRY_INVALID',
