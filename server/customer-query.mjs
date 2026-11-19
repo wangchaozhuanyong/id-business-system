@@ -45,9 +45,9 @@ function appleStatus(row) {
   return row.status === '正常' ? 'normal' : 'unavailable';
 }
 
-function bankView(order, cardTypes, cardContext) {
+function bankView(order, cardTypes, cardContext, reference) {
   if (order.payment !== '银行卡') return undefined;
-  const { id, number, conflict } = orderCardHealthReference(order, cardContext);
+  const { id, number, conflict } = reference;
   const health = !conflict && (id || number) ? orderCardHealth(cardTypes, id, number) : 'unknown';
   const state = !blockedOrderCard(health) && frozenOrderCard(cardContext.freezes, id, cardContext.fingerprint?.(number))
     ? 'frozen' : health;
@@ -56,7 +56,7 @@ function bankView(order, cardTypes, cardContext) {
     type: text(order.cardTypeName) };
 }
 
-function projection(snapshots, customer, cardTypes, now, cardContext) {
+function projection(snapshots, customer, cardTypes, now, cardContext, includeBankNumbers) {
   const commerce = snapshots.commerce.data || {};
   const inventory = snapshots.inventory.data || {};
   const orders = list(commerce.orders).filter(row => row.customerId === customer.id);
@@ -90,10 +90,13 @@ function projection(snapshots, customer, cardTypes, now, cardContext) {
       confirmed, ended, cancelled, failed: order.entitlementStatus === 'failed' || ['failed', '失败'].includes(order.status) }, now);
     const tenant = claude(order.product) && !conflict && tenants.get(order.tenantId);
     const apple = order.payment === '苹果内购' && order.appleIdId ? apples.get(order.appleIdId) : null;
+    const card = orderCardHealthReference(order, cardContext);
+    const bankNumber = includeBankNumbers && !conflict && !isDraft(order) && !card.conflict && card.number;
     const row = { id: order.id, orderNo: text(order.orderNo), product: text(order.product), plan: text(order.plan),
       account: text(orderIdentity(order)), email: text(order.email), start: text(order.start), expiry: text(order.expiry),
       status, conflict, businessType: text(order.businessType), payment: claude(order.product) && order.payment === '银行卡' ? '' : text(order.payment),
-      bank: bankView(order, cardTypes, cardContext), cancelled, ended,
+      bank: bankView(order, cardTypes, cardContext, card), cancelled, ended,
+      ...(bankNumber && { bankNumber }),
       canPrefill: !isDraft(order) && !conflict && !otherCustomer && customer.active !== false && products.has(order.product),
       refunds: list(order.refunds).map(refund => ({ at: text(refund.at || refund.time || refund.createdAt),
         amount: text(refund.amount), currency: text(refund.currency || order.saleCurrency) })),
@@ -163,7 +166,8 @@ export function customerQuery(snapshots, cards, action, body, now = Date.now(), 
   }
   const customer = customers.find(row => row.id === body.customerId);
   if (!customer) throw failure(404, '未找到此客户');
-  const data = projection(snapshots, customer, cards, now, cardContext);
+  const includeBankNumbers = action === 'detail' && ['accounts', 'orders'].includes(body.tab);
+  const data = projection(snapshots, customer, cards, now, cardContext, includeBankNumbers);
   if (action === 'detail') {
     const tabs = { accounts: data.accountRows, orders: data.rows, records: data.related };
     if (!Object.hasOwn(tabs, body.tab)) throw failure(400, '请选择查询内容');
@@ -238,6 +242,10 @@ export function createCustomerQueryHandler({ store, publicOrigin, clock = Date.n
         };
         const output = customerQuery(input, store.featureDocument(cardTypeDocument).data, action, body, clock(), cardContext);
         if (action === 'copy-claude') audit('copy', [body.orderId]);
+        if (action === 'detail') {
+          const revealed = output.items.filter(row => row.bankNumber).map(row => row.id);
+          if (revealed.length) audit('view', revealed);
+        }
         return output;
       });
       return send(200, result);

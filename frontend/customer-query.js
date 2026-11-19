@@ -50,7 +50,7 @@
   function assetMarkup(row) {
     const bank = row.bank;
     const apples = row.appleBindings || (row.apple ? [row.apple] : []);
-    return [bank && `<div>${!bank.private && bank.last4 ? `尾号 ${E(bank.last4)} · ` : ''}${bankBadge(bank)}</div>`,
+    return [bank && `<div>${bankBadge(bank)}</div>`,
       ...apples.map(apple => `<div>${appleBadge(apple)}</div>`)].filter(Boolean).join('') || '—';
   }
   function pager(id, result) {
@@ -66,13 +66,15 @@
       : row.tenantConflict ? '关联待核对' : Object.hasOwn(row, 'tenant') ? '未关联' : '—';
     const actions = `${!order && row.copyClaude ? textAction('复制 Claude 资料', 'customer-query-copy', attr(row.id)) : ''}${
       row.canPrefill ? button('采用此单提交订单', 'customer-query-prefill', '', '', attr(row.id)) : ''}`;
+    const bankNumber = row.bankNumber ? `<div>${E(row.bankNumber)}</div>${textAction('复制卡号',
+      'customer-query-copy-card', `${attr(row.id)} data-tab="${order ? 'orders' : 'accounts'}"`)}` : '无';
     return `<article class="customer-query-account" data-customer-query-row="${E(row.id)}">
       <div class="customer-query-account-heading"><h3>${E([row.product, row.plan].filter(Boolean).join(' · ') || '套餐待核对')}</h3>${
         row.cancelled ? tag('已撤单') : tag(status[row.status] || '待核对', row.status === 'active' ? 'success' : row.status === 'pending' ? 'warning' : '')}
         <span class="footnote" data-customer-duration="${E(row.id)}">${E(duration(row))}</span></div>
       <p class="customer-query-account-name">${E(row.account || '账号待核对')}${row.email && row.email !== row.account ? `<br>${E(row.email)}` : ''}</p>
       ${facts([['开通日期', date(row.start)], ['到期时间', date(row.expiry)],
-        ['付款资料', assetMarkup(row)], ...(Object.hasOwn(row, 'tenant') ? [['租户', tenant]] : []),
+        ['银行卡号', bankNumber], ['付款资料', assetMarkup(row)], ...(Object.hasOwn(row, 'tenant') ? [['租户', tenant]] : []),
         ...(order ? [['订单编号', E(row.orderNo || '待核对')], ['业务类型', E(row.businessType || '待核对')],
           ['退款', row.refunds?.map(refund => `<div>${E(`${refund.amount} ${refund.currency}`)} · ${date(refund.at)}</div>`).join('') || '—']] : [])])}
       ${actions ? `<div class="customer-query-account-actions">${actions}</div>` : ''}</article>`;
@@ -183,8 +185,9 @@
       if (!data?.customerQuery) throw new Error('客户查询服务尚未连接');
       const load = async (action, command) => {
         const fetch = () => data.customerQuery(action, command, { timing: action === 'search' || command.tab === 'accounts' ? timing : undefined });
-        const result = await (data.queries?.read('customer-query', JSON.stringify([action, command]), fetch,
-          { refresh: refresh || command.tab === refreshTab }) || fetch());
+        const includesBankNumbers = action === 'detail' && ['accounts', 'orders'].includes(command.tab);
+        const result = await (includesBankNumbers ? fetch() : data.queries?.read('customer-query',
+          JSON.stringify([action, command]), fetch, { refresh: refresh || command.tab === refreshTab }) || fetch());
         if (!Array.isArray(result?.items) || (action === 'detail' && result.customer?.id !== command.customerId))
           throw new Error('客户资料与本次查询不符');
         return result;
@@ -202,11 +205,17 @@
         state.customerId = result.items[0].id;
       }
       const customerId = state.customerId;
-      const requested = Object.keys(tabs).filter(id => state.expanded[id]);
+      const requested = Object.keys(tabs).filter(id => {
+        if (!state.expanded[id]) return false;
+        const previous = sections.get(id), { page, pageSize } = state.pages[id];
+        return refresh || id === refreshTab || previous?.customer?.id !== customerId ||
+          previous.page !== page || previous.pageSize !== pageSize;
+      });
       const replies = await Promise.all(requested.map(async tab => [tab,
         await load('detail', { customerId, tab, ...state.pages[tab] })]));
       if (!current() || state.customerId !== customerId) return true;
       for (const [tab, result] of replies) {
+        if (!state.expanded[tab]) continue;
         state.pages[tab] = { page: result.page, pageSize: result.pageSize };
         sections.set(tab, result);
       }
@@ -302,7 +311,8 @@
     },
     clearPageState() { measureNextSearch = false; sequence++; snapshot = searchSnapshot = undefined; sections.clear(); window.clearTimeout(expiryTimer); },
     onDataChanges(scopes) {
-      if (active() && scopes.some(scope => ['commerce', 'inventory', 'card-types', 'subscription-management'].includes(scope))) {
+      if (active() && scopes.some(scope =>
+        ['commerce', 'inventory', 'card-types', 'tenant-cards', 'order-card-freeze', 'subscription-management'].includes(scope))) {
         for (const id of Object.keys(tabs)) if (!view().expanded[id]) sections.delete(id);
         return read(true);
       }
@@ -341,7 +351,7 @@
         changeSelection();
       } else if (action === 'customer-query-section' && ['orders', 'records'].includes(node.dataset.tab)) {
         state.expanded[node.dataset.tab] = !state.expanded[node.dataset.tab];
-        if (state.expanded[node.dataset.tab]) sections.delete(node.dataset.tab);
+        sections.delete(node.dataset.tab);
         const region = document.querySelector('[data-customer-query-region]');
         if (region) renderResult(region, snapshot, state);
         if (state.expanded[node.dataset.tab]) void read(false, node.dataset.tab);
@@ -351,6 +361,10 @@
           `<form id="customer-query-product-form" novalidate>${A.field('产品', 'customer-query-product',
             `<select id="customer-query-product" name="product">${A.options(products, 'GPT')}</select>`, true)}</form>`,
           button('取消', 'drawer-close') + '<button class="button primary" type="submit" form="customer-query-product-form">进入订单提交</button>', 'customer-query:product');
+      } else if (action === 'customer-query-copy-card') {
+        const row = sections.get(node.dataset.tab)?.items.find(row => row.id === node.dataset.id);
+        const current = () => active() && node.isConnected;
+        if (row?.bankNumber) void A.copyText(row.bankNumber, '银行卡号已复制', { current });
       } else if (action === 'customer-query-copy') {
         const customerId = state.customerId;
         const current = () => active() && view().customerId === customerId && node.isConnected;
