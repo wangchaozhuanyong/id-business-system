@@ -248,7 +248,7 @@ class Canary:
             ['pricing-checkout.js', 'region-config.js', 'server.js'] or result.get('returnFiles') != ['mysql-store.js', 'server.js'] or
             result.get('providerRetirementFiles') != ['mysql-store.js', 'server.js'] or
             result.get('cardPlanFiles') != ['mysql-store.js', 'payment-retry.js', 'server.js'] or
-            result.get('plusTrialFiles') != ['chatgpt.js', 'pricing-checkout.js', 'session-auth.js', 'stripe-payment.js']):
+            result.get('plusTrialFiles') != ['browser-pool.js', 'chatgpt.js', 'pricing-checkout.js', 'session-auth.js', 'stripe-payment.js']):
             raise CanaryError('pristine_source_mismatch')
         self.checks.append(code)
 

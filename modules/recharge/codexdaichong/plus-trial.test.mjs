@@ -15,6 +15,7 @@ const pricingFixture = new URL('../../../test/fixtures/pricing-checkout.post-rou
 const stripeFixture = new URL('../../../test/fixtures/stripe-payment.upstream.js.txt', import.meta.url);
 const chatgptFixture = new URL('../../../test/fixtures/chatgpt.upstream.js.txt', import.meta.url);
 const sessionAuthFixture = new URL('../../../test/fixtures/session-auth.upstream.js.txt', import.meta.url);
+const browserPoolFixture = new URL('../../../test/fixtures/browser-pool.upstream.js.txt', import.meta.url);
 
 const prepareUrl = new URL('./prepare.mjs', import.meta.url);
 const patchPath = fileURLToPath(patchUrl);
@@ -27,7 +28,8 @@ const fixtures = {
   'pricing-checkout.js': normalize(await readFile(pricingFixture)),
   'stripe-payment.js': normalize(await readFile(stripeFixture)),
   'chatgpt.js': normalize(await readFile(chatgptFixture)),
-  'session-auth.js': normalize(await readFile(sessionAuthFixture))
+  'session-auth.js': normalize(await readFile(sessionAuthFixture)),
+  'browser-pool.js': normalize(await readFile(browserPoolFixture))
 };
 
 function blobSha1(content) {
@@ -54,10 +56,10 @@ async function appliedSources() {
 test('优惠账号补丁清单与内容一致', () => {
   assert.equal(manifest.revision, '4e9bb201cf481d4bcc85da34970fc26c63ab818a');
   assert.deepEqual(Object.keys(manifest.files).sort(),
-    ['chatgpt.js', 'pricing-checkout.js', 'session-auth.js', 'stripe-payment.js']);
+    ['browser-pool.js', 'chatgpt.js', 'pricing-checkout.js', 'session-auth.js', 'stripe-payment.js']);
   assert.equal(createHash('sha256').update(patch).digest('hex'), manifest.patchSha256);
   const names = [...patch.toString().matchAll(/^diff --git a\/(\S+) b\/\1$/gm)].map((match) => match[1]).sort();
-  assert.deepEqual(names, ['chatgpt.js', 'pricing-checkout.js', 'session-auth.js', 'stripe-payment.js']);
+  assert.deepEqual(names, ['browser-pool.js', 'chatgpt.js', 'pricing-checkout.js', 'session-auth.js', 'stripe-payment.js']);
 });
 
 test('三个基准分别是选路补丁结果与锁定上游文件', () => {
@@ -159,7 +161,7 @@ test('调试模式填卡与账单地址后停在提交前', async () => {
 
 test('准备脚本与发布核验已覆盖四个文件', async () => {
   const prepare = (await readFile(prepareUrl, 'utf8')).replace(/\r\n/g, '\n');
-  assert.match(prepare, /const plusTrialFiles = \['chatgpt\.js', 'pricing-checkout\.js', 'session-auth\.js', 'stripe-payment\.js'\];/);
+  assert.match(prepare, /const plusTrialFiles = \['browser-pool\.js', 'chatgpt\.js', 'pricing-checkout\.js', 'session-auth\.js', 'stripe-payment\.js'\];/);
   assert.match(prepare, /plusTrialFiles\.some\(name => routing\.files\[name\] && manifest\.files\[name\]\.original !== routing\.files\[name\]\.approved\)/);
 });
 
