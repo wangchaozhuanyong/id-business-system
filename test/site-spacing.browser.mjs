@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { tableColumnAlignment } from './helpers/table-column-alignment.mjs';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import {
@@ -32,7 +33,10 @@ const drawerActions = [
   'ops-audit-detail'
 ];
 const capture = async (page, width, theme, route, state) => {
-  results.push({ width, theme, route, state, ...(await spacingSnapshot(page)) });
+  const spacing = await spacingSnapshot(page);
+  const columns = await tableColumnAlignment(page.locator('#main'));
+  results.push({ width, theme, route, state, ...spacing, columnMeasurements: columns.measurements,
+    findings: [...spacing.findings, ...columns.findings] });
 };
 try {
   for (const width of [1920, 1440, 1024, 901, 900, 768, 390, 320])
@@ -86,7 +90,9 @@ try {
             );
             if (geometry.labelInset != null) assert(geometry.labelInset >= 14);
             if (geometry.footerInset != null) assert(geometry.footerInset >= 14);
-            results.push({ width, theme, route, state: action, findings: [], geometry });
+            const columns = await tableColumnAlignment(drawer);
+            results.push({ width, theme, route, state: action, columnMeasurements: columns.measurements,
+              findings: columns.findings, geometry });
             await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
             await settle(page);
           }

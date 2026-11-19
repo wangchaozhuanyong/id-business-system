@@ -1030,7 +1030,7 @@
         ? '—' : A.tag(paymentStates[row.payment], row.payment === 'recorded' ? 'success' : 'warning') },
       { id: 'balance', label: '余额（USD）', mobileSummary: true,
         render: row => E(row.wallet ? ready() || hasLoaded ? shown(row.wallet.balance) : '未读取' : '—') },
-      { id: 'expected', label: '预计金额', class: 'apple-management-amount', render: row => E(row.expected || '—') },
+      { id: 'expected', label: '预计金额', align: 'end', class: 'apple-management-amount', render: row => E(row.expected || '—') },
       { id: 'actions', label: '操作', action: true, class: 'apple-management-actions', render: row =>
         `<div class="action-links">${A.textAction('更多操作', 'apple-management-more', `data-id="${E(row.id)}"`, '', 'chevron')}</div>` }
     ];

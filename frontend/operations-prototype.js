@@ -35,7 +35,7 @@
   const $ = (selector) => document.querySelector(selector);
   const localData = window.IDLocalData;
   const pluginPages = {
-    'plugins/mailboxes': { label: '邮箱查询与邮箱池', tool: '邮箱查询与邮箱池', description: '统一管理收信连接、Claude 待授权邮箱与验证码查询。' },
+    'plugins/mailboxes': { label: '邮箱查询', tool: '邮箱查询与邮箱池', description: '统一管理收信连接、Claude 待授权邮箱与验证码查询。' },
     'plugins/websites': { label: '网站监控', tool: '网站监控', description: '查看运行状态、告警记录、访问记录和网站检测。' }
   };
   let pluginCleanup;

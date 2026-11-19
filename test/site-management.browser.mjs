@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
+import { tableColumnAlignment } from './helpers/table-column-alignment.mjs';
 import { interceptDesign, origin, settle, separatorSnapshot } from './helpers/offline-design.mjs';
 
 const { chromium } = await import(process.env.ID_RECHARGE_QA_PLAYWRIGHT
@@ -76,6 +77,14 @@ test('admin can diagnose a report, navigate through data, and download only the 
   await page.goto(origin + '/#/monitor/performance');
   await page.getByRole('heading', { name: '性能与错误' }).waitFor();
   await page.getByRole('heading', { name: '哪些页面操作较慢' }).waitFor();
+  const chart = page.locator('.design-chart-details');
+  const checkChart = async () => {
+    await chart.locator('summary').click();
+    const { measurements, findings } = await tableColumnAlignment(chart);
+    assert(measurements >= 2);
+    assert.deepEqual(findings, []);
+  };
+  await checkChart();
   assert.equal(await page.getByLabel('查看时段').inputValue(), '24');
   await page.getByLabel('查看内容').selectOption('server');
   await page.getByRole('heading', { name: '哪些操作在服务器处理较慢' }).waitFor();
@@ -128,6 +137,9 @@ test('admin can diagnose a report, navigate through data, and download only the 
   await page.evaluate(() => window.IDDesignAPI.go('settings/information'));
   await page.getByText('id.example.test', { exact: true }).waitFor();
   assert.equal(await page.getByRole('link', { name: '查看操作记录' }).getAttribute('href'), '#/settings/audit');
+  await page.goto(origin + '/#/monitor');
+  await page.getByText('查看最近 24 小时走势', { exact: true }).click();
+  await checkChart();
   assert.deepEqual(errors, []);
   assert.deepEqual(access.external, []);
 });

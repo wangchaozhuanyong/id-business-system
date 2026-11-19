@@ -1,8 +1,12 @@
+:root {
+  --title-help-size: 36px;
+  --title-help-gap: 6px;
+}
 .title-with-help {
   position: relative;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--title-help-gap);
   min-width: 0;
   max-width: 100%;
 }
@@ -42,8 +46,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: var(--title-help-size);
+  height: var(--title-help-size);
   border-radius: 6px;
   color: var(--muted, var(--text-dim));
   list-style: none;
@@ -62,10 +66,7 @@
   outline-offset: 2px;
 }
 @media (max-width: 900px) {
-  :is(.title-help, .field-help) > summary {
-    width: 44px;
-    height: 44px;
-  }
+  :root { --title-help-size: 44px; }
 }
 
 /* Top-labelled form fields keep a single 20px label baseline on desktop. */

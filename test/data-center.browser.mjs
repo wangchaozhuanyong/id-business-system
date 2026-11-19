@@ -64,7 +64,8 @@ test('data center navigation, four website reports, reporting dates and responsi
   const pluginIndex = groups.indexOf('插件管理');
   assert(pluginIndex >= 0);
   assert.deepEqual(groups.slice(pluginIndex, pluginIndex + 3), ['插件管理', '数据中心', '监控中心']);
-  assert.equal(await side.getByRole('link', { name: '插件管理', exact: true }).getAttribute('href'), '#/plugins/mailboxes');
+  await side.getByRole('button', { name: '插件管理', exact: true }).click();
+  assert.equal(await side.getByRole('link', { name: '邮箱查询', exact: true }).getAttribute('href'), '#/plugins/mailboxes');
   await side.getByRole('button', { name: '监控中心', exact: true }).click();
   assert.deepEqual(await side.locator('.nav-children a').allTextContents(), ['网站监控', '性能与错误']);
   await side.getByRole('link', { name: '数据中心', exact: true }).click();

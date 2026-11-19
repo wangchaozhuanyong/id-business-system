@@ -94,7 +94,16 @@ test('对账直接显示完整卡号和邮箱，长资料可复制，宽窄屏�
         .filter(node => node.checkVisibility()).map(node => node.getBoundingClientRect());
       const copy = region.querySelector('[data-action="billing-copy"]'), box = copy.getBoundingClientRect();
       const text = copy.querySelector('span'), textBox = text.getBoundingClientRect(), row = copy.closest('tr').getBoundingClientRect();
-      return { overflow: document.documentElement.scrollWidth > innerWidth + 1,
+      const amount = region.querySelector('tbody td[data-column="amount"]');
+      const value = amount.querySelector('.mobile-record-value');
+      const range = document.createRange();
+      range.selectNodeContents(value);
+      const valueBox = range.getBoundingClientRect();
+      const heading = amount.closest('table').tHead.rows[0].cells[amount.cellIndex];
+      range.selectNodeContents(heading);
+      const amountOffset = innerWidth > 900 ? valueBox.right - range.getBoundingClientRect().right :
+        valueBox.left - value.getBoundingClientRect().left;
+      return { amountOffset, overflow: document.documentElement.scrollWidth > innerWidth + 1,
         controlsOutside: controls.some(b => b.left < 0 || b.right > innerWidth + 1),
         overlap: controls.some((a, index) => controls.slice(index + 1).some(b =>
           Math.min(a.right, b.right) > Math.max(a.left, b.left) + 1 && Math.min(a.bottom, b.bottom) > Math.max(a.top, b.top) + 1)),
@@ -104,6 +113,7 @@ test('对账直接显示完整卡号和邮箱，长资料可复制，宽窄屏�
     });
     assert.equal(geometry.overflow || geometry.controlsOutside || geometry.overlap || geometry.clippedCard,
       false, JSON.stringify({ width, theme, geometry }));
+    assert(Math.abs(geometry.amountOffset) <= 1, '原币金额 ' + width + 'px ' + geometry.amountOffset);
     if (width <= 760) assert(geometry.cardHeight >= 44);
     if (width >= 1440) assert(Math.max(...geometry.toolbarBottoms) - Math.min(...geometry.toolbarBottoms) <= 2);
     assert.deepEqual((await separatorSnapshot(page)).findings, [], width + ' ' + theme);

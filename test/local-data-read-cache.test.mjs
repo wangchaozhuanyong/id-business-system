@@ -310,6 +310,19 @@ test('clearing identity data prevents late reads and already queued cache hits f
   assert.equal(queries.peek('commerce', 'rows').data.actor, 'new');
 });
 
+test('恢复或拒绝续费在离开工作台时也会刷新候选、拒绝记录和提醒计数', async () => {
+  const { api } = client();
+  const keys = [['renewal-handoffs', { view: 'staff' }], ['renewal-handoffs', { view: 'declined' }], ['renewal-sidebar', {}]];
+  for (const change of [
+    () => api.save('commerce', 1, {}, { action: '恢复续费提醒' }),
+    () => api.saveRenewalHandoff({ action: 'decline' })
+  ]) {
+    for (const [scope, key] of keys) await api.queries.read(scope, key, async () => ({}));
+    await change();
+    for (const [scope, key] of keys) assert.equal(api.queries.peek(scope, key).stale, true);
+  }
+});
+
 test('only known writes invalidate related snapshots; query POSTs and explicit reload semantics stay unchanged', async () => {
   const requests = [];
   const { api } = client(async (url, options) => {

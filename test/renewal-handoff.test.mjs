@@ -12,6 +12,7 @@ import { stageConfirmedRenewalDebit } from '../server/apple-funding.mjs';
 import { cardTypeDocument } from '../server/card-management.mjs';
 import { subscriptionDomain, subscriptionAccountId } from '../server/subscription-management.mjs';
 import { createRenewalHandoff, renewalHandoffDomain, renewalHandoffPath } from '../server/renewal-handoff.mjs';
+import { renewalSidebar } from '../server/renewal-sidebar.mjs';
 import { localBusinessRequest } from './helpers/local-business-request.mjs';
 
 const origin = 'https://renewal.example.test';
@@ -61,6 +62,83 @@ function sender(store) {
     return { status, data };
   }
 }
+
+test('拒绝续费按原单持久记录、停止提醒并兼容历史恢复', async t => {
+  const copy = id => ({ ...initialOrder, id, email: id + '@example.test', orderNo: 'OD-' + id });
+  const orders = ['first', 'second', 'third', 'restored', 'historical', 'other'].map(copy);
+  orders.at(-1).ownerId = actors.other.id;
+  const { store, send } = fixture(t, orders, (store, data) => {
+    data.logs = [
+      { id: 'r', type: '恢复续费提醒', entityId: 'restored' },
+      { id: 'd', type: '拒续费', entityId: 'restored' },
+      { id: 'h', type: '拒续费', entityId: 'historical', at: '2026-11-12 12:00', actor: '历史经办人' },
+      { id: 'o', type: '拒续费', entityId: 'other' }
+    ];
+    store.saveBatch([{ domain: 'commerce', version: 0, data }]);
+  });
+  const list = async role => (await send(role, null, { view: 'declined' })).data.items;
+  const cmd = { action: 'decline', confirmed: true, orders: ['first', 'second'].map(id => ({ id, version: 1 })) };
+  const clock = Date.UTC(2026, 10, 13, 5), before = renewalSidebar(store, clock).count;
+  const previous = store.load('commerce');
+  assert.deepEqual((await list('employee')).map(row => row.id), ['historical']);
+  assert.deepEqual((await list('other')).map(row => row.id), ['other']);
+  assert.equal((await send('finance', null, { view: 'declined' })).status, 403);
+  assert.equal((await send('finance', cmd)).status, 403);
+  assert.equal((await send('other', cmd)).status, 404);
+  assert.equal((await send('employee', { ...cmd, confirmed: undefined })).status, 400);
+  assert.equal((await send('employee', { ...cmd, orders: [cmd.orders[0], { id: 'second', version: 3 }] })).status, 409);
+  assert.deepEqual(store.load('commerce'), previous);
+  const operationId = randomUUID();
+  const receipt = await send('employee', cmd, { operationId });
+  assert.deepEqual(receipt, { status: 200, data: { saved: true, count: 2 } });
+  assert.deepEqual(await send('employee', cmd, { operationId }), receipt);
+  assert.equal((await send('employee', cmd)).status, 409);
+  assert.equal((await send('employee', { ...cmd, action: 'submit' })).status, 409);
+  assert.deepEqual((await send('employee', null)).data.candidates.map(order => order.id), ['third', 'restored']);
+  const archived = await list('supervisor');
+  assert.deepEqual(archived.map(row => row.id), ['first', 'second', 'historical']);
+  assert.equal(archived[0].declinedBy, actors.employee.name);
+  assert.equal(archived[0].declinedAt, new Date(clock).toISOString());
+  assert(!JSON.stringify(archived).includes(firstCard));
+  assert.equal(renewalSidebar(store, clock).count, before - 2);
+  const saved = store.load('commerce');
+  assert.deepEqual(saved.data.orders, previous.data.orders);
+  assert.deepEqual(saved.data.logs.slice(2), previous.data.logs);
+  assert.equal(saved.version, previous.version + 1);
+  assert.equal((await send('finance', null, { view: 'finance' })).data.items.length, 0);
+  assert.equal((await send('employee', { action: 'submit', orders: [{ id: 'third', version: 1 }] })).status, 200);
+  assert.equal((await send('employee', { ...cmd, orders: [{ id: 'third', version: 1 }] })).status, 409);
+  const queuedDecision = { id: 'queued-decline', type: '拒续费', entityId: 'third' };
+  assert.throws(() => store.saveBatch([{ domain: 'commerce', version: saved.version, action: '拒续费',
+    data: { ...saved.data, logs: [queuedDecision, ...saved.data.logs] } }]), /已进入续费办理/);
+  assert.equal(store.load('commerce').version, saved.version);
+  const restore = { id: 'restore-first', type: '恢复续费提醒', entityId: 'first' };
+  store.saveBatch([{ domain: 'commerce', version: saved.version, action: '恢复续费提醒',
+    data: { ...saved.data, logs: [restore, ...saved.data.logs] } }]);
+  assert.equal((await list('employee')).some(row => row.id === 'first'), false);
+  assert((await send('employee', null)).data.candidates.some(row => row.id === 'first'));
+  assert.equal(renewalSidebar(store, clock).count, before - 1);
+});
+
+test('拒绝续费与送财务并发只接受一次，重开数据库后仍可按原决定办理', async t => {
+  const database = await databaseFixture(t);
+  const { close, send, submit } = fixture(t, [initialOrder], undefined, database);
+  const operationId = randomUUID(), decline = { ...submit, action: 'decline' };
+  const [refused, forwarded] = await Promise.all([
+    send('employee', decline, { operationId }), send('employee', submit)
+  ]);
+  assert.deepEqual([refused.status, forwarded.status].sort(), [200, 409]);
+  close();
+  const reopened = createLocalBusinessStore(database);
+  t.after(() => reopened.close());
+  const read = sender(reopened);
+  const archived = (await read('employee', null, { view: 'declined' })).data.items;
+  const queue = (await read('finance', null, { view: 'finance' })).data.items;
+  assert.equal(archived.length + queue.length, 1);
+  assert.equal(archived.length, refused.status === 200 ? 1 : 0);
+  assert.equal((await read('employee', decline, { operationId })).status, refused.status);
+  assert.equal(reopened.load('commerce').data.logs.filter(log => log.type === '拒续费').length, archived.length);
+});
 
 test('续费日志定位同一笔申请和订单，沿用原接口退回且保留原申请', async t => {
   const { store, send, submit } = fixture(t);

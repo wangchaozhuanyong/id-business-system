@@ -77,16 +77,14 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
       const sideBySide = history.left >= form.right;
       const findings = [];
       const editor = formPanel.querySelector('form');
-      const quickCustomer = editor.querySelector('.order-quick-customer');
-      if (quickCustomer) {
-        const bounds = quickCustomer.closest('.field-control').getBoundingClientRect();
-        const disclosure = quickCustomer.closest('details');
-        const controls = [editor.querySelector('#commerce-customerId-picker'), disclosure.querySelector('summary'),
-          ...(disclosure.open ? quickCustomer.querySelectorAll('input, button') : [])];
+      const match = editor.querySelector('[data-action="commerce-customer-match-open"]');
+      if (match) {
+        const bounds = match.closest('.field-control').getBoundingClientRect();
+        const controls = [editor.querySelector('#commerce-customerId-picker'), match];
         const positions = controls.map(control => control.getBoundingClientRect());
         if (positions.some(position => position.left < bounds.left - 1 || position.right > bounds.right + 1))
           findings.push('客户选择与快捷新增超出资料行');
-        if (!disclosure.open && bounds.width >= 340 && Math.abs(positions[1].top - positions[0].top) > 3)
+        if (bounds.width >= 340 && Math.abs(positions[1].top - positions[0].top) > 3)
           findings.push('宽屏下客户选择与匹配或新增应同排');
         if (innerWidth <= 900 && positions.some(position => position.height < 44))
           findings.push('手机客户资料控件高度不足 44px');
@@ -665,4 +663,75 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
   assert.deepEqual(mock.external, []);
   assert.deepEqual(mock.unavailable, []);
   if (output) await writeFile(join(output, 'geometry.json'), JSON.stringify(checks, null, 2));
+});
+
+test('录单币种完整可见，长名称回显与金额输入和价格按钮分行', async t => {
+  const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  for (const long of [false, true]) {
+    const context = await browser.newContext();
+    const name = long ? '跨境订单售卖与代付使用的人民币结算币种'.repeat(2) : '人民币';
+    const currencies = [{ name, code: 'CNY' }];
+    if (long) currencies.push({ name: '美元', code: 'USD' });
+    const fixture = JSON.parse(await readFile(new URL('../docs/audits/2026-11-06-design-review/visual-fixtures.json', import.meta.url)));
+    fixture.settings.data.orderCurrenciesByProduct = Object.fromEntries(
+      ['GPT', 'Claude', 'Gemini', 'Grok'].map(product => [product, currencies])
+    );
+    await interceptDesign(context, { localFixtures: fixture, actor: { id: 'layout', name: '测试员工', role: 'admin' }, skipRechargeAssets: true });
+    const page = await context.newPage();
+    for (const product of ['gpt', 'claude', 'gemini', 'grok']) {
+      await page.goto(origin + '/#/workspace/order/' + product);
+      const sale = page.locator('#commerce-saleCurrency');
+      await sale.getByText(name + ' CNY', { exact: true }).waitFor({ state: 'attached' });
+      await sale.selectOption('CNY');
+      const paid = page.locator('#commerce-paidCurrency');
+      await paid.selectOption('CNY');
+      for (const width of [2480, 1440, 768, 390, 320]) {
+        await page.setViewportSize({ width, height: 960 });
+        const dark = width === 1440 || width === 390;
+        if (await page.evaluate(() => document.documentElement.dataset.theme === 'dark') !== dark) await toggleDesignTheme(page);
+        await settle(page);
+        const cards = await page.locator('.order-financial-groups--amounts .order-financial-group').evaluateAll(groups => groups.map(group => {
+          const box = node => node.getBoundingClientRect();
+          const currency = group.querySelector('select');
+          const extra = currency.closest('.field-control').querySelector('.order-value-readout');
+          const amount = box(group.querySelector('.order-amount-picker'));
+          const price = box(group.querySelector('.order-financial-actions button'));
+          const readout = extra && box(extra), bounds = box(group);
+          return {
+            label: currency.selectedOptions[0].textContent, extra: extra?.textContent,
+            fits: !readout || (readout.top >= box(currency).bottom && readout.bottom <= amount.top &&
+              readout.left >= bounds.left && readout.right <= bounds.right + 1 && extra.scrollWidth <= extra.clientWidth + 1),
+            amountTop: amount.top, groupTop: bounds.top, priceVisible: price.top >= amount.bottom && price.bottom <= bounds.bottom + 1
+          };
+        }));
+        assert.equal(cards.length, 2);
+        for (const card of cards) {
+          assert.equal(card.extra, long ? card.label : undefined, product + ' ' + width + 'px ' + card.label);
+          assert(card.fits && card.priceVisible, JSON.stringify({ product, width, card }));
+        }
+        if (Math.abs(cards[0].groupTop - cards[1].groupTop) < 1)
+          assert(Math.abs(cards[0].amountTop - cards[1].amountTop) <= 1, '并排金额框应对齐');
+      }
+      if (long) {
+        const amountMenu = page.getByRole('menu', { name: '选择售卖金额', exact: true });
+        await page.getByRole('button', { name: '选择售卖金额', exact: true }).click();
+        await amountMenu.waitFor();
+        await page.keyboard.press('Escape');
+        await amountMenu.waitFor({ state: 'hidden' });
+        await page.getByRole('button', { name: '查看售价', exact: true }).click();
+        await page.locator('#drawer[open] #commerce-order-price-reference-panel').waitFor();
+        await page.getByRole('button', { name: '返回订单', exact: true }).click();
+        await sale.selectOption('USD');
+        await sale.locator('..').locator('.order-value-readout').waitFor({ state: 'detached' });
+        await page.setViewportSize({ width: 1920, height: 960 });
+        await settle(page);
+        const paidTop = (await page.locator('#commerce-paidAmount').boundingBox()).y;
+        const saleTop = (await page.locator('#commerce-saleAmount').boundingBox()).y;
+        assert(Math.abs(paidTop - saleTop) <= 1, '只有一侧币种需要回显时，并排金额框仍应对齐');
+      }
+    }
+    await context.close();
+  }
 });

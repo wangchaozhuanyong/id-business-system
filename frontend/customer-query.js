@@ -18,6 +18,7 @@
       pages: { search: page(), accounts: page(), orders: page(), records: page() } });
     const state = S.drafts.get(route);
     state.expanded ||= { accounts: true, orders: false, records: false };
+    state.detailRows ||= {};
     return state;
   }
   const active = () => S.route === route;
@@ -61,23 +62,34 @@
     return `<dl class="${className}">${items.map(([label, value]) =>
       `<div><dt>${E(label)}</dt><dd>${value || '—'}</dd></div>`).join('')}</dl>`;
   }
-  function subscriptionCard(row, order = false) {
+  function subscriptionCard(row, sectionId, index, expandedId) {
+    const order = sectionId === 'orders';
     const tenant = row.tenant ? `${E(row.tenant.name)} ${tag(row.tenant.active ? '正常' : '已停用', row.tenant.active ? 'success' : 'warning')}`
       : row.tenantConflict ? '关联待核对' : Object.hasOwn(row, 'tenant') ? '未关联' : '—';
-    const actions = `${!order && row.copyClaude ? textAction('复制 Claude 资料', 'customer-query-copy', attr(row.id)) : ''}${
-      row.canPrefill ? button('采用此单提交订单', 'customer-query-prefill', '', '', attr(row.id)) : ''}`;
-    const bankNumber = row.bankNumber ? `<div>${E(row.bankNumber)}</div>${textAction('复制卡号',
-      'customer-query-copy-card', `${attr(row.id)} data-tab="${order ? 'orders' : 'accounts'}"`)}` : '无';
+    const detailId = `customer-query-${sectionId}-detail-${index}`, open = expandedId === row.id;
+    const badge = row.cancelled ? tag('已撤单') : tag(status[row.status] || '待核对',
+      row.status === 'active' ? 'success' : row.status === 'pending' ? 'warning' : '');
+    const assetIssue = ['dead', 'unlocking', 'frozen'].includes(row.bank?.state) ||
+      (row.appleBindings || (row.apple ? [row.apple] : [])).some(apple => ['dead', 'unlocking', 'unavailable'].includes(apple.state));
+    const bankNumber = row.bankNumber ? `<span>${E(row.bankNumber)}</span>${textAction('复制卡号',
+      'customer-query-copy-card', `${attr(row.id)} data-tab="${sectionId}"`)}` : '无';
     return `<article class="customer-query-account" data-customer-query-row="${E(row.id)}">
-      <div class="customer-query-account-heading"><h3>${E([row.product, row.plan].filter(Boolean).join(' · ') || '套餐待核对')}</h3>${
-        row.cancelled ? tag('已撤单') : tag(status[row.status] || '待核对', row.status === 'active' ? 'success' : row.status === 'pending' ? 'warning' : '')}
+      <div class="customer-query-identity"><h3>${E(row.account || '账号待核对')}</h3>${
+        row.email && row.email !== row.account ? `<span>${E(row.email)}</span>` : ''}</div>
+      <div class="customer-query-plan"><strong>${E([row.product, row.plan].filter(Boolean).join(' · ') || '套餐待核对')}</strong>
+        <div class="customer-query-status">${badge}${assetIssue ? tag('付款资料异常', 'warning') : ''}${
+          row.tenantConflict ? tag('租户待核对', 'warning') : row.tenant?.active === false ? tag('租户已停用', 'warning') : ''}</div></div>
+      <div class="customer-query-expiry"><span><span class="customer-query-mobile-label">到期时间</span>${date(row.expiry)}</span>
         <span class="footnote" data-customer-duration="${E(row.id)}">${E(duration(row))}</span></div>
-      <p class="customer-query-account-name">${E(row.account || '账号待核对')}${row.email && row.email !== row.account ? `<br>${E(row.email)}` : ''}</p>
-      ${facts([['开通日期', date(row.start)], ['到期时间', date(row.expiry)],
-        ['银行卡号', bankNumber], ['付款资料', assetMarkup(row)], ...(Object.hasOwn(row, 'tenant') ? [['租户', tenant]] : []),
-        ...(order ? [['订单编号', E(row.orderNo || '待核对')], ['业务类型', E(row.businessType || '待核对')],
-          ['退款', row.refunds?.map(refund => `<div>${E(`${refund.amount} ${refund.currency}`)} · ${date(refund.at)}</div>`).join('') || '—']] : [])])}
-      ${actions ? `<div class="customer-query-account-actions">${actions}</div>` : ''}</article>`;
+      ${facts([['银行卡号', bankNumber]], 'customer-query-bank')}
+      <div class="customer-query-account-actions">${textAction(open ? '收起明细' : '明细', 'customer-query-detail',
+        `data-tab="${sectionId}" aria-expanded="${open}" aria-controls="${detailId}"`)}${
+        !order && row.copyClaude ? textAction('复制 Claude 资料', 'customer-query-copy', attr(row.id)) : ''}${
+        row.canPrefill ? button('采用此单提交订单', 'customer-query-prefill', 'compact', '', attr(row.id)) : ''}</div>
+      <div class="customer-query-detail" id="${detailId}" ${open ? '' : 'hidden'}>${
+        facts([['开通日期', date(row.start)], ['付款资料', assetMarkup(row)], ...(Object.hasOwn(row, 'tenant') || row.tenantConflict ? [['租户', tenant]] : []),
+          ...(order ? [['订单编号', E(row.orderNo || '待核对')], ['业务类型', E(row.businessType || '待核对')],
+            ['退款', row.refunds?.map(refund => `<div>${E(`${refund.amount} ${refund.currency}`)} · ${date(refund.at)}</div>`).join('') || '—']] : [])])}</div></article>`;
   }
   function section(id, state) {
     const result = sections.get(id), open = state.expanded[id], heading = tabs[id];
@@ -85,8 +97,9 @@
       : !result.items.length ? A.empty(`暂无${heading}`, '没有已核实关联到此客户的记录。')
       : id === 'records' ? `<ol class="customer-query-records">${result.items.map(row =>
         `<li><strong>${E(row.type || '关联记录')}</strong><time>${E(row.at || '时间待核对')}</time><span>${E(row.actor || '操作人未记录')}</span></li>`).join('')}</ol>`
-      : `<div class="customer-query-accounts">${result.items.map(row => subscriptionCard(row, id === 'orders')).join('')}</div>`;
-    return `<section class="panel customer-query-section" aria-labelledby="customer-query-${id}-title">
+      : `<div class="customer-query-accounts"><div class="customer-query-columns" aria-hidden="true"><span>订阅账号</span><span>产品与套餐</span><span>到期时间</span><span>银行卡号</span><span>操作</span></div>${
+        result.items.map((row, index) => subscriptionCard(row, id, index, state.detailRows[id])).join('')}</div>`;
+    return `<section class="${id === 'accounts' ? 'panel ' : ''}customer-query-section" aria-labelledby="customer-query-${id}-title">
       <div class="customer-query-section-heading"><h2 id="customer-query-${id}-title">${heading}</h2>${
         result ? `<span class="footnote">${result.total} 条</span>` : ''}${id !== 'accounts'
         ? button(open ? '收起' : '展开', 'customer-query-section', '', '', `data-tab="${id}" aria-label="${open ? '收起' : '展开'}${heading}" aria-expanded="${open}" aria-controls="customer-query-${id}-content"`) : ''}</div>
@@ -110,14 +123,15 @@
       row.kind === 'bank' ? bankBadge(row) : appleBadge({ ...row, account: row.apple })}${row.kind === 'apple' && row.state === 'dead'
       ? row.bound ? '<p>此绑定 ID 已死号。此订阅账号不可继续绑定其他 Apple ID，建议更换订阅账号或改用银行卡订阅。</p>'
         : '<p>待付款 Apple ID 已死号，请核对原订单及付款资料。</p>' : ''}</li>`);
-    const profile = `<section class="panel customer-query-profile-panel"><div class="toolbar"><div class="toolbar-left"><h2>${E(c.name)}</h2>${
-      tag(c.active ? '使用中' : '已停用', c.active ? 'success' : 'warning')}</div><div class="toolbar-right">${searchSnapshot?.total > 1 ? button('返回匹配客户', 'customer-query-back') : ''}${
+    const profile = `<section class="panel customer-query-profile-panel"><div class="customer-query-profile-heading"><div class="customer-query-account-heading"><h2>${E(c.name)}</h2>${
+      tag(c.active ? '使用中' : '已停用', c.active ? 'success' : 'warning')}</div><div class="customer-query-profile-actions">${searchSnapshot?.total > 1 ? button('返回匹配客户', 'customer-query-back') : ''}${
       c.active ? button('仅采用客户资料', 'customer-query-product', 'primary') : ''}</div></div>${
-      facts([['客户编号', E(c.id)], ...properties.map(([label, value]) => [label, E(value)])], 'customer-query-facts customer-query-profile')}${
+      facts([...properties.map(([label, value]) => [label, E(value)]), ['客户编号', E(c.id)]], 'customer-query-profile')}${
       warnings.length ? `<ul class="customer-query-warnings" aria-label="付款资料异常">${warnings.join('')}</ul>` : ''}${
       result.unresolved ? `<p class="inline-notice warning">有 ${result.unresolved} 笔历史订单的客户关联待核对。</p>` : ''}${
       c.notes ? `<div class="customer-query-notes"><strong>备注</strong><p>${E(c.notes)}</p></div>` : ''}</section>`;
-    return profile + Object.keys(tabs).map(id => section(id, state)).join('');
+    return profile + section('accounts', state) +
+      `<div class="panel customer-query-history">${section('orders', state)}${section('records', state)}</div>`;
   }
 
   function render() {
@@ -126,9 +140,9 @@
       `<div class="customer-query-page"><section class="panel"><form id="customer-query-search" class="customer-query-search">
       <div class="customer-query-search-label"><label for="customer-query-input">客户资料</label>${A.titleInfo('客户资料查询', '按客户姓名或微信查询。唯一匹配直接显示档案；多位匹配时先选择客户。', 'customer-query-help')}</div>
       <div class="customer-query-search-row"><div class="search-field">${A.icon('search')}
-      <input id="customer-query-input" type="search" aria-label="客户姓名或微信" aria-describedby="customer-query-input-notice" maxlength="160" placeholder="输入客户姓名或微信" value="${E(state.input)}"></div>
-      <button class="button primary" type="submit">查询</button>${button('粘贴查询', 'customer-query-paste', '', 'copy')}${
-        state.query || state.input ? button('重新查询', 'customer-query-reset') : ''}</div>
+      <input id="customer-query-input" type="search" aria-label="客户姓名或微信" aria-describedby="customer-query-input-notice" maxlength="160" placeholder="输入姓名或微信" value="${E(state.input)}"></div>
+      <div class="customer-query-search-actions"><button class="button primary" type="submit">查询</button>${button('粘贴查询', 'customer-query-paste', '', 'copy')}${
+        state.query || state.input ? button('重新查询', 'customer-query-reset') : ''}</div></div>
       <p id="customer-query-input-notice" class="field-error" role="status" hidden></p></form></section>
       <div data-customer-query-region><div data-customer-query-progress role="status" hidden></div>
       <p data-customer-query-error class="inline-notice warning" role="status" hidden></p>
@@ -238,6 +252,7 @@
 
   let measureNextSearch = false;
   function changeSelection() {
+    view().detailRows = {};
     sequence++;
     snapshot = undefined;
     sections.clear();
@@ -349,6 +364,16 @@
         state.expanded = { accounts: true, orders: false, records: false };
         for (const id of Object.keys(tabs)) state.pages[id] = page();
         changeSelection();
+      } else if (action === 'customer-query-detail') {
+        const row = node.closest('[data-customer-query-row]'), tab = node.dataset.tab;
+        const next = state.detailRows[tab] === row.dataset.customerQueryRow ? '' : row.dataset.customerQueryRow;
+        state.detailRows[tab] = next;
+        for (const toggle of row.parentElement.querySelectorAll('[data-action="customer-query-detail"]')) {
+          const open = toggle.closest('[data-customer-query-row]').dataset.customerQueryRow === next;
+          toggle.setAttribute('aria-expanded', String(open));
+          toggle.textContent = open ? '收起明细' : '明细';
+          document.getElementById(toggle.getAttribute('aria-controls')).hidden = !open;
+        }
       } else if (action === 'customer-query-section' && ['orders', 'records'].includes(node.dataset.tab)) {
         state.expanded[node.dataset.tab] = !state.expanded[node.dataset.tab];
         sections.delete(node.dataset.tab);
@@ -381,6 +406,7 @@
     const state = view(), id = detail.id?.replace(/^customer-query-/, '');
     if (!Object.hasOwn(state.pages, id) || detail.id !== `customer-query-${id}` ||
         (state.customerId ? !state.expanded[id] : id !== 'search')) return;
+    delete state.detailRows[id];
     state.pages[id] = { page: detail.page, pageSize: detail.pageSize };
     void read();
   });

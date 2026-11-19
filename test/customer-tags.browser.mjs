@@ -162,16 +162,16 @@ test('下拉设置页签支持来源标签持久化、历史选项和客户草�
 
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto(url + '#/workspace/order');
-  const quickAdd = page.locator('[data-action="commerce-quick-customer"]');
-  const inlineName = page.locator('#order-quick-customer-name');
-  const inlineWechat = page.locator('#order-quick-customer-wechat');
+  const openMatch = page.getByRole('button', { name: '匹配或新增', exact: true });
+  const quickAdd = page.locator('#drawer[open] [data-action="commerce-customer-match-create"]');
+  const matchName = page.locator('#order-match-name');
+  const matchWechat = page.locator('#order-match-wechat');
   const identity = page.getByRole('group', { name: '本次新增客户', exact: true });
-  assert(await quickAdd.isDisabled());
   assert.equal(await page.locator('#drawer[open]').count(), 0);
   await page.locator('#commerce-email').fill('quick-draft@example.test');
-  await page.locator('.order-quick-customer-disclosure > summary').click();
-  await inlineName.fill('订单快捷客户');
-  await inlineWechat.fill('order_customer_wechat');
+  await openMatch.click();
+  await matchName.fill('订单快捷客户');
+  await matchWechat.fill('order_customer_wechat');
   await quickAdd.click();
   await identity.waitFor();
   assert.match(await identity.innerText(), /订单快捷客户.*微信 order_customer_wechat/s);
@@ -183,10 +183,11 @@ test('下拉设置页签支持来源标签持久化、历史选项和客户草�
   assert.equal(await form.getByRole('button', { name: '来源设置', exact: true }).count(), 0);
   await openSettings('来源设置');
   await go('workspace/order');
+  await openMatch.click();
+  assert.equal(await matchName.inputValue(), '订单快捷客户');
+  assert.equal(await matchWechat.inputValue(), 'order_customer_wechat');
   await quickAdd.click();
   await identity.waitFor();
-  assert.equal(await inlineName.inputValue(), '订单快捷客户');
-  assert.equal(await inlineWechat.inputValue(), 'order_customer_wechat');
   assert.equal(await form.getByLabel('来源渠道').inputValue(), '');
   assert.equal(await form.getByLabel('联系电话').inputValue(), '5550199');
   await summary.click();
@@ -206,13 +207,14 @@ test('下拉设置页签支持来源标签持久化、历史选项和客户草�
   assert.equal(await page.locator('#commerce-wechat').inputValue(), quickCustomer.wechat);
   assert.equal(await page.locator('#commerce-customerPhone').inputValue(), quickCustomer.phone);
   assert.equal(await page.locator('#commerce-email').inputValue(), 'quick-draft@example.test');
-  assert.equal(await inlineName.inputValue(), '');
-  assert.equal(await inlineWechat.inputValue(), '');
+  assert.equal(await page.locator('#order-quick-customer-name').inputValue(), '');
+  assert.equal(await page.locator('#order-quick-customer-wechat').inputValue(), '');
 
-  if (!(await inlineName.isVisible())) await page.locator('.order-quick-customer-disclosure > summary').click();
-  await inlineName.fill(quickCustomer.name);
-  await inlineWechat.fill(quickCustomer.wechat);
+  if (!(await matchName.isVisible())) await openMatch.click();
+  await matchName.fill(quickCustomer.name);
+  await matchWechat.fill(quickCustomer.wechat);
   assert(await quickAdd.isDisabled());
+  await page.getByRole('button', { name: '使用此客户', exact: true }).click();
   assert.equal(await page.locator('#commerce-customerId').inputValue(), quickCustomer.id);
   assert.equal(await page.locator('#confirm-dialog[open]').count(), 0);
   await page.goto(url + '#/customers/list');
@@ -243,8 +245,9 @@ test('下拉设置页签支持来源标签持久化、历史选项和客户草�
     newCustomer.telegram, newCustomer.notes, newCustomer.tags], ['', '', '', '', '', '', []]);
 
   await go('workspace/order');
-  if (!(await inlineName.isVisible())) await page.locator('.order-quick-customer-disclosure > summary').click();
-  await inlineName.fill('仅填姓名的快捷客户');
+  if (!(await matchName.isVisible())) await openMatch.click();
+  await matchName.fill('仅填姓名的快捷客户');
+  await matchWechat.fill('');
   await quickAdd.click();
   await identity.waitFor();
   await form.getByLabel('来源渠道').selectOption('');

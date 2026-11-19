@@ -755,6 +755,7 @@
     const stale = original && cached && Number(cached['staff-version']) !== original.version;
     const draft = cached;
     const superAccount = original?.role === 'super';
+    const teamLeads = staff.rows.filter(row => row.role === 'supervisor' && row.active).map(row => [row.id, row.name]);
     const { field, input, select, openDrawer, button, esc } = api;
     const fields =
       field(
@@ -790,9 +791,8 @@
         true
       ) +
       (superAccount ? '' : field('所属主管', 'local-staff-team-lead',
-        select('local-staff-team-lead', [['', '暂不分配'],
-          ...staff.rows.filter(row => row.role === 'supervisor' && row.active).map(row => [row.id, row.name])],
-        draft?.['local-staff-team-lead'] ?? original?.teamLeadId ?? ''), false, '用于分配员工所属小组。')) +
+        select('local-staff-team-lead', [['', teamLeads.length ? '暂不分配' : '暂无启用的主管'], ...teamLeads],
+        draft?.['local-staff-team-lead'] ?? original?.teamLeadId ?? ''), false, '分配后，主管可查看这名员工的小组订单与客户统计，并办理其名下订单的续费。')) +
       field(
         original ? '新密码' : '登录密码',
         'local-staff-password',
@@ -811,6 +811,15 @@
       `${button('取消', 'drawer-close')}<button type="submit" class="button primary" form="ops-local-staff-form">核对并保存</button>`,
       context
     );
+    if (!superAccount) {
+      const role = $('#local-staff-role'), lead = $('#local-staff-team-lead');
+      const updateTeamField = () => {
+        lead.disabled = role.value !== 'employee';
+        lead.closest('.field').hidden = lead.disabled;
+      };
+      updateTeamField();
+      role.addEventListener('change', updateTeamField);
+    }
     if (stale) api.notify('账户资料已变化，未提交的输入已保留；保存时将再次核对版本。');
   }
 

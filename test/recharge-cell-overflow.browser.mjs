@@ -264,3 +264,38 @@ test(
     assert.deepEqual(errors, []);
   }
 );
+
+test('处理中充值码的套餐全名在表格和手机卡片中均占一行', async t => {
+  const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
+  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
+  t.after(() => browser.close());
+  const context = await browser.newContext({ viewport: { width: 1920, height: 960 } });
+  const actor = { id: 'plan-layout', role: 'employee', name: '测试员工' };
+  await interceptDesign(context, { actor, localFixtures: {}, skipRechargeAssets: true });
+  const plans = ['plus', 'pro100', 'pro200', 'pro500'];
+  const items = plans.map(plan => ({ id: plan, plan, status: 'processing', itemNo: plan }));
+  await context.route(origin + '/api/local/recharge-codes*', route => {
+    const view = new URL(route.request().url()).searchParams.get('view');
+    return route.fulfill({ json: view === 'codes' ? { items } : { requests: [] } });
+  });
+  const page = await context.newPage();
+  await page.goto(origin + '/#/workspace/recharge-codes');
+  await page.getByRole('tab', { name: '处理中与待核对' }).click();
+  const values = page.locator('#recharge-code-list td[data-column="plan"] .mobile-record-value');
+  await values.first().waitFor();
+  assert.deepEqual(await values.allTextContents(), ['Plus', 'Pro 100', 'Pro 200', 'Pro 500']);
+  for (const width of [2480, 1492, 901, 390, 320]) {
+    await page.setViewportSize({ width, height: 960 });
+    await page.evaluate(dark => { document.documentElement.dataset.theme = dark ? 'dark' : 'light'; }, width === 1492 || width === 390);
+    const layouts = await values.evaluateAll(nodes => nodes.map(node => {
+      const range = document.createRange();
+      range.selectNodeContents(node);
+      const cell = node.closest('td'), bounds = cell.getBoundingClientRect();
+      const lines = range.getClientRects(), padding = getComputedStyle(cell);
+      return { plan: node.textContent, visible: lines.length === 1 &&
+        lines[0].left >= bounds.left + parseFloat(padding.paddingLeft) - 1 &&
+        lines[0].right <= bounds.right - parseFloat(padding.paddingRight) + 1 };
+    }));
+    for (const layout of layouts) assert.ok(layout.visible, width + 'px 下 ' + layout.plan + ' 应在一行完整显示');
+  }
+});

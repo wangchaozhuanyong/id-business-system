@@ -2233,6 +2233,25 @@ export function createLocalBusinessStore(databasePath) {
       });
     },
     replayWrite,
+    declineRenewalOrders(versions, orders, actor, at, operation) {
+      return writeTransaction(() => {
+        if (replayWrite(operation)) return;
+        for (const [domain, expected] of Object.entries(versions)) {
+          if ((revision.get(domain)?.version ?? 0) !== expected)
+            throw new LocalDataError(409, '续费或订单资料已更新，请刷新后核对');
+        }
+        const commerce = readDocument('commerce'), next = commerce.version + 1;
+        const decisions = orders.map(({ id, orderNo }) => ({
+          id: 'commerce-log-' + randomUUID(), type: '拒续费', entityId: id, detail: orderNo || id, at,
+          actor: actor.name, actorId: actor.id
+        }));
+        putDocument('commerce', next, { ...commerce.data, logs: [...decisions, ...(commerce.data.logs || [])] });
+        for (const order of orders) {
+          log.run(at, 'commerce', '拒续费', auditSummary('登记拒绝续费', actor, order.id, auditOrderNumber(order.orderNo)), next);
+        }
+        putDocument(operation.domain, 1, { fingerprint: operation.fingerprint, domains: ['commerce'] });
+      });
+    },
     saveRenewalQueue(version, commerceVersion, items, { action, actor, ids, operation }) {
       return writeTransaction(() => {
         if (replayWrite(operation)) return;
@@ -2347,6 +2366,13 @@ export function createLocalBusinessStore(databasePath) {
         const priorCommerce = checksStock ? current('commerce') : null;
         let inventory = incoming.get('inventory') ?? priorInventory;
         const commerce = incoming.get('commerce') ?? priorCommerce;
+        if (writes.some(write => write.domain === 'commerce' && write.action === '拒续费')) {
+          const queued = new Set((current(renewalHandoffDomain)?.items || [])
+            .filter(item => item.status !== 'returned').map(item => item.order.id));
+          const previous = new Set((priorCommerce?.logs || []).map(entry => entry.id));
+          if ((commerce.logs || []).some(entry => entry.type === '拒续费' && !previous.has(entry.id) && queued.has(entry.entityId)))
+            throw new LocalDataError(409, '原订单已进入续费办理，请核对办理记录');
+        }
         const inventoryWrite = writes.find(({ domain }) => domain === 'inventory');
         const tenantCardDocument = incoming.has('commerce') ? readDocument('tenant-cards') : null;
         const existingTenantCards = tenantCardDocument?.data?.items || [];
