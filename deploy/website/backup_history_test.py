@@ -130,6 +130,22 @@ class BackupHistoryTests(unittest.TestCase):
                 self.assertFalse(remote.recent_recovery_failures()["available"])
                 read.assert_not_called()
 
+    def test_oom_events_only_expose_owned_helpers_and_safe_time(self):
+        event = {"Action": "oom", "time": 1000000, "Actor": {"Attributes": {
+            "name": "id-recovery-capsule-" + "a" * 16, "org.id-business.backup": "portable-recovery",
+            "private": PRIVATE}}}
+        unrelated = {**event, "Actor": {"Attributes": {"name": PRIVATE}}}
+        with patch.object(remote.time, "time", return_value=1000000), \
+                patch.object(remote, "run", return_value=(json.dumps(event) + "\n" + json.dumps(unrelated)).encode()) as read:
+            result = remote.recent_backup_oom_events()
+        self.assertEqual(result, {"available": True, "historyMayBeIncomplete": True,
+                                  "events": [{"at": 1000000, "helper": "capsule"}]})
+        self.assertEqual(read.call_args.kwargs["timeout"], 5)
+        self.assertNotIn(PRIVATE, json.dumps(result))
+        with patch.object(remote, "run", side_effect=OSError(PRIVATE)):
+            self.assertEqual(remote.recent_backup_oom_events(),
+                             {"available": False, "historyMayBeIncomplete": True})
+
 
 if __name__ == "__main__":
     unittest.main()

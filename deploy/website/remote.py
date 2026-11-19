@@ -811,6 +811,7 @@ def inspect_canary(sha, sample_backup_resources=False):
         result["backupObservation"] = observe_backup_resources()
         result["backupResources"] = backup_resource_summary()
     result["recentRecoveryFailures"] = recent_recovery_failures()
+    result["recentBackupOomEvents"] = recent_backup_oom_events()
     return result
 
 
@@ -972,6 +973,28 @@ RECOVERY_FAILURE_STAGES = {"application", "collector", "source", "sqlite", "cred
                            "services", "size_limit", "encryption", "verification", "unknown"}
 BACKUP_HISTORY_KEY = re.compile(r"mysql/daily/independent-recharge/([0-9]{8}T[0-9]{6}Z)/"
                                 r"([a-f0-9]{40})/(manifest.json|mysql.sql.aes256gcm|recovery-state.idbackup)")
+
+
+def recent_backup_oom_events():
+    """Docker retains only its last 256 events; an empty result cannot exclude past OOM."""
+    try:
+        now = int(time.time())
+        raw = run(["docker", "events", "--since", str(now - 2 * 86400), "--until", str(now),
+                   "--filter", "type=container", "--filter", "event=oom", "--filter",
+                   "label=org.id-business.backup=portable-recovery", "--format", "{{json .}}"], timeout=5)
+        events = []
+        for line in raw.splitlines()[:256]:
+            event = json.loads(line)
+            attributes = event.get("Actor", {}).get("Attributes", {})
+            name = attributes.get("name", "")
+            matched = re.fullmatch(r"id-recovery-(snapshot|capsule)-[a-f0-9]{16}", name)
+            at = event.get("time")
+            if (event.get("Action") == "oom" and attributes.get("org.id-business.backup") == "portable-recovery"
+                    and matched and type(at) is int and now - 2 * 86400 <= at <= now):
+                events.append({"at": at, "helper": matched[1]})
+        return {"available": True, "historyMayBeIncomplete": True, "events": events}
+    except (OSError, ValueError, TypeError, AttributeError, subprocess.SubprocessError):
+        return {"available": False, "historyMayBeIncomplete": True}
 
 
 def read_backup_failure_manifest(key, listed):
