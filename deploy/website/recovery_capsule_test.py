@@ -127,7 +127,7 @@ class PortableRecovery(unittest.TestCase):
                     replacement = path.with_suffix('.replacement')
                     replacement.write_bytes(b'synthetic-replaced-auth')
                     replacement.replace(path)
-                    raise FileNotFoundError('synthetic-race')
+                    raise FileNotFoundError(2, 'synthetic-race', str(path))
             return original(path)
         with patch.object(capsule, 'read_file', side_effect=read):
             state = self.collect()
@@ -139,6 +139,7 @@ class PortableRecovery(unittest.TestCase):
         failures = [capsule.RecoveryError(code) for code in
                     ('recovery_symlink_forbidden', 'recovery_state_too_large', 'recovery_credential_unavailable')]
         failures.append(PermissionError('synthetic-private-path'))
+        failures.append(FileNotFoundError(2, 'synthetic-missing-program', 'systemctl'))
         for failure in failures:
             with self.subTest(failure=type(failure).__name__), \
                     patch.object(capsule, 'collect_once', side_effect=failure) as collect, \
@@ -147,6 +148,18 @@ class PortableRecovery(unittest.TestCase):
                     capsule.collect(self.root, 'a' * 40, 'b' * 40)
                 self.assertEqual(collect.call_count, 1)
                 sleep.assert_not_called()
+
+    def test_recipient_rotation_during_recollection_never_creates_an_archive(self):
+        recipient = b'synthetic-original-recipient'
+        output = self.root / 'never-created.idbackup'
+        with patch.object(capsule, 'read_file', side_effect=[(recipient, None), (b'synthetic-new-recipient', None)]), \
+                patch.object(capsule, 'collect', return_value={}), \
+                patch.object(capsule.subprocess, 'run') as crypto:
+            with self.assertRaisesRegex(capsule.RecoveryError, 'recovery_recipient_changed'):
+                capsule.capture(self.root, self.root / 'source', 'a' * 40, 'b' * 40, output,
+                                hashlib.sha256(recipient).hexdigest(), 'sha256:' + 'c' * 64)
+            crypto.assert_not_called()
+        self.assertFalse(output.exists())
 
     def test_symlink_and_missing_required_file_are_not_silently_omitted(self):
         path = self.root / 'formal/private/synthetic-other'

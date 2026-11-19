@@ -176,8 +176,12 @@ def collect(root, app_revision, native_revision, *, image=None):
         except RecoveryError as error:
             if str(error) not in {'recovery_source_changed', 'recovery_native_runtime_changed'} or attempt == 2:
                 raise
-        except FileNotFoundError:
-            if attempt == 2:
+        except FileNotFoundError as error:
+            filename = Path(error.filename) if isinstance(error.filename, str) else None
+            if (filename is None or not filename.is_absolute() or not (
+                    filename.is_relative_to(Path(root)) or str(filename) in {
+                        '/run/id-business-independent-drive-backup/config.json',
+                        '/run/id-business-independent-sheets-sync/config.json'}) or attempt == 2):
                 raise
         time.sleep(0.25)
 
@@ -333,6 +337,9 @@ def capture(root, source, app_revision, native_revision, destination, recipient_
     if hashlib.sha256(recipient).hexdigest() != recipient_sha256:
         raise RecoveryError('recovery_recipient_changed')
     state = collect(root, app_revision, native_revision, image=image)
+    current_recipient, _ = read_file(root / 'formal/google-drive-backup/recipient.pem')
+    if current_recipient != recipient:
+        raise RecoveryError('recovery_recipient_changed')
     name = 'id-recovery-capsule-' + uuid.uuid4().hex[:16]
     command = ['docker', 'run', '--rm', '--pull=never', '-i', '--name', name,
                '--label', BACKUP_CONTAINER_LABEL, '--log-driver', 'none',
