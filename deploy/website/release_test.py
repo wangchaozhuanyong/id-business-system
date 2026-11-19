@@ -356,6 +356,40 @@ class WebsiteReleaseTests(unittest.TestCase):
 
     @patch("release.require_ancestor")
     @patch("release.git")
+    def test_website_defers_only_reviewed_retry_inputs_on_the_original_base(self, git, ancestor):
+        changes = "\n".join(sorted(release.DEFERRED_RETRY_INPUTS))
+        git.side_effect = [changes, ""]
+        self.assertEqual(release.require_website_scope(release.DEFERRED_RETRY_BASE, TARGET),
+                         ("deferredNativeBuildInputs", {"reviewedCommit": release.DEFERRED_RETRY_MERGE,
+                                                       "assetsSha256": release.DEFERRED_RETRY_ASSETS}))
+        ancestor.assert_called_with(release.DEFERRED_RETRY_MERGE, TARGET)
+        git.assert_called_with("diff", "--name-only", release.DEFERRED_RETRY_MERGE, TARGET, "--",
+                               *release.CORE_PATHS, release.RETRY_DEPLOY_SCRIPT)
+        for path in (*sorted(release.DEFERRED_RETRY_INPUTS), release.RETRY_DEPLOY_SCRIPT):
+            git.side_effect = [changes, path]
+            with self.subTest(path=path), self.assertRaisesRegex(RuntimeError, "deferred_retry_inputs_source_mismatch"):
+                release.require_website_scope(release.DEFERRED_RETRY_BASE, TARGET)
+        for base, paths, flags in ((BASE, changes, {}), (release.DEFERRED_RETRY_BASE, changes + "\nother", {}),
+                                   (release.DEFERRED_RETRY_BASE, changes, {"include_core": True}),
+                                   (release.DEFERRED_RETRY_BASE, changes, {"include_adapter": True}),
+                                   (release.DEFERRED_RETRY_BASE, changes, {"partner_api": True})):
+            git.side_effect = [paths]
+            with self.subTest(base=base, flags=flags), self.assertRaises(RuntimeError):
+                release.require_website_scope(base, TARGET, **flags)
+
+    def test_deferred_retry_requires_live_mounted_asset_and_running_recharge_components(self):
+        mounted = {"available": True, "sha256": release.DEFERRED_RETRY_ASSETS}
+        components = {name: {"running": True} for name in ("recharge", "recharge-native")}
+        before = {"components": components, "mountedAssets": mounted}
+        release.verify_deferred_retry_baseline(before)
+        for changed in ({"mountedAssets": {}}, {"mountedAssets": mounted | {"sha256": "0" * 64}},
+                        {"components": components | {"recharge-native": {"running": False}}},
+                        {"components": {"recharge-native": {"running": True}}}):
+            with self.subTest(changed=changed), self.assertRaisesRegex(RuntimeError, "deferred_retry_live_components_mismatch"):
+                release.verify_deferred_retry_baseline(before | changed)
+
+    @patch("release.require_ancestor")
+    @patch("release.git")
     def test_website_carries_only_exact_inputs_from_the_verified_running_native(self, git, ancestor):
         native = {"identity": {"revision": TARGET, "image": "image", "running": True},
                   "imageLabelsVerified": True}

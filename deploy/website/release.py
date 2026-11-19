@@ -67,6 +67,17 @@ DEFERRED_DEBUG_MERGE = "47447e73c6562b43f27f9e1f80f82573b81ec00d"
 DEFERRED_DEBUG_FILES = frozenset(PLUS_TRIAL_SCOPE)
 PLUS_TRIAL_BUILD_INPUTS = PLUS_TRIAL_SCOPE | {"modules/recharge/codexdaichong/prepare.mjs"}
 DEPLOYED_TRIAL_BUILD_INPUTS = PLUS_TRIAL_BUILD_INPUTS | {"deploy/recharge-core/canary.py"}
+# Website-only release over the reviewed #1055 build inputs. The asset digest is
+# the production readback for the base website (release run 44504400315).
+DEFERRED_RETRY_BASE = "e4bd247086134fa75d49ffaa59d0e3507f67d430"
+DEFERRED_RETRY_MERGE = "45ba71fbd4054669a029ab2b565f49ceb6a3242b"
+DEFERRED_RETRY_ASSETS = "a67d83372c40fe5ca94d41ca075a889aa5b5bbeecb5202ae562e1a554728b1df"
+DEFERRED_RETRY_INPUTS = frozenset({
+    "deploy/recharge-core/canary.py", "modules/recharge/codexdaichong/prepare.mjs",
+    "modules/recharge/codexdaichong/retry/manifest.json",
+    "modules/recharge/codexdaichong/retry/upstream-retry.patch",
+})
+RETRY_DEPLOY_SCRIPT = "deploy/website/recharge_core.py"
 NATIVE_CORE_SCOPE = NATIVE_PATCH_FILES | PLUS_TRIAL_SCOPE | {
     "deploy/recharge-core/README.md", "deploy/recharge-core/canary.py", "deploy/recharge-core/health.mjs",
     "deploy/recharge-core/card-plans-canary.mjs", "deploy/recharge-core/check-provider-cutover.mjs",
@@ -200,6 +211,14 @@ def require_deferred_debug_inputs(base, sha):
     return approval
 
 
+def verify_deferred_retry_baseline(before):
+    mounted = before.get("mountedAssets", {})
+    if (mounted.get("available") is not True or mounted.get("sha256") != DEFERRED_RETRY_ASSETS or
+            any(before["components"].get(name, {}).get("running") is not True
+                for name in ("recharge", "recharge-native"))):
+        raise RuntimeError("deferred_retry_live_components_mismatch")
+
+
 def verify_deferred_native_receipt(receipt, approval, before, expected_assets=None):
     assets_sha = approval["assetsSha256"] if expected_assets is None else expected_assets
     if (receipt.get("protectedComponentsUnchanged") is not True or
@@ -296,6 +315,12 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False, 
     elif changed == set(SECURITY_PRESENTATION_FILES):
         return "securityPresentation", require_presentation_approval(
             base, sha, "security-ui-20261114.json", SECURITY_PRESENTATION_FILES)
+    elif base == DEFERRED_RETRY_BASE and changed == DEFERRED_RETRY_INPUTS:
+        require_ancestor(DEFERRED_RETRY_MERGE, sha)
+        if git("diff", "--name-only", DEFERRED_RETRY_MERGE, sha, "--", *CORE_PATHS, RETRY_DEPLOY_SCRIPT):
+            raise RuntimeError("deferred_retry_inputs_source_mismatch")
+        return "deferredNativeBuildInputs", {"reviewedCommit": DEFERRED_RETRY_MERGE,
+                                             "assetsSha256": DEFERRED_RETRY_ASSETS}
     elif base == DEFERRED_DEBUG_BASE and changed == DEFERRED_DEBUG_FILES:
         return "deferredNativeBuildInputs", require_deferred_debug_inputs(base, sha)
     elif changed:
@@ -505,6 +530,9 @@ def main(sample_backup_resources=False):
     if deferred_native and (retry_receipt or customer_progress or
                             before["assetsSha256"] != deferred_native["assetsSha256"]):
         raise RuntimeError("deferred_native_inputs_live_baseline_mismatch")
+    retry_inputs_only = deferred_native is not None and deferred_native["reviewedCommit"] == DEFERRED_RETRY_MERGE
+    if retry_inputs_only:
+        verify_deferred_retry_baseline(before)
     if include_adapter or include_core:
         for name in ("recharge", "recharge-native"):
             require_ancestor(before["components"][name]["revision"], sha)
@@ -600,7 +628,9 @@ def main(sample_backup_resources=False):
         files += PARTNER_API_FILES
     if customer_progress:
         files += CUSTOMER_PROGRESS_FILES
-    if deferred_native:
+    if retry_inputs_only:
+        files += (*sorted(DEFERRED_RETRY_INPUTS), RETRY_DEPLOY_SCRIPT)
+    elif deferred_native:
         files += ("frontend/recharge-partners.mjs", *sorted(DEFERRED_DEBUG_FILES))
     if deployed_native:
         files += tuple(sorted(DEPLOYED_TRIAL_BUILD_INPUTS))
