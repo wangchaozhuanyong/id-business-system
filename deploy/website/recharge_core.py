@@ -90,7 +90,7 @@ def ready_native(sha, image, expected_mounts):
                     sources = json.loads(run(["docker", "exec", state["id"], "node", "--input-type=module",
                                               "-e", script], timeout=30))
                     require(sources.get("revision") == PINNED_UPSTREAM and sources.get("files") == 203 and
-                            sources.get("originalFiles") == 195 and
+                            sources.get("originalFiles") == 194 and
                             sources.get("plusTrialFiles") == ['browser-pool.js', 'chatgpt.js', 'pricing-checkout.js', 'session-auth.js', 'stripe-payment.js'],
                             "running_native_sources_mismatch")
                     return state

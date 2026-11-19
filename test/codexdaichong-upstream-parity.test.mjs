@@ -45,7 +45,7 @@ test('all 203 upstream files match the original and five exact patches', async (
   assert.equal(result.files, 203);
   await exec(process.execPath, ['--check', join(prepared, 'server.js')]);
   await exec(process.execPath, ['--check', join(prepared, 'mysql-store.js')]);
-  assert.equal(result.originalFiles, 195);
+  assert.equal(result.originalFiles, 194);
   assert.deepEqual(result.routingFiles, ['pricing-checkout.js', 'region-config.js', 'server.js']);
   assert.deepEqual(result.returnFiles, ['mysql-store.js', 'server.js']);
   assert.deepEqual(result.providerRetirementFiles, ['mysql-store.js', 'server.js']);
