@@ -683,6 +683,21 @@ async function cardDetails(context, order, account) {
   return { card, number: card.canReveal ? number : undefined };
 }
 
+export function createOrderCardNumberReader({ archive, tenantCards, client }) {
+  const requests = new Map();
+  const context = { archive, types: classify(), client: { get(path) {
+    if (!requests.has(path)) requests.set(path, Promise.resolve().then(() => client.get(path)));
+    return requests.get(path);
+  } } };
+  return async order => {
+    const { id, number, conflict } = orderCardHealthReference(order, { archive, tenantCards });
+    if (conflict || !order) return '';
+    if (number || !recognizedCard(id) || id.startsWith('tenant:')) return number;
+    const resolved = await cardDetails(context, order, {});
+    return resolved.number || '';
+  };
+}
+
 async function readRenewalCard(store, client, command, actor, now, action) {
   if (!validOrderId(command.orderId) || (command.renewalOrderId !== undefined && !validOrderId(command.renewalOrderId)) ||
       (command.version !== undefined && (!Number.isSafeInteger(command.version) || command.version < 1)))

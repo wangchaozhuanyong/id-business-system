@@ -392,7 +392,7 @@ test('shared layouts preserve alignment, readable controls and stable navigation
     assert(form.width > main.width - 70, '空侧栏仍挤压费用表单');
   });
 
-  await t.test('relay unified filters and overflow actions align in one row and empty guidance stays inside the table', async () => {
+  await t.test('relay filters and overflow actions align within each row and empty guidance stays inside the table', async () => {
     await page.setViewportSize({ width: 1591, height: 900 });
     await go('mailboxes/relay');
     await page.getByRole('tab', { name: '隐藏邮箱管理' }).click();
@@ -435,10 +435,15 @@ test('shared layouts preserve alignment, readable controls and stable navigation
             };
           });
         });
-        const centers = controls.map(c => c.y);
-        assert(Math.max(...centers) - Math.min(...centers) <= 2, '状态、搜索及操作始终同排居中');
-        for (let i = 1; i < controls.length; i++)
-          assert(controls[i].left >= controls[i - 1].right - 1, '工具栏控件不得重叠');
+        const rows = [];
+        for (const control of controls) {
+          const row = rows.find(items => Math.abs(items[0].y - control.y) <= 2);
+          if (row) row.push(control);
+          else rows.push([control]);
+        }
+        assert.equal(rows.length, width <= 390 ? 2 : 1, '窄屏搜索独占首行，宽屏筛选与操作同排');
+        for (const row of rows) for (let i = 1; i < row.length; i++)
+          assert(row[i].left >= row[i - 1].right - 1, '同排工具栏控件不得重叠');
         await toolbar.locator('[data-action="relay-alias-tools"]').click();
         const menu = page.locator('[role="menu"]');
         const secondaryVisible = await toolbar.locator('.relay-secondary-actions').isVisible();

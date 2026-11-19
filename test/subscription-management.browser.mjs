@@ -178,6 +178,7 @@ test('四类订阅页面使用独立状态、真实复制入口与历史兼容�
         }
         assert.match(await page.locator('#page-title').innerText(), new RegExp(name === 'gpt' ? 'GPT' : name === 'claude' ? 'Claude' : name === 'gemini' ? 'Gemini' : 'Grok'));
         const subscriptionRow = page.locator('#subscription-list tbody tr[data-row-id]');
+        assert.equal(await subscriptionRow.getByText(/^(提交给财务|登记已完成续费)$/).count(), 0);
         const days = subscriptionRow.locator('td[data-column="days"]');
         if (!(await days.isVisible())) await subscriptionRow.getByRole('button', { name: '更多资料', exact: true }).click();
         assert.equal(await days.getAttribute('data-label'), '到期倒计时');
@@ -195,6 +196,10 @@ test('四类订阅页面使用独立状态、真实复制入口与历史兼容�
           assert.equal(await contacts.getByRole('link', { name: /打开 Telegram/ }).getAttribute('href'), 'https://t.me/qa_customer');
           await contacts.getByRole('button', { name: '复制微信', exact: true }).click();
           await page.waitForFunction(() => window.syntheticCopies.at(-1) === 'qa-wechat');
+          await page.keyboard.press('Escape');
+          await subscriptionRow.getByRole('button', { name: '详情', exact: true }).click();
+          await contacts.getByRole('heading', { name: '订阅账号详情', exact: true }).waitFor();
+          assert.equal(await contacts.getByText(/^(提交给财务|登记已完成续费)$/).count(), 0);
           await page.keyboard.press('Escape');
         }
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);

@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { interceptDesign, origin, settle } from './helpers/offline-design.mjs';
+import { interceptDesign, interceptRenewalWorktable, origin, settle } from './helpers/offline-design.mjs';
 
-const entry = '/#/workspace/renewals/reminders';
+const entry = '/#/workspace/renewals';
 const api = '/api/local/subscription-card-';
 const fixturePath = new URL('../docs/audits/2026-11-06-design-review/visual-fixtures.json', import.meta.url);
 const actor = { id: 'synthetic-renewal-admin', name: '合成管理员', role: 'admin' };
@@ -90,6 +90,7 @@ test('续费银行卡抽屉按点击订单独立读取并保护卡号', { timeou
       try {
         const fixtures = await localFixtures();
         const mock = await interceptDesign(context, { localFixtures: fixtures, actor });
+        await interceptRenewalWorktable(context, { localFixtures: fixtures, actor, clock: () => Date.parse(now) });
         await context.addInitScript(() => Object.defineProperty(navigator, 'clipboard', {
           value: { writeText: async (value) => { window.qaCopied = value; } }
         }));
@@ -148,18 +149,17 @@ test('续费银行卡抽屉按点击订单独立读取并保护卡号', { timeou
         page.on('pageerror', (error) => errors.push(error.message));
         await page.goto(origin + entry);
         await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
-        const list = page.locator('[data-renewal-scroll]');
-        const row = (id) => list.locator('button[data-id="' + id + '"]');
-        const tab = (label) => page.getByRole('tab', { name: label });
-        const search = page.locator('#commerce-search');
-        const product = page.locator('#commerce-renewal-product');
+        const list = page.locator('[data-renewal-list]');
+        const row = (id) => list.locator('tr[data-row-id="' + id + '"]');
+        const period = page.locator('#renewal-handoff-period');
+        const search = page.locator('#renewal-handoff-search');
+        const product = page.locator('#renewal-handoff-product');
         const drawer = page.locator('#drawer[open]');
         const panel = drawer.locator('#commerce-renewal-card-panel');
         const section = (kind) => panel.locator('[data-renewal-card-kind="' + kind + '"]');
         const openCard = async (id) => {
-          const action = page.locator(`[data-action="commerce-renewal-card-open"][data-id="${id}"]`);
-          if (!(await action.isVisible())) await row(id).click();
-          await action.click();
+          await row(id).getByRole('button', { name: '更多操作', exact: true }).click();
+          await page.getByRole('menuitem', { name: '用卡详情', exact: true }).click();
         };
         const reveal = (kind) => section(kind).locator('[data-action="commerce-renewal-card-reveal"]');
         const revealed = (kind) => section(kind).locator('[data-renewal-card-number]');
@@ -175,10 +175,10 @@ test('续费银行卡抽屉按点击订单独立读取并保护卡号', { timeou
           id, started: Promise.withResolvers(), release: Promise.withResolvers(), finished: Promise.withResolvers()
         });
 
-        await tab(/^已处理/).click();
+        await period.selectOption('renewed');
         await product.selectOption('GPT');
         await search.fill('QA-' + original);
-        await row(original).getByText('已续费', { exact: true }).waitFor();
+        await row(original).waitFor();
         await openCard(original);
         await section('order').getByText('QA-' + original, { exact: true }).waitFor();
         await section('renewal').getByText('QA-' + renewed, { exact: true }).waitFor();
@@ -219,7 +219,7 @@ test('续费银行卡抽屉按点击订单独立读取并保护卡号', { timeou
         await exposed.dispose();
         assert.equal(await search.inputValue(), 'QA-' + original);
         assert.equal(await product.inputValue(), 'GPT');
-        assert.equal(await tab(/^已处理/).getAttribute('aria-selected'), 'true');
+        assert.equal(await period.inputValue(), 'renewed');
         assert.equal(page.url(), origin + entry);
 
         if (width === 1440) {
@@ -231,7 +231,7 @@ test('续费银行卡抽屉按点击订单独立读取并保护卡号', { timeou
             await pendingReveal.started.promise;
             await close();
             await search.fill('');
-            await tab(/^已到期/).click();
+            await period.selectOption('expired');
             await openCard(noCard);
             await section('order').getByText('QA-' + noCard, { exact: true }).waitFor();
             assert.deepEqual(details.at(-1), { orderId: noCard });
@@ -247,13 +247,13 @@ test('续费银行卡抽屉按点击订单独立读取并保护卡号', { timeou
           }
           await close();
 
-          await tab(/^已处理/).click();
+          await period.selectOption('renewed');
           pendingDetails = startHeld(original);
           try {
             await openCard(original);
             await pendingDetails.started.promise;
             await close();
-            await tab(/^即将到期/).click();
+            await period.selectOption('upcoming');
             await openCard(upcoming);
             await section('order').getByText('QA-' + upcoming, { exact: true }).waitFor();
             assert.deepEqual(details.at(-1), { orderId: upcoming });

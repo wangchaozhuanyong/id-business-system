@@ -1053,7 +1053,7 @@
       : { title: '正在读取苹果内购订阅', description: '' };
     return title + (A.modules.commerce?.subscriptionCenterNav?.('apple-ids', overview) || overview) + (readFailed && available ? '<p class="inline-notice warning" role="status">读取失败，已保留上次成功读取的资料。</p>' : '') +
       `<section class="panel apple-management-list" data-pagination-table>${statusTabs}<div class="toolbar"><div class="toolbar-left"><div class="search-field">
-      ${A.icon('search')}<input data-auto-search id="apple-management-search" aria-label="搜索苹果内购订阅" placeholder="搜索订阅账号、付款 ID、客户或订单" value="${E(view.query)}" /></div>
+      ${A.icon('search')}<input data-auto-search id="apple-management-search" aria-label="搜索苹果内购订阅" aria-description="可搜索订阅账号、付款 ID、客户或订单" placeholder="账号、付款 ID、客户或单号" value="${E(view.query)}" /></div>
       <select id="apple-management-plan" aria-label="订阅套餐">${A.options([['', '全部套餐'], ...plans], view.plan)}</select>
       <select id="apple-management-sort" aria-label="到期排序">${A.options([['funding', '待续费优先'], ['asc', '到期时间升序'], ['desc', '到期时间降序']], view.sort)}</select>
       </div><div class="toolbar-right" data-page-actions></div></div>
@@ -1270,7 +1270,7 @@
         ],
         ['有余额', accounts.filter((row) => M.compare(row.balance, '0') > 0).length, '个']
       ]) +
-      `<section class="panel design-async-region" data-apple-balance-region><div data-apple-balance-progress role="status" hidden></div>${tabs}${selected === 'imports' ? A.modules.inventory.renderAppleImports() : `<div class="toolbar"><div class="toolbar-left"><div class="search-field">${A.icon('search')}<input data-auto-search id="apple-list-search" aria-label="搜索苹果 ID" placeholder="搜索苹果 ID、注册地区、关联账号或订单" value="${E(S.query || '')}" /></div></div><div class="toolbar-right" data-page-actions>${localData ? A.button('刷新', 'apple-reload') : ''}</div></div>${A.table(columns, A.pageRows(rows, row => [row.createdAt, row.importedAt, row.registered]), '', '苹果ID余额')}${A.pagination(rows.length)}`}</section>`
+      `<section class="panel design-async-region" data-apple-balance-region><div data-apple-balance-progress role="status" hidden></div>${tabs}${selected === 'imports' ? A.modules.inventory.renderAppleImports() : `<div class="toolbar"><div class="toolbar-left"><div class="search-field">${A.icon('search')}<input data-auto-search id="apple-list-search" aria-label="搜索苹果 ID" aria-description="可搜索苹果 ID、注册地区、关联账号或订单" placeholder="苹果 ID、地区、账号或单号" value="${E(S.query || '')}" /></div></div><div class="toolbar-right" data-page-actions>${localData ? A.button('刷新', 'apple-reload') : ''}</div></div>${A.table(columns, A.pageRows(rows, row => [row.createdAt, row.importedAt, row.registered]), '', '苹果ID余额')}${A.pagination(rows.length)}`}</section>`
     );
   }
   function saveDrafts() {
@@ -1428,13 +1428,14 @@
       const attrs = `data-id="${E(id)}"`;
       const walletAttrs = row.wallet ? `data-id="${E(row.wallet.id)}"` : '';
       if (action === 'apple-management-more') A.openActionMenu(node,
-        (row.canRenew ? A.button(localData ? '登记已完成续费' : '续费', 'apple-management-renew', '', '', attrs) : '') +
+        (!localData?.authRequired && row.canRenew ? A.button(localData ? '登记已完成续费' : '续费', 'apple-management-renew', '', '', attrs) : '') +
         A.button('订单详情', 'apple-management-order', '', '', attrs) +
         A.button('查看关联订单', 'apple-management-history', '', '', attrs) +
         (row.wallet ? A.button('充值', 'apple-topup', '', '', walletAttrs) + A.button('余额变动', 'apple-ledger', '', '', walletAttrs) +
           healthAction(row.wallet.id) : '') +
         A.button('复制', 'apple-management-copy', '', '', attrs));
-      else if (action === 'apple-management-renew' && row.canRenew) A.modules.commerce.openAppleRenewal(row.order.id);
+      else if (action === 'apple-management-renew' && !localData?.authRequired && row.canRenew)
+        A.modules.commerce.openAppleRenewal(row.order.id);
       else if (action === 'apple-management-history') void openLinkedAccounts(id, row);
       else if (action === 'apple-management-copy') void A.copyText([
         '订阅账号：' + row.account, '付款苹果 ID：' + row.apple, row.expected ? '预计金额：' + row.expected : ''

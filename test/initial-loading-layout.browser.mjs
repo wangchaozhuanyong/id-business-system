@@ -15,14 +15,15 @@ const workspaces = [
   ...['gpt', 'claude', 'gemini', 'grok'].map(product => ['workspace/order/' + product, 'commerce', '#commerce-order-form']),
   ['customers/new', 'commerce', '#commerce-contact-form'],
   ['customers/new/tenant', 'commerce', '#commerce-contact-form'],
-  ...['mail-submit', 'account-submit', 'mail-extract', 'account-extract'].map(route => ['workspace/' + route, 'inventory', '#inventory-extract-form']),
-  ['workspace/renewals/reminders', 'commerce', '.renewal-workbench-items']
+  ...['mail-submit', 'account-submit', 'mail-extract', 'account-extract'].map(route => ['workspace/' + route, 'inventory', '#inventory-extract-form'])
 ];
 const shapes = [
   ['.commerce-entry-columns', ['.form-panel', '.entry-records']],
   ['.inventory-workspace-columns', ['.inventory-submission-panel', '.inventory-extraction-panel']],
-  ['.renewal-workbench', ['.renewal-workbench-queue', '.renewal-workbench-detail']]
+  ['.renewal-progress-layout', ['.renewal-progress-navigation', '[data-renewal-handoff]']]
 ];
+const layoutCases = [[2062, false, true], [1440, true, true], [1280, false, false], [1024, true, false],
+  [901, false, true], [900, true, false], [768, false, true], [390, true, true], [320, false, false]];
 
 function trackFrames(shapes) {
   window.loadingLayoutFrames = [];
@@ -39,7 +40,7 @@ function trackFrames(shapes) {
     return { route: region.dataset.pageRegion, grid: box(grid),
       pending: Boolean(grid.querySelector('[data-initial-state]')),
       fixedHeight: grid.dataset.paginationLayout === 'workspace' &&
-        (shape[0] === '.renewal-workbench' || shape[0] === '.commerce-entry-columns' && getComputedStyle(grid).gridTemplateColumns.split(' ').length > 1),
+        shape[0] === '.commerce-entry-columns' && getComputedStyle(grid).gridTemplateColumns.split(' ').length > 1,
       columns: getComputedStyle(grid).gridTemplateColumns.split(' ').length,
       panels: shape[1].map(selector => box(grid.querySelector(':scope > ' + selector))),
       headings: shape[1].map(selector => box(grid.querySelector(':scope > ' + selector + ' .panel-heading h2'))) };
@@ -74,13 +75,12 @@ function comparePanels(before, after, label) {
   }
 }
 
-test('录入、提取与续费工作台在首读、失败、重试及成功之间保留实际双栏框架', { timeout: 180_000 }, async t => {
+test('录入和提取工作台在首读、失败、重试及成功之间保留实际双栏框架', { timeout: 180_000 }, async t => {
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
   t.after(() => browser.close());
   if (output) await mkdir(output, { recursive: true });
   const results = [];
-  for (const [width, dark, populated] of [[2062, false, true], [1440, true, true], [1280, false, false],
-    [1024, true, false], [901, false, true], [900, true, false], [768, false, true], [390, true, true], [320, false, false]]) {
+  for (const [width, dark, populated] of layoutCases) {
     await t.test(`${width}px ${dark ? 'dark' : 'light'} ${populated ? '有资料' : '空资料'}`, async () => {
       for (const [routeName, scope, readySelector] of workspaces) {
         const context = await browser.newContext({ viewport: { width, height: 900 } });
@@ -99,7 +99,7 @@ test('录入、提取与续费工作台在首读、失败、重试及成功之�
         page.on('pageerror', error => errors.push(error.message));
         const snapshot = async () => { await settle(page); return page.evaluate(() => window.loadingLayoutSnapshot()); };
         const capture = async phase => {
-          if (output && width === 1440 && ['workspace/order/gpt', 'customers/new', 'workspace/mail-extract', 'workspace/renewals/reminders'].includes(routeName))
+          if (output && width === 1440 && ['workspace/order/gpt', 'customers/new', 'workspace/mail-extract'].includes(routeName))
             await page.screenshot({ path: join(output, `${routeName.replaceAll('/', '-')}-${phase}.png`) });
         };
         try {
@@ -146,6 +146,78 @@ test('录入、提取与续费工作台在首读、失败、重试及成功之�
     });
   }
   if (output) await writeFile(join(output, 'initial-loading-layout.json'), JSON.stringify(results, null, 2));
+});
+
+test('续费工作台首读、失败及重试保留订单区与进度导航', { timeout: 60_000 }, async t => {
+  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
+  t.after(() => browser.close());
+  if (output) await mkdir(output, { recursive: true });
+  const routeName = 'workspace/renewals';
+  const results = [];
+  for (const [width, dark, populated] of layoutCases) {
+    const context = await browser.newContext({ viewport: { width, height: 900 } });
+    const traffic = await interceptDesign(context, { actor, localFixtures: populated ? fixture : {}, skipRechargeAssets: true });
+    await context.addInitScript(trackFrames, shapes);
+    let gate = Promise.withResolvers(), fail = true;
+    const writes = [], errors = [];
+    await context.route('**/api/local/renewals?view=staff', async route => {
+      if (route.request().method() !== 'GET') { writes.push(route.request().method()); return route.abort(); }
+      await gate.promise;
+      if (fail) return route.fulfill({ status: 503, json: { error: '隔离续费首读失败' } });
+      const candidates = populated ? [{ id: 'layout-fixture', number: 'QA-RENEWAL-1', customer: '测试客户',
+        account: 'renewal-layout@example.test', product: 'GPT', plan: 'Plus', reminderState: 'upcoming',
+        expiry: new Date(Date.now() + 24 * 3_600_000).toISOString(), version: 1 }] : [];
+      return route.fulfill({ json: { candidates, items: [], reminderHours: 72, canSubmitToFinance: true } });
+    });
+    const page = await context.newPage();
+    page.setDefaultTimeout(6000);
+    page.on('pageerror', error => errors.push(error.message));
+    const workspace = page.locator('#main [data-renewal-handoff]');
+    const snapshot = async () => { await settle(page); return page.evaluate(() => window.loadingLayoutSnapshot()); };
+    const capture = async phase => {
+      if (output && width === 1440) await page.screenshot({ path: join(output, `workspace-renewals-${phase}.png`) });
+    };
+    try {
+      await page.goto(origin + '/#/' + routeName);
+      await workspace.locator('[data-renewal-progress]:visible').waitFor();
+      if (dark) await toggleDesignTheme(page);
+      const loading = await snapshot();
+      assert.equal(await workspace.locator('.id-pagination').count(), 0, '未读取时不显示虚构总数');
+      assert.equal(await workspace.locator('form').count(), 0, '资料就绪前不挂载可提交表单');
+      await capture('loading');
+      gate.resolve();
+      await workspace.getByText('续费资料暂时无法读取', { exact: true }).waitFor();
+      const failed = await snapshot();
+      comparePanels(loading, failed, `${width}px 失败`);
+      await capture('error');
+      gate = Promise.withResolvers(); fail = false;
+      await workspace.getByRole('button', { name: '刷新', exact: true }).click();
+      await workspace.locator('[data-renewal-progress]:visible').waitFor();
+      const retrying = await snapshot();
+      comparePanels(loading, retrying, `${width}px 重试`);
+      gate.resolve();
+      await workspace.getByRole('table', { name: '待续费订单' }).waitFor();
+      const ready = await snapshot();
+      comparePanels(loading, ready, `${width}px 成功`);
+      assert.equal(await workspace.locator('tbody tr[data-row-id]').count(), populated ? 1 : 0);
+      await capture('ready');
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      const frames = await page.evaluate(() => { window.loadingLayoutDone = true; return window.loadingLayoutFrames; });
+      for (const frame of frames) {
+        assert(frame.panels.every(Boolean), '进度导航和订单区始终同屏挂载');
+        for (const panel of frame.panels.filter(p => p.visible)) {
+          assert(panel.width > 0 && panel.x >= frame.grid.x - 1 && panel.x + panel.width <= frame.grid.x + frame.grid.width + 1,
+            '每帧面板均在工作区内');
+        }
+      }
+      results.push({ route: routeName, width, dark, populated, loading, failed, retrying, ready, frames: frames.length });
+      assert.deepEqual(errors, []);
+      assert.deepEqual(writes, []);
+      assert.deepEqual(traffic.external, []);
+      assert.deepEqual(traffic.unavailable, []);
+    } finally { gate.resolve(); await context.close(); }
+  }
+  if (output) await writeFile(join(output, 'renewal-loading-layout.json'), JSON.stringify(results, null, 2));
 });
 
 test('首读期间连续切换产品仍保留双栏，迟到响应不改变当前路由，重读失败保留表单草稿', async t => {

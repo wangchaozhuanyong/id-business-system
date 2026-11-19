@@ -137,8 +137,8 @@
     `<div class="form-grid${paired ? ' form-grid--paired' : ''}">${html}</div>`;
   const formFooter = (form, label = '核对并保存', durable = false) =>
     `<span class="footnote">${durable ? '保存到数据库' : '仅更新演示内存，刷新重置'}</span>${button('取消', 'drawer-close')}<button class="button primary" form="${form}" type="submit">${esc(label)}</button>`;
-  const search = (placeholder = '搜索名称、备注或编号', query = state.query || '', id = 'ops-list-search') =>
-    `<div class="search-field">${icon('search')}<input data-auto-search id="${id}" aria-label="搜索当前列表" value="${esc(query)}" placeholder="${esc(placeholder)}" /></div>`;
+  const search = (placeholder = '搜索名称、备注或编号', query = state.query || '', id = 'ops-list-search', description = placeholder) =>
+    `<div class="search-field">${icon('search')}<input data-auto-search id="${id}" aria-label="搜索当前列表" aria-description="${esc(description)}" value="${esc(query)}" placeholder="${esc(placeholder)}" /></div>`;
   const { defaultPageSize, pageSizes } = window.IDPagination || {};
   const renderPagination = (options) => window.IDPagination?.render(options) || '';
   function finishDrawer() {
@@ -868,12 +868,14 @@
     return true;
   }
   function selectOnlineView(nav, view) {
+    const changed = activeOnlineView !== view;
     activeOnlineView = view;
     for (const control of nav?.querySelectorAll('[data-view]') || []) {
       const selected = control.dataset.view === view;
       control.setAttribute('aria-pressed', String(selected));
       control.classList.toggle('active', selected);
     }
+    if (nav && changed) api.revealActiveTab(nav);
   }
   function preserveLockedRecharge(view) {
     const frame = lockedRechargeFrame(view);
@@ -992,6 +994,7 @@
     if (root) {
       const themeKey = frame.dataset.viewGroup === 'bit' ? 'theme' : 'idTheme';
       root.dataset[themeKey] = integrationTheme();
+      if (frame.dataset.viewGroup === 'workspace') window.IDTabNavigation.attachWorkspace(root.ownerDocument);
     }
     resizeRechargeFrame(frame, height);
     request.frame = null;
@@ -1772,7 +1775,7 @@
       [['', '全部模块'], ['order', '订单'], ['account', '账号库存'], ['mailbox', '邮箱库存'], ['customer', '客户资料'], ['tenant', '租户资料'],
         ['renewal', '续费管理'], ['finance', '财务']], auditModule)}</select>` : '';
     return header('操作记录', '按北京时间查询业务操作和恢复回执。输入 # 加日志编号可以定位单条记录。') +
-      `<section class="panel"><div class="toolbar list-filters"><div class="toolbar-left">${filter}${modules}${search('搜索操作人、操作、订单号或资料编号', list.query, auditSearchId(view))}<span class="toolbar-meta">${scopeLabel}</span></div><div class="toolbar-right" data-page-actions>${button('列设置', 'column-settings', '', 'columns', `data-table-id="${tableId}"`)}${button(list.error ? '重试读取' : '刷新日志', 'ops-audit-refresh')}</div></div>${auditPageContent(view, columns, tableId)}</section>`;
+      `<section class="panel"><div class="toolbar list-filters"><div class="toolbar-left">${filter}${modules}${search('操作人、操作、单号或编号', list.query, auditSearchId(view), '搜索操作人、操作、订单号或资料编号')}<span class="toolbar-meta">${scopeLabel}</span></div><div class="toolbar-right" data-page-actions>${button('列设置', 'column-settings', '', 'columns', `data-table-id="${tableId}"`)}${button(list.error ? '重试读取' : '刷新日志', 'ops-audit-refresh')}</div></div>${auditPageContent(view, columns, tableId)}</section>`;
   }
   function renderLoginLogs() {
     const canManageSecurity = !localData?.authRequired || state.actor?.role === 'super';
@@ -1795,14 +1798,15 @@
       { id: 'action', label: '事件' }
     ];
     return title + tabs + `<section class="panel">
-      <div class="toolbar"><div class="toolbar-left">${search('搜索账号、事件或编号（最近 1,000 条）', auditViews.login.query)}<span class="toolbar-meta">检索最近 1,000 条</span></div>
+      <div class="toolbar"><div class="toolbar-left">${search('账号、事件或编号', auditViews.login.query)}<span class="toolbar-meta">检索最近 1,000 条</span></div>
       <div class="toolbar-right">${button(auditViews.login.error ? '重试读取' : '刷新日志', 'ops-audit-refresh')}</div></div>
       ${auditPageContent('login', columns, '系统登录日志')}
     </section>`;
   }
   function phraseRows() {
-    return localData ? toolbox?.current()?.data.phrases || [] : phrases;
+    return localData ? (toolbox?.current()?.data.phrases || []).filter(ordinaryPhrase) : phrases;
   }
+  const ordinaryPhrase = row => !window.IDRenewalRemarks?.isTemplate(row);
   function showPhrases() {
     state.toolsTab = '话术文案';
     if (localData && !toolbox?.current()) {
@@ -1886,14 +1890,14 @@
     phraseOrdering = true;
     try {
       await changePhrases(toolbox?.current()?.version, (rows) => {
-        const active = rows.filter((row) => !row.deleted);
+        const active = rows.filter((row) => !row.deleted && ordinaryPhrase(row));
         const from = active.findIndex((row) => row.id === id);
         const to = active.findIndex((row) => row.id === target);
         if (from < 0 || to < 0) throw new Error('找不到需要排序的话术');
         const [item] = active.splice(from, 1);
         active.splice(to, 0, item);
         let next = 0;
-        rows.forEach((row, index) => { if (!row.deleted) rows[index] = active[next++]; });
+        rows.forEach((row, index) => { if (!row.deleted && ordinaryPhrase(row)) rows[index] = active[next++]; });
       }, '调整话术顺序', () => {
         if (local.phrasePage === startingPage && local.phraseSort === 'custom' &&
             !local.showDeleted && !local.phraseQuery.trim()) {

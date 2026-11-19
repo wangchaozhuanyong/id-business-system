@@ -155,6 +155,21 @@ test('ID authorization page shows the account locally, posts consent once, and c
       });
       const page = await context.newPage();
       await page.goto(origin + '/recharge/authorize#' + fixtureReference + '.' + fixtureTicket);
+      const help = page.getByLabel('充值授权说明');
+      const note = page.getByRole('note');
+      const statusLabel = page.locator('#authorization-status');
+      const before = await statusLabel.boundingBox();
+      assert(!(await note.isVisible()));
+      if (width <= 900) {
+        const target = await help.boundingBox();
+        assert(target.width >= 44 && target.height >= 44);
+      }
+      await help.click();
+      await note.waitFor();
+      assert.deepEqual(await statusLabel.boundingBox(), before);
+      await page.keyboard.press('Escape');
+      assert(!(await note.isVisible()));
+      assert(await help.evaluate(node => node === document.activeElement));
       const form = page.locator('#authorization-form');
       const textarea = page.getByLabel('目标 ChatGPT 账号授权资料');
       await textarea.fill(JSON.stringify({ user: { id: 'synthetic', email: 'local@example.test' },

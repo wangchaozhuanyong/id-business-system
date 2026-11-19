@@ -331,7 +331,7 @@
         data-action="employee-statistics-tab" data-tab="${key}" aria-pressed="${filter.tab === key}">${name}</button>`).join('');
     return heading + `<section class="panel" id="employee-statistics">
       <div class="content-toolbar employee-statistics-header">
-      <div class="employee-statistics-scroll" tabindex="0" role="group" aria-label="员工统计视图和筛选">
+      <div class="employee-statistics-scroll" data-tab-scrollport tabindex="0" role="group" aria-label="员工统计视图和筛选">
       <div class="tabs" role="group" aria-label="员工统计视图">${tabs}</div>
       <div class="toolbar toolbar--inline list-filters" role="group" aria-label="员工统计筛选">
         ${filter.tab === 'work' ? `<label class="toolbar-date" for="employee-statistics-date">统计日期

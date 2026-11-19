@@ -12,6 +12,7 @@ import { stageConfirmedRenewalDebit } from '../server/apple-funding.mjs';
 import { cardTypeDocument } from '../server/card-management.mjs';
 import { subscriptionDomain, subscriptionAccountId } from '../server/subscription-management.mjs';
 import { createRenewalHandoff, renewalHandoffDomain, renewalHandoffPath } from '../server/renewal-handoff.mjs';
+import { checkWriteReceipt, describeWriteOperation } from '../server/write-operation.mjs';
 import { renewalSidebar } from '../server/renewal-sidebar.mjs';
 import { localBusinessRequest } from './helpers/local-business-request.mjs';
 
@@ -36,6 +37,7 @@ const initialOrder = { id: 'original', ownerId: actors.employee.id, owner: actor
 const emptyCommerce = { customers: [{ id: 'customer', name: '测试客户', active: true }],
   tenants: [], operating: [], rentBatches: [], logs: [] };
 const finishFields = { start: '2026-11-13T12:00', expiry: '2026-12-13T11:00', saleAmount: '160.00', saleCurrency: 'CNY' };
+const submissionRemark = '请按客户确认的套餐办理续费';
 
 function fixture(t, orders = [initialOrder], setup, database = ':memory:') {
   const store = createLocalBusinessStore(database);
@@ -45,13 +47,13 @@ function fixture(t, orders = [initialOrder], setup, database = ':memory:') {
   const data = { ...structuredClone(emptyCommerce), orders: structuredClone(orders) };
   if (setup) setup(store, data);
   else store.saveBatch([{ domain: 'commerce', version: 0, data }]);
-  return { store, close, send: sender(store), submit: { action: 'submit', confirmed: true, orders: [{ id: orders[0].id, version: 1 }] } };
+  return { store, close, send: sender(store), submit: { action: 'submit', confirmed: true, remark: submissionRemark,
+    orders: [{ id: orders[0].id, version: 1 }] } };
 }
 
-function sender(store) {
+function sender(store, orderOwners = () => Object.values(actors), client = { get: async () => ({ cards: [] }) }) {
   const handler = createRenewalHandoff({ store, publicOrigin: origin, clock: () => Date.UTC(2026, 10, 13, 5),
-    getAuth: () => ({ orderOwners: () => Object.values(actors),
-      teamFor: () => [actors.employee] }), client: { get: async () => ({ cards: [] }) } });
+    getAuth: () => ({ orderOwners, teamFor: () => [actors.employee] }), client });
   return async function send(actor, value, { view = 'staff', itemId, operationId = randomUUID(), source = origin } = {}) {
     const request = Readable.from(value ? [Buffer.from(JSON.stringify(value))] : []);
     request.method = value ? 'POST' : 'GET';
@@ -62,6 +64,134 @@ function sender(store) {
     return { status, data };
   }
 }
+
+test('续费送财务校验可接手账号和必填备注，保留旧记录及提交回执', async () => {
+  const oldSubmit = { action: 'submit', orders: [{ id: initialOrder.id, version: 1 }] };
+  const oldOperationId = randomUUID();
+  const oldOperation = describeWriteOperation(oldOperationId, actors.super, ['renewal', oldSubmit]);
+  const receipts = new Map([[oldOperation.domain, { ...oldOperation, domains: [renewalHandoffDomain] }]]);
+  const legacy = { id: 'legacy-returned', version: 2, status: 'returned', order: { id: initialOrder.id },
+    submittedBy: actors.super };
+  let queue = { version: 1, data: { items: [legacy] } };
+  const commerce = { version: 1, data: { ...emptyCommerce, orders: [initialOrder] } };
+  const store = {
+    featureDocument: domain => domain === renewalHandoffDomain ? queue : { version: 0 },
+    load: domain => domain === 'commerce' ? commerce : { data: {} },
+    auditFeature() {},
+    orderCardFingerprint: () => 'fixture-card-fingerprint',
+    replayWrite: operation => checkWriteReceipt(receipts.get(operation.domain), operation),
+    saveRenewalQueue(version, commerceVersion, items, { operation }) {
+      assert.equal(version, queue.version);
+      assert.equal(commerceVersion, commerce.version);
+      queue = { version: version + 1, data: { items } };
+      receipts.set(operation.domain, { fingerprint: operation.fingerprint, domains: [renewalHandoffDomain] });
+    }
+  };
+  let availableAccounts = [actors.super, actors.employee, { ...actors.finance, active: false }, { id: 'admin', role: 'admin' }];
+  const send = sender(store, () => availableAccounts.filter(account => account.active !== false));
+  const command = { ...oldSubmit, remark: ' ' + submissionRemark + ' ' };
+  const unavailable = await send('super', null);
+  assert.equal(unavailable.data.canSubmitToFinance, false);
+  assert.equal(unavailable.data.items[0].remark, undefined);
+  assert.equal((await send('employee', null)).data.canSubmitToFinance, true);
+  const blocked = await send('super', command);
+  assert.deepEqual(blocked, { status: 409, data: { error: '当前没有其他账号可以处理这笔续费，请先启用财务账号。' } });
+  assert.equal((await send('super', oldSubmit, { operationId: oldOperationId })).status, 200);
+  assert.equal(queue.version, 1);
+
+  availableAccounts = [actors.super, actors.finance];
+  assert.equal((await send('super', null)).data.canSubmitToFinance, true);
+  for (const remark of [undefined, '  ', '字'.repeat(161), '甲\n乙', firstCard]) {
+    const invalid = await send('super', { ...oldSubmit, remark });
+    assert.equal(invalid.status, 400);
+    assert.match(invalid.data.error, /提交备注/);
+  }
+  assert.equal(queue.version, 1);
+  const operationId = randomUUID();
+  assert.equal((await send('super', command, { operationId })).status, 200);
+  assert.equal(queue.data.items[0].remark, submissionRemark);
+  const financeView = await send('finance', null, { view: 'finance' });
+  assert.equal(financeView.data.canSubmitToFinance, undefined);
+  assert.equal(financeView.data.items[0].remark, submissionRemark);
+  assert.equal(financeView.data.items[0].canTake, true);
+  assert.equal((await send('super', null)).data.items[0].remark, submissionRemark);
+  availableAccounts = [actors.super];
+  assert.equal((await send('super', command, { operationId })).status, 200);
+  assert.equal(queue.version, 2);
+});
+
+test('仅财务续费工作台读取核实的原卡号和实付卡号', async () => {
+  const poolOrder = { ...initialOrder, id: 'pool-order', email: 'pool@example.test',
+    cardId: 'recharge:1', proMaterialMode: 'pool_card', proCardNumber: '', paymentId: '4242' };
+  const unknownOrder = { ...poolOrder, id: 'unknown-order', email: 'unknown@example.test', cardId: 'recharge:2' };
+  const archivedOrder = { ...poolOrder, id: 'archived-order', email: 'archive@example.test', cardId: 'recharge:3' };
+  const conflictOrder = { ...poolOrder, id: 'conflict-order', email: 'conflict@example.test', cardId: 'recharge:4' };
+  const archive = { cards: { 'recharge:3': { number: firstCard }, 'recharge:4': { number: replacement } } };
+  const orders = [initialOrder, poolOrder, unknownOrder, archivedOrder, conflictOrder];
+  const commerce = { version: 1, data: { ...emptyCommerce, orders } };
+  let queue = { version: 0, data: { items: [] } };
+  const audits = [];
+  const store = {
+    featureDocument: domain => domain === renewalHandoffDomain ? queue : {
+      version: 0, data: domain === 'order-card-archive' ? archive : null
+    },
+    load: domain => domain === 'commerce' ? commerce : { data: {} },
+    auditFeature(domain, version, metadata) { audits.push({ domain, version, metadata }); },
+    orderCardFingerprint: number => createHash('sha256').update(number || '').digest('hex'),
+    replayWrite: () => false,
+    saveRenewalQueue(version, _commerceVersion, items) { queue = { version: version + 1, data: { items } }; }
+  };
+  let poolReads = 0;
+  let poolUnavailable = false;
+  const send = sender(store, undefined, { async get(path) {
+    assert.equal(path, '/api/admin/cards');
+    poolReads++;
+    if (poolUnavailable) throw new Error('offline');
+    return { cards: [{ id: 1, is_active: 1, last4: '4242', card_number: firstCard },
+      { id: 2, is_active: 1, last4: '4242', card_number: firstCard },
+      { id: 2, is_active: 1, last4: '4242', card_number: firstCard }] };
+  } });
+  assert.equal((await send('employee', { action: 'submit', remark: submissionRemark,
+    orders: orders.map(order => ({ id: order.id, version: order.version })) })).status, 200);
+  const [paid] = queue.data.items;
+  Object.assign(paid, { status: 'paid', funding: { payment: '银行卡', number: replacement,
+    last4: '1111', actor: actors.finance, amount: '20', currency: 'USD' } });
+  const staff = (await send('employee', null)).data.items;
+  assert(!JSON.stringify(staff).includes(firstCard));
+  assert(!JSON.stringify(staff).includes(replacement));
+  assert.equal((await send('employee', null, { view: 'finance' })).status, 403);
+  assert.equal(poolReads, 0);
+  const finance = await send('finance', null, { view: 'finance' });
+  assert.equal(finance.status, 200);
+  assert.equal(poolReads, 1);
+  const [manual, pool, unknown, archived, conflict] = finance.data.items;
+  assert.equal(manual.originalCardNumber, firstCard);
+  assert.equal(manual.cardNumber, replacement);
+  assert.equal(pool.originalCardNumber, firstCard);
+  assert.equal(unknown.originalCardNumber, undefined);
+  assert.equal(unknown.order.originalLast4, '4242');
+  assert.equal(archived.originalCardNumber, firstCard);
+  assert.equal(conflict.originalCardNumber, undefined);
+  assert.equal(audits.length, 1);
+  assert(!JSON.stringify(audits).includes(firstCard));
+  assert(!JSON.stringify(audits).includes(replacement));
+  poolUnavailable = true;
+  const degraded = await send('super', null, { view: 'finance' });
+  assert.equal(degraded.status, 200);
+  assert.equal(degraded.data.items[1].originalCardNumber, undefined);
+  assert.equal(degraded.data.items[3].originalCardNumber, firstCard);
+
+  const successor = { ...initialOrder, id: 'joined-renewal', previousOrderId: initialOrder.id,
+    proCardNumber: replacement, paymentId: '1111', start: '2026-11-13T11:00', expiry: '2026-12-12T11:00' };
+  const correctedCard = '5555555555551111';
+  orders.push({ ...successor, proCardNumber: correctedCard, corrections: [{ previous: successor }] });
+  paid.status = 'complete';
+  paid.newOrderId = successor.id;
+  delete paid.funding.number;
+  const historical = await send('finance', null, { view: 'finance' });
+  assert.equal(historical.data.items[0].cardNumber, replacement);
+  assert(!JSON.stringify(historical.data.items).includes(correctedCard));
+});
 
 test('拒绝续费按原单持久记录、停止提醒并兼容历史恢复', async t => {
   const copy = id => ({ ...initialOrder, id, email: id + '@example.test', orderNo: 'OD-' + id });
@@ -93,7 +223,7 @@ test('拒绝续费按原单持久记录、停止提醒并兼容历史恢复', as
   assert.deepEqual(receipt, { status: 200, data: { saved: true, count: 2 } });
   assert.deepEqual(await send('employee', cmd, { operationId }), receipt);
   assert.equal((await send('employee', cmd)).status, 409);
-  assert.equal((await send('employee', { ...cmd, action: 'submit' })).status, 409);
+  assert.equal((await send('employee', { ...cmd, action: 'submit', remark: submissionRemark })).status, 409);
   assert.deepEqual((await send('employee', null)).data.candidates.map(order => order.id), ['third', 'restored']);
   const archived = await list('supervisor');
   assert.deepEqual(archived.map(row => row.id), ['first', 'second', 'historical']);
@@ -106,7 +236,7 @@ test('拒绝续费按原单持久记录、停止提醒并兼容历史恢复', as
   assert.deepEqual(saved.data.logs.slice(2), previous.data.logs);
   assert.equal(saved.version, previous.version + 1);
   assert.equal((await send('finance', null, { view: 'finance' })).data.items.length, 0);
-  assert.equal((await send('employee', { action: 'submit', orders: [{ id: 'third', version: 1 }] })).status, 200);
+  assert.equal((await send('employee', { action: 'submit', remark: submissionRemark, orders: [{ id: 'third', version: 1 }] })).status, 200);
   assert.equal((await send('employee', { ...cmd, orders: [{ id: 'third', version: 1 }] })).status, 409);
   const queuedDecision = { id: 'queued-decline', type: '拒续费', entityId: 'third' };
   assert.throws(() => store.saveBatch([{ domain: 'commerce', version: saved.version, action: '拒续费',
@@ -123,7 +253,7 @@ test('拒绝续费按原单持久记录、停止提醒并兼容历史恢复', as
 test('拒绝续费与送财务并发只接受一次，重开数据库后仍可按原决定办理', async t => {
   const database = await databaseFixture(t);
   const { close, send, submit } = fixture(t, [initialOrder], undefined, database);
-  const operationId = randomUUID(), decline = { ...submit, action: 'decline' };
+  const operationId = randomUUID(), decline = { action: 'decline', confirmed: true, orders: submit.orders };
   const [refused, forwarded] = await Promise.all([
     send('employee', decline, { operationId }), send('employee', submit)
   ]);
@@ -179,6 +309,99 @@ test('续费日志定位同一笔申请和订单，沿用原接口退回且保�
   assert.deepEqual(store.load('appleBalance'), ledger);
 });
 
+test('提交人可撤回未接手的续费，原申请保留且可重送', async t => {
+  const { store, send, submit } = fixture(t);
+  const priorCommerce = store.load('commerce');
+  const priorLedger = store.load('appleBalance');
+  assert.equal((await send('employee', submit)).status, 200);
+  const [pending] = (await send('employee', null)).data.items;
+  const withdraw = { action: 'withdraw', id: pending.id, version: 1 };
+  assert.equal(pending.canWithdraw, true);
+  assert.equal((await send('super', null)).data.items[0].canWithdraw, undefined);
+  assert.equal((await send('super', withdraw)).status, 403);
+  assert.equal((await send('finance', withdraw)).status, 403);
+  assert.equal((await send('employee', { ...withdraw, version: 2 })).status, 409);
+  const operationId = randomUUID();
+  assert.equal((await send('employee', withdraw, { operationId })).status, 200);
+  assert.equal((await send('employee', withdraw, { operationId })).status, 200);
+  const staff = (await send('employee', null)).data;
+  assert.equal(staff.items[0].status, 'withdrawn');
+  assert.equal(staff.items[0].remark, submissionRemark);
+  assert.equal(staff.items[0].canWithdraw, undefined);
+  assert.match(staff.items[0].withdrawnAt, /^2026-11-13T/);
+  assert.equal(staff.candidates[0].id, initialOrder.id);
+  const [closed] = (await send('finance', null, { view: 'finance' })).data.items;
+  assert.equal(closed.canTake, false);
+  assert.equal(closed.originalCardNumber, undefined);
+  assert.equal((await send('finance', { action: 'claim', id: pending.id, version: 2 })).status, 409);
+  const [log] = store.audit().filter(row => row.action === 'renewal_withdraw');
+  assert.equal(store.audit().filter(row => row.action === 'renewal_withdraw').length, 1);
+  const audit = await localBusinessRequest(store, 'audit/' + log.id + '/recovery', {
+    actor: actors.super, publicOrigin: origin
+  });
+  assert.deepEqual(audit.body.renewal, { id: pending.id, state: 'withdrawn' });
+  assert.equal((await send('employee', submit)).status, 200);
+  assert.deepEqual((await send('employee', null)).data.items.map(row => row.status), ['pending', 'withdrawn']);
+  assert.deepEqual(store.load('commerce'), priorCommerce);
+  assert.deepEqual(store.load('appleBalance'), priorLedger);
+});
+
+test('撤回与接手互斥，待核对付款时不能撤回，财务回复随已处理记录回传', async t => {
+  const { store, send, submit } = fixture(t);
+  assert.equal((await send('employee', submit)).status, 200);
+  const [{ id }] = (await send('employee', null)).data.items;
+  const withdraw = version => ({ action: 'withdraw', id, version });
+  const claim = version => ({ action: 'claim', id, version });
+  const attempts = await Promise.all([send('finance', claim(1)), send('employee', withdraw(1))]);
+  assert.deepEqual(attempts.map(result => result.status), [200, 409]);
+  assert.equal((await send('employee', null)).data.items[0].canWithdraw, undefined);
+  assert.equal((await send('employee', withdraw(2))).status, 409);
+  assert.equal((await send('finance', { action: 'transfer', id, version: 2, review: true,
+    reason: '需要交接核对付款情况' })).status, 200);
+  assert.equal((await send('employee', null)).data.items[0].canWithdraw, undefined);
+  assert.equal((await send('employee', withdraw(3))).status, 409);
+  assert.equal((await send('financeOther', claim(3))).status, 200);
+  const payment = { action: 'paid', id, version: 4, amount: '20.00', currency: 'USD', cardMode: 'none' };
+  for (const financeRemark of [null, firstCard, '不可\n换行', '字'.repeat(161)])
+    assert.equal((await send('financeOther', { ...payment, financeRemark })).status, 400);
+  assert.equal(store.featureDocument(renewalHandoffDomain).data.items[0].status, 'processing');
+  assert.equal((await send('financeOther', { ...payment, financeRemark: '  已添加银行卡金额  ' })).status, 200);
+  assert.equal((await send('employee', withdraw(5))).status, 409);
+  for (const [role, view] of [['employee', 'staff'], ['finance', 'finance']]) {
+    const [paid] = (await send(role, null, { view })).data.items;
+    assert.equal(paid.remark, submissionRemark);
+    assert.equal(paid.financeRemark, '已添加银行卡金额');
+    assert.equal(paid.status, 'paid');
+  }
+  assert.equal((await send('employee', { action: 'finish', id, version: 5, ...finishFields })).status, 200);
+  assert.equal((await send('employee', null)).data.items[0].financeRemark, '已添加银行卡金额');
+  assert(!JSON.stringify(store.audit()).includes('已添加银行卡金额'));
+});
+
+test('登记拒续与送财务互斥，撤回后可登记拒续', async t => {
+  const { store, send, submit } = fixture(t);
+  const refuse = () => {
+    const { version, data } = store.load('commerce');
+    const action = '拒续费';
+    data.logs.unshift({ id: randomUUID(), type: action, entityId: initialOrder.id,
+      detail: initialOrder.orderNo, at: '2026-11-13 13:05', actor: actors.super.name, actorId: actors.super.id });
+    return localBusinessRequest(store, 'commerce', { method: 'PUT', body: { version, data, action },
+      actor: actors.super, publicOrigin: origin, operationId: randomUUID() });
+  };
+  assert.equal((await send('employee', submit)).status, 200);
+  const [pending] = (await send('employee', null)).data.items;
+  const blocked = await refuse();
+  assert.equal(blocked.status, 409, blocked.body.error);
+  assert.match(blocked.body.error, /已进入续费办理/);
+  assert.deepEqual(store.load('commerce').data.logs, []);
+  assert.equal((await send('employee', { action: 'withdraw', id: pending.id, version: pending.version })).status, 200);
+  const declined = await refuse();
+  assert.equal(declined.status, 200, declined.body.error);
+  assert.equal((await send('employee', submit)).status, 409);
+  assert.deepEqual((await send('super', null)).data.candidates.map(({ id, reminderState }) => [id, reminderState]),
+    [[initialOrder.id, 'refused']]);
+});
+
 test('confirmed staff handoff, exclusive finance claim, verified card replacement and one new order', async t => {
   const { store, send, submit } = fixture(t);
   const original = structuredClone(store.load('commerce').data.orders[0]);
@@ -232,6 +455,9 @@ test('confirmed staff handoff, exclusive finance claim, verified card replacemen
   assert.equal(data.orders[0].ownerId, actors.employee.id);
   const receipt = store.featureDocument(renewalHandoffDomain).data.items[0];
   assert.equal(receipt.status, 'complete');
+  const [completedView] = (await send('finance', null, { view: 'finance' })).data.items;
+  assert.equal(completedView.originalCardNumber, firstCard);
+  assert.equal(completedView.cardNumber, replacement);
   assert(!JSON.stringify(receipt).includes(replacement));
   assert(!JSON.stringify(receipt).includes(firstCard));
   assert(!JSON.stringify(store.audit()).includes(replacement));
@@ -623,7 +849,7 @@ test('已完成的续费可直接入账，有进行中记录或已有同一期�
   const direct = { ...initialOrder, id: 'direct-copy', orderNo: 'OD-DIRECT-RENEWAL', ...finishFields,
     previousOrderId: undefined, paidConfirmed: false, receiptConfirmed: false };
   const repeated = { ...snapshot.data, orders: [...snapshot.data.orders, direct] };
-  const queued = await send('employee', { action: submit.action, orders: submit.orders });
+  const queued = await send('employee', { action: submit.action, orders: submit.orders, remark: submit.remark });
   assert.equal(queued.status, 200);
   for (const domain of ['commerce', 'batch']) {
     const bypass = await put(repeated, '新增独立订单', domain);

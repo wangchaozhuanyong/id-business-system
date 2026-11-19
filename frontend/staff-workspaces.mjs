@@ -53,19 +53,18 @@ export function createPage(A, definition) {
     return heading('本人客户', '可按姓名或微信查找。', 'staff-customer-help') +
       table('本人客户', [['name', '姓名'], ['wechat', '微信'], ['actions', '操作', row =>
         row.active === false ? '已停用' : rowAction('登记订单', 'order', row.id)]], contacts.slice(0, 20)) +
-      heading('本人订单', '登记续费后会新增一笔订单，保留原记录。', 'staff-orders-help') +
+      heading('本人订单', '需要续费时，前往快速操作中的续费管理。', 'staff-orders-help') +
       list(matching, current, '本人订单', [
         ['orderNo', '订单编号'], ['product', '产品'], ['plan', '套餐'],
         ['customer', '客户', row => E(customerNames.get(row.customerId) || '—')],
-        ['expiry', '到期时间'], ['actions', '操作', row => !row.draft && !row.cancelled && !row.subscriptionEnded
-          ? rowAction('提交续费', 'renewal', row.id) : '—']
+        ['expiry', '到期时间']
       ]);
   }
 
   function customers(current) {
     const draft = current.draft.customer || {};
     return form('customer', input('客户姓名', 'name', draft.name, 'required maxlength="80"') +
-      input('客户微信', 'wechat', draft.wechat, 'maxlength="120"'), '保存客户') + search('按客户、微信、订单或邮箱搜索') +
+      input('客户微信', 'wechat', draft.wechat, 'maxlength="120"'), '保存客户') + search('客户、微信、订单或邮箱', '按客户、微信、订单或邮箱搜索') +
       `<div data-staff-list>${customerTable(current.result, current)}</div>`;
   }
 
@@ -82,10 +81,10 @@ export function createPage(A, definition) {
         [['name', '名称'], ['endpoint', '地址'], ['countryCode', '国家或地区'], ['protocol', '连接方式']]);
   }
 
-  const searchField = (placeholder, current) => `<div class="search-field">${A.icon('search')}
-    <input type="search" id="staff-list-search" data-auto-search data-staff-query aria-label="${E(placeholder)}" value="${E(current.query || '')}"
+  const searchField = (placeholder, current, label = placeholder) => `<div class="search-field">${A.icon('search')}
+    <input type="search" id="staff-list-search" data-auto-search data-staff-query aria-label="${E(label)}" value="${E(current.query || '')}"
     placeholder="${E(placeholder)}" /></div>`;
-  const search = placeholder => `<div class="toolbar"><div class="toolbar-left">${searchField(placeholder, active.current)}</div></div>`;
+  const search = (placeholder, label) => `<div class="toolbar list-filter-toolbar"><div class="toolbar-left">${searchField(placeholder, active.current, label)}</div></div>`;
 
   function registrationList(current) {
     const { mailboxes = [], accounts = [] } = current.result.data || {};
@@ -160,11 +159,11 @@ export function createPage(A, definition) {
   const cardPolicyLabel = current => current.result.strict ? '仅使用已配置套餐的卡' : '未配置套餐的卡按现有规则使用';
 
   function cardToolbar() {
-    const filter = (label, key, choices, selected) => `<label class="finance-filter">${label}${
+    const filter = (label, key, choices, selected) => `<label class="list-filter-field">${label}${
       A.select('staff-card-' + key, choices, selected).replace('<select', `<select data-card-filter="${key}" aria-label="${key === 'status' ? '银行卡状态' : '允许套餐'}"`)}</label>`;
-    return `<div class="toolbar toolbar--inline finance-toolbar"><div class="toolbar-left">${searchField('按尾号查找银行卡', state)}${
+    return `<div class="toolbar toolbar--inline finance-toolbar list-filter-toolbar"><div class="toolbar-left">${searchField('按尾号查找银行卡', state)}<div class="list-filter-fields">${
       filter('状态', 'status', [['', '全部状态'], ...['可用', '暂缓使用', '已停用', '不可用'].map(value => [value, value])], state.cardStatus || '')}${
-      filter('套餐', 'plan', [['', '全部套餐'], ...plans, ['unconfigured', '未配置套餐']], state.cardPlan || '')}</div>
+      filter('套餐', 'plan', [['', '全部套餐'], ...plans, ['unconfigured', '未配置套餐']], state.cardPlan || '')}</div></div>
       <div class="toolbar-right">${control('刷新', 'refresh')}${control('取卡设置', 'card-settings', 'disabled')}
       <button type="button" class="button primary" data-staff-action="card-import-open" disabled>导入银行卡</button></div></div>`;
   }
@@ -489,7 +488,6 @@ export function createPage(A, definition) {
       message(view, '');
       return load(view);
     }
-    if (action === 'renewal') return window.IDRenewalHandoff?.select(id);
     if (action === 'card-import-open') return cardImport(view);
     if (action === 'card-settings') return cardSettings(view);
     if (action === 'order') return orderForm(view, id);

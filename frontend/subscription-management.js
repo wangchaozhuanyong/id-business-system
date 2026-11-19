@@ -204,10 +204,10 @@
       `<section class="panel" id="subscriptions-panel">
         <div class="list-controls subscription-controls">
           <div class="tabs" role="tablist" aria-label="订阅列表">${tabs}</div>
-          <form class="toolbar" id="subscription-filter" aria-label="筛选订阅" novalidate>
+          <form class="toolbar list-filter-toolbar" data-list-query id="subscription-filter" aria-label="筛选订阅" novalidate>
             <div class="toolbar-left"><div class="search-field">${A.icon('search')}${A.input('subscription-query', f.input,
-              'maxlength="254" aria-label="搜索客户、邮箱、订单或卡尾号" placeholder="搜索客户、邮箱、订单或卡尾号"')}</div>
-              ${name === 'all' ? `<select id="subscription-product" aria-label="产品">${A.options(
+              'maxlength="254" aria-label="搜索客户、邮箱、订单或卡尾号" placeholder="客户、邮箱、单号或尾号"')}</div>
+              <div class="list-filter-fields">${name === 'all' ? `<select id="subscription-product" aria-label="产品">${A.options(
                 [['all', '全部产品'], ...Object.values(labels).filter(value => value !== 'all')], f.product || 'all')}</select>` : ''}
               ${archiveScopes.has(selectedScope()) ? '' : `<select id="subscription-status" aria-label="订阅状态">${A.options(
                 [['', '全部状态'], ...Object.entries(states).map(([status, label]) =>
@@ -215,9 +215,9 @@
               <select id="subscription-sort" aria-label="排序">${A.options([
                 ['recent', recentSortLabels[selectedScope()] || '最新订阅优先'],
                 ['expiry_asc', '到期时间升序'], ['expiry_desc', '到期时间降序'], ['account_asc', '账号排序']
-              ], selectedSort())}</select>
-              <button class="button" type="submit">搜索</button></div>
-            <div class="toolbar-right" data-page-actions>${button('刷新', 'subscriptions-refresh')}</div>
+              ], selectedSort())}</select></div></div>
+            <div class="toolbar-right" data-page-actions><button class="button" type="submit">搜索</button>
+              ${button('刷新', 'subscriptions-refresh', '', '', 'data-mobile-visible')}</div>
           </form>
         </div><div class="design-async-region"><div id="subscription-read-status" role="status" hidden></div>
           <div id="subscription-read-error" role="status" hidden></div><div id="subscription-list" data-pagination-table>${listMarkup()}</div>

@@ -25,9 +25,9 @@ test('a renewal template conflict shows the latest value and keeps the draft on 
   });
   const page = await context.newPage();
   page.setDefaultTimeout(6_000);
-  await page.goto(origin + '/#/workspace/renewals/reminders');
-  await page.locator('#main').getByRole('button', { name: '更多操作', exact: true }).click();
-  await page.getByRole('menuitem', { name: '续费提醒话术', exact: true }).click();
+  await page.goto(origin + '/#/workspace/renewals');
+  await page.getByRole('group', { name: '续费设置', exact: true })
+    .getByRole('button', { name: '续费提醒话术', exact: true }).click();
   const drawer = page.locator('#drawer'), input = drawer.getByRole('textbox', { name: '提醒话术', exact: true });
   const save = drawer.getByRole('button', { name: '保存话术', exact: true });
   const review = drawer.getByRole('button', { name: '重新读取并核对', exact: true });

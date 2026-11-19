@@ -30,8 +30,6 @@ const localFixtures = {
   'staff/business-proxies': { version: 0, items: [] },
   'staff/customer-service': { version: 2, data: { customers: [{ id: 'customer-1', name: '本人客户', active: true }],
     orders: [{ ...order, customerId: 'customer-1' }] } },
-  renewals: { version: 1, items: [], candidates: [{ id: order.id, version: 1, number: order.orderNo, account: order.email,
-    product: order.product, plan: order.plan, customer: '本人客户', payment: order.payment, expiry: order.expiry }] },
   'auth/security/network': { policy: { version: 0, mode: 'observe', entries: [] }, connectable: false, challengeEnabled: false },
   'auth/security/device-requests': { items: [] },
   'auth/security/activity': { items: [] }
@@ -96,9 +94,10 @@ test('role navigation uses business language and finance order operations remain
         await page.getByRole('button', { name: '动态验证码' }).click();
         await page.getByText('654321', { exact: true }).waitFor();
       } else if (role === 'employee') {
-        await page.getByRole('button', { name: '提交续费' }).click();
-        await page.getByRole('heading', { name: '续费管理', exact: true }).waitFor();
-        assert.equal(await page.locator('[data-select="renewal-handoff"]').isChecked(), true);
+        await page.getByRole('heading', { name: '本人订单', exact: true }).waitFor();
+        await page.getByText(order.orderNo, { exact: true }).waitFor();
+        assert.equal(await page.getByRole('button', { name: /^(提交续费|提交给财务|登记已完成续费)$/ }).count(), 0);
+        assert.equal(await page.evaluate(() => window.IDDesignAPI.canVisit('workspace/renewals')), true);
       }
       assert.deepEqual(errors, [], role);
       assert.deepEqual(access.external, [], role);

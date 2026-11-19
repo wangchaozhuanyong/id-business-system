@@ -22,14 +22,15 @@ export function createPage(A, definition) {
   const date = value => Number.isFinite(Date.parse(value)) ? clock.format(new Date(value)) : '—';
   const render = () => A.header(definition.label, definition.description) +
     '<section class="panel design-async-region finance-workspace" data-finance-reconciliation>' +
-    '<form class="toolbar toolbar--inline finance-toolbar finance-date-filter" data-billing-filter><div class="toolbar-left">' +
+    '<form class="toolbar toolbar--inline list-filter-toolbar finance-toolbar finance-date-filter" data-billing-filter><div class="toolbar-left"><div class="list-filter-fields">' +
     A.field('开始日期', 'staff-from', A.input('staff-from', draft.from, 'type="date"')) +
     A.field('结束日期', 'staff-to', A.input('staff-to', draft.to, 'type="date"')) +
+    '</div><div class="list-filter-fields">' +
     A.field('卡号后四位', 'billing-last4', A.input('billing-last4', draft.last4,
       'inputmode="numeric" pattern="[0-9]{4}" maxlength="4" placeholder="全部银行卡"')) +
     A.field('套餐', 'billing-plan', A.select('billing-plan', [['', '全部套餐'], ...Object.entries(plans)], draft.plan)) +
     A.field('扣款状态', 'billing-status', A.select('billing-status', [['', '全部状态'], ...Object.entries(statuses)], draft.status)) +
-    '</div><div class="toolbar-right"><button type="submit" class="button primary">查询账单</button>' + A.button('刷新', 'billing-refresh') +
+    '</div></div><div class="toolbar-right"><button type="submit" class="button primary">查询账单</button>' + A.button('刷新', 'billing-refresh') +
     '<a class="button" href="#/orders/statistics">查看订单统计</a></div></form>' +
     '<p class="finance-feedback" data-billing-progress role="status" hidden></p>' +
     '<p class="finance-feedback field-error" data-billing-error role="alert" hidden></p>' +

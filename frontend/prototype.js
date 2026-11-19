@@ -833,7 +833,7 @@ function confirmAction(title, message, callback, label = '确认操作') {
 }
 function openDrawer(title, description, body, footer = '', context = '', layout = {}) {
   const drawer = $('#drawer');
-  const tabScroll = captureTabScroll(drawer);
+  const tabScroll = window.IDTabNavigation.capture(drawer);
   window.IDSearchInput?.suspend(drawer);
   if (drawer.open) {
     preserveDrawerDraft();
@@ -851,29 +851,8 @@ function openDrawer(title, description, body, footer = '', context = '', layout 
   normalizeDrawerActions(drawer);
   drawer.showModal();
   window.IDSearchInput?.restore(drawer);
-  restoreTabScroll(drawer, tabScroll);
+  window.IDTabNavigation.restore(drawer, tabScroll);
   requestAnimationFrame(() => { if (drawer.open) updateMobileDatePreviews(drawer); });
-}
-function tabScrollKey(tabs, index) {
-  return tabs.getAttribute('aria-label') || tabs.id ||
-    `${tabs.querySelector('[data-action]')?.dataset.action || 'tabs'}:${index}`;
-}
-function captureTabScroll(root) {
-  return new Map($$('.tabs', root).map((tabs, index) => [tabScrollKey(tabs, index), tabs.scrollLeft]));
-}
-function revealActiveTab(tabs) {
-  const active = tabs.querySelector('.tab.active, [role="tab"][aria-selected="true"], [aria-current="page"]');
-  if (!active) return;
-  const container = tabs.getBoundingClientRect();
-  const bounds = active.getBoundingClientRect();
-  if (bounds.left < container.left) tabs.scrollLeft -= container.left - bounds.left;
-  else if (bounds.right > container.right) tabs.scrollLeft += bounds.right - container.right;
-}
-function restoreTabScroll(root, previous = new Map()) {
-  $$('.tabs', root).forEach((tabs, index) => {
-    tabs.scrollLeft = previous.get(tabScrollKey(tabs, index)) || 0;
-    revealActiveTab(tabs);
-  });
 }
 function normalizeDrawerActions(drawer) {
   const body = $('.drawer-body', drawer);
@@ -1268,7 +1247,7 @@ function restoreMobileEntryFooter() {
   $('#mobile-entry-actions').hidden = true;
 }
 function mountMobileListActions(region) {
-  const sourceButtons = group => Array.from(group.children).filter(node => node.matches('button:not(.primary):not(.mobile-secondary-action):not(.mobile-list-actions):not([type="submit"]):not([hidden])'));
+  const sourceButtons = group => Array.from(group.children).filter(node => node.matches('button:not(.primary, .mobile-secondary-action, .mobile-list-actions, [type="submit"], [data-mobile-visible], [hidden])'));
   const prepare = (group, sources) => {
     const trigger = document.createElement('button');
     trigger.type = 'button'; trigger.className = 'button mobile-list-actions';
@@ -1288,7 +1267,7 @@ function mountMobileListActions(region) {
     for (const group of groups) if (Array.from(group.children).every(node => node.matches('button'))) group.classList.add('mobile-merged-actions');
   }
   for (const group of $$('.toolbar-right', region)) {
-    if (group.closest('form,.form-panel,.entry-records') || group.classList.contains('mobile-merged-actions') || $('.mobile-list-actions', group)) continue;
+    if (group.closest('form:not([data-list-query]),.form-panel,.entry-records') || group.classList.contains('mobile-merged-actions') || $('.mobile-list-actions', group)) continue;
     const sources = sourceButtons(group);
     if (sources.length >= 2) prepare(group, sources);
   }
@@ -1841,12 +1820,12 @@ function render() {
   if ($('#main')?.dataset.layoutRoute === state.route &&
       window.IDChangeSync?.preserveEditor?.() && $('#main form[novalidate]')) return;
   window.IDSearchInput?.suspend(activePageRegion());
-  closeActionMenu();
+  if (!activeActionMenu?.anchor.closest('dialog[open]')) closeActionMenu();
   restoreMobileEntryFooter();
   const renderVersion = ++layoutRenderVersion;
   const main = $('#main');
   const sameRoute = main.dataset.layoutRoute === state.route;
-  const tabScroll = sameRoute ? captureTabScroll(activePageRegion()) : new Map();
+  const tabScroll = sameRoute ? window.IDTabNavigation.capture(activePageRegion()) : state.viewDrafts.get(state.route)?.tabScroll;
   const entryFormScroll = sameRoute
     ? $(entryFormSelector, activePageRegion())?.scrollTop
     : state.viewDrafts.get(state.route)?.entryFormScroll;
@@ -1940,7 +1919,7 @@ function render() {
   updateTableLayout?.();
   const entryForm = $(entryFormSelector, region);
   if (entryForm && entryFormScroll) entryForm.scrollTop = entryFormScroll;
-  restoreTabScroll(region, tabScroll);
+  window.IDTabNavigation.restore(region, tabScroll, sameRoute);
   window.IDSearchInput?.restore(region);
   if (tableScroll.size) {
     for (const table of $$('.table-viewport > table[data-table]', region)) {
@@ -1976,6 +1955,7 @@ function navigate(event) {
     'workspace/account-submit': 'workspace/account-extract',
     'workspace/mail-submit': 'workspace/mail-extract',
     'workspace/my-recharge-codes': 'workspace/recharge-codes',
+    'workspace/renewals/reminders': 'workspace/renewals',
     'plugins/sheets': 'data/sheets',
     'data-management/claude-google-subscriptions': 'subscriptions/claude',
     'data-management/bank-cards': 'subscriptions/bank-cards',
@@ -2031,6 +2011,7 @@ function navigate(event) {
         mailTab: state.mailTab,
         claudeTab: state.claudeTab,
         scrollY: mobileSidebarScroll ?? window.scrollY,
+        tabScroll: window.IDTabNavigation.capture(activePageRegion()),
         entryFormScroll: $(entryFormSelector, activePageRegion())?.scrollTop
       });
     state.route = next;
@@ -3667,7 +3648,7 @@ window.IDDesignAPI = {
   activePageRegion,
   clearPageRegions,
   restorePendingPageScroll,
-  revealActiveTab,
+  revealActiveTab: window.IDTabNavigation.reveal,
   $,
   $$,
   esc: escapeHtml,

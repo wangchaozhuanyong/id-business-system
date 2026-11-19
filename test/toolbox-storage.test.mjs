@@ -13,6 +13,7 @@ const phrase = {
   text: '只属于个人账号的固定话术',
   deleted: false
 };
+const renewalRemark = { id: 'renewal-remark-personal', title: '请升级 Pro', text: '请升级 Pro', deleted: false };
 const empty = { version: 0, data: { shortcuts: [], phrases: [] } };
 
 test('toolbox keeps account data private across reopen and records no content in audits', async () => {
@@ -23,7 +24,7 @@ test('toolbox keeps account data private across reopen and records no content in
   try {
     store = createLocalBusinessStore(databasePath);
     assert.deepEqual(store.loadToolbox(alice), empty);
-    const saved = store.saveToolbox({ version: 0, data: { shortcuts: [shortcut], phrases: [phrase] } }, alice);
+    const saved = store.saveToolbox({ version: 0, data: { shortcuts: [shortcut], phrases: [phrase, renewalRemark] } }, alice);
     store.saveToolbox({ version: 0, data: { shortcuts: [], phrases: [] } });
     assert.deepEqual(store.loadToolbox(bob), empty);
     assert.deepEqual(store.loadToolbox(), { ...empty, version: 1 });
@@ -40,7 +41,7 @@ test('toolbox keeps account data private across reopen and records no content in
     assert(Number.isFinite(Date.parse(saved.data.phrases[0].updatedAt)));
     assert.deepEqual(store.loadToolbox(bob), empty);
     assert.equal(store.audit().find((record) => record.actorId === alice.id)?.domain, 'toolbox');
-    for (const content of [shortcut.url, phrase.text]) {
+    for (const content of [shortcut.url, phrase.text, renewalRemark.text]) {
       assert.equal((await readFile(databasePath)).includes(Buffer.from(content)), false);
       assert.equal(JSON.stringify(store.audit()).includes(content), false);
     }
@@ -91,6 +92,9 @@ test('toolbox rejects invalid records and strips untrusted ownership fields', ()
     assert.throws(() => save([shortcut, shortcut], []), { status: 400 });
     assert.throws(() => save([], [{ ...phrase, deleted: 'false' }]), { status: 400 });
     assert.throws(() => save([], [{ ...phrase, text: 'x'.repeat(5001) }]), { status: 400 });
+    for (const text of ['a'.repeat(161), '升级 Pro\n第二行', '测试 1234 1234 1234 1234']) {
+      assert.throws(() => save([], [{ ...renewalRemark, text }]), { status: 400 });
+    }
     const tooMany = Array.from({ length: 21 }, (_, index) => ({
       ...shortcut,
       id: `shortcut-${index}`

@@ -262,6 +262,7 @@ const orderFeatureDomains = new Set([
   cardFreezeDocument, 'system-monitoring-config', 'system-monitoring-state', subscriptionDomain, orderExpenseDomain, renewalHandoffDomain
 ]);
 const renewalAuditLabels = { renewal_submit: '提交续费给财务', renewal_claim: '领取续费申请',
+  renewal_withdraw: '撤回续费申请',
   renewal_paid: '登记续费实付', renewal_return: '退回续费申请', renewal_finish: '提交续费新订单',
   renewal_transfer: '移交续费待处理', renewal_review_source: '核对续费原订单与付款' };
 const financeCardPendingDomain = 'finance-card-pending';
@@ -657,6 +658,9 @@ function checkToolbox({ version, data }) {
     ) {
       throw new LocalDataError(400, '话术需填写 1 至 60 字标题、1 至 5000 字内容及有效状态');
     }
+    if (!row.deleted && row.id.startsWith('renewal-remark-') &&
+        (text.length > 160 || /[\p{Cc}\p{Cf}]/u.test(text) || /(?:\d[ -]?){12}/.test(text)))
+      throw new LocalDataError(400, '常用备注每条最多 160 字，请检查内容和格式');
     return { title, text, deleted: row.deleted };
   });
   return { shortcuts, phrases };
@@ -1275,11 +1279,12 @@ export function createLocalBusinessStore(databasePath) {
     if (domain === renewalHandoffDomain) {
       const matches = (data?.items || []).filter(row => row.id === targetId);
       const row = matches.length === 1 && matches[0];
-      if (!row?.order?.id || !['pending', 'processing', 'paid', 'returned', 'complete'].includes(row.status))
+      if (!row?.order?.id || !['pending', 'processing', 'paid', 'returned', 'withdrawn', 'complete'].includes(row.status))
         return unavailable('找不到唯一的续费办理记录，请到续费管理核对。');
       const orders = readDocument('commerce').data?.orders || [];
       const matchingOrder = orders.filter(order => order.id === row.order.id);
       const message = row.status === 'returned' ? '这笔申请已退回，可查看退回记录。'
+        : row.status === 'withdrawn' ? '提交人已撤回这笔续费申请，可查看办理记录。'
         : row.status === 'complete' ? '这笔续费已生成新订单，可查看办理记录。'
           : row.status === 'paid' ? '这笔申请已有实付记录，请在财务续费核对原单和付款依据。'
             : row.paymentReview === true ? '付款结果待核对，请由经办人核对付款凭证。'
@@ -2368,7 +2373,7 @@ export function createLocalBusinessStore(databasePath) {
         const commerce = incoming.get('commerce') ?? priorCommerce;
         if (writes.some(write => write.domain === 'commerce' && write.action === '拒续费')) {
           const queued = new Set((current(renewalHandoffDomain)?.items || [])
-            .filter(item => item.status !== 'returned').map(item => item.order.id));
+            .filter(item => !['returned', 'withdrawn'].includes(item.status)).map(item => item.order.id));
           const previous = new Set((priorCommerce?.logs || []).map(entry => entry.id));
           if ((commerce.logs || []).some(entry => entry.type === '拒续费' && !previous.has(entry.id) && queued.has(entry.entityId)))
             throw new LocalDataError(409, '原订单已进入续费办理，请核对办理记录');

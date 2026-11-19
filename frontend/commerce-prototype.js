@@ -1052,11 +1052,13 @@
     });
     return `<div class="tabs" role="tablist"${attributes ? ` ${attributes}` : ''}>${items.join('')}</div>`;
   }
-  function searchField(placeholder) {
-    return `<div class="search-field">${A.icon('search')}<input data-auto-search id="commerce-search" aria-label="搜索当前列表" maxlength="500" placeholder="${E(placeholder)}" value="${E(S.query || '')}" /></div>`;
+  function searchField(placeholder, description = placeholder) {
+    return `<div class="search-field">${A.icon('search')}<input data-auto-search id="commerce-search" aria-label="搜索当前列表" title="${E(description)}" maxlength="500" placeholder="${E(placeholder)}" value="${E(S.query || '')}" /></div>`;
   }
-  function toolbar(placeholder, actions = '', actionAttributes = '') {
-    return `<div class="toolbar"><div class="toolbar-left">${searchField(placeholder)}</div><div class="toolbar-right"${actionAttributes ? ` ${actionAttributes}` : ''}>${actions}</div></div>`;
+  function toolbar(placeholder, { actions = '', filters = '', description = placeholder } = {}) {
+    return `<div class="toolbar list-filter-toolbar"><div class="toolbar-left">${searchField(placeholder, description)}
+      ${filters ? `<div class="list-filter-fields">${filters}</div>` : ''}</div>
+      <div class="toolbar-right" data-page-actions>${actions}</div></div>`;
   }
   function property(label, content, raw = false, action = '') {
     return `<div class="property-row"><span>${E(label)}</span><strong>${raw ? content : E(content || '—')}</strong>${action}</div>`;
@@ -1789,7 +1791,7 @@
       ['apple-ids', '按苹果 ID', 'subscriptions/apple-ids']
     ].map(([key, label, route]) => `<a class="button ${key === selected ? 'primary' : ''}" href="#/${route}"
       ${key === selected ? 'aria-current="page"' : ''}>${label}</a>`).join('')}</nav><div class="subscription-center-content"${
-        selected === 'bank-cards' ? '' : ' tabindex="0" role="group" aria-label="当前视图统计"'}>${content}</div></section>`;
+        selected === 'bank-cards' ? ' data-tab-scrollport' : ' tabindex="0" role="group" aria-label="当前视图统计"'}>${content}</div></section>`;
   }
 
   function renewalActions(series, subscriptionId = '', extra = {}) {
@@ -1800,8 +1802,7 @@
     const list = [];
     if (localData?.renewalContactCopy) list.push(action('复制订阅信息', 'commerce-renewal-contact', attrs));
     if (localData?.authRequired) {
-      list.push(action('登记已完成续费', 'commerce-renewal-record', attrs, 'primary'),
-        action('提交给财务', 'commerce-renewal-open', attrs));
+      if (S.route === renewalRoute) list.push(action('登记已完成续费', 'commerce-renewal-record', attrs, 'primary'));
       return list.join('');
     }
     if (series.payment === '银行卡' && localData?.renewalCard) {
@@ -1869,17 +1870,126 @@
   }
 
   function refreshRenewalHistory() {
-    const selected = renewalWorkbenchRows().find(row => row.id === renewalSelected);
-    const region = $('[data-renewal-history]');
-    if (S.route === renewalRoute && selected && region)
-      region.outerHTML = renderRenewalHistory(selected, orderEvaluationTime());
+    const { selected, region } = currentRenewalHistory();
+    if (selected && region) region.outerHTML = renderRenewalHistory(selected, orderEvaluationTime());
   }
 
-  function renderRenewalDetail(selected, evaluatedAt) {
+  function renewalWorktableDetail(orderId) {
+    const reminder = renewalProjection().reminders.find(row => row.order.id === orderId);
+    const order = reminder?.order || orders.find(row => row.id === orderId);
+    if (!order) return undefined;
+    const identity = reminder?.identity || order.customerId;
+    return { ...order, order, identity, expiry: subscriptionTime(order.expiry), ...reminder,
+      ...customerForOrder(order, identity) };
+  }
+
+  function currentRenewalHistory() {
+    const details = S.route === renewalHome && $('#drawer[open] [data-renewal-order-preview]');
+    if (details) return {
+      selected: renewalWorktableDetail(details.dataset.renewalOrderPreview),
+      region: $('[data-renewal-history]', details)
+    };
+    return S.route === renewalRoute ? {
+      selected: renewalWorkbenchRows().find(row => row.id === renewalSelected),
+      region: $('[data-renewal-history]')
+    } : {};
+  }
+
+  const renewalWorktableDetailReads = new WeakMap();
+  let renewalDetailOpening;
+  async function loadRenewalWorktableDetailCard(panel, refresh = false) {
+    const id = panel?.dataset.renewalOrderPreview;
+    const selected = id && renewalWorktableDetail(id);
+    if (!selected || selected.state === 'processed' || selected.order.payment !== '银行卡' || !localData?.renewalCard) return;
+    const actorId = currentOperator().id, request = {};
+    renewalWorktableDetailReads.set(panel, request);
+    const current = () => panel.isConnected && panel.closest('dialog')?.open && S.route === renewalHome &&
+      currentOperator().id === actorId && renewalWorktableDetailReads.get(panel) === request &&
+      orders.find(row => row.id === id)?.version === selected.order.version;
+    const notice = $('[data-renewal-preview-notice]', panel);
+    try {
+      const resource = await localData.queries.read('renewal-card-resource', id, () =>
+        localData.renewalCard({ action: 'prepare', orderId: id }), { refresh });
+      if (!current()) return;
+      if (resource?.orderId !== id) throw new Error('续费用卡回执无效');
+      const funding = $('[data-renewal-preview-funding]', panel);
+      const tail = $('[data-renewal-preview-tail]', panel);
+      if (funding) funding.textContent = resource.estimate?.usd ? resource.estimate.usd + ' USD' : '未核算';
+      if (tail && /^\d{4}$/.test(resource.last4 || '')) tail.textContent = '尾号 ' + resource.last4;
+      notice.hidden = true;
+      return true;
+    } catch (error) {
+      if (!current()) return;
+      if ([401, 403].includes(error.status)) {
+        $('[data-renewal-preview-funding]', panel).textContent = '未核算';
+        $('[data-renewal-preview-tail]', panel).textContent = '待核对';
+      }
+      notice.hidden = false;
+      return false;
+    }
+  }
+
+  async function openRenewalWorktableDetails(order, trigger) {
+    if (!localData?.authRequired || S.route !== renewalHome || !canManageOrders() || !order?.id) return;
+    const request = {}, actorId = currentOperator().id, drawerContext = S.drawerContext;
+    renewalDetailOpening = request;
+    const current = () => renewalDetailOpening === request && S.route === renewalHome &&
+      currentOperator().id === actorId && S.drawerContext === drawerContext && canManageOrders();
+    const ready = await A.withActionFeedback(trigger, () => loadLocalCommerce(true), { pending: '正在读取订单资料…' });
+    if (!current()) return;
+    if (!ready) return A.notify('订单资料暂时无法读取，请重试');
+    const selected = renewalWorktableDetail(order.id);
+    if (!selected) return A.notify('此订单已变化，请刷新后重试');
+    A.openDrawer('续费详情', '查看客户、当前订阅和历史订阅。',
+      `<section class="renewal-workbench-detail" aria-label="当前选中客户" data-renewal-order-preview="${E(order.id)}">${renderRenewalDetail(selected, orderEvaluationTime(), { readOnly: true })}</section>`,
+      A.button('关闭', 'drawer-close'), 'renewal-detail:' + order.id);
+    void loadRenewalWorktableDetailCard($('#drawer[open] [data-renewal-order-preview]'));
+  }
+
+  async function renewalWorktableActions(order) {
+    if (!localData?.authRequired || !canManageOrders() || !order?.id) return '';
+    const attrs = `data-id="${E(order.id)}"`;
+    const pending = ['upcoming', 'expired'].includes(order.reminderState);
+    if (order.reminderState === 'renewed' && localPhase !== 'ready') await loadLocalCommerce(true);
+    const missing = orders.find(row => row.id === order.id);
+    const fillAccount = pending && (missing
+      ? manualOrderDetailsMissing(missing, customers, orderEvaluationTime())?.account : !order.account);
+    const completed = order.reminderState === 'renewed' ? renewalWorktableDetail(order.id)?.completed : undefined;
+    return (pending ? A.button('登记已完成续费', 'commerce-renewal-record', '', '', attrs) : '') +
+      (pending && localData.renewalContactCopy ? A.button('复制订阅信息', 'commerce-renewal-contact', '', '', attrs) : '') +
+      (order.payment === '银行卡' && localData.subscriptionCardDetails ? A.button('用卡详情', 'commerce-renewal-card-open', '', '', attrs) : '') +
+      (fillAccount ? A.button(order.product === 'Grok' ? '补账号' : '补邮箱', 'commerce-order-fill-details', '', '', attrs) : '') +
+      (order.reminderState === 'refused' ? A.button('恢复提醒', 'commerce-renewal-restore', '', '', attrs)
+        : pending ? A.button('拒续费', 'commerce-renewal-refuse', 'danger', '', attrs) : '') +
+      (completed ? renewalExpiryAction(completed) : '');
+  }
+
+  async function runRenewalWorktableAction(choice, trigger) {
+    if (!localData?.authRequired || S.route !== renewalHome || !canManageOrders()) return;
+    const { id, action } = choice.dataset;
+    if (!id) return;
+    if (action === 'commerce-renewal-contact') return copyRenewalContact(choice, trigger);
+    if (!['commerce-renewal-card-open', 'commerce-order-fill-details', 'commerce-renewal-record', 'commerce-renewal-expiry', 'commerce-renewal-refuse',
+      'commerce-renewal-restore'].includes(action)) return;
+    const current = currentRenewalAction(trigger);
+    const ready = await A.withActionFeedback(trigger, () => loadLocalCommerce(true), { pending: '正在读取订单资料…' });
+    if (!current()) return;
+    if (!ready) return A.notify('订单资料暂时无法读取，请重试');
+    if (action === 'commerce-renewal-card-open') openRenewalCardDrawer(id);
+    else if (action === 'commerce-order-fill-details') manualOrderDetailsEditor(id);
+    else if (action === 'commerce-renewal-record') {
+      if (!renewalCardCanRenew(id)) return A.notify('此订单已变化，请刷新后重试');
+      A.go(renewalOrderPrefix + encodeURIComponent(id));
+    }
+    else if (action === 'commerce-renewal-expiry') openRenewalExpiry(id);
+    else changeRenewalDecision(id, action === 'commerce-renewal-restore');
+  }
+
+  function renderRenewalDetail(selected, evaluatedAt, { readOnly = false } = {}) {
     let detail = A.empty('选择一笔续费', '从待办中选择客户后可查看资料及操作。');
     if (selected) {
       const { order, completed, refused } = selected;
-      const fillAccount = canManageOrders() && manualOrderDetailsMissing(order, customers, evaluatedAt)?.account
+      const fillAccount = !readOnly && canManageOrders() && manualOrderDetailsMissing(order, customers, evaluatedAt)?.account
         ? A.button(order.product === 'Grok' ? '补账号' : '补邮箱', 'commerce-order-fill-details', '', '', `data-id="${E(order.id)}"`)
         : '';
       const tail = bankCardStatus(order)?.last4 || (/^\d{4}(?:\d{2})?$/.test(order.paymentId) ? order.paymentId.slice(-4) : '');
@@ -1887,13 +1997,13 @@
       const series = { sourceId: order.id, payment: order.payment, appleIdId: order.appleIdId,
         availability: resource?.availability ?? bankCardStatus(order)?.state,
         hasCard: resource?.hasCard ?? Boolean(order.cardId || tail || order.proCardNumber) };
-      detail = `<div class="renewal-workbench-heading">${A.textAction('返回待办', 'commerce-renewal-back', '', 'renewal-mobile-back')}
+      detail = `<div class="renewal-workbench-heading">${readOnly ? '' : A.textAction('返回待办', 'commerce-renewal-back', '', 'renewal-mobile-back')}
         <h2>${E(selected.name)}</h2>${A.tag(selected.state === 'processed' ? refused ? '已拒续' : '已续费' :
           formatExpiryDuration(selected.expiry, evaluatedAt), selected.state === 'expired' ? 'danger' : 'warning')}</div>
         <div class="renewal-workbench-fields">${[
           ['账号', orderIdentity(order) || '未登记'], ['套餐', [order.product, order.plan].filter(Boolean).join(' ')],
           ['订阅时间', dateInput(order.start).replace('T', ' ') || '未登记'],
-          ['到期时间', beijingClock.format(selected.expiry)],
+          ['到期时间', Number.isFinite(selected.expiry) ? beijingClock.format(selected.expiry) : '待核对'],
           ...(completed?.rechargeCompletedAt ? [
             ['充值码续费时间', dateInput(completed.rechargeCompletedAt).replace('T', ' ')],
             ['续费后到期', completed.expiry ? dateInput(completed.expiry).replace('T', ' ') : '待核对']
@@ -1901,18 +2011,20 @@
           ['续费方式', order.payment || '未登记'],
           ...(order.payment === '银行卡' ? [['银行卡', (resource?.last4 || tail) ? '尾号 ' + (resource?.last4 || tail) : '未绑定'],
             ['预计备款', resource?.estimate?.usd ? resource.estimate.usd + ' USD' : '未核算']] : [])
-        ].map(([label, value]) => property(label, value, false,
-          label === '银行卡' && canManageOrders() && localData?.subscriptionCardDetails
+        ].map(([label, value]) => readOnly && ['银行卡', '预计备款'].includes(label)
+          ? `<div class="property-row"><span>${label}</span><strong data-renewal-preview-${label === '银行卡' ? 'tail' : 'funding'}>${E(value)}</strong></div>`
+          : property(label, value, false, label === '银行卡' && canManageOrders() && localData?.subscriptionCardDetails
             ? A.textAction('用卡详情', 'commerce-renewal-card-open', `data-id="${E(order.id)}"`) : '')).join('')}${subscriptionContacts(
           Object.fromEntries(orderContactFields.map(([field, channel]) => [channel, selected[field]])))}</div>
-        ${workbenchFailure === order.id ? `<p class="inline-notice warning" role="status">续费用卡资料读取失败。${
+        ${readOnly ? '<p class="inline-notice warning" role="status" data-renewal-preview-notice hidden>续费用卡资料暂时无法读取，请稍后重试。</p>'
+          : workbenchFailure === order.id ? `<p class="inline-notice warning" role="status">续费用卡资料读取失败。${
           resource ? '已保留上次读取的资料。' : ''}${
           A.textAction('重读用卡资料', 'commerce-renewal-resource-refresh', `data-id="${E(order.id)}"`)}</p>` : ''}
-        <div class="toolbar renewal-workbench-actions">${renewalActions(series, '', { processed: selected.state === 'processed', buttons: true })}${fillAccount}${
+        <div class="toolbar renewal-workbench-actions">${readOnly ? '' : renewalActions(series, '', { processed: selected.state === 'processed', buttons: true })}${fillAccount}${
           A.button('原单', 'commerce-order-detail', '', '', `data-id="${E(order.id)}"`)}${
           completed ? A.button('新订单', 'commerce-order-detail', '', '', `data-id="${E(completed.id)}"`) +
-            renewalExpiryAction(completed) :
-          A.button(refused ? '恢复提醒' : '拒续费', refused ? 'commerce-renewal-restore' : 'commerce-renewal-refuse',
+            (readOnly ? '' : renewalExpiryAction(completed)) :
+          readOnly ? '' : A.button(refused ? '恢复提醒' : '拒续费', refused ? 'commerce-renewal-restore' : 'commerce-renewal-refuse',
             refused ? '' : 'danger', '', `data-id="${E(order.id)}"`)}</div>${renderRenewalHistory(selected, evaluatedAt)}`;
     }
     return detail;
@@ -2006,9 +2118,9 @@
     });
   }
 
-  async function copyRenewalContact(node) {
-    const current = currentRenewalAction(node);
-    await A.withActionFeedback(node, async () => {
+  async function copyRenewalContact(node, trigger = node) {
+    const current = currentRenewalAction(trigger);
+    await A.withActionFeedback(trigger, async () => {
       const { text } = await localData.renewalContactCopy({
         orderId: node.dataset.id, id: node.dataset.subscriptionId || undefined
       });
@@ -2171,7 +2283,7 @@
   const renewalCardDrawers = new WeakMap();
   function renewalCardDrawerCurrent(panel) {
     const binding = renewalCardDrawers.get(panel);
-    return Boolean(binding && S.route === renewalRoute && panel.isConnected && panel.closest('dialog')?.open &&
+    return Boolean(binding && S.route === renewalHome && panel.isConnected && panel.closest('dialog')?.open &&
       binding.actorId === currentOperator().id && canManageOrders());
   }
   function renewalCardActionCurrent(panel, node) {
@@ -2287,8 +2399,8 @@
     }
   }
   function openRenewalCardDrawer(id) {
-    if (S.route !== renewalRoute || !canManageOrders()) return;
-    const reminder = renewalProjection().reminders.find(row => row.order.id === id);
+    if (S.route !== renewalHome || !canManageOrders()) return;
+    const reminder = renewalWorktableDetail(id);
     if (reminder?.order.payment !== '银行卡') return;
     const { order, identity, completed, refused } = reminder;
     const contact = customerForOrder(order, identity);
@@ -2638,8 +2750,9 @@
       columnSettingsButton(frozen ? 'commerce-frozen-cards' : subscriptionCardTab === 'groups' || healthTab
         ? 'commerce-bank-card-groups' : 'commerce-subscription-cards')) + subscriptionCenterNav('bank-cards', tabs(
       choices, subscriptionCardTab, 'commerce-subscription-card-tab',
-      'aria-label="银行卡列表"')) + `<section class="panel">${toolbar(frozen ? '搜索卡号、卡类型、序列号、冻结原因或操作人'
-        : '搜索客户、账号、订单、卡号、卡类型或序列号', frozen ? '' : filters)}${
+      'aria-label="银行卡列表"')) + `<section class="panel">${toolbar(frozen ? '卡号、类型或操作人' : '客户、账号、订单或卡号', {
+        filters: frozen ? '' : filters, description: frozen ? '搜索卡号、卡类型、序列号、冻结原因或操作人'
+          : '搜索客户、账号、订单、卡号、卡类型或序列号' })}${
       subscriptionStatusError ? `<p class="footnote" role="status">${E(subscriptionStatusError)} ${
         A.textAction('重试', 'commerce-subscription-card-refresh')}</p>` : ''}${
       subscriptionEstimateError ? `<p class="footnote" role="status">${E(subscriptionEstimateError)} ${
@@ -3015,11 +3128,11 @@
     ])];
     const filter = (name, label, values) =>
       select(`loss-${name}`, values, view[name], `aria-label="${label}"`);
-    return toolbar('搜索客户、联系方式、历史账号或订单号',
-      filter('plan', '产品和套餐', choices) + (tab ? '' :
+    return toolbar('客户、账号或订单号', { description: '搜索客户、联系方式、历史账号或订单号',
+      filters: filter('plan', '产品和套餐', choices) + (tab ? '' :
         filter('age', '停用时长', [['', '全部停用时长'], ['recent', '近 7 天'], ['month', '7–29 天'], ['older', '30 天及以上']]) +
         filter('count', '订阅次数', [['', '全部订阅次数'], ['one', '1 次'], ['few', '2–3 次'], ['many', '4 次及以上']]) +
-        filter('sort', '排序方式', [['recent', '最近停止优先'], ['count', '订阅次数优先']])));
+        filter('sort', '排序方式', [['recent', '最近停止优先'], ['count', '订阅次数优先']])) });
   }
   function retentionRecordMatches(fact, key) {
     return !key || retentionPlanKey(fact.order.product) === key ||
@@ -3243,10 +3356,13 @@
     }, () => {
       cleanClose(form.dataset.commerceDraft);
       A.render();
+      if (!tenant && S.route === renewalHome) void window.IDRenewalHandoff?.refreshWorktable?.();
       A.notify(`已设为提前 ${duration}提醒`);
     }, [], undefined, tenant ? $(`button[form="${form.id}"]`) : undefined);
   }
   function changeRenewalDecision(id, restore) {
+    if (S.route !== renewalHome || !canManageOrders()) return;
+    const actorId = currentOperator().id;
     const canChange = () => renewalProjection().reminders.some((row) =>
       row.order.id === id && (restore ? row.refused : row.state !== 'processed'));
     if (!canChange()) return;
@@ -3256,9 +3372,10 @@
       `${order.orderNo} · ${order.email}。${
         restore ? '恢复后按当前到期时间计算提醒。' : '确认客户不续这笔订单，停止该单提醒。'
       }`, () => {
-        if (S.route !== renewalRoute || !canChange()) return;
+        if (S.route !== renewalHome || currentOperator().id !== actorId || !canChange()) return;
         persistCommerce(action, () => log(action, id, order.orderNo), () => {
           A.render();
+          void window.IDRenewalHandoff?.refreshWorktable?.();
           A.notify(restore ? '已恢复提醒' : '已登记拒续费');
         });
       }, '确认');
@@ -3584,9 +3701,9 @@
       ? { title: '暂无符合条件的提醒', description: '可调整搜索或租户筛选。' }
       : processed ? { title: '暂无已处理记录', description: '已完成的续费跟进会记录在这里。' }
         : { title: '暂无待处理续费', description: '进入提醒时间且尚未处理的账号会列在这里。' };
-    return toolbar('搜索租户、客户、账号或联系方式',
-      `<label for="commerce-tenant-renewal-filter">租户</label>${select('tenant-renewal-filter', choices, view.tenantId)}` +
-      columnSettingsButton(tableId), 'data-page-actions') +
+    return toolbar('租户、客户或账号', { description: '搜索租户、客户、账号或联系方式',
+      filters: `<div class="list-filter-field"><label for="commerce-tenant-renewal-filter">租户</label>${select('tenant-renewal-filter', choices, view.tenantId)}</div>`,
+      actions: columnSettingsButton(tableId) }) +
       A.table(columns, A.pageRows(rows, processed ? row => row.record.at : row => row.expiry, processed ? 'desc' : 'asc'),
         '', tableId, empty) + A.pagination(rows.length);
   }
@@ -3786,7 +3903,7 @@
           `data-kind="${tenant ? 'tenant' : 'customer'}"`
         )
       ) +
-      `<section class="panel">${listTabs}${toolbar(`搜索${noun}、联系方式、标签、历史业务或录入人`, columnSettingsButton(`commerce-${tenant ? 'tenants' : 'customers'}`), 'data-page-actions')}${tableList(columns, displayRows, `commerce-${tenant ? 'tenants' : 'customers'}`, '', row => row.createdAt)}</section>`
+      `<section class="panel">${listTabs}${toolbar(`${noun}、联系方式或标签`, { description: `搜索${noun}、联系方式、标签、历史业务或录入人`, actions: columnSettingsButton(`commerce-${tenant ? 'tenants' : 'customers'}`) })}${tableList(columns, displayRows, `commerce-${tenant ? 'tenants' : 'customers'}`, '', row => row.createdAt)}</section>`
     );
   }
   function customerSourceOptions(selected) {
@@ -5381,7 +5498,7 @@
       (personal ? personalEntitlementFields(v, existing) : '') +
       `</div>` +
       `<div class="order-financial-groups commerce-span-all${separatePeriod ? ' order-financial-groups--amounts' : ''}">
-        <div class="order-financial-group">
+        <div class="order-financial-group order-money-group">
           ${orderAmountHeading('代付', true, v)}
           ${field(!auto && gptCardPayment(product, v('payment')) ? '国家／地区' : '代付币种', 'paidCurrency',
             auto || keepApplePayment ? input('paidCurrency', v('paidCurrency') ? currencyLabel(v('paidCurrency')) : '',
@@ -5390,7 +5507,7 @@
                 v('paidCurrency'), existing), v('paidCurrency')), !keepApplePayment)}
           ${field('实际代付金额', 'paidAmount', orderAmountInput(v, 'paidAmount', auto || keepApplePayment), !keepApplePayment)}
         </div>
-        <div class="order-financial-group">
+        <div class="order-financial-group order-money-group">
           ${orderAmountHeading('售卖', false, v)}
           ${field('售卖币种', 'saleCurrency', select('saleCurrency', keepSavedOption(currencyChoices(codes, v('saleCurrency'), product), v('saleCurrency'), existing), v('saleCurrency')), true)}
           ${field('售卖金额', 'saleAmount', orderAmountInput(v, 'saleAmount'), true)}
@@ -6146,7 +6263,7 @@
       A.header(
         renewal ? (isClaude({ product }) ? 'Claude 提交订单' : product + ' 提交订单') : '订单提交',
         '已收款并开通后登记。填写客户、两笔金额和订阅周期，邮箱及银行卡可留空。',
-        renewal ? routeButton('返回续费管理', renewalRoute, '', 'return') : fromCustomer
+        renewal ? routeButton('返回续费管理', renewalHome, '', 'return') : fromCustomer
           ? routeButton('返回客户查询', 'workspace/customer-query', '', 'return') : '',
         renewal ? '续费录单' : '订单工作台'
       ) + (renewal && !source
@@ -6360,7 +6477,7 @@
     const filterControls = filterChoices.map(([key, label, choices]) => {
       const control = select('order-filter-' + key, [['', '全部' + label], ...choices], filters[key],
         claude ? `aria-label="${E(label)}"` : '');
-      return claude ? control : `<label for="commerce-order-filter-${key}">${label}</label>${control}`;
+      return claude ? control : `<div class="list-filter-field"><label for="commerce-order-filter-${key}">${label}</label>${control}</div>`;
     }).join('');
     const paged = pagedOrders();
     const { result, error, stale } = paged ? orderPage.view() : { result: orderListRows(product, filters, orderTab) };
@@ -6401,10 +6518,10 @@
         ],
         orderTab,
         'commerce-order-tab'
-      )}${toolbar(claude ? '搜索订单编号、邮箱、客户、卡号或序列号' : personal ? '搜索订单编号、账号、客户或账单' : '搜索订单编号、邮箱或客户',
-        filterControls + columnSettingsButton(tableId) + (claude ? historicalSale + viewSubscriptions :
-          routeButton('订单统计', 'orders/statistics')),
-        'data-page-actions')}${product === 'GPT' ? syncedOrderReadNotice() : ''}${paged ? '<div data-business-list-progress="orders" role="status" hidden></div>' : ''}${list}</section>`
+      )}${toolbar(personal ? '订单号、账号或客户' : '订单号、邮箱或客户', {
+        description: claude ? '搜索订单编号、邮箱、客户、卡号或序列号' : personal ? '搜索订单编号、账号、客户或账单' : '搜索订单编号、邮箱或客户',
+        filters: filterControls, actions: columnSettingsButton(tableId) + (claude ? historicalSale + viewSubscriptions :
+          routeButton('订单统计', 'orders/statistics')) })}${product === 'GPT' ? syncedOrderReadNotice() : ''}${paged ? '<div data-business-list-progress="orders" role="status" hidden></div>' : ''}${list}</section>`
     );
   }
 
@@ -6694,6 +6811,7 @@
       if (currentOperator().id !== actorId) return;
       const loaded = await refreshAfterOrderSync();
       if (currentOperator().id !== actorId) return;
+      if (loaded && S.route === renewalHome) void window.IDRenewalHandoff?.refreshWorktable?.();
       S.drafts.delete(key);
       if (S.drawerContext === key && form.isConnected && form.closest('dialog')?.open) {
         cleanClose(key);
@@ -6753,6 +6871,7 @@
       if (currentOperator().id !== actorId) return;
       const loaded = await refreshAfterOrderSync();
       if (currentOperator().id !== actorId) return;
+      if (loaded && S.route === renewalHome) void window.IDRenewalHandoff?.refreshWorktable?.();
       S.drafts.delete(key);
       if (current()) {
         cleanClose(key);
@@ -9529,8 +9648,8 @@
   }
   function claudeOrderOperations(row) {
     const id = E(row.id);
-    const actions = canShortcutRenew(row)
-      ? A.button(localData?.authRequired ? '提交给财务' : '续费', 'commerce-order-renew', '', 'return', `data-id="${id}"`) : '';
+    const actions = !localData?.authRequired && canShortcutRenew(row)
+      ? A.button('续费', 'commerce-order-renew', '', 'return', `data-id="${id}"`) : '';
     const states = row.operation.status === 'active'
       ? A.button('冻结', 'commerce-subscription-state', '', '', `data-id="${id}" data-status="frozen"`) +
         A.button('弃用', 'commerce-subscription-state', 'danger', '', `data-id="${id}" data-status="abandoned"`)
@@ -9795,8 +9914,9 @@
       return true;
     }
     if (action === 'commerce-renewal-history-scope') {
-      if (S.route === renewalRoute && renewalSelected && ['account', 'customer'].includes(node.dataset.scope)) {
-        const view = renewalHistoryView(renewalSelected);
+      const { selected, region } = currentRenewalHistory();
+      if (selected && region?.contains(node) && ['account', 'customer'].includes(node.dataset.scope)) {
+        const view = renewalHistoryView(selected.order.id);
         view.scope = node.dataset.scope;
         view.page = 1;
         refreshRenewalHistory();
@@ -10109,7 +10229,16 @@
       return true;
     }
     if (action === 'commerce-renewal-settings') {
-      openRenewalSettings();
+      if (canManageOrders()) {
+        if (!localData || localPhase === 'ready') openRenewalSettings();
+        else {
+          const current = currentRenewalAction(node);
+          void A.withActionFeedback(node, async () => {
+            if (!await loadLocalCommerce(true)) return false;
+            if (current()) openRenewalSettings();
+          }, { pending: '正在读取提醒设置…', failure: '暂时无法读取提醒设置，请重试' });
+        }
+      }
       return true;
     }
     if (action === 'commerce-tenant-renewal-settings') {
@@ -10133,15 +10262,14 @@
       return true;
     }
     if (action === 'commerce-renewal-open' || action === 'commerce-renewal-record') {
+      if (localData?.authRequired && (action !== 'commerce-renewal-record' ||
+          S.route !== renewalHome)) return true;
       if (node.hasAttribute('data-renewal-card-renew')) {
         const panel = $('#commerce-renewal-card-panel');
         if (!renewalCardActionCurrent(panel, node) || !renewalCardCanRenew(id) ||
             renewalCardDrawers.get(panel)?.details?.order?.account?.canRenew === false) return true;
       }
-      if (id && canManageOrders()) {
-        if (localData?.authRequired && action === 'commerce-renewal-open') window.IDRenewalHandoff?.select(id);
-        else A.go(renewalOrderPrefix + encodeURIComponent(id));
-      }
+      if (id && canManageOrders()) A.go(renewalOrderPrefix + encodeURIComponent(id));
       return true;
     }
     if (action === 'commerce-loss-history') {
@@ -10401,13 +10529,13 @@
       return true;
     }
     if (action === 'commerce-order-renew') {
+      if (localData?.authRequired) return true;
       const order = currentSubscriptions().find(row => row.id === id);
       if (!order || !canShortcutRenew(order)) {
         A.notify('当前订单不可快捷续费，请核对最新订单。');
         return true;
       }
-      if (localData?.authRequired) window.IDRenewalHandoff?.select(id);
-      else orderEditor('', id);
+      orderEditor('', id);
       return true;
     }
     if (action === 'commerce-order-tab') {
@@ -11508,6 +11636,7 @@
   let requestedAccountLifecycle = false, accountLifecycleReading = false;
   A.modules.commerce = {
     openBankCardTypeAssignment, subscriptionCenterNav, renewalActions, subscriptionContacts, openAuditExpense,
+    openRenewalWorktableDetails, renewalWorktableActions, runRenewalWorktableAction,
     async openAuditOrder(reference, reverse, node) {
       if (!localData?.authRequired || !canManageOrders() || !reference?.id) return;
       const actorId = currentOperator().id;
@@ -11802,9 +11931,11 @@
     quickReturn = null;
     if (!back.main && back.route === S.route) orderEditor(back.orderId, back.renewalId, false);
   });
-  document.addEventListener?.('id-pagination-change', ({ detail }) => {
-    if (S.route !== renewalRoute || !renewalSelected || detail.id !== 'commerce-renewal-history') return;
-    const view = renewalHistoryView(renewalSelected);
+  document.addEventListener?.('id-pagination-change', ({ detail, target }) => {
+    if (detail.id !== 'commerce-renewal-history') return;
+    const { selected, region } = currentRenewalHistory();
+    if (!selected || !region?.contains(target)) return;
+    const view = renewalHistoryView(selected.order.id);
     view.page = detail.page;
     view.pageSize = detail.pageSize;
     refreshRenewalHistory();
@@ -11828,6 +11959,7 @@
       sidebarReminder = undefined;
       timeRefreshPending = false;
       clearRenewalCardSecrets();
+      renewalDetailOpening = undefined;
       subscriptionCardRequestGeneration++;
       subscriptionEstimateRequest = undefined;
       subscriptionEstimateKey = undefined;
@@ -11840,6 +11972,7 @@
     },
     render,
     beforeNavigate(route) {
+      if (route !== renewalHome) renewalDetailOpening = undefined;
       orderViewTiming = !pagedOrders() && Object.hasOwn(orderListProducts, route) ? window.IDSiteTiming?.start('order-list') : undefined;
       window.clearTimeout(sidebarDeadlineTimer);
       if (usesSidebarSummary()) {
@@ -11997,8 +12130,10 @@
         (await loadSubscriptionCardEstimates(true)) === false) updated = false;
       const panel = $('#commerce-renewal-card-panel');
       if (scopes.some(scope => renewalResourceScopes.includes(scope))) {
+        const preview = S.route === renewalHome && $('#drawer[open] [data-renewal-order-preview]');
         const reads = await Promise.all([
           S.route === renewalRoute && renewalSelected ? loadWorkbenchResource(renewalSelected) : undefined,
+          preview ? loadRenewalWorktableDetailCard(preview, true) : undefined,
           renewalCardDrawerCurrent(panel) ? loadRenewalCardDetails(panel) : undefined
         ]);
         if (reads.includes(false)) updated = false;

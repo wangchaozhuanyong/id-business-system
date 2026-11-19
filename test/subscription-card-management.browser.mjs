@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 
-import { interceptDesign, origin } from './helpers/offline-design.mjs';
+import { interceptDesign, interceptRenewalWorktable, origin } from './helpers/offline-design.mjs';
 
 const fixturePath = new URL('../docs/audits/2026-11-06-design-review/visual-fixtures.json', import.meta.url);
 const actor = { id: 'qa-card-admin', name: '合成管理员', role: 'admin' };
@@ -60,6 +60,7 @@ test('银行卡管理与续费共用复制、筛选、分组和预计金额', { 
       try {
         const localFixtures = await fixture();
         const mock = await interceptDesign(context, { localFixtures, actor, skipRechargeAssets: true });
+        await interceptRenewalWorktable(context, { localFixtures, actor });
         await context.addInitScript(() => {
           Object.defineProperty(navigator, 'clipboard', { value: {
             async writeText(text) {
@@ -216,13 +217,18 @@ test('银行卡管理与续费共用复制、筛选、分组和预计金额', { 
           await page.locator('#toast').getByText('合成剪贴板权限拒绝', { exact: true }).waitFor();
           assert.equal(await page.evaluate(() => window.qaCopies), 2);
         }
-        await page.goto(origin + '/#/workspace/renewals/reminders');
-        await page.locator('[data-action="commerce-renewal-select"][data-id="upcoming"]').click();
-        const renewal = page.getByRole('region', { name: '当前选中客户', exact: true });
+        await page.goto(origin + '/#/workspace/renewals');
+        const renewalRow = page.locator('[data-renewal-list] tr[data-row-id="upcoming"]');
+        await renewalRow.getByRole('button', { name: '详情', exact: true }).click();
+        const renewal = page.locator('#drawer[open] [data-renewal-order-preview]');
         await renewal.getByText('175.92 USD', { exact: true }).waitFor();
         assert.equal(await renewal.getByRole('button', { name: '复制银行卡', exact: true }).count(), 0);
-        await renewal.getByRole('button', { name: '提交给财务', exact: true }).waitFor();
+        assert.equal(await renewal.getByRole('button', { name: '提交给财务', exact: true }).count(), 0);
+        assert.equal(await renewal.getByRole('button', { name: '登记已完成续费', exact: true }).count(), 0);
         assert.ok(!(await renewal.innerText()).includes(pan));
+        await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
+        await renewalRow.getByRole('button', { name: '更多操作', exact: true }).click();
+        await page.getByRole('menuitem', { name: '登记已完成续费', exact: true }).waitFor();
         assert.deepEqual(errors, []);
         assert.deepEqual(mock.external, []);
       } finally { await context.close(); }

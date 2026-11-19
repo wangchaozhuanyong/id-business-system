@@ -10,7 +10,7 @@ const fixturePath = new URL('../docs/audits/2026-11-06-design-review/visual-fixt
 const actor = { id: 'claude-qa-admin', name: '合成管理员', role: 'admin' };
 const sampleCard = '4000000000000003';
 
-test('统一 Claude 列表、三档套餐、租户银行卡录入与送财务', { timeout: 90_000 }, async t => {
+test('统一 Claude 列表、三档套餐、租户银行卡录入与账号运营', { timeout: 90_000 }, async t => {
   const playwright = process.env.ID_RECHARGE_QA_PLAYWRIGHT;
   const { chromium } = await import(playwright ? pathToFileURL(playwright).href : 'playwright');
   const browser = await chromium.launch();
@@ -289,23 +289,9 @@ test('统一 Claude 列表、三档套餐、租户银行卡录入与送财务', 
   await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
   const more = id => row(id).locator('[data-action="commerce-order-more"]').click();
   const menu = page.locator('.row-action-menu:popover-open');
-  await more(max.id);
-  await context.route('**/api/local/renewals?view=staff', route => route.fulfill({ json: { version: 0, items: [],
-    candidates: [{ id: max.id, version: max.version, number: max.orderNo, customer: customer.name, account: max.email,
-      start: max.start, expiry: max.expiry, product: max.product, plan: max.plan, payment: max.payment }] } }));
-  const beforeHandoff = writes.length;
-  await menu.getByRole('menuitem', { name: '提交给财务', exact: true }).click();
-  await page.getByRole('heading', { name: '续费管理', exact: true }).waitFor();
-  await page.getByRole('button', { name: '提交给财务（1）', exact: true }).waitFor();
-  assert.equal(writes.length, beforeHandoff);
-  assert.equal(await page.locator('#main #commerce-order-form, #drawer[open] #commerce-order-form').count(), 0);
-  await page.goto(origin + ordersPath);
-  await table.waitFor();
-  await search.fill(max.email);
-  await row(max.id).waitFor();
   assert.equal(await row(max.id).locator('input[data-select]').count(), 0);
   await more(max.id);
-  assert.equal(await menu.getByRole('menuitem', { name: '续费', exact: true }).count(), 0);
+  assert.equal(await menu.getByRole('menuitem', { name: /^(续费|提交给财务|登记已完成续费)$/ }).count(), 0);
   await menu.getByRole('menuitem', { name: '冻结', exact: true }).click();
   await page.locator('#confirm-dialog[open]').getByRole('button', { name: '确认操作' }).click();
   await row(max.id).locator('[data-column="accountStatus"]').getByText('冻结', { exact: true }).waitFor();

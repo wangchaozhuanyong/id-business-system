@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { interceptDesign, origin, root, settle } from './helpers/offline-design.mjs';
+import { interceptDesign, origin, root, settle, toggleDesignTheme } from './helpers/offline-design.mjs';
 import { validMailExtractionSettings } from '../server/inventory-extraction-settings.mjs';
 import { checkInventoryHistory } from '../server/inventory-history.mjs';
 
@@ -25,7 +25,7 @@ test('邮箱提取用途设置支持增删、草稿、失败重试、旧版本�
       if (route.request().method() === 'GET') return route.fulfill({ json: inventory });
       const command = route.request().postDataJSON();
       writes.push(command);
-      if (fail) { fail = false; return route.fulfill({ status: 503, json: { error: '模拟用途保存失败' } }); }
+      if (fail) return route.fulfill({ status: 503, json: { error: '模拟用途保存失败' } });
       if (command.version !== inventory.version) return route.fulfill({ status: 409, json: { error: '用途配置版本已变化' } });
       assert(validMailExtractionSettings(command.data.tableSettings));
       assert.equal(checkInventoryHistory(inventory.data, command.data), undefined);
@@ -37,17 +37,20 @@ test('邮箱提取用途设置支持增删、草稿、失败重试、旧版本�
     await page.goto(origin + '/#/workspace/mail-extract');
     const settings = page.locator('[data-action="inventory-purpose-settings"]');
     await settings.waitFor();
-    if (theme === 'dark') await page.locator('#theme-toggle').click();
+    if (theme === 'dark') await toggleDesignTheme(page);
     await page.locator('#inventory-extract-notes').fill('保留邮箱提取草稿');
     const geometry = await settings.evaluate(button => {
       const select = document.querySelector('#inventory-purpose'), label = select.closest('.field').querySelector('label');
       const b = button.getBoundingClientRect(), s = select.getBoundingClientRect(), l = label.getBoundingClientRect();
       return { button: b.toJSON(), select: s.toJSON(), label: l.toJSON(), overflow: document.documentElement.scrollWidth > innerWidth + 1 };
     });
-    assert(!geometry.overflow && geometry.label.right <= geometry.select.left + 1);
-    assert(Math.abs(geometry.button.top - geometry.select.top) <= 1 && Math.abs(geometry.button.height - geometry.select.height) <= 1);
+    assert(!geometry.overflow);
+    assert(geometry.label.bottom <= geometry.select.top + 1, '用途标签应位于选择框上方');
+    assert(Math.abs(geometry.label.left - geometry.select.left) <= 1, '用途标签与选择框左对齐');
+    const centerY = box => box.top + box.height / 2;
+    assert(Math.abs(centerY(geometry.button) - centerY(geometry.select)) <= 1, '用途选择和设置按钮垂直居中');
+    assert(Math.min(geometry.button.height, geometry.select.height) >= (width <= 900 ? 44 : 36));
     assert(geometry.button.left >= geometry.select.right && geometry.button.right <= width + 1);
-    if (width <= 900) assert(geometry.button.height >= 44);
     measurements.push({ width, theme, ...geometry });
     await settings.click();
     const form = page.locator('#inventory-purpose-settings-form');
@@ -87,6 +90,7 @@ test('邮箱提取用途设置支持增删、草稿、失败重试、旧版本�
       await pending.fill('');
       fail = true; await save(503);
       await page.getByText('本次操作未保存，请检查本机服务后重试', { exact: true }).waitFor();
+      fail = false;
       assert((await items()).includes('员工验证用途'));
       await save();
       assert.equal(await page.locator('#inventory-purpose').inputValue(), '', '移除原草稿用途后必须重新选择');

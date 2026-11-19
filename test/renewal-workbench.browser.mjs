@@ -19,7 +19,7 @@ test('renewal reminder persists decisions, hands off to finance and projects cus
   const subscriptions = createSubscriptionHandler({ store, publicOrigin: origin, clock });
   const commerce = (req, res, path, user) => handleLocalBusiness(req, res, path, store, user, { publicOrigin: origin });
   const renew = createRenewalHandoff({ store, publicOrigin: origin, clock,
-    getAuth: () => ({ orderOwners: () => [actor] }) });
+    getAuth: () => ({ orderOwners: () => [actor, finance] }) });
   const renewal = (req, res, path, user) => renew(req, res, user);
   const commerceRequest = async (method, data, path = api, handler = commerce, user = actor, operation) => {
     const request = Object.assign(Readable.from(data ? [Buffer.from(JSON.stringify(data))] : []), {
@@ -91,27 +91,34 @@ test('renewal reminder persists decisions, hands off to finance and projects cus
     });
     await page.clock.setFixedTime(new Date('2026-11-06T08:00:00Z'));
     await page.goto(origin + '/#/workspace/renewals/reminders');
+    await page.waitForURL('**/#/workspace/renewals');
     const drawer = page.locator('#drawer');
     const confirm = page.locator('#confirm-dialog');
-    const list = page.locator('[data-renewal-scroll]');
-    const detail = page.getByRole('region', { name: '当前选中客户' });
+    const list = page.locator('[data-renewal-list]');
+    const detail = drawer.locator('[data-renewal-order-preview]');
     const loss = page.locator('table[data-table="commerce-customer-loss"]');
-    const row = (id) => list.locator(`button[data-id="${id}"]`);
+    const row = (id) => list.locator(`tr[data-row-id="${id}"]`);
     const select = async id => {
-      await row(id).click();
+      await row(id).getByRole('button', { name: '详情', exact: true }).click();
       await detail.getByRole('heading', { name: /客户/ }).waitFor();
-      assert.equal(await row(id).getAttribute('aria-pressed'), 'true');
+      assert.equal(await detail.getAttribute('data-renewal-order-preview'), id);
+      assert.equal(page.url(), origin + '/#/workspace/renewals');
     };
-    const tab = (name) => page.getByRole('tab', { name }).click();
-    const completed = async () => {
-      await tab(/^已处理/);
-      await row('QA-EXPIRED').getByText('已续费', { exact: true }).waitFor();
+    const closeDetails = async () => {
+      await drawer.getByRole('button', { name: '关闭抽屉' }).click();
+      await detail.waitFor({ state: 'hidden' });
     };
-    await tab(/^即将到期/);
+    const operation = async (id, label) => {
+      await row(id).getByRole('button', { name: '更多操作', exact: true }).click();
+      await page.getByRole('menuitem', { name: label, exact: true }).click();
+    };
+    const period = value => page.locator('#renewal-handoff-period').selectOption(value);
+    const completed = async id => {
+      await page.getByRole('link', { name: '办理记录', exact: true }).click();
+      await row(id).getByText('已续费', { exact: true }).waitFor();
+    };
     await page.getByText('提前 1 天提醒', { exact: true }).waitFor();
     assert.equal(await row('QA-REFUSE').count(), 0);
-    assert.equal(await page.locator('table[data-table="commerce-renewals"]').count(), 0);
-    assert.equal(await detail.getByRole('button', { name: '续费', exact: true }).count(), 0);
     await row('QA-SOON').getByText('剩余不足 1 小时', { exact: true }).waitFor();
     await page.getByRole('button', { name: '提醒设置' }).click();
     const days = drawer.getByLabel('提前天数');
@@ -121,47 +128,56 @@ test('renewal reminder persists decisions, hands off to finance and projects cus
     await hours.fill('1');
     await drawer.getByRole('button', { name: '保存设置' }).click();
     await row('QA-REFUSE').getByText('剩余 1 天 1 小时', { exact: true }).waitFor();
-    const search = page.locator('#commerce-search');
+    const search = page.locator('#renewal-handoff-search');
     await search.fill('@qa_order_only');
     await row('QA-SOON').waitFor({ state: 'hidden' });
     await select('QA-REFUSE');
     await detail.getByText('@qa_order_only').waitFor();
+    await closeDetails();
     await search.fill('');
     await select('QA-SOON');
     assert.equal(await detail.getByText('@qa_order_only').count(), 0);
-    await select('QA-REFUSE');
-    await detail.getByRole('button', { name: '拒续费' }).click();
+    await closeDetails();
+    await operation('QA-REFUSE', '拒续费');
     await confirm.getByRole('button', { name: '确认', exact: true }).click();
     await row('QA-REFUSE').waitFor({ state: 'hidden' });
-    await tab(/^已处理/);
-    await row('QA-REFUSE').getByText('已拒续', { exact: true }).waitFor();
+    await period('refused');
+    await row('QA-REFUSE').waitFor();
     assert.equal((await read()).data.renewalWarningHours, 25);
     await select('QA-REFUSE');
-    await detail.getByRole('button', { name: '恢复提醒' }).click();
+    await detail.getByText('已拒续', { exact: true }).waitFor();
+    assert.equal(await detail.getByRole('button', { name: '恢复提醒' }).count(), 0);
+    await closeDetails();
+    await operation('QA-REFUSE', '恢复提醒');
     await confirm.getByRole('button', { name: '确认', exact: true }).click();
     await row('QA-REFUSE').waitFor({ state: 'hidden' });
-    await tab(/^即将到期/);
+    await period('upcoming');
     await row('QA-REFUSE').waitFor();
-    assert.equal(await detail.getByRole('button', { name: '拒续费' }).count(), 0, '切换不会自动选中下一笔');
-    await tab(/^已到期/);
+    assert.equal(await detail.isVisible(), false, '筛选切换不会自动打开详情');
+    await period('expired');
     await row('QA-EXPIRED').getByText('已到期 1 天 1 小时', { exact: true }).waitFor();
     await select('QA-EXPIRED');
     await detail.getByText('@qa_customer').waitFor();
+    await closeDetails();
     await page.getByRole('button', { name: '续费提醒话术' }).click();
     await drawer.getByLabel('提醒话术', { exact: true }).fill('合成续费询问。');
     await drawer.getByRole('button', { name: '保存话术' }).click();
-    await detail.getByRole('button', { name: '复制订阅信息' }).click();
+    await operation('QA-EXPIRED', '复制订阅信息');
     await page.locator('#toast').getByText('已复制订阅信息', { exact: true }).waitFor();
     const reminderText = await page.evaluate(() => navigator.clipboard.readText());
     assert.match(reminderText, /订阅套餐：Plus[\s\S]*合成续费询问/);
     assert.doesNotMatch(reminderText, /续费客户甲|客户：|微信：|Telegram/);
-    await detail.getByRole('button', { name: '提交给财务', exact: true }).click();
+    assert.equal(await row('QA-NO-EMAIL').count(), 0);
+    await list.getByRole('checkbox', { name: '选择 QA-EXPIRED', exact: true }).check();
     await page.getByRole('button', { name: '提交给财务（1）' }).click();
-    await confirm.getByRole('button', { name: '确认送财务' }).click();
+    const submit = page.locator('#renewal-submit-form');
+    await submit.getByRole('textbox', { name: /^提交备注/ }).fill('请办理该订单的续费。');
+    await drawer.getByRole('button', { name: '确认提交给财务' }).click();
     await page.waitForURL('**/#/workspace/renewals/sent');
     const path = '/api/local/renewals';
     const task = (await commerceRequest('GET', undefined, path + '?view=finance', renewal, finance)).json.items[0];
     assert.equal(task.order.id, 'QA-EXPIRED');
+    assert.equal(task.remark, '请办理该订单的续费。');
     const financeStep = async (input, operation) => {
       const result = await commerceRequest('POST', { id: task.id, ...input }, path, renewal, finance, operation);
       assert.equal(result.status, 200, JSON.stringify(result.json));
@@ -182,8 +198,7 @@ test('renewal reminder persists decisions, hands off to finance and projects cus
       throw new Error(JSON.stringify({ responses, fieldErrors, toast: await page.locator('#toast').textContent(), errors }), { cause: issue });
     });
     await page.getByRole('link', { name: '返回待补资料', exact: true }).click();
-    await page.getByRole('link', { name: '续费提醒', exact: true }).click();
-    await completed();
+    await completed(task.id);
     const snapshot = await read();
     const newOrder = snapshot.data.orders.find((item) => item.id !== 'QA-EXPIRED' && item.customerId === 'qa-renew' && item.paidConfirmed);
     assert.equal(newOrder.expiry, '2026-12-06T15:59');
@@ -211,12 +226,10 @@ test('renewal reminder persists decisions, hands off to finance and projects cus
     assert.equal(await loss.getByText('换号客户丙', { exact: true }).count(), 0);
     await sidebar.getByRole('button', { name: '快速操作', exact: true }).click();
     await sidebar.getByRole('link', { name: /^续费管理/ }).click();
-    await page.getByRole('link', { name: '续费提醒', exact: true }).click();
     await page.getByText('提前 1 天 1 小时提醒', { exact: true }).waitFor();
-    await completed();
-    await tab(/^即将到期/);
+    await period('upcoming');
     await page.getByLabel('产品', { exact: true }).selectOption('Gemini');
-    assert.equal(await list.locator('button[data-id]').count(), 0);
+    assert.equal(await list.locator('tr[data-row-id]').count(), 0);
     for (const [dayCount, hourCount, label] of [[0, 23, '23 小时'], [3, 12, '3 天 12 小时']]) {
       await page.getByRole('button', { name: '提醒设置' }).click();
       await days.fill(String(dayCount));
@@ -233,10 +246,10 @@ test('renewal reminder persists decisions, hands off to finance and projects cus
     await select('QA-REFUSE');
     await detail.locator('.renewal-workbench-fields').getByText('2026-11-07 17:00', { exact: true }).waitFor();
     await detail.getByText('@qa_order_only').waitFor();
-    await detail.getByRole('button', { name: '返回待办' }).click();
+    await closeDetails();
     await row('QA-REFUSE').waitFor();
     await page.clock.setFixedTime(new Date('2026-11-06T08:30:00Z'));
-    await tab(/^已到期/);
+    await period('expired');
     await row('QA-SOON').getByText('已到期不足 1 小时', { exact: true }).waitFor();
     await page.goto(origin + '/#/data-management/bank-cards');
     await page.waitForURL('**/#/subscriptions/bank-cards');

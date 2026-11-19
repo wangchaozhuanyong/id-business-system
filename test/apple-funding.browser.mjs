@@ -10,7 +10,7 @@ const id = 'apple-browser-1';
 const apple = 'apple-wallet-with-a-long-account-name@example.test';
 const email = 'subscriber-with-a-long-account-name@example.test';
 const start = new Date(Date.now() - 86400000).toISOString();
-const expiry = new Date(Date.now() + 86400000 * 30).toISOString();
+const expiry = new Date(Date.now() + 86400000 * 2).toISOString();
 const fixture = {
   inventory: { version: 1, data: { mailboxes: [
     { id, email: apple, type: 'apple', status: '正常', country: '美国', appStoreRegion: 'US' }
@@ -54,10 +54,10 @@ fixture.inventory.data.mailboxes.push({
   id: 'unused-fixture', email: 'unused-wallet@example.test', type: 'apple',
   status: '正常', country: '美国', appStoreRegion: 'US'
 });
-const renewalCandidates = fixture.commerce.data.orders.filter(order => order.appleIdId).map(order => ({
+const renewalCandidates = fixture.commerce.data.orders.filter(order => order.id === 'fixture-order').map(order => ({
   id: order.id, version: order.version, number: order.orderNo, customer: fixture.commerce.data.customers[0].name,
   account: order.email, product: order.product, plan: order.plan, payment: order.payment, start: order.start,
-  expiry: order.expiry, owner: '离线操作员', previousPaidCurrency: order.paidCurrency
+  expiry: order.expiry, owner: '离线操作员', previousPaidCurrency: order.paidCurrency, reminderState: 'upcoming'
 }));
 const browser = await chromium.launch({ headless: true });
 const withinWidth = locator => locator.evaluate(el => el.scrollWidth <= el.clientWidth + 1);
@@ -77,7 +77,8 @@ try {
         renewalWrites.push(route.request().method());
         return route.fulfill({ status: 405, json: { error: '离线页面核验不写入续费' } });
       }
-      return route.fulfill({ json: { version: 1, candidates: renewalCandidates, items: [], reminderHours: 168 } });
+      return route.fulfill({ json: { version: 1, candidates: renewalCandidates, items: [], reminderHours: 168,
+        canSubmitToFinance: true } });
     });
     await context.route(origin + '/api/local/renewals', route => {
       renewalWrites.push(route.request().method());
@@ -157,11 +158,14 @@ try {
     await drawer.locator('#apple-reason').waitFor();
     await drawer.getByRole('button', { name: '取消', exact: true }).click();
     await boundRow.getByRole('button', { name: '更多操作' }).click();
-    await page.getByRole('menuitem', { name: '续费', exact: true }).click();
+    assert.equal(await page.getByRole('menuitem', { name: /^(续费|提交给财务|登记已完成续费)$/ }).count(), 0);
+    await page.evaluate(() => location.hash = '#/workspace/renewals');
     await page.waitForURL('**/#/workspace/renewals');
     const candidate = main.getByRole('row').filter({ hasText: 'SYNTHETIC-APPLE-ORDER-123456' });
     await candidate.getByText(email, { exact: true }).waitFor();
     assert.equal(await candidate.getByText('苹果内购', { exact: true }).count(), 1);
+    assert.equal(await candidate.getByRole('checkbox').isChecked(), false);
+    await candidate.getByRole('checkbox').check();
     assert.equal(await candidate.getByRole('checkbox').isChecked(), true);
     assert.equal(await main.getByRole('button', { name: '提交给财务（1）', exact: true }).isEnabled(), true);
     assert.equal(await page.locator('#commerce-order-form').count(), 0);

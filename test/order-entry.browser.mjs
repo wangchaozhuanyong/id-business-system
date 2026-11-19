@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { applyOrderCompletion, readOrderCompletion } from '../server/order-completion.mjs';
-import { interceptDesign, origin, toggleDesignTheme } from './helpers/offline-design.mjs';
+import { interceptDesign, interceptRenewalWorktable, origin, toggleDesignTheme } from './helpers/offline-design.mjs';
 
 test('自动订单证据缺失时可以补资料并保留原始证据', { timeout: 15_000 }, async (t) => {
   const playwright = process.env.ID_RECHARGE_QA_PLAYWRIGHT;
@@ -106,6 +106,7 @@ test('员工审批边界及 GPT 代充原单、来源颜色和跨页关联', { t
     manual.source = '管理员手工';
     localFixtures.commerce.data.orders.unshift(structuredClone(synced));
     await interceptDesign(context, { localFixtures, actor });
+    await interceptRenewalWorktable(context, { actor, localFixtures });
     let syncReads = 0;
     const corrections = [];
     await context.route((url) => url.pathname === '/api/local/order-completion', async route => {
@@ -244,9 +245,12 @@ test('员工审批边界及 GPT 代充原单、来源颜色和跨页关联', { t
       await page.locator(`#commerce-customerId-options [data-value="${customer.id}"]`).click();
       assert.equal(await page.locator('#commerce-email').inputValue(), synced.email);
       await page.goto(origin + '/#/workspace/renewals/reminders');
-      await search.fill(synced.email);
-      await main.locator(`[data-action="commerce-renewal-select"][data-id="${synced.id}"]`).click();
-      await main.getByRole('region', { name: '当前选中客户' }).getByText(synced.email, { exact: true }).waitFor();
+      await page.waitForURL('**/#/workspace/renewals');
+      const searchRenewal = page.getByRole('textbox', { name: '搜索续费订单' });
+      await searchRenewal.fill(synced.email);
+      await searchRenewal.press('Enter');
+      await main.locator(`[data-action="renewal-handoff-order-details"][data-id="${synced.id}"]`).click();
+      await page.locator('#drawer[open] [data-renewal-order-preview]').getByText(synced.email, { exact: true }).first().waitFor();
     } else {
       await page.goto(origin + '/#/orders/recharge-sync');
       await page.waitForURL('**/#/orders/gpt');

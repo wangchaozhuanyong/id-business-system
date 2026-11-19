@@ -33,8 +33,6 @@
   flex-wrap: nowrap;
   justify-content: flex-start;
   overflow-x: auto;
-  scrollbar-width: thin;
-  scrollbar-color: var(--line) transparent;
   padding: 0;
   border: 0;
 }

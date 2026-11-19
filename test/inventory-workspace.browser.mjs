@@ -105,7 +105,7 @@ test('账号与邮箱提交提取工作台：旧路由、双模块、草稿、�
       const summary = panel.querySelector('.inventory-extraction-summary'), actions = summary.querySelector('.inventory-extraction-actions');
       const history = panel.querySelector('.inventory-extraction-history');
       return { summary: rect(summary), stock: rect(summary.querySelector('.inventory-availability')), actions: rect(actions),
-        buttons: [...actions.querySelectorAll('button')].map(rect),
+        buttons: [...actions.querySelectorAll('button')].map(rect), stockItems: [...summary.querySelectorAll('.inventory-availability > span')].map(rect),
         separation: parseFloat(getComputedStyle(history).borderTopWidth),
         historyTop: rect(history).top, headerBackground: getComputedStyle(history.querySelector('.panel-heading')).backgroundColor,
         formBackground: getComputedStyle(panel).backgroundColor,
@@ -121,10 +121,17 @@ test('账号与邮箱提交提取工作台：旧路由、双模块、草稿、�
     assert.equal(extraction.buttons.length, 2, '提取与归还、确认提取各保留一个按钮');
     assert(extraction.buttons.every(box => box.left >= extraction.summary.left && box.right <= extraction.summary.right + 1), '提取按钮不裁切');
     assert(Math.abs(extraction.buttons[0].top - extraction.buttons[1].top) <= 1, '两个提取按钮在宽窄屏保持同排');
-    if (extraction.summary.width >= 450) {
+    if (extraction.stockItems.length === 4) {
+      const items = extraction.stockItems;
+      const columns = extraction.summary.width >= 440 ? 4 : 2;
+      assert(items.every((item, i) => Math.abs(item.width - items[0].width) <= 1 &&
+        Math.abs(item.top - items[Math.floor(i / columns) * columns].top) <= 1 &&
+        Math.abs(item.left - items[i % columns].left) <= 1), '四种库存共享等宽列，窄容器稳定排列两行');
+    }
+    if (extraction.summary.width >= 680) {
       assert(Math.abs(extraction.stock.top + extraction.stock.height / 2 - extraction.actions.top - extraction.actions.height / 2) <= 1, '库存与按钮同排居中');
       assert(extraction.stock.right <= extraction.actions.left, '按钮位于库存右侧');
-    }
+    } else assert(extraction.stock.bottom <= extraction.actions.top - 7, '窄容器中的操作行位于库存摘要下方');
     assert(Math.abs(extraction.actions.right - extraction.summary.right) <= 1, '按钮靠操作行最右侧');
     assert(extraction.separation >= 8 && extraction.headerBackground !== extraction.formBackground && extraction.historyTop >= extraction.summary.bottom, '历史分区有明确间隔及独立标题底色');
     for (const row of extraction.rows) {
@@ -280,8 +287,7 @@ test('账号与邮箱提交提取工作台：旧路由、双模块、草稿、�
       assert.equal(await page.getByText('暂无提取批次', { exact: true }).count(), 1);
     }
   }
-  // Mail entry can start a follow-up inventory read on route entry for
-  // relay availability. A success must clear an earlier failure screen.
+  // Retrying a failed read keeps both panels in the workspace and restores the form.
   const inventoryApi = origin + '/api/local/inventory';
   const followupRead = Promise.withResolvers(), releaseRead = Promise.withResolvers();
   t.after(() => releaseRead.resolve());
@@ -297,13 +303,14 @@ test('账号与邮箱提交提取工作台：旧路由、双模块、草稿、�
   const firstRead = page.waitForResponse(response => response.url() === inventoryApi && response.status() === 503);
   await page.reload();
   await firstRead;
-  await page.getByText('本机库存读取失败', { exact: true }).waitFor();
+  await page.locator('.inventory-extraction-panel').getByText('库存资料读取失败，请重试。', { exact: true }).waitFor();
+  if (reads === 1) await page.locator('.inventory-extraction-panel [data-action="inventory-reload"]').click();
   await followupRead.promise;
   const reloaded = page.waitForResponse(response => response.url() === inventoryApi && response.ok());
   releaseRead.resolve();
   await reloaded;
   await page.locator('#inventory-extract-form').waitFor();
-  const retry = page.locator('#main [data-action="inventory-reload"]');
+  const retry = page.locator('.inventory-extraction-panel [data-action="inventory-reload"]');
   assert.equal(await retry.count(), 0);
   await context.unroute(inventoryApi, simulateRead);
   await context.route(inventoryApi, route => route.fulfill({
