@@ -1,5 +1,5 @@
 diff --git a/chatgpt.js b/chatgpt.js
-index 8a7cba7..a2fcdf5 100644
+index 8a7cba7..5ea9f88 100644
 --- a/chatgpt.js
 +++ b/chatgpt.js
 @@ -216,10 +216,24 @@ class ChatGPTService {
@@ -88,7 +88,7 @@ index 8a7cba7..a2fcdf5 100644
      const { assertChatGptLoggedIn } = require('./session-auth');
      const { hasVisibleLoginChrome } = require('./auth-page-detect');
      const isPaymentUrl = (raw) => {
-@@ -520,6 +576,83 @@ async function verifyCheckoutDebugPage(page, { checkoutUrl, timeoutMs = 60000 }
+@@ -520,6 +576,87 @@ async function verifyCheckoutDebugPage(page, { checkoutUrl, timeoutMs = 60000 }
          if (!isPaymentUrl(page.url())) {
              throw new Error('支付页面发生非 Checkout 跳转，调试已停止');
          }
@@ -97,9 +97,10 @@ index 8a7cba7..a2fcdf5 100644
 +        for (const frame of page.frames()) {
 +            if (await frame.locator(cardSelectorForFill).count().catch(() => 0)) { cardPresent = true; break; }
 +        }
-+        // Stripe 支付区是懒加载：调试填卡时先滚动到支付区，等卡号框渲染出来（最多 60 秒）。
++        // Stripe 支付区是懒加载：调试填卡时先滚动到支付区，等卡号框渲染出来（最多 90 秒）。
 +        if (!cardPresent && process.env.CHECKOUT_DEBUG_FILL === '1') {
-+            for (let waited = 0; waited < 60000 && !cardPresent; waited += 3000) {
++            const waitMs = Number(process.env.CHECKOUT_FORM_WAIT_MS || 90000);
++            for (let waited = 0; waited < waitMs && !cardPresent; waited += 3000) {
 +                await page.evaluate(() => {
 +                    const target = Array.from(document.querySelectorAll('h2, h3, div, span'))
 +                        .find((node) => /Payment method|付款方式/i.test(node.textContent || ''));
@@ -116,6 +117,9 @@ index 8a7cba7..a2fcdf5 100644
 +                if (!cardPresent) {
 +                    console.log('  [调试] 等待支付表单渲染... ' + Math.round(waited / 1000) + 's');
 +                }
++            }
++            if (!cardPresent) {
++                console.log('  [调试] 支付组件（Stripe iframe）始终未加载：通常是出口 IP 被风控，需要更换线路后重试');
 +            }
 +        }
 +        // 有卡号表单时优先走填卡分支：先填卡与地址，再停在提交前。
@@ -787,3 +791,22 @@ index cd7ff9d..e4454ec 100644
      humanType,
      generateRandomName,
      getTypingDelay,
+diff --git a/browser-pool.js b/browser-pool.js
+index ef46cae..68642e7 100644
+--- a/browser-pool.js
++++ b/browser-pool.js
+@@ -151,6 +151,14 @@ async function warmSlot(slotId) {
+         launchOptions.channel = channel;
+     }
+ 
++    // 用完整 Chrome 二进制替代 headless-shell：headless-shell 的自动化特征更明显，
++    // Stripe 会据此拒绝加载卡号 iframe，导致页面能打开但无法填卡。
++    const FULL_CHROME_PATH = process.env.CHROMIUM_FULL_PATH
++        || '/root/.cache/ms-playwright/chromium-1217/chrome-linux64/chrome';
++    if (fs.existsSync(FULL_CHROME_PATH)) {
++        launchOptions.executablePath = FULL_CHROME_PATH;
++        console.log('[BrowserPool] 使用完整 Chrome: ' + FULL_CHROME_PATH);
++    }
+     const persistentContext = await chromium.launchPersistentContext(profileDir, launchOptions);
+     return {
+         slotId,
