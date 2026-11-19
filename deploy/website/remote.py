@@ -102,6 +102,17 @@ class ReleaseError(RuntimeError):
     pass
 
 
+class ContainerMetadataError(ReleaseError):
+    def __init__(self, component, reason):
+        super().__init__("container_metadata_read_failed")
+        self.component = component if component in (*WEBSITE, *PROTECTED) else "unknown"
+        self.reason = reason if isinstance(reason, str) and reason in {"not_found", "command_failed", "command_unavailable",
+                                          "timeout", "invalid_metadata"} else "command_failed"
+
+    def public_code(self):
+        return f"container_metadata_read_failed:{self.component}:{self.reason}"
+
+
 def require(condition, message):
     if not condition:
         raise ReleaseError(message)
@@ -110,9 +121,17 @@ def require(condition, message):
 def run(args, timeout=25):
     try:
         return subprocess.check_output(args, stderr=subprocess.PIPE, timeout=timeout)
-    except subprocess.CalledProcessError:
+    except subprocess.CalledProcessError as error:
         if args[:2] == ["docker", "inspect"]:
-            raise ReleaseError("container_metadata_read_failed") from None
+            component = (args[2].removeprefix("id-business-independent-")
+                         if len(args) == 3 and isinstance(args[2], str) and
+                            args[2].startswith("id-business-independent-") else "unknown")
+            details = error.stderr or b""
+            if isinstance(details, str):
+                details = details.encode()
+            reason = "not_found" if any(value in details.lower() for value in
+                                        (b"no such object", b"no such container")) else "command_failed"
+            raise ContainerMetadataError(component, reason) from None
         if args[:4] == ["docker", "exec", "id-business-independent-app", "cat"]:
             raise ReleaseError("mounted_public_asset_read_failed") from None
         if args[:3] == ["git", "-c", "credential.helper="]:
@@ -124,8 +143,44 @@ def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def inspect(name):
-    return json.loads(run(["docker", "inspect", "id-business-independent-" + name]))[0]
+def inspect(name, timeout=None):
+    command = ["docker", "inspect", "id-business-independent-" + name]
+    try:
+        raw = run(command) if timeout is None else run(command, timeout=timeout)
+        containers = json.loads(raw)
+        if not isinstance(containers, list) or len(containers) != 1 or not isinstance(containers[0], dict):
+            raise ValueError("invalid metadata")
+        return containers[0]
+    except ContainerMetadataError:
+        raise
+    except subprocess.TimeoutExpired:
+        raise ContainerMetadataError(name, "timeout") from None
+    except OSError:
+        raise ContainerMetadataError(name, "command_unavailable") from None
+    except (ValueError, TypeError, IndexError):
+        raise ContainerMetadataError(name, "invalid_metadata") from None
+
+
+def component_metadata_status():
+    """Fixed component names and states only; Docker environments never leave memory."""
+    result = {}
+    for name in (*WEBSITE, *PROTECTED):
+        try:
+            container = inspect(name, timeout=5)
+            running = container["State"]["Running"]
+            if type(running) is not bool:
+                raise ValueError("invalid state")
+            revision = (container["Config"].get("Labels") or {}).get("org.opencontainers.image.revision")
+            result[name] = {"available": True, "running": running,
+                            "revision": revision if isinstance(revision, str) and
+                                re.fullmatch(r"[a-f0-9]{40}", revision) else None}
+        except ContainerMetadataError as error:
+            result[name] = {"available": False, "reason": error.reason}
+        except ReleaseError:
+            result[name] = {"available": False, "reason": "command_failed"}
+        except (ValueError, TypeError, KeyError, AttributeError):
+            result[name] = {"available": False, "reason": "invalid_metadata"}
+    return result
 
 
 def identity(container):
@@ -812,6 +867,7 @@ def inspect_canary(sha, sample_backup_resources=False):
         result["backupResources"] = backup_resource_summary()
     result["recentRecoveryFailures"] = recent_recovery_failures()
     result["recentBackupOomEvents"] = recent_backup_oom_events()
+    result["componentMetadata"] = component_metadata_status()
     return result
 
 
@@ -1500,7 +1556,7 @@ def main(plan):
                 result = release_with_optional_vendure_refresh(plan)
             print(json.dumps(result, sort_keys=True), flush=True)
     except ReleaseError as error:
-        sys.exit(str(error))
+        sys.exit(error.public_code() if isinstance(error, ContainerMetadataError) else str(error))
     except BlockingIOError:
         sys.exit("application_release_lock_busy")
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError, ValueError, KeyError) as error:

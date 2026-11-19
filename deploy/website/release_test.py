@@ -213,6 +213,55 @@ class WebsiteReleaseTests(unittest.TestCase):
                     remote.run(command)
                 self.assertEqual(str(error.exception), reason)
 
+    def test_container_failures_report_only_fixed_names_and_safe_reasons(self):
+        command = ["docker", "inspect", "id-business-independent-recharge"]
+        failure = subprocess.CalledProcessError(1, command, stderr=b"No such object; synthetic-private-details")
+        with patch.object(remote.subprocess, "check_output", side_effect=failure):
+            with self.assertRaises(remote.ContainerMetadataError) as caught:
+                remote.inspect("recharge")
+        self.assertEqual(str(caught.exception), "container_metadata_read_failed")
+        self.assertEqual(caught.exception.public_code(), "container_metadata_read_failed:recharge:not_found")
+        for value, reason in ((b"[]", "invalid_metadata"), (b"synthetic-private-json", "invalid_metadata")):
+            with patch.object(remote, "run", return_value=value):
+                with self.assertRaises(remote.ContainerMetadataError) as caught:
+                    remote.inspect("drive-backup")
+            self.assertEqual(caught.exception.public_code(), f"container_metadata_read_failed:drive-backup:{reason}")
+        with patch.object(remote, "run", side_effect=subprocess.TimeoutExpired("synthetic-private-command", 5)):
+            with self.assertRaises(remote.ContainerMetadataError) as caught:
+                remote.inspect("sheets-sync", timeout=5)
+        self.assertEqual(caught.exception.reason, "timeout")
+        self.assertEqual(remote.ContainerMetadataError("synthetic-private-name", ["private"]).public_code(),
+                         "container_metadata_read_failed:unknown:command_failed")
+
+    def test_readonly_component_inventory_separates_missing_stopped_and_invalid_metadata(self):
+        def inspect(name, timeout):
+            self.assertEqual(timeout, 5)
+            if name == "recharge":
+                raise remote.ContainerMetadataError(name, "not_found")
+            if name == "sheets-sync":
+                return {"State": {"Running": "synthetic-private-state"}}
+            return {"State": {"Running": name != "media"}, "Config": {
+                "Env": ["synthetic-private-environment"], "Labels": {"org.opencontainers.image.revision": TARGET}}}
+        with patch.object(remote, "inspect", side_effect=inspect):
+            report = remote.component_metadata_status()
+        self.assertEqual(set(report), set((*remote.WEBSITE, *remote.PROTECTED)))
+        self.assertEqual(report["app"], {"available": True, "running": True, "revision": TARGET})
+        self.assertEqual(report["recharge"], {"available": False, "reason": "not_found"})
+        self.assertEqual(report["sheets-sync"], {"available": False, "reason": "invalid_metadata"})
+        self.assertEqual(report["media"], {"available": True, "running": False, "revision": TARGET})
+        self.assertNotIn("synthetic-private", json.dumps(report))
+
+    def test_unreadable_mandatory_component_still_blocks_staging(self):
+        def inspect(name):
+            if name == "recharge":
+                raise remote.ContainerMetadataError(name, "not_found")
+            return {"Id": "id", "Image": "image", "State": {"Running": True, "StartedAt": "now"},
+                    "Config": {"Labels": {"org.opencontainers.image.revision": BASE}}}
+        with patch.object(remote, "inspect", side_effect=inspect), patch.object(remote, "stage") as stage:
+            with self.assertRaises(remote.ContainerMetadataError):
+                remote.release_website({"sha": TARGET, "before": {"components": {"app": {"revision": BASE}}}})
+            stage.assert_not_called()
+
     def test_native_diagnostic_uses_only_release_phases_and_fixed_error_codes(self):
         invocation = {"Status": "Failed",
                       "StandardOutputContent": '{"rechargePreflight": {"readOnly": true}}\n'
@@ -310,11 +359,14 @@ class WebsiteReleaseTests(unittest.TestCase):
     def test_website_carries_only_exact_inputs_from_the_verified_running_native(self, git, ancestor):
         native = {"identity": {"revision": TARGET, "image": "image", "running": True},
                   "imageLabelsVerified": True}
-        git.side_effect = ["\n".join(sorted(release.PLUS_TRIAL_SCOPE)), ""]
-        scope, evidence = release.require_website_scope(remote.ASSET_METADATA_REPAIR_BASE, TARGET,
-                                                       native_publication=native)
-        self.assertEqual(scope, "deployedNativeBuildInputs")
-        self.assertEqual(evidence, {"nativeRevision": TARGET, "image": "image"})
+        for inputs in (release.PLUS_TRIAL_SCOPE, release.DEPLOYED_TRIAL_BUILD_INPUTS):
+            git.side_effect = ["\n".join(sorted(inputs)), ""]
+            scope, evidence = release.require_website_scope(remote.ASSET_METADATA_REPAIR_BASE, TARGET,
+                                                           native_publication=native)
+            self.assertEqual(scope, "deployedNativeBuildInputs")
+            self.assertEqual(evidence, {"nativeRevision": TARGET, "image": "image"})
+            self.assertEqual(git.call_args, call("diff", "--name-only", TARGET, TARGET, "--",
+                                              *sorted(release.DEPLOYED_TRIAL_BUILD_INPUTS)))
         for invalid in (native | {"imageLabelsVerified": False},
                         native | {"identity": native["identity"] | {"running": False}},
                         native | {"identity": native["identity"] | {"revision": "invalid"}}):
@@ -325,6 +377,20 @@ class WebsiteReleaseTests(unittest.TestCase):
         git.side_effect = ["\n".join(sorted(release.PLUS_TRIAL_SCOPE)), "changed"]
         with self.assertRaisesRegex(RuntimeError, "deployed_native_inputs_source_mismatch"):
             release.require_website_scope(remote.ASSET_METADATA_REPAIR_BASE, TARGET, native_publication=native)
+
+    @patch("release.require_ancestor")
+    @patch("release.git")
+    def test_deployed_chrome_inputs_cannot_hide_a_changed_builder_or_unreviewed_runtime(self, git, ancestor):
+        native = {"identity": {"revision": TARGET, "image": "image", "running": True}, "imageLabelsVerified": True}
+        for path in ("modules/recharge/codexdaichong/prepare.mjs", "deploy/recharge-core/canary.py"):
+            git.side_effect = ["\n".join(sorted(release.DEPLOYED_TRIAL_BUILD_INPUTS)), path]
+            with self.assertRaisesRegex(RuntimeError, "deployed_native_inputs_source_mismatch"):
+                release.require_website_scope(BASE, TARGET, native_publication=native)
+        git.side_effect = None
+        git.return_value = "\n".join(sorted(release.DEPLOYED_TRIAL_BUILD_INPUTS | {
+            "modules/recharge/codexdaichong/native-adapter.mjs"}))
+        with self.assertRaisesRegex(RuntimeError, "recharge_core_or_runtime_changed"):
+            release.require_website_scope(BASE, TARGET, native_publication=native)
 
     def test_host_rejects_native_carry_when_provenance_or_selected_operations_differ(self):
         native = {"revision": TARGET, "image": "image", "running": True}
@@ -361,7 +427,7 @@ class WebsiteReleaseTests(unittest.TestCase):
             if plan["operation"] == "preflight":
                 return "preflight", before
             self.assertEqual(plan["deployedNativeBuildInputs"], evidence)
-            self.assertTrue(release.PLUS_TRIAL_SCOPE <= set(plan["files"]))
+            self.assertTrue(release.DEPLOYED_TRIAL_BUILD_INPUTS <= set(plan["files"]))
             for name in ("adapter", "rechargeCore", "rechargePartnerApi", "customerProgress", "vendureRetryReceipt"):
                 self.assertNotIn(name, plan)
             receipt = {"mainSha": TARGET, "appCanaryPassed": True, "protectedComponentsUnchanged": True,
