@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { interceptDesign, origin } from './helpers/offline-design.mjs';
+import { interceptDesign, origin, settle } from './helpers/offline-design.mjs';
 
 test('订单下拉框在展开后搜索，保留联动、草稿与快捷新增', { timeout: 60_000 }, async (t) => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
@@ -64,6 +64,7 @@ test('订单下拉框在展开后搜索，保留联动、草稿与快捷新增',
   await search.fill('beta');
   assert.equal(await popup.getByRole('option').count(), 1, '不保留不匹配的旧选中项');
   await search.press('ArrowDown');
+  await popup.evaluate(node => node.dispatchEvent(new ToggleEvent('toggle', { oldState: 'closed', newState: 'open' })));
   assert.equal(await page.evaluate(() => document.activeElement?.getAttribute('data-value')), 'qa-beta', '方向键应聚焦匹配选项');
   await page.keyboard.press('Enter');
   await popup.waitFor({ state: 'hidden' });
@@ -123,10 +124,10 @@ test('订单下拉框在展开后搜索，保留联动、草稿与快捷新增',
   await page.locator('#main[data-layout-route="workspace/order/gpt"]').waitFor();
   assert.equal(await page.locator('#commerce-customerId').inputValue(), 'qa-beta', '切页返回恢复客户');
   await page.locator('#commerce-email').fill('draft-preserved@example.test');
-  await page.locator('.order-quick-customer-disclosure > summary').click();
-  await page.locator('#order-quick-customer-name').fill('快捷新增合成客户');
-  await page.locator('#order-quick-customer-wechat').fill('qa_new_customer');
-  await page.locator('[data-action="commerce-quick-customer"]').click();
+  await page.locator('[data-action="commerce-customer-match-open"]').click();
+  await page.locator('#order-match-name').fill('快捷新增合成客户');
+  await page.locator('#order-match-wechat').fill('qa_new_customer');
+  await page.locator('[data-action="commerce-customer-match-create"]').click();
   await page.locator('#drawer').getByRole('button', { name: '核对并保存', exact: true }).click();
   await page.locator('#commerce-contact-form').waitFor({ state: 'hidden' });
   assert.equal(writes.length, 1);
@@ -146,6 +147,7 @@ test('订单下拉框在展开后搜索，保留联动、草稿与快捷新增',
   for (const width of [1440, 753, 390, 320]) {
     await page.setViewportSize({ width, height: 900 });
     await page.evaluate(dark => { document.documentElement.dataset.theme = dark ? 'dark' : 'light'; }, width <= 390);
+    await settle(page);
     const form = drawer.locator('#commerce-order-form');
     const geometry = await form.evaluate(node => {
       const field = name => node.querySelector(`[data-commerce-field="${name}"]`);
@@ -153,7 +155,8 @@ test('订单下拉框在展开后搜索，保留联动、草稿与快捷新增',
       const select = field('cardTypeId').querySelector('select');
       const controls = field('cardTypeId').querySelector('.field-control');
       return {
-        width: box(node).width, customer: box(field('customerId')), email: box(field('email')),
+        width: box(node).width, choice: box(node.querySelector('.order-identity-grid > .order-choice-grid')),
+        customer: box(field('customerId')), email: box(field('email')),
         owner: box(field('ownerId')), card: box(field('cardId')),
         payment: box(field('payment')), type: box(field('cardTypeId')), tail: box(field('paymentId')),
         labelsFit: ['customerId', 'cardId'].every(key => {
@@ -166,26 +169,50 @@ test('订单下拉框在展开后搜索，保留联动、草稿与快捷新增',
         clientWidth: node.closest('.drawer-body').clientWidth
       };
     });
-    assert(geometry.customer.width >= geometry.width - 1, JSON.stringify(geometry));
     assert(geometry.email.top >= geometry.customer.bottom);
-    assert(geometry.email.width >= geometry.width - 1, '邮箱账号单独一行占满宽度');
-    assert(geometry.owner.top >= geometry.email.bottom - 1, '归属人位于邮箱账号下方独立成行');
-    assert(geometry.owner.width >= geometry.width - 1, '归属人通栏显示完整操作者资料');
-    assert(geometry.labelsFit && geometry.actionsFit && geometry.scrollWidth <= geometry.clientWidth + 1);
-    if (width >= 753) {
+    assert(geometry.labelsFit && geometry.actionsFit && geometry.scrollWidth <= geometry.clientWidth + 1, JSON.stringify(geometry));
+    if (width > 900) {
+      assert.equal(geometry.customer.top, geometry.choice.top, '客户与开通选择在宽屏并排');
+      assert(geometry.choice.left >= geometry.customer.right);
+      assert.equal(geometry.email.top, geometry.owner.top, '宽屏邮箱与归属人同排');
+      assert(geometry.owner.left >= geometry.email.right);
       assert.equal(geometry.payment.top, geometry.type.top);
       assert.equal(geometry.card.top, geometry.tail.top);
       assert(geometry.card.top >= geometry.type.bottom);
     } else {
+      assert(geometry.customer.width >= geometry.width - 1 && geometry.choice.top >= geometry.customer.bottom);
+      assert(geometry.email.width >= geometry.width - 1 && geometry.owner.width >= geometry.width - 1);
+      assert(geometry.owner.top >= geometry.email.bottom - 1, '窄屏邮箱和归属人分行');
       assert(geometry.type.top >= geometry.payment.bottom);
       assert(geometry.card.top >= geometry.type.bottom);
       assert(geometry.tail.top >= geometry.card.bottom);
     }
     const readout = form.locator('[data-commerce-field="email"] .order-value-readout');
-    await readout.waitFor();
-    assert.equal(await readout.textContent(), longEmail);
-    if (width <= 390)
-      assert.equal(await form.locator('[data-commerce-field="cardTypeId"] .order-value-readout').textContent(), cardTypeName);
+    if (await form.locator('#commerce-email').evaluate(input => input.scrollWidth > input.clientWidth + 1)) {
+      await readout.waitFor();
+      assert.equal(await readout.textContent(), longEmail);
+    } else {
+      assert.equal(await form.locator('#commerce-email').inputValue(), longEmail);
+      await readout.waitFor({ state: 'detached' });
+    }
+    const cardType = form.locator('#commerce-cardTypeId');
+    assert.equal(await cardType.locator('option:checked').textContent(), cardTypeName);
+    const cardReadout = form.locator('[data-commerce-field="cardTypeId"] .order-value-readout');
+    const clipped = await cardType.evaluate(select => {
+      const style = getComputedStyle(select);
+      const probe = document.createElement('span');
+      probe.textContent = select.selectedOptions[0].textContent;
+      Object.assign(probe.style, { position: 'absolute', whiteSpace: 'pre', fontFamily: style.fontFamily,
+        fontSize: style.fontSize, fontWeight: style.fontWeight, letterSpacing: style.letterSpacing });
+      select.after(probe);
+      const width = probe.getBoundingClientRect().width;
+      probe.remove();
+      return width > select.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    });
+    if (clipped) {
+      await cardReadout.waitFor();
+      assert.equal(await cardReadout.textContent(), cardTypeName);
+    } else await cardReadout.waitFor({ state: 'detached' });
   }
   await drawer.locator('#commerce-email').fill('a@b.co');
   await drawer.locator('[data-commerce-field="email"] .order-value-readout').waitFor({ state: 'detached' });

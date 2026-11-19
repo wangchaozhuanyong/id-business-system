@@ -16,7 +16,7 @@ const units = ['local-data-read-cache', 'change-sync-client', 'change-sync-feed'
   'account-lifecycle', 'account-lifecycle-performance', 'personal-subscriptions', 'inventory-usage', 'operation-recovery',
   'mailbox-updates', 'mailbox-query-content', 'relay-mail-updates', 'recharge-events', 'recharge-activity'];
 const browsers = ['search-input', 'ui-idle-contract', 'change-sync', 'performance-read-index', 'system-monitoring', 'site-management',
-  'staff-workspaces', 'finance-reconciliation', 'renewal-handoff', 'shared-layout', 'page-lifecycle', 'order-completion', 'order-submit-stay', 'contact-recovery', 'operation-recovery',
+  'staff-workspaces', 'finance-reconciliation', 'renewal-handoff', 'login-security', 'shared-layout', 'order-statistics-cost', 'page-lifecycle', 'order-completion', 'order-submit-stay', 'contact-recovery', 'operation-recovery',
   'mobile-navigation-layout', 'design-list-boundaries', 'global-pagination', 'business-lists', 'site-visual-v2-border',
   'recharge-layout-transitions', 'recharge-cell-overflow', 'recharge-server-diagnostic', 'recharge-partner',
   'recharge-invoice-subscription', 'mailbox-updates', 'initial-loading-layout'];
@@ -43,6 +43,7 @@ for (const [name, args] of groups.filter(([name]) => !selected.length || selecte
   child.stdout.pipe(stream, { end: false }); child.stderr.pipe(stream, { end: false });
   const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
   await new Promise(resolve => stream.end(resolve));
+  if (code !== 0) console.error((await readFile(log, 'utf8')).slice(-6000));
   const previous = results.findIndex(result => result.name === name);
   const result = { name, started, code, log };
   if (previous < 0) results.push(result); else results[previous] = result;

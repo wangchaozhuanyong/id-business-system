@@ -28,7 +28,9 @@
   const inventoryPageDependencies = ['inventory', 'commerce', 'tools/mailbox-pool'];
   const listQueryScopes = scopes => [
     ...(orderPageDependencies.some(scope => scopes.includes(scope)) ? ['order-page'] : []),
-    ...(inventoryPageDependencies.some(scope => scopes.includes(scope)) ? ['inventory-page'] : [])
+    ...(inventoryPageDependencies.some(scope => scopes.includes(scope)) ? ['inventory-page'] : []),
+    ...(scopes.some(scope => ['commerce', 'inventory', 'subscription-management'].includes(scope))
+      ? ['renewal-sidebar', 'renewal-handoffs'] : [])
   ];
   const sourceError = () => Object.assign(new Error('业务数据来源已变化，请重新加载页面后核对'), {
     status: 409, code: 'DATA_SOURCE_CHANGED'
@@ -67,7 +69,6 @@
     if (scopes.includes('inventory')) { expanded.add('appleBalance'); expanded.add('apple-relay'); expanded.add('tools/mailbox-pool'); }
     if (scopes.includes('operators')) expanded.add('order-owners');
     if (scopes.some(scope => ['commerce', 'inventory', 'order-sync'].includes(scope))) expanded.add('site-data-health');
-    if (scopes.some(scope => ['commerce', 'inventory', 'subscription-management'].includes(scope))) expanded.add('renewal-sidebar');
     queries.invalidate([...expanded, ...listQueryScopes(scopes)]);
     notifyChanges(scopes);
   }
@@ -620,7 +621,7 @@
     renewalHandoffs: (view, id) => request('renewals?' + new URLSearchParams({ view, ...(id && { id }) })),
     renewalSidebar: () => request('renewal-sidebar'),
     saveRenewalHandoff: (command, options) => write(['renewal-handoffs',
-      ...(command.action === 'finish' ? ['commerce', 'appleBalance'] : [])],
+      ...(command.action === 'finish' ? ['commerce', 'appleBalance'] : command.action === 'decline' ? ['commerce'] : [])],
       () => request('renewals', command, 'POST', options)),
     subscriptionConfirm: (command) => write(['subscription-management'], () => request('subscriptions/confirm', command, 'POST')),
     subscriptionOwner: (command) => write(['subscription-management'], () => request('subscriptions/owner', command, 'POST')),

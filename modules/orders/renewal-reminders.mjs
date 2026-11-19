@@ -104,6 +104,16 @@ export function confirmedRenewalOrders(orders, at, hasOpeningEvidence) {
   });
 }
 
+// Commerce logs are newest first. A later restoration supersedes an earlier refusal.
+export function latestRenewalDecisions(logs) {
+  const decisions = new Map();
+  for (const entry of logs) {
+    if (['拒续费', '恢复续费提醒'].includes(entry.type) && !decisions.has(entry.entityId))
+      decisions.set(entry.entityId, entry);
+  }
+  return decisions;
+}
+
 export function renewalProjection({ orders, customers, logs, renewalWarningHours, evaluatedAt, hasOpeningEvidence, endedInventoryOrder }) {
   const identities = identifyOrderCustomers(orders, customers);
   const deadline = evaluatedAt + renewalWarningHours * 3_600_000;
@@ -120,10 +130,8 @@ export function renewalProjection({ orders, customers, logs, renewalWarningHours
     if (!prior || row.expiry > prior.expiry || (row.expiry === prior.expiry && row.start > prior.start))
       latest.set(row.subscription, row);
   }
-  const decisions = new Map(), links = new Map();
+  const decisions = latestRenewalDecisions(logs), links = new Map();
   for (const entry of logs) {
-    if (['拒续费', '恢复续费提醒'].includes(entry.type) && !decisions.has(entry.entityId))
-      decisions.set(entry.entityId, entry);
     if (entry.type === '关联续费订单') {
       if (!links.has(entry.entityId)) links.set(entry.entityId, []);
       links.get(entry.entityId).push(entry.relatedOrderId);

@@ -437,3 +437,38 @@ test('sign-in waits for a human check and then requests the authenticator code',
   assert.equal(factorChecks, 1);
   assert.deepEqual(browserErrors, []);
 });
+
+test('员工分组随角色切换，只能选择启用的主管，重新打开时按角色恢复', async t => {
+  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
+  t.after(() => browser.close());
+  const employees = [
+    { ...actor('supervisor'), active: true, version: 1 },
+    { ...actor('supervisor'), id: 'inactive-lead', name: '已停用主管', active: false, version: 1 },
+    { ...actor('finance'), active: true, version: 1 },
+    { ...actor('employee'), active: true, teamLeadId: actor('supervisor').id, version: 1 }
+  ];
+  const { page } = await prepare(browser, 'super', { ...localFixtures, 'auth/employees': { employees } });
+  await page.goto(origin + '/#/settings/accounts');
+  const edit = role => page.locator(`[data-action="ops-local-staff-edit"][data-id="${actor(role).id}"]`).click();
+  const close = () => page.getByRole('button', { name: '关闭抽屉' }).click();
+  const role = page.locator('#local-staff-role'), lead = page.locator('#local-staff-team-lead');
+  await edit('finance');
+  assert(!await lead.isVisible() && await lead.isDisabled());
+  await close();
+  await edit('employee');
+  assert.equal(await lead.inputValue(), actor('supervisor').id);
+  assert.deepEqual(await lead.locator('option').evaluateAll(nodes => nodes.map(node => node.value)), ['', actor('supervisor').id]);
+  await close();
+  await page.getByRole('button', { name: '新增员工', exact: true }).click();
+  await lead.selectOption(actor('supervisor').id);
+  for (const value of ['admin', 'finance', 'registrar', 'supervisor']) {
+    await role.selectOption(value);
+    assert(!await lead.isVisible() && await lead.isDisabled(), value);
+  }
+  await close();
+  await page.getByRole('button', { name: '新增员工', exact: true }).click();
+  assert.equal(await role.inputValue(), 'supervisor');
+  assert(!await lead.isVisible() && await lead.isDisabled());
+  await role.selectOption('employee');
+  assert(await lead.isVisible() && await lead.isEnabled());
+});

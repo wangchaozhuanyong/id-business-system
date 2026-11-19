@@ -223,6 +223,19 @@ export async function spacingSnapshot(page, scope = '#main') {
     const findings = [],
       cards = [];
     const visible = (el) => el.checkVisibility() && el.getBoundingClientRect().width > 0;
+    // Only the visible part of a horizontally scrollable row can touch a panel edge.
+    const horizontalInsets = (box, node, panel, rect) => {
+      let { left, right } = box;
+      if (left - rect.left < 10 || rect.right - right < 10) {
+        for (let el = node.parentElement; el && el !== panel; el = el.parentElement) {
+          if (el.scrollWidth <= el.clientWidth || !/^(auto|scroll)$/.test(getComputedStyle(el).overflowX)) continue;
+          const start = el.getBoundingClientRect().left + el.clientLeft;
+          if (el.scrollLeft > 0) left = Math.max(left, start);
+          if (el.scrollLeft + el.clientWidth < el.scrollWidth) right = Math.min(right, start + el.clientWidth);
+        }
+      }
+      return { left: left - rect.left, right: rect.right - right };
+    };
     const inVerticalScrollport = (node, panel) => {
       for (let parent = node.parentElement; parent && parent !== panel; parent = parent.parentElement) {
         if (parent.scrollHeight > parent.clientHeight + 1 && /^(auto|scroll)$/.test(getComputedStyle(parent).overflowY))
@@ -256,9 +269,8 @@ export async function spacingSnapshot(page, scope = '#main') {
         range.selectNodeContents(node);
         const box = range.getBoundingClientRect();
         if (!box.width || box.right < rect.left || box.left > rect.right) continue;
-        const left = box.left - rect.left,
-          right = rect.right - box.right,
-          bottom = rect.bottom - box.bottom;
+        const { left, right } = horizontalInsets(box, parent, panel, rect);
+        const bottom = rect.bottom - box.bottom;
         // Scrollable content can lie below the outer panel. Its horizontal
         // padding still counts; reachability is checked by the owning page.
         if (left < 10 || right < 10 || (bottom < 7 && !inVerticalScrollport(parent, panel)))
@@ -280,10 +292,9 @@ export async function spacingSnapshot(page, scope = '#main') {
           control.closest('table,.tabs,.recharge-integration__nav')
         )
           continue;
-        const box = control.getBoundingClientRect(),
-          left = box.left - rect.left,
-          right = rect.right - box.right,
-          bottom = rect.bottom - box.bottom;
+        const box = control.getBoundingClientRect();
+        const { left, right } = horizontalInsets(box, control, panel, rect);
+        const bottom = rect.bottom - box.bottom;
         if (left < 10 || right < 10 || (bottom < 7 && !inVerticalScrollport(control, panel)))
           findings.push({
             control: control.id || control.textContent.slice(0, 45),

@@ -289,7 +289,7 @@ const navigation = [
     ['员工数据统计', 'data-management/employee-statistics']
   ]],
   ['插件管理', 'grid', [
-    ['邮箱查询与邮箱池', 'plugins/mailboxes'],
+    ['邮箱查询', 'plugins/mailboxes'],
   ]],
   ['数据中心', 'database', [['数据中心', 'data']]],
   ['监控中心', 'monitor', [
@@ -1108,12 +1108,16 @@ function table(columns, rows, scope = '', tableId = 'default', emptyState, selec
   const check = scope
     ? `<th class="check-cell"><label class="table-selection"><input type="checkbox" aria-label="选择当前页" data-select-all="${scope}" ${selectableRows.length && selectableRows.every((row) => getSelection(scope).has(row.id)) ? 'checked' : ''} ${selectableRows.length ? '' : 'disabled'} /><span class="mobile-record-only">选择本页</span></label></th>`
     : '';
+  const cellClasses = column => [
+    column.class, column.action && 'table-actions', column.align === 'end' && 'table-number',
+    column.align === 'end' && column.headerHelp && 'table-number-with-help'
+  ].filter(Boolean).join(' ');
   const headers = visible.map((column) => {
     const label = escapeHtml(column.label);
     const help = column.headerHelp && titleInfo(column.label, column.headerHelp,
       `column-help-${encodeURIComponent(tableId)}-${encodeURIComponent(column.id)}`);
     const content = help ? `<div class="title-with-help"><span>${label}</span>${help}</div>` : label;
-    return `<th class="${column.class || ''} ${column.action ? 'table-actions' : ''}" scope="col"${help ? ` aria-label="${label}"` : ''}>${content}</th>`;
+    return `<th class="${cellClasses(column)}" scope="col"${help ? ` aria-label="${label}"` : ''}>${content}</th>`;
   }).join('');
   const mobileCards = tableId !== '苹果 ID 管理';
   const dataColumns = visible.filter(column => !column.action);
@@ -1137,7 +1141,7 @@ function table(columns, rows, scope = '', tableId = 'default', emptyState, selec
     const presentation = column.action ? 'actions' : column === identity ? 'identity' : summaryColumns.has(column.id) ? 'summary' : 'secondary';
     const toggle = mobileCards && expandable && column === toggleColumn
       ? '<button type="button" class="text-button mobile-record-only mobile-record-toggle" data-action="table-mobile-toggle" aria-expanded="false">更多资料</button>' : '';
-    return `<td class="${column.class || ''} ${column.action ? 'table-actions' : ''}" data-column="${escapeHtml(column.id)}" data-mobile-field="${presentation}" data-label="${escapeHtml(column.label)}">${column.action ? renderTableCell(column, row, tableId) : `<div class="mobile-record-value">${renderTableCell(column, row, tableId)}</div>`}${toggle}</td>`;
+    return `<td class="${cellClasses(column)}" data-column="${escapeHtml(column.id)}" data-mobile-field="${presentation}" data-label="${escapeHtml(column.label)}">${column.action ? renderTableCell(column, row, tableId) : `<div class="mobile-record-value">${renderTableCell(column, row, tableId)}</div>`}${toggle}</td>`;
   }).join('')}</tr>`;
   const viewportClasses = ['table-viewport', mobileCards ? 'mobile-records' : '',
     scope ? 'mobile-records--selectable' : '',
@@ -1337,6 +1341,14 @@ document.addEventListener('input', event => {
     if (output) output.textContent = event.target.value.replace('T', ' ');
   }
 });
+function hasSidebarSubmenu(group, children) {
+  return children.length > 1 || group === '插件管理' || group === '监控中心';
+}
+function setDesktopSidebarCollapsed(collapsed) {
+  state.collapsed = collapsed;
+  document.body.classList.toggle('is-collapsed', collapsed);
+  $('#nav-toggle').setAttribute('aria-expanded', String(!collapsed));
+}
 function renderSidebar(openCurrent = false) {
   const previousScroll = $('.sidebar-navigation')?.scrollTop || 0;
   const isCurrent = (route) => orderSubmissionRoute(route)
@@ -1351,13 +1363,13 @@ function renderSidebar(openCurrent = false) {
   const currentGroup = allowedNavigation.find((group) =>
     group[2].some((item) => isCurrent(item[1]))
   );
-  if (openCurrent && currentGroup && (currentGroup[2].length > 1 || currentGroup[0] === '监控中心')) state.expandedGroup = currentGroup[0];
+  if (openCurrent && currentGroup && hasSidebarSubmenu(currentGroup[0], currentGroup[2])) state.expandedGroup = currentGroup[0];
   const renewalCount = permittedRoute('workspace/renewals')
     ? window.IDDesignAPI.modules.commerce?.renewalReminderCount?.() || 0 : 0;
   $('#sidebar').innerHTML =
     `<a class="brand" href="#/mailboxes/google" aria-label="AI订阅管理系统首页" title="AI订阅管理系统"><img class="brand-mark" src="/brand/ai-subscription-mark.png" width="36" height="36" alt="" /><span class="brand-name">AI订阅管理系统</span></a><nav class="sidebar-navigation" tabindex="0" aria-label="业务模块导航">${allowedNavigation
       .map(([group, iconName, children]) => {
-        const direct = children.length === 1 && group !== '监控中心';
+        const direct = !hasSidebarSubmenu(group, children);
         const active = currentGroup?.[0] === group;
         const expanded = state.expandedGroup === group;
         return `<div class="nav-group" data-tone="${({ mail: 'cyan', key: 'violet', users: 'teal', user: 'teal', orders: 'blue', bolt: 'violet', database: 'blue', monitor: 'teal', settings: 'blue', work: 'violet' })[iconName] || 'blue'}">${direct ? `<a class="nav-heading ${active ? 'active-direct' : ''}" href="#/${children[0][1]}" title="${group}" ${active ? 'aria-current="page"' : ''}>${icon(iconName)}<span class="nav-text">${group}</span></a>` : `<button class="nav-heading ${active ? 'active-parent' : ''}" data-action="nav-group" data-group="${group}" aria-expanded="${expanded}" title="${group}">${icon(iconName)}<span class="nav-text">${group}</span>${icon(expanded ? 'down' : 'chevron', 'chevron')}</button>${expanded ? `<div class="nav-children">${children.map(([title, route, placeholder]) => `<a class="nav-child ${isCurrent(route) ? 'active' : ''}" href="#/${route === 'plugins/websites' && permittedRoute('monitor') ? 'monitor' : route}" ${isCurrent(route) ? 'aria-current="page"' : ''}>${title}${route === 'workspace/renewals' ? `<small id="renewal-reminder-count" aria-label="待处理提醒" ${renewalCount ? '' : 'hidden'}>${renewalCount}</small>` : placeholder ? '<small>占位</small>' : ''}</a>`).join('')}</div>` : ''}`}</div>`;
@@ -1719,7 +1731,7 @@ function renderOrders() {
                 label: '资料完整性',
                 render: (row) => tag(row.status, row.status === '待补全' ? 'warning' : 'success')
               },
-              { id: 'profit', label: '收益 CNY' },
+              { id: 'profit', label: '收益 CNY', align: 'end' },
               {
                 id: 'actions',
                 label: '操作',
@@ -2965,7 +2977,10 @@ document.addEventListener('click', async (event) => {
   }
   if (action === 'nav-group') {
     const group = node.dataset.group;
-    state.expandedGroup = state.expandedGroup === group ? null : group;
+    if (window.innerWidth > 900 && state.collapsed) {
+      setDesktopSidebarCollapsed(false);
+      state.expandedGroup = group;
+    } else state.expandedGroup = state.expandedGroup === group ? null : group;
     renderSidebar();
     const heading = $(`#sidebar [data-group="${CSS.escape(group)}"]`);
     heading?.focus({ preventScroll: true });
@@ -3508,21 +3523,15 @@ $('#nav-toggle').addEventListener('click', () => {
   if (window.innerWidth <= 900) {
     const open = document.body.classList.toggle('nav-open');
     $('#sidebar-shade').hidden = !open;
+    $('#nav-toggle').setAttribute('aria-expanded', String(open));
     if (open) mobileSidebarScroll = window.scrollY;
     else if (mobileSidebarScroll !== null) {
       restorePageScroll(mobileSidebarScroll);
       mobileSidebarScroll = null;
     }
   } else {
-    state.collapsed = !state.collapsed;
-    document.body.classList.toggle('is-collapsed', state.collapsed);
+    setDesktopSidebarCollapsed(!state.collapsed);
   }
-  $('#nav-toggle').setAttribute(
-    'aria-expanded',
-    String(
-      window.innerWidth <= 900 ? document.body.classList.contains('nav-open') : !state.collapsed
-    )
-  );
 });
 $('#sidebar-shade').addEventListener('click', () => {
   document.body.classList.remove('nav-open');

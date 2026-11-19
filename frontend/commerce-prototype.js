@@ -988,7 +988,7 @@
       </div>
     </div>`;
   }
-  function filterPicker(search) {
+  function filterPicker(search, opening = false) {
     const picker = search.closest('.commerce-search-picker');
     const select = picker?.querySelector('select');
     if (!select) return;
@@ -1003,7 +1003,7 @@
     }
     trigger.disabled = select.disabled;
     const popup = picker.querySelector('.commerce-picker-popover');
-    if (!popup.matches(':popover-open')) return;
+    if (!opening && !popup.matches(':popover-open')) return;
     const terms = search.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
     const showUnavailable = select.id === 'commerce-cardId' && select.form && orderCardSource(select.form)?.pool === false;
     const options = [...select.options].filter(option => (!option.disabled || showUnavailable) &&
@@ -3271,8 +3271,6 @@
     if (owner) draft['commerce-ownerId'] = owner.value;
     const login = form.elements?.['commerce-loginMethod'];
     if (login) draft['commerce-loginMethod'] = login.value;
-    const quickCustomer = form.querySelector?.('.order-quick-customer-disclosure');
-    if (quickCustomer) draft['order-quick-customer-open'] = quickCustomer.open;
     delete draft['commerce-balanceReversalConfirmed'];
     return draft;
   }
@@ -4294,55 +4292,79 @@
   const historicalApplePaymentFields = ['payment', 'appleIdId', 'appleStoreRegion', 'paidAmount', 'paidCurrency',
     'paidConfirmed', 'paymentId', 'cardId', 'cardTypeId'];
   function orderCustomerField(customerId, quickDraft, existing) {
-    const add = A.button('新增', 'commerce-quick-customer', '', 'plus', `aria-haspopup="dialog"${quickDraft ? ' disabled' : ''}`);
+    const add = A.button('新增', 'commerce-quick-customer', '', 'plus', 'aria-haspopup="dialog"');
     const choices = orderCustomerChoices(customerId);
     if (customerId && !choices.some(([id]) => id === customerId))
       choices.push([customerId, '原客户待核对']);
     const picker = searchableSelect('customerId', '客户', choices, customerId, quickDraft ? '' : add);
-    const hasQuickInput = quickDraft && (quickDraft['order-quick-customer-name'] || quickDraft['order-quick-customer-wechat']);
     const control = quickDraft ? `<div class="order-customer-row">${picker}
+      ${A.button('匹配或新增', 'commerce-customer-match-open', '', 'plus', 'aria-haspopup="dialog" aria-controls="drawer"')}
       ${A.input('order-customer-history-email', quickDraft['order-customer-history-email'] ?? '', 'type="hidden"')}
-      <details class="order-quick-customer-disclosure"${(quickDraft['order-quick-customer-open'] ?? hasQuickInput) ? ' open' : ''}>
-      <summary class="button">${A.icon('plus')}匹配或新增</summary>
-      <div class="order-quick-customer" role="group" aria-label="匹配或新增客户">
-        ${A.input('order-quick-customer-name', quickDraft['order-quick-customer-name'] ?? '',
-          'aria-label="客户姓名" aria-describedby="order-quick-customer-status" placeholder="客户姓名" maxlength="80"')}
-        ${A.input('order-quick-customer-wechat', quickDraft['order-quick-customer-wechat'] ?? '',
-          'aria-label="客户微信" aria-describedby="order-quick-customer-status" placeholder="客户微信" maxlength="60"')}
-        ${add}<p class="footnote order-quick-customer-status" id="order-quick-customer-status" role="status" hidden></p>
-      </div>
-      </details>
-    </div>` : picker;
+      ${A.input('order-quick-customer-name', quickDraft['order-quick-customer-name'] ?? '', 'type="hidden"')}
+      ${A.input('order-quick-customer-wechat', quickDraft['order-quick-customer-wechat'] ?? '', 'type="hidden"')}
+    </div><p class="footnote" id="order-quick-customer-status" role="status" hidden></p>` : picker;
     return field('客户资料', 'customerId', control, !existing || Boolean(existing.customerId),
       historicalStockWithoutBuyer(existing) ? '可以按原销售记录补选买家。暂时查不到买家时，可以先保存其他修改。' : '');
   }
   const composingCustomerFields = new WeakSet();
-  const isOrderCustomerLookupInput = node => ['order-quick-customer-name', 'order-quick-customer-wechat'].includes(node.id);
+  const isOrderCustomerLookupInput = node => node.form?.id === 'order-customer-match-form';
   function readOrderCustomerLookup(form) {
     const nameInput = form.elements?.['order-quick-customer-name'];
     if (!nameInput) return null;
-    const wechatInput = form.elements['order-quick-customer-wechat'];
-    if (composingCustomerFields.has(nameInput) || composingCustomerFields.has(wechatInput))
-      return { kind: 'composing' };
-    const name = nameInput.value.trim(), wechat = wechatInput.value.trim();
+    const name = nameInput.value.trim(), wechat = form.elements['order-quick-customer-wechat'].value.trim();
     return { name, wechat, ...matchOrderCustomer(customers, name, wechat) };
+  }
+  const orderMatchKey = orderKey => orderKey + ':customer-match';
+  function openOrderCustomerMatch(order) {
+    const key = orderMatchKey(order.dataset.commerceDraft);
+    const draft = S.drafts.get(key) || {};
+    const selected = customers.find(row => row.id === order.elements['commerce-customerId'].value);
+    const lookup = readOrderCustomerLookup(order);
+    const name = draft['order-match-name'] ?? (lookup.name || selected?.name || '');
+    const wechat = draft['order-match-wechat'] ?? (lookup.name ? lookup.wechat : selected?.wechat || '');
+    const body = `<form id="order-customer-match-form" data-order-key="${E(order.dataset.commerceDraft)}">
+      ${A.field('客户姓名', 'order-match-name', A.input('order-match-name', name,
+        'maxlength="80" required aria-describedby="order-match-status"'), true)}
+      ${A.field('客户微信', 'order-match-wechat', A.input('order-match-wechat', wechat,
+        'maxlength="60" aria-describedby="order-match-status"'))}
+      <p class="footnote" id="order-match-status" role="status"></p></form>`;
+    A.openDrawer('匹配或新增客户', '按姓名和微信匹配已有客户。新客户可随订单新增，也可补齐资料后立即建档。',
+      body, A.button('取消', 'drawer-close') + A.button('新增客户资料', 'commerce-customer-match-create') +
+      A.button('使用此客户', 'commerce-customer-match-apply', 'primary'), key);
+    updateOrderMatchDrawer($('#order-customer-match-form'));
+    $('#order-match-name').focus({ preventScroll: true });
+  }
+  function updateOrderMatchDrawer(form) {
+    const nameInput = form.elements['order-match-name'], wechatInput = form.elements['order-match-wechat'];
+    const name = nameInput.value.trim(), wechat = wechatInput.value.trim();
+    const lookup = composingCustomerFields.has(nameInput) || composingCustomerFields.has(wechatInput)
+      ? { kind: 'composing' } : { name, wechat, ...matchOrderCustomer(customers, name, wechat) };
+    const drawer = form.closest('dialog'), matched = lookup.kind === 'matched';
+    const match = matched && customers.find(row => row.id === lookup.customerId);
+    const apply = $('[data-action="commerce-customer-match-apply"]', drawer);
+    apply.textContent = lookup.kind === 'new' ? '随订单新增' : '使用此客户';
+    apply.disabled = !matched && lookup.kind !== 'new';
+    $('[data-action="commerce-customer-match-create"]', drawer).disabled = !canAddOrderCustomer(lookup);
+    $('#order-match-status', form).textContent = match ? ['已匹配 ' + match.name, match.wechat].filter(Boolean).join(' · ')
+      : lookup.kind === 'composing' ? '' : orderCustomerLookupMessage(lookup);
+    return lookup;
   }
   const canAddOrderCustomer = lookup => lookup.kind === 'new' || lookup.kind === 'same-name';
   function orderCustomerLookupMessage(lookup) {
     switch (lookup.kind) {
       case 'empty': return lookup.wechat ? '请先填写客户姓名。' : '';
       case 'matched': return '已匹配客户。';
-      case 'new': return '提交订单时将新增客户。';
-      case 'same-name': return '同名客户的微信不同，确认是另一位客户后可点「新增」。';
+      case 'new': return '未匹配到已有客户。';
+      case 'same-name': return '同名客户的微信不同，确认是另一位客户后可点「新增客户资料」。';
       case 'inactive': return '已有停用资料，请先到客户数据核对或恢复。';
-      case 'wechat-conflict': return '此微信已关联其他姓名，请从左侧核对客户。';
+      case 'wechat-conflict': return '此微信已关联其他姓名，请核对客户姓名和微信。';
       case 'invalid': return '请核对客户姓名和微信的格式。';
-      default: return '无法唯一匹配客户，请核对微信或从左侧选择。';
+      default: return '无法唯一匹配客户，请核对微信或返回订单选择客户。';
     }
   }
   function updateOrderCustomerLookup(form, { editing = false, refreshChoices = false } = {}) {
     const lookup = readOrderCustomerLookup(form);
-    if (!lookup || lookup.kind === 'composing') return lookup;
+    if (!lookup) return lookup;
     const select = form.elements['commerce-customerId'];
     const previousId = select.value;
     const fromQuery = editing || lookup.name || lookup.wechat;
@@ -4354,12 +4376,12 @@
     if (select.value !== previousId) onChange(select, true);
     else if (refreshChoices) filterPicker($('[data-commerce-picker="customerId"]', form));
 
-    const message = !fromQuery && inactiveSelection ? '原客户资料已变化，请从左侧重新选择。'
-      : orderCustomerLookupMessage(lookup);
+    const message = !fromQuery && inactiveSelection ? '原客户资料已变化，请重新选择客户。'
+      : lookup.kind === 'new' ? `${lookup.name} · 随订单新增`
+      : lookup.kind === 'matched' ? '' : orderCustomerLookupMessage(lookup);
     const status = $('#order-quick-customer-status', form);
     if (status.textContent !== message) status.textContent = message;
     status.hidden = !message;
-    $('[data-action="commerce-quick-customer"]', form).disabled = !canAddOrderCustomer(lookup);
     if (editing) A.setError('commerce-customerId', '', form);
     return lookup;
   }
@@ -4368,6 +4390,8 @@
     for (const form of document.querySelectorAll('#main #commerce-order-form')) {
       if (updateOrderCustomerLookup(form, { refreshChoices: true })) refreshed = true;
     }
+    const matcher = $('#drawer[open] #order-customer-match-form');
+    if (matcher) updateOrderMatchDrawer(matcher);
     if (refreshed) saveDrafts();
     return refreshed;
   }
@@ -6171,12 +6195,12 @@
         { id: 'proCardSerial', label: '卡序列号', render: (row) => E(proCardSerialLabel(row)) }
       ] : []),
       {
-        id: 'paidAmount',
+        id: 'paidAmount', align: 'end',
         label: '代付金额',
         render: (row) => `<span class="table-amount">${E(display(row.paidAmount))}</span><span class="table-unit">${E(currencyLabel(row.paidCurrency))}</span>`
       },
       {
-        id: 'saleAmount',
+        id: 'saleAmount', align: 'end',
         label: '售卖金额',
         render: (row) =>
           row.saleAmount === ''
@@ -6184,12 +6208,12 @@
             : `<span class="table-amount">${E(display(row.saleAmount))}</span><span class="table-unit">${E(currencyLabel(row.saleCurrency))}</span>`
       },
       {
-        id: 'netCost', label: `净成本 ${currency}`,
+        id: 'netCost', align: 'end', label: `净成本 ${currency}`,
         headerHelp: '已知费用折算合计，减去渠道已到账回款。',
         render: row => statisticsAmount(row.list ? row.list.netCost : localData ? fact(row).cost?.netCost : costsFor(row).total)
       },
       {
-        id: 'profit',
+        id: 'profit', align: 'end',
         label: `利润 ${currency}`,
         headerHelp: '客户净收款减已知净成本。点击金额查看费用明细。',
         render: (row) => {
@@ -7423,7 +7447,7 @@
     const planChoices = [...definitions].filter(([, row]) => statisticsMatchesProduct(row, f.product))
       .map(([key, row]) => [key, statisticsPlanLabel(row.product, row.plan)]);
     const operations = [...new Set(orders.map(row => row.businessType).filter(Boolean))];
-    return `<section class="panel commerce-stat-filters" aria-label="订单统计筛选"><div class="toolbar commerce-stat-filter-controls">
+    return `<section class="panel commerce-stat-filters" aria-label="订单统计筛选"><div class="toolbar commerce-stat-filter-controls commerce-stat-order-controls">
       ${select('dateBasis', '统计日期', [['created', '订单录入日'], ['opened', '实际开通日']], f.dateBasis || 'created')}
       ${date('from', '开始日期')}${date('to', '结束日期')}
       ${select('product', '产品', [['', '全部产品'], ...productChoices])}
@@ -7484,10 +7508,10 @@
     return A.table([
       { id: 'name', label: '套餐 / 渠道', render: row =>
         row.channel ? `<span class="commerce-stat-channel">${E(row.name)}</span>` : E(row.name) },
-      { id: 'count', label: '订单数', render: row => row.facts.length },
-      { id: 'revenue', label: `净收款（${currency}）`, headerHelp: '客户实收减退款，按每笔订单的汇率折算。',
+      { id: 'count', align: 'end', label: '订单数', render: row => row.facts.length },
+      { id: 'revenue', align: 'end', label: `净收款（${currency}）`, headerHelp: '客户实收减退款，按每笔订单的汇率折算。',
         render: row => statisticsAmount(statisticsSum(row.facts, fact => fact.revenue)) },
-      { id: 'netCost', label: `已知净成本（${currency}）`, mobileSummary: true,
+      { id: 'netCost', align: 'end', label: `已知净成本（${currency}）`, mobileSummary: true,
         headerHelp: '订阅代付、开卡、KYC、手续费等已知费用折算后相加，再减已到账回款。',
         render: row => {
           const total = statisticsTotals(row.facts);
@@ -7495,10 +7519,10 @@
           return total.count ? `<div class="commerce-stat-amounts"><strong>${statisticsAmount(total.netCost)}</strong>
             <small>单均 ${statisticsAmount(total.average)} · ${total.count} 笔${unallocated ? ` · ${unallocated} 笔开卡费未分摊` : ''}</small></div>` : '—';
         } },
-      { id: 'profit', label: `自动计算利润（${currency}）`, mobileSummary: true,
+      { id: 'profit', align: 'end', label: `自动计算利润（${currency}）`, mobileSummary: true,
         headerHelp: '对有净收款和已知净成本的订单，逐笔相减后加总。',
         render: row => statisticsAmount(statisticsTotals(row.facts).profit) },
-      { id: 'pending', label: '计算缺项', mobileSummary: true, render: row => row.facts.filter(fact => fact.pending).length },
+      { id: 'pending', align: 'end', label: '计算缺项', mobileSummary: true, render: row => row.facts.filter(fact => fact.pending).length },
       { id: 'actions', label: '操作', action: true, render: row => {
         if (!row.facts.length) return '';
         const expanded = moduleState.statsExpanded === row.group;
@@ -7541,10 +7565,10 @@
     };
     return A.table([
       { id: 'name', label: '费用项目', render: row => `<div class="title-with-help"><span>${row.name}</span>${A.titleInfo(row.name, row.help, 'stat-fee-' + row.id)}</div>` },
-      { id: 'actual', label: '实账', mobileSummary: true, render: row => feeCell(row, 'actual') },
-      { id: 'reference', label: '参考', mobileSummary: true, render: row => feeCell(row, 'reference') },
-      { id: 'partial', label: '部分已知费用', mobileSummary: true, render: row => feeCell(row, 'partial') },
-      { id: 'total', label: `费用合计（${currency}）`, mobileSummary: true,
+      { id: 'actual', align: 'end', label: '实账', mobileSummary: true, render: row => feeCell(row, 'actual') },
+      { id: 'reference', align: 'end', label: '参考', mobileSummary: true, render: row => feeCell(row, 'reference') },
+      { id: 'partial', align: 'end', label: '部分已知费用', mobileSummary: true, render: row => feeCell(row, 'partial') },
+      { id: 'total', align: 'end', label: `费用合计（${currency}）`, mobileSummary: true,
         headerHelp: '按每笔订单的历史汇率把左侧各项折算到同一币种后相加。',
         render: row => statisticsAmount(statisticsSum(row.lines, line => line.amount)) }
     ], rows, '', 'commerce-fee-statistics');
@@ -7892,17 +7916,17 @@
       { id: 'reason', label: pending ? '缺少的计算资料' : '计算依据', mobileSummary: true, render: row =>
         E(row.reasons.join('、') || row.cost?.appleLedgerNote || (row.cost?.cardIssueUnallocated ? '已计算 · 开卡费未分摊'
           : row.cost?.singleUseCardFee ? '参考核算 · 一次性虚拟卡' : accountingLabel(row.basis))) },
-      ...(feeScope ? [{ id: 'feeAmount', label: `${feeScope[1]}（${currency}）`, mobileSummary: true, render: row =>
+      ...(feeScope ? [{ id: 'feeAmount', align: 'end', label: `${feeScope[1]}（${currency}）`, mobileSummary: true, render: row =>
         statisticsAmount(row.feeAmount) }] : []),
-      { id: 'cardIssue', label: `开卡费（${currency}）`, headerHelp: statisticsFeeTypes.find(([key]) => key === 'card-issue')[2],
+      { id: 'cardIssue', align: 'end', label: `开卡费（${currency}）`, headerHelp: statisticsFeeTypes.find(([key]) => key === 'card-issue')[2],
         render: row => row.cost?.cardIssueUnallocated ? '未分摊' : statisticsAmount(statisticsSum(
           statisticsFeeItems(row).filter(line => line.key === 'card-issue'), line => line.amount)) },
-      { id: 'kyc', label: `KYC（${currency}）`, headerHelp: statisticsFeeTypes.find(([key]) => key === 'kyc')[2],
+      { id: 'kyc', align: 'end', label: `KYC（${currency}）`, headerHelp: statisticsFeeTypes.find(([key]) => key === 'kyc')[2],
         render: row => statisticsAmount(statisticsSum(statisticsFeeItems(row).filter(line => line.key === 'kyc'), line => line.amount)) },
-      { id: 'netCost', label: `已知净成本（${currency}）`, mobileSummary: true, render: row =>
+      { id: 'netCost', align: 'end', label: `已知净成本（${currency}）`, mobileSummary: true, render: row =>
         E(statisticsAmount(row.cost?.netCost)) },
-      { id: 'revenue', label: `确认净收款（${currency}）`, render: row => statisticsAmount(row.revenue) },
-      { id: 'amount', label: `利润（${currency}）`, render: row =>
+      { id: 'revenue', align: 'end', label: `确认净收款（${currency}）`, render: row => statisticsAmount(row.revenue) },
+      { id: 'amount', align: 'end', label: `利润（${currency}）`, render: row =>
         E(row.originalProfit ? originalProfitText(row.originalProfit)
           : statisticsAmount(row.gain) + (row.basis === 'partial' && row.gain !== null ? ' · 参考' : '')) },
       { id: 'actions', label: '操作', action: true, render: row =>
@@ -8253,6 +8277,7 @@
           const draft = S.drafts.get(back.key) || {};
           draft[`commerce-${tenant ? back.target : 'customerId'}`] = saved.id;
           if (back.identity) {
+            S.drafts.delete(orderMatchKey(back.key));
             delete draft['order-quick-customer-name'];
             delete draft['order-quick-customer-wechat'];
           }
@@ -8507,10 +8532,6 @@
   function saveOrder(form, appleBalanceReady = false, tenantCardChecked = false) {
     if (!canManageOrders() || saving) return;
     const customerLookup = updateOrderCustomerLookup(form);
-    if (customerLookup?.kind === 'composing') {
-      A.notify('请先完成客户姓名或微信的输入。');
-      return;
-    }
     const raw = A.readForm(form);
     const existing = orders.find((row) => row.id === value(raw, 'id'));
     const onlyNotes = orderNoteFields.get(form);
@@ -8816,6 +8837,7 @@
           },
           () => {
             committed = true;
+            S.drafts.delete(orderMatchKey(key));
             if (!existing) orderReceipts.set(submittedRoute, { id, actorId: operator.id });
             cleanClose(key);
             A.render();
@@ -9713,10 +9735,8 @@
     );
     return { ok: true, settings: safeClone(costSettings) };
   }
-  function quickCreate(tenant, node) {
-    const form = node.closest('#commerce-order-form');
+  function quickCreate(tenant, node, form = node.closest('#commerce-order-form'), lookup = null) {
     if (!form) return;
-    const lookup = tenant ? null : updateOrderCustomerLookup(form);
     if (lookup && !canAddOrderCustomer(lookup)) return;
     const identity = lookup ? { name: lookup.name, wechat: lookup.wechat } : null;
     saveDrafts();
@@ -10240,6 +10260,25 @@
       );
       return true;
     }
+    if (action === 'commerce-customer-match-open') {
+      openOrderCustomerMatch(node.closest('#commerce-order-form'));
+      return true;
+    }
+    if (action === 'commerce-customer-match-apply' || action === 'commerce-customer-match-create') {
+      const matcher = $('#drawer[open] #order-customer-match-form'), order = $('#main #commerce-order-form');
+      if (!matcher || !order || order.dataset.commerceDraft !== matcher.dataset.orderKey) return true;
+      const lookup = updateOrderMatchDrawer(matcher);
+      if (action === 'commerce-customer-match-create') {
+        quickCreate(false, node, order, lookup);
+      } else if (lookup.kind === 'matched' || lookup.kind === 'new') {
+        order.elements['order-quick-customer-name'].value = lookup.name;
+        order.elements['order-quick-customer-wechat'].value = lookup.wechat;
+        updateOrderCustomerLookup(order, { editing: true });
+        A.closeDrawer();
+        S.drafts.delete(orderMatchKey(order.dataset.commerceDraft));
+      }
+      return true;
+    }
     if (action === 'commerce-quick-customer' || action === 'commerce-quick-tenant') {
       quickCreate(action.endsWith('tenant'), node);
       return true;
@@ -10620,8 +10659,10 @@
       const label = control.selectedOptions[0]?.textContent || '';
       const style = getComputedStyle(control);
       orderValueMeasure ??= document.createElement('canvas').getContext('2d');
-      orderValueMeasure.font = style.font;
-      const reserved = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight) + parseFloat(style.fontSize);
+      orderValueMeasure.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+      orderValueMeasure.letterSpacing = style.letterSpacing === 'normal' ? '0px' : style.letterSpacing;
+      // The custom select arrow is drawn inside the right padding.
+      const reserved = parseFloat(style.paddingLeft) + parseFloat(style.paddingRight);
       if (orderValueMeasure.measureText(label).width > control.clientWidth - reserved)
         value = label;
     } else if (control.clientWidth && control.scrollWidth > control.clientWidth + 1) {
@@ -10976,8 +11017,13 @@
         moduleState.statsSource = null;
       }
       S.page = 1;
+      const scrollLeft = node.closest('.commerce-stat-order-controls').scrollLeft;
       A.render();
-      document.getElementById(node.id)?.focus({ preventScroll: true });
+      const field = document.getElementById(node.id);
+      if (field) {
+        field.closest('.commerce-stat-order-controls').scrollLeft = scrollLeft;
+        field.focus({ preventScroll: true });
+      }
       return true;
     }
     const form = node.closest('#commerce-order-form');
@@ -11048,6 +11094,7 @@
       }
       if (node.id === 'commerce-customerId') {
         if (!fromCustomerLookup && controls['order-quick-customer-name']) {
+          S.drafts.delete(orderMatchKey(form.dataset.commerceDraft));
           controls['order-quick-customer-name'].value = '';
           controls['order-quick-customer-wechat'].value = '';
           A.setError('commerce-customerId', '', form);
@@ -11210,14 +11257,11 @@
       search?.setSelectionRange(cursor, cursor);
       return true;
     }
+    if (isOrderCustomerLookupInput(node)) {
+      updateOrderMatchDrawer(node.form);
+      return true;
+    }
     if (node.closest('form[data-commerce-draft]')) {
-      if (isOrderCustomerLookupInput(node)) {
-        if (!composingCustomerFields.has(node)) {
-          updateOrderCustomerLookup(node.form, { editing: true });
-          saveDrafts();
-        }
-        return true;
-      }
       if (node.id === 'commerce-contact-phone') updateTenantPhoneError(node.form);
       if (node.id === 'commerce-email') {
         const orderForm = node.closest('#commerce-order-form');
@@ -11641,33 +11685,40 @@
   document.addEventListener?.('visibilitychange', refreshTimeDependentView);
   document.addEventListener?.('focusout', () => queueMicrotask(refreshTimeDependentView));
   document.addEventListener?.('close', refreshTimeDependentView, true);
+  document.addEventListener?.('beforetoggle', event => {
+    const popup = event.target;
+    if (!popup.matches?.('.commerce-picker-popover')) return;
+    const open = event.newState === 'open';
+    popup.closest('.commerce-search-picker').querySelector('.commerce-picker-trigger').setAttribute('aria-expanded', String(open));
+    if (!open) return;
+    const search = popup.querySelector('[data-commerce-picker]');
+    if (popup.closest('.commerce-email-history')) search.value = '';
+    filterPicker(search, true);
+  }, true);
   document.addEventListener?.('toggle', (event) => {
     const popup = event.target;
     if (!popup.matches?.('.commerce-picker-popover')) return;
-    const picker = popup.closest('.commerce-search-picker');
-    const open = event.newState === 'open';
-    picker.querySelector('.commerce-picker-trigger').setAttribute('aria-expanded', String(open));
-    if (!open) return;
-    const search = picker.querySelector('[data-commerce-picker]');
-    if (picker.querySelector('#commerce-email')) search.value = '';
-    filterPicker(search);
+    if (event.newState !== 'open' || !popup.matches(':popover-open')) return;
     positionPicker(popup);
-    search.focus({ preventScroll: true });
+    // A queued toggle can arrive after the user has already focused a matching option.
+    if (popup.matches(':popover-open') && !popup.contains(document.activeElement))
+      popup.querySelector('[data-commerce-picker]').focus({ preventScroll: true });
   }, true);
   document.addEventListener?.('compositionstart', event => {
-    if (isOrderCustomerLookupInput(event.target)) composingCustomerFields.add(event.target);
+    if (isOrderCustomerLookupInput(event.target)) {
+      composingCustomerFields.add(event.target);
+      updateOrderMatchDrawer(event.target.form);
+    }
   });
   document.addEventListener?.('compositionend', event => {
     if (!composingCustomerFields.delete(event.target) || !event.target.form) return;
-    updateOrderCustomerLookup(event.target.form, { editing: true });
-    saveDrafts();
+    updateOrderMatchDrawer(event.target.form);
   });
   document.addEventListener?.('keydown', (event) => {
     if (event.isComposing || composingCustomerFields.has(event.target)) return;
     if (event.key === 'Enter' && isOrderCustomerLookupInput(event.target)) {
       event.preventDefault();
-      updateOrderCustomerLookup(event.target.form, { editing: true });
-      saveDrafts();
+      updateOrderMatchDrawer(event.target.form);
       return;
     }
     const popup = event.target.closest('.commerce-picker-popover');

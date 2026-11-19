@@ -24,7 +24,7 @@ test('renewal page controls share one row when they fit and wrap within the pane
   const page = await context.newPage(), errors = [];
   page.on('pageerror', error => errors.push(error.message));
   page.setDefaultTimeout(6000);
-  const routes = ['renewals', 'renewals/sent', 'renewals/ready', 'renewals/history', 'renewals/reminders', 'finance-renewals'];
+  const routes = ['renewals', 'renewals/sent', 'renewals/ready', 'renewals/history', 'renewals/declined', 'renewals/reminders', 'finance-renewals'];
   await page.goto(origin + '/#/workspace/renewals');
   for (const theme of ['light', 'dark']) {
     if (theme === 'dark') await toggleDesignTheme(page);
@@ -61,7 +61,10 @@ test('renewal page controls share one row when they fit and wrap within the pane
         }
         if (hasTabs) assert.equal(await row.getByRole('tab').count(), 3, label);
         if (!reminder) assert(await row.getByRole('button', { name: '刷新', exact: true }).isVisible(), label);
-        if (path === 'renewals') assert(await row.getByRole('button', { name: '提交给财务', exact: true }).isDisabled(), label);
+        if (path === 'renewals') for (const name of ['提交给财务', '拒绝续费']) {
+          const batchAction = row.getByRole('button', { name, exact: true });
+          assert(await batchAction.isVisible() && await batchAction.isDisabled(), label);
+        }
         if (path.startsWith('renewals') && !reminder)
           assert(await row.getByRole('link', { name: '续费提醒', exact: true }).isVisible(), label);
         const spacing = await spacingSnapshot(page);
@@ -73,6 +76,69 @@ test('renewal page controls share one row when they fit and wrap within the pane
   assert.deepEqual(errors, []);
   assert.deepEqual(traffic.unavailable, []);
   assert.deepEqual(traffic.external, []);
+});
+
+test('勾选、确认拒绝和刷新后从拒绝续费表回读，失败保留原订单', async t => {
+  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
+  t.after(() => browser.close());
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  await interceptDesign(context, { actor: { id: 'staff', name: '员工', role: 'employee' }, localFixtures: {}, skipRechargeAssets: true });
+  const remaining = [source, { ...source, id: 'second', number: 'OD-QA-141' }];
+  const archived = Array.from({ length: 21 }, (_, i) => ({ id: 'historical-' + i,
+    order: { ...source, number: 'OD-HISTORY-' + i, product: 'GPT' },
+    declinedBy: '历史经办人', declinedAt: '2026-11-01T05:00:00Z' }));
+  const keys = [];
+  await context.route('**/api/local/renewals**', route => {
+    const request = route.request();
+    if (request.method() === 'GET') return route.fulfill({ json: new URL(request.url()).searchParams.get('view') === 'declined'
+      ? { items: archived } : { items: [], candidates: remaining } });
+    const command = request.postDataJSON();
+    assert.deepEqual(command, { action: 'decline', confirmed: true, orders: [{ id: source.id, version: source.version }] });
+    keys.push(request.headers()['x-id-operation']);
+    if (keys.length <= 2) return route.fulfill({ status: 503, json: { error: '暂时无法确认办理结果' } });
+    archived.push({ id: source.id, order: remaining.shift(), declinedBy: '员工', declinedAt: '2026-11-19T05:00:00Z' });
+    return route.fulfill({ json: { saved: true, count: 1 } });
+  });
+  const page = await context.newPage();
+  page.setDefaultTimeout(6000);
+  await page.goto(origin + '/#/workspace/renewals');
+  const decline = page.getByRole('button', { name: '拒绝续费（1）', exact: true });
+  const emptySelection = page.getByRole('button', { name: '拒绝续费', exact: true });
+  await emptySelection.waitFor();
+  assert(await emptySelection.isDisabled());
+  await page.getByRole('checkbox', { name: '选择 ' + source.id, exact: true }).check();
+  const confirm = page.getByRole('dialog', { name: '确认拒绝续费' });
+  await decline.click();
+  await confirm.getByText(/OD-QA-140/).waitFor();
+  await confirm.getByRole('button', { name: '取消' }).click();
+  assert.equal(keys.length, 0);
+  await decline.click();
+  await confirm.getByRole('button', { name: '确认拒绝续费' }).click();
+  await page.getByText('暂时无法确认办理结果', { exact: true }).waitFor();
+  await decline.click();
+  await confirm.getByRole('button', { name: '确认拒绝续费' }).click();
+  await page.waitForURL('**/#/workspace/renewals/declined');
+  assert.equal(keys.length, 3);
+  assert(keys[0] && keys.every(key => key === keys[0]));
+  await page.reload();
+  const table = page.getByRole('table', { name: '拒绝续费', exact: true });
+  await table.getByText(source.number).waitFor();
+  await table.getByText('员工', { exact: true }).waitFor();
+  assert.equal(await table.locator('tbody tr').count(), 20);
+  await page.getByRole('button', { name: '下一页', exact: true }).click();
+  assert.equal(await table.locator('tbody tr').count(), 2);
+  assert(await page.getByRole('button', { name: '下一页', exact: true }).isDisabled());
+  await page.getByLabel('产品', { exact: true }).selectOption(source.product);
+  await table.getByText(source.number).waitFor();
+  assert.equal(await table.locator('tbody tr').count(), 1);
+  const search = page.getByRole('textbox', { name: '搜索续费订单' });
+  await search.fill('未匹配');
+  await page.getByText('暂无符合条件的拒绝续费记录').waitFor();
+  await search.fill(source.number);
+  await table.getByText(source.number).waitFor();
+  await page.getByRole('link', { name: '选订单', exact: true }).click();
+  await page.getByText('OD-QA-141', { exact: true }).waitFor();
+  assert.equal(await page.locator('tr[data-row-id="' + source.id + '"]').count(), 0);
 });
 
 test('renewal countdown uses Beijing dates, updates across expiry and keeps the current selection', { timeout: 60_000 }, async t => {

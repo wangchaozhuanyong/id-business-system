@@ -105,7 +105,7 @@ test('客户查询显示历史 Apple ID 和当前死卡，Claude 只复制账号
   }
 });
 
-test('隐藏邮箱两行、复制失败重试和邮箱池跨页批量操作', { timeout: 50_000 }, async t => {
+test('隐藏邮箱单行工具栏、复制失败重试和邮箱池跨页批量操作', { timeout: 50_000 }, async t => {
   const browser = await chromium.launch();
   t.after(() => browser.close());
   const fixtures = await fixture();
@@ -171,18 +171,17 @@ test('隐藏邮箱两行、复制失败重试和邮箱池跨页批量操作', { 
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(origin + '/#/mailboxes/relay');
   await action(page, 'relay-delivery-copy').waitFor();
-  const alignment = () => page.locator('.relay-alias-toolbar').evaluate(toolbar => [...toolbar.querySelectorAll('.relay-alias-row')].map(row => {
-    const items = [...row.querySelectorAll('button, input, select, .footnote')].filter(node => node.checkVisibility());
-    const positions = items.map(node => node.getBoundingClientRect()).map(({ top, height }) => top + height / 2);
-    return { spread: Math.max(...positions) - Math.min(...positions), center: positions[0] };
-  }));
-  const rows = await alignment();
-  assert.equal(rows.length, 2);
-  assert(rows.every(row => row.spread <= 2) && rows[1].center - rows[0].center > 30, JSON.stringify(rows));
+  const toolbar = page.locator('.relay-alias-toolbar');
+  const row = toolbar.locator('.relay-alias-row');
+  assert.equal(await row.count(), 1);
+  const centers = await row.locator('button, input, select').evaluateAll(nodes => nodes.filter(node => node.checkVisibility())
+    .map(node => { const box = node.getBoundingClientRect(); return box.top + box.height / 2; }));
+  assert(centers.length >= 3 && Math.max(...centers) - Math.min(...centers) <= 2, '可见的查找及操作控件应在同一行');
   if (process.env.ID_UNIFIED_SCREENSHOTS === '1') {
     await mkdir(evidence, { recursive: true });
     await page.screenshot({ path: fileURLToPath(new URL('relay-1440.png', evidence)) });
   }
+  if (!await action(page, 'mailbox-delivery-settings').count()) await toolbar.getByRole('button', { name: '更多', exact: true }).click();
   await action(page, 'mailbox-delivery-settings').click();
   await page.locator('#mailbox-delivery-relayQuery').fill('新隐藏后缀\n第二行');
   await page.getByRole('button', { name: '保存设置', exact: true }).click();

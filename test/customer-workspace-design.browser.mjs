@@ -44,7 +44,9 @@ test('单客户档案：唯一匹配、候选分页、粘贴失败、空结果�
       { ...order, id: 'current-card', proCardNumber: currentCard, paymentId: currentCard.slice(-4) },
       { ...order, id: 'previous-card', start: at(-40), expiry: at(-10),
         proCardNumber: previousCard, paymentId: previousCard.slice(-4) },
-      { ...order, id: 'no-card', product: 'Claude Pro', plan: 'Pro', proCardNumber: '', paymentId: '1111' }
+      { ...order, id: 'no-card', product: 'Claude Pro', plan: 'Pro', proCardNumber: '', paymentId: '1111' },
+      ...Array.from({ length: 21 }, (_, i) => ({ ...order, id: `long-account-${i}`, customerId: 'query-person-4',
+        email: `subscription.operations.customer-services.team-${i}@accounts.example.test` }))
     ];
     const context = await browser.newContext({ viewport: { width, height: 900 } });
     t.after(() => context.close());
@@ -95,6 +97,28 @@ test('单客户档案：唯一匹配、候选分页、粘贴失败、空结果�
       .filter({ has: page.getByText('银行卡号', { exact: true }) });
     const current = cardField(accounts, 'current-card');
     await current.getByText(currentCard, { exact: true }).waitFor();
+    const card = accounts.locator('[data-customer-query-row="current-card"]');
+    const detail = card.locator('.customer-query-detail');
+    const toggle = card.locator('[data-action="customer-query-detail"]');
+    assert.equal(await detail.isVisible(), false);
+    assert((await card.boundingBox()).height <= (width === 1440 ? 100 : 290), '收起的订阅行应紧凑');
+    if (width === 1440) {
+      const aligned = await card.evaluate(row => {
+        const headers = row.parentElement.querySelector('.customer-query-columns').children;
+        return [...headers].every((header, i) =>
+          Math.abs(header.getBoundingClientRect().left - row.children[i].getBoundingClientRect().left) <= 1);
+      });
+      assert(aligned, '账号、套餐、到期时间、卡号及操作的列标题应与记录对齐');
+    }
+    await toggle.focus();
+    await page.keyboard.press('Enter');
+    await detail.getByText('开通日期', { exact: true }).waitFor();
+    assert.equal(await toggle.getAttribute('aria-expanded'), 'true');
+    const nextCard = accounts.locator('[data-customer-query-row="no-card"]');
+    await nextCard.getByRole('button', { name: '明细', exact: true }).click();
+    assert.equal(await detail.isVisible(), false);
+    await nextCard.locator('.customer-query-detail').getByText('租户', { exact: true }).waitFor();
+    assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
     await current.getByRole('button', { name: '复制卡号', exact: true }).click();
     assert.equal(await page.evaluate(() => window.copiedCard), currentCard);
     const noCard = cardField(accounts, 'no-card');
@@ -102,6 +126,10 @@ test('单客户档案：唯一匹配、候选分页、粘贴失败、空结果�
     assert.equal(await noCard.getByRole('button').count(), 0);
     await page.getByRole('button', { name: '展开订单历史', exact: true }).click();
     const previous = cardField(page.locator('#customer-query-orders-content'), 'previous-card');
+    const historyRow = page.locator('#customer-query-orders-content [data-customer-query-row="previous-card"]');
+    await historyRow.getByRole('button', { name: '明细', exact: true }).click();
+    await historyRow.locator('.customer-query-detail').getByText('退款', { exact: true }).waitFor();
+    assert(await nextCard.locator('.customer-query-detail').isVisible(), '历史与订阅的明细展开状态各自独立');
     await previous.getByText(previousCard, { exact: true }).waitFor();
     await previous.getByRole('button', { name: '复制卡号', exact: true }).click();
     assert.equal(await page.evaluate(() => window.copiedCard), previousCard);
@@ -129,6 +157,22 @@ test('单客户档案：唯一匹配、候选分页、粘贴失败、空结果�
     await query('没有此客户');
     await page.getByText('未找到匹配客户', { exact: true }).waitFor();
     assert.equal(await candidates.count(), 0);
+    await query('unique-contact-04');
+    const subscriptions = accounts.locator('[data-customer-query-row]');
+    await subscriptions.nth(19).waitFor();
+    const accountPager = accounts.locator('[data-pagination="customer-query-accounts"]');
+    for (const count of [20, 1]) {
+      await page.waitForFunction(n => document.querySelectorAll('#customer-query-accounts-content article').length === n, count);
+      const fits = await subscriptions.evaluateAll(rows => rows.every(row => {
+        const bounds = row.getBoundingClientRect();
+        return [...row.querySelectorAll('h3, button')].filter(el => el.checkVisibility()).every(el => {
+          const box = el.getBoundingClientRect();
+          return box.left >= bounds.left && box.right <= bounds.right + 1 && el.scrollWidth <= el.clientWidth + 1;
+        });
+      }));
+      assert(fits, '跨页长账号和行操作应完整落在可见记录内');
+      if (count === 20) await accountPager.getByRole('button', { name: '下一页', exact: true }).click();
+    }
     failNext = true;
     await query('unique-contact-01');
     await page.locator('[data-customer-query-error]').getByText(/合成读取失败/).waitFor();

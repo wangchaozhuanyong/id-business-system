@@ -6,9 +6,10 @@
   const { subscriptionTime, subscriptionDuration } = window.IDOrderOpening;
   const scope = 'renewal-handoffs';
   const staffRoot = 'workspace/renewals';
+  const declinedRoute = staffRoot + '/declined';
   const financeRoute = 'workspace/finance-renewals';
   const finishPrefix = 'workspace/renewal-submit/';
-  const staffTabs = [['', '选订单'], ['/sent', '已送财务'], ['/ready', '待补资料'], ['/history', '办理记录']];
+  const staffTabs = [['', '选订单'], ['/sent', '已送财务'], ['/ready', '待补资料'], ['/history', '办理记录'], ['/declined', '拒绝续费']];
   const financeTabs = ['待处理', '处理中', '已处理'];
   const staffStages = { pending: '/sent', processing: '/sent', paid: '/ready', returned: '/history', complete: '/history' };
   const financeStages = { pending: '待处理', processing: '处理中', paid: '已处理', returned: '已处理', complete: '已处理' };
@@ -56,12 +57,15 @@
     const title = finance ? '财务续费' : finishing ? '提交续费订单' : '续费管理';
     const help = finance ? '请先接手要办理的订单。核对实际付款后登记金额及用卡，交回员工完成新订单。'
       : finishing ? '根据财务已登记的实付资料，补齐客户实收和新的订阅周期。'
-      : '选中需要续费的订单，确认后交给财务。财务办结后，请在「待补资料」提交新订单。';
+      : route === declinedRoute ? '查看已确认拒绝续费的原订单、登记人和登记时间。'
+      : '客户确认不续费时，勾选原订单并选择「拒绝续费」。选中需要续费的订单，确认后交给财务。财务办结后，请在「待补资料」提交新订单。';
     const back = finishing ? '<a class="button" href="#/workspace/renewals/ready">返回待补资料</a>' : '';
     const reminder = !finance && !finishing && canViewOrder()
       ? '<a class="button" href="#/workspace/renewals/reminders">续费提醒</a>' : '';
     const submit = route === staffRoot
-      ? A.button('提交给财务', 'renewal-handoff-submit', 'primary', '', 'hidden disabled') : '';
+      ? '<div class="renewal-selection-actions" role="group" aria-label="处理所选订单">' +
+        A.button('拒绝续费', 'renewal-handoff-decline', 'danger', '', 'hidden disabled') +
+        A.button('提交给财务', 'renewal-handoff-submit', 'primary', '', 'hidden disabled') + '</div>' : '';
     const auditTarget = auditNavigation?.route === route || (active?.route === route && active.auditId);
     const toolbar = '<div class="toolbar toolbar--inline renewal-toolbar">' +
       (finishing ? '' : '<div class="toolbar-left" data-renewal-filters hidden></div>') +
@@ -89,12 +93,14 @@
       const { order } = row;
       const expiry = subscriptionTime(order.expiry);
       const inStage = view.finance ? financeStages[row.status] === view.filter.status : staffRoot + staffStages[row.status] === view.route;
-      return (choosing || inStage) && (!view.filter.product || order.product === view.filter.product) &&
+      return (choosing || view.route === declinedRoute || inStage) && (!view.filter.product || order.product === view.filter.product) &&
         (!choosing || view.filter.period === 'all' || (view.filter.period === 'expired' ? expiry <= now :
           expiry > now && expiry <= now + (view.data.reminderHours || 168) * 3_600_000)) &&
-        (!query || [order.number, order.account, order.customer, order.wechat, order.owner, row.submittedBy]
+        (!query || [order.number, order.account, order.customer, order.wechat, order.owner, row.submittedBy, row.declinedBy]
           .some(value => String(value || '').toLowerCase().includes(query)));
-    }).sort((a, b) => choosing ? String(a.order.expiry || '').localeCompare(String(b.order.expiry || '')) ||
+    }).sort((a, b) => view.route === declinedRoute
+      ? (subscriptionTime(b.declinedAt) || 0) - (subscriptionTime(a.declinedAt) || 0) || a.id.localeCompare(b.id)
+      : choosing ? String(a.order.expiry || '').localeCompare(String(b.order.expiry || '')) ||
         a.order.number.localeCompare(b.order.number) : String(b.completedAt || b.paidAt || b.submittedAt)
           .localeCompare(String(a.completedAt || a.paidAt || a.submittedAt)));
   }
@@ -127,18 +133,24 @@
       ['customer', '客户', row => E(row.order.customer)],
       ['account', '订阅账号', row => E(row.order.account || '待补资料')],
       ['plan', '产品与套餐', row => E([row.order.product, row.order.plan].join(' · '))],
-      ['expiry', '原到期时间', row => E(beijing(row.order.expiry))],
-      ['days', '到期倒计时', row => {
+      ['expiry', '原到期时间', row => E(beijing(row.order.expiry))]
+    ];
+    if (view.route === declinedRoute) {
+      columns.push(['owner', '归属人', row => E(row.order.owner || '—')],
+        ['declinedBy', '登记人', row => E(row.declinedBy || '历史未记录')],
+        ['declinedAt', '登记时间', row => E(beijing(row.declinedAt))]);
+    } else {
+      columns.push(['days', '到期倒计时', row => {
         const expiry = subscriptionTime(row.order.expiry);
         if (!Number.isFinite(expiry)) return row.order.expiry ? '到期时间待核对' : '未登记到期时间';
         return '<span class="tag ' + (expiry <= now ? 'danger' : 'success') + '" data-renewal-countdown="' +
           expiry + '">' + E(subscriptionDuration(expiry, now)) + '</span>';
       }],
-      ['payment', '付款方式', row => E(row.order.payment)]
-    ];
+      ['payment', '付款方式', row => E(row.order.payment)]);
+    }
     if (choosing) {
       columns.push(['owner', '归属人', row => E(row.order.owner || '—')]);
-    } else {
+    } else if (view.route !== declinedRoute) {
       columns.push(['submittedBy', '提交人', row => E(row.submittedBy || '—')],
         ...(view.finance ? [['submittedAt', '提交时间', row => E(beijing(row.submittedAt))],
           ['originalCard', '原用卡尾号', row => E(row.order.originalLast4 || '—')]] : []),
@@ -153,19 +165,22 @@
         ['newOrderNo', '结果', row => E(row.newOrderNo || row.returned || '—')], ['actions', '操作', row => rowActions(view, row)]);
     }
     return A.table(columns.map(([id, label, render]) => ({ id, label, render, action: id === 'actions',
-      mobileSummary: id === 'days' || (Boolean(view.auditId) && ['orderNo', 'status', 'newOrderNo'].includes(id)) })),
+      mobileSummary: id === 'days' || id === 'declinedAt' || (Boolean(view.auditId) && ['orderNo', 'status', 'newOrderNo'].includes(id)) })),
       rows.slice(start, start + pageSize), choosing ? 'renewal-handoff' : '', choosing ? '待续费订单' :
-        view.finance ? '财务续费订单' : '续费办理记录', { title: '暂无符合条件的订单', description: '可切换筛选或稍后刷新。' }) +
+        view.route === declinedRoute ? '拒绝续费' : view.finance ? '财务续费订单' : '续费办理记录',
+      { title: view.route === declinedRoute ? '暂无符合条件的拒绝续费记录' : '暂无符合条件的订单', description: '可切换筛选或稍后刷新。' }) +
       window.IDPagination.render({ id: 'renewal-handoff-pagination', page: view.filter.page, pageSize, total: rows.length });
   }
 
   function selectionButton(view) {
-    const anchor = $('[data-action="renewal-handoff-submit"]', view.host);
-    if (!anchor) return;
-    const count = selected(view).size;
-    anchor.textContent = count ? '提交给财务（' + count + '）' : '提交给财务';
-    anchor.disabled = count === 0 || view.saving;
-    anchor.hidden = false;
+    const count = selected().size;
+    for (const [action, label] of [['submit', '提交给财务'], ['decline', '拒绝续费']]) {
+      const control = $('[data-action="renewal-handoff-' + action + '"]', view.host);
+      if (!control) continue;
+      control.textContent = count ? label + '（' + count + '）' : label;
+      control.disabled = count === 0 || view.saving;
+      control.hidden = false;
+    }
   }
 
   function drawList(view) {
@@ -274,7 +289,7 @@
   }
 
   async function load(view, refresh = false) {
-    const key = { view: view.finance ? 'finance' : 'staff' };
+    const key = { view: view.finance ? 'finance' : view.route === declinedRoute ? 'declined' : 'staff' };
     const id = (view.request || 0) + 1;
     view.request = id;
     const cached = D.queries.peek(scope, key)?.data;
@@ -344,6 +359,7 @@
   async function save(view, command, submitter, form) {
     if (active !== view || view.saving) return;
     view.saving = true;
+    selectionButton(view);
     notifyError(view, '');
     const formError = form?.querySelector('[data-renewal-form-error]');
     if (formError) {
@@ -357,22 +373,26 @@
       feedback = A.beginActionFeedback(submitter, '正在登记…');
       const measure = command.action === 'finish' ? 'order-save' : undefined;
       timing = measure ? window.IDSiteTiming?.start(measure) : undefined;
-      const review = command.action === 'review-source' ? JSON.stringify(command) : '';
-      if (review && view.sourceReview?.command !== review)
-        view.sourceReview = { command: review, operationId: crypto.randomUUID() };
-      const operationId = review ? view.sourceReview.operationId : crypto.randomUUID();
+      const retryKey = ['review-source', 'decline'].includes(command.action) ? JSON.stringify(command) : '';
+      if (retryKey && view.pendingWrite?.command !== retryKey)
+        view.pendingWrite = { command: retryKey, operationId: crypto.randomUUID() };
+      const operationId = retryKey ? view.pendingWrite.operationId : crypto.randomUUID();
       const result = await D.saveRenewalHandoff(command, { operationId, measure, timing });
       if (!result.saved) throw new Error('保存结果待核对，请刷新');
-      if (review) view.sourceReview = undefined;
+      if (retryKey) view.pendingWrite = undefined;
       timing?.finish();
       if (active !== view) return;
       if (form?.closest('dialog')) {
         A.state.drafts.delete(form.dataset.renewalDraft);
         A.closeDrawer();
       }
-      if (command.action === 'submit') {
-        selected(view).clear();
-        A.go(staffRoot + '/sent');
+      if (command.action === 'submit' || command.action === 'decline') {
+        selected().clear();
+        if (command.action === 'decline') {
+          Object.assign(filters(declinedRoute), { query: '', product: '', page: 1 });
+          if (canViewOrder()) void A.modules.commerce?.refreshAfterOrderSync?.();
+        }
+        A.go(command.action === 'decline' ? declinedRoute : staffRoot + '/sent');
       } else {
         if (command.action === 'finish') {
           A.state.drafts.delete(storeKey(view.route + ':form'));
@@ -381,7 +401,7 @@
         const updated = await load(view, true);
         if (!updated) notifyError(view, '已保存，列表暂未刷新。请点击刷新。');
       }
-      const messages = { submit: '已提交给财务', claim: '已接手这笔续费', paid: '已交回续费管理，等待员工补资料',
+      const messages = { submit: '已提交给财务', decline: '已移入拒绝续费，已停止所选原订单的续费提醒', claim: '已接手这笔续费', paid: '已交回续费管理，等待员工补资料',
         return: '已退回业务人员', finish: '订单提交成功', transfer: '已移交，其他财务可接手',
         'review-source': '原单已核对，员工可以补资料提交订单' };
       A.notify(messages[command.action] + (result.orderNo ? ' · ' + result.orderNo : ''), { kind: 'success' });
@@ -403,13 +423,19 @@
     }
   }
 
-  function submitSelected(view, submitter) {
+  function submitSelected(view, submitter, action) {
     const orders = view.data.candidates.filter(row => selected(view).has(row.id));
     if (!orders.length || orders.length > 50) {
       notifyError(view, orders.length ? '每次最多提交 50 笔，请分批办理。' : '请先勾选需要续费的订单。');
       return;
     }
-    void save(view, { action: 'submit', orders: orders.map(({ id, version }) => ({ id, version })) }, submitter);
+    const command = { action, orders: orders.map(({ id, version }) => ({ id, version })) };
+    if (action === 'decline') {
+      const names = orders.slice(0, 3).map(order => order.number || order.id).join('、');
+      A.confirmAction('确认拒绝续费', '已与客户确认不再续费？所选 ' + orders.length + ' 笔原订单（' +
+        names + (orders.length > 3 ? ' 等' : '') + '）将移入「拒绝续费」，并停止这些订单的续费提醒。',
+        () => save(view, { ...command, confirmed: true }, submitter), '确认拒绝续费');
+    } else void save(view, command, submitter);
   }
 
   function paymentForm(view, row, returning) {
@@ -524,7 +550,7 @@
       view.filter.status = node.dataset.id;
       view.filter.page = 1;
       draw(view);
-    } else if (command === 'submit') submitSelected(view, node);
+    } else if (command === 'submit' || command === 'decline') submitSelected(view, node, command);
     else if (command === 'cards') await loadCards(node.closest('form'), node);
     else {
       const row = view.data?.items.find(item => item.id === node.dataset.id);
@@ -643,7 +669,6 @@
     onDataChanges(scopes) {
       if (!active || active.saving || !scopes.some(key => [scope, 'commerce'].includes(key))) return;
       const view = active;
-      if (scopes.includes('commerce') && !scopes.includes(scope)) D.queries.invalidate([scope]);
       if (view.host.contains(document.activeElement) && view.route.startsWith(finishPrefix))
         preserveForm($('#renewal-finish-form', view.host));
       return load(view);
