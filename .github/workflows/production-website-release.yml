@@ -82,9 +82,12 @@ jobs:
           test "$RELEASE_SHA" = "$GITHUB_SHA"
           test "$(git rev-parse HEAD)" = "$RELEASE_SHA"
           test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$RELEASE_SHA"
-          run=$(gh run list --workflow quality.yml --event push --branch main --commit "$RELEASE_SHA" \
-            --status success --limit 1 --json databaseId,headSha --jq '.[0] | select(.headSha != null) | .databaseId')
-          [[ "$run" =~ ^[0-9]+$ ]]
+          record=$(gh run list --workflow quality.yml --event push --branch main --commit "$RELEASE_SHA" \
+            --limit 1 --json databaseId,headSha,status,conclusion,event,headBranch \
+            --jq '.[0] | select(.status == "completed" and .conclusion == "success" and .event == "push" and .headBranch == "main") | "\(.headSha) \(.databaseId)"')
+          read -r quality_sha run <<< "$record"
+          test "$quality_sha" = "$RELEASE_SHA"
+          [[ "$run" =~ ^[0-9]+$ ]] || exit 1
           echo "Verified main quality run: $run"
           echo "QUALITY_RUN_ID=$run" >> "$GITHUB_ENV"
       - name: Set up Node.js
