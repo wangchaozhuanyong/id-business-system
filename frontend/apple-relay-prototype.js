@@ -417,7 +417,7 @@
     const placeholder = statusGroups ? '搜索邮箱、编号或备注' : '搜索邮箱、编号、备注或录入人';
     const search = `<div class="toolbar-left"><div class="search-field">${A.icon('search')}<input data-auto-search id="relay-search" aria-label="搜索苹果邮箱资料" value="${E(view.q)}" placeholder="${placeholder}" /></div>${filters}</div>`;
     return statusGroups
-      ? `<div class="toolbar list-filters relay-alias-toolbar"><div class="relay-alias-row">${statusGroups}${search}<div class="toolbar-right">${actions}</div></div></div>`
+      ? `<div class="toolbar list-filters relay-alias-toolbar"><div class="relay-alias-row">${search}${statusGroups}<div class="toolbar-right">${actions}</div></div></div>`
       : `<div class="toolbar list-filters">${search}<div class="toolbar-right">${columnButton(id)}${actions}</div></div>`;
   }
   function renderRelayPage() {

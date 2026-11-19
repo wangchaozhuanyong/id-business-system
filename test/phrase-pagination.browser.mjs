@@ -12,7 +12,9 @@ test('default phrase order is paged and can be adjusted across a page boundary',
     id: 'phrase-' + (index + 1), title: '合成话术 ' + (index + 1), text: '测试内容', deleted: false
   }));
   const deleted = { id: 'deleted', title: '已删除话术', text: '测试内容', deleted: true };
+  const renewal = { id: 'renewal-remark-fixture', title: '续费专用备注', text: '测试续费备注', deleted: false };
   phrases.splice(4, 0, deleted);
+  phrases.splice(8, 0, renewal);
   let snapshot = { version: 1, data: { shortcuts: [], phrases } };
   await interceptDesign(context, { localFixtures: {} });
   await context.route(origin + '/api/local/toolbox', route => {
@@ -31,6 +33,7 @@ test('default phrase order is paged and can be adjusted across a page boundary',
   const pager = drawer.locator('[data-pagination="operations-phrases"]');
   await list.locator('[data-phrase-id="phrase-20"]').waitFor();
   assert.equal(await list.locator('[data-phrase-id]').count(), 20);
+  assert.equal(await list.locator('[data-phrase-id="renewal-remark-fixture"]').count(), 0);
   assert.equal(await pager.getAttribute('data-total'), '23');
   assert.equal(await drawer.locator('#ops-phrase-sort').inputValue(), 'custom');
   const keyboard = list.getByRole('button', { name: '调整顺序：合成话术 20', exact: true });
@@ -38,8 +41,9 @@ test('default phrase order is paged and can be adjusted across a page boundary',
   await page.waitForFunction(() => document.querySelector('[data-pagination="operations-phrases"]')?.dataset.page === '2');
   assert.equal(await list.locator('[data-phrase-id]').first().getAttribute('data-phrase-id'), 'phrase-20');
   assert(await keyboard.evaluate(node => node === document.activeElement));
-  assert.equal(snapshot.data.phrases.filter(row => !row.deleted)[19].id, 'phrase-21');
+  assert.equal(snapshot.data.phrases.filter(row => !row.deleted && row.id !== renewal.id)[19].id, 'phrase-21');
   assert.equal(snapshot.data.phrases[4].id, 'deleted');
+  assert.deepEqual(snapshot.data.phrases[8], renewal);
   await list.getByLabel('更多：合成话术 20', { exact: true }).click();
   await list.getByRole('button', { name: '上移', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('[data-pagination="operations-phrases"]')?.dataset.page === '1');

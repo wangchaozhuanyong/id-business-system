@@ -80,10 +80,9 @@
       : '';
     return title + '<section class="panel design-async-region" id="completion-list">' +
       '<div class="list-controls completion-controls"><div class="completion-status-filters" role="group" aria-label="订单补全分类">' +
-      tabMarkup + '</div><div class="toolbar"><div class="toolbar-left"><div class="search-field">' + A.icon('search') +
+      tabMarkup + '</div><div class="toolbar list-filter-toolbar"><div class="toolbar-left"><div class="search-field">' + A.icon('search') +
       input('list-search', S.query, 'data-auto-search type="search" aria-label="搜索订单" placeholder="订单号、邮箱或客户"') +
-      '</div>' + button('刷新', 'completion-refresh', '', 'refresh') +
-      '</div>' + (assignOwners ? '<div class="toolbar-right">' + assignOwners + '</div>' : '') +
+      '</div></div><div class="toolbar-right">' + button('刷新', 'completion-refresh', '', 'refresh', 'data-mobile-visible') + assignOwners + '</div>' +
       '</div></div><div role="status" id="completion-list-progress" hidden></div>' +
       (loadError && snapshot ? '<div class="panel-body"><p class="inline-notice warning" role="status">' +
         (snapshot ? '刷新失败，已保留上次订单。' : '暂时无法读取订单，请刷新重试。') + '</p></div>' : '') +

@@ -3,7 +3,7 @@ import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { applyOrderCompletion, assignMissingManualOrderOwners, fillManualOrderDetails,
   readOrderCompletion, rechargePriceSnapshot } from '../server/order-completion.mjs';
-import { interceptDesign, origin, settle, spacingSnapshot, toggleDesignTheme } from './helpers/offline-design.mjs';
+import { interceptDesign, interceptRenewalWorktable, origin, settle, spacingSnapshot, toggleDesignTheme } from './helpers/offline-design.mjs';
 
 const playwright = process.env.ID_RECHARGE_QA_PLAYWRIGHT;
 const { chromium } = await import(playwright ? pathToFileURL(playwright).href : 'playwright');
@@ -231,7 +231,7 @@ test('管理员待归属，归属员工可快捷新增客户并随原单保存',
   assert.deepEqual(employee.traffic.external, []);
 });
 
-test('手工旧单空白归属补齐后退出待补列表，仍可从续费提醒独立补邮箱', { timeout: 35_000 }, async t => {
+test('手工旧单空白归属补齐后退出待补列表，仍可在续费管理的已到期订单中独立补邮箱', { timeout: 35_000 }, async t => {
   const browser = await chromium.launch({ headless: true });
   t.after(() => browser.close());
   const data = model();
@@ -254,11 +254,11 @@ test('手工旧单空白归属补齐后退出待补列表，仍可从续费提�
   assert.equal(await drawer.locator('[name="commerce-completionFullReceipt"]').count(), 0);
   await drawer.getByRole('button', { name: '取消', exact: true }).click();
 
+  await interceptRenewalWorktable(page.context(), { actor: admin, localFixtures: data, clock: () => Date.parse(now) });
   await page.goto(origin + '/#/workspace/renewals');
-  await page.getByRole('link', { name: '续费提醒', exact: true }).click();
-  await page.getByRole('tab', { name: /^已到期/ }).click();
-  await page.locator('[data-action="commerce-renewal-select"][data-id="manual"]').click();
-  await page.getByRole('region', { name: '当前选中客户' }).getByRole('button', { name: '补邮箱', exact: true }).click();
+  await page.getByLabel('订单状态', { exact: true }).selectOption('expired');
+  await row.getByRole('button', { name: '更多操作', exact: true }).click();
+  await page.getByRole('menuitem', { name: '补邮箱', exact: true }).click();
   await page.setViewportSize({ width: 390, height: 844 });
   await drawer.getByLabel('邮箱账号', { exact: true }).fill('verified@example.test');
   const form = drawer.locator('#commerce-order-completion-form');

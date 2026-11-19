@@ -226,11 +226,7 @@
       const becameActive = tab.dataset.id === codeTab && tab.getAttribute('aria-selected') !== 'true';
       tab.classList.toggle('active', tab.dataset.id === codeTab);
       tab.setAttribute('aria-selected', String(tab.dataset.id === codeTab));
-      if (becameActive) {
-        const strip = tab.parentElement, box = strip.getBoundingClientRect(), item = tab.getBoundingClientRect();
-        if (item.left < box.left) strip.scrollLeft -= box.left - item.left;
-        else if (item.right > box.right) strip.scrollLeft += item.right - box.right;
-      }
+      if (becameActive) A.revealActiveTab(tab.parentElement);
     }
     const banner = document.getElementById('recharge-code-new-batch');
     banner.hidden = !draft.batchId;

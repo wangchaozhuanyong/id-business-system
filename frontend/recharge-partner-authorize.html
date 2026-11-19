@@ -7,15 +7,17 @@
     <title>充值授权</title>
     <link rel="stylesheet" href="/design-tokens.css">
     <link rel="stylesheet" href="/recharge-partner.css">
+    <link rel="stylesheet" href="/title-help.css">
+    <script src="/title-help.js" defer></script>
     <script src="/recharge-partner-authorize.js" defer></script>
   </head>
   <body>
     <main class="partner-authorization">
-      <div class="partner-authorization-heading">
+      <div class="title-with-help">
         <h1>充值授权</h1>
-        <details>
-          <summary aria-label="充值授权说明">ⓘ</summary>
-          <p>请在已登录目标 ChatGPT 账号的浏览器获取完整授权资料，只在此页提交。</p>
+        <details class="title-help">
+          <summary aria-label="充值授权说明" aria-controls="authorization-help">ⓘ</summary>
+          <p class="title-description" id="authorization-help" role="note">请在已登录目标 ChatGPT 账号的浏览器获取完整授权资料，只在此页提交。</p>
         </details>
       </div>
       <p id="authorization-status" role="status">正在读取充值请求…</p>

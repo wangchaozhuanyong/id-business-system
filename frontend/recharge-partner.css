@@ -13,19 +13,6 @@ body { margin: 0; color: CanvasText; background: Canvas; }
   font: 1rem/1.55 "Inter", system-ui, sans-serif;
 }
 .partner-authorization h1 { margin: 0; font-size: 1.55rem; }
-.partner-authorization-heading { display: flex; align-items: center; gap: .5rem; position: relative; }
-.partner-authorization-heading summary { cursor: pointer; list-style: none; padding: .4rem; }
-.partner-authorization-heading details p {
-  position: absolute;
-  inset-inline: 0;
-  z-index: 1;
-  margin: .15rem 0 0;
-  padding: .7rem;
-  border-radius: var(--radius-control);
-  background: Canvas;
-  box-shadow: var(--shadow-raised);
-  border: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
-}
 .partner-authorization dl {
   display: grid;
   grid-template-columns: max-content minmax(0, 1fr);

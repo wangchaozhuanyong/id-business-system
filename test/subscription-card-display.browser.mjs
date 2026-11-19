@@ -3,7 +3,7 @@ import test from 'node:test';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { interceptDesign, root, settle, spacingSnapshot, toggleDesignTheme } from './helpers/offline-design.mjs';
+import { interceptDesign, interceptRenewalWorktable, root, settle, spacingSnapshot, toggleDesignTheme } from './helpers/offline-design.mjs';
 import { cardDisplayFixture, cardDisplayOrigin as origin, cardDisplayActor as actor,
   cardDisplayTime, syntheticCards } from './helpers/subscription-card-display-fixture.mjs';
 
@@ -21,6 +21,7 @@ async function interceptCards(context, fixture, statusResponse = () => fixture.r
   Object.assign(fixtures, fixture.snapshots, { 'card-types': { version: 1, ...fixture.documents['card-types'].data },
     'subscription-card-estimates': { items: [] } });
   const requests = await interceptDesign(context, { localFixtures: fixtures, actor, skipRechargeAssets: true });
+  await interceptRenewalWorktable(context, { localFixtures: fixtures, actor, clock: () => cardDisplayTime });
   requests.cardPreparations = [];
   await context.route('**/api/local/subscription-card-status*', async route => {
     assert.equal(new URL(route.request().url()).searchParams.get('includeDetails'), '1');
@@ -274,14 +275,19 @@ test('续费待办不展示银行卡余额，保留原来的用卡与备款资�
     const page = await context.newPage();
     page.setDefaultTimeout(7000);
     await page.clock.setFixedTime(cardDisplayTime);
-    await page.goto(origin + '/#/workspace/renewals/reminders');
-    await page.locator('[data-action="commerce-renewal-tab"][data-tab="expired"]').click();
-    await page.locator('[data-action="commerce-renewal-select"][data-id="manual"]').click();
-    const detail = page.locator('.renewal-workbench-detail');
+    await page.goto(origin + '/#/workspace/renewals');
+    await page.locator('#renewal-handoff-period').selectOption('expired');
+    const previewRow = page.locator('[data-renewal-list] tr[data-row-id="manual"]');
+    await previewRow.getByRole('button', { name: '详情', exact: true }).click();
+    const detail = page.locator('#drawer[open] [data-renewal-order-preview]');
     await detail.getByText('22.30 USD', { exact: true }).waitFor();
     assert(!/余额|78\.20/.test(await detail.innerText()));
     assert.equal(await detail.getByRole('button', { name: '复制银行卡', exact: true }).count(), 0);
-    assert(await detail.getByRole('button', { name: '提交给财务', exact: true }).isVisible());
+    assert.equal(await detail.getByRole('button', { name: '提交给财务', exact: true }).count(), 0);
+    assert.equal(await detail.getByRole('button', { name: '登记已完成续费', exact: true }).count(), 0);
+    await closeDrawer(page);
+    await previewRow.getByRole('button', { name: '更多操作', exact: true }).click();
+    await page.getByRole('menuitem', { name: '登记已完成续费', exact: true }).waitFor();
     await context.close();
   }
 });

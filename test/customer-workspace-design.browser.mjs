@@ -4,7 +4,7 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { customerQuery } from '../server/customer-query.mjs';
-import { interceptDesign, origin, settle, toggleDesignTheme } from './helpers/offline-design.mjs';
+import { interceptDesign, interceptRenewalWorktable, origin, settle, toggleDesignTheme } from './helpers/offline-design.mjs';
 
 const actor = { id: 'workspace-design-qa', name: '离线验收', role: 'admin' };
 const now = Date.parse('2026-11-13T04:00:00Z');
@@ -241,16 +241,17 @@ test('续费历史按客户与账号隔离，独立分页、原单及切换客�
     page.on('pageerror', error => errors.push(error.message));
     page.setDefaultTimeout(6000);
     await page.clock.setFixedTime(now);
-    await page.goto(origin + '/#/workspace/renewals/reminders');
+    await interceptRenewalWorktable(context, { actor, localFixtures: fixture, clock: () => now });
+    await page.goto(origin + '/#/workspace/renewals');
     if (width === 390) await toggleDesignTheme(page);
-    await page.getByRole('tab', { name: /^已到期/ }).click();
+    await page.getByLabel('订单状态').selectOption('expired');
+    const drawer = page.locator('#drawer[open]');
     const select = async id => {
-      if (width < 760 && await page.locator('[data-action="commerce-renewal-back"]').isVisible())
-        await page.locator('[data-action="commerce-renewal-back"]').click();
-      await page.locator(`[data-action="commerce-renewal-select"][data-id="${id}"]`).click();
+      if (await drawer.isVisible()) await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
+      await page.locator(`[data-action="renewal-handoff-order-details"][data-id="${id}"]`).click();
     };
     await select('HISTORY-CURRENT');
-    const history = page.locator('[data-renewal-history]'), rows = history.locator('[data-renewal-history-order]');
+    const history = drawer.locator('[data-renewal-history]'), rows = history.locator('[data-renewal-history-order]');
     await history.getByRole('heading', { name: '历史订阅', exact: true }).waitFor();
     assert.equal(await rows.count(), 20);
     assert.equal(await history.locator('[aria-current="true"]').count(), 1);
@@ -264,7 +265,7 @@ test('续费历史按客户与账号隔离，独立分页、原单及切换客�
     assert.equal(await pager.getAttribute('data-page'), '1');
     assert.equal(await pager.getAttribute('data-total'), '24');
     await history.getByText('another-account@example.test', { exact: true }).waitFor();
-    await page.locator('.renewal-workbench-detail').evaluate(node => { node.scrollTop = 0; });
+    await drawer.locator('.drawer-body').evaluate(node => { node.scrollTop = 0; });
     await page.evaluate(() => scrollTo(0, 0));
     await capture(page, 'renewal-history-' + width);
     await history.locator('[data-renewal-history-order="HISTORY-CURRENT"]').getByRole('button', { name: '查看原单', exact: true }).click();

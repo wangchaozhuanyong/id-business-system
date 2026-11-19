@@ -216,11 +216,12 @@ test('录单、编辑入口共用支付方式、填写方式、银行卡类型�
           await inspect(edit, key, 'edit', card);
           await page.locator('#drawer [data-action="drawer-close"]').first().click();
           await go('workspace/order/renew/layout-' + key);
-          await page.getByRole('button', { name: '打开续费管理', exact: true }).waitFor();
-          assert.equal(await form.count(), 0);
+          await page.getByRole('button', { name: '返回续费管理', exact: true }).waitFor();
+          await form.getByText('本订阅未绑定续费用卡。', { exact: true }).waitFor();
+          assert.equal(await form.locator('.order-money-group').count(), 2, '提醒订单共用代付和售卖金额栏');
         }
         assert.deepEqual(errors, []);
-        assert.deepEqual([...prepared], [], '旧续费入口不再读取原卡');
+        assert.deepEqual([...prepared], products.map(([key]) => 'layout-' + key), '登记续费读取对应原订单的用卡提示');
         assert.deepEqual(writes, [], '布局验证不写入业务数据');
         assert.deepEqual(traffic.external, []);
         assert.deepEqual(traffic.unavailable, []);

@@ -79,8 +79,6 @@
 }
 .finance-toolbar > .toolbar-left { flex: 1 1 max-content; }
 .finance-toolbar .search-field { flex: 1 1 180px; width: 220px; min-width: min(100%, 180px); max-width: 280px; }
-.finance-filter { display: inline-flex; align-items: center; gap: 8px; color: var(--secondary); white-space: nowrap; }
-.finance-filter > select { width: auto; min-width: 114px; }
 .finance-list-meta {
   display: flex;
   flex-wrap: wrap;
@@ -134,8 +132,6 @@
 @media (max-width: 600px) {
   .finance-toolbar > .toolbar-left { flex-basis: 100%; }
   .finance-toolbar .search-field { flex-basis: 100%; max-width: none; }
-  .finance-filter { flex: 1 1 130px; }
-  .finance-filter > select { flex: 1; min-width: 0; }
   .finance-toolbar > .toolbar-right { flex: 1 1 100%; justify-content: flex-end; }
   .finance-date-filter .field { flex: 1 1 130px; }
   .finance-amount { text-align: start; }
@@ -172,23 +168,69 @@
 
 .renewal-progress-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 10rem;
+  grid-template-columns: minmax(0, 1fr) 11rem;
   align-items: start;
   gap: var(--section-gap);
 }
 .renewal-progress-layout > [data-renewal-handoff] { grid-area: 1 / 1; min-inline-size: 0; }
 .renewal-progress-navigation {
   grid-area: 1 / 2;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  display: grid;
+  gap: var(--toolbar-padding-block);
   padding: var(--toolbar-padding-block);
 }
-.renewal-progress-navigation > .button { justify-content: flex-start; }
+.renewal-navigation-section + .renewal-navigation-section {
+  border-block-start: 1px solid var(--line);
+  padding-block-start: var(--toolbar-padding-block);
+}
+.renewal-navigation-label {
+  display: block;
+  margin-block-end: 4px;
+  padding-inline: 12px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 20px;
+}
+.renewal-navigation-items {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--control-gap);
+}
+.renewal-navigation-items > .button {
+  justify-content: flex-start;
+  padding-inline: 11px;
+}
+.renewal-navigation-items > .button:is([aria-current="page"], [aria-selected="true"]) {
+  border-color: var(--primary);
+  background: var(--primary-soft);
+  color: var(--primary);
+  font-weight: 600;
+}
+.renewal-navigation-items > .button:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+}
 
 @media (max-width: 900px) {
   .renewal-progress-layout { display: flex; flex-direction: column; align-items: stretch; }
-  .renewal-progress-navigation { flex-direction: row; flex-wrap: wrap; }
+  .renewal-progress-navigation { container: renewal-navigation / inline-size; }
+  .renewal-navigation-label { padding-inline: 0; }
+  .renewal-navigation-items { display: flex; flex-wrap: wrap; }
+  .renewal-navigation-items > .button {
+    flex: 1 1 0;
+    min-inline-size: max-content;
+    min-block-size: 44px;
+    padding-inline: 8px;
+    justify-content: center;
+  }
+  .renewal-navigation-items > .button:only-child { flex: none; min-inline-size: 7em; }
+}
+@container renewal-navigation (max-width: 23rem) {
+  .renewal-navigation-items:has(> :nth-child(4):last-child) {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 760px) {
@@ -205,5 +247,4 @@
   .site-management-table td { display: grid; grid-template-columns: minmax(5.75rem, .42fr) minmax(0, 1fr); gap: 6px; padding: 5px 0; text-align: start; }
   .site-management-table td::before { content: attr(data-label); color: var(--secondary); font-weight: normal; }
   .site-management-table td .button { justify-self: start; }
-  .renewal-progress-navigation > .button { min-block-size: 44px; }
 }

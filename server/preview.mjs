@@ -78,6 +78,7 @@ const files = new Map([
   ['prototype.css', 'text/css; charset=utf-8'],
   ['design-tokens.css', 'text/css; charset=utf-8'],
   ['tabs.css', 'text/css; charset=utf-8'],
+  ['tab-navigation.css', 'text/css; charset=utf-8'],
   ['design-charts.css', 'text/css; charset=utf-8'],
   ['design-charts.js', 'text/javascript; charset=utf-8'],
   ['interaction-preferences.css', 'text/css; charset=utf-8'],
@@ -102,6 +103,7 @@ const files = new Map([
     'overview-prototype',
     'finance-collection',
     'title-help',
+    'tab-navigation',
     'inventory-prototype',
     'mailbox-delivery',
     'customer-query',
@@ -122,6 +124,7 @@ const files = new Map([
     'system-monitoring',
     'site-timing',
     'account-security',
+    'renewal-remarks',
     'renewal-handoff',
     'site-management',
     'bitbrowser-addresses'
@@ -259,7 +262,7 @@ export async function startPreview(
   const websiteModuleAssets = [
     ['/assets/website/pages.mjs', new URL('../modules/website/pages.mjs', import.meta.url)],
     ['/renewal-reminders.mjs', new URL('../frontend/renewal-reminders.mjs', import.meta.url)],
-    ...['orders/order-opening', 'orders/list-order', 'orders/renewal-reminders', 'orders/order-list',
+    ...['orders/order-opening', 'orders/list-order', 'orders/renewal-reminders', 'orders/order-list', 'orders/renewal-account-reference',
       'inventory/list', 'finance/apple-funding', 'finance/accounting', 'data/document-delta', 'data/record-edit'].map(name =>
       ['/modules/' + name + '.mjs', new URL('../modules/' + name + '.mjs', import.meta.url)]),
     ...[...new Set(websitePages.map(page => page.script))].map(script =>

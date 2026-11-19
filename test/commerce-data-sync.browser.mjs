@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { interceptDesign, origin } from './helpers/offline-design.mjs';
+import { interceptDesign, interceptRenewalWorktable, origin } from './helpers/offline-design.mjs';
 
 const actor = { id: 'sync-test-admin', name: '合成管理员', role: 'admin' };
 const instant = Date.parse('2026-11-10T12:00:00Z');
@@ -35,6 +35,7 @@ test('银行卡与续费资料跟随版本通知更新，同时保留订单价�
       const context = await browser.newContext({ viewport: { width, height: 900 }, locale: 'zh-CN' });
       try {
         const mock = await interceptDesign(context, { localFixtures: fixture, actor, changeEvents: true, skipRechargeAssets: true });
+        await interceptRenewalWorktable(context, { localFixtures: fixture, actor, clock: () => instant });
         await context.addInitScript(() => {
           const fetchOriginal = window.fetch.bind(window);
           window.emitRevision = versions => window.changeController.enqueue(new TextEncoder().encode(
@@ -140,26 +141,20 @@ test('银行卡与续费资料跟随版本通知更新，同时保留订单价�
           .getByRole('menuitem', { name: '使用预设 202 CNY', exact: true }).waitFor();
         await page.keyboard.press('Escape');
 
-        await go('workspace/renewals/reminders');
-        await page.locator('[data-action="commerce-renewal-select"][data-id="sync-test-order"]').click();
-        const workbench = page.locator('.renewal-workbench-detail');
+        await go('workspace/renewals');
+        const renewal = page.locator('[data-renewal-list] tr[data-row-id="sync-test-order"]');
+        await renewal.getByRole('button', { name: '详情', exact: true }).click();
+        const workbench = page.locator('#drawer[open] [data-renewal-order-preview]');
         await workbench.getByText('20.10 USD', { exact: true }).waitFor();
-        await workbench.getByRole('button', { name: '用卡详情', exact: true }).click();
-        const panel = page.locator('#drawer[open] #commerce-renewal-card-panel');
-        await panel.getByText('22.30 USD', { exact: true }).waitFor();
-        const previousReads = detailReads, previousWorkbench = workbenchReads;
-        detailAmount = '33.40';
+        const previousWorkbench = workbenchReads;
         workbenchAmount = '24.70';
         await page.evaluate(() => window.emitRevision({ 'finance-rates': '5' }));
-        await panel.getByText('33.40 USD', { exact: true }).waitFor();
         await workbench.getByText('24.70 USD', { exact: true }).waitFor();
         await idle();
-        assert.ok(detailReads > previousReads, '汇率更新后重新读取当前订单的银行卡详情');
         assert.equal(workbenchReads, previousWorkbench + 1);
-        await page.locator('#drawer[open] [data-action="drawer-close"]').first().click();
         failWorkbench = true;
         await page.evaluate(() => window.emitRevision({ 'finance-rates': '6' }));
-        await workbench.getByText('续费用卡资料读取失败。已保留上次读取的资料。').waitFor();
+        await workbench.getByText('续费用卡资料暂时无法读取，请稍后重试。').waitFor();
         assert.equal(await workbench.getByText('24.70 USD', { exact: true }).isVisible(), true);
         failWorkbench = false;
         const delayed = workbenchDelay = { started: Promise.withResolvers(), release: Promise.withResolvers() };
@@ -172,6 +167,17 @@ test('银行卡与续费资料跟随版本通知更新，同时保留订单价�
         await workbench.getByText('26.30 USD', { exact: true }).waitFor();
         await idle();
         assert.equal(await workbench.getByText('25.00 USD', { exact: true }).count(), 0);
+        await page.locator('#drawer[open] [data-action="drawer-close"]').first().click();
+        await renewal.getByRole('button', { name: '更多操作', exact: true }).click();
+        await page.getByRole('menuitem', { name: '用卡详情', exact: true }).click();
+        const panel = page.locator('#drawer[open] #commerce-renewal-card-panel');
+        await panel.getByText('22.30 USD', { exact: true }).waitFor();
+        const previousReads = detailReads;
+        detailAmount = '33.40';
+        await page.evaluate(() => window.emitRevision({ 'finance-rates': '9' }));
+        await panel.getByText('33.40 USD', { exact: true }).waitFor();
+        await idle();
+        assert.ok(detailReads > previousReads, '汇率更新后重新读取当前订单的银行卡详情');
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true);
         assert.deepEqual(errors, []);
         assert.deepEqual(mock.external, []);

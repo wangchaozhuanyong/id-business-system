@@ -196,6 +196,8 @@ test('订单金额预设、手填、更正原因和既有价格与订阅快捷�
   await editor.locator('#commerce-paidCurrency').selectOption('EGP');
   assert.equal(await editorPaid.inputValue(), '975.1000');
   menu = await openAmount('paid', editor);
+  // A deferred list search may finish after the editor has opened its preset menu.
+  await page.evaluate(() => window.IDDesignAPI.render());
   await menu.getByRole('menuitem', { name: '使用预设 1999.1234 EGP', exact: true }).click();
   assert.equal(await editorPaid.inputValue(), '1999.1234');
   menu = await openAmount('sale', editor);
@@ -217,8 +219,10 @@ test('订单金额预设、手填、更正原因和既有价格与订阅快捷�
     '从价格抽屉返回旧单编辑，保留金额、版本和全部草稿');
   await page.getByRole('button', { name: '关闭抽屉', exact: true }).click();
   await editor.waitFor({ state: 'hidden' });
+  await page.getByRole('tab', { name: '待补全', exact: true }).click();
   await page.locator('#commerce-search').fill('locked-shortcuts@example.test');
-  await page.locator('[data-action="commerce-order-edit"][data-id="locked-shortcuts"]').click();
+  await page.locator('[data-action="commerce-order-more"][data-id="locked-shortcuts"]').click();
+  await page.getByRole('menuitem', { name: '更正订单资料', exact: true }).click();
   assert.equal(await editor.locator('[data-action="commerce-order-start-shortcut"]').count(), 0,
     '自动入单的只读订阅时间不能通过快捷操作修改');
   assert.equal(await editor.locator('#commerce-start').getAttribute('readonly'), '');
@@ -256,7 +260,11 @@ test('订单金额预设、手填、更正原因和既有价格与订阅快捷�
         const input = node.querySelector('input').getBoundingClientRect();
         const button = node.querySelector('button').getBoundingClientRect();
         const minimum = innerWidth <= 900 ? 44 : 36;
-        return label.right <= input.left && input.width >= 60 && input.right < button.left &&
+        const currency = node.closest('.order-money-group').querySelector('select, input[readonly]');
+        const arrow = getComputedStyle(node.querySelector('button'));
+        return label.bottom <= input.top && Math.abs(label.left - input.left) <= 1 &&
+          getComputedStyle(currency).fontSize === getComputedStyle(node.querySelector('input')).fontSize &&
+          parseFloat(arrow.borderRightWidth) >= 1 && Math.abs(input.right - button.left) <= 1 && input.width >= 60 &&
           input.top === button.top && input.height === button.height && button.right <= field.right + 1 &&
           button.width >= minimum && button.height >= minimum;
       }));

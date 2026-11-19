@@ -104,6 +104,7 @@ export async function interceptDesign(context, { beforeDirectory, localFixtures,
     if (url.pathname.startsWith('/assets/website/pages/'))
       file = path.join(root, 'frontend', path.basename(url.pathname));
     if (['/modules/orders/order-opening.mjs', '/modules/orders/list-order.mjs', '/modules/orders/renewal-reminders.mjs',
+      '/modules/orders/renewal-account-reference.mjs',
       '/modules/orders/order-list.mjs', '/modules/inventory/list.mjs', '/modules/data/document-delta.mjs',
       '/modules/data/record-edit.mjs', '/modules/finance/accounting.mjs',
       '/modules/finance/apple-funding.mjs'].includes(url.pathname)) file = path.join(root, url.pathname);
@@ -170,6 +171,23 @@ export async function settle(page) {
   await page.evaluate(
     () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)))
   );
+}
+export async function interceptRenewalWorktable(context, { actor, localFixtures, clock = Date.now }) {
+  const { createRenewalHandoff, renewalHandoffPath } = await import('../../server/renewal-handoff.mjs');
+  const load = domain => localFixtures[domain] || { version: 0, data: null };
+  const handler = createRenewalHandoff({
+    store: { load, featureDocument: load, orderCardFingerprint: () => '' },
+    publicOrigin: origin, getAuth: () => ({ orderOwners: () => [], teamFor: () => [] }), clock
+  });
+  await context.route(url => url.pathname === renewalHandoffPath && url.searchParams.get('view') === 'staff', async route => {
+    const request = route.request();
+    if (request.method() !== 'GET') return route.fallback();
+    let status, body;
+    await handler({ method: 'GET', url: request.url(), headers: { origin } }, {
+      writeHead(value) { status = value; }, end(value) { body = value; }
+    }, actor);
+    await route.fulfill({ status, contentType: 'application/json', body });
+  });
 }
 export async function separatorSnapshot(page, scope = '#main') {
   return page.locator(scope).evaluate((root) => {

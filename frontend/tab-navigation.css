@@ -1,0 +1,7 @@
+/* Keep native touch and trackpad scrolling while hiding the tab strip scrollbar. */
+:is(.tabs, [data-tab-scrollport], .completion-status-filters, .subscription-center-nav) {
+  scrollbar-width: none;
+}
+:is(.tabs, [data-tab-scrollport], .completion-status-filters, .subscription-center-nav)::-webkit-scrollbar {
+  display: none;
+}

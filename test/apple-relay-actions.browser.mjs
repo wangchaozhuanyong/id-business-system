@@ -4,7 +4,7 @@ import { readFile, mkdir } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import { interceptDesign, origin } from './helpers/offline-design.mjs';
 
-test('隐藏邮箱的未登记计数、筛选与显示一致，健康状态独立', { timeout: 20_000 }, async t => {
+test('隐藏邮箱未登记、可用性与使用计数在宽窄屏入口均与筛选结果一致', { timeout: 20_000 }, async t => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
   const browser = await chromium.launch();
   t.after(() => browser.close());
@@ -15,7 +15,8 @@ test('隐藏邮箱的未登记计数、筛选与显示一致，健康状态独�
   fixture.inventory.data.mailboxes = [
     { ...base, id: 'alias-unknown', email: 'unknown@example.test', status: '正常' },
     { ...base, id: 'alias-available', email: 'available@example.test', status: '正常', inventoryState: 'available' },
-    { ...base, id: 'alias-used', email: 'used@example.test', status: '封控中', inventoryState: 'used' }
+    { ...base, id: 'alias-used', email: 'used@example.test', status: '正常', inventoryState: 'used' },
+    { ...base, id: 'alias-restricted', email: 'restricted@example.test', status: '封控中', inventoryState: 'used' }
   ];
   const traffic = await interceptDesign(context, { localFixtures: fixture, skipRechargeAssets: true });
   const page = await context.newPage();
@@ -23,18 +24,31 @@ test('隐藏邮箱的未登记计数、筛选与显示一致，健康状态独�
   await page.goto(origin + '/#/mailboxes/relay');
   const main = page.locator('#main');
   await main.getByRole('tab', { name: '隐藏邮箱管理', exact: true }).click();
-  const usage = main.getByRole('group', { name: '使用状态', exact: true });
-  const health = main.getByRole('group', { name: '资料状态', exact: true });
   const rows = main.locator('table[data-table="relay-aliases"] tbody tr[data-row-id]');
-  const ids = () => rows.evaluateAll(nodes => nodes.map(node => node.dataset.rowId));
-  await usage.getByRole('button', { name: '未登记 1', exact: true }).click();
-  assert.deepEqual(await ids(), ['alias-unknown']);
-  await usage.getByRole('button', { name: '未使用 1', exact: true }).click();
-  assert.deepEqual(await ids(), ['alias-available']);
-  await usage.getByRole('button', { name: '全部 3', exact: true }).click();
-  await health.getByRole('button', { name: '封控中 1', exact: true }).click();
-  assert.deepEqual(await ids(), ['alias-used']);
-  assert(await usage.getByRole('button', { name: '已使用 1', exact: true }).isVisible());
+  const ids = () => rows.evaluateAll(nodes => nodes.map(node => node.dataset.rowId).sort());
+  const cases = [
+    ['unknown', '未登记 1', ['alias-unknown']], ['available', '未使用 1', ['alias-available']],
+    ['', '全部 4', ['alias-available', 'alias-restricted', 'alias-unknown', 'alias-used']],
+    ['restricted', '封控中 1', ['alias-restricted']], ['used', '已使用 1', ['alias-used']]
+  ];
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    const compact = main.getByRole('combobox', { name: '筛选邮箱状态', exact: true });
+    const group = main.getByRole('group', { name: '状态', exact: true });
+    const mobile = width === 390;
+    assert.equal(await compact.isVisible(), mobile, width + 'px 的紧凑状态筛选');
+    assert.equal(await group.isVisible(), !mobile, width + 'px 的展开状态筛选');
+    for (const [value, label, expected] of cases) {
+      if (mobile) {
+        await compact.selectOption({ label });
+      } else if (['restricted', 'unknown'].includes(value)) {
+        await main.getByRole('combobox', { name: '其他状态' }).selectOption({ label });
+      } else {
+        await group.getByRole('button', { name: label, exact: true }).click();
+      }
+      assert.deepEqual(await ids(), expected, width + 'px ' + label);
+    }
+  }
   assert.deepEqual(traffic.external, []);
 });
 

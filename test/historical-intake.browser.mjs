@@ -4,7 +4,7 @@ import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 const runtime = process.env.ID_RECHARGE_QA_PLAYWRIGHT;
 const { chromium } = await import(runtime ? pathToFileURL(runtime).href : 'playwright');
-import { interceptDesign, origin, settle } from './helpers/offline-design.mjs';
+import { interceptDesign, interceptRenewalWorktable, origin, settle } from './helpers/offline-design.mjs';
 import { planHistoricalIntake, historicalIntakePreview, requireHistoricalIntake, stageHistoricalIntake } from '../server/apple-relay/historical-intake.mjs';
 import { applyInventoryUsage, inspectInventoryUsage } from '../server/inventory-usage.mjs';
 import { accountLifecycleSummaries, applyAccountOrderLifecycle } from '../server/account-lifecycle.mjs';
@@ -22,6 +22,7 @@ test('Claude Pro 和 Max 通过实际表单保存独立空邮箱订单', { timeo
   local.commerce.data.customers = [customer];
   local.commerce.data.orders = [];
   const requests = await interceptDesign(context, { localFixtures: local, actor });
+  await interceptRenewalWorktable(context, { actor, localFixtures: local });
   await context.route(origin + '/api/local/auth/order-owners', route => route.fulfill({ json: { items: [actor] } }));
   const saved = [];
   await context.route(origin + '/api/local/commerce', route => {
@@ -69,13 +70,13 @@ test('Claude Pro 和 Max 通过实际表单保存独立空邮箱订单', { timeo
   assert.equal(new Set(saved.map(row => row.id)).size, 2);
   local.commerce.data.orders.push({ ...local.commerce.data.orders.find(row => row.id === saved[0].id),
     id: 'tracked-claude', orderNo: 'QA-TRACKED', email: 'tracked@example.test' });
-  await page.goto(origin + '/#/workspace/renewals/reminders');
+  await page.goto(origin + '/#/workspace/renewals');
   await page.reload();
-  await page.getByRole('tab', { name: /^已到期/ }).click();
-  const reminders = page.getByRole('region', { name: '续费待办' });
-  await reminders.getByRole('button', { name: /tracked@example\.test/ }).waitFor();
+  await page.getByLabel('订单状态').selectOption('expired');
+  const reminders = page.getByRole('table', { name: '待续费订单' });
+  await reminders.getByText('tracked@example.test', { exact: true }).waitFor();
   for (const order of saved)
-    await reminders.locator('[data-action="commerce-renewal-select"][data-id="' + order.id + '"]').waitFor();
+    await reminders.locator('[data-action="renewal-handoff-order-details"][data-id="' + order.id + '"]').waitFor();
   await page.goto(origin + '/#/orders/exclusive');
   await page.getByText('tracked@example.test', { exact: true }).first().waitFor();
   assert.equal(await page.evaluate(() => window.IDDesignAPI.modules.commerce.getCurrentSubscription('')), null);

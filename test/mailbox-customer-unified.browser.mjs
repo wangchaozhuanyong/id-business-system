@@ -105,7 +105,7 @@ test('客户查询显示历史 Apple ID 和当前死卡，Claude 只复制账号
   }
 });
 
-test('隐藏邮箱两行、复制失败重试和邮箱池跨页批量操作', { timeout: 50_000 }, async t => {
+test('隐藏邮箱响应式工具栏、复制失败重试和邮箱池跨页批量操作', { timeout: 50_000 }, async t => {
   const browser = await chromium.launch();
   t.after(() => browser.close());
   const fixtures = await fixture();
@@ -171,19 +171,23 @@ test('隐藏邮箱两行、复制失败重试和邮箱池跨页批量操作', { 
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(origin + '/#/mailboxes/relay');
   await action(page, 'relay-delivery-copy').waitFor();
-  const alignment = () => page.locator('.relay-alias-toolbar').evaluate(toolbar => [...toolbar.querySelectorAll('.relay-alias-row')].map(row => {
-    const items = [...row.querySelectorAll('button, input, select, .footnote')].filter(node => node.checkVisibility());
-    const positions = items.map(node => node.getBoundingClientRect()).map(({ top, height }) => top + height / 2);
-    return { spread: Math.max(...positions) - Math.min(...positions), center: positions[0] };
-  }));
-  const rows = await alignment();
-  assert.equal(rows.length, 2);
-  assert(rows.every(row => row.spread <= 2) && rows[1].center - rows[0].center > 30, JSON.stringify(rows));
+  const toolbar = page.locator('.relay-alias-toolbar');
+  const alignment = () => toolbar.evaluate(node => {
+    const visible = [...node.querySelectorAll('button, input, select')].filter(control => control.checkVisibility());
+    return visible.map(control => {
+      const { top, height } = control.getBoundingClientRect();
+      return { search: control.id === 'relay-search', center: top + height / 2 };
+    });
+  });
+  const desktop = await alignment();
+  assert(desktop.some(item => item.search) && desktop.length >= 3);
+  assert(desktop.every(item => Math.abs(item.center - desktop[0].center) <= 2), '宽屏搜索、筛选和操作同排');
   if (process.env.ID_UNIFIED_SCREENSHOTS === '1') {
     await mkdir(evidence, { recursive: true });
     await page.screenshot({ path: fileURLToPath(new URL('relay-1440.png', evidence)) });
   }
-  await action(page, 'mailbox-delivery-settings').click();
+  await toolbar.getByRole('button', { name: '更多', exact: true }).click();
+  await page.getByRole('menuitem', { name: '复制设置', exact: true }).click();
   await page.locator('#mailbox-delivery-relayQuery').fill('新隐藏后缀\n第二行');
   await page.getByRole('button', { name: '保存设置', exact: true }).click();
   await page.locator('#drawer').waitFor({ state: 'hidden' });
@@ -197,6 +201,10 @@ test('隐藏邮箱两行、复制失败重试和邮箱池跨页批量操作', { 
   assert.equal(await page.evaluate(() => window.fixtureCopiedText), `${relay.email}----BUY-FAKE-0002\n新隐藏后缀\n第二行`);
   assert.equal(relayWrites.length, 1);
   await page.setViewportSize({ width: 390, height: 900 });
+  const mobile = await alignment();
+  const search = mobile.find(item => item.search), actions = mobile.filter(item => !item.search);
+  assert(search && actions.length >= 2 && actions.every(item => item.center > search.center + 30), '手机搜索独占首行');
+  assert(actions.every(item => Math.abs(item.center - actions[0].center) <= 2), '手机筛选和更多操作同排');
   assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
   await page.setViewportSize({ width: 1440, height: 960 });
   await page.evaluate(() => window.IDDesignAPI.go('mailboxes/google'));
