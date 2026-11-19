@@ -43,6 +43,7 @@ for (const [name, args] of groups.filter(([name]) => !selected.length || selecte
   child.stdout.pipe(stream, { end: false }); child.stderr.pipe(stream, { end: false });
   const code = await new Promise((resolve, reject) => { child.once('error', reject); child.once('close', resolve); });
   await new Promise(resolve => stream.end(resolve));
+  if (code !== 0) console.error((await readFile(log, 'utf8')).slice(-6000));
   const previous = results.findIndex(result => result.name === name);
   const result = { name, started, code, log };
   if (previous < 0) results.push(result); else results[previous] = result;
