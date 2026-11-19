@@ -55,7 +55,7 @@ NATIVE_PATCH_FILES = {
                           ("provider-retirement", "upstream-provider-retirement.patch"))
     for name in ("manifest.json", patch)
 }
-# 0 元试用补丁只改 pricing-checkout.js，作为独立审查批次，不与银行卡套餐或供应商退役批次绑定。
+# 已批准的优惠及浏览器补丁独立核验，不与银行卡套餐或供应商退役批次绑定。
 PLUS_TRIAL_PATCH_FILES = {
     f"modules/recharge/codexdaichong/plus-trial/{name}"
     for name in ("manifest.json", "upstream-plus-trial.patch")
@@ -66,6 +66,7 @@ DEFERRED_DEBUG_BASE = "18ca7897c494352f5ab0ce0217d11b294ac645b8"
 DEFERRED_DEBUG_MERGE = "47447e73c6562b43f27f9e1f80f82573b81ec00d"
 DEFERRED_DEBUG_FILES = frozenset(PLUS_TRIAL_SCOPE)
 PLUS_TRIAL_BUILD_INPUTS = PLUS_TRIAL_SCOPE | {"modules/recharge/codexdaichong/prepare.mjs"}
+DEPLOYED_TRIAL_BUILD_INPUTS = PLUS_TRIAL_BUILD_INPUTS | {"deploy/recharge-core/canary.py"}
 NATIVE_CORE_SCOPE = NATIVE_PATCH_FILES | PLUS_TRIAL_SCOPE | {
     "deploy/recharge-core/README.md", "deploy/recharge-core/canary.py", "deploy/recharge-core/health.mjs",
     "deploy/recharge-core/card-plans-canary.mjs", "deploy/recharge-core/check-provider-cutover.mjs",
@@ -218,13 +219,13 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False, 
     changed.discard(BACKUP_OPERATION)
     native = native_publication or {}
     native_revision = native.get("identity", {}).get("revision")
-    if (changed == PLUS_TRIAL_SCOPE and
+    if (changed in (PLUS_TRIAL_SCOPE, DEPLOYED_TRIAL_BUILD_INPUTS) and
             not any((include_adapter, include_core, partner_api)) and
             native.get("imageLabelsVerified") is True and
             isinstance(native_revision, str) and re.fullmatch(r"[a-f0-9]{40}", native_revision) and
             native["identity"].get("running") is True):
         require_ancestor(native_revision, sha)
-        if git("diff", "--name-only", native_revision, sha, "--", *sorted(PLUS_TRIAL_SCOPE)).strip():
+        if git("diff", "--name-only", native_revision, sha, "--", *sorted(DEPLOYED_TRIAL_BUILD_INPUTS)).strip():
             raise RuntimeError("deployed_native_inputs_source_mismatch")
         return "deployedNativeBuildInputs", {"nativeRevision": native_revision, "image": native["identity"]["image"]}
     if include_core and base == DEFERRED_DEBUG_BASE and changed == DEFERRED_DEBUG_FILES:
@@ -602,7 +603,7 @@ def main(sample_backup_resources=False):
     if deferred_native:
         files += ("frontend/recharge-partners.mjs", *sorted(DEFERRED_DEBUG_FILES))
     if deployed_native:
-        files += tuple(sorted(PLUS_TRIAL_SCOPE))
+        files += tuple(sorted(DEPLOYED_TRIAL_BUILD_INPUTS))
     plan = {"operation": "release", "sha": sha, "before": before, "artifacts": artifacts,
             "files": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in files},
             "qualityRun": quality_run, "preflightCommand": preflight_id, 'externalEvents': True}
