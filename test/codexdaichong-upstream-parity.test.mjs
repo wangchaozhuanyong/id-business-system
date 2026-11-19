@@ -50,7 +50,7 @@ test('all 203 upstream files match the original and five exact patches', async (
   assert.deepEqual(result.returnFiles, ['mysql-store.js', 'server.js']);
   assert.deepEqual(result.providerRetirementFiles, ['mysql-store.js', 'server.js']);
   assert.deepEqual(result.cardPlanFiles, ['mysql-store.js', 'payment-retry.js', 'server.js']);
-  assert.deepEqual(result.plusTrialFiles, ['chatgpt.js', 'pricing-checkout.js', 'session-auth.js', 'stripe-payment.js']);
+  assert.deepEqual(result.plusTrialFiles, ['browser-pool.js', 'chatgpt.js', 'pricing-checkout.js', 'session-auth.js', 'stripe-payment.js']);
   const mysql = await readFile(join(prepared, 'mysql-store.js'), 'utf8');
   const previousMysql = await readFile(join(previous, 'mysql-store.js'), 'utf8');
   assert.equal(previousMysql.replace('module.exports = {\n    withTransaction,', 'module.exports = {'), await original('mysql-store.js'));
