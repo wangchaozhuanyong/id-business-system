@@ -172,6 +172,7 @@ test('隐藏邮箱响应式工具栏、复制失败重试和邮箱池跨页批�
   await page.goto(origin + '/#/mailboxes/relay');
   await action(page, 'relay-delivery-copy').waitFor();
   const toolbar = page.locator('.relay-alias-toolbar');
+  assert.equal(await toolbar.locator('.relay-alias-row').count(), 1);
   const alignment = () => toolbar.evaluate(node => {
     const visible = [...node.querySelectorAll('button, input, select')].filter(control => control.checkVisibility());
     return visible.map(control => {
@@ -186,8 +187,11 @@ test('隐藏邮箱响应式工具栏、复制失败重试和邮箱池跨页批�
     await mkdir(evidence, { recursive: true });
     await page.screenshot({ path: fileURLToPath(new URL('relay-1440.png', evidence)) });
   }
-  await toolbar.getByRole('button', { name: '更多', exact: true }).click();
-  await page.getByRole('menuitem', { name: '复制设置', exact: true }).click();
+  const copySettings = action(page, 'mailbox-delivery-settings');
+  if (!await copySettings.first().isVisible()) {
+    await toolbar.getByRole('button', { name: '更多', exact: true }).click();
+    await page.getByRole('menuitem', { name: '复制设置', exact: true }).click();
+  } else await copySettings.click();
   await page.locator('#mailbox-delivery-relayQuery').fill('新隐藏后缀\n第二行');
   await page.getByRole('button', { name: '保存设置', exact: true }).click();
   await page.locator('#drawer').waitFor({ state: 'hidden' });

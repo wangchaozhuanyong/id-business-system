@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { latestRenewalDecisions } from '../modules/orders/renewal-reminders.mjs';
 import { managesBusiness } from './access-roles.mjs';
 import { moneyUnits, validMoney } from './order-policy.mjs';
 import { validCurrencyCode } from '../modules/finance/accounting.mjs';
@@ -53,17 +54,13 @@ function originalOrderContext(commerce, inventory, profiles, store, now) {
   const orders = commerce?.orders || [];
   const byId = new Map(orders.map(row => [row.id, row]));
   const customers = new Map((commerce?.customers || []).filter(row => row.active !== false).map(row => [row.id, row]));
-  const decisions = new Map();
+  const decisions = latestRenewalDecisions(commerce?.logs || []);
   const accounts = new Map((inventory?.accounts || []).map(row => [row.id, row]));
   const operations = new Map(commerce?.operating || []);
   const released = new Set([...accounts.values()].flatMap(row => [...releasedAccountOrders(row)]));
   const legacy = new Set(legacyOpeningOrderIds(orders, profiles));
   const opened = row => orderOpeningConfirmed(row, now, legacy.has(row.id));
   const owners = new Map();
-  for (const row of commerce?.logs || []) {
-    if (['拒续费', '恢复续费提醒'].includes(row.type) && !decisions.has(row.entityId))
-      decisions.set(row.entityId, row.type);
-  }
   const latest = new Map(), linked = new Set();
   const keyOf = row => {
     const root = subscriptionChainRoot(row, byId);
@@ -88,7 +85,7 @@ function originalOrderContext(commerce, inventory, profiles, store, now) {
       !linked.has(row.id) && !accountMarkedDead(accounts.get(row.accountId)) &&
       (!row.product.startsWith('Claude') || !['frozen', 'abandoned'].includes(
         operations.get(String(row.email || '').toLowerCase())?.status)) &&
-      decisions.get(row.id) !== '拒续费' && [bank, apple].includes(row.payment));
+      decisions.get(row.id)?.type !== '拒续费' && [bank, apple].includes(row.payment));
   }
   const eligible = row => eligibleForHandoff(row) && latest.get(keyOf(row))?.id === row.id;
   function owner(order) {
@@ -103,7 +100,7 @@ function originalOrderContext(commerce, inventory, profiles, store, now) {
     }
     return owners.get(order.id);
   }
-  return { orders, byId, customers, tenants: commerce?.tenants || [], eligible, eligibleForHandoff,
+  return { orders, byId, customers, decisions, tenants: commerce?.tenants || [], eligible, eligibleForHandoff,
     opened, released, owner, stamp: order => originalStamp(order, store) };
 }
 
@@ -392,9 +389,9 @@ async function readCommand(request) {
   fail(400, '请核对填写的资料');
 }
 
-const actions = new Set(['submit', 'withdraw', 'claim', 'paid', 'return', 'finish', 'transfer', 'review-source']);
+const actions = new Set(['submit', 'decline', 'withdraw', 'claim', 'paid', 'return', 'finish', 'transfer', 'review-source']);
 const actionFields = {
-  submit: ['confirmed', 'orders', 'remark', 'accountReference'], claim: [],
+  submit: ['confirmed', 'orders', 'remark', 'accountReference'], decline: ['confirmed', 'orders'], claim: [],
   withdraw: [],
   paid: ['confirmed', 'amount', 'currency', 'reference', 'cardMode', 'cardId', 'cardNumber', 'cardSerial', 'financeRemark'],
   return: ['confirmed', 'reason'], finish: ['start', 'expiry', 'saleAmount', 'saleCurrency', 'email', 'xHandle'],
@@ -417,8 +414,9 @@ export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clo
       const snapshot = store.featureDocument(renewalHandoffDomain);
       const items = snapshot.data?.items || [];
       const commerce = store.load('commerce');
-      const inventory = store.load('inventory').data;
-      const context = originalOrderContext(commerce.data, inventory, store.featureDocument(subscriptionDomain).data, store, now);
+      const inventorySnapshot = store.load('inventory'), inventory = inventorySnapshot.data;
+      const profiles = store.featureDocument(subscriptionDomain);
+      const context = originalOrderContext(commerce.data, inventory, profiles.data, store, now);
       const reminderHours = commerce.data?.renewalWarningHours ?? (commerce.data?.renewalWarningDays ?? 3) * 24;
       if (request.method === 'GET') {
         const params = new URL(request.url, origin).searchParams;
@@ -438,10 +436,21 @@ export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clo
           return send(response, 200, { items: [...selected, ...pool.map(({ id, last4 }) => ({ id, last4, label: '代充卡' }))] });
         }
         const fromFinance = view === 'finance';
-        if (fromFinance && !financeRole(actor) || !fromFinance && (view !== 'staff' || actor.role === 'finance'))
+        if (fromFinance && !financeRole(actor) || !fromFinance && (!['staff', 'declined'].includes(view) || actor.role === 'finance'))
           fail(403, '当前账号无权查看此工作台');
         const manager = managesBusiness(actor);
         const mine = order => Boolean(order && canSend(actor, order, team, context));
+        if (view === 'declined') {
+          const declined = [];
+          for (const [id, decision] of context.decisions) {
+            const order = context.byId.get(id);
+            if (decision.type !== '拒续费' || !mine(order)) continue;
+            const { number, customer, account, product, plan, expiry, owner, wechat } = publicOrder(order, context);
+            declined.push({ id, order: { number, customer, account, product, plan, expiry, owner, wechat },
+              declinedAt: decision.at, declinedBy: decision.actor });
+          }
+          return send(response, 200, { version: commerce.version, items: declined });
+        }
         const visible = items.filter(row => fromFinance || manager ||
           mine(context.byId.get(row.order.id)));
         const queued = new Set(items.filter(blocksNewHandoff).map(row => row.order.id));
@@ -516,34 +525,46 @@ export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clo
       const operation = describeWriteOperation(request.headers['x-id-operation'], actor, ['renewal', command]);
       if (!operation) fail(400, '请从当前工作台提交');
       if (store.replayWrite(operation)) {
+        if (action === 'decline') return send(response, 200, { saved: true, count: command.orders.length });
         const prior = items.find(row => row.id === command.id && row.status === 'complete');
         return send(response, 200, { saved: true, ...(prior && { orderNo: prior.newOrderNo }) });
       }
-      if (action === 'submit') {
-        if (actor.role === 'finance') fail(403, '请由业务人员送财务');
+      if (action === 'submit' || action === 'decline') {
+        if (actor.role === 'finance') fail(403, '请由业务人员处理所选订单');
+        if (action === 'decline' && command.confirmed !== true) fail(400, '请确认客户拒绝续费');
         if (!Array.isArray(command.orders) || !command.orders.length || command.orders.length > 50 ||
             command.orders.some(row => typeof row?.id !== 'string' || row.id.length > 256 || !Number.isSafeInteger(row.version)) ||
             new Set(command.orders.map(row => row?.id)).size !== command.orders.length)
           fail(400, '请选择 1 至 50 笔续费订单');
+        const submitting = action === 'submit';
         const remark = text(command.remark, 160);
-        if (!remark || /(?:\d[ -]?){12}/.test(remark))
+        if (submitting && (!remark || /(?:\d[ -]?){12}/.test(remark)))
           fail(400, '请填写 1 至 160 字的提交备注，银行卡号请勿填入备注');
-        if (!canSendToFinance(actor, scope))
+        if (submitting && !canSendToFinance(actor, scope))
           fail(409, '当前没有其他账号可以处理这笔续费，请先启用财务账号。');
-        const { reminders } = handoffReminders(commerce.data, context, reminderHours, now);
-        const additions = command.orders.map(row => {
+        const reminders = submitting ? handoffReminders(commerce.data, context, reminderHours, now).reminders : null;
+        const sources = command.orders.map(row => {
           const source = context.byId.get(row?.id);
           if (!source || !canSend(actor, source, team, context)) fail(404, '所选订单不存在或不在你的工作范围内');
           if (!context.eligible(source) || row.version !== (source.version ?? 0) ||
               items.some(item => item.order.id === row.id && blocksNewHandoff(item)))
             fail(409, '有订单已送财务或资料已更新，请刷新后核对再提交');
-          if (!reminders.has(source.id) || reminders.get(source.id).state === 'processed')
+          if (reminders && (!reminders.has(source.id) || reminders.get(source.id).state === 'processed'))
             fail(409, '有订单不在续费提醒范围内，请刷新后重新选择');
-          return { id: randomUUID(), version: 1, status: 'pending', order: publicOrder(source, context),
-            source: context.stamp(source), accountSource: source.accountSource || '',
-            submittedBy: { id: actor.id, name: actor.name }, submittedAt: displayTime(now), remark,
-            ...(command.accountReference && { accountReference: command.accountReference }) };
+          return source;
         });
+        if (action === 'decline') {
+          const versions = { [renewalHandoffDomain]: snapshot.version, commerce: commerce.version,
+            inventory: inventorySnapshot.version, [subscriptionDomain]: profiles.version };
+          store.declineRenewalOrders(versions, sources, actor, displayTime(now), operation);
+          return send(response, 200, { saved: true, count: sources.length });
+        }
+        const additions = sources.map(source => ({
+          id: randomUUID(), version: 1, status: 'pending', order: publicOrder(source, context),
+          source: context.stamp(source), accountSource: source.accountSource || '',
+          submittedBy: { id: actor.id, name: actor.name }, submittedAt: displayTime(now), remark,
+          ...(command.accountReference && { accountReference: command.accountReference })
+        }));
         store.saveRenewalQueue(snapshot.version, commerce.version, [...additions, ...items],
           { action: 'renewal_submit', actor, ids: additions.map(row => row.id), operation });
         return send(response, 200, { saved: true, count: additions.length });

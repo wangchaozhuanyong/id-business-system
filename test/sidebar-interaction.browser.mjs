@@ -185,3 +185,41 @@ test('interaction sounds use real browser audio after opt-in', { timeout: 50_000
     } finally { await context.close(); }
   });
 });
+
+test('插件管理保留邮箱查询子导航，展开、直达和刷新使用同一页', async t => {
+  const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
+  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
+  t.after(() => browser.close());
+
+  for (const [role, width, start] of [['admin', 1440, 'overview'], ['employee', 390, 'workspace/order-completion']]) {
+    const mobile = width === 390;
+    const context = await browser.newContext({ viewport: { width, height: 900 } });
+    const traffic = await interceptDesign(context, { actor: { id: 'test-' + role, role, name: '测试账号' },
+      localFixtures: {}, skipRechargeAssets: true });
+    const page = await context.newPage();
+    page.setDefaultTimeout(5000);
+    const side = page.locator('#sidebar'), toggle = page.locator('#nav-toggle');
+    const group = side.getByRole('button', { name: '插件管理', exact: true });
+    const child = side.getByRole('link', { name: '邮箱查询', exact: true });
+    await page.goto(origin + '/#/' + start);
+    await toggle.click(); // Open the mobile menu or switch the desktop sidebar to its icon rail.
+    await group.click();
+    assert.equal(new URL(page.url()).hash, '#/' + start);
+    assert.equal(await group.getAttribute('aria-expanded'), 'true');
+    assert(await child.isVisible());
+    await group.click();
+    assert.equal(await group.getAttribute('aria-expanded'), 'false');
+    await group.press('Enter');
+    await child.click();
+    await page.waitForURL('**/#/plugins/mailboxes');
+    await page.getByRole('heading', { name: '邮箱查询', exact: true }).waitFor();
+    assert.equal(await page.locator('#breadcrumbs').textContent(), '插件管理');
+    await page.reload();
+    await page.getByRole('heading', { name: '邮箱查询', exact: true }).waitFor();
+    if (mobile) await toggle.click();
+    assert.equal(await group.getAttribute('aria-expanded'), 'true');
+    assert.equal(await child.getAttribute('aria-current'), 'page');
+    assert.deepEqual(traffic.external, []);
+    await context.close();
+  }
+});

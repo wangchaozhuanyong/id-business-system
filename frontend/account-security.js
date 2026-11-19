@@ -153,51 +153,104 @@
 
   const route = 'settings/security';
   let host, loadId = 0;
+  const reasons = { limited: '尝试过于频繁', network: '网络未获准', challenge: '真人验证未通过',
+    credentials: '账号或密码未通过', verification: '两步验证码未通过', device: '设备等待批准' };
+  function beijingTime(at) {
+    const date = new Date(at);
+    if (!Number.isFinite(date.getTime())) return '时间待核对';
+    return `<time datetime="${date.toISOString()}">${E(date.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }))}</time>`;
+  }
+
+  function securityPanel(id, title, help, actions, body) {
+    return `<section class="panel security-panel" aria-labelledby="security-${id}">
+      <div class="panel-heading"><div class="section-title-row"><h2 id="security-${id}">${title}</h2>
+      ${A.titleInfo(title, help, id + '-help')}</div>${actions}</div>${body}</section>`;
+  }
+
+  function summary(data) {
+    const facts = [
+      ['登录真人验证', data && A.tag(data.challengeEnabled ? '已启用' : '未启用', data.challengeEnabled ? 'success' : '')],
+      ['登录网络限制', data && A.tag(data.policy.mode === 'enforce' ? '仅允许名单内网络' : '未启用', data.policy.mode === 'enforce' ? 'blue' : '')],
+      ['当前网络地址', data && E(data.address || '尚未取得')]
+    ];
+    if (data?.lastRecovery) facts.push(['上次恢复登录权限', beijingTime(data.lastRecovery.at)]);
+    return facts.map(([label, value]) => `<div class="summary-item"><dt class="summary-label">${label}</dt>
+      <dd>${value || '—'}</dd></div>`).join('');
+  }
+
+  function networkControls(network) {
+    const modeLabel = network ? (network.policy.mode === 'enforce' ? '暂停网络限制' : '启用网络限制') : '网络限制';
+    return `<button type="button" class="button primary" data-network-action="add" ${network ? '' : 'disabled'}>${A.icon('plus')}添加 IP</button>
+      ${button('data-network-action="mode"', modeLabel, network?.connectable ? '' : 'disabled')}`;
+  }
+
+  const emptyMessage = text => `<p class="security-empty">${text}</p>`;
   function render() {
-    return A.header('登录安全', '管理允许登录的网络、查看真人验证状态和待批准的设备。') +
-      `<section class="panel" data-login-security><div class="toolbar"><div class="toolbar-right">
-        ${button('data-network-action="reload"', '刷新')}</div></div><div class="panel-body" data-network-content aria-live="polite">正在读取登录安全设置…</div></section>`;
+    const waiting = emptyMessage('正在读取…');
+    return A.header('登录安全', '查看登录状态，管理允许登录的网络并处理设备申请。') +
+      `<div class="security-workspace" data-login-security>
+      ${securityPanel('overview', '当前状态', '当前网络地址来自本次访问，所有时间均为北京时间。',
+        button('data-network-action="reload"', '刷新'),
+        `<p class="inline-notice warning" data-security-error role="alert" hidden></p>
+         <dl class="summary-strip security-summary" data-security-summary aria-live="polite">${summary()}</dl>`)}
+      <div class="security-columns">
+      ${securityPanel('allowed-networks', '允许登录的网络', '先登记当前使用的公司网络，再开启限制。员工账号仍需要密码和适用的两步验证码。',
+        `<div class="security-actions" data-network-controls>${networkControls()}</div>`,
+        `<div data-security-networks>${waiting}</div>`)}
+      ${securityPanel('device-requests', '待批准的设备', '核对申请人、设备和申请时间，再选择批准或拒绝。', '',
+        `<div data-security-devices>${waiting}</div>`)}
+      </div>
+      ${securityPanel('login-blocks', '近期登录拦截', '显示网站本次运行期间最近一天的拦截，最多十条，按北京时间从新到旧排列。',
+        '<a class="button" href="#/settings/audit">查看操作记录</a>', `<div data-security-blocks>${waiting}</div>`)}
+      <span data-security-progress role="status" hidden></span></div>`;
+  }
+
+  function securityList(rows, item, empty) {
+    return rows.length ? `<ul class="security-records">${rows.map(row => `<li>${item(row)}</li>`).join('')}</ul>` : emptyMessage(empty);
   }
 
   async function load() {
     if (!host?.isConnected) return;
-    const id = ++loadId;
-    const content = $('[data-network-content]', host);
-    content.setAttribute('aria-busy', 'true');
+    const view = host, id = ++loadId;
+    const errorBox = $('[data-security-error]', view);
+    const feedback = A.beginRegionRead(view, $('[data-security-progress]', view), {
+      refreshButton: $('[data-network-action="reload"]', view)
+    });
+    errorBox.hidden = true;
     try {
       const [network, devices, activity] = await Promise.all([
         request('security/network'), request('security/device-requests'), request('security/activity')
       ]);
-      if (id !== loadId || !content.isConnected) return;
-      const { policy, address, challengeEnabled, connectable, lastRecovery } = network;
-      const reasons = { limited: '尝试过于频繁', network: '网络未获准', challenge: '真人验证未通过',
-        credentials: '账号或密码未通过', verification: '两步验证码未通过', device: '设备等待批准' };
-      const stamp = at => E(new Date(at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }));
-      content.innerHTML = `<div class="property-list">
-        <div class="property-row"><span>登录真人验证</span><strong>${challengeEnabled ? '已启用' : '尚未启用'}</strong></div>
-        <div class="property-row"><span>当前网络地址</span><strong>${address ? E(address) : '尚未取得'}</strong></div>
-        <div class="property-row"><span>登录网络限制</span><strong>${policy.mode === 'enforce' ? '只允许名单内网络' : '目前允许登录'}</strong></div>
-        ${lastRecovery ? `<div class="property-row"><span>上次恢复登录权限</span><strong>${stamp(lastRecovery.at)}</strong></div>` : ''}
-      </div>
-      <div class="section-title-row"><h2>允许登录的网络</h2>${A.titleInfo('允许登录的网络',
-        '先登记当前使用的公司网络，再开启限制。员工账号仍需要密码和适用的两步验证码。', 'allowed-networks-help')}</div>
-      <div class="toolbar"><div class="toolbar-left">${button('data-network-action="add"', '添加允许登录的 IP')}
-      ${button('data-network-action="mode"', policy.mode === 'enforce' ? '暂停网络限制' : '启用网络限制', !connectable ? 'disabled' : '')}</div></div>
-      ${policy.entries.length ? policy.entries.map(row => `<article class="local-auth-device"><div><strong>${E(row.name)}</strong><p>${E(row.network)}</p></div>
-        ${button(`data-network-action="remove" data-id="${E(row.id)}"`, '移除')}</article>`).join('') : '<p>还没有登记允许登录的网络。</p>'}
-      <div class="section-title-row"><h2>待批准的设备</h2>${A.titleInfo('待批准的设备', '确认申请人和设备后再批准。', 'device-requests-help')}</div>
-      ${devices.items.length ? devices.items.map(row => `<article class="local-auth-device"><div><strong>${E(row.employeeName)}</strong><p>${E(row.name)} · ${E(new Date(row.at).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }))}</p></div><div class="action-links">
-        ${button(`data-network-action="approve" data-id="${E(row.id)}" data-employee="${E(row.employeeId)}"`, '批准')}
-        ${button(`data-network-action="reject" data-id="${E(row.id)}" data-employee="${E(row.employeeId)}"`, '拒绝')}</div></article>`).join('') : '<p>暂无设备申请。</p>'}
-      <div class="section-title-row"><h2>近期登录拦截</h2>${A.titleInfo('近期登录拦截',
-        '显示网站本次运行期间最近一天的拦截，最多保留十条可查看记录。', 'login-blocks-help')}</div>
-      ${activity.items.length ? `<ul class="security-blocks">${activity.items.map(row =>
-        `<li><strong>${E(reasons[row.kind] || '登录未通过')}</strong> <span>${stamp(row.at)}</span></li>`).join('')}</ul>` : '<p>暂无近期拦截记录。</p>'}
-      <div class="toolbar"><a class="button" href="#/settings/audit">查看操作记录</a></div>`;
-      host.dataset.version = policy.version;
-      host.dataset.mode = policy.mode;
-    } catch (error) { if (id === loadId && content.isConnected) content.textContent = error.message; }
-    finally { if (id === loadId) content.removeAttribute('aria-busy'); }
+      if (id !== loadId || !view.isConnected) return;
+      const { policy } = network;
+      $('[data-security-summary]', view).innerHTML = summary(network);
+      $('[data-network-controls]', view).innerHTML = networkControls(network);
+      $('[data-security-networks]', view).innerHTML = securityList(policy.entries, row =>
+        `<div class="security-record-text"><strong>${E(row.name)}</strong><span>${E(row.network)}</span></div>
+         ${button(`data-network-action="remove" data-id="${E(row.id)}"`, '移除')}`, '还没有登记允许登录的网络。');
+      $('[data-security-devices]', view).innerHTML = securityList(devices.items, row =>
+        `<div class="security-record-text"><strong>${E(row.employeeName)}</strong><span>${E(row.name)}</span>${beijingTime(row.at)}</div>
+         <div class="security-actions">${button(`data-network-action="approve" data-id="${E(row.id)}" data-employee="${E(row.employeeId)}"`, '批准')}
+         ${button(`data-network-action="reject" data-id="${E(row.id)}" data-employee="${E(row.employeeId)}"`, '拒绝')}</div>`, '暂无设备申请。');
+      $('[data-security-blocks]', view).innerHTML = securityList(activity.items, row =>
+        `${beijingTime(row.at)}<strong>${E(reasons[row.kind] || '登录未通过')}</strong>`, '暂无近期拦截记录。');
+      view.dataset.version = policy.version;
+      view.dataset.mode = policy.mode;
+    } catch (error) {
+      if (id !== loadId || !view.isConnected) return;
+      const retain = view.dataset.version !== undefined && error.status !== 401 && error.status !== 403;
+      if (!retain) {
+        delete view.dataset.version;
+        delete view.dataset.mode;
+        $('[data-security-summary]', view).innerHTML = summary();
+        $('[data-network-controls]', view).innerHTML = networkControls();
+        for (const content of view.querySelectorAll('[data-security-networks], [data-security-devices], [data-security-blocks]'))
+          content.innerHTML = emptyMessage('暂未取得数据');
+      }
+      const message = (error.message || '读取失败').replace(/[。.!！]+$/, '');
+      errorBox.textContent = message + (retain ? '。当前显示上次读取的内容，可点击刷新重试。' : '。请点击刷新重试。');
+      errorBox.hidden = false;
+    } finally { feedback.finish(); }
   }
 
   function confirmChange(title, note) {

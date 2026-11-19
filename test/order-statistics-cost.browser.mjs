@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
+import { tableColumnAlignment } from './helpers/table-column-alignment.mjs';
 import { createOrderSnapshot } from '../modules/finance/accounting.mjs';
 import { interceptDesign, origin, settle, spacingSnapshot, toggleDesignTheme } from './helpers/offline-design.mjs';
 
@@ -65,6 +66,137 @@ const fixtures = () => ({
   appleBalance: { version: 1, data: { wallets: [], refunds: [], movements: [],
     allocations: [{ orderId: 'apple', appleIdId: 'fixture-apple-id', amount: '100', returned: '10' }] } },
   settings: { version: 1, data: { costSettings: rules } }
+});
+
+test('表头文字与每行数值对齐，手机卡片的字段和值各自对齐', async t => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  for (const [width, dark] of [[2215, false], [1440, true], [901, false], [900, true], [390, false], [320, true]]) {
+    await t.test(width + 'px', async t => {
+      const context = await browser.newContext({ viewport: { width, height: 900 } });
+      t.after(() => context.close());
+      await interceptDesign(context, { actor, localFixtures: fixtures(), skipRechargeAssets: true });
+      const page = await context.newPage();
+      await page.goto(origin + '/#/orders/statistics');
+      if (dark) await toggleDesignTheme(page);
+      const main = page.locator('#main');
+      const table = main.locator('[data-table="commerce-plan-statistics"]');
+      const row = table.locator('tr[data-row-id="GPT:Plus"]');
+      const profit = row.locator('[data-column="profit"]');
+      await profit.getByText('30.7198', { exact: true }).waitFor();
+      const check = async scope => {
+        const { measurements, findings } = await tableColumnAlignment(scope);
+        assert(measurements > 0, '至少测量一列表头和正文');
+        assert.deepEqual(findings, []);
+      };
+      if (width > 900) {
+        const header = table.getByRole('columnheader', { name: '自动计算利润（CNY）', exact: true });
+        assert(['right', 'end'].includes(await header.evaluate(el => getComputedStyle(el).textAlign)));
+        await table.locator('td[data-column="profit"]').getByText('—', { exact: true }).first().waitFor();
+        const help = header.locator('summary');
+        await help.scrollIntoViewIfNeeded();
+        const label = await header.locator('.title-with-help > span').boundingBox();
+        const trigger = await help.boundingBox();
+        assert(trigger.x >= label.x + label.width && trigger.width >= 36);
+        assert.equal(await header.locator('details[open]').count(), 0);
+        await help.click();
+        await header.getByRole('note').waitFor();
+        await check(main);
+        await help.press('Escape');
+        assert.equal(await header.locator('details[open]').count(), 0);
+        await row.getByRole('button', { name: '展开渠道' }).click();
+        await table.locator('tr[data-row-id="GPT:Plus:银行卡 · PHP"]').waitFor();
+        await check(main);
+      } else {
+        await row.getByRole('button', { name: '更多资料' }).click();
+        const values = await row.evaluate(row => ['count', 'revenue', 'netCost', 'profit', 'pending'].map(id => {
+          const cell = row.querySelector('[data-column="' + id + '"]');
+          const value = cell.querySelector('.mobile-record-value');
+          const range = document.createRange();
+          const first = value.querySelector('strong') || value;
+          range.selectNodeContents(first.firstChild);
+          return { label: getComputedStyle(cell, '::before').content, start: cell.getBoundingClientRect().left,
+            valueStart: range.getBoundingClientRect().left };
+        }));
+        assert(values.every(value => value.label !== 'none' && value.valueStart > value.start));
+        assert(values.every(value => Math.abs(value.start - values[0].start) <= 1 &&
+          Math.abs(value.valueStart - values[0].valueStart) <= 1));
+      }
+      await page.getByText('查看图表数据', { exact: true }).click();
+      await check(main.locator('.design-chart-data'));
+      if (width > 900) {
+        for (const name of ['费用拆分', '来源订单', '计算缺项']) {
+          await page.getByRole('tab', { name, exact: true }).click();
+          await check(main);
+        }
+        await page.goto(origin + '/#/orders/gpt');
+        const list = main.locator('table[data-table="commerce-orders-GPT"]');
+        await list.locator('tbody tr[data-row-id="b"]').waitFor();
+        await check(main);
+        await main.getByRole('button', { name: '列设置', exact: true }).click();
+        const dialog = page.getByRole('dialog', { name: '列设置' });
+        await dialog.getByRole('checkbox', { name: '代付金额', exact: true }).uncheck();
+        await dialog.getByRole('button', { name: '完成', exact: true }).click();
+        assert.equal(await list.locator('td[data-column="paidAmount"]').count(), 0);
+        await check(main);
+      } else {
+        await page.getByRole('tab', { name: '费用拆分' }).click();
+        const amountLink = main.locator('td .commerce-stat-amounts > button:visible').first();
+        await amountLink.waitFor();
+        const inset = await amountLink.evaluate(button => {
+          const range = document.createRange();
+          range.selectNodeContents(button);
+          return range.getBoundingClientRect().left - button.closest('.mobile-record-value').getBoundingClientRect().left;
+        });
+        assert(Math.abs(inset) <= 1, '费用明细链接的金额沿数值栏左边缘排列');
+      }
+      assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+    });
+  }
+});
+
+test('订单统计的八个筛选项与重置按钮保持一行，窄屏可访问整行', async t => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const context = await browser.newContext();
+  await interceptDesign(context, { actor, localFixtures: fixtures(), skipRechargeAssets: true });
+  const page = await context.newPage();
+  await page.goto(origin + '/#/orders/statistics');
+  const filters = page.getByRole('region', { name: '订单统计筛选' });
+  const bar = filters.locator('.toolbar');
+  const reset = filters.getByRole('button', { name: '重置筛选' });
+  const currency = filters.getByLabel('统计币种');
+  for (const width of [2234, 1920, 1440, 1280, 1024, 768, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    await settle(page);
+    const layout = await bar.evaluate(el => {
+      const controls = [...el.querySelectorAll('select,input,button')].map(node => node.getBoundingClientRect());
+      const end = controls.at(-1);
+      const bounds = el.getBoundingClientRect();
+      return {
+        count: controls.length,
+        sameRow: controls.every((box, i) => Math.abs(box.bottom - end.bottom) <= 1 &&
+          (i === 0 || box.left >= controls[i - 1].right + 1)),
+        fits: el.scrollWidth <= el.clientWidth + 1 && end.right <= bounds.right + 1,
+        pageFits: document.documentElement.scrollWidth <= innerWidth + 1
+      };
+    });
+    assert.equal(layout.count, 9);
+    assert(layout.sameRow && layout.pageFits, width + 'px ' + JSON.stringify(layout));
+    if (width >= 1440) assert(layout.fits, '宽屏直接显示全部筛选和重置按钮');
+    await reset.scrollIntoViewIfNeeded();
+    const endScroll = await bar.evaluate(el => el.scrollLeft);
+    if (width === 390) assert(endScroll > 0);
+    await currency.selectOption('MYR');
+    assert.equal(await currency.inputValue(), 'MYR');
+    assert.equal(await bar.evaluate(el => el.scrollLeft), endScroll);
+    await currency.press('Tab');
+    assert(await reset.evaluate(el => el === document.activeElement));
+    const buttonBox = await reset.boundingBox(), barBox = await bar.boundingBox();
+    assert(buttonBox.x >= barBox.x && buttonBox.x + buttonBox.width <= barBox.x + barBox.width + 1);
+    await reset.press('Enter');
+    assert.equal(await currency.inputValue(), 'CNY');
+  }
 });
 
 test('订单统计页签共用右侧操作区，切换时表格紧接页签栏', { timeout: 40_000 }, async () => {

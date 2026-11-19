@@ -59,17 +59,27 @@ test('四个录单入口匹配客户和历史账号，随单建档未提交不�
       const url = origin + '/#/workspace/order/' + slug;
       await page.goto(url);
       const form = page.locator('#main #commerce-order-form');
-      const name = form.locator('#order-quick-customer-name');
-      const wechat = form.locator('#order-quick-customer-wechat');
-      const status = form.locator('#order-quick-customer-status');
-      const add = form.locator('[data-action="commerce-quick-customer"]');
+      const drawer = page.locator('#drawer[open]');
+      const open = form.getByRole('button', { name: '匹配或新增' });
+      const name = drawer.getByLabel('客户姓名', { exact: false });
+      const wechat = drawer.getByLabel('客户微信', { exact: true });
+      const status = drawer.locator('#order-match-status');
+      const add = drawer.getByRole('button', { name: '新增客户资料', exact: true });
+      const apply = drawer.locator('[data-action="commerce-customer-match-apply"]');
       const select = form.locator('#commerce-customerId');
       const email = form.locator('#commerce-email');
       const dialog = page.locator('#confirm-dialog[open]');
       const submit = page.locator('button[form="commerce-order-form"][type="submit"]');
       await select.locator('option[value="known"]').waitFor({ state: 'attached' });
       if (slug === 'claude') await form.locator('#commerce-plan').selectOption(plan);
-      await form.locator('.order-quick-customer-disclosure > summary').click();
+      const originalHeight = (await form.boundingBox()).height;
+      await open.click();
+      await drawer.getByRole('heading', { name: '匹配或新增客户' }).waitFor();
+      assert.equal((await form.boundingBox()).height, originalHeight);
+      const bounds = await drawer.boundingBox();
+      assert(Math.abs(bounds.x + bounds.width - width) <= 1, '抽屉贴靠右侧');
+      assert(await name.evaluate(node => node === document.activeElement));
+      assert(await apply.isDisabled());
       assert(await add.isDisabled());
       if (slug === 'gpt') {
         await name.evaluate(input => {
@@ -80,43 +90,51 @@ test('四个录单入口匹配客户和历史账号，随单建档未提交不�
         assert.equal(await select.inputValue(), '');
         await name.dispatchEvent('compositionend', { bubbles: true });
       } else await name.fill('合成老客户');
+      assert.match(await status.innerText(), /合成老客户.*known_wechat/);
+      assert(await add.isDisabled());
+      await name.press('Enter');
+      assert.equal(writes.length, 0);
+      assert.equal(await select.inputValue(), '', '输入不会修改订单，须先使用匹配结果');
+      await apply.click();
+      await drawer.waitFor({ state: 'hidden' });
       assert.equal(await select.inputValue(), 'known');
       assert.equal(await form.locator('#commerce-wechat').inputValue(), 'known_wechat');
       assert.equal(await form.locator('#commerce-customerPhone').inputValue(), '+1 202 555 0101');
       assert.equal(await email.inputValue(), history);
-      assert(await add.isDisabled());
       if (slug === 'gpt') {
         await page.evaluate(() => { location.hash = '#/customers/new'; });
         await page.locator('#commerce-contact-name').waitFor();
         await page.evaluate(() => { location.hash = '#/workspace/order/gpt'; });
-        await name.waitFor();
-        assert.equal(await name.inputValue(), '合成老客户');
+        await open.waitFor();
         assert.equal(await select.inputValue(), 'known');
         assert.equal(await email.inputValue(), history);
-        await email.fill('temporary@example.test');
-        await email.fill(history);
-        await name.fill('合成同名');
-        assert.equal(await email.inputValue(), history, '手填与历史相同的邮箱仍按手填保留');
-        await email.fill('');
-        await name.fill('合成老客户');
-        assert.equal(await email.inputValue(), history);
       }
-      await name.press('Enter');
-      assert.equal(await dialog.count(), 0);
-      assert.equal(writes.length, 0);
-
+      await open.click();
       await name.fill('合成同名');
-      assert.equal(await select.inputValue(), '');
-      assert.equal(await email.inputValue(), '', '清除上一个客户带出的历史账号');
-      assert.equal(await form.locator('#commerce-wechat').inputValue(), '');
+      assert(await apply.isDisabled());
       assert(await add.isDisabled());
       await wechat.fill('ＳＥＣＯＮＤ');
+      assert(await apply.isEnabled());
+      await page.keyboard.press('Escape');
+      await drawer.waitFor({ state: 'hidden' });
+      assert.equal(await select.inputValue(), 'known', '取消匹配保留原客户');
+      assert.equal(await email.inputValue(), history);
+      await open.click();
+      await apply.click();
       assert.equal(await select.inputValue(), 'second');
+      assert.equal(await email.inputValue(), '', '更换客户清除旧的历史账号');
       await email.fill(history);
+      await open.click();
+      await name.fill('合成老客户');
+      await wechat.fill('known_wechat');
+      await apply.click();
+      assert.equal(await email.inputValue(), history, '手填账号与历史值相同时仍然保留');
+      await open.click();
+      await name.fill('合成同名');
       await wechat.fill('known_wechat');
       assert.match(await status.innerText(), /此微信已关联其他姓名/);
-      assert.equal(await select.inputValue(), '');
-      assert.equal(await email.inputValue(), history, '手填账号即使等于历史值也保留');
+      assert(await apply.isDisabled());
+      assert.equal(await select.inputValue(), 'known');
       await wechat.fill('');
       await name.fill('合成停用');
       assert.match(await status.innerText(), /停用/);
@@ -128,6 +146,7 @@ test('四个录单入口匹配客户和历史账号，随单建档未提交不�
         assert(await add.isEnabled());
         await add.click();
         await page.locator('#drawer[open] [data-action="drawer-close"]').first().click();
+        await open.click();
         await name.fill('微信未登记');
         assert(await add.isDisabled());
         await wechat.fill('');
@@ -150,10 +169,16 @@ test('四个录单入口匹配客户和历史账号，随单建档未提交不�
 
       const freshName = '随单客户 ' + slug;
       const fillQuickOrder = async (customerName, customerWechat) => {
-        if (!(await name.isVisible())) await form.locator('.order-quick-customer-disclosure > summary').click();
+        if (!(await name.isVisible())) await open.click();
         await name.fill(customerName);
         await wechat.fill(customerWechat);
-        await status.getByText('提交订单时将新增客户。', { exact: true }).waitFor();
+        await status.getByText('未匹配到已有客户。', { exact: true }).waitFor();
+        assert(await status.evaluate(node => {
+          const box = node.getBoundingClientRect();
+          return box.width > 0 && box.left >= 0 && box.right <= innerWidth && document.documentElement.scrollWidth <= innerWidth;
+        }), '匹配状态在视口内');
+        await apply.click();
+        await drawer.waitFor({ state: 'hidden' });
         assert.equal(await select.inputValue(), '');
         if (slug === 'claude') await form.locator('#commerce-plan').selectOption(plan);
         await form.locator('#commerce-proCardNumber').fill('4242424242424242');
@@ -167,10 +192,6 @@ test('四个录单入口匹配客户和历史账号，随单建档未提交不�
       };
       if (width < 400) await page.evaluate(() => { document.documentElement.dataset.theme = 'dark'; });
       await fillQuickOrder(freshName, 'quick_' + slug);
-      assert(await status.evaluate(node => {
-        const box = node.getBoundingClientRect();
-        return box.width > 0 && box.left >= 0 && box.right <= innerWidth && document.documentElement.scrollWidth <= innerWidth;
-      }), '窄屏状态文字在视口内');
       const count = writes.length;
       assert.equal(await dialog.count(), 0);
       assert(!fixture.commerce.data.customers.some(row => row.name === freshName));
@@ -181,7 +202,7 @@ test('四个录单入口匹配客户和历史账号，随单建档未提交不�
         await submit.click();
         await page.locator('#toast').getByText(/模拟拒绝订单/).waitFor();
         assert(!fixture.commerce.data.customers.some(row => row.name === freshName));
-        assert.equal(await name.inputValue(), freshName);
+        assert.match(await form.locator('#order-quick-customer-status').innerText(), new RegExp(freshName));
         assert.equal(await form.locator('#commerce-notes').inputValue(), '保留本单备注');
         fail = false;
       }
@@ -195,7 +216,7 @@ test('四个录单入口匹配客户和历史账号，随单建档未提交不�
       assert.equal(savedCustomer.wechat, 'quick_' + slug);
       assert.equal(write.data.orders[0].customerId, savedCustomer.id);
       assert.equal(write.data.orders[0].wechat, savedCustomer.wechat);
-      assert.equal(await name.inputValue(), '');
+      assert.equal(await form.locator('#order-quick-customer-name').inputValue(), '');
 
       if (slug === 'grok') {
         await fillQuickOrder('另一页先登记', 'other_tab');
@@ -206,7 +227,9 @@ test('四个录单入口匹配客户和历史账号，随单建档未提交不�
         assert.equal(await select.inputValue(), 'other-tab');
         assert.equal(await email.inputValue(), 'manual-grok@example.test');
         assert.equal(await form.locator('#commerce-notes').inputValue(), '保留本单备注');
+        await open.click();
         assert(await add.isDisabled());
+        await drawer.getByRole('button', { name: '取消', exact: true }).click();
         await submit.click();
         await page.locator('#toast').getByText(/订单提交成功/).waitFor();
         assert.equal(await dialog.count(), 0);

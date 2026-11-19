@@ -46,7 +46,7 @@ test('shared layouts preserve alignment, readable controls and stable navigation
   const region = page.locator('#main > .design-page-region:visible');
   const centeredPages = new Set([
     'data', 'data/sheets', 'data/health', 'data/backups', 'data/export',
-    'settings/monitoring', 'settings/accounts', 'settings/information',
+    'settings/monitoring', 'settings/accounts', 'settings/security', 'settings/information',
     'settings/mail-types', 'settings/costs', 'settings/payment-countries'
   ]);
   const checkPageWidth = async route => {
@@ -244,12 +244,15 @@ test('shared layouts preserve alignment, readable controls and stable navigation
       const fields = form.locator('.field > :is(label, dt.field-label):visible');
       await fields.first().waitFor();
       const positions = await fields.evaluateAll(labels => labels.map(label => {
+        // The amount controls also have clipped labels for assistive technology.
+        if (getComputedStyle(label).clipPath === 'inset(50%)')
+          return { label: label.textContent, associated: Boolean(label.control) };
         const text = document.createRange();
         text.selectNodeContents(label);
         const field = label.parentElement.getBoundingClientRect();
         return { label: label.textContent, delta: text.getBoundingClientRect().left - field.left };
       }));
-      assert(positions.every(({ delta }) => Math.abs(delta) <= 1),
+      assert(positions.every(item => 'associated' in item ? item.associated : Math.abs(item.delta) <= 1),
         `${context} 字段文字应对齐字段行左边缘 ${JSON.stringify(positions)}`);
     };
     for (const width of [1440, 901, 390, 320]) {
