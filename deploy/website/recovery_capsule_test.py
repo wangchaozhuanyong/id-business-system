@@ -93,6 +93,35 @@ class PortableRecovery(unittest.TestCase):
                         and '/data/' in entry['path'])
         self.assertEqual(base64.b64decode(original['data']), b'synthetic-only')
 
+    def test_live_browser_pool_profile_is_excluded_without_omitting_business_files(self):
+        data = self.root / 'formal/recharge-data/data'
+        profile = data / 'browser-pool/slot-0'
+        profile.mkdir(parents=True)
+        (profile / 'Cookies').write_bytes(b'synthetic-runtime-cookie')
+        (profile / 'SingletonCookie').symlink_to(self.root / 'synthetic-runtime-owner')
+        business = data / 'browser-pool.json'
+        business.write_bytes(b'synthetic-business-configuration')
+        other = self.root / 'formal/vendure-state/browser-pool/customer.json'
+        other.parent.mkdir(parents=True)
+        other.write_bytes(b'synthetic-business-record')
+        before = sorted(str(path) for path in self.root.rglob('*'))
+        state = self.collect()
+        self.assertEqual(before, sorted(str(path) for path in self.root.rglob('*')))
+        paths = {row['path'] for row in state['entries'] + state['directories']}
+        self.assertFalse(any(name == 'formal/recharge-data/data/browser-pool' or
+                             name.startswith('formal/recharge-data/data/browser-pool/') for name in paths))
+        self.assertIn(business.relative_to(self.root).as_posix(), paths)
+        self.assertIn(other.relative_to(self.root).as_posix(), paths)
+
+    def test_large_disposable_browser_cache_does_not_consume_recovery_capacity(self):
+        cache = self.root / 'formal/recharge-data/data/browser-pool/slot-0/Default/Cache/data'
+        cache.parent.mkdir(parents=True)
+        with cache.open('wb') as stream:
+            stream.truncate(capsule.MAX_BYTES + 1)
+        state = self.collect()
+        self.assertEqual(cache.stat().st_size, capsule.MAX_BYTES + 1)
+        self.assertFalse(any('/browser-pool/' in row['path'] for row in state['entries']))
+
     def test_auth_change_during_capture_fails_without_a_recovery_receipt(self):
         attempts = []
         def snapshot(_path, _image):

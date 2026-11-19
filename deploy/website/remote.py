@@ -1154,7 +1154,8 @@ def backup_resource_summary():
         report["spool"] = None
     try:
         categories = ("operations", "ops", "private", "vendure-state", "data/vendure-admission",
-                      "recharge-data/product_files", "recharge-data/data", "google-drive-backup/outbox")
+                      "recharge-data/product_files", "recharge-data/data", "recharge-data/data/browser-pool",
+                      "google-drive-backup/outbox")
         report["recoverySourceBytes"] = {name: directory_summary(FORMAL / name) for name in categories}
         report["sqliteFileBytes"] = (FORMAL / "data/local-business.sqlite").stat().st_size
     except OSError:

@@ -196,8 +196,11 @@ def collect_once(root, app_revision, native_revision, *, image=None):
     total = 0
 
     def runtime_path(path):
-        return any(part.endswith(('.sessions', '.sock', '.lock')) or part == 'accept-submissions'
-                   for part in path.relative_to(root).parts)
+        parts = path.relative_to(root).parts
+        # Chromium recreates these profiles and caches. Live lock symlinks and
+        # changing cache files are not portable business recovery state.
+        return parts[:4] == ('formal', 'recharge-data', 'data', 'browser-pool') or any(
+            part.endswith(('.sessions', '.sock', '.lock')) or part == 'accept-submissions' for part in parts)
 
     def add(name, content, kind='file', mode=0o600, uid=0, gid=0):
         nonlocal total
@@ -257,10 +260,10 @@ def collect_once(root, app_revision, native_revision, *, image=None):
             raise RecoveryError('recovery_required_directory_missing')
         remember_directories(directory)
         for path in sorted(directory.rglob('*')):
-            if path.is_symlink():
-                raise RecoveryError('recovery_symlink_forbidden')
             if runtime_path(path):
                 continue
+            if path.is_symlink():
+                raise RecoveryError('recovery_symlink_forbidden')
             if path.is_dir():
                 remember_directories(path)
                 continue
