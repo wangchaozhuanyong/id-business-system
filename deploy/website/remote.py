@@ -1027,6 +1027,17 @@ console.log(JSON.stringify(states));
 
 RECOVERY_FAILURE_STAGES = {"application", "collector", "source", "sqlite", "credentials",
                            "services", "size_limit", "encryption", "verification", "unknown"}
+RECOVERY_FAILURE_REASONS = {
+    "recovery_sqlite_snapshot_failed", "recovery_sqlite_replaced", "recovery_snapshot_runtime_required",
+    "recovery_credential_name_invalid", "recovery_credential_unavailable", "recovery_credential_binding_requires_review",
+    "recovery_service_inventory_unavailable", "recovery_service_definition_unavailable",
+    "recovery_active_operations_missing", "recovery_native_launcher_unavailable", "recovery_native_source_mismatch",
+    "recovery_native_runtime_changed", "recovery_source_changed", "recovery_regular_file_required",
+    "recovery_directory_invalid", "recovery_required_directory_missing", "recovery_symlink_forbidden",
+    "recovery_state_too_large", "recovery_recipient_changed", "recovery_capsule_encryption_failed",
+    "recovery_capsule_digest_mismatch", "application_unavailable", "collector_load_failed", "source_missing",
+    "permission_denied", "operation_timeout", "invalid_output", "validation_failed", "unexpected", "unknown",
+}
 BACKUP_HISTORY_KEY = re.compile(r"mysql/daily/independent-recharge/([0-9]{8}T[0-9]{6}Z)/"
                                 r"([a-f0-9]{40})/(manifest.json|mysql.sql.aes256gcm|recovery-state.idbackup)")
 
@@ -1086,8 +1097,10 @@ def read_backup_failure_manifest(key, listed):
     if manifest.get("recoveryStateError") != "capture_failed":
         return None
     stage = manifest.get("recoveryStateFailureStage")
+    reason = manifest.get("recoveryStateFailureReason")
     return {"capturedAt": match[1], "nativeRevision": match[2],
             "failureStage": stage if isinstance(stage, str) and stage in RECOVERY_FAILURE_STAGES else "unknown",
+            "failureReason": reason if isinstance(reason, str) and reason in RECOVERY_FAILURE_REASONS else "unknown",
             "manifestVersionId": version, "manifestSha256": digest.hex()}
 
 
@@ -1139,6 +1152,9 @@ def backup_resource_summary():
             if receipt.get("recoveryStateStatus") in {"verified", "capture_failed", "unavailable"} else None)
         report["lastUpload"]["recoveryStateFailureStage"] = (receipt.get("recoveryStateFailureStage")
             if receipt.get("recoveryStateFailureStage") in RECOVERY_FAILURE_STAGES else None)
+        reason = receipt.get("recoveryStateFailureReason")
+        report["lastUpload"]["recoveryStateFailureReason"] = (reason
+            if isinstance(reason, str) and reason in RECOVERY_FAILURE_REASONS else None)
     except (OSError, ValueError, TypeError):
         report["lastUpload"] = None
     try:
@@ -1194,7 +1210,8 @@ def backup_resource_summary():
         report["spool"] = None
     try:
         categories = ("operations", "ops", "private", "vendure-state", "data/vendure-admission",
-                      "recharge-data/product_files", "recharge-data/data", "google-drive-backup/outbox")
+                      "recharge-data/product_files", "recharge-data/data", "recharge-data/data/browser-pool",
+                      "google-drive-backup/outbox")
         report["recoverySourceBytes"] = {name: directory_summary(FORMAL / name) for name in categories}
         report["sqliteFileBytes"] = (FORMAL / "data/local-business.sqlite").stat().st_size
     except OSError:

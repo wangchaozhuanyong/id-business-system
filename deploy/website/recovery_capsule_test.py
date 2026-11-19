@@ -62,6 +62,7 @@ class PortableRecovery(unittest.TestCase):
              patch.object(capsule, 'sealed_credential', return_value=b'synthetic-portable-value'), \
              patch.object(capsule, 'read_file', side_effect=private_read), \
              patch.object(capsule, 'stamp', side_effect=private_stamp), \
+             patch.object(capsule.time, 'sleep'), \
              patch.object(capsule.subprocess, 'run', side_effect=fake_run):
             return capsule.collect(self.root, 'a' * 40, 'b' * 40)
 
@@ -92,12 +93,102 @@ class PortableRecovery(unittest.TestCase):
                         and '/data/' in entry['path'])
         self.assertEqual(base64.b64decode(original['data']), b'synthetic-only')
 
+    def test_live_browser_pool_profile_is_excluded_without_omitting_business_files(self):
+        data = self.root / 'formal/recharge-data/data'
+        profile = data / 'browser-pool/slot-0'
+        profile.mkdir(parents=True)
+        (profile / 'Cookies').write_bytes(b'synthetic-runtime-cookie')
+        (profile / 'SingletonCookie').symlink_to(self.root / 'synthetic-runtime-owner')
+        business = data / 'browser-pool.json'
+        business.write_bytes(b'synthetic-business-configuration')
+        other = self.root / 'formal/vendure-state/browser-pool/customer.json'
+        other.parent.mkdir(parents=True)
+        other.write_bytes(b'synthetic-business-record')
+        before = sorted(str(path) for path in self.root.rglob('*'))
+        state = self.collect()
+        self.assertEqual(before, sorted(str(path) for path in self.root.rglob('*')))
+        paths = {row['path'] for row in state['entries'] + state['directories']}
+        self.assertFalse(any(name == 'formal/recharge-data/data/browser-pool' or
+                             name.startswith('formal/recharge-data/data/browser-pool/') for name in paths))
+        self.assertIn(business.relative_to(self.root).as_posix(), paths)
+        self.assertIn(other.relative_to(self.root).as_posix(), paths)
+
+    def test_large_disposable_browser_cache_does_not_consume_recovery_capacity(self):
+        cache = self.root / 'formal/recharge-data/data/browser-pool/slot-0/Default/Cache/data'
+        cache.parent.mkdir(parents=True)
+        with cache.open('wb') as stream:
+            stream.truncate(capsule.MAX_BYTES + 1)
+        state = self.collect()
+        self.assertEqual(cache.stat().st_size, capsule.MAX_BYTES + 1)
+        self.assertFalse(any('/browser-pool/' in row['path'] for row in state['entries']))
+
     def test_auth_change_during_capture_fails_without_a_recovery_receipt(self):
+        attempts = []
         def snapshot(_path, _image):
+            attempts.append(True)
             (self.root / 'formal/data/local-auth.json').write_bytes(b'synthetic-changed-account')
             return b'synthetic-committed-sqlite'
         with self.assertRaisesRegex(capsule.RecoveryError, 'source_changed'):
             self.collect(snapshot)
+        self.assertEqual(len(attempts), 3)
+
+    def test_transient_auth_update_restarts_full_capture_and_keeps_the_new_consistent_state(self):
+        auth = self.root / 'formal/data/local-auth.json'
+        attempts = []
+        def snapshot(_path, _image):
+            attempts.append(True)
+            if len(attempts) == 1:
+                auth.write_bytes(b'synthetic-updated-auth')
+            return b'synthetic-committed-sqlite'
+        state = self.collect(snapshot)
+        self.assertEqual(len(attempts), 2)
+        entry = next(row for row in state['entries'] if row['path'] == 'formal/data/local-auth.json')
+        self.assertEqual(base64.b64decode(entry['data']), b'synthetic-updated-auth')
+
+    def test_atomic_replacement_can_recover_without_omitting_the_required_file(self):
+        original = capsule.read_file
+        auth = self.root / 'formal/data/local-auth.json'
+        attempts = []
+        def read(path):
+            if path == auth:
+                attempts.append(True)
+                if len(attempts) == 1:
+                    replacement = path.with_suffix('.replacement')
+                    replacement.write_bytes(b'synthetic-replaced-auth')
+                    replacement.replace(path)
+                    raise FileNotFoundError(2, 'synthetic-race', str(path))
+            return original(path)
+        with patch.object(capsule, 'read_file', side_effect=read):
+            state = self.collect()
+        self.assertEqual(len(attempts), 2)
+        entry = next(row for row in state['entries'] if row['path'] == 'formal/data/local-auth.json')
+        self.assertEqual(base64.b64decode(entry['data']), b'synthetic-replaced-auth')
+
+    def test_security_size_and_permission_errors_do_not_retry(self):
+        failures = [capsule.RecoveryError(code) for code in
+                    ('recovery_symlink_forbidden', 'recovery_state_too_large', 'recovery_credential_unavailable')]
+        failures.append(PermissionError('synthetic-private-path'))
+        failures.append(FileNotFoundError(2, 'synthetic-missing-program', 'systemctl'))
+        for failure in failures:
+            with self.subTest(failure=type(failure).__name__), \
+                    patch.object(capsule, 'collect_once', side_effect=failure) as collect, \
+                    patch.object(capsule.time, 'sleep') as sleep:
+                with self.assertRaises(type(failure)):
+                    capsule.collect(self.root, 'a' * 40, 'b' * 40)
+                self.assertEqual(collect.call_count, 1)
+                sleep.assert_not_called()
+
+    def test_recipient_rotation_during_recollection_never_creates_an_archive(self):
+        recipient = b'synthetic-original-recipient'
+        output = self.root / 'never-created.idbackup'
+        with patch.object(capsule, 'read_file', side_effect=[(recipient, None), (b'synthetic-new-recipient', None)]), \
+                patch.object(capsule, 'collect', return_value={}), \
+                patch.object(capsule.subprocess, 'run') as crypto:
+            with self.assertRaisesRegex(capsule.RecoveryError, 'recovery_recipient_changed'):
+                capsule.capture(self.root, self.root / 'source', 'a' * 40, 'b' * 40, output,
+                                hashlib.sha256(recipient).hexdigest(), 'sha256:' + 'c' * 64)
+            crypto.assert_not_called()
+        self.assertFalse(output.exists())
 
     def test_symlink_and_missing_required_file_are_not_silently_omitted(self):
         path = self.root / 'formal/private/synthetic-other'

@@ -47,6 +47,10 @@ RECOVERY_ERROR_STAGES = {
     'recovery_capsule_encryption_failed': 'encryption',
     'recovery_capsule_digest_mismatch': 'verification',
 }
+RECOVERY_FAILURE_REASONS = set(RECOVERY_ERROR_STAGES) | {
+    'application_unavailable', 'collector_load_failed', 'source_missing', 'permission_denied',
+    'operation_timeout', 'invalid_output', 'validation_failed', 'unexpected', 'unknown',
+}
 
 
 class BackupError(Exception):
@@ -58,9 +62,10 @@ class ReleaseDeferred(BackupError):
 
 
 class RecoveryCaptureError(BackupError):
-    def __init__(self, stage):
+    def __init__(self, stage, reason='unknown'):
         super().__init__('Portable recovery state capture failed')
         self.stage = stage
+        self.reason = reason if isinstance(reason, str) and reason in RECOVERY_FAILURE_REASONS else 'unknown'
 
 
 def private_json(path):
@@ -178,23 +183,33 @@ def capture_recovery_state(target, native_revision, destination):
             '{{.State.Running}} {{index .Config.Labels "org.opencontainers.image.revision"}} {{.Image}}',
             'id-business-independent-app'], text=True, timeout=15).strip()
     except (OSError, ValueError, subprocess.SubprocessError):
-        raise RecoveryCaptureError('application') from None
+        raise RecoveryCaptureError('application', 'application_unavailable') from None
     app = re.fullmatch(r'true ([a-f0-9]{40}) (sha256:[a-f0-9]{64})', status)
     if not app:
-        raise RecoveryCaptureError('application')
+        raise RecoveryCaptureError('application', 'application_unavailable')
     source = ROOT / 'releases' / app[1] / 'source'
     try:
         collector = runpy.run_path(str(source / 'deploy/website/recovery_capsule.py'))
         capture_state, recovery_error = collector['capture'], collector['RecoveryError']
     except Exception:
-        raise RecoveryCaptureError('collector') from None
+        raise RecoveryCaptureError('collector', 'collector_load_failed') from None
     try:
         return capture_state(ROOT, source, app[1], native_revision, destination,
                              target['recipientSha256'], app[2])
     except recovery_error as error:
-        raise RecoveryCaptureError(RECOVERY_ERROR_STAGES.get(str(error), 'unknown')) from None
+        code = str(error)
+        raise RecoveryCaptureError(RECOVERY_ERROR_STAGES.get(code, 'unknown'),
+            code if code in RECOVERY_ERROR_STAGES else 'validation_failed') from None
+    except FileNotFoundError:
+        raise RecoveryCaptureError('source', 'source_missing') from None
+    except PermissionError:
+        raise RecoveryCaptureError('source', 'permission_denied') from None
+    except subprocess.TimeoutExpired:
+        raise RecoveryCaptureError('unknown', 'operation_timeout') from None
+    except ValueError:
+        raise RecoveryCaptureError('unknown', 'invalid_output') from None
     except Exception:
-        raise RecoveryCaptureError('unknown') from None
+        raise RecoveryCaptureError('unknown', 'unexpected') from None
 
 
 def capture(target, pending):
@@ -218,6 +233,7 @@ def capture(target, pending):
             key, wrapped = wrap_backup_key(recipient, target['recipientSha256'])
             capsule = Path(temporary) / RECOVERY_FILENAME
             recovery_stage = 'unknown'
+            recovery_reason = 'unknown'
             try:
                 recovery = capture_recovery_state(target, match[1], capsule)
             except RecoveryCaptureError as error:
@@ -225,6 +241,7 @@ def capture(target, pending):
                 # Its failure is recorded separately and monitored.
                 recovery = None
                 recovery_stage = error.stage
+                recovery_reason = error.reason
             mysql_started = utc_now().isoformat()
             manifest = take_snapshot(match[1], stage, backup_key=key)
             mysql_finished = utc_now().isoformat()
@@ -238,6 +255,7 @@ def capture(target, pending):
             else:
                 manifest['recoveryStateError'] = 'capture_failed'
                 manifest['recoveryStateFailureStage'] = recovery_stage
+                manifest['recoveryStateFailureReason'] = recovery_reason
             (stage / MANIFEST).write_text(json.dumps(manifest, indent=2) + '\n')
             sync_file(stage / BACKUP_FILENAME)
             sync_file(stage / MANIFEST)
@@ -271,8 +289,12 @@ def publish(target, pending):
     recovery = manifest.get('recoveryState')
     recovery_error = manifest.get('recoveryStateError')
     recovery_stage = manifest.get('recoveryStateFailureStage')
+    recovery_reason = manifest.get('recoveryStateFailureReason')
     if recovery_error not in (None, 'capture_failed') or (recovery is not None and recovery_error is not None):
         raise BackupError('Pending recovery status is invalid')
+    if recovery_reason is not None and (recovery_error != 'capture_failed' or
+            not isinstance(recovery_reason, str) or recovery_reason not in RECOVERY_FAILURE_REASONS):
+        raise BackupError('Pending recovery failure reason is invalid')
     if recovery is not None:
         capsule = pending / RECOVERY_FILENAME
         info = capsule.lstat()
@@ -319,6 +341,8 @@ def publish(target, pending):
         receipt['recoveryStateStatus'] = recovery_error
         if isinstance(recovery_stage, str) and recovery_stage in RECOVERY_STAGES:
             receipt['recoveryStateFailureStage'] = recovery_stage
+        if recovery_reason is not None:
+            receipt['recoveryStateFailureReason'] = recovery_reason
     return receipt
 
 

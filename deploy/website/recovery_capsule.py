@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import stat
 import subprocess
+import time
 import uuid
 
 MAX_BYTES = 64 * 1024 * 1024
@@ -167,6 +168,25 @@ def native_source_launcher(root, revision, definition):
 
 
 def collect(root, app_revision, native_revision, *, image=None):
+    # Live writers do not hold the deployment lock. Restart the whole capture
+    # after a replacement/change rather than accepting a mixed or omitted file.
+    for attempt in range(3):
+        try:
+            return collect_once(root, app_revision, native_revision, image=image)
+        except RecoveryError as error:
+            if str(error) not in {'recovery_source_changed', 'recovery_native_runtime_changed'} or attempt == 2:
+                raise
+        except FileNotFoundError as error:
+            filename = Path(error.filename) if isinstance(error.filename, str) else None
+            if (filename is None or not filename.is_absolute() or not (
+                    filename.is_relative_to(Path(root)) or str(filename) in {
+                        '/run/id-business-independent-drive-backup/config.json',
+                        '/run/id-business-independent-sheets-sync/config.json'}) or attempt == 2):
+                raise
+        time.sleep(0.25)
+
+
+def collect_once(root, app_revision, native_revision, *, image=None):
     root = Path(root)
     if root.resolve() != root or not all(re.fullmatch('[a-f0-9]{40}', sha)
                                        for sha in (app_revision, native_revision)):
@@ -176,8 +196,11 @@ def collect(root, app_revision, native_revision, *, image=None):
     total = 0
 
     def runtime_path(path):
-        return any(part.endswith(('.sessions', '.sock', '.lock')) or part == 'accept-submissions'
-                   for part in path.relative_to(root).parts)
+        parts = path.relative_to(root).parts
+        # Chromium recreates these profiles and caches. Live lock symlinks and
+        # changing cache files are not portable business recovery state.
+        return parts[:4] == ('formal', 'recharge-data', 'data', 'browser-pool') or any(
+            part.endswith(('.sessions', '.sock', '.lock')) or part == 'accept-submissions' for part in parts)
 
     def add(name, content, kind='file', mode=0o600, uid=0, gid=0):
         nonlocal total
@@ -237,10 +260,10 @@ def collect(root, app_revision, native_revision, *, image=None):
             raise RecoveryError('recovery_required_directory_missing')
         remember_directories(directory)
         for path in sorted(directory.rglob('*')):
-            if path.is_symlink():
-                raise RecoveryError('recovery_symlink_forbidden')
             if runtime_path(path):
                 continue
+            if path.is_symlink():
+                raise RecoveryError('recovery_symlink_forbidden')
             if path.is_dir():
                 remember_directories(path)
                 continue
@@ -317,6 +340,9 @@ def capture(root, source, app_revision, native_revision, destination, recipient_
     if hashlib.sha256(recipient).hexdigest() != recipient_sha256:
         raise RecoveryError('recovery_recipient_changed')
     state = collect(root, app_revision, native_revision, image=image)
+    current_recipient, _ = read_file(root / 'formal/google-drive-backup/recipient.pem')
+    if current_recipient != recipient:
+        raise RecoveryError('recovery_recipient_changed')
     name = 'id-recovery-capsule-' + uuid.uuid4().hex[:16]
     command = ['docker', 'run', '--rm', '--pull=never', '-i', '--name', name,
                '--label', BACKUP_CONTAINER_LABEL, '--log-driver', 'none',
