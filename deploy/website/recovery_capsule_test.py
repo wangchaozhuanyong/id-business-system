@@ -62,6 +62,7 @@ class PortableRecovery(unittest.TestCase):
              patch.object(capsule, 'sealed_credential', return_value=b'synthetic-portable-value'), \
              patch.object(capsule, 'read_file', side_effect=private_read), \
              patch.object(capsule, 'stamp', side_effect=private_stamp), \
+             patch.object(capsule.time, 'sleep'), \
              patch.object(capsule.subprocess, 'run', side_effect=fake_run):
             return capsule.collect(self.root, 'a' * 40, 'b' * 40)
 
@@ -93,11 +94,59 @@ class PortableRecovery(unittest.TestCase):
         self.assertEqual(base64.b64decode(original['data']), b'synthetic-only')
 
     def test_auth_change_during_capture_fails_without_a_recovery_receipt(self):
+        attempts = []
         def snapshot(_path, _image):
+            attempts.append(True)
             (self.root / 'formal/data/local-auth.json').write_bytes(b'synthetic-changed-account')
             return b'synthetic-committed-sqlite'
         with self.assertRaisesRegex(capsule.RecoveryError, 'source_changed'):
             self.collect(snapshot)
+        self.assertEqual(len(attempts), 3)
+
+    def test_transient_auth_update_restarts_full_capture_and_keeps_the_new_consistent_state(self):
+        auth = self.root / 'formal/data/local-auth.json'
+        attempts = []
+        def snapshot(_path, _image):
+            attempts.append(True)
+            if len(attempts) == 1:
+                auth.write_bytes(b'synthetic-updated-auth')
+            return b'synthetic-committed-sqlite'
+        state = self.collect(snapshot)
+        self.assertEqual(len(attempts), 2)
+        entry = next(row for row in state['entries'] if row['path'] == 'formal/data/local-auth.json')
+        self.assertEqual(base64.b64decode(entry['data']), b'synthetic-updated-auth')
+
+    def test_atomic_replacement_can_recover_without_omitting_the_required_file(self):
+        original = capsule.read_file
+        auth = self.root / 'formal/data/local-auth.json'
+        attempts = []
+        def read(path):
+            if path == auth:
+                attempts.append(True)
+                if len(attempts) == 1:
+                    replacement = path.with_suffix('.replacement')
+                    replacement.write_bytes(b'synthetic-replaced-auth')
+                    replacement.replace(path)
+                    raise FileNotFoundError('synthetic-race')
+            return original(path)
+        with patch.object(capsule, 'read_file', side_effect=read):
+            state = self.collect()
+        self.assertEqual(len(attempts), 2)
+        entry = next(row for row in state['entries'] if row['path'] == 'formal/data/local-auth.json')
+        self.assertEqual(base64.b64decode(entry['data']), b'synthetic-replaced-auth')
+
+    def test_security_size_and_permission_errors_do_not_retry(self):
+        failures = [capsule.RecoveryError(code) for code in
+                    ('recovery_symlink_forbidden', 'recovery_state_too_large', 'recovery_credential_unavailable')]
+        failures.append(PermissionError('synthetic-private-path'))
+        for failure in failures:
+            with self.subTest(failure=type(failure).__name__), \
+                    patch.object(capsule, 'collect_once', side_effect=failure) as collect, \
+                    patch.object(capsule.time, 'sleep') as sleep:
+                with self.assertRaises(type(failure)):
+                    capsule.collect(self.root, 'a' * 40, 'b' * 40)
+                self.assertEqual(collect.call_count, 1)
+                sleep.assert_not_called()
 
     def test_symlink_and_missing_required_file_are_not_silently_omitted(self):
         path = self.root / 'formal/private/synthetic-other'

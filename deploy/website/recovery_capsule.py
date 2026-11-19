@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 import stat
 import subprocess
+import time
 import uuid
 
 MAX_BYTES = 64 * 1024 * 1024
@@ -167,6 +168,21 @@ def native_source_launcher(root, revision, definition):
 
 
 def collect(root, app_revision, native_revision, *, image=None):
+    # Live writers do not hold the deployment lock. Restart the whole capture
+    # after a replacement/change rather than accepting a mixed or omitted file.
+    for attempt in range(3):
+        try:
+            return collect_once(root, app_revision, native_revision, image=image)
+        except RecoveryError as error:
+            if str(error) not in {'recovery_source_changed', 'recovery_native_runtime_changed'} or attempt == 2:
+                raise
+        except FileNotFoundError:
+            if attempt == 2:
+                raise
+        time.sleep(0.25)
+
+
+def collect_once(root, app_revision, native_revision, *, image=None):
     root = Path(root)
     if root.resolve() != root or not all(re.fullmatch('[a-f0-9]{40}', sha)
                                        for sha in (app_revision, native_revision)):

@@ -22,7 +22,8 @@ PRIVATE = "synthetic-private-do-not-return"
 class BackupHistoryTests(unittest.TestCase):
     def fixture(self, **changes):
         return {"capturedAt": CAPTURED, "revision": REVISION, "recoveryStateError": "capture_failed",
-                "recoveryStateFailureStage": "source", "wrappedKey": PRIVATE, **changes}
+                "recoveryStateFailureStage": "source", "recoveryStateFailureReason": "recovery_source_changed",
+                "wrappedKey": PRIVATE, **changes}
 
     def read_fixture(self, body=None, metadata_changes=None, listed_changes=None, fail=False):
         raw = json.dumps(self.fixture() if body is None else body).encode()
@@ -66,10 +67,15 @@ class BackupHistoryTests(unittest.TestCase):
         result = self.read_fixture()
         self.assertEqual(result["capturedAt"], CAPTURED)
         self.assertEqual(result["failureStage"], "source")
+        self.assertEqual(result["failureReason"], "recovery_source_changed")
         self.assertEqual(set(result), {"capturedAt", "nativeRevision", "failureStage",
-                                       "manifestVersionId", "manifestSha256"})
+                                       "failureReason", "manifestVersionId", "manifestSha256"})
         self.assertNotIn(PRIVATE, json.dumps(result))
         self.assertEqual(self.read_fixture(self.fixture(recoveryStateFailureStage=PRIVATE))["failureStage"], "unknown")
+        self.assertEqual(self.read_fixture(self.fixture(recoveryStateFailureReason=PRIVATE))["failureReason"], "unknown")
+        legacy = self.fixture()
+        del legacy["recoveryStateFailureReason"]
+        self.assertEqual(self.read_fixture(legacy)["failureReason"], "unknown")
         self.assertIsNone(self.read_fixture(self.fixture(recoveryStateError=None)))
 
     def test_mismatch_or_unbounded_manifest_is_rejected_and_descriptor_closed(self):

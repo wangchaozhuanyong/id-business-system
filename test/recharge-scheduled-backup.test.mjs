@@ -23,6 +23,9 @@ sys.path.insert(0, sys.argv[1])
 spec = importlib.util.spec_from_file_location('scheduled_backup', Path(sys.argv[1]) / 'scheduled-backup.py')
 backup = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(backup)
+sys.path.insert(0, str(Path(sys.argv[1]).parent / 'website'))
+import remote
+assert backup.RECOVERY_FAILURE_REASONS == remote.RECOVERY_FAILURE_REASONS
 os.umask(0o077)
 pending = Path(sys.argv[2])
 private_key = pending / 'synthetic-test-private.pem'
@@ -172,9 +175,30 @@ with patch.object(backup.subprocess, 'check_output', return_value='true ' + 'a'*
         backup.capture_recovery_state(target, 'a'*40, new_pending)
     except backup.RecoveryCaptureError as error:
         assert error.stage == 'services'
+        assert error.reason == 'recovery_service_definition_unavailable'
         assert 'recovery_service_definition_unavailable' not in str(error)
     else:
         raise AssertionError('capture stage was not mapped')
+
+for failure, stage, reason in (
+    (FileNotFoundError('synthetic-private-path'), 'source', 'source_missing'),
+    (PermissionError('synthetic-private-path'), 'source', 'permission_denied'),
+    (subprocess.TimeoutExpired('synthetic-private-command', 1), 'unknown', 'operation_timeout'),
+    (ValueError('synthetic-private-output'), 'unknown', 'invalid_output'),
+    (RuntimeError('synthetic-private-error'), 'unknown', 'unexpected'),
+    (FixtureRecoveryError('synthetic-private-error'), 'unknown', 'validation_failed'),
+):
+    def fail_capture(*args):
+        raise failure
+    with patch.object(backup.subprocess, 'check_output', return_value='true ' + 'a'*40 + ' sha256:' + 'b'*64), \
+            patch.object(backup.runpy, 'run_path', return_value={'capture':fail_capture, 'RecoveryError':FixtureRecoveryError}):
+        try:
+            backup.capture_recovery_state(target, 'a'*40, new_pending)
+        except backup.RecoveryCaptureError as error:
+            assert (error.stage, error.reason) == (stage, reason)
+            assert 'synthetic-private' not in str(error) + error.reason
+        else:
+            raise AssertionError('capture failure was not classified')
 
 def fake_snapshot(revision, stage, backup_key):
     assert revision == 'a'*40 and backup_key == key
@@ -186,19 +210,33 @@ def fake_snapshot(revision, stage, backup_key):
 with patch.object(backup, 'ROOT', isolation), \
         patch.object(backup.subprocess, 'check_output', return_value='true ' + 'a'*40), \
         patch.object(backup, 'wrap_backup_key', return_value=(key, wrapped_key)), \
-        patch.object(backup, 'capture_recovery_state', side_effect=backup.RecoveryCaptureError('services')), \
+        patch.object(backup, 'capture_recovery_state', side_effect=backup.RecoveryCaptureError(
+            'services', 'recovery_service_definition_unavailable')), \
         patch.object(backup, 'take_snapshot', side_effect=fake_snapshot), \
         patch.object(backup, 'utc_now', return_value=backup.datetime(2026,11,11,tzinfo=backup.timezone.utc)):
     backup.capture(target, new_pending)
 new_manifest = json.loads((new_pending / backup.MANIFEST).read_text())
 assert new_manifest['recoveryStateError'] == 'capture_failed'
+assert new_manifest['recoveryStateFailureReason'] == 'recovery_service_definition_unavailable'
 assert 'recoveryState' not in new_manifest and (new_pending / backup.BACKUP_FILENAME).is_file()
 assert not (new_pending / backup.RECOVERY_FILENAME).exists()
 stored.clear(); operations.clear()
 fallback_receipt = backup.publish(target, new_pending)
 assert fallback_receipt['recoveryStateStatus'] == 'capture_failed'
 assert fallback_receipt['recoveryStateFailureStage'] == 'services'
+assert fallback_receipt['recoveryStateFailureReason'] == 'recovery_service_definition_unavailable'
 assert fallback_receipt['blobVersionId'] and fallback_receipt['manifestVersionId']
+
+new_manifest['recoveryStateFailureReason'] = 'synthetic-private-error'
+(new_pending / backup.MANIFEST).write_text(json.dumps(new_manifest))
+before_invalid = operations[:]
+try:
+    backup.publish(target, new_pending)
+except backup.BackupError:
+    pass
+else:
+    raise AssertionError('private error reason was accepted')
+assert operations == before_invalid
 
 receipt_file = new_pending.parent / 'last-upload.json'
 backup.save_receipt(receipt_file, {'recoveryStateStatus':'verified','capturedAt':'20261110T233000Z'})
