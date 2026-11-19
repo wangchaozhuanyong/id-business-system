@@ -14,6 +14,7 @@ from pathlib import Path
 from remote import (ACTION_PASSWORD_PRESENTATION_FILES, ASSET_METADATA_REPAIR_BASE, ASSET_METADATA_REPAIR_DIGEST,
                     ASSET_METADATA_RELEASE_RUN,
                     BACKUP_OPERATION, CARD_IMPORT_ASSET_SOURCE, CARD_IMPORT_PRESENTATION_FILES, CARD_PLAN_PRESENTATION_FILES,
+                    CARD_TYPE_IMPORT_FILES, CARD_TYPE_IMPORT_INTEGRATION_FILES,
                     CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES, PRESENTATION_SCOPES, SECURITY_PRESENTATION_FILES,
                     REDEEM_PRESENTATION_FILES, SUBSCRIPTION_INVOICE_PRESENTATION_FILES,
                     TABLE_ACTIONS_STYLESHEET, TASK_HISTORY_PRESENTATION_FILES,
@@ -36,9 +37,11 @@ SUBSCRIPTION_INVOICE_MANIFEST = "recharge-subscription-invoice-20261116.json"
 SUBSCRIPTION_INVOICE_MANIFEST_PATH = f"deploy/website/{SUBSCRIPTION_INVOICE_MANIFEST}"
 ACTION_PASSWORD_MANIFEST = "action-password-20261116.json"
 ACTION_PASSWORD_MANIFEST_PATH = f"deploy/website/{ACTION_PASSWORD_MANIFEST}"
+CARD_TYPE_IMPORT_MANIFEST = "card-type-import-20261119.json"
+CARD_TYPE_IMPORT_MANIFEST_PATH = f"deploy/website/{CARD_TYPE_IMPORT_MANIFEST}"
 CORE_PATHS = ("deploy/recharge-core", "deploy/caddy", "modules/recharge/codexdaichong", "package.json",
               PROXY_TYPE_CATALOG, TASK_HISTORY_MANIFEST_PATH, ADMIN_WORKSPACE_MANIFEST_PATH,
-              SUBSCRIPTION_INVOICE_MANIFEST_PATH, ACTION_PASSWORD_MANIFEST_PATH)
+              SUBSCRIPTION_INVOICE_MANIFEST_PATH, ACTION_PASSWORD_MANIFEST_PATH, CARD_TYPE_IMPORT_MANIFEST_PATH)
 ADAPTER_SCOPE = {
     "modules/recharge/codexdaichong/gateway.mjs", "modules/recharge/codexdaichong/local-gateway.mjs",
     "modules/recharge/codexdaichong/native-adapter.mjs", "modules/recharge/codexdaichong/runtime.mjs",
@@ -287,6 +290,9 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False, 
     elif changed == {CARD_IMPORT_ASSET_SOURCE}:
         return "cardImportPresentation", require_presentation_approval(
             base, sha, "card-import-20261113.json", CARD_IMPORT_PRESENTATION_FILES)
+    elif changed == {*CARD_TYPE_IMPORT_INTEGRATION_FILES, CARD_TYPE_IMPORT_MANIFEST_PATH}:
+        return "cardTypeImportPresentation", require_presentation_approval(
+            base, sha, CARD_TYPE_IMPORT_MANIFEST, CARD_TYPE_IMPORT_FILES)
     elif changed == set(CARD_PLAN_PRESENTATION_FILES):
         return "cardPlanPresentation", require_presentation_approval(
             base, sha, "card-plan-ui-20261114.json", CARD_PLAN_PRESENTATION_FILES)

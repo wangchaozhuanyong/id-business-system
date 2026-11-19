@@ -923,7 +923,7 @@ function adaptAdminScript(source, routingScript) {
                 const res = await authFetch('/api/admin/cards/import', {`
   );
   source = replaceOne(source, '                    body: JSON.stringify({ cards })',
-    '                    body: JSON.stringify({ cards, ...planRequest })');
+    '                    body: JSON.stringify({ cards, typeId, ...planRequest })');
   source = replaceOne(source, '                    cardPoolList = cardPoolList.filter((c) => c.id !== cardId);',
     '                    cardPoolList = cardPoolList.filter((c) => c.id !== cardId);\n' +
     '                    rechargeCardPlans.remove(cardId);');
@@ -937,14 +937,15 @@ function adaptAdminScript(source, routingScript) {
                     if (res.status === 409) await loadCardPoolList();
                     return;
                 }
-                if (!res.ok || !rechargeCardPlans.confirmedImport(data, planRequest))
+                if (!res.ok || data.success !== true || !rechargeCardPlans.confirmedImport(data, planRequest))
                     throw new Error('卡池导入回执待核对');
-                const numbers = rechargeCardTypes.acceptedNumbers(cards, data);
                 if (textarea.value === submitted) textarea.value = '';
-                const result = await finishRechargeCardImport(numbers, typeId);
+                const typeRefresh = rechargeCardTypes.invalidate();
+                await loadCardPoolList();
+                await typeRefresh;
                 resultEl.textContent = '导入 ' + data.imported + ' 张，跳过重复 ' + data.skipped +
                     ' 张，失败 ' + (data.failed + parseErrors.length) + ' 张；已设置允许套餐 ' +
-                    data.assignedPlans + ' 张' + result;
+                    data.assignedPlans + ' 张' + formatImportedRechargeCardTypes(data);
                 resultEl.style.color = 'var(--text-dim)';
             } catch {
                 resultEl.textContent = '导入回执待核对，请先刷新卡池查看。';
@@ -1115,24 +1116,13 @@ function adaptAdminScript(source, routingScript) {
                 ? '银行卡类型已更新，请刷新后重试' : '银行卡类型保存未确认，请刷新后核对');
             return response.json();
         }
-        async function finishRechargeCardImport(numbers, typeId) {
-            const cards = await loadCardPoolList();
-            if (!numbers.size) return '';
-            const pending = '；银行卡类型待核对，可在列表补设';
-            if (!cards) return pending;
-            const { cardIds, missing } = rechargeCardTypes.matchCardIds(numbers, cards);
-            if (!cardIds.length) return pending;
-            try {
-                await rechargeCardTypes.refresh();
-                const { importTypes } = await writeRechargeCardType({ action: 'assign-imported', cardIds, typeId });
-                await rechargeCardTypes.refresh();
-                return '；已确认银行卡类型 ' + (importTypes.assigned + importTypes.alreadyAssigned) + ' 张' +
-                    (importTypes.conflict ? '，已有其他类型 ' + importTypes.conflict + ' 张' : '') +
-                    (missing + importTypes.missing ? '，待核对 ' + (missing + importTypes.missing) + ' 张' : '');
-            } catch {
-                void rechargeCardTypes.refresh();
-                return pending;
-            }
+        function formatImportedRechargeCardTypes({ imported, skipped, importTypes }) {
+            if (!imported && !skipped) return '';
+            if (!importTypes) return '；银行卡类型待核对，可在列表补设';
+            const { assigned, alreadyAssigned, conflict, missing } = importTypes;
+            return '；已确认银行卡类型 ' + (assigned + alreadyAssigned) + ' 张' +
+                (conflict ? '，已有其他类型 ' + conflict + ' 张' : '') +
+                (missing ? '，待核对 ' + missing + ' 张' : '');
         }
         document.getElementById('card_pool_import_type').addEventListener('change', paintRechargeCardTypes);
         document.getElementById('card_pool_list_body').addEventListener('change', async (event) => {

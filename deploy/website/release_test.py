@@ -869,6 +869,35 @@ class WebsiteReleaseTests(unittest.TestCase):
     @patch("release.require_presentation_approval")
     @patch("release.require_ancestor")
     @patch("release.git")
+    def test_card_type_import_release_uses_only_the_reviewed_website_scope(self, git, ancestor, approval):
+        files = remote.CARD_TYPE_IMPORT_FILES
+        module = "modules/recharge/codexdaichong/"
+        protected_files = {module + name for name in ("assets.mjs", "card-type-overlay.mjs", "gateway.mjs",
+                                                       "local-gateway.mjs")}
+        self.assertEqual(set(files), protected_files | {"server/card-management.mjs", "server/preview.mjs"})
+        self.assertEqual(release.CARD_TYPE_IMPORT_MANIFEST, "card-type-import-20261119.json")
+        manifest = "deploy/website/" + release.CARD_TYPE_IMPORT_MANIFEST
+        self.assertIn(manifest, release.CORE_PATHS)
+        scope = protected_files | {manifest}
+        git.return_value = "\n".join(sorted(scope))
+        self.assertEqual(release.require_website_scope(BASE, TARGET),
+                         ("cardTypeImportPresentation", approval.return_value))
+        ancestor.assert_called_once_with(BASE, TARGET)
+        git.assert_called_once_with("diff", "--name-only", BASE, TARGET, "--", *release.CORE_PATHS)
+        approval.assert_called_once_with(BASE, TARGET, release.CARD_TYPE_IMPORT_MANIFEST, files)
+
+        incomplete = [scope - {name} for name in sorted(scope)]
+        unrelated = [scope | {module + name} for name in ("native-adapter.mjs", "retry/upstream-retry.patch")]
+        for changed in incomplete + unrelated:
+            with self.subTest(changed=sorted(changed)):
+                git.return_value = "\n".join(sorted(changed))
+                with self.assertRaisesRegex(RuntimeError, "recharge_core_or_runtime_changed"):
+                    release.require_website_scope(BASE, TARGET)
+        self.assertEqual(approval.call_count, 1)
+
+    @patch("release.require_presentation_approval")
+    @patch("release.require_ancestor")
+    @patch("release.git")
     def test_task_history_approval_cannot_include_changes_to_the_recharge_runtime(self, git, ancestor, approval):
         files = remote.TASK_HISTORY_PRESENTATION_FILES
         manifest = release.TASK_HISTORY_MANIFEST_PATH
@@ -1089,6 +1118,14 @@ class WebsiteReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_bundle_scope_mismatch"):
             remote.verify_presentation_bundle(bundle(previous), bundle(changed | {"/workspace": {"body": "new"}}),
                                               card_assets)
+        card_type_files, card_type_assets = remote.PRESENTATION_SCOPES["cardTypeImportPresentation"]
+        self.assertEqual(card_type_files, remote.CARD_TYPE_IMPORT_FILES)
+        self.assertEqual(card_type_assets, {"/admin.js"})
+        card_type_candidate = previous | {"/admin.js": {"body": "shared card type import"}}
+        remote.verify_presentation_bundle(bundle(previous), bundle(card_type_candidate), card_type_assets)
+        with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_bundle_scope_mismatch"):
+            remote.verify_presentation_bundle(
+                bundle(previous), bundle(card_type_candidate | {"/admin": {"body": "changed"}}), card_type_assets)
         card_plan_assets = remote.PRESENTATION_SCOPES["cardPlanPresentation"][1]
         remote.verify_presentation_bundle(bundle(previous), bundle(changed), card_plan_assets)
         with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_bundle_scope_mismatch"):

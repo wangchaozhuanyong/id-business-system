@@ -756,6 +756,53 @@ function cardCopyText(order, type, number, estimate) {
     estimate.usd ? estimate.usd + ' USD' : '待核算'].join(' / ') };
 }
 
+function requireActiveCardType(data, typeId) {
+  if (!data.items.some(row => row.id === typeId && row.active))
+    throw error(400, '请选择有效的银行卡类型');
+}
+
+function saveImportedCardTypes(store, current, data, { cardIds, typeId, missing }, actor) {
+  const importTypes = { assigned: 0, alreadyAssigned: 0, conflict: 0, missing };
+  for (const id of cardIds) {
+    if (data.assignments[id] === typeId) importTypes.alreadyAssigned++;
+    else if (data.assignments[id]) importTypes.conflict++;
+    else {
+      data.assignments[id] = typeId;
+      importTypes.assigned++;
+    }
+  }
+  if (!importTypes.assigned) {
+    if (store.featureDocument(cardTypeDocument).version !== current.version)
+      throw error(409, '银行卡类型已更新，请刷新后重试');
+    return { document: current, importTypes };
+  }
+  const document = store.saveFeatureDocument(cardTypeDocument, current.version, data, {
+    action: '设置本批充值银行卡类型', actor, targetId: typeId
+  });
+  return { document, importTypes };
+}
+
+export function prepareRechargeCardTypeImport(store, client, typeId, actor) {
+  requireActiveCardType(classify(store.featureDocument(cardTypeDocument).data), typeId);
+  return async numbers => {
+    const matches = new Map();
+    for (const card of await poolCards(client)) {
+      const number = card.card_number;
+      if (!validPan(number) || !numbers.has(number)) continue;
+      const id = Number.isSafeInteger(card.id) ? String(card.id) : card.id;
+      matches.set(number, matches.has(number) || typeof id !== 'string' || !/^[1-9]\d{0,19}$/.test(id)
+        ? '' : 'recharge:' + id);
+    }
+    const cardIds = [...new Set([...matches.values()].filter(Boolean))];
+    const current = store.featureDocument(cardTypeDocument);
+    const data = structuredClone(classify(current.data));
+    requireActiveCardType(data, typeId);
+    return saveImportedCardTypes(store, current, data, {
+      cardIds, typeId, missing: numbers.size - cardIds.length
+    }, actor).importTypes;
+  };
+}
+
 async function writeType(store, client, command, actor) {
   const current = store.featureDocument(cardTypeDocument);
   if (command.version !== current.version) throw error(409, '银行卡类型已更新，请刷新后重试');
@@ -763,7 +810,7 @@ async function writeType(store, client, command, actor) {
   const item = command.action === 'add' ? undefined : data.items.find(row => row.id === command.id && row.active);
   if (item?.name === realCardType.name && ['rename', 'remove'].includes(command.action))
     throw error(409, '真实卡是固定启用的银行卡类型');
-  let target = command.id, label, importTypes;
+  let target = command.id, label;
   switch (command.action) {
     case 'add':
     case 'rename': {
@@ -810,32 +857,19 @@ async function writeType(store, client, command, actor) {
       if (!Array.isArray(cardIds) || !cardIds.length || cardIds.length > 500 ||
           cardIds.some(id => typeof id !== 'string' || !/^recharge:[1-9]\d{0,19}$/.test(id)))
         throw error(400, '导入卡片编号无效');
-      if (!data.items.some(row => row.id === typeId && row.active))
-        throw error(400, '请选择有效的银行卡类型');
+      requireActiveCardType(data, typeId);
       const existing = new Set((await poolCards(client)).map(row => 'recharge:' + row.id));
-      importTypes = { assigned: 0, alreadyAssigned: 0, conflict: 0, missing: 0 };
-      for (const id of new Set(cardIds)) {
-        if (!existing.has(id)) importTypes.missing++;
-        else if (data.assignments[id] === typeId) importTypes.alreadyAssigned++;
-        else if (data.assignments[id]) importTypes.conflict++;
-        else {
-          data.assignments[id] = typeId;
-          importTypes.assigned++;
-        }
-      }
-      if (!importTypes.assigned) {
-        if (store.featureDocument(cardTypeDocument).version !== current.version)
-          throw error(409, '银行卡类型已更新，请刷新后重试');
-        return { ...cardTypesView({ version: current.version, data }), importTypes };
-      }
-      target = typeId;
-      label = '设置本批充值银行卡类型';
-      break;
+      const requested = [...new Set(cardIds)];
+      const found = requested.filter(id => existing.has(id));
+      const { document, importTypes } = saveImportedCardTypes(store, current, data, {
+        cardIds: found, typeId, missing: requested.length - found.length
+      }, actor);
+      return { ...cardTypesView(document), importTypes };
     }
     default: throw error(400, '不支持此银行卡类型操作');
   }
   const saved = store.saveFeatureDocument(cardTypeDocument, current.version, data, { action: label, actor, targetId: target });
-  return { ...cardTypesView(saved), ...(importTypes && { importTypes }) };
+  return cardTypesView(saved);
 }
 
 function writeHealth(store, command, actor, operationId, now) {

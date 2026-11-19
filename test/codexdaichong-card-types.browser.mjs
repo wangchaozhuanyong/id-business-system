@@ -20,12 +20,12 @@ test('card pool renders, imports and edits shared card types', { timeout: 35_000
   const firstNumber = '4000000000000007';
   const newNumber = '5000000000000007';
   const thirdNumber = '6000000000000007';
-  const pool = [{ id: 1, last4: '0007', card_number: firstNumber }, { id: 2, last4: '0007' }];
+  const maskedNumber = '****0007';
+  const pool = [1, 2].map(id => ({ id, last4: '0007', card_number: maskedNumber }));
   const otherType = { id: 'type-b', name: '合成备用类型', active: true };
   const disabledType = { id: 'type-disabled', name: '合成停用类型', active: false };
   const importRequests = [];
   const typeWrites = [];
-  let failingWrite = false;
   let types = { version: 1, items: [{ id: 'type-a', name: '<img src=x onerror=alert(1)>测试', active: true }], assignments: { 'recharge:1': 'type-a' } };
   let failing = false;
   await context.route(origin + prefix + '/api/admin/cards', (route) => {
@@ -37,6 +37,7 @@ test('card pool renders, imports and edits shared card types', { timeout: 35_000
     const request = route.request().postDataJSON();
     assert.deepEqual(request.allowedPlans, ['pro500']);
     assert.equal(request.planVersion, planPolicy.version);
+    assert.equal(request.typeId, otherType.id);
     const numbers = request.cards.map(card => card.card_number);
     importRequests.push(numbers.length);
     planPolicy = { ...planPolicy, version: planPolicy.version + 1 };
@@ -47,26 +48,22 @@ test('card pool renders, imports and edits shared card types', { timeout: 35_000
         { card_number: newNumber, card_expiry: '0130', card_cvc: '000', card_holder: '' },
         { card_number: 'invalid', card_expiry: '01/30', card_cvc: '000', card_holder: '' }
       ]);
-      pool.push({ id: 3, last4: '0007', card_number: newNumber, allowed_plans: ['pro500'] });
+      pool.push({ id: 3, last4: '0007', card_number: maskedNumber, allowed_plans: ['pro500'] });
+      types = {
+        ...types, version: types.version + 1, assignments: { ...types.assignments, 'recharge:3': otherType.id }
+      };
       return route.fulfill({ json: { success: true, imported: 1, assignedPlans: 1, planPolicy, skipped: 2, failed: 1,
-        failures: [{ index: 3, errors: ['synthetic-sensitive-failure'] }] } });
+        importTypes: { assigned: 1, alreadyAssigned: 0, conflict: 1, missing: 0 } } });
     }
     assert.deepEqual(numbers, [thirdNumber]);
-    pool.push({ id: 4, last4: '0007', card_number: thirdNumber, allowed_plans: ['pro500'] });
-    return route.fulfill({ json: { success: true, imported: 1, assignedPlans: 1, planPolicy, skipped: 0, failed: 0, failures: [] } });
+    pool.push({ id: 4, last4: '0007', card_number: maskedNumber, allowed_plans: ['pro500'] });
+    // The card and its plan committed before the shared type store became unavailable.
+    return route.fulfill({ json: { success: true, imported: 1, assignedPlans: 1, planPolicy, skipped: 0, failed: 0 } });
   });
   await context.route(origin + '/api/local/card-types', async (route) => {
     if (route.request().method() === 'POST') {
       const command = route.request().postDataJSON();
       typeWrites.push(command);
-      if (failingWrite) return route.fulfill({ status: 503, json: { error: 'synthetic' } });
-      assert.equal(command.version, types.version);
-      if (command.action === 'assign-imported') {
-        assert.deepEqual(command, { action: 'assign-imported', cardIds: ['recharge:1', 'recharge:3'],
-          typeId: otherType.id, version: types.version });
-        types = { ...types, version: types.version + 1, assignments: { ...types.assignments, 'recharge:3': otherType.id } };
-        return route.fulfill({ json: { ...types, importTypes: { assigned: 1, alreadyAssigned: 0, conflict: 1, missing: 0 } } });
-      }
       assert.deepEqual(command, { action: 'assign', cardId: 'recharge:2', typeId: otherType.id, version: types.version });
       types = { ...types, version: types.version + 1, assignments: { ...types.assignments, 'recharge:2': otherType.id } };
       return route.fulfill({ json: types });
@@ -194,21 +191,24 @@ test('card pool renders, imports and edits shared card types', { timeout: 35_000
   assert.equal(await input.inputValue(), '');
   await selected(cards.locator('[data-recharge-card-type="recharge:3"] select'), otherType.name);
   assert.equal(await typed.inputValue(), 'type-a');
+  await selected(untyped, '未设置');
   await cards.locator('[data-card-plan-edit="3"]').getByText('Pro 500').waitFor();
+  assert.equal(await cards.getByText(maskedNumber, { exact: true }).count(), 3);
+  assert.deepEqual(typeWrites, [], 'the browser does not write types separately during import');
 
-  failingWrite = true;
+  const readsBeforeUnconfirmedImport = cardReads;
   await input.fill(thirdNumber + '|01/30|000');
   await submit.click();
   await receipt.filter({ hasText: /导入 1 张.*银行卡类型待核对/ }).waitFor();
   assert.deepEqual(importRequests, [4, 1]);
-  assert.deepEqual(typeWrites[1].cardIds, ['recharge:4']);
+  assert.deepEqual(typeWrites, []);
   assert.equal(await input.inputValue(), '');
   await selected(cards.locator('[data-recharge-card-type="recharge:4"] select'), '未设置');
-  failingWrite = false;
+  assert(cardReads > readsBeforeUnconfirmedImport, 'a type write failure still refreshes the card list');
   await untyped.selectOption(otherType.id);
   await selected(untyped, otherType.name);
   await page.getByText('银行卡类型已保存', { exact: true }).waitFor();
-  assert.doesNotMatch(JSON.stringify(typeWrites), /0000000000007|synthetic-sensitive-failure/);
+  assert.equal(typeWrites.length, 1, 'only the manual single-card edit posts to the type endpoint');
   assert.deepEqual(external, []);
   assert.deepEqual(pageErrors, []);
 });

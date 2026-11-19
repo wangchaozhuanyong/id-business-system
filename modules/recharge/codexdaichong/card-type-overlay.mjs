@@ -36,33 +36,6 @@ export function createRechargeCardTypeOverlay({ fetchSettings, onChange }) {
     return { version: payload.version, types, options, assignments };
   }
 
-  function acceptedNumbers(cards, receipt) {
-    const counts = [receipt?.imported, receipt?.skipped, receipt?.failed];
-    const failures = receipt?.failures;
-    if (receipt?.success !== true ||
-        counts.some(count => !Number.isSafeInteger(count) || count < 0 || count > cards.length) ||
-        counts.reduce((sum, count) => sum + count, 0) !== cards.length ||
-        !Array.isArray(failures) || failures.length !== receipt.failed)
-      throw new Error('卡池导入结果待核对，请先刷新列表');
-    const rejected = new Set(failures.map(item => item?.index));
-    if (rejected.size !== receipt.failed || [...rejected].some(index =>
-      !Number.isSafeInteger(index) || index < 0 || index >= cards.length))
-      throw new Error('卡池导入结果待核对，请先刷新列表');
-    return new Set(cards.flatMap((card, index) => rejected.has(index) ? [] :
-      [card.card_number.replace(/[\s-]+/g, '')]));
-  }
-
-  function matchCardIds(numbers, cards) {
-    const matches = new Map();
-    for (const card of cards) {
-      const number = card.card_number;
-      if (!numbers.has(number)) continue;
-      matches.set(number, matches.has(number) ? '' : cardKey(card.id));
-    }
-    const cardIds = [...new Set([...matches.values()].filter(Boolean))];
-    return { cardIds, missing: numbers.size - cardIds.length };
-  }
-
   function refresh() {
     if (pending) return pending;
     state = 'loading';
@@ -92,8 +65,6 @@ export function createRechargeCardTypeOverlay({ fetchSettings, onChange }) {
 
   return {
     cardKey,
-    acceptedNumbers,
-    matchCardIds,
     refresh,
     invalidate,
     get version() { return state === 'ready' ? snapshot.version : null; },
