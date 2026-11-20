@@ -575,7 +575,11 @@ async function changeCardStatus(store, client, command, actor, now) {
 async function cardDetails(context, order, account) {
   const { commerce, client, types, tenantCards, archive, freezes, fingerprint, fixedFee, quotes, now } = context;
   const bank = order.payment === '银行卡';
-  const { id, manual, conflict } = bank ? orderCardReference(order) : { id: '' };
+  const reference = bank ? orderCardReference(order) : { id: '' };
+  const { id, manual } = reference;
+  const savedNumbers = new Set([order.proCardNumber, archive?.cards?.[id]?.number].filter(validPan));
+  const [savedNumber] = savedNumbers;
+  const conflict = reference.conflict || savedNumbers.size > 1;
   const tail = /^\d{4}(?:\d{2})?$/.test(order.paymentId) ? order.paymentId : '';
   const paid = bank ? confirmedPaid(order, id) : null;
   const estimate = bank ? cardFundingEstimate({
@@ -587,7 +591,6 @@ async function cardDetails(context, order, account) {
     canReveal: false, estimate, paid
   };
   let number, verifiedTail, livePoolCard, liveTenantCard, liveOrbitCard;
-  const savedNumber = order.proCardNumber || archive?.cards?.[id]?.number;
   if (conflict) card.status = '卡片关联待核对';
   else if (validPan(savedNumber)) {
     // The saved order is the source of historical card materials, not the mutable pool.
@@ -607,7 +610,7 @@ async function cardDetails(context, order, account) {
       const row = livePoolCard = await poolCard(client, id);
       card.status = !row ? '历史卡已删除' : Number(row.is_active) === 1 ? '可用' : '已停用';
       verifiedTail = row?.last4;
-      if (card.status === '可用') number = row.card_number;
+      number = row?.card_number;
     } catch {
       card.status = '卡池暂时无法读取';
     }
@@ -623,7 +626,7 @@ async function cardDetails(context, order, account) {
       liveTenantCard = { ...row, active };
       card.status = active ? '可用' : '已停用';
       if (validPan(row.number)) verifiedTail = row.number.slice(-4);
-      if (active) number = row.number;
+      number = row.number;
     }
   } else if (id.startsWith('orbitcard:')) {
     card.source = '线上代充用卡';
@@ -636,7 +639,7 @@ async function cardDetails(context, order, account) {
         const active = row.status === 'ACTIVE' && !unavailable.includes(row.providerStatus);
         card.status = active ? '可用' : '已停用';
         verifiedTail = row.cardLast4;
-        if (active) number = row.cardNumber;
+        number = row.cardNumber;
       }
     } catch {
       card.status = '卡池暂时无法读取';
@@ -655,7 +658,9 @@ async function cardDetails(context, order, account) {
       card.status = '完整卡号未登记';
     }
   }
-  card.canReveal = Boolean(validPan(number) && !account.conflict && !account.released && !order.cancelled && paymentConfirmed(order));
+  const displayNumber = validPan(number) && !account.conflict && !account.released && !order.cancelled && paymentConfirmed(order)
+    ? number : undefined;
+  card.canReveal = Boolean(displayNumber && card.status !== '已停用');
   if (bank && context.includeAvailability) {
     if (!conflict && !tailConflict && validPan(savedNumber)) {
       if (id.startsWith('recharge:')) {
@@ -680,7 +685,7 @@ async function cardDetails(context, order, account) {
       card.status = healthLabels[health];
     }
   }
-  return { card, number: card.canReveal ? number : undefined };
+  return { card, displayNumber, number: card.canReveal ? number : undefined };
 }
 
 export function createOrderCardNumberReader({ archive, tenantCards, client }) {
@@ -694,7 +699,7 @@ export function createOrderCardNumberReader({ archive, tenantCards, client }) {
     if (conflict || !order) return '';
     if (number || !recognizedCard(id) || id.startsWith('tenant:')) return number;
     const resolved = await cardDetails(context, order, {});
-    return resolved.number || '';
+    return resolved.displayNumber || '';
   };
 }
 
@@ -755,10 +760,15 @@ async function readRenewalCard(store, client, command, actor, now, action) {
       return cardCopyText(order, originalCard.card.typeName, originalCard.number, originalCard.card.estimate);
     return { number: originalCard.number };
   }
-  const view = (row, account, card) => ({
-    id: row.id, version: row.version, orderNo: row.orderNo || row.id, payment: row.payment,
-    account: account.account, card: card.card
-  });
+  const view = (row, account, resolved) => {
+    const { card, displayNumber: number } = resolved;
+    if (number) store.auditFeature(cardTypeDocument, store.featureDocument(cardTypeDocument).version,
+      { action: '查看续费银行卡号', actor, targetId: row.id });
+    return {
+      id: row.id, version: row.version, orderNo: row.orderNo || row.id, payment: row.payment,
+      account: account.account, card: { ...card, ...(number && { number }) }
+    };
+  };
   return {
     order: view(order, original, originalCard),
     renewal: renewal ? view(renewal, candidateAccount, renewalCard) : null,
@@ -952,7 +962,7 @@ async function renewalCardAction(store, client, command, actor, now) {
     });
   }
 
-  const { card, number } = await check(binding);
+  const { card, number, displayNumber } = await check(binding);
   const canCopy = Boolean(number && card.availability === 'normal');
   const confirmation = expires => createHash('sha256').update(JSON.stringify([
     version, actor.id, key, order.id, order.customerId, store.orderCardFingerprint(number), expires
@@ -965,16 +975,17 @@ async function renewalCardAction(store, client, command, actor, now) {
       if (!canCopy || !Number.isSafeInteger(expires) || expires <= now || expires - now > cardConfirmationLifetime ||
           !/^[a-f0-9]{64}$/.test(provided || '') ||
           !timingSafeEqual(Buffer.from(confirmation(expires), 'hex'), Buffer.from(provided, 'hex')))
-        throw error(409, '复制确认已过期或用卡已变化，请重新核对客户和尾号');
+        throw error(409, '复制确认已过期或用卡已变化，请重新核对客户和银行卡号');
       audit('renewal_card_copy', [target.row.id]);
       return { text: number };
     }
     const expires = now + cardConfirmationLifetime;
+    if (displayNumber) audit('view', [target.row.id]);
     return {
       orderId: order.id, subscriptionId: target.row.id, version,
       customerName: target.series.customerName, account: target.row.account || target.series.orderNo,
       last4: card.last4, availability: card.status === '历史卡已删除' ? 'inactive' : card.availability, hasCard: target.series.hasCard,
-      status: card.status, estimate: card.estimate, canCopy,
+      status: card.status, estimate: card.estimate, canCopy, ...(displayNumber && { number: displayNumber }),
       ...(canCopy && { confirmation: expires + '.' + confirmation(expires) })
     };
   });
@@ -1000,8 +1011,9 @@ export function createCardManagementHandler({ store, client, publicOrigin, clock
           const { order } = await readRenewalCard(store, client, {
             orderId: query.get('orderId'), ...(query.has('version') && { version: Number(query.get('version')) })
           }, actor, clock(), 'details');
-          const { last4, typeName, availability } = order.card;
-          return send(response, 200, { order: { id: order.id, version: order.version, card: { last4, typeName, availability } } });
+          const { last4, number, typeName, availability } = order.card;
+          return send(response, 200, { order: { id: order.id, version: order.version,
+            card: { last4, typeName, availability, ...(number && { number }) } } });
         }
         if (route === '/api/local/card-types') {
           const current = store.featureDocument(cardTypeDocument);

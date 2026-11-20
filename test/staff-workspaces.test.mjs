@@ -180,10 +180,15 @@ test('finance can read cards and statements, and uses explicit verification for 
   f.useStore(store);
   assert.equal((await f.call('supervisor', 'finance/cards')).status, 403);
   assert.equal((await f.call('admin', 'finance/cards')).status, 403);
+  const number = '1000000000000123';
+  f.rawCards.cards.push({ id: 6, last4: '0123', is_active: 1, card_number: number, card_cvc: 'fixture-cvc' });
   const cards = await f.call('finance', 'finance/cards');
   assert.equal(cards.status, 200);
   assert.equal(cards.data.items[0].last4, '0123');
+  assert.equal(cards.data.items[0].cardNumber, '');
+  assert.equal(cards.data.items[1].cardNumber, number);
   assert(!JSON.stringify(cards).includes('fixture-number'));
+  assert(!JSON.stringify(cards).includes('fixture-cvc'));
   const billing = await f.call('finance', 'finance/reconciliation?page=1&from=2026-11-13&to=2026-11-13');
   assert.equal(billing.status, 200);
   assert.deepEqual(billing.data.items[0], { reference: 'bill-1', time: '2026-11-13T12:00:00Z',

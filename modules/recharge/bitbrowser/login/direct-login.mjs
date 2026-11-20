@@ -665,25 +665,26 @@ async function runDirectJsonSession(settings, expected, windowName, signal, hook
         continue;
       }
       const observedKind = state.kind;
+      const hasIdentity = state.kind === 'identity' || (state.kind === 'expired' && typeof state.email === 'string');
       if (
-        expected.token &&
-        ownedProfile &&
-        !suppliedSessionChecked &&
-        (state.kind === 'identity' || (state.kind === 'expired' && typeof state.email === 'string'))
+        expected.token && ownedProfile && !suppliedSessionChecked &&
+        (hasIdentity || (state.kind === 'expired' && state.refreshFailed === true))
       ) {
-        if (
+        if (hasIdentity && (
           state.email?.toLowerCase() !== expected.email ||
           state.userId !== expected.userId ||
           state.accountId !== expected.accountId
-        )
+        ))
           throw new DirectBrowserError('official_login_email_mismatch');
         suppliedSessionChecked = true;
-        if (state.kind === 'expired' && (await injectCookies(true))) {
+        if ((settings.updateOwnedAuthorization || state.kind === 'expired') && await injectCookies(true)) {
           canInjectOnUnauthenticated = false;
           pageReadyDeadline = automaticDeadline;
           expiredDeadline = undefined;
+          sessionRefreshRequested = false;
+          tokenRejected = false;
           await hooks.progress('session_restore', {
-            account_matched: true,
+            ...(hasIdentity && { account_matched: true }),
             session_step: 'page_refresh',
             session_refresh_count: 1
           });

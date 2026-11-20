@@ -2356,7 +2356,8 @@
     const columns = [
       { id: 'orderNo', label: '订单编号' }, { id: 'customer', label: '历史客户' },
       { id: 'businessType', label: '业务类型' }, { id: 'payment', label: '付款方式' },
-      { id: 'paymentId', label: '付款账号／尾号' },
+      { id: 'paymentId', label: '付款账号／卡号', render: row => esc(row.payment === '银行卡'
+        ? row.bankCardNumber || (row.paymentId ? '完整卡号待核对' : '未登记') : row.paymentId || '—') },
       { id: 'paidAmount', align: 'end', label: '原代付金额', render: row => esc([row.paidAmount, row.paidCurrency].filter(Boolean).join(' ') || '待补充') },
       { id: 'paidConfirmed', label: '付款确认', render: row => esc(row.paidConfirmed ? '已确认' : '待核对') },
       ...(asset.type === 'claude' ? [{ id: 'kyc', label: 'KYC 记录' }, { id: 'verifier', label: '认证人' }, { id: 'verifierPhone', label: '认证电话' }] : []),

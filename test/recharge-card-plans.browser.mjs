@@ -59,8 +59,8 @@ test('银行卡套餐可单张或批量保存，冲突保留草稿，严格模�
       });
       let policy = { version: 0, strict: false };
       const cards = [
-        { id: 1, last4: '1111', allowed_plans: null },
-        { id: 2, last4: '2222', allowed_plans: ['pro100'] },
+        { id: 1, last4: '1111', card_number: '1000000000001111', allowed_plans: null },
+        { id: 2, last4: '2222', card_number: '1000000000002222', allowed_plans: ['pro100'] },
         { id: 3, last4: '3333', allowed_plans: null }
       ];
       const writes = [];
@@ -94,7 +94,7 @@ test('银行卡套餐可单张或批量保存，冲突保留草稿，严格模�
       const dialog = frame.getByRole('dialog', { name: '设置允许套餐' });
       await editorLayout(dialog);
       assert.equal(await dialog.locator('#card_plan_target').textContent(), '已选 2 张银行卡');
-      assert.match(await dialog.locator('#card_plan_target_detail').textContent(), /1111.*2222/);
+      assert.equal(await dialog.locator('#card_plan_target_detail').textContent(), '1000000000001111 · 1000000000002222');
       assert.equal(await dialog.locator('#card_plan_selection').textContent(), '已选 0 / 4');
       await dialog.getByRole('button', { name: '保存', exact: true }).click();
       assert.equal(writes.length, 0, '空选择不发送保存请求');
@@ -125,7 +125,7 @@ test('银行卡套餐可单张或批量保存，冲突保留草稿，严格模�
       await frame.locator('[data-card-plan-edit="3"]').getByText('未设置').waitFor();
       assert.deepEqual(writes[1], { version: 1, cardIds: [1, 2], allowedPlans: ['pro500'] });
       await frame.locator('[data-card-plan-edit="2"]').click();
-      assert.equal(await dialog.locator('#card_plan_target').textContent(), '•••• 2222');
+      assert.equal(await dialog.locator('#card_plan_target').textContent(), cards[1].card_number);
       assert(await dialog.locator('#card_plan_target_detail').isHidden());
       await dialog.getByRole('checkbox', { name: 'Pro 500' }).uncheck();
       await dialog.getByRole('checkbox', { name: 'Plus', exact: true }).check();
@@ -176,7 +176,7 @@ test('套餐弹层和导入共用控件覆盖深浅主题、嵌入与独立页�
             items: [{ id: 'sample', name: '合成银行卡类型', active: true }], assignments: {} } }
         });
         let cards = [
-          { id: 1, last4: '1111', allowed_plans: null, is_active: 1, status: '正常' },
+          { id: 1, last4: '1111', card_number: '1000000000001111', allowed_plans: null, is_active: 1, status: '正常' },
           { id: 2, last4: '2222', allowed_plans: ['plus', 'pro100', 'pro200', 'pro500'], is_active: 1, status: '正常' }
         ];
         await context.route(origin + '/integrations/codexdaichong/api/admin/cards', route =>
@@ -196,7 +196,7 @@ test('套餐弹层和导入共用控件覆盖深浅主题、嵌入与独立页�
         await trigger.click();
         await settle(page);
         const first = await editorLayout(dialog);
-        assert.equal(await dialog.locator('#card_plan_target').textContent(), '•••• 1111');
+        assert.equal(await dialog.locator('#card_plan_target').textContent(), cards[0].card_number);
         const help = dialog.getByLabel('查看设置允许套餐说明');
         assert.equal(await dialog.locator('.title-help').getAttribute('open'), null);
         const beforeHelp = await dialog.locator('#card_plan_options').boundingBox();

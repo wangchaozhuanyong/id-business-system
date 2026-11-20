@@ -66,7 +66,7 @@ export function createPage(A, definition) {
         render: row => A.esc(row.cardType || cardTypeStates[row.cardTypeState] || '未匹配') },
       { id: 'cardNumber', label: '完整卡号', mobileSummary: true, class: 'finance-card-number',
         render: row => row.cardNumber ? copyValue(row.cardNumber, 'cardNumber', row.index, '完整卡号') :
-          `<span class="finance-muted">未留存${row.last4 ? '（尾号 ' + A.esc(row.last4) + '）' : '完整卡号'}</span>` },
+          '<span class="finance-muted">未留存完整卡号</span>' },
       { id: 'email', label: '充值邮箱', long: true, render: row => A.esc(row.email || '未留存邮箱') },
       { id: 'plan', label: '套餐', render: row => A.esc(plans[row.plan] || '—') },
       { id: 'amount', label: '原币金额', mobileSummary: true, align: 'end', class: 'finance-amount', render: row =>

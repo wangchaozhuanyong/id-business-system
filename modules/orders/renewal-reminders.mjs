@@ -1,3 +1,5 @@
+import { contactKey } from './order-customer-match.mjs';
+export { contactKey };
 import { rechargeRenewalExpiryPending, subscriptionChainRoot, subscriptionTime, validOrderEmail, validOrderXHandle } from './order-opening.mjs';
 
 const orderContactFields = [
@@ -13,17 +15,6 @@ const isClaude = order => String(order?.product || '').startsWith('Claude');
 const orderIdentity = order => personalProduct(order?.product)
   ? order.loginMethod === 'x' && order.xHandle ? order.xHandle : order.email || order.xHandle || ''
   : order?.email || '';
-
-export function contactKey(text, channel) {
-  const normalized = String(text || '')
-    .normalize('NFKC')
-    .trim()
-    .toLowerCase();
-  if (channel === 'telegram') return normalized.replace(/^@/, '');
-  if ((channel === 'phone' || channel === 'whatsapp') && /^\+?[\d\s().-]+$/.test(normalized))
-    return normalized.replace(/[\s().-]/g, '');
-  return normalized;
-}
 
 function orderContactKeys(record, order = true) {
   return orderContactFields.flatMap(([orderField, customerField]) => {

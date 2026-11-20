@@ -950,6 +950,43 @@ class WebsiteReleaseTests(unittest.TestCase):
     @patch("release.require_presentation_approval")
     @patch("release.require_ancestor")
     @patch("release.git")
+    def test_card_number_release_only_accepts_exact_website_sources_and_manifest(self, git, ancestor, approval):
+        files = remote.CARD_NUMBER_PRESENTATION_FILES
+        approved = (*files, release.CARD_NUMBER_MANIFEST_PATH)
+        git.return_value = "\n".join(approved)
+        self.assertEqual(release.require_website_scope(BASE, TARGET),
+                         ("cardNumberPresentation", approval.return_value))
+        approval.assert_called_once_with(BASE, TARGET, release.CARD_NUMBER_MANIFEST, files)
+        self.assertIn(release.CARD_NUMBER_MANIFEST_PATH, git.call_args.args)
+        for flag in ("include_adapter", "include_core", "partner_api"):
+            with self.assertRaises(RuntimeError):
+                release.require_website_scope(BASE, TARGET, **{flag: True})
+        for changed in (files, approved[1:], (*approved, "modules/recharge/codexdaichong/native-adapter.mjs")):
+            git.return_value = "\n".join(changed)
+            with self.assertRaisesRegex(RuntimeError, "recharge_core_or_runtime_changed"):
+                release.require_website_scope(BASE, TARGET)
+        self.assertEqual(approval.call_count, 1)
+
+    def test_card_number_release_requires_verified_and_unmodified_mounted_asset_baseline(self):
+        before, after = "a" * 64, "b" * 64
+        mounted = {"available": True, "sha256": before, "bytes": 123}
+        baseline = {"components": {}, "unitSha256": before, "gatewaySha256": before, "launchers": {},
+                    "assetsSha256": before, "mountedAssets": mounted}
+        plan = {"before": baseline, "cardNumberPresentation": {"beforeAssetsSha256": before, "assetsSha256": after},
+                "files": dict.fromkeys(remote.CARD_NUMBER_PRESENTATION_FILES, "c" * 64)}
+        self.assertEqual(remote.require_asset_digest(plan, after), "cardNumberPresentation")
+        with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_approval_mismatch"):
+            remote.require_asset_digest(plan, "e" * 64)
+        for actual in ({"available": False}, mounted | {"sha256": "d" * 64}):
+            different_mount = baseline | {"mountedAssets": actual}
+            with self.assertRaisesRegex(remote.ReleaseError, "card_number_presentation_mount_mismatch"):
+                remote.require_asset_digest(plan | {"before": different_mount}, after)
+            with self.assertRaisesRegex(remote.ReleaseError, "card_number_presentation_mount_mismatch"):
+                remote.check_baseline(different_mount, baseline, check_asset_mount=True)
+
+    @patch("release.require_presentation_approval")
+    @patch("release.require_ancestor")
+    @patch("release.git")
     def test_checkout_diagnostic_release_verifies_its_four_presentation_sources(self, git, ancestor, approval):
         files = remote.CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES
         git.return_value = "\n".join(files)
@@ -1128,6 +1165,12 @@ class WebsiteReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_bundle_scope_mismatch"):
             remote.verify_presentation_bundle(bundle(previous), bundle(changed | {"/redeem": {"body": "new"}}),
                                               card_plan_assets)
+        card_number_assets = remote.PRESENTATION_SCOPES["cardNumberPresentation"][1]
+        self.assertEqual(card_number_assets, {"/admin", "/admin.js", "/shell.css"})
+        remote.verify_presentation_bundle(bundle(previous), bundle(changed), card_number_assets)
+        with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_bundle_scope_mismatch"):
+            remote.verify_presentation_bundle(bundle(previous), bundle(changed | {"/workspace": {"body": "new"}}),
+                                              card_number_assets)
         checkout_assets = remote.PRESENTATION_SCOPES["checkoutDiagnosticPresentation"][1]
         remote.verify_presentation_bundle(bundle(previous), bundle(changed), checkout_assets)
         with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_bundle_scope_mismatch"):

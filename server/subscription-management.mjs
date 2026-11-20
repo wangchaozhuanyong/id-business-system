@@ -134,7 +134,7 @@ function seriesFor(order) {
   return personalProduct(order.product) ? subscriptionSeries(order) : family(order.product).toLowerCase();
 }
 
-function buildRecords(snapshots, now) {
+function buildRecords(snapshots, now, cardNumberFor) {
   const inventory = snapshots.inventory.data || {};
   const accounts = array(inventory.accounts);
   const profiles = snapshots.subscriptions?.data || {};
@@ -172,6 +172,8 @@ function buildRecords(snapshots, now) {
     ]).filter(([, value]) => value));
     const nextCard = profiles.renewalCards?.[renewalCardKey(id, seriesFor(order))];
     const tail = /^\d{4}(?:\d{2})?$/.test(order.paymentId) ? order.paymentId.slice(-4) : '';
+    const cardOrder = nextCard ? { ...order, cardId: nextCard.cardId || '', proCardNumber: nextCard.number || '',
+      proMaterialMode: nextCard.number ? 'manual_card' : '', paymentId: nextCard.last4, financialEvidence: [], corrections: [] } : order;
     const record = {
       id, product, sourceId: order.id, source: 'order', orderNo: text(order.orderNo) || text(order.id),
       target: accountIdentity, display: !accountIdentity ? '' : order.loginMethod === 'x' && order.xHandle
@@ -182,6 +184,7 @@ function buildRecords(snapshots, now) {
       customerName: text(customer?.name || order.customerName), wechat: text(customer?.wechat || order.wechat), contacts,
       payment: text(order.payment), appleIdId: text(order.appleIdId),
       last4: order.payment === '银行卡' ? nextCard?.last4 || tail : '',
+      cardNumber: cardNumberFor?.(cardOrder),
       hasCard: order.payment === '银行卡' && Boolean(nextCard || order.cardId || order.proCardNumber || tail),
       delivered: order.businessType === '成品交付' && Boolean(match.account?.id && match.account.id === order.accountId),
       historicalSale, customerOwned: customerOwned(order),
@@ -236,7 +239,7 @@ export function currentSeriesRecord(records) {
   return latest;
 }
 
-function publicRecord(record, now) {
+function publicRecord(record, now, includeCardNumber = false) {
   return {
     source: record.source, sourceId: record.sourceId, orderNo: record.orderNo, plan: record.plan,
     start: record.start, expiry: record.expiry, endedAt: record.endedAt, status: record.status,
@@ -245,6 +248,7 @@ function publicRecord(record, now) {
     customerName: record.customerName || '', wechat: record.wechat || '',
     payment: record.payment || '', last4: record.last4 || '', hasCard: Boolean(record.hasCard),
     appleIdId: record.appleIdId || '',
+    ...(includeCardNumber && record.cardNumber && { cardNumber: record.cardNumber }),
     ...(record.renewalExpiryPending && { renewalExpiryPending: true })
   };
 }
@@ -283,9 +287,9 @@ function queryCodeFor(row, snapshots, now) {
     value: status === 'active' ? item.queryCode : '' };
 }
 
-export function projectSubscriptions(snapshots, now = Date.now()) {
+export function projectSubscriptions(snapshots, now = Date.now(), cardNumberFor) {
   const groups = new Map();
-  for (const record of buildRecords(snapshots, now)) {
+  for (const record of buildRecords(snapshots, now, cardNumberFor)) {
     if (!groups.has(record.id)) groups.set(record.id, []);
     groups.get(record.id).push(record);
   }
@@ -344,7 +348,7 @@ export function projectSubscriptions(snapshots, now = Date.now()) {
       customerName: primary.customerName || '', wechat: primary.wechat || '',
       contacts: conflict ? {} : primary.contacts || {},
       conflict: Boolean(conflict), missingAssociation, ownerEligible,
-      series: selected.map(record => ({ key: record.series, ...publicRecord(record, now),
+      series: selected.map(record => ({ key: record.series, ...publicRecord(record, now, !conflict),
         ...(dead && { status: 'dead', periodStatus: record.status, remainingDays: 0 }) })),
       history: records.map(record => publicRecord(record, now)),
       _account: account, _records: records, _customerOwned: primary.customerOwned
@@ -471,7 +475,7 @@ async function readBody(request) {
   throw failure(400, '无法读取请求内容');
 }
 
-export function createSubscriptionHandler({ store, publicOrigin, readOwners = () => [], clock = Date.now }) {
+export function createSubscriptionHandler({ store, publicOrigin, readOwners = () => [], cardNumberProjection, clock = Date.now }) {
   const generation = randomUUID();
   return async (request, response, route, actor) => {
     if (!manager(actor)) return send(response, 403, { error: '只有管理员可以查看或管理订阅资料' });
@@ -515,7 +519,7 @@ export function createSubscriptionHandler({ store, publicOrigin, readOwners = ()
             paid(order), openingConfirmed(order, priorProfile, now), order.cancelled, order.subscriptionEnded,
             priorProfile.confirmations?.[orderId] ?? null);
         };
-        const rows = projectSubscriptions(snapshots, now);
+        const rows = projectSubscriptions(snapshots, now, action === 'list' ? cardNumberProjection?.() : undefined);
         if (action === 'account') {
           if (typeof body.accountId !== 'string' || !body.accountId || body.accountId.length > 160)
             throw failure(400, '请选择账号');
@@ -570,7 +574,7 @@ export function createSubscriptionHandler({ store, publicOrigin, readOwners = ()
           const query = text(body.query).toLowerCase();
           const matching = productRows.filter(row => (!body.status || hasStatus(row, body.status)) &&
             (!query || [row.account, row.registrationEmail, row.ownerName, row.operatorName, row.customerName, ...Object.values(row.contacts),
-              ...row.series.map(series => series.last4),
+              ...row.series.flatMap(series => [series.cardNumber, series.last4]),
               ...row.history.map(record => record.orderNo)].some(value => text(value).toLowerCase().includes(query))));
           const sort = body.sort || defaultSubscriptionSort(scope);
           const ordered = sort === 'account_asc'

@@ -1,3 +1,4 @@
+import { chooseOrderCustomer } from './helpers/order-customer.mjs';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
@@ -240,9 +241,7 @@ test('员工审批边界及 GPT 代充原单、来源颜色和跨页关联', { t
       await page.locator(`[data-action="commerce-contact-services"][data-id="${customer.id}"]`).click();
       await page.locator('#drawer table[data-table="commerce-contact-services"]').getByText(synced.orderNo).waitFor();
       await page.goto(origin + '/#/workspace/order/gpt');
-      await page.locator('#commerce-customerId-picker').click();
-      await page.locator('#commerce-customerId-popover input').fill(customer.name);
-      await page.locator(`#commerce-customerId-options [data-value="${customer.id}"]`).click();
+      await chooseOrderCustomer(page, customer);
       assert.equal(await page.locator('#commerce-email').inputValue(), synced.email);
       await page.goto(origin + '/#/workspace/renewals/reminders');
       await page.waitForURL('**/#/workspace/renewals');

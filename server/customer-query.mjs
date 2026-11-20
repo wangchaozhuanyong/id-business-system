@@ -96,6 +96,7 @@ function projection(snapshots, customer, cardTypes, now, cardContext, includeBan
       account: text(orderIdentity(order)), email: text(order.email), start: text(order.start), expiry: text(order.expiry),
       status, conflict, businessType: text(order.businessType), payment: claude(order.product) && order.payment === '银行卡' ? '' : text(order.payment),
       bank: bankView(order, cardTypes, cardContext, card), cancelled, ended,
+      ...(includeBankNumbers && order.payment === '银行卡' && { bankPayment: true }),
       ...(bankNumber && { bankNumber }),
       canPrefill: !isDraft(order) && !conflict && !otherCustomer && customer.active !== false && products.has(order.product),
       refunds: list(order.refunds).map(refund => ({ at: text(refund.at || refund.time || refund.createdAt),

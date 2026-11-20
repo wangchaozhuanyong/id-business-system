@@ -1,3 +1,4 @@
+import { chooseOrderCustomer } from './helpers/order-customer.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFile } from 'node:fs/promises';
@@ -37,15 +38,11 @@ async function setup(browser, slug = 'gpt', width = 1440, seed) {
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(origin + '/#/workspace/order/' + slug);
   await page.locator('#commerce-ownerId option[value="submit-stay"]').waitFor({ state: 'attached' });
-  await page.locator('#commerce-customerId').evaluate((select, id) => {
-    select.value = id; select.dispatchEvent(new Event('change', { bubbles: true }));
-  }, fixture.commerce.data.customers[0].id);
+  await chooseOrderCustomer(page, fixture.commerce.data.customers[0]);
   const submit = async () => {
     const form = page.locator('#main #commerce-order-form');
     const customer = form.locator('#commerce-customerId');
-    if (!await customer.inputValue()) await customer.evaluate((select, id) => {
-      select.value = id; select.dispatchEvent(new Event('change', { bubbles: true }));
-    }, fixture.commerce.data.customers[0].id);
+    if (!await customer.inputValue()) await chooseOrderCustomer(form, fixture.commerce.data.customers[0]);
     for (const [id, value] of [['paidAmount', '20'], ['saleAmount', '100']]) {
       const input = form.locator('#commerce-' + id);
       if (!await input.inputValue()) await input.fill(value);
@@ -73,8 +70,8 @@ test('五类订单提交后留在录入页，刷新最近记录并可连续录�
           assignments: { 'recharge:71': 'qa-wise-type' }
         };
         fixture['order-cards'] = { items: [
-          { id: 'recharge:71', last4: '0171', active: true, status: '正常' },
-          { id: 'recharge:72', last4: '0172', active: true, status: '正常' }
+          { id: 'recharge:71', number: '4000000000000171', last4: '0171', active: true, status: '正常' },
+          { id: 'recharge:72', number: '4000000000000172', last4: '0172', active: true, status: '正常' }
         ] };
       });
       try {
@@ -88,9 +85,10 @@ test('五类订单提交后留在录入页，刷新最近记录并可连续录�
           await materialMode.selectOption('');
           const picker = page.locator('#commerce-cardId-picker');
           await page.locator('#commerce-cardId option[value="recharge:72"]').waitFor({ state: 'attached' });
-          for (const [tail, expected] of [['0171', 'qa-wise-type'], ['0172', 'qa-default-type']]) {
+          for (const [number, expected] of [['4000000000000171', 'qa-wise-type'], ['4000000000000172', 'qa-default-type']]) {
             await picker.click();
-            await page.locator('#commerce-cardId-options').getByRole('option', { name: new RegExp(tail) }).click();
+            await page.locator('#commerce-cardId-options').getByRole('option', { name: new RegExp(number) }).click();
+            assert.equal(await page.locator('#commerce-selectedCardNumber').inputValue(), number);
             assert.equal(await cardType.inputValue(), expected);
           }
         } else await page.locator('#commerce-proCardNumber').fill(sampleCard);

@@ -47,8 +47,7 @@ try {
       if (width < 900) await page.setViewportSize({ width, height: 844 });
       if (name === 'order-entry') {
         // Fill only local controls for a representative draft; no submit is performed.
-        const customer = page.locator('#commerce-customerId');
-        if (await customer.count()) await customer.evaluate(el => { el.value = 'visual-draft-customer'; el.dispatchEvent(new Event('change', { bubbles: true })); });
+        await page.locator('#commerce-customerName').fill('预览草稿客户');
         await page.locator('#commerce-email').fill('ye.zhixia@example.test');
         await page.locator('#commerce-cardTypeId').selectOption('visual-type');
         await page.locator('#commerce-paidAmount').fill('983');

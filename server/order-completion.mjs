@@ -8,6 +8,7 @@ import {
   orderOpeningConfirmed, orderReceiptRecorded, subscriptionTime, validOrderEmail, validOrderXHandle
 } from '../modules/orders/order-opening.mjs';
 import { accountLifecycleSummary, systemAccount } from './account-lifecycle.mjs';
+import { orderCardHealthReference } from './card-management.mjs';
 import { isClaudeHistoricalSale } from './claude-history-intake.mjs';
 import { registrationEmail, registrationOccupancy, registrationProductConflict } from './inventory-registration.mjs';
 import { stockTypeForProduct, targetKey } from './personal-subscriptions.mjs';
@@ -79,15 +80,17 @@ function customerView(row) {
   } : null;
 }
 
-function orderView(order, customer, actor, names = new Map()) {
+function orderView(order, customer, actor, names, cardContext) {
   const source = sourceOf(order, customer);
   const { ownerId: owner, receiptRecorded, state, missing } = rechargeOrderCompletion(order, customer);
   const tail = clean(order.paymentId) || clean(order.proCardNumber).slice(-4);
   const cardLast4 = /^\d{4,6}$/.test(tail) ? tail.slice(-4) : '';
+  const { number, conflict } = orderCardHealthReference(order, cardContext);
   return {
     ...fields(order, [...orderFields, ...contactFields.map(([key]) => key)]),
     ...paymentView(order), customer: customerView(customer),
     customerSource: source, cardLast4, bankPayment: order.payment === '银行卡',
+    ...(!conflict && number && { cardNumber: number }),
     customerLinkMissing: Boolean(order.customerId && !customer), receiptRecorded,
     owner: order.owner || names.get(owner) || (owner === actor.id ? actor.name : owner),
     state, missing
@@ -129,7 +132,7 @@ function contactKey(value, key) {
   return normalized;
 }
 
-export function readOrderCompletion(data, settings, actor, params, readOwners) {
+export function readOrderCompletion(data, settings, actor, params, readOwners, cardContext) {
   requireCompletionActor(actor);
   const customers = data?.customers || [];
   if (params.has('orderId')) {
@@ -149,7 +152,7 @@ export function readOrderCompletion(data, settings, actor, params, readOwners) {
   const orders = data?.orders || [];
   const items = sortByRecordTime(orders.filter(row => visible(row, actor)),
     row => [row.rechargeCompletedAt, row.start, row.createdAt])
-    .map((row) => orderView(row, byId.get(row.customerId), actor, names));
+    .map((row) => orderView(row, byId.get(row.customerId), actor, names, cardContext));
   return {
     items, sources: sourcesOf(settings), canAssign: manager(actor),
     receiptCurrencies: [...new Set([...currencies, ...(settings?.orderCurrenciesByProduct?.GPT ||

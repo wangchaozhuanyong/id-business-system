@@ -87,16 +87,20 @@ export function accountLifecycleSummary(account, commerce, now = Date.now(), con
     : state(account) === 'available' ? lifecycle?.disposition === 'recovered' ? '已回收可用' : '首次可用'
     : latest && instant(latest.expiry) && instant(latest.expiry) <= now ? '到期待处理' : '使用中';
   const name = id => (context ? context.customers.get(id) : rows(commerce?.customers).find(customer => customer.id === id))?.name || (id ? '历史客户' : '未分配');
-  const snapshot = order => ({
-    id: order.id, orderNo: order.orderNo || order.id, product: order.product, plan: order.plan || '', businessType: order.businessType,
-    customerId: order.customerId || '', customer: name(order.customerId), start: order.start || '', expiry: order.expiry || '',
-    payment: order.payment || '', paymentId: order.paymentId || '', paidAmount: order.paidAmount || '',
-    paidCurrency: order.paidCurrency || '', paidConfirmed: order.paidConfirmed === true,
-    ...(personal && { entitlementStatus: order.entitlementStatus, cancelled: order.cancelled === true }),
-    kyc: kycLabel(order.kyc), verifier: order.verifier || '', verifierPhone: order.verifierPhone || '',
-    tenant: (context ? context.tenants.get(order.tenantId) : rows(commerce?.tenants).find(tenant => tenant.id === order.tenantId))?.name || '',
-    released: released.has(order.id)
-  });
+  const snapshot = (order, includeCard = false) => {
+    const bankCardNumber = includeCard && order.payment === '银行卡' && context?.cardNumberFor?.(order);
+    return {
+      id: order.id, orderNo: order.orderNo || order.id, product: order.product, plan: order.plan || '', businessType: order.businessType,
+      customerId: order.customerId || '', customer: name(order.customerId), start: order.start || '', expiry: order.expiry || '',
+      payment: order.payment || '', paymentId: order.paymentId || '', paidAmount: order.paidAmount || '',
+      ...(bankCardNumber && { bankCardNumber }),
+      paidCurrency: order.paidCurrency || '', paidConfirmed: order.paidConfirmed === true,
+      ...(personal && { entitlementStatus: order.entitlementStatus, cancelled: order.cancelled === true }),
+      kyc: kycLabel(order.kyc), verifier: order.verifier || '', verifierPhone: order.verifierPhone || '',
+      tenant: (context ? context.tenants.get(order.tenantId) : rows(commerce?.tenants).find(tenant => tenant.id === order.tenantId))?.name || '',
+      released: released.has(order.id)
+    };
+  };
   const verified = history.find(order => kycLabel(order.kyc) === 'KYC 认证');
   return {
     assetId: account.id, systemOwned: systemAccount(account), label, customerId, customer: name(customerId),
@@ -108,14 +112,14 @@ export function accountLifecycleSummary(account, commerce, now = Date.now(), con
       kyc: 'KYC 认证', orderNo: '账号原始资料', verifier: account.verifier || '', verifierPhone: account.verifierPhone || '', tenant: ''
     } : null,
     currentKyc: closed ? '待重新核实' : kycLabel(latest?.kyc ?? account.kyc),
-    orders: history.map(snapshot), events: rows(account.accountLifecycleEvents)
+    orders: history.map(order => snapshot(order, true)), events: rows(account.accountLifecycleEvents)
   };
 }
 
-export function accountLifecycleSummaries(inventory, commerce, now) {
+export function accountLifecycleSummaries(inventory, commerce, now, cardNumberFor) {
   const accounts = rows(inventory?.accounts).filter(managedAccount);
   if (!accounts.length) return [];
-  const context = lifecycleReadContext(commerce);
+  const context = { ...lifecycleReadContext(commerce), cardNumberFor };
   return accounts.map(account => accountLifecycleSummary(account, commerce, now, context));
 }
 

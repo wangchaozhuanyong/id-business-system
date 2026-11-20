@@ -8,6 +8,9 @@ import { preparePersonalInventory } from '../server/personal-subscriptions.mjs';
 import { buildRechargeOrder } from '../server/recharge-order-sync.mjs';
 import { createSubscriptionHandler } from '../server/subscription-management.mjs';
 
+import { documentDelta } from '../modules/data/document-delta.mjs';
+import { orderCustomerCalibrateAction } from '../modules/orders/order-opening.mjs';
+
 const origin = 'https://workflow.example.test';
 const actor = { id: 'qa-admin', name: '合成管理员', role: 'admin' };
 const customer = { id: 'qa-customer', name: '合成客户', wechat: '', active: true, version: 1 };
@@ -102,14 +105,19 @@ test('续费用卡不改付款记录，复制确认锁定客户、订阅和最�
   assert.equal((await card('bind', { number: syntheticPan, version: first.data.version })).status, 200);
   assert.deepEqual(store.load('commerce'), before);
   const preview = await card('prepare');
+  assert.equal(preview.status, 200);
   assert.equal(preview.data.customerName, '合成客户');
   assert.equal(preview.data.last4, '4242');
-  assert.doesNotMatch(JSON.stringify(preview.data), new RegExp(syntheticPan));
+  assert.equal(preview.data.number, syntheticPan);
+  assert.equal(preview.data.canCopy, true);
   assert.equal((await card('copy')).status, 409);
   assert.equal((await card('copy', { confirmation: preview.data.confirmation }, 'qa-other')).status, 409);
   assert.equal((await card('copy', { confirmation: preview.data.confirmation })).data.text, syntheticPan);
   assert.equal((await card('bind', { number: '4000000000000002', version: preview.data.version })).status, 200);
   assert.equal((await card('copy', { confirmation: preview.data.confirmation })).status, 409);
+  assert.equal((await card('prepare')).data.number, '4000000000000002');
+  assert.deepEqual(store.load('commerce'), before);
+  assert.doesNotMatch(JSON.stringify(store.audit()), new RegExp(syntheticPan + '|4000000000000002'));
   const suffix = await request(subscriptions, '/api/local/subscriptions/renewal-settings', {});
   assert.equal((await request(subscriptions, '/api/local/subscriptions/renewal-settings',
     { suffix: '方便时请回复是否续费。', revision: suffix.data.revision })).status, 200);
@@ -189,4 +197,33 @@ test('购买账号独立统计，只有明确选择的注册邮箱记为已使�
   const replacement = structuredClone(next);
   replacement.accounts[1].sourceMailboxId = 'unchanged-mail';
   assert.match(preparePersonalInventory(next, replacement, 'inventory_edit', actor), /来源库存创建后须保留/);
+});
+
+test('手工录单通过现有增量保存接口同步校准，标签和订单校验共用一次事务', async t => {
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  const commerce = (req, res, route, user) => handleLocalBusiness(req, res, route, store, user, { publicOrigin: origin });
+  const profile = { ...customer, wechat: 'prior-id', notes: '保留备注', tags: ['旧标签'] };
+  const seeded = store.saveBatch([
+    { domain: 'settings', version: 0, action: 'customer_tags_save', data: { mailboxTypes: [], customerTags: ['旧标签', '新标签'] } },
+    { domain: 'commerce', version: 0, action: '新增资料', data: { ...blankCommerce(), customers: [profile] } }
+  ], { actor: { ...actor, role: 'super' } }).find(row => row.domain === 'commerce');
+  const proposal = tag => {
+    const data = structuredClone(seeded.data);
+    const input = { name: customer.name, wechat: 'new-id', tags: [tag] };
+    Object.assign(data.customers[0], input, { version: 2 });
+    data.orders.unshift(order('new-profile-order', 'GPT', 'Plus', { customerMatchReview: { input, decision: 'calibrate', customerVersion: 1 } }));
+    return { version: seeded.version, delta: documentDelta('commerce', seeded.data, data), action: orderCustomerCalibrateAction };
+  };
+  const invalid = await request(commerce, '/api/local/commerce', proposal('不存在的标签'), 'PUT');
+  assert.equal(invalid.status, 409);
+  assert.equal(store.load('commerce').version, seeded.version);
+  const success = await request(commerce, '/api/local/commerce', proposal('新标签'), 'PUT');
+  assert.equal(success.status, 200, success.data.error);
+  const written = store.load('commerce');
+  assert.equal(written.version, seeded.version + 1);
+  assert.equal(written.data.customers[0].notes, profile.notes);
+  assert.deepEqual(written.data.customers[0].tags, ['新标签']);
+  assert.equal(written.data.orders[0].wechat, 'new-id');
+  assert.equal(written.data.orders[0].customerMatchReview, undefined);
 });

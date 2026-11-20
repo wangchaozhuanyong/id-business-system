@@ -122,7 +122,7 @@ test('单客户档案：唯一匹配、候选分页、粘贴失败、空结果�
     await current.getByRole('button', { name: '复制卡号', exact: true }).click();
     assert.equal(await page.evaluate(() => window.copiedCard), currentCard);
     const noCard = cardField(accounts, 'no-card');
-    await noCard.getByText('无', { exact: true }).waitFor();
+    await noCard.getByText('完整卡号待核对', { exact: true }).waitFor();
     assert.equal(await noCard.getByRole('button').count(), 0);
     await page.getByRole('button', { name: '展开订单历史', exact: true }).click();
     const previous = cardField(page.locator('#customer-query-orders-content'), 'previous-card');

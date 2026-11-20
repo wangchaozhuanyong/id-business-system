@@ -67,6 +67,28 @@ test('有效充值码把成功入单映射到领用员工，列表、详情资�
   assert.doesNotMatch(JSON.stringify(view(data, a)), /synthetic-code|internal-card|task-own/i);
 });
 
+test('订单补全展示已核对的完整卡号并保留订单归属限制', t => {
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  const first = '4242424242424242', archived = '5555555555554444';
+  const bankOrder = (id, fields) => order(id, { payment: '银行卡', ...fields });
+  const data = payload(
+    bankOrder('archived', { cardId: 'recharge:1', paymentId: '4444' }),
+    bankOrder('conflict', { cardId: 'recharge:1', paymentId: '4242' }),
+    bankOrder('tail-only', { paymentId: '1234' }),
+    bankOrder('other', { proCardNumber: first, paymentId: '4242', rechargeOwnerId: b.id }));
+  store.saveBatch([{ domain: 'commerce', version: 0,
+    data: { ...data, tenants: [], operating: [], rentBatches: [], logs: [] } }]);
+  store.applyRechargeOrder({ since: Date.parse(at), row: { jobKey: 'task-stored', needs: [] },
+    order: bankOrder('stored', { proCardNumber: first, paymentId: '4242' }) });
+  store.saveFeatureDocument('order-card-archive', 0, { cards: { 'recharge:1': { number: archived, last4: '4444' } } });
+  const { items } = store.orderCompletionView(a, new URLSearchParams(), owners);
+  const entries = Object.fromEntries(items.map(({ email, cardNumber, cardLast4 }) => [email.split('@')[0], [cardNumber, cardLast4]]));
+  assert.deepEqual(entries, {
+    stored: [first, '4242'], archived: [archived, '4444'], conflict: [undefined, '4242'], 'tail-only': [undefined, '1234']
+  });
+});
+
 test('配置与实际扣款独立，历史订单保留原收费并标记缺失依据', () => {
   assert.deepEqual(price, {
     settingsVersion: 8, at, saleAmount: '140.00', saleCurrency: 'CNY', paidPrices: { PHP: '100.0000', MYR: '60' }

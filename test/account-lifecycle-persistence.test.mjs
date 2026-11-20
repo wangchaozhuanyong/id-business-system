@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createLocalBusinessStore } from '../server/local-business.mjs';
 import { lifecycleFixture } from './helpers/account-lifecycle-fixture.mjs';
+import { localBusinessRequest } from './helpers/local-business-request.mjs';
 
 // Run through npm test in the existing remote, isolated CI; no production data.
 const actor = { id: 'lifecycle-admin', name: '隔离管理员', role: 'admin' };
@@ -31,6 +32,25 @@ function command(store, overrides = {}) {
       commandId: 'isolated-lifecycle-command', action: 'release', reason: '客户已结束使用',
       controlled: true, accessReviewed: true, tasksReviewed: true, ...overrides } };
 }
+
+test('库存详情仅向可管理库存的账号返回历史银行卡号', async t => {
+  const store = seed(t, 'gpt');
+  const number = '4242424242424242', original = store.load('commerce').data.orders[0];
+  store.applyRechargeOrder({ since: Date.now(), row: { jobKey: 'fixture-bank-order', needs: [] },
+    order: { ...original, taskId: 'fixture-bank-order', source: '线上代充', cardId: 'recharge:40', paymentId: '4242' } });
+  store.saveFeatureDocument('order-card-archive', 0, { cards: { 'recharge:40': { number, last4: '4242' } } });
+  const publicOrigin = 'https://inventory.example.test';
+  const managed = await localBusinessRequest(store, 'inventory', { actor, publicOrigin });
+  assert.equal(managed.status, 200);
+  assert.equal(managed['Cache-Control'], 'private, no-store');
+  const history = managed.body.accountSummaries[0].orders;
+  assert.equal(history.find(row => row.paymentId === '4242').bankCardNumber, number);
+  assert.equal(history.find(row => row.id === original.id).bankCardNumber, undefined);
+  const registrar = await localBusinessRequest(store, 'inventory', { actor: { ...actor, role: 'registrar' }, publicOrigin });
+  assert.equal(registrar.status, 200);
+  assert.equal(registrar.body.accountSummaries, undefined);
+  assert.doesNotMatch(JSON.stringify(registrar.body), /4242424242424242/);
+});
 
 for (const type of ['gpt', 'claude']) {
   test(`${type} 加密文档回收保存和回读保留原单，重复回执不增加版本或审计`, t => {

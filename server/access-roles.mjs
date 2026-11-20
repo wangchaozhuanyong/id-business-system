@@ -104,7 +104,7 @@ const accountingFields = ['id', 'kind', 'paidAmount', 'paidCurrency', 'currency'
   'appleRecoverableCostAmount', 'feeAmount', 'customerAmount', 'customerCurrency', 'actualAmount', 'actualCurrency',
   'saleAmount', 'saleCurrency', 'chargeAmount', 'chargeCurrency', 'rate', 'state', 'payment'];
 
-export function financeCommerce(snapshot) {
+export function financeCommerce(snapshot, cardNumberFor = () => '') {
   if (!snapshot.data) return snapshot;
   const { orders = [], customers = [], operating = [] } = snapshot.data;
   return { version: snapshot.version, data: {
@@ -115,6 +115,7 @@ export function financeCommerce(snapshot) {
         'loginMethod', 'subscriptionSeries', 'previousSubscriptionOrderId', 'billingChannel', 'cardTypeName',
         'cardTypeId', 'proMaterialMode', 'kyc', 'proRenewalSourceId', 'claudeRenewalId']),
       paymentId: row.payment === '银行卡' ? financeCardSuffix(row) : row.paymentId,
+      bankCardNumber: cardNumberFor(row),
       ...Object.fromEntries(['refunds', 'bankReturns', 'financialEvidence'].map(key =>
         [key, (Array.isArray(row[key]) ? row[key] : []).map(item => pick(item, accountingFields))])),
       // Monetary snapshots are used by the same accounting calculation as the orders page.
@@ -133,12 +134,12 @@ export function financeCommerce(snapshot) {
   } };
 }
 
-export function employeeCommerce(snapshot, actor) {
+export function employeeCommerce(snapshot, actor, cardNumberFor = () => '') {
   if (!snapshot.data) return snapshot;
   const orders = (snapshot.data.orders || []).filter(row => ownsRecord(actor, row));
   const customerIds = new Set(orders.map(row => row.customerId));
   return { version: snapshot.version, data: {
-    orders: orders.map(row => pick(row, orderFields)),
+    orders: orders.map(row => ({ ...pick(row, orderFields), bankCardNumber: cardNumberFor(row) })),
     customers: (snapshot.data.customers || []).filter(row => ownsRecord(actor, row) || customerIds.has(row.id))
       .map(row => pick(row, customerFields)),
     tenants: [], operating: [], rentBatches: [], logs: []

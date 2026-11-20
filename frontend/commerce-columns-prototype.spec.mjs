@@ -197,7 +197,8 @@ test('各产品共用银行卡资料列，旧单和 Apple 内购各自显示原�
   };
   const render = (id, row) => pro.columns.find((column) => column.id === id).render(row);
   assert.equal(render('proMaterialMode', manual), '手动填写银行卡');
-  assert.equal(render('proCardNumber', manual), '•••• 4242');
+  assert.equal(render('proCardNumber', { ...manual, proCardNumber: '4242'.repeat(4) }), '4242'.repeat(4));
+  assert.equal(render('proCardNumber', manual), '完整卡号待核对');
   assert.equal(render('proCardSerial', manual), '00042-QA');
   assert.equal(render('proMaterialMode', { product: 'Claude Pro', payment: '银行卡' }), '原订单资料');
   assert.equal(render('proMaterialMode', { product: 'Claude Pro', payment: '苹果内购' }), '不适用');

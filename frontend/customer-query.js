@@ -72,7 +72,7 @@
     const assetIssue = ['dead', 'unlocking', 'frozen'].includes(row.bank?.state) ||
       (row.appleBindings || (row.apple ? [row.apple] : [])).some(apple => ['dead', 'unlocking', 'unavailable'].includes(apple.state));
     const bankNumber = row.bankNumber ? `<span>${E(row.bankNumber)}</span>${textAction('复制卡号',
-      'customer-query-copy-card', `${attr(row.id)} data-tab="${sectionId}"`)}` : '无';
+      'customer-query-copy-card', `${attr(row.id)} data-tab="${sectionId}"`)}` : row.bankPayment ? '完整卡号待核对' : '无';
     return `<article class="customer-query-account" data-customer-query-row="${E(row.id)}">
       <div class="customer-query-identity"><h3>${E(row.account || '账号待核对')}</h3>${
         row.email && row.email !== row.account ? `<span>${E(row.email)}</span>` : ''}</div>

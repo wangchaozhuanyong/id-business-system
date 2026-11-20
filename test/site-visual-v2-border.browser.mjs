@@ -44,7 +44,7 @@ function measure(scope) {
 }
 async function checkOrderStates(page, width, theme) {
   const targets = ['commerce-paidAmount', 'commerce-saleAmount', 'commerce-paidCurrency',
-    'commerce-saleCurrency', 'commerce-email', 'commerce-customerId-picker', 'commerce-emailHistory-picker'];
+    'commerce-saleCurrency', 'commerce-email', 'commerce-customerName', 'commerce-emailHistory-picker'];
   for (const id of targets) {
     const control = page.locator('#' + id);
     if (!(await control.isVisible()) || !(await control.isEnabled())) continue;

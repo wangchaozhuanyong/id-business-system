@@ -4,6 +4,7 @@ import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 
 import { interceptDesign, interceptRenewalWorktable, origin } from './helpers/offline-design.mjs';
+import { chooseOrderCustomer } from './helpers/order-customer.mjs';
 
 const fixturePath = new URL('../docs/audits/2026-11-06-design-review/visual-fixtures.json', import.meta.url);
 const actor = { id: 'qa-card-admin', name: '合成管理员', role: 'admin' };
@@ -86,7 +87,7 @@ test('银行卡管理与续费共用复制、筛选、分组和预计金额', { 
             return route.fulfill({ json: { text: pan } });
           }
           assert.equal(action, 'prepare');
-          return route.fulfill({ json: { orderId, account: order.email, customerName: '合成客户', last4: '4242',
+          return route.fulfill({ json: { orderId, account: order.email, customerName: '合成客户', last4: '4242', number: pan,
             canCopy: true, hasCard: true, availability: 'normal', confirmation, estimate } });
         });
         const page = await context.newPage();
@@ -196,7 +197,7 @@ test('银行卡管理与续费共用复制、筛选、分组和预计金额', { 
         await drawer.getByRole('button', { name: '关闭', exact: true }).click();
         const confirm = page.locator('#confirm-dialog[open]');
         await copyButton.click();
-        await confirm.getByText(/upcoming@example.test.*卡尾号 4242/).waitFor();
+        await confirm.getByText(new RegExp('upcoming@example\\.test.*银行卡号 ' + pan)).waitFor();
         assert.deepEqual(copied, []);
         await confirm.getByRole('button', { name: '确认复制', exact: true }).click();
         await page.waitForFunction(value => window.qaCopied === value, pan);
@@ -225,7 +226,7 @@ test('银行卡管理与续费共用复制、筛选、分组和预计金额', { 
         assert.equal(await renewal.getByRole('button', { name: '复制银行卡', exact: true }).count(), 0);
         assert.equal(await renewal.getByRole('button', { name: '提交给财务', exact: true }).count(), 0);
         assert.equal(await renewal.getByRole('button', { name: '登记已完成续费', exact: true }).count(), 0);
-        assert.ok(!(await renewal.innerText()).includes(pan));
+        assert.equal(await renewal.locator('[data-renewal-preview-number]').textContent(), pan);
         await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
         await renewalRow.getByRole('button', { name: '更多操作', exact: true }).click();
         await page.getByRole('menuitem', { name: '登记已完成续费', exact: true }).waitFor();
@@ -311,10 +312,8 @@ test('冻结银行卡后日常录单和已完成续费都保留原卡提示', { 
   await page.goto(origin + '/#/workspace/order/gpt');
   await page.locator('#commerce-businessType').selectOption('续费');
   await page.locator('#commerce-payment').selectOption('银行卡');
-  await page.locator('#commerce-customerId').evaluate((select, id) => {
-    select.value = id;
-    select.dispatchEvent(new Event('change', { bubbles: true }));
-  }, shared.find(row => row.id === 'upcoming').customerId);
+  const customerId = shared.find(row => row.id === 'upcoming').customerId;
+  await chooseOrderCustomer(page, localFixtures.commerce.data.customers.find(row => row.id === customerId));
   const email = page.locator('#commerce-email');
   await email.fill('upcoming@example.test');
   await email.blur();
