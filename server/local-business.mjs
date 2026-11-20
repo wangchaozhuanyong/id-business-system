@@ -280,6 +280,8 @@ const orderFeatureAuditLabels = {
   recharge_code_request: '申请充值码',
   recharge_partner_create: '发放合作方 API 凭证',
   recharge_partner_disable: '停用合作方 API 凭证',
+  recharge_partner_rotate: '更换合作方 API 密钥',
+  recharge_partner_request_recover: '撤销未受理的合作方授权',
   recharge_partner_issue: '发放合作方兑换码',
   recharge_code_approve: '批准充值码申请',
   recharge_code_reject: '驳回充值码申请',

@@ -2,7 +2,7 @@ export function createPage(A, definition) {
   const D = window.IDLocalData;
   const e = A.esc;
   const pageId = definition.id;
-  const planNames = { plus: 'Plus', pro100: 'Pro 100', pro200: 'Pro 200' };
+  const planNames = { plus: 'Plus', pro100: 'Pro 100', pro200: 'Pro 200', pro500: 'Pro 500' };
   const defaults = () => ({ name: '', partnerId: '', plan: 'plus', count: '1', page: 1 });
   const operations = new Map();
   let active, data, draft = defaults();
@@ -86,8 +86,11 @@ export function createPage(A, definition) {
       { id: 'id', label: '合作方编号', class: 'recharge-partner-id-cell', long: true, render: row => `<span class="mono">${e(row.id)}</span>` },
       { id: 'state', label: '凭证状态', mobileSummary: true, render: row =>
         `<span class="tag${row.disabledAt ? '' : ' success'}">${row.disabledAt ? '已停用' : '已启用'}</span>` },
-      { id: 'actions', label: '操作', action: true, render: row => !row.disabledAt ?
-        A.button('停用', 'recharge-partner-disable', '', '', `data-partner-id="${e(row.id)}"`) : '' }
+      { id: 'actions', label: '操作', action: true, render: row => {
+        const attrs = `data-partner-id="${e(row.id)}"`;
+        return A.button(row.disabledAt ? '换钥后启用' : '更换密钥', 'recharge-partner-rotate', '', '', attrs) +
+          (row.disabledAt ? '' : A.button('停用', 'recharge-partner-disable', '', '', attrs));
+      } }
     ], data.partners, '', '充值 API 合作方', { title: '暂无合作方', description: '在上方填写名称，创建第一个合作方。' });
     const partnerNames = new Map(data.partners.map(row => [row.id, row.name]));
     const batches = data.batches.map(row => ({ ...row, partnerName: partnerNames.get(row.partnerId) || row.partnerId }));
@@ -139,7 +142,7 @@ export function createPage(A, definition) {
   }
 
   function setBusy(view, value) {
-    for (const control of view.host.querySelectorAll('form :is(input, select, button), [data-action="recharge-partner-disable"]'))
+    for (const control of view.host.querySelectorAll('form :is(input, select, button), [data-action="recharge-partner-disable"], [data-action="recharge-partner-rotate"]'))
       control.disabled = value;
   }
 
@@ -154,8 +157,8 @@ export function createPage(A, definition) {
       const result = await D.rechargePartnerAction({ ...command, operationId: operations.get(fingerprint) });
       operations.delete(fingerprint);
       if (active !== view) return;
-      if (command.action === 'create') {
-        view.host.querySelector('[name="name"]').value = draft.name = '';
+      if (command.action === 'create' || command.action === 'rotate') {
+        if (command.action === 'create') view.host.querySelector('[name="name"]').value = draft.name = '';
         if (result.apiKey) {
           const reveal = view.host.querySelector('[data-partner-secret]');
           reveal.querySelector('input').value = result.apiKey;
@@ -163,7 +166,7 @@ export function createPage(A, definition) {
           reveal.hidden = false;
           draft.partnerId = result.partner.id;
         } else {
-          feedback(view, '合作方已创建。若尚未复制密钥，可停用该凭证后重新创建。');
+          feedback(view, '操作已保存。若未收到密钥，请刷新后使用「更换密钥」。');
         }
       }
       if (command.action === 'issue') draft.page = 1;
@@ -217,6 +220,13 @@ export function createPage(A, definition) {
       } else if (action === 'recharge-partner-codes') {
         const batch = data.batches.find(row => row.id === node.dataset.batchId);
         if (batch) void A.copyText(batch.codes.join('\n'));
+      } else if (action === 'recharge-partner-rotate') {
+        const partner = data.partners.find(row => row.id === node.dataset.partnerId);
+        const verb = partner?.disabledAt ? '重新启用并换发' : '更换';
+        if (partner && window.confirm(`确认${verb} ${partner.name} 的 API 密钥？旧密钥将失效，已发兑换码和历史任务仍归此合作方。`)) {
+          clearSecret(view);
+          void save(view, { action: 'rotate', partnerId: partner.id });
+        }
       } else if (action === 'recharge-partner-disable') {
         const partner = data.partners.find(row => row.id === node.dataset.partnerId);
         if (partner && window.confirm(`停用 ${partner.name} 的 API 凭证？已受理的任务会继续处理。`)) {

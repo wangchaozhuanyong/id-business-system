@@ -15,7 +15,8 @@ const route = '/lookup';
 const issueRoute = '/issue';
 const historicalCodePattern = /^KC-[A-F0-9]{28}$/;
 const supportedPlans = new Map([
-  ['plus', 'plus'], ['pro100', 'pro_5x'], ['pro_5x', 'pro_5x'], ['pro200', 'pro_20x'], ['pro_20x', 'pro_20x']
+  ['plus', 'plus'], ['pro100', 'pro_5x'], ['pro_5x', 'pro_5x'], ['pro200', 'pro_20x'], ['pro_20x', 'pro_20x'],
+  ['pro500', 'pro500']
 ]);
 
 export function storefrontRechargePlan(plan) {

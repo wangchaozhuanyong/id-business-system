@@ -18,7 +18,7 @@
     awaiting_review: '结果待核对，请查询原请求，避免重复提交。',
     expired: '授权已过期，请回原网站重新发起。'
   };
-  const plans = { plus: 'Plus', pro_5x: 'Pro 100', pro_20x: 'Pro 200' };
+  const plans = { plus: 'Plus', pro_5x: 'Pro 100', pro_20x: 'Pro 200', pro500: 'Pro 500' };
   let submitting = false;
   let busy = false;
   let uncertain = false;

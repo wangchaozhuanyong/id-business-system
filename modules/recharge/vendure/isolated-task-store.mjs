@@ -32,8 +32,9 @@ export function openIsolatedRechargeStore({ file, storageKey }) {
   const key = Buffer.from(storageKey);
   const fingerprint = (purpose, value) =>
     createHmac('sha256', key).update(purpose).update('\0').update(value).digest('hex');
-  const integrity = (revision, payload) =>
-    fingerprint('snapshot', JSON.stringify([revision, payload]));
+  // After reconciliation, older processes must not open this snapshot and write without the fences.
+  const integrity = (revision, payload, fenced) =>
+    fingerprint(fenced ? 'snapshot-with-blocked-submissions' : 'snapshot', JSON.stringify([revision, payload]));
 
   try {
     db.exec(`
@@ -59,20 +60,16 @@ export function openIsolatedRechargeStore({ file, storageKey }) {
     );
     function load() {
       const row = read.get();
-      if (
-        !row ||
-        !Number.isSafeInteger(row.revision) ||
-        !/^[a-f0-9]{64}$/.test(row.integrity) ||
-        !timingSafeEqual(
-          Buffer.from(row.integrity, 'hex'),
-          Buffer.from(integrity(row.revision, row.payload), 'hex')
-        )
-      ) {
+      if (!row || !Number.isSafeInteger(row.revision) || !/^[a-f0-9]{64}$/.test(row.integrity))
         throw new Error('隔离任务库校验失败，请核对原存储与密钥');
-      }
       const state = JSON.parse(row.payload);
-      if (!Array.isArray(state?.tasks) || !Array.isArray(state.nonces))
+      if (!Array.isArray(state?.tasks) || !Array.isArray(state.nonces) ||
+          (state.blockedSubmissions !== undefined && (!Array.isArray(state.blockedSubmissions) ||
+            !state.blockedSubmissions.every(ref => typeof ref === 'string' && /^[a-f0-9]{64}$/.test(ref)))))
         throw new Error('隔离任务库结构无效');
+      if (!timingSafeEqual(Buffer.from(row.integrity, 'hex'),
+          Buffer.from(integrity(row.revision, row.payload, Boolean(state.blockedSubmissions?.length)), 'hex')))
+        throw new Error('隔离任务库校验失败，请核对原存储与密钥');
       return { revision: row.revision, state };
     }
     load();
@@ -84,7 +81,8 @@ export function openIsolatedRechargeStore({ file, storageKey }) {
         const revision = expectedRevision + 1;
         const payload = JSON.stringify(state);
         // One SQLite statement commits the reservation, lease or result and its nonce together.
-        const result = write.run(revision, payload, integrity(revision, payload), expectedRevision);
+        const signature = integrity(revision, payload, Boolean(state.blockedSubmissions?.length));
+        const result = write.run(revision, payload, signature, expectedRevision);
         if (result.changes !== 1) throw new Error('隔离任务库版本已变化，请重新读取');
         return revision;
       },

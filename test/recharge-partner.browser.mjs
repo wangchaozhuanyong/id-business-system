@@ -93,6 +93,7 @@ test('partner admin issues and copies only the scoped key and codes with the sha
     });
     const source = { apiOrigin: origin, apiBase: origin + '/api/recharge/v1', partners: [], batches: [], page: 1, pages: 1 };
     const key = 'synthetic-api-key-only';
+    const newKey = 'synthetic-rotated-key-only';
     const code = 'RA-' + 'A'.repeat(32);
     const partner = { id: 'rp_' + 'b'.repeat(24), name: '测试合作方', createdAt: '2026-11-14T12:00:00Z' };
     const actions = [];
@@ -104,7 +105,8 @@ test('partner admin issues and copies only the scoped key and codes with the sha
         source.partners.push(partner);
         return route.fulfill({ status: 201, json: { partner, apiKey: key } });
       }
-      const batch = { id: 'synthetic-batch', partnerId: partner.id, plan: 'plus', batchNo: 'PO000001', codes: [code] };
+      if (input.action === 'rotate') return route.fulfill({ json: { partner, apiKey: newKey } });
+      const batch = { id: 'synthetic-batch', partnerId: partner.id, plan: input.plan, batchNo: 'PO000001', codes: [code] };
       source.batches.push(batch);
       return route.fulfill({ status: 201, json: { batch } });
     });
@@ -120,10 +122,19 @@ test('partner admin issues and copies only the scoped key and codes with the sha
     await page.locator('[data-action="recharge-partner-close"]').click();
     assert.equal(await page.getByLabel('API 密钥', { exact: true }).inputValue(), '');
     await page.getByLabel('合作方', { exact: true }).selectOption(partner.id);
+    await page.getByLabel('套餐', { exact: true }).selectOption({ label: 'Pro 500' });
     await page.getByRole('button', { name: '发放兑换码', exact: true }).click();
+    await page.locator('[data-partner-batches]').getByText('Pro 500', { exact: true }).waitFor();
     await page.getByRole('button', { name: '复制兑换码', exact: true }).click();
     await page.waitForFunction(value => window.fixtureCopied === value, code);
-    assert.deepEqual(actions.map(input => input.action), ['create', 'issue']);
+    page.once('dialog', dialog => dialog.accept());
+    await page.getByRole('button', { name: '更换密钥', exact: true }).click();
+    await page.getByRole('button', { name: '复制接入资料', exact: true }).click();
+    await page.waitForFunction(value => window.fixtureCopied?.includes(value), newKey);
+    assert(!(await page.locator('body').innerText()).includes(newKey));
+    await page.locator('[data-action="recharge-partner-close"]').click();
+    assert.deepEqual(actions.map(input => input.action), ['create', 'issue', 'rotate']);
+    assert.equal(actions[1].plan, 'pro500');
     assert(actions.every(input => Boolean(input.operationId)));
     await page.setViewportSize({ width: 390, height: 844 });
     assert(await page.getByRole('button', { name: '复制兑换码', exact: true }).isVisible());
@@ -137,7 +148,7 @@ test('ID authorization page shows the account locally, posts consent once, and c
     const browser = await chromium.launch();
     t.after(() => browser.close());
     const html = await readFile(new URL('../frontend/recharge-partner-authorize.html', import.meta.url));
-    for (const width of [1440, 390]) {
+    for (const [width, plan, label] of [[1440, 'plus', 'Plus'], [390, 'pro500', 'Pro 500']]) {
       const context = await browser.newContext({ viewport: { width, height: 850 } });
       const source = await interceptDesign(context, { skipRechargeAssets: true });
       await context.route('**/recharge/authorize', route => route.fulfill({ body: html, contentType: 'text/html' }));
@@ -151,10 +162,11 @@ test('ID authorization page shows the account locally, posts consent once, and c
           status = 'queued';
           return route.fulfill({ status: 503, json: {} });
         }
-        return route.fulfill({ json: { id: fixtureReference, partner: '测试合作方', plan: 'plus', status } });
+        return route.fulfill({ json: { id: fixtureReference, partner: '测试合作方', plan, status } });
       });
       const page = await context.newPage();
       await page.goto(origin + '/recharge/authorize#' + fixtureReference + '.' + fixtureTicket);
+      await page.locator('#authorization-plan').getByText(label, { exact: true }).waitFor();
       const help = page.getByLabel('充值授权说明');
       const note = page.getByRole('note');
       const statusLabel = page.locator('#authorization-status');

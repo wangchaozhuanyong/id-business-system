@@ -109,8 +109,10 @@ def require_reviewed_receipt(db, receipt):
         return hmac.new(key, (purpose + "\0" + value).encode(), hashlib.sha256).hexdigest()
 
     snapshot = json.dumps([revision, payload], ensure_ascii=False, separators=(",", ":"))
-    require(hmac.compare_digest(integrity, fingerprint("snapshot", snapshot)), "gateway_retry_snapshot_mismatch")
-    tasks = json.loads(payload)["tasks"]
+    state = json.loads(payload)
+    purpose = "snapshot-with-blocked-submissions" if state.get("blockedSubmissions") else "snapshot"
+    require(hmac.compare_digest(integrity, fingerprint(purpose, snapshot)), "gateway_retry_snapshot_mismatch")
+    tasks = state["tasks"]
     matches = [task for task in tasks if hashlib.sha256(task["id"].encode()).hexdigest() == receipt]
     require(len(matches) == 1, "gateway_retry_receipt_missing")
     task, = matches

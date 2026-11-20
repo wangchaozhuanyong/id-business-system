@@ -1,17 +1,18 @@
 import assert from 'node:assert/strict';
-import { createHmac, randomBytes } from 'node:crypto';
+import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdir, mkdtemp, readFile, realpath, rm, stat } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { DatabaseSync } from 'node:sqlite';
 import test from 'node:test';
 import { createOrderRechargeClient } from '../server/order-recharge-client.mjs';
 import { startPreview } from '../server/preview.mjs';
 import { startVendureTaskService } from '../server/vendure-task-service.mjs';
 import { createVendureCodexdaichongWorker } from '../modules/recharge/vendure/codexdaichong-worker.mjs';
 import {
-  createStorefrontAdmissionClient, listenStorefrontAdmission, storefrontAdmissionSocketName
+  createStorefrontAdmissionClient, listenStorefrontAdmission, moyaoRechargeChannel, storefrontAdmissionSocketName
 } from '../modules/recharge/vendure/admission.mjs';
 import {
   createLoopbackVendureRechargeBridge,
@@ -137,12 +138,80 @@ async function fixture(t, { durable = false, throughHost = false, lookupAdmissio
     },
     readFile: () => readFile(file),
     inspect: () => store.load(),
+    acceptsLegacySignature: () => {
+      const db = new DatabaseSync(file, { readOnly: true });
+      try {
+        const { revision, payload, integrity } = db.prepare(
+          'SELECT revision, payload, integrity FROM vendure_recharge_isolated_state WHERE id = 1'
+        ).get();
+        return integrity === store.fingerprint('snapshot', JSON.stringify([revision, payload]));
+      } finally { db.close(); }
+    },
     openWithWrongKey: () => openIsolatedRechargeStore({ file, storageKey: randomBytes(32) }),
     advance: (ms) => {
       at += ms;
     }
   };
 }
+
+test('ordinary recovery fences an in-flight submission and its durable snapshot fails closed on old readers', async t => {
+  const arrived = Promise.withResolvers();
+  const gate = Promise.withResolvers();
+  let paused = true;
+  const f = await fixture(t, { durable: true, lookupAdmission: async () => {
+    if (paused) { arrived.resolve(); await gate.promise; }
+    return { plan: 'pro500', status: 'available' };
+  } });
+  const headers = { 'x-vendure-recharge-channel': moyaoRechargeChannel };
+  const post = (action, body) => f.vendure(action, body, headers);
+  const code = 'KC-' + 'A'.repeat(15);
+  const submissionId = randomUUID();
+  assert.deepEqual((await post('config', {})).body, { maintenance: false, reconciliationVersion: 1 });
+  assert.deepEqual((await f.vendure('config', {}, { 'x-vendure-recharge-channel': 'other-store' })).body,
+    { maintenance: true });
+  assert.equal((await f.vendure('task', { action: 'reconcile', code, submissionId },
+    { ...headers, 'x-vendure-recharge-key': 'invalid' })).status, 401);
+  assert.equal((await post('task', { action: 'reconcile', code, submissionId, taskToken: 'invalid' })).status, 400);
+  assert.equal((await post('task', { action: 'other', code, submissionId })).status, 400);
+  assert.equal((await post('task', { code, submissionId })).status, 400);
+  assert.equal((await post('reconcile', { action: 'reconcile', code, submissionId })).status, 404);
+  assert.equal(f.acceptsLegacySignature(), true);
+  const original = post('submit', { code, submissionId, session: authorization() });
+  await arrived.promise;
+  try {
+    assert.equal((await f.vendure('task', { action: 'reconcile', code, submissionId },
+      { 'x-vendure-recharge-channel': 'other-store' })).status, 400);
+    assert.equal((await post('task', { action: 'reconcile', code, submissionId: [submissionId] })).status, 400);
+    f.fault('before');
+    assert.equal((await post('task', { action: 'reconcile', code, submissionId })).status, 503);
+    assert.equal(f.acceptsLegacySignature(), true);
+    assert.deepEqual((await post('task', { action: 'reconcile', code, submissionId })).body, { fenced: true });
+    assert.equal(f.acceptsLegacySignature(), false);
+  } finally {
+    paused = false;
+    gate.resolve();
+  }
+  assert.deepEqual((await original).body, { rejected: true });
+  assert.equal((await f.worker('claim')).body.task, null);
+  await f.restart();
+  assert.deepEqual((await post('submit', { code, submissionId, session: authorization() })).body, { rejected: true });
+  const newRequest = { code, submissionId: randomUUID() };
+  assert.equal((await post('submit', { ...newRequest, session: authorization() })).body.status, 'queued');
+  assert.deepEqual((await post('task', { action: 'reconcile', ...newRequest })).body, { fenced: false });
+  assert.equal(f.inspect().state.tasks.length, 1);
+  assert.equal(f.inspect().state.blockedSubmissions.length, 1);
+});
+
+test('older ordinary holds fence all prior unidentified submissions but allow a new identified attempt', async t => {
+  const f = await fixture(t, { lookupAdmission: async () => ({ plan: 'plus', status: 'available' }) });
+  const headers = { 'x-vendure-recharge-channel': moyaoRechargeChannel };
+  const post = (action, body) => f.vendure(action, body, headers);
+  const code = 'KC-' + 'B'.repeat(15);
+  assert.deepEqual((await post('task', { action: 'reconcile', code })).body, { fenced: true });
+  assert.deepEqual((await post('submit', { code, session: authorization() })).body, { rejected: true });
+  assert.equal((await post('submit', { code, submissionId: randomUUID(), session: authorization() })).body.status, 'queued');
+  assert.equal((await f.worker('claim')).body.task.plan, 'plus');
+});
 
 test('standalone task service separates the store and worker listeners and refuses concurrent ownership', async (t) => {
   const runtime = fileURLToPath(new URL('../.runtime', import.meta.url));
@@ -548,7 +617,7 @@ test('the original source decides code validity without an issuance record and r
   const directory = await mkdtemp(join(runtime, 'a-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const code = 'KC-' + 'ABCD'.repeat(7);
-  const [hold, outage, other, used] = ['K', 'M', 'N', 'P'].map(letter => 'KC-' + letter.repeat(15));
+  const [hold, outage, other, used, pro500] = ['K', 'M', 'N', 'P', 'R'].map(letter => 'KC-' + letter.repeat(15));
   let lookups = 0;
   const native = createOrderRechargeClient({
     upstreamUrl: 'http://127.0.0.1:44575', secret: 's'.repeat(40)
@@ -557,7 +626,7 @@ test('the original source decides code validity without an issuance record and r
       assert.equal(options.method, 'GET');
       assert.ok([hold, used].includes(url.searchParams.get('cdk')));
       return Response.json({
-        success: true, data: { planType: 'plus', type: '自助', accountEmail: 'private@example.test' }
+        success: true, data: { planType: url.searchParams.get('cdk') === used ? 'pro500' : 'plus', type: '自助', accountEmail: 'private@example.test' }
       });
     }
     assert.equal(url.pathname, '/api/verify-cdk');
@@ -565,6 +634,7 @@ test('the original source decides code validity without an issuance record and r
     const { cdk } = JSON.parse(options.body);
     if (cdk === outage) return new Response(null, { status: 503 });
     if (cdk === code) return Response.json({ success: true, data: { plan_type: 'pro_20x', type: '自助' } });
+    if (cdk === pro500) return Response.json({ success: true, data: { plan_type: 'pro500', type: '自助' } });
     if (cdk === hold)
       return Response.json({ success: false, code: 'manual_review_required' }, { status: 409 });
     const message = cdk === used ? '该 CDK 已使用' : '无效 CDK';
@@ -600,7 +670,7 @@ test('the original source decides code validity without an issuance record and r
   assert.deepEqual((await shop('query', { code: hold })).body, {
     plan: 'plus', status: 'reserved', reason: 'manual_review_required', task: null
   });
-  assert.deepEqual((await shop('verify', { code: used })).body, { plan: 'plus', status: 'used' });
+  assert.deepEqual((await shop('verify', { code: used })).body, { plan: 'pro500', status: 'used' });
   open = true;
   assert.equal((await shop('config')).body.maintenance, false);
   assert.deepEqual((await shop('submit', { code: hold, session })).body, { rejected: true });
@@ -618,6 +688,13 @@ test('the original source decides code validity without an issuance record and r
   const claim = (await f.worker('claim')).body.task;
   assert.equal(claim.executionCode, code);
   assert.equal(claim.id, first.body.id);
+  assert.deepEqual((await shop('verify', { code: pro500 })).body, { plan: 'pro500', status: 'available' });
+  const premium = (await shop('submit', { code: pro500, session })).body;
+  const premiumClaim = (await f.worker('claim')).body.task;
+  assert.equal(premium.plan, 'pro500');
+  assert.equal(premiumClaim.id, premium.id);
+  assert.equal(premiumClaim.executionCode, pro500);
+  assert.equal(premiumClaim.plan, 'pro500');
   assert.equal((await f.worker('claim')).body.task, null);
   await f.restart();
   const before = lookups;
