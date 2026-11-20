@@ -78,6 +78,32 @@ async function readPresentationJson(stream, limit) {
   return JSON.parse(Buffer.concat(chunks));
 }
 
+async function writeCardImportReceipt(reply, res, cards, finish) {
+  const body = await readPresentationJson(reply, 1024 * 1024);
+  const { success, imported, skipped, failed, failures, assignedPlans, planPolicy } = body;
+  if (success !== true || !Array.isArray(cards) ||
+      [imported, skipped, failed].some(count => !Number.isSafeInteger(count) || count < 0) ||
+      imported + skipped + failed !== cards.length || !Array.isArray(failures) || failures.length !== failed)
+    throw new Error('银行卡导入回执无效');
+  const rejected = new Set(failures.map(item => item?.index));
+  if (rejected.size !== failed ||
+      [...rejected].some(index => !Number.isSafeInteger(index) || index < 0 || index >= cards.length))
+    throw new Error('银行卡导入回执无效');
+
+  let importTypes;
+  if (imported + skipped) {
+    try {
+      const numbers = new Set(cards.flatMap((card, index) => rejected.has(index) ? [] :
+        [String(card?.card_number || '').replace(/[\s-]+/g, '')]));
+      importTypes = await finish(numbers);
+    } catch { /* The pool write is confirmed. The type assignment still needs checking. */ }
+  }
+  if (res.destroyed) return;
+  res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store',
+    'X-Content-Type-Options': 'nosniff' });
+  res.end(JSON.stringify({ success, imported, skipped, failed, assignedPlans, planPolicy, importTypes }));
+}
+
 function browserTaskRow(value) {
   const row = value || {};
   const progress = Number(row.progress);
@@ -261,6 +287,7 @@ export function createCodexdaichongGateway({
   onRechargeOutcome,
   beforeCardDelete,
   beforeCardWrite,
+  prepareCardTypeImport,
   onCardPlanChange,
   assets = loadCodexdaichongAssets
 }) {
@@ -334,7 +361,8 @@ export function createCodexdaichongGateway({
       return respond(res, 403, '此入口用于服务间调用');
     }
     const resolvePrincipal = external ? getExternalCardPrincipal : getUnifiedPrincipal;
-    const actor = safePrincipal(await resolvePrincipal(req));
+    const principal = await resolvePrincipal(req);
+    const actor = safePrincipal(principal);
     if (!actor) return respond(res, 401, '请通过统一账号登录');
     if ((scope === 'admin' || external || path.pathname === '/admin') && !actor.admin) {
       return respond(res, 403, '当前账号没有充值管理权限');
@@ -404,9 +432,11 @@ export function createCodexdaichongGateway({
     }
     const extraHeaders = external ? filterHeaders(req.headers, ['x-api-key']) : {};
     let bufferedBody;
-    if (beforeCardWrite && req.method === 'POST') {
+    let typedImport;
+    const cardImport = req.method === 'POST' && /^\/api\/admin\/cards\/import\/?$/i.test(path.pathname);
+    if ((beforeCardWrite || (cardImport && prepareCardTypeImport)) && req.method === 'POST') {
       const restore = /^\/api\/admin\/orbitcard\/cards\/([^/]+)\/restore\/?$/i.exec(path.pathname);
-      const kind = external || /^\/api\/admin\/cards\/import\/?$/i.test(path.pathname) ? 'import'
+      const kind = external || cardImport ? 'import'
         : /^\/api\/admin\/config\/?$/i.test(path.pathname) ? 'config' : '';
       if (restore || kind) {
         let data, id;
@@ -422,9 +452,22 @@ export function createCodexdaichongGateway({
             data = await readPresentationJson(req, 15 * 1024 * 1024);
           }
         } catch { return respond(res, 400, '无法读取银行卡池操作'); }
-        try { await beforeCardWrite({ id, kind, data }); }
+        try { await beforeCardWrite?.({ id, kind, data }); }
         catch (error) {
           return error.status === 409 ? respond(res, 409, error.message) : respond(res, 503, '暂时无法核对银行卡冻结状态');
+        }
+        if (cardImport && Object.hasOwn(data || {}, 'typeId')) {
+          if (!actor.sensitive) return respond(res, 403, '没有导入充值银行卡的权限');
+          if (!prepareCardTypeImport) return respond(res, 503, '银行卡类型暂时不可用');
+          const { typeId, ...nativeBody } = data;
+          try {
+            const finish = prepareCardTypeImport(typeId, { id: actor.id, name: principal.name });
+            typedImport = { cards: nativeBody.cards, finish };
+          }
+          catch (error) {
+            return error.status === 400 ? respond(res, 400, error.message) : respond(res, 503, '银行卡类型暂时不可用');
+          }
+          data = nativeBody;
         }
         if (kind) {
           bufferedBody = Buffer.from(JSON.stringify(data));
@@ -487,6 +530,20 @@ export function createCodexdaichongGateway({
           });
           return;
         }
+        if (onCardPlanChange && actor.sensitive && reply.statusCode === 200 &&
+            ((req.method === 'PUT' && path.pathname === '/api/admin/cards/plan-policy') ||
+             cardImport)) {
+          const value = reply.headers['x-id-recharge-card-plan-version'];
+          if (typeof value === 'string' && /^\d{1,16}$/.test(value) && Number.isSafeInteger(Number(value))) {
+            try { onCardPlanChange(Number(value)); } catch { /* The native write is already committed. */ }
+          }
+        }
+        if (typedImport && reply.statusCode === 200) {
+          void writeCardImportReceipt(reply, res, typedImport.cards, typedImport.finish).catch(() => {
+            if (!res.destroyed) respond(res, 502, '导入回执待核对，请先刷新卡池查看');
+          });
+          return;
+        }
         res.writeHead(reply.statusCode, {
           ...filterHeaders(reply.headers, responseHeaders),
           'Cache-Control': 'no-store',
@@ -494,14 +551,6 @@ export function createCodexdaichongGateway({
         });
         if (onRechargeOutcome && req.method === 'POST' && path.pathname === '/api/run-process' && reply.statusCode === 409)
           observeRouteRejection(reply, onRechargeOutcome);
-        if (onCardPlanChange && actor.sensitive && reply.statusCode === 200 &&
-            ((req.method === 'PUT' && path.pathname === '/api/admin/cards/plan-policy') ||
-             (req.method === 'POST' && path.pathname === '/api/admin/cards/import'))) {
-          const value = reply.headers['x-id-recharge-card-plan-version'];
-          if (typeof value === 'string' && /^\d{1,16}$/.test(value) && Number.isSafeInteger(Number(value))) {
-            try { onCardPlanChange(Number(value)); } catch { /* The native write is already committed. */ }
-          }
-        }
         reply.on('error', () => res.destroy());
         reply.pipe(res);
       }

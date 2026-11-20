@@ -32,7 +32,8 @@ import { productionDataPaths } from './production-data.mjs';
 import { createOrderRechargeClient, readPoolCards } from './order-recharge-client.mjs';
 import { createOrderAuxiliaryHandler, orderAuxiliaryRoutes } from './order-auxiliary.mjs';
 import {
-  cardManagementRoutes, checkFrozenCardPoolWrite, createCardManagementHandler, preserveReferencedOrderCard
+  cardManagementRoutes, checkFrozenCardPoolWrite, createCardManagementHandler, prepareRechargeCardTypeImport,
+  preserveReferencedOrderCard
 } from './card-management.mjs';
 import { claudeGoogleSubscriptionRoutes, createClaudeGoogleSubscriptionsHandler } from './claude-google-subscriptions.mjs';
 import { createSubscriptionHandler, subscriptionRoutes } from './subscription-management.mjs';
@@ -350,6 +351,8 @@ export async function startPreview(
             if (!store) throw new Error('订单资料尚未就绪');
             checkFrozenCardPoolWrite(store, command);
           },
+          prepareCardTypeImport: (typeId, actor) =>
+            prepareRechargeCardTypeImport(store, orderRechargeClient, typeId, actor),
           onCardPlanChange(version) {
             if (version <= nativeCardPlanVersion) return;
             nativeCardPlanVersion = version;

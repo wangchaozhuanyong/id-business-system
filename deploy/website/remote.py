@@ -46,6 +46,11 @@ WORKSPACE_PROGRESS_PRESENTATION_FILES = (
 TABLE_ACTIONS_STYLESHEET = "modules/recharge/codexdaichong/shell.css"
 CARD_IMPORT_ASSET_SOURCE = "modules/recharge/codexdaichong/assets.mjs"
 CARD_IMPORT_PRESENTATION_FILES = (CARD_IMPORT_ASSET_SOURCE, "frontend/pagination.js", "frontend/tabs.css")
+CARD_TYPE_IMPORT_INTEGRATION_FILES = (
+    CARD_IMPORT_ASSET_SOURCE, "modules/recharge/codexdaichong/card-type-overlay.mjs",
+    "modules/recharge/codexdaichong/gateway.mjs", "modules/recharge/codexdaichong/local-gateway.mjs",
+)
+CARD_TYPE_IMPORT_FILES = (*CARD_TYPE_IMPORT_INTEGRATION_FILES, "server/card-management.mjs", "server/preview.mjs")
 CARD_PLAN_PRESENTATION_FILES = (
     "modules/recharge/codexdaichong/card-plan-admin.mjs",
     "modules/recharge/codexdaichong/shell.css",
@@ -69,6 +74,7 @@ PRESENTATION_SCOPES = {
     "rechargeAdminWorkspacePresentation": (WORKSPACE_PROGRESS_PRESENTATION_FILES, {"/admin", "/admin.js", "/shell.js", "/shell.css"}),
     "tableActionsPresentation": ((TABLE_ACTIONS_STYLESHEET,), {"/shell.css"}),
     "cardImportPresentation": (CARD_IMPORT_PRESENTATION_FILES, {"/admin", "/admin.js", "/shell.css"}),
+    "cardTypeImportPresentation": (CARD_TYPE_IMPORT_FILES, {"/admin.js"}),
     "cardPlanPresentation": (CARD_PLAN_PRESENTATION_FILES, {"/admin", "/admin.js", "/shell.css"}),
     "checkoutDiagnosticPresentation": (CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES, {"/admin", "/admin.js", "/shell.css"}),
     "securityPresentation": (SECURITY_PRESENTATION_FILES, {"/admin.js"}),

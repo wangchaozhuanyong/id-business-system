@@ -5,7 +5,10 @@ import { test } from 'node:test';
 import { Script } from 'node:vm';
 import { loadCodexdaichongAssets } from '../modules/recharge/codexdaichong/assets.mjs';
 import { createCodexdaichongGateway } from '../modules/recharge/codexdaichong/gateway.mjs';
+import { createLocalCodexdaichongGateway } from '../modules/recharge/codexdaichong/local-gateway.mjs';
 import { createNativeRechargeAdapter } from '../modules/recharge/codexdaichong/native-adapter.mjs';
+import { cardTypeDocument, checkFrozenCardPoolWrite, prepareRechargeCardTypeImport } from '../server/card-management.mjs';
+import { createOrderRechargeClient } from '../server/order-recharge-client.mjs';
 
 const prefix = '/integrations/codexdaichong';
 const member = { id: 'u-1', email: 'member@example.test', admin: false, sensitive: false };
@@ -179,6 +182,134 @@ test('冻结卡写入检查拦截重新导入和恢复，其他配置按原入�
   const valid = { cards: [{ card_number: '4000000000000002' }] };
   assert.equal((await post(importPath, valid)).status, 200);
   assert.deepEqual(forwarded, [['/api/admin/config', config], [importPath, valid]]);
+});
+
+test('银行卡导入按完整卡号保存类型，浏览器回执和列表维持脱敏', async t => {
+  const origin = 'https://cards.example.test';
+  const secret = randomBytes(48).toString('base64url');
+  const selectedType = { id: 'selected-type', name: '合成导入类型', active: true };
+  const previousType = { id: 'previous-type', name: '合成原有类型', active: true };
+  const initialAssignments = { 'recharge:1': previousType.id };
+  let current = { version: 1, data: { items: [selectedType, previousType], assignments: initialAssignments } };
+  const audit = [];
+  const store = {
+    featureDocument: domain => domain === cardTypeDocument ? current : { version: 0, data: null },
+    saveFeatureDocument(domain, version, data, { action, actor, targetId }) {
+      assert.equal(domain, cardTypeDocument);
+      assert.equal(version, current.version);
+      audit.push({ domain, action, actorId: actor.id, actorName: actor.name, targetId });
+      current = { version: version + 1, data };
+      return current;
+    }
+  };
+
+  const duplicate = '4000000000000007';
+  const sameTail = '4100000000000007';
+  const failed = '4200000000000007';
+  const ambiguous = '4300000000000007';
+  const added = '5000000000000007';
+  const unconfirmed = '6000000000000007';
+  const poolCard = (id, card_number) => ({ id, card_number, last4: card_number.slice(-4), card_cvc: '007' });
+  const cards = [poolCard(1, duplicate), poolCard(2, sameTail), poolCard(3, failed),
+    poolCard(4, ambiguous), poolCard(5, ambiguous)];
+  const forwarded = [];
+  const confirmedVersions = [];
+  let readsUnavailable = false;
+  let privateReads = 0;
+  const engine = await listen(t, async (req, res) => {
+    if (req.method === 'GET' && req.url === '/api/admin/cards') {
+      privateReads++;
+      const result = readsUnavailable ? { success: false } : { success: true, cards };
+      return res.writeHead(readsUnavailable ? 503 : 200, { 'Content-Type': 'application/json' })
+        .end(JSON.stringify(result));
+    }
+    if (req.method !== 'POST' || req.url !== '/api/admin/cards/import') return res.writeHead(404).end();
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    forwarded.push(JSON.parse(Buffer.concat(chunks)));
+    const version = forwarded.length;
+    const isFirst = version === 1;
+    cards.push(isFirst ? poolCard(6, added) : poolCard(7, unconfirmed));
+    res.writeHead(200, {
+      'Content-Type': 'application/json',
+      'X-ID-Recharge-Card-Plan-Version': String(version)
+    });
+    res.end(JSON.stringify({
+      success: true, imported: 1, assignedPlans: 1, planPolicy: { version, strict: false },
+      skipped: isFirst ? 2 : 0, failed: isFirst ? 1 : 0,
+      failures: isFirst ? [{ index: 2, errors: ['synthetic rejection ' + failed] }] : []
+    }));
+  });
+  let actor = { id: 'fixture-card-admin', name: '合成操作员', email: 'fixture@example.test', role: 'super', active: true };
+  const client = createOrderRechargeClient({ upstreamUrl: engine, secret });
+  const gateway = createLocalCodexdaichongGateway({
+    upstreamUrl: engine, publicOrigin: origin, secret, getActor: () => actor,
+    beforeCardWrite: command => checkFrozenCardPoolWrite(store, command),
+    prepareCardTypeImport: (typeId, principal) => prepareRechargeCardTypeImport(store, client, typeId, principal),
+    onCardPlanChange: version => confirmedVersions.push(version)
+  });
+  const host = await listen(t, gateway.handle);
+  const request = host + prefix + '/api/admin/cards';
+  const importCards = (data, typeId = selectedType.id) => fetch(request + '/import', {
+    method: 'POST', headers: { Origin: origin, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...data, typeId })
+  });
+  const batch = {
+    cards: ['5000 0000 0000-0007', duplicate, failed, ambiguous].map(card_number =>
+      ({ card_number, card_expiry: '01/30', card_cvc: '007' })),
+    allowedPlans: ['pro200'], planVersion: 0
+  };
+
+  let response = await importCards(batch, 'unknown-type');
+  assert.equal(response.status, 400);
+  await response.arrayBuffer();
+  actor = { ...actor, role: 'admin' };
+  response = await importCards(batch);
+  assert.equal(response.status, 403);
+  await response.arrayBuffer();
+  assert.deepEqual(forwarded, []);
+  assert.equal(privateReads, 0);
+  actor = { ...actor, role: 'super' };
+
+  response = await importCards(batch);
+  assert.equal(response.status, 200);
+  const receipt = await response.json();
+  assert.deepEqual(receipt.importTypes, { assigned: 1, alreadyAssigned: 0, conflict: 1, missing: 1 });
+  assert.equal(receipt.assignedPlans, 1);
+  assert.equal(receipt.failed, 1);
+  assert.equal(response.headers.get('x-id-recharge-card-plan-version'), null);
+  assert.deepEqual(forwarded, [batch]);
+  assert.equal(privateReads, 1);
+  const expectedAssignments = { ...initialAssignments, 'recharge:6': selectedType.id };
+  assert.deepEqual(store.featureDocument(cardTypeDocument).data.assignments, expectedAssignments);
+
+  response = await fetch(request);
+  assert.equal(response.status, 200);
+  const pool = await response.json();
+  assert.equal(pool.cards.length, 6);
+  assert(pool.cards.every(card => card.card_number === '****0007' && !Object.hasOwn(card, 'card_cvc')));
+
+  readsUnavailable = true;
+  const secondBatch = {
+    ...batch, cards: [{ ...batch.cards[0], card_number: unconfirmed }], planVersion: 1
+  };
+  response = await importCards(secondBatch);
+  assert.equal(response.status, 200);
+  const partialReceipt = await response.json();
+  assert.equal(partialReceipt.imported, 1);
+  assert(!Object.hasOwn(partialReceipt, 'importTypes'));
+  assert.deepEqual(forwarded, [batch, secondBatch]);
+  assert.deepEqual(confirmedVersions, [1, 2]);
+  assert.equal(privateReads, 3);
+  assert.deepEqual(store.featureDocument(cardTypeDocument).data.assignments, expectedAssignments);
+  assert.equal(audit.length, 1);
+  assert.equal(audit[0].action, '设置本批充值银行卡类型');
+  assert.equal(audit[0].actorId, actor.id);
+  assert.equal(audit[0].actorName, actor.name);
+  assert.equal(audit[0].targetId, selectedType.id);
+  const publicData = JSON.stringify([receipt, partialReceipt, pool, audit]);
+  for (const number of [duplicate, sameTail, failed, ambiguous, added, unconfirmed]) assert(!publicData.includes(number));
+  assert(!publicData.includes('synthetic rejection'));
 });
 
 test('browser progress uses only confirmed native receipts and never resends a submission', async (t) => {
