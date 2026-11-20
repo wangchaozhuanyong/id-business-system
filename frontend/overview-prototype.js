@@ -7,7 +7,6 @@
   const business = window.IDLocalData;
   const draftKey = 'overview:filters';
   const rechargeRequestsRoute = 'workspace/recharge-codes';
-  const ranges = [['today', '今日'], ['week', '近 7 天'], ['month', '近 30 天']];
   const chartModes = [['orders', '订单量'], ['profit', '自动计算利润']];
   const dateBases = [['created', '订单录入日'], ['opened', '实际开通日']];
   const currencies = [['CNY', '人民币 CNY'], ['MYR', '马币 MYR']];
@@ -108,7 +107,7 @@
       ]);
       snapshot.commerce = section('commerce', summary?.commerce);
       if (allowed('customers/list')) snapshot.customers = section('customers', customers);
-      for (const range of [...ranges.map(([id]) => id), ...(key.custom ? ['custom'] : [])])
+      for (const range of [...window.IDDateFilter.presets.map(([id]) => id), ...(key.custom ? ['custom'] : [])])
         snapshot['profit:' + range] = section('profit:' + range, summary?.profit?.[range]);
     }
     if (key.apple) snapshot.apple = section('apple', await readSource(() =>
@@ -183,10 +182,10 @@
     return `<div class="overview-heading"><div class="section-title-row"><h2 id="overview-${id}">${title}</h2>${A.titleInfo(title, note, `overview-${id}-note`)}</div>${action}</div>`;
   }
 
-  function renderControls(items, selected, name, label, extra = '') {
+  function renderControls(items, selected, name, label) {
     return `<div class="overview-controls" role="group" aria-label="${label}">${items.map(([id, title]) =>
       A.button(title, 'overview-' + name, id === selected ? 'primary' : '', '',
-        `data-value="${id}" aria-pressed="${id === selected}"`)).join('')}${extra}</div>`;
+        `data-value="${id}" aria-pressed="${id === selected}"`)).join('')}</div>`;
   }
 
   function metricCard(id, value, note, extra = '') {
@@ -254,7 +253,7 @@
       ? `，变化最大的是 ${product}（${changeText(delta, '笔')}）` : ''}。`;
   }
 
-  function chartMarkup(series, mode, label, range, currency) {
+  function chartMarkup(series, mode, label, hourly, currency) {
     const isProfit = mode === 'profit';
     // Convert only the SVG coordinates to numbers. Display and totals keep the exact decimal strings.
     const values = isProfit ? series.map(row => Number(profitValue(row)))
@@ -273,7 +272,7 @@
       const center = slot * (index + 0.5);
       const amount = profitValue(row);
       const value = Number(amount);
-      const date = dayFormatter.format(row.at) + (range === 'today' ? ' ' + hourFormatter.format(row.at) : '');
+      const date = dayFormatter.format(row.at) + (hourly ? ' ' + hourFormatter.format(row.at) : '');
       const description = [date + '（北京时间）', ...(isProfit ? [
         amount == null ? '利润计算缺项' : `自动计算利润：${moneyText(amount)} ${currency}`,
         `已核算：${countText(row.accounted)} 笔`, `计算缺项：${countText(row.pending)} 笔`
@@ -303,10 +302,11 @@
     const isProfit = mode === 'profit';
     const period = isProfit ? earnings?.current : activity?.current;
     const series = period?.series || [];
+    const hourly = range === 'today' || range === 'yesterday';
     const daysPerPoint = period?.daysPerPoint || 1;
     const crossesYear = period && dayFormatter.format(period.start).slice(0, 4) !== dayFormatter.format(period.end).slice(0, 4);
     const dayLabel = value => crossesYear ? dayFormatter.format(value) : dateFormatter.format(value);
-    const label = value => range === 'today' ? hourFormatter.format(value) : dayLabel(value);
+    const label = value => hourly ? hourFormatter.format(value) : dayLabel(value);
     const detailLabel = value => daysPerPoint > 1
       ? `${dayLabel(value)} 至 ${dayLabel(Math.min(period.end, value + (daysPerPoint - 1) * 86_400_000))}`
       : label(value);
@@ -318,17 +318,17 @@
         ? `${profitValue(row) == null ? '利润计算缺项' : `${moneyText(profitValue(row))} ${currency}`}${row.pending ? ` · 计算缺项 ${row.pending} 笔` : ''}`
         : `订单 ${countText(row.orders)} 笔 · 撤单 ${countText(row.cancelled)} 笔`}</span></li>`).join('');
     return `<section class="panel overview-section" aria-labelledby="overview-trend"><div class="panel-body">
-      ${heading('trend', '经营趋势', '今日按小时统计，其他范围按北京时间日期统计。长区间按多日分组，订单和撤单使用所选订单日期口径。', link('查看订单统计', statisticsRoute(activity?.current, currency, dateBasis), 'orders/statistics'))}
+      ${heading('trend', '经营趋势', '今日和昨日按小时统计，其他范围按北京时间日期统计。长区间按多日分组，订单和撤单使用所选订单日期口径。', link('查看订单统计', statisticsRoute(activity?.current, currency, dateBasis), 'orders/statistics'))}
       <div class="overview-chart-tools">${renderControls(chartModes, mode, 'chart', '趋势指标')}
         <div class="overview-legend">${daysPerPoint > 1 ? `<span>每 ${daysPerPoint} 天汇总</span>` : ''}${isProfit
           ? `<span><i></i>自动计算利润（${currency}）</span><span><i class="overview-key-incomplete"></i>计算缺项</span>`
           : '<span><i></i>订单</span><span><i class="overview-key-cancelled"></i>撤单</span>'}</div>
       </div>
-      ${empty ? `<div class="overview-chart-empty">${E(empty)}</div>` : chartMarkup(series, mode, label, range, currency)}
+      ${empty ? `<div class="overview-chart-empty">${E(empty)}</div>` : chartMarkup(series, mode, label, hourly, currency)}
       ${period && section?.phase === 'error' ? `<p class="overview-section-note overview-warning">${E(sectionStatus(section))}</p>` : ''}
       ${activity?.current ? `<p class="overview-insight">${A.icon('info')}<span>${E(orderInsight(activity))}</span></p>` : ''}
       ${details ? `<details class="overview-daily" data-overview-details${detailsOpen ? ' open' : ''}>
-        <summary>查看${range === 'today' ? '每小时' : daysPerPoint > 1 ? '分段' : '每日'}数据</summary><ul>${details}</ul></details>` : ''}
+        <summary>查看${hourly ? '每小时' : daysPerPoint > 1 ? '分段' : '每日'}数据</summary><ul>${details}</ul></details>` : ''}
       </div></section>`;
   }
 
@@ -480,7 +480,8 @@
   }
 
   function renderToolbar(finance, activity, section, range, dateBasis, currency) {
-    const custom = range === 'custom';
+    const dates = A.state.drafts.get(draftKey)?.custom;
+    const { from, to } = dates ? { from: dates[0], to: dates[1] } : window.IDDateFilter.range(range);
     const title = activity ? windowText(activity.current) : finance ? '统计区间' : '库存快照';
     const compactTitle = activity
       ? `${dateFormatter.format(activity.current.start)}–${dateFormatter.format(activity.current.end)}` : title;
@@ -495,13 +496,8 @@
         ${A.textAction(compactTitle, 'overview-period', 'aria-label="查看统计区间与更新时间" aria-haspopup="dialog"', 'overview-period-compact')}
       </div>
       <div class="overview-actions">
-        ${finance ? renderControls(ranges, range, 'range', '统计时间范围',
-          A.button('自定义日期', 'overview-date-range', custom ? 'primary' : '', '',
-            `aria-haspopup="dialog" aria-pressed="${custom}"`)) +
-          `<select id="overview-range-compact" aria-label="统计时间范围">${ranges.map(([id, label]) =>
-            `<option value="${id}"${id === range ? ' selected' : ''}>${label}</option>`).join('')}${
-            custom ? '<option value="custom" selected>自定义区间</option>' : ''}
-            <option value="choose-custom">自定义日期</option></select>` : ''}
+        ${finance ? window.IDDateFilter.render({ id: 'overview-date', value: range, from, to,
+          label: '统计时间范围', max: dayFormatter.format(Date.now()), onSelect: selectRange }) : ''}
         ${finance ? `<div class="overview-accounting-filters">${accountingFilters(dateBasis, currency)}</div>` : ''}
         ${business ? `<button type="button" class="button overview-toolbar-action${section?.phase === 'error' ? ' overview-warning' : ''}"
           data-action="overview-refresh" aria-label="刷新数据" aria-describedby="overview-toolbar-status">${A.icon('refresh')}<span>刷新数据</span></button>` : ''}
@@ -537,7 +533,7 @@
     const finance = allowed('orders/statistics');
     const items = finance ? [
       ...metrics.map(([, title, note]) => [title, note]),
-      ['时间与对比', '预设区间包含今日。自定义区间包含起止日，今日截止到本次快照。比较区间向前平移相同天数。待办、库存和客户状态取当前快照。'],
+      ['时间与对比', '昨日取完整自然日，近 N 天包含今日。自定义区间包含起止日，今日截止到本次快照。比较区间向前平移相同天数。待办、库存和客户状态取当前快照。'],
       ['利润公式', '客户实际收款减客户退款得到净收款。实际总成本或适用费用合计减去渠道已到账回款得到净成本。逐单利润等于净收款减净成本。'],
       ['数据覆盖', '统计已录入的订单和已同步的代充订单。网站访问量、全量代充任务在各自模块核对。站点与执行器状态见监控中心。'],
       ['其他业务栏目', '网站访问和谷歌表格同步状态可在数据中心查看。Gemini、Grok 和 Claude 代充见各自栏目。']
@@ -567,40 +563,29 @@
   }
 
   function updateFilter(field, value) {
-    const items = { range: ranges, chart: chartModes, dateBasis: dateBases, currency: currencies }[field];
+    const items = { chart: chartModes, dateBasis: dateBases, currency: currencies }[field];
     if (!items.some(([id]) => id === value)) return;
     A.state.drafts.set(draftKey, { ...A.state.drafts.get(draftKey), [field]: value });
     A.render();
     if (field !== 'chart') void refreshOverview();
   }
 
-  function openDateRange() {
-    if (!overviewKey().finance) return;
-    const today = dayFormatter.format(Date.now());
-    const selected = A.state.drafts.get(draftKey)?.custom || [
-      dayFormatter.format(Date.now() - 6 * 86_400_000), today
-    ];
-    A.openDrawer('选择统计日期', '按北京时间统计，起止日均纳入统计。',
-      `<form id="overview-date-form" novalidate>
-        ${A.field('开始日期', 'overview-date-from', A.input('overview-date-from', selected[0], `type="date" max="${today}" required`), true)}
-        ${A.field('结束日期', 'overview-date-to', A.input('overview-date-to', selected[1], `type="date" max="${today}" required`), true)}
-      </form>`, '<button type="submit" class="button primary" form="overview-date-form">应用日期</button>');
+  function selectRange({ preset, from, to }) {
+    A.state.drafts.set(draftKey, { ...A.state.drafts.get(draftKey), range: preset,
+      ...(preset === 'custom' ? { custom: [from, to] } : {}) });
+    A.render();
+    void refreshOverview();
   }
 
   function onClick(action, node) {
-    if (action === 'overview-date-range') {
-      openDateRange();
-      return true;
-    }
     if (action === 'overview-refresh') {
       void A.withActionFeedback(node, () => refreshOverview({ refresh: true }),
         { pending: '', success: '总览数据已刷新', failure: '部分数据未能更新，请查看对应区块' });
       return true;
     }
-    if (action === 'overview-range' || action === 'overview-chart') {
-      const field = action === 'overview-range' ? 'range' : 'chart';
+    if (action === 'overview-chart') {
       const value = node.dataset.value;
-      updateFilter(field, value);
+      updateFilter('chart', value);
       A.$(`[data-action="${action}"][data-value="${value}"]`)?.focus({ preventScroll: true });
       return true;
     }
@@ -615,46 +600,16 @@
     return false;
   }
 
-  function onSubmit(form) {
-    if (form.id !== 'overview-date-form') return false;
-    if (A.state.route !== 'overview' || !overviewKey().finance) return true;
-    const from = form.elements['overview-date-from'].value;
-    const to = form.elements['overview-date-to'].value;
-    const today = dayFormatter.format(Date.now());
-    const date = /^\d{4}-\d{2}-\d{2}$/;
-    const fromError = !date.test(from) ? '请选择开始日期' : from > today ? '开始日期不能晚于今天' : '';
-    const toError = !date.test(to) ? '请选择结束日期' : to > today ? '结束日期不能晚于今天' :
-      from && to < from ? '结束日期不能早于开始日期' : '';
-    A.setError('overview-date-from', fromError);
-    A.setError('overview-date-to', toError);
-    if (fromError || toError) return true;
-    A.state.drafts.set(draftKey, { ...A.state.drafts.get(draftKey), range: 'custom', custom: [from, to] });
-    A.closeDrawer();
-    A.render();
-    A.$('[data-action="overview-date-range"]')?.focus({ preventScroll: true });
-    A.$('#overview-range-compact')?.focus({ preventScroll: true });
-    void refreshOverview();
-    return true;
-  }
-
   A.modules.overview = { refresh: refreshOverview };
   window.IDDesignModules.push({
-    id: 'overview', matches: route => route === 'overview', render, onClick, onSubmit,
+    id: 'overview', matches: route => route === 'overview', render, onClick,
     onChange(node) {
       if (node.dataset.overviewAccountingFilter) {
         updateFilter(node.dataset.overviewAccountingFilter, node.value);
         A.$('#' + node.id)?.focus({ preventScroll: true });
         return true;
       }
-      if (node.id !== 'overview-range-compact') return false;
-      if (node.value === 'choose-custom') {
-        node.value = A.state.drafts.get(draftKey)?.range || 'week';
-        openDateRange();
-        return true;
-      }
-      updateFilter('range', node.value);
-      A.$('#overview-range-compact')?.focus({ preventScroll: true });
-      return true;
+      return false;
     },
     afterRender({ routeChanged } = {}) {
       if (refreshing?.id === JSON.stringify(overviewKey())) bindOverviewRead();

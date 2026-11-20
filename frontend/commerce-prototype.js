@@ -6038,19 +6038,20 @@
     });
     return S.drafts.get(key);
   }
+  function filterDates(preset, from, to) {
+    return preset && preset !== 'all' && preset !== 'custom'
+      ? window.IDDateFilter.range(preset, orderEvaluationTime()) : { from, to };
+  }
   function entryRecordRows(kind, product, view) {
     const rows = kind === 'order' ? orders.filter(row => currencyFamily(row.product) === currencyFamily(product))
       : kind === 'tenant' ? tenants : customers;
-    const today = now().slice(0, 10);
-    const yesterday = beijingClock.format(parseDate(today + ' 12:00') - 86_400_000).slice(0, 10);
+    const { from, to } = filterDates(view.period, view.from, view.to);
     return rows.filter(row => {
       if (view.period === 'all') return true;
       const timestamp = parseDate(row.createdAt);
       if (!Number.isFinite(timestamp)) return false;
       const day = beijingClock.format(timestamp).slice(0, 10);
-      if (view.period === 'today') return day === today;
-      if (view.period === 'yesterday') return day === yesterday;
-      return (!view.from || day >= view.from) && (!view.to || day <= view.to);
+      return (!from || day >= from) && (!to || day <= to);
     }).sort((a, b) =>
       (parseDate(b.createdAt) || 0) - (parseDate(a.createdAt) || 0) || String(b.id).localeCompare(String(a.id))
     );
@@ -6127,19 +6128,10 @@
   }
   function entryRecordFilters(kind, product) {
     const view = entryView(kind, product);
-    return `<div class="entry-record-filters entry-periods" role="group" aria-label="录入时间">${[
-        ['all', '全部'], ['today', '今日'], ['yesterday', '昨日'], ['custom', '选择日期']
-      ].map(([id, label]) => A.button(label, 'commerce-entry-period', view.period === id ? 'primary compact' : 'compact', '',
-        `data-period="${id}" aria-pressed="${view.period === id}"${id === 'custom' ? ` aria-expanded="${Boolean(view.dateOpen || view.period === 'custom')}"` : ''}`)).join('')}</div>`;
-  }
-  function entryRecordDateRange(kind, product) {
-    const view = entryView(kind, product);
-    return `<div class="entry-date-range content-toolbar" ${view.dateOpen || view.period === 'custom' ? '' : 'hidden'}>
-        <label>开始日期<input type="date" data-entry-date="from" aria-label="开始日期" value="${E(view.fromDraft ?? view.from)}" /></label>
-        <label>结束日期<input type="date" data-entry-date="to" aria-label="结束日期" value="${E(view.toDraft ?? view.to)}" /></label>
-        ${A.button('查询', 'commerce-entry-query', 'primary')}
-        <p class="field-error" data-entry-date-error role="alert" hidden></p>
-      </div>`;
+    const id = 'commerce-entry-date-' + S.route.replace(/[^a-zA-Z0-9_-]/g, '-');
+    return `<div class="entry-record-filters">${window.IDDateFilter.render({ id, value: view.period,
+      from: view.from, to: view.to, all: true, compact: true, label: '录入时间', now: orderEvaluationTime(),
+      onSelect: applyEntryPeriod })}</div>`;
   }
   function entryWorkspace(form, kind, product = '') {
     const pending = localData && localPhase !== 'ready';
@@ -6165,7 +6157,6 @@
             ${periods}</div>
           <div class="entry-record-actions"><div class="search-field entry-record-search">${A.icon('search')}<input type="search" data-auto-search id="commerce-entry-search" aria-label="${searchLabel}" placeholder="${searchLabel}" value="${E(query)}" autocomplete="off" /></div>
             ${localData ? A.button('刷新', 'commerce-entry-refresh', 'compact', '', 'aria-label="刷新最近录入记录"') : ''}</div></div>
-        ${pending ? '' : entryRecordDateRange(kind, product)}
         <div class="entry-record-region design-async-region"><div data-entry-progress role="status" hidden></div><div class="entry-record-list">${pending
           ? entryLoadingState(title) : entryRecordList(kind, product)}</div></div>
         <p class="entry-record-error" data-entry-error role="status" hidden></p>
@@ -6203,41 +6194,13 @@
       updateEntryRecords(panel);
     });
   }
-  function applyEntryPeriod(button) {
-    const panel = button.closest('#commerce-entry-records');
+  function applyEntryPeriod({ preset, from, to }) {
+    const panel = $('#commerce-entry-records', A.activePageRegion?.());
     if (!panel) return;
     const view = entryView(panel.dataset.kind, panel.dataset.product);
-    if (button.dataset.period === 'custom') {
-      view.dateOpen = true;
-      button.setAttribute('aria-expanded', 'true');
-      panel.querySelector('.entry-date-range').hidden = false;
-      panel.querySelector('[data-entry-date="from"]').focus();
-      return;
-    }
-    if (button.dataset.period) {
-      view.period = button.dataset.period;
-      view.dateOpen = false;
-    }
-    else {
-      const from = panel.querySelector('[data-entry-date="from"]');
-      const to = panel.querySelector('[data-entry-date="to"]');
-      const error = panel.querySelector('[data-entry-date-error]');
-      const invalid = !from.value || !to.value || !from.validity.valid || !to.validity.valid || from.value > to.value;
-      error.hidden = !invalid;
-      if (invalid) {
-        error.textContent = '请选择完整日期范围，结束日期不能早于开始日期。';
-        (!from.value ? from : to).focus();
-        return;
-      }
-      view.period = 'custom';
-      view.from = from.value;
-      view.to = to.value;
-    }
-    view.page = 1;
+    Object.assign(view, { period: preset, page: 1, ...(preset === 'custom' ? { from, to } : {}) });
     panel.querySelector('.entry-record-filters').outerHTML = entryRecordFilters(panel.dataset.kind, panel.dataset.product);
-    panel.querySelector('.entry-date-range').outerHTML = entryRecordDateRange(panel.dataset.kind, panel.dataset.product);
     updateEntryRecords(panel);
-    panel.querySelector(`[data-period="${view.period}"]`)?.focus({ preventScroll: true });
   }
   async function refreshEntryRecords(button) {
     const panel = button.closest('#commerce-entry-records');
@@ -7553,14 +7516,23 @@
       profitCount: included.filter(row => row.gain !== null).length };
   }
 
-  function statisticsFilterBar(definitions, invalidDates) {
+  function setStatisticsDates({ preset, from, to }) {
+    const filters = moduleState.statsFilters;
+    Object.assign(filters, { preset, from, to, until: undefined, asOf: undefined });
+    moduleState.statsExpanded = '';
+    moduleState.statsSource = null;
+    S.page = 1;
+    const scrollLeft = $('.commerce-stat-order-controls', A.activePageRegion?.()).scrollLeft;
+    A.render();
+    $('.commerce-stat-order-controls', A.activePageRegion?.()).scrollLeft = scrollLeft;
+  }
+
+  function statisticsFilterBar(definitions, invalidDates, dates) {
     const f = moduleState.statsFilters;
     const inputId = key => 'commerce-stat-' + key;
     const field = (key, label, control) => `<div><label for="${inputId(key)}">${label}</label>${control}</div>`;
     const select = (key, label, values, selected = f[key] || '') => field(key, label,
       `<select id="${inputId(key)}" data-stat-filter="${key}">${A.options(values, selected)}</select>`);
-    const date = (key, label) => field(key, label,
-      `<input id="${inputId(key)}" data-stat-filter="${key}" type="date" value="${E(f[key] || '')}"${invalidDates ? ' aria-invalid="true" aria-describedby="commerce-stat-date-error"' : ''} />`);
     const productChoices = [...new Set(Object.keys(productPlans).flatMap(product => [statisticsProduct(product), product]))];
     if (orders.some(order => !Object.hasOwn(productPlans, order.product))) productChoices.push('其他业务');
     const planChoices = [...definitions].filter(([, row]) => statisticsMatchesProduct(row, f.product))
@@ -7568,7 +7540,9 @@
     const operations = [...new Set(orders.map(row => row.businessType).filter(Boolean))];
     return `<section class="panel commerce-stat-filters" aria-label="订单统计筛选"><div class="toolbar commerce-stat-filter-controls commerce-stat-order-controls">
       ${select('dateBasis', '统计日期', [['created', '订单录入日'], ['opened', '实际开通日']], f.dateBasis || 'created')}
-      ${date('from', '开始日期')}${date('to', '结束日期')}
+      ${field('date-select', '时间范围', window.IDDateFilter.render({ id: 'commerce-stat-date',
+        value: f.preset || (dates.from || dates.to ? 'custom' : 'all'), ...dates, all: true, compact: true, allowOpen: true,
+        now: orderEvaluationTime(), onSelect: setStatisticsDates }))}
       ${select('product', '产品', [['', '全部产品'], ...productChoices])}
       ${select('plan', '套餐', [['', '全部套餐'], ...planChoices])}
       ${select('payment', '支付渠道', [['', '全部渠道'], '银行卡', '苹果内购'])}
@@ -7786,14 +7760,18 @@
       return '<section class="panel commerce-stat-filters">' + title + (state.phase === 'error'
         ? A.empty('费用凭据读取失败', '请重试读取账单记录。')
         : A.empty('正在读取费用凭据', '请稍候。')) + '</section>';
-    const invalidDates = state.from && state.to && state.from > state.to;
-    const dates = ['from', 'to'].map((key, index) =>
-      `<div><label for="commerce-expense-${key}">扣款${index ? '止' : '起'}日</label><input id="commerce-expense-${key}" type="date" data-expense-date="${key}" value="${E(state[key])}"${invalidDates ? ' aria-invalid="true" aria-describedby="commerce-expense-date-error"' : ''} /></div>`
-    ).join('');
+    const dates = filterDates(state.preset, state.from, state.to);
+    const dateFilter = window.IDDateFilter.render({ id: 'commerce-expense-date', ...dates, all: true, compact: true,
+      label: '扣款日期范围', value: state.preset || 'all', allowOpen: true, now: orderEvaluationTime(),
+      onSelect(selection) {
+        Object.assign(state, selection);
+        S.page = 1;
+        A.render();
+      } });
     const byId = new Map(orders.map(order => [order.id, order]));
     const f = moduleState.statsFilters;
-    const records = (invalidDates ? [] : state.items).filter(row =>
-      (!state.from || row.chargedOn >= state.from) && (!state.to || row.chargedOn <= state.to))
+    const records = state.items.filter(row =>
+      (!dates.from || row.chargedOn >= dates.from) && (!dates.to || row.chargedOn <= dates.to))
       .map(row => ({ ...row, order: byId.get(row.orderId) }))
       .filter(({ order, category }) => (!f.product && !f.plan) ||
         (order && category !== 'card-issue' &&
@@ -7812,8 +7790,7 @@
         pending: rows.filter(row => amountInCurrency(row) === null).length };
     });
     return `<section class="panel commerce-stat-filters">${title}
-      <div class="toolbar commerce-stat-filter-controls">${dates}</div>
-      ${invalidDates ? '<p class="field-error commerce-stat-filter-error" id="commerce-expense-date-error" role="alert">扣款起日须早于或等于止日。</p>' : ''}
+      <div class="toolbar commerce-stat-filter-controls"><div><label for="commerce-expense-date-select">扣款日期范围</label>${dateFilter}</div></div>
       ${A.table([
         { id: 'label', label: '费用项目' }, { id: 'count', label: '有效凭据' },
         { id: 'original', label: '实付原币', mobileSummary: true },
@@ -8058,7 +8035,8 @@
     const clock = f.asOf || orderEvaluationTime();
     const expenseState = prepareExpenseReceipts();
     const expenses = statisticsExpenseAccounting(clock, expenseState);
-    const invalidDates = Boolean(f.from && f.to && f.from > f.to);
+    const dates = filterDates(f.preset, f.from, f.to);
+    const invalidDates = Boolean(dates.from && dates.to && dates.from > dates.to);
     const active = orders.filter(statisticsEligible);
     const definitions = new Map();
     const addPlan = (product, plan, showEmpty) => {
@@ -8077,11 +8055,11 @@
       if (f.plan && statisticsPlanKey(order.product, statisticsPlan(order)) !== f.plan) return false;
       if (f.payment && order.payment !== f.payment) return false;
       if (f.operation && order.businessType !== f.operation) return false;
-      if (!f.from && !f.to && !f.until && f.dateBasis !== 'opened') return true;
+      if (!dates.from && !dates.to && !f.until && f.dateBasis !== 'opened') return true;
       const at = statisticsDate(order, f.dateBasis);
       if (!Number.isFinite(at) || (f.until && at > f.until)) return false;
       const date = beijingClock.format(at).slice(0, 10);
-      return (!f.from || date >= f.from) && (!f.to || date <= f.to);
+      return (!dates.from || date >= dates.from) && (!dates.to || date <= dates.to);
     });
     const facts = selected.map(order => statisticsFact(order, currency, clock, expenses));
     const partialCount = facts.filter(row => row.cost?.cardIssueUnallocated).length;
@@ -8119,7 +8097,7 @@
     return A.header('订单统计', '默认按北京时间订单录入日期统计，也可切换到实际开通日期。系统按已保存的实收、成本、费用凭据和订单汇率计算。' + statisticsQuoteHelp,
       A.canVisit('settings/costs') ? routeButton('费用设置', 'settings/costs', 'commerce-stat-settings', 'settings') : '') +
       expenseStatus(expenseState) + appleStatus +
-      statisticsSummary(facts, currency) + statisticsFilterBar(definitions, invalidDates) +
+      statisticsSummary(facts, currency) + statisticsFilterBar(definitions, invalidDates, dates) +
       (partialCount ? `<p class="footnote panel-body">${partialCount} 笔订单开卡费未分摊，已知费用单列。</p>` : '') +
       `<section class="panel">${statisticsToolbar(controls)}${body}</section>` +
       (showingExpenseReceipts() ? renderExpenseReceipts(currency, expenseState) : '');
@@ -9986,10 +9964,6 @@
       void refreshEntryRecords(node);
       return true;
     }
-    if (action === 'commerce-entry-period' || action === 'commerce-entry-query') {
-      applyEntryPeriod(node);
-      return true;
-    }
     if (action === 'commerce-order-prices-retry') {
       const form = node.closest('#commerce-order-form');
       if (form?.dataset.priceReferenceStatus === 'error') {
@@ -11054,11 +11028,6 @@
       A.render();
       return true;
     }
-    if (node.matches('[data-entry-date]')) {
-      const panel = node.closest('#commerce-entry-records');
-      entryView(panel.dataset.kind, panel.dataset.product)[node.dataset.entryDate + 'Draft'] = node.value;
-      return true;
-    }
     if (node.closest('.commerce-entry-layout') && node.matches('input:not([type="hidden"]), select'))
       updateOrderValueReadout(node);
     const orderFilter = node.id?.match(/^commerce-order-filter-(plan|payment|expiry|operation)$/)?.[1];
@@ -11124,18 +11093,10 @@
       return true;
     }
     const statFilter = node.dataset?.statFilter;
-    const expenseDate = node.dataset?.expenseDate;
-    if (showingExpenseReceipts() && expenseReceipts && ['from', 'to'].includes(expenseDate)) {
-      expenseReceipts[expenseDate] = node.value;
-      S.page = 1;
-      A.render();
-      document.getElementById(node.id)?.focus({ preventScroll: true });
-      return true;
-    }
-    if (S.route === 'orders/statistics' && ['from', 'to', 'dateBasis', 'product', 'plan', 'payment', 'operation', 'currency'].includes(statFilter)) {
+    if (S.route === 'orders/statistics' && ['dateBasis', 'product', 'plan', 'payment', 'operation', 'currency'].includes(statFilter)) {
       const filters = moduleState.statsFilters;
       filters[statFilter] = node.value;
-      if (['from', 'to', 'dateBasis'].includes(statFilter)) {
+      if (statFilter === 'dateBasis') {
         delete filters.until;
         delete filters.asOf;
       }
@@ -11523,11 +11484,15 @@
         step
       };
     };
-    const ranges = Object.fromEntries(Object.entries({ today: 1, week: 7, month: 30 }).map(([key, days]) => {
-      const start = midnight - (days - 1) * day;
+    const ranges = Object.fromEntries(window.IDDateFilter.presets.map(([key]) => {
+      const { from, to } = window.IDDateFilter.range(key, asOf);
+      const start = parseDate(from + 'T00:00');
+      const last = parseDate(to + 'T00:00');
+      const end = Math.min(asOf, last + day - 1);
+      const days = (last - start) / day + 1;
       return [key, {
-        current: period(start, asOf, key === 'today' ? hour : day),
-        previous: period(start - days * day, asOf - days * day)
+        current: period(start, end, days === 1 ? hour : day),
+        previous: period(start - days * day, end - days * day)
       }];
     }));
     if (custom) {

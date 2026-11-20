@@ -1825,6 +1825,7 @@ function render() {
   const renderVersion = ++layoutRenderVersion;
   const main = $('#main');
   const sameRoute = main.dataset.layoutRoute === state.route;
+  const restoreDateFocus = sameRoute ? window.IDDateFilter?.captureFocus(activePageRegion()) : undefined;
   const tabScroll = sameRoute ? window.IDTabNavigation.capture(activePageRegion()) : state.viewDrafts.get(state.route)?.tabScroll;
   const entryFormScroll = sameRoute
     ? $(entryFormSelector, activePageRegion())?.scrollTop
@@ -1921,6 +1922,7 @@ function render() {
   if (entryForm && entryFormScroll) entryForm.scrollTop = entryFormScroll;
   window.IDTabNavigation.restore(region, tabScroll, sameRoute);
   window.IDSearchInput?.restore(region);
+  restoreDateFocus?.();
   if (tableScroll.size) {
     for (const table of $$('.table-viewport > table[data-table]', region)) {
       const scroll = tableScroll.get(tableScrollKey(table));
@@ -2030,6 +2032,7 @@ function navigate(event) {
   mobileSidebarScroll = null;
   document.body.classList.remove('nav-open');
   $('#sidebar-shade').hidden = true;
+  window.IDDateFilter?.dismiss();
   if ($('#drawer').open) closeDrawer();
   render();
 }
@@ -3690,6 +3693,7 @@ window.IDDesignAPI = {
   confirmAction,
   openDrawer,
   closeDrawer,
+  dismissOnBackdrop,
   openToolboxPanel,
   refreshToolbox: () => {
     if ($('#drawer[open]')?.dataset.layout === 'workspace-tools') showTools(state.toolsTab);

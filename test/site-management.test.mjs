@@ -69,6 +69,29 @@ test('keeps page and server measurements separate and never stores raw fields', 
   assert.notEqual(data.resourceVersionOf(), previous);
 });
 
+test('explicit performance periods use Beijing days and expose unavailable coverage', async () => {
+  let now = Date.parse('2026-10-31T15:50:00Z');
+  const observations = await createSiteObservations({ clock: () => now });
+  for (const timestamp of ['2026-10-31T15:59:59Z', '2026-10-31T16:00:00Z', '2026-11-01T15:59:59Z', '2026-11-01T16:00:00Z']) {
+    now = Date.parse(timestamp);
+    const { response } = requestCapture();
+    observations.request(response, 'order-list', employee.id);
+    response.statusCode = 200;
+    response.emit('finish');
+  }
+  now = at;
+  await observations.collect();
+  const handler = createSiteManagement({ observations, origin, clock: () => now });
+  const read = (from, to) => reply(handler, { url: path + '?view=performance&' + new URLSearchParams({ from, to }), actor: admin });
+  const day = JSON.parse((await read('2026-11-01', '2026-11-01')).value);
+  assert.equal(day.groups.server.total, 2);
+  assert.equal(day.groups.server.trend.length, 24);
+  assert.equal(day.coverage, 'available');
+  assert.equal(JSON.parse((await read('2026-10-30', '2026-10-30')).value).coverage, 'unavailable');
+  assert.equal(JSON.parse((await read('2026-10-30', '2026-11-01')).value).coverage, 'partial');
+  assert.equal((await read('2026-10-01', '2026-11-01')).code, 400);
+});
+
 test('identifies duplicate upstream orders and broken links without flagging blank optional values', () => {
   const orders = [
     { id: 'order-a', orderNo: 'OD-LOCAL-0001', taskId: 'private-origin', source: '线上代充', product: 'GPT',

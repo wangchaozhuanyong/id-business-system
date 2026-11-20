@@ -1,3 +1,4 @@
+import { calendarRange, calendarDates } from '../calendar-range.mjs';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { isIP } from 'node:net';
 import { parseToolPublicOrigin, toolRequestOrigin } from './request-origin.mjs';
@@ -88,9 +89,10 @@ export function websiteVisitSignaturePayload(event) {
 
 export function parseWebsiteVisitSearch(value) {
   const input = object(value);
+  const explicit = Object.hasOwn(input, 'from') || Object.hasOwn(input, 'to');
   if (
-    Object.keys(input).some((k) => !['days', 'page', 'pageSize', 'sort', 'ip'].includes(k)) ||
-    ![7, 30].includes(input.days) ||
+    Object.keys(input).some((k) => !['days', 'from', 'to', 'page', 'pageSize', 'sort', 'ip'].includes(k)) ||
+    (explicit ? Object.hasOwn(input, 'days') || !calendarRange(input.from, input.to) : ![7, 30].includes(input.days)) ||
     ![10, 20, 50].includes(input.pageSize) ||
     !['newest', 'oldest'].includes(input.sort) ||
     !Number.isInteger(input.page) ||
@@ -133,9 +135,18 @@ export function appendWebsiteVisit(rows, event, now) {
 
 export function reportWebsiteVisits(rows, body, now) {
   const query = parseWebsiteVisitSearch(body);
-  const { start, dates } = websiteVisitRange(query.days, new Date(now));
-  const matches = rows.filter((row) => Date.parse(row.occurredAt) >= start.getTime() &&
-    Date.parse(row.occurredAt) <= now && (!query.ip || row.ip === query.ip));
+  const period = query.days === undefined ? calendarRange(query.from, query.to) : undefined;
+  const available = websiteVisitRange(30, new Date(now));
+  if (period && (period.start < available.start.getTime() || period.to > available.dates.at(-1)))
+    throw new WebsiteVisitError('请选择最近 30 天内的访问日期');
+  const legacy = period ? undefined : websiteVisitRange(query.days, new Date(now));
+  const start = period?.start ?? legacy.start.getTime();
+  const end = period?.end ?? Infinity;
+  const dates = period ? calendarDates(period.from, period.days) : legacy.dates;
+  const matches = rows.filter((row) => {
+    const at = Date.parse(row.occurredAt);
+    return at >= start && at < end && at <= now && (!query.ip || row.ip === query.ip);
+  });
   matches.sort((a, b) => (query.sort === 'oldest' ? 1 : -1) *
     (a.occurredAt.localeCompare(b.occurredAt) || a.id.localeCompare(b.id)));
   const page = Math.min(query.page, Math.max(1, Math.ceil(matches.length / query.pageSize)));
@@ -150,7 +161,7 @@ export function reportWebsiteVisits(rows, body, now) {
     daily.set(date, counts);
   }
   return {
-    status: matches.length ? 'ready' : 'empty', days: query.days, page, pageSize: query.pageSize,
+    status: matches.length ? 'ready' : 'empty', days: dates.length, page, pageSize: query.pageSize,
     fetchedAt: new Date(now).toISOString(), lastReceivedAt, total: matches.length,
     summary: matches.length ? { pageViews: matches.length, visitors: new Set(matches.map(({ ip }) => ip)).size } : null,
     daily: dates.map((date) => {

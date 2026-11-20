@@ -35,6 +35,7 @@
   font-size: 11px;
 }
 .overview-actions { flex: none; }
+.overview-toolbar .id-date-applied { display: none; }
 .overview-accounting-filters { display: flex; gap: 4px; }
 .overview-accounting-filters select { width: auto; }
 @container overview-toolbar (max-width: 1120px) {
@@ -50,27 +51,20 @@
   clip-path: inset(50%);
 }
 .overview-toolbar .overview-previous-compact, .overview-toolbar .overview-period-compact,
-.overview-status-short, #overview-range-compact { display: none; }
+.overview-status-short { display: none; }
 .overview-controls {
   display: inline-flex;
   flex-wrap: wrap;
   gap: 4px;
 }
 .overview-controls .button { padding-inline: 10px; }
-.overview-toolbar .overview-controls {
-  flex-wrap: nowrap;
-  gap: 2px;
-  padding: 3px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface);
-}
-.overview-toolbar .overview-controls .button { border-color: transparent; box-shadow: none; }
 @container overview-toolbar (max-width: 1120px) {
   .overview-previous { display: none; }
   .overview-toolbar .overview-previous-compact { display: inline-flex; }
 }
 @container overview-toolbar (max-width: 859px) {
+  .overview-toolbar .id-date-presets { display: none; }
+  .overview-toolbar .id-date-filter .id-date-select { display: block; }
   .overview-status-full { display: none; }
   .overview-status-short { display: inline; }
 }
@@ -78,7 +72,7 @@
   .overview-toolbar { gap: 4px; min-height: 44px; }
   .overview-actions { gap: 4px; }
   .overview-period > strong, .overview-timezone, .overview-toolbar .overview-previous-compact,
-  .overview-toolbar .overview-controls, .overview-status-short,
+  .overview-status-short,
   .overview-toolbar-action > span { display: none; }
   .overview-toolbar .overview-period-compact {
     display: block;
@@ -90,8 +84,8 @@
     color: var(--text);
     font-weight: 600;
   }
-  #overview-range-compact { display: block; width: auto; min-height: 44px; padding-inline: 8px; font-size: 12px; }
   .overview-toolbar-action.button { width: 44px; min-height: 44px; padding: 0; justify-content: center; }
+  .overview-toolbar .id-date-select { min-height: 44px; }
 }
 .overview-metrics {
   display: grid;

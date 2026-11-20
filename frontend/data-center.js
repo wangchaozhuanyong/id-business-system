@@ -3,6 +3,7 @@
   'use strict';
   const A = window.IDDesignAPI;
   const data = window.IDLocalData;
+  const dateFilter = window.IDDateFilter;
   const sheets = A.modules.sheetsStatus;
   const trafficRoute = 'data';
   const sheetsRoute = 'data/sheets';
@@ -15,17 +16,19 @@
     ['shop.flashcast.com.my', '闪铸商城']
   ]);
   const renovation = sites.keys().next().value;
-  const periods = [7, 30];
   const number = new Intl.NumberFormat('zh-CN');
   const canRead = () => data?.authRequired && ['admin', 'super'].includes(A.state.actor?.role);
-  const filters = () => A.state.drafts.get(draftKey) ?? { site: renovation, days: 7 };
+  const sourceZone = site => site === renovation ? 'Asia/Kuala_Lumpur' : 'UTC';
+  const filters = () => A.state.drafts.get(draftKey) ?? { site: renovation, preset: 'week' };
+  const selectedDates = ({ site, preset, from, to }) => preset === 'custom'
+    ? { from, to } : dateFilter.range(preset, Date.now(), sourceZone(site));
   const count = (value) => Number.isSafeInteger(value) && value >= 0 ? number.format(value) : '—';
   const columns = (site) => site === renovation
     ? [['pageViews', '浏览量', '次'], ['sessions', '访问次数', '次'], ['visitors', '访客数', '位']]
     : [['pageViews', '浏览量', '次'], ['visits', '访问次数', '次']];
 
   function renderTraffic() {
-    const { site, days } = filters();
+    const selection = filters(), { site, preset } = selection;
     const live = canRead();
     const disabled = live ? '' : 'disabled';
     return `<div class="data-traffic" data-traffic>
@@ -38,8 +41,15 @@
           <div class="data-traffic-filters">
             <div class="data-traffic-site"><label for="data-center-site">网站</label><select id="data-center-site" ${disabled}>${[...sites].map(([value, label]) =>
               `<option value="${value}"${site === value ? ' selected' : ''}>${label}</option>`).join('')}</select></div>
-            <div class="data-traffic-period" role="group" aria-label="统计时间范围">${periods.map((period) =>
-              A.button(`最近 ${period} 天`, 'data-traffic-period', '', '', `data-days="${period}" aria-pressed="${days === period}" ${disabled}`)).join('')}</div>
+            <div class="data-traffic-period">${dateFilter.render({
+              id: 'data-traffic-range', value: preset, ...selectedDates(selection), label: '统计时间范围',
+              timeZone: sourceZone(site), max: dateFilter.range('today', Date.now(), sourceZone(site)).to,
+              maxDays: 30, disabled: !live,
+              onSelect(next) {
+                A.state.drafts.set(draftKey, { site, ...next });
+                A.render();
+              }
+            })}</div>
             ${A.button('刷新统计', 'data-traffic-refresh', '', '', disabled)}
           </div>
         </div>
@@ -78,7 +88,7 @@
     const zone = zoneNames[timeZone] || new Intl.DateTimeFormat('zh-CN', { timeZone, timeZoneName: 'long' })
       .formatToParts(time).find((part) => part.type === 'timeZoneName')?.value;
     const last = report.daily.at(-1).date;
-    const note = last === date.format() ? '今日数据仍在更新' : '末日数据截至上次读取';
+    const note = last === date.format(Date.now()) ? '今日数据仍在更新' : '末日数据截至上次读取';
     return `<div class="data-traffic-meta">
       <strong>${A.esc(report.daily[0].date)} 至 ${A.esc(last)}</strong>
       <span>统计时区 ${A.esc(zone)}</span>
@@ -139,13 +149,16 @@
     detail.hidden = false;
   }
 
-  async function readTrafficReport(site, days) {
-    const report = await data.websiteAnalytics(days, site);
+  async function readTrafficReport(site, dates) {
+    const { from, to } = dates;
+    const days = (Date.parse(to) - Date.parse(from)) / 86_400_000 + 1;
+    const report = await data.websiteAnalytics(dates, site);
     if (report?.site !== site || report.days !== days ||
         !['ready', 'empty', 'unconfigured'].includes(report.status)) throw new Error('Invalid website report');
     if (report.status !== 'unconfigured') {
       if (!report.timeZone || !Number.isFinite(Date.parse(report.fetchedAt)) ||
           !Array.isArray(report.daily) || report.daily.length !== days ||
+          report.daily[0].date !== from || report.daily.at(-1).date !== to ||
           report.daily.some(row => typeof row?.date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(row.date)) ||
           (report.status === 'ready' && !report.summary)) throw new Error('Incomplete website report');
       // Validate the reporting timezone before this snapshot can be cached.
@@ -156,15 +169,12 @@
 
   async function loadTraffic(workspace, selection, { refresh = false } = {}) {
     if (!workspace || !canRead()) return;
-    const { site, days } = selection;
-    A.state.drafts.set(draftKey, selection);
-    for (const button of workspace.querySelectorAll('[data-days]'))
-      button.setAttribute('aria-pressed', String(Number(button.dataset.days) === days));
+    const { site } = selection, dates = selectedDates(selection), query = { site, ...dates };
     const notice = workspace.querySelector('[data-traffic-notice]');
     const region = workspace.querySelector('[data-traffic-read]');
     const status = workspace.querySelector('[data-traffic-progress]');
-    const key = site + ':' + days;
-    const previous = data.queries.peek(scope, selection)?.data;
+    const key = JSON.stringify(query);
+    const previous = data.queries.peek(scope, query)?.data;
     const sameSelection = workspace.dataset.trafficKey === key;
     if (!sameSelection) {
       workspace.dataset.trafficKey = key;
@@ -177,7 +187,7 @@
       refreshButton: workspace.querySelector('[data-action="data-traffic-refresh"]')
     });
     try {
-      const report = await data.queries.read(scope, selection, () => readTrafficReport(site, days), { refresh });
+      const report = await data.queries.read(scope, query, () => readTrafficReport(site, dates), { refresh });
       if (read.current() && canRead()) showTraffic(workspace, report, site, sameSelection);
     } catch (error) {
       if (!read.current() || error.name === 'AbortError') return;
@@ -206,7 +216,13 @@
     },
     onChange(node) {
       if (node.id !== 'data-center-site' || !sites.has(node.value)) return false;
-      void loadTraffic(node.closest('[data-traffic]'), { ...filters(), site: node.value });
+      const site = node.value;
+      const next = { ...filters(), site };
+      if (next.preset === 'custom' && next.to > dateFilter.range('today', Date.now(), sourceZone(site)).to)
+        next.preset = 'today';
+      A.state.drafts.set(draftKey, next);
+      A.render();
+      document.getElementById('data-center-site')?.focus({ preventScroll: true });
       return true;
     },
     onClick(action, node) {
@@ -218,11 +234,7 @@
         void loadTraffic(node.closest('[data-traffic]'), filters(), { refresh: true });
         return true;
       }
-      if (action !== 'data-traffic-period') return false;
-      const days = Number(node.dataset.days);
-      if (periods.includes(days) && days !== filters().days)
-        void loadTraffic(node.closest('[data-traffic]'), { ...filters(), days });
-      return true;
+      return false;
     }
   });
 })();

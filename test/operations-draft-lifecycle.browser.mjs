@@ -129,12 +129,12 @@ test('运营表单关闭和切页保留普通草稿，提交快照及敏感字�
   await drawer.getByRole('tab', { name: '网站检测', exact: true }).click();
   await page.locator('#ops-monitor-url').fill('https://example.test/status');
   await drawer.getByRole('tab', { name: '访问记录与 IP', exact: true }).click();
-  await page.locator('#ops-visits-days').selectOption('30');
+  await page.locator('#ops-visits-range-select').selectOption('month');
   await page.locator('#ops-visits-sort').selectOption('oldest');
   await close();
   await openTool('网站监控');
   assert.equal(await page.locator('#ops-monitor-url').inputValue(), 'https://example.test/status');
-  assert.equal(await page.locator('#ops-visits-days').inputValue(), '30');
+  assert.equal(await page.locator('#ops-visits-range-select').inputValue(), 'month');
   assert.equal(await page.locator('#ops-visits-sort').inputValue(), 'oldest');
   await close();
 

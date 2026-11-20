@@ -1,6 +1,7 @@
 (() => {
   'use strict';
   const A = window.IDDesignAPI, D = window.IDLocalData, e = A.esc;
+  const dateFilter = window.IDDateFilter;
   const $ = (selector, root = document) => root.querySelector(selector);
   const { defaultPageSize, render: pagination } = window.IDPagination;
   const routes = {
@@ -44,10 +45,11 @@
   const currentView = () => routes[A.state.route];
   const canRead = () => D?.authRequired && ['admin', 'super'].includes(A.state.actor?.role);
   const viewKey = name => 'site-management:' + name;
-  const historyView = () => A.state.drafts.get(viewKey('performance')) || { hours: 24, channel: 'browser' };
+  const historyView = () => A.state.drafts.get(viewKey('performance')) || { preset: 'today', channel: 'browser' };
+  const historyDates = ({ preset, from, to }) => preset === 'custom' ? { from, to } : dateFilter.range(preset);
   const healthView = () => A.state.drafts.get(viewKey('health')) || { kind: '', page: 1, pageSize: defaultPageSize };
-  const exportView = () => A.state.drafts.get(viewKey('export')) || { collection: 'customers', start: '', end: '', status: '', product: '' };
-  const keyFor = view => view === 'performance' ? { hours: historyView().hours } : view === 'health' ? healthView() : {};
+  const exportView = () => A.state.drafts.get(viewKey('export')) || { collection: 'customers', period: 'all', start: '', end: '', status: '', product: '' };
+  const keyFor = view => view === 'performance' ? historyDates(historyView()) : view === 'health' ? healthView() : {};
   const link = (route, text) => '<a class="button compact" href="#/' + e(route) + '">' + e(text) + '</a>';
   function title(text, help = '', id = '') {
     return '<div class="section-title-row"><h2>' + e(text) + '</h2>' + (help ? A.titleInfo(text, help, id) : '') + '</div>';
@@ -78,18 +80,21 @@
   }
 
   function performanceReport(report) {
-    const { channel, hours } = historyView(), group = report.groups[channel];
+    const { channel } = historyView(), group = report.groups[channel];
+    const noCoverage = report.coverage === 'unavailable';
     const rates = group.total ? (100 * group.failed / group.total).toLocaleString('zh-CN', { maximumFractionDigits: 1 }) + '%' : '暂无记录';
     const items = group.activities.filter(row => row.total);
     const chartRows = group.trend.map(row => ({
-      label: time(row.at), shortLabel: hours === 24 ? hour.format(row.at) + '时' : shortDate.format(row.at),
+      label: time(row.at), shortLabel: report.hours === 24 ? hour.format(row.at) + '时' : shortDate.format(row.at),
       value: row.p95 === null ? null : row.p95 / 1000
     }));
     return '<div class="site-management-grid"><div class="site-management-metrics">' +
-      metric('测得操作', count(group.total)) + metric('失败比例', rates) + metric('近 95% 成功操作在', duration(group.p95) + (group.p95 === null ? '' : ' 内')) +
+      metric('测得操作', noCoverage ? '未取得' : count(group.total)) + metric('失败比例', rates) + metric('近 95% 成功操作在', duration(group.p95) + (group.p95 === null ? '' : ' 内')) +
       '</div>' + (group.blocked ? '<p class="site-management-time">有 ' + e(count(group.blocked)) +
         ' 次操作未通过检查，另列于下表。' + (group.limited ? ' 其中 ' + e(count(group.limited)) + ' 次尝试过于频繁。' : '') + '</p>' : '') +
       (!report.storageAvailable ? '<p class="inline-notice warning">历史记录暂时无法保存，本次运行的数据仍可查看。</p>' : '') +
+      (noCoverage ? '<p class="inline-notice warning">所选日期没有可用的性能历史。</p>' :
+        report.coverage === 'partial' ? '<p class="inline-notice warning">所选日期含尚无历史采集的时段，指标仅统计已有记录。</p>' : '') +
       '<section class="panel panel-body site-management-card">' +
       title('等待时间走势', '每个时间段至少有 20 次成功操作才显示耗时。按北京时间展示。', 'site-time-chart-help') +
       (chartRows.some(row => row.value !== null) ? window.IDCharts.bars({ title: '成功操作等待时间', rows: chartRows,
@@ -193,16 +198,28 @@
 
   const selection = (id, label, choices, value) => '<div class="site-management-field"><label for="' + id + '">' + e(label) +
     '</label><select id="' + id + '" name="' + id + '">' + A.options(choices, value) + '</select></div>';
+  function exportDates() {
+    const { start, end, period } = exportView();
+    return dateFilter.render({
+      id: 'site-export-dates', label: '录入日期', value: period, from: start, to: end, all: true, allowOpen: true, compact: true,
+      onSelect({ preset, from, to }) {
+        const form = $('#site-export-form');
+        if (!form) return;
+        const current = captureExport(form);
+        A.state.drafts.set(viewKey('export'), { ...current, period: preset, start: from, end: to });
+        $('[data-site-export-dates]', form).innerHTML = exportDates();
+      }
+    });
+  }
   function exportForm() {
-    const { collection, start, end, status, product, detail } = exportView(), orders = collection === 'orders';
+    const { collection, status, product, detail } = exportView(), orders = collection === 'orders';
     const states = orders ? [['recorded', '已登记'], ['cancelled', '已撤销']] : [['active', '使用中'], ['inactive', '已停用']];
     return '<div class="site-management-grid"><section class="panel panel-body site-management-card">' +
       title('下载资料', '按北京时间的录入日期筛选。每次下载均留记录。', 'site-export-help') +
       '<form id="site-export-form"><div class="site-management-filters">' +
       selection('site-export-collection', '资料类型', [['customers', '客户'], ['orders', '订单']], collection) +
       selection('site-export-detail', '表格内容', [['masked', '简表（隐藏个人信息）'], ['business', '业务明细']], detail || 'masked') +
-      '<label for="site-export-start">录入日期从<input id="site-export-start" type="date" value="' + e(start) + '"></label>' +
-      '<label for="site-export-end">至<input id="site-export-end" type="date" value="' + e(end) + '"></label>' +
+      '<div data-site-export-dates>' + exportDates() + '</div>' +
       selection('site-export-status', '状态', [['', '全部'], ...states], status) +
       (orders ? selection('site-export-product', '产品',
         [['', '全部'], ...['GPT', 'Claude Pro', 'Claude Max', 'Gemini', 'Grok'].map(value => [value, value])], product) : '') +
@@ -228,9 +245,16 @@
 
   function buttons(view) {
     if (view === 'performance') {
-      const { hours, channel } = historyView();
+      const current = historyView(), { preset, channel } = current;
       return '<div class="toolbar list-filters site-management-toolbar"><div class="toolbar-left">' +
-        selection('site-time-range', '查看时段', [['24', '近 24 小时'], ['168', '近 7 天']], String(hours)) +
+        dateFilter.render({
+          id: 'site-time-range', label: '查看时段', value: preset, ...historyDates(current),
+          min: dateFilter.range('month').from, max: dateFilter.range('today').to, compact: true,
+          onSelect(next) {
+            A.state.drafts.set(viewKey('performance'), { ...historyView(), ...next });
+            A.render();
+          }
+        }) +
         selection('site-time-view', '查看内容', [['browser', '页面等待时间'], ['server', '服务器处理时间']], channel) +
         '</div></div>';
     }
@@ -339,10 +363,11 @@
   function captureExport(form) {
     const value = name => $('#site-export-' + name, form)?.value || '';
     const prior = exportView(), collection = value('collection');
-    const next = { collection, start: value('start'), end: value('end'),
+    const dates = prior.period === 'custom' ? { from: prior.start, to: prior.end } : dateFilter.range(prior.period);
+    const next = { collection, start: dates.from, end: dates.to,
       status: collection === prior.collection ? value('status') : '', product: collection === 'orders' ? value('product') : '',
       ...(value('detail') === 'business' && { detail: 'business' }) };
-    A.state.drafts.set(viewKey('export'), next);
+    A.state.drafts.set(viewKey('export'), { ...next, period: prior.period });
     return next;
   }
   async function exportData(form) {
@@ -399,9 +424,8 @@
       return true;
     },
     onChange(node) {
-      if (node.id === 'site-time-range' || node.id === 'site-time-view') {
-        A.state.drafts.set(viewKey('performance'), { ...historyView(), ...(node.id === 'site-time-view'
-          ? { channel: node.value } : { hours: Number(node.value) }) });
+      if (node.id === 'site-time-view') {
+        A.state.drafts.set(viewKey('performance'), { ...historyView(), channel: node.value });
         void read('performance');
         return true;
       }
@@ -425,7 +449,6 @@
         $('[data-site-diagnostic-result]', node.form.parentElement).replaceChildren();
         return true;
       }
-      if (node.closest('#site-export-form') && node.type === 'date') captureExport(node.form);
       return false;
     },
     onSubmit(form) {

@@ -11,8 +11,8 @@ import { interceptDesign, origin as offlineOrigin } from './helpers/offline-desi
 
 const analyticsPath = '/api/local/tools/website-analytics';
 const visitsPath = '/api/local/tools/website-visits/search';
-const firstVisitFilters = { days: 7, sort: 'newest', page: 1, pageSize: 20, ip: '203.0.113.7' };
-const nextVisitFilters = { days: 30, sort: 'oldest', page: 1, pageSize: 20, ip: '203.0.113.8' };
+const firstVisitFilters = { from: '2026-11-06', to: '2026-11-12', sort: 'newest', page: 1, pageSize: 20, ip: '203.0.113.7' };
+const nextVisitFilters = { from: '2026-10-14', to: '2026-11-12', sort: 'oldest', page: 1, pageSize: 20, ip: '203.0.113.8' };
 
 function interceptedTools(page, origin) {
   const requests = new Map([
@@ -50,7 +50,8 @@ function interceptedTools(page, origin) {
 
 function analyticsResult(pageViews, request) {
   const params = new URL(request.url()).searchParams;
-  const days = Number(params.get('days'));
+  const from = params.get('from'), to = params.get('to');
+  const days = (Date.parse(to) - Date.parse(from)) / 86_400_000 + 1;
   return {
     status: 'ready',
     site: params.get('site'),
@@ -59,7 +60,7 @@ function analyticsResult(pageViews, request) {
     fetchedAt: '2026-11-12T03:00:00Z',
     summary: { pageViews, visitors: 12, sessions: 25 },
     daily: Array.from({ length: days }, (_, index) => ({
-      date: new Date(Date.UTC(2026, 10, 12 - days + 1 + index)).toISOString().slice(0, 10),
+      date: new Date(Date.parse(from) + index * 86_400_000).toISOString().slice(0, 10),
       metrics: { pageViews: 9, visitors: 8, sessions: 10 }
     }))
   };
@@ -83,7 +84,7 @@ function visitResult(path, { page = 1, pageSize = 20, total = 34 } = {}) {
 
 async function setVisitFilters(page, filters) {
   await page.getByRole('tab', { name: '访问记录与 IP', exact: true }).click();
-  await page.locator('#ops-visits-days').selectOption(String(filters.days));
+  await page.locator('#ops-visits-range-select').selectOption(filters === firstVisitFilters ? 'week' : 'month');
   await page.locator('#ops-visits-sort').selectOption(filters.sort);
   await page.locator('#ops-visits-ip').fill(filters.ip);
 }
@@ -130,6 +131,7 @@ test(
       localFixtures: { toolbox: { version: 0, data: { shortcuts: [], phrases: [] } } }
     });
     page.setDefaultTimeout(5000);
+    await page.clock.setFixedTime(new Date('2026-11-12T08:00:00Z'));
     const errors = [];
     page.on('pageerror', (error) => errors.push(error.message));
     const tools = interceptedTools(page, origin);
@@ -184,11 +186,12 @@ test(
     let analyticsDays = 7;
     async function requestAnalytics(days) {
       if (days) analyticsDays = days;
-      await traffic.getByRole('button', { name: days ? `最近 ${days} 天` : '刷新统计', exact: true }).click();
+      await traffic.getByRole('button', { name: days ? `近 ${days} 天` : '刷新统计', exact: true }).click();
       const request = await tools.next(analyticsPath);
       assert.equal(request.request().method(), 'GET');
       const params = new URL(request.request().url()).searchParams;
-      assert.equal(params.get('days'), String(analyticsDays));
+      assert.equal(params.get('from'), analyticsDays === 7 ? '2026-11-06' : '2026-10-14');
+      assert.equal(params.get('to'), '2026-11-12');
       assert.equal(params.get('site'), 'flashcast.com.my');
       return request;
     }
@@ -227,12 +230,12 @@ test(
 
     const pendingThirtyDays = await requestAnalytics();
     const beforeCachedSwitch = { ...readCounts };
-    await traffic.getByRole('button', { name: '最近 7 天', exact: true }).click();
+    await traffic.getByRole('button', { name: '近 7 天', exact: true }).click();
     await showMetric(222);
     assert.deepEqual(readCounts, beforeCachedSwitch, '切回已有时间范围不重复请求');
     await replyAnalytics(pendingThirtyDays, 666);
     await showMetric(222);
-    await traffic.getByRole('button', { name: '最近 30 天', exact: true }).click();
+    await traffic.getByRole('button', { name: '近 30 天', exact: true }).click();
     await showMetric(666);
 
     const failingAnalytics = await requestAnalytics();
@@ -244,6 +247,14 @@ test(
     await page.goto(origin + '/#/overview');
     await tools.reply(await openMonitor(), { items: [], page: 1, pageSize: 20, total: 0 });
     await setVisitFilters(page, firstVisitFilters);
+    const nested = page.locator('#date-filter-drawer');
+    await drawer.locator('#ops-visits-range-select').selectOption('choose-custom');
+    await nested.waitFor();
+    assert.equal(await nested.locator('#ops-visits-range-from').inputValue(), '2026-11-06');
+    await page.keyboard.press('Escape');
+    await nested.waitFor({ state: 'hidden' });
+    assert(await drawer.isVisible());
+    assert.equal(await drawer.locator('#ops-visits-ip').inputValue(), firstVisitFilters.ip);
     const firstVisit = await requestVisits();
     assert.deepEqual(firstVisit.request().postDataJSON(), firstVisitFilters);
     await showPendingLine(visitsStatus);

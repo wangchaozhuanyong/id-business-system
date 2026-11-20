@@ -33,7 +33,9 @@
   const superAdmin = () => A.state.actor?.role === 'super';
   const settingsTab = () => A.state.drafts.get(tabKey) || 'channels';
   const queryTab = () => !settingsPage() ? 'incidents' : settingsTab() === 'deliveries' ? 'deliveries' : 'config';
-  const list = (tab = queryTab()) => A.state.drafts.get(listViewKey + tab) || { page: 1, pageSize: defaultPageSize, status: '', q: '', days: 0, priority: '' };
+  const dates = window.IDDateFilter;
+  const listDefaults = pageSize => ({ page: 1, pageSize, status: '', q: '', period: 'all', from: '', to: '', priority: '' });
+  const list = (tab = queryTab()) => A.state.drafts.get(listViewKey + tab) || listDefaults(defaultPageSize);
   const currentDraftKey = () => draftKey + ':' + settingsTab();
   const draft = () => A.state.drafts.get(currentDraftKey());
   const snapshots = new Map();
@@ -47,7 +49,10 @@
     (row.accepted ? delivery.accepted : row.external ? incidentDelivery.external_unknown : '暂无回执');
 
   function params(tab = queryTab()) {
-    return tab === 'config' ? { tab } : { tab, ...list(tab) };
+    if (tab === 'config') return { tab };
+    const { period, from, to, ...filters } = list(tab);
+    const bounds = period === 'all' ? {} : period === 'custom' ? { from, to } : dates.range(period);
+    return { tab, ...filters, ...bounds };
   }
 
   function bindRead(tab) {
@@ -158,7 +163,11 @@
       <div class="system-monitor-query-heading"><div class="section-title-row"><h2>${isDelivery ? '投递记录' : '告警记录'}</h2>${A.titleInfo(isDelivery ? '投递记录' : '告警记录', help, 'system-monitor-list-help')}</div><div data-page-actions></div></div>
       <div class="system-monitor-filters">
         <label class="system-monitor-search"><span class="sr-only">搜索${isDelivery ? '通知' : '告警'}</span><input id="system-monitor-search" type="search" maxlength="100" placeholder="${isDelivery ? '搜索通知、接收人或编号' : '搜索告警、事件编号或任务尾号'}" value="${e(selection.q || '')}"/></label>
-        <label>时间<select id="system-monitor-days">${A.options([['0', '全部时间'], ['1', '最近 24 小时'], ['7', '最近 7 天'], ['30', '最近 30 天']], String(selection.days || 0))}</select></label>
+        ${dates.render({ id: 'system-monitor-period', label: '时间范围', value: selection.period,
+          from: selection.from, to: selection.to, all: true, compact: true, onSelect({ preset, from, to }) {
+            if (queryTab() !== tab) return;
+            queryList($('#system-monitor-query-form'), { period: preset, from, to });
+          } })}
         <label>状态<select id="system-monitor-filter">${A.options([['', '全部状态'], ...statuses], selection.status)}</select></label>
         ${isDelivery ? '' : `<label>级别<select id="system-monitor-priority">${A.options([['', '全部级别'], ['P0', 'P0 · 紧急'], ['P1', 'P1 · 重要'], ['P2', 'P2 · 一般']], selection.priority || '')}</select></label>`}
         <div class="system-monitor-filter-actions"><button type="submit" class="button primary">查询</button>${A.button('重置', 'system-monitor-reset')}</div>
@@ -412,7 +421,7 @@
     if (action === 'system-monitor-refresh') void load(true);
     if (action === 'system-monitor-reset') {
       const tab = queryTab();
-      A.state.drafts.set(listViewKey + tab, { page: 1, pageSize: list(tab).pageSize, status: '', q: '', days: 0, priority: '' });
+      A.state.drafts.set(listViewKey + tab, listDefaults(list(tab).pageSize));
       A.render(); void load();
     }
     if (action === 'system-monitor-check') checkDetails(node.dataset.code);
@@ -471,7 +480,7 @@
     if (node.id === 'system-monitor-category') {
       A.state.drafts.set(checksKey + ':category', node.value); A.render(); return true;
     }
-    if (['system-monitor-filter', 'system-monitor-days', 'system-monitor-priority'].includes(node.id)) {
+    if (['system-monitor-filter', 'system-monitor-priority'].includes(node.id)) {
       queryList(node.form); return true;
     }
     if (settingsPage() && (node.dataset.rule || node.dataset.legacyTarget || node.id === 'system-monitor-enabled')) {
@@ -488,14 +497,14 @@
     return false;
   }
 
-  function queryList(form) {
+  function queryList(form, timeSelection) {
     if (!form) return;
     const tab = queryTab();
-    A.state.drafts.set(listViewKey + tab, { ...list(tab), page: 1,
+    A.state.drafts.set(listViewKey + tab, { ...list(tab), ...timeSelection, page: 1,
       q: form.querySelector('#system-monitor-search').value.trim(),
-      days: Number(form.querySelector('#system-monitor-days').value),
       status: form.querySelector('#system-monitor-filter').value,
       priority: form.querySelector('#system-monitor-priority')?.value || '' });
+    if (timeSelection) A.render();
     void load();
   }
 

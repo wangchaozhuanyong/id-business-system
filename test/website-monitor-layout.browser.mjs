@@ -93,7 +93,7 @@ test('网站监控的访问记录与检测共用页签，网站统计从数据�
       await host.getByText('证书有效', { exact: true }).waitFor();
       assert.equal(checks.length, 1);
       await host.getByRole('tab', { name: '访问记录与 IP', exact: true }).click();
-      await page.locator('#ops-visits-days').selectOption('30');
+      await page.locator('#ops-visits-range-select').selectOption('month');
       await page.locator('#ops-visits-sort').selectOption('oldest');
       await host.getByRole('button', { name: '查询明细', exact: true }).click();
       await host.getByRole('button', { name: 'IP 明细', exact: true }).click();

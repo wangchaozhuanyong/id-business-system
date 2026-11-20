@@ -1004,7 +1004,7 @@ h1 {
 }
 .panel > .toolbar.commerce-stat-order-controls {
   grid-auto-flow: column;
-  grid-template-columns: minmax(124px, 1fr) repeat(2, minmax(132px, 1fr))
+  grid-template-columns: minmax(124px, 1fr) minmax(172px, 1.2fr)
     minmax(136px, 1.2fr) repeat(3, minmax(108px, 1fr)) max-content max-content;
   margin-inline: var(--panel-padding-inline);
   padding-inline: 3px;
@@ -1390,6 +1390,8 @@ input[type='radio'] {
 .employee-statistics-scroll > .toolbar > * {
   flex-shrink: 0;
 }
+.employee-statistics-scroll .id-date-filter { flex-wrap: nowrap; }
+.employee-statistics-scroll .id-date-applied { white-space: nowrap; }
 .employee-statistics-header .toolbar-select-filters {
   flex-wrap: nowrap;
 }
@@ -5551,9 +5553,7 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
   min-width: 0;
 }
 .entry-record-context,
-.entry-record-actions,
-.entry-date-range,
-.entry-periods {
+.entry-record-actions {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -5604,20 +5604,6 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
 .order-submission-entry .entry-record-list [data-column='name'] .table-value-button {
   max-inline-size: var(--entry-record-value-width);
 }
-.entry-date-range {
-  padding: var(--toolbar-padding-block) var(--panel-padding-inline);
-}
-.entry-date-range[hidden] { display: none; }
-.entry-date-range > label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--secondary);
-  font-size: 12px;
-  min-width: 0;
-}
-.entry-date-range input { width: 152px; min-width: 0; }
-.entry-date-range .field-error { flex-basis: 100%; margin: 0; }
 .entry-record-list th {
   position: sticky;
   top: 0;
@@ -6786,7 +6772,7 @@ select,.id-pagination select[data-pagination-size] { appearance: none; padding-r
 html[data-theme='dark'] select,html[data-theme='dark'] .id-pagination select[data-pagination-size] { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' stroke='%23b9c4d4' stroke-width='1.5'%3E%3Cpath d='m4 6 4 4 4-4'/%3E%3C/svg%3E"); background-repeat: no-repeat; background-position: right 10px center; }
 select[multiple] { background-image: none; }
 input:is([type='checkbox'],[type='radio']) { accent-color: var(--primary); }
-:is(.toolbar,.content-toolbar,.list-controls,.pagination,.id-pagination,.entry-record-actions,.entry-date-range) :is(input:not([type='checkbox']):not([type='radio']),select) { min-height: 36px; padding-block: 7px; font-size: 13px; }
+:is(.toolbar,.content-toolbar,.list-controls,.pagination,.id-pagination,.entry-record-actions) :is(input:not([type='checkbox']):not([type='radio']),select) { min-height: 36px; padding-block: 7px; font-size: 13px; }
 .search-field > input { padding-left: 36px !important; }
 .search-field > .icon { top: 50%; transform: translateY(-50%); color: var(--muted); }
 /* Labels above controls; help stays next to its label, outside the input flow. */
@@ -6846,9 +6832,6 @@ input:is([type='checkbox'],[type='radio']) { accent-color: var(--primary); }
 .entry-records .panel-heading { padding-inline: 16px; }
 .entry-records .section-title-row h2 { font-size: 14px; }
 .entry-record-context { gap: 8px; }
-.entry-periods { gap: 2px; }
-.entry-periods > .button { border-color: transparent; background: transparent; padding-inline: 8px; font-size: 12px; }
-.entry-periods > .button.primary { background: var(--primary-soft); color: var(--primary); box-shadow: none; }
 .entry-record-actions { flex-basis: 180px; }
 .entry-record-actions .entry-record-search { flex-basis: 190px; max-width: 240px; }
 .entry-records .entry-record-list td { padding-block: 8px; }
@@ -6879,7 +6862,7 @@ td { color: var(--text); border-color: var(--line); }
   .topbar-page-title h1 { font-size: 16px; }
   .button,.button.compact,.field-row .button { min-height: 44px; }
   input:not([type='checkbox']):not([type='radio']):not([type='range']):where(:not([type='file']):not([type='hidden'])),select,textarea,
-  :is(.toolbar,.content-toolbar,.list-controls,.id-pagination,.entry-record-actions,.entry-date-range) :is(input:not([type='checkbox']):not([type='radio']),select),
+  :is(.toolbar,.content-toolbar,.list-controls,.id-pagination,.entry-record-actions) :is(input:not([type='checkbox']):not([type='radio']),select),
   .commerce-search-picker > .commerce-picker-trigger { min-height: 44px; font-size: 16px; }
   .field-title-help > summary { min-width: 28px; min-height: 28px; }
   .field,.field:has(> .field-title-help),.form-grid .field,.commerce-field-grid .field,#commerce-order-form .field { grid-template-columns: minmax(0,max-content) minmax(0,1fr); row-gap: 5px; }
@@ -6893,7 +6876,6 @@ td { color: var(--text); border-color: var(--line); }
   .order-submission-entry .form-section .panel-heading .button { min-height: 44px; }
   .order-submission-entry .form-section + .form-section { margin-top: 20px; padding-top: 16px; }
   .order-submission-entry [data-commerce-field='notes'] textarea { height: 64px; }
-  .entry-periods > .button { min-height: 44px; }
   .order-submission-navigation { padding: 4px; gap: 2px; }
   .order-submission-navigation > .button { min-height: 44px; }
 }

@@ -630,10 +630,16 @@ test('监控中心入口、全量筛选、键盘和大表格视口保持可用',
   await page.getByRole('button', { name: '重置', exact: true }).click();
   await page.locator('[data-row-id="monitor-fixture-2"]').waitFor();
   assert.equal(await page.locator('#system-monitor-search').inputValue(), '');
-  await page.locator('#system-monitor-days').selectOption('7');
+  const calendarRead = page.waitForRequest(request => {
+    const url = new URL(request.url());
+    return url.pathname.endsWith('/system-monitoring') && url.searchParams.has('from') && url.searchParams.has('to');
+  });
+  await page.locator('#system-monitor-period-select').selectOption('week');
+  const dates = new URL((await calendarRead).url()).searchParams;
+  assert.deepEqual({ from: dates.get('from'), to: dates.get('to') }, await page.evaluate(() => window.IDDateFilter.range('week')));
   await page.getByRole('tab', { name: '运行状态', exact: true }).click();
   await page.getByRole('tab', { name: '告警记录', exact: true }).click();
-  assert.equal(await page.locator('#system-monitor-days').inputValue(), '7');
+  assert.equal(await page.locator('#system-monitor-period-select').inputValue(), 'week');
   await tabs.getByRole('tab', { name: '告警记录', exact: true }).press('ArrowRight');
   await page.waitForURL('**/#/plugins/websites');
   await tabs.getByRole('tab', { name: '访问记录与 IP', exact: true, selected: true }).waitFor();

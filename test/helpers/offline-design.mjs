@@ -123,7 +123,7 @@ export async function interceptDesign(context, { beforeDirectory, localFixtures,
       let body = await readFile(file);
       // Custom scrollbars reserve layout space even when the headless browser uses overlay scrollbars.
       if (scrollbarSelector && path.basename(file) === 'prototype.css')
-        body = body.toString() + `\n${scrollbarSelector} { scrollbar-width: auto !important; }\n${scrollbarSelector}::-webkit-scrollbar { width: 12px; height: 12px; }\n`;
+        body = body.toString() + `\n${scrollbarSelector} { scrollbar-width: auto !important; }\n${scrollbarSelector}::-webkit-scrollbar { display: block !important; width: 12px; height: 12px; }\n`;
       if (url.pathname === '/' && localFixtures)
         body = body
           .toString()

@@ -1,6 +1,7 @@
 (() => {
   'use strict';
   const A = window.IDDesignAPI, D = window.IDLocalData, route = 'settings/exchange-rates';
+  const dateFilter = window.IDDateFilter;
   const e = A.esc, $ = selector => document.querySelector(selector);
   const labels = {
     USD: '美元 USD', MYR: '马币 MYR', PHP: '菲律宾比索 PHP',
@@ -14,16 +15,17 @@
   const defaultPageSize = window.IDPagination.defaultPageSize;
   let data, loading = false, saving = false, error = '', lastKey = '', sequence = 0, lifetime = 0, expiryTimer;
   function view() {
-    if (!A.state.drafts.has(viewKey)) A.state.drafts.set(viewKey, { tab: 'rates', query: '', currency: '', status: '', mode: '', from: '', to: '', page: 1, pageSize: defaultPageSize });
+    if (!A.state.drafts.has(viewKey)) A.state.drafts.set(viewKey, { tab: 'rates', query: '', currency: '', status: '', mode: '', from: '', to: '', period: 'all', page: 1, pageSize: defaultPageSize });
     return A.state.drafts.get(viewKey);
   }
   const active = () => A.state.route === route && (!D?.authRequired || ['admin', 'super'].includes(D.actor()?.role));
   const time = value => value ? new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false }) : '—';
   const source = value => value === 'disabled' ? '尚未启用' : value === 'exchange-rate-api-open' ? 'ExchangeRate-API（历史来源）' : 'Fawaz Currency API';
   const badge = value => A.tag(states[value] || '待核对', ['valid', 'updated', 'unchanged'].includes(value) ? 'success' : ['failed', 'expired'].includes(value) ? 'danger' : 'warning');
+  const selectedDates = ({ period, from, to }) => period === 'custom' ? { from, to } : dateFilter.range(period);
   function params() {
     const v = view();
-    return { tab: v.tab, query: v.query, currency: v.currency, status: v.status, mode: v.mode, from: v.from, to: v.to,
+    return { tab: v.tab, query: v.query, currency: v.currency, status: v.status, mode: v.mode, ...selectedDates(v),
       page: String(A.state.page), pageSize: String(A.state.pageSize) };
   }
   function preserveDraft() {
@@ -105,8 +107,14 @@
     if (!history) filters += '<select id="fx-filter-status" aria-label="筛选结果">' + A.options([['', '全部结果'],
       ...Object.entries(states).filter(([key]) => records ? ['running', 'updated', 'unchanged', 'partial', 'failed'].includes(key) : ['valid', 'expired', 'missing'].includes(key))], v.status) + '</select>';
     if (records) filters += '<select id="fx-filter-mode" aria-label="筛选采集方式">' + A.options([['', '全部方式'], ...Object.entries(modes)], v.mode) + '</select>';
-    if (records || history) filters += '<label class="fx-date">开始日期' + A.input('fx-from', v.from, 'type="date" aria-label="开始日期"') + '</label>' +
-      '<label class="fx-date">结束日期' + A.input('fx-to', v.to, 'type="date" aria-label="结束日期"') + '</label>';
+    if (records || history) filters += dateFilter.render({
+      id: 'fx-date-range', value: v.period, ...selectedDates(v), all: true, compact: true, allowOpen: true,
+      onSelect({ preset, from, to }) {
+        Object.assign(view(), { period: preset, from, to, page: 1 });
+        A.state.page = 1;
+        A.render();
+      }
+    });
     return '<div class="toolbar fx-toolbar"><div class="toolbar-left">' + filters + '</div><div class="toolbar-right" data-page-actions>' +
       A.button(history ? v.tab === 'settings-history' ? '返回采集设置' : '返回当前汇率' : '清空筛选', history ? v.tab === 'settings-history' ? 'fx-settings' : 'fx-rates' : 'fx-clear') +
       (!records && !history ? A.button('历史报价', 'fx-history') : '') +
@@ -198,9 +206,9 @@
   function switchTab(tab) {
     preserveDraft();
     window.IDSearchInput?.discardPage(route, 'fx-query');
-    const v = view(), { query, currency, status, mode, from, to, page, pageSize, total } = v;
-    (v.tabs ||= {})[v.tab] = { query, currency, status, mode, from, to, page, pageSize, total };
-    Object.assign(v, { query: '', currency: '', status: '', mode: '', from: '', to: '', page: 1, pageSize: defaultPageSize, total: 0 },
+    const v = view(), { query, currency, status, mode, from, to, period, page, pageSize, total } = v;
+    (v.tabs ||= {})[v.tab] = { query, currency, status, mode, from, to, period, page, pageSize, total };
+    Object.assign(v, { query: '', currency: '', status: '', mode: '', from: '', to: '', period: 'all', page: 1, pageSize: defaultPageSize, total: 0 },
       v.tabs[tab], { tab });
     A.state.page = v.page; A.state.pageSize = v.pageSize; lastKey = ''; error = ''; A.render();
   }
@@ -258,7 +266,7 @@
     else if (['fx-rates', 'fx-history', 'fx-settings', 'fx-settings-history'].includes(action))
       switchTab({ 'fx-rates': 'rates', 'fx-history': 'history', 'fx-settings': 'settings', 'fx-settings-history': 'settings-history' }[action]);
     else if (action === 'fx-clear') {
-      Object.assign(view(), { query: '', currency: '', status: '', mode: '', from: '', to: '', page: 1 });
+      Object.assign(view(), { query: '', currency: '', status: '', mode: '', from: '', to: '', period: 'all', page: 1 });
       A.state.page = 1; error = ''; lastKey = ''; A.render();
     }
     else if (action === 'fx-refresh') {
@@ -342,7 +350,7 @@
       if (node.name === 'fx-currencies') $('#fx-currencies').textContent = '已选择 ' + readSettings($('#fx-settings-form')).currencies.length + ' 个币种';
       return true;
     }
-    const key = { 'fx-filter-currency': 'currency', 'fx-filter-status': 'status', 'fx-filter-mode': 'mode', 'fx-from': 'from', 'fx-to': 'to' }[node.id];
+    const key = { 'fx-filter-currency': 'currency', 'fx-filter-status': 'status', 'fx-filter-mode': 'mode' }[node.id];
     if (!key) return false;
     view()[key] = node.value; A.state.page = 1; view().page = 1; void load(); return true;
   }

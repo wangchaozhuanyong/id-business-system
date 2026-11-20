@@ -391,7 +391,7 @@ test('overview reuses a clean visit, refreshes explicitly and preserves failed s
         refreshOverview: async () => { calls.commerce++; return !failCommerce; },
         overviewSummary: () => {
           const data = { generation: calls.commerce };
-          return { commerce: data, profit: { today: data, week: data, month: data } };
+          return { commerce: data, profit: Object.fromEntries(window.IDDateFilter.presets.map(([id]) => [id, data])) };
         },
         overviewCustomerSummary: () => ({ generation: calls.commerce })
       },
@@ -411,6 +411,7 @@ test('overview reuses a clean visit, refreshes explicitly and preserves failed s
   };
   window.IDDesignAPI = A;
   window.IDDesignModules = [];
+  window.IDDateFilter = { presets: [['today'], ['yesterday'], ['three'], ['week'], ['fifteen'], ['month']] };
   runInNewContext(overviewSource, { window, document, structuredClone, queueMicrotask, Intl });
   const overview = window.IDDesignModules[0];
   const revisit = async () => {

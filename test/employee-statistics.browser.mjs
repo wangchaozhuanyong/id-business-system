@@ -53,7 +53,8 @@ async function install(page, actor) {
   });
   await page.route('**/api/local/employee-statistics?*', async intercepted => {
     controls.requests++;
-    controls.queries.push(new URL(intercepted.request().url()).searchParams.get('date'));
+    const dates = new URL(intercepted.request().url()).searchParams;
+    controls.queries.push(dates.has('from') ? dates.get('from') + '/' + dates.get('to') : dates.get('date'));
     if (controls.httpError) return intercepted.fulfill({ status: 503, json: { error: '暂时不可读' } });
     const request = intercepted.request();
     assert.equal(new URL(request.url()).pathname, employeeStatisticsRoute);
@@ -67,6 +68,31 @@ async function install(page, actor) {
     await intercepted.fulfill(result);
   });
   return controls;
+}
+
+function dateControls(statistics) {
+  const group = statistics.locator('[data-date-filter="employee-statistics-period"]');
+  const compact = group.locator('[data-date-select]');
+  const action = value => group.locator(`[data-date-choice="${value}"]`);
+  return {
+    group,
+    async choose(value, keyboard = false) {
+      if (await compact.isVisible()) await compact.selectOption(value);
+      else if (keyboard) await action(value).press('Enter');
+      else await action(value).click();
+    },
+    async selected(value) {
+      return await compact.isVisible() ? await compact.inputValue() === value :
+        await action(value === 'custom' ? 'choose-custom' : value).getAttribute('aria-pressed') === 'true';
+    }
+  };
+}
+
+async function enterDateRange(page, from, to) {
+  const drawer = page.getByRole('dialog', { name: '选择统计日期' });
+  await drawer.getByLabel('开始日期', { exact: true }).fill(from);
+  await drawer.getByLabel('结束日期', { exact: true }).fill(to);
+  await drawer.getByRole('button', { name: '应用日期', exact: true }).press('Enter');
 }
 
 test('员工统计从数据管理进入，工作量、当前资产与权限独立显示', { timeout: 100_000 }, async t => {
@@ -98,38 +124,33 @@ test('员工统计从数据管理进入，工作量、当前资产与权限独�
         await orderCount.waitFor();
         assert.equal(await orderCount.textContent(), '13');
         const toolbar = statistics.getByRole('group', { name: '员工统计筛选', exact: true });
-        const shortcuts = toolbar.getByRole('group', { name: '快捷日期', exact: true });
-        assert.equal(await shortcuts.getByRole('button', { name: '今天', exact: true }).getAttribute('aria-pressed'), 'true');
+        const shortcuts = dateControls(statistics);
+        assert(await shortcuts.selected('today'));
         const geometry = await toolbar.evaluate(node => {
           const bounds = node.getBoundingClientRect();
           const heading = node.closest('.employee-statistics-header');
           const row = heading.getBoundingClientRect();
           const refresh = heading.querySelector('[data-action="employee-statistics-refresh"]').getBoundingClientRect();
           const centers = [...heading.querySelectorAll('.tabs > .tab, .toolbar input, .toolbar select, .toolbar button, .employee-statistics-scope'),
-            heading.querySelector('[data-action="employee-statistics-refresh"]')].map(control => {
+            heading.querySelector('[data-action="employee-statistics-refresh"]')].filter(control => control.checkVisibility()).map(control => {
             const box = control.getBoundingClientRect();
             return (box.top + box.bottom) / 2;
           });
-          const controls = [...node.querySelectorAll('input, select, button')].map(control => {
+          const controls = [...node.querySelectorAll('input, select, button')].filter(control => control.checkVisibility()).map(control => {
             const rect = control.getBoundingClientRect();
             return { x: rect.x, y: rect.y, right: rect.right, bottom: rect.bottom, width: rect.width, height: rect.height };
           });
-          const label = node.querySelector('.toolbar-date');
-          const text = document.createRange();
-          text.selectNodeContents(label.firstChild);
+          const paired = [...node.querySelectorAll('.toolbar-select-filters select')].map(control => control.getBoundingClientRect().top);
           return { controls, top: bounds.top, bottom: bounds.bottom,
             scrollbar: heading.querySelector('.employee-statistics-scroll').offsetHeight - heading.querySelector('.employee-statistics-scroll').clientHeight,
             scrollportWidth: heading.querySelector('.employee-statistics-scroll').clientWidth,
             scrollWidth: heading.querySelector('.employee-statistics-scroll').scrollWidth,
             centerDeviation: Math.max(...centers) - Math.min(...centers),
             refreshVisible: refresh.left >= row.left && refresh.right <= row.right && refresh.right <= innerWidth,
-            refreshInsets: [refresh.top - row.top, row.bottom - refresh.bottom],
-            labelRight: text.getBoundingClientRect().right, labelCenter: (text.getBoundingClientRect().top + text.getBoundingClientRect().bottom) / 2 };
+            refreshInsets: [refresh.top - row.top, row.bottom - refresh.bottom], paired };
         });
         const [dateBox] = geometry.controls;
-        assert(dateBox.width >= 145 && dateBox.width <= 165, '日期框应紧凑且完整显示');
-        assert(geometry.labelRight <= dateBox.x, '日期标签应在输入框左侧');
-        assert(Math.abs(geometry.labelCenter - dateBox.y - dateBox.height / 2) <= 2, '日期文字未垂直居中');
+        assert(dateBox.width > 0, '日期选择器应可见');
         assert(geometry.controls.every(box => box.y - geometry.top >= 8 && geometry.bottom - box.bottom >= 8), '筛选控件贴边');
         assert(geometry.controls.every(box => box.height >= (width <= 900 ? 44 : 36)), '控件触控高度不足');
         assert(geometry.centerDeviation <= 1, '页签、筛选、数据时间和刷新必须同排居中');
@@ -142,7 +163,7 @@ test('员工统计从数据管理进入，工作量、当前资产与权限独�
           assert(a.right <= b.x || b.right <= a.x || a.bottom <= b.y || b.bottom <= a.y, '筛选控件重叠');
         }
         if (width >= 1440) assert(geometry.controls.every(box => Math.abs(box.y - dateBox.y) <= 1), '宽屏筛选必须完整同排');
-        assert.equal(geometry.controls[4].y, geometry.controls[5].y, '员工与业务筛选应成组排列');
+        assert.equal(geometry.paired[0], geometry.paired[1], '员工与业务筛选应成组排列');
         if (process.env.ID_LAYOUT_QA_OUTPUT && [2062, 1440, 390, 320].includes(width)) {
           await mkdir(process.env.ID_LAYOUT_QA_OUTPUT, { recursive: true });
           await page.screenshot({ path: `${process.env.ID_LAYOUT_QA_OUTPUT}/employee-statistics-${width}-${dark ? 'dark' : 'light'}.png` });
@@ -151,7 +172,7 @@ test('员工统计从数据管理进入，工作量、当前资产与权限独�
         assert(await statistics.evaluate(panel => {
           const scroll = panel.querySelector('.employee-statistics-scroll');
           const bounds = scroll.getBoundingClientRect();
-          const controls = [...panel.querySelectorAll('.toolbar input, .toolbar select, .toolbar button')]
+          const controls = [...panel.querySelectorAll('.toolbar input, .toolbar select, .toolbar button')].filter(control => control.checkVisibility())
             .map(control => control.getBoundingClientRect());
           const textFits = [...panel.querySelectorAll('th')].every(heading => {
             const range = document.createRange();
@@ -184,28 +205,27 @@ test('员工统计从数据管理进入，工作量、当前资产与权限独�
         await page.waitForFunction(() => document.querySelector('#employee-statistics-detail nav[data-pagination]').dataset.page === '2');
         assert.equal(await details.locator('tbody tr').count(), 3);
         await page.getByRole('button', { name: '关闭抽屉' }).click();
-        await shortcuts.getByRole('button', { name: '昨天', exact: true }).click();
+        await shortcuts.choose('yesterday');
         await dateLoaded('2026-11-08');
-        assert.equal(await statistics.getByLabel('统计日期').inputValue(), '2026-11-08');
-        assert.equal(await shortcuts.getByRole('button', { name: '昨天', exact: true }).getAttribute('aria-pressed'), 'true');
+        assert(await shortcuts.selected('yesterday'));
         assert.equal(await orderCount.textContent(), '1');
-        await shortcuts.getByRole('button', { name: '前天', exact: true }).press('Enter');
-        await dateLoaded('2026-11-07');
-        assert.equal(await statistics.getByLabel('统计日期').inputValue(), '2026-11-07');
-        assert.equal(await shortcuts.getByRole('button', { name: '前天', exact: true }).getAttribute('aria-pressed'), 'true');
+        await shortcuts.choose('three', true);
+        await statistics.locator('[data-statistics-date="2026-11-07"][data-statistics-to="2026-11-09"]').waitFor();
+        assert(await shortcuts.selected('three'));
         assert.equal(await employee.inputValue(), operator.id);
-        assert.equal(await orderCount.count(), 0);
-        await statistics.getByLabel('统计日期').fill('2026-09-06');
+        assert.equal(await orderCount.textContent(), '14');
+        await shortcuts.choose('choose-custom', true);
+        await enterDateRange(page, '2026-09-06', '2026-09-06');
         await dateLoaded('2026-09-06');
-        assert.equal(await shortcuts.locator('[aria-pressed="true"]').count(), 0);
-        assert.deepEqual(controls.queries.slice(-3), ['2026-11-08', '2026-11-07', '2026-09-06']);
-        await statistics.getByRole('button', { name: '今天', exact: true }).click();
+        assert(await shortcuts.selected('custom'));
+        assert.deepEqual(controls.queries.slice(-3), ['2026-11-08', '2026-11-07/2026-11-09', '2026-09-06']);
+        await shortcuts.choose('today');
         await dateLoaded('2026-11-09');
         await statistics.getByRole('combobox', { name: '业务类型' }).selectOption('mail');
         await header('邮箱提交').waitFor({ state: 'attached' });
         assert.equal(await header('提交订单').count(), 0);
         await statistics.getByRole('button', { name: '待处理资产' }).click();
-        assert.equal(await shortcuts.count(), 0, '待处理资产不使用历史日期筛选');
+        assert.equal(await shortcuts.group.count(), 0, '待处理资产不使用历史日期筛选');
         const unused = statistics.getByRole('button', { name: '查看测试员工的未用未还充值码明细', exact: true });
         await statistics.getByRole('button', { name: '展开明细', exact: true }).click();
         await unused.waitFor();
@@ -310,33 +330,35 @@ test('员工统计从数据管理进入，工作量、当前资产与权限独�
           await page.goto(origin + '/#/' + route);
           const statistics = page.locator('#employee-statistics');
           const dateLoaded = value => statistics.locator(`[data-statistics-date="${value}"]`).waitFor();
-          const selectedDate = statistics.getByLabel('统计日期');
+          const shortcuts = dateControls(statistics);
           await dateLoaded(date);
-          assert.equal(await selectedDate.inputValue(), date);
-          assert.equal(await selectedDate.getAttribute('max'), date);
+          assert(await shortcuts.selected('today'));
           await statistics.getByRole('combobox', { name: '员工', exact: true }).selectOption(operator.id);
           await statistics.getByRole('combobox', { name: '业务类型' }).selectOption('mail');
-          await statistics.getByRole('button', { name: '昨天', exact: true }).click();
+          await shortcuts.choose('yesterday');
           await dateLoaded(yesterday);
-          assert.equal(await selectedDate.inputValue(), yesterday);
-          await statistics.getByRole('button', { name: '前天', exact: true }).click();
-          await dateLoaded(beforeYesterday);
-          assert.equal(await selectedDate.inputValue(), beforeYesterday);
+          assert(await shortcuts.selected('yesterday'));
+          await shortcuts.choose('three');
+          const rangeLoaded = () => statistics.locator(`[data-statistics-date="${beforeYesterday}"][data-statistics-to="${date}"]`).waitFor();
+          await rangeLoaded();
           await statistics.getByRole('button', { name: '待处理资产', exact: true }).click();
           await statistics.getByText('当前资产截至', { exact: false }).waitFor();
           await statistics.getByRole('button', { name: '工作量', exact: true }).click();
-          await dateLoaded(beforeYesterday);
+          await rangeLoaded();
           await page.evaluate(() => { location.hash = '#/overview'; });
           await page.locator('#main[data-layout-route="overview"]').waitFor();
           await page.evaluate(route => { location.hash = '#/' + route; }, route);
-          await dateLoaded(beforeYesterday);
-          assert.equal(await selectedDate.inputValue(), beforeYesterday);
+          await rangeLoaded();
           assert.equal(await statistics.getByRole('combobox', { name: '员工', exact: true }).inputValue(), operator.id);
           assert.equal(await statistics.getByRole('combobox', { name: '业务类型' }).inputValue(), 'mail');
-          assert.equal(await statistics.getByRole('button', { name: '前天', exact: true }).getAttribute('aria-pressed'), 'true');
-          await statistics.getByRole('button', { name: '今天', exact: true }).click();
+          assert(await shortcuts.selected('three'));
+          await shortcuts.choose('choose-custom');
+          assert.equal(await page.getByLabel('结束日期', { exact: true }).getAttribute('max'), date);
+          await page.keyboard.press('Escape');
+          assert(await shortcuts.selected('three'));
+          await shortcuts.choose('today');
           await dateLoaded(date);
-          assert.equal(await selectedDate.inputValue(), date);
+          assert(await shortcuts.selected('today'));
         } finally { await page.close(); }
       }
     }

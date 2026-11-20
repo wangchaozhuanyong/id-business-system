@@ -7,8 +7,6 @@
 .fx-toolbar .toolbar-left { flex: 1 1 420px; }
 .fx-toolbar input[type='search'] { flex: 1 1 200px; min-width: 140px; }
 .fx-toolbar select { flex: 0 1 auto; width: auto; }
-.fx-date { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
-.fx-date input { min-width: 0; width: 155px; }
 .fx-currency-trigger { width: 100%; justify-content: space-between; }
 .fx-currency-popover { width: min(340px, calc(100vw - 24px)); max-height: min(420px, calc(100dvh - 24px)); overflow-y: auto; }
 .fx-currency-popover > input { width: 100%; }

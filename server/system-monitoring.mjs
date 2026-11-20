@@ -447,12 +447,17 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
       receipts.some(item => item.status === state)) || 'unknown';
   }
 
-  function view({ tab = 'incidents', status = '', page = 1, pageSize = 20, q = '', days = 0, priority = '' } = {}) {
+  function view({ tab = 'incidents', status = '', page = 1, pageSize = 20, q = '', days = 0, priority = '', start, end } = {}) {
     const { data } = state();
     const query = q.trim().toLocaleLowerCase('zh-CN');
-    const matches = row => (!days || (tab === 'deliveries' ? row.finishedAt || row.at : row.at) >= clock() - days * 86400_000) &&
-      (!priority || row.priority === priority) && (!query || [row.label, row.id, row.target, row.taskTail]
-        .some(value => String(value || '').toLocaleLowerCase('zh-CN').includes(query)));
+    const lower = start ?? (days ? clock() - days * 86400_000 : -Infinity);
+    const upper = end ?? Infinity;
+    const matches = row => {
+      const at = tab === 'deliveries' ? row.finishedAt || row.at : row.at;
+      return at >= lower && at < upper && (!priority || row.priority === priority) &&
+        (!query || [row.label, row.id, row.target, row.taskTail]
+          .some(value => String(value || '').toLocaleLowerCase('zh-CN').includes(query)));
+    };
     if (tab === 'deliveries') return pageOf(data.deliveries.filter(row => !status || row.status === status).map(row => ({
       id: row.id, incidentId: row.incidentId, label: row.kind === 'test' ? '渠道测试' : monitorRules[row.code].label,
       kind: row.kind, target: monitorChannels[row.target], status: row.status, attempts: row.attempts,

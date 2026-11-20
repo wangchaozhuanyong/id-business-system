@@ -682,7 +682,9 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
 
   await t.test('自定义日期覆盖两个自然月，校验起止并保留筛选', async () => {
     const template = commerceFixture.orders.find(row => !row.cancelled);
-    const orders = ['2026-08-31 23:59', '2026-09-01 00:00', '2026-10-31 23:59', '2026-11-01 00:00']
+    const orders = ['2026-08-31 23:59', '2026-09-01 00:00', '2026-10-31 23:59', '2026-11-01 00:00',
+      '2026-10-26 23:59', '2026-10-27 00:00', '2026-11-08 23:59', '2026-11-09 00:00',
+      '2026-11-09 23:59', '2026-11-10 00:00']
       .map((createdAt, index) => ({ ...template, id: 'overview-date-' + index, createdAt, start: createdAt }));
     const { context, page, errors } = await open(undefined, {
       commerce: { version: 1, data: { ...commerceFixture, orders } },
@@ -690,9 +692,18 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     });
     try {
       await page.goto(origin + '/#/overview');
+      await refreshed(page);
+      await selectRange(page, '昨日');
+      assert.equal(await value(page, 'orders'), '2');
+      assert.equal(await page.locator('.overview-chart-data g').count(), 24);
+      await selectRange(page, '近 3 天');
+      assert.equal(await value(page, 'orders'), '4');
+      await selectRange(page, '近 15 天');
+      assert.equal(await value(page, 'orders'), '7');
+      await selectRange(page, '近 7 天');
       const custom = page.getByRole('button', { name: '自定义日期', exact: true });
       await custom.click();
-      const drawer = page.locator('#drawer[open]');
+      const drawer = page.locator('#date-filter-drawer[open]');
       await drawer.getByRole('heading', { name: '选择统计日期' }).waitFor();
       await page.keyboard.press('Escape');
       await drawer.waitFor({ state: 'hidden' });
@@ -711,10 +722,10 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
       await drawer.waitFor({ state: 'hidden' });
       const period = page.getByRole('button', { name: '查看统计区间与更新时间' });
       await period.getByText(/09\/01.*10\/31/).waitFor();
-      assert.equal(await value(page, 'orders'), '2');
+      assert.equal(await value(page, 'orders'), '4');
       assert.equal(await compact.inputValue(), 'custom');
       await period.click();
-      assert.match(await drawer.innerText(), /上期[\s\S]*08\/31/);
+      assert.match(await page.locator('#drawer[open]').innerText(), /上期[\s\S]*08\/31/);
       await page.keyboard.press('Escape');
       assert.equal(await page.locator('.overview-chart-data g').count(), 21);
       await page.getByText('每 3 天汇总', { exact: true }).waitFor();

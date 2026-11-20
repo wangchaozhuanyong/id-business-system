@@ -144,6 +144,9 @@ test('统计入口仅管理员可读，校验日期、权限及筛选后才读�
   assert.equal((await request(admin, '', { headers: { origin: 'https://unrelated.test' } })).status, 403);
   assert.equal((await request(admin, '?date=2026-02-30')).status, 400);
   assert.equal((await request(admin, '?date=2026-11-10')).status, 400);
+  for (const dates of ['from=2026-11-08', 'from=2026-02-30&to=2026-11-09', 'from=2026-11-09&to=2026-11-08',
+    'from=2026-11-08&to=2026-11-10', 'date=2026-11-08&from=2026-11-08&to=2026-11-09'])
+    assert.equal((await request(admin, '?' + dates)).status, 400, dates);
   assert.equal((await request(admin, '?metric=unusedCodes')).status, 400);
   assert.equal(reads, 0);
   const received = await request(admin);
@@ -152,4 +155,9 @@ test('统计入口仅管理员可读，校验日期、权限及筛选后才读�
   assert.equal(received.body.date, '2026-11-09');
   assert.equal(received.body.codeSourceAvailable, false);
   assert.equal(reads, 2);
+  const ranged = await request(admin, '?from=2026-11-08&to=2026-11-09&kind=order&metric=orders&employee=operator-a');
+  assert.equal(ranged.status, 200);
+  assert.equal(ranged.body.from, '2026-11-08');
+  assert.equal(ranged.body.to, '2026-11-09');
+  assert.deepEqual(ranged.body.items.map(row => row.id), ['manual', 'last-day']);
 });

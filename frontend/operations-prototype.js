@@ -34,6 +34,7 @@
   } = api;
   const $ = (selector) => document.querySelector(selector);
   const localData = window.IDLocalData;
+  const dateFilter = window.IDDateFilter;
   const pluginPages = {
     'plugins/mailboxes': { label: '邮箱查询', tool: '邮箱查询与邮箱池', description: '统一管理收信连接、Claude 待授权邮箱与验证码查询。' },
     'plugins/websites': { label: '网站监控', tool: '网站监控', description: '查看运行状态、告警记录、访问记录和网站检测。' }
@@ -3612,24 +3613,27 @@
     return `<div class="tool-metrics${items.length === 2 ? ' tool-metrics--two' : ''}">${items.map(([label, amount]) =>
       `<div class="tool-metric"><span>${esc(label)}</span><strong>${amount}</strong></div>`).join('')}</div>`;
   }
+  const websiteVisitPeriod = () => getDraft('website-visits-period', { preset: 'week' });
+  const websiteVisitDates = ({ preset, from, to }) => preset === 'custom' ? { from, to } : dateFilter.range(preset);
+  function websiteVisitFilter() {
+    const period = websiteVisitPeriod();
+    return dateFilter.render({
+      id: 'ops-visits-range', value: period.preset, ...websiteVisitDates(period),
+      min: dateFilter.range('month').from, max: dateFilter.range('today').to, compact: true,
+      onSelect(next) {
+        state.drafts.set(draftKey('website-visits-period'), next);
+        const filter = $('#ops-website-visits [data-visits-period]');
+        if (filter) filter.innerHTML = websiteVisitFilter();
+      }
+    });
+  }
   function websiteVisitsPanel() {
     const title = '访问记录与访客 IP';
     const actions = button('刷新记录', 'ops-website-visit-refresh', '', 'return', 'data-async-refresh') +
       '<button type="submit" class="button primary">查询明细</button>';
     const help = titleInfo(title, '这里显示 flashcast.com.my 装修站的签名采集记录。', 'website-visits-help');
     return `<section class="form-section website-tool-panel" id="ops-website-visits"><form id="ops-website-visits-form" novalidate>${websiteToolHeader(title, actions, help)}${grid(
-      field(
-        '最近天数',
-        'ops-visits-days',
-        select(
-          'ops-visits-days',
-          [
-            ['7', '最近 7 天'],
-            ['30', '最近 30 天']
-          ],
-          '7'
-        )
-      ) +
+      field('时间范围', 'ops-visits-range-select', `<div data-visits-period>${websiteVisitFilter()}</div>`) +
         field(
           '排序',
           'ops-visits-sort',
@@ -3665,7 +3669,7 @@
     } else {
       const values = readForm(form);
       query = {
-        days: Number(values['ops-visits-days']),
+        ...websiteVisitDates(websiteVisitPeriod()),
         sort: values['ops-visits-sort'],
         page: 1,
         pageSize: websiteVisitQueries.get(output)?.pageSize || defaultPageSize,
@@ -3683,7 +3687,7 @@
           dateStyle: 'short',
           timeStyle: 'medium'
         });
-        const filters = `最近 ${query.days} 天 · ${query.sort === 'oldest' ? '最早优先' : '最新优先'}${query.ip ? ' · 按 IP 筛选' : ''}`;
+        const filters = `${query.from} 至 ${query.to} · ${query.sort === 'oldest' ? '最早优先' : '最新优先'}${query.ip ? ' · 按 IP 筛选' : ''}`;
         const count = (value) => Number.isSafeInteger(value) ? esc(value) : '—';
         const metrics = report.summary
           ? websiteMetrics([['已采集浏览量', count(report.summary.pageViews)], ['独立 IP 数', count(report.summary.visitors)]])
