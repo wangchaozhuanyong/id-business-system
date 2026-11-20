@@ -7,7 +7,6 @@
   const session = $('session');
   const agreement = $('confirm');
   const account = $('account');
-  const help = document.querySelector('.partner-authorization-heading details');
   const match = /^#([a-f0-9-]{36})\.([A-Za-z0-9_-]{43})$/.exec(location.hash);
   const labels = {
     awaiting_authorization: '请核对合作方和套餐，填写目标账号的授权资料。',
@@ -92,15 +91,6 @@
     if (!uncertain && agreement.checked && form.reportValidity()) void read(true);
   });
   session.addEventListener('input', showAccount);
-  document.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && help.open) {
-      help.open = false;
-      help.querySelector('summary').focus();
-    }
-  });
-  document.addEventListener('click', event => {
-    if (help.open && !help.contains(event.target)) help.open = false;
-  });
   refresh.addEventListener('click', () => void read());
   window.addEventListener('pagehide', () => {
     session.value = '';

@@ -165,6 +165,8 @@ test('ID authorization page shows the account locally, posts consent once, and c
         return route.fulfill({ json: { id: fixtureReference, partner: '测试合作方', plan, status } });
       });
       const page = await context.newPage();
+      const errors = [];
+      page.on('pageerror', error => errors.push(error.message));
       await page.goto(origin + '/recharge/authorize#' + fixtureReference + '.' + fixtureTicket);
       await page.locator('#authorization-plan').getByText(label, { exact: true }).waitFor();
       const help = page.getByLabel('充值授权说明');
@@ -198,6 +200,7 @@ test('ID authorization page shows the account locally, posts consent once, and c
       await page.getByText('已受理，等待执行。').waitFor();
       assert.equal(writes, 1);
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      assert.deepEqual(errors, []);
       assert.deepEqual(source.external, []);
       await context.close();
     }
