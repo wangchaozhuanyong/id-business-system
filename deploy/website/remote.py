@@ -627,6 +627,30 @@ def normalize_tools_credential_stream(content):
     return content.replace(original, normalized)
 
 
+def wire_canary_card_details(content):
+    """Update the inherited check for the approved administrator detail contract."""
+    legacy = re.compile(
+        r"""^([ \t]*)assert\.ok\(!details\.body\.includes\(cardNumber\), """
+        r"""(?:'[^'\r\n]*'|"[^"\r\n]*")\);$""",
+        re.MULTILINE,
+    )
+    checks = (
+        "const { number: detailCardNumber, ...maskedCard } = summary.card;",
+        "assert.ok(detailCardNumber === cardNumber, 'authorized card details returned an unexpected number');",
+        "assert.ok(!JSON.stringify({ ...json(details), order: { ...summary, card: maskedCard } }).includes(cardNumber),",
+        "  'card details exposed the number outside the authorized field');",
+    )
+    if any(check in content for check in checks):
+        require(all(content.count(check) == 1 for check in checks) and not legacy.search(content),
+                "unexpected_card_details_canary")
+        return content
+    matches = list(legacy.finditer(content))
+    require(len(matches) == 1, "unexpected_card_details_canary")
+    match = matches[0]
+    replacement = "\n".join(match.group(1) + check for check in checks)
+    return content[:match.start()] + replacement + content[match.end():]
+
+
 def wire_event_launcher(content):
     credential = '  cat "$CREDENTIALS_DIRECTORY/independent-vendure-integrations"'
     framed = (
@@ -794,6 +818,8 @@ def stage(plan, release):
                 content = wire_canary_authenticator(content)
             elif scope == "rechargeAdminWorkspacePresentation":
                 content = wire_canary_business_confirmation(content)
+            elif scope == "cardNumberPresentation":
+                content = wire_canary_card_details(content)
         if plan.get('externalEvents'):
             if name == 'run-app':
                 content = wire_event_launcher(content)
