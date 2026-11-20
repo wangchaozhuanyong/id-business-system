@@ -124,11 +124,26 @@ function browserTaskListRow(value) {
   };
 }
 
-function browserAdminData(route, body, actor) {
+const savedCardNumber = (number, last4) => typeof number === 'string' && /^\d{12,19}$/.test(number) &&
+  typeof last4 === 'string' && /^\d{4}$/.test(last4) && number.endsWith(last4) ? number : '';
+
+function browserAdminData(route, body, actor, readSessionCardNumbers) {
   if (route === '/api/admin/cards') {
     return { ...body, cards: Array.isArray(body.cards) ? body.cards.map(({ card_cvc, card_number, ...card }) => ({
-      ...card, card_number: /^\d{4}$/.test(card.last4) ? '****' + card.last4 : ''
+      ...card, card_number: actor.sensitive ? savedCardNumber(card_number, card.last4) : ''
     })) : [] };
+  }
+  if (route === '/api/admin/sessions') {
+    const rows = Array.isArray(body) ? body : Array.isArray(body.items) ? body.items : [];
+    const jobKeys = new Set(rows.filter(row => row?.status === 'success' && typeof row.job_key === 'string')
+      .map(row => row.job_key));
+    let numbers;
+    try {
+      if (actor.sensitive && jobKeys.size) numbers = readSessionCardNumbers?.(jobKeys);
+    } catch { /* Keep the Session list available when its order evidence cannot be read. */ }
+    const items = rows.map(row => ({ ...row, cardNumber: row?.status === 'success'
+      ? savedCardNumber(numbers?.get(row.job_key), row.card_last4) : '' }));
+    return Array.isArray(body) ? items : { ...body, items };
   }
   if (route === '/api/admin/data') {
     const { telegram, hcaptcha, ...data } = body;
@@ -150,7 +165,7 @@ function browserAdminData(route, body, actor) {
 function browserAdminProjection(method, path) {
   if (method !== 'GET') return false;
   const route = path.toLowerCase().replace(/\/+$/, '');
-  return route === '/api/admin/cards' || route === '/api/admin/data' || route === '/api/admin/task-logs' ||
+  return route === '/api/admin/cards' || route === '/api/admin/sessions' || route === '/api/admin/data' || route === '/api/admin/task-logs' ||
     route.startsWith('/api/admin/task-logs/') ? route : false;
 }
 
@@ -261,6 +276,7 @@ export function createCodexdaichongGateway({
   onRechargeOutcome,
   beforeCardDelete,
   beforeCardWrite,
+  readSessionCardNumbers,
   onCardPlanChange,
   assets = loadCodexdaichongAssets
 }) {
@@ -473,7 +489,7 @@ export function createCodexdaichongGateway({
           void readPresentationJson(reply, 8 * 1024 * 1024).then(body => {
             if (res.destroyed) return;
             res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
-            res.end(JSON.stringify(browserAdminData(projectedAdmin, body, actor)));
+            res.end(JSON.stringify(browserAdminData(projectedAdmin, body, actor, readSessionCardNumbers)));
           }).catch(() => { if (!res.destroyed) respond(res, 502, '暂时无法读取代充资料'); });
           return;
         }

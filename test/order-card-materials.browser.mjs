@@ -1,3 +1,4 @@
+import { chooseOrderCustomer } from './helpers/order-customer.mjs';
 import assert from 'node:assert/strict';
 import { readFile, mkdir } from 'node:fs/promises';
 import test from 'node:test';
@@ -107,9 +108,7 @@ test('所有录单入口默认手填并可编辑卡号，卡序列号选填，�
       assert.equal(await form.locator('#commerce-proCardNumber').inputValue(), number);
       assert.equal(await form.locator('#commerce-proCardSerial').inputValue(), serialValue);
     }
-    await form.locator('#commerce-customerId').evaluate((node, id) => {
-      node.value = id; node.dispatchEvent(new Event('change', { bubbles: true }));
-    }, customer.id);
+    await chooseOrderCustomer(form, customer);
     const email = `card-${list}@example.test`;
     await form.locator('#commerce-email').fill(email);
     await form.locator('#commerce-paidAmount').fill('20');
@@ -163,7 +162,7 @@ test('租户银行卡锁定真实卡，新单和更正均保存固定类型', { 
   fixture.commerce.data.orders = [];
   fixture.commerce.data.tenants = [tenant];
   fixture['card-types'] = { version: 1, items: [realType, customType], assignments: { [cardId]: customType.id } };
-  fixture['tenant-cards'] = { version: 1, items: [{ id: cardId, tenantId: tenant.id, last4: '4242', active: true }] };
+  fixture['tenant-cards'] = { version: 1, items: [{ id: cardId, tenantId: tenant.id, number, last4: '4242', active: true }] };
   await page.route('**/api/local/tenant-cards*', route => {
     if (route.request().method() === 'POST' && route.request().postDataJSON().action === 'reveal')
       return route.fulfill({ json: { number } });
@@ -178,7 +177,7 @@ test('租户银行卡锁定真实卡，新单和更正均保存固定类型', { 
     await page.locator(`#commerce-${name}-options [data-value="${id}"]`).click();
   };
   await field('plan').selectOption('Max 5x');
-  await choose('customerId', customer.id);
+  await chooseOrderCustomer(page, customer);
   await field('email').fill('tenant-type@example.test');
   await field('cardTypeId').selectOption(customType.id);
   await field('proMaterialMode').selectOption('tenant_card');
@@ -192,7 +191,9 @@ test('租户银行卡锁定真实卡，新单和更正均保存固定类型', { 
   assert.equal(await field('cardTypeId').inputValue(), customType.id);
   await field('proMaterialMode').selectOption('tenant_card');
   await choose('tenantId', tenant.id);
-  await field('cardId').locator(`option[value="${cardId}"]`).waitFor({ state: 'attached' });
+  const cardOption = field('cardId').locator(`option[value="${cardId}"]`);
+  await cardOption.waitFor({ state: 'attached' });
+  assert.ok((await cardOption.textContent()).includes(number));
   await choose('cardId', cardId);
   await field('paidAmount').fill('20');
   await field('saleAmount').fill('100');

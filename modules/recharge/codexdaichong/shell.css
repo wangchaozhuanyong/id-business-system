@@ -1183,6 +1183,11 @@ body[data-recharge-view='admin']:not([data-standalone]) .main-content {
   max-width: 200px;
 }
 
+[data-recharge-view='admin'] .session-table .session-card-number {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
 [data-recharge-view='admin']:not([data-standalone]) .session-table-container {
   container-name: none;
 }

@@ -192,7 +192,7 @@ test('shared layouts preserve alignment, readable controls and stable navigation
             aligned(await box('label[for="commerce-payment"]'), await box('label[for="commerce-proMaterialMode"]'), '第一行标签不齐');
             // V2 groups payment, material mode and card type together; subsequent selectors retain their full width.
             if (formWidth > 650) aligned(await box('#commerce-payment'), await box('#commerce-cardTypeId'), '支付方式与银行卡类型应同排');
-            for (const id of product === 'claude' ? ['tenantId-picker', 'cardId-picker', 'tenantCardNumber'] : ['cardId-picker', 'paymentId', 'proCardSerial']) {
+            for (const id of product === 'claude' ? ['tenantId-picker', 'cardId-picker', 'tenantCardNumber'] : ['cardId-picker', 'selectedCardNumber', 'proCardSerial']) {
               const node = page.locator('#commerce-' + id);
               if (await node.isVisible()) {
                 const bounds = await node.boundingBox();

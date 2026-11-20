@@ -3,7 +3,7 @@ import { Readable } from 'node:stream';
 import test from 'node:test';
 import { businessListQuery, readInventoryPage, readOrdersPage } from '../server/business-lists.mjs';
 import { employeeCommerce, financeCommerce, retailAccess } from '../server/access-roles.mjs';
-import { handleLocalBusiness } from '../server/local-business.mjs';
+import { handleLocalBusiness, orderCardNumberProjection } from '../server/local-business.mjs';
 
 const at = Date.parse('2026-11-14T02:00:00Z');
 const order = (id, fields = {}) => ({
@@ -68,6 +68,39 @@ test('order list preserves scoped search, accounting and current owner without r
   assert.deepEqual(employeePage.rows.map(row => row.id), ['order-1']);
   assert(!JSON.stringify(employeePage).includes('synthetic-other-record'));
   assert(!JSON.stringify(employeePage).includes('synthetic-private-note'));
+});
+
+test('员工仅查询所属订单的完整卡号，财务沿用既有订单范围，冲突卡号不显示', async () => {
+  const employee = { id: 'employee-a', role: 'employee' };
+  const finance = { id: 'finance', role: 'finance' };
+  const archived = '4000' + '00000000' + '1234';
+  const other = '4000' + '00000000' + '5678';
+  const snapshot = { version: 2, data: document([
+    order(1, { ownerId: employee.id, cardId: 'recharge:17', paymentId: '1234', proCardSerial: 'private-serial' }),
+    order(2, { ownerId: 'employee-b', proMaterialMode: 'manual_card', proCardNumber: other, paymentId: '5678' }),
+    order(3, { ownerId: employee.id, cardId: 'recharge:17', paymentId: '4321' })
+  ]) };
+  const store = { load: () => snapshot, featureDocument: domain => ({
+    data: domain === 'order-card-archive' ? { cards: { 'recharge:17': { number: archived } } } : {}
+  }) };
+  const read = async actor => {
+    const req = Object.assign(Readable.from([]), { method: 'GET', headers: { host: 'example.test' } });
+    let body;
+    await handleLocalBusiness(req, {
+      setHeader() {}, writeHead(status) { assert.equal(status, 200); },
+      end(value) { body = JSON.parse(value); }
+    }, '/api/local/commerce', store, actor);
+    return body;
+  };
+  const numbers = orderCardNumberProjection(store);
+  assert.equal(numbers(snapshot.data.orders[0]), archived);
+  assert.equal(numbers(snapshot.data.orders[2]), '');
+  const personal = await read(employee);
+  assert.deepEqual(personal.data.orders.map(row => [row.id, row.bankCardNumber]), [['order-1', archived], ['order-3', '']]);
+  assert.doesNotMatch(JSON.stringify(personal), /private-serial/);
+  const accounts = await read(finance);
+  const listed = readOrdersPage(orderQuery({ query: other }), { snapshot: accounts, at });
+  assert.deepEqual(listed.rows.map(row => [row.id, row.bankCardNumber]), [['order-2', other]]);
 });
 
 test('inventory filtering includes registration labels, health and legacy status with bounded detail', () => {

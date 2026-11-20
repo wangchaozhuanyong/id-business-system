@@ -50,6 +50,13 @@ CARD_PLAN_PRESENTATION_FILES = (
     "modules/recharge/codexdaichong/card-plan-admin.mjs",
     "modules/recharge/codexdaichong/shell.css",
 )
+CARD_NUMBER_PRESENTATION_FILES = (
+    "modules/recharge/codexdaichong/assets.mjs",
+    "modules/recharge/codexdaichong/card-plan-admin.mjs",
+    "modules/recharge/codexdaichong/gateway.mjs",
+    "modules/recharge/codexdaichong/local-gateway.mjs",
+    "modules/recharge/codexdaichong/shell.css",
+)
 CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES = (
     "modules/recharge/codexdaichong/assets.mjs",
     "modules/recharge/codexdaichong/routing-admin-ui.mjs",
@@ -70,6 +77,7 @@ PRESENTATION_SCOPES = {
     "tableActionsPresentation": ((TABLE_ACTIONS_STYLESHEET,), {"/shell.css"}),
     "cardImportPresentation": (CARD_IMPORT_PRESENTATION_FILES, {"/admin", "/admin.js", "/shell.css"}),
     "cardPlanPresentation": (CARD_PLAN_PRESENTATION_FILES, {"/admin", "/admin.js", "/shell.css"}),
+    "cardNumberPresentation": (CARD_NUMBER_PRESENTATION_FILES, {"/admin", "/admin.js", "/shell.css"}),
     "checkoutDiagnosticPresentation": (CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES, {"/admin", "/admin.js", "/shell.css"}),
     "securityPresentation": (SECURITY_PRESENTATION_FILES, {"/admin.js"}),
     "taskHistoryPresentation": (TASK_HISTORY_PRESENTATION_FILES, {"/admin", "/admin.js"}),
@@ -419,11 +427,13 @@ def snapshot(include_adapter=False):
     return state
 
 
-def check_baseline(current, expected):
+def check_baseline(current, expected, *, check_asset_mount=False):
     require(all(current[key] == expected[key] for key in
                 ("components", "unitSha256", "gatewaySha256", "assetsSha256", "launchers")),
             "live_baseline_changed")
     require(current.get("adapterUnit") == expected.get("adapterUnit"), "live_adapter_unit_changed")
+    if check_asset_mount:
+        require(current.get("mountedAssets") == expected.get("mountedAssets"), "card_number_presentation_mount_mismatch")
 
 
 def write_new(path, value, mode):
@@ -711,6 +721,10 @@ def require_asset_digest(plan, candidate_sha):
             presentation.get("beforeAssetsSha256") == before and presentation.get("assetsSha256") == candidate_sha and
             candidate_sha != before and re.fullmatch(r"[a-f0-9]{64}", candidate_sha),
             "recharge_presentation_approval_mismatch")
+    if scope == "cardNumberPresentation":
+        mounted = plan["before"].get("mountedAssets", {})
+        require(mounted.get("available") is True and mounted.get("sha256") == before,
+                "card_number_presentation_mount_mismatch")
     return scope
 
 
@@ -1334,7 +1348,12 @@ def read_website(plan, release, source, adapter=None, core=None):
     else:
         raise ReleaseError("website_or_sidecar_readback_failed")
     require(mount_matches(containers["app"], release / "assets.json"), "live_assets_mount_mismatch")
-    require_asset_digest(plan, digest(release / "assets.json"))
+    live_assets = digest(release / "assets.json")
+    scope = require_asset_digest(plan, live_assets)
+    if scope == "cardNumberPresentation":
+        mounted = mounted_assets_digest()
+        require(mounted.get("available") is True and mounted.get("sha256") == live_assets,
+                "card_number_presentation_mount_mismatch")
     require(all(any(m["Destination"] == "/state" and not m["RW"] for m in containers[name]["Mounts"])
                 for name in WEBSITE[1:]), "sidecar_state_mount_not_readonly")
     hash_files = """
@@ -1353,8 +1372,11 @@ console.log(JSON.stringify(Object.fromEntries(hashes)));
         "frontend/recharge-partners.mjs": "/assets/website/pages/recharge-partners.mjs",
         "frontend/recharge-partner-authorize.html": "/recharge/authorize",
         "modules/website/pages.mjs": "/assets/website/pages.mjs",
+        "modules/recharge/bitbrowser/login/index.mjs": "/assets/bitbrowser/login/index.mjs",
+        "modules/recharge/bitbrowser/login/direct-login.mjs": "/assets/bitbrowser/login/direct-login.mjs",
         **{name: "/" + name for name in (
             "modules/orders/order-opening.mjs", "modules/orders/list-order.mjs",
+            "modules/orders/order-customer-match.mjs", "modules/orders/order-whatsapp.mjs",
             "modules/orders/renewal-reminders.mjs", "modules/finance/apple-funding.mjs",
             "modules/data/document-delta.mjs", "modules/orders/order-list.mjs", "modules/inventory/list.mjs",
             "modules/finance/accounting.mjs", "modules/data/record-edit.mjs"
@@ -1382,6 +1404,9 @@ console.log(JSON.stringify(Object.fromEntries(hashes)));
         protected_reads += ("/api/local/subscription-card-status",)
     if presentation_scope(plan) == "subscriptionInvoicePresentation":
         protected_reads += ("/integrations/codexdaichong" + SUBSCRIPTION_INVOICE_ASSET,)
+    if scope == "cardNumberPresentation":
+        protected_reads += ("/integrations/codexdaichong/admin", "/integrations/codexdaichong/api/admin/cards",
+                            "/integrations/codexdaichong/api/admin/sessions", "/api/local/bitbrowser-login-windows")
     for path in protected_reads:
         try:
             with http(path):
@@ -1423,6 +1448,7 @@ def release_website(plan, staged=None):
     before = plan["before"]
     base = before["components"]["app"]["revision"]
     include_adapter = bool(plan.get("adapter"))
+    check_asset_mount = presentation_scope(plan) == "cardNumberPresentation"
     if plan.get("deployedNativeBuildInputs"):
         native = before.get("nativePublication", {})
         require(not any(name in plan for name in ("adapter", "rechargeCore", "vendureRetryReceipt",
@@ -1432,7 +1458,7 @@ def release_website(plan, staged=None):
                 plan["deployedNativeBuildInputs"] == {"nativeRevision": native["identity"]["revision"],
                                                        "image": native["identity"]["image"]},
                 "deployed_native_inputs_not_verified")
-    check_baseline(snapshot(include_adapter), before)
+    check_baseline(snapshot(include_adapter), before, check_asset_mount=check_asset_mount)
     release = ROOT / "releases" / sha
     source, ops = staged or stage(plan, release)
     check_native_recovery_source(plan, source)
@@ -1449,7 +1475,7 @@ def release_website(plan, staged=None):
         adapter_canary(plan, source, ops)
     if core:
         core.prepare()
-    check_baseline(snapshot(include_adapter), before)
+    check_baseline(snapshot(include_adapter), before, check_asset_mount=check_asset_mount)
     old = DROP.read_text()
     launcher = ops / "run-app"
     require(launcher.is_file() and os.access(launcher, os.X_OK), "staged_website_launcher_not_executable")

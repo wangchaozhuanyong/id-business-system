@@ -23,7 +23,10 @@ async function body(request) {
   return JSON.parse(Buffer.concat(chunks).toString());
 }
 
-const metadata = ({ number, firstUse, ...row }) => ({ ...row, last4: number.slice(-4) });
+const metadata = ({ number, firstUse, ...row }) => {
+  const verified = tenantCardNumber(number);
+  return { ...row, last4: verified?.slice(-4) || '', ...(verified && { number: verified }) };
+};
 const confirmedCardUse = (row, id) => (row.cardId === id && row.paidConfirmed) ||
   (row.financialEvidence || []).some((entry) => entry.kind === 'payment' && entry.cardId === id);
 function iso(value) {
@@ -59,7 +62,8 @@ export function createOrderAuxiliaryHandler({ store, client, publicOrigin }) {
           const autoLast = iso(card.lastUsedAt);
           const lastUsedAt = [autoLast, manualLast].filter(Boolean).sort().at(-1) || null;
           const frozen = isFrozen(freezes, card.id, number);
-          return { ...card, health: orderCardHealth(types, card.id, number), ...(frozen && { active: false, frozen, status: '已冻结' }),
+          const verified = typeof number === 'string' && /^\d{12,19}$/.test(number) && number.endsWith(card.last4);
+          return { ...card, ...(verified && { number }), health: orderCardHealth(types, card.id, number), ...(frozen && { active: false, frozen, status: '已冻结' }),
             autoUsageCount: card.usageCount, manualUsageCount: manual.length,
             usageCount: card.usageCount === null ? null : card.usageCount + manual.length,
             lastUsedAt, sources: [...(card.usageCount ? ['线上代充'] : []), ...(manual.length ? ['手工录单'] : [])] };
@@ -98,7 +102,7 @@ export function createOrderAuxiliaryHandler({ store, client, publicOrigin }) {
         const owner = commerce?.tenants?.find(row => row.id === match.tenantId);
         const frozen = isFrozen(freezes, card.id, card.number);
         const firstUse = uses.get(card.id);
-        return { ...match, label: card.label || '', active: Boolean(owner && owner.active !== false && card.active && !frozen),
+        return { ...match, number, label: card.label || '', active: Boolean(owner && owner.active !== false && card.active && !frozen),
           frozen, used: Boolean(firstUse), firstUse: firstUse || null };
       }) });
     }
@@ -116,7 +120,12 @@ export function createOrderAuxiliaryHandler({ store, client, publicOrigin }) {
         }))
       };
     };
-    if (request.method === 'GET') return send(response, 200, view(current));
+    if (request.method === 'GET') {
+      const result = view(current);
+      if (result.items.some(row => row.number)) store.auditFeature(tenantDomain, current.version,
+        { action: '查看租户银行卡号', actor, targetId: tenantId });
+      return send(response, 200, result);
+    }
     const card = items.find((row) => row.id === command.id && row.tenantId === tenantId);
     const audit = (action, targetId) => ({ action, actor, targetId });
     try {

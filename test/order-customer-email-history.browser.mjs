@@ -1,8 +1,9 @@
+import { chooseOrderCustomer } from './helpers/order-customer.mjs';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { interceptDesign, origin } from './helpers/offline-design.mjs';
+import { interceptDesign, origin, settle } from './helpers/offline-design.mjs';
 
 test('订单按 GPT、Claude 隔离客户历史邮箱，支持切换、手填和草稿，保留既有账号约束', { timeout: 60_000 }, async (t) => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
@@ -56,12 +57,18 @@ test('订单按 GPT、Claude 隔离客户历史邮箱，支持切换、手填和
     await page.locator('#commerce-emailHistory-picker[aria-expanded="true"]').waitFor();
   }
   async function customer(id) {
+    if (await page.locator('#commerce-customerName').isVisible()) {
+      // Re-entering the name starts an explicit lookup, even for the current customer.
+      await page.locator('#commerce-customerName').fill('');
+      await chooseOrderCustomer(page, fixture.commerce.data.customers.find(row => row.id === id));
+      return;
+    }
     await page.locator('#commerce-customerId-picker').click();
     await page.locator('#commerce-customerId-popover input').fill(id);
     await page.locator(`#commerce-customerId-options [data-value="${id}"]`).click();
   }
   await page.goto(origin + '/#/workspace/order/gpt');
-  await page.locator('#commerce-customerId option[value="alpha"]').waitFor({ state: 'attached' });
+  await page.locator('#commerce-customerName').waitFor();
   await page.locator('#commerce-proMaterialMode').selectOption('');
   await page.locator('#commerce-cardId-picker').click();
   await page.locator('#commerce-cardId-options [data-value="synthetic-card"]').click();
@@ -138,6 +145,7 @@ test('订单按 GPT、Claude 隔离客户历史邮箱，支持切换、手填和
     await openHistory();
     await search.fill('recent');
     await popup.locator('[data-value="recent@example.test"]').waitFor();
+    await settle(page); // The native popover toggle positions the open list on the next frame.
     const geometry = await popup.evaluate(node => {
       const box = element => element.getBoundingClientRect().toJSON();
       return { popup: box(node), search: box(node.querySelector('input')), option: box(node.querySelector('[role="option"]')) };

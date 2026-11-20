@@ -257,14 +257,16 @@ test('续费银行卡详情分别返回原单和可信后继，忽略上游余�
     email: original.email, source: '客户自有', status: '未关联库存', canRenew: true
   });
   assert.equal(found.data.order.card.last4, '4242');
+  assert.equal(found.data.order.card.number, pan);
   assert.equal(found.data.order.card.canReveal, true);
   assert.deepEqual(found.data.order.card.paid, { amount: '10000', currency: 'PHP' });
   assert.equal(found.data.order.card.estimate.usd, '175.92');
   assert.equal(Object.hasOwn(found.data.order.card, 'balance'), false);
   assert.equal(found.data.renewal.id, renewal.id);
   assert.equal(found.data.renewal.card.last4, '0002');
+  assert.equal(found.data.renewal.card.number, nextPan);
   assert.equal(Object.hasOwn(found.data.renewal.card, 'balance'), false);
-  assert.doesNotMatch(JSON.stringify(found.data), /4242424242424242|4000000000000002|cardCvc|card_cvc/);
+  assert.doesNotMatch(JSON.stringify(found.data), /cardCvc|card_cvc/);
   assert.ok(calls.includes('/api/admin/orbitcard/usage?page_size=100&keyword=9'));
   assert.ok(calls.every(path => !path.includes('refresh')));
   calls.length = 0;
@@ -288,7 +290,10 @@ test('续费银行卡详情分别返回原单和可信后继，忽略上游余�
   assert.equal((await request(handler, 'subscription-card-copy', {
     body: { orderId: original.id, cardId: renewal.cardId, context: 'renewal' }
   })).status, 409);
-  assert.deepEqual(audits.map(row => row.data.action), ['查看续费银行卡号', '复制续费银行卡资料']);
+  assert.deepEqual(audits.map(row => [row.data.action, row.data.targetId]), [
+    ['查看续费银行卡号', original.id], ['查看续费银行卡号', renewal.id], ['查看续费银行卡号', original.id],
+    ['查看续费银行卡号', original.id], ['复制续费银行卡资料', original.id]
+  ]);
   assert.doesNotMatch(JSON.stringify(audits), /4242424242424242|4000000000000002/);
 });
 
@@ -332,6 +337,7 @@ test('Orbitcard 仅有尾号时标记完整卡号未登记且不返回余额', a
   assert.equal(first.data.order.card.status, '完整卡号未登记');
   assert.equal(Object.hasOwn(first.data.order.card, 'balance'), false);
   assert.equal(first.data.order.card.canReveal, false);
+  assert.equal(Object.hasOwn(first.data.order.card, 'number'), false);
   assert.equal((await request(handler, 'subscription-card-reveal', { body })).status, 404);
   orbit.cardLast4 = '9999';
   const conflict = (await details()).data.order.card;

@@ -82,17 +82,14 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
       const sideBySide = history.left >= form.right;
       const findings = [];
       const editor = formPanel.querySelector('form');
-      const match = editor.querySelector('[data-action="commerce-customer-match-open"]');
-      if (match) {
-        const bounds = match.closest('.field-control').getBoundingClientRect();
-        const controls = [editor.querySelector('#commerce-customerId-picker'), match];
-        const positions = controls.map(control => control.getBoundingClientRect());
-        if (positions.some(position => position.left < bounds.left - 1 || position.right > bounds.right + 1))
-          findings.push('客户选择与快捷新增超出资料行');
-        if (bounds.width >= 340 && Math.abs(positions[1].top - positions[0].top) > 3)
-          findings.push('宽屏下客户选择与匹配或新增应同排');
-        if (innerWidth <= 900 && positions.some(position => position.height < 44))
-          findings.push('手机客户资料控件高度不足 44px');
+      if (editor.querySelector('#commerce-customerName')) {
+        const controls = ['wechat', 'customerPhone', 'qq', 'whatsapp', 'telegram', 'customerName', 'customerSource'];
+        for (const key of controls) {
+          const control = editor.querySelector('#commerce-' + key);
+          const rect = control.getBoundingClientRect();
+          if (rect.left < form.left || rect.right > form.right + 1) findings.push('客户资料控件超出表单：' + key);
+          if (innerWidth <= 900 && rect.height < 44) findings.push('手机客户资料控件高度不足 44px：' + key);
+        }
       }
       const firstGroup = editor.querySelector('[data-commerce-section="01"] > .section-heading');
       if (firstGroup) {

@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { interceptDesign, origin } from './helpers/offline-design.mjs';
+import { chooseOrderCustomer } from './helpers/order-customer.mjs';
 
 test('录单分离银行卡来源、订单类型和共享卡分类，GPT 未登记卡仍可确认付款', { timeout: 45_000 }, async t => {
   const playwright = process.env.ID_RECHARGE_QA_PLAYWRIGHT;
@@ -10,10 +11,11 @@ test('录单分离银行卡来源、订单类型和共享卡分类，GPT 未登�
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
   t.after(() => browser.close());
   const fixture = JSON.parse(await readFile(new URL('../docs/audits/2026-11-06-design-review/visual-fixtures.json', import.meta.url)));
-  const actor = { id: 'qa-order-admin', name: '合成管理员', role: 'admin' };
+  const actor = { id: 'qa-order-admin', name: '合成超级管理员', role: 'super' };
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   const mock = await interceptDesign(context, { localFixtures: fixture, actor });
   const poolId = 'recharge:24';
+  const cardNumber = '4242'.repeat(4);
   const cardTypeA = { id: 'card-type-wise-pan', name: 'wise潘', active: true };
   const cardTypeB = { id: 'card-type-wise-jia', name: 'wise佳', active: true };
   let types = { version: 1, items: [cardTypeA, cardTypeB], assignments: { [poolId]: cardTypeA.id } };
@@ -32,7 +34,7 @@ test('录单分离银行卡来源、订单类型和共享卡分类，GPT 未登�
     await route.fulfill({ json: types });
   });
   await context.route('**/api/local/order-cards', route => route.fulfill({ json: { items: [
-    { id: poolId, last4: '4242', active: true, usageCount: 2, status: '正常' }
+    { id: poolId, last4: '4242', number: cardNumber, active: true, usageCount: 2, status: '正常' }
   ] } }));
   await context.route('**/api/local/auth/order-owners', route => route.fulfill({ json: { items: [actor] } }));
   await context.route('**/api/local/auth/display-names', route => route.fulfill({ json: { items: [actor] } }));
@@ -62,6 +64,10 @@ test('录单分离银行卡来源、订单类型和共享卡分类，GPT 未登�
   await pool.locator(`option[value="${poolId}"]`).waitFor({ state: 'attached' });
   await pool.evaluate((select, id) => { select.value = id; select.dispatchEvent(new Event('change', { bubbles: true })); }, poolId);
   assert.equal(await field('cardTypeId').inputValue(), cardTypeA.id);
+  assert.equal(await field('selectedCardNumber').inputValue(), cardNumber);
+  assert.equal(await field('selectedCardNumber').isVisible(), true);
+  assert.equal(await field('paymentId').isVisible(), false);
+  assert.ok((await pool.locator(`option[value="${poolId}"]`).textContent()).includes(cardNumber));
   await field('cardTypeId').selectOption(cardTypeB.id);
   assert.equal(typeWrites.length, 0, '订单类型下拉不改共享卡分类');
   await mode.selectOption('tenant_card');
@@ -116,10 +122,7 @@ test('录单分离银行卡来源、订单类型和共享卡分类，GPT 未登�
   assert.deepEqual(typeWrites.map(({ action }) => action), ['assign', 'add', 'rename', 'remove']);
   const customer = fixture.commerce.data.customers.find(row => row.active !== false);
   assert.ok(customer);
-  await field('customerId').evaluate((select, id) => {
-    select.value = id;
-    select.dispatchEvent(new Event('change', { bubbles: true }));
-  }, customer.id);
+  await chooseOrderCustomer(page, customer);
   await field('email').fill('no-card-fixture@example.test');
   await mode.selectOption('');
   await field('paidAmount').fill('20');

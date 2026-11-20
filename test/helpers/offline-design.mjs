@@ -104,7 +104,7 @@ export async function interceptDesign(context, { beforeDirectory, localFixtures,
     if (url.pathname.startsWith('/assets/website/pages/'))
       file = path.join(root, 'frontend', path.basename(url.pathname));
     if (['/modules/orders/order-opening.mjs', '/modules/orders/list-order.mjs', '/modules/orders/renewal-reminders.mjs',
-      '/modules/orders/renewal-account-reference.mjs',
+      '/modules/orders/renewal-account-reference.mjs', '/modules/orders/order-customer-match.mjs', '/modules/orders/order-whatsapp.mjs',
       '/modules/orders/order-list.mjs', '/modules/inventory/list.mjs', '/modules/data/document-delta.mjs',
       '/modules/data/record-edit.mjs', '/modules/finance/accounting.mjs',
       '/modules/finance/apple-funding.mjs'].includes(url.pathname)) file = path.join(root, url.pathname);

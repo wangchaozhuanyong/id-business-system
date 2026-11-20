@@ -6,7 +6,9 @@
   const S = A.state;
   const { manualBusinessOrder, manualOrderDetailsMissing, orderOpeningConfirmed, orderTerminationTime, orderNeedsAccount,
     validOrderEmail, validOrderXHandle, subscriptionPeriodState, subscriptionStateLabels, subscriptionTime,
-    matchOrderCustomer, orderCustomerCreateAction, orderFieldChanged,
+    matchInlineOrderCustomer, hasInlineOrderCustomerContact, orderCustomerChanges, orderCustomerCreateAction, orderCustomerCalibrateAction,
+    orderCallingCodes, splitOrderWhatsApp, formatOrderWhatsApp, validOrderWhatsApp, orderWhatsAppKey, orderFieldChanged,
+    splitOrderPhone, formatOrderPhone, validOrderPhone, orderPhoneKey,
     automaticGptOrder, orderReceiptRecorded, rechargeOrderCompletion, rechargeRenewalExpiryPending, expiredDuration, subscriptionDuration } = window.IDOrderOpening;
   const localData = window.IDLocalData;
   const { claudeListPlan, listPaymentStatus, listSubscriptionStatus, matchesOrderQuery, normalizedListPlan,
@@ -36,6 +38,7 @@
   let priceLoad;
   let orderPriceReferenceReturn = null;
   let orderCards = [];
+  let orderBankNumbers = new Map();
   const tenantCards = new Map();
   const cardLoads = new WeakMap();
   let bankCardTypes = { version: 0, items: [], assignments: {}, health: {} };
@@ -657,6 +660,7 @@
     if (response.version < localVersion) return;
     localVersion = response.version;
     if (Array.isArray(response.legacyOpeningOrderIds)) legacyOpeningOrders = new Set(response.legacyOpeningOrderIds);
+    if (Array.isArray(response.bankCardNumbers)) orderBankNumbers = new Map(response.bankCardNumbers.map(row => [row.id, row]));
     applyCommerceSnapshot(response.data);
     localPhase = 'ready';
     updateEntryRecords();
@@ -1179,7 +1183,17 @@
     return localData ? orderCards : A.modules.operations?.getResources?.('cards') || [];
   }
   const cardTail = (card) => card?.last4 || card?.last6 || '';
-  const cardLabel = (id) => cards().find((row) => row.id === id)?.name || '原付款银行卡';
+  const completeCardNumber = value => typeof value === 'string' && /^\d{12,19}$/.test(value) ? value : '';
+  const orderBankNumber = order => {
+    if (order?.payment !== '银行卡') return '';
+    if (Object.hasOwn(order, 'bankCardNumber')) return completeCardNumber(order.bankCardNumber);
+    const read = orderBankNumbers.get(order.id);
+    if (read && read.version === order.version) return completeCardNumber(read.number);
+    const number = completeCardNumber(order.proCardNumber);
+    const tail = order.paymentId || '';
+    return /^\d{4}(?:\d{2})?$/.test(tail) && !number.endsWith(tail) ? '' : number;
+  };
+  const bankNumberLabel = value => completeCardNumber(value) || '完整卡号待核对';
   function poolUsage(id) {
     const card = cards().find((row) => row.id === id);
     if (!card || !localData) return '';
@@ -1197,7 +1211,7 @@
   }
   const cardHealthLabels = { normal: '正常', dead: '死卡', unlocking: '解封中' };
   const blockedCard = state => state === 'dead' || state === 'unlocking';
-  function cardChoices(product, tenantId, selected, savedTail = '', historical = false) {
+  function cardChoices(product, tenantId, selected, savedNumber = '', historical = false) {
     const gpt = cardPoolProduct(product);
     const items = gpt ? cards() : (tenantCards.get(tenantId)?.items || []);
     const allowed = row => !blockedCard(row.health || bankCardTypes.health[row.id]) || (historical && row.id === selected);
@@ -1206,13 +1220,13 @@
         const status = gpt ? (Number.isInteger(row.usageCount) ? `已用 ${row.usageCount} 次` : '') :
           row.used ? '使用中' : row.frozen ? '已冻结' : !row.active ? '已停用' : '未使用';
         const health = cardHealthLabels[row.health || bankCardTypes.health[row.id]];
-        return [row.id, [row.label || row.name, `尾号 ${cardTail(row)}`,
+        return [row.id, [row.label || row.name, bankNumberLabel(row.number),
           gpt ? bankCardTypeName(bankCardTypes.assignments[row.id]) : tenantBankCardType().name, status, health === '正常' ? '' : health].filter(Boolean).join(' · '),
         { disabled: !gpt && row.id !== selected && (row.used || !row.active) }];
       });
     const selectedHealth = items.find(row => row.id === selected)?.health || bankCardTypes.health[selected];
     if (selected && (historical || !blockedCard(selectedHealth)) && !options.some(([id]) => id === selected))
-      options.unshift([selected, savedTail ? `已选银行卡 · 尾号 ${savedTail}` : '已选银行卡']);
+      options.unshift([selected, '已选银行卡 · ' + bankNumberLabel(savedNumber)]);
     return [['', gpt ? '选择银行卡' : '选择租户银行卡'], ...options];
   }
   function orderCardSource(form) {
@@ -1225,7 +1239,7 @@
     if (isClaude({ product }) && (!mode || mode === 'tenant_card')) return { field: 'cardId', pool: false };
     return null;
   }
-  function refreshOrderCardTail(form) {
+  function refreshOrderCardSelection(form) {
     const source = orderCardSource(form);
     const tail = form.elements['commerce-paymentId'];
     const selected = source && form.elements[`commerce-${source.field}`]?.value;
@@ -1233,6 +1247,10 @@
     const rows = source.pool ? cards() : tenantCards.get(form.elements['commerce-tenantId']?.value)?.items || [];
     const card = rows.find(row => row.id === selected);
     tail.value = card ? cardTail(card) : selected === tail.dataset.savedCard ? tail.dataset.savedTail : '';
+    const display = form.querySelector('#commerce-selectedCardNumber');
+    const saved = selected === tail.dataset.savedCard ? orderBankNumber(orders.find(row =>
+      row.id === form.elements['commerce-id']?.value)) : '';
+    if (display) display.value = selected ? bankNumberLabel(saved || card?.number) : '';
   }
   async function loadOrderCards(form, force = false) {
     const source = orderCardSource(form);
@@ -1242,11 +1260,11 @@
     if (!select || select.tagName !== 'SELECT') return;
     const loadKey = source.pool ? `pool:${source.field}` : tenantId;
     if (!loadKey || (!force && cardLoads.get(form)?.key === loadKey)) return;
-    const request = { key: loadKey };
+    const actorId = currentOperator().id, request = { key: loadKey };
     cardLoads.set(form, request);
     try {
       const snapshot = source.pool ? await localData.orderCards() : await localData.tenantCards(tenantId);
-      if (cardLoads.get(form) !== request) return;
+      if (cardLoads.get(form) !== request || currentOperator().id !== actorId || !form.isConnected) return;
       if (source.pool) orderCards = snapshot.items || [];
       else tenantCards.set(tenantId, snapshot);
       const current = orderCardSource(form);
@@ -1271,10 +1289,10 @@
         }
         const retainedSelection = select.value;
         select.innerHTML = A.options(cardChoices(source.pool ? 'GPT' : 'Claude', tenantId, retainedSelection,
-          form.elements['commerce-paymentId'].value, historical), retainedSelection);
+          historical ? orderBankNumber(prior) : '', historical), retainedSelection);
         const search = select.closest('.commerce-search-picker')?.querySelector('input[type="search"]');
         if (search) filterPicker(search);
-        refreshOrderCardTail(form);
+        refreshOrderCardSelection(form);
         if (source.pool && source.field === 'cardId') refreshPoolUsage(form);
         A.setError(`commerce-${source.field}`, unavailableHealth ? '原选银行卡已不可用，请重新选择' : '');
         return true;
@@ -1602,9 +1620,9 @@
   }
   function bankReturnSource(order) {
     const mode = proMaterialMode(order);
-    if (mode === 'manual_card') return `尾号 ${order.paymentId || String(order.proCardNumber || '').slice(-4)} · 卡序列号 ${order.proCardSerial || '未记录'}`;
+    if (mode === 'manual_card') return `${bankNumberLabel(orderBankNumber(order))} · 卡序列号 ${order.proCardSerial || '未记录'}`;
     if (mode === 'people') return proMaterialLabels.people;
-    return `${cardLabel(order.cardId)} · ${order.paymentId}`;
+    return bankNumberLabel(orderBankNumber(order));
   }
   function profit(order, accounting = localData ? localAccounting(order) : null) {
     if (order.cancelled || order.draft || ['draft', 'failed', '草稿', '失败'].includes(order.status) ||
@@ -1913,16 +1931,16 @@
       if (!current()) return;
       if (resource?.orderId !== id) throw new Error('续费用卡回执无效');
       const funding = $('[data-renewal-preview-funding]', panel);
-      const tail = $('[data-renewal-preview-tail]', panel);
+      const number = $('[data-renewal-preview-number]', panel);
       if (funding) funding.textContent = resource.estimate?.usd ? resource.estimate.usd + ' USD' : '未核算';
-      if (tail && /^\d{4}$/.test(resource.last4 || '')) tail.textContent = '尾号 ' + resource.last4;
+      if (number) number.textContent = resource.hasCard ? bankNumberLabel(resource.number) : '未绑定';
       notice.hidden = true;
       return true;
     } catch (error) {
       if (!current()) return;
       if ([401, 403].includes(error.status)) {
         $('[data-renewal-preview-funding]', panel).textContent = '未核算';
-        $('[data-renewal-preview-tail]', panel).textContent = '待核对';
+        $('[data-renewal-preview-number]', panel).textContent = '待核对';
       }
       notice.hidden = false;
       return false;
@@ -1956,7 +1974,6 @@
       ? manualOrderDetailsMissing(missing, customers, orderEvaluationTime())?.account : !order.account);
     const completed = order.reminderState === 'renewed' ? renewalWorktableDetail(order.id)?.completed : undefined;
     return (pending ? A.button('登记已完成续费', 'commerce-renewal-record', '', '', attrs) : '') +
-      (pending && localData.renewalContactCopy ? A.button('复制订阅信息', 'commerce-renewal-contact', '', '', attrs) : '') +
       (order.payment === '银行卡' && localData.subscriptionCardDetails ? A.button('用卡详情', 'commerce-renewal-card-open', '', '', attrs) : '') +
       (fillAccount ? A.button(order.product === 'Grok' ? '补账号' : '补邮箱', 'commerce-order-fill-details', '', '', attrs) : '') +
       (order.reminderState === 'refused' ? A.button('恢复提醒', 'commerce-renewal-restore', '', '', attrs)
@@ -1968,7 +1985,6 @@
     if (!localData?.authRequired || S.route !== renewalHome || !canManageOrders()) return;
     const { id, action } = choice.dataset;
     if (!id) return;
-    if (action === 'commerce-renewal-contact') return copyRenewalContact(choice, trigger);
     if (!['commerce-renewal-card-open', 'commerce-order-fill-details', 'commerce-renewal-record', 'commerce-renewal-expiry', 'commerce-renewal-refuse',
       'commerce-renewal-restore'].includes(action)) return;
     const current = currentRenewalAction(trigger);
@@ -1992,11 +2008,12 @@
       const fillAccount = !readOnly && canManageOrders() && manualOrderDetailsMissing(order, customers, evaluatedAt)?.account
         ? A.button(order.product === 'Grok' ? '补账号' : '补邮箱', 'commerce-order-fill-details', '', '', `data-id="${E(order.id)}"`)
         : '';
-      const tail = bankCardStatus(order)?.last4 || (/^\d{4}(?:\d{2})?$/.test(order.paymentId) ? order.paymentId.slice(-4) : '');
+      const cardStatus = bankCardStatus(order);
       const resource = workbenchResource?.orderId === order.id ? workbenchResource : null;
       const series = { sourceId: order.id, payment: order.payment, appleIdId: order.appleIdId,
         availability: resource?.availability ?? bankCardStatus(order)?.state,
-        hasCard: resource?.hasCard ?? Boolean(order.cardId || tail || order.proCardNumber) };
+        hasCard: resource?.hasCard ?? (cardStatus?.hasCard || Boolean(order.cardId || order.paymentId || orderBankNumber(order))) };
+      const number = resource ? resource.number : cardStatus?.preferred ? cardStatus.number : orderBankNumber(order);
       detail = `<div class="renewal-workbench-heading">${readOnly ? '' : A.textAction('返回待办', 'commerce-renewal-back', '', 'renewal-mobile-back')}
         <h2>${E(selected.name)}</h2>${A.tag(selected.state === 'processed' ? refused ? '已拒续' : '已续费' :
           formatExpiryDuration(selected.expiry, evaluatedAt), selected.state === 'expired' ? 'danger' : 'warning')}</div>
@@ -2009,11 +2026,11 @@
             ['续费后到期', completed.expiry ? dateInput(completed.expiry).replace('T', ' ') : '待核对']
           ] : []),
           ['续费方式', order.payment || '未登记'],
-          ...(order.payment === '银行卡' ? [['银行卡', (resource?.last4 || tail) ? '尾号 ' + (resource?.last4 || tail) : '未绑定'],
+          ...(order.payment === '银行卡' ? [['银行卡号', series.hasCard ? bankNumberLabel(number) : '未绑定'],
             ['预计备款', resource?.estimate?.usd ? resource.estimate.usd + ' USD' : '未核算']] : [])
-        ].map(([label, value]) => readOnly && ['银行卡', '预计备款'].includes(label)
-          ? `<div class="property-row"><span>${label}</span><strong data-renewal-preview-${label === '银行卡' ? 'tail' : 'funding'}>${E(value)}</strong></div>`
-          : property(label, value, false, label === '银行卡' && canManageOrders() && localData?.subscriptionCardDetails
+        ].map(([label, value]) => readOnly && ['银行卡号', '预计备款'].includes(label)
+          ? `<div class="property-row"><span>${label}</span><strong data-renewal-preview-${label === '银行卡号' ? 'number' : 'funding'}>${E(value)}</strong></div>`
+          : property(label, value, false, label === '银行卡号' && canManageOrders() && localData?.subscriptionCardDetails
             ? A.textAction('用卡详情', 'commerce-renewal-card-open', `data-id="${E(order.id)}"`) : '')).join('')}${subscriptionContacts(
           Object.fromEntries(orderContactFields.map(([field, channel]) => [channel, selected[field]])))}</div>
         ${readOnly ? '<p class="inline-notice warning" role="status" data-renewal-preview-notice hidden>续费用卡资料暂时无法读取，请稍后重试。</p>'
@@ -2118,9 +2135,9 @@
     });
   }
 
-  async function copyRenewalContact(node, trigger = node) {
-    const current = currentRenewalAction(trigger);
-    await A.withActionFeedback(trigger, async () => {
+  async function copyRenewalContact(node) {
+    const current = currentRenewalAction(node);
+    await A.withActionFeedback(node, async () => {
       const { text } = await localData.renewalContactCopy({
         orderId: node.dataset.id, id: node.dataset.subscriptionId || undefined
       });
@@ -2135,7 +2152,7 @@
       const preview = await localData.renewalCard(request);
       if (!current() || preview.orderId !== request.orderId) return;
       if (!bind && preview.canCopy && preview.confirmation) {
-        A.confirmAction('确认复制银行卡', `客户 ${preview.customerName} · ${preview.account} · 卡尾号 ${preview.last4}。请核对后复制。`, async () => {
+        A.confirmAction('确认复制银行卡', `客户 ${preview.customerName} · ${preview.account} · 银行卡号 ${bankNumberLabel(preview.number)}。请核对后复制。`, async () => {
           if (!current()) return A.notify('当前客户已变化，请重新选择');
           try {
             const result = await localData.renewalCard({ ...request, action: 'copy', confirmation: preview.confirmation });
@@ -2162,7 +2179,7 @@
         ...(tenant.status === 'fulfilled' ? tenant.value?.items || [] : [])]
         .filter(row => row.active !== false && !row.frozen && row.status !== '停用' && !blockedCard(row.health));
       const choices = [['', '选择银行卡'], ...available.map(row => [row.id,
-        [row.name || row.label, '尾号 ' + cardTail(row)].filter(Boolean).join(' · ')])];
+        [row.name || row.label, bankNumberLabel(row.number)].filter(Boolean).join(' · ')])];
       A.openDrawer(preview.hasCard ? '更换银行卡' : '绑定银行卡', '用于以后准备续费，原订单的实际用卡记录继续保留。',
         `<form id="commerce-renewal-bind-form" novalidate><div class="property-list">${property('客户', preview.customerName)}${
           property('订阅', preview.account)}</div><div class="commerce-field-grid">
@@ -2295,15 +2312,7 @@
     return reminder?.state === 'upcoming' || reminder?.state === 'expired';
   }
   function clearRenewalCardNumbers(root) {
-    if (!root) return;
-    for (const input of root.querySelectorAll('[data-renewal-card-number]')) {
-      input.value = '';
-      input.closest('[data-renewal-card-full]').hidden = true;
-    }
-    for (const button of root.querySelectorAll('[data-action="commerce-renewal-card-reveal"]')) {
-      button.textContent = '显示完整卡号';
-      button.setAttribute('aria-expanded', 'false');
-    }
+    root?.querySelectorAll('[data-renewal-card-number]').forEach(node => { node.textContent = ''; });
   }
   function renewalCardAmount(amount, currency, fallback) {
     return amount !== null && amount !== undefined && amount !== '' && currency ? `${amount} ${currency}` : fallback;
@@ -2318,7 +2327,9 @@
     const paid = Object.hasOwn(card, 'paid') ? card.paid : estimate;
     const bank = detail.payment === '银行卡';
     const funding = renewalCardAmount(estimate?.usd, 'USD', '待核算');
-    const last4 = /^\d{4}$/.test(card.last4) ? card.last4 : '';
+    const number = completeCardNumber(card.number);
+    const numberText = number && (!card.last4 || number.endsWith(card.last4)) ? number
+      : card.last4 ? '完整卡号待核对' : '未登记';
     const accountItems = [
       ['订单编号', detail.orderNo], ['订阅账号', account.email], ['账号来源', account.source], ['账号状态', account.status],
       ['产品 / 套餐', [order?.product, order?.plan].filter(Boolean).join(' / ')], ['付款方式', detail.payment],
@@ -2326,26 +2337,23 @@
     ];
     const cardItems = [
       ['银行卡来源', card.source], ['银行卡类型', card.typeName],
-      ['银行卡尾号', last4 ? `•••• ${last4}` : '未登记'], ['用卡状态', card.status],
+      ['银行卡号', numberText], ['用卡状态', card.status],
       ...(card.availability ? [['银行卡状态', bankCardAvailability[card.availability]]] : []),
       ['实际代付', renewalCardAmount(paid?.amount, paid?.currency, '待核对')],
       ...(!preparing ? [['备款参考金额', funding]] : [])
     ];
     const attrs = `data-id="${E(detail.id)}"`;
-    const numberId = `commerce-renewal-card-number-${kind}`;
-    return `<section class="form-section" data-renewal-card-kind="${kind}" data-renewal-card-last4="${last4}">
+    return `<section class="form-section" data-renewal-card-kind="${kind}">
       <div class="section-heading section-heading--actions"><h3>${original ? '原单' : '续费单'}</h3>
         ${account.email ? A.button('复制账号', 'commerce-renewal-card-copy-account', '', 'copy') : ''}</div>
       <div class="property-list">${accountItems.map(([label, value]) => property(label, value)).join('')}</div>
       <div class="section-title-row"><h4>${preparing ? '续费用卡' : original ? '原单用卡' : '新单用卡'}</h4></div>
       ${bank ? (preparing ? `<div class="commerce-cost-strip"><span>预计续费需备款 <strong>${E(funding)}</strong></span></div>` : '') +
-        `<div class="property-list">${cardItems.map(([label, value]) => property(label, value)).join('')}</div>` +
+        `<div class="property-list">${cardItems.map(([label, value]) => label === '银行卡号'
+          ? `<div class="property-row"><span>银行卡号</span><strong data-renewal-card-number>${E(value)}</strong></div>`
+          : property(label, value)).join('')}</div>` +
         (card.canReveal && !(preparing && card.availability === 'frozen') ? `<div class="drawer-action-bar">
-          ${A.button('显示完整卡号', 'commerce-renewal-card-reveal', '', '',
-            `${attrs} aria-expanded="false" aria-controls="${numberId}-field"`)}
-          ${A.button('复制银行卡资料', 'commerce-copy-subscription-card', '', 'copy', attrs)}
-          </div><div id="${numberId}-field" data-renewal-card-full hidden>${A.field('完整银行卡号', numberId,
-            A.input(numberId, '', 'readonly autocomplete="off" data-no-draft data-renewal-card-number'))}</div>` : '') :
+          ${A.button('复制银行卡资料', 'commerce-copy-subscription-card', '', 'copy', attrs)}</div>` : '') :
         '<p class="footnote">此单使用其他付款方式。</p>'}
     </section>`;
   }
@@ -2361,7 +2369,6 @@
     const renewStatus = $('[data-renewal-card-renew-status]', panel);
     if (renew) renew.disabled = true;
     renewStatus.hidden = true;
-    clearRenewalCardNumbers(content);
     error.hidden = true;
     const read = A.beginRegionRead(region, status, { loadingText: '正在读取银行卡资料…', refreshButton: refresh });
     const current = () => read.current() && renewalCardDrawerCurrent(panel);
@@ -2372,7 +2379,6 @@
       if (!current()) return;
       if (data?.order?.id !== binding.orderId || (data.renewal && data.renewal.id !== binding.renewalOrderId))
         throw new Error('银行卡资料与当前订单不符');
-      clearRenewalCardNumbers(content);
       const actionable = Boolean(renew && data.order.account?.canRenew !== false && renewalCardCanRenew(binding.orderId));
       binding.details = data;
       if (renew) {
@@ -2437,32 +2443,6 @@
     drawer.addEventListener('id-view-deactivate', dispose, { signal: cleanup.signal });
     drawer.addEventListener('close', () => { if (!drawer.open) dispose(); }, { signal: cleanup.signal });
     void loadRenewalCardDetails(panel);
-  }
-  async function revealRenewalCard(node) {
-    const panel = node.closest('#commerce-renewal-card-panel');
-    const section = node.closest('[data-renewal-card-kind]');
-    const current = () => renewalCardActionCurrent(panel, node);
-    if (!current() || !section) return;
-    const input = $('[data-renewal-card-number]', section);
-    if (!input) return;
-    if (input.value) return clearRenewalCardNumbers(section);
-    const binding = renewalCardDrawers.get(panel);
-    const id = node.dataset.id;
-    const detail = binding.details?.[section.dataset.renewalCardKind];
-    if (id !== detail?.id || !detail.card?.canReveal) return;
-    await A.withActionFeedback(node, async () => {
-      let result;
-      try { result = await localData.revealSubscriptionCard(id, detail.version); }
-      catch (failure) { if (current()) throw failure; return; }
-      if (!current()) return;
-      const last4 = section.dataset.renewalCardLast4;
-      if (!/^\d{12,19}$/.test(result?.number) || (last4 && !result.number.endsWith(last4)))
-        throw new Error('完整卡号无法核对，请刷新后重试');
-      input.value = result.number;
-      input.closest('[data-renewal-card-full]').hidden = false;
-      node.textContent = '隐藏完整卡号';
-      node.setAttribute('aria-expanded', 'true');
-    }, { pending: '正在读取完整卡号…', failure: '无法读取完整卡号，请重试' });
   }
   function copyRenewalCardAccount(node) {
     const panel = node.closest('#commerce-renewal-card-panel');
@@ -2586,6 +2566,9 @@
       } else {
         if ([401, 403].includes(statuses.reason?.status)) {
           bankCardStatuses.clear();
+      orderCards = [];
+      orderBankNumbers.clear();
+      tenantCards.clear();
           frozenBankCards = undefined;
         }
         subscriptionStatusError = '银行卡资料暂未更新';
@@ -2813,9 +2796,9 @@
     const order = orders.find(row => row.id === id);
     const status = order && bankCardStatus(order);
     if (!canManageOrders() || !status?.canFreeze) return;
-    const tail = status.last4 ? '尾号 ' + status.last4 : '此银行卡';
+    const number = completeCardNumber(status.number) || orderBankNumber(order) || '此银行卡';
     A.openDrawer('标记银行卡冻结', '', `<form id="commerce-card-freeze-form">
-      <p>${E(tail)}冻结后，关联账号续费时会提示换卡。历史订单及退款记录可继续查看。</p>
+      <p>${E(number)}冻结后，关联账号续费时会提示换卡。历史订单及退款记录可继续查看。</p>
       ${A.field('冻结原因（选填）', 'commerce-card-freeze-reason',
         A.input('commerce-card-freeze-reason', '', 'maxlength="120" autocomplete="off"'))}</form>`,
     A.button('取消', 'drawer-close') + A.button('确认冻结', 'commerce-card-freeze-save', 'danger', '',
@@ -3916,18 +3899,18 @@
     if (value && !available.includes(value)) choices.push([value, `${value}（已移出选项）`]);
     return { choices, value };
   }
-  function customerTagPicker(selected, previous, open = false) {
+  function customerTagPicker(selected, previous, open = false, { id = 'commerce-tags', name = 'commerce-tags' } = {}) {
     const configured = A.modules.operations?.getCustomerTags?.() || [];
     const options = [...new Set([...configured, ...previous, ...selected])];
     const choices = options.map((tag) =>
       `<label class="customer-tag-choice"><input type="checkbox" value="${E(tag)}" data-customer-tag${selected.includes(tag) ? ' checked' : ''} /><span>${E(tag)}</span>${configured.includes(tag) ? '' : '<small>历史标签</small>'}</label>`
     ).join('');
     return `<details class="customer-tag-picker" data-customer-tag-picker data-dismiss-outside${open ? ' open' : ''}>
-      <summary id="commerce-tags" aria-label="客户标签"><span data-customer-tag-summary>${E(selected.join('、') || '请选择标签（可多选）')}</span>${A.icon('chevron')}</summary>
+      <summary id="${E(id)}" aria-label="客户标签"><span data-customer-tag-summary>${E(selected.join('、') || '请选择标签（可多选）')}</span>${A.icon('chevron')}</summary>
       <div class="customer-tag-options" role="group" aria-label="客户标签选项">
         ${choices || '<p>暂无可选标签，可由管理员在“系统设置 → 下拉设置 → 标签设置”中添加。</p>'}
       </div>
-      <input type="hidden" name="commerce-tags" value="${E(JSON.stringify(selected))}" />
+      <input type="hidden" name="${E(name)}" value="${E(JSON.stringify(selected))}" />
     </details>`;
   }
   function refreshCustomerTagOptions() {
@@ -3938,27 +3921,35 @@
       source.innerHTML = A.options(choices, value);
       if (useDefault) source.dataset.defaultSource = value;
     }
+    const inlineForm = $('#main .order-customer-fields')?.closest('form');
+    if (inlineForm) {
+      const source = inlineForm.elements['commerce-customerSource'];
+      source.innerHTML = A.options(customerSourceOptions(source.value).choices, source.value);
+      const tags = inlineForm.elements['order-customer-tags'];
+      const picker = tags.closest('[data-customer-tag-picker]');
+      const prior = customers.find(row => row.id === inlineForm.elements['commerce-customerId'].value);
+      const focus = picker.contains(document.activeElement);
+      picker.outerHTML = orderTagsControl(A.readOptionList(tags.value), prior?.tags || [], picker.open);
+      if (focus) inlineForm.querySelector('#commerce-orderTags').focus();
+    }
     const picker = $('#commerce-contact-form [data-customer-tag-picker]');
     if (!picker) return;
     const form = picker.closest('form');
     const previous = customers.find((row) => row.id === form.elements['commerce-id'].value)?.tags || [];
     const selected = A.readOptionList(form.elements['commerce-tags'].value);
     const focused = picker.contains(document.activeElement);
-    picker.outerHTML = customerTagPicker(selected, previous, picker.open)
-      .replace('id="commerce-tags"', 'id="commerce-contact-tags"');
+    picker.outerHTML = customerTagPicker(selected, previous, picker.open, { id: 'commerce-contact-tags' });
     if (focused) form.querySelector('#commerce-contact-tags')?.focus();
   }
   function contactForm(tenant = false, id = '', quick = false, standalone = false) {
     const data = tenant ? tenants : customers,
       row = data.find((entry) => entry.id === id);
-    const identity = quick && !tenant ? quickReturn.identity : null;
     const key =
       quick && !tenant
-        ? `commerce-contact:customer:new:${quickReturn.key}${identity ? ':' + JSON.stringify([identity.name, identity.wechat]) : ''}`
+        ? `commerce-contact:customer:new:${quickReturn.key}`
         : `commerce-contact:${tenant ? 'tenant' : 'customer'}:${id || 'new'}`;
     const draft = S.drafts.get(key) || {},
       v = (name) => draft[`commerce-${name}`] ?? row?.[name] ?? '';
-    const fixedWechat = Boolean(identity?.wechat);
     // An order and its quick-add drawer coexist; only the submitted field names may match.
     const contactField = (label, name, control, required = false, help = '', span = '') =>
       field(
@@ -3972,7 +3963,6 @@
     const contactInput = (name, attrs = '') => input(name, v(name), attrs);
     const channels = customerChannels
       .slice(1)
-      .filter(([name]) => !fixedWechat || name !== 'wechat')
       .map(([name, label]) => contactField(label, name, contactInput(name, 'maxlength="60"')))
       .join('');
     const phone = contactField(
@@ -3998,16 +3988,9 @@
       '',
       'commerce-span-all'
     );
-    const name = identity ? '' : contactField(
+    const name = contactField(
       `${tenant ? '租户' : '客户'}姓名`, 'name', contactInput('name', 'maxlength="80" required'), true
     );
-    const identitySummary = identity ? `<div class="order-quick-customer-summary" role="group" aria-label="本次新增客户">
-      <strong>${E(identity.name)}</strong>
-      ${fixedWechat ? `<span id="commerce-contact-wechat" tabindex="-1">微信 ${E(identity.wechat)}</span>
-      <div class="field-error" id="commerce-contact-wechat-error" role="alert" hidden></div>` : ''}
-    </div>
-    <input type="hidden" name="commerce-name" value="${E(identity.name)}" />
-    ${fixedWechat ? `<input type="hidden" name="commerce-wechat" value="${E(identity.wechat)}" />` : ''}` : '';
     const initialCardCount = Math.min(99, Math.max(0, Number(draft['commerce-initial-card-count']) || 0));
     const cardFields = tenant && !row ? `<section class="form-section" aria-label="银行卡">
       <div class="section-heading section-heading--actions">
@@ -4036,7 +4019,7 @@
           section('02', '联系方式', phone + channels + notes,
             '联系方式选填，可先登记直接在网站下单的客户。', false, 'commerce-customer-section')
         ].join('');
-    const body = `<form id="commerce-contact-form" data-commerce-draft="${E(key)}" novalidate><input type="hidden" name="commerce-id" value="${E(id)}" /><input type="hidden" name="commerce-kind" value="${tenant ? 'tenant' : 'customer'}" /><input type="hidden" name="commerce-version" value="${E(draft['commerce-version'] || row?.version || '')}" /><input type="hidden" name="commerce-quick" value="${quick ? 'yes' : ''}" />${identitySummary}${details}</form>`;
+    const body = `<form id="commerce-contact-form" data-commerce-draft="${E(key)}" novalidate><input type="hidden" name="commerce-id" value="${E(id)}" /><input type="hidden" name="commerce-kind" value="${tenant ? 'tenant' : 'customer'}" /><input type="hidden" name="commerce-version" value="${E(draft['commerce-version'] || row?.version || '')}" /><input type="hidden" name="commerce-quick" value="${quick ? 'yes' : ''}" />${details}</form>`;
     const cancel = standalone
       ? tenant
         ? routeButton('返回租户数据', 'customers/tenants')
@@ -4050,14 +4033,12 @@
       `${row ? '编辑' : '新增'}${tenant ? '租户' : '客户'}`,
       tenant
         ? '保存前确认资料。关闭保留当前草稿，关联记录使用稳定编号。'
-        : identity ? '关闭可返回订单修改姓名和微信。保存后会自动选中该客户。'
-          : '关闭保留当前草稿。录入人和修改人自动记录，关联订单和历史开通业务可从列表直接打开。',
+        : '关闭保留当前草稿。录入人和修改人自动记录，关联订单和历史开通业务可从列表直接打开。',
       body,
       footer,
       key
     );
     if (tenant) void loadOrderOwners($('#commerce-contact-form', $('#drawer') || document));
-    if (identity) $('#drawer #commerce-contact-source')?.focus({ preventScroll: true });
     return '';
   }
   function contactRecordActions(id, tenant = false) {
@@ -4408,109 +4389,244 @@
   const preserveHistoricalApplePayment = order => historicalStockWithoutBuyer(order) && order.payment === '苹果内购';
   const historicalApplePaymentFields = ['payment', 'appleIdId', 'appleStoreRegion', 'paidAmount', 'paidCurrency',
     'paidConfirmed', 'paymentId', 'cardId', 'cardTypeId'];
-  function orderCustomerField(customerId, quickDraft, existing) {
-    const add = A.button('新增', 'commerce-quick-customer', '', 'plus', 'aria-haspopup="dialog"');
+  function orderCustomerField(customerId, existing) {
     const choices = orderCustomerChoices(customerId);
-    if (customerId && !choices.some(([id]) => id === customerId))
-      choices.push([customerId, '原客户待核对']);
-    const picker = searchableSelect('customerId', '客户', choices, customerId, quickDraft ? '' : add);
-    const control = quickDraft ? `<div class="order-customer-row">${picker}
-      ${A.button('匹配或新增', 'commerce-customer-match-open', '', 'plus', 'aria-haspopup="dialog" aria-controls="drawer"')}
-      ${A.input('order-customer-history-email', quickDraft['order-customer-history-email'] ?? '', 'type="hidden"')}
-      ${A.input('order-quick-customer-name', quickDraft['order-quick-customer-name'] ?? '', 'type="hidden"')}
-      ${A.input('order-quick-customer-wechat', quickDraft['order-quick-customer-wechat'] ?? '', 'type="hidden"')}
-    </div><p class="footnote" id="order-quick-customer-status" role="status" hidden></p>` : picker;
-    return field('客户资料', 'customerId', control, !existing || Boolean(existing.customerId),
-      historicalStockWithoutBuyer(existing) ? '可以按原销售记录补选买家。暂时查不到买家时，可以先保存其他修改。' : '');
+    if (customerId && !choices.some(([id]) => id === customerId)) choices.push([customerId, '原客户待核对']);
+    const add = A.button('新增', 'commerce-quick-customer', '', 'plus', 'aria-haspopup="dialog"');
+    return field('客户资料', 'customerId', searchableSelect('customerId', '客户', choices, customerId, add),
+      !existing || Boolean(existing.customerId), historicalStockWithoutBuyer(existing)
+        ? '可以按原销售记录补选买家。暂时查不到买家时，可以先保存其他修改。' : '');
   }
-  const composingCustomerFields = new WeakSet();
-  const isOrderCustomerLookupInput = node => node.form?.id === 'order-customer-match-form';
-  function readOrderCustomerLookup(form) {
-    const nameInput = form.elements?.['order-quick-customer-name'];
-    if (!nameInput) return null;
-    const name = nameInput.value.trim(), wechat = form.elements['order-quick-customer-wechat'].value.trim();
-    return { name, wechat, ...matchOrderCustomer(customers, name, wechat) };
-  }
-  const orderMatchKey = orderKey => orderKey + ':customer-match';
-  function openOrderCustomerMatch(order) {
-    const key = orderMatchKey(order.dataset.commerceDraft);
-    const draft = S.drafts.get(key) || {};
-    const selected = customers.find(row => row.id === order.elements['commerce-customerId'].value);
-    const lookup = readOrderCustomerLookup(order);
-    const name = draft['order-match-name'] ?? (lookup.name || selected?.name || '');
-    const wechat = draft['order-match-wechat'] ?? (lookup.name ? lookup.wechat : selected?.wechat || '');
-    const body = `<form id="order-customer-match-form" data-order-key="${E(order.dataset.commerceDraft)}">
-      ${A.field('客户姓名', 'order-match-name', A.input('order-match-name', name,
-        'maxlength="80" required aria-describedby="order-match-status"'), true)}
-      ${A.field('客户微信', 'order-match-wechat', A.input('order-match-wechat', wechat,
-        'maxlength="60" aria-describedby="order-match-status"'))}
-      <p class="footnote" id="order-match-status" role="status"></p></form>`;
-    A.openDrawer('匹配或新增客户', '按姓名和微信匹配已有客户。新客户可随订单新增，也可补齐资料后立即建档。',
-      body, A.button('取消', 'drawer-close') + A.button('新增客户资料', 'commerce-customer-match-create') +
-      A.button('使用此客户', 'commerce-customer-match-apply', 'primary'), key);
-    updateOrderMatchDrawer($('#order-customer-match-form'));
-    $('#order-match-name').focus({ preventScroll: true });
-  }
-  function updateOrderMatchDrawer(form) {
-    const nameInput = form.elements['order-match-name'], wechatInput = form.elements['order-match-wechat'];
-    const name = nameInput.value.trim(), wechat = wechatInput.value.trim();
-    const lookup = composingCustomerFields.has(nameInput) || composingCustomerFields.has(wechatInput)
-      ? { kind: 'composing' } : { name, wechat, ...matchOrderCustomer(customers, name, wechat) };
-    const drawer = form.closest('dialog'), matched = lookup.kind === 'matched';
-    const match = matched && customers.find(row => row.id === lookup.customerId);
-    const apply = $('[data-action="commerce-customer-match-apply"]', drawer);
-    apply.textContent = lookup.kind === 'new' ? '随订单新增' : '使用此客户';
-    apply.disabled = !matched && lookup.kind !== 'new';
-    $('[data-action="commerce-customer-match-create"]', drawer).disabled = !canAddOrderCustomer(lookup);
-    $('#order-match-status', form).textContent = match ? ['已匹配 ' + match.name, match.wechat].filter(Boolean).join(' · ')
-      : lookup.kind === 'composing' ? '' : orderCustomerLookupMessage(lookup);
-    return lookup;
-  }
-  const canAddOrderCustomer = lookup => lookup.kind === 'new' || lookup.kind === 'same-name';
-  function orderCustomerLookupMessage(lookup) {
-    switch (lookup.kind) {
-      case 'empty': return lookup.wechat ? '请先填写客户姓名。' : '';
-      case 'matched': return '已匹配客户。';
-      case 'new': return '未匹配到已有客户。';
-      case 'same-name': return '同名客户的微信不同，确认是另一位客户后可点「新增客户资料」。';
-      case 'inactive': return '已有停用资料，请先到客户数据核对或恢复。';
-      case 'wechat-conflict': return '此微信已关联其他姓名，请核对客户姓名和微信。';
-      case 'invalid': return '请核对客户姓名和微信的格式。';
-      default: return '无法唯一匹配客户，请核对微信或返回订单选择客户。';
-    }
-  }
-  function updateOrderCustomerLookup(form, { editing = false, refreshChoices = false } = {}) {
-    const lookup = readOrderCustomerLookup(form);
-    if (!lookup) return lookup;
-    const select = form.elements['commerce-customerId'];
-    const previousId = select.value;
-    const fromQuery = editing || lookup.name || lookup.wechat;
-    const inactiveSelection = previousId && !customers.some(row => row.id === previousId && row.active !== false);
-    const nextId = fromQuery ? lookup.customerId || '' : inactiveSelection ? '' : previousId;
-    if (refreshChoices || inactiveSelection || (nextId && ![...select.options].some(option => option.value === nextId)))
-      select.innerHTML = A.options(orderCustomerChoices(), nextId);
-    select.value = nextId;
-    if (select.value !== previousId) onChange(select, true);
-    else if (refreshChoices) filterPicker($('[data-commerce-picker="customerId"]', form));
 
-    const message = !fromQuery && inactiveSelection ? '原客户资料已变化，请重新选择客户。'
-      : lookup.kind === 'new' ? `${lookup.name} · 随订单新增`
-      : lookup.kind === 'matched' ? '' : orderCustomerLookupMessage(lookup);
-    const status = $('#order-quick-customer-status', form);
-    if (status.textContent !== message) status.textContent = message;
-    status.hidden = !message;
-    if (editing) A.setError('commerce-customerId', '', form);
+  const inlineCustomerFields = [
+    ['wechat', '微信', 'wechat'], ['name', '客户姓名', 'customerName'], ['phone', '联系电话', 'customerPhone'],
+    ['qq', 'QQ', 'qq'], ['telegram', 'Telegram', 'telegram'], ['whatsapp', 'WhatsApp', 'whatsapp'],
+    ['source', '来源渠道', 'customerSource'], ['tags', '客户标签', 'orderTags']
+  ];
+  const inlineLabel = key => inlineCustomerFields.find(([field]) => field === key)?.[1] || key;
+  const inlineNumberContacts = {
+    phone: { split: splitOrderPhone, format: formatOrderPhone, valid: validOrderPhone, key: orderPhoneKey },
+    whatsapp: { split: splitOrderWhatsApp, format: formatOrderWhatsApp, valid: validOrderWhatsApp, key: orderWhatsAppKey }
+  };
+  const callingCodeOptions = orderCallingCodes.map(code => [code, '+' + code]);
+  const contactPrefixName = key => 'order-' + key + '-prefix';
+  const displayCustomerValue = value => Array.isArray(value) ? value.join('、') || '未登记' : value || '未登记';
+  const composingCustomerFields = new WeakSet();
+  const isOrderCustomerLookupInput = node => Boolean(node.dataset?.orderCustomerKey);
+  function orderTagsControl(selected, previous, open = false) {
+    return customerTagPicker(selected, previous, open, { id: 'commerce-orderTags', name: 'order-customer-tags' });
+  }
+  function storedContactNumberParts(contact, value, prefix) {
+    const normalized = contact.key(value);
+    return contact.split(contact.valid(normalized) ? normalized : value, prefix || '86');
+  }
+  function inlineCustomerFieldsHtml(customerId, draft) {
+    const customer = customers.find(row => row.id === customerId);
+    let entered = {};
+    let choice = draft['order-customer-choice'] || '';
+    if (draft['order-customer-entered']) {
+      entered = JSON.parse(draft['order-customer-entered']);
+    } else {
+      // Drafts created by the previous picker and customer workbench carry a selected id.
+      for (const [key, , field] of inlineCustomerFields) {
+        const old = draft['commerce-' + field];
+        if (old && old !== customer?.[key] && key !== 'tags') entered[key] = old;
+      }
+      if (draft['order-quick-customer-name']) entered.name = draft['order-quick-customer-name'];
+      if (draft['order-quick-customer-wechat']) entered.wechat = draft['order-quick-customer-wechat'];
+      if (customer) {
+        entered.name ||= customer.name;
+        choice = customer.id;
+      }
+    }
+    if (entered.phone && !draft[contactPrefixName('phone')]) {
+      const legacy = orderPhoneKey(entered.phone);
+      if (validOrderPhone(legacy)) entered.phone = legacy;
+    }
+    const rows = inlineCustomerFields.map(([key, label, id]) => {
+      const data = 'data-order-customer-key="' + key + '"';
+      const initial = entered[key] ?? customer?.[key] ?? '';
+      let control;
+      const number = inlineNumberContacts[key];
+      if (number) {
+        const prefixName = contactPrefixName(key);
+        const prefix = Object.hasOwn(entered, key) ? draft[prefixName] : '86';
+        const { code, national } = storedContactNumberParts(number, initial, prefix);
+        control = '<div class="order-contact-number"><select id="' + prefixName + '" name="' + prefixName +
+          '" data-order-contact-prefix="' + key + '" aria-label="' + E(label) + ' 国际区号">' +
+          A.options(callingCodeOptions, code) + '</select>' + input(id, national, data + ' type="tel" maxlength="60" autocomplete="off"') + '</div>';
+      } else if (key === 'source') control = select(id, customerSourceOptions(initial).choices, initial, data);
+      else if (key === 'tags') control = orderTagsControl(initial || [], customer?.tags || []);
+      else control = input(id, initial, data + (key === 'name' ? ' maxlength="80" required' : ' maxlength="60"') + ' autocomplete="off"');
+      return field(label, id, control, key === 'name', key === 'wechat'
+        ? '微信、联系电话、QQ、WhatsApp 和 Telegram 至少填写一项。' : '') + (key === 'whatsapp'
+        ? '<div id="order-customer-status" class="order-customer-status commerce-span-all" role="status" hidden></div>' : '');
+    }).join('');
+    return '<div class="order-customer-fields commerce-field-grid commerce-span-all">' +
+      input('customerId', customerId, 'type="hidden"') +
+      A.input('order-customer-choice', choice, 'type="hidden"') +
+      A.input('order-customer-entered', JSON.stringify(entered), 'type="hidden"') +
+      A.input('order-customer-history-email', draft['order-customer-history-email'] || '', 'type="hidden"') + rows + '</div>';
+  }
+  function readOrderCustomerLookup(form) {
+    const stored = form.elements?.['order-customer-entered'];
+    if (!stored) return null;
+    const entered = JSON.parse(stored.value);
+    const values = Object.fromEntries(Object.entries(entered).filter(([, value]) => Array.isArray(value) ? value.length : value.trim()));
+    const match = matchInlineOrderCustomer(customers, values);
+    const choice = form.elements['order-customer-choice'].value;
+    const canSeparate = match.kind === 'review' && !Object.keys(match.matches).some(key => key !== 'name');
+    const chosenId = match.kind === 'matched' ? match.customerId
+      : match.kind === 'review' && match.ids.includes(choice) ? choice : '';
+    const customer = customers.find(row => row.id === chosenId && row.active !== false);
+    const create = match.kind === 'new' || (canSeparate && choice === 'new');
+    const changes = customer ? orderCustomerChanges(customer, values) : {};
+    const decision = create ? 'new' : customer ? (Object.keys(changes).length ? 'calibrate' : 'matched') : '';
+    const hasContact = hasInlineOrderCustomerContact(customer ? { ...customer, ...changes } : values);
+    return { entered, values, match, customer, changes, decision, canSeparate, choice, hasContact };
+  }
+  function customerDifferenceHtml(customer, changes) {
+    return Object.entries(changes).map(([key, next]) =>
+      '<div class="order-customer-difference"><strong>' + E(inlineLabel(key)) + '</strong><span>档案：' +
+      E(displayCustomerValue(customer[key])) + '</span><span>本次：' + E(displayCustomerValue(next)) + '</span></div>').join('');
+  }
+  function inlineCustomerStatus(lookup) {
+    const { match, customer, decision, changes, values } = lookup;
+    const reselect = match.kind === 'review' && lookup.choice
+      ? ' ' + A.textAction('重新选择', 'commerce-order-customer-reselect') : '';
+    if (decision === 'new') {
+      const next = !values.name ? '填写客户姓名后可随订单新增。'
+        : !lookup.hasContact ? '填写任一种联系方式后可随订单新增。' : '提交订单时将新增客户。';
+      return (lookup.choice === 'new' ? '已选择另建同名客户。' : '未匹配。') + next + reselect;
+    }
+    if (customer) {
+      const channel = Object.keys(match.matches).find(key => key !== 'name' && match.matches[key].includes(customer.id)) || 'name';
+      return '已通过' + inlineLabel(channel) + '匹配到 ' + E(customer.name) + (decision === 'calibrate'
+        ? '。提交时请确认校准以下资料。' + customerDifferenceHtml(customer, changes) : '') + reselect;
+    }
+    if (match.kind === 'empty') return '';
+    if (match.kind === 'invalid') return '请核对姓名或联系方式的格式。';
+    const review = match.kind === 'review';
+    const sharedContact = Object.entries(match.matches).find(([key, ids]) => key !== 'name' && ids.length > 1);
+    const title = match.kind === 'inactive' ? '匹配到已停用的客户，请先核对档案。'
+      : review && sharedContact ? '此' + inlineLabel(sharedContact[0]) + '匹配到多位客户，请选择。'
+      : review ? (match.matches.name?.length ? '找到同名客户，请核对档案与本次填写。' : '客户资料有差异，请核对后选择。')
+      : '填写的资料指向不同客户，请核对并更正后提交。';
+    const ids = new Set(match.ids);
+    const candidatesById = new Map(customers.filter(row => ids.has(row.id)).map(row => [row.id, row]));
+    const hitsById = new Map();
+    for (const [key, matches] of Object.entries(match.matches)) {
+      for (const id of matches) {
+        if (!hitsById.has(id)) hitsById.set(id, []);
+        hitsById.get(id).push(inlineLabel(key));
+      }
+    }
+    const candidates = match.ids.map(id => {
+      const candidate = candidatesById.get(id);
+      if (!candidate) return '';
+      const hits = hitsById.get(id) || [];
+      const contacts = orderContactFields.filter(([, key]) => candidate[key])
+        .map(([, key]) => inlineLabel(key) + ' ' + candidate[key]).join(' · ');
+      const select = review && candidate.active !== false
+        ? A.button('是这位客户', 'commerce-order-customer-choose', '', '', 'data-id="' + E(id) + '"') : '';
+      return '<div class="order-customer-candidate"><strong>' + E(candidate.name) + '</strong> · ' +
+        E(hits.join('、')) + '匹配' + (candidate.active === false ? ' · 已停用' : '') +
+        (contacts ? '<p>' + E(contacts) + '</p>' : '') + (review ? customerDifferenceHtml(candidate, orderCustomerChanges(candidate, values)) : '') +
+        (select ? '<div class="order-customer-actions">' + select + '</div>' : '') + '</div>';
+    }).join('');
+    return title + candidates + (lookup.canSeparate
+      ? '<div class="order-customer-actions">' + A.button('是另一位同名客户', 'commerce-order-customer-new') + '</div>' : '');
+  }
+  // A blur fires change between pointerdown and click. Preserve the candidate button while the result is identical.
+  const inlineCustomerMessages = new WeakMap();
+  function updateOrderCustomerLookup(form, { editing = false } = {}) {
+    const lookup = readOrderCustomerLookup(form);
+    if (!lookup) return null;
+    const { customer, entered, choice, decision, match } = lookup;
+    // A partially typed international number can be invalid until its last digits arrive.
+    if (choice && match.kind !== 'invalid' && choice !== customer?.id && !(choice === 'new' && decision === 'new'))
+      form.elements['order-customer-choice'].value = '';
+    for (const [key, , field] of inlineCustomerFields) {
+      const typed = entered[key];
+      const active = document.activeElement;
+      if ((Array.isArray(typed) ? typed.length : typed) || (Object.hasOwn(entered, key) &&
+          (active?.dataset?.orderCustomerKey === key || (key === 'tags' && active?.closest('[data-customer-tag-picker]'))))) continue;
+      const next = customer?.[key] || '';
+      if (key === 'tags') {
+        const tags = form.elements['order-customer-tags'];
+        if (tags.value !== JSON.stringify(next || []))
+          tags.closest('[data-customer-tag-picker]').outerHTML = orderTagsControl(next || [], next || []);
+        continue;
+      }
+      const node = form.elements['commerce-' + field];
+      const number = inlineNumberContacts[key];
+      if (number) {
+        const prefix = form.elements[contactPrefixName(key)];
+        const { code, national } = storedContactNumberParts(number, next, Object.hasOwn(entered, key) ? prefix.value : '86');
+        if (prefix.value !== code) prefix.value = code;
+        if (node.value !== national) node.value = national;
+      } else {
+        if (key === 'source' && next && ![...node.options].some(option => option.value === next))
+          node.innerHTML = A.options(customerSourceOptions(next).choices, next);
+        if (node.value !== next) node.value = next;
+      }
+    }
+    const id = form.elements['commerce-customerId'];
+    if (id.value !== (customer?.id || '')) {
+      id.value = customer?.id || '';
+      onChange(id, true);
+    }
+    const status = $('#order-customer-status', form);
+    const html = inlineCustomerStatus(lookup);
+    status.dataset.kind = decision || match.kind;
+    if (inlineCustomerMessages.get(status) !== html) {
+      inlineCustomerMessages.set(status, html);
+      status.innerHTML = html;
+    }
+    status.hidden = !html;
+    if (editing) {
+      A.setError('commerce-customerName', '', form);
+      A.setError('commerce-customerPhone', '', form);
+      A.setError('commerce-whatsapp', '', form);
+      if (lookup.hasContact) A.setError('commerce-wechat', '', form);
+    }
     return lookup;
+  }
+  function editOrderCustomer(form, key) {
+    const stored = form.elements?.['order-customer-entered'];
+    const entered = JSON.parse(stored.value);
+    const field = inlineCustomerFields.find(([name]) => name === key)[2];
+    let next;
+    if (key === 'tags') next = A.readOptionList(form.elements['order-customer-tags'].value);
+    else {
+      const control = form.elements['commerce-' + field];
+      next = control.value.trim();
+      const number = inlineNumberContacts[key];
+      if (number) {
+        const prefix = form.elements[contactPrefixName(key)];
+        if (/^(?:\+|00|(?:https?:\/\/)?wa\.me\/)/i.test(next.normalize('NFKC'))) {
+          const { code, national } = number.split(next, prefix.value);
+          if (code && national && national !== next) {
+            prefix.value = code;
+            control.value = national;
+          }
+        }
+        next = number.format(prefix.value, control.value);
+      }
+    }
+    if (JSON.stringify(entered[key]) !== JSON.stringify(next)) {
+      entered[key] = next;
+      stored.value = JSON.stringify(entered);
+      if (key === 'name') form.elements['order-customer-choice'].value = '';
+    }
+    updateOrderCustomerLookup(form, { editing: true });
+    saveDrafts();
   }
   function refreshOrderCustomerLookups() {
-    let refreshed = false;
-    for (const form of document.querySelectorAll('#main #commerce-order-form')) {
-      if (updateOrderCustomerLookup(form, { refreshChoices: true })) refreshed = true;
-    }
-    const matcher = $('#drawer[open] #order-customer-match-form');
-    if (matcher) updateOrderMatchDrawer(matcher);
-    if (refreshed) saveDrafts();
-    return refreshed;
+    const form = $('#main #commerce-order-form');
+    if (!form || !updateOrderCustomerLookup(form)) return false;
+    saveDrafts();
+    return true;
   }
   function orderIdentityFields(v, contact, existing, chooseClaudePlan, linkedClaude, quickDraft, lockCustomer) {
     const auto = automaticOrder(existing);
@@ -4522,7 +4638,7 @@
       `<div class="commerce-span-all order-identity-grid">` +
       (lockCustomer ? field('客户资料', 'renewalCustomer', input('renewalCustomer',
         customers.find(row => row.id === customerId)?.name || (customerId ? '原客户资料待核对' : '客户资料未登记'), 'readonly') +
-        input('customerId', customerId, 'type="hidden"'), true) : orderCustomerField(customerId, quickDraft, existing)) +
+        input('customerId', customerId, 'type="hidden"'), true) : quickDraft ? inlineCustomerFieldsHtml(customerId, quickDraft) : orderCustomerField(customerId, existing)) +
       `<div class="order-choice-grid">` +
       input('product', product, 'type="hidden"') +
       field('开通套餐', 'plan', lockChoices ? input('plan', v('plan'), 'readonly') : select('plan',
@@ -4557,7 +4673,7 @@
       ) +
       orderOwnerField(v, existing) + '</div>') +
       '</div>' +
-      `<details class="commerce-span-all"><summary>联系方式（自动回填，可展开修改）</summary><div class="commerce-field-grid">${field('客户微信', 'wechat', input('wechat', contact('wechat')))}${field('客户电话', 'customerPhone', input('customerPhone', contact('customerPhone')))}${field('QQ', 'qq', input('qq', contact('qq')))}${field('WhatsApp', 'whatsapp', input('whatsapp', contact('whatsapp')))}${field('Telegram', 'telegram', input('telegram', contact('telegram')))}</div></details>`
+      (quickDraft ? '' : `<details class="commerce-span-all"><summary>联系方式（自动回填，可展开修改）</summary><div class="commerce-field-grid">${field('客户微信', 'wechat', input('wechat', contact('wechat')))}${field('客户电话', 'customerPhone', input('customerPhone', contact('customerPhone')))}${field('QQ', 'qq', input('qq', contact('qq')))}${field('WhatsApp', 'whatsapp', input('whatsapp', contact('whatsapp')))}${field('Telegram', 'telegram', input('telegram', contact('telegram')))}</div></details>`)
     );
   }
   function orderPlanChoices(product, selected, existing) {
@@ -5161,7 +5277,7 @@
     const selected = v(id);
     const historical = orders.some(row => row.id === v('id') && (row.paidConfirmed || hasPaymentHistory(row)) &&
       [row.cardId, row.proPoolCardId].includes(selected));
-    const choices = cardChoices(pool ? 'GPT' : 'Claude', v('tenantId'), selected, v('paymentId'), historical);
+    const choices = cardChoices(pool ? 'GPT' : 'Claude', v('tenantId'), selected, v('proCardNumber'), historical);
     const actions = !localData ? '' : pool
       ? A.button('刷新', 'commerce-order-card-retry', 'compact', '', 'aria-label="刷新银行卡"')
       : A.button('读取', 'commerce-tenant-card-reveal', 'compact', '', 'aria-label="读取完整卡号"');
@@ -5187,7 +5303,7 @@
     if (!region) return;
     region.hidden = !message;
     region.innerHTML = E(message) + matches.map(match => A.textAction(
-      match.cardId ? `查看${match.tenantName || '租户'}银行卡 · 尾号 ${match.last4}` : `查看原单 ${match.orderNo}`,
+      match.cardId ? `查看${match.tenantName || '租户'}银行卡 · ${bankNumberLabel(match.number || normalizeTenantNumber(input.value))}` : `查看原单 ${match.orderNo}`,
       'commerce-tenant-card-locate',
       `data-tenant="${E(match.tenantId || '')}" data-card="${E(match.cardId || '')}" data-order="${E(match.orderId || '')}"`)).join(' ');
   }
@@ -5311,11 +5427,11 @@
   }
   async function openTenantCards(tenantId, cardId = '') {
     if (!canManageOrders()) return;
-    const route = S.route;
+    const route = S.route, actorId = currentOperator().id;
     const context = S.drawerContext;
     try {
       const snapshot = await localData.tenantCards(tenantId);
-      if (S.route !== route || S.drawerContext !== context) return;
+      if (S.route !== route || S.drawerContext !== context || currentOperator().id !== actorId) return;
       tenantCards.set(tenantId, snapshot);
       const row = tenants.find((tenant) => tenant.id === tenantId);
       const items = snapshot.items || [];
@@ -5325,7 +5441,7 @@
         kyc?.accounts?.length ? property('占用认证资格的账号', kyc.accounts.join('、')) : ''}</div>`;
       const list = items.length ? A.table([
         { id: 'label', label: '银行卡名称', render: (card) => E(card.label || '银行卡') },
-        { id: 'last4', label: '卡尾号', mobileSummary: true },
+        { id: 'last4', label: '银行卡号', mobileSummary: true, render: card => E(bankNumberLabel(card.number)) },
         { id: 'status', label: '状态', render: card => card.used ? '已使用' : card.frozen ? '已冻结' : card.active ? '可使用' : '停用' },
         { id: 'firstUse', label: '首次使用', mobileSummary: true, render: card => E(card.firstUse
           ? [card.firstUse.orderNo, dateInput(card.firstUse.at).replace('T', ' ')].filter(Boolean).join(' · ') : '—') },
@@ -5464,9 +5580,10 @@
         orderCardPicker(v, apple || (Boolean(proMode) && proMode !== 'tenant_card'), { optional: true }) : '') +
       (isClaude({ product }) ? field('银行卡号', 'tenantCardNumber', tenantCardInput('tenantCardNumber'), false,
         '选卡或填写 12 至 19 位完整卡号，二选一。未登记的卡随订单加入所选租户。', '', apple || proMode !== 'tenant_card') : '') +
-      field('卡尾号', 'paymentId', input('paymentId', v('paymentId'),
-        `readonly data-saved-card="${E(savedCard)}" data-saved-tail="${E(savedTail)}"`),
-        false, '', '', apple || ['manual_card', 'people', 'none', 'tenant_card'].includes(proMode)) +
+      input('paymentId', v('paymentId'), `type="hidden" data-saved-card="${E(savedCard)}" data-saved-tail="${E(savedTail)}"`) +
+      field('银行卡号', 'selectedCardNumber', `<input id="commerce-selectedCardNumber" readonly autocomplete="off" data-no-draft
+        value="${E(savedCard ? bankNumberLabel(orderBankNumber(existing)) : '')}" />`, false, '', '',
+        apple || ['manual_card', 'people', 'none', 'tenant_card'].includes(proMode)) +
       field('卡序列号', 'proCardSerial', input('proCardSerial', v('proCardSerial'), 'maxlength="120" autocomplete="off"'),
         false, '选填的业务登记编号，可保留前导零。', '', !orderCardSerialAvailable({ product,
           payment: v('payment'), proMaterialMode: proMode, cardId: v('cardId') })) +
@@ -5769,6 +5886,17 @@
     for (const [key, inputValue] of Object.entries(raw))
       if (key.startsWith('commerce-') && !['commerce-saleCurrencyChosen', 'commerce-saleManual', 'commerce-emailCostManual', 'commerce-proPoolCardId', 'commerce-card-type-touched', 'commerce-personalHistoryId', 'commerce-submissionId', 'commerce-expiryManual', 'commerce-paidManual', 'commerce-renewalCustomer'].includes(key))
         order[key.slice(9)] = String(inputValue).trim();
+    if (form.elements?.['order-customer-entered']) {
+      const customer = customers.find(row => row.id === order.customerId);
+      // Keep the saved historical representation for a legacy value displayed without edits.
+      const entered = JSON.parse(form.elements['order-customer-entered'].value);
+      for (const [orderField, customerField] of orderContactFields) {
+        if (inlineNumberContacts[customerField])
+          order[orderField] = Object.hasOwn(entered, customerField) ? entered[customerField] : customer?.[customerField] || '';
+      }
+      delete order.customerSource;
+      delete order.customerName;
+    }
     if (newCustomer) {
       order.customerId = newCustomer.id;
       order.wechat ||= newCustomer.wechat;
@@ -6001,9 +6129,9 @@
     }
     if (!hint.isConnected || renewalCardHints.get(form) !== request) return;
     request.availability = card?.availability || 'review';
-    const tail = card?.last4 || order.paymentId || '';
     const type = card?.typeName || order.cardTypeName || '';
-    status.innerHTML = card?.hasCard === false ? '本订阅未绑定续费用卡。' : `<strong>${E([selected ? '续费用卡' : '原卡', type, /^\d{4,6}$/.test(tail) ? '•••• ' + tail.slice(-4) : ''].filter(Boolean).join(' · '))}</strong> ${
+    const number = card?.number || (selected ? '' : orderBankNumber(order));
+    status.innerHTML = card?.hasCard === false ? '本订阅未绑定续费用卡。' : `<strong>${E([selected ? '续费用卡' : '原卡', type, bankNumberLabel(number)].filter(Boolean).join(' · '))}</strong> ${
       cardAvailabilityTag(request.availability)}${request.availability === 'frozen' || blockedCard(request.availability) ? ' <span>请更换可用银行卡</span>' : ''}`;
     change.textContent = card?.hasCard === false ? '填写本次用卡' : '换用银行卡';
     change.hidden = false;
@@ -6021,7 +6149,7 @@
     const target = picker?.querySelector('.commerce-picker-trigger') || field;
     if (source && field?.value === renewalCardHints.get(form)?.order.cardId) {
       field.value = '';
-      refreshOrderCardTail(form);
+      refreshOrderCardSelection(form);
       refreshPoolUsage(form);
       clearRevealedCard(form);
       if (picker) filterPicker(picker.querySelector('[data-commerce-picker]'));
@@ -6268,9 +6396,10 @@
       { id: 'businessType', label: '业务类型' },
       { id: 'payment', label: '支付方式' },
       { id: 'cardTypeName', label: '银行卡类型', render: row => E(row.cardTypeName || '—') },
-      { id: 'paymentId', label: '卡尾号 / ID' },
+      { id: 'paymentId', label: canManageOrders() ? '苹果 ID' : '银行卡号 / 苹果 ID', render: row => E(
+        row.payment === '银行卡' ? canManageOrders() ? '—' : bankNumberLabel(orderBankNumber(row)) : row.paymentId || '—') },
       { id: 'proMaterialMode', label: '填写方式', render: (row) => E(proMaterialLabel(row)) },
-      ...(canManageOrders() ? [{ id: 'proCardNumber', label: '银行卡号', render: (row) => E(row.proCardNumber || '—') }] : []),
+      ...(canManageOrders() ? [{ id: 'proCardNumber', label: '银行卡号', render: row => E(row.payment === '银行卡' ? bankNumberLabel(orderBankNumber(row)) : '—') }] : []),
       ...(canManageOrders() && product.startsWith('Claude') ? [
         { id: 'proCardSerial', label: '卡序列号', render: (row) => E(proCardSerialLabel(row)) }
       ] : []),
@@ -6590,7 +6719,7 @@
   function proOrderProperties(order) {
     if (order.payment !== '银行卡' || !canManageOrders()) return '';
     const mode = proMaterialMode(order);
-    return property('填写方式', proMaterialLabel(order)) + property('银行卡号', order.proCardNumber || '历史未登记完整卡号') +
+    return property('填写方式', proMaterialLabel(order)) + property('银行卡号', bankNumberLabel(orderBankNumber(order))) +
       (orderCardSerialAvailable(order) ? property('卡序列号', proCardSerialLabel(order)) : '') +
       (mode === 'people' ? property('订阅电话', order.phone) : '');
   }
@@ -6877,7 +7006,8 @@
                 automaticOrder(order) ? property('客户来源', order.customerSource || customer?.source) : ''}${
                 [['wechat', '微信'], ['phone', '客户电话'], ['qq', 'QQ'], ['whatsapp', 'WhatsApp'], ['telegram', 'Telegram']]
                   .map(([key, label]) => contactProperty(label, key, orderContactValue(order, customer, key))).join('')
-              }${property('支付方式', order.payment)}${order.payment === '银行卡' ? property('银行卡类型', order.cardTypeName) : ''}${property('卡尾号 / ID', order.paymentId)}${appleLedger}${proOrderProperties(order)}${property('订阅时间', order.start)}${property('到期时间', order.expiry)}${property('归属人', orderOwnerName(order))}${personal ? '' : property('租户', tenantLabel(order.tenantId)) + property('认证人', order.verifier) + property('认证电话', order.verifierPhone) + property('验证状态', order.kyc)}${property('付款状态', paymentStatus(order))}${property('历史付款证据', hasPaymentHistory(order) ? '已保留实际付款记录' : '未登记实际付款')}${property('资料完整性', orderStatus(order))}${property('订阅状态', subscriptionStatus(order))}${property('退款状态', refundStatus(order))}${property('账号运营状态', accountStatus(order))}${property('订单业务状态', orderBusinessStatus(order))}${property('资料缺项', completenessReasons(order).join('、') || '—')}${property('核算缺项', financialPendingReasons(order).filter(Boolean).join('、') || '—')}${traceProperties(order)}${property('备注', order.notes)}</div>`;
+              }${property('支付方式', order.payment)}${order.payment === '银行卡' ? property('银行卡类型', order.cardTypeName) : ''}${order.payment === '银行卡' ? canManageOrders() ? '' : property('银行卡号', bankNumberLabel(orderBankNumber(order))) :
+                property('苹果 ID', order.paymentId)}${appleLedger}${proOrderProperties(order)}${property('订阅时间', order.start)}${property('到期时间', order.expiry)}${property('归属人', orderOwnerName(order))}${personal ? '' : property('租户', tenantLabel(order.tenantId)) + property('认证人', order.verifier) + property('认证电话', order.verifierPhone) + property('验证状态', order.kyc)}${property('付款状态', paymentStatus(order))}${property('历史付款证据', hasPaymentHistory(order) ? '已保留实际付款记录' : '未登记实际付款')}${property('资料完整性', orderStatus(order))}${property('订阅状态', subscriptionStatus(order))}${property('退款状态', refundStatus(order))}${property('账号运营状态', accountStatus(order))}${property('订单业务状态', orderBusinessStatus(order))}${property('资料缺项', completenessReasons(order).join('、') || '—')}${property('核算缺项', financialPendingReasons(order).filter(Boolean).join('、') || '—')}${traceProperties(order)}${property('备注', order.notes)}</div>`;
     const detailBody = `<div class="tabs" role="tablist"${asPage ? ' data-page-actions="tabs"' : ''}>${[
       ['details', '资料'],
       ['costs', '成本与汇率'],
@@ -8149,13 +8279,6 @@
     );
     document.getElementById(fieldId)?.focus();
   }
-  function checkOrderCustomerDrawer(form, lookup) {
-    if (canAddOrderCustomer(lookup)) return true;
-    A.setError('commerce-contact-wechat', lookup.kind === 'matched'
-      ? '已有此客户，请返回订单选择。' : orderCustomerLookupMessage(lookup) || '请核对客户姓名。', form);
-    $('#commerce-contact-wechat', form)?.focus();
-    return false;
-  }
   function showContactConflict(form) {
     if (!form?.isConnected) return;
     const raw = A.readForm(form), tenant = value(raw, 'kind') === 'tenant';
@@ -8290,8 +8413,6 @@
       return;
     }
     const back = value(raw, 'quick') === 'yes' ? quickReturn : null;
-    const quickLookup = back?.identity ? { wechat: contacts.wechat, ...matchOrderCustomer(customers, name, contacts.wechat) } : null;
-    if (quickLookup && !checkOrderCustomerDrawer(form, quickLookup)) return;
     const duplicate = !tenant && customerDuplicates(id, name, contacts)?.duplicate;
     if (duplicate) {
       showDuplicate(duplicate);
@@ -8314,14 +8435,6 @@
       showContactConflict(form);
       A.notify('资料版本已变化，保存已停止');
       return;
-    }
-    if (quickLookup) {
-      const latest = { wechat: contacts.wechat, ...matchOrderCustomer(customers, name, contacts.wechat) };
-      if (!checkOrderCustomerDrawer(form, latest)) return;
-      if (latest.kind !== quickLookup.kind) {
-        A.notify('客户资料已变化，请重新核对后保存');
-        return;
-      }
     }
     const duplicatePhone = tenant && tenantPhoneDuplicateError(id, phone);
     if (duplicatePhone) {
@@ -8373,11 +8486,6 @@
         if (back) {
           const draft = S.drafts.get(back.key) || {};
           draft[`commerce-${tenant ? back.target : 'customerId'}`] = saved.id;
-          if (back.identity) {
-            S.drafts.delete(orderMatchKey(back.key));
-            delete draft['order-quick-customer-name'];
-            delete draft['order-quick-customer-wechat'];
-          }
           if (!tenant)
             for (const [orderField, customerField] of orderContactFields)
               draft[`commerce-${orderField}`] = saved[customerField];
@@ -8433,7 +8541,15 @@
       ? '' : '请选择有效的开通套餐');
     if (changed('customerId')) {
       const hasCustomer = newCustomer || customers.some(row => row.id === order.customerId && row.active !== false);
-      error('customerId', hasCustomer ? '' : '请选择或核对客户');
+      if (customerLookup) {
+        const { phone, whatsapp } = customerLookup.values;
+        error('customerPhone', phone && !validOrderPhone(phone) ? '请填写带国际区号的有效联系电话' : '');
+        error('whatsapp', whatsapp && !validOrderWhatsApp(whatsapp) ? '请填写带国际区号的有效 WhatsApp 号码' : '');
+        const hasName = form.elements['commerce-customerName'].value.trim();
+        error('customerName', !hasName ? '请填写客户姓名' : !customerLookup.decision ? '请核对上方匹配结果并选择客户' : '');
+        error('wechat', customerLookup.decision && !customerLookup.hasContact
+          ? '请至少填写一种联系方式（微信、联系电话、QQ、WhatsApp 或 Telegram）' : '');
+      } else error('customerId', hasCustomer ? '' : '请选择或核对客户');
     }
     if (changed('paidAmount', 'paidCurrency') && !auto)
       error('paidAmount', amountValid(order.paidAmount) && M.compare(order.paidAmount, '0') > 0 ? '' : '请填写大于零的实际代付金额');
@@ -8611,7 +8727,7 @@
           subscriptionStatus(row) === '有效'
       );
     if (current && changed('email', 'customerId') && order.customerId && current.customerId !== order.customerId)
-      error('customerId', 'Claude 账号在同一有效期间只属于一个客户');
+      error(customerLookup ? 'customerName' : 'customerId', 'Claude 账号在同一有效期间只属于一个客户');
     if (first) {
       const target = ['commerce-claudeVerifierId', 'commerce-customerId'].includes(first) ? first + '-picker' : first;
       const control = document.getElementById(target);
@@ -8681,14 +8797,21 @@
     }
     saveDrafts();
     const enteredAt = now();
-    const newCustomer = customerLookup?.kind === 'new' ? {
-      id: uid('commerce-customer'), name: customerLookup.name, wechat: customerLookup.wechat,
+    const calibrate = customerLookup?.decision === 'calibrate';
+    const matchedVersion = customerLookup?.customer?.version ?? 0;
+    const newCustomer = customerLookup?.decision === 'new' ? {
+      id: uid('commerce-customer'), ...orderCustomerChanges(null, customerLookup.values),
       active: true, version: 1,
       createdById: operator.id, createdBy: operator.name, createdAt: enteredAt,
       updatedById: operator.id, updatedBy: operator.name, updatedAt: enteredAt
     } : null;
     const inputOrder = validateOrder(form, customerLookup, newCustomer);
     if (!inputOrder) return;
+    if (customerLookup && localData) {
+      inputOrder.customerMatchReview = { input: customerLookup.values, decision: customerLookup.decision,
+        ...(newCustomer ? (customerLookup.choice === 'new' ? { confirmedSameName: true } : {})
+          : { customerVersion: matchedVersion }) };
+    }
     const renewalEntry = S.route.startsWith(renewalOrderPrefix) ? S.route : '';
     const linkedOrder = !existing && inputOrder.claudeRenewalId && orders.find(row => row.id === inputOrder.claudeRenewalId);
     const renewalSource = renewalEntry ? workbenchOrderSource(renewalEntry) : linkedOrder ? { order: linkedOrder } : null;
@@ -8783,9 +8906,10 @@
         }
         if (customerLookup) {
           const latest = readOrderCustomerLookup(form);
-          if (latest.kind !== customerLookup.kind || latest.customerId !== customerLookup.customerId ||
-              (!newCustomer && !customers.some(row => row.id === saved.customerId && row.active !== false))) {
-            updateOrderCustomerLookup(form, { refreshChoices: true });
+          if (latest.decision !== customerLookup.decision || latest.customer?.id !== customerLookup.customer?.id ||
+              latest.choice !== customerLookup.choice || (latest.customer?.version ?? 0) !== matchedVersion ||
+              JSON.stringify(latest.changes) !== JSON.stringify(customerLookup.changes)) {
+            updateOrderCustomerLookup(form);
             saveDrafts();
             A.notify('客户资料已变化，请重新核对订单。');
             return;
@@ -8857,7 +8981,7 @@
         }
         const inventory = A.modules.inventory;
         persistCommerce(
-          newCustomer ? orderCustomerCreateAction : existing ? '更正订单' : '新增独立订单',
+          newCustomer ? orderCustomerCreateAction : calibrate ? orderCustomerCalibrateAction : existing ? '更正订单' : '新增独立订单',
           () => {
             const balanceResult = localData
               ? { ok: true }
@@ -8918,6 +9042,16 @@
               if (newCustomer) {
                 customers.unshift(newCustomer);
                 log('新增资料', newCustomer.id, '随订单登记客户', saved.id);
+              } else if (calibrate) {
+                const customer = customers.find(row => row.id === saved.customerId);
+                Object.assign(customer, customerLookup.changes, { version: matchedVersion + 1,
+                  updatedById: operator.id, updatedBy: operator.name, updatedAt: enteredAt });
+                log('修改资料', customer.id, '随订单校准' + Object.keys(customerLookup.changes).map(inlineLabel).join('、'), saved.id);
+              }
+              if (customerLookup) {
+                const profile = newCustomer || customers.find(row => row.id === saved.customerId);
+                for (const [orderField, key] of orderContactFields)
+                  saved[orderField] = profile[key] || '';
               }
               orders.unshift(saved);
             }
@@ -8934,7 +9068,6 @@
           },
           () => {
             committed = true;
-            S.drafts.delete(orderMatchKey(key));
             if (!existing) orderReceipts.set(submittedRoute, { id, actorId: operator.id });
             cleanClose(key);
             A.render();
@@ -8960,7 +9093,15 @@
           !existing ? id : undefined
         );
     };
-    submitOrder();
+    if (calibrate) {
+      const customer = customerLookup.customer;
+      const lines = Object.entries(customerLookup.changes).map(([key, next]) =>
+        inlineLabel(key) + '：' + displayCustomerValue(customer[key]) + ' → ' + displayCustomerValue(next));
+      A.confirmAction('确认校准客户资料', '客户 ' + customer.name + '\n' + lines.join('\n'), submitOrder, '确认校准并提交');
+      const dialog = $('#confirm-dialog');
+      dialog.querySelector('p').style.whiteSpace = 'pre-line';
+      dialog.querySelector('[data-action="confirm-cancel"]').textContent = '返回修改';
+    } else submitOrder();
   }
   function refundEditor(id) {
     const order = orders.find((row) => row.id === id);
@@ -9247,7 +9388,7 @@
       historicalCardReview = { id, actorId, version, cards: available };
       const key = `commerce-card-backfill:${id}`, draft = S.drafts.get(key) || {};
       const choices = [['', '选择经核实的原付款卡'], ...available.map(card =>
-        [card.id, [card.label || card.name, `尾号 ${card.last4}`].filter(Boolean).join(' · ')])];
+        [card.id, [card.label || card.name, bankNumberLabel(card.number)].filter(Boolean).join(' · ')])];
       A.openDrawer('补录原付款卡', `${order.orderNo} · 仅补录空白的原付款卡，不新增付款。`,
         `<form id="commerce-card-backfill-form" data-commerce-draft="${E(key)}" novalidate><input type="hidden" name="commerce-id" value="${E(id)}" /><input type="hidden" name="commerce-version" value="${E(draft['commerce-version'] || version)}" /><div class="commerce-field-grid">${field('原付款卡', 'backfill-card', select('backfill-card', choices, draft['commerce-backfill-card'] || ''), true)}${field('核对依据', 'backfill-reason', `<textarea id="commerce-backfill-reason" name="commerce-backfill-reason" rows="2" maxlength="200">${E(draft['commerce-backfill-reason'] || '')}</textarea>`, true, '填写历史付款依据，不填写密码、密钥或完整卡号。', 'commerce-span-all')}</div></form>`,
         A.button('取消', 'drawer-close') + '<button type="submit" form="commerce-card-backfill-form" class="button primary">保存原付款卡</button>', key);
@@ -9832,14 +9973,12 @@
     );
     return { ok: true, settings: safeClone(costSettings) };
   }
-  function quickCreate(tenant, node, form = node.closest('#commerce-order-form'), lookup = null) {
+  function quickCreate(tenant, node) {
+    const form = node.closest('#commerce-order-form');
     if (!form) return;
-    if (lookup && !canAddOrderCustomer(lookup)) return;
-    const identity = lookup ? { name: lookup.name, wechat: lookup.wechat } : null;
     saveDrafts();
     quickReturn = {
       tenant,
-      identity,
       target: node.dataset.target || 'tenantId',
       route: S.route,
       key: form.dataset.commerceDraft,
@@ -10012,10 +10151,6 @@
     }
     if (action === 'commerce-renewal-card-refresh') {
       void loadRenewalCardDetails(node.closest('#commerce-renewal-card-panel'));
-      return true;
-    }
-    if (action === 'commerce-renewal-card-reveal') {
-      void revealRenewalCard(node);
       return true;
     }
     if (action === 'commerce-renewal-card-copy-account') {
@@ -10362,23 +10497,18 @@
       );
       return true;
     }
-    if (action === 'commerce-customer-match-open') {
-      openOrderCustomerMatch(node.closest('#commerce-order-form'));
-      return true;
-    }
-    if (action === 'commerce-customer-match-apply' || action === 'commerce-customer-match-create') {
-      const matcher = $('#drawer[open] #order-customer-match-form'), order = $('#main #commerce-order-form');
-      if (!matcher || !order || order.dataset.commerceDraft !== matcher.dataset.orderKey) return true;
-      const lookup = updateOrderMatchDrawer(matcher);
-      if (action === 'commerce-customer-match-create') {
-        quickCreate(false, node, order, lookup);
-      } else if (lookup.kind === 'matched' || lookup.kind === 'new') {
-        order.elements['order-quick-customer-name'].value = lookup.name;
-        order.elements['order-quick-customer-wechat'].value = lookup.wechat;
-        updateOrderCustomerLookup(order, { editing: true });
-        A.closeDrawer();
-        S.drafts.delete(orderMatchKey(order.dataset.commerceDraft));
+    if (['commerce-order-customer-choose', 'commerce-order-customer-new', 'commerce-order-customer-reselect'].includes(action)) {
+      const form = node.closest('#commerce-order-form');
+      const lookup = readOrderCustomerLookup(form);
+      const separate = action === 'commerce-order-customer-new';
+      if (action === 'commerce-order-customer-reselect') form.elements['order-customer-choice'].value = '';
+      else {
+        if (!lookup || lookup.match.kind !== 'review' || (separate ? !lookup.canSeparate : !lookup.match.ids.includes(id))) return true;
+        form.elements['order-customer-choice'].value = separate ? 'new' : id;
       }
+      updateOrderCustomerLookup(form, { editing: true });
+      saveDrafts();
+      form.elements['commerce-customerName'].focus({ preventScroll: true });
       return true;
     }
     if (action === 'commerce-quick-customer' || action === 'commerce-quick-tenant') {
@@ -10959,7 +11089,7 @@
     toggle('proCardNumber', mode === 'manual_card');
     toggle('tenantCardNumber', mode === 'tenant_card');
     toggle('proCardSerial', orderCardSerialAvailable(order));
-    toggle('paymentId', mode !== 'tenant_card' && Boolean(orderCardSource(form)));
+    toggle('selectedCardNumber', mode !== 'tenant_card' && Boolean(orderCardSource(form)));
     toggle('tenantId', isClaude(order) && bank && usesOrderTenant(mode));
     toggle('appleIdId', order.payment === '苹果内购');
     toggle('appleStoreRegion', order.payment === '苹果内购');
@@ -10982,7 +11112,7 @@
       else if (label && confirmed) label.insertAdjacentHTML('beforeend', '<span class="required">*</span>');
     }
     refreshOrderCardType(form);
-    refreshOrderCardTail(form);
+    refreshOrderCardSelection(form);
     updateStockSearch(form);
     void updateRenewalCardHint(form);
   }
@@ -11084,12 +11214,17 @@
       A.render();
       return true;
     }
+    if (node.dataset?.orderContactPrefix || isOrderCustomerLookupInput(node)) {
+      if (!composingCustomerFields.has(node)) editOrderCustomer(node.form, node.dataset.orderCustomerKey || node.dataset.orderContactPrefix);
+      return true;
+    }
     if (node.dataset?.customerTag !== undefined) {
       const picker = node.closest('[data-customer-tag-picker]');
       const tags = [...picker.querySelectorAll('[data-customer-tag]:checked')].map((input) => input.value);
-      picker.querySelector('[name="commerce-tags"]').value = JSON.stringify(tags);
+      picker.querySelector('input[type="hidden"]').value = JSON.stringify(tags);
       picker.querySelector('[data-customer-tag-summary]').textContent = tags.join('、') || '请选择标签（可多选）';
-      A.setError('commerce-contact-tags', '');
+      if (picker.closest('.order-customer-fields')) editOrderCustomer(node.form, 'tags');
+      else A.setError('commerce-contact-tags', '');
       return true;
     }
     const statFilter = node.dataset?.statFilter;
@@ -11182,16 +11317,11 @@
         applyOrderPrice(form);
       }
       if (node.id === 'commerce-customerId') {
-        if (!fromCustomerLookup && controls['order-quick-customer-name']) {
-          S.drafts.delete(orderMatchKey(form.dataset.commerceDraft));
-          controls['order-quick-customer-name'].value = '';
-          controls['order-quick-customer-wechat'].value = '';
-          A.setError('commerce-customerId', '', form);
-          updateOrderCustomerLookup(form);
+        if (!fromCustomerLookup) {
+          const customer = customers.find(row => row.id === node.value);
+          for (const [orderField, customerField] of orderContactFields)
+            form.querySelector('#commerce-' + orderField).value = customer?.[customerField] || '';
         }
-        const customer = customers.find((row) => row.id === node.value);
-        for (const [orderField, customerField] of orderContactFields)
-          form.querySelector(`#commerce-${orderField}`).value = customer?.[customerField] || '';
         updateCustomerEmailHistory(form, true);
       }
       if (node.id === 'commerce-businessType') updateCustomerEmailHistory(form, true);
@@ -11347,7 +11477,7 @@
       return true;
     }
     if (isOrderCustomerLookupInput(node)) {
-      updateOrderMatchDrawer(node.form);
+      if (!composingCustomerFields.has(node)) editOrderCustomer(node.form, node.dataset.orderCustomerKey);
       return true;
     }
     if (node.closest('form[data-commerce-draft]')) {
@@ -11801,18 +11931,17 @@
   document.addEventListener?.('compositionstart', event => {
     if (isOrderCustomerLookupInput(event.target)) {
       composingCustomerFields.add(event.target);
-      updateOrderMatchDrawer(event.target.form);
     }
   });
   document.addEventListener?.('compositionend', event => {
     if (!composingCustomerFields.delete(event.target) || !event.target.form) return;
-    updateOrderMatchDrawer(event.target.form);
+    editOrderCustomer(event.target.form, event.target.dataset.orderCustomerKey);
   });
   document.addEventListener?.('keydown', (event) => {
     if (event.isComposing || composingCustomerFields.has(event.target)) return;
-    if (event.key === 'Enter' && isOrderCustomerLookupInput(event.target)) {
+    if (event.key === 'Enter' && event.target.tagName === 'INPUT' && isOrderCustomerLookupInput(event.target)) {
       event.preventDefault();
-      updateOrderMatchDrawer(event.target.form);
+      editOrderCustomer(event.target.form, event.target.dataset.orderCustomerKey);
       return;
     }
     const popup = event.target.closest('.commerce-picker-popover');

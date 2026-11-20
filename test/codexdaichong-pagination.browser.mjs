@@ -6,6 +6,7 @@ import { interceptDesign, origin } from './helpers/offline-design.mjs';
 
 const fixtureRows = (count, build) => Array.from({ length: count }, (_, index) => build(index + 1));
 const padded = (value) => String(value).padStart(3, '0');
+const fixtureCardNumber = '1000000000000001';
 const base = origin + CODEXDAICHONG_PREFIX;
 const cdks = fixtureRows(125, (id) => ({
   code: `KC-FIXTURE-${padded(id)}`,
@@ -81,7 +82,9 @@ async function openFixture(browser, t, view, { embedded = false, rechargePartner
         job_key: `session-fixture-${id}`,
         cdk_code: `Session码 ${id}`,
         has_session: false,
-        status: 'failed',
+        status: id === 1 ? 'success' : 'failed',
+        card_last4: String(id).padStart(4, '0'),
+        ...(id === 1 && { cardNumber: fixtureCardNumber }),
         message: `Session记录 ${id}`
       }));
       const offset = Number(query.offset);
@@ -89,7 +92,8 @@ async function openFixture(browser, t, view, { embedded = false, rechargePartner
     }
     if (key === 'orbitcard/usage') {
       const start = (Number(query.page) - 1) * Number(query.page_size);
-      const all = fixtureRows(63, (cardId) => ({ cardId, cardLast4: padded(cardId) }));
+      const all = fixtureRows(63, (cardId) => ({ cardId, cardLast4: String(cardId).padStart(4, '0'),
+        ...(cardId === 1 && { cardNumber: fixtureCardNumber }) }));
       return send({
         success: true,
         total: all.length,
@@ -259,6 +263,9 @@ test(
         const { page, reads, failure } = await openFixture(browser, t, 'sessions');
         const nav = pager(page, 'session');
         await current(page, 'session', 1, 20);
+        const cardCells = page.locator('#session_body td[data-label="银行卡号"]');
+        assert.equal(await cardCells.nth(0).textContent(), fixtureCardNumber);
+        assert.equal(await cardCells.nth(1).textContent(), '未留存完整卡号');
         const queries = () =>
           reads.filter(({ key }) => key === 'sessions').map(({ query }) => query);
         assert.deepEqual(queries().at(-1), { limit: '20', offset: '0' });
@@ -302,6 +309,8 @@ test(
         await page.getByRole('tab', { name: 'Orbitcard 用卡记录' }).click();
         const orbitcard = pager(page, 'orbitcard');
         await current(page, 'orbitcard', 1, 20);
+        assert.equal(await page.locator('#orbitcard_usage_body tr').first().getByText(fixtureCardNumber, { exact: true }).count(), 1);
+        assert.equal(await page.locator('#orbitcard_usage_body tr').first().getByText('0001', { exact: true }).count(), 0);
         await orbitcard.getByLabel('每页条数').selectOption('50');
         await current(page, 'orbitcard', 1, 50);
         await orbitcard.getByRole('button', { name: '下一页' }).click();

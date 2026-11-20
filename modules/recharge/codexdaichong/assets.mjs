@@ -543,6 +543,13 @@ function adaptAdminTaskRecords(source) {
 }
 
 function adaptAdminScript(source, routingScript) {
+  source = replaceOne(source,
+    'class="session-cell-center" data-label="卡尾号">${escapeHtml(row.card_last4 || \'-\')}</td>',
+    'class="session-cell-center session-card-number" data-label="银行卡号">${escapeHtml(row.cardNumber || \'未留存完整卡号\')}</td>');
+  source = replaceOne(source, "                    <td><code>${escapeHtml(card.cardLast4 || '****')}</code></td>\n", '');
+  source = replaceOne(source, '<td colspan="11" style="text-align:center; color:var(--text-dim); padding:36px 0;">',
+    '<td colspan="10" style="text-align:center; color:var(--text-dim); padding:36px 0;">');
+  source = replaceOne(source, '`已准备卡片 ····${task.cardLast4 || \'-\'}`', "'支付方式已准备'");
   source = adaptAdminTaskRecords(source);
   source = adaptAdminPagination(source);
   source = replaceSection(source, '        // ─── 第三方代充 API 配置', 'const US_TAX_FREE_STATE_NAMES', `
@@ -967,7 +974,7 @@ function adaptAdminScript(source, routingScript) {
     source,
     "const cardNumber = escapeHtml(card.card_number || card.last4 || '****');",
     "const cardKey = rechargeCardTypes.cardKey(card.id);\n" +
-      "                const cardNumber = escapeHtml(card.card_number || card.last4 || '****');"
+      "                const cardNumber = escapeHtml(card.card_number || '未留存完整卡号');"
   );
   source = replaceOne(
     source,
@@ -1992,6 +1999,9 @@ function adaptHtml(source, kind) {
       .replace(/class="admin-switcher-tab(?=[" ])/g, 'class="tab admin-switcher-tab');
     const telegramPanel = '<div class="panel" style="margin-top: 24px;">\n                <h2 class="panel-title">Telegram 通知</h2>';
     source = replaceOne(source, telegramPanel, telegramPanel.replace('class="panel"', 'class="panel" data-recharge-telegram-form'));
+    source = replaceOne(source, 'session-cell-center">卡尾号</th>', 'session-cell-center">银行卡号</th>');
+    source = replaceOne(source, '任务 ID、卡尾号', '任务 ID、卡号后四位');
+    source = replaceOne(source, '                                <th width="90px">后四位</th>\n', '');
     source = replaceOne(
       source,
       '<th width="200px">卡号</th>',

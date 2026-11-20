@@ -143,6 +143,7 @@ test('renewal reminder persists decisions, hands off to finance and projects cus
     await row('QA-REFUSE').waitFor({ state: 'hidden' });
     await period('refused');
     await row('QA-REFUSE').waitFor();
+    assert.equal(await row('QA-REFUSE').getByRole('button', { name: '复制订阅信息', exact: true }).count(), 0);
     assert.equal((await read()).data.renewalWarningHours, 25);
     await select('QA-REFUSE');
     await detail.getByText('已拒续', { exact: true }).waitFor();
@@ -162,7 +163,11 @@ test('renewal reminder persists decisions, hands off to finance and projects cus
     await page.getByRole('button', { name: '续费提醒话术' }).click();
     await drawer.getByLabel('提醒话术', { exact: true }).fill('合成续费询问。');
     await drawer.getByRole('button', { name: '保存话术' }).click();
-    await operation('QA-EXPIRED', '复制订阅信息');
+    await row('QA-EXPIRED').getByRole('button', { name: '更多操作', exact: true }).click();
+    await page.getByRole('menuitem', { name: '用卡详情', exact: true }).waitFor();
+    assert.equal(await page.getByRole('menuitem', { name: '复制订阅信息', exact: true }).count(), 0);
+    await page.keyboard.press('Escape');
+    await row('QA-EXPIRED').getByRole('button', { name: '复制订阅信息', exact: true }).click();
     await page.locator('#toast').getByText('已复制订阅信息', { exact: true }).waitFor();
     const reminderText = await page.evaluate(() => navigator.clipboard.readText());
     assert.match(reminderText, /订阅套餐：Plus[\s\S]*合成续费询问/);

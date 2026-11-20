@@ -6,10 +6,71 @@ import { Script } from 'node:vm';
 import { loadCodexdaichongAssets } from '../modules/recharge/codexdaichong/assets.mjs';
 import { createCodexdaichongGateway } from '../modules/recharge/codexdaichong/gateway.mjs';
 import { createNativeRechargeAdapter } from '../modules/recharge/codexdaichong/native-adapter.mjs';
+import { orderCardNumberProjection } from '../server/local-business.mjs';
+import { sessionCardNumbers } from '../server/preview.mjs';
 
 const prefix = '/integrations/codexdaichong';
 const member = { id: 'u-1', email: 'member@example.test', admin: false, sensitive: false };
 const admin = { ...member, id: 'u-2', admin: true, sensitive: true };
+
+test('银行卡池与 Session 列表仅向既有敏感资料角色返回有证据的完整号码', async t => {
+  const cardNumber = '1000000000001234';
+  const conflictingNumber = '1000000000011234';
+  const cards = [{ id: 1, last4: '1234', card_number: cardNumber, card_cvc: 'sample-cvc' },
+    { id: 2, last4: '5678', card_number: cardNumber }];
+  const sessions = [{ job_key: 'linked', status: 'success', card_last4: '1234' },
+    { job_key: 'mismatch', status: 'success', card_last4: '5678' },
+    { job_key: 'unlinked', status: 'success', card_last4: '1234', cardNumber },
+    { job_key: 'conflicting-archive', status: 'success', card_last4: '1234' },
+    { job_key: 'duplicate-job', status: 'success', card_last4: '1234' },
+    { job_key: 'from-archive', status: 'success', card_last4: '1234' },
+    { job_key: 'running', status: 'running', card_last4: '1234' }];
+  const order = { source: '线上代充', product: 'GPT', payment: '银行卡', paymentId: '1234', proCardNumber: cardNumber };
+  const orders = ['linked', 'mismatch', 'conflicting-archive', 'duplicate-job', 'from-archive', 'running']
+    .map(taskId => ({ ...order, taskId }));
+  orders[2].cardId = 'recharge:2';
+  orders[4] = { ...orders[4], cardId: 'recharge:1', proCardNumber: '' };
+  orders.push({ ...order, taskId: 'duplicate-job', payment: '苹果内购' });
+  const cardNumberFor = orderCardNumberProjection({
+    featureDocument: name => ({ data: name === 'order-card-archive' ? {
+      cards: { 'recharge:1': { number: cardNumber }, 'recharge:2': { number: conflictingNumber } }
+    } : undefined })
+  });
+  const secret = randomBytes(48).toString('base64url');
+  const engine = await listen(t, (req, res) => {
+    const body = req.url === '/api/admin/cards' ? { cards } : { items: sessions, total: sessions.length };
+    res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(body));
+  });
+  const adapter = await listen(t, createNativeRechargeAdapter({ nativeUrl: engine, secret,
+    getNativeAdminToken: () => 'fixture' }).handle);
+  let actor = admin;
+  const lookupCalls = [];
+  const gateway = await listen(t, createCodexdaichongGateway({
+    upstreamUrl: adapter, publicOrigin: 'https://fixture.example.test', secret, getUnifiedPrincipal: () => actor,
+    readSessionCardNumbers(jobKeys) {
+      lookupCalls.push([...jobKeys]);
+      return sessionCardNumbers(orders, jobKeys, cardNumberFor);
+    }
+  }).handle);
+  const get = path => fetch(gateway + prefix + '/api/admin/' + path);
+  for (actor of [member, { ...admin, sensitive: false }]) {
+    assert.equal((await get('cards')).status, 403);
+    assert.equal((await get('sessions?limit=4')).status, 403);
+  }
+  assert.deepEqual(lookupCalls, []);
+  actor = admin;
+  const cardResponse = await get('cards');
+  assert.equal(cardResponse.headers.get('cache-control'), 'no-store');
+  const actualCards = (await cardResponse.json()).cards;
+  assert.deepEqual(actualCards.map(row => row.card_number), [cardNumber, '']);
+  assert(!actualCards.some(row => Object.hasOwn(row, 'card_cvc')));
+  const sessionResponse = await get('sessions?limit=4');
+  assert.equal(sessionResponse.headers.get('cache-control'), 'no-store');
+  const actualSessions = await sessionResponse.json();
+  assert.equal(actualSessions.total, sessions.length);
+  assert.deepEqual(actualSessions.items.map(row => row.cardNumber), [cardNumber, '', '', '', '', cardNumber, '']);
+  assert.deepEqual(lookupCalls, [['linked', 'mismatch', 'unlinked', 'conflicting-archive', 'duplicate-job', 'from-archive']]);
+});
 
 test('task records show safe summaries without exposing recharge codes, authorization or raw errors', async t => {
   const code = 'KC-SYNTHETIC-HOLD1234';
@@ -521,6 +582,8 @@ test('upstream pages retain the signed-in operations without their own login or 
   assert.doesNotMatch(script, /data-delete-task|deleteAdminTaskLog/);
   assert.match(script, /data-copy-session=/);
   assert.match(script, /data-export-session=/);
+  assert.match(script, /data-label="银行卡号">\$\{escapeHtml\(row.cardNumber/);
+  assert.doesNotMatch(assets.get('/admin').body, /<th[^>]*>后四位<\/th>/);
   assert.match(script, /onclick="resolveActivationManualHold\(/);
   assert.doesNotMatch(script, /plus_admin_token|localStorage\./);
   assert.doesNotThrow(() => new Script(script));

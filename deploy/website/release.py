@@ -13,7 +13,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from remote import (ACTION_PASSWORD_PRESENTATION_FILES, ASSET_METADATA_REPAIR_BASE, ASSET_METADATA_REPAIR_DIGEST,
                     ASSET_METADATA_RELEASE_RUN,
-                    BACKUP_OPERATION, CARD_IMPORT_ASSET_SOURCE, CARD_IMPORT_PRESENTATION_FILES, CARD_PLAN_PRESENTATION_FILES,
+                    BACKUP_OPERATION, CARD_IMPORT_ASSET_SOURCE, CARD_IMPORT_PRESENTATION_FILES,
+                    CARD_NUMBER_PRESENTATION_FILES, CARD_PLAN_PRESENTATION_FILES,
                     CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES, PRESENTATION_SCOPES, SECURITY_PRESENTATION_FILES,
                     REDEEM_PRESENTATION_FILES, SUBSCRIPTION_INVOICE_PRESENTATION_FILES,
                     TABLE_ACTIONS_STYLESHEET, TASK_HISTORY_PRESENTATION_FILES,
@@ -36,9 +37,11 @@ SUBSCRIPTION_INVOICE_MANIFEST = "recharge-subscription-invoice-20261116.json"
 SUBSCRIPTION_INVOICE_MANIFEST_PATH = f"deploy/website/{SUBSCRIPTION_INVOICE_MANIFEST}"
 ACTION_PASSWORD_MANIFEST = "action-password-20261116.json"
 ACTION_PASSWORD_MANIFEST_PATH = f"deploy/website/{ACTION_PASSWORD_MANIFEST}"
+CARD_NUMBER_MANIFEST = "card-number-display-20261121.json"
+CARD_NUMBER_MANIFEST_PATH = f"deploy/website/{CARD_NUMBER_MANIFEST}"
 CORE_PATHS = ("deploy/recharge-core", "deploy/caddy", "modules/recharge/codexdaichong", "package.json",
               PROXY_TYPE_CATALOG, TASK_HISTORY_MANIFEST_PATH, ADMIN_WORKSPACE_MANIFEST_PATH,
-              SUBSCRIPTION_INVOICE_MANIFEST_PATH, ACTION_PASSWORD_MANIFEST_PATH)
+              SUBSCRIPTION_INVOICE_MANIFEST_PATH, ACTION_PASSWORD_MANIFEST_PATH, CARD_NUMBER_MANIFEST_PATH)
 ADAPTER_SCOPE = {
     "modules/recharge/codexdaichong/gateway.mjs", "modules/recharge/codexdaichong/local-gateway.mjs",
     "modules/recharge/codexdaichong/native-adapter.mjs", "modules/recharge/codexdaichong/runtime.mjs",
@@ -309,6 +312,9 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False, 
     elif changed == set(CARD_PLAN_PRESENTATION_FILES):
         return "cardPlanPresentation", require_presentation_approval(
             base, sha, "card-plan-ui-20261114.json", CARD_PLAN_PRESENTATION_FILES)
+    elif changed == {*CARD_NUMBER_PRESENTATION_FILES, CARD_NUMBER_MANIFEST_PATH}:
+        return "cardNumberPresentation", require_presentation_approval(
+            base, sha, CARD_NUMBER_MANIFEST, CARD_NUMBER_PRESENTATION_FILES)
     elif changed == set(CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES):
         return "checkoutDiagnosticPresentation", require_presentation_approval(
             base, sha, "checkout-diagnostic-20261114.json", CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES)
@@ -545,6 +551,10 @@ def main(sample_backup_resources=False):
     if presentation:
         if presentation["beforeAssetsSha256"] != expected_assets:
             raise RuntimeError("recharge_presentation_live_baseline_mismatch")
+        if presentation_scope == "cardNumberPresentation" and (
+                before.get("mountedAssets", {}).get("available") is not True or
+                before["mountedAssets"].get("sha256") != expected_assets):
+            raise RuntimeError("card_number_presentation_mount_mismatch")
         expected_assets = presentation["assetsSha256"]
     if (actual_assets != expected_assets and base == ASSET_METADATA_REPAIR_BASE and
             actual_assets == ASSET_METADATA_REPAIR_DIGEST and not any((include_core, include_adapter, presentation,
@@ -583,6 +593,7 @@ def main(sample_backup_resources=False):
              "frontend/page-modules.mjs", "frontend/finance-reconciliation.mjs", "frontend/renewal-reminders.mjs",
              "frontend/apple-funding.mjs", "frontend/list-order.mjs",
              "modules/website/pages.mjs", "modules/orders/order-opening.mjs", "modules/orders/list-order.mjs",
+             "modules/orders/order-customer-match.mjs", "modules/orders/order-whatsapp.mjs", "server/order-customer-write.mjs",
              "modules/finance/apple-funding.mjs", "modules/orders/renewal-reminders.mjs", "modules/data/document-delta.mjs",
              "modules/orders/order-list.mjs", "modules/inventory/list.mjs", "modules/finance/accounting.mjs",
              "modules/data/record-edit.mjs", "server/business-lists.mjs", "server/record-edit.mjs",
@@ -607,6 +618,11 @@ def main(sample_backup_resources=False):
               'modules/external-events/requirements.txt')
     if presentation_scope:
         files += PRESENTATION_SCOPES[presentation_scope][0]
+    if presentation_scope == "cardNumberPresentation":
+        files += (CARD_NUMBER_MANIFEST_PATH, "frontend/order-completion.js", "server/card-management.mjs",
+                  "server/order-auxiliary.mjs", "server/order-completion.mjs", "server/order-recovery.mjs",
+                  "server/subscription-management.mjs", "modules/recharge/bitbrowser/login/index.mjs",
+                  "modules/recharge/bitbrowser/login/direct-login.mjs")
     if presentation_scope == "rechargeAdminWorkspacePresentation":
         files += ("frontend/finance-collection.js", "server/finance/collection-route.mjs", "server/card-management.mjs",
                   "deploy/website/check-business-action.mjs")

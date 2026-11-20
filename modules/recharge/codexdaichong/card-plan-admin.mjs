@@ -113,11 +113,11 @@ export function createCardPlanAdmin({ labels, request, loadCards, onImportChange
     const allowed = Array.isArray(card.allowed_plans)
       ? card.allowed_plans.filter(plan => Object.hasOwn(labels, plan)).map(plan => labels[plan]).join(' / ')
       : '未设置';
-    const tail = /^\d{4}$/.test(card.last4) ? '尾号 ' + card.last4 : '编号 ' + id;
+    const reference = /^\d{12,19}$/.test(card.card_number) ? ' ' + card.card_number : '编号 ' + id;
     return '<div class="card-plan-cell"><label class="card-plan-select"><input type="checkbox" data-card-plan-select value="' + id +
-      '" aria-label="选择银行卡' + tail + '"></label>' +
+      '" aria-label="选择银行卡' + reference + '"></label>' +
       '<button type="button" class="btn btn-secondary" data-card-plan-edit="' + id +
-      '" aria-haspopup="dialog" aria-label="设置银行卡' + tail + '的允许套餐">' +
+      '" aria-haspopup="dialog" aria-label="设置银行卡' + reference + '的允许套餐">' +
       (allowed || '待核对') + '</button></div>';
   }
 
@@ -127,7 +127,7 @@ export function createCardPlanAdmin({ labels, request, loadCards, onImportChange
     let draft;
     try { draft = JSON.parse(readDraft().card_pool_plan_editor || 'null'); } catch { /* Invalid drafts are discarded. */ }
     editing = { ids, key, version: snapshot.version };
-    const cardLabel = id => /^\d{4}$/.test(rows.get(id).last4) ? '•••• ' + rows.get(id).last4 : '银行卡编号 ' + id;
+    const cardLabel = id => rows.get(id).card_number || '银行卡编号 ' + id + '（未留存完整卡号）';
     element('card_plan_target_label').textContent = ids.length > 1 ? '批量设置' : '当前银行卡';
     element('card_plan_target').textContent = ids.length > 1 ? '已选 ' + ids.length + ' 张银行卡' : cardLabel(ids[0]);
     const detail = element('card_plan_target_detail');

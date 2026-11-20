@@ -1,3 +1,4 @@
+import { chooseOrderCustomer } from './helpers/order-customer.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
@@ -90,8 +91,7 @@ test('库存使用状态、归还核对和成品选单使用同一份本机资�
   const stockOption = page.locator('#commerce-emailHistory-options [role="option"]').filter({ hasText: '已提取' });
   assert.equal(await stockOption.getAttribute('data-value'), stock.email);
   await stockOption.click();
-  await page.locator('#commerce-customerId-picker').click();
-  await page.locator('#commerce-customerId-options [data-value="customer-1"]').click();
+  await chooseOrderCustomer(page, { name: '测试客户', id: 'customer-1' });
   await page.locator('#commerce-payment').selectOption({ label: '银行卡' });
   await page.locator('#commerce-proMaterialMode').selectOption('manual_card');
   await page.locator('#commerce-proCardNumber').fill('4111111111111111');

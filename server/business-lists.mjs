@@ -69,7 +69,7 @@ function orderOwner(row, labels) {
 }
 
 export function readOrdersPage(params, {
-  snapshot, inventory, owners = [], managers = false, expenseReceipts = [], appleLedger, currency = 'CNY', at = Date.now(), sync
+  snapshot, inventory, owners = [], managers = false, expenseReceipts = [], appleLedger, currency = 'CNY', at = Date.now(), sync, cardNumberFor
 }) {
   const { data, version } = snapshot;
   const orders = list(data?.orders), customers = list(data?.customers), tenants = list(data?.tenants);
@@ -145,7 +145,8 @@ export function readOrdersPage(params, {
       includeDeadline(expiry > at ? expiry - Math.floor((duration - 1) / interval) * interval + 1
         : expiry + (Math.floor(duration / interval) + 1) * interval);
     }
-    return { ...pick(row, orderFields), refunds,
+    const bankCardNumber = cardNumberFor ? cardNumberFor(row) : row.bankCardNumber;
+    return { ...pick(row, orderFields), ...(bankCardNumber !== undefined && { bankCardNumber }), refunds,
       list: { ...labels, paymentRecorded: hasRecordedPaymentAmount(row), netCost: cost?.netCost ?? null, gain,
         receiptRecorded: orderReceiptRecorded(row), originalProfit, cardIssueUnallocated: cost?.cardIssueUnallocated } };
   });

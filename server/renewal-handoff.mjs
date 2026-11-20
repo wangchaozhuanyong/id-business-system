@@ -195,10 +195,10 @@ function matchesHandoffSource(row, order, context) {
     context.stamp(order) === row.source);
 }
 
-async function financeCardNumbers(row, order, context, readNumber) {
+async function handoffCardNumbers(row, order, context, readNumber, includeOriginal) {
   if (row.order.payment !== bank || row.status === 'withdrawn') return {};
-  const original = matchesHandoffSource(row, order, context) ? order : order?.corrections
-    ?.find(change => matchesHandoffSource(row, change.previous, context))?.previous;
+  const original = includeOriginal && (matchesHandoffSource(row, order, context) ? order : order?.corrections
+    ?.find(change => matchesHandoffSource(row, change.previous, context))?.previous);
   const funding = row.funding;
   let cardNumber = funding?.card?.number || funding?.number;
   if (row.status === 'complete' && funding?.last4) {
@@ -208,7 +208,7 @@ async function financeCardNumbers(row, order, context, readNumber) {
     if (recorded?.previousOrderId === row.order.id && recorded.payment === bank)
       cardNumber = await readNumber(recorded);
   }
-  const originalCardNumber = await readNumber(original);
+  const originalCardNumber = original ? await readNumber(original) : '';
   return { originalLast4: orderTail(original), ...(originalCardNumber && { originalCardNumber }),
     ...(funding?.payment === bank && /^\d{4}$/.test(funding.last4 || '') &&
       typeof cardNumber === 'string' && /^\d{12,19}$/.test(cardNumber) &&
@@ -428,12 +428,12 @@ export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clo
           const source = row && sourceFor(row, context);
           if (!source || source.payment !== bank) fail(404, '请先接手对应的银行卡续费');
           const { tenantCards, isAvailable } = tenantFunding(store, context, source, items);
-          const selected = tenantCards.filter(isAvailable).map(({ id, number }) => ({ id, last4: number.slice(-4), label: '租户卡' }));
+          const selected = tenantCards.filter(isAvailable).map(({ id, number }) => ({ id, number, last4: number.slice(-4), label: '租户卡' }));
           let pool;
           try { pool = (await readPoolCards(client, { includeNumbers: true })).filter(card => card.active &&
             /^\d{12,19}$/.test(card.number || '') && card.number.endsWith(card.last4) && cardPermitted(store, card.id, card.number)); }
           catch { return send(response, 200, { items: selected, poolUnavailable: true }); }
-          return send(response, 200, { items: [...selected, ...pool.map(({ id, last4 }) => ({ id, last4, label: '代充卡' }))] });
+          return send(response, 200, { items: [...selected, ...pool.map(({ id, number, last4 }) => ({ id, number, last4, label: '代充卡' }))] });
         }
         const fromFinance = view === 'finance';
         if (fromFinance && !financeRole(actor) || !fromFinance && (!['staff', 'declined'].includes(view) || actor.role === 'finance'))
@@ -484,7 +484,7 @@ export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clo
             candidates.push({ ...display, version: order.version ?? 0, reminderState, canSubmitToFinance: eligible && !historical });
           }
         }
-        const readNumber = fromFinance && visible.some(row => row.order.payment === bank)
+        const readNumber = actor.role !== 'supervisor' && visible.some(row => row.order.payment === bank)
           ? createOrderCardNumberReader({ client, archive: store.featureDocument(orderCardArchiveDocument).data,
             tenantCards: store.featureDocument('tenant-cards').data?.items }) : null;
         const projected = await Promise.all(visible.map(async row => {
@@ -493,15 +493,21 @@ export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clo
           const view = viewRow(row, actor, fromFinance, source, canFinish(actor, order, context),
             fromFinance && reviewSourceFor(row, actor, context, source));
           if (readNumber) {
-            const { originalLast4, ...cardNumbers } = await financeCardNumbers(row, order, context, readNumber);
+            const { originalLast4, ...cardNumbers } = await handoffCardNumbers(row, order, context, readNumber, fromFinance);
             if (originalLast4) view.order.originalLast4 = originalLast4;
             Object.assign(view, cardNumbers);
           }
           return view;
         }));
-        if (fromFinance && projected.some(row => row.originalCardNumber || row.cardNumber))
+        if (projected.some(row => row.originalCardNumber || row.cardNumber)) {
+          if (store.load('commerce').version !== commerce.version || store.load('inventory').version !== inventorySnapshot.version ||
+              store.featureDocument(subscriptionDomain).version !== profiles.version ||
+              store.featureDocument(renewalHandoffDomain).version !== snapshot.version)
+            fail(409, '订单或续费用卡资料已变化，请刷新后重新核对');
           store.auditFeature(cardTypeDocument, store.featureDocument(cardTypeDocument).version,
-            { action: '查看财务续费银行卡号', actor, targetId: 'finance-renewal-list' });
+            { action: fromFinance ? '查看财务续费银行卡号' : '查看续费办理银行卡号', actor,
+              targetId: fromFinance ? 'finance-renewal-list' : 'staff-renewal-list' });
+        }
         return send(response, 200, { version: snapshot.version, reminderHours, candidates,
           nextReminderAt: Number.isFinite(nextReminderAt) ? nextReminderAt : null,
           ...(!fromFinance && { canSubmitToFinance: canSendToFinance(actor, scope) }), items: projected });

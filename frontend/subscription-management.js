@@ -95,7 +95,7 @@
           ? countdown({ expiry: row.queryCode.expiresAt, status: 'expired' }) :
           esc(codeStates[row.queryCode?.status] || '待核对') + ' · ' + esc(displayDays(row.queryCode?.remainingDays)) }] : []),
       { id: 'payment', label: '续费方式', render: row => lineValues(row, series =>
-        esc(series.payment === '银行卡' ? series.last4 ? '银行卡 · ' + series.last4 : '银行卡 · 未绑定'
+        esc(series.payment === '银行卡' ? '银行卡 · ' + (series.cardNumber || (series.hasCard ? '完整卡号待核对' : '未绑定'))
           : series.payment === '苹果内购' ? series.appleIdId ? '苹果内购' : '苹果内购 · 系统外'
           : '未登记')) },
       { id: 'actions', label: '操作', action: true, render: row => {
@@ -206,7 +206,7 @@
           <div class="tabs" role="tablist" aria-label="订阅列表">${tabs}</div>
           <form class="toolbar list-filter-toolbar" data-list-query id="subscription-filter" aria-label="筛选订阅" novalidate>
             <div class="toolbar-left"><div class="search-field">${A.icon('search')}${A.input('subscription-query', f.input,
-              'maxlength="254" aria-label="搜索客户、邮箱、订单或卡尾号" placeholder="客户、邮箱、单号或尾号"')}</div>
+              'maxlength="254" aria-label="搜索客户、邮箱、订单或银行卡号" placeholder="客户、邮箱、单号或卡号"')}</div>
               <div class="list-filter-fields">${name === 'all' ? `<select id="subscription-product" aria-label="产品">${A.options(
                 [['all', '全部产品'], ...Object.values(labels).filter(value => value !== 'all')], f.product || 'all')}</select>` : ''}
               ${archiveScopes.has(selectedScope()) ? '' : `<select id="subscription-status" aria-label="订阅状态">${A.options(

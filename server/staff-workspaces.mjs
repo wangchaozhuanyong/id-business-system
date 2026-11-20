@@ -160,7 +160,9 @@ function cardsView(data) {
         const active = Number(row.is_active) === 1;
         const state = !active ? '已停用' : row.status && row.status !== '正常' ? '不可用'
           : Date.parse(row.cooldown_until) > Date.now() ? '暂缓使用' : '可用';
-        return { id: Number(row.id), last4: row.last4, active, state,
+        const cardNumber = typeof row.card_number === 'string' && /^\d{12,19}$/.test(row.card_number) &&
+          row.card_number.endsWith(row.last4) ? row.card_number : '';
+        return { id: Number(row.id), last4: row.last4, cardNumber, active, state,
           uses: Number(row.usage_count) || 0, lastUsedAt: row.last_used_at || null,
           plans: Array.isArray(row.allowed_plans) ? row.allowed_plans.filter(plan => configuredPlans.has(plan)) : null };
       })

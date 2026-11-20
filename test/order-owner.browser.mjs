@@ -1,8 +1,9 @@
+import { chooseOrderCustomer } from './helpers/order-customer.mjs';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { interceptDesign, origin } from './helpers/offline-design.mjs';
+import { interceptDesign, origin, settle } from './helpers/offline-design.mjs';
 
 test('管理员代录订单可指定员工，草稿、列表与实际录入人保持一致', { timeout: 60_000 }, async t => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
@@ -48,7 +49,7 @@ test('管理员代录订单可指定员工，草稿、列表与实际录入人�
       await context.close();
       return;
     }
-    await page.locator('#commerce-customerId option').first().waitFor({state:'attached'});
+    await page.locator('#commerce-customerName').waitFor();
     const trigger = page.locator('#commerce-ownerId-picker');
     const popup = page.locator('#commerce-ownerId-popover');
     const search = popup.getByRole('searchbox', {name:'搜索归属人'});
@@ -77,6 +78,7 @@ test('管理员代录订单可指定员工，草稿、列表与实际录入人�
         await page.evaluate(dark=>{document.documentElement.dataset.theme=dark?'dark':'light';},dark);
         await trigger.click();
         await page.locator('#commerce-ownerId-picker[aria-expanded="true"]').waitFor();
+        await settle(page);
         const layout = await popup.evaluate(node=>{const r=node.getBoundingClientRect();return {fits:r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight,noOverflow:document.documentElement.scrollWidth<=innerWidth,searchFirst:node.firstElementChild.matches('input')};});
         assert(layout.fits && layout.noOverflow && layout.searchFirst);
         await search.press('Escape');
@@ -84,9 +86,7 @@ test('管理员代录订单可指定员工，草稿、列表与实际录入人�
     }
     await page.setViewportSize({width:1440,height:900});
     const customer = fixture.commerce.data.customers.find(row => row.active !== false);
-    await page.locator('#commerce-customerId').evaluate((node, id) => {
-      node.value = id; node.dispatchEvent(new Event('change', { bubbles: true }));
-    }, customer.id);
+    await chooseOrderCustomer(page, customer);
     await page.locator('#commerce-email').fill('owner@example.test');
     await page.locator('#commerce-paidAmount').fill('20');
     await page.locator('#commerce-saleAmount').fill('120');
