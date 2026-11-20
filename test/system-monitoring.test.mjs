@@ -8,7 +8,7 @@ import { createSystemMonitoring } from '../server/system-monitoring.mjs';
 import { createLegacyRechargeNotifications, projectRechargeMonitoring } from '../server/monitoring-recharge.mjs';
 import { createMonitoringSources } from '../server/monitoring-sources.mjs';
 import { createMonitoringHandler, createMonitoringReadiness, createProbeReportHandler, signMonitoringReport } from '../server/monitoring-route.mjs';
-import { monitorPath, monitorReportPath, readyPath, sendTelegram } from '../server/monitoring-policy.mjs';
+import { monitorPath, monitorReportPath, monitorStateDomain, readyPath, sendTelegram } from '../server/monitoring-policy.mjs';
 import { advanceSiteProbe, runSiteProbeCycle } from '../server/monitoring-site-probe.mjs';
 import { createCodexdaichongGateway, CODEXDAICHONG_PREFIX } from '../modules/recharge/codexdaichong/gateway.mjs';
 
@@ -106,6 +106,90 @@ test('opens a sustained incident once, coalesces counts, and separates acceptanc
   assert.equal(await monitor.dispatch(), true);
   assert.equal(sent.filter(row => row.text.includes(opened.id)).length, 2);
   assert.match(sent.at(-1).text, /已恢复/);
+});
+
+test('preserves opening recharge probes after recovery and restart without storing raw failures', t => {
+  const { monitor, store, tick, clock } = fixture(t);
+  const original = { id: 'old-incident', code: 'recharge_runtime', scope: 'system', at: now - minute, resolvedAt: now };
+  store.saveFeatureDocument(monitorStateDomain, 0, { incidents: [original], deliveries: [],
+    verifiedBindings: {}, telegramRetryAt: 0 });
+
+  const bad = (reason, durationMs) => monitor.observe([{ code: 'recharge_runtime', status: 'bad',
+    runtimeProbe: { at: clock() - 10, reason, durationMs, responseBody: 'opaque-response-body' } }]);
+  const ok = () => monitor.observe([{ code: 'recharge_runtime', status: 'ok' }]);
+  bad('runtime_not_ready', 80);
+  const first = tick(4 * minute);
+  bad('unreachable', 3002);
+  bad('bridge_rejected', 500); // Duplicate observation cannot advance the failure streak.
+  const second = tick();
+  bad('untrusted-upstream-error', 123_456);
+  assert.equal(monitor.activeCount(), 0);
+  const third = tick();
+  bad('invalid_runtime_response', 91);
+  const evidence = [
+    { at: first - 10, detail: '探测连接失败或超时。', durationMs: 3002 },
+    { at: second - 10, detail: '未取得具体的探测失败原因。', durationMs: null },
+    { at: third - 10, detail: '就绪接口响应格式异常。', durationMs: 91 }
+  ];
+  const opened = monitor.view().items[0];
+  assert.equal(opened.at, third);
+  assert.deepEqual(opened.runtimeProbes, evidence);
+  assert.equal(monitor.view().checks.find(row => row.code === 'recharge_runtime').detail, evidence[2].detail);
+  tick(); bad('bridge_rejected', 15);
+  tick(); ok();
+  assert.equal(monitor.activeCount(), 1);
+  const recoveredAt = tick(); ok();
+  assert.equal(monitor.activeCount(), 0);
+  monitor.close();
+
+  const reopened = createSystemMonitoring({ store, origin, clock });
+  t.after(() => reopened.close());
+  const recovered = reopened.view({ status: 'resolved' }).items;
+  assert.equal(recovered.find(row => row.id === original.id).runtimeProbes, undefined);
+  const recoveredIncident = recovered.find(row => row.id === opened.id);
+  assert.equal(recoveredIncident.resolvedAt, recoveredAt);
+  assert.deepEqual(recoveredIncident.runtimeProbes, evidence);
+  assert.doesNotMatch(JSON.stringify(store.featureDocument(monitorStateDomain)), /opaque-response-body|untrusted-upstream-error/);
+});
+
+test('captures the checkout-independent probe before a slow task read and tolerates synchronous source failures', async t => {
+  const f = fixture(t);
+  const seen = [];
+  let throwImmediately = false;
+  const task = Promise.withResolvers();
+  const sources = createMonitoringSources({
+    monitor: { ...f.monitor, observe(rows) { seen.push(rows); f.monitor.observe(rows); } },
+    databasePath: '/fixture/data.sqlite', clock: f.clock,
+    readDisk: async () => ({ bavail: 8, blocks: 10 }),
+    runtimeProbe() {
+      if (throwImmediately) throw new Error('diagnostic-private-error');
+      return { ready: false, reason: 'bridge_rejected' };
+    },
+    rechargeClient: { get() {
+      if (throwImmediately) throw new Error('unavailable-task-data');
+      return task.promise;
+    } }
+  });
+  t.after(() => sources.close());
+  const checkedAt = f.clock();
+  const reading = sources.tick();
+  await new Promise(setImmediate);
+  f.tick(15_000);
+  task.reject(new Error('slow-task-read-failed'));
+  await reading;
+  const observed = seen[0].find(row => row.code === 'recharge_runtime');
+  assert.equal(observed.status, 'bad');
+  assert.equal(observed.runtimeProbe.reason, 'bridge_rejected');
+  assert.equal(observed.runtimeProbe.at, checkedAt);
+  assert(Number.isSafeInteger(observed.runtimeProbe.durationMs) && observed.runtimeProbe.durationMs >= 0);
+  assert.equal(seen[0].find(row => row.code === 'recharge_review').reason, 'tasks_unavailable');
+
+  throwImmediately = true;
+  f.tick();
+  await sources.tick();
+  const fallback = seen[1].find(row => row.code === 'recharge_runtime');
+  assert.equal(fallback.runtimeProbe.reason, 'recharge_probe_failed');
+  assert.doesNotMatch(JSON.stringify(seen), /diagnostic-private-error|unavailable-task-data|slow-task-read-failed/);
 });
 
 test('respects Telegram retry-after, records ambiguous outcomes, and avoids replay or a stale target', async t => {
