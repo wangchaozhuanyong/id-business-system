@@ -1061,6 +1061,23 @@ class WebsiteReleaseTests(unittest.TestCase):
         self.assertLess(confirmed.index("recentlyVerified,true"), confirmed.index("/app/deploy/website/check-business-action.mjs"))
         self.assertLess(confirmed.index("await confirmSyntheticBusinessAction("), confirmed.index("'/api/local/auth/employees'"))
 
+    def test_card_details_canary_checks_only_the_authorized_field(self):
+        legacy = "  assert.ok(!details.body.includes(cardNumber), 'old detail contract');\n"
+        surrounding = "  assert.equal(details.status, 200);\n"
+        reveal = "  assert.equal(revealed.status, 200);\n"
+        configured = remote.wire_canary_card_details(surrounding + legacy + reveal)
+        self.assertTrue(configured.startswith(surrounding))
+        self.assertTrue(configured.endswith(reveal))
+        self.assertIn("assert.ok(detailCardNumber === cardNumber,", configured)
+        self.assertIn("order: { ...summary, card: maskedCard }", configured)
+        self.assertNotIn(legacy, configured)
+        self.assertEqual(remote.wire_canary_card_details(configured), configured)
+        for invalid in ("other contract", legacy + legacy, configured + legacy,
+                        configured.replace("=== cardNumber", "!== cardNumber")):
+            with self.subTest(invalid=invalid):
+                with self.assertRaisesRegex(remote.ReleaseError, "unexpected_card_details_canary"):
+                    remote.wire_canary_card_details(invalid)
+
     def test_stages_active_website_launchers_and_switches_to_the_prepared_path(self):
         with TemporaryDirectory() as directory:
             root = Path(directory)
