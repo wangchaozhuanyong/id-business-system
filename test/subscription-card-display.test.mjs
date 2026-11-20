@@ -56,10 +56,23 @@ test('银行卡资料和续费准备接口不再返回余额', async () => {
   const details = await fixture.request({ path: '/api/local/subscription-card-details', command: { orderId: 'manual' } });
   assert.equal(details.status, 200, JSON.stringify(details.body));
   assert.equal(details.body.order.card.canReveal, true);
+  assert.equal(details.body.order.card.number, syntheticCards.shared);
   assert.equal(Object.hasOwn(details.body.order.card, 'balance'), false);
-  const prepared = await fixture.request({ path: '/api/local/subscription-renewal-card', command: { action: 'prepare', orderId: 'preferred' } });
+  const prepare = { path: '/api/local/subscription-renewal-card', command: { action: 'prepare', orderId: 'preferred' } };
+  const prepared = await fixture.request(prepare);
   assert.equal(prepared.status, 200, JSON.stringify(prepared.body));
+  assert.equal(prepared.headers['Cache-Control'], 'private, no-store');
   assert.equal(prepared.body.last4, '0002');
+  assert.equal(prepared.body.number, syntheticCards.replacement);
   assert.equal(prepared.body.canCopy, true);
   assert.equal(Object.hasOwn(prepared.body, 'balance'), false);
+  assert(!JSON.stringify(prepared.body).includes('SYNTHETIC-CVC'));
+  assert(fixture.audits.some(entry => entry.domain === 'subscriptions' && entry.action === 'view' &&
+    entry.targetId === prepared.body.subscriptionId));
+  for (const number of Object.values(syntheticCards)) assert(!JSON.stringify(fixture.audits).includes(number));
+  const audits = fixture.audits.length;
+  const denied = await fixture.request({ ...prepare, actor: { ...cardDisplayActor, role: 'employee' } });
+  assert.equal(denied.status, 403);
+  assert.deepEqual(Object.keys(denied.body), ['error']);
+  assert.equal(fixture.audits.length, audits);
 });

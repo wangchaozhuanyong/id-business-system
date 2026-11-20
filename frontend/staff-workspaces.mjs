@@ -130,13 +130,15 @@ export function createPage(A, definition) {
 
   function cardList(current) {
     const all = current.result.items || [];
-    const rows = all.filter(row => (!current.query || row.last4.includes(current.query.trim())) &&
+    const query = (current.query || '').trim().replace(/[\s-]+/g, '');
+    const rows = all.filter(row => (!query || (row.cardNumber || row.last4).includes(query)) &&
       (!current.cardStatus || cardState(row) === current.cardStatus) &&
       (!current.cardPlan || (current.cardPlan === 'unconfigured' ? !row.plans?.length : row.plans?.includes(current.cardPlan))));
     const size = current.pageSize || 20;
     current.page = Math.max(1, Math.min(current.page, Math.ceil(rows.length / size)));
     const columns = [
-      { id: 'last4', label: '银行卡尾号', render: row => `<strong>${E(row.last4)}</strong>` },
+      { id: 'last4', label: '银行卡号', mobileSummary: true,
+        render: row => `<strong>${E(row.cardNumber || '未留存完整卡号')}</strong>` },
       { id: 'active', label: '状态', mobileSummary: true, render: row => {
         const value = cardState(row);
         return A.tag(value, value === '可用' ? 'success' : value === '暂缓使用' ? 'warning' : value === '不可用' ? 'danger' : '');
@@ -151,7 +153,7 @@ export function createPage(A, definition) {
     ];
     return A.table(columns, rows.slice((current.page - 1) * size, current.page * size), '', '银行卡和套餐', {
       title: all.length ? '没有符合条件的银行卡' : '暂无银行卡',
-      description: all.length ? '可调整尾号、状态或套餐筛选。' : '点击「导入银行卡」添加，并选择允许使用的套餐。'
+      description: all.length ? '可调整卡号、状态或套餐筛选。' : '点击「导入银行卡」添加，并选择允许使用的套餐。'
     }) + window.IDPagination.render({ id: 'staff-list', page: current.page, pageSize: size, total: rows.length });
   }
 
@@ -161,7 +163,7 @@ export function createPage(A, definition) {
   function cardToolbar() {
     const filter = (label, key, choices, selected) => `<label class="list-filter-field">${label}${
       A.select('staff-card-' + key, choices, selected).replace('<select', `<select data-card-filter="${key}" aria-label="${key === 'status' ? '银行卡状态' : '允许套餐'}"`)}</label>`;
-    return `<div class="toolbar toolbar--inline finance-toolbar list-filter-toolbar"><div class="toolbar-left">${searchField('按尾号查找银行卡', state)}<div class="list-filter-fields">${
+    return `<div class="toolbar toolbar--inline finance-toolbar list-filter-toolbar"><div class="toolbar-left">${searchField('按卡号查找银行卡', state)}<div class="list-filter-fields">${
       filter('状态', 'status', [['', '全部状态'], ...['可用', '暂缓使用', '已停用', '不可用'].map(value => [value, value])], state.cardStatus || '')}${
       filter('套餐', 'plan', [['', '全部套餐'], ...plans, ['unconfigured', '未配置套餐']], state.cardPlan || '')}</div></div>
       <div class="toolbar-right">${control('刷新', 'refresh')}${control('取卡设置', 'card-settings', 'disabled')}
@@ -410,7 +412,7 @@ export function createPage(A, definition) {
   }
 
   function cardPlan(view, row) {
-    A.openDrawer('设置允许套餐', '保存后，这张银行卡只用于本次选择的套餐。', `<p>银行卡尾号 ${E(row.last4)}</p>` +
+    A.openDrawer('设置允许套餐', '保存后，这张银行卡只用于本次选择的套餐。', `<p>银行卡号 ${E(row.cardNumber || '未留存完整卡号')}</p>` +
       form('card-plan', optionPlans('staff-edit-plan', row.plans || []), '保存套餐'), '', 'staff-card-plan');
     const formNode = $('#drawer [data-staff-form]');
     formNode.addEventListener('submit', async event => {
@@ -529,7 +531,7 @@ export function createPage(A, definition) {
     if (!card) return;
     if (action === 'card-plan') return cardPlan(view, card);
     if (action === 'card-stop' && await Security.confirmChange('停用银行卡',
-      '尾号 ' + card.last4 + ' 的银行卡停用后不再参与自动代充，历史记录会继续保留。'))
+      '银行卡 ' + (card.cardNumber || '编号 ' + card.id) + ' 停用后不再参与自动代充，历史记录会继续保留。'))
       await write(view, action, { action: 'stop', id: card.id });
   }
 

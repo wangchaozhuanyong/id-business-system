@@ -116,12 +116,15 @@ test('员工桌面和窄屏可选客户、恢复草稿、核对冲突并写回�
   t.after(() => browser.close());
   for (const [width, theme] of [[1440, 'light'], [390, 'dark']]) {
     const data = model();
+    const cardNumber = '4242424242424242';
+    Object.assign(data.commerce.data.orders[0], { proCardNumber: cardNumber, paymentId: cardNumber.slice(-4) });
     const { page, drawer, errors, traffic, writes } = await open(t, browser, data, a, width, theme);
     assert.equal(await page.locator('table[data-table="订单补全"] tbody tr[data-row-id]').count(), 1);
     assert.equal(await page.getByText('SYN-other', { exact: true }).count(), 0);
     assert.equal(await page.getByRole('button', { name: '待分配', exact: true }).count(), 0);
     const pending = page.getByRole('button', { name: '补全资料', exact: true });
     await pending.click();
+    await drawer.getByText(cardNumber, { exact: true }).waitFor();
     await drawer.getByText('100 PHP', { exact: true }).waitFor();
     await drawer.getByText('101 PHP', { exact: true }).waitFor();
     await drawer.getByText('配置代付与实际扣款有差额', { exact: false }).waitFor();
@@ -212,6 +215,7 @@ test('管理员待归属，归属员工可快捷新增客户并随原单保存',
   assert.equal(customer.source, undefined);
   assert.equal(saved.saleAmount, '120');
   await employee.page.locator('.completion-saved').getByRole('button', { name: '查看此订单' }).click();
+  await employee.drawer.getByText('未登记', { exact: true }).waitFor();
   await employee.drawer.getByRole('button', { name: '补充资料', exact: true }).click();
   assert.equal(await employee.drawer.locator('#completion-receipt-amount').count(), 0);
   await employee.drawer.locator('#completion-card-last4').fill('2468');

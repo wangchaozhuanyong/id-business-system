@@ -65,12 +65,12 @@ test('renewal pages keep toolbars aligned and share an accessible responsive nav
           assert(await toolbar.getByRole('button', { name: '拒绝续费', exact: true }).isDisabled(), label);
           const order = region.locator('tr[data-row-id="' + source.id + '"]');
           const actions = order.locator('[data-column="actions"] .action-links');
-          assert(await actions.getByRole('button', { name: '详情', exact: true }).isVisible(), label);
-          assert(await actions.getByRole('button', { name: '更多操作', exact: true }).isVisible(), label);
+          assert.deepEqual(await actions.getByRole('button').allTextContents(), ['详情', '复制订阅信息', '更多操作'], label);
           const separated = await actions.evaluate(group => {
-            const [details, menu] = [...group.children].map(button => button.getBoundingClientRect());
-            return Math.abs(details.top - menu.top) <= 1 && menu.left - details.right >= 8 &&
-              menu.right <= group.closest('td').getBoundingClientRect().right;
+            const [details, copy, menu] = [...group.children].map(button => button.getBoundingClientRect());
+            return Math.abs(details.top - copy.top) <= 1 && Math.abs(copy.top - menu.top) <= 1 &&
+              copy.left - details.right >= 8 && menu.left - copy.right >= 8 &&
+              menu.right <= Math.min(innerWidth, group.closest('td').getBoundingClientRect().right) + 1;
           });
           assert(separated, label + ' 订单动作应在同一行并留出间距');
         }
@@ -556,10 +556,16 @@ test('staff confirms a batch and finance returns a verified replacement for a ne
     await context.route('**/api/local/renewals**', route => {
       const request = route.request();
       if (request.method() === 'GET') {
+        const params = new URL(request.url()).searchParams;
+        if (params.get('view') === 'cards') {
+          assert.equal(role, 'finance');
+          assert.equal(params.get('id'), 'case-0');
+          return route.fulfill({ json: { items: [{ id: 'recharge:1', number: usedCard, label: '代充卡' }] } });
+        }
         const current = rows.map(row => ({ ...row, canTake: role === 'finance' && row.status === 'pending',
           canFinish: role === 'employee' && row.status === 'paid' && !row.sourceChanged, assignedToMe: role === 'finance',
-          ...(role === 'finance' && row.id === 'case-0' && { originalCardNumber: originalCard,
-            cardNumber: row.last4 ? usedCard : undefined }),
+          ...(role === 'finance' && row.id === 'case-0' && { originalCardNumber: originalCard }),
+          ...(row.id === 'case-0' && row.last4 && { cardNumber: usedCard }),
           ...(role === 'finance' && row.id === 'case-1' && { order: { ...row.order, originalLast4: '1111' } }) }));
         return route.fulfill({ json: { version: actions.length, items: current, candidates: available,
           reminderHours: 72, canSubmitToFinance: financeAvailable } });
@@ -677,7 +683,8 @@ test('staff confirms a batch and finance returns a verified replacement for a ne
   await finance.page.getByRole('columnheader', { name: '原用卡号', exact: true }).waitFor();
   await finance.page.getByRole('columnheader', { name: '本次用卡号', exact: true }).waitFor();
   await initialFinance.locator('[data-column="originalCard"]').getByText(originalCard, { exact: true }).waitFor();
-  await finance.page.getByText('仅登记尾号 1111', { exact: true }).waitFor();
+  await finance.page.locator('tr[data-row-id="case-1"] [data-column="originalCard"]')
+    .getByText('完整卡号待核对', { exact: true }).waitFor();
   await initialFinance.getByRole('button', { name: '接手' }).click();
   await finance.page.getByRole('tab', { name: '处理中' }).click();
   await initialFinance.getByRole('button', { name: '登记实付' }).click();
@@ -685,6 +692,8 @@ test('staff confirms a batch and finance returns a verified replacement for a ne
   await drawer.getByText(remark, { exact: true }).waitFor();
   await drawer.getByText(originalCard, { exact: true }).waitFor();
   await drawer.getByLabel('实际付款金额').fill('22.25');
+  await drawer.getByLabel('本次使用的卡').selectOption('pool');
+  assert.equal(await drawer.locator('#renewal-cardId option[value="recharge:1"]').textContent(), usedCard + ' · 代充卡');
   await drawer.getByLabel('本次使用的卡').selectOption('manual');
   await drawer.getByLabel('本次银行卡号').fill(usedCard);
   await drawer.getByRole('textbox', { name: '财务回复', exact: true }).fill(financeRemark);
@@ -729,6 +738,7 @@ test('staff confirms a batch and finance returns a verified replacement for a ne
   await staff.page.getByText(financeRemark, { exact: true }).waitFor();
   await staff.page.getByRole('link', { name: '补资料并提交' }).click();
   await staff.page.getByText(financeRemark, { exact: true }).waitFor();
+  await staff.page.getByText(usedCard, { exact: true }).waitFor();
   const form = staff.page.locator('#renewal-finish-form');
   const receipt = form.getByLabel('客户实收金额');
   await receipt.fill('160.00');

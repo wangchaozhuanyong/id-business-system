@@ -1,10 +1,10 @@
 import { isDeepStrictEqual } from 'node:util';
 import { hasConfirmedMoney } from './local-business-integrity.mjs';
 import { historicalFeeAction, historicalFeeKind } from './finance/snapshot-integrity.mjs';
-import { orderCustomerCreateAction } from '../modules/orders/order-opening.mjs';
+import { orderCustomerCalibrateAction, orderCustomerCreateAction } from '../modules/orders/order-opening.mjs';
 import { toV2DateTimeInput } from '../modules/time/dateTime.ts';
 
-const creation = new Set(['新增独立订单', orderCustomerCreateAction]);
+const creation = new Set(['新增独立订单', orderCustomerCreateAction, orderCustomerCalibrateAction]);
 const correction = '更正订单';
 const compensation = '补偿撤回更正';
 const cancel = '业务撤单';

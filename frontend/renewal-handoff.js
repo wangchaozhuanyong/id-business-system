@@ -28,11 +28,10 @@
   const canViewOrder = () => ['admin', 'super'].includes(currentRole());
   const handledPeriods = ['refused', 'renewed'];
   const selectableOrder = order => order.canSubmitToFinance !== false && !handledPeriods.includes(order.reminderState);
-  const cardNumberText = (number, tail, missing = '完整卡号待核对') => number || (tail ? '仅登记尾号 ' + tail : missing);
   const originalCardText = row => row.order.payment === '银行卡'
-    ? cardNumberText(row.originalCardNumber, row.sourceReview?.originalLast4 || row.order.originalLast4) : '—';
+    ? row.originalCardNumber || '完整卡号待核对' : '—';
   const actualCardText = row => row.order.payment === '银行卡' && ['paid', 'complete'].includes(row.status)
-    ? cardNumberText(row.cardNumber, row.last4, '未登记卡号') : '—';
+    ? row.cardNumber || (row.last4 ? '完整卡号待核对' : '未登记卡号') : '—';
   const storeKey = name => 'renewal-handoff:' + name;
   const defaults = () => ({ page: 1, pageSize: 20, status: '待处理', period: 'upcoming', product: '', query: '' });
   const financeUnavailable = '当前没有其他账号可以处理这笔续费，请先启用财务账号。';
@@ -193,6 +192,8 @@
         (canSelect && !selectableOrder(row.order) ? ' ' + A.tag('交接待核对') : '')]);
       if (canViewOrder()) columns.push(['actions', '操作', row =>
         '<span class="action-links">' + button('详情', 'order-details', row.id, 'compact') +
+        (D.renewalContactCopy && ['upcoming', 'expired'].includes(row.order.reminderState)
+          ? A.button('复制订阅信息', 'commerce-renewal-contact', 'compact', '', 'data-id="' + E(row.id) + '"') : '') +
         button('更多操作', 'order-actions', row.id, 'compact') + '</span>']);
     } else if (view.route !== declinedRoute) {
       columns.push(['submittedBy', '提交人', row => E(row.submittedBy || '—')],
@@ -206,7 +207,7 @@
           statuses[row.status] || '待核对', row.status === 'paid' ? 'success' : '')],
         ...(currentRole() === 'supervisor' ? [] : [
           ['amount', '本次实付', row => E(row.amount ? row.amount + ' ' + row.currency : '—')],
-          ['last4', view.finance ? '本次用卡号' : '本次用卡尾号', row => E(view.finance ? actualCardText(row) : row.last4 || '—')]
+          ['last4', '本次用卡号', row => E(actualCardText(row))]
         ]),
         ...(view.finance && view.filter.status === '已处理' ? [['paidAt', '付款登记时间', row => E(beijing(row.paidAt))],
           ['reference', '付款凭据编号', row => E(row.reference || '—')]] : []),
@@ -313,7 +314,7 @@
     return '<div class="form-section panel-body">' + props([['原订单', order.number], ['客户', order.customer],
       ['产品与套餐', order.product + ' · ' + order.plan], ['原到期时间', beijing(order.expiry)],
       ['财务已登记实付', row.amount + ' ' + row.currency], ['本次付款方式', order.payment],
-      ...(row.last4 ? [['本次银行卡尾号', row.last4]] : []),
+      ...(order.payment === '银行卡' ? [['本次银行卡号', actualCardText(row)]] : []),
       ...(row.remark ? [['提交备注', row.remark]] : []), ...(row.financeRemark ? [['财务回复', row.financeRemark]] : [])]) +
       '<form id="renewal-finish-form" data-renewal-id="' + E(row.id) + '" data-renewal-version="' + row.version +
       '" data-renewal-draft="' + E(storeKey(view.route + ':form')) + '"><div class="form-grid">' +
@@ -683,8 +684,8 @@
       const { items, poolUnavailable } = await D.renewalHandoffs('cards', form.dataset.renewalId);
       if (node.isConnected && form.elements['renewal-cardMode']?.value === 'pool') {
         const previous = A.state.drafts.get(form.dataset.renewalDraft)?.['renewal-cardId'] || '';
-        container.innerHTML = (items.length ? selectField('银行卡尾号', 'renewal-cardId',
-          [['', '请选择本次使用的卡'], ...items.map(row => [row.id, row.last4 + (row.label ? ' · ' + row.label : '')])], previous)
+        container.innerHTML = (items.length ? selectField('银行卡号', 'renewal-cardId',
+          [['', '请选择本次使用的卡'], ...items.map(row => [row.id, row.number + (row.label ? ' · ' + row.label : '')])], previous)
           : '<p>暂无可选卡。请核对后填写本次实际用卡。</p>') +
           (poolUnavailable ? '<p role="status">代充卡暂时无法读取，可稍后重试或填写实际用卡。</p>' : '');
       }

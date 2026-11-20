@@ -1,3 +1,4 @@
+import { chooseOrderCustomer } from './helpers/order-customer.mjs';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
@@ -43,8 +44,7 @@ test('Claude Pro 和 Max 通过实际表单保存独立空邮箱订单', { timeo
     const email = page.locator('#commerce-email');
     assert.equal(await email.evaluate(input => input.required || input.getAttribute('aria-required') === 'true'), false);
     await page.locator('#commerce-businessType').selectOption('续费');
-    await page.locator('#commerce-customerId-picker').click();
-    await page.locator('#commerce-customerId-popover [data-value="fixture-customer"]').click();
+    await chooseOrderCustomer(page, customer);
     assert.equal(await page.locator('#commerce-proMaterialMode').inputValue(), 'manual_card');
     await page.locator('#commerce-proCardNumber').fill('4242424242424242');
     await page.locator('#commerce-start').fill('2025-02-01T09:12');

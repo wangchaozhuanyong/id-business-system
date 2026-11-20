@@ -76,14 +76,15 @@ async function request(store, method, data, { actor = admin, path = route, readO
   return { status, data: parsed, headers };
 }
 
-async function tenantCardView(store, id) {
+async function tenantCardView(store, id, { actor = admin, expectedStatus = 200 } = {}) {
   const path = '/api/local/tenant-cards';
   const handler = createOrderAuxiliaryHandler({ store, publicOrigin: origin });
-  let status, body;
+  let status, headers, body;
   await handler({ method: 'GET', headers: { origin }, url: path + '?tenantId=' + encodeURIComponent(id) }, {
-    writeHead(code) { status = code; }, end(data) { body = JSON.parse(data); }
-  }, path, admin);
-  assert.equal(status, 200);
+    writeHead(code, values) { status = code; headers = values; }, end(data) { body = JSON.parse(data); }
+  }, path, actor);
+  assert.equal(status, expectedStatus);
+  assert.equal(headers['Cache-Control'], 'private, no-store');
   return body;
 }
 
@@ -500,8 +501,10 @@ test('Claude resolves a typed tenant card and saves a new card with its order in
     const registered = after.data.items.find(row => row.id === saved.cardId);
     assert.deepEqual([registered.tenantId, registered.firstUse.orderId], [other.id, saved.id]);
     const view = await tenantCardView(store, other.id);
-    assert.deepEqual(view.items.map(row => [row.id, row.used]), [[sameTailId, false], [registered.id, true]]);
-    assert.doesNotMatch(JSON.stringify(view), new RegExp(newNumber));
+    assert.deepEqual(view.items.map(row => [row.id, row.used, row.number]),
+      [[sameTailId, false, '4000000000004242'], [registered.id, true, newNumber]]);
+    const denied = await tenantCardView(store, other.id, { actor: employee, expectedStatus: 403 });
+    assert.deepEqual(Object.keys(denied), ['error']);
   } finally { store.close(); }
 });
 
@@ -560,8 +563,8 @@ test('Claude uses distinct certifiers and keeps one-time tenant cards attached t
     const firstUse = store.featureDocument('tenant-cards').data.items[0].firstUse;
     assert.deepEqual([firstUse.orderId, firstUse.orderNo], [original.id, original.orderNo]);
     const view = await tenantCardView(store, cardOwner.id);
-    assert.deepEqual(view.items.map(card => [card.id, card.used]), [[cardId, true], [renewalCard, false]]);
-    assert.doesNotMatch(JSON.stringify(view), new RegExp(sampleNumber));
+    assert.deepEqual(view.items.map(card => [card.id, card.used, card.number]),
+      [[cardId, true, sampleNumber], [renewalCard, false, '4000000000000002']]);
     const invalidEdit = await save(store, 1, {
       ...saved.data.data, orders: [edit(pro, { businessType: '续费' }), original]
     }, '更正订单');
@@ -837,9 +840,13 @@ test('one card freeze follows its confirmed GPT and Claude accounts and blocks f
     assert.equal(after.data.frozen.length, 1);
     assert.equal(after.data.items.find(row => row.id === sharedClaude.id).state, 'frozen');
     assert.doesNotMatch(JSON.stringify(after.data), new RegExp(number + '|' + replacement));
-    const renewalHint = await cardApi('subscription-card-status?orderId=claude-shared&version=1');
+    const renewalQuery = 'subscription-card-status?orderId=claude-shared&version=1';
+    const renewalHint = await cardApi(renewalQuery);
     assert.equal(renewalHint.status, 200);
-    assert.deepEqual(renewalHint.data.order.card, { last4: '4242', typeName: '未设置', availability: 'frozen' });
+    assert.deepEqual(renewalHint.data.order.card, { last4: '4242', typeName: '未设置', availability: 'frozen', number });
+    const denied = await cardApi(renewalQuery, null, employee);
+    assert.equal(denied.status, 403);
+    assert.deepEqual(Object.keys(denied.data), ['error']);
     const accounts = await cardApi('subscription-card-status', { action: 'accounts', frozenId: marked.data.card.id });
     assert.equal(accounts.data.accounts.length, 3);
     assert.equal(accounts.data.accounts.find(row => row.account === 'gpt-one@example.test').orders.length, 2);

@@ -44,6 +44,7 @@ import {
 } from './recharge-partner-api.mjs';
 import { rechargePartnerGateway } from './recharge-partner-gateway.mjs';
 import { createRechargeOrderSync, orderSyncRoute } from './recharge-order-sync.mjs';
+import { automaticGptOrder } from '../modules/orders/order-opening.mjs';
 import { createRechargeActivity, rechargeActivityDomain, rechargeActivityRoute } from './recharge-activity.mjs';
 import { createDataChangeStream, dataChangeRoute, dataSourceIdentity } from './change-sync.mjs';
 import { createEmployeeStatisticsHandler, employeeStatisticsRoute } from './employee-statistics.mjs';
@@ -171,6 +172,15 @@ function sendPublicAsset(request, response, asset) {
   response.end(request.method === 'HEAD' ? undefined : body);
 }
 
+export function sessionCardNumbers(orders, jobKeys, cardNumberFor) {
+  const numbers = new Map();
+  for (const order of orders) {
+    if (!automaticGptOrder(order) || !jobKeys.has(order.taskId)) continue;
+    numbers.set(order.taskId, numbers.has(order.taskId) ? '' : cardNumberFor(order));
+  }
+  return numbers;
+}
+
 export async function startPreview(
   port = 4347,
   {
@@ -264,7 +274,7 @@ export async function startPreview(
   const websiteModuleAssets = [
     ['/assets/website/pages.mjs', new URL('../modules/website/pages.mjs', import.meta.url)],
     ['/renewal-reminders.mjs', new URL('../frontend/renewal-reminders.mjs', import.meta.url)],
-    ...['orders/order-opening', 'orders/list-order', 'orders/renewal-reminders', 'orders/order-list', 'orders/renewal-account-reference',
+    ...['orders/order-opening', 'orders/order-customer-match', 'orders/order-whatsapp', 'orders/list-order', 'orders/renewal-reminders', 'orders/order-list', 'orders/renewal-account-reference',
       'inventory/list', 'finance/apple-funding', 'finance/accounting', 'data/document-delta', 'data/record-edit'].map(name =>
       ['/modules/' + name + '.mjs', new URL('../modules/' + name + '.mjs', import.meta.url)]),
     ...[...new Set(websitePages.map(page => page.script))].map(script =>
@@ -349,6 +359,11 @@ export async function startPreview(
           beforeCardWrite: command => {
             if (!store) throw new Error('订单资料尚未就绪');
             checkFrozenCardPoolWrite(store, command);
+          },
+          readSessionCardNumbers(jobKeys) {
+            if (!store) return new Map();
+            const orders = store.load('commerce').data?.orders || [];
+            return sessionCardNumbers(orders, jobKeys, localBusiness.orderCardNumberProjection(store));
           },
           onCardPlanChange(version) {
             if (version <= nativeCardPlanVersion) return;
@@ -444,7 +459,7 @@ export async function startPreview(
       handleCardManagement = createCardManagementHandler({ store, client: orderRechargeClient, publicOrigin: secureOrigin });
       handleClaudeGoogleSubscriptions = createClaudeGoogleSubscriptionsHandler({ store, publicOrigin: secureOrigin });
       handleSubscriptions = createSubscriptionHandler({ store, publicOrigin: secureOrigin,
-        readOwners: () => auth?.orderOwners() || [] });
+        readOwners: () => auth?.orderOwners() || [], cardNumberProjection: () => localBusiness.orderCardNumberProjection(store) });
       handleCustomerQuery = createCustomerQueryHandler({ store, publicOrigin: secureOrigin });
       handleEmployeeStatistics = createEmployeeStatisticsHandler({
         store, client: orderRechargeClient, publicOrigin: secureOrigin, readEmployees: () => auth.orderOwners()

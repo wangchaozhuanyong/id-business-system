@@ -6,8 +6,8 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { createSnapshot, restoreSnapshot } from '../server/backup/local-sqlite.mjs';
-import { createSubscriptionHandler, ownerForSubscriptionOrder, projectSubscriptions } from '../server/subscription-management.mjs';
-import { attributeCommerce, createLocalBusinessStore } from '../server/local-business.mjs';
+import { createSubscriptionHandler, ownerForSubscriptionOrder, projectSubscriptions, renewalCardKey, subscriptionAccountId } from '../server/subscription-management.mjs';
+import { attributeCommerce, createLocalBusinessStore, orderCardNumberProjection } from '../server/local-business.mjs';
 import { lifecycleFixture } from './helpers/account-lifecycle-fixture.mjs';
 
 const now = Date.parse('2026-11-10T02:00:00Z');
@@ -75,6 +75,28 @@ test('订阅总表按最新订阅分页，临期按符合条件的最近到期�
   assert.deepEqual(await read('upcoming'), ['due-first@example.test', 'due-second@example.test', 'mixed@example.test']);
   assert.deepEqual(await read('expired'), ['expired-recent@example.test', 'mixed@example.test', 'expired-older@example.test']);
   assert.equal((await read('all', { sort: 'account_asc' }))[0], 'due-first@example.test');
+});
+
+test('订阅直接显示经核对的现用卡或下次续费用卡，可按完整号码搜索', async () => {
+  const savedNumber = '4000000000007001', nextNumber = '4000000000007002';
+  const saved = makeOrder('current', 'GPT', { payment: '银行卡', proMaterialMode: 'manual_card',
+    paymentId: savedNumber.slice(-4), proCardNumber: savedNumber, entitlementStatus: 'active' });
+  const partial = { ...saved, id: 'tail-only', orderNo: 'tail-only', email: 'tail@example.test',
+    paymentId: '1188', proCardNumber: '' };
+  const data = fixtures([saved, partial]);
+  const store = Object.assign(fakeStore(data), { featureDocument: () => ({ data: null }) });
+  const handler = createSubscriptionHandler({ store, publicOrigin: origin, clock: () => now,
+    cardNumberProjection: () => orderCardNumberProjection(store) });
+  const list = async (query, user = admin) => request(handler, 'list', { product: 'all', query }, user);
+  const before = await list(savedNumber);
+  assert.deepEqual(before.body.items.map(row => row.series[0].cardNumber), [savedNumber]);
+  const accountId = subscriptionAccountId('GPT', saved);
+  data.subscriptions.data = { renewalCards: { [renewalCardKey(accountId, before.body.items[0].series[0].key)]:
+    { number: nextNumber, last4: nextNumber.slice(-4) } } };
+  const after = await list(nextNumber);
+  assert.deepEqual(after.body.items.map(row => row.series[0].cardNumber), [nextNumber]);
+  assert.equal((await list('1188')).body.items[0].series[0].cardNumber, undefined);
+  assert.equal((await list(nextNumber, actor)).status, 403);
 });
 
 test('按产品和账号汇总历史订单，订阅有效期与查询码有效期分开', () => {

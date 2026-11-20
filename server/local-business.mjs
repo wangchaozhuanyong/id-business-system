@@ -85,6 +85,7 @@ import { AccountLifecycleError, accountLifecycleSummaries, changeAccountLifecycl
 import { applyInventoryUsage, correctInventoryUsage, inspectInventoryUsage, usageReviewRows } from './inventory-usage.mjs';
 import { checkRegistrationChanges } from './inventory-registration.mjs';
 import { attributeInventory, defaultInventoryRegistrationTimes } from './inventory-attribution.mjs';
+import { applyInlineOrderCustomer } from './order-customer-write.mjs';
 import { checkAccountLocations } from './inventory-account-location.mjs';
 import { renewalSidebar } from './renewal-sidebar.mjs';
 import { emptyAppleLedger, stageAppleOpenings, stageAppleOrderFunding, stageConfirmedAppleDebit, stageConfirmedRenewalDebit,
@@ -97,7 +98,7 @@ import {
 import { claudeGoogleCopyDomainPrefix, validateClaudeGoogleCopySettings } from './claude-google-subscriptions.mjs';
 import { legacyOpeningOrderIds, ownerForSubscriptionOrder, subscriptionDomain } from './subscription-management.mjs';
 import {
-  automaticGptOrder, manualBusinessOrder, matchOrderCustomer, orderCustomerCreateAction, orderFieldChanged, rechargeOrderOwner, rechargeRenewalExpiryPending,
+  automaticGptOrder, manualBusinessOrder, matchOrderCustomer, orderCustomerCalibrateAction, orderCustomerCreateAction, orderFieldChanged, rechargeOrderOwner, rechargeRenewalExpiryPending,
   subscriptionChainRoot, subscriptionTime, validOrderEmail, validOrderXHandle
 } from '../modules/orders/order-opening.mjs';
 import {
@@ -195,6 +196,7 @@ const actionsByDomain = {
     '恢复资料',
     '新增独立订单',
     orderCustomerCreateAction,
+    orderCustomerCalibrateAction,
     '更新续费提醒设置',
     tenantRenewalSettingsAction,
     tenantRenewalHandledAction,
@@ -999,14 +1001,30 @@ async function saveHttpWrites(store, entries, actor, operationId, {
   return store.saveBatch(writes, { ...options, [verifiedRelayClaimIds]: verifiedIds });
 }
 
-function commerceForActor(store, snapshot, actor) {
-  if (actor?.role === 'finance') return financeCommerce(snapshot);
+export function orderCardNumberProjection(store) {
+  const context = {
+    archive: store.featureDocument(orderCardArchiveDocument).data,
+    tenantCards: store.featureDocument('tenant-cards').data?.items || []
+  };
+  return order => {
+    const { number, conflict } = orderCardHealthReference(order, context);
+    return conflict ? '' : number;
+  };
+}
+
+function commerceForActor(store, snapshot, actor, includeCardNumbers = false) {
+  if (actor?.role === 'finance') return financeCommerce(snapshot, orderCardNumberProjection(store));
+  if (actor?.role === 'employee') return employeeCommerce(snapshot, actor, orderCardNumberProjection(store));
   const profiles = store.featureDocument(subscriptionDomain).data;
   const result = redactClaudeProOrderMaterials(snapshot, actor);
-  if (actor?.role === 'employee' && Array.isArray(result.data?.orders)) {
-    return employeeCommerce(result, actor);
-  }
-  return { ...result, legacyOpeningOrderIds: legacyOpeningOrderIds(result.data?.orders, profiles) };
+  const view = { ...result, legacyOpeningOrderIds: legacyOpeningOrderIds(result.data?.orders, profiles) };
+  if (!includeCardNumbers || !managesBusiness(actor)) return view;
+  const numberFor = orderCardNumberProjection(store);
+  return { ...view, bankCardNumbers: (result.data?.orders || []).flatMap(order => {
+    if (order.payment !== '银行卡') return [];
+    const number = numberFor(order);
+    return number !== (order.proCardNumber || '') ? [{ id: order.id, version: order.version, number }] : [];
+  }) };
 }
 
 export function createLocalBusinessStore(databasePath) {
@@ -1100,7 +1118,12 @@ export function createLocalBusinessStore(databasePath) {
     return result;
   }
 
-  function replayWrite(operation) {
+  function inventoryAccountSummaries(inventory, commerce, actor) {
+    const cardNumberFor = managesBusiness(actor) ? orderCardNumberProjection({ featureDocument: readDocument }) : undefined;
+    return accountLifecycleSummaries(inventory, commerce, undefined, cardNumberFor);
+  }
+
+  function replayWrite(operation, actor) {
     if (!operation) return null;
     const domains = checkWriteReceipt(readDocument(operation.domain).data, operation);
     if (!domains) return null;
@@ -1109,7 +1132,7 @@ export function createLocalBusinessStore(databasePath) {
       const snapshot = readDocument(domain);
       return { domain, ...snapshot, ...(domain === 'inventory' && {
         commerceVersion: commerce.version,
-        accountSummaries: accountLifecycleSummaries(snapshot.data, commerce.data),
+        accountSummaries: inventoryAccountSummaries(snapshot.data, commerce.data, actor),
         usageReview: usageReviewRows(inspectInventoryUsage(snapshot.data, commerce.data))
       }) };
     });
@@ -1561,7 +1584,7 @@ export function createLocalBusinessStore(databasePath) {
           auditSummary('读取含微软邮箱的库存资料', actor), snapshot.version);
       }
       return { ...snapshot, ...(review.length && { usageReview: review }), commerceVersion: commerce.version,
-        accountSummaries: accountLifecycleSummaries(snapshot.data, commerce.data) };
+        accountSummaries: inventoryAccountSummaries(snapshot.data, commerce.data, actor) };
     },
     businessList(domain, params, actor, owners) {
       if (domain === inventoryPageDomain) {
@@ -1586,7 +1609,8 @@ export function createLocalBusinessStore(databasePath) {
       const snapshot = commerceForActor(this, readDocument('commerce'), actor);
       const settings = accounting ? readDocument('settings').data : null;
       return readOrdersPage(params, {
-        snapshot, managers, inventory: managers ? readDocument('inventory').data : undefined, owners: owners?.() || [],
+        snapshot, managers, ...(managers && { cardNumberFor: orderCardNumberProjection(this) }),
+        inventory: managers ? readDocument('inventory').data : undefined, owners: owners?.() || [],
         currency: settings?.costSettings?.currency === 'MYR' ? 'MYR' : 'CNY',
         expenseReceipts: accounting ? readDocument(orderExpenseDomain).data?.items || [] : [],
         appleLedger: accounting ? readDocument('appleBalance').data : undefined
@@ -1609,7 +1633,7 @@ export function createLocalBusinessStore(databasePath) {
           log.run(now.toISOString(), 'inventory', 'inventory_account_lifecycle',
             auditSummary(command.action === 'release' ? '恢复账号可用库存' : '账号停止复用', actor, command.assetId), version);
         }
-        return this.inventorySnapshot();
+        return this.inventorySnapshot(actor);
       });
     },
     planAppleRelayIntake(input) {
@@ -1663,7 +1687,7 @@ export function createLocalBusinessStore(databasePath) {
           log.run(time.toISOString(), 'inventory', 'inventory_claude_history_import',
             auditSummary('Claude 历史入库 ' + result.imported + ' 条', actor, result.batchId), version);
         }
-        return { ...result, inventory: this.inventorySnapshot() };
+        return { ...result, inventory: this.inventorySnapshot(actor) };
       });
     },
     saveAppleRelayPrimaries(rows, actor, aliases = [], registration) {
@@ -1791,7 +1815,7 @@ export function createLocalBusinessStore(databasePath) {
         const usageReview = usageReviewRows(inspectInventoryUsage(snapshot.data, commerce, now.getTime()));
         return { version, data: snapshot.data, usageReview,
           commerceVersion: readDocument('commerce').version,
-          accountSummaries: accountLifecycleSummaries(snapshot.data, commerce) };
+          accountSummaries: inventoryAccountSummaries(snapshot.data, commerce, actor) };
       });
     },
     appendWebsiteVisit(event, time) {
@@ -2326,12 +2350,12 @@ export function createLocalBusinessStore(databasePath) {
       let writes = recordEdit ? [] : checkWrites(entries).map(write => (write.domain === 'commerce' &&
         (write.action === orderCustomerCreateAction ||
           write.data.tenants.some(row => Object.hasOwn(row, 'initialCards')) ||
-          write.data.orders.some(row => Object.hasOwn(row, 'tenantCardNumber')))) ||
+          write.data.orders.some(row => Object.hasOwn(row, 'tenantCardNumber') || Object.hasOwn(row, 'customerMatchReview')))) ||
         (write.domain === 'inventory' && write.data.mailboxes.some(row => Object.hasOwn(row, 'appleOpeningBalance'))) ||
         (write.domain === 'appleBalance' && write.action === 'apple_topup')
         ? { ...write, data: structuredClone(write.data) } : write);
       return writeTransaction(() => {
-        const replay = replayWrite(operation);
+        const replay = replayWrite(operation, actor);
         if (replay) return replay;
         if (recordEdit) {
           const { domain, action, version, edit } = recordEdit;
@@ -2473,7 +2497,9 @@ export function createLocalBusinessStore(databasePath) {
           }
           const subscriptions = current(subscriptionDomain);
           const checkedAt = Date.now();
-          if (action === orderCustomerCreateAction) prepareOrderCustomerWrite(priorCommerce, commerce, actor, checkedAt);
+          const inlineOrder = applyInlineOrderCustomer(priorCommerce, commerce, action, actor, checkedAt);
+          if (!inlineOrder && action === orderCustomerCreateAction)
+            prepareOrderCustomerWrite(priorCommerce, commerce, actor, checkedAt);
           const legacyOpening = action === tenantRenewalHandledAction
             ? new Set(legacyOpeningOrderIds(priorCommerce?.orders, subscriptions)) : undefined;
           try { prepareTenantRenewalWrite(priorCommerce, commerce, action, actor, new Date(checkedAt), legacyOpening); }
@@ -2535,7 +2561,7 @@ export function createLocalBusinessStore(databasePath) {
             const terminationError = checkSubscriptionTermination(row, prior, action, checkedAt, !cards);
             if (terminationError) throw new LocalDataError(409, terminationError);
             const manualCreate = !prior && row.source === '管理员手工' &&
-              (action === orderCustomerCreateAction || (cards && action === '新增独立订单'));
+              (inlineOrder === row.id || action === orderCustomerCreateAction || (cards && action === '新增独立订单'));
             if (manualCreate) {
               if (row.draft || row.cancelled || ['draft', 'failed', '草稿', '失败'].includes(row.status) ||
                   !positiveOrderAmount(row.paidAmount) || !validMoney(row.saleAmount) ||
@@ -2946,7 +2972,7 @@ export function createLocalBusinessStore(databasePath) {
             ? usageReviewRows(inspectInventoryUsage(inventory, commerce, Date.parse(now)))
             : [];
           result.push({ domain, version: next, data, ...(review.length && { usageReview: review }),
-            ...(domain === 'inventory' && { accountSummaries: accountLifecycleSummaries(data, commerce),
+            ...(domain === 'inventory' && { accountSummaries: inventoryAccountSummaries(data, commerce, actor),
               commerceVersion: writes.find(write => write.domain === 'commerce')?.version + 1 || readDocument('commerce').version }) });
         }
         if (handoff) {
@@ -3098,7 +3124,10 @@ export function createLocalBusinessStore(databasePath) {
       });
     },
     orderCompletionView(actor, params, readOrderOwners) {
-      return readOrderCompletion(readDocument('commerce').data, readDocument('settings').data, actor, params, readOrderOwners);
+      return readOrderCompletion(readDocument('commerce').data, readDocument('settings').data, actor, params, readOrderOwners, {
+        archive: readDocument(orderCardArchiveDocument).data,
+        tenantCards: readDocument('tenant-cards').data?.items || []
+      });
     },
     saveOrderCompletion(actor, command, readOrderOwners) {
       return writeTransaction(() => {
@@ -3695,7 +3724,7 @@ export async function handleLocalBusiness(
         if (actor?.role === 'registrar') return json(response, 200, registrarInventory(store.load(domain), actor));
         return json(response, 200, store.inventorySnapshot(actor));
       }
-      if (domain === 'commerce') return json(response, 200, commerceForActor(store, store.load(domain), actor));
+      if (domain === 'commerce') return json(response, 200, commerceForActor(store, store.load(domain), actor, true));
       if (domain === 'appleBalance' && actor?.role === 'finance') {
         const { version, data } = store.load(domain);
         const allocations = (data?.allocations || []).map(({ orderId, appleIdId, amount, returned }) =>

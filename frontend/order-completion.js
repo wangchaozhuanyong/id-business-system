@@ -158,7 +158,7 @@
     return section('原订单', properties([
       ['订单编号', row.orderNo], ['账号邮箱', row.email], ['充值套餐', row.plan], ['归属人', row.owner],
       ['开通时间', displayTime(row.rechargeCompletedAt || row.start)], ['到期时间', displayTime(row.expiry)],
-      ...(row.bankPayment ? [['银行卡尾号', row.cardLast4]] : [])
+      ...(row.bankPayment ? [['银行卡号', row.cardNumber || (row.cardLast4 ? '完整卡号待核对' : '未登记')]] : [])
     ])) + section('金额与凭据', properties([
       ['配置代付', money(row.standardPaidAmount, row.paidCurrency)],
       ['代充实扣', row.paidConfirmed ? money(row.paidAmount, row.paidCurrency) : '未取得凭据'],

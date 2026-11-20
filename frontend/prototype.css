@@ -4609,7 +4609,7 @@ details.toolbox-phrase-more[open] > summary {
   position: relative;
   min-width: 0;
 }
-#commerce-contact-form .customer-tag-picker > summary {
+:is(#commerce-contact-form, #commerce-order-form) .customer-tag-picker > summary {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -4748,7 +4748,7 @@ details.toolbox-phrase-more[open] > summary {
 .order-payment-options > [data-commerce-field='appleIdId'] {
   grid-column: 1 / -1;
 }
-.order-payment-options:has(> [data-commerce-field='paymentId'][hidden])
+.order-payment-options:has(> [data-commerce-field='selectedCardNumber'][hidden])
   > [data-commerce-field='proCardSerial']:not([hidden]):not(:has(~ .field:not([hidden]))) {
   grid-column: 1 / -1;
 }
@@ -5438,44 +5438,73 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--toolbar-padding-block) var(--section-gap);
 }
-.order-customer-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
-  gap: var(--control-gap);
+@container (min-width: 640px) {
+  #commerce-order-form .order-customer-fields { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  #commerce-order-form .order-customer-fields > .field { grid-column: span 2; }
+  #commerce-order-form .order-customer-fields > :is([data-commerce-field="customerSource"], [data-commerce-field="orderTags"]) {
+    grid-column: span 3;
+  }
 }
-.order-customer-row > .commerce-search-picker {
-  flex: 1 1 min(100%, 148px);
-  padding-block-start: 5px;
+.order-contact-number {
+  display: grid;
+  grid-template-columns: 5.5rem minmax(0, 1fr);
+  gap: 6px;
 }
-#commerce-order-form [data-commerce-field='customerId']:has(.order-customer-row) > label {
-  margin-block-start: 5px;
+.order-contact-number > :is(select, input) {
+  min-width: 0;
+  width: 100%;
 }
-#commerce-order-form .order-customer-row .commerce-picker-label {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.order-submission-entry .order-customer-row > .commerce-search-picker { padding-block-start: 0; }
-.order-submission-entry #commerce-order-form [data-commerce-field='customerId']:has(.order-customer-row) > label { margin-block-start: 0; }
-.order-quick-customer-summary {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 6px 16px;
-  margin-block-end: 14px;
-  padding: 10px 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-control);
-  background: var(--surface-soft);
+.order-customer-status {
+  grid-column: 1 / -1;
+  font-size: 13px;
+  color: var(--secondary);
   overflow-wrap: anywhere;
 }
-.order-quick-customer-summary > span {
-  color: var(--secondary);
+.order-customer-status[hidden], .order-customer-status:empty {
+  display: none;
 }
-.order-quick-customer-summary > .field-error {
-  flex-basis: 100%;
-  margin: 0;
+.order-customer-status[data-kind='matched'] { color: var(--success); }
+.order-customer-status:is([data-kind='review'], [data-kind='calibrate'], [data-kind='conflict'], [data-kind='inactive'], [data-kind='invalid']) {
+  padding: var(--toolbar-padding-block);
+  border: 1px solid var(--line);
+  border-inline-start: 3px solid var(--warning);
+  border-radius: var(--radius-control);
+  background: var(--warning-soft);
+  color: var(--text);
+}
+.order-customer-status p { margin: 0; }
+.order-customer-candidate, .order-customer-actions {
+  margin-block-start: 8px;
+}
+.order-customer-candidate + .order-customer-candidate {
+  border-block-start: 1px solid var(--line);
+  padding-block-start: 8px;
+}
+.order-customer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--control-gap);
+}
+.order-customer-difference {
+  display: grid;
+  grid-template-columns: minmax(6ch, max-content) repeat(2, minmax(0, 1fr));
+  gap: 4px var(--control-gap);
+  margin-block-start: 6px;
+  overflow-wrap: anywhere;
+}
+.order-customer-difference > span:first-of-type { color: var(--secondary); }
+@container (width < 440px) {
+  .order-customer-difference { grid-template-columns: minmax(0, 1fr); }
+}
+#commerce-order-form .order-customer-fields .customer-tag-picker > summary {
+  min-height: 40px;
+  padding-inline: 10px;
+  color: var(--text);
+}
+@media (max-width: 900px) {
+  #commerce-order-form .order-customer-fields .customer-tag-picker > summary,
+  .order-customer-status .button { min-height: 44px; }
 }
 .commerce-entry-layout #commerce-order-form [data-commerce-field='cardTypeId'] .field-row > select {
   flex-basis: min(100%, 140px);
@@ -6806,6 +6835,7 @@ input:is([type='checkbox'],[type='radio']) { accent-color: var(--primary); }
 /* The form uses its existing fields and event handlers in a denser, top-labelled grid. */
 #commerce-order-form .order-identity-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px 16px; grid-column: 1 / -1; align-items: start; }
 #commerce-order-form .order-identity-grid > .order-choice-grid { grid-column: auto; }
+#commerce-order-form .order-customer-fields + .order-choice-grid { grid-column: 1 / -1; }
 #commerce-order-form .order-account-fields > :is([data-commerce-field='email'],[data-commerce-field='ownerId']) { grid-column: auto; }
 #commerce-order-form .order-account-fields { grid-column: 1 / -1; }
 #commerce-order-form .order-identity-grid > [data-commerce-field] { margin: 0; }
@@ -6814,14 +6844,12 @@ input:is([type='checkbox'],[type='radio']) { accent-color: var(--primary); }
   white-space: normal; overflow-wrap: anywhere; min-width: 0;
 }
 #commerce-order-form .order-identity-grid .commerce-search-picker > .commerce-picker-trigger { min-height: 40px; flex-basis: 0; }
-#commerce-order-form .order-customer-row { flex-wrap: nowrap; }
-#commerce-order-form [data-action='commerce-customer-match-open'] { font-size: 12px; padding-inline: 8px; min-height: 40px; }
 #commerce-order-form .order-identity-grid [data-commerce-field='ownerId'] .field-row > .button { padding-inline: 10px; }
 #commerce-order-form .order-payment-options { grid-template-columns: repeat(6,minmax(0,1fr)); }
 #commerce-order-form .order-payment-options > .field { grid-column: span 3; }
 #commerce-order-form .order-payment-options > :is([data-commerce-field='payment'],[data-commerce-field='proMaterialMode'],[data-commerce-field='cardTypeId']) { grid-column: span 2; }
 #commerce-order-form .order-payment-options > [data-commerce-field='appleIdId'] { grid-column: 1 / -1; }
-.order-payment-options:has(> [data-commerce-field='paymentId'][hidden]) > [data-commerce-field='proCardSerial']:not([hidden]):not(:has(~ .field:not([hidden]))) { grid-column: span 3 !important; }
+.order-payment-options:has(> [data-commerce-field='selectedCardNumber'][hidden]) > [data-commerce-field='proCardSerial']:not([hidden]):not(:has(~ .field:not([hidden]))) { grid-column: span 3 !important; }
 #commerce-order-form .order-payment-options:has([data-commerce-field='payment'][hidden]) > [data-commerce-field='proMaterialMode'] { grid-column: span 3; }
 .order-submission-entry .form-section + .form-section { margin-top: 20px; padding-top: 20px; }
 .order-submission-entry .section-heading { margin-bottom: 12px; }
@@ -6869,10 +6897,9 @@ td { color: var(--text); border-color: var(--line); }
   .field > label { font-size: 12px; }
   #commerce-order-form .order-identity-grid { grid-template-columns: minmax(0,1fr); }
   #commerce-order-form .order-account-fields { grid-template-columns: minmax(0,1fr); }
-  #commerce-order-form .order-identity-grid .commerce-search-picker > .commerce-picker-trigger,
-  #commerce-order-form [data-action='commerce-customer-match-open'] { min-height: 44px; }
+  #commerce-order-form .order-identity-grid .commerce-search-picker > .commerce-picker-trigger { min-height: 44px; }
   #commerce-order-form .order-payment-options > .field { grid-column: 1 / -1; }
-  .order-payment-options:has(> [data-commerce-field='paymentId'][hidden]) > [data-commerce-field='proCardSerial']:not([hidden]):not(:has(~ .field:not([hidden]))) { grid-column: 1 / -1 !important; }
+  .order-payment-options:has(> [data-commerce-field='selectedCardNumber'][hidden]) > [data-commerce-field='proCardSerial']:not([hidden]):not(:has(~ .field:not([hidden]))) { grid-column: 1 / -1 !important; }
   .order-submission-entry .form-section .panel-heading .button { min-height: 44px; }
   .order-submission-entry .form-section + .form-section { margin-top: 20px; padding-top: 16px; }
   .order-submission-entry [data-commerce-field='notes'] textarea { height: 64px; }

@@ -120,7 +120,7 @@ test('续费送财务校验可接手账号和必填备注，保留旧记录及�
   assert.equal(queue.version, 2);
 });
 
-test('仅财务续费工作台读取核实的原卡号和实付卡号', async () => {
+test('财务读取已核实的原卡号，员工读取本人订单的完整实付卡号', async () => {
   const poolOrder = { ...initialOrder, id: 'pool-order', email: 'pool@example.test',
     cardId: 'recharge:1', proMaterialMode: 'pool_card', proCardNumber: '', paymentId: '4242' };
   const unknownOrder = { ...poolOrder, id: 'unknown-order', email: 'unknown@example.test', cardId: 'recharge:2' };
@@ -158,7 +158,9 @@ test('仅财务续费工作台读取核实的原卡号和实付卡号', async ()
     last4: '1111', actor: actors.finance, amount: '20', currency: 'USD' } });
   const staff = (await send('employee', null)).data.items;
   assert(!JSON.stringify(staff).includes(firstCard));
-  assert(!JSON.stringify(staff).includes(replacement));
+  assert.equal(staff[0].cardNumber, replacement);
+  assert.equal((await send('other', null)).data.items.length, 0);
+  assert.equal((await send('supervisor', null)).data.items[0].cardNumber, undefined);
   assert.equal((await send('employee', null, { view: 'finance' })).status, 403);
   assert.equal(poolReads, 0);
   const finance = await send('finance', null, { view: 'finance' });
@@ -172,7 +174,7 @@ test('仅财务续费工作台读取核实的原卡号和实付卡号', async ()
   assert.equal(unknown.order.originalLast4, '4242');
   assert.equal(archived.originalCardNumber, firstCard);
   assert.equal(conflict.originalCardNumber, undefined);
-  assert.equal(audits.length, 1);
+  assert.deepEqual(audits.map(row => row.metadata.targetId), ['staff-renewal-list', 'finance-renewal-list']);
   assert(!JSON.stringify(audits).includes(firstCard));
   assert(!JSON.stringify(audits).includes(replacement));
   poolUnavailable = true;
@@ -191,6 +193,7 @@ test('仅财务续费工作台读取核实的原卡号和实付卡号', async ()
   const historical = await send('finance', null, { view: 'finance' });
   assert.equal(historical.data.items[0].cardNumber, replacement);
   assert(!JSON.stringify(historical.data.items).includes(correctedCard));
+  assert.equal((await send('employee', null)).data.items[0].cardNumber, replacement);
 });
 
 test('拒绝续费按原单持久记录、停止提醒并兼容历史恢复', async t => {
@@ -428,13 +431,14 @@ test('confirmed staff handoff, exclusive finance claim, verified card replacemen
   assert.equal(store.load('commerce').data.orders.length, 1);
   const teamRow = (await send('supervisor', null)).data.items[0];
   assert.equal(teamRow.last4, undefined);
+  assert.equal(teamRow.cardNumber, undefined);
   assert.equal(teamRow.amount, undefined);
   assert.equal(teamRow.order.previousPaidCurrency, undefined);
   assert.equal((await send('other', null)).data.items.length, 0);
   const staff = (await send('employee', null)).data.items[0];
   assert.equal(staff.last4, '1111');
   assert.equal(staff.canFinish, true);
-  assert(!JSON.stringify(staff).includes(replacement));
+  assert.equal(staff.cardNumber, replacement);
   assert(!JSON.stringify(staff).includes(firstCard));
   const finish = { action: 'finish', id: row.id, version: 3, ...finishFields };
   assert.equal((await send('employee', { ...finish, amount: '0.01', cardNumber: firstCard })).status, 400);
@@ -815,10 +819,11 @@ test('finance sees only unused authorized tenant cards and cannot register the a
   assert.equal((await send('finance', { action: 'claim', id, version: 1 })).status, 200);
   const cards = { view: 'cards', itemId: id };
   assert.equal((await send('financeOther', null, cards)).status, 404);
+  assert.equal((await send('employee', null, cards)).status, 403);
   const available = await send('finance', null, cards);
   assert.equal(available.status, 200);
   assert.deepEqual(available.data.items,
-    [{ id: 'tenant:unused', last4: '1111', label: '租户卡' }]);
+    [{ id: 'tenant:unused', number: replacement, last4: '1111', label: '租户卡' }]);
   const payment = { action: 'paid', id, version: 2, confirmed: true, amount: '20', currency: 'USD' };
   const used = await send('finance', { ...payment, cardMode: 'original' });
   assert.equal(used.status, 409);

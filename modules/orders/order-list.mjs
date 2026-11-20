@@ -65,7 +65,7 @@ export function orderListTime(row, tab) {
 }
 
 export function matchesOrderQuery(row, query, { customer, owner, tenant }) {
-  const base = `${row.email} ${row.orderNo} ${customer} ${owner} ${row.cardTypeName || ''} ${row.proCardNumber || ''} ${row.proCardSerial || ''}`;
+  const base = `${row.email} ${row.orderNo} ${customer} ${owner} ${row.cardTypeName || ''} ${row.bankCardNumber || row.proCardNumber || ''} ${row.proCardSerial || ''}`;
   if (personalOrderProduct(row.product)) return [base, listIdentity(row), row.xHandle, row.plan, row.billingReceipt]
     .join(' ').toLowerCase().includes(query.toLowerCase());
   if (!isClaudeOrder(row)) return base.includes(query);
@@ -73,7 +73,7 @@ export function matchesOrderQuery(row, query, { customer, owner, tenant }) {
     row.verifierPhone, row.phone, row.tenantId ? tenant : ''];
   if (fields.some(value => String(value ?? '').toLowerCase().includes(query.toLowerCase()))) return true;
   const digits = query.replace(/[\s-]/g, '');
-  return /^\d+$/.test(digits) && String(row.proCardNumber || '').includes(digits);
+  return /^\d+$/.test(digits) && String(row.bankCardNumber || row.proCardNumber || '').includes(digits);
 }
 
 export function orderAccountingFact(order, options) {

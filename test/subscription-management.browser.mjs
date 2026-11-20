@@ -1,3 +1,4 @@
+import { chooseOrderCustomer } from './helpers/order-customer.mjs';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
@@ -512,10 +513,7 @@ test('清空账号后，迟到的归属查询不会覆盖当前录单人选择',
   page.setDefaultTimeout(8000);
   try {
     await page.goto(origin + '/#/workspace/order/gpt');
-    await page.locator('#commerce-customerId option[value="' + customer.id + '"]').waitFor({ state: 'attached' });
-    await page.locator('#commerce-customerId-picker').click();
-    await page.locator('#commerce-customerId-popover input').fill(customer.name);
-    await page.locator('#commerce-customerId-options [data-value="' + customer.id + '"]').click();
+    await chooseOrderCustomer(page, customer);
     await page.locator('#commerce-ownerId option[value="' + owner.id + '"]').waitFor({ state: 'attached' });
     await page.locator('#commerce-email').fill('late-owner@example.test');
     await gate.started.promise;

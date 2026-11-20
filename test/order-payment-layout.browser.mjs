@@ -81,7 +81,7 @@ test('录单、编辑入口共用支付方式、填写方式、银行卡类型�
             for (const group of groups) group.open = true;
           });
           await settle(page);
-          const number = key === 'max' ? 'tenantCardNumber' : 'paymentId';
+          const number = key === 'max' ? 'tenantCardNumber' : 'selectedCardNumber';
           const measured = await form.evaluate((node, { card, number }) => {
             const field = name => node.querySelector(`[data-commerce-field="${name}"]`);
             const rect = el => el.getBoundingClientRect().toJSON();

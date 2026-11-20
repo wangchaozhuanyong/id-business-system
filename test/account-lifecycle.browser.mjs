@@ -1,3 +1,4 @@
+import { chooseOrderCustomer } from './helpers/order-customer.mjs';
 import assert from 'node:assert/strict';
 import { readFile, mkdir } from 'node:fs/promises';
 import test from 'node:test';
@@ -22,9 +23,11 @@ test('GPT／Claude 回库、历史资料、再交付、续费归属与停止复�
       f.inventory = { ...structuredClone(base.inventory.data), ...f.inventory };
       f.commerce.orders[0] = { ...base.commerce.data.orders.find(row => row.product === 'GPT'), ...f.commerce.orders[0] };
       const original = structuredClone(f.commerce.orders[0]);
+      const bankCardNumber = '4242424242424242';
       let inventoryVersion = 1, commerceVersion = 1, heldResponse;
       const snapshot = () => ({ version: inventoryVersion, commerceVersion, data: f.inventory,
-        usageReview: [], accountSummaries: accountLifecycleSummaries(f.inventory, f.commerce, now.getTime()) });
+        usageReview: [], accountSummaries: accountLifecycleSummaries(f.inventory, f.commerce, now.getTime(),
+          order => type === 'gpt' && order.id === original.id ? bankCardNumber : '') });
       const context = await browser.newContext({ viewport: { width, height: 1000 } });
       await interceptDesign(context, { localFixtures: base, actor });
       await context.route(origin + '/api/local/inventory', route => route.fulfill({ json: snapshot() }));
@@ -52,10 +55,7 @@ test('GPT／Claude 回库、历史资料、再交付、续费归属与停止复�
         await page.locator(`#main[data-layout-route="${route}"]`).waitFor();
       };
       const drawer = page.locator('#drawer[open]');
-      const chooseCustomer = async id => {
-        await page.locator('#commerce-customerId-picker').click();
-        await page.locator(`#commerce-customerId-options [data-value="${id}"]`).click();
-      };
+      const chooseCustomer = id => chooseOrderCustomer(page, f.commerce.customers.find(row => row.id === id));
       const more = () => page.locator('[data-action="inventory-more"][data-id="account-a"]').click();
       const checks = async () => {
         for (const name of ['controlled', 'access', 'tasks']) await page.locator(`#inventory-lifecycle-${name}`).check();
@@ -96,6 +96,8 @@ test('GPT／Claude 回库、历史资料、再交付、续费归属与停止复�
       assert.equal(await drawer.getByRole('heading', { name: '账号使用与回收', exact: true }).count(), 1);
       await drawer.getByText('已回收可用', { exact: true }).first().waitFor();
       await drawer.getByRole('heading', { name: '历史订单、付款与认证资料', exact: true }).waitFor();
+      const paymentReference = drawer.locator('table[data-table="账号历史订单"] td[data-column="paymentId"]');
+      assert.match(await paymentReference.first().textContent(), new RegExp(type === 'gpt' ? bankCardNumber : '完整卡号待核对'));
       if (type === 'claude') {
         await drawer.getByText('待重新核实', { exact: true }).waitFor();
         assert.match(await drawer.innerText(), /历史认证人/);
@@ -116,11 +118,10 @@ test('GPT／Claude 回库、历史资料、再交付、续费归属与停止复�
       await page.screenshot({ path: `${output}/${type}-orders-${width}-${theme}.png` });
       await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
       await go(`workspace/order/${type}`);
-      await page.locator('#commerce-customerId option[value="customer-a"]').waitFor({ state: 'attached' });
       await chooseCustomer('customer-a');
       assert.equal(await page.locator('#commerce-email').inputValue(), '', '回收账号不自动推荐为可续费账号');
       await page.locator('#commerce-email').fill('owned@example.test');
-      await page.getByRole('button', { name: '确认提交', exact: true }).click();
+      await page.locator('button[form="commerce-order-form"][type="submit"]').click();
       assert.match(await page.locator('#commerce-email-error').innerText(), /回收|重新分配/);
       await page.locator('#commerce-businessType').selectOption('成品交付');
       await page.locator('#commerce-emailHistory-picker').click();
@@ -144,7 +145,7 @@ test('GPT／Claude 回库、历史资料、再交付、续费归属与停止复�
       await page.locator('#commerce-businessType').selectOption('续费');
       await chooseCustomer('customer-a');
       await page.locator('#commerce-email').fill('owned@example.test');
-      await page.getByRole('button', { name: '确认提交', exact: true }).click();
+      await page.locator('button[form="commerce-order-form"][type="submit"]').click();
       assert.match(await page.locator('#commerce-email-error').innerText(), /其他客户/);
       await chooseCustomer('customer-b');
       assert.equal(await page.locator('#commerce-email').inputValue(), 'owned@example.test', '当前客户可沿用原账号续费');

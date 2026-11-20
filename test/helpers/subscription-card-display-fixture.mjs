@@ -64,7 +64,10 @@ export function cardDisplayFixture() {
     load: domain => snapshots[domain] || { version: 0, data: {} },
     featureDocument: domain => documents[domain] || { version: 0, data: {} },
     orderCardFingerprint: fingerprint,
-    withSubscriptions: (_actor, operation) => operation(snapshots),
+    withSubscriptions: (actor, operation) => operation(snapshots, (action, ids) => {
+      for (const targetId of ids)
+        audits.push({ domain: 'subscriptions', version: snapshots.subscriptions.version, action, actor, targetId });
+    }),
     auditFeature: (domain, version, event) => audits.push({ domain, version, ...event })
   };
   const client = { async get(path) {

@@ -4,7 +4,7 @@ import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { interceptDesign, origin, settle } from './helpers/offline-design.mjs';
 
-test('订单下拉框在展开后搜索，保留联动、草稿与快捷新增', { timeout: 60_000 }, async (t) => {
+test('新订单在表单内选择客户，既有订单和其他业务下拉继续支持搜索', { timeout: 60_000 }, async (t) => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
   t.after(() => browser.close());
@@ -45,6 +45,49 @@ test('订单下拉框在展开后搜索，保留联动、草稿与快捷新增',
   const popup = page.locator('#commerce-customerId-popover');
   const search = popup.getByRole('searchbox', { name: '搜索客户' });
   await page.goto(origin + '/#/workspace/order/gpt');
+  await page.locator('#commerce-wechat').fill('Beta_Shop');
+  await page.waitForFunction(() => document.querySelector('#commerce-customerId')?.value === 'qa-beta');
+  assert.equal(await page.locator('#commerce-customerPhone').inputValue(), '13900139000');
+  assert.equal(await trigger.count(), 0);
+
+  for (const width of [1440, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const dark of [false, true]) {
+      await page.evaluate(dark => { document.documentElement.dataset.theme = dark ? 'dark' : 'light'; }, dark);
+      for (const product of ['gpt', 'claude']) {
+        await page.evaluate(product => { location.hash = '#/workspace/order/' + product; }, product);
+        await page.locator(`#main[data-layout-route="workspace/order/${product}"]`).waitFor();
+        await page.locator('#commerce-payment').selectOption('银行卡');
+        await page.locator('#commerce-proMaterialMode').selectOption(product === 'claude' ? 'tenant_card' : '');
+        await page.locator('#commerce-cardId-picker').click();
+        await page.getByRole('searchbox', { name: product === 'claude' ? '搜索租户银行卡' : '搜索银行卡' }).waitFor();
+        await page.keyboard.press('Escape');
+        if (product === 'claude') {
+          await page.locator('#commerce-tenantId-picker').click();
+          await page.getByRole('searchbox', { name: '搜索租户', exact: true }).fill('没有匹配的合成租户');
+          await page.locator('#commerce-tenantId-popover').getByRole('status').waitFor();
+          await page.keyboard.press('Escape');
+        }
+        await page.locator('#commerce-payment').selectOption('苹果内购');
+        await page.locator('#commerce-appleIdId-picker').click();
+        await page.getByRole('searchbox', { name: '搜索苹果 ID' }).waitFor();
+        await page.keyboard.press('Escape');
+        assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+      }
+    }
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.evaluate(() => { location.hash = '#/workspace/order/gpt'; });
+  await page.locator('#main[data-layout-route="workspace/order/gpt"]').waitFor();
+  assert.equal(await page.locator('#commerce-customerId').inputValue(), 'qa-beta', '切页返回恢复客户');
+  await page.locator('#commerce-email').fill('draft-preserved@example.test');
+  await page.locator('#commerce-wechat').fill('qa_new_customer');
+  await page.locator('#commerce-customerName').fill('新录单合成客户');
+  assert.equal(writes.length, 0);
+  assert.equal(await page.locator('#commerce-email').inputValue(), 'draft-preserved@example.test');
+  await page.evaluate(() => { location.hash = '#/orders/gpt'; });
+  await page.locator(`[data-action="commerce-order-edit"][data-id="${editedOrder.id}"]`).click();
+  const drawer = page.locator('#drawer[open]');
   await page.locator('#commerce-customerId option[value="qa-alpha"]').waitFor({ state: 'attached' });
   assert.equal(await search.isVisible(), false, '收起时只有一个选择控件');
   await page.locator('label[for="commerce-customerId-picker"]').click();
@@ -78,71 +121,31 @@ test('订单下拉框在展开后搜索，保留联动、草稿与快捷新增',
   assert(await trigger.evaluate(node => node === document.activeElement));
   await trigger.click();
   await search.waitFor();
-  await page.locator('h1').click();
+  await drawer.getByRole('heading').first().click();
   await popup.waitFor({ state: 'hidden' });
 
-  for (const width of [1440, 390, 320]) {
-    await page.setViewportSize({ width, height: 900 });
-    for (const dark of [false, true]) {
-      await page.evaluate(dark => { document.documentElement.dataset.theme = dark ? 'dark' : 'light'; }, dark);
-      for (const product of ['gpt', 'claude']) {
-        await page.evaluate(product => { location.hash = '#/workspace/order/' + product; }, product);
-        await page.locator(`#main[data-layout-route="workspace/order/${product}"]`).waitFor();
-        await trigger.click();
-        await search.fill('138');
-        await popup.getByRole('option').waitFor();
-        const { bounds, input, option } = await popup.evaluate(node => ({
-          bounds: node.getBoundingClientRect().toJSON(),
-          input: node.querySelector('input').getBoundingClientRect().toJSON(),
-          option: node.querySelector('[role="option"]').getBoundingClientRect().toJSON()
-        }));
-        assert(bounds.x >= 0 && bounds.x + bounds.width <= width, '下拉面板不得横向溢出');
-        assert(bounds.y >= 0 && bounds.y + bounds.height <= 900, '下拉面板不得被视口裁切');
-        assert(input.y + input.height <= option.y, '搜索框必须在选项上方');
-        await page.keyboard.press('Escape');
-        await page.locator('#commerce-payment').selectOption('银行卡');
-        await page.locator('#commerce-proMaterialMode').selectOption(product === 'claude' ? 'tenant_card' : '');
-        await page.locator('#commerce-cardId-picker').click();
-        await page.getByRole('searchbox', { name: product === 'claude' ? '搜索租户银行卡' : '搜索银行卡' }).waitFor();
-        await page.keyboard.press('Escape');
-        if (product === 'claude') {
-          await page.locator('#commerce-tenantId-picker').click();
-          await page.getByRole('searchbox', { name: '搜索租户', exact: true }).fill('没有匹配的合成租户');
-          await page.locator('#commerce-tenantId-popover').getByRole('status').waitFor();
-          await page.keyboard.press('Escape');
-        }
-        await page.locator('#commerce-payment').selectOption('苹果内购');
-        await page.locator('#commerce-appleIdId-picker').click();
-        await page.getByRole('searchbox', { name: '搜索苹果 ID' }).waitFor();
-        await page.keyboard.press('Escape');
-        assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
-      }
-    }
-  }
-  await page.setViewportSize({ width: 1440, height: 900 });
-  await page.evaluate(() => { location.hash = '#/workspace/order/gpt'; });
-  await page.locator('#main[data-layout-route="workspace/order/gpt"]').waitFor();
-  assert.equal(await page.locator('#commerce-customerId').inputValue(), 'qa-beta', '切页返回恢复客户');
-  await page.locator('#commerce-email').fill('draft-preserved@example.test');
-  await page.locator('[data-action="commerce-customer-match-open"]').click();
-  await page.locator('#order-match-name').fill('快捷新增合成客户');
-  await page.locator('#order-match-wechat').fill('qa_new_customer');
-  await page.locator('[data-action="commerce-customer-match-create"]').click();
-  await page.locator('#drawer').getByRole('button', { name: '核对并保存', exact: true }).click();
-  await page.locator('#commerce-contact-form').waitFor({ state: 'hidden' });
-  assert.equal(writes.length, 1);
-  assert.match(await trigger.innerText(), /快捷新增合成客户/);
-  assert.equal(await page.locator('#commerce-email').inputValue(), 'draft-preserved@example.test');
-  assert.equal(await page.locator('#commerce-wechat').inputValue(), 'qa_new_customer');
-  await page.evaluate(() => { location.hash = '#/orders/gpt'; });
-  await page.locator(`[data-action="commerce-order-edit"][data-id="${editedOrder.id}"]`).click();
-  const drawer = page.locator('#drawer[open]');
   await drawer.locator('#commerce-customerId-picker').click();
   await search.fill('138');
   await popup.getByRole('option').waitFor();
   await page.keyboard.press('Escape');
   await popup.waitFor({ state: 'hidden' });
   assert(await drawer.isVisible(), '关闭下拉不得关闭订单编辑抽屉');
+  for (const width of [1440, 390, 320]) for (const theme of ['light', 'dark']) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+    await trigger.click();
+    await search.fill('138');
+    await popup.getByRole('option').waitFor();
+    await settle(page);
+    const bounds = await popup.evaluate(node => {
+      const box = el => el.getBoundingClientRect().toJSON();
+      return { popup: box(node), input: box(node.querySelector('input')), option: box(node.querySelector('[role="option"]')) };
+    });
+    assert(bounds.popup.left >= 0 && bounds.popup.right <= width, '更正客户的下拉面板不得横向溢出');
+    assert(bounds.popup.top >= 0 && bounds.popup.bottom <= 900, '更正客户的下拉面板不得被视口裁切');
+    assert(bounds.input.bottom <= bounds.option.top, '搜索框必须在选项上方');
+    await search.press('Escape');
+  }
   await drawer.getByText(/最近使用.*手工录单、线上代充/).waitFor();
   for (const width of [1440, 753, 390, 320]) {
     await page.setViewportSize({ width, height: 900 });
@@ -158,7 +161,7 @@ test('订单下拉框在展开后搜索，保留联动、草稿与快捷新增',
         width: box(node).width, choice: box(node.querySelector('.order-identity-grid > .order-choice-grid')),
         customer: box(field('customerId')), email: box(field('email')),
         owner: box(field('ownerId')), card: box(field('cardId')),
-        payment: box(field('payment')), type: box(field('cardTypeId')), tail: box(field('paymentId')),
+        payment: box(field('payment')), type: box(field('cardTypeId')), tail: box(field('selectedCardNumber')),
         labelsFit: ['customerId', 'cardId'].every(key => {
           const label = field(key).querySelector('.commerce-picker-label');
           return label.scrollWidth <= label.clientWidth + 1 && label.scrollHeight <= label.clientHeight + 1;
@@ -216,6 +219,6 @@ test('订单下拉框在展开后搜索，保留联动、草稿与快捷新增',
   }
   await drawer.locator('#commerce-email').fill('a@b.co');
   await drawer.locator('[data-commerce-field="email"] .order-value-readout').waitFor({ state: 'detached' });
-  assert.equal(writes.length, 1);
+  assert.equal(writes.length, 0);
   assert.deepEqual(errors, []);
 });

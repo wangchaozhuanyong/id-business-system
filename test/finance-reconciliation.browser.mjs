@@ -197,7 +197,7 @@ test('对账筛选在分页前生效，失败保留结果和草稿，空记录�
   f.state.records[1].email = null;
   await page.getByLabel('卡号后四位', { exact: true }).fill('1357');
   await submit.click();
-  await page.getByText('未留存（尾号 1357）', { exact: true }).waitFor();
+  await page.getByText('未留存完整卡号', { exact: true }).waitFor();
   assert(await page.getByText('未留存邮箱', { exact: true }).isVisible());
   assert(await page.getByText('卡号未留存', { exact: true }).isVisible());
   f.state.failCards = true;
@@ -208,7 +208,7 @@ test('对账筛选在分页前生效，失败保留结果和草稿，空记录�
   await page.evaluate(() => window.IDDesignAPI.go('overview'));
   await page.getByRole('heading', { name: '网站总览', exact: true }).waitFor();
   await page.evaluate(route => window.IDDesignAPI.go(route), route);
-  await page.getByText('未留存（尾号 1357）', { exact: true }).waitFor();
+  await page.getByText('未留存完整卡号', { exact: true }).waitFor();
   assert.equal(await page.getByLabel('扣款状态', { exact: true }).inputValue(), 'pending');
   assert.equal(f.requests.at(-1).status, 'failed');
   f.response.status = 403;

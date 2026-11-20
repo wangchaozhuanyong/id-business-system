@@ -13,7 +13,9 @@ const order = { id: 'test-order', orderNo: 'OD-READONLY-001', product: 'GPT', pl
   start: new Date().toISOString(), expiry: '2027-01-01T00:00:00+08:00', saleAmount: '111.00', saleCurrency: 'CNY',
   paidAmount: '20.00', paidCurrency: 'USD', paidConfirmed: true, receiptConfirmed: true, refunds: [],
   bankReturns: [{ id: 'return-01', amount: '2.00', currency: 'USD', at: '2026-11-13T12:00:00Z' }] };
-const cards = { version: 7, strict: false, items: [{ id: 11, last4: '6022', active: true, uses: 2, plans: ['plus'] }] };
+const financeCardNumber = '1000000000006022';
+const cards = { version: 7, strict: false,
+  items: [{ id: 11, last4: '6022', cardNumber: financeCardNumber, active: true, uses: 2, plans: ['plus'] }] };
 const localFixtures = {
   commerce: { version: 1, data: { orders: [order], customers: [], tenants: [], operating: [], rentBatches: [], logs: [] } },
   'finance/expense-receipts': { version: 1, items: [] },
@@ -220,7 +222,7 @@ test('finance verifies a card change and staff pages fit narrow screens with rea
     return route.fulfill({ status: 503, json: { error: '银行卡维护结果待核对' } });
   });
   await page.goto(origin + '/#/staff/finance/cards');
-  await page.getByText('6022', { exact: true }).waitFor();
+  await page.getByText(financeCardNumber, { exact: true }).waitFor();
   for (const width of [1440, 390, 320]) for (const theme of ['light', 'dark']) {
     await page.setViewportSize({ width, height: 850 });
     await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
@@ -229,6 +231,7 @@ test('finance verifies a card change and staff pages fit narrow screens with rea
     assert.deepEqual((await separatorSnapshot(page)).findings, []);
   }
   await page.getByRole('button', { name: '设置套餐', exact: true }).click();
+  await page.locator('#drawer').getByText('银行卡号 ' + financeCardNumber, { exact: true }).waitFor();
   await page.locator('#staff-edit-plan-pro200').check();
   await page.getByRole('button', { name: '保存套餐' }).click();
   const important = page.getByRole('dialog', { name: '确认重要操作' });
@@ -250,7 +253,9 @@ test('finance verifies a card change and staff pages fit narrow screens with rea
 test('finance lists keep filters, status and pagination readable across widths and empty results', { timeout: 45_000 }, async t => {
   const browser = await chromium.launch();
   t.after(() => browser.close());
-  const items = Array.from({ length: 45 }, (_, i) => ({ id: i + 1, last4: String(6000 + i), uses: i,
+  const number = index => '100000000000' + (6000 + index);
+  const items = Array.from({ length: 45 }, (_, i) => ({ id: i + 1, last4: String(6000 + i),
+    cardNumber: number(i), uses: i,
     active: i % 4 !== 3, state: ['可用', '暂缓使用', '不可用', '已停用'][i % 4],
     plans: i % 2 ? [] : ['plus', 'pro100', 'pro200', 'pro500'], lastUsedAt: '2026-11-14T02:15:00Z' }));
   const { context, page, access, errors } = await prepare(browser, 'finance', {
@@ -258,20 +263,20 @@ test('finance lists keep filters, status and pagination readable across widths a
   });
   t.after(() => context.close());
   await page.goto(origin + '/#/staff/finance/cards');
-  await page.getByText('6000', { exact: true }).waitFor();
+  await page.getByText(number(0), { exact: true }).waitFor();
   assert.equal(await page.locator('[data-staff-content] textarea').count(), 0);
   await page.getByRole('button', { name: '下一页', exact: true }).click();
-  await page.getByText('6020', { exact: true }).waitFor();
+  await page.getByText(number(20), { exact: true }).waitFor();
   await page.getByRole('button', { name: '下一页', exact: true }).click();
-  await page.getByText('6044', { exact: true }).waitFor();
+  await page.getByText(number(44), { exact: true }).waitFor();
   assert.equal(await page.locator('[data-table="银行卡和套餐"] tbody tr').count(), 5);
   assert(await page.getByRole('button', { name: '下一页', exact: true }).isDisabled());
   await page.getByLabel('银行卡状态', { exact: true }).selectOption('不可用');
   await page.getByLabel('允许套餐', { exact: true }).selectOption('plus');
   assert.equal(await page.locator('[data-table="银行卡和套餐"] tbody tr').count(), 11);
-  await page.getByRole('searchbox').fill('6002');
+  await page.getByRole('searchbox').fill(number(2));
   await page.getByRole('searchbox').press('Enter');
-  await page.getByText('6002', { exact: true }).waitFor();
+  await page.getByText(number(2), { exact: true }).waitFor();
   assert.equal(await page.locator('[data-table="银行卡和套餐"] tbody tr').count(), 1);
   await page.getByRole('searchbox').fill('9999');
   await page.getByRole('searchbox').press('Enter');
@@ -346,7 +351,7 @@ test('card drawers preserve plan choices, clear private input and submit imports
   assert(await page.getByRole('button', { name: '导入银行卡', exact: true }).isDisabled());
   await page.getByRole('button', { name: '更多操作', exact: true }).click();
   await page.getByRole('menuitem', { name: '刷新', exact: true }).click();
-  await page.getByText('6022', { exact: true }).waitFor();
+  await page.getByText(financeCardNumber, { exact: true }).waitFor();
   await page.setViewportSize({ width: 1440, height: 900 });
   const openImport = () => page.getByRole('button', { name: '导入银行卡', exact: true }).click();
   const drawer = page.locator('#drawer');
