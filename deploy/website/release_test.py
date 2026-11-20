@@ -1740,9 +1740,50 @@ class WebsiteReleaseTests(unittest.TestCase):
     def test_canary_diagnostic_outputs_only_recognized_indicators_and_locations(self):
         result = remote.canary_diagnostics("AssertionError [ERR_ASSERTION]: synthetic secret input\n"
                                            "at /ops/check-app.mjs:24:5\n"
-                                           "prototype.css?v=20261111-confirmed-orders")
+                                           "prototype.css?v=20261111-confirmed-orders\n"
+                                           "  actual: 'private-result-value',\n"
+                                           "  operator: 'doesNotMatch'\n")
         self.assertEqual(result, {"indicators": ["assertion"], "frames": [["check-app.mjs", "24", "5"]],
-                                  "assets": ["prototype.css?v=20261111-confirmed-orders"]})
+                                  "assets": ["prototype.css?v=20261111-confirmed-orders"],
+                                  "assertion": {"code": "ERR_ASSERTION", "operator": "doesNotMatch"}})
+        result = remote.canary_diagnostics("AssertionError [ERR_ASSERTION]: private input\n"
+                                           "  operator: 'private-operator'\n")
+        self.assertEqual(result["assertion"], {"code": "ERR_ASSERTION"})
+
+    def test_canary_checker_outline_masks_source_and_bounds_the_context(self):
+        source = (
+            "const panelResult = await send('/api/local/commerce?private-query', {method:'GET'}); // private-comment\n"
+            "const sessionValue = \x60private-template\u0024{privateToken}\x60;\n"
+            r"assert.doesNotMatch(panelResult.body, /private-regex:[0-9]{3}/g);" "\n"
+            "assert.equal(panelResult.status, 418);\n"
+            "const connection = 'private-literal';\n"
+            "assert.equal(panelResult.headers, null);\n"
+        )
+        with TemporaryDirectory(dir=Path(__file__).parent) as directory:
+            checker = Path(directory) / "check-app.mjs"
+            checker.write_bytes(source.replace("\n", "\r\n").encode())
+            frames = [["check-app.mjs", "3", "7"], ["app-entry.mjs", "71", "5"]]
+            report = remote.canary_checker_outline(checker, frames)
+            self.assertEqual(report["checkerSha256"], remote.digest(checker))
+            self.assertEqual(report["checkerOutline"], [
+                {"line": 1, "syntax": 'const <token> = await send("/api/local/commerce?<redacted>", {method:"GET"}); <comment>'},
+                {"line": 2, "syntax": "const <token> = <template>;"},
+                {"line": 3, "syntax": "assert.doesNotMatch(<token>.body, <regex>);"},
+                {"line": 4, "syntax": "assert.equal(<token>.status, <number>);"},
+                {"line": 5, "syntax": "const <token> = <string>;"},
+            ])
+            self.assertEqual(remote.canary_checker_outline(checker, frames[1:]), {})
+            self.assertEqual(remote.canary_checker_outline(checker, [["check-app.mjs", "999999", "1"]]), {})
+            checker.write_text("assert.equal(cards.card_number, '****1234');\n"
+                               "assert.equal(cards.card_number, '1234567890123456');\n")
+            self.assertEqual(remote.canary_checker_outline(
+                checker, [["check-app.mjs", "1", "7"]]
+            )["checkerOutline"], [
+                {"line": 1, "syntax": "assert.equal(cards.card_number, <masked-pan>);"},
+                {"line": 2, "syntax": "assert.equal(cards.card_number, <pan-like>);"},
+            ])
+            checker.write_bytes(b" " * 65537)
+            self.assertEqual(remote.canary_checker_outline(checker, frames), {})
 
     @patch("remote.time.sleep")
     @patch("remote.subprocess.run")
