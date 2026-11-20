@@ -338,28 +338,28 @@ test('订单日志打开原单操作，结算记录保持只读，撤单和恢�
     await main.getByRole('combobox', { name: '日志范围' }).selectOption('recovery');
     await main.getByRole('combobox', { name: '恢复模块' }).selectOption('order');
     const search = main.getByRole('textbox', { name: '搜索当前列表' });
-    const matching = page.waitForResponse(response => {
-      const url = new URL(response.url());
-      return url.pathname.endsWith('/audit/page') && url.searchParams.get('query') === 'WD-002';
-    });
-    await search.fill('WD-002');
-    assert.equal((await matching).status(), 200);
-    await main.getByRole('button', { name: '查看恢复', exact: true }).click();
+    const findLog = async keyword => {
+      const requested = page.waitForResponse(response => {
+        const url = new URL(response.url());
+        return url.pathname.endsWith('/audit/page') && url.searchParams.get('module') === 'order' &&
+          url.searchParams.get('query') === keyword;
+      });
+      await search.fill(keyword);
+      const response = await requested;
+      assert.equal(response.status(), 200);
+      const { items } = await response.json();
+      assert.equal(items.length, 1);
+      const actions = main.getByRole('button', { name: '查看恢复', exact: true });
+      await actions.nth(1).waitFor({ state: 'hidden' });
+      await actions.and(main.locator(`button[data-id="${items[0].id}"]`)).click();
+    };
+    await findLog('WD-002');
     await dialog.getByText(/已有付款、实收/).waitFor();
     assert.equal(await dialog.getByRole('button', { name: '业务撤单', exact: true }).count(), 0);
     await dialog.getByRole('button', { name: '查看原订单', exact: true }).click();
     await dialog.getByRole('heading', { name: '订单详情', exact: true }).waitFor();
     assert.equal(await dialog.getByRole('tab', { name: '操作记录' }).getAttribute('aria-selected'), 'true');
     await page.keyboard.press('Escape');
-    const findLog = async keyword => {
-      const requested = page.waitForResponse(response => {
-        const url = new URL(response.url());
-        return url.pathname.endsWith('/audit/page') && url.searchParams.get('query') === keyword;
-      });
-      await search.fill(keyword);
-      await requested;
-      await main.getByRole('button', { name: '查看恢复', exact: true }).click();
-    };
     await findLog('WD-001');
     await dialog.getByRole('button', { name: '业务撤单', exact: true }).click();
     await dialog.getByRole('heading', { name: '业务撤单' }).waitFor();
