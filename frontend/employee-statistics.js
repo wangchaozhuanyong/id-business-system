@@ -3,6 +3,7 @@
 
   const A = window.IDDesignAPI;
   const D = window.IDLocalData;
+  const dates = window.IDDateFilter;
   const { $, esc, button, textAction } = A;
   const title = '员工数据统计';
   const route = 'data-management/employee-statistics';
@@ -60,11 +61,11 @@
   const exceptions = row => (row.counts.overdue || 0) + (row.counts.review || 0) + (row.counts.returningCodes || 0);
   const displayTime = value => value && Number.isFinite(Date.parse(value)) ? timeFormat.format(Date.parse(value)) : '待核对';
   const businessToday = () => report?.data.today || dayFormat.format(new Date());
-  const previousDay = (today, days) => dayFormat.format(Date.parse(today + 'T12:00:00+08:00') - days * 86_400_000);
+  const businessNow = () => Date.parse(businessToday() + 'T12:00:00+08:00');
 
   function filters() {
     if (!A.state.drafts.has(draftKey))
-      A.state.drafts.set(draftKey, { tab: 'work', date: '', employee: '', work: 'all', pending: 'all', exceptions: false,
+      A.state.drafts.set(draftKey, { tab: 'work', period: 'today', from: '', to: '', employee: '', work: 'all', pending: 'all', exceptions: false,
         comparisons: {
           work: { metric: 'orders', sort: 'quantity', page: 1, selected: '', detailsOpen: false },
           pending: { metric: 'unusedCodes', sort: 'quantity', page: 1, selected: '', detailsOpen: false }
@@ -73,8 +74,20 @@
   }
 
   function parameters() {
-    const { tab, date, ...values } = filters();
-    return { kind: values[tab], ...(tab === 'work' && date ? { date } : {}) };
+    const filter = filters();
+    const { tab, period } = filter;
+    const selection = period === 'custom' ? filter : dates.range(period, businessNow());
+    const { from, to } = selection;
+    const bounds = tab !== 'work' || period === 'today' ? {} : from === to ? { date: from } : { from, to };
+    return { kind: filter[tab], ...bounds };
+  }
+
+  function selectDateRange({ preset, from, to }) {
+    if (!active() || filters().tab !== 'work') return;
+    Object.assign(filters(), { period: preset, from, to });
+    comparison().page = 1;
+    A.state.page = 1;
+    A.render();
   }
 
   function viewKey() {
@@ -311,13 +324,10 @@
     const shortTime = dataTime.startsWith(snapshot?.today + ' ') ? dataTime.slice(11) : dataTime;
     const scope = snapshot ? (filter.tab === 'pending' ? '当前资产截至 ' : '北京时间 · 截至 ') + shortTime : '';
     const error = failure?.key === key;
-    const today = businessToday();
-    const selectedDate = filter.date || today;
-    const dateShortcuts = ['今天', '昨天', '前天'].map((label, days) => {
-      const selected = selectedDate === previousDay(today, days);
-      return button(label, 'employee-statistics-date-preset', selected ? 'primary' : '', '',
-        `data-days-ago="${days}" aria-pressed="${selected}"`);
-    }).join('');
+    const dateRange = filter.tab === 'work' ? dates.render({
+      id: 'employee-statistics-period', value: filter.period, from: filter.from, to: filter.to,
+      label: '统计日期', compact: true, now: businessNow(), max: businessToday(), onSelect: selectDateRange
+    }) : '';
     const employees = (report?.data.items || []).map(({ id, name }) => [id, name]);
     if (filter.employee && !employees.some(([id]) => id === filter.employee))
       employees.push([filter.employee, '当前选择的员工']);
@@ -334,9 +344,7 @@
       <div class="employee-statistics-scroll" data-tab-scrollport tabindex="0" role="group" aria-label="员工统计视图和筛选">
       <div class="tabs" role="group" aria-label="员工统计视图">${tabs}</div>
       <div class="toolbar toolbar--inline list-filters" role="group" aria-label="员工统计筛选">
-        ${filter.tab === 'work' ? `<label class="toolbar-date" for="employee-statistics-date">统计日期
-          ${A.input('employee-statistics-date', selectedDate, `type="date" max="${esc(today)}" aria-label="统计日期"`)}
-        </label><div class="toolbar-date-shortcuts" role="group" aria-label="快捷日期">${dateShortcuts}</div>` : ''}
+        ${dateRange}
         <div class="toolbar-select-filters">
           <label for="employee-statistics-person">员工</label>
           ${A.select('employee-statistics-person', [['', '全部员工'], ...employees], filter.employee).replace('<select', '<select aria-label="员工"')}
@@ -346,7 +354,7 @@
         <label class="checkbox-label">
           <input type="checkbox" id="employee-statistics-exceptions" ${filter.exceptions ? 'checked' : ''} />
           <span>只看异常</span></label>` : ''}
-        ${scope ? `<p class="employee-statistics-scope" data-statistics-date="${esc(snapshot.date)}"
+        ${scope ? `<p class="employee-statistics-scope" data-statistics-date="${esc(snapshot.date)}"${snapshot.to ? ` data-statistics-to="${esc(snapshot.to)}"` : ''}
           title="北京时间 ${esc(dataTime)}">${esc(scope)}</p>` : ''}
       </div>
       </div><div class="toolbar-right" data-page-actions></div></div>
@@ -393,7 +401,8 @@
     const row = snapshot?.items.find(item => item.id === node.dataset.employee);
     const metric = visibleMetrics().find(([key]) => key === node.dataset.metric);
     if (!row || !metric) return;
-    const params = { ...parameters(), date: snapshot.date, employee: row.id, metric: metric[0] };
+    const bounds = snapshot.from ? { from: snapshot.from, to: snapshot.to } : { date: snapshot.date };
+    const params = { kind: parameters().kind, ...bounds, employee: row.id, metric: metric[0] };
     detail = { params, page: 1, pageSize: window.IDPagination.defaultPageSize };
     A.openDrawer(row.name + ' · ' + metric[1], '记录编号可用于回查原业务。待处理资产以读取时的状态为准。',
       '<section class="panel design-async-region" id="employee-statistics-detail"><div role="status" data-detail-progress hidden></div><div data-detail-result></div></section>',
@@ -499,14 +508,8 @@
         A.state.page = 1;
         A.render();
       }
-      else if (action === 'employee-statistics-tab' || action === 'employee-statistics-date-preset') {
-        if (action === 'employee-statistics-tab') filters().tab = node.dataset.tab;
-        else {
-          const days = Number(node.dataset.daysAgo);
-          if (![0, 1, 2].includes(days)) return false;
-          filters().date = days ? previousDay(businessToday(), days) : '';
-          comparison().page = 1;
-        }
+      else if (action === 'employee-statistics-tab') {
+        filters().tab = node.dataset.tab;
         A.state.page = 1;
         A.render();
       } else return false;
@@ -526,7 +529,6 @@
         return true;
       }
       switch (node.id) {
-        case 'employee-statistics-date': filter.date = node.value; break;
         case 'employee-statistics-person': filter.employee = node.value; break;
         case 'employee-statistics-kind': filter[filter.tab] = node.value; break;
         case 'employee-statistics-exceptions': filter.exceptions = node.checked; break;

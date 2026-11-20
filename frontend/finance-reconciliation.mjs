@@ -1,8 +1,10 @@
 export function createPage(A, definition) {
   const D = window.IDLocalData;
+  const dates = window.IDDateFilter;
   const tableId = '代充对账记录';
   const defaults = () => ({ page: 1, from: '', to: '', last4: '', plan: '', status: '' });
   let draft = defaults(), applied, active;
+  let period = 'all';
 
   const note = ({ from, to }) => from && to ? from + ' 至 ' + to :
     from ? from + ' 起' : to ? '截至 ' + to : '全部日期';
@@ -11,8 +13,9 @@ export function createPage(A, definition) {
   const plans = { plus: 'Plus', pro100: 'Pro 100', pro200: 'Pro 200', pro500: 'Pro 500' };
   const cardTypeStates = { unassigned: '未设置', unmatched: '未匹配', ambiguous: '分类待核对',
     unavailable: '暂未读取', 'missing-number': '卡号未留存', conflict: '卡号待核对' };
-  const filters = form => ({ page: 1, from: form.elements['staff-from'].value,
-    to: form.elements['staff-to'].value, last4: form.elements['billing-last4'].value.trim(),
+  const dateBounds = () => period === 'custom' ? { from: draft.from, to: draft.to } : dates.range(period);
+  const filters = form => ({ page: 1, ...dateBounds(),
+    last4: form.elements['billing-last4'].value.trim(),
     plan: form.elements['billing-plan'].value, status: form.elements['billing-status'].value });
   const copyValue = (value, field, index, label) => `<button type="button" class="finance-copy-value"
     data-action="billing-copy" data-field="${field}" data-index="${index}" aria-label="复制${label}"><span>${A.esc(value)}</span>${A.icon('copy')}</button>`;
@@ -20,11 +23,20 @@ export function createPage(A, definition) {
     timeZone: 'Asia/Shanghai', dateStyle: 'short', timeStyle: 'medium', hourCycle: 'h23'
   });
   const date = value => Number.isFinite(Date.parse(value)) ? clock.format(new Date(value)) : '—';
+  function dateFilter() {
+    return dates.render({ id: 'billing-period', label: '账单日期范围', value: period, ...dateBounds(),
+      all: true, compact: true, allowOpen: true, onSelect({ preset, from, to }) {
+        const control = active?.region.querySelector('[data-billing-period]');
+        if (!control?.isConnected) return;
+        period = preset;
+        draft = { ...draft, from, to };
+        control.innerHTML = dateFilter();
+      } });
+  }
   const render = () => A.header(definition.label, definition.description) +
     '<section class="panel design-async-region finance-workspace" data-finance-reconciliation>' +
     '<form class="toolbar toolbar--inline list-filter-toolbar finance-toolbar finance-date-filter" data-billing-filter><div class="toolbar-left"><div class="list-filter-fields">' +
-    A.field('开始日期', 'staff-from', A.input('staff-from', draft.from, 'type="date"')) +
-    A.field('结束日期', 'staff-to', A.input('staff-to', draft.to, 'type="date"')) +
+    '<div data-billing-period>' + dateFilter() + '</div>' +
     '</div><div class="list-filter-fields">' +
     A.field('卡号后四位', 'billing-last4', A.input('billing-last4', draft.last4,
       'inputmode="numeric" pattern="[0-9]{4}" maxlength="4" placeholder="全部银行卡"')) +
@@ -131,12 +143,6 @@ export function createPage(A, definition) {
         event.preventDefault();
         event.stopPropagation();
         draft = filters(form);
-        if (draft.from && draft.to && draft.from > draft.to) {
-          const error = region.querySelector('[data-billing-error]');
-          error.textContent = '开始日期不能晚于结束日期。';
-          error.hidden = false;
-          return;
-        }
         void read(view, draft, true);
       });
       showResult(view);
@@ -170,6 +176,7 @@ export function createPage(A, definition) {
     clearPageState() {
       active = applied = undefined;
       draft = defaults();
+      period = 'all';
       A.table([], [], '', tableId);
     }
   };

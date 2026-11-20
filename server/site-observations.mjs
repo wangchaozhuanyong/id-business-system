@@ -2,10 +2,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import { constants } from 'node:fs';
 import { open, readFile, rename, unlink } from 'node:fs/promises';
 import { cpus, freemem, totalmem } from 'node:os';
+import { calendarDate, calendarRange } from './calendar-range.mjs';
 
 const hour = 3_600_000;
 const minute = 60_000;
-const maxFileSize = 2 * 1024 * 1024;
+const performanceDays = 30;
+const maxFileSize = 4 * 1024 * 1024;
 const limits = [100, 200, 350, 500, 750, 1000, 1500, 2000, 3000, 5000, 8000, 12000, 20000, 30000, 60000, 120000];
 const activities = new Set(['login', 'customer-search', 'order-list', 'order-save']);
 const channels = ['browser', 'server'];
@@ -58,11 +60,17 @@ function summary(points) {
   return { total: all.total, successes, blocked: all.blocked, failed: all.failed, limited: all.limited, p95 };
 }
 
+function performanceStart(now) {
+  const today = calendarDate(now), first = calendarDate(now - (performanceDays - 1) * 24 * hour);
+  return calendarRange(first, today).start;
+}
+
 function loadRows(data, oldest, now) {
+  const performanceOldest = performanceStart(now);
   const groups = {};
   for (const [at, point] of Object.entries(data?.groups || {})) {
     const time = Number(at);
-    if (!Number.isSafeInteger(time) || bucketAt(time) !== time || time < oldest || time > now || !point) continue;
+    if (!Number.isSafeInteger(time) || bucketAt(time) !== time || time < performanceOldest || time > now || !point) continue;
     const accepted = {};
     for (const channel of channels) for (const activity of activities) {
       const key = groupKey(channel, activity), row = point[key];
@@ -232,8 +240,9 @@ export async function createSiteObservations({ path, version, clock = Date.now }
 
   async function collect(diskAvailable, backupEvidence) {
     const at = clock(), oldest = bucketAt(at) - 167 * hour;
-    for (const collection of [state.groups, state.resources]) for (const key of Object.keys(collection))
-      if (Number(key) < oldest) { delete collection[key]; pendingVersion++; diskDirty = true; }
+    for (const [collection, cutoff] of [[state.groups, performanceStart(at)], [state.resources, oldest]])
+      for (const key of Object.keys(collection))
+        if (Number(key) < cutoff) { delete collection[key]; pendingVersion++; diskDirty = true; }
     state.diagnostics = state.diagnostics.filter(row => row.at >= oldest);
     for (const [id, row] of recentRequests) if (at - row.at > 5 * minute) recentRequests.delete(id);
     const rawCpu = cpus().reduce(({ total, idle }, cpu) => ({
@@ -271,9 +280,15 @@ export async function createSiteObservations({ path, version, clock = Date.now }
     return persist();
   }
 
-  function performanceView(hours) {
-    const at = clock(), last = bucketAt(at), count = hours === 168 ? 7 : 24, step = hours / count;
-    const buckets = Array.from({ length: hours }, (_, i) => last - (hours - i - 1) * hour);
+  function performanceView(period) {
+    const at = clock(), explicit = typeof period === 'object';
+    const hours = explicit ? period.days * 24 : period;
+    const step = hours === 24 ? 1 : 24, count = hours / step;
+    const start = explicit ? period.start : bucketAt(at) - (hours - 1) * hour;
+    const buckets = Array.from({ length: hours }, (_, i) => start + i * hour);
+    // Existing files can have only seven days of buckets. Report the available coverage.
+    const oldest = Math.max(performanceStart(at), Math.min(bucketAt(first), ...Object.keys(state.groups).map(Number)));
+    const coverage = explicit && (period.end <= oldest ? 'unavailable' : start < oldest ? 'partial' : 'available');
     const groups = Object.fromEntries(channels.map(channel => {
       const all = points => points.flatMap(time => [...activities].map(activity =>
         state.groups[time]?.[groupKey(channel, activity)]).filter(Boolean));
@@ -287,7 +302,7 @@ export async function createSiteObservations({ path, version, clock = Date.now }
         }))
       }];
     }));
-    return { at, hours, storageAvailable, groups };
+    return { at, hours, storageAvailable, groups, ...(coverage && { coverage }) };
   }
 
   function resourceView() {

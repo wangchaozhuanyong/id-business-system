@@ -726,9 +726,27 @@ test('monitor query validation rejects ambiguous, excessive and unknown filters'
   const { monitor } = fixture(t);
   const handler = createMonitoringHandler({ monitor, publicOrigin: origin });
   for (const query of ['q=' + 'x'.repeat(101), 'q=a&q=b', 'days=-1', 'days=2', 'priority=P3',
-    'q=%00', 'tab=deliveries&priority=P0', 'surprise=true'])
+    'q=%00', 'tab=deliveries&priority=P0', 'surprise=true', 'from=2026-11-09', 'from=2026-02-30&to=2026-11-10',
+    'from=2026-11-10&to=2026-11-09', 'from=2026-11-09&to=2026-11-10&days=7'])
     assert.equal((await http(handler, { url: monitorPath + '?' + query })).status, 400, query);
   assert.equal((await http(handler, { url: monitorPath + '?q=%E6%94%AF%E4%BB%98&days=7&priority=P0', actor: admin })).status, 200);
+});
+
+test('monitor calendar filters use Beijing day boundaries and delivery completion time', async t => {
+  const { monitor, tick } = fixture(t);
+  const handler = createMonitoringHandler({ monitor, publicOrigin: origin });
+  tick(Date.parse('2026-11-10T15:59:59.999Z') - now);
+  monitor.observe([{ code: 'security_confirmed', scope: 'before-midnight', status: 'bad' }]);
+  monitor.save(0, { enabled: false, token, channels: { operations: ops }, rules: {} }, supervisor);
+  monitor.queueTest(1, 'operations', supervisor);
+  tick(1);
+  monitor.observe([{ code: 'payment_duplicate', scope: 'at-midnight', status: 'bad' }]);
+  await monitor.dispatch();
+  const get = async query => JSON.parse((await http(handler, { url: monitorPath + '?' + query })).body);
+  assert.deepEqual((await get('from=2026-11-10&to=2026-11-10&priority=P0')).items.map(row => row.label), ['已核实安全事件']);
+  assert.deepEqual((await get('from=2026-11-11&to=2026-11-11')).items.map(row => row.label), ['已核实重复扣款']);
+  assert.equal((await get('tab=deliveries&from=2026-11-10&to=2026-11-10')).total, 0);
+  assert.equal((await get('tab=deliveries&from=2026-11-11&to=2026-11-11')).total, 1);
 });
 
 test('monitoring emits changed samples and their exact stale deadline without polling', t => {

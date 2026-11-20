@@ -16,7 +16,7 @@ const today = new Date('2026-11-12T03:10:00Z');
 const fetchedAt = '2026-11-12T03:09:41Z';
 const format = new Intl.NumberFormat('zh-CN');
 
-function report(site, days, state) {
+function report(site, from, days, state) {
   const renovation = site === 'flashcast.com.my';
   const common = { status: state, site, days, provider: renovation ? 'ga4' : 'cloudflare' };
   if (state === 'unconfigured') return { ...common, summary: null, daily: [] };
@@ -27,7 +27,7 @@ function report(site, days, state) {
     fetchedAt,
     summary: state === 'ready' ? { pageViews: sources.get(site), ...traffic } : null,
     daily: Array.from({ length: days }, (_, index) => ({
-      date: new Date(Date.UTC(2026, 10, 12 - days + 1 + index)).toISOString().slice(0, 10),
+      date: new Date(Date.parse(from) + index * 86_400_000).toISOString().slice(0, 10),
       metrics: state === 'ready' && index !== 1
         ? { pageViews: 170 + (index * 39) % 138, ...(renovation ? { sessions: 31, visitors: 20 } : { visits: 31 }) }
         : null
@@ -45,10 +45,13 @@ test('data center navigation, four website reports, reporting dates and responsi
   await context.route('**/api/local/tools/website-analytics?*', route => {
     const request = route.request();
     const params = new URL(request.url()).searchParams;
-    const site = params.get('site'), days = Number(params.get('days'));
+    const site = params.get('site'), from = params.get('from'), to = params.get('to');
+    const days = (Date.parse(to) - Date.parse(from)) / 86_400_000 + 1;
+    assert.equal(to, '2026-11-12');
+    assert.equal(from, days === 7 ? '2026-11-06' : '2026-10-14');
     requests.push([request.method(), site, days]);
     return mode === 'error' ? route.fulfill({ status: 503, json: { error: '合成内部错误' } })
-      : route.fulfill({ json: report(site, days, mode) });
+      : route.fulfill({ json: report(site, from, days, mode) });
   });
   await context.route('**/api/local/tools/sheets-status', route => route.fulfill({ json: {
     state: 'no_receipt', reportedAt: null, verifiedAt: null, failures: null, tabs: []
@@ -81,7 +84,7 @@ test('data center navigation, four website reports, reporting dates and responsi
     .filter({ hasText: new RegExp('^' + format.format(value) + '次$') }).waitFor();
   await waitForViews(1234);
   assert.equal(await select.inputValue(), 'flashcast.com.my');
-  assert.equal(await workspace.getByRole('button', { name: '最近 7 天' }).getAttribute('aria-pressed'), 'true');
+  assert.equal(await workspace.getByRole('button', { name: '近 7 天' }).getAttribute('aria-pressed'), 'true');
   assert.deepEqual(await select.locator('option').allTextContents(), ['FLASH CAST 装修站', '大马通', '模钥商城', '闪铸商城']);
   assert.match(await overview.innerText(), /2026-11-06 至 2026-11-12/);
   assert.match(await overview.innerText(), /马来西亚时间.*上次读取 2026-11-12 11:09/s);
@@ -105,8 +108,8 @@ test('data center navigation, four website reports, reporting dates and responsi
         const chart = rect(node.querySelector('.design-chart-plot'));
         return {
           overflow: document.documentElement.scrollWidth > innerWidth || chart.right > panel.right,
-          gaps: [...heading.querySelectorAll('button,select,summary')].map(control => panel.bottom - 1 - rect(control).bottom),
-          heights: [...heading.querySelectorAll('button,select,summary')].map(control => rect(control).height),
+          gaps: [...heading.querySelectorAll('button,select,summary')].filter(control => control.checkVisibility()).map(control => panel.bottom - 1 - rect(control).bottom),
+          heights: [...heading.querySelectorAll('button,select,summary')].filter(control => control.checkVisibility()).map(control => rect(control).height),
           aligned: Math.abs(select.top + select.height / 2 - (period.top + period.height / 2)) <= 1,
           stacked: select.bottom < period.top
         };
@@ -155,7 +158,7 @@ test('data center navigation, four website reports, reporting dates and responsi
     assert.match(await overview.innerText(), /世界标准时间（UTC）.*2026-11-12 03:09/s);
     await overview.getByText('含估算', { exact: true }).waitFor();
   }
-  await workspace.getByRole('button', { name: '最近 30 天' }).click();
+  await workspace.getByRole('combobox', { name: '统计时间范围', exact: true }).selectOption('month');
   await overview.getByText('2026-10-14 至 2026-11-12', { exact: true }).waitFor();
   await overview.getByText('含估算', { exact: true }).waitFor();
   await tabs.getByRole('link', { name: '谷歌表格同步' }).click();
@@ -163,7 +166,7 @@ test('data center navigation, four website reports, reporting dates and responsi
   await tabs.getByRole('link', { name: '网站统计' }).click();
   await waitForViews(987);
   assert.equal(await select.inputValue(), 'shop.flashcast.com.my');
-  assert.equal(await workspace.getByRole('button', { name: '最近 30 天' }).getAttribute('aria-pressed'), 'true');
+  assert.equal(await workspace.getByRole('combobox', { name: '统计时间范围', exact: true }).inputValue(), 'month');
 
   mode = 'empty';
   await refresh.click();

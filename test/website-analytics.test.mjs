@@ -61,7 +61,9 @@ test('the explicit renovation site keeps the period visitor total and the source
         return Response.json({ access_token: 'fixture-read-token', expires_in: 3600 });
       reads++;
       const requests = JSON.parse(options.body).requests;
-      assert.deepEqual(requests.map(request => request.dateRanges), Array(2).fill([{ startDate: '6daysAgo', endDate: 'today' }]));
+      const dates = reads === 1 ? { startDate: '6daysAgo', endDate: 'today' }
+        : { startDate: '2026-11-12', endDate: '2026-11-13' };
+      assert.deepEqual(requests.map(request => request.dateRanges), Array(2).fill([dates]));
       return Response.json({ reports: [
         { metadata, metricHeaders, rowCount: 1, rows: [row([12, 4, 8])] },
         { metadata, metricHeaders, dimensionHeaders: [{ name: 'date' }], rowCount: 2,
@@ -79,6 +81,11 @@ test('the explicit renovation site keeps the period visitor total and the source
   assert.equal(body.daily[0].date, '2026-11-07');
   assert.equal(body.daily.at(-1).date, '2026-11-13');
   assert.equal(reads, 1);
+  const exact = await request(handler, { site: params.site, from: '2026-11-12', to: '2026-11-13' }, { origin });
+  assert.equal(exact.status, 200);
+  assert.deepEqual(exact.body.daily.map(row => row.date), ['2026-11-12', '2026-11-13']);
+  assert.deepEqual(exact.body.summary, body.summary);
+  assert.equal(reads, 2);
 });
 
 test('Cloudflare reports isolate site tags, exact hosts and periods, and share in-flight reads for the same selection', async () => {
@@ -181,4 +188,28 @@ test('Cloudflare errors and incomplete responses stay distinct from empty report
   const zero = await request(handler, { ...params, days: 30 });
   assert.equal(zero.body.status, 'ready');
   assert.deepEqual(zero.body.summary, { pageViews: 0, visits: 0 });
+});
+
+
+test('custom Cloudflare calendar dates use inclusive UTC days and are cached separately', async () => {
+  const from = '2026-11-08', to = '2026-11-09', calls = [];
+  const handler = createWebsiteAnalytics({
+    cloudflareConfig: config, clock: () => now,
+    fetchImpl: async (_url, options) => {
+      const { variables: { filter } } = JSON.parse(options.body);
+      calls.push(filter.AND[0]);
+      const body = rumReport(14, 7);
+      body.data.viewer.accounts[0].daily[0].dimensions.date = from;
+      return Response.json(body);
+    }
+  });
+  const result = await request(handler, { from, to, site: 'damatong.net' });
+  assert.equal(result.status, 200);
+  assert.deepEqual(calls, [{ datetime_geq: from + 'T00:00:00Z', datetime_leq: to + 'T23:59:59Z' }]);
+  assert.deepEqual(result.body.daily.map(row => row.date), [from, to]);
+  assert.equal((await request(handler, { from, to, days: 7, site: 'damatong.net' })).status, 400);
+  assert.equal((await request(handler, { from: '2026-10-10', to, site: 'damatong.net' })).status, 400);
+  assert.equal((await request(handler, { from, to: '2026-11-13', site: 'damatong.net' })).status, 400);
+  assert.deepEqual(await request(handler, { from, to, site: 'damatong.net' }), result);
+  assert.equal(calls.length, 1);
 });

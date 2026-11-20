@@ -57,6 +57,11 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
       : route.fulfill({ json: fixture.commerce });
   });
   const page = await context.newPage();
+  const dateFilter = page.getByRole('combobox', { name: '录入时间' });
+  const dateDrawer = page.locator('#date-filter-drawer[open]');
+  const applyDate = dateDrawer.getByRole('button', { name: '应用日期' });
+  const fromDate = dateDrawer.getByLabel(/^开始日期/);
+  const toDate = dateDrawer.getByLabel(/^结束日期/);
   await page.clock.setFixedTime(clock);
   page.setDefaultTimeout(6000);
   const errors = [];
@@ -317,7 +322,7 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
       assert(await page.evaluate(() => window.formBeforeEntrySearch === document.querySelector('#commerce-order-form')));
       assert.equal(await page.locator('#commerce-email').inputValue(), 'order-search-draft@example.test');
 
-      await history.getByRole('button', { name: '今日', exact: true }).click();
+      await dateFilter.selectOption('today');
       await history.getByText('没有匹配的记录', { exact: true }).waitFor();
       assert.equal(await total(), '0');
       await search.fill('');
@@ -360,7 +365,7 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
       await go('workspace/order/gpt');
       assert.equal(await search.inputValue(), 'order_wechat 苹果');
       assert.deepEqual(await recordIds(), ['entry-order-0-1']);
-      assert.equal(await history.getByRole('button', { name: '今日', exact: true }).getAttribute('aria-pressed'), 'true');
+      assert.equal(await dateFilter.inputValue(), 'today');
       await go('customers/new');
       assert.equal(await search.inputValue(), '示例 2025550102');
       assert.deepEqual(await recordIds(), ['entry-customer-1']);
@@ -368,8 +373,7 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
       for (const route of ['workspace/order/gpt', 'customers/new', 'customers/new/tenant']) {
         await go(route);
         if (await search.count()) await search.fill('');
-        const all = history.getByRole('button', { name: '全部', exact: true });
-        if (await all.count()) await all.click();
+        if (await dateFilter.count()) await dateFilter.selectOption('all');
       }
     }
   });
@@ -392,17 +396,19 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
       if (claude) await pager.getByRole('button', { name: '下一页', exact: true }).click();
       assert.equal(await history.locator('tbody tr[data-row-id]').count(), claude ? 4 : 2);
       assert.equal((await history.locator('.table-viewport').boundingBox()).height, frame.height);
-      await history.getByRole('button', { name: '今日', exact: true }).click();
+      await dateFilter.selectOption('today');
       assert.equal(await pager.getAttribute('data-total'), claude ? '4' : '2');
-      await history.getByRole('button', { name: '昨日', exact: true }).click();
+      await dateFilter.selectOption('yesterday');
       assert.equal(await pager.getAttribute('data-total'), claude ? '4' : '2');
-      await history.getByRole('button', { name: '选择日期', exact: true }).click();
-      await history.getByLabel('开始日期', { exact: true }).fill('2026-11-08');
-      await history.getByLabel('结束日期', { exact: true }).fill('2026-11-09');
-      await history.getByRole('button', { name: '查询', exact: true }).click();
+      await dateFilter.selectOption('three');
+      assert.equal(await pager.getAttribute('data-total'), claude ? '12' : '6');
+      await dateFilter.selectOption('choose-custom');
+      await fromDate.fill('2026-11-08');
+      await toDate.fill('2026-11-09');
+      await applyDate.click();
       assert.equal(await pager.getAttribute('data-total'), claude ? '8' : '4');
       assert.equal(await page.locator('#commerce-email').inputValue(), 'pagination-draft@example.test');
-      await history.getByRole('button', { name: '全部', exact: true }).click();
+      await dateFilter.selectOption('all');
     }
   });
 
@@ -420,33 +426,34 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
     assert.equal(await pager.getAttribute('data-page'), '2');
     assert(await page.evaluate(() => window.entryFormBeforeRefresh === document.querySelector('#commerce-contact-form')));
     assert.equal((await history.locator('.table-viewport').boundingBox()).height, frame.height);
-    await history.getByRole('button', { name: '今日', exact: true }).click();
+    await dateFilter.selectOption('today');
     assert.equal(await pager.getAttribute('data-page'), '1');
     assert.equal(await pager.getAttribute('data-total'), '2');
-    await history.getByRole('button', { name: '昨日', exact: true }).click();
+    await dateFilter.selectOption('yesterday');
     assert.equal(await pager.getAttribute('data-total'), '2');
-    await history.getByRole('button', { name: '选择日期', exact: true }).click();
-    await history.getByLabel('开始日期', { exact: true }).fill('2026-11-08');
-    await history.getByLabel('结束日期', { exact: true }).fill('2026-11-07');
-    await history.getByRole('button', { name: '查询', exact: true }).click();
-    await history.locator('[data-entry-date-error]:not([hidden])').waitFor();
+    await dateFilter.selectOption('choose-custom');
+    await fromDate.fill('2026-11-08');
+    await toDate.fill('2026-11-07');
+    await applyDate.click();
+    await dateDrawer.getByText('结束日期不能早于开始日期', { exact: true }).waitFor();
     assert.equal(await pager.getAttribute('data-total'), '2', '无效查询保留上一组记录');
-    await history.getByLabel('结束日期', { exact: true }).fill('2026-11-09');
-    await history.getByRole('button', { name: '查询', exact: true }).click();
+    await toDate.fill('2026-11-09');
+    await applyDate.click();
     assert.equal(await pager.getAttribute('data-total'), '4');
     await go('workspace/order/gpt');
     await go('customers/new');
-    assert.equal(await history.getByLabel('开始日期', { exact: true }).inputValue(), '2026-11-08');
+    await dateFilter.selectOption('choose-custom');
+    assert.equal(await fromDate.inputValue(), '2026-11-08');
     assert.equal(await pager.getAttribute('data-total'), '4');
     assert.equal(await page.locator('#commerce-contact-name').inputValue(), '分页时保留的客户');
     const filteredFrame = await history.locator('.table-viewport').boundingBox();
-    await history.getByLabel('开始日期', { exact: true }).fill('2027-01-01');
-    await history.getByLabel('结束日期', { exact: true }).fill('2027-01-02');
-    await history.getByRole('button', { name: '查询', exact: true }).click();
+    await fromDate.fill('2027-01-01');
+    await toDate.fill('2027-01-02');
+    await applyDate.click();
     await history.getByText('所选时间暂无录入记录', { exact: true }).waitFor();
-    assert.equal((await history.boundingBox()).height, panel.height, '日期工具栏展开时保持整个记录区高度');
+    assert.equal((await history.boundingBox()).height, panel.height, '日期抽屉不改变记录区高度');
     assert.equal((await history.locator('.table-viewport').boundingBox()).height, filteredFrame.height);
-    await history.getByRole('button', { name: '全部', exact: true }).click();
+    await dateFilter.selectOption('all');
     await pager.getByLabel('每页条数').selectOption('20');
     assert.equal(await history.locator('tbody tr[data-row-id]').count(), 12);
     assert.equal(await pager.getAttribute('data-total'), '12');
@@ -569,13 +576,13 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
       ].map(([createdAt, name], i) => ({ ...original.customers[0], id: `midnight-${i}`, createdAt, name }));
       await history.getByRole('button', { name: '刷新最近录入记录' }).click();
       await page.waitForFunction(() => document.querySelector('#commerce-entry-records [data-pagination]').dataset.total === '4');
-      await history.getByRole('button', { name: '今日', exact: true }).click();
+      await dateFilter.selectOption('today');
       assert.equal(await pager.getAttribute('data-total'), '2');
       assert((await history.locator('td[data-column="name"]').allTextContents()).every(text => text.startsWith('今天')));
-      await history.getByRole('button', { name: '昨日', exact: true }).click();
+      await dateFilter.selectOption('yesterday');
       assert.equal(await pager.getAttribute('data-total'), '1');
       assert.equal(await history.locator('td[data-column="name"]').textContent(), '昨天最后一刻');
-      await history.getByRole('button', { name: '全部', exact: true }).click();
+      await dateFilter.selectOption('all');
       fixture.commerce.data.customers = original.customers;
       fixture.commerce.data.orders = Array.from({ length: 23 }, (_, i) => ({
         ...original.orders[0], id: `history-${i}`, orderNo: `DEMO-HISTORY-${i}`,
@@ -602,7 +609,7 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
     } finally {
       fixture.commerce.data = original;
       await page.setViewportSize({ width: 1440, height: 1000 });
-      await history.getByRole('button', { name: '全部', exact: true }).click();
+      await dateFilter.selectOption('all');
       await history.getByRole('button', { name: '刷新最近录入记录' }).click();
       await page.waitForFunction(() => document.querySelector('#commerce-entry-records [data-pagination]').dataset.total === '12');
     }

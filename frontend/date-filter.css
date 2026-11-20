@@ -1,0 +1,48 @@
+.id-date-filter {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+.id-date-presets {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.id-date-presets .button {
+  min-height: 36px;
+  padding-inline: 9px;
+  border-color: transparent;
+  box-shadow: none;
+  white-space: nowrap;
+}
+.id-date-filter .id-date-select {
+  display: none;
+  width: auto;
+  max-width: 100%;
+}
+.id-date-filter-compact .id-date-presets { display: none; }
+.id-date-filter-compact .id-date-select { display: block; }
+.id-date-applied {
+  font-size: 12px;
+  color: var(--secondary);
+  font-variant-numeric: tabular-nums;
+}
+#date-filter-drawer { width: min(480px, 100%); }
+#date-filter-drawer .drawer-header { align-items: center; }
+#date-filter-drawer .drawer-header h2 { margin: 0; }
+@media (max-width: 900px) {
+  .id-date-presets .button, .id-date-filter .id-date-select { min-height: 44px; }
+}
+@media (max-width: 720px) {
+  .id-date-filter .id-date-presets { display: none; }
+  .id-date-filter .id-date-select { display: block; min-height: 44px; }
+  .id-date-filter .id-date-applied { flex-basis: 100%; }
+}

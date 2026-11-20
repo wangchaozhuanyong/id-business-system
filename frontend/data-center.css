@@ -21,11 +21,6 @@
 .data-traffic-filters { flex-wrap: wrap; }
 .data-traffic-site > label { flex: none; color: var(--secondary); }
 .data-traffic-site > select { width: auto; min-width: 0; }
-.data-traffic-period .button[aria-pressed='true'] {
-  color: var(--primary);
-  border-color: var(--primary);
-  background: var(--primary-soft);
-}
 .data-traffic-meta {
   display: flex;
   flex-wrap: wrap;

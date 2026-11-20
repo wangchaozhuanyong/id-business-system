@@ -155,7 +155,7 @@ test('表头文字与每行数值对齐，手机卡片的字段和值各自对�
   }
 });
 
-test('订单统计的八个筛选项与重置按钮保持一行，窄屏可访问整行', async t => {
+test('订单统计的七个筛选项与重置按钮保持一行，窄屏可访问整行', async t => {
   const browser = await chromium.launch();
   t.after(() => browser.close());
   const context = await browser.newContext();
@@ -170,7 +170,8 @@ test('订单统计的八个筛选项与重置按钮保持一行，窄屏可访�
     await page.setViewportSize({ width, height: 900 });
     await settle(page);
     const layout = await bar.evaluate(el => {
-      const controls = [...el.querySelectorAll('select,input,button')].map(node => node.getBoundingClientRect());
+      const controls = [...el.querySelectorAll('select,input,button')]
+        .map(node => node.getBoundingClientRect()).filter(box => box.width && box.height);
       const end = controls.at(-1);
       const bounds = el.getBoundingClientRect();
       return {
@@ -181,7 +182,7 @@ test('订单统计的八个筛选项与重置按钮保持一行，窄屏可访�
         pageFits: document.documentElement.scrollWidth <= innerWidth + 1
       };
     });
-    assert.equal(layout.count, 9);
+    assert.equal(layout.count, 8);
     assert(layout.sameRow && layout.pageFits, width + 'px ' + JSON.stringify(layout));
     if (width >= 1440) assert(layout.fits, '宽屏直接显示全部筛选和重置按钮');
     await reset.scrollIntoViewIfNeeded();
@@ -400,8 +401,13 @@ test('按套餐独立汇总实收、成本、分摊及费用来源，并用原�
       await page.getByRole('tab', { name: '统计概览' }).click();
       await page.getByLabel('产品', { exact: true }).selectOption('GPT');
       await page.getByLabel('套餐', { exact: true }).selectOption('GPT:Plus');
-      await page.getByLabel('开始日期').fill('2026-11-03');
-      await page.getByLabel('结束日期').fill('2026-11-03');
+      const dateFilter = page.getByRole('combobox', { name: '时间范围', exact: true });
+      const dateDrawer = page.locator('#date-filter-drawer[open]');
+      const applyDate = dateDrawer.getByRole('button', { name: '应用日期' });
+      await dateFilter.selectOption('choose-custom');
+      await dateDrawer.getByLabel(/^开始日期/).fill('2026-11-03');
+      await dateDrawer.getByLabel(/^结束日期/).fill('2026-11-03');
+      await applyDate.click();
       await page.getByLabel('统计币种').selectOption('MYR');
       assert.match(await plus.locator('[data-column="netCost"]').textContent(), /80\.8502.*单均 80\.8502/s);
       await plus.getByRole('button', { name: '查看订单' }).click();
@@ -410,8 +416,11 @@ test('按套餐独立汇总实收、成本、分摊及费用来源，并用原�
       await drawer.getByText(/同卡已确认开通 3 单.*本单份额 0\.1667 USD/).waitFor();
       await drawer.getByText('80.8502 马币 MYR', { exact: true }).first().waitFor();
       await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
-      await page.getByLabel('结束日期').fill('2026-11-02');
-      await page.getByText('开始日期须早于或等于结束日期。', { exact: true }).waitFor();
+      await dateFilter.selectOption('choose-custom');
+      await dateDrawer.getByLabel(/^结束日期/).fill('2026-11-02');
+      await applyDate.click();
+      await dateDrawer.getByText('结束日期不能早于开始日期', { exact: true }).waitFor();
+      await page.keyboard.press('Escape');
       await page.getByRole('button', { name: '重置筛选' }).click();
       assert.equal(await page.getByLabel('统计币种').inputValue(), 'CNY');
       await settle(page);
@@ -482,13 +491,27 @@ test('实付凭据按扣款日和原币汇总，登记及作废后可逐单核�
       assert.equal(await cell('card-issue', 'converted').textContent(), '—');
       assert.equal(await cell('card-issue', 'pending').textContent(), '1');
       assert.equal(await cell('fx-fee', 'converted').textContent(), '4.15');
-      await page.getByLabel('开始日期').fill('2026-11-10');
+      const orderDates = page.getByRole('combobox', { name: '时间范围', exact: true });
+      const chargeDates = page.getByRole('combobox', { name: '扣款日期范围', exact: true });
+      const dateDrawer = page.locator('#date-filter-drawer[open]');
+      const fromDate = dateDrawer.getByLabel(/^开始日期/);
+      const toDate = dateDrawer.getByLabel(/^结束日期/);
+      const applyDate = dateDrawer.getByRole('button', { name: '应用日期' });
+      await orderDates.selectOption('choose-custom');
+      await fromDate.fill('2026-11-10');
+      await toDate.fill('');
+      await applyDate.click();
       assert.equal(await cell('card-issue', 'count').textContent(), '1');
-      await page.getByLabel('扣款起日').fill('2026-11-09');
+      await chargeDates.selectOption('choose-custom');
+      await fromDate.fill('2026-11-09');
+      await toDate.fill('');
+      await applyDate.click();
       assert.equal(await cell('card-issue', 'count').textContent(), '0');
-      await page.getByLabel('扣款止日').fill('2026-11-08');
-      await page.getByRole('alert').filter({ hasText: '扣款起日须早于或等于止日' }).waitFor();
-      await page.getByLabel('扣款止日').fill('');
+      await chargeDates.selectOption('choose-custom');
+      await toDate.fill('2026-11-08');
+      await applyDate.click();
+      await dateDrawer.getByText('结束日期不能早于开始日期', { exact: true }).waitFor();
+      await page.keyboard.press('Escape');
       const help = page.getByLabel('查看实付凭据说明');
       await help.click();
       await page.getByRole('note').filter({ hasText: '原币按币种分别加总' }).waitFor();
@@ -515,7 +538,7 @@ test('实付凭据按扣款日和原币汇总，登记及作废后可逐单核�
       await page.getByLabel('套餐', { exact: true }).selectOption('Claude Pro:Pro');
       assert.equal(await cell('kyc', 'count').textContent(), '1');
       const saved = receiptTable.locator('tr[data-row-id="new-kyc"]');
-      await page.getByLabel('开始日期').fill('');
+      await orderDates.selectOption('all');
       await page.getByRole('tab', { name: '统计概览' }).click();
       const plan = page.locator('table[data-table="commerce-plan-statistics"] tr[data-row-id="Claude Pro:Pro"]');
       assert.match(await plan.locator('[data-column="netCost"]').textContent(), /249\.375/);

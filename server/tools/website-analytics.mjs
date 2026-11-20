@@ -1,4 +1,5 @@
 import { createPrivateKey, sign } from 'node:crypto';
+import { calendarDate, calendarDates, calendarRange } from '../calendar-range.mjs';
 
 const METRICS = ['screenPageViews', 'totalUsers', 'sessions'];
 const renovationSite = 'flashcast.com.my';
@@ -18,7 +19,7 @@ function metrics(row) {
   return { pageViews: counts[0], visitors: counts[1], sessions: counts[2] };
 }
 
-export function parseWebsiteAnalyticsReport(reports, days, now) {
+export function parseWebsiteAnalyticsReport(reports, days, now, from) {
   if (!Array.isArray(reports) || reports.length !== 2) throw new Error('Missing reports');
   const [summaryReport, dailyReport] = reports;
   const timeZone = summaryReport.metadata?.timeZone;
@@ -55,9 +56,7 @@ export function parseWebsiteAnalyticsReport(reports, days, now) {
   }).formatToParts(now);
   const part = (type) => parts.find((item) => item.type === type)?.value || '';
   const today = Date.UTC(Number(part('year')), Number(part('month')) - 1, Number(part('day')));
-  const dates = Array.from({ length: days }, (_, index) =>
-    new Date(today - (days - index - 1) * dayMs).toISOString().slice(0, 10)
-  );
+  const dates = calendarDates(from || new Date(today - (days - 1) * dayMs).toISOString().slice(0, 10), days);
   const byDate = new Map();
   for (const row of dailyReport.rows ?? []) {
     const raw = row.dimensionValues?.[0]?.value;
@@ -140,14 +139,13 @@ function cloudflareMetrics(row) {
   return { pageViews, visits };
 }
 
-async function loadCloudflareReport(config, site, siteTag, days, now, fetchImpl) {
+async function loadCloudflareReport(config, site, siteTag, days, now, fetchImpl, period) {
   const fetchedAt = now.toISOString();
   const midnight = Date.parse(fetchedAt.slice(0, 10) + 'T00:00:00Z');
-  const dates = Array.from({ length: days }, (_, index) =>
-    new Date(midnight - (days - index - 1) * dayMs).toISOString().slice(0, 10)
-  );
+  const dates = calendarDates(period?.from || new Date(midnight - (days - 1) * dayMs).toISOString().slice(0, 10), days);
+  const end = period ? new Date(Math.min(period.end - 1000, now.getTime())).toISOString() : fetchedAt;
   const filter = { AND: [
-    { datetime_geq: dates[0] + 'T00:00:00Z', datetime_leq: fetchedAt.slice(0, 19) + 'Z' },
+    { datetime_geq: dates[0] + 'T00:00:00Z', datetime_leq: end.slice(0, 19) + 'Z' },
     { bot: 0 },
     { requestHost: site },
     { siteTag_in: [siteTag] }
@@ -233,7 +231,7 @@ export function createWebsiteAnalytics({ config, cloudflareConfig, publicOrigin,
     tokenRequest ??= requestToken().finally(() => { tokenRequest = undefined; });
     return tokenRequest;
   }
-  async function loadGa4(days) {
+  async function loadGa4(days, period) {
     const access = await accessToken();
     const filters = {
       andGroup: {
@@ -249,7 +247,8 @@ export function createWebsiteAnalytics({ config, cloudflareConfig, publicOrigin,
           method: 'POST',
           headers: { Authorization: 'Bearer ' + access, 'Content-Type': 'application/json' },
           body: JSON.stringify({ requests: [false, true].map((daily) => ({
-            dateRanges: [{ startDate: (days - 1) + 'daysAgo', endDate: 'today' }],
+            dateRanges: [period ? { startDate: period.from, endDate: period.to }
+              : { startDate: (days - 1) + 'daysAgo', endDate: 'today' }],
             dimensions: daily ? [{ name: 'date' }] : [],
             metrics: METRICS.map((name) => ({ name })),
             dimensionFilter: filters,
@@ -257,7 +256,7 @@ export function createWebsiteAnalytics({ config, cloudflareConfig, publicOrigin,
             limit: '31'
           })) })
         });
-      return parseWebsiteAnalyticsReport(reports, days, new Date(clock()));
+      return parseWebsiteAnalyticsReport(reports, days, new Date(clock()), period?.from);
     } catch (error) {
       if (error.status === 401) token = undefined;
       throw error;
@@ -275,28 +274,35 @@ export function createWebsiteAnalytics({ config, cloudflareConfig, publicOrigin,
         (req.headers['sec-fetch-site'] && req.headers['sec-fetch-site'] !== 'same-origin'))
       return send(403, { error: '请求来源未通过校验' });
     const params = new URL(req.url, 'http://127.0.0.1').searchParams;
-    const days = params.get('days');
-    if (!['7', '30'].includes(days)) return send(400, { error: '请选择最近 7 天或 30 天' });
+    const days = params.get('days'), explicit = params.has('from') || params.has('to');
     const site = params.get('site') ?? renovationSite;
     const isRenovation = site === renovationSite;
     if (!isRenovation && !storefronts.has(site)) return send(400, { error: '请选择支持的统计站点' });
+    const requestedAt = clock();
+    const period = explicit ? calendarRange(params.get('from'), params.get('to'), 0) : undefined;
+    const latest = calendarDate(requestedAt, isRenovation ? 'Asia/Kuala_Lumpur' : 'UTC');
+    if (explicit ? days !== null || !period || period.days > 30 || period.to > latest : !['7', '30'].includes(days))
+      return send(400, { error: '请选择有效日期，统计区间最多 30 天' });
     const siteTag = siteTags.get(site);
     const provider = isRenovation ? 'ga4' : 'cloudflare';
-    const count = Number(days);
+    const count = period?.days ?? Number(days);
     if (!(isRenovation ? configured : siteTag)) {
       if (!params.has('site')) return send(503, { error: '尚未配置独立新版的网站访问统计来源' });
       return send(200, { status: 'unconfigured', site, provider, days: count, summary: null, daily: [] });
     }
-    const cacheKey = site + ':' + days;
+    const cacheKey = site + ':' + (period ? period.from + ':' + period.to : days);
     try {
       const cached = cache.get(cacheKey);
-      if (cached?.expires > clock()) return send(200, cached.result);
+      if (cached?.expires > requestedAt) return send(200, cached.result);
       if (!pending.has(cacheKey)) {
-        const request = isRenovation ? loadGa4(count)
-          : loadCloudflareReport(cloudflareConfig, site, siteTag, count, new Date(clock()), fetchImpl);
+        const request = isRenovation ? loadGa4(count, period)
+          : loadCloudflareReport(cloudflareConfig, site, siteTag, count, new Date(requestedAt), fetchImpl, period);
         pending.set(cacheKey, request.then(report => {
           const result = { ...report, site, provider };
-          cache.set(cacheKey, { result, expires: clock() + 60_000 });
+          const now = clock();
+          for (const [key, item] of cache) if (item.expires <= now) cache.delete(key);
+          if (cache.size >= 200) cache.delete(cache.keys().next().value);
+          cache.set(cacheKey, { result, expires: now + 60_000 });
           return result;
         }).finally(() => pending.delete(cacheKey)));
       }

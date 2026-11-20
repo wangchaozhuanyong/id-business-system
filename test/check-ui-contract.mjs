@@ -16,7 +16,7 @@ const units = ['local-data-read-cache', 'change-sync-client', 'change-sync-feed'
   'renewal-account-reference',
   'account-lifecycle', 'account-lifecycle-performance', 'personal-subscriptions', 'inventory-usage', 'operation-recovery',
   'mailbox-updates', 'mailbox-query-content', 'relay-mail-updates', 'recharge-events', 'recharge-activity'];
-const browsers = ['search-input', 'ui-idle-contract', 'change-sync', 'performance-read-index', 'system-monitoring', 'site-management',
+const browsers = ['date-filter', 'search-input', 'ui-idle-contract', 'change-sync', 'performance-read-index', 'system-monitoring', 'site-management',
   'staff-workspaces', 'finance-reconciliation', 'renewal-handoff', 'login-security', 'shared-layout', 'order-statistics-cost', 'page-lifecycle', 'order-completion', 'order-submit-stay', 'contact-recovery', 'operation-recovery',
   'mobile-navigation-layout', 'tab-navigation', 'list-filter-toolbar', 'order-price-shortcuts', 'inventory-workspace', 'design-list-boundaries', 'global-pagination', 'business-lists', 'site-visual-v2-border',
   'recharge-layout-transitions', 'recharge-cell-overflow', 'recharge-server-diagnostic', 'recharge-partner',

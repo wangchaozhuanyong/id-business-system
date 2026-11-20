@@ -93,7 +93,8 @@ function runtime(localData) {
     getElementById: () => null
   };
   runInNewContext(source, {
-    window: { IDListOrder: listOrder, IDOrderOpening: orderOpening, IDRenewalReminders: renewalReminders, IDDesignAPI: api, IDDesignModules: modules, IDLocalData: localData, IDPagination: { defaultPageSize: 10, render: () => '' } },
+    window: { IDListOrder: listOrder, IDOrderOpening: orderOpening, IDRenewalReminders: renewalReminders, IDDesignAPI: api, IDDesignModules: modules, IDLocalData: localData,
+      IDPagination: { defaultPageSize: 10, render: () => '' }, IDDateFilter: { render: () => '' } },
     document,
     structuredClone: globalThis.structuredClone,
     Date,

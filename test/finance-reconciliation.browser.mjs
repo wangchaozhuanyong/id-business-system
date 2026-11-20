@@ -139,6 +139,19 @@ test('对账直接显示完整卡号和邮箱，长资料可复制，宽窄屏�
   healthy(f);
 });
 
+test('跨北京时间零点后再次查询使用新一天的预设范围', { timeout: 15_000 }, async t => {
+  const f = await prepare(t), { page } = f;
+  await page.clock.setFixedTime(new Date('2026-11-20T23:58:00+08:00'));
+  await open(page);
+  await page.getByRole('combobox', { name: '账单日期范围' }).selectOption('today');
+  await page.clock.setFixedTime(new Date('2026-11-21T00:01:00+08:00'));
+  await page.getByRole('button', { name: '查询账单' }).click();
+  await page.getByText('账单日期 2026-11-21 至 2026-11-21', { exact: true }).waitFor();
+  assert.equal(f.requests.at(-1).from, '2026-11-21');
+  assert.equal(f.requests.at(-1).to, '2026-11-21');
+  healthy(f);
+});
+
 test('对账筛选在分页前生效，失败保留结果和草稿，空记录与缺失资料明确显示', { timeout: 40_000 }, async t => {
   const f = await prepare(t), { page } = f;
   await open(page);
@@ -152,8 +165,12 @@ test('对账筛选在分页前生效，失败保留结果和草稿，空记录�
   assert.equal(await page.locator(table + ' tbody tr').count(), 5);
   assert(await page.getByRole('button', { name: '下一页', exact: true }).isDisabled());
   const beforeDraft = f.requests.length;
-  await page.getByLabel('开始日期', { exact: true }).fill('2026-11-14');
-  await page.getByLabel('结束日期', { exact: true }).fill('2026-11-14');
+  await page.getByRole('combobox', { name: '账单日期范围', exact: true }).selectOption('choose-custom');
+  const dateDrawer = page.getByRole('dialog', { name: '选择统计日期' });
+  await dateDrawer.getByLabel('开始日期', { exact: true }).fill('2026-11-14');
+  await dateDrawer.getByLabel('结束日期', { exact: true }).fill('2026-11-14');
+  await dateDrawer.getByRole('button', { name: '应用日期', exact: true }).press('Enter');
+  assert.equal(await dateDrawer.count(), 0);
   await page.getByLabel('卡号后四位', { exact: true }).fill('1357');
   await page.getByLabel('套餐', { exact: true }).selectOption('pro100');
   await page.getByLabel('扣款状态', { exact: true }).selectOption('failed');

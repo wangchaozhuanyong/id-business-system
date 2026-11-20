@@ -160,6 +160,20 @@ test('the normal preview routes isolate saved 2FA, website analytics and signed 
   assert.equal(visits.total, 1);
   assert.equal(visits.items[0].ipMasked, '203.0.*.*');
   assert.equal(visits.items[0].ip, undefined);
+  const { days, ...visitPaging } = filters;
+  const beijingDay = offset => new Date(Date.parse(event.occurredAt) + 8 * 3_600_000 + offset * 86_400_000)
+    .toISOString().slice(0, 10);
+  const exact = await call(search, { method: 'POST', cookie: admin,
+    body: { ...visitPaging, from: beijingDay(0), to: beijingDay(0) } });
+  const yesterday = await call(search, { method: 'POST', cookie: admin,
+    body: { ...visitPaging, from: beijingDay(-1), to: beijingDay(-1) } });
+  assert.equal(exact.status, 200);
+  assert.equal((await exact.json()).total, 1);
+  assert.equal(yesterday.status, 200);
+  assert.equal((await yesterday.json()).total, 0);
+  const expired = await call(search, { method: 'POST', cookie: admin,
+    body: { ...visitPaging, from: beijingDay(-30), to: beijingDay(0) } });
+  assert.equal(expired.status, 400);
   const revealed = await call('tools/website-visits/reveal', { method: 'POST', cookie: admin,
     body: { id: event.eventId } });
   assert.deepEqual(await revealed.json(), { ip: event.ip });

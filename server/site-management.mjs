@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { subscriptionTime, automaticGptOrder } from '../modules/orders/order-opening.mjs';
 import { describeWriteOperation } from './write-operation.mjs';
+import { calendarDate, calendarRange } from './calendar-range.mjs';
 import { isDiagnostic, softwareVersion } from './site-observations.mjs';
 
 export const siteManagementPath = '/api/local/site-management';
@@ -218,7 +219,7 @@ export function createSiteManagement({ store, observations, origin, release, rea
       if (request.method !== 'GET' || url.pathname !== siteManagementPath)
         return send(response, 405, { error: '此页面只供查看' });
       const params = url.searchParams, view = params.get('view') || '';
-      const allowed = { health: ['kind', 'page', 'pageSize'], performance: ['hours'], diagnostic: ['id'],
+      const allowed = { health: ['kind', 'page', 'pageSize'], performance: ['hours', 'from', 'to'], diagnostic: ['id'],
         resources: [], backups: [], information: [] };
       if (!Object.hasOwn(allowed, view) || [...params.keys()].some(key =>
         (key !== 'view' && !allowed[view].includes(key)) || params.getAll(key).length !== 1))
@@ -226,6 +227,13 @@ export function createSiteManagement({ store, observations, origin, release, rea
       const now = clock();
       switch (view) {
         case 'performance': {
+          if (params.has('from') || params.has('to')) {
+            const range = calendarRange(params.get('from'), params.get('to'));
+            const today = calendarDate(now), first = calendarDate(now - 29 * 86_400_000);
+            if (params.has('hours') || !range || range.from < first || range.to > today)
+              throw allowedError(400, '请选择最近 30 天内的查看日期');
+            return send(response, 200, observations.performanceView(range));
+          }
           const hours = params.get('hours') || '24';
           if (!['24', '168'].includes(hours)) throw allowedError(400, '请选择查看时段');
           return send(response, 200, observations.performanceView(Number(hours)));

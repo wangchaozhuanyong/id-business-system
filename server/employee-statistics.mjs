@@ -47,25 +47,30 @@ function indexCodeStatus(nativeCodes) {
 }
 
 function parseQuery(search, today) {
-  const fields = new Set(['date', 'kind', 'metric', 'employee', 'page', 'pageSize']);
+  const fields = new Set(['date', 'from', 'to', 'kind', 'metric', 'employee', 'page', 'pageSize']);
   if ([...search.keys()].some(key => !fields.has(key) || search.getAll(key).length !== 1)) return null;
+  const range = search.has('from') || search.has('to');
   const date = search.get('date') ?? today;
+  const from = range ? search.get('from') : date;
+  const to = range ? search.get('to') : date;
+  const validDate = value => datePattern.test(value) && parseV2DateTimeInput(value + 'T00:00');
   const kind = search.get('kind') ?? 'all';
   const metric = search.get('metric');
   const employee = search.get('employee');
   const page = Number(search.get('page') ?? 1);
   const pageSize = Number(search.get('pageSize') ?? 10);
-  if (!datePattern.test(date) || !parseV2DateTimeInput(date + 'T00:00') || date > today || !categories.has(kind) ||
+  if ((range && search.has('date')) || !validDate(from) || !validDate(to) || from > to || to > today || !categories.has(kind) ||
       (metric ? !Object.hasOwn(metricCategories, metric) || !id(employee) : ['metric', 'employee', 'page', 'pageSize'].some(key => search.has(key))) ||
       !Number.isSafeInteger(page) || page < 1 || ![10, 20, 50].includes(pageSize)) return null;
   const detailKind = kind === 'all' ? metricCategories[metric] || kind : kind;
-  return { date, kind: detailKind, metric, employee, page, pageSize };
+  return { date: range ? from : date, ...(range ? { from, to } : {}), kind: detailKind, metric, employee, page, pageSize };
 }
 
 export function buildEmployeeStatistics({ employees, commerce, inventory, requests, nativeCodes }, query, now) {
   const today = currentV2BusinessDate(now);
-  const start = parseV2DateTimeInput(query.date + 'T00:00').getTime();
-  const end = Math.min(start + dayMs - 1, now);
+  const start = parseV2DateTimeInput((query.from ?? query.date) + 'T00:00').getTime();
+  const lastDay = query.to ? parseV2DateTimeInput(query.to + 'T00:00').getTime() : start;
+  const end = Math.min(lastDay + dayMs - 1, now);
   const people = new Map();
   const details = [];
   const statusByCode = indexCodeStatus(nativeCodes);
@@ -222,7 +227,8 @@ export function buildEmployeeStatistics({ employees, commerce, inventory, reques
   }
 
   const meta = {
-    date: query.date, today, asOf: new Date(now).toISOString(),
+    date: query.date ?? query.from, ...(query.from ? { from: query.from, to: query.to } : {}),
+    today, asOf: new Date(now).toISOString(),
     codeSourceAvailable: nativeCodes !== null
   };
   if (query.metric) {

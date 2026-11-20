@@ -90,6 +90,7 @@ const files = new Map([
   ['data-center.css', 'text/css; charset=utf-8'],
   ['sheets-status.css', 'text/css; charset=utf-8'],
   ['finance-collection.css', 'text/css; charset=utf-8'],
+  ['date-filter.css', 'text/css; charset=utf-8'],
   ['recharge-integration.css', 'text/css; charset=utf-8'],
   ['recharge-activity.css', 'text/css; charset=utf-8'],
   ['bitbrowser-addresses.css', 'text/css; charset=utf-8'],
@@ -99,6 +100,7 @@ const files = new Map([
   ['page-modules.mjs', 'text/javascript; charset=utf-8'],
   ...[
     'prototype',
+    'date-filter',
     'pagination',
     'overview-prototype',
     'finance-collection',

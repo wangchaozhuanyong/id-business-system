@@ -36,7 +36,7 @@ async function environment(browser, role) {
     reads.push(view);
     if (view === 'performance') return breakPerformance
       ? route.fulfill({ status: 503, json: { error: '隐藏的测试错误' } })
-      : route.fulfill({ json: { at, hours: +params.get('hours'), storageAvailable: true, groups } });
+      : route.fulfill({ json: { at, hours: params.get('from') === params.get('to') ? 24 : 168, storageAvailable: true, groups } });
     if (view === 'diagnostic') return route.fulfill({ json: { item: params.get('id') === diagnostic ?
       { id: diagnostic, at, activity: 'order-save', result: 'failed', channel: 'server', version: 'f'.repeat(40) } : null } });
     if (view === 'resources') return route.fulfill({ json: { latest: { at, cpu: 5, disk: 72, memory: 32 },
@@ -63,6 +63,7 @@ async function environment(browser, role) {
   });
   const page = await context.newPage();
   page.setDefaultTimeout(6000);
+  await page.clock.setFixedTime(new Date(at));
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   return { page, context, reads, writes, errors, access, fail: () => { breakPerformance = true; },
@@ -85,12 +86,12 @@ test('admin can diagnose a report, navigate through data, and download only the 
     assert.deepEqual(findings, []);
   };
   await checkChart();
-  assert.equal(await page.getByLabel('查看时段').inputValue(), '24');
+  assert.equal(await page.getByRole('combobox', { name: '查看时段', exact: true }).inputValue(), 'today');
   await page.getByLabel('查看内容').selectOption('server');
   await page.getByRole('heading', { name: '哪些操作在服务器处理较慢' }).waitFor();
   assert.deepEqual(reads, ['performance']);
-  await page.getByLabel('查看时段').selectOption('168');
-  await page.waitForFunction(() => document.querySelector('[data-site-content]').dataset.siteKey === '{"hours":168}');
+  await page.getByRole('combobox', { name: '查看时段', exact: true }).selectOption('week');
+  await page.waitForFunction(() => document.querySelector('[data-site-content]').dataset.siteKey === '{"from":"2026-11-07","to":"2026-11-13"}');
   const field = page.getByLabel('诊断编号', { exact: true });
   await field.fill(diagnostic);
   await page.locator('#site-diagnostic-form').getByRole('button', { name: '查询' }).click();
@@ -124,8 +125,10 @@ test('admin can diagnose a report, navigate through data, and download only the 
   }
   await page.getByRole('link', { name: '导出与保留', exact: true }).click();
   await page.getByLabel('资料类型').selectOption('orders');
-  await page.getByLabel('录入日期从').fill('2026-11-12');
-  await page.getByLabel('至', { exact: true }).fill('2026-11-13');
+  await page.getByRole('combobox', { name: '录入日期', exact: true }).selectOption('choose-custom');
+  await page.locator('#site-export-dates-from').fill('2026-11-12');
+  await page.locator('#site-export-dates-to').fill('2026-11-13');
+  await page.locator('#site-export-dates-to').press('Enter');
   await page.getByLabel('产品', { exact: true }).selectOption('GPT');
   await page.getByLabel('状态', { exact: true }).selectOption('recorded');
   const [download] = await Promise.all([page.waitForEvent('download'),

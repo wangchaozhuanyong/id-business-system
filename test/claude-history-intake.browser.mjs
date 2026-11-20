@@ -458,8 +458,11 @@ test('Claude 订单补录复用原账号，保留租户并在订阅显示来源�
     assert.equal(await orderRow.locator('[data-column="profit"]').textContent(), '150.00');
     await page.goto(origin + '/#/orders/statistics');
     await page.getByLabel('统计日期', { exact: true }).selectOption('opened');
-    await page.getByLabel('开始日期', { exact: true }).fill('2026-10-31');
-    await page.getByLabel('结束日期', { exact: true }).fill('2026-10-31');
+    await page.locator('#commerce-stat-date-select').selectOption('choose-custom');
+    const dateDrawer = page.locator('#date-filter-drawer');
+    await dateDrawer.getByLabel('开始日期', { exact: true }).fill('2026-10-31');
+    await dateDrawer.getByLabel('结束日期', { exact: true }).fill('2026-10-31');
+    await dateDrawer.getByRole('button', { name: '应用日期', exact: true }).click();
     const total = page.locator('#main [data-stat-metric="profit"] .summary-number');
     assert.match(await total.textContent(), /^150\.00/);
     await page.getByLabel('统计币种', { exact: true }).selectOption('MYR');

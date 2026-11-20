@@ -761,7 +761,9 @@
     savedTotpSecret: (id, version) => request('saved-totp/secret', { id, version }, 'POST'),
     websiteVisits: (filters) => readQuery('tools/website-visits/search', filters),
     websiteVisitIp: (id) => request('tools/website-visits/reveal', { id }, 'POST'),
-    websiteAnalytics: (days, site) => request('tools/website-analytics?' + new URLSearchParams(site ? { days, site } : { days })),
+    websiteAnalytics: (period, site) => request('tools/website-analytics?' + new URLSearchParams({
+      ...(typeof period === 'number' || typeof period === 'string' ? { days: period } : period), ...(site && { site })
+    })),
     sheetsStatus: () => request('tools/sheets-status'),
     websiteMonitor: (url) => request('tools/website-monitor', { url }, 'POST'),
     resolveMedia: (url) => request('tools/media/resolve', { url }, 'POST'),
