@@ -92,7 +92,7 @@ async function prepare(browser, width, role = 'super', phase = 'native', changeE
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
   page.setDefaultTimeout(7000);
-  return { page, context, offline, errors, writes, reads, setChecks(value) { readings = value; }, setLegacyStatus(value) { phase = value; },
+  return { page, context, offline, errors, writes, reads, records, setChecks(value) { readings = value; }, setLegacyStatus(value) { phase = value; },
     setFailSave(value) { failSave = value; }, setFailRead(value) { failRead = value; } };
 }
 
@@ -303,6 +303,59 @@ test('监控概览显示完整状态、检查依据和通知缺口，筛选及�
   assert.deepEqual(f.writes, []);
   assert.deepEqual(f.offline.external, []);
   assert.deepEqual(f.errors, []);
+});
+
+test('已恢复的代充告警保留触发探测，旧告警仍能查看', { timeout: 20_000 }, async t => {
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const f = await prepare(browser, 1440);
+  t.after(() => f.context.close());
+  const { page } = f;
+  const previous = { id: 'runtime-legacy', label: '代充执行器不可用', category: '代充', priority: 'P1',
+    kind: 'incident', at, resolvedAt: at + 120_000 };
+  f.records.splice(0, f.records.length, {
+    ...previous, id: 'runtime-evidence',
+    runtimeProbes: [
+      { at: at - 120_000, detail: '接入层鉴权拒绝。', durationMs: 86 },
+      { at: at - 60_000, detail: '连接失败或超时。', durationMs: null },
+      { at, detail: '就绪接口返回异常。', durationMs: 121 }
+    ]
+  }, previous);
+
+  await page.goto(origin + '/#/monitor');
+  await page.getByRole('tab', { name: '告警记录', exact: true }).click();
+  const drawer = page.locator('#drawer[open]');
+  const open = async id => {
+    const row = page.locator(`[data-monitor-card="${id}"]:visible, [data-row-id="${id}"]:visible`);
+    await row.getByText('已恢复', { exact: true }).waitFor();
+    await row.getByRole('button', { name: '查看详情', exact: true }).click();
+  };
+  const close = () => drawer.getByRole('button', { name: '关闭', exact: true }).click();
+
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await open('runtime-evidence');
+    await drawer.getByText('首次失败', { exact: true }).waitFor();
+    const evidence = await drawer.locator('.property-row').evaluateAll(rows => rows
+      .map(row => [row.querySelector('span').textContent, row.querySelector('strong').textContent])
+      .filter(([label]) => ['首次失败', '第 2 次失败', '触发告警'].includes(label)));
+    assert.deepEqual(evidence, [
+      ['首次失败', '2026/11/10 09:58:00 · 接入层鉴权拒绝。 · 86 毫秒'],
+      ['第 2 次失败', '2026/11/10 09:59:00 · 连接失败或超时。'],
+      ['触发告警', '2026/11/10 10:00:00 · 就绪接口返回异常。 · 121 毫秒']
+    ]);
+    await drawer.getByText('2026/11/10 10:02:00', { exact: true }).waitFor();
+    assert.equal(await drawer.evaluate(node => node.scrollWidth > node.clientWidth + 1), false);
+    await close();
+  }
+
+  await open('runtime-legacy');
+  await drawer.getByText('2026/11/10 10:02:00', { exact: true }).waitFor();
+  assert.equal(await drawer.getByText('首次失败', { exact: true }).count(), 0);
+  assert.equal(await drawer.getByText('触发告警', { exact: true }).count(), 0);
+  assert.deepEqual(f.writes, []);
+  assert.deepEqual(f.errors, []);
+  assert.deepEqual(f.offline.external, []);
 });
 
 test('缺少监控资料时显示读取失败，不渲染虚构的零值概览', { timeout: 20_000 }, async t => {

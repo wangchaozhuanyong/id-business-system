@@ -81,7 +81,25 @@ export const monitorCheckInfo = {
   sheets: ['Google 表格同步', '表格同步核对及只读采集回执', '完整性失败、连续 3 次失败，或 15 分钟以上没有有效回执或成功校验时告警。', '请运维检查表格同步回执，并核对同步目标及写入结果。']
 };
 
+export const rechargeRuntimeProbeReasons = Object.freeze({
+  bridge_rejected: '接入层拒绝探测鉴权。',
+  runtime_not_ready: '就绪接口返回非成功状态。',
+  invalid_runtime_response: '就绪接口响应格式异常。',
+  unreachable: '探测连接失败或超时。',
+  recharge_probe_failed: '未取得具体的探测失败原因。'
+});
+
+export function normalizeRechargeRuntimeProbe(input, observedAt) {
+  const { at, reason, durationMs } = input || {};
+  return {
+    at: Number.isSafeInteger(at) && at > 0 && at <= observedAt ? at : observedAt,
+    reason: typeof reason === 'string' && Object.hasOwn(rechargeRuntimeProbeReasons, reason) ? reason : 'recharge_probe_failed',
+    durationMs: Number.isSafeInteger(durationMs) && durationMs >= 0 && durationMs <= 60_000 ? durationMs : null
+  };
+}
+
 export const monitorReasons = {
+  ...rechargeRuntimeProbeReasons,
   insufficient_requests: '近 10 分钟请求样本不足 50 个，暂不能判断错误率。',
   mailbox_samples: '近 10 分钟尚未满足正常或异常的判定条件。',
   receipt_disabled: '尚未接入专用工作进程回执，无法判断任务运行结果。',

@@ -118,6 +118,11 @@
       if (row.backup.detail) fields.push(['触发原因', row.backup.detail]);
       fields.push(['最近完整恢复点', row.backup.completeAt ? time(row.backup.completeAt) : '未取得']);
     } else fields.push(['任务尾号', row.taskTail || '—']);
+    if (Array.isArray(row.runtimeProbes)) row.runtimeProbes.forEach(({ at, detail, durationMs }, index, probes) => {
+      const label = index === 0 ? '首次失败' : index === probes.length - 1 ? '触发告警' : `第 ${index + 1} 次失败`;
+      const duration = Number.isSafeInteger(durationMs) && durationMs >= 0 ? ` · ${durationMs} 毫秒` : '';
+      fields.push([label, `${time(at)} · ${detail}${duration}`]);
+    });
     fields.push(
       ['投递', receiptLabel(row)],
       ['人工确认', row.ackAt ? time(row.ackAt) + ' · ' + row.ackBy : '待确认'],
