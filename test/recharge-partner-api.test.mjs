@@ -11,7 +11,7 @@ import { rechargePartnerGateway } from '../server/recharge-partner-gateway.mjs';
 import { readProgressStream } from '../modules/recharge/vendure/progress-stream.mjs';
 import {
   commitPartnerIssue, createStorefrontAdmissionClient, listenPrivateRechargeSocket, listenStorefrontAdmission,
-  moyaoRechargeChannel, partnerTaskDirectoryName, partnerTaskSocketName, storefrontAdmissionSocketName
+  moyaoRechargeChannel, partnerTaskDirectoryName, partnerTaskSocketName, storefrontAdmissionSocketName, storefrontRechargePlan
 } from '../modules/recharge/vendure/admission.mjs';
 import {
   createLoopbackVendureRechargeBridge, rechargeWorkerPrefix, signRechargeWorkerRequest, vendureRechargePrefix
@@ -27,7 +27,7 @@ const vendureKey = 'only-synthetic-legacy-gateway-credential';
 const workerSecret = 'only-synthetic-worker-signing-credential';
 const copies = value => structuredClone(value);
 
-async function fixture(t) {
+async function fixture(t, stock = nativeCodes.map(code => ({ code, plan: 'plus' }))) {
   const documents = new Map();
   const keyDigests = new Map();
   const read = name => copies(documents.get(name) ?? { version: 0, data: null });
@@ -57,7 +57,6 @@ async function fixture(t) {
     }
   };
   let now = Date.now();
-  const stock = nativeCodes.map(code => ({ code, plan: 'plus' }));
   const originalTasks = new Map();
   const nativeHolds = new Set();
   let beforeNativeLookup;
@@ -66,7 +65,8 @@ async function fixture(t) {
     get: async path => ({ task: originalTasks.get(path.split('/').at(-1)) }),
     async verifyStorefrontCode(code) {
       await beforeNativeLookup?.(code);
-      return stock.some(row => row.code === code) ? { plan: 'plus',
+      const item = stock.find(row => row.code === code);
+      return item ? { plan: storefrontRechargePlan(item.plan),
         ...(nativeHolds.has(code)
           ? { status: 'reserved', reason: 'manual_review_required' }
           : { status: 'available' })
@@ -99,11 +99,12 @@ async function fixture(t) {
     bridge.close();
     await Promise.all([server, partnerServer].map(listener => new Promise(resolve => listener.close(resolve))));
   });
-  let loseResponse = false, maintenance = false, rejectSubmit = false;
+  let loseResponse = false, maintenance = false, rejectSubmit = false, beforePartnerSubmit;
   const address = listener => 'http://127.0.0.1:' + listener.address().port;
   const gateway = async (action, data) => {
     if (action === 'config' && maintenance) return { maintenance: true };
     if (action === 'submit' && rejectSubmit) return { rejected: true };
+    if (action === 'submit') await beforePartnerSubmit?.();
     const res = await fetch(address(partnerServer) + '/' + action, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data)
     });
@@ -145,6 +146,7 @@ async function fixture(t) {
     }),
     rejectSubmit: flag => { rejectSubmit = flag; },
     onNativeLookup: fn => { beforeNativeLookup = fn; },
+    onPartnerSubmit: fn => { beforePartnerSubmit = fn; },
     loseResponse: flag => { loseResponse = flag; },
     admin: (body, headers) => call('/admin', body, { origin: publicOrigin, ...headers }),
     api: (key, path, body, operation) => call(partnerApiPrefix + path, body, {
@@ -222,11 +224,11 @@ test('an already unlocked original failure can be reviewed in ID and retried onc
   assert.equal((await f.storefrontReview({ ...lookup, code: uncertainCode })).body.receipt.canRelease, false);
 });
 
-async function enrollment(f, name, count = 1) {
+async function enrollment(f, name, count = 1, plan = 'plus') {
   const result = await f.admin({ action: 'create', name, operationId: 'create-' + name });
   assert.equal(result.status, 201);
   const { partner, apiKey } = result.body;
-  const issue = { action: 'issue', partnerId: partner.id, plan: 'plus', count, operationId: 'issue-' + name };
+  const issue = { action: 'issue', partnerId: partner.id, plan, count, operationId: 'issue-' + name };
   const allocated = await f.admin(issue);
   assert.equal(allocated.status, 201, JSON.stringify(allocated.body));
   assert.deepEqual((await f.admin(issue)).body, allocated.body);
@@ -237,6 +239,124 @@ const authorizationInput = request => {
   const [id, ticket] = new URL(request.authorizationUrl).hash.slice(1).split('.');
   return { id, ticket };
 };
+
+test('partner Pro500 issuance reserves only matching stock and carries the code-bound plan through authorization', async t => {
+  const [plus, pro200, pro500] = nativeCodes;
+  const f = await fixture(t, [{ code: plus, plan: 'plus' }, { code: pro200, plan: 'pro200' },
+    { code: pro500, plan: 'pro500' }]);
+  const partner = await enrollment(f, 'pro500-partner', 1, 'pro500');
+  const [code] = partner.codes;
+  assert.deepEqual(f.documents.get('recharge-codes').data.partnerReservedCodes, [pro500]);
+  assert.equal((await f.admin({ action: 'issue', partnerId: partner.id, plan: 'pro500', count: 1,
+    operationId: 'pro500-exhausted' })).status, 409);
+  assert.equal((await f.legacy('verify', { code: pro500 })).status, 400);
+  assert.deepEqual((await f.api(partner.apiKey, '/codes/verify', { code })).body,
+    { plan: 'pro500', status: 'available' });
+  const created = await f.api(partner.apiKey, '/redemptions', { code }, 'pro500-order');
+  assert.equal(created.status, 201);
+  const ticket = authorizationInput(created.body);
+  assert.equal((await f.authorize(ticket)).body.plan, 'pro500');
+  assert.equal((await f.worker('claim')).body.task, null);
+  assert.equal((await f.authorize({ ...ticket, session })).body.status, 'queued');
+  const task = (await f.worker('claim')).body.task;
+  assert.equal(task.executionCode, pro500);
+  assert.equal(task.plan, 'pro500');
+  assert.equal((await f.api(partner.apiKey, '/codes/query', { code })).body.task.plan, 'pro500');
+});
+
+test('a confirmed unadmitted authorization stays fenced even when the old submit reaches the queue late', async t => {
+  const f = await fixture(t);
+  const { apiKey, codes: [code] } = await enrollment(f, 'protected-recovery');
+  const initial = (await f.api(apiKey, '/redemptions', { code }, 'initial')).body;
+  const ticket = authorizationInput(initial);
+  const arrived = Promise.withResolvers();
+  const gate = Promise.withResolvers();
+  f.onPartnerSubmit(() => { arrived.resolve(); return gate.promise; });
+  const originalSubmit = f.authorize({ ...ticket, session });
+  await arrived.promise;
+  f.advance(24 * 60 * 60_000);
+  try {
+    const route = { action: 'lookup', code };
+    const { receipt } = (await f.storefrontReview(route)).body;
+    assert.equal(receipt.id, initial.id);
+    assert.equal(receipt.awaitingAdmission, true);
+    assert.equal(receipt.canRelease, true);
+    const confirm = { action: 'release', code, id: receipt.id, updatedAt: receipt.updatedAt,
+      verifiedNoChargeOrActivation: true };
+    assert.equal((await f.storefrontReview(confirm, { 'x-test-role': 'admin' })).status, 403);
+    const recovered = await f.storefrontReview(confirm);
+    assert.equal(recovered.body.receipt.released, true);
+    assert.deepEqual(await f.storefrontReview(confirm), recovered);
+  } finally {
+    f.onPartnerSubmit(undefined);
+    gate.resolve();
+  }
+  assert.equal((await originalSubmit).status, 410);
+  assert.equal((await f.worker('claim')).body.task, null);
+  assert.equal((await f.authorize(ticket)).status, 410);
+  assert.equal((await f.api(apiKey, '/codes/query', { code })).body.task.status, 'expired');
+
+  const retry = (await f.api(apiKey, '/redemptions', { code }, 'retry')).body;
+  assert.notEqual(retry.id, initial.id);
+  assert.equal((await f.authorize({ ...authorizationInput(retry), session })).body.status, 'queued');
+  assert.equal((await f.api(apiKey, '/redemptions/' + initial.id)).body.status, 'expired');
+});
+
+test('recovery cannot withdraw a queued request and the administrator can review its confirmed failure', async t => {
+  const f = await fixture(t);
+  const { apiKey, codes: [code] } = await enrollment(f, 'confirmed-failure');
+  const request = (await f.api(apiKey, '/redemptions', { code }, 'initial')).body;
+  const ticket = authorizationInput(request);
+  // Lose the response after the queue has committed. The review must use the real receipt.
+  f.loseResponse(true);
+  assert.equal((await f.authorize({ ...ticket, session })).body.status, 'awaiting_review');
+  const lookup = { action: 'lookup', code };
+  let { receipt } = (await f.storefrontReview(lookup)).body;
+  assert.equal(receipt.status, 'queued');
+  assert.equal(receipt.canRelease, false);
+  assert.equal((await f.storefrontReview({ action: 'release', code, id: request.id,
+    updatedAt: request.updatedAt, verifiedNoChargeOrActivation: true })).status, 409);
+
+  const { task } = (await f.worker('claim')).body;
+  const lease = { id: task.id, leaseToken: task.leaseToken };
+  const upstreamJobId = 'confirmed-partner-failure';
+  await f.worker('progress', { ...lease, stage: 'started', upstreamJobId });
+  await f.worker('result', { ...lease, upstreamJobId, outcome: 'unknown' });
+  f.originalTasks.set(upstreamJobId, { jobKey: upstreamJobId, cdk: nativeCodes[0], status: 'failed' });
+  ({ receipt } = (await f.storefrontReview(lookup)).body);
+  assert.equal(receipt.canRelease, true);
+  assert.equal(receipt.originalTaskId, upstreamJobId);
+  assert.equal((await f.storefrontReview({ action: 'release', code, id: receipt.id,
+    updatedAt: receipt.updatedAt, verifiedNoChargeOrActivation: true })).body.receipt.released, true);
+  assert.equal((await f.api(apiKey, '/codes/query', { code })).body.reason, 'verified_retry_available');
+  assert.equal((await f.worker('claim')).body.task, null);
+  const retry = (await f.api(apiKey, '/redemptions', { code }, 'new-authorization')).body;
+  assert.notEqual(retry.id, request.id);
+  f.loseResponse(false);
+  assert.equal((await f.authorize({ ...authorizationInput(retry), session })).body.status, 'queued');
+});
+
+test('rotating an existing partner key preserves code ownership and does not replay old rotations', async t => {
+  const f = await fixture(t);
+  const partner = await enrollment(f, 'same-identity');
+  const { apiKey, codes: [code] } = partner;
+  const request = (await f.api(apiKey, '/redemptions', { code }, 'initial')).body;
+  await f.admin({ action: 'disable', partnerId: partner.id, operationId: 'disable' });
+  assert.equal((await f.api(apiKey, '/redemptions/' + request.id)).status, 401);
+  const input = { action: 'rotate', partnerId: partner.id, operationId: 'rotation-a' };
+  assert.equal((await f.admin(input, { 'x-test-unverified': '1' })).status, 403);
+  assert.equal((await f.admin(input, { 'x-test-role': 'admin' })).status, 403);
+  const rotated = (await f.admin(input)).body;
+  assert.equal(rotated.partner.id, partner.id);
+  assert.notEqual(rotated.apiKey, apiKey);
+  assert.equal((await f.api(apiKey, '/redemptions/' + request.id)).status, 401);
+  assert.equal((await f.api(rotated.apiKey, '/redemptions/' + request.id)).body.id, request.id);
+  const latest = (await f.admin({ ...input, operationId: 'rotation-b' })).body;
+  const duplicate = (await f.admin(input)).body;
+  assert.equal(duplicate.apiKey, undefined);
+  assert.equal((await f.api(latest.apiKey, '/redemptions/' + request.id)).body.id, request.id);
+  assert(!JSON.stringify([...f.documents]).includes(latest.apiKey));
+});
 
 test('partner progress stream binds the public request, rejects another owner and closes at completion', async t => {
   const f = await fixture(t);

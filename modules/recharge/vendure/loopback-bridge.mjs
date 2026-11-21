@@ -15,7 +15,8 @@ const vendureFields = new Map([
   ['config', []],
   ['verify', ['code']],
   ['query', ['code']],
-  ['submit', ['code', 'session', 'afterFailedTask']],
+  ['submit', ['code', 'session', 'afterFailedTask', 'submissionId']],
+  ['reconcile', ['action', 'code', 'submissionId', 'afterFailedTask']],
   ['task', ['id', 'taskToken']]
 ]);
 const progressLabels = new Map([
@@ -182,6 +183,7 @@ export function createLoopbackVendureRechargeBridge({
   let revision = loaded?.revision;
   let tasks = new Map((loaded?.state.tasks ?? []).map((task) => [task.id, task]));
   let nonces = new Map(loaded?.state.nonces ?? []);
+  let blockedSubmissions = new Set(loaded?.state.blockedSubmissions ?? []);
   const legacy = indexLegacyReceipts(legacyReceipts, tasks, registry);
   // The authorization never enters the durable snapshot, even during a failed commit.
   const sessions = new Map();
@@ -249,6 +251,19 @@ export function createLoopbackVendureRechargeBridge({
       ));
   }
 
+  function approvedFailure(task) {
+    return (task?.status === 'failed' && Boolean(task.retryReview)) ||
+      (isReviewed(task?.id) && rejectedBeforeExecution(task));
+  }
+
+  function blockSubmission(ref) {
+    if (!blockedSubmissions.has(ref)) commit(tasks, nonces, new Set(blockedSubmissions).add(ref));
+  }
+
+  function submissionRef(codeRef, partition, id) {
+    return fingerprint('submission', JSON.stringify([codeRef, partition, id ?? null]));
+  }
+
   function reviewableFailure(task) {
     return rejectedBeforeExecution(task) || Boolean(
       ['failed', 'awaiting_review'].includes(task.status) && upstreamJobPattern.test(task.upstreamJobId ?? '')
@@ -257,11 +272,26 @@ export function createLoopbackVendureRechargeBridge({
 
   async function handleStorefrontReview(action, body, res) {
     const code = storefrontRechargeCode(body.code);
-    if (!code) return send(res, 400, {});
+    const { partnerId, requestId } = body;
+    if (!code || ((partnerId !== undefined || requestId !== undefined) &&
+        (!rechargePartnerIdPattern.test(partnerId ?? '') || !rechargeRequestIdPattern.test(requestId ?? ''))))
+      return send(res, 400, {});
     const codeRef = fingerprint('code', code);
     const latest = () => [...tasks.values()].findLast(task => task.codeRef === codeRef);
     const task = latest();
-    if (!task || task.partnerId || legacy.byCode.has(codeRef)) return send(res, 404, {});
+    const sameRequest = task?.partnerId === partnerId && (!partnerId || task?.partnerRequestId === requestId);
+    if (action === 'review-fence') {
+      if (!partnerId || typeof body.actorId !== 'string' || !body.actorId || body.actorId.length > 128)
+        return send(res, 400, {});
+      if (legacy.byCode.has(codeRef) ||
+          [...tasks.values()].some(task => task.partnerId === partnerId && task.partnerRequestId === requestId))
+        return send(res, 200, { fenced: false });
+      // This write competes with submit's final synchronous queue commit. The other process may
+      // update its authorization record only after this acknowledgement has been persisted.
+      blockSubmission(submissionRef(codeRef, partnerId, requestId));
+      return send(res, 200, { fenced: true });
+    }
+    if (!task || !sameRequest || legacy.byCode.has(codeRef)) return send(res, 404, {});
     const view = row => ({
       ...taskView(row),
       upstreamJobId: row.upstreamJobId,
@@ -276,7 +306,7 @@ export function createLoopbackVendureRechargeBridge({
     if (task.retryReview?.previousVersion === body.updatedAt) return send(res, 200, view(task));
     if (task.retryReview || taskView(task).updatedAt !== body.updatedAt) return send(res, 409, {});
 
-    const admitted = await lookupAdmission(code, body.clientIp);
+    const admitted = await lookupAdmission(code, body.clientIp, partnerId);
     if (closed || needsRecovery) return send(res, 503, {});
     if (latest() !== task || issuing.has(codeRef) ||
         admitted?.status !== 'available' || admitted.plan !== task.plan) return send(res, 409, {});
@@ -290,12 +320,13 @@ export function createLoopbackVendureRechargeBridge({
     return send(res, 200, view(reviewed));
   }
 
-  function commit(nextTasks, nextNonces = nonces) {
+  function commit(nextTasks, nextNonces = nonces, nextBlockedSubmissions = blockedSubmissions) {
     if (store) {
       try {
         revision = store.commit(revision, {
           tasks: [...nextTasks.values()],
-          nonces: [...nextNonces]
+          nonces: [...nextNonces],
+          blockedSubmissions: [...nextBlockedSubmissions]
         });
       } catch (error) {
         try {
@@ -313,6 +344,7 @@ export function createLoopbackVendureRechargeBridge({
     const previous = tasks;
     tasks = nextTasks;
     nonces = nextNonces;
+    blockedSubmissions = nextBlockedSubmissions;
     for (const [id, listeners] of progressListeners) {
       const task = tasks.get(id);
       if (task && (task.progress?.version !== previous.get(id)?.progress?.version || task.status !== previous.get(id)?.status))
@@ -355,7 +387,8 @@ export function createLoopbackVendureRechargeBridge({
       if (action === 'submit') return send(res, 200, { rejected: true });
       return send(res, 400, { reason: 'storefront_code_not_admitted' });
     }
-    if (action === 'config') return send(res, 200, { maintenance: !accepting() });
+    if (action === 'config')
+      return send(res, 200, { maintenance: !accepting(), ...(!partnerId && useAdmission && { reconciliationVersion: 1 }) });
     if (action === 'task') {
       const task = tasks.get(body.id) ?? legacy.byId.get(body.id);
       const supplied = body.taskToken;
@@ -376,22 +409,41 @@ export function createLoopbackVendureRechargeBridge({
     const sameOwner = task => !task || task.partnerId === partnerId;
     const differentOwner = () => send(res, 400, { reason: 'storefront_code_not_admitted' });
     const recover = task => task && (useAdmission || task.status !== 'failed' || legacy.byCode.has(codeRef));
-    // A reviewed failure is tied to this exact receipt, not every failure of the code.
-    const approvedFailure = task => useAdmission && (
-      (task?.status === 'failed' && Boolean(task.retryReview)) ||
-      (isReviewed(task?.id) && rejectedBeforeExecution(task))
-    );
+    const submissionId = partnerId ? body.requestId : body.submissionId;
+    const ref = submissionRef(codeRef, partnerId || storefrontChannel || '', submissionId);
+    const isBlocked = () => blockedSubmissions.has(ref);
+    const rejected = () => send(res, 200, { rejected: true, ...(partnerId && { fenced: true }) });
     let prior = lastTask();
     if (!sameOwner(prior)) return differentOwner();
     const checkedTaskId = prior?.id;
     const explicitRetry = body.afterFailedTask !== undefined;
-    const canCheckRetry = () => approvedFailure(prior) && (action !== 'submit' || body.afterFailedTask === prior.id);
+    // Reconciliation and the final submit check have no await between their decision and commit.
+    // Old storefront deliveries without an ID share a separate fence from new identified attempts.
+    if (action === 'reconcile') {
+      if (!useAdmission || !nativeCode ||
+          (submissionId !== undefined && (typeof submissionId !== 'string' || !taskIdPattern.test(submissionId))) ||
+          (explicitRetry && (typeof body.afterFailedTask !== 'string' || !taskIdPattern.test(body.afterFailedTask))))
+        return send(res, 400, {});
+      if (isBlocked()) return send(res, 200, { fenced: true });
+      if (submissionId && [...tasks.values()].some(task => task.submissionRef === ref))
+        return send(res, 200, { fenced: false });
+      if (prior && (!explicitRetry || prior.id !== body.afterFailedTask || !approvedFailure(prior)))
+        return send(res, 200, { fenced: false });
+      if (explicitRetry && !prior) return send(res, 200, { fenced: false });
+      blockSubmission(ref);
+      return send(res, 200, { fenced: true });
+    }
+    const canCheckRetry = () => useAdmission && approvedFailure(prior) &&
+      (action !== 'submit' || body.afterFailedTask === prior.id);
     if (action === 'submit') {
+      if (body.submissionId !== undefined && (typeof submissionId !== 'string' || !taskIdPattern.test(submissionId)))
+        return send(res, 400, {});
+      if (isBlocked()) return rejected();
       if (explicitRetry && (!useAdmission || typeof body.afterFailedTask !== 'string' ||
           !taskIdPattern.test(body.afterFailedTask))) return send(res, 400, { error: '重试回执编号无效' });
       if (explicitRetry) {
         const previous = tasks.get(body.afterFailedTask);
-        if (!approvedFailure(previous) || previous.codeRef !== codeRef)
+        if (!approvedFailure(previous) || previous.codeRef !== codeRef || previous.partnerId !== partnerId)
           return send(res, 200, { rejected: true });
       }
       if (recover(prior) && !canCheckRetry())
@@ -416,6 +468,7 @@ export function createLoopbackVendureRechargeBridge({
         admitted = await lookupAdmission(nativeCode, clientIp, partnerId);
       } catch (error) {
         if (action === 'submit') {
+          if (isBlocked()) return rejected();
           const current = lastTask();
           return send(res, 200, sameOwner(current) && recover(current) && current.id !== body.afterFailedTask &&
             (!partnerId || current.partnerRequestId === body.requestId)
@@ -436,6 +489,7 @@ export function createLoopbackVendureRechargeBridge({
         record = { ...admitted, upstreamCode: nativeCode };
     }
     if (action === 'submit') {
+      if (isBlocked()) return rejected();
       // Lookup yields to concurrent requests. Reuse their task before claiming this code.
       if (recover(prior) && (!canCheckRetry() || prior.id !== checkedTaskId))
         return send(res, 200, partnerId && prior.partnerRequestId !== body.requestId
@@ -445,7 +499,7 @@ export function createLoopbackVendureRechargeBridge({
       const task = projectCustomerProgress({
         id: randomUUID(),
         codeRef,
-        ...(partnerId && { partnerId, partnerRequestId: body.requestId }),
+        ...(partnerId ? { partnerId, partnerRequestId: body.requestId } : submissionId && { submissionRef: ref }),
         plan: record.plan,
         clientIp,
         queuedUntil: at + queuedLifetimeMs,
@@ -461,7 +515,7 @@ export function createLoopbackVendureRechargeBridge({
 
     if (!record && !prior)
       return send(res, 400, useAdmission ? { reason: 'storefront_code_not_admitted' } : { error: '兑换码不可用' });
-    const reviewed = approvedFailure(prior) && prior.id === checkedTaskId;
+    const reviewed = useAdmission && approvedFailure(prior) && prior.id === checkedTaskId;
     const status = reviewed && record ? record.status : prior?.codeStatus ?? (prior
       ? prior.status === 'succeeded'
         ? 'used'
@@ -614,14 +668,15 @@ export function createLoopbackVendureRechargeBridge({
     } catch {
       return send(res, 400, { error: 'JSON 格式无效' });
     }
-    if (vendure && Object.keys(body).some((field) => !vendureFields.get(vendure[1]).includes(field)))
+    const vendureAction = vendure?.[1] === 'task' && body.action === 'reconcile' ? 'reconcile' : vendure?.[1];
+    if (vendureAction && Object.keys(body).some((field) => !vendureFields.get(vendureAction).includes(field)))
       return send(res, 400, { error: '不支持的请求字段' });
     if (worker && Object.keys(body).some((field) => !workerFields.get(worker[1]).includes(field)))
       return send(res, 400, { error: '不支持的执行字段' });
     expire(at);
     if (worker && nonces.has(nonceRef)) return send(res, 409, { error: '执行请求已接收' });
     return vendure
-      ? handleVendure(vendure[1], body, res, at, headers['x-vendure-client-ip'], headers['x-vendure-recharge-channel'], undefined, headers.accept === 'text/event-stream')
+      ? handleVendure(vendureAction, body, res, at, headers['x-vendure-client-ip'], headers['x-vendure-recharge-channel'], undefined, headers.accept === 'text/event-stream')
       : handleWorker(worker[1], body, res, at, nonceRef, nonceUntil);
   }
 
@@ -632,7 +687,7 @@ export function createLoopbackVendureRechargeBridge({
       });
     },
     async handlePartner(req, res) {
-      const action = /^\/(config|query|submit|task|issue|review-lookup|review-release)$/.exec(req.url)?.[1];
+      const action = /^\/(config|query|submit|task|issue|review-lookup|review-release|review-fence)$/.exec(req.url)?.[1];
       if (!lookupAdmission || !action || req.method !== 'POST' || req.headers.origin || req.headers.cookie)
         return send(res, 404, {});
       if (closed || needsRecovery) return send(res, 503, {});
@@ -640,7 +695,7 @@ export function createLoopbackVendureRechargeBridge({
         const raw = await readBody(req, action === 'submit' ? 1_600_000 : action === 'issue' ? 131_072 : 1024);
         if (!raw) return send(res, 413, {});
         const body = JSON.parse(raw);
-        if (action === 'review-lookup' || action === 'review-release')
+        if (action === 'review-lookup' || action === 'review-release' || action === 'review-fence')
           return await handleStorefrontReview(action, body, res);
         const { partnerId, clientIp, requestId, code, session } = body;
         if (typeof partnerId !== 'string' || !rechargePartnerIdPattern.test(partnerId) || !isIP(clientIp ?? '') ||
@@ -697,6 +752,7 @@ export function createLoopbackVendureRechargeBridge({
       tasks.clear();
       registry.clear();
       nonces.clear();
+      blockedSubmissions.clear();
       sessions.clear();
       issuing.clear();
       admissionReads.clear();

@@ -7,7 +7,6 @@
   const session = $('session');
   const agreement = $('confirm');
   const account = $('account');
-  const help = document.querySelector('.partner-authorization-heading details');
   const match = /^#([a-f0-9-]{36})\.([A-Za-z0-9_-]{43})$/.exec(location.hash);
   const labels = {
     awaiting_authorization: '请核对合作方和套餐，填写目标账号的授权资料。',
@@ -18,7 +17,7 @@
     awaiting_review: '结果待核对，请查询原请求，避免重复提交。',
     expired: '授权已过期，请回原网站重新发起。'
   };
-  const plans = { plus: 'Plus', pro_5x: 'Pro 100', pro_20x: 'Pro 200' };
+  const plans = { plus: 'Plus', pro_5x: 'Pro 100', pro_20x: 'Pro 200', pro500: 'Pro 500' };
   let submitting = false;
   let busy = false;
   let uncertain = false;
@@ -92,15 +91,6 @@
     if (!uncertain && agreement.checked && form.reportValidity()) void read(true);
   });
   session.addEventListener('input', showAccount);
-  document.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && help.open) {
-      help.open = false;
-      help.querySelector('summary').focus();
-    }
-  });
-  document.addEventListener('click', event => {
-    if (help.open && !help.contains(event.target)) help.open = false;
-  });
   refresh.addEventListener('click', () => void read());
   window.addEventListener('pagehide', () => {
     session.value = '';

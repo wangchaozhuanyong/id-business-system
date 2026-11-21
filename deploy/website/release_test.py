@@ -1385,13 +1385,19 @@ class WebsiteReleaseTests(unittest.TestCase):
         receipt = hashlib.sha256(task_id.encode()).hexdigest()
         db = Mock()
 
-        def set_snapshot(tasks, valid=True):
-            payload = json.dumps({"tasks": tasks}, separators=(",", ":"))
-            signature = fingerprint("snapshot", json.dumps([3, payload], separators=(",", ":")))
+        def set_snapshot(tasks, valid=True, blocked_submissions=None):
+            state = {"tasks": tasks}
+            if blocked_submissions is not None:
+                state["blockedSubmissions"] = blocked_submissions
+            payload = json.dumps(state, separators=(",", ":"))
+            purpose = "snapshot-with-blocked-submissions" if blocked_submissions else "snapshot"
+            signature = fingerprint(purpose, json.dumps([3, payload], separators=(",", ":")))
             db.execute.return_value.fetchone.return_value = (3, payload, signature if valid else "e" * 64)
 
         with patch.object(vendure_admission, "run", return_value=key.hex().encode()):
             set_snapshot([task])
+            vendure_admission.require_reviewed_receipt(db, receipt)
+            set_snapshot([task], blocked_submissions=["a" * 64])
             vendure_admission.require_reviewed_receipt(db, receipt)
             with self.assertRaisesRegex(remote.ReleaseError, "gateway_retry_receipt_missing"):
                 vendure_admission.require_reviewed_receipt(db, "f" * 64)

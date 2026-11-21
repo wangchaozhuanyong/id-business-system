@@ -16,8 +16,7 @@ const keyPattern = /^(rp_[a-f0-9]{24})\.([A-Za-z0-9_-]{43})$/;
 const codePattern = /^RA-[A-F0-9]{32}$/;
 const operationPattern = /^[A-Za-z0-9._-]{1,120}$/;
 const ticketPattern = /^[A-Za-z0-9_-]{43}$/;
-const plans = new Map([['plus', 'Plus'], ['pro_5x', 'Pro 100'], ['pro_20x', 'Pro 200']]);
-const currentPlans = new Set(['plus', 'pro100', 'pro200']);
+const currentPlans = new Set(['plus', 'pro100', 'pro200', 'pro500']);
 const taskStates = new Set(['queued', 'running', 'succeeded', 'failed', 'awaiting_review']);
 const stages = new Set(['started', 'processing', 'payment_details', 'paying', 'paid', 'subscription_check']);
 const ticketLifetime = 15 * 60_000;
@@ -76,7 +75,7 @@ function publicBatch({ id, batchNo, partnerId, plan, createdAt, codes }) {
 }
 
 function taskView(row, task, now) {
-  const fallback = row.state === 'open' && row.expiresAt <= now ? 'expired'
+  const fallback = row.state === 'cancelled' || (row.state === 'open' && row.expiresAt <= now) ? 'expired'
     : row.state === 'open' ? 'awaiting_authorization' : 'awaiting_review';
   const source = task && taskStates.has(task.status) && task.plan === row.plan &&
     Number.isFinite(Date.parse(task.updatedAt)) ? task : undefined;
@@ -85,7 +84,7 @@ function taskView(row, task, now) {
     id: row.id, plan: row.plan, status,
     stage: status === 'running' ? (stages.has(source.stage) ? source.stage : 'processing') : status,
     updatedAt: source ? time(Math.max(Date.parse(source.updatedAt), Date.parse(row.updatedAt) + 1))
-      : status === 'expired' ? time(row.expiresAt) : row.updatedAt,
+      : row.state === 'open' && status === 'expired' ? time(row.expiresAt) : row.updatedAt,
     ...(source?.progress && { progress: source.progress }),
     ...(source?.accountEmail && { accountEmail: source.accountEmail }),
     expiresAt: time(row.expiresAt)
@@ -146,7 +145,7 @@ export function createRechargePartnerHandlers({
     return gateway(action, input);
   }
   function requestTask(row, clientIp) {
-    if (row.state === 'open') return null;
+    if (row.state !== 'claimed') return null;
     return queue('task', { partnerId: row.partnerId, requestId: row.id, clientIp });
   }
   async function lookup(code, partnerId, clientIp) {
@@ -155,8 +154,8 @@ export function createRechargePartnerHandlers({
       throw unavailable();
     return status || { status: 'disabled', plan: code.plan };
   }
-  const saveRequests = (snapshot, requests) =>
-    store.saveFeatureDocument('recharge-partner-requests', snapshot.version, { requests });
+  const saveRequests = (snapshot, requests, audit) =>
+    store.saveFeatureDocument('recharge-partner-requests', snapshot.version, { requests }, audit);
 
   function operationId(value) {
     if (typeof value !== 'string' || !operationPattern.test(value)) throw invalid();
@@ -174,8 +173,10 @@ export function createRechargePartnerHandlers({
         (req.headers['sec-fetch-site'] && req.headers['sec-fetch-site'] !== 'same-origin'))
       throw new RequestError(403, 'forbidden', '请在 ID 后台操作');
     const body = await readBody(req, ['action', 'code', 'id', 'updatedAt', 'verifiedNoChargeOrActivation']);
-    const code = storefrontRechargeCode(body.code);
-    if (!code || !['lookup', 'release'].includes(body.action)) throw invalid();
+    const userCode = normalizeCode(body.code);
+    const partnerCode = codePattern.test(userCode);
+    const legacy = storefrontRechargeCode(body.code);
+    if ((!partnerCode && !legacy) || !['lookup', 'release'].includes(body.action)) throw invalid();
     const release = body.action === 'release';
     if (release) {
       if (actor.role !== 'super') throw new RequestError(403, 'forbidden', '请使用超级管理员账号');
@@ -185,15 +186,48 @@ export function createRechargePartnerHandlers({
           body.verifiedNoChargeOrActivation !== true) throw invalid();
     }
 
-    const row = await queue('review-lookup', { code });
-    if (!row) {
-      if (release) throw conflict('商城回执已变化，请重新查询');
-      return json(res, 200, { receipt: null });
-    }
+    const findLatest = (requests, partnerId) =>
+      requests?.findLast(row => row.partnerId === partnerId && row.code === userCode);
+    const owner = partnerCode ?
+      readPartners().data?.batches?.find(batch => batch.codes.some(entry => entry.code === userCode)) : null;
+    const latest = owner && findLatest(readRequests().data?.requests, owner.partnerId);
+    const code = owner?.codes.find(entry => entry.code === userCode)?.nativeCode ?? legacy;
+    const context = latest ? { code, partnerId: owner.partnerId, requestId: latest.id } : { code };
+    const reviewableRequest = latest?.state === 'claimed' || latest?.state === 'cancelled';
+    const row = partnerCode && !reviewableRequest ? null : await queue('review-lookup', context);
     const projection = (task, canRelease = false) => ({
       id: task.id, updatedAt: task.updatedAt, plan: task.plan, status: task.status,
       originalTaskId: task.upstreamJobId, released: task.released, canRelease
     });
+    if (!row && reviewableRequest) {
+      const released = latest.state === 'cancelled';
+      const view = projection({ ...requestView(latest), released }, !released && actor.role === 'super');
+      if (!release) return json(res, 200, { receipt: { ...view, awaitingAdmission: !released } });
+      if (latest.id !== body.id || (!released && latest.updatedAt !== body.updatedAt))
+        throw conflict('商城回执已变化，请重新查询');
+      if (!released) {
+        const confirmed = await queue('review-fence', { ...context, actorId: actor.id });
+        if (confirmed?.fenced !== true)
+          throw conflict('该请求已进入任务队列，请重新读取并核对原任务');
+        const snapshot = readRequests();
+        const requests = snapshot.data?.requests ?? [];
+        const current = findLatest(requests, owner.partnerId);
+        if (current?.id !== latest.id) throw conflict('商城回执已变化，请重新查询');
+        if (current.state !== 'cancelled') {
+          const cancelled = { ...current, state: 'cancelled',
+            updatedAt: time(Math.max(clock(), Date.parse(current.updatedAt) + 1)) };
+          saveRequests(snapshot, requests.map(entry => entry.id === current.id ? cancelled : entry),
+            { action: 'recharge_partner_request_recover', actor, targetId: current.id });
+          return json(res, 200, { receipt: projection({ ...requestView(cancelled), released: true }) });
+        }
+        return json(res, 200, { receipt: projection({ ...requestView(current), released: true }) });
+      }
+      return json(res, 200, { receipt: view });
+    }
+    if (!row) {
+      if (release) throw conflict('商城回执已变化，请重新查询');
+      return json(res, 200, { receipt: null });
+    }
     if (release && (row.id !== body.id || (!row.released && row.updatedAt !== body.updatedAt)))
       throw conflict('商城回执已变化，请重新查询');
 
@@ -211,7 +245,7 @@ export function createRechargePartnerHandlers({
       throw conflict('原任务的失败结果无法确认，暂不能解除');
     const clientIp = readSource(req);
     if (!clientIp) throw invalid();
-    const reviewed = await queue('review-release', { code, id: row.id, updatedAt: body.updatedAt,
+    const reviewed = await queue('review-release', { ...context, id: row.id, updatedAt: body.updatedAt,
       actorId: actor.id, clientIp });
     if (!reviewed?.released)
       throw conflict('回执已变化或兑换码仍不可用。请核对原任务和执行器的人工锁，再重新查询');
@@ -260,6 +294,19 @@ export function createRechargePartnerHandlers({
     if (typeof body.partnerId !== 'string' || !rechargePartnerIdPattern.test(body.partnerId)) throw invalid();
     const partner = partners.find(row => row.id === body.partnerId);
     if (!partner) throw notFound();
+    if (body.action === 'rotate') {
+      if (!authorizeStorefrontRelease(req))
+        throw new RequestError(403, 'SECURITY_CONFIRMATION_REQUIRED', '请先完成安全确认，再继续这项操作');
+      const rotations = partner.rotations ?? [];
+      if (rotations.includes(operation)) return json(res, 200, { partner: publicPartner(partner) });
+      const apiKey = partner.id + '.' + secret();
+      const updated = { ...partner, disabledAt: undefined, keyHash: store.rechargePartnerKeyHash(apiKey),
+        rotations: [...rotations, operation] };
+      store.saveFeatureDocument('recharge-partners', initial.version, { ...initial.data,
+        partners: partners.map(row => row.id === updated.id ? updated : row) },
+      { action: 'recharge_partner_rotate', actor, targetId: updated.id });
+      return json(res, 200, { partner: publicPartner(updated), apiKey });
+    }
     if (body.action === 'disable') {
       if (!partner.disabledAt) {
         partner.disabledAt = time(clock());
@@ -328,7 +375,7 @@ export function createRechargePartnerHandlers({
       const row = readRequests().data?.requests?.find(row => row.id === requestId && row.partnerId === partnerId);
       if (!row) throw notFound();
       if (req.headers.accept === 'text/event-stream') {
-        if (row.state === 'open' || !gateway?.watch) return json(res, 409, { code: 'stream_unavailable' });
+        if (row.state !== 'claimed' || !gateway?.watch) return json(res, 409, { code: 'stream_unavailable' });
         const initial = await requestTask(row, clientIp);
         if (!initial) throw notFound();
         const abort = new AbortController();
@@ -383,7 +430,7 @@ export function createRechargePartnerHandlers({
       return json(res, 200, requestView(concurrent, await requestTask(concurrent, clientIp), canAuthorize));
     }
     const latest = requests.findLast(row => row.partnerId === partnerId && row.code === code.code);
-    if (!partnerFor(partnerId)) throw new RequestError(401, 'invalid_api_key');
+    if (partnerFor(partnerId)?.keyHash !== partner.keyHash) throw new RequestError(401, 'invalid_api_key');
     if (latest?.state === 'open' && latest.expiresAt > now) {
       const updated = { ...latest, operations: [...(latest.operations ?? [latest.operation]), operation] };
       if (updated.operations.length > 25) throw conflict('已有待授权请求，请使用原请求编号');
@@ -391,8 +438,9 @@ export function createRechargePartnerHandlers({
       return json(res, 200, requestView(updated, null, true));
     }
     const retry = inventoryStatus.reason === 'verified_retry_available' && inventoryStatus.task?.status === 'failed' &&
-      latest?.afterFailedTask !== inventoryStatus.task.id;
-    if (inventoryStatus.status !== 'available' || (latest && latest.state !== 'open' && !retry))
+      (latest?.state === 'cancelled' || latest?.afterFailedTask !== inventoryStatus.task.id);
+    if (inventoryStatus.status !== 'available' ||
+        (latest && latest.state !== 'open' && latest.state !== 'cancelled' && !retry))
       throw conflict('兑换码暂不可创建新请求');
     // These reads and the compare-and-swap are synchronous. No disabled partner can create
     // a request while awaiting a gateway reply.
@@ -419,7 +467,7 @@ export function createRechargePartnerHandlers({
     if (!row || !timingSafeEqual(Buffer.from(store.rechargePartnerTicket(row.id)), Buffer.from(ticket))) throw notFound();
     const partner = partnerFor(row.partnerId);
     const now = clock();
-    if (row.expiresAt <= now) throw new RequestError(410, 'expired', row.state === 'open'
+    if (row.expiresAt <= now || row.state === 'cancelled') throw new RequestError(410, 'expired', row.state === 'open'
       ? '此授权已过期，请回原网站重新发起' : '此授权链接已过期，请回原网站查询进度');
     if (row.state !== 'open')
       return json(res, 200, { ...requestView(row, await requestTask(row, clientIp)), partner: partner?.name });
@@ -452,8 +500,10 @@ export function createRechargePartnerHandlers({
       task = await queue('submit', { partnerId: row.partnerId, code: code.nativeCode, clientIp,
         requestId: row.id, session, afterFailedTask: row.afterFailedTask });
     } catch {
-      // The queue may have committed. Only reads can recover an ambiguous submit.
+      // Keep the claim until a task read or a confirmed, persisted withdrawal resolves it.
     }
+    if (task?.fenced === true)
+      throw new RequestError(410, 'expired', '此授权已撤销，请回原网站重新发起');
     if (task?.rejected === true) {
       const pending = readRequests();
       const pendingRows = pending.data?.requests ?? [];

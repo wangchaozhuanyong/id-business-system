@@ -660,7 +660,7 @@
     rechargeCodeAction: (command) => write(['recharge-codes'], () => request('recharge-codes', command, 'POST')),
     rechargePartnerAction: (command) => write(
       command.action === 'issue' ? ['recharge-partners', 'recharge-codes'] : ['recharge-partners'],
-      () => request('recharge-partners', command, 'POST', { writeTimeout: 35_000 })),
+      () => request('recharge-partners', command, 'POST', { writeTimeout: 35_000, stepUp: command.action === 'rotate' })),
     orderCompletion: (params) => request('order-completion' + (params ? '?' + new URLSearchParams(params) : '')),
     saveOrderCompletion: (command) => write(command.action === 'record-apple-payment' ? ['commerce', 'appleBalance'] : ['commerce'],
       () => request('order-completion', command, 'POST')),

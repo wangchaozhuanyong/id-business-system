@@ -772,7 +772,7 @@
     toolbar.append(trigger);
   }
   function openStorefrontReview(trigger) {
-    openDrawer('商城充值回执', '当执行器的待人工确认列表为空，但商城仍显示待核对时，用原兑换码查询。',
+    openDrawer('商城充值回执', '查询商城或合作方原兑换码，核对需人工处理的充值回执。',
       `<form class="drawer-form" id="storefront-recharge-review" autocomplete="off">
         ${field('商城兑换码', 'storefront-review-code',
           input('storefront-review-code', '', 'required maxlength="64" spellcheck="false" data-no-draft'), true)}
@@ -821,11 +821,13 @@
         if (lifecycle.signal.aborted) return;
         receipt = result.receipt;
         release.hidden = !receipt?.canRelease;
+        release.textContent = receipt?.awaitingAdmission ? '撤销旧授权' : '解除商城锁定';
         if (!receipt) {
           status.textContent = '未找到该码的商城回执。若仍待核对，请查看执行器的人工确认记录。';
           return;
         }
         const label = receipt.released ? '已解除商城锁定。请让客户用原兑换码重新查询。'
+          : receipt.awaitingAdmission ? '尚未查到执行任务。请核对扣款和订阅状态后撤销旧授权。'
           : receipt.canRelease ? '原任务已失败。请先核对扣款、订阅和执行器人工锁。'
           : ({ queued: '商城任务正在等待执行。', running: '商城任务执行中。', succeeded: '商城任务已开通。',
               failed: '商城任务已失败。', awaiting_review: '商城回执待核对。' }[receipt.status] || '商城回执暂不可处理。');
@@ -845,7 +847,11 @@
       if (!receipt?.canRelease) return;
       const code = inputNode.value.trim();
       const { id, updatedAt } = receipt;
-      confirmAction('解除商城锁定', '确认已核对这笔原任务未扣款、未开通。解除后客户可用原码重新提交，原记录会保留。',
+      const title = receipt.awaitingAdmission ? '撤销旧授权' : '解除商城锁定';
+      const confirmation = receipt.awaitingAdmission
+        ? '确认本笔请求未扣款、未开通。撤销后客户可用原码重新发起，原记录会保留。'
+        : '确认已核对这笔原任务未扣款、未开通。解除后客户可用原码重新提交，原记录会保留。';
+      confirmAction(title, confirmation,
         () => run('release', code, { id, updatedAt, verifiedNoChargeOrActivation: true }), '确认解除');
     });
   }
