@@ -18,15 +18,15 @@ const sampleCards = [
     usage_count: 0, allowed_plans: ['pro200'] }
 ];
 
-async function prepare(browser, { role = 'super', viewport = { width: 1440, height: 1000 }, pending = [] } = {}) {
+async function prepare(browser, { role = 'super', viewport = { width: 1440, height: 1000 }, pending = [], localAuthUi = false } = {}) {
   const context = await browser.newContext({ viewport, hasTouch: viewport.width < 901 });
   const snapshot = { version: 3, strict: false, items: sampleCards.map(card => ({ id: card.id,
-    last4: card.last4, active: true, plans: card.allowed_plans, uses: card.usage_count })), pending };
+    last4: card.last4, cardNumber: card.id === 1 ? '1000000000002468' : '', active: true, plans: card.allowed_plans, uses: card.usage_count })), pending };
   const types = { version: 1, items: [{ id: 'sample', name: '样例虚拟卡', active: true }],
     assignments: { 'recharge:1': 'sample', 'recharge:2': 'sample' } };
-  const traffic = await interceptDesign(context, { actor: { id: 'card-entry-' + role,
+  const traffic = await interceptDesign(context, { localAuthUi, actor: { id: 'card-entry-' + role,
     name: '离线验收账号', email: 'card-entry@example.test', role },
-    localFixtures: { 'staff/finance/cards': snapshot, 'card-types': types } });
+    localFixtures: { 'staff/finance/cards': snapshot, 'staff/finance/cards/pending': { pending }, 'card-types': types } });
   const reads = [], writes = [];
   const state = { ready: true, admin: role === 'super', status: 200, cards: structuredClone(sampleCards),
     policy: { version: 3, strict: false } };
@@ -123,12 +123,13 @@ test('银行卡池从左侧子导航进入并保留完整功能和编辑状态',
   await frame.locator('#orbitcard_strategy_product_code').waitFor();
   const reads = fixture.reads.length;
   const reloaded = page.waitForResponse(response => new URL(response.url()).pathname ===
-    '/integrations/codexdaichong/api/admin/cards');
+    '/integrations/codexdaichong/api/admin/orbitcard/products');
   await page.getByRole('button', { name: '刷新', exact: true }).click();
   await reloaded;
   await page.locator('[data-recharge-module="cards"] .recharge-integration__view[aria-busy="false"]').waitFor();
   await frame.locator('#orbitcard_strategy_product_code').waitFor();
   assert.equal(await strategy.getAttribute('aria-pressed'), 'true');
+  assert.equal(fixture.reads.length, reads);
   await tabsInCardPool.getByRole('button', { name: '银行卡列表', exact: true }).click();
   await frame.locator('#card_pool_list_body tr').first().waitFor();
   assert(fixture.reads.length > reads);
@@ -147,9 +148,9 @@ test('待核对记录读取缓慢时完整银行卡池仍能加载和刷新', { 
   const fixture = await prepare(browser);
   let release;
   t.after(async () => { release?.(); await fixture.context.close(); });
-  await fixture.context.route('**/api/local/staff/finance/cards', async request => {
+  await fixture.context.route('**/api/local/staff/finance/cards/pending', async request => {
     await new Promise(resolve => { release = resolve; });
-    await request.fulfill({ json: { version: 3, strict: false, items: [], pending: [] } });
+    await request.fulfill({ json: { pending: [] } });
   });
   const frame = await open(fixture.page);
   const reads = fixture.reads.length;
@@ -187,7 +188,104 @@ test('银行卡入口保留待核对记录，服务失败可以重试且刷新�
   await page.getByText('ChatGPT 充值服务未就绪，已保留当前内容。', { exact: true }).waitFor();
   assert.equal(await frame.locator('#card_pool_list_body tr').count(), 2);
   assert.equal(await page.getByRole('button', { name: '核对上次操作', exact: true }).count(), 1);
+  state.status = 200;
+  state.ready = true;
+  const original = await page.locator(frameSelector).elementHandle();
+  await fixture.context.route('**/integrations/codexdaichong/api/admin/cards', request =>
+    request.fulfill({ status: 503, json: { success: false } }), { times: 1 });
+  const failedList = page.waitForResponse(response =>
+    new URL(response.url()).pathname.endsWith('/api/admin/cards') && response.status() === 503);
+  await page.getByRole('button', { name: '刷新', exact: true }).click();
+  await failedList;
+  await page.getByText('ChatGPT 充值服务未就绪，已保留当前内容。', { exact: true }).waitFor();
+  assert(await page.locator(frameSelector).evaluate((node, previous) => node === previous, original));
+  assert.equal(await frame.locator('#card_pool_list_body tr').count(), 2);
+  await original.dispose();
   healthy(fixture);
+});
+
+test('待核对记录的旧读回不会覆盖较新的版本通知', { timeout: 15_000 }, async t => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const { context, page } = await prepare(browser);
+  let releaseFirst;
+  const gate = new Promise(resolve => { releaseFirst = resolve; });
+  t.after(async () => { releaseFirst(); await context.close(); });
+  const path = '/api/local/staff/finance/cards/pending';
+  let reads = 0;
+  await context.route('**' + path, async request => {
+    const original = ++reads === 1;
+    if (original) await gate;
+    const row = { id: 'review', label: original ? '旧回执' : '新回执', submittedBy: '样例财务', canReview: true };
+    await request.fulfill({ json: { pending: [row] } });
+  });
+  await open(page);
+  assert.equal(reads, 1);
+  await page.evaluate(() => {
+    const scope = 'recharge-card-plans';
+    window.IDLocalData.queries.invalidate([scope]);
+    return window.IDDesignModules.find(item => item.id === 'staff-finance-cards').onDataChanges([scope]);
+  });
+  await page.getByText('新回执', { exact: true }).waitFor();
+  const old = page.waitForResponse(response => new URL(response.url()).pathname === path);
+  releaseFirst();
+  await (await old).finished();
+  await settle(page);
+  assert(await page.getByText('新回执', { exact: true }).isVisible());
+  assert.equal(await page.getByText('旧回执', { exact: true }).count(), 0);
+  assert.equal(reads, 2);
+});
+
+test('管理员核对使用确认前的卡池版本，只有内嵌列表未就绪时才按需读取', { timeout: 30_000 }, async t => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  for (const ready of [true, false]) {
+    const row = { id: 'sample', label: '停用银行卡', submittedBy: '样例财务', canReview: true };
+    const fixture = await prepare(browser, { localAuthUi: true });
+    const { context, page, state } = fixture;
+    try {
+      state.status = ready ? 200 : 503;
+      state.ready = ready;
+      let pending = [row], fullReads = 0;
+      const commands = [];
+      await context.route('**/api/local/staff/finance/cards/pending', request => request.fulfill({ json: { pending } }));
+      await context.route('**/api/local/staff/finance/cards', request => {
+        if (request.request().method() === 'GET') {
+          fullReads++;
+          return request.fulfill({ json: { version: state.policy.version, pending, items: [] } });
+        }
+        const command = request.request().postDataJSON();
+        commands.push(command);
+        if (command.version !== state.policy.version)
+          return request.fulfill({ status: 409, json: { error: '请刷新列表并核对当前银行卡资料' } });
+        pending = [];
+        return request.fulfill({ json: { reconciled: true } });
+      });
+      if (ready) await open(page);
+      else {
+        await page.goto(origin + '/#/' + route);
+        await page.getByText('ChatGPT 充值服务未就绪', { exact: true }).waitFor();
+      }
+      const review = page.getByRole('button', { name: '核对上次操作', exact: true });
+      await review.waitFor();
+      assert.equal(fullReads, 0);
+      await review.click();
+      const confirm = page.getByRole('button', { name: '确认', exact: true });
+      await confirm.waitFor();
+      if (ready) state.policy = { ...state.policy, version: 4 };
+      await confirm.click();
+      if (ready) {
+        await page.locator('[data-staff-status]').filter({ hasText: '请刷新列表并核对当前银行卡资料' }).waitFor();
+        assert(await review.isVisible());
+      } else {
+        await page.getByText('已核对银行卡维护结果', { exact: true }).waitFor();
+        assert.equal(await review.count(), 0);
+      }
+      assert.equal(fullReads, ready ? 0 : 1);
+      assert.deepEqual(commands, [{ action: 'reconcile', id: 'sample', version: 3, confirmed: true }]);
+      healthy(fixture);
+    } finally { await context.close(); }
+  }
 });
 
 test('财务账号保持原有授权入口，普通管理员不能打开该页面', { timeout: 25_000 }, async t => {
@@ -199,7 +297,8 @@ test('财务账号保持原有授权入口，普通管理员不能打开该页�
       await fixture.page.goto(origin + '/#/' + route);
       if (role === 'finance') {
         await fixture.page.getByRole('button', { name: '导入银行卡', exact: true }).waitFor();
-        await fixture.page.getByText('2468', { exact: true }).waitFor();
+        await fixture.page.getByText('1000000000002468', { exact: true }).waitFor();
+        await fixture.page.getByText('未留存完整卡号', { exact: true }).waitFor();
       } else await fixture.page.getByRole('heading', { name: '访问受限' }).waitFor();
       assert.equal(await fixture.page.locator('iframe').count(), 0);
       assert.deepEqual(fixture.reads, []);

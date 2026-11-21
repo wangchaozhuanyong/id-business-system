@@ -982,7 +982,46 @@ class WebsiteReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(remote.ReleaseError, "card_number_presentation_mount_mismatch"):
                 remote.require_asset_digest(plan | {"before": different_mount}, after)
             with self.assertRaisesRegex(remote.ReleaseError, "card_number_presentation_mount_mismatch"):
-                remote.check_baseline(different_mount, baseline, check_asset_mount=True)
+                remote.check_baseline(different_mount, baseline,
+                                      asset_mount_error=remote.PRESENTATION_MOUNT_ERRORS["cardNumberPresentation"])
+
+    @patch("release.require_presentation_approval")
+    @patch("release.require_ancestor")
+    @patch("release.git")
+    def test_card_first_paint_release_requires_exact_sources_and_manifest(self, git, ancestor, approval):
+        files = remote.CARD_FIRST_PAINT_PRESENTATION_FILES
+        approved = (*files, release.CARD_FIRST_PAINT_MANIFEST_PATH)
+        git.return_value = "\n".join(approved)
+        self.assertEqual(release.require_website_scope(BASE, TARGET),
+                         ("cardFirstPaintPresentation", approval.return_value))
+        approval.assert_called_once_with(BASE, TARGET, release.CARD_FIRST_PAINT_MANIFEST, files)
+        for flag in ("include_adapter", "include_core", "partner_api"):
+            with self.assertRaises(RuntimeError):
+                release.require_website_scope(BASE, TARGET, **{flag: True})
+        for changed in (files, (*approved, "modules/recharge/codexdaichong/native-adapter.mjs")):
+            git.return_value = "\n".join(changed)
+            with self.assertRaisesRegex(RuntimeError, "recharge_core_or_runtime_changed"):
+                release.require_website_scope(BASE, TARGET)
+
+    def test_card_first_paint_release_checks_digest_mount_and_exact_browser_assets(self):
+        before, after = "a" * 64, "b" * 64
+        files, routes = remote.PRESENTATION_SCOPES["cardFirstPaintPresentation"]
+        approval = {"beforeAssetsSha256": before, "assetsSha256": after}
+        baseline = {"assetsSha256": before, "mountedAssets": {"available": True, "sha256": before}}
+        plan = {"before": baseline, "cardFirstPaintPresentation": approval, "files": dict.fromkeys(files, "c" * 64)}
+        self.assertEqual(remote.require_asset_digest(plan, after), "cardFirstPaintPresentation")
+        with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_mount_mismatch"):
+            remote.require_asset_digest(plan | {"before": baseline | {"mountedAssets": {}}}, after)
+        with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_approval_mismatch"):
+            remote.require_asset_digest(plan, "a" * 64)
+        self.assertEqual(routes, {"/admin.js", "/shell.js"})
+        original = {route: {"body": "old"} for route in routes | {"/redeem"}}
+        updated = original | {route: {"body": "new"} for route in routes}
+        bundle = lambda assets: Mock(read_bytes=lambda:
+            json.dumps({"revision": remote.PINNED_UPSTREAM, "assets": assets}).encode())
+        remote.verify_presentation_bundle(bundle(original), bundle(updated), routes)
+        with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_bundle_scope_mismatch"):
+            remote.verify_presentation_bundle(bundle(original), bundle(updated | {"/redeem": {"body": "new"}}), routes)
 
     @patch("release.require_presentation_approval")
     @patch("release.require_ancestor")

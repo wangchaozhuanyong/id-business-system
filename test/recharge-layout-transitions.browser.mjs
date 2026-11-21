@@ -6,6 +6,63 @@ import { join } from 'node:path';
 import { startCodexdaichongDemoSite } from '../modules/recharge/codexdaichong/demo-site.mjs';
 import { toggleDesignTheme, interceptDesign, origin as offlineOrigin } from './helpers/offline-design.mjs';
 
+test('银行卡首屏在服务就绪前保留页签，获得权限后只读当前列表', { timeout: 25_000 }, async t => {
+  const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
+  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
+  t.after(() => browser.close());
+  const context = await browser.newContext();
+  const fixture = await interceptDesign(context, { actor: { id: 'sample-super', name: '验收管理员', role: 'super' },
+    localFixtures: { 'staff/finance/cards/pending': { pending: [] } } });
+  const prefix = '/integrations/codexdaichong';
+  const pageScript = Promise.withResolvers(), access = Promise.withResolvers(), cards = Promise.withResolvers();
+  t.after(() => { pageScript.resolve(); access.resolve(); cards.resolve(); });
+  await context.route('**/assets/website/pages/staff-workspaces.mjs', async route => {
+    await pageScript.promise;
+    await route.fallback();
+  });
+  await context.route('**' + prefix + '/status', async route => {
+    await access.promise;
+    await route.fallback();
+  });
+  await context.route('**' + prefix + '/api/admin/cards', async route => {
+    await cards.promise;
+    await route.fulfill({ json: { success: true, cards: [{ id: 1, last4: '1357', card_number: '****1357',
+      is_active: 1 }], planPolicy: { version: 1, strict: false } } });
+  });
+  const page = await context.newPage();
+  page.setDefaultTimeout(5000);
+  const reads = [];
+  page.on('request', request => reads.push(new URL(request.url()).pathname));
+  await page.goto(offlineOrigin + '/#/staff/finance/cards');
+  const tabs = page.getByRole('navigation', { name: '银行卡池功能' });
+  const tab = tabs.getByRole('button', { name: '银行卡列表' });
+  const status = page.getByText('正在读取银行卡…', { exact: true });
+  await status.waitFor();
+  assert(await tab.isDisabled());
+  const initial = await tabs.boundingBox();
+  const probe = page.waitForRequest(request => new URL(request.url()).pathname === prefix + '/status');
+  pageScript.resolve();
+  await probe;
+  assert(await status.isVisible());
+  assert.equal(await page.locator('iframe').count(), 0);
+  assert.deepEqual(await tabs.boundingBox(), initial);
+  const firstList = page.waitForRequest(request => new URL(request.url()).pathname === prefix + '/api/admin/cards');
+  access.resolve();
+  await firstList;
+  assert(await status.isVisible());
+  assert.equal(await page.locator('iframe[data-view="cards"]:visible').count(), 0);
+  cards.resolve();
+  const frame = page.frameLocator('iframe[data-view="cards"]:visible');
+  await frame.locator('#card_pool_list_body tr').filter({ hasText: '1357' }).waitFor();
+  assert.equal(await status.count(), 0);
+  assert.deepEqual(await tabs.boundingBox(), initial);
+  assert.equal(reads.filter(path => path === prefix + '/api/admin/cards').length, 1);
+  assert(!reads.some(path => path === '/api/local/staff/finance/cards' ||
+    /^\/integrations\/codexdaichong\/api\/admin\/(data|region|recharge-routing|orbitcard)(\/|$)/.test(path)));
+  assert.deepEqual(fixture.external, []);
+  assert.deepEqual(fixture.unavailable, []);
+});
+
 // All requests stay inside the disposable demo host; no business writes or external calls.
 test('recharge transitions keep content and geometry through delayed, superseded and failed loads', { timeout: 90_000 }, async t => {
   assert(process.env.ID_RECHARGE_QA_PLAYWRIGHT, '请指定已有 Playwright 模块入口');
@@ -80,7 +137,16 @@ test('recharge transitions keep content and geometry through delayed, superseded
       };
 
       try {
+        const access = Promise.withResolvers();
+        await page.route('**' + statusPath, async route => {
+          await access.promise;
+          await (offline ? offlineFixture.handle(route) : route.continue());
+        }, { times: 1 });
         await page.goto(origin + '/#/online-recharge/chatgpt');
+        try {
+          await page.getByRole('navigation', { name: 'ChatGPT 充值功能' }).waitFor();
+          await page.getByText('正在加载充值页面…', { exact: true }).waitFor();
+        } finally { access.resolve(); }
         await frame().locator('#querySection').waitFor();
         await idle();
         assert.equal(statusChecks, 1, '首次打开应检查服务');

@@ -19,6 +19,22 @@
   let syncWorkspaceViewport;
   let telegramStatus;
   window.idRechargeVisible = standalone;
+  let pendingCardTypes = false;
+  let pendingCardPlanVersion;
+  function applyPendingCardChanges() {
+    if (!window.idRechargeVisible || document.hidden || reportType !== 'ready' ||
+        !document.querySelector('#cards.active [data-switch-panel="local"]:not([hidden])')) return;
+    if (pendingCardTypes) {
+      pendingCardTypes = false;
+      window.idRechargeCardTypesChanged?.();
+    }
+    if (pendingCardPlanVersion !== undefined && window.idRechargeCardPlansChanged?.(pendingCardPlanVersion))
+      pendingCardPlanVersion = undefined;
+  }
+  if (cardTabs) {
+    window.idRechargeApplyCardChanges = applyPendingCardChanges;
+    document.addEventListener('visibilitychange', applyPendingCardChanges);
+  }
   function setVisible(visible) {
     const changed = window.idRechargeVisible !== visible;
     window.idRechargeVisible = visible;
@@ -32,6 +48,7 @@
     }
     if (visible && reportType === 'ready') {
       syncCardPoolSection();
+      if (cardTabs) applyPendingCardChanges();
       report('view-context');
       report('resize');
     }
@@ -306,12 +323,12 @@
       );
     }
   };
-  function syncCardPoolSection() {
+  function syncCardPoolSection(initial = false) {
     const selected = cardTabs?.querySelector('[aria-pressed="true"]')?.dataset.cardSection;
     if (!selected) return;
     const tab = [...document.querySelectorAll('#cards.active [data-switcher="card-assets"] [data-switcher-tab]')]
       .find(item => item.dataset.switcherTab === selected);
-    if (tab?.getAttribute('aria-selected') !== 'false') return;
+    if (!tab || (!initial && tab.getAttribute('aria-selected') === 'true')) return;
     tab.click();
     if (reportType === 'ready') report('view-context');
   }
@@ -322,7 +339,7 @@
         item.getAttribute('onclick').startsWith("switchPage('" + view + "',")
       );
       nav?.click();
-      if (view === 'cards') syncCardPoolSection();
+      if (view === 'cards') syncCardPoolSection(true);
       return;
     }
     if (['query', 'redeem'].includes(view) ||
@@ -348,6 +365,12 @@
     } else if (message.type === 'select-card-section') {
       syncCardPoolSection();
     } else if (!standalone && message.type === 'data-change' && Array.isArray(message.scopes)) {
+      if (cardTabs) {
+        if (message.scopes.includes('card-types')) pendingCardTypes = true;
+        if (message.scopes.includes('recharge-card-plans')) pendingCardPlanVersion = message.cardPlanVersion;
+        applyPendingCardChanges();
+        return;
+      }
       if (message.scopes.includes('card-types')) window.idRechargeCardTypesChanged?.();
       if (message.scopes.includes('recharge-card-plans'))
         window.idRechargeCardPlansChanged?.(message.cardPlanVersion);

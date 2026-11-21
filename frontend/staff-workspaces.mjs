@@ -225,7 +225,36 @@ export function createPage(A, definition) {
     body.innerHTML = view.current.result ? content[view.route](view.current) : A.empty('资料未能读取', '请点击刷新重试。');
   }
 
+  async function loadCardReviews(view, refresh = false) {
+    const read = {};
+    view.reviewRead = read;
+    const current = () => active === view && view.host.isConnected && view.reviewRead === read;
+    try {
+      const snapshot = await D.queries.read(definition.scope, 'pending', async () => {
+        const result = await request(resource + '/pending');
+        if (!Array.isArray(result?.pending)) throw new Error('暂时无法读取待核对的银行卡维护');
+        return result;
+      }, { refresh });
+      if (!current()) return false;
+      view.current.result = snapshot;
+      view.current.failed = false;
+      message(view, '');
+      draw(view);
+      return true;
+    } catch (error) {
+      if (!current() || error.code === 'READ_SUPERSEDED') return false;
+      view.current.failed = true;
+      if (error.status === 401 || error.status === 403) {
+        view.current.result = undefined;
+        draw(view);
+      }
+      message(view, error.message);
+      return false;
+    }
+  }
+
   async function load(view, paint = true) {
+    if (cardPool) return loadCardReviews(view);
     if (view.loading) return view.loading;
     const { current, host } = view;
     current.failed = false;
@@ -309,8 +338,12 @@ export function createPage(A, definition) {
         formNode.reset();
         for (const input of formNode.querySelectorAll('[data-no-draft]')) input.value = '';
       }
+      if (cardPool) {
+        D.queries.invalidate(definition.scope);
+        if (active !== view || !view.host.isConnected) return true;
+      }
       const changed = await load(view, payload.action !== 'reconcile');
-      if (changed && payload.action === 'reconcile') {
+      if (changed && payload.action === 'reconcile' && !cardPool) {
         drawCardReviews(view);
         drawList(view);
       }
@@ -520,11 +553,21 @@ export function createPage(A, definition) {
     if (action === 'card-reconcile' || action === 'card-unconfirmed') {
       const pending = current.result.pending?.find(row => row.id === id);
       const unconfirmed = action === 'card-unconfirmed';
-      if (pending?.canReview && await Security.confirmChange(unconfirmed ? '登记未确认' : '核对上次操作',
-        unconfirmed ? '请先核对列表。这一步只记录结果未确认。后续维护请以卡池当前资料为准。' :
-          '系统将查看当前银行卡和用卡规则。如与上次提交一致，会补记结果。')) {
-        await write(view, action, { action: 'reconcile', id: pending.id, confirmed: true, ...(unconfirmed && { outcome: 'unconfirmed' }) });
-      }
+      if (!pending?.canReview || view.reviewing || view.saving || current.failed) return;
+      view.reviewing = true;
+      try {
+        // Freeze the version the operator is about to confirm. If the embedded list has not loaded,
+        // obtain it only for this review. The server compares it again before recording the result.
+        const version = cardPool ? (cardPool.version?.() ?? (await request(resource)).version) : current.version;
+        if (active !== view || !current.result?.pending?.some(row => row.id === id && row.canReview)) return;
+        if (!Number.isSafeInteger(version) || version < 0) throw new Error('暂时无法确认卡池版本，请刷新重试');
+        if (await Security.confirmChange(unconfirmed ? '登记未确认' : '核对上次操作',
+          unconfirmed ? '请先核对列表。这一步只记录结果未确认。后续维护请以卡池当前资料为准。' :
+            '系统将查看当前银行卡和用卡规则。如与上次提交一致，会补记结果。')) {
+          await write(view, action, { action: 'reconcile', id, version, confirmed: true, ...(unconfirmed && { outcome: 'unconfirmed' }) });
+        }
+      } catch (error) { message(view, error.message); }
+      finally { view.reviewing = false; }
       return;
     }
     const card = current.result.items?.find(row => String(row.id) === id);
@@ -607,7 +650,7 @@ export function createPage(A, definition) {
       if (!cardPool || action !== 'staff-card-pool-refresh') return false;
       if (active && !active.saving) {
         message(active, '');
-        void load(active);
+        void loadCardReviews(active, true);
         cardPool.refresh();
       }
       return true;

@@ -315,7 +315,7 @@ const navigation = [
 ];
 const registeredPages = new Map();
 
-function registerPage(page, loadPage) {
+function registerPage(page, loadPage, renderLoading) {
   const group = navigation.find(([name]) => name === page.navigation);
   const occupied = navigation.some(([, , children]) => children.some(([, route]) => route === page.route));
   if (!group || occupied || window.IDDesignModules.some(module => module.id === page.id || module.matches(page.route)))
@@ -349,9 +349,13 @@ function registerPage(page, loadPage) {
     matches: route => route === page.route,
     sharedBusinessData: page.sharedBusinessData,
     retainPage: () => instance?.retainPage?.() === true,
-    render: () => instance?.render() ?? header(page.label, page.description) + '<section class="panel panel-body">' +
-      (failed ? empty('暂时无法打开此页面', '请重试。') + button('重试', 'registered-page-retry')
-        : '<p role="status">正在加载页面…</p>') + '</section>',
+    render() {
+      if (instance) return instance.render();
+      const body = failed
+        ? '<section class="panel panel-body">' + empty('暂时无法打开此页面', '请重试。') + button('重试', 'registered-page-retry') + '</section>'
+        : renderLoading?.() ?? '<section class="panel panel-body"><p role="status">正在加载页面…</p></section>';
+      return header(page.label, page.description) + body;
+    },
     afterRender(options) {
       if (instance) instance.afterRender?.(options);
       else if (!failed) load();

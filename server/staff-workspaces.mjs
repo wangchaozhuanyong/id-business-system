@@ -227,9 +227,10 @@ export function createStaffWorkspaces({ store, client, publicOrigin, getAuth, re
   const inProgress = new Set();
   const lastMailRead = new Map();
   async function manageCards(request, route, actor, body) {
-    if (!managesCards(actor)) fail(403, '当前账号无权管理自动代充银行卡');
-    if (route === 'finance/cards' && isReadable(request.method)) {
-      const current = cardsView(await client.get('/api/admin/cards'));
+    if (!managesCards(actor) || (route === 'finance/cards/pending' && actor.role !== 'super'))
+      fail(403, '当前账号无权管理自动代充银行卡');
+    if (isReadable(request.method) && ['finance/cards', 'finance/cards/pending'].includes(route)) {
+      const current = route === 'finance/cards' ? cardsView(await client.get('/api/admin/cards')) : {};
       const pending = store.pendingFinanceCardOperations().map(row => ({ id: row.id, at: row.at,
         label: cardActions[row.action], submittedBy: row.actorName, canReview: actor.role === 'super' || row.actorId === actor.id }));
       return { ...current, pending };

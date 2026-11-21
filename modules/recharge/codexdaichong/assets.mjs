@@ -265,6 +265,80 @@ function adaptRemoteAdminPagination(source) {
   `);
 }
 
+// The host mounts a dedicated card-pool document. Other admin documents still
+// initialize the full console and can navigate freely between its sections.
+function adaptHostedCardPool(source) {
+  source = replaceOne(source, "            if (pId === 'cards') {",
+    "            if (pId === 'cards' && !hostedCardPool) {");
+  source = replaceOne(source, "            if (group === 'card-assets' && target === 'orbitcard') {", `
+            if (hostedCardPool && group === 'card-assets') {
+                void readHostedCardSection(target);
+                lucide.createIcons();
+                return;
+            }
+            if (group === 'card-assets' && target === 'orbitcard') {`);
+  source = replaceOne(source, '        function switchAdminSection(group, target) {', `
+        const hostedCardPool = document.documentElement.hasAttribute('data-recharge-card-tabs');
+        const hostedCardReads = new Map();
+        let hostedCardSelection = 0;
+        let hostedCardReady = false;
+        async function readHostedCardSection(section) {
+            const selection = ++hostedCardSelection;
+            let read = hostedCardReads.get(section);
+            if (!read) {
+                if (section === 'local') read = loadCardPoolList();
+                else if (section === 'orbitcard') read = loadOrbitcardUsage(false, false);
+                else if (section === 'orbitcard-strategy') read = loadOrbitcardProductStrategy(false);
+                else return;
+                hostedCardReads.set(section, read);
+            }
+            try {
+                const loaded = await read;
+                if (selection !== hostedCardSelection) return;
+                if (!hostedCardReady) {
+                    hostedCardReady = Boolean(loaded);
+                    window.idRechargeReport(loaded ? 'ready' : 'unavailable');
+                }
+                if (section === 'local' && loaded) window.idRechargeApplyCardChanges();
+            } catch {
+                if (selection === hostedCardSelection && !hostedCardReady) window.idRechargeReport('unavailable');
+            } finally {
+                if (hostedCardReads.get(section) === read) hostedCardReads.delete(section);
+            }
+        }
+        function switchAdminSection(group, target) {`);
+  source = replaceOne(source, "                if (showToast) showMessage('Orbitcard 用卡记录已刷新', 'success');",
+    "                if (showToast) showMessage('Orbitcard 用卡记录已刷新', 'success');\n" +
+    "                if (hostedCardPool) { lucide.createIcons(); return true; }");
+  source = replaceOne(source, '        async function loadOrbitcardProductStrategy(showToast = false) {', `
+        let strategyReadNumber = 0;
+        async function loadOrbitcardProductStrategy(showToast = false) {`);
+  source = replaceOne(source, "            const previous = select.value || '';\n            select.disabled = true;", `
+            const readNumber = ++strategyReadNumber;
+            const controls = hostedCardPool ? select.closest('[data-switch-panel]').querySelectorAll(
+                'input, select, button[onclick="saveOrbitcardProductStrategy()"]'
+            ) : [];
+            for (const control of controls) control.disabled = true;
+            let loaded = false;
+            const previous = select.value || '';
+            select.disabled = true;`);
+  source = replaceOne(source, "                if (!res.ok || !data.success) throw new Error(data.message || '产品目录查询失败');",
+    "                if (hostedCardPool && readNumber !== strategyReadNumber) return;\n" +
+    "                if (!res.ok || !data.success) throw new Error(data.message || '产品目录查询失败');");
+  source = replaceOne(source, "                if (showToast) showMessage('上游产品与库存已刷新', 'success');",
+    "                if (showToast) showMessage('上游产品与库存已刷新', 'success');\n" +
+    "                loaded = true;\n                return true;");
+  source = replaceOne(source, '                hint.textContent = `产品目录读取失败：',
+    "                if (hostedCardPool && readNumber !== strategyReadNumber) return;\n" +
+    '                hint.textContent = `产品目录读取失败：');
+  return replaceOne(source, '                select.disabled = false;\n                lucide.createIcons();', `
+                if (!hostedCardPool || readNumber === strategyReadNumber) {
+                    select.disabled = false;
+                    for (const control of controls) control.disabled = !loaded;
+                    lucide.createIcons();
+                }`);
+}
+
 function adaptAdminRuntimeLogs(source) {
   source = replaceSection(source,
     '        const RUNTIME_LOG_TEXT_CAP',
@@ -806,6 +880,10 @@ function adaptAdminScript(source, routingScript) {
                     window.idRechargeReport('ready');
                     return;
                 }
+                if (hostedCardPool) {
+                    window.idRechargeSelect('cards');
+                    return;
+                }
                 await loadData(true);
                 await loadRegionConfig();
                 await loadOrbitcardConfig();
@@ -851,6 +929,7 @@ function adaptAdminScript(source, routingScript) {
   );
   source = replaceOne(source, '                loadAdminSecurityStatus().catch(() => { });', '');
   source = adaptAdminRuntimeLogs(source);
+  source = adaptHostedCardPool(source);
   source = replaceOne(source, 'uptimeTickTimer = setInterval(renderUptimeTick, 1000);',
     'uptimeTickTimer = setInterval(() => { if (!document.hidden && window.idRechargeVisible !== false) renderUptimeTick(); }, 1000);');
   // The host must keep the last working iframe when its replacement cannot load.
@@ -961,6 +1040,7 @@ function adaptAdminScript(source, routingScript) {
                 btn.innerHTML = '<i data-lucide="check-check"></i> 解析并导入';
                 paintRechargeCardTypes();
                 lucide.createIcons();
+                window.idRechargeApplyCardChanges?.();
             }
         }
 `

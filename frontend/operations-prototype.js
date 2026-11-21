@@ -739,7 +739,7 @@
   function visibleRechargeCardFrame() {
     if (state.route !== rechargeCardsRoute &&
         (state.route !== onlineRechargeRoute || activeOnlineView !== 'cards')) return null;
-    return $('iframe[data-view="cards"][data-view-group="admin"]:not([hidden])', integrationRoot());
+    return integrationRoot().querySelector('iframe[data-view="cards"][data-view-group="admin"]:not([hidden])');
   }
   function openRechargeTaskLog(jobKey, returnFocus) {
     if (!isAdmin() || typeof jobKey !== 'string' || !/^[\w-]{1,128}$/.test(jobKey)) return;
@@ -915,11 +915,16 @@
         : login)
     );
   }
+  function rechargeLoadingState(module) {
+    if (module === 'cards') return api.loadingState('正在读取银行卡…', { rows: 3 });
+    if (module === 'online') return api.loadingState('正在加载充值页面…', { rows: 3 });
+    return '';
+  }
   function renderRechargeRegion(module, toolbar = '') {
     return `<section class="panel recharge-integration" data-recharge-module="${module}">
         ${toolbar}
         <div class="recharge-integration__view design-async-region" aria-busy="true">
-          <div class="recharge-integration__content"></div>
+          <div class="recharge-integration__content">${rechargeLoadingState(module)}</div>
           <div class="design-region-progress" role="status" hidden></div>
         </div>
       </section>`;
@@ -1150,7 +1155,7 @@
     const loginLogs = state.route === loginLogsRoute;
     const cards = state.route === rechargeCardsRoute;
     const module = bit ? 'bit' : workspace ? 'workspace' : loginLogs ? 'login-logs' : cards ? 'cards' : 'online';
-    const panel = $(`[data-recharge-module="${module}"]`, integrationRoot());
+    const panel = integrationRoot().querySelector(`[data-recharge-module="${module}"]`);
     const view = panel?.querySelector('.recharge-integration__view');
     if (!view) return;
     const selected = bit ? bitLoginView : workspace ? workspaceRechargeView :
@@ -1196,6 +1201,9 @@
     const active = () => panel.isConnected && currentIntegrationRequest.get(view) === request;
     const progress = view.querySelector('.design-region-progress');
     const needsAccessCheck = !bit && (refresh || onlineAdmin === undefined);
+    if (!existingFrame && view.dataset.unavailable && (cards || module === 'online')) {
+      view.querySelector('.recharge-integration__content').innerHTML = rechargeLoadingState(module);
+    }
     request.read = api.beginRegionRead(view, progress, {
       loadingText: needsAccessCheck && !refresh && !existingFrame ? '正在检查充值服务' : '',
       refreshButton: panel.querySelector('.recharge-integration__toolbar :is([data-action="ops-integrated-refresh"], [data-action="staff-card-pool-refresh"])')
@@ -4685,13 +4693,14 @@
   });
   api.modules.operations = {
     cardPool: {
-      render: () => renderRechargeRegion('cards', `<div class="recharge-integration__toolbar content-toolbar">
+      render: (loading = false) => renderRechargeRegion('cards', `<div class="recharge-integration__toolbar content-toolbar">
         <nav class="recharge-integration__nav tabs" aria-label="银行卡池功能" data-recharge-card-tabs>
-          ${cardPoolSections.map(([id, label]) => `<button type="button" class="tab${id === 'local' ? ' active' : ''}" data-action="ops-card-pool-section" data-card-section="${id}" aria-pressed="${id === 'local'}">${label}</button>`).join('')}
+          ${cardPoolSections.map(([id, label]) => `<button type="button" class="tab${id === 'local' ? ' active' : ''}" data-action="ops-card-pool-section" data-card-section="${id}" aria-pressed="${id === 'local'}"${loading ? ' disabled' : ''}>${label}</button>`).join('')}
         </nav>
-        ${button('刷新', 'staff-card-pool-refresh')}
+        ${button('刷新', 'staff-card-pool-refresh', '', '', loading ? 'disabled' : '')}
       </div>`),
       afterRender: () => void loadIntegratedRecharge(),
+      version: () => visibleRechargeCardFrame()?.contentWindow?.idRechargeCardPolicyVersion?.(),
       refresh: () => void loadIntegratedRecharge({ refresh: true }),
       deactivate: deactivateIntegration
     },

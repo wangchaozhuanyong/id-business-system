@@ -57,6 +57,11 @@ CARD_NUMBER_PRESENTATION_FILES = (
     "modules/recharge/codexdaichong/local-gateway.mjs",
     "modules/recharge/codexdaichong/shell.css",
 )
+CARD_FIRST_PAINT_PRESENTATION_FILES = (
+    "modules/recharge/codexdaichong/assets.mjs",
+    "modules/recharge/codexdaichong/card-plan-admin.mjs",
+    "modules/recharge/codexdaichong/shell.js",
+)
 CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES = (
     "modules/recharge/codexdaichong/assets.mjs",
     "modules/recharge/codexdaichong/routing-admin-ui.mjs",
@@ -78,11 +83,16 @@ PRESENTATION_SCOPES = {
     "cardImportPresentation": (CARD_IMPORT_PRESENTATION_FILES, {"/admin", "/admin.js", "/shell.css"}),
     "cardPlanPresentation": (CARD_PLAN_PRESENTATION_FILES, {"/admin", "/admin.js", "/shell.css"}),
     "cardNumberPresentation": (CARD_NUMBER_PRESENTATION_FILES, {"/admin", "/admin.js", "/shell.css"}),
+    "cardFirstPaintPresentation": (CARD_FIRST_PAINT_PRESENTATION_FILES, {"/admin.js", "/shell.js"}),
     "checkoutDiagnosticPresentation": (CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES, {"/admin", "/admin.js", "/shell.css"}),
     "securityPresentation": (SECURITY_PRESENTATION_FILES, {"/admin.js"}),
     "taskHistoryPresentation": (TASK_HISTORY_PRESENTATION_FILES, {"/admin", "/admin.js"}),
     "subscriptionInvoicePresentation": (SUBSCRIPTION_INVOICE_PRESENTATION_FILES, {SUBSCRIPTION_INVOICE_ASSET}),
     "actionPasswordPresentation": (ACTION_PASSWORD_PRESENTATION_FILES, {"/admin.js"}),
+}
+PRESENTATION_MOUNT_ERRORS = {
+    "cardNumberPresentation": "card_number_presentation_mount_mismatch",
+    "cardFirstPaintPresentation": "recharge_presentation_mount_mismatch",
 }
 ADAPTER_MOUNTS = ("modules", "deploy/recharge-core")
 LAUNCHERS = ("run-app", "app-entry.mjs", "check-app.mjs")
@@ -427,13 +437,13 @@ def snapshot(include_adapter=False):
     return state
 
 
-def check_baseline(current, expected, *, check_asset_mount=False):
+def check_baseline(current, expected, *, asset_mount_error=None):
     require(all(current[key] == expected[key] for key in
                 ("components", "unitSha256", "gatewaySha256", "assetsSha256", "launchers")),
             "live_baseline_changed")
     require(current.get("adapterUnit") == expected.get("adapterUnit"), "live_adapter_unit_changed")
-    if check_asset_mount:
-        require(current.get("mountedAssets") == expected.get("mountedAssets"), "card_number_presentation_mount_mismatch")
+    if asset_mount_error:
+        require(current.get("mountedAssets") == expected.get("mountedAssets"), asset_mount_error)
 
 
 def write_new(path, value, mode):
@@ -745,10 +755,10 @@ def require_asset_digest(plan, candidate_sha):
             presentation.get("beforeAssetsSha256") == before and presentation.get("assetsSha256") == candidate_sha and
             candidate_sha != before and re.fullmatch(r"[a-f0-9]{64}", candidate_sha),
             "recharge_presentation_approval_mismatch")
-    if scope == "cardNumberPresentation":
+    if scope in PRESENTATION_MOUNT_ERRORS:
         mounted = plan["before"].get("mountedAssets", {})
         require(mounted.get("available") is True and mounted.get("sha256") == before,
-                "card_number_presentation_mount_mismatch")
+                PRESENTATION_MOUNT_ERRORS[scope])
     return scope
 
 
@@ -1456,10 +1466,10 @@ def read_website(plan, release, source, adapter=None, core=None):
     require(mount_matches(containers["app"], release / "assets.json"), "live_assets_mount_mismatch")
     live_assets = digest(release / "assets.json")
     scope = require_asset_digest(plan, live_assets)
-    if scope == "cardNumberPresentation":
+    if scope in PRESENTATION_MOUNT_ERRORS:
         mounted = mounted_assets_digest()
         require(mounted.get("available") is True and mounted.get("sha256") == live_assets,
-                "card_number_presentation_mount_mismatch")
+                PRESENTATION_MOUNT_ERRORS[scope])
     require(all(any(m["Destination"] == "/state" and not m["RW"] for m in containers[name]["Mounts"])
                 for name in WEBSITE[1:]), "sidecar_state_mount_not_readonly")
     hash_files = """
@@ -1513,6 +1523,8 @@ console.log(JSON.stringify(Object.fromEntries(hashes)));
     if scope == "cardNumberPresentation":
         protected_reads += ("/integrations/codexdaichong/admin", "/integrations/codexdaichong/api/admin/cards",
                             "/integrations/codexdaichong/api/admin/sessions", "/api/local/bitbrowser-login-windows")
+    if scope == "cardFirstPaintPresentation":
+        protected_reads += ("/api/local/staff/finance/cards/pending",)
     for path in protected_reads:
         try:
             with http(path):
@@ -1554,7 +1566,7 @@ def release_website(plan, staged=None):
     before = plan["before"]
     base = before["components"]["app"]["revision"]
     include_adapter = bool(plan.get("adapter"))
-    check_asset_mount = presentation_scope(plan) == "cardNumberPresentation"
+    asset_mount_error = PRESENTATION_MOUNT_ERRORS.get(presentation_scope(plan))
     if plan.get("deployedNativeBuildInputs"):
         native = before.get("nativePublication", {})
         require(not any(name in plan for name in ("adapter", "rechargeCore", "vendureRetryReceipt",
@@ -1564,7 +1576,7 @@ def release_website(plan, staged=None):
                 plan["deployedNativeBuildInputs"] == {"nativeRevision": native["identity"]["revision"],
                                                        "image": native["identity"]["image"]},
                 "deployed_native_inputs_not_verified")
-    check_baseline(snapshot(include_adapter), before, check_asset_mount=check_asset_mount)
+    check_baseline(snapshot(include_adapter), before, asset_mount_error=asset_mount_error)
     release = ROOT / "releases" / sha
     source, ops = staged or stage(plan, release)
     check_native_recovery_source(plan, source)
@@ -1581,7 +1593,7 @@ def release_website(plan, staged=None):
         adapter_canary(plan, source, ops)
     if core:
         core.prepare()
-    check_baseline(snapshot(include_adapter), before, check_asset_mount=check_asset_mount)
+    check_baseline(snapshot(include_adapter), before, asset_mount_error=asset_mount_error)
     old = DROP.read_text()
     launcher = ops / "run-app"
     require(launcher.is_file() and os.access(launcher, os.X_OK), "staged_website_launcher_not_executable")
