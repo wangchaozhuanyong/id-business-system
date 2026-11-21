@@ -204,6 +204,18 @@ def ready_socket():
             "id_private_admission_socket_unavailable")
 
 
+def read_live_gateway_launcher(path):
+    try:
+        metadata = path.lstat()
+        require(stat.S_ISREG(metadata.st_mode) and metadata.st_uid == 0 and
+                (metadata.st_mode & stat.S_IXUSR) and not (metadata.st_mode & 0o022) and
+                path.resolve(strict=True) == path,
+                "gateway_service_launcher_unsafe")
+        return path.read_text()
+    except FileNotFoundError:
+        raise ReleaseError("gateway_service_launcher_missing") from None
+
+
 @contextmanager
 def paused_submission_marker(sha, enabled):
     marker = ADMISSION / "accept-submissions"
@@ -241,7 +253,8 @@ def check_refresh_baseline(sha, retry_receipt, partner_api=False, customer_progr
     read_gateway(previous, ROOT / "releases" / previous / "source")
     launcher = ROOT / "releases" / previous / "operations/run-vendure"
     require(DROP.read_text().count("ExecStart=" + str(launcher)) == 1, "gateway_service_launcher_mismatch")
-    stage_launcher(launcher.read_text(), previous, sha, refresh=True, retry_receipt=retry_receipt, partner_api=partner_api)
+    stage_launcher(read_live_gateway_launcher(launcher), previous, sha, refresh=True,
+                   retry_receipt=retry_receipt, partner_api=partner_api)
     marker = (ADMISSION / "accept-submissions").lstat()
     require(stat.S_ISREG(marker.st_mode) and marker.st_uid == UID and
             stat.S_IMODE(marker.st_mode) == 0o600, "storefront_acceptance_marker_invalid")
@@ -286,8 +299,8 @@ def cutover(sha, release, refresh=False, retry_receipt=None, partner_api=False, 
     launcher = ops / "run-vendure"
     old_drop = DROP.read_text()
     require(old_drop.count("ExecStart=" + str(old_launcher)) == 1, "gateway_service_launcher_mismatch")
-    candidate = stage_launcher(old_launcher.read_text(), previous, sha, refresh=refresh, retry_receipt=retry_receipt,
-                               partner_api=partner_api)
+    candidate = stage_launcher(read_live_gateway_launcher(old_launcher), previous, sha, refresh=refresh,
+                               retry_receipt=retry_receipt, partner_api=partner_api)
     if launcher.exists():
         require(not launcher.is_symlink() and launcher.read_text() == candidate, "gateway_candidate_launcher_changed")
     else:

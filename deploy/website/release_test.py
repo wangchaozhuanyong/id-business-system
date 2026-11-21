@@ -1356,6 +1356,33 @@ class WebsiteReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(remote.ReleaseError, "gateway_retry_launcher_changed"):
             vendure_admission.stage_launcher(approved, before, target, refresh=True, retry_receipt="d" * 64)
 
+    def test_gateway_refresh_reports_missing_or_unsafe_launcher_before_reading_the_queue(self):
+        previous = "a" * 40
+        with TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            launcher = root / "releases" / previous / "operations/run-vendure"
+            launcher.parent.mkdir(parents=True)
+            drop = root / "vendure.conf"
+            with patch.object(vendure_admission, "ROOT", root), patch.object(vendure_admission, "DROP", drop), \
+                    patch.object(vendure_admission, "ready_socket"), patch.object(vendure_admission, "inspect"), \
+                    patch.object(vendure_admission, "identity", return_value={"revision": previous}), \
+                    patch.object(vendure_admission, "read_gateway"), \
+                    patch.object(vendure_admission.sqlite3, "connect") as connect:
+                drop.write_text("ExecStart=/unrelated/run-vendure\n")
+                with self.assertRaisesRegex(remote.ReleaseError, "^gateway_service_launcher_mismatch$"):
+                    vendure_admission.check_refresh_baseline(TARGET, None)
+
+                drop.write_text(f"ExecStart={launcher}\n")
+                with self.assertRaisesRegex(remote.ReleaseError, "^gateway_service_launcher_missing$"):
+                    vendure_admission.check_refresh_baseline(TARGET, None)
+
+                retained = root / "retained-launcher"
+                retained.write_text("retained launcher\n")
+                launcher.symlink_to(retained)
+                with self.assertRaisesRegex(remote.ReleaseError, "^gateway_service_launcher_unsafe$"):
+                    vendure_admission.check_refresh_baseline(TARGET, None)
+                connect.assert_not_called()
+
     def test_gateway_worker_binding_stays_stable_when_the_same_worker_stops(self):
         started = (b"{ path=/operations/worker ; argv[]=/operations/worker --serve ; ignore_errors=no ; "
                    b"start_time=[Mon 2026-11-16] ; stop_time=[n/a] ; pid=451 ; code=(null) ; status=0/0 }\n")
