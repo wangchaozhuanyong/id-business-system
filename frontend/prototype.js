@@ -1107,7 +1107,8 @@ async function saveColumnPreference(tableId, change, control) {
     finally { if (pendingColumnSaves.get(tableId) === saved) pendingColumnSaves.delete(tableId); }
   }, { pending: '正在保存列设置…', success: '列设置已保存', failure: '列设置保存失败，请重试' });
 }
-function table(columns, rows, scope = '', tableId = 'default', emptyState, selectable = () => true) {
+function table(columns, rows, scope = '', tableId = 'default', emptyState, selectable = () => true,
+  { showAllMobileFields = false } = {}) {
   columnDefinitions[tableId] = columns;
   tableRecords.set(tableId, rows);
   const hiddenColumns = hiddenTableColumns(tableId);
@@ -1146,7 +1147,7 @@ function table(columns, rows, scope = '', tableId = 'default', emptyState, selec
     : ['status', 'use', 'subscriptionStatus', 'plan', 'balance', 'saleAmount', 'amount', 'owner', 'ownerName', 'currentCustomer', 'customer', 'expiry'];
   const summaries = [...new Set([...dataColumns.filter(column => column.mobileSummary).map(column => column.id),
     ...preferred.filter(key => dataColumns.some(column => column.id === key))])];
-  const summaryColumns = new Set([identity?.id, ...summaries.slice(0, 3)]);
+  const summaryColumns = new Set(showAllMobileFields ? dataColumns.map(column => column.id) : [identity?.id, ...summaries.slice(0, 3)]);
   if (summaryColumns.size === 1) for (const column of dataColumns) {
     if (!/password|totp|secret|token|session|security|proxy/i.test(column.id)) summaryColumns.add(column.id);
     if (summaryColumns.size >= 4) break;

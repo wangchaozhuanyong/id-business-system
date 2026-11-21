@@ -29,10 +29,12 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
   fixture.commerce.data.customers = Array.from({ length: 12 }, (_, i) => ({
     id: `entry-customer-${i}`, name: i === 0 ? '林先生 · 企业订阅' : `示例客户 ${i + 1}`,
     active: true, version: 1, createdAt: i === 11 ? '' : new Date(clock - Math.floor(i / 2) * 86_400_000 - i * 60_000).toISOString(),
-    ...(i % 2 ? { phone: '+60 12 345 6789' } : { wechat: i === 0 ? 'customer_' + 'long_contact_'.repeat(5) : 'sample_wechat_' + i }),
+    ...(i === 11 ? {} : i % 2 ? { phone: '+60 12 345 6789' } : { wechat: i === 0 ? 'customer_' + 'long_contact_'.repeat(5) : 'sample_wechat_' + i }),
     ...(i === 1 ? contact : i === 2 ? { whatsapp: invalidChatLink, telegram: invalidChatLink } : {}),
     tags: [], source: '客户推荐', notes: i === 0 ? '隔离测试长备注 ' + '仅用于离线验收。'.repeat(40) : ''
   }));
+  const longCustomerName = '企业订阅客户'.repeat(12);
+  fixture.commerce.data.customers.at(-1).name = longCustomerName;
   fixture.commerce.data.orders = products.flatMap((product, p) => fixture.commerce.data.customers.map((customer, i) => ({
     ...sample, id: `entry-order-${p}-${i}`, orderNo: `DEMO-${p}-${i}`, product, plan: plans[p],
     customerId: customer.id, createdAt: customer.createdAt, email: `sample-${p}-${i}@example.test`,
@@ -121,9 +123,12 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
         if (!pager || Math.abs(history.bottom - pager.bottom) > 2) findings.push('分页未贴合记录区底部');
       }
       const heads = root.querySelectorAll('.entry-record-list th');
-      for (const date of root.querySelectorAll('.entry-record-time .entry-record-primary')) {
-        if (date.getClientRects().length && date.scrollWidth > date.clientWidth + 1)
-          findings.push('提交日期在可见列内被截断');
+      for (const cell of records.querySelectorAll('td[data-column="submittedAt"] .mobile-record-value')) {
+        if (records.dataset.kind !== 'order' || !cell.checkVisibility()) continue;
+        const text = document.createRange();
+        text.selectNodeContents(cell);
+        if (text.getClientRects().length !== 1 || text.getBoundingClientRect().right > cell.getBoundingClientRect().right + 1)
+          findings.push('提交日期和时刻应完整显示在同一行');
       }
       const cells = root.querySelector('.entry-record-list tbody tr')?.querySelectorAll('td');
       if (cells?.length === heads.length) heads.forEach((head, i) => {
@@ -180,16 +185,20 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
   await page.goto(origin + '/#/workspace/order/gpt');
   await page.locator('#commerce-entry-records').waitFor({ state: 'attached' });
 
-  await t.test('单行表格、动态渠道列、套餐支付备注与业务隔离', async () => {
+  await t.test('单行表格、独立联系方式与支付方式、备注和业务隔离', async () => {
     const history = page.locator('#commerce-entry-records');
     assert.equal(await history.locator('[data-pagination]').getAttribute('data-page-size'), '20');
     assert.equal(await history.locator('tbody tr[data-row-id]').count(), 12);
-    assert((await history.locator('td[data-column="plan"] .entry-record-primary').allTextContents()).every(text => text === 'GPT · Plus'));
+    assert.deepEqual(await history.locator('td[data-column="plan"]').allTextContents(), Array(12).fill('GPT · Plus'));
     assert.deepEqual(await history.locator('thead th').evaluateAll(nodes => nodes.map(node => node.getAttribute('aria-label') || node.textContent.trim())),
-      ['客户 / 联系方式', '套餐 / 支付方式', '备注', '提交时间', '操作']);
+      ['客户', '联系方式', '套餐', '支付方式', '备注', '提交时间', '操作']);
     assert.equal(await history.getByRole('columnheader', { name: 'QQ', exact: true }).count(), 0);
-    assert.equal(await history.locator('[data-entry-record-contact]').first().textContent(), '微信：cu****t_');
-    assert(!/QQ|WhatsApp|Telegram/.test(await history.locator('[data-entry-record-contact]').first().textContent()));
+    const contactCells = history.locator('td[data-column="contact"]');
+    assert.equal(await contactCells.first().textContent(), '微信：cu****t_');
+    assert(!/QQ|WhatsApp|Telegram/.test(await contactCells.first().textContent()));
+    assert.equal(await contactCells.last().textContent(), '—');
+    assert.equal(await history.locator('td[data-column="submittedAt"]').first().textContent(), '2026-11-10 12:00');
+    assert.equal(await history.locator('td[data-column="submittedAt"]').last().textContent(), '时间未记录');
     const first = history.locator('tbody tr[data-row-id]').first();
     await page.locator('#commerce-email').fill('unfinished@example.test');
     await first.getByRole('button', { name: '查看林先生 · 企业订阅的录入记录' }).click();
@@ -202,7 +211,7 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
     assert(labels.every(x => x.startsWith('Claude')));
     for (const route of ['workspace/order/gpt', 'workspace/order/claude', 'workspace/order/gemini', 'workspace/order/grok']) {
       await go(route);
-      const values = await history.locator('[data-entry-record-payment]').allTextContents();
+      const values = await history.locator('td[data-column="payment"]').allTextContents();
       assert.deepEqual([...new Set(values)].sort(), ['—', '苹果内购', '银行卡'].sort(), route + ' 显示已保存支付方式及缺失占位');
     }
     await go('customers/new');
@@ -215,6 +224,70 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
     await page.locator('#drawer [data-action="drawer-close"]').last().click();
     await go('customers/new/tenant');
     assert.equal(await history.getByRole('columnheader', { name: '支付方式', exact: true }).count(), 0);
+  });
+
+  await t.test('最近订单桌面单行，手机卡片直接展示主要字段、时间与详情', async () => {
+    for (const [width, route, dark] of [
+      [1920, 'gpt', false], [1440, 'claude', true], [390, 'gemini', false], [320, 'grok', true]
+    ]) {
+      const mobile = width <= 900;
+      await page.setViewportSize({ width, height: mobile ? 844 : 1000 });
+      await go('workspace/order/' + route);
+      if (await page.evaluate(() => document.documentElement.dataset.theme === 'dark') !== dark) await toggleDesignTheme(page);
+      if (mobile) await page.getByRole('button', { name: '最近订单', exact: true }).click();
+      const history = page.locator('#commerce-entry-records');
+      const viewport = history.locator('.table-viewport');
+      const rows = viewport.locator('tr[data-row-id]');
+      if (!mobile) {
+        assert(await rows.evaluateAll(items => items.every(tr => {
+          const { top, bottom, height } = tr.getBoundingClientRect();
+          return height <= 56 && tr.cells.length === 7 && Array.from(tr.cells).every(cell => {
+            const rect = cell.getBoundingClientRect();
+            return rect.top === top && rect.bottom === bottom && getComputedStyle(cell).whiteSpace === 'nowrap';
+          });
+        })), route + ' 的七列数据必须在同一行');
+        if (output && width === 1920) await history.screenshot({ path: join(output, 'recent-orders-desktop.png') });
+        continue;
+      }
+      assert(await rows.evaluateAll(items => items.every(card => {
+        const bounds = card.getBoundingClientRect();
+        const inside = node => {
+          const rect = node.getBoundingClientRect();
+          return node.checkVisibility() && rect.width > 0 && rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1;
+        };
+        const time = card.querySelector('[data-column="submittedAt"] .mobile-record-value');
+        const text = document.createRange();
+        text.selectNodeContents(time);
+        return ['name', 'contact', 'plan', 'payment', 'submittedAt'].every(key =>
+          inside(card.querySelector('td[data-column="' + key + '"] .mobile-record-value'))) &&
+          inside(card.querySelector('[data-action="commerce-order-detail"]')) && text.getClientRects().length === 1 &&
+          text.getBoundingClientRect().right <= time.getBoundingClientRect().right + 1;
+      })), width + 'px 订单卡片直接显示主要字段与单行日期时间');
+      assert(await viewport.evaluate(node => node.scrollWidth <= node.clientWidth + 1 &&
+        document.documentElement.scrollWidth <= innerWidth + 1), '手机记录区无需横滑');
+      assert.equal(await rows.first().locator('[data-column="contact"]').textContent(), '微信：cu****t_');
+      assert.equal(await rows.first().locator('[data-column="submittedAt"]').textContent(), '2026-11-10 12:00');
+      if (output && width === 390) {
+        await page.evaluate(() => window.scrollTo(0, 0));
+        await settle(page);
+        await page.screenshot({ path: join(output, 'recent-orders-mobile.png'), animations: 'disabled' });
+      }
+      await rows.first().getByRole('button', { name: /的录入记录$/ }).click();
+      const drawer = page.locator('#drawer[open]');
+      await drawer.getByText(sample.notes, { exact: true }).waitFor({ state: 'visible' });
+      await drawer.locator('[data-action="drawer-close"]').last().click();
+      const pager = history.locator('[data-pagination="commerce-entry-records"]');
+      await pager.getByLabel('每页条数').selectOption('10');
+      await pager.getByRole('button', { name: '下一页', exact: true }).click();
+      assert.equal(await rows.count(), 2);
+      assert.equal(await rows.last().locator('td[data-column="name"]').textContent(), longCustomerName);
+      assert.equal(await rows.last().locator('[data-column="submittedAt"]').textContent(), '时间未记录');
+      await pager.getByRole('button', { name: '上一页', exact: true }).click();
+      await pager.getByLabel('每页条数').selectOption('20');
+      await page.getByRole('button', { name: '返回填写', exact: true }).click();
+    }
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await toggleDesignTheme(page);
   });
 
   await t.test('订单和客户近期记录脱敏，详情支持复制完整值与跳转', async () => {
@@ -245,7 +318,7 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
         await go(route);
         if (customerEntry) await page.getByRole('tab', { name: '最近客户', exact: true }).click();
         const row = history.locator(`tr[data-row-id="${rowId}"]`);
-        const summary = row.locator(customerEntry ? 'td[data-column="contact"]' : '[data-entry-record-contact]');
+        const summary = row.locator('td[data-column="contact"]');
         if (!(await summary.isVisible())) await row.getByRole('button', { name: '更多资料' }).click();
         const maskedWechat = customerEntry ? 'qa****id' : 'qa****ot';
         assert.equal(await summary.textContent(),
@@ -326,7 +399,7 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
       assert.equal(await total(), '2', '清空关键词即时恢复当日记录');
       await apply('order_wechat 苹果');
       assert.deepEqual(await recordIds(), ['entry-order-0-1']);
-      assert(!((await history.locator('[data-entry-record-contact]').textContent()).includes(orderWechat)), '搜索完整联系方式仍脱敏展示');
+      assert(!((await history.locator('td[data-column="contact"]').textContent()).includes(orderWechat)), '搜索完整联系方式仍脱敏展示');
 
       await go('workspace/order/claude');
       assert.equal(await search.inputValue(), '');
@@ -383,10 +456,10 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
       const claude = route.endsWith('/claude');
       await page.locator('#commerce-email').fill('pagination-draft@example.test');
       await pager.getByLabel('每页条数').selectOption('10');
-      const payments = await history.locator('[data-entry-record-payment]').allTextContents();
+      const payments = await history.locator('td[data-column="payment"]').allTextContents();
       if (route.endsWith('/gpt')) {
         await page.locator('#commerce-payment').selectOption('苹果内购');
-        assert.deepEqual(await history.locator('[data-entry-record-payment]').allTextContents(), payments, '左侧草稿不改变已保存订单的支付方式');
+        assert.deepEqual(await history.locator('td[data-column="payment"]').allTextContents(), payments, '左侧草稿不改变已保存订单的支付方式');
       }
       const frame = await history.locator('.table-viewport').boundingBox();
       await pager.getByRole('button', { name: '下一页', exact: true }).click();
@@ -669,7 +742,7 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
   if (output) await writeFile(join(output, 'geometry.json'), JSON.stringify(checks, null, 2));
 });
 
-test('录单币种完整可见，长名称回显与金额输入和价格按钮分行', async t => {
+test('录单币种完整可见，长名称、金额输入和价格按钮互不遮挡', async t => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
   const browser = await chromium.launch();
   t.after(() => browser.close());
@@ -701,14 +774,21 @@ test('录单币种完整可见，长名称回显与金额输入和价格按钮�
           const currency = group.querySelector('select');
           const extra = currency.closest('.field-control').querySelector('.order-value-readout');
           const amount = box(group.querySelector('.order-amount-picker'));
-          const price = box(group.querySelector('.order-financial-actions button'));
+          const priceButton = group.querySelector('.order-financial-actions button');
+          const price = box(priceButton), choice = box(currency);
           const readout = extra && box(extra), bounds = box(group);
+          const inside = rect => rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1 &&
+            rect.top >= bounds.top - 1 && rect.bottom <= bounds.bottom + 1;
+          const separate = (first, second) => first.right <= second.left + 1 || second.right <= first.left + 1 ||
+            first.bottom <= second.top + 1 || second.bottom <= first.top + 1;
           return {
             label: currency.selectedOptions[0].textContent, extra: extra?.textContent,
-            fits: !readout || (readout.top >= box(currency).bottom && readout.bottom <= amount.top &&
-              readout.left >= bounds.left && readout.right <= bounds.right + 1 && extra.scrollWidth <= extra.clientWidth + 1),
-            controlsInside: [box(currency), amount, price].every(rect => rect.left >= bounds.left && rect.right <= bounds.right + 1),
-            amountTop: amount.top, groupTop: bounds.top, priceVisible: price.top >= amount.bottom && price.bottom <= bounds.bottom + 1
+            fits: !readout || (inside(readout) && readout.top >= choice.bottom &&
+              separate(readout, amount) && separate(readout, price) && extra.scrollWidth <= extra.clientWidth + 1),
+            controlsInside: [choice, amount, price].every(inside),
+            amountTop: amount.top, groupTop: bounds.top,
+            priceVisible: priceButton.checkVisibility() && price.width > 0 && price.height > 0 &&
+              separate(price, amount) && separate(price, choice)
           };
         }));
         assert.equal(cards.length, 2);
@@ -730,11 +810,15 @@ test('录单币种完整可见，长名称回显与金额输入和价格按钮�
         await page.getByRole('button', { name: '返回订单', exact: true }).click();
         await sale.selectOption('USD');
         await sale.locator('..').locator('.order-value-readout').waitFor({ state: 'detached' });
-        await page.setViewportSize({ width: 1920, height: 960 });
-        await settle(page);
-        const paidTop = (await page.locator('#commerce-paidAmount').boundingBox()).y;
-        const saleTop = (await page.locator('#commerce-saleAmount').boundingBox()).y;
-        assert(Math.abs(paidTop - saleTop) <= 1, '只有一侧币种需要回显时，并排金额框仍应对齐');
+        for (const width of [1920, 2000]) {
+          await page.setViewportSize({ width, height: 960 });
+          await settle(page);
+          for (const field of ['Currency', 'Amount']) {
+            const paidTop = (await page.locator('#commerce-paid' + field).boundingBox()).y;
+            const saleTop = (await page.locator('#commerce-sale' + field).boundingBox()).y;
+            assert(Math.abs(paidTop - saleTop) <= 1, `${width}px 只有一侧币种需回显时，并排${field}控件仍应对齐`);
+          }
+        }
       }
     }
     await context.close();

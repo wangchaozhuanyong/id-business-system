@@ -6457,7 +6457,7 @@
   function entryRecordList(kind, product) {
     const view = entryView(kind, product);
     const terms = contactKey(view.query).split(/\s+/).filter(Boolean);
-    const grouped = kind === 'order';
+    const recentOrderEntry = kind === 'order' && isOrderEntry(S.route);
     const rows = entryRecordRows(kind, product, view);
     const contacts = new Map(customers.map(row => [row.id, row]));
     const plans = new Map();
@@ -6493,24 +6493,18 @@
         submittedAt: Number.isFinite(timestamp) ? beijingClock.format(timestamp) : '时间未记录'
       });
     }
-    const hasContact = records.some(row => row.contact);
-    const entryValue = (value, detail, attribute = '') => '<span class="entry-record-primary">' + E(value) + '</span>' +
-      (detail ? '<span class="entry-record-secondary" ' + attribute + '>' + E(detail) + '</span>' : '');
+    const hasContact = recentOrderEntry || records.some(row => row.contact);
     const columns = [
-      { id: 'name', label: kind === 'tenant' ? '租户' : grouped && hasContact ? '客户 / 联系方式' : '客户', long: true,
-        render: grouped ? row => entryValue(row.name, row.contact, 'data-entry-record-contact') : undefined },
-      ...(!grouped && hasContact ? [{ id: 'contact', label: '联系方式',
+      { id: 'name', label: kind === 'tenant' ? '租户' : '客户', long: true },
+      ...(hasContact ? [{ id: 'contact', label: '联系方式',
         render: row => `<span class="table-value-ellipsis entry-contact-summary">${E(row.contact || '—')}</span>` }] : []),
-      { id: 'plan', label: grouped ? '套餐 / 支付方式' : '订阅套餐', long: true,
-        render: row => grouped ? entryValue(row.plan || '—', row.payment || '—', 'data-entry-record-payment') : E(row.plan || '—'),
-        headerHelp: grouped ? '本条订单实际登记的产品、套餐与支付方式。' : kind === 'order'
+      { id: 'plan', label: recentOrderEntry ? '套餐' : '订阅套餐', long: true,
+        render: row => E(row.plan || '—'),
+        headerHelp: kind === 'order'
           ? '本条订单登记的产品与套餐。' : '按已关联订单展示登记的产品与套餐，不代表当前订阅仍然有效；开通证据在历史开通业务中查看。' },
-      ...(kind === 'order' && !grouped ? [{ id: 'payment', label: '支付方式', render: row => E(row.payment || '—') }] : []),
-      { id: 'notes', label: '备注', long: true, mobileSummary: grouped, render: row => E(row.notes || '—') },
-      { id: 'submittedAt', label: '提交时间', class: grouped ? 'entry-record-time' : '', mobileSummary: grouped, render: grouped ? row => {
-        const [day, time] = row.submittedAt.split(' ');
-        return entryValue(day, time ? ' ' + time : '');
-      } : undefined },
+      ...(kind === 'order' ? [{ id: 'payment', label: '支付方式', render: row => E(row.payment || '—') }] : []),
+      { id: 'notes', label: '备注', long: true, render: row => E(row.notes || '—') },
+      { id: 'submittedAt', label: '提交时间' },
       { id: 'actions', label: '操作', action: true, render: row => `<div class="action-links">${
         A.textAction('详情', kind === 'order' ? 'commerce-order-detail' : 'commerce-contact-detail',
           `data-id="${E(row.id)}" data-kind="${kind}" aria-label="查看${E(row.name)}的录入记录"`)
@@ -6522,7 +6516,7 @@
         title: terms.length ? '没有匹配的记录' : view.period === 'all' ? '暂无录入记录' : '所选时间暂无录入记录',
         description: terms.length ? '可试试更短的关键词，或调整日期范围。' :
           view.period === 'all' ? '保存资料后可在这里查看。' : '可切换全部或调整日期范围。'
-      }) + window.IDPagination.render({ id: 'commerce-entry-records', ...view, total: records.length });
+      }, undefined, { showAllMobileFields: recentOrderEntry }) + window.IDPagination.render({ id: 'commerce-entry-records', ...view, total: records.length });
   }
   function entryRecordFilters(kind, product) {
     const view = entryView(kind, product);
@@ -6541,19 +6535,18 @@
     const mobileView = A.state.drafts.get(`mobile-entry:${A.state.route}`)?.view === 'records' ? 'records' : 'form';
     const unified = kind === 'order';
     const mobileControl = unified
-      ? `<div class="panel order-entry-mobile-switch"><strong data-entry-switch-view="form">填写订单资料</strong>
-        <strong data-entry-switch-view="records">${title}</strong>${
-        A.button(title, 'mobile-entry-view', '', 'chevron', 'data-view="records" data-entry-switch-view="form"')}${
-        A.button('返回填写', 'mobile-entry-view', '', 'return', 'data-view="form" data-entry-switch-view="records"')}</div>`
+      ? `<div class="panel order-entry-mobile-switch" data-entry-switch-view="form"><strong>填写订单资料</strong>${
+        A.button(title, 'mobile-entry-view', '', 'chevron', 'data-view="records" data-entry-switch-view="form"')}</div>`
       : `<div class="entry-mobile-tabs" role="tablist" aria-label="录入与最近记录"><button type="button" class="tab" role="tab" data-action="mobile-entry-view" data-view="form" aria-selected="${mobileView === 'form'}">填写资料</button><button type="button" class="tab" role="tab" data-action="mobile-entry-view" data-view="records" aria-selected="${mobileView === 'records'}">${title}</button></div>`;
     const periods = entryRecordFilters(kind, product);
     return `<div class="commerce-entry-layout${unified ? ' order-submission-entry' : ''}" data-mobile-view="${mobileView}">${unified ? '' : mobileControl}
       <div class="commerce-entry-columns">${unified ? mobileControl : ''}${form}
       <aside class="panel entry-records" id="commerce-entry-records" data-kind="${kind}" data-product="${E(product)}" aria-labelledby="entry-records-title">
-        <div class="panel-heading" ${pending ? 'inert' : ''}>
-          <div class="entry-record-context"><div class="section-title-row"><h2 id="entry-records-title">${title}</h2>${A.titleInfo(title, description, 'entry-records-help')}</div>
+        <div class="panel-heading">
+          <div class="entry-record-context" ${pending ? 'inert' : ''}><div class="section-title-row"><h2 id="entry-records-title">${title}</h2>${A.titleInfo(title, description, 'entry-records-help')}</div>
             ${periods}</div>
-          <div class="entry-record-actions"><div class="search-field entry-record-search">${A.icon('search')}<input type="search" data-auto-search id="commerce-entry-search" aria-label="${searchLabel}" placeholder="${searchLabel}" value="${E(query)}" autocomplete="off" /></div>
+          ${unified ? A.button('返回填写', 'mobile-entry-view', 'order-entry-return', 'return', 'data-view="form" data-entry-switch-view="records"') : ''}
+          <div class="entry-record-actions" ${pending ? 'inert' : ''}><div class="search-field entry-record-search">${A.icon('search')}<input type="search" data-auto-search id="commerce-entry-search" aria-label="${searchLabel}" placeholder="${unified ? '搜索订单' : searchLabel}" value="${E(query)}" autocomplete="off" /></div>
             ${localData ? A.button('刷新', 'commerce-entry-refresh', 'compact', '', 'aria-label="刷新最近录入记录"') : ''}</div></div>
         <div class="entry-record-region design-async-region"><div data-entry-progress role="status" hidden></div><div class="entry-record-list">${pending
           ? entryLoadingState(title) : entryRecordList(kind, product)}</div></div>

@@ -12,7 +12,7 @@ import { RECHARGE_STAGE_LABELS, RECHARGE_STEP_LABELS } from './progress-presenta
 import { checkoutServerDiagnostic, routingAdminPanel } from './routing-admin-ui.mjs';
 import { createRechargeCardTypeOverlay } from './card-type-overlay.mjs';
 import { describeCardImport, inspectCardImport } from './card-import-preview.mjs';
-import { cardPlanAdminScript, cardPlanImportFields, cardPlanLabels, cardPlanToolbar } from './card-plan-admin.mjs';
+import { cardPlanAdminScript, cardPlanEditor, cardPlanImportFields, cardPlanLabels, cardPlanToolbar } from './card-plan-admin.mjs';
 
 const git = promisify(execFile);
 const clone = fileURLToPath(new URL('../../../.upstream/codexdaichong/', import.meta.url));
@@ -2291,13 +2291,14 @@ function adaptHtml(source, kind) {
       'id="card_pool_import_btn" class="btn btn-success" disabled');
     source = replaceOne(source, '<p id="card_pool_import_result" style=',
       '<p id="card_pool_import_result" role="status" style=');
+    source = replaceOne(source, '<h2 class="panel-title">银行卡列表</h2>', cardPlanToolbar);
     source = replaceOne(
       source,
       '<div class="table-container">\n                    <table class="admin-action-table card-pool-table">',
       '<div class="card-pool-type-feedback">' +
         '<span id="card_pool_type_status" role="status"></span>' +
         '<button type="button" id="card_pool_type_retry" class="btn btn-secondary" hidden>重试读取类型</button>' +
-        '</div>\n' + cardPlanToolbar +
+        '</div>\n' + cardPlanEditor +
         '\n                <div class="table-container">\n                    <table class="admin-action-table card-pool-table">'
     );
     source = source.replace('每次任务从「启用」的代理中随机抽取。',

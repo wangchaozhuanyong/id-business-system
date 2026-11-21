@@ -536,10 +536,10 @@ export async function startPreview(
       .toString('utf8')
       .replace(
         '    <script src="./prototype.js',
-        '    <link rel="stylesheet" href="/local-auth.css?v=20261114-login-refresh" />\n' +
+        '    <link rel="stylesheet" href="/local-auth.css?v=20261121-session-restore" />\n' +
           '    <script src="/local-data.js" defer></script>\n' +
           '    <script src="/toolbox-local.js" defer></script>\n' +
-          '    <script src="/local-auth.js?v=20261119-staff-team-field" defer></script>\n    <script src="./prototype.js'
+          '    <script src="/local-auth.js?v=20261121-session-restore" defer></script>\n    <script src="./prototype.js'
       )
       .replace('20261105-bit-login" />', '20261106-local-inventory-settings" />')
       .replace(

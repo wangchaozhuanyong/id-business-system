@@ -163,6 +163,9 @@ html[data-theme='dark'] .local-auth-story-copy span:last-child { color: #b5c7a7;
   letter-spacing: .5px;
 }
 .local-auth-form { display: flex; flex-direction: column; gap: 21px; }
+#local-auth-session-check { margin-top: 24px; }
+#local-auth-session-check button { margin-top: 12px; }
+#local-auth-session-check button[hidden] { display: none; }
 .local-auth-field { display: flex; flex-direction: column; gap: 9px; min-width: 0; }
 .local-auth-field > label {
   margin: 0;
@@ -244,7 +247,7 @@ html[data-theme='dark'] .local-auth-story-copy span:last-child { color: #b5c7a7;
   cursor: pointer;
 }
 .local-auth-remember input { width: 16px; height: 16px; margin: 0; flex: none; accent-color: var(--primary); }
-.local-auth-reason {
+.local-auth-reason, #local-auth-session-check p {
   margin: 0;
   padding: 10px 14px;
   border-radius: 8px;

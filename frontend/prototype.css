@@ -4897,6 +4897,19 @@ details.toolbox-phrase-more[open] > summary {
 }
 .order-amount-picker > :focus-visible { z-index: 1; }
 .order-financial-groups--amounts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+@container (min-width: 640px) {
+  .order-financial-groups--amounts:has(> .order-money-group .order-value-readout) > .order-money-group {
+    align-items: start;
+  }
+}
+/* At 868px both cards have 400px of content plus their borders, padding and shared gap. */
+@container (640px <= width < 868px) {
+  .order-financial-groups--amounts:has(> .order-money-group .order-value-readout) > .order-money-group {
+    container-type: normal;
+    grid-row: span 3;
+    grid-template-rows: subgrid;
+  }
+}
 @container (max-width: 1039px) {
   .order-financial-groups { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .order-financial-group:not(.order-money-group) {
@@ -5668,26 +5681,7 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
   .entry-record-actions .entry-record-search { max-width: none; }
   .entry-record-search input { font-size: 16px; }
 }
-.order-entry-mobile-switch { display: none; }
-.entry-record-primary,
-.entry-record-secondary {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.entry-record-time .entry-record-primary { white-space: nowrap; }
-@media (min-width: 901px) {
-  .order-submission-entry .entry-record-list .entry-record-time {
-    inline-size: 100px;
-    min-inline-size: 100px;
-    font-variant-numeric: tabular-nums;
-  }
-}
-.entry-record-secondary {
-  color: var(--secondary);
-  font-size: 12px;
-  font-weight: 400;
-}
+.order-entry-mobile-switch, .order-entry-return { display: none; }
 .order-submission-entry .entry-record-list [data-column='name'] .table-value-button {
   max-inline-size: var(--entry-record-value-width);
 }
@@ -6531,7 +6525,7 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
   .mobile-records .mobile-record-value { display: block; min-width: 0; line-height: 1.7; }
   .mobile-records .relay-buyer-code { min-width: 0; max-width: 100%; }
   .mobile-records :is(.table-value-button, .table-value-ellipsis) { max-width: 100%; }
-  .entry-record-list .entry-contact-summary { white-space: normal; }
+  .entry-record-list .mobile-records .entry-contact-summary { white-space: normal; }
   .mobile-records td[data-mobile-field='identity'] > .mobile-record-value { flex: 1; }
   .mobile-records td[data-mobile-field='identity'] :is(.text-button, .table-value-button, .table-value-ellipsis) { white-space: normal; overflow-wrap: anywhere; text-align: left; }
   .mobile-records td[data-mobile-field='actions'] { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 8px; padding-top: 8px; border-top: 1px solid var(--line); }
@@ -6921,8 +6915,7 @@ input:is([type='checkbox'],[type='radio']) { accent-color: var(--primary); }
 .entry-record-actions { flex-basis: 180px; }
 .entry-record-actions .entry-record-search { flex-basis: 190px; max-width: 240px; }
 .entry-records .entry-record-list td { padding-block: 8px; }
-.entry-records .entry-record-primary { color: var(--text); font-weight: 500; }
-.entry-records :is(.entry-contact-summary,.entry-record-secondary) { color: var(--muted); }
+.entry-records .entry-contact-summary { color: var(--muted); }
 /* Table hierarchy and restrained status colours. */
 table { font-size: 13px; }
 th { background: var(--surface-soft); color: var(--secondary); font-size: 12px; font-weight: 500; }
@@ -6991,6 +6984,7 @@ td { color: var(--text); border-color: var(--line); }
 
 @media (min-width: 901px) {
   .entry-records[data-kind='order'] .entry-record-list td { height: 47px; }
+  .order-submission-entry .entry-record-list tbody tr[data-row-id] > td { height: 42px; }
   .entry-records .table-actions .text-button { min-height: 32px; }
 }
 @container commerce-entry (min-width: 1040px) {
@@ -6998,4 +6992,68 @@ td { color: var(--text); border-color: var(--line); }
   .entry-records[data-kind='order'] .entry-record-list .table-actions { right: 12px; }
 }
 
-@media (max-width: 900px) { .order-submission-form .section-heading { margin-bottom: 8px; } }
+@media (max-width: 900px) {
+  .order-submission-form .section-heading { margin-bottom: 8px; }
+  .order-submission-entry .entry-records > .panel-heading {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 8px;
+  }
+  .order-submission-entry .entry-record-context { display: contents; }
+  .order-submission-entry .entry-record-context .section-title-row { grid-area: 1 / 1 / 2 / 3; }
+  .order-submission-entry .entry-record-filters { grid-area: 2 / 1; }
+  .order-submission-entry .entry-record-actions { grid-area: 2 / 2 / 3 / -1; min-width: 0; }
+  .order-submission-entry .order-entry-return { display: inline-flex; grid-area: 1 / 3; }
+  .order-submission-entry .entry-record-list tr[data-row-id] {
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+    gap: 6px 12px;
+  }
+  .order-submission-entry .entry-record-list tr[data-row-id] > td {
+    min-width: 0;
+    padding: 0;
+  }
+  .order-submission-entry .entry-record-list td[data-column='actions'] {
+    grid-area: 1 / 2;
+    align-self: start;
+    justify-self: end;
+    border: 0;
+  }
+  .order-submission-entry .entry-record-list td[data-column='contact'],
+  .order-submission-entry .entry-record-list td[data-column='notes'],
+  .order-submission-entry .entry-record-list td[data-column='submittedAt'] {
+    grid-column: 1 / -1;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .order-submission-entry .entry-record-list td[data-column='contact'] {
+    display: block;
+  }
+  .order-submission-entry .entry-record-list td[data-column='contact']::before {
+    content: none;
+  }
+  .order-submission-entry .entry-record-list .entry-contact-summary {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    max-width: 100%;
+    line-height: 1.5;
+  }
+  .order-submission-entry .entry-record-list :is(td[data-column='plan'], td[data-column='payment']) {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+  .order-submission-entry .entry-record-list td[data-column] .table-value-button {
+    max-inline-size: 100%;
+  }
+  .order-submission-entry .entry-record-list td[data-column='notes']:not(:has(.table-value-button)) {
+    display: none;
+  }
+  .order-submission-entry .entry-record-list tr[data-row-id] > td[data-column='submittedAt'] {
+    grid-template-columns: 1fr auto;
+    padding-top: 6px;
+    border-top: 1px solid var(--line);
+    white-space: nowrap;
+  }
+}
+@media (max-width: 359px) {
+  .order-submission-entry .entry-record-actions { grid-area: 3 / 1 / 4 / -1; }
+}

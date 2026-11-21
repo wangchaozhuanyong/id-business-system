@@ -16,7 +16,7 @@ test('remember login, own-device controls and reconnect states work without loca
   await context.route('**/api/local/auth/**', async route => {
     const req = route.request(), path = new URL(req.url()).pathname;
     if (path.endsWith('/login')) { submitted = req.postDataJSON(); signedIn = true; return route.fulfill({ json: { actor } }); }
-    if (path.endsWith('/session')) return fail ? route.fulfill({ status: 503, json: { error: '暂不可用' } }) : route.fulfill({ json: { configured: true, actor: expired ? null : actor, reason: expired ? 'expired' : undefined } });
+    if (path.endsWith('/session')) return fail ? route.fulfill({ status: 503, json: { error: '暂不可用' } }) : route.fulfill({ json: { configured: true, actor: signedIn && !expired ? actor : null, reason: expired ? 'expired' : undefined } });
     if (path.endsWith('/activity')) { activityCount++; return fail ? route.abort() : route.fulfill({ json: { remembered: true } }); }
     if (req.method() === 'DELETE') { devices = devices.filter(row => !path.endsWith(row.id)); return route.fulfill({ json: { current: false } }); }
     if (path.endsWith('/devices')) return route.fulfill({ json: { items: devices } });
@@ -32,6 +32,7 @@ test('remember login, own-device controls and reconnect states work without loca
   page.on('pageerror', error => errors.push(error.message));
   t.after(() => { if (errors.length) console.error('browser errors:', errors); });
   await page.goto(origin + '/');
+  await page.locator('#local-auth-remember').waitFor();
   for (const width of [1280, 390, 320]) for (const theme of ['light', 'dark']) {
     await page.setViewportSize({ width, height: 900 });
     await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
@@ -97,8 +98,8 @@ test('remember login, own-device controls and reconnect states work without loca
   assert.equal(await page.locator('#self-nickname').inputValue(), '隔离的未保存昵称');
   expired = true; signedIn = false;
   await page.evaluate(() => window.IDLocalAuth.refresh());
-  await page.locator('#local-auth-gate').waitFor();
-  assert.equal(await page.locator('.local-auth-reason').textContent(), '登录已到期，请重新登录。');
+  await page.locator('.local-auth-form .local-auth-reason').waitFor();
+  assert.equal(await page.locator('.local-auth-form .local-auth-reason').textContent(), '登录已到期，请重新登录。');
   assert.deepEqual(errors, []);
   if (process.env.ID_AUTH_QA_OUTPUT) {
     await mkdir(process.env.ID_AUTH_QA_OUTPUT, { recursive: true });
