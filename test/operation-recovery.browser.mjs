@@ -120,6 +120,18 @@ test('导入批次可逐条归档，手机和桌面都能从原归档恢复，�
       await dialog.getByRole('button', { name: '确认归档', exact: true }).click();
       await dialog.getByText(/暂时无法确认归档结果/).waitFor();
       assert.equal(store.load('inventory').data.mailboxes.length, 0);
+      await page.keyboard.press('Escape');
+      await dialog.waitFor({ state: 'hidden' });
+      await page.goto(origin + '/#/customers/list');
+      await page.goto(origin + '/#/mailboxes/google');
+      if (width === 1440) await main.getByRole('button', { name: /待核对归档/ }).click();
+      else {
+        await main.getByRole('tab', { name: '导入记录' }).click();
+        await main.locator('[data-action="inventory-import-detail"]').click();
+      }
+      await dialog.getByRole('button', { name: '核对上次归档' }).click();
+      assert.equal(await dialog.getByLabel('归档原因').inputValue(), 'wrong_import');
+      assert.equal(await dialog.getByLabel('归档原因').isDisabled(), true);
       await dialog.getByRole('button', { name: '重试归档', exact: true }).click();
       await dialog.getByRole('button', { name: '查看归档记录', exact: true }).click();
       await page.locator('#main[data-layout-route="settings/audit"]').waitFor();

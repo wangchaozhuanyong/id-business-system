@@ -128,7 +128,7 @@ test('租户普通新增及录单快捷新增复用员工归属，保存重试�
     assert.equal(await name.inputValue(), '合成新租户', '保存失败保留完整输入');
     await page.locator('#drawer [data-action="drawer-close"]').first().click();
     await page.goto(origin + '/#/customers/new/tenant');
-    await page.locator('[data-action="commerce-local-retry"]').click();
+    await page.locator('#main .form-panel [data-action="commerce-local-retry"]').click();
     await name.waitFor();
     assert.equal(await owner.inputValue(), staff.id, '保存结果待核对时，先重新读取再恢复草稿');
     await save(200);
@@ -196,6 +196,8 @@ test('租户普通新增及录单快捷新增复用员工归属，保存重试�
     assert.equal(noPhone.version, 2);
     assert.equal(writes.at(-1).recordChange.after.id, noPhone.id);
 
+    await page.goto(origin + '/#/customers/new/tenant');
+    await name.fill('独立租户草稿');
     await page.goto(origin + '/#/workspace/order/claude');
     await page.locator('#commerce-ownerId option[value="staff"]').waitFor({ state: 'attached' });
     await page.locator('#commerce-ownerId').selectOption(staff.id, { force: true });
@@ -204,6 +206,16 @@ test('租户普通新增及录单快捷新增复用员工归属，保存重试�
     const supplement = page.locator('#main #commerce-order-form details').filter({ hasText: 'Claude 补充资料' });
     await supplement.locator('summary').click();
     await page.locator('[data-action="commerce-quick-tenant"][data-target="claudeVerifierId"]').click();
+    assert.equal(await name.inputValue(), '', '新增认证人不会带入独立租户草稿');
+    await name.fill('认证人专用草稿');
+    await page.locator('#drawer [data-action="drawer-close"]').first().click();
+    await page.locator('#commerce-proMaterialMode').selectOption('tenant_card');
+    await page.locator('[data-action="commerce-quick-tenant"]:not([data-target]):visible').click();
+    assert.equal(await name.inputValue(), '', '同一订单的付款租户与认证人相互隔离');
+    await name.fill('用卡租户草稿');
+    await page.locator('#drawer [data-action="drawer-close"]').first().click();
+    await page.locator('[data-action="commerce-quick-tenant"][data-target="claudeVerifierId"]').click();
+    assert.equal(await name.inputValue(), '认证人专用草稿');
     await owner.locator('option[value="staff"]').waitFor({ state: 'attached' });
     assert.equal(await owner.inputValue(), actor.id, '快捷新增也默认实际录入人，不沿用订单所选员工');
     assert.equal(await page.locator('#commerce-ownerId').inputValue(), staff.id);
@@ -226,7 +238,7 @@ test('租户普通新增及录单快捷新增复用员工归属，保存重试�
       const layout = await popup.evaluate(node => {
         const rect = node.getBoundingClientRect();
         return { fits: rect.left >= 0 && rect.right <= innerWidth && rect.top >= 0 && rect.bottom <= innerHeight,
-          noOverflow: document.documentElement.scrollWidth <= innerWidth };
+          noOverflow: document.documentElement.scrollWidth <= innerWidth, rect: rect.toJSON(), inlineStyle: node.style.cssText };
       });
       assert(layout.fits && layout.noOverflow, JSON.stringify({ width, dark, ...layout }));
       const alignment = await trigger.evaluate(node => {
@@ -257,6 +269,7 @@ test('租户普通新增及录单快捷新增复用员工归属，保存重试�
     assert.deepEqual(fixture.commerce.data.orders, originalOrders);
 
     await page.goto(origin + '/#/customers/new/tenant');
+    assert.equal(await name.inputValue(), '独立租户草稿', '两类快捷草稿的保存与取消均保留独立租户草稿');
     await name.fill('失效归属重试');
     await phone.fill('合成电话 03');
     await choose(staff.id);

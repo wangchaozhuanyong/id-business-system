@@ -177,7 +177,7 @@ test('严格拒绝越权、直接覆盖财务字段、无效资料和并发覆�
 test('新客户与原单的关联一起产生，重复客户不会被静默创建', () => {
   const data = payload(order('own'));
   const command = { action: 'complete', orderId: 'own', version: 1, newCustomer: { name: '新客户' },
-    customerSource: '客户推荐', contacts: { customerPhone: '789012' } };
+    customerSource: '客户推荐', contacts: { customerPhone: '010-55550102' } };
   const result = change(data, a, command);
   assert.equal(result.createdCustomer, true);
   assert.equal(result.customer.name, '新客户');
@@ -185,6 +185,8 @@ test('新客户与原单的关联一起产生，重复客户不会被静默创�
   assert.equal(result.customer.source, '客户推荐');
   assert.equal(result.order.customerId, result.customer.id);
   assert.equal(result.order.customerPhone, result.customer.phone);
+  assert.equal(result.customer.phone, '+861055550102');
+  assert.throws(() => change(data, a, { ...command, contacts: { customerPhone: 'abc' } }), { status: 400 });
   assert.throws(() => change(data, a, { ...command, newCustomer: { name: existing.name },
     contacts: { customerPhone: '123-456' } }), { status: 409 });
 });

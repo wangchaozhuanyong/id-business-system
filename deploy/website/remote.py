@@ -46,6 +46,8 @@ WORKSPACE_PROGRESS_PRESENTATION_FILES = (
 TABLE_ACTIONS_STYLESHEET = "modules/recharge/codexdaichong/shell.css"
 CARD_IMPORT_ASSET_SOURCE = "modules/recharge/codexdaichong/assets.mjs"
 CARD_IMPORT_PRESENTATION_FILES = (CARD_IMPORT_ASSET_SOURCE, "frontend/pagination.js", "frontend/tabs.css")
+CARD_IMPORT_PREVIEW_SOURCE = "modules/recharge/codexdaichong/card-import-preview.mjs"
+RECHARGE_REDEMPTION_CARD_IMPORT_FILES = (CARD_IMPORT_ASSET_SOURCE, CARD_IMPORT_PREVIEW_SOURCE)
 CARD_PLAN_PRESENTATION_FILES = (
     "modules/recharge/codexdaichong/card-plan-admin.mjs",
     "modules/recharge/codexdaichong/shell.css",
@@ -84,6 +86,8 @@ PRESENTATION_SCOPES = {
     "cardPlanPresentation": (CARD_PLAN_PRESENTATION_FILES, {"/admin", "/admin.js", "/shell.css"}),
     "cardNumberPresentation": (CARD_NUMBER_PRESENTATION_FILES, {"/admin", "/admin.js", "/shell.css"}),
     "cardFirstPaintPresentation": (CARD_FIRST_PAINT_PRESENTATION_FILES, {"/admin.js", "/shell.js"}),
+    "rechargeRedemptionCardImportPresentation": (RECHARGE_REDEMPTION_CARD_IMPORT_FILES,
+                                                {"/redeem", "/workspace", "/admin", "/admin.js"}),
     "checkoutDiagnosticPresentation": (CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES, {"/admin", "/admin.js", "/shell.css"}),
     "securityPresentation": (SECURITY_PRESENTATION_FILES, {"/admin.js"}),
     "taskHistoryPresentation": (TASK_HISTORY_PRESENTATION_FILES, {"/admin", "/admin.js"}),
@@ -93,6 +97,7 @@ PRESENTATION_SCOPES = {
 PRESENTATION_MOUNT_ERRORS = {
     "cardNumberPresentation": "card_number_presentation_mount_mismatch",
     "cardFirstPaintPresentation": "recharge_presentation_mount_mismatch",
+    "rechargeRedemptionCardImportPresentation": "recharge_presentation_mount_mismatch",
 }
 ADAPTER_MOUNTS = ("modules", "deploy/recharge-core")
 LAUNCHERS = ("run-app", "app-entry.mjs", "check-app.mjs")
@@ -755,6 +760,10 @@ def require_asset_digest(plan, candidate_sha):
             presentation.get("beforeAssetsSha256") == before and presentation.get("assetsSha256") == candidate_sha and
             candidate_sha != before and re.fullmatch(r"[a-f0-9]{64}", candidate_sha),
             "recharge_presentation_approval_mismatch")
+    if scope == "rechargeRedemptionCardImportPresentation":
+        require(presentation.get("baseWebsiteSha") == plan["before"]["components"]["app"]["revision"] and
+                not any(plan.get(name) for name in ("rechargePartnerApi", "vendureRetryReceipt", "customerProgress")),
+                "recharge_presentation_approval_mismatch")
     if scope in PRESENTATION_MOUNT_ERRORS:
         mounted = plan["before"].get("mountedAssets", {})
         require(mounted.get("available") is True and mounted.get("sha256") == before,
@@ -1495,7 +1504,8 @@ console.log(JSON.stringify(Object.fromEntries(hashes)));
             "modules/orders/order-customer-match.mjs", "modules/orders/order-whatsapp.mjs",
             "modules/orders/renewal-reminders.mjs", "modules/finance/apple-funding.mjs",
             "modules/data/document-delta.mjs", "modules/orders/order-list.mjs", "modules/inventory/list.mjs",
-            "modules/finance/accounting.mjs", "modules/data/record-edit.mjs"
+            "modules/finance/accounting.mjs", "modules/data/record-edit.mjs",
+            "modules/recharge/codexdaichong/card-import-preview.mjs"
         )},
     }
     for name, expected in plan["files"].items():

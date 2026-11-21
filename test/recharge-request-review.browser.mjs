@@ -118,3 +118,112 @@ test('申请审批模块按角色展示，状态筛选与草稿独立，宽窄�
   }
   await writeFile(output + '/review-geometry.json', JSON.stringify(geometry, null, 2));
 });
+
+test('申请按内容恢复原回执，迟到的批准回执保留新打开的详情', async t => {
+  const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const stock = Array.from({ length: 6 }, (_, i) => ({ code: 'KC-' + 'Z'.repeat(14) + 'ABCDEF'[i], plan: 'plus' }));
+  const workspace = origin + '/#/workspace/recharge-codes';
+
+  async function prepare(t, user, beforeResponse, availableStock = stock) {
+    const fixture = setup();
+    fixture.transport.listCodeStock = async () => availableStock;
+    const handler = fixture.start(), context = await browser.newContext({ serviceWorkers: 'block' });
+    t.after(() => context.close());
+    const requests = await interceptDesign(context, { actor: user, localFixtures: {}, skipRechargeAssets: true });
+    await context.route(origin + '/api/local/recharge-codes*', async route => {
+      const request = route.request(), input = request.method() === 'POST' ? request.postDataJSON() : undefined;
+      const { status, ...json } = await call(handler, input, user, new URL(request.url()).search);
+      if (await beforeResponse(input, status)) return route.abort('connectionreset');
+      return route.fulfill({ status, json });
+    });
+    return { fixture, handler, page: await context.newPage(), requests };
+  }
+
+  await t.test('不同数量使用新编号，重试原数量取得原回执', async t => {
+    const writes = [];
+    const { fixture, page, requests } = await prepare(t, actor, (input, status) => {
+      if (input?.action !== 'request') return false;
+      writes.push({ input, status });
+      return writes.length === 1;
+    });
+    await page.goto(workspace);
+    const submit = page.getByRole('button', { name: '提交申请', exact: true });
+    await submit.click();
+    await page.locator('[data-request-status="pending"]').waitFor();
+    const count = page.locator('#recharge-request-count');
+    await count.fill('2');
+    await submit.click();
+    await page.getByRole('status').getByText('申请已提交，等待审核', { exact: true }).first().waitFor();
+    await count.fill('1');
+    await submit.click();
+    await page.waitForFunction(() => !document.querySelector('#recharge-code-request button[type="submit"]').disabled);
+    assert.deepEqual(writes.map(row => row.status), [201, 201, 200]);
+    assert.notEqual(writes[0].input.requestKey, writes[1].input.requestKey);
+    assert.equal(writes[0].input.requestKey, writes[2].input.requestKey);
+    assert.equal(fixture.store.load().data.requests.filter(row => row.status === 'pending').length, 2);
+    assert.deepEqual(requests.external, []);
+  });
+
+  await t.test('库存已发完时仍能核对原编号，其他数量继续校验库存', async t => {
+    const writes = [];
+    const { fixture, handler, page, requests } = await prepare(t, actor, (input, status) => {
+      if (input?.action !== 'request') return false;
+      writes.push({ input, status });
+      return writes.length === 1;
+    }, stock.slice(0, 1));
+    await page.goto(workspace);
+    const submit = page.getByRole('button', { name: '提交申请', exact: true });
+    await submit.click();
+    await page.locator('[data-request-status="pending"]').waitFor();
+    const pending = fixture.store.load().data.requests.find(row => row.status === 'pending');
+    const approved = await call(handler, { action: 'approve', id: pending.id }, { ...actor, role: 'admin' });
+    assert.equal(approved.status, 200);
+    assert.equal((await call(handler, undefined, actor)).stock.plus, 0);
+    await page.getByRole('button', { name: '刷新提取申请', exact: true }).click();
+    await page.locator(`[data-request-id="${pending.id}"][data-request-status="issued"]`).waitFor();
+    assert(await submit.isEnabled());
+    const count = page.locator('#recharge-request-count');
+    await count.fill('2');
+    assert(await submit.isDisabled());
+    await count.fill('1');
+    assert(await submit.isEnabled());
+    await page.evaluate(() => window.IDDesignAPI.render());
+    assert(await submit.isEnabled());
+    await submit.click();
+    await page.locator('#toast').getByText('已发码', { exact: true }).waitFor();
+    assert.deepEqual(writes.map(row => row.status), [201, 200]);
+    assert.equal(writes[0].input.requestKey, writes[1].input.requestKey);
+    assert.equal(fixture.store.load().data.requests.filter(row => row.id === pending.id).length, 1);
+    assert(await submit.isDisabled());
+    assert.deepEqual(requests.external, []);
+  });
+
+  await t.test('批准响应到达时仅能关闭本次提交的抽屉', async t => {
+    const approval = Promise.withResolvers(), release = Promise.withResolvers();
+    t.after(() => release.resolve());
+    const { fixture, page, requests } = await prepare(t, { ...actor, role: 'admin' }, async (input, status) => {
+      if (input?.action === 'approve') { approval.resolve(status); await release.promise; }
+      return false;
+    });
+    const before = fixture.store.load(), id = randomUUID();
+    fixture.store.save(before.version, { ...before.data, requests: [...before.data.requests, {
+      id, plan: 'plus', count: 1, status: 'pending', applicantId: actor.id, applicantName: actor.name,
+      createdAt: '2026-11-12T12:00:00Z'
+    }] }, { action: 'synthetic_seed' });
+    await page.goto(workspace);
+    const drawer = page.locator('#drawer[open]');
+    await page.locator('[data-action="order-code-approve"]').click();
+    await drawer.getByRole('button', { name: '批准并发码', exact: true }).click();
+    assert.equal(await approval.promise, 200);
+    await drawer.getByRole('button', { name: '取消', exact: true }).click();
+    await page.locator('#recharge-codes-region [data-action="order-code-item-detail"]').first().click();
+    const detail = drawer.getByRole('heading', { name: '充值码详情', exact: true });
+    await detail.waitFor();
+    release.resolve();
+    await page.locator(`[data-request-id="${id}"][data-request-status="issued"]`).waitFor();
+    assert(await detail.isVisible());
+    assert.deepEqual(requests.external, []);
+  });
+});

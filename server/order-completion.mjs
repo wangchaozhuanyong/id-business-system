@@ -3,6 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { assignOrderOwner, checkSubscriptionTermination, manualOrderDetailsAction, moneyUnits, validMoney } from './order-policy.mjs';
 import { currencies, validCurrencyCode, hasRecordedPaymentAmount } from '../modules/finance/accounting.mjs';
 import { sortByRecordTime } from '../modules/orders/list-order.mjs';
+import { contactKey, customerIdentityKey, duplicateCustomerContact, normalizeCustomerNumbers } from '../modules/orders/order-customer-match.mjs';
 import {
   automaticGptOrder, rechargeOrderCompletion, rechargeOrderOwner, rechargeRenewalExpiryPending, manualBusinessOrder, manualOrderDetailsMissing,
   orderOpeningConfirmed, orderReceiptRecorded, subscriptionTime, validOrderEmail, validOrderXHandle
@@ -124,14 +125,6 @@ function findOrder(data, id, actor) {
   return order;
 }
 
-function contactKey(value, key) {
-  const normalized = clean(value).normalize('NFKC').toLowerCase();
-  if (key === 'telegram') return normalized.replace(/^@/, '');
-  if (['phone', 'whatsapp'].includes(key) && /^\+?[\d\s().-]+$/.test(normalized))
-    return normalized.replace(/[\s().-]/g, '');
-  return normalized;
-}
-
 export function readOrderCompletion(data, settings, actor, params, readOwners, cardContext) {
   requireCompletionActor(actor);
   const customers = data?.customers || [];
@@ -140,9 +133,11 @@ export function readOrderCompletion(data, settings, actor, params, readOwners, c
     if (customers.some(row => row.id === order.customerId)) return { items: [] };
     const query = clean(params.get('q')).slice(0, 100);
     if (!query) return { items: [] };
-    const match = ['name', ...contactFields.map(([, key]) => key)].map((key) => [key, contactKey(query, key)]);
+    const match = ['name', ...contactFields.map(([, key]) => key)].map(key =>
+      [key, contactKey(query, key), customerIdentityKey(query, key)]);
     const items = customers.filter((row) => row.active !== false &&
-      match.some(([key, keyword]) => keyword && contactKey(row[key], key).includes(keyword)))
+      match.some(([key, fragment, identity]) => fragment && (contactKey(row[key], key).includes(fragment) ||
+        customerIdentityKey(row[key], key) === identity)))
       .slice(0, 20).map(customerView);
     return { items };
   }
@@ -392,10 +387,16 @@ export function applyOrderCompletion(data, settings, actor, command, readOwners,
       if (value && !clean(current?.[customerKey])) customerChanges[customerKey] = value;
     }
     if (command.notes !== undefined) next.notes = fill(order.notes, text(command.notes, 1000), '备注') || '';
-    if ((current || adding) && customers.some(row => row.id !== current?.id && contactKey(row.name) === contactKey(name) &&
-        contactFields.some(([, key]) => clean(customerChanges[key]) &&
-          contactKey(row[key], key) === contactKey(customerChanges[key], key))))
+    if ((current || adding) && duplicateCustomerContact(customers, { ...current, name, ...customerChanges }, current))
       throw new OrderCompletionError(409, '已有同名客户使用相同联系方式，请选择已有客户');
+    const { numbers, error } = normalizeCustomerNumbers({
+      phone: clean(order.customerPhone) || clean(current?.phone) ? '' : clean(contacts.customerPhone),
+      whatsapp: clean(order.whatsapp) || clean(current?.whatsapp) ? '' : clean(contacts.whatsapp)
+    });
+    if (error) throw new OrderCompletionError(400, error.message);
+    Object.assign(customerChanges, numbers);
+    if (numbers.phone) next.customerPhone = numbers.phone;
+    if (numbers.whatsapp) next.whatsapp = numbers.whatsapp;
     if (adding) {
       customer = {
         id: 'commerce-customer-' + randomUUID(), name, active: true, version: 1, tags: [], notes: '',

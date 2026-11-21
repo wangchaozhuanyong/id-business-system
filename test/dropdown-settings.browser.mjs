@@ -36,12 +36,12 @@ test('下拉设置三页签在深浅主题和宽窄屏保持对齐，可键盘�
           const labels = [...panel.querySelectorAll('.field')].filter(node => node.checkVisibility()).map(field => {
             const label = field.querySelector(':scope > label')?.getBoundingClientRect();
             const control = field.querySelector(':scope > .field-control')?.getBoundingClientRect();
-            return !label || !control || label.right <= control.left + 1;
+            return !label || !control || (label.bottom <= control.top + 1 && Math.abs(label.left - control.left) <= 1);
           });
-          return { x: rect.x, width: rect.width, tabsSameLine: tabs.every(tab => Math.abs(tab.y - tabs[0].y) < 1), labelsLeft: labels.every(Boolean), nestedPanels: panel.querySelectorAll('.panel').length };
+          return { x: rect.x, width: rect.width, tabsSameLine: tabs.every(tab => Math.abs(tab.y - tabs[0].y) < 1), labelsAbove: labels.every(Boolean), nestedPanels: panel.querySelectorAll('.panel').length };
         });
         assert(geometry.tabsSameLine, '三个导航页签应在同一行');
-        assert(geometry.labelsLeft, '表单标签位于控件左侧');
+        assert(geometry.labelsAbove, '表单标签位于控件上方并左对齐');
         assert.equal(geometry.nestedPanels, 0, '设置内容不再嵌套面板外框');
         measurements.push({ width, theme, key, ...geometry, separatorChecks: spacing.separators.measurements });
         if (width === 1440 || (width === 390 && key === 'sources'))

@@ -156,7 +156,8 @@ function runtime() {
         ? {
             id: node.id,
             raw: defaults(body),
-            dataset: { inventoryDraft: node['data-inventory-draft'] || context },
+            dataset: { inventoryDraft: node['data-inventory-draft'] || context,
+              registrationClaim: node['data-registration-claim'], registrationVersion: node['data-registration-version'] },
             querySelectorAll: () => []
           }
         : null;

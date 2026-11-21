@@ -744,3 +744,46 @@ test('两名管理员的凭据变更推送到同一页面，旧核算草稿必�
   assert.deepEqual(first.errors.concat(second.errors), []);
   assert.deepEqual(first.traffic.external.concat(second.traffic.external), []);
 });
+
+test('财务直接打开统计即计 Apple 回款，版本变化和失败重试保留已核算资料', { timeout: 20_000 }, async t => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const context = await browser.newContext();
+  const data = fixtures();
+  const apple = order('apple', 9, {
+    product: 'Claude Max', plan: 'Max 5x', payment: '苹果内购', appleIdId: 'fixture-apple-id',
+    cardId: '', paymentId: '', issueFeeSnapshot: null, paidAmount: '100', paidCurrency: 'USD', saleAmount: '800'
+  });
+  data.commerce.data.orders = [apple];
+  const traffic = await interceptDesign(context, { actor: { ...actor, role: 'finance' }, localFixtures: data, skipRechargeAssets: true });
+  let reads = 0, failed = false;
+  await context.route(origin + '/api/local/appleBalance', route => {
+    assert.equal(route.request().method(), 'GET');
+    reads++;
+    return failed ? route.fulfill({ status: 503, json: { error: '隔离读取失败' } }) : route.fulfill({ json: data.appleBalance });
+  });
+  const page = await context.newPage();
+  page.setDefaultTimeout(4500);
+  await page.clock.setFixedTime(clock);
+  await page.goto(origin + '/#/orders/statistics');
+  const profit = page.locator('[data-stat-metric="profit"] .summary-number');
+  await profit.getByText('281.60', { exact: false }).waitFor();
+  assert.equal(reads, 1, '冷开统计自行读取 Apple 账本');
+  assert.equal(await page.evaluate(() => window.IDDesignAPI.canVisit('accounts/apple-balances')), false);
+  const refresh = () => page.evaluate(() => window.IDDesignModules.find(module => module.id === 'commerce').onDataChanges(['appleBalance']));
+  data.appleBalance.version++;
+  data.appleBalance.data.allocations[0].returned = '20';
+  await refresh();
+  await profit.getByText('339.20', { exact: false }).waitFor();
+  failed = true;
+  await refresh();
+  await page.getByText('Apple 回款读取失败，利润按现有资料计算。', { exact: true }).waitFor();
+  assert.match(await profit.innerText(), /339\.20/);
+  failed = false;
+  data.appleBalance.version++;
+  data.appleBalance.data.allocations[0].returned = '30';
+  await page.getByRole('button', { name: '重读 Apple 回款', exact: true }).click();
+  await profit.getByText('396.80', { exact: false }).waitFor();
+  assert.equal(reads, 4);
+  assert.deepEqual(traffic.external, []);
+});

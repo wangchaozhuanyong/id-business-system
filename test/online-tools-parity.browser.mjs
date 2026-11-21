@@ -1,18 +1,16 @@
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
 const playwright = await import(
   process.env.ID_RECHARGE_QA_PLAYWRIGHT
     ? pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href
     : 'playwright'
 );
 const { chromium } = playwright;
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import assert from 'node:assert/strict';
-import { toggleDesignTheme } from './helpers/offline-design.mjs';
-const root = fileURLToPath(new URL('../', import.meta.url)),
-  output = process.env.ID_LAYOUT_QA_OUTPUT || path.join(root, '.runtime/tool-parity-20261107');
+import { interceptDesign, origin, root, toggleDesignTheme } from './helpers/offline-design.mjs';
+const output = process.env.ID_LAYOUT_QA_OUTPUT || path.join(root, '.runtime/tool-parity-20261107');
 await mkdir(output, { recursive: true });
-const origin = 'https://tool-layout.invalid';
 const browser = await chromium.launch({ headless: true });
 const results = [];
 try {
@@ -23,8 +21,7 @@ try {
         serviceWorkers: 'block',
         permissions: ['clipboard-read', 'clipboard-write']
       });
-      const errors = [],
-        blocked = [];
+      const errors = [];
       let rows = 0,
         mailFailure = false;
       const mailRequests = [];
@@ -46,137 +43,101 @@ try {
         extractedCode: '123456',
         body: '<p>验证码 123456</p><script>window.mailInjected=true</script><img src="https://tracking.invalid/pixel"><a href="javascript:alert(1)">不可信链接</a><p><a href="https://example.test/verify">验证链接</a></p><p>详情 https://example.test/help。</p>'
       }));
-      await context.route('**/*', async (route) => {
+      const traffic = await interceptDesign(context, {
+        actor: { id: 'synthetic', name: '离线验收', role: 'admin' },
+        localFixtures: {},
+        skipRechargeAssets: true
+      });
+      await context.route(origin + '/api/local/**', async (route) => {
         const u = new URL(route.request().url());
-        if (u.origin !== origin) {
-          blocked.push(u.origin);
-          return route.abort();
-        }
         const respond = (data) => route.fulfill({ json: data });
-        if (u.pathname.startsWith('/api/')) {
-          if (u.pathname === '/api/local/tools/mailbox-pool') {
-            if (route.request().method() === 'PUT')
-              return route.fulfill({ status: 422, json: { error: '合成授权验证失败，请重试' } });
-            if (route.request().method() === 'POST') {
-              const { ids, version } = route.request().postDataJSON(), code = 'SYNTHETIC-CODE-ONLY';
-              return respond(ids ? { version, items: ids.map(id => ({ id, code })) } : { code });
-            }
-            return respond({
-              version: 0,
-              defaultValidDays: 30,
-              items: Array.from({ length: rows }, (_, i) => ({
-                id: `fixture-${i}`,
-                email: `合成验收-${i}@example.test`,
-                provider: i === 1 ? 'microsoft' : 'google',
-                label: '仅用于离线验收的长备注',
-                active: true,
-                expiresAt: '2099-01-01T00:00:00Z'
-              }))
-            });
+        if (u.pathname === '/api/local/tools/mailbox-pool') {
+          if (route.request().method() === 'PUT')
+            return route.fulfill({ status: 422, json: { error: '合成授权验证失败，请重试' } });
+          if (route.request().method() === 'POST') {
+            const { ids, version } = route.request().postDataJSON(), code = 'SYNTHETIC-CODE-ONLY';
+            return respond(ids ? { version, items: ids.map(id => ({ id, code })) } : { code });
           }
-          if (u.pathname === '/api/local/tools/media/resolve')
-            return respond({
-              platform: 'douyin',
-              mediaType: 'video',
-              engine: 'f2',
-              title: '合成解析验收：' + '长作品标题'.repeat(12),
-              author: '离线合成作者',
-              expiresAt: '2099-01-01T00:00:00Z',
-              options: ['video', 'audio', 'image'].map((mediaType) => ({
-                mediaType,
-                label: '合成下载格式',
-                extension: 'mp4',
-                width: 1920,
-                height: 1080,
-                downloadToken: 'synthetic-only'
-              }))
-            });
-          if (u.pathname === '/api/local/saved-totp') {
-            if (route.request().method() === 'PUT') {
-              const body = route.request().postDataJSON();
-              totpWrites.push(body);
-              if (body.action === 'create' && allowTotpCreate) {
-                totpAccounts.push({ id: '22222222-2222-4222-8222-222222222222', name: body.name, issuer: 'RFC' });
-                savedTotpVersion++;
-                return respond({ version: savedTotpVersion, items: totpAccounts });
-              }
-              return route.fulfill({ status: 422, json: { error: '合成保存失败，请重试' } });
-            }
-            return respond({ version: savedTotpVersion, items: totpAccounts });
-          }
-          if (u.pathname === '/api/local/saved-totp/code') {
-            const { ids, version } = route.request().postDataJSON();
-            const serverNow = Date.now();
-            return respond({ version, serverNow, items: ids.map(id => ({ id, code: '123456', expiresAt: serverNow + 30_000 })) });
-          }
-          if (u.pathname === '/api/local/saved-totp/secret') {
-            assert.equal(route.request().method(), 'POST');
+          return respond({
+            version: 0,
+            defaultValidDays: 30,
+            items: Array.from({ length: rows }, (_, i) => ({
+              id: `fixture-${i}`,
+              email: `合成验收-${i}@example.test`,
+              provider: i === 1 ? 'microsoft' : 'google',
+              label: '仅用于离线验收的长备注',
+              active: true,
+              expiresAt: '2099-01-01T00:00:00Z'
+            }))
+          });
+        }
+        if (u.pathname === '/api/local/tools/media/resolve')
+          return respond({
+            platform: 'douyin',
+            mediaType: 'video',
+            engine: 'f2',
+            title: '合成解析验收：' + '长作品标题'.repeat(12),
+            author: '离线合成作者',
+            expiresAt: '2099-01-01T00:00:00Z',
+            options: ['video', 'audio', 'image'].map((mediaType) => ({
+              mediaType,
+              label: '合成下载格式',
+              extension: 'mp4',
+              width: 1920,
+              height: 1080,
+              downloadToken: 'synthetic-only'
+            }))
+          });
+        if (u.pathname === '/api/local/saved-totp') {
+          if (route.request().method() === 'PUT') {
             const body = route.request().postDataJSON();
-            secretReads.push(body);
-            const gate = secretGate;
-            secretGate = undefined;
-            if (gate) await gate;
-            if (secretFailure) return route.fulfill({ status: 503, json: { error: '合成密钥读取失败' } });
-            return respond({ ...body, secret: publicTotpKey });
+            totpWrites.push(body);
+            if (body.action === 'create' && allowTotpCreate) {
+              totpAccounts.push({ id: '22222222-2222-4222-8222-222222222222', name: body.name, issuer: 'RFC' });
+              savedTotpVersion++;
+              return respond({ version: savedTotpVersion, items: totpAccounts });
+            }
+            return route.fulfill({ status: 422, json: { error: '合成保存失败，请重试' } });
           }
-          if (u.pathname === '/api/local/toolbox')
-            return respond({ version: 0, data: { shortcuts: [], phrases: [] } });
-          if (
-            u.pathname.endsWith('/mailbox-query') ||
-            u.pathname.endsWith('/apple-relay/public-query')
-          ) {
-            mailRequests.push(route.request().postDataJSON());
-            if (mailFailure)
-              return route.fulfill({ status: 502, json: { error: '合成取信失败，请重试' } });
-            return respond({
-              targetType: u.pathname.endsWith('/public-query') ? 'VIRTUAL' : 'PRIMARY',
-              primaryEmail: 'd***@example.test',
-              codeExpiresAt: '2099-01-01T00:00:00Z',
-              items: mailItems
-            });
-          }
-          return respond({ version: 0, data: null });
+          return respond({ version: savedTotpVersion, items: totpAccounts });
         }
-        let file = path.join(
-          root,
-          'frontend',
-          u.pathname === '/' ? 'index.html' : decodeURIComponent(u.pathname)
-        );
-        if (u.pathname === '/assets/tools/totp.mjs')
-          file = path.join(root, 'modules/tools/totp.mjs');
-        let body;
-        try {
-          body = await readFile(file);
-        } catch {
-          return route.fulfill({ status: 404, body: 'Unavailable offline fixture asset' });
+        if (u.pathname === '/api/local/saved-totp/code') {
+          const { ids, version } = route.request().postDataJSON();
+          const serverNow = Date.now();
+          return respond({ version, serverNow, items: ids.map(id => ({ id, code: '123456', expiresAt: serverNow + 30_000 })) });
         }
-        if (u.pathname === '/')
-          body = body
-            .toString()
-            .replace(
-              '<head>',
-              `<head><meta name="id-local-auth" content="required"><meta name="id-local-actor" content="${encodeURIComponent(JSON.stringify({ id: 'synthetic', name: '离线验收', role: 'admin' }))}">`
-            )
-            .replace('data-theme="light"', `data-theme="${theme}"`)
-            .replace(
-              '    <script src="./prototype.js',
-              '    <script src="/local-data.js" defer></script><script src="/toolbox-local.js" defer></script>\n    <script src="./prototype.js'
-            );
-        return route.fulfill({
-          body,
-          contentType:
-            {
-              '.css': 'text/css',
-              '.js': 'text/javascript',
-              '.mjs': 'text/javascript',
-              '.html': 'text/html'
-            }[path.extname(file)] || 'application/octet-stream'
-        });
+        if (u.pathname === '/api/local/saved-totp/secret') {
+          assert.equal(route.request().method(), 'POST');
+          const body = route.request().postDataJSON();
+          secretReads.push(body);
+          const gate = secretGate;
+          secretGate = undefined;
+          if (gate) await gate;
+          if (secretFailure) return route.fulfill({ status: 503, json: { error: '合成密钥读取失败' } });
+          return respond({ ...body, secret: publicTotpKey });
+        }
+        if (u.pathname === '/api/local/toolbox')
+          return respond({ version: 0, data: { shortcuts: [], phrases: [] } });
+        if (
+          u.pathname.endsWith('/mailbox-query') ||
+          u.pathname.endsWith('/apple-relay/public-query')
+        ) {
+          mailRequests.push(route.request().postDataJSON());
+          if (mailFailure)
+            return route.fulfill({ status: 502, json: { error: '合成取信失败，请重试' } });
+          return respond({
+            targetType: u.pathname.endsWith('/public-query') ? 'VIRTUAL' : 'PRIMARY',
+            primaryEmail: 'd***@example.test',
+            codeExpiresAt: '2099-01-01T00:00:00Z',
+            items: mailItems
+          });
+        }
+        return route.fallback();
       });
       const page = await context.newPage();
       page.on('pageerror', (e) => errors.push(e.message));
       page.setDefaultTimeout(6000);
-      await page.goto(origin + '/#/overview');
+      await page.goto(origin + '/#/overview', { waitUntil: 'domcontentloaded', timeout: 20_000 });
       // Theme is a user preference, set through the actual visible control.
       if ((await page.locator('html').getAttribute('data-theme')) !== theme)
         await toggleDesignTheme(page);
@@ -186,8 +147,16 @@ try {
       const drawer = page.locator('#drawer');
 
       for (const name of ['计算 2FA 验证码', '抖音解析', '邮箱查询与邮箱池']) {
-        // Exercise the retained tool action; the plugin page entry has its own browser suite.
-    await page.evaluate(name => window.IDDesignModules.find(module => module.id === 'operations').onClick('tool-open', { dataset: { name } }), name);
+        const pool = page.locator('#ops-mailbox-pool');
+        const bindMailbox = pool.locator('.mailbox-pool-actions').getByRole('button', { name: '绑定邮箱', exact: true });
+        const openMail = () => pool.getByRole('button', { name: '邮箱查询', exact: true }).click();
+        if (name === '邮箱查询与邮箱池') {
+          assert.equal(await drawer.getByRole('button', { name, exact: true }).count(), 0);
+          await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
+          await page.goto(origin + '/#/plugins/mailboxes');
+          await pool.getByText('邮箱池暂无记录', { exact: true }).waitFor();
+          await openMail();
+        } else await drawer.getByRole('button', { name, exact: true }).click();
         if (name === '计算 2FA 验证码')
           await drawer.locator('[data-saved-totp-code] .ops-code').nth(7).waitFor();
         const label = name === '计算 2FA 验证码' ? 'totp' : name === '抖音解析' ? 'media' : 'mail';
@@ -272,9 +241,10 @@ try {
           const labelGeometry = await drawer.locator('label[for="ops-totp-secret"],label[for="ops-totp-save-secret"]').evaluateAll(labels => labels.map(label => {
             const range = document.createRange(); range.selectNodeContents(label);
             const box = range.getBoundingClientRect(), control = label.closest('.field').querySelector('.field-control').getBoundingClientRect();
-            return { height: box.height, left: box.left, right: box.right, controlLeft: control.left };
+            return { height: box.height, left: box.left, bottom: box.bottom, controlLeft: control.left, controlTop: control.top };
           }));
-          assert(labelGeometry.every(box => box.height <= 20 && box.right <= box.controlLeft), '密钥标签应保持单行且在控件左侧');
+          assert(labelGeometry.every(box => box.height <= 20 && box.bottom <= box.controlTop + 1 &&
+            Math.abs(box.left - box.controlLeft) <= 1), '密钥标签应保持单行，位于控件上方并左对齐');
           await page.screenshot({ path: path.join(output, `saved-totp-edit-${width}-${theme}.png`) });
           await saved.getByRole('button', { name: '保存账号', exact: true }).click();
           await drawer.getByText('合成保存失败，请重试', { exact: true }).waitFor();
@@ -361,9 +331,15 @@ try {
             (await drawer.getByText('请输入邮箱查询码', { exact: false }).count()) ||
               (await drawer.locator('input:invalid').count())
           );
-          await drawer.getByRole('tab', { name: '邮箱池管理', exact: true }).click();
-          await drawer.getByText('邮箱池暂无记录', { exact: true }).waitFor();
-          await drawer.getByRole('button', { name: '绑定邮箱', exact: true }).click();
+          await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
+          const heading = pool.locator('.mailbox-pool-toolbar .section-title-row');
+          const search = pool.getByRole('searchbox', { name: '搜索邮箱池' });
+          const searchBox = await search.boundingBox();
+          await heading.locator('summary').click();
+          assert.deepEqual(await search.boundingBox(), searchBox);
+          await heading.locator('summary').press('Escape');
+          assert(!(await heading.locator('details').getAttribute('open')));
+          await bindMailbox.click();
           await page.locator('#ops-managed-email').fill('draft@example.test');
           {
             // Field instructions now use the shared, body-level help popover.
@@ -381,15 +357,6 @@ try {
               .getByRole('button', { name: '连接 Microsoft 并添加', exact: true })
               .waitFor();
             await page.locator('#ops-managed-provider').selectOption('google');
-            const heading = drawer
-              .locator('.section-title-row')
-              .filter({ has: page.getByRole('heading', { name: '邮箱池', exact: true }) });
-            await heading.scrollIntoViewIfNeeded();
-            const fieldBox = await page.locator('#ops-managed-email').boundingBox();
-            await heading.locator('summary').click();
-            assert.equal((await page.locator('#ops-managed-email').boundingBox()).y, fieldBox.y);
-            await heading.locator('summary').press('Escape');
-            assert(!(await heading.locator('details').getAttribute('open')));
           }
           await page.screenshot({ path: path.join(output, `after-pool-${width}-${theme}.png`) });
           await page.locator('#ops-managed-app-password').fill('synthetic-password');
@@ -399,17 +366,18 @@ try {
             await page.locator('#ops-managed-app-password').inputValue(),
             'synthetic-password'
           );
+          await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
           rows = 24;
-          await drawer.getByRole('button', { name: '刷新', exact: true }).click();
-          await drawer.getByText('合成验收-23@example.test', { exact: true }).waitFor();
-          await drawer
+          await pool.getByRole('button', { name: '刷新', exact: true }).click();
+          await pool.getByText('合成验收-23@example.test', { exact: true }).waitFor();
+          await pool
             .locator('[data-mailbox-code]')
             .first()
             .filter({ hasText: 'SYNTHETIC-CODE-ONLY' })
             .waitFor();
-          await drawer.getByRole('button', { name: '下一页', exact: true }).click();
-          await drawer.getByText('合成验收-0@example.test', { exact: true }).waitFor();
-          await drawer.getByRole('tab', { name: '邮件查询', exact: true }).click();
+          await pool.getByRole('button', { name: '下一页', exact: true }).click();
+          await pool.getByText('合成验收-0@example.test', { exact: true }).waitFor();
+          await openMail();
           assert((await drawer.boundingBox()).width <= 860);
           const query = drawer.locator('#ops-managed-mail-query');
           await query.locator('#ops-managed-query-code').fill('MBX-' + 'A'.repeat(32));
@@ -446,8 +414,12 @@ try {
           assert.equal(await query.locator('#ops-managed-query-limit').inputValue(), '5');
           assert.equal(await query.locator('#ops-managed-query-code').inputValue(), '');
           assert.equal(await query.locator('#ops-managed-query-results').innerText(), '');
-          await drawer.getByRole('tab', { name: '邮箱池管理', exact: true }).click();
+          await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
+          await bindMailbox.click();
           assert.equal(await page.locator('#ops-managed-email').inputValue(), 'draft@example.test');
+          assert.equal(await page.locator('#ops-managed-app-password').inputValue(), '');
+          await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();
+          await openMail();
         }
         const populated = await drawer.boundingBox();
         assert.deepEqual(populated, box, `${name} 展示结果后仍保持右侧抽屉尺寸`);
@@ -455,17 +427,18 @@ try {
           !(await drawer.evaluate((el) => el.scrollWidth > el.clientWidth + 1)),
           `${label} populated overflow`
         );
-        const labelsAligned = await drawer.locator('.field:visible').evaluateAll((nodes) =>
-          nodes.every((node) => {
-            const label = node.querySelector(':scope > label'),
-              control = node.querySelector(':scope > .field-control');
-            return (
-              !label ||
-              !control ||
-              (node.closest('.mailbox-pool-form')
-                ? label.getBoundingClientRect().bottom <= control.getBoundingClientRect().top + 1
-                : label.getBoundingClientRect().right <= control.getBoundingClientRect().left + 1)
-            );
+        const labelsAligned = await drawer.locator('.field:visible').evaluateAll(fields =>
+          fields.every(field => {
+            const label = field.querySelector(':scope > label');
+            const control = field.querySelector(':scope > .field-control');
+            if (!label || !control) return true;
+            const labelBox = label.getBoundingClientRect(), controlBox = control.getBoundingClientRect();
+            if (field.closest('.mailbox-query-controls')) {
+              const labelCenter = labelBox.top + labelBox.height / 2;
+              const controlCenter = controlBox.top + controlBox.height / 2;
+              return labelBox.right <= controlBox.left + 1 && Math.abs(labelCenter - controlCenter) <= 1;
+            }
+            return labelBox.bottom <= controlBox.top + 1;
           })
         );
         assert(labelsAligned, `${width} ${theme} ${label}: field label alignment`);
@@ -491,7 +464,7 @@ try {
       assert.equal(await drawer.getAttribute('data-section'), '');
       assert((await drawer.boundingBox()).height >= 899);
       assert.deepEqual(errors, []);
-      assert.deepEqual(blocked, []);
+      assert.deepEqual(traffic.external, []);
       await context.close();
     }
   await writeFile(path.join(output, `after-geometry.json`), JSON.stringify(results, null, 2));

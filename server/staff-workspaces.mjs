@@ -5,19 +5,26 @@ import { canUseWorkspace, employeeCommerce, managesCards, ownsRecord, registrarI
 import { checkFrozenCardPoolWrite } from './card-management.mjs';
 import { extractManagedMailboxCode } from './tools/mailbox-pool.mjs';
 import { validMoney } from './order-policy.mjs';
+import { checkCustomerContactDuplicate } from './contact-write.mjs';
+import { contactKey } from '../modules/orders/order-customer-match.mjs';
 import { validCurrencyCode } from '../modules/finance/accounting.mjs';
+import { grokOrderAccount, orderSaleCurrencyAllowed, orderProductPlans, orderPaymentChoices,
+  validOrderEmail, validOrderXHandle } from '../modules/orders/order-opening.mjs';
+import { saleCurrencySettings } from './order-currency-settings.mjs';
 import { describeWriteOperation } from './write-operation.mjs';
-import { personalPlans, personalProduct, subscriptionSeries } from './personal-subscriptions.mjs';
+import { personalProduct, subscriptionSeries, personalInventoryIdentityError, targetKey } from './personal-subscriptions.mjs';
 import { normalizeRechargeProxyInput } from '../modules/recharge/codexdaichong/proxy-input.mjs';
+import { cardImportFailureIndexes, inspectCardImport } from '../modules/recharge/codexdaichong/card-import-preview.mjs';
 import { isProxyType } from '../modules/recharge/bitbrowser/proxy-types.mjs';
+import { parseBitBrowserProxyInput } from '../modules/recharge/bitbrowser/proxy-input.mjs';
 import { calculateTotp } from '../modules/tools/totp.mjs';
+import { inventoryPasswordRequired } from '../modules/inventory/list.mjs';
+import { checkMicrosoftFields } from './inventory-entry-fields.mjs';
 
 export const staffPath = '/api/local/staff/';
 const commerceLists = ['customers', 'tenants', 'orders', 'operating', 'rentBatches', 'logs'];
 const inventoryLists = ['mailboxes', 'accounts', 'batches', 'returnRecords', 'importRecords', 'registrationRecords', 'tableSettings', 'undo'];
 const configuredPlans = new Set(['plus', 'pro100', 'pro200', 'pro500']);
-const orderPlans = { GPT: ['Plus', 'Pro 100', 'Pro 200', 'Pro 500'],
-  'Claude Pro': ['Pro'], 'Claude Max': ['Max 5x', 'Max 20x'], ...personalPlans };
 const registrations = new Set(['google', 'apple', 'microsoft', 'gpt', 'claude', 'gemini', 'grok']);
 const accountTypes = new Set(['gpt', 'claude', 'gemini', 'grok']);
 const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
@@ -55,18 +62,23 @@ function keepVersion(body, snapshot) {
 }
 
 function readCustomerService(store, actor) {
-  return employeeCommerce(store.load('commerce'), actor);
+  return { ...employeeCommerce(store.load('commerce'), actor), ...saleCurrencySettings(store.load('settings')?.data) };
 }
 
 function addCustomer(store, snapshot, body, actor, operation) {
   const data = snapshot.data || emptyDocument(commerceLists);
   const name = clean(body.name, 80);
-  const wechat = clean(body.wechat, 120);
+  const wechat = clean(body.wechat, 60);
   if (!name) fail(400, '请填写客户姓名');
-  const key = value => clean(value, 120).normalize('NFKC').toLowerCase();
-  if (data.customers.some(row => (wechat && key(row.wechat) === key(wechat)) ||
-      (!wechat && key(row.name) === key(name))))
+  if (body.wechat && !wechat && (typeof body.wechat !== 'string' || body.wechat.trim()))
+    fail(400, '客户微信最多 60 个字符，请重新核对');
+  const linked = new Set(data.orders.filter(row => ownsRecord(actor, row)).map(row => row.customerId));
+  const wechatKey = contactKey(wechat), nameKey = contactKey(name);
+  // A hidden customer's identity can only be resolved by an administrator.
+  if (data.customers.some(row => !ownsRecord(actor, row) && !linked.has(row.id) &&
+      (wechatKey ? contactKey(row.wechat) === wechatKey : contactKey(row.name) === nameKey)))
     fail(409, '客户可能已存在，请查询或请管理员分配原客户');
+  checkCustomerContactDuplicate(data.customers, { name, wechat });
   const id = 'customer-' + randomUUID();
   const at = new Date().toISOString();
   store.saveBatch([{ domain: 'commerce', version: snapshot.version, action: '新增资料', data: {
@@ -83,34 +95,37 @@ function addOrder(store, snapshot, body, actor, operation) {
       !data.orders.some(row => row.customerId === customer.id && ownsRecord(actor, row))))
     fail(404, '请选择本人负责的客户');
   const [product, plan] = String(body.planChoice || '').split('|');
-  if (!Object.hasOwn(orderPlans, product) || !orderPlans[product].includes(plan)) fail(400, '请选择可用的套餐');
-  const address = clean(body.email).toLowerCase();
-  const loginMethod = ({ Gemini: 'google', Grok: 'email' })[product];
-  if (!email(address)) fail(400, '请填写有效订单邮箱');
+  if (!Object.hasOwn(orderProductPlans, product) || !orderProductPlans[product].includes(plan)) fail(400, '请选择可用的套餐');
+  const target = clean(body.email).toLowerCase();
+  const account = product === 'Grok' ? grokOrderAccount(target) : { email: target };
+  if (account.loginMethod === 'x' ? !validOrderXHandle(account.xHandle) : !validOrderEmail(account.email))
+    fail(400, product === 'Grok' ? '请填写有效的订单邮箱或 X @账号' : '请填写有效订单邮箱');
   if (product === 'Claude Pro') fail(400, 'Claude Pro 的租户资料请联系管理员登记');
   const { paidAmount, paidCurrency, saleAmount, saleCurrency } = body;
   if (!validMoney(paidAmount) || !/[1-9]/.test(paidAmount) || !validMoney(saleAmount) ||
       !validCurrencyCode(paidCurrency) || !validCurrencyCode(saleCurrency))
     fail(400, '请填写实际代付、客户实收和币种');
+  if (!orderSaleCurrencyAllowed(store.load('settings')?.data, product, saleCurrency))
+    fail(400, '实收币种已变化，请刷新并选择当前产品可用的币种');
   const start = clean(body.start, 24);
   const expiry = clean(body.expiry, 24);
   if (![start, expiry].every(value => /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(value) &&
       Number.isFinite(Date.parse(value + '+08:00'))) || expiry <= start)
     fail(400, '请填写开通和到期时间');
-  if (body.payment !== '银行卡' && body.payment !== '苹果内购') fail(400, '请选择实际付款方式');
+  if (!orderPaymentChoices(product, plan).includes(body.payment)) fail(400, '请选择与套餐相符的实际付款方式');
   if (body.payment === '苹果内购' && paidCurrency !== 'USD') fail(400, '苹果内购的实际代付币种请选择 USD');
   const id = 'order-' + randomUUID();
   const at = new Date().toISOString();
-  const row = { id, product, plan, email: address,
+  const row = { id, product, plan, ...account,
     customerId: customer.id, businessType: product === 'GPT' ? '续费' : '首次开通',
     accountSource: '客户自有', source: '管理员手工', ownerId: actor.id, version: 1, start, expiry,
     payment: body.payment, paidAmount, paidCurrency, saleAmount, saleCurrency, createdAt: at, updatedAt: at,
     paidConfirmed: true, receiptConfirmed: true, entitlementStatus: 'active', costBasis: 'standard',
-    ...(loginMethod && { loginMethod }) };
+    ...(product === 'Gemini' && { loginMethod: 'google' }),
+    ...(account.xHandle && { xLinkState: 'unknown' }) };
   if (personalProduct(product)) row.subscriptionSeries = subscriptionSeries(row);
-  store.saveStaffOrder({ domain: 'commerce', version: snapshot.version, action: '新增独立订单',
-    data: { ...data, orders: [row, ...data.orders] } }, actor, operation);
-  return { savedId: id };
+  return store.saveStaffOrder({ domain: 'commerce', version: snapshot.version, action: '新增独立订单',
+    data: { ...data, orders: [row, ...data.orders] } }, actor, operation, id);
 }
 
 async function registerAsset(store, snapshot, body, actor, operation) {
@@ -119,7 +134,17 @@ async function registerAsset(store, snapshot, body, actor, operation) {
   const password = typeof body.password === 'string' && body.password.length <= 4096 && !/[\u0000\r\n]/.test(body.password)
     ? body.password : '';
   const totp = clean(body.totp, 4096);
-  if (!registrations.has(type) || !email(identity)) fail(400, '请选择类型并填写有效邮箱');
+  const personal = type === 'gemini' || type === 'grok';
+  const personalIdentity = personal ? { loginMethod: type === 'gemini' ? 'google' : body.loginMethod || 'email',
+    ...(type === 'grok' && { xHandle: body.xHandle || '', xLinkState: body.xLinkState || 'unknown' }),
+    platformAccountId: body.platformAccountId || '' } : {};
+  if (!registrations.has(type) || (!personal && !email(identity))) fail(400, '请选择类型并填写有效邮箱');
+  if (personal) {
+    const problem = personalInventoryIdentityError({ type, email: identity, ...personalIdentity });
+    if (problem) fail(400, problem);
+  }
+  if ((body.email && !identity) || (body.password && !password)) fail(400, '请核对邮箱或登录密码');
+  if (inventoryPasswordRequired(type) && !password.trim()) fail(400, '请填写登录密码');
   if (body.totp) {
     try { await calculateTotp(totp); }
     catch { fail(400, '请填写有效的动态验证码密钥或验证器链接'); }
@@ -130,21 +155,30 @@ async function registerAsset(store, snapshot, body, actor, operation) {
   const oldMailbox = body.mailboxId ? data.mailboxes.find(row => row.id === body.mailboxId && ownsRecord(actor, row) &&
     !row.deleted && !row.relayDeleted && !row.used && row.email?.toLowerCase() === identity) : null;
   if (body.mailboxId && (!account || !oldMailbox)) fail(400, '请选择本人已登记且邮箱相同的资料');
-  if ((data[target] || []).some(row => row.email?.toLowerCase() === identity && (account || row.type === type)))
+  if ((data[target] || []).some(row => (identity && row.email?.toLowerCase() === identity && (account || row.type === type)) ||
+      (personal && type === row.type && targetKey(row) === targetKey({ email: identity, ...personalIdentity }))))
     fail(409, account ? '这个邮箱已登记过平台账号' : '这个邮箱已登记');
   const id = 'registration-' + randomUUID();
   const row = { id, type, email: identity, password, totp, version: 1, registered: new Date().toISOString(),
     status: '正常', health: 'normal', inventoryState: 'available', used: false, notes: clean(body.notes, 600),
     device: clean(body.device, 200), proxyUrl: clean(body.proxyUrl, 2048), country: clean(body.country, 100),
     inventoryHistory: [], usageLinks: [], source: '自行注册', createdById: actor.id, createdBy: actor.name,
-    ...(account && { acquisitionMethod: 'self_registered' }),
+    ...personalIdentity, ...(account && { acquisitionMethod: 'self_registered' }),
     ...(!account && body.appPassword && { appPassword: clean(body.appPassword, 4096) }),
-    ...(oldMailbox && { sourceMailboxId: oldMailbox.id, ...(oldMailbox.claimId && { sourceClaimId: oldMailbox.claimId }) }),
-    ...(type === 'microsoft' && { microsoftSecurity: {
-      loginMode: password ? 'password' : 'passwordless', recoveryAccess: 'unknown', twoStep: totp ? 'enabled' : 'unknown',
-      verificationMethods: totp ? ['totp'] : password ? [] : ['authenticator']
-    } })
+    ...(oldMailbox && { sourceMailboxId: oldMailbox.id, ...(oldMailbox.claimId && { sourceClaimId: oldMailbox.claimId }) })
   };
+  if (type === 'microsoft') {
+    row.auxiliary = clean(body.auxiliary).toLowerCase();
+    if (body.auxiliary && !row.auxiliary) fail(400, '请核对辅助邮箱');
+    row.microsoftSecurity = body.microsoftSecurity ?? {
+      loginMode: password || !totp ? 'password' : 'passwordless', recoveryAccess: 'unknown',
+      twoStep: totp ? 'enabled' : 'unknown', verificationMethods: totp ? ['totp'] : []
+    };
+    const ownRecovery = data.mailboxes.filter(mail => row.auxiliary && !mail.deleted && !mail.relayDeleted &&
+      ['google', 'microsoft', 'relay'].includes(mail.type) && ownsRecord(actor, mail) && mail.email?.toLowerCase() === row.auxiliary);
+    const problem = checkMicrosoftFields(row, new Map([[row.auxiliary, ownRecovery]]));
+    if (problem) fail(400, problem);
+  }
   store.saveBatch([{ domain: 'inventory', version: snapshot.version, action: 'inventory_create',
     data: { ...data, [target]: [row, ...data[target]] } }], { actor, operation });
   return { savedId: id };
@@ -178,15 +212,11 @@ function allowedPlans(value) {
 
 function importCommand(body) {
   if (typeof body.lines !== 'string') fail(400, '请填写银行卡');
-  const rows = body.lines.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+  const rows = inspectCardImport(body.lines);
   if (!rows.length || rows.length > 500) fail(400, '每次导入 1 至 500 张银行卡');
-  const cards = rows.map((line, index) => {
-    const match = /^(\d{12,19})\s*(?:\|\s*|\s+)(0[1-9]|1[0-2])\/(\d{2}|\d{4})\s*(?:\|\s*|\s+)(\d{3,4})(?:(?:\s*\|\s*|\s+)([^\u0000-\u001f]{1,100}))?$/.exec(line);
-    if (!match) fail(400, '第 ' + (index + 1) + ' 行格式有误，请检查卡号、有效期和安全码');
-    return { card_number: match[1], card_expiry: match[2] + '/' + match[3].slice(-2), card_cvc: match[4],
-      card_holder: match[5]?.trim() || '' };
-  });
-  return { cards, allowedPlans: allowedPlans(body.plans), planVersion: body.version };
+  const invalid = rows.filter(row => row.state === 'invalid').map(row => row.line);
+  if (invalid.length) fail(400, '第 ' + invalid.join('、') + ' 行格式有误，请检查卡号、有效期和安全码。整批未提交。');
+  return { command: { cards: rows.map(row => row.card), allowedPlans: allowedPlans(body.plans), planVersion: body.version }, rows };
 }
 
 const samePlans = (actual, expected) => Array.isArray(actual) && expected.length === actual.length &&
@@ -196,8 +226,8 @@ const uncertainCardWrite = '银行卡维护结果待核对，请刷新列表并�
 const cardIdentity = (row, store) => store.financeCardIdentity(
   JSON.stringify([row.card_number, row.card_expiry, String(row.card_holder || '').trim()]));
 
-function finishCardWrite(store, actor, domain, audit, count) {
-  const result = { saved: true, ...(count !== undefined && { count }) };
+function finishCardWrite(store, actor, domain, audit, count, details) {
+  const result = { saved: true, ...(count !== undefined && { count }), ...details };
   store.finishFinanceCardOperation(actor, domain, { audit, result });
   return result;
 }
@@ -272,7 +302,7 @@ export function createStaffWorkspaces({ store, client, publicOrigin, getAuth, re
         cardChanged?.();
         return { ...result, reconciled: true };
       }
-      let audit, count;
+      let audit, count, details;
       const start = evidence => store.startFinanceCardOperation(actor, operation, body.action, body.version, current.version, evidence);
       const sendToCardPool = async callback => {
         try { return await callback(); }
@@ -285,7 +315,7 @@ export function createStaffWorkspaces({ store, client, publicOrigin, getAuth, re
         }
       };
       if (body.action === 'import') {
-        const command = importCommand(body);
+        const { command, rows } = importCommand(body);
         checkFrozenCardPoolWrite(store, { kind: 'import', data: command });
         const existing = new Set(raw.cards.map(row => row.card_number));
         const seen = new Set();
@@ -301,9 +331,12 @@ export function createStaffWorkspaces({ store, client, publicOrigin, getAuth, re
         const intent = store.financeCardIdentity(JSON.stringify([numbers.sort(), [...command.allowedPlans].sort()]));
         start({ intent, imported, plans: command.allowedPlans, version: current.version });
         const result = await sendToCardPool(() => client.writeCardMaintenance('POST', '/api/admin/cards/import', command, actor));
-        if (!Number.isSafeInteger(result.imported) || result.imported < 0 || result.imported > command.cards.length)
-          fail(503, uncertainCardWrite);
+        let failures;
+        try { failures = cardImportFailureIndexes(result, rows.length); }
+        catch { fail(503, uncertainCardWrite); }
         count = result.imported;
+        details = { skipped: result.skipped, failedLines: [...failures].map(index => rows[index].line).sort((a, b) => a - b),
+          ...(Number.isSafeInteger(result.planPolicy?.version) && { version: result.planPolicy.version }) };
         audit = ['finance_card_import', '导入 ' + count + ' 张'];
       } else if (body.action === 'plans' || body.action === 'strict') {
         const ids = body.cardIds;
@@ -340,7 +373,7 @@ export function createStaffWorkspaces({ store, client, publicOrigin, getAuth, re
         }
         audit = ['finance_card_stop', '卡尾 ' + card.last4];
       } else fail(400, '请选择可用的银行卡操作');
-      const result = finishCardWrite(store, actor, operation.domain, audit, count);
+      const result = finishCardWrite(store, actor, operation.domain, audit, count, details);
       cardChanged?.();
       return result;
     } finally {
@@ -418,11 +451,16 @@ export function createStaffWorkspaces({ store, client, publicOrigin, getAuth, re
           if (![result.added, result.labeled, result.skipped].every(Number.isSafeInteger))
             fail(503, '暂时无法确认业务 IP 登记结果');
           store.recordAuthEvent({ action: 'supervisor_proxy_add', actor, targetId: countryCode });
-          return send(response, 200, { saved: true, added: result.added, skipped: result.skipped });
+          return send(response, 200, { saved: true, added: result.added, labeled: result.labeled, skipped: result.skipped });
         }
         if (!read && body.id) fail(403, '主管可以登记新的业务 IP');
-        const result = read ? store.loadBitBrowserProxies(actor) : store.saveBitBrowserProxy(body, actor);
-        return send(response, 200, result);
+        if (read) return send(response, 200, store.loadBitBrowserProxies(actor));
+        let parsed;
+        try { parsed = parseBitBrowserProxyInput(body.link, { mode: body.mode, protocol: body.protocol }); }
+        catch { fail(400, '代理地址或协议格式不正确'); }
+        if (parsed.automaticProtocol) fail(400, '无法从地址确认代理协议，请明确选择协议后再登记');
+        return send(response, 200, store.saveBitBrowserProxy({ ...body,
+          mode: parsed.mode, protocol: parsed.protocol, link: parsed.link }, actor));
       }
       if (route === 'mail-code' && !read) return send(response, 200, await mailCodes(actor, body));
       if (route === 'registration-code' && actor.role === 'registrar' && !read) {
@@ -440,9 +478,12 @@ export function createStaffWorkspaces({ store, client, publicOrigin, getAuth, re
         if (read) return send(response, 200, registration
           ? registrarInventory(store.load(domain), actor) : readCustomerService(store, actor));
         const operation = describeWriteOperation(request.headers['x-id-operation'], actor, [route, body]);
-        const saved = operation && store.replayWrite(operation);
+        const saved = operation && store.replayWrite(operation, actor, { receiptResult: true });
+        if (saved) {
+          const savedId = !registration && body.action === 'manual-order' ? saved.savedId : undefined;
+          return send(response, 200, { saved: true, ...(savedId && { savedId }) });
+        }
         const snapshot = store.load(domain);
-        if (saved) return send(response, 200, { saved: true });
         keepVersion(body, snapshot);
         const result = registration ? await registerAsset(store, snapshot, body, actor, operation)
           : body.action === 'customer' ? addCustomer(store, snapshot, body, actor, operation)

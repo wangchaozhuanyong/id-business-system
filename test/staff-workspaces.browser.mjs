@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
-import { interceptDesign, origin, root, separatorSnapshot, settle } from './helpers/offline-design.mjs';
+import { interceptDesign, origin, root, separatorSnapshot, settle, toggleDesignTheme } from './helpers/offline-design.mjs';
 import { turnstileLoginPage } from '../server/login-security.mjs';
 
 const { chromium } = await import(process.env.ID_RECHARGE_QA_PLAYWRIGHT
@@ -46,6 +46,51 @@ async function prepare(browser, role, fixtures = localFixtures) {
   page.on('pageerror', error => errors.push(error.message));
   return { context, page, access, errors };
 }
+
+test('注册员复用产品身份控件和微软验证方式，切换类型隔离草稿并清理凭据', async t => {
+  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
+  t.after(() => browser.close());
+  const { context, page, errors } = await prepare(browser, 'registrar');
+  const submitted = [];
+  await context.route('**/api/local/staff/registration', route => {
+    if (route.request().method() === 'GET') return route.fulfill({ json: localFixtures['staff/registration'] });
+    submitted.push(route.request().postDataJSON());
+    return route.fulfill({ json: { saved: true } });
+  });
+  await page.goto(origin + '/#/staff/registration');
+  const form = page.locator('[data-staff-form="registration"]');
+  const type = form.locator('#staff-type');
+  await type.waitFor();
+  assert.ok(await form.locator('#staff-password').evaluate(input => input.required));
+  await form.locator('#staff-email').fill('google@example.test');
+  await form.locator('#staff-password').fill('test-input');
+  await type.selectOption('grok');
+  assert.equal(await form.locator('#staff-password').inputValue(), '');
+  await form.locator('#staff-loginMethod').selectOption('x');
+  await form.locator('#staff-xHandle').fill('@sample_a');
+  await type.selectOption('google');
+  assert.equal(await form.locator('#staff-email').inputValue(), 'google@example.test');
+  assert.equal(await form.locator('#staff-password').inputValue(), '');
+  await type.selectOption('grok');
+  assert.equal(await form.locator('#staff-xHandle').inputValue(), '@sample_a');
+  await form.getByRole('button', { name: '保存登记' }).click();
+  await page.getByText('保存成功', { exact: true }).waitFor();
+  assert.equal(submitted[0].loginMethod, 'x');
+  assert.equal(submitted[0].email, '');
+  await type.selectOption('gemini');
+  assert.equal(await form.locator('#staff-loginMethod').inputValue(), 'google');
+  await type.selectOption('microsoft');
+  await form.locator('#staff-email').fill('mail@example.test');
+  await form.locator('#staff-microsoft-login').selectOption('passwordless');
+  await form.getByRole('button', { name: '保存登记' }).click();
+  await page.getByText('无密码登录请选择实际使用的验证方式', { exact: true }).waitFor();
+  assert.equal(submitted.length, 1);
+  await form.getByLabel('通行密钥').check();
+  await form.getByRole('button', { name: '保存登记' }).click();
+  await page.getByText('保存成功', { exact: true }).waitFor();
+  assert.deepEqual(submitted[1].microsoftSecurity.verificationMethods, ['passkey']);
+  assert.deepEqual(errors, []);
+});
 
 test('role navigation uses business language and finance order operations remain read-only', { timeout: 60_000 }, async t => {
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
@@ -105,6 +150,310 @@ test('role navigation uses business language and finance order operations remain
       assert.deepEqual(access.external, [], role);
     } finally { await context.close(); }
   }
+});
+
+test('员工从本人客户进入核心录单分组，草稿按客户和产品隔离并通过岗位接口提交', { timeout: 45_000 }, async t => {
+  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
+  t.after(() => browser.close());
+  const { context, page, errors, access } = await prepare(browser, 'employee');
+  t.after(() => context.close());
+  const customers = [{ id: 'staff-a', name: '合成客户甲', active: true }, { id: 'staff-b', name: '合成客户乙', active: true }];
+  const commands = [];
+  let failNextRead = false, staffVersion = 2;
+  await context.route('**/api/local/staff/customer-service', async route => {
+    if (route.request().method() === 'GET') {
+      if (failNextRead) {
+        failNextRead = false;
+        return route.fulfill({ status: 503, json: { error: '列表暂不可读' } });
+      }
+      return route.fulfill({ json: { version: staffVersion, data: { customers, orders: [] },
+        orderCurrenciesByProduct: { GPT: commands.length ? [{ code: 'GBP', name: '英镑' }] : [{ code: 'EUR', name: '欧元' }] } } });
+    }
+    commands.push({ data: route.request().postDataJSON(), operation: route.request().headers()['x-id-operation'] });
+    if (commands.length === 1) {
+      staffVersion++;
+      return route.fulfill({ status: 503, json: { error: '保存结果待核对' } });
+    }
+    failNextRead = true;
+    return route.fulfill({ json: { savedId: 'staff-receipt' } });
+  });
+  await page.goto(origin + '/#/staff/customers');
+  const open = id => page.locator(`[data-staff-action="order"][data-id="${id}"]`).click();
+  const profile = page.locator('form[data-staff-form="customer"]');
+  await profile.waitFor();
+  assert.deepEqual(await profile.locator('.section-heading h2').allTextContents(), ['基本资料', '联系方式']);
+  assert.equal(await profile.locator('#staff-wechat').getAttribute('maxlength'), '60');
+  assert.equal(await profile.locator('input').count(), 2, '员工沿用客户建档模板及本人可写字段');
+  const back = page.getByRole('button', { name: '返回本人客户' });
+  const form = page.locator('form.order-submission-form');
+  await open('staff-a');
+  assert.deepEqual(await form.locator('.section-heading h2').allTextContents(), ['客户与账号', '付款与金额', '订阅周期']);
+  assert.equal(await page.getByLabel('客户资料').inputValue(), customers[0].name);
+  assert(await page.getByLabel('客户资料').evaluate(node => node.readOnly));
+  const product = form.getByLabel('产品', { exact: false });
+  assert.deepEqual(await product.locator('option').evaluateAll(nodes => nodes.map(node => node.value)), ['GPT', 'Claude Max', 'Gemini', 'Grok']);
+  const email = form.getByLabel('邮箱账号');
+  assert.deepEqual(await form.getByLabel('实收币种').locator('option').allTextContents(), ['欧元 EUR']);
+  await email.fill('draft-a@example.test');
+  await product.selectOption('Grok');
+  assert.equal(await email.inputValue(), '');
+  assert.deepEqual(await form.getByLabel('支付方式').locator('option').allTextContents(), ['银行卡']);
+  await product.selectOption('GPT');
+  assert.equal(await email.inputValue(), 'draft-a@example.test');
+  await back.click();
+  await open('staff-b');
+  assert.equal(await email.inputValue(), '');
+  await back.click();
+  await open('staff-a');
+  assert.equal(await email.inputValue(), 'draft-a@example.test');
+  for (const width of [1440, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const theme of ['light', 'dark']) {
+      if (await page.locator('html').getAttribute('data-theme') !== theme) await toggleDesignTheme(page);
+      const [start, expiry, paid, sale] = await Promise.all(['#staff-start', '#staff-expiry', '#staff-paidAmount', '#staff-saleAmount']
+        .map(id => form.locator(id).boundingBox()));
+      assert(width === 1440 ? Math.abs(start.y - expiry.y) < 2 : expiry.y > start.y + start.height);
+      assert(width === 1440 ? Math.abs(paid.y - sale.y) < 2 : sale.y > paid.y + paid.height);
+      assert(await form.evaluate(node => node.scrollWidth <= node.clientWidth + 1));
+    }
+  }
+  await form.getByLabel('代付币种').selectOption('CLP');
+  await form.getByLabel('实际代付金额').fill('24999');
+  await form.getByLabel('客户实收金额').fill('119');
+  await form.getByLabel('支付方式').selectOption('苹果内购');
+  assert.deepEqual(await form.getByLabel('代付币种').locator('option').allTextContents(), ['USD']);
+  assert.equal(await form.getByLabel('实际代付金额').inputValue(), '');
+  assert.equal(await form.getByLabel('客户实收金额').inputValue(), '119');
+  await form.getByLabel('实际代付金额').fill('19');
+  await form.getByLabel('支付方式').selectOption('银行卡');
+  await form.getByLabel('支付方式').selectOption('苹果内购');
+  assert.equal(await form.getByLabel('实际代付金额').inputValue(), '19');
+  await form.getByLabel('客户实收金额').fill('119');
+  await form.getByLabel('开通时间').fill('2026-11-21T12:00');
+  await form.getByLabel('到期时间').fill('2026-12-21T12:00');
+  assert.equal(commands.length, 0);
+  await form.getByRole('button', { name: '提交订单' }).click();
+  await page.getByText('保存结果待核对', { exact: true }).waitFor();
+  await back.click();
+  await page.evaluate(() => window.IDDesignAPI.go('orders/gpt'));
+  await page.getByRole('heading', { name: 'GPT 订单', exact: true }).waitFor();
+  await page.evaluate(() => window.IDDesignAPI.go('staff/customers'));
+  await open('staff-a');
+  assert.equal(await form.getByLabel('实收币种').inputValue(), 'EUR', '未知结果重试须保留原币种及幂等请求');
+  await form.getByRole('button', { name: '提交订单' }).click();
+  await page.getByText('订单提交成功，列表刷新失败，请点击刷新。').waitFor();
+  assert.equal(await page.getByRole('link', { name: '查看此订单' }).getAttribute('href'), '#/orders/detail/staff-receipt');
+  assert.equal(await form.count(), 0);
+  assert.equal(commands.length, 2);
+  assert.deepEqual(commands[1], commands[0], '同一份订单在本地版本变化后重试仍应使用原操作编号和版本');
+  assert.ok(commands[0].operation);
+  assert.deepEqual(commands[0].data, { action: 'manual-order', customerId: 'staff-a', version: 2,
+    planChoice: 'GPT|Plus', email: 'draft-a@example.test', payment: '苹果内购', paidAmount: '19', paidCurrency: 'USD',
+    saleAmount: '119', saleCurrency: 'EUR', start: '2026-11-21T12:00', expiry: '2026-12-21T12:00' });
+  assert.deepEqual(errors, []);
+  assert.deepEqual(access.external, []);
+});
+
+test('员工使用 X 账号录 Grok，原单冲突直接显示有权限的续费入口', async t => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const { context, page, access, errors } = await prepare(browser, 'employee');
+  t.after(() => context.close());
+  const requests = [];
+  await context.route('**/api/local/staff/customer-service', route => {
+    if (route.request().method() === 'GET') return route.fallback();
+    requests.push(route.request().postDataJSON());
+    return route.fulfill({ status: 409, json: { error: '该订阅已有原单，请选择续费' } });
+  });
+  await page.goto(origin + '/#/staff/customers');
+  await page.getByRole('button', { name: '登记订单' }).click();
+  const form = page.locator('[data-staff-form="manual-order"]');
+  await form.locator('#order-entry-product').selectOption('Grok');
+  const account = form.getByLabel('邮箱账号');
+  await account.fill('@invalid space');
+  await form.getByLabel('实际代付金额').fill('20');
+  await form.getByLabel('客户实收金额').fill('100');
+  await form.getByLabel('开通时间').fill('2026-11-21T12:00');
+  await form.getByLabel('到期时间').fill('2026-12-21T12:00');
+  await form.getByRole('button', { name: '提交订单' }).click();
+  await form.getByText('请填写有效的订单邮箱或 X @账号').waitFor();
+  assert.equal(requests.length, 0);
+  await account.fill('@synthetic_user');
+  await form.getByRole('button', { name: '提交订单' }).click();
+  const renewal = page.getByRole('link', { name: '前往续费管理' });
+  await renewal.waitFor();
+  assert.equal(requests[0].email, '@synthetic_user');
+  assert.equal(await account.inputValue(), '@synthetic_user');
+  await renewal.click();
+  await page.waitForURL('**/#/workspace/renewals');
+  assert.deepEqual(errors, []);
+  assert.deepEqual(access.external, []);
+});
+
+test('主管只在比特执行 IP 入口填写名称和协议，切换后保留个人草稿', async t => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const { context, page, access, errors } = await prepare(browser, 'supervisor');
+  t.after(() => context.close());
+  const requests = [];
+  await context.route('**/api/local/staff/business-proxies', route => {
+    if (route.request().method() === 'GET') return route.fallback();
+    const command = route.request().postDataJSON();
+    requests.push(command);
+    const recharge = [{ added: 0, labeled: 1, skipped: 0 }, { added: 0, labeled: 0, skipped: 1 }];
+    return route.fulfill({ json: { saved: true, ...(command.action === 'recharge' ? recharge[requests.length - 2] : {}) } });
+  });
+  await page.goto(origin + '/#/staff/business-proxies');
+  const form = page.locator('[data-staff-form="proxy"]');
+  const scope = form.getByLabel('使用范围'), protocol = form.getByLabel('代理协议');
+  const name = form.getByLabel('名称', { exact: true }), link = form.getByLabel('代理链接');
+  const submit = form.getByRole('button', { name: '登记业务 IP' });
+  await protocol.selectOption('http');
+  await link.fill('proxy.example.test:8080');
+  await submit.click();
+  await page.getByText('请填写 IP 名称。', { exact: true }).waitFor();
+  assert.equal(requests.length, 0);
+  await name.fill('合成地址');
+  await submit.click();
+  await page.getByText('保存成功', { exact: true }).waitFor();
+  assert.equal(requests[0].name, '合成地址');
+  assert.equal(requests[0].protocol, 'http');
+  await name.fill('待登记的个人地址');
+  await protocol.selectOption('https');
+  await scope.selectOption('recharge');
+  assert.equal(await protocol.isVisible(), false);
+  assert.equal(await name.isVisible(), false);
+  await scope.selectOption('personal');
+  assert(await name.isVisible());
+  assert.equal(await name.inputValue(), '待登记的个人地址');
+  assert.equal(await protocol.inputValue(), 'https');
+  await scope.selectOption('recharge');
+  await form.getByLabel('国家或地区代码').fill('PH');
+  await link.fill('proxy.example.test:8080');
+  await submit.click();
+  await page.getByText('自动代充代理新增 0 条，补标国家 1 条，跳过重复 0 条', { exact: true }).waitFor();
+  assert.equal(requests[1].action, 'recharge');
+  assert.equal(requests[1].countryCode, 'PH');
+  assert.equal(Object.hasOwn(requests[1], 'name'), false);
+  assert.equal(Object.hasOwn(requests[1], 'protocol'), false);
+  assert.equal(await name.inputValue(), '待登记的个人地址');
+  assert.equal(await protocol.inputValue(), 'https');
+  assert.equal(await link.inputValue(), '');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await scope.selectOption('recharge');
+  assert.equal(await name.isVisible(), false);
+  await form.getByLabel('国家或地区代码').fill('PH');
+  await link.fill('proxy.example.test:8080');
+  await submit.click();
+  await page.getByText('自动代充代理新增 0 条，补标国家 0 条，跳过重复 1 条', { exact: true }).waitFor();
+  assert.equal(Object.hasOwn(requests[2], 'name'), false);
+  assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  assert.deepEqual(errors, []);
+  assert.deepEqual(access.external, []);
+});
+
+test('主管登记代充代理后收到迟到回执时保留当前个人输入', async t => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  for (const leaveAndReturn of [false, true]) {
+    await t.test(leaveAndReturn ? '切页返回，先前列表读取仍在等待' : '留在原页', async t => {
+      const { context, page, access, errors } = await prepare(browser, 'supervisor');
+      t.after(() => context.close());
+      const respond = Promise.withResolvers();
+      const respondToOldRead = Promise.withResolvers();
+      const routePath = '/api/local/staff/business-proxies';
+      let returning = false, saved = false, writes = 0;
+      try {
+        await context.route('**' + routePath, async route => {
+          if (route.request().method() === 'GET') {
+            if (saved) return route.fulfill({ json: { version: 1, items: [{ name: '已更新的个人地址', countryCode: 'PH' }] } });
+            if (!returning) return route.fallback();
+            await respondToOldRead.promise;
+            return route.fulfill({ headers: { 'x-fixture-snapshot': 'old' },
+              json: { version: 0, items: [{ name: '保存前的旧列表', countryCode: 'PH' }] } });
+          }
+          writes += 1;
+          await respond.promise;
+          saved = true;
+          return route.fulfill({ json: { saved: true, added: 1, labeled: 0, skipped: 0 } });
+        });
+        await page.goto(origin + '/#/staff/business-proxies');
+        const form = page.locator('[data-staff-form="proxy"]');
+        const scope = form.getByLabel('使用范围'), country = form.getByLabel('国家或地区代码');
+        const name = form.getByLabel('名称', { exact: true }), link = form.getByLabel('代理链接');
+        const protocol = form.getByLabel('代理协议');
+        await scope.selectOption('recharge');
+        await country.fill('PH');
+        await link.fill('business.example.test:8080');
+        const submit = form.getByRole('button', { name: '登记业务 IP' });
+        const submitted = page.waitForRequest(request => request.method() === 'POST' && new URL(request.url()).pathname === routePath);
+        await submit.click();
+        assert.equal((await submitted).postDataJSON().action, 'recharge');
+
+        if (leaveAndReturn) {
+          await page.evaluate(() => window.IDDesignAPI.go('staff/team'));
+          await page.getByRole('heading', { name: '小组工作', exact: true }).waitFor();
+          returning = true;
+          const oldRead = page.waitForRequest(request => request.method() === 'GET' && new URL(request.url()).pathname === routePath);
+          await page.evaluate(() => window.IDDesignAPI.go('staff/business-proxies'));
+          await oldRead;
+          assert.equal(await link.inputValue(), '');
+        }
+        await scope.selectOption('personal');
+        await name.fill('下次登记的个人地址');
+        await protocol.selectOption('https');
+        await country.fill('MY');
+        await link.fill('https://personal.example.test:8081');
+        respond.resolve();
+        await page.getByText('自动代充代理新增 1 条，补标国家 0 条，跳过重复 0 条', { exact: true }).waitFor();
+        if (leaveAndReturn) {
+          const oldResponse = page.waitForResponse(response => response.headers()['x-fixture-snapshot'] === 'old');
+          respondToOldRead.resolve();
+          await (await oldResponse).finished();
+        }
+        await page.getByRole('cell', { name: '已更新的个人地址' }).waitFor();
+        assert.equal(await scope.inputValue(), 'personal');
+        assert.equal(await name.inputValue(), '下次登记的个人地址');
+        assert.equal(await protocol.inputValue(), 'https');
+        assert.equal(await country.inputValue(), 'MY');
+        assert.equal(await link.inputValue(), 'https://personal.example.test:8081');
+        assert.equal(writes, 1);
+        assert.deepEqual(errors, []);
+        assert.deepEqual(access.external, []);
+      } finally {
+        respond.resolve();
+        respondToOldRead.resolve();
+      }
+    });
+  }
+});
+
+test('注册工作台隐藏邮箱使用主表字段及单条登记请求', async t => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const { context, page, access, errors } = await prepare(browser, 'registrar');
+  t.after(() => context.close());
+  const sent = [];
+  await context.route('**/api/local/apple-relay/alias-register', route => {
+    sent.push(route.request().postDataJSON());
+    return route.fulfill({ json: { registered: 1 } });
+  });
+  await page.goto(origin + '/#/staff/registration');
+  const form = page.locator('[data-staff-form="alias"]');
+  await form.getByLabel('所属主邮箱').selectOption('apple1');
+  const address = form.getByLabel(/^隐藏邮箱地址/);
+  const note = form.getByLabel('备注', { exact: true });
+  assert.equal(await address.getAttribute('maxlength'), '254');
+  assert.equal(await note.getAttribute('maxlength'), '500');
+  await address.fill('alias-fixture@example.test');
+  await note.fill('合成备注'.repeat(35));
+  const response = page.waitForResponse('**/api/local/apple-relay/alias-register');
+  await form.getByRole('button', { name: '登记隐藏邮箱' }).click();
+  assert.equal((await response).status(), 200);
+  assert.deepEqual(sent, [{ parentId: 'apple1', parentVersion: 1, days: 30, batch: false,
+    rows: [{ email: 'alias-fixture@example.test', note: '合成备注'.repeat(35) }] }]);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(access.external, []);
 });
 
 test('finance reconciliation loads on demand and keeps dates, rows and page together across slow or failed reads', { timeout: 35_000 }, async t => {
@@ -321,6 +670,83 @@ test('finance lists keep filters, status and pagination readable across widths a
   assert.deepEqual(access.external, []);
 });
 
+test('财务停卡确认遇到卡池更新须重新确认', async t => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const { context, page, errors, access } = await prepare(browser, 'finance');
+  t.after(() => context.close());
+  const writes = [];
+  let snapshot = structuredClone(cards);
+  await context.route('**/api/local/auth/security**', route =>
+    route.fulfill({ json: { available: true, bound: true, passwordConfirmed: true } }));
+  await context.route('**/api/local/staff/finance/cards', route => {
+    if (route.request().method() === 'GET') return route.fulfill({ json: snapshot });
+    const command = route.request().postDataJSON();
+    writes.push(command);
+    assert.equal(command.version, snapshot.version);
+    snapshot = { ...snapshot, version: snapshot.version + 1, items: [{ ...snapshot.items[0], active: false }] };
+    return route.fulfill({ json: { saved: true } });
+  });
+  await page.goto(origin + '/#/staff/finance/cards');
+  const stop = page.getByRole('button', { name: '停用', exact: true });
+  const confirm = page.locator('dialog[open]').getByRole('button', { name: '确认', exact: true });
+  await stop.click();
+  await page.getByRole('heading', { name: '停用银行卡', exact: true }).waitFor();
+  snapshot = { ...snapshot, version: 8, items: [{ ...snapshot.items[0], plans: ['pro100'] }] };
+  await page.evaluate(() => window.IDDesignModules.find(item => item.id === 'staff-finance-cards').onDataChanges(['recharge-card-plans']));
+  await confirm.click();
+  await page.getByText('银行卡资料已更新，请核对当前资料后重新确认停用。', { exact: true }).waitFor();
+  assert.deepEqual(writes, []);
+  await stop.click();
+  await confirm.click();
+  await stop.waitFor({ state: 'hidden' });
+  assert.deepEqual(writes, [{ action: 'stop', id: 11, version: 8 }]);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(access.external, []);
+});
+
+test('财务设置套餐在其他人更新后保留选择，读取最新版本并确认前不覆盖', async t => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const { context, page, errors, access } = await prepare(browser, 'finance');
+  t.after(() => context.close());
+  const writes = [];
+  let snapshot = structuredClone(cards);
+  await context.route('**/api/local/auth/security**', route =>
+    route.fulfill({ json: { available: true, bound: true, passwordConfirmed: true } }));
+  await context.route('**/api/local/staff/finance/cards', route => {
+    if (route.request().method() === 'GET') return route.fulfill({ json: snapshot });
+    const command = route.request().postDataJSON();
+    writes.push(command);
+    if (command.version !== snapshot.version)
+      return route.fulfill({ status: 409, json: { error: '资料已更新，请刷新后重新核对，输入已保留' } });
+    snapshot = { ...snapshot, version: snapshot.version + 1, items: [{ ...snapshot.items[0], plans: command.plans }] };
+    return route.fulfill({ json: { saved: true } });
+  });
+  await page.goto(origin + '/#/staff/finance/cards');
+  await page.getByRole('button', { name: '设置套餐', exact: true }).click();
+  const drawer = page.locator('#drawer');
+  const save = drawer.getByRole('button', { name: '保存套餐' });
+  const latest = drawer.getByRole('button', { name: '读取最新套餐' });
+  await drawer.getByLabel('Pro 200').check();
+  snapshot = { ...snapshot, version: 8, items: [{ ...snapshot.items[0], plans: ['pro100'] }] };
+  await page.evaluate(() => window.IDDesignModules.find(item => item.id === 'staff-finance-cards').onDataChanges(['recharge-card-plans']));
+  await save.click();
+  assert.equal(writes.length, 0);
+  await drawer.getByText(/套餐设置已更新，已保留你的选择/).waitFor();
+  assert(await drawer.getByLabel('Plus', { exact: true }).isChecked());
+  assert(await drawer.getByLabel('Pro 200').isChecked());
+  await latest.click();
+  await drawer.getByText('当前已设置套餐：Pro 100', { exact: true }).waitFor();
+  assert(await drawer.getByLabel('Pro 200').isChecked());
+  assert.equal(writes.length, 0);
+  await save.click();
+  await drawer.waitFor({ state: 'hidden' });
+  assert.deepEqual(writes, [{ action: 'plans', cardIds: [11], plans: ['plus', 'pro200'], version: 8 }]);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(access.external, []);
+});
+
 test('card drawers preserve plan choices, clear private input and submit imports once and preserve write contracts', { timeout: 30_000 }, async t => {
   const browser = await chromium.launch();
   t.after(() => browser.close());
@@ -362,6 +788,9 @@ test('card drawers preserve plan choices, clear private input and submit imports
   assert.equal(writes.length, 0);
   await drawer.getByLabel('Plus', { exact: true }).check();
   assert.equal(writes.length, 0);
+  await page.getByRole('button', { name: '保存导入' }).click();
+  await drawer.getByText('存在格式错误。整批未提交，输入已保留。', { exact: true }).waitFor();
+  assert.equal(writes.length, 0);
   assert.equal(await page.getByLabel('银行卡资料', { exact: false }).inputValue(), 'isolated-fixture-only');
   await page.getByRole('button', { name: '关闭抽屉' }).click();
   assert.equal(await page.locator('#staff-lines').inputValue(), '');
@@ -369,12 +798,17 @@ test('card drawers preserve plan choices, clear private input and submit imports
   await openImport();
   assert(await drawer.getByLabel('Plus', { exact: true }).isChecked());
   assert.equal(await page.getByLabel('银行卡资料', { exact: false }).inputValue(), '');
-  await page.getByLabel('银行卡资料', { exact: false }).fill('isolated-fixture-only');
+  const valid = '0000000000010044 01/29 000';
+  await page.getByLabel('银行卡资料', { exact: false }).fill(valid + '\n\n' + financeCardNumber + ' 01/29 000');
+  await drawer.locator('[data-card-import-preview]').getByText('待导入 1 行（第 1 行） · 已知重复 1 行（第 3 行） · 格式有误 0 行。格式有误时整批不提交。').waitFor();
   assert.deepEqual((await separatorSnapshot(page)).findings, []);
   await page.getByRole('button', { name: '保存导入' }).click();
   assert.equal(await page.locator('#confirm-dialog[open]').count(), 0);
   await page.getByText('已导入 1 张银行卡', { exact: true }).waitFor();
-  assert.deepEqual(writes, [{ action: 'import', lines: 'isolated-fixture-only', plans: ['plus'], version: 7 }]);
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].lines === valid + '\n\n' + financeCardNumber + ' 01/29 000', true);
+  assert.deepEqual({ action: writes[0].action, plans: writes[0].plans, version: writes[0].version },
+    { action: 'import', plans: ['plus'], version: 7 });
   assert.equal(await drawer.evaluate(node => node.open), false);
   await page.getByRole('button', { name: '更多操作', exact: true }).click();
   await page.getByRole('menuitem', { name: '取卡设置' }).click();
@@ -384,6 +818,41 @@ test('card drawers preserve plan choices, clear private input and submit imports
   await page.getByText('取卡规则：仅使用已配置套餐的卡', { exact: true }).waitFor();
   assert.deepEqual(writes.at(-1), { action: 'strict', strict: true, version: 7 });
   assert.equal(await drawer.evaluate(node => node.open), false);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(access.external, []);
+});
+
+test('财务导入保留卡池退回的行，并用本次已确认版本重新导入', async t => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const { context, page, errors, access } = await prepare(browser, 'finance');
+  t.after(() => context.close());
+  const versions = [];
+  let version = cards.version;
+  await context.route('**/api/local/auth/security**', route =>
+    route.fulfill({ json: { available: true, bound: true, passwordConfirmed: true } }));
+  await context.route('**/api/local/staff/finance/cards', route => {
+    if (route.request().method() === 'GET') return route.fulfill({ json: { ...cards, version } });
+    const command = route.request().postDataJSON();
+    versions.push(command.version);
+    version++;
+    return route.fulfill({ json: { saved: true, count: 1, skipped: 0, failedLines: versions.length === 1 ? [3] : [], version } });
+  });
+  await page.goto(origin + '/#/staff/finance/cards');
+  await page.getByRole('button', { name: '导入银行卡', exact: true }).click();
+  const drawer = page.locator('#drawer');
+  const lines = drawer.locator('#staff-lines');
+  const first = '0000000000010044 01/29 000';
+  const second = '0000000000010045 01/29 000';
+  await lines.fill(first + '\n\n' + second);
+  await drawer.getByLabel('Plus', { exact: true }).check();
+  const save = drawer.getByRole('button', { name: '保存导入' });
+  await save.click();
+  await drawer.getByRole('alert').getByText(/失败 1 张（第 3 行/).waitFor();
+  assert.equal((await lines.inputValue()) === second, true);
+  await save.click();
+  await drawer.waitFor({ state: 'hidden' });
+  assert.deepEqual(versions, [7, 8]);
   assert.deepEqual(errors, []);
   assert.deepEqual(access.external, []);
 });

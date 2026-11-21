@@ -194,12 +194,12 @@ test('客户和银行卡独立订单在本机保存、重开后可读，旧标�
     await Promise.all([first.load(), stale.load()]);
     assert.equal(first.getCustomers().length, 0);
     assert.equal(first.listOrders().length, 0);
-    first.submitCustomer('本地测试客户', '111');
+    first.submitCustomer('本地测试客户', '+12025550101');
     assert.equal(first.getCustomers().length, 0, '持久化响应之前不显示成功记录');
     await turn();
     assert.equal(first.getCustomers()[0].createdBy, '本机操作员');
 
-    stale.submitCustomer('并发标签页客户', '222');
+    stale.submitCustomer('并发标签页客户', '+12025550102');
     await turn();
     assert.match(stale.notices.at(-1), /本次未保存/);
     assert.equal(stale.getCustomers()[0].name, '本地测试客户');
@@ -269,7 +269,7 @@ test('成品订单和库存占用一起提交，库存版本冲突时两边都�
   try {
     const tab = browser(store);
     await tab.load();
-    tab.submitCustomer('成品客户', '333');
+    tab.submitCustomer('成品客户', '+12025550103');
     await turn();
     const account = {
       id: 'stock-local-a',
@@ -394,7 +394,7 @@ test('苹果内购和余额一起提交，客户退款独立登记待回款，�
     const ledger = first.api.modules.appleBalance;
     await first.load();
     await ledger.ensureReady();
-    first.submitCustomer('苹果内购测试客户', '111');
+    first.submitCustomer('苹果内购测试客户', '+12025550101');
     await turn();
     assert.equal((await ledger.adjust(asset.id, '250', { reason: '核实期初余额' })).ok, true);
 

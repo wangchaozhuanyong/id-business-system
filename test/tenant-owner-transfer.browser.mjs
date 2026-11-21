@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import { mkdir, readFile } from 'node:fs/promises';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { pathToFileURL } from 'node:url';
+import { join } from 'node:path';
 import test from 'node:test';
 import { planTenantOwnerTransfer, tenantOwnerTransferView } from '../server/tenant-owner-transfer.mjs';
-import { interceptDesign, origin, settle } from './helpers/offline-design.mjs';
+import { interceptDesign, origin, root, settle } from './helpers/offline-design.mjs';
 
 test('租户归属转交抽屉、失效人员与版本冲突、未知结果恢复及宽窄屏', { timeout: 90_000 }, async t => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
@@ -92,7 +93,8 @@ test('租户归属转交抽屉、失效人员与版本冲突、未知结果恢�
   assert.deepEqual(fixture.commerce.data.orders, originalOrders);
   await close(); await open();
   assert.equal(await drawer.locator('table[data-table="commerce-tenant-owner-history"] tbody tr').count(), 2);
-  const evidence = new URL('../.runtime/tenant-owner-transfer-20261108/', import.meta.url); await mkdir(evidence, { recursive: true });
+  const evidence = process.env.ID_LAYOUT_QA_OUTPUT || join(root, '.runtime/tenant-owner-transfer-20261108');
+  await mkdir(evidence, { recursive: true });
   for (const width of [1440, 900, 390, 320]) for (const theme of ['light', 'dark']) {
     await page.setViewportSize({ width, height: 1000 }); await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme); await settle(page);
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
@@ -102,12 +104,20 @@ test('租户归属转交抽屉、失效人员与版本冲突、未知结果恢�
     assert.equal(outside, 0, `${width} ${theme} 抽屉控件不能被裁切`);
     const history = drawer.locator('.table-viewport:has(table[data-table="commerce-tenant-owner-history"])');
     assert(await history.evaluate(el=>{const r=el.getBoundingClientRect();return r.left>=0&&r.right<=innerWidth+1}));
-    await history.evaluate(el=>{el.scrollLeft=el.scrollWidth});
-    const reasonBox=await history.locator('tbody tr').first().locator('[data-column="reason"] button').boundingBox();
-    assert(reasonBox.x>=0&&reasonBox.x+reasonBox.width<=width+1,'历史原因可通过表内横向滚动完整访问');
-    await history.evaluate(el=>{el.scrollLeft=0});
+    const newest = history.locator('tbody tr').first();
+    const details = newest.getByRole('button', { name: '更多资料', exact: true });
+    const compact = await details.isVisible();
+    if (compact) await details.click();
+    else await history.evaluate(node => { node.scrollLeft = node.scrollWidth; });
+    const priorReason = newest.getByRole('button', { name: '查看转交原因完整内容', exact: true });
+    assert.match(await priorReason.innerText(), /下一次交接，测试迟到回包/);
+    const reasonBox = await priorReason.boundingBox();
+    assert(reasonBox && reasonBox.x >= 0 && reasonBox.x + reasonBox.width <= width + 1,
+      '使用当前布局的操作可以完整访问历史原因');
+    if (compact) await newest.getByRole('button', { name: '收起资料', exact: true }).click();
+    else await history.evaluate(node => { node.scrollLeft = 0; });
     const toast=page.locator('.toast-dismiss:visible');if(await toast.count())await toast.click();
-    if ([1440, 390].includes(width)) await page.screenshot({ path: fileURLToPath(new URL(`transfer-${width}-${theme}.png`, evidence)) });
+    if ([1440, 390].includes(width)) await page.screenshot({ path: join(evidence, `transfer-${width}-${theme}.png`) });
   }
   assert.deepEqual(errors, []); assert.deepEqual(traffic.external, []); assert.deepEqual(traffic.unavailable, []);
 });

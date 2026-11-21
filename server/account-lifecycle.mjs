@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { isHistoricallyOpenedClaude } from './inventory-history.mjs';
 import { parseV2DateTimeInput, toV2DateTimeInput } from '../modules/time/dateTime.ts';
-import { inventoryOperationalStatus, manualBusinessOrder, orderFieldChanged, validOrderEmail } from '../modules/orders/order-opening.mjs';
+import { completedRenewalHealthWindow, completedRenewalStartIssue, inventoryOperationalStatus,
+  manualBusinessOrder, orderFieldChanged, validOrderEmail } from '../modules/orders/order-opening.mjs';
 import { personalProduct, personalStock, sameTarget, stockTypeForProduct, targetKey } from './personal-subscriptions.mjs';
 import { registrationOccupancy, registrationProductConflict } from './inventory-registration.mjs';
 
@@ -104,6 +105,7 @@ export function accountLifecycleSummary(account, commerce, now = Date.now(), con
   const verified = history.find(order => kycLabel(order.kyc) === 'KYC 认证');
   return {
     assetId: account.id, systemOwned: systemAccount(account), label, customerId, customer: name(customerId),
+    completedRenewalHealth: systemAccount(account) ? completedRenewalHealthWindow(account) : null,
     currentOrderIds: closed ? [] : current.map(order => order.id), currentCustomers: closed ? [] : currentCustomers,
     disposition: lifecycle?.disposition || (state(account) === 'used' ? 'in_use' : 'new'),
     cycle: lifecycle?.cycle || 0,
@@ -121,6 +123,12 @@ export function accountLifecycleSummaries(inventory, commerce, now, cardNumberFo
   if (!accounts.length) return [];
   const context = { ...lifecycleReadContext(commerce), cardNumberFor };
   return accounts.map(account => accountLifecycleSummary(account, commerce, now, context));
+}
+
+export function completedInventoryRenewalIssue(order, inventory, now, originalStart) {
+  const account = order.accountId && rows(inventory?.accounts).find(row => row.id === order.accountId);
+  return systemAccount(account)
+    ? completedRenewalStartIssue(order.start, completedRenewalHealthWindow(account), now, originalStart) : '';
 }
 
 export function releasedSubscriptionOrderIds(inventory, commerce) {

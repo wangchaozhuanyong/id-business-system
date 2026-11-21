@@ -35,8 +35,11 @@
   const copy = (value) => (value ? JSON.parse(JSON.stringify(value)) : value);
   const net = (allocation) => M.subtract(allocation.amount, allocation.returned);
   const managementRoute = 'subscriptions/apple-ids';
-  const isBalanceRoute = () => ['accounts/apple-balances', 'mailboxes/apple', managementRoute].includes(S.route);
+  const balanceRoute = 'accounts/apple-balances';
+  let openPendingRefundsOnEntry = false;
+  const isBalanceRoute = () => [balanceRoute, 'mailboxes/apple', managementRoute].includes(S.route);
   const ready = () => !localData || loadState === 'ready';
+  const canReadAccounting = () => S.actor?.role === 'finance' || A.canVisit(balanceRoute);
   const pendingTotal = (orderId, exceptId) =>
     [...refunds.values()].reduce(
       (sum, item) =>
@@ -147,11 +150,13 @@
     } catch (error) {
       const read = await refreshLocalBalance();
       if (!read) return fail('无法核对保存结果，请重新读取余额与流水');
-      if (action === 'apple_topup') {
+      if (action === 'apple_topup' || action === 'apple_refund_receive') {
         const sent = prepared.data.movements.at(-1);
+        const kind = action === 'apple_topup' ? 'topup' : 'apple-refund';
         const saved = movements.find(row => row.id === sent.id && row.appleIdId === sent.appleIdId &&
-          row.kind === 'topup' && row.amount === sent.amount && row.reason === sent.reason);
-        if (saved) return prepared;
+          row.kind === kind && row.amount === sent.amount && row.reason === sent.reason &&
+          row.orderId === sent.orderId && row.refundId === sent.refundId);
+        if (saved && (kind === 'topup' || refunds.get(saved.refundId)?.status === 'received')) return prepared;
       }
       return fail(
         error?.status === 409 && localVersion !== prepared.version
@@ -681,11 +686,11 @@
         label: '操作',
         action: true,
         render: (row) =>
-          canCompensate(row) && (!target || wallet.version === row.versionAfter)
+          canCompensate(row) && wallet.version === row.versionAfter
             ? A.textAction('补偿撤回', 'apple-undo', `data-id="${E(row.id)}"`)
             : row.undoneBy
               ? A.tag('已补偿撤回')
-              : target && canCompensate(row) ? '后续已有余额变动' : '—'
+              : canCompensate(row) ? '后续已有余额变动' : '—'
       }
     ];
     const hasRefunds = localData
@@ -774,6 +779,10 @@
       key
     );
   }
+  function openPendingRefunds() {
+    if (S.route === balanceRoute && A.canVisit(balanceRoute))
+      openRefundList(listRefunds().filter(row => row.status === 'pending'));
+  }
   function openRefundList(rows) {
     A.openDrawer(
       'Apple 回款记录',
@@ -816,14 +825,63 @@
       A.button('关闭', 'drawer-close')
     );
   }
-  function pendingRefundEditor(id, isCorrection) {
+  function pendingRefundSnapshot(id) {
     const refund = refunds.get(id);
     const allocation = refund && getOrderLedger(refund.orderId);
     const wallet = refund && get(refund.appleIdId);
-    if (!refund || refund.status !== 'pending' || !allocation || !wallet) {
+    if (!refund || refund.status !== 'pending' || !allocation || allocation.appleIdId !== refund.appleIdId || !wallet) return;
+    return { refund, allocation, wallet, versions: {
+      'apple-pending-version': refund.version,
+      'apple-pending-ledger-version': allocation.version,
+      'apple-pending-wallet-version': wallet.version
+    } };
+  }
+
+  function showPendingRefundConflict(form) {
+    if (!form.closest('#drawer[open]')) return false;
+    const snapshot = pendingRefundSnapshot(form.elements['apple-pending-id'].value);
+    if (snapshot && Object.entries(snapshot.versions).every(([name, version]) => form.elements[name].value === String(version)))
+      return false;
+    const notice = form.querySelector('[data-apple-pending-conflict]');
+    const drawer = form.closest('#drawer');
+    notice.hidden = false;
+    delete form.dataset.reviewedRefundVersions;
+    const adopt = drawer.querySelector('[data-action="apple-pending-adopt"]');
+    adopt.hidden = !snapshot;
+    drawer.querySelector('button[form="apple-pending-form"][type="submit"]').disabled = true;
+    if (!snapshot) {
+      notice.textContent = '本笔回款已处理或资料已变化。请关闭后查看最新回款记录。';
+      return true;
+    }
+    const { refund, allocation, wallet, versions } = snapshot;
+    form.dataset.reviewedRefundVersions = JSON.stringify(versions);
+    notice.textContent = '回款资料已变化，已保留填写。当前回款 ' + shown(refund.amount) +
+      ' USD，原订单剩余净扣款 ' + shown(allocation.netAmount) + ' USD，当前余额 ' + shown(wallet.balance) +
+      ' USD。请核对后使用当前资料。';
+    return true;
+  }
+
+  function adoptPendingRefundSnapshot() {
+    const form = $('#drawer[open] #apple-pending-form');
+    if (!form?.dataset.reviewedRefundVersions || saving) return;
+    const id = form.elements['apple-pending-id'].value;
+    const snapshot = pendingRefundSnapshot(id);
+    if (!snapshot || JSON.stringify(snapshot.versions) !== form.dataset.reviewedRefundVersions) {
+      showPendingRefundConflict(form);
+      return;
+    }
+    for (const [name, version] of Object.entries(snapshot.versions)) form.elements[name].value = version;
+    saveDrafts();
+    pendingRefundEditor(id, form.elements['apple-pending-action'].value === 'edit');
+  }
+
+  function pendingRefundEditor(id, isCorrection) {
+    const snapshot = pendingRefundSnapshot(id);
+    if (!snapshot) {
       A.notify('待回款记录已变化，请重新核对');
       return;
     }
+    const { refund, wallet, versions } = snapshot;
     const key = `apple-pending:${isCorrection ? 'edit' : 'receive'}:${id}`;
     const draft = S.drafts.get(key) || {};
     const title = isCorrection ? '更正 Apple 待回款' : '登记 Apple 回款到账';
@@ -844,11 +902,12 @@
       isCorrection
         ? '保留更正前的金额和原因。填写 0 表示无需回款。'
         : '按已登记金额入账。实际金额有差异时请先更正。',
-      `<div class="property-list">${property('订单编号', refund.orderNo)}${property('原付款苹果 ID', wallet.email)}${property('已登记回款', `${shown(refund.amount)} USD · 美元`)}</div><form id="apple-pending-form" data-apple-draft="${E(key)}" novalidate><input type="hidden" name="apple-pending-id" value="${E(id)}" /><input type="hidden" name="apple-pending-action" value="${isCorrection ? 'edit' : 'receive'}" /><input type="hidden" name="apple-pending-version" value="${E(draft['apple-pending-version'] ?? refund.version)}" /><input type="hidden" name="apple-pending-ledger-version" value="${E(draft['apple-pending-ledger-version'] ?? allocation.version)}" /><input type="hidden" name="apple-pending-wallet-version" value="${E(draft['apple-pending-wallet-version'] ?? wallet.version)}" /><div class="form-grid">${fields}${A.field(isCorrection ? '更正原因' : '到账依据', 'apple-pending-reason', `<textarea id="apple-pending-reason" name="apple-pending-reason" rows="3">${E(draft['apple-pending-reason'] || '')}</textarea>`, true).replace('class="field"', 'class="field form-field-wide"')}</div></form>`,
-      A.button('取消', 'drawer-close') +
+      `<div class="property-list">${property('订单编号', refund.orderNo)}${property('原付款苹果 ID', wallet.email)}${property('已登记回款', `${shown(refund.amount)} USD · 美元`)}</div><form id="apple-pending-form" data-apple-draft="${E(key)}" novalidate><input type="hidden" name="apple-pending-id" value="${E(id)}" /><input type="hidden" name="apple-pending-action" value="${isCorrection ? 'edit' : 'receive'}" />${Object.entries(versions).map(([name, version]) => `<input type="hidden" name="${name}" value="${E(draft[name] ?? version)}" />`).join('')}<div class="form-grid">${fields}${A.field(isCorrection ? '更正原因' : '到账依据', 'apple-pending-reason', `<textarea id="apple-pending-reason" name="apple-pending-reason" rows="3">${E(draft['apple-pending-reason'] || '')}</textarea>`, true).replace('class="field"', 'class="field form-field-wide"')}</div><p class="inline-notice" data-apple-pending-conflict role="status" hidden></p></form>`,
+      A.button('取消', 'drawer-close') + A.button('使用当前资料', 'apple-pending-adopt', '', '', 'hidden') +
         `<button class="button primary" type="submit" form="apple-pending-form">${isCorrection ? '保存更正' : '登记到账'}</button>`,
       key
     );
+    showPendingRefundConflict($('#apple-pending-form'));
   }
   function openRefundHistory(id) {
     const refund = refunds.get(id);
@@ -1258,6 +1317,7 @@
         A.button('列设置', 'column-settings', '', 'columns', 'data-table-id="苹果ID余额"') +
           A.button('本表设置', 'inventory-settings', '', 'settings') +
           A.button('批量导入', 'apple-import', '', 'upload') +
+          (localData ? A.button('待回款', 'apple-return-pending', '', 'return') : '') +
           A.button('新增苹果 ID', 'apple-add', 'primary', 'plus')
       ) +
       refreshFeedback +
@@ -1284,12 +1344,12 @@
     if (key) S.drafts.delete(key);
     A.render();
   }
-  async function finishLocal(form, promise, openResult) {
+  async function finishLocal(form, promise, openResult, onFailure) {
     const key = form.dataset.appleDraft;
     const snapshot = JSON.stringify(A.readDraft(form));
     const result = await promise;
     if (!result.ok) {
-      A.notify(result.error);
+      if (!onFailure?.(form)) A.notify(result.error);
       return;
     }
     if (
@@ -1305,6 +1365,7 @@
     }
   }
   function submitPendingRefund(form, data) {
+    if (showPendingRefundConflict(form)) return;
     const isCorrection = data['apple-pending-action'] === 'edit';
     const id = data['apple-pending-id'];
     const refund = refunds.get(id);
@@ -1324,7 +1385,7 @@
     A.setError('apple-pending-reason', options.reason ? '' : '请填写依据或原因');
     if (invalidAmount || !options.reason) return;
     void finishLocal(form, isCorrection ? correctRefund(id, amount, options) : receiveRefund(id, options),
-      () => openOrderRefund(refund.orderId));
+      () => openOrderRefund(refund.orderId), showPendingRefundConflict);
   }
   function onSubmit(form) {
     if (!form.id.startsWith('apple-')) return false;
@@ -1446,6 +1507,13 @@
     else if (action === 'apple-edit') A.modules.inventory.editAppleId(id);
     else if (action === 'apple-details') A.modules.inventory.showAppleId(id);
     else if (action === 'apple-import') A.modules.inventory.importAppleIds();
+    else if (action === 'apple-return-pending') {
+      void A.withActionFeedback(node, async () => {
+        if (!await ensureReady() || !node.isConnected) return false;
+        openPendingRefunds();
+        return true;
+      }, { pending: '正在读取 Apple 回款…' });
+    }
     else if (action === 'apple-ledger') openLedger(id);
     else if (action === 'apple-adjust') adjustmentEditor(id);
     else if (action === 'apple-topup') {
@@ -1460,6 +1528,7 @@
       { pending: '正在读取余额与关联资料…', success: '余额与关联资料已刷新', failure: '读取失败，已保留当前资料' });
     else if (action === 'apple-pending-edit') pendingRefundEditor(id, true);
     else if (action === 'apple-pending-receive') pendingRefundEditor(id, false);
+    else if (action === 'apple-pending-adopt') adoptPendingRefundSnapshot();
     else if (action === 'apple-refund-history') openRefundHistory(id);
     else if (action === 'apple-return-select') {
       if (localData) {
@@ -1579,6 +1648,8 @@
     reconcileOrder: localData ? () => fail('余额扣款必须与本机订单一起保存') : commitOrder,
     refundToApple: localData ? () => fail('请通过待回款记录确认实际到账') : refundToApple,
     getOrderLedger,
+    canReadAccounting,
+    applyListScope(pending) { openPendingRefundsOnEntry = pending; },
     entries,
     adjust: localData ? saveAdjustment : adjust,
     undoAdjustment: localData ? saveAdjustmentUndo : undoAdjustment,
@@ -1607,6 +1678,10 @@
     render,
     afterRender({ routeChanged } = {}) {
       if (loading) bindBalanceRead();
+      if (openPendingRefundsOnEntry && ready() && S.route === balanceRoute) {
+        openPendingRefundsOnEntry = false;
+        openPendingRefunds();
+      }
       if (routeChanged && isBalanceRoute() && localData) void refreshManagement();
     },
     onDataChanges(scopes) {

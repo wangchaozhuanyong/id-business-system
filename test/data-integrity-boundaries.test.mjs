@@ -37,6 +37,57 @@ test('control: stale document version rejects and does not change the order', as
   const result = await submit(store, data => { data.orders[0].saleAmount = '999.0000'; }, '更正订单', { body: { version: 0 } });
   assert.equal(result.status, 409); assert.equal(store.load('commerce').data.orders[0].saleAmount, '100.0000'); store.close();
 });
+test('普通录单与岗位入口按最新产品币种校验，已保存的旧币种保留', async t => {
+  const store = setup();
+  t.after(() => store.close());
+  store.saveBatch([{ domain: 'settings', version: 0, action: 'order_currencies_save', data: {
+    mailboxTypes: [], costSettings: {}, orderCurrenciesByProduct: { GPT: [{ code: 'EUR', name: '欧元' }] }
+  } }]);
+  const add = saleCurrency => data => {
+    data.customers.push({ id: 'audit-next-customer', name: 'Second synthetic customer', active: true });
+    data.orders.push({ ...seedOrder(), id: 'audit-next', customerId: 'audit-next-customer', businessType: '续费',
+      orderNo: 'AUDIT-2', email: 'audit-next@example.test', saleCurrency });
+  };
+  const rejected = await submit(store, add('CNY'), '新增独立订单');
+  assert.equal(rejected.status, 400);
+  assert.match(rejected.body.error, /实收币种已变化/);
+  const saved = await submit(store, add('EUR'), '新增独立订单', { operation: 'audit-operation-0002' });
+  assert.equal(saved.status, 200, JSON.stringify(saved));
+  assert.deepEqual(store.load('commerce').data.orders.map(row => row.saleCurrency), ['CNY', 'EUR']);
+});
+test('当前库存异常不抹去已完成续费，服务端按最新可证实的开通时间范围核对', async t => {
+  for (const withTimeline of [true, false]) await t.test(withTimeline ? '有状态时间' : '历史缺少时间', async t => {
+    const store = setup({ businessType: '续费', entitlementStatus: 'active' });
+    t.after(() => store.close());
+    const original = store.load('commerce').data.orders[0];
+    const inventory = { accounts: [{ id: 'audit-stock', type: 'gpt', email: original.email, source: '自己注册',
+      status: '正常', health: 'unlocking', inventoryState: 'used', used: true, version: 1, inventoryHistory: [],
+      usageLinks: [{ kind: 'order-use', orderId: original.id }] }], mailboxes: [], batches: [],
+      registrationRecords: [], returnRecords: [], importRecords: [], tableSettings: [], undo: [] };
+    if (withTimeline) Object.assign(inventory.accounts[0], { healthChangedAt: '2026-11-15 12:00', inventoryHistory: [
+      { action: '健康状态变化', detail: 'dead', time: '2026-11-12 12:00' },
+      { action: '健康状态变化', detail: 'unlocking', time: '2026-11-15 12:00' }
+    ] });
+    store.saveBatch([{ domain: 'inventory', version: 0, data: inventory, action: 'inventory_create' }]);
+    const appendRenewal = start => data => data.orders.push({ ...original, id: 'audit-renewal', orderNo: 'AUDIT-RENEWAL-2',
+      accountId: withTimeline ? '' : 'audit-stock', accountSource: withTimeline ? '客户自有' : '库存',
+      renewalSourceVersion: original.version, previousOrderId: original.id,
+      start, expiry: '2027-01-15T10:30' });
+    const rejected = await submit(store, appendRenewal('2026-11-13T10:30'), '新增独立订单');
+    assert.equal(rejected.status, 409, JSON.stringify(rejected));
+    assert.match(rejected.body.error, withTimeline ? /早于异常时间/ : /异常时间未记录/);
+    assert.deepEqual(store.load('commerce').data.orders, [original]);
+    if (!withTimeline) return;
+    const past = await submit(store, appendRenewal('2026-11-11T10:30'), '新增独立订单', { operation: 'audit-operation-0002' });
+    assert.equal(past.status, 200, JSON.stringify(past));
+    assert.deepEqual(store.load('commerce').data.orders[0], original);
+    assert.equal(store.load('commerce').data.orders[1].previousOrderId, original.id);
+    assert.equal(store.load('commerce').data.orders[1].accountId, 'audit-stock');
+    const timeline = store.inventorySnapshot().accountSummaries[0];
+    assert.equal(timeline.completedRenewalHealth.status, '解封中');
+    assert.equal(timeline.completedRenewalHealth.before, Date.parse('2026-11-12T12:00+08:00'));
+  });
+});
 test('control: negative receipt through the correction action is rejected', async () => {
   const store = setup(); const result = await submit(store, data => { data.orders[0].saleAmount = '-1'; }, '更正订单');
   assert.equal(result.status, 400, JSON.stringify(result)); store.close();

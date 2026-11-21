@@ -19,7 +19,7 @@ const microsoftLoginFields = ({ verificationDevice, ...fields } = {}) => fields;
 const validMicrosoftSecurityObject = value => value && typeof value === 'object' && !Array.isArray(value) &&
   Object.keys(value).every(key => microsoftSecurityKeys.has(key));
 
-function checkMicrosoftFields(row, recoveryMailboxes) {
+export function checkMicrosoftFields(row, recoveryMailboxes) {
   const email = emailKey(row.email);
   const auxiliary = emailKey(row.auxiliary);
   if (!validEmail(email)) return '微软邮箱地址格式不正确';

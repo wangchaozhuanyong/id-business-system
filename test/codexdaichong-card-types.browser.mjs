@@ -189,9 +189,12 @@ test('card pool renders, imports and edits shared card types', { timeout: 35_000
     'invalid 01/30 000',
     ' '
   ].join('\n'));
+  await importBox.locator('#card_pool_import_preview').getByText(
+    '待导入 1 行（第 1 行） · 已知重复 2 行（第 2、3 行） · 格式有误 1 行（第 4 行）。有效行可先导入，失败行保留待修。').waitFor();
   await submit.click();
   await receipt.filter({ hasText: '导入 1 张，跳过重复 2 张，失败 1 张；已设置允许套餐 1 张；已确认银行卡类型 1 张，已有其他类型 1 张' }).waitFor();
-  assert.equal(await input.inputValue(), '');
+  assert.equal(await input.inputValue(), 'invalid 01/30 000');
+  assert.doesNotMatch(await receipt.textContent(), /synthetic-sensitive-failure/);
   await selected(cards.locator('[data-recharge-card-type="recharge:3"] select'), otherType.name);
   assert.equal(await typed.inputValue(), 'type-a');
   await cards.locator('[data-card-plan-edit="3"]').getByText('Pro 500').waitFor();
@@ -255,6 +258,14 @@ test('银行卡池操作列修改旧卡类型并在原页回读', { timeout: 40_
       await type.getByText('未设置', { exact: true }).waitFor();
       const edit = frame.locator('button[data-edit-recharge-card-type="recharge:21"]');
       assert.equal(await edit.innerText(), '修改');
+      if (width === 390) {
+        const scrolled = await edit.evaluate(node => {
+          const viewport = node.closest('.table-container');
+          viewport.scrollLeft = viewport.scrollWidth - viewport.clientWidth;
+          return viewport.scrollLeft > 0;
+        });
+        assert(scrolled, '窄屏可横向滚动到操作列');
+      }
       const fit = await edit.evaluate(node => {
         const cell = node.closest('td').getBoundingClientRect();
         const viewport = node.closest('.table-container').getBoundingClientRect();

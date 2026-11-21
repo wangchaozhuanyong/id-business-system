@@ -5,7 +5,9 @@ export function createPage(A, definition) {
   const planNames = { plus: 'Plus', pro100: 'Pro 100', pro200: 'Pro 200', pro500: 'Pro 500' };
   const defaults = () => ({ name: '', partnerId: '', plan: 'plus', count: '1', page: 1 });
   const operations = new Map();
-  let active, data, draft = defaults();
+  let active, data, issueReceipt, draft = defaults();
+  const issueCommand = () => ({ action: 'issue', partnerId: draft.partnerId, plan: draft.plan, count: Number(draft.count) });
+  const requiresNewIssue = () => issueReceipt?.protect && issueReceipt.fingerprint === JSON.stringify(issueCommand());
   let busy = false;
 
   function render() {
@@ -50,6 +52,10 @@ export function createPage(A, definition) {
           </div>
           <button class="button primary" type="submit">发放兑换码</button>
         </form>
+        <div class="panel-body" data-partner-issue-receipt hidden>
+          <p role="status" data-partner-issue-status></p>
+          ${A.button('准备发放下一批', 'recharge-partner-next-issue')}
+        </div>
         <div class="recharge-partner-records">
           <section class="recharge-partner-section" aria-labelledby="recharge-partner-list-title">
             <div class="panel-heading"><h3 id="recharge-partner-list-title">合作方列表</h3></div>
@@ -81,6 +87,7 @@ export function createPage(A, definition) {
       `<option value="${e(row.id)}">${e(row.name)}</option>`).join('');
     select.value = draft.partnerId;
     if (!select.value && draft.partnerId) draft.partnerId = '';
+    showIssueReceipt(view);
     view.host.querySelector('[data-partner-list]').innerHTML = A.table([
       { id: 'name', label: '合作方', class: 'recharge-partner-name-cell', mobileSummary: true, long: true },
       { id: 'id', label: '合作方编号', class: 'recharge-partner-id-cell', long: true, render: row => `<span class="mono">${e(row.id)}</span>` },
@@ -118,12 +125,14 @@ export function createPage(A, definition) {
       if (active !== view || !progress.current()) return true;
       data = value;
       draft.page = value.page;
+      if (issueReceipt?.protect && value.batches.some(batch => batch.id === issueReceipt.id))
+        issueReceipt.protect = false;
       show(view);
       return true;
     } catch (failure) {
       if (active !== view || !progress.current()) return true;
       if ([401, 403, 404].includes(failure.status)) {
-        data = undefined;
+        data = issueReceipt = undefined;
         clearSecret(view);
         show(view);
       }
@@ -141,20 +150,44 @@ export function createPage(A, definition) {
     view.secretPartner = undefined;
   }
 
+  function showIssueReceipt(view) {
+    const receipt = view.host.querySelector('[data-partner-issue-receipt]');
+    receipt.hidden = !issueReceipt;
+    receipt.querySelector('[data-partner-issue-status]').textContent = !issueReceipt ? '' : issueReceipt.batchNo
+      ? '已发放批次 ' + issueReceipt.batchNo + '，共 ' + issueReceipt.count + ' 个兑换码。'
+      : '已发放 ' + issueReceipt.count + ' 个兑换码，批次编号待核对。';
+    receipt.querySelector('[data-action="recharge-partner-next-issue"]').hidden = !requiresNewIssue();
+    setBusy(view, busy);
+  }
+
   function setBusy(view, value) {
     for (const control of view.host.querySelectorAll('form :is(input, select, button), [data-action="recharge-partner-disable"], [data-action="recharge-partner-rotate"]'))
       control.disabled = value;
+    view.host.querySelector('[data-partner-form="issue"] button[type="submit"]').disabled = value || Boolean(requiresNewIssue());
+    view.host.querySelector('[data-action="recharge-partner-next-issue"]').disabled = value;
   }
 
   async function save(view, command) {
-    if (busy) return;
+    if (busy || command.action === 'issue' && requiresNewIssue()) return;
+    const actorId = D.actor()?.id;
     const fingerprint = JSON.stringify(command);
     if (!operations.has(fingerprint)) operations.set(fingerprint, crypto.randomUUID());
+    const operationId = operations.get(fingerprint);
     busy = true;
     setBusy(view, true);
     feedback(view, '');
     try {
-      const result = await D.rechargePartnerAction({ ...command, operationId: operations.get(fingerprint) });
+      const result = await D.rechargePartnerAction({ ...command, operationId });
+      if (actorId !== D.actor()?.id || operationId !== operations.get(fingerprint)) return;
+      if (command.action === 'issue') {
+        const batch = result.batch;
+        if (!batch?.id || batch.partnerId !== command.partnerId || batch.plan !== command.plan ||
+            batch.codes?.length !== command.count)
+          throw new Error('发码结果暂未确认。请刷新核对原批次。');
+        issueReceipt = { id: batch.id, batchNo: batch.batchNo, count: batch.codes.length, fingerprint, protect: true };
+        draft.page = 1;
+        if (active) showIssueReceipt(active);
+      }
       operations.delete(fingerprint);
       if (active !== view) return;
       if (command.action === 'create' || command.action === 'rotate') {
@@ -169,10 +202,10 @@ export function createPage(A, definition) {
           feedback(view, '操作已保存。若未收到密钥，请刷新后使用「更换密钥」。');
         }
       }
-      if (command.action === 'issue') draft.page = 1;
       await read(view, true);
     } catch (failure) {
-      if (active === view) feedback(view, failure.message || '操作结果暂未确认，请刷新核对。');
+      if (active === view && actorId === D.actor()?.id)
+        feedback(view, failure.message || '操作结果暂未确认，请刷新核对。');
     } finally {
       busy = false;
       if (active) setBusy(active, false);
@@ -187,7 +220,10 @@ export function createPage(A, definition) {
       const view = { host };
       active = view;
       for (const form of host.querySelectorAll('form')) {
-        const preserve = () => Object.assign(draft, Object.fromEntries(new FormData(form)));
+        const preserve = () => {
+          Object.assign(draft, Object.fromEntries(new FormData(form)));
+          if (form.dataset.partnerForm === 'issue') showIssueReceipt(view);
+        };
         form.addEventListener('input', preserve);
         form.addEventListener('change', preserve);
         form.addEventListener('submit', event => {
@@ -195,9 +231,7 @@ export function createPage(A, definition) {
           event.stopPropagation();
           preserve();
           const action = form.dataset.partnerForm;
-          const input = action === 'create' ? { name: draft.name.trim() }
-            : { partnerId: draft.partnerId, plan: draft.plan, count: Number(draft.count) };
-          void save(view, { action, ...input });
+          void save(view, action === 'create' ? { action, name: draft.name.trim() } : issueCommand());
         });
       }
       show(view);
@@ -208,6 +242,13 @@ export function createPage(A, definition) {
       const view = active;
       if (!view?.host.contains(node) || !action.startsWith('recharge-partner-')) return false;
       if (action === 'recharge-partner-refresh') { feedback(view, ''); void read(view, true); }
+      else if (action === 'recharge-partner-next-issue') {
+        if (issueReceipt && !busy) {
+          issueReceipt.protect = false;
+          showIssueReceipt(view);
+          view.host.querySelector('[data-partner-form="issue"] button[type="submit"]').focus();
+        }
+      }
       else if (action === 'recharge-partner-previous' || action === 'recharge-partner-next') {
         draft.page = data.page + (action === 'recharge-partner-next' ? 1 : -1);
         void read(view);
@@ -247,7 +288,7 @@ export function createPage(A, definition) {
     },
     clearPageState() {
       if (active) clearSecret(active);
-      active = data = undefined;
+      active = data = issueReceipt = undefined;
       draft = defaults();
       operations.clear();
       A.table([], [], '', '充值 API 合作方');

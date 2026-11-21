@@ -3,7 +3,8 @@ import { latestRenewalDecisions } from '../modules/orders/renewal-reminders.mjs'
 import { managesBusiness } from './access-roles.mjs';
 import { moneyUnits, validMoney } from './order-policy.mjs';
 import { validCurrencyCode } from '../modules/finance/accounting.mjs';
-import { orderOpeningConfirmed, subscriptionChainRoot, subscriptionTime,
+import { saleCurrencySettings } from './order-currency-settings.mjs';
+import { orderSaleCurrencyAllowed, orderOpeningConfirmed, subscriptionChainRoot, subscriptionTime,
   validOrderEmail, validOrderXHandle } from '../modules/orders/order-opening.mjs';
 import { renewalProjection } from '../modules/orders/renewal-reminders.mjs';
 import { validateRenewalAccountReference } from '../modules/orders/renewal-account-reference.mjs';
@@ -311,12 +312,14 @@ async function fundingFor(store, client, context, inventory, items, source, inpu
   return { ...funding, number, serial, last4: number.slice(-4) };
 }
 
-function newOrder(source, row, command, actor, context, now) {
+function newOrder(source, row, command, actor, context, now, settings) {
   const { start, expiry, saleAmount, saleCurrency } = command;
   if (!dateInput(start) || !dateInput(expiry) || !(subscriptionTime(start) <= now &&
       subscriptionTime(expiry) > Math.max(subscriptionTime(start), subscriptionTime(source.expiry))))
     fail(400, '请填写实际开通时间，新到期时间须晚于原到期时间');
   if (!credit(saleAmount, saleCurrency)) fail(400, '请填写客户实际支付金额及币种');
+  if (!orderSaleCurrencyAllowed(settings, source.product, saleCurrency))
+    fail(400, '实收币种已变化，请刷新并选择当前产品可用的币种');
   const funding = row.funding;
   const email = source.email || text(command.email, 254).toLowerCase();
   const xHandle = source.xHandle || text(command.xHandle, 16);
@@ -510,7 +513,8 @@ export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clo
         }
         return send(response, 200, { version: snapshot.version, reminderHours, candidates,
           nextReminderAt: Number.isFinite(nextReminderAt) ? nextReminderAt : null,
-          ...(!fromFinance && { canSubmitToFinance: canSendToFinance(actor, scope) }), items: projected });
+          ...(!fromFinance && { canSubmitToFinance: canSendToFinance(actor, scope) }),
+          ...(projected.some(row => row.canFinish) && saleCurrencySettings(store.load('settings')?.data)), items: projected });
       }
       if (request.method !== 'POST') fail(405, '此操作不可用');
       if (request.headers.origin !== origin) fail(403, '请从当前页面提交');
@@ -624,7 +628,7 @@ export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clo
         // Finance may reconcile dates only. Keep the paid identity immutable,
         // while validating the new expiry against the reviewed current dates.
         const paidSource = row.paidSource ? { ...row.paidSource, start: source.start, expiry: source.expiry } : source;
-        const order = newOrder(paidSource, row, command, actor, context, now);
+        const order = newOrder(paidSource, row, command, actor, context, now, store.load('settings')?.data);
         const orderNo = store.finishRenewal({ snapshot, commerce, item: next, order, actor, operation,
           owners: () => scope.orderOwners() });
         return send(response, 200, { saved: true, orderNo });

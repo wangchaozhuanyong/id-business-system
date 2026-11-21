@@ -28,7 +28,11 @@
   const canViewOrder = () => ['admin', 'super'].includes(currentRole());
   const orderPeriods = { upcoming: '即将到期', expired: '已到期', refused: '已拒续', renewed: '已续费' };
   const handledPeriods = ['refused', 'renewed'];
-  const canChoosePeriod = period => Object.hasOwn(orderPeriods, period) && (!handledPeriods.includes(period) || canViewOrder());
+  const pendingPeriod = 'pending';
+  const pendingPeriods = ['upcoming', 'expired'];
+  const matchesPeriod = (period, current) => current === pendingPeriod ? pendingPeriods.includes(period) : period === current;
+  const canChoosePeriod = period => period === pendingPeriod ||
+    (Object.hasOwn(orderPeriods, period) && (!handledPeriods.includes(period) || canViewOrder()));
   const selectableOrder = order => order.canSubmitToFinance !== false && !handledPeriods.includes(order.reminderState);
   const originalCardText = row => row.order.payment === '银行卡'
     ? row.originalCardNumber || '完整卡号待核对' : '—';
@@ -59,9 +63,10 @@
 
   const button = (label, action, id = '', kind = '') =>
     A.button(label, 'renewal-handoff-' + action, kind, '', id ? 'data-id="' + E(id) + '"' : '');
-  function periodControls(current) {
+  function periodControls({ period: current, pendingScope }) {
+    const periods = pendingScope ? [[pendingPeriod, '全部待处理'], ...Object.entries(orderPeriods)] : Object.entries(orderPeriods);
     return '<div class="renewal-period-controls" role="group" aria-label="订单状态">' +
-      Object.entries(orderPeriods).filter(([period]) => canChoosePeriod(period)).map(([period, label]) => '<button type="button" class="button" ' +
+      periods.filter(([period]) => canChoosePeriod(period)).map(([period, label]) => '<button type="button" class="button" ' +
         'data-action="renewal-handoff-period" data-renewal-period="' + period + '" aria-pressed="' + (period === current) +
         '" disabled>' + label + ' <span class="tab-count" data-renewal-period-count>—</span></button>').join('') + '</div>';
   }
@@ -107,7 +112,7 @@
     const auditTarget = auditNavigation?.route === route || (active?.route === route && active.auditId);
     const choosing = route === staffRoot && !auditTarget;
     const toolbar = '<div class="toolbar toolbar--inline renewal-toolbar ' + (choosing ? 'renewal-status-toolbar' : 'list-filter-toolbar') + '">' +
-      (choosing ? periodControls(filters(route).period) : '') +
+      (choosing ? periodControls(filters(route)) : '') +
       (finishing ? '' : '<div class="toolbar-left" data-renewal-filters hidden></div>') +
       '<div class="toolbar-right" data-page-actions>' +
       (route === staffRoot ? '<span class="footnote" data-reminder-window hidden></span>' : '') +
@@ -137,7 +142,15 @@
     const query = view.filter.query.trim().toLowerCase();
     const choosing = view.route === staffRoot;
     const source = choosing ? view.data.candidates.map(order => ({ id: order.id, order })) : view.data.items;
-    const counts = { upcoming: 0, expired: 0, refused: 0, renewed: 0 };
+    if (choosing && view.filter.pendingScope) {
+      const candidateIds = new Set(source.map(row => row.id));
+      const reminderDeadline = now + view.data.reminderHours * 3_600_000;
+      for (const row of view.data.items) {
+        if (['pending', 'processing', 'paid'].includes(row.status) && !candidateIds.has(row.order.id) &&
+            subscriptionTime(row.order.expiry) <= reminderDeadline) source.push({ ...row, inProgress: true });
+      }
+    }
+    const counts = { upcoming: 0, expired: 0, refused: 0, renewed: 0, inProgress: 0 };
     if (view.auditId) return { rows: source.filter(row => row.id === view.auditId), counts };
     const rows = [];
     for (const row of source) {
@@ -147,10 +160,13 @@
       if (view.filter.product && order.product !== view.filter.product) continue;
       if (query && ![order.number, order.account, order.customer, order.wechat, order.contactSearch, order.owner, row.submittedBy, row.declinedBy]
         .some(value => String(value || '').toLowerCase().includes(query))) continue;
-      if (choosing) {
+      if (row.inProgress) {
+        counts.inProgress++;
+        if (view.filter.period !== pendingPeriod) continue;
+      } else if (choosing) {
         const period = reminderPeriod(order, now);
         if (Object.hasOwn(counts, period)) counts[period]++;
-        if (period !== view.filter.period) continue;
+        if (!matchesPeriod(period, view.filter.period)) continue;
       }
       rows.push(row);
     }
@@ -207,9 +223,11 @@
     }
     if (choosing) {
       columns.push(['owner', '归属人', row => E(row.order.owner || '—') +
-        (canSelect && !selectableOrder(row.order) ? ' ' + A.tag('交接待核对') : '')]);
-      if (canViewOrder()) columns.push(['actions', '操作', row =>
-        '<span class="action-links">' + button('详情', 'order-details', row.id, 'compact') +
+        (row.inProgress ? ' ' + A.tag(statuses[row.status]) :
+          canSelect && !selectableOrder(row.order) ? ' ' + A.tag('交接待核对') : '')]);
+      if (canViewOrder()) columns.push(['actions', '操作', row => row.inProgress
+        ? '<a class="button compact" href="#/' + staffRoot + staffStages[row.status] + '">查看办理进度</a>'
+        : '<span class="action-links">' + button('详情', 'order-details', row.id, 'compact') +
         (D.renewalContactCopy && ['upcoming', 'expired'].includes(row.order.reminderState)
           ? A.button('复制订阅信息', 'commerce-renewal-contact', 'compact', '', 'data-id="' + E(row.id) + '"') : '') +
         button('更多操作', 'order-actions', row.id, 'compact') + '</span>']);
@@ -239,7 +257,7 @@
         view.route === declinedRoute ? '拒绝续费' : view.finance ? '财务续费订单' : '续费办理记录', { title: view.route === declinedRoute ? '暂无符合条件的拒绝续费记录' : '暂无符合条件的订单',
         description: choosing && view.filter.period === 'upcoming' && Number.isFinite(view.data.reminderHours)
           ? '当前按到期前 ' + reminderDuration(view.data.reminderHours) + ' 的设置显示提醒订单。' : '可切换筛选或稍后刷新。' },
-      row => selectableOrder(row.order)) +
+      row => !row.inProgress && selectableOrder(row.order)) +
       window.IDPagination.render({ id: 'renewal-handoff-pagination', page: view.filter.page, pageSize, total: rows.length });
   }
 
@@ -269,7 +287,7 @@
       view.nextExpiry = Infinity;
       for (const order of view.data.candidates) {
         const period = reminderPeriod(order, now);
-        if (period === view.filter.period && selectableOrder(order)) candidates.add(order.id);
+        if (matchesPeriod(period, view.filter.period) && selectableOrder(order)) candidates.add(order.id);
         if (period === 'upcoming') view.nextExpiry = Math.min(view.nextExpiry, subscriptionTime(order.expiry));
       }
       for (const id of selected()) if (!candidates.has(id)) selected().delete(id);
@@ -277,7 +295,8 @@
         const period = control.dataset.renewalPeriod;
         control.setAttribute('aria-pressed', String(period === view.filter.period));
         const count = $('[data-renewal-period-count]', control);
-        const text = counts[period].toLocaleString('zh-CN');
+        const total = period === pendingPeriod ? counts.upcoming + counts.expired + counts.inProgress : counts[period];
+        const text = total.toLocaleString('zh-CN');
         if (count.textContent !== text) count.textContent = text;
         control.disabled = false;
       }
@@ -338,22 +357,32 @@
     const draft = A.state.drafts.get(storeKey(view.route + ':form')) || {};
     const { order } = row;
     const date = dateValue(new Date());
-    return '<div class="form-section panel-body">' + props([['原订单', order.number], ['客户', order.customer],
-      ['产品与套餐', order.product + ' · ' + order.plan], ['原到期时间', beijing(order.expiry)],
-      ['财务已登记实付', row.amount + ' ' + row.currency], ['本次付款方式', order.payment],
-      ...(order.payment === '银行卡' ? [['本次银行卡号', actualCardText(row)]] : []),
-      ...(row.remark ? [['提交备注', row.remark]] : []), ...(row.financeRemark ? [['财务回复', row.financeRemark]] : [])]) +
-      '<form id="renewal-finish-form" data-renewal-id="' + E(row.id) + '" data-renewal-version="' + row.version +
-      '" data-renewal-draft="' + E(storeKey(view.route + ':form')) + '"><div class="form-grid">' +
-      (order.account ? props([['订阅账号', order.account]]) : inputField('订阅邮箱', 'renewal-email', draft['renewal-email'] || '',
+    const readout = (label, key, value) => A.field(label, 'renewal-' + key,
+      '<output class="break-word" id="renewal-' + key + '">' + E(String(value ?? '') || '—') + '</output>');
+    const identity = readout('客户', 'customer', order.customer) +
+      readout('产品与套餐', 'plan', order.product + ' · ' + order.plan) +
+      readout('原订单', 'source-number', order.number) +
+      (order.account ? readout('订阅账号', 'account', order.account) : inputField('订阅邮箱', 'renewal-email', draft['renewal-email'] || '',
         'type="email" maxlength="254"') + (order.product === 'Grok' ? inputField('X 账号', 'renewal-xHandle', draft['renewal-xHandle'] || '',
-          'maxlength="16" placeholder="@账号"') : '')) +
-      inputField('开通时间（北京）', 'renewal-start', draft['renewal-start'] || date, 'type="datetime-local" required') +
-      inputField('新到期时间（北京）', 'renewal-expiry', draft['renewal-expiry'] || '', 'type="datetime-local" required') +
-      inputField('客户实收金额', 'renewal-saleAmount', draft['renewal-saleAmount'] || '',
-        'maxlength="21" inputmode="decimal" required') +
-      fieldCurrency('实收币种', 'renewal-saleCurrency', draft['renewal-saleCurrency'] || row.saleCurrency || 'CNY') +
-      '</div><div class="field-error" data-renewal-form-error role="alert" hidden></div><div class="form-footer">' +
+          'maxlength="16" placeholder="@账号"') : ''));
+    const amounts = A.orderAmountGroups({
+      paid: readout('代付币种', 'paid-currency', row.currency) + readout('财务已登记实付', 'paid', row.amount),
+      sale: selectField('实收币种', 'renewal-saleCurrency', window.IDOrderOpening.orderSaleCurrencyChoices(view.data,
+        order.product, draft['renewal-saleCurrency'] ?? row.saleCurrency), draft['renewal-saleCurrency'] ?? row.saleCurrency ?? 'CNY') +
+        inputField('客户实收金额', 'renewal-saleAmount', draft['renewal-saleAmount'] || '', 'maxlength="21" inputmode="decimal" required')
+    });
+    const payment = readout('本次付款方式', 'payment', order.payment) +
+      (order.payment === '银行卡' ? readout('本次银行卡号', 'funding-card', actualCardText(row)) : '') +
+      amounts +
+      (row.remark ? readout('提交备注', 'submitted-remark', row.remark) : '') +
+      (row.financeRemark ? readout('财务回复', 'finance-reply', row.financeRemark) : '');
+    const period = A.orderPeriodInputs({ prefix: 'renewal', start: draft['renewal-start'] || date, expiry: draft['renewal-expiry'] || '',
+      startLabel: '开通时间（北京）', expiryLabel: '新到期时间（北京）' }) +
+      readout('原到期时间', 'original-expiry', beijing(order.expiry));
+    return '<div class="panel-body"><form id="renewal-finish-form" class="order-submission-form" data-renewal-id="' +
+      E(row.id) + '" data-renewal-version="' + row.version + '" data-renewal-draft="' + E(storeKey(view.route + ':form')) + '">' +
+      A.orderSubmissionSections({ identity, payment, period, idPrefix: 'renewal-finish' }) +
+      '<div class="field-error" data-renewal-form-error role="alert" hidden></div><div class="form-footer">' +
       '<button class="button primary" type="submit">提交订单</button></div></form></div>';
   }
 
@@ -410,6 +439,7 @@
     try {
       const data = await D.queries.read(scope, key, () => D.renewalHandoffs(key.view), { refresh: refresh || crossedReminder });
       if (!latest()) return true;
+      if (view.saving && !refresh) return true;
       const openForm = $('#renewal-finish-form', view.host);
       view.data = data;
       if (view.route === staffRoot) view.nextReminderAt = data.nextReminderAt > Date.now() ? data.nextReminderAt : undefined;
@@ -420,11 +450,15 @@
         notifyError(view, target ? '' : '这笔续费目前无法读取，请核对原操作。');
         return true;
       }
-      if (openForm?.contains(document.activeElement) && data.items.some(row => row.id === openForm.dataset.renewalId &&
-          row.version === Number(openForm.dataset.renewalVersion) && row.canFinish && !row.sourceChanged)) {
+      const editable = openForm && data.items.find(row => row.id === openForm.dataset.renewalId &&
+        row.version === Number(openForm.dataset.renewalVersion) && row.canFinish && !row.sourceChanged);
+      if (editable) {
+        A.syncOrderSaleCurrencySelect(openForm.elements['renewal-saleCurrency'], data, editable.order.product);
+        preserveForm(openForm);
         notifyError(view, '');
         return true;
       }
+      if (openForm && !view.saving) preserveForm(openForm);
       draw(view);
       notifyError(view, '');
       return true;
@@ -511,6 +545,7 @@
     } catch (error) {
       const diagnostic = timing?.finish(error);
       if (active === view) {
+        if (command.action === 'finish' && error.status === 400) await load(view, true);
         if (formError?.isConnected) {
           formError.textContent = error.message || '结果待核对，请刷新后再试。';
           formError.hidden = false;
@@ -903,7 +938,16 @@
     void load(view, refresh);
   }
 
-  window.IDRenewalHandoff = { refreshWorktable() {
+  window.IDRenewalHandoff = {
+    applyListScope(pending) {
+      const filter = filters(staffRoot);
+      filter.pendingScope = pending;
+      if (pending) {
+        Object.assign(filter, { period: pendingPeriod, page: 1, product: '', query: '' });
+        window.IDSearchInput?.discardPage(staffRoot, 'renewal-handoff-search');
+      } else if (filter.period === pendingPeriod) filter.period = 'upcoming';
+    },
+    refreshWorktable() {
     if (active?.route === staffRoot) return load(active, true);
   }, openAuditRecord({ id, state }) {
     if (!id || A.state.route !== 'settings/audit' || !canViewOrder()) return;

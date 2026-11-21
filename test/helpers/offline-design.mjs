@@ -108,7 +108,8 @@ export async function interceptDesign(context, { beforeDirectory, localFixtures,
       '/modules/orders/renewal-account-reference.mjs', '/modules/orders/order-customer-match.mjs', '/modules/orders/order-whatsapp.mjs',
       '/modules/orders/order-list.mjs', '/modules/inventory/list.mjs', '/modules/data/document-delta.mjs',
       '/modules/data/record-edit.mjs', '/modules/finance/accounting.mjs',
-      '/modules/finance/apple-funding.mjs'].includes(url.pathname)) file = path.join(root, url.pathname);
+      '/modules/finance/apple-funding.mjs', '/modules/recharge/codexdaichong/card-import-preview.mjs'].includes(url.pathname))
+      file = path.join(root, url.pathname);
     if (url.pathname === '/assets/tools/totp.mjs') file = path.join(root, 'modules/tools/totp.mjs');
     if (
       beforeDirectory &&

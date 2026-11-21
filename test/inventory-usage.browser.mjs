@@ -2,21 +2,21 @@ import { chooseOrderCustomer } from './helpers/order-customer.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { startPreview } from '../server/preview.mjs';
+import { offlineBusiness } from './helpers/offline-business.mjs';
+import { origin } from './helpers/offline-design.mjs';
 
 test('库存使用状态、归还核对和成品选单使用同一份本机资料', { timeout: 45_000 }, async (t) => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
-  const host = await startPreview(0, { databasePath: ':memory:' });
-  t.after(() => new Promise((resolve) => { host.server.close(resolve); host.server.closeAllConnections(); }));
-  const origin = new URL(host.url).origin;
+  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
+  t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  const { request, traffic } = await offlineBusiness(t, page, { localFixtures: {
+    'apple-relay/status': { configured: false, codeQueryConfigured: false, parentIds: [], aliasIds: [] }
+  } });
   async function save(domain, version, data, action) {
-    const response = await fetch(host.url + 'api/local/' + domain, {
-      method: 'PUT', headers: { Origin: origin, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ version, data, action })
-    });
-    const result = await response.json();
-    assert.equal(response.status, 200, JSON.stringify(result.error));
-    return result;
+    const { status, body } = await request(domain, { method: 'PUT', body: { version, data, action } });
+    assert.equal(status, 200, body.error);
+    return body;
   }
   const mailbox = (id, type = 'google') => ({
     id, type, email: id + '@example.test', status: '正常', health: 'normal',
@@ -50,29 +50,26 @@ test('库存使用状态、归还核对和成品选单使用同一份本机资�
   })));
   await save('inventory', 1, initial, 'inventory_import');
   await save('commerce', 0, {
-    orders: [], customers: [{ id: 'customer-1', name: '测试客户', phone: '00000000', active: true }],
+    orders: [], customers: [{ id: 'customer-1', name: '测试客户', phone: '+60125550199', active: true }],
     tenants: [], operating: [], rentBatches: [], logs: []
   }, '新增资料');
-  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
-  t.after(() => browser.close());
-  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
   page.setDefaultTimeout(7000);
-  await page.route('**/*', (route) => new URL(route.request().url()).origin === origin
-    ? route.continue() : route.abort());
-  await page.goto(host.url + '#/mailboxes/relay');
-  await page.getByRole('button', { name: '已提取 0', exact: true }).waitFor();
-  await page.getByRole('button', { name: '已使用 1', exact: true }).click();
+  await page.goto(origin + '/#/mailboxes/relay');
+  await page.getByRole('tab', { name: '隐藏邮箱管理', exact: true }).click();
+  const relayState = page.getByRole('combobox', { name: '筛选邮箱状态', exact: true });
+  await relayState.getByRole('option', { name: '已提取 0', exact: true }).waitFor({ state: 'attached' });
+  await relayState.selectOption({ label: '已使用 1' });
   await page.getByText(relay.email, { exact: true }).waitFor();
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 390);
 
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto(host.url + '#/mailboxes/google');
+  await page.goto(origin + '/#/mailboxes/google');
   await page.getByRole('tab', { name: /已使用/ }).click();
   const usedRow = page.getByRole('row').filter({ hasText: used.email });
   await usedRow.waitFor();
   assert.match(await usedRow.innerText(), /死号/);
 
-  await page.goto(host.url + '#/workspace/extractions/mail-batch');
+  await page.goto(origin + '/#/workspace/extractions/mail-batch');
   const pending = page.getByRole('row').filter({ hasText: unused.email });
   await pending.getByRole('button', { name: '归还', exact: true }).click();
   await page.locator('#drawer[open] #inventory-return-form').waitFor();
@@ -80,10 +77,10 @@ test('库存使用状态、归还核对和成品选单使用同一份本机资�
   await page.locator('#confirm-dialog[open]').getByRole('button', { name: /确认/ }).click();
   await pending.getByText('已归还', { exact: true }).waitFor();
   await page.getByRole('row').filter({ hasText: used.email }).getByText('已使用', { exact: true }).waitFor();
-  const data = await fetch(host.url + 'api/local/inventory').then((response) => response.json());
+  const data = (await request('inventory')).body;
   assert.deepEqual(data.data.batches[0].items.map((item) => item.status), ['used', 'returned']);
 
-  await page.goto(host.url + '#/workspace/order');
+  await page.goto(origin + '/#/workspace/order');
   assert.equal(await page.locator('#commerce-product').inputValue(), 'GPT');
   await page.locator('#commerce-businessType').selectOption({ label: '成品交付' });
   await page.locator('#commerce-emailHistory-picker').click();
@@ -104,9 +101,9 @@ test('库存使用状态、归还核对和成品选单使用同一份本机资�
   assert.equal(await page.locator('#confirm-dialog[open]').count(), 0);
   await page.locator('#toast').filter({ hasText: '订单提交成功' }).waitFor();
   assert.equal(page.url(), entryUrl);
-  await page.goto(host.url + '#/orders/gpt');
-  const delivered = await fetch(host.url + 'api/local/inventory').then((response) => response.json());
-  const order = await fetch(host.url + 'api/local/commerce').then((response) => response.json());
+  await page.goto(origin + '/#/orders/gpt');
+  const delivered = (await request('inventory')).body;
+  const order = (await request('commerce')).body;
   assert.equal(delivered.data.batches[1].items[0].status, 'used');
   assert.equal(delivered.data.batches[1].items[0].orderId, order.data.orders[0].id);
   assert.equal(order.data.orders[0].accountId, stock.id);
@@ -119,20 +116,21 @@ test('库存使用状态、归还核对和成品选单使用同一份本机资�
     await page.locator('#confirm-dialog[open]').getByRole('button', { name: '确认更正', exact: true }).click();
     await page.locator('#drawer[open]').getByText(/^已更正 · 账号登记/).waitFor();
   }
-  await page.goto(host.url + '#/mailboxes/relay');
+  await page.goto(origin + '/#/mailboxes/relay');
   await page.getByRole('button', { name: '已使用 1', exact: true }).click();
   await correct(page.getByRole('row').filter({ hasText: relay.email }));
   await page.locator('#drawer[open]').getByRole('button', { name: '关闭', exact: true }).click();
   await page.getByRole('button', { name: '未使用 1', exact: true }).click();
   await page.getByRole('cell', { name: relay.email, exact: true }).waitFor();
 
-  await page.goto(host.url + '#/mailboxes/google');
+  await page.goto(origin + '/#/mailboxes/google');
   await page.getByRole('tab', { name: /已使用/ }).click();
   await correct(page.getByRole('row').filter({ hasText: used.email }));
   await page.locator('#drawer[open]').getByRole('button', { name: '查看原提取批次', exact: true }).click();
   await page.getByRole('row').filter({ hasText: used.email }).getByText('原使用关联已更正', { exact: true }).waitFor();
-  const final = await fetch(host.url + 'api/local/inventory').then((response) => response.json());
+  const final = (await request('inventory')).body;
   assert.equal(final.data.batches[0].items[0].status, 'pending');
   assert.equal(final.data.batches[0].items[1].status, 'returned');
   assert.equal(final.data.batches[1].items[0].status, 'used');
+  assert.deepEqual(traffic.external, []);
 });

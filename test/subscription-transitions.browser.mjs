@@ -161,7 +161,13 @@ test('订阅与银行卡池切换保留几何框架、清除敏感资料并隔�
 
         // The same shared loading primitive also serves a drawer form.
         settingsGate = { started: Promise.withResolvers(), released: Promise.withResolvers() }; gates.push(settingsGate);
-        await page.locator('[data-action="subscriptions-settings"]').click(); await settingsGate.started.promise;
+        const settings = page.getByRole('button', { name: '账号资料后缀', exact: true });
+        if (await settings.isVisible()) await settings.click();
+        else {
+          await page.locator('#main [data-action="mobile-list-actions"]:visible').click();
+          await page.getByRole('menuitem', { name: '账号资料后缀', exact: true }).click();
+        }
+        await settingsGate.started.promise;
         const input = page.locator('#subscription-copy1'), bounds = await input.boundingBox();
         await page.locator('#subscription-settings-status:not([hidden])').waitFor();
         assert.deepEqual(await input.boundingBox(), bounds, '抽屉加载反馈不移动输入');

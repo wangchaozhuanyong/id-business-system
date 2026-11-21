@@ -6,7 +6,7 @@
   const { normalizeInventoryAsset: normalize, historicallyOpened, displayInventoryState, mailHealth, mailUse,
     inventoryHealthTime: healthChangeTime, inventoryListTime, inventoryRegistrationTime: registrationTime,
     inventoryRegistrationInstant: registrationInstant, inventoryIdentityIndex, defaultInventorySettings,
-    registrationPlatforms, registrationAddress, registrationProduct, stockRegistration, registeredPlatforms,
+    registrationPlatforms, registrationResultPlatforms, registrationAddress, registrationProduct, stockRegistration, registeredPlatforms,
     registrationConflict, inventoryPlatformLabel,
     inventoryMatches, claudeInventoryIssue, inventoryCanExtract } = window.IDInventoryList;
   const operationalStatus = asset => window.IDOrderOpening?.inventoryOperationalStatus?.(asset) ?? (asset.status || '正常');
@@ -36,7 +36,7 @@
   const returnRecords = [];
   const importRecords = [];
   const registrationRecords = [];
-  const relayRegistrationPlatforms = registrationPlatforms.filter(([key]) => ['gpt', 'claude', 'grok'].includes(key));
+  const registrationResults = ['成功', '失败且未使用', '待核对'];
   const actualUsePurposes = ['注册 GPT', ...registrationPlatforms.slice(1).map(([, label]) => `注册 ${label}`), '客户交付', '其他'];
   const mailboxType = type => ['google', 'relay', 'microsoft'].includes(type);
   const mailboxPlatforms = asset => registeredPlatforms(asset, readInventoryIndex());
@@ -83,6 +83,7 @@
   let accountAssetContext = null;
   let accountImportContext = null;
   let archiveReview;
+  const archiveAttempts = new Map();
   let locationSettingsReturn = null;
   let importFileReadVersion = 0;
   const claudeHistoryStates = { opened: '已开通', aging: '养号中', dead: '死号' };
@@ -513,10 +514,47 @@
       .map((method) => choiceLabel(microsoftVerificationOptions, method))
       .join('、') || '未记录';
   }
+  function personalLoginFields(type, prefix, val, existing) {
+    const id = key => prefix + key;
+    const login = type === 'gemini'
+      ? input(id('loginMethod'), 'google', 'type="hidden"')
+      : field('登录方式', id('loginMethod'), select(id('loginMethod'), grokLoginOptions, val('loginMethod') || 'email'), true) +
+        field('X @账号', id('xHandle'), input(id('xHandle'), val('xHandle'),
+          existing?.loginMethod === 'x' ? 'readonly' : 'placeholder="@username" maxlength="16"')) +
+        field('X 绑定状态', id('xLinkState'), select(id('xLinkState'), xLinkOptions, val('xLinkState') || 'unknown'));
+    return login + field('平台账号编号', id('platformAccountId'), input(id('platformAccountId'), val('platformAccountId'), 'maxlength="120"'));
+  }
+  function microsoftLoginField(prefix, value) {
+    const id = prefix + 'microsoft-login';
+    return field('登录方式', id, select(id, microsoftLoginModes, value || 'password'), true);
+  }
+  function microsoftVerificationFields(prefix, val, security = {}) {
+    const id = key => prefix + 'microsoft-' + key;
+    const value = (key, fallback) => val('microsoft-' + key) ?? fallback;
+    const methods = microsoftVerificationOptions.map(([method, label]) => {
+      const name = id('method-' + method);
+      const checked = value('method-' + method, security.verificationMethods?.includes(method));
+      return `<label class="checkbox-label"><input type="checkbox" id="${name}" name="${name}" ${checked ? 'checked' : ''} />${label}</label>`;
+    }).join('');
+    return field('辅助邮箱取码方式', id('recovery'),
+      select(id('recovery'), microsoftRecoveryOptions, value('recovery', security.recoveryAccess || 'unknown')),
+      false, '选择系统内邮箱时，辅助邮箱地址须对应唯一一条可查看的库存资料。') +
+      field('两步验证', id('two-step'), select(id('two-step'), microsoftTwoStepOptions, value('two-step', security.twoStep || 'unknown'))) +
+      wide('验证方式', id('methods'), `<div class="inline-checks" id="${id('methods')}" role="group" aria-label="验证方式" tabindex="-1">${methods}</div>`) +
+      wide('验证设备／审批人', id('device'), input(id('device'), value('device', security.verificationDevice || ''), 'maxlength="200"'),
+        false, '需要手机确认或通行密钥时，可登记实际可用的设备或确认人。');
+  }
+  function microsoftFormSecurity(val) {
+    return {
+      loginMode: val('microsoft-login'), recoveryAccess: val('microsoft-recovery'), twoStep: val('microsoft-two-step'),
+      verificationMethods: microsoftVerificationOptions.map(([method]) => method).filter(method => val('microsoft-method-' + method)),
+      verificationDevice: String(val('microsoft-device') || '').trim()
+    };
+  }
   function readMicrosoftSecurity(values, {
     loginMode = 'password', recoveryAccess = 'unknown', twoStep = 'unknown',
     verificationMethods = [], verificationDevice = ''
-  } = {}) {
+  } = {}, availableMailboxes = allAssets) {
     const email = values.email.trim().toLowerCase();
     const auxiliary = (values.auxiliary || '').trim().toLowerCase();
     if (email.length > 254) throw new Error('邮箱地址最多 254 个字符', { cause: 'inventory-email' });
@@ -550,7 +588,7 @@
     if (verificationDevice.length > 200) throw new Error('验证设备最多 200 个字符', { cause: 'inventory-microsoft-device' });
     let recoveryMailboxId;
     if (recoveryAccess === 'inventory') {
-      const matches = allAssets().filter((row) => ['google', 'relay', 'microsoft'].includes(row.type) &&
+      const matches = availableMailboxes().filter((row) => ['google', 'relay', 'microsoft'].includes(row.type) &&
         !isAccount(row) && !row.relayDeleted &&
         row.email.trim().toLowerCase() === auxiliary);
       if (matches.length !== 1) throw new Error('辅助邮箱须唯一对应一条可查看的邮箱库存资料', { cause: 'inventory-auxiliary' });
@@ -1088,9 +1126,11 @@
       unlocking: assets.filter((asset) => asset.health === 'unlocking').length
     };
     const title = typeLabel(type);
+    const pendingArchives = unresolvedArchives(type).length;
     const actions = canManage ?
       (googleDelivery ? button('复制设置', 'mailbox-delivery-settings', '', 'settings') +
         button('查询码设置', 'mailbox-delivery-validity', '', 'key') : '') +
+      (pendingArchives ? button(`待核对归档（${pendingArchives}）`, 'inventory-archive-pending', '', 'orders') : '') +
       (paged ? result?.hasReview ? button('核对使用关联', 'inventory-usage-review', '', 'check') : '' : usageReviewButton()) +
       button('本表设置', 'inventory-settings', '', 'settings') +
       (type === 'claude' && localData && admin() ? button('历史账号入库', 'inventory-claude-history', '', 'upload') : '') +
@@ -1320,7 +1360,7 @@
         }) + pageControls
         : table(columns, pageRows(rows, asset => inventoryListTime(asset, v.tab)), 'inventory-module-assets', `${title}库存`) + pagination(rows.length);
       body = `<div class="toolbar list-filters list-filter-toolbar"><div class="toolbar-left"><div class="search-field">${icon('search')}<input data-auto-search id="inventory-list-query" aria-label="搜索库存资料" maxlength="500" placeholder="${microsoft ? '搜索邮箱、辅助邮箱或备注' : '搜索账号、备注或用途'}" value="${esc(v.query)}" /></div><div class="list-filter-fields"><select id="inventory-country" aria-label="筛选国家">${options(choicesWithCurrent([['', '全部国家'], ...countries], v.country), v.country)}</select><select id="inventory-status" aria-label="筛选${kind === 'mail' ? '邮箱' : '账号'}状态">${options([['', '全部状态'], '正常', '冻结', '封控中', ...(kind === 'mail' ? ['死号', '解封中'] : [])], v.status)}</select>${kind === 'mail' ?
-        `<select id="inventory-usage-filter" aria-label="筛选使用状态">${options([['', '全部使用状态'], ...Object.entries(mailUseLabels)], v.usage)}</select>` : ''}</div></div><div class="toolbar-right">${googleDelivery ? button('批量重置', 'inventory-google-batch', '', 'refresh', deliverySnapshot ? '' : 'disabled') : ''}${button('列设置', 'column-settings', '', 'columns', `data-table-id="${esc(title)}库存"`)}${microsoft ? '' : button('提取与归还', 'inventory-center', '', 'return')}${button(microsoft ? '复制邮箱地址' : '复制所选', 'inventory-copy-selected', '', 'copy', selection.size ? '' : 'disabled')}${!microsoft && v.tab === 'claimed' ? button('归还所选', 'inventory-return-selected', '', 'return', selection.size ? '' : 'disabled') : ''}</div></div>${googleDelivery && googlePoolError ? `<p class="inline-notice warning" role="status">${esc(googlePoolError)} ${button('重试', 'inventory-google-refresh')}</p>` : ''}${list}`;
+        `<select id="inventory-usage-filter" aria-label="筛选使用状态">${options([['', '全部使用状态'], ...Object.entries(mailUseLabels)], v.usage)}</select>` : ''}</div></div><div class="toolbar-right">${googleDelivery ? button('批量重置', 'inventory-google-batch', '', 'refresh', deliverySnapshot ? '' : 'disabled') : ''}${button('列设置', 'column-settings', '', 'columns', `data-table-id="${esc(title)}库存"`)}${microsoft ? '' : button('提取与归还', 'inventory-center', '', 'return')}${button(microsoft ? '复制邮箱地址' : type === 'google' ? '复制所选邮箱及密码' : '复制所选', 'inventory-copy-selected', '', 'copy', selection.size ? '' : 'disabled')}${!microsoft && v.tab === 'claimed' ? button('归还所选', 'inventory-return-selected', '', 'return', selection.size ? '' : 'disabled') : ''}</div></div>${googleDelivery && googlePoolError ? `<p class="inline-notice warning" role="status">${esc(googlePoolError)} ${button('重试', 'inventory-google-refresh')}</p>` : ''}${list}`;
     }
     const stockTotal = paged ? result?.stockTotal : assets.length;
     const stockAvailable = paged ? result?.available : microsoft ? counts.available : assets.filter(available).length;
@@ -1554,12 +1594,15 @@
     const count = batchCounts(batch);
     const number = extractionBatchNumbers().get(batch.id) ?? batch.id;
     const selected = api.getSelection('inventory-claims');
+    const selectedItems = batch.items.filter(item => selected.has(item.id));
+    const copyItems = selectedItems.length ? selectedItems : batch.items;
     return (
       header(
         '提取批次明细',
         `${number} · ${batch.actorName} · ${batch.time} · ${batch.purpose}`,
         button('返回提取与归还', 'inventory-center') +
-          button('复制所选', 'inventory-claim-copy', '', 'copy', selected.size ? '' : 'disabled') +
+          button(copyItems.every(item => item.type === 'google') ? '复制所选邮箱及密码' : '复制所选',
+            'inventory-claim-copy', '', 'copy', selected.size ? '' : 'disabled') +
           button('登记使用', 'inventory-claim-use', '', 'check',
             batch.items.some(item => selected.has(item.id) && useAllowed({ item, batch })) ? '' : 'disabled') +
           button(
@@ -1592,8 +1635,14 @@
             id: 'actions',
             label: '操作',
             action: true,
-            render: (item) =>
-              `<div class="action-links">${textAction('复制', 'inventory-item-copy', `data-id="${item.id}"`)}${textAction('资料', 'inventory-detail', `data-id="${item.assetId}"`)}${textAction(returnBlock(assetById(item.assetId), batch, item) ? '不可归还' : '归还', 'inventory-item-return', `data-id="${item.id}" ${returnBlock(assetById(item.assetId), batch, item) ? 'disabled' : ''}`)}</div>`
+            render: (item) => {
+              const asset = assetById(item.assetId);
+              const blocked = returnBlock(asset, batch, item);
+              const attrs = `data-id="${esc(item.id)}"`;
+              return `<div class="action-links">${textAction(item.type === 'google' ? '复制邮箱及密码' : '复制', 'inventory-item-copy', attrs)}${textAction('资料', 'inventory-detail', `data-id="${esc(item.assetId)}"`)}${
+                !registrationUnavailable(asset, asset && pendingClaim(asset), item.id) ? textAction('登记注册结果', 'inventory-claim-register', attrs) : ''
+              }${textAction(blocked ? '不可归还' : '归还', 'inventory-item-return', `${attrs} ${blocked ? 'disabled' : ''}`)}</div>`;
+            }
           }
         ],
         batch.items.map((item) => {
@@ -1788,19 +1837,36 @@
     const key = `inventory-use:${eligible.map(({ item }) => item.id).sort().join(',')}`;
     const saved = draft(key);
     const purposes = usePurposesFor(eligible);
+    const canRouteRegistration = eligible.length === 1 && canRegisterMailbox(assetById(eligible[0].item.assetId));
     showDrawer(
       '登记实际使用',
-      '确认后资料永久退出通用可提取库存。同一邮箱不可再提取注册其他产品。',
-      `<form id="inventory-use-form" data-inventory-draft="${esc(key)}" novalidate><input type="hidden" name="inventory-use-ids" value="${esc(eligible.map(({ item }) => item.id).join(','))}" /><div class="form-grid">${field('实际用途', 'inventory-use-purpose', select('inventory-use-purpose', [['', '请选择实际用途'], ...purposes], saved['inventory-use-purpose']), true)}${wide('使用结果', 'inventory-use-result', area('inventory-use-result', saved['inventory-use-result'] || '', '记录平台、关联账号或订单说明'), true)}</div></form>`,
+      '确认后资料永久退出通用可提取库存。邮箱的注册结果可从批次明细逐条登记。',
+      `<form id="inventory-use-form" data-inventory-draft="${esc(key)}"${canRouteRegistration ? ' data-registration-entry' : ''} novalidate><input type="hidden" name="inventory-use-ids" value="${esc(eligible.map(({ item }) => item.id).join(','))}" /><div class="form-grid">${field('实际用途', 'inventory-use-purpose', select('inventory-use-purpose', [['', '请选择实际用途'], ...purposes], saved['inventory-use-purpose']), true)}${wide('使用结果', 'inventory-use-result', area('inventory-use-result', saved['inventory-use-result'] || '', '记录实际用途、关联账号或订单说明'), true)}</div></form>`,
       button('取消', 'inventory-close') +
         '<button class="button primary" form="inventory-use-form" type="submit">核对使用结果</button>',
       key
     );
+    updateUseRegistrationMode(document.getElementById('inventory-use-form'));
+  }
+  function registrationPurpose(purpose) {
+    return typeof purpose === 'string' && purpose.startsWith('注册 ') ? registrationProduct(purpose.slice(3)) : '';
   }
   function usePurposesFor(claims) {
-    return claims.some(({ item }) => assetById(item.assetId)?.type === 'relay')
-      ? actualUsePurposes.filter(purpose => !['注册 Gemini', '注册 Apple ID'].includes(purpose))
-      : actualUsePurposes;
+    const assets = claims.map(({ item }) => assetById(item.assetId));
+    const registrationMailboxes = assets.filter(canRegisterMailbox);
+    if (!registrationMailboxes.length) return actualUsePurposes;
+    const products = claims.length === 1 ? registrationResultPlatforms(registrationMailboxes[0].type) : [];
+    return actualUsePurposes.filter(purpose => {
+      const product = registrationPurpose(purpose);
+      return !product || products.some(([key]) => key === product);
+    });
+  }
+  function updateUseRegistrationMode(form) {
+    if (form?.dataset?.registrationEntry === undefined) return;
+    const register = Boolean(registrationPurpose(form.elements['inventory-use-purpose'].value));
+    form.elements['inventory-use-result'].closest('.field').hidden = register;
+    document.querySelector('button[form="inventory-use-form"][type="submit"]').textContent =
+      register ? '前往登记注册结果' : '核对使用结果';
   }
 
   function assetEditor(id = '', forcedType = '', sourceId = '') {
@@ -1900,15 +1966,7 @@
           ? input('inventory-emailType', typeLabel(linked.type), 'readonly disabled')
           : select('inventory-emailType', choicesWithCurrent([['', '未登记'], ...accountEmailTypes()], val('emailType')), val('emailType'))
       );
-    if (personal) {
-      fields += type === 'gemini'
-        ? '<input type="hidden" name="inventory-loginMethod" value="google" />'
-        : field('登录方式', 'inventory-loginMethod', select('inventory-loginMethod', grokLoginOptions, val('loginMethod') || 'email'), true) +
-          field('X @账号', 'inventory-xHandle', input('inventory-xHandle', val('xHandle'),
-            original?.loginMethod === 'x' ? 'readonly' : 'placeholder="@username" maxlength="16"')) +
-          field('X 绑定状态', 'inventory-xLinkState', select('inventory-xLinkState', xLinkOptions, val('xLinkState') || 'unknown'));
-      fields += field('平台账号编号', 'inventory-platformAccountId', input('inventory-platformAccountId', val('platformAccountId'), 'maxlength="120"'));
-    }
+    if (personal) fields += personalLoginFields(type, 'inventory-', val, original);
     if (account) {
       const choices = [['', '独立录入'], ...personalSourceMailboxes(type)
         .map(row => [row.id, `${row.email} · ${row.inventoryState === 'claimed' ? '本人已领用' : '可用库存'}`])];
@@ -1927,17 +1985,12 @@
         : select('inventory-mailboxUsage', [['', '未登记'], ['available', '未使用'], ['used', '已使用']], val('mailboxUsage')));
     }
     const security = original?.microsoftSecurity || {};
-    if (microsoft)
-      fields += field(
-        '登录方式', 'inventory-microsoft-login',
-        select('inventory-microsoft-login', microsoftLoginModes, d['inventory-microsoft-login'] ?? security.loginMode ?? 'password'),
-        true
-      );
+    if (microsoft) fields += microsoftLoginField('inventory-', d['inventory-microsoft-login'] ?? security.loginMode);
     fields += field(
       account ? '账号密码' : microsoft ? '登录密码' : '邮箱密码',
       'inventory-password',
       input('inventory-password', val('password'), 'autocomplete="off"'),
-      ['google', 'apple'].includes(type) && (!original || Boolean(original.password)),
+      window.IDInventoryList.inventoryPasswordRequired(type, original),
       microsoft ? '密码登录必填。无密码登录留空，并记录实际验证方式。' : ''
     );
     if (['google', 'apple'].includes(type))
@@ -2035,29 +2088,7 @@
         'inventory-auxiliary',
         input('inventory-auxiliary', val('auxiliary'))
       );
-    if (microsoft) {
-      fields += field(
-        '辅助邮箱取码方式', 'inventory-microsoft-recovery',
-        select('inventory-microsoft-recovery', microsoftRecoveryOptions, d['inventory-microsoft-recovery'] ?? security.recoveryAccess ?? 'unknown'),
-        false, '选择系统内邮箱时，辅助邮箱地址须对应唯一一条已有库存资料。'
-      ) + field(
-        '两步验证', 'inventory-microsoft-two-step',
-        select('inventory-microsoft-two-step', microsoftTwoStepOptions, d['inventory-microsoft-two-step'] ?? security.twoStep ?? 'unknown')
-      );
-      const methods = microsoftVerificationOptions.map(([method, label]) => {
-        const name = `inventory-microsoft-method-${method}`;
-        const checked = d[name] ?? security.verificationMethods?.includes(method);
-        return `<label class="checkbox-label"><input type="checkbox" id="${name}" name="${name}" ${checked ? 'checked' : ''} />${esc(label)}</label>`;
-      }).join('');
-      fields += wide(
-        '验证方式', 'inventory-microsoft-methods',
-        `<div class="inline-checks" id="inventory-microsoft-methods" role="group" aria-label="验证方式" tabindex="-1">${methods}</div>`
-      ) + wide(
-        '验证设备／审批人', 'inventory-microsoft-device',
-        input('inventory-microsoft-device', d['inventory-microsoft-device'] ?? security.verificationDevice ?? '', 'maxlength="200"'),
-        false, '需要手机确认或通行密钥时，可登记实际可用的设备或确认人。'
-      );
-    }
+    if (microsoft) fields += microsoftVerificationFields('inventory-', key => d['inventory-' + key], security);
     if (type === 'google' || type === 'apple' || microsoft)
       fields += wide(
         '应用专用密码',
@@ -2212,7 +2243,7 @@
   function mailboxPlatformChoices(asset) {
     const known = new Set(mailboxPlatforms(asset).map(([key]) => key));
     const hasAi = [...known].some(key => key !== 'apple');
-    return (asset.type === 'relay' ? relayRegistrationPlatforms : registrationPlatforms)
+    return (asset.type === 'relay' ? registrationResultPlatforms(asset.type) : registrationPlatforms)
       .filter(([key]) => !known.has(key) && (key === 'apple' || !hasAi) &&
         (asset.type !== 'microsoft' || key !== 'gemini'));
   }
@@ -2589,24 +2620,64 @@
       (stockType(asset.type) || ['google', 'microsoft'].includes(asset.type)) && asset.type !== 'apple';
   }
 
+  function unresolvedArchives(type) {
+    if (!localData?.authRequired || !admin()) return [];
+    const actor = currentActor().id;
+    return [...archiveAttempts.values()].filter(entry => entry.actor === actor && entry.asset.type === type && !entry.receipt);
+  }
+
+  function openPendingArchives() {
+    const entries = unresolvedArchives(api.state.route.split('/')[1]);
+    if (!entries.length) { api.render(); return; }
+    showDrawer('待核对归档', '继续核对先前提交的归档，可读取同一次操作的原回执。',
+      `<div class="property-list">${entries.map(entry => `<div class="property-row"><strong>${esc(entry.preview.identity || entry.command.id)}</strong>${
+        button('核对上次归档', 'inventory-archive', '', 'return', `data-id="${esc(entry.command.id)}"`)}</div>`).join('')}</div>`,
+      button('关闭', 'drawer-close'));
+  }
+
   function openArchiveReview(id) {
-    if (!canReviewArchive(assetById(id))) return;
+    const asset = assetById(id);
+    const pending = archiveAttempts.get(id);
+    const actor = currentActor().id;
+    const attempt = pending?.actor === actor && !pending.receipt ? pending : undefined;
+    if (!admin() || !localData?.authRequired || (!attempt && !canReviewArchive(asset))) return;
     showDrawer('归档库存资料', '归档资料退出库存。可从「系统设置 → 操作记录」恢复原状态。',
       '<div class="stack" data-inventory-archive-review></div>', button('关闭', 'drawer-close'));
     const drawer = document.getElementById('drawer');
-    const review = { id, actor: currentActor().id, route: api.state.route,
+    const details = attempt?.asset || { type: asset.type, importId: asset.importId, identity: identityKey(asset) };
+    const review = { id, actor, route: api.state.route, asset: details, attempt, preview: attempt?.preview,
+      reason: attempt?.command.reason,
       region: drawer.querySelector('[data-inventory-archive-review]'), controller: new AbortController() };
     archiveReview = review;
     drawer.addEventListener('id-view-deactivate', () => {
       review.controller.abort();
       if (archiveReview === review) archiveReview = undefined;
+      const previous = archiveAttempts.get(review.id);
+      if (previous && !previous.receipt) queueMicrotask(() => {
+        if (api.state.route === review.route && currentActor().id === review.actor) api.render();
+      });
     }, { once: true });
-    void loadArchiveReview(review);
+    if (attempt) renderArchivePreview(review, '暂时无法确认归档结果，可重试核对原请求。');
+    else void loadArchiveReview(review);
   }
 
   function currentArchiveReview(review) {
     return archiveReview === review && review.region.isConnected && review.region.closest('dialog')?.open &&
       currentActor().id === review.actor && api.state.route === review.route;
+  }
+
+  function renderArchivePreview(review, warning = '') {
+    const { preview } = review;
+    const health = ({ normal: '正常', dead: '死号', unlocking: '解封中' })[preview.health] || preview.health;
+    review.region.innerHTML = `<dl class="definition-list"><dt>资料</dt><dd>${esc(preview.identity || preview.id)}</dd>
+      <dt>健康状态</dt><dd>${esc(health)}</dd></dl>` +
+      (preview.status === 'available' ? `<form id="inventory-archive-form" class="stack">
+        ${field('归档原因', 'inventory-archive-reason',
+          select('inventory-archive-reason', [['', '请选择原因'], ...preview.reasons], review.reason || ''), true)}
+        <p class="inline-notice warning" role="alert" data-archive-error${warning ? '' : ' hidden'}>${esc(warning)}</p>
+        <div class="form-footer"><button type="submit" class="button primary">${review.attempt ? '重试归档' : '确认归档'}</button></div></form>` :
+        `<p class="inline-notice" role="status">${esc(preview.message)}</p>`);
+    if (review.attempt) review.region.querySelector('#inventory-archive-reason').disabled = true;
   }
 
   async function loadArchiveReview(review) {
@@ -2617,15 +2688,7 @@
       const preview = await localData.inventoryArchivePreview(review.id, review.controller.signal);
       if (!currentArchiveReview(review)) return;
       review.preview = preview;
-      const health = ({ normal: '正常', dead: '死号', unlocking: '解封中' })[preview.health] || preview.health;
-      region.innerHTML = `<dl class="definition-list"><dt>资料</dt><dd>${esc(preview.identity || preview.id)}</dd>
-        <dt>健康状态</dt><dd>${esc(health)}</dd></dl>` +
-        (preview.status === 'available' ? `<form id="inventory-archive-form" class="stack">
-          ${field('归档原因', 'inventory-archive-reason',
-            select('inventory-archive-reason', [['', '请选择原因'], ...preview.reasons], review.reason || ''), true)}
-          <p class="inline-notice warning" role="alert" data-archive-error hidden></p>
-          <div class="form-footer"><button type="submit" class="button primary">确认归档</button></div></form>` :
-          `<p class="inline-notice" role="status">${esc(preview.message)}</p>`);
+      renderArchivePreview(review);
     } catch (error) {
       if (!currentArchiveReview(review)) return;
       region.innerHTML = `<p class="inline-notice warning" role="alert">${esc(error.message || '归档预览读取失败。')}</p>` +
@@ -2645,7 +2708,9 @@
       return;
     }
     const { id, version, assetVersion } = review.preview;
-    const attempt = review.attempt ||= { command: { id, version, assetVersion, reason: reason.value }, id: crypto.randomUUID() };
+    const attempt = review.attempt ||= { command: { id, version, assetVersion, reason: reason.value },
+      id: crypto.randomUUID(), actor: review.actor, preview: review.preview, asset: review.asset };
+    archiveAttempts.set(review.id, attempt);
     review.reason = attempt.command.reason;
     review.busy = reason.disabled = true;
     notice.hidden = true;
@@ -2653,6 +2718,7 @@
     const feedback = api.beginActionFeedback(submit, '正在归档库存资料…');
     try {
       const receipt = await localData.archiveInventory(attempt.command, attempt.id, review.controller.signal);
+      if (archiveAttempts.get(review.id) === attempt) attempt.receipt = receipt;
       if (!currentArchiveReview(review)) return;
       const module = stockType(review.preview.type) ? 'account' : 'mailbox';
       review.region.innerHTML = `<p class="inline-notice" role="status">资料已归档。</p>${
@@ -2664,6 +2730,7 @@
       if (!currentArchiveReview(review)) return;
       if (error.status === 409 && error.code !== 'DATA_SOURCE_CHANGED') {
         review.attempt = undefined;
+        if (archiveAttempts.get(review.id) === attempt) archiveAttempts.delete(review.id);
         await loadArchiveReview(review);
         const updated = review.region.querySelector('[data-archive-error]');
         if (currentArchiveReview(review) && updated) {
@@ -2672,7 +2739,10 @@
         }
       } else {
         const uncertain = !error.status || error.status >= 500;
-        if (!uncertain) review.attempt = undefined;
+        if (!uncertain) {
+          review.attempt = undefined;
+          if (archiveAttempts.get(review.id) === attempt) archiveAttempts.delete(review.id);
+        }
         notice.textContent = uncertain ? '暂时无法确认归档结果，可重试核对原请求。' : error.message;
         notice.hidden = false;
         submit.textContent = uncertain ? '重试归档' : '确认归档';
@@ -3389,46 +3459,58 @@
         )
       : empty('暂无注册记录', '从未使用邮箱的“更多操作”中登记或模拟注册结果。');
   }
-  function openRegistration(assetId) {
+  function canRegisterMailbox(asset) {
+    return asset && !isAccount(asset) && registrationResultPlatforms(asset.type).length > 0;
+  }
+  function registrationUnavailable(asset, claim, claimId = '') {
+    if (!canRegisterMailbox(asset) || asset.inventoryState === 'used' || asset.health !== 'normal')
+      return '请选择正常且尚未实际使用的邮箱';
+    if (claimId && claim?.item.id !== claimId)
+      return '原邮箱领用已变化，请重新打开当前批次';
+    if ((claimId || asset.inventoryState === 'claimed' || (localData && asset.type === 'relay')) &&
+        (asset.inventoryState !== 'claimed' || !claim || claim.item.assetId !== asset.id || claim.batch.kind !== 'mail' ||
+          claim.item.status !== 'pending' || !ownerAllowed(claim.batch)))
+      return asset.type === 'relay' ? '请先核对当前隐藏邮箱领用，再登记本次注册结果' : '请先核对当前邮箱领用';
+    if (claim?.item.taskId || reservations.has(asset.id)) return '当前邮箱已有未结束任务';
+    return '';
+  }
+  function openRegistration(assetId, { claimId = '', product = '' } = {}) {
     const asset = assetById(assetId);
-    if (
-      !asset ||
-      isAccount(asset) ||
-      asset.inventoryState === 'used' ||
-      asset.health !== 'normal'
-    ) {
-      api.notify('请选择正常且尚未实际使用的邮箱');
-      return;
-    }
-    const claim = pendingClaim(asset);
-    if (localData && asset.type === 'relay' && (!claim || !ownerAllowed(claim.batch))) {
-      api.notify('请先在邮箱提取领取隐藏邮箱，再登记本次注册结果');
+    const claim = asset && pendingClaim(asset);
+    const problem = registrationUnavailable(asset, claim, claimId);
+    if (problem) {
+      api.notify(problem);
       return;
     }
     const pendingRecord = registrationRecords.find(
       (record) => record.id === claim?.item.registrationId
     );
-    if (claim?.item.taskId) {
-      api.notify('当前邮箱已有未结束任务');
+    if (claim?.item.registrationId && (!pendingRecord || pendingRecord.assetId !== asset.id || pendingRecord.state !== '待核对')) {
+      api.notify('原注册记录已变化，请重新核对');
       return;
     }
-    const key = `inventory-registration:${asset.id}:${pendingRecord?.id || 'new'}`;
+    const key = `inventory-registration:${asset.id}:${pendingRecord?.id || claim?.item.id || 'new'}`;
     const saved = draft(key);
-    const products = relayRegistrationPlatforms;
+    const products = registrationResultPlatforms(asset.type);
     const current = registrationProduct(pendingRecord?.product);
+    const savedProduct = saved['inventory-registration-product'];
+    const suggested = product || savedProduct ||
+      registrationPurpose(claim?.batch.purpose) || (asset.type === 'relay' || claim ? '' : 'gpt');
+    const previousResult = !current && product && savedProduct && savedProduct !== product
+      ? undefined : saved['inventory-registration-result'];
     showDrawer(
       '登记注册结果',
       '这里只登记外部注册结果，不启动注册器。成功后邮箱退出通用库存；账号资料请在账号管理独立录入。',
-      `<form id="inventory-registration-form" data-inventory-draft="${esc(key)}" novalidate><input type="hidden" name="inventory-registration-asset" value="${asset.id}" /><input type="hidden" name="inventory-registration-id" value="${pendingRecord?.id || ''}" /><div class="form-grid">${wide('邮箱账号', 'inventory-registration-email', input('inventory-registration-email', asset.email, 'readonly'))}${field(
+      `<form id="inventory-registration-form" data-inventory-draft="${esc(key)}" data-registration-claim="${esc(claim?.item.id || '')}" data-registration-version="${esc(asset.version)}" novalidate><input type="hidden" name="inventory-registration-asset" value="${esc(asset.id)}" /><input type="hidden" name="inventory-registration-id" value="${esc(pendingRecord?.id || '')}" /><div class="form-grid">${wide('邮箱账号', 'inventory-registration-email', input('inventory-registration-email', asset.email, 'readonly'))}${field(
         '产品',
         'inventory-registration-product',
         select(
           'inventory-registration-product',
           [['', '请选择实际注册平台'], ...choicesWithCurrent(products, current)],
-          saved['inventory-registration-product'] ?? (current || (asset.type === 'relay' ? '' : 'gpt'))
+          current || (products.some(([key]) => key === suggested) ? suggested : '')
         ),
         true
-      )}${field('注册结果', 'inventory-registration-result', select('inventory-registration-result', ['成功', '失败且未使用', '待核对'], saved['inventory-registration-result'] ?? pendingRecord?.state ?? '成功'), true)}</div></form>`,
+      )}${field('注册结果', 'inventory-registration-result', select('inventory-registration-result', [['', '请选择实际结果'], ...registrationResults], previousResult ?? pendingRecord?.state ?? ''), true)}</div></form>`,
       button('取消', 'inventory-close') +
         '<button class="button primary" form="inventory-registration-form" type="submit">核对登记结果</button>',
       key
@@ -3485,7 +3567,7 @@
     }
     let first = '';
     const required = type === 'grok' ? [] : ['inventory-email'];
-    if (['google', 'apple'].includes(type) && (!previous || previous.password)) required.push('inventory-password');
+    if (window.IDInventoryList.inventoryPasswordRequired(type, previous)) required.push('inventory-password');
     for (const name of required) {
       const error = !String(data[name] || '').trim() ? '请填写此项资料' : '';
       api.setError(name, error);
@@ -3624,14 +3706,7 @@
         return;
       }
       const savedSecurity = original?.microsoftSecurity;
-      const security = {
-        loginMode: data['inventory-microsoft-login'],
-        recoveryAccess: data['inventory-microsoft-recovery'],
-        twoStep: data['inventory-microsoft-two-step'],
-        verificationMethods: microsoftVerificationOptions
-          .map(([method]) => method).filter((method) => data[`inventory-microsoft-method-${method}`]),
-        verificationDevice: String(data['inventory-microsoft-device'] || '').trim()
-      };
+      const security = microsoftFormSecurity(key => data['inventory-' + key]);
       const changesSecurity = !original ||
         ['password', 'auxiliary', 'totp'].some(key =>
           String(data['inventory-' + key] || '').trim() !== String(original[key] || '').trim()) ||
@@ -4132,17 +4207,25 @@
   }
   function submitUse(form) {
     const d = api.readForm(form),
-      claims = d['inventory-use-ids'].split(',').map(claimById).filter(Boolean);
-    if (!claims.length || !usePurposesFor(claims).includes(d['inventory-use-purpose'])) {
+      ids = d['inventory-use-ids'].split(','),
+      claims = ids.map(claimById);
+    if (new Set(ids).size !== ids.length || claims.some((claim) => !claim) ||
+        !usePurposesFor(claims).includes(d['inventory-use-purpose'])) {
       api.setError('inventory-use-purpose', '请选择有效的实际用途');
-      return;
-    }
-    if (!d['inventory-use-result'].trim()) {
-      api.setError('inventory-use-result', '请记录实际使用结果');
       return;
     }
     if (claims.some((claim) => !useAllowed(claim))) {
       api.notify('领用或业务状态已变化，请重新核对');
+      return;
+    }
+    const product = registrationPurpose(d['inventory-use-purpose']);
+    if (product && claims.length === 1 && canRegisterMailbox(assetById(claims[0].item.assetId))) {
+      const { item } = claims[0];
+      openRegistration(item.assetId, { claimId: item.id, product });
+      return;
+    }
+    if (!d['inventory-use-result'].trim()) {
+      api.setError('inventory-use-result', '请记录实际使用结果');
       return;
     }
     saveInventoryChange("inventory_use", () => {
@@ -4153,8 +4236,7 @@
         for (const { item } of claims)
           consume(assetById(item.assetId), item, {
             kind: 'manual-use',
-            ...(mailboxType(assetById(item.assetId)?.type) && /^注册 /.test(d['inventory-use-purpose'])
-              ? { product: registrationProduct(d['inventory-use-purpose'].slice(3)) } : {}),
+            ...(mailboxType(assetById(item.assetId)?.type) && product ? { product } : {}),
             label: `${d['inventory-use-purpose']} · ${d['inventory-use-result']}`
           });
         return () => {
@@ -4564,6 +4646,7 @@
         else if (asset?.type === 'google') reset('single', [id], 1, node, true);
       }
       else if (action === 'inventory-center') api.go('workspace/extractions');
+      else if (action === 'inventory-archive-pending') openPendingArchives();
       else if (inventorySavePending) api.notify('资料正在保存，请稍候重试');
       else {
         void api.withActionFeedback(node, async () => {
@@ -4711,6 +4794,11 @@
       if (claim) void reviewReturn([claim]);
     } else if (action === 'inventory-claim-return') void reviewReturn(selectedClaims());
     else if (action === 'inventory-claim-use') confirmUse(selectedClaims());
+    else if (action === 'inventory-claim-register') {
+      const claim = claimById(id);
+      if (claim) openRegistration(claim.item.assetId, { claimId: id });
+      else api.notify('原邮箱领用已变化，请重新打开当前批次');
+    }
     else if (action === 'inventory-item-copy') {
       const claim = claimById(id);
       if (claim) void copyClaims([claim], node);
@@ -4783,6 +4871,8 @@
       else if (asset) openArchiveReview(id);
     } else if (action === 'inventory-archive') {
       openArchiveReview(id);
+    } else if (action === 'inventory-archive-pending') {
+      openPendingArchives();
     } else if (action === 'inventory-archive-record') {
       api.modules.operations?.openRecoveryRecord(id, node.dataset.module);
     } else if (action === 'inventory-archive-retry' && archiveReview) {
@@ -4817,6 +4907,9 @@
           const key = asset.type + ':' + identityKey(asset);
           legacy.set(key, legacy.has(key) ? null : asset);
         }
+        const archiveLines = new Map([...archiveAttempts.values()]
+          .filter(entry => entry.actor === currentActor().id && entry.asset.importId === record.id)
+          .map(entry => [entry.asset.type + ':' + entry.asset.identity, entry]));
         showDrawer(
           '导入批次详情',
           '',
@@ -4837,8 +4930,16 @@
                     { id: 'actions', label: '操作', action: true, render: row => {
                       const asset = row.assetId ? assetById(row.assetId) :
                         legacy.get(row.type + ':' + identityKey(row));
-                      return asset?.importId === record.id && canReviewArchive(asset)
+                      const archive = row.assetId ? archiveAttempts.get(row.assetId) :
+                        archiveLines.get(row.type + ':' + identityKey(row));
+                      const related = archive?.actor === currentActor().id && archive.asset.importId === record.id;
+                      if (related && !archive.receipt)
+                        return textAction('核对上次归档', 'inventory-archive', `data-id="${esc(archive.command.id)}"`);
+                      const begin = asset?.importId === record.id && canReviewArchive(asset)
                         ? textAction('核对归档', 'inventory-archive', `data-id="${esc(asset.id)}"`) : '';
+                      const receipt = related && archive.receipt ? textAction('查看归档记录', 'inventory-archive-record',
+                        `data-id="${esc(archive.receipt.auditId)}" data-module="${stockType(archive.asset.type) ? 'account' : 'mailbox'}"`) : '';
+                      return begin + receipt;
                     } }
                   ],
                   record.results,
@@ -5052,27 +5153,31 @@
     } else if (form.id === 'inventory-registration-form') {
       const data = api.readForm(form),
         asset = assetById(data['inventory-registration-asset']);
-      if (!asset || asset.inventoryState === 'used') {
-        api.notify('邮箱已实际使用');
+      const activeClaim = asset && pendingClaim(asset);
+      const problem = registrationUnavailable(asset, activeClaim, form.dataset.registrationClaim);
+      if (problem) {
+        api.notify(problem);
         return true;
       }
-      const activeClaim = pendingClaim(asset);
-      if (
-        localData &&
-        asset.type === 'relay' &&
-        (!activeClaim || !ownerAllowed(activeClaim.batch))
-      ) {
-        api.notify('原隐藏邮箱领用已变化，请重新打开当前批次');
+      const unresolvedId = data['inventory-registration-id'] || '';
+      const unresolved = unresolvedId && registrationRecords.find((entry) => entry.id === unresolvedId);
+      if (String(asset.version) !== form.dataset.registrationVersion ||
+          (activeClaim?.item.id || '') !== form.dataset.registrationClaim ||
+          (activeClaim?.item.registrationId || '') !== unresolvedId ||
+          (unresolvedId && (!unresolved || unresolved.assetId !== asset.id || unresolved.state !== '待核对'))) {
+        api.notify('邮箱或原注册记录已变化，请重新打开后核对');
         return true;
       }
-      const unresolved = registrationRecords.find(
-        (entry) => entry.id === data['inventory-registration-id']
-      );
       const product = data['inventory-registration-product'];
-      const products = relayRegistrationPlatforms;
+      const result = data['inventory-registration-result'];
+      const products = registrationResultPlatforms(asset.type);
       if (!products.some(([key]) => key === product) && !(unresolved && registrationProduct(unresolved.product) === product &&
-        data['inventory-registration-result'] === '失败且未使用')) {
+        result === '失败且未使用')) {
         api.setError('inventory-registration-product', '请选择有效的注册平台');
+        return true;
+      }
+      if (!registrationResults.includes(result)) {
+        api.setError('inventory-registration-result', '请选择实际注册结果');
         return true;
       }
       if (
@@ -5085,47 +5190,30 @@
         );
         return true;
       }
-      const registrationVersion = asset.version;
       saveInventoryChange("inventory_registration_result", () => {
-          if (
-            asset.version !== registrationVersion ||
-            asset.inventoryState === 'used' ||
-            asset.health !== 'normal' ||
-            pendingClaim(asset)?.item.taskId
-          ) {
-            api.notify('确认期间邮箱或关联任务已变化，请重新核对');
-            return;
-          }
-          let found = pendingClaim(asset);
-          if (localData && asset.type === 'relay' && (!found || !ownerAllowed(found.batch))) {
-            api.notify('原隐藏邮箱领用已变化，请重新打开当前批次');
-            return;
-          }
+          let found = activeClaim;
           if (!found) {
             const batch = createBatch(
               'mail',
               [asset],
-              `注册 ${data['inventory-registration-product'].toUpperCase()}`,
+              `注册 ${product.toUpperCase()}`,
               '从邮箱管理登记注册'
             );
             found = { batch, item: batch.items[0] };
           }
-          const previousRecord = registrationRecords.find(
-            (entry) => entry.id === data['inventory-registration-id']
-          );
-          const record = previousRecord || {
+          const record = unresolved || {
             id: uid('REGISTER'),
             assetId: asset.id,
             email: asset.email,
-            product: data['inventory-registration-product'].toUpperCase(),
-            state: data['inventory-registration-result'],
+            product: product.toUpperCase(),
+            state: result,
             createdById: currentActor().id,
             createdBy: currentActor().name,
             createdAt: inventoryNow(),
             time: inventoryNow(),
             accountId: ''
           };
-          record.state = data['inventory-registration-result'];
+          record.state = result;
           record.actorId = currentActor().id;
           record.actor = currentActor().name;
           record.time = inventoryNow();
@@ -5134,7 +5222,7 @@
             consume(asset, found.item, {
               kind: 'registration',
               registrationId: record.id,
-              product: data['inventory-registration-product'],
+              product,
               label: `已登记 ${record.product} 外部注册成功；账号资料需独立录入`
             });
           } else if (record.state === '待核对') {
@@ -5144,7 +5232,7 @@
             found.item.registrationId = '';
             log(asset, '登记注册失败且未使用', record.id);
           }
-          if (!previousRecord) registrationRecords.unshift(record);
+          if (!unresolved) registrationRecords.unshift(record);
           return () => {
             finishDrawer(form.dataset.inventoryDraft);
             api.render();
@@ -5161,6 +5249,11 @@
     return true;
   }
   function onChange(node) {
+    if (node.id === 'inventory-use-purpose') {
+      updateUseRegistrationMode(node.form);
+      saveDrafts();
+      return true;
+    }
     if (node.id === 'inventory-platform-product') {
       api.setError(node.id, '');
       saveDrafts();
@@ -5362,6 +5455,7 @@
   }
 
   api.modules.inventory = {
+    personalLoginFields, personalAccountError, microsoftLoginField, microsoftVerificationFields, microsoftFormSecurity, readMicrosoftSecurity,
     phoneValue,
     usageDetails,
     personalRegistrationButtons,
@@ -5641,6 +5735,7 @@
       stockPage?.clear();
       archiveReview?.controller.abort();
       archiveReview = undefined;
+      archiveAttempts.clear();
     },
     beforeNavigate(route) {
       if (localData && api.usesSharedBusinessData(route) &&

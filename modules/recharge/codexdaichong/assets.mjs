@@ -11,6 +11,7 @@ import { proxyTypeLabels } from '../bitbrowser/proxy-types.mjs';
 import { RECHARGE_STAGE_LABELS, RECHARGE_STEP_LABELS } from './progress-presentation.mjs';
 import { checkoutServerDiagnostic, routingAdminPanel } from './routing-admin-ui.mjs';
 import { createRechargeCardTypeOverlay } from './card-type-overlay.mjs';
+import { describeCardImport, inspectCardImport } from './card-import-preview.mjs';
 import { cardPlanAdminScript, cardPlanImportFields, cardPlanLabels, cardPlanToolbar } from './card-plan-admin.mjs';
 
 const git = promisify(execFile);
@@ -990,12 +991,21 @@ function adaptAdminScript(source, routingScript) {
             const submitted = textarea.value;
             const text = submitted.trim();`
   );
-  source = replaceOne(
+  source = replaceSection(
     source,
-    "            // Parse pipe-delimited format: number|expiry|CVC|holder\n            const lines = text.split('\\n').map(l => l.trim()).filter(Boolean);",
-    String.raw`            // Normalize space-delimited rows for the existing import parser.
-            const lines = text.split('\n').map(line => line.trim()).filter(Boolean).map(line =>
-                line.includes('|') ? line : line.replace(/^(\S+)\s+(\S+)\s+(\S+)(?:\s+(.*))?$/, '$1|$2|$3|$4'));`
+    '            // Parse pipe-delimited format: number|expiry|CVC|holder',
+    '            btn.disabled = true;\n            btn.innerHTML',
+    `            const preview = reviewCardImport(submitted);
+            const parsed = preview.filter(row => row.card);
+            const cards = parsed.map(row => row.card);
+            const parseErrors = preview.filter(row => !row.card);
+            if (!cards.length) {
+                resultEl.textContent = '第 ' + parseErrors.map(row => row.line).join('、') +
+                    ' 行格式错误（需至少 3 个字段，用 | 分隔）';
+                resultEl.style.color = 'var(--error)';
+                return;
+            }
+`
   );
   source = replaceOne(source, '（需至少 3 个字段，用 | 分隔）', '（请填写卡号、有效期和 CVC，用空格或竖线分隔）');
   source = replaceOne(
@@ -1026,11 +1036,19 @@ function adaptAdminScript(source, routingScript) {
                 if (!res.ok || !rechargeCardPlans.confirmedImport(data, planRequest))
                     throw new Error('卡池导入回执待核对');
                 const numbers = rechargeCardTypes.acceptedNumbers(cards, data);
-                if (textarea.value === submitted) textarea.value = '';
+                const retained = new Set([...parseErrors.map(row => row.line), ...data.failures.map(item => parsed[item.index].line)]);
+                const failedLines = [...retained].sort((a, b) => a - b);
+                const unchanged = textarea.value === submitted;
+                if (unchanged) {
+                    textarea.value = preview.filter(row => retained.has(row.line)).map(row => row.source).join('\\n');
+                    reviewCardImport(textarea.value);
+                }
                 const result = await finishRechargeCardImport(numbers, typeId);
                 resultEl.textContent = '导入 ' + data.imported + ' 张，跳过重复 ' + data.skipped +
                     ' 张，失败 ' + (data.failed + parseErrors.length) + ' 张；已设置允许套餐 ' +
-                    data.assignedPlans + ' 张' + result;
+                    data.assignedPlans + ' 张' + result +
+                    (failedLines.length ? '；第 ' + failedLines.join('、') + ' 行失败' +
+                        (unchanged ? '，已保留待修' : '，已保留当前输入，请核对') : '');
                 resultEl.style.color = 'var(--text-dim)';
             } catch {
                 resultEl.textContent = '导入回执待核对，请先刷新卡池查看。';
@@ -1109,6 +1127,16 @@ function adaptAdminScript(source, routingScript) {
   const proxyTypesScript = 'const rechargeProxyTypeLabels = ' + JSON.stringify(proxyTypeLabels) + ';\n';
   return replaceOne(localUrls(source + '\n' + proxyTypesScript + routingScript), '        let cardPoolList = [];', `
         let cardPoolList = [];
+        ${inspectCardImport.toString()}
+        ${describeCardImport.toString()}
+        function reviewCardImport(text) {
+            const rows = inspectCardImport(text, cardPoolList.map(card => card.card_number).filter(Boolean), 'super');
+            const summary = document.getElementById('card_pool_import_preview');
+            if (summary) summary.textContent = rows.length ? describeCardImport(rows) +
+                '。有效行可先导入，失败行保留待修。' : '填写银行卡资料后将逐行检查。有效行可先导入。';
+            return rows;
+        }
+        document.getElementById('card_pool_import_text')?.addEventListener('input', event => reviewCardImport(event.target.value));
         const rechargeCardPlans = ${cardPlanAdminScript}({
             labels: ${JSON.stringify(cardPlanLabels)},
             request: (url, options) => authFetch('${prefix}' + url, options),
@@ -1284,18 +1312,184 @@ function adaptRedeemHtml(source) {
   ];
   for (const [anchor, replacement] of replacements)
     source = replaceOne(source, anchor, replacement);
-  source = replaceOne(source, "        let verifiedCdk = '';", `        let verifiedCdk = '';
+  return source;
+}
+
+function adaptRedeemSubmission(source, workspace) {
+  const verifyCleanup = '                toggleLoading(redeemBtn, false);' + (workspace
+    ? '\n                redeemBtn.disabled = false;\n                if (!verifiedCdk) cdkInput.readOnly = false;' : '');
+  const verifyFailureMessage = "                showStatus('网络请求失败', 'error');";
+  const verifyFailure = workspace
+    ? "                window.idRechargeWorkspaceLog?.record('暂时无法读取兑换码校验结果。', 'review');\n" +
+      "                window.idRechargeWorkspaceLog?.state('idle');\n" + verifyFailureMessage
+    : verifyFailureMessage + '\n            } finally {\n' + verifyCleanup;
+  const replacements = [
+    ["        let verifiedCdk = '';", `        let verifiedCdk = '';
+        let verifiedCdkKey = '';
+        let activeRedeemVerification;
+        const pendingReview = new Set();
+        // The tab remembers a salted identifier for an in-flight submission across reloads.
+        const reviewStoragePrefix = 'id-recharge-review:';
         window.idRechargeClearTransient = () => {
-            if (activationLocked) return;
-            verifiedCdk = '';
-            cdkInput.value = '';
-            cdkInput.readOnly = false;
+            if (!activationLocked) resetRedeemFlow();
+        };
+        function reviewCode(cdk) {
+            return cdk.normalize('NFKD').replace(/\\p{M}/gu, '').toUpperCase();
+        }
+        async function submissionStorageKey(cdk, create = true) {
+            try {
+                const saltKey = reviewStoragePrefix + 'salt';
+                let salt = sessionStorage.getItem(saltKey);
+                if (!salt) {
+                    if (!create) return '';
+                    salt = crypto.randomUUID();
+                    sessionStorage.setItem(saltKey, salt);
+                }
+                const bytes = new TextEncoder().encode(salt + ':' + reviewCode(cdk));
+                const digest = await crypto.subtle.digest('SHA-256', bytes);
+                return reviewStoragePrefix + Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('');
+            } catch {
+                return '';
+            }
+        }
+        function storedSubmission(key) {
+            try { return !!key && sessionStorage.getItem(key) === 'pending'; }
+            catch { return false; }
+        }
+        function needsSubmissionReview(cdk = verifiedCdk, key = verifiedCdkKey) {
+            return pendingReview.has(reviewCode(cdk)) || storedSubmission(key);
+        }
+        function finishRedeemVerification() {
+            activeRedeemVerification = undefined;
+            toggleLoading(redeemBtn, false);
+            if (!verifiedCdk) cdkInput.readOnly = false;
+        }
+        function leaveRedeemVerification() {
+            if (!activeRedeemVerification) return;
+            finishRedeemVerification();
+            window.idRechargeWorkspaceLog?.reset();
+        }
+        async function showRedeemVerificationFailure(cdk, verification, message) {
+            const key = await submissionStorageKey(cdk, false);
+            if (activeRedeemVerification !== verification) return;
+            if (needsSubmissionReview(cdk, key)) {
+                queryInput.value = cdk;
+                message += ' 该兑换码有待核对的提交，请先查询。';
+            }
+            showStatus(message, 'error');
+        }
+        function beginSubmissionRecord() {
+            if (!verifiedCdkKey) return false;
+            try {
+                sessionStorage.setItem(verifiedCdkKey, 'pending');
+                return true;
+            } catch { return false; }
+        }
+        function finishSubmissionRecord() {
+            pendingReview.delete(reviewCode(verifiedCdk));
+            try { if (verifiedCdkKey) sessionStorage.removeItem(verifiedCdkKey); } catch {}
+        }
+        function submissionLocked() {
+            return activationLocked || taskCompleted || needsSubmissionReview();
+        }
+        function syncRechargeAccountLock() {
+            const locked = submissionLocked();
+            tokenInput.readOnly = locked || tokenInput.dataset.demoReadonly === 'true';
+            if (locked) startBtn.disabled = true;
+        }
+        function submissionRefused(status, data) {
+            if (data?.success !== false) return false;
+            if (status === 503) return data.notAccepted === true &&
+                ['maintenance_mode', 'recharge_plan_cards_unavailable'].includes(data.code);
+            return status >= 400 && status < 500 && status !== 408;
+        }
+        function markUncertain() {
+            pendingReview.add(reviewCode(verifiedCdk));
             tokenInput.value = '';
-            startBtn.disabled = true;
-            redeemBtn.hidden = false;
-            backToStep1.hidden = true;
-            tokenInput.dispatchEvent(new Event('input', { bubbles: true }));
-        };`);
+            if (verifiedCdk) queryInput.value = verifiedCdk;
+            hideProgress();
+            updateFlowUI(2, 'manual');
+            toggleLoading(startBtn, false);
+            setActivationLock(false);
+            setButtonText(startBtn, '待核对');
+            showStatus('提交结果暂时无法确认，请用原兑换码查询。', 'error');
+            window.idRechargeWorkspaceLog?.record('提交结果待核对，请用原兑换码查询，勿重复充值。', 'review');
+            window.idRechargeWorkspaceLog?.state('uncertain');
+        }`],
+    ["            toggleLoading(redeemBtn, true);", "            const verification = {};\n            activeRedeemVerification = verification;\n            toggleLoading(redeemBtn, true);"],
+    ["                const tab = btn.dataset.tab;", "                const tab = btn.dataset.tab;\n                if (tab !== 'redeem') leaveRedeemVerification();"],
+    ["                    verifiedCdk = cdk;", `
+                    const storageKey = await submissionStorageKey(cdk);
+                    if (activeRedeemVerification !== verification) return;
+                    verifiedCdkKey = storageKey;
+                    verifiedCdk = cdk;`],
+    [verifyFailure, '                if (activeRedeemVerification !== verification) return;\n' +
+      verifyFailure.replace(verifyFailureMessage,
+        "                await showRedeemVerificationFailure(cdk, verification, '网络请求失败');")],
+    [verifyCleanup, '                if (activeRedeemVerification === verification) finishRedeemVerification();'],
+    ["                    body: JSON.stringify({ cdk })\n                });\n                const data = await response.json();",
+      "                    body: JSON.stringify({ cdk })\n                });\n                const data = await response.json();\n                if (activeRedeemVerification !== verification) return;"],
+    ["            const preserveStatus = Boolean(options.preserveStatus);",
+      "            const preserveStatus = Boolean(options.preserveStatus);\n            activeRedeemVerification = undefined;\n            verifiedCdkKey = '';"],
+    ['            window.idRechargeSetNavigationLock(activationLocked);',
+      '            window.idRechargeSetNavigationLock(activationLocked);\n            syncRechargeAccountLock();'],
+    ['            const rawSession = tokenInput.value.trim();',
+      '            if (submissionLocked()) return;\n            const rawSession = tokenInput.value.trim();'],
+    ['            setButtonText(startBtn, START_PENDING_TEXT);', `
+            if (!beginSubmissionRecord()) {
+                showStatus('无法保存本次提交的核对状态，请允许此站点使用会话存储后再提交。', 'error');
+                return;
+            }
+            setButtonText(startBtn, START_PENDING_TEXT);`],
+    ['                if (data.success && data.jobKey) {', `                if (response.ok && data?.success === true && validRechargeJobKey(data.jobKey)) {
+                    finishSubmissionRecord();
+                    tokenInput.value = '';`],
+    ["                } else {\n                    hideProgress();\n                    updateFlowUI(2, 'failed');", `
+                } else if (!submissionRefused(response.status, data)) {
+                    markUncertain();
+                } else {
+                    finishSubmissionRecord();
+                    if (data.manualReview) {
+                        pendingReview.add(reviewCode(verifiedCdk));
+                        tokenInput.value = '';
+                        queryInput.value = verifiedCdk;
+                    }
+                    hideProgress();
+                    window.idRechargeWorkspaceLog?.receipt(data.manualReview
+                        ? '开通结果待核对，请用原兑换码查询。' : '提交未受理，请检查页面提示后重试。', 'review');
+                    window.idRechargeWorkspaceLog?.state('finished');
+                    updateFlowUI(2, data.manualReview ? 'manual' : 'failed');`],
+    ["                    setButtonText(startBtn, START_FAILED_TEXT);\n                    toggleLoading(startBtn, false);\n                    startBtn.disabled = false;\n                    setActivationLock(false);", `
+                    setButtonText(startBtn, data.manualReview ? '待核对' : START_FAILED_TEXT);
+                    toggleLoading(startBtn, false);
+                    setActivationLock(false);${workspace ? '\n                    updateConfirmation();' : ''}`],
+    ["                hideProgress();\n                updateFlowUI(2, 'failed');\n                showStatus('网络连接失败，请重试', 'error');\n                setButtonText(startBtn, START_FAILED_TEXT);\n                toggleLoading(startBtn, false);\n                startBtn.disabled = false;\n                setActivationLock(false);",
+      '                markUncertain();'],
+    ['<div id="statusMessage" class="status-message">', '<div id="statusMessage" class="status-message" role="status">']
+  ];
+  if (!workspace) replacements.push(
+    ['            toggleLoading(redeemBtn, true);',
+      '            cdkInput.readOnly = true;\n            toggleLoading(redeemBtn, true);'],
+    ['            redeemBtn.disabled = false;\n            startBtn.disabled = false;',
+      '            redeemBtn.disabled = false;\n            cdkInput.readOnly = false;\n            startBtn.disabled = false;'],
+    ["                    updateFlowUI(2, 'cdk_ok');", "                    updateFlowUI(2, needsSubmissionReview() ? 'manual' : 'cdk_ok');"],
+    ["                    statusMsg.style.display = 'none';\n                } else {\n                    showStatus(data.message || '兑换码无效或已使用', 'error');", `
+                    syncRechargeAccountLock();
+                    if (needsSubmissionReview()) {
+                        queryInput.value = cdk;
+                        setButtonText(startBtn, '待核对');
+                        showStatus('该兑换码有待核对的提交，请先查询。', 'error');
+                    } else {
+                        statusMsg.style.display = 'none';
+                    }
+                } else {
+                    showStatus(data.message || '兑换码无效或已使用', 'error');`],
+    ["                    querySection.style.display = 'block';",
+      "                    querySection.style.display = 'block';\n                    if (verifiedCdk && !queryInput.value.trim()) queryInput.value = verifiedCdk;"]
+  );
+  replacements.push(["                    showStatus(data.message || '兑换码无效或已使用', 'error');",
+    "                    await showRedeemVerificationFailure(cdk, verification, data.message || '兑换码无效或已使用');"]);
+  for (const [anchor, replacement] of replacements) source = replaceOne(source, anchor, replacement);
   return source;
 }
 
@@ -1497,7 +1691,7 @@ function adaptRechargeProgress(source, workspace) {
             activeJobKey = '';
             const result = openingResults[status];
             const succeeded = status === 'success';
-            ${workspace ? "if (status === 'manual') pendingReview.add(verifiedCdk);" : ''}
+            if (status === 'manual') pendingReview.add(reviewCode(verifiedCdk));
             setProgress(succeeded ? 100 : progress, result.label, result.tone);
             const renewalUnconfirmed = succeeded && data.renewalUnconfirmed === true;
             setProgressHint(renewalUnconfirmed ? '自动续订取消状态未确认，请到目标账号账单页核对。' : '');
@@ -1510,17 +1704,15 @@ function adaptRechargeProgress(source, workspace) {
             setActivationLock(false);
             if (status === 'failed') {
                 taskCompleted = false;
-                ${workspace ? 'syncWorkspaceAccountLock(); updateConfirmation();' : 'startBtn.disabled = false;'}
+                syncRechargeAccountLock();${workspace ? ' updateConfirmation();' : ' startBtn.disabled = submissionLocked();'}
             } else startBtn.disabled = true;
         }
   `);
   source = replaceOne(source, '            hideCaptchaVerification();\n', '');
   source = replaceOne(source, '            closeTaskSocket();', "            activeJobKey = '';\n            taskStatusRequest = null;" +
     (workspace ? '\n            window.idRechargeWorkspaceLog?.reset();' : ''));
-  source = replaceOne(source, 'if (isProcessing && data.data?.jobKey) {', 'if (isProcessing && validRechargeJobKey(data.data?.jobKey)) {');
-  source = replaceOne(source,
-    workspace ? 'if (response.ok && data.success && data.jobKey) {' : 'if (data.success && data.jobKey) {',
-    'if (response.ok && data.success === true && validRechargeJobKey(data.jobKey)) {');
+  source = replaceOne(source, 'if (isProcessing && data.data?.jobKey) {',
+    'if (isProcessing && validRechargeJobKey(data.data?.jobKey)) {\n                        finishSubmissionRecord();');
   for (const [anchor, replacement] of replacements) source = replaceOne(source, anchor, replacement);
   if (workspace) {
     source = replaceOne(source,
@@ -1537,6 +1729,69 @@ function adaptRechargeProgress(source, workspace) {
       "            taskProgress.style.display = 'none';\n            delete taskProgress.dataset.state;\n            resetProgressState();"
     );
   }
+  return source;
+}
+
+function adaptRedeemQueries(source) {
+  const replacements = [
+    ["                document.querySelectorAll('.tab-btn').forEach", "                cancelRechargeQuery();\n                document.querySelectorAll('.tab-btn').forEach"],
+    ["                setQueryMode(button.dataset.queryMode || 'single');",
+      "                cancelRechargeQuery();\n                setQueryMode(button.dataset.queryMode || 'single');"],
+    ["            if (!activationLocked) resetRedeemFlow();", "            cancelRechargeQuery();\n            if (!activationLocked) resetRedeemFlow();"],
+    ["        batchQueryBtn?.addEventListener('click'", `        let activeRechargeQuery;
+        function cancelRechargeQuery() {
+            if (!activeRechargeQuery) return;
+            const { controller, button } = activeRechargeQuery;
+            activeRechargeQuery = undefined;
+            controller.abort();
+            toggleLoading(button, false);
+        }
+        function beginRechargeQuery(button) {
+            cancelRechargeQuery();
+            const request = { button, controller: new AbortController() };
+            activeRechargeQuery = request;
+            toggleLoading(button, true);
+            statusMsg.style.display = 'none';
+            return request;
+        }
+        function canRenderRechargeQuery(request) {
+            return activeRechargeQuery === request && querySection.checkVisibility() && request.button.checkVisibility();
+        }
+        for (const input of [queryInput, batchQueryInput]) input?.addEventListener('input', () => {
+            cancelRechargeQuery();
+            if (querySection.checkVisibility()) statusMsg.style.display = 'none';
+            if (input === batchQueryInput) batchQueryResults.style.display = 'none';
+        });
+        window.addEventListener('pagehide', cancelRechargeQuery);
+
+        batchQueryBtn?.addEventListener('click'`],
+    ["            toggleLoading(batchQueryBtn, true);\n            statusMsg.style.display = 'none';",
+      "            const request = beginRechargeQuery(batchQueryBtn);\n            batchQueryResults.style.display = 'none';"],
+    ["fetch('/api/cdk/query-batch', {\n                    method: 'POST',",
+      "fetch('/api/cdk/query-batch', {\n                    signal: request.controller.signal,\n                    method: 'POST',"],
+    ["                if (!data.success) return showStatus(data.message || '批量查询失败', 'error');",
+      "                if (!canRenderRechargeQuery(request)) return;\n                if (!data.success) return showStatus(data.message || '批量查询失败', 'error');"],
+    ["                showStatus('网络请求失败', 'error');\n            } finally {\n                toggleLoading(batchQueryBtn, false);",
+      "                if (canRenderRechargeQuery(request)) showStatus('网络请求失败', 'error');\n            } finally {\n                if (activeRechargeQuery === request) toggleLoading(batchQueryBtn, false);"],
+    ["            toggleLoading(queryBtn, true);\n            statusMsg.style.display = 'none';",
+      "            const request = beginRechargeQuery(queryBtn);"],
+    ['fetch(`/api/cdk/query?cdk=${encodeURIComponent(cdk)}`)',
+      'fetch(`/api/cdk/query?cdk=${encodeURIComponent(cdk)}`, { signal: request.controller.signal })'],
+    ["                if (data.success) {\n                    const statusText",
+      "                if (!canRenderRechargeQuery(request)) return;\n                if (data.success) {\n                    const statusText"],
+    ["                    const taskSummary = queryTaskSummary(data.data);", `                    const taskSummary = queryTaskSummary(data.data);
+                    const reviewBlocked = statusText === '未使用' &&
+                        needsSubmissionReview(cdk, await submissionStorageKey(cdk, false));
+                    if (!canRenderRechargeQuery(request)) return;`],
+    ["                    showStatus(resultHtml, isUsed ? 'error' : 'success', true);", `                    const reviewNote = reviewBlocked
+                        ? '<p>上次提交仍待核对，请联系客服确认，勿重复提交。</p>' : '';
+                    showStatus(resultHtml + reviewNote, isUsed || reviewBlocked ? 'error' : 'success', true);`],
+    ["if (stageNode.isConnected && queryInput.value.trim() === cdk) stageNode.textContent = label;",
+      "if (canRenderRechargeQuery(request) && stageNode.isConnected) stageNode.textContent = label;"],
+    ["                showStatus('查询失败', 'error');\n            } finally {\n                toggleLoading(queryBtn, false);",
+      "                if (canRenderRechargeQuery(request)) showStatus('查询失败', 'error');\n            } finally {\n                if (activeRechargeQuery === request) toggleLoading(queryBtn, false);"]
+  ];
+  for (const [anchor, replacement] of replacements) source = replaceOne(source, anchor, replacement);
   return source;
 }
 
@@ -1685,37 +1940,18 @@ function adaptWorkspaceRechargeScript(source) {
         const accountHint = document.getElementById('workspaceAccountHint');
         const plan = document.getElementById('workspacePlan');
         const verifiedPlan = document.getElementById('workspaceVerifiedPlan');
-        const pendingReview = new Set();
-        function syncWorkspaceAccountLock() {
-            tokenInput.readOnly = activationLocked || taskCompleted || pendingReview.has(verifiedCdk) ||
-                tokenInput.dataset.demoReadonly === 'true';
-        }
         function setWorkspaceVerified(verified) {
             cdkInput.readOnly = verified;
             redeemBtn.hidden = verified;
             backToStep1.hidden = !verified;
             step2.disabled = !verified;
-            syncWorkspaceAccountLock();
+            syncRechargeAccountLock();
         }
         function updateConfirmation() {
             const result = validateSessionInput(tokenInput.value, { silent: true });
             account.textContent = result.valid && result.email ? result.email : '填写后显示';
             accountHint.textContent = tokenInput.value.trim() && !result.valid ? result.message : '';
-            startBtn.disabled = !verifiedCdk || !result.valid || activationLocked ||
-                taskCompleted || pendingReview.has(verifiedCdk);
-        }
-        function markUncertain() {
-            pendingReview.add(verifiedCdk);
-            setActivationLock(false);
-            tokenInput.value = '';
-            hideProgress();
-            updateFlowUI(2, 'manual');
-            toggleLoading(startBtn, false);
-            startBtn.disabled = true;
-            setButtonText(startBtn, '待核对');
-            showStatus('提交结果暂时无法确认，请用原兑换码查询。', 'error');
-            window.idRechargeWorkspaceLog?.record('提交结果待核对，请用原兑换码查询，勿重复充值。', 'review');
-            window.idRechargeWorkspaceLog?.state('uncertain');
+            startBtn.disabled = !verifiedCdk || !result.valid || submissionLocked();
         }
   `
   );
@@ -1793,9 +2029,11 @@ function adaptWorkspaceRechargeScript(source) {
     "updateFlowUI(2, 'cdk_ok');",
     '} else {\n                    showStatus(data.message',
     `
-                    updateFlowUI(2, pendingReview.has(verifiedCdk) ? 'manual' : 'cdk_ok');
+                    updateFlowUI(2, needsSubmissionReview() ? 'manual' : 'cdk_ok');
                     updateConfirmation();
-                    if (pendingReview.has(verifiedCdk)) {
+                    if (needsSubmissionReview()) {
+                        queryInput.value = verifiedCdk;
+                        setButtonText(startBtn, '待核对');
                         showStatus('该兑换码有待核对的提交，请先查询。', 'error');
                     } else {
                         statusMsg.style.display = 'none';
@@ -1843,72 +2081,7 @@ function adaptWorkspaceRechargeScript(source) {
     'if (!preserveStatus)',
     ''
   );
-  replace(
-    '            const rawSession = tokenInput.value.trim();',
-    `
-            if (activationLocked || taskCompleted || pendingReview.has(verifiedCdk)) return;
-            const rawSession = tokenInput.value.trim();
-  `
-  );
-  replace(
-    '            setButtonText(startBtn, START_PENDING_TEXT);',
-    `
-            tokenInput.readOnly = true;
-            setButtonText(startBtn, START_PENDING_TEXT);
-  `
-  );
-  replace(
-    '                if (data.success && data.jobKey) {',
-    `
-                if (response.ok && data.success && data.jobKey) {
-                    tokenInput.value = '';
-  `
-  );
-  replace(
-    "                } else {\n                    hideProgress();\n                    updateFlowUI(2, 'failed');",
-    `
-                } else if (response.ok || data.success !== false || (response.status >= 500 && !(
-                    response.status === 503 && data.notAccepted === true &&
-                    ['maintenance_mode', 'recharge_plan_cards_unavailable'].includes(data.code)
-                ))) {
-                    markUncertain();
-                } else {
-                    if (data.manualReview) pendingReview.add(verifiedCdk);
-                    hideProgress();
-                    window.idRechargeWorkspaceLog?.receipt(data.manualReview
-                        ? '开通结果待核对，请用原兑换码查询。' : '提交未受理，请检查页面提示后重试。', 'review');
-                    window.idRechargeWorkspaceLog?.state('finished');
-                    updateFlowUI(2, data.manualReview ? 'manual' : 'failed');
-  `
-  );
-  replace(
-    '                    startBtn.disabled = false;\n                    setActivationLock(false);',
-    `
-                    setActivationLock(false);
-                    updateConfirmation();
-  `
-  );
-  replace(
-    "                hideProgress();\n                updateFlowUI(2, 'failed');\n                showStatus('网络连接失败，请重试', 'error');\n                setButtonText(startBtn, START_FAILED_TEXT);\n                toggleLoading(startBtn, false);\n                startBtn.disabled = false;\n                setActivationLock(false);",
-    `
-                markUncertain();
-            } finally {
-                syncWorkspaceAccountLock();
-  `
-  );
-  replace(
-    '<div id="statusMessage" class="status-message">',
-    '<div id="statusMessage" class="status-message" role="status">'
-  );
-  replace(
-    '            window.idRechargeSetNavigationLock(activationLocked);',
-    '            window.idRechargeSetNavigationLock(activationLocked);\n            syncWorkspaceAccountLock();'
-  );
-  return replaceSection(source, '        window.idRechargeClearTransient = () => {', 'const START_DEFAULT_TEXT', `
-        window.idRechargeClearTransient = () => {
-            if (!activationLocked) resetRedeemFlow();
-        };
-  `);
+  return source;
 }
 
 function adaptSubscriptionPage(source) {
@@ -2022,7 +2195,11 @@ function adaptSubscriptionPage(source) {
 function adaptHtml(source, kind) {
   if (kind === 'redeem' || kind === 'workspace') source = adaptRedeemHtml(source);
   if (kind === 'workspace') source = adaptWorkspaceRecharge(source);
-  if (kind === 'redeem' || kind === 'workspace') source = adaptRechargeProgress(source, kind === 'workspace');
+  if (kind === 'redeem' || kind === 'workspace') {
+    source = adaptRedeemSubmission(source, kind === 'workspace');
+    source = adaptRechargeProgress(source, kind === 'workspace');
+    source = adaptRedeemQueries(source);
+  }
   if (kind === 'subscription') source = adaptSubscriptionPage(source);
   source = source
     .replace(/^[ \t]*<link\b[^>]*https:\/\/fonts\.(?:googleapis|gstatic)\.com[^>]*>\s*$/gm, '')
@@ -2107,7 +2284,8 @@ function adaptHtml(source, kind) {
         '<p id="card_pool_import_type_hint" class="embedded-field-hint">同一批使用所选类型。已有其他类型的重复卡片可在列表修改。</p>' +
         '</div>\n' + cardPlanImportFields + '\n                    <textarea id="card_pool_import_text" class="import-textarea" ' +
         'aria-label="待导入银行卡资料" aria-describedby="card_pool_import_hint" ' +
-        'placeholder="卡号 10/30 CVC&#10;卡号 10/30 CVC 持卡人"></textarea>'
+        'placeholder="卡号 10/30 CVC&#10;卡号 10/30 CVC 持卡人"></textarea>' +
+        '<p id="card_pool_import_preview" aria-live="polite">填写银行卡资料后将逐行检查。有效行可先导入。</p>'
     );
     source = replaceOne(source, 'id="card_pool_import_btn" class="btn btn-success"',
       'id="card_pool_import_btn" class="btn btn-success" disabled');

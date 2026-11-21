@@ -3,6 +3,8 @@
   const A = window.IDDesignAPI, data = window.IDLocalData, S = A.state;
   const { esc: E, button, tag } = A;
   const settingsForm = 'mailbox-delivery-settings-form', validityForm = 'mailbox-delivery-validity-form';
+  const validityDraft = 'mailbox-delivery-validity-draft';
+  const validityViews = new WeakMap();
   const suffixes = [
     ['relayQuery', '隐藏邮箱查询', 'alias@example.test----BUY-DEMO-0001'],
     ['googleCredentials', '谷歌邮箱账密', 'google@example.test----演示密码----演示密钥'],
@@ -15,7 +17,7 @@
   const selected = scope => A.getSelection(scope === 'google' ? 'inventory-module-assets' : 'mailbox-delivery-' + scope);
   const append = (first, suffix) => first + (suffix?.trim() ? '\n' + suffix : '');
   const pending = new Map();
-  let pool, byEmail = new Map(), report, settingsRequest = 0, sessionVersion = 0;
+  let pool, byEmail = new Map(), report, settingsRequest = 0, sessionVersion = 0, navigationVersion = 0;
 
   function rememberPool(snapshot) {
     if (!snapshot || !Array.isArray(snapshot.items)) throw new Error('邮箱池资料读取失败');
@@ -76,8 +78,17 @@
     if (current()) A.notify(message, { kind: 'success' });
   }
   const routeGuard = () => {
-    const actor = identity(), route = S.route, session = sessionVersion;
-    return () => identity() === actor && S.route === route && sessionVersion === session && enabled();
+    const actor = identity(), navigation = navigationVersion, session = sessionVersion;
+    return () => identity() === actor && navigationVersion === navigation && sessionVersion === session && enabled();
+  };
+  const drawerGuard = () => {
+    const drawer = document.getElementById('drawer');
+    const content = drawer.firstElementChild, open = drawer.open;
+    return () => drawer.firstElementChild === content && drawer.open === open;
+  };
+  const viewGuard = () => {
+    const route = routeGuard(), drawer = drawerGuard();
+    return () => route() && drawer();
   };
   function reportBody() {
     const rows = report.results;
@@ -101,7 +112,7 @@
 
   function reset(scope, mode, ids, count, node, { snapshot = pool, copyQuery = false, done } = {}) {
     if (!enabled() || !count || pending.has(scope)) return;
-    const current = routeGuard();
+    const onRoute = routeGuard();
     const inventoryVersion = scope === 'relay' ? A.modules.inventory.inventoryVersion() : snapshot?.inventoryVersion;
     if (!Number.isSafeInteger(inventoryVersion)) { A.notify('正在读取邮箱资料，请稍候重试'); return; }
     const command = { mode, ...(mode !== 'all' && { ids: [...ids] }), inventoryVersion,
@@ -109,7 +120,9 @@
     const operationId = crypto.randomUUID();
     let settings;
     const run = async (trigger = node) => {
-      if (!current() || pending.has(scope)) return;
+      if (!onRoute() || pending.has(scope)) return;
+      const sameDrawer = drawerGuard();
+      const current = () => onRoute() && sameDrawer();
       pending.set(scope, operationId);
       try {
         await A.withActionFeedback(trigger?.isConnected ? trigger : null, async () => {
@@ -125,8 +138,8 @@
             }
             throw error;
           }
+          if (scope !== 'relay' && onRoute()) rememberPool(result);
           if (!current()) return;
-          if (scope !== 'relay') rememberPool(result);
           done?.(result);
           const receipts = result.results || [];
           const value = scope === 'relay' ? result.issued?.queryCode : result.issuedCode;
@@ -157,51 +170,146 @@
   }
   async function copyCredentials(asset, node) {
     if (!enabled()) return;
-    const current = routeGuard();
+    const current = viewGuard();
     await A.withActionFeedback(node?.isConnected ? node : null, async () => {
       const result = await data.copyGoogleMailboxCredentials({ id: asset.id, version: asset.version });
       const missing = result.missing?.length ? `，缺少${result.missing.join('、')}` : '';
       await copy(result.text, current, false, '谷歌邮箱账密已复制' + missing);
     }, { failure: '谷歌邮箱账密读取失败' });
   }
-  async function openSettings(node, validity) {
+  async function openSettings(node) {
     if (!enabled()) return;
-    const current = routeGuard(), request = ++settingsRequest, drawer = document.getElementById('drawer');
-    const context = S.drawerContext;
+    const current = viewGuard(), request = ++settingsRequest;
     await A.withActionFeedback(node, async () => {
-      const saved = validity ? await readPool(true) : await data.mailboxDeliverySettings();
-      if (!current() || request !== settingsRequest || S.drawerContext !== context) return;
-      const id = validity ? validityForm : settingsForm;
-      const draft = S.drafts.get(id) || {};
-      const fields = validity ? A.field('默认有效期（天）', 'mailbox-delivery-days', A.input('mailbox-delivery-days',
-        draft['mailbox-delivery-days'] ?? saved.defaultValidDays, 'type="number" min="1" max="365"'), true,
-      '从生成查询码时开始计算，适用于之后生成的新码。') : suffixes.map(([key, label, example]) => {
+      const saved = await data.mailboxDeliverySettings();
+      if (!current() || request !== settingsRequest) return;
+      const draft = S.drafts.get(settingsForm) || {};
+      const fields = suffixes.map(([key, label, example]) => {
         const value = draft[key] ?? saved[key];
         return `<div class="mailbox-delivery-suffix">${A.field(label, `mailbox-delivery-${key}`,
           `<textarea id="mailbox-delivery-${key}" name="${key}" maxlength="2000" rows="3" data-example="${E(example)}">${E(value)}</textarea>`)}
           <pre class="mailbox-delivery-preview" aria-label="${label}预览" data-suffix-preview="${key}">${E(append(example, value))}</pre></div>`;
       }).join('');
-      A.openDrawer(validity ? '查询码设置' : '复制后缀设置', validity
-        ? '隐藏邮箱固定 30 天。普通邮箱可设置 1 至 365 天。' : '设置随当前登录账号保存。后缀从第二行开始添加。',
-      `<form id="${id}" novalidate data-version="${saved.version}">${fields}</form>`,
-      button('取消', 'drawer-close') + `<button class="button primary" type="submit" form="${id}">保存设置</button>`, id);
-      const form = drawer.querySelector('#' + id);
+      A.openDrawer('复制后缀设置', '设置随当前登录账号保存。后缀从第二行开始添加。',
+        `<form id="${settingsForm}" novalidate data-version="${saved.version}">${fields}</form>`,
+        button('取消', 'drawer-close') + `<button class="button primary" type="submit" form="${settingsForm}">保存设置</button>`, settingsForm);
+      const form = document.getElementById(settingsForm);
       form.addEventListener('input', event => {
-        S.drafts.set(id, A.readForm(form));
+        S.drafts.set(settingsForm, A.readForm(form));
         const preview = form.querySelector(`[data-suffix-preview="${event.target.name}"]`);
         if (preview) preview.textContent = append(event.target.dataset.example, event.target.value);
       });
     }, { failure: '设置读取失败' });
   }
 
+  function validitySaveButton() {
+    return document.querySelector(`[form="${validityForm}"]`);
+  }
+  function rememberValidityDraft(form, view) {
+    S.drafts.set(validityDraft, { value: form.elements['mailbox-delivery-days'].value, version: view.version });
+  }
+  function showValidityConflict(form, view, latest, message) {
+    view.conflict = true;
+    view.latest = latest;
+    validitySaveButton().disabled = true;
+    const warning = form.querySelector('[data-validity-warning]');
+    warning.hidden = false;
+    warning.innerHTML = latest
+      ? `<p>邮箱池设置已变化。当前保存为 ${E(latest.defaultValidDays)} 天，保留了你本次填写。</p>` +
+        button('按当前版本继续', 'mailbox-delivery-validity-accept')
+      : `<p>${E(message)}</p>` + button('重新读取设置', 'mailbox-delivery-validity-reload');
+  }
+  async function reloadValidityConflict(form, view) {
+    try {
+      const latest = await readPool(true);
+      if (view.current()) showValidityConflict(form, view, latest);
+    } catch {
+      if (view.current()) showValidityConflict(form, view, null, '最新设置读取失败，你的填写已保留。');
+    }
+  }
+  async function openValiditySettings(node, onSave) {
+    if (!enabled()) return;
+    const current = viewGuard(), request = ++settingsRequest;
+    await A.withActionFeedback(node, async () => {
+      const saved = await readPool(true);
+      if (!current() || request !== settingsRequest) return;
+      const draft = S.drafts.get(validityDraft);
+      const fields = A.field('默认有效期（天）', 'mailbox-delivery-days', A.input('mailbox-delivery-days',
+        draft?.value ?? saved.defaultValidDays, 'type="number" min="1" max="365"'), true,
+      '从生成查询码时开始计算，适用于之后生成的新码。');
+      A.openDrawer('查询码设置', '隐藏邮箱固定 30 天。普通邮箱可设置 1 至 365 天。',
+        `<form id="${validityForm}" novalidate>${fields}<div class="inline-notice warning" data-validity-warning role="status" hidden></div></form>`,
+        button('取消', 'drawer-close') + `<button class="button primary" type="submit" form="${validityForm}">保存设置</button>`);
+      const form = document.getElementById(validityForm);
+      const view = { current: viewGuard(), onSave, version: draft?.version ?? saved.version };
+      validityViews.set(form, view);
+      form.addEventListener('input', () => rememberValidityDraft(form, view));
+      if (draft && draft.version !== saved.version) showValidityConflict(form, view, saved);
+    }, { failure: '设置读取失败' });
+  }
+  async function saveValiditySettings(form) {
+    const view = validityViews.get(form);
+    if (!view?.current() || view.saving || view.conflict) return;
+    const field = form.elements['mailbox-delivery-days'];
+    const days = Number(field.value);
+    if (!Number.isSafeInteger(days) || days < 1 || days > 365) {
+      A.setError(field.id, '请填写 1 至 365 天', form);
+      return;
+    }
+    A.setError(field.id, '', form);
+    rememberValidityDraft(form, view);
+    const submitted = S.drafts.get(validityDraft);
+    const node = validitySaveButton(), feedback = A.beginActionFeedback(node, '正在保存设置…');
+    view.saving = true;
+    try {
+      const result = await data.saveManagedMailboxPool({ action: 'settings', version: submitted.version, validDays: days });
+      const current = view.current();
+      const sameInput = current && field.value === submitted.value;
+      if (S.drafts.get(validityDraft) === submitted || sameInput) S.drafts.delete(validityDraft);
+      if (!current) return;
+      const saved = rememberPool(result);
+      view.onSave?.(saved);
+      A.notify('设置已保存');
+      if (sameInput) A.closeDrawer();
+      else {
+        view.version = result.version;
+        rememberValidityDraft(form, view);
+        if (saved.version !== result.version) showValidityConflict(form, view, saved);
+      }
+    } catch (error) {
+      if (!view.current()) return;
+      if (error.status === 409 && error.code !== 'DATA_SOURCE_CHANGED') await reloadValidityConflict(form, view);
+      else A.notify(error.message || '设置保存失败', { kind: 'error' });
+    } finally {
+      view.saving = false;
+      feedback.finish();
+      if (view.current() && view.conflict) node.disabled = true;
+    }
+  }
+
   A.modules.mailboxDelivery = { enabled, selected, reset, batchMenu, copyCredentials, readPool, rememberPool, connection, canRotate, date, remaining,
+    openValiditySettings,
     currentPool: () => pool, google: email => byEmail.get(String(email || '').trim().toLowerCase()) };
   window.IDDesignModules.push({
     id: 'mailbox-delivery-actions', matches: () => false,
-    clearPageState() { pool = undefined; byEmail = new Map(); report = undefined; settingsRequest++; sessionVersion++; pending.clear(); },
+    beforeNavigate() { navigationVersion++; },
+    clearPageState() { pool = undefined; byEmail = new Map(); report = undefined; settingsRequest++; sessionVersion++; pending.clear(); S.drafts.delete(validityDraft); },
     onClick(action, node) {
-      if (action === 'mailbox-delivery-settings' || action === 'mailbox-delivery-validity') {
-        void openSettings(node, action === 'mailbox-delivery-validity'); return true;
+      if (action === 'mailbox-delivery-settings') { void openSettings(node); return true; }
+      if (action === 'mailbox-delivery-validity') { void openValiditySettings(node); return true; }
+      if (action === 'mailbox-delivery-validity-accept' || action === 'mailbox-delivery-validity-reload') {
+        const form = node.closest('form'), view = validityViews.get(form);
+        if (!view?.current() || view.saving) return true;
+        if (action === 'mailbox-delivery-validity-reload') {
+          void A.withActionFeedback(node, () => reloadValidityConflict(form, view), { failure: '设置读取失败' });
+        } else if (view.latest) {
+          view.version = view.latest.version;
+          view.conflict = false;
+          rememberValidityDraft(form, view);
+          form.querySelector('[data-validity-warning]').hidden = true;
+          validitySaveButton().disabled = false;
+        }
+        return true;
       }
       if (action === 'mailbox-delivery-reconcile') { if (report?.replay) void report.replay(node); return true; }
       if (action === 'mailbox-delivery-retry-copy') {
@@ -216,18 +324,13 @@
       return false;
     },
     onSubmit(form) {
-      const validity = form.id === validityForm;
-      if ((!validity && form.id !== settingsForm) || !enabled()) return false;
+      if (!enabled()) return false;
+      if (form.id === validityForm) { void saveValiditySettings(form); return true; }
+      if (form.id !== settingsForm) return false;
       const values = A.readForm(form), node = document.querySelector(`[form="${form.id}"]`);
       const version = Number(form.dataset.version);
-      const days = Number(values['mailbox-delivery-days']);
-      if (validity && (!Number.isSafeInteger(days) || days < 1 || days > 365)) {
-        A.setError('mailbox-delivery-days', '请填写 1 至 365 天', form);
-        return true;
-      }
       void A.withActionFeedback(node, async () => {
-        if (validity) rememberPool(await data.saveManagedMailboxPool({ action: 'settings', version, validDays: days }));
-        else await data.saveMailboxDeliverySettings({ ...values, version });
+        await data.saveMailboxDeliverySettings({ ...values, version });
         if (form.isConnected && JSON.stringify(A.readForm(form)) === JSON.stringify(values)) {
           S.drafts.delete(form.id);
           S.drawerContext = '';

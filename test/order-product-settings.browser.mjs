@@ -13,7 +13,7 @@ test('GPT、Claude Pro、Claude Max、Gemini、Grok 的币种、代付和售价�
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, locale: 'zh-CN' });
   const fixture = JSON.parse(await readFile(new URL('../docs/audits/2026-11-06-design-review/visual-fixtures.json', import.meta.url)));
-  const actor = { id: 'qa-admin', name: '合成管理员', role: 'admin' };
+  const actor = { id: 'qa-super', name: '合成超级管理员', role: 'super' };
   const personalPricing = [
     { product: 'Gemini', plan: 'Google AI Plus', saleCode: 'EUR', saleName: '欧元', salePrice: '98.1234', stockPrice: '128.1200',
       paidCode: 'PHP', paidLabel: '菲律宾 · 菲律宾比索 PHP', paidPrice: '349.1000' },
@@ -46,7 +46,7 @@ test('GPT、Claude Pro、Claude Max、Gemini、Grok 的币种、代付和售价�
   await interceptDesign(context, { localFixtures: fixture, actor, skipRechargeAssets: true });
   await context.route('**/api/local/auth/order-owners', route => route.fulfill({ json: { items: [actor] } }));
   await context.route('**/api/local/auth/display-names', route => route.fulfill({ json: { items: [actor] } }));
-  let failSave = false, rateVersion = 1, phpRate = '0.125';
+  let failedSaveResponses = 0, rateVersion = 1, phpRate = '0.125';
   const writes = [], businessWrites = [];
   await context.route('**/api/local/finance/collection?**', route => route.fulfill({ json: {
     version: rateVersion,
@@ -61,7 +61,10 @@ test('GPT、Claude Pro、Claude Max、Gemini、Grok 的币种、代付和售价�
     if (route.request().method() === 'GET') return route.fulfill({ json: settings });
     const command = route.request().postDataJSON();
     writes.push(command);
-    if (failSave) { failSave = false; return route.fulfill({ status: 503, json: { error: '模拟设置保存失败' } }); }
+    if (failedSaveResponses > 0) {
+      failedSaveResponses--;
+      return route.fulfill({ status: 503, json: { error: '模拟设置保存失败' } });
+    }
     if (command.version !== settings.version) return route.fulfill({ status: 409, json: { error: '设置版本已变化' } });
     assert(validOrderCurrencyGroups(command.data.orderCurrenciesByProduct));
     assert(validOrderPrices(command.data.orderPrices));
@@ -167,7 +170,7 @@ test('GPT、Claude Pro、Claude Max、Gemini、Grok 的币种、代付和售价�
   await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
   await page.waitForFunction(() => !document.querySelector('#commerce-currency-options')?.value.includes('GBP'));
   await add('英镑 GBP');
-  failSave = true;
+  failedSaveResponses = 2;
   await save('commerce-currencies-form', 503);
   assert((await currencies()).includes('英镑 GBP'));
   await save('commerce-currencies-form');
@@ -224,10 +227,10 @@ test('GPT、Claude Pro、Claude Max、Gemini、Grok 的币种、代付和售价�
       const fieldsFit = await priceGroup.locator('.field').evaluateAll(fields => fields.every(field => {
         const label = field.querySelector('label').getBoundingClientRect();
         const input = field.querySelector('input').getBoundingClientRect();
-        return label.left >= 0 && label.right <= input.left + 1 && label.top < input.bottom &&
+        return label.left >= 0 && Math.abs(label.left - input.left) <= 1 && label.bottom <= input.top + 1 &&
           input.right <= innerWidth && input.width > 0;
       }));
-      assert(fieldsFit, `售价标签和输入框在 ${width}px ${dark ? '深色' : '浅色'} 下保持左侧布局`);
+      assert(fieldsFit, `售价标签和输入框在 ${width}px ${dark ? '深色' : '浅色'} 下上下排列并左对齐`);
       assert(await page.locator('#drawer').evaluate(node => node.scrollWidth <= node.clientWidth));
     }
     if ((width === 1440 && !dark) || (width === 390 && dark))
@@ -246,7 +249,7 @@ test('GPT、Claude Pro、Claude Max、Gemini、Grok 的币种、代付和售价�
   assert(await stockMaxPrice.evaluate(node => node === document.activeElement));
   assert.equal(writes.length, beforeInvalidPrice);
   await stockMaxPrice.fill('199.9999');
-  failSave = true;
+  failedSaveResponses = 2;
   await save('commerce-prices-form', 503);
   assert.equal(await stockMaxPrice.inputValue(), '199.9999');
   await save('commerce-prices-form');
@@ -304,7 +307,8 @@ test('GPT、Claude Pro、Claude Max、Gemini、Grok 的币种、代付和售价�
       const input = field.querySelector('input').getBoundingClientRect();
       const budget = document.createRange();
       budget.selectNodeContents(field.querySelector('output'));
-      return label.left >= edge.left && label.right <= input.left + 1 && input.right <= edge.right + 1 &&
+      return label.left >= edge.left && Math.abs(label.left - input.left) <= 1 && label.bottom <= input.top + 1 &&
+        input.right <= edge.right + 1 &&
         input.width > 0 && budget.getClientRects().length === 1 && budget.getBoundingClientRect().right <= edge.right + 1;
     });
   });
@@ -408,7 +412,7 @@ test('GPT、Claude Pro、Claude Max、Gemini、Grok 的币种、代付和售价�
       assert(await paidPricesFit(), `${product} 在 ${width}px ${dark ? '深色' : '浅色'} 下显示完整金额和预算`);
     }
     if (product === 'Gemini') {
-      failSave = true;
+      failedSaveResponses = 2;
       await save('commerce-paid-prices-form', 503);
       assert.equal(await priceInput.inputValue(), paidPrice);
     }

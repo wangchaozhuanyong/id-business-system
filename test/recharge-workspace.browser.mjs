@@ -84,7 +84,10 @@ test('充值码合并工作台独立刷新分页、保留草稿、审批后定�
       assert(geometry.right.width / geometry.left.width > 1.8 && geometry.right.width / geometry.left.width < 2.1, '约一比二布局');
       assert(Math.abs(geometry.fields[0].control.top - geometry.fields[1].control.top) < 1, '套餐与数量同排');
     } else assert(geometry.right.top >= geometry.left.bottom + 19);
-    for (const field of geometry.fields) assert(field.label.right <= field.control.left + 1);
+    for (const { label, control } of geometry.fields) {
+      assert(label.bottom <= control.top + 1 && Math.abs(label.left - control.left) <= 1,
+        `${width}/${theme}/${state} 字段标签在输入框上方左对齐`);
+    }
     const { row, notice, button } = geometry.submission;
     const centerY = bounds => (bounds.top + bounds.bottom) / 2;
     assert(button.left - notice.right >= 11 && Math.abs(centerY(button) - centerY(notice)) <= 1 &&

@@ -1,23 +1,16 @@
 import { randomUUID } from 'node:crypto';
 import { parseV2DateTimeInput, toV2DateTimeInput } from '../modules/time/dateTime.ts';
-import { orderFieldChanged } from '../modules/orders/order-opening.mjs';
+import { orderFieldChanged, orderPaymentChoices, personalSubscriptionPlans, personalSubscriptionSeries } from '../modules/orders/order-opening.mjs';
 import { pendingInventoryClaim } from './inventory-usage.mjs';
 import { registrationEmail, registrationMailboxType, registrationPurposeProduct } from './inventory-registration.mjs';
 
-export const personalPlans = {
-  Gemini: ['Google AI Plus', 'Google AI Pro', 'Google AI Ultra 5x', 'Google AI Ultra 20x'],
-  Grok: ['The X Subscription Plus', 'The X Subscription Premium', 'The X Subscription Super',
-    'The X Subscription Ultra', 'SuperGrok Lite', 'SuperGrok', 'SuperGrok Plus', 'SuperGrok Heavy',
-    'X Premium', 'X Premium+']
-};
+export const personalPlans = personalSubscriptionPlans;
 export const personalProduct = product => Object.hasOwn(personalPlans, product);
 export const personalStock = type => type === 'gemini' || type === 'grok';
 export const stockTypeForProduct = product => ({
   GPT: 'gpt', 'Claude Pro': 'claude', 'Claude Max': 'claude', Gemini: 'gemini', Grok: 'grok'
 })[product] || '';
-export const subscriptionSeries = order => order.product === 'Gemini' ? 'google_ai'
-  : order.plan?.startsWith('The X Subscription ') ? 'x_subscription'
-    : order.plan?.startsWith('SuperGrok') ? 'supergrok' : 'x_premium';
+export const subscriptionSeries = order => personalSubscriptionSeries(order.product, order.plan);
 export const targetKey = row => {
   const email = String(row?.email || '').trim().toLowerCase();
   const handle = String(row?.xHandle || '').trim().toLowerCase();
@@ -54,6 +47,8 @@ function targetError(row, gemini, optional = false) {
     (row.xLinkState === 'linked' && !row.xHandle))) return '请核对 X 账号绑定状态';
 }
 
+export const personalInventoryIdentityError = row => targetError(row, row.type === 'gemini');
+
 export function personalOrderError(order, prior, orders, customers) {
   if (!personalProduct(order.product)) return;
   const manual = order.source === '管理员手工' || prior?.source === '管理员手工';
@@ -72,8 +67,7 @@ export function personalOrderError(order, prior, orders, customers) {
   const series = subscriptionSeries(order);
   if (order.subscriptionSeries !== series) return '订阅系列与套餐不匹配';
   if (series === 'x_premium' && !order.xHandle && !manual && changed('email', 'xHandle', 'plan')) return 'X Premium 需记录实际订阅的 @账号';
-  if (changed('payment', 'plan', 'appleIdId') && (!['银行卡', '苹果内购'].includes(order.payment) ||
-      (series === 'x_subscription' && order.payment !== '银行卡') ||
+  if (changed('payment', 'plan', 'appleIdId') && (!orderPaymentChoices(order.product, order.plan).includes(order.payment) ||
       (order.payment !== '苹果内购' && order.appleIdId)))
     return '充值方式与套餐或付款资源不匹配';
   if (order.billingChannel && changed('billingChannel', 'payment', 'plan') && (!['web', 'web_apple_pay', 'google_play', 'app_store'].includes(order.billingChannel) ||
@@ -160,7 +154,7 @@ export function preparePersonalInventory(previous, next, action, actor, now = ne
         personalStockOwner(old) !== personalStockOwner(row) || (row.sourceMailboxId || '') !== (old.sourceMailboxId || '') ||
         (row.sourceClaimId || '') !== (old.sourceClaimId || ''))) return '账号标识和来源库存创建后须保留';
     if (personalStock(row.type)) {
-      const issue = targetError(row, row.type === 'gemini');
+      const issue = personalInventoryIdentityError(row);
       if (issue) return issue;
     }
     const identity = row.type + ':' + targetKey(row);

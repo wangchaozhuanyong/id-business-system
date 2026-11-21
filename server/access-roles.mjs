@@ -76,7 +76,7 @@ export function protectedSettingsChanged(next, previous) {
 export function registrarInventory(snapshot, actor) {
   if (!snapshot.data) return snapshot;
   const data = snapshot.data;
-  const forRegistration = row => ({ ...pick(row, ['id', 'type', 'email', 'status', 'version', 'inventoryState', 'used']),
+  const forRegistration = row => ({ ...pick(row, ['id', 'type', 'email', 'xHandle', 'loginMethod', 'status', 'version', 'inventoryState', 'used']),
     hasAuthenticator: Boolean(row.totp) });
   const mailboxes = (data.mailboxes || []).filter(row => ownsRecord(actor, row) && !row.relayDeleted).map(forRegistration);
   const accounts = (data.accounts || []).filter(row => ownsRecord(actor, row)).map(forRegistration);

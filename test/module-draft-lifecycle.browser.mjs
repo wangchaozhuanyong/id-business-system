@@ -1,20 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { startPreview } from '../server/preview.mjs';
+import { offlineBusiness } from './helpers/offline-business.mjs';
+import { origin, toggleDesignTheme } from './helpers/offline-design.mjs';
 
 test('库存、隐藏邮箱和苹果余额表单保留草稿、隔离类型并保护迟到保存', { timeout: 90_000 }, async (t) => {
   assert(process.env.ID_RECHARGE_QA_PLAYWRIGHT, '请指定已有 Playwright 模块入口');
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
-  const host = await startPreview(0, { databasePath: ':memory:' });
-  const origin = new URL(host.url).origin;
   let browser;
   let releaseSave = () => {};
   t.after(async () => {
     releaseSave();
     await browser?.close();
-    host.server.closeAllConnections();
-    await new Promise(resolve => host.server.close(resolve));
   });
   const asset = (id, type, extra = {}) => ({
     id, type, email: `${id}@example.test`, password: 'isolated-fixture-only', phone: 'fixture',
@@ -35,22 +32,24 @@ test('库存、隐藏邮箱和苹果余额表单保留草稿、隔离类型并�
     appleRelay: { parents: [{ id: 'qa-parent', email: 'qa-parent@example.test', status: 'ACTIVE',
       days: 30, version: 1 }], imports: [], events: [] }
   };
-  const seeded = await fetch(host.url + 'api/local/inventory', { method: 'PUT',
-    headers: { Origin: origin, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ version: 0, data: inventory }) });
-  assert.equal(seeded.status, 200);
   browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const { request, respond, fulfil, traffic } = await offlineBusiness(t, page);
+  const seeded = await request('inventory', { method: 'PUT', body: { version: 0, data: inventory } });
+  assert.equal(seeded.status, 200, seeded.body.error);
   page.setDefaultTimeout(5000);
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
-  await page.route('**/*', route => new URL(route.request().url()).origin === origin
-    ? route.continue() : route.abort());
   await page.route('**/api/local/apple-relay/*', route => {
     const operation = new URL(route.request().url()).pathname.split('/').at(-1);
+    if (operation === 'code-read') {
+      const { ids, version } = route.request().postDataJSON();
+      const queryCode = 'BUY-SYNTHETIC-CODE';
+      return route.fulfill({ json: ids ? { items: ids.map(id => ({ id, queryCode })), version } : { queryCode } });
+    }
     if (operation === 'alias-register') return route.fulfill({
       status: 503, contentType: 'application/json',
-      body: JSON.stringify({ message: '隔离测试：收件服务暂时不可用' })
+      body: JSON.stringify({ error: '隔离测试：收件服务暂时不可用' })
     });
     const result = operation === 'status'
       ? { configured: true, parentIds: ['qa-parent'], aliasIds: ['qa-relay-a', 'qa-relay-b'], codeQueryConfigured: true,
@@ -65,11 +64,14 @@ test('库存、隐藏邮箱和苹果余额表单保留草稿、隔离类型并�
     await page.evaluate(route => window.IDDesignAPI.go(route), route);
     await page.locator(`#main[data-layout-route="${route}"]`).waitFor();
   };
-  const close = () => page.evaluate(() => window.IDDesignAPI.closeDrawer());
+  const close = async () => {
+    await page.evaluate(() => window.IDDesignAPI.closeDrawer());
+    await page.locator('#drawer').waitFor({ state: 'hidden' });
+  };
   const action = (module, action, data = {}) => page.evaluate(({ module, action, data }) => {
     window.IDDesignModules.find(item => item.id === module).onClick(action, { dataset: data });
   }, { module, action, data });
-  await page.goto(host.url + '#/mailboxes/google');
+  await page.goto(origin + '/#/mailboxes/google');
   await page.waitForFunction(() => window.IDDesignAPI?.collections.mailboxes.some(row => row.id === 'qa-google'));
 
   await t.test('库存新增类型分别保留，注册及使用抽屉关闭和切页后恢复', async () => {
@@ -124,7 +126,7 @@ test('库存、隐藏邮箱和苹果余额表单保留草稿、隔离类型并�
     await page.locator('tr[data-row-id="qa-relay-a"] td[data-column="aliasId"]').filter({ hasText: 'y000005' }).waitFor();
     assert.equal(await page.locator('tr[data-row-id="qa-relay-a"] td[data-column="parentMailboxId"]').textContent(), 'm000001');
     await page.locator('#relay-search').fill('y000006');
-    assert.equal(await page.locator('table[data-table="relay-aliases"] tbody tr[data-row-id]').count(), 1);
+    await page.waitForFunction(() => document.querySelectorAll('table[data-table="relay-aliases"] tbody tr[data-row-id]').length === 1);
     assert.equal(await page.locator('table[data-table="relay-aliases"] tbody tr[data-row-id]').getAttribute('data-row-id'), 'qa-relay-b');
     await page.locator('#relay-search').fill('');
     await page.evaluate(() => window.IDDesignAPI.modules.appleRelay.openAliasImport());
@@ -159,26 +161,33 @@ test('库存、隐藏邮箱和苹果余额表单保留草稿、隔离类型并�
     const toolbar = page.locator('.relay-alias-toolbar');
     const table = page.locator('table[data-table="relay-aliases"]');
     await table.getByText('qa-relay-a@example.test', { exact: true }).waitFor();
-    assert(await toolbar.getByRole('button', { name: '批量导入' }).isVisible());
+    const openTools = () => toolbar.locator('[data-action="relay-alias-tools"]').click();
+    await openTools();
+    await page.getByRole('menuitem', { name: '批量导入', exact: true }).waitFor();
+    await page.keyboard.press('Escape');
     assert(await toolbar.getByRole('button', { name: '登记隐藏邮箱' }).isVisible());
     assert.equal(await toolbar.getByRole('button', { name: '新增主邮箱' }).count(), 0);
     const tops = await toolbar.locator('button, input, select').evaluateAll(controls =>
-      controls.map(control => control.getBoundingClientRect().top));
+      controls.filter(control => control.checkVisibility()).map(control => control.getBoundingClientRect().top));
     assert(Math.max(...tops) - Math.min(...tops) <= 1, '有数据时搜索、状态和操作仍应同排');
     await toolbar.getByRole('button', { name: '已提取 0', exact: true }).click();
-    await table.getByRole('heading', { name: '暂无已提取的隐藏邮箱' }).waitFor();
-    assert(await toolbar.getByRole('button', { name: '查看提取与归还' }).isVisible());
+    await page.getByRole('heading', { name: '暂无已提取的隐藏邮箱' }).waitFor();
+    await openTools();
+    await page.getByRole('menuitem', { name: '查看提取与归还', exact: true }).waitFor();
+    await page.keyboard.press('Escape');
     await page.locator('#relay-search').fill('no-match');
-    await table.getByRole('heading', { name: '暂无符合条件的记录' }).waitFor();
+    await page.getByRole('heading', { name: '暂无符合条件的记录' }).waitFor();
     await page.setViewportSize({ width: 1440, height: 900 });
   });
 
   await t.test('主邮箱搜索与选择合一，宽窄屏校验、草稿和编辑锁定正确', async () => {
+    await go('mailboxes/relay');
+    await page.getByRole('tab', { name: '隐藏邮箱管理', exact: true }).click();
     for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: 900 });
       for (const theme of ['light', 'dark']) {
         if (await page.evaluate(() => document.documentElement.dataset.theme || 'light') !== theme)
-          await page.locator('#theme-toggle').click();
+          await toggleDesignTheme(page);
         await action('apple-relay', 'relay-alias-add');
         const picker = page.locator('#relay-parent-choice');
         assert.equal(await page.locator('#relay-parent-search').count(), 0);
@@ -206,15 +215,20 @@ test('库存、隐藏邮箱和苹果余额表单保留草稿、隔离类型并�
     }
     await page.setViewportSize({ width: 1440, height: 900 });
     if (await page.evaluate(() => document.documentElement.dataset.theme || 'light') !== 'light')
-      await page.locator('#theme-toggle').click();
+      await toggleDesignTheme(page);
   });
 
   await t.test('隐藏邮箱补接入口在宽窄屏可操作，服务失败后保留原记录并可重试', async () => {
+    await go('mailboxes/relay');
+    await page.getByRole('tab', { name: '隐藏邮箱管理', exact: true }).click();
+    await page.getByRole('button', { name: '全部 3', exact: true }).click();
+    await page.locator('#relay-search').fill('');
+    await page.locator('[data-action="relay-alias-more"][data-id="qa-relay-c"]').waitFor();
     for (const width of [1440, 390]) {
       await page.setViewportSize({ width, height: 900 });
       for (const theme of ['light', 'dark']) {
         if (await page.evaluate(() => document.documentElement.dataset.theme || 'light') !== theme)
-          await page.locator('#theme-toggle').click();
+          await toggleDesignTheme(page);
         await go('mailboxes/relay');
         const more = page.locator('[data-action="relay-alias-more"][data-id="qa-relay-c"]');
         await more.click();
@@ -277,10 +291,24 @@ test('库存、隐藏邮箱和苹果余额表单保留草稿、隔离类型并�
 
   await t.test('余额慢刷新和失败保留表格与筛选', async () => {
     await go('accounts/apple-balances');
-    await page.locator('#apple-list-search').fill('qa-apple');
+    const search = page.locator('#apple-list-search');
+    await search.fill('qa-apple');
+    await page.waitForFunction(() => window.IDDesignAPI.state.query === 'qa-apple');
     const row = page.locator('tr[data-row-id="qa-apple"]');
-    const originalRow = await row.elementHandle();
     const before = await row.textContent();
+    const viewport = page.locator('.table-viewport').filter({ has: row });
+    const scrolled = await viewport.evaluate(node => { node.scrollLeft = 150; return node.scrollLeft; });
+    assert(scrolled > 0, '验收表格应可横向滚动');
+    await page.evaluate(() => {
+      const samples = [], observe = () => {
+        const record = document.querySelector('tr[data-row-id="qa-apple"]');
+        samples.push({ visible: record?.checkVisibility() ?? false,
+          filter: document.querySelector('#apple-list-search')?.value });
+        window.appleRefreshFrame = requestAnimationFrame(observe);
+      };
+      window.appleRefreshSamples = samples;
+      window.appleRefreshFrame = requestAnimationFrame(observe);
+    });
     const release = Promise.withResolvers();
     await page.route('**/api/local/appleBalance', async route => {
       await release.promise;
@@ -293,14 +321,24 @@ test('库存、隐藏邮箱和苹果余额表单保留草稿、隔离类型并�
       assert.equal(await progress.textContent(), '');
       assert((await progress.boundingBox()).height <= 3);
       assert.equal(await row.textContent(), before);
+      await search.focus();
     } finally { release.resolve(); }
-    await page.getByText('余额刷新失败，当前显示上次成功读取的资料。', { exact: true }).waitFor();
-    assert(await originalRow.evaluate(node => node.isConnected));
-    await originalRow.dispose();
+    const refreshError = page.getByText('余额或关联资料刷新失败，当前显示上次成功读取的资料。', { exact: true });
+    await refreshError.waitFor();
+    const samples = await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => {
+      cancelAnimationFrame(window.appleRefreshFrame);
+      resolve(window.appleRefreshSamples);
+      delete window.appleRefreshFrame;
+      delete window.appleRefreshSamples;
+    })));
+    assert(samples.length >= 2, '刷新期间应采集多帧');
+    assert(samples.every(({ visible, filter }) => visible && filter === 'qa-apple'), '刷新期间保留行和筛选');
     assert.equal(await row.textContent(), before);
-    assert.equal(await page.locator('#apple-list-search').inputValue(), 'qa-apple');
+    assert.equal(await search.inputValue(), 'qa-apple');
+    assert(await search.evaluate(node => node === document.activeElement), '刷新失败应保留搜索框焦点');
+    assert.equal(await viewport.evaluate(node => node.scrollLeft), scrolled, '刷新失败应保留表格横向位置');
     await page.locator('[data-action="apple-reload"]').click();
-    await page.getByText('余额刷新失败，当前显示上次成功读取的资料。', { exact: true }).waitFor({ state: 'hidden' });
+    await refreshError.waitFor({ state: 'hidden' });
     assert.equal(await row.textContent(), before);
   });
 
@@ -309,12 +347,12 @@ test('库存、隐藏邮箱和苹果余额表单保留草稿、隔离类型并�
     const saved = new Promise(resolve => { acknowledged = resolve; });
     const released = new Promise(resolve => { releaseSave = resolve; });
     await page.route('**/api/local/inventory', async route => {
-      if (route.request().method() !== 'PUT') return route.continue();
-      const response = await route.fetch();
-      assert.equal(response.status(), 200);
+      if (route.request().method() !== 'PUT') return route.fallback();
+      const response = await respond(route);
+      assert.equal(response.status, 200, response.body.error);
       acknowledged();
       await released;
-      await route.fulfill({ response });
+      await fulfil(route, response);
     });
     await go('mailboxes/google');
     await action('inventory', 'inventory-edit', { id: 'qa-google' });
@@ -329,17 +367,18 @@ test('库存、隐藏邮箱和苹果余额表单保留草稿、隔离类型并�
     await close();
     await action('inventory', 'inventory-edit', { id: 'qa-google' });
     assert.equal(await page.locator('#inventory-notes').inputValue(), '保存等待时继续填写的说明');
-    const stored = await (await page.request.get(host.url + 'api/local/inventory')).json();
+    const stored = (await request('inventory')).body;
     const firstSaved = stored.data.mailboxes.find(row => row.id === 'qa-google');
     assert.equal(firstSaved.notes, '本次提交说明');
     assert.equal(await page.locator('[name="inventory-version"]').inputValue(), String(firstSaved.version));
     await page.locator('[form="inventory-asset-form"][type="submit"]').click();
     await page.locator('#inventory-asset-form').waitFor({ state: 'hidden' });
-    const final = await (await page.request.get(host.url + 'api/local/inventory')).json();
+    const final = (await request('inventory')).body;
     const finalAsset = final.data.mailboxes.find(row => row.id === 'qa-google');
     assert.equal(finalAsset.notes, '保存等待时继续填写的说明');
     assert.equal(finalAsset.version, firstSaved.version + 1);
     assert.equal(await page.evaluate(() => window.IDDesignAPI.state.drafts.has('inventory-edit:qa-google')), false);
   });
   assert.deepEqual(errors, []);
+  assert.deepEqual(traffic.external, []);
 });

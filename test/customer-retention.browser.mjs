@@ -123,7 +123,7 @@ test('客户流失归集、订阅历史、数据核对与响应式离线验收',
       await detail('scheduled').locator('strong').getByText('1', { exact: true }).waitFor();
       assert.equal(await detail('recent').locator('strong').textContent(), '2');
       assert.equal(await detail('review').locator('strong').textContent(), '8');
-      assert.equal(await detail('renewals').locator('a').getAttribute('href'), '#/workspace/renewals');
+      assert.equal(await detail('renewals').locator('a').getAttribute('href'), '#/workspace/renewals?view=pending');
       const before = await page.locator('.overview-customer-section').innerText();
       await page.getByRole('group', { name: '统计时间范围' }).getByRole('button', { name: '今日', exact: true }).click();
       assert.equal(await page.locator('.overview-customer-section').innerText(), before, '客户快照不跟随经营区间变化');
@@ -386,8 +386,7 @@ test('部分退款保留有效期，明确终止的退款同时写入实际时�
     await drawer(page).locator('#commerce-refundReason').fill('隔离验收');
   };
   const submit = async () => {
-    await drawer(page).getByRole('button', { name: '核对退款', exact: true }).click();
-    await page.locator('#confirm-dialog [data-action="confirm-accept"]').click();
+    await drawer(page).getByRole('button', { name: '登记退款', exact: true }).click();
     await drawer(page).getByRole('heading', { name: '订单详情', exact: true }).waitFor();
     await drawer(page).getByRole('button', { name: '关闭抽屉', exact: true }).click();
   };
