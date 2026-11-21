@@ -112,7 +112,7 @@ test('renewal reminder persists decisions, hands off to finance and projects cus
       await row(id).getByRole('button', { name: '更多操作', exact: true }).click();
       await page.getByRole('menuitem', { name: label, exact: true }).click();
     };
-    const period = value => page.locator('#renewal-handoff-period').selectOption(value);
+    const period = value => page.locator(`[data-renewal-period="${value}"]`).click();
     const completed = async id => {
       await page.getByRole('link', { name: '办理记录', exact: true }).click();
       await row(id).getByText('已续费', { exact: true }).waitFor();

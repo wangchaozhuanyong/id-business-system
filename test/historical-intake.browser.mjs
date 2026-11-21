@@ -72,7 +72,7 @@ test('Claude Pro 和 Max 通过实际表单保存独立空邮箱订单', { timeo
     id: 'tracked-claude', orderNo: 'QA-TRACKED', email: 'tracked@example.test' });
   await page.goto(origin + '/#/workspace/renewals');
   await page.reload();
-  await page.getByLabel('订单状态').selectOption('expired');
+  await page.getByRole('group', { name: '订单状态' }).getByRole('button', { name: /^已到期/ }).click();
   const reminders = page.getByRole('table', { name: '待续费订单' });
   await reminders.getByText('tracked@example.test', { exact: true }).waitFor();
   for (const order of saved)

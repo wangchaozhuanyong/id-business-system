@@ -33,7 +33,7 @@ const collectErrors = page => {
 
 function entries(page) {
   const workbench = page.locator('#main [data-renewal-handoff]');
-  const group = workbench.getByRole('group', { name: '到期状态', exact: true });
+  const group = workbench.getByRole('group', { name: '订单状态', exact: true });
   const upcoming = group.getByRole('button', { name: /^即将到期/ });
   const overdue = group.getByRole('button', { name: /^已到期/ });
   const pager = workbench.locator('[data-pagination="renewal-handoff-pagination"]');
@@ -124,15 +124,24 @@ test('续费到期入口与表格共享筛选和分页，跨到期自动更新�
   await product.selectOption('');
   await counts(2, 23);
 
-  const status = workbench.locator('#renewal-handoff-period');
-  await status.selectOption('refused');
+  const refusedButton = group.getByRole('button', { name: /^已拒续/ });
+  const renewedButton = group.getByRole('button', { name: /^已续费/ });
+  assert.equal(await workbench.getByRole('combobox', { name: '订单状态' }).count(), 0);
+  assert.deepEqual(await group.getByRole('button').allTextContents(),
+    ['即将到期 2', '已到期 23', '已拒续 1', '已续费 1']);
+  await refusedButton.focus();
+  await page.keyboard.press('Space');
   await workbench.getByText('QA-REFUSED', { exact: true }).waitFor();
   assert.equal(await upcoming.getAttribute('aria-pressed'), 'false');
   assert.equal(await overdue.getAttribute('aria-pressed'), 'false');
-  await status.selectOption('renewed');
+  assert.equal(await refusedButton.getAttribute('aria-pressed'), 'true');
+  await page.keyboard.press('ArrowRight');
   await workbench.getByText('QA-RENEWED', { exact: true }).waitFor();
-  await upcoming.click();
-  assert.equal(await status.inputValue(), 'upcoming');
+  assert(await renewedButton.evaluate(button => button === document.activeElement));
+  assert.equal(await renewedButton.getAttribute('aria-pressed'), 'true');
+  await page.keyboard.press('Home');
+  assert.equal(await upcoming.getAttribute('aria-pressed'), 'true');
+  assert.equal(await group.locator('[aria-pressed="true"]').count(), 1);
 
   const navigation = page.getByRole('navigation', { name: '续费办理进度' });
   await navigation.getByRole('link', { name: '已送财务', exact: true }).click();
@@ -172,9 +181,10 @@ test('手机员工可触屏选择两个到期入口，页签数量来自当前�
   const errors = collectErrors(page);
   await page.clock.setFixedTime(now);
   await page.goto(url);
-  const { workbench, upcoming, overdue, pager, counts } = entries(page);
+  const { workbench, group, upcoming, overdue, pager, counts } = entries(page);
   await counts(1, 1);
-  assert.equal(await workbench.locator('#renewal-handoff-period').isVisible(), false);
+  assert.deepEqual(await group.getByRole('button').allTextContents(), ['即将到期 1', '已到期 1']);
+  assert.equal(await workbench.getByRole('combobox', { name: '订单状态' }).count(), 0);
   for (const width of [320, 390]) {
     await page.setViewportSize({ width, height: 900 });
     for (const control of [upcoming, overdue]) {

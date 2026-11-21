@@ -133,7 +133,7 @@ test('续费银行卡抽屉直接显示原单与续费单完整卡号', { timeou
         await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
         const list = page.locator('[data-renewal-list]');
         const row = (id) => list.locator('tr[data-row-id="' + id + '"]');
-        const period = page.locator('#renewal-handoff-period');
+        const period = value => page.locator(`[data-renewal-period="${value}"]`);
         const search = page.locator('#renewal-handoff-search');
         const product = page.locator('#renewal-handoff-product');
         const drawer = page.locator('#drawer[open]');
@@ -152,7 +152,7 @@ test('续费银行卡抽屉直接显示原单与续费单完整卡号', { timeou
           id, started: Promise.withResolvers(), release: Promise.withResolvers(), finished: Promise.withResolvers()
         });
 
-        await period.selectOption('renewed');
+        await period('renewed').click();
         await product.selectOption('GPT');
         await search.fill('QA-' + original);
         await row(original).waitFor();
@@ -183,12 +183,12 @@ test('续费银行卡抽屉直接显示原单与续费单完整卡号', { timeou
         await exposed.dispose();
         assert.equal(await search.inputValue(), 'QA-' + original);
         assert.equal(await product.inputValue(), 'GPT');
-        assert.equal(await period.inputValue(), 'renewed');
+        assert.equal(await period('renewed').getAttribute('aria-pressed'), 'true');
         assert.equal(page.url(), origin + entry);
 
         if (width === 1440) {
           await search.fill('');
-          await period.selectOption('expired');
+          await period('expired').click();
           await openCard(noCard);
           await section('order').getByText('QA-' + noCard, { exact: true }).waitFor();
           assert.deepEqual(details.at(-1), { orderId: noCard });
@@ -197,13 +197,13 @@ test('续费银行卡抽屉直接显示原单与续费单完整卡号', { timeou
           assert.equal(await section('renewal').count(), 0);
           await close();
 
-          await period.selectOption('renewed');
+          await period('renewed').click();
           pendingDetails = startHeld(original);
           try {
             await openCard(original);
             await pendingDetails.started.promise;
             await close();
-            await period.selectOption('upcoming');
+            await period('upcoming').click();
             await openCard(upcoming);
             await section('order').getByText('QA-' + upcoming, { exact: true }).waitFor();
             assert.deepEqual(details.at(-1), { orderId: upcoming });

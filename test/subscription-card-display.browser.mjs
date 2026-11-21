@@ -276,7 +276,7 @@ test('续费待办不展示银行卡余额，保留原来的用卡与备款资�
     page.setDefaultTimeout(7000);
     await page.clock.setFixedTime(cardDisplayTime);
     await page.goto(origin + '/#/workspace/renewals');
-    await page.locator('#renewal-handoff-period').selectOption('expired');
+    await page.getByRole('group', { name: '订单状态' }).getByRole('button', { name: /^已到期/ }).click();
     const previewRow = page.locator('[data-renewal-list] tr[data-row-id="manual"]');
     await previewRow.getByRole('button', { name: '详情', exact: true }).click();
     const detail = page.locator('#drawer[open] [data-renewal-order-preview]');
