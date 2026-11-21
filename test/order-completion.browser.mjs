@@ -260,7 +260,7 @@ test('手工旧单空白归属补齐后退出待补列表，仍可在续费管�
 
   await interceptRenewalWorktable(page.context(), { actor: admin, localFixtures: data, clock: () => Date.parse(now) });
   await page.goto(origin + '/#/workspace/renewals');
-  await page.getByLabel('订单状态', { exact: true }).selectOption('expired');
+  await page.getByRole('group', { name: '订单状态' }).getByRole('button', { name: /^已到期/ }).click();
   await row.getByRole('button', { name: '更多操作', exact: true }).click();
   await page.getByRole('menuitem', { name: '补邮箱', exact: true }).click();
   await page.setViewportSize({ width: 390, height: 844 });

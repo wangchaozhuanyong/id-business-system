@@ -288,7 +288,7 @@ test('续费历史按客户与账号隔离，独立分页、原单及切换客�
     await interceptRenewalWorktable(context, { actor, localFixtures: fixture, clock: () => now });
     await page.goto(origin + '/#/workspace/renewals');
     if (width === 390) await toggleDesignTheme(page);
-    await page.getByLabel('订单状态').selectOption('expired');
+    await page.getByRole('group', { name: '订单状态' }).getByRole('button', { name: /^已到期/ }).click();
     const drawer = page.locator('#drawer[open]');
     const select = async id => {
       if (await drawer.isVisible()) await drawer.getByRole('button', { name: '关闭抽屉', exact: true }).click();

@@ -47,11 +47,18 @@ test('renewal pages keep toolbars aligned and share an accessible responsive nav
               return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, height: box.height };
             });
           const panel = node.closest('.panel').getBoundingClientRect();
-          return { controls, panel: { left: panel.left, right: panel.right } };
+          const bar = node.getBoundingClientRect();
+          const horizontalScroll = node.scrollWidth - node.clientWidth;
+          return { controls, panel: { left: panel.left, right: panel.right }, horizontalScroll,
+            barInsidePanel: bar.left >= panel.left && bar.right <= panel.right,
+            scrollable: ['auto', 'scroll'].includes(getComputedStyle(node).overflowX) };
         });
         const label = `${route} ${width}px ${theme}`;
+        assert(layout.barInsidePanel, label + ' 工具栏应在列表面板内');
+        const scrollRange = path === 'renewals' ? layout.horizontalScroll : 0;
+        if (scrollRange > 1) assert(layout.scrollable, label + ' 较窄视口应能横向滚动工具栏');
         for (const [i, control] of layout.controls.entries()) {
-          assert(control.left >= layout.panel.left + 10 && control.right <= layout.panel.right - 10, label);
+          assert(control.left >= layout.panel.left + 10 && control.right <= layout.panel.right + scrollRange - 10, label);
           assert(layout.controls.slice(i + 1).every(other => control.right <= other.left + 1 ||
             other.right <= control.left + 1 || control.bottom <= other.top + 1 || other.bottom <= control.top + 1), label);
         }
@@ -264,10 +271,10 @@ test('renewal countdown uses Beijing dates, updates across expiry and keeps the 
   await counter('soon').waitFor({ state: 'detached' });
   assert(await selection.isChecked(), '到期阶段更新保留其他已勾选订单');
   await page.getByRole('button', { name: '提交给财务（1）', exact: true }).waitFor();
-  await page.getByRole('group', { name: '到期状态' }).getByRole('button', { name: /^已到期/ }).click();
+  await page.getByRole('group', { name: '订单状态' }).getByRole('button', { name: /^已到期/ }).click();
   await counter('soon').getByText('已到期不足 1 小时', { exact: true }).waitFor();
   await counter('expired').getByText('已到期 2 天 1 小时', { exact: true }).waitFor();
-  await page.getByRole('group', { name: '到期状态' }).getByRole('button', { name: /^即将到期/ }).click();
+  await page.getByRole('group', { name: '订单状态' }).getByRole('button', { name: /^即将到期/ }).click();
   await selection.check();
   const originalCheckbox = await selection.elementHandle();
   await page.clock.fastForward(30 * 60_000);

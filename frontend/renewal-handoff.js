@@ -26,8 +26,9 @@
   const dateValue = date => dates.format(date).replace(' ', 'T');
   const currentRole = () => A.state.actor?.role;
   const canViewOrder = () => ['admin', 'super'].includes(currentRole());
-  const expiryPeriods = { upcoming: '即将到期', expired: '已到期' };
+  const orderPeriods = { upcoming: '即将到期', expired: '已到期', refused: '已拒续', renewed: '已续费' };
   const handledPeriods = ['refused', 'renewed'];
+  const canChoosePeriod = period => Object.hasOwn(orderPeriods, period) && (!handledPeriods.includes(period) || canViewOrder());
   const selectableOrder = order => order.canSubmitToFinance !== false && !handledPeriods.includes(order.reminderState);
   const originalCardText = row => row.order.payment === '银行卡'
     ? row.originalCardNumber || '完整卡号待核对' : '—';
@@ -59,8 +60,8 @@
   const button = (label, action, id = '', kind = '') =>
     A.button(label, 'renewal-handoff-' + action, kind, '', id ? 'data-id="' + E(id) + '"' : '');
   function periodControls(current) {
-    return '<div class="renewal-period-controls" role="group" aria-label="到期状态">' +
-      Object.entries(expiryPeriods).map(([period, label]) => '<button type="button" class="button" ' +
+    return '<div class="renewal-period-controls" role="group" aria-label="订单状态">' +
+      Object.entries(orderPeriods).filter(([period]) => canChoosePeriod(period)).map(([period, label]) => '<button type="button" class="button" ' +
         'data-action="renewal-handoff-period" data-renewal-period="' + period + '" aria-pressed="' + (period === current) +
         '" disabled>' + label + ' <span class="tab-count" data-renewal-period-count>—</span></button>').join('') + '</div>';
   }
@@ -104,7 +105,9 @@
         A.button('拒绝续费', 'renewal-handoff-decline', 'danger', '', 'hidden disabled') +
         A.button('提交给财务', 'renewal-handoff-submit', 'primary', '', 'hidden disabled') + '</div>' : '';
     const auditTarget = auditNavigation?.route === route || (active?.route === route && active.auditId);
-    const toolbar = '<div class="toolbar toolbar--inline list-filter-toolbar renewal-toolbar">' +
+    const choosing = route === staffRoot && !auditTarget;
+    const toolbar = '<div class="toolbar toolbar--inline renewal-toolbar ' + (choosing ? 'renewal-status-toolbar' : 'list-filter-toolbar') + '">' +
+      (choosing ? periodControls(filters(route).period) : '') +
       (finishing ? '' : '<div class="toolbar-left" data-renewal-filters hidden></div>') +
       '<div class="toolbar-right" data-page-actions>' +
       (route === staffRoot ? '<span class="footnote" data-reminder-window hidden></span>' : '') +
@@ -112,7 +115,6 @@
       (auditTarget ? button('查看全部续费', 'show-all', '', 'primary') : '') + '</div></div>';
     const panel = '<section class="panel staff-workspace" data-renewal-handoff>' +
       toolbar +
-      (route === staffRoot && !auditTarget ? periodControls(filters(route).period) : '') +
       (route === staffRoot ? '<p class="panel-body inline-notice warning" role="status" data-renewal-finance-unavailable hidden></p>' : '') +
       '<p class="panel-body inline-notice warning" role="status" data-renewal-error hidden></p>' +
       '<div data-renewal-body' + (finance && !auditTarget ? ' id="renewal-finance-orders" role="tabpanel" aria-labelledby="renewal-status-' +
@@ -135,7 +137,7 @@
     const query = view.filter.query.trim().toLowerCase();
     const choosing = view.route === staffRoot;
     const source = choosing ? view.data.candidates.map(order => ({ id: order.id, order })) : view.data.items;
-    const counts = { upcoming: 0, expired: 0 };
+    const counts = { upcoming: 0, expired: 0, refused: 0, renewed: 0 };
     if (view.auditId) return { rows: source.filter(row => row.id === view.auditId), counts };
     const rows = [];
     for (const row of source) {
@@ -367,13 +369,10 @@
       ? '搜索客户、联系方式、账号或订单编号' : '搜索客户、账号或原订单编号';
     filters.innerHTML = '<div class="search-field">' + A.icon('search') +
       '<input id="renewal-handoff-search" data-auto-search aria-label="搜索续费订单" title="' + searchPlaceholder +
-      '" placeholder="' + (canViewOrder() && view.route === staffRoot ? '客户、联系方式、账号或单号' : '客户、账号或订单号') + '" value="' +
+      '" placeholder="' + (view.route === staffRoot ? '客户/账号/单号' : '客户、账号或订单号') + '" value="' +
       E(view.filter.query) + '"></div>' +
       '<div class="list-filter-fields"><div class="list-filter-field"><label for="renewal-handoff-product">产品</label><select id="renewal-handoff-product">' +
-      A.options([['', '全部产品'], 'GPT', 'Claude Pro', 'Claude Max', 'Gemini', 'Grok'], view.filter.product) + '</select></div>' +
-      (view.route === staffRoot && canViewOrder() ? '<div class="list-filter-field"><label for="renewal-handoff-period">订单状态</label><select id="renewal-handoff-period">' +
-        A.options([...Object.entries(expiryPeriods), ['refused', '已拒续'], ['renewed', '已续费']],
-          view.filter.period) + '</select></div>' : '') + '</div>';
+      A.options([['', '全部产品'], 'GPT', 'Claude Pro', 'Claude Max', 'Gemini', 'Grok'], view.filter.product) + '</select></div></div>';
     const reminder = $('[data-reminder-window]', view.host);
     if (reminder) {
       reminder.hidden = Boolean(view.auditId) || !Number.isFinite(view.data.reminderHours);
@@ -727,7 +726,7 @@
     else if (command === 'remark-settings') window.IDRenewalRemarks?.settings(node);
     else if (command === 'period') {
       const period = node.dataset.renewalPeriod;
-      if (view.route === staffRoot && view.data && Object.hasOwn(expiryPeriods, period)) setPeriod(view, period);
+      if (view.route === staffRoot && view.data && canChoosePeriod(period)) setPeriod(view, period);
     }
     else if (['order-details', 'order-actions'].includes(command)) {
       const order = view.route === staffRoot && canViewOrder() &&
@@ -827,8 +826,6 @@
     if (view.filter.period === period) return;
     view.filter.period = period;
     view.filter.page = 1;
-    const control = $('#renewal-handoff-period', view.host);
-    if (control) control.value = period;
     drawList(view);
   }
 
@@ -838,10 +835,6 @@
     if (node.id === 'renewal-cardMode') {
       preserveForm(node.form);
       updateCardFields(node.form, node.value === 'pool');
-      return true;
-    }
-    if (node.id === 'renewal-handoff-period') {
-      setPeriod(view, node.value);
       return true;
     }
     if (node.id === 'renewal-handoff-product') {
@@ -875,7 +868,7 @@
     const auditId = auditNavigation?.id;
     const view = { route, finance: route === financeRoute, filter: auditId ? defaults() : filters(route), host, auditId };
     active = view;
-    const tabs = host.parentElement.querySelector('[data-renewal-statuses]');
+    const tabs = host.parentElement.querySelector('[data-renewal-statuses], .renewal-period-controls');
     tabs?.addEventListener('keydown', event => {
       const items = Array.from(tabs.children);
       const index = items.indexOf(event.target);

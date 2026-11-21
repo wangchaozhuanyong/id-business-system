@@ -32,7 +32,8 @@ test('列表筛选文字、日期和操作区在手机与桌面可读，订阅�
         'staff/finance/reconciliation', 'subscriptions/gpt', 'subscriptions/claude', 'subscriptions/gemini', 'subscriptions/grok',
         'mailboxes/google', 'mailboxes/microsoft', ...Object.keys(additionalFilters)]) {
         await page.evaluate(path => location.hash = '#/' + path, route);
-        const toolbar = page.locator('#main[data-layout-route="' + route + '"] ' + (additionalFilters[route] || '.list-filter-toolbar')).first();
+        const toolbarSelector = route === 'workspace/renewals' ? '.renewal-status-toolbar' : additionalFilters[route] || '.list-filter-toolbar';
+        const toolbar = page.locator('#main[data-layout-route="' + route + '"] ' + toolbarSelector).first();
         await toolbar.locator('select').first().waitFor({ state: 'attached' });
         await settle(page);
         const metrics = await toolbar.evaluate(node => {
@@ -61,17 +62,44 @@ test('列表筛选文字、日期和操作区在手机与桌面可读，订阅�
           const actions = [...node.querySelectorAll('.toolbar-right :is(button,a.button)')].filter(visible);
           const firstAction = Math.min(...actions.map(element => element.getBoundingClientRect().top));
           const lastField = Math.max(...fields.map(element => element.getBoundingClientRect().bottom));
-          return { cutoff, collisions, gap: firstAction - lastField, actionRows: new Set(actions.map(n => n.offsetTop)).size,
-            filterY: fields.map(n => Math.round(n.getBoundingClientRect().top)), overflow: document.documentElement.scrollWidth > innerWidth };
+          return { cutoff, collisions, gap: firstAction - lastField, overflow: document.documentElement.scrollWidth > innerWidth };
         });
         const id = [route, width, theme].join(' ');
         assert.deepEqual(metrics.cutoff, [], id + ' 控件正文裁切');
         assert.deepEqual(metrics.collisions, [], id + ' 控件重叠');
         assert.equal(metrics.overflow, false, id + ' 页面溢出');
-        if (width <= 900 && !additionalFilters[route]) assert(metrics.gap >= 7, id + ' 筛选与操作需要分行');
+        if (width <= 900 && route !== 'workspace/renewals' && !additionalFilters[route]) {
+          assert(metrics.gap >= 7, id + ' 筛选与操作需要分行');
+        }
         if (route === 'workspace/renewals') {
-          assert.equal(new Set(metrics.filterY).size, 1, id + ' 产品与状态选择框需要同排');
-          assert.equal(metrics.actionRows, 1, id + ' 刷新和提交需要同排');
+          const layout = await toolbar.evaluate(node => {
+            const periods = [...node.querySelectorAll('[data-renewal-period]')];
+            const search = node.querySelector('#renewal-handoff-search');
+            const product = node.querySelector('#renewal-handoff-product');
+            const reminder = node.querySelector('[data-reminder-window]');
+            const actions = [...node.querySelectorAll('[data-page-actions] button')].filter(button => button.checkVisibility());
+            const boxes = [...periods, search, product, reminder, ...actions].map(control => control.getBoundingClientRect());
+            return {
+              periods: periods.map(button => button.dataset.renewalPeriod),
+              overlapY: Math.min(...boxes.map(box => box.bottom)) - Math.max(...boxes.map(box => box.top)),
+              leftToRight: boxes.every((box, index) => index === 0 || box.left >= boxes[index - 1].right - 1),
+              scrollable: node.scrollWidth > node.clientWidth,
+              rightmostVisible: boxes.at(-1).right <= node.getBoundingClientRect().right + 1
+            };
+          });
+          assert.deepEqual(layout.periods, ['upcoming', 'expired', 'refused', 'renewed'], id);
+          assert(layout.overlapY > 0 && layout.leftToRight, id + ' 四个状态按钮在左，搜索、产品、提醒和操作同排在右');
+          if (width === 1440) assert(!layout.scrollable && layout.rightmostVisible, id + ' 桌面工具栏整行可见');
+          if (width <= 768) {
+            assert(layout.scrollable, id + ' 窄屏工具栏可局部横向滚动');
+            const action = toolbar.getByRole('button', { name: '提交给财务', exact: true });
+            await action.scrollIntoViewIfNeeded();
+            assert(await action.evaluate(button => {
+              const bar = button.closest('.renewal-status-toolbar');
+              return bar.scrollLeft > 0 && button.getBoundingClientRect().right <= bar.getBoundingClientRect().right + 1 &&
+                document.documentElement.scrollLeft === 0;
+            }), id + ' 末端按钮可完整滚入工具栏，页面保持原位');
+          }
         }
         const longChoice = route === 'plugins/mailboxes' ? '#ops-mailbox-filter-status'
           : route === 'mailboxes/relay' ? '#relay-filter-parent' : '';

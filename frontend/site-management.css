@@ -138,11 +138,24 @@
 
 .renewal-period-controls {
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--control-gap);
-  padding: 0 var(--panel-padding-inline) var(--toolbar-padding-block);
+  flex: none;
+  gap: 2px;
+  align-items: center;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--surface-soft);
 }
-.renewal-period-controls .tab-count { margin-inline-start: 0; }
+.renewal-period-controls > .button {
+  gap: 4px;
+  padding-inline: 6px;
+  border-color: transparent;
+  background: transparent;
+}
+.renewal-period-controls .tab-count {
+  margin-inline-start: 0;
+  padding-inline: 3px;
+}
 .renewal-toolbar {
   align-items: center;
   padding-block: var(--toolbar-padding-block);
@@ -177,11 +190,35 @@
   gap: var(--control-gap);
 }
 
-@media (max-width: 420px) {
-  .renewal-toolbar > .toolbar-right > [data-reminder-window]:not([hidden]) {
-    flex: 0 0 100%;
-  }
+.renewal-status-toolbar {
+  margin-inline: 10px;
+  padding-inline: calc(var(--panel-padding-inline) - 10px);
+  flex-wrap: nowrap;
+  gap: var(--control-gap);
+  overflow-x: auto;
 }
+.renewal-status-toolbar > [data-renewal-filters]:not([hidden]) { display: contents; }
+.renewal-status-toolbar .search-field {
+  flex: 0 1 220px;
+  width: 220px;
+  min-width: 148px;
+  margin-inline-start: auto;
+}
+.renewal-status-toolbar .list-filter-field select {
+  flex: none;
+  width: auto;
+  field-sizing: content;
+  min-width: 6em;
+}
+.renewal-status-toolbar.toolbar--inline > .toolbar-right {
+  flex: none;
+  flex-wrap: nowrap;
+  margin-inline-start: 0;
+}
+.renewal-status-toolbar .toolbar-right .button { padding-inline: var(--control-gap); }
+.renewal-status-toolbar .renewal-selection-actions { flex-wrap: nowrap; }
+.renewal-status-toolbar .button { white-space: nowrap; }
+
 .renewal-progress-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 11rem;
@@ -229,7 +266,22 @@
   outline-offset: 1px;
 }
 
+@media (min-width: 901px) and (max-width: 1440px) {
+  .renewal-status-toolbar { padding-inline: 2px; }
+  .renewal-status-toolbar,
+  .renewal-status-toolbar > .toolbar-right,
+  .renewal-status-toolbar .renewal-selection-actions { gap: 4px; }
+}
+@media (min-width: 901px) and (max-width: 1350px) {
+  .renewal-status-toolbar .footnote { font-size: 12px; }
+  .renewal-status-toolbar .list-filter-field { gap: 4px; }
+}
+@media (max-width: 360px), (min-width: 901px) and (max-width: 1350px) {
+  .renewal-period-controls > .button { gap: 2px; padding-inline: 2px; font-size: 12px; }
+  .renewal-period-controls .tab-count { padding-inline: 1px; }
+}
 @media (max-width: 900px) {
+  .renewal-status-toolbar .search-field { min-width: 184px; }
   .renewal-period-controls > .button { min-height: 44px; }
   .renewal-progress-layout { display: flex; flex-direction: column; align-items: stretch; }
   .renewal-progress-navigation { container: renewal-navigation / inline-size; }
