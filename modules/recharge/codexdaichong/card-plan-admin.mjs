@@ -6,11 +6,14 @@ export const cardPlanImportFields = '<fieldset id="card_pool_import_plans" class
   '<legend>允许套餐</legend><div class="card-plan-grid">' + choices + '</div></fieldset>';
 
 export const cardPlanToolbar = `
-  <div class="card-plan-toolbar" aria-label="银行卡套餐规则" role="group">
+  <section class="card-plan-toolbar" aria-labelledby="card_pool_list_title" tabindex="0">
+    <h2 class="panel-title" id="card_pool_list_title">银行卡列表</h2>
     <button type="button" class="btn btn-secondary" id="card_plan_mode" aria-pressed="false" disabled>仅使用已设置套餐的卡</button>
     <button type="button" class="btn btn-secondary" id="card_plan_batch" disabled>批量设置套餐</button>
     <span id="card_plan_summary" role="status">正在读取套餐设置…</span>
-  </div>
+  </section>`;
+
+export const cardPlanEditor = `
   <dialog class="card-plan-editor" id="card_plan_editor" aria-labelledby="card_plan_title" aria-describedby="card_plan_result">
     <form>
       <header class="card-plan-editor-header">

@@ -1026,6 +1026,50 @@ class WebsiteReleaseTests(unittest.TestCase):
     @patch("release.require_presentation_approval")
     @patch("release.require_ancestor")
     @patch("release.git")
+    def test_card_list_toolbar_release_requires_exact_sources_and_manifest(self, git, ancestor, approval):
+        files = remote.CARD_LIST_TOOLBAR_PRESENTATION_FILES
+        manifest = release.CARD_LIST_TOOLBAR_MANIFEST_PATH
+        approved = (*files, manifest)
+        git.return_value = "\n".join(approved)
+        self.assertEqual(release.require_website_scope(BASE, TARGET), ("cardListToolbarPresentation", approval.return_value))
+        approval.assert_called_once_with(BASE, TARGET, release.CARD_LIST_TOOLBAR_MANIFEST, files)
+        self.assertIn(manifest, git.call_args.args)
+        for flag in ("include_adapter", "include_core", "partner_api"):
+            with self.assertRaises(RuntimeError):
+                release.require_website_scope(BASE, TARGET, **{flag: True})
+        for changed in (files, approved[1:], (*approved, "modules/recharge/codexdaichong/shell.js")):
+            git.return_value = "\n".join(changed)
+            with self.assertRaisesRegex(RuntimeError, "recharge_core_or_runtime_changed"):
+                release.require_website_scope(BASE, TARGET)
+        self.assertEqual(approval.call_count, 1)
+
+    def test_card_list_toolbar_release_checks_mount_digest_and_exact_routes(self):
+        before, after = "a" * 64, "b" * 64
+        scope = "cardListToolbarPresentation"
+        files, routes = remote.PRESENTATION_SCOPES[scope]
+        baseline = {"assetsSha256": before, "mountedAssets": {"available": True, "sha256": before}}
+        plan = {"before": baseline, scope: {"beforeAssetsSha256": before, "assetsSha256": after},
+                "files": dict.fromkeys(files, "c" * 64)}
+        self.assertEqual(remote.require_asset_digest(plan, after), scope)
+        with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_mount_mismatch"):
+            remote.require_asset_digest(plan | {"before": baseline | {"mountedAssets": {}}}, after)
+        with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_approval_mismatch"):
+            remote.require_asset_digest(plan, "d" * 64)
+        self.assertEqual(routes, {"/admin", "/shell.css"})
+        original = {route: {"body": "old"} for route in routes | {"/admin.js"}}
+        updated = original | {route: {"body": "new"} for route in routes}
+
+        def bundle(assets):
+            return Mock(read_bytes=lambda: json.dumps({"revision": remote.PINNED_UPSTREAM, "assets": assets}).encode())
+
+        remote.verify_presentation_bundle(bundle(original), bundle(updated), routes)
+        for changed in (updated | {"/admin.js": {"body": "new"}}, updated | {"/shell.css": original["/shell.css"]}):
+            with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_bundle_scope_mismatch"):
+                remote.verify_presentation_bundle(bundle(original), bundle(changed), routes)
+
+    @patch("release.require_presentation_approval")
+    @patch("release.require_ancestor")
+    @patch("release.git")
     def test_checkout_diagnostic_release_verifies_its_four_presentation_sources(self, git, ancestor, approval):
         files = remote.CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES
         git.return_value = "\n".join(files)

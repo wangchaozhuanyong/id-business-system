@@ -15,11 +15,14 @@
     registrar: '邮箱及账号登记、查询邮件验证码、保存动态验证码',
     employee: '快速操作与本人负责的客户业务'
   };
+  function isKnownActor(candidate) {
+    return candidate?.id && Object.hasOwn(roles, candidate.role);
+  }
   let actor = null;
   if (required && actorMeta) {
     try {
       const candidate = JSON.parse(decodeURIComponent(actorMeta));
-      if (candidate?.id && Object.hasOwn(roles, candidate.role)) actor = candidate;
+      if (isKnownActor(candidate)) actor = candidate;
     } catch {
       // An invalid identity must open the login screen.
     }
@@ -29,6 +32,11 @@
     status: setupEmail ? 'setup' : !required ? 'unconfigured' : actor ? 'signed-in' : 'signed-out',
     actor
   });
+  const restoredEntry = window.history.state?.idSessionRestore === true;
+  if (restoredEntry) {
+    const { idSessionRestore, ...otherState } = window.history.state;
+    window.history.replaceState(otherState, '');
+  }
   let reloading = false;
   const $ = (selector, root = document) => root.querySelector(selector);
 
@@ -173,7 +181,12 @@
       </aside>
       <div class="local-auth-panel"><section class="local-auth-card">
         <p class="local-auth-kicker">${setup ? 'WELCOME' : 'WELCOME BACK'}</p>
-        <h1 id="local-auth-title">${setup ? '设置本机管理员密码' : '登录工作台'}</h1>
+        <h1 id="local-auth-title">${setup ? '设置本机管理员密码' : '工作台'}</h1>
+        ${setup ? '' : `<div id="local-auth-session-check">
+          <p role="status">正在检查此设备的登录状态…</p>
+          <button type="button" class="button" hidden>重新检查</button>
+        </div>`}
+        <template id="local-auth-login-template">
         <p class="local-auth-intro">${setup ? '首次设置只在本机进行。完成后可在系统设置中管理员工。' : '受控内部业务中枢 · 仅限授权人员登录访问。'}</p>
         <form class="local-auth-form">
           <fieldset class="local-auth-stage" id="local-auth-credentials">
@@ -210,7 +223,7 @@
           <p class="local-auth-reason" role="status" hidden></p>
           <p class="local-auth-error" role="alert" hidden></p>
           <button type="submit" class="button primary">${submitLabel}</button>
-        </form>
+        </form></template>
         <button type="button" class="local-auth-tool-entry" id="local-auth-totp-open" aria-haspopup="dialog" aria-controls="local-auth-totp-dialog">
           <span class="local-auth-tool-icon"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="3" width="14" height="18" rx="3"/><path d="M9 8h6M9 12h2m2 0h2m-6 4h2m2 0h2"/></svg></span>
           <span class="local-auth-tool-label">2FA 验证码查询<span>无需登录，即时获取动态验证码</span></span>
@@ -234,15 +247,62 @@
         <p class="local-auth-totp-privacy"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4.5 6v6c0 4.5 7.5 9 7.5 9s7.5-4.5 7.5-9V6z"/><path d="m8.5 12 2.3 2.3 4.7-4.7"/></svg>仅在此浏览器计算</p>
       </dialog>`;
     document.body.append(gate);
-    window.IDTitleHelp?.attach($('#local-auth-title', gate), $('.local-auth-intro', gate));
     bindLoginTotp(gate);
+    const openForm = reason => {
+      $('#local-auth-session-check', gate)?.remove();
+      const template = $('#local-auth-login-template', gate);
+      template.replaceWith(template.content);
+      const title = $('#local-auth-title', gate);
+      if (!setup) title.textContent = '登录工作台';
+      window.IDTitleHelp?.attach(title, $('.local-auth-intro', gate));
+      bindLoginForm(gate, setup, submitLabel, reason);
+    };
+    if (setup) openForm();
+    else checkSavedSession(gate, openForm);
+  }
+
+  function checkSavedSession(gate, openForm) {
+    const panel = $('#local-auth-session-check', gate);
+    const status = $('[role="status"]', panel);
+    const retry = $('button', panel);
+    async function check(alreadyRestored) {
+      retry.hidden = true;
+      status.textContent = '正在检查此设备的登录状态…';
+      let result;
+      try {
+        result = await request('session');
+      } catch {
+        // A failed read cannot establish that the session has expired.
+      }
+      if (result?.configured === true && result.actor === null) {
+        openForm(result.reason);
+        return;
+      }
+      if (result?.configured === true && isKnownActor(result.actor)) {
+        if (!alreadyRestored) {
+          // The first cross-site navigation may omit the Strict cookie. Fetch the workspace from this origin.
+          window.history.replaceState({ ...window.history.state, idSessionRestore: true }, '');
+          reload();
+          return;
+        }
+        status.textContent = '当前设备已登录，工作台暂未打开。请重试。';
+      } else {
+        status.textContent = '暂时无法确认登录状态，请检查网络后重试。';
+      }
+      retry.hidden = false;
+    }
+    retry.addEventListener('click', () => void check(false));
+    void check(restoredEntry);
+  }
+
+  function bindLoginForm(gate, setup, submitLabel, sessionReason) {
     const help = document.createElement('span');
     help.textContent = '勾选后从登录起保持10天，闲置或关闭浏览器不会提前到期。取消勾选时登录有效期为8小时。';
     window.IDTitleHelp?.attach($('.local-auth-remember', gate), help, 'field-help');
     const reasons = { expired: '登录已到期，请重新登录。', revoked: '账号密码、权限或启用状态已变化，请重新登录。',
       invalid: '登录已失效或已在其他设备退出，请重新登录。', logout: '已安全退出登录。',
       network: '当前网络尚未获准访问，请连接允许的网络。', device: '这台设备的登录许可已变化，请重新登录。' };
-    const reason = reasons[new URL(window.location.href).searchParams.get('auth_reason')];
+    const reason = reasons[new URL(window.location.href).searchParams.get('auth_reason')] || reasons[sessionReason];
     if (reason) { $('.local-auth-reason', gate).textContent = reason; $('.local-auth-reason', gate).hidden = false; }
 
     const form = $('.local-auth-form', gate);
@@ -390,7 +450,7 @@
         }
       }
     });
-    (setup ? password : email).focus();
+    if (!gate.querySelector('dialog[open]') && document.activeElement === document.body) (setup ? password : email).focus();
   }
 
   function bindLoginTotp(gate) {

@@ -255,11 +255,14 @@ test('interaction sounds use real browser audio after opt-in', { timeout: 50_000
         .replace('<head>', '<head><meta name="id-local-auth" content="required">')
         .replace('    <script src="./prototype.js', '    <script src="/local-auth.js" defer></script>\n    <script src="./prototype.js');
       await page.route(appUrl, route => route.fulfill({ body: signedOut, contentType: 'text/html' }));
+      const sessionUrl = appUrl + 'api/local/auth/session';
+      await page.route(sessionUrl, route => route.fulfill({ json: { configured: true, actor: null } }));
       await page.reload();
-      await page.getByRole('heading', { name: '登录工作台' }).waitFor();
+      await page.getByLabel('登录邮箱', { exact: true }).waitFor();
       assert.deepEqual(await page.evaluate(() => window.audioFeedback), { contexts: 0, tones: [] });
 
       await page.unroute(appUrl);
+      await page.unroute(sessionUrl);
       await page.reload();
       await page.locator('#sidebar .nav-heading').first().waitFor();
       assert.equal(await controls.getAttribute('data-enabled'), 'false');

@@ -319,6 +319,29 @@ test('完整银行卡入口在深浅主题、宽窄屏和空结果下保持可�
         const { page, state } = fixture;
         const frame = await open(page);
         if (theme === 'dark') await toggleDesignTheme(page);
+        const listHeader = frame.locator('#cards [data-switch-panel="local"] > .panel-header');
+        const headerLayout = await listHeader.evaluate(header => {
+          const strip = header.querySelector('.card-plan-toolbar');
+          const summary = strip.querySelector('[role="status"]');
+          const importButton = header.querySelector(':scope > button');
+          const bounds = node => node.getBoundingClientRect();
+          const center = node => bounds(node).top + bounds(node).height / 2;
+          const offsets = [...strip.children].map(node => Math.abs(center(node) - center(importButton)));
+          const scrolls = strip.scrollWidth > strip.clientWidth;
+          strip.scrollLeft = strip.scrollWidth;
+          const endReachable = bounds(summary).right <= bounds(strip).right + 1;
+          strip.scrollLeft = 0;
+          return { offsets, scrolls, endReachable,
+            importVisible: bounds(importButton).left >= bounds(strip).right && bounds(importButton).right <= innerWidth,
+            startVisible: bounds(strip.querySelector('h2')).left >= bounds(strip).left - 1 };
+        });
+        assert(headerLayout.offsets.every(offset => offset <= 2), '列表标题、套餐操作、说明与导入按钮必须同排居中');
+        assert(headerLayout.importVisible && headerLayout.startVisible && headerLayout.endReachable,
+          '导入按钮固定可见，横向滑动可读完整说明');
+        if (width >= 1440) assert.equal(headerLayout.scrolls, false, '宽屏直接展示全部操作');
+        if (width <= 390) assert.equal(headerLayout.scrolls, true, '窄屏只在标题与套餐操作区域横向滚动');
+        if (output && theme === 'light' && width === 1920)
+          await listHeader.screenshot({ path: join(output, 'card-list-header.png') });
         const tabs = poolTabs(page);
         const toolbar = await tabs.evaluate(nav => {
           const refresh = nav.nextElementSibling;
