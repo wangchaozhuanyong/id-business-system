@@ -214,7 +214,11 @@ test('订单统计页签共用右侧操作区，切换时表格紧接页签栏',
       const tabs = page.getByRole('tablist', { name: '订单统计视图' });
       const bar = tabs.locator('..');
       const actions = bar.locator('[data-page-actions]');
-      const height = (await bar.boundingBox()).height;
+      await tabs.waitFor();
+      await actions.getByRole('heading', { name: '套餐成本', exact: true }).waitFor();
+      await settle(page);
+      const height = await bar.evaluate(node => node.getBoundingClientRect().height);
+      assert(height > 0);
       const sameCenter = (a, b) => Math.abs(a.y + a.height / 2 - b.y - b.height / 2) <= 1;
       for (const [tab, title] of [['统计概览', '套餐成本'], ['费用拆分', '费用构成'], ['来源订单', ''],
         ['计算缺项', ''], ['汇率来源', '订单汇率来源']]) {
