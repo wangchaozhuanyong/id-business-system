@@ -136,6 +136,13 @@
   .finance-date-filter .field { flex: 1 1 130px; }
 }
 
+.renewal-period-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--control-gap);
+  padding: 0 var(--panel-padding-inline) var(--toolbar-padding-block);
+}
+.renewal-period-controls .tab-count { margin-inline-start: 0; }
 .renewal-toolbar {
   align-items: center;
   padding-block: var(--toolbar-padding-block);
@@ -210,7 +217,8 @@
   justify-content: flex-start;
   padding-inline: 11px;
 }
-.renewal-navigation-items > .button:is([aria-current="page"], [aria-selected="true"]) {
+.renewal-navigation-items > .button:is([aria-current="page"], [aria-selected="true"]),
+.renewal-period-controls > .button[aria-pressed="true"]:not(:disabled) {
   border-color: var(--primary);
   background: var(--primary-soft);
   color: var(--primary);
@@ -222,6 +230,7 @@
 }
 
 @media (max-width: 900px) {
+  .renewal-period-controls > .button { min-height: 44px; }
   .renewal-progress-layout { display: flex; flex-direction: column; align-items: stretch; }
   .renewal-progress-navigation { container: renewal-navigation / inline-size; }
   .renewal-navigation-label { padding-inline: 0; }

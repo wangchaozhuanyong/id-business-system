@@ -1996,6 +1996,7 @@ td.table-number-with-help > .mobile-record-value {
   width: auto;
 }
 .commerce-picker-popover,
+.order-customer-suggestions,
 .fx-currency-popover {
   position: fixed;
   inset: auto;
@@ -5454,6 +5455,15 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
   min-width: 0;
   width: 100%;
 }
+.order-customer-suggestions {
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.order-customer-suggestion > span {
+  display: block;
+  color: var(--secondary);
+  font-size: 12px;
+}
 .order-customer-status {
   grid-column: 1 / -1;
   font-size: 13px;
@@ -5504,7 +5514,8 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
 }
 @media (max-width: 900px) {
   #commerce-order-form .order-customer-fields .customer-tag-picker > summary,
-  .order-customer-status .button { min-height: 44px; }
+  .order-customer-status .button,
+  .order-customer-suggestion { min-height: 44px; }
 }
 .commerce-entry-layout #commerce-order-form [data-commerce-field='cardTypeId'] .field-row > select {
   flex-basis: min(100%, 140px);

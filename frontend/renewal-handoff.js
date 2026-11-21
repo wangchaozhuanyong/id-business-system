@@ -26,6 +26,7 @@
   const dateValue = date => dates.format(date).replace(' ', 'T');
   const currentRole = () => A.state.actor?.role;
   const canViewOrder = () => ['admin', 'super'].includes(currentRole());
+  const expiryPeriods = { upcoming: '即将到期', expired: '已到期' };
   const handledPeriods = ['refused', 'renewed'];
   const selectableOrder = order => order.canSubmitToFinance !== false && !handledPeriods.includes(order.reminderState);
   const originalCardText = row => row.order.payment === '银行卡'
@@ -57,6 +58,13 @@
 
   const button = (label, action, id = '', kind = '') =>
     A.button(label, 'renewal-handoff-' + action, kind, '', id ? 'data-id="' + E(id) + '"' : '');
+  function periodControls(current) {
+    return '<div class="renewal-period-controls" role="group" aria-label="到期状态">' +
+      Object.entries(expiryPeriods).map(([period, label]) => '<button type="button" class="button" ' +
+        'data-action="renewal-handoff-period" data-renewal-period="' + period + '" aria-pressed="' + (period === current) +
+        '" disabled>' + label + ' <span class="tab-count" data-renewal-period-count>—</span></button>').join('') + '</div>';
+  }
+
   function progressNavigation(route, auditTarget) {
     const finance = route === financeRoute;
     const currentStatus = finance && filters(route).status;
@@ -89,7 +97,7 @@
     const help = finance ? '接手后按提交备注办理续费，核对实际付款并登记金额及用卡，交回业务人员。'
       : finishing ? '根据财务已登记的实付资料，补齐客户实收和新的订阅周期。'
       : route === declinedRoute ? '查看已确认拒绝续费的原订单、登记人和登记时间。'
-      : '选订单默认显示达到提醒时间且尚未到期的订阅。委托财务办理时填写备注。客户确认不续费时可勾选归档。线下已完成的续费可直接登记。';
+      : '选订单默认显示即将到期的订阅，顶部数量按当前筛选统计。左侧角标是提醒总数，含办理中的订单。委托财务办理时填写备注。客户确认不续费时可勾选归档。线下已完成的续费可直接登记。';
     const back = finishing ? '<a class="button" href="#/workspace/renewals/ready">返回待补资料</a>' : '';
     const submit = route === staffRoot
       ? '<div class="renewal-selection-actions" role="group" aria-label="处理所选订单">' +
@@ -104,6 +112,7 @@
       (auditTarget ? button('查看全部续费', 'show-all', '', 'primary') : '') + '</div></div>';
     const panel = '<section class="panel staff-workspace" data-renewal-handoff>' +
       toolbar +
+      (route === staffRoot && !auditTarget ? periodControls(filters(route).period) : '') +
       (route === staffRoot ? '<p class="panel-body inline-notice warning" role="status" data-renewal-finance-unavailable hidden></p>' : '') +
       '<p class="panel-body inline-notice warning" role="status" data-renewal-error hidden></p>' +
       '<div data-renewal-body' + (finance && !auditTarget ? ' id="renewal-finance-orders" role="tabpanel" aria-labelledby="renewal-status-' +
@@ -122,24 +131,33 @@
     return '';
   }
 
-  function rowsFor(view) {
+  function listSnapshot(view, now) {
     const query = view.filter.query.trim().toLowerCase();
     const choosing = view.route === staffRoot;
-    const rows = choosing ? view.data.candidates.map(order => ({ id: order.id, order })) : view.data.items;
-    if (view.auditId) return rows.filter(row => row.id === view.auditId);
-    const now = Date.now();
-    return rows.filter(row => {
+    const source = choosing ? view.data.candidates.map(order => ({ id: order.id, order })) : view.data.items;
+    const counts = { upcoming: 0, expired: 0 };
+    if (view.auditId) return { rows: source.filter(row => row.id === view.auditId), counts };
+    const rows = [];
+    for (const row of source) {
       const { order } = row;
       const inStage = view.finance ? financeStages[row.status] === view.filter.status : staffRoot + staffStages[row.status] === view.route;
-      return (choosing || view.route === declinedRoute || inStage) && (!view.filter.product || order.product === view.filter.product) &&
-        (!choosing || reminderPeriod(order, now) === view.filter.period) &&
-        (!query || [order.number, order.account, order.customer, order.wechat, order.contactSearch, order.owner, row.submittedBy, row.declinedBy]
-          .some(value => String(value || '').toLowerCase().includes(query)));
-    }).sort((a, b) => view.route === declinedRoute
+      if (!choosing && view.route !== declinedRoute && !inStage) continue;
+      if (view.filter.product && order.product !== view.filter.product) continue;
+      if (query && ![order.number, order.account, order.customer, order.wechat, order.contactSearch, order.owner, row.submittedBy, row.declinedBy]
+        .some(value => String(value || '').toLowerCase().includes(query))) continue;
+      if (choosing) {
+        const period = reminderPeriod(order, now);
+        if (Object.hasOwn(counts, period)) counts[period]++;
+        if (period !== view.filter.period) continue;
+      }
+      rows.push(row);
+    }
+    rows.sort((a, b) => view.route === declinedRoute
       ? (subscriptionTime(b.declinedAt) || 0) - (subscriptionTime(a.declinedAt) || 0) || a.id.localeCompare(b.id)
       : choosing ? String(a.order.expiry || '').localeCompare(String(b.order.expiry || '')) ||
         a.order.number.localeCompare(b.order.number) : String(b.withdrawnAt || b.completedAt || b.paidAt || b.submittedAt)
           .localeCompare(String(a.withdrawnAt || a.completedAt || a.paidAt || a.submittedAt)));
+    return { rows, counts };
   }
 
   function rowActions(view, row) {
@@ -159,14 +177,12 @@
       ? '<a class="button compact" href="#/orders/detail/' + E(encodeURIComponent(row.newOrderId)) + '">查看新订单</a>' : '—';
   }
 
-  function list(view) {
+  function list(view, rows, now) {
     const choosing = view.route === staffRoot;
     const canSelect = choosing && !handledPeriods.includes(view.filter.period);
-    const rows = rowsFor(view);
     const { pageSize } = view.filter;
     view.filter.page = Math.max(1, Math.min(view.filter.page, Math.ceil(rows.length / pageSize)));
     const start = (view.filter.page - 1) * pageSize;
-    const now = Date.now();
     const columns = [
       ['orderNo', '原订单', row => E(row.order.number || '—')],
       ['customer', '客户', row => E(row.order.customer)],
@@ -244,8 +260,9 @@
   function drawList(view) {
     const host = $('[data-renewal-list]', view.host);
     if (!host) return;
+    const now = Date.now();
+    const { rows, counts } = listSnapshot(view, now);
     if (view.route === staffRoot) {
-      const now = Date.now();
       const candidates = new Set();
       view.nextExpiry = Infinity;
       for (const order of view.data.candidates) {
@@ -254,8 +271,16 @@
         if (period === 'upcoming') view.nextExpiry = Math.min(view.nextExpiry, subscriptionTime(order.expiry));
       }
       for (const id of selected()) if (!candidates.has(id)) selected().delete(id);
+      for (const control of view.host.querySelectorAll('[data-renewal-period]')) {
+        const period = control.dataset.renewalPeriod;
+        control.setAttribute('aria-pressed', String(period === view.filter.period));
+        const count = $('[data-renewal-period-count]', control);
+        const text = counts[period].toLocaleString('zh-CN');
+        if (count.textContent !== text) count.textContent = text;
+        control.disabled = false;
+      }
     }
-    host.innerHTML = list(view);
+    host.innerHTML = list(view, rows, now);
     selectionButton(view);
     updateCountdowns(view);
   }
@@ -346,9 +371,8 @@
       E(view.filter.query) + '"></div>' +
       '<div class="list-filter-fields"><div class="list-filter-field"><label for="renewal-handoff-product">产品</label><select id="renewal-handoff-product">' +
       A.options([['', '全部产品'], 'GPT', 'Claude Pro', 'Claude Max', 'Gemini', 'Grok'], view.filter.product) + '</select></div>' +
-      (view.route === staffRoot ? '<div class="list-filter-field"><label for="renewal-handoff-period">订单状态</label><select id="renewal-handoff-period">' +
-        A.options([['upcoming', '即将到期'], ['expired', '已到期'],
-          ...(canViewOrder() ? [['refused', '已拒续'], ['renewed', '已续费']] : [])],
+      (view.route === staffRoot && canViewOrder() ? '<div class="list-filter-field"><label for="renewal-handoff-period">订单状态</label><select id="renewal-handoff-period">' +
+        A.options([...Object.entries(expiryPeriods), ['refused', '已拒续'], ['renewed', '已续费']],
           view.filter.period) + '</select></div>' : '') + '</div>';
     const reminder = $('[data-reminder-window]', view.host);
     if (reminder) {
@@ -701,6 +725,10 @@
     const command = action.slice('renewal-handoff-'.length);
     if (command === 'refresh') await load(view, true);
     else if (command === 'remark-settings') window.IDRenewalRemarks?.settings(node);
+    else if (command === 'period') {
+      const period = node.dataset.renewalPeriod;
+      if (view.route === staffRoot && view.data && Object.hasOwn(expiryPeriods, period)) setPeriod(view, period);
+    }
     else if (['order-details', 'order-actions'].includes(command)) {
       const order = view.route === staffRoot && canViewOrder() &&
         view.data?.candidates.find(candidate => candidate.id === node.dataset.id);
@@ -795,6 +823,15 @@
     return true;
   }
 
+  function setPeriod(view, period) {
+    if (view.filter.period === period) return;
+    view.filter.period = period;
+    view.filter.page = 1;
+    const control = $('#renewal-handoff-period', view.host);
+    if (control) control.value = period;
+    drawList(view);
+  }
+
   function onChange(node) {
     const view = active;
     if (!view) return false;
@@ -803,8 +840,12 @@
       updateCardFields(node.form, node.value === 'pool');
       return true;
     }
-    if (['renewal-handoff-product', 'renewal-handoff-period'].includes(node.id)) {
-      view.filter[node.id.split('-').at(-1)] = node.value;
+    if (node.id === 'renewal-handoff-period') {
+      setPeriod(view, node.value);
+      return true;
+    }
+    if (node.id === 'renewal-handoff-product') {
+      view.filter.product = node.value;
       view.filter.page = 1;
       drawList(view);
       return true;
