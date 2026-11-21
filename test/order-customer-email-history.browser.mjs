@@ -58,8 +58,8 @@ test('订单按 GPT、Claude 隔离客户历史邮箱，支持切换、手填和
   }
   async function customer(id) {
     if (await page.locator('#commerce-customerName').isVisible()) {
-      // Re-entering the name starts an explicit lookup, even for the current customer.
-      await page.locator('#commerce-customerName').fill('');
+      const reselect = page.locator('#order-customer-status [data-action="commerce-order-customer-reselect"]');
+      if (await reselect.isVisible()) await reselect.click();
       await chooseOrderCustomer(page, fixture.commerce.data.customers.find(row => row.id === id));
       return;
     }

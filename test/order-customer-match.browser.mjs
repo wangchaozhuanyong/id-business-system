@@ -123,7 +123,10 @@ test('四个录单入口匹配客户和历史账号，随单建档未提交不�
           if (field === wechat) {
             await source.selectOption({ index: 1 });
             if (await source.inputValue() === '网站') await source.selectOption({ index: 2 });
-            assert.equal(await select.inputValue(), 'known', '只改来源时继续关联已匹配客户');
+            assert.equal(await select.inputValue(), '', '只改来源也须明确选用档案或更新');
+            await choose('known').click();
+            await selected('known');
+            await status.getByRole('button', { name: '更新客户资料' }).click();
             assert.equal(await status.getAttribute('data-kind'), 'calibrate');
             assert.equal(await choose('known').count(), 0);
           }
@@ -175,8 +178,10 @@ test('四个录单入口匹配客户和历史账号，随单建档未提交不�
         Math.abs(layout.right - layout.gridRight) <= 1, '换号提醒在联系方式下方独占整行，两侧与表单齐平');
       await choose('known').click();
       await selected('known');
-      assert.equal(await wechat.inputValue(), 'changed_' + slug);
+      assert.equal(await wechat.inputValue(), 'known_wechat');
       assert.equal(await email.inputValue(), history);
+      await status.getByRole('button', { name: '更新客户资料' }).click();
+      assert.equal(await wechat.inputValue(), 'changed_' + slug);
       if (slug === 'gpt') {
         await page.evaluate(() => { location.hash = '#/customers/new'; });
         await page.locator('#commerce-contact-name').waitFor();
@@ -193,7 +198,7 @@ test('四个录单入口匹配客户和历史账号，随单建档未提交不�
         assert.equal(writes.length, 0);
         fail = true;
         await submit.click();
-        await dialog.getByRole('button', { name: '确认校准并提交' }).click();
+        await dialog.getByRole('button', { name: '确认更新并提交订单' }).click();
         await page.locator('#toast').getByText(/模拟拒绝订单/).waitFor();
         assert.equal(fixture.commerce.data.customers.find(row => row.id === 'known').wechat, 'known_wechat');
         assert.equal(await name.inputValue(), '合成老客户');
@@ -202,7 +207,7 @@ test('四个录单入口匹配客户和历史账号，随单建档未提交不�
         assert.equal(await form.locator('#commerce-notes').inputValue(), '保留本单备注');
         fail = false;
         await submit.click();
-        await dialog.getByRole('button', { name: '确认校准并提交' }).click();
+        await dialog.getByRole('button', { name: '确认更新并提交订单' }).click();
         await success();
         const updated = fixture.commerce.data.customers.find(row => row.id === 'known');
         assert.equal(updated.wechat, 'changed_gpt');
@@ -222,6 +227,25 @@ test('四个录单入口匹配客户和历史账号，随单建档未提交不�
         assert.equal(await phonePrefix.inputValue(), '1');
         assert.equal(await phone.inputValue(), '2025550101');
         assert.match(await status.innerText(), /冲突|不同客户|多位客户/);
+        assert.match(await status.innerText(), /微信「first」匹配到 合成同名/);
+        assert.match(await status.innerText(), /联系电话.*匹配到 合成老客户/);
+        await status.getByRole('button', { name: '修改联系电话' }).click();
+        assert(await phone.evaluate(input => document.activeElement === input));
+        await fresh();
+
+        const stored = structuredClone(fixture.commerce.data.customers.find(row => row.id === 'known'));
+        await wechat.fill(stored.wechat);
+        await name.fill('合成');
+        await choose('known').click();
+        assert.equal(await name.inputValue(), stored.name);
+        await fillOrder();
+        await submit.click();
+        await success();
+        assert.equal(await dialog.count(), 0, '只采用档案时无更新客户确认');
+        assert.equal(writes.length, 3);
+        assert.equal(writes.at(-1).data.orders[0].customerMatchReview.decision, 'matched');
+        assert.deepEqual(fixture.commerce.data.customers.find(row => row.id === 'known'), stored, '姓名片段和档案版本均未写回');
+        assert.equal(fixture.commerce.data.orders[0].customerId, 'known');
         await fresh();
       }
       const freshName = slug === 'gemini' ? '合成同名' : '随单客户 ' + slug;
