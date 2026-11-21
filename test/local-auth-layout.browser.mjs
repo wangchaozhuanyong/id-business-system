@@ -11,7 +11,7 @@ test('login redesign keeps fields, setup, errors, 2FA entry and pending submits 
   const browser = await chromium.launch();
   t.after(() => browser.close());
   const context = await browser.newContext({ serviceWorkers: 'block' });
-  const requests = await interceptDesign(context, { localFixtures: {}, skipRechargeAssets: true });
+  const requests = await interceptDesign(context, { localFixtures: {}, localAuthUi: true, skipRechargeAssets: true });
   let setup = false, loginCalls = 0, pending;
   const errors = [], rows = [];
   const output = process.env.ID_AUTH_QA_OUTPUT;

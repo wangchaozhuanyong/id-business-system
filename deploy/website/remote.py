@@ -62,6 +62,11 @@ CARD_FIRST_PAINT_PRESENTATION_FILES = (
     "modules/recharge/codexdaichong/card-plan-admin.mjs",
     "modules/recharge/codexdaichong/shell.js",
 )
+CARD_LIST_TOOLBAR_PRESENTATION_FILES = (
+    "modules/recharge/codexdaichong/assets.mjs",
+    "modules/recharge/codexdaichong/card-plan-admin.mjs",
+    "modules/recharge/codexdaichong/shell.css",
+)
 CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES = (
     "modules/recharge/codexdaichong/assets.mjs",
     "modules/recharge/codexdaichong/routing-admin-ui.mjs",
@@ -84,6 +89,7 @@ PRESENTATION_SCOPES = {
     "cardPlanPresentation": (CARD_PLAN_PRESENTATION_FILES, {"/admin", "/admin.js", "/shell.css"}),
     "cardNumberPresentation": (CARD_NUMBER_PRESENTATION_FILES, {"/admin", "/admin.js", "/shell.css"}),
     "cardFirstPaintPresentation": (CARD_FIRST_PAINT_PRESENTATION_FILES, {"/admin.js", "/shell.js"}),
+    "cardListToolbarPresentation": (CARD_LIST_TOOLBAR_PRESENTATION_FILES, {"/admin", "/shell.css"}),
     "checkoutDiagnosticPresentation": (CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES, {"/admin", "/admin.js", "/shell.css"}),
     "securityPresentation": (SECURITY_PRESENTATION_FILES, {"/admin.js"}),
     "taskHistoryPresentation": (TASK_HISTORY_PRESENTATION_FILES, {"/admin", "/admin.js"}),
@@ -93,6 +99,7 @@ PRESENTATION_SCOPES = {
 PRESENTATION_MOUNT_ERRORS = {
     "cardNumberPresentation": "card_number_presentation_mount_mismatch",
     "cardFirstPaintPresentation": "recharge_presentation_mount_mismatch",
+    "cardListToolbarPresentation": "recharge_presentation_mount_mismatch",
 }
 ADAPTER_MOUNTS = ("modules", "deploy/recharge-core")
 LAUNCHERS = ("run-app", "app-entry.mjs", "check-app.mjs")

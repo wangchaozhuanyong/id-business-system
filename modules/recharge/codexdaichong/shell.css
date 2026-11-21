@@ -84,12 +84,23 @@
   font-size: 13px;
 }
 
+[data-recharge-view='admin'] .panel-header:has(> .card-plan-toolbar) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
 [data-recharge-view='admin'] .card-plan-toolbar {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 8px 12px;
+  gap: 12px;
+  overflow-x: auto;
   padding-block: var(--toolbar-padding-block, 12px);
+  white-space: nowrap;
+  outline-offset: -2px;
+}
+
+[data-recharge-view='admin'] .card-plan-toolbar > * {
+  flex: none;
 }
 
 [data-recharge-view='admin'] #card_plan_mode[aria-pressed='true'] {
@@ -99,10 +110,8 @@
 }
 
 [data-recharge-view='admin'] #card_plan_summary {
-  flex: 1 1 18rem;
   color: var(--text-secondary);
   font-size: 12px;
-  overflow-wrap: anywhere;
 }
 
 [data-recharge-view='admin'] .card-plan-cell {

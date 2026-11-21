@@ -14,7 +14,7 @@ test('signed-out 2FA queries stay local, expire correctly and clear on close or 
   const browser = await chromium.launch();
   t.after(() => browser.close());
   const context = await browser.newContext({ serviceWorkers: 'block', viewport: { width: 1440, height: 960 } });
-  const requests = await interceptDesign(context, { skipRechargeAssets: true });
+  const requests = await interceptDesign(context, { localAuthUi: true, skipRechargeAssets: true });
   await context.route(url => url.origin === origin && url.pathname === '/', async route => {
     const html = (await readFile(join(root, 'frontend/index.html'), 'utf8'))
       .replace('    <script src="./prototype.js', '    <script src="/local-auth.js" defer></script>\n    <script src="./prototype.js')
@@ -58,6 +58,8 @@ test('signed-out 2FA queries stay local, expire correctly and clear on close or 
   const notice = page.locator('#local-auth-totp-error');
   const copy = page.getByRole('button', { name: '复制验证码' });
   const waitForCode = expected => page.waitForFunction(value => document.querySelector('.local-auth-totp-code')?.textContent === value, expected);
+  await page.locator('.local-auth-form').waitFor();
+  assert.deepEqual(apiCalls, [{ path: '/api/local/auth/session', method: 'GET' }]);
   const storageBefore = await page.evaluate(() => [JSON.stringify(localStorage), JSON.stringify(sessionStorage)]);
 
   await opener.press('Enter');
@@ -177,7 +179,7 @@ test('signed-out 2FA queries stay local, expire correctly and clear on close or 
   assert.equal(await input.inputValue(), '');
   assert.equal(await code.textContent(), '—');
   assert.deepEqual(await page.evaluate(() => [JSON.stringify(localStorage), JSON.stringify(sessionStorage)]), storageBefore);
-  assert.deepEqual(apiCalls, [], 'anonymous calculator must never read saved-account or other business APIs');
+  assert.equal(apiCalls.length, 1, 'anonymous calculator must issue no API requests after the initial session check');
   assert.equal(leaked, false, 'test key is never sent in a request');
   assert.deepEqual(requests.external, []);
   assert.deepEqual(requests.unavailable, []);

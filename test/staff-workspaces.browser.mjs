@@ -392,7 +392,7 @@ test('sign-in waits for a human check and then requests the authenticator code',
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
   t.after(() => browser.close());
   const context = await browser.newContext({ viewport: { width: 320, height: 850 } });
-  await interceptDesign(context, { skipRechargeAssets: true });
+  await interceptDesign(context, { localAuthUi: true, skipRechargeAssets: true });
   let passwordChecks = 0, factorChecks = 0;
   await context.route(url => url.origin === origin && url.pathname === '/', async route => {
     const source = await readFile(root + '/frontend/index.html', 'utf8');
