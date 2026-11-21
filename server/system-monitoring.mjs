@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import {
   monitorRules, monitorChannels, monitorConfigDomain, monitorStateDomain, legacyRules, initialMonitoringConfig,
   taskMonitorRules, scopePattern, chatIdPattern, botTokenPattern, boundedCount, monitoringError, telegramText, sendTelegram,
-  monitorReasons, monitorCheckDetail, recoveryStageLabels, monitorReasonText
+  monitorReasons, monitorCheckDetail, recoveryStageLabels, monitorReasonText, normalizeRechargeRuntimeProbe
 } from './monitoring-policy.mjs';
 
 const limit = 1000;
@@ -153,8 +153,10 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
     const summary = code === 'digest' && input.summary &&
       ['success', 'failure', 'review', 'open'].every(key => boundedCount(input.summary[key]) !== null)
       ? Object.fromEntries(['success', 'failure', 'review', 'open'].map(key => [key, input.summary[key]])) : undefined;
-    const reason = typeof input.reason === 'string' && Object.hasOwn(monitorReasons, input.reason)
-      ? input.reason : undefined;
+    const runtimeProbe = code === 'recharge_runtime' && status === 'bad' && !external
+      ? normalizeRechargeRuntimeProbe(input.runtimeProbe, at) : undefined;
+    const reason = runtimeProbe?.reason ?? (typeof input.reason === 'string' && Object.hasOwn(monitorReasons, input.reason)
+      ? input.reason : undefined);
     const backup = code === 'recharge_backup' ? { reason,
       completeAt: Number.isSafeInteger(input.completeAt) && input.completeAt > 0 && input.completeAt <= at
         ? input.completeAt : null,
@@ -163,7 +165,7 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
     } : undefined;
     return { code, scope, status, at, external, confirmed: external && confirmed,
       accepted: external && input.accepted === true, externalId: external ? input.externalId : undefined,
-      count, summary, reason, backup, rule, key: code + ':' + scope };
+      count, summary, reason, backup, runtimeProbe, rule, key: code + ':' + scope };
   }
 
   function observe(inputs, audit) {
@@ -175,11 +177,15 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
     const changed = updateState(data => {
       let dirty = false;
       for (const item of current) {
-        const { key, code, scope, status, count, at, external, confirmed, accepted, externalId, rule, summary, reason, backup } = item;
+        const { key, code, scope, status, count, at, external, confirmed, accepted, externalId, rule, summary, reason, backup, runtimeProbe } = item;
         const last = nextSamples.get(key);
         if (last && at <= last.at && !confirmed) continue;
-        const streak = last?.status === status && at - last.at <= 3 * minute ? last.streak + 1 : 1;
-        if (!rule.oneShot && (!last || at > last.at)) nextSamples.set(key, { code, status, streak, at, count, reason, backup });
+        const continuesStreak = last?.status === status && at - last.at <= 3 * minute;
+        const streak = continuesStreak ? last.streak + 1 : 1;
+        const runtimeProbes = runtimeProbe
+          ? [...(continuesStreak ? last.runtimeProbes || [] : []), runtimeProbe].slice(-rule.failures) : undefined;
+        if (!rule.oneShot && (!last || at > last.at))
+          nextSamples.set(key, { code, status, streak, at, count, reason, backup, runtimeProbes });
         if (legacyRules.includes(code) && settings.legacy.phase !== 'managed') continue;
         if (rule.oneShot && !settings.rules[code] && ['digest', ...legacyRules].includes(code)) continue;
         const active = data.incidents.find(row => row.code === code && row.scope === scope &&
@@ -201,7 +207,8 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
         }
         if (status !== 'bad' || (!confirmed && streak < rule.failures)) continue;
         const id = externalId && !data.incidents.some(row => row.id === externalId) ? externalId : randomUUID();
-        const incident = { id, code, scope, at, count, summary, backup, external, externalAccepted: accepted };
+        const incident = { id, code, scope, at, count, summary, backup, external, externalAccepted: accepted,
+          ...(runtimeProbes && { runtimeProbes }) };
         data.incidents.unshift(incident);
         if (!external) enqueue(data, settings, incident, 'opened', at);
         dirty = true;
@@ -485,6 +492,11 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
       taskTail: taskMonitorRules.has(row.code) ? row.scope.slice(-6) : '',
       taskId: taskMonitorRules.has(row.code) ? row.scope : undefined,
       backup: row.backup && { detail: monitorReasonText(row.backup.reason, row.backup.stage), completeAt: row.backup.completeAt },
+      runtimeProbes: row.code === 'recharge_runtime' && Array.isArray(row.runtimeProbes)
+        ? row.runtimeProbes.slice(0, monitorRules.recharge_runtime.failures).map(probe => {
+          const { at, reason, durationMs } = normalizeRechargeRuntimeProbe(probe, row.at);
+          return { at, detail: monitorReasonText(reason), durationMs };
+        }) : undefined,
       count: row.count, summary: row.summary, at: row.at, resolvedAt: row.resolvedAt, ackAt: row.ackAt, ackBy: row.ackBy,
       queueFull: row.queueFull, external: row.external, deliveryStatus: incidentDelivery(data, row),
       accepted: row.externalAccepted || data.deliveries.some(item => item.incidentId === row.id &&

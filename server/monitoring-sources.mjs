@@ -1,7 +1,7 @@
 import { statfs } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname, isAbsolute, resolve } from 'node:path';
-import { beijingDay, monitorPath } from './monitoring-policy.mjs';
+import { beijingDay, monitorPath, normalizeRechargeRuntimeProbe } from './monitoring-policy.mjs';
 import { projectRechargeMonitoring } from './monitoring-recharge.mjs';
 import { readBackupMonitorReceipt, readSheetsSyncStatus, readWorkerReceipt } from './monitoring-worker-receipts.mjs';
 import { managedMailboxQueryRoute, storefrontMailboxQueryRoute } from './tools/mailbox-pool.mjs';
@@ -237,19 +237,31 @@ export function createMonitoringSources({ monitor, databasePath, externalProbe =
     return output;
   }
 
+  async function checkRechargeRuntime() {
+    const startedAt = performance.now();
+    const probe = await Promise.resolve().then(runtimeProbe).catch(() => null);
+    const code = 'recharge_runtime';
+    if (probe?.ready) return { code, status: 'ok' };
+    return { code, status: 'bad', runtimeProbe: normalizeRechargeRuntimeProbe(
+      { reason: probe?.reason, durationMs: Math.round(performance.now() - startedAt) }, clock()) };
+  }
+
   async function recharge(now) {
     if (!runtimeProbe) return ['recharge_runtime', 'recharge_review', 'recharge_stuck', 'recharge_burst']
       .map(code => ({ code, status: 'disabled', reason: 'runtime_disabled' }));
-    const [runtime, tasks] = await Promise.allSettled([runtimeProbe(), rechargeClient.get('/api/admin/task-logs?limit=200')]);
-    const result = [{ code: 'recharge_runtime', status: runtime.status === 'fulfilled' && runtime.value.ready ? 'ok' : 'bad' }];
+    const [runtime, tasks] = await Promise.all([
+      checkRechargeRuntime(),
+      Promise.resolve().then(() => rechargeClient.get('/api/admin/task-logs?limit=200')).catch(() => null)
+    ]);
+    const result = [runtime];
     for (const code of ['recharge_cards', 'recharge_route']) {
       const row = refusals.get(code);
       if (row && now - row.at < 15 * minute) result.push(row);
     }
-    if (tasks.status === 'rejected' || !Array.isArray(tasks.value?.tasks)) return [...result,
+    if (!Array.isArray(tasks?.tasks)) return [...result,
       ...['recharge_review', 'recharge_stuck', 'recharge_burst']
         .map(code => ({ code, status: 'unknown', reason: 'tasks_unavailable' }))];
-    const projection = projectRechargeMonitoring(tasks.value.tasks, now, monitor.legacyStatus().since);
+    const projection = projectRechargeMonitoring(tasks.tasks, now, monitor.legacyStatus().since);
     const output = [...result, ...projection.samples];
     for (const code of ['recharge_review', 'recharge_stuck']) if (!projection.samples.some(row => row.code === code))
       output.push({ code, status: 'unknown', reason: projection.complete ? 'tasks_empty' : 'tasks_incomplete' });

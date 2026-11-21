@@ -627,6 +627,30 @@ def normalize_tools_credential_stream(content):
     return content.replace(original, normalized)
 
 
+def wire_canary_card_details(content):
+    """Update the inherited check for the approved administrator detail contract."""
+    legacy = re.compile(
+        r"""^([ \t]*)assert\.ok\(!details\.body\.includes\(cardNumber\), """
+        r"""(?:'[^'\r\n]*'|"[^"\r\n]*")\);$""",
+        re.MULTILINE,
+    )
+    checks = (
+        "const { number: detailCardNumber, ...maskedCard } = summary.card;",
+        "assert.ok(detailCardNumber === cardNumber, 'authorized card details returned an unexpected number');",
+        "assert.ok(!JSON.stringify({ ...json(details), order: { ...summary, card: maskedCard } }).includes(cardNumber),",
+        "  'card details exposed the number outside the authorized field');",
+    )
+    if any(check in content for check in checks):
+        require(all(content.count(check) == 1 for check in checks) and not legacy.search(content),
+                "unexpected_card_details_canary")
+        return content
+    matches = list(legacy.finditer(content))
+    require(len(matches) == 1, "unexpected_card_details_canary")
+    match = matches[0]
+    replacement = "\n".join(match.group(1) + check for check in checks)
+    return content[:match.start()] + replacement + content[match.end():]
+
+
 def wire_event_launcher(content):
     credential = '  cat "$CREDENTIALS_DIRECTORY/independent-vendure-integrations"'
     framed = (
@@ -794,6 +818,8 @@ def stage(plan, release):
                 content = wire_canary_authenticator(content)
             elif scope == "rechargeAdminWorkspacePresentation":
                 content = wire_canary_business_confirmation(content)
+            elif scope == "cardNumberPresentation":
+                content = wire_canary_card_details(content)
         if plan.get('externalEvents'):
             if name == 'run-app':
                 content = wire_event_launcher(content)
@@ -856,9 +882,88 @@ def canary_diagnostics(text):
     frames = re.findall(r"\b(check-app\.mjs|app-entry\.mjs|preview\.mjs):(\d+):(\d+)", text)
     assets = re.findall(r"\b(?:commerce-prototype\.js|prototype\.css|prototype\.js|"
                         r"subscription-management\.js|order-opening\.mjs)(?:\?v=[a-zA-Z0-9-]+)?", text)
-    return {"indicators": [name for name, pattern in indicators.items() if re.search(pattern, text, re.I)],
-            "frames": [list(frame) for frame in dict.fromkeys(frames)][:12],
-            "assets": sorted(set(assets))[:20]}
+    result = {"indicators": [name for name, pattern in indicators.items() if re.search(pattern, text, re.I)],
+              "frames": [list(frame) for frame in dict.fromkeys(frames)][:12],
+              "assets": sorted(set(assets))[:20]}
+    if re.search(r"(?m)^AssertionError \[ERR_ASSERTION\]:|^\s*code: 'ERR_ASSERTION',?$", text):
+        assertion = {"code": "ERR_ASSERTION"}
+        operator = re.search(r"(?m)^\s*operator: '([^'\r\n]{1,24})',?$", text)
+        if operator and operator[1] in {
+            "==", "!=", "===", "!==", "deepEqual", "deepStrictEqual", "strictEqual", "notDeepEqual",
+            "notDeepStrictEqual", "notStrictEqual", "match", "doesNotMatch", "throws", "rejects",
+            "doesNotThrow", "doesNotReject", "ifError",
+        }:
+            assertion["operator"] = operator[1]
+        result["assertion"] = assertion
+    return result
+
+
+CANARY_CHECKER_TOKENS = re.compile(
+    r"(?P<comment>//[^\n]*|/\*[\s\S]*?(?:\*/|\Z))"
+    r"""|(?P<literal>'(?:\\[\s\S]|[^'\\])*(?:'|\Z)|"(?:\\[\s\S]|[^"\\])*(?:"|\Z))"""
+    r"|(?P<template>\x60(?:\\[\s\S]|[^\x60\\])*(?:\x60|\Z))"
+    r"|(?P<regex>/(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\[\n])+/[a-z]*)"
+    r"|(?P<number>(?:0[xXbBoO][0-9a-fA-F_]+|[0-9][\d_]*(?:\.[\d_]+)?(?:[eE][+-]?[\d_]+)?)n?)"
+    r"|(?P<name>[$\w]+)|(?P<space>\s+)|(?P<punct>[.,;:?!&|=<>+*%(){}\[\]-])|(?P<other>[\s\S])"
+)
+CANARY_CHECKER_NAMES = set(
+    "assert equal strictEqual deepEqual deepStrictEqual notEqual notStrictEqual notDeepEqual notDeepStrictEqual "
+    "ok match doesNotMatch throws rejects doesNotThrow doesNotReject ifError "
+    "const let await return new if else for of typeof null true false undefined "
+    "send fetch JSON Object Array parse stringify keys hasOwn isArray includes startsWith endsWith test find map "
+    "status headers body method data items cards cardNumber card_number card_cvc last4 payment order orders "
+    "customer customers number code".split()
+)
+CANARY_CHECKER_LITERALS = {
+    "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "cardNumber", "card_number", "card_cvc", "last4",
+    "/health/ready", "/api/local/auth/login", "/api/local/auth/security", "/api/local/commerce",
+    "/api/local/inventory", "/api/local/order-completion", "/api/local/renewals",
+    "/api/local/subscriptions", "/api/local/tenant-cards", "/api/local/staff/finance/cards",
+    "/api/local/bitbrowser-login-windows", "/api/local/customer-query",
+    "/integrations/codexdaichong/admin", "/integrations/codexdaichong/api/admin/cards",
+    "/integrations/codexdaichong/api/admin/sessions",
+}
+
+
+def canary_checker_outline(checker, frames):
+    line = next((int(number) for name, number, _ in frames
+                 if name == "check-app.mjs" and len(number) <= 6), None)
+    if line is None or checker.is_symlink():
+        return {}
+    try:
+        with checker.open("rb") as file:
+            raw = file.read(65537)
+    except OSError:
+        return {}
+    if len(raw) > 65536:
+        return {}
+
+    def safe_token(match):
+        kind = match.lastgroup
+        token = match[0]
+        if kind in {"space", "punct"} or (kind == "name" and token in CANARY_CHECKER_NAMES):
+            return token
+        if kind == "literal":
+            value = token[1:-1]
+            if re.fullmatch(r"\*{4}[0-9]{4}", value):
+                return "<masked-pan>"
+            if re.fullmatch(r"[0-9]{12,19}", value):
+                return "<pan-like>"
+            value, query, _ = value.partition("?")
+            if value in CANARY_CHECKER_LITERALS:
+                return '"' + value + ("?<redacted>" if query else "") + '"'
+        return {"comment": "<comment>", "literal": "<string>", "template": "<template>",
+                "regex": "<regex>", "number": "<number>"}.get(kind, "<token>") + "\n" * token.count("\n")
+
+    source = raw.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
+    lines = CANARY_CHECKER_TOKENS.sub(safe_token, source).split("\n")
+    if not 0 < line <= len(lines):
+        return {}
+    return {
+        "checkerSha256": hashlib.sha256(raw).hexdigest(),
+        "checkerOutline": [{"line": index + 1, "syntax": lines[index].strip()[:240]}
+                           for index in range(max(0, line - 3), min(len(lines), line + 2)) if lines[index].strip()],
+    }
 
 
 def inspect_canary(sha, sample_backup_resources=False):
@@ -866,6 +971,7 @@ def inspect_canary(sha, sample_backup_resources=False):
     ops = ROOT / "releases" / sha / "operations"
     retried = (ops / CANARY_RETRY_LOG).is_file()
     size, log = read_canary_log(ops / (CANARY_RETRY_LOG if retried else CANARY_LOG))
+    diagnostic = canary_diagnostics(log)
     live = identity(inspect("app"))["revision"]
     result = {"attemptSha": sha, "liveWebsiteSha": live,
             "nativePublication": native_publication_state(),
@@ -874,7 +980,7 @@ def inspect_canary(sha, sample_backup_resources=False):
             "liveAssets": {"host": asset_bundle_summary(ROOT / "releases" / live / "assets.json"),
                            "mounted": mounted_assets_digest()},
             "bytes": size, "retried": retried, "backupResources": backup_resource_summary(),
-            **canary_diagnostics(log)}
+            **diagnostic, **canary_checker_outline(ops / "check-app.mjs", diagnostic["frames"])}
     if sample_backup_resources:
         result["backupResourcesBefore"] = result["backupResources"]
         result["backupObservation"] = observe_backup_resources()

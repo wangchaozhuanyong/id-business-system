@@ -1,9 +1,9 @@
 """Dispatch the independent website release from the checked main revision."""
 
 import base64
-import gzip
 import hashlib
 import json
+import lzma
 import os
 import re
 import subprocess
@@ -337,11 +337,11 @@ def script_for(plan):
     script = Path(__file__).with_name("remote.py").read_text()
     program = (script + "\nsys.modules['remote'] = sys.modules[__name__]\n" +
                f"main(json.loads({json.dumps(plan)!r}))\n").encode("utf8")
-    encoded = base64.b64encode(gzip.compress(program, mtime=0)).decode("ascii")
+    encoded = base64.b64encode(lzma.compress(program)).decode("ascii")
     checksum = hashlib.sha256(program).hexdigest()
     return ("set -eu\npython3 - <<'ID_WEBSITE_RELEASE'\n" +
-            "import base64, gzip, hashlib\n" +
-            f"program = gzip.decompress(base64.b64decode({encoded!r}, validate=True))\n" +
+            "import base64, hashlib, lzma\n" +
+            f"program = lzma.decompress(base64.b64decode({encoded!r}, validate=True))\n" +
             f"if hashlib.sha256(program).hexdigest() != {checksum!r}:\n" +
             "    raise RuntimeError('release_program_digest_mismatch')\n" +
             "exec(compile(program, '<id-website-release>', 'exec'))\nID_WEBSITE_RELEASE\n")
