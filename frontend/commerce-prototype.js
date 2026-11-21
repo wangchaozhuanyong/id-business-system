@@ -1017,7 +1017,8 @@
     picker.querySelector('.commerce-picker-empty').hidden = options.some(option => option.value);
   }
   function positionPicker(popup) {
-    const trigger = popup.closest('.commerce-search-picker').querySelector('.commerce-picker-trigger');
+    const trigger = popup.matches('.order-customer-suggestions') ? popup.previousElementSibling
+      : popup.closest('.commerce-search-picker').querySelector('.commerce-picker-trigger');
     const anchor = trigger.getBoundingClientRect();
     if (anchor.bottom < 0 || anchor.top > innerHeight) {
       popup.hidePopover();
@@ -1913,37 +1914,44 @@
     } : {};
   }
 
-  const renewalWorktableDetailReads = new WeakMap();
   let renewalDetailOpening;
   async function loadRenewalWorktableDetailCard(panel, refresh = false) {
     const id = panel?.dataset.renewalOrderPreview;
     const selected = id && renewalWorktableDetail(id);
     if (!selected || selected.state === 'processed' || selected.order.payment !== '银行卡' || !localData?.renewalCard) return;
-    const actorId = currentOperator().id, request = {};
-    renewalWorktableDetailReads.set(panel, request);
-    const current = () => panel.isConnected && panel.closest('dialog')?.open && S.route === renewalHome &&
-      currentOperator().id === actorId && renewalWorktableDetailReads.get(panel) === request &&
-      orders.find(row => row.id === id)?.version === selected.order.version;
+    const actorId = currentOperator().id;
     const notice = $('[data-renewal-preview-notice]', panel);
+    if (!notice) return;
+    const retry = $('[data-action="commerce-renewal-resource-refresh"]', notice);
+    const funding = $('[data-renewal-preview-funding]', panel);
+    const number = $('[data-renewal-preview-number]', panel);
+    const focusedRetry = document.activeElement === retry;
+    const read = A.beginRegionRead(panel, $('[data-renewal-preview-status]', panel), {
+      loadingText: '正在读取用卡资料…', refreshButton: retry
+    });
+    const current = () => read.current() && S.route === renewalHome && currentOperator().id === actorId &&
+      canManageOrders() && orders.find(row => row.id === id)?.version === selected.order.version;
     try {
       const resource = await localData.queries.read('renewal-card-resource', id, () =>
         localData.renewalCard({ action: 'prepare', orderId: id }), { refresh });
       if (!current()) return;
       if (resource?.orderId !== id) throw new Error('续费用卡回执无效');
-      const funding = $('[data-renewal-preview-funding]', panel);
-      const number = $('[data-renewal-preview-number]', panel);
-      if (funding) funding.textContent = resource.estimate?.usd ? resource.estimate.usd + ' USD' : '未核算';
-      if (number) number.textContent = resource.hasCard ? bankNumberLabel(resource.number) : '未绑定';
+      funding.textContent = resource.estimate?.usd ? resource.estimate.usd + ' USD' : '未核算';
+      number.textContent = resource.hasCard ? bankNumberLabel(resource.number) : '未绑定';
       notice.hidden = true;
       return true;
     } catch (error) {
       if (!current()) return;
       if ([401, 403].includes(error.status)) {
-        $('[data-renewal-preview-funding]', panel).textContent = '未核算';
-        $('[data-renewal-preview-number]', panel).textContent = '待核对';
+        funding.textContent = '未核算';
+        number.textContent = '待核对';
       }
       notice.hidden = false;
       return false;
+    } finally {
+      const restoreFocus = focusedRetry && current() && [retry, document.body].includes(document.activeElement);
+      read.finish();
+      if (restoreFocus) (notice.hidden ? number : retry).focus({ preventScroll: true });
     }
   }
 
@@ -2026,14 +2034,17 @@
             ['续费后到期', completed.expiry ? dateInput(completed.expiry).replace('T', ' ') : '待核对']
           ] : []),
           ['续费方式', order.payment || '未登记'],
-          ...(order.payment === '银行卡' ? [['银行卡号', series.hasCard ? bankNumberLabel(number) : '未绑定'],
-            ['预计备款', resource?.estimate?.usd ? resource.estimate.usd + ' USD' : '未核算']] : [])
-        ].map(([label, value]) => readOnly && ['银行卡号', '预计备款'].includes(label)
-          ? `<div class="property-row"><span>${label}</span><strong data-renewal-preview-${label === '银行卡号' ? 'number' : 'funding'}>${E(value)}</strong></div>`
+          ...(order.payment === '银行卡' ? [['银行卡号', series.hasCard ? bankNumberLabel(number) : '未绑定', 'number'],
+            ['预计备款', resource?.estimate?.usd ? resource.estimate.usd + ' USD' : '未核算', 'funding']] : [])
+        ].map(([label, value, preview]) => readOnly && preview
+          ? `<div class="property-row"><span>${label}</span><strong data-renewal-preview-${preview}${preview === 'number' ? ' tabindex="-1"' : ''}>${E(value)}</strong></div>`
           : property(label, value, false, label === '银行卡号' && canManageOrders() && localData?.subscriptionCardDetails
             ? A.textAction('用卡详情', 'commerce-renewal-card-open', `data-id="${E(order.id)}"`) : '')).join('')}${subscriptionContacts(
           Object.fromEntries(orderContactFields.map(([field, channel]) => [channel, selected[field]])))}</div>
-        ${readOnly ? '<p class="inline-notice warning" role="status" data-renewal-preview-notice hidden>续费用卡资料暂时无法读取，请稍后重试。</p>'
+        ${readOnly ? (order.payment === '银行卡' && selected.state !== 'processed' && localData?.renewalCard
+          ? `<div role="status" data-renewal-preview-status hidden></div>
+            <div class="inline-notice warning" data-renewal-preview-notice hidden><span role="status">续费用卡资料暂时无法读取。</span>${
+              A.button('重读用卡资料', 'commerce-renewal-resource-refresh')}</div>` : '')
           : workbenchFailure === order.id ? `<p class="inline-notice warning" role="status">续费用卡资料读取失败。${
           resource ? '已保留上次读取的资料。' : ''}${
           A.textAction('重读用卡资料', 'commerce-renewal-resource-refresh', `data-id="${E(order.id)}"`)}</p>` : ''}
@@ -4413,6 +4424,91 @@
   const displayCustomerValue = value => Array.isArray(value) ? value.join('、') || '未登记' : value || '未登记';
   const composingCustomerFields = new WeakSet();
   const isOrderCustomerLookupInput = node => Boolean(node.dataset?.orderCustomerKey);
+  const isOrderCustomerSuggestionInput = node => ['wechat', 'name'].includes(node.dataset?.orderCustomerKey);
+  const orderCustomerSuggestionLimit = 8;
+
+  function updateOrderCustomerSuggestions(input) {
+    const popup = input.nextElementSibling;
+    const key = input.dataset.orderCustomerKey;
+    const query = contactKey(input.value, key);
+    const matches = [[], [], []];
+    if (document.activeElement === input && Array.from(query).length >= (key === 'wechat' ? 2 : 1)) {
+      for (const customer of customers) {
+        if (customer.active === false) continue;
+        const value = contactKey(customer[key], key);
+        const rank = value === query ? 0 : value.startsWith(query) ? 1 : value.includes(query) ? 2 : -1;
+        if (rank !== -1 && matches[rank].length < orderCustomerSuggestionLimit) matches[rank].push(customer);
+      }
+    }
+    const candidates = matches.flat().slice(0, orderCustomerSuggestionLimit);
+    input.removeAttribute('aria-activedescendant');
+    popup.innerHTML = candidates.map((customer, index) => {
+      const phone = customer.phone && maskContact(orderPhoneKey(customer.phone) || customer.phone);
+      const contact = [customer.wechat && '微信 ' + customer.wechat, phone && '电话 ' + phone].filter(Boolean).join(' · ');
+      return '<button type="button" class="commerce-picker-option order-customer-suggestion" role="option" aria-selected="false"' +
+        ' tabindex="-1" id="' + popup.id + '-' + index + '" data-action="commerce-order-customer-suggestion"' +
+        ' data-order-customer-suggestion="' + E(customer.id) + '">' +
+        '<strong>' + E(customer.name || '姓名未登记') + '</strong>' + (contact ? '<span>' + E(contact) + '</span>' : '') + '</button>';
+    }).join('');
+    if (!candidates.length) {
+      popup.hidePopover();
+      return;
+    }
+    if (!popup.matches(':popover-open')) popup.showPopover({ source: input });
+    positionPicker(popup);
+  }
+
+  function chooseOrderCustomerSuggestion(option) {
+    const popup = option.closest('.order-customer-suggestions');
+    if (!popup?.matches(':popover-open')) return;
+    const input = popup.previousElementSibling;
+    const { form } = input;
+    const customer = customers.find(row => row.id === option.dataset.orderCustomerSuggestion && row.active !== false);
+    popup.hidePopover();
+    input.focus({ preventScroll: true });
+    if (!customer) return;
+    const stored = form.elements['order-customer-entered'];
+    const { source, tags } = JSON.parse(stored.value);
+    const name = customer.name || '', wechat = customer.wechat || '';
+    // Replace the search text and prior customer contacts with the chosen profile's identity.
+    stored.value = JSON.stringify({ name, wechat, source, tags });
+    form.elements['commerce-customerName'].value = name;
+    form.elements['commerce-wechat'].value = wechat;
+    form.elements['order-customer-choice'].value = customer.id;
+    updateOrderCustomerLookup(form, { editing: true });
+    saveDrafts();
+  }
+
+  function handleOrderCustomerSuggestionKey(event) {
+    const input = event.target;
+    const popup = input.nextElementSibling;
+    const open = popup.matches(':popover-open');
+    if (event.key === 'Escape' && open) {
+      event.preventDefault();
+      popup.hidePopover();
+      return true;
+    }
+    if (event.key === 'Enter' && open) {
+      event.preventDefault();
+      const option = popup.querySelector('[aria-selected="true"]') || popup.firstElementChild;
+      if (option) chooseOrderCustomerSuggestion(option);
+      return true;
+    }
+    if (!['ArrowDown', 'ArrowUp'].includes(event.key)) return false;
+    if (!open) updateOrderCustomerSuggestions(input);
+    if (!popup.matches(':popover-open')) return false;
+    event.preventDefault();
+    const options = [...popup.children];
+    const current = options.findIndex(option => option.id === input.getAttribute('aria-activedescendant'));
+    const next = event.key === 'ArrowDown' ? Math.min(current + 1, options.length - 1)
+      : current === -1 ? options.length - 1 : Math.max(current - 1, 0);
+    options[current]?.setAttribute('aria-selected', 'false');
+    const option = options[next];
+    option.setAttribute('aria-selected', 'true');
+    input.setAttribute('aria-activedescendant', option.id);
+    option.scrollIntoView({ block: 'nearest', container: 'nearest' });
+    return true;
+  }
   function orderTagsControl(selected, previous, open = false) {
     return customerTagPicker(selected, previous, open, { id: 'commerce-orderTags', name: 'order-customer-tags' });
   }
@@ -4457,7 +4553,14 @@
           A.options(callingCodeOptions, code) + '</select>' + input(id, national, data + ' type="tel" maxlength="60" autocomplete="off"') + '</div>';
       } else if (key === 'source') control = select(id, customerSourceOptions(initial).choices, initial, data);
       else if (key === 'tags') control = orderTagsControl(initial || [], customer?.tags || []);
-      else control = input(id, initial, data + (key === 'name' ? ' maxlength="80" required' : ' maxlength="60"') + ' autocomplete="off"');
+      else {
+        const listId = 'commerce-' + id + '-suggestions';
+        const suggestions = key === 'wechat' || key === 'name';
+        control = input(id, initial, data + (key === 'name' ? ' maxlength="80" required' : ' maxlength="60"') + ' autocomplete="off"' +
+          (suggestions ? ' role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="' + listId + '"' : ''));
+        if (suggestions) control += '<div class="order-customer-suggestions" id="' + listId +
+          '" popover="auto" role="listbox" aria-label="' + label + '匹配客户"></div>';
+      }
       return field(label, id, control, key === 'name', key === 'wechat'
         ? '微信、联系电话、QQ、WhatsApp 和 Telegram 至少填写一项。' : '') + (key === 'whatsapp'
         ? '<div id="order-customer-status" class="order-customer-status commerce-span-all" role="status" hidden></div>' : '');
@@ -4625,6 +4728,8 @@
   function refreshOrderCustomerLookups() {
     const form = $('#main #commerce-order-form');
     if (!form || !updateOrderCustomerLookup(form)) return false;
+    const popup = $('.order-customer-suggestions:popover-open', form);
+    if (popup) updateOrderCustomerSuggestions(popup.previousElementSibling);
     saveDrafts();
     return true;
   }
@@ -10062,7 +10167,9 @@
     }
     if (action === 'commerce-renewal-card-group') { openBankCardGroup(node.dataset); return true; }
     if (action === 'commerce-renewal-resource-refresh') {
-      void A.withActionFeedback(node, () => loadWorkbenchResource(id), { pending: '正在读取用卡资料…' });
+      const preview = node.closest('[data-renewal-order-preview]');
+      if (preview) void loadRenewalWorktableDetailCard(preview, true);
+      else void A.withActionFeedback(node, () => loadWorkbenchResource(id), { pending: '正在读取用卡资料…' });
       return true;
     }
     if (action === 'commerce-renewal-suffix') { void openRenewalSuffix(node); return true; }
@@ -10495,6 +10602,10 @@
           );
         }
       );
+      return true;
+    }
+    if (action === 'commerce-order-customer-suggestion') {
+      chooseOrderCustomerSuggestion(node);
       return true;
     }
     if (['commerce-order-customer-choose', 'commerce-order-customer-new', 'commerce-order-customer-reselect'].includes(action)) {
@@ -11477,7 +11588,10 @@
       return true;
     }
     if (isOrderCustomerLookupInput(node)) {
-      if (!composingCustomerFields.has(node)) editOrderCustomer(node.form, node.dataset.orderCustomerKey);
+      if (!composingCustomerFields.has(node)) {
+        editOrderCustomer(node.form, node.dataset.orderCustomerKey);
+        if (isOrderCustomerSuggestionInput(node)) updateOrderCustomerSuggestions(node);
+      }
       return true;
     }
     if (node.closest('form[data-commerce-draft]')) {
@@ -11911,6 +12025,15 @@
   document.addEventListener?.('close', refreshTimeDependentView, true);
   document.addEventListener?.('beforetoggle', event => {
     const popup = event.target;
+    if (popup.matches?.('.order-customer-suggestions')) {
+      const input = popup.previousElementSibling;
+      input.setAttribute('aria-expanded', String(event.newState === 'open'));
+      if (event.newState === 'closed') {
+        input.removeAttribute('aria-activedescendant');
+        popup.textContent = '';
+      }
+      return;
+    }
     if (!popup.matches?.('.commerce-picker-popover')) return;
     const open = event.newState === 'open';
     popup.closest('.commerce-search-picker').querySelector('.commerce-picker-trigger').setAttribute('aria-expanded', String(open));
@@ -11931,14 +12054,17 @@
   document.addEventListener?.('compositionstart', event => {
     if (isOrderCustomerLookupInput(event.target)) {
       composingCustomerFields.add(event.target);
+      if (isOrderCustomerSuggestionInput(event.target)) event.target.nextElementSibling.hidePopover();
     }
   });
   document.addEventListener?.('compositionend', event => {
     if (!composingCustomerFields.delete(event.target) || !event.target.form) return;
     editOrderCustomer(event.target.form, event.target.dataset.orderCustomerKey);
+    if (isOrderCustomerSuggestionInput(event.target)) updateOrderCustomerSuggestions(event.target);
   });
   document.addEventListener?.('keydown', (event) => {
     if (event.isComposing || composingCustomerFields.has(event.target)) return;
+    if (isOrderCustomerSuggestionInput(event.target) && handleOrderCustomerSuggestionKey(event)) return;
     if (event.key === 'Enter' && event.target.tagName === 'INPUT' && isOrderCustomerLookupInput(event.target)) {
       event.preventDefault();
       editOrderCustomer(event.target.form, event.target.dataset.orderCustomerKey);
@@ -11973,9 +12099,12 @@
   document.addEventListener?.('focusin', (event) => {
     for (const popup of document.querySelectorAll('.commerce-picker-popover:popover-open'))
       if (!popup.closest('.commerce-search-picker').contains(event.target)) popup.hidePopover();
+    for (const popup of document.querySelectorAll('.order-customer-suggestions:popover-open'))
+      if (popup.previousElementSibling !== event.target && !popup.contains(event.target)) popup.hidePopover();
   });
   const positionOpenPickers = () => {
-    for (const popup of document.querySelectorAll('.commerce-picker-popover:popover-open')) positionPicker(popup);
+    for (const popup of document.querySelectorAll('.commerce-picker-popover:popover-open, .order-customer-suggestions:popover-open'))
+      positionPicker(popup);
   };
   window.addEventListener?.('resize', positionOpenPickers);
   window.addEventListener?.('scroll', positionOpenPickers, { capture: true, passive: true });

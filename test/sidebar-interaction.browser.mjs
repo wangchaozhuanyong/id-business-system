@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { interceptDesign, origin, settle, toggleDesignTheme } from './helpers/offline-design.mjs';
 
-async function observeAudio(browser, settings) {
+async function observeAudio(browser, settings, design = {}) {
   const context = await browser.newContext(settings);
-  await interceptDesign(context, { localFixtures: {}, skipRechargeAssets: true });
+  await interceptDesign(context, { localFixtures: {}, skipRechargeAssets: true, ...design });
   await context.addInitScript(() => {
     const NativeAudioContext = window.AudioContext;
     window.audioFeedback = { contexts: 0, tones: [] };
@@ -89,7 +90,7 @@ test('interaction sounds use real browser audio after opt-in', { timeout: 50_000
       const panel = await soundSettings(page);
       await panel.getByLabel('开启轻音效').check();
       await page.locator('#interaction-preferences[data-enabled="true"]').waitFor({ state: 'attached' });
-      assert.match(await panel.locator('#sound-state').textContent(), /鼠标移入导航或按钮/);
+      await panel.getByRole('status').filter({ hasText: /鼠标移入导航或按钮/ }).waitFor();
       await page.keyboard.press('Escape');
       await panel.waitFor({ state: 'hidden' });
 
@@ -161,6 +162,109 @@ test('interaction sounds use real browser audio after opt-in', { timeout: 50_000
       await page.reload();
       assert.equal(await page.locator('#interaction-preferences').getAttribute('data-enabled'), 'false');
       assert.equal(await countTones(page), 0);
+    } finally { await context.close(); }
+  });
+
+  await t.test('same-tab reload restores sound and volume before waiting for a user gesture', async () => {
+    const { page, context } = await observeAudio(browser, { viewport: { width: 1440, height: 900 } });
+    const controls = page.locator('#interaction-preferences');
+    const enabled = page.getByLabel('开启轻音效');
+    const volume = page.getByLabel('交互音效音量');
+    const first = page.locator('#sidebar .nav-heading').first();
+    const group = page.locator('#sidebar [data-group="账号管理"]');
+    const assertPreference = async (on, level) => {
+      assert.equal(await controls.getAttribute('data-enabled'), String(on));
+      assert.equal(await enabled.isChecked(), on);
+      assert.equal(await volume.inputValue(), String(level));
+      assert.equal(await page.locator('#sound-volume-label').textContent(), level + '%');
+    };
+    const assertSilent = async () => {
+      assert.equal(await page.evaluate(() => window.IDInteractionSound.play('success')), false);
+      assert.equal(await countTones(page), 0);
+    };
+    const verifyAudio = async () => {
+      await page.waitForFunction(() => window.IDInteractionSound.play('success'));
+      await page.waitForFunction(() => window.audioFeedback.tones.some(tone => tone.state === 'running' && tone.peak > 0.005));
+    };
+    try {
+      await soundSettings(page);
+      await volume.press('End');
+      await enabled.check();
+      await page.locator('#interaction-preferences[data-enabled="true"]').waitFor({ state: 'attached' });
+
+      await page.reload();
+      await assertPreference(true, 30);
+      await first.hover();
+      await first.evaluate(node => Promise.all(node.getAnimations().map(animation => animation.finished)));
+      assert.deepEqual(await page.evaluate(() => window.audioFeedback), { contexts: 0, tones: [] });
+      await assertSilent();
+      await group.click();
+      await verifyAudio();
+      await waitForCooldown(page);
+      const beforeHover = await countTones(page);
+      await first.hover();
+      await waitForTone(page, beforeHover + 1);
+
+      await page.reload();
+      await assertPreference(true, 30);
+      assert.deepEqual(await page.evaluate(() => window.audioFeedback), { contexts: 0, tones: [] });
+      await page.keyboard.press('Tab');
+      await verifyAudio();
+
+      const fresh = await context.newPage();
+      try {
+        await fresh.goto(origin + '/#/overview');
+        assert.equal(await fresh.locator('#interaction-preferences').getAttribute('data-enabled'), 'false');
+        assert.equal(await fresh.locator('#sound-volume').inputValue(), '15');
+        assert.deepEqual(await fresh.evaluate(() => window.audioFeedback), { contexts: 0, tones: [] });
+      } finally { await fresh.close(); }
+
+      await soundSettings(page);
+      await volume.press('Home');
+      await page.reload();
+      await assertPreference(true, 0);
+      await group.click();
+      await assertSilent();
+
+      await soundSettings(page);
+      await enabled.uncheck();
+      await volume.press('End');
+      await page.reload();
+      await assertPreference(false, 30);
+      await group.click();
+      await assertSilent();
+    } finally { await context.close(); }
+  });
+
+  await t.test('an authentication boundary clears saved sound preferences in the same tab', async () => {
+    const actor = { id: 'sound-test', name: '合成管理员', role: 'admin' };
+    const { page, context } = await observeAudio(browser, { viewport: { width: 1440, height: 900 } }, { actor, localAuthUi: true });
+    const appUrl = origin + '/';
+    const controls = page.locator('#interaction-preferences');
+    const volume = page.getByLabel('交互音效音量');
+    try {
+      const panel = await soundSettings(page);
+      await volume.press('End');
+      await panel.getByLabel('开启轻音效').check();
+      await panel.getByRole('status').filter({ hasText: /鼠标移入导航或按钮/ }).waitFor();
+      await page.reload();
+      assert.equal(await controls.getAttribute('data-enabled'), 'true');
+      assert.equal(await volume.inputValue(), '30');
+
+      const signedOut = (await readFile(new URL('../frontend/index.html', import.meta.url), 'utf8'))
+        .replace('<head>', '<head><meta name="id-local-auth" content="required">')
+        .replace('    <script src="./prototype.js', '    <script src="/local-auth.js" defer></script>\n    <script src="./prototype.js');
+      await page.route(appUrl, route => route.fulfill({ body: signedOut, contentType: 'text/html' }));
+      await page.reload();
+      await page.getByRole('heading', { name: '登录工作台' }).waitFor();
+      assert.deepEqual(await page.evaluate(() => window.audioFeedback), { contexts: 0, tones: [] });
+
+      await page.unroute(appUrl);
+      await page.reload();
+      await page.locator('#sidebar .nav-heading').first().waitFor();
+      assert.equal(await controls.getAttribute('data-enabled'), 'false');
+      assert.equal(await volume.inputValue(), '15');
+      assert.deepEqual(await page.evaluate(() => window.audioFeedback), { contexts: 0, tones: [] });
     } finally { await context.close(); }
   });
 

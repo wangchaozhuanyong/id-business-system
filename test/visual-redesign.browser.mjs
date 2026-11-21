@@ -81,6 +81,8 @@ test('全站视觉：截图、图表、音效、对比度、键盘与窄屏', { 
     await page.reload();
     assert.deepEqual(await page.evaluate(() => window.audioAudit), { contexts: 0, tones: 0 });
     await page.getByLabel('界面音效设置').click();
+    await page.locator('#sound-volume').waitFor();
+    await page.locator('#sound-volume').press('End');
     await page.evaluate(() => { window.rejectAudio = true; });
     await page.getByLabel('开启轻音效').click();
     await page.waitForFunction(() => !document.getElementById('sound-enabled').checked);

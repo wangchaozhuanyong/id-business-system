@@ -32,7 +32,7 @@
     <script src="/site-timing.js?v=1" defer></script>
     <script src="./pagination.js?v=20261111-monitoring-orders-toolbar" defer></script>
     <script src="./design-charts.js?v=20261112-trend-tooltip" defer></script>
-    <script src="./interaction-preferences.js?v=20261114-hover-sound" defer></script>
+    <script src="./interaction-preferences.js?v=20261121-sound-preferences" defer></script>
     <script src="./search-input.js" defer></script>
     <script type="module" src="./list-order.mjs?v=20261114-business-pagination"></script>
     <script src="./prototype.js?v=20261120-date-filter" defer></script>
@@ -99,7 +99,7 @@
                 <label><input id="sound-enabled" type="checkbox" />开启轻音效</label>
                 <label for="sound-volume">音量 <output id="sound-volume-label">15%</output></label>
                 <input id="sound-volume" type="range" min="0" max="30" value="15" aria-label="交互音效音量" />
-                <p id="sound-state" role="status">默认静音，仅在本次会话开启。</p>
+                <p id="sound-state" role="status">默认静音。开启后，同一标签页刷新会保留设置。</p>
               </div>
             </details>
             <button

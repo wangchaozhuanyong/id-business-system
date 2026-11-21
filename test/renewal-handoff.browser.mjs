@@ -264,10 +264,10 @@ test('renewal countdown uses Beijing dates, updates across expiry and keeps the 
   await counter('soon').waitFor({ state: 'detached' });
   assert(await selection.isChecked(), '到期阶段更新保留其他已勾选订单');
   await page.getByRole('button', { name: '提交给财务（1）', exact: true }).waitFor();
-  await page.getByLabel('订单状态', { exact: true }).selectOption('expired');
+  await page.getByRole('group', { name: '到期状态' }).getByRole('button', { name: /^已到期/ }).click();
   await counter('soon').getByText('已到期不足 1 小时', { exact: true }).waitFor();
   await counter('expired').getByText('已到期 2 天 1 小时', { exact: true }).waitFor();
-  await page.getByLabel('订单状态', { exact: true }).selectOption('upcoming');
+  await page.getByRole('group', { name: '到期状态' }).getByRole('button', { name: /^即将到期/ }).click();
   await selection.check();
   const originalCheckbox = await selection.elementHandle();
   await page.clock.fastForward(30 * 60_000);
