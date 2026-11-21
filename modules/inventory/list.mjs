@@ -6,6 +6,14 @@ export const inventoryMailboxTypes = ['google', 'microsoft'];
 export const registrationPlatforms = [
   ['gpt', 'ChatGPT'], ['claude', 'Claude'], ['gemini', 'Gemini'], ['grok', 'Grok'], ['apple', 'Apple ID']
 ];
+const relayRegistrationPlatforms = registrationPlatforms.filter(([key]) => ['gpt', 'claude', 'grok'].includes(key));
+export function registrationResultPlatforms(type) {
+  if (type === 'google') return registrationPlatforms;
+  if (type === 'relay' || type === 'apple') return relayRegistrationPlatforms;
+  return [];
+}
+export const inventoryPasswordRequired = (type, existing) =>
+  ['google', 'apple'].includes(type) && (!existing || Boolean(existing.password));
 export const registrationAddress = value => String(value || '').trim().toLowerCase();
 export const stockRegistration = row => inventoryAccountTypes.includes(row?.type) && row.source !== '客户提供' &&
   !['客户自有', 'customer'].includes(row.accountSource);

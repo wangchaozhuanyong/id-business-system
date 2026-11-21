@@ -177,9 +177,16 @@ test('mail identity changes reject late reads and authorization errors do not au
     await form.getByText('合成邮件一', { exact: true }).waitFor();
     await form.locator('[data-mail-auto-refresh]').check();
     await page.waitForFunction(() => window.mailStreams.length === 2 && !document.querySelector('#ops-managed-mail-query [type=submit]').disabled);
+    await page.evaluate(() => { window.holdMail = true; window.emitMail('changed', { version: 1 }); });
+    await page.waitForFunction(() => window.mailHeld.length === 1);
     await page.evaluate(() => window.emitMail('stopped', { reason: 'authorization' }));
     await page.waitForFunction(() => !document.querySelector('[data-mail-auto-refresh]').checked);
     assert.match(await form.locator('#ops-managed-query-progress').textContent(), /授权已变化/);
+    await page.evaluate(async () => { window.holdMail = false; window.mailHeld.shift()(); await new Promise(requestAnimationFrame); });
+    assert.equal(await form.locator('#ops-managed-query-results').textContent(), '');
+    assert.equal(await form.locator('[data-mail-refresh]').isVisible(), false);
+    await form.getByRole('button', { name: '查询邮件', exact: true }).click();
+    await form.getByText('合成邮件一', { exact: true }).waitFor();
     await form.locator('[data-mail-auto-refresh]').check();
     await page.waitForFunction(() => window.mailStreams.length === 3);
     await page.evaluate(() => window.IDLocalData.queries.clear());

@@ -201,7 +201,7 @@ const orderSubmissionViews = [
   ['客户查询', 'workspace/customer-query']
 ];
 const orderSubmissionRoute = (route) => route === 'workspace/order' ? orderSubmissionViews[0][1]
-  : orderSubmissionViews.find(([, path]) => path === route)?.[1];
+  : orderSubmissionViews.find(([, path]) => path === route)?.[1] || window.IDDesignAPI?.modules.commerce?.sourceProductRoute?.(route);
 const navigation = [
   ['网站总览', 'grid', [['网站总览', 'overview']]],
   [
@@ -938,6 +938,39 @@ function titleInfo(title, description, id, trustedHtml = false) {
     ? `<details class="title-help"><summary aria-label="查看${escapeHtml(title)}说明" aria-controls="${id}">${icon('info')}</summary><div class="title-description" id="${id}" role="note">${trustedHtml ? description : escapeHtml(description)}</div></details>`
     : '';
 }
+function formSection(number, title, body, description = '', hidden = false, idPrefix = 'commerce-section', actions = '') {
+  return `<section class="form-section" data-commerce-section="${number}"${hidden ? ' hidden' : ''}>
+    <div class="section-heading${actions ? ' section-heading--actions' : ''}"><span class="section-number">${number}</span>
+      <div class="section-title-row"><h2>${escapeHtml(title)}</h2>${titleInfo(title, description, `${idPrefix}-${number}`)}</div>
+      ${actions ? `<div class="page-actions">${actions}</div>` : ''}</div>
+    <div class="commerce-field-grid">${body}</div></section>`;
+}
+function orderPeriodInputs({ prefix, start, expiry, readOnly = false, startLabel = '订阅时间', expiryLabel = '到期时间', startHelp = '' }) {
+  const dateField = (key, label, value, help = '') => {
+    const id = prefix + '-' + key;
+    const control = input(id, value, 'type="datetime-local" ' + (readOnly ? 'readonly' : 'required'));
+    return field(label, id, control, true, help).replace('<div class="field"', `<div class="field" data-commerce-field="${key}"`);
+  };
+  return dateField('start', startLabel, start, startHelp) + dateField('expiry', expiryLabel, expiry);
+}
+function orderAmountGroups({ paid, sale, paidHeading, saleHeading, period = '' }) {
+  const amountGroup = (title, heading, fields) => `<div class="order-financial-group order-money-group">
+    ${heading || `<div class="order-financial-heading"><h3>${title}</h3></div>`}${fields}</div>`;
+  return `<div class="order-financial-groups commerce-span-all${period ? '' : ' order-financial-groups--amounts'}">
+    ${amountGroup('代付', paidHeading, paid)}${amountGroup('售卖', saleHeading, sale)}${period}</div>`;
+}
+function syncOrderSaleCurrencySelect(control, settings, product) {
+  const previous = control.value;
+  const choices = window.IDOrderOpening.orderSaleCurrencyChoices(settings, product, previous);
+  if (control.options.length === choices.length && choices.every(([code, label], index) =>
+    control.options[index].value === code && control.options[index].text === label)) return;
+  control.replaceChildren(...choices.map(([code, label]) => new Option(label, code, false, code === previous)));
+}
+function orderSubmissionSections({ identity, payment, period, periodActions = '', identityHelp = '', idPrefix = 'commerce-section' }) {
+  return formSection('01', '客户与账号', identity, identityHelp, false, idPrefix) +
+    formSection('02', '付款与金额', payment, '', false, idPrefix) +
+    formSection('03', '订阅周期', period, '', false, idPrefix, periodActions);
+}
 let operatorIdNoteSequence = 0;
 function operatorIdProperty(label, id) {
   const full = typeof id === 'string' && id.trim() ? id : '';
@@ -1198,9 +1231,12 @@ function startingRoute() {
   return ({ supervisor: 'staff/team', finance: 'overview', registrar: 'staff/registration',
     employee: 'staff/customers' })[state.actor?.role] || 'mailboxes/google';
 }
+function isOrderSubmissionView(route) {
+  return Boolean(orderSubmissionRoute(route) || window.IDDesignAPI?.modules.commerce?.isOrderEntry?.(route));
+}
 function orderSubmissionNavigation() {
   const active = orderSubmissionRoute(state.route);
-  state.drafts.set('order-submission-navigation', active);
+  if (active) state.drafts.set('order-submission-navigation', active);
   return '<nav class="order-submission-navigation" aria-label="订单提交业务切换">' +
     orderSubmissionViews.filter(([, route]) => permittedRoute(route)).map(([label, route]) =>
       '<a class="button' + (route === active ? ' primary' : '') + '" href="#/' + route +
@@ -1336,7 +1372,7 @@ function setDesktopSidebarCollapsed(collapsed) {
 function renderSidebar(openCurrent = false) {
   const previousScroll = $('.sidebar-navigation')?.scrollTop || 0;
   const isCurrent = (route) => orderSubmissionRoute(route)
-    ? Boolean(orderSubmissionRoute(state.route)) : matchesNav(state.route, route);
+    ? isOrderSubmissionView(state.route) : matchesNav(state.route, route);
   const allowedNavigation = navigation
     .map(([label, iconName, children]) => [
       label,
@@ -1889,7 +1925,7 @@ function render() {
     region.dataset.pageRegion = state.route;
     region.className = 'design-page-region design-async-region';
     region.innerHTML = content;
-    if (allowed && orderSubmissionRoute(state.route)) {
+    if (allowed && isOrderSubmissionView(state.route)) {
       const columns = $('.order-submission-entry > .commerce-entry-columns', region);
       (columns || region).insertAdjacentHTML('afterbegin', orderSubmissionNavigation());
     }
@@ -1949,6 +1985,9 @@ function navigate(event) {
   let next = location.hash.replace(/^#\/?/, '') || startingRoute();
   const statisticsQuery = next.startsWith('orders/statistics?') ? next.slice('orders/statistics?'.length) : '';
   if (statisticsQuery) next = 'orders/statistics';
+  const listScope = /^((?:orders\/(?:gpt|claude|gemini|grok)|workspace\/renewals|accounts\/apple-balances))\?view=pending$/.exec(next) ||
+    /^(workspace\/customer-loss)\?view=lost$/.exec(next);
+  if (listScope) next = listScope[1];
   const currentHash = '#/' + state.route;
   if (
     window.IDDesignAPI.modules.operations?.blockRechargeNavigation({
@@ -2003,7 +2042,7 @@ function navigate(event) {
     return;
   }
   // A hash navigation can emit both popstate and hashchange.
-  if (event && !statisticsQuery && !legacyCustomerTags && !legacyRechargeSync && state.route === next && mountedPage?.region.isConnected &&
+  if (event && !statisticsQuery && !listScope && !legacyCustomerTags && !legacyRechargeSync && state.route === next && mountedPage?.region.isConnected &&
       mountedPage.region.dataset.pageRegion === next) return;
   window.IDSearchInput?.suspend(activePageRegion());
   preserveMainDraft();
@@ -2032,6 +2071,12 @@ function navigate(event) {
     state.selections.clear();
   }
   if (legacyRechargeSync) { state.page = 1; state.query = ''; }
+  if (permittedRoute(next)) {
+    if (next === 'workspace/renewals') window.IDRenewalHandoff?.applyListScope(Boolean(listScope));
+    else if (listScope && next !== 'accounts/apple-balances') window.IDDesignAPI.modules.commerce?.applyListScope(next);
+  }
+  window.IDDesignAPI.modules.appleBalance?.applyListScope(
+    Boolean(listScope && next === 'accounts/apple-balances' && permittedRoute(next)));
   window.IDDesignAPI.modules.commerce?.applyStatisticsLink(
     next === 'orders/statistics' && permittedRoute(next) ? statisticsQuery : '');
   mobileSidebarScroll = null;
@@ -3566,7 +3611,7 @@ window.addEventListener('resize', () => {
   }
 });
 let designIdCounter = 0;
-function designGo(route) {
+function designGo(route, entryState = null) {
   const target = '#/' + String(route).replace(/^#?\/?/, '');
   if (
     window.IDDesignAPI.modules.operations?.blockRechargeNavigation({
@@ -3574,7 +3619,7 @@ function designGo(route) {
     })
   )
     return;
-  if (location.hash !== target) history.pushState(null, '', target);
+  if (location.hash !== target) history.pushState(entryState, '', target);
   navigate();
 }
 function showDesignPreviewStates() {
@@ -3651,6 +3696,11 @@ function roundedDivision(numerator, denominator) {
 }
 window.IDDesignAPI = {
   registerPage,
+  formSection,
+  orderAmountGroups,
+  syncOrderSaleCurrencySelect,
+  orderPeriodInputs,
+  orderSubmissionSections,
   beginRegionRead,
   finishRegionRead,
   activePageRegion,

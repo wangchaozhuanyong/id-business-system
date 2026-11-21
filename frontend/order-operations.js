@@ -14,7 +14,8 @@
   const views = new Map();
   const e = A.esc;
   let saving = false;
-  let requestKey;
+  const requestKeys = new Map();
+  let identityGeneration = 0;
   let codeTab = A.state.drafts.get('recharge-code-view')?.tab || 'unused';
   let returnContext, previewGeneration = 0;
   let codeFrameObserver;
@@ -52,7 +53,7 @@
       return current.pending;
     }
     if (current.loaded && !refresh) return true;
-    const actorId = D.actor()?.id;
+    const actorId = D.actor()?.id, generation = identityGeneration;
     current.loading = true;
     current.error = '';
     views.set(route, current);
@@ -62,7 +63,7 @@
     }) : null;
     current.pending = (async () => { try {
       const data = await read(route);
-      if (actorId !== D.actor()?.id) return false;
+      if (generation !== identityGeneration || actorId !== D.actor()?.id) return false;
       if (route === codesRoute && current.data) locateNewBatch(current.data.items, data.items, actorId);
       current.data = data;
       return true;
@@ -73,11 +74,11 @@
       current.loaded = true;
       current.loading = false;
       feedback?.finish();
-      if (workspaceActive()) updateWorkspaceRegion(route);
+      if (generation === identityGeneration && workspaceActive()) updateWorkspaceRegion(route);
     } })();
     const result = await current.pending;
     current.pending = undefined;
-    if (current.reload) { current.reload = false; return load(route, true); }
+    if (generation === identityGeneration && current.reload) { current.reload = false; return load(route, true); }
     return result;
   }
 
@@ -98,6 +99,12 @@
     if (!available) return { blocked: true, message: '该套餐剩余可提取 0 个。' };
     if (count > available) return { blocked: true, message: `该套餐剩余可提取 ${available} 个，请调整申请数量。` };
     return { blocked: false, message: `该套餐剩余可提取 ${available} 个，审核通过后发码。` };
+  }
+  const requestAttempt = (plan, count) => JSON.stringify([D.actor()?.id, plan, count]);
+  function requestFormAvailability(view, plan, count) {
+    if (requestKeys.has(requestAttempt(plan, count)))
+      return { blocked: false, message: '提交相同套餐和数量会核对原申请。原申请未受理时仍需符合当前库存。' };
+    return requestAvailability(view?.error ? null : view?.data?.stock, plan, count);
   }
 
   function workspaceHeading(title, description, id, glyph, tone, route) {
@@ -139,7 +146,7 @@
   function requestContent(view) {
     const draft = A.state.drafts.get('recharge-code-request') || {};
     const plan = draft['recharge-request-plan'] || 'plus', count = draft['recharge-request-count'] ?? '1';
-    const availability = requestAvailability(view.error ? null : view.data?.stock, plan, Number(count));
+    const availability = requestFormAvailability(view, plan, Number(count));
     return '<div class="form-panel recharge-request-form"><form id="recharge-code-request"><div class="form-grid recharge-request-fields">' +
       A.field('套餐', 'recharge-request-plan', A.select('recharge-request-plan', Object.entries(planNames), plan), true) +
       A.field('数量', 'recharge-request-count', A.input('recharge-request-count', count, 'type="number" min="1" max="100" step="1" required aria-label="申请数量"'), true) +
@@ -207,7 +214,7 @@
     const form = document.getElementById('recharge-code-request');
     if (!form) return;
     const view = views.get(requestRoute);
-    const { message, blocked } = requestAvailability(view?.error ? null : view?.data?.stock,
+    const { message, blocked } = requestFormAvailability(view,
       form.elements['recharge-request-plan'].value, Number(form.elements['recharge-request-count'].value));
     form.querySelector('#recharge-request-stock').textContent = message;
     form.querySelector('#recharge-request-stock').dataset.blocked = String(blocked);
@@ -376,6 +383,7 @@
 
   async function perform(route, operation) {
     if (saving) return;
+    const generation = identityGeneration;
     saving = true;
     const feedback = A.beginActionFeedback?.(null, '正在处理，请稍候…');
     const view = views.get(route);
@@ -386,21 +394,28 @@
     try {
       return await operation(view);
     } catch (error) {
+      if (generation !== identityGeneration) return;
       A.notify(error.message || '操作未完成，请重试');
       if (route === requestRoute && [409, 503].includes(error.status)) await load(route, true);
     } finally {
       feedback?.finish();
-      saving = false;
-      enabled.forEach((node) => { node.disabled = false; });
-      if (workspaceActive()) updateWorkspaceRegion(requestRoute);
+      if (generation === identityGeneration) {
+        saving = false;
+        enabled.forEach((node) => { node.disabled = false; });
+        if (workspaceActive()) updateWorkspaceRegion(requestRoute);
+      }
     }
   }
 
-  async function requestAction(action, id, details = {}) {
+  async function requestAction(action, id, details = {}, form) {
+    const actorId = D.actor()?.id, route = routeNow(), generation = identityGeneration;
     await perform(requestRoute, async () => {
       const { request } = await D.rechargeCodeAction({ action, id, ...details });
-      if (action !== 'reconcile') A.closeDrawer();
-      A.notify(request.issueProblem || requestStates[request.status] || '已保存');
+      if (generation !== identityGeneration || actorId !== D.actor()?.id) return;
+      if (routeNow() === route) {
+        if (form?.isConnected && form.closest('#drawer[open]')) A.closeDrawer();
+        A.notify(request.issueProblem || requestStates[request.status] || '已保存');
+      }
       await refreshWorkspace();
     });
   }
@@ -475,11 +490,11 @@
     if (form.id === 'code-return-form') { await submitReturn(form); return true; }
     if (form.id === 'code-list-filters') return true;
     if (form.id === 'order-code-reject') {
-      await requestAction('reject', form.dataset.id, { reason: form.elements['order-code-reason'].value.trim() });
+      await requestAction('reject', form.dataset.id, { reason: form.elements['order-code-reason'].value.trim() }, form);
       return true;
     }
     if (form.id === 'order-code-approve') {
-      await requestAction('approve', form.dataset.id);
+      await requestAction('approve', form.dataset.id, {}, form);
       return true;
     }
     if (form.id !== 'recharge-code-request' || !D?.authRequired) return false;
@@ -491,18 +506,30 @@
       return true;
     }
     const view = views.get(requestRoute);
-    const availability = requestAvailability(view?.error ? null : view?.data?.stock, plan, count);
+    const availability = requestFormAvailability(view, plan, count);
     if (availability.blocked) {
       A.setError('recharge-request-count', availability.message);
       return true;
     }
     const draft = JSON.stringify(A.readDraft(form));
-    const actorId = D.actor()?.id;
-    requestKey ??= crypto.randomUUID();
+    const actorId = D.actor()?.id, route = routeNow(), generation = identityGeneration;
+    const attempt = requestAttempt(plan, count);
     await perform(requestRoute, async () => {
-      await D.rechargeCodeAction({ action: 'request', requestKey, plan, count });
-      requestKey = undefined;
-      if (actorId !== D.actor()?.id) return;
+      const requestKey = requestKeys.get(attempt) || crypto.randomUUID();
+      let request;
+      try {
+        ({ request } = await D.rechargeCodeAction({ action: 'request', requestKey, plan, count }));
+        if (!request?.id || !Object.hasOwn(requestStates, request.status)) throw new Error('申请结果暂未确认');
+      } catch (error) {
+        if (generation !== identityGeneration || actorId !== D.actor()?.id) return;
+        if (error.status >= 400 && error.status < 500) throw error;
+        requestKeys.set(attempt, requestKey);
+        if (route === routeNow()) A.notify('申请结果暂未确认。请刷新核对。重新提交相同套餐和数量会核对原申请。');
+        await load(requestRoute, true);
+        return;
+      }
+      if (generation !== identityGeneration || actorId !== D.actor()?.id) return;
+      requestKeys.delete(attempt);
       if (JSON.stringify(A.state.drafts.get('recharge-code-request')) === draft)
         A.state.drafts.delete('recharge-code-request');
       if (form.isConnected && JSON.stringify(A.readDraft(form)) === draft) {
@@ -510,9 +537,11 @@
         form.elements['recharge-request-count'].value = '1';
       }
       setListView(requestRoute, { page: 1 });
-      if (listView(requestRoute).status === 'processed') setListView(requestRoute, { status: 'pending' });
+      if (request.status === 'pending' && listView(requestRoute).status === 'processed')
+        setListView(requestRoute, { status: 'pending' });
       await load(requestRoute, true);
-      A.notify('申请已提交，等待审核');
+      if (generation === identityGeneration && actorId === D.actor()?.id && route === routeNow())
+        A.notify(request.status === 'pending' ? '申请已提交，等待审核' : requestStates[request.status]);
     });
     return true;
   }
@@ -583,6 +612,16 @@
         void load(requestRoute, Boolean(routeChanged)); void load(codesRoute, Boolean(routeChanged));
       }
     },
-    onLeave() { codeFrameObserver?.disconnect(); }
+    onLeave() { codeFrameObserver?.disconnect(); },
+    clearPageState() {
+      identityGeneration++;
+      previewGeneration++;
+      requestKeys.clear();
+      views.clear();
+      saving = false;
+      returnContext = undefined;
+      codeTab = 'unused';
+      codeFrameObserver?.disconnect();
+    }
   });
 })();

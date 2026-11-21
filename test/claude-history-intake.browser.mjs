@@ -421,6 +421,12 @@ test('Claude 订单补录复用原账号，保留租户并在订阅显示来源�
     await drawer.getByLabel(/历史账号/).selectOption(account.id);
     await drawer.getByRole('combobox', { name: '租户*', exact: true }).selectOption(tenant.id);
     await drawer.getByLabel(/原开通方式/).selectOption('银行卡');
+    await form.locator('#commerce-paidCurrency').selectOption('MYR');
+    await form.locator('#commerce-paidAmount').fill('100');
+    await drawer.getByLabel(/原开通方式/).selectOption('苹果内购');
+    assert.deepEqual(await form.locator('#commerce-paidCurrency option').evaluateAll(rows => rows.map(row => row.value)), ['USD']);
+    assert.equal(await form.locator('#commerce-paidAmount').inputValue(), '', '马币金额不能被转存为美元');
+    await drawer.getByLabel(/原开通方式/).selectOption('银行卡');
     await drawer.getByLabel(/^客户实收\*?$/).fill('1500');
     await drawer.getByRole('button', { name: '保存历史订单', exact: true }).click();
     await drawer.waitFor({ state: 'hidden' });

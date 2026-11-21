@@ -1,8 +1,8 @@
 import { isDeepStrictEqual } from 'node:util';
 import { currencies, usesVirtualBankCard, validCurrencyCode } from '../modules/finance/accounting.mjs';
 import { validApplePaidPrices as validateApplePrices } from './apple-funding.mjs';
-import { personalPlans, personalProduct, samePersonalSubscription, stockTypeForProduct, subscriptionSeries, targetKey } from './personal-subscriptions.mjs';
-import { orderNeedsAccount, orderOpeningConfirmed, orderTerminationTime, subscriptionTime } from '../modules/orders/order-opening.mjs';
+import { personalProduct, samePersonalSubscription, stockTypeForProduct, subscriptionSeries, targetKey } from './personal-subscriptions.mjs';
+import { orderNeedsAccount, orderOpeningConfirmed, orderProductPlans as plans, orderTerminationTime, subscriptionTime } from '../modules/orders/order-opening.mjs';
 
 export const rechargePlanLabels = Object.freeze({
   plus: 'Plus', pro100: 'Pro 100', pro200: 'Pro 200', pro500: 'Pro 500'
@@ -10,9 +10,6 @@ export const rechargePlanLabels = Object.freeze({
 const bands = {
   Plus: ['20', '99'], 'Pro 100': ['100', '199'], 'Pro 200': ['220', '499'], 'Pro 500': ['500', ''],
   Pro: ['20', '99'], 'Max 5x': ['100', '249'], 'Max 20x': ['250', '']
-};
-const plans = {
-  GPT: Object.values(rechargePlanLabels), 'Claude Pro': ['Pro'], 'Claude Max': ['Max 5x', 'Max 20x'], ...personalPlans
 };
 const isClaudeOrder = order => order?.product === 'Claude Pro' || order?.product === 'Claude Max';
 export const validApplePaidPrices = prices => validateApplePrices(prices, plans);

@@ -1,14 +1,34 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { startCodexdaichongDemoSite } from '../modules/recharge/codexdaichong/demo-site.mjs';
 import { CODEXDAICHONG_PREFIX } from '../modules/recharge/codexdaichong/gateway.mjs';
+import { interceptDesign, origin } from './helpers/offline-design.mjs';
 
 const frameSelector = '#main > [data-page-region]:not([hidden]) .recharge-integration__content iframe:not([hidden])';
 const workspace = '#/workspace/recharge';
 const mailboxes = '#/mailboxes/google';
 const online = '#/online-recharge/chatgpt';
 const lockNotice = '充值任务正在执行，请等待任务处理完成后再切换或刷新。';
+const code = 'KC-NAVIGATION-FIXTURE';
+const jobKey = 'navigation-fixture-job';
+
+function syntheticSession() {
+  const encode = value => Buffer.from(JSON.stringify(value)).toString('base64url');
+  return JSON.stringify({
+    user: { id: 'navigation-user', email: 'navigation@example.test' },
+    accessToken: [
+      encode({ typ: 'JWT', alg: 'RS256' }),
+      encode({
+        iss: 'https://auth.openai.com',
+        aud: ['https://api.openai.com/v1'],
+        scp: ['model.request'],
+        exp: Math.floor(Date.now() / 1000) + 3600,
+        'https://api.openai.com/auth': { chatgpt_account_id: 'navigation-fixture', chatgpt_user_id: 'navigation-fixture' }
+      }),
+      'synthetic'
+    ].join('.')
+  });
+}
 
 async function captureFrame(page) {
   const frame = page.locator(frameSelector);
@@ -31,27 +51,48 @@ test(
   { timeout: 30_000 },
   async (t) => {
     const playwright = process.env.ID_RECHARGE_QA_PLAYWRIGHT;
-    assert(playwright, '请通过 ID_RECHARGE_QA_PLAYWRIGHT 指定已有 Playwright 模块入口');
-    const { chromium } = await import(pathToFileURL(playwright).href);
-    let clock = Date.now();
-    const host = await startCodexdaichongDemoSite(0, { now: () => clock });
-    t.after(
-      () =>
-        new Promise((resolve) => {
-          host.server.close(resolve);
-          host.server.closeAllConnections();
-        })
-    );
+    const { chromium } = await import(playwright ? pathToFileURL(playwright).href : 'playwright');
     const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
     t.after(() => browser.close());
-    const page = await browser.newPage({ viewport: { width: 1280, height: 850 } });
-    page.setDefaultTimeout(6000);
-    const origin = new URL(host.url).origin;
-    await page.route('**/*', (route) =>
-      new URL(route.request().url()).origin === origin ? route.continue() : route.abort()
-    );
+    const context = await browser.newContext({ viewport: { width: 1280, height: 850 }, serviceWorkers: 'block' });
+    const traffic = await interceptDesign(context, {
+      actor: { id: 'navigation-admin', name: '隔离管理员', role: 'super' },
+      localFixtures: {}
+    });
+    const host = origin + '/';
     const base = origin + CODEXDAICHONG_PREFIX;
     const statusUrl = base + '/status';
+    const taskUrl = base + '/api/task-status/' + jobKey;
+    const session = syntheticSession();
+    const commands = [];
+    const unexpectedWrites = [];
+    let terminal = false;
+    await context.route(base + '/api/**', route => {
+      const request = route.request();
+      const path = new URL(request.url()).pathname.slice(CODEXDAICHONG_PREFIX.length);
+      if (path === '/api/verify-cdk' && request.method() === 'POST') {
+        commands.push({ path, body: request.postDataJSON() });
+        return route.fulfill({ json: { success: true, data: { plan_type: 'plus', plan_label: 'Plus' } } });
+      }
+      if (path === '/api/run-process' && request.method() === 'POST') {
+        commands.push({ path, body: request.postDataJSON() });
+        return route.fulfill({ json: { success: true, jobKey } });
+      }
+      if (path === '/api/task-status/' + jobKey && request.method() === 'GET') {
+        return route.fulfill({ json: { success: true, data: {
+          jobKey, status: terminal ? 'manual' : 'running', isTerminal: terminal, progress: 28
+        } } });
+      }
+      if (request.method() !== 'GET') {
+        unexpectedWrites.push(path);
+        return route.abort();
+      }
+      return route.fallback();
+    });
+
+    const page = await context.newPage();
+    page.setDefaultTimeout(6000);
+    await page.clock.install();
     let statusChecks = 0;
     let submissions = 0;
     const pageErrors = [];
@@ -69,36 +110,37 @@ test(
     const toast = page.getByText(lockNotice, { exact: true });
     const sidebar = page.getByRole('link', { name: '谷歌邮箱', exact: true });
 
-    await page.goto(host.url + workspace);
-    await frame.getByRole('button', { name: '填入演示资料' }).click();
+    await page.goto(host + workspace);
+    await frame.locator('#cdkInput').fill(code);
     await frame.locator('#redeemBtn').click();
+    await frame.locator('#workspaceVerifiedPlan').waitFor();
+    await frame.locator('#tokenInput').fill(session);
     const submitted = page.waitForResponse(
       (response) => response.url() === base + '/api/run-process'
     );
     await frame.locator('#startBtn').click();
-    const { jobKey } = await (await submitted).json();
-    assert(jobKey);
+    assert.equal((await (await submitted).json()).jobKey, jobKey);
     await frame.locator('#taskProgressTitle').getByText('开通中', { exact: true }).waitFor();
     await lock(true);
     const runningFrame = await captureFrame(page);
-    const task = async () => {
-      const response = await fetch(base + '/api/task-status/' + encodeURIComponent(jobKey));
-      assert.equal(response.status, 200);
+    const task = () => page.evaluate(async url => {
+      const response = await fetch(url, { cache: 'no-store' });
+      if (!response.ok) throw new Error('隔离任务读取失败');
       return (await response.json()).data;
-    };
+    }, taskUrl);
     const beforeNavigation = statusChecks;
 
     await page.locator('#sidebar').getByRole('button', { name: '邮箱管理', exact: true }).click();
     await sidebar.click();
     await toast.waitFor();
-    await page.waitForURL(host.url + workspace);
+    await page.waitForURL(host + workspace);
     assert.equal(await runningFrame.same(), true);
     assert.equal((await task()).jobKey, jobKey);
 
     await page.evaluate((hash) => {
       location.hash = hash;
     }, online);
-    await page.waitForURL(host.url + workspace);
+    await page.waitForURL(host + workspace);
     assert.equal(await runningFrame.same(), true);
     assert.equal((await task()).status, 'running');
     assert.equal((await task()).jobKey, jobKey);
@@ -106,13 +148,14 @@ test(
     assert.equal(submissions, 1);
     await runningFrame.dispose();
 
-    clock += 1500;
+    terminal = true;
+    await page.clock.fastForward(1600);
     await frame.locator('#taskProgressTitle').getByText('开通结果待核对', { exact: true }).waitFor();
     await lock(false);
     assert.equal((await task()).isTerminal, true);
     assert.equal((await task()).jobKey, jobKey);
     await sidebar.click();
-    await page.waitForURL(host.url + mailboxes);
+    await page.waitForURL(host + mailboxes);
     await page.locator(frameSelector).waitFor({ state: 'detached' });
 
     // The real online host has tabs and refresh, while actual submission is in the workspace.
@@ -120,7 +163,7 @@ test(
     await page.evaluate((hash) => {
       location.hash = hash;
     }, online);
-    await page.waitForURL(host.url + online);
+    await page.waitForURL(host + online);
     await frame.locator('#querySection').waitFor();
     const nav = page.getByRole('navigation', { name: 'ChatGPT 充值功能' });
     const query = nav.getByRole('button', { name: '查询状态', exact: true });
@@ -151,7 +194,7 @@ test(
       async (route) => {
         started.resolve();
         await resume.promise;
-        await route.continue().catch(() => {});
+        await route.fulfill({ json: { ready: true, admin: true } }).catch(() => {});
       },
       { times: 1 }
     );
@@ -179,6 +222,13 @@ test(
     assert.equal(new URL(page.url()).hash, online);
     assert.equal((await task()).jobKey, jobKey);
     assert.equal(submissions, 1);
+    assert.deepEqual(commands, [
+      { path: '/api/verify-cdk', body: { cdk: code } },
+      { path: '/api/run-process', body: { session, cdk: code } }
+    ]);
+    assert.deepEqual(unexpectedWrites, []);
     assert.deepEqual(pageErrors, []);
+    assert.deepEqual(traffic.external, []);
+    assert.deepEqual(traffic.unavailable, []);
   }
 );

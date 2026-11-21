@@ -161,7 +161,8 @@ test('录单复核只更新已确认客户，客户与订单同存，过期版�
   const profiles = structuredClone(customers);
   profiles[0].phone = profiles[1].phone = '13900000042';
   profiles.find(row => row.id === 'unverified').whatsapp = '+86';
-  const seed = save(0, { customers: profiles, orders: [], tenants: [], operating: [], rentBatches: [], logs: [] }, '新增资料');
+  // Seed historical rows, including a country code that was once saved without a number.
+  const seed = save(0, { customers: profiles, orders: [], tenants: [], operating: [], rentBatches: [], logs: [] }, 'local_save');
   function pending(snapshot, input, decision, id = 'unique', confirmedSameName = false) {
     const data = structuredClone(snapshot.data);
     const existing = data.customers.find(row => row.id === id);

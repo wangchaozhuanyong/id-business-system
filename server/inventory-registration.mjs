@@ -1,3 +1,5 @@
+import { registrationProduct, registrationResultPlatforms } from '../modules/inventory/list.mjs';
+
 const platforms = new Map([
   ['gpt', 'ChatGPT'], ['claude', 'Claude'], ['grok', 'Grok'], ['gemini', 'Gemini']
 ]);
@@ -120,10 +122,15 @@ export function checkRegistrationChanges(previous, next, action, actor) {
   const otherEmails = addresses(['relay', 'microsoft']);
   const oldRecords = new Map(list(previous?.registrationRecords).map(row => [row?.id, row]));
   for (const record of list(next.registrationRecords)) {
+    const prior = oldRecords.get(record?.id);
+    const mailbox = mailboxes.get(record?.assetId);
+    if (!prior && action === 'inventory_registration_result' && !record?.accountId) {
+      const choices = registrationResultPlatforms(mailbox?.type);
+      if (choices.length && !choices.some(([key]) => key === registrationProduct(record.product)))
+        return mailbox?.type === 'relay' ? '隐藏邮箱仅可登记 ChatGPT、Claude 或 Grok' : '请选择该邮箱支持的注册平台';
+    }
     if (!['成功', '待核对'].includes(record?.state)) continue;
-    const prior = oldRecords.get(record.id);
     if (prior && prior.state === record.state) continue;
-    const mailbox = mailboxes.get(record.assetId);
     const product = aiRegistrationProduct(record.product);
     if (mailbox?.type === 'relay' && (!product || product === 'gemini'))
       return '隐藏邮箱仅可登记 ChatGPT、Claude 或 Grok';

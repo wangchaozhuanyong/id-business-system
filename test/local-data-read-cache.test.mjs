@@ -396,6 +396,7 @@ test('overview reuses a clean visit, refreshes explicitly and preserves failed s
         overviewCustomerSummary: () => ({ generation: calls.commerce })
       },
       appleBalance: {
+        canReadAccounting: () => A.state.actor?.role === 'finance' || A.canVisit('accounts/apple-balances'),
         refreshLocalBalance: async () => { calls.apple++; return true; },
         listRefunds: () => [{ status: 'pending' }]
       }

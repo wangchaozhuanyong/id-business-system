@@ -1,23 +1,22 @@
 import { isDeepStrictEqual } from 'node:util';
 import { WriteOperationError } from './write-operation.mjs';
+import { duplicateCustomerContact, normalizeCustomerNumbers } from '../modules/orders/order-customer-match.mjs';
 
 const fail = message => { throw new WriteOperationError(409, message); };
-const contactKey = (value, key) => {
-  const text = String(value || '').trim().normalize('NFKC').toLowerCase();
-  return key === 'telegram' ? text.replace(/^@/, '') : ['phone', 'whatsapp'].includes(key) && /^\+?[\d\s().-]+$/.test(text)
-    ? text.replace(/[\s().-]/g, '') : text;
-};
-
 export function checkCustomerContactDuplicate(rows, after, before) {
-  const nameKey = contactKey(after.name);
-  const nameChanged = nameKey !== contactKey(before?.name);
-  const duplicate = rows.some(row => row.id !== after.id && contactKey(row.name) === nameKey &&
-    ['phone', 'wechat', 'qq', 'whatsapp', 'telegram'].some(key => {
-      const normalized = contactKey(after[key], key);
-      return normalized && normalized === contactKey(row[key], key) &&
-        (nameChanged || normalized !== contactKey(before?.[key], key));
-    }));
-  if (duplicate) fail('相同姓名和联系方式的客户已存在，请核对原客户');
+  if (duplicateCustomerContact(rows, after, before)) fail('相同姓名和联系方式的客户已存在，请核对原客户');
+}
+
+export function prepareCustomerContactWrites(rows, previous) {
+  const byId = new Map((previous || []).map(row => [row.id, row]));
+  for (const row of rows) {
+    const before = byId.get(row.id);
+    if (before && ['name', 'phone', 'whatsapp', 'wechat', 'qq', 'telegram'].every(key => before[key] === row[key])) continue;
+    checkCustomerContactDuplicate(rows, row, before);
+    const { numbers, error } = normalizeCustomerNumbers(row, before);
+    if (error) throw new WriteOperationError(400, error.message);
+    Object.assign(row, numbers);
+  }
 }
 
 // Only an ordinary single contact edit may merge with unrelated changes.
@@ -40,8 +39,9 @@ export function mergeContactWrite(write, current) {
   if (!isDeepStrictEqual(before, latest)) fail('这条资料已被其他操作更新，本次未保存，输入已保留，请重新核对');
   if (data.logs.some(row => row.id === change.log.id)) fail('操作记录已存在，请核对原保存结果');
   if (change.list === 'customers') checkCustomerContactDuplicate(rows, after, before);
-  if (before) rows[rows.findIndex(row => row.id === after.id)] = structuredClone(after);
-  else rows.unshift(structuredClone(after));
+  const saved = structuredClone(after);
+  if (before) rows[rows.findIndex(row => row.id === after.id)] = saved;
+  else rows.unshift(saved);
   data.logs.unshift(structuredClone(change.log));
   if (current.version === write.version && !isDeepStrictEqual(data, write.data))
     fail('普通资料保存包含其他业务改动，请重新核对');

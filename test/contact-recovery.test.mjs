@@ -94,7 +94,7 @@ test('restores only the supported fields of a saved edit, even after unrelated w
   const list = await request(store, 'audit/page?view=recovery&query=' + encodeURIComponent(admin.name));
   assert.equal(list.body.total, 2);
   assert(list.body.items.some(row => row.id === originalId && row.recovery === 'original'));
-  assert(!JSON.stringify(list.body).includes('+60 11111'));
+  assert(!JSON.stringify(list.body).includes('+6011111'));
   store.saveBatch([{ domain: 'inventory', version: 0, action: 'inventory_create', data: {
     mailboxes: [{ id: 'apple-a', type: 'apple', email: 'apple-a@example.test',
       status: '正常', health: 'normal', appStoreRegion: 'US', appleOpeningBalance: '25' }],
@@ -110,7 +110,7 @@ test('restores only the supported fields of a saved edit, even after unrelated w
   assert.equal(diff.status, 'available');
   assert.equal(diff.targetName, '合成客户');
   assert.deepEqual(diff.changes, [
-    { label: '联系电话', current: '+60 44444', restore: '+60 11111' },
+    { label: '联系电话', current: '+6044444', restore: '+6011111' },
     { label: '客户标签', current: ['新客户'], restore: ['长期客户'] }
   ]);
   assert(!JSON.stringify(diff).includes('synthetic-note'));
@@ -123,7 +123,7 @@ test('restores only the supported fields of a saved edit, even after unrelated w
   const { customers: previousCustomers, logs: previousLogs, ...previousRest } = before.data;
   assert.deepEqual(rest, previousRest);
   assert.deepEqual(customers[1], previousCustomers[1]);
-  assert.equal(customers[0].phone, '+60 11111');
+  assert.equal(customers[0].phone, '+6011111');
   assert.deepEqual(customers[0].tags, ['长期客户']);
   assert.equal(customers[0].notes, 'synthetic-note-after');
   assert.equal(customers[0].version, 3);
@@ -180,7 +180,7 @@ test('blocks stale targets, duplicate restored contacts and labels removed from 
   assert.equal((await request(store, resource(numberId), { operationId: randomUUID(),
     body: { version: number.version, reason: 'wrong_value' } })).status, 409);
   const linked = store.load('commerce');
-  linked.data.customers[0].phone = '合成电话';
+  linked.data.customers[0].phone = '+1 202 555 0188';
   linked.data.customers[0].version++;
   linked.data.orders[0].notes = '关联订单同时修改';
   linked.data.orders[0].version++;
@@ -214,7 +214,7 @@ test('does not offer recovery for old, expired, note-only or multi-record writes
   const store = storeFixture(t);
   seed(store);
   assert.equal((await preview(store, String(store.audit().find(row => row.action === '新增资料').id))).status, 'unavailable');
-  const id = await edit(store, 'customers', 0, { phone: '98765' });
+  const id = await edit(store, 'customers', 0, { phone: '+60 98765' });
   const diff = await preview(store, id);
   t.mock.timers.tick(30 * 24 * 60 * 60 * 1_000);
   assert.equal((await preview(store, id)).status, 'available');
@@ -245,7 +245,7 @@ test('failed restore rolls back the business write, audit and receipt, then a re
       WHEN NEW.domain LIKE 'contact-recovery:%' BEGIN SELECT RAISE(ABORT, 'synthetic failure'); END`);
     const original = store.load('commerce');
     const rejected = structuredClone(original);
-    Object.assign(rejected.data.customers[0], { phone: 'never-save-this-number', version: 2 });
+    Object.assign(rejected.data.customers[0], { phone: '+1 202 555 0189', version: 2 });
     rejected.data.logs.unshift({ id: randomUUID(), type: '修改资料', entityId: 'customer-a' });
     const originalAudit = store.audit();
     assert.throws(() => store.saveBatch([{ domain: 'commerce', action: '修改资料', ...rejected }], { actor: admin }));

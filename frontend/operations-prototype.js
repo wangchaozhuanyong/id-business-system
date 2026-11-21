@@ -2757,6 +2757,10 @@
         },
         onError(error) {
           autoRefresh.checked = false; stop();
+          if (!keepManagedMailResults(form, error)) {
+            finishManagedMailRead(form);
+            clearManagedMailResults(form);
+          }
           const status = form.querySelector('#ops-managed-query-progress');
           status.className = 'inline-notice warning';
           status.textContent = error.message || '自动更新已断开，可重新开启或立即刷新。';
@@ -2804,6 +2808,17 @@
   const mailQuerySnapshots = new WeakMap();
   const mailUpdateControls = new WeakMap();
   const queuedMailUpdates = new WeakSet();
+  function keepManagedMailResults(form, error) {
+    const snapshot = mailQuerySnapshots.get(form);
+    const expires = Date.parse(snapshot?.codeExpiresAt);
+    return snapshot && (!error.status || error.status === 429 || error.status >= 500) &&
+      (!Number.isFinite(expires) || expires > Date.now());
+  }
+  function clearManagedMailResults(form) {
+    mailQuerySnapshots.delete(form);
+    form.querySelector('#ops-managed-query-results').replaceChildren();
+    form.querySelector('[data-mail-refresh]').hidden = true;
+  }
   function mailBodyParts(body) {
     const parts = [];
     const safeLink = (value) => {
@@ -2914,6 +2929,7 @@
     } catch (error) {
       if (read.current() && field.value.trim() === code && Number(limitField.value) === limit) {
         finishManagedMailRead(form, read);
+        if (!keepManagedMailResults(form, error)) clearManagedMailResults(form);
         progress.className = 'inline-notice warning';
         progress.innerHTML = `<span>${esc(error.message || '邮件读取失败，请重试。')}</span>`;
         progress.insertAdjacentHTML('beforeend', button('重试', 'ops-mail-retry'));
@@ -3035,8 +3051,7 @@
         const view = getDraft('mailbox-tools-view');
         if (['create', 'credential', 'rotate'].includes(view.editor))
           editManagedPool(panel, view.editor, view.id || '');
-        else if (['batch', 'settings'].includes(view.editor))
-          editMailboxBatchOrSettings(panel, view.editor);
+        else if (view.editor === 'batch') editMailboxBatch(panel);
       }
       return true;
     } catch (error) {
@@ -3129,7 +3144,6 @@
       create: '选择实际收信服务商，按字段右侧说明完成授权。验证成功后复制查询码交付买家。',
       credential: '生成新的应用专用密码后在这里验证并保存。现有买家查询码继续使用。',
       batch: '每批可导入 1 至 50 个邮箱。按服务商准备资料，提交后核对每行结果。失败行可修正后重新导入。',
-      settings: '设置之后生成的查询码有效天数。',
       'registration-access': '授权指定注册员查询这个邮箱的验证码，授权可以随时收回。',
       rotate: '重置后旧查询码立即失效，请复制并重新交付新码。',
       query: '按查询码读取邮件。验证码和正文仅在当前查询中展示。'
@@ -3207,11 +3221,13 @@
       '<div data-mailbox-query-slot></div>', button('关闭', 'drawer-close'));
     root.querySelector('[data-mailbox-query-slot]').append(form);
     if (row) form.dataset.boundMailbox = row.id;
+    else delete form.dataset.boundMailbox;
     form.querySelector('#ops-managed-query-code').closest('.field').parentElement.hidden = Boolean(row);
     form.querySelector('[data-action="ops-tool-clear"]').hidden = Boolean(row);
     onMailboxOperationClose(root, () => {
       finishManagedMailRead(form);
       mailUpdateControls.get(form)?.stop();
+      delete form.dataset.boundMailbox;
       form.querySelector('#ops-managed-query-code').value = '';
       form.querySelector('#ops-managed-query-code').closest('.field').parentElement.hidden = false;
       form.querySelector('[data-action="ops-tool-clear"]').hidden = false;
@@ -3309,29 +3325,26 @@
     provider?.dispatchEvent(new Event('change'));
     surface.querySelector('#ops-managed-pool-form').scrollIntoView({ block: 'nearest' });
   }
-  function editMailboxBatchOrSettings(panel, action) {
+  function editMailboxBatch(panel) {
     if (panel.dataset.version === undefined) return;
     preserveDraft();
-    state.drafts.set(draftKey('mailbox-tools-view'), { tab: 'manage', editor: action, id: '' });
+    state.drafts.set(draftKey('mailbox-tools-view'), { tab: 'manage', editor: 'batch', id: '' });
     panel.querySelector('[data-mailbox-pool-issued]').replaceChildren();
-    const fields = action === 'batch'
-      ? wide(field('收信服务商', 'ops-managed-batch-provider',
+    const fields = wide(field('收信服务商', 'ops-managed-batch-provider',
           select('ops-managed-batch-provider', [['google', '谷歌邮箱'], ['apple', '苹果云邮箱'], ['microsoft', '微软邮箱']], 'google'), true,
           `<div data-mailbox-batch-help>${mailboxCredentialHelp('google', true)}</div>`)) +
         wide(field('邮箱数据', 'ops-managed-batch', '<textarea id="ops-managed-batch" name="ops-managed-batch" maxlength="16000" rows="6" autocomplete="off" data-no-draft></textarea>', true,
-          '每行一条，每批 1 至 50 条。谷歌或苹果用“邮箱----应用专用密码----备注”，微软用“邮箱----备注”。也支持竖线分隔。提交后核对逐行结果，失败行修正后重新导入。'))
-      : field('默认有效期', 'ops-managed-days', input('ops-managed-days', panel.dataset.defaultValidDays, 'type="number" min="1" max="365"'), true,
-        '填写 1 至 365 天，用于以后生成的查询码；到期时间以北京时间显示。');
-    const label = action === 'batch' ? '验证并导入' : '保存设置';
-    const markup = `<form id="ops-managed-pool-form" class="mailbox-pool-form" novalidate><input type="hidden" name="ops-managed-action" value="${action}"><input type="hidden" name="ops-managed-version" value="${esc(panel.dataset.version)}">${grid(fields)}<div class="form-footer">${button('取消', 'ops-mailbox-pool-cancel')}<button type="submit" class="button primary">${label}</button></div></form>`;
+          '每行一条，每批 1 至 50 条。谷歌或苹果用“邮箱----应用专用密码----备注”，微软用“邮箱----备注”。也支持竖线分隔。提交后核对逐行结果，失败行修正后重新导入。'));
+    const label = '验证并导入';
+    const markup = `<form id="ops-managed-pool-form" class="mailbox-pool-form" novalidate><input type="hidden" name="ops-managed-action" value="batch"><input type="hidden" name="ops-managed-version" value="${esc(panel.dataset.version)}">${grid(fields)}<div class="form-footer">${button('取消', 'ops-mailbox-pool-cancel')}<button type="submit" class="button primary">${label}</button></div></form>`;
     let surface = panel;
     if (panel.closest('dialog')) panel.querySelector('[data-mailbox-pool-editor]').innerHTML = markup;
     else {
-      surface = openMailboxOperation(panel, action, action === 'batch' ? '批量导入邮箱' : '查询码设置', null, markup,
-        button('取消', 'ops-mailbox-pool-cancel') + `<button type="submit" form="ops-managed-pool-form" class="button primary">${label}</button>`, draftKey(`mailbox-pool:${action}:new`));
+      surface = openMailboxOperation(panel, 'batch', '批量导入邮箱', null, markup,
+        button('取消', 'ops-mailbox-pool-cancel') + `<button type="submit" form="ops-managed-pool-form" class="button primary">${label}</button>`, draftKey('mailbox-pool:batch:new'));
       surface.querySelector('.form-footer').hidden = true;
     }
-    bindToolDraft(surface.querySelector('#ops-managed-pool-form'), `mailbox-pool:${action}:new`);
+    bindToolDraft(surface.querySelector('#ops-managed-pool-form'), 'mailbox-pool:batch:new');
     const provider = surface.querySelector('#ops-managed-batch-provider');
     const updateGuide = () => {
       surface.querySelector('[data-mailbox-batch-help]').innerHTML = mailboxCredentialHelp(provider.value, true);
@@ -4013,8 +4026,8 @@
         delivery.batchMenu(node, 'pool', snapshot.items.length, reset);
       if (action === 'ops-mailbox-pool-copy-query' && snapshot && delivery?.enabled()) reset('single', [id], 1, node, true);
       if (action === 'ops-mailbox-pool-add') editManagedPool(panel, 'create');
-      if (action === 'ops-mailbox-pool-batch') editMailboxBatchOrSettings(panel, 'batch');
-      if (action === 'ops-mailbox-pool-settings') editMailboxBatchOrSettings(panel, 'settings');
+      if (action === 'ops-mailbox-pool-batch') editMailboxBatch(panel);
+      if (action === 'ops-mailbox-pool-settings') void delivery?.openValiditySettings(node, result => paintManagedPool(panel, result));
       if (action === 'ops-mailbox-pool-more') {
         const row = mailboxPoolSnapshots.get(panel)?.items.find(item => item.id === id);
         if (!row || row.authorizationPending) return true;

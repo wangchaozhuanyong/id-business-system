@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { interceptDesign, origin, settle, toggleDesignTheme } from './helpers/offline-design.mjs';
+import { assertOrderWorkspace } from './helpers/order-workspace.mjs';
 
 const browserEntry = process.env.ID_RECHARGE_QA_PLAYWRIGHT;
 const links = [['GPT', 'order/gpt'], ['Claude', 'order/claude'], ['Gemini', 'order/gemini'],
@@ -99,6 +100,7 @@ test('订单提交合并入口，保留五个旧地址、草稿、权限和手�
         await page.locator('#commerce-order-form').waitFor();
         if (dark) await toggleDesignTheme(page);
         await settle(page);
+        await assertOrderWorkspace(page, 'GPT');
         const readyNavigation = await assertNavigationLayout(nav, width);
         if (loadingNavigation) {
           for (const edge of ['left', 'right', 'top'])
@@ -113,6 +115,7 @@ test('订单提交合并入口，保留五个旧地址、草稿、权限和手�
           await heading.waitFor();
           await settle(page);
           await assertNavigationLayout(nav, width, route === 'order-completion');
+          if (route.startsWith('order/')) await assertOrderWorkspace(page, label);
           assert.equal(await nav.locator('[aria-current="page"]').textContent(), label);
           assert.equal(await sidebar.locator('.nav-child[aria-current="page"]').textContent(), '订单提交');
           assert(await nav.evaluate(node => {

@@ -1,25 +1,19 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { pathToFileURL } from 'node:url';
-import { startPreview } from '../server/preview.mjs';
+import { offlineBusiness } from './helpers/offline-business.mjs';
+import { origin } from './helpers/offline-design.mjs';
 
 test('全局外点收起与切页草稿保留', { timeout: 90_000 }, async (t) => {
   assert(process.env.ID_RECHARGE_QA_PLAYWRIGHT, '请指定已有 Playwright 模块入口');
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
-  const host = await startPreview(0, { databasePath: ':memory:' });
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
-  t.after(async () => {
-    await browser.close();
-    host.server.closeAllConnections();
-    await new Promise(resolve => host.server.close(resolve));
-  });
+  t.after(() => browser.close());
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+  const { traffic } = await offlineBusiness(t, page, { role: 'super' });
   page.setDefaultTimeout(5000);
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
-  const origin = new URL(host.url).origin;
-  await page.route('**/*', route => new URL(route.request().url()).origin === origin
-    ? route.continue() : route.abort());
   const go = async route => {
     await page.evaluate(route => { location.hash = '#/' + route; }, route);
     await page.locator(`#main[data-layout-route="${route}"]`).waitFor();
@@ -33,7 +27,7 @@ test('全局外点收起与切页草稿保留', { timeout: 90_000 }, async (t) =
     assert(bounds.x > 0, '测试视口应留有抽屉遮罩');
     await page.mouse.click(bounds.x / 2, 500);
   };
-  await page.goto(host.url + '#/customers/new');
+  await page.goto(origin + '/#/customers/new');
   await name.fill('客户录入未保存');
   await page.locator('#commerce-contact-phone').fill('5550123');
   await go('settings/costs');
@@ -134,34 +128,33 @@ test('全局外点收起与切页草稿保留', { timeout: 90_000 }, async (t) =
   });
   assert.deepEqual(safeDraft, { ordinary: 'keep', unchecked: '' });
   assert.deepEqual(errors, []);
+  assert.deepEqual(traffic.external, []);
 });
 
 test('客户保存迟到响应不清除随后输入', { timeout: 30_000 }, async (t) => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
-  const host = await startPreview(0, { databasePath: ':memory:' });
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
   let release;
   const gate = new Promise(resolve => { release = resolve; });
   t.after(async () => {
     release();
     await browser.close();
-    host.server.closeAllConnections();
-    await new Promise(resolve => host.server.close(resolve));
   });
   const page = await browser.newPage();
+  const { request, respond, fulfil, traffic } = await offlineBusiness(t, page);
   page.setDefaultTimeout(5000);
   let acknowledged;
   const sent = new Promise(resolve => { acknowledged = resolve; });
   await page.route('**/api/local/commerce', async route => {
-    if (route.request().method() !== 'PUT') return route.continue();
-    const response = await route.fetch();
+    if (route.request().method() !== 'PUT') return route.fallback();
+    const response = await respond(route);
     acknowledged();
     await gate;
-    await route.fulfill({ response });
+    await fulfil(route, response);
   });
-  await page.goto(host.url + '#/customers/new');
+  await page.goto(origin + '/#/customers/new');
   await page.locator('#commerce-contact-name:visible').fill('首次提交客户');
-  await page.locator('#commerce-contact-phone').fill('5550199');
+  await page.locator('#commerce-contact-phone').fill('+60125550199');
   await page.locator('button[form="commerce-contact-form"]').click();
   await sent;
   await page.locator('#commerce-contact-name:visible').fill('保存期间继续编辑');
@@ -182,11 +175,11 @@ test('客户保存迟到响应不清除随后输入', { timeout: 30_000 }, async
   let editAcknowledged;
   const editSent = new Promise(resolve => { editAcknowledged = resolve; });
   await page.route('**/api/local/commerce', async route => {
-    if (route.request().method() !== 'PUT') return route.continue();
-    const response = await route.fetch();
+    if (route.request().method() !== 'PUT') return route.fallback();
+    const response = await respond(route);
     editAcknowledged();
     await editGate;
-    await route.fulfill({ response });
+    await fulfil(route, response);
   });
   await page.locator('button[form="commerce-contact-form"]').click();
   await editSent;
@@ -199,7 +192,8 @@ test('客户保存迟到响应不清除随后输入', { timeout: 30_000 }, async
   await page.locator('button[form="commerce-contact-form"]').click();
   assert.equal((await nextSave).status(), 200, '本次保存推进的版本应支持后续编辑继续保存');
   await page.locator('#drawer').waitFor({ state: 'hidden' });
-  const persisted = await (await page.request.get(host.url + 'api/local/commerce')).json();
+  const persisted = (await request('commerce')).body;
   assert.equal(persisted.data.customers[0].name, '已有客户的后续编辑');
   assert.equal(persisted.data.customers[0].version, 3);
+  assert.deepEqual(traffic.external, []);
 });

@@ -17,6 +17,7 @@ from remote import (ACTION_PASSWORD_PRESENTATION_FILES, ASSET_METADATA_REPAIR_BA
                     CARD_FIRST_PAINT_PRESENTATION_FILES, CARD_LIST_TOOLBAR_PRESENTATION_FILES,
                     CARD_NUMBER_PRESENTATION_FILES, CARD_PLAN_PRESENTATION_FILES,
                     CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES, PRESENTATION_SCOPES, SECURITY_PRESENTATION_FILES,
+                    CARD_IMPORT_PREVIEW_SOURCE, RECHARGE_REDEMPTION_CARD_IMPORT_FILES,
                     REDEEM_PRESENTATION_FILES, SUBSCRIPTION_INVOICE_PRESENTATION_FILES,
                     TABLE_ACTIONS_STYLESHEET, TASK_HISTORY_PRESENTATION_FILES,
                     WORKSPACE_PROGRESS_PRESENTATION_FILES, PRESENTATION_MOUNT_ERRORS, asset_bundle_summary)
@@ -44,10 +45,13 @@ CARD_FIRST_PAINT_MANIFEST = "recharge-card-first-paint-20261121.json"
 CARD_FIRST_PAINT_MANIFEST_PATH = f"deploy/website/{CARD_FIRST_PAINT_MANIFEST}"
 CARD_LIST_TOOLBAR_MANIFEST = "card-list-toolbar-20261121.json"
 CARD_LIST_TOOLBAR_MANIFEST_PATH = f"deploy/website/{CARD_LIST_TOOLBAR_MANIFEST}"
+RECHARGE_REDEMPTION_CARD_IMPORT_MANIFEST = "recharge-redemption-card-import-20261121.json"
+RECHARGE_REDEMPTION_CARD_IMPORT_MANIFEST_PATH = f"deploy/website/{RECHARGE_REDEMPTION_CARD_IMPORT_MANIFEST}"
 CORE_PATHS = ("deploy/recharge-core", "deploy/caddy", "modules/recharge/codexdaichong", "package.json",
               PROXY_TYPE_CATALOG, TASK_HISTORY_MANIFEST_PATH, ADMIN_WORKSPACE_MANIFEST_PATH,
               SUBSCRIPTION_INVOICE_MANIFEST_PATH, ACTION_PASSWORD_MANIFEST_PATH, CARD_NUMBER_MANIFEST_PATH,
-              CARD_FIRST_PAINT_MANIFEST_PATH, CARD_LIST_TOOLBAR_MANIFEST_PATH)
+              CARD_FIRST_PAINT_MANIFEST_PATH, CARD_LIST_TOOLBAR_MANIFEST_PATH,
+              RECHARGE_REDEMPTION_CARD_IMPORT_MANIFEST_PATH)
 ADAPTER_SCOPE = {
     "modules/recharge/codexdaichong/gateway.mjs", "modules/recharge/codexdaichong/local-gateway.mjs",
     "modules/recharge/codexdaichong/native-adapter.mjs", "modules/recharge/codexdaichong/runtime.mjs",
@@ -169,7 +173,7 @@ def require_ancestor(base, sha):
         raise RuntimeError("requested_revision_not_an_ancestor_of_main")
 
 
-def require_presentation_approval(base, sha, manifest, approved_files):
+def require_presentation_approval(base, sha, manifest, approved_files, *, added_files=()):
     approval_file = ROOT / "deploy/website" / manifest
     try:
         approval = json.loads(approval_file.read_bytes())
@@ -178,17 +182,27 @@ def require_presentation_approval(base, sha, manifest, approved_files):
         if (not all(isinstance(value, str) and SHA256.fullmatch(value) for value in assets.values()) or
                 assets["beforeAssetsSha256"] == assets["assetsSha256"] or
                 not isinstance(files, dict) or set(files) != set(approved_files) or
+                (added_files and approval.get("baseWebsiteSha") != base) or
                 not all(isinstance(pair, dict) and set(pair) == {"before", "after"} and
-                        all(isinstance(value, str) and SHA256.fullmatch(value) for value in pair.values())
-                        for pair in files.values())):
+                        isinstance(pair["after"], str) and SHA256.fullmatch(pair["after"]) and
+                        (pair["before"] is None if name in added_files else
+                         isinstance(pair["before"], str) and SHA256.fullmatch(pair["before"]))
+                        for name, pair in files.items())):
             raise ValueError("invalid scope")
     except (KeyError, OSError, TypeError, ValueError) as error:
         raise RuntimeError("recharge_presentation_approval_invalid") from error
     for name in approved_files:
         for side, revision in (("before", base), ("after", sha)):
+            expected = files[name][side]
+            if expected is None:
+                if git("ls-tree", revision, "--", name):
+                    raise RuntimeError("recharge_presentation_source_mismatch")
+                continue
             content = subprocess.check_output(["git", "show", f"{revision}:{name}"], cwd=ROOT, timeout=30)
-            if hashlib.sha256(content).hexdigest() != files[name][side]:
+            if hashlib.sha256(content).hexdigest() != expected:
                 raise RuntimeError("recharge_presentation_source_mismatch")
+    if added_files:
+        assets["baseWebsiteSha"] = base
     return assets
 
 
@@ -327,6 +341,10 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False, 
     elif changed == {*CARD_LIST_TOOLBAR_PRESENTATION_FILES, CARD_LIST_TOOLBAR_MANIFEST_PATH}:
         return "cardListToolbarPresentation", require_presentation_approval(
             base, sha, CARD_LIST_TOOLBAR_MANIFEST, CARD_LIST_TOOLBAR_PRESENTATION_FILES)
+    elif changed == {*RECHARGE_REDEMPTION_CARD_IMPORT_FILES, RECHARGE_REDEMPTION_CARD_IMPORT_MANIFEST_PATH}:
+        return "rechargeRedemptionCardImportPresentation", require_presentation_approval(
+            base, sha, RECHARGE_REDEMPTION_CARD_IMPORT_MANIFEST, RECHARGE_REDEMPTION_CARD_IMPORT_FILES,
+            added_files=(CARD_IMPORT_PREVIEW_SOURCE,))
     elif changed == set(CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES):
         return "checkoutDiagnosticPresentation", require_presentation_approval(
             base, sha, "checkout-diagnostic-20261114.json", CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES)
@@ -532,6 +550,8 @@ def main(sample_backup_resources=False):
         raise RuntimeError("requested_revision_already_running_read_back_the_existing_release")
     presentation_scope, presentation = require_website_scope(base, sha, include_adapter, include_core,
         partner_api=partner_api, native_publication=before.get("nativePublication")) or (None, None)
+    if presentation_scope == "rechargeRedemptionCardImportPresentation" and (retry_receipt or customer_progress):
+        raise RuntimeError("recharge_presentation_requires_plain_website")
     deferred_native = None
     deployed_native = None
     if presentation_scope == "deployedNativeBuildInputs":
@@ -608,7 +628,8 @@ def main(sample_backup_resources=False):
              "modules/orders/order-customer-match.mjs", "modules/orders/order-whatsapp.mjs", "server/order-customer-write.mjs",
              "modules/finance/apple-funding.mjs", "modules/orders/renewal-reminders.mjs", "modules/data/document-delta.mjs",
              "modules/orders/order-list.mjs", "modules/inventory/list.mjs", "modules/finance/accounting.mjs",
-             "modules/data/record-edit.mjs", "server/business-lists.mjs", "server/record-edit.mjs",
+             "modules/data/record-edit.mjs", "modules/recharge/codexdaichong/card-import-preview.mjs",
+             "server/business-lists.mjs", "server/record-edit.mjs",
              "server/renewal-sidebar.mjs", "server/account-lifecycle.mjs", "server/finance/recharge-reconciliation.mjs",
              "server/site-management.mjs", "server/site-observations.mjs", "server/access-roles.mjs",
              "server/local-auth.mjs", "server/login-security.mjs", "server/staff-workspaces.mjs",
@@ -639,6 +660,9 @@ def main(sample_backup_resources=False):
         files += (CARD_FIRST_PAINT_MANIFEST_PATH,)
     if presentation_scope == "cardListToolbarPresentation":
         files += (CARD_LIST_TOOLBAR_MANIFEST_PATH,)
+    if presentation_scope == "rechargeRedemptionCardImportPresentation":
+        files += (RECHARGE_REDEMPTION_CARD_IMPORT_MANIFEST_PATH, "frontend/order-operations.js",
+                  "frontend/recharge-partners.mjs")
     if presentation_scope == "rechargeAdminWorkspacePresentation":
         files += ("frontend/finance-collection.js", "server/finance/collection-route.mjs", "server/card-management.mjs",
                   "deploy/website/check-business-action.mjs")

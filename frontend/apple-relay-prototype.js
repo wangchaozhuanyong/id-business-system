@@ -353,6 +353,16 @@
   function select(name, choices, value = '') {
     return A.select(`relay-${name}`, choices, value);
   }
+  function aliasEmailField(id, value, readOnly = false, help = '填写已在 Apple 开通并转发到此主邮箱的地址，不在这里创建 Apple 地址。') {
+    return A.field('隐藏邮箱地址', id,
+      A.input(id, value, `type="email" maxlength="254" required${readOnly ? ' readonly' : ''}`), true, help);
+  }
+  function aliasNoteField(id, value) {
+    return A.field('备注', id, A.input(id, value, 'maxlength="500"'));
+  }
+  function singleAliasRegistration(parentId, parentVersion, email, note, days = 30) {
+    return { parentId, parentVersion, days, batch: false, rows: [{ email, note }] };
+  }
   function parentChoices(current = '') {
     return [
       ['', '请选择 Apple 主邮箱'],
@@ -1147,20 +1157,11 @@
       id,
       id ? '编辑隐藏邮箱' : '登记 Apple 隐藏邮箱',
       parentPicker(pid, id ? undefined : d['relay-parent-choice'], Boolean(id)) +
-        field(
-          '隐藏邮箱地址',
-          'email',
-          input(
-            'email',
-            v('email'),
-            row && (local || row.inventoryState !== 'available' || row.usageLinks.length)
-              ? 'readonly'
-              : ''
-          ),
-          true,
+        aliasEmailField('relay-email', v('email'),
+          Boolean(row && (local || row.inventoryState !== 'available' || row.usageLinks.length)),
           row && local
             ? '隐藏邮箱地址用于核对 Vendure 绑定，登记后不可修改。'
-            : '填写已在 Apple 开通并转发到此主邮箱的地址，不在这里创建 Apple 地址。'
+            : undefined
         ) +
         field(
           '有效天数',
@@ -1180,11 +1181,7 @@
               true
             )
           : '') +
-        field(
-          '备注',
-          'note',
-          input('note', d['relay-note'] ?? row?.notes ?? '', 'maxlength="500"')
-        ) +
+        aliasNoteField('relay-note', d['relay-note'] ?? row?.notes ?? '') +
         `<div class="commerce-span-all footnote">${local ? '收件服务登记后可查看查询码。已签发的查询码可从“更多操作”中重置。' : '隐藏邮箱无需独立密码、2FA 或电话；查询码和到期时间由系统生成。'}</div>`
     );
     ctx.parentId = row?.parentMailboxId || '';
@@ -1684,10 +1681,8 @@
       A.notify('主邮箱或隐藏邮箱库存已变化，本次未保存');
       return;
     }
-    if (!row && usesRelayRegistration()) return registerAliases(form, ctx, fp, {
-      parentId: pid, parentVersion, days: Number(val(raw, 'days')), batch: false,
-      rows: [{ email: val(raw, 'email'), note: val(raw, 'note') }]
-    });
+    if (!row && usesRelayRegistration()) return registerAliases(form, ctx, fp,
+      singleAliasRegistration(pid, parentVersion, val(raw, 'email'), val(raw, 'note'), Number(val(raw, 'days'))));
     return saveChange(
       form,
       ctx,
@@ -3127,6 +3122,9 @@
       A.go('mailboxes/relay');
     },
     openAliasEditor,
+    aliasEmailField,
+    aliasNoteField,
+    singleAliasRegistration,
     openAliasImport,
     openAliasDetail,
     openMails,

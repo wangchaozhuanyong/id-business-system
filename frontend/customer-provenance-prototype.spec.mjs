@@ -52,6 +52,7 @@ function runtime(localData) {
     icon: () => '',
     tag: esc,
     titleInfo: () => '',
+    formSection: (_number, _title, fields) => fields,
     operatorIdProperty: (label, id) => `<div>${esc(label)} ${esc(id || '历史未记录')}</div>`,
     header: () => '',
     summary: () => '',
@@ -109,7 +110,7 @@ function runtime(localData) {
       raw: {
         'commerce-kind': kind,
         'commerce-name': '演示新客户',
-        'commerce-phone': '演示联系电话',
+        'commerce-phone': '+1 202 555 0108',
         'commerce-tags': '["长期客户","企业客户"]',
         ...Object.fromEntries(Object.entries(raw).map(([key, value]) => [`commerce-${key}`, value]))
       },
@@ -231,7 +232,7 @@ test('客户与租户录入独立页面保留草稿，保存后留在当前页�
 
   r.api.state.route = 'customers/new';
   assert.match(r.module.render(), /value="客户草稿"/);
-  r.contact({ name: '工作台客户', phone: '60123456789' });
+  r.contact({ name: '工作台客户', phone: '+60123456789' });
   assert.equal(r.customers()[0].name, '工作台客户');
   assert.equal(r.api.state.route, 'customers/new');
   assert.equal(r.api.state.drafts.has('commerce-contact:customer:new'), false);

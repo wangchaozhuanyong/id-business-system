@@ -97,8 +97,12 @@ test('partner admin issues and copies only the scoped key and codes with the sha
     const code = 'RA-' + 'A'.repeat(32);
     const partner = { id: 'rp_' + 'b'.repeat(24), name: '测试合作方', createdAt: '2026-11-14T12:00:00Z' };
     const actions = [];
+    let failBatchRefresh = false;
     await context.route('**/api/local/recharge-partners*', async route => {
-      if (route.request().method() === 'GET') return route.fulfill({ json: source });
+      if (route.request().method() === 'GET') {
+        if (failBatchRefresh) return route.fulfill({ status: 503, json: { error: '合成批次刷新失败' } });
+        return route.fulfill({ json: source });
+      }
       const input = route.request().postDataJSON();
       actions.push(input);
       if (input.action === 'create') {
@@ -108,6 +112,7 @@ test('partner admin issues and copies only the scoped key and codes with the sha
       if (input.action === 'rotate') return route.fulfill({ json: { partner, apiKey: newKey } });
       const batch = { id: 'synthetic-batch', partnerId: partner.id, plan: input.plan, batchNo: 'PO000001', codes: [code] };
       source.batches.push(batch);
+      failBatchRefresh = true;
       return route.fulfill({ status: 201, json: { batch } });
     });
     const page = await context.newPage();
@@ -123,8 +128,16 @@ test('partner admin issues and copies only the scoped key and codes with the sha
     assert.equal(await page.getByLabel('API 密钥', { exact: true }).inputValue(), '');
     await page.getByLabel('合作方', { exact: true }).selectOption(partner.id);
     await page.getByLabel('套餐', { exact: true }).selectOption({ label: 'Pro 500' });
-    await page.getByRole('button', { name: '发放兑换码', exact: true }).click();
+    const issue = page.getByRole('button', { name: '发放兑换码', exact: true });
+    await issue.click();
+    await page.getByText('已发放批次 PO000001，共 1 个兑换码。', { exact: true }).waitFor();
+    await page.getByText('合成批次刷新失败', { exact: true }).waitFor();
+    assert(await issue.isDisabled());
+    failBatchRefresh = false;
+    await page.getByRole('button', { name: '刷新', exact: true }).click();
     await page.locator('[data-partner-batches]').getByText('Pro 500', { exact: true }).waitFor();
+    assert(await issue.isEnabled());
+    assert.equal(await page.getByRole('button', { name: '准备发放下一批', exact: true }).count(), 0);
     await page.getByRole('button', { name: '复制兑换码', exact: true }).click();
     await page.waitForFunction(value => window.fixtureCopied === value, code);
     page.once('dialog', dialog => dialog.accept());

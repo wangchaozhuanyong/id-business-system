@@ -7,13 +7,14 @@ import { applyInventoryUsage, inspectInventoryUsage } from '../server/inventory-
 import { checkAppleLedger, checkStockDeliveries } from '../server/local-business-integrity.mjs';
 import { checkAppleOrder } from '../server/order-policy.mjs';
 import { personalOrderError, preparePersonalInventory } from '../server/personal-subscriptions.mjs';
+import { chooseOrderCustomer } from './helpers/order-customer.mjs';
 import { interceptDesign, origin, separatorSnapshot, settle, toggleDesignTheme } from './helpers/offline-design.mjs';
 
 const { chromium } = await import(process.env.ID_RECHARGE_QA_PLAYWRIGHT
   ? pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href : 'playwright');
 
 const actor = { id: 'personal-admin', name: '合成经办员', role: 'admin' };
-const customer = { id: 'personal-customer', name: '合成续费客户', active: true };
+const customer = { id: 'personal-customer', name: '合成续费客户', phone: '+60125550199', active: true };
 const mailbox = { id: 'personal-google', email: 'selected@example.test', type: 'google', status: '正常',
   health: 'normal', inventoryState: 'available', usageLinks: [], inventoryHistory: [] };
 const wallet = { id: 'personal-apple', email: 'wallet@example.test', type: 'apple', status: '正常',
@@ -149,7 +150,7 @@ test('Gemini 从谷歌邮箱登记并交付，Apple 扣款与库存同批保存�
     ['续费', '成品交付']);
   assert.equal(await page.locator(removedFields).count(), 0);
   await page.locator('#commerce-businessType').selectOption('成品交付');
-  await pick(page, 'customerId', customer.id);
+  await chooseOrderCustomer(page, customer);
   await pick(page, 'emailHistory', stock.id);
   assert.equal(await page.locator('#commerce-email').inputValue(), mailbox.email);
   assert.equal(await page.locator('#commerce-tenantId, #commerce-kyc, #commerce-verifierPhone').count(), 0);
@@ -184,7 +185,7 @@ test('Gemini 从谷歌邮箱登记并交付，Apple 扣款与库存同批保存�
 
   await go(page, 'workspace/order/gemini');
   await page.locator('#commerce-businessType').selectOption('续费');
-  await pick(page, 'customerId', customer.id);
+  await chooseOrderCustomer(page, customer);
   assert.equal(await page.locator('#commerce-email').inputValue(), mailbox.email);
   assert.equal(await page.locator('[data-commerce-field="email"] #commerce-emailHistory-picker').isVisible(), true);
   await pick(page, 'emailHistory', prior.id);
@@ -216,7 +217,7 @@ test('Grok 手机录单保留 X 标识、卡序列号、草稿和失败重试', 
   assert.equal(await page.locator('[data-commerce-field="loginMethod"], [data-commerce-field="xHandle"], [data-commerce-field="xLinkState"]').count(), 0);
   assert.equal(await page.locator('#commerce-previousSubscriptionOrderId, #commerce-previousAutoRenew').count(), 0);
   assert.equal(await page.locator('[data-commerce-field="email"] #commerce-emailHistory-picker').isVisible(), true);
-  await pick(page, 'customerId', customer.id);
+  await chooseOrderCustomer(page, customer);
   await page.locator('#commerce-email').fill('@draft_account');
   assert.equal(await page.locator('#commerce-loginMethod').inputValue(), 'x');
   await page.locator('#commerce-email').fill('new@example.test');
@@ -315,7 +316,7 @@ test('Grok 编辑和续费沿用已登记账号资料，移除录入控件不清
   await go(page, 'workspace/order/grok');
   const renewal = page.locator('#main #commerce-order-form');
   await renewal.locator('#commerce-plan').selectOption('SuperGrok');
-  await pick(renewal, 'customerId', customer.id);
+  await chooseOrderCustomer(renewal, customer);
   await renewal.locator('#commerce-email').fill('different@example.test');
   assert.equal(await renewal.locator('#commerce-loginMethod').inputValue(), 'email');
   assert.equal(await renewal.locator('#commerce-xHandle').inputValue(), '');

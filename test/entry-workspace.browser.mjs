@@ -742,7 +742,7 @@ test('录入工作台：宽表格、日期查询、独立分页与历史抽屉',
   if (output) await writeFile(join(output, 'geometry.json'), JSON.stringify(checks, null, 2));
 });
 
-test('录单币种完整可见，长名称回显与金额输入和价格按钮分行', async t => {
+test('录单币种完整可见，长名称、金额输入和价格按钮互不遮挡', async t => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
   const browser = await chromium.launch();
   t.after(() => browser.close());
@@ -774,14 +774,21 @@ test('录单币种完整可见，长名称回显与金额输入和价格按钮�
           const currency = group.querySelector('select');
           const extra = currency.closest('.field-control').querySelector('.order-value-readout');
           const amount = box(group.querySelector('.order-amount-picker'));
-          const price = box(group.querySelector('.order-financial-actions button'));
+          const priceButton = group.querySelector('.order-financial-actions button');
+          const price = box(priceButton), choice = box(currency);
           const readout = extra && box(extra), bounds = box(group);
+          const inside = rect => rect.left >= bounds.left - 1 && rect.right <= bounds.right + 1 &&
+            rect.top >= bounds.top - 1 && rect.bottom <= bounds.bottom + 1;
+          const separate = (first, second) => first.right <= second.left + 1 || second.right <= first.left + 1 ||
+            first.bottom <= second.top + 1 || second.bottom <= first.top + 1;
           return {
             label: currency.selectedOptions[0].textContent, extra: extra?.textContent,
-            fits: !readout || (readout.top >= box(currency).bottom && readout.bottom <= amount.top &&
-              readout.left >= bounds.left && readout.right <= bounds.right + 1 && extra.scrollWidth <= extra.clientWidth + 1),
-            controlsInside: [box(currency), amount, price].every(rect => rect.left >= bounds.left && rect.right <= bounds.right + 1),
-            amountTop: amount.top, groupTop: bounds.top, priceVisible: price.top >= amount.bottom && price.bottom <= bounds.bottom + 1
+            fits: !readout || (inside(readout) && readout.top >= choice.bottom &&
+              separate(readout, amount) && separate(readout, price) && extra.scrollWidth <= extra.clientWidth + 1),
+            controlsInside: [choice, amount, price].every(inside),
+            amountTop: amount.top, groupTop: bounds.top,
+            priceVisible: priceButton.checkVisibility() && price.width > 0 && price.height > 0 &&
+              separate(price, amount) && separate(price, choice)
           };
         }));
         assert.equal(cards.length, 2);
@@ -803,11 +810,15 @@ test('录单币种完整可见，长名称回显与金额输入和价格按钮�
         await page.getByRole('button', { name: '返回订单', exact: true }).click();
         await sale.selectOption('USD');
         await sale.locator('..').locator('.order-value-readout').waitFor({ state: 'detached' });
-        await page.setViewportSize({ width: 1920, height: 960 });
-        await settle(page);
-        const paidTop = (await page.locator('#commerce-paidAmount').boundingBox()).y;
-        const saleTop = (await page.locator('#commerce-saleAmount').boundingBox()).y;
-        assert(Math.abs(paidTop - saleTop) <= 1, '只有一侧币种需要回显时，并排金额框仍应对齐');
+        for (const width of [1920, 2000]) {
+          await page.setViewportSize({ width, height: 960 });
+          await settle(page);
+          for (const field of ['Currency', 'Amount']) {
+            const paidTop = (await page.locator('#commerce-paid' + field).boundingBox()).y;
+            const saleTop = (await page.locator('#commerce-sale' + field).boundingBox()).y;
+            assert(Math.abs(paidTop - saleTop) <= 1, `${width}px 只有一侧币种需回显时，并排${field}控件仍应对齐`);
+          }
+        }
       }
     }
     await context.close();

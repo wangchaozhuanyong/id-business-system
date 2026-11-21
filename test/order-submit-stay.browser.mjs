@@ -6,7 +6,9 @@ import { pathToFileURL } from 'node:url';
 import { calculateConfirmedNetReceipt } from '../modules/finance/accounting.mjs';
 import { applyDocumentDelta, documentDelta } from '../modules/data/document-delta.mjs';
 import { projectSubscriptions } from '../server/subscription-management.mjs';
+import { checkManualRenewalLink } from '../server/order-policy.mjs';
 import { interceptDesign, origin } from './helpers/offline-design.mjs';
+import { assertOrderWorkspace } from './helpers/order-workspace.mjs';
 
 const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
 const actor = { id: 'submit-stay', name: '离线录单员', role: 'admin' };
@@ -195,10 +197,29 @@ test('从原单进入已完成续费登记，仅在提交时新建一笔', { tim
   const original = structuredClone(fixture.commerce.data.orders[0]);
   await page.goto(origin + '/#/workspace/order/renew/' + id);
   const form = page.locator('#main #commerce-order-form');
-  await form.waitFor();
+  await assertOrderWorkspace(page, 'GPT');
   assert.equal(await form.locator('#commerce-customerId').inputValue(), original.customerId);
   assert.equal(await form.locator('#commerce-email').inputValue(), email);
+  assert.equal(await form.locator('#commerce-businessType').inputValue(), '续费');
+  assert.equal(await form.locator('#commerce-businessType').isEditable(), false);
   assert.equal(writes.length, 0);
+  await form.locator('#commerce-notes').fill('按旧原单核对的草稿');
+  const updated = { ...original, version: original.version + 1, wechat: '更新后的微信' };
+  fixture.commerce = { version: fixture.commerce.version + 1,
+    data: { ...fixture.commerce.data, orders: [updated] } };
+  const reread = page.waitForResponse(response => response.request().method() === 'GET' &&
+    new URL(response.url()).pathname === '/api/local/commerce');
+  await page.getByRole('button', { name: '刷新最近录入记录' }).click();
+  await reread;
+  await submit();
+  const reload = page.getByRole('button', { name: '重新带入最新原单', exact: true });
+  await reload.waitFor();
+  assert.equal(writes.length, 0, '过期版本不能提交订单');
+  assert.deepEqual(fixture.commerce.data.orders, [updated]);
+  await reload.click();
+  assert.equal(await form.locator('#commerce-notes').inputValue(), '');
+  assert.equal(await form.locator('#commerce-wechat').inputValue(), updated.wechat);
+  assert.equal(writes.length, 0, '显式带入最新资料只更新表单');
   await submit();
   await success();
   assert.equal(writes.length, 1);
@@ -206,9 +227,137 @@ test('从原单进入已完成续费登记，仅在提交时新建一笔', { tim
   assert.equal(saved.previousOrderId, id);
   assert.equal(saved.paidConfirmed, true);
   assert.equal(saved.receiptConfirmed, true);
-  assert.deepEqual(retained, original);
+  assert.equal(saved.renewalSourceVersion, updated.version);
+  assert.deepEqual(retained, updated);
   assert.deepEqual(errors, []);
   assert.deepEqual(traffic.external, []);
+});
+
+test('Claude 原单在产品工作台登记续费，切换和重试保留独立草稿', { timeout: 30_000 }, async t => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const id = 'claude-renew-layout', email = 'renew-claude@example.test';
+  const { context, page, fixture, control, writes, submit, success } = await setup(browser, 'claude', 390, fixture => {
+    const day = 86_400_000;
+    fixture.commerce.data.orders = [{ id, orderNo: 'QA-CLAUDE-SOURCE', version: 3,
+      customerId: fixture.commerce.data.customers[0].id, product: 'Claude Pro', plan: 'Pro',
+      email, source: '管理员手工', businessType: '首次开通', payment: '银行卡', proMaterialMode: 'none',
+      start: new Date(Date.now() - 31 * day).toISOString(), expiry: new Date(Date.now() - day).toISOString(),
+      paidConfirmed: true, receiptConfirmed: true, entitlementStatus: 'active', paidCurrency: 'USD',
+      saleCurrency: 'CNY', paidAmount: '20', saleAmount: '100', refunds: [], bankReturns: [], corrections: [] }];
+  });
+  t.after(() => context.close());
+  const original = structuredClone(fixture.commerce.data.orders[0]);
+  const form = page.locator('#main #commerce-order-form');
+  const notes = form.locator('#commerce-notes');
+  await notes.fill('Claude 普通录单草稿');
+  const sourceURL = origin + '/#/workspace/order/renew/' + id;
+  await page.goto(sourceURL);
+  await assertOrderWorkspace(page, 'Claude');
+  const details = form.locator('details').filter({ has: page.locator('summary', { hasText: /^Claude 补充资料$/ }) });
+  assert.equal(await details.getAttribute('open'), null);
+  await details.locator('summary').click();
+  const phone = details.locator('#commerce-phone');
+  await phone.fill('+60123456789');
+  assert.equal(await details.locator('#commerce-kyc').isVisible(), false);
+  assert.equal(await form.locator('#commerce-email').inputValue(), email);
+  assert.equal(await form.locator('#commerce-claudeRenewalId').inputValue(), id);
+  assert.equal(await form.locator('#commerce-plan').inputValue(), 'Pro');
+  assert.equal(await form.locator('#commerce-paidAmount').inputValue(), '');
+  assert.equal(await form.locator('#commerce-saleAmount').inputValue(), '');
+  await notes.fill('此原单续费的草稿');
+  await page.getByRole('navigation', { name: '订单提交业务切换' }).getByRole('link', { name: 'GPT', exact: true }).click();
+  assert.equal(await notes.inputValue(), '');
+  await page.getByRole('navigation', { name: '订单提交业务切换' }).getByRole('link', { name: 'Claude', exact: true }).click();
+  assert.equal(await notes.inputValue(), 'Claude 普通录单草稿');
+  await page.goto(sourceURL);
+  assert.equal(await notes.inputValue(), '此原单续费的草稿');
+  assert.equal(writes.length, 0);
+  control.fail = true;
+  await submit();
+  await page.locator('#toast').filter({ hasText: '模拟提交失败' }).waitFor();
+  assert.equal(await notes.inputValue(), '此原单续费的草稿');
+  assert.deepEqual(fixture.commerce.data.orders, [original]);
+  control.fail = false;
+  await submit();
+  await success();
+  assert.equal(writes.length, 2);
+  const [saved, retained] = fixture.commerce.data.orders;
+  assert.equal(writes[0].data.orders[0].id, saved.id);
+  assert.equal(saved.previousOrderId, id);
+  assert.equal(saved.renewalSourceVersion, original.version);
+  assert.equal(saved.proRenewalSourceVersion, original.version);
+  assert.equal(saved.phone, '+60123456789');
+  assert.equal(saved.notes, '此原单续费的草稿');
+  assert.deepEqual(retained, original);
+});
+
+test('两名经办人同时提交同一原单，仅产生一笔续费', { timeout: 20_000 }, async t => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const fixtures = JSON.parse(await readFile(new URL('../docs/audits/2026-11-06-design-review/visual-fixtures.json', import.meta.url)));
+  const day = 86_400_000, now = Date.now();
+  const source = { id: 'shared-renewal', orderNo: 'QA-SHARED', version: 2,
+    customerId: fixtures.commerce.data.customers[0].id, product: 'GPT', plan: 'Plus',
+    email: 'shared-renewal@example.test', source: '管理员手工', businessType: '首次开通',
+    payment: '银行卡', proMaterialMode: 'none', paidAmount: '20', paidCurrency: 'USD', saleAmount: '100', saleCurrency: 'CNY',
+    start: new Date(now - 31 * day).toISOString(), expiry: new Date(now - day).toISOString(),
+    paidConfirmed: true, receiptConfirmed: true, entitlementStatus: 'active', refunds: [], bankReturns: [], corrections: [] };
+  fixtures.commerce.data.orders = [source];
+  const base = structuredClone(fixtures.commerce);
+  const reached = [], outcomes = [], bothReady = Promise.withResolvers();
+  t.after(() => bothReady.resolve());
+  const pages = [];
+  for (const actorId of ['operator-a', 'operator-b']) {
+    const operator = { id: actorId, name: actorId, role: 'admin' };
+    const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+    await interceptDesign(context, { actor: operator, localFixtures: fixtures, documentDelta: true, skipRechargeAssets: true });
+    await context.route('**/api/local/commerce', async route => {
+      const request = route.request();
+      if (request.method() === 'GET') return route.fulfill({ json: fixtures.commerce });
+      const body = request.postDataJSON();
+      assert.equal(body.version, base.version, '两个经办人均基于同一版本提交');
+      const proposed = body.delta ? applyDocumentDelta('commerce', base.data, body.delta) : body.data;
+      const candidate = proposed.orders.find(row => row.id !== source.id);
+      assert.equal(candidate.previousOrderId, source.id);
+      reached.push(actorId);
+      if (reached.length === 2) bothReady.resolve();
+      await bothReady.promise;
+      // In-memory commit order lets the production duplicate check see the first accepted order.
+      const previous = new Map(fixtures.commerce.data.orders.map(row => [row.id, row]));
+      const next = new Map([...previous, ...proposed.orders.map(row => [row.id, row])]);
+      const issue = checkManualRenewalLink(candidate, previous, next, now);
+      outcomes.push({ actorId, candidate: candidate.id, issue });
+      if (issue) return route.fulfill({ status: 409, json: { error: issue } });
+      fixtures.commerce = { version: base.version + 1, data: proposed };
+      return route.fulfill({ json: fixtures.commerce });
+    });
+    const page = await context.newPage();
+    page.setDefaultTimeout(6000);
+    await page.goto(origin + '/#/workspace/order/renew/' + source.id);
+    const form = page.locator('#main #commerce-order-form');
+    await form.locator('#commerce-paidAmount').fill('20');
+    await form.locator('#commerce-saleAmount').fill('100');
+    await form.locator('#commerce-notes').fill(actorId);
+    pages.push(page);
+  }
+  assert.deepEqual(reached, []);
+  const responses = await Promise.all(pages.map(async page => {
+    const response = page.waitForResponse(r => new URL(r.url()).pathname === '/api/local/commerce' && r.request().method() === 'PUT');
+    await page.locator('button[form="commerce-order-form"][type="submit"]').click();
+    return (await response).status();
+  }));
+  assert.deepEqual([...responses].sort(), [200, 409]);
+  const accepted = outcomes.find(row => !row.issue), refused = outcomes.find(row => row.issue);
+  assert.notEqual(accepted.candidate, refused.candidate);
+  assert.equal(refused.issue, '该期订阅已有续费订单，请刷新后查看新单');
+  const [saved, retained] = fixtures.commerce.data.orders;
+  assert.equal(fixtures.commerce.data.orders.length, 2);
+  assert.equal(saved.id, accepted.candidate);
+  assert.equal(saved.notes, accepted.actorId);
+  assert.deepEqual(retained, source);
+  await pages[responses.indexOf(200)].locator('#toast').getByText('订单提交成功', { exact: true }).waitFor();
+  await pages[responses.indexOf(409)].locator('#toast').filter({ hasText: refused.issue }).waitFor();
 });
 
 test('旧订单可单独修改备注，保留原来的空值、付款状态与成本', { timeout: 25_000 }, async t => {

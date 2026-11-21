@@ -198,7 +198,7 @@ test('管理员待归属，归属员工可快捷新增客户并随原单保存',
   await employee.drawer.getByText('快捷录入客户（待保存）', { exact: true }).waitFor();
   assert.equal(data.commerce.data.customers.length, 1);
   assert.equal(await employee.drawer.locator('#completion-receipt-amount').inputValue(), '120');
-  await employee.drawer.locator('#completion-customerPhone').fill('789012');
+  await employee.drawer.locator('#completion-customerPhone').fill('010-55550102');
   await checkLayout(employee.page, employee.drawer);
   await employee.drawer.getByRole('button', { name: '保存订单', exact: true }).click();
   await employee.page.getByRole('button', { name: '已补全', exact: true }).click();
@@ -211,7 +211,7 @@ test('管理员待归属，归属员工可快捷新增客户并随原单保存',
   assert.equal(saved.ownerId, b.id);
   assert.equal(saved.rechargeOwnerAssignment.reason, '已核对合成领码记录');
   assert.equal(customer.name, '快捷录入客户');
-  assert.equal(customer.phone, '789012');
+  assert.equal(customer.phone, '+861055550102');
   assert.equal(customer.source, undefined);
   assert.equal(saved.saleAmount, '120');
   await employee.page.locator('.completion-saved').getByRole('button', { name: '查看此订单' }).click();
@@ -228,11 +228,42 @@ test('管理员待归属，归属员工可快捷新增客户并随原单保存',
   await manager.page.goto(origin + '/?verify=original#/orders/detail/unassigned');
   const original = manager.page.locator('#main .property-list');
   await original.getByText('快捷录入客户', { exact: true }).waitFor();
-  await original.getByText('789012', { exact: true }).waitFor();
+  await original.getByText('+861055550102', { exact: true }).waitFor();
   assert.deepEqual(manager.errors, []);
   assert.deepEqual(employee.errors, []);
   assert.deepEqual(manager.traffic.external, []);
   assert.deepEqual(employee.traffic.external, []);
+});
+
+test('补全成功提示和已补全列表为管理员打开同一订单详情', { timeout: 30_000 }, async t => {
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const data = model();
+  const order = data.commerce.data.orders[0];
+  const { page, drawer, writes, errors, traffic } = await open(t, browser, data, admin, 1440, 'light');
+  await page.locator('tr[data-row-id="own"]').getByRole('button', { name: '补全资料' }).click();
+  await drawer.locator('#completion-customer-query').fill('已有测试客户');
+  await drawer.getByRole('button', { name: '选择客户 已有测试客户' }).click();
+  await drawer.locator('#completion-receipt-amount').fill('120');
+  await drawer.getByRole('button', { name: '保存订单', exact: true }).click();
+
+  const main = page.locator('#main');
+  const expectDetail = async () => {
+    await page.waitForURL('**/#/orders/detail/' + order.id);
+    await page.getByRole('heading', { name: '订单详情', exact: true }).waitFor();
+    await main.getByRole('tab', { name: '成本与汇率' }).waitFor();
+    assert.deepEqual(await main.getByRole('tab').allTextContents(), ['资料', '成本与汇率', '退款记录', '操作记录']);
+    assert.equal(await page.getByRole('button', { name: '补充代充资料' }).count(), 1);
+  };
+  await main.locator('.completion-saved').getByRole('button', { name: '查看此订单' }).click();
+  await expectDetail();
+  await page.getByRole('button', { name: '返回订单补全' }).click();
+  await main.getByRole('button', { name: '已补全', exact: true }).click();
+  await main.locator('tr[data-row-id="own"]').getByRole('button', { name: '查看此订单' }).click();
+  await expectDetail();
+  assert.equal(writes.length, 1);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(traffic.external, []);
 });
 
 test('手工旧单空白归属补齐后退出待补列表，仍可在续费管理的已到期订单中独立补邮箱', { timeout: 35_000 }, async t => {

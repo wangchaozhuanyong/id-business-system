@@ -162,9 +162,11 @@ test('兑换开通铺满工作区：深浅主题、宽窄屏、真实标题对�
             assert.equal(await frame.locator('#flowStatusBadge').isVisible(), true, `${state} 保留首行状态`);
             assert.equal(await frame.locator('#taskProgressText').isVisible(), true, `${state} 结果保持可见`);
             assert.equal(await frame.locator('.workspace-progress-idle').isVisible(), false, '有详细结果时不重复显示待核对提示');
-            const details = await frame.locator('#taskProgress').boundingBox();
-            const toolbar = await frame.locator('.workspace-log-toolbar').boundingBox();
-            assert(details.y >= toolbar.y + toolbar.height, '实际进度与结果位于两行标题下方');
+            const gap = await frame.locator('#taskProgress').evaluate(node => {
+              const toolbar = document.querySelector('.workspace-log-toolbar');
+              return node.getBoundingClientRect().top - toolbar.getBoundingClientRect().bottom;
+            });
+            assert(gap >= 0, `${state} 进度与结果位于两行标题下方（实测间距 ${gap}px）`);
           }
           await frame.locator('#taskProgress').evaluate(node => {
             delete node.dataset.state;
@@ -282,13 +284,14 @@ test('本次任务日志自动追加、去重、断线恢复、暂停跟随，�
   await idle();
   // Enough real response transitions to exercise internal scrolling, without changing the form or page height.
   const panelHeight = await frame.locator('.workspace-recharge-progress').evaluate(node => node.offsetHeight);
-  for (let i = 0; i < 22; i++) {
+  for (let i = 0; i < 28; i++) {
     next = { status: 'running', stage: i % 2 ? 'paying' : 'payment_details', progress: 50 };
     await refresh.click();
     await idle();
   }
   const viewport = frame.locator('#workspaceLogViewport');
-  assert(await viewport.evaluate(node => node.scrollHeight > node.clientHeight));
+  assert(await viewport.evaluate(node => node.scrollHeight - node.clientHeight > 24),
+    '测试日志必须足够长，滚回顶部时超过自动跟随的 24px 阈值');
   assert(await viewport.evaluate(node => node.scrollHeight - node.scrollTop - node.clientHeight < 2));
   await viewport.evaluate(node => { node.scrollTop = 0; });
   await frame.locator('#workspaceLogLatest:not([hidden])').waitFor();

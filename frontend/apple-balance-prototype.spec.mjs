@@ -272,6 +272,37 @@ const versions = (ledger, row, id) => ({
   walletVersion: ledger.get(row.appleIdId).version
 });
 
+test('Apple 到账响应丢失只凭本次唯一流水确认成功', async t => {
+  for (const sameMovement of [true, false]) await t.test(sameMovement ? '本次流水' : '另一笔同金额流水', async () => {
+    const row = order();
+    const refundId = 'receipt-from-offline-test';
+    let snapshot = { version: 1, data: {
+      wallets: [{ id: row.appleIdId, balance: '230', currency: 'USD', version: 1 }],
+      allocations: [{ orderId: row.id, appleIdId: row.appleIdId, amount: '20', returned: '0', version: 1 }],
+      refunds: [{ id: refundId, orderId: row.id, appleIdId: row.appleIdId, amount: '7', status: 'pending',
+        version: 1, corrections: [] }],
+      movements: []
+    } };
+    let writes = 0;
+    const ledger = runtime({
+      load: async () => structuredClone(snapshot),
+      save: async (domain, version, data) => {
+        writes++;
+        assert.equal(version, 1);
+        snapshot = { version: 2, data: structuredClone(data) };
+        if (!sameMovement) snapshot.data.movements.at(-1).id = 'concurrent-receipt';
+        throw new Error('隔离响应中断');
+      }
+    });
+    assert(await ledger.ensureReady());
+    const result = await ledger.receiveRefund(refundId, { ...versions(ledger, row, refundId), reason: '合成到账依据' });
+    assert.equal(result.ok, sameMovement);
+    assert.equal(ledger.listRefunds(row.id)[0].status, 'received');
+    assert.equal(ledger.entries().filter(item => item.refundId === refundId).length, 1);
+    assert.equal(writes, 1);
+  });
+});
+
 test('本机 Apple 台账保存已付扣款与独立回款，重开后只对已登记金额入账一次', async (t) => {
   const { start, saveOrder, store } = localLedger(t);
   const ledger = start();
@@ -473,7 +504,7 @@ test('登记邮箱外部注册成功只消耗邮箱，不自动创建账号主�
   context.api.readForm = () => data;
   const count = context.accounts.length;
   context.module.onSubmit({ id: 'inventory-registration-form',
-    dataset: { inventoryDraft: 'inventory-registration:mail-new:new' } });
+    dataset: { inventoryDraft: 'inventory-registration:mail-new:new', registrationClaim: '', registrationVersion: '1' } });
   assert.equal(context.accounts.length, count);
   assert.equal(email.inventoryState, 'used');
   assert.equal(email.usageLinks[0].kind, 'registration');

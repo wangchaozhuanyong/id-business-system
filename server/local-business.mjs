@@ -4,7 +4,7 @@ import { dirname } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { financeReconciliation } from '../modules/website/pages.mjs';
 import { describeWriteOperation, checkWriteReceipt, WriteOperationError } from './write-operation.mjs';
-import { checkCustomerContactDuplicate, mergeContactWrite } from './contact-write.mjs';
+import { checkCustomerContactDuplicate, mergeContactWrite, prepareCustomerContactWrites } from './contact-write.mjs';
 import {
   captureContactRecovery, contactRecoveryAction, contactRecoveryLabel, contactRecoveryPreview,
   contactRecoveryWindow, prepareContactRecovery, recoveryReasonOptions
@@ -81,7 +81,8 @@ import { checkInventoryEntryFields } from './inventory-entry-fields.mjs';
 import { personalOrderError, personalProduct, preparePersonalInventory } from './personal-subscriptions.mjs';
 import { stageInitialTenantCards, stageOrderTenantCard, stageTenantCardUses, TenantCardError } from './tenant-initial-cards.mjs';
 import { checkTenantKycRecovery, checkTenantKycWrite, isDeadAccountCorrection } from './tenant-kyc.mjs';
-import { AccountLifecycleError, accountLifecycleSummaries, changeAccountLifecycle, checkInventoryRenewals, applyAccountOrderLifecycle } from './account-lifecycle.mjs';
+import { AccountLifecycleError, accountLifecycleSummaries, changeAccountLifecycle, checkInventoryRenewals,
+  applyAccountOrderLifecycle, completedInventoryRenewalIssue } from './account-lifecycle.mjs';
 import { applyInventoryUsage, correctInventoryUsage, inspectInventoryUsage, usageReviewRows } from './inventory-usage.mjs';
 import { checkRegistrationChanges } from './inventory-registration.mjs';
 import { attributeInventory, defaultInventoryRegistrationTimes } from './inventory-attribution.mjs';
@@ -99,7 +100,7 @@ import { claudeGoogleCopyDomainPrefix, validateClaudeGoogleCopySettings } from '
 import { legacyOpeningOrderIds, ownerForSubscriptionOrder, subscriptionDomain } from './subscription-management.mjs';
 import {
   automaticGptOrder, manualBusinessOrder, matchOrderCustomer, orderCustomerCalibrateAction, orderCustomerCreateAction, orderFieldChanged, rechargeOrderOwner, rechargeRenewalExpiryPending,
-  subscriptionChainRoot, subscriptionTime, validOrderEmail, validOrderXHandle
+  existingSubscriptionRenewalMessage, orderSaleCurrencyAllowed, subscriptionChainRoot, subscriptionTime, validOrderEmail, validOrderXHandle
 } from '../modules/orders/order-opening.mjs';
 import {
   assignOrderOwner, assignTenantOwner, checkClaudeProMaterialHistory,
@@ -303,6 +304,7 @@ const linkedAuditDomains = {
 const verifiedOrderCards = Symbol('verifiedOrderCards');
 const verifiedRenewalHandoff = Symbol('verifiedRenewalHandoff');
 const singleRecordEdit = Symbol('singleRecordEdit');
+const staffOrderReceipt = Symbol('staffOrderReceipt');
 const rechargeEvidenceFields = [
   'source', 'taskId', 'email', 'product', 'plan', 'businessType', 'payment', 'paymentId',
   'cardId', 'paidAmount', 'paidCurrency', 'start', 'expiry', 'paidConfirmed', 'rechargeCompletedAt', 'entitlementStatus',
@@ -1123,10 +1125,12 @@ export function createLocalBusinessStore(databasePath) {
     return accountLifecycleSummaries(inventory, commerce, undefined, cardNumberFor);
   }
 
-  function replayWrite(operation, actor) {
+  function replayWrite(operation, actor, { receiptResult = false } = {}) {
     if (!operation) return null;
-    const domains = checkWriteReceipt(readDocument(operation.domain).data, operation);
+    const receipt = readDocument(operation.domain).data;
+    const domains = checkWriteReceipt(receipt, operation);
     if (!domains) return null;
+    if (receiptResult) return receipt.result ?? {};
     const commerce = readDocument('commerce');
     return domains.map(domain => {
       const snapshot = readDocument(domain);
@@ -2336,16 +2340,18 @@ export function createLocalBusinessStore(databasePath) {
         [verifiedOrderCards]: new Map(card ? [[card.id, card]] : []), [verifiedRenewalHandoff]: { version: snapshot.version, item, id: order.id } });
       return updated.find(entry => entry.domain === 'commerce')?.data.orders.find(row => row.id === order.id)?.orderNo;
     },
-    saveStaffOrder(write, actor, operation) {
+    saveStaffOrder(write, actor, operation, savedId) {
       if (actor?.role !== 'employee' || write.domain !== 'commerce' || write.action !== '新增独立订单')
         throw new LocalDataError(403, '当前账号无权登记这类订单');
-      return this.saveBatch([write], { actor, operation, requireRenewalHandoff: true, [verifiedOrderCards]: new Map() });
+      return this.saveBatch([write], { actor, operation, requireRenewalHandoff: true,
+        [verifiedOrderCards]: new Map(), [staffOrderReceipt]: savedId });
     },
     saveBatch(entries, {
       actor, verifyAutomaticSnapshot, readOrderOwners, operation, requireRenewalHandoff, [verifiedRelayClaimIds]: verifiedIds,
       [verifiedAppleRelayPrimaries]: primaryTargets, [verifiedOrderCards]: cards, [stagedRelayIntake]: relayIntake,
-      [verifiedRenewalHandoff]: handoff, [singleRecordEdit]: recordEdit
+      [verifiedRenewalHandoff]: handoff, [singleRecordEdit]: recordEdit, [staffOrderReceipt]: savedStaffOrderId
     } = {}) {
+      const staffOrderResult = savedStaffOrderId && { savedId: savedStaffOrderId };
       // Preserve the caller's retry snapshot when normalizing transient input.
       let writes = recordEdit ? [] : checkWrites(entries).map(write => (write.domain === 'commerce' &&
         (write.action === orderCustomerCreateAction ||
@@ -2355,7 +2361,7 @@ export function createLocalBusinessStore(databasePath) {
         (write.domain === 'appleBalance' && write.action === 'apple_topup')
         ? { ...write, data: structuredClone(write.data) } : write);
       return writeTransaction(() => {
-        const replay = replayWrite(operation, actor);
+        const replay = replayWrite(operation, actor, { receiptResult: Boolean(staffOrderResult) });
         if (replay) return replay;
         if (recordEdit) {
           const { domain, action, version, edit } = recordEdit;
@@ -2497,6 +2503,8 @@ export function createLocalBusinessStore(databasePath) {
           }
           const subscriptions = current(subscriptionDomain);
           const checkedAt = Date.now();
+          if (action === '新增资料' || action === '修改资料')
+            prepareCustomerContactWrites(commerce.customers, priorCommerce?.customers);
           const inlineOrder = applyInlineOrderCustomer(priorCommerce, commerce, action, actor, checkedAt);
           if (!inlineOrder && action === orderCustomerCreateAction)
             prepareOrderCustomerWrite(priorCommerce, commerce, actor, checkedAt);
@@ -2567,6 +2575,8 @@ export function createLocalBusinessStore(databasePath) {
                   !positiveOrderAmount(row.paidAmount) || !validMoney(row.saleAmount) ||
                   !validCurrencyCode(row.paidCurrency) || !validCurrencyCode(row.saleCurrency))
                 throw new LocalDataError(400, '请填写本单实际代付、客户实收及币种');
+              if (!orderSaleCurrencyAllowed(incoming.get('settings') ?? current('settings'), row.product, row.saleCurrency))
+                throw new LocalDataError(400, '实收币种已变化，请刷新并选择当前产品可用的币种');
               if (!(subscriptionTime(row.expiry) > subscriptionTime(row.start)))
                 throw new LocalDataError(400, '请填写有效的订阅起止时间');
               if (!commerce.customers.some(customer => customer.id === row.customerId && customer.active !== false))
@@ -2582,13 +2592,18 @@ export function createLocalBusinessStore(databasePath) {
                   const items = (current(renewalHandoffDomain)?.items || []).filter(item =>
                     item.order?.id === sourceId && ['pending', 'processing', 'paid'].includes(item.status));
                   if (items.length) throw new LocalDataError(409, '原单已有进行中的续费，请在已有记录上继续办理');
-                  if (row.businessType !== '续费') throw new LocalDataError(409, '该订阅已有原单，请选择续费');
+                  if (row.businessType !== '续费') throw new LocalDataError(409, existingSubscriptionRenewalMessage);
                   row.previousOrderId = sourceId;
                   row.renewalSourceVersion ??= priorById.get(sourceId)?.version ?? 0;
                 }
               }
               const renewalIssue = checkManualRenewalLink(row, priorById, nextById, checkedAt, legacyOpened);
               if (renewalIssue) throw new LocalDataError(409, renewalIssue);
+              if (!handoff && row.businessType === '续费') {
+                const openingIssue = completedInventoryRenewalIssue(row, priorInventory, checkedAt,
+                  priorById.get(row.previousOrderId)?.start);
+                if (openingIssue) throw new LocalDataError(409, openingIssue);
+              }
             } else if (cards && !personalProduct(row.product) && row.source !== '线上代充' && prior?.source !== '线上代充') {
               retainOrderField(row, prior, 'entitlementStatus');
             }
@@ -2997,9 +3012,10 @@ export function createLocalBusinessStore(databasePath) {
             log.run(now, 'tenant-cards', 'tenant_card_first_use', auditSummary('登记租户银行卡首次使用', actor, card.id), version);
         }
         if (operation) put.run(operation.domain, 1, encrypt(key, operation.domain, 1, JSON.stringify({
-          fingerprint: operation.fingerprint, domains: result.map(entry => entry.domain)
+          fingerprint: operation.fingerprint, domains: result.map(entry => entry.domain),
+          ...(staffOrderResult && { result: staffOrderResult })
         })));
-        return result;
+        return staffOrderResult || result;
       });
     },
     loginAuthenticatorKey: () => Buffer.from(hkdfSync('sha256', key, '', 'id-business/login-authenticator/v1', 32)),
@@ -3391,13 +3407,14 @@ export function createLocalBusinessStore(databasePath) {
       const version = domain => String(revision.get(domain)?.version ?? 0);
       const versions = {};
       if (renewalRole(actor))
-        versions[renewalHandoffDomain] = [renewalHandoffDomain, subscriptionDomain, 'inventory', 'commerce'].map(version).join(':');
+        versions[renewalHandoffDomain] = [renewalHandoffDomain, subscriptionDomain, 'inventory', 'commerce', 'settings'].map(version).join(':');
       if (['finance', 'super'].includes(actor.role))
         versions['recharge-card-plans'] = version(financeCardPendingDomain);
       if (financeReconciliation.roles.includes(actor.role))
         versions[financeReconciliation.scope] = [cardTypeDocument, orderCardArchiveDocument].map(version).join(':');
       if (['admin', 'super', 'registrar'].includes(actor.role)) versions.inventory = version('inventory');
       if (['admin', 'super', 'employee', 'finance'].includes(actor.role)) versions.commerce = version('commerce');
+      if (actor.role === 'employee') versions.commerce += ':' + version('settings');
       if (['admin', 'super', 'employee'].includes(actor.role)) versions['recharge-codes'] = version('recharge-codes');
       if (actor.role === 'super') versions['recharge-partners'] = version('recharge-partners');
       if (actor.role === 'finance') {

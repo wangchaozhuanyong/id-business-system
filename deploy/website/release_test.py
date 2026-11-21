@@ -1026,6 +1026,88 @@ class WebsiteReleaseTests(unittest.TestCase):
     @patch("release.require_presentation_approval")
     @patch("release.require_ancestor")
     @patch("release.git")
+    def test_redemption_card_import_release_accepts_only_its_exact_website_scope(self, git, ancestor, approval):
+        files = remote.RECHARGE_REDEMPTION_CARD_IMPORT_FILES
+        manifest = release.RECHARGE_REDEMPTION_CARD_IMPORT_MANIFEST_PATH
+        protected = (*files, manifest)
+        git.return_value = "\n".join(protected)
+        self.assertEqual(release.require_website_scope(BASE, TARGET),
+                         ("rechargeRedemptionCardImportPresentation", approval.return_value))
+        approval.assert_called_once_with(BASE, TARGET, release.RECHARGE_REDEMPTION_CARD_IMPORT_MANIFEST, files,
+                                         added_files=(remote.CARD_IMPORT_PREVIEW_SOURCE,))
+        self.assertIn(manifest, git.call_args.args)
+        for flag in ("include_adapter", "include_core", "partner_api"):
+            with self.assertRaises(RuntimeError):
+                release.require_website_scope(BASE, TARGET, **{flag: True})
+        for changed in (files, protected[1:], (*protected, "modules/recharge/codexdaichong/native-adapter.mjs")):
+            git.return_value = "\n".join(changed)
+            with self.assertRaisesRegex(RuntimeError, "recharge_core_or_runtime_changed"):
+                release.require_website_scope(BASE, TARGET)
+        self.assertEqual(approval.call_count, 1)
+
+    @patch("release.git")
+    @patch("release.subprocess.check_output")
+    @patch("release.Path.read_bytes")
+    def test_redemption_card_import_approval_checks_base_and_new_file_absence(self, read, content, git):
+        assets, preview = remote.RECHARGE_REDEMPTION_CARD_IMPORT_FILES
+        hashes = {value: hashlib.sha256(value.encode()).hexdigest() for value in ("old", "new", "preview")}
+        approved = {"baseWebsiteSha": BASE, "beforeAssetsSha256": "a" * 64, "assetsSha256": "b" * 64,
+                    "files": {assets: {"before": hashes["old"], "after": hashes["new"]},
+                              preview: {"before": None, "after": hashes["preview"]}}}
+        read.return_value = json.dumps(approved).encode()
+        git.return_value = ""
+        content.side_effect = [b"old", b"new", b"preview"]
+
+        def verify():
+            return release.require_presentation_approval(BASE, TARGET, release.RECHARGE_REDEMPTION_CARD_IMPORT_MANIFEST,
+                                                         (assets, preview), added_files=(preview,))
+
+        self.assertEqual(verify(), {key: value for key, value in approved.items() if key != "files"})
+        git.assert_called_once_with("ls-tree", BASE, "--", preview)
+        self.assertEqual([args.args[0][2] for args in content.call_args_list],
+                         [f"{BASE}:{assets}", f"{TARGET}:{assets}", f"{TARGET}:{preview}"])
+        content.side_effect = [b"old", b"new"]
+        git.return_value = f"100644 blob {'1' * 40}\t{preview}"
+        with self.assertRaisesRegex(RuntimeError, "recharge_presentation_source_mismatch"):
+            verify()
+        git.return_value = ""
+        content.side_effect = [b"old", b"new", b"changed"]
+        with self.assertRaisesRegex(RuntimeError, "recharge_presentation_source_mismatch"):
+            verify()
+        for modified in (approved | {"baseWebsiteSha": TARGET}, approved | {"files": {
+                assets: {"before": None, "after": hashes["new"]}, preview: approved["files"][preview]}}):
+            read.return_value = json.dumps(modified).encode()
+            with self.assertRaisesRegex(RuntimeError, "recharge_presentation_approval_invalid"):
+                verify()
+
+    def test_redemption_card_import_release_checks_mounted_bundle_and_only_four_routes(self):
+        before, after = "a" * 64, "b" * 64
+        scope = "rechargeRedemptionCardImportPresentation"
+        files, routes = remote.PRESENTATION_SCOPES[scope]
+        approval = {"baseWebsiteSha": BASE, "beforeAssetsSha256": before, "assetsSha256": after}
+        baseline = {"assetsSha256": before, "mountedAssets": {"available": True, "sha256": before},
+                    "components": {"app": {"revision": BASE}}}
+        plan = {"before": baseline, scope: approval, "files": dict.fromkeys(files, "c" * 64)}
+        self.assertEqual(remote.require_asset_digest(plan, after), scope)
+        with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_mount_mismatch"):
+            remote.require_asset_digest(plan | {"before": baseline | {"mountedAssets": {}}}, after)
+        for changed in (plan | {scope: approval | {"baseWebsiteSha": TARGET}}, plan | {"files": {}},
+                        *(plan | {name: True} for name in ("rechargePartnerApi", "customerProgress", "vendureRetryReceipt"))):
+            with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_approval_mismatch"):
+                remote.require_asset_digest(changed, after)
+        self.assertEqual(routes, {"/redeem", "/workspace", "/admin", "/admin.js"})
+        original = {route: {"body": "old"} for route in routes | {"/shell.js"}}
+        updated = original | {route: {"body": "new"} for route in routes}
+        bundle = lambda assets: Mock(read_bytes=lambda:
+            json.dumps({"revision": remote.PINNED_UPSTREAM, "assets": assets}).encode())
+        remote.verify_presentation_bundle(bundle(original), bundle(updated), routes)
+        for modified in (updated | {"/shell.js": {"body": "new"}}, updated | {"/redeem": original["/redeem"]}):
+            with self.assertRaisesRegex(remote.ReleaseError, "recharge_presentation_bundle_scope_mismatch"):
+                remote.verify_presentation_bundle(bundle(original), bundle(modified), routes)
+
+    @patch("release.require_presentation_approval")
+    @patch("release.require_ancestor")
+    @patch("release.git")
     def test_card_list_toolbar_release_requires_exact_sources_and_manifest(self, git, ancestor, approval):
         files = remote.CARD_LIST_TOOLBAR_PRESENTATION_FILES
         manifest = release.CARD_LIST_TOOLBAR_MANIFEST_PATH

@@ -72,7 +72,7 @@
     const draft = A.state.drafts.get(draftKey);
     return {
       actor: actor?.id || '', role: actor?.role || '', finance,
-      apple: finance && (actor?.role === 'finance' || allowed('accounts/apple-balances')),
+      apple: finance && Boolean(A.modules.appleBalance?.canReadAccounting()),
       ...(finance ? { dateBasis: draft?.dateBasis || 'created', currency: draft?.currency || 'CNY' } : {}),
       rechargeRequests: finance && Boolean(business?.canApproveRechargeCodes) && allowed(rechargeRequestsRoute),
       ...(finance && draft?.range === 'custom' ? { custom: draft.custom } : {})
@@ -334,28 +334,34 @@
 
   function renderTasks(sections, showRechargeRequests) {
     const incomplete = sections.commerce?.data?.incomplete;
-    const byProduct = products.filter(([product]) => incomplete?.[product])
-      .map(([product, route]) => route && allowed(route)
-        ? link(`${product} ${countText(incomplete[product])} 笔`, route)
-        : `<span>${E(product)} ${countText(incomplete[product])} 笔</span>`).join('');
+    const pendingProducts = products.filter(([product]) => product !== 'Claude Max').map(([product, route]) =>
+      product === 'Claude Pro'
+        ? ['Claude', route, (incomplete?.['Claude Pro'] || 0) + (incomplete?.['Claude Max'] || 0)]
+        : [product, route, incomplete?.[product]]);
+    const byProduct = pendingProducts.filter(([, , count]) => count)
+      .map(([product, route, count]) => route && allowed(route)
+        ? link(`${product} ${countText(count)} 笔`, route + '?view=pending', route)
+        : `<span>${E(product)} ${countText(count)} 笔</span>`).join('');
     const rows = [
-      ['续费待处理', '沿用续费提醒范围', 'workspace/renewals', 'clock', sections.customers, sections.customers?.data?.renewals],
+      ['续费待处理', '沿用续费提醒范围', 'workspace/renewals', 'clock', sections.customers, sections.customers?.data?.renewals,
+        undefined, 'workspace/renewals?view=pending'],
       ['订单待补资料', '按产品核对客户、支付或订阅资料', 'orders/statistics', 'orders', sections.commerce,
         incomplete && Object.values(incomplete).reduce((sum, value) => sum + value, 0), byProduct],
       ['已领用待处理', '核对使用结果或归还', 'workspace/extractions', 'return', sections.inventory, sections.inventory?.data?.pending],
-      ['苹果待回款', '已登记，等待确认到账', 'accounts/apple-balances', 'card', sections.apple, sections.apple?.data],
+      ['苹果待回款', '已登记，等待确认到账', 'accounts/apple-balances', 'card', sections.apple, sections.apple?.data,
+        undefined, 'accounts/apple-balances?view=pending'],
       ...(showRechargeRequests ? [['充值码申请待处理', '待审核或待发码核对', rechargeRequestsRoute, 'key',
         sections.rechargeRequests, sections.rechargeRequests?.data]] : []),
       ['Claude 付租待发放', '待发放或发放失败', 'orders/claude/rentals', 'card', sections.commerce,
         sections.commerce?.data?.pendingRentItems]
     ].filter(([, , route, , section, value]) =>
       allowed(route) && (value !== 0 || section?.phase !== 'ready'));
-    const markup = rows.map(([title, note, route, icon, section, value, links]) => {
+    const markup = rows.map(([title, note, route, icon, section, value, links, destination = route]) => {
       const content = `<span class="overview-task-icon">${A.icon(icon)}</span><span class="overview-task-text"><strong>${title}</strong><small>${
         E(section?.phase === 'ready' ? note : sectionStatus(section))
       }</small></span><strong class="overview-task-count">${countText(value)}</strong>`;
       return links ? `<li class="overview-task">${content}<div class="overview-task-links">${links}</div></li>`
-        : `<li><a class="overview-task" href="#/${route}">${content}${A.icon('chevron')}</a></li>`;
+        : `<li><a class="overview-task" href="#/${destination}">${content}${A.icon('chevron')}</a></li>`;
     }).join('');
     return `<section class="panel overview-section" aria-labelledby="overview-tasks"><div class="panel-body">
       ${heading('tasks', '当前待处理', '数量取自当前业务状态。续费按提醒订单计数，充值码按申请笔数计数，Claude 付租按待发放明细计数。')}
@@ -447,8 +453,8 @@
     const data = section?.data;
     const items = [
       ['有效服务', data?.active, '客户列表', 'customers/list'],
-      ['续费待跟进', data?.followUp, '续费管理', 'workspace/renewals'],
-      ['已确认流失', data?.lost, '流失明细', 'workspace/customer-loss']
+      ['续费待跟进', data?.followUp, '续费管理', 'workspace/renewals', 'workspace/renewals?view=pending'],
+      ['已确认流失', data?.lost, '流失明细', 'workspace/customer-loss', 'workspace/customer-loss?view=lost']
     ];
     const details = [
       ['renewals', '待处理续费单', data?.renewals, '笔', 'workspace/renewals'],
@@ -459,13 +465,13 @@
     return `<section class="panel overview-section overview-customer-section" aria-labelledby="overview-customers"><div class="panel-body">
       ${heading('customers', '客户状态', '按客户编号去重。客户名下仍有有效服务时不计流失，续费待跟进可与有效服务重叠。手工及历史订单按已录入周期统计，无需再次确认开通或付款。待生效指曾开通过、当前无有效服务但已登记未来订阅的客户；近 7 天流失取已确认流失中停止服务不足 7 个北京时间自然日的客户。续费单和资料问题订单按笔数列示，不能与客户数相加。所有数据取当前快照，不随顶部经营区间切换。')}
       <div class="overview-customer-content">
-        <dl class="overview-customer-summary">${items.map(([title, value, action, route]) => `<div>
-          <dt>${title}</dt><dd><span class="overview-customer-count">${countText(value)}${value != null ? '<small>位</small>' : ''}</span>${link(action, route)}</dd>
+        <dl class="overview-customer-summary">${items.map(([title, value, action, route, destination = route]) => `<div>
+          <dt>${title}</dt><dd><span class="overview-customer-count">${countText(value)}${value != null ? '<small>位</small>' : ''}</span>${link(action, destination, route)}</dd>
           </div>`).join('')}</dl>
         <ul class="overview-customer-details" aria-label="客户跟进与数据核对">${details.map(([id, label, value, unit, route]) => {
           const content = `<span>${label}</span><span class="overview-customer-detail-count"><strong>${countText(value)}</strong><small>${unit}</small></span>`;
           const action = !allowed(route) ? `<div class="overview-customer-detail">${content}</div>`
-            : id === 'renewals' ? `<a class="overview-customer-detail" href="#/${route}">${content}${A.icon('chevron')}</a>`
+            : id === 'renewals' ? `<a class="overview-customer-detail" href="#/${route}?view=pending">${content}${A.icon('chevron')}</a>`
               : `<button class="overview-customer-detail" type="button" data-action="commerce-loss-open" data-view="${id}">${content}${A.icon('chevron')}</button>`;
           return `<li data-customer-detail="${id}">${action}</li>`;
         }).join('')}</ul>

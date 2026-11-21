@@ -150,6 +150,9 @@ test('Claude 历史销售从原库存生成订单，买家可补齐，死号保�
     assert.throws(() => store.saveClaudeHistoricalSale(endedInput, actor), /已变化/);
     const originalLedger = store.load('appleBalance');
     assert.throws(() => store.saveClaudeHistoricalSale({ ...endedInput,
+      commerceVersion: first.version, paidCurrency: 'MYR' }, actor), /代付|扣款/);
+    assert.deepEqual(store.load('appleBalance'), originalLedger);
+    assert.throws(() => store.saveClaudeHistoricalSale({ ...endedInput,
       commerceVersion: first.version, paidAmount: '251' }, actor), /余额不足/);
     assert.deepEqual(store.load('appleBalance'), originalLedger);
     assert.equal(store.load('commerce').version, first.version);

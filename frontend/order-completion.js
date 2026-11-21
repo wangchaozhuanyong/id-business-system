@@ -62,7 +62,7 @@
         ? esc(money(row.saleAmount, row.saleCurrency)) : A.tag('未登记', 'warning') },
       { id: 'actions', label: '操作', action: true, render: (row) => A.textAction(
         row.state === 'complete' ? '查看此订单' : '补全资料',
-        'completion-open', 'data-id="' + esc(row.id) + '"') }
+        row.state === 'complete' ? 'completion-view-order' : 'completion-open', 'data-id="' + esc(row.id) + '"') }
     ];
     const shown = A.pageRows(rows);
     const emptyTitle = query ? '未找到符合条件的订单'
@@ -76,7 +76,7 @@
     const saved = find(savedId);
     const savedNotice = saved?.state === 'complete'
       ? '<div class="panel-body completion-saved"><span role="status">' + esc(saved.orderNo) + ' 已补全</span>' +
-        A.textAction('查看此订单', 'completion-view-saved', 'data-id="' + esc(saved.id) + '"') + '</div>'
+        A.textAction('查看此订单', 'completion-view-order', 'data-id="' + esc(saved.id) + '"') + '</div>'
       : '';
     return title + '<section class="panel design-async-region" id="completion-list">' +
       '<div class="list-controls completion-controls"><div class="completion-status-filters" role="group" aria-label="订单补全分类">' +
@@ -208,7 +208,9 @@
       field('客户来源', key, select(key, [['', '未登记'], ...sources.map(source => [source, source])], draft[key]))];
     for (const [name, customerField, label] of contacts) {
       const value = row[name] || person?.[customerField];
-      details.push(value ? properties([[label, value]]) : draftControl(name, label, draft[fieldId(name)] || '', 'maxlength="60"'));
+      const attrs = ['phone', 'whatsapp'].includes(customerField)
+        ? 'type="tel" maxlength="60" placeholder="请填写含国际区号的号码"' : 'maxlength="60"';
+      details.push(value ? properties([[label, value]]) : draftControl(name, label, draft[fieldId(name)] || '', attrs));
     }
     details.push(row.notes ? properties([['备注', row.notes]]) : draftText('notes', '补充备注', draft[fieldId('notes')], 1000));
     return details.join('');
@@ -222,6 +224,12 @@
   function footer(key, label) {
     return button('关闭', 'drawer-close') + (label ?
       '<button class="button primary" type="submit" form="' + key + '">' + esc(label) + '</button>' : '');
+  }
+  function viewOrder(id, scopedRow) {
+    const detail = 'orders/detail/' + encodeURIComponent(id);
+    if (S.actor?.role !== 'employee' && A.canVisit(detail)) {
+      A.go(detail, { orderDetailFromCompletion: true });
+    } else if (scopedRow) show(scopedRow);
   }
   function show(row, editing = false) {
     const meta = getMeta(row);
@@ -438,16 +446,12 @@
       } else if (action === 'completion-open') {
         if (saving) A.notify('订单正在保存，请稍候');
         else if (find(node.dataset.id)) show(find(node.dataset.id));
-      } else if (action === 'completion-view-saved') {
+      } else if (action === 'completion-view-order') {
         const row = find(node.dataset.id);
-        if (row?.state === 'complete') {
-          const detail = 'orders/detail/' + encodeURIComponent(row.id);
-          if (S.actor?.role === 'employee' || !A.canVisit(detail)) show(row);
-          else A.go(detail);
-        }
+        if (row?.state === 'complete') viewOrder(row.id, row);
       } else if (action === 'completion-original') {
         if (snapshot?.manualItems?.some(row => row.id === node.dataset.id))
-          A.go('orders/detail/' + encodeURIComponent(node.dataset.id));
+          viewOrder(node.dataset.id);
       } else if (action === 'completion-assign-manual') confirmManualOwners();
       else if (action === 'completion-new') quickNew();
       else if (action === 'completion-optional' && editor) {

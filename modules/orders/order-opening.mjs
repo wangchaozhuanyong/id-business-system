@@ -1,6 +1,41 @@
-export { hasInlineOrderCustomerContact, matchInlineOrderCustomer, orderCustomerChanges, orderCustomerCalibrateAction } from './order-customer-match.mjs';
+export { hasInlineOrderCustomerContact, matchInlineOrderCustomer, orderCustomerChanges, orderCustomerCalibrateAction,
+  duplicateCustomerContact, normalizeCustomerNumbers } from './order-customer-match.mjs';
 export { orderCallingCodes, orderPhoneKey, splitOrderPhone, formatOrderPhone, validOrderPhone,
   orderWhatsAppKey, splitOrderWhatsApp, formatOrderWhatsApp, validOrderWhatsApp } from './order-whatsapp.mjs';
+
+export const orderCurrencyNames = Object.freeze({
+  CNY: '人民币', MYR: '马币', USD: '美元', PHP: '菲律宾比索', CLP: '智利比索', IDR: '印尼盾', EGP: '埃及镑'
+});
+const defaultOrderCurrencies = Object.entries(orderCurrencyNames).map(([code, name]) => ({ code, name }));
+export const orderCurrencyFamily = product => ['GPT', 'Gemini', 'Grok'].includes(product) ? product : 'Claude';
+export function orderCurrencyRows(settings, product) {
+  return settings?.orderCurrenciesByProduct?.[orderCurrencyFamily(product)] || settings?.orderCurrencies || defaultOrderCurrencies;
+}
+export const orderSaleCurrencyAllowed = (settings, product, code) =>
+  orderCurrencyRows(settings, product).some(row => row.code === code);
+export function orderSaleCurrencyChoices(settings, product, previous) {
+  const choices = orderCurrencyRows(settings, product).map(({ code, name }) => [code, name + ' ' + code]);
+  if (previous != null && !choices.some(([code]) => code === previous))
+    choices.unshift(['', previous ? previous + ' 已移出，请重新选择' : '请选择当前可用的币种']);
+  return choices;
+}
+
+export const personalSubscriptionPlans = Object.freeze({
+  Gemini: Object.freeze(['Google AI Plus', 'Google AI Pro', 'Google AI Ultra 5x', 'Google AI Ultra 20x']),
+  Grok: Object.freeze(['The X Subscription Plus', 'The X Subscription Premium', 'The X Subscription Super',
+    'The X Subscription Ultra', 'SuperGrok Lite', 'SuperGrok', 'SuperGrok Plus', 'SuperGrok Heavy', 'X Premium', 'X Premium+'])
+});
+export const orderProductPlans = Object.freeze({
+  GPT: Object.freeze(['Plus', 'Pro 100', 'Pro 200', 'Pro 500']),
+  'Claude Pro': Object.freeze(['Pro']),
+  'Claude Max': Object.freeze(['Max 5x', 'Max 20x']),
+  ...personalSubscriptionPlans
+});
+export const personalSubscriptionSeries = (product, plan) => product === 'Gemini' ? 'google_ai'
+  : plan?.startsWith('The X Subscription ') ? 'x_subscription'
+    : plan?.startsWith('SuperGrok') ? 'supergrok' : 'x_premium';
+export const orderPaymentChoices = (product, plan) => product === 'Grok' && personalSubscriptionSeries(product, plan) === 'x_subscription'
+  ? ['银行卡'] : ['银行卡', '苹果内购'];
 
 export const subscriptionStateLabels = Object.freeze({
   active: '有效', expired: '已过期', opened: '已开通', scheduled: '未开始',
@@ -13,6 +48,35 @@ export function subscriptionTime(value) {
   if (/^\d{4}-\d{2}-\d{2}$/.test(input)) input += 'T00:00';
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?$/i.test(input)) return NaN;
   return Date.parse(/(?:Z|[+-]\d{2}:?\d{2})$/i.test(input) ? input : input + '+08:00');
+}
+
+// The current account status and the completed opening time describe different stages.
+export function completedRenewalHealthWindow(account) {
+  const abnormal = { dead: '死号', unlocking: '解封中' };
+  const status = abnormal[account?.health] ||
+    (!account?.health && ['死号', '解封中'].includes(account?.status) ? account.status : '');
+  if (!status) return null;
+  const events = Array.isArray(account.inventoryHistory) ? account.inventoryHistory : [];
+  const changes = events.filter(event => event?.action === '健康状态变化' &&
+    ['normal', 'dead', 'unlocking'].includes(event.detail));
+  const lastNormal = changes.findLastIndex(event => event.detail === 'normal');
+  const times = changes.slice(lastNormal + 1).map(event => subscriptionTime(event.time));
+  const latest = subscriptionTime(account.healthChangedAt);
+  const restoredAt = subscriptionTime(changes[lastNormal]?.time);
+  if (Number.isFinite(latest) && (!Number.isFinite(restoredAt) || latest > restoredAt)) times.push(latest);
+  const since = Math.min(...times.filter(Number.isFinite));
+  return { status, before: Number.isFinite(since) ? since : null };
+}
+
+export function completedRenewalStartIssue(start, healthWindow, now, originalStart) {
+  if (!healthWindow) return '';
+  const { status, before } = healthWindow;
+  if (!Number.isFinite(before)) return '原库存账号为' + status + '，异常时间未记录，请先核对原单和开通凭据';
+  const opening = subscriptionTime(start);
+  if (!Number.isFinite(opening)) return '请填写已完成续费的实际开通时间';
+  if (opening < subscriptionTime(originalStart)) return '本次实际开通时间不能早于原订阅开始时间';
+  if (opening >= before || opening > now) return '原库存账号为' + status + '，本次实际开通时间须早于异常时间';
+  return '';
 }
 
 function hoursText(hours) {
@@ -44,6 +108,13 @@ export function orderTerminationTime(order, now = Date.now()) {
 
 export const validOrderEmail = value => typeof value === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 export const validOrderXHandle = value => typeof value === 'string' && /^@[a-z0-9_]{1,15}$/i.test(value.trim());
+export function grokOrderAccount(value) {
+  const target = typeof value === 'string' ? value.trim() : '';
+  return target.startsWith('@')
+    ? { email: '', xHandle: target, loginMethod: 'x' }
+    : { email: target, xHandle: '', loginMethod: 'email' };
+}
+export const existingSubscriptionRenewalMessage = '该订阅已有原单，请选择续费';
 
 export const rechargeOrderOwner = order =>
   [order?.ownerId, order?.rechargeOwnerId, order?.createdById]

@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { interceptDesign, origin, root, settle, toggleDesignTheme } from './helpers/offline-design.mjs';
+import { assertOrderWorkspace } from './helpers/order-workspace.mjs';
 
 const products = [
   ['gpt', 'GPT', 'Plus', 'gpt', ''],
@@ -13,6 +14,17 @@ const products = [
 ];
 const actor = { id: 'payment-layout-admin', name: '合成管理员', role: 'admin' };
 const output = process.env.ID_LAYOUT_QA_OUTPUT || root + '/.runtime/order-payment-layout-20261110';
+
+async function customerColumns(form) {
+  return form.evaluate(node => ['wechat', 'name', 'customerPhone', 'qq', 'telegram', 'whatsapp'].map(id => {
+    const control = id === 'name' ? node.querySelector('#commerce-customerName, #commerce-renewalCustomer')
+      : node.querySelector('#commerce-' + id);
+    const field = control.closest('.field');
+    const label = field.querySelector('label').getBoundingClientRect();
+    const input = field.querySelector('.field-control').firstElementChild.getBoundingClientRect();
+    return { id, labelLeft: label.left, inputLeft: input.left, inputRight: input.right, width: input.width };
+  }));
+}
 
 test('录单、编辑入口共用支付方式、填写方式、银行卡类型顺序', { timeout: 150_000 }, async t => {
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
@@ -154,8 +166,7 @@ test('录单、编辑入口共用支付方式、填写方式、银行卡类型�
             const context = `${width}/${theme}/${key}/${contextName}/${row.name}`;
             assert(Math.abs(row.text.left - row.box.left) <= 1, `${context} 标签沿字段左边缘`);
             assert(row.control.left >= row.box.left - 1 && row.control.right <= row.box.right + 1, `${context} 控件在字段内`);
-            const inlineNote = row.name === 'notes' && width > 900;
-            assert(inlineNote ? row.text.right <= row.control.left : row.text.bottom <= row.control.top + 1, `${context} 标签不覆盖控件`);
+            assert(row.text.bottom <= row.control.top + 1, `${context} 标签应在控件上方`);
             if (row.customerPicker) assert(row.text.bottom <= row.customerPicker.top + 1, `${context} 客户选择器保持可读`);
           }
           for (const left of measured.rows) for (const right of measured.rows) {
@@ -202,6 +213,7 @@ test('录单、编辑入口共用支付方式、填写方式、银行卡类型�
           assert.equal(await form.locator('#commerce-paymentId').inputValue(), key === 'max' ? '4444' : '4242');
           if (key === 'max') await page.waitForFunction(() => document.querySelector('#commerce-tenantCardNumber').value === '5555555555554444');
           await inspect(form, key, 'entry', card);
+          const ordinaryColumns = await customerColumns(form);
           await form.locator('#commerce-payment').selectOption('苹果内购');
           assert.equal(await form.locator('#commerce-cardTypeId').isVisible(), false);
           assert.equal(await form.locator('#commerce-paymentId').isVisible(), false);
@@ -217,8 +229,21 @@ test('录单、编辑入口共用支付方式、填写方式、银行卡类型�
           await page.locator('#drawer [data-action="drawer-close"]').first().click();
           await go('workspace/order/renew/layout-' + key);
           await page.getByRole('button', { name: '返回续费管理', exact: true }).waitFor();
+          await assertOrderWorkspace(page, entry === 'claude' ? 'Claude' : product);
+          const renewalColumns = await customerColumns(form);
+          for (const [index, actual] of renewalColumns.entries()) {
+            const expected = ordinaryColumns[index];
+            assert(actual.width > 0, actual.id + ' 来源字段应可见');
+            for (const edge of ['labelLeft', 'inputLeft', 'inputRight'])
+              assert(Math.abs(actual[edge] - expected[edge]) <= 1, `${width}/${key}/${actual.id} 应与普通录单列对齐`);
+          }
           await form.getByText('本订阅未绑定续费用卡。', { exact: true }).waitFor();
           assert.equal(await form.locator('.order-money-group').count(), 2, '提醒订单共用代付和售卖金额栏');
+          if (key === 'pro' && [1440, 390].includes(width)) {
+            const period = form.locator('[data-commerce-section="03"]');
+            await period.locator('summary').filter({ hasText: /^Claude 补充资料$/ }).click();
+            await period.screenshot({ path: `${output}/renewal-claude-${width}-${theme}.png` });
+          }
         }
         assert.deepEqual(errors, []);
         assert.deepEqual([...prepared], products.map(([key]) => 'layout-' + key), '登记续费读取对应原订单的用卡提示');

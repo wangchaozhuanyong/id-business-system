@@ -19,7 +19,7 @@ test('下拉设置页签支持来源标签持久化、历史选项和客户草�
   const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
   const snapshots = { commerce: { version: 0, data: null }, settings: { version: 0, data: null } };
   if (offline) {
-    await interceptDesign(page.context(), { localFixtures: snapshots });
+    await interceptDesign(page.context(), { localFixtures: snapshots, skipRechargeAssets: true });
     await page.route('**/api/local/{settings,commerce}', route => {
       const domain = new URL(route.request().url()).pathname.split('/').at(-1);
       if (route.request().method() !== 'GET') {
@@ -52,7 +52,7 @@ test('下拉设置页签支持来源标签持久化、历史选项和客户草�
   const summary = picker.locator('summary');
   assert.equal(await page.getByLabel('来源渠道').inputValue(), '咸鱼');
   await page.locator('#commerce-contact-name').fill('多标签测试客户');
-  await page.locator('#commerce-contact-phone').fill('5550123');
+  await page.locator('#commerce-contact-phone').fill('+60125550199');
   await openSettings('来源设置');
   const sourceSettings = page.locator('#ops-customer-sources-form');
   await sourceSettings.getByPlaceholder('请输入来源').fill('门店咨询');
@@ -105,12 +105,12 @@ test('下拉设置页签支持来源标签持久化、历史选项和客户草�
   assert.equal(await form.getByLabel('客户姓名').inputValue(), '多标签测试客户');
   assert.equal(await summary.innerText(), '企业客户、复购客户');
   const recent = page.locator('#commerce-entry-records');
-  const today = recent.getByRole('button', { name: '今日', exact: true });
-  await today.click();
+  const period = recent.getByRole('combobox', { name: '录入时间', exact: true });
+  await period.selectOption('today');
   await page.getByRole('button', { name: '核对并保存' }).click();
   await recent.getByText('多标签测试客户', { exact: true }).waitFor();
   assert.equal(new URL(page.url()).hash, '#/customers/new');
-  assert.equal(await today.getAttribute('aria-pressed'), 'true');
+  assert.equal(await period.inputValue(), 'today');
   assert.equal(await form.getByLabel('客户姓名').inputValue(), '');
   assert.equal(await form.getByLabel('来源渠道').inputValue(), '咸鱼');
   assert.equal(await summary.innerText(), '请选择标签（可多选）');

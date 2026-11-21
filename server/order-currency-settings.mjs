@@ -12,6 +12,11 @@ export function validOrderCurrencyGroups(groups) {
     Object.entries(groups).every(([key, rows]) => ['GPT', 'Claude', 'Gemini', 'Grok'].includes(key) && validOrderCurrencies(rows));
 }
 
+export function saleCurrencySettings(settings) {
+  return { ...(settings?.orderCurrencies && { orderCurrencies: settings.orderCurrencies }),
+    ...(settings?.orderCurrenciesByProduct && { orderCurrenciesByProduct: settings.orderCurrenciesByProduct }) };
+}
+
 // Settings are shared with other modules; partial writes retain settings for all product families.
 export function retainOrderSettings(data, previous) {
   const next = { ...data };

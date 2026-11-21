@@ -458,12 +458,12 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     assert.match(await customerPanel.innerText(), /资料问题订单\s+[1-9]/);
     assert.deepEqual(await customerPanel.locator('.overview-customer-summary a').evaluateAll(links =>
       links.map(link => [link.textContent, link.getAttribute('href')])), [
-      ['客户列表', '#/customers/list'], ['续费管理', '#/workspace/renewals'], ['流失明细', '#/workspace/customer-loss']
+      ['客户列表', '#/customers/list'], ['续费管理', '#/workspace/renewals?view=pending'], ['流失明细', '#/workspace/customer-loss?view=lost']
     ]);
     const taskCounts = () => page.locator('.overview-task-count').allTextContents();
     const beforeTasks = await taskCounts();
     assert(beforeTasks.includes('1'));
-    assert.equal(await page.getByRole('link', { name: /Claude Pro.*笔/ }).getAttribute('href'), '#/orders/claude');
+    assert.equal(await page.getByRole('link', { name: /Claude .*笔/ }).getAttribute('href'), '#/orders/claude?view=pending');
 
     await range(page, '今日').click();
     assert.equal(await value(page, 'orders'), '1');
@@ -914,4 +914,108 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     checkTransport(session);
     await context.close();
   });
+});
+
+test('总览待办进入原列表的准确状态，忽略此前的筛选和页签', { timeout: 25_000 }, async t => {
+  const entry = process.env.ID_RECHARGE_QA_PLAYWRIGHT;
+  const { chromium } = await import(entry ? pathToFileURL(entry).href : 'playwright');
+  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
+  t.after(() => browser.close());
+  const context = await browser.newContext();
+  const customer = { id: 'scope-customer', name: '隔离流失客户' };
+  const expired = order('scope-expired', '2026-10-09T09:00:00', {
+    customerId: customer.id, expiry: beijing('2026-11-09T07:00:00'), source: '管理员手工'
+  });
+  const followUp = { id: 'scope-followup', name: '隔离续费客户' };
+  const upcoming = order('scope-upcoming', '2026-10-10T07:00:00', {
+    customerId: followUp.id, expiry: beijing('2026-11-11T08:00:00'), source: '管理员手工'
+  });
+  const processing = order('scope-processing', '2026-10-10T08:00:00', {
+    customerId: followUp.id, expiry: beijing('2026-11-12T08:00:00'), source: '管理员手工'
+  });
+  const pending = order('scope-pending', '2026-11-10T07:00:00', {
+    taskId: 'scope-task', source: '线上代充', start: '', expiry: '', customerId: '', paidConfirmed: false, receiptConfirmed: false
+  });
+  const reminder = (record, state) => ({
+    id: record.id, number: record.orderNo, product: record.product, plan: record.plan,
+    customer: record.customerId === customer.id ? customer.name : followUp.name,
+    expiry: record.expiry, reminderState: state, canSubmitToFinance: true
+  });
+  const actor = { id: 'scope-manager', name: '隔离超管', role: 'super' };
+  const wallet = { id: 'scope-wallet', email: 'scope-wallet@example.test', type: 'apple', currency: 'USD', balance: '20', version: 2 };
+  const refund = { id: 'scope-apple-pending', orderNo: 'SCOPE-APPLE-PENDING', appleIdId: wallet.id, amount: '3',
+    status: 'pending', corrections: [] };
+  const traffic = await interceptDesign(context, { actor, skipRechargeAssets: true, localFixtures: {
+    commerce: { version: 1, data: { orders: [expired, upcoming, processing, pending], customers: [customer, followUp],
+      tenants: [], logs: [], operating: [], rentBatches: [] } },
+    inventory: { version: 1, data: { mailboxes: [wallet], accounts: [], batches: [] } },
+    appleBalance: { version: 1, data: { wallets: [wallet], refunds: [refund,
+      { ...refund, id: 'scope-apple-paid', orderNo: 'SCOPE-APPLE-PAID', status: 'received' }], allocations: [], movements: [] } },
+    renewals: { version: 1, candidates: [reminder(expired, 'expired'), reminder(upcoming, 'upcoming')],
+      items: [{ id: 'scope-handoff', status: 'processing', order: reminder(processing, 'upcoming') }], reminderHours: 72 }
+  } });
+  const page = await context.newPage();
+  page.setDefaultTimeout(4500);
+  await page.clock.setFixedTime(clock);
+  await page.goto(origin + '/#/overview');
+  const main = page.locator('#main');
+  const home = () => page.evaluate(() => { location.hash = '#/overview'; });
+
+  await main.getByRole('link', { name: /GPT 1 笔/ }).click();
+  const pendingTab = main.locator('[data-action="commerce-order-tab"][data-tab="pending"]');
+  await pendingTab.waitFor();
+  assert.equal(await pendingTab.getAttribute('aria-selected'), 'true');
+  await main.locator('tr[data-row-id="scope-pending"]').waitFor();
+  await main.getByRole('tab', { name: /当前订单/ }).click();
+  await main.getByRole('textbox', { name: '搜索当前列表' }).fill('无对应订单');
+  await home();
+  await main.getByRole('link', { name: /GPT 1 笔/ }).click();
+  await main.locator('tr[data-row-id="scope-pending"]').waitFor();
+  assert.equal(await main.getByRole('textbox', { name: '搜索当前列表' }).inputValue(), '');
+
+  await home();
+  await main.getByRole('link', { name: /续费待处理.*3/ }).click();
+  const allPending = main.getByRole('button', { name: /全部待处理 3/ });
+  await allPending.waitFor();
+  assert.equal(await allPending.getAttribute('aria-pressed'), 'true');
+  await main.getByText(expired.orderNo, { exact: true }).waitFor();
+  await main.getByText(upcoming.orderNo, { exact: true }).waitFor();
+  const handoff = main.locator('tr[data-row-id="scope-handoff"]');
+  await handoff.getByText(processing.orderNo, { exact: true }).waitFor();
+  assert.equal(await handoff.getByRole('link', { name: '查看办理进度' }).getAttribute('href'), '#/workspace/renewals/sent');
+  assert.equal(await handoff.locator('[data-select="renewal-handoff"]:enabled').count(), 0);
+  await main.getByRole('link', { name: '选订单', exact: true }).click();
+  await main.locator('[data-renewal-period="upcoming"][aria-pressed="true"]').waitFor();
+
+  await home();
+  await main.getByRole('link', { name: '流失明细', exact: true }).click();
+  await main.locator('tr[data-row-id="scope-customer"]').waitFor();
+  await main.getByRole('tab', { name: /资料问题/ }).click();
+  await home();
+  await main.getByRole('link', { name: '流失明细', exact: true }).click();
+  assert.equal(await main.locator('[data-action="commerce-loss-tab"][data-tab=""]').getAttribute('aria-selected'), 'true');
+  await main.locator('tr[data-row-id="scope-customer"]').waitFor();
+
+  await home();
+  await main.getByRole('link', { name: /苹果待回款.*1/ }).click();
+  const drawer = page.locator('#drawer[open]');
+  await drawer.getByRole('heading', { name: 'Apple 回款记录' }).waitFor();
+  await drawer.getByText(refund.orderNo, { exact: true }).waitFor();
+  assert.equal(await drawer.getByText('SCOPE-APPLE-PAID', { exact: true }).count(), 0);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await home();
+  await main.getByRole('link', { name: /续费待处理.*3/ }).click();
+  await allPending.waitFor();
+  assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  assert((await allPending.boundingBox()).height >= 44);
+  await main.getByRole('button', { name: /已到期 1/ }).click();
+  const expiredRecord = main.locator('tr[data-row-id="scope-expired"]');
+  await expiredRecord.locator('[data-action="table-mobile-toggle"]').click();
+  await expiredRecord.getByText(expired.orderNo, { exact: true }).waitFor();
+  assert.equal(await handoff.count(), 0);
+  await allPending.click();
+  await handoff.waitFor();
+  assert.deepEqual(traffic.external, []);
+  assert.deepEqual(traffic.unavailable, []);
 });

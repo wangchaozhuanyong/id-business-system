@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mergeContactWrite } from '../server/contact-write.mjs';
+import { mergeContactWrite, prepareCustomerContactWrites } from '../server/contact-write.mjs';
 
 const customer = id => ({ id, name: id, phone: id, version: 1 });
 const base = () => ({ customers: [customer('a'), customer('b')], tenants: [], orders: [], operating: [], rentBatches: [], logs: [] });
@@ -29,7 +29,7 @@ test('only the stated contact and one audit entry may change; related business r
   assert.throws(() => mergeContactWrite({ ...edit('a'), action: '更正订单' }, { version: 2, data: base() }), { status: 409 });
 });
 test('first contact is supported and concurrent same-name/contact creation is rejected', () => {
-  const after = customer('new'), log = { id: 'new-log', entityId: after.id, type: '新增资料' };
+  const after = { ...customer('new'), phone: '+1 202 555 0102' }, log = { id: 'new-log', entityId: after.id, type: '新增资料' };
   const data = { ...base(), customers: [after], logs: [log] };
   const write = { domain: 'commerce', version: 0, action: '新增资料', data,
     recordChange: { list: 'customers', before: null, after, log } };
@@ -48,4 +48,16 @@ test('a historical customer collision does not block unrelated changes or removi
   assert.equal(update({ notes: '补充备注' }).data.customers[0].notes, '补充备注');
   assert.equal(update({ phone: '' }).data.customers[0].phone, '');
   assert.throws(() => update({ qq: 'historical' }), { status: 409 });
+});
+
+test('普通建档使用与录单相同的电话和 WhatsApp 身份，保留未修改的历史值', () => {
+  const original = { id: 'a', name: '虚构甲', phone: '010-55550101', whatsapp: '历史格式' };
+  const other = { id: 'b', name: '虚构甲', phone: '+86 10 5555 0101' };
+  assert.throws(() => prepareCustomerContactWrites([original, other], [original]), { status: 409 });
+  const next = { ...other, name: '虚构乙', phone: '010-55550101', whatsapp: 'https://wa.me/12025550102' };
+  assert.doesNotThrow(() => prepareCustomerContactWrites([original, next], [original]));
+  assert.equal(next.phone, '+861055550101');
+  assert.equal(next.whatsapp, '+12025550102');
+  assert.equal(original.whatsapp, '历史格式');
+  assert.throws(() => prepareCustomerContactWrites([{ ...next, phone: '请联系助理' }], [next]), { status: 400 });
 });

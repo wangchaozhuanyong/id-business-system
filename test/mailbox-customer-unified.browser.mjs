@@ -3,6 +3,7 @@ import { mkdir, readFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { interceptDesign, origin } from './helpers/offline-design.mjs';
+import { assertOrderWorkspace } from './helpers/order-workspace.mjs';
 import { customerQuery } from '../server/customer-query.mjs';
 import { inventoryMailboxPool, mailboxPoolMetadata, planMailboxRotations } from '../server/tools/mailbox-pool.mjs';
 
@@ -50,15 +51,18 @@ test('客户查询显示历史 Apple ID 和当前死卡，Claude 只复制账号
     const context = await browser.newContext({ viewport: { width, height: 900 } });
     await installClipboard(context);
     await interceptDesign(context, { localFixtures: fixtures, actor, skipRechargeAssets: true });
+    let failPrefill = false;
     await context.route(origin + '/api/local/customer-query/**', route => {
       const command = route.request().postDataJSON(), action = route.request().url().split('/').at(-1);
+      if (action === 'prefill' && failPrefill)
+        return route.fulfill({ status: 503, json: { error: '合成客户资料读取失败' } });
       try { return response(route, customerQuery(fixtures, cards, action, command)); }
       catch (error) { throw new Error(`${action} ${JSON.stringify(command)}: ${error.message}`); }
     });
     const page = await context.newPage(), errors = [], writes = [];
     page.setDefaultTimeout(8000);
     page.on('pageerror', error => errors.push(error.message));
-    page.on('request', request => { if (request.method() === 'PUT' && request.url().endsWith('/commerce')) writes.push(request); });
+    context.on('request', request => { if (request.method() === 'PUT' && request.url().endsWith('/commerce')) writes.push(request); });
     await page.goto(origin + '/#/workspace/order/gpt');
     if (dark) await page.evaluate(() => document.documentElement.dataset.theme = 'dark');
     await page.locator('#commerce-email').fill('ordinary-draft@example.test');
@@ -85,19 +89,40 @@ test('客户查询显示历史 Apple ID 和当前死卡，Claude 只复制账号
     const oldRow = page.locator('[data-customer-query-row="lookup-old"]');
     await oldRow.getByRole('button', { name: '采用此单提交订单' }).click();
     await page.locator('#commerce-email').waitFor();
+    await assertOrderWorkspace(page, 'GPT');
+    assert.equal(new URL(page.url()).hash, '#/workspace/order/gpt/customer/' + a.id + '/order/' + old.id);
     assert.equal(await page.locator('#commerce-email').inputValue(), current.email);
     assert.equal(await page.locator('#commerce-payment').inputValue(), '银行卡');
     assert.equal(await page.locator('#commerce-cardId').inputValue(), '');
     assert.equal(await page.locator('#commerce-paidAmount').inputValue(), '');
-    await page.evaluate(() => window.IDDesignAPI.go('workspace/customer-query'));
+    const reopened = await context.newPage();
+    reopened.setDefaultTimeout(6000);
+    failPrefill = true;
+    await reopened.goto(page.url());
+    await reopened.getByText('无法带入客户资料', { exact: true }).waitFor();
+    assert.equal(await reopened.locator('#commerce-order-form').count(), 0);
+    failPrefill = false;
+    await reopened.getByRole('button', { name: '重新读取', exact: true }).click();
+    await assertOrderWorkspace(reopened, 'GPT');
+    assert.equal(await reopened.locator('#commerce-customerId').inputValue(), a.id);
+    assert.equal(await reopened.locator('#commerce-email').inputValue(), current.email);
+    await reopened.close();
+    await page.getByRole('button', { name: '返回客户查询', exact: true }).click();
     await page.getByRole('button', { name: '仅采用客户资料', exact: true }).click();
     await page.locator('#customer-query-product').selectOption('Gemini');
     await page.getByRole('button', { name: '进入订单提交' }).click();
     await page.locator('#commerce-order-form').waitFor();
+    await assertOrderWorkspace(page, 'Gemini');
+    assert.equal(new URL(page.url()).hash, '#/workspace/order/gemini/customer/' + a.id + '/product/Gemini');
     assert.equal(await page.locator('#commerce-customerId').inputValue(), a.id);
     assert.equal(await page.locator('#commerce-email').inputValue(), '');
-    await page.evaluate(() => window.IDDesignAPI.go('workspace/order/gpt'));
+    await orderNav.getByRole('link', { name: 'GPT', exact: true }).click();
     assert.equal(await page.locator('#commerce-email').inputValue(), 'ordinary-draft@example.test');
+    await page.goBack();
+    await page.reload();
+    await assertOrderWorkspace(page, 'Gemini');
+    assert.equal(await page.locator('#commerce-customerId').inputValue(), a.id);
+    assert.equal(await page.locator('#commerce-email').inputValue(), '');
     assert.equal(writes.length, 0);
     assert.deepEqual(errors, []);
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
@@ -215,6 +240,13 @@ test('隐藏邮箱响应式工具栏、复制失败重试和邮箱池跨页批�
   await action(page, 'inventory-google-credentials').click();
   await page.waitForFunction(() => window.fixtureCopiedText?.endsWith('\n账密后缀'));
   assert.equal(ordinary.length, 0, '复制账密没有重置查询码');
+  await page.locator('input[type="checkbox"][data-select="inventory-module-assets"]').first().check();
+  await page.getByRole('button', { name: '复制所选邮箱及密码', exact: true }).click();
+  await page.waitForFunction(() => {
+    const copied = window.fixtureCopiedText || '';
+    return copied.split('\t').length === 2 && !copied.includes('\n');
+  });
+  assert.equal(ordinary.length, 0, '复制所选邮箱及密码没有重置查询码');
   await action(page, 'inventory-google-query-copy').click();
   await page.waitForFunction(() => window.fixtureCopiedText?.endsWith('\n查询说明'));
   assert.equal(ordinary[0].scope, 'google');

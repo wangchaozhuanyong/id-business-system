@@ -21,13 +21,40 @@ const phoneChannels = {
   phone: { key: orderPhoneKey, split: splitOrderPhone, valid: validOrderPhone },
   whatsapp: { key: orderWhatsAppKey, split: splitOrderWhatsApp, valid: validOrderWhatsApp }
 };
-const identityKey = (key, value) => phoneChannels[key]?.key(value) ?? contactKey(value, key);
+export function customerIdentityKey(value, key) {
+  return phoneChannels[key]?.key(value) ?? contactKey(value, key);
+}
+export function normalizeCustomerNumbers(profile, previous = {}) {
+  const numbers = {};
+  for (const [key, label] of [['phone', '联系电话'], ['whatsapp', 'WhatsApp']]) {
+    const value = profile[key];
+    if (value == null || value === '' || value === previous?.[key]) continue;
+    const number = phoneChannels[key], normalized = number.key(value);
+    if (typeof value !== 'string' || (value.trim() && !number.valid(normalized)))
+      return { error: { key, message: '请填写带国际区号的有效' + label + '号码' } };
+    numbers[key] = normalized;
+  }
+  return { numbers };
+}
+
+export function duplicateCustomerContact(customers, profile, previous) {
+  const name = contactKey(profile.name);
+  const changedName = name !== contactKey(previous?.name);
+  const checks = channels.map(key => [key, customerIdentityKey(profile[key], key)])
+    .filter(([key, value]) => value && (changedName || value !== customerIdentityKey(previous?.[key], key)));
+  if (!checks.length) return;
+  for (const row of customers) {
+    if (row.id === profile.id || contactKey(row.name) !== name) continue;
+    const match = checks.find(([key, value]) => customerIdentityKey(row[key], key) === value);
+    if (match) return { row, key: match[0] };
+  }
+}
 
 export function hasInlineOrderCustomerContact(profile) {
   return channels.some((key) => {
     const value = profile?.[key];
     if (typeof value !== 'string') return false;
-    const contact = identityKey(key, value);
+    const contact = customerIdentityKey(value, key);
     const phone = phoneChannels[key];
     if (!phone) return Boolean(contact);
     const { national } = phone.split(contact);
@@ -56,7 +83,7 @@ export function orderCustomerChanges(before, input) {
       const stored = before?.tags || [];
       if (Array.isArray(value) && value.length && (value.length !== stored.length || value.some(tag => !stored.includes(tag))))
         changes.tags = [...value];
-    } else if (typeof value === 'string' && value.trim() && identityKey(key, value) !== identityKey(key, before?.[key])) {
+    } else if (typeof value === 'string' && value.trim() && customerIdentityKey(value, key) !== customerIdentityKey(before?.[key], key)) {
       changes[key] = phoneChannels[key]?.key(value) ?? value.trim();
     }
   }
@@ -67,12 +94,12 @@ export function matchInlineOrderCustomer(customers, input) {
   const matches = {};
   const result = (kind, ids = [], customerId) => ({ kind, ids, matches, ...(customerId && { customerId }) });
   if (!validProfileInput(input)) return result('invalid');
-  const keys = [...channels, 'name'].filter(key => identityKey(key, input[key]));
+  const keys = [...channels, 'name'].filter(key => customerIdentityKey(input[key], key));
   if (!keys.length) return result('empty');
 
   for (const key of keys) {
-    const value = identityKey(key, input[key]);
-    const ids = customers.filter(row => identityKey(key, row[key]) === value).map(row => row.id);
+    const value = customerIdentityKey(input[key], key);
+    const ids = customers.filter(row => customerIdentityKey(row[key], key) === value).map(row => row.id);
     if (ids.length) matches[key] = ids;
   }
   const groups = Object.values(matches);
@@ -96,7 +123,7 @@ export function matchInlineOrderCustomer(customers, input) {
   const changes = orderCustomerChanges(customer, input);
   // A new tag or a previously empty field does not introduce a second identity.
   // The actual update still requires calibration confirmation before saving.
-  const replacedIdentity = keys.some(key => Object.hasOwn(changes, key) && identityKey(key, customer[key]));
+  const replacedIdentity = keys.some(key => Object.hasOwn(changes, key) && customerIdentityKey(customer[key], key));
   if (replacedIdentity) return result('review', available);
   return result('matched', available, customer.id);
 }

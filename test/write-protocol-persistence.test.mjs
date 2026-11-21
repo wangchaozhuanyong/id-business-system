@@ -68,7 +68,9 @@ for (const same of [false, true]) test(`independent database writers: ${same ? '
     const path = await database(t), store = createLocalBusinessStore(path);
     t.after(() => store.close());
     const data = empty();
-    data.customers = ['a', 'b'].map(id => ({ id, name: id, version: 1, phone: id }));
+    data.customers = ['a', 'b'].map((id, index) => ({
+      id, name: id, version: 1, phone: '+1202555010' + (index + 1)
+    }));
     store.saveBatch([{ domain: 'commerce', version: 0, data, action: '新增资料' }], { actor });
     const workers = [], ready = [], results = [];
     for (let index = 0; index < 2; index++) {

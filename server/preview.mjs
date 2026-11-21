@@ -275,7 +275,8 @@ export async function startPreview(
     ['/assets/website/pages.mjs', new URL('../modules/website/pages.mjs', import.meta.url)],
     ['/renewal-reminders.mjs', new URL('../frontend/renewal-reminders.mjs', import.meta.url)],
     ...['orders/order-opening', 'orders/order-customer-match', 'orders/order-whatsapp', 'orders/list-order', 'orders/renewal-reminders', 'orders/order-list', 'orders/renewal-account-reference',
-      'inventory/list', 'finance/apple-funding', 'finance/accounting', 'data/document-delta', 'data/record-edit'].map(name =>
+      'inventory/list', 'finance/apple-funding', 'finance/accounting', 'data/document-delta', 'data/record-edit',
+      'recharge/codexdaichong/card-import-preview'].map(name =>
       ['/modules/' + name + '.mjs', new URL('../modules/' + name + '.mjs', import.meta.url)]),
     ...[...new Set(websitePages.map(page => page.script))].map(script =>
       ['/assets/website/pages/' + script, new URL('../frontend/' + script, import.meta.url)])

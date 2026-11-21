@@ -7,9 +7,11 @@
   const { manualBusinessOrder, manualOrderDetailsMissing, orderOpeningConfirmed, orderTerminationTime, orderNeedsAccount,
     validOrderEmail, validOrderXHandle, subscriptionPeriodState, subscriptionStateLabels, subscriptionTime,
     matchInlineOrderCustomer, hasInlineOrderCustomerContact, orderCustomerChanges, orderCustomerCreateAction, orderCustomerCalibrateAction,
+    duplicateCustomerContact, normalizeCustomerNumbers,
     orderCallingCodes, splitOrderWhatsApp, formatOrderWhatsApp, validOrderWhatsApp, orderWhatsAppKey, orderFieldChanged,
     splitOrderPhone, formatOrderPhone, validOrderPhone, orderPhoneKey,
-    automaticGptOrder, orderReceiptRecorded, rechargeOrderCompletion, rechargeRenewalExpiryPending, expiredDuration, subscriptionDuration } = window.IDOrderOpening;
+    automaticGptOrder, orderReceiptRecorded, rechargeOrderCompletion, rechargeRenewalExpiryPending, expiredDuration,
+    subscriptionDuration, completedRenewalStartIssue } = window.IDOrderOpening;
   const localData = window.IDLocalData;
   const { claudeListPlan, listPaymentStatus, listSubscriptionStatus, matchesOrderQuery, normalizedListPlan,
     orderAccountingFact, orderListMissing, orderListTime, validListAmount } = window.IDListOrder;
@@ -73,16 +75,8 @@
     cardPerPaymentUsd: '0.3',
     version: 1
   };
-  const currencies = ['CNY', 'MYR', 'USD', 'PHP', 'CLP', 'IDR', 'EGP'];
-  const currencyNames = {
-    CNY: '人民币',
-    MYR: '马币',
-    USD: '美元',
-    PHP: '菲律宾比索',
-    CLP: '智利比索',
-    IDR: '印尼盾',
-    EGP: '埃及镑'
-  };
+  const { orderCurrencyNames: currencyNames, orderCurrencyFamily: currencyFamily } = window.IDOrderOpening;
+  const currencies = Object.keys(currencyNames);
   const currencyLabel = (code) => currencyNames[code] ? `${currencyNames[code]} ${code}` : code;
   let currencySettings = {};
   let currencySettingsRevision = 0;
@@ -90,18 +84,10 @@
   const paymentCountries = {
     PHP: '菲律宾', CLP: '智利', USD: '美国', IDR: '印尼', MYR: '马来西亚', EGP: '埃及'
   };
-  const personalPlans = {
-    Gemini: ['Google AI Plus', 'Google AI Pro', 'Google AI Ultra 5x', 'Google AI Ultra 20x'],
-    Grok: ['The X Subscription Plus', 'The X Subscription Premium', 'The X Subscription Super',
-      'The X Subscription Ultra', 'SuperGrok Lite', 'SuperGrok', 'SuperGrok Plus', 'SuperGrok Heavy', 'X Premium', 'X Premium+']
-  };
+  const { orderProductPlans: productPlans, personalSubscriptionPlans: personalPlans,
+    personalSubscriptionSeries: personalSeries, orderPaymentChoices } = window.IDOrderOpening;
   const personalProduct = product => Object.hasOwn(personalPlans, product);
   const cardPoolProduct = product => product === 'GPT' || personalProduct(product);
-  const personalSeries = (product, plan) => product === 'Gemini' ? 'google_ai'
-    : plan?.startsWith('The X Subscription ') ? 'x_subscription'
-      : plan?.startsWith('SuperGrok') ? 'supergrok' : 'x_premium';
-  const orderPaymentChoices = (product, plan) => product === 'Grok' && personalSeries(product, plan) === 'x_subscription'
-    ? ['银行卡'] : ['银行卡', '苹果内购'];
   const personalTarget = order => order?.loginMethod === 'x' && order.xHandle ? order.xHandle : order?.email || order?.xHandle || '';
   const orderIdentity = order => personalProduct(order?.product) ? personalTarget(order) : order?.email || '';
   const orderListRoute = product => ({
@@ -117,12 +103,8 @@
   const personalLoginChoices = [['email', '邮箱登录'], ['google', 'Google 登录'], ['apple', 'Apple 登录'], ['x', 'X 登录']];
   const linkChoices = [['unknown', '未核验'], ['linked', '已绑定'], ['unlinked', '未绑定']];
   const labelOf = (choices, id) => choices.find(([value]) => value === id)?.[1] || '—';
-  const currencyFamily = product => personalProduct(product) || product === 'GPT' ? product : 'Claude';
   const orderSettingsFamilies = ['GPT', 'Claude', ...Object.keys(personalPlans)];
-  function orderCurrencyRows(product) {
-    return currencySettings.orderCurrenciesByProduct?.[currencyFamily(product)] || currencySettings.orderCurrencies ||
-      currencies.map(code => ({ code, name: currencyNames[code] }));
-  }
+  const orderCurrencyRows = product => window.IDOrderOpening.orderCurrencyRows(currencySettings, product);
   const orderCurrencyCodes = product => orderCurrencyRows(product).map(row => row.code);
   const currencyChoices = (codes = currencies, selected = '', product = '') =>
     [...new Set([...codes, ...(selected ? [selected] : [])])].map(code => {
@@ -167,7 +149,7 @@
   function captureOrderSettingsReturn() {
     const form = $('#main #commerce-order-form') || $('#drawer[open] #commerce-order-form');
     return form ? { route: S.route, actorId: currentOperator().id, main: Boolean(form.closest('#main')),
-      id: form.elements['commerce-id'].value, renewalId: form.elements['commerce-claudeRenewalId'].value } : null;
+      id: form.elements['commerce-id'].value } : null;
   }
   const realBankCardType = { id: 'card-type-real', name: '真实卡', active: true };
   const demoBankCardTypes = [
@@ -440,7 +422,7 @@
       priceLoad = null;
       paymentSettingsVersion = savedVersion;
       if (form.isConnected) {
-        if (JSON.stringify(readCommerceDraft(form)) === confirmed) cleanClose(form.dataset.commerceDraft);
+        if (JSON.stringify(readCommerceDraft(form)) === submitted) cleanClose(form.dataset.commerceDraft);
         else { form.elements['commerce-currency-version'].value = savedVersion; saveDrafts(); }
       }
       refreshCurrencyFields($('#commerce-order-form'));
@@ -448,12 +430,6 @@
     } catch (error) { A.notify(error.message || '币种设置保存失败，输入已保留'); }
     finally { form.removeAttribute('aria-busy'); }
   }
-  const productPlans = {
-    GPT: ['Plus', 'Pro 100', 'Pro 200', 'Pro 500'],
-    'Claude Pro': ['Pro'],
-    'Claude Max': ['Max 5x', 'Max 20x'],
-    ...personalPlans
-  };
   const claudePlans = [...productPlans['Claude Pro'], ...productPlans['Claude Max']];
   const claudeProductForPlan = plan => plan === 'Pro' ? 'Claude Pro'
     : productPlans['Claude Max'].includes(plan) ? 'Claude Max' : '';
@@ -585,12 +561,51 @@
   const gptOrderRoute = 'workspace/order/gpt';
   const claudeOrderRoute = 'workspace/order/claude';
   const personalEntries = { 'workspace/order/gemini': 'Gemini', 'workspace/order/grok': 'Grok' };
-  const isOrderEntry = route => ['workspace/order', gptOrderRoute, claudeOrderRoute].includes(route) || Object.hasOwn(personalEntries, route);
+  const customerEntryPath = /^(workspace\/order\/(?:gpt|claude|gemini|grok))\/customer\/([^/]+)\/(order|product)\/([^/]+)$/;
+  const isOrderEntry = route => ['workspace/order', gptOrderRoute, claudeOrderRoute].includes(route) ||
+    Object.hasOwn(personalEntries, route) || route.startsWith(renewalOrderPrefix) || customerEntryPath.test(route);
   const entryRoute = product => personalProduct(product) ? 'workspace/order/' + product.toLowerCase()
     : product === 'GPT' ? gptOrderRoute : claudeOrderRoute;
   const automaticOrder = (row) => row?.source === '线上代充' && Boolean(row.taskId);
   const entryDraft = product => `commerce-order:new:${currencyFamily(product).toLowerCase()}`;
-  let customerOrderDraft;
+  let customerPrefillRead;
+  function sourceProductRoute(route) {
+    if (route.startsWith(renewalOrderPrefix)) {
+      const original = orders.find(row => encodeURIComponent(row.id) === route.slice(renewalOrderPrefix.length));
+      if (original) return entryRoute(original.product);
+    }
+    return customerEntryPath.exec(route)?.[1];
+  }
+  function rememberCustomerPrefill(route, values) {
+    const fields = ['product', 'customerId', 'wechat', 'customerPhone', 'qq', 'whatsapp', 'telegram',
+      'plan', 'email', 'tenantId', 'proMaterialMode', 'proPoolCardId', 'payment', 'cardId', 'appleIdId', 'appleStoreRegion',
+      'loginMethod', 'xHandle', 'xLinkState', 'platformAccountId', 'personalHistoryId'];
+    const key = 'commerce-order:' + route;
+    if (!S.drafts.has(key)) S.drafts.set(key, Object.fromEntries(fields.filter(field => typeof values[field] === 'string')
+      .map(field => ['commerce-' + field, values[field]])));
+  }
+  async function restoreCustomerPrefill(route) {
+    const match = customerEntryPath.exec(route);
+    if (!match || customerPrefillRead?.route === route || S.drafts.has('commerce-order:' + route) || orderReceipts.has(route)) return;
+    const request = { route, actor: currentOperator().id };
+    customerPrefillRead = request;
+    const current = () => customerPrefillRead === request && S.route === route && currentOperator().id === request.actor;
+    try {
+      const customerId = decodeURIComponent(match[2]);
+      const source = decodeURIComponent(match[4]);
+      const result = await localData.customerQuery('prefill', { customerId,
+        ...(match[3] === 'order' ? { orderId: source } : { product: source }) });
+      if (!current()) return;
+      if (result.values?.customerId !== customerId || !Object.hasOwn(productPlans, result.values.product) ||
+          entryRoute(result.values.product) !== match[1])
+        throw new Error('客户或订单产品已变化，请返回客户查询核对。');
+      rememberCustomerPrefill(route, result.values);
+    } catch (error) {
+      if (!current()) return;
+      request.error = error.message || '客户资料读取失败';
+    }
+    if (current()) A.render();
+  }
   const defaultWarningHours = 72;
   const maxWarningHours = 365 * 24;
   let renewalWarningHours = defaultWarningHours;
@@ -1038,9 +1053,7 @@
     popup.style.left = `${Math.max(left + 8, Math.min(anchor.left, left + width - bounds.width - 8))}px`;
     popup.style.top = `${Math.max(top + 8, Math.min(openBelow ? anchor.bottom + 4 : anchor.top - bounds.height - 4, top + height - bounds.height - 8))}px`;
   }
-  function section(number, title, body, description = '', hidden = false, idPrefix = 'commerce-section', actions = '') {
-    return `<section class="form-section" data-commerce-section="${number}"${hidden ? ' hidden' : ''}><div class="section-heading${actions ? ' section-heading--actions' : ''}"><span class="section-number">${number}</span><div class="section-title-row"><h2>${E(title)}</h2>${A.titleInfo(title, description, `${idPrefix}-${number}`)}</div>${actions ? `<div class="page-actions">${actions}</div>` : ''}</div><div class="commerce-field-grid">${body}</div></section>`;
-  }
+  const section = A.formSection;
   function panelTitle(title, description = '', actions = '', actionAttributes = '') {
     return `<div class="panel-heading"><div class="section-title-row"><h2>${E(title)}</h2>${A.titleInfo(title, description, `commerce-panel-${title.replace(/\s/g, '')}`)}</div><div class="toolbar-right"${actionAttributes ? ` ${actionAttributes}` : ''}>${actions}</div></div>`;
   }
@@ -1276,7 +1289,7 @@
         const selected = snapshot.items?.find(row => row.id === previousSelection);
         const historical = Boolean(prior && (prior.paidConfirmed || hasPaymentHistory(prior)) &&
           [prior.cardId, prior.proPoolCardId].includes(previousSelection));
-        const adopted = customerOrderDraft?.key === form.dataset.commerceDraft;
+        const adopted = customerEntryPath.test(S.route) && form.dataset.commerceDraft === 'commerce-order:' + S.route;
         const unavailableHealth = !historical && (blockedCard(selected?.health || bankCardTypes.health[previousSelection]) ||
           (adopted && previousSelection && !selected));
         const frozen = selected?.frozen && (!prior || (!prior.paidConfirmed && !hasPaymentHistory(prior)));
@@ -1345,6 +1358,13 @@
       Promise.resolve().then(() => { accountingFrameClock = undefined; });
     }
     return accountingFrameClock;
+  }
+  async function refreshStatisticsAppleBalance() {
+    const apple = A.modules.appleBalance;
+    if (!localData || S.route !== 'orders/statistics' || !apple?.canReadAccounting()) return true;
+    const result = await apple.refreshLocalBalance();
+    if (S.route === 'orders/statistics') A.render();
+    return result;
   }
   function localAccountingOptions(order, currency, clock, expenses) {
     if (cardIssueContext?.clock !== clock)
@@ -1609,6 +1629,15 @@
       order.saleAmount || '0',
       sum(order.refunds || [], (row) => row.amount)
     );
+  }
+  function canRefundOrder(order) {
+    if (order.cancelled || !(order.list?.receiptRecorded ?? orderReceiptRecorded(order))) return false;
+    try {
+      return M.compare(refundable(order), '0') > 0;
+    } catch {
+      // An unreadable historical amount cannot establish a refundable balance.
+      return false;
+    }
   }
   function bankReturned(order) {
     return sum(order.bankReturns || [], (row) => row.amount);
@@ -1976,12 +2005,12 @@
     if (!localData?.authRequired || !canManageOrders() || !order?.id) return '';
     const attrs = `data-id="${E(order.id)}"`;
     const pending = ['upcoming', 'expired'].includes(order.reminderState);
-    if (order.reminderState === 'renewed' && localPhase !== 'ready') await loadLocalCommerce(true);
+    if ((pending || order.reminderState === 'renewed') && localPhase !== 'ready') await loadLocalCommerce(true);
     const missing = orders.find(row => row.id === order.id);
     const fillAccount = pending && (missing
       ? manualOrderDetailsMissing(missing, customers, orderEvaluationTime())?.account : !order.account);
     const completed = order.reminderState === 'renewed' ? renewalWorktableDetail(order.id)?.completed : undefined;
-    return (pending ? A.button('登记已完成续费', 'commerce-renewal-record', '', '', attrs) : '') +
+    return (pending && completedRenewalReminder(order.id) ? A.button('登记已完成续费', 'commerce-renewal-record', '', '', attrs) : '') +
       (order.payment === '银行卡' && localData.subscriptionCardDetails ? A.button('用卡详情', 'commerce-renewal-card-open', '', '', attrs) : '') +
       (fillAccount ? A.button(order.product === 'Grok' ? '补账号' : '补邮箱', 'commerce-order-fill-details', '', '', attrs) : '') +
       (order.reminderState === 'refused' ? A.button('恢复提醒', 'commerce-renewal-restore', '', '', attrs)
@@ -2002,8 +2031,8 @@
     if (action === 'commerce-renewal-card-open') openRenewalCardDrawer(id);
     else if (action === 'commerce-order-fill-details') manualOrderDetailsEditor(id);
     else if (action === 'commerce-renewal-record') {
-      if (!renewalCardCanRenew(id)) return A.notify('此订单已变化，请刷新后重试');
-      A.go(renewalOrderPrefix + encodeURIComponent(id));
+      if (!completedRenewalReminder(id)) return A.notify('此订单已变化，请刷新后重试');
+      openRenewalEntry(id);
     }
     else if (action === 'commerce-renewal-expiry') openRenewalExpiry(id);
     else changeRenewalDecision(id, action === 'commerce-renewal-restore');
@@ -2318,9 +2347,8 @@
     return node.isConnected && renewalCardDrawerCurrent(panel) &&
       $('[data-renewal-card-region]', panel).getAttribute('aria-busy') !== 'true';
   }
-  function renewalCardCanRenew(id) {
-    const reminder = renewalProjection().reminders.find(row => row.order.id === id);
-    return reminder?.state === 'upcoming' || reminder?.state === 'expired';
+  function completedRenewalReminder(id) {
+    return workbenchOrderSource(renewalOrderPrefix + encodeURIComponent(id), true);
   }
   function clearRenewalCardNumbers(root) {
     root?.querySelectorAll('[data-renewal-card-number]').forEach(node => { node.textContent = ''; });
@@ -2378,7 +2406,7 @@
     const refresh = $('[data-action="commerce-renewal-card-refresh"]', panel);
     const renew = $('[data-renewal-card-renew]', panel.closest('dialog'));
     const renewStatus = $('[data-renewal-card-renew-status]', panel);
-    if (renew) renew.disabled = true;
+    if (renew) renew.disabled = !localData?.authRequired || !completedRenewalReminder(binding.orderId);
     renewStatus.hidden = true;
     error.hidden = true;
     const read = A.beginRegionRead(region, status, { loadingText: '正在读取银行卡资料…', refreshButton: refresh });
@@ -2390,13 +2418,18 @@
       if (!current()) return;
       if (data?.order?.id !== binding.orderId || (data.renewal && data.renewal.id !== binding.renewalOrderId))
         throw new Error('银行卡资料与当前订单不符');
-      const actionable = Boolean(renew && data.order.account?.canRenew !== false && renewalCardCanRenew(binding.orderId));
+      const source = completedRenewalReminder(binding.orderId);
+      const preparing = Boolean(renew && source && data.order.account?.canRenew !== false);
       binding.details = data;
       if (renew) {
-        renew.disabled = !actionable;
-        renewStatus.hidden = actionable;
+        renew.disabled = localData?.authRequired ? !source : !preparing;
+        const historical = !renew.disabled && data.order.account?.canRenew === false;
+        renewStatus.hidden = !renew.disabled && !historical;
+        renewStatus.textContent = historical
+          ? '此入口用于登记已完成的续费。请核对原单与实际开通时间。'
+          : '原单或提醒状态已变化，请重新核对续费资料。';
       }
-      content.innerHTML = renderRenewalCardOrder(data.order, 'order', actionable) + (data.renewal
+      content.innerHTML = renderRenewalCardOrder(data.order, 'order', preparing) + (data.renewal
         ? renderRenewalCardOrder(data.renewal, 'renewal', false) : binding.renewalOrderId
           ? `<p class="footnote">${E(data.renewalStatus || '暂未读取到续费单资料，请刷新后重试。')}</p>` : '');
       return true;
@@ -2405,6 +2438,7 @@
       if ([401, 403].includes(failure?.status)) {
         content.replaceChildren();
         binding.details = undefined;
+        if (renew) renew.disabled = true;
       }
       error.textContent = content.childElementCount ? '银行卡资料暂未更新，已保留上次的摘要。请刷新重试。' :
         '无法读取银行卡资料，请刷新重试。';
@@ -3155,6 +3189,11 @@
         plans: retentionPlanLabel(fact.order.product, fact.plan),
         reason: fact.reasons.join('、')
       }));
+  }
+  function customerLossScope(view) {
+    S.drafts.set(retentionFiltersKey, { ...retentionFilterDefaults, age: view === 'recent' ? 'recent' : '' });
+    window.IDSearchInput?.discardPage(customerLossRoute, 'commerce-search');
+    return { page: 1, query: '', scrollY: 0, status: ['review', 'scheduled'].includes(view) ? view : '' };
   }
   function retentionCustomerRows(projection, view, tab, query) {
     const profiles = tab === 'scheduled' ? projection.scheduled : projection.lost;
@@ -3952,13 +3991,23 @@
     picker.outerHTML = customerTagPicker(selected, previous, picker.open, { id: 'commerce-contact-tags' });
     if (focused) form.querySelector('#commerce-contact-tags')?.focus();
   }
+  function customerProfileFields(renderInput, { source = '', tags = '', notes = '', employee = false } = {}) {
+    const basic = renderInput('客户姓名', 'name', 'maxlength="80" required', true) + source + tags;
+    const channels = customerChannels.filter(([key]) => !employee || key === 'wechat')
+      .map(([key, label]) => renderInput(label, key, 'maxlength="60"',
+        false, ['phone', 'whatsapp'].includes(key) ? '可留空。填写时请带国际区号，例如 +60。' : '')).join('');
+    const prefix = employee ? 'staff-customer' : 'commerce';
+    return section('01', '基本资料', basic, '', false, prefix + '-section') +
+      section('02', '联系方式', channels + notes, '联系方式选填，可先登记直接在网站下单的客户。',
+        false, prefix + '-customer-section');
+  }
   function contactForm(tenant = false, id = '', quick = false, standalone = false) {
     const data = tenant ? tenants : customers,
       row = data.find((entry) => entry.id === id);
-    const key =
-      quick && !tenant
-        ? `commerce-contact:customer:new:${quickReturn.key}`
-        : `commerce-contact:${tenant ? 'tenant' : 'customer'}:${id || 'new'}`;
+    const key = quick
+      ? tenant ? 'commerce-contact:tenant:new:' + JSON.stringify([quickReturn.key, quickReturn.target])
+        : `commerce-contact:customer:new:${quickReturn.key}`
+      : `commerce-contact:${tenant ? 'tenant' : 'customer'}:${id || 'new'}`;
     const draft = S.drafts.get(key) || {},
       v = (name) => draft[`commerce-${name}`] ?? row?.[name] ?? '';
     // An order and its quick-add drawer coexist; only the submitted field names may match.
@@ -3972,15 +4021,8 @@
         span
       );
     const contactInput = (name, attrs = '') => input(name, v(name), attrs);
-    const channels = customerChannels
-      .slice(1)
-      .map(([name, label]) => contactField(label, name, contactInput(name, 'maxlength="60"')))
-      .join('');
-    const phone = contactField(
-      '联系电话',
-      'phone',
-      contactInput('phone', 'maxlength="60"')
-    );
+    const renderInput = (label, name, attrs, required, help) =>
+      contactField(label, name, contactInput(name, attrs), required, help);
     const savedSource = draft['commerce-source'] ?? (row ? row.source ?? '' : undefined);
     const sourceOptions = tenant ? null : customerSourceOptions(savedSource);
     const source = tenant
@@ -3998,9 +4040,6 @@
       false,
       '',
       'commerce-span-all'
-    );
-    const name = contactField(
-      `${tenant ? '租户' : '客户'}姓名`, 'name', contactInput('name', 'maxlength="80" required'), true
     );
     const initialCardCount = Math.min(99, Math.max(0, Number(draft['commerce-initial-card-count']) || 0));
     const cardFields = tenant && !row ? `<section class="form-section" aria-label="银行卡">
@@ -4022,14 +4061,9 @@
       }).join('')}</div>
     </section>` : '';
     const details = tenant
-      ? `<div class="commerce-field-grid">${name}${phone}${source}${notes}</div>${cardFields}<p class="footnote">录入人和修改人自动记录。</p>`
-      : [
-          section('01', '基本资料', name + source + contactField('客户标签', 'tags',
-            customerTagPicker(A.readOptionList(draft['commerce-tags'] ?? row?.tags ?? []), row?.tags || [])
-          ), '', false, 'commerce-section'),
-          section('02', '联系方式', phone + channels + notes,
-            '联系方式选填，可先登记直接在网站下单的客户。', false, 'commerce-customer-section')
-        ].join('');
+      ? `<div class="commerce-field-grid">${renderInput('租户姓名', 'name', 'maxlength="80" required', true)}${renderInput('联系电话', 'phone', 'maxlength="60"')}${source}${notes}</div>${cardFields}<p class="footnote">录入人和修改人自动记录。</p>`
+      : customerProfileFields(renderInput, { source, notes, tags: contactField('客户标签', 'tags',
+          customerTagPicker(A.readOptionList(draft['commerce-tags'] ?? row?.tags ?? []), row?.tags || [])) });
     const body = `<form id="commerce-contact-form" data-commerce-draft="${E(key)}" novalidate><input type="hidden" name="commerce-id" value="${E(id)}" /><input type="hidden" name="commerce-kind" value="${tenant ? 'tenant' : 'customer'}" /><input type="hidden" name="commerce-version" value="${E(draft['commerce-version'] || row?.version || '')}" /><input type="hidden" name="commerce-quick" value="${quick ? 'yes' : ''}" />${details}</form>`;
     const cancel = standalone
       ? tenant
@@ -4846,6 +4880,18 @@
     saveDrafts();
     return true;
   }
+  function renewalCustomerFields(customerId, contact) {
+    const customer = customers.find(row => row.id === customerId);
+    const fields = inlineCustomerFields.map(([key, label, id]) => {
+      if (key === 'name') return field(label, 'renewalCustomer', input('renewalCustomer',
+        customer?.name || (customerId ? '原客户资料待核对' : '客户资料未登记'), 'readonly') +
+        input('customerId', customerId, 'type="hidden"'), true);
+      if (key === 'source' || key === 'tags')
+        return field(label, id, `<output id="commerce-${id}">${E(displayCustomerValue(customer?.[key]))}</output>`);
+      return field(label, id, input(id, contact(id), inlineNumberContacts[key] ? 'type="tel" maxlength="60"' : 'maxlength="60"'));
+    }).join('');
+    return `<div class="order-customer-fields commerce-field-grid commerce-span-all">${fields}</div>`;
+  }
   function orderIdentityFields(v, contact, existing, chooseClaudePlan, linkedClaude, quickDraft, lockCustomer) {
     const auto = automaticOrder(existing);
     const lockChoices = auto || linkedClaude;
@@ -4854,7 +4900,7 @@
       stock = v('businessType') === '成品交付';
     return (
       `<div class="commerce-span-all order-identity-grid">` +
-      (lockCustomer ? field('客户资料', 'renewalCustomer', input('renewalCustomer',
+      (quickDraft && lockCustomer ? renewalCustomerFields(customerId, contact) : lockCustomer ? field('客户资料', 'renewalCustomer', input('renewalCustomer',
         customers.find(row => row.id === customerId)?.name || (customerId ? '原客户资料待核对' : '客户资料未登记'), 'readonly') +
         input('customerId', customerId, 'type="hidden"'), true) : quickDraft ? inlineCustomerFieldsHtml(customerId, quickDraft) : orderCustomerField(customerId, existing)) +
       `<div class="order-choice-grid">` +
@@ -4864,7 +4910,7 @@
       field(
         '业务类型',
         'businessType',
-        lockChoices || (existing && (isClaude({ product }) || existing.businessType === '首次开通'))
+        lockChoices || (!existing && lockCustomer) || (existing && (isClaude({ product }) || existing.businessType === '首次开通'))
           ? input('businessType', v('businessType'), 'readonly')
           : select('businessType', keepSavedOption(orderBusinessTypes(product), v('businessType'), existing), v('businessType')),
         true
@@ -5109,8 +5155,7 @@
       apple: kind === 'paid' && form.elements['commerce-payment'].value === '苹果内购' && Boolean(window.IDAppleFunding),
       appleRegion: form.elements['commerce-appleStoreRegion']?.value };
     orderPriceReferenceReturn = { view, route: S.route, actorId: currentOperator().id,
-      main: !form.closest('#drawer'), orderId: form.elements['commerce-id'].value,
-      renewalId: form.elements['commerce-claudeRenewalId'].value };
+      main: !form.closest('#drawer'), orderId: form.elements['commerce-id'].value };
     A.openDrawer(`${view.product} ${kind === 'paid' ? '代付金额' : '售卖价格'}`,
       view.apple ? '按 Id地区查看苹果内购美元代付价。实际支出按账单确认。'
         : kind === 'paid' ? '查看系统设置中保存的银行卡原币代付金额，不包含人民币折算预算；实际支付以本笔账单为准。'
@@ -5353,7 +5398,7 @@
       paymentSettingsVersion = result.version;
       const key = form.dataset.commerceDraft;
       const current = form.isConnected ? readCommerceDraft(form) : S.drafts.get(key);
-      if (JSON.stringify(current) === confirmed) S.drafts.delete(key);
+      if (JSON.stringify(current) === submitted) S.drafts.delete(key);
       else if (current) S.drafts.set(key, { ...current, 'commerce-paid-price-version': String(result.version) });
       if (form.isConnected) {
         form.removeAttribute('data-commerce-draft');
@@ -5473,7 +5518,7 @@
       paymentSettingsVersion = savedVersion;
       priceLoad = null;
       if (form.isConnected) {
-        if (JSON.stringify(readCommerceDraft(form)) === confirmed) cleanClose(key);
+        if (JSON.stringify(readCommerceDraft(form)) === draft) cleanClose(key);
         else {
           form.elements['commerce-price-version'].value = savedVersion;
           saveDrafts();
@@ -5753,10 +5798,8 @@
       A.button(label, 'commerce-order-start-shortcut', '', '', `data-minutes="${minutes}"`)).join('');
   }
   function orderPeriodFields(v, auto) {
-    const attributes = auto ? 'type="datetime-local" readonly' : 'type="datetime-local"';
-    return field('订阅时间', 'start', input('start', dateInput(v('start')), attributes),
-      true, '本次实际开通时间，只登记一次。') +
-      field('到期时间', 'expiry', input('expiry', dateInput(v('expiry')), attributes), true);
+    return A.orderPeriodInputs({ prefix: 'commerce', start: dateInput(v('start')), expiry: dateInput(v('expiry')),
+      readOnly: auto, startHelp: '本次实际开通时间，只登记一次。' });
   }
   function orderPaymentFields(v, existing, defaultGptType, separatePeriod) {
     const auto = automaticOrder(existing);
@@ -5832,26 +5875,21 @@
         false, '', '', !apple || v('businessType') === '续费')) +
       (personal ? personalEntitlementFields(v, existing) : '') +
       `</div>` +
-      `<div class="order-financial-groups commerce-span-all${separatePeriod ? ' order-financial-groups--amounts' : ''}">
-        <div class="order-financial-group order-money-group">
-          ${orderAmountHeading('代付', true, v)}
-          ${field(!auto && gptCardPayment(product, v('payment')) ? '国家／地区' : '代付币种', 'paidCurrency',
-            auto || keepApplePayment ? input('paidCurrency', v('paidCurrency') ? currencyLabel(v('paidCurrency')) : '',
-              `readonly placeholder="待核对" data-currency-code="${E(v('paidCurrency'))}"`)
-              : select('paidCurrency', keepSavedOption(paidCurrencyChoices(product, v('payment'), v('paidCurrency')),
-                v('paidCurrency'), existing), v('paidCurrency')), !keepApplePayment)}
-          ${field('实际代付金额', 'paidAmount', orderAmountInput(v, 'paidAmount', auto || keepApplePayment), !keepApplePayment)}
-        </div>
-        <div class="order-financial-group order-money-group">
-          ${orderAmountHeading('售卖', false, v)}
-          ${field('售卖币种', 'saleCurrency', select('saleCurrency', keepSavedOption(currencyChoices(codes, v('saleCurrency'), product), v('saleCurrency'), existing), v('saleCurrency')), true)}
-          ${field('售卖金额', 'saleAmount', orderAmountInput(v, 'saleAmount'), true)}
-        </div>
-        ${separatePeriod ? '' : `<div class="order-financial-group">
+      A.orderAmountGroups({
+        paidHeading: orderAmountHeading('代付', true, v),
+        saleHeading: orderAmountHeading('售卖', false, v),
+        paid: field(!auto && gptCardPayment(product, v('payment')) ? '国家／地区' : '代付币种', 'paidCurrency',
+          auto || keepApplePayment ? input('paidCurrency', v('paidCurrency') ? currencyLabel(v('paidCurrency')) : '',
+            `readonly placeholder="待核对" data-currency-code="${E(v('paidCurrency'))}"`)
+            : select('paidCurrency', keepSavedOption(paidCurrencyChoices(product, v('payment'), v('paidCurrency')),
+              v('paidCurrency'), existing), v('paidCurrency')), !keepApplePayment) +
+          field('实际代付金额', 'paidAmount', orderAmountInput(v, 'paidAmount', auto || keepApplePayment), !keepApplePayment),
+        sale: field('售卖币种', 'saleCurrency', select('saleCurrency', keepSavedOption(currencyChoices(codes, v('saleCurrency'), product), v('saleCurrency'), existing), v('saleCurrency')), true) +
+          field('售卖金额', 'saleAmount', orderAmountInput(v, 'saleAmount'), true),
+        period: separatePeriod ? '' : `<div class="order-financial-group">
           <div class="order-financial-heading"><h3>订阅周期</h3>${auto ? '' : `<div class="order-financial-actions">${orderPeriodActions(auto)}</div>`}</div>
-          ${orderPeriodFields(v, auto)}
-        </div>`}
-      </div>` +
+          ${orderPeriodFields(v, auto)}</div>`
+      }) +
       (v('claudeRenewalId')
         ? `<div class="commerce-cost-strip commerce-span-all">Claude 快捷续费：当前订阅到期 ${E(orders.find((row) => row.id === v('claudeRenewalId'))?.expiry || '')}，本次新单到期 ${E(v('expiry'))}。原单保持独立可见。</div>`
         : '')
@@ -5916,17 +5954,17 @@
       '</div></details>'
     );
   }
-  function orderEditor(orderId = '', renewalId = '', main = false, workbenchSource = null, pageProduct = '') {
+  function orderEditor(orderId, pageProduct = '', workbenchSource = null) {
+    const main = Boolean(pageProduct);
     const existing = orders.find((row) => row.id === orderId);
-    const candidate = workbenchSource?.order || orders.find((row) => row.id === renewalId);
-    const previous = workbenchSource?.order || (claudeAccountTracked(candidate) ? candidate : null);
-    if (renewalId && !previous) {
-      A.notify('快捷续费需要已记录邮箱的 Claude 订单，请直接提交独立新订单。');
+    const previous = workbenchSource?.order;
+    if (!main && !existing) {
+      A.notify('订单已变化，请重新打开。');
       return '';
     }
     const key = workbenchSource ? `commerce-order:workbench:${previous.id}` : main
-      ? (customerOrderDraft?.route === S.route ? customerOrderDraft.key : entryDraft(pageProduct))
-      : `commerce-order:${orderId || `renew:${renewalId}`}`;
+      ? (customerEntryPath.test(S.route) ? 'commerce-order:' + S.route : entryDraft(pageProduct))
+      : `commerce-order:${orderId}`;
     const legacyDraft = S.drafts.get('commerce-order:new');
     const draft = S.drafts.get(key) || (main && !previous && legacyDraft &&
       entryRoute(legacyDraft['commerce-product']) === entryRoute(pageProduct) ? legacyDraft : {});
@@ -5937,17 +5975,11 @@
     const initialProduct = existing?.product || previous?.product ||
       (chooseClaudePlan && claudeProductForPlan(selectedClaudePlan)) || pageProduct;
     const base = existing || orderDefault(initialProduct);
-    if (!existing && previous) {
+    if (previous) {
       for (const name of [
         'product',
         'plan',
-        'customerId',
         'email',
-        'wechat',
-        'customerPhone',
-        'qq',
-        'whatsapp',
-        'telegram',
         'tenantId',
         'owner',
         'ownerPhone',
@@ -5955,10 +5987,7 @@
         'appleStoreRegion',
         'cardTypeId',
         'cardTypeName',
-        'paidAmount',
-        'paidCurrency',
-        'emailCostAmount',
-        'emailCostCurrency'
+        'paidCurrency'
       ])
         base[name] = previous[name] ?? base[name];
       if (!validOrderEmail(base.email)) base.email = '';
@@ -5969,6 +5998,7 @@
       base.expiry = orderPeriodEnd(base.start, previous);
       base.appleIdId = previous.payment === '苹果内购' ? previous.appleIdId || '' : '';
       base.paymentId = previous.payment === '苹果内购' ? previous.paymentId : '';
+      base.accountId = previous.accountId || '';
       base.cardId = '';
       if (previous.payment === '银行卡') {
         base.proMaterialMode = 'none';
@@ -5978,21 +6008,12 @@
         }
       }
       base.saleCurrency = previous.saleCurrency || base.saleCurrency;
-      base.saleAmount = previous.saleAmount || '';
-      if (workbenchSource) {
-        base.customerId = customers.some((row) => row.id === workbenchSource.identity)
-          ? workbenchSource.identity : '';
-        const contact = customerForOrder(previous, workbenchSource.identity);
-        for (const [key] of orderContactFields) base[key] = previous[key] || contact[key];
-        base.paidAmount = '';
-        base.saleAmount = '';
-        base.emailCostAmount = '0';
-        base.emailCostCurrency = 'CNY';
-      }
+      base.customerId = customers.some((row) => row.id === workbenchSource.identity) ? workbenchSource.identity : '';
+      const contact = customerForOrder(previous, workbenchSource.identity);
+      for (const [key] of orderContactFields) base[key] = previous[key] || contact[key];
       if (personalProduct(previous.product)) {
-        for (const key of ['accountId', 'xHandle', 'xLinkState', 'loginMethod']) base[key] = previous[key] || base[key];
+        for (const key of ['xHandle', 'xLinkState', 'loginMethod']) base[key] = previous[key] || base[key];
         base.personalHistoryId = previous.id;
-        base.paidAmount = '';
       }
     }
     const originalPlan = linkedClaude ? claudeOrderPlan(previous.product, previous.plan) : draft['commerce-plan'] ?? base.plan;
@@ -6003,7 +6024,7 @@
       : linkedClaude ? originalPlan
         : existing || orderPlanChoices(initialProduct, nextPlan).includes(nextPlan) ? nextPlan : productPlans[initialProduct][0];
     const draftBusinessType = draft['commerce-businessType'];
-    const businessType = linkedClaude ? '续费' : existing
+    const businessType = previous ? '续费' : existing
       ? existing.businessType || ''
       : orderBusinessTypes(initialProduct).includes(draftBusinessType) ? draftBusinessType : base.businessType;
     const originalAccount = existing?.accountId && A.modules.inventory?.getAsset?.(existing.accountId);
@@ -6049,33 +6070,37 @@
       '';
     const claude = isClaude({ product });
     const defaultGptType = main && !existing && !previous && product === 'GPT';
-    const submissionWorkspace = main && isOrderEntry(S.route);
     const supplementalFields = claude ?
       `<div class="commerce-span-all commerce-field-grid" data-claude-certification${v('businessType') === '续费' ? ' hidden' : ''}>${
         claudeCertificationFields(v, existing)}</div>` +
       field('订阅电话', 'phone', input('phone', v('phone'), 'type="tel" maxlength="60"')) : '';
-    const supplemental = !claude ? '' : submissionWorkspace
-      ? `<details class="commerce-span-all"><summary>Claude 补充资料</summary><div class="commerce-field-grid">${supplementalFields}</div></details>`
-      : section('03', '补充资料', supplementalFields);
     const saleCurrencyChosen = existing || draft['commerce-saleCurrencyChosen'] === 'yes';
-    const identityFields = orderIdentityFields(v, contact, existing, chooseClaudePlan, linkedClaude,
-      main && !existing && !previous && isOrderEntry(S.route) ? draft : null,
-      lockCustomer);
+    const identity = orderIdentityFields(v, contact, existing, chooseClaudePlan, linkedClaude,
+      main ? draft : null, lockCustomer);
+    const identityHelp = '邮箱选填。选择系统库存时登记实际交付。';
     const notes = field('备注', 'notes', `<textarea id="commerce-notes" name="commerce-notes" rows="2">${E(v('notes'))}</textarea>`, false, '', 'commerce-span-all');
-    const paymentSection = section('02', submissionWorkspace ? '付款与金额' : '金额与订阅周期',
-      orderPaymentFields(v, existing, defaultGptType, submissionWorkspace) + orderCostFields(v, existing));
-    const periodSection = submissionWorkspace ? section('03', '订阅周期',
-      orderPeriodFields(v, automaticOrder(existing)) + supplemental + notes, '', false, 'commerce-section',
-      orderPeriodActions(automaticOrder(existing))) : '';
-    const html = `<form id="commerce-order-form" data-commerce-draft="${key}"${chooseClaudePlan ? ' data-choose-claude-plan' : ''} novalidate><input type="hidden" id="commerce-id" name="commerce-id" value="${E(existing?.id || '')}" /><input type="hidden" name="commerce-version" value="${E(draft['commerce-version'] || (existing ? existing.version ?? 0 : ''))}" /><input type="hidden" name="commerce-source" value="${E(existing?.source || '管理员手工')}" /><input type="hidden" name="commerce-submissionId" value="${E(draft['commerce-submissionId'] || '')}" /><input type="hidden" name="commerce-expiryManual" value="${E(draft['commerce-expiryManual'] || '')}" /><input type="hidden" name="commerce-emailCostManual" value="${E(draft['commerce-emailCostManual'] || '')}" /><input type="hidden" name="commerce-paidManual" value="${E(draft['commerce-paidManual'] ?? (draft['commerce-paidAmount'] ? 'yes' : ''))}" /><input type="hidden" name="commerce-saleManual" value="${E(draft['commerce-saleManual'] || '')}" /><input type="hidden" name="commerce-saleCurrencyChosen" value="${saleCurrencyChosen ? 'yes' : ''}" /><input type="hidden" id="commerce-claudeRenewalId" name="commerce-claudeRenewalId" value="${E(v('claudeRenewalId'))}" />${linkedClaude ? input('proRenewalSourceVersion', v('proRenewalSourceVersion'), 'type="hidden"') : ''}${section('01', '客户与账号', identityFields, '邮箱选填。选择系统库存时登记实际交付。')}${paymentSection}${submissionWorkspace ? periodSection : `${supplemental}<div class="commerce-field-grid">${existing ? field('更正原因', 'correctionReason', input('correctionReason', draft['commerce-correctionReason'] ?? '修改错误'), true, '', 'commerce-span-all') : ''}${notes}</div>`}</form>`;
+    const payment = orderPaymentFields(v, existing, defaultGptType, main) + orderCostFields(v, existing);
+    let sections;
+    if (main) {
+      const supplemental = claude ? `<details class="commerce-span-all"><summary>Claude 补充资料</summary><div class="commerce-field-grid">${supplementalFields}</div></details>` : '';
+      sections = A.orderSubmissionSections({ identity, identityHelp, payment,
+        period: orderPeriodFields(v, auto) + (workbenchSource
+          ? '<p class="inline-notice warning commerce-span-all" data-completed-renewal-time role="status" hidden></p>' : '') +
+          supplemental + notes, periodActions: orderPeriodActions(auto) });
+    } else {
+      const reason = existing ? field('更正原因', 'correctionReason', input('correctionReason',
+        draft['commerce-correctionReason'] ?? '修改错误'), true, '', 'commerce-span-all') : '';
+      sections = section('01', '客户与账号', identity, identityHelp) + section('02', '金额与订阅周期', payment) +
+        (claude ? section('03', '补充资料', supplementalFields) : '') +
+        `<div class="commerce-field-grid">${reason}${notes}</div>`;
+    }
+    const html = `<form id="commerce-order-form"${main ? ' class="order-submission-form"' : ''} data-commerce-draft="${key}"${chooseClaudePlan ? ' data-choose-claude-plan' : ''} novalidate><input type="hidden" id="commerce-id" name="commerce-id" value="${E(existing?.id || '')}" /><input type="hidden" name="commerce-version" value="${E(draft['commerce-version'] || (existing ? existing.version ?? 0 : ''))}" /><input type="hidden" name="commerce-source" value="${E(existing?.source || '管理员手工')}" /><input type="hidden" name="commerce-submissionId" value="${E(draft['commerce-submissionId'] || '')}" /><input type="hidden" name="commerce-expiryManual" value="${E(draft['commerce-expiryManual'] || '')}" /><input type="hidden" name="commerce-emailCostManual" value="${E(draft['commerce-emailCostManual'] || '')}" /><input type="hidden" name="commerce-paidManual" value="${E(draft['commerce-paidManual'] ?? (draft['commerce-paidAmount'] ? 'yes' : ''))}" /><input type="hidden" name="commerce-saleManual" value="${E(draft['commerce-saleManual'] || '')}" /><input type="hidden" name="commerce-saleCurrencyChosen" value="${saleCurrencyChosen ? 'yes' : ''}" /><input type="hidden" id="commerce-claudeRenewalId" name="commerce-claudeRenewalId" value="${E(v('claudeRenewalId'))}" />${workbenchSource ? input('renewalSourceVersion', draft['commerce-renewalSourceVersion'] ?? previous.version ?? 0, 'type="hidden"') : ''}${linkedClaude ? input('proRenewalSourceVersion', v('proRenewalSourceVersion'), 'type="hidden"') : ''}${sections}</form>`;
     const footer = `<button form="commerce-order-form" type="submit" class="button primary">${existing ? '保存修改' : '提交订单'}</button>`;
     if (main)
       return entryWorkspace(`<section class="panel form-panel">${html}<div class="form-footer">${footer}${orderReceiptAction()}</div></section>`, 'order', product);
     A.openDrawer(
-      previous ? 'Claude 续费新订单' : '修改订单资料',
-      previous
-        ? '沿用账号与客户资料，生成独立新单；银行卡请重新选择，苹果 ID 可保留。'
-        : '更正保留版本、费用和余额台账，不删除真实财务记录。',
+      '修改订单资料',
+      '更正保留版本、费用和余额台账，不删除真实财务记录。',
       html,
       footer,
       key
@@ -6142,11 +6167,8 @@
     if (personal) {
       order.entitlementStatus ||= 'pending';
       order.loginMethod = form.elements['commerce-loginMethod']?.value || order.loginMethod;
-      if (order.product === 'Grok' && order.email?.startsWith('@')) {
-        order.loginMethod = 'x';
-        order.xHandle = order.email;
-        order.email = '';
-      }
+      if (order.product === 'Grok' && order.email?.startsWith('@'))
+        Object.assign(order, window.IDOrderOpening.grokOrderAccount(order.email));
       order.subscriptionSeries = personalSeries(order.product, order.plan);
       const appStore = order.payment === '苹果内购';
       const original = appStore && order.businessType === '续费' ? previousAppleOrder(order) : null;
@@ -6286,12 +6308,23 @@
       !cardIssueRecorded(order.cardId, order.id) && (cards().find((card) => card.id === order.cardId)?.usageCount || 0) === 0);
     return order;
   }
-  function workbenchOrderSource(route) {
+  function openRenewalEntry(id) {
+    A.go(renewalOrderPrefix + encodeURIComponent(id), { orderReturnRoute: S.route });
+  }
+  function renewalReturnAction() {
+    const route = window.history?.state?.orderReturnRoute;
+    const labels = { 'orders/claude': '返回 Claude 订单', 'subscriptions/apple-ids': '返回苹果 ID 管理',
+      'subscriptions/bank-cards': '返回订阅银行卡' };
+    return Object.hasOwn(labels, route) && A.canVisit(route) ? routeButton(labels[route], route, '', 'return')
+      : routeButton('返回续费管理', renewalHome, '', 'return');
+  }
+  function workbenchOrderSource(route, reminderOnly = false) {
     if (!canManageOrders() || !route.startsWith(renewalOrderPrefix)) return null;
     const id = route.slice(renewalOrderPrefix.length);
     const projection = renewalProjection();
     const reminder = projection.reminders.find(row => encodeURIComponent(row.order.id) === id);
     if (reminder) return reminder.state === 'processed' ? null : reminder;
+    if (reminderOnly) return null;
     const current = projection.rows.find(row => encodeURIComponent(row.order.id) === id);
     if (current && current.order.customerId && !current.order.cancelled && !current.order.subscriptionEnded &&
         !endedInventoryOrder(current.order) && !projection.rows.some(row => row !== current &&
@@ -6302,6 +6335,25 @@
     const index = appleIndex();
     return order && index && window.IDAppleFunding.appleBinding(index, order).id === order.appleIdId
       ? { order, identity: order.customerId, state: 'apple-funding' } : null;
+  }
+  function completedRenewalHealth(order) {
+    if (!order) return null;
+    const inventory = A.modules.inventory;
+    const summary = inventory?.accountSummary?.(order.accountId) ||
+      (!personalProduct(order.product) ? inventory?.accountSummaryForEmail?.(order.email, order.product) : null);
+    return summary?.systemOwned && (order.accountId || summary.customerId === order.customerId ||
+      summary.orders?.some(row => row.id === order.id)) ? summary.completedRenewalHealth : null;
+  }
+  function updateCompletedRenewalTimeHelp(form) {
+    const notice = $('[data-completed-renewal-time]', form);
+    if (!notice) return;
+    const health = completedRenewalHealth(workbenchOrderSource(S.route)?.order);
+    notice.hidden = !health;
+    if (health) {
+      const before = Number.isFinite(health.before) ? dateInput(new Date(health.before).toISOString()).replace('T', ' ') : '';
+      notice.textContent = before ? `原库存账号当前为${health.status}。请填写早于 ${before}（北京时间）的实际开通时间。`
+        : `原库存账号当前为${health.status}，异常时间未记录。请先核对原单和开通凭据。`;
+    }
   }
   const renewalCardHints = new WeakMap();
   function renewalCardSource(order) {
@@ -6481,7 +6533,7 @@
     const searchLabel = `搜索${title}`;
     const query = entryView(kind, product).query;
     const mobileView = A.state.drafts.get(`mobile-entry:${A.state.route}`)?.view === 'records' ? 'records' : 'form';
-    const unified = kind === 'order' && isOrderEntry(S.route);
+    const unified = kind === 'order';
     const mobileControl = unified
       ? `<div class="panel order-entry-mobile-switch" data-entry-switch-view="form"><strong>填写订单资料</strong>${
         A.button(title, 'mobile-entry-view', '', 'chevron', 'data-view="records" data-entry-switch-view="form"')}</div>`
@@ -6557,21 +6609,31 @@
   function renderOrderPage() {
     const renewal = S.route.startsWith(renewalOrderPrefix);
     const source = renewal ? workbenchOrderSource(S.route) : null;
-    const original = renewal ? orders.find(row => encodeURIComponent(row.id) === S.route.slice(renewalOrderPrefix.length)) : null;
-    const fromCustomer = customerOrderDraft?.route === S.route ? customerOrderDraft : null;
-    const product = source?.order.product || original?.product || fromCustomer?.product || personalEntries[S.route] ||
-      (S.route === claudeOrderRoute ? 'Claude Pro' : 'GPT');
-    return (
-      A.header(
-        renewal ? (isClaude({ product }) ? 'Claude 提交订单' : product + ' 提交订单') : '订单提交',
-        '已收款并开通后登记。填写客户、两笔金额和订阅周期，邮箱及银行卡可留空。',
-        renewal ? routeButton('返回续费管理', renewalHome, '', 'return') : fromCustomer
-          ? routeButton('返回客户查询', 'workspace/customer-query', '', 'return') : '',
-        renewal ? '续费录单' : '订单工作台'
-      ) + (renewal && !source
-        ? `<section class="panel">${orderReceiptAction() || A.empty('续费提醒已变化', '请返回续费管理查看最新状态。')}</section>`
-        : orderEditor('', '', true, source, product))
-    );
+    const route = sourceProductRoute(S.route) || S.route;
+    const fromCustomer = customerEntryPath.test(S.route);
+    const customerDraft = fromCustomer && S.drafts.get('commerce-order:' + S.route);
+    const product = source?.order.product || customerDraft?.['commerce-product'] || personalEntries[route] ||
+      (route === claudeOrderRoute ? 'Claude Pro' : 'GPT');
+    const back = renewal ? renewalReturnAction() : fromCustomer
+      ? routeButton('返回客户查询', 'workspace/customer-query', '', 'return') : '';
+    const header = A.header('订单提交', '已收款并开通后登记。填写客户、两笔金额和订阅周期，邮箱及银行卡可留空。',
+      back, renewal ? '续费录单' : '订单工作台');
+    const receipt = (renewal || fromCustomer) && orderReceiptAction();
+    if (receipt) return header + `<section class="panel panel-body">${receipt}</section>`;
+    if (renewal && !source) return header + `<section class="panel">${A.empty('续费提醒已变化', '请返回续费管理查看最新状态。')}</section>`;
+    if (source) {
+      const version = S.drafts.get('commerce-order:workbench:' + source.order.id)?.['commerce-renewalSourceVersion'];
+      if (version != null && Number(version) !== (source.order.version ?? 0)) return header +
+        `<section class="panel panel-body">${A.empty('原订单资料已变化', '重新带入最新原单将替换这笔未提交的续费草稿。')}
+          ${A.button('重新带入最新原单', 'commerce-reload-renewal', 'primary')}</section>`;
+    }
+    if (fromCustomer && !customerDraft) {
+      const message = customerPrefillRead?.route === S.route && customerPrefillRead.error;
+      return header + `<section class="panel panel-body">${message
+        ? A.empty('无法带入客户资料', message) + A.button('重新读取', 'commerce-retry-customer-prefill')
+        : A.loadingState('正在读取客户资料…')}</section>`;
+    }
+    return header + orderEditor('', product, source);
   }
   function gptOrderListHeading() {
     return '<div class="gpt-order-origin-bar"><div class="gpt-order-origin-legend" aria-label="订单来源颜色">' +
@@ -6720,7 +6782,7 @@
           const edit = fill ? A.textAction('补全资料', 'commerce-order-complete', id)
             : canManageOrders() ? A.textAction('编辑', 'commerce-order-edit', id + (row.cancelled ? ' disabled' : '')) : '';
           const manage = canManageOrders() ? A.textAction('退款', 'commerce-order-refund',
-            id + (row.cancelled || !(row.list?.receiptRecorded ?? orderReceiptRecorded(row)) ? ' disabled' : '')) +
+            id + (canRefundOrder(row) ? '' : ' disabled')) +
             A.textAction(product === 'Claude' ? '更多操作' : '更多', 'commerce-order-more',
               id + ' aria-haspopup="menu" aria-expanded="false"', 'secondary', 'down') : '';
           return `<div class="action-links">${detail}${edit}${manage}</div>`;
@@ -6875,7 +6937,15 @@
         const wallet = form.elements['commerce-appleIdId'];
         wallet.closest('.field').hidden = !apple;
         wallet.disabled = !apple;
-        if (apple) form.elements['commerce-paidCurrency'].value = 'USD';
+        const currency = form.elements['commerce-paidCurrency'];
+        const paid = form.elements['commerce-paidAmount'];
+        if (apple && currency.value !== 'USD' && paid.value) {
+          paid.value = '';
+          A.notify('付款方式已切换为苹果内购，如需登记代付请按美元重新填写金额。');
+        }
+        const selected = apple ? 'USD' : currency.value;
+        const choices = apple ? paidCurrencyChoices('Claude Pro', '苹果内购') : currencyChoices();
+        currency.replaceChildren(...choices.map(([code, label]) => new Option(label, code, false, code === selected)));
       });
     } catch (error) {
       if (feedback.current()) A.notify(error.message || '暂时无法读取历史账号');
@@ -6891,7 +6961,10 @@
       'saleCurrency', 'actualCostAmount', 'actualCostCurrency', 'subscriptionEndedAt', 'notes', 'paidAmount', 'paidCurrency']
       .map(name => [name, value(raw, name)]));
     if (command.payment === '苹果内购') {
-      command.paidCurrency = 'USD';
+      if (command.paidCurrency !== 'USD') {
+        A.setError('commerce-paidCurrency', '苹果内购请填写美元实际扣款', form);
+        return;
+      }
       command.appleIdId = value(raw, 'appleIdId');
       if (command.appleIdId && (!amountValid(command.paidAmount) || M.compare(command.paidAmount, '0') <= 0)) {
         A.setError('commerce-paidAmount', '请填写实际扣款金额', form);
@@ -7246,17 +7319,19 @@
       `data-id="${id}" ${order.cancelled ? 'disabled' : ''}`
     ) + (independentOrderNotes(order)
       ? A.button('修改备注', 'commerce-order-notes', '', '', `data-id="${E(id)}"`) : '') : '');
-    if (asPage)
+    if (asPage) {
+      const fromCompletion = window.history?.state?.orderDetailFromCompletion && A.canVisit('workspace/order-completion');
       return (
         A.header(
           '订单详情',
           `${order.orderNo} · 业务记录、费用和历史互相追溯。`,
           routeButton(
-            '返回订单列表',
-            orderListRoute(order.product)
+            fromCompletion ? '返回订单补全' : '返回订单列表',
+            fromCompletion ? 'workspace/order-completion' : orderListRoute(order.product)
           ) + actions
         ) + `<section class="panel">${detailBody}</section>`
       );
+    }
     A.openDrawer(
       '订单详情',
       `${order.orderNo} · 业务记录、费用和历史互相追溯。`,
@@ -8431,10 +8506,12 @@
       controls = list.source + searchField('搜索订单、客户或邮箱');
       body = list.body;
     }
-    const appleReadFailed = localData && A.canVisit('accounts/apple-balances') &&
-      A.modules.appleBalance?.readFailed?.() && selected.some(order => order.payment === '苹果内购');
-    const appleStatus = appleReadFailed
-      ? '<p class="footnote panel-body overview-warning" role="status">Apple 回款读取失败，利润按现有资料计算。</p>' : '';
+    const apple = A.modules.appleBalance;
+    const readsApple = localData && apple?.canReadAccounting() && selected.some(order => order.payment === '苹果内购');
+    const appleStatus = !readsApple || apple.ready() ? '' : apple.readFailed()
+      ? `<div class="footnote panel-body overview-warning"><span role="status">Apple 回款读取失败，利润按现有资料计算。</span>
+        ${A.textAction('重读 Apple 回款', 'commerce-stat-apple-retry')}</div>`
+      : '<p class="footnote panel-body" role="status">正在读取 Apple 回款，利润将随资料更新。</p>';
     return A.header('订单统计', '默认按北京时间订单录入日期统计，也可切换到实际开通日期。系统按已保存的实收、成本、费用凭据和订单汇率计算。' + statisticsQuoteHelp,
       A.canVisit('settings/costs') ? routeButton('费用设置', 'settings/costs', 'commerce-stat-settings', 'settings') : '') +
       expenseStatus(expenseState) + appleStatus +
@@ -8462,25 +8539,8 @@
     A.setError(phone.id, message, form);
     return message;
   }
-  function customerDuplicates(id, name, contacts) {
-    const previous = customers.find(row => row.id === id);
-    const nameKey = contactKey(name);
-    const nameChanged = nameKey !== contactKey(previous?.name);
-    let sharedContact = '';
-    for (const row of customers) {
-      if (row.id === id) continue;
-      const channel = customerChannels.find(([key]) => {
-        const normalized = contactKey(contacts[key], key);
-        return normalized && normalized === contactKey(row[key], key) &&
-          (nameChanged || normalized !== contactKey(previous?.[key], key));
-      });
-      if (!channel) continue;
-      if (contactKey(row.name) === nameKey) return { duplicate: { row, channel }, sharedContact };
-      if (!sharedContact) sharedContact = channel[1];
-    }
-    return { sharedContact };
-  }
-  function showDuplicate({ row, channel: [key, label] }) {
+  function showDuplicate({ row, key }) {
+    const label = customerChannels.find(([name]) => name === key)[1];
     const fieldId = `commerce-contact-${key}`;
     A.setError(
       fieldId,
@@ -8624,10 +8684,20 @@
       return;
     }
     const back = value(raw, 'quick') === 'yes' ? quickReturn : null;
-    const duplicate = !tenant && customerDuplicates(id, name, contacts)?.duplicate;
+    const duplicate = !tenant && duplicateCustomerContact(customers, { id, name, ...contacts }, existing);
     if (duplicate) {
       showDuplicate(duplicate);
       return;
+    }
+    if (!tenant) {
+      const { numbers, error } = normalizeCustomerNumbers(contacts, existing);
+      if (error) {
+        const fieldId = 'commerce-contact-' + error.key;
+        A.setError(fieldId, error.message, form);
+        document.getElementById(fieldId)?.focus();
+        return;
+      }
+      Object.assign(contacts, numbers);
     }
     const route = S.route;
     const key = form.dataset.commerceDraft;
@@ -8709,7 +8779,7 @@
               restored.value = typed;
               queueTenantCardLookup(restored);
             }
-          } else orderEditor(back.orderId, back.renewalId, false);
+          } else orderEditor(back.orderId);
         } else {
           if (!current && !tenant && route === 'customers/list') {
             moduleState.customerMode = 'active';
@@ -9030,6 +9100,15 @@
       A.notify('这笔续费提醒已处理，请返回续费管理核对。');
       return;
     }
+    if (renewalEntry) {
+      const timeIssue = completedRenewalStartIssue(inputOrder.start, completedRenewalHealth(renewalSource.order),
+        orderEvaluationTime(), renewalSource.order.start);
+      if (timeIssue) {
+        A.setError('commerce-start', timeIssue, form);
+        form.elements['commerce-start'].focus();
+        return;
+      }
+    }
     if (existing && String(Number(existing.version) || 0) !== inputOrder.version) {
       A.notify('订单版本已变化，请重新核对');
       return;
@@ -9066,7 +9145,7 @@
       taskEvidenceId: existing?.taskEvidenceId || '',
       previousOrderId: renewalSource?.order.id || (personalProduct(inputOrder.product) ? inputOrder.previousOrderId || '' :
         existing?.previousOrderId || (!existing && renewalCardSource(inputOrder)?.id) || ''),
-      ...(renewalSource && { renewalSourceVersion: renewalSource.order.version ?? 0 }),
+      ...(renewalSource && { renewalSourceVersion: renewalEntry ? Number(raw['commerce-renewalSourceVersion']) : renewalSource.order.version ?? 0 }),
       balanceReversalConfirmed: false
     };
     pruneProMaterialFields(saved);
@@ -9126,9 +9205,21 @@
             return;
           }
         }
-        if (renewalEntry && (S.route !== renewalEntry || !workbenchOrderSource(renewalEntry))) {
-          A.notify('这笔续费提醒已变化，请返回续费管理核对。');
+        const currentSource = renewalEntry && workbenchOrderSource(renewalEntry);
+        if (renewalEntry && (!currentSource || saved.renewalSourceVersion !== (currentSource.order.version ?? 0))) {
+          saveDrafts();
+          A.render();
+          A.notify('这笔续费提醒已变化，请重新核对原单。');
           return;
+        }
+        if (renewalEntry) {
+          const timeIssue = completedRenewalStartIssue(saved.start, completedRenewalHealth(currentSource.order),
+            orderEvaluationTime(), currentSource.order.start);
+          if (timeIssue) {
+            A.setError('commerce-start', timeIssue, form);
+            A.notify(timeIssue);
+            return;
+          }
         }
         if (currentOperator().id !== operator.id) {
           A.notify('登录身份已变化，请重新核对后保存');
@@ -9317,7 +9408,7 @@
   function refundEditor(id) {
     const order = orders.find((row) => row.id === id);
     if (!order) return;
-    if (order.cancelled || !orderReceiptRecorded(order) || M.compare(refundable(order), '0') <= 0) {
+    if (!canRefundOrder(order)) {
       A.notify('当前订单没有可登记退款的已确认实收');
       return;
     }
@@ -9346,7 +9437,7 @@
     const raw = A.readForm(form),
       order = orders.find((row) => row.id === value(raw, 'id'));
     if (!order) return;
-    if (order.cancelled || !orderReceiptRecorded(order)) {
+    if (!canRefundOrder(order)) {
       A.notify('当前订单没有可登记退款的已确认实收');
       return;
     }
@@ -9409,8 +9500,7 @@
     if (
       orders.find((row) => row.id === order.id) !== order ||
       order.version !== expectedVersion ||
-      order.cancelled ||
-      !orderReceiptRecorded(order) ||
+      !canRefundOrder(order) ||
       M.compare(amount, refundable(order)) > 0
     ) {
       A.notify('可退款金额已变化，停止登记');
@@ -9907,7 +9997,7 @@
       : ledger
         ? `<div class="guide-item"><h3>Apple 余额退回</h3><p>本单可确认退回 ${display(ledger.netAmount)} ${currencyLabel('USD')}，仅在 Apple 已实际返还时登记。</p><div class="toolbar">${A.button('确认 Apple 余额退回', 'commerce-apple-refund', '', 'return', `data-id="${id}" ${M.compare(ledger.netAmount, '0') <= 0 ? 'disabled' : ''}`)}</div></div>`
         : '';
-    A.openActionMenu(node, `<div class="property-list">${property('订单编号', order.orderNo)}</div><div class="guide-list">${claude}<div class="guide-item"><h3>更正与补偿</h3><div class="toolbar">${A.button('更正订单资料', 'commerce-order-edit', '', '', `data-id="${id}" ${order.cancelled ? 'disabled' : ''}`)}${notes}${A.button('补偿撤回最近更正', 'commerce-order-undo', '', 'return', `data-id="${id}" ${order.corrections?.length ? '' : 'disabled'}`)}</div></div><div class="guide-item"><h3>客户退款</h3><div class="toolbar">${A.button('登记客户实际退款', 'commerce-order-refund', '', '', `data-id="${id}" ${!orderReceiptRecorded(order) ? 'disabled' : ''}`)}</div></div>${apple}<div class="guide-item"><div class="section-title-row"><h3>业务撤单</h3>${A.titleInfo('业务撤单', '已有实付、实收、退款或任务时不能通过撤单抹账；不自动归还库存或苹果余额。', 'commerce-more-cancel')}</div><div class="toolbar">${A.button(order.cancelled ? '恢复业务订单' : '业务撤单', 'commerce-order-cancel', order.cancelled ? '' : 'danger', '', `data-id="${id}"`)}</div></div></div>`);
+    A.openActionMenu(node, `<div class="property-list">${property('订单编号', order.orderNo)}</div><div class="guide-list">${claude}<div class="guide-item"><h3>更正与补偿</h3><div class="toolbar">${A.button('更正订单资料', 'commerce-order-edit', '', '', `data-id="${id}" ${order.cancelled ? 'disabled' : ''}`)}${notes}${A.button('补偿撤回最近更正', 'commerce-order-undo', '', 'return', `data-id="${id}" ${order.corrections?.length ? '' : 'disabled'}`)}</div></div><div class="guide-item"><h3>客户退款</h3><div class="toolbar">${A.button('登记客户实际退款', 'commerce-order-refund', '', '', `data-id="${id}" ${canRefundOrder(order) ? '' : 'disabled'}`)}</div></div>${apple}<div class="guide-item"><div class="section-title-row"><h3>业务撤单</h3>${A.titleInfo('业务撤单', '已有实付、实收、退款或任务时不能通过撤单抹账；不自动归还库存或苹果余额。', 'commerce-more-cancel')}</div><div class="toolbar">${A.button(order.cancelled ? '恢复业务订单' : '业务撤单', 'commerce-order-cancel', order.cancelled ? '' : 'danger', '', `data-id="${id}"`)}</div></div></div>`);
   }
 
   const notesFormId = 'commerce-order-notes-form';
@@ -10194,22 +10284,20 @@
       route: S.route,
       key: form.dataset.commerceDraft,
       main: !form.closest('#drawer'),
-      orderId: form.elements['commerce-id']?.value || '',
-      renewalId: form.elements['commerce-claudeRenewalId']?.value || ''
+      orderId: form.elements['commerce-id']?.value || ''
     };
     contactForm(tenant, '', true);
   }
   function onClick(action, node) {
     const id = node.dataset.id;
+    if (action === 'commerce-stat-apple-retry') {
+      void A.withActionFeedback(node, refreshStatisticsAppleBalance, { pending: '正在读取 Apple 回款…' });
+      return true;
+    }
     if (action === 'commerce-loss-open') {
       const view = node.dataset.view;
       if (!A.canVisit(customerLossRoute) || !['scheduled', 'recent', 'review'].includes(view)) return true;
-      S.drafts.set(retentionFiltersKey, { ...retentionFilterDefaults, age: view === 'recent' ? 'recent' : '' });
-      window.IDSearchInput?.discardPage(customerLossRoute, 'commerce-search');
-      S.viewDrafts.set(customerLossRoute, {
-        ...S.viewDrafts.get(customerLossRoute), page: 1, query: '', scrollY: 0,
-        status: view === 'recent' ? '' : view
-      });
+      S.viewDrafts.set(customerLossRoute, { ...S.viewDrafts.get(customerLossRoute), ...customerLossScope(view) });
       A.go(customerLossRoute);
       return true;
     }
@@ -10588,10 +10676,11 @@
           S.route !== renewalHome)) return true;
       if (node.hasAttribute('data-renewal-card-renew')) {
         const panel = $('#commerce-renewal-card-panel');
-        if (!renewalCardActionCurrent(panel, node) || !renewalCardCanRenew(id) ||
-            renewalCardDrawers.get(panel)?.details?.order?.account?.canRenew === false) return true;
+        if (!node.isConnected || !renewalCardDrawerCurrent(panel) || !completedRenewalReminder(id)) return true;
+        if (!localData?.authRequired && (!renewalCardActionCurrent(panel, node) ||
+            renewalCardDrawers.get(panel)?.details?.order?.account?.canRenew === false)) return true;
       }
-      if (id && canManageOrders()) A.go(renewalOrderPrefix + encodeURIComponent(id));
+      if (id && canManageOrders()) openRenewalEntry(id);
       return true;
     }
     if (action === 'commerce-loss-history') {
@@ -10754,6 +10843,17 @@
       quickCreate(action.endsWith('tenant'), node);
       return true;
     }
+    if (action === 'commerce-reload-renewal') {
+      const source = workbenchOrderSource(S.route);
+      if (source) S.drafts.delete('commerce-order:workbench:' + source.order.id);
+      A.render();
+      return true;
+    }
+    if (action === 'commerce-retry-customer-prefill') {
+      customerPrefillRead = undefined;
+      A.render();
+      return true;
+    }
     if (action === 'commerce-new-product-order') {
       const product = node.dataset.product;
       const key = entryDraft(product);
@@ -10878,7 +10978,7 @@
         A.notify('当前订单不可快捷续费，请核对最新订单。');
         return true;
       }
-      orderEditor('', id);
+      openRenewalEntry(id);
       return true;
     }
     if (action === 'commerce-order-tab') {
@@ -11269,10 +11369,10 @@
       controls['commerce-xLinkState'].value = original.xLinkState || 'unknown';
       return;
     }
-    const x = identity.startsWith('@');
-    controls['commerce-loginMethod'].value = x ? 'x' : 'email';
-    controls['commerce-xHandle'].value = x ? identity : '';
-    controls['commerce-xLinkState'].value = x && same(original?.xHandle)
+    const target = window.IDOrderOpening.grokOrderAccount(identity);
+    controls['commerce-loginMethod'].value = target.loginMethod;
+    controls['commerce-xHandle'].value = target.xHandle;
+    controls['commerce-xLinkState'].value = target.xHandle && same(original?.xHandle)
       ? original.xLinkState || 'unknown' : 'unknown';
   }
   function updateStockSearch(form) {
@@ -11573,7 +11673,12 @@
             : form.querySelector('#commerce-product').value === 'GPT'
               ? 'PHP'
               : 'MYR';
-        if (!controls['commerce-paidManual'].value && paid.value !== nextCurrency) amount.value = '';
+        if (paid.value !== nextCurrency && (!controls['commerce-id'].value || !controls['commerce-paidManual'].value)) {
+          if (controls['commerce-paidManual'].value && amount.value)
+            A.notify('代付币种已变化，请核对本次实际金额');
+          amount.value = '';
+          controls['commerce-paidManual'].value = '';
+        }
         paid.innerHTML = A.options(
           paidCurrencyChoices(form.elements['commerce-product'].value, nextPayment, nextCurrency),
           nextCurrency
@@ -11761,7 +11866,6 @@
         'customers/new/tenant',
         'customers/list',
         tenantRoute,
-        'workspace/order', gptOrderRoute, claudeOrderRoute, ...Object.keys(personalEntries),
         renewalRoute,
         customerLossRoute,
         subscriptionCardsRoute,
@@ -11770,7 +11874,7 @@
         'orders/statistics',
         paymentSettingsRoute
       ].includes(route) ||
-      route.startsWith(renewalOrderPrefix) ||
+      isOrderEntry(route) ||
       route.startsWith(claudeRentalsRoute + '/') ||
       route.startsWith('orders/detail/')
     );
@@ -11788,7 +11892,8 @@
       if (orderEntryPage || contactEntryPage) {
         const tenant = S.route === 'customers/new/tenant';
         const kind = orderEntryPage ? 'order' : tenant ? 'tenant' : 'customer';
-        const product = personalEntries[S.route] || (S.route === claudeOrderRoute ? 'Claude Pro' : 'GPT');
+        const route = sourceProductRoute(S.route) || S.route;
+        const product = personalEntries[route] || (route === claudeOrderRoute ? 'Claude Pro' : 'GPT');
         const title = orderEntryPage ? '订单提交' : tenant ? '租户录入' : '客户录入';
         return A.header(title, '') + entryWorkspace(
           `<section class="panel form-panel"><div class="entry-loading-form">${entryLoadingState(orderEntryPage ? '订单资料' : tenant ? '租户资料' : '客户资料')}</div></section>`,
@@ -11818,7 +11923,7 @@
     }
     if (S.route === 'customers/list') return renderContacts(false);
     if (tenantPage) return renderContacts(true);
-    if (isOrderEntry(S.route) || S.route.startsWith(renewalOrderPrefix)) return renderOrderPage();
+    if (isOrderEntry(S.route)) return renderOrderPage();
     if (S.route === subscriptionCardsRoute) return renderSubscriptionCards();
     if (lossPage) {
       if (localData && (!requestedAccountLifecycle || accountLifecycleReading) &&
@@ -11972,6 +12077,9 @@
   }
   let requestedAccountLifecycle = false, accountLifecycleReading = false;
   A.modules.commerce = {
+    customerProfileFields,
+    orderPlansFor: product => [...(productPlans[product] || [])],
+    orderPaymentChoices, sourceProductRoute, isOrderEntry,
     openBankCardTypeAssignment, subscriptionCenterNav, renewalActions, subscriptionContacts, openAuditExpense,
     openRenewalWorktableDetails, renewalWorktableActions, runRenewalWorktableAction,
     async openAuditOrder(reference, reverse, node) {
@@ -11993,16 +12101,10 @@
       const product = values?.product;
       if (!canManageOrders() || !Object.hasOwn(productPlans, product) || !values.customerId)
         throw new Error('客户或订单产品待核对');
-      const route = entryRoute(product);
-      const key = `commerce-order:customer-query:${JSON.stringify([product, values.customerId, orderId])}`;
-      if (!S.drafts.has(key)) {
-        const fields = ['product', 'customerId', 'wechat', 'customerPhone', 'qq', 'whatsapp', 'telegram',
-          'plan', 'email', 'tenantId', 'proMaterialMode', 'proPoolCardId', 'payment', 'cardId', 'appleIdId', 'appleStoreRegion', 'loginMethod',
-          'xHandle', 'xLinkState', 'platformAccountId', 'personalHistoryId'];
-        S.drafts.set(key, Object.fromEntries(fields.filter(field => typeof values[field] === 'string')
-          .map(field => ['commerce-' + field, values[field]])));
-      }
-      customerOrderDraft = { key, route, product };
+      const route = entryRoute(product) + '/customer/' + encodeURIComponent(values.customerId) +
+        (orderId ? '/order/' + encodeURIComponent(orderId) : '/product/' + encodeURIComponent(product));
+      orderReceipts.delete(route);
+      rememberCustomerPrefill(route, values);
       A.go(route);
     },
     appleFundingData({ includeSubscriptions = false } = {}) {
@@ -12035,7 +12137,7 @@
     openAppleRenewal(orderId) {
       const row = orders.find(order => order.id === orderId && order.payment === '苹果内购' && !order.cancelled);
       if (!row) return A.notify('原苹果内购订单已变化，请重新读取');
-      if (canManageOrders()) A.go(renewalOrderPrefix + encodeURIComponent(orderId));
+      if (canManageOrders()) openRenewalEntry(orderId);
     },
     refreshCustomerTagOptions,
     refreshCommerce: () => loadLocalCommerce(true, true),
@@ -12047,6 +12149,20 @@
     },
     refreshAfterOrderSync,
     setOrderListTab,
+    applyListScope(route) {
+      if (route === customerLossRoute) {
+        const scope = customerLossScope('lost');
+        Object.assign(S, scope);
+        S.viewDrafts.set(route, { ...S.viewDrafts.get(route), ...scope });
+        return;
+      }
+      const product = orderListProducts[route];
+      if (!product) return;
+      S.drafts.set('commerce-order-filters:' + product, { tab: 'pending' });
+      window.IDSearchInput?.discardPage(route, 'commerce-search');
+      Object.assign(S, { page: 1, query: '' });
+      S.viewDrafts.set(route, { ...S.viewDrafts.get(route), scrollY: 0 });
+    },
     overviewSummary,
     applyStatisticsLink,
     overviewCustomerSummary,
@@ -12164,8 +12280,11 @@
     }
     if (!popup.matches?.('.commerce-picker-popover')) return;
     const open = event.newState === 'open';
-    popup.closest('.commerce-search-picker').querySelector('.commerce-picker-trigger').setAttribute('aria-expanded', String(open));
-    if (!open) return;
+    if (!open) {
+      popup.closest('.commerce-search-picker').querySelector('.commerce-picker-trigger').setAttribute('aria-expanded', 'false');
+      return;
+    }
+    popup.style.visibility = 'hidden';
     const search = popup.querySelector('[data-commerce-picker]');
     if (popup.closest('.commerce-email-history')) search.value = '';
     filterPicker(search, true);
@@ -12175,8 +12294,11 @@
     if (!popup.matches?.('.commerce-picker-popover')) return;
     if (event.newState !== 'open' || !popup.matches(':popover-open')) return;
     positionPicker(popup);
+    if (!popup.matches(':popover-open')) return;
+    popup.style.removeProperty('visibility');
+    popup.closest('.commerce-search-picker').querySelector('.commerce-picker-trigger').setAttribute('aria-expanded', 'true');
     // A queued toggle can arrive after the user has already focused a matching option.
-    if (popup.matches(':popover-open') && !popup.contains(document.activeElement))
+    if (!popup.contains(document.activeElement))
       popup.querySelector('[data-commerce-picker]').focus({ preventScroll: true });
   }, true);
   document.addEventListener?.('compositionstart', event => {
@@ -12258,7 +12380,7 @@
       const back = orderPriceReferenceReturn;
       orderPriceReferenceReturn = null;
       if (S.route === back.route && currentOperator().id === back.actorId) {
-        if (!back.main) orderEditor(back.orderId, back.renewalId, false);
+        if (!back.main) orderEditor(back.orderId);
         const form = $(`${back.main ? '#main' : '#drawer[open]'} #commerce-order-form`);
         form?.querySelector(`[data-action="commerce-order-price-reference"][data-kind="${back.view.kind}"]`)?.focus({ preventScroll: true });
       }
@@ -12271,7 +12393,7 @@
         if (back.onClose) back.onClose();
         else if (!back.order) A.render();
         else if (back.order.main) refreshOrderCardType($('#main #commerce-order-form'));
-        else orderEditor(back.order.id, back.order.renewalId, false);
+        else orderEditor(back.order.id);
       }
       return;
     }
@@ -12279,10 +12401,10 @@
     if (closedOrder) clearRevealedCard(closedOrder);
     const cardInput = drawer.querySelector('#commerce-tenant-card-number');
     if (cardInput) cardInput.value = '';
-    if (!quickReturn || quickReturn.tenant) return;
+    if (!quickReturn) return;
     const back = quickReturn;
     quickReturn = null;
-    if (!back.main && back.route === S.route) orderEditor(back.orderId, back.renewalId, false);
+    if (!back.main && back.route === S.route) orderEditor(back.orderId);
   });
   document.addEventListener?.('id-pagination-change', ({ detail, target }) => {
     if (detail.id !== 'commerce-renewal-history') return;
@@ -12298,13 +12420,14 @@
     matches,
     deactivate(region) {
       if (!pagedOrders()) orderPage?.clear();
-      if (S.route !== customerOrderDraft?.route) customerOrderDraft = undefined;
+      if (customerPrefillRead?.route !== S.route) customerPrefillRead = undefined;
       if (region?.dataset.pageRegion === renewalRoute && S.route !== renewalRoute)
         workbenchRead = workbenchResource = workbenchFailure = undefined;
     },
     clearPageState() {
       orderPage?.clear();
-      customerOrderDraft = undefined;
+      customerPrefillRead = undefined;
+      orderReceipts.clear();
       orderViewTiming = undefined;
       listDiagnostic = undefined;
       window.clearTimeout?.(commerceDeadlineTimer);
@@ -12402,22 +12525,24 @@
           }
           if (!ready || route !== S.route) return;
           const form = $('#commerce-order-form');
-          if (form) updateCustomerEmailHistory(form);
+          if (form) {
+            updateCustomerEmailHistory(form);
+            updateCompletedRenewalTimeHelp(form);
+          }
           else A.render();
         });
       }
       updateRenewalReminder();
       if (!localData || localPhase !== 'ready') return;
       if (S.route === subscriptionCardsRoute) loadSubscriptionCardEstimates();
-      if (S.route === 'orders/statistics' && A.canVisit('accounts/apple-balances')) {
+      if (S.route === 'orders/statistics') {
         const apple = A.modules.appleBalance;
-        if (routeChanged || (!apple?.ready?.() && !apple?.readFailed?.()))
-          void apple?.refreshLocalBalance().then(() => {
-            if (S.route === 'orders/statistics') A.render();
-          });
+        if (apple && (routeChanged || (!apple.ready() && !apple.readFailed())))
+          void refreshStatisticsAppleBalance();
       }
       for (const form of document.querySelectorAll('#main #commerce-contact-form, #drawer[open] #commerce-contact-form')) void loadOrderOwners(form);
-      if (isOrderEntry(S.route) || S.route.startsWith(renewalOrderPrefix)) {
+      if (isOrderEntry(S.route)) {
+        if (customerEntryPath.test(S.route)) void restoreCustomerPrefill(S.route);
         const form = $('#commerce-order-form');
         if (routeChanged) {
           currencySettingsRevision++;
@@ -12438,6 +12563,7 @@
         if (form) {
           void loadPrices(form);
           void updateRenewalCardHint(form);
+          updateCompletedRenewalTimeHelp(form);
         }
       } else if (S.route !== 'orders/statistics' && S.route.startsWith('orders/')) {
         const apple = A.modules.appleBalance;
@@ -12455,7 +12581,7 @@
         if (usesSidebarSummary() && !(await refreshSidebarReminder())) updated = false;
         scheduleCommerceDeadline();
       } else if (scopes.includes('settings')) scheduleCommerceDeadline();
-      if (scopes.includes('appleBalance') && S.route === 'orders/statistics') A.render();
+      if (scopes.includes('appleBalance') && !(await refreshStatisticsAppleBalance())) updated = false;
       if (scopes.includes(expenseScope) && (S.route === 'orders/statistics' || (!pagedOrders() && Object.hasOwn(orderListProducts, S.route)) ||
           S.route.startsWith('orders/detail/') ||
           $('#drawer[open] [data-order-cost-detail]')) && (await loadExpenseReceipts(prepareExpenseReceipts())) === false) updated = false;
@@ -12492,6 +12618,7 @@
         if (reads.includes(false)) updated = false;
       }
       const form = $('#drawer[open] #commerce-order-form') || $('#main #commerce-order-form');
+      if (form && scopes.includes('inventory')) updateCompletedRenewalTimeHelp(form);
       if (form && scopes.some(scope => ['order-card-freeze', 'card-types'].includes(scope))) {
         await Promise.all([updateRenewalCardHint(form, true), loadOrderCards(form, true)]);
       } else if (form && scopes.includes('tenant-cards') && orderCardSource(form)?.pool === false) {

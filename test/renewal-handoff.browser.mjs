@@ -12,6 +12,98 @@ const second = { ...source, id: 'fixture-second', number: 'OD-QA-141', account: 
 const orderFixture = { ...source, orderNo: source.number, email: source.account, source: '管理员手工',
   status: '已记录', businessType: '续费', refunds: [] };
 
+test('员工录单与财务交回的实收币种随版本通知更新，保留金额、焦点和未提交版本', { timeout: 40_000 }, async t => {
+  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
+  t.after(() => browser.close());
+  for (const staff of [true, false]) {
+    const context = await browser.newContext();
+    try {
+      const scope = staff ? 'commerce' : 'renewal-handoffs';
+      let revision = 1;
+      let heldRead;
+      const commands = [];
+      const customer = { id: 'qa-buyer', name: '合成客户', active: true };
+      await interceptDesign(context, { localFixtures: {}, actor: { id: 'qa-employee', name: '合成员工', role: 'employee' },
+        changeEvents: true, skipRechargeAssets: true, localAuthUi: true });
+      await context.addInitScript(scope => {
+        const fetch = window.fetch.bind(window);
+        window.fetch = (request, options) => {
+          if (new URL(String(request), location.href).pathname !== '/api/local/change-events') return fetch(request, options);
+          return Promise.resolve(new Response(new ReadableStream({ start(controller) {
+            const send = (event, version) => controller.enqueue(new TextEncoder().encode(
+              'event: ' + event + '\ndata: ' + JSON.stringify({ schema: 1, versions: { [scope]: version } }) + '\n\n'));
+            send('snapshot', '1:1');
+            window.notifyCurrencyChange = version => send('change', '1:' + version);
+          } }), { headers: { 'Content-Type': 'text/event-stream' } }));
+        };
+      }, scope);
+      const currencies = { CNY: '人民币', MYR: '马币', EUR: '欧元', GBP: '英镑' };
+      await context.route(staff ? '**/api/local/staff/customer-service' : '**/api/local/renewals**', async route => {
+        if (route.request().method() !== 'GET') {
+          commands.push(route.request().postDataJSON());
+          return route.fulfill({ status: 409, json: { error: '合成版本冲突，保留输入' } });
+        }
+        const codes = revision === 1 ? ['CNY', 'MYR'] : revision === 2 ? ['CNY', 'EUR'] : ['CNY', 'GBP'];
+        const orderCurrenciesByProduct = { GPT: codes.map(code => ({ code, name: currencies[code] })) };
+        const version = revision;
+        if (heldRead) {
+          const held = heldRead;
+          heldRead = undefined;
+          held.started();
+          await held.release;
+        }
+        return route.fulfill({ json: staff ? { version, orderCurrenciesByProduct, data: { customers: [customer], orders: [] } } :
+          { version: revision, orderCurrenciesByProduct, candidates: [], items: [{ id: 'case', version: 7, status: 'paid',
+            canFinish: true, saleCurrency: 'CNY', amount: '25', currency: 'USD', order: { ...source, product: 'GPT', plan: 'Plus' } }] } });
+      });
+      const page = await context.newPage();
+      page.setDefaultTimeout(5000);
+      await page.goto(origin + (staff ? '/#/staff/customers' : '/#/workspace/renewal-submit/case'));
+      if (staff) await page.locator('[data-staff-action="order"]').click();
+      const form = page.locator(staff ? '[data-staff-form="manual-order"]' : '#renewal-finish-form');
+      const sale = form.getByLabel('实收币种'), amount = form.getByLabel('客户实收金额');
+      await sale.selectOption('MYR');
+      await amount.fill('123.50');
+      await amount.evaluate(node => { node.dataset.sameInput = 'yes'; });
+      await page.waitForFunction(() => typeof window.notifyCurrencyChange === 'function');
+      let releaseOlder;
+      if (staff) {
+        const waiting = Promise.withResolvers(), held = Promise.withResolvers();
+        heldRead = { started: waiting.resolve, release: held.promise };
+        releaseOlder = held.resolve;
+        await page.getByRole('button', { name: '刷新', exact: true }).click();
+        await waiting.promise;
+        await amount.focus();
+      }
+      const update = async (next, code) => {
+        revision = next;
+        await page.evaluate(next => window.notifyCurrencyChange(next), next);
+        await sale.locator('option[value="' + code + '"]').waitFor({ state: 'attached' });
+        assert.equal(await sale.inputValue(), '', '移出的币种不能自动替换为新币种');
+        assert.equal(await sale.evaluate(node => node.validity.valueMissing), true);
+        assert.equal(await amount.getAttribute('data-same-input'), 'yes');
+        assert.equal(await amount.inputValue(), '123.50');
+      };
+      try { await update(2, 'EUR'); } finally { releaseOlder?.(); }
+      assert.equal(await amount.evaluate(node => node === document.activeElement), true);
+      await sale.selectOption('EUR');
+      await sale.blur();
+      await update(3, 'GBP');
+      await sale.selectOption('GBP');
+      if (staff) {
+        await form.getByLabel('邮箱账号').fill('buyer@example.test');
+        await form.getByLabel('实际代付金额').fill('20');
+        await form.getByLabel('开通时间').fill('2026-11-21T12:00');
+      }
+      await form.getByLabel(staff ? '到期时间' : '新到期时间').fill('2026-12-21T12:00');
+      await form.getByRole('button', { name: '提交订单' }).click();
+      await page.getByText('合成版本冲突，保留输入').waitFor();
+      assert.deepEqual(commands.map(({ saleAmount, saleCurrency, version }) => [saleAmount, saleCurrency, version]),
+        [['123.50', 'GBP', staff ? 1 : 7]]);
+    } finally { await context.close(); }
+  }
+});
+
 test('renewal pages keep toolbars aligned and share an accessible responsive navigation', { timeout: 60_000 }, async t => {
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
   t.after(() => browser.close());
@@ -575,6 +667,7 @@ test('staff confirms a batch and finance returns a verified replacement for a ne
           ...(row.id === 'case-0' && row.last4 && { cardNumber: usedCard }),
           ...(role === 'finance' && row.id === 'case-1' && { order: { ...row.order, originalLast4: '1111' } }) }));
         return route.fulfill({ json: { version: actions.length, items: current, candidates: available,
+          orderCurrenciesByProduct: { Claude: [{ code: 'EUR', name: '欧元' }] },
           reminderHours: 72, canSubmitToFinance: financeAvailable } });
       }
       const body = request.postDataJSON();
@@ -624,6 +717,7 @@ test('staff confirms a batch and finance returns a verified replacement for a ne
         }
         if (body.action === 'finish') {
           assert.equal(body.saleAmount, '160.00');
+          assert.equal(body.saleCurrency, 'EUR');
           assert.equal(body.expiry, '2026-12-14T10:00');
           assert.equal(body.cardNumber, undefined);
           Object.assign(row, { status: 'complete', newOrderNo: 'OD-QA-NEW', completedAt: '2026-11-13T08:00:00Z' });
@@ -747,6 +841,25 @@ test('staff confirms a batch and finance returns a verified replacement for a ne
   await staff.page.getByText(financeRemark, { exact: true }).waitFor();
   await staff.page.getByText(usedCard, { exact: true }).waitFor();
   const form = staff.page.locator('#renewal-finish-form');
+  await form.getByLabel('实收币种').selectOption('EUR');
+  assert.deepEqual(await form.getByLabel('实收币种').locator('option').allTextContents(), ['欧元 EUR']);
+  assert.deepEqual(await form.getByRole('heading', { level: 2 }).allTextContents(), ['客户与账号', '付款与金额', '订阅周期']);
+  const group = title => form.locator('section').filter({ has: staff.page.getByRole('heading', { name: title, exact: true }) });
+  assert.equal(await group('客户与账号').getByLabel('订阅账号').textContent(), source.account);
+  assert.deepEqual(await group('付款与金额').getByRole('heading', { level: 3 }).allTextContents(), ['代付', '售卖']);
+  assert.equal(await group('付款与金额').getByLabel('本次银行卡号').textContent(), usedCard);
+  assert.match(await group('付款与金额').getByLabel('财务已登记实付').textContent(), /22\.25/);
+  assert.deepEqual(await form.evaluate(node => [...new FormData(node).keys()].sort()),
+    ['renewal-expiry', 'renewal-saleAmount', 'renewal-saleCurrency', 'renewal-start']);
+  for (const width of [1440, 390]) {
+    await staff.page.setViewportSize({ width, height: 900 });
+    const dates = group('订阅周期');
+    const start = await dates.getByLabel('开通时间（北京）').boundingBox();
+    const expiry = await dates.getByLabel('新到期时间（北京）').boundingBox();
+    if (width === 1440) assert(Math.abs(start.y - expiry.y) < 2 && start.x + start.width < expiry.x);
+    else assert(Math.abs(start.x - expiry.x) < 2 && start.y + start.height < expiry.y);
+    assert(await form.evaluate(node => node.scrollWidth <= node.clientWidth + 1));
+  }
   const receipt = form.getByLabel('客户实收金额');
   await receipt.fill('160.00');
   await receipt.focus();

@@ -1,3 +1,4 @@
+import { preparePersonalInventory } from '../server/personal-subscriptions.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
@@ -5,6 +6,7 @@ import { randomBytes } from 'node:crypto';
 import { createStaffWorkspaces } from '../server/staff-workspaces.mjs';
 import { createLocalBusinessStore } from '../server/local-business.mjs';
 import { createOrderRechargeClient } from '../server/order-recharge-client.mjs';
+import { checkWriteReceipt, describeWriteOperation } from '../server/write-operation.mjs';
 import { employeeCommerce, financeCommerce, nativeBrowserVerification, nativeManagerAccess, protectedSettingsChanged, registrarInventory, retailAccess } from '../server/access-roles.mjs';
 import { mailboxRegistrationAssignment, registrationMailboxSource } from '../server/tools/mailbox-pool.mjs';
 import { calculateConfirmedNetReceipt } from '../modules/finance/accounting.mjs';
@@ -31,28 +33,31 @@ const inventory = { version: 4, data: { mailboxes: [
 ], accounts: [], batches: [], returnRecords: [], importRecords: [], registrationRecords: [], tableSettings: [], undo: [],
 appleRelay: { parents: [{ id: 'parent-1', status: 'ACTIVE', email: 'parent@example.test', appPassword: 'fixture-parent-password' }] } } };
 
-function fixture() {
+function fixture(settings) {
   let verified = false;
   const audited = [], writes = [], used = new Map(), upstream = [];
-  const state = { commerce: structuredClone(commerce), inventory: structuredClone(inventory) };
+  const state = { commerce: structuredClone(commerce), inventory: structuredClone(inventory), settings: { version: 1, data: settings } };
   const rawCards = { cards: [{ id: 5, last4: '0123', is_active: 1, card_number: 'fixture-number', card_cvc: 'fixture-cvc',
     allowed_plans: ['plus'], usage_count: 2 }], planPolicy: { strict: false, version: 7 } };
   const store = {
     load: domain => structuredClone(state[domain]),
     featureDocument: () => ({}),
-    replayWrite(operation) {
-      if (!used.has(operation.domain)) return null;
-      if (used.get(operation.domain) !== operation.fingerprint)
-        throw Object.assign(new Error('保存内容已变化'), { status: 409 });
-      return [];
+    replayWrite(operation, actor, { receiptResult = false } = {}) {
+      const receipt = used.get(operation.domain);
+      if (!checkWriteReceipt(receipt, operation)) return null;
+      return receiptResult ? receipt.result ?? {} : [];
     },
-    saveBatch([entry], { actor, operation }) {
+    saveBatch([entry], { actor, operation, result }) {
       if (state[entry.domain].version !== entry.version) throw Object.assign(new Error('版本不同'), { status: 409 });
       writes.push({ ...entry, actor });
       state[entry.domain] = { version: entry.version + 1, data: entry.data };
-      if (operation) used.set(operation.domain, operation.fingerprint);
+      if (operation) used.set(operation.domain, { fingerprint: operation.fingerprint, domains: [entry.domain], result });
     },
-    saveStaffOrder(write, actor, operation) { return this.saveBatch([write], { actor, operation }); },
+    saveStaffOrder(write, actor, operation, savedId) {
+      const result = { savedId };
+      this.saveBatch([write], { actor, operation, result });
+      return result;
+    },
     registrationMailbox(id, actor) {
       const asset = state.inventory.data.mailboxes.find(row => row.id === id && row.createdById === actor.id);
       return asset ? { asset, item: { email: asset.email } } : null;
@@ -74,7 +79,8 @@ function fixture() {
     async writeCardMaintenance(method, path, command, actor) {
       upstream.push({ method, path, command, actor });
       rawCards.planPolicy.version++;
-      return { imported: command.cards?.length || 0, planPolicy: { ...rawCards.planPolicy } };
+      return { success: true, imported: command.cards?.length || 0, skipped: 0, failed: 0, failures: [],
+        planPolicy: { ...rawCards.planPolicy } };
     },
     async stopCardUse(refs) { upstream.push({ refs }); rawCards.cards[0].is_active = 0; return { state: 'stopped', refs }; },
     async addBusinessProxy(command) { upstream.push({ proxy: command }); return { added: 1, labeled: 0, skipped: 0 }; }
@@ -232,6 +238,32 @@ test('finance can read cards and statements, and uses explicit verification for 
   assert(!JSON.stringify(events).includes('0000000000000123'));
 });
 
+test('财务导入整批检查语法，卡池失败回执只返回原文行号', async t => {
+  const f = fixture();
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  f.useStore(store);
+  f.verify();
+  let sends = 0;
+  f.client.writeCardMaintenance = async () => {
+    sends++;
+    return { success: true, imported: 1, skipped: 0, failed: 1, failures: [{ index: 1, errors: ['synthetic-not-for-display'] }],
+      planPolicy: { version: 8, strict: false } };
+  };
+  const line = '0000000000010044 01/29 000';
+  const other = '0000000000010045 01/29 000';
+  const request = { action: 'import', version: 7, plans: ['plus'] };
+  const rejected = await f.call('finance', 'finance/cards', { ...request, lines: line + '\n\ninvalid' });
+  assert.equal(rejected.status, 400);
+  assert.match(rejected.data.error, /第 3 行格式有误.*整批未提交/);
+  assert.equal(sends, 0);
+  const accepted = await f.call('finance', 'finance/cards', { ...request, lines: line + '\n\n' + other });
+  assert.equal(accepted.status, 200);
+  assert.deepEqual(accepted.data, { saved: true, count: 1, skipped: 0, failedLines: [3], version: 8 });
+  assert.equal(sends, 1);
+  assert.equal(JSON.stringify(accepted.data).includes('synthetic-not-for-display'), false);
+});
+
 test('billing revision tracks card classification and archives only for the existing finance readers', t => {
   const store = createLocalBusinessStore(':memory:');
   t.after(() => store.close());
@@ -316,6 +348,34 @@ test('unconfirmed card result can be documented by its submitter without retryin
   assert.equal(store.audit().filter(row => row.action === 'finance_card_unconfirmed' && row.targetId === pending.id).length, 1);
 });
 
+test('注册工作台按库存身份规则登记 Gemini 与 Grok，微软验证方式来自已核对的资料', async () => {
+  const f = fixture();
+  const register = (type, fields) => f.call('registrar', 'registration',
+    { type, version: inventory.version + f.writes.length, ...fields });
+  assert.equal((await register('google', { email: 'empty@example.test' })).status, 400);
+  assert.equal((await register('microsoft', { email: 'empty@example.test' })).status, 400);
+  const security = { loginMode: 'passwordless', recoveryAccess: 'unknown', twoStep: 'unknown', verificationMethods: [] };
+  assert.equal((await register('microsoft', { email: 'ms@example.test', microsoftSecurity: security })).status, 400);
+  assert.equal((await register('microsoft', { email: 'ms@example.test', microsoftSecurity: {
+    ...security, recoveryAccess: 'inventory', verificationMethods: ['email'], recoveryMailboxId: 'mail-other'
+  }, auxiliary: 'other@example.test' })).status, 400);
+  const passkey = { ...security, verificationMethods: ['passkey'] };
+  assert.equal((await register('microsoft', { email: 'ms@example.test', microsoftSecurity: passkey })).status, 200);
+  assert.deepEqual(f.writes.at(-1).data.mailboxes[0].microsoftSecurity, passkey);
+  assert.equal((await register('gemini', { email: 'gemini@example.test' })).status, 200);
+  const gemini = f.writes.at(-1).data.accounts[0];
+  assert.equal(gemini.loginMethod, 'google');
+  assert.equal((await register('grok', { loginMethod: 'x', xHandle: 'invalid' })).status, 400);
+  assert.equal((await register('grok', { loginMethod: 'x', xHandle: '@sample_a', xLinkState: 'linked' })).status, 200);
+  assert.equal((await register('grok', { loginMethod: 'x', xHandle: '@SAMPLE_A' })).status, 409);
+  assert.equal((await register('grok', { loginMethod: 'x', xHandle: '@sample_b' })).status, 200);
+  const saved = f.writes.at(-1);
+  assert.equal(preparePersonalInventory(inventory.data, saved.data, saved.action, actors.registrar), undefined);
+  const scoped = await f.call('registrar', 'registration');
+  assert.equal(scoped.data.data.accounts[0].xHandle, '@sample_b');
+  assert.equal(Object.hasOwn(scoped.data.data.mailboxes[0], 'password'), false);
+});
+
 test('registration and customer writes use scoped records, replay receipts and only return necessary data', async () => {
   const f = fixture();
   assert.equal((await f.call('employee', 'registration')).status, 403);
@@ -345,6 +405,111 @@ test('registration and customer writes use scoped records, replay receipts and o
   assert.equal(gemini.status, 200);
   assert.equal(f.writes[2].data.orders[0].loginMethod, 'google');
   assert.equal((await f.call('supervisor', 'business-proxies', { version: 0, id: 'unowned' })).status, 403);
-  assert.equal((await f.call('supervisor', 'business-proxies', { action: 'recharge', countryCode: 'PH',
-    kind: 'static_residential', link: 'proxy.example.test:1000' })).status, 200);
+  const proxy = { action: 'recharge', countryCode: 'PH', kind: 'static_residential', link: 'proxy.example.test:1000' };
+  for (const result of [{ added: 1, labeled: 0, skipped: 0 }, { added: 0, labeled: 1, skipped: 0 }, { added: 0, labeled: 0, skipped: 1 }]) {
+    f.client.addBusinessProxy = async () => result;
+    assert.deepEqual(await f.call('supervisor', 'business-proxies', proxy), { status: 200, data: { saved: true, ...result } });
+  }
+});
+
+test('员工按公共规则判重本人客户，跨归属碰撞只提示分配', async () => {
+  const f = fixture();
+  const save = (name, wechat, version) => f.call('employee', 'customer-service', { action: 'customer', name, wechat, version });
+  assert.equal((await save('乙', '', 5)).status, 409, '他人的档案不跨归属复用');
+  assert.equal((await save('甲', '', 5)).status, 200, '本人客户同名且没有相同联系方式时允许另建');
+  assert.equal((await save('合成客户', 'shared-wechat', 6)).status, 200);
+  assert.equal((await save('合成客户', 'ＳＨＡＲＥＤ－ＷＥＣＨＡＴ', 7)).status, 409);
+  assert.equal((await save('另一个客户', 'shared-wechat', 7)).status, 200);
+  assert.equal((await save('超长号码', 'x'.repeat(61), 8)).status, 400);
+});
+
+test('员工录单读取产品币种并在保存时拒绝已移出选项', async () => {
+  const orderCurrenciesByProduct = { GPT: [{ code: 'EUR', name: '欧元' }] };
+  const f = fixture({ orderCurrenciesByProduct, applePaidPrices: { restricted: true } });
+  const view = (await f.call('employee', 'customer-service')).data;
+  assert.deepEqual(view.orderCurrenciesByProduct, orderCurrenciesByProduct);
+  assert.equal(view.applePaidPrices, undefined);
+  const command = { action: 'manual-order', version: 5, customerId: 'customer-1',
+    planChoice: 'GPT|Plus', email: 'buyer@example.test', start: '2026-11-13T10:00', expiry: '2026-12-13T10:00',
+    payment: '银行卡', saleAmount: '100', saleCurrency: 'CNY', paidAmount: '20', paidCurrency: 'USD' };
+  assert.match((await f.call('employee', 'customer-service', command)).data.error, /实收币种/);
+  assert.equal(f.writes.length, 0);
+  assert.equal((await f.call('employee', 'customer-service', { ...command, saleCurrency: 'EUR' })).status, 200);
+  assert.equal(f.writes[0].data.orders[0].saleCurrency, 'EUR');
+});
+
+test('员工按主表规则登记 Grok 的 X 账号，已有订阅进入续费流程', async t => {
+  const f = fixture();
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  store.saveBatch([{ domain: 'commerce', version: 0, data: { ...structuredClone(commerce.data), orders: [] } }]);
+  f.useStore(store);
+  const command = { action: 'manual-order', version: 1, customerId: 'customer-1',
+    planChoice: 'Grok|The X Subscription Plus', start: '2026-11-13T10:00', expiry: '2026-12-13T10:00',
+    payment: '银行卡', saleAmount: '100', saleCurrency: 'CNY', paidAmount: '20', paidCurrency: 'USD' };
+  const save = changes => f.call('employee', 'customer-service', { ...command, ...changes });
+  assert.equal((await save({ email: '@bad handle' })).status, 400);
+  assert.equal((await save({ email: '@synthetic_x', customerId: 'customer-2' })).status, 404);
+  const saved = await save({ email: '@synthetic_x' });
+  assert.equal(saved.status, 200, JSON.stringify(saved));
+  const [row] = store.load('commerce').data.orders;
+  assert.deepEqual([row.email, row.xHandle, row.loginMethod, row.xLinkState], ['', '@synthetic_x', 'x', 'unknown']);
+  const duplicate = await save({ email: '@synthetic_x', version: 2 });
+  assert.equal(duplicate.status, 409);
+  assert.match(duplicate.data.error, /已有原单.*续费/);
+  assert.equal(store.load('commerce').data.orders.length, 1);
+});
+
+test('员工录单回执丢失后重试返回原订单编号', async t => {
+  const f = fixture();
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  store.saveBatch([{ domain: 'commerce', version: 0, data: { ...structuredClone(commerce.data), orders: [] } }]);
+  f.useStore(store);
+  const order = { action: 'manual-order', version: 1, customerId: 'customer-1',
+    planChoice: 'Grok|The X Subscription Plus', email: '@receipt_first', start: '2026-11-13T10:00', expiry: '2026-12-13T10:00',
+    payment: '银行卡', saleAmount: '100', saleCurrency: 'CNY', paidAmount: '20', paidCurrency: 'USD' };
+  const originalOperation = 'fixture-staff-receipt-lost';
+  const submit = (body, id) => f.call('employee', 'customer-service', body, { 'x-id-operation': id });
+  const accepted = await submit(order, originalOperation);
+  assert.equal(accepted.status, 200, JSON.stringify(accepted));
+  assert.equal(accepted.data.savedId, store.load('commerce').data.orders[0].id);
+  const later = await submit({ ...order, version: 2, email: '@receipt_second' }, 'fixture-staff-receipt-later');
+  assert.equal(later.status, 200, JSON.stringify(later));
+  assert.notEqual(later.data.savedId, accepted.data.savedId);
+
+  assert.deepEqual(await submit(order, originalOperation), accepted);
+  assert.equal((await submit({ ...order, saleAmount: '101' }, originalOperation)).status, 409);
+  const otherActor = { ...actors.employee, id: 'another-employee' };
+  const otherOperation = describeWriteOperation(originalOperation, otherActor, ['customer-service', order]);
+  assert.equal(store.replayWrite(otherOperation, otherActor, { receiptResult: true }), null);
+  const saved = store.load('commerce');
+  assert.equal(saved.version, 3);
+  assert.equal(saved.data.orders.length, 2);
+
+  const oldId = 'fixture-staff-legacy-receipt';
+  const oldOperation = describeWriteOperation(oldId, actors.employee, ['customer-service', order]);
+  store.saveBatch([{ domain: 'commerce', ...saved }], { operation: oldOperation });
+  assert.deepEqual(await submit(order, oldId), { status: 200, data: { saved: true } });
+  assert.equal(store.load('commerce').data.orders.length, 2);
+});
+
+test('主管保存本人的比特执行 IP 时先明确确认代理协议', async t => {
+  const f = fixture();
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  f.useStore(store);
+  const base = { version: 0, name: '合成比特执行 IP', kind: 'static_residential', countryCode: '' };
+  const save = changes => f.call('supervisor', 'business-proxies', { ...base, ...changes });
+  const unresolved = await save({ link: 'proxy.example.test:8080' });
+  assert.equal(unresolved.status, 400);
+  assert.match(unresolved.data.error, /明确选择协议/);
+  assert.equal(store.loadBitBrowserProxies(actors.supervisor).items.length, 0);
+  const explicit = await save({ link: 'proxy.example.test:8080', protocol: 'http' });
+  assert.equal(explicit.status, 200);
+  assert.equal(explicit.data.items[0].protocol, 'http');
+  const declared = await save({ link: 'socks5://proxy.example.test:1080', protocol: 'auto', version: 1 });
+  assert.equal(declared.status, 200);
+  assert.equal(declared.data.items[1].protocol, 'socks5');
+  assert.equal(store.loadBitBrowserProxies(actors.other).items.length, 0);
 });
