@@ -4424,31 +4424,77 @@
   const displayCustomerValue = value => Array.isArray(value) ? value.join('、') || '未登记' : value || '未登记';
   const composingCustomerFields = new WeakSet();
   const isOrderCustomerLookupInput = node => Boolean(node.dataset?.orderCustomerKey);
-  const isOrderCustomerSuggestionInput = node => ['wechat', 'name'].includes(node.dataset?.orderCustomerKey);
+  const suggestionMinimum = { name: 1, wechat: 2, phone: 2, qq: 2, telegram: 2, whatsapp: 2 };
+  const isOrderCustomerSuggestionInput = node => Object.hasOwn(suggestionMinimum, node.dataset?.orderCustomerKey);
   const orderCustomerSuggestionLimit = 8;
+
+  function orderCustomerSuggestionValue(key, value, number, prefix, query) {
+    if (!number) return contactKey(value, key);
+    if (!value) return '';
+    const normalized = number.key(value);
+    const { code, national } = number.split(normalized, '');
+    if (code !== prefix || !number.valid(normalized)) return '';
+    // Accept the domestic leading zero for Mainland landlines.
+    if (key === 'phone' && code === '86' && query.startsWith('0') &&
+        number.format(code, '0' + national) === normalized) return '0' + national;
+    return national;
+  }
+
+  const orderCustomerTextSegmenter = typeof Intl.Segmenter === 'function' ? new Intl.Segmenter() : null;
+  function highlightOrderCustomerText(value, query) {
+    const text = String(value).trim();
+    const start = contactKey(text).indexOf(query);
+    if (start === -1) return E(text);
+    const end = start + query.length;
+    let offset = 0, before = '', matched = '', after = '';
+    const segments = orderCustomerTextSegmenter?.segment(text) ?? Array.from(text, segment => ({ segment }));
+    for (const { segment } of segments) {
+      const next = offset + segment.normalize('NFKC').toLowerCase().length;
+      if (next <= start) before += segment;
+      else if (offset >= end) after += segment;
+      else matched += segment;
+      offset = next;
+    }
+    return E(before) + '<mark>' + E(matched) + '</mark>' + E(after);
+  }
 
   function updateOrderCustomerSuggestions(input) {
     const popup = input.nextElementSibling;
     const key = input.dataset.orderCustomerKey;
     const query = contactKey(input.value, key);
+    const number = inlineNumberContacts[key];
+    const prefix = number ? input.form.elements[contactPrefixName(key)].value : '';
     const matches = [[], [], []];
-    if (document.activeElement === input && Array.from(query).length >= (key === 'wechat' ? 2 : 1)) {
+    if (!orderCustomerSelection(input.form)?.editing &&
+        document.activeElement === input && Array.from(query).length >= suggestionMinimum[key] &&
+        (!number || /^\d+$/.test(query))) {
       for (const customer of customers) {
         if (customer.active === false) continue;
-        const value = contactKey(customer[key], key);
+        const value = orderCustomerSuggestionValue(key, customer[key], number, prefix, query);
         const rank = value === query ? 0 : value.startsWith(query) ? 1 : value.includes(query) ? 2 : -1;
-        if (rank !== -1 && matches[rank].length < orderCustomerSuggestionLimit) matches[rank].push(customer);
+        if (rank !== -1 && matches[rank].length < orderCustomerSuggestionLimit) matches[rank].push({ customer, value });
       }
     }
     const candidates = matches.flat().slice(0, orderCustomerSuggestionLimit);
     input.removeAttribute('aria-activedescendant');
-    popup.innerHTML = candidates.map((customer, index) => {
-      const phone = customer.phone && maskContact(orderPhoneKey(customer.phone) || customer.phone);
-      const contact = [customer.wechat && '微信 ' + customer.wechat, phone && '电话 ' + phone].filter(Boolean).join(' · ');
+    popup.innerHTML = candidates.map(({ customer, value }, index) => {
+      const display = (field, stored, masked = false) => {
+        if (!masked) return field === key ? highlightOrderCustomerText(stored, query) : E(stored);
+        const hidden = E(maskContact(stored));
+        if (field !== key) return hidden;
+        // Echo only partial input. An exact search still shows the masked value.
+        return value === query ? '<mark>' + hidden + '</mark>' : hidden + ' · 输入 <mark>' + E(query) + '</mark>';
+      };
+      const phone = customer.phone && (orderPhoneKey(customer.phone) || customer.phone);
+      const matchedContact = ['qq', 'telegram', 'whatsapp'].includes(key) && customer[key];
+      const contact = [customer.wechat && '微信 ' + display('wechat', customer.wechat),
+        phone && '电话 ' + display('phone', phone, true),
+        matchedContact && E(inlineLabel(key)) + ' ' + display(key, number ? number.key(matchedContact) : matchedContact, true)]
+        .filter(Boolean).join(' · ');
       return '<button type="button" class="commerce-picker-option order-customer-suggestion" role="option" aria-selected="false"' +
         ' tabindex="-1" id="' + popup.id + '-' + index + '" data-action="commerce-order-customer-suggestion"' +
         ' data-order-customer-suggestion="' + E(customer.id) + '">' +
-        '<strong>' + E(customer.name || '姓名未登记') + '</strong>' + (contact ? '<span>' + E(contact) + '</span>' : '') + '</button>';
+        '<strong>' + display('name', customer.name || '姓名未登记') + '</strong>' + (contact ? '<span>' + contact + '</span>' : '') + '</button>';
     }).join('');
     if (!candidates.length) {
       popup.hidePopover();
@@ -4458,25 +4504,21 @@
     positionPicker(popup);
   }
 
+  function reopenOrderCustomerSuggestions(input) {
+    if (isOrderCustomerSuggestionInput(input) && !composingCustomerFields.has(input) &&
+        !input.nextElementSibling.matches(':popover-open')) updateOrderCustomerSuggestions(input);
+  }
+
   function chooseOrderCustomerSuggestion(option) {
     const popup = option.closest('.order-customer-suggestions');
     if (!popup?.matches(':popover-open')) return;
     const input = popup.previousElementSibling;
     const { form } = input;
     const customer = customers.find(row => row.id === option.dataset.orderCustomerSuggestion && row.active !== false);
-    popup.hidePopover();
     input.focus({ preventScroll: true });
+    popup.hidePopover();
     if (!customer) return;
-    const stored = form.elements['order-customer-entered'];
-    const { source, tags } = JSON.parse(stored.value);
-    const name = customer.name || '', wechat = customer.wechat || '';
-    // Replace the search text and prior customer contacts with the chosen profile's identity.
-    stored.value = JSON.stringify({ name, wechat, source, tags });
-    form.elements['commerce-customerName'].value = name;
-    form.elements['commerce-wechat'].value = wechat;
-    form.elements['order-customer-choice'].value = customer.id;
-    updateOrderCustomerLookup(form, { editing: true });
-    saveDrafts();
+    useOrderCustomer(form, customer, input.dataset.orderCustomerKey, true);
   }
 
   function handleOrderCustomerSuggestionKey(event) {
@@ -4516,6 +4558,13 @@
     const normalized = contact.key(value);
     return contact.split(contact.valid(normalized) ? normalized : value, prefix || '86');
   }
+  function orderCustomerSuggestionControl(label, id, initial, data, attributes) {
+    const listId = 'commerce-' + id + '-suggestions';
+    return input(id, initial, data + ' ' + attributes + ' autocomplete="off" role="combobox"' +
+      ' aria-autocomplete="list" aria-expanded="false" aria-controls="' + listId + '"') +
+      '<div class="order-customer-suggestions" id="' + listId +
+      '" popover="auto" role="listbox" aria-label="' + label + '匹配客户"></div>';
+  }
   function inlineCustomerFieldsHtml(customerId, draft) {
     const customer = customers.find(row => row.id === customerId);
     let entered = {};
@@ -4550,17 +4599,12 @@
         const { code, national } = storedContactNumberParts(number, initial, prefix);
         control = '<div class="order-contact-number"><select id="' + prefixName + '" name="' + prefixName +
           '" data-order-contact-prefix="' + key + '" aria-label="' + E(label) + ' 国际区号">' +
-          A.options(callingCodeOptions, code) + '</select>' + input(id, national, data + ' type="tel" maxlength="60" autocomplete="off"') + '</div>';
+          A.options(callingCodeOptions, code) + '</select>' +
+          orderCustomerSuggestionControl(label, id, national, data, 'type="tel" maxlength="60"') + '</div>';
       } else if (key === 'source') control = select(id, customerSourceOptions(initial).choices, initial, data);
       else if (key === 'tags') control = orderTagsControl(initial || [], customer?.tags || []);
-      else {
-        const listId = 'commerce-' + id + '-suggestions';
-        const suggestions = key === 'wechat' || key === 'name';
-        control = input(id, initial, data + (key === 'name' ? ' maxlength="80" required' : ' maxlength="60"') + ' autocomplete="off"' +
-          (suggestions ? ' role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="' + listId + '"' : ''));
-        if (suggestions) control += '<div class="order-customer-suggestions" id="' + listId +
-          '" popover="auto" role="listbox" aria-label="' + label + '匹配客户"></div>';
-      }
+      else control = orderCustomerSuggestionControl(label, id, initial, data,
+        key === 'name' ? 'maxlength="80" required' : 'maxlength="60"');
       return field(label, id, control, key === 'name', key === 'wechat'
         ? '微信、联系电话、QQ、WhatsApp 和 Telegram 至少填写一项。' : '') + (key === 'whatsapp'
         ? '<div id="order-customer-status" class="order-customer-status commerce-span-all" role="status" hidden></div>' : '');
@@ -4568,111 +4612,155 @@
     return '<div class="order-customer-fields commerce-field-grid commerce-span-all">' +
       input('customerId', customerId, 'type="hidden"') +
       A.input('order-customer-choice', choice, 'type="hidden"') +
+      A.input('order-customer-selection', draft['order-customer-selection'] || '', 'type="hidden"') +
       A.input('order-customer-entered', JSON.stringify(entered), 'type="hidden"') +
       A.input('order-customer-history-email', draft['order-customer-history-email'] || '', 'type="hidden"') + rows + '</div>';
+  }
+  function orderCustomerSelection(form) {
+    const value = form.elements['order-customer-selection']?.value;
+    return value ? JSON.parse(value) : null;
+  }
+  function orderCustomerProfileInput(customer) {
+    // Keep older, unparseable numbers visible without using them as matching evidence.
+    const input = {};
+    for (const key of Object.keys(suggestionMinimum)) {
+      const value = customer?.[key];
+      const number = inlineNumberContacts[key];
+      if (value && (!number || number.valid(number.key(value)))) input[key] = number ? number.key(value) : value;
+    }
+    return input;
   }
   function readOrderCustomerLookup(form) {
     const stored = form.elements?.['order-customer-entered'];
     if (!stored) return null;
     const entered = JSON.parse(stored.value);
-    const values = Object.fromEntries(Object.entries(entered).filter(([, value]) => Array.isArray(value) ? value.length : value.trim()));
+    const selection = orderCustomerSelection(form);
+    const profile = selection && customers.find(row => row.id === selection.id && row.active !== false);
+    const values = { ...orderCustomerProfileInput(profile),
+      ...Object.fromEntries(Object.entries(entered).filter(([, value]) => Array.isArray(value) ? value.length : value.trim())) };
     const match = matchInlineOrderCustomer(customers, values);
     const choice = form.elements['order-customer-choice'].value;
-    const canSeparate = match.kind === 'review' && !Object.keys(match.matches).some(key => key !== 'name');
-    const chosenId = match.kind === 'matched' ? match.customerId
+    const canSeparate = !selection && match.kind === 'review' && !Object.keys(match.matches).some(key => key !== 'name');
+    const chosenId = selection ? (match.ids.includes(profile?.id) && ['matched', 'review'].includes(match.kind) ? profile.id : '')
+      : match.kind === 'matched' ? match.customerId
       : match.kind === 'review' && match.ids.includes(choice) ? choice : '';
-    const customer = customers.find(row => row.id === chosenId && row.active !== false);
-    const create = match.kind === 'new' || (canSeparate && choice === 'new');
-    const changes = customer ? orderCustomerChanges(customer, values) : {};
+    const candidate = chosenId && (profile || customers.find(row => row.id === chosenId && row.active !== false));
+    const changes = candidate ? orderCustomerChanges(candidate, values) : {};
+    const staleEdit = selection?.editing && profile && selection.version !== (profile.version ?? 0);
+    const customer = candidate && !staleEdit && (selection?.editing || !Object.keys(changes).length) ? candidate : null;
+    const create = !selection && (match.kind === 'new' || (canSeparate && choice === 'new'));
     const decision = create ? 'new' : customer ? (Object.keys(changes).length ? 'calibrate' : 'matched') : '';
     const hasContact = hasInlineOrderCustomerContact(customer ? { ...customer, ...changes } : values);
-    return { entered, values, match, customer, changes, decision, canSeparate, choice, hasContact };
+    return { entered, values, match, profile, selection, staleEdit, customer, changes, decision, canSeparate, choice, hasContact };
   }
-  function customerDifferenceHtml(customer, changes) {
-    return Object.entries(changes).map(([key, next]) =>
-      '<div class="order-customer-difference"><strong>' + E(inlineLabel(key)) + '</strong><span>档案：' +
-      E(displayCustomerValue(customer[key])) + '</span><span>本次：' + E(displayCustomerValue(next)) + '</span></div>').join('');
+  function customerDifferenceHtml(customer, changes, updating) {
+    return Object.entries(changes).map(([key, next]) => '<dl class="order-customer-difference">' +
+      '<div><dt>档案' + E(inlineLabel(key)) + '</dt><dd>' + E(displayCustomerValue(customer[key])) + '</dd></div>' +
+      '<div><dt>' + (updating ? '更新为' : '本次输入') + '</dt><dd>' + E(displayCustomerValue(next)) + '</dd></div></dl>').join('');
   }
   function inlineCustomerStatus(lookup) {
-    const { match, customer, decision, changes, values } = lookup;
-    const reselect = match.kind === 'review' && lookup.choice
-      ? ' ' + A.textAction('重新选择', 'commerce-order-customer-reselect') : '';
+    const { match, profile, selection, customer, decision, changes, values } = lookup;
+    const reselect = A.textAction('重新选择', 'commerce-order-customer-reselect');
+    const cancel = A.textAction('取消更新', 'commerce-order-customer-cancel-update');
+    const titleHtml = title => '<strong class="order-customer-status-title" tabindex="-1">' + E(title) + '</strong>';
     if (decision === 'new') {
       const next = !values.name ? '填写客户姓名后可随订单新增。'
         : !lookup.hasContact ? '填写任一种联系方式后可随订单新增。' : '提交订单时将新增客户。';
-      return (lookup.choice === 'new' ? '已选择另建同名客户。' : '未匹配。') + next + reselect;
+      return lookup.choice === 'new' ? '已选择另建同名客户。' + next + ' ' + reselect : '未精确匹配到已有客户。' + next;
     }
     if (customer) {
-      const channel = Object.keys(match.matches).find(key => key !== 'name' && match.matches[key].includes(customer.id)) || 'name';
-      return '已通过' + inlineLabel(channel) + '匹配到 ' + E(customer.name) + (decision === 'calibrate'
-        ? '。提交时请确认校准以下资料。' + customerDifferenceHtml(customer, changes) : '') + reselect;
+      if (selection?.editing) return titleHtml('更新客户资料 · ' + customer.name) +
+        '<p>' + (decision === 'calibrate' ? '提交订单时将再次确认以下修改。' : '在表单中修改资料，提交订单时会再次确认。') + '</p>' +
+        customerDifferenceHtml(customer, changes, true) + '<div class="order-customer-actions">' + cancel + '</div>';
+      return '<div class="order-customer-selected"><strong class="order-customer-status-title" tabindex="-1">' +
+        A.icon('check') + '已选客户 · ' + E(customer.name) + '</strong><div class="order-customer-actions">' + reselect +
+        A.button('更新客户资料', 'commerce-order-customer-update') + '</div></div>';
     }
+    if (selection && !profile) return titleHtml('已选客户已停用或不可用') + '<div class="order-customer-actions">' + reselect + '</div>';
+    if (lookup.staleEdit) return titleHtml('客户档案已变化，请按最新资料重新核对') +
+      customerDifferenceHtml(profile, orderCustomerChanges(profile, values), true) +
+      '<div class="order-customer-actions">' + A.button('核对最新档案', 'commerce-order-customer-update') + cancel + '</div>';
+    if (selection?.editing && match.kind !== 'conflict') return titleHtml('请核对更新的客户资料') +
+      '<p>请检查字段格式，并保留至少一项能匹配原客户的资料。</p><div class="order-customer-actions">' + cancel + '</div>';
     if (match.kind === 'empty') return '';
     if (match.kind === 'invalid') return '请核对姓名或联系方式的格式。';
-    const review = match.kind === 'review';
+    const ids = new Set(match.ids);
+    const candidates = customers.filter(row => ids.has(row.id));
+    if (match.kind === 'conflict') {
+      const fields = Object.entries(match.matches).map(([key, ids]) =>
+        '<div class="order-customer-conflict"><span>' +
+        E(inlineLabel(key) + '「' + displayCustomerValue(values[key]) + '」匹配到 ' +
+          candidates.filter(row => ids.includes(row.id)).map(row => row.name).join('、')) + '</span>' +
+        A.textAction('修改' + inlineLabel(key), 'commerce-order-customer-continue', 'data-key="' + E(key) + '"') + '</div>').join('');
+      return titleHtml('填写的资料指向不同客户') + fields + (selection?.editing ? cancel : selection ? reselect : '');
+    }
+    if (selection && !['matched', 'review'].includes(match.kind)) return titleHtml('填写的资料与已选客户不符') +
+      '<div class="order-customer-actions">' + reselect + '</div>';
+    const review = match.kind === 'review' || match.kind === 'matched';
+    const exactContact = candidates.length === 1 && Object.entries(match.matches).find(([key]) => key !== 'name');
     const sharedContact = Object.entries(match.matches).find(([key, ids]) => key !== 'name' && ids.length > 1);
     const title = match.kind === 'inactive' ? '匹配到已停用的客户，请先核对档案。'
-      : review && sharedContact ? '此' + inlineLabel(sharedContact[0]) + '匹配到多位客户，请选择。'
-      : review ? (match.matches.name?.length ? '找到同名客户，请核对档案与本次填写。' : '客户资料有差异，请核对后选择。')
-      : '填写的资料指向不同客户，请核对并更正后提交。';
-    const ids = new Set(match.ids);
-    const candidatesById = new Map(customers.filter(row => ids.has(row.id)).map(row => [row.id, row]));
-    const hitsById = new Map();
-    for (const [key, matches] of Object.entries(match.matches)) {
-      for (const id of matches) {
-        if (!hitsById.has(id)) hitsById.set(id, []);
-        hitsById.get(id).push(inlineLabel(key));
-      }
-    }
-    const candidates = match.ids.map(id => {
-      const candidate = candidatesById.get(id);
-      if (!candidate) return '';
-      const hits = hitsById.get(id) || [];
-      const contacts = orderContactFields.filter(([, key]) => candidate[key])
-        .map(([, key]) => inlineLabel(key) + ' ' + candidate[key]).join(' · ');
-      const select = review && candidate.active !== false
-        ? A.button('是这位客户', 'commerce-order-customer-choose', '', '', 'data-id="' + E(id) + '"') : '';
-      return '<div class="order-customer-candidate"><strong>' + E(candidate.name) + '</strong> · ' +
-        E(hits.join('、')) + '匹配' + (candidate.active === false ? ' · 已停用' : '') +
-        (contacts ? '<p>' + E(contacts) + '</p>' : '') + (review ? customerDifferenceHtml(candidate, orderCustomerChanges(candidate, values)) : '') +
-        (select ? '<div class="order-customer-actions">' + select + '</div>' : '') + '</div>';
+      : exactContact ? inlineLabel(exactContact[0]) + '「' + displayCustomerValue(values[exactContact[0]]) + '」与已有客户完全一致'
+      : sharedContact ? inlineLabel(sharedContact[0]) + '匹配到多位客户，请选择'
+      : candidates.length > 1 ? '找到多位同名客户，请选择' : '找到同名客户，请核对';
+    const options = candidates.map(candidate => {
+      const id = candidate.id;
+      const differences = review ? orderCustomerChanges(candidate, values) : {};
+      const contacts = orderContactFields.filter(([, key]) => candidate[key] &&
+        !Object.hasOwn(differences, key) && exactContact?.[0] !== key)
+        .map(([, key]) => inlineLabel(key) + ' ' + maskContact(candidate[key])).join(' · ');
+      const comparison = customerDifferenceHtml(candidate, differences, false);
+      const focusKey = Object.keys(differences)[0] || 'name';
+      const select = review ? '<div class="order-customer-actions order-customer-review-actions">' +
+        A.button('使用客户「' + candidate.name + '」', 'commerce-order-customer-choose', 'primary', '', 'data-id="' + E(id) + '"') +
+        (candidates.length === 1 ? A.button('继续填写', 'commerce-order-customer-continue', '', '', 'data-key="' + E(focusKey) + '"') : '') +
+        '</div>' : '';
+      return '<div class="order-customer-candidate">' +
+        (!Object.hasOwn(differences, 'name') ? '<strong>' + E(candidate.name) + '</strong>' : '') +
+        (contacts ? '<p class="order-customer-candidate-contacts">' + E(contacts) + '</p>' : '') +
+        comparison + select + '</div>';
     }).join('');
-    return title + candidates + (lookup.canSeparate
+    return titleHtml(title) + options + (lookup.canSeparate
       ? '<div class="order-customer-actions">' + A.button('是另一位同名客户', 'commerce-order-customer-new') + '</div>' : '');
   }
   // A blur fires change between pointerdown and click. Preserve the candidate button while the result is identical.
   const inlineCustomerMessages = new WeakMap();
-  function updateOrderCustomerLookup(form, { editing = false } = {}) {
+  function writeOrderCustomerField(form, key, field, next, customer, prefixFallback) {
+    if (key === 'tags') {
+      const tags = form.elements['order-customer-tags'];
+      if (tags.value !== JSON.stringify(next || []))
+        tags.closest('[data-customer-tag-picker]').outerHTML = orderTagsControl(next || [], customer?.tags || []);
+      return;
+    }
+    const node = form.elements['commerce-' + field];
+    const number = inlineNumberContacts[key];
+    if (number) {
+      const prefix = form.elements[contactPrefixName(key)];
+      const { code, national } = storedContactNumberParts(number, next, prefixFallback || '86');
+      if (prefix.value !== code) prefix.value = code;
+      if (node.value !== national) node.value = national;
+    } else {
+      if (key === 'source' && next && ![...node.options].some(option => option.value === next))
+        node.innerHTML = A.options(customerSourceOptions(next).choices, next);
+      if (node.value !== next) node.value = next;
+    }
+  }
+  function updateOrderCustomerLookup(form, { editing = false, resetFields = false } = {}) {
     const lookup = readOrderCustomerLookup(form);
     if (!lookup) return null;
-    const { customer, entered, choice, decision, match } = lookup;
+    const { customer, profile, selection, entered, choice, decision, match } = lookup;
     // A partially typed international number can be invalid until its last digits arrive.
     if (choice && match.kind !== 'invalid' && choice !== customer?.id && !(choice === 'new' && decision === 'new'))
       form.elements['order-customer-choice'].value = '';
     for (const [key, , field] of inlineCustomerFields) {
       const typed = entered[key];
       const active = document.activeElement;
-      if ((Array.isArray(typed) ? typed.length : typed) || (Object.hasOwn(entered, key) &&
-          (active?.dataset?.orderCustomerKey === key || (key === 'tags' && active?.closest('[data-customer-tag-picker]'))))) continue;
-      const next = customer?.[key] || '';
-      if (key === 'tags') {
-        const tags = form.elements['order-customer-tags'];
-        if (tags.value !== JSON.stringify(next || []))
-          tags.closest('[data-customer-tag-picker]').outerHTML = orderTagsControl(next || [], next || []);
-        continue;
-      }
-      const node = form.elements['commerce-' + field];
-      const number = inlineNumberContacts[key];
-      if (number) {
-        const prefix = form.elements[contactPrefixName(key)];
-        const { code, national } = storedContactNumberParts(number, next, Object.hasOwn(entered, key) ? prefix.value : '86');
-        if (prefix.value !== code) prefix.value = code;
-        if (node.value !== national) node.value = national;
-      } else {
-        if (key === 'source' && next && ![...node.options].some(option => option.value === next))
-          node.innerHTML = A.options(customerSourceOptions(next).choices, next);
-        if (node.value !== next) node.value = next;
-      }
+      const hasTyped = Array.isArray(typed) ? typed.length : typed;
+      if (!resetFields && (hasTyped || (Object.hasOwn(entered, key) &&
+          (active?.dataset?.orderCustomerKey === key || (key === 'tags' && active?.closest('[data-customer-tag-picker]')))))) continue;
+      const fallback = customer || profile;
+      const prefix = Object.hasOwn(entered, key) && form.elements[contactPrefixName(key)]?.value;
+      writeOrderCustomerField(form, key, field, hasTyped ? typed : fallback?.[key] || '', fallback, prefix);
     }
     const id = form.elements['commerce-customerId'];
     if (id.value !== (customer?.id || '')) {
@@ -4681,7 +4769,9 @@
     }
     const status = $('#order-customer-status', form);
     const html = inlineCustomerStatus(lookup);
-    status.dataset.kind = decision || match.kind;
+    status.dataset.kind = !selection && !decision && match.kind === 'matched' ? 'review'
+      : selection && !profile ? 'inactive' : selection?.editing && match.kind !== 'conflict' ? 'calibrate'
+      : decision || match.kind;
     if (inlineCustomerMessages.get(status) !== html) {
       inlineCustomerMessages.set(status, html);
       status.innerHTML = html;
@@ -4694,6 +4784,21 @@
       if (lookup.hasContact) A.setError('commerce-wechat', '', form);
     }
     return lookup;
+  }
+  function focusOrderCustomerField(form, key) {
+    const field = inlineCustomerFields.find(([name]) => name === key)?.[2];
+    if (field) $('#commerce-' + field, form)?.focus();
+  }
+  function setOrderCustomerSelection(form, selection, entered) {
+    form.elements['order-customer-selection'].value = selection ? JSON.stringify(selection) : '';
+    form.elements['order-customer-entered'].value = JSON.stringify(entered);
+    form.elements['order-customer-choice'].value = '';
+    updateOrderCustomerLookup(form, { editing: true, resetFields: true });
+    saveDrafts();
+  }
+  function useOrderCustomer(form, customer, key, fromSearch = false) {
+    const { entered } = readOrderCustomerLookup(form);
+    setOrderCustomerSelection(form, { id: customer.id, previous: entered, key, fromSearch }, {});
   }
   function editOrderCustomer(form, key) {
     const stored = form.elements?.['order-customer-entered'];
@@ -4716,6 +4821,14 @@
         }
         next = number.format(prefix.value, control.value);
       }
+    }
+    const selection = orderCustomerSelection(form);
+    if (selection && !selection.editing) {
+      const current = customers.find(row => row.id === selection.id)?.[key];
+      const sameValue = inlineNumberContacts[key]
+        ? inlineNumberContacts[key].key(next) === inlineNumberContacts[key].key(current)
+        : JSON.stringify(next) === JSON.stringify(current ?? (key === 'tags' ? [] : ''));
+      if (sameValue && !Object.hasOwn(entered, key)) return;
     }
     if (JSON.stringify(entered[key]) !== JSON.stringify(next)) {
       entered[key] = next;
@@ -9202,7 +9315,7 @@
       const customer = customerLookup.customer;
       const lines = Object.entries(customerLookup.changes).map(([key, next]) =>
         inlineLabel(key) + '：' + displayCustomerValue(customer[key]) + ' → ' + displayCustomerValue(next));
-      A.confirmAction('确认校准客户资料', '客户 ' + customer.name + '\n' + lines.join('\n'), submitOrder, '确认校准并提交');
+      A.confirmAction('确认更新客户资料', '客户 ' + customer.name + '\n' + lines.join('\n'), submitOrder, '确认更新并提交订单');
       const dialog = $('#confirm-dialog');
       dialog.querySelector('p').style.whiteSpace = 'pre-line';
       dialog.querySelector('[data-action="confirm-cancel"]').textContent = '返回修改';
@@ -10608,18 +10721,40 @@
       chooseOrderCustomerSuggestion(node);
       return true;
     }
-    if (['commerce-order-customer-choose', 'commerce-order-customer-new', 'commerce-order-customer-reselect'].includes(action)) {
+    if (['commerce-order-customer-choose', 'commerce-order-customer-new', 'commerce-order-customer-reselect',
+      'commerce-order-customer-continue', 'commerce-order-customer-update', 'commerce-order-customer-cancel-update'].includes(action)) {
       const form = node.closest('#commerce-order-form');
       const lookup = readOrderCustomerLookup(form);
-      const separate = action === 'commerce-order-customer-new';
-      if (action === 'commerce-order-customer-reselect') form.elements['order-customer-choice'].value = '';
-      else {
-        if (!lookup || lookup.match.kind !== 'review' || (separate ? !lookup.canSeparate : !lookup.match.ids.includes(id))) return true;
-        form.elements['order-customer-choice'].value = separate ? 'new' : id;
+      if (!lookup) return true;
+      const { selection, customer, profile, match, entered } = lookup;
+      if (action === 'commerce-order-customer-continue') {
+        focusOrderCustomerField(form, node.dataset.key);
+      } else if (action === 'commerce-order-customer-choose') {
+        const candidate = customers.find(row => row.id === id && row.active !== false);
+        if (candidate && ['matched', 'review'].includes(match.kind) && match.ids.includes(id)) {
+          useOrderCustomer(form, candidate, node.closest('.order-customer-candidate')?.querySelector('[data-key]')?.dataset.key || 'name');
+          $('.order-customer-status-title', form)?.focus({ preventScroll: true });
+        }
+      } else if (action === 'commerce-order-customer-update' && (customer || lookup.staleEdit)) {
+        const target = customer || profile;
+        const previous = selection?.previous || entered;
+        const changes = lookup.staleEdit ? entered : selection?.fromSearch ? {} : orderCustomerChanges(target, previous);
+        setOrderCustomerSelection(form, { ...selection, id: target.id, previous, version: target.version ?? 0, editing: true }, changes);
+        focusOrderCustomerField(form, Object.keys(changes)[0] || 'name');
+      } else if (action === 'commerce-order-customer-cancel-update' && profile && selection?.editing) {
+        setOrderCustomerSelection(form, { ...selection, editing: false }, {});
+        $('.order-customer-status-title', form)?.focus({ preventScroll: true });
+      } else if (action === 'commerce-order-customer-reselect') {
+        const previous = selection?.previous || (lookup.choice === 'new' ? entered : {});
+        setOrderCustomerSelection(form, null, previous);
+        if (readOrderCustomerLookup(form)?.customer) setOrderCustomerSelection(form, null, {});
+        focusOrderCustomerField(form, selection?.key || 'name');
+      } else if (action === 'commerce-order-customer-new' && lookup.canSeparate) {
+        form.elements['order-customer-choice'].value = 'new';
+        updateOrderCustomerLookup(form, { editing: true });
+        saveDrafts();
+        focusOrderCustomerField(form, 'name');
       }
-      updateOrderCustomerLookup(form, { editing: true });
-      saveDrafts();
-      form.elements['commerce-customerName'].focus({ preventScroll: true });
       return true;
     }
     if (action === 'commerce-quick-customer' || action === 'commerce-quick-tenant') {
@@ -12101,7 +12236,9 @@
       if (!popup.closest('.commerce-search-picker').contains(event.target)) popup.hidePopover();
     for (const popup of document.querySelectorAll('.order-customer-suggestions:popover-open'))
       if (popup.previousElementSibling !== event.target && !popup.contains(event.target)) popup.hidePopover();
+    reopenOrderCustomerSuggestions(event.target);
   });
+  document.addEventListener?.('click', event => reopenOrderCustomerSuggestions(event.target));
   const positionOpenPickers = () => {
     for (const popup of document.querySelectorAll('.commerce-picker-popover:popover-open, .order-customer-suggestions:popover-open'))
       positionPicker(popup);
