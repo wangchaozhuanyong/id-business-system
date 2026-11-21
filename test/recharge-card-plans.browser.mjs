@@ -55,6 +55,7 @@ test('银行卡套餐可单张或批量保存，冲突保留草稿，严格模�
       t.after(() => context.close());
       const traffic = await interceptDesign(context, {
         actor: { id: 'card-plan-operator', name: '离线超级管理员', role: 'super' },
+        dataVersions: { 'recharge-card-plans': 'fixture:7:2' },
         localFixtures: { 'card-types': { version: 1, items: [], assignments: {} } }
       });
       let policy = { version: 0, strict: false };
@@ -64,9 +65,15 @@ test('银行卡套餐可单张或批量保存，冲突保留草稿，严格模�
         { id: 3, last4: '3333', allowed_plans: null }
       ];
       const writes = [];
-      let reads = 0, pending, received;
-      await context.route(prefix, route => {
+      const cardReadGates = [];
+      let reads = 0, pending, received, failSave = false;
+      await context.route(prefix, async route => {
         reads++;
+        const gate = cardReadGates.shift();
+        if (gate) {
+          gate.started.resolve();
+          if (!await gate.release.promise) return route.fulfill({ status: 503, json: { success: false } });
+        }
         return route.fulfill({ json: { success: true, cards, planPolicy: policy } });
       });
       await context.route(prefix + '/plan-policy', async route => {
@@ -74,6 +81,7 @@ test('银行卡套餐可单张或批量保存，冲突保留草稿，严格模�
         const command = route.request().postDataJSON();
         writes.push(command);
         if (pending) { received.resolve(); await pending.promise; }
+        if (failSave) return route.fulfill({ status: 503, json: { success: false } });
         if (command.version !== policy.version)
           return route.fulfill({ status: 409, json: { success: false, message: '套餐设置已更新' } });
         if (command.cardIds) for (const id of command.cardIds)
@@ -139,16 +147,55 @@ test('银行卡套餐可单张或批量保存，冲突保留草稿，严格模�
       const before = reads;
       policy = { ...policy, version: 5 };
       cards[2].allowed_plans = ['pro200'];
-      const notify = () => page.locator('iframe[data-view="cards"]:visible').evaluate(frame => {
+      const notify = marker => page.locator('iframe[data-view="cards"]:visible').evaluate((frame, version) => {
         frame.contentWindow.postMessage({ source: 'id-recharge-shell', type: 'data-change',
-          scopes: ['recharge-card-plans'], cardPlanVersion: 'fixture:5' }, location.origin);
-      });
-      await notify();
+          scopes: ['recharge-card-plans'], cardPlanVersion: version }, location.origin);
+      }, marker);
+      await notify('fixture:7:3');
+      await settle(page);
+      assert.equal(reads, before, '仅待核对回执变化，不重读卡池');
+      await notify('fixture:8:3');
       await frame.locator('[data-card-plan-edit="3"]').getByText('Pro 200').waitFor();
       assert.equal(reads, before + 1);
-      await notify();
-      await frame.locator('#card_plan_summary').evaluate(() => new Promise(requestAnimationFrame));
+      await notify('fixture:8:4');
+      await settle(page);
       assert.equal(reads, before + 1);
+      await frame.locator('[data-card-plan-edit="3"]').click();
+      failSave = true;
+      pending = Promise.withResolvers(); received = Promise.withResolvers();
+      await dialog.getByRole('button', { name: '保存', exact: true }).click();
+      await received.promise;
+      policy = { ...policy, version: 6 };
+      cards[2].allowed_plans = ['pro500'];
+      await notify('fixture:9:4');
+      await settle(page);
+      assert.equal(reads, before + 1, '保存期间暂不重读银行卡');
+      pending.resolve(); pending = undefined;
+      await dialog.getByText('套餐设置保存未确认，请刷新后核对').waitFor();
+      await frame.locator('[data-card-plan-edit="3"]').getByText('Pro 500').waitFor();
+      assert.equal(reads, before + 2, '保存失败后仍应用期间收到的变更');
+      await dialog.getByRole('button', { name: '取消' }).click();
+
+      const failed = { started: Promise.withResolvers(), release: Promise.withResolvers() };
+      const newer = { started: Promise.withResolvers(), release: Promise.withResolvers() };
+      t.after(() => { failed.release.resolve(false); newer.release.resolve(false); });
+      cardReadGates.push(failed, newer);
+      await notify('fixture:10:4');
+      await failed.started.promise;
+      await notify('fixture:11:4');
+      await settle(page);
+      assert.equal(reads, before + 3, '在途通知读取不重叠发起请求');
+      failed.release.resolve(false);
+      await newer.started.promise;
+      assert(await frame.locator('[data-card-plan-edit="3"]').getByText('Pro 500').isVisible(),
+        '首次通知读取失败时，仍展示上次读取的银行卡');
+      policy = { ...policy, version: 7 };
+      cards[2].allowed_plans = ['pro100'];
+      newer.release.resolve(true);
+      await frame.locator('[data-card-plan-edit="3"]').getByText('Pro 100').waitFor();
+      await notify('fixture:11:4');
+      await settle(page);
+      assert.equal(reads, before + 4, '仅应用一次在途期间收到的新通知');
       assert.deepEqual(errors, []);
       assert.deepEqual(traffic.external, []);
     });

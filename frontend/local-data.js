@@ -552,6 +552,7 @@
     clearChangeTracking() {
       observedVersions.clear(); serverVersions.clear(); pageBaseline.clear(); pendingInitialChanges.clear(); projectedChanges.clear();
     },
+    changeVersion(scope) { return serverVersions.get(scope); },
     pendingChangeVersions(scopes) {
       return Object.fromEntries(scopes.filter(scope => serverVersions.has(scope) &&
         (pendingInitialChanges.has(scope) || (serverVersions.get(scope) !== projectedChanges.get(scope) &&

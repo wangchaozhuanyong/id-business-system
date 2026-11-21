@@ -173,6 +173,26 @@ test('financial and proxy commands are signed for the allowed original recharge 
   ]);
 });
 
+test('pending card reviews read only local receipts and keep the existing finance permissions', async () => {
+  const f = fixture();
+  const row = { id: 'sample', at: '2026-11-14', actorId: actors.finance.id, actorName: '示例财务',
+    action: 'stop', domain: 'internal', evidence: { intent: 'internal' } };
+  f.useStore({ pendingFinanceCardOperations: () => [row] });
+  const path = 'finance/cards/pending';
+  const expected = { id: row.id, at: row.at, submittedBy: row.actorName, label: '停用银行卡', canReview: true };
+  assert.deepEqual(await f.call('super', path), { status: 200, data: { pending: [expected] } });
+  assert.equal((await f.call('finance', path)).status, 403);
+  assert.equal((await f.call('admin', path)).status, 403);
+  assert.equal((await f.call('employee', path)).status, 403);
+  assert.equal((await f.call('unsigned', path)).status, 401);
+  assert.equal((await f.call('super', path, { action: 'stop' })).status, 405);
+  assert.deepEqual(f.upstream, []);
+  const finance = await f.call('finance', 'finance/cards');
+  assert.equal(finance.status, 200);
+  assert.deepEqual(finance.data.pending, [expected]);
+  assert.deepEqual(f.upstream, [{ path: '/api/admin/cards' }]);
+});
+
 test('finance can read cards and statements, and uses explicit verification for narrow writes', async t => {
   const f = fixture();
   const store = createLocalBusinessStore(':memory:');

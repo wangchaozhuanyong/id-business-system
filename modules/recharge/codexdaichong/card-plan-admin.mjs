@@ -190,7 +190,7 @@ export function createCardPlanAdmin({ labels, request, loadCards, onImportChange
     paint();
     try { await write({ version, strict: !strict }); notify('套餐取卡规则已保存。', 'success'); }
     catch (error) { notify(error.message, 'error'); }
-    finally { writing = false; paint(); }
+    finally { writing = false; paint(); window.idRechargeApplyCardChanges?.(); }
   });
   element('card_plan_cancel').addEventListener('click', () => dialog.close());
   element('card_plan_close').addEventListener('click', () => { if (!writing) dialog.close(); });
@@ -239,14 +239,32 @@ export function createCardPlanAdmin({ labels, request, loadCards, onImportChange
       element('card_plan_close').disabled = false;
       options.disabled = false;
       paint();
+      window.idRechargeApplyCardChanges?.();
     }
   });
+  // The last component is the independent review document version.
+  const cardChange = marker => /^([a-z0-9]+):(\d+):\d+$/i.exec(marker || '');
+  let appliedCardChange = cardChange(window.parent.IDLocalData?.changeVersion?.('recharge-card-plans'));
+  let readingCardChange = false;
+  window.idRechargeCardPolicyVersion = () => snapshot?.version;
   window.idRechargeCardPlansChanged = marker => {
-    const version = Number(String(marker || '').split(':').at(-1));
-    if (snapshot && Number.isSafeInteger(version) && version > snapshot.version && !writing &&
-        !element('card_pool_import_btn').dataset.saving && window.idRechargeVisible !== false && !document.hidden &&
-        element('cards')?.classList.contains('active') && tbody.checkVisibility())
-      void loadCards();
+    if (!snapshot || writing || readingCardChange || element('card_pool_import_btn').dataset.saving ||
+        window.idRechargeVisible === false || document.hidden ||
+        !element('cards')?.classList.contains('active') || !tbody.checkVisibility()) return false;
+    const change = cardChange(marker);
+    if (change) {
+      if (change[1] === appliedCardChange?.[1] && Number(change[2]) <= Number(appliedCardChange[2])) return true;
+      appliedCardChange = change;
+    } else {
+      const version = Number(String(marker || '').split(':').at(-1));
+      if (!Number.isSafeInteger(version) || version <= snapshot.version) return true;
+    }
+    readingCardChange = true;
+    void loadCards().finally(() => {
+      readingCardChange = false;
+      window.idRechargeApplyCardChanges?.();
+    });
+    return true;
   };
   return {
     accept, cell, paint,

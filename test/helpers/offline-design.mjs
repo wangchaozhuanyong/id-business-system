@@ -73,6 +73,7 @@ export async function interceptDesign(context, { beforeDirectory, localFixtures,
       if (resource === 'apple-relay/status')
         return json(localFixtures?.[resource] ?? { configured: true, codeQueryConfigured: true, parentIds: [], aliasIds: [] });
       if (resource === 'audit') return json([]);
+      if (resource === 'staff/finance/cards/pending') return json(localFixtures?.[resource] ?? { pending: [] });
       if (resource === 'subscriptions/lookup' && !localFixtures?.[resource])
         return json({ ownerId: '', ownerName: '' });
       if (resource === 'renewals' && !localFixtures?.[resource])
