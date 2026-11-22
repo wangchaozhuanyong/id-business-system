@@ -295,6 +295,21 @@ async function directBrowserCatalog(url, token, signal) {
     tags: choices(catalogRows(await api.post('/browserTag/list')), 'tagName')
   };
 }
+function resolveDynamicProxyUsername(username) {
+  if (typeof username !== 'string' || !username) return '';
+  const array = new Uint32Array(1);
+  crypto.getRandomValues(array);
+  const rand = 10000000 + (array[0] % 90000000);
+  if (username.includes('{session}')) {
+    return username.replaceAll('{session}', String(rand));
+  }
+  const sessionPattern = /(-session-)[a-zA-Z0-9_-]+?(-sessiontime-|$)/i;
+  if (sessionPattern.test(username)) {
+    return username.replace(sessionPattern, `$1${rand}$2`);
+  }
+  return username;
+}
+
 function directProfileOptions(settings) {
   const o = normalizeV2RechargeBrowserOptions(settings.browserOptions);
   const fingerprint = {
@@ -355,7 +370,9 @@ function directProfileOptions(settings) {
       : {
           host: o.staticHost,
           port: o.staticPort,
-          proxyUserName: settings.staticProxyCredentials?.username ?? '',
+          proxyUserName: (settings._resolvedProxyUserName ??= resolveDynamicProxyUsername(
+            settings.staticProxyCredentials?.username ?? ''
+          )),
           proxyPassword: settings.staticProxyCredentials?.password ?? ''
         })
   };
@@ -409,5 +426,6 @@ export {
   directBrowserProfileExists,
   directProfileOptions,
   localBrowserUrl,
+  resolveDynamicProxyUsername,
   verifyDirectProfileConfiguration
 };
