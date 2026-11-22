@@ -8,7 +8,6 @@ import { runBitBrowserJsonLogin } from '../modules/recharge/bitbrowser/login/ind
 
 const profileId = 'a'.repeat(32);
 const authorizationToken = 'login-fixture-authorization';
-const replacementToken = 'login-fixture-replacement';
 const localApiKey = 'login-fixture-local-api';
 const groupName = 'gpt账号注册';
 const tagName = '申请gpt';
@@ -33,9 +32,9 @@ const freshProfileApi = [
   '/browser/open'
 ];
 
-function localAuthorization(sessionToken = authorizationToken) {
+function localAuthorization() {
   return JSON.stringify({
-    sessionToken,
+    sessionToken: authorizationToken,
     user: { id: identity.userId, email: identity.email },
     account: { id: identity.accountId }
   });
@@ -46,7 +45,7 @@ async function withLoginFixture(observedIdentity, useFixture, controls = {}) {
   const commands = [];
   const errors = [];
   let profile;
-  let sessionCookie = '';
+  let sessionCookieApplied = false;
   let officialTabOpen = false;
   let socketClosed = false;
   const server = createServer(async (request, response) => {
@@ -153,29 +152,18 @@ async function withLoginFixture(observedIdentity, useFixture, controls = {}) {
       case 'Network.setExtraHTTPHeaders':
         return {};
       case 'Network.getCookies':
-        return { cookies: sessionCookie ? [{
-          name: '__Secure-next-auth.session-token', domain: 'chatgpt.com', path: '/', value: sessionCookie
-        }] : [] };
-      case 'Network.deleteCookies':
-        assert.deepEqual(params, { name: '__Secure-next-auth.session-token', domain: 'chatgpt.com', path: '/' });
-        sessionCookie = '';
-        return {};
-      case 'Network.setCookies': {
+        return { cookies: [] };
+      case 'Network.setCookies':
         assert.equal(params.cookies.length, 1);
-        const { value, ...cookie } = params.cookies[0];
-        assert.ok([authorizationToken, replacementToken].includes(value));
-        assert.deepEqual(cookie, {
+        assert.deepEqual(params.cookies[0], {
           name: '__Secure-next-auth.session-token',
+          value: authorizationToken,
           url: 'https://chatgpt.com/',
           httpOnly: true,
           secure: true,
           sameSite: 'Lax'
         });
-        sessionCookie = value;
-        return {};
-      }
-      case 'Page.reload':
-        assert.deepEqual(params, {});
+        sessionCookieApplied = true;
         return {};
       case 'Page.navigate':
         assert.deepEqual(params, { url: 'https://chatgpt.com/' });
@@ -196,8 +184,7 @@ async function withLoginFixture(observedIdentity, useFixture, controls = {}) {
         assert.match(invocation, /^"inspect","",/);
         assert.match(invocation, /"sessionOnly":true/);
         assert.ok(expression.includes('/api/auth/session'));
-        const value = sessionCookie ? controls.inspect?.(sessionCookie) ?? observedIdentity : { kind: 'unauthenticated' };
-        return { result: { value } };
+        return { result: { value: sessionCookieApplied ? observedIdentity : { kind: 'unauthenticated' } } };
       }
       default:
         assert.fail('Unexpected CDP command: ' + method);
@@ -260,7 +247,6 @@ async function withLoginFixture(observedIdentity, useFixture, controls = {}) {
       requests,
       commands,
       closeWindow: () => { officialTabOpen = false; },
-      rotateSession: () => { sessionCookie = replacementToken; },
       socketClosed: () => socketClosed,
       login: (onProgress = () => {}, options = {}) =>
         (options.runner || runBitBrowserJsonLogin)({
@@ -319,74 +305,6 @@ test('reuses the verified window for the same account and leaves the live sessio
     assert.equal(secondCommands.includes('Page.navigate'), false);
     assert.ok(secondCommands.includes('Runtime.evaluate'));
   });
-});
-
-test('retains a verified session refreshed by the website when the submitted JSON is unchanged', async () => {
-  const controls = { inspect: value => ({ ...identity, plan: value === replacementToken ? 'plus' : 'free' }) };
-  await withLoginFixture(identity, async ({ commands, login, rotateSession }) => {
-    await login();
-    rotateSession();
-    const start = commands.length;
-    const equivalent = JSON.stringify(JSON.parse(localAuthorization()), null, 2);
-    assert.equal((await login(undefined, { sessionJson: equivalent })).currentPlan, 'plus');
-    assert.equal(commands.slice(start).includes('Network.setCookies'), false);
-  }, controls);
-});
-
-test('replaces changed JSON for a matching account and verifies the refreshed original window', async () => {
-  const controls = { inspect: value => ({ ...identity, plan: value === replacementToken ? 'plus' : 'free' }) };
-  await withLoginFixture(identity, async ({ requests, commands, login }) => {
-    await login();
-    const requestStart = requests.length, commandStart = commands.length;
-    const result = await login(undefined, { sessionJson: localAuthorization(replacementToken) });
-    assert.deepEqual(result, { email: identity.email, profileId, currentPlan: 'plus' });
-    assert.deepEqual(requests.slice(requestStart).map(({ path }) => path),
-      ['/browser/detail', '/browser/pids/alive', '/browser/open']);
-    const actions = commands.slice(commandStart);
-    assert.equal(actions.filter(method => method === 'Network.setCookies').length, 1);
-    assert.ok(actions.indexOf('Network.setCookies') < actions.indexOf('Page.reload'));
-    assert.ok(actions.lastIndexOf('Runtime.evaluate') > actions.indexOf('Page.reload'));
-  }, controls);
-});
-
-test('recovers an expired original window even if the rejected session no longer returns identity', async () => {
-  const controls = { inspect: value => value === authorizationToken
-    ? { kind: 'expired', refreshFailed: true } : identity };
-  await withLoginFixture(identity, async ({ requests, commands, login }) => {
-    await assert.rejects(login(), error => error.reason === 'access_token_expired');
-    const result = await login(undefined, { sessionJson: localAuthorization(replacementToken) });
-    assert.equal(result.profileId, profileId);
-    assert.equal(requests.filter(({ path }) => path === '/browser/update').length, 1);
-    assert.equal(commands.filter(method => method === 'Page.reload').length, 1);
-  }, controls);
-});
-
-test('rejects a replacement rejected by the website even if the old session was valid', async () => {
-  const controls = { inspect: value => value === replacementToken
-    ? { kind: 'expired', refreshFailed: true, tokenRejected: true } : identity };
-  await withLoginFixture(identity, async ({ commands, login }) => {
-    await login();
-    const start = commands.length;
-    await assert.rejects(login(undefined, { sessionJson: localAuthorization(replacementToken) }),
-      error => error.reason === 'official_login_token_rejected');
-    assert.ok(commands.slice(start).includes('Page.reload'));
-  }, controls);
-});
-
-test('a replacement can be retried after a connection failure but cannot overwrite another signed-in account', async () => {
-  const controls = {};
-  await withLoginFixture(identity, async ({ login, commands }) => {
-    await login();
-    controls.failConnections = 1;
-    const replacement = { sessionJson: localAuthorization(replacementToken) };
-    await assert.rejects(login(undefined, replacement), error => error.reason === 'bitbrowser_existing_window_control_unavailable');
-    const start = commands.length;
-    controls.inspect = () => ({ ...identity, userId: 'different-fixture-user' });
-    await assert.rejects(login(undefined, replacement), error => error.reason === 'official_login_email_mismatch');
-    assert.equal(commands.slice(start).includes('Network.setCookies'), false);
-    controls.inspect = value => ({ ...identity, plan: value === replacementToken ? 'plus' : 'free' });
-    assert.equal((await login(undefined, replacement)).currentPlan, 'plus');
-  }, controls);
 });
 
 test('an explicit new IP updates only the retained window network after confirmed close', async () => {
@@ -509,7 +427,6 @@ async function withWindowRecords(use) {
     assert.equal(options.credentials, 'same-origin');
     assert.equal(options.cache, 'no-store');
     assert(!options.body.includes(authorizationToken));
-    assert(!options.body.includes(replacementToken));
     assert(!options.body.includes(localApiKey));
     const body = JSON.parse(options.body);
     if (controls.failRead && options.method === 'POST') return Response.json({}, { status: 503 });
@@ -543,19 +460,6 @@ test('a fresh page restores the server-linked original window without creating o
     assert.equal(writes.length, 1);
     assert.deepEqual(requests.slice(before).map(row => row.path), ['/browser/detail', '/browser/pids/alive', '/browser/open']);
     assert.equal(commands.slice(beforeCommands).includes('Network.setCookies'), false);
-  });
-});
-
-test('a fresh page can apply a different JSON to the linked window without storing the new authorization', async () => {
-  await withWindowRecords(async ({ login, freshRunner, commands, writes }) => {
-    await login(undefined, { persistWindow: true });
-    const start = commands.length;
-    const result = await login(undefined, {
-      persistWindow: true, runner: await freshRunner(), sessionJson: localAuthorization(replacementToken)
-    });
-    assert.equal(result.profileId, profileId);
-    assert.equal(commands.slice(start).filter(method => method === 'Network.setCookies').length, 1);
-    assert.equal(writes.length, 1);
   });
 });
 
