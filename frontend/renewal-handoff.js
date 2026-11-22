@@ -181,6 +181,8 @@
   function rowActions(view, row) {
     if (view.finance) {
       if (row.sourceReview) return button('核对原单', 'review-source', row.id, 'primary');
+      if (row.status === 'paid' && row.sourceChanged && (row.assignedToMe || currentRole() === 'super'))
+        return '实付已保留，请先核对原单及库存';
       if (row.canTake) return button('接手', 'claim', row.id);
       if (row.status === 'processing' && row.assignedToMe)
         return (row.sourceChanged ? '' : button(row.paymentReview ? '核对并登记实付' : '登记实付', 'payment', row.id, 'primary')) +
@@ -545,7 +547,8 @@
     } catch (error) {
       const diagnostic = timing?.finish(error);
       if (active === view) {
-        if (command.action === 'finish' && error.status === 400) await load(view, true);
+        if (error.code === 'RENEWAL_PAYMENT_REVIEW' && form?.isConnected) form.dataset.renewalReviewRequired = 'true';
+        if ((command.action === 'finish' && error.status === 400) || error.code === 'RENEWAL_PAYMENT_REVIEW') await load(view, true);
         if (formError?.isConnected) {
           formError.textContent = error.message || '结果待核对，请刷新后再试。';
           formError.hidden = false;
@@ -559,6 +562,7 @@
         form.removeAttribute('aria-busy');
       }
       feedback?.finish();
+      if (form?.dataset.renewalReviewRequired && submitter?.isConnected) submitter.disabled = true;
       if (active === view) {
         selectionButton(view);
         updateCountdowns(view);
@@ -811,7 +815,7 @@
       'renewal-transfer-form': 'transfer', 'renewal-review-source-form': 'review-source' };
     const action = actions[form.id];
     if (!active || !action) return false;
-    if (!form.reportValidity()) return true;
+    if (form.dataset.renewalReviewRequired || !form.reportValidity()) return true;
     const view = active, fields = Object.fromEntries(new FormData(form));
     const submitter = form.querySelector('[type="submit"]') || document.querySelector('[form="' + form.id + '"][type="submit"]');
     if (action === 'submit') {

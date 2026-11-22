@@ -9,6 +9,26 @@
       : null
     : Object.freeze({ id: 'local-operator', name: '本机操作员', role: 'admin' });
   const canApproveRechargeCodes = authRequired && ['admin', 'super'].includes(actor?.role);
+  const validWriteOperation = id => typeof id === 'string' && /^[A-Za-z0-9_-]{16,120}$/.test(id);
+  const writeMarkerKey = scope => ['id-business:write-receipt', encodeURIComponent(actor.id),
+    encodeURIComponent(dataSource || 'local'), scope].join(':');
+  function pendingWriteReceipt(scope) {
+    if (!actor?.id) return '';
+    try {
+      const id = window.sessionStorage.getItem(writeMarkerKey(scope));
+      return validWriteOperation(id) ? id : '';
+    }
+    catch { return ''; }
+  }
+  function rememberWriteReceipt(scope, operationId) {
+    if (!actor?.id || !validWriteOperation(operationId)) return false;
+    try { window.sessionStorage.setItem(writeMarkerKey(scope), operationId); return true; }
+    catch { return false; }
+  }
+  function forgetWriteReceipt(scope, operationId) {
+    if (pendingWriteReceipt(scope) !== operationId) return;
+    try { window.sessionStorage.removeItem(writeMarkerKey(scope)); } catch { /* The receipt can still be checked later. */ }
+  }
 
   const queryEntries = new Map();
   const mailboxUpdateStops = new Set();
@@ -318,10 +338,10 @@
     if (data !== undefined && dataSource) options.headers['X-ID-Data-Source'] = dataSource;
     const receiptWrite = (data !== undefined && method === 'PUT' &&
       ['commerce', 'inventory', 'settings', 'appleBalance', 'batch'].includes(resource)) ||
-      (resource === 'card-types' && data?.action === 'health');
+      (resource === 'card-types' && data?.action === 'health') || (method === 'POST' && resource === 'order-completion');
     const operationId = suppliedOperation || (receiptWrite && window.crypto?.randomUUID?.());
     const retryable = operationId && retryWrite;
-    if (operationId) options.headers['X-ID-Operation'] = operationId;
+    if (operationId) (options.headers ||= {})['X-ID-Operation'] = operationId;
     if (measure) (options.headers ||= {})['X-ID-Measured-Action'] = measure;
     // Retry only the same versioned operation. The server's durable receipt is
     // committed atomically, so a lost response never produces a second write.
@@ -508,7 +528,7 @@
     return request(domain, { version, action, recordEdit }, 'PUT', options);
   }
 
-  async function saveDocument(domain, version, data, { action, base, measure, timing } = {}) {
+  async function saveDocument(domain, version, data, { action, base, measure, timing, operationId } = {}) {
     const recordChange = domain === 'commerce' && contactChange(action, base, data);
     let payload = { version, data, action, ...(recordChange && { recordChange }) };
     let rules;
@@ -526,7 +546,7 @@
       const delta = rules?.documentDelta(domain, base, data);
       if (delta) payload = { version, action, delta };
     }
-    const result = await request(domain, payload, 'PUT', { measure, timing, stepUp: domain === 'settings' });
+    const result = await request(domain, payload, 'PUT', { measure, timing, operationId, stepUp: domain === 'settings' });
     if (!result.delta) return result;
     const committed = rules?.applyDocumentDelta(domain, base, result.delta);
     if (committed) return { ...result, data: committed };
@@ -663,8 +683,8 @@
       command.action === 'issue' ? ['recharge-partners', 'recharge-codes'] : ['recharge-partners'],
       () => request('recharge-partners', command, 'POST', { writeTimeout: 35_000, stepUp: command.action === 'rotate' })),
     orderCompletion: (params) => request('order-completion' + (params ? '?' + new URLSearchParams(params) : '')),
-    saveOrderCompletion: (command) => write(command.action === 'record-apple-payment' ? ['commerce', 'appleBalance'] : ['commerce'],
-      () => request('order-completion', command, 'POST')),
+    saveOrderCompletion: (command, operationId) => write(command.action === 'record-apple-payment' ? ['commerce', 'appleBalance'] : ['commerce'],
+      () => request('order-completion', command, 'POST', { operationId, writeTimeout: 15_000 })),
     orderSync: (command) => command.mode === 'preview'
       ? request('order-sync', command, 'POST')
       : write(['order-sync', 'commerce', 'inventory', 'recharge-codes'], () => request('order-sync', command, 'POST')),
@@ -700,6 +720,8 @@
       : write(['finance-rates'], () => request('finance/collection', command, 'POST')),
     changeAccountLifecycle: (data) => write(['inventory', 'commerce'], () => request('inventory/account-lifecycle', data)),
     save: (domain, version, data, options) => write([domain], () => saveDocument(domain, version, data, options)),
+    pendingWriteReceipt, rememberWriteReceipt, forgetWriteReceipt,
+    extractionReceipt: (operationId) => request('inventory/extraction-receipt', undefined, 'GET', { operationId, retryWrite: false }),
     saveBatch: (entries, options) => write(entries.map((entry) => entry.domain), () =>
       request('batch', entries, 'PUT', { ...options, stepUp: entries.some(entry => entry.domain === 'settings') })),
     audit: () => request('audit'),
@@ -732,6 +754,10 @@
     resetMailboxDelivery: (scope, data, operationId) => scope === 'relay'
       ? write(['apple-relay'], () => request('apple-relay/code-delivery-reset', data, 'POST', { operationId }))
       : write(['tools/mailbox-pool'], () => request('tools/mailbox-pool', { action: 'rotate-delivery', scope, ...data }, 'PUT', { operationId })),
+    mailboxDeliveryReceipt: (scope, operationId) => request(scope === 'relay' ? 'apple-relay/code-delivery-receipt' :
+      'tools/mailbox-pool/delivery-receipt', undefined, 'GET', { operationId, retryWrite: false }),
+    reconcileRelayDeliveryReceipt: operationId => request('apple-relay/code-delivery-reconcile', {}, 'POST',
+      { operationId, retryWrite: false, writeTimeout: 30_000 }),
     managedMailboxPool: () => request('tools/mailbox-pool'),
     managedMailboxCode: (id) => request('tools/mailbox-pool', { id }, 'POST'),
     managedMailboxCodePage: (ids, version) => readQuery('tools/mailbox-pool', { ids, version }),

@@ -224,8 +224,12 @@ test('同一 GPT 原单补分配、客户及跨币种实收，后续回读和重
   assert.equal(partial.state, 'unassigned');
   const command = { action: 'complete', orderId: id, version: 2, ownerId: a.id, reason: '已核对领码记录',
     newCustomer: { name: '测试买家' }, receipt: { amount: '90.50', currency: 'MYR' } };
-  const saved = store.saveOrderCompletion(admin, command, owners);
+  const operationId = 'fixture-completion-receipt';
+  const saved = store.saveOrderCompletion(admin, command, owners, operationId);
   assert.equal(saved.state, 'complete');
+  assert.deepEqual(store.saveOrderCompletion(admin, command, owners, operationId), saved);
+  assert.throws(() => store.saveOrderCompletion(admin, { ...command, reason: '不同说明' }, owners, operationId),
+    { status: 409, message: '同一保存操作的内容已变化，请核对原操作结果' });
   assert.throws(() => store.saveOrderCompletion(admin, command, owners), { status: 409 });
   const { data } = store.load('commerce');
   assert.equal(data.customers.length, 1);
@@ -249,6 +253,7 @@ test('同一 GPT 原单补分配、客户及跨币种实收，后续回读和重
   assert.equal(updated[0].email, 'captured@example.test');
   assert.equal(updated[0].subscriptionAnchor, id);
   assert.equal(updated[0].paymentId, '1234');
+  assert.deepEqual(store.saveOrderCompletion(admin, command, owners, operationId), saved);
   assert.equal(updated[0].ownerId, a.id);
   assert.equal(updated[0].saleAmount, original.saleAmount);
   assert.deepEqual(updated[0].financialEvidence, original.financialEvidence);

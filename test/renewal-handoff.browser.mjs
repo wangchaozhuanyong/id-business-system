@@ -890,3 +890,42 @@ test('staff confirms a batch and finance returns a verified replacement for a ne
   assert.deepEqual(errors, []);
   for (const { requests } of [staff, finance, admin]) assert.deepEqual(requests.external, []);
 });
+
+test('实付登记遇到原单变化，财务看到付款待核对并可继续移交', { timeout: 30_000 }, async t => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const context = await browser.newContext();
+  const traffic = await interceptDesign(context, { actor: { id: 'finance-review', name: '合成经办', role: 'finance' },
+    localFixtures: {}, localAuthUi: true, skipRechargeAssets: true });
+  let rejected = false;
+  await context.route('**/api/local/renewals**', route => {
+    const request = route.request();
+    if (request.method() === 'GET') return route.fulfill({ json: { version: rejected ? 3 : 2, candidates: [],
+      items: [{ id: 'review-case', status: 'processing', version: rejected ? 3 : 2, order: source, assignedToMe: true,
+        canTransfer: true, paymentReview: rejected, sourceChanged: rejected }] } });
+    const command = request.postDataJSON();
+    assert.equal(command.action, 'paid');
+    assert.equal(command.amount, '22.25');
+    assert.equal(command.version, 2);
+    rejected = true;
+    return route.fulfill({ status: 409, json: { code: 'RENEWAL_PAYMENT_REVIEW',
+      error: '原单、库存或订阅资料已更新，本次金额尚未登记。已标记付款待核对，请保留凭据，核对后在财务续费继续办理。' } });
+  });
+  const page = await context.newPage();
+  page.setDefaultTimeout(5000);
+  await page.goto(origin + '/#/workspace/finance-renewals');
+  await page.getByRole('tab', { name: '处理中', exact: true }).click();
+  await page.getByRole('button', { name: '登记实付', exact: true }).click();
+  const drawer = page.locator('#drawer[open]');
+  const amount = drawer.getByLabel('实际付款金额');
+  await amount.fill('22.25');
+  await drawer.getByRole('button', { name: '保存实付' }).click();
+  await drawer.getByText('本次金额尚未登记。', { exact: false }).waitFor();
+  assert.equal(await amount.inputValue(), '22.25');
+  assert.equal(await drawer.getByRole('button', { name: '保存实付' }).isEnabled(), false);
+  await drawer.getByRole('button', { name: '取消', exact: true }).click();
+  await page.getByText('付款待核对', { exact: true }).waitFor();
+  await page.getByRole('button', { name: '移交', exact: true }).click();
+  assert.equal(await drawer.getByLabel('付款情况').inputValue(), 'review');
+  assert.deepEqual(traffic.external, []);
+});

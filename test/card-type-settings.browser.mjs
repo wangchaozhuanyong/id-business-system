@@ -2,9 +2,9 @@ import assert from 'node:assert/strict';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
-import { interceptDesign, origin, root, settle, separatorSnapshot } from './helpers/offline-design.mjs';
+import { interceptDesign, origin, root, settle, separatorSnapshot, toggleDesignTheme } from './helpers/offline-design.mjs';
 
-const actor = { id: 'card-settings-admin', name: '测试管理员', role: 'admin' };
+const actor = { id: 'card-settings-super', name: '测试超级管理员', role: 'super' };
 const output = process.env.ID_LAYOUT_QA_OUTPUT || root + '/.runtime/card-type-settings-20261110';
 const fixtures = () => ({ version: 4, assignments: { 'recharge:1': 'type-0' }, items: [
   ...['vccwc999', 'wise潘', 'wise佳', '小红卡峰'].map((name, index) => ({ id: 'type-' + index, name, active: true })),
@@ -51,7 +51,7 @@ test('代付国家银行卡类型：响应式、历史状态、草稿、错误�
         page.setDefaultTimeout(6000);
         page.on('pageerror', error => errors.push(error.message));
         await page.goto(origin + '/#/settings/payment-countries');
-        if (theme === 'dark') await page.locator('#theme-toggle').click();
+        if (theme === 'dark') await toggleDesignTheme(page);
         await page.getByRole('tab', { name: '银行卡类型', exact: true }).click();
         const region = page.locator('[data-card-type-settings]');
         const table = region.locator('table');
@@ -80,7 +80,7 @@ test('代付国家银行卡类型：响应式、历史状态、草稿、错误�
         assert.equal(await table.getByRole('button', { name: '修改', exact: true }).count(), 0);
         await status.selectOption('all');
         await search.fill('WISE');
-        assert.equal(await table.locator('tbody tr').count(), 2);
+        await page.waitForFunction(() => document.querySelectorAll('[data-card-type-settings] tbody tr').length === 2);
         await page.getByRole('tab', { name: '套餐售价', exact: true }).click();
         await page.getByRole('tab', { name: '银行卡类型', exact: true }).click();
         assert.equal(await search.inputValue(), 'WISE');
@@ -96,7 +96,7 @@ test('代付国家银行卡类型：响应式、历史状态、草稿、错误�
         const alignment = await drawer.evaluate(el => {
           const control = el.querySelector('#commerce-card-type-name').getBoundingClientRect();
           const label = el.querySelector('label[for="commerce-card-type-name"]').getBoundingClientRect();
-          return { left: label.right <= control.left + 1, aligned: Math.abs(label.top - control.top) < 10 };
+          return { left: Math.abs(label.left - control.left) <= 1, aligned: label.bottom <= control.top + 1 };
         });
         assert.deepEqual(alignment, { left: true, aligned: true });
         if ([1440, 390].includes(width)) await page.screenshot({ path: `${output}/card-type-add-${width}-${theme}.png`, fullPage: true });

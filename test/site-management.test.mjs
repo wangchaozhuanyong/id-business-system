@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { PassThrough } from 'node:stream';
 import test from 'node:test';
-import { createSiteManagement, siteBackupView, siteDataIssues } from '../server/site-management.mjs';
+import { createSiteManagement, siteBackupView, siteDataIssues, siteExport } from '../server/site-management.mjs';
 import { createSiteObservations, measuredActivity } from '../server/site-observations.mjs';
+import { createLocalBusinessStore } from '../server/local-business.mjs';
+import { describeWriteOperation } from '../server/write-operation.mjs';
 
 const origin = 'https://id.example.test';
 const path = '/api/local/site-management';
@@ -154,9 +156,11 @@ test('protects administrative data and exports the filtered redacted snapshot wi
       { id: 'customer-a', name: '张三', active: true, phone: '9012345678', notes: 'private', createdAt: '2026-11-12T16:02:00Z' },
       { id: 'customer-b', name: '李四', active: false, createdAt: '2026-11-13T16:00:00Z' }
     ] } }),
-    recordSiteExport(actor, operation, label) {
+    recordSiteExport(actor, operation, prepare) {
       assert.equal(actor.id, admin.id);
+      const { label, metadata } = prepare();
       receipts.set(operation.domain, label);
+      return metadata;
     }
   }, observations: { diagnostic: () => null }, origin, official: true,
   release: { version: revision, updatedAt: at - 4000 }, clock: () => at });
@@ -180,4 +184,66 @@ test('protects administrative data and exports the filtered redacted snapshot wi
   assert.equal(business.code, 200);
   assert.match(business.value, /9012345678/);
   assert.doesNotMatch(business.value, /customer-b|private/);
+});
+
+test('a lost export response replays the original bytes and audit while the live data changes', async t => {
+  const receipts = createLocalBusinessStore(':memory:');
+  t.after(() => receipts.close());
+  const customer = { id: 'customer-original', name: '测试客户甲', createdAt: '2026-11-13T04:30:00Z' };
+  let customers = [customer], now = at;
+  const store = {
+    load: () => ({ data: { customers } }),
+    recordSiteExport: receipts.recordSiteExport
+  };
+  const createHandler = () => createSiteManagement({ store, origin, clock: () => now });
+  const handler = createHandler();
+  const exp = { url: path + '/export', method: 'POST', body: { collection: 'customers', detail: 'business' },
+    actor: admin, id: randomUUID() };
+  const file = await reply(handler, exp);
+  assert.equal(file.code, 200);
+  const auditCount = () => receipts.audit().filter(row => row.action === 'site_export').length;
+  assert.equal(auditCount(), 1);
+  assert.doesNotMatch(JSON.stringify(receipts.audit()), /测试客户甲/);
+
+  customers = [{ ...customer, name: '测试客户乙' }, { id: 'customer-new', name: '测试客户丙', active: false }];
+  const [replay, repeated] = await Promise.all([reply(handler, exp), reply(handler, exp)]);
+  assert.deepEqual(replay, file);
+  assert.deepEqual(repeated, file);
+  assert.equal(auditCount(), 1);
+  assert.equal((await reply(handler, { ...exp, body: { ...exp.body, detail: 'masked' } })).code, 409);
+  assert.equal((await reply(handler, { ...exp, actor: employee })).code, 403);
+
+  now += 16 * minute;
+  assert.equal((await reply(handler, exp)).code, 410);
+  assert.equal((await reply(createHandler(), exp)).code, 410);
+  assert.equal(auditCount(), 1);
+  customers = [customer];
+  assert.deepEqual(await reply(createHandler(), exp), file, 'restart may reproduce identical bytes from the source');
+
+  const otherAdmin = { ...admin, id: 'second-admin' };
+  customers = [{ ...customer, name: '测试客户乙' }];
+  const distinct = await reply(handler, { ...exp, actor: otherAdmin });
+  assert.equal(distinct.code, 200);
+  assert.match(distinct.value, /测试客户乙/);
+  assert.doesNotMatch(distinct.value, /测试客户甲/);
+  assert.equal(auditCount(), 2);
+});
+
+test('original exports created before receipts carried metadata remain safe to replay', async t => {
+  const receipts = createLocalBusinessStore(':memory:');
+  t.after(() => receipts.close());
+  let customers = [{ id: 'original-customer', name: '测试客户甲' }];
+  const filter = { collection: 'customers', start: '', end: '', status: '', product: '' };
+  const { content, label } = siteExport({ customers }, filter);
+  const digest = createHash('sha256').update(content).digest('hex');
+  const id = randomUUID();
+  const legacy = describeWriteOperation(id, admin, { filter, digest });
+  receipts.recordSiteExport(admin, legacy, () => ({ label })); // Old receipts only had fingerprint and domains.
+  const handler = () => createSiteManagement({ store: { load: () => ({ data: { customers } }),
+    recordSiteExport: receipts.recordSiteExport }, origin, clock: () => at });
+  const exp = { url: path + '/export', method: 'POST', body: filter, actor: admin, id };
+  assert.equal((await reply(handler(), exp)).value, content);
+  customers = [{ id: 'other-customer', name: '测试客户乙' }];
+  assert.equal((await reply(handler(), exp)).code, 409);
+  assert.equal(receipts.audit().length, 1);
 });

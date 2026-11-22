@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { constants } from 'node:fs';
 import { open } from 'node:fs/promises';
-import { createRelayCodeReset, createRelayDeliveryReset } from './code-reset.mjs';
+import { createRelayCodeReset, createRelayDeliveryReconcile, createRelayDeliveryReset } from './code-reset.mjs';
 import { createRelayMailReassignment } from './mail-reassignment.mjs';
 import { createAppleRelayPrimaryManagement } from './primary-management.mjs';
 import { historicalIntakePreview, requireHistoricalIntake } from './historical-intake.mjs';
@@ -50,6 +50,8 @@ const allowedMethods = new Map([
   ['code-reset-prepare', 'POST'],
   ['code-reset-confirm', 'POST'],
   ['code-delivery-reset', 'POST'],
+  ['code-delivery-receipt', 'GET'],
+  ['code-delivery-reconcile', 'POST'],
   ['mail-reassign-prepare', 'POST'],
   ['mail-reassign-confirm', 'POST']
 ]);
@@ -693,6 +695,7 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
         ? record('reset_code', actor, target.local.id)
         : record('reset_code', actor, target.owner.local.id, target.local.id)
   });
+  const reconcileDelivery = createRelayDeliveryReconcile({ lookup: lookupCodeTarget, journal: deliveryJournal });
   const deliveryReset = createRelayDeliveryReset({ lookup: lookupCodeTarget, mutate: mutateCode, journal: deliveryJournal,
     async readAliases() {
       const local = await current();
@@ -1272,6 +1275,16 @@ export function createAppleRelayService({ config, readInventory, savePrimaries, 
             ? await extractionCodes(input.claimIds, actor)
             : await checkExtractionEligibility(input.aliasIds, actor);
           return writeJson(response, 200, result);
+        }
+        if (action === 'code-delivery-receipt' || action === 'code-delivery-reconcile') {
+          requireAdministrator(actor, '只有管理员可以核对查询码重置');
+          if (!deliveryJournal) throw new RelayError(503, '暂时无法读取重置回执');
+          const operationId = request.headers['x-id-operation'];
+          if (action === 'code-delivery-receipt')
+            return writeJson(response, 200, deliveryJournal.receipt(actor, operationId));
+          if (Object.keys(await readBody(request, 64)).length)
+            throw new RelayError(400, '请仅使用原操作编号核对重置');
+          return writeJson(response, 200, await reconcileDelivery(actor, operationId));
         }
         if (!provider) throw new RelayError(503, 'Vendure 邮箱服务尚未配置');
         const input = await readBody(request, action === 'code-delivery-reset' ? 2 * 1024 * 1024 : action === 'code-read' ? 10 * 1024 : 4096);

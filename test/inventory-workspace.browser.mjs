@@ -31,6 +31,7 @@ test('账号与邮箱提交提取工作台：旧路由、双模块、草稿、�
   }
   let inventory = { version: 1, data: seed }, fail = false;
   const writes = [], errors = [], measurements = [];
+  let extractionReceiptReads = 0;
   const context = await browser.newContext({ viewport: { width: 1680, height: 1050 }, locale: 'zh-CN', serviceWorkers: 'block' });
   const requests = await interceptDesign(context, { localFixtures: { ...fixture, inventory }, actor });
   await context.route(origin + '/api/local/inventory', async route => {
@@ -39,6 +40,12 @@ test('账号与邮箱提交提取工作台：旧路由、双模块、草稿、�
     if (fail) return route.fulfill({ status: 503, json: { error: '模拟库存保存失败' } });
     inventory = { version: inventory.version + 1, data: structuredClone(command.data) };
     return route.fulfill({ json: inventory });
+  });
+  await context.route(origin + '/api/local/inventory/extraction-receipt', route => {
+    assert.equal(route.request().method(), 'GET');
+    assert.ok(route.request().headers()['x-id-operation']);
+    extractionReceiptReads++;
+    return route.fulfill({ json: { status: 'pending' } });
   });
   const page = await context.newPage(); page.setDefaultTimeout(6000);
   page.on('pageerror', error => errors.push(error.message));
@@ -255,7 +262,16 @@ test('账号与邮箱提交提取工作台：旧路由、双模块、草稿、�
     assert.equal((await response).status(), status); await settle(page);
   };
   await extract(503);
-  await page.locator('#toast').getByText(/本次操作未保存/).waitFor();
+  await page.locator('#toast').getByText(/本次提取结果尚未确认/).waitFor();
+  const attemptsAfterFailure = writes.length;
+  await page.locator('#inventory-extract-form [type="submit"]').click();
+  assert.equal(await page.locator('#confirm-dialog[open]').count(), 0);
+  await page.getByRole('button', { name: '核对上次提取', exact: true }).click();
+  await page.locator('#toast').getByText(/原操作可能仍在处理/).waitFor();
+  assert.equal(extractionReceiptReads, 1);
+  await page.getByRole('button', { name: '开始新的提取', exact: true }).click();
+  await page.locator('#confirm-dialog[open]').getByRole('button', { name: '开始新提取', exact: true }).click();
+  assert.equal(writes.length, attemptsAfterFailure, '核对以及开始新提取的确认均不提交库存');
   fail = false;
   assert.equal(await page.locator('#inventory-extract-notes').inputValue(), 'account 的提取草稿');
   await extract(200);

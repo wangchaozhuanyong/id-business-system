@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { Readable } from 'node:stream';
+import { createLocalBusinessStore, handleLocalBusiness } from '../server/local-business.mjs';
 import { pathToFileURL } from 'node:url';
 import { applyOrderCompletion, assignMissingManualOrderOwners, fillManualOrderDetails,
   readOrderCompletion, rechargePriceSnapshot } from '../server/order-completion.mjs';
@@ -347,4 +349,54 @@ test('客户检索忽略新输入之前发出的迟到结果，组合输入不�
   await drawer.getByRole('button', { name: '关闭', exact: true }).click();
   await page.clock.runFor(600); assert.equal(readCount, 2, '关闭后的输入计时器不能继续检索');
   assert.deepEqual(errors, []);
+});
+
+test('补全写入后连续丢失响应，保留表单并重复回读同一保存回执', { timeout: 30_000 }, async t => {
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  const data = model();
+  data.commerce.data.orders[0].customerId = 'known';
+  store.saveBatch([{ domain: 'commerce', version: 0, data: data.commerce.data }]);
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const context = await browser.newContext();
+  const traffic = await interceptDesign(context, { localFixtures: data, actor: a });
+  const posted = [];
+  await context.route(url => url.pathname === path, async intercepted => {
+    const request = intercepted.request();
+    const operationId = request.headers()['x-id-operation'];
+    const input = Readable.from(request.postData() ? [Buffer.from(request.postData())] : []);
+    Object.assign(input, { method: request.method(), url: request.url(), headers: {
+      origin, 'content-type': 'application/json', ...(operationId && { 'x-id-operation': operationId })
+    } });
+    let status, result;
+    await handleLocalBusiness(input, { setHeader() {}, writeHead(code) { status = code; },
+      end(body) { result = JSON.parse(body); } }, path, store, a, { publicOrigin: origin, readOrderOwners: owners });
+    if (request.method() === 'POST') {
+      posted.push({ operationId, status, result });
+      if (posted.length <= 2) return intercepted.abort('failed');
+    }
+    return intercepted.fulfill({ status, json: result });
+  });
+  const page = await context.newPage();
+  await page.goto(origin + '/#/' + route);
+  await page.getByRole('button', { name: '补全资料', exact: true }).click();
+  const drawer = page.locator('#drawer[open]');
+  await drawer.locator('#completion-receipt-amount').fill('84.75');
+  await drawer.locator('#completion-receipt-currency').selectOption('MYR');
+  const save = drawer.getByRole('button', { name: '保存订单' });
+  await save.click();
+  await drawer.getByText('保存结果暂未确认，可重试本次保存或重新核对订单。').waitFor();
+  assert.equal(await drawer.locator('#completion-receipt-amount').inputValue(), '84.75');
+  assert.equal(posted.length, 2);
+  await save.click();
+  await page.getByText('订单已补全', { exact: true }).waitFor();
+  assert.equal(posted.length, 3);
+  assert.match(posted[0].operationId, /^[\w-]{16,120}$/);
+  assert.deepEqual(posted, [posted[0], posted[0], posted[0]]);
+  assert.equal(posted[0].status, 200);
+  const snapshot = store.load('commerce');
+  assert.equal(snapshot.data.orders.find(row => row.id === 'own').version, 2);
+  assert.equal(snapshot.data.logs.length, 1);
+  assert.deepEqual(traffic.external, []);
 });

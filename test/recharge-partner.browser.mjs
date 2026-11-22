@@ -96,8 +96,8 @@ test('partner admin issues and copies only the scoped key and codes with the sha
     const newKey = 'synthetic-rotated-key-only';
     const code = 'RA-' + 'A'.repeat(32);
     const partner = { id: 'rp_' + 'b'.repeat(24), name: '测试合作方', createdAt: '2026-11-14T12:00:00Z' };
-    const actions = [];
-    let failBatchRefresh = false;
+    const actions = [], issued = new Map();
+    let failBatchRefresh = false, loseIssueReceipt = false;
     await context.route('**/api/local/recharge-partners*', async route => {
       if (route.request().method() === 'GET') {
         if (failBatchRefresh) return route.fulfill({ status: 503, json: { error: '合成批次刷新失败' } });
@@ -110,8 +110,13 @@ test('partner admin issues and copies only the scoped key and codes with the sha
         return route.fulfill({ status: 201, json: { partner, apiKey: key } });
       }
       if (input.action === 'rotate') return route.fulfill({ json: { partner, apiKey: newKey } });
-      const batch = { id: 'synthetic-batch', partnerId: partner.id, plan: input.plan, batchNo: 'PO000001', codes: [code] };
+      if (issued.has(input.operationId)) return route.fulfill({ json: { batch: issued.get(input.operationId) } });
+      const index = issued.size + 1;
+      const batch = { id: 'synthetic-batch-' + index, partnerId: partner.id, plan: input.plan,
+        batchNo: 'PO' + String(index).padStart(6, '0'), codes: [code] };
+      issued.set(input.operationId, batch);
       source.batches.push(batch);
+      if (loseIssueReceipt) { loseIssueReceipt = false; return route.abort('connectionreset'); }
       failBatchRefresh = true;
       return route.fulfill({ status: 201, json: { batch } });
     });
@@ -149,12 +154,89 @@ test('partner admin issues and copies only the scoped key and codes with the sha
     assert.deepEqual(actions.map(input => input.action), ['create', 'issue', 'rotate']);
     assert.equal(actions[1].plan, 'pro500');
     assert(actions.every(input => Boolean(input.operationId)));
+
+    loseIssueReceipt = true;
+    await page.getByLabel('套餐', { exact: true }).selectOption('pro100');
+    await issue.click();
+    await page.getByText('发码结果暂未确认，请按相同条件核对原批次。', { exact: true }).waitFor();
+    assert.equal(source.batches.length, 2);
+    const stored = await page.evaluate(() => Object.entries(sessionStorage)
+      .filter(([key]) => key.includes(':recharge-issue:')).map(([, value]) => value));
+    assert.deepEqual(stored, [actions[3].operationId]);
+    await page.reload();
+    await page.getByLabel('合作方', { exact: true }).selectOption(partner.id);
+    await page.getByLabel('套餐', { exact: true }).selectOption('pro100');
+    await page.getByText('上次发码结果待核对。按相同条件提交会使用原编号核对回执。', { exact: true }).waitFor();
+    await issue.click();
+    await page.getByText('已发放批次 PO000002，共 1 个兑换码。', { exact: true }).waitFor();
+    assert.equal(actions[3].operationId, actions[4].operationId);
+    assert.equal(source.batches.length, 2);
+    await issue.click();
+    await page.getByText('已发放批次 PO000003，共 1 个兑换码。', { exact: true }).waitFor();
+    assert.notEqual(actions[4].operationId, actions[5].operationId);
+    assert.equal(source.batches.length, 3);
+
+    await page.evaluate(() => {
+      const set = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (key, value) {
+        if (this === sessionStorage && key.includes(':recharge-issue:')) throw new DOMException('fixture', 'QuotaExceededError');
+        return set.call(this, key, value);
+      };
+    });
+    await page.getByLabel('套餐', { exact: true }).selectOption('pro200');
+    await issue.click();
+    await page.getByText('无法保留发码编号。请允许此站点使用会话存储后再提交。', { exact: true }).waitFor();
+    assert.equal(actions.length, 6);
+
     await page.setViewportSize({ width: 390, height: 844 });
-    assert(await page.getByRole('button', { name: '复制兑换码', exact: true }).isVisible());
+    assert(await page.getByRole('button', { name: '复制兑换码', exact: true }).first().isVisible());
     assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     assert.deepEqual(errors, []);
     assert.deepEqual(access.external, []);
   });
+
+test('已打开的旧数据脚本可读合作方与创建资料，发码提示整页刷新', async t => {
+  const browser = await chromium.launch();
+  t.after(() => browser.close());
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, serviceWorkers: 'block' });
+  const traffic = await interceptDesign(context, {
+    actor: { id: 'receipt-compat-super', role: 'super', name: '合成管理员' },
+    localFixtures: {}, rechargePartnerApi: true, skipRechargeAssets: true
+  });
+  await context.addInitScript(() => {
+    Object.defineProperty(window, 'IDLocalData', {
+      configurable: true,
+      set({ pendingWriteReceipt, rememberWriteReceipt, forgetWriteReceipt, ...previous }) {
+        Object.defineProperty(window, 'IDLocalData', { value: Object.freeze(previous), configurable: true });
+      }
+    });
+  });
+  const original = { id: 'rp_' + 'a'.repeat(24), name: '合成原合作方' };
+  const created = { id: 'rp_' + 'b'.repeat(24), name: '合成新合作方' };
+  const value = { apiBase: origin, partners: [original], batches: [], page: 1, pages: 1 };
+  const actions = [];
+  await context.route('**/api/local/recharge-partners*', route => {
+    if (route.request().method() === 'GET') return route.fulfill({ json: value });
+    const { action } = route.request().postDataJSON();
+    actions.push(action);
+    if (action !== 'create') return route.abort();
+    value.partners.push(created);
+    return route.fulfill({ status: 201, json: { partner: created } });
+  });
+  const page = await context.newPage();
+  await page.goto(origin + '/#/overview');
+  await page.evaluate(() => window.IDDesignAPI.go('online-recharge/partners'));
+  await page.locator('[data-partner-list]').getByText(original.name, { exact: true }).waitFor();
+  await page.getByLabel('合作方', { exact: true }).selectOption(original.id);
+  await page.getByRole('button', { name: '发放兑换码', exact: true }).click();
+  await page.getByText('页面资源已更新，请整页刷新后再发码。', { exact: true }).waitFor();
+  assert.deepEqual(actions, []);
+  await page.getByLabel('合作方名称', { exact: true }).fill(created.name);
+  await page.getByRole('button', { name: '创建合作方', exact: true }).click();
+  await page.locator('[data-partner-list]').getByText(created.name, { exact: true }).waitFor();
+  assert.deepEqual(actions, ['create']);
+  assert.deepEqual(traffic.external, []);
+});
 
 test('ID authorization page shows the account locally, posts consent once, and clears the form on an uncertain result',
   { timeout: 30_000 }, async t => {

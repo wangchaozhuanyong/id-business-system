@@ -161,6 +161,51 @@ test('ordinary employee can open business pages while administrative views remai
   assert.deepEqual(errors, []);
 });
 
+test('export recovery after refresh reuses the original request and selected filters', { timeout: 20_000 }, async t => {
+  const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
+  t.after(() => browser.close());
+  const { page, context, errors, access } = await environment(browser, 'admin');
+  const attempts = [];
+  await context.route('**/api/local/site-management/export', async route => {
+    const request = route.request();
+    attempts.push({ id: request.headers()['x-id-operation'], body: request.postDataJSON() });
+    if (attempts.length === 1) return route.abort('connectionreset');
+    return route.fulfill({ contentType: 'text/csv; charset=utf-8', headers: { 'X-ID-Export-Count': '1' },
+      body: '订单编号,产品\nOD-LOCAL-0094,GPT\n' });
+  });
+  await page.setViewportSize({ width: 390, height: 820 });
+  await page.goto(origin + '/#/data/export');
+  await page.getByLabel('资料类型').selectOption('orders');
+  await page.getByLabel('产品', { exact: true }).selectOption('GPT');
+  const submit = page.getByRole('button', { name: '下载表格', exact: true });
+  await submit.click();
+  await page.getByText('下载结果待核对，请点击「核对上次下载」。').waitFor();
+  await page.reload();
+  const recover = page.getByRole('button', { name: '核对上次下载', exact: true });
+  await recover.waitFor();
+  await submit.click();
+  await page.getByText('有一次下载待核对，请先核对上次下载。').waitFor();
+  assert.equal(attempts.length, 1);
+  const [download] = await Promise.all([page.waitForEvent('download'), recover.click()]);
+  assert.equal(download.suggestedFilename(), '订单-脱敏.csv');
+  assert.match(await readFile(await download.path(), 'utf8'), /OD-LOCAL-0094,GPT/);
+  assert.match(attempts[0].id, /^[\da-f-]{36}$/);
+  assert.deepEqual(attempts[1], attempts[0]);
+  await recover.waitFor({ state: 'hidden' });
+  await page.evaluate(() => {
+    const setItem = Storage.prototype.setItem;
+    Storage.prototype.setItem = function (key, value) {
+      if (this === sessionStorage && key.startsWith('id-site-export:')) throw new DOMException('fixture', 'QuotaExceededError');
+      return setItem.call(this, key, value);
+    };
+  });
+  await submit.click();
+  await page.getByText('无法保留下载编号。请允许此站点使用会话存储后再下载。').waitFor();
+  assert.equal(attempts.length, 2);
+  assert.deepEqual(errors, []);
+  assert.deepEqual(access.external, []);
+});
+
 test('customer query errors copy a diagnostic number and leave customer input out of measurements', { timeout: 15_000 }, async t => {
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
   t.after(() => browser.close());

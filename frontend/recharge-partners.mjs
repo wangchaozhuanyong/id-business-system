@@ -1,5 +1,7 @@
 export function createPage(A, definition) {
   const D = window.IDLocalData;
+  const canKeepIssueReceipt = typeof D?.pendingWriteReceipt === 'function' &&
+    typeof D.rememberWriteReceipt === 'function' && typeof D.forgetWriteReceipt === 'function';
   const e = A.esc;
   const pageId = definition.id;
   const planNames = { plus: 'Plus', pro100: 'Pro 100', pro200: 'Pro 200', pro500: 'Pro 500' };
@@ -8,7 +10,8 @@ export function createPage(A, definition) {
   let active, data, issueReceipt, draft = defaults();
   const issueCommand = () => ({ action: 'issue', partnerId: draft.partnerId, plan: draft.plan, count: Number(draft.count) });
   const requiresNewIssue = () => issueReceipt?.protect && issueReceipt.fingerprint === JSON.stringify(issueCommand());
-  let busy = false;
+  const issueAttempt = ({ partnerId, plan, count }) => 'recharge-issue:' + JSON.stringify([partnerId, plan, count]);
+  let busy = false, identityGeneration = 0;
 
   function render() {
     return `<section class="panel recharge-partner-page" data-partner-page>
@@ -125,8 +128,10 @@ export function createPage(A, definition) {
       if (active !== view || !progress.current()) return true;
       data = value;
       draft.page = value.page;
-      if (issueReceipt?.protect && value.batches.some(batch => batch.id === issueReceipt.id))
+      if (issueReceipt?.protect && value.batches.some(batch => batch.id === issueReceipt.id)) {
+        D.forgetWriteReceipt(issueReceipt.attempt, issueReceipt.operationId);
         issueReceipt.protect = false;
+      }
       show(view);
       return true;
     } catch (failure) {
@@ -152,8 +157,12 @@ export function createPage(A, definition) {
 
   function showIssueReceipt(view) {
     const receipt = view.host.querySelector('[data-partner-issue-receipt]');
-    receipt.hidden = !issueReceipt;
-    receipt.querySelector('[data-partner-issue-status]').textContent = !issueReceipt ? '' : issueReceipt.batchNo
+    const pending = canKeepIssueReceipt && D.pendingWriteReceipt(issueAttempt(issueCommand()));
+    const awaitingReceipt = pending && pending !== issueReceipt?.operationId;
+    receipt.hidden = !issueReceipt && !awaitingReceipt;
+    receipt.querySelector('[data-partner-issue-status]').textContent = awaitingReceipt
+      ? '上次发码结果待核对。按相同条件提交会使用原编号核对回执。'
+      : !issueReceipt ? '' : issueReceipt.batchNo
       ? '已发放批次 ' + issueReceipt.batchNo + '，共 ' + issueReceipt.count + ' 个兑换码。'
       : '已发放 ' + issueReceipt.count + ' 个兑换码，批次编号待核对。';
     receipt.querySelector('[data-action="recharge-partner-next-issue"]').hidden = !requiresNewIssue();
@@ -168,27 +177,42 @@ export function createPage(A, definition) {
   }
 
   async function save(view, command) {
-    if (busy || command.action === 'issue' && requiresNewIssue()) return;
+    const issuing = command.action === 'issue';
+    if (busy || issuing && requiresNewIssue()) return;
+    if (issuing && !canKeepIssueReceipt) {
+      feedback(view, '页面资源已更新，请整页刷新后再发码。');
+      return;
+    }
     const actorId = D.actor()?.id;
+    if (!actorId) return;
+    const generation = identityGeneration;
     const fingerprint = JSON.stringify(command);
-    if (!operations.has(fingerprint)) operations.set(fingerprint, crypto.randomUUID());
-    const operationId = operations.get(fingerprint);
+    const attempt = issuing ? issueAttempt(command) : null;
+    const previous = issuing ? D.pendingWriteReceipt(attempt) : operations.get(fingerprint);
+    const operationId = previous || crypto.randomUUID();
+    if (issuing) {
+      if (!previous && !D.rememberWriteReceipt(attempt, operationId)) {
+        feedback(view, '无法保留发码编号。请允许此站点使用会话存储后再提交。');
+        return;
+      }
+    } else operations.set(fingerprint, operationId);
     busy = true;
     setBusy(view, true);
     feedback(view, '');
+    const current = () => generation === identityGeneration && actorId === D.actor()?.id;
     try {
       const result = await D.rechargePartnerAction({ ...command, operationId });
-      if (actorId !== D.actor()?.id || operationId !== operations.get(fingerprint)) return;
-      if (command.action === 'issue') {
+      if (!current()) return;
+      if (issuing) {
         const batch = result.batch;
         if (!batch?.id || batch.partnerId !== command.partnerId || batch.plan !== command.plan ||
             batch.codes?.length !== command.count)
           throw new Error('发码结果暂未确认。请刷新核对原批次。');
-        issueReceipt = { id: batch.id, batchNo: batch.batchNo, count: batch.codes.length, fingerprint, protect: true };
+        issueReceipt = { id: batch.id, batchNo: batch.batchNo, count: batch.codes.length,
+          attempt, operationId, fingerprint, protect: true };
         draft.page = 1;
         if (active) showIssueReceipt(active);
-      }
-      operations.delete(fingerprint);
+      } else operations.delete(fingerprint);
       if (active !== view) return;
       if (command.action === 'create' || command.action === 'rotate') {
         if (command.action === 'create') view.host.querySelector('[name="name"]').value = draft.name = '';
@@ -204,11 +228,18 @@ export function createPage(A, definition) {
       }
       await read(view, true);
     } catch (failure) {
-      if (active === view && actorId === D.actor()?.id)
-        feedback(view, failure.message || '操作结果暂未确认，请刷新核对。');
+      if (!current()) return;
+      if (issuing && !previous && failure.status === 400) D.forgetWriteReceipt(attempt, operationId);
+      if (active === view) {
+        const unknown = issuing && (!failure.status || failure.status === 408 || failure.status >= 500);
+        feedback(view, unknown ? '发码结果暂未确认，请按相同条件核对原批次。'
+          : failure.message || '操作结果暂未确认，请刷新核对。');
+      }
     } finally {
-      busy = false;
-      if (active) setBusy(active, false);
+      if (current()) {
+        busy = false;
+        if (active) showIssueReceipt(active);
+      }
     }
   }
 
@@ -244,6 +275,7 @@ export function createPage(A, definition) {
       if (action === 'recharge-partner-refresh') { feedback(view, ''); void read(view, true); }
       else if (action === 'recharge-partner-next-issue') {
         if (issueReceipt && !busy) {
+          D.forgetWriteReceipt(issueReceipt.attempt, issueReceipt.operationId);
           issueReceipt.protect = false;
           showIssueReceipt(view);
           view.host.querySelector('[data-partner-form="issue"] button[type="submit"]').focus();
@@ -288,6 +320,8 @@ export function createPage(A, definition) {
     },
     clearPageState() {
       if (active) clearSecret(active);
+      identityGeneration++;
+      busy = false;
       active = data = issueReceipt = undefined;
       draft = defaults();
       operations.clear();

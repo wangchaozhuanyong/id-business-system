@@ -765,7 +765,7 @@
   }
   function renderAliases() {
     const allAliases = aliases();
-    const delivery = A.modules.mailboxDelivery?.enabled();
+    const delivery = A.modules.mailboxDelivery;
     const query = view.q.toLowerCase();
     const matching = allAliases.filter(
       (r) =>
@@ -800,7 +800,8 @@
           ? { title: '暂无隐藏邮箱', description: '可在上方登记或批量导入已开通的隐藏邮箱。' }
           : undefined;
     return (
-      toolbar(`<span class="relay-secondary-actions">` + (delivery ? A.button('复制设置', 'mailbox-delivery-settings', '', 'settings') +
+      toolbar(`<span class="relay-secondary-actions">` + (delivery?.enabled() ? A.button('复制设置', 'mailbox-delivery-settings', '', 'settings') +
+        (delivery.pendingResetButton?.('relay') || '') +
         A.button('批量操作', 'relay-delivery-batch', '', 'refresh', `aria-haspopup="menu" ${remote.status?.configured ? '' : 'disabled'}`) : '') +
         columnButton('relay-aliases') + `</span><span class="relay-primary-action">${actions}</span>` + A.button('更多', 'relay-alias-tools', '', 'more', 'aria-haspopup="menu"'),
         'relay-aliases', filters, usage) +
@@ -2778,7 +2779,9 @@
       const toolbar = node.closest?.('.relay-alias-toolbar');
       const visible = selector => Boolean(toolbar?.querySelector(selector)?.getClientRects().length);
       const secondary = !visible('.relay-secondary-actions')
-        ? (A.modules.mailboxDelivery?.enabled() ? A.button('复制设置', 'mailbox-delivery-settings', '', 'settings') + A.button('批量操作', 'relay-delivery-batch', '', 'refresh', remote.status?.configured ? '' : 'disabled') : '') + columnButton('relay-aliases') : '';
+        ? (A.modules.mailboxDelivery?.enabled() ? A.button('复制设置', 'mailbox-delivery-settings', '', 'settings') +
+          (A.modules.mailboxDelivery.pendingResetButton?.('relay') || '') +
+          A.button('批量操作', 'relay-delivery-batch', '', 'refresh', remote.status?.configured ? '' : 'disabled') : '') + columnButton('relay-aliases') : '';
       const primary = !visible('.relay-primary-action') ? (hasParent ? A.button('登记隐藏邮箱', 'relay-alias-add', '', 'plus') : A.button('新增主邮箱', 'relay-parent-add', '', 'plus')) : '';
       const parentFilter = !visible('#relay-filter-parent') ? A.button(view.parentId ? `主邮箱：${parentEmail(view.parentId)}` : '筛选主邮箱', 'relay-parent-filter', '', 'down') : '';
       A.openActionMenu(node, secondary + primary + parentFilter + (hasParent ? A.button('批量导入', 'relay-import', '', 'upload') : '') +
