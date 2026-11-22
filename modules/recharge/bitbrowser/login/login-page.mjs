@@ -194,7 +194,7 @@ function inspectLoggedInPage() {
   );
   const composers = Array.from(
     document.querySelectorAll(
-      '#prompt-textarea, textarea[data-testid="prompt-textarea"], div[role="textbox"][contenteditable="true"][aria-label="询问 ChatGPT"], div[role="textbox"][contenteditable="true"][aria-label="Ask ChatGPT"]'
+      '#prompt-textarea, #pending-home-input, textarea[data-testid="prompt-textarea"], textarea[aria-label="询问 ChatGPT"], textarea[aria-label="Ask ChatGPT"], textarea, div[role="textbox"][contenteditable="true"][aria-label="询问 ChatGPT"], div[role="textbox"][contenteditable="true"][aria-label="Ask ChatGPT"]'
     )
   );
   const ready =
