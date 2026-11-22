@@ -18,6 +18,20 @@
   const append = (first, suffix) => first + (suffix?.trim() ? '\n' + suffix : '');
   const pending = new Map();
   let pool, byEmail = new Map(), report, settingsRequest = 0, sessionVersion = 0, navigationVersion = 0;
+  const receiptScope = scope => scope === 'relay' ? 'mailbox-reset:relay' : 'mailbox-reset:managed';
+  const pendingReset = scope => data?.pendingWriteReceipt?.(receiptScope(scope));
+  const resetReceiptsReady = scope => Boolean(data?.pendingWriteReceipt && data.rememberWriteReceipt &&
+    data.forgetWriteReceipt && data.mailboxDeliveryReceipt && (scope !== 'relay' || data.reconcileRelayDeliveryReceipt));
+
+  function pendingResetButton(scope) {
+    if (!enabled() || !data.mailboxDeliveryReceipt) return '';
+    return button('核对上次重置', 'mailbox-delivery-open-receipt', '', 'return',
+      `data-mailbox-delivery-pending="${scope}"${pendingReset(scope) ? '' : ' hidden'}`);
+  }
+  function updatePendingResetButtons() {
+    for (const node of document.querySelectorAll('[data-mailbox-delivery-pending]'))
+      node.hidden = !pendingReset(node.dataset.mailboxDeliveryPending);
+  }
 
   function rememberPool(snapshot) {
     if (!snapshot || !Array.isArray(snapshot.items)) throw new Error('邮箱池资料读取失败');
@@ -100,18 +114,72 @@
     return A.table(columns, rows.slice(start, start + pageSize), '', 'mailbox-delivery-receipts') +
       window.IDPagination.render({ id: 'mailbox-delivery-receipts', page: report.page, pageSize, total: rows.length });
   }
-  function showReport(results, replay, error = '') {
-    report = { results, replay, page: 1 };
+  function showReport(results, replay, error = '', scope) {
+    report = { results, replay, scope, page: 1 };
     const totals = Object.keys(resetStatuses).map(state => `${resetStatuses[state]} ${results.filter(row => row.status === state).length} 条`);
     A.openDrawer('查询码重置结果', '查看本次重置结果。待核对时可读取同一操作的结果。',
       `<div class="panel-body"><p role="status">${E(error || totals.join(' · '))}</p><div id="mailbox-delivery-report">${results.length ? reportBody() : ''}</div></div>`,
-      button('关闭', 'drawer-close') + (replay ? button('核对本次结果', 'mailbox-delivery-reconcile', 'primary', 'return') : ''), 'mailbox-delivery-report');
+      button('关闭', 'drawer-close') + (replay ? button('核对本次结果', 'mailbox-delivery-reconcile', 'primary', 'return') : '') +
+      (scope ? button('开始新的重置', 'mailbox-delivery-new-reset') : ''), 'mailbox-delivery-report');
     const opened = report, drawer = document.getElementById('drawer');
     drawer.addEventListener('id-view-deactivate', () => { if (report === opened) report = undefined; }, { once: true });
   }
 
+  async function readPendingReset(scope, node, done, verifyRelay = true) {
+    const operationId = pendingReset(scope);
+    if (!operationId) return;
+    const key = receiptScope(scope), current = viewGuard();
+    if (pending.has(key)) {
+      A.notify('上次重置正在处理，请稍后核对。');
+      return;
+    }
+    pending.set(key, operationId);
+    try {
+      await A.withActionFeedback(node, async () => {
+        let result = await data.mailboxDeliveryReceipt(scope, operationId);
+        if (!current() || pendingReset(scope) !== operationId) return;
+        if (scope === 'relay' && verifyRelay && result.status === 'pending' &&
+            result.results?.some(row => row.status === 'pending')) {
+          if (typeof data.reconcileRelayDeliveryReceipt !== 'function') {
+            A.notify('查询码回执功能已更新，请刷新此页后再核对。');
+            return;
+          }
+          result = await data.reconcileRelayDeliveryReceipt(operationId);
+          if (!current() || pendingReset(scope) !== operationId) return;
+        }
+        const rows = result.results || [];
+        if (result.status === 'saved') {
+          if (scope !== 'relay' && Array.isArray(result.items)) rememberPool(result);
+          if (done) done(result);
+          else if (scope === 'pool') void A.modules.operations?.refreshLiveReads(['tools/mailbox-pool']);
+          data.forgetWriteReceipt(key, operationId);
+          updatePendingResetButtons();
+          showReport(rows, null);
+        } else {
+          showReport(rows, trigger => readPendingReset(scope, trigger, done),
+            '尚未读到完整回执，原重置可能仍在处理。', scope);
+        }
+      }, { pending: '正在核对重置回执…', failure: '原重置回执读取失败' });
+    } finally { if (pending.get(key) === operationId) pending.delete(key); }
+  }
+
+  function startNewReset(scope) {
+    const operationId = pendingReset(scope), key = receiptScope(scope);
+    if (!operationId || pending.has(key)) return;
+    const current = routeGuard();
+    A.confirmAction('开始新的重置', '原重置可能已经生效。开始新业务后，下一次重置可能使刚生成的查询码失效。', () => {
+      if (!current() || pendingReset(scope) !== operationId) return;
+      data.forgetWriteReceipt(key, operationId);
+      updatePendingResetButtons();
+      A.closeDrawer();
+    }, '开始新重置');
+  }
+
   function reset(scope, mode, ids, count, node, { snapshot = pool, copyQuery = false, done } = {}) {
-    if (!enabled() || !count || pending.has(scope)) return;
+    const key = receiptScope(scope);
+    if (!enabled() || !count || pending.has(key)) return;
+    if (!resetReceiptsReady(scope)) { A.notify('查询码重置功能已更新，请刷新此页后再操作。'); return; }
+    if (pendingReset(scope)) { void readPendingReset(scope, node, done, false); return; }
     const onRoute = routeGuard();
     const inventoryVersion = scope === 'relay' ? A.modules.inventory.inventoryVersion() : snapshot?.inventoryVersion;
     if (!Number.isSafeInteger(inventoryVersion)) { A.notify('正在读取邮箱资料，请稍候重试'); return; }
@@ -120,20 +188,29 @@
     const operationId = crypto.randomUUID();
     let settings;
     const run = async (trigger = node) => {
-      if (!onRoute() || pending.has(scope)) return;
+      if (!onRoute() || pending.has(key)) return;
       const sameDrawer = drawerGuard();
       const current = () => onRoute() && sameDrawer();
-      pending.set(scope, operationId);
+      pending.set(key, operationId);
       try {
         await A.withActionFeedback(trigger?.isConnected ? trigger : null, async () => {
           if (copyQuery && !settings) settings = await data.mailboxDeliverySettings();
           if (!current()) return;
+          const previous = pendingReset(scope);
+          if (previous && previous !== operationId) return A.notify('请先核对上次重置。');
+          if (!data.rememberWriteReceipt(key, operationId))
+            return A.notify('浏览器无法保留重置回执编号，本次未提交。');
+          updatePendingResetButtons();
           let result;
           try { result = await data.resetMailboxDelivery(scope, command, operationId); }
           catch (error) {
+            const uncertain = ![400, 403, 409, 422].includes(error.status) || error.code === 'DATA_SOURCE_CHANGED';
+            if (!uncertain) data.forgetWriteReceipt?.(key, operationId);
+            if (onRoute()) updatePendingResetButtons();
             if (!current()) return;
-            if (!error.status || error.status >= 500) {
-              showReport([], run, '本次操作的结果尚未确认，可核对同一操作。');
+            if (uncertain) {
+              showReport([], trigger => readPendingReset(scope, trigger, done),
+                '本次操作的结果尚未确认，可核对同一操作。', scope);
               return;
             }
             throw error;
@@ -142,6 +219,11 @@
           if (!current()) return;
           done?.(result);
           const receipts = result.results || [];
+          const needsReview = receipts.some(row => row.status === 'pending');
+          if (!needsReview) {
+            data.forgetWriteReceipt?.(key, operationId);
+            updatePendingResetButtons();
+          }
           const value = scope === 'relay' ? result.issued?.queryCode : result.issuedCode;
           const row = receipts[0];
           if (copyQuery && row?.status === 'success' && value) {
@@ -150,10 +232,11 @@
           } else if (copyQuery && row?.status === 'success' && !value) {
             A.notify('本次重置已完成，当前查询码已变化，请核对后交付');
           } else {
-            showReport(receipts, receipts.some(row => row.status === 'pending') ? run : null);
+            const review = scope === 'relay' ? trigger => readPendingReset(scope, trigger, done) : run;
+            showReport(receipts, needsReview ? review : null, '', needsReview ? scope : undefined);
           }
         }, { pending: '正在重置查询码…', failure: '查询码重置失败' });
-      } finally { if (pending.get(scope) === operationId) pending.delete(scope); }
+      } finally { if (pending.get(key) === operationId) pending.delete(key); }
     };
     if (copyQuery) void run();
     else A.confirmAction('确认重置查询码', `将核对 ${count} 个邮箱。符合条件的邮箱将生成新码，原查询码立即失效。`, () => void run(), '确认重置');
@@ -287,7 +370,7 @@
     }
   }
 
-  A.modules.mailboxDelivery = { enabled, selected, reset, batchMenu, copyCredentials, readPool, rememberPool, connection, canRotate, date, remaining,
+  A.modules.mailboxDelivery = { enabled, selected, reset, batchMenu, copyCredentials, readPool, rememberPool, connection, canRotate, date, remaining, pendingResetButton,
     openValiditySettings,
     currentPool: () => pool, google: email => byEmail.get(String(email || '').trim().toLowerCase()) };
   window.IDDesignModules.push({
@@ -312,6 +395,8 @@
         return true;
       }
       if (action === 'mailbox-delivery-reconcile') { if (report?.replay) void report.replay(node); return true; }
+      if (action === 'mailbox-delivery-open-receipt') { void readPendingReset(node.dataset.mailboxDeliveryPending, node); return true; }
+      if (action === 'mailbox-delivery-new-reset') { if (report?.scope) startNewReset(report.scope); return true; }
       if (action === 'mailbox-delivery-retry-copy') {
         const area = document.getElementById('mailbox-delivery-copy-text');
         if (area) void A.withActionFeedback(node, async () => {

@@ -141,9 +141,10 @@ test('申请按内容恢复原回执，迟到的批准回执保留新打开的�
     return { fixture, handler, page: await context.newPage(), requests };
   }
 
-  await t.test('不同数量使用新编号，重试原数量取得原回执', async t => {
+  await t.test('不同数量使用新编号，整页刷新后原数量取得原回执', async t => {
     const writes = [];
-    const { fixture, page, requests } = await prepare(t, actor, (input, status) => {
+    const user = { ...actor };
+    const { fixture, page, requests } = await prepare(t, user, (input, status) => {
       if (input?.action !== 'request') return false;
       writes.push({ input, status });
       return writes.length === 1;
@@ -156,13 +157,78 @@ test('申请按内容恢复原回执，迟到的批准回执保留新打开的�
     await count.fill('2');
     await submit.click();
     await page.getByRole('status').getByText('申请已提交，等待审核', { exact: true }).first().waitFor();
-    await count.fill('1');
+
+    user.id = 'other-recharge-applicant';
+    await page.reload();
+    await page.getByText('该套餐剩余可提取 6 个，审核通过后发码。', { exact: true }).waitFor();
     await submit.click();
-    await page.waitForFunction(() => !document.querySelector('#recharge-code-request button[type="submit"]').disabled);
-    assert.deepEqual(writes.map(row => row.status), [201, 201, 200]);
+    await page.locator('#toast').getByText('申请已提交，等待审核', { exact: true }).waitFor();
+    assert.notEqual(writes[2].input.requestKey, writes[0].input.requestKey);
+    assert.equal(fixture.store.load().data.requests.filter(row => row.applicantId === user.id).length, 1);
+
+    user.id = actor.id;
+    await page.reload();
+    await page.locator('[data-request-status="pending"]').nth(1).waitFor();
+    await count.fill('1');
+    await page.getByText('提交相同套餐和数量会核对原申请。原申请未受理时仍需符合当前库存。', { exact: true }).waitFor();
+    await submit.click();
+    await page.locator('#toast').getByText('原申请已核对，当前状态：待审核', { exact: true }).waitFor();
+    assert.deepEqual(writes.map(row => row.status), [201, 201, 201, 200]);
     assert.notEqual(writes[0].input.requestKey, writes[1].input.requestKey);
-    assert.equal(writes[0].input.requestKey, writes[2].input.requestKey);
-    assert.equal(fixture.store.load().data.requests.filter(row => row.status === 'pending').length, 2);
+    assert.equal(writes[0].input.requestKey, writes[3].input.requestKey);
+    assert.equal(fixture.store.load().data.requests.filter(row => row.status === 'pending' && row.applicantId === actor.id).length, 2);
+    await submit.click();
+    await page.locator('[data-request-status="pending"]').nth(2).waitFor();
+    assert.deepEqual(writes.map(row => row.status), [201, 201, 201, 200, 201]);
+    assert.notEqual(writes[0].input.requestKey, writes[4].input.requestKey);
+    assert.deepEqual(requests.external, []);
+  });
+
+  await t.test('会话存储拒绝写入时不新建充值码申请', async t => {
+    const writes = [];
+    const { page, requests } = await prepare(t, actor, input => { if (input) writes.push(input); });
+    await page.addInitScript(() => {
+      const set = Storage.prototype.setItem;
+      Storage.prototype.setItem = function (key, value) {
+        if (this === sessionStorage && key.includes(':recharge-request:')) throw new DOMException('fixture', 'QuotaExceededError');
+        return set.call(this, key, value);
+      };
+    });
+    await page.goto(workspace);
+    await page.getByRole('button', { name: '提交申请', exact: true }).click();
+    await page.getByText('无法保留申请编号。请允许此站点使用会话存储后再提交。', { exact: true }).waitFor();
+    assert.deepEqual(writes, []);
+    assert.deepEqual(requests.external, []);
+  });
+
+  await t.test('旧数据脚本仍能读取和驳回申请，新建申请提示整页刷新', async t => {
+    const writes = [];
+    const user = { ...actor, role: 'admin' };
+    const { fixture, page, requests } = await prepare(t, user, input => { if (input) writes.push(input); });
+    const before = fixture.store.load(), id = randomUUID();
+    fixture.store.save(before.version, { ...before.data, requests: [...before.data.requests, {
+      id, plan: 'plus', count: 1, status: 'pending', applicantId: actor.id, applicantName: actor.name,
+      createdAt: '2026-11-21T01:00:00Z'
+    }] }, { action: 'synthetic_seed' });
+    await page.addInitScript(() => {
+      Object.defineProperty(window, 'IDLocalData', {
+        configurable: true,
+        set({ pendingWriteReceipt, rememberWriteReceipt, forgetWriteReceipt, ...previous }) {
+          Object.defineProperty(window, 'IDLocalData', { value: Object.freeze(previous), configurable: true });
+        }
+      });
+    });
+    await page.goto(workspace);
+    const row = page.locator(`[data-request-id="${id}"]`);
+    await row.waitFor();
+    await page.getByRole('button', { name: '提交申请', exact: true }).click();
+    await page.getByText('页面资源已更新，请整页刷新后再提交申请。', { exact: true }).waitFor();
+    assert.deepEqual(writes, []);
+    await row.getByRole('button', { name: '驳回', exact: true }).click();
+    await page.locator('#order-code-reason').fill('合成审核说明');
+    await page.getByRole('button', { name: '确认驳回', exact: true }).click();
+    await row.and(page.locator('[data-request-status="rejected"]')).waitFor();
+    assert.deepEqual(writes.map(input => input.action), ['reject']);
     assert.deepEqual(requests.external, []);
   });
 
@@ -192,7 +258,7 @@ test('申请按内容恢复原回执，迟到的批准回执保留新打开的�
     await page.evaluate(() => window.IDDesignAPI.render());
     assert(await submit.isEnabled());
     await submit.click();
-    await page.locator('#toast').getByText('已发码', { exact: true }).waitFor();
+    await page.locator('#toast').getByText('原申请已核对，当前状态：已发码', { exact: true }).waitFor();
     assert.deepEqual(writes.map(row => row.status), [201, 200]);
     assert.equal(writes[0].input.requestKey, writes[1].input.requestKey);
     assert.equal(fixture.store.load().data.requests.filter(row => row.id === pending.id).length, 1);

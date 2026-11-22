@@ -2,6 +2,8 @@
   'use strict';
   const A = window.IDDesignAPI;
   const D = window.IDLocalData;
+  const canKeepRequestReceipt = typeof D?.pendingWriteReceipt === 'function' &&
+    typeof D.rememberWriteReceipt === 'function' && typeof D.forgetWriteReceipt === 'function';
   const requestRoute = 'workspace/recharge-codes';
   const codesRoute = 'workspace/my-recharge-codes';
   const routes = new Set([requestRoute, codesRoute]);
@@ -14,7 +16,6 @@
   const views = new Map();
   const e = A.esc;
   let saving = false;
-  const requestKeys = new Map();
   let identityGeneration = 0;
   let codeTab = A.state.drafts.get('recharge-code-view')?.tab || 'unused';
   let returnContext, previewGeneration = 0;
@@ -100,9 +101,9 @@
     if (count > available) return { blocked: true, message: `该套餐剩余可提取 ${available} 个，请调整申请数量。` };
     return { blocked: false, message: `该套餐剩余可提取 ${available} 个，审核通过后发码。` };
   }
-  const requestAttempt = (plan, count) => JSON.stringify([D.actor()?.id, plan, count]);
+  const requestAttempt = (plan, count) => 'recharge-request:' + JSON.stringify([plan, count]);
   function requestFormAvailability(view, plan, count) {
-    if (requestKeys.has(requestAttempt(plan, count)))
+    if (canKeepRequestReceipt && D.pendingWriteReceipt(requestAttempt(plan, count)))
       return { blocked: false, message: '提交相同套餐和数量会核对原申请。原申请未受理时仍需符合当前库存。' };
     return requestAvailability(view?.error ? null : view?.data?.stock, plan, count);
   }
@@ -498,6 +499,10 @@
       return true;
     }
     if (form.id !== 'recharge-code-request' || !D?.authRequired) return false;
+    if (!canKeepRequestReceipt) {
+      A.notify('页面资源已更新，请整页刷新后再提交申请。');
+      return true;
+    }
     preserveDraft();
     const plan = form.elements['recharge-request-plan'].value;
     const count = Number(form.elements['recharge-request-count'].value);
@@ -513,23 +518,32 @@
     }
     const draft = JSON.stringify(A.readDraft(form));
     const actorId = D.actor()?.id, route = routeNow(), generation = identityGeneration;
+    if (!actorId) return true;
     const attempt = requestAttempt(plan, count);
     await perform(requestRoute, async () => {
-      const requestKey = requestKeys.get(attempt) || crypto.randomUUID();
+      const pending = D.pendingWriteReceipt(attempt);
+      const requestKey = pending || crypto.randomUUID();
+      if (!pending && !D.rememberWriteReceipt(attempt, requestKey)) {
+        if (route === routeNow()) A.notify('无法保留申请编号。请允许此站点使用会话存储后再提交。');
+        return;
+      }
       let request;
       try {
         ({ request } = await D.rechargeCodeAction({ action: 'request', requestKey, plan, count }));
-        if (!request?.id || !Object.hasOwn(requestStates, request.status)) throw new Error('申请结果暂未确认');
+        if (!request?.id || request.plan !== plan || request.count !== count || !Object.hasOwn(requestStates, request.status))
+          throw new Error('申请结果暂未确认');
       } catch (error) {
         if (generation !== identityGeneration || actorId !== D.actor()?.id) return;
-        if (error.status >= 400 && error.status < 500) throw error;
-        requestKeys.set(attempt, requestKey);
+        if (error.status >= 400 && error.status < 500 && error.status !== 408) {
+          if (!pending && [400, 409].includes(error.status)) D.forgetWriteReceipt(attempt, requestKey);
+          throw error;
+        }
         if (route === routeNow()) A.notify('申请结果暂未确认。请刷新核对。重新提交相同套餐和数量会核对原申请。');
         await load(requestRoute, true);
         return;
       }
       if (generation !== identityGeneration || actorId !== D.actor()?.id) return;
-      requestKeys.delete(attempt);
+      D.forgetWriteReceipt(attempt, requestKey);
       if (JSON.stringify(A.state.drafts.get('recharge-code-request')) === draft)
         A.state.drafts.delete('recharge-code-request');
       if (form.isConnected && JSON.stringify(A.readDraft(form)) === draft) {
@@ -541,7 +555,8 @@
         setListView(requestRoute, { status: 'pending' });
       await load(requestRoute, true);
       if (generation === identityGeneration && actorId === D.actor()?.id && route === routeNow())
-        A.notify(request.status === 'pending' ? '申请已提交，等待审核' : requestStates[request.status]);
+        A.notify(pending ? '原申请已核对，当前状态：' + requestStates[request.status]
+          : request.status === 'pending' ? '申请已提交，等待审核' : requestStates[request.status]);
     });
     return true;
   }
@@ -616,7 +631,6 @@
     clearPageState() {
       identityGeneration++;
       previewGeneration++;
-      requestKeys.clear();
       views.clear();
       saving = false;
       returnContext = undefined;

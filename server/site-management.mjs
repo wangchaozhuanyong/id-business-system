@@ -11,6 +11,9 @@ const collections = ['customers', 'orders'];
 const products = new Set(['GPT', 'Claude Pro', 'Claude Max', 'Gemini', 'Grok']);
 const statuses = { customers: ['active', 'inactive'], orders: ['recorded', 'cancelled'] };
 const issueKinds = new Set(['duplicate', 'deleted-source', 'customer', 'tenant', 'inventory']);
+const exportReplayTime = 15 * minute;
+const exportReplayBytes = 32 * 1024 * 1024;
+const exportReplayEntries = 24;
 const array = value => Array.isArray(value) ? value : [];
 const recordId = value => typeof value === 'string' && /^[a-zA-Z][a-zA-Z0-9_.-]{0,119}$/.test(value) && !/\d{12,}/.test(value) ? value : '';
 const orderNumber = value => typeof value === 'string' && /^(?:OD|GPT|Claude|CL|Gemini|Grok|ORD|ID)[ -]?[A-Za-z0-9-]{1,64}$/i.test(value) &&
@@ -185,6 +188,26 @@ function send(response, status, data) {
 
 export function createSiteManagement({ store, observations, origin, release, readBackups, readRecoveries, readSources,
   official = false, clock = Date.now }) {
+  // Keep the original download temporarily in process memory. The durable receipt only records metadata.
+  const exports = new Map();
+  let exportBytes = 0;
+  function forgetExport(domain) {
+    const entry = exports.get(domain);
+    if (!entry) return;
+    clearTimeout(entry.timer);
+    exportBytes -= entry.bytes;
+    exports.delete(domain);
+  }
+  function rememberExport(domain, content) {
+    const bytes = Buffer.byteLength(content);
+    if (bytes > exportReplayBytes) return;
+    while (exports.size && (exports.size >= exportReplayEntries || exportBytes + bytes > exportReplayBytes))
+      forgetExport(exports.keys().next().value);
+    const timer = setTimeout(() => forgetExport(domain), exportReplayTime);
+    timer.unref();
+    exports.set(domain, { content, bytes, timer, expires: clock() + exportReplayTime });
+    exportBytes += bytes;
+  }
   return async (request, response, actor) => {
     const expectedOrigin = origin || 'http://' + request.headers.host;
     const url = new URL(request.url, expectedOrigin);
@@ -206,14 +229,33 @@ export function createSiteManagement({ store, observations, origin, release, rea
           return response.writeHead(204, { 'Cache-Control': 'private, no-store' }).end();
         }
         const filter = filters(body);
-        const { content, count, label } = siteExport(store.load('commerce').data, filter);
-        const digest = createHash('sha256').update(content).digest('hex');
-        const operation = describeWriteOperation(request.headers['x-id-operation'], actor, { filter, digest });
+        const id = request.headers['x-id-operation'];
+        const operation = describeWriteOperation(id, actor, { action: 'site-export', filter });
         if (!operation) throw allowedError(400, '请重新点击导出');
-        store.recordSiteExport(actor, operation, label);
+        const cached = exports.get(operation.domain);
+        if (cached && cached.expires <= clock()) forgetExport(operation.domain);
+        let candidate;
+        const prepare = () => {
+          if (candidate) return candidate;
+          const { content, count, label } = siteExport(store.load('commerce').data, filter);
+          const digest = createHash('sha256').update(content).digest('hex');
+          const filename = filter.collection + '-' + dateText(clock()) + '.csv';
+          candidate = { content, label, metadata: { digest, count, filename },
+            legacyOperation: describeWriteOperation(id, actor, { filter, digest }) };
+          return candidate;
+        };
+        const receipt = store.recordSiteExport(actor, operation, prepare);
+        let content = exports.get(operation.domain)?.content;
+        if (content === undefined) {
+          const snapshot = prepare();
+          if (snapshot.metadata.digest !== receipt.digest)
+            throw allowedError(410, '原导出文件已过期，无法取回。请重新发起下载以导出当前资料。');
+          content = snapshot.content;
+          rememberExport(operation.domain, content);
+        }
         response.writeHead(200, { 'Content-Type': 'text/csv; charset=utf-8', 'Cache-Control': 'private, no-store',
-          'Content-Disposition': 'attachment; filename="' + filter.collection + '-' + dateText(clock()) + '.csv"',
-          'X-ID-Export-Count': String(count) });
+          'Content-Disposition': 'attachment; filename="' + receipt.filename + '"',
+          'X-ID-Export-Count': String(receipt.count) });
         return response.end(content);
       }
       if (request.method !== 'GET' || url.pathname !== siteManagementPath)
@@ -263,7 +305,7 @@ export function createSiteManagement({ store, observations, origin, release, rea
       }
     } catch (error) {
       if (response.headersSent) return response.end();
-      const status = [400, 409, 413].includes(error?.status) ? error.status : 503;
+      const status = [400, 409, 410, 413].includes(error?.status) ? error.status : 503;
       return send(response, status, { error: status === 503 ? '暂时无法读取，请稍后重试' : error.message });
     }
   };

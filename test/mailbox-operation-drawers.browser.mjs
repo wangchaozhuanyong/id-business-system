@@ -17,6 +17,9 @@ test('邮箱池行操作使用右侧抽屉，查询、授权、状态、查询�
   })) };
   let fail = true, oauthStarts = 0, slow = false, requestStarted, slowOAuth = false, oauthRequested, queryStatus = 200;
   const writes = [], errors = [];
+  let lastRotation;
+  await context.route(origin + '/api/local/tools/mailbox-pool/delivery-receipt', route =>
+    route.fulfill({ json: { ...snapshot, status: 'saved', results: lastRotation } }));
   await context.route(origin + '/api/local/tools/mailbox-pool', async route => {
     const request = route.request();
     if (request.method() === 'GET') return route.fulfill({ json: snapshot });
@@ -37,8 +40,9 @@ test('邮箱池行操作使用右侧抽屉，查询、授权、状态、查询�
     const id = command.action === 'rotate-delivery' ? command.ids[0] : command.id;
     snapshot = { ...snapshot, version: snapshot.version + 1, items: snapshot.items.map(row => row.id === id
       ? { ...row, active: command.action === 'status' ? command.active : row.active, authorizationPending: false } : row) };
+    if (command.action === 'rotate-delivery') lastRotation = [{ id, email: snapshot.items.find(row => row.id === id).email, status: 'success' }];
     return route.fulfill({ json: { ...snapshot, ...(command.action === 'rotate-delivery' ? { issuedCode: 'MBX-SYNTHETIC-NEW-CODE',
-      results: [{ id, email: snapshot.items.find(row => row.id === id).email, status: 'success' }] } : {}) } });
+      results: lastRotation } : {}) } });
   });
   await context.route(origin + '/api/local/tools/mailbox-query', async route => {
     if (slow) { requestStarted?.(); await new Promise(resolve => { release = resolve; }); }
@@ -148,10 +152,10 @@ test('邮箱池行操作使用右侧抽屉，查询、授权、状态、查询�
   assert.equal(oauthStarts, 0, '进入授权抽屉不提前执行 OAuth');
   const popupEvent = page.waitForEvent('popup');
   await drawer.getByRole('button', { name: '前往 Microsoft 授权', exact: true }).click();
-  const popup = await popupEvent;
+  const popup = await bounded(popupEvent, '打开授权窗口');
   await drawer.getByRole('button', { name: '核对并保存授权', exact: true }).waitFor();
   assert.equal(oauthStarts, 1);
-  await popup.close();
+  await bounded(popup.close(), '关闭首次授权窗口');
   await close();
   await bindRow(4);
   assert.equal(await drawer.locator('[data-mailbox-operation="relay"]').count(), 1);
@@ -166,7 +170,7 @@ test('邮箱池行操作使用右侧抽屉，查询、授权、状态、查询�
   await bindRow(2);
   const delayedPopupEvent = page.waitForEvent('popup');
   await drawer.getByRole('button', { name: '前往 Microsoft 授权', exact: true }).click();
-  const delayedPopup = await delayedPopupEvent;
+  const delayedPopup = await bounded(delayedPopupEvent, '打开延迟授权窗口');
   await bounded(oauthStarted, '延迟授权请求');
   const popupClosed = delayedPopup.waitForEvent('close');
   await close();
@@ -228,10 +232,15 @@ test('邮箱池行操作使用右侧抽屉，查询、授权、状态、查询�
     await drawer.locator('#ops-managed-query-code').fill('MBX-SYNTHETIC-NEW-QUERY');
     const returned = page.waitForResponse(r => r.request().method() === 'PUT' && new URL(r.url()).pathname === '/api/local/tools/mailbox-pool');
     releaseRotation();
-    await (await returned).finished();
-    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(resolve)));
+    await bounded(returned.then(response => response.finished()), '延迟查询码回执结束');
+    await page.waitForFunction(() => !window.IDLocalData.writesPending(scope => scope === 'tools/mailbox-pool'));
     assert.equal(await page.evaluate(() => window.syntheticClipboardWrites), 0);
     assert.equal(await drawer.locator('#ops-managed-query-code').inputValue(), 'MBX-SYNTHETIC-NEW-QUERY');
+    await close();
+    const rotations = writes.filter(command => command.action === 'rotate-delivery').length;
+    await pool.getByRole('button', { name: '核对上次重置', exact: true }).click();
+    await drawer.getByText('已重置', { exact: true }).waitFor();
+    assert.equal(writes.filter(command => command.action === 'rotate-delivery').length, rotations);
     await close();
   }
   await page.goto(origin + '/#/overview');

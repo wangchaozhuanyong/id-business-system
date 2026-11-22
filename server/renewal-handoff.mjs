@@ -24,7 +24,10 @@ export const renewalHandoffPath = '/api/local/renewals';
 const products = new Set(['GPT', 'Claude Pro', 'Claude Max', 'Gemini', 'Grok']);
 const states = new Set(['pending', 'processing', 'paid', 'returned', 'withdrawn', 'complete']);
 const blocksNewHandoff = row => !['returned', 'withdrawn'].includes(row.status);
-const fail = (status, message) => { throw Object.assign(new Error(message), { status }); };
+const fail = (status, message, code) => { throw Object.assign(new Error(message), { status, code }); };
+const paymentReviewConflict = () => fail(409,
+  '原单、库存或订阅资料已更新，本次金额尚未登记。已标记付款待核对，请保留凭据，核对后在财务续费继续办理。',
+  'RENEWAL_PAYMENT_REVIEW');
 const text = (value, limit = 120) => typeof value === 'string' && value.length <= limit && !/[\p{Cc}\p{Cf}]/u.test(value)
   ? value.trim() : '';
 const bank = '银行卡', apple = '苹果内购';
@@ -419,6 +422,7 @@ export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clo
       const commerce = store.load('commerce');
       const inventorySnapshot = store.load('inventory'), inventory = inventorySnapshot.data;
       const profiles = store.featureDocument(subscriptionDomain);
+      const sourceVersions = { inventory: inventorySnapshot.version, [subscriptionDomain]: profiles.version };
       const context = originalOrderContext(commerce.data, inventory, profiles.data, store, now);
       const reminderHours = commerce.data?.renewalWarningHours ?? (commerce.data?.renewalWarningDays ?? 3) * 24;
       if (request.method === 'GET') {
@@ -534,7 +538,9 @@ export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clo
       }
       const operation = describeWriteOperation(request.headers['x-id-operation'], actor, ['renewal', command]);
       if (!operation) fail(400, '请从当前工作台提交');
-      if (store.replayWrite(operation)) {
+      const replay = store.replayWrite(operation, actor, { receiptResult: true });
+      if (replay) {
+        if (replay.paymentReview) paymentReviewConflict();
         if (action === 'decline') return send(response, 200, { saved: true, count: command.orders.length });
         const prior = items.find(row => row.id === command.id && row.status === 'complete');
         return send(response, 200, { saved: true, ...(prior && { orderNo: prior.newOrderNo }) });
@@ -576,7 +582,7 @@ export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clo
           ...(command.accountReference && { accountReference: command.accountReference })
         }));
         store.saveRenewalQueue(snapshot.version, commerce.version, [...additions, ...items],
-          { action: 'renewal_submit', actor, ids: additions.map(row => row.id), operation });
+          { action: 'renewal_submit', actor, ids: additions.map(row => row.id), operation, sourceVersions });
         return send(response, 200, { saved: true, count: additions.length });
       }
       const row = items.find(item => item.id === command.id);
@@ -629,7 +635,7 @@ export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clo
         // while validating the new expiry against the reviewed current dates.
         const paidSource = row.paidSource ? { ...row.paidSource, start: source.start, expiry: source.expiry } : source;
         const order = newOrder(paidSource, row, command, actor, context, now, store.load('settings')?.data);
-        const orderNo = store.finishRenewal({ snapshot, commerce, item: next, order, actor, operation,
+        const orderNo = store.finishRenewal({ snapshot, commerce, sourceVersions, item: next, order, actor, operation,
           owners: () => scope.orderOwners() });
         return send(response, 200, { saved: true, orderNo });
       } else {
@@ -655,12 +661,15 @@ export function createRenewalHandoff({ store, client, publicOrigin, getAuth, clo
         }
       }
       if (['withdrawn', 'returned', 'paid'].includes(next.status)) delete next.accountReference;
-      store.saveRenewalQueue(snapshot.version, commerce.version, items.map(item => item.id === row.id ? next : item),
-        { action: 'renewal_' + action.replace('-', '_'), actor, ids: [row.id], operation });
+      const result = store.saveRenewalQueue(snapshot.version, commerce.version, items.map(item => item.id === row.id ? next : item),
+        { action: 'renewal_' + action.replace('-', '_'), actor, ids: [row.id], operation,
+          ...(['paid', 'review-source'].includes(action) && { sourceVersions }) });
+      if (result?.paymentReview) paymentReviewConflict();
       return send(response, 200, { saved: true });
     } catch (error) {
       const status = [400, 401, 403, 404, 405, 409, 413, 415, 422].includes(error.status) ? error.status : 503;
-      return send(response, status, { error: status === 503 ? '暂时无法确认办理结果，请刷新后核对' : error.message });
+      return send(response, status, { error: status === 503 ? '暂时无法确认办理结果，请刷新后核对' : error.message,
+        ...(error.code === 'RENEWAL_PAYMENT_REVIEW' && { code: error.code }) });
     }
   };
 }

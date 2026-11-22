@@ -279,9 +279,13 @@
     return { data: rebased };
   }
 
-  async function persistInventory(action, mutate, { relayExtraction = false } = {}) {
+  async function persistInventory(action, mutate, { relayExtraction = false, extractKind } = {}) {
     if (localInventoryState !== 'ready' || inventorySavePending) {
       api.notify('库存尚未就绪或仍在保存，请稍候重试');
+      return;
+    }
+    if (extractKind && !localData.rememberWriteReceipt) {
+      api.notify('页面资源已更新，请整页刷新后再提取。');
       return;
     }
     const before = inventoryDocument();
@@ -296,6 +300,12 @@
     const actorId = currentActor().id;
     const viewActorId = api.state.actor?.id;
     const sentVersion = localInventoryVersion;
+    const receiptScope = extractKind ? extractionScope(extractKind) : '';
+    if (receiptScope && localData.pendingWriteReceipt(receiptScope)) {
+      updateExtractionReceipt(extractKind);
+      api.notify('请先核对上次提取。');
+      return;
+    }
     let after, finish, saved;
     try {
       inventoryReadIndex = undefined;
@@ -309,13 +319,32 @@
       applyInventoryDocument(before);
     }
 
+    const operationId = receiptScope ? crypto.randomUUID() : undefined;
+    if (operationId && !localData.rememberWriteReceipt(receiptScope, operationId)) {
+      api.notify('浏览器无法保留提取回执编号，本次未提交。');
+      return;
+    }
+    const sameActor = () => currentActor().id === actorId && api.state.actor?.id === viewActorId;
     inventorySavePending = true;
     const feedback = api.beginActionFeedback?.(null, '正在保存资料…');
     try {
-      saved = await localData.save('inventory', localInventoryVersion, after, { action, base: before });
+      saved = await localData.save('inventory', localInventoryVersion, after, { action, base: before, operationId });
+      if (operationId && !sameActor()) return;
       applyCommittedInventory(saved);
       if (saved.appleBalance) api.modules.appleBalance?.applyCommittedBalance?.(saved.appleBalance);
     } catch (error) {
+      if (operationId) {
+        if (!sameActor()) return;
+        const status = error?.status ?? error?.statusCode;
+        if (![400, 403, 409, 422].includes(status) || error?.code === 'DATA_SOURCE_CHANGED') {
+          if (api.state.route === route) {
+            updateExtractionReceipt(extractKind);
+            api.notify('本次提取结果尚未确认，请先核对原提取。');
+          }
+          return;
+        }
+        localData.forgetWriteReceipt(receiptScope, operationId);
+      }
       const versionConflict = (error?.status === 409 || error?.statusCode === 409) &&
         error.message === '库存资料已在其他页面更新，请刷新后重试';
       if (versionConflict && action === 'inventory_create' &&
@@ -377,6 +406,7 @@
       document.querySelector('#drawer[open]')?.firstElementChild === drawerContent &&
       (!draftForm || (draftForm.isConnected && JSON.stringify(api.readDraft(draftForm)) === submittedDraft))
     ) {
+      if (operationId) localData.forgetWriteReceipt(receiptScope, operationId);
       if (draftKey) {
         api.state.drafts.delete(draftKey);
         draftForm.removeAttribute('data-inventory-draft');
@@ -1360,7 +1390,7 @@
         }) + pageControls
         : table(columns, pageRows(rows, asset => inventoryListTime(asset, v.tab)), 'inventory-module-assets', `${title}库存`) + pagination(rows.length);
       body = `<div class="toolbar list-filters list-filter-toolbar"><div class="toolbar-left"><div class="search-field">${icon('search')}<input data-auto-search id="inventory-list-query" aria-label="搜索库存资料" maxlength="500" placeholder="${microsoft ? '搜索邮箱、辅助邮箱或备注' : '搜索账号、备注或用途'}" value="${esc(v.query)}" /></div><div class="list-filter-fields"><select id="inventory-country" aria-label="筛选国家">${options(choicesWithCurrent([['', '全部国家'], ...countries], v.country), v.country)}</select><select id="inventory-status" aria-label="筛选${kind === 'mail' ? '邮箱' : '账号'}状态">${options([['', '全部状态'], '正常', '冻结', '封控中', ...(kind === 'mail' ? ['死号', '解封中'] : [])], v.status)}</select>${kind === 'mail' ?
-        `<select id="inventory-usage-filter" aria-label="筛选使用状态">${options([['', '全部使用状态'], ...Object.entries(mailUseLabels)], v.usage)}</select>` : ''}</div></div><div class="toolbar-right">${googleDelivery ? button('批量重置', 'inventory-google-batch', '', 'refresh', deliverySnapshot ? '' : 'disabled') : ''}${button('列设置', 'column-settings', '', 'columns', `data-table-id="${esc(title)}库存"`)}${microsoft ? '' : button('提取与归还', 'inventory-center', '', 'return')}${button(microsoft ? '复制邮箱地址' : type === 'google' ? '复制所选邮箱及密码' : '复制所选', 'inventory-copy-selected', '', 'copy', selection.size ? '' : 'disabled')}${!microsoft && v.tab === 'claimed' ? button('归还所选', 'inventory-return-selected', '', 'return', selection.size ? '' : 'disabled') : ''}</div></div>${googleDelivery && googlePoolError ? `<p class="inline-notice warning" role="status">${esc(googlePoolError)} ${button('重试', 'inventory-google-refresh')}</p>` : ''}${list}`;
+        `<select id="inventory-usage-filter" aria-label="筛选使用状态">${options([['', '全部使用状态'], ...Object.entries(mailUseLabels)], v.usage)}</select>` : ''}</div></div><div class="toolbar-right">${googleDelivery ? (delivery.pendingResetButton?.('google') || '') + button('批量重置', 'inventory-google-batch', '', 'refresh', deliverySnapshot ? '' : 'disabled') : ''}${button('列设置', 'column-settings', '', 'columns', `data-table-id="${esc(title)}库存"`)}${microsoft ? '' : button('提取与归还', 'inventory-center', '', 'return')}${button(microsoft ? '复制邮箱地址' : type === 'google' ? '复制所选邮箱及密码' : '复制所选', 'inventory-copy-selected', '', 'copy', selection.size ? '' : 'disabled')}${!microsoft && v.tab === 'claimed' ? button('归还所选', 'inventory-return-selected', '', 'return', selection.size ? '' : 'disabled') : ''}</div></div>${googleDelivery && googlePoolError ? `<p class="inline-notice warning" role="status">${esc(googlePoolError)} ${button('重试', 'inventory-google-refresh')}</p>` : ''}${list}`;
     }
     const stockTotal = paged ? result?.stockTotal : assets.length;
     const stockAvailable = paged ? result?.available : microsoft ? counts.available : assets.filter(available).length;
@@ -1396,6 +1426,53 @@
       const counts = batchCounts(batch);
       return `<li><strong class="inventory-extraction-number">${esc(numbers.get(batch.id) ?? batch.id)}</strong><span class="inventory-extraction-status">${tag(counts.pending ? `待处理 ${counts.pending}` : '已处理', counts.pending ? 'warning' : 'success')}</span><span class="inventory-extraction-purpose" title="${esc(batch.purpose || '未记录')}">${esc(batch.purpose || '未记录')}</span><span class="inventory-extraction-count">${batch.items.length} 条</span><span class="inventory-extraction-actor" title="${esc(batch.actorName || '未记录')}">${esc(batch.actorName || '未记录')}</span><time class="inventory-extraction-time" title="北京时间">${esc(workspaceRecordTime(batch.time))}</time><div class="inventory-record-actions">${textAction('明细', 'inventory-batch', `data-id="${esc(batch.id)}"`)}${textAction(counts.returnable ? `归还（${counts.returnable}）` : '无可归还项', 'inventory-batch-return', `data-id="${esc(batch.id)}" ${counts.returnable ? '' : 'disabled title="查看明细了解已使用、已归还或业务占用原因"'}`)}</div></li>`;
     }).join('')}</ul>` : empty('暂无提取批次', '完成提取后在这里查看最近批次。');
+  }
+  const extractionScope = kind => 'inventory-extraction:' + kind;
+  const pendingExtraction = kind => localData?.pendingWriteReceipt?.(extractionScope(kind));
+  function extractionReceiptControls(kind) {
+    if (!pendingExtraction(kind)) return '';
+    return `<div class="inline-notice warning" role="status" data-extraction-receipt>
+      <p>上次提取结果待核对。请先查看原操作是否已生成批次。</p>${button('核对上次提取', 'inventory-extraction-receipt')}
+      ${button('开始新的提取', 'inventory-extraction-new')}</div>`;
+  }
+  function updateExtractionReceipt(kind) {
+    const slot = document.querySelector('#inventory-extract-form [data-extraction-receipt-controls]');
+    if (slot && slot.closest('form').elements['inventory-kind']?.value === kind) {
+      slot.innerHTML = extractionReceiptControls(kind);
+      slot.hidden = !slot.firstElementChild;
+    }
+  }
+  async function readExtractionReceipt(kind, node) {
+    const operationId = pendingExtraction(kind);
+    if (!operationId || inventorySavePending) return;
+    const actor = currentActor().id, route = api.state.route;
+    const current = () => currentActor().id === actor && api.state.route === route && pendingExtraction(kind) === operationId;
+    await api.withActionFeedback(node, async () => {
+      const receipt = await localData.extractionReceipt(operationId);
+      if (!current()) return;
+      if (receipt.status !== 'saved') {
+        api.notify('暂未读到原提取批次，原操作可能仍在处理。');
+        return;
+      }
+      await readLocalInventory({ keepContent: true });
+      if (!current()) return;
+      if (!batches.some(batch => batch.id === receipt.batchId && batch.kind === kind && ownerAllowed(batch))) {
+        api.notify('原提取已确认，暂未读到批次资料，请稍后核对。');
+        return;
+      }
+      localData.forgetWriteReceipt(extractionScope(kind), operationId);
+      api.go('workspace/extractions/' + encodeURIComponent(receipt.batchId));
+    }, { failure: '原提取回执读取失败' });
+  }
+  function startNewExtraction(kind) {
+    const operationId = pendingExtraction(kind);
+    if (!operationId || inventorySavePending) return;
+    const actor = currentActor().id, route = api.state.route;
+    api.confirmAction('开始新的提取', '原提取仍可能已经生效。继续将开始一笔独立提取，请先核对库存和提取批次。', () => {
+      if (currentActor().id !== actor || api.state.route !== route || pendingExtraction(kind) !== operationId) return;
+      localData.forgetWriteReceipt(extractionScope(kind), operationId);
+      updateExtractionReceipt(kind);
+    }, '开始新提取');
   }
   function extractionPage(account = accountSubmissionRoute()) {
     const heading = header(account ? '账号提取' : '邮箱提取',
@@ -1440,7 +1517,7 @@
       .join('');
     return (
       heading +
-      `<div class="inventory-workspace"><div class="inventory-workspace-columns">${submissionPanel(account)}<section class="panel inventory-extraction-panel" aria-labelledby="inventory-extraction-heading">${workspaceHeading('提取资料', '从可用库存按数量提取。确认实际使用后不再进入通用可提取库存；数量不足时不会减少数量提交。', 'inventory-extraction-heading', 'download', 'violet')}<div class="form-panel"><form id="inventory-extract-form" data-inventory-draft="${key}" novalidate><input type="hidden" name="inventory-kind" value="${kind}" /><div class="form-grid inventory-extraction-fields">${field(account ? '账号类型' : '邮箱类型', 'inventory-extract-type', select('inventory-extract-type', list, d['inventory-extract-type']), true)}${field('提取数量', 'inventory-quantity', input('inventory-quantity', d['inventory-quantity'], 'type="number" min="1" max="100"'), true)}${wide('提取用途', 'inventory-purpose', purposeControl, true)}${selectedPurpose === '其他' ? wide('用途说明', 'inventory-purpose-other', input('inventory-purpose-other', d['inventory-purpose-other'] || '', 'placeholder="填写具体用途"'), true) : ''}${wide('备注', 'inventory-extract-notes', area('inventory-extract-notes', d['inventory-extract-notes'] || '', '记录本批资料用途和操作说明'))}</div><div class="inventory-extraction-summary"><div class="inventory-availability" aria-label="当前可用库存">${availableCounts}</div><div class="inventory-extraction-actions" data-page-actions="before-submit"><button class="button primary" type="submit">确认提取</button></div></div></form></div><section class="inventory-extraction-history" aria-labelledby="inventory-extraction-history-heading"><div class="panel-heading"><h3 id="inventory-extraction-history-heading">最近提取批次</h3>${button('全部记录', 'inventory-center')}</div><div class="panel-body inventory-workspace-history" tabindex="0" aria-label="最近提取批次列表">${recentExtractionList(recent)}</div></section></section></div></div>`
+      `<div class="inventory-workspace"><div class="inventory-workspace-columns">${submissionPanel(account)}<section class="panel inventory-extraction-panel" aria-labelledby="inventory-extraction-heading">${workspaceHeading('提取资料', '从可用库存按数量提取。确认实际使用后不再进入通用可提取库存；数量不足时不会减少数量提交。', 'inventory-extraction-heading', 'download', 'violet')}<div class="form-panel"><form id="inventory-extract-form" data-inventory-draft="${key}" novalidate><input type="hidden" name="inventory-kind" value="${kind}" /><div data-extraction-receipt-controls${pendingExtraction(kind) ? '' : ' hidden'}>${extractionReceiptControls(kind)}</div><div class="form-grid inventory-extraction-fields">${field(account ? '账号类型' : '邮箱类型', 'inventory-extract-type', select('inventory-extract-type', list, d['inventory-extract-type']), true)}${field('提取数量', 'inventory-quantity', input('inventory-quantity', d['inventory-quantity'], 'type="number" min="1" max="100"'), true)}${wide('提取用途', 'inventory-purpose', purposeControl, true)}${selectedPurpose === '其他' ? wide('用途说明', 'inventory-purpose-other', input('inventory-purpose-other', d['inventory-purpose-other'] || '', 'placeholder="填写具体用途"'), true) : ''}${wide('备注', 'inventory-extract-notes', area('inventory-extract-notes', d['inventory-extract-notes'] || '', '记录本批资料用途和操作说明'))}</div><div class="inventory-extraction-summary"><div class="inventory-availability" aria-label="当前可用库存">${availableCounts}</div><div class="inventory-extraction-actions" data-page-actions="before-submit"><button class="button primary" type="submit">确认提取</button></div></div></form></div><section class="inventory-extraction-history" aria-labelledby="inventory-extraction-history-heading"><div class="panel-heading"><h3 id="inventory-extraction-history-heading">最近提取批次</h3>${button('全部记录', 'inventory-center')}</div><div class="panel-body inventory-workspace-history" tabindex="0" aria-label="最近提取批次列表">${recentExtractionList(recent)}</div></section></section></div></div>`
     );
   }
   function extractionBatchNumbers() {
@@ -4016,7 +4093,7 @@
           };
         },
         '确认提取',
-        { relayExtraction: true }
+        { relayExtraction: true, extractKind: 'mail' }
       );
     } catch (error) {
       if (current())
@@ -4033,6 +4110,11 @@
     const d = api.readForm(form),
       kind = d['inventory-kind'],
       type = d['inventory-extract-type'];
+    if (pendingExtraction(kind)) {
+      updateExtractionReceipt(kind);
+      api.notify('请先核对上次提取。');
+      return;
+    }
     const allowedType =
       kind === 'account'
         ? stockType(type)
@@ -4091,7 +4173,9 @@
           api.state.drafts.delete(`inventory-extract:${kind}`);
           api.go(`workspace/extractions/${batch.id}`);
         };
-      }
+      },
+      '确认提取',
+      { extractKind: kind }
     );
   }
   async function copyClaims(claims, control) {
@@ -4626,6 +4710,12 @@
 
   function onClick(action, node, hydrated = false) {
     if (!action.startsWith('inventory-')) return false;
+    if (action === 'inventory-extraction-receipt' || action === 'inventory-extraction-new') {
+      const kind = node.closest('form')?.elements['inventory-kind']?.value;
+      if (action === 'inventory-extraction-receipt') void readExtractionReceipt(kind, node);
+      else startNewExtraction(kind);
+      return true;
+    }
     if (pagedInventory() && node.closest('[data-page-region]') && !hydrated) {
       if (action === 'inventory-tab') {
         view().tab = node.dataset.tab;

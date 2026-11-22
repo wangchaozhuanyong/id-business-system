@@ -8,18 +8,39 @@ const digestCode = code => createHash('sha256').update(String(code || '')).diges
 const relayValidity = 30 * 86_400_000;
 const isResetWindow = (expiry, startedAt) => Number.isFinite(Date.parse(expiry)) &&
   Math.abs(Date.parse(expiry) - startedAt - relayValidity) <= 120_000;
+const deliveryReply = row => ({ id: row.id, email: row.email,
+  status: row.status === 'queued' || row.status === 'running' ? 'pending' : row.status,
+  ...(row.reason && { reason: row.reason }), ...(row.codeExpiresAt && { expiresAt: row.codeExpiresAt }) });
 
 // Store only hashes of codes in receipts. The live binding is rechecked before
 // returning a code on replay. A reserved write with no response stays pending.
 export function createRelayDeliveryJournal({ read, write, transaction, inventoryVersion, audit, now = Date.now }) {
   const receiptKey = (operation, id) => 'write-receipt:' + digestCode(`relay-row\0${operation.domain}\0${id}`);
   const lockKey = id => 'write-receipt:' + digestCode(`relay-lock\0${id}`);
+  const receiptRows = (operation, rows) => rows.map(row => read(receiptKey(operation, row.id)).data || row);
+  function operationRows(actor, operationId) {
+    let operation;
+    try { operation = describeWriteOperation(operationId, actor, []); }
+    catch (error) { throw new RelayError(error.status, error.message); }
+    if (!operation) throw new RelayError(400, '缺少要核对的操作编号');
+    const stored = read(operation.domain).data;
+    const rows = stored?.domains?.includes(relayDeliveryDomain) && Array.isArray(stored.rows)
+      ? receiptRows(operation, stored.rows) : undefined;
+    return { operation, rows };
+  }
   return {
+    operationRows,
+    receipt(actor, operationId) {
+      const { rows } = operationRows(actor, operationId);
+      if (!rows) return { status: 'pending' };
+      const results = rows.map(deliveryReply);
+      return { status: results.some(row => row.status === 'pending') ? 'pending' : 'saved', results };
+    },
     start(operation, version, targets) {
       return transaction(() => {
         const current = read(operation.domain);
         if (checkWriteReceipt(current.data, operation))
-          return { rows: current.data.rows.map(row => read(receiptKey(operation, row.id)).data || row), replayed: true };
+          return { rows: receiptRows(operation, current.data.rows), replayed: true };
         if (inventoryVersion() !== version) throw new RelayError(409, '隐藏邮箱库存已变化，请刷新后重新选择');
         const rows = targets.map(({ id, email, version }) => ({ id, email: email || '', version: version ?? 0, status: 'queued' }));
         write(operation.domain, 1, { fingerprint: operation.fingerprint, domains: [relayDeliveryDomain], rows });
@@ -107,6 +128,30 @@ function verifiedReset(kind, target, result, validityDays, now) {
   return { queryCode: code, codeExpiresAt: result.codeExpiresAt ?? null, email: target.local.email };
 }
 
+async function reconcileDeliveryRows(operation, rows, actor, journal, lookup, now) {
+  for (let offset = 0; offset < rows.length; offset += 4) await Promise.all(rows.slice(offset, offset + 4).map(async (row, index) => {
+    if ((row.status !== 'pending' && !(row.status === 'running' && now() - row.startedAt > 20_000)) ||
+        !row.original || !row.remoteId) return;
+    try {
+      const target = await lookup('alias', row.id);
+      const code = target.remote.buyerQueryCode, digest = digestCode(code);
+      if (target.local.email !== row.email || row.remoteId !== target.remoteId || typeof code !== 'string' || !code ||
+          digest === row.original || !isResetWindow(target.remote.codeExpiresAt, row.startedAt)) return;
+      rows[offset + index] = journal.finish(operation, row, { status: 'success', digest,
+        codeExpiresAt: target.remote.codeExpiresAt }, actor);
+    } catch { /* Provider read failure leaves the original receipt pending. */ }
+  }));
+}
+
+export function createRelayDeliveryReconcile({ lookup, journal, now = Date.now }) {
+  return async (actor, operationId) => {
+    const { operation, rows } = journal.operationRows(actor, operationId);
+    if (!rows) return { status: 'pending' };
+    await reconcileDeliveryRows(operation, rows, actor, journal, lookup, now);
+    return journal.receipt(actor, operationId);
+  };
+}
+
 export function createRelayDeliveryReset({ lookup, mutate, journal, readAliases, now = Date.now }) {
   return async (body, actor, operationId) => {
     const { mode, ids, inventoryVersion } = body;
@@ -123,23 +168,9 @@ export function createRelayDeliveryReset({ lookup, mutate, journal, readAliases,
     const targets = mode === 'all' ? [...aliases.values()] : ids.map(id => aliases.get(id) || { id });
     const started = journal.start(operation, inventoryVersion, targets);
     const receipts = started.rows.slice();
-    const reply = row => ({ id: row.id, email: row.email, status: row.status === 'queued' || row.status === 'running' ? 'pending' : row.status,
-      ...(row.reason && { reason: row.reason }), ...(row.codeExpiresAt && { expiresAt: row.codeExpiresAt }) });
     const eligible = ({ local, owner }) => (!local.health || local.health === 'normal') &&
       (!local.status || local.status === '正常') && owner.remote.status === 'ACTIVE';
-    if (started.replayed) {
-      for (let offset = 0; offset < receipts.length; offset += 4) await Promise.all(receipts.slice(offset, offset + 4).map(async (row, index) => {
-        if ((row.status !== 'pending' && !(row.status === 'running' && now() - row.startedAt > 20_000)) ||
-            !row.original || !row.remoteId) return;
-        try {
-          const target = await lookup('alias', row.id);
-          if (row.remoteId !== target.remoteId || digestCode(target.remote.buyerQueryCode) === row.original ||
-              !target.remote.buyerQueryCode || !isResetWindow(target.remote.codeExpiresAt, row.startedAt)) return;
-          receipts[offset + index] = journal.finish(operation, row, { status: 'success', digest: digestCode(target.remote.buyerQueryCode),
-            codeExpiresAt: target.remote.codeExpiresAt }, actor);
-        } catch { /* A failed read back leaves the original result pending. */ }
-      }));
-    }
+    if (started.replayed) await reconcileDeliveryRows(operation, receipts, actor, journal, lookup, now);
     let issued;
     async function reset(row, read, lookupAt) {
       let target;
@@ -182,7 +213,7 @@ export function createRelayDeliveryReset({ lookup, mutate, journal, readAliases,
           issued = { queryCode: target.remote.buyerQueryCode, codeExpiresAt: target.remote.codeExpiresAt, email: row.email };
       } catch { /* No code is returned if the binding cannot be checked. */ }
     }
-    return { results: receipts.map(reply), ...(issued && { issued }), ...(started.replayed && { replayed: true }) };
+    return { results: receipts.map(deliveryReply), ...(issued && { issued }), ...(started.replayed && { replayed: true }) };
   };
 }
 

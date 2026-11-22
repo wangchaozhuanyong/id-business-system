@@ -903,3 +903,85 @@ test('已完成的续费可直接入账，有进行中记录或已有同一期�
   assert.equal(order.paidConfirmed, true);
   assert.equal(order.entitlementStatus, 'active');
 });
+
+test('登记续费实付期间原库存或订阅变化，保留待核对并从最新资料继续', async t => {
+  for (const domain of ['inventory', subscriptionDomain]) {
+    await t.test(domain, async t => {
+      const source = { ...initialOrder, businessType: '新开', accountId: 'stock-gpt', accountSource: '库存' };
+      const { store, submit } = fixture(t, [source], (store, data) => {
+        store.saveBatch([{ domain: 'inventory', version: 0, data: { mailboxes: [], batches: [],
+          returnRecords: [], registrationRecords: [], importRecords: [], tableSettings: [], undo: [],
+          accounts: [{ id: source.accountId, type: 'gpt', email: source.email, health: 'normal',
+            status: '正常', source: '自己注册', inventoryState: 'used', used: true, version: 1, inventoryHistory: [] }]
+        } }, { domain: 'commerce', version: 0, data }]);
+      });
+      const entered = Promise.withResolvers(), resume = Promise.withResolvers();
+      const send = sender(store, undefined, { async get(path) {
+        assert.equal(path, '/api/admin/cards');
+        entered.resolve();
+        await resume.promise;
+        return { cards: [{ id: 7, last4: '1111', is_active: 1, card_number: replacement }] };
+      } });
+      assert.equal((await send('employee', submit)).status, 200);
+      const [item] = store.featureDocument(renewalHandoffDomain).data.items;
+      assert.equal((await send('finance', { action: 'claim', id: item.id, version: item.version })).status, 200);
+      const operationId = randomUUID();
+      const payment = { action: 'paid', id: item.id, version: item.version + 1, amount: '20.00', currency: 'USD',
+        cardMode: 'pool', cardId: 'recharge:7' };
+      const pending = send('finance', payment, { operationId });
+      await Promise.race([entered.promise, pending.then(result => assert.fail(JSON.stringify(result)))]);
+      const ledgerBefore = store.load('appleBalance');
+      const commerceBefore = store.load('commerce');
+      const updateHealth = health => {
+        const inventory = store.load('inventory');
+        const account = inventory.data.accounts[0];
+        account.health = health;
+        account.healthChangedAt = '2026-11-13 13:00';
+        account.inventoryHistory.push({ id: randomUUID(), action: '健康状态变化',
+          detail: health, reason: '合成并发测试', time: account.healthChangedAt });
+        account.version++;
+        store.saveBatch([{ domain: 'inventory', version: inventory.version, data: inventory.data,
+          action: 'inventory_health_change' }]);
+      };
+      if (domain === 'inventory') updateHealth('dead');
+      else store.saveFeatureDocument(subscriptionDomain, 0, { owners: {} });
+      resume.resolve();
+
+      const conflict = await pending;
+      assert.equal(conflict.status, 409);
+      assert.equal(conflict.data.code, 'RENEWAL_PAYMENT_REVIEW');
+      assert.match(conflict.data.error, /本次金额尚未登记/);
+      assert.deepEqual(await send('finance', payment, { operationId }), conflict);
+      const [financeRow] = (await send('finance', null, { view: 'finance' })).data.items;
+      assert.equal(financeRow.status, 'processing');
+      assert.equal(financeRow.paymentReview, true);
+      assert.equal(financeRow.amount, undefined);
+      assert.equal(financeRow.sourceChanged, domain === 'inventory');
+      assert.equal(financeRow.canTransfer, true);
+      assert.deepEqual(store.load('appleBalance'), ledgerBefore);
+      assert.deepEqual(store.load('commerce'), commerceBefore);
+      assert.equal(store.audit().filter(row => row.action === 'renewal_payment_review').length, 1);
+      assert.equal((await send('employee', { action: 'finish', id: item.id,
+        version: financeRow.version, ...finishFields })).status, 409);
+
+      if (domain === 'inventory') updateHealth('normal');
+      assert.equal((await send('finance', { ...payment, version: financeRow.version, cardMode: 'none', cardId: undefined })).status, 200);
+      const [staffRow] = (await send('employee', null)).data.items;
+      assert.equal(staffRow.status, 'paid');
+      assert.equal(staffRow.paymentReview, undefined);
+      if (domain === 'inventory') {
+        updateHealth('dead');
+        const [blocked] = (await send('finance', null, { view: 'finance' })).data.items;
+        assert.equal(blocked.status, 'paid');
+        assert.equal(blocked.amount, '20.00');
+        assert.equal(blocked.sourceReview, undefined);
+        assert.equal((await send('employee', { action: 'finish', id: item.id,
+          version: staffRow.version, ...finishFields })).status, 409);
+        updateHealth('normal');
+      }
+      const finished = await send('employee', { action: 'finish', id: item.id, version: staffRow.version, ...finishFields });
+      assert.equal(finished.status, 200, finished.data.error);
+      assert.equal(store.load('commerce').data.orders.length, 2);
+    });
+  }
+});

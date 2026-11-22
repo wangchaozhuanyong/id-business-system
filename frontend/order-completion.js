@@ -311,13 +311,13 @@
     }
   }
 
-  function formError(message, canRecheck = false) {
+  function formError(message, canRecheck = false, blockSave = canRecheck) {
     const error = $('#completion-form-error');
     if (!error) return;
     error.hidden = !message;
     error.textContent = message;
     $('[data-action="completion-recheck"]').hidden = !canRecheck;
-    if (canRecheck) $('button[form="completion-form"][type="submit"]').disabled = true;
+    if (blockSave) $('button[form="completion-form"][type="submit"]').disabled = true;
   }
 
   async function recheck() {
@@ -367,6 +367,9 @@
       command.customerId = customer.id;
       command.customerVersion = row.customer ? meta.linkedVersion : customer.version;
     } else if (meta.newName) command.newCustomer = { name: meta.newName };
+    const fingerprint = JSON.stringify(command);
+    if (meta.submission?.fingerprint !== fingerprint)
+      meta.submission = { fingerprint, operationId: window.crypto.randomUUID() };
     preserveDraft();
     formError('');
     saving = row.id;
@@ -375,11 +378,13 @@
     controls.forEach((node) => { node.disabled = true; });
     let result;
     try {
-      result = await D.saveOrderCompletion(command);
+      result = await D.saveOrderCompletion(command, meta.submission.operationId);
     } catch (error) {
       if (open(form)) {
         controls.forEach((node) => { node.disabled = false; });
-        formError(error.message || '保存失败，请重试。', error.status === 409);
+        const outcomeUnknown = !error.status || error.status >= 500;
+        formError(outcomeUnknown ? '保存结果暂未确认，可重试本次保存或重新核对订单。' :
+          error.message || '保存失败，请重试。', outcomeUnknown || error.status === 409, error.status === 409);
       } else if (editor === current) {
         // Closing a disabled form during save cannot capture its fields.
         S.drafts.set(form.dataset.completionDraft, raw);

@@ -265,7 +265,7 @@ const orderFeatureDomains = new Set([
   cardFreezeDocument, 'system-monitoring-config', 'system-monitoring-state', subscriptionDomain, orderExpenseDomain, renewalHandoffDomain
 ]);
 const renewalAuditLabels = { renewal_submit: '提交续费给财务', renewal_claim: '领取续费申请',
-  renewal_withdraw: '撤回续费申请',
+  renewal_withdraw: '撤回续费申请', renewal_payment_review: '标记续费付款待核对',
   renewal_paid: '登记续费实付', renewal_return: '退回续费申请', renewal_finish: '提交续费新订单',
   renewal_transfer: '移交续费待处理', renewal_review_source: '核对续费原订单与付款' };
 const financeCardPendingDomain = 'finance-card-pending';
@@ -1922,6 +1922,14 @@ export function createLocalBusinessStore(databasePath) {
           ...(plan.issued && { issuedCode: plan.issued.queryCode }) };
       });
     },
+    managedMailboxDeliveryReceipt(actor, operationId) {
+      const operation = describeWriteOperation(operationId, actor, []);
+      if (!operation) throw new MailboxPoolError(400, '缺少要核对的操作编号');
+      const receipt = readDocument(operation.domain).data;
+      return receipt?.domains?.includes(managedMailboxDomain) && Array.isArray(receipt.results)
+        ? { ...mailboxPoolView(readDocument(managedMailboxDomain)), status: 'saved', results: receipt.results }
+        : { status: 'pending' };
+    },
     copyManagedMailboxCode(id, actor) {
       const current = readDocument(managedMailboxDomain);
       const code = mailboxPoolItems(current).find((row) => row.id === id)?.queryCode;
@@ -2287,14 +2295,34 @@ export function createLocalBusinessStore(databasePath) {
         putDocument(operation.domain, 1, { fingerprint: operation.fingerprint, domains: ['commerce'] });
       });
     },
-    saveRenewalQueue(version, commerceVersion, items, { action, actor, ids, operation }) {
+    saveRenewalQueue(version, commerceVersion, items, { action, actor, ids, operation, sourceVersions = {} }) {
       return writeTransaction(() => {
-        if (replayWrite(operation)) return;
+        const replay = replayWrite(operation, actor, { receiptResult: true });
+        if (replay) return replay;
         const renewals = readDocument(renewalHandoffDomain), commerce = readDocument('commerce');
-        if (renewals.version !== version || commerce.version !== commerceVersion)
-          throw new LocalDataError(409, '续费或订单资料已更新，请刷新后核对');
-        items = structuredClone(items);
+        const stale = renewals.version !== version || commerce.version !== commerceVersion ||
+          Object.entries(sourceVersions).some(([domain, expected]) => readDocument(domain).version !== expected);
         const domains = [renewalHandoffDomain];
+        if (stale) {
+          const attempted = action === 'renewal_paid' && ids.length === 1 && items.find(row => row.id === ids[0]);
+          const current = attempted && renewals.data?.items?.find(row => row.id === attempted.id);
+          if (!current || current.status !== 'processing' || current.processingBy?.id !== actor.id ||
+              attempted.version !== current.version + 1)
+            throw new LocalDataError(409, '续费或订单资料已更新，请刷新后核对');
+          if (!current.paymentReview) {
+            const nextVersion = renewals.version + 1;
+            const reviewed = { ...current, version: current.version + 1, paymentReview: true };
+            const nextItems = renewals.data.items.map(row => row.id === current.id ? reviewed : row);
+            putDocument(renewalHandoffDomain, nextVersion, { items: nextItems });
+            log.run(new Date().toISOString(), renewalHandoffDomain, 'renewal_payment_review',
+              auditSummary(renewalAuditLabels.renewal_payment_review, actor, current.id, auditOrderNumber(current.order?.number)),
+              nextVersion);
+          }
+          const result = { paymentReview: true };
+          putDocument(operation.domain, 1, { fingerprint: operation.fingerprint, domains, result });
+          return result;
+        }
+        items = structuredClone(items);
         if (action === 'renewal_paid') {
           const paid = items.find(row => row.id === ids[0]);
           const previous = renewals.data?.items?.find(row => row.id === paid?.id);
@@ -2328,7 +2356,7 @@ export function createLocalBusinessStore(databasePath) {
         putDocument(operation.domain, 1, { fingerprint: operation.fingerprint, domains });
       });
     },
-    finishRenewal({ snapshot, commerce, item, order, actor, operation, owners }) {
+    finishRenewal({ snapshot, commerce, sourceVersions, item, order, actor, operation, owners }) {
       const { version, data } = readDocument('appleBalance');
       const ledger = item.funding.ledgerPosted === true ? structuredClone(data)
         : stageConfirmedRenewalDebit(data, order, item.funding.actor, item.funding.at);
@@ -2337,7 +2365,8 @@ export function createLocalBusinessStore(databasePath) {
       if (ledger) writes.push({ domain: 'appleBalance', version, action: 'apple_order_charge', data: ledger });
       const card = item.funding.card;
       const updated = this.saveBatch(writes, { actor, readOrderOwners: owners, operation,
-        [verifiedOrderCards]: new Map(card ? [[card.id, card]] : []), [verifiedRenewalHandoff]: { version: snapshot.version, item, id: order.id } });
+        [verifiedOrderCards]: new Map(card ? [[card.id, card]] : []),
+        [verifiedRenewalHandoff]: { version: snapshot.version, sourceVersions, item, id: order.id } });
       return updated.find(entry => entry.domain === 'commerce')?.data.orders.find(row => row.id === order.id)?.orderNo;
     },
     saveStaffOrder(write, actor, operation, savedId) {
@@ -2372,8 +2401,9 @@ export function createLocalBusinessStore(databasePath) {
           if (domain === 'inventory') requireVerifiedRelayClaimIds(checkedRelayClaims(latest.data, writes[0], actor), []);
         }
         const renewals = handoff && readDocument(renewalHandoffDomain);
-        if (handoff && renewals.version !== handoff.version)
-          throw new LocalDataError(409, '续费已在其他页面更新，请刷新后核对');
+        if (handoff && (renewals.version !== handoff.version ||
+            Object.entries(handoff.sourceVersions).some(([domain, expected]) => readDocument(domain).version !== expected)))
+          throw new LocalDataError(409, '续费、库存或订阅资料已更新，请刷新后核对');
         if (writes.some(write => write.recordChange)) {
           if (writes.length !== 1) throw new WriteOperationError(400, '关联业务必须按整个批次核对版本');
           writes = writes.map(write => mergeContactWrite(write, readDocument(write.domain)));
@@ -3011,9 +3041,16 @@ export function createLocalBusinessStore(databasePath) {
           for (const card of nextTenantCards.filter(card => card.firstUse && !used.has(card.id)))
             log.run(now, 'tenant-cards', 'tenant_card_first_use', auditSummary('登记租户银行卡首次使用', actor, card.id), version);
         }
+        let extraction;
+        if (operation && inventoryWrite?.action === 'inventory_extract') {
+          const previousBatches = new Set((priorInventory?.batches || []).map(batch => batch.id));
+          const added = inventory.batches.filter(batch => !previousBatches.has(batch.id) &&
+            batch.actorId === (actor || localToolboxActor).id);
+          if (added.length === 1) extraction = { batchId: added[0].id };
+        }
         if (operation) put.run(operation.domain, 1, encrypt(key, operation.domain, 1, JSON.stringify({
           fingerprint: operation.fingerprint, domains: result.map(entry => entry.domain),
-          ...(staffOrderResult && { result: staffOrderResult })
+          ...(staffOrderResult && { result: staffOrderResult }), ...(extraction && { extraction })
         })));
         return staffOrderResult || result;
       });
@@ -3072,11 +3109,27 @@ export function createLocalBusinessStore(databasePath) {
         return { version: next, data };
       });
     },
-    recordSiteExport(actor, operation, label) {
+    recordSiteExport(actor, operation, prepare) {
+      function existingFile() {
+        const receipt = readDocument(operation.domain).data;
+        if (!receipt) return null;
+        if (receipt.domains?.includes('site-export') && !receipt.result) {
+          const { legacyOperation, metadata } = prepare();
+          checkWriteReceipt(receipt, legacyOperation);
+          return metadata;
+        }
+        checkWriteReceipt(receipt, operation);
+        return receipt.result;
+      }
+      const existing = existingFile();
+      if (existing) return existing;
+      const { label, metadata } = prepare();
       return writeTransaction(() => {
-        if (checkWriteReceipt(readDocument(operation.domain).data, operation)) return;
-        putDocument(operation.domain, 1, { fingerprint: operation.fingerprint, domains: ['site-export'] });
+        const replay = existingFile();
+        if (replay) return replay;
+        putDocument(operation.domain, 1, { fingerprint: operation.fingerprint, domains: ['site-export'], result: metadata });
         log.run(new Date().toISOString(), 'site-export', 'site_export', auditSummary(label, actor), 0);
+        return metadata;
       });
     },
     pendingFinanceCardOperations() { return readDocument(financeCardPendingDomain).data?.items || []; },
@@ -3145,8 +3198,16 @@ export function createLocalBusinessStore(databasePath) {
         tenantCards: readDocument('tenant-cards').data?.items || []
       });
     },
-    saveOrderCompletion(actor, command, readOrderOwners) {
+    saveOrderCompletion(actor, command, readOrderOwners, operationId) {
+      requireCompletionActor(actor);
+      const operation = describeWriteOperation(operationId, actor, ['order-completion', command]);
       return writeTransaction(() => {
+        const replay = replayWrite(operation, actor, { receiptResult: true });
+        if (replay) return replay;
+        const complete = (result, domains = ['commerce']) => {
+          if (operation) putDocument(operation.domain, 1, { fingerprint: operation.fingerprint, domains, result });
+          return result;
+        };
         const current = readDocument('commerce');
         const data = current.data;
         const at = new Date().toISOString();
@@ -3170,7 +3231,7 @@ export function createLocalBusinessStore(databasePath) {
                 appleAmountUnits(allocation.amount) === appleAmountUnits(amount) &&
                 appleAmountUnits(prior.paidAmount) === appleAmountUnits(amount) &&
                 ledger?.movements?.some(row => row.orderId === prior.id && row.appleIdId === prior.appleIdId && row.kind === 'order-charge'))
-              return { orderId, version: current.version };
+              return complete({ orderId, version: current.version });
             throw new LocalDataError(409, '原单已有付款记录，请在订单详情查看');
           }
           if (expectedVersion !== (prior.version ?? 0))
@@ -3193,11 +3254,11 @@ export function createLocalBusinessStore(databasePath) {
             at: auditDate.format(new Date(at)).slice(0, 16), actor: actor.name, actorId: actor.id }, ...(data.logs || [])];
           putDocument('commerce', version, data);
           log.run(at, 'commerce', 'order_completion_record_apple_payment', auditSummary(label, actor, order.id), version);
-          return { orderId, version };
+          return complete({ orderId, version }, ['commerce', 'appleBalance']);
         }
         if (command?.action === 'assign-manual-owners') {
           const assigned = assignMissingManualOrderOwners(data, actor, command, readOrderOwners, at);
-          if (!assigned.length) return { assigned: 0, version: current.version };
+          if (!assigned.length) return complete({ assigned: 0, version: current.version });
           const byId = new Map(assigned.map(order => [order.id, order]));
           const label = '补齐手工订单归属';
           data.orders = data.orders.map(row => byId.get(row.id) || row);
@@ -3208,7 +3269,7 @@ export function createLocalBusinessStore(databasePath) {
           put.run('commerce', version, encrypt(key, 'commerce', version, JSON.stringify(data)));
           for (const order of assigned)
             log.run(at, 'commerce', 'order_completion_assign_manual_owner', auditSummary(label, actor, order.id), version);
-          return { assigned: assigned.length, version };
+          return complete({ assigned: assigned.length, version });
         }
         const manual = command?.action === 'fill-manual-details';
         const prior = data?.orders?.find(row => row.id === command?.orderId);
@@ -3218,7 +3279,7 @@ export function createLocalBusinessStore(databasePath) {
           ? fillManualOrderDetails(data, inventory, actor, command, at, legacyConfirmed)
           : applyOrderCompletion(data, readDocument('settings').data, actor, command, readOrderOwners, at);
         const result = { orderId: order.id, version, ...(completion && { state: completion.state, missing: completion.missing }) };
-        if (order === prior && !customer) return { ...result, version: current.version };
+        if (order === prior && !customer) return complete({ ...result, version: current.version });
         if (!prior.subscriptionAnchor && !validOrderEmail(prior.email) && !validOrderXHandle(prior.xHandle) &&
             (validOrderEmail(order.email) || validOrderXHandle(order.xHandle))) {
           order.subscriptionAnchor = subscriptionChainRoot(prior, new Map(data.orders.map(row => [row.id, row]))).id;
@@ -3267,7 +3328,7 @@ export function createLocalBusinessStore(databasePath) {
         log.run(at, 'commerce', 'order_completion_' + command.action, auditSummary(label, actor, order.id), version);
         if (customer) log.run(at, 'commerce', createdCustomer ? 'order_completion_customer_create' : 'order_completion_customer_fill',
           auditSummary(createdCustomer ? '补全订单时新增客户' : '补齐客户资料', actor, customer.id), version);
-        return result;
+        return complete(result);
       });
     },
     applyRechargeOrder({ since, row, order, firstUse, codeRenewal }) {
@@ -3457,6 +3518,14 @@ export function createLocalBusinessStore(databasePath) {
       requireRecoveryManager(actor);
       return archivePreview(readDocument('inventory'), ...archiveDependencies(), id);
     },
+    inventoryExtractionReceipt(actor, operationId) {
+      const operation = describeWriteOperation(operationId, actor, []);
+      if (!operation) throw new LocalDataError(400, '缺少要核对的操作编号');
+      const receipt = readDocument(operation.domain).data;
+      return receipt?.domains?.includes('inventory') && receipt.extraction?.batchId
+        ? { status: 'saved', batchId: receipt.extraction.batchId }
+        : { status: 'pending' };
+    },
     archiveInventory(command, actor, operationId) {
       requireRecoveryManager(actor);
       return recordInventoryArchive(command, actor, operationId);
@@ -3566,6 +3635,15 @@ export async function handleLocalBusiness(
       if (request.headers.origin !== origin) throw new LocalDataError(403, '请从当前页面操作');
       return json(response, 200, store.archiveInventory(await readJson(request, 4096), actor, request.headers['x-id-operation']));
     }
+    if (domain === 'inventory/extraction-receipt' || domain === 'tools/mailbox-pool/delivery-receipt') {
+      const extraction = domain === 'inventory/extraction-receipt';
+      if (!extraction || actor) requireRecoveryManager(actor);
+      response.setHeader('Cache-Control', 'private, no-store');
+      if (request.method !== 'GET') throw new LocalDataError(405, '此接口只支持读取原操作回执');
+      const operationId = request.headers['x-id-operation'];
+      return json(response, 200, extraction ? store.inventoryExtractionReceipt(actor, operationId) :
+        store.managedMailboxDeliveryReceipt(actor, operationId));
+    }
     if (route === columnPreferencesRoute) {
       response.setHeader('Cache-Control', 'private, no-store');
       if (request.method !== 'PATCH') throw new LocalDataError(405, '列设置接口不支持此操作');
@@ -3596,7 +3674,8 @@ export async function handleLocalBusiness(
         return json(response, 200, store.orderCompletionView(actor, new URL(request.url, origin).searchParams, readOrderOwners));
       if (request.method !== 'POST') throw new LocalDataError(405, '不支持此补全操作');
       if (request.headers.origin !== origin) throw new LocalDataError(403, '仅允许从当前页面保存补全资料');
-      return json(response, 200, store.saveOrderCompletion(actor, await readJson(request), readOrderOwners));
+      return json(response, 200, store.saveOrderCompletion(actor, await readJson(request), readOrderOwners,
+        request.headers['x-id-operation']));
     }
     if (domain === 'claude-history-intake') {
       response.setHeader('Cache-Control', 'private, no-store');

@@ -223,7 +223,9 @@
       selection('site-export-status', '状态', [['', '全部'], ...states], status) +
       (orders ? selection('site-export-product', '产品',
         [['', '全部'], ...['GPT', 'Claude Pro', 'Claude Max', 'Gemini', 'Grok'].map(value => [value, value])], product) : '') +
-      '<button type="submit" class="button primary">下载表格</button></div><p data-site-export-result role="status" hidden></p></form></section>' +
+      '<button type="submit" class="button primary">下载表格</button>' +
+      A.button('核对上次下载', 'site-export-recover', '', '', pendingExport() ? '' : 'hidden') +
+      '</div><p data-site-export-result role="status" hidden></p></form></section>' +
       '<section class="panel panel-body site-management-card">' +
       title('资料保留期限', '此处展示现行规则和影响范围。业务记录的归档由管理员另外核对。', 'site-retention-help') +
       table('保留期限', ['资料', '保留多久', '影响范围'], [
@@ -359,7 +361,29 @@
     } finally { progress.finish(); }
   }
 
-  let exportPending = false, attempt;
+  const exportSource = $('meta[name="id-data-source"]')?.content || '';
+  let exportPending = false;
+  function exportKey() {
+    if (!canRead() || !A.state.actor?.id) return '';
+    return 'id-site-export:' + encodeURIComponent(exportSource) + ':' + encodeURIComponent(A.state.actor.id);
+  }
+  function pendingExport(key = exportKey()) {
+    if (!key) return null;
+    try {
+      const item = JSON.parse(sessionStorage.getItem(key));
+      if (/^[A-Za-z0-9_-]{16,120}$/.test(item?.id || '') &&
+          ['customers', 'orders'].includes(item.filter?.collection)) return item;
+    } catch {}
+    return null;
+  }
+  function setPendingExport(key, request) {
+    if (!key) return false;
+    try {
+      if (request) sessionStorage.setItem(key, JSON.stringify(request));
+      else sessionStorage.removeItem(key);
+      return true;
+    } catch { return false; }
+  }
   function captureExport(form) {
     const value = name => $('#site-export-' + name, form)?.value || '';
     const prior = exportView(), collection = value('collection');
@@ -370,36 +394,52 @@
     A.state.drafts.set(viewKey('export'), { ...next, period: prior.period });
     return next;
   }
-  async function exportData(form) {
+  async function exportData(form, retryButton) {
     if (exportPending) return;
-    const filter = captureExport(form), target = $('[data-site-export-result]', form);
+    const key = exportKey(), previous = pendingExport(key);
+    if (retryButton && !previous) return;
+    const filter = retryButton ? previous.filter : captureExport(form);
+    const target = $('[data-site-export-result]', form);
+    const recover = $('[data-action="site-export-recover"]', form);
+    const show = message => { target.textContent = message; target.hidden = false; };
     if (filter.start && filter.end && filter.start > filter.end) {
-      target.textContent = '结束日期应在开始日期当天或之后。';
-      target.hidden = false;
+      show('结束日期应在开始日期当天或之后。');
+      return;
+    }
+    if (previous && !retryButton && JSON.stringify(previous.filter) !== JSON.stringify(filter)) {
+      show('有一次下载待核对，请先核对上次下载。');
+      return;
+    }
+    const request = previous || { filter, id: crypto.randomUUID() };
+    if (!previous && !setPendingExport(key, request)) {
+      show('无法保留下载编号。请允许此站点使用会话存储后再下载。');
       return;
     }
     exportPending = true;
-    const fingerprint = JSON.stringify(filter);
-    if (attempt?.fingerprint !== fingerprint) attempt = { fingerprint, id: crypto.randomUUID() };
-    const request = attempt;
-    const progress = A.beginActionFeedback($('button[type="submit"]', form), '正在准备下载…');
+    recover.hidden = false;
+    const progress = A.beginActionFeedback(retryButton || $('button[type="submit"]', form), '正在准备下载…');
+    const isCurrent = () => form.isConnected && currentView() === 'export' && exportKey() === key;
     try {
-      if (!form.isConnected) return;
-      const { content, count: total } = await D.siteExport(filter, request.id);
-      if (attempt === request) attempt = undefined;
-      if (!form.isConnected) return;
+      const { content, count: total } = await D.siteExport(request.filter, request.id);
+      if (!isCurrent()) return;
       const url = URL.createObjectURL(content), file = document.createElement('a');
       file.href = url;
-      file.download = (filter.collection === 'orders' ? '订单' : '客户') + (filter.detail === 'business' ? '-明细.csv' : '-脱敏.csv');
+      file.download = (request.filter.collection === 'orders' ? '订单' : '客户') +
+        (request.filter.detail === 'business' ? '-明细.csv' : '-脱敏.csv');
       document.body.append(file);
       file.click();
       file.remove();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-      target.textContent = '已生成 ' + count(total) + ' 条资料。';
-      target.hidden = false;
+      setPendingExport(key, null);
+      recover.hidden = true;
+      show('已生成 ' + count(total) + ' 条资料。');
     } catch (error) {
-      if ([400, 403, 409].includes(error.status) && attempt === request) attempt = undefined;
-      if (form.isConnected) { target.textContent = error.message || '下载未完成，请重试。'; target.hidden = false; }
+      const rejected = [400, 403, 409, 410, 413].includes(error.status);
+      if (rejected) setPendingExport(key, null);
+      if (isCurrent()) {
+        recover.hidden = rejected;
+        show(rejected ? error.message : '下载结果待核对，请点击「核对上次下载」。');
+      }
     } finally { exportPending = false; progress.finish(); }
   }
 
@@ -409,7 +449,6 @@
     afterRender: () => { if (reports[currentView()]) void read(currentView()); },
     clearPageState() {
       for (const key of ['health', 'performance', 'diagnostic', 'export', 'resource-trend']) A.state.drafts.delete(viewKey(key));
-      attempt = undefined;
     },
     onDataChanges(scopesChanged) {
       const changed = name => scopesChanged.includes(name);
@@ -418,7 +457,11 @@
       if (currentView() === 'health' && ['commerce', 'inventory', 'order-sync'].some(changed)) return read('health', true);
       if (currentView() === 'backups' && changed('site-backups')) return read('backups', true);
     },
-    onClick(action) {
+    onClick(action, node) {
+      if (action === 'site-export-recover') {
+        void exportData(node.form, node);
+        return true;
+      }
       if (action !== 'site-refresh' || !reports[currentView()]) return false;
       void read(currentView(), true);
       return true;

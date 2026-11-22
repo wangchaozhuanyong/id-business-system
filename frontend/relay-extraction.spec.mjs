@@ -25,7 +25,7 @@ const relay = (id, parentMailboxId, values = {}) => ({
 const primary = 'test-primary';
 const exampleCode = 'BUY-TEST-RELAY-ONLY';
 
-async function fixture({ auth = true, role = 'admin', configured = true } = {}) {
+async function fixture({ auth = true, role = 'admin', configured = true, oldDataModule = false } = {}) {
   const expired = relay('relay-expired', primary);
   const eligible = relay('relay-eligible', primary);
   const disabled = relay('relay-disabled', primary, { relayStatus: 'DISABLED' });
@@ -48,6 +48,7 @@ async function fixture({ auth = true, role = 'admin', configured = true } = {}) 
   let deferredCopy;
   const actor = { id: 'relay-admin-fixture', name: '提取测试员', role };
   const calls = [];
+  const storage = new Map();
   const copies = [];
   const notices = [];
   const errors = new Map();
@@ -60,6 +61,11 @@ async function fixture({ auth = true, role = 'admin', configured = true } = {}) 
   };
   const window = {
     IDDesignModules: [],
+    sessionStorage: {
+      getItem: key => storage.get(key) ?? null,
+      setItem: (key, value) => storage.set(key, value),
+      removeItem: key => storage.delete(key)
+    },
     async fetch(path, options) {
       const method = options.method || 'GET';
       const body = options.body && JSON.parse(options.body);
@@ -172,6 +178,10 @@ async function fixture({ auth = true, role = 'admin', configured = true } = {}) 
   const context = { window, document, structuredClone, crypto, AbortSignal };
   const sandbox = runInNewContext(dataSource + '\nwindow.IDLocalData;', context);
   assert.equal(sandbox.authRequired, auth);
+  if (oldDataModule) {
+    const { rememberWriteReceipt, pendingWriteReceipt, forgetWriteReceipt, ...legacy } = sandbox;
+    window.IDLocalData = Object.freeze(legacy);
+  }
   runInNewContext(inventorySource, context);
   const inventory = window.IDDesignModules.find((module) => module.id === 'inventory');
   inventory.render();
@@ -244,6 +254,15 @@ async function fixture({ auth = true, role = 'admin', configured = true } = {}) 
     }
   };
 }
+
+test('旧数据模块仍能读取库存，刷新前不发送未带回执保护的提取', async () => {
+  const page = await fixture({ oldDataModule: true });
+  await page.extract(1);
+  await page.accept();
+  assert(page.calls.some(call => call.path === '/api/local/inventory' && call.method === 'GET'));
+  assert(!page.calls.some(call => call.path === '/api/local/inventory' && call.method === 'PUT'));
+  assert(page.notices.includes('页面资源已更新，请整页刷新后再提取。'));
+});
 
 test('only an authenticated administrator can select Apple Relay in mailbox extraction', async () => {
   const admin = await fixture();
