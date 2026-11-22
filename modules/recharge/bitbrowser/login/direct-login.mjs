@@ -216,40 +216,15 @@ async function runDirectJsonSession(settings, expected, windowName, signal, hook
         await waitDirectLogin(signal);
       }
     };
-    const isRotatingProxy = Boolean(
-      settings.staticProxyCredentials?.username &&
-        (settings.staticProxyCredentials.username.includes('{session}') ||
-          /-session-[a-zA-Z0-9_-]+?(-sessiontime-|$)/i.test(settings.staticProxyCredentials.username))
-    );
-    const applyProxyConfiguration = async () => {
-      const proxyOptions = Object.fromEntries(
-        Object.entries(directProfileOptions(settings)).filter(
-          ([key]) =>
-            ![
-              'browserFingerPrint',
-              'syncTabs',
-              'syncCookies',
-              'syncLocalStorage',
-              'syncIndexedDb',
-              'syncAuthorization'
-            ].includes(key)
-        )
-      );
+    if (ownedProfile && settings.updateOwnedProxy) {
+      await closeProfile();
+      const proxyOptions = Object.fromEntries(Object.entries(directProfileOptions(settings)).filter(
+        ([key]) => !['browserFingerPrint', 'syncTabs', 'syncCookies', 'syncLocalStorage', 'syncIndexedDb', 'syncAuthorization'].includes(key)));
       await api.post('/browser/update', { id: profileId, ...proxyOptions }, remaining());
       detail = (await api.post('/browser/detail', { id: profileId }, remaining())).data;
-      if (
-        !detail ||
-        detail.id !== profileId ||
-        Object.entries(proxyOptions).some(
-          ([key, value]) => String(detail[key] ?? '') !== String(value)
-        )
-      )
+      if (!detail || detail.id !== profileId || Object.entries(proxyOptions).some(([key, value]) => String(detail[key] ?? '') !== String(value)))
         throw new DirectBrowserError('bitbrowser_profile_configuration_mismatch');
       await hooks.progress('bitbrowser_proxy_updated', { browser_profile_id: profileId });
-    };
-    if (ownedProfile && (settings.updateOwnedProxy || isRotatingProxy)) {
-      await closeProfile();
-      await applyProxyConfiguration();
     }
     let originallyRunning = false;
     if (ownedProfile) {
@@ -368,10 +343,7 @@ async function runDirectJsonSession(settings, expected, windowName, signal, hook
       );
       return true;
     };
-    const isDynamicProxy =
-      (Boolean(settings.dynamicProxyUrl) && directProfileOptions(settings).proxyMethod === 3) ||
-      isRotatingProxy;
-    const openSession = async (extractIp = isDynamicProxy) => {
+    const openSession = async (extractIp = false) => {
       remaining();
       attempts++;
       networkFailed = false;
@@ -502,7 +474,7 @@ async function runDirectJsonSession(settings, expected, windowName, signal, hook
           throw new DirectBrowserError('official_login_not_verified');
         networkFailed = true;
       }
-      proxyDeadline = Math.min(deadline, Date.now() + 60_000);
+      proxyDeadline = Math.min(deadline, Date.now() + 20_000);
       await hooks.progress('session_restore', {
         session_attempt: attempts,
         session_attempt_limit: attemptLimit
@@ -569,7 +541,7 @@ async function runDirectJsonSession(settings, expected, windowName, signal, hook
           throw new DirectBrowserError('proxy_probe_unverified');
       }
       if (
-        (!isDynamicProxy) ||
+        directProfileOptions(settings).proxyMethod !== 3 ||
         settings.browserOptions?.sessionRetryLimit === 0 ||
         attempts >= attemptLimit
       )
@@ -586,10 +558,6 @@ async function runDirectJsonSession(settings, expected, windowName, signal, hook
         session_attempt_limit: attemptLimit
       });
       canInjectOnUnauthenticated = Boolean(expected.token);
-      settings._resolvedProxyUserName = undefined;
-      if (isRotatingProxy) {
-        await applyProxyConfiguration();
-      }
       await openSession(true);
       expiredDeadline = undefined;
       automaticDeadline = Math.min(
@@ -611,13 +579,7 @@ async function runDirectJsonSession(settings, expected, windowName, signal, hook
           manualStarted === undefined
             ? Math.min(remaining(), proxyDeadline - Date.now())
             : Math.min(20_000, remaining());
-        if (probeRemaining <= 0) {
-          if (isDynamicProxy && attempts < attemptLimit && manualStarted === undefined) {
-            networkFailed = true;
-            continue;
-          }
-          throw new DirectBrowserError('proxy_probe_unverified');
-        }
+        if (probeRemaining <= 0) throw new DirectBrowserError('proxy_probe_unverified');
         const probeReadDeadline = Date.now() + probeRemaining;
         const probe = await activeCdp.evaluate(
           sessionId,
@@ -628,13 +590,8 @@ async function runDirectJsonSession(settings, expected, windowName, signal, hook
         if (
           Date.now() >= probeReadDeadline &&
           !['proxy_network_failed', 'manual'].includes(probe.kind)
-        ) {
-          if (isDynamicProxy && attempts < attemptLimit && manualStarted === undefined) {
-            networkFailed = true;
-            continue;
-          }
+        )
           throw new DirectBrowserError('proxy_probe_unverified');
-        }
         if (probe.kind === 'proxy_network_failed') {
           if (manualStarted !== undefined) {
             await waitDirectLogin(signal);
@@ -643,13 +600,8 @@ async function runDirectJsonSession(settings, expected, windowName, signal, hook
           networkFailed = true;
           continue;
         }
-        if (probe.kind === 'proxy_unverified') {
-          if (isDynamicProxy && attempts < attemptLimit && manualStarted === undefined) {
-            networkFailed = true;
-            continue;
-          }
+        if (probe.kind === 'proxy_unverified')
           throw new DirectBrowserError('proxy_probe_unverified');
-        }
         if (probe.kind === 'proxy_ready') {
           proxyReady = true;
           if (manualReported && manualState === 'manual') {
@@ -713,26 +665,25 @@ async function runDirectJsonSession(settings, expected, windowName, signal, hook
         continue;
       }
       const observedKind = state.kind;
-      const hasIdentity = state.kind === 'identity' || (state.kind === 'expired' && typeof state.email === 'string');
       if (
-        expected.token && ownedProfile && !suppliedSessionChecked &&
-        (hasIdentity || (state.kind === 'expired' && state.refreshFailed === true))
+        expected.token &&
+        ownedProfile &&
+        !suppliedSessionChecked &&
+        (state.kind === 'identity' || (state.kind === 'expired' && typeof state.email === 'string'))
       ) {
-        if (hasIdentity && (
+        if (
           state.email?.toLowerCase() !== expected.email ||
           state.userId !== expected.userId ||
           state.accountId !== expected.accountId
-        ))
+        )
           throw new DirectBrowserError('official_login_email_mismatch');
         suppliedSessionChecked = true;
-        if ((settings.updateOwnedAuthorization || state.kind === 'expired') && await injectCookies(true)) {
+        if (state.kind === 'expired' && (await injectCookies(true))) {
           canInjectOnUnauthenticated = false;
           pageReadyDeadline = automaticDeadline;
           expiredDeadline = undefined;
-          sessionRefreshRequested = false;
-          tokenRejected = false;
           await hooks.progress('session_restore', {
-            ...(hasIdentity && { account_matched: true }),
+            account_matched: true,
             session_step: 'page_refresh',
             session_refresh_count: 1
           });

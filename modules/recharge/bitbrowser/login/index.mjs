@@ -84,7 +84,6 @@ export async function runBitBrowserJsonLogin({
   }
   const profileName = requiredName(windowName, '窗口名称', 100);
   const accountKey = await digest(accountId);
-  const authorizationFingerprint = await digest(expected.token);
   const connectionKey = await digest(JSON.stringify([localApiUrl, await digest(token), connectionId]));
   const key = `${connectionKey}#${accountKey}`;
   const networkOptions = Object.fromEntries(Object.entries(directProfileOptions(settings)).filter(
@@ -146,9 +145,6 @@ export async function runBitBrowserJsonLogin({
       }
     }
     settings.updateOwnedProxy = Boolean((useSelectedProxy || expectedCountryCode) && saved && saved.proxyConfiguration !== proxyConfiguration);
-    // The fingerprint is kept only in this page, separate from the server's window record.
-    settings.updateOwnedAuthorization = previous?.profile?.profileId !== saved?.profile?.profileId ||
-      previous?.authorizationFingerprint !== authorizationFingerprint;
     const result = await runDirectJsonSession(settings, expected, profileName, signal, {
       accountKey,
       restore: async () => ({ ownedProfile: saved?.profile }),
@@ -159,8 +155,6 @@ export async function runBitBrowserJsonLogin({
         onProgress?.(stage);
       }
     });
-    if (saved?.profile?.profileId === result.browser_profile_id)
-      ownedProfiles.set(key, { ...saved, authorizationFingerprint });
     return {
       email,
       profileId: result.browser_profile_id,
