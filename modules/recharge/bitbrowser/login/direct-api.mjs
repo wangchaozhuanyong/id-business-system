@@ -297,7 +297,9 @@ async function directBrowserCatalog(url, token, signal) {
 }
 function resolveDynamicProxyUsername(username) {
   if (typeof username !== 'string' || !username) return '';
-  const rand = Math.floor(10000000 + Math.random() * 90000000);
+  const array = new Uint32Array(1);
+  crypto.getRandomValues(array);
+  const rand = 10000000 + (array[0] % 90000000);
   if (username.includes('{session}')) {
     return username.replaceAll('{session}', String(rand));
   }
