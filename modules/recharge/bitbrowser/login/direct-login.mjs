@@ -5,6 +5,7 @@ import {
   directBrowserCatalog,
   directBrowserProfileExists,
   directProfileOptions,
+  resolveDynamicProxyUsername,
   verifyDirectProfileConfiguration,
   directBrowserFailure,
   DirectBrowserError
@@ -216,20 +217,45 @@ async function runDirectJsonSession(settings, expected, windowName, signal, hook
         await waitDirectLogin(signal);
       }
     };
-    if (ownedProfile && settings.updateOwnedProxy) {
-      await closeProfile();
+    const isRotatingProxy = Boolean(
+      settings.staticProxyCredentials?.username &&
+        (settings.staticProxyCredentials.username.includes('{session}') ||
+          /([-_:]session[-_:])([a-zA-Z0-9_-]+?)((?:[-_:]sessiontime[-_:]|\b|$))/i.test(settings.staticProxyCredentials.username))
+    );
+    const applyProxyConfiguration = async () => {
       const allOptions = directProfileOptions(settings);
-      const proxyOptions = Object.fromEntries(Object.entries(allOptions).filter(
-        ([key]) => !['browserFingerPrint', 'syncTabs', 'syncCookies', 'syncLocalStorage', 'syncIndexedDb', 'syncAuthorization'].includes(key)));
+      const proxyOptions = Object.fromEntries(
+        Object.entries(allOptions).filter(
+          ([key]) =>
+            ![
+              'browserFingerPrint',
+              'syncTabs',
+              'syncCookies',
+              'syncLocalStorage',
+              'syncIndexedDb',
+              'syncAuthorization'
+            ].includes(key)
+        )
+      );
       await api.post('/browser/update', {
         id: profileId,
         ...proxyOptions,
         browserFingerPrint: detail.browserFingerPrint ?? allOptions.browserFingerPrint
       }, remaining());
       detail = (await api.post('/browser/detail', { id: profileId }, remaining())).data;
-      if (!detail || detail.id !== profileId || Object.entries(proxyOptions).some(([key, value]) => String(detail[key] ?? '') !== String(value)))
+      if (
+        !detail ||
+        detail.id !== profileId ||
+        Object.entries(proxyOptions).some(
+          ([key, value]) => String(detail[key] ?? '') !== String(value)
+        )
+      )
         throw new DirectBrowserError('bitbrowser_profile_configuration_mismatch');
       await hooks.progress('bitbrowser_proxy_updated', { browser_profile_id: profileId });
+    };
+    if (ownedProfile && (settings.updateOwnedProxy || isRotatingProxy)) {
+      await closeProfile();
+      await applyProxyConfiguration();
     }
     let originallyRunning = false;
     if (ownedProfile) {
@@ -348,7 +374,10 @@ async function runDirectJsonSession(settings, expected, windowName, signal, hook
       );
       return true;
     };
-    const openSession = async (extractIp = false) => {
+    const isDynamicProxy =
+      (Boolean(settings.dynamicProxyUrl) && directProfileOptions(settings).proxyMethod === 3) ||
+      isRotatingProxy;
+    const openSession = async (extractIp = isDynamicProxy) => {
       remaining();
       attempts++;
       networkFailed = false;
@@ -546,7 +575,7 @@ async function runDirectJsonSession(settings, expected, windowName, signal, hook
           throw new DirectBrowserError('proxy_probe_unverified');
       }
       if (
-        directProfileOptions(settings).proxyMethod !== 3 ||
+        (!isDynamicProxy) ||
         settings.browserOptions?.sessionRetryLimit === 0 ||
         attempts >= attemptLimit
       )
@@ -563,6 +592,10 @@ async function runDirectJsonSession(settings, expected, windowName, signal, hook
         session_attempt_limit: attemptLimit
       });
       canInjectOnUnauthenticated = Boolean(expected.token);
+      settings._resolvedProxyUserName = undefined;
+      if (isRotatingProxy) {
+        await applyProxyConfiguration();
+      }
       await openSession(true);
       expiredDeadline = undefined;
       automaticDeadline = Math.min(

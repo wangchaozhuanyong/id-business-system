@@ -31,6 +31,16 @@ test('native probing recognizes protocol and only accepts an actual successful e
   assert.equal(result.protocol, 'http'); assert.match(result.link, /^http:/); assert.equal(result.countryCode, 'PH'); assert.equal(result.ip, '8.8.8.8');
   assert.equal(calls[0].body.checkExists, 0);
 });
+test('native probing resolves rotating session usernames before checking agent', async t => {
+  const calls = [];
+  t.mock.method(globalThis, 'fetch', async (url, options) => {
+    calls.push({ url, body: JSON.parse(options.body) });
+    return Response.json({ success: true, data: { success: true, data: { ip: '8.8.8.8', countryCode: 'ph' } } });
+  });
+  await testBitBrowserProxy({ link: 'd7234158000-mob-country-ph-session-44052610-sessiontime-10:pwd@proxy.test:8082', url: 'http://127.0.0.1:54345', token: 'synthetic-key' });
+  assert.match(calls[0].body.proxyUserName, /^d7234158000-mob-country-ph-session-\d{8}-sessiontime-10$/);
+  assert.notEqual(calls[0].body.proxyUserName, 'd7234158000-mob-country-ph-session-44052610-sessiontime-10');
+});
 test('native failures and private or malformed exit addresses are never reported as usable', async t => {
   t.mock.method(globalThis, 'fetch', async () => Response.json({ success: true, data: { success: true, data: { ip: '127.0.0.1' } } }));
   await assert.rejects(() => testBitBrowserProxy({ link: 'socks5://user:synthetic-password@proxy.test:1080', url: 'http://127.0.0.1:54345', token: 'synthetic-key' }), error => !error.message.includes('synthetic-password'));
