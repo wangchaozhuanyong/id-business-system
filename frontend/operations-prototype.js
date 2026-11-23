@@ -2996,7 +2996,7 @@
         button('更多', 'ops-mailbox-pool-more', 'mailbox-account__more', 'more', `${attrs} aria-label="更多操作：${esc(row.email)}" aria-haspopup="menu"`);
       const source = row.inventorySources?.map(type => mailboxSources[type]).filter(Boolean).join('、') || (row.source === 'claude' ? 'Claude 账号' : '手工登记');
       const code = row.associationConflict ? '关联待核对' : row.authorizationPending ? '授权后生成' :
-        `<output data-mailbox-code="${esc(row.id)}">正在读取…</output>`;
+        `<output data-mailbox-code="${esc(row.id)}">正在读取…</output>${button('复制', 'ops-mailbox-pool-copy-existing', '', '', attrs + ' disabled aria-label="复制买家查询码"')}`;
       return `<tr class="mailbox-account">${selected ? `<td><input type="checkbox" data-mailbox-batch-id="${esc(row.id)}" aria-label="选择 ${esc(row.email)}" ${selected.has(row.id) ? 'checked' : ''}></td>` : ''}<td><div class="mailbox-account__heading"><strong title="${esc(row.email)}">${esc(row.email)}</strong></div></td><td class="mailbox-account__text" title="${esc(mailboxProviders[row.provider] || '待选择')}">${esc(mailboxProviders[row.provider] || '待选择')}</td><td class="mailbox-account__text" title="${esc(row.label || '未填写备注')}">${esc(row.label || '—')}</td><td class="mailbox-account__text" title="${esc(source)}">${esc(source)}</td><td><div class="mailbox-account__code">${code}</div></td><td>${tag(mailboxStatuses[status], status === 'active' ? 'success' : status === 'disabled' ? '' : 'warning')}</td><td class="mailbox-account__date">${formatMailboxDate(row.expiresAt)}</td><td>${esc(delivery?.remaining(row) || '—')}</td><td class="mailbox-account__date">${formatMailboxDate(row.lastQueriedAt)}</td><td><div class="mailbox-row-actions">${actions}</div></td></tr>`;
     }).join('')}</tbody></table></div>${renderPagination({ id: 'operations-mailbox-pool', page, pageSize, total: items.length })}`;
     void loadVisibleMailboxCodes(panel);
@@ -3016,21 +3016,29 @@
     if (!toolActive(panel) || Number(panel.dataset.version) !== version) return;
     for (const output of outputs) {
       if (!output.isConnected) continue;
+      const copy = output.nextElementSibling;
       const code = codes?.get(output.dataset.mailboxCode);
       const unavailable = !failure && typeof code === 'string' && !code;
       output.textContent = code || (unavailable ? '未登记查询码' : '读取失败');
       output.title = code || (unavailable ? '未登记查询码' :
         failure?.status === 409 ? '邮箱池已更新，请刷新列表' : '读取失败，请刷新列表');
+      if (copy && copy.dataset.action === 'ops-mailbox-pool-copy-existing') {
+        copy.disabled = !code || unavailable || [401, 403, 409].includes(failure?.status);
+      }
     }
   }
   async function copyManagedMailboxCode(panel, node) {
     const operator = localData.actor()?.id;
     const current = () => toolActive(panel) && operator === localData.actor()?.id;
-    await api.withActionFeedback(null, async () => {
+    await api.withActionFeedback(node?.isConnected ? node : null, async () => {
       const { code } = await localData.managedMailboxCode(node.dataset.id);
       const output = current() && panel.querySelector(`[data-mailbox-code="${CSS.escape(node.dataset.id)}"]`);
-      if (output) output.title = output.textContent = code;
-      await api.copyText(code, '已复制当前查询码', { current });
+      if (output) {
+        output.title = output.textContent = code;
+        const copy = output.nextElementSibling;
+        if (copy && copy.dataset.action === 'ops-mailbox-pool-copy-existing') copy.disabled = !code;
+      }
+      await api.copyText(code, '买家查询码已复制', { current });
     }, { failure: '当前查询码读取失败' });
   }
   async function loadManagedPool(panel, { refresh = false } = {}) {

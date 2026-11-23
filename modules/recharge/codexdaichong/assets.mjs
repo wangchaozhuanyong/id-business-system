@@ -2228,27 +2228,30 @@ function adaptHtml(source, kind) {
       '失败后该卡密会被锁定，任何账号都不能再次使用；确认处理后在这里解除。',
       '这里只显示已转入人工确认的记录。确认未扣款、未开通后，可解除锁定，让对应的兑换码重新提交。');
     source = replaceSection(source, '<!-- 第三方代充 API 设置 -->', '<div class="config-grid">', `
-            <div class="panel">
+            <div class="panel orbitcard-config-panel" id="orbitcard_config_panel">
                 <h2 class="panel-title">Orbitcard 卡片管理</h2>
-                <div class="toggle-field">
-                    <label for="orbitcard_live_management">允许实时查余额、恢复及绑定套餐</label>
+                <p>自有虚拟信用卡服务商（卡商）接口对接。配置后系统可在自动充值前实时核验卡片可用余额与有效状态，防止因余额不足被拒付。此设置仅用于自有卡池管理，非第三方代充。</p>
+                <div class="toggle-field orbitcard-toggle">
+                    <label for="orbitcard_live_management" class="toggle-label">启用卡商实时同步（允许实时查询余额、检测卡片状态及绑定套餐）</label>
                     <input type="checkbox" id="orbitcard_live_management">
                 </div>
-                <div class="form-group">
-                    <label for="orbitcard_base_url">Orbitcard 地址</label>
-                    <input type="text" id="orbitcard_base_url" class="asset-input" autocomplete="off">
+                <div class="orbitcard-form-grid">
+                    <div class="form-group orbitcard-field-full">
+                        <label for="orbitcard_base_url">Orbitcard 接口地址 <span class="field-hint">（卡商 API 基础地址，默认 https://orbitcard.cc）</span></label>
+                        <input type="text" id="orbitcard_base_url" class="asset-input" placeholder="https://orbitcard.cc" autocomplete="off">
+                    </div>
+                    <div class="form-group">
+                        <label for="orbitcard_api_key">Orbitcard API Key <span class="field-hint">（卡商身份 Key）</span></label>
+                        <input type="password" id="orbitcard_api_key" class="asset-input" placeholder="已配置，留空不修改" autocomplete="off">
+                    </div>
+                    <div class="form-group">
+                        <label for="orbitcard_api_secret">Orbitcard Secret <span class="field-hint">（API 密钥）</span></label>
+                        <input type="password" id="orbitcard_api_secret" class="asset-input" placeholder="已配置，留空不修改" autocomplete="off">
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label for="orbitcard_api_key">Orbitcard API Key</label>
-                    <input type="password" id="orbitcard_api_key" class="asset-input" autocomplete="off">
-                </div>
-                <div class="form-group">
-                    <label for="orbitcard_api_secret">Orbitcard Secret</label>
-                    <input type="password" id="orbitcard_api_secret" class="asset-input" autocomplete="off">
-                </div>
-                <p id="orbitcard_config_status" role="status"></p>
-                <div class="import-actions">
+                <div class="orbitcard-actions">
                     <button type="button" id="orbitcard_config_save" class="btn btn-primary" onclick="saveOrbitcardConfig()" disabled>保存 Orbitcard 配置</button>
+                    <p id="orbitcard_config_status" class="orbitcard-status" role="status"></p>
                 </div>
             </div>
     `);

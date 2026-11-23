@@ -3204,6 +3204,10 @@ dialog::backdrop {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   line-height: 20px;
 }
+.mailbox-account__code .button {
+  flex: none;
+  padding-inline: 10px;
+}
 .mailbox-account__date {
   color: var(--secondary);
   font-size: 12px;
@@ -3553,6 +3557,7 @@ dialog::backdrop {
 }
 .relay-buyer-code > .button {
   flex: none;
+  padding-inline: 10px;
 }
 .row-action-menu:popover-open {
   display: grid;
