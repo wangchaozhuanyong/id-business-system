@@ -67,6 +67,16 @@ import {
   writeBitBrowserConnection
 } from './bitbrowser-connections.mjs';
 import { bitBrowserWindowDomain, BitBrowserWindowError, readWindowRecord, writeWindowRecord } from './bitbrowser-login-windows.mjs';
+import {
+  nativeWorkbenchDomain,
+  queryWorkbenchAccounts,
+  upsertWorkbenchAccount,
+  updateWorkbenchNote,
+  updateAccountSessionJson,
+  removeWorkbenchAccount,
+  launchWorkbenchBrowser,
+  closeWorkbenchBrowser
+} from './native-browser-workbench.mjs';
 import { bitBrowserProxyDomain, validateBitBrowserProxyWrite, summarizeBitBrowserProxies, readBitBrowserProxy } from './bitbrowser-proxies.mjs';
 import { checkAppleIdHealthChanges, checkInventoryHistory } from './inventory-history.mjs';
 import { createRelayDeliveryJournal } from './apple-relay/code-reset.mjs';
@@ -2180,6 +2190,92 @@ export function createLocalBusinessStore(databasePath) {
         return { record };
       });
     },
+    loadNativeWorkbenchAccounts(query, actor) {
+      const { version, data } = readDocument(`${nativeWorkbenchDomain}:${actor.id}`);
+      const items = queryWorkbenchAccounts(data ?? [], query);
+      return { version, items, total: (data ?? []).length };
+    },
+    saveNativeWorkbenchAccount(body, actor) {
+      const domain = `${nativeWorkbenchDomain}:${actor.id}`;
+      return writeTransaction(() => {
+        const current = readDocument(domain);
+        const { record, records } = upsertWorkbenchAccount(current.data ?? [], body);
+        const version = current.version + 1;
+        put.run(domain, version, encrypt(key, domain, version, JSON.stringify(records)));
+        log.run(new Date().toISOString(), nativeWorkbenchDomain, 'native_workbench_save',
+          auditSummary('保存代充账号资料', actor, record.id), version);
+        return { version, record };
+      });
+    },
+    updateNativeWorkbenchNote(body, actor) {
+      const domain = `${nativeWorkbenchDomain}:${actor.id}`;
+      return writeTransaction(() => {
+        const current = readDocument(domain);
+        const { record, records } = updateWorkbenchNote(current.data ?? [], body);
+        const version = current.version + 1;
+        put.run(domain, version, encrypt(key, domain, version, JSON.stringify(records)));
+        log.run(new Date().toISOString(), nativeWorkbenchDomain, 'native_workbench_note',
+          auditSummary('更新代充续费备注', actor, record.id), version);
+        return { version, record };
+      });
+    },
+    deleteNativeWorkbenchAccount(body, actor) {
+      const domain = `${nativeWorkbenchDomain}:${actor.id}`;
+      return writeTransaction(() => {
+        const current = readDocument(domain);
+        const { records } = removeWorkbenchAccount(current.data ?? [], body?.id);
+        const version = current.version + 1;
+        put.run(domain, version, encrypt(key, domain, version, JSON.stringify(records)));
+        log.run(new Date().toISOString(), nativeWorkbenchDomain, 'native_workbench_delete',
+          auditSummary('移除代充账号记录', actor, body?.id), version);
+        return { version, ok: true };
+      });
+    },
+    async launchNativeWorkbenchBrowser(body, actor) {
+      const domain = `${nativeWorkbenchDomain}:${actor.id}`;
+      const current = readDocument(domain);
+      const launchRes = await launchWorkbenchBrowser(current.data ?? [], body?.id, { customProxyUrl: body?.proxyUrl });
+      writeTransaction(() => {
+        const version = current.version + 1;
+        put.run(domain, version, encrypt(key, domain, version, JSON.stringify(launchRes.records)));
+        log.run(new Date().toISOString(), nativeWorkbenchDomain, 'native_browser_launch',
+          auditSummary('拉起原生代充浏览器', actor, body?.id), version);
+      });
+      return { ok: true, account: launchRes.account, result: launchRes.result };
+    },
+    closeNativeWorkbenchBrowser(body, actor) {
+      const domain = `${nativeWorkbenchDomain}:${actor.id}`;
+      const current = readDocument(domain);
+      const res = closeWorkbenchBrowser(current.data ?? [], body?.id);
+      log.run(new Date().toISOString(), nativeWorkbenchDomain, 'native_browser_close',
+        auditSummary('关闭原生代充浏览器', actor, body?.id), current.version);
+      return res;
+    },
+    async updateNativeWorkbenchJson(body, actor) {
+      const domain = `${nativeWorkbenchDomain}:${actor.id}`;
+      const current = readDocument(domain);
+      const { record, records } = updateAccountSessionJson(current.data ?? [], body?.id, body?.sessionJson);
+
+      let launchRes = null;
+      let finalRecords = records;
+      if (body?.autoLaunch) {
+        launchRes = await launchWorkbenchBrowser(records, record.id, { customProxyUrl: body?.proxyUrl });
+        finalRecords = launchRes.records;
+      }
+
+      writeTransaction(() => {
+        const version = current.version + 1;
+        put.run(domain, version, encrypt(key, domain, version, JSON.stringify(finalRecords)));
+        log.run(new Date().toISOString(), nativeWorkbenchDomain, 'native_workbench_update_json',
+          auditSummary('更换账号授权凭据' + (body?.autoLaunch ? '并启动' : ''), actor, body?.id), version);
+      });
+
+      return {
+        ok: true,
+        record,
+        launch: launchRes ? { ok: true, account: launchRes.account } : null
+      };
+    },
     loadBitBrowserProxies(actor) {
       const { version, data } = readDocument(`${bitBrowserProxyDomain}:${actor.id}`);
       const items = summarizeBitBrowserProxies(data ?? []);
@@ -3766,6 +3862,37 @@ export async function handleLocalBusiness(
         return json(response, 200, store.revealSavedTotp(await readJson(request), actor));
       }
       throw new LocalDataError(405, '本机接口不支持此操作');
+    }
+    if (domain === nativeWorkbenchDomain) {
+      if (!actor?.id) throw new LocalDataError(401, '请先登录');
+      response.setHeader('Cache-Control', 'private, no-store');
+      if (request.headers.origin !== origin) throw new LocalDataError(403, '仅允许从当前页面操作');
+      if (request.method === 'GET') {
+        const search = url.searchParams.get('search') || '';
+        const status = url.searchParams.get('status') || '';
+        return json(response, 200, store.loadNativeWorkbenchAccounts({ search, status }, actor));
+      }
+      const action = url.searchParams.get('action') || '';
+      if (request.method === 'POST') {
+        const body = await readJson(request);
+        if (action === 'launch') {
+          return json(response, 200, await store.launchNativeWorkbenchBrowser(body, actor));
+        }
+        if (action === 'close') {
+          return json(response, 200, store.closeNativeWorkbenchBrowser(body, actor));
+        }
+        if (action === 'update-json') {
+          return json(response, 200, await store.updateNativeWorkbenchJson(body, actor));
+        }
+        if (action === 'note') {
+          return json(response, 200, store.updateNativeWorkbenchNote(body, actor));
+        }
+        if (action === 'delete') {
+          return json(response, 200, store.deleteNativeWorkbenchAccount(body, actor));
+        }
+        return json(response, 200, store.saveNativeWorkbenchAccount(body, actor));
+      }
+      throw new LocalDataError(405, '代充工作台接口不支持该操作');
     }
     if (domain === bitBrowserWindowDomain) {
       if (!actor?.id) throw new LocalDataError(401, '请先登录');

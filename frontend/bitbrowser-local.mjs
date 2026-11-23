@@ -156,28 +156,462 @@ function updateStartButton() {
   defaultProfileButton.textContent = selectedProfileId && selectedProfileId === profileData?.defaultId
     ? '取消默认' : '设为默认';
   get('bit-toggle-connection').disabled = Boolean(activeLogin);
-  for (const id of ['bit-tab-login', 'bit-tab-library', 'bit-show-library']) get(id).disabled = Boolean(activeLogin);
+  for (const id of ['bit-tab-workbench', 'bit-tab-login', 'bit-tab-library', 'bit-show-library']) {
+    const el = get(id);
+    if (el) el.disabled = Boolean(activeLogin);
+  }
   if (pendingDataChanges.size) queueMicrotask(refreshLiveChoices);
 }
 
+const workspaceNames = ['workbench', 'login', 'library'];
+
 function showWorkspace(view, focus = false) {
   if (activeLogin) return;
-  for (const name of ['login', 'library']) {
-    const selected = view === name, button = get('bit-tab-' + name);
-    button.setAttribute('aria-selected', String(selected)); button.classList.toggle('active', selected); button.tabIndex = selected ? 0 : -1;
-    get('bit-' + name + '-panel').hidden = !selected;
-    if (selected && focus) button.focus();
+  const targetView = workspaceNames.includes(view) ? view : 'workbench';
+  for (const name of workspaceNames) {
+    const selected = targetView === name;
+    const button = get('bit-tab-' + name);
+    if (button) {
+      button.setAttribute('aria-selected', String(selected));
+      button.classList.toggle('active', selected);
+      button.tabIndex = selected ? 0 : -1;
+      if (selected && focus) button.focus();
+    }
+    const panel = get('bit-' + name + '-panel');
+    if (panel) panel.hidden = !selected;
   }
-  const values = readConnectionDrafts(); values.workspace = view; draftBridge?.write('bit-local', values);
+  const values = readConnectionDrafts();
+  values.workspace = targetView;
+  draftBridge?.write('bit-local', values);
 }
-for (const name of ['login', 'library']) {
-  get('bit-tab-' + name).addEventListener('click', () => showWorkspace(name));
-  get('bit-tab-' + name).addEventListener('keydown', event => {
-    if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) { event.preventDefault(); showWorkspace(event.key === 'Home' ? 'login' : event.key === 'End' ? 'library' : name === 'login' ? 'library' : 'login', true); }
+for (const name of workspaceNames) {
+  get('bit-tab-' + name)?.addEventListener('click', () => showWorkspace(name));
+  get('bit-tab-' + name)?.addEventListener('keydown', (event) => {
+    if (['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) {
+      event.preventDefault();
+      const currentIndex = workspaceNames.indexOf(name);
+      let nextIndex = 0;
+      if (event.key === 'Home') nextIndex = 0;
+      else if (event.key === 'End') nextIndex = workspaceNames.length - 1;
+      else if (event.key === 'ArrowRight') nextIndex = (currentIndex + 1) % workspaceNames.length;
+      else if (event.key === 'ArrowLeft') nextIndex = (currentIndex - 1 + workspaceNames.length) % workspaceNames.length;
+      showWorkspace(workspaceNames[nextIndex], true);
+    }
   });
 }
-get('bit-show-library').addEventListener('click', () => showWorkspace('library', true));
-showWorkspace(readConnectionDrafts().workspace === 'library' ? 'library' : 'login');
+get('bit-show-library')?.addEventListener('click', () => showWorkspace('library', true));
+const savedWorkspace = readConnectionDrafts().workspace;
+const defaultInitialWorkspace = savedWorkspace || (document.body.hasAttribute('data-connection-profiles') ? 'login' : 'workbench');
+showWorkspace(defaultInitialWorkspace);
+function initializeNativeWorkbench() {
+  const wbJsonInput = get('wb-json-input');
+  const wbJsonStatus = get('wb-json-status');
+  const wbProxySummary = get('wb-proxy-summary');
+  const wbProxyUrl = get('wb-proxy-url');
+  const wbNotesInput = get('wb-notes-input');
+  const wbSaveAndOpen = get('wb-save-and-open');
+  const wbSaveOnly = get('wb-save-only');
+  const wbClearInput = get('wb-clear-input');
+  const wbRefreshList = get('wb-refresh-list');
+  const wbSearchInput = get('wb-search-input');
+  const wbFilterStatus = get('wb-filter-status');
+  const wbListCount = get('wb-list-count');
+  const wbTbody = get('wb-accounts-tbody');
+
+  const wbUpdateDialog = get('wb-update-json-dialog');
+  const wbUpdateEmail = get('wb-update-json-email');
+  const wbUpdateTextarea = get('wb-update-json-textarea');
+  const wbUpdateStatus = get('wb-update-json-status');
+  const wbUpdateDismiss = get('wb-update-json-dismiss');
+  const wbUpdateCancel = get('wb-update-json-cancel');
+  const wbUpdateSaveOnly = get('wb-update-json-save-only');
+  const wbUpdateSaveAndLaunch = get('wb-update-json-save-and-launch');
+
+  if (!wbJsonInput || !wbTbody) return;
+
+  let accounts = [];
+
+  function escapeHtml(str) {
+    return String(str ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function parseInputJson() {
+    const raw = wbJsonInput.value.trim();
+    if (!raw) {
+      wbJsonStatus.textContent = '等待输入';
+      wbJsonStatus.className = 'field-help';
+      return null;
+    }
+    try {
+      const data = JSON.parse(raw);
+      const email = data.user?.email || '';
+      const plan = data.account?.planType || data.account?.plan_type || 'free';
+      const hasToken = Boolean(data.sessionToken || data.session_token);
+      const hasDevice = Boolean(data.statsigContext?.deviceId || data.deviceId || data.device_id);
+      if (!hasToken) {
+        wbJsonStatus.textContent = '提示：JSON 中未发现 sessionToken';
+        wbJsonStatus.className = 'field-help text-warning';
+        return null;
+      }
+      wbJsonStatus.textContent = `✓ 已识别邮箱：${email || '未命名'} · 套餐：${plan}${hasDevice ? ' · 含设备指纹' : ''}`;
+      wbJsonStatus.className = 'field-help text-success';
+      return data;
+    } catch {
+      wbJsonStatus.textContent = '提示：当前内容不是合法的单账户 JSON 格式';
+      wbJsonStatus.className = 'field-help text-warning';
+      return null;
+    }
+  }
+
+  wbJsonInput.addEventListener('input', parseInputJson);
+  wbJsonInput.addEventListener('change', parseInputJson);
+
+  wbClearInput?.addEventListener('click', () => {
+    wbJsonInput.value = '';
+    if (wbProxySummary) wbProxySummary.value = '';
+    if (wbProxyUrl) wbProxyUrl.value = '';
+    if (wbNotesInput) wbNotesInput.value = '';
+    parseInputJson();
+  });
+
+  async function loadAccounts() {
+    const search = wbSearchInput?.value.trim() || '';
+    const status = wbFilterStatus?.value || '';
+    try {
+      const params = new URLSearchParams();
+      if (search) params.set('search', search);
+      if (status) params.set('status', status);
+      const res = await fetch(`/api/local/native-browser-workbench?${params.toString()}`, {
+        cache: 'no-store'
+      });
+      if (!res.ok) throw new Error('读取数据表失败');
+      const data = await res.json();
+      accounts = data.items || [];
+      renderTable();
+    } catch (err) {
+      wbTbody.innerHTML = `<tr><td colspan="7" style="text-align:center; color: var(--text-error); padding: 18px;">加载数据表失败：${escapeHtml(err.message)}</td></tr>`;
+    }
+  }
+
+  function renderTable() {
+    if (wbListCount) wbListCount.textContent = `共 ${accounts.length} 个账号`;
+    if (!accounts.length) {
+      wbTbody.innerHTML = `<tr><td colspan="7" style="text-align:center; color: var(--text-secondary); padding: 24px;">暂无账号记录，请在上方录入</td></tr>`;
+      return;
+    }
+
+    wbTbody.innerHTML = accounts
+      .map((item) => {
+        const statusMap = {
+          pending_renewal: { text: '待续费', color: 'var(--tag-pending-color, #d97706)' },
+          active: { text: '已开通', color: 'var(--tag-success-color, #16a34a)' },
+          expired: { text: '授权过期', color: 'var(--tag-error-color, #dc2626)' }
+        };
+        const statusBadge = statusMap[item.status] || { text: item.status, color: 'var(--text-secondary)' };
+        const runningBadge = item.isRunning
+          ? `<span style="display:inline-block; margin-left: 4px; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 500; background: #22c55e20; color: #16a34a; border: 1px solid #22c55e40;">● 运行中</span>`
+          : '';
+        const openTime = item.lastOpenedAt
+          ? new Date(item.lastOpenedAt).toLocaleString('zh-CN', {
+              month: 'numeric',
+              day: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit'
+            })
+          : '未曾打开';
+
+        return `
+          <tr data-account-id="${escapeHtml(item.id)}">
+            <td style="font-weight: 500;">
+              <span class="wb-account-email" title="点击复制" style="cursor: pointer;">${escapeHtml(item.email)}</span>
+            </td>
+            <td><span class="badge">${escapeHtml(item.currentPlan.toUpperCase())}</span></td>
+            <td>${escapeHtml(item.proxySummary)}</td>
+            <td><span style="display:inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; background: ${statusBadge.color}18; color: ${statusBadge.color}; border: 1px solid ${statusBadge.color}40;">${escapeHtml(statusBadge.text)}</span>${runningBadge}</td>
+            <td style="font-size: 13px; color: var(--text-secondary);">${escapeHtml(openTime)}</td>
+            <td style="font-size: 13px;">${escapeHtml(item.renewalNotes || '—')}</td>
+            <td style="text-align: right; white-space: nowrap;">
+              ${item.isRunning
+                ? `<button type="button" class="button button--small button--warning wb-btn-close" data-id="${escapeHtml(item.id)}" title="关闭浏览器并立即切断代理连接">关闭窗口</button>`
+                : `<button type="button" class="button button--small button--primary wb-btn-launch" data-id="${escapeHtml(item.id)}">打开浏览器</button>`
+              }
+              <button type="button" class="button button--small wb-btn-update-json" data-id="${escapeHtml(item.id)}" data-email="${escapeHtml(item.email)}" title="会话过期时，更换最新授权 JSON">更换 JSON</button>
+              <button type="button" class="button button--small wb-btn-mark-active" data-id="${escapeHtml(item.id)}" title="标记为已开通Plus">标记开通</button>
+              <button type="button" class="button button--small button--danger wb-btn-delete" data-id="${escapeHtml(item.id)}">删除</button>
+            </td>
+          </tr>
+        `;
+      })
+      .join('');
+
+    wbTbody.querySelectorAll('.wb-account-email').forEach((el) => {
+      el.addEventListener('click', () => {
+        navigator.clipboard?.writeText(el.textContent.trim());
+        const original = el.textContent;
+        el.textContent = '✓ 已复制';
+        setTimeout(() => {
+          el.textContent = original;
+        }, 1200);
+      });
+    });
+
+    wbTbody.querySelectorAll('.wb-btn-launch').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const id = btn.getAttribute('data-id');
+        btn.disabled = true;
+        btn.textContent = '启动中…';
+        try {
+          const res = await fetch('/api/local/native-browser-workbench?action=launch', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id })
+          });
+          const result = await res.json();
+          if (!res.ok) throw new Error(result.error || '拉起浏览器失败');
+          alert('✓ 浏览器窗口已在屏幕前打开，请在窗口中手动点击续费');
+          await loadAccounts();
+        } catch (err) {
+          alert(`启动失败: ${err.message}`);
+        } finally {
+          btn.disabled = false;
+          btn.textContent = '打开浏览器';
+        }
+      });
+    });
+
+    wbTbody.querySelectorAll('.wb-btn-close').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const id = btn.getAttribute('data-id');
+        btn.disabled = true;
+        btn.textContent = '关闭中…';
+        try {
+          const res = await fetch('/api/local/native-browser-workbench?action=close', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id })
+          });
+          const result = await res.json();
+          if (!res.ok) throw new Error(result.error || '关闭浏览器失败');
+          await loadAccounts();
+        } catch (err) {
+          alert(`关闭失败: ${err.message}`);
+          btn.disabled = false;
+          btn.textContent = '关闭窗口';
+        }
+      });
+    });
+
+    wbTbody.querySelectorAll('.wb-btn-mark-active').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const id = btn.getAttribute('data-id');
+        try {
+          const res = await fetch('/api/local/native-browser-workbench?action=note', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              id,
+              status: 'active',
+              currentPlan: 'plus',
+              renewalNotes: '已完成 Plus 续费'
+            })
+          });
+          if (!res.ok) throw new Error('更新状态失败');
+          await loadAccounts();
+        } catch (err) {
+          alert(`操作失败: ${err.message}`);
+        }
+      });
+    });
+
+    wbTbody.querySelectorAll('.wb-btn-delete').forEach((btn) => {
+      btn.addEventListener('click', async () => {
+        const id = btn.getAttribute('data-id');
+        if (!confirm('确定要删除这条账号记录吗？')) return;
+        try {
+          const res = await fetch('/api/local/native-browser-workbench?action=delete', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id })
+          });
+          if (!res.ok) throw new Error('删除记录失败');
+          await loadAccounts();
+        } catch (err) {
+          alert(`删除失败: ${err.message}`);
+        }
+      });
+    });
+
+    wbTbody.querySelectorAll('.wb-btn-update-json').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const id = btn.getAttribute('data-id');
+        const email = btn.getAttribute('data-email');
+        if (wbUpdateDialog) {
+          wbUpdateDialog.dataset.accountId = id;
+          if (wbUpdateEmail) wbUpdateEmail.value = email;
+          if (wbUpdateTextarea) wbUpdateTextarea.value = '';
+          if (wbUpdateStatus) {
+            wbUpdateStatus.textContent = '请粘贴该账号最新的授权 JSON';
+            wbUpdateStatus.className = 'field-help';
+          }
+          wbUpdateDialog.showModal();
+        }
+      });
+    });
+  }
+
+  function closeUpdateDialog() {
+    if (wbUpdateDialog?.open) wbUpdateDialog.close();
+    if (wbUpdateTextarea) wbUpdateTextarea.value = '';
+    if (wbUpdateStatus) {
+      wbUpdateStatus.textContent = '请粘贴该账号最新的授权 JSON';
+      wbUpdateStatus.className = 'field-help';
+    }
+  }
+
+  wbUpdateDismiss?.addEventListener('click', closeUpdateDialog);
+  wbUpdateCancel?.addEventListener('click', closeUpdateDialog);
+
+  wbUpdateTextarea?.addEventListener('input', () => {
+    const raw = wbUpdateTextarea.value.trim();
+    if (!raw) {
+      wbUpdateStatus.textContent = '请粘贴该账号最新的授权 JSON';
+      wbUpdateStatus.className = 'field-help';
+      return;
+    }
+    try {
+      const data = JSON.parse(raw);
+      const email = (data.user?.email || '').trim().toLowerCase();
+      const hasToken = Boolean(data.sessionToken || data.session_token);
+      const targetEmail = (wbUpdateEmail?.value || '').trim().toLowerCase();
+
+      if (!hasToken) {
+        wbUpdateStatus.textContent = '⚠️ 提示：JSON 中未发现有效 sessionToken';
+        wbUpdateStatus.className = 'field-help text-warning';
+        return;
+      }
+      if (email && targetEmail && email !== targetEmail) {
+        wbUpdateStatus.textContent = `⚠️ 警告：JSON 邮箱 (${email}) 与目标账号 (${targetEmail}) 不一致`;
+        wbUpdateStatus.className = 'field-help text-warning';
+        return;
+      }
+      wbUpdateStatus.textContent = '✓ 凭据格式有效，与目标账号匹配';
+      wbUpdateStatus.className = 'field-help text-success';
+    } catch {
+      wbUpdateStatus.textContent = '⚠️ 提示：JSON 格式无效，请粘贴完整内容';
+      wbUpdateStatus.className = 'field-help text-warning';
+    }
+  });
+
+  async function handleUpdateJson(autoLaunch = false) {
+    const id = wbUpdateDialog?.dataset.accountId;
+    const sessionJson = wbUpdateTextarea?.value.trim();
+    if (!id || !sessionJson) {
+      alert('请粘贴完整的单账户授权 JSON');
+      return;
+    }
+
+    const btn = autoLaunch ? wbUpdateSaveAndLaunch : wbUpdateSaveOnly;
+    if (btn) btn.disabled = true;
+
+    try {
+      const res = await fetch('/api/local/native-browser-workbench?action=update-json', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, sessionJson, autoLaunch })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '更新凭据失败');
+
+      closeUpdateDialog();
+      if (autoLaunch) {
+        alert('✓ 凭据已更新！浏览器窗口已在屏幕前打开，请在窗口中手动点击续费');
+      } else {
+        alert('✓ 凭据已成功更新');
+      }
+      await loadAccounts();
+    } catch (err) {
+      alert(`更新失败: ${err.message}`);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  wbUpdateSaveOnly?.addEventListener('click', () => handleUpdateJson(false));
+  wbUpdateSaveAndLaunch?.addEventListener('click', () => handleUpdateJson(true));
+
+  async function saveAccount(andOpen = false) {
+    const raw = wbJsonInput.value.trim();
+    if (!raw) {
+      alert('请先粘贴授权 JSON');
+      wbJsonInput.focus();
+      return;
+    }
+
+    const payload = {
+      sessionJson: raw,
+      proxySummary: wbProxySummary?.value.trim() || '',
+      proxyUrl: wbProxyUrl?.value.trim() || '',
+      renewalNotes: wbNotesInput?.value.trim() || ''
+    };
+
+    const targetBtn = andOpen ? wbSaveAndOpen : wbSaveOnly;
+    if (targetBtn) {
+      targetBtn.disabled = true;
+      targetBtn.textContent = '正在保存…';
+    }
+
+    try {
+      const res = await fetch('/api/local/native-browser-workbench', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || '保存账号记录失败');
+
+      if (andOpen && data.record?.id) {
+        if (targetBtn) targetBtn.textContent = '正在拉起浏览器…';
+        const launchRes = await fetch('/api/local/native-browser-workbench?action=launch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: data.record.id })
+        });
+        const launchData = await launchRes.json();
+        if (!launchRes.ok) throw new Error(launchData.error || '拉起浏览器失败');
+        alert('✓ 账号已保存，专属 Chrome 窗口已成功打开！');
+      } else {
+        alert('✓ 账号已成功保存至数据表');
+      }
+
+      wbJsonInput.value = '';
+      if (wbNotesInput) wbNotesInput.value = '';
+      parseInputJson();
+      await loadAccounts();
+    } catch (err) {
+      alert(`保存失败: ${err.message}`);
+    } finally {
+      if (targetBtn) {
+        targetBtn.disabled = false;
+        targetBtn.textContent = andOpen ? '保存并打开浏览器' : '仅保存到数据表';
+      }
+    }
+  }
+
+  wbSaveAndOpen?.addEventListener('click', () => saveAccount(true));
+  wbSaveOnly?.addEventListener('click', () => saveAccount(false));
+  wbRefreshList?.addEventListener('click', loadAccounts);
+  wbSearchInput?.addEventListener('input', loadAccounts);
+  wbFilterStatus?.addEventListener('change', loadAccounts);
+
+  void loadAccounts();
+}
+
+initializeNativeWorkbench();
 executionProxies = initializeExecutionProxies({ get, drafts: draftBridge, onChange: updateStartButton, locked: () => Boolean(activeLogin), onUse: () => showWorkspace('login'), connection: () => ({ url: urlInput.value, token: tokenInput.value }) });
 void executionProxies.refresh();
 get('bit-token-eye').addEventListener('click', () => {
