@@ -516,12 +516,33 @@
       if (cell) cell.textContent = value;
     }
   }
+  function ensureBuyerCodeCopyButton(cell, id) {
+    let copy = cell.querySelector('[data-action="relay-buyer-code-copy"]');
+    if (!copy) {
+      const html = A.button('复制', 'relay-buyer-code-copy', 'compact', '', `data-id="${E(id)}" aria-label="复制买家查询码"`);
+      const retry = cell.querySelector('[data-action="relay-buyer-code-retry"]');
+      if (retry) retry.insertAdjacentHTML('beforebegin', html);
+      else cell.insertAdjacentHTML('beforeend', html);
+      copy = cell.querySelector('[data-action="relay-buyer-code-copy"]');
+    }
+    return copy;
+  }
   function buyerCodeCell(row) {
     const connected = !local || codeTargetBound('alias', row.id);
-    const text = !local ? row.queryCode || '暂无查询码'
+    let text = !local ? row.queryCode || '暂无查询码'
       : !remote.status ? remote.statusError ? '收件服务读取失败' : '正在检测收件服务…'
         : connected ? '正在读取…' : '未接入收件服务';
-    return `<div class="relay-buyer-code" data-relay-buyer-code="${E(row.id)}"><output aria-label="买家查询码">${E(text)}</output>${local && connected ? A.button('重试', 'relay-buyer-code-retry', 'compact', '', `data-id="${E(row.id)}" hidden`) : ''}</div>`;
+    let hasCode = !local && Boolean(row.queryCode);
+    if (local && connected) {
+      const operatorId = actor().id, snapshot = buyerCodeSnapshot(row);
+      const cached = window.IDLocalData.queries?.peek('apple-relay', [operatorId, 'buyer-code', snapshot]);
+      if (cached?.stale === false && cached.data?.reuseUntil > Date.now() && cached.data?.queryCode) {
+        text = cached.data.queryCode;
+        hasCode = true;
+      }
+    }
+    const copyButton = hasCode ? A.button('复制', 'relay-buyer-code-copy', 'compact', '', `data-id="${E(row.id)}" aria-label="复制买家查询码"`) : '';
+    return `<div class="relay-buyer-code" data-relay-buyer-code="${E(row.id)}"><output aria-label="买家查询码">${E(text)}</output>${copyButton}${local && connected ? A.button('重试', 'relay-buyer-code-retry', 'compact', '', `data-id="${E(row.id)}" hidden`) : ''}</div>`;
   }
   function currentBuyerCodeCell(cell, operatorId, snapshot) {
     const row = alias(cell.dataset.relayBuyerCode);
@@ -533,6 +554,11 @@
     cell.querySelector('output').textContent = state.value;
     cell.querySelector('[data-action="relay-buyer-code-retry"]')?.setAttribute('hidden', '');
     cell.setAttribute('aria-busy', 'false');
+    if (state.value && !['正在读取…', '读取失败', '收件服务读取失败', '正在检测收件服务…', '未接入收件服务', '暂无查询码'].includes(state.value)) {
+      ensureBuyerCodeCopyButton(cell, row.id);
+    } else {
+      cell.querySelector('[data-action="relay-buyer-code-copy"]')?.remove();
+    }
     showAliasMetadata(row, state.metadata, cell.closest('tr'));
   }
   function reuseBuyerCode(cell, row) {
@@ -559,6 +585,7 @@
     const retry = cell.querySelector('[data-action="relay-buyer-code-retry"]');
     cell.setAttribute('aria-busy', 'true');
     output.textContent = '正在读取…';
+    cell.querySelector('[data-action="relay-buyer-code-copy"]')?.remove();
     if (retry) retry.hidden = true;
     const loader = async () => {
       const value = result || await (read ? read(id)
@@ -588,6 +615,7 @@
         if (!current()) return;
         output.textContent = error.status === 404 ? '暂无查询码' : '读取失败';
         if (error.status === 404) showAliasMetadata(alias(id), { expiresAt: '' }, cell.closest('tr'));
+        cell.querySelector('[data-action="relay-buyer-code-copy"]')?.remove();
         if (retry) retry.hidden = false;
       } finally {
         if (current()) cell.setAttribute('aria-busy', 'false');
@@ -842,7 +870,7 @@
             label: '操作',
             action: true,
             render: (r) =>
-              `<div class="action-links">${delivery ? A.textAction('复制', 'relay-delivery-copy', `data-id="${E(r.id)}" title="复制邮箱及新查询码，旧码失效" ${codeTargetBound('alias', r.id) && aliasHealth(r) === 'normal' && r.relayStatus !== 'DISABLED' ? '' : 'disabled'}`) : ''}${A.textAction('详情', 'relay-alias-detail', `data-id="${E(r.id)}"`)}${A.textAction('查看邮件', 'relay-mails', `data-id="${E(r.id)}"`)}${A.textAction('更多操作', 'relay-alias-more', `data-id="${E(r.id)}" aria-haspopup="menu" aria-expanded="false"`, '', 'down')}</div>`
+              `<div class="action-links">${delivery ? A.textAction('交付复制', 'relay-delivery-copy', `data-id="${E(r.id)}" title="生成新码并复制，旧码失效" ${codeTargetBound('alias', r.id) && aliasHealth(r) === 'normal' && r.relayStatus !== 'DISABLED' ? '' : 'disabled'}`) : ''}${A.textAction('详情', 'relay-alias-detail', `data-id="${E(r.id)}"`)}${A.textAction('查看邮件', 'relay-mails', `data-id="${E(r.id)}"`)}${A.textAction('更多操作', 'relay-alias-more', `data-id="${E(r.id)}" aria-haspopup="menu" aria-expanded="false"`, '', 'down')}</div>`
           }
         ],
         rows,

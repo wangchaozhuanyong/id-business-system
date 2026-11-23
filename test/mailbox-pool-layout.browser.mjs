@@ -107,8 +107,10 @@ try {
     const editorRect = await operation.locator('#ops-managed-pool-form').boundingBox();
     assert(editorRect.y >= (await operation.locator('.drawer-body').boundingBox()).y - 1 && editorRect.y < 900);
     await operation.getByRole('button', { name: '取消', exact: true }).click();
-    await firstRow.locator('.mailbox-account__more').click();
-    await actions.getByRole('menuitem', { name: '仅复制当前码', exact: true }).click();
+    const cellCopy = firstRow.locator('.mailbox-account__code [data-action="ops-mailbox-pool-copy-existing"]');
+    assert.equal(await cellCopy.isEnabled(), true);
+    await cellCopy.click();
+    await page.locator('#toast').getByText('买家查询码已复制', { exact: true }).waitFor();
     await page.waitForFunction(async () => await navigator.clipboard.readText() === 'SYNTHETIC-fixture-0-LAYOUT-ONLY');
     assert.deepEqual(singleReads, [fixture[0].id], '手动复制继续使用既有单条读取');
     await pool.getByRole('button', { name: '下一页', exact: true }).click(); await waitCodes();

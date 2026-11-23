@@ -2493,3 +2493,46 @@ body[data-recharge-view] :is(input, select, textarea):focus {
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 14%, transparent);
 }
 body[data-recharge-view] :is(.card, .panel) { box-shadow: var(--shadow); }
+
+[data-recharge-view='admin'] .orbitcard-config-panel {
+  margin-top: 24px;
+}
+[data-recharge-view='admin'] .orbitcard-toggle {
+  margin-block-end: 16px;
+  padding: 12px 16px;
+  border-radius: 8px;
+}
+[data-recharge-view='admin'] .orbitcard-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px 20px;
+  max-inline-size: 56rem;
+  margin-block-end: 16px;
+}
+[data-recharge-view='admin'] .orbitcard-field-full {
+  grid-column: 1 / -1;
+}
+[data-recharge-view='admin'] .orbitcard-form-grid .form-group {
+  margin-bottom: 0;
+}
+[data-recharge-view='admin'] .orbitcard-form-grid .field-hint {
+  font-size: 12px;
+  color: var(--text-dim, var(--text-secondary));
+  font-weight: normal;
+}
+[data-recharge-view='admin'] .orbitcard-actions {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-block-start: 12px;
+}
+[data-recharge-view='admin'] .orbitcard-status {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+@media (max-width: 768px) {
+  [data-recharge-view='admin'] .orbitcard-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

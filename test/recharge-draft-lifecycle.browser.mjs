@@ -116,6 +116,7 @@ test('embedded recharge retains ordinary drafts across reloads, isolates records
   // The BitBrowser iframe keeps connection drafts and clears the authorization and its email.
   await navigate('recharge/start');
   const bit = () => page.frameLocator('.recharge-integration__frame--bit-local');
+  await bit().locator('#bit-tab-login').click();
   const windowEmail = 'draft-window@example.test';
   await bit().locator('#bit-authorization-json').fill(JSON.stringify({
     sessionToken: 'synthetic-session', user: { id: 'user-fixture', email: windowEmail },
@@ -127,6 +128,7 @@ test('embedded recharge retains ordinary drafts across reloads, isolates records
   await navigate('customers/list');
   await page.locator('#main > [data-page-region]:not([hidden]) [data-recharge-module]').waitFor({ state: 'detached' });
   await navigate('recharge/start');
+  await bit().locator('#bit-tab-login').click();
   await assertEventually(() => bit().locator('#bit-connection-name').inputValue(), 'Draft connection');
   assert.equal(await bit().locator('#bit-window-name').inputValue(), '');
   assert.equal(await bit().locator('#bit-local-token').inputValue(), '');

@@ -132,6 +132,10 @@ test('买家查询码按页读取，切页复用成功结果，重置或失效�
   assert.equal(await output(aliases[1].id).textContent(), codes.get(aliases[1].id));
   assert.equal(await field(aliases[1].id, 'mailCount').textContent(), '0');
   assert.equal(await remaining(aliases[1].id).textContent(), '长期有效');
+  await cell(aliases[1].id).getByRole('button', { name: '复制买家查询码', exact: true }).click();
+  await page.waitForFunction(code => window.copiedBuyerCode === code, codes.get(aliases[1].id));
+  assert.equal(await page.evaluate(() => window.copiedBuyerCode), codes.get(aliases[1].id));
+  await page.locator('#toast').getByText('买家查询码已复制', { exact: true }).waitFor();
   await copyCurrent(aliases[0].id);
   assert.equal(await page.evaluate(() => window.copiedBuyerCode), codes.get(aliases[0].id));
   const beforeReturn = reads.length;
