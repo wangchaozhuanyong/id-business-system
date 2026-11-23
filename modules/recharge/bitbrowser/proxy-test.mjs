@@ -1,4 +1,4 @@
-import { directBrowserApi } from './login/direct-api.mjs';
+import { directBrowserApi, resolveDynamicProxyUsername } from './login/direct-api.mjs';
 import { parseBitBrowserProxyInput } from './proxy-input.mjs';
 function exitAddress(value) {
   if (typeof value !== 'string' || value.length > 64) return '';
@@ -48,7 +48,8 @@ export async function testBitBrowserProxy({ link, protocol = 'auto', mode = 'aut
   for (const type of candidates) {
     signal.throwIfAborted();
     try {
-      const body = { host: parsed.host.replace(/^\[|\]$/g, ''), port: String(parsed.port), proxyType: type, proxyUserName: parsed.username, proxyPassword: parsed.password, checkExists: 0 };
+      const proxyUserName = resolveDynamicProxyUsername(parsed.username);
+      const body = { host: parsed.host.replace(/^\[|\]$/g, ''), port: String(parsed.port), proxyType: type, proxyUserName, proxyPassword: parsed.password, checkExists: 0 };
       let response;
       try { response = await nativeCheck(body); }
       catch (error) {

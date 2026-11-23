@@ -370,6 +370,37 @@ test('reopens a manually closed window using its original ID and preserved sessi
   });
 });
 
+test('reopening a manually closed window with rotating mobile proxy updates to a fresh session IP', async () => {
+  await withLoginFixture(identity, async ({ requests, closeWindow, login }) => {
+    const staticProxyCredentials = {
+      username: 'd7234158000-mob-country-ph-session-44052610-sessiontime-10',
+      password: 'fixture-password'
+    };
+    const browserOptions = { proxyMode: 'static', staticHost: 'gate.ipdeep.com', staticPort: 8080 };
+    await login(undefined, { useSelectedProxy: true, staticProxyCredentials, browserOptions });
+    const createReq = requests.find(row => row.path === '/browser/update' && !row.body.id);
+    assert.ok(createReq);
+    const firstUser = createReq.body.proxyUserName;
+    assert.match(firstUser, /^d7234158000-mob-country-ph-session-\d{8}-sessiontime-10$/);
+    assert.notEqual(firstUser, staticProxyCredentials.username);
+
+    closeWindow();
+    const before = requests.length;
+    await login(undefined, { useSelectedProxy: true, staticProxyCredentials, browserOptions });
+    const updateReq = requests.slice(before).find(row => row.path === '/browser/update' && row.body.id === profileId);
+    assert.ok(updateReq, 'expected /browser/update on reopening rotating proxy window');
+    const secondUser = updateReq.body.proxyUserName;
+    assert.match(secondUser, /^d7234158000-mob-country-ph-session-\d{8}-sessiontime-10$/);
+    assert.notEqual(secondUser, firstUser);
+    assert.notEqual(secondUser, staticProxyCredentials.username);
+    assert.ok(updateReq.body.browserFingerPrint);
+
+    const openReq = requests.slice(before).find(row => row.path === '/browser/open');
+    assert.ok(openReq);
+    assert.equal(openReq.body.extractIp, true);
+  });
+});
+
 test('a failed first control connection can retry on the created window without creating another', async () => {
   await withLoginFixture(identity, async ({ requests, login }) => {
     await assert.rejects(login(), error => error.reason === 'bitbrowser_direct_debug_unavailable');
