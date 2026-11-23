@@ -1,0 +1,14 @@
+{
+  "beforeAssetsSha256": "0c82ce54737e0f182ce172d65b3dead0097a3c832881f5ba09fa8463020c7e66",
+  "assetsSha256": "a1f401772d10dc27d4da5da4954b2a65aae19afec92dbb7909f13cf9ee854da8",
+  "files": {
+    "modules/recharge/codexdaichong/assets.mjs": {
+      "before": "5ef29143092f16e33275740c64ecf09777b530d5c49d23e8d1d46ec044941137",
+      "after": "845a07282b0ea5d37478d8ea83a4bf313665c92df1eb47934700855932b6baeb"
+    },
+    "modules/recharge/codexdaichong/shell.css": {
+      "before": "ed885c43b4eb2d6411b6ae39d3059a37866af637ccedb1a3eb2e5108654ff043",
+      "after": "bebef68216340bb85d5c2c07b5ffe87e77b520b96dc670c2b0612cca0aaabe33"
+    }
+  }
+}
