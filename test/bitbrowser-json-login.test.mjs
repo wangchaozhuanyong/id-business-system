@@ -75,7 +75,8 @@ async function withLoginFixture(observedIdentity, useFixture, controls = {}) {
         case '/browser/update':
           if (body.id) {
             assert.equal(body.id, profileId);
-            for (const key of ['cookie', 'password', 'browserFingerPrint']) assert(!Object.hasOwn(body, key));
+            for (const key of ['cookie', 'password']) assert(!Object.hasOwn(body, key));
+            assert.ok(body.browserFingerPrint, 'browserFingerPrint is required by BitBrowser /browser/update');
             profile = { ...profile, ...body }; data = { id: profileId }; break;
           }
           assert.equal(body.groupId, 'fixture-group');
@@ -352,7 +353,7 @@ test('selected proxies can change on the retained window before country detectio
     assert.equal(result.profileId, profileId);
     const changed = requests.slice(before).find(row => row.path === '/browser/update');
     assert.equal(changed.body.id, profileId); assert.equal(changed.body.dynamicIpUrl, 'https://second.example.test/get');
-    assert.equal(Object.hasOwn(changed.body, 'browserFingerPrint'), false);
+    assert.ok(changed.body.browserFingerPrint, 'BitBrowser requires browserFingerPrint on /browser/update');
   });
 });
 

@@ -218,9 +218,14 @@ async function runDirectJsonSession(settings, expected, windowName, signal, hook
     };
     if (ownedProfile && settings.updateOwnedProxy) {
       await closeProfile();
-      const proxyOptions = Object.fromEntries(Object.entries(directProfileOptions(settings)).filter(
+      const allOptions = directProfileOptions(settings);
+      const proxyOptions = Object.fromEntries(Object.entries(allOptions).filter(
         ([key]) => !['browserFingerPrint', 'syncTabs', 'syncCookies', 'syncLocalStorage', 'syncIndexedDb', 'syncAuthorization'].includes(key)));
-      await api.post('/browser/update', { id: profileId, ...proxyOptions }, remaining());
+      await api.post('/browser/update', {
+        id: profileId,
+        ...proxyOptions,
+        browserFingerPrint: detail.browserFingerPrint ?? allOptions.browserFingerPrint
+      }, remaining());
       detail = (await api.post('/browser/detail', { id: profileId }, remaining())).data;
       if (!detail || detail.id !== profileId || Object.entries(proxyOptions).some(([key, value]) => String(detail[key] ?? '') !== String(value)))
         throw new DirectBrowserError('bitbrowser_profile_configuration_mismatch');
