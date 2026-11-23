@@ -17,6 +17,7 @@ from remote import (ACTION_PASSWORD_PRESENTATION_FILES, ASSET_METADATA_REPAIR_BA
                     CARD_FIRST_PAINT_PRESENTATION_FILES, CARD_LIST_TOOLBAR_PRESENTATION_FILES,
                     CARD_NUMBER_PRESENTATION_FILES, CARD_PLAN_PRESENTATION_FILES,
                     CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES, PRESENTATION_SCOPES, SECURITY_PRESENTATION_FILES,
+                    ORBITCARD_LAYOUT_PRESENTATION_FILES,
                     CARD_IMPORT_PREVIEW_SOURCE, RECHARGE_REDEMPTION_CARD_IMPORT_FILES,
                     REDEEM_PRESENTATION_FILES, SUBSCRIPTION_INVOICE_PRESENTATION_FILES,
                     TABLE_ACTIONS_STYLESHEET, TASK_HISTORY_PRESENTATION_FILES,
@@ -47,11 +48,13 @@ CARD_LIST_TOOLBAR_MANIFEST = "card-list-toolbar-20261121.json"
 CARD_LIST_TOOLBAR_MANIFEST_PATH = f"deploy/website/{CARD_LIST_TOOLBAR_MANIFEST}"
 RECHARGE_REDEMPTION_CARD_IMPORT_MANIFEST = "recharge-redemption-card-import-20261121.json"
 RECHARGE_REDEMPTION_CARD_IMPORT_MANIFEST_PATH = f"deploy/website/{RECHARGE_REDEMPTION_CARD_IMPORT_MANIFEST}"
+ORBITCARD_LAYOUT_MANIFEST = "orbitcard-layout-20261123.json"
+ORBITCARD_LAYOUT_MANIFEST_PATH = f"deploy/website/{ORBITCARD_LAYOUT_MANIFEST}"
 CORE_PATHS = ("deploy/recharge-core", "deploy/caddy", "modules/recharge/codexdaichong", "package.json",
               PROXY_TYPE_CATALOG, TASK_HISTORY_MANIFEST_PATH, ADMIN_WORKSPACE_MANIFEST_PATH,
               SUBSCRIPTION_INVOICE_MANIFEST_PATH, ACTION_PASSWORD_MANIFEST_PATH, CARD_NUMBER_MANIFEST_PATH,
               CARD_FIRST_PAINT_MANIFEST_PATH, CARD_LIST_TOOLBAR_MANIFEST_PATH,
-              RECHARGE_REDEMPTION_CARD_IMPORT_MANIFEST_PATH)
+              RECHARGE_REDEMPTION_CARD_IMPORT_MANIFEST_PATH, ORBITCARD_LAYOUT_MANIFEST_PATH)
 ADAPTER_SCOPE = {
     "modules/recharge/codexdaichong/gateway.mjs", "modules/recharge/codexdaichong/local-gateway.mjs",
     "modules/recharge/codexdaichong/native-adapter.mjs", "modules/recharge/codexdaichong/runtime.mjs",
@@ -341,6 +344,9 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False, 
     elif changed == {*CARD_LIST_TOOLBAR_PRESENTATION_FILES, CARD_LIST_TOOLBAR_MANIFEST_PATH}:
         return "cardListToolbarPresentation", require_presentation_approval(
             base, sha, CARD_LIST_TOOLBAR_MANIFEST, CARD_LIST_TOOLBAR_PRESENTATION_FILES)
+    elif changed == {*ORBITCARD_LAYOUT_PRESENTATION_FILES, ORBITCARD_LAYOUT_MANIFEST_PATH}:
+        return "orbitcardLayoutPresentation", require_presentation_approval(
+            base, sha, ORBITCARD_LAYOUT_MANIFEST, ORBITCARD_LAYOUT_PRESENTATION_FILES)
     elif changed == {*RECHARGE_REDEMPTION_CARD_IMPORT_FILES, RECHARGE_REDEMPTION_CARD_IMPORT_MANIFEST_PATH}:
         return "rechargeRedemptionCardImportPresentation", require_presentation_approval(
             base, sha, RECHARGE_REDEMPTION_CARD_IMPORT_MANIFEST, RECHARGE_REDEMPTION_CARD_IMPORT_FILES,
@@ -661,6 +667,8 @@ def main(sample_backup_resources=False):
         files += (CARD_FIRST_PAINT_MANIFEST_PATH,)
     if presentation_scope == "cardListToolbarPresentation":
         files += (CARD_LIST_TOOLBAR_MANIFEST_PATH,)
+    if presentation_scope == "orbitcardLayoutPresentation":
+        files += (ORBITCARD_LAYOUT_MANIFEST_PATH,)
     if presentation_scope == "rechargeRedemptionCardImportPresentation":
         files += (RECHARGE_REDEMPTION_CARD_IMPORT_MANIFEST_PATH, "frontend/order-operations.js",
                   "frontend/recharge-partners.mjs")
