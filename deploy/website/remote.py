@@ -1525,6 +1525,7 @@ console.log(JSON.stringify(Object.fromEntries(hashes)));
         "modules/website/pages.mjs": "/assets/website/pages.mjs",
         "modules/recharge/bitbrowser/login/index.mjs": "/assets/bitbrowser/login/index.mjs",
         "modules/recharge/bitbrowser/login/direct-login.mjs": "/assets/bitbrowser/login/direct-login.mjs",
+        "frontend/bitbrowser-local.mjs": "/assets/bitbrowser/local.mjs",
         **{name: "/" + name for name in (
             "modules/orders/order-opening.mjs", "modules/orders/list-order.mjs",
             "modules/orders/order-customer-match.mjs", "modules/orders/order-whatsapp.mjs",

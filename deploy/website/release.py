@@ -654,7 +654,7 @@ def main(sample_backup_resources=False):
              "frontend/renewal-handoff.js", "server/renewal-handoff.mjs", "server/backup/cloud-cli.mjs",
              "server/backup/cloud-worker.mjs", "server/backup/local-sqlite.mjs",
              "server/local-business.mjs", "server/native-browser-workbench.mjs",
-             "frontend/bitbrowser-local.html", "frontend/bitbrowser-local.mjs",
+             "frontend/bitbrowser-local.mjs",
              "server/native-chrome-runner.mjs", "server/recharge-activity.mjs",
              "server/backup/sheets-source.mjs", "server/monitoring-policy.mjs",
              "server/tools/website-analytics.mjs", "server/tools/sheets-status.mjs",
@@ -685,13 +685,7 @@ def main(sample_backup_resources=False):
     if presentation_scope == "cardPoolLimitPresentation":
         files += (CARD_POOL_LIMIT_MANIFEST_PATH,)
     if presentation_scope == "cardPoolTogglePresentation":
-        files += (CARD_POOL_TOGGLE_MANIFEST_PATH, "server/card-management.mjs",
-                  "frontend/order-completion.js", "server/order-completion.mjs",
-                  "server/subscription-management.mjs", "frontend/commerce-prototype.js",
-                  "server/recharge-order-sync.mjs", "server/business-lists.mjs",
-                  "server/local-business.mjs",
-                  "frontend/bitbrowser-local.html", "frontend/bitbrowser-local.mjs",
-                  "frontend/recharge-integration.css")
+        files += (CARD_POOL_TOGGLE_MANIFEST_PATH, "server/card-management.mjs")
     if presentation_scope == "rechargeRedemptionCardImportPresentation":
         files += (RECHARGE_REDEMPTION_CARD_IMPORT_MANIFEST_PATH, "frontend/order-operations.js",
                   "frontend/recharge-partners.mjs")
