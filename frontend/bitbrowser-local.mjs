@@ -206,7 +206,18 @@ showWorkspace(defaultInitialWorkspace);
 function initializeNativeWorkbench() {
   const wbJsonInput = get('wb-json-input');
   const wbJsonStatus = get('wb-json-status');
+  const wbPasteJson = get('wb-paste-json');
+  const wbClearJson = get('wb-clear-json');
+
+  const wbExtractedEmail = get('wb-extracted-email');
+  const wbCopyEmail = get('wb-copy-email');
+  const wbCopyBtnText = get('wb-copy-btn-text');
+  const wbExtractedPlan = get('wb-extracted-plan');
+  const wbExtractedDevice = get('wb-extracted-device');
+
   const wbProxyRegion = get('wb-proxy-region');
+  const wbSetDefaultProxy = get('wb-set-default-proxy');
+  const wbPrefSavedBadge = get('wb-pref-saved-badge');
   const wbProxyHint = get('wb-proxy-hint');
   const wbProxySummary = get('wb-proxy-summary');
   const wbProxyUrl = get('wb-proxy-url');
@@ -232,6 +243,7 @@ function initializeNativeWorkbench() {
   if (!wbJsonInput || !wbTbody) return;
 
   let accounts = [];
+  let userDefaultProxy = 'auto';
 
   function escapeHtml(str) {
     return String(str ?? '')
@@ -242,40 +254,11 @@ function initializeNativeWorkbench() {
       .replace(/'/g, '&#39;');
   }
 
-  function parseInputJson() {
-    const raw = wbJsonInput.value.trim();
-    if (!raw) {
-      wbJsonStatus.textContent = '等待输入 JSON';
-      wbJsonStatus.className = 'wb-json-badge';
-      return null;
+  function updateProxyHintText() {
+    const val = wbProxyRegion?.value || 'auto';
+    if (wbPrefSavedBadge) {
+      wbPrefSavedBadge.style.display = val === userDefaultProxy ? 'inline-flex' : 'none';
     }
-    try {
-      const data = JSON.parse(raw);
-      const email = data.user?.email || '';
-      const plan = data.account?.planType || data.account?.plan_type || 'free';
-      const hasToken = Boolean(data.sessionToken || data.session_token);
-      const hasDevice = Boolean(data.statsigContext?.deviceId || data.deviceId || data.device_id);
-      if (!hasToken) {
-        wbJsonStatus.textContent = '提示：未识别到 sessionToken';
-        wbJsonStatus.className = 'wb-json-badge wb-json-badge--warning';
-        return null;
-      }
-      const planUpper = String(plan).toUpperCase();
-      wbJsonStatus.textContent = `✓ 已识别：${email || '未命名'} · ${planUpper}${hasDevice ? ' · 设备指纹' : ''}`;
-      wbJsonStatus.className = 'wb-json-badge wb-json-badge--success';
-      return data;
-    } catch {
-      wbJsonStatus.textContent = '提示：非标准 JSON 格式';
-      wbJsonStatus.className = 'wb-json-badge wb-json-badge--warning';
-      return null;
-    }
-  }
-
-  wbJsonInput.addEventListener('input', parseInputJson);
-  wbJsonInput.addEventListener('change', parseInputJson);
-
-  wbProxyRegion?.addEventListener('change', () => {
-    const val = wbProxyRegion.value;
     if (wbProxyHint) {
       if (val === 'auto') {
         wbProxyHint.textContent = '⚡ 共享自动代充 IP 池：根据账号套餐智能选路（Plus 自动匹配菲律宾，Pro 自动匹配埃及）。';
@@ -283,19 +266,184 @@ function initializeNativeWorkbench() {
         wbProxyHint.textContent = '⚡ 直连模式：不使用代理，直接通过本机网络连接（仅在特殊调试时使用）。';
       } else {
         const text = wbProxyRegion.options[wbProxyRegion.selectedIndex]?.text || val;
-        wbProxyHint.textContent = `⚡ 共享自动代充 IP 池：已指定【${text}】，打开浏览器时将自动注入代充出口代理。`;
+        wbProxyHint.textContent = `⚡ 共享自动代充 IP 池：已指定【${text}】，打开浏览器时将自动注入对应国家的已核验代理。`;
       }
+    }
+  }
+
+  function parseInputJson() {
+    const raw = wbJsonInput.value.trim();
+    if (!raw) {
+      wbJsonStatus.textContent = '等待输入 JSON';
+      wbJsonStatus.className = 'wb-json-badge';
+      if (wbExtractedEmail) wbExtractedEmail.value = '';
+      if (wbExtractedPlan) wbExtractedPlan.style.display = 'none';
+      if (wbExtractedDevice) wbExtractedDevice.style.display = 'none';
+      return null;
+    }
+    try {
+      const data = JSON.parse(raw);
+      const email = String(data.user?.email || '').trim().toLowerCase();
+      const plan = data.account?.planType || data.account?.plan_type || 'free';
+      const hasToken = Boolean(data.sessionToken || data.session_token);
+      const hasDevice = Boolean(data.statsigContext?.deviceId || data.deviceId || data.device_id);
+
+      if (email && wbExtractedEmail) {
+        wbExtractedEmail.value = email;
+      } else if (wbExtractedEmail) {
+        wbExtractedEmail.value = '';
+      }
+
+      if (wbExtractedPlan) {
+        const planUpper = String(plan).toUpperCase();
+        wbExtractedPlan.textContent = `ChatGPT ${planUpper}`;
+        wbExtractedPlan.className = `wb-plan-pill ${planUpper.includes('PRO') ? 'wb-plan-pill--pro' : planUpper.includes('PLUS') ? 'wb-plan-pill--plus' : 'wb-plan-pill--free'}`;
+        wbExtractedPlan.style.display = 'inline-block';
+      }
+      if (wbExtractedDevice) {
+        wbExtractedDevice.style.display = hasDevice ? 'inline-flex' : 'none';
+      }
+
+      if (!hasToken) {
+        wbJsonStatus.textContent = '⚠️ 提示：未识别到 sessionToken';
+        wbJsonStatus.className = 'wb-json-badge wb-json-badge--warning';
+        return null;
+      }
+      if (!email) {
+        wbJsonStatus.textContent = '⚠️ 提示：未识别到账号邮箱';
+        wbJsonStatus.className = 'wb-json-badge wb-json-badge--warning';
+        return null;
+      }
+
+      const planUpper = String(plan).toUpperCase();
+      wbJsonStatus.textContent = `✓ 已识别：${email} · ${planUpper}${hasDevice ? ' · 设备指纹' : ''}`;
+      wbJsonStatus.className = 'wb-json-badge wb-json-badge--success';
+      return data;
+    } catch {
+      wbJsonStatus.textContent = '⚠️ 提示：非标准 JSON 格式';
+      wbJsonStatus.className = 'wb-json-badge wb-json-badge--warning';
+      if (wbExtractedEmail) wbExtractedEmail.value = '';
+      if (wbExtractedPlan) wbExtractedPlan.style.display = 'none';
+      if (wbExtractedDevice) wbExtractedDevice.style.display = 'none';
+      return null;
+    }
+  }
+
+  wbJsonInput.addEventListener('input', parseInputJson);
+  wbJsonInput.addEventListener('change', parseInputJson);
+
+  // 粘贴与清空按钮
+  wbPasteJson?.addEventListener('click', async () => {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text && text.trim()) {
+        wbJsonInput.value = text.trim();
+        parseInputJson();
+      } else {
+        alert('剪贴板中未检测到有效文本');
+      }
+    } catch {
+      wbJsonInput.focus();
+      alert('请使用键盘快捷键 (Ctrl+V / Cmd+V) 粘贴到输入框');
+    }
+  });
+
+  wbClearJson?.addEventListener('click', () => {
+    wbJsonInput.value = '';
+    parseInputJson();
+    wbJsonInput.focus();
+  });
+
+  // 一键复制邮箱按钮
+  wbCopyEmail?.addEventListener('click', async () => {
+    const email = wbExtractedEmail?.value?.trim();
+    if (!email) {
+      alert('暂无可复制的邮箱，请先在上方粘贴授权 JSON');
+      wbJsonInput.focus();
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(email);
+      if (wbCopyBtnText) wbCopyBtnText.textContent = '✓ 已复制邮箱';
+      setTimeout(() => {
+        if (wbCopyBtnText) wbCopyBtnText.textContent = '一键复制邮箱';
+      }, 1600);
+    } catch {
+      wbExtractedEmail.select();
+      document.execCommand('copy');
+      if (wbCopyBtnText) wbCopyBtnText.textContent = '✓ 已复制邮箱';
+      setTimeout(() => {
+        if (wbCopyBtnText) wbCopyBtnText.textContent = '一键复制邮箱';
+      }, 1600);
+    }
+  });
+
+  // 代理选路变更
+  wbProxyRegion?.addEventListener('change', updateProxyHintText);
+
+  // 个人专属默认 IP 偏好
+  async function loadPreferences() {
+    try {
+      const res = await fetch('/api/local/native-browser-workbench?action=preferences', { cache: 'no-store' });
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.defaultProxyRegion) {
+        userDefaultProxy = data.defaultProxyRegion;
+      }
+      if (Array.isArray(data.availableRegions) && wbProxyRegion) {
+        const currentSelected = wbProxyRegion.value;
+        const autoOpt = '<option value="auto">自动匹配套餐推荐线路（Plus 菲律宾 / Pro 埃及 · 推荐）</option>';
+        const regionOpts = data.availableRegions.map(
+          r => `<option value="${escapeHtml(r.code)}">${escapeHtml(r.label)}</option>`
+        ).join('');
+        const directOpt = '<option value="direct">服务器直连（无代理）</option>';
+        wbProxyRegion.innerHTML = autoOpt + regionOpts + directOpt;
+
+        const targetVal = userDefaultProxy || currentSelected || 'auto';
+        if ([...wbProxyRegion.options].some(o => o.value === targetVal)) {
+          wbProxyRegion.value = targetVal;
+        } else {
+          wbProxyRegion.value = 'auto';
+        }
+      }
+      updateProxyHintText();
+    } catch {
+      // 容错降级
+    }
+  }
+
+  wbSetDefaultProxy?.addEventListener('click', async () => {
+    const chosen = wbProxyRegion?.value || 'auto';
+    const chosenLabel = wbProxyRegion?.options[wbProxyRegion.selectedIndex]?.text || chosen;
+    try {
+      wbSetDefaultProxy.disabled = true;
+      const res = await fetch('/api/local/native-browser-workbench?action=preferences', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ defaultProxyRegion: chosen })
+      });
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || '保存偏好失败');
+      }
+      userDefaultProxy = chosen;
+      updateProxyHintText();
+      alert(`✓ 已将【${chosenLabel}】设为您的个人专属默认线路，后续登录与刷新将自动保持！`);
+    } catch (err) {
+      alert(`设置默认 IP 失败：${err.message}`);
+    } finally {
+      wbSetDefaultProxy.disabled = false;
     }
   });
 
   wbClearInput?.addEventListener('click', () => {
     wbJsonInput.value = '';
-    if (wbProxyRegion) wbProxyRegion.value = 'auto';
+    if (wbProxyRegion) wbProxyRegion.value = userDefaultProxy || 'auto';
     if (wbProxySummary) wbProxySummary.value = '';
     if (wbProxyUrl) wbProxyUrl.value = '';
     if (wbNotesInput) wbNotesInput.value = '';
-    if (wbProxyHint) wbProxyHint.textContent = '⚡ 共享自动代充 IP 池：启动指纹浏览器时自动注入对应国家已核验代理 IP，免手动配置。';
     parseInputJson();
+    updateProxyHintText();
   });
 
   async function loadAccounts() {
@@ -634,6 +782,7 @@ function initializeNativeWorkbench() {
   wbSearchInput?.addEventListener('input', loadAccounts);
   wbFilterStatus?.addEventListener('change', loadAccounts);
 
+  void loadPreferences();
   void loadAccounts();
 }
 

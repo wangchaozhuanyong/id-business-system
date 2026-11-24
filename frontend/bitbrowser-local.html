@@ -18,10 +18,9 @@
 <body class="bit-local">
 <form id="bit-login-form" autocomplete="off">
   <div class="bit-local__workspace-bar bit-workspace-heading">
-    <div class="tabs wb-segmented-tabs" role="tablist" aria-label="工作区">
-      <button class="tab active" type="button" id="bit-tab-workbench" role="tab" aria-selected="true" aria-controls="bit-workbench-panel">工作台</button>
-      <button class="tab" type="button" id="bit-tab-login" role="tab" aria-selected="false" aria-controls="bit-login-panel" tabindex="-1">单号登录</button>
-      <button class="tab" type="button" id="bit-tab-library" role="tab" aria-selected="false" aria-controls="bit-library-panel" tabindex="-1">IP 资料库 <span class="tab-count" id="bit-ip-count">—</span></button>
+    <div class="title-with-help">
+      <h1 class="page-title" style="margin: 0; font-size: 18px; font-weight: 600;">手动充值工作台</h1>
+      <details class="title-help"><summary id="wb-top-help-btn" aria-label="查看手动充值工作台说明" aria-controls="wb-top-help">ⓘ</summary><div class="title-description" id="wb-top-help" role="note">专为 ChatGPT 等订阅手动代充与续费设计。支持一键粘贴单账户授权 JSON、自动提取账号邮箱、一键复制邮箱；共享自动代充已核验真实 IP 池，并支持为个人操作员持久化锁定默认线路。一键拉起独立的指纹浏览器进入登录态，所有操作记录均沉淀在下方数据表中。</div></details>
     </div>
     <div class="wb-header-status" aria-label="运行环境状态">
       <span class="wb-status-tag wb-status-tag--proxy" title="已自动关联自动代充代理池，智能按套餐匹配出口">
@@ -32,298 +31,151 @@
       </span>
     </div>
   </div>
-  <div class="bit-local__body">
-  <div id="bit-workbench-panel" role="tabpanel" aria-labelledby="bit-tab-workbench">
-    <section class="panel bit-local__section wb-entry-card" aria-labelledby="workbench-entry-title">
-      <header class="panel-heading">
-        <div class="title-with-help">
-          <h2 id="workbench-entry-title"><span class="bit-local__step">1</span>录入账号与一键启动</h2>
-          <details class="title-help"><summary id="workbench-entry-help-btn" aria-label="查看快速录入说明" aria-controls="workbench-entry-help">ⓘ</summary><div class="title-description" id="workbench-entry-help" role="note">粘贴完整单账户授权 JSON，系统自动提取邮箱、套餐与设备指纹；共享自动代充 IP 池，无需手动配置代理。点击“保存并打开浏览器”后，系统将在本机直接拉起独立的指纹 Chrome 窗口并加载 ChatGPT，自动注入登录态保留给您手动订阅及绑定支付。</div></details>
-        </div>
-      </header>
-      <div class="panel-body">
-        <div class="field wb-json-field">
-          <div class="wb-field-head">
-            <label for="wb-json-input">授权 JSON</label>
-            <span id="wb-json-status" class="wb-json-badge" role="status">等待输入 JSON</span>
-          </div>
-          <textarea id="wb-json-input" class="textarea wb-mono-textarea" rows="3" placeholder="粘贴 ChatGPT 单账户授权 JSON，系统将自动识别邮箱与凭据"></textarea>
-        </div>
-        <div class="form-grid form-grid--paired wb-config-grid">
-          <div class="field">
-            <label for="wb-proxy-region">代理 IP 选路（共享自动代充 IP 池）</label>
-            <select id="wb-proxy-region" class="select wb-select-highlight">
-              <option value="auto">自动匹配套餐推荐线路（Plus 菲律宾 / Pro 埃及 · 推荐）</option>
-              <option value="PH">菲律宾（PH · 自动代充 IP 池）</option>
-              <option value="EG">埃及（EG · 自动代充 IP 池）</option>
-              <option value="MY">马来西亚（MY · 自动代充 IP 池）</option>
-              <option value="SG">新加坡（SG · 自动代充 IP 池）</option>
-              <option value="US">美国（US · 自动代充 IP 池）</option>
-              <option value="direct">服务器直连（无代理）</option>
-            </select>
-            <input type="hidden" id="wb-proxy-summary" value="共享代充池 · 智能选路" />
-            <input type="hidden" id="wb-proxy-url" value="" />
-            <p id="wb-proxy-hint" class="field-help text-success" role="status">⚡ 共享自动代充 IP 池：启动指纹浏览器时自动注入对应国家已核验代理 IP，免手动配置。</p>
-          </div>
-          <div class="field">
-            <label for="wb-notes-input">续费备注（选填）</label>
-            <input id="wb-notes-input" class="input" placeholder="例如：已付订金、预订 Plus" />
-            <p class="field-help">记录客户偏好或支付渠道，保存后可在下方随时修改</p>
-          </div>
-        </div>
-        <div class="bit-local__submit-row wb-button-row">
-          <button type="button" class="button button--primary wb-btn-primary" id="wb-save-and-open">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin-right: 6px;"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-            保存并打开浏览器
-          </button>
-          <button type="button" class="button wb-btn-secondary" id="wb-save-only">仅保存到数据表</button>
-          <button type="button" class="button button--subtle wb-btn-clear" id="wb-clear-input">清空输入</button>
-        </div>
-      </div>
-    </section>
 
-    <section class="panel bit-local__section wb-table-card" aria-labelledby="workbench-list-title">
-      <header class="panel-heading wb-table-card-heading">
-        <div class="title-with-help">
-          <h2 id="workbench-list-title"><span class="bit-local__step">2</span>账号续费管理数据表</h2>
-          <details class="title-help"><summary id="workbench-list-help-btn" aria-label="查看数据表说明" aria-controls="workbench-list-help">ⓘ</summary><div class="title-description" id="workbench-list-help" role="note">沉淀您操作过的所有代充账号与打开记录。点击“打开浏览器”可一键唤醒带登录态的专属 Chrome 窗口执行续费；续费完成后可标记状态。</div></details>
-        </div>
-      </header>
-      <div class="panel-body wb-table-card-body">
-        <div class="table-toolbar compact-toolbar wb-integrated-toolbar">
-          <div class="wb-toolbar-filters">
-            <div class="wb-search-wrapper">
-              <input type="search" id="wb-search-input" class="input search-input wb-search-input" placeholder="搜索邮箱、代理或备注…" data-auto-search />
-            </div>
-            <select id="wb-filter-status" class="select wb-filter-select">
-              <option value="">全部状态</option>
-              <option value="pending_renewal">待续费</option>
-              <option value="active">已开通</option>
-              <option value="expired">已过期</option>
-            </select>
-          </div>
-          <div class="wb-toolbar-meta">
-            <span id="wb-list-count" class="wb-badge-count">共 0 个账号</span>
-            <button type="button" class="button button--small wb-btn-refresh" id="wb-refresh-list" title="重新载入最新列表">
-              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin-right: 4px;"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
-              刷新列表
-            </button>
-          </div>
-        </div>
-        <div class="table-viewport wb-table-viewport" tabindex="0" aria-label="续费账号数据表，可横向滚动">
-          <table class="table wb-table" id="wb-accounts-table">
-            <thead>
-              <tr>
-                <th scope="col" style="min-width: 190px;">账号邮箱</th>
-                <th scope="col" style="min-width: 85px;">当前套餐</th>
-                <th scope="col" style="min-width: 140px;">绑定代理</th>
-                <th scope="col" style="min-width: 95px;">状态</th>
-                <th scope="col" style="min-width: 130px;">最后打开时间</th>
-                <th scope="col" style="min-width: 130px;">续费备注</th>
-                <th scope="col" style="min-width: 200px; text-align: right;">操作</th>
-              </tr>
-            </thead>
-            <tbody id="wb-accounts-tbody">
-              <tr>
-                <td colspan="7" class="wb-empty-cell">
-                  <div class="wb-empty-state">
-                    <span class="wb-empty-icon">📋</span>
-                    <span class="wb-empty-text">暂无账号记录，请在上方录入</span>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </section>
-  </div>
-  <div id="bit-login-panel" role="tabpanel" aria-labelledby="bit-tab-login" hidden>
-    <fieldset id="bit-login-fields">
-      <section class="panel bit-local__section" aria-labelledby="bit-account-title">
+  <div class="bit-local__body">
+    <div id="bit-workbench-panel" role="region" aria-label="手动充值工作区">
+      <section class="panel bit-local__section wb-entry-card" aria-labelledby="workbench-entry-title">
         <header class="panel-heading">
-          <div class="title-with-help"><h2 id="bit-account-title"><span class="bit-local__step">1</span>选择比特账号</h2>
-            <details class="title-help"><summary id="bit-toggle-connection-help" aria-label="查看账号连接说明" aria-controls="bit-connection-help">ⓘ</summary><div class="title-description" id="bit-connection-help" role="note">先在这台电脑的比特客户端登录对应账号，再选择已保存的连接。账号名称是手动标记，网站不会替你切换客户端账号。首次使用新电脑，请启用 Local API 和鉴权，填写该电脑的地址与密钥；子账号需要接口权限。</div></details>
+          <div class="title-with-help">
+            <h2 id="workbench-entry-title"><span class="bit-local__step">1</span>录入账号与一键启动</h2>
+            <details class="title-help"><summary id="workbench-entry-help-btn" aria-label="查看快速录入说明" aria-controls="workbench-entry-help">ⓘ</summary><div class="title-description" id="workbench-entry-help" role="note">粘贴完整单账户授权 JSON，系统自动提取邮箱、套餐与设备指纹；共享自动代充 IP 池，无需手动配置代理。点击“保存并打开浏览器”后，系统将在本机直接拉起独立的指纹 Chrome 窗口并加载 ChatGPT，自动注入登录态保留给您手动订阅及绑定支付。</div></details>
           </div>
-          <div class="bit-local__actions"><button class="button" type="button" id="bit-toggle-connection" aria-controls="bit-connection-settings" aria-expanded="false">连接设置</button><button class="button" type="button" id="bit-add-connection" data-bit-profile hidden disabled>新增连接</button></div>
         </header>
         <div class="panel-body">
-          <div class="field" data-bit-profile hidden><label for="bit-connection-profile">比特账号</label><div class="field-control"><div class="option-entry-controls"><select id="bit-connection-profile" disabled></select><button class="button" type="button" id="bit-default-connection" title="仅对当前登录账号生效" disabled>设为默认</button></div><p id="bit-catalog-result" class="field-help" role="status">请选择账号连接，或新增这台电脑的连接。</p><p id="bit-default-connection-result" class="field-help" role="status" hidden></p></div></div>
-          <details id="bit-connection-settings">
-            <summary>账号标记与本机接口</summary>
-            <div class="bit-local__connection">
-              <div class="form-grid form-grid--paired">
-                <div class="field"><label for="bit-account-name">比特账号名称</label><input id="bit-account-name" autocomplete="off" maxlength="80" placeholder="填写实际登录的比特账号" /></div>
-                <div class="field"><label for="bit-connection-name">电脑／连接备注<span class="required">*</span></label><input id="bit-connection-name" maxlength="80" placeholder="例如：办公室 Mac、家里电脑" /></div>
-              <div class="field">
-                <label for="bit-local-url">本机接口地址</label>
-                <input id="bit-local-url" type="url" value="http://127.0.0.1:54345" required />
+          <div class="field wb-json-field">
+            <div class="wb-json-toolbar">
+              <div class="wb-field-head">
+                <label for="wb-json-input" style="font-weight: 600;">授权 JSON</label>
+                <span id="wb-json-status" class="wb-json-badge" role="status">等待输入 JSON</span>
               </div>
-              <div class="field">
-                <label for="bit-local-token">本机接口密钥</label>
-                <details class="title-help field-title-help"><summary aria-label="查看本机接口密钥说明" aria-controls="bit-local-token-help">ⓘ</summary><div class="title-description" id="bit-local-token-help" role="note">保存连接时加密保存。输入新密钥可替换已保存的值。</div></details>
-                <div class="field-control">
-                  <div class="bit-local__secret-control"><input id="bit-local-token" type="password" autocomplete="new-password" required /><button class="button" id="bit-token-eye" type="button" aria-label="查看本机接口密钥" aria-pressed="false" title="查看本机接口密钥"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg></button></div>
-                </div>
+              <div class="wb-json-actions">
+                <button type="button" class="wb-action-pill-btn" id="wb-paste-json" title="从剪贴板读取并填入">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><rect x="8" y="2" width="8" height="4" rx="1" ry="1"/></svg>
+                  粘贴
+                </button>
+                <button type="button" class="wb-action-pill-btn" id="wb-clear-json" title="清空输入框">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                  清空
+                </button>
               </div>
-              <div class="field">
-                <label for="bit-local-group">窗口分组</label
-                ><select id="bit-local-group" aria-describedby="bit-catalog-result" disabled required>
-                  <option value="">请先检测连接</option>
-                </select>
-              </div>
-              <div class="field">
-                <label for="bit-local-tag">窗口标签</label
-                ><select id="bit-local-tag" aria-describedby="bit-catalog-result" disabled required>
-                  <option value="">请先检测连接</option>
-                </select>
-              </div>
-
-              </div>
-            <details class="bit-local__advanced">
-              <summary>浏览器与等待设置</summary>
-              <div class="form-grid form-grid--paired">
-                <div class="field">
-                  <label for="bit-core">内核版本</label>
-                  <input
-                    id="bit-core"
-                    inputmode="numeric"
-                    pattern="[0-9]{2,3}"
-                    value="152"
-                    required
-                  />
-                </div>
-                <div class="field">
-                  <label for="bit-session-wait">每轮等待（分钟）</label>
-                  <input id="bit-session-wait" type="number" min="1" max="10" required />
-                </div>
-                <div class="field">
-                  <label for="bit-session-retries">网络恢复次数</label>
-                  <input id="bit-session-retries" type="number" min="0" max="9" required />
-                </div>
-                <div hidden inert>                <div class="field">
-                  <label for="bit-proxy-mode">代理类型</label>
-                  <select id="bit-proxy-mode">
-                    <option value="dynamic">动态代理</option>
-                    <option value="static">固定代理</option>
-                  </select>
-                </div>
-                <div class="field">
-                  <label for="bit-proxy-type">代理协议</label>
-                  <select id="bit-proxy-type">
-                    <option value="http">HTTP</option>
-                    <option value="https">HTTPS</option>
-                    <option value="socks5">SOCKS5</option>
-                  </select>
-                </div>
-                <div class="field">
-                  <label for="bit-proxy-country">代理国家</label>
-                  <input
-                    id="bit-proxy-country"
-                    placeholder="如 US，选填"
-                    maxlength="2"
-                    pattern="[a-zA-Z]{2}"
-                  />
-                </div>
-                <div class="field" data-bit-proxy="dynamic">
-                  <label for="bit-proxy-url">动态代理地址</label
-                  ><input id="bit-proxy-url" autocomplete="new-password" type="password" placeholder="选填" />
-                </div>
-                <div class="field" data-bit-proxy="static" hidden>
-                  <label for="bit-proxy-host">代理主机</label><input id="bit-proxy-host" />
-                </div>
-                <div class="field" data-bit-proxy="static" hidden>
-                  <label for="bit-proxy-port">代理端口</label
-                  ><input id="bit-proxy-port" type="number" min="1" max="65535" value="8080" />
-                </div>
-                <div class="field" data-bit-proxy="static" hidden>
-                  <label for="bit-proxy-user">代理用户名</label
-                  ><input id="bit-proxy-user" type="password" autocomplete="new-password" maxlength="256" />
-                </div>
-                <div class="field" data-bit-proxy="static" hidden>
-                  <label for="bit-proxy-password">代理密码</label
-                  ><input id="bit-proxy-password" type="password" autocomplete="new-password" maxlength="256" />
-                </div>
-                </div>
-              </div>
-            </details>
-
-              <div class="bit-local__actions"><button class="button" type="button" id="bit-check-connection">检测连接</button><button class="button primary" type="button" id="bit-save-connection" data-bit-profile hidden disabled>保存连接</button><button class="button" type="button" id="bit-reload-connections" hidden>重新读取配置</button><p id="bit-profile-result" class="bit-local__status" role="status"></p></div>
             </div>
-          </details>
+            <textarea id="wb-json-input" class="textarea wb-mono-textarea" rows="3" placeholder="粘贴 ChatGPT 单账户授权 JSON，系统将自动识别邮箱与凭据"></textarea>
+          </div>
+
+          <!-- 自动识别邮箱账号框架与一键复制 -->
+          <div class="wb-email-frame" id="wb-email-frame">
+            <div class="wb-email-frame-head">
+              <span class="wb-email-frame-title">已识别账号资料</span>
+              <div class="wb-email-frame-badges">
+                <span id="wb-extracted-plan" class="wb-plan-pill" style="display: none;"></span>
+                <span id="wb-extracted-device" class="wb-saved-pref-badge" style="display: none;">指纹已识别</span>
+              </div>
+            </div>
+            <div class="wb-email-input-group">
+              <input id="wb-extracted-email" class="input wb-email-input" placeholder="粘贴 JSON 后自动识别账号邮箱" readonly />
+              <button type="button" class="button button--small wb-btn-copy-email" id="wb-copy-email" title="复制识别出的邮箱账号">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
+                <span id="wb-copy-btn-text">一键复制邮箱</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="form-grid form-grid--paired wb-config-grid" style="margin-top: 12px;">
+            <div class="field">
+              <div class="wb-field-head">
+                <label for="wb-proxy-region">代理 IP 选路（共享自动代充真实 IP 池）</label>
+                <span id="wb-pref-saved-badge" class="wb-saved-pref-badge" style="display: none;">★ 个人默认</span>
+              </div>
+              <div class="wb-proxy-control-row">
+                <select id="wb-proxy-region" class="select wb-select-highlight">
+                  <option value="auto">自动匹配套餐推荐线路（Plus 菲律宾 / Pro 埃及 · 推荐）</option>
+                  <option value="PH">菲律宾（PH · 自动代充 IP 池）</option>
+                  <option value="EG">埃及（EG · 自动代充 IP 池）</option>
+                  <option value="direct">服务器直连（无代理）</option>
+                </select>
+                <button type="button" class="button button--small wb-btn-set-default" id="wb-set-default-proxy" title="保存为当前操作员专属默认线路，刷新后持续保持">设为我的默认</button>
+              </div>
+              <input type="hidden" id="wb-proxy-summary" value="共享代充池 · 智能选路" />
+              <input type="hidden" id="wb-proxy-url" value="" />
+              <p id="wb-proxy-hint" class="field-help text-success" role="status">⚡ 共享自动代充 IP 池：启动指纹浏览器时自动注入对应国家已核验代理 IP，免手动配置。</p>
+            </div>
+            <div class="field">
+              <label for="wb-notes-input">续费备注（选填）</label>
+              <input id="wb-notes-input" class="input" placeholder="例如：已付订金、预订 Plus" />
+              <p class="field-help">记录客户偏好或支付渠道，保存后可在下方随时修改</p>
+            </div>
+          </div>
+
+          <div class="bit-local__submit-row wb-button-row">
+            <button type="button" class="button button--primary wb-btn-primary" id="wb-save-and-open">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin-right: 6px;"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+              保存并打开浏览器
+            </button>
+            <button type="button" class="button wb-btn-secondary" id="wb-save-only">仅保存到数据表</button>
+            <button type="button" class="button button--subtle wb-btn-clear" id="wb-clear-input">重置输入</button>
+          </div>
         </div>
       </section>
-      <section class="panel bit-local__section" aria-labelledby="bit-proxy-title">
-        <header class="panel-heading"><div class="title-with-help"><h2 id="bit-proxy-title"><span class="bit-local__step">2</span>选择执行 IP</h2><details class="title-help"><summary aria-label="查看执行 IP 说明">ⓘ</summary><div class="title-description" role="note">录入 IP 时标记国家和类型。每次执行直接选择 IP，无需另选国家。已保存的资料可以在 IP 资料库查看和编辑。</div></details></div><div class="bit-local__actions"><button class="button" id="bit-show-library" type="button">管理 IP</button><button class="button" id="bit-add-proxy" type="button">新增 IP</button></div></header>
-        <div class="panel-body"><div class="field"><label for="bit-execution-proxy">执行 IP<span class="required">*</span></label><div class="field-control"><div class="option-entry-controls"><select id="bit-execution-proxy" disabled><option value="">正在读取 IP…</option></select><button class="button" type="button" id="bit-default-proxy" data-bit-profile title="仅对当前登录账号生效" hidden disabled>设为默认</button></div><p id="bit-proxy-result" class="field-help" role="status">正在读取已保存的 IP。</p></div></div></div>
-      </section>
-      <section class="panel bit-local__section" aria-labelledby="bit-auth-title">
-        <header class="panel-heading"><h2 id="bit-auth-title"><span class="bit-local__step">3</span>填写登录资料</h2><span class="tag">授权 JSON 登录</span></header>
-        <div class="panel-body"><div class="form-grid form-grid--paired">
-            <div class="field">
-              <label for="bit-authorization-json">授权 JSON</label>
-              <div class="field-control">
-                <div class="bit-local__secret-control">
-                  <input
-                    id="bit-authorization-json" autocomplete="new-password"
-                    type="password"
-                    spellcheck="false"
-                    placeholder="粘贴完整授权 JSON，将自动载入"
-                    aria-describedby="bit-authorization-result"
-                  />
-                  <button class="button" type="button" id="bit-clear-authorization" aria-label="清空授权 JSON">清空</button>
-                </div>
-                <p id="bit-authorization-result" class="field-help" role="status"></p>
-              </div>
-            </div>
-            <div class="field">
-              <label for="bit-authorization-file">导入文件</label>
-              <input
-                id="bit-authorization-file"
-                type="file"
-                accept=".json,.txt,application/json,text/plain"
-                aria-describedby="bit-authorization-result"
-              />
-            </div>
-            <div class="field">
-              <label for="bit-window-name">窗口名称</label>
-              <input
-                id="bit-window-name"
-                placeholder="载入授权 JSON 后显示邮箱账号"
-                readonly
-              />
-            </div>
 
-        </div></div>
+      <section class="panel bit-local__section wb-table-card" aria-labelledby="workbench-list-title">
+        <header class="panel-heading wb-table-card-heading">
+          <div class="title-with-help">
+            <h2 id="workbench-list-title"><span class="bit-local__step">2</span>账号续费管理数据表</h2>
+            <details class="title-help"><summary id="workbench-list-help-btn" aria-label="查看数据表说明" aria-controls="workbench-list-help">ⓘ</summary><div class="title-description" id="workbench-list-help" role="note">沉淀您操作过的所有代充账号与打开记录。点击“打开浏览器”可一键唤醒带登录态的专属 Chrome 窗口执行续费；续费完成后可标记状态。</div></details>
+          </div>
+        </header>
+        <div class="panel-body wb-table-card-body">
+          <div class="table-toolbar compact-toolbar wb-integrated-toolbar">
+            <div class="wb-toolbar-filters">
+              <div class="wb-search-wrapper">
+                <input type="search" id="wb-search-input" class="input search-input wb-search-input" placeholder="搜索邮箱、代理或备注…" data-auto-search />
+              </div>
+              <select id="wb-filter-status" class="select wb-filter-select">
+                <option value="">全部状态</option>
+                <option value="pending_renewal">待续费</option>
+                <option value="active">已开通</option>
+                <option value="expired">已过期</option>
+              </select>
+            </div>
+            <div class="wb-toolbar-meta">
+              <span id="wb-list-count" class="wb-badge-count">共 0 个账号</span>
+              <button type="button" class="button button--small wb-btn-refresh" id="wb-refresh-list" title="重新载入最新列表">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin-right: 4px;"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
+                刷新列表
+              </button>
+            </div>
+          </div>
+          <div class="table-viewport wb-table-viewport" tabindex="0" aria-label="续费账号数据表，可横向滚动">
+            <table class="table wb-table" id="wb-accounts-table">
+              <thead>
+                <tr>
+                  <th scope="col" style="min-width: 190px;">账号邮箱</th>
+                  <th scope="col" style="min-width: 85px;">当前套餐</th>
+                  <th scope="col" style="min-width: 140px;">绑定代理</th>
+                  <th scope="col" style="min-width: 95px;">状态</th>
+                  <th scope="col" style="min-width: 130px;">最后打开时间</th>
+                  <th scope="col" style="min-width: 130px;">续费备注</th>
+                  <th scope="col" style="min-width: 200px; text-align: right;">操作</th>
+                </tr>
+              </thead>
+              <tbody id="wb-accounts-tbody">
+                <tr>
+                  <td colspan="7" class="wb-empty-cell">
+                    <div class="wb-empty-state">
+                      <span class="wb-empty-icon">📋</span>
+                      <span class="wb-empty-text">暂无账号记录，请在上方录入</span>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
       </section>
-    </fieldset>
-    <section class="bit-local__execution" aria-labelledby="bit-local-status"><div><h2 id="bit-local-status">执行状态</h2><p id="bit-login-result" class="bit-local__status" role="status">等待登录</p></div><div class="bit-local__actions"><button class="button primary" type="submit" id="bit-start-login" disabled>登录账号</button><button class="button" type="button" id="bit-cancel-login" hidden>取消登录</button></div></section>
-  </div>
-  <section id="bit-library-panel" class="panel" role="tabpanel" aria-labelledby="bit-tab-library" hidden>
-    <header class="panel-heading"><div class="title-with-help"><h2>已保存的 IP</h2><details class="title-help"><summary aria-label="查看 IP 资料库说明">ⓘ</summary><div class="title-description" role="note">IP 资料保存到当前账号的服务端资料库。列表展示地址摘要，完整代理链接加密保存。点击“使用”返回登录页并选中该 IP。</div></details></div><div class="bit-local__actions"><button class="button" id="bit-refresh-proxies" type="button">刷新列表</button><button class="button" id="bit-test-all-proxies" type="button" title="检测所有已保存的 IP，不受筛选和分页影响" disabled>检测全部</button><button class="button primary" id="bit-library-add" type="button">新增 IP</button></div></header>
-    <div class="toolbar bit-local__filters"><input id="bit-ip-search" type="search" aria-label="搜索 IP" placeholder="搜索名称、国家或代理地址" /><select id="bit-ip-filter" aria-label="筛选 IP 类型"><option value="">全部 IP 类型</option></select><select id="bit-ip-sort" aria-label="IP 排序"><option value="recent">最近添加优先</option><option value="name">按名称排序</option><option value="country">按国家排序</option></select></div>
-    <p id="bit-library-result" class="bit-local__library-status" role="status"></p>
-    <div class="table-viewport bit-local__ip-table" tabindex="0" aria-label="IP 资料表，可横向滚动"><table><thead><tr><th>名称／备注</th><th>国家</th><th>IP 类型</th><th>检测状态</th><th>代理地址／协议</th><th class="table-actions">操作</th></tr></thead><tbody id="bit-ip-rows"></tbody></table><div id="bit-ip-empty" class="empty-state" hidden></div></div>
-    <footer id="bit-ip-pagination" data-pagination-footer></footer>
-  </section>
-  </div>
-  <dialog id="bit-proxy-editor" class="bit-local__proxy-editor" aria-labelledby="bit-proxy-editor-title">
-    <header class="bit-local__drawer-header"><h2 id="bit-proxy-editor-title">新增执行 IP</h2><button class="button" id="bit-ip-dismiss" type="button" aria-label="关闭 IP 编辑">关闭</button></header>
-    <div class="bit-local__drawer-body">
-      <div class="field"><label for="bit-ip-name">备注名称<span class="required">*</span></label><input id="bit-ip-name" autocomplete="off" maxlength="80" placeholder="例如：菲律宾住宅代理" /></div>
-      <div class="field"><label for="bit-ip-kind">IP 类型</label><select id="bit-ip-kind"></select></div>
-      <div class="field"><label for="bit-ip-protocol">代理协议</label><select id="bit-ip-protocol"><option value="auto">自动识别</option><option value="socks5">SOCKS5</option><option value="http">HTTP</option><option value="https">HTTPS</option></select></div>
-      <div class="field"><label for="bit-ip-link">代理链接<span id="bit-ip-link-required" class="required">*</span></label><input id="bit-ip-link" type="text" autocomplete="off" spellcheck="false" autocapitalize="off" placeholder="直接粘贴购买平台生成的代理信息" /></div>
-      <p class="field-help">支持账号:密码@主机:端口、主机:端口:账号:密码和完整代理链接。也支持 HTTP／HTTPS API 提取链接。执行时自动填入比特窗口。</p>
-      <p id="bit-ip-probe-result" class="field-help" role="status">尚未测试代理。</p>
-      <details id="bit-ip-advanced"><summary>高级设置（通常无需填写）</summary>
-        <div class="field"><label for="bit-ip-mode">连接方式</label><select id="bit-ip-mode"><option value="auto">自动识别</option><option value="static">代理地址</option><option value="dynamic">API 提取链接</option></select></div>
-        <div class="field"><label for="bit-ip-country">国家标记</label><input id="bit-ip-country" maxlength="80" list="bit-ip-countries" autocomplete="off" placeholder="测试时自动识别，也可填写中文国家名" /></div><datalist id="bit-ip-countries"></datalist>
-      </details>
-      <p id="bit-ip-edit-note" class="field-help"></p><p id="bit-ip-save-result" role="status"></p><button class="button" id="bit-ip-rebase" type="button" hidden>核对最新资料</button>
     </div>
-    <footer class="bit-local__drawer-footer"><button class="button" id="bit-ip-test" type="button">测试代理</button><button class="button" id="bit-ip-close" type="button">取消</button><button class="button primary" id="bit-ip-save" type="button">保存并使用</button></footer>
-  </dialog>
+  </div>
+
+  <!-- 更换凭据弹窗 -->
   <dialog id="wb-update-json-dialog" class="bit-local__proxy-editor" aria-labelledby="wb-update-json-title">
     <header class="bit-local__drawer-header">
       <h2 id="wb-update-json-title">更换授权 JSON</h2>
@@ -336,7 +188,7 @@
       </div>
       <div class="field">
         <label for="wb-update-json-textarea">最新授权 JSON<span class="required">*</span></label>
-        <textarea id="wb-update-json-textarea" class="textarea" rows="5" placeholder="粘贴该账号最新的单账户授权 JSON…"></textarea>
+        <textarea id="wb-update-json-textarea" class="textarea wb-mono-textarea" rows="5" placeholder="粘贴该账号最新的单账户授权 JSON…"></textarea>
         <p id="wb-update-json-status" class="field-help" role="status">请粘贴该账号最新的授权 JSON</p>
       </div>
     </div>
@@ -346,6 +198,99 @@
       <button class="button button--primary primary" id="wb-update-json-save-and-launch" type="button">更新并立即打开登录</button>
     </footer>
   </dialog>
+
+  <!-- 兼容历史组件占位（保持隐藏，避免第三方库或遗留脚本报错） -->
+  <div hidden style="display: none;" aria-hidden="true">
+    <div class="tabs wb-segmented-tabs" role="tablist">
+      <button class="tab active" type="button" id="bit-tab-workbench" role="tab"></button>
+      <button class="tab" type="button" id="bit-tab-login" role="tab"></button>
+      <button class="tab" type="button" id="bit-tab-library" role="tab"></button>
+    </div>
+    <span id="bit-ip-count">0</span>
+    <button id="bit-show-library" type="button"></button>
+    <div id="bit-login-panel">
+      <fieldset id="bit-login-fields">
+        <section class="panel bit-local__section" aria-labelledby="bit-account-title">
+          <header class="panel-heading">
+            <h2 id="bit-account-title"></h2>
+            <button class="button" type="button" id="bit-toggle-connection"></button>
+            <button class="button" type="button" id="bit-add-connection"></button>
+          </header>
+          <div class="panel-body">
+            <select id="bit-connection-profile"></select>
+            <button class="button" type="button" id="bit-default-connection"></button>
+            <p id="bit-catalog-result"></p>
+            <p id="bit-default-connection-result"></p>
+            <details id="bit-connection-settings">
+              <input id="bit-account-name" />
+              <input id="bit-connection-name" />
+              <input id="bit-local-url" value="http://127.0.0.1:54345" />
+              <input id="bit-local-token" />
+              <button id="bit-token-eye" type="button"></button>
+              <select id="bit-local-group"></select>
+              <select id="bit-local-tag"></select>
+              <input id="bit-core" value="152" />
+              <input id="bit-session-wait" value="1" />
+              <input id="bit-session-retries" value="0" />
+              <select id="bit-proxy-mode"></select>
+              <select id="bit-proxy-type"></select>
+              <input id="bit-proxy-country" />
+              <input id="bit-proxy-url" />
+              <input id="bit-proxy-host" />
+              <input id="bit-proxy-port" />
+              <input id="bit-proxy-user" />
+              <input id="bit-proxy-password" />
+              <button class="button" type="button" id="bit-check-connection"></button>
+              <button class="button" type="button" id="bit-save-connection"></button>
+              <button class="button" type="button" id="bit-reload-connections"></button>
+              <p id="bit-profile-result"></p>
+            </details>
+          </div>
+        </section>
+        <section class="panel bit-local__section" aria-labelledby="bit-proxy-title">
+          <header class="panel-heading"><h2 id="bit-proxy-title"></h2><button class="button" id="bit-add-proxy" type="button"></button></header>
+          <div class="panel-body"><select id="bit-execution-proxy"></select><button class="button" type="button" id="bit-default-proxy"></button><p id="bit-proxy-result"></p></div>
+        </section>
+        <section class="panel bit-local__section" aria-labelledby="bit-auth-title">
+          <header class="panel-heading"><h2 id="bit-auth-title"></h2></header>
+          <div class="panel-body">
+            <input id="bit-authorization-json" />
+            <button class="button" type="button" id="bit-clear-authorization"></button>
+            <p id="bit-authorization-result"></p>
+            <input id="bit-authorization-file" type="file" />
+            <input id="bit-window-name" />
+          </div>
+        </section>
+      </fieldset>
+      <section class="bit-local__execution"><p id="bit-login-result"></p><button id="bit-start-login" type="submit"></button><button id="bit-cancel-login" type="button"></button></section>
+    </div>
+    <section id="bit-library-panel" class="panel">
+      <header class="panel-heading"><button class="button" id="bit-refresh-proxies" type="button"></button><button class="button" id="bit-test-all-proxies" type="button"></button><button class="button" id="bit-library-add" type="button"></button></header>
+      <input id="bit-ip-search" /><select id="bit-ip-filter"></select><select id="bit-ip-sort"></select>
+      <p id="bit-library-result"></p>
+      <table><tbody id="bit-ip-rows"></tbody></table>
+      <div id="bit-ip-empty"></div>
+      <footer id="bit-ip-pagination"></footer>
+    </section>
+    <dialog id="bit-proxy-editor">
+      <button class="button" id="bit-ip-dismiss" type="button"></button>
+      <input id="bit-ip-name" />
+      <select id="bit-ip-kind"></select>
+      <select id="bit-ip-protocol"></select>
+      <input id="bit-ip-link" />
+      <span id="bit-ip-link-required"></span>
+      <p id="bit-ip-probe-result"></p>
+      <select id="bit-ip-mode"></select>
+      <input id="bit-ip-country" />
+      <datalist id="bit-ip-countries"></datalist>
+      <p id="bit-ip-edit-note"></p>
+      <p id="bit-ip-save-result"></p>
+      <button class="button" id="bit-ip-rebase" type="button"></button>
+      <button class="button" id="bit-ip-test" type="button"></button>
+      <button class="button" id="bit-ip-close" type="button"></button>
+      <button class="button" id="bit-ip-save" type="button"></button>
+    </dialog>
+  </div>
 </form>
 </body>
 </html>

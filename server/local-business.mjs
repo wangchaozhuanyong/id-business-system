@@ -69,6 +69,7 @@ import {
 import { bitBrowserWindowDomain, BitBrowserWindowError, readWindowRecord, writeWindowRecord } from './bitbrowser-login-windows.mjs';
 import {
   nativeWorkbenchDomain,
+  NativeWorkbenchError,
   queryWorkbenchAccounts,
   upsertWorkbenchAccount,
   updateWorkbenchNote,
@@ -2276,6 +2277,31 @@ export function createLocalBusinessStore(databasePath) {
         launch: launchRes ? { ok: true, account: launchRes.account } : null
       };
     },
+    loadNativeWorkbenchPreferences(actor = localToolboxActor) {
+      const { data } = readDocument(`${nativeWorkbenchDomain}:pref:${actor.id}`);
+      return {
+        defaultProxyRegion: data?.defaultProxyRegion || 'auto',
+        availableRegions: [
+          { code: 'PH', label: '菲律宾 (PH · 自动代充 IP 池)' },
+          { code: 'EG', label: '埃及 (EG · 自动代充 IP 池)' }
+        ]
+      };
+    },
+    saveNativeWorkbenchPreferences(body, actor = localToolboxActor) {
+      const domain = `${nativeWorkbenchDomain}:pref:${actor.id}`;
+      return writeTransaction(() => {
+        const current = readDocument(domain);
+        const defaultProxyRegion = typeof body?.defaultProxyRegion === 'string' && body.defaultProxyRegion.trim()
+          ? body.defaultProxyRegion.trim()
+          : 'auto';
+        const version = current.version + 1;
+        const payload = { defaultProxyRegion, updatedAt: new Date().toISOString() };
+        put.run(domain, version, encrypt(key, domain, version, JSON.stringify(payload)));
+        log.run(new Date().toISOString(), nativeWorkbenchDomain, 'native_workbench_pref_save',
+          auditSummary('保存代充个人专属默认IP', actor, defaultProxyRegion), version);
+        return { version, defaultProxyRegion };
+      });
+    },
     loadBitBrowserProxies(actor) {
       const { version, data } = readDocument(`${bitBrowserProxyDomain}:${actor.id}`);
       const items = summarizeBitBrowserProxies(data ?? []);
@@ -3868,14 +3894,20 @@ export async function handleLocalBusiness(
       const effectiveActor = actor?.id ? actor : localToolboxActor;
       response.setHeader('Cache-Control', 'private, no-store');
       if (request.headers.origin && request.headers.origin !== origin) throw new LocalDataError(403, '仅允许从当前页面操作');
+      const action = url.searchParams.get('action') || '';
       if (request.method === 'GET') {
+        if (action === 'preferences') {
+          return json(response, 200, store.loadNativeWorkbenchPreferences(effectiveActor));
+        }
         const search = url.searchParams.get('search') || '';
         const status = url.searchParams.get('status') || '';
         return json(response, 200, store.loadNativeWorkbenchAccounts({ search, status }, effectiveActor));
       }
-      const action = url.searchParams.get('action') || '';
       if (request.method === 'POST') {
         const body = await readJson(request);
+        if (action === 'preferences') {
+          return json(response, 200, store.saveNativeWorkbenchPreferences(body, effectiveActor));
+        }
         if (action === 'launch') {
           return json(response, 200, await store.launchNativeWorkbenchBrowser(body, effectiveActor));
         }
@@ -4022,7 +4054,8 @@ export async function handleLocalBusiness(
       error instanceof BitBrowserConnectionError ||
       error instanceof BitBrowserWindowError ||
       error instanceof SavedTotpError ||
-      error instanceof MailboxPoolError
+      error instanceof MailboxPoolError ||
+      error instanceof NativeWorkbenchError
     )
       return json(response, error.status, { error: error.message });
     return json(response, 500, { error: '本机数据读写失败，请重试' });
