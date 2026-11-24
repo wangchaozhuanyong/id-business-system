@@ -225,7 +225,7 @@ export function createRechargeOrderSync({ store, client, publicOrigin, quoteServ
           continue;
         }
         if (task.status !== 'success') continue;
-        if (!task.cdk || !String(task.cdk).trim()) continue;
+        if (!committed && (!task.cdk || !String(task.cdk).trim())) continue;
         if (committed) store.rememberRechargeSessions([jobKey], saved.scanOffset);
         const { codes, cards, bills } = await evidenceSources();
         let orbitCards = [];
@@ -237,7 +237,7 @@ export function createRechargeOrderSync({ store, client, publicOrigin, quoteServ
           } catch (error) { if (committed) throw error; }
         }
         const evidence = rechargeOrderEvidence(task, { bills, codes, cards, orbitCards, ownerData, runtimeEntries, now: checkedAt });
-        if (!evidence || !evidence.code) continue;
+        if (!evidence || (!committed && !evidence.code)) continue;
         const completed = utcInstant(evidence.completedAt);
         const created = utcInstant(task.createdAt);
         if (!(completed >= saved.since || !Number.isFinite(completed) && created >= saved.since)) {
