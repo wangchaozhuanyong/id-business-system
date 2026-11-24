@@ -73,6 +73,11 @@ ORBITCARD_LAYOUT_PRESENTATION_FILES = (
     "modules/recharge/codexdaichong/assets.mjs",
     "modules/recharge/codexdaichong/shell.css",
 )
+CARD_POOL_LIMIT_PRESENTATION_FILES = (
+    "modules/recharge/codexdaichong/assets.mjs",
+    "modules/recharge/codexdaichong/card-plan-admin.mjs",
+    "modules/recharge/codexdaichong/shell.css",
+)
 CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES = (
     "modules/recharge/codexdaichong/assets.mjs",
     "modules/recharge/codexdaichong/routing-admin-ui.mjs",
@@ -104,8 +109,10 @@ PRESENTATION_SCOPES = {
     "subscriptionInvoicePresentation": (SUBSCRIPTION_INVOICE_PRESENTATION_FILES, {SUBSCRIPTION_INVOICE_ASSET}),
     "actionPasswordPresentation": (ACTION_PASSWORD_PRESENTATION_FILES, {"/admin.js"}),
     "orbitcardLayoutPresentation": (ORBITCARD_LAYOUT_PRESENTATION_FILES, {"/admin", "/shell.css"}),
+    "cardPoolLimitPresentation": (CARD_POOL_LIMIT_PRESENTATION_FILES, {"/admin", "/admin.js", "/shell.css"}),
 }
 PRESENTATION_MOUNT_ERRORS = {
+    "cardPoolLimitPresentation": "recharge_presentation_mount_mismatch",
     "orbitcardLayoutPresentation": "recharge_presentation_mount_mismatch",
     "cardNumberPresentation": "card_number_presentation_mount_mismatch",
     "cardFirstPaintPresentation": "recharge_presentation_mount_mismatch",

@@ -76,8 +76,8 @@ test('银行卡池从左侧子导航进入并保留完整功能和编辑状态',
   assert.equal(await page.locator('[data-staff-action="card-import-open"]').count(), 0);
   assert.equal(await frame.locator('#cards [data-switch-panel="local"] th').count(), 12);
   const tabsInCardPool = poolTabs(page);
-  for (const name of ['银行卡列表', 'Orbitcard 用卡记录', 'Orbitcard 开卡策略'])
-    await tabsInCardPool.getByRole('button', { name, exact: true }).waitFor({ state: 'attached' });
+  await tabsInCardPool.getByRole('button', { name: '银行卡列表', exact: true }).waitFor({ state: 'attached' });
+  assert.equal(await tabsInCardPool.getByRole('button').count(), 1);
   assert.equal(await frame.locator('#cards .admin-switcher-tabs').isVisible(), false);
   await frame.getByRole('button', { name: '批量导入', exact: true }).click();
   const importBox = frame.locator('#card_pool_import_box');
@@ -116,23 +116,14 @@ test('银行卡池从左侧子导航进入并保留完整功能和编辑状态',
   await frame.locator('#admin_confirm_cancel').click();
   await frame.getByRole('button', { name: '仅使用已设置套餐的卡' }).click();
   await frame.locator('#admin_confirm_cancel').click();
-  await tabsInCardPool.getByRole('button', { name: 'Orbitcard 用卡记录', exact: true }).click();
-  await frame.locator('#orbitcard_usage_filters').waitFor();
-  const strategy = tabsInCardPool.getByRole('button', { name: 'Orbitcard 开卡策略', exact: true });
-  await strategy.click();
-  await frame.locator('#orbitcard_strategy_product_code').waitFor();
-  const reads = fixture.reads.length;
+  assert.equal(await frame.locator('#card_pool_list_body tr').first().locator('.card-usage-metric').textContent(), '2 / 1');
+  assert.equal(await frame.locator('#card_pool_list_body tr').first().locator('.status-exhausted').first().textContent(), '已用满');
   const reloaded = page.waitForResponse(response => new URL(response.url()).pathname ===
-    '/integrations/codexdaichong/api/admin/orbitcard/products');
+    '/integrations/codexdaichong/api/admin/cards');
   await page.getByRole('button', { name: '刷新', exact: true }).click();
   await reloaded;
-  await page.locator('[data-recharge-module="cards"] .recharge-integration__view[aria-busy="false"]').waitFor();
-  await frame.locator('#orbitcard_strategy_product_code').waitFor();
-  assert.equal(await strategy.getAttribute('aria-pressed'), 'true');
-  assert.equal(fixture.reads.length, reads);
-  await tabsInCardPool.getByRole('button', { name: '银行卡列表', exact: true }).click();
   await frame.locator('#card_pool_list_body tr').first().waitFor();
-  assert(fixture.reads.length > reads);
+  assert.equal(await tabsInCardPool.getByRole('button', { name: '银行卡列表', exact: true }).getAttribute('aria-pressed'), 'true');
   assert.equal(await page.locator('iframe[data-view="cards"]').count(), 1);
   const retained = await page.locator(frameSelector).elementHandle();
   await page.evaluate(() => window.IDDesignAPI.clearPageRegions());
@@ -368,18 +359,8 @@ test('完整银行卡入口在深浅主题、宽窄屏和空结果下保持可�
         assert.deepEqual(toolbar.dividers, ['1px', '0px']);
         assert(toolbar.height <= (width <= 900 ? 70 : 62), JSON.stringify(toolbar));
         if (width <= 390) {
-          assert(toolbar.scrolls, '窄屏页签横向滚动');
-          const strategy = tabs.getByRole('button', { name: 'Orbitcard 开卡策略', exact: true });
-          await strategy.focus();
-          await strategy.press('Enter');
-          await frame.locator('#orbitcard_strategy_product_code').waitFor();
-          assert(await strategy.evaluate(node => {
-            const tab = node.getBoundingClientRect();
-            const nav = node.parentElement.getBoundingClientRect();
-            return tab.left >= nav.left - 1 && tab.right <= nav.right + 1;
-          }), '选中页签完整显示在可滚动区域内');
-          await tabs.getByRole('button', { name: '银行卡列表', exact: true }).click();
-          await frame.locator('#card_pool_list_body tr').first().waitFor();
+          const listTab = tabs.getByRole('button', { name: '银行卡列表', exact: true });
+          assert.equal(await listTab.getAttribute('aria-pressed'), 'true');
         }
         const help = page.getByLabel('查看自动代充银行卡说明', { exact: true });
         const before = await page.locator(frameSelector).boundingBox();

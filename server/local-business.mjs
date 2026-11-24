@@ -3866,7 +3866,7 @@ export async function handleLocalBusiness(
     if (domain === nativeWorkbenchDomain) {
       if (!actor?.id) throw new LocalDataError(401, '请先登录');
       response.setHeader('Cache-Control', 'private, no-store');
-      if (request.headers.origin !== origin) throw new LocalDataError(403, '仅允许从当前页面操作');
+      if (request.headers.origin && request.headers.origin !== origin) throw new LocalDataError(403, '仅允许从当前页面操作');
       if (request.method === 'GET') {
         const search = url.searchParams.get('search') || '';
         const status = url.searchParams.get('status') || '';

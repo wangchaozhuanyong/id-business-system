@@ -631,20 +631,25 @@ function adaptAdminScript(source, routingScript) {
         async function loadOrbitcardConfig() {
             const status = document.getElementById('orbitcard_config_status');
             const save = document.getElementById('orbitcard_config_save');
+            if (!status || !save) return;
             try {
                 const res = await authFetch('/api/admin/orbitcard/config');
                 const data = await res.json();
                 if (!res.ok || !data.success) throw new Error(data.message || '加载 Orbitcard 配置失败');
                 const cfg = data.config;
-                document.getElementById('orbitcard_live_management').checked = cfg.live_management === true;
-                document.getElementById('orbitcard_base_url').value = cfg.orbitcard_base_url || '';
+                const toggle = document.getElementById('orbitcard_live_management');
+                if (toggle) toggle.checked = cfg.live_management === true;
+                const url = document.getElementById('orbitcard_base_url');
+                if (url) url.value = cfg.orbitcard_base_url || '';
                 for (const [id, saved] of [
                     ['orbitcard_api_key', cfg.orbitcard_api_key_saved],
                     ['orbitcard_api_secret', cfg.orbitcard_api_secret_configured]
                 ]) {
                     const input = document.getElementById(id);
-                    input.value = '';
-                    input.placeholder = saved ? '已保存，留空不修改' : '';
+                    if (input) {
+                        input.value = '';
+                        input.placeholder = saved ? '已保存，留空不修改' : '';
+                    }
                 }
                 status.textContent = '';
                 save.disabled = false;
@@ -655,17 +660,17 @@ function adaptAdminScript(source, routingScript) {
 
         async function saveOrbitcardConfig() {
             const save = document.getElementById('orbitcard_config_save');
-            if (save.disabled) return;
+            if (!save || save.disabled) return;
             save.disabled = true;
             try {
                 const res = await authFetch('/api/admin/orbitcard/config', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        live_management: document.getElementById('orbitcard_live_management').checked,
-                        orbitcard_base_url: document.getElementById('orbitcard_base_url').value.trim(),
-                        orbitcard_api_key: document.getElementById('orbitcard_api_key').value.trim(),
-                        orbitcard_api_secret: document.getElementById('orbitcard_api_secret').value.trim()
+                        live_management: document.getElementById('orbitcard_live_management')?.checked ?? false,
+                        orbitcard_base_url: document.getElementById('orbitcard_base_url')?.value?.trim() || '',
+                        orbitcard_api_key: document.getElementById('orbitcard_api_key')?.value?.trim() || '',
+                        orbitcard_api_secret: document.getElementById('orbitcard_api_secret')?.value?.trim() || ''
                     })
                 });
                 const data = await res.json();
@@ -674,7 +679,7 @@ function adaptAdminScript(source, routingScript) {
                 await loadOrbitcardConfig();
             } catch (error) {
                 showMessage(error.message || '保存 Orbitcard 配置失败', 'error');
-            } finally { save.disabled = false; }
+            } finally { if (save) save.disabled = false; }
         }
   `);
   source = replaceSection(source, '        async function saveProxyPool() {', '        function applyProxyTestResultToRow', `
@@ -1080,6 +1085,16 @@ function adaptAdminScript(source, routingScript) {
     '<td><code>${cardNumber}</code></td>\n' +
       '                    <td data-recharge-card-type="${cardKey}"></td>\n' +
       '                    <td>${rechargeCardPlans.cell(card)}</td>'
+  );
+  source = replaceOne(
+    source,
+    '<td style="text-align:center">${usageCount}</td>',
+    '<td style="text-align:center">${rechargeCardPlans.usageCell(card)}</td>'
+  );
+  source = replaceOne(
+    source,
+    "            return '<span class=\"status-badge status-success\">正常</span>';",
+    "            if (rechargeCardPlans.isExhausted(card)) return '<span class=\"status-badge status-exhausted\">已用满</span>';\n            return '<span class=\"status-badge status-success\">正常</span>';"
   );
   const deleteCardButton = '<button class="btn-delete" onclick="deleteCardPoolItem(${card.id})" title="删除">\n' +
     '                            <i data-lucide="trash-2"></i>\n                        </button>';
@@ -2227,41 +2242,28 @@ function adaptHtml(source, kind) {
     source = replaceOne(source,
       '失败后该卡密会被锁定，任何账号都不能再次使用；确认处理后在这里解除。',
       '这里只显示已转入人工确认的记录。确认未扣款、未开通后，可解除锁定，让对应的兑换码重新提交。');
-    source = replaceSection(source, '<!-- 第三方代充 API 设置 -->', '<div class="config-grid">', `
-            <div class="panel orbitcard-config-panel" id="orbitcard_config_panel">
-                <h2 class="panel-title">Orbitcard 卡片管理</h2>
-                <p>自有虚拟信用卡服务商（卡商）接口对接。配置后系统可在自动充值前实时核验卡片可用余额与有效状态，防止因余额不足被拒付。此设置仅用于自有卡池管理，非第三方代充。</p>
-                <div class="toggle-field orbitcard-toggle">
-                    <label for="orbitcard_live_management" class="toggle-label">启用卡商实时同步（允许实时查询余额、检测卡片状态及绑定套餐）</label>
-                    <input type="checkbox" id="orbitcard_live_management">
-                </div>
-                <div class="orbitcard-form-grid">
-                    <div class="form-group orbitcard-field-full">
-                        <label for="orbitcard_base_url">Orbitcard 接口地址 <span class="field-hint">（卡商 API 基础地址，默认 https://orbitcard.cc）</span></label>
-                        <input type="text" id="orbitcard_base_url" class="asset-input" placeholder="https://orbitcard.cc" autocomplete="off">
-                    </div>
-                    <div class="form-group">
-                        <label for="orbitcard_api_key">Orbitcard API Key <span class="field-hint">（卡商身份 Key）</span></label>
-                        <input type="password" id="orbitcard_api_key" class="asset-input" placeholder="已配置，留空不修改" autocomplete="off">
-                    </div>
-                    <div class="form-group">
-                        <label for="orbitcard_api_secret">Orbitcard Secret <span class="field-hint">（API 密钥）</span></label>
-                        <input type="password" id="orbitcard_api_secret" class="asset-input" placeholder="已配置，留空不修改" autocomplete="off">
-                    </div>
-                </div>
-                <div class="orbitcard-actions">
-                    <button type="button" id="orbitcard_config_save" class="btn btn-primary" onclick="saveOrbitcardConfig()" disabled>保存 Orbitcard 配置</button>
-                    <p id="orbitcard_config_status" class="orbitcard-status" role="status"></p>
-                </div>
-            </div>
-    `);
+    source = replaceSection(source, '<!-- 第三方代充 API 设置 -->', '<div class="config-grid">', '');
+    source = replaceOne(source,
+      '                    <button type="button" class="admin-switcher-tab" role="tab" aria-selected="false" data-switcher-tab="orbitcard" onclick="switchAdminSection(\'card-assets\', \'orbitcard\')">Orbitcard 用卡记录</button>\n' +
+      '                    <button type="button" class="admin-switcher-tab" role="tab" aria-selected="false" data-switcher-tab="orbitcard-strategy" onclick="switchAdminSection(\'card-assets\', \'orbitcard-strategy\')">Orbitcard 开卡策略</button>\n',
+      ''
+    );
+    source = replaceSection(
+      source,
+      '            <div class="panel admin-switcher-panel" role="tabpanel" data-switch-panel="orbitcard" hidden>',
+      '        <!-- CDK 管理 -->',
+      '        </div>\n        </div>\n\n        <!-- CDK 管理 -->'
+    );
+    source = replaceOne(source,
+      '<th width="80px" style="text-align:center">次数</th>',
+      '<th width="110px" style="text-align:center">已用/上限</th>'
+    );
     source = source.replaceAll('class="admin-switcher-tabs"', 'class="admin-switcher-tabs tabs"')
       .replace(/class="admin-switcher-tab(?=[" ])/g, 'class="tab admin-switcher-tab');
     const telegramPanel = '<div class="panel" style="margin-top: 24px;">\n                <h2 class="panel-title">Telegram 通知</h2>';
     source = replaceOne(source, telegramPanel, telegramPanel.replace('class="panel"', 'class="panel" data-recharge-telegram-form'));
     source = replaceOne(source, 'session-cell-center">卡尾号</th>', 'session-cell-center">银行卡号</th>');
     source = replaceOne(source, '任务 ID、卡尾号', '任务 ID、卡号后四位');
-    source = replaceOne(source, '                                <th width="90px">后四位</th>\n', '');
     source = replaceOne(
       source,
       '<th width="200px">卡号</th>',

@@ -390,9 +390,6 @@ test('local demo workspace, retry, refresh failure and restart', { timeout: 45_0
         .waitFor();
     if (name === '银行卡池') {
       await frame.locator(content).getByText('虚构演示持卡人').waitFor();
-      await frame.getByRole('tab', { name: 'Orbitcard 用卡记录' }).click();
-      await frame.locator('#orbitcard_usage_filters').waitFor();
-      await verifyToolbarRow('#orbitcard_usage_filters', 'input, select, button');
     }
     if (name === 'CDK 管理') {
       await frame.locator(content).getByText(cdk, { exact: true }).waitFor();
