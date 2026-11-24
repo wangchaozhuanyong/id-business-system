@@ -201,11 +201,13 @@ for (const name of workspaceNames) {
 }
 get('bit-show-library')?.addEventListener('click', () => showWorkspace('library', true));
 const savedWorkspace = readConnectionDrafts().workspace;
-const defaultInitialWorkspace = savedWorkspace || (document.body.hasAttribute('data-connection-profiles') ? 'login' : 'workbench');
+const defaultInitialWorkspace = savedWorkspace || 'workbench';
 showWorkspace(defaultInitialWorkspace);
 function initializeNativeWorkbench() {
   const wbJsonInput = get('wb-json-input');
   const wbJsonStatus = get('wb-json-status');
+  const wbProxyRegion = get('wb-proxy-region');
+  const wbProxyHint = get('wb-proxy-hint');
   const wbProxySummary = get('wb-proxy-summary');
   const wbProxyUrl = get('wb-proxy-url');
   const wbNotesInput = get('wb-notes-input');
@@ -258,7 +260,9 @@ function initializeNativeWorkbench() {
         wbJsonStatus.className = 'field-help text-warning';
         return null;
       }
-      wbJsonStatus.textContent = `✓ 已识别邮箱：${email || '未命名'} · 套餐：${plan}${hasDevice ? ' · 含设备指纹' : ''}`;
+      const planUpper = String(plan).toUpperCase();
+      const planHint = planUpper.includes('PRO') ? 'EG 埃及' : 'PH 菲律宾';
+      wbJsonStatus.textContent = `✓ 已识别邮箱：${email || '未命名'} · 套餐：${planUpper}${hasDevice ? ' · 含设备指纹' : ''}（推荐匹配代充 ${planHint} 线路）`;
       wbJsonStatus.className = 'field-help text-success';
       return data;
     } catch {
@@ -271,11 +275,27 @@ function initializeNativeWorkbench() {
   wbJsonInput.addEventListener('input', parseInputJson);
   wbJsonInput.addEventListener('change', parseInputJson);
 
+  wbProxyRegion?.addEventListener('change', () => {
+    const val = wbProxyRegion.value;
+    if (wbProxyHint) {
+      if (val === 'auto') {
+        wbProxyHint.textContent = '⚡ 共享自动代充 IP 池：根据账号套餐智能选路（Plus 自动匹配菲律宾，Pro 自动匹配埃及）。';
+      } else if (val === 'direct') {
+        wbProxyHint.textContent = '⚡ 直连模式：不使用代理，直接通过本机网络连接（仅在特殊调试时使用）。';
+      } else {
+        const text = wbProxyRegion.options[wbProxyRegion.selectedIndex]?.text || val;
+        wbProxyHint.textContent = `⚡ 共享自动代充 IP 池：已指定【${text}】，打开浏览器时将自动注入代充出口代理。`;
+      }
+    }
+  });
+
   wbClearInput?.addEventListener('click', () => {
     wbJsonInput.value = '';
+    if (wbProxyRegion) wbProxyRegion.value = 'auto';
     if (wbProxySummary) wbProxySummary.value = '';
     if (wbProxyUrl) wbProxyUrl.value = '';
     if (wbNotesInput) wbNotesInput.value = '';
+    if (wbProxyHint) wbProxyHint.textContent = '⚡ 共享自动代充 IP 池：启动指纹浏览器时自动注入对应国家的已核验代理 IP，无需手动输入。';
     parseInputJson();
   });
 
@@ -552,10 +572,10 @@ function initializeNativeWorkbench() {
       return;
     }
 
+    const proxyRegion = wbProxyRegion?.value || 'auto';
     const payload = {
       sessionJson: raw,
-      proxySummary: wbProxySummary?.value.trim() || '',
-      proxyUrl: wbProxyUrl?.value.trim() || '',
+      proxyRegion,
       renewalNotes: wbNotesInput?.value.trim() || ''
     };
 
@@ -575,17 +595,17 @@ function initializeNativeWorkbench() {
       if (!res.ok) throw new Error(data.error || '保存账号记录失败');
 
       if (andOpen && data.record?.id) {
-        if (targetBtn) targetBtn.textContent = '正在拉起浏览器…';
+        if (targetBtn) targetBtn.textContent = '正在拉起指纹浏览器…';
         const launchRes = await fetch('/api/local/native-browser-workbench?action=launch', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: data.record.id })
+          body: JSON.stringify({ id: data.record.id, proxyRegion })
         });
         const launchData = await launchRes.json();
         if (!launchRes.ok) throw new Error(launchData.error || '拉起浏览器失败');
-        alert('✓ 账号已保存，专属 Chrome 窗口已成功打开！');
+        alert('✓ 账号已保存，专属指纹浏览器已成功打开并保持登录状态！');
       } else {
-        alert('✓ 账号已成功保存至数据表');
+        alert('✓ 账号已成功保存至下方数据表');
       }
 
       wbJsonInput.value = '';

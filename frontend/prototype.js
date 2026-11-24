@@ -224,7 +224,7 @@ const navigation = [
       ['账号提取', 'workspace/account-extract'],
       ['邮箱提取', 'workspace/mail-extract'],
       ['提取与归还', 'workspace/extractions'],
-      ['比特登录', 'recharge/start']
+      ['手动充值', 'recharge/start']
     ]
   ],
   [

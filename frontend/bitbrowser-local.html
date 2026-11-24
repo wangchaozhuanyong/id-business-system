@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>比特登录 · AI订阅管理系统</title>
+  <title>手动充值 · AI订阅管理系统</title>
   <link rel="icon" type="image/png" sizes="32x32" href="/brand/favicon-32.png" />
   <link rel="apple-touch-icon" sizes="180x180" href="/brand/apple-touch-icon.png" />
   <link rel="stylesheet" href="/prototype.css?v=20261119-tab-scroll" />
@@ -19,18 +19,18 @@
 <form id="bit-login-form" autocomplete="off">
   <div class="bit-local__workspace-bar bit-workspace-heading">
     <div class="tabs" role="tablist" aria-label="工作区">
-      <button class="tab" type="button" id="bit-tab-workbench" role="tab" aria-selected="false" aria-controls="bit-workbench-panel" tabindex="-1">工作台</button>
-      <button class="tab active" type="button" id="bit-tab-login" role="tab" aria-selected="true" aria-controls="bit-login-panel">账号登录</button>
+      <button class="tab active" type="button" id="bit-tab-workbench" role="tab" aria-selected="true" aria-controls="bit-workbench-panel">工作台</button>
+      <button class="tab" type="button" id="bit-tab-login" role="tab" aria-selected="false" aria-controls="bit-login-panel" tabindex="-1">单号登录</button>
       <button class="tab" type="button" id="bit-tab-library" role="tab" aria-selected="false" aria-controls="bit-library-panel" tabindex="-1">IP 资料库 <span class="tab-count" id="bit-ip-count">—</span></button>
     </div>
   </div>
   <div class="bit-local__body">
-  <div id="bit-workbench-panel" role="tabpanel" aria-labelledby="bit-tab-workbench" hidden>
+  <div id="bit-workbench-panel" role="tabpanel" aria-labelledby="bit-tab-workbench">
     <section class="panel bit-local__section" aria-labelledby="workbench-entry-title">
       <header class="panel-heading">
         <div class="title-with-help">
           <h2 id="workbench-entry-title"><span class="bit-local__step">1</span>录入账号与一键启动</h2>
-          <details class="title-help"><summary id="workbench-entry-help-btn" aria-label="查看快速录入说明" aria-controls="workbench-entry-help">ⓘ</summary><div class="title-description" id="workbench-entry-help" role="note">粘贴完整单账户授权 JSON，系统自动提取邮箱与设备指纹；点击“保存并打开浏览器”后，系统将在本机直接拉起独立的官方 Chrome 窗口并加载 ChatGPT 登录主页，窗口将保留给您手动点击订阅及绑定支付。无需再运行外部比特浏览器。</div></details>
+          <details class="title-help"><summary id="workbench-entry-help-btn" aria-label="查看快速录入说明" aria-controls="workbench-entry-help">ⓘ</summary><div class="title-description" id="workbench-entry-help" role="note">粘贴完整单账户授权 JSON，系统自动提取邮箱、套餐与设备指纹；共享自动代充 IP 池，无需手动配置代理。点击“保存并打开浏览器”后，系统将在本机直接拉起独立的指纹 Chrome 窗口并加载 ChatGPT，自动注入登录态保留给您手动订阅及绑定支付。</div></details>
         </div>
       </header>
       <div class="panel-body">
@@ -41,14 +41,21 @@
             <p id="wb-json-status" class="field-help" role="status">等待输入</p>
           </div>
         </div>
-        <div class="form-grid form-grid--paired">
+        <div class="form-grid">
           <div class="field">
-            <label for="wb-proxy-summary">绑定代理标签（选填）</label>
-            <input id="wb-proxy-summary" class="input" placeholder="例如：菲律宾 · 动态移动" />
-          </div>
-          <div class="field">
-            <label for="wb-proxy-url">代理服务器地址（选填）</label>
-            <input id="wb-proxy-url" class="input" placeholder="例如：http://user:pwd@ip:port 或留空直连" />
+            <label for="wb-proxy-region">代理 IP 选路（共享自动代充 IP 池）</label>
+            <select id="wb-proxy-region" class="input">
+              <option value="auto">自动匹配套餐推荐线路（Plus 菲律宾 / Pro 埃及 · 推荐）</option>
+              <option value="PH">菲律宾（PH · 自动代充 IP 池）</option>
+              <option value="EG">埃及（EG · 自动代充 IP 池）</option>
+              <option value="MY">马来西亚（MY · 自动代充 IP 池）</option>
+              <option value="SG">新加坡（SG · 自动代充 IP 池）</option>
+              <option value="US">美国（US · 自动代充 IP 池）</option>
+              <option value="direct">服务器直连（无代理）</option>
+            </select>
+            <input type="hidden" id="wb-proxy-summary" value="共享代充池 · 智能选路" />
+            <input type="hidden" id="wb-proxy-url" value="" />
+            <p id="wb-proxy-hint" class="field-help text-success" role="status">⚡ 共享自动代充 IP 池：启动指纹浏览器时自动注入对应国家的已核验代理 IP，无需手动输入。</p>
           </div>
         </div>
         <div class="form-grid">
@@ -109,7 +116,7 @@
       </div>
     </section>
   </div>
-  <div id="bit-login-panel" role="tabpanel" aria-labelledby="bit-tab-login">
+  <div id="bit-login-panel" role="tabpanel" aria-labelledby="bit-tab-login" hidden>
     <fieldset id="bit-login-fields">
       <section class="panel bit-local__section" aria-labelledby="bit-account-title">
         <header class="panel-heading">

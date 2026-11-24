@@ -12,6 +12,26 @@ export class NativeWorkbenchError extends Error {
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+const regionLabels = {
+  auto: '共享代充池 · 智能选路',
+  PH: '共享代充池 · 菲律宾 (PH)',
+  EG: '共享代充池 · 埃及 (EG)',
+  MY: '共享代充池 · 马来西亚 (MY)',
+  SG: '共享代充池 · 新加坡 (SG)',
+  US: '共享代充池 · 美国 (US)',
+  direct: '本机直连'
+};
+
+function formatProxySummary(input) {
+  if (input.proxyRegion && regionLabels[input.proxyRegion]) {
+    return regionLabels[input.proxyRegion];
+  }
+  if (input.proxySummary && String(input.proxySummary).trim()) {
+    return String(input.proxySummary).trim();
+  }
+  return '共享代充池 · 智能选路';
+}
+
 function hashKey(value) {
   return createHash('sha256').update(String(value || '')).digest('hex');
 }
@@ -92,7 +112,8 @@ export function queryWorkbenchAccounts(records = [], { search = '', status = '',
     email: row.email,
     accountId: row.accountId,
     profileKey: row.profileKey,
-    proxySummary: row.proxySummary || '直连 / 未指定',
+    proxyRegion: row.proxyRegion || 'auto',
+    proxySummary: row.proxySummary || '共享代充池 · 智能选路',
     status: row.status,
     currentPlan: row.currentPlan || 'free',
     lastOpenedAt: row.lastOpenedAt || null,
@@ -129,8 +150,10 @@ export function upsertWorkbenchAccount(records = [], input = {}) {
 
   const profileKey = `chatgpt_${hashKey(email).slice(0, 16)}`;
   const now = new Date().toISOString();
-
   const existingIndex = entries.findIndex((row) => row.email === email);
+  const proxySummary = formatProxySummary(input);
+  const proxyRegion = input.proxyRegion || 'auto';
+
   if (existingIndex >= 0) {
     const current = entries[existingIndex];
     const updated = {
@@ -140,8 +163,9 @@ export function upsertWorkbenchAccount(records = [], input = {}) {
       ...(userId && { userId }),
       ...(deviceId && { deviceId }),
       ...(plan && { currentPlan: plan }),
+      ...(input.proxyRegion !== undefined && { proxyRegion }),
+      proxySummary: input.proxyRegion !== undefined || input.proxySummary !== undefined ? proxySummary : current.proxySummary,
       ...(input.proxyUrl !== undefined && { proxyUrl: String(input.proxyUrl).trim() }),
-      ...(input.proxySummary !== undefined && { proxySummary: String(input.proxySummary).trim() }),
       ...(input.status && { status: input.status }),
       ...(input.renewalNotes !== undefined && { renewalNotes: String(input.renewalNotes).trim() }),
       updatedAt: now
@@ -158,8 +182,9 @@ export function upsertWorkbenchAccount(records = [], input = {}) {
     token: token || '',
     deviceId: deviceId || '',
     profileKey,
+    proxyRegion,
     proxyUrl: String(input.proxyUrl || '').trim(),
-    proxySummary: String(input.proxySummary || '').trim() || '未指定代理',
+    proxySummary,
     status: input.status || 'pending_renewal',
     currentPlan: plan || 'free',
     lastOpenedAt: null,

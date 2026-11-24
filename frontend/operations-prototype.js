@@ -726,7 +726,7 @@
   const workspaceRechargeRoute = 'workspace/recharge';
   const workspaceRechargeView = ['redeem', '兑换开通', 'workspace'];
   const bitLoginRoute = 'recharge/start';
-  const bitLoginView = ['bit-login', '比特登录', '/integrations/bitbrowser/local-login'];
+  const bitLoginView = ['bit-login', '手动充值', '/integrations/bitbrowser/local-login'];
   const onlineRechargeRoute = 'online-recharge/chatgpt';
   const rechargeCardsRoute = 'staff/finance/cards';
   const cardPoolSections = [['local', '银行卡列表']];
@@ -909,7 +909,7 @@
       : '';
     const login = renderRechargeRegion('bit');
     return (
-      header('比特登录', '使用授权 JSON 登录账号，登录后保留比特浏览器窗口。') +
+      header('手动充值', '使用 ChatGPT 授权 JSON 登录账号，共享自动代充 IP 池并在指纹浏览器中进入登录状态，支持手动操作与续费管理。') +
       (showAddresses
         ? `<div class="bit-login-layout">${jump}${login}<aside id="bit-addresses-host" aria-label="地址管理" tabindex="-1"></aside></div>`
         : login)
