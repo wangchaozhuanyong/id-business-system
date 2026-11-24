@@ -951,6 +951,7 @@
     view.setAttribute('aria-busy', 'false');
   }
   function showUnavailableIntegration(view, status, keepContent = false) {
+    rechargeAccessCache = null;
     finishIntegrationLoad(view);
     const bit = view.closest('[data-recharge-module]')?.dataset.rechargeModule === 'bit';
     if (!bit && status !== 403) onlineAdmin = undefined;
@@ -1137,19 +1138,32 @@
     root.style.setProperty('--embed-visible-top', `${top}px`);
     root.style.setProperty('--embed-visible-height', `${height}px`);
   }
-  async function checkRechargeAccess(signal) {
+  let rechargeAccessCache = null;
+  async function checkRechargeAccess(signal, { force = false } = {}) {
+    const now = Date.now();
+    if (!force && rechargeAccessCache && (now - rechargeAccessCache.time < 30000)) {
+      return rechargeAccessCache.result;
+    }
     try {
       const response = await window.fetch(onlineRechargeMount + 'status', {
         credentials: 'same-origin',
         cache: 'no-store',
         signal: AbortSignal.any([signal, AbortSignal.timeout(8000)])
       });
-      return { status: response.status, access: response.ok ? await response.json() : null };
+      const result = { status: response.status, access: response.ok ? await response.json() : null };
+      if (response.ok && result.access?.ready === true) {
+        rechargeAccessCache = { time: now, result };
+      } else {
+        rechargeAccessCache = null;
+      }
+      return result;
     } catch {
+      rechargeAccessCache = null;
       return { status: 503, access: null };
     }
   }
   async function loadIntegratedRecharge({ refresh = false } = {}) {
+    if (refresh) rechargeAccessCache = null;
     const bit = state.route === bitLoginRoute;
     const workspace = state.route === workspaceRechargeRoute;
     const loginLogs = state.route === loginLogsRoute;
@@ -1210,7 +1224,7 @@
     });
 
     if (needsAccessCheck) {
-      const { status, access } = await checkRechargeAccess(controller.signal);
+      const { status, access } = await checkRechargeAccess(controller.signal, { force: refresh });
       if (!active() || preserveLockedRecharge(view)) return;
       if (access?.ready !== true) {
         onlineAdmin = undefined;
@@ -1250,7 +1264,7 @@
         return;
       }
       onlineAdmin = undefined;
-      const { status, access } = await checkRechargeAccess(controller.signal);
+      const { status, access } = await checkRechargeAccess(controller.signal, { force: true });
       if (!active() || preserveLockedRecharge(view)) return;
       const denied = status === 401 || status === 403 ||
         (access?.ready === true && access.admin !== true && !selected[2]);
