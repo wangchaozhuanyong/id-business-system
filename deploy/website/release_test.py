@@ -1238,8 +1238,9 @@ class WebsiteReleaseTests(unittest.TestCase):
                 remote.verify_presentation_bundle(bundle(original), bundle(changed), routes)
 
     @patch("release.require_presentation_approval")
+    @patch("release.require_ancestor")
     @patch("release.git")
-    def test_card_pool_toggle_presentation_scope(self, git, approval):
+    def test_card_pool_toggle_presentation_scope(self, git, ancestor, approval):
         files = remote.CARD_POOL_TOGGLE_PRESENTATION_FILES
         manifest = release.CARD_POOL_TOGGLE_MANIFEST_PATH
         approved = (*files, manifest)
