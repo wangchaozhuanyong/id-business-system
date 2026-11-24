@@ -612,6 +612,7 @@
 
 .wb-proxy-control-row select {
   flex: 1;
+  min-width: 0;
 }
 
 .wb-btn-set-default {
@@ -639,9 +640,6 @@
   }
   .wb-btn-clear {
     margin-left: 0;
-  }
-  .wb-proxy-control-row {
-    flex-wrap: wrap;
   }
 }
 

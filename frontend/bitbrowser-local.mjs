@@ -1409,6 +1409,7 @@ if (window.parent !== window) {
     } catch { /* Standalone tokens also cover an inaccessible embedding host. */ }
   };
   syncWorkspaceSpacing();
+  void document.body.offsetHeight;
   try {
     document.documentElement.dataset.theme = window.parent.document.documentElement.dataset.theme || 'light';
     window.parent.addEventListener('resize', syncWorkspaceSpacing);
@@ -1416,7 +1417,7 @@ if (window.parent !== window) {
   } catch { /* Standalone styling remains the default for an inaccessible parent. */ }
   const reportHeight = () =>
     window.parent.postMessage(
-      { source: 'id-bitbrowser-local', type: 'resize', height: document.body.getBoundingClientRect().height },
+      { source: 'id-bitbrowser-local', type: 'resize', height: Math.ceil(document.body.getBoundingClientRect().height) },
       location.origin
     );
   new ResizeObserver(reportHeight).observe(document.body);
