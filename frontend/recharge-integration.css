@@ -221,3 +221,328 @@
   .bit-local__drawer-body .field { --field-label-width: 70px; --field-gap: 10px; }
   .bit-local__execution { padding-block: 14px; }
 }
+
+/* ==========================================================================
+   手动充值工作台 · 美工布局重构样式 (2026-11-24)
+   ========================================================================== */
+
+/* 顶部环境微标组合 */
+.wb-header-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.wb-status-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.wb-status-tag--proxy {
+  background: var(--tag-success-bg, rgba(34, 197, 94, 0.1));
+  color: var(--tag-success-color, #15803d);
+  border: 1px solid var(--tag-success-border, rgba(34, 197, 94, 0.25));
+}
+
+.wb-status-tag--browser {
+  background: var(--tag-info-bg, rgba(59, 130, 246, 0.08));
+  color: var(--tag-info-color, #1d4ed8);
+  border: 1px solid var(--tag-info-border, rgba(59, 130, 246, 0.25));
+}
+
+.wb-status-tag__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background-color: currentColor;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.4);
+}
+
+/* 卡片 1：录入区域美化 */
+.wb-entry-card {
+  margin-bottom: 20px;
+}
+
+.wb-json-field {
+  margin-bottom: 16px;
+}
+
+.wb-field-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.wb-json-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--surface-soft, rgba(0, 0, 0, 0.04));
+  color: var(--text-secondary, #64748b);
+  border: 1px solid var(--line, rgba(0, 0, 0, 0.08));
+}
+
+.wb-json-badge--success {
+  background: rgba(34, 197, 94, 0.12);
+  color: #15803d;
+  border-color: rgba(34, 197, 94, 0.3);
+}
+
+.wb-json-badge--warning {
+  background: rgba(245, 158, 11, 0.12);
+  color: #b45309;
+  border-color: rgba(245, 158, 11, 0.3);
+}
+
+.wb-mono-textarea {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 12.5px;
+  line-height: 1.5;
+  letter-spacing: -0.01em;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.wb-mono-textarea:focus {
+  border-color: var(--primary, #2563eb);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+  outline: none;
+}
+
+.wb-config-grid {
+  margin-bottom: 16px;
+}
+
+.wb-button-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 4px;
+}
+
+.wb-btn-primary {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 18px;
+  font-weight: 500;
+  box-shadow: 0 1px 3px rgba(37, 99, 235, 0.3);
+}
+
+.wb-btn-secondary {
+  padding: 8px 16px;
+}
+
+.wb-btn-clear {
+  margin-left: auto;
+  color: var(--text-secondary);
+}
+
+/* 卡片 2：数据表与工具栏重构 */
+.wb-table-card {
+  margin-bottom: 24px;
+}
+
+.wb-integrated-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-block: 10px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 100%;
+}
+
+.wb-toolbar-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 200px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.wb-search-wrapper {
+  flex: 1 1 140px;
+  min-width: 0;
+}
+
+.wb-search-input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.wb-filter-select {
+  flex: 0 1 120px;
+  min-width: 90px;
+  max-width: 130px;
+  box-sizing: border-box;
+}
+
+.wb-toolbar-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.wb-badge-count {
+  font-size: 12px;
+  color: var(--text-secondary, #64748b);
+  padding: 3px 8px;
+  border-radius: 9999px;
+  background: var(--surface-soft, rgba(0, 0, 0, 0.04));
+  white-space: nowrap;
+}
+
+.wb-btn-refresh {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+}
+
+.wb-table-viewport {
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+}
+
+/* 数据表内细节美化 */
+.wb-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.wb-table thead th {
+  background: var(--surface-soft, rgba(0, 0, 0, 0.02));
+  font-weight: 500;
+  font-size: 12.5px;
+  color: var(--text-secondary, #64748b);
+  border-bottom: 1px solid var(--line);
+  padding: 10px 12px;
+}
+
+.wb-table tbody td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+  font-size: 13px;
+}
+
+.wb-table tbody tr:hover td {
+  background: var(--surface-hover, rgba(0, 0, 0, 0.015));
+}
+
+.wb-account-email {
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  border-bottom: 1px dashed var(--line);
+  padding-bottom: 1px;
+}
+
+.wb-account-email:hover {
+  color: var(--primary, #2563eb);
+}
+
+.wb-plan-pill {
+  display: inline-block;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.wb-plan-pill--plus {
+  background: rgba(34, 197, 94, 0.12);
+  color: #15803d;
+  border: 1px solid rgba(34, 197, 94, 0.25);
+}
+
+.wb-plan-pill--pro {
+  background: rgba(99, 102, 241, 0.12);
+  color: #4338ca;
+  border: 1px solid rgba(99, 102, 241, 0.25);
+}
+
+.wb-plan-pill--free {
+  background: var(--surface-soft);
+  color: var(--text-secondary);
+  border: 1px solid var(--line);
+}
+
+.wb-empty-cell {
+  padding: 36px 16px !important;
+  text-align: center;
+}
+
+.wb-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+}
+
+.wb-empty-icon {
+  font-size: 28px;
+  line-height: 1;
+  opacity: 0.7;
+}
+
+.wb-empty-text {
+  font-size: 13px;
+}
+
+@media (max-width: 900px) {
+  .wb-header-status {
+    display: none;
+  }
+  .wb-btn-clear {
+    margin-left: 0;
+  }
+}
+
+@media (max-width: 600px) {
+  .wb-toolbar-filters {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+  .wb-search-wrapper {
+    flex: 1 1 100%;
+  }
+  .wb-filter-select {
+    flex: 1 1 100%;
+    max-width: 100%;
+  }
+  .wb-toolbar-meta {
+    width: 100%;
+    justify-content: space-between;
+  }
+}
+
+

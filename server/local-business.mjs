@@ -2190,12 +2190,12 @@ export function createLocalBusinessStore(databasePath) {
         return { record };
       });
     },
-    loadNativeWorkbenchAccounts(query, actor) {
+    loadNativeWorkbenchAccounts(query, actor = localToolboxActor) {
       const { version, data } = readDocument(`${nativeWorkbenchDomain}:${actor.id}`);
       const items = queryWorkbenchAccounts(data ?? [], query);
       return { version, items, total: (data ?? []).length };
     },
-    saveNativeWorkbenchAccount(body, actor) {
+    saveNativeWorkbenchAccount(body, actor = localToolboxActor) {
       const domain = `${nativeWorkbenchDomain}:${actor.id}`;
       return writeTransaction(() => {
         const current = readDocument(domain);
@@ -2207,7 +2207,7 @@ export function createLocalBusinessStore(databasePath) {
         return { version, record };
       });
     },
-    updateNativeWorkbenchNote(body, actor) {
+    updateNativeWorkbenchNote(body, actor = localToolboxActor) {
       const domain = `${nativeWorkbenchDomain}:${actor.id}`;
       return writeTransaction(() => {
         const current = readDocument(domain);
@@ -2219,7 +2219,7 @@ export function createLocalBusinessStore(databasePath) {
         return { version, record };
       });
     },
-    deleteNativeWorkbenchAccount(body, actor) {
+    deleteNativeWorkbenchAccount(body, actor = localToolboxActor) {
       const domain = `${nativeWorkbenchDomain}:${actor.id}`;
       return writeTransaction(() => {
         const current = readDocument(domain);
@@ -2231,7 +2231,7 @@ export function createLocalBusinessStore(databasePath) {
         return { version, ok: true };
       });
     },
-    async launchNativeWorkbenchBrowser(body, actor) {
+    async launchNativeWorkbenchBrowser(body, actor = localToolboxActor) {
       const domain = `${nativeWorkbenchDomain}:${actor.id}`;
       const current = readDocument(domain);
       const launchRes = await launchWorkbenchBrowser(current.data ?? [], body?.id, { customProxyUrl: body?.proxyUrl });
@@ -2243,7 +2243,7 @@ export function createLocalBusinessStore(databasePath) {
       });
       return { ok: true, account: launchRes.account, result: launchRes.result };
     },
-    closeNativeWorkbenchBrowser(body, actor) {
+    closeNativeWorkbenchBrowser(body, actor = localToolboxActor) {
       const domain = `${nativeWorkbenchDomain}:${actor.id}`;
       const current = readDocument(domain);
       const res = closeWorkbenchBrowser(current.data ?? [], body?.id);
@@ -2251,7 +2251,7 @@ export function createLocalBusinessStore(databasePath) {
         auditSummary('关闭原生代充浏览器', actor, body?.id), current.version);
       return res;
     },
-    async updateNativeWorkbenchJson(body, actor) {
+    async updateNativeWorkbenchJson(body, actor = localToolboxActor) {
       const domain = `${nativeWorkbenchDomain}:${actor.id}`;
       const current = readDocument(domain);
       const { record, records } = updateAccountSessionJson(current.data ?? [], body?.id, body?.sessionJson);
@@ -3864,33 +3864,33 @@ export async function handleLocalBusiness(
       throw new LocalDataError(405, '本机接口不支持此操作');
     }
     if (domain === nativeWorkbenchDomain) {
-      if (!actor?.id) throw new LocalDataError(401, '请先登录');
+      const effectiveActor = actor?.id ? actor : localToolboxActor;
       response.setHeader('Cache-Control', 'private, no-store');
       if (request.headers.origin && request.headers.origin !== origin) throw new LocalDataError(403, '仅允许从当前页面操作');
       if (request.method === 'GET') {
         const search = url.searchParams.get('search') || '';
         const status = url.searchParams.get('status') || '';
-        return json(response, 200, store.loadNativeWorkbenchAccounts({ search, status }, actor));
+        return json(response, 200, store.loadNativeWorkbenchAccounts({ search, status }, effectiveActor));
       }
       const action = url.searchParams.get('action') || '';
       if (request.method === 'POST') {
         const body = await readJson(request);
         if (action === 'launch') {
-          return json(response, 200, await store.launchNativeWorkbenchBrowser(body, actor));
+          return json(response, 200, await store.launchNativeWorkbenchBrowser(body, effectiveActor));
         }
         if (action === 'close') {
-          return json(response, 200, store.closeNativeWorkbenchBrowser(body, actor));
+          return json(response, 200, store.closeNativeWorkbenchBrowser(body, effectiveActor));
         }
         if (action === 'update-json') {
-          return json(response, 200, await store.updateNativeWorkbenchJson(body, actor));
+          return json(response, 200, await store.updateNativeWorkbenchJson(body, effectiveActor));
         }
         if (action === 'note') {
-          return json(response, 200, store.updateNativeWorkbenchNote(body, actor));
+          return json(response, 200, store.updateNativeWorkbenchNote(body, effectiveActor));
         }
         if (action === 'delete') {
-          return json(response, 200, store.deleteNativeWorkbenchAccount(body, actor));
+          return json(response, 200, store.deleteNativeWorkbenchAccount(body, effectiveActor));
         }
-        return json(response, 200, store.saveNativeWorkbenchAccount(body, actor));
+        return json(response, 200, store.saveNativeWorkbenchAccount(body, effectiveActor));
       }
       throw new LocalDataError(405, '代充工作台接口不支持该操作');
     }
