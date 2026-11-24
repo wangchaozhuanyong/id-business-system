@@ -18,15 +18,23 @@
 <body class="bit-local">
 <form id="bit-login-form" autocomplete="off">
   <div class="bit-local__workspace-bar bit-workspace-heading">
-    <div class="tabs" role="tablist" aria-label="工作区">
+    <div class="tabs wb-segmented-tabs" role="tablist" aria-label="工作区">
       <button class="tab active" type="button" id="bit-tab-workbench" role="tab" aria-selected="true" aria-controls="bit-workbench-panel">工作台</button>
       <button class="tab" type="button" id="bit-tab-login" role="tab" aria-selected="false" aria-controls="bit-login-panel" tabindex="-1">单号登录</button>
       <button class="tab" type="button" id="bit-tab-library" role="tab" aria-selected="false" aria-controls="bit-library-panel" tabindex="-1">IP 资料库 <span class="tab-count" id="bit-ip-count">—</span></button>
     </div>
+    <div class="wb-header-status" aria-label="运行环境状态">
+      <span class="wb-status-tag wb-status-tag--proxy" title="已自动关联自动代充代理池，智能按套餐匹配出口">
+        <span class="wb-status-tag__dot"></span>共享代充 IP 池 · 智能选路
+      </span>
+      <span class="wb-status-tag wb-status-tag--browser" title="内置指纹浏览器已准备就绪">
+        <span class="wb-status-tag__dot"></span>指纹浏览器 · 就绪
+      </span>
+    </div>
   </div>
   <div class="bit-local__body">
   <div id="bit-workbench-panel" role="tabpanel" aria-labelledby="bit-tab-workbench">
-    <section class="panel bit-local__section" aria-labelledby="workbench-entry-title">
+    <section class="panel bit-local__section wb-entry-card" aria-labelledby="workbench-entry-title">
       <header class="panel-heading">
         <div class="title-with-help">
           <h2 id="workbench-entry-title"><span class="bit-local__step">1</span>录入账号与一键启动</h2>
@@ -34,17 +42,17 @@
         </div>
       </header>
       <div class="panel-body">
-        <div class="form-grid">
-          <div class="field">
+        <div class="field wb-json-field">
+          <div class="wb-field-head">
             <label for="wb-json-input">授权 JSON</label>
-            <textarea id="wb-json-input" class="textarea" rows="3" placeholder="粘贴 ChatGPT 单账户授权 JSON，自动解析邮箱与登录凭据"></textarea>
-            <p id="wb-json-status" class="field-help" role="status">等待输入</p>
+            <span id="wb-json-status" class="wb-json-badge" role="status">等待输入 JSON</span>
           </div>
+          <textarea id="wb-json-input" class="textarea wb-mono-textarea" rows="3" placeholder="粘贴 ChatGPT 单账户授权 JSON，系统将自动识别邮箱与凭据"></textarea>
         </div>
-        <div class="form-grid">
+        <div class="form-grid form-grid--paired wb-config-grid">
           <div class="field">
             <label for="wb-proxy-region">代理 IP 选路（共享自动代充 IP 池）</label>
-            <select id="wb-proxy-region" class="input">
+            <select id="wb-proxy-region" class="select wb-select-highlight">
               <option value="auto">自动匹配套餐推荐线路（Plus 菲律宾 / Pro 埃及 · 推荐）</option>
               <option value="PH">菲律宾（PH · 自动代充 IP 池）</option>
               <option value="EG">埃及（EG · 自动代充 IP 池）</option>
@@ -55,60 +63,74 @@
             </select>
             <input type="hidden" id="wb-proxy-summary" value="共享代充池 · 智能选路" />
             <input type="hidden" id="wb-proxy-url" value="" />
-            <p id="wb-proxy-hint" class="field-help text-success" role="status">⚡ 共享自动代充 IP 池：启动指纹浏览器时自动注入对应国家的已核验代理 IP，无需手动输入。</p>
+            <p id="wb-proxy-hint" class="field-help text-success" role="status">⚡ 共享自动代充 IP 池：启动指纹浏览器时自动注入对应国家已核验代理 IP，免手动配置。</p>
           </div>
-        </div>
-        <div class="form-grid">
           <div class="field">
             <label for="wb-notes-input">续费备注（选填）</label>
             <input id="wb-notes-input" class="input" placeholder="例如：已付订金、预订 Plus" />
+            <p class="field-help">记录客户偏好或支付渠道，保存后可在下方随时修改</p>
           </div>
         </div>
-        <div class="bit-local__submit-row" style="display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px;">
-          <button type="button" class="button button--primary" id="wb-save-and-open">保存并打开浏览器</button>
-          <button type="button" class="button" id="wb-save-only">仅保存到数据表</button>
-          <button type="button" class="button button--subtle" id="wb-clear-input">清空输入</button>
+        <div class="bit-local__submit-row wb-button-row">
+          <button type="button" class="button button--primary wb-btn-primary" id="wb-save-and-open">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin-right: 6px;"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+            保存并打开浏览器
+          </button>
+          <button type="button" class="button wb-btn-secondary" id="wb-save-only">仅保存到数据表</button>
+          <button type="button" class="button button--subtle wb-btn-clear" id="wb-clear-input">清空输入</button>
         </div>
       </div>
     </section>
 
-    <section class="panel bit-local__section" aria-labelledby="workbench-list-title">
-      <header class="panel-heading">
+    <section class="panel bit-local__section wb-table-card" aria-labelledby="workbench-list-title">
+      <header class="panel-heading wb-table-card-heading">
         <div class="title-with-help">
           <h2 id="workbench-list-title"><span class="bit-local__step">2</span>账号续费管理数据表</h2>
           <details class="title-help"><summary id="workbench-list-help-btn" aria-label="查看数据表说明" aria-controls="workbench-list-help">ⓘ</summary><div class="title-description" id="workbench-list-help" role="note">沉淀您操作过的所有代充账号与打开记录。点击“打开浏览器”可一键唤醒带登录态的专属 Chrome 窗口执行续费；续费完成后可标记状态。</div></details>
         </div>
-        <div class="bit-local__actions">
-          <button type="button" class="button" id="wb-refresh-list">刷新列表</button>
-        </div>
       </header>
-      <div class="panel-body">
-        <div class="table-toolbar compact-toolbar" style="margin-bottom: 12px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding-block: 12px;">
-          <input type="search" id="wb-search-input" class="input search-input" placeholder="搜索邮箱、代理或备注…" style="max-width: 280px;" data-auto-search />
-          <select id="wb-filter-status" class="select" style="max-width: 160px;">
-            <option value="">全部状态</option>
-            <option value="pending_renewal">待续费</option>
-            <option value="active">已开通</option>
-            <option value="expired">已过期</option>
-          </select>
-          <span id="wb-list-count" class="field-help" style="margin-left: auto;">共 0 个账号</span>
+      <div class="panel-body wb-table-card-body">
+        <div class="table-toolbar compact-toolbar wb-integrated-toolbar">
+          <div class="wb-toolbar-filters">
+            <div class="wb-search-wrapper">
+              <input type="search" id="wb-search-input" class="input search-input wb-search-input" placeholder="搜索邮箱、代理或备注…" data-auto-search />
+            </div>
+            <select id="wb-filter-status" class="select wb-filter-select">
+              <option value="">全部状态</option>
+              <option value="pending_renewal">待续费</option>
+              <option value="active">已开通</option>
+              <option value="expired">已过期</option>
+            </select>
+          </div>
+          <div class="wb-toolbar-meta">
+            <span id="wb-list-count" class="wb-badge-count">共 0 个账号</span>
+            <button type="button" class="button button--small wb-btn-refresh" id="wb-refresh-list" title="重新载入最新列表">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="margin-right: 4px;"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
+              刷新列表
+            </button>
+          </div>
         </div>
-        <div class="table-viewport" tabindex="0" aria-label="续费账号数据表，可横向滚动" style="overflow-x: auto;">
-          <table class="table" id="wb-accounts-table">
+        <div class="table-viewport wb-table-viewport" tabindex="0" aria-label="续费账号数据表，可横向滚动">
+          <table class="table wb-table" id="wb-accounts-table">
             <thead>
               <tr>
-                <th scope="col" style="min-width: 200px;">账号邮箱</th>
-                <th scope="col" style="min-width: 90px;">当前套餐</th>
+                <th scope="col" style="min-width: 190px;">账号邮箱</th>
+                <th scope="col" style="min-width: 85px;">当前套餐</th>
                 <th scope="col" style="min-width: 140px;">绑定代理</th>
-                <th scope="col" style="min-width: 100px;">状态</th>
+                <th scope="col" style="min-width: 95px;">状态</th>
                 <th scope="col" style="min-width: 130px;">最后打开时间</th>
-                <th scope="col" style="min-width: 140px;">续费备注</th>
-                <th scope="col" style="min-width: 210px; text-align: right;">操作</th>
+                <th scope="col" style="min-width: 130px;">续费备注</th>
+                <th scope="col" style="min-width: 200px; text-align: right;">操作</th>
               </tr>
             </thead>
             <tbody id="wb-accounts-tbody">
               <tr>
-                <td colspan="7" style="text-align: center; color: var(--text-secondary); padding: 24px;">暂无账号记录，请在上方录入</td>
+                <td colspan="7" class="wb-empty-cell">
+                  <div class="wb-empty-state">
+                    <span class="wb-empty-icon">📋</span>
+                    <span class="wb-empty-text">暂无账号记录，请在上方录入</span>
+                  </div>
+                </td>
               </tr>
             </tbody>
           </table>

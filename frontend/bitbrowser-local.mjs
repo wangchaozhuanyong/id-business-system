@@ -245,8 +245,8 @@ function initializeNativeWorkbench() {
   function parseInputJson() {
     const raw = wbJsonInput.value.trim();
     if (!raw) {
-      wbJsonStatus.textContent = '等待输入';
-      wbJsonStatus.className = 'field-help';
+      wbJsonStatus.textContent = '等待输入 JSON';
+      wbJsonStatus.className = 'wb-json-badge';
       return null;
     }
     try {
@@ -256,18 +256,17 @@ function initializeNativeWorkbench() {
       const hasToken = Boolean(data.sessionToken || data.session_token);
       const hasDevice = Boolean(data.statsigContext?.deviceId || data.deviceId || data.device_id);
       if (!hasToken) {
-        wbJsonStatus.textContent = '提示：JSON 中未发现 sessionToken';
-        wbJsonStatus.className = 'field-help text-warning';
+        wbJsonStatus.textContent = '提示：未识别到 sessionToken';
+        wbJsonStatus.className = 'wb-json-badge wb-json-badge--warning';
         return null;
       }
       const planUpper = String(plan).toUpperCase();
-      const planHint = planUpper.includes('PRO') ? 'EG 埃及' : 'PH 菲律宾';
-      wbJsonStatus.textContent = `✓ 已识别邮箱：${email || '未命名'} · 套餐：${planUpper}${hasDevice ? ' · 含设备指纹' : ''}（推荐匹配代充 ${planHint} 线路）`;
-      wbJsonStatus.className = 'field-help text-success';
+      wbJsonStatus.textContent = `✓ 已识别：${email || '未命名'} · ${planUpper}${hasDevice ? ' · 设备指纹' : ''}`;
+      wbJsonStatus.className = 'wb-json-badge wb-json-badge--success';
       return data;
     } catch {
-      wbJsonStatus.textContent = '提示：当前内容不是合法的单账户 JSON 格式';
-      wbJsonStatus.className = 'field-help text-warning';
+      wbJsonStatus.textContent = '提示：非标准 JSON 格式';
+      wbJsonStatus.className = 'wb-json-badge wb-json-badge--warning';
       return null;
     }
   }
@@ -295,7 +294,7 @@ function initializeNativeWorkbench() {
     if (wbProxySummary) wbProxySummary.value = '';
     if (wbProxyUrl) wbProxyUrl.value = '';
     if (wbNotesInput) wbNotesInput.value = '';
-    if (wbProxyHint) wbProxyHint.textContent = '⚡ 共享自动代充 IP 池：启动指纹浏览器时自动注入对应国家的已核验代理 IP，无需手动输入。';
+    if (wbProxyHint) wbProxyHint.textContent = '⚡ 共享自动代充 IP 池：启动指纹浏览器时自动注入对应国家已核验代理 IP，免手动配置。';
     parseInputJson();
   });
 
@@ -309,19 +308,22 @@ function initializeNativeWorkbench() {
       const res = await fetch(`/api/local/native-browser-workbench?${params.toString()}`, {
         cache: 'no-store'
       });
-      if (!res.ok) throw new Error('读取数据表失败');
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson.error || `接口响应异常 (${res.status})`);
+      }
       const data = await res.json();
       accounts = data.items || [];
       renderTable();
     } catch (err) {
-      wbTbody.innerHTML = `<tr><td colspan="7" style="text-align:center; color: var(--text-error); padding: 18px;">加载数据表失败：${escapeHtml(err.message)}</td></tr>`;
+      wbTbody.innerHTML = `<tr><td colspan="7" class="wb-empty-cell" style="color: var(--text-error);"><div class="wb-empty-state"><span class="wb-empty-icon">⚠️</span><span class="wb-empty-text">加载数据表失败：${escapeHtml(err.message)}</span><button type="button" class="button button--small" style="margin-top: 6px;" onclick="document.getElementById('wb-refresh-list')?.click()">重试</button></div></td></tr>`;
     }
   }
 
   function renderTable() {
     if (wbListCount) wbListCount.textContent = `共 ${accounts.length} 个账号`;
     if (!accounts.length) {
-      wbTbody.innerHTML = `<tr><td colspan="7" style="text-align:center; color: var(--text-secondary); padding: 24px;">暂无账号记录，请在上方录入</td></tr>`;
+      wbTbody.innerHTML = `<tr><td colspan="7" class="wb-empty-cell"><div class="wb-empty-state"><span class="wb-empty-icon">📋</span><span class="wb-empty-text">暂无账号记录，请在上方录入</span></div></td></tr>`;
       return;
     }
 
@@ -345,16 +347,20 @@ function initializeNativeWorkbench() {
             })
           : '未曾打开';
 
+        const planClass = item.currentPlan?.toLowerCase() === 'pro'
+          ? 'wb-plan-pill--pro'
+          : (item.currentPlan?.toLowerCase() === 'plus' ? 'wb-plan-pill--plus' : 'wb-plan-pill--free');
+
         return `
           <tr data-account-id="${escapeHtml(item.id)}">
             <td style="font-weight: 500;">
-              <span class="wb-account-email" title="点击复制" style="cursor: pointer;">${escapeHtml(item.email)}</span>
+              <span class="wb-account-email" title="点击复制邮箱" style="cursor: pointer;">${escapeHtml(item.email)}</span>
             </td>
-            <td><span class="badge">${escapeHtml(item.currentPlan.toUpperCase())}</span></td>
-            <td>${escapeHtml(item.proxySummary)}</td>
+            <td><span class="wb-plan-pill ${planClass}">${escapeHtml(item.currentPlan.toUpperCase())}</span></td>
+            <td style="font-size: 12.5px;">${escapeHtml(item.proxySummary)}</td>
             <td><span style="display:inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; background: ${statusBadge.color}18; color: ${statusBadge.color}; border: 1px solid ${statusBadge.color}40;">${escapeHtml(statusBadge.text)}</span>${runningBadge}</td>
-            <td style="font-size: 13px; color: var(--text-secondary);">${escapeHtml(openTime)}</td>
-            <td style="font-size: 13px;">${escapeHtml(item.renewalNotes || '—')}</td>
+            <td style="font-size: 12.5px; color: var(--text-secondary);">${escapeHtml(openTime)}</td>
+            <td style="font-size: 12.5px;">${escapeHtml(item.renewalNotes || '—')}</td>
             <td style="text-align: right; white-space: nowrap;">
               ${item.isRunning
                 ? `<button type="button" class="button button--small button--warning wb-btn-close" data-id="${escapeHtml(item.id)}" title="关闭浏览器并立即切断代理连接">关闭窗口</button>`
