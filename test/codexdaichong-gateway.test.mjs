@@ -561,7 +561,7 @@ test('upstream pages retain the signed-in operations without their own login or 
   assert.equal(assets.has('/admin-login.html'), false);
   for (const path of ['/admin', '/admin.js', '/shell.js', '/redeem', '/workspace'])
     assert.doesNotMatch(String(assets.get(path).body), /gpt_api_|\/api\/(?:admin\/gpt-api|task-captcha)|captchaVerificationBtn/);
-  assert.match(assets.get('/admin').body, /orbitcard_config_save/);
+  assert.doesNotMatch(assets.get('/admin').body, /orbitcard_config_save/);
   assert.match(assets.get('/admin.js').body, /\/api\/admin\/orbitcard\/config/);
   for (const path of ['/redeem', '/subscription', '/admin']) {
     const page = assets.get(path);

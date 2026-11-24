@@ -75,6 +75,39 @@ export function createCardPlanAdmin({ labels, request, loadCards, onImportChange
     typeof value.strict === 'boolean';
   const readDraft = () => window.parent.IDRechargeDrafts?.read('admin') || {};
   const writeDraft = values => window.parent.IDRechargeDrafts?.write('admin', values);
+  function readLimits() {
+    try {
+      return JSON.parse(readDraft().card_pool_usage_limits || '{}');
+    } catch {
+      return {};
+    }
+  }
+  function writeLimits(limits) {
+    try {
+      const draft = readDraft();
+      draft.card_pool_usage_limits = JSON.stringify(limits);
+      writeDraft(draft);
+    } catch { /* Ignore draft errors */ }
+  }
+  function getCardLimit(card) {
+    const limits = readLimits();
+    const custom = limits[Number(card.id)];
+    if (Number.isSafeInteger(custom) && custom >= 1 && custom <= 20) return custom;
+    const plans = Array.isArray(card.allowed_plans) && card.allowed_plans.length ? card.allowed_plans : ['plus'];
+    if (plans.every(p => p.startsWith('pro'))) return 1;
+    return 4;
+  }
+  function usageCell(card) {
+    const count = Number(card.usage_count || 0);
+    const limit = getCardLimit(card);
+    const exhausted = count >= limit;
+    return '<span class="card-usage-metric' + (exhausted ? ' is-exhausted' : '') + '">' +
+      count + ' / ' + limit + '</span>' +
+      (exhausted ? ' <span class="status-badge status-exhausted">已用满</span>' : '');
+  }
+  function isExhausted(card) {
+    return Number(card.usage_count || 0) >= getCardLimit(card);
+  }
   function rememberImport() {
     writeDraft({ ...readDraft(), card_pool_allowed_plans: readChoices(importFields).join(',') });
     onImportChange();
@@ -140,6 +173,15 @@ export function createCardPlanAdmin({ labels, request, loadCards, onImportChange
     result.textContent = ids.length > 1 ? '将替换这 ' + ids.length + ' 张卡的允许套餐。' : '';
     setChoices(options, draft?.key === key && Array.isArray(draft.plans) ? draft.plans :
       (ids.length === 1 ? rows.get(ids[0]).allowed_plans || [] : []));
+    const maxUsageInput = element('card_plan_max_usage');
+    if (maxUsageInput) {
+      if (ids.length === 1) {
+        const limits = readLimits();
+        maxUsageInput.value = limits[ids[0]] || '';
+      } else {
+        maxUsageInput.value = '';
+      }
+    }
     paintSelection();
     save.disabled = false;
     dialog.showModal();
@@ -212,6 +254,14 @@ export function createCardPlanAdmin({ labels, request, loadCards, onImportChange
     if (writing || !editing) return;
     const allowedPlans = readChoices(options);
     if (!allowedPlans.length) { result.dataset.state = 'error'; result.textContent = '请选择至少一个允许套餐。'; return; }
+    const maxUsageInput = element('card_plan_max_usage');
+    const rawMax = maxUsageInput ? maxUsageInput.value.trim() : '';
+    const parsedMax = rawMax ? Number(rawMax) : null;
+    if (rawMax && (!Number.isInteger(parsedMax) || parsedMax < 1 || parsedMax > 20)) {
+      result.dataset.state = 'error';
+      result.textContent = '单卡使用上限必须在 1 至 20 之间，或留空使用默认上限。';
+      return;
+    }
     const { ids, version } = editing;
     writing = true;
     save.disabled = true;
@@ -223,13 +273,19 @@ export function createCardPlanAdmin({ labels, request, loadCards, onImportChange
     paint();
     try {
       await write({ version, cardIds: ids, allowedPlans });
+      const limits = readLimits();
+      for (const id of ids) {
+        if (parsedMax) limits[id] = parsedMax;
+        else delete limits[id];
+      }
+      writeLimits(limits);
       for (const id of ids) selected.delete(id);
       const draft = readDraft();
       delete draft.card_pool_plan_editor;
       writeDraft(draft);
       editing = null;
       dialog.close();
-      notify('允许套餐已保存。', 'success');
+      notify('允许套餐与使用上限已保存。', 'success');
     } catch (error) {
       result.dataset.state = 'error';
       result.textContent = error.message;
@@ -270,7 +326,7 @@ export function createCardPlanAdmin({ labels, request, loadCards, onImportChange
     return true;
   };
   return {
-    accept, cell, paint,
+    accept, cell, usageCell, isExhausted, paint,
     remove(id) {
       rows.delete(Number(id));
       selected.delete(Number(id));

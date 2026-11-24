@@ -729,7 +729,7 @@
   const bitLoginView = ['bit-login', '比特登录', '/integrations/bitbrowser/local-login'];
   const onlineRechargeRoute = 'online-recharge/chatgpt';
   const rechargeCardsRoute = 'staff/finance/cards';
-  const cardPoolSections = [['local', '银行卡列表'], ['orbitcard', 'Orbitcard 用卡记录'], ['orbitcard-strategy', 'Orbitcard 开卡策略']];
+  const cardPoolSections = [['local', '银行卡列表']];
   const onlineRechargeMount = '/integrations/codexdaichong/';
   let activeOnlineView = 'query';
   let onlineAdmin;

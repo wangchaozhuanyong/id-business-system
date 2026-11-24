@@ -306,21 +306,6 @@ test(
         await current(page, 'card_pool', 2, 20);
         assert.equal(await page.locator('#card_pool_list_body tr').count(), 7);
         assert.equal(cardReads(), before);
-        await page.getByRole('tab', { name: 'Orbitcard 用卡记录' }).click();
-        const orbitcard = pager(page, 'orbitcard');
-        await current(page, 'orbitcard', 1, 20);
-        assert.equal(await page.locator('#orbitcard_usage_body tr').first().getByText(fixtureCardNumber, { exact: true }).count(), 1);
-        assert.equal(await page.locator('#orbitcard_usage_body tr').first().getByText('0001', { exact: true }).count(), 0);
-        await orbitcard.getByLabel('每页条数').selectOption('50');
-        await current(page, 'orbitcard', 1, 50);
-        await orbitcard.getByRole('button', { name: '下一页' }).click();
-        await current(page, 'orbitcard', 2, 50);
-        const last = reads.filter(({ key }) => key === 'orbitcard/usage').at(-1).query;
-        assert.equal(last.page, '2');
-        assert.equal(last.page_size, '50');
-        assert.equal(last.refresh, undefined);
-        assert.equal(await page.locator('#orbitcard_usage_body tr').count(), 13);
-        assert.equal(await page.locator('#orbitcard_usage_body tr td').first().textContent(), '51');
       }
     );
 
