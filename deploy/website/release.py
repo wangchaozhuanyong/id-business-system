@@ -654,7 +654,7 @@ def main(sample_backup_resources=False):
              "frontend/renewal-handoff.js", "server/renewal-handoff.mjs", "server/backup/cloud-cli.mjs",
              "server/backup/cloud-worker.mjs", "server/backup/local-sqlite.mjs",
              "server/local-business.mjs", "server/native-browser-workbench.mjs",
-             "frontend/bitbrowser-local.html", "frontend/bitbrowser-local.mjs",
+             "frontend/bitbrowser-local.mjs",
              "server/native-chrome-runner.mjs", "server/recharge-activity.mjs",
              "server/backup/sheets-source.mjs", "server/monitoring-policy.mjs",
              "server/tools/website-analytics.mjs", "server/tools/sheets-status.mjs",
