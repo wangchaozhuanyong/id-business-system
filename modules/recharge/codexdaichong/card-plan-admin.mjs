@@ -10,6 +10,8 @@ export const cardPlanToolbar = `
     <h2 class="panel-title" id="card_pool_list_title">银行卡列表</h2>
     <button type="button" class="btn btn-secondary" id="card_plan_mode" aria-pressed="false" disabled>仅使用已设置套餐的卡</button>
     <button type="button" class="btn btn-secondary" id="card_plan_batch" disabled>批量设置套餐</button>
+    <button type="button" class="btn btn-secondary" id="card_plan_enable_all" style="color:var(--success,#10b981);">一键开启</button>
+    <button type="button" class="btn btn-secondary" id="card_plan_disable_all" style="color:var(--text-dim,#6b7280);">一键关闭</button>
     <span id="card_plan_summary" role="status">正在读取套餐设置…</span>
   </section>`;
 
@@ -45,6 +47,8 @@ export function createCardPlanAdmin({ labels, request, loadCards, onImportChange
   const tbody = element('card_pool_list_body');
   const mode = element('card_plan_mode');
   const batch = element('card_plan_batch');
+  const enableAllBtn = element('card_plan_enable_all');
+  const disableAllBtn = element('card_plan_disable_all');
   const summary = element('card_plan_summary');
   const dialog = element('card_plan_editor');
   const options = element('card_plan_options');
@@ -118,6 +122,14 @@ export function createCardPlanAdmin({ labels, request, loadCards, onImportChange
   function paint() {
     batch.disabled = !snapshot || writing || selected.size === 0;
     batch.textContent = selected.size ? '设置所选 ' + selected.size + ' 张卡' : '批量设置套餐';
+    if (enableAllBtn) {
+      enableAllBtn.disabled = !snapshot || writing;
+      enableAllBtn.textContent = selected.size ? '开启所选 ' + selected.size + ' 张' : '一键开启';
+    }
+    if (disableAllBtn) {
+      disableAllBtn.disabled = !snapshot || writing;
+      disableAllBtn.textContent = selected.size ? '关闭所选 ' + selected.size + ' 张' : '一键关闭';
+    }
     mode.disabled = !snapshot || writing;
     mode.setAttribute('aria-pressed', String(snapshot?.strict === true));
     importFields.disabled = !snapshot;
@@ -222,6 +234,48 @@ export function createCardPlanAdmin({ labels, request, loadCards, onImportChange
     const button = event.target.closest('[data-card-plan-edit]');
     if (button) open([Number(button.dataset.cardPlanEdit)]);
   });
+  async function triggerBatchToggle(isEnabled) {
+    if (!snapshot || writing) return;
+    const isAll = selected.size === 0;
+    const targetCount = isAll ? rows.size : selected.size;
+    const actionText = isEnabled ? '开启' : '关闭';
+    if (targetCount === 0) {
+      notify('当前无可用银行卡', 'warning');
+      return;
+    }
+    const ok = await confirm(isAll
+      ? '确定' + actionText + '当前全部 ' + targetCount + ' 张银行卡吗？' + (isEnabled ? '开启后可被调用。' : '关闭后将暂停调用。')
+      : '确定' + actionText + '所选的 ' + targetCount + ' 张银行卡吗？', actionText);
+    if (!ok) return;
+    writing = true;
+    paint();
+    try {
+      const payload = isAll
+        ? { all: true, is_enabled: isEnabled ? 1 : 0 }
+        : { ids: [...selected], is_enabled: isEnabled ? 1 : 0 };
+      const res = await request('/api/admin/cards/batch-toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        notify(actionText + '成功，共处理 ' + (data.affected || targetCount) + ' 张卡', 'success');
+        await loadCards();
+      } else {
+        notify(data.message || data.error || '操作失败', 'error');
+      }
+    } catch (e) {
+      notify('请求失败: ' + e.message, 'error');
+    } finally {
+      writing = false;
+      paint();
+      window.idRechargeApplyCardChanges?.();
+    }
+  }
+
+  enableAllBtn?.addEventListener('click', () => triggerBatchToggle(true));
+  disableAllBtn?.addEventListener('click', () => triggerBatchToggle(false));
   batch.addEventListener('click', () => open([...selected]));
   mode.addEventListener('click', async () => {
     if (!snapshot || writing) return;

@@ -3466,6 +3466,7 @@ export function createLocalBusinessStore(databasePath) {
             if (!old.start && !old.expiry && order.start) {
               for (const field of ['start', 'expiry', 'rechargeCompletedAt']) next[field] = order[field];
             }
+            if (!old.rechargeCode && order.rechargeCode) next.rechargeCode = order.rechargeCode;
             if (!old.paymentId && order.paymentId) next.paymentId = order.paymentId;
             if (!old.cardId && order.cardId && next.paymentId === order.paymentId && old.proMaterialMode !== 'manual_card') next.cardId = order.cardId;
             if (!old.proCardNumber && order.proCardNumber && next.cardId === order.cardId && next.paymentId === order.paymentId)

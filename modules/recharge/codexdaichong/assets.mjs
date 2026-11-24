@@ -1094,14 +1094,14 @@ function adaptAdminScript(source, routingScript) {
   source = replaceOne(
     source,
     "            return '<span class=\"status-badge status-success\">正常</span>';",
-    "            if (rechargeCardPlans.isExhausted(card)) return '<span class=\"status-badge status-exhausted\">已用满</span>';\n            return '<span class=\"status-badge status-success\">正常</span>';"
+    "            if (card.is_enabled === 0 || card.is_enabled === false) return '<span class=\"status-badge\" style=\"background:rgba(107,114,128,0.15);color:var(--text-dim);border:1px solid rgba(107,114,128,0.3);\">已关闭</span>';\n            if (rechargeCardPlans.isExhausted(card)) return '<span class=\"status-badge status-exhausted\">已用满</span>';\n            return '<span class=\"status-badge status-success\">正常</span>';"
   );
   const deleteCardButton = '<button class="btn-delete" onclick="deleteCardPoolItem(${card.id})" title="删除">\n' +
     '                            <i data-lucide="trash-2"></i>\n                        </button>';
   source = replaceOne(
     source,
     deleteCardButton,
-    '<div class="table-action-group">${renderRechargeCardTypeEdit(cardKey)}' + deleteCardButton + '</div>'
+    '<div class="table-action-group">${renderCardToggleEnableButton(card)}${renderRechargeCardTypeEdit(cardKey)}' + deleteCardButton + '</div>'
   );
   source = replaceOne(
     source,
@@ -1168,7 +1168,39 @@ function adaptAdminScript(source, routingScript) {
             return '<button type="button" class="btn btn-secondary" aria-haspopup="dialog" data-edit-recharge-card-type="' +
                 cardKey + '">修改</button>';
         }
+        function renderCardToggleEnableButton(card) {
+            const isEnabled = !(card.is_enabled === 0 || card.is_enabled === false);
+            return '<button type="button" class="btn btn-secondary card-toggle-enable-btn" data-toggle-card-id="' + card.id +
+                '" data-toggle-target="' + (isEnabled ? 0 : 1) + '" title="' + (isEnabled ? '点击关闭此卡（暂停调用）' : '点击开启此卡（允许调用）') +
+                '" style="padding: 2px 7px; font-size: 12px; margin-right: 4px; color: ' + (isEnabled ? 'var(--success,#10b981)' : 'var(--text-dim,#6b7280)') + ';">' +
+                (isEnabled ? '开启中' : '已关闭') + '</button>';
+        }
+        async function toggleCardEnabled(cardId, isEnabled) {
+            try {
+                const res = await authFetch('/api/admin/cards/' + cardId + '/toggle', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ is_enabled: isEnabled })
+                });
+                const data = await res.json();
+                if (res.ok && data.success) {
+                    showMessage(isEnabled ? '银行卡已开启调用' : '银行卡已关闭调用', 'success');
+                    await loadCardPoolList();
+                } else {
+                    showMessage(data.error || data.message || '操作失败', 'error');
+                }
+            } catch (e) {
+                showMessage('操作失败: ' + e.message, 'error');
+            }
+        }
         document.getElementById('card_pool_list_body')?.addEventListener('click', (event) => {
+            const toggleTrigger = event.target.closest('[data-toggle-card-id]');
+            if (toggleTrigger) {
+                const id = Number(toggleTrigger.dataset.toggleCardId);
+                const target = Number(toggleTrigger.dataset.toggleTarget);
+                void toggleCardEnabled(id, target);
+                return;
+            }
             const trigger = event.target.closest('[data-edit-recharge-card-type]');
             if (!trigger || window.idRechargeVisible === false) return;
             window.parent.postMessage({ source: 'id-codexdaichong', type: 'edit-card-type',

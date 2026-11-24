@@ -356,7 +356,7 @@ function cardAvailability(cardId, number, freeze, pool, tenant, orbit) {
   if (freeze) return 'frozen';
   if (cardId?.startsWith('recharge:')) {
     if (!pool) return 'review';
-    return Number(pool.is_active) === 1 && (!pool.status || pool.status === '正常') ? 'normal' : 'inactive';
+    return Number(pool.is_active) === 1 && pool.is_enabled !== 0 && (!pool.status || pool.status === '正常') ? 'normal' : 'inactive';
   }
   if (cardId?.startsWith('tenant:')) return tenant ? tenant.active ? 'normal' : 'inactive' : 'review';
   if (cardId?.startsWith('orbitcard:')) {
@@ -608,7 +608,7 @@ async function cardDetails(context, order, account) {
     card.source = '充值卡池';
     try {
       const row = livePoolCard = await poolCard(client, id);
-      card.status = !row ? '历史卡已删除' : Number(row.is_active) === 1 ? '可用' : '已停用';
+      card.status = !row ? '历史卡已删除' : (Number(row.is_active) === 1 && row.is_enabled !== 0) ? '可用' : '已停用';
       verifiedTail = row?.last4;
       number = row?.card_number;
     } catch {

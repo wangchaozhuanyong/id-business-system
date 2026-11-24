@@ -55,7 +55,7 @@ export function rechargeOrderEvidence(task, {
   if (task?.status !== 'success' || !jobPattern.test(task.jobKey || '')) return null;
   const created = utcInstant(task.createdAt);
   const provider = providerReceipt(task);
-  const code = typeof task.cdk === 'string' && task.cdk ? task.cdk : '';
+  const code = typeof task.cdk === 'string' && task.cdk ? task.cdk.trim() : '';
   const codePlan = codes.find((row) => row.code === code)?.plan_type;
   const matched = code && Number.isFinite(created) ? bills.filter((row) =>
     row.status === 'success' && row.cdk_code === code && row.stripe_session_id &&
@@ -101,6 +101,7 @@ export function rechargeOrderEvidence(task, {
     !provider?.paidAmount && '实扣金额待核对',
     !tail && '卡尾待核对',
     !cardId && '银行卡归属待核对',
+    !code && '充值码待核对',
     typeof firstUse !== 'boolean' && '首次开卡费待核对'
   ].filter(Boolean);
   return {
@@ -109,6 +110,7 @@ export function rechargeOrderEvidence(task, {
     expiry: start ? expiryFor(start) : '',
     paidAmount: provider?.paidAmount || '', paidCurrency: provider?.paidCurrency || '',
     paymentId: tail, cardId, employeeId: owner?.employeeId || '',
+    code, rechargeCode: code,
     ...(/^\d{12,19}$/.test(savedNumber || '') && tail && savedNumber.endsWith(tail) && { proCardNumber: savedNumber }),
     firstUse, needs,
     codeRenewal: Boolean(code && (bill || provider) && emailValid(email) && verifiedEmails.size === 1 && plan && start)
@@ -116,10 +118,11 @@ export function rechargeOrderEvidence(task, {
 }
 
 export function buildRechargeOrder(evidence, settings, at) {
-  const { jobKey, email, plan, start, expiry, completedAt, paidAmount, paidCurrency, paymentId, cardId, employeeId } = evidence;
+  const { jobKey, email, plan, start, expiry, completedAt, paidAmount, paidCurrency, paymentId, cardId, employeeId, rechargeCode, code } = evidence;
   return {
     product: 'GPT', businessType: '续费', accountSource: '客户自有', accountId: '',
     taskId: jobKey, source: '线上代充', email, plan, payment: '银行卡', paymentId, cardId,
+    rechargeCode: rechargeCode || code || '',
     entitlementStatus: 'active',
     ...(evidence.proCardNumber && { proCardNumber: evidence.proCardNumber }),
     paidAmount, paidCurrency, paidConfirmed: Boolean(paidAmount && paidCurrency),
@@ -222,6 +225,7 @@ export function createRechargeOrderSync({ store, client, publicOrigin, quoteServ
           continue;
         }
         if (task.status !== 'success') continue;
+        if (!committed && (!task.cdk || !String(task.cdk).trim())) continue;
         if (committed) store.rememberRechargeSessions([jobKey], saved.scanOffset);
         const { codes, cards, bills } = await evidenceSources();
         let orbitCards = [];
@@ -233,7 +237,7 @@ export function createRechargeOrderSync({ store, client, publicOrigin, quoteServ
           } catch (error) { if (committed) throw error; }
         }
         const evidence = rechargeOrderEvidence(task, { bills, codes, cards, orbitCards, ownerData, runtimeEntries, now: checkedAt });
-        if (!evidence) continue;
+        if (!evidence || (!committed && !evidence.code)) continue;
         const completed = utcInstant(evidence.completedAt);
         const created = utcInstant(task.createdAt);
         if (!(completed >= saved.since || !Number.isFinite(completed) && created >= saved.since)) {
