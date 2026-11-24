@@ -149,6 +149,7 @@ function buildRecords(snapshots, now, cardNumberFor) {
   for (const order of orders) {
     const product = family(order?.product);
     if (!products.has(product) || !text(order.id) || order.draft || ['draft', '草稿'].includes(order.status)) continue;
+    if (order.source === '线上代充' && !validOrderEmail(order.email) && !order.rechargeCode && !order.cdk) continue;
     const accountIdentity = identity(order, product);
     const root = subscriptionChainRoot(order, orderById);
     const anchor = root.subscriptionAnchor || (!identity(root, product) ? root.id : '');

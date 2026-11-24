@@ -53,7 +53,9 @@
       { id: 'actions', label: '操作', action: true, render: row => A.textAction(
         '查看原单', 'completion-original', 'data-id="' + esc(row.id) + '"') }
     ] : [
-      { id: 'orderNo', label: '订单编号' }, { id: 'email', label: '账号邮箱' }, { id: 'plan', label: '套餐' },
+      { id: 'orderNo', label: '订单编号' },
+      { id: 'rechargeCode', label: '充值码', render: (row) => esc(row.rechargeCode || '—') },
+      { id: 'email', label: '账号邮箱' }, { id: 'plan', label: '套餐' },
       { id: 'rechargeCompletedAt', label: '开通时间', render: (row) => esc(displayTime(row.rechargeCompletedAt || row.start)) },
       ...(snapshot?.canAssign ? [{ id: 'owner', label: '归属人', render: (row) => esc(row.owner || '—') }] : []),
       { id: 'customer', label: current === 'complete' ? '客户' : '缺少资料', render: (row) =>
@@ -156,7 +158,9 @@
   }
   function evidence(row) {
     return section('原订单', properties([
-      ['订单编号', row.orderNo], ['账号邮箱', row.email], ['充值套餐', row.plan], ['归属人', row.owner],
+      ['订单编号', row.orderNo],
+      ...(row.rechargeCode ? [['充值码', row.rechargeCode]] : []),
+      ['账号邮箱', row.email], ['充值套餐', row.plan], ['归属人', row.owner],
       ['开通时间', displayTime(row.rechargeCompletedAt || row.start)], ['到期时间', displayTime(row.expiry)],
       ...(row.bankPayment ? [['银行卡号', row.cardNumber || (row.cardLast4 ? '完整卡号待核对' : '未登记')]] : [])
     ])) + section('金额与凭据', properties([

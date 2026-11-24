@@ -38,7 +38,7 @@ test('browser reconciliation uses the terminal timestamp but does not promote an
   assert.equal(order.receiptConfirmed, false);
   assert.equal(order.paidConfirmed, false);
   assert.equal(order.proCardNumber, '4000000000002345');
-  assert.doesNotMatch(JSON.stringify(order), /example-code/);
+  assert.equal(order.rechargeCode, 'example-code');
   assert.doesNotMatch(JSON.stringify(redactClaudeProOrderMaterials(order, { role: 'employee' })), /4000000000002345/);
 });
 
@@ -359,4 +359,34 @@ test('the collection transport cannot call payment, cancellation or card mutatio
     '/api/admin/cards/1', '/api/admin/orbitcard/sync', '/api/admin/orbitcard/usage?refresh=1'])
     await assert.rejects(client.get(path), /不支持/);
   assert.equal(attempts.length, 0);
+});
+
+test('自动充值调试数据（无充值码）严禁入单，只有充值码成功任务才入单', async () => {
+  const debugTaskWithoutCdk = { jobKey: 'debug-task-1', status: 'success', createdAt, cardLast4: '2345' };
+  const debugEvidence1 = rechargeOrderEvidence(debugTaskWithoutCdk, { now });
+  assert.equal(debugEvidence1.code, '');
+  assert.equal(debugEvidence1.codeRenewal, false);
+  assert.ok(debugEvidence1.needs.includes('充值码待核对'));
+
+  const debugTaskEmptyCdk = { jobKey: 'debug-task-2', status: 'success', cdk: '   ', createdAt, cardLast4: '2345' };
+  const debugEvidence2 = rechargeOrderEvidence(debugTaskEmptyCdk, { now });
+  assert.equal(debugEvidence2.code, '');
+  assert.equal(debugEvidence2.codeRenewal, false);
+  assert.ok(debugEvidence2.needs.includes('充值码待核对'));
+
+  const normalTask = { jobKey: 'real-cdk-task', status: 'success', cdk: 'VALID-CDK-CODE', createdAt, cardLast4: '2345' };
+  const evidence = rechargeOrderEvidence(normalTask, {
+    now,
+    bills: [{
+      cdk_code: 'VALID-CDK-CODE', email: 'user@example.test', status: 'success', plan_type: 'plus',
+      payment_time: completedAt, stripe_session_id: 'session-real', card_last4: '2345'
+    }],
+    runtimeEntries: [{ source: 'task', text: '任务结束 status=success progress=100', jobKey: 'real-cdk-task', ts: Date.parse(completedAt) }]
+  });
+  assert.ok(evidence);
+  assert.equal(evidence.code, 'VALID-CDK-CODE');
+  assert.equal(evidence.rechargeCode, 'VALID-CDK-CODE');
+  const order = buildRechargeOrder(evidence, {}, now);
+  assert.equal(order.rechargeCode, 'VALID-CDK-CODE');
+  assert.equal(order.email, 'user@example.test');
 });

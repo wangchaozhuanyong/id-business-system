@@ -87,8 +87,10 @@ function orderView(order, customer, actor, names, cardContext) {
   const tail = clean(order.paymentId) || clean(order.proCardNumber).slice(-4);
   const cardLast4 = /^\d{4,6}$/.test(tail) ? tail.slice(-4) : '';
   const { number, conflict } = orderCardHealthReference(order, cardContext);
+  const isManager = manager(actor);
   return {
     ...fields(order, [...orderFields, ...contactFields.map(([key]) => key)]),
+    ...(isManager && (order.rechargeCode || order.cdk) && { rechargeCode: order.rechargeCode || order.cdk }),
     ...paymentView(order), customer: customerView(customer),
     customerSource: source, cardLast4, bankPayment: order.payment === '银行卡',
     ...(!conflict && number && { cardNumber: number }),

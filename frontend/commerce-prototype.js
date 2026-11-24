@@ -6658,6 +6658,7 @@
     };
     return [
       { id: 'orderNo', label: '订单编号', ...(product === 'GPT' && { render: gptOrderNumber, mobileSummary: true }) },
+      ...(product === 'GPT' ? [{ id: 'rechargeCode', label: '充值码', render: row => E(row.rechargeCode || row.cdk || '—') }] : []),
       { id: 'owner', label: '归属人', render: (row) => E(orderOwnerName(row)) },
       { id: 'customerId', label: '客户', render: row => E(row.list?.customer ?? customerLabel(row.customerId)) },
       { id: 'email', label: personalProduct(product) ? '订阅账号' : '邮箱账号', class: 'email-cell', render: row => E(orderIdentity(row)) },
@@ -7283,7 +7284,7 @@
             ? timeline(order.id)
             : activeTab === 'renewals'
               ? renewalChain(order)
-              : `<div class="property-list">${property('订单编号', order.orderNo)}${property('来源入口', order.source)}${property('来源任务', order.taskId)}${property('产品 / 套餐', `${order.product} / ${order.plan}`)}${property('业务类型', order.businessType)}${property(personal ? '订阅账号' : '邮箱账号', orderIdentity(order))}${personal ? personalOrderProperties(order) : ''}${
+              : `<div class="property-list">${property('订单编号', order.orderNo)}${order.rechargeCode || order.cdk ? property('充值码', order.rechargeCode || order.cdk) : ''}${property('来源入口', order.source)}${property('来源任务', order.taskId)}${property('产品 / 套餐', `${order.product} / ${order.plan}`)}${property('业务类型', order.businessType)}${property(personal ? '订阅账号' : '邮箱账号', orderIdentity(order))}${personal ? personalOrderProperties(order) : ''}${
                 property('客户', customer?.name || '待补充客户')}${
                 order.subscriptionEnded ? property('实际终止时间', missing?.end ? '待补实际时间' :
                   dateInput(order.subscriptionEndedAt).replace('T', ' ')) : ''}${

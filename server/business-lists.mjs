@@ -23,7 +23,7 @@ const inventoryTabs = ['all', 'available', 'claimed', 'used', 'dead', 'unlocking
 const orderFields = ['id', 'version', 'orderNo', 'product', 'plan', 'status', 'cancelled', 'draft', 'businessType', 'source',
   'customerId', 'ownerId', 'owner', 'rechargeOwnerId', 'createdById', 'createdBy', 'createdAt', 'updatedAt', 'updatedBy',
   'updatedById', 'start', 'expiry', 'entitlementStatus', 'payment', 'paymentId', 'saleAmount', 'saleCurrency', 'paidAmount',
-  'paidCurrency', 'paidConfirmed', 'receiptConfirmed', 'email', 'xHandle', 'loginMethod', 'taskId', 'proMaterialMode',
+  'paidCurrency', 'paidConfirmed', 'receiptConfirmed', 'email', 'xHandle', 'loginMethod', 'taskId', 'rechargeCode', 'proMaterialMode',
   'proCardNumber', 'proCardSerial', 'cardTypeName', 'billingChannel', 'wechat', 'customerPhone', 'whatsapp', 'telegram',
   'phone', 'kyc', 'verifier', 'verifierPhone', 'tenantId', 'notes'];
 const assetFields = ['id', 'version', 'type', 'email', 'xHandle', 'loginMethod', 'emailType', 'acquisitionMethod',
@@ -91,6 +91,7 @@ export function readOrdersPage(params, {
   const results = [];
   for (const row of orders) {
     if (claude ? !isClaudeOrder(row) : row.product !== params.product) continue;
+    if (row.source === '线上代充' && !row.rechargeCode && !row.cdk && !validOrderEmail(row.email)) continue;
     productTotal++;
     const missing = orderListMissing(row, customerIndex, at), pending = missing.length > 0;
     const opens = subscriptionTime(row.start), expires = subscriptionTime(row.expiry);
