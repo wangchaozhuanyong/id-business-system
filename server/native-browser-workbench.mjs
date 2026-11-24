@@ -14,12 +14,9 @@ const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const regionLabels = {
   auto: '共享代充池 · 智能选路',
-  PH: '共享代充池 · 菲律宾 (PH)',
-  EG: '共享代充池 · 埃及 (EG)',
-  MY: '共享代充池 · 马来西亚 (MY)',
-  SG: '共享代充池 · 新加坡 (SG)',
-  US: '共享代充池 · 美国 (US)',
-  direct: '本机直连'
+  PH: '菲律宾 (PH · 自动代充 IP 池)',
+  EG: '埃及 (EG · 自动代充 IP 池)',
+  direct: '服务器直连 (无代理)'
 };
 
 function formatProxySummary(input) {

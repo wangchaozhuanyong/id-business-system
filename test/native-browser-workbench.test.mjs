@@ -127,3 +127,25 @@ test('updateAccountSessionJson updates credentials in-place and rejects mismatch
     (err) => err instanceof NativeWorkbenchError && err.status === 400
   );
 });
+
+test('store manages operator-isolated proxy preference and valid regions', async () => {
+  const { createLocalBusinessStore } = await import('../server/local-business.mjs');
+  const store = createLocalBusinessStore(':memory:');
+  const actor1 = { id: 'emp_1', email: 'emp1@example.com' };
+  const actor2 = { id: 'emp_2', email: 'emp2@example.com' };
+
+  const initial = store.loadNativeWorkbenchPreferences(actor1);
+  assert.equal(initial.defaultProxyRegion, 'auto');
+  assert.deepEqual(initial.availableRegions, [
+    { code: 'PH', label: '菲律宾 (PH · 自动代充 IP 池)' },
+    { code: 'EG', label: '埃及 (EG · 自动代充 IP 池)' }
+  ]);
+
+  store.saveNativeWorkbenchPreferences({ defaultProxyRegion: 'EG' }, actor1);
+  const updated1 = store.loadNativeWorkbenchPreferences(actor1);
+  assert.equal(updated1.defaultProxyRegion, 'EG');
+
+  // Verify actor2 is isolated and not influenced
+  const updated2 = store.loadNativeWorkbenchPreferences(actor2);
+  assert.equal(updated2.defaultProxyRegion, 'auto');
+});
