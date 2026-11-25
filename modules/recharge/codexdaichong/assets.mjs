@@ -288,8 +288,6 @@ function adaptHostedCardPool(source) {
             let read = hostedCardReads.get(section);
             if (!read) {
                 if (section === 'local') read = loadCardPoolList();
-                else if (section === 'orbitcard') read = loadOrbitcardUsage(false, false);
-                else if (section === 'orbitcard-strategy') read = loadOrbitcardProductStrategy(false);
                 else return;
                 hostedCardReads.set(section, read);
             }
@@ -308,36 +306,158 @@ function adaptHostedCardPool(source) {
             }
         }
         function switchAdminSection(group, target) {`);
-  source = replaceOne(source, "                if (showToast) showMessage('Orbitcard 用卡记录已刷新', 'success');",
-    "                if (showToast) showMessage('Orbitcard 用卡记录已刷新', 'success');\n" +
-    "                if (hostedCardPool) { lucide.createIcons(); return true; }");
-  source = replaceOne(source, '        async function loadOrbitcardProductStrategy(showToast = false) {', `
-        let strategyReadNumber = 0;
-        async function loadOrbitcardProductStrategy(showToast = false) {`);
-  source = replaceOne(source, "            const previous = select.value || '';\n            select.disabled = true;", `
-            const readNumber = ++strategyReadNumber;
-            const controls = hostedCardPool ? select.closest('[data-switch-panel]').querySelectorAll(
-                'input, select, button[onclick="saveOrbitcardProductStrategy()"]'
-            ) : [];
-            for (const control of controls) control.disabled = true;
-            let loaded = false;
-            const previous = select.value || '';
-            select.disabled = true;`);
-  source = replaceOne(source, "                if (!res.ok || !data.success) throw new Error(data.message || '产品目录查询失败');",
-    "                if (hostedCardPool && readNumber !== strategyReadNumber) return;\n" +
-    "                if (!res.ok || !data.success) throw new Error(data.message || '产品目录查询失败');");
-  source = replaceOne(source, "                if (showToast) showMessage('上游产品与库存已刷新', 'success');",
-    "                if (showToast) showMessage('上游产品与库存已刷新', 'success');\n" +
-    "                loaded = true;\n                return true;");
-  source = replaceOne(source, '                hint.textContent = `产品目录读取失败：',
-    "                if (hostedCardPool && readNumber !== strategyReadNumber) return;\n" +
-    '                hint.textContent = `产品目录读取失败：');
-  return replaceOne(source, '                select.disabled = false;\n                lucide.createIcons();', `
-                if (!hostedCardPool || readNumber === strategyReadNumber) {
-                    select.disabled = false;
-                    for (const control of controls) control.disabled = !loaded;
-                    lucide.createIcons();
-                }`);
+  return replaceSection(
+    source,
+    '        async function loadOrbitcardProductStrategy(showToast = false) {',
+    '        async function syncOrbitcardCards() {',
+    `        const DEFAULT_CARD_REUSE_LIMITS = { plus: 4, pro100: 1, pro200: 1, pro500: 1 };
+        let cardReuseDrawerReturnFocus = null;
+        function readCardReuseInputs() {
+            const next = {};
+            for (const key of ['plus', 'pro100', 'pro200', 'pro500']) {
+                const input = document.getElementById('card_reuse_limit_' + key);
+                const val = Number(input?.value);
+                if (!Number.isSafeInteger(val) || val < 1 || val > 20) {
+                    return { error: '所有套餐的一卡几充上限须为 1–20 的整数', input };
+                }
+                next[key] = val;
+            }
+            return { limits: next };
+        }
+        function applyCardReuseLimitsToUi(limits) {
+            const normalized = {
+                plus: Number(limits?.plus) || 4,
+                pro100: Number(limits?.pro100) || 1,
+                pro200: Number(limits?.pro200) || 1,
+                pro500: Number(limits?.pro500) || 1
+            };
+            window.idRechargePlanReuseLimits = normalized;
+            for (const key of ['plus', 'pro100', 'pro200', 'pro500']) {
+                const input = document.getElementById('card_reuse_limit_' + key);
+                if (input) input.value = String(normalized[key]);
+            }
+            try {
+                if (typeof loadCardPoolList === 'function' && document.getElementById('card_pool_list_body')) void loadCardPoolList();
+            } catch { /* Ignore */ }
+            return normalized;
+        }
+        function stepCardReuseLimit(planKey, delta) {
+            const input = document.getElementById('card_reuse_limit_' + planKey);
+            if (!input || input.disabled) return;
+            const current = Number(input.value) || DEFAULT_CARD_REUSE_LIMITS[planKey] || 1;
+            const next = Math.min(20, Math.max(1, current + delta));
+            input.value = String(next);
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        function resetCardReuseLimits() {
+            for (const [key, def] of Object.entries(DEFAULT_CARD_REUSE_LIMITS)) {
+                const input = document.getElementById('card_reuse_limit_' + key);
+                if (input && !input.disabled) input.value = String(def);
+            }
+            const status = document.getElementById('card_reuse_limits_status');
+            if (status) status.textContent = '已填入系统默认值，点击「保存设置」生效';
+        }
+        function handleCardReuseDrawerKeydown(event) {
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                closeCardReuseLimitsDrawer();
+            }
+        }
+        function openCardReuseLimitsDrawer(triggerBtn) {
+            const drawer = document.getElementById('card_reuse_limits_drawer');
+            const backdrop = document.getElementById('card_reuse_limits_backdrop');
+            if (!drawer || !backdrop) return;
+            cardReuseDrawerReturnFocus = triggerBtn || document.activeElement;
+            backdrop.hidden = false;
+            drawer.hidden = false;
+            requestAnimationFrame(() => {
+                backdrop.classList.add('is-open');
+                drawer.classList.add('is-open');
+            });
+            document.addEventListener('keydown', handleCardReuseDrawerKeydown);
+            const closeBtn = drawer.querySelector('.card-reuse-drawer-close');
+            if (closeBtn) closeBtn.focus();
+            if (typeof lucide !== 'undefined') lucide.createIcons();
+            void loadCardReuseLimits(false);
+        }
+        function closeCardReuseLimitsDrawer() {
+            const drawer = document.getElementById('card_reuse_limits_drawer');
+            const backdrop = document.getElementById('card_reuse_limits_backdrop');
+            if (!drawer || !backdrop || drawer.hidden) return;
+            drawer.classList.remove('is-open');
+            backdrop.classList.remove('is-open');
+            drawer.hidden = true;
+            backdrop.hidden = true;
+            document.removeEventListener('keydown', handleCardReuseDrawerKeydown);
+            if (cardReuseDrawerReturnFocus && typeof cardReuseDrawerReturnFocus.focus === 'function') {
+                cardReuseDrawerReturnFocus.focus();
+            }
+            cardReuseDrawerReturnFocus = null;
+        }
+        async function loadCardReuseLimits(showToast = false) {
+            const status = document.getElementById('card_reuse_limits_status');
+            if (status) status.textContent = '正在读取配置…';
+            try {
+                const res = await authFetch('/api/admin/gpt-api');
+                const data = await res.json();
+                if (!res.ok || !data.success) throw new Error(data.message || '读取配置失败');
+                const cfg = data.config || {};
+                const limits = cfg.orbitcard_reuse_limits || {};
+                applyCardReuseLimitsToUi(limits);
+                if (status) status.textContent = '';
+                if (showToast) showMessage('一卡几充设置已刷新', 'success');
+                return true;
+            } catch (error) {
+                if (status) status.textContent = '读取失败：' + (error.message || '请稍后重试');
+                if (showToast) showMessage(error.message || '读取配置失败', 'error');
+                return false;
+            }
+        }
+        async function saveCardReuseLimits() {
+            const saveBtn = document.getElementById('save_card_reuse_limits_btn');
+            const status = document.getElementById('card_reuse_limits_status');
+            const parsed = readCardReuseInputs();
+            if (parsed.error) {
+                if (status) status.textContent = parsed.error;
+                showMessage(parsed.error, 'warning');
+                parsed.input?.focus();
+                return;
+            }
+            if (saveBtn) saveBtn.disabled = true;
+            if (status) status.textContent = '正在保存…';
+            try {
+                const res = await authFetch('/api/admin/orbitcard/product-strategy', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ product_code: '', reuse_limits: parsed.limits })
+                });
+                const data = await res.json();
+                if (!res.ok || !data.success) throw new Error(data.message || '保存失败');
+                applyCardReuseLimitsToUi(parsed.limits);
+                if (status) status.textContent = '已保存并生效';
+                showMessage('一卡几充设置已保存', 'success');
+            } catch (error) {
+                if (status) status.textContent = '保存失败：' + (error.message || '请稍后重试');
+                showMessage(error.message || '保存失败', 'error');
+            } finally {
+                if (saveBtn) saveBtn.disabled = false;
+            }
+        }
+        async function refreshHostedCardPool() {
+            const btn = document.getElementById('refresh_card_pool_btn');
+            if (btn) btn.disabled = true;
+            try {
+                await loadCardPoolList();
+                showMessage('银行卡列表已刷新', 'success');
+            } catch (error) {
+                showMessage(error.message || '刷新失败', 'error');
+            } finally {
+                if (btn) btn.disabled = false;
+                if (typeof lucide !== 'undefined') lucide.createIcons();
+            }
+        }
+`
+  );
 }
 
 function adaptAdminRuntimeLogs(source) {
@@ -2278,108 +2398,129 @@ function adaptHtml(source, kind) {
     source = replaceOne(source,
       '                    <button type="button" class="admin-switcher-tab" role="tab" aria-selected="false" data-switcher-tab="orbitcard" onclick="switchAdminSection(\'card-assets\', \'orbitcard\')">Orbitcard 用卡记录</button>\n' +
       '                    <button type="button" class="admin-switcher-tab" role="tab" aria-selected="false" data-switcher-tab="orbitcard-strategy" onclick="switchAdminSection(\'card-assets\', \'orbitcard-strategy\')">Orbitcard 开卡策略</button>\n',
-      '                    <button type="button" class="admin-switcher-tab" role="tab" aria-selected="false" data-switcher-tab="card-reuse-limits" onclick="switchAdminSection(\'card-assets\', \'card-reuse-limits\')">一卡几充设置</button>\n'
+      ''
+    );
+    source = replaceOne(source,
+      '                    <button class="btn btn-success" onclick="toggleCardPoolImportBox()">\n' +
+      '                        <i data-lucide="upload"></i>\n' +
+      '                        批量导入\n' +
+      '                    </button>',
+      `                    <div class="card-pool-header-actions">
+                        <button type="button" class="btn btn-secondary card-reuse-trigger-btn" id="open_card_reuse_limits_btn" onclick="openCardReuseLimitsDrawer(this)">
+                            <i data-lucide="sliders-horizontal"></i>
+                            一卡几充设置
+                        </button>
+                        <button class="btn btn-success" onclick="toggleCardPoolImportBox()">
+                            <i data-lucide="upload"></i>
+                            批量导入
+                        </button>
+                        <button type="button" class="btn btn-secondary" id="refresh_card_pool_btn" onclick="refreshHostedCardPool()">
+                            <i data-lucide="refresh-cw"></i>
+                            刷新
+                        </button>
+                    </div>`
     );
     source = replaceSection(
       source,
       '            <div class="panel admin-switcher-panel" role="tabpanel" data-switch-panel="orbitcard" hidden>',
       '        <!-- CDK 管理 -->',
-      `            <div class="panel admin-switcher-panel card-reuse-limits-panel" role="tabpanel" data-switch-panel="card-reuse-limits" hidden>
-                <div class="panel-header">
-                    <div>
-                        <h2 class="panel-title" id="card_reuse_limits_title">一卡几充设置</h2>
-                        <p style="font-size:13px; color:var(--text-dim); margin:8px 0 0;">
-                            设置每张银行卡最多可为多少个账户充值订阅。自动充值取卡时，达到该上限的卡片将自动停用并标记为「已用满」，防止超额扣款。
-                        </p>
+      `        </div>
+        </div>
+
+        <div id="card_reuse_limits_backdrop" class="card-reuse-drawer-backdrop" hidden onclick="closeCardReuseLimitsDrawer()"></div>
+        <aside id="card_reuse_limits_drawer" class="card-reuse-drawer" role="dialog" aria-modal="true" aria-labelledby="card_reuse_limits_title" hidden>
+            <div class="card-reuse-drawer-head">
+                <div>
+                    <h2 class="panel-title" id="card_reuse_limits_title">一卡几充设置</h2>
+                    <p>设置每张银行卡最多可为多少个账户充值订阅。自动充值取卡时，达到该上限的卡片将自动停用并标记为「已用满」，防止超额扣款。</p>
+                </div>
+                <button type="button" class="card-reuse-drawer-close" aria-label="关闭一卡几充设置" onclick="closeCardReuseLimitsDrawer()">
+                    <i data-lucide="x"></i>
+                </button>
+            </div>
+            <div class="card-reuse-drawer-body">
+                <div class="card-reuse-drawer-list">
+                    <div class="card-reuse-plan-card">
+                        <div class="card-reuse-plan-info">
+                            <span class="plan-badge plan-badge--plus">ChatGPT Plus</span>
+                            <p class="card-reuse-hint">允许范围 1–20 次 · 系统默认 4 次</p>
+                        </div>
+                        <div class="card-reuse-stepper-wrap">
+                            <div class="card-reuse-stepper">
+                                <button type="button" class="card-reuse-step-btn" aria-label="减少 Plus 上限" onclick="stepCardReuseLimit('plus', -1)">−</button>
+                                <input id="card_reuse_limit_plus" class="asset-input card-reuse-input" type="number" min="1" max="20" step="1" value="4" aria-label="ChatGPT Plus 每张卡充值账户数上限" required>
+                                <button type="button" class="card-reuse-step-btn" aria-label="增加 Plus 上限" onclick="stepCardReuseLimit('plus', 1)">+</button>
+                            </div>
+                            <span class="card-reuse-unit">个账户</span>
+                        </div>
                     </div>
-                    <button type="button" class="btn btn-secondary" id="card_reuse_limits_refresh_btn" onclick="loadCardReuseLimits(true)">
-                        <i data-lucide="refresh-cw"></i>
-                        刷新设置
-                    </button>
+
+                    <div class="card-reuse-plan-card">
+                        <div class="card-reuse-plan-info">
+                            <span class="plan-badge plan-badge--pro">ChatGPT Pro 100</span>
+                            <p class="card-reuse-hint">允许范围 1–20 次 · 系统默认 1 次</p>
+                        </div>
+                        <div class="card-reuse-stepper-wrap">
+                            <div class="card-reuse-stepper">
+                                <button type="button" class="card-reuse-step-btn" aria-label="减少 Pro 100 上限" onclick="stepCardReuseLimit('pro100', -1)">−</button>
+                                <input id="card_reuse_limit_pro100" class="asset-input card-reuse-input" type="number" min="1" max="20" step="1" value="1" aria-label="ChatGPT Pro 100 每张卡充值账户数上限" required>
+                                <button type="button" class="card-reuse-step-btn" aria-label="增加 Pro 100 上限" onclick="stepCardReuseLimit('pro100', 1)">+</button>
+                            </div>
+                            <span class="card-reuse-unit">个账户</span>
+                        </div>
+                    </div>
+
+                    <div class="card-reuse-plan-card">
+                        <div class="card-reuse-plan-info">
+                            <span class="plan-badge plan-badge--pro">ChatGPT Pro 200</span>
+                            <p class="card-reuse-hint">允许范围 1–20 次 · 系统默认 1 次</p>
+                        </div>
+                        <div class="card-reuse-stepper-wrap">
+                            <div class="card-reuse-stepper">
+                                <button type="button" class="card-reuse-step-btn" aria-label="减少 Pro 200 上限" onclick="stepCardReuseLimit('pro200', -1)">−</button>
+                                <input id="card_reuse_limit_pro200" class="asset-input card-reuse-input" type="number" min="1" max="20" step="1" value="1" aria-label="ChatGPT Pro 200 每张卡充值账户数上限" required>
+                                <button type="button" class="card-reuse-step-btn" aria-label="增加 Pro 200 上限" onclick="stepCardReuseLimit('pro200', 1)">+</button>
+                            </div>
+                            <span class="card-reuse-unit">个账户</span>
+                        </div>
+                    </div>
+
+                    <div class="card-reuse-plan-card">
+                        <div class="card-reuse-plan-info">
+                            <span class="plan-badge plan-badge--pro">ChatGPT Pro 500</span>
+                            <p class="card-reuse-hint">允许范围 1–20 次 · 系统默认 1 次</p>
+                        </div>
+                        <div class="card-reuse-stepper-wrap">
+                            <div class="card-reuse-stepper">
+                                <button type="button" class="card-reuse-step-btn" aria-label="减少 Pro 500 上限" onclick="stepCardReuseLimit('pro500', -1)">−</button>
+                                <input id="card_reuse_limit_pro500" class="asset-input card-reuse-input" type="number" min="1" max="20" step="1" value="1" aria-label="ChatGPT Pro 500 每张卡充值账户数上限" required>
+                                <button type="button" class="card-reuse-step-btn" aria-label="增加 Pro 500 上限" onclick="stepCardReuseLimit('pro500', 1)">+</button>
+                            </div>
+                            <span class="card-reuse-unit">个账户</span>
+                        </div>
+                    </div>
                 </div>
 
-                <div class="card-reuse-limits-container">
-                    <div class="card-reuse-limits-grid">
-                        <div class="card-reuse-plan-card">
-                            <div class="card-reuse-plan-header">
-                                <span class="plan-badge plan-badge--plus">ChatGPT Plus</span>
-                                <span class="plan-badge-hint">默认套餐</span>
-                            </div>
-                            <div class="card-reuse-plan-body">
-                                <label for="card_reuse_limit_plus" class="card-reuse-label">每张卡充值账户数上限</label>
-                                <div class="card-reuse-input-wrap">
-                                    <input id="card_reuse_limit_plus" class="asset-input card-reuse-input" type="number" min="1" max="20" step="1" value="4" required>
-                                    <span class="card-reuse-unit">个账户</span>
-                                </div>
-                                <p class="card-reuse-hint">允许范围 1–20 次，系统默认 4 次</p>
-                            </div>
-                        </div>
-
-                        <div class="card-reuse-plan-card">
-                            <div class="card-reuse-plan-header">
-                                <span class="plan-badge plan-badge--pro">ChatGPT Pro 100</span>
-                            </div>
-                            <div class="card-reuse-plan-body">
-                                <label for="card_reuse_limit_pro100" class="card-reuse-label">每张卡充值账户数上限</label>
-                                <div class="card-reuse-input-wrap">
-                                    <input id="card_reuse_limit_pro100" class="asset-input card-reuse-input" type="number" min="1" max="20" step="1" value="1" required>
-                                    <span class="card-reuse-unit">个账户</span>
-                                </div>
-                                <p class="card-reuse-hint">允许范围 1–20 次，系统默认 1 次</p>
-                            </div>
-                        </div>
-
-                        <div class="card-reuse-plan-card">
-                            <div class="card-reuse-plan-header">
-                                <span class="plan-badge plan-badge--pro">ChatGPT Pro 200</span>
-                            </div>
-                            <div class="card-reuse-plan-body">
-                                <label for="card_reuse_limit_pro200" class="card-reuse-label">每张卡充值账户数上限</label>
-                                <div class="card-reuse-input-wrap">
-                                    <input id="card_reuse_limit_pro200" class="asset-input card-reuse-input" type="number" min="1" max="20" step="1" value="1" required>
-                                    <span class="card-reuse-unit">个账户</span>
-                                </div>
-                                <p class="card-reuse-hint">允许范围 1–20 次，系统默认 1 次</p>
-                            </div>
-                        </div>
-
-                        <div class="card-reuse-plan-card">
-                            <div class="card-reuse-plan-header">
-                                <span class="plan-badge plan-badge--pro">ChatGPT Pro 500</span>
-                            </div>
-                            <div class="card-reuse-plan-body">
-                                <label for="card_reuse_limit_pro500" class="card-reuse-label">每张卡充值账户数上限</label>
-                                <div class="card-reuse-input-wrap">
-                                    <input id="card_reuse_limit_pro500" class="asset-input card-reuse-input" type="number" min="1" max="20" step="1" value="1" required>
-                                    <span class="card-reuse-unit">个账户</span>
-                                </div>
-                                <p class="card-reuse-hint">允许范围 1–20 次，系统默认 1 次</p>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="card-reuse-limits-footer">
-                        <div class="card-reuse-rules-notice">
-                            <div class="notice-title">用卡规则说明</div>
-                            <ul class="notice-list">
-                                <li><strong>自动扣款防重：</strong>系统自动代充取卡时，每次核对当前卡片已成功充值的次数；达到设定上限后将自动停用并标记为「已用满」，避免超额扣款。</li>
-                                <li><strong>单卡自定义优先：</strong>若在银行卡列表中对特定卡片单独设置了「单卡使用上限」，则优先按该卡的自定义上限执行。</li>
-                                <li><strong>独立自有规则：</strong>此规则由本系统独立管理生效，不依赖任何第三方平台或外部接口。</li>
-                            </ul>
-                        </div>
-
-                        <div class="card-reuse-actions">
-                            <button type="button" class="btn btn-primary" id="save_card_reuse_limits_btn" onclick="saveCardReuseLimits()">
-                                <i data-lucide="save"></i>
-                                保存设置
-                            </button>
-                            <span id="card_reuse_limits_status" role="status" class="card-reuse-status"></span>
-                        </div>
-                    </div>
+                <div class="card-reuse-rules-notice">
+                    <div class="notice-title">用卡规则说明</div>
+                    <ul class="notice-list">
+                        <li><strong>自动扣款防重：</strong>达到对应套餐上限后卡片自动停用并标记为「已用满」，防止超额扣款。</li>
+                        <li><strong>单卡自定义优先：</strong>在列表点击「修改」单独设置的上限优先于本抽屉全局默认。</li>
+                        <li><strong>独立自有规则：</strong>由本系统独立控制生效，不依赖任何第三方平台接口。</li>
+                    </ul>
                 </div>
             </div>
-        </div>
-        </div>
+            <div class="card-reuse-drawer-foot">
+                <button type="button" class="btn btn-secondary" id="reset_card_reuse_limits_btn" onclick="resetCardReuseLimits()">恢复系统默认</button>
+                <div class="card-reuse-actions">
+                    <span id="card_reuse_limits_status" role="status" class="card-reuse-status"></span>
+                    <button type="button" class="btn btn-primary" id="save_card_reuse_limits_btn" onclick="saveCardReuseLimits()">
+                        <i data-lucide="save"></i>
+                        保存设置
+                    </button>
+                </div>
+            </div>
+        </aside>
 
         <!-- CDK 管理 -->`
     );

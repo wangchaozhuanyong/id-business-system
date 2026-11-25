@@ -19,6 +19,7 @@ from remote import (ACTION_PASSWORD_PRESENTATION_FILES, ASSET_METADATA_REPAIR_BA
                     CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES, PRESENTATION_SCOPES, SECURITY_PRESENTATION_FILES,
                     ORBITCARD_LAYOUT_PRESENTATION_FILES, CARD_POOL_LIMIT_PRESENTATION_FILES,
                     CARD_POOL_TOGGLE_PRESENTATION_FILES, CARD_REUSE_LIMITS_PRESENTATION_FILES,
+                    CARD_REUSE_DRAWER_PRESENTATION_FILES,
                     CARD_IMPORT_PREVIEW_SOURCE, RECHARGE_REDEMPTION_CARD_IMPORT_FILES,
                     REDEEM_PRESENTATION_FILES, SUBSCRIPTION_INVOICE_PRESENTATION_FILES,
                     TABLE_ACTIONS_STYLESHEET, TASK_HISTORY_PRESENTATION_FILES,
@@ -57,13 +58,15 @@ CARD_POOL_TOGGLE_MANIFEST = "card-pool-toggle-20261124.json"
 CARD_POOL_TOGGLE_MANIFEST_PATH = f"deploy/website/{CARD_POOL_TOGGLE_MANIFEST}"
 CARD_REUSE_LIMITS_MANIFEST = "card-reuse-limits-20261125.json"
 CARD_REUSE_LIMITS_MANIFEST_PATH = f"deploy/website/{CARD_REUSE_LIMITS_MANIFEST}"
+CARD_REUSE_DRAWER_MANIFEST = "card-reuse-drawer-20261125.json"
+CARD_REUSE_DRAWER_MANIFEST_PATH = f"deploy/website/{CARD_REUSE_DRAWER_MANIFEST}"
 CORE_PATHS = ("deploy/recharge-core", "deploy/caddy", "modules/recharge/codexdaichong", "package.json",
               PROXY_TYPE_CATALOG, TASK_HISTORY_MANIFEST_PATH, ADMIN_WORKSPACE_MANIFEST_PATH,
               SUBSCRIPTION_INVOICE_MANIFEST_PATH, ACTION_PASSWORD_MANIFEST_PATH, CARD_NUMBER_MANIFEST_PATH,
               CARD_FIRST_PAINT_MANIFEST_PATH, CARD_LIST_TOOLBAR_MANIFEST_PATH,
               RECHARGE_REDEMPTION_CARD_IMPORT_MANIFEST_PATH, ORBITCARD_LAYOUT_MANIFEST_PATH,
               CARD_POOL_LIMIT_MANIFEST_PATH, CARD_POOL_TOGGLE_MANIFEST_PATH,
-              CARD_REUSE_LIMITS_MANIFEST_PATH)
+              CARD_REUSE_LIMITS_MANIFEST_PATH, CARD_REUSE_DRAWER_MANIFEST_PATH)
 ADAPTER_SCOPE = {
     "modules/recharge/codexdaichong/gateway.mjs", "modules/recharge/codexdaichong/local-gateway.mjs",
     "modules/recharge/codexdaichong/native-adapter.mjs", "modules/recharge/codexdaichong/runtime.mjs",
@@ -365,6 +368,9 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False, 
     elif changed == {*CARD_REUSE_LIMITS_PRESENTATION_FILES, CARD_REUSE_LIMITS_MANIFEST_PATH}:
         return "cardReuseLimitsPresentation", require_presentation_approval(
             base, sha, CARD_REUSE_LIMITS_MANIFEST, CARD_REUSE_LIMITS_PRESENTATION_FILES)
+    elif changed == {*CARD_REUSE_DRAWER_PRESENTATION_FILES, CARD_REUSE_DRAWER_MANIFEST_PATH}:
+        return "cardReuseDrawerPresentation", require_presentation_approval(
+            base, sha, CARD_REUSE_DRAWER_MANIFEST, CARD_REUSE_DRAWER_PRESENTATION_FILES)
     elif changed == {*RECHARGE_REDEMPTION_CARD_IMPORT_FILES, RECHARGE_REDEMPTION_CARD_IMPORT_MANIFEST_PATH}:
         return "rechargeRedemptionCardImportPresentation", require_presentation_approval(
             base, sha, RECHARGE_REDEMPTION_CARD_IMPORT_MANIFEST, RECHARGE_REDEMPTION_CARD_IMPORT_FILES,
@@ -694,6 +700,8 @@ def main(sample_backup_resources=False):
         files += (CARD_POOL_TOGGLE_MANIFEST_PATH, "server/card-management.mjs")
     if presentation_scope == "cardReuseLimitsPresentation":
         files += (CARD_REUSE_LIMITS_MANIFEST_PATH,)
+    if presentation_scope == "cardReuseDrawerPresentation":
+        files += (CARD_REUSE_DRAWER_MANIFEST_PATH,)
     if presentation_scope == "rechargeRedemptionCardImportPresentation":
         files += (RECHARGE_REDEMPTION_CARD_IMPORT_MANIFEST_PATH, "frontend/order-operations.js",
                   "frontend/recharge-partners.mjs")

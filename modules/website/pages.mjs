@@ -32,8 +32,8 @@ const registration = workspace({
   resource: 'staff/registration', scope: 'inventory'
 });
 export const financeCards = workspace({
-  id: 'staff-finance-cards', route: 'staff/finance/cards', label: '自动代充银行卡',
-  description: '与 ChatGPT 充值共用银行卡池。超级管理员可管理银行卡、允许套餐、Orbitcard 用卡记录与开卡策略；财务账号按已授权范围维护银行卡。',
+  id: 'staff-finance-cards', route: 'staff/finance/cards', label: '银行卡设置',
+  description: '管理自动代充自有银行卡池、允许套餐、单卡状态与一卡几充上限规则；财务账号按已授权范围维护银行卡。',
   navigation: '线上代充', before: 'online-recharge/chatgpt', roles: ['finance', 'super'],
   resource: 'staff/finance/cards', scope: 'recharge-card-plans'
 });

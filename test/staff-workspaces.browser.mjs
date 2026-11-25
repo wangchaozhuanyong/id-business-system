@@ -655,7 +655,7 @@ test('finance lists keep filters, status and pagination readable across widths a
       if (width === 1440) assert(Math.max(...geometry.bottoms) - Math.min(...geometry.bottoms) <= 2, 'desktop controls share one row');
       assert.deepEqual((await separatorSnapshot(page)).findings, [], `${route} ${width} ${theme}`);
     }
-    const help = page.getByLabel('查看' + (route.endsWith('cards') ? '自动代充银行卡' : '代充对账') + '说明', { exact: true });
+    const help = page.getByLabel('查看' + (route.endsWith('cards') ? '银行卡设置' : '代充对账') + '说明', { exact: true });
     const before = await page.locator('.finance-toolbar').boundingBox();
     assert.equal(await help.evaluate(node => node.parentElement.open), false);
     await help.click();

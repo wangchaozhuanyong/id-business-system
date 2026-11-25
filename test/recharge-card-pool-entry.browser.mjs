@@ -46,6 +46,11 @@ async function prepare(browser, { role = 'super', viewport = { width: 1440, heig
   });
   await context.route('**/integrations/codexdaichong/api/admin/gpt-api', request =>
     request.fulfill({ json: { success: true, config: { orbitcard_reuse_limits: { plus: 4, pro100: 1, pro200: 1, pro500: 1 } } } }));
+  await context.route('**/integrations/codexdaichong/api/admin/orbitcard/product-strategy', request => {
+    const body = request.request().postDataJSON();
+    writes.push({ strategy: body });
+    return request.fulfill({ json: { success: true, message: '一卡几充设置已保存' } });
+  });
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -74,19 +79,22 @@ test('银行卡池从左侧子导航进入并保留完整功能和编辑状态',
   t.after(() => fixture.context.close());
   const { page, writes } = fixture;
   const frame = await open(page);
-  assert.equal(await page.getByRole('heading', { name: '自动代充银行卡', exact: true }).count(), 1);
+  assert.equal(await page.getByRole('heading', { name: '银行卡设置', exact: true }).count(), 1);
   assert.equal(await page.locator('[data-staff-action="card-import-open"]').count(), 0);
   assert.equal(await frame.locator('#cards [data-switch-panel="local"] th').count(), 12);
-  const tabsInCardPool = poolTabs(page);
-  await tabsInCardPool.getByRole('button', { name: '银行卡列表', exact: true }).waitFor({ state: 'attached' });
-  assert.equal(await tabsInCardPool.getByRole('button').count(), 2);
-  assert.equal(await tabsInCardPool.getByRole('button', { name: '一卡几充设置', exact: true }).count(), 1);
+  assert.equal(await poolTabs(page).count(), 0);
   assert.equal(await frame.locator('#cards .admin-switcher-tabs').isVisible(), false);
-  await tabsInCardPool.getByRole('button', { name: '一卡几充设置', exact: true }).click();
-  await frame.locator('#cards [data-switch-panel="card-reuse-limits"]').waitFor({ state: 'visible' });
+  await frame.getByRole('button', { name: '一卡几充设置', exact: true }).click();
+  const reuseDrawer = frame.locator('#card_reuse_limits_drawer');
+  await reuseDrawer.waitFor({ state: 'visible' });
   assert.equal(await frame.locator('#card_reuse_limit_plus').inputValue(), '4');
-  await tabsInCardPool.getByRole('button', { name: '银行卡列表', exact: true }).click();
-  await frame.locator('#cards [data-switch-panel="local"]').waitFor({ state: 'visible' });
+  await reuseDrawer.getByRole('button', { name: '增加 Plus 上限', exact: true }).click();
+  assert.equal(await frame.locator('#card_reuse_limit_plus').inputValue(), '5');
+  await reuseDrawer.getByRole('button', { name: '保存设置', exact: true }).click();
+  await reuseDrawer.getByText('已保存并生效').waitFor();
+  assert.deepEqual(writes.shift(), { strategy: { product_code: '', reuse_limits: { plus: 5, pro100: 1, pro200: 1, pro500: 1 } } });
+  await reuseDrawer.getByRole('button', { name: '关闭一卡几充设置', exact: true }).click();
+  await reuseDrawer.waitFor({ state: 'hidden' });
   await frame.getByRole('button', { name: '批量导入', exact: true }).click();
   const importBox = frame.locator('#card_pool_import_box');
   await importBox.getByRole('combobox', { name: '银行卡类型', exact: true }).waitFor();
@@ -106,7 +114,7 @@ test('银行卡池从左侧子导航进入并保留完整功能和编辑状态',
     await sidebar.getByRole('link', { name: 'ChatGPT 充值', exact: true }).click();
     await tabs.getByRole('button', { name: '支付链接调试', exact: true }).waitFor();
     assert.equal(await tabs.getByRole('button', { name: '银行卡池', exact: true }).count(), 0);
-    await sidebar.getByRole('link', { name: '自动代充银行卡', exact: true }).click();
+    await sidebar.getByRole('link', { name: '银行卡设置', exact: true }).click();
     await page.waitForURL('**/#/' + route);
     await frame.locator('#card_pool_list_body tr').first().waitFor();
   }
@@ -128,10 +136,9 @@ test('银行卡池从左侧子导航进入并保留完整功能和编辑状态',
   assert.equal(await frame.locator('#card_pool_list_body tr').first().locator('.status-exhausted').first().textContent(), '已用满');
   const reloaded = page.waitForResponse(response => new URL(response.url()).pathname ===
     '/integrations/codexdaichong/api/admin/cards');
-  await page.getByRole('button', { name: '刷新', exact: true }).click();
+  await frame.locator('#refresh_card_pool_btn').click();
   await reloaded;
   await frame.locator('#card_pool_list_body tr').first().waitFor();
-  assert.equal(await tabsInCardPool.getByRole('button', { name: '银行卡列表', exact: true }).getAttribute('aria-pressed'), 'true');
   assert.equal(await page.locator('iframe[data-view="cards"]').count(), 1);
   const retained = await page.locator(frameSelector).elementHandle();
   await page.evaluate(() => window.IDDesignAPI.clearPageRegions());
@@ -155,7 +162,7 @@ test('待核对记录读取缓慢时完整银行卡池仍能加载和刷新', { 
   const reads = fixture.reads.length;
   const reloaded = fixture.page.waitForResponse(response => new URL(response.url()).pathname ===
     '/integrations/codexdaichong/api/admin/cards');
-  await fixture.page.getByRole('button', { name: '刷新', exact: true }).click();
+  await frame.locator('#refresh_card_pool_btn').click();
   await reloaded;
   assert(fixture.reads.length > reads);
   release();
@@ -178,25 +185,17 @@ test('银行卡入口保留待核对记录，服务失败可以重试且刷新�
   await page.getByRole('button', { name: '登记未确认', exact: true }).waitFor();
   state.status = 200;
   state.ready = true;
-  await page.getByRole('button', { name: '刷新', exact: true }).click();
+  await page.getByRole('button', { name: '重新检查服务', exact: true }).click();
   const frame = page.frameLocator(frameSelector);
   await frame.locator('#card_pool_list_body tr').first().waitFor();
-  state.status = 503;
-  state.ready = false;
-  await page.getByRole('button', { name: '刷新', exact: true }).click();
-  await page.getByText('ChatGPT 充值服务未就绪，已保留当前内容。', { exact: true }).waitFor();
-  assert.equal(await frame.locator('#card_pool_list_body tr').count(), 2);
-  assert.equal(await page.getByRole('button', { name: '核对上次操作', exact: true }).count(), 1);
-  state.status = 200;
-  state.ready = true;
   const original = await page.locator(frameSelector).elementHandle();
   await fixture.context.route('**/integrations/codexdaichong/api/admin/cards', request =>
     request.fulfill({ status: 503, json: { success: false } }), { times: 1 });
   const failedList = page.waitForResponse(response =>
     new URL(response.url()).pathname.endsWith('/api/admin/cards') && response.status() === 503);
-  await page.getByRole('button', { name: '刷新', exact: true }).click();
+  await frame.locator('#refresh_card_pool_btn').click();
   await failedList;
-  await page.getByText('ChatGPT 充值服务未就绪，已保留当前内容。', { exact: true }).waitFor();
+  await frame.locator('#card_pool_list_body tr').first().waitFor();
   assert(await page.locator(frameSelector).evaluate((node, previous) => node === previous, original));
   assert.equal(await frame.locator('#card_pool_list_body tr').count(), 2);
   await original.dispose();
@@ -322,7 +321,7 @@ test('完整银行卡入口在深浅主题、宽窄屏和空结果下保持可�
         const headerLayout = await listHeader.evaluate(header => {
           const strip = header.querySelector('.card-plan-toolbar');
           const summary = strip.querySelector('[role="status"]');
-          const importButton = header.querySelector(':scope > button');
+          const importButton = header.querySelector('.card-pool-header-actions button.btn-success');
           const bounds = node => node.getBoundingClientRect();
           const center = node => bounds(node).top + bounds(node).height / 2;
           const offsets = [...strip.children].map(node => Math.abs(center(node) - center(importButton)));
@@ -341,36 +340,10 @@ test('完整银行卡入口在深浅主题、宽窄屏和空结果下保持可�
         if (width <= 390) assert.equal(headerLayout.scrolls, true, '窄屏只在标题与套餐操作区域横向滚动');
         if (output && theme === 'light' && width === 1920)
           await listHeader.screenshot({ path: join(output, 'card-list-header.png') });
-        const tabs = poolTabs(page);
-        const toolbar = await tabs.evaluate(nav => {
-          const refresh = nav.nextElementSibling;
-          const row = nav.parentElement;
-          const button = refresh.getBoundingClientRect();
-          const strip = nav.getBoundingClientRect();
-          const bar = row.getBoundingClientRect();
-          const center = node => {
-            const range = document.createRange();
-            range.selectNodeContents(node);
-            const rect = range.getBoundingClientRect();
-            return rect.top + rect.height / 2;
-          };
-          return {
-            width: strip.width, height: bar.height, scrolls: nav.scrollWidth > nav.clientWidth,
-            textOffsets: [...nav.querySelectorAll('button')].map(tab => Math.abs(center(tab) - center(refresh))),
-            rightAligned: strip.right < button.left && button.right < bar.right,
-            buttonClearance: Math.min(button.top - bar.top, bar.bottom - button.bottom),
-            dividers: [getComputedStyle(row).borderBottomWidth, getComputedStyle(nav).borderBottomWidth]
-          };
-        });
-        assert(toolbar.rightAligned && toolbar.width > 0 && toolbar.buttonClearance >= 8, JSON.stringify(toolbar));
-        assert(toolbar.textOffsets.every(offset => offset <= 2), '页签与刷新文字在同一行');
-        assert.deepEqual(toolbar.dividers, ['1px', '0px']);
-        assert(toolbar.height <= (width <= 900 ? 70 : 62), JSON.stringify(toolbar));
-        if (width <= 390) {
-          const listTab = tabs.getByRole('button', { name: '银行卡列表', exact: true });
-          assert.equal(await listTab.getAttribute('aria-pressed'), 'true');
-        }
-        const help = page.getByLabel('查看自动代充银行卡说明', { exact: true });
+        assert.equal(await poolTabs(page).count(), 0);
+        await frame.getByRole('button', { name: '一卡几充设置', exact: true }).waitFor();
+        await frame.locator('#refresh_card_pool_btn').waitFor();
+        const help = page.getByLabel('查看银行卡设置说明', { exact: true });
         const before = await page.locator(frameSelector).boundingBox();
         await help.click();
         await page.keyboard.press('Escape');
@@ -400,7 +373,7 @@ test('完整银行卡入口在深浅主题、宽窄屏和空结果下保持可�
         });
         assert.equal(geometry.overflow, false);
         assert(geometry.choices.every(height => height >= 44));
-        measurements.push({ theme, width, ...geometry, toolbar });
+        measurements.push({ theme, width, ...geometry, headerLayout });
         if (output && [1920, 1440, 390].includes(width))
           await page.screenshot({ path: join(output, theme + '-' + width + '-dialog.png') });
         await dialog.getByRole('button', { name: '关闭套餐设置', exact: true }).click();
@@ -422,7 +395,7 @@ test('完整银行卡入口在深浅主题、宽窄屏和空结果下保持可�
           await page.screenshot({ path: join(output, theme + '-' + width + '.png') });
         }
         state.cards = [];
-        await page.getByRole('button', { name: '刷新', exact: true }).click();
+        await frame.locator('#refresh_card_pool_btn').click();
         await frame.locator('#card_pool_list_body').getByText(/暂无/).waitFor();
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
         healthy(fixture);
