@@ -1,0 +1,18 @@
+{
+  "beforeAssetsSha256": "b994c84718cf924ba3eab8b074777b5607d218f3c3e25130f3bdd3a4cf7f1475",
+  "assetsSha256": "8bc14b7e2f588444d7a2bf7aa88810ae9f3c7116103754e17019515f8cd484fc",
+  "files": {
+    "modules/recharge/codexdaichong/assets.mjs": {
+      "before": "3df90e07650ad5faf7f254c7505c3b283fff6e3bd8809d7be10e45aa2878b707",
+      "after": "762d268ea67518c12db8ab95abb07aef13ec4b27ab2bdc6b7831fadfac15e65e"
+    },
+    "modules/recharge/codexdaichong/card-plan-admin.mjs": {
+      "before": "b4b8f9d271cf52c134d8617133f13b11e86b1b2118200de7a6fa87d668f7c5b9",
+      "after": "4f80422ab3cf2b762d8c1ec8440de4b75b931c806369223c7d447376f3f85a04"
+    },
+    "modules/recharge/codexdaichong/shell.css": {
+      "before": "17d8b9a62f7bf3c2bea76d00da4d6ba35ebf24254a2a669e052208ad7ea0ee4d",
+      "after": "79e6c30baa25dada9ed6ff5cc846c6f5ee7cc019e15630e5486975ffbc4347e4"
+    }
+  }
+}

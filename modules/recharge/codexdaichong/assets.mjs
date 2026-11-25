@@ -2278,13 +2278,110 @@ function adaptHtml(source, kind) {
     source = replaceOne(source,
       '                    <button type="button" class="admin-switcher-tab" role="tab" aria-selected="false" data-switcher-tab="orbitcard" onclick="switchAdminSection(\'card-assets\', \'orbitcard\')">Orbitcard 用卡记录</button>\n' +
       '                    <button type="button" class="admin-switcher-tab" role="tab" aria-selected="false" data-switcher-tab="orbitcard-strategy" onclick="switchAdminSection(\'card-assets\', \'orbitcard-strategy\')">Orbitcard 开卡策略</button>\n',
-      ''
+      '                    <button type="button" class="admin-switcher-tab" role="tab" aria-selected="false" data-switcher-tab="card-reuse-limits" onclick="switchAdminSection(\'card-assets\', \'card-reuse-limits\')">一卡几充设置</button>\n'
     );
     source = replaceSection(
       source,
       '            <div class="panel admin-switcher-panel" role="tabpanel" data-switch-panel="orbitcard" hidden>',
       '        <!-- CDK 管理 -->',
-      '        </div>\n        </div>\n\n        <!-- CDK 管理 -->'
+      `            <div class="panel admin-switcher-panel card-reuse-limits-panel" role="tabpanel" data-switch-panel="card-reuse-limits" hidden>
+                <div class="panel-header">
+                    <div>
+                        <h2 class="panel-title" id="card_reuse_limits_title">一卡几充设置</h2>
+                        <p style="font-size:13px; color:var(--text-dim); margin:8px 0 0;">
+                            设置每张银行卡最多可为多少个账户充值订阅。自动充值取卡时，达到该上限的卡片将自动停用并标记为「已用满」，防止超额扣款。
+                        </p>
+                    </div>
+                    <button type="button" class="btn btn-secondary" id="card_reuse_limits_refresh_btn" onclick="loadCardReuseLimits(true)">
+                        <i data-lucide="refresh-cw"></i>
+                        刷新设置
+                    </button>
+                </div>
+
+                <div class="card-reuse-limits-container">
+                    <div class="card-reuse-limits-grid">
+                        <div class="card-reuse-plan-card">
+                            <div class="card-reuse-plan-header">
+                                <span class="plan-badge plan-badge--plus">ChatGPT Plus</span>
+                                <span class="plan-badge-hint">默认套餐</span>
+                            </div>
+                            <div class="card-reuse-plan-body">
+                                <label for="card_reuse_limit_plus" class="card-reuse-label">每张卡充值账户数上限</label>
+                                <div class="card-reuse-input-wrap">
+                                    <input id="card_reuse_limit_plus" class="asset-input card-reuse-input" type="number" min="1" max="20" step="1" value="4" required>
+                                    <span class="card-reuse-unit">个账户</span>
+                                </div>
+                                <p class="card-reuse-hint">允许范围 1–20 次，系统默认 4 次</p>
+                            </div>
+                        </div>
+
+                        <div class="card-reuse-plan-card">
+                            <div class="card-reuse-plan-header">
+                                <span class="plan-badge plan-badge--pro">ChatGPT Pro 100</span>
+                            </div>
+                            <div class="card-reuse-plan-body">
+                                <label for="card_reuse_limit_pro100" class="card-reuse-label">每张卡充值账户数上限</label>
+                                <div class="card-reuse-input-wrap">
+                                    <input id="card_reuse_limit_pro100" class="asset-input card-reuse-input" type="number" min="1" max="20" step="1" value="1" required>
+                                    <span class="card-reuse-unit">个账户</span>
+                                </div>
+                                <p class="card-reuse-hint">允许范围 1–20 次，系统默认 1 次</p>
+                            </div>
+                        </div>
+
+                        <div class="card-reuse-plan-card">
+                            <div class="card-reuse-plan-header">
+                                <span class="plan-badge plan-badge--pro">ChatGPT Pro 200</span>
+                            </div>
+                            <div class="card-reuse-plan-body">
+                                <label for="card_reuse_limit_pro200" class="card-reuse-label">每张卡充值账户数上限</label>
+                                <div class="card-reuse-input-wrap">
+                                    <input id="card_reuse_limit_pro200" class="asset-input card-reuse-input" type="number" min="1" max="20" step="1" value="1" required>
+                                    <span class="card-reuse-unit">个账户</span>
+                                </div>
+                                <p class="card-reuse-hint">允许范围 1–20 次，系统默认 1 次</p>
+                            </div>
+                        </div>
+
+                        <div class="card-reuse-plan-card">
+                            <div class="card-reuse-plan-header">
+                                <span class="plan-badge plan-badge--pro">ChatGPT Pro 500</span>
+                            </div>
+                            <div class="card-reuse-plan-body">
+                                <label for="card_reuse_limit_pro500" class="card-reuse-label">每张卡充值账户数上限</label>
+                                <div class="card-reuse-input-wrap">
+                                    <input id="card_reuse_limit_pro500" class="asset-input card-reuse-input" type="number" min="1" max="20" step="1" value="1" required>
+                                    <span class="card-reuse-unit">个账户</span>
+                                </div>
+                                <p class="card-reuse-hint">允许范围 1–20 次，系统默认 1 次</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card-reuse-limits-footer">
+                        <div class="card-reuse-rules-notice">
+                            <div class="notice-title">用卡规则说明</div>
+                            <ul class="notice-list">
+                                <li><strong>自动扣款防重：</strong>系统自动代充取卡时，每次核对当前卡片已成功充值的次数；达到设定上限后将自动停用并标记为「已用满」，避免超额扣款。</li>
+                                <li><strong>单卡自定义优先：</strong>若在银行卡列表中对特定卡片单独设置了「单卡使用上限」，则优先按该卡的自定义上限执行。</li>
+                                <li><strong>独立自有规则：</strong>此规则由本系统独立管理生效，不依赖任何第三方平台或外部接口。</li>
+                            </ul>
+                        </div>
+
+                        <div class="card-reuse-actions">
+                            <button type="button" class="btn btn-primary" id="save_card_reuse_limits_btn" onclick="saveCardReuseLimits()">
+                                <i data-lucide="save"></i>
+                                保存设置
+                            </button>
+                            <span id="card_reuse_limits_status" role="status" class="card-reuse-status"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        </div>
+
+        <!-- CDK 管理 -->`
     );
     source = replaceOne(source,
       '<th width="80px" style="text-align:center">次数</th>',

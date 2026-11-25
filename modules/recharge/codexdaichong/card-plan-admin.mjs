@@ -31,6 +31,11 @@ export const cardPlanEditor = `
         <fieldset id="card_plan_options" class="card-plan-options">
           <legend>允许套餐</legend><div class="card-plan-grid">${choices}</div>
         </fieldset>
+        <div class="embedded-field" style="margin-top: 14px;">
+          <label for="card_plan_max_usage">单卡使用上限（可选）</label>
+          <input type="number" id="card_plan_max_usage" class="asset-input" min="1" max="20" placeholder="留空则按套餐默认上限">
+          <p class="embedded-field-hint">单独限制此卡最多充值账户数（1–20 次）。留空则自动按「一卡几充设置」中的套餐上限执行。</p>
+        </div>
         <p id="card_plan_result" role="status"></p>
       </div>
       <footer class="card-plan-editor-actions">
@@ -93,13 +98,25 @@ export function createCardPlanAdmin({ labels, request, loadCards, onImportChange
       writeDraft(draft);
     } catch { /* Ignore draft errors */ }
   }
+  function readPlanReuseLimits() {
+    try {
+      if (window.idRechargePlanReuseLimits) return window.idRechargePlanReuseLimits;
+      const raw = readDraft().card_plan_reuse_limits;
+      if (raw) return JSON.parse(raw);
+    } catch { /* Ignore draft errors */ }
+    return { plus: 4, pro100: 1, pro200: 1, pro500: 1 };
+  }
   function getCardLimit(card) {
     const limits = readLimits();
     const custom = limits[Number(card.id)];
     if (Number.isSafeInteger(custom) && custom >= 1 && custom <= 20) return custom;
+    const planLimits = readPlanReuseLimits();
     const plans = Array.isArray(card.allowed_plans) && card.allowed_plans.length ? card.allowed_plans : ['plus'];
-    if (plans.every(p => p.startsWith('pro'))) return 1;
-    return 4;
+    if (plans.every(p => p.startsWith('pro'))) {
+      const proKey = plans[0] || 'pro100';
+      return planLimits[proKey] || 1;
+    }
+    return planLimits.plus || 4;
   }
   function usageCell(card) {
     const count = Number(card.usage_count || 0);
