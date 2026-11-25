@@ -29,27 +29,23 @@ async function prepare(browser, { role = 'super', viewport = { width: 1440, heig
     localFixtures: { 'staff/finance/cards': snapshot, 'staff/finance/cards/pending': { pending }, 'card-types': types } });
   const reads = [], writes = [];
   const state = { ready: true, admin: role === 'super', status: 200, cards: structuredClone(sampleCards),
-    policy: { version: 3, strict: false } };
+    policy: { version: 3, strict: false, reuseLimits: null }, cardsStatus: 200 };
   await context.route('**/integrations/codexdaichong/status', request =>
     request.fulfill({ status: state.status, json: state }));
   await context.route('**/integrations/codexdaichong/api/admin/cards', request => {
     reads.push('cards');
-    return request.fulfill({ json: { success: true, cards: state.cards, planPolicy: state.policy } });
+    return request.fulfill({ status: state.cardsStatus, json: { success: true, cards: state.cards, planPolicy: state.policy } });
   });
   await context.route('**/integrations/codexdaichong/api/admin/cards/plan-policy', request => {
     const command = request.request().postDataJSON();
     writes.push(command);
+    if (command.version !== state.policy.version)
+      return request.fulfill({ status: 409, json: { success: false, message: '套餐设置已更新，请核对最新设置后重试' } });
     if (command.cardIds) for (const card of state.cards)
       if (command.cardIds.includes(card.id)) card.allowed_plans = command.allowedPlans;
-    state.policy = { version: state.policy.version + 1, strict: command.strict ?? state.policy.strict };
+    state.policy = { version: state.policy.version + 1, strict: command.strict ?? state.policy.strict,
+      reuseLimits: command.reuseLimits ?? state.policy.reuseLimits };
     return request.fulfill({ json: { success: true, planPolicy: state.policy } });
-  });
-  await context.route('**/integrations/codexdaichong/api/admin/gpt-api', request =>
-    request.fulfill({ json: { success: true, config: { orbitcard_reuse_limits: { plus: 4, pro100: 1, pro200: 1, pro500: 1 } } } }));
-  await context.route('**/integrations/codexdaichong/api/admin/orbitcard/product-strategy', request => {
-    const body = request.request().postDataJSON();
-    writes.push({ strategy: body });
-    return request.fulfill({ json: { success: true, message: '一卡几充设置已保存' } });
   });
   const page = await context.newPage();
   const errors = [];
@@ -77,7 +73,7 @@ test('银行卡池从左侧子导航进入并保留完整功能和编辑状态',
   t.after(() => browser.close());
   const fixture = await prepare(browser);
   t.after(() => fixture.context.close());
-  const { page, writes } = fixture;
+  const { page, writes, state } = fixture;
   const frame = await open(page);
   assert.equal(await page.getByRole('heading', { name: '银行卡设置', exact: true }).count(), 1);
   assert.equal(await page.locator('[data-staff-action="card-import-open"]').count(), 0);
@@ -87,13 +83,33 @@ test('银行卡池从左侧子导航进入并保留完整功能和编辑状态',
   await frame.getByRole('button', { name: '一卡几充设置', exact: true }).click();
   const reuseDrawer = frame.locator('#card_reuse_limits_drawer');
   await reuseDrawer.waitFor({ state: 'visible' });
+  await reuseDrawer.getByText('保存后开始按套餐限制取卡').waitFor();
   assert.equal(await frame.locator('#card_reuse_limit_plus').inputValue(), '4');
   await reuseDrawer.getByRole('button', { name: '增加 Plus 上限', exact: true }).click();
   assert.equal(await frame.locator('#card_reuse_limit_plus').inputValue(), '5');
   await reuseDrawer.getByRole('button', { name: '保存设置', exact: true }).click();
   await reuseDrawer.getByText('已保存并生效').waitFor();
-  assert.deepEqual(writes.shift(), { strategy: { product_code: '', reuse_limits: { plus: 5, pro100: 1, pro200: 1, pro500: 1 } } });
+  assert.deepEqual(writes.shift(), { version: 3, reuseLimits: { plus: 5, pro100: 1, pro200: 1, pro500: 1 } });
+  assert.equal(await frame.locator('#card_pool_list_body tr').first().locator('.card-usage-metric').textContent(), '2 / 5');
   await reuseDrawer.getByRole('button', { name: '关闭一卡几充设置', exact: true }).click();
+  await reuseDrawer.waitFor({ state: 'hidden' });
+  state.cardsStatus = 503;
+  await frame.getByRole('button', { name: '一卡几充设置', exact: true }).click();
+  await reuseDrawer.getByText('配置读取失败，请关闭后重试').waitFor();
+  assert(await reuseDrawer.getByRole('button', { name: '保存设置', exact: true }).isDisabled());
+  await reuseDrawer.getByRole('button', { name: '关闭一卡几充设置', exact: true }).click();
+  state.cardsStatus = 200;
+  await frame.getByRole('button', { name: '一卡几充设置', exact: true }).click();
+  const plusLimit = frame.locator('#card_reuse_limit_plus:not(:disabled)');
+  await plusLimit.waitFor();
+  assert.equal(await plusLimit.inputValue(), '5');
+  const help = reuseDrawer.locator('summary[aria-label="查看一卡几充设置说明"]');
+  await help.click();
+  await reuseDrawer.getByText('达到某个套餐上限的银行卡将跳过该套餐。', { exact: false }).waitFor();
+  await page.keyboard.press('Escape');
+  assert(await reuseDrawer.isVisible());
+  assert.equal(await reuseDrawer.locator('details[open]').count(), 0);
+  await page.keyboard.press('Escape');
   await reuseDrawer.waitFor({ state: 'hidden' });
   await frame.getByRole('button', { name: '批量导入', exact: true }).click();
   const importBox = frame.locator('#card_pool_import_box');
@@ -124,7 +140,7 @@ test('银行卡池从左侧子导航进入并保留完整功能和编辑状态',
   assert.equal(await dialog.getByRole('checkbox', { name: 'Pro 500', exact: true }).isChecked(), true);
   await dialog.getByRole('button', { name: '保存', exact: true }).click();
   await frame.locator('[data-card-plan-edit="1"]').getByText('Pro 500').waitFor();
-  assert.deepEqual(writes, [{ version: 3, cardIds: [1, 2], allowedPlans: ['pro500'] }]);
+  assert.deepEqual(writes, [{ version: 4, cardIds: [1, 2], allowedPlans: ['pro500'] }]);
   await frame.locator('[data-edit-recharge-card-type="recharge:1"]').click();
   await page.locator('#drawer[open]').getByRole('heading', { name: '设置银行卡类型' }).waitFor();
   await page.locator('#drawer[open]').getByRole('button', { name: '取消', exact: true }).click();

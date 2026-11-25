@@ -19,7 +19,7 @@ async function check() {
   assert.equal(identity.db, process.env.DB_NAME);
   assert.equal(identity.account.split('@')[0], process.env.DB_USER);
 
-  assert.deepEqual((await store.readCardPlanPool()).planPolicy, { version: 0, strict: false });
+  assert.deepEqual((await store.readCardPlanPool()).planPolicy, { version: 0, strict: false, reuseLimits: null });
   const plus = await store.importCards([card(1), card(1)], { version: 0, allowedPlans: ['plus'] });
   assert.deepEqual([plus.imported, plus.assignedPlans, plus.skipped, plus.planPolicy.version], [1, 1, 1, 1]);
   const pro = await store.importCards([card(1), card(2)], { version: 1, allowedPlans: ['pro100'] });
@@ -28,7 +28,8 @@ async function check() {
   const pool = await store.readCardPlanPool();
   assert.deepEqual(pool.rows.map(row => row.plan_value), ['plus', 'pro100', null]);
   assert.equal(await store.hasAvailableCard('pro500'), true);
-  assert.deepEqual(await store.saveCardPlanPolicy({ version: 2, strict: true }), { version: 3, strict: true });
+  assert.deepEqual(await store.saveCardPlanPolicy({ version: 2, strict: true }),
+    { version: 3, strict: true, reuseLimits: null });
   await assert.rejects(store.saveCardPlanPolicy({ version: 2, strict: false }), { status: 409 });
   assert.equal(await store.hasAvailableCard('pro500'), false);
 
@@ -58,7 +59,40 @@ async function check() {
   }
   const after = await store.readCardPlanPool();
   assert.deepEqual(after.rows.map(row => row.id), pool.rows.map(row => row.id));
-  assert.deepEqual(after.planPolicy, { version: 3, strict: true });
+  assert.deepEqual(after.planPolicy, { version: 3, strict: true, reuseLimits: null });
+
+  await store.saveCardPlanPolicy({ version: 3, cardIds: [plusCard.id], allowedPlans: ['plus', 'pro200'] });
+  const reuseLimits = { plus: 2, pro100: 1, pro200: 1, pro500: 1 };
+  await assert.rejects(store.saveCardPlanPolicy({ version: 4, reuseLimits: { ...reuseLimits, plus: 0 } }), { status: 400 });
+  await assert.rejects(store.saveCardPlanPolicy({ version: 4, reuseLimits, strict: false }), { status: 400 });
+  const policy = await store.saveCardPlanPolicy({ version: 4, reuseLimits });
+  assert.deepEqual(policy, { version: 5, strict: true, reuseLimits });
+  assert.deepEqual(await store.saveCardPlanPolicy({ version: 5, reuseLimits }), policy);
+  await assert.rejects(store.saveCardPlanPolicy({ version: 4, reuseLimits }), { status: 409 });
+
+  const pro200 = await store.reserveCard('canary-reuse-pro200', 'pro200');
+  assert.equal(pro200?.id, plusCard.id);
+  await store.recordCardUsage(pro200.id);
+  await store.releaseCard(pro200.id);
+  assert.equal(await store.hasAvailableCard('pro200'), false);
+  assert.equal(await store.reserveCard('canary-reuse-pro200-retry', 'pro200'), null);
+  assert.equal(await store.hasAvailableCard('plus'), true);
+  const reuse = await store.reserveCard('canary-reuse-plus', 'plus');
+  assert.equal(reuse?.id, plusCard.id);
+  await store.recordCardUsage(reuse.id);
+  await store.releaseCard(reuse.id);
+  assert.equal(await store.hasAvailableCard('plus'), false);
+  assert.equal(await store.reserveCard('canary-reuse-plus-retry', 'plus'), null);
+  assert.deepEqual((await store.readCardPlanPool()).planPolicy, policy);
+  assert.deepEqual((await store.saveCardPlanPolicy({ version: 5, strict: false })).reuseLimits, reuseLimits);
+  await store.saveCardPlanPolicy({ version: 6, reuseLimits: { ...reuseLimits, plus: 3 } });
+  const canUseAgain = await store.reserveCard('canary-reuse-after-raise', 'plus');
+  // The unassigned card has a lower use count while strict mode is off.
+  assert.equal(canUseAgain?.id, pool.rows[2].id);
+  await store.releaseCard(canUseAgain.id);
+  await store.saveCardPlanPolicy({ version: 7, strict: true });
+  assert.equal((await store.reserveCard('canary-reuse-after-raise-strict', 'plus'))?.id, plusCard.id);
+  await store.releaseCard(plusCard.id);
 }
 
 try {

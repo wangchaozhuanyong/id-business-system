@@ -306,12 +306,18 @@ function adaptHostedCardPool(source) {
             }
         }
         function switchAdminSection(group, target) {`);
-  return replaceSection(
+  return replaceOne(
     source,
     '        async function loadOrbitcardProductStrategy(showToast = false) {',
-    '        async function syncOrbitcardCards() {',
     `        const DEFAULT_CARD_REUSE_LIMITS = { plus: 4, pro100: 1, pro200: 1, pro500: 1 };
         let cardReuseDrawerReturnFocus = null;
+        let cardReuseEdit = null;
+        function setCardReuseControlsDisabled(disabled) {
+            const drawer = document.getElementById('card_reuse_limits_drawer');
+            for (const control of drawer.querySelectorAll('.card-reuse-drawer-body input, .card-reuse-drawer-body button, .card-reuse-drawer-foot button')) {
+                control.disabled = disabled;
+            }
+        }
         function readCardReuseInputs() {
             const next = {};
             for (const key of ['plus', 'pro100', 'pro200', 'pro500']) {
@@ -325,21 +331,10 @@ function adaptHostedCardPool(source) {
             return { limits: next };
         }
         function applyCardReuseLimitsToUi(limits) {
-            const normalized = {
-                plus: Number(limits?.plus) || 4,
-                pro100: Number(limits?.pro100) || 1,
-                pro200: Number(limits?.pro200) || 1,
-                pro500: Number(limits?.pro500) || 1
-            };
-            window.idRechargePlanReuseLimits = normalized;
-            for (const key of ['plus', 'pro100', 'pro200', 'pro500']) {
+            for (const [key, limit] of Object.entries(limits || DEFAULT_CARD_REUSE_LIMITS)) {
                 const input = document.getElementById('card_reuse_limit_' + key);
-                if (input) input.value = String(normalized[key]);
+                if (input) input.value = String(limit);
             }
-            try {
-                if (typeof loadCardPoolList === 'function' && document.getElementById('card_pool_list_body')) void loadCardPoolList();
-            } catch { /* Ignore */ }
-            return normalized;
         }
         function stepCardReuseLimit(planKey, delta) {
             const input = document.getElementById('card_reuse_limit_' + planKey);
@@ -358,19 +353,29 @@ function adaptHostedCardPool(source) {
             if (status) status.textContent = '已填入系统默认值，点击「保存设置」生效';
         }
         function handleCardReuseDrawerKeydown(event) {
-            if (event.key === 'Escape') {
+            if (event.key === 'Escape' && !event.defaultPrevented && !event.target.closest('.title-help[open]')) {
                 event.preventDefault();
                 closeCardReuseLimitsDrawer();
+            } else if (event.key === 'Tab') {
+                const drawer = document.getElementById('card_reuse_limits_drawer');
+                const controls = [...drawer.querySelectorAll('button:not(:disabled), input:not(:disabled), summary')];
+                const first = controls[0], last = controls.at(-1);
+                if (!drawer.contains(document.activeElement) ||
+                    document.activeElement === (event.shiftKey ? first : last)) {
+                    event.preventDefault();
+                    (event.shiftKey ? last : first)?.focus();
+                }
             }
         }
         function openCardReuseLimitsDrawer(triggerBtn) {
             const drawer = document.getElementById('card_reuse_limits_drawer');
             const backdrop = document.getElementById('card_reuse_limits_backdrop');
-            if (!drawer || !backdrop) return;
+            if (!drawer || !backdrop || !drawer.hidden) return;
             cardReuseDrawerReturnFocus = triggerBtn || document.activeElement;
             backdrop.hidden = false;
             drawer.hidden = false;
             requestAnimationFrame(() => {
+                if (drawer.hidden) return;
                 backdrop.classList.add('is-open');
                 drawer.classList.add('is-open');
             });
@@ -378,12 +383,13 @@ function adaptHostedCardPool(source) {
             const closeBtn = drawer.querySelector('.card-reuse-drawer-close');
             if (closeBtn) closeBtn.focus();
             if (typeof lucide !== 'undefined') lucide.createIcons();
-            void loadCardReuseLimits(false);
+            void loadCardReuseLimits();
         }
         function closeCardReuseLimitsDrawer() {
             const drawer = document.getElementById('card_reuse_limits_drawer');
             const backdrop = document.getElementById('card_reuse_limits_backdrop');
-            if (!drawer || !backdrop || drawer.hidden) return;
+            if (!drawer || !backdrop || drawer.hidden || cardReuseEdit?.saving) return;
+            cardReuseEdit = null;
             drawer.classList.remove('is-open');
             backdrop.classList.remove('is-open');
             drawer.hidden = true;
@@ -394,27 +400,25 @@ function adaptHostedCardPool(source) {
             }
             cardReuseDrawerReturnFocus = null;
         }
-        async function loadCardReuseLimits(showToast = false) {
+        async function loadCardReuseLimits() {
+            const edit = cardReuseEdit = {};
             const status = document.getElementById('card_reuse_limits_status');
-            if (status) status.textContent = '正在读取配置…';
+            setCardReuseControlsDisabled(true);
+            status.textContent = '正在读取配置…';
             try {
-                const res = await authFetch('/api/admin/gpt-api');
-                const data = await res.json();
-                if (!res.ok || !data.success) throw new Error(data.message || '读取配置失败');
-                const cfg = data.config || {};
-                const limits = cfg.orbitcard_reuse_limits || {};
-                applyCardReuseLimitsToUi(limits);
-                if (status) status.textContent = '';
-                if (showToast) showMessage('一卡几充设置已刷新', 'success');
-                return true;
+                const policy = await rechargeCardPlans.readReuseSettings();
+                if (cardReuseEdit !== edit) return;
+                edit.version = policy.version;
+                applyCardReuseLimitsToUi(policy.reuseLimits);
+                status.textContent = policy.reuseLimits ? '' : '保存后开始按套餐限制取卡';
+                setCardReuseControlsDisabled(false);
             } catch (error) {
-                if (status) status.textContent = '读取失败：' + (error.message || '请稍后重试');
-                if (showToast) showMessage(error.message || '读取配置失败', 'error');
-                return false;
+                if (cardReuseEdit === edit) status.textContent = error.message || '读取失败，请关闭后重试';
             }
         }
         async function saveCardReuseLimits() {
-            const saveBtn = document.getElementById('save_card_reuse_limits_btn');
+            const edit = cardReuseEdit;
+            if (!Number.isSafeInteger(edit?.version) || edit.saving) return;
             const status = document.getElementById('card_reuse_limits_status');
             const parsed = readCardReuseInputs();
             if (parsed.error) {
@@ -423,31 +427,29 @@ function adaptHostedCardPool(source) {
                 parsed.input?.focus();
                 return;
             }
-            if (saveBtn) saveBtn.disabled = true;
-            if (status) status.textContent = '正在保存…';
+            edit.saving = true;
+            setCardReuseControlsDisabled(true);
+            status.textContent = '正在保存…';
             try {
-                const res = await authFetch('/api/admin/orbitcard/product-strategy', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ product_code: '', reuse_limits: parsed.limits })
-                });
-                const data = await res.json();
-                if (!res.ok || !data.success) throw new Error(data.message || '保存失败');
-                applyCardReuseLimitsToUi(parsed.limits);
-                if (status) status.textContent = '已保存并生效';
+                const policy = await rechargeCardPlans.saveReuseSettings(edit.version, parsed.limits);
+                edit.version = policy.version;
+                applyCardReuseLimitsToUi(policy.reuseLimits);
+                renderCardPoolTable();
+                status.textContent = '已保存并生效';
                 showMessage('一卡几充设置已保存', 'success');
             } catch (error) {
-                if (status) status.textContent = '保存失败：' + (error.message || '请稍后重试');
+                status.textContent = '保存失败：' + (error.message || '请稍后重试');
                 showMessage(error.message || '保存失败', 'error');
             } finally {
-                if (saveBtn) saveBtn.disabled = false;
+                edit.saving = false;
+                setCardReuseControlsDisabled(false);
             }
         }
         async function refreshHostedCardPool() {
             const btn = document.getElementById('refresh_card_pool_btn');
             if (btn) btn.disabled = true;
             try {
-                await loadCardPoolList();
+                if (!await loadCardPoolList()) throw new Error('刷新失败，请重试');
                 showMessage('银行卡列表已刷新', 'success');
             } catch (error) {
                 showMessage(error.message || '刷新失败', 'error');
@@ -456,7 +458,7 @@ function adaptHostedCardPool(source) {
                 if (typeof lucide !== 'undefined') lucide.createIcons();
             }
         }
-`
+        async function loadOrbitcardProductStrategy(showToast = false) {`
   );
 }
 
@@ -2430,9 +2432,12 @@ function adaptHtml(source, kind) {
         <div id="card_reuse_limits_backdrop" class="card-reuse-drawer-backdrop" hidden onclick="closeCardReuseLimitsDrawer()"></div>
         <aside id="card_reuse_limits_drawer" class="card-reuse-drawer" role="dialog" aria-modal="true" aria-labelledby="card_reuse_limits_title" hidden>
             <div class="card-reuse-drawer-head">
-                <div>
+                <div class="title-with-help">
                     <h2 class="panel-title" id="card_reuse_limits_title">一卡几充设置</h2>
-                    <p>设置每张银行卡最多可为多少个账户充值订阅。自动充值取卡时，达到该上限的卡片将自动停用并标记为「已用满」，防止超额扣款。</p>
+                    <details class="title-help">
+                        <summary aria-label="查看一卡几充设置说明">ⓘ</summary>
+                        <div class="title-description">达到某个套餐上限的银行卡将跳过该套餐。卡片达到所有允许套餐的上限时，列表会显示「已用满」。</div>
+                    </details>
                 </div>
                 <button type="button" class="card-reuse-drawer-close" aria-label="关闭一卡几充设置" onclick="closeCardReuseLimitsDrawer()">
                     <i data-lucide="x"></i>

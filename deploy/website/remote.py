@@ -87,11 +87,6 @@ CARD_REUSE_LIMITS_PRESENTATION_FILES = (
     "modules/recharge/codexdaichong/card-plan-admin.mjs",
     "modules/recharge/codexdaichong/shell.css",
 )
-CARD_REUSE_DRAWER_PRESENTATION_FILES = (
-    "modules/recharge/codexdaichong/assets.mjs",
-    "modules/recharge/codexdaichong/shell.css",
-    "modules/recharge/codexdaichong/shell.js",
-)
 CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES = (
     "modules/recharge/codexdaichong/assets.mjs",
     "modules/recharge/codexdaichong/routing-admin-ui.mjs",
@@ -126,10 +121,8 @@ PRESENTATION_SCOPES = {
     "cardPoolLimitPresentation": (CARD_POOL_LIMIT_PRESENTATION_FILES, {"/admin", "/admin.js", "/shell.css"}),
     "cardPoolTogglePresentation": (CARD_POOL_TOGGLE_PRESENTATION_FILES, {"/admin", "/admin.js"}),
     "cardReuseLimitsPresentation": (CARD_REUSE_LIMITS_PRESENTATION_FILES, {"/admin", "/admin.js", "/shell.css"}),
-    "cardReuseDrawerPresentation": (CARD_REUSE_DRAWER_PRESENTATION_FILES, {"/admin", "/admin.js", "/shell.css", "/shell.js"}),
 }
 PRESENTATION_MOUNT_ERRORS = {
-    "cardReuseDrawerPresentation": "recharge_presentation_mount_mismatch",
     "cardReuseLimitsPresentation": "recharge_presentation_mount_mismatch",
     "cardPoolTogglePresentation": "recharge_presentation_mount_mismatch",
     "cardPoolLimitPresentation": "recharge_presentation_mount_mismatch",
