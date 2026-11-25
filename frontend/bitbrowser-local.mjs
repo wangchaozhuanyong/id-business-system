@@ -354,7 +354,7 @@ function initializeNativeWorkbench() {
     wbJsonInput.focus();
   });
 
-  // 一键复制邮箱按钮
+  // 复制邮箱按钮
   wbCopyEmail?.addEventListener('click', async () => {
     const email = wbExtractedEmail?.value?.trim();
     if (!email) {
@@ -364,17 +364,17 @@ function initializeNativeWorkbench() {
     }
     try {
       await navigator.clipboard.writeText(email);
-      if (wbCopyBtnText) wbCopyBtnText.textContent = '✓ 已复制邮箱';
+      if (wbCopyBtnText) wbCopyBtnText.textContent = '✓ 已复制';
       setTimeout(() => {
-        if (wbCopyBtnText) wbCopyBtnText.textContent = '一键复制邮箱';
-      }, 1600);
+        if (wbCopyBtnText) wbCopyBtnText.textContent = '复制';
+      }, 1500);
     } catch {
       wbExtractedEmail.select();
       document.execCommand('copy');
-      if (wbCopyBtnText) wbCopyBtnText.textContent = '✓ 已复制邮箱';
+      if (wbCopyBtnText) wbCopyBtnText.textContent = '✓ 已复制';
       setTimeout(() => {
-        if (wbCopyBtnText) wbCopyBtnText.textContent = '一键复制邮箱';
-      }, 1600);
+        if (wbCopyBtnText) wbCopyBtnText.textContent = '复制';
+      }, 1500);
     }
   });
 

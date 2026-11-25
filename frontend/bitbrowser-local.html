@@ -21,7 +21,7 @@
     <div class="tabs wb-segmented-tabs" role="tablist" aria-label="工作区">
       <button class="tab active" type="button" id="bit-tab-workbench" role="tab" aria-selected="true" aria-controls="bit-workbench-panel">工作台</button>
       <button class="tab" type="button" id="bit-tab-login" role="tab" aria-selected="false" aria-controls="bit-login-panel" tabindex="-1">单号登录</button>
-      <button class="tab" type="button" id="bit-tab-library" role="tab" aria-selected="false" aria-controls="bit-library-panel" tabindex="-1">IP 资料库 <span class="tab-count" id="bit-ip-count">—</span></button>
+      <button class="tab" type="button" id="bit-tab-library" role="tab" aria-selected="false" aria-controls="bit-library-panel" tabindex="-1" style="display: none !important;">IP 资料库 <span class="tab-count" id="bit-ip-count">—</span></button>
     </div>
     <div class="wb-header-status" aria-label="运行环境状态">
       <span class="wb-status-tag wb-status-tag--proxy" title="已自动关联自动代充代理池，智能按套餐匹配出口">
@@ -76,16 +76,19 @@
               <input id="wb-extracted-email" class="input wb-email-input" placeholder="粘贴 JSON 后自动识别账号邮箱" readonly />
               <button type="button" class="button button--small wb-btn-copy-email" id="wb-copy-email" title="复制识别出的邮箱账号">
                 <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/></svg>
-                <span id="wb-copy-btn-text">一键复制邮箱</span>
+                <span id="wb-copy-btn-text">复制</span>
               </button>
             </div>
           </div>
 
-          <div class="form-grid form-grid--paired wb-config-grid" style="margin-top: 12px;">
-            <div class="field">
+          <div class="form-grid form-grid--paired wb-config-grid" style="margin-top: 14px;">
+            <div class="field wb-proxy-col">
               <div class="wb-field-head">
                 <label for="wb-proxy-region">代理 IP 选路（共享自动代充真实 IP 池）</label>
-                <span id="wb-pref-saved-badge" class="wb-saved-pref-badge">★ 个人默认</span>
+                <div class="wb-proxy-head-right">
+                  <span id="wb-pref-saved-badge" class="wb-saved-pref-badge">★ 个人默认</span>
+                  <button type="button" class="wb-btn-set-default" id="wb-set-default-proxy" title="保存为当前操作员专属默认线路，刷新后持续保持">设为我的默认</button>
+                </div>
               </div>
               <div class="wb-proxy-control-row">
                 <select id="wb-proxy-region" class="select wb-select-highlight">
@@ -94,14 +97,15 @@
                   <option value="EG">埃及（EG · 自动代充 IP 池）</option>
                   <option value="direct">服务器直连（无代理）</option>
                 </select>
-                <button type="button" class="button button--small wb-btn-set-default" id="wb-set-default-proxy" title="保存为当前操作员专属默认线路，刷新后持续保持">设为我的默认</button>
               </div>
               <input type="hidden" id="wb-proxy-summary" value="共享代充池 · 智能选路" />
               <input type="hidden" id="wb-proxy-url" value="" />
               <p id="wb-proxy-hint" class="field-help text-success" role="status">⚡ 共享自动代充 IP 池：根据账号套餐智能选路（Plus 自动匹配菲律宾，Pro 自动匹配埃及）。</p>
             </div>
-            <div class="field">
-              <label for="wb-notes-input">续费备注（选填）</label>
+            <div class="field wb-notes-col">
+              <div class="wb-field-head">
+                <label for="wb-notes-input">续费备注（选填）</label>
+              </div>
               <input id="wb-notes-input" class="input" placeholder="例如：已付订金、预订 Plus" />
               <p class="field-help">记录客户偏好或支付渠道，保存后可在下方随时修改</p>
             </div>
