@@ -44,6 +44,8 @@ async function prepare(browser, { role = 'super', viewport = { width: 1440, heig
     state.policy = { version: state.policy.version + 1, strict: command.strict ?? state.policy.strict };
     return request.fulfill({ json: { success: true, planPolicy: state.policy } });
   });
+  await context.route('**/integrations/codexdaichong/api/admin/gpt-api', request =>
+    request.fulfill({ json: { success: true, config: { orbitcard_reuse_limits: { plus: 4, pro100: 1, pro200: 1, pro500: 1 } } } }));
   const page = await context.newPage();
   const errors = [];
   page.on('pageerror', error => errors.push(error.message));
@@ -77,8 +79,14 @@ test('银行卡池从左侧子导航进入并保留完整功能和编辑状态',
   assert.equal(await frame.locator('#cards [data-switch-panel="local"] th').count(), 12);
   const tabsInCardPool = poolTabs(page);
   await tabsInCardPool.getByRole('button', { name: '银行卡列表', exact: true }).waitFor({ state: 'attached' });
-  assert.equal(await tabsInCardPool.getByRole('button').count(), 1);
+  assert.equal(await tabsInCardPool.getByRole('button').count(), 2);
+  assert.equal(await tabsInCardPool.getByRole('button', { name: '一卡几充设置', exact: true }).count(), 1);
   assert.equal(await frame.locator('#cards .admin-switcher-tabs').isVisible(), false);
+  await tabsInCardPool.getByRole('button', { name: '一卡几充设置', exact: true }).click();
+  await frame.locator('#cards [data-switch-panel="card-reuse-limits"]').waitFor({ state: 'visible' });
+  assert.equal(await frame.locator('#card_reuse_limit_plus').inputValue(), '4');
+  await tabsInCardPool.getByRole('button', { name: '银行卡列表', exact: true }).click();
+  await frame.locator('#cards [data-switch-panel="local"]').waitFor({ state: 'visible' });
   await frame.getByRole('button', { name: '批量导入', exact: true }).click();
   const importBox = frame.locator('#card_pool_import_box');
   await importBox.getByRole('combobox', { name: '银行卡类型', exact: true }).waitFor();

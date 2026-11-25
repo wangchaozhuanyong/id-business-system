@@ -82,6 +82,11 @@ CARD_POOL_TOGGLE_PRESENTATION_FILES = (
     "modules/recharge/codexdaichong/assets.mjs",
     "modules/recharge/codexdaichong/card-plan-admin.mjs",
 )
+CARD_REUSE_LIMITS_PRESENTATION_FILES = (
+    "modules/recharge/codexdaichong/assets.mjs",
+    "modules/recharge/codexdaichong/card-plan-admin.mjs",
+    "modules/recharge/codexdaichong/shell.css",
+)
 CHECKOUT_DIAGNOSTIC_PRESENTATION_FILES = (
     "modules/recharge/codexdaichong/assets.mjs",
     "modules/recharge/codexdaichong/routing-admin-ui.mjs",
@@ -115,8 +120,10 @@ PRESENTATION_SCOPES = {
     "orbitcardLayoutPresentation": (ORBITCARD_LAYOUT_PRESENTATION_FILES, {"/admin", "/shell.css"}),
     "cardPoolLimitPresentation": (CARD_POOL_LIMIT_PRESENTATION_FILES, {"/admin", "/admin.js", "/shell.css"}),
     "cardPoolTogglePresentation": (CARD_POOL_TOGGLE_PRESENTATION_FILES, {"/admin", "/admin.js"}),
+    "cardReuseLimitsPresentation": (CARD_REUSE_LIMITS_PRESENTATION_FILES, {"/admin", "/admin.js", "/shell.css"}),
 }
 PRESENTATION_MOUNT_ERRORS = {
+    "cardReuseLimitsPresentation": "recharge_presentation_mount_mismatch",
     "cardPoolTogglePresentation": "recharge_presentation_mount_mismatch",
     "cardPoolLimitPresentation": "recharge_presentation_mount_mismatch",
     "orbitcardLayoutPresentation": "recharge_presentation_mount_mismatch",

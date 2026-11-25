@@ -729,7 +729,10 @@
   const bitLoginView = ['bit-login', '手动充值', '/integrations/bitbrowser/local-login'];
   const onlineRechargeRoute = 'online-recharge/chatgpt';
   const rechargeCardsRoute = 'staff/finance/cards';
-  const cardPoolSections = [['local', '银行卡列表']];
+  const cardPoolSections = [
+    ['local', '银行卡列表'],
+    ['card-reuse-limits', '一卡几充设置']
+  ];
   const onlineRechargeMount = '/integrations/codexdaichong/';
   let activeOnlineView = 'query';
   let onlineAdmin;
@@ -4230,7 +4233,7 @@
       api.revealActiveTab(tabs);
       for (const frame of tabs.closest('.recharge-integration').querySelectorAll('iframe.recharge-integration__frame')) {
         frame.contentWindow?.postMessage(
-          { source: 'id-recharge-shell', type: 'select-card-section' }, window.location.origin
+          { source: 'id-recharge-shell', type: 'select-card-section', section: node.dataset.cardSection }, window.location.origin
         );
       }
       return true;
