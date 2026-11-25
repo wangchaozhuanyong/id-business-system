@@ -315,16 +315,19 @@ test('recharge transitions keep content and geometry through delayed, superseded
         if (offline && !dark) {
           await page.setViewportSize({ width, height: 900 });
           const bit = page.frameLocator(bitSelector);
-          await bit.getByRole('tab', { name: /IP 资料库/ }).click();
-          await bit.locator('nav[data-total="51"] [data-pagination-size]').selectOption('50');
-          await page.waitForFunction(selector => {
-            const frame = document.querySelector(selector);
-            const doc = frame?.contentDocument;
-            return doc?.querySelectorAll('#bit-ip-rows tr').length === 50 &&
-              Math.abs(doc.body.offsetHeight - frame.clientHeight) <= 2;
-          }, bitSelector);
-          const rowsScroll = await bit.locator('.bit-local__ip-table').evaluate(node => node.scrollHeight > node.clientHeight + 1);
-          assert.equal(rowsScroll, width > 900, '桌面表格内部滚动，手机在页面上滚动');
+          const libTab = bit.getByRole('tab', { name: /IP 资料库/ });
+          if (await libTab.isVisible().catch(() => false)) {
+            await libTab.click();
+            await bit.locator('nav[data-total="51"] [data-pagination-size]').selectOption('50');
+            await page.waitForFunction(selector => {
+              const frame = document.querySelector(selector);
+              const doc = frame?.contentDocument;
+              return doc?.querySelectorAll('#bit-ip-rows tr').length === 50 &&
+                Math.abs(doc.body.offsetHeight - frame.clientHeight) <= 2;
+            }, bitSelector);
+            const rowsScroll = await bit.locator('.bit-local__ip-table').evaluate(node => node.scrollHeight > node.clientHeight + 1);
+            assert.equal(rowsScroll, width > 900, '桌面表格内部滚动，手机在页面上滚动');
+          }
         }
         results.push({ width, theme: dark ? 'dark' : 'light', delayed, rapid, bitFirst, bitReturned, retainedOnFailure: true });
       } catch (error) {

@@ -78,6 +78,7 @@ import {
   launchWorkbenchBrowser,
   closeWorkbenchBrowser
 } from './native-browser-workbench.mjs';
+import { NativeBrowserError } from './native-chrome-runner.mjs';
 import { bitBrowserProxyDomain, validateBitBrowserProxyWrite, summarizeBitBrowserProxies, readBitBrowserProxy } from './bitbrowser-proxies.mjs';
 import { checkAppleIdHealthChanges, checkInventoryHistory } from './inventory-history.mjs';
 import { createRelayDeliveryJournal } from './apple-relay/code-reset.mjs';
@@ -3894,6 +3895,7 @@ export async function handleLocalBusiness(
       const effectiveActor = actor?.id ? actor : localToolboxActor;
       response.setHeader('Cache-Control', 'private, no-store');
       if (request.headers.origin && request.headers.origin !== origin) throw new LocalDataError(403, '仅允许从当前页面操作');
+      const url = new URL(request.url, origin);
       const action = url.searchParams.get('action') || '';
       if (request.method === 'GET') {
         if (action === 'preferences') {
@@ -4055,7 +4057,8 @@ export async function handleLocalBusiness(
       error instanceof BitBrowserWindowError ||
       error instanceof SavedTotpError ||
       error instanceof MailboxPoolError ||
-      error instanceof NativeWorkbenchError
+      error instanceof NativeWorkbenchError ||
+      error instanceof NativeBrowserError
     )
       return json(response, error.status, { error: error.message });
     return json(response, 500, { error: '本机数据读写失败，请重试' });
