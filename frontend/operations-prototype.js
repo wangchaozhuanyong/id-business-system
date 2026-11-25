@@ -729,10 +729,6 @@
   const bitLoginView = ['bit-login', '手动充值', '/integrations/bitbrowser/local-login'];
   const onlineRechargeRoute = 'online-recharge/chatgpt';
   const rechargeCardsRoute = 'staff/finance/cards';
-  const cardPoolSections = [
-    ['local', '银行卡列表'],
-    ['card-reuse-limits', '一卡几充设置']
-  ];
   const onlineRechargeMount = '/integrations/codexdaichong/';
   let activeOnlineView = 'query';
   let onlineAdmin;
@@ -981,7 +977,9 @@
       ? button(needsSetup ? '我已设置密码，去登录' : '去登录', 'ops-integrated-login', 'primary')
       : [workspaceRechargeRoute, loginLogsRoute, bitLoginRoute].includes(state.route) && status !== 401 && status !== 403
         ? button(bit ? '重新加载' : '重新检查服务', 'ops-integrated-refresh')
-        : '';
+        : state.route === rechargeCardsRoute && status !== 401 && status !== 403
+          ? button('重新检查服务', 'staff-card-pool-refresh')
+          : '';
     updateRechargeDescription('');
     view.dataset.unavailable = String(status);
     view.querySelector('.recharge-integration__content').innerHTML =
@@ -4223,21 +4221,6 @@
       window.IDLocalAuth?.employeeAction(api, action, id);
       return true;
     }
-    if (action === 'ops-card-pool-section' && state.route === rechargeCardsRoute) {
-      const tabs = node.closest('[data-recharge-card-tabs]');
-      if (!tabs || node.getAttribute('aria-pressed') === 'true') return true;
-      for (const tab of tabs.querySelectorAll('[data-card-section]')) {
-        tab.setAttribute('aria-pressed', String(tab === node));
-        tab.classList.toggle('active', tab === node);
-      }
-      api.revealActiveTab(tabs);
-      for (const frame of tabs.closest('.recharge-integration').querySelectorAll('iframe.recharge-integration__frame')) {
-        frame.contentWindow?.postMessage(
-          { source: 'id-recharge-shell', type: 'select-card-section', section: node.dataset.cardSection }, window.location.origin
-        );
-      }
-      return true;
-    }
     if (action === 'ops-integrated-view' && state.route === onlineRechargeRoute) {
       const view = node.dataset.view;
       if (canOpenRechargeView(view) && onlineRechargeViews.some(([id]) => id === view) && view !== activeOnlineView) {
@@ -4717,12 +4700,7 @@
   });
   api.modules.operations = {
     cardPool: {
-      render: (loading = false) => renderRechargeRegion('cards', `<div class="recharge-integration__toolbar content-toolbar">
-        <nav class="recharge-integration__nav tabs" aria-label="银行卡池功能" data-recharge-card-tabs>
-          ${cardPoolSections.map(([id, label]) => `<button type="button" class="tab${id === 'local' ? ' active' : ''}" data-action="ops-card-pool-section" data-card-section="${id}" aria-pressed="${id === 'local'}"${loading ? ' disabled' : ''}>${label}</button>`).join('')}
-        </nav>
-        ${button('刷新', 'staff-card-pool-refresh', '', '', loading ? 'disabled' : '')}
-      </div>`),
+      render: () => renderRechargeRegion('cards'),
       afterRender: () => void loadIntegratedRecharge(),
       version: () => visibleRechargeCardFrame()?.contentWindow?.idRechargeCardPolicyVersion?.(),
       refresh: () => void loadIntegratedRecharge({ refresh: true }),

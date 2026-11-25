@@ -29,7 +29,10 @@ try {
     const { success, planPolicy } = allowed.ok ? await allowed.json() : {};
     const retired = await readRoute('/api/admin/gpt-api/config');
     await retired.body?.cancel();
-    const ready = denied.status === 403 && success === true && retired.status === 404 &&
+    const limits = planPolicy?.reuseLimits;
+    const reuseLimitsReady = limits === null || ['plus', 'pro100', 'pro200', 'pro500'].every(plan =>
+      Number.isSafeInteger(limits?.[plan]) && limits[plan] >= 1 && limits[plan] <= 20);
+    const ready = denied.status === 403 && success === true && retired.status === 404 && reuseLimitsReady &&
       Number.isSafeInteger(planPolicy?.version) && typeof planPolicy.strict === 'boolean';
     console.log(JSON.stringify({ ready, cardPlansReady: ready, retiredProviderRoute: retired.status }));
     if (!ready) process.exitCode = 1;

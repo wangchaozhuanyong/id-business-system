@@ -32,9 +32,9 @@ export const cardPlanEditor = `
           <legend>允许套餐</legend><div class="card-plan-grid">${choices}</div>
         </fieldset>
         <div class="embedded-field" style="margin-top: 14px;">
-          <label for="card_plan_max_usage">单卡使用上限（可选）</label>
-          <input type="number" id="card_plan_max_usage" class="asset-input" min="1" max="20" placeholder="留空则按套餐默认上限">
-          <p class="embedded-field-hint">单独限制此卡最多充值账户数（1–20 次）。留空则自动按「一卡几充设置」中的套餐上限执行。</p>
+          <label for="card_plan_max_usage">个人参考上限（可选）</label>
+          <input type="number" id="card_plan_max_usage" class="asset-input" min="1" max="20">
+          <p class="embedded-field-hint">在此卡用量提示中显示个人参考值。自动取卡使用「一卡几充设置」的套餐上限。</p>
         </div>
         <p id="card_plan_result" role="status"></p>
       </div>
@@ -80,8 +80,12 @@ export function createCardPlanAdmin({ labels, request, loadCards, onImportChange
   const setChoices = (group, values) => {
     for (const input of group.querySelectorAll('input')) input.checked = values.includes(input.value);
   };
+  const planKeys = Object.keys(labels);
+  const validReuseLimits = limits => limits === null || (limits && planKeys.every(key =>
+    Number.isSafeInteger(limits[key]) && limits[key] >= 1 && limits[key] <= 20));
   const validPolicy = value => Number.isSafeInteger(value?.version) && value.version >= 0 &&
-    typeof value.strict === 'boolean';
+    typeof value.strict === 'boolean' &&
+    (!Object.hasOwn(value, 'reuseLimits') || validReuseLimits(value.reuseLimits));
   const readDraft = () => window.parent.IDRechargeDrafts?.read('admin') || {};
   const writeDraft = values => window.parent.IDRechargeDrafts?.write('admin', values);
   function readLimits() {
@@ -98,36 +102,28 @@ export function createCardPlanAdmin({ labels, request, loadCards, onImportChange
       writeDraft(draft);
     } catch { /* Ignore draft errors */ }
   }
-  function readPlanReuseLimits() {
-    try {
-      if (window.idRechargePlanReuseLimits) return window.idRechargePlanReuseLimits;
-      const raw = readDraft().card_plan_reuse_limits;
-      if (raw) return JSON.parse(raw);
-    } catch { /* Ignore draft errors */ }
-    return { plus: 4, pro100: 1, pro200: 1, pro500: 1 };
-  }
+  const allowedPlans = card => card.allowed_plans ?? (snapshot?.strict ? [] : planKeys);
   function getCardLimit(card) {
-    const limits = readLimits();
-    const custom = limits[Number(card.id)];
-    if (Number.isSafeInteger(custom) && custom >= 1 && custom <= 20) return custom;
-    const planLimits = readPlanReuseLimits();
-    const plans = Array.isArray(card.allowed_plans) && card.allowed_plans.length ? card.allowed_plans : ['plus'];
-    if (plans.every(p => p.startsWith('pro'))) {
-      const proKey = plans[0] || 'pro100';
-      return planLimits[proKey] || 1;
-    }
-    return planLimits.plus || 4;
+    const limits = allowedPlans(card).map(plan => snapshot?.reuseLimits?.[plan]).filter(Number.isSafeInteger);
+    return limits.length ? Math.max(...limits) : null;
   }
   function usageCell(card) {
     const count = Number(card.usage_count || 0);
     const limit = getCardLimit(card);
-    const exhausted = count >= limit;
-    return '<span class="card-usage-metric' + (exhausted ? ' is-exhausted' : '') + '">' +
-      count + ' / ' + limit + '</span>' +
+    const exhausted = limit !== null && count >= limit;
+    const detail = allowedPlans(card).filter(plan => Number.isSafeInteger(snapshot?.reuseLimits?.[plan]))
+      .map(plan => labels[plan] + ' ' + snapshot.reuseLimits[plan]);
+    const reference = readLimits()[Number(card.id)];
+    if (Number.isSafeInteger(reference) && reference >= 1 && reference <= 20)
+      detail.push('个人参考 ' + reference);
+    return '<span class="card-usage-metric' + (exhausted ? ' is-exhausted' : '') + '"' +
+      (detail.length ? ' title="' + detail.join(' · ') + '"' : '') + '>' +
+      count + ' / ' + (limit ?? '—') + '</span>' +
       (exhausted ? ' <span class="status-badge status-exhausted">已用满</span>' : '');
   }
   function isExhausted(card) {
-    return Number(card.usage_count || 0) >= getCardLimit(card);
+    const limit = getCardLimit(card);
+    return limit !== null && Number(card.usage_count || 0) >= limit;
   }
   function rememberImport() {
     writeDraft({ ...readDraft(), card_pool_allowed_plans: readChoices(importFields).join(',') });
@@ -225,7 +221,8 @@ export function createCardPlanAdmin({ labels, request, loadCards, onImportChange
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(command)
     });
     const reply = await response.json();
-    if (!response.ok || reply.success !== true || !validPolicy(reply.planPolicy)) {
+    if (!response.ok || reply.success !== true || !validPolicy(reply.planPolicy) ||
+        (command.reuseLimits && !planKeys.every(key => reply.planPolicy.reuseLimits?.[key] === command.reuseLimits[key]))) {
       if (response.status === 409) {
         await loadCards();
         throw new Error(reply.message || '套餐设置已更新，请重新打开编辑');
@@ -330,7 +327,7 @@ export function createCardPlanAdmin({ labels, request, loadCards, onImportChange
     const parsedMax = rawMax ? Number(rawMax) : null;
     if (rawMax && (!Number.isInteger(parsedMax) || parsedMax < 1 || parsedMax > 20)) {
       result.dataset.state = 'error';
-      result.textContent = '单卡使用上限必须在 1 至 20 之间，或留空使用默认上限。';
+      result.textContent = '个人参考上限必须在 1 至 20 之间，也可以留空。';
       return;
     }
     const { ids, version } = editing;
@@ -356,7 +353,7 @@ export function createCardPlanAdmin({ labels, request, loadCards, onImportChange
       writeDraft(draft);
       editing = null;
       dialog.close();
-      notify('允许套餐与使用上限已保存。', 'success');
+      notify('允许套餐已保存。', 'success');
     } catch (error) {
       result.dataset.state = 'error';
       result.textContent = error.message;
@@ -398,6 +395,25 @@ export function createCardPlanAdmin({ labels, request, loadCards, onImportChange
   };
   return {
     accept, cell, usageCell, isExhausted, paint,
+    async readReuseSettings() {
+      if (!await loadCards() || !snapshot || !Object.hasOwn(snapshot, 'reuseLimits'))
+        throw new Error('配置读取失败，请关闭后重试');
+      return snapshot;
+    },
+    async saveReuseSettings(version, reuseLimits) {
+      if (writing) throw new Error('银行卡设置正在保存，请稍后重试');
+      writing = true;
+      paint();
+      try {
+        const policy = await write({ version, reuseLimits });
+        if (snapshot.version < policy.version) snapshot = policy;
+        return snapshot;
+      } finally {
+        writing = false;
+        paint();
+        window.idRechargeApplyCardChanges?.();
+      }
+    },
     remove(id) {
       rows.delete(Number(id));
       selected.delete(Number(id));

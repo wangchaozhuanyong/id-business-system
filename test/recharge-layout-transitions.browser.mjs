@@ -35,17 +35,17 @@ test('银行卡首屏在服务就绪前保留页签，获得权限后只读当�
   page.on('request', request => reads.push(new URL(request.url()).pathname));
   await page.goto(offlineOrigin + '/#/staff/finance/cards');
   const tabs = page.getByRole('navigation', { name: '银行卡池功能' });
-  const tab = tabs.getByRole('button', { name: '银行卡列表' });
+  const moduleRegion = page.locator('[data-recharge-module="cards"]');
   const status = page.getByText('正在读取银行卡…', { exact: true });
   await status.waitFor();
-  assert(await tab.isDisabled());
-  const initial = await tabs.boundingBox();
+  assert.equal(await tabs.count(), 0);
+  const initial = await moduleRegion.boundingBox();
   const probe = page.waitForRequest(request => new URL(request.url()).pathname === prefix + '/status');
   pageScript.resolve();
   await probe;
   assert(await status.isVisible());
   assert.equal(await page.locator('iframe').count(), 0);
-  assert.deepEqual(await tabs.boundingBox(), initial);
+  assert.equal((await moduleRegion.boundingBox()).y, initial.y);
   const firstList = page.waitForRequest(request => new URL(request.url()).pathname === prefix + '/api/admin/cards');
   access.resolve();
   await firstList;
@@ -55,7 +55,7 @@ test('银行卡首屏在服务就绪前保留页签，获得权限后只读当�
   const frame = page.frameLocator('iframe[data-view="cards"]:visible');
   await frame.locator('#card_pool_list_body tr').filter({ hasText: '1357' }).waitFor();
   assert.equal(await status.count(), 0);
-  assert.deepEqual(await tabs.boundingBox(), initial);
+  assert.equal((await moduleRegion.boundingBox()).y, initial.y);
   assert.equal(reads.filter(path => path === prefix + '/api/admin/cards').length, 1);
   assert(!reads.some(path => path === '/api/local/staff/finance/cards' ||
     /^\/integrations\/codexdaichong\/api\/admin\/(data|region|recharge-routing|orbitcard)(\/|$)/.test(path)));

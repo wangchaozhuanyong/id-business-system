@@ -80,6 +80,13 @@ NATIVE_PATCH_FILES = {
                           ("provider-retirement", "upstream-provider-retirement.patch"))
     for name in ("manifest.json", patch)
 }
+CARD_REUSE_NATIVE_SCOPE = {
+    "deploy/recharge-core/card-plans-canary.mjs", "deploy/recharge-core/health.mjs",
+    "modules/recharge/codexdaichong/card-plans/manifest.json",
+    "modules/recharge/codexdaichong/card-plans/upstream-card-plans.patch",
+    "modules/recharge/codexdaichong/assets.mjs", "modules/recharge/codexdaichong/card-plan-admin.mjs",
+    "modules/recharge/codexdaichong/shell.css", "modules/recharge/codexdaichong/shell.js",
+}
 # 已批准的优惠及浏览器补丁独立核验，不与银行卡套餐或供应商退役批次绑定。
 PLUS_TRIAL_PATCH_FILES = {
     f"modules/recharge/codexdaichong/plus-trial/{name}"
@@ -309,7 +316,7 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False, 
         carried_patches = approved_patches or (
             changed <= NATIVE_CORE_SCOPE
             and not git("diff", "--name-only", base, sha, "--", *sorted(reviewed_patches)).strip())
-        if include_adapter or (not carried_patches and changed != PROXY_TYPE_CORE_SCOPE):
+        if include_adapter or (not carried_patches and changed not in (PROXY_TYPE_CORE_SCOPE, CARD_REUSE_NATIVE_SCOPE)):
             raise RuntimeError("recharge_native_release_scope_mismatch")
     elif include_adapter:
         if not changed <= ADAPTER_SCOPE or not changed.intersection(ADAPTER_RUNTIME_FILES):

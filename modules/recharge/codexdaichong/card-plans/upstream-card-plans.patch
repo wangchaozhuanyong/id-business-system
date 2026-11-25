@@ -17,7 +17,7 @@ diff --git a/mysql-store.js b/mysql-store.js
              if (cardPool.length > 0) {
                  const cardNumbers = cardPool.map((item) => item[0]);
                  const cardPlaceholders = cardNumbers.map(() => '?').join(', ');
-@@ -3431,31 +3433,148 @@
+@@ -3431,31 +3433,169 @@
   * @param {string} ownerKey - 锁持有者标识（通常为 jobKey）
   * @returns {object|null} 卡片信息 { id, card_number, card_expiry, card_cvc, card_holder, usage_count } 或 null（无可用卡）
   */
@@ -42,7 +42,17 @@ diff --git a/mysql-store.js b/mysql-store.js
 +    const policy = JSON.parse(rows[0]?.config_value || 'null');
 +    if (!Number.isSafeInteger(policy?.version) || policy.version < 0 || typeof policy.strict !== 'boolean')
 +        throw new Error('银行卡套餐规则读取失败');
-+    return { version: policy.version, strict: policy.strict };
++    const reuseLimits = policy.reuseLimits ?? null;
++    if (reuseLimits !== null && !validCardReuseLimits(reuseLimits))
++        throw new Error('银行卡复用上限读取失败');
++    return { version: policy.version, strict: policy.strict, reuseLimits };
++}
++
++function validCardReuseLimits(limits) {
++    return limits && typeof limits === 'object' && !Array.isArray(limits) &&
++        Object.keys(limits).length === CANONICAL_PLAN_TYPES.length &&
++        CANONICAL_PLAN_TYPES.every(plan => Object.hasOwn(limits, plan) &&
++            Number.isSafeInteger(limits[plan]) && limits[plan] >= 1 && limits[plan] <= 20);
 +}
 +
 +function cardPlanError(status, message) {
@@ -69,8 +79,8 @@ diff --git a/mysql-store.js b/mysql-store.js
 +    );
 +}
 +
-+async function advanceCardPlanPolicy(connection, policy, strict = policy.strict) {
-+    const next = { version: policy.version + 1, strict };
++async function advanceCardPlanPolicy(connection, policy, values = {}) {
++    const next = { ...policy, ...values, version: policy.version + 1 };
 +    if (!Number.isSafeInteger(next.version)) throw new Error('银行卡套餐版本超出范围');
 +    await runExecute('UPDATE app_config SET config_value = ? WHERE config_key = ?',
 +        [JSON.stringify(next), CARD_PLAN_POLICY_KEY], { connection });
@@ -95,8 +105,12 @@ diff --git a/mysql-store.js b/mysql-store.js
 +    if (!command || typeof command !== 'object' || Array.isArray(command))
 +        throw cardPlanError(400, '套餐设置格式无效');
 +    const settingMode = Object.hasOwn(command, 'strict');
++    const settingReuseLimits = Object.hasOwn(command, 'reuseLimits');
 +    let ids, plans;
-+    if (settingMode) {
++    if (settingReuseLimits) {
++        if (Object.keys(command).length !== 2 || !validCardReuseLimits(command.reuseLimits))
++            throw cardPlanError(400, '各套餐的一卡几充上限必须是 1 至 20 的整数');
++    } else if (settingMode) {
 +        if (typeof command.strict !== 'boolean' || Object.hasOwn(command, 'cardIds') || Object.hasOwn(command, 'allowedPlans'))
 +            throw cardPlanError(400, '套餐取卡模式无效');
 +    } else {
@@ -109,9 +123,14 @@ diff --git a/mysql-store.js b/mysql-store.js
 +    return withTransaction(async connection => {
 +        const policy = await readCardPlanPolicy(connection, true);
 +        checkCardPlanVersion(policy, command.version);
++        if (settingReuseLimits) {
++            if (CANONICAL_PLAN_TYPES.every(plan => policy.reuseLimits?.[plan] === command.reuseLimits[plan]))
++                return policy;
++            return advanceCardPlanPolicy(connection, policy, { reuseLimits: command.reuseLimits });
++        }
 +        if (settingMode) {
 +            if (command.strict === policy.strict) return policy;
-+            return advanceCardPlanPolicy(connection, policy, command.strict);
++            return advanceCardPlanPolicy(connection, policy, { strict: command.strict });
 +        }
 +        const rows = await runQuery(
 +            `SELECT id, in_use FROM card_assets WHERE id IN (${ids.map(() => '?').join(', ')})
@@ -130,10 +149,12 @@ diff --git a/mysql-store.js b/mysql-store.js
 +           AND COALESCE((
 +                SELECT COALESCE(FIND_IN_SET(?, plan.config_value), 0)
 +                FROM app_config AS plan WHERE plan.config_key = CONCAT(?, card_assets.id)
-+           ), ?) > 0`;
++           ), ?) > 0
++           AND (? IS NULL OR card_assets.usage_count < ?)`;
 +
 +function cardPlanParams(planType, policy) {
-+    return [String(planType || ''), CARD_PLAN_PREFIX, policy.strict ? 0 : 1];
++    const limit = policy.reuseLimits?.[planType] ?? null;
++    return [String(planType || ''), CARD_PLAN_PREFIX, policy.strict ? 0 : 1, limit, limit];
 +}
 +
 +async function hasAvailableCard(planType) {
@@ -176,7 +197,7 @@ diff --git a/mysql-store.js b/mysql-store.js
          );
 
          if (!rows.length) {
-@@ -4164,7 +4283,8 @@
+@@ -4164,7 +4304,8 @@
   * @param {Array<{ card_number: string, card_expiry: string, card_cvc: string, card_holder?: string }>} cards
   * @returns {Promise<{ imported: number, skipped: number, failed: number, failures: Array<{ index: number, errors: string[] }> }>}
   */
@@ -186,7 +207,7 @@ diff --git a/mysql-store.js b/mysql-store.js
      if (!Array.isArray(cards)) {
          throw new Error('cards 参数必须为数组');
      }
-@@ -4200,69 +4320,81 @@
+@@ -4200,69 +4341,81 @@
          }
      }
 
@@ -326,7 +347,7 @@ diff --git a/mysql-store.js b/mysql-store.js
  }
 
  // ─── Region Selector ────────────────────────────────────────────────────────
-@@ -4610,6 +4742,8 @@
+@@ -4610,6 +4763,8 @@
      getClaimedProductDownloadInfo,
      reserveCard,
      hasAvailableCard,

@@ -239,7 +239,7 @@ test(
     for (const [id, name] of pageNames) {
       if (id === 'cards') {
         assert.equal(await nav.getByRole('button', { name, exact: true }).count(), 0);
-        await page.getByRole('link', { name: '自动代充银行卡', exact: true }).click();
+        await page.getByRole('link', { name: '银行卡设置', exact: true }).click();
       } else if (id === 'runtime_logs') {
         await select('支付链接调试');
         await frame.getByRole('button', { name: '打开完整运行日志', exact: true }).click();

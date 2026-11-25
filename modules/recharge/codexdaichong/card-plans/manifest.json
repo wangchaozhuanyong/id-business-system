@@ -1,10 +1,10 @@
 {
   "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
-  "patchSha256": "fddaf725df2c2a0de8e1b1df76befbe13d7b408016abd83a45b31cbce7069701",
+  "patchSha256": "495946c3a353f083fec2df01eda980169a81a438a97f009f1be8845f66ba051a",
   "files": {
     "mysql-store.js": {
       "original": "2b02b843134387bf75a112b681ea9028edb7648b",
-      "approved": "7d4b6b152b14cd155ad37e23528830c36cedfc7b"
+      "approved": "4347510ba6c4182a8c3e6b879e91d350fa91204c"
     },
     "payment-retry.js": {
       "original": "d0a398bf7ef1f7743590798d0621fc268368cc34",

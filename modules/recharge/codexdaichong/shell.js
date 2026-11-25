@@ -3,7 +3,7 @@
   const standalone = window.parent === window;
   const root = document.documentElement;
   const search = new URLSearchParams(window.location.search);
-  const cardTabs = window.frameElement?.closest('[data-recharge-module="cards"]')?.querySelector('[data-recharge-card-tabs]');
+  const cardTabs = window.frameElement?.closest('[data-recharge-module="cards"]');
   if (cardTabs) root.dataset.rechargeCardTabs = '';
   const taskLog = search.get('taskLog');
   const telegramSettings = !standalone && window.location.pathname.endsWith('/admin') &&
@@ -324,7 +324,7 @@
     }
   };
   function syncCardPoolSection(initial = false) {
-    const selected = cardTabs?.querySelector('[aria-pressed="true"]')?.dataset.cardSection;
+    const selected = cardTabs?.querySelector('[aria-pressed="true"]')?.dataset.cardSection || (cardTabs ? 'local' : '');
     if (!selected) return;
     const tab = [...document.querySelectorAll('#cards.active [data-switcher="card-assets"] [data-switcher-tab]')]
       .find(item => item.dataset.switcherTab === selected);
