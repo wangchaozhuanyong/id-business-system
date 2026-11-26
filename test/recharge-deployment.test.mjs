@@ -83,6 +83,14 @@ def fake_timeout(args, **kwargs):
 m['subprocess'].run=fake_timeout
 try: c.command(['docker', 'exec'], step='routing_migration_exec'); raise AssertionError('expected timeout')
 except m['CanaryError'] as err: assert str(err)=='routing_migration_exec_timeout'
+calls=[]
+c.command=lambda args,**kwargs: calls.append(kwargs.get('step')) or '1'
+assert c.mysql_query('b'*64, 'SELECT 1')=='1'
+assert c.mysql_query('b'*64, 'SELECT 1', step='mysql_version_query')=='1'
+assert calls==['mysql_query', 'mysql_version_query']
+args=m['mysql_arguments']('sha256:'+'0'*64, 'canary-mysql', 'db', 'user', [], ['/usr/local/bin/docker-entrypoint.sh'])
+for flag in ('512m', '640m', '--innodb-redo-log-capacity=16M', '--temptable-max-ram=8M', '--innodb-doublewrite=OFF'):
+ assert flag in args
 print('passed')`;
   assert.equal(execFileSync('python3', ['-c', code]).toString().trim(), 'passed');
 });

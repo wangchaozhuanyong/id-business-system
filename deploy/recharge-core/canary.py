@@ -105,13 +105,14 @@ def mysql_arguments(image, name, database, user, labels, entrypoint):
     script = ('IFS= read -r MYSQL_ROOT_PASSWORD; IFS= read -r MYSQL_PASSWORD; '
               'export MYSQL_ROOT_PASSWORD MYSQL_PASSWORD; exec "$@"')
     return ['docker', 'create', '--rm', '-i', '--name', name, *labels, '--network', 'bridge',
-            '--memory', '384m', '--memory-swap', '384m', '--security-opt', 'no-new-privileges',
+            '--memory', '512m', '--memory-swap', '640m', '--security-opt', 'no-new-privileges',
             '--tmpfs', '/var/lib/mysql:rw,nosuid,nodev,size=256m',
             '--publish', '127.0.0.1::3306', '-e', 'MYSQL_DATABASE=' + database, '-e', 'MYSQL_USER=' + user,
             '--entrypoint', 'bash', image, '-ec', script, '--', *entrypoint, 'mysqld',
             '--innodb-buffer-pool-size=32M', '--innodb-log-buffer-size=4M', '--performance-schema=OFF',
             '--max-connections=12', '--table-open-cache=64', '--tmp-table-size=4M',
-            '--max-heap-table-size=4M', '--skip-log-bin', '--mysqlx=0']
+            '--max-heap-table-size=4M', '--skip-log-bin', '--mysqlx=0',
+            '--innodb-redo-log-capacity=16M', '--temptable-max-ram=8M', '--innodb-doublewrite=OFF']
 
 
 def role_arguments(image, role, name, database, user, host, database_port, labels, native_url=None,
@@ -224,7 +225,7 @@ class Canary:
             time.sleep(1)
         raise CanaryError(code + '_timeout')
 
-    def mysql_query(self, identity, query):
+    def mysql_query(self, identity, query, step='mysql_query'):
         if query not in ('SELECT 1', "SELECT config_value FROM app_config WHERE config_key = 'admin_password_version'"):
             if query not in getattr(self, 'return_queries', ()) or identity != getattr(self, 'return_mysql', None):
                 raise CanaryError('canary_read_query_rejected')
@@ -234,7 +235,7 @@ class Canary:
                              'IFS= read -r MYSQL_PWD; export MYSQL_PWD; exec "$@"', '--',
                              'mysql', '--protocol=TCP', '-h127.0.0.1', '-P3306', '-u' + self.user,
                              '--database=' + self.database, '--default-character-set=utf8mb4', '--batch', '--skip-column-names',
-                             '--connect-timeout=2', '-e', query], input=(self.password + '\n').encode(), timeout=8, step='mysql_query')
+                             '--connect-timeout=2', '-e', query], input=(self.password + '\n').encode(), timeout=8, step=step)
 
     def published(self, identity, port):
         values = self.inspect(identity)['NetworkSettings']['Ports'].get(port)
@@ -281,7 +282,7 @@ class Canary:
         orbit_state = "SELECT status FROM orbitcard_card_usage WHERE card_id=7102"
         self.return_mysql = mysql
         self.return_queries = (fixture, release_lock, card_state, orbit_state)
-        self.mysql_query(mysql, fixture)
+        self.mysql_query(mysql, fixture, step='card_stop_mysql_query')
 
         def stop(actor):
             return http_json(adapter_url, CARD_STOP_PATH, {
@@ -289,16 +290,18 @@ class Canary:
                 'x-id-recharge-assertion': assertion(self.bridge, CARD_STOP_PATH, actor, 'POST'),
             }, 'POST', {'refs': refs, 'number': number})
 
-        if stop(privileged)[0] != 403 or self.mysql_query(mysql, card_state) != '1:1:4:synthetic-card-stop':
+        if stop(privileged)[0] != 403 or self.mysql_query(mysql, card_state, step='card_stop_mysql_query') != '1:1:4:synthetic-card-stop':
             raise CanaryError('card_stop_service_boundary_failed')
         service = {**privileged, 'id': 'order-reconciliation'}
         if stop(service) != (200, {'success': True, 'state': 'pending', 'refs': refs}) or \
-                self.mysql_query(mysql, card_state) != '1:1:4:synthetic-card-stop' or self.mysql_query(mysql, orbit_state) != 'RETIRED':
+                self.mysql_query(mysql, card_state, step='card_stop_mysql_query') != '1:1:4:synthetic-card-stop' or \
+                self.mysql_query(mysql, orbit_state, step='card_stop_mysql_query') != 'RETIRED':
             raise CanaryError('card_stop_in_use_preservation_failed')
-        self.mysql_query(mysql, release_lock)
+        self.mysql_query(mysql, release_lock, step='card_stop_mysql_query')
         for _ in range(2):
             if stop(service) != (200, {'success': True, 'state': 'stopped', 'refs': refs}) or \
-                    self.mysql_query(mysql, card_state) != '0:0:4:' or self.mysql_query(mysql, orbit_state) != 'RETIRED':
+                    self.mysql_query(mysql, card_state, step='card_stop_mysql_query') != '0:0:4:' or \
+                    self.mysql_query(mysql, orbit_state, step='card_stop_mysql_query') != 'RETIRED':
                 raise CanaryError('card_stop_readback_failed')
         self.checks.append('synthetic_card_stop_and_retry_preserved_history')
 
@@ -323,7 +326,8 @@ class Canary:
             'SELECT COUNT(*) FROM id_recharge_code_returns',
             *("UPDATE cdk_codes SET used_at=CURRENT_TIMESTAMP WHERE cdk_code='%s' AND is_active=1 AND used_at IS NULL; SELECT ROW_COUNT()" % codes[index] for index in range(1, 9))
         }
-        self.mysql_query(mysql, 'INSERT INTO cdk_codes(cdk_code,is_active,type,plan_type) VALUES ' + values)
+        self.mysql_query(mysql, 'INSERT INTO cdk_codes(cdk_code,is_active,type,plan_type) VALUES ' + values,
+                         step='code_returns_mysql_query')
         service = {**privileged, 'id': 'order-reconciliation'}
         def request(action, body, actor=service):
             path = '/api/admin/cdks/returns/' + action
@@ -341,10 +345,12 @@ class Canary:
             status, result = request(action, command(0))
             if status != 200 or result.get('receipt') != first.get('receipt'):
                 raise CanaryError('code_return_idempotency_failed')
-        if self.mysql_query(mysql, "SELECT is_active FROM cdk_codes WHERE cdk_code='%s'" % codes[0]) != '0':
+        if self.mysql_query(mysql, "SELECT is_active FROM cdk_codes WHERE cdk_code='%s'" % codes[0],
+                            step='code_returns_mysql_query') != '0':
             raise CanaryError('returned_code_still_active')
         try:
-            self.mysql_query(mysql, "DELETE FROM cdk_codes WHERE cdk_code='%s'" % codes[0])
+            self.mysql_query(mysql, "DELETE FROM cdk_codes WHERE cdk_code='%s'" % codes[0],
+                             step='code_returns_mysql_query')
         except CanaryError:
             pass
         else:
@@ -354,7 +360,8 @@ class Canary:
             barrier = threading.Barrier(2)
             def redeem():
                 barrier.wait(timeout=5)
-                return self.mysql_query(mysql, "UPDATE cdk_codes SET used_at=CURRENT_TIMESTAMP WHERE cdk_code='%s' AND is_active=1 AND used_at IS NULL; SELECT ROW_COUNT()" % codes[index])
+                return self.mysql_query(mysql, "UPDATE cdk_codes SET used_at=CURRENT_TIMESTAMP WHERE cdk_code='%s' AND is_active=1 AND used_at IS NULL; SELECT ROW_COUNT()" % codes[index],
+                                        step='code_returns_race_mysql_query')
             def give_back():
                 barrier.wait(timeout=5)
                 return request('commit', command(index))
@@ -368,9 +375,12 @@ class Canary:
             if int(used) + int(receipt.get('state') == 'returned') != 1:
                 raise CanaryError('code_return_and_redeem_both_succeeded_or_failed')
         self.checks.append('code_return_vs_native_claim_compare_and_set_eight_races')
-        self.mysql_query(mysql, "INSERT INTO task_logs(job_key,token_preview,cdk_code,status,message,display_time) VALUES('return-canary-task','synthetic','%s','failed','synthetic','synthetic')" % codes[9])
-        self.mysql_query(mysql, "INSERT INTO activation_manual_holds(account_key,cdk_code,reason) VALUES('return-canary','%s','synthetic')" % codes[10])
-        self.mysql_query(mysql, "UPDATE cdk_codes SET shipped_at=CURRENT_TIMESTAMP WHERE cdk_code='%s'" % codes[11])
+        self.mysql_query(mysql, "INSERT INTO task_logs(job_key,token_preview,cdk_code,status,message,display_time) VALUES('return-canary-task','synthetic','%s','failed','synthetic','synthetic')" % codes[9],
+                         step='code_returns_mysql_query')
+        self.mysql_query(mysql, "INSERT INTO activation_manual_holds(account_key,cdk_code,reason) VALUES('return-canary','%s','synthetic')" % codes[10],
+                         step='code_returns_mysql_query')
+        self.mysql_query(mysql, "UPDATE cdk_codes SET shipped_at=CURRENT_TIMESTAMP WHERE cdk_code='%s'" % codes[11],
+                         step='code_returns_mysql_query')
         for index in (9, 10, 11):
             status, result = request('commit', command(index))
             if status != 200 or result.get('receipt', {}).get('state') != 'blocked':
@@ -378,10 +388,12 @@ class Canary:
         status, result = request('commit', {**command(12), 'operationId': command(0)['operationId']})
         if status != 200 or result.get('receipt', {}).get('state') != 'conflict':
             raise CanaryError('code_return_operation_collision_not_blocked')
-        count = self.mysql_query(mysql, 'SELECT COUNT(*) FROM id_recharge_code_returns')
+        count = self.mysql_query(mysql, 'SELECT COUNT(*) FROM id_recharge_code_returns',
+                                 step='code_returns_mysql_query')
         self.command(['docker', 'exec', '-i', native, 'node', '/candidate/deploy/recharge-core/entry.mjs',
                       'migrate-canary-code-returns'], input=sealed.encode(), timeout=30, step='code_returns_remigration_exec')
-        if self.mysql_query(mysql, 'SELECT COUNT(*) FROM id_recharge_code_returns') != count:
+        if self.mysql_query(mysql, 'SELECT COUNT(*) FROM id_recharge_code_returns',
+                            step='code_returns_mysql_query') != count:
             raise CanaryError('code_return_migration_not_idempotent')
         self.checks.append('code_return_history_delivery_hold_collision_and_additive_migration')
 
@@ -389,7 +401,7 @@ class Canary:
         stock_fixture = ('INSERT INTO cdk_codes(cdk_code,is_active,type,plan_type,shipped_at) VALUES '
                          "('%s',1,'自助','plus',NULL),('%s',1,'自助','plus',CURRENT_TIMESTAMP)") % (eligible, shipped)
         self.return_queries.add(stock_fixture)
-        self.mysql_query(mysql, stock_fixture)
+        self.mysql_query(mysql, stock_fixture, step='code_returns_mysql_query')
         denied, _ = http_json(adapter_url, STOCK_PATH, {
             'x-id-recharge-assertion': assertion(self.bridge, STOCK_PATH, privileged)})
         status, value = http_json(adapter_url, STOCK_PATH, {
@@ -444,7 +456,8 @@ class Canary:
             raise CanaryError('routing_migration_failed')
         self.checks.append('routing_additive_migration')
 
-        version = int(self.mysql_query(mysql, "SELECT config_value FROM app_config WHERE config_key = 'admin_password_version'"))
+        version = int(self.mysql_query(mysql, "SELECT config_value FROM app_config WHERE config_key = 'admin_password_version'",
+                                       step='mysql_version_query'))
         if version < 1:
             raise CanaryError('native_password_version_invalid')
         bearer = native_token(self.bridge, version)
