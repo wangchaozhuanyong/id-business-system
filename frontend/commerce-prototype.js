@@ -4747,6 +4747,8 @@
       const focusKey = Object.keys(differences)[0] || 'name';
       const select = review ? '<div class="order-customer-actions order-customer-review-actions">' +
         A.button('使用客户「' + candidate.name + '」', 'commerce-order-customer-choose', 'primary', '', 'data-id="' + E(id) + '"') +
+        (candidates.length === 1 && Object.keys(differences).length
+          ? A.button('用本次填写更新客户', 'commerce-order-customer-choose-update', '', '', 'data-id="' + E(id) + '"') : '') +
         (candidates.length === 1 ? A.button('继续填写', 'commerce-order-customer-continue', '', '', 'data-key="' + E(focusKey) + '"') : '') +
         '</div>' : '';
       return '<div class="order-customer-candidate">' +
@@ -9026,7 +9028,7 @@
   }
   function saveOrder(form, appleBalanceReady = false, tenantCardChecked = false) {
     if (!canManageOrders() || saving) return;
-    const customerLookup = updateOrderCustomerLookup(form);
+    let customerLookup = updateOrderCustomerLookup(form);
     const raw = A.readForm(form);
     const existing = orders.find((row) => row.id === value(raw, 'id'));
     const onlyNotes = orderNoteFields.get(form);
@@ -9078,6 +9080,22 @@
       return;
     }
     saveDrafts();
+    if (customerLookup && !customerLookup.decision && !customerLookup.staleEdit &&
+        customerLookup.match.kind === 'review' && customerLookup.match.ids.length === 1 &&
+        Object.keys(customerLookup.match.matches).some(key => key !== 'name')) {
+      const candidate = customers.find(row => row.id === customerLookup.match.ids[0] && row.active !== false);
+      if (candidate) {
+        const matchKey = Object.keys(customerLookup.match.matches).find(key => key !== 'name') || 'name';
+        setOrderCustomerSelection(form, {
+          id: candidate.id,
+          previous: customerLookup.entered,
+          key: matchKey,
+          version: candidate.version ?? 0,
+          editing: true
+        }, customerLookup.entered);
+        customerLookup = readOrderCustomerLookup(form);
+      }
+    }
     const enteredAt = now();
     const calibrate = customerLookup?.decision === 'calibrate';
     const matchedVersion = customerLookup?.customer?.version ?? 0;
@@ -10804,8 +10822,9 @@
       chooseOrderCustomerSuggestion(node);
       return true;
     }
-    if (['commerce-order-customer-choose', 'commerce-order-customer-new', 'commerce-order-customer-reselect',
-      'commerce-order-customer-continue', 'commerce-order-customer-update', 'commerce-order-customer-cancel-update'].includes(action)) {
+    if (['commerce-order-customer-choose', 'commerce-order-customer-choose-update', 'commerce-order-customer-new',
+      'commerce-order-customer-reselect', 'commerce-order-customer-continue', 'commerce-order-customer-update',
+      'commerce-order-customer-cancel-update'].includes(action)) {
       const form = node.closest('#commerce-order-form');
       const lookup = readOrderCustomerLookup(form);
       if (!lookup) return true;
@@ -10816,6 +10835,13 @@
         const candidate = customers.find(row => row.id === id && row.active !== false);
         if (candidate && ['matched', 'review'].includes(match.kind) && match.ids.includes(id)) {
           useOrderCustomer(form, candidate, node.closest('.order-customer-candidate')?.querySelector('[data-key]')?.dataset.key || 'name');
+          $('.order-customer-status-title', form)?.focus({ preventScroll: true });
+        }
+      } else if (action === 'commerce-order-customer-choose-update') {
+        const candidate = customers.find(row => row.id === id && row.active !== false);
+        if (candidate && ['matched', 'review'].includes(match.kind) && match.ids.includes(id)) {
+          const key = node.closest('.order-customer-candidate')?.querySelector('[data-key]')?.dataset.key || 'name';
+          setOrderCustomerSelection(form, { id: candidate.id, previous: entered, key, version: candidate.version ?? 0, editing: true }, entered);
           $('.order-customer-status-title', form)?.focus({ preventScroll: true });
         }
       } else if (action === 'commerce-order-customer-update' && (customer || lookup.staleEdit)) {
