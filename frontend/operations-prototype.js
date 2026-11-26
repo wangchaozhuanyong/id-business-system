@@ -1168,7 +1168,7 @@
     if (!refresh && pending?.key === key && !pending.controller.signal.aborted) return;
 
     if (!refresh) {
-      if (view.dataset.unavailable) return;
+      if (view.dataset.unavailable === '401' || view.dataset.unavailable === '403') return;
       const cachedFrame = view.querySelector(`iframe[data-view-group="${group}"][data-bridge-ready="true"]`);
       if (
         cachedFrame &&
