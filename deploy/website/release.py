@@ -316,7 +316,20 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False, 
         carried_patches = approved_patches or (
             changed <= NATIVE_CORE_SCOPE
             and not git("diff", "--name-only", base, sha, "--", *sorted(reviewed_patches)).strip())
-        if include_adapter or (not carried_patches and changed not in (PROXY_TYPE_CORE_SCOPE, CARD_REUSE_NATIVE_SCOPE)):
+        combined_core_scope = {
+            "deploy/recharge-core/card-plans-canary.mjs",
+            "deploy/recharge-core/health.mjs",
+            "modules/recharge/codexdaichong/assets.mjs",
+            "modules/recharge/codexdaichong/card-plan-admin.mjs",
+            "modules/recharge/codexdaichong/card-plans/manifest.json",
+            "modules/recharge/codexdaichong/card-plans/upstream-card-plans.patch",
+            "modules/recharge/codexdaichong/gateway.mjs",
+            "modules/recharge/codexdaichong/native-routing.mjs",
+            "modules/recharge/codexdaichong/native-routing.test.mjs",
+            "modules/recharge/codexdaichong/shell.css",
+            "modules/recharge/codexdaichong/shell.js",
+        }
+        if include_adapter or (not carried_patches and changed not in (PROXY_TYPE_CORE_SCOPE, CARD_REUSE_NATIVE_SCOPE, combined_core_scope)):
             raise RuntimeError("recharge_native_release_scope_mismatch")
     elif include_adapter:
         if not changed <= ADAPTER_SCOPE or not changed.intersection(ADAPTER_RUNTIME_FILES):
