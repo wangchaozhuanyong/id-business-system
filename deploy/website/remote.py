@@ -410,6 +410,19 @@ def require_main(sha):
     require(remote.decode().split() == [sha, "refs/heads/main"], "remote_main_changed")
 
 
+def exec_start_spec(state, error):
+    """Return static systemd ExecStart fields without runtime timestamps or PIDs."""
+    text = state.decode() if isinstance(state, bytes) else state
+    parsed = re.fullmatch(
+        r"\{ (path=[^;{}\r\n]+ ; argv\[\]=[^;{}\r\n]+ ; ignore_errors=(?:yes|no) ;)"
+        r" start_time=\[[^\]\r\n]*\] ; stop_time=\[[^\]\r\n]*\] ; pid=\d+ ;"
+        r" code=[^;{}\r\n]+ ; status=[^;{}\r\n]+ \}",
+        text.strip(),
+    )
+    require(parsed is not None, error)
+    return parsed[1].encode() if isinstance(state, bytes) else parsed[1]
+
+
 def adapter_unit_state(components):
     adapter, native = components["recharge"], components["recharge-native"]
     image, revision = adapter["image"], adapter["revision"]
@@ -423,7 +436,10 @@ def adapter_unit_state(components):
     binding = inspect("recharge-native")["NetworkSettings"]["Ports"].get("3000/tcp")
     require(binding == [{"HostIp": "127.0.0.1", "HostPort": "44579"}], "native_binding_mismatch")
     require(run(["systemctl", "is-active", ADAPTER_UNIT]).strip() == b"active", "adapter_unit_not_active")
-    command = run(["systemctl", "show", "--property=ExecStart", "--value", ADAPTER_UNIT]).decode()
+    command = exec_start_spec(
+        run(["systemctl", "show", "--property=ExecStart", "--value", ADAPTER_UNIT]).decode(),
+        "adapter_unit_launch_mismatch",
+    )
     require(re.search(r"/run-recharge\.py adapter " + revision + r"(?=[ ;}]|$)", command), "adapter_unit_launch_mismatch")
     override = None
     if ADAPTER_DROP.exists() or ADAPTER_DROP.is_symlink():

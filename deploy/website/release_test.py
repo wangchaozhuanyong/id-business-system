@@ -1699,6 +1699,34 @@ class WebsiteReleaseTests(unittest.TestCase):
             f"ExecStart=/usr/bin/python3 {remote.ROOT}/releases/{TARGET}/source/deploy/recharge-core/run-recharge.py"
             f" adapter {TARGET} {BASE} {image}"])
 
+    def test_adapter_unit_state_ignores_runtime_timestamps_across_daemon_reload(self):
+        image = "sha256:" + "c" * 64
+        components = {
+            "recharge": {"image": image, "revision": BASE, "running": True},
+            "recharge-native": {"image": image, "revision": BASE, "running": True},
+        }
+        prefix = f"{{ path=/usr/bin/python3 ; argv[]=/usr/bin/python3 /releases/{BASE}/run-recharge.py adapter {BASE} ; ignore_errors=no ; "
+        before = f"{prefix}start_time=[Thu 2026-11-26 10:55:00 UTC] ; stop_time=[n/a] ; pid=1234 ; code=(null) ; status=0/0 }}\n"
+        reloaded = f"{prefix}start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }}\n"
+        changed = before.replace(f"adapter {BASE}", f"adapter {TARGET}")
+        multiple = before.strip() + " ; " + reloaded.strip() + "\n"
+        missing = Path("/nonexistent/id-adapter-dropin-check.conf")
+
+        def read_state(command):
+            labels = json.dumps({"org.id-business.upstream.revision": remote.PINNED_UPSTREAM,
+                                 "org.opencontainers.image.revision": BASE}).encode()
+            with patch.object(remote, "run", side_effect=[labels, b"active\n", command.encode()]), \
+                    patch.object(remote, "inspect", return_value={"NetworkSettings": {"Ports": {"3000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "44579"}]}}}), \
+                    patch.object(remote, "ADAPTER_DROP", missing):
+                return remote.adapter_unit_state(components)
+
+        first = read_state(before)
+        self.assertEqual(first, read_state(reloaded))
+        self.assertIsNone(first["overrideSha256"])
+        for invalid in (changed, multiple):
+            with self.assertRaisesRegex(remote.ReleaseError, "adapter_unit_launch_mismatch"):
+                read_state(invalid)
+
     def test_runtime_mount_must_match_exact_readonly_source(self):
         source = Path("/opt/id-business-independent/releases") / TARGET / "source"
         mount = {"Source": str(source), "Destination": "/app", "RW": False}
