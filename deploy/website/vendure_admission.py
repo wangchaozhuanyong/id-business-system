@@ -14,7 +14,7 @@ import time
 from contextlib import closing, contextmanager
 from pathlib import Path
 
-from remote import FORMAL, LOCK, ROOT, ReleaseError, digest, identity, inspect, require, require_main, run, write_new
+from remote import FORMAL, LOCK, ROOT, ReleaseError, digest, exec_start_spec, identity, inspect, require, require_main, run, write_new
 
 UNIT = "id-business-independent-vendure.service"
 WORKER_UNIT = "id-business-independent-vendure-worker.service"
@@ -129,12 +129,7 @@ def worker_binding():
     require(UNIT in run(["systemctl", "show", "-p", "PartOf", "--value", WORKER_UNIT]).decode().split(),
             "gateway_worker_dependency_changed")
     state = run(["systemctl", "show", "-p", "ExecStart", "--value", WORKER_UNIT]).strip()
-    command = re.fullmatch(
-        rb"\{ (path=[^;{}\r\n]+ ; argv\[\]=[^;{}\r\n]+ ; ignore_errors=(?:yes|no) ;)"
-        rb" start_time=\[[^\]\r\n]*\] ; stop_time=\[[^\]\r\n]*\] ; pid=\d+ ;"
-        rb" code=[^;{}\r\n]+ ; status=[^;{}\r\n]+ \}", state)
-    require(command is not None, "gateway_worker_command_ambiguous")
-    return command[1], digest(WORKER_LAUNCHER)
+    return exec_start_spec(state, "gateway_worker_command_ambiguous"), digest(WORKER_LAUNCHER)
 
 
 def worker_runtime(container):
