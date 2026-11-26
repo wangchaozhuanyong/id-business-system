@@ -216,6 +216,9 @@ export function findChromeExecutable() {
     );
   } else {
     candidates.push(
+      '/state/chromium/chrome-wrapper',
+      '/state/chromium/chrome',
+      '/state/chromium/chromium',
       '/usr/bin/google-chrome',
       '/usr/bin/google-chrome-stable',
       '/usr/bin/chromium-browser',
@@ -458,6 +461,28 @@ export function getRunningProfileKeys() {
 }
 
 /**
+ * Resolve a writable base directory for isolated browser profiles.
+ */
+export function resolveBaseProfilesDir() {
+  if (process.env.NATIVE_BROWSER_PROFILE_DIR) {
+    return process.env.NATIVE_BROWSER_PROFILE_DIR;
+  }
+  const roots = process.platform === 'linux'
+    ? [os.homedir(), '/state', os.tmpdir()]
+    : [os.homedir(), os.tmpdir()];
+  for (const root of roots) {
+    if (!root) continue;
+    try {
+      fs.accessSync(root, fs.constants.W_OK);
+      return path.join(root, '.id_business_profiles');
+    } catch {
+      // Try next writable root
+    }
+  }
+  return path.join(os.tmpdir(), '.id_business_profiles');
+}
+
+/**
  * Launch an isolated native Chrome instance with independent profile and optional proxy.
  */
 export async function launchNativeChrome({
@@ -478,8 +503,7 @@ export async function launchNativeChrome({
     throw new NativeBrowserError(500, '系统未找到可用的 Google Chrome 或 Chromium 浏览器，请先安装 Chrome');
   }
 
-  const baseProfilesDir =
-    process.env.NATIVE_BROWSER_PROFILE_DIR || path.join(os.homedir(), '.id_business_profiles');
+  const baseProfilesDir = resolveBaseProfilesDir();
   const safeKey = String(profileKey || 'default').replace(/[^a-zA-Z0-9_-]/g, '_');
 
   // If a previous instance is already running for this profile, close it first
@@ -499,7 +523,7 @@ export async function launchNativeChrome({
     '--disable-blink-features=AutomationControlled',
     '--disable-infobars',
     `--window-size=${windowSize}`,
-    ...(headless ? ['--headless=new', '--disable-gpu', '--no-sandbox'] : []),
+    ...(headless ? ['--headless=new', '--disable-gpu', '--no-sandbox', '--disable-dev-shm-usage'] : []),
     ...customArgs
   ];
 
@@ -531,9 +555,19 @@ export async function launchNativeChrome({
   // Open initial blank page so we can inject cookies before opening chatgpt.com
   args.push('about:blank');
 
+  const spawnEnv = process.platform === 'linux'
+    ? {
+        ...process.env,
+        HOME: profileDir,
+        XDG_CONFIG_HOME: path.join(profileDir, '.config'),
+        XDG_CACHE_HOME: path.join(profileDir, '.cache')
+      }
+    : process.env;
+
   const child = spawn(executable, args, {
     detached: true,
-    stdio: 'ignore'
+    stdio: 'ignore',
+    env: spawnEnv
   });
 
   const browserEntry = {

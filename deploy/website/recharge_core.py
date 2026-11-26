@@ -149,7 +149,12 @@ class CoreRelease:
         command = ["docker", "exec", "-i", self.native_name, "node", "--input-type=module", "-e", script, "--", *flags]
         result = subprocess.run(command, input=sealed.encode(), capture_output=True, timeout=35)
         require(result.returncode == 0, "recharge_production_readonly_preflight_failed")
-        state = json.loads(result.stdout)
+        lines = [line.strip() for line in result.stdout.decode("utf-8", errors="replace").splitlines() if line.strip()]
+        require(lines, "recharge_production_readonly_empty_output")
+        try:
+            state = json.loads(lines[-1])
+        except ValueError:
+            raise ReleaseError("recharge_production_readonly_invalid_json") from None
         require(state.get("readOnly") is True and type(state.get("providerActive")) is bool and
                 all(type(state.get(key)) is int and state[key] >= 0
                     for key in ("providerInFlight", "providerUnresolved", "availableCards")),
