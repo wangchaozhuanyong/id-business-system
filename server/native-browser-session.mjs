@@ -161,6 +161,18 @@ async function fetchJsonViaHttpProxy(proxyConfig, targetUrl, timeoutMs = 5000) {
   });
 }
 
+export function resolveProxySessionOnce(proxyUrl = '') {
+  const raw = String(proxyUrl || '').trim();
+  if (!raw) return '';
+  const parsed = parseProxyServerConfig(raw);
+  if (!parsed || !parsed.username) return raw;
+  const username = resolveDynamicProxySession(parsed.username);
+  if (username === parsed.username) return raw;
+  const scheme = parsed.protocol || 'http:';
+  const auth = `${encodeURIComponent(username)}:${encodeURIComponent(parsed.password || '')}@`;
+  return `${scheme}//${auth}${parsed.host}:${parsed.port}`;
+}
+
 /**
  * Default exit IP/country probe (supports direct fetch or HTTP proxy).
  */
@@ -177,9 +189,8 @@ export async function probeExitCountry(proxyUrl = '') {
   if (!parsed) {
     throw new NativeBrowserError(400, '代理地址格式无效，请检查协议、主机与端口');
   }
-  const username = parsed.username ? resolveDynamicProxySession(parsed.username) : '';
   const data = await fetchJsonViaHttpProxy(
-    { ...parsed, username },
+    parsed,
     endpoint,
     5000
   );
@@ -324,7 +335,48 @@ export async function verifyChatGptLogin({
       return { loggedIn: false, reason: 'not_on_chatgpt', url: href };
     }
     try {
-      const res = await fetch('/backend-api/me', { credentials: 'include' });
+      const sessRes = await fetch('/api/auth/session', { credentials: 'include', cache: 'no-store' });
+      if (sessRes.status === 403) {
+        return { loggedIn: false, status: 403, reason: 'challenge_or_forbidden', url: href };
+      }
+      const sess = sessRes.ok ? await sessRes.json() : null;
+      if (sess?.error === 'RefreshAccessTokenError') {
+        return { loggedIn: false, expired: true, reason: 'refresh_token_error', url: href };
+      }
+      if (sess?.error) {
+        return { loggedIn: false, expired: true, reason: 'session_error', url: href };
+      }
+      if (sess?.user?.email && sess?.accessToken) {
+        let accountId = '';
+        let exp = 0;
+        try {
+          const claims = JSON.parse(atob(sess.accessToken.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')));
+          accountId = String(claims?.['https://api.openai.com/auth']?.chatgpt_account_id || '');
+          exp = Number(claims?.exp || 0);
+        } catch {}
+        if (exp && exp <= Math.floor(Date.now() / 1000) + 30) {
+          return { loggedIn: false, expired: true, email: String(sess.user.email), reason: 'access_token_expired', url: href };
+        }
+        if (accountId) {
+          const checkRes = await fetch('/backend-api/accounts/check/v4-2023-04-27', {
+            cache: 'no-store',
+            headers: {
+              Authorization: 'Bearer ' + sess.accessToken,
+              'chatgpt-account-id': accountId
+            }
+          });
+          if (checkRes.status === 401) {
+            return { loggedIn: false, expired: true, status: 401, email: String(sess.user.email), reason: 'token_rejected', url: href };
+          }
+        }
+        return {
+          loggedIn: true,
+          email: String(sess.user.email),
+          accountId,
+          url: href
+        };
+      }
+      const res = await fetch('/backend-api/me', { credentials: 'include', cache: 'no-store' });
       if (res.ok) {
         const me = await res.json();
         return {
@@ -352,13 +404,24 @@ export async function verifyChatGptLogin({
       });
       probe = res?.result?.value || null;
       if (probe?.loggedIn) break;
-      if (probe?.status === 401 || probe?.status === 403) break;
+      if (probe?.expired || probe?.status === 401 || probe?.status === 403) break;
       await new Promise((r) => setTimeout(r, 400));
     }
 
     const actualEmail = String(probe?.email || '').trim();
     const expected = String(expectedEmail || '').trim();
     const loggedIn = Boolean(probe?.loggedIn);
+
+    if (probe?.expired) {
+      return {
+        status: 'expired',
+        loggedIn: false,
+        actualEmail,
+        expectedEmail: expected,
+        url: probe?.url || '',
+        message: '登录会话已过期或访问令牌被拒绝，请在操作窗内重新登录或更新授权 JSON'
+      };
+    }
 
     if (!loggedIn) {
       return {
@@ -435,8 +498,10 @@ export async function launchPrototypeWorkbenchSession({
     regionProxies
   });
 
+  const resolvedProxyUrl = resolveProxySessionOnce(proxyConfig.proxyUrl);
+
   const exitInfo = await verifyProxyExitCountry({
-    proxyUrl: proxyConfig.proxyUrl,
+    proxyUrl: resolvedProxyUrl,
     expectedCountry: proxyConfig.expectedCountry,
     probeFn
   });
@@ -444,7 +509,8 @@ export async function launchPrototypeWorkbenchSession({
   const safeProfileKey = `proto_${parsed.profileKey}`;
   const launchResult = await launchChromeFn({
     profileKey: safeProfileKey,
-    proxyUrl: proxyConfig.proxyUrl,
+    proxyUrl: resolvedProxyUrl,
+    skipSessionRotation: true,
     token: parsed.token,
     deviceId: parsed.deviceId,
     windowSize: '1280,800',
@@ -556,6 +622,7 @@ export async function attachPrototypeWsBridge({
             x: Math.round(Number(cmd.x) || 0),
             y: Math.round(Number(cmd.y) || 0),
             button: cmd.button || 'left',
+            buttons: cmd.eventType === 'mousePressed' ? 1 : 0,
             clickCount: Number(cmd.clickCount) || 1
           });
           break;

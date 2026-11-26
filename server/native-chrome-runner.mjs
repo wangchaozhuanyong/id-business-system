@@ -308,7 +308,54 @@ export async function injectCookiesAndNavigate(wsUrl, cookies, targetUrl = 'http
       try {
         await send('Network.enable');
         if (Array.isArray(cookies) && cookies.length > 0) {
-          await send('Network.setCookies', { cookies });
+          const sessionCookies = cookies.filter((c) => /^__Secure-next-auth\.session-token(?:\.\d+)?$/.test(c.name));
+          const otherCookies = cookies.filter((c) => !/^__Secure-next-auth\.session-token(?:\.\d+)?$/.test(c.name));
+
+          let shouldSetSession = sessionCookies.length > 0;
+          if (shouldSetSession) {
+            const existingRes = await send('Network.getCookies', {
+              urls: ['https://chatgpt.com/', 'https://chatgpt.com/api/auth/session']
+            });
+            const existing = Array.isArray(existingRes?.cookies) ? existingRes.cookies : [];
+            const currentSession = existing.filter(
+              (c) =>
+                c &&
+                typeof c.name === 'string' &&
+                /^__Secure-next-auth\.session-token(?:\.\d+)?$/.test(c.name) &&
+                typeof c.domain === 'string' &&
+                c.domain.replace(/^\./, '') === 'chatgpt.com' &&
+                c.path === '/'
+            );
+            const expectedJoined = sessionCookies.map((c) => c.value).join('');
+            const currentPlain = currentSession.filter((c) => c.name === '__Secure-next-auth.session-token');
+            const currentChunks = currentSession
+              .filter((c) => c.name !== '__Secure-next-auth.session-token')
+              .sort((a, b) => Number(a.name.split('.').at(-1)) - Number(b.name.split('.').at(-1)));
+
+            const unchanged =
+              (currentPlain.length === 1 && !currentChunks.length && currentPlain[0].value === expectedJoined) ||
+              (!currentPlain.length &&
+                currentChunks.length > 0 &&
+                currentChunks.every((c, idx) => c.name === `__Secure-next-auth.session-token.${idx}`) &&
+                currentChunks.map((c) => c.value).join('') === expectedJoined);
+
+            if (unchanged) {
+              shouldSetSession = false;
+            } else {
+              for (const old of currentSession) {
+                await send('Network.deleteCookies', {
+                  name: old.name,
+                  domain: old.domain,
+                  path: old.path
+                });
+              }
+            }
+          }
+
+          const toWrite = [...(shouldSetSession ? sessionCookies : []), ...otherCookies];
+          if (toWrite.length > 0) {
+            await send('Network.setCookies', { cookies: toWrite });
+          }
         }
         await send('Page.navigate', { url: targetUrl });
         ws.close();
@@ -423,7 +470,8 @@ export async function launchNativeChrome({
   windowSize = '1520,960',
   ownerId = '',
   exitInfo = null,
-  targetUrl = 'https://chatgpt.com/'
+  targetUrl = 'https://chatgpt.com/',
+  skipSessionRotation = false
 } = {}) {
   const executable = findChromeExecutable();
   if (!executable) {
@@ -460,7 +508,9 @@ export async function launchNativeChrome({
     const parsedProxy = parseProxyServerConfig(proxyUrl);
     if (parsedProxy) {
       if (parsedProxy.username && parsedProxy.password) {
-        const resolvedUsername = resolveDynamicProxySession(parsedProxy.username);
+        const resolvedUsername = skipSessionRotation
+          ? parsedProxy.username
+          : resolveDynamicProxySession(parsedProxy.username);
         const tunnel = await createLocalProxyTunnel({
           upstreamHost: parsedProxy.host,
           upstreamPort: parsedProxy.port,
@@ -508,10 +558,10 @@ export async function launchNativeChrome({
   });
   child.unref();
 
-  const debugInfo = await waitForDebuggerReady(port);
-  const wsUrl = debugInfo.webSocketDebuggerUrl;
+  await waitForDebuggerReady(port);
+  const wsUrl = await getPageTargetWsUrl(port);
 
-  // Build the complete cookie set:
+  // Build the complete cookie set (host-only url matching direct-login.mjs):
   const cookiesToSet = [];
   if (token) {
     const chunks = token.match(/.{1,3936}/g) || [token];
@@ -519,8 +569,7 @@ export async function launchNativeChrome({
       cookiesToSet.push({
         name: '__Secure-next-auth.session-token' + (chunks.length > 1 ? `.${i}` : ''),
         value: chunks[i],
-        domain: '.chatgpt.com',
-        path: '/',
+        url: 'https://chatgpt.com/',
         httpOnly: true,
         secure: true,
         sameSite: 'Lax'
@@ -532,8 +581,7 @@ export async function launchNativeChrome({
     cookiesToSet.push({
       name: 'oai-did',
       value: deviceId,
-      domain: '.chatgpt.com',
-      path: '/',
+      url: 'https://chatgpt.com/',
       httpOnly: false,
       secure: true,
       sameSite: 'Lax'

@@ -295,11 +295,10 @@ body.proto-body {
 
 #protoCanvas {
   display: block;
-  width: 100%;
-  height: auto;
+  max-width: 100%;
   max-height: calc(100vh - 230px);
-  aspect-ratio: 1280 / 800;
-  object-fit: contain;
+  width: auto;
+  height: auto;
   outline: none;
   cursor: default;
 }

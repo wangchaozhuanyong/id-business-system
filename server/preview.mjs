@@ -852,6 +852,66 @@ export async function startPreview(
       if (!actor || !canManage) return forbidden();
       return void extractBitProxy(request, response, actor);
     }
+    if (route.startsWith('/api/local/native-workbench-prototype/')) {
+      if (!canManage) return forbidden();
+      const requestOrigin = secureOrigin || `http://${request.headers.host}`;
+      if (request.headers.origin && request.headers.origin !== requestOrigin) {
+        response.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+        return response.end(JSON.stringify({ error: '仅允许从当前页面操作' }));
+      }
+      if (request.method !== 'POST') {
+        return response.writeHead(405, { Allow: 'POST' }).end();
+      }
+      const action = route.slice('/api/local/native-workbench-prototype/'.length);
+      const ownerId = actor?.id || 'local-operator';
+      const sendJson = (status, payload) => {
+        response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
+        return response.end(JSON.stringify(payload));
+      };
+      return void (async () => {
+        try {
+          const chunks = [];
+          let total = 0;
+          for await (const chunk of request) {
+            total += chunk.length;
+            if (total > 1024 * 1024) throw new NativeBrowserError(413, '请求体过大');
+            chunks.push(chunk);
+          }
+          const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {};
+          if (action === 'launch') {
+            return sendJson(200, await launchPrototypeWorkbenchSession({
+              sessionJson: body?.sessionJson,
+              proxyRegion: body?.proxyRegion,
+              customProxyUrl: body?.customProxyUrl,
+              ownerId
+            }));
+          }
+          if (action === 'close') {
+            const profileKey = String(body?.profileKey || '');
+            const browser = profileKey.startsWith('proto_') ? getActiveBrowser(profileKey) : null;
+            if (browser && (!browser.ownerId || browser.ownerId === ownerId)) {
+              return sendJson(200, { ok: true, closed: closeNativeBrowser(profileKey) });
+            }
+            return sendJson(200, { ok: true, closed: false });
+          }
+          if (action === 'verify-login') {
+            const profileKey = String(body?.profileKey || '');
+            const browser = profileKey.startsWith('proto_') ? getActiveBrowser(profileKey) : null;
+            if (!browser || (browser.ownerId && browser.ownerId !== ownerId)) {
+              return sendJson(404, { error: '浏览器实例未运行' });
+            }
+            return sendJson(200, await verifyChatGptLogin({
+              port: browser.port,
+              expectedEmail: body?.expectedEmail || ''
+            }));
+          }
+          return sendJson(404, { error: '不支持的原型操作' });
+        } catch (error) {
+          const status = error instanceof NativeBrowserError ? error.status : (error instanceof SyntaxError ? 400 : 500);
+          return sendJson(status, { error: error?.message || '原型操作失败' });
+        }
+      })();
+    }
     if (store && route.startsWith('/api/local/')) {
       if (loginRequired && !actor) return forbidden();
       return void localBusiness.handleLocalBusiness(request, response, route, store, actor, {
@@ -870,6 +930,20 @@ export async function startPreview(
       });
     }
 
+    if (route === '/integrations/native-workbench/prototype') {
+      if (!canManage) return forbidden();
+      if (request.method !== 'GET' && request.method !== 'HEAD') {
+        return response.writeHead(405, { Allow: 'GET, HEAD' }).end();
+      }
+      response.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Content-Length': nativePrototypeHtml.length,
+        'Cache-Control': 'no-cache, no-store, must-revalidate, max-age=0',
+        'Content-Security-Policy':
+          "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self' ws: wss:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'"
+      });
+      return response.end(request.method === 'HEAD' ? undefined : nativePrototypeHtml);
+    }
     if (route === '/integrations/bitbrowser/local-login') {
       if (!canManage) return forbidden();
       if (request.method !== 'GET' && request.method !== 'HEAD') {
@@ -982,20 +1056,44 @@ export async function startPreview(
     server.once('listening', syncOrders);
     server.once('close', () => clearInterval(timer));
   }
-  if (codexdaichong || rechargeConfig) {
-    server.on('upgrade', (request, socket, head) => {
-      const address = server.address();
-      if (
-        !allowsHost(request.headers.host, address.port) ||
-        request.url !== '/integrations/codexdaichong/socket' ||
-        ((auth || rechargeConfig) && !['admin', 'super'].includes(auth?.getActor(request)?.role))
-      ) {
+  server.on('upgrade', (request, socket, head) => {
+    const address = server.address();
+    if (!allowsHost(request.headers.host, address.port)) {
+      socket.destroy();
+      return;
+    }
+    const reqUrl = new URL(request.url || '/', `http://${request.headers.host || '127.0.0.1'}`);
+    if (reqUrl.pathname === '/integrations/native-workbench/ws') {
+      const actor = auth ? auth.getActor(request) : null;
+      const canManage = !auth || managesBusiness(actor);
+      if (!canManage) {
         socket.destroy();
         return;
       }
+      const profileKey = reqUrl.searchParams.get('profileKey') || '';
+      if (!profileKey.startsWith('proto_')) {
+        socket.destroy();
+        return;
+      }
+      const ws = acceptWebSocketUpgrade(request, socket, head);
+      if (!ws) return;
+      void attachPrototypeWsBridge({
+        ws,
+        profileKey,
+        ownerId: actor?.id || 'local-operator'
+      });
+      return;
+    }
+    if (
+      (codexdaichong || rechargeConfig) &&
+      reqUrl.pathname === '/integrations/codexdaichong/socket' &&
+      !((auth || rechargeConfig) && !['admin', 'super'].includes(auth?.getActor(request)?.role))
+    ) {
       gatewayFor(request.headers.host).upgrade(request, socket, head);
-    });
-  }
+      return;
+    }
+    socket.destroy();
+  });
   let storefrontAdmission;
   if (storefrontAdmissionDirectory) {
     try {
