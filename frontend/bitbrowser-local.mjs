@@ -378,6 +378,333 @@ function initializeNativeWorkbench() {
     }
   });
 
+  // 云端内嵌浏览器操作窗控制器
+  const remoteDialog = get('wb-remote-browser-dialog');
+  const remoteEmailBadge = get('wb-remote-email');
+  const remoteProxyBadge = get('wb-remote-proxy');
+  const remoteLoginBadge = get('wb-remote-login');
+  const remoteRecheckBtn = get('wb-remote-recheck');
+  const remoteStopBtn = get('wb-remote-stop');
+  const remoteHideBtn = get('wb-remote-hide');
+  const remoteBackBtn = get('wb-remote-back');
+  const remoteReloadBtn = get('wb-remote-reload');
+  const remoteUrlInput = get('wb-remote-url');
+  const remoteGoBtn = get('wb-remote-go');
+  const remotePasteInput = get('wb-remote-paste-input');
+  const remotePasteSend = get('wb-remote-paste-send');
+  const remoteCanvas = get('wb-remote-canvas');
+  const remoteOverlay = get('wb-remote-overlay');
+  const remoteStatusEl = get('wb-remote-status');
+  const remoteCtx = remoteCanvas?.getContext('2d') || null;
+
+  let remoteWs = null;
+  let remoteViewportWidth = 1280;
+  let remoteViewportHeight = 800;
+  let remoteRendering = false;
+  let remoteLastMouseMove = 0;
+  let activeRemoteAccountId = '';
+  let activeRemoteEmail = '';
+
+  function setRemotePill(el, text, kind = 'muted') {
+    if (!el) return;
+    el.textContent = text;
+    el.className = `wb-remote-pill wb-remote-pill--${kind}`;
+  }
+
+  function applyRemoteLoginVerification(verification) {
+    if (!verification) {
+      setRemotePill(remoteLoginBadge, '登录态: 核验中', 'muted');
+      return;
+    }
+    switch (verification.status) {
+      case 'matched':
+        setRemotePill(remoteLoginBadge, `已核验: ${verification.actualEmail || verification.expectedEmail}`, 'ok');
+        break;
+      case 'logged_in_unverified':
+        setRemotePill(remoteLoginBadge, '已登录（未完全核验邮箱）', 'warn');
+        break;
+      case 'mismatch':
+        setRemotePill(remoteLoginBadge, `账号不匹配: ${verification.actualEmail}`, 'err');
+        break;
+      case 'expired':
+        setRemotePill(remoteLoginBadge, '会话已过期（请更新 JSON）', 'err');
+        break;
+      case 'unauthenticated':
+        setRemotePill(remoteLoginBadge, '未登录（需在窗内手动登录）', 'warn');
+        break;
+      default:
+        setRemotePill(remoteLoginBadge, '核验异常', 'err');
+    }
+    if (verification.message && remoteStatusEl) {
+      remoteStatusEl.textContent = verification.message;
+    }
+  }
+
+  function applyRemoteExitInfo(exitInfo) {
+    if (exitInfo?.ip) {
+      const loc = exitInfo.country ? ` (${exitInfo.country})` : '';
+      setRemotePill(remoteProxyBadge, `出口: ${exitInfo.ip}${loc}`, exitInfo.country ? 'ok' : 'warn');
+    } else {
+      setRemotePill(remoteProxyBadge, '出口: 直连 / 自动', 'muted');
+    }
+  }
+
+  function sendRemoteWs(payload) {
+    if (remoteWs && remoteWs.readyState === WebSocket.OPEN) {
+      remoteWs.send(JSON.stringify(payload));
+    }
+  }
+
+  function disconnectRemoteWs() {
+    if (remoteWs) {
+      try {
+        remoteWs.close();
+      } catch {}
+      remoteWs = null;
+    }
+  }
+
+  async function drawRemoteFrame(base64Data, metadata) {
+    if (remoteRendering || !base64Data || !remoteCtx || !remoteCanvas) return;
+    remoteRendering = true;
+    try {
+      if (metadata?.deviceWidth > 0 && metadata?.deviceHeight > 0) {
+        if (remoteViewportWidth !== metadata.deviceWidth || remoteViewportHeight !== metadata.deviceHeight) {
+          remoteViewportWidth = metadata.deviceWidth;
+          remoteViewportHeight = metadata.deviceHeight;
+          remoteCanvas.width = remoteViewportWidth;
+          remoteCanvas.height = remoteViewportHeight;
+        }
+      }
+      const binary = atob(base64Data);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      const blob = new Blob([bytes], { type: 'image/jpeg' });
+      const bitmap = await createImageBitmap(blob);
+      remoteCtx.drawImage(bitmap, 0, 0, remoteCanvas.width, remoteCanvas.height);
+      bitmap.close();
+      if (remoteOverlay) remoteOverlay.hidden = true;
+    } catch {
+      // 忽略单帧解码异常
+    } finally {
+      remoteRendering = false;
+    }
+  }
+
+  function openRemoteBrowserModal({ accountId = '', profileKey = '', email = '', exitInfo = null, loginVerification = null } = {}) {
+    if (!remoteDialog || !profileKey) return;
+    activeRemoteAccountId = accountId;
+    activeRemoteEmail = email;
+    setRemotePill(remoteEmailBadge, email || profileKey, 'muted');
+    applyRemoteExitInfo(exitInfo);
+    applyRemoteLoginVerification(loginVerification);
+    if (remoteOverlay) {
+      remoteOverlay.textContent = '正在连接云端浏览器画面…';
+      remoteOverlay.hidden = false;
+    }
+    if (remoteCtx && remoteCanvas) {
+      remoteCtx.clearRect(0, 0, remoteCanvas.width, remoteCanvas.height);
+    }
+    if (typeof remoteDialog.showModal === 'function' && !remoteDialog.open) {
+      remoteDialog.showModal();
+    }
+
+    disconnectRemoteWs();
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsUrl = `${proto}//${location.host}/integrations/native-workbench/ws?profileKey=${encodeURIComponent(profileKey)}`;
+    remoteWs = new WebSocket(wsUrl);
+
+    remoteWs.onopen = () => {
+      remoteCanvas?.focus();
+    };
+
+    remoteWs.onmessage = (event) => {
+      let msg;
+      try {
+        msg = JSON.parse(event.data);
+      } catch {
+        return;
+      }
+      if (msg.type === 'ready') {
+        if (msg.exitInfo) applyRemoteExitInfo(msg.exitInfo);
+      } else if (msg.type === 'frame') {
+        void drawRemoteFrame(msg.data, msg.metadata);
+      } else if (msg.type === 'navigated' && msg.url && remoteUrlInput) {
+        remoteUrlInput.value = msg.url;
+      } else if (msg.type === 'loginVerification') {
+        applyRemoteLoginVerification(msg.verification);
+      } else if (msg.type === 'error') {
+        if (remoteOverlay) {
+          remoteOverlay.textContent = msg.message || '云端浏览器连接异常';
+          remoteOverlay.hidden = false;
+        }
+        if (remoteStatusEl) remoteStatusEl.textContent = msg.message || '操作窗通信错误';
+      }
+    };
+
+    remoteWs.onclose = () => {
+      if (remoteDialog.open && remoteStatusEl) {
+        remoteStatusEl.textContent = '操作窗连接已断开；可重新点击“进入操作窗”恢复连接';
+      }
+    };
+  }
+
+  function mapRemoteCanvasCoords(event) {
+    const rect = remoteCanvas.getBoundingClientRect();
+    const scaleX = remoteViewportWidth / Math.max(rect.width, 1);
+    const scaleY = remoteViewportHeight / Math.max(rect.height, 1);
+    return {
+      x: Math.max(0, Math.min(remoteViewportWidth, Math.round((event.clientX - rect.left) * scaleX))),
+      y: Math.max(0, Math.min(remoteViewportHeight, Math.round((event.clientY - rect.top) * scaleY)))
+    };
+  }
+
+  function remoteMouseButton(button) {
+    if (button === 1) return 'middle';
+    if (button === 2) return 'right';
+    return 'left';
+  }
+
+  function remoteKeyModifiers(event) {
+    return (
+      (event.altKey ? 1 : 0) |
+      (event.ctrlKey ? 2 : 0) |
+      (event.metaKey ? 4 : 0) |
+      (event.shiftKey ? 8 : 0)
+    );
+  }
+
+  remoteCanvas?.addEventListener('mousedown', (event) => {
+    remoteCanvas.focus();
+    const pos = mapRemoteCanvasCoords(event);
+    sendRemoteWs({
+      type: 'mouse',
+      eventType: 'mousePressed',
+      ...pos,
+      button: remoteMouseButton(event.button),
+      clickCount: 1
+    });
+  });
+
+  remoteCanvas?.addEventListener('mouseup', (event) => {
+    const pos = mapRemoteCanvasCoords(event);
+    sendRemoteWs({
+      type: 'mouse',
+      eventType: 'mouseReleased',
+      ...pos,
+      button: remoteMouseButton(event.button),
+      clickCount: 1
+    });
+  });
+
+  remoteCanvas?.addEventListener('mousemove', (event) => {
+    const now = performance.now();
+    if (now - remoteLastMouseMove < 40) return;
+    remoteLastMouseMove = now;
+    const pos = mapRemoteCanvasCoords(event);
+    sendRemoteWs({ type: 'mouse', eventType: 'mouseMoved', ...pos, button: 'none', clickCount: 0 });
+  });
+
+  remoteCanvas?.addEventListener('wheel', (event) => {
+    event.preventDefault();
+    const pos = mapRemoteCanvasCoords(event);
+    sendRemoteWs({ type: 'wheel', ...pos, deltaX: event.deltaX, deltaY: event.deltaY });
+  }, { passive: false });
+
+  remoteCanvas?.addEventListener('contextmenu', (event) => event.preventDefault());
+
+  remoteCanvas?.addEventListener('keydown', (event) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'v') {
+      return;
+    }
+    event.preventDefault();
+    const modifiers = remoteKeyModifiers(event);
+    if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      sendRemoteWs({ type: 'text', text: event.key });
+      return;
+    }
+    sendRemoteWs({
+      type: 'key',
+      eventType: 'keyDown',
+      key: event.key,
+      code: event.code,
+      keyCode: event.keyCode,
+      modifiers
+    });
+  });
+
+  remoteCanvas?.addEventListener('keyup', (event) => {
+    if (event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey) return;
+    sendRemoteWs({
+      type: 'key',
+      eventType: 'keyUp',
+      key: event.key,
+      code: event.code,
+      keyCode: event.keyCode,
+      modifiers: remoteKeyModifiers(event)
+    });
+  });
+
+  remoteCanvas?.addEventListener('paste', (event) => {
+    const text = event.clipboardData?.getData('text/plain');
+    if (text) {
+      event.preventDefault();
+      sendRemoteWs({ type: 'text', text });
+    }
+  });
+
+  remoteBackBtn?.addEventListener('click', () => sendRemoteWs({ type: 'back' }));
+  remoteReloadBtn?.addEventListener('click', () => sendRemoteWs({ type: 'reload' }));
+  remoteGoBtn?.addEventListener('click', () => {
+    const url = remoteUrlInput?.value.trim();
+    if (url) sendRemoteWs({ type: 'navigate', url });
+  });
+  remoteUrlInput?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      remoteGoBtn?.click();
+    }
+  });
+  remotePasteSend?.addEventListener('click', () => {
+    const text = remotePasteInput?.value;
+    if (text) {
+      sendRemoteWs({ type: 'text', text });
+      remotePasteInput.value = '';
+      remoteCanvas?.focus();
+    }
+  });
+  remotePasteInput?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      remotePasteSend?.click();
+    }
+  });
+  remoteRecheckBtn?.addEventListener('click', () => {
+    setRemotePill(remoteLoginBadge, '正在核验…', 'muted');
+    sendRemoteWs({ type: 'recheckLogin', expectedEmail: activeRemoteEmail });
+  });
+  remoteHideBtn?.addEventListener('click', () => {
+    disconnectRemoteWs();
+    if (remoteDialog?.open) remoteDialog.close();
+  });
+  remoteStopBtn?.addEventListener('click', async () => {
+    disconnectRemoteWs();
+    if (activeRemoteAccountId) {
+      try {
+        await fetch('/api/local/native-browser-workbench?action=close', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: activeRemoteAccountId })
+        });
+      } catch {}
+    }
+    if (remoteDialog?.open) remoteDialog.close();
+    await loadAccounts();
+  });
+  remoteDialog?.addEventListener('close', () => {
+    disconnectRemoteWs();
+  });
+
   // 代理选路变更
   wbProxyRegion?.addEventListener('change', updateProxyHintText);
 
@@ -511,8 +838,9 @@ function initializeNativeWorkbench() {
             <td style="font-size: 12.5px;">${escapeHtml(item.renewalNotes || '—')}</td>
             <td style="text-align: right; white-space: nowrap;">
               ${item.isRunning
-                ? `<button type="button" class="button button--small button--warning wb-btn-close" data-id="${escapeHtml(item.id)}" title="关闭浏览器并立即切断代理连接">关闭窗口</button>`
-                : `<button type="button" class="button button--small button--primary wb-btn-launch" data-id="${escapeHtml(item.id)}">打开浏览器</button>`
+                ? `<button type="button" class="button button--small button--primary wb-btn-attach" data-id="${escapeHtml(item.id)}" data-profile-key="${escapeHtml(item.profileKey)}" data-email="${escapeHtml(item.email)}">进入操作窗</button>
+                   <button type="button" class="button button--small button--warning wb-btn-close" data-id="${escapeHtml(item.id)}" title="关闭浏览器并立即切断代理连接">关闭窗口</button>`
+                : `<button type="button" class="button button--small button--primary wb-btn-launch" data-id="${escapeHtml(item.id)}" data-email="${escapeHtml(item.email)}">打开浏览器</button>`
               }
               <button type="button" class="button button--small wb-btn-update-json" data-id="${escapeHtml(item.id)}" data-email="${escapeHtml(item.email)}" title="会话过期时，更换最新授权 JSON">更换 JSON</button>
               <button type="button" class="button button--small wb-btn-mark-active" data-id="${escapeHtml(item.id)}" title="标记为已开通Plus">标记开通</button>
@@ -534,9 +862,20 @@ function initializeNativeWorkbench() {
       });
     });
 
+    wbTbody.querySelectorAll('.wb-btn-attach').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        openRemoteBrowserModal({
+          accountId: btn.getAttribute('data-id') || '',
+          profileKey: btn.getAttribute('data-profile-key') || '',
+          email: btn.getAttribute('data-email') || ''
+        });
+      });
+    });
+
     wbTbody.querySelectorAll('.wb-btn-launch').forEach((btn) => {
       btn.addEventListener('click', async () => {
         const id = btn.getAttribute('data-id');
+        const email = btn.getAttribute('data-email') || '';
         btn.disabled = true;
         btn.textContent = '启动中…';
         try {
@@ -547,8 +886,14 @@ function initializeNativeWorkbench() {
           });
           const result = await res.json();
           if (!res.ok) throw new Error(result.error || '拉起浏览器失败');
-          alert('✓ 浏览器窗口已在屏幕前打开，请在窗口中手动点击续费');
           await loadAccounts();
+          openRemoteBrowserModal({
+            accountId: id,
+            profileKey: result.profileKey || result.account?.profileKey || '',
+            email: result.account?.email || email,
+            exitInfo: result.exitInfo || null,
+            loginVerification: result.loginVerification || null
+          });
         } catch (err) {
           alert(`启动失败: ${err.message}`);
         } finally {
@@ -702,12 +1047,18 @@ function initializeNativeWorkbench() {
       if (!res.ok) throw new Error(data.error || '更新凭据失败');
 
       closeUpdateDialog();
-      if (autoLaunch) {
-        alert('✓ 凭据已更新！浏览器窗口已在屏幕前打开，请在窗口中手动点击续费');
+      await loadAccounts();
+      if (autoLaunch && data.launch) {
+        openRemoteBrowserModal({
+          accountId: id,
+          profileKey: data.launch.profileKey || data.launch.account?.profileKey || data.record?.profileKey || '',
+          email: data.launch.account?.email || data.record?.email || '',
+          exitInfo: data.launch.exitInfo || null,
+          loginVerification: data.launch.loginVerification || null
+        });
       } else {
         alert('✓ 凭据已成功更新');
       }
-      await loadAccounts();
     } catch (err) {
       alert(`更新失败: ${err.message}`);
     } finally {
@@ -749,7 +1100,7 @@ function initializeNativeWorkbench() {
       if (!res.ok) throw new Error(data.error || '保存账号记录失败');
 
       if (andOpen && data.record?.id) {
-        if (targetBtn) targetBtn.textContent = '正在拉起指纹浏览器…';
+        if (targetBtn) targetBtn.textContent = '正在拉起云端操作窗…';
         const launchRes = await fetch('/api/local/native-browser-workbench?action=launch', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -757,7 +1108,18 @@ function initializeNativeWorkbench() {
         });
         const launchData = await launchRes.json();
         if (!launchRes.ok) throw new Error(launchData.error || '拉起浏览器失败');
-        alert('✓ 账号已保存，专属指纹浏览器已成功打开并保持登录状态！');
+        wbJsonInput.value = '';
+        if (wbNotesInput) wbNotesInput.value = '';
+        parseInputJson();
+        await loadAccounts();
+        openRemoteBrowserModal({
+          accountId: data.record.id,
+          profileKey: launchData.profileKey || launchData.account?.profileKey || data.record.profileKey || '',
+          email: launchData.account?.email || data.record.email || '',
+          exitInfo: launchData.exitInfo || null,
+          loginVerification: launchData.loginVerification || null
+        });
+        return;
       } else {
         alert('✓ 账号已成功保存至下方数据表');
       }

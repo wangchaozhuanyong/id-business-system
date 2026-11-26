@@ -149,3 +149,11 @@ test('store manages operator-isolated proxy preference and valid regions', async
   const updated2 = store.loadNativeWorkbenchPreferences(actor2);
   assert.equal(updated2.defaultProxyRegion, 'auto');
 });
+
+test('launchWorkbenchBrowser throws 404 for unknown id and supports owner/window options', async () => {
+  const { launchWorkbenchBrowser } = await import('../server/native-browser-workbench.mjs');
+  await assert.rejects(
+    () => launchWorkbenchBrowser([], 'missing-id', { ownerId: 'emp_1' }),
+    (err) => err instanceof NativeWorkbenchError && err.status === 404
+  );
+});

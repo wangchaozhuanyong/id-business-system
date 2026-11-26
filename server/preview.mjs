@@ -1071,7 +1071,7 @@ export async function startPreview(
         return;
       }
       const profileKey = reqUrl.searchParams.get('profileKey') || '';
-      if (!profileKey.startsWith('proto_')) {
+      if (!profileKey.startsWith('proto_') && !profileKey.startsWith('chatgpt_')) {
         socket.destroy();
         return;
       }

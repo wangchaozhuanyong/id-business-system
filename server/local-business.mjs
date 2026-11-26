@@ -82,6 +82,12 @@ import {
   closeWorkbenchBrowser
 } from './native-browser-workbench.mjs';
 import { NativeBrowserError } from './native-chrome-runner.mjs';
+import {
+  resolveWorkbenchProxy,
+  resolveProxySessionOnce,
+  verifyProxyExitCountry,
+  verifyChatGptLogin
+} from './native-browser-session.mjs';
 import { bitBrowserProxyDomain, validateBitBrowserProxyWrite, summarizeBitBrowserProxies, readBitBrowserProxy } from './bitbrowser-proxies.mjs';
 import { checkAppleIdHealthChanges, checkInventoryHistory } from './inventory-history.mjs';
 import { createRelayDeliveryJournal } from './apple-relay/code-reset.mjs';
@@ -2259,14 +2265,74 @@ export function createLocalBusinessStore(databasePath) {
     async launchNativeWorkbenchBrowser(body, actor = localToolboxActor) {
       const domain = `${nativeWorkbenchDomain}:${actor.id}`;
       const current = readDocument(domain);
-      const launchRes = await launchWorkbenchBrowser(current.data ?? [], body?.id, { customProxyUrl: body?.proxyUrl });
+      const { launchRes, exitInfo, loginVerification } = await (async () => {
+        const records = current.data ?? [];
+        const target = records.find((row) => row.id === body?.id);
+        if (!target) {
+          throw new NativeWorkbenchError(404, '该账号记录不存在');
+        }
+        return this._launchWorkbenchSession(records, target, {
+          proxyRegion: body?.proxyRegion ?? target.proxyRegion ?? 'auto',
+          proxyUrl: body?.proxyUrl || '',
+          actor
+        });
+      })();
       writeTransaction(() => {
         const version = current.version + 1;
         put.run(domain, version, encrypt(key, domain, version, JSON.stringify(launchRes.records)));
         log.run(new Date().toISOString(), nativeWorkbenchDomain, 'native_browser_launch',
           auditSummary('拉起原生代充浏览器', actor, body?.id), version);
       });
-      return { ok: true, account: launchRes.account, result: launchRes.result };
+      return {
+        ok: true,
+        profileKey: launchRes.account?.profileKey || launchRes.result?.profileKey || '',
+        account: launchRes.account,
+        exitInfo,
+        loginVerification,
+        result: launchRes.result
+      };
+    },
+    async _launchWorkbenchSession(records, target, { proxyRegion = 'auto', proxyUrl = '', actor = localToolboxActor } = {}) {
+      let resolvedProxyUrl = '';
+      let exitInfo = null;
+      if (String(proxyRegion).toLowerCase() !== 'direct') {
+        const proxyConfig = resolveWorkbenchProxy({
+          proxyRegion,
+          customProxyUrl: proxyUrl,
+          savedProxyUrl: target.proxyUrl || ''
+        });
+        if (proxyConfig.proxyUrl) {
+          resolvedProxyUrl = resolveProxySessionOnce(proxyConfig.proxyUrl);
+          exitInfo = await verifyProxyExitCountry({
+            proxyUrl: resolvedProxyUrl,
+            expectedCountry: proxyConfig.expectedCountry
+          });
+          exitInfo = { ...exitInfo, region: proxyConfig.region, regionLabel: proxyConfig.regionLabel };
+        }
+      }
+      const launchRes = await launchWorkbenchBrowser(records, target.id, {
+        customProxyUrl: resolvedProxyUrl,
+        ownerId: actor.id,
+        windowSize: '1280,800',
+        exitInfo,
+        skipSessionRotation: Boolean(resolvedProxyUrl)
+      });
+      let loginVerification = null;
+      if (launchRes.result?.port) {
+        try {
+          loginVerification = await verifyChatGptLogin({
+            port: launchRes.result.port,
+            expectedEmail: launchRes.account?.email || ''
+          });
+        } catch (err) {
+          loginVerification = {
+            status: 'error',
+            loggedIn: false,
+            message: err?.message || '登录核验失败'
+          };
+        }
+      }
+      return { launchRes, exitInfo, loginVerification };
     },
     closeNativeWorkbenchBrowser(body, actor = localToolboxActor) {
       const domain = `${nativeWorkbenchDomain}:${actor.id}`;
@@ -2281,11 +2347,15 @@ export function createLocalBusinessStore(databasePath) {
       const current = readDocument(domain);
       const { record, records } = updateAccountSessionJson(current.data ?? [], body?.id, body?.sessionJson);
 
-      let launchRes = null;
+      let launchSession = null;
       let finalRecords = records;
       if (body?.autoLaunch) {
-        launchRes = await launchWorkbenchBrowser(records, record.id, { customProxyUrl: body?.proxyUrl });
-        finalRecords = launchRes.records;
+        launchSession = await this._launchWorkbenchSession(records, record, {
+          proxyRegion: body?.proxyRegion ?? record.proxyRegion ?? 'auto',
+          proxyUrl: body?.proxyUrl || '',
+          actor
+        });
+        finalRecords = launchSession.launchRes.records;
       }
 
       writeTransaction(() => {
@@ -2298,7 +2368,15 @@ export function createLocalBusinessStore(databasePath) {
       return {
         ok: true,
         record,
-        launch: launchRes ? { ok: true, account: launchRes.account } : null
+        launch: launchSession
+          ? {
+              ok: true,
+              profileKey: launchSession.launchRes.account?.profileKey || launchSession.launchRes.result?.profileKey || '',
+              account: launchSession.launchRes.account,
+              exitInfo: launchSession.exitInfo,
+              loginVerification: launchSession.loginVerification
+            }
+          : null
       };
     },
     loadNativeWorkbenchPreferences(actor = localToolboxActor) {
