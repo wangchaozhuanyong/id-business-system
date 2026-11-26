@@ -260,7 +260,13 @@ export function removeWorkbenchAccount(records = [], id) {
 /**
  * Execute native Chrome launch for an account.
  */
-export async function launchWorkbenchBrowser(records = [], id, { customProxyUrl = '' } = {}) {
+export async function launchWorkbenchBrowser(records = [], id, {
+  customProxyUrl = '',
+  ownerId = '',
+  windowSize = '1280,800',
+  exitInfo = null,
+  skipSessionRotation = false
+} = {}) {
   const entries = Array.isArray(records) ? [...records] : [];
   const index = entries.findIndex((row) => row.id === id);
   if (index < 0) {
@@ -272,8 +278,12 @@ export async function launchWorkbenchBrowser(records = [], id, { customProxyUrl 
   const result = await launchNativeChrome({
     profileKey: account.profileKey,
     proxyUrl,
+    skipSessionRotation,
     token: account.token,
-    deviceId: account.deviceId
+    deviceId: account.deviceId,
+    windowSize,
+    ownerId,
+    exitInfo
   });
 
   const now = new Date().toISOString();
@@ -286,6 +296,9 @@ export async function launchWorkbenchBrowser(records = [], id, { customProxyUrl 
     account: {
       id: account.id,
       email: account.email,
+      profileKey: account.profileKey,
+      proxyRegion: account.proxyRegion || 'auto',
+      proxySummary: account.proxySummary || '',
       lastOpenedAt: now
     },
     records: entries

@@ -389,28 +389,39 @@
     </div>
     <footer class="bit-local__drawer-footer"><button class="button" id="bit-ip-test" type="button">测试代理</button><button class="button" id="bit-ip-close" type="button">取消</button><button class="button primary" id="bit-ip-save" type="button">保存并使用</button></footer>
   </dialog>
-  <dialog id="wb-update-json-dialog" class="bit-local__proxy-editor" aria-labelledby="wb-update-json-title">
-    <header class="bit-local__drawer-header">
-      <h2 id="wb-update-json-title">更换授权 JSON</h2>
-      <button class="button" id="wb-update-json-dismiss" type="button" aria-label="关闭更换窗口">关闭</button>
-    </header>
-    <div class="bit-local__drawer-body">
-      <div class="field">
-        <label>目标账号邮箱</label>
-        <input id="wb-update-json-email" readonly class="input" style="font-weight: 500;" />
-      </div>
-      <div class="field">
-        <label for="wb-update-json-textarea">最新授权 JSON<span class="required">*</span></label>
-        <textarea id="wb-update-json-textarea" class="textarea" rows="5" placeholder="粘贴该账号最新的单账户授权 JSON…"></textarea>
-        <p id="wb-update-json-status" class="field-help" role="status">请粘贴该账号最新的授权 JSON</p>
-      </div>
-    </div>
-    <footer class="bit-local__drawer-footer">
-      <button class="button" id="wb-update-json-cancel" type="button">取消</button>
-      <button class="button" id="wb-update-json-save-only" type="button">仅更新凭据</button>
-      <button class="button button--primary primary" id="wb-update-json-save-and-launch" type="button">更新并立即打开登录</button>
-    </footer>
-  </dialog>
 </form>
+
+<dialog id="wb-remote-browser-dialog" class="wb-remote-dialog" aria-labelledby="wb-remote-title">
+  <header class="wb-remote-dialog__header">
+    <div class="wb-remote-dialog__meta">
+      <h2 id="wb-remote-title">云端充值操作窗</h2>
+      <span id="wb-remote-email" class="wb-remote-pill wb-remote-pill--muted">—</span>
+      <span id="wb-remote-proxy" class="wb-remote-pill wb-remote-pill--muted">出口: 检测中</span>
+      <span id="wb-remote-login" class="wb-remote-pill wb-remote-pill--muted">登录态: 核验中</span>
+    </div>
+    <div class="wb-remote-dialog__actions">
+      <button class="button button--small" id="wb-remote-recheck" type="button">核验登录态</button>
+      <button class="button button--small button--warning" id="wb-remote-stop" type="button">关闭并释放浏览器</button>
+      <button class="button button--small" id="wb-remote-hide" type="button" aria-label="收起操作窗">收起窗口</button>
+    </div>
+  </header>
+  <div class="wb-remote-dialog__toolbar">
+    <button class="button button--small" id="wb-remote-back" type="button" title="后退">←</button>
+    <button class="button button--small" id="wb-remote-reload" type="button" title="刷新">↻</button>
+    <input id="wb-remote-url" class="wb-remote-url" type="url" value="https://chatgpt.com/" aria-label="目标地址" />
+    <button class="button button--small" id="wb-remote-go" type="button">前往</button>
+    <div class="wb-remote-paste-group">
+      <input id="wb-remote-paste-input" class="wb-remote-paste-input" type="text" placeholder="快捷粘贴：卡号 / 地址 / 验证码，发送至当前焦点" autocomplete="off" />
+      <button class="button button--small button--primary" id="wb-remote-paste-send" type="button">发送输入</button>
+    </div>
+  </div>
+  <div class="wb-remote-dialog__stage">
+    <canvas id="wb-remote-canvas" width="1280" height="800" tabindex="0" aria-label="云端浏览器实时画面"></canvas>
+    <div id="wb-remote-overlay" class="wb-remote-overlay" hidden>正在连接云端浏览器画面…</div>
+  </div>
+  <footer class="wb-remote-dialog__footer">
+    <span id="wb-remote-status" role="status">点击画面即可操作；支持直接 Ctrl+V 粘贴或使用上方快捷发送输入框</span>
+  </footer>
+</dialog>
 </body>
 </html>
