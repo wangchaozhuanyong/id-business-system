@@ -342,6 +342,40 @@ export function isBrowserRunning(profileKey) {
 }
 
 /**
+ * Return the active browser entry for profileKey if the process is still alive.
+ */
+export function getActiveBrowser(profileKey) {
+  if (!isBrowserRunning(profileKey)) return null;
+  const safeKey = String(profileKey || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+  return activeBrowsers.get(safeKey) || null;
+}
+
+/**
+ * Resolve the page-level CDP WebSocket URL for the active tab on a debugging port.
+ */
+export async function getPageTargetWsUrl(port) {
+  const listRes = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(3000) });
+  if (!listRes.ok) {
+    throw new NativeBrowserError(500, '无法读取 Chrome 页面调试目标');
+  }
+  const targets = await listRes.json();
+  const pageTarget = Array.isArray(targets)
+    ? targets.find((t) => t?.type === 'page' && typeof t.webSocketDebuggerUrl === 'string')
+    : null;
+  if (pageTarget) return pageTarget.webSocketDebuggerUrl;
+
+  const newRes = await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, {
+    method: 'PUT',
+    signal: AbortSignal.timeout(3000)
+  });
+  if (newRes.ok) {
+    const created = await newRes.json();
+    if (created?.webSocketDebuggerUrl) return created.webSocketDebuggerUrl;
+  }
+  throw new NativeBrowserError(500, '未找到可用的 Chrome 页面调试目标');
+}
+
+/**
  * Terminate a running Chrome instance and immediately tear down its proxy tunnel.
  */
 export function closeNativeBrowser(profileKey) {
@@ -384,7 +418,12 @@ export async function launchNativeChrome({
   proxyUrl = '',
   token = '',
   deviceId = '',
-  customArgs = []
+  customArgs = [],
+  headless = process.env.NATIVE_BROWSER_HEADLESS === '1' || (process.platform === 'linux' && !process.env.DISPLAY),
+  windowSize = '1520,960',
+  ownerId = '',
+  exitInfo = null,
+  targetUrl = 'https://chatgpt.com/'
 } = {}) {
   const executable = findChromeExecutable();
   if (!executable) {
@@ -411,7 +450,8 @@ export async function launchNativeChrome({
     '--no-default-browser-check',
     '--disable-blink-features=AutomationControlled',
     '--disable-infobars',
-    '--window-size=1520,960',
+    `--window-size=${windowSize}`,
+    ...(headless ? ['--headless=new', '--disable-gpu', '--no-sandbox'] : []),
     ...customArgs
   ];
 
@@ -452,6 +492,8 @@ export async function launchNativeChrome({
     port,
     profileDir,
     proxyCleanup,
+    ownerId,
+    exitInfo,
     startedAt: new Date().toISOString()
   };
   activeBrowsers.set(safeKey, browserEntry);
@@ -498,13 +540,15 @@ export async function launchNativeChrome({
     });
   }
 
-  // Inject cookies and navigate to chatgpt.com
-  await injectCookiesAndNavigate(wsUrl, cookiesToSet, 'https://chatgpt.com/');
+  // Inject cookies and navigate to targetUrl
+  await injectCookiesAndNavigate(wsUrl, cookiesToSet, targetUrl);
 
   return {
     ok: true,
     pid: child.pid,
     port,
-    profileDir
+    profileDir,
+    profileKey: safeKey,
+    exitInfo
   };
 }

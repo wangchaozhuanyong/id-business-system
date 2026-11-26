@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | 2FA | 手工计算支持 Base32、验证器链接和多行输入。保存账号按登录身份隔离，加密落盘，取码和变更审计不包含密钥或验证码 | 使用新版登录，支持本机验证，无外部依赖 |
 | 网站监控 | 公开网站健康检测。管理员访问明细支持 7／30 天、排序分页、按 IP 查询、默认遮挡与经审计查看 | 签名采集使用 `--website-visits-secret-file` |
-| 网站统计 | 装修站展示浏览量、访问次数和时段去重访客数。三个商城展示浏览量与访问次数，按站点与时间范围分别查看 | `--website-analytics-config` 读取装修站 GA4，`--website-cloudflare-config` 读取商城 Cloudflare Web Analytics |
+| 网站统计 | 四个网站均展示所选时段的独立 IP 数。装修站同时展示 GA4 访客数，各站保留原浏览量与访问次数 | 装修站 GA4、商城 Cloudflare Web Analytics、签名访问采集 |
 | 谷歌表格同步 | 查看持续运行的同步进程回执，以及邮箱、账号、订单和客户的工作表字段。刷新只读取回执 | 优先读取同步进程的专用回执。正式站的现有备份状态采集器也从同步进程的日志投影最后核验时间和失败状态，通过现有只读挂载提供给页面 |
 | 抖音解析 | 沿用原执行器协议、公开作品平台规则，按视频、原声、图片显示，统一登录下载 | 通过 `--media-resolver-url` 挂载独立执行器，详见 [解析执行器](MEDIA_RESOLVER.md) |
 | 邮箱查询与邮箱池 | 登录工具和买家查询页共用查询码。管理员可登记、批量登记谷歌／苹果、修改授权、启停、重发查询码、设定默认有效期。Microsoft 逐个完成 OAuth，已接通的 Apple 隐藏邮箱查询入口继续可用 | 谷歌、苹果填写应用专用密码；Microsoft 使用 `--microsoft-mailbox-config`，包含 `clientId`、`clientSecret`、`redirectUri`。独立回调路径为 `/api/local/tools/mailbox-microsoft/callback`。详见 [Microsoft 回调要求](https://learn.microsoft.com/entra/identity-platform/reply-url) 和 [IMAP 授权范围](https://learn.microsoft.com/en-us/exchange/client-developer/legacy-protocols/how-to-authenticate-an-imap-pop-smtp-application-by-using-oauth/) |
@@ -60,6 +60,14 @@ const microsoftMailboxConfig = await readToolConfig(
 正式主机沿用 `independent-online-tools` 的 systemd 加密凭据，在现有 JSON 顶层增加 `cloudflare` 对象，结构与上述单独配置相同。发布流程仅为已核验的 `app-entry.mjs` 补齐读取接入；没有该字段时保持待接入状态，有字段但格式或私有文件校验失败时停止启动。凭据仅经现有标准输入进入容器，并在 `/credentials` 内存文件系统中以 `0600` 读取，不加入仓库、资源包、命令参数或发布日志。专用令牌应使用目标账户的 `Account Analytics Read`，限制正式服务器出口 IP；该权限在 Cloudflare 侧属于账户级，应用查询另以这三个域名和对应站点标识严格过滤。
 
 启动器通过现有 Python 运行时将工具凭据 JSON 规范化为单行，再写入协议分隔符。配置文件可以带末尾换行或使用缩进排版，JSON 内的字符串值保持原样；无效 JSON 会阻止启动，不能破坏下一份凭据的读取边界。
+
+### 商城独立 IP 数
+
+Vendure 沿用取得分析同意后的页面访问采集。后端使用可信代理解析的公网 IP，为每个站点生成可跨日去重的脱敏标识，经既有签名入口提交。ID 系统仅接收站点、事件编号、脱敏标识和发生时间，用现有加密文档按站保存，同站同一 UTC 自然日的相同标识只入库一次。查询只返回整个选中时段的去重计数。装修站继续使用原采集和马来西亚自然日。
+
+商城按 UTC 与页面上的 Cloudflare 报表对齐。没有采集覆盖的历史时段显示「—」。已建立采集且所选时段没有记录时显示 0。
+
+授权发布时，先更新 ID 接收端，再在 Vendure 受管服务端环境中配置 `ID_WEBSITE_VISIT_INGEST_URL` 和 `ID_WEBSITE_VISIT_SIGNING_KEY`。前者使用既有 HTTPS 签名入口（路径见下表），后者使用装修站采集密钥为 HMAC-SHA256 密钥、以 `storefront-website-visits-v1` 为消息派生的 64 位小写十六进制值。原采集密钥留在现有系统，派生密钥通过受管凭据注入，避免在终端及发布日志显示。三个域名分别核对首次有效事件、同 IP 重访、独立计数和时间范围。
 
 ## 线上配置与新版接入
 

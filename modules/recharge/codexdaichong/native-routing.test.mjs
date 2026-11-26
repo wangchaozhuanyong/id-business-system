@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { createNativeRechargeRouting, DEFAULT_PLAN_ROUTES, parseExitTrace,
   validatePlanRoutes, migrateRechargeRouting } from './native-routing.mjs';
 
-function fixture({ rows = [], countries = ['PH'], onProbe, failures = [] } = {}) {
+function fixture({ rows = [], countries = ['PH'], onProbe, measure, failures = [], types = [] } = {}) {
   let version = 1;
   let plans = { ...DEFAULT_PLAN_ROUTES };
   const audit = [];
@@ -12,7 +12,7 @@ function fixture({ rows = [], countries = ['PH'], onProbe, failures = [] } = {})
   const labelAudit = [];
   const calls = [];
   const warnings = [];
-  let proxyTypes = new Map();
+  let proxyTypes = new Map(types);
   const fail = name => { if (failures.includes(name)) throw new Error('private database credentials'); };
   let substitutions = 0;
   const store = {
@@ -92,10 +92,13 @@ function fixture({ rows = [], countries = ['PH'], onProbe, failures = [] } = {})
   };
   const routing = createNativeRechargeRouting({ store, chooseOrder: rows => rows,
     onWarning(message) { warnings.push(message); fail('warning'); },
-    substituteSession(raw) { substitutions++; return raw.replace('{session}', 'synthetic-sticky-' + substitutions); },
-    async probe(proxy) {
+    substituteSession(raw) {
+      return raw.replace(/\{session\}/gi, () => 'synthetic-sticky-' + ++substitutions);
+    },
+    async probe(proxy, timeout) {
       calls.push(['probe', proxy]);
       await onProbe?.({ rows, routing });
+      if (measure) return measure(proxy, timeout);
       const countryCode = countries.length > 1 ? countries.shift() : countries[0];
       if (countryCode === 'error') throw new Error('socks5://private-user:private-password@private-host');
       return { ip: '8.8.8.8', countryCode, latencyMs: 12, source: 'Cloudflare trace' };
@@ -118,7 +121,8 @@ test('trace accepts public IPv4/IPv6 and rejects ambiguous, private and oversize
   assert.equal(parseExitTrace('ip=8.8.8.8\nloc=PH\n').countryCode, 'PH');
   assert.equal(parseExitTrace('ip=2606:4700:4700::1111\r\nloc=EG\r\n').countryCode, 'EG');
   for (const trace of ['ip=127.0.0.1\nloc=PH', 'ip=10.1.2.3\nloc=PH', 'ip=192.0.2.1\nloc=PH',
-    'ip=2001:db8::1\nloc=PH', 'ip=ff02::1\nloc=PH', 'ip=8.8.8.8\nloc=XX', 'ip=8.8.8.8\nloc=PH\nloc=EG',
+    'ip=2001:db8::1\nloc=PH', 'ip=ff02::1\nloc=PH', 'ip=2606:4700::1111%eth0\nloc=PH',
+    'ip=8.8.8.8\nloc=XX', 'ip=8.8.8.8\nloc=PH\nloc=EG',
     'ip=8.8.8.8\nip=1.1.1.1\nloc=PH', 'x'.repeat(16385)]) assert.throws(() => parseExitTrace(trace));
 });
 test('four canonical plans are mandatory and default countries match the authorization', () => {
@@ -267,6 +271,101 @@ test('selected sticky proxy is resolved once and exactly reused immediately befo
   assert.deepEqual(f.calls.filter(call => call[0] === 'probe').map(call => call[1]), [route.proxy, route.proxy]);
   assert.doesNotMatch(f.routing.describe(route), /synthetic-secret|proxy\.example/);
 });
+
+for (const [plan, countryCode] of [['plus', 'PH'], ['pro100', 'EG']]) {
+  test(`${countryCode} chooses the lowest current latency, including when the first response is slower`, async () => {
+    const first = proxy(1, 1, countryCode), second = proxy(2, 1, countryCode);
+    second.proxy_url = second.proxy_url.replace('synthetic-{session}', 'synthetic-static');
+    const rows = [first, second, proxy(3, 1, countryCode), proxy(4, 1, countryCode)];
+    const completed = [];
+    let releaseSlowResponse;
+    const waitForSecondProbe = new Promise(resolve => { releaseSlowResponse = resolve; });
+    let initialSecondProbe = true;
+    const f = fixture({ rows, types: [[1, 'mobile'], [2, 'static_residential']], async measure(url) {
+      const id = Number(new URL(url).port) - 1000;
+      if (id === 3) return { ip: '1.1.1.1', countryCode: 'JP', latencyMs: 1 };
+      if (id === 4) throw new Error('synthetic timeout');
+      if (id === 1) {
+        completed.push(1);
+        releaseSlowResponse();
+        return { ip: '8.8.8.8', countryCode, latencyMs: 100 };
+      }
+      if (initialSecondProbe) {
+        initialSecondProbe = false;
+        await waitForSecondProbe;
+        completed.push(2);
+      }
+      return { ip: '8.8.4.4', countryCode, latencyMs: 10 };
+    } });
+    const route = await f.routing.resolve(plan);
+    assert.deepEqual(completed, [1, 2]);
+    assert.equal(route.proxyId, 2);
+    assert.equal(route.ip, '8.8.4.4');
+    assert.equal(route.latencyMs, 10);
+    assert.deepEqual(f.calls.filter(([kind]) => kind === 'usage'), []);
+    const env = { PROXY: first.proxy_url, PAYMENT_REGION_OVERRIDE: countryCode };
+    const handedOff = await f.routing.verifiedStart(route, workerEnv => workerEnv)(env);
+    assert.deepEqual(handedOff, { ...env, PROXY: second.proxy_url });
+    assert.equal(env.PROXY, first.proxy_url);
+    assert.deepEqual(f.calls.filter(([kind]) => kind === 'usage'), [['usage', 2]]);
+  });
+}
+
+test('a same-country IP change uses the measured backup session without starting the former winner', async () => {
+  const counts = new Map();
+  const f = fixture({ rows: [proxy(1), proxy(2)], types: [[1, 'dynamic_residential'], [2, 'mobile']], measure(url) {
+    const id = Number(new URL(url).port) - 1000;
+    const attempts = (counts.get(url) ?? 0) + 1;
+    counts.set(url, attempts);
+    const ip = id === 1 ? (attempts === 1 ? '8.8.8.8' : '1.1.1.1') : '8.8.4.4';
+    return { ip, countryCode: 'PH', latencyMs: id };
+  } });
+  const primary = await f.routing.resolve('plus');
+  const [primaryProbe, backupProbe] = f.calls.filter(([kind]) => kind === 'probe').map(([, url]) => url);
+  assert.equal(primary.proxy, primaryProbe);
+  const launched = [];
+  await f.routing.verifiedStart(primary, env => { launched.push(env.PROXY); })({ PROXY: primary.proxy });
+  assert.deepEqual(launched, [backupProbe]);
+  assert.deepEqual([...counts], [[primaryProbe, 2], [backupProbe, 2]]);
+  assert.equal(f.substitutions(), 2);
+  assert.deepEqual(f.calls.filter(([kind]) => kind === 'usage'), [['usage', 2]]);
+  assert.doesNotMatch(JSON.stringify(f.warnings), /synthetic-secret|proxy\.example|8\.8/);
+});
+
+test('same-country drift without a measured backup never launches or generates a replacement session', async () => {
+  let probes = 0;
+  const f = fixture({ rows: [proxy(1)], measure() {
+    return { ip: ++probes === 1 ? '8.8.8.8' : '8.8.4.4', countryCode: 'PH', latencyMs: 10 };
+  } });
+  const route = await f.routing.resolve('plus');
+  await assert.rejects(f.routing.verifiedStart(route, () => assert.fail('must not launch'))({}),
+    /出口 IP 与测速结果不一致/);
+  assert.equal(f.substitutions(), 1);
+  assert.ok(!f.calls.some(([kind]) => kind === 'usage'));
+});
+
+test('typed rotating gateways require a session template for automatic routing but remain manually testable', async () => {
+  const rotating = proxy(1, 1, 'PH');
+  rotating.proxy_url = rotating.proxy_url.replace('synthetic-{session}', 'synthetic-rotating');
+  const f = fixture({ rows: [rotating, proxy(2, 1, 'PH')], types: [[1, 'mobile'], [2, 'dynamic_residential']] });
+  const route = await f.routing.resolve('plus');
+  assert.equal(route.proxyId, 2);
+  assert.equal(f.calls.filter(([kind]) => kind === 'probe').length, 1);
+  assert.equal((await f.routing.checkProxy(1)).countryCode, 'PH');
+  await f.routing.checkProxy(2);
+  await f.routing.checkProxy(2);
+  const probes = f.calls.filter(([kind]) => kind === 'probe').map(([, url]) => url);
+  assert.equal(probes[1], rotating.proxy_url);
+  assert.equal(new Set([probes[0], ...probes.slice(2)]).size, 3);
+});
+
+test('startup compares IPv6 addresses independently of their text representation', async () => {
+  const ips = ['2606:4700:4700::1111', '2606:4700:4700:0:0:0:0:1111'];
+  const f = fixture({ rows: [proxy(1)], measure: () => ({ ip: ips.shift(), countryCode: 'PH', latencyMs: 10 }) });
+  const route = await f.routing.resolve('plus');
+  const workerProxy = await f.routing.verifiedStart(route, env => env.PROXY)({});
+  assert.equal(workerProxy, route.proxy);
+});
 test('changed or disabled proxy and drifting country block child launch', async () => {
   for (const mutation of [row => row.is_active = 0, row => row.proxy_url += '-changed']) {
     const f = fixture({ rows: [proxy(1)] }); const route = await f.routing.resolve('plus');
@@ -302,6 +401,7 @@ test('auxiliary storage and warning failures never block a verified route or mar
     const route = await f.routing.resolve('plus');
     let started = false;
     await f.routing.verifiedStart(route, () => { started = true; })({ PROXY: route.proxy });
+    if (failures.includes('history-read')) await f.routing.view();
     assert.equal(started, true);
     assert.equal(f.calls.filter(call => call[0] === 'probe').length, 2);
     assert.ok(!f.calls.some(call => call[0] === 'check' && call[2] === false));
@@ -310,7 +410,7 @@ test('auxiliary storage and warning failures never block a verified route or mar
   }
 });
 test('required policy and pool reads still fail closed without probing or direct fallback', async () => {
-  for (const failure of ['policy', 'pool-read', 'proxy-read']) {
+  for (const failure of ['policy', 'pool-read', 'type-read', 'proxy-read']) {
     const f = fixture({ rows: [proxy(1)], failures: [failure] });
     await assert.rejects(f.routing.resolve('plus'), error => error.code === 'route_storage_unavailable');
     assert.ok(!f.calls.some(call => call[0] === 'probe' && !call[1]));
@@ -334,12 +434,14 @@ test('each new native outer attempt selects a fresh sticky route in the accepted
   assert.equal(second.region, 'PH'); assert.equal(second.currency, 'PHP');
   assert.equal(second.configVersion, first.configVersion);
   assert.equal(second.proxyId, 2); assert.notEqual(second.proxy, first.proxy);
-  assert.equal(f.substitutions(), 2);
+  assert.equal(f.substitutions(), 3);
   let ran = false;
   await f.routing.verifiedStart(second, () => { ran = true; })({ PROXY: second.proxy });
   assert.equal(ran, true);
-  assert.deepEqual(f.calls.filter(call => call[0] === 'probe').map(call => call[1]),
-    [first.proxy, second.proxy, second.proxy]);
+  const [initialWinner, initialBackup, ...nextProbes] = f.calls.filter(call => call[0] === 'probe').map(call => call[1]);
+  assert.equal(initialWinner, first.proxy);
+  assert.notEqual(initialBackup, second.proxy);
+  assert.deepEqual(nextProbes, [second.proxy, second.proxy]);
 });
 test('migration is additive and idempotent without touching upstream payment tables', async () => {
   const sql = [];

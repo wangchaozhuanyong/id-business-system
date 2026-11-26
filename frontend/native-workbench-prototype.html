@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>应急人工代充操作窗 · 隔离原型</title>
+  <link rel="stylesheet" href="/assets/native-workbench/prototype.css">
+</head>
+<body class="proto-body">
+  <header class="proto-header">
+    <div class="proto-title-group">
+      <h1>ChatGPT 应急人工代充操作窗</h1>
+      <span class="proto-badge">隔离原型 · 独立于自动代充</span>
+    </div>
+    <div class="proto-status-bar">
+      <span id="protoProxyBadge" class="proto-pill proto-pill-muted">出口: 未检测</span>
+      <span id="protoLoginBadge" class="proto-pill proto-pill-muted">登录态: 未启动</span>
+    </div>
+  </header>
+
+  <main class="proto-layout">
+    <aside class="proto-sidebar">
+      <section class="proto-card">
+        <h2>1. 粘贴授权 JSON</h2>
+        <textarea
+          id="protoJsonInput"
+          class="proto-textarea"
+          rows="7"
+          placeholder="粘贴 ChatGPT session JSON（包含 user.email 与 accessToken / sessionToken）"
+          spellcheck="false"
+        ></textarea>
+        <div class="proto-parse-box" id="protoParseBox">
+          <div class="proto-parse-row"><span>账号邮箱</span><strong id="protoParsedEmail">—</strong></div>
+          <div class="proto-parse-row"><span>当前套餐</span><strong id="protoParsedPlan">—</strong></div>
+          <div class="proto-parse-row"><span>设备 ID</span><strong id="protoParsedDevice">—</strong></div>
+          <div class="proto-parse-row"><span>凭据状态</span><strong id="protoParsedToken">等待输入</strong></div>
+        </div>
+        <div class="proto-btn-row">
+          <button type="button" id="protoParseBtn" class="proto-btn proto-btn-secondary">仅解析核对</button>
+          <button type="button" id="protoClearBtn" class="proto-btn proto-btn-ghost">清空</button>
+        </div>
+      </section>
+
+      <section class="proto-card">
+        <h2>2. 线路与启动</h2>
+        <label class="proto-label" for="protoRegionSelect">支付地区线路</label>
+        <select id="protoRegionSelect" class="proto-select">
+          <option value="auto">自动（直连 / 不校验国家）</option>
+          <option value="ph">菲律宾 (PH)</option>
+          <option value="eg">埃及 (EG)</option>
+        </select>
+
+        <label class="proto-label" for="protoProxyInput">代理地址（可选，填写则优先使用）</label>
+        <input
+          id="protoProxyInput"
+          class="proto-input"
+          type="text"
+          placeholder="例如 http://user:pass@host:port 或 ip:port:user:pass"
+          autocomplete="off"
+        >
+
+        <button type="button" id="protoLaunchBtn" class="proto-btn proto-btn-primary proto-btn-full">
+          识别并启动站内操作窗
+        </button>
+
+        <div id="protoMessage" class="proto-message" role="status" aria-live="polite"></div>
+      </section>
+
+      <section class="proto-notice">
+        <strong>操作边界说明</strong>
+        <p>本原型仅负责注入凭据、校验代理出口并核验 ChatGPT 登录态。选套餐、填写付款资料与提交付款全程由你在右侧操作窗内手动完成。</p>
+      </section>
+    </aside>
+
+    <section class="proto-stage">
+      <div class="proto-toolbar">
+        <div class="proto-nav-btns">
+          <button type="button" id="protoBackBtn" class="proto-btn proto-btn-sm" disabled title="后退">←</button>
+          <button type="button" id="protoReloadBtn" class="proto-btn proto-btn-sm" disabled title="刷新">↻</button>
+        </div>
+        <form id="protoUrlForm" class="proto-url-form">
+          <input id="protoUrlInput" class="proto-input proto-url-input" type="url" value="https://chatgpt.com/" disabled>
+          <button type="submit" id="protoGoBtn" class="proto-btn proto-btn-sm" disabled>前往</button>
+        </form>
+        <div class="proto-stage-actions">
+          <button type="button" id="protoRecheckBtn" class="proto-btn proto-btn-sm" disabled>重新核验登录</button>
+          <button type="button" id="protoCloseBtn" class="proto-btn proto-btn-danger proto-btn-sm" disabled>关闭浏览器</button>
+        </div>
+      </div>
+
+      <div class="proto-paste-bar">
+        <input
+          id="protoSendTextInput"
+          class="proto-input"
+          type="text"
+          placeholder="先在画面内点击目标输入框，再在此输入或粘贴卡号 / 文本发送到浏览器"
+          disabled
+        >
+        <button type="button" id="protoSendTextBtn" class="proto-btn proto-btn-secondary proto-btn-sm" disabled>
+          发送文本
+        </button>
+      </div>
+
+      <div class="proto-canvas-wrap" id="protoCanvasWrap">
+        <canvas id="protoCanvas" width="1280" height="800" tabindex="0"></canvas>
+        <div id="protoEmptyOverlay" class="proto-overlay">
+          <div class="proto-overlay-inner">
+            <p class="proto-overlay-title">站内浏览器操作窗尚未启动</p>
+            <p class="proto-overlay-sub">在左侧粘贴授权 JSON 并点击「识别并启动站内操作窗」，通过出口与登录核验后即可在此直接操作。</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="/assets/native-workbench/prototype.mjs"></script>
+</body>
+</html>

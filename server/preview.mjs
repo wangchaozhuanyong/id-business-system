@@ -63,6 +63,13 @@ import { createStaffWorkspaces, staffPath } from './staff-workspaces.mjs';
 import { createRenewalHandoff, renewalHandoffPath } from './renewal-handoff.mjs';
 import { readBackupMonitorReceipt, readRestoreEvidence } from './monitoring-worker-receipts.mjs';
 import { websitePages } from '../modules/website/pages.mjs';
+import { acceptWebSocketUpgrade } from './native-ws.mjs';
+import { NativeBrowserError, closeNativeBrowser, getActiveBrowser } from './native-chrome-runner.mjs';
+import {
+  attachPrototypeWsBridge,
+  launchPrototypeWorkbenchSession,
+  verifyChatGptLogin
+} from './native-browser-session.mjs';
 
 function requireSecurityConfirmation(response) {
   response.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -307,6 +314,17 @@ export async function startPreview(
   const bitLoginHtml = await readFile(
     new URL('../frontend/bitbrowser-local.html', import.meta.url),
     'utf8'
+  );
+  assets.set('/assets/native-workbench/prototype.mjs', {
+    type: 'text/javascript; charset=utf-8',
+    body: await readFile(new URL('../frontend/native-workbench-prototype.mjs', import.meta.url))
+  });
+  assets.set('/assets/native-workbench/prototype.css', {
+    type: 'text/css; charset=utf-8',
+    body: await readFile(new URL('../frontend/native-workbench-prototype.css', import.meta.url))
+  });
+  const nativePrototypeHtml = await readFile(
+    new URL('../frontend/native-workbench-prototype.html', import.meta.url)
   );
   const localBitCheck = Buffer.from(
     databasePath
@@ -860,6 +878,9 @@ export async function startPreview(
       response.writeHead(200, {
         'Content-Type': 'text/html; charset=utf-8',
         'Content-Length': localBitCheck.length,
+        'Cache-Control': 'no-cache, no-store, must-revalidate, max-age=0',
+        'Pragma': 'no-cache',
+        'Expires': '0',
         'Content-Security-Policy':
           "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self' http://127.0.0.1:* http://localhost:* ws://127.0.0.1:* ws://localhost:*; frame-ancestors 'self'; base-uri 'none'; form-action 'none'"
       });

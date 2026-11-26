@@ -604,6 +604,40 @@
   gap: 5px;
 }
 
+/* 方案 A 对称双列网格与满宽控件排版 */
+.wb-config-grid {
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important;
+  gap: 16px !important;
+  margin-top: 14px !important;
+  margin-bottom: 16px !important;
+  width: 100% !important;
+}
+
+.wb-config-grid.form-grid > .field,
+.wb-config-grid .field,
+.wb-config-grid .wb-proxy-col,
+.wb-config-grid .wb-notes-col {
+  display: flex !important;
+  flex-direction: column !important;
+  grid-template-columns: none !important;
+  width: 100% !important;
+  min-width: 0 !important;
+}
+
+.wb-config-grid .wb-field-head {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  width: 100% !important;
+  margin-bottom: 6px !important;
+}
+
+.wb-config-grid .wb-field-head label {
+  font-weight: 600 !important;
+  margin-bottom: 0 !important;
+}
+
 .wb-proxy-head-right {
   display: inline-flex;
   align-items: center;
@@ -611,17 +645,33 @@
 }
 
 .wb-proxy-control-row {
-  display: flex;
-  align-items: center;
-  width: 100%;
+  display: flex !important;
+  align-items: center !important;
+  width: 100% !important;
 }
 
 .wb-proxy-control-row select {
-  width: 100%;
-  flex: 1;
-  min-width: 0;
-  height: 38px;
-  font-size: 13.5px;
+  display: block !important;
+  width: 100% !important;
+  flex: 1 1 100% !important;
+  min-width: 0 !important;
+  height: 38px !important;
+  font-size: 13.5px !important;
+  box-sizing: border-box !important;
+}
+
+.wb-config-grid .wb-notes-col input {
+  display: block !important;
+  width: 100% !important;
+  height: 38px !important;
+  font-size: 13.5px !important;
+  box-sizing: border-box !important;
+}
+
+/* 彻底隐藏 IP 资料库页签 */
+#bit-tab-library,
+[aria-controls="bit-library-panel"] {
+  display: none !important;
 }
 
 .wb-btn-set-default {

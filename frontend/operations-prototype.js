@@ -726,7 +726,7 @@
   const workspaceRechargeRoute = 'workspace/recharge';
   const workspaceRechargeView = ['redeem', '兑换开通', 'workspace'];
   const bitLoginRoute = 'recharge/start';
-  const bitLoginView = ['bit-login', '手动充值', '/integrations/bitbrowser/local-login'];
+  const bitLoginView = ['bit-login', '手动充值', '/integrations/bitbrowser/local-login?v=20261125-layout-fix'];
   const onlineRechargeRoute = 'online-recharge/chatgpt';
   const rechargeCardsRoute = 'staff/finance/cards';
   const onlineRechargeMount = '/integrations/codexdaichong/';

@@ -13,6 +13,9 @@ export class WebsiteVisitError extends Error {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const HOSTS = new Set(['flashcast.com.my', 'www.flashcast.com.my']);
+export const storefrontVisitSites = ['damatong.net', 'moyaoai.com', 'shop.flashcast.com.my'];
+const storefrontSites = new Set(storefrontVisitSites);
+const digestHex = /^[a-f0-9]{64}$/;
 export const WEBSITE_VISIT_DAY_MS = 86_400_000;
 export const WEBSITE_VISIT_OFFSET_MS = 8 * 3_600_000;
 
@@ -70,12 +73,7 @@ export function parseWebsiteVisitEvent(value) {
     /%(?![a-f0-9]{2})/i.test(input.path)
   )
     throw new WebsiteVisitError('访问页面路径无效');
-  if (
-    typeof input.occurredAt !== 'string' ||
-    !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(input.occurredAt) ||
-    !Number.isFinite(Date.parse(input.occurredAt)) ||
-    new Date(input.occurredAt).toISOString() !== input.occurredAt
-  )
+  if (!validVisitTime(input.occurredAt))
     throw new WebsiteVisitError('访问时间无效');
   // Validate the original IP before signing; canonicalize only for persistence and search.
   normalizeWebsiteVisitIp(input.ip);
@@ -85,6 +83,23 @@ export function parseWebsiteVisitEvent(value) {
 
 export function websiteVisitSignaturePayload(event) {
   return JSON.stringify([event.eventId, event.host, event.path, event.ip, event.occurredAt]);
+}
+
+export const websiteVisitDocument = (site) => storefrontSites.has(site)
+  ? `${websiteVisitsDomain}:${site}` : websiteVisitsDomain;
+
+function validVisitTime(value) {
+  return typeof value === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value) &&
+    Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
+}
+
+function parseStorefrontVisit(value) {
+  const input = object(value);
+  if (!storefrontSites.has(input.host) || Object.keys(input).length !== 4 ||
+    typeof input.ipToken !== 'string' || !digestHex.test(input.ipToken) || !validVisitTime(input.occurredAt))
+    throw new WebsiteVisitError('商城访问记录字段无效');
+  websiteVisitId(input.eventId);
+  return input;
 }
 
 export function parseWebsiteVisitSearch(value) {
@@ -116,21 +131,53 @@ export function websiteVisitRange(days, now) {
   return { start, end: now, dates };
 }
 
-function retained(rows, now) {
-  const earliest = websiteVisitRange(30, new Date(now)).start.getTime();
+function retained(rows, now, storefront = false) {
+  const date = new Date(now);
+  const earliest = storefront
+    ? Date.parse(date.toISOString().slice(0, 10)) - 29 * WEBSITE_VISIT_DAY_MS
+    : websiteVisitRange(30, date).start.getTime();
   return rows.filter((row) => Date.parse(row.occurredAt) >= earliest);
 }
 
 export function appendWebsiteVisit(rows, event, now) {
-  const entries = retained(rows, now);
+  const storefront = storefrontSites.has(event.host);
+  const entries = retained(rows, now, storefront);
   const id = websiteVisitId(event.eventId);
-  if (entries.some((row) => row.id === id)) return null;
+  if (entries.some((row) => row.id === id || (storefront && row.ipToken === event.ipToken &&
+    row.occurredAt.slice(0, 10) === event.occurredAt.slice(0, 10)))) return null;
   if (entries.length >= 20_000)
     throw new WebsiteVisitError('独立版访问明细容量已满，需核对采集量', 503);
-  return [...entries, {
-    id, host: event.host, path: event.path,
-    ip: normalizeWebsiteVisitIp(event.ip), occurredAt: event.occurredAt, receivedAt: new Date(now).toISOString()
-  }];
+  const identity = storefront ? { ipToken: event.ipToken }
+    : { path: event.path, ip: normalizeWebsiteVisitIp(event.ip) };
+  return [...entries, { id, host: event.host, ...identity,
+    occurredAt: event.occurredAt, receivedAt: new Date(now).toISOString() }];
+}
+
+export function parseWebsiteUniqueIpsQuery(value, now) {
+  const input = object(value);
+  const { site, from, to } = input;
+  const storefront = storefrontSites.has(site);
+  const offset = storefront ? 0 : 8;
+  const availableTo = new Date(now + offset * 3_600_000).toISOString().slice(0, 10);
+  const range = calendarRange(from, to, offset);
+  const available = calendarRange(availableTo, availableTo, offset);
+  if (Object.keys(input).length !== 3 || (!storefront && site !== 'flashcast.com.my') || !range ||
+    range.start < available.start - 29 * WEBSITE_VISIT_DAY_MS || to > availableTo)
+    throw new WebsiteVisitError('请选择支持的网站及最近 30 天内的访问日期');
+  return { site, from, to, start: range.start, end: range.end, storefront };
+}
+
+export function reportWebsiteUniqueIps(rows, query, now) {
+  const { site, from, to, start, end, storefront } = query;
+  const identities = new Set();
+  let recorded = !storefront;
+  for (const row of rows) {
+    const time = Date.parse(row.occurredAt);
+    if (time >= end || time > now) continue;
+    recorded = true;
+    if (time >= start) identities.add(storefront ? row.ipToken : row.ip);
+  }
+  return { site, from, to, status: recorded ? 'ready' : 'not-collected', uniqueIps: recorded ? identities.size : null };
 }
 
 export function reportWebsiteVisits(rows, body, now) {
@@ -183,6 +230,8 @@ export function createWebsiteVisits({ store, secret, publicOrigin, clock = Date.
   const publicUrl = parseToolPublicOrigin(publicOrigin);
   if (secret !== undefined && (typeof secret !== 'string' || Buffer.byteLength(secret) < 32))
     throw new Error('网站访问采集密钥须至少 32 字节');
+  // A storefront deployment receives only the derived signing key and cannot sign renovation records.
+  const storefrontKey = secret && createHmac('sha256', secret).update('storefront-website-visits-v1').digest();
   return async (req, res, operation, actor) => {
     const send = (status, result) => {
       res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'private, no-store' });
@@ -217,16 +266,24 @@ export function createWebsiteVisits({ store, secret, publicOrigin, clock = Date.
         const signature = req.headers['x-website-visit-signature'];
         if (typeof signature !== 'string' || !/^[a-f0-9]{64}$/.test(signature))
           throw new WebsiteVisitError('访问采集签名无效', 401);
-        const event = parseWebsiteVisitEvent(input);
+        const storefront = storefrontSites.has(input?.host);
+        const event = storefront ? parseStorefrontVisit(input) : parseWebsiteVisitEvent(input);
         if (Math.abs(clock() - Date.parse(event.occurredAt)) > 60_000)
           throw new WebsiteVisitError('访问采集签名已过期', 401);
-        const expected = createHmac('sha256', secret).update(websiteVisitSignaturePayload(event)).digest();
+        const payload = storefront
+          ? JSON.stringify([event.eventId, event.host, event.ipToken, event.occurredAt])
+          : websiteVisitSignaturePayload(event);
+        const expected = createHmac('sha256', storefront ? storefrontKey : secret).update(payload).digest();
         if (!timingSafeEqual(expected, Buffer.from(signature, 'hex')))
           throw new WebsiteVisitError('访问采集签名无效', 401);
         store.appendWebsiteVisit(event, clock());
         return send(200, { accepted: true });
       }
       if (operation === 'search') return send(200, store.searchWebsiteVisits(input, clock()));
+      if (operation === 'unique-ips') {
+        const now = clock();
+        return send(200, store.searchWebsiteUniqueIps(parseWebsiteUniqueIpsQuery(input, now), now));
+      }
       if (operation === 'reveal') return send(200, store.revealWebsiteVisit(input?.id, clock(), actor));
       return send(404, { error: '没有此访问记录操作' });
     } catch (error) {

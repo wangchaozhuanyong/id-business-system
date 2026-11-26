@@ -40,7 +40,8 @@ import { validCurrencyCode, snapshotAction } from '../modules/finance/accounting
 import { appleAmountUnits } from '../modules/finance/apple-funding.mjs';
 import { checkFinanceSnapshots, historicalFeeAction } from './finance/snapshot-integrity.mjs';
 import { orderExpenseDomain } from './finance/expense-receipts.mjs';
-import { appendWebsiteVisit, getWebsiteVisitIp, reportWebsiteVisits, websiteVisitsDomain } from './tools/website-visits.mjs';
+import { appendWebsiteVisit, getWebsiteVisitIp, reportWebsiteUniqueIps, reportWebsiteVisits, storefrontVisitSites,
+  websiteVisitDocument, websiteVisitsDomain } from './tools/website-visits.mjs';
 import {
   applyMailboxPoolWrite, defaultMailboxValidDays, findMailboxQuery, inventoryMailboxPool, mailboxPoolCodePage,
   availableRegistrationMailbox, mailboxPoolItems, mailboxPoolMetadata, mailboxRegistrationAssignment,
@@ -1854,16 +1855,20 @@ export function createLocalBusinessStore(databasePath) {
     },
     appendWebsiteVisit(event, time) {
       return writeTransaction(() => {
-        const current = readDocument(websiteVisitsDomain);
+        const domain = websiteVisitDocument(event.host);
+        const current = readDocument(domain);
         const rows = appendWebsiteVisit(current.data || [], event, time);
         if (rows) {
           const version = current.version + 1;
-          put.run(websiteVisitsDomain, version, encrypt(key, websiteVisitsDomain, version, JSON.stringify(rows)));
+          put.run(domain, version, encrypt(key, domain, version, JSON.stringify(rows)));
         }
       });
     },
     searchWebsiteVisits(input, time) {
       return reportWebsiteVisits(readDocument(websiteVisitsDomain).data || [], input, time);
+    },
+    searchWebsiteUniqueIps(query, time) {
+      return reportWebsiteUniqueIps(readDocument(websiteVisitDocument(query.site)).data || [], query, time);
     },
     revealWebsiteVisit(id, time, actor) {
       const snapshot = readDocument(websiteVisitsDomain);
@@ -3663,7 +3668,8 @@ export function createLocalBusinessStore(databasePath) {
         versions['system-monitoring'] = `${version('system-monitoring-config')}:${version('system-monitoring-state')}`;
         versions['tools/mailbox-pool'] = version(managedMailboxDomain);
         versions['tools/mailbox-delivery'] = version(claudeGoogleCopyDomainPrefix + actor.id);
-        versions['tools/website-visits'] = version(websiteVisitsDomain);
+        versions['tools/website-visits'] = [websiteVisitsDomain, ...storefrontVisitSites.map(websiteVisitDocument)]
+          .map(version).join(':');
         versions['apple-relay'] = String(relayRevision.get().version);
         versions.audit = String(auditRevision.get().version);
       }

@@ -8,6 +8,7 @@
   const trafficRoute = 'data';
   const sheetsRoute = 'data/sheets';
   const scope = 'tools/website-analytics';
+  const visitScope = 'tools/website-visits';
   const draftKey = 'data-center:traffic';
   const sites = new Map([
     ['flashcast.com.my', 'FLASH CAST 装修站'],
@@ -35,7 +36,8 @@
       <section class="panel" aria-labelledby="traffic-overview-title">
         <div class="panel-heading data-traffic-heading">
           <div class="section-title-row"><h2 id="traffic-overview-title">访问概况</h2>${A.titleInfo('访问概况',
-            '一次访问可以浏览多页。装修站的访客数在所选时段内去重，不能把每日人数相加。各网站的访问次数按各自报表口径统计。' +
+            '独立 IP 数按站点和所选时段汇总已采集的访问，相同公网 IP 只计一次。装修站使用马来西亚时间，其他站使用世界标准时间（UTC）。' +
+            '装修站的访客数由 GA4 去重。' +
             '商城数据含估算，切换日期范围时，同一天的数字也可能变化。',
             'traffic-overview-help')}</div>
           <div class="data-traffic-filters">
@@ -56,6 +58,7 @@
         <div class="panel-body design-async-region" data-traffic-read>
           <div data-traffic-progress role="status" hidden></div>
           <p class="inline-notice warning data-traffic-notice" data-traffic-notice role="status" hidden></p>
+          <p class="inline-notice warning data-traffic-notice" data-traffic-ip-notice role="status" hidden></p>
           <div data-traffic-summary><p class="data-traffic-message" role="status">${live
             ? '正在读取网站统计…' : '登录业务站后可查看实际访问统计。'}</p></div>
         </div>
@@ -79,7 +82,7 @@
       </div>`;
   }
 
-  function reportMeta(report) {
+  function reportMeta(report, site) {
     const timeZone = report.timeZone;
     const time = new Date(report.fetchedAt);
     const date = new Intl.DateTimeFormat('sv-SE', { timeZone, dateStyle: 'short' });
@@ -92,7 +95,7 @@
     return `<div class="data-traffic-meta">
       <strong>${A.esc(report.daily[0].date)} 至 ${A.esc(last)}</strong>
       <span>统计时区 ${A.esc(zone)}</span>
-      <span>上次读取 <time datetime="${time.toISOString()}">${A.esc(timestamp)}</time></span>
+      <span>${site === renovation ? 'GA4' : 'Cloudflare'} 上次读取 <time datetime="${time.toISOString()}">${A.esc(timestamp)}</time></span>
       ${report.provider === 'cloudflare' && report.status === 'ready' ? '<span>含估算</span>' : ''}
       <span class="data-traffic-today">${note}</span>
       ${report.thresholded ? '<span>部分数据因隐私限制未显示</span>' : ''}
@@ -126,26 +129,28 @@
     </section>`;
   }
 
-  function showTraffic(workspace, report, site, keepOpen = false) {
+  function showOverview(workspace, report, site, ipCount, loading) {
     const overview = workspace.querySelector('[data-traffic-summary]');
+    const ready = report?.status === 'ready';
+    const items = columns(site).map(([key, label, unit]) =>
+      [label, count(report?.summary?.[key]), unit, key === 'pageViews' && ready]);
+    items.push(['独立 IP 数', count(ipCount), '个']);
+    const meta = report && report.status !== 'unconfigured' ? reportMeta(report, site) : '';
+    const source = site === renovation ? 'GA4' : 'Cloudflare';
+    const message = loading ? '正在读取网站统计…' : report?.status === 'unconfigured'
+      ? `该网站尚未接入 ${source} 统计。` : report?.status === 'empty' ? `该时段暂无 ${source} 访问数据。` : '';
+    overview.innerHTML = meta + A.summary(items) + (message
+      ? `<p class="data-traffic-message" role="status">${A.esc(message)}</p>` : '');
+  }
+
+  function showTrend(workspace, report, site, keepOpen = false) {
     const detail = workspace.querySelector('[data-traffic-detail]');
-    if (!report || report.status === 'unconfigured') {
-      overview.innerHTML = report ? '<p class="data-traffic-message" role="status">该网站尚未接入统计。</p>' : '';
+    if (report?.status !== 'ready') {
       detail.replaceChildren();
       detail.hidden = true;
       return;
     }
-    const meta = reportMeta(report);
-    if (report.status === 'empty') {
-      overview.innerHTML = meta + '<p class="data-traffic-message" role="status">该时段暂无访问数据。</p>';
-      detail.replaceChildren();
-      detail.hidden = true;
-      return;
-    }
-    const metrics = columns(site);
-    overview.innerHTML = meta + A.summary(metrics.map(([key, label, unit]) =>
-      [label, count(report.summary[key]), unit, key === 'pageViews']));
-    detail.innerHTML = renderTrend(report, metrics, keepOpen && Boolean(detail.querySelector('details[open]')));
+    detail.innerHTML = renderTrend(report, columns(site), keepOpen && Boolean(detail.querySelector('details[open]')));
     detail.hidden = false;
   }
 
@@ -167,36 +172,89 @@
     return report;
   }
 
+  async function readUniqueIps(query) {
+    const report = await data.websiteUniqueIps(query);
+    if (report?.site !== query.site || report.from !== query.from || report.to !== query.to)
+      throw new Error('Invalid website visits report');
+    if (report.status === 'not-collected' && report.uniqueIps === null) return null;
+    if (report.status !== 'ready' || !Number.isSafeInteger(report.uniqueIps) || report.uniqueIps < 0)
+      throw new Error('Invalid website visits count');
+    return report.uniqueIps;
+  }
+
   async function loadTraffic(workspace, selection, { refresh = false } = {}) {
     if (!workspace || !canRead()) return;
     const { site } = selection, dates = selectedDates(selection), query = { site, ...dates };
     const notice = workspace.querySelector('[data-traffic-notice]');
+    const ipNotice = workspace.querySelector('[data-traffic-ip-notice]');
     const region = workspace.querySelector('[data-traffic-read]');
     const status = workspace.querySelector('[data-traffic-progress]');
     const key = JSON.stringify(query);
-    const previous = data.queries.peek(scope, query)?.data;
+    const analytics = data.queries.peek(scope, query);
+    const previous = analytics?.data;
+    let report = previous;
+    let ipCount = data.queries.peek(visitScope, query)?.data;
+    let loading = !previous;
+    const updateOverview = () => showOverview(workspace, report, site, ipCount, loading);
     const sameSelection = workspace.dataset.trafficKey === key;
     if (!sameSelection) {
       workspace.dataset.trafficKey = key;
-      showTraffic(workspace, previous, site);
+      updateOverview();
+      showTrend(workspace, previous, site);
     }
     notice.hidden = true;
-    if (!previous) workspace.querySelector('[data-traffic-summary]').innerHTML =
-      '<p class="data-traffic-message" role="status">正在读取网站统计…</p>';
+    ipNotice.hidden = true;
+    if (sameSelection && loading) updateOverview();
     const read = A.beginRegionRead(region, status, {
       refreshButton: workspace.querySelector('[data-action="data-traffic-refresh"]')
     });
+    const current = () => read.current() && canRead();
+    const readAnalytics = async () => {
+      try {
+        report = await data.queries.read(scope, query, () => readTrafficReport(site, dates), { refresh });
+        if (!current()) return;
+        if (refresh || analytics?.stale || analytics?.pending || !previous) showTrend(workspace, report, site, sameSelection);
+      } catch (error) {
+        if (!current() || error.name === 'AbortError') return false;
+        const denied = error.status === 401 || error.status === 403;
+        const hasPrevious = !denied && previous && previous.status !== 'unconfigured';
+        if (!hasPrevious) {
+          report = null;
+          showTrend(workspace, null, site);
+        }
+        notice.textContent = denied ? '当前账号无权查看网站统计。' : hasPrevious
+          ? '暂时无法更新，已保留上次读取的统计。' : '暂时读不到访问数据，请刷新统计。';
+        notice.hidden = false;
+      }
+      loading = false;
+      updateOverview();
+    };
+    const readIps = async () => {
+      try {
+        ipCount = await data.queries.read(visitScope, query, () => readUniqueIps(query), { refresh });
+        if (!current()) return true;
+        updateOverview();
+        if (ipCount === null) {
+          ipNotice.textContent = '该时段尚无可用的独立 IP 采集数据。';
+          ipNotice.hidden = false;
+        }
+        return true;
+      } catch (error) {
+        if (!current() || error.name === 'AbortError') return false;
+        const denied = error.status === 401 || error.status === 403;
+        if (denied) {
+          ipCount = undefined;
+          updateOverview();
+        }
+        ipNotice.textContent = denied ? '当前账号无权查看独立 IP 数。' : ipCount == null
+          ? '暂时无法读取独立 IP 数，请刷新统计。' : '暂时无法更新独立 IP 数，已保留上次数据。';
+        ipNotice.hidden = false;
+        return false;
+      }
+    };
     try {
-      const report = await data.queries.read(scope, query, () => readTrafficReport(site, dates), { refresh });
-      if (read.current() && canRead()) showTraffic(workspace, report, site, sameSelection);
-    } catch (error) {
-      if (!read.current() || error.name === 'AbortError') return;
-      const denied = error.status === 401 || error.status === 403;
-      const hasPrevious = !denied && previous && previous.status !== 'unconfigured';
-      if (!hasPrevious) showTraffic(workspace, null, site);
-      notice.textContent = denied ? '当前账号无权查看网站统计。' : hasPrevious
-        ? '暂时无法更新，已保留上次读取的统计。' : '暂时读不到访问数据，请刷新统计。';
-      notice.hidden = false;
+      const [, ipsRead] = await Promise.all([readAnalytics(), readIps()]);
+      return !current() || ipsRead;
     } finally {
       read.finish();
     }
@@ -209,6 +267,10 @@
     afterRender() {
       if (A.state.route === sheetsRoute) void sheets.refresh(document.querySelector('[data-sheets-workspace]'));
       else void loadTraffic(document.querySelector('[data-traffic]'), filters());
+    },
+    onDataChanges(scopes) {
+      if (A.state.route !== trafficRoute || !scopes.includes(visitScope)) return;
+      return loadTraffic(document.querySelector('[data-traffic]'), filters());
     },
     deactivate(region) {
       const read = region.querySelector('[data-traffic-read]');
