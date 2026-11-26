@@ -30,6 +30,9 @@ const el = {
 
 const ctx = el.canvas.getContext('2d');
 
+let viewportWidth = VIEWPORT_WIDTH;
+let viewportHeight = VIEWPORT_HEIGHT;
+
 let activeProfileKey = '';
 let expectedEmail = '';
 let ws = null;
@@ -128,6 +131,10 @@ function applyLoginVerification(verification) {
       setPill(el.loginBadge, '未登录（需手动登录）', 'warn');
       setMessage(verification.message, 'warn');
       break;
+    case 'expired':
+      setPill(el.loginBadge, '会话已过期（需重登）', 'err');
+      setMessage(verification.message, 'error');
+      break;
     default:
       setPill(el.loginBadge, '登录核验失败', 'err');
       setMessage(verification.message || '登录核验异常', 'error');
@@ -145,10 +152,18 @@ function applyProxyInfo(proxy) {
   }
 }
 
-async function drawBase64Frame(base64Data) {
+async function drawBase64Frame(base64Data, metadata) {
   if (renderingFrame || !base64Data) return;
   renderingFrame = true;
   try {
+    if (metadata?.deviceWidth > 0 && metadata?.deviceHeight > 0) {
+      if (viewportWidth !== metadata.deviceWidth || viewportHeight !== metadata.deviceHeight) {
+        viewportWidth = metadata.deviceWidth;
+        viewportHeight = metadata.deviceHeight;
+        el.canvas.width = viewportWidth;
+        el.canvas.height = viewportHeight;
+      }
+    }
     const binary = atob(base64Data);
     const bytes = new Uint8Array(binary.length);
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
@@ -197,7 +212,7 @@ function connectWs(profileKey) {
       return;
     }
     if (msg.type === 'frame') {
-      void drawBase64Frame(msg.data);
+      void drawBase64Frame(msg.data, msg.metadata);
     } else if (msg.type === 'navigated' && msg.url) {
       el.urlInput.value = msg.url;
     } else if (msg.type === 'loginVerification') {
@@ -214,11 +229,11 @@ function connectWs(profileKey) {
 
 function mapCanvasCoords(event) {
   const rect = el.canvas.getBoundingClientRect();
-  const scaleX = VIEWPORT_WIDTH / Math.max(rect.width, 1);
-  const scaleY = VIEWPORT_HEIGHT / Math.max(rect.height, 1);
+  const scaleX = viewportWidth / Math.max(rect.width, 1);
+  const scaleY = viewportHeight / Math.max(rect.height, 1);
   return {
-    x: Math.max(0, Math.min(VIEWPORT_WIDTH, Math.round((event.clientX - rect.left) * scaleX))),
-    y: Math.max(0, Math.min(VIEWPORT_HEIGHT, Math.round((event.clientY - rect.top) * scaleY)))
+    x: Math.max(0, Math.min(viewportWidth, Math.round((event.clientX - rect.left) * scaleX))),
+    y: Math.max(0, Math.min(viewportHeight, Math.round((event.clientY - rect.top) * scaleY)))
   };
 }
 
