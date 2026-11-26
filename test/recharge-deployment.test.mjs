@@ -62,6 +62,30 @@ assert len(calls)==1
 print('passed')`;
   assert.equal(execFileSync('python3', ['-c', code]).toString().trim(), 'passed');
 });
+
+test('canary command failures surface safe step and exit identifiers without leaking output', () => {
+  const canary = fileURLToPath(new URL('../deploy/recharge-core/canary.py', import.meta.url));
+  const code = `import runpy, types, subprocess
+m=runpy.run_path(${JSON.stringify(canary)})
+c=m['Canary']('a'*40)
+def fake_run(args, **kwargs):
+ return types.SimpleNamespace(returncode=17, stdout=b'secret-stdout', stderr=b'secret-stderr')
+m['subprocess'].run=fake_run
+try: c.command(['docker', 'exec'], step='card_plans_canary_exec'); raise AssertionError('expected failure')
+except m['CanaryError'] as err: assert str(err)=='card_plans_canary_exec_rc_17'
+def fake_sig(args, **kwargs):
+ return types.SimpleNamespace(returncode=-9, stdout=b'', stderr=b'')
+m['subprocess'].run=fake_sig
+try: c.command(['docker', 'exec'], step='source_203_adapter_exec'); raise AssertionError('expected signal')
+except m['CanaryError'] as err: assert str(err)=='source_203_adapter_exec_sig_9'
+def fake_timeout(args, **kwargs):
+ raise subprocess.TimeoutExpired(args, 30, output=b'secret')
+m['subprocess'].run=fake_timeout
+try: c.command(['docker', 'exec'], step='routing_migration_exec'); raise AssertionError('expected timeout')
+except m['CanaryError'] as err: assert str(err)=='routing_migration_exec_timeout'
+print('passed')`;
+  assert.equal(execFileSync('python3', ['-c', code]).toString().trim(), 'passed');
+});
 test('the host supervisor keeps credentials off Docker arguments and isolates only the native role', () => {
   const code = `import runpy,json\nm=runpy.run_path(${JSON.stringify(launcher)})\nprint(json.dumps([m['docker_arguments']('native','a'*40,'172.17.0.2','synthetic-image'),m['docker_arguments']('adapter','a'*40,'172.17.0.2','synthetic-image','http://127.0.0.1:44579')]))`;
   const [native, adapter] = JSON.parse(execFileSync('python3', ['-c', code]));
