@@ -1,3 +1,4 @@
+import { applyRechargeFixture } from './recharge-order-fixtures.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createLocalBusinessStore } from '../server/local-business.mjs';
@@ -13,7 +14,7 @@ test('自动入单按来源任务去重，迟到回执只补缺项并保留人�
     start: '', expiry: '', completedAt: '', paidAmount: '', paidCurrency: '',
     paymentId: '4321', cardId: ''
   };
-  const first = store.applyRechargeOrder({ since: at, row, order: buildRechargeOrder(evidence, {}, at) });
+  const first = applyRechargeFixture(store, { since: at, row, order: buildRechargeOrder(evidence, {}, at) });
   const original = store.load('commerce');
   assert.equal(original.data.orders[0].entitlementStatus, 'active');
   original.data.customers.push({ id: 'verified-customer', name: '已核对客户', active: true });
@@ -26,7 +27,7 @@ test('自动入单按来源任务去重，迟到回执只补缺项并保留人�
     start: '2026-11-07T10:00', expiry: '2026-12-07T10:00',
     completedAt: '2026-11-07T02:00:00.000Z', paidAmount: '99.00', paidCurrency: 'PHP'
   };
-  const repeat = store.applyRechargeOrder({ since: at, row, order: buildRechargeOrder(verified, {}, at) });
+  const repeat = applyRechargeFixture(store, { since: at, row, order: buildRechargeOrder(verified, {}, at) });
   assert.equal(repeat.orderNo, first.orderNo);
   const { orders } = store.load('commerce').data;
   assert.equal(orders.length, 1);

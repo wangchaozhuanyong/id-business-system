@@ -7,12 +7,15 @@ import { createLocalBusinessStore } from '../server/local-business.mjs';
 import { createRechargeOrderSync } from '../server/recharge-order-sync.mjs';
 import { createSnapshot, restoreSnapshot } from '../server/backup/local-sqlite.mjs';
 import { consumeCommittedJobs } from '../modules/external-events/committed-jobs.mjs';
+import { rechargeSessions, usedRechargeCode } from './recharge-order-fixtures.mjs';
 
 // Synthetic successful native task; no executor, network, payment or notification.
 const root = fileURLToPath(new URL('..', import.meta.url));
 const since = Date.parse('2026-11-10T00:00:00Z');
 const completed = since + 60_000;
 const job = 'synthetic-restored-success';
+const task = { jobKey: job, status: 'success', progress: 100,
+  createdAt: new Date(since + 1000).toISOString(), cdk: 'SYNTHETIC-RESTORE-CODE', cardLast4: '4242' };
 const event = { version: 1, receipt: 'a'.repeat(64), jobs: [job], scopes: ['task_logs'], reconcile: true };
 
 function upstream() {
@@ -23,16 +26,16 @@ function upstream() {
     fail() { available = false; },
     resume() { available = true; },
     client: {
-      async listCodes() { return [{ code: 'SYNTHETIC-RESTORE-CODE', plan_type: 'plus' }]; },
+      async listCodes() { return [usedRechargeCode(task)]; },
       async get(path) {
         reads.push(path);
         if (!available) throw new Error('synthetic read interruption');
         if (path === '/api/admin/task-logs/' + job) return {
-          task: { jobKey: job, status: 'success', createdAt: new Date(since + 1000).toISOString(),
-            cdk: 'SYNTHETIC-RESTORE-CODE', cardLast4: '4242' },
+          task,
           runtimeEntries: [{ jobKey: job, source: 'task', ts: completed,
             text: '任务结束 status=success progress=100' }]
         };
+        if (path.includes('&search=')) return rechargeSessions([task]);
         if (path === '/api/admin/cards') return { cards: [{ id: 91, last4: '4242',
           card_number: '4242424242424242', usage_count: 1, last_used_at: new Date(completed).toISOString() }] };
         if (path.startsWith('/api/admin/billing?')) return { total: 1, records: [{
@@ -101,7 +104,7 @@ for (const imported of [false, true]) test(
     assert.equal(rows.length, 1);
     assert.equal(rows[0].orderNo, orders[0].orderNo);
     assert.ok(rows[0].needs.includes('实扣金额待核对'));
-    assert.ok(remote.reads.every(path => /^\/api\/admin\/(task-logs\/|cards$|billing\?)/.test(path)));
+    assert.ok(remote.reads.every(path => /^\/api\/admin\/(task-logs\/|cards$|billing\?|sessions\?.+&search=)/.test(path)));
   });
 
 test('恢复回读失败不确认断点；确认丢失后的重放不重复创建订单', async t => {

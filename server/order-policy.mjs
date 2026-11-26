@@ -421,8 +421,8 @@ export function validPersonalPaidPrices(prices) {
   return validGroupedPaidPrices(prices, personalProduct);
 }
 
-export function nextOrderNo(orders) {
-  let maximum = 0;
+export function nextOrderNo(orders, minimum = 0) {
+  let maximum = minimum;
   for (const row of orders) {
     const sequence = Number(/^OD-LOCAL-(\d{1,12})$/.exec(row?.orderNo)?.[1] || 0);
     maximum = Math.max(maximum, sequence);

@@ -3,12 +3,15 @@ import test from 'node:test';
 import { createLocalBusinessStore } from '../server/local-business.mjs';
 import { createOrderRechargeClient } from '../server/order-recharge-client.mjs';
 import { buildRechargeOrder, createRechargeOrderSync, rechargeOrderEvidence } from '../server/recharge-order-sync.mjs';
+import { rechargeSessions, usedRechargeCode } from './recharge-order-fixtures.mjs';
 import { checkAppleOrder, deriveCardIssueFee, nextOrderNo, redactClaudeProOrderMaterials } from '../server/order-policy.mjs';
+import { rechargeAdmissionConflict, rechargeAdmissionPending } from '../server/recharge-order-admission.mjs';
+import { subscriptionForOrder } from '../server/subscription-management.mjs';
 
 const createdAt = '2026-10-31T15:30:00.000Z';
 const completedAt = '2026-10-31T15:45:00.000Z';
 const now = Date.parse('2026-10-31T16:00:00.000Z');
-const session = { jobKey: 'task-a', status: 'success', cdk: 'example-code', createdAt, cardLast4: '2345' };
+const session = { jobKey: 'task-a', status: 'success', progress: 100, cdk: 'example-code', createdAt, cardLast4: '2345' };
 const ownerData = { requests: [{ id: 'batch-a', status: 'issued', applicantId: 'employee-a', codes: ['EXAMPLE-CODE'] }] };
 
 test('browser reconciliation uses the terminal timestamp but does not promote an estimated billing amount', () => {
@@ -84,22 +87,21 @@ test('preview writes nothing and confirmed synchronization only reads the select
       return { ...row, orderNo: 'OD-LOCAL-0001' };
     }
   };
-  const other = { ...session, jobKey: 'task-b' };
+  const other = { ...session, jobKey: 'task-b', cdk: 'other-code' };
   const open = { ...session, gptApiOrderId: 'provider-a', gptApiRaw: JSON.stringify({
     orderId: 'provider-a', status: 'succeeded', targetEmail: 'account@example.test',
     planCode: 'plus', completedAt, payment: { amount: '123', currency: 'PHP' }
   }) };
   const paths = [];
   const client = {
-    listCodes: async () => [],
+    listCodes: async () => [usedRechargeCode(session), usedRechargeCode(other)],
     async get(path) {
       paths.push(path);
-      if (path.includes('/sessions')) return {
-        items: [session, other].map(({ jobKey }) => ({ job_key: jobKey, status: 'success' })), total: 2
-      };
+      if (path.includes('/sessions')) return rechargeSessions(path.includes('&search=')
+        ? [path.endsWith(other.cdk) ? other : session] : [session, other]);
       if (path.includes('/cards')) return { cards: [] };
       if (path.includes('/billing')) return { total: 0, records: [] };
-      return { task: { ...open, jobKey: path.split('/').at(-1) } };
+      return { task: path.endsWith(other.jobKey) ? { ...open, ...other } : open };
     }
   };
   let clock = Date.parse('2026-10-31T15:00:00.000Z');
@@ -133,7 +135,7 @@ test('accounting transport reads stock and rejects checkout and CDK creation rou
   assert.deepEqual(attempts, [['/api/admin/cdks', 'GET'], ['/api/admin/cdks/returns/stock', 'GET']]);
 });
 
-test('后台按终态入单，账单与卡池不可用时保留成功并等待原任务回执补资料', async () => {
+test('后台已核实充值码，账单与卡池不可用时保留成功并等待补资料', async () => {
   const start = Date.parse('2026-10-31T15:00:00.000Z');
   let time = now, restored = false;
   const records = new Map(), writes = [];
@@ -152,8 +154,9 @@ test('后台按终态入单，账单与卡池不可用时保留成功并等待�
     }
   };
   const client = {
-    async listCodes() { if (!restored) throw new Error('模拟码池不可用'); return []; },
+    async listCodes() { return [usedRechargeCode(session)]; },
     async get(path) {
+      if (path.includes('&search=')) return rechargeSessions([session]);
       if (path.startsWith('/api/admin/sessions')) return { total: 3, items: [
         { job_key: 'task-a', status: 'success' }, { job_key: 'task-b', status: 'failed' },
         { job_key: 'task-c', status: 'running' }
@@ -193,20 +196,22 @@ test('入单回读失败保持监控异常，管理员每次只重读一批已�
   t.after(() => store.close());
   const since = Date.parse('2026-10-31T15:00:00.000Z');
   const tasks = Array.from({ length: 7 }, (_, index) => 'retry-' + index);
+  const fixtures = tasks.map(jobKey => ({ ...session, jobKey, cdk: 'code-' + jobKey }));
   store.saveFeatureDocument('order-sync', 0, { since, rows: tasks.map(jobKey => ({
     jobKey, checkedAt: now, needs: ['本次回读未确认，可重试']
   })) });
   const reads = [], states = [];
   const client = {
-    listCodes: async () => [],
+    listCodes: async () => fixtures.map(task => usedRechargeCode(task)),
     async get(path) {
+      if (path.includes('&search=')) return rechargeSessions(fixtures.filter(task => path.endsWith(task.cdk)));
       if (path.startsWith('/api/admin/sessions')) return { total: 0, items: [] };
       if (path.startsWith('/api/admin/billing')) return { total: 0, records: [] };
       if (path === '/api/admin/cards') return { cards: [] };
       assert(path.startsWith('/api/admin/task-logs/'));
       const jobKey = path.split('/').at(-1);
       reads.push(jobKey);
-      return { task: { ...session, jobKey }, runtimeEntries: [{
+      return { task: fixtures.find(task => task.jobKey === jobKey), runtimeEntries: [{
         source: 'task', jobKey, ts: Date.parse(completedAt), text: '任务结束 status=success progress=100'
       }] };
     }
@@ -299,7 +304,8 @@ test('collection, table-write and quote failures affect only auxiliary synchroni
       async (url, options) => {
         attempts.push({ path: url.pathname, method: options.method });
         assert.equal(options.method, 'GET');
-        if (url.pathname === '/api/admin/cdks') return Response.json([]);
+        if (url.pathname === '/api/admin/cdks') return Response.json([usedRechargeCode(task)]);
+        if (url.pathname === '/api/admin/sessions') return Response.json(rechargeSessions([task]));
         if (url.pathname === '/api/admin/cards') return Response.json({ cards: [{
           id: 1, last4: '2345', card_number: privateValues[3], cvc: privateValues[2], session: privateValues[1]
         }] });
@@ -389,4 +395,91 @@ test('自动充值调试数据（无充值码）严禁入单，只有充值码�
   const order = buildRechargeOrder(evidence, {}, now);
   assert.equal(order.rechargeCode, 'VALID-CDK-CODE');
   assert.equal(order.email, 'user@example.test');
+});
+
+test('实时提交、后台补扫和管理员重读共用成功码准入，迟到回执仅入单一次', async t => {
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  const since = Date.parse(createdAt) - 1000;
+  store.saveFeatureDocument('order-sync', 0, { since, rows: [] });
+  const tasks = [
+    { ...session, jobKey: 'debug-marker', cdk: '[checkout-debug]' },
+    { ...session, jobKey: 'debug-blank', cdk: '' },
+    { ...session, jobKey: 'internal-product', cdk: 'ADMIN_PRODUCT_GEN:1' },
+    { ...session, jobKey: 'manual-review', cdk: 'review-code', status: 'manual' },
+    { ...session, jobKey: 'incomplete', cdk: 'incomplete-code', progress: 99 },
+    { ...session, jobKey: 'duplicate-1', cdk: 'duplicate-code' },
+    { ...session, jobKey: 'duplicate-2', cdk: 'duplicate-code' },
+    { ...session, jobKey: 'wrong-job', cdk: 'wrong-job-code' },
+    { ...session, jobKey: 'unknown-code', cdk: 'unknown-code' },
+    session
+  ];
+  let poolReady = false, clock = now;
+  const taskReads = [];
+  const client = {
+    async listCodes() {
+      return [tasks[4], tasks[6]].map(task => usedRechargeCode(task)).concat([
+        { ...usedRechargeCode(tasks[7]), session_job_key: 'different-job' },
+        { ...usedRechargeCode(session), status: poolReady ? 'used' : 'processing' }
+      ]);
+    },
+    async get(path) {
+      if (path.includes('/task-logs/')) {
+        const task = tasks.find(row => path.endsWith('/' + row.jobKey));
+        taskReads.push(task.jobKey);
+        return { task, runtimeEntries: [{ jobKey: task.jobKey, source: 'task',
+          ts: Date.parse(completedAt), text: '任务结束 status=success progress=100' }] };
+      }
+      if (path.includes('/sessions?')) {
+        const code = new URL(path, 'http://fixture.local').searchParams.get('search');
+        return rechargeSessions(code ? tasks.filter(task => task.cdk === code) : tasks);
+      }
+      if (path.includes('/cards')) return { cards: [] };
+      return { total: 1, records: [{ status: 'success', cdk_code: session.cdk, plan_type: 'plus',
+        stripe_session_id: 'verified-fixture', email: 'recharge@example.test', payment_time: completedAt, card_last4: '2345' }] };
+    }
+  };
+  const sync = createRechargeOrderSync({ store, client, background: true, clock: () => clock, publicOrigin: 'http://fixture.local' });
+  for (const batch of [tasks.slice(0, 6), tasks.slice(6)])
+    await sync.runCommitted({ apply: true, jobKeys: batch.map(task => task.jobKey) });
+  assert.equal(store.load('commerce').data, null);
+  const pending = Object.fromEntries(store.featureDocument('order-sync').data.rows.map(row => [row.jobKey, row]));
+  for (const task of tasks.slice(0, 3)) assert.equal(pending[task.jobKey].excluded, true);
+  assert.equal(pending['manual-review'], undefined);
+  for (const task of [tasks[4], tasks[7], tasks[8], session])
+    assert.deepEqual(pending[task.jobKey].needs, [rechargeAdmissionPending]);
+  for (const task of tasks.slice(5, 7)) assert.deepEqual(pending[task.jobKey].needs, [rechargeAdmissionConflict]);
+  poolReady = true;
+  clock += 15 * 60_000;
+  await sync.run({ apply: true });
+  const response = { writeHead(status) { this.status = status; }, end(value) { this.body = JSON.parse(value); } };
+  await sync.handle({ method: 'POST', headers: { origin: 'http://fixture.local' },
+    async *[Symbol.asyncIterator]() { yield JSON.stringify({ mode: 'retry' }); }
+  }, response, { role: 'admin' });
+  assert.equal(response.status, 200);
+  await sync.runCommitted({ apply: true, jobKeys: [session.jobKey, 'debug-marker'] });
+  const commerce = store.load('commerce');
+  assert.equal(commerce.data.orders.length, 1);
+  const [order] = commerce.data.orders;
+  assert.equal(order.taskId, session.jobKey);
+  assert.equal(order.email, 'recharge@example.test');
+  assert.equal(order.receiptConfirmed, false);
+  assert.ok(subscriptionForOrder({ commerce, inventory: { data: null } }, order.id, now));
+  assert.equal(taskReads.filter(key => key === 'debug-marker').length, 1);
+});
+
+test('订单写入事务拒绝伪造或冲突的充值码关联', t => {
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  const first = buildRechargeOrder({ jobKey: session.jobKey, rechargeCode: session.cdk }, {}, now);
+  const entry = { since: now, row: { jobKey: session.jobKey, needs: [] }, order: first };
+  assert.throws(() => store.applyRechargeOrder(entry), /缺少已核实/);
+  assert.ok(store.applyRechargeOrder({ ...entry, admission: usedRechargeCode(session) }).orderNo);
+  const duplicate = { ...session, jobKey: 'another-task', cdk: session.cdk.toUpperCase() };
+  const result = store.applyRechargeOrder({ ...entry, row: { jobKey: duplicate.jobKey, needs: [] },
+    admission: usedRechargeCode(duplicate),
+    order: { ...first, taskId: duplicate.jobKey, rechargeCode: duplicate.cdk } });
+  assert.deepEqual(result.needs, [rechargeAdmissionConflict]);
+  assert.equal(result.orderNo, undefined);
+  assert.equal(store.load('commerce').data.orders.length, 1);
 });

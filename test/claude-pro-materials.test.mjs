@@ -1,3 +1,4 @@
+import { applyRechargeFixture } from './recharge-order-fixtures.mjs';
 import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -1023,14 +1024,14 @@ test('confirmed recharge readback snapshots a type only on first association wit
       product: 'GPT', plan: 'Plus', source: '线上代充', taskId: 'synthetic-job', cardId
     });
     const input = { since: 0, row: { jobKey: order.taskId, needs: [] }, order };
-    store.applyRechargeOrder(input);
+    applyRechargeFixture(store, input);
     const [original] = store.load('commerce').data.orders;
     assert.equal(original.cardTypeId, typeId);
     assert.equal(original.cardTypeName, '同步卡类型');
     store.saveFeatureDocument(cardTypeDocument, 1, {
       ...data, items: [{ id: typeId, name: '更新卡类型', active: true }]
     });
-    store.applyRechargeOrder(input);
+    applyRechargeFixture(store, input);
     const [latest] = store.load('commerce').data.orders;
     assert.deepEqual(latest, original);
   } finally { store.close(); }

@@ -1,3 +1,4 @@
+import { applyRechargeFixture } from './recharge-order-fixtures.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createLocalBusinessStore } from '../server/local-business.mjs';
@@ -36,7 +37,7 @@ function command(store, overrides = {}) {
 test('库存详情仅向可管理库存的账号返回历史银行卡号', async t => {
   const store = seed(t, 'gpt');
   const number = '4242424242424242', original = store.load('commerce').data.orders[0];
-  store.applyRechargeOrder({ since: Date.now(), row: { jobKey: 'fixture-bank-order', needs: [] },
+  applyRechargeFixture(store, { since: Date.now(), row: { jobKey: 'fixture-bank-order', needs: [] },
     order: { ...original, taskId: 'fixture-bank-order', source: '线上代充', cardId: 'recharge:40', paymentId: '4242' } });
   store.saveFeatureDocument('order-card-archive', 0, { cards: { 'recharge:40': { number, last4: '4242' } } });
   const publicOrigin = 'https://inventory.example.test';

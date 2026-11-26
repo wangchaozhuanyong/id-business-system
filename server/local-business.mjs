@@ -24,6 +24,8 @@ import { recordFingerprintInput, validRecordEdit } from '../modules/data/record-
 import { mergeRecordEdit } from './record-edit.mjs';
 import { businessListQuery, inventoryPageDomain, ordersPageDomain, ordersPageRoles, readInventoryPage, readOrdersPage } from './business-lists.mjs';
 import { matchRechargeRenewal, renewalAssociationIssue, renewalExpiryIssue } from './recharge-renewal.mjs';
+import { rechargeAdmissionConflict, rechargeCodeKey } from './recharge-order-admission.mjs';
+import { prepareRechargeDebugRemoval } from './recharge-debug-cleanup.mjs';
 import { validOrderCurrencies, validOrderCurrencyGroups, retainOrderSettings } from './order-currency-settings.mjs';
 import { isDeepStrictEqual } from 'node:util';
 import { employeeCommerce, feeAndPriceSettingsChanged, financeCommerce, managesBusiness, protectedSettingsChanged, registrarInventory } from './access-roles.mjs';
@@ -764,6 +766,22 @@ export function readBusinessAuditDocuments(databasePath, key) {
   } finally {
     db.close();
   }
+}
+
+function readCleanupDocuments(db, key) {
+  const rows = db.prepare('SELECT domain, version, payload FROM business_document').all();
+  return Object.fromEntries(rows.map(({ domain, version, payload }) =>
+    [domain, { version, data: decrypt(key, domain, version, payload) }]));
+}
+
+export function readRechargeDebugCleanupDocuments(databasePath) {
+  const key = readFileSync(databasePath + '.key');
+  try {
+    if (key.length !== 32) throw new Error('本机数据密钥无效');
+    const db = new DatabaseSync(databasePath, { readOnly: true, timeout: 4000 });
+    try { return readCleanupDocuments(db, key); }
+    finally { db.close(); }
+  } finally { key.fill(0); }
 }
 
 function checkDomain(domain) {
@@ -1667,7 +1685,7 @@ export function createLocalBusinessStore(databasePath) {
         const inventory = readDocument('inventory');
         const time = new Date();
         const { order, created } = recordClaudeHistoricalSale(input, inventory, commerce, actor,
-          time, orderCostSnapshot(readDocument('settings').data?.costSettings));
+          time, orderCostSnapshot(readDocument('settings').data?.costSettings), readDocument('order-sync').data?.orderSequenceFloor);
         const version = commerce.version + Number(created);
         if (created) {
           const label = '补录 Claude 历史销售';
@@ -2866,7 +2884,7 @@ export function createLocalBusinessStore(databasePath) {
                   throw new LocalDataError(400, '请填写订单产品和付款方式');
                 const error = checkNewOrder(row);
                 if (error) throw new LocalDataError(400, error);
-                row.orderNo = nextOrderNo(seen);
+                row.orderNo = nextOrderNo(seen, readDocument('order-sync').data?.orderSequenceFloor);
                 row.costSettings = orderCostSnapshot(current('settings')?.costSettings);
                 delete row.issueFeeSnapshot;
                 delete row.cardUsedAt;
@@ -3454,15 +3472,41 @@ export function createLocalBusinessStore(databasePath) {
         return complete(result);
       });
     },
-    applyRechargeOrder({ since, row, order, firstUse, codeRenewal }) {
+    removeRechargeDebugOrders({ verified, orderNos, confirmation, restoredBackup }) {
+      return writeTransaction(() => {
+        const documents = readCleanupDocuments(db, key);
+        const removal = prepareRechargeDebugRemoval(documents, verified, orderNos, confirmation, restoredBackup);
+        const version = documents.commerce.version + 1;
+        putDocument('commerce', version, removal.commerce);
+        putDocument('order-sync', documents['order-sync'].version + 1, removal.status);
+        const actor = { id: 'recharge-debug-cleanup', name: '充值调试清理工具' };
+        log.run(new Date().toISOString(), 'commerce', 'recharge_debug_order_removal',
+          auditSummary('清除充值调试误入订单 ' + removal.removed.length + ' 笔', actor, null, { confirmation }), version);
+        return { removed: removal.removed.map(row => row.orderNo), version };
+      });
+    },
+    applyRechargeOrder({ since, row, order, admission, firstUse, codeRenewal }) {
+      const codeKey = rechargeCodeKey(order?.rechargeCode);
+      if (order && (!automaticGptOrder(order) || order.taskId !== row.jobKey || !codeKey ||
+          rechargeCodeKey(admission?.code) !== codeKey || admission.type !== '自助' ||
+          admission.status !== 'used' || admission.session_job_key !== row.jobKey || row.excluded))
+        throw new LocalDataError(409, '缺少已核实的充值码成功回执');
       return writeTransaction(() => {
         const status = readDocument('order-sync');
         const commerce = readDocument('commerce');
         const data = commerce.data || { customers: [], tenants: [], orders: [], operating: [], rentBatches: [], logs: [] };
         const previous = status.data?.rows || [];
         const previousResult = previous.find(item => item.jobKey === row.jobKey);
-        const old = data.orders.find((item) => item.taskId === row.jobKey && automaticGptOrder(item));
+        if (previousResult?.excluded) return previousResult;
+        const sameTask = data.orders.filter(item => item.taskId === row.jobKey && automaticGptOrder(item));
+        const [old] = sameTask;
         const result = { ...row };
+        const oldCode = rechargeCodeKey(old?.rechargeCode || old?.cdk);
+        if (order && (sameTask.length > 1 || oldCode && oldCode !== codeKey || data.orders.some(item =>
+          item.taskId !== row.jobKey && automaticGptOrder(item) && rechargeCodeKey(item.rechargeCode || item.cdk) === codeKey))) {
+          result.needs = [rechargeAdmissionConflict];
+          order = undefined;
+        }
         let changed;
         if (old) {
           result.orderNo = old.orderNo;
@@ -3512,7 +3556,7 @@ export function createLocalBusinessStore(databasePath) {
           } else if (order) result.needs = ['成功回执与已有订单不一致'];
         } else if (order) {
           const id = 'commerce-order-' + randomUUID();
-          const orderNo = nextOrderNo(data.orders);
+          const orderNo = nextOrderNo(data.orders, status.data?.orderSequenceFloor);
           const price = rechargePriceSnapshot(readDocument('settings'), order.plan, new Date().toISOString());
           changed = { ...order, id, orderNo, entitlementStatus: 'active', saleAmount: price.saleAmount, rechargePriceSnapshot: price };
           data.orders.unshift(changed);
