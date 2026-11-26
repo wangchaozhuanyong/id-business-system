@@ -204,3 +204,24 @@ test('signed health distinguishes real readiness from an arbitrary 200 and does 
   assert.deepEqual(await probe(), { ready: false, reason: 'runtime_not_ready' });
   await assert.rejects(probe({ upstreamUrl: 'http://mysql.example.test:43101' }), /回环端口/);
 });
+
+test('runtime probe retries once on transient 503 and recovers', async (t) => {
+  const secret = randomBytes(32).toString('hex');
+  let attempts = 0;
+  const server = createServer((_req, res) => {
+    attempts += 1;
+    if (attempts === 1) {
+      res.writeHead(503, { 'Content-Type': 'application/json' }).end(JSON.stringify({ success: false }));
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' }).end(
+      JSON.stringify({ success: true, runtime: { active_foreground_jobs: 0, max_foreground_jobs: 2 } })
+    );
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const upstreamUrl = 'http://127.0.0.1:' + server.address().port;
+  assert.deepEqual(await probeCodexdaichongRuntime({ upstreamUrl, secret }), { ready: true });
+  assert.equal(attempts, 2);
+});

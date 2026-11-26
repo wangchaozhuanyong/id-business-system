@@ -27,29 +27,18 @@ export function validateRuntimeOrigin(value) {
   return url.origin;
 }
 
-export async function probeCodexdaichongRuntime({
-  upstreamUrl,
-  secret,
-  actor = probeActor,
-  clientIp,
-  timeoutMs = 3000
-}) {
-  const origin = validateRuntimeOrigin(upstreamUrl);
-  if (typeof secret !== 'string' || Buffer.byteLength(secret) < 32)
-    throw new TypeError('需要至少 32 字节的桥接密钥');
+async function probeOnce({ origin, headers, timeoutMs }) {
   try {
     const response = await fetch(origin + path, {
       redirect: 'error',
       signal: AbortSignal.timeout(timeoutMs),
-      headers: {
-        ...(isIP(clientIp) ? { 'x-real-ip': clientIp } : {}),
-        'x-id-recharge-assertion': signRechargeAssertion(secret, 'GET', path, actor)
-      }
+      headers
     });
     if (!response.ok) {
       await response.body?.cancel();
       return {
         ready: false,
+        status: response.status,
         reason: [401, 403].includes(response.status) ? 'bridge_rejected' : 'runtime_not_ready'
       };
     }
@@ -80,4 +69,30 @@ export async function probeCodexdaichongRuntime({
   } catch {
     return { ready: false, reason: 'unreachable' };
   }
+}
+
+export async function probeCodexdaichongRuntime({
+  upstreamUrl,
+  secret,
+  actor = probeActor,
+  clientIp,
+  timeoutMs = 5000,
+  retries = 1
+}) {
+  const origin = validateRuntimeOrigin(upstreamUrl);
+  if (typeof secret !== 'string' || Buffer.byteLength(secret) < 32)
+    throw new TypeError('需要至少 32 字节的桥接密钥');
+  const headers = {
+    ...(isIP(clientIp) ? { 'x-real-ip': clientIp } : {}),
+    'x-id-recharge-assertion': signRechargeAssertion(secret, 'GET', path, actor)
+  };
+  let last;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    last = await probeOnce({ origin, headers, timeoutMs });
+    if (last.ready) return { ready: true };
+    const transient = last.reason === 'unreachable' || [502, 503, 504].includes(last.status);
+    if (!transient || attempt === retries) return { ready: false, reason: last.reason };
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  }
+  return { ready: false, reason: last?.reason || 'unreachable' };
 }
