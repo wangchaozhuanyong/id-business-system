@@ -1,3 +1,4 @@
+import { applyRechargeFixture } from './recharge-order-fixtures.mjs';
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
 import test from 'node:test';
@@ -147,7 +148,7 @@ test('充值码成功只关联一次，实际到期确认与待核对标记一�
     start: '2026-11-12T12:00', expiry: '2026-12-12T12:00', completedAt: new Date(time).toISOString(),
     paidAmount: '', paidCurrency: '', paymentId: '', cardId: '', employeeId: ''
   }, {}, time);
-  const sync = () => store.applyRechargeOrder({ since: time - 1, row: {
+  const sync = () => applyRechargeFixture(store, { since: time - 1, row: {
     jobKey: receipt.taskId, checkedAt: time, needs: []
   }, order: receipt, codeRenewal: true });
   assert.deepEqual(sync().needs, ['续费到期时间待核对']);

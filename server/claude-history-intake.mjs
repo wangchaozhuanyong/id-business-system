@@ -181,7 +181,7 @@ export function claudeHistoricalSales(inventory, commerce, now = Date.now()) {
 const saleFields = ['accountId', 'tenantId', 'customerId', 'payment', 'saleAmount', 'saleCurrency',
   'actualCostAmount', 'actualCostCurrency', 'subscriptionEndedAt', 'notes', 'appleIdId', 'paidAmount', 'paidCurrency'];
 
-export function recordClaudeHistoricalSale(input, inventory, commerce, actor, time, costSettings) {
+export function recordClaudeHistoricalSale(input, inventory, commerce, actor, time, costSettings, orderSequenceFloor) {
   if (!actor?.id || !['admin', 'super'].includes(actor.role))
     throw new ClaudeHistoryIntakeError('只有管理员可以补录 Claude 历史销售', 403);
   if (!Number.isSafeInteger(input.inventoryVersion) || !Number.isSafeInteger(input.commerceVersion) ||
@@ -232,7 +232,7 @@ export function recordClaudeHistoricalSale(input, inventory, commerce, actor, ti
   const order = {
     ...sale,
     id: 'commerce-order-' + randomUUID(),
-    orderNo: nextOrderNo(orders),
+    orderNo: nextOrderNo(orders, orderSequenceFloor),
     product: candidate.plan === 'Pro' ? 'Claude Pro' : 'Claude Max',
     plan: candidate.plan,
     email: candidate.email,

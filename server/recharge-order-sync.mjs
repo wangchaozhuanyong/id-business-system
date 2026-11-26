@@ -1,6 +1,8 @@
 import { currencies } from '../modules/finance/accounting.mjs';
 import { lookupRechargeCodeOwner } from './recharge-code-requests.mjs';
 import { rechargePlanLabels, validMoney } from './order-policy.mjs';
+import { readRechargeAdmission, rechargeAdmissionConflict, rechargeAdmissionPending,
+  rechargeCodeKey, rechargeEvidenceConflict } from './recharge-order-admission.mjs';
 import { renewalAssociationIssue, renewalExpiryIssue } from './recharge-renewal.mjs';
 
 export const orderSyncRoute = '/api/local/order-sync';
@@ -10,7 +12,8 @@ const maxBillPages = 3;
 const maxChecks = 6;
 const retryAfter = 15 * 60_000;
 const readbackFailure = '本次回读未确认，可重试';
-const retryable = row => !row.excluded && row.needs?.includes(readbackFailure);
+const retryable = row => !row.excluded && row.needs?.some(issue =>
+  [readbackFailure, rechargeAdmissionPending, rechargeAdmissionConflict, rechargeEvidenceConflict].includes(issue));
 const hasReadbackNeeds = row => row.needs?.some(issue => issue !== renewalExpiryIssue && issue !== renewalAssociationIssue);
 const fallbackRules = Object.freeze({
   currency: 'CNY', version: 1, cardIssueUsd: '0.5', cardPercent: '0.008', cardPerPaymentUsd: '0.3'
@@ -19,7 +22,7 @@ const beijing = (time) => new Date(time + 28800000).toISOString().slice(0, 16);
 const canonical = (value) => {
   const compact = typeof value === 'string' ? value.toLowerCase().replace(/[ _-]/g, '') : '';
   return ({ chatgptplusplan: 'plus', chatgptplus: 'plus', chatgptpro100: 'pro100',
-    chatgptpro200: 'pro200', chatgptpro500: 'pro500' })[compact] || compact;
+    chatgptpro200: 'pro200', chatgptpro500: 'pro500', pro5x: 'pro100', pro20x: 'pro200', pro50x: 'pro500' })[compact] || compact;
 };
 const emailValid = (value) => typeof value === 'string' && value.trim().length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
 const utcInstant = (value) => typeof value === 'string' && /(?:Z|[+-]\d{2}:\d{2})$/.test(value) ? Date.parse(value) : NaN;
@@ -56,9 +59,10 @@ export function rechargeOrderEvidence(task, {
   const created = utcInstant(task.createdAt);
   const provider = providerReceipt(task);
   const code = typeof task.cdk === 'string' && task.cdk ? task.cdk.trim() : '';
-  const codePlan = codes.find((row) => row.code === code)?.plan_type;
+  const codeKey = rechargeCodeKey(code);
+  const codePlan = codeKey ? codes.find((row) => rechargeCodeKey(row.code) === codeKey)?.plan_type : '';
   const matched = code && Number.isFinite(created) ? bills.filter((row) =>
-    row.status === 'success' && row.cdk_code === code && row.stripe_session_id &&
+    row.status === 'success' && codeKey && rechargeCodeKey(row.cdk_code) === codeKey && row.stripe_session_id &&
     (!task.cardLast4 || row.card_last4 === task.cardLast4) &&
     utcInstant(row.payment_time) >= created && utcInstant(row.payment_time) <= now &&
     utcInstant(row.payment_time) - created <= 24 * 3600000) : [];
@@ -69,13 +73,13 @@ export function rechargeOrderEvidence(task, {
   const orbit = orbitLinks.length === 1 && Number.isSafeInteger(orbitLinks[0].cardId) && orbitLinks[0].cardId > 0 ? orbitLinks[0] : null;
   const evidencePlan = canonical(provider?.plan || bill?.plan_type || orbit?.planType);
   const codeCanonical = canonical(codePlan);
-  const conflict = (evidencePlan && codeCanonical && evidencePlan !== codeCanonical) ||
-    (orbit?.planType && evidencePlan && canonical(orbit.planType) !== evidencePlan);
+  const conflict = new Set([codeCanonical, provider?.plan, canonical(bill?.plan_type), canonical(orbit?.planType)]
+    .filter(Boolean)).size > 1;
   const plan = conflict ? '' : Object.hasOwn(rechargePlanLabels, evidencePlan || codeCanonical)
     ? rechargePlanLabels[evidencePlan || codeCanonical] : '';
-  const email = provider?.email || bill?.email || orbit?.accountEmail;
-  const verifiedEmails = new Set([provider?.email, bill?.email, orbit?.accountEmail]
-    .filter(emailValid).map(value => value.trim().toLowerCase()));
+  const emails = [provider?.email, bill?.email, orbit?.accountEmail, task.tokenPreview].filter(emailValid);
+  const [email] = emails;
+  const verifiedEmails = new Set(emails.map(value => value.trim().toLowerCase()));
   const tails = [...new Set([task.cardLast4, provider?.tail, bill?.card_last4, orbit?.cardLast4].filter(Boolean))];
   const tail = tails.length === 1 && /^\d{4}$/.test(tails[0]) ? tails[0] : '';
   const rawPan = typeof bill?.card_number === 'string' ? bill.card_number : '';
@@ -105,14 +109,14 @@ export function rechargeOrderEvidence(task, {
     typeof firstUse !== 'boolean' && '首次开卡费待核对'
   ].filter(Boolean);
   return {
-    jobKey: task.jobKey, email: emailValid(email) ? email.trim() : '', plan, start,
+    jobKey: task.jobKey, email: email?.trim() || '', plan, start,
     completedAt: start ? new Date(completed).toISOString() : '',
     expiry: start ? expiryFor(start) : '',
     paidAmount: provider?.paidAmount || '', paidCurrency: provider?.paidCurrency || '',
     paymentId: tail, cardId, employeeId: owner?.employeeId || '',
     code, rechargeCode: code,
     ...(/^\d{12,19}$/.test(savedNumber || '') && tail && savedNumber.endsWith(tail) && { proCardNumber: savedNumber }),
-    firstUse, needs,
+    firstUse, needs, conflict: conflict || verifiedEmails.size > 1,
     codeRenewal: Boolean(code && (bill || provider) && emailValid(email) && verifiedEmails.size === 1 && plan && start)
   };
 }
@@ -197,15 +201,14 @@ export function createRechargeOrderSync({ store, client, publicOrigin, quoteServ
       .sort((a, b) => (prior.get(a)?.checkedAt || 0) - (prior.get(b)?.checkedAt || 0));
     if (!candidates.length) return { rows: [], more };
     const date = beijing(saved.since).slice(0, 10);
-    let shared;
+    let sharedCodes, shared;
     async function evidenceSources() {
-      shared ??= Promise.allSettled([client.listCodes(), client.get('/api/admin/cards'), readBills(date)])
-        .then(([codeResult, cardResult, billingResult]) => {
-          if (committed && [codeResult, cardResult, billingResult].some(result => result.status !== 'fulfilled'))
+      shared ??= Promise.allSettled([client.get('/api/admin/cards'), readBills(date)])
+        .then(([cardResult, billingResult]) => {
+          if (committed && [cardResult, billingResult].some(result => result.status !== 'fulfilled'))
             throw new Error('committed_evidence_unavailable');
           more ||= billingResult.status === 'fulfilled' && billingResult.value.more;
           return {
-            codes: codeResult.status === 'fulfilled' && Array.isArray(codeResult.value) ? codeResult.value : [],
             cards: cardResult.status === 'fulfilled' && Array.isArray(cardResult.value?.cards) ? cardResult.value.cards : [],
             bills: billingResult.status === 'fulfilled' ? billingResult.value.bills : []
           };
@@ -217,6 +220,10 @@ export function createRechargeOrderSync({ store, client, publicOrigin, quoteServ
     const rows = [];
     for (const jobKey of candidates.slice(0, maxChecks)) {
       const checkedAt = clock();
+      const saveStatus = fields => {
+        const row = { jobKey, checkedAt, ...fields };
+        return apply ? store.applyRechargeOrder({ since: saved.since, row }) : row;
+      };
       let result;
       try {
         const { task, runtimeEntries } = await client.get('/api/admin/task-logs/' + jobKey);
@@ -225,9 +232,19 @@ export function createRechargeOrderSync({ store, client, publicOrigin, quoteServ
           continue;
         }
         if (task.status !== 'success') continue;
-        if (!committed && (!task.cdk || !String(task.cdk).trim())) continue;
-        if (committed) store.rememberRechargeSessions([jobKey], saved.scanOffset);
-        const { codes, cards, bills } = await evidenceSources();
+        if (!rechargeCodeKey(task.cdk)) {
+          if (apply) saveStatus({ excluded: true, needs: [] });
+          continue;
+        }
+        if (apply && committed) store.rememberRechargeSessions([jobKey], saved.scanOffset);
+        const codes = await (sharedCodes ??= Promise.resolve().then(() => client.listCodes()));
+        if (!Array.isArray(codes)) throw new Error('代充码列表格式不正确');
+        const admission = await readRechargeAdmission(task, codes, client);
+        if (!admission.code) {
+          rows.push(publicSummary(saveStatus({ needs: [admission.needs] })));
+          continue;
+        }
+        const { cards, bills } = await evidenceSources();
         let orbitCards = [];
         if (typeof task.gptApiOrderId === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(task.gptApiOrderId)) {
           try {
@@ -236,8 +253,13 @@ export function createRechargeOrderSync({ store, client, publicOrigin, quoteServ
             if (Array.isArray(related.cards)) orbitCards = related.cards;
           } catch (error) { if (committed) throw error; }
         }
-        const evidence = rechargeOrderEvidence(task, { bills, codes, cards, orbitCards, ownerData, runtimeEntries, now: checkedAt });
-        if (!evidence || (!committed && !evidence.code)) continue;
+        const evidence = rechargeOrderEvidence(task, {
+          bills, codes: [admission.code], cards, orbitCards, ownerData, runtimeEntries, now: checkedAt
+        });
+        if (evidence.conflict) {
+          rows.push(publicSummary(saveStatus({ needs: [rechargeEvidenceConflict] })));
+          continue;
+        }
         const completed = utcInstant(evidence.completedAt);
         const created = utcInstant(task.createdAt);
         if (!(completed >= saved.since || !Number.isFinite(completed) && created >= saved.since)) {
@@ -253,7 +275,7 @@ export function createRechargeOrderSync({ store, client, publicOrigin, quoteServ
           if (!order.fxSnapshot) evidence.needs.push('订单汇率尚未取得');
         }
         result = { jobKey, needs: evidence.needs, checkedAt };
-        if (apply) result = store.applyRechargeOrder({ since: saved.since, row: result, order,
+        if (apply) result = store.applyRechargeOrder({ since: saved.since, row: result, order, admission: admission.code,
           firstUse: evidence.firstUse, codeRenewal: evidence.codeRenewal });
       } catch (error) {
         result = { jobKey, checkedAt, needs: [committed && error.upstreamStatus === 404

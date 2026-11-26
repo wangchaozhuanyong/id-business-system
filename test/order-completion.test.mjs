@@ -1,3 +1,4 @@
+import { applyRechargeFixture } from './recharge-order-fixtures.mjs';
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
 import test from 'node:test';
@@ -79,7 +80,7 @@ test('订单补全展示已核对的完整卡号并保留订单归属限制', t 
     bankOrder('other', { proCardNumber: first, paymentId: '4242', rechargeOwnerId: b.id }));
   store.saveBatch([{ domain: 'commerce', version: 0,
     data: { ...data, tenants: [], operating: [], rentBatches: [], logs: [] } }]);
-  store.applyRechargeOrder({ since: Date.parse(at), row: { jobKey: 'task-stored', needs: [] },
+  applyRechargeFixture(store, { since: Date.parse(at), row: { jobKey: 'task-stored', needs: [] },
     order: bankOrder('stored', { proCardNumber: first, paymentId: '4242' }) });
   store.saveFeatureDocument('order-card-archive', 0, { cards: { 'recharge:1': { number: archived, last4: '4444' } } });
   const { items } = store.orderCompletionView(a, new URLSearchParams(), owners);
@@ -217,7 +218,7 @@ test('同一 GPT 原单补分配、客户及跨币种实收，后续回读和重
   auto.fxSnapshot = createOrderSnapshot({ source: '合成凭据 R-11', at: '2026-11-10T00:00:00Z',
     expiresAt: '2026-11-11T00:00:00Z', rates: { MYR: '1.6', PHP: '0.12', USD: '7' } }, auto, Date.parse(at));
   const upstream = { since: Date.parse(at), row: { jobKey: auto.taskId, needs: ['邮箱证据待核对'] }, order: auto };
-  const imported = store.applyRechargeOrder(upstream);
+  const imported = applyRechargeFixture(store, upstream);
   const [{ id }] = store.load('commerce').data.orders;
   assert.equal(store.orderCompletionView(a, new URLSearchParams(), owners).items.length, 0);
   const partial = store.saveOrderCompletion(admin, { action: 'complete', orderId: id, version: 1, notes: '合成备注' }, owners);
@@ -245,8 +246,8 @@ test('同一 GPT 原单补分配、客户及跨币种实收，后续回读和重
   assert.equal(calculateConfirmedNetReceipt(original, { currency: 'CNY', clock: Date.parse(at) }), '144.8000');
 
   const readback = { ...upstream, order: { ...auto, email: 'captured@example.test', paymentId: '1234', rechargeOwnerId: b.id } };
-  assert.equal(store.applyRechargeOrder(readback).orderNo, original.orderNo);
-  assert.equal(store.applyRechargeOrder(readback).orderNo, original.orderNo);
+  assert.equal(applyRechargeFixture(store, readback).orderNo, original.orderNo);
+  assert.equal(applyRechargeFixture(store, readback).orderNo, original.orderNo);
   const updated = store.load('commerce').data.orders;
   assert.equal(updated.length, 1);
   assert.equal(updated[0].version, 4);
@@ -265,7 +266,7 @@ test('同一 GPT 原单补分配、客户及跨币种实收，后续回读和重
 
   const privateOrder = { ...auto, taskId: 'foreign', rechargeOwnerId: b.id, createdById: b.id,
     email: 'foreign@example.test', proCardNumber: '4111111111111111' };
-  store.applyRechargeOrder({ ...upstream, row: { jobKey: privateOrder.taskId, needs: [] }, order: privateOrder });
+  applyRechargeFixture(store, { ...upstream, row: { jobKey: privateOrder.taskId, needs: [] }, order: privateOrder });
   const commerceFor = async actor => {
     const res = { setHeader() {}, writeHead(status) { this.status = status; }, end(raw) { this.data = JSON.parse(raw); } };
     await handleLocalBusiness({ method: 'GET', url: '/api/local/commerce', headers: { host: 'fixture.local' } },

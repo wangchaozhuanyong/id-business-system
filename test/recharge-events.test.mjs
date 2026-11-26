@@ -111,7 +111,7 @@ test('committed running tasks avoid billing scans; failed terminal evidence rema
   };
   const sync = createRechargeOrderSync({ store, client: {
     async get(path) {
-      if (path.startsWith('/api/admin/task-logs/')) return { task: { jobKey: 'synthetic-job', status } };
+      if (path.startsWith('/api/admin/task-logs/')) return { task: { jobKey: 'synthetic-job', status, cdk: 'synthetic-code' } };
       reads++; throw new Error('synthetic source unavailable');
     }, async listCodes() { reads++; throw new Error('synthetic source unavailable'); }
   } });
@@ -119,5 +119,5 @@ test('committed running tasks avoid billing scans; failed terminal evidence rema
   assert.equal(reads, 0); assert.equal(data.rows.length, 0);
   status = 'success';
   await assert.rejects(sync.runCommitted({ apply: true, jobKeys: ['synthetic-job'] }), /committed_readback_unavailable/);
-  assert.deepEqual(sync.pendingJobs(), ['synthetic-job']); assert.equal(reads, 3);
+  assert.deepEqual(sync.pendingJobs(), ['synthetic-job']); assert.equal(reads, 1);
 });
