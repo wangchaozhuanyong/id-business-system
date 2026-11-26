@@ -87,6 +87,11 @@ CARD_REUSE_NATIVE_SCOPE = {
     "modules/recharge/codexdaichong/assets.mjs", "modules/recharge/codexdaichong/card-plan-admin.mjs",
     "modules/recharge/codexdaichong/shell.css", "modules/recharge/codexdaichong/shell.js",
 }
+CARD_REUSE_AND_ROUTING_NATIVE_SCOPE = CARD_REUSE_NATIVE_SCOPE | {
+    "modules/recharge/codexdaichong/gateway.mjs",
+    "modules/recharge/codexdaichong/native-routing.mjs",
+    "modules/recharge/codexdaichong/native-routing.test.mjs",
+}
 # 已批准的优惠及浏览器补丁独立核验，不与银行卡套餐或供应商退役批次绑定。
 PLUS_TRIAL_PATCH_FILES = {
     f"modules/recharge/codexdaichong/plus-trial/{name}"
@@ -316,7 +321,8 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False, 
         carried_patches = approved_patches or (
             changed <= NATIVE_CORE_SCOPE
             and not git("diff", "--name-only", base, sha, "--", *sorted(reviewed_patches)).strip())
-        if include_adapter or (not carried_patches and changed not in (PROXY_TYPE_CORE_SCOPE, CARD_REUSE_NATIVE_SCOPE)):
+        if include_adapter or (not carried_patches and changed not in (
+                PROXY_TYPE_CORE_SCOPE, CARD_REUSE_NATIVE_SCOPE, CARD_REUSE_AND_ROUTING_NATIVE_SCOPE)):
             raise RuntimeError("recharge_native_release_scope_mismatch")
     elif include_adapter:
         if not changed <= ADAPTER_SCOPE or not changed.intersection(ADAPTER_RUNTIME_FILES):
