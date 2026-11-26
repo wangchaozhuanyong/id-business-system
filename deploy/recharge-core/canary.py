@@ -157,15 +157,21 @@ class Canary:
         self.checks = []
         self.log_prefix = 'native-canary-' + time.strftime('%Y%m%dT%H%M%SZ', time.gmtime()) + '-' + self.owner[:8]
 
-    def command(self, args, input=None, timeout=15):
-        result = subprocess.run(args, input=input, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                timeout=timeout, check=False)
+    def command(self, args, input=None, timeout=15, step='controlled_command'):
+        if not re.fullmatch('[a-z][a-z0-9_]*', step):
+            raise CanaryError('invalid_command_step')
+        try:
+            result = subprocess.run(args, input=input, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                    timeout=timeout, check=False)
+        except subprocess.TimeoutExpired:
+            raise CanaryError(f'{step}_timeout') from None
         if result.returncode:
-            raise CanaryError('controlled_command_failed')
+            code = f'sig_{-result.returncode}' if result.returncode < 0 else f'rc_{result.returncode}'
+            raise CanaryError(f'{step}_{code}')
         return result.stdout.decode('utf-8').strip()
 
     def inspect(self, identity):
-        return json.loads(self.command(['docker', 'inspect', identity]))[0]
+        return json.loads(self.command(['docker', 'inspect', identity], step='docker_inspect'))[0]
 
     def labels(self):
         return ['--label', 'com.id-business.native-canary=true', '--label', SHA_LABEL + '=' + self.sha,
@@ -185,7 +191,7 @@ class Canary:
             self.log_errors.append(role)
 
     def start(self, role, args, sealed):
-        identity = self.command(args, timeout=30)
+        identity = self.command(args, timeout=30, step=f'docker_create_{role}')
         if not re.fullmatch('[a-f0-9]{64}', identity):
             raise CanaryError('invalid_created_container')
         self.created.append(identity)
@@ -214,7 +220,7 @@ class Canary:
             except Exception:
                 pass
             if any(process.poll() is not None for process in self.processes):
-                raise CanaryError('canary_container_exited')
+                raise CanaryError(f'canary_container_exited_{code}')
             time.sleep(1)
         raise CanaryError(code + '_timeout')
 
@@ -228,7 +234,7 @@ class Canary:
                              'IFS= read -r MYSQL_PWD; export MYSQL_PWD; exec "$@"', '--',
                              'mysql', '--protocol=TCP', '-h127.0.0.1', '-P3306', '-u' + self.user,
                              '--database=' + self.database, '--default-character-set=utf8mb4', '--batch', '--skip-column-names',
-                             '--connect-timeout=2', '-e', query], input=(self.password + '\n').encode(), timeout=8)
+                             '--connect-timeout=2', '-e', query], input=(self.password + '\n').encode(), timeout=8, step='mysql_query')
 
     def published(self, identity, port):
         values = self.inspect(identity)['NetworkSettings']['Ports'].get(port)
@@ -242,7 +248,8 @@ class Canary:
     def source_check(self, identity, code):
         script = ('import {verifyCodexdaichongSource} from "/candidate/modules/recharge/codexdaichong/prepare.mjs";'
                   'console.log(JSON.stringify(await verifyCodexdaichongSource("/candidate/.runtime/codexdaichong")));')
-        result = json.loads(self.command(['docker', 'exec', identity, 'node', '--input-type=module', '-e', script], timeout=30))
+        result = json.loads(self.command(['docker', 'exec', identity, 'node', '--input-type=module', '-e', script],
+                                         timeout=30, step=f'{code}_exec'))
         if (result.get('revision') != REVISION or result.get('files') != 203 or
             result.get('originalFiles') != 194 or result.get('routingFiles') !=
             ['pricing-checkout.js', 'region-config.js', 'server.js'] or result.get('returnFiles') != ['mysql-store.js', 'server.js'] or
@@ -256,7 +263,8 @@ class Canary:
         if not same_owner(self.inspect(native), self.sha, self.owner, native, self.names['native']):
             raise CanaryError('canary_card_plan_ownership_rejected')
         result = self.command(['docker', 'exec', '-i', native, 'node',
-            '/candidate/deploy/recharge-core/card-plans-canary.mjs'], input=(self.password + '\n').encode(), timeout=35)
+            '/candidate/deploy/recharge-core/card-plans-canary.mjs'], input=(self.password + '\n').encode(),
+            timeout=35, step='card_plans_canary_exec')
         if result != 'card_plan_mysql_transactions_passed':
             raise CanaryError('card_plan_mysql_transactions_failed')
         self.checks.append(result)
@@ -296,7 +304,8 @@ class Canary:
 
     def check_code_returns(self, mysql, native, adapter_url, privileged, sealed):
         migration = json.loads(self.command(['docker', 'exec', '-i', native, 'node',
-            '/candidate/deploy/recharge-core/entry.mjs', 'migrate-canary-code-returns'], input=sealed.encode(), timeout=30))
+            '/candidate/deploy/recharge-core/entry.mjs', 'migrate-canary-code-returns'], input=sealed.encode(),
+            timeout=30, step='code_returns_migration_exec'))
         if migration != {'migration': 'unused-code-returns-v1', 'tables': 1, 'completed': True}:
             raise CanaryError('code_returns_migration_failed')
         codes = ['KC-' + hashlib.sha256((self.sha + ':return:' + str(i)).encode()).hexdigest()[:28].upper() for i in range(13)]
@@ -371,7 +380,7 @@ class Canary:
             raise CanaryError('code_return_operation_collision_not_blocked')
         count = self.mysql_query(mysql, 'SELECT COUNT(*) FROM id_recharge_code_returns')
         self.command(['docker', 'exec', '-i', native, 'node', '/candidate/deploy/recharge-core/entry.mjs',
-                      'migrate-canary-code-returns'], input=sealed.encode(), timeout=30)
+                      'migrate-canary-code-returns'], input=sealed.encode(), timeout=30, step='code_returns_remigration_exec')
         if self.mysql_query(mysql, 'SELECT COUNT(*) FROM id_recharge_code_returns') != count:
             raise CanaryError('code_return_migration_not_idempotent')
         self.checks.append('code_return_history_delivery_hold_collision_and_additive_migration')
@@ -397,17 +406,17 @@ class Canary:
         self.operations.mkdir(parents=True, exist_ok=True, mode=0o700)
         if self.operations.is_symlink() or self.receipt.exists():
             raise CanaryError('canary_evidence_already_exists_or_invalid')
-        existing = set(self.command(['docker', 'container', 'ls', '--all', '--format', '{{.Names}}']).splitlines())
+        existing = set(self.command(['docker', 'container', 'ls', '--all', '--format', '{{.Names}}'], step='docker_container_ls').splitlines())
         if any(name in existing for name in self.names.values()):
             raise CanaryError('canary_name_already_exists')
-        labels = json.loads(self.command(['docker', 'image', 'inspect', '--format', '{{json .Config.Labels}}', self.image]))
+        labels = json.loads(self.command(['docker', 'image', 'inspect', '--format', '{{json .Config.Labels}}', self.image], step='image_inspect'))
         if (self.adapter_only and labels.get('org.id-business.upstream.revision') != REVISION or
                 not self.adapter_only and labels.get('org.opencontainers.image.revision') != self.sha):
             raise CanaryError('image_revision_mismatch')
-        mysql_image = self.command(['docker', 'inspect', '--format', '{{.Image}}', FORMAL_MYSQL])
+        mysql_image = self.command(['docker', 'inspect', '--format', '{{.Image}}', FORMAL_MYSQL], step='formal_mysql_inspect')
         if not re.fullmatch('sha256:[a-f0-9]{64}', mysql_image):
             raise CanaryError('formal_mysql_binary_unavailable')
-        entrypoint = json.loads(self.command(['docker', 'image', 'inspect', '--format', '{{json .Config.Entrypoint}}', mysql_image]))
+        entrypoint = json.loads(self.command(['docker', 'image', 'inspect', '--format', '{{json .Config.Entrypoint}}', mysql_image], step='mysql_image_inspect'))
         if not isinstance(entrypoint, list) or len(entrypoint) != 1 or Path(entrypoint[0]).name != 'docker-entrypoint.sh':
             raise CanaryError('unsupported_mysql_binary_entrypoint')
         mysql = self.start('mysql', mysql_arguments(mysql_image, self.names['mysql'], self.database, self.user,
@@ -430,7 +439,7 @@ class Canary:
         sealed = self.password + '\n' + self.bridge + '\n{}\n'
         migration = json.loads(self.command(['docker', 'exec', '-i', native, 'node',
             '/candidate/deploy/recharge-core/entry.mjs', 'migrate-canary-routing'],
-            input=sealed.encode(), timeout=30))
+            input=sealed.encode(), timeout=30, step='routing_migration_exec'))
         if migration != {'migration': 'per-plan-routing-v2', 'tables': 3, 'completed': True}:
             raise CanaryError('routing_migration_failed')
         self.checks.append('routing_additive_migration')
@@ -524,7 +533,8 @@ class Canary:
         if status != 200 or config.get('auditCount') != 3:
             raise CanaryError('routing_audit_missing')
         self.command(['docker', 'exec', '-i', native, 'node',
-            '/candidate/deploy/recharge-core/entry.mjs', 'migrate-canary-routing'], input=sealed.encode(), timeout=30)
+            '/candidate/deploy/recharge-core/entry.mjs', 'migrate-canary-routing'], input=sealed.encode(),
+            timeout=30, step='routing_remigration_exec')
         status, config = route(privileged)
         if (status != 200 or config.get('version') != 3 or config.get('auditCount') != 3 or
             config.get('proxyLabels') != [{'proxyId': proxy_id, 'countryCode': 'MX'}] or config.get('checks') != []):
@@ -608,7 +618,8 @@ class Canary:
                 clean = False
         if self.created:
             try:
-                remaining = set(self.command(['docker', 'container', 'ls', '--all', '--no-trunc', '--format', '{{.ID}}']).splitlines())
+                remaining = set(self.command(['docker', 'container', 'ls', '--all', '--no-trunc', '--format', '{{.ID}}'],
+                                             step='cleanup_docker_ls').splitlines())
                 if any(identity in remaining for identity in self.created):
                     clean = False
             except Exception:
