@@ -4806,7 +4806,7 @@
     const status = $('#order-customer-status', form);
     const html = inlineCustomerStatus(lookup);
     status.dataset.kind = !selection && !decision && match.kind === 'matched' ? 'review'
-      : selection && !profile ? 'inactive' : selection?.editing && match.kind !== 'conflict' && Object.keys(changes).length ? 'calibrate'
+      : selection && !profile ? 'inactive' : selection?.editing && match.kind !== 'conflict' ? 'calibrate'
       : decision || match.kind;
     if (inlineCustomerMessages.get(status) !== html) {
       inlineCustomerMessages.set(status, html);
@@ -4860,17 +4860,11 @@
     }
     const selection = orderCustomerSelection(form);
     if (selection && !selection.editing) {
-      const profile = customers.find(row => row.id === selection.id && row.active !== false);
-      const current = profile?.[key];
+      const current = customers.find(row => row.id === selection.id)?.[key];
       const sameValue = inlineNumberContacts[key]
         ? inlineNumberContacts[key].key(next) === inlineNumberContacts[key].key(current)
         : JSON.stringify(next) === JSON.stringify(current ?? (key === 'tags' ? [] : ''));
       if (sameValue && !Object.hasOwn(entered, key)) return;
-      if (profile && !sameValue) {
-        form.elements['order-customer-selection'].value = JSON.stringify({
-          ...selection, version: profile.version ?? 0, editing: true
-        });
-      }
     }
     if (JSON.stringify(entered[key]) !== JSON.stringify(next)) {
       entered[key] = next;
