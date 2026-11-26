@@ -236,17 +236,18 @@ test('recharge transitions keep content and geometry through delayed, superseded
         };
         const bitSelector = '.recharge-integration__frame--bit-local';
         const bitReady = () => page.locator(bitSelector + ':not([hidden])').waitFor();
-        const bitStarted = Promise.withResolvers();
+        const bitLoginPath = '/integrations/bitbrowser/local-login';
         const bitRelease = Promise.withResolvers();
-        await page.route('**/integrations/bitbrowser/local-login', async route => {
-          bitStarted.resolve();
+        await page.route(url => url.pathname === bitLoginPath, async route => {
           await bitRelease.promise;
           await (offline ? offlineFixture.handle(route) : route.continue()).catch(() => {});
         }, { times: 1 });
         await startProbe();
         try {
-          await navigate('recharge/start');
-          await bitStarted.promise;
+          await Promise.all([
+            page.waitForRequest(request => new URL(request.url()).pathname === bitLoginPath, { timeout: 8000 }),
+            navigate('recharge/start')
+          ]);
           await page.locator('[data-recharge-module="bit"] .design-region-progress:not([hidden])').waitFor();
           assert.equal(await page.locator(bitSelector + ':not([hidden])').count(), 0, '未测量的比特登录空框不应可见');
         } finally { bitRelease.resolve(); }
@@ -334,10 +335,16 @@ test('recharge transitions keep content and geometry through delayed, superseded
         if (output) {
           if (offlineFixture) await writeFile(join(output, `failure-${width}-${dark ? 'dark' : 'light'}-requests.json`), JSON.stringify({unavailable:offlineFixture.unavailable,external:offlineFixture.external}));
           await page.screenshot({ path: join(output, `failure-${width}-${dark ? 'dark' : 'light'}.png`), fullPage: true }).catch(() => {});
-          await writeFile(join(output, `failure-${width}-${dark ? 'dark' : 'light'}.html`), await page.content()).catch(() => {});
+          await page.content()
+            .then(html => writeFile(join(output, `failure-${width}-${dark ? 'dark' : 'light'}.html`), html))
+            .catch(() => {});
         }
         throw error;
-      } finally { await page.close(); }
+      } finally {
+        await page.unrouteAll({ behavior: 'ignoreErrors' });
+        await page.context().unrouteAll({ behavior: 'ignoreErrors' });
+        await page.close();
+      }
     });
   }
   if (output) await writeFile(join(output, 'transition-frames.json'), JSON.stringify(results, null, 2));

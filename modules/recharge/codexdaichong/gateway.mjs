@@ -366,6 +366,71 @@ export function createCodexdaichongGateway({
     }
     if (/^\/api\/admin\/cards\/stop-use\/?$/i.test(path.pathname))
       return respond(res, 404, '页面不存在');
+    if (req.method === 'POST' && path.pathname === '/api/admin/cards/batch-toggle') {
+      try {
+        const body = await readPresentationJson(req, 128 * 1024);
+        let ids = body.ids;
+        if (body.all || !Array.isArray(ids)) {
+          const listRes = await fetch(new URL('/api/admin/cards', upstream), {
+            headers: { 'x-id-recharge-assertion': signRechargeAssertion(secret, 'GET', '/api/admin/cards', actor) }
+          });
+          const listData = await listRes.json();
+          ids = (listData.cards || []).map(c => Number(c.id)).filter(id => Number.isSafeInteger(id) && id > 0);
+        }
+        if (ids.length === 0) {
+          res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+          return res.end(JSON.stringify({ success: true, affected: 0 }));
+        }
+        const isEnabled = Number(body.is_enabled) !== 0 && body.is_enabled !== false;
+        const allowedPlans = isEnabled ? ['plus', 'pro100', 'pro200', 'pro500'] : [];
+        const putRes = await fetch(new URL('/api/admin/cards/plan-policy', upstream), {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-id-recharge-assertion': signRechargeAssertion(secret, 'PUT', '/api/admin/cards/plan-policy', actor)
+          },
+          body: JSON.stringify({ cardIds: ids, allowedPlans })
+        });
+        const putReply = await putRes.json();
+        if (!putRes.ok || !putReply.success) {
+          res.writeHead(putRes.status || 500, { 'Content-Type': 'application/json; charset=utf-8' });
+          return res.end(JSON.stringify({ success: false, message: putReply.message || '卡片状态更新未确认' }));
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({ success: true, affected: ids.length }));
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({ success: false, message: e.message }));
+      }
+    }
+    const cardToggle = req.method === 'PUT' && /^\/api\/admin\/cards\/([^/]+)\/toggle\/?$/i.exec(path.pathname);
+    if (cardToggle) {
+      try {
+        const id = Number(decodeURIComponent(cardToggle[1]));
+        if (!Number.isSafeInteger(id) || id <= 0) return respond(res, 400, '银行卡编号无效');
+        const body = await readPresentationJson(req, 128 * 1024);
+        const isEnabled = Number(body.is_enabled) !== 0 && body.is_enabled !== false;
+        const allowedPlans = isEnabled ? ['plus', 'pro100', 'pro200', 'pro500'] : [];
+        const putRes = await fetch(new URL('/api/admin/cards/plan-policy', upstream), {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-id-recharge-assertion': signRechargeAssertion(secret, 'PUT', '/api/admin/cards/plan-policy', actor)
+          },
+          body: JSON.stringify({ cardIds: [id], allowedPlans })
+        });
+        const putReply = await putRes.json();
+        if (!putRes.ok || !putReply.success) {
+          res.writeHead(putRes.status || 500, { 'Content-Type': 'application/json; charset=utf-8' });
+          return res.end(JSON.stringify({ success: false, message: putReply.message || '卡片状态更新未确认' }));
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({ success: true }));
+      } catch (e) {
+        res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+        return res.end(JSON.stringify({ success: false, message: e.message }));
+      }
+    }
     const deletedCard = req.method === 'DELETE' && /^\/api\/admin\/cards\/([^/]+)\/?$/i.exec(path.pathname);
     if (deletedCard && beforeCardDelete) {
       let id;

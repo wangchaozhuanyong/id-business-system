@@ -43,6 +43,7 @@
   background: var(--surface-soft);
   color: var(--secondary);
 }
+.data-traffic .summary-strip + .data-traffic-message { margin-top: 12px; }
 .data-traffic-trend .panel-heading { padding-block: var(--toolbar-padding-block); }
 .data-traffic-daily { margin-top: 16px; }
 .data-traffic-daily > summary {
@@ -81,4 +82,7 @@
   .data-traffic-filters > .button { margin-inline-start: auto; }
   .data-traffic-meta > strong { flex-basis: 100%; }
   .data-traffic-daily :is(th, td) { padding-inline: 8px; }
+}
+@container (max-width: 420px) {
+  .data-traffic [data-traffic-summary] .summary-item { display: block; }
 }

@@ -787,6 +787,7 @@
     savedTotpCodePage: (ids, version) => readQuery('saved-totp/code', { ids, version }),
     savedTotpSecret: (id, version) => request('saved-totp/secret', { id, version }, 'POST'),
     websiteVisits: (filters) => readQuery('tools/website-visits/search', filters),
+    websiteUniqueIps: (query) => readQuery('tools/website-visits/unique-ips', query),
     websiteVisitIp: (id) => request('tools/website-visits/reveal', { id }, 'POST'),
     websiteAnalytics: (period, site) => request('tools/website-analytics?' + new URLSearchParams({
       ...(typeof period === 'number' || typeof period === 'string' ? { days: period } : period), ...(site && { site })

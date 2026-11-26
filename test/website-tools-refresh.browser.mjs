@@ -25,6 +25,8 @@ function interceptedTools(page, origin) {
       await page.route('**/*', (route) => {
         const url = new URL(route.request().url());
         if (url.origin !== origin) return route.abort();
+        if (url.pathname === '/api/local/tools/website-visits/unique-ips')
+          return route.fulfill({ json: { ...route.request().postDataJSON(), status: 'ready', uniqueIps: 5 } });
         const queue = requests.get(url.pathname);
         if (!queue) return route.fallback();
         queue.push(route);

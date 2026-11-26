@@ -556,6 +556,60 @@ test('invoice queries preserve the Session body and original checker outcome acr
   assert.equal(nativeRequests, 2);
 });
 
+test('gateway handles batch-toggle and single-card toggle by delegating to plan-policy', async t => {
+  const secret = randomBytes(48).toString('base64url');
+  const calls = [];
+  const upstream = await listen(t, (req, res) => {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      calls.push({ method: req.method, url: req.url, body: body ? JSON.parse(body) : null });
+      if (req.method === 'GET' && req.url === '/api/admin/cards') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        return res.end(JSON.stringify({ success: true, cards: [{ id: 1 }, { id: 2 }] }));
+      }
+      if (req.method === 'PUT' && req.url === '/api/admin/cards/plan-policy') {
+        res.writeHead(200, { 'Content-Type': 'application/json', 'x-id-recharge-card-plan-version': '5' });
+        return res.end(JSON.stringify({ success: true, planPolicy: { version: 5 } }));
+      }
+      res.writeHead(404).end();
+    });
+  });
+
+  const gateway = await listen(t, createCodexdaichongGateway({
+    upstreamUrl: upstream, publicOrigin: 'https://example.test', secret,
+    getUnifiedPrincipal: () => ({ id: 'admin-1', email: 'admin@example.test', admin: true })
+  }).handle);
+
+  // Test batch toggle all cards disabled (一键关闭全部)
+  const batchRes = await fetch(gateway + '/integrations/codexdaichong/api/admin/cards/batch-toggle', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Origin: 'https://example.test' },
+    body: JSON.stringify({ all: true, is_enabled: 0 })
+  });
+  assert.equal(batchRes.status, 200);
+  const batchData = await batchRes.json();
+  assert.deepEqual(batchData, { success: true, affected: 2 });
+  assert.deepEqual(calls[calls.length - 1], {
+    method: 'PUT', url: '/api/admin/cards/plan-policy',
+    body: { cardIds: [1, 2], allowedPlans: [] }
+  });
+
+  // Test single card toggle enabled
+  const singleRes = await fetch(gateway + '/integrations/codexdaichong/api/admin/cards/12/toggle', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', Origin: 'https://example.test' },
+    body: JSON.stringify({ is_enabled: 1 })
+  });
+  assert.equal(singleRes.status, 200);
+  const singleData = await singleRes.json();
+  assert.deepEqual(singleData, { success: true });
+  assert.deepEqual(calls[calls.length - 1], {
+    method: 'PUT', url: '/api/admin/cards/plan-policy',
+    body: { cardIds: [12], allowedPlans: ['plus', 'pro100', 'pro200', 'pro500'] }
+  });
+});
+
 test('upstream pages retain the signed-in operations without their own login or external runtime assets', async () => {
   const assets = await loadCodexdaichongAssets();
   assert.equal(assets.has('/admin-login.html'), false);
