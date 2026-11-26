@@ -9080,8 +9080,9 @@
       return;
     }
     saveDrafts();
-    if (customerLookup && !customerLookup.decision && customerLookup.match.kind === 'review' &&
-        customerLookup.match.ids.length === 1 && Object.keys(customerLookup.match.matches).some(key => key !== 'name')) {
+    if (customerLookup && !customerLookup.decision && !customerLookup.staleEdit &&
+        customerLookup.match.kind === 'review' && customerLookup.match.ids.length === 1 &&
+        Object.keys(customerLookup.match.matches).some(key => key !== 'name')) {
       const candidate = customers.find(row => row.id === customerLookup.match.ids[0] && row.active !== false);
       if (candidate) {
         const matchKey = Object.keys(customerLookup.match.matches).find(key => key !== 'name') || 'name';
