@@ -451,6 +451,7 @@ def release_failure_diagnostic(invocation):
         "Switching the drained native recharge runtime": "native_cutover_started",
         "Verified the existing native runtime before resuming the interrupted release": "interrupted_preflight_verified",
         "Resuming the adapter and website with the existing native runtime": "interrupted_peripheral_switch_started",
+        "Verified the interrupted adapter before the isolated website canary": "interrupted_adapter_ready",
     }
     stdout = invocation["StandardOutputContent"].splitlines()
     phases = [markers[line] for line in stdout if line in markers]

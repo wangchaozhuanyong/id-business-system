@@ -6,7 +6,7 @@ import os
 import sqlite3
 import subprocess
 import unittest
-from contextlib import redirect_stdout
+from contextlib import ExitStack, nullcontext, redirect_stdout
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import Mock, call, patch
@@ -1760,6 +1760,90 @@ class WebsiteReleaseTests(unittest.TestCase):
         adapter_canary.assert_called_once_with(plan, *stage.return_value)
         install_backup_monitoring.assert_not_called()
         switch_adapter.assert_not_called()
+
+    def test_website_canary_order_during_adapter_recovery_and_normal_release(self):
+        import interrupted_cutover
+
+        root = remote.ROOT / "releases"
+        candidate = root / TARGET
+        source, operations = candidate / "source", candidate / "operations"
+        native, adapter = {"revision": "c" * 40}, {"revision": TARGET}
+        baseline = {"components": {"app": {"revision": BASE}}, "unitSha256": "unit",
+                    "gatewaySha256": "gateway", "assetsSha256": "assets", "launchers": {}}
+        before_override = f"[Service]\nExecStart={root / BASE / 'operations/run-app'}\n"
+        pending = Path("/isolated/app-before-switch.conf")
+        drop = Mock(spec=Path)
+        drop.read_text.return_value = before_override
+        drop.stat.return_value.st_mode = 0o100644
+        drop.with_name.return_value = pending
+        live = {name: {"revision": TARGET} for name in remote.WEBSITE}
+
+        for interrupted, canary_fails in ((True, False), (True, True), (False, False)):
+            with self.subTest(interrupted=interrupted, canary_fails=canary_fails):
+                plan = {"sha": TARGET, "before": baseline, "adapter": {"runtimeFiles": []}, "files": {},
+                        "artifacts": {}, "qualityRun": "123", "preflightCommand": "fixture"}
+                if interrupted:
+                    plan["interruptedRelease"] = {"native": native}
+                calls = Mock()
+                calls.core.cutover.return_value = nullcontext(native)
+                calls.core.receipt = {"native": native, "ingressResumed": True}
+                calls.canary.return_value = False
+                if canary_fails:
+                    calls.canary.side_effect = remote.ReleaseError("isolated_app_canary_failed")
+                calls.switch_adapter.return_value = adapter
+                calls.read_website.return_value = live
+                boundaries = (
+                    patch.object(remote, "snapshot", return_value=baseline),
+                    patch.object(remote, "stage", return_value=(source, operations)),
+                    patch.object(remote, "check_native_recovery_source"),
+                    patch.object(interrupted_cutover, "InterruptedCutover", return_value=calls.core),
+                    patch.object(remote, "canary", calls.canary),
+                    patch.object(remote, "adapter_canary", calls.adapter_canary),
+                    patch.object(remote, "DROP", drop),
+                    patch.object(Path, "is_file", lambda path: path == operations / "run-app"),
+                    patch.object(remote.os, "access", return_value=True),
+                    patch.object(remote, "require_main"),
+                    patch.object(remote, "prepare_backup_recovery", return_value=nullcontext(lambda: {})),
+                    patch.object(remote, "switch_adapter", calls.switch_adapter),
+                    patch.object(remote, "install_backup_monitoring", calls.install_backup_monitoring),
+                    patch.object(remote, "digest", return_value="unit"),
+                    patch.object(remote, "write_new", calls.write),
+                    patch.object(remote.os, "replace", calls.replace),
+                    patch.object(remote, "run", calls.run),
+                    patch.object(remote, "read_website", calls.read_website),
+                    patch.object(remote, "read_backup_monitoring", return_value={}),
+                    patch.object(remote, "inspect"),
+                    patch.object(remote, "backup_resource_summary", return_value={}),
+                    redirect_stdout(io.StringIO()),
+                )
+                with ExitStack() as stack:
+                    for boundary in boundaries:
+                        stack.enter_context(boundary)
+                    if canary_fails:
+                        with self.assertRaisesRegex(remote.ReleaseError, "isolated_app_canary_failed"):
+                            remote.release_website(plan)
+                    else:
+                        self.assertTrue(remote.release_website(plan)["appCanaryPassed"])
+
+                events = [actual[0] for actual in calls.mock_calls]
+                if canary_fails:
+                    self.assertEqual(events, ["core.prepare", "core.cutover", "switch_adapter", "canary"])
+                    calls.core.finish.assert_not_called()
+                    calls.replace.assert_not_called()
+                    calls.run.assert_not_called()
+                elif interrupted:
+                    self.assertEqual(events[:6], [
+                        "core.prepare", "core.cutover", "switch_adapter", "canary", "core.require_paused",
+                        "install_backup_monitoring",
+                    ])
+                    calls.switch_adapter.assert_called_once_with(plan, source, operations, native)
+                    self.assertLess(events.index("read_website"), events.index("core.finish"))
+                else:
+                    self.assertEqual(events[:4], ["canary", "adapter_canary", "install_backup_monitoring", "switch_adapter"])
+                    calls.core.prepare.assert_not_called()
+                if not canary_fails:
+                    calls.replace.assert_called_once_with(pending, drop)
+                    calls.run.assert_any_call(["systemctl", "restart", remote.UNIT], timeout=55)
 
     def test_adapter_override_uses_exact_candidate_and_existing_native_runtime(self):
         image = "sha256:" + "c" * 64
