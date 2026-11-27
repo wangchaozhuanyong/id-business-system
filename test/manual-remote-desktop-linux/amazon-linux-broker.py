@@ -59,12 +59,15 @@ def main():
                                     "--recharge-block-network", "203.0.113.1/32"])
         try:
             deadline = time.monotonic() + 8
-            while not path.is_socket():
-                assert process.poll() is None, "broker_exited_before_binding"
-                if time.monotonic() >= deadline:
-                    raise TimeoutError("broker_socket_start_timeout")
-                time.sleep(0.05)
-            code, data = response(path, "/v1/client/core/rfb.js")
+            while True:
+                assert process.poll() is None, "broker_exited_before_ready"
+                try:
+                    code, data = response(path, "/v1/client/core/rfb.js")
+                    break
+                except (FileNotFoundError, ConnectionRefusedError):
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("broker_socket_start_timeout")
+                    time.sleep(0.05)
             assert code == 200 and data == (assets / "core/rfb.js").read_bytes()
             for route, key in (("renewal", "renewalWorkspace"), ("recharge", "rechargeBootstrap")):
                 code, data = response(path, f"/v1/{route}/status")

@@ -83,13 +83,21 @@ jobs:
           Type=oneshot
           TimeoutStartSec=75
           ExecStart=/usr/bin/python3 -IBu /fixture/systemd-check.py
-          StandardOutput=journal+console
-          StandardError=journal+console
+          StandardOutput=truncate:/fixture/systemd-check.log
+          StandardError=inherit
           UNIT
+          guest_status=0
           sudo systemd-run --wait --pipe --collect --property=Delegate=yes --property=RuntimeMaxSec=120s \
             --property=TimeoutStopSec=15s /usr/bin/systemd-nspawn --keep-unit --settings=no --register=no \
             --private-network --resolv-conf=off --link-journal=no --console=pipe --machine=manual-first-install \
-            --directory="$root" --boot -- --unit=manual-first-install-check.service
+            --directory="$root" --boot -- --unit=manual-first-install-check.service || guest_status=$?
+          if sudo test -f "$root/fixture/systemd-first-install.error"; then
+            sudo cat "$root/fixture/systemd-first-install.error"
+          fi
+          if sudo test -f "$root/fixture/systemd-check.log"; then
+            sudo tail -50 "$root/fixture/systemd-check.log"
+          fi
+          test "$guest_status" -eq 0
           sudo cat "$root/fixture/missing-unit-results.json"
           sudo test -f "$root/fixture/systemd-first-install.passed"
 
