@@ -31,6 +31,9 @@ SYSTEMCTL = "/usr/bin/systemctl"
 TMPFILES = "/usr/bin/systemd-tmpfiles"
 SYSUSERS = "/usr/bin/systemd-sysusers"
 PKCHECK = "/usr/bin/pkcheck"
+RPM = "/usr/bin/rpm"
+RPM_KEYS = "/usr/bin/rpmkeys"
+DNF = "/usr/bin/dnf"
 UNIT_DIR = Path("/etc/systemd/system")
 SYSUSERS_FILE = Path("/etc/sysusers.d/id-manual-desktop.conf")
 TMPFILES_FILE = Path("/etc/tmpfiles.d/id-manual-desktop.conf")
@@ -98,6 +101,43 @@ def existing_identity(required=False):
 
 def systemctl(*args, allowed=(0,), timeout=10):
     return command([SYSTEMCTL, "--no-ask-password", "--no-pager", *args], allowed=allowed, timeout=timeout)
+
+
+def prepare_host_tools(config):
+    if os.access(PKCHECK, os.X_OK):
+        return False
+    distribution = Path("/etc/os-release").read_text(encoding="utf8")
+    require(re.search(r'^ID="?amzn"?$', distribution, re.MULTILINE) and
+            re.search(r'^VERSION_ID="?2023"?$', distribution, re.MULTILINE),
+            "manual_host_package_platform_unsupported")
+    release = Path(config["root"])
+    artifacts = release_path(release / "artifacts", stat.S_ISDIR)
+    package_dir = Path(tempfile.mkdtemp(prefix="workspace-dependencies-", dir=artifacts))
+    # Resolve the single missing dependency from the already configured Amazon
+    # Linux release. This transaction only downloads packages.
+    command([DNF, "-qy", "--disablerepo=*", "--enablerepo=amazonlinux",
+             "--setopt=install_weak_deps=False", "install", "--downloadonly",
+             "--destdir=" + str(package_dir), "polkit"], timeout=100)
+    packages = sorted(package_dir.glob("*.rpm"))
+    require(packages and len(packages) <= 20 and all(package.is_file() and not package.is_symlink()
+            for package in packages), "manual_host_dependency_bundle_invalid")
+    names = set()
+    for package in packages:
+        signature, _ = command([RPM_KEYS, "--checksig", str(package)])
+        require(signature.endswith("digests signatures OK"), "manual_host_dependency_signature_invalid")
+        name, _ = command([RPM, "-qp", "--qf", "%{NAME}", str(package)])
+        require(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9+_.-]{0,79}", name) is not None and name not in names,
+                "manual_host_dependency_name_invalid")
+        _, status = command([RPM, "-q", name], allowed=(0, 1))
+        require(status == 1, "manual_host_dependency_would_upgrade_existing_package")
+        names.add(name)
+    require("polkit" in names, "manual_host_dependency_bundle_invalid")
+    package_paths = [str(package) for package in packages]
+    command([RPM, "--install", "--test", *package_paths], timeout=20)
+    command([RPM, "--install", *package_paths], timeout=35)
+    require(os.access(PKCHECK, os.X_OK), "manual_host_dependency_install_unverified")
+    systemctl("daemon-reload")
+    return True
 
 
 def check_host(config, available=True):
@@ -368,7 +408,7 @@ def deactivate(config):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("check", "install", "verify", "smoke", "deactivate"))
+    parser.add_argument("operation", choices=("prepare", "check", "install", "verify", "smoke", "deactivate"))
     parser.add_argument("--release-root", required=True, type=Path)
     parser.add_argument("--image-id", required=True)
     parser.add_argument("--assets", required=True, type=Path)
@@ -381,7 +421,9 @@ def main():
     require(platform.system() == "Linux" and os.geteuid() == 0, "requires_root_linux_release_host")
     config = release_config(args)
     result = {"operation": args.operation, "revision": Path(config["root"]).name}
-    if args.operation == "install":
+    if args.operation == "prepare":
+        result["systemDependencyInstalled"] = prepare_host_tools(config)
+    elif args.operation == "install":
         result["started"] = install(config)
     elif args.operation == "deactivate":
         deactivate(config)

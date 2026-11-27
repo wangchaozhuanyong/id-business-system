@@ -1019,8 +1019,8 @@ def manual_host_command(operation, release, image):
             "--image-id", image, "--assets", str(runtime / "novnc"),
             "--site-packages", str(runtime / "site-packages"), "--max-active", "1",
             "--min-available-mib", "512", "--block-network", f"{site_ip}/32"]
-    result = subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True,
-                            timeout=285 if operation == "smoke" else 90)
+    timeout = {"prepare": 175, "smoke": 285}.get(operation, 90)
+    result = subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout)
     if result.returncode != 0:
         reason = result.stderr.decode(errors="replace").strip()
         raise ReleaseError(reason if re.fullmatch(r"[a-z][a-z0-9_]{6,95}", reason)
@@ -1047,6 +1047,7 @@ def release_with_manual_workspace(plan):
          str(release / "artifacts" / f"independent-manual-runtime-{sha}.tar.gz"),
          "-C", str(runtime)], timeout=45)
     run(["docker", "load", "-i", str(release / "artifacts" / f"independent-manual-image-{sha}.tar.gz")], timeout=120)
+    dependency = manual_host_command("prepare", release, image)
     manual_host_command("check", release, image)
     synthetic = subprocess.run(
         ["bash", str(source / "test/manual-remote-desktop-linux/container-check.sh"), "--verified-image", image],
@@ -1068,6 +1069,7 @@ def release_with_manual_workspace(plan):
         require(manual_host_command("smoke", release, image).get("renewalLifecycleVerified") is True,
                 "renewal_workspace_lifecycle_not_verified")
         plan["manualWorkspace"]["offlinePeakMiB"] = peak
+        plan["manualWorkspace"]["systemDependencyInstalled"] = dependency["systemDependencyInstalled"]
         plan["manualWorkspace"]["renewalLifecycleVerified"] = True
         return release_website(plan, staged=(source, ops))
     except Exception:
