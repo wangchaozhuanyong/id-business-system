@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -53,9 +53,10 @@ test('authenticated host serves finance and admins only their own renewal record
       try {
         const chunks = [];
         for await (const chunk of res) chunks.push(chunk);
-        const text = Buffer.concat(chunks).toString('utf8');
+        const bytes = Buffer.concat(chunks);
+        const text = bytes.toString('utf8');
         resolve({ status: res.statusCode, cookie: res.headers['set-cookie']?.[0]?.split(';', 1)[0],
-          text, json: () => JSON.parse(text) });
+          bytes, type: res.headers['content-type'], text, json: () => JSON.parse(text) });
       } catch (error) { reject(error); }
     });
     req.on('error', reject).end(body && JSON.stringify(body));
@@ -76,6 +77,32 @@ test('authenticated host serves finance and admins only their own renewal record
     if (role === 'finance') secondFinance = await login(account);
   }
   assert.ok(sessions.finance !== secondFinance);
+  await t.test('public prototype assets match the release bytes and the workbench HTML requires administrator access', async () => {
+    for (const [extension, mime] of [['mjs', 'text/javascript'], ['css', 'text/css']]) {
+      const asset = await call('/assets/native-workbench/prototype.' + extension);
+      assert.equal(asset.status, 200, extension);
+      assert.equal(asset.type?.split(';')[0], mime);
+      const file = new URL('../frontend/native-workbench-prototype.' + extension, import.meta.url);
+      assert.deepEqual(asset.bytes, await readFile(file), extension + ' release bytes');
+    }
+    const route = '/integrations/native-workbench/prototype';
+    for (const [cookie, status] of [[null, 401], ...['finance', ...restricted].map(role => [sessions[role], 403])]) {
+      const denied = await call(route, cookie);
+      assert.equal(denied.status, status);
+      assert.doesNotMatch(denied.text, /id="protoLaunchForm"/);
+    }
+    const template = await readFile(new URL('../frontend/native-workbench-prototype.html', import.meta.url), 'utf8');
+    for (const [cookie, embedded] of [[sessions.admin, false], [sessions.super, true]]) {
+      const page = await call(route + (embedded ? '?embedded=1' : ''), cookie);
+      assert.equal(page.status, 200);
+      assert.equal(page.type?.split(';')[0], 'text/html');
+      // This fixture uses an unavailable broker socket, so the host renders the paused state.
+      const flags = 'data-workbench-paused' + (embedded ? ' data-workbench-embedded' : '');
+      const expected = template.replace('<body class="proto-body">', '<body class="proto-body" ' + flags + '>');
+      assert.notEqual(expected, template);
+      assert.deepEqual(page.bytes, Buffer.from(expected));
+    }
+  });
   const address = '/api/local/bitbrowser-addresses', base = '/api/local/native-browser-workbench';
   const list = base + '?action=renewals', save = base + '?action=renewal-record';
   const form = { email: 'subscription@example.test', status: 'pending_renewal', currentPlan: '', renewalNotes: '' };
@@ -99,7 +126,7 @@ test('authenticated host serves finance and admins only their own renewal record
       [base + '?action=update-json', 'POST'], [base + '?action=launch', 'POST'],
       ['/api/local/bitbrowser-connections', 'GET'], ['/api/local/bitbrowser-proxies', 'GET'],
       ['/api/local/bitbrowser-login-windows', 'POST'], ['/integrations/bitbrowser/local-login', 'GET'],
-      ['/integrations/native-workbench/prototype', 'GET'], [address + ':another-operator', 'GET']]) {
+      [address + ':another-operator', 'GET']]) {
       assert.equal((await call(path, cookie, method, method === 'POST' ? {} : undefined)).status, 403, method + ' ' + path);
     }
   }
