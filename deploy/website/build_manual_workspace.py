@@ -2,6 +2,7 @@
 
 import hashlib
 import io
+import json
 from pathlib import Path, PurePosixPath
 import re
 import subprocess
@@ -12,6 +13,7 @@ from urllib.request import urlopen
 ROOT = Path(__file__).resolve().parents[2]
 NOVNC_COMMIT = "63107bd06d9e1f6136ff21aeda8cd62cbf0d433e"  # v1.7.0
 NOVNC_SHA256 = "06dac239be3973ed79a00e357a68aab996e6ed2fd496ee2cc6e6a34020344ac9"
+AL2023_BLOBSTORE = "https://cdn.amazonlinux.com/al2023/blobstore/"
 
 
 def browser_client(target):
@@ -36,6 +38,26 @@ def browser_client(target):
         raise ValueError("manual_workspace_client_missing")
 
 
+def package_host_tools(target):
+    inventory = ROOT / "deploy/manual-desktop/host/polkit-rpms.json"
+    packages = json.loads(inventory.read_text())["packages"]
+    target.mkdir(mode=0o755)
+    for item in packages:
+        filename = item["file"]
+        sha = item["sha256"]
+        size = item["bytes"]
+        if (not re.fullmatch(r"[A-Za-z0-9._+-]+\.x86_64\.rpm", filename)
+                or not re.fullmatch(r"[a-f0-9]{64}", sha)
+                or type(size) is not int or not 0 < size <= 2_000_000):
+            raise ValueError("manual_workspace_rpm_manifest_invalid")
+        url = f"{AL2023_BLOBSTORE}{sha}/{filename}"
+        with urlopen(url, timeout=30) as response:
+            data = response.read(size + 1)
+        if len(data) != size or hashlib.sha256(data).hexdigest() != sha:
+            raise ValueError("manual_workspace_rpm_digest_mismatch")
+        (target / filename).write_bytes(data)
+
+
 def build(sha):
     if not re.fullmatch(r"[a-f0-9]{40}", sha):
         raise ValueError("release_revision_required")
@@ -48,8 +70,9 @@ def build(sha):
                     "--implementation", "cp", "--abi", "cp39", "--target", str(runtime / "site-packages"),
                     "-r", str(ROOT / "deploy/manual-desktop/requirements-x86-python39.txt")], check=True)
     browser_client(runtime / "novnc")
+    package_host_tools(runtime / "host-packages")
     with tarfile.open(output / f"independent-manual-runtime-{sha}.tar.gz", mode="x:gz") as archive:
-        for directory in ("site-packages", "novnc"):
+        for directory in ("site-packages", "novnc", "host-packages"):
             archive.add(runtime / directory, arcname=directory)
 
 

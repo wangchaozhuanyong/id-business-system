@@ -5,6 +5,7 @@ import argparse
 from contextlib import contextmanager, suppress
 import fcntl
 import grp
+import hashlib
 from http.client import HTTPResponse
 import ipaddress
 import json
@@ -33,7 +34,6 @@ SYSUSERS = "/usr/bin/systemd-sysusers"
 PKCHECK = "/usr/bin/pkcheck"
 RPM = "/usr/bin/rpm"
 RPM_KEYS = "/usr/bin/rpmkeys"
-DNF = "/usr/bin/dnf"
 UNIT_DIR = Path("/etc/systemd/system")
 SYSUSERS_FILE = Path("/etc/sysusers.d/id-manual-desktop.conf")
 TMPFILES_FILE = Path("/etc/tmpfiles.d/id-manual-desktop.conf")
@@ -110,31 +110,36 @@ def prepare_host_tools(config):
     require(re.search(r'^ID="?amzn"?$', distribution, re.MULTILINE) and
             re.search(r'^VERSION_ID="?2023"?$', distribution, re.MULTILINE),
             "manual_host_package_platform_unsupported")
-    release = Path(config["root"])
-    artifacts = release_path(release / "artifacts", stat.S_ISDIR)
-    package_dir = Path(tempfile.mkdtemp(prefix="workspace-dependencies-", dir=artifacts))
-    # Resolve the single missing dependency from the already configured Amazon
-    # Linux release. This transaction only downloads packages.
-    command([DNF, "-q", "-y", "--disablerepo=*", "--enablerepo=amazonlinux",
-             "--setopt=install_weak_deps=False", "install", "--downloadonly",
-             "--destdir=" + str(package_dir), "polkit"], timeout=100, failure="manual_host_dependency_download_failed")
-    packages = sorted(package_dir.glob("*.rpm"))
-    require(packages and len(packages) <= 20 and all(package.is_file() and not package.is_symlink()
-            for package in packages), "manual_host_dependency_bundle_invalid")
-    names = set()
-    for package in packages:
+    inventory = release_path(Path(config["desktop"]) / "host/polkit-rpms.json", stat.S_ISREG)
+    catalog = json.loads(inventory.read_text(encoding="ascii"))
+    release, _ = command([RPM, "-q", "--qf", "%{VERSION}", "system-release"],
+                         failure="manual_host_package_inventory_failed")
+    require(release == catalog["systemRelease"] and platform.machine() == catalog["architecture"] == "x86_64",
+            "manual_host_package_release_mismatch")
+    package_dir = release_path(Path(config["root"]) / "manual-runtime/host-packages", stat.S_ISDIR)
+    packages = catalog["packages"]
+    require({item["name"] for item in packages} == {"polkit", "polkit-libs", "duktape"} and len(packages) == 3
+            and {item["file"] for item in packages} == {path.name for path in package_dir.iterdir()},
+            "manual_host_dependency_bundle_invalid")
+    package_paths = []
+    for item in packages:
+        filename = item["file"]
+        require(re.fullmatch(r"[A-Za-z0-9._+-]+\.x86_64\.rpm", filename) is not None,
+                "manual_host_dependency_name_invalid")
+        package = release_path(package_dir / filename, stat.S_ISREG)
+        require(0 < item["bytes"] <= 2_000_000 and package.stat().st_size == item["bytes"]
+                and hashlib.sha256(package.read_bytes()).hexdigest() == item["sha256"],
+                "manual_host_dependency_digest_mismatch")
         signature, _ = command([RPM_KEYS, "--checksig", str(package)],
                                failure="manual_host_dependency_verification_failed")
         require(signature.endswith("digests signatures OK"), "manual_host_dependency_signature_invalid")
         name, _ = command([RPM, "-qp", "--qf", "%{NAME}", str(package)],
                           failure="manual_host_dependency_header_failed")
-        require(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9+_.-]{0,79}", name) is not None and name not in names,
-                "manual_host_dependency_name_invalid")
-        _, status = command([RPM, "-q", name], allowed=(0, 1), failure="manual_host_package_inventory_failed")
-        require(status == 1, "manual_host_dependency_would_upgrade_existing_package")
-        names.add(name)
-    require("polkit" in names, "manual_host_dependency_bundle_invalid")
-    package_paths = [str(package) for package in packages]
+        require(name == item["name"], "manual_host_dependency_name_invalid")
+        _, status = command([RPM, "-q", item["name"]], allowed=(0, 1), failure="manual_host_package_inventory_failed")
+        if status == 1:
+            package_paths.append(str(package))
+    require(package_paths, "manual_host_dependency_install_unverified")
     command([RPM, "--install", "--test", *package_paths], timeout=20, failure="manual_host_dependency_rpm_check_failed")
     command([RPM, "--install", *package_paths], timeout=35, failure="manual_host_dependency_rpm_install_failed")
     require(os.access(PKCHECK, os.X_OK), "manual_host_dependency_install_unverified")
