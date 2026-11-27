@@ -585,6 +585,13 @@ INTERRUPTED_RELEASE_FILES = {
     "deploy/website/remote.py",
     "deploy/website/vendure_admission.py",
     "docs/PRODUCTION_OPERATIONS.md",
+    "frontend/bitbrowser-local.html",
+    "frontend/bitbrowser-local.mjs",
+    "server/local-business.mjs",
+    "server/preview.mjs",
+    "test/check-ui-contract.mjs",
+    "test/native-browser-store.test.mjs",
+    "test/workbench-cloud-hold.browser.mjs",
 }
 INTERRUPTED_GATE_SOURCE = "deploy/recharge-core/release-gate.py"
 INTERRUPTED_NATIVE = {

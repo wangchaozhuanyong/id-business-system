@@ -27,7 +27,7 @@
       <span class="wb-status-tag wb-status-tag--proxy" title="已自动关联自动代充代理池，智能按套餐匹配出口">
         <span class="wb-status-tag__dot"></span>共享代充 IP 池 · 智能选路
       </span>
-      <span class="wb-status-tag wb-status-tag--browser" title="内置指纹浏览器已准备就绪">
+      <span class="wb-status-tag wb-status-tag--browser" id="wb-browser-status" title="内置指纹浏览器已准备就绪">
         <span class="wb-status-tag__dot"></span>指纹浏览器 · 就绪
       </span>
     </div>
@@ -38,7 +38,7 @@
       <section class="panel bit-local__section wb-entry-card" aria-labelledby="workbench-entry-title">
         <header class="panel-heading">
           <div class="title-with-help">
-            <h2 id="workbench-entry-title"><span class="bit-local__step">1</span>录入账号与一键启动</h2>
+            <h2 id="workbench-entry-title"><span class="bit-local__step">1</span><span id="wb-entry-action-title">录入账号与一键启动</span></h2>
             <details class="title-help"><summary id="workbench-entry-help-btn" aria-label="查看快速录入说明" aria-controls="workbench-entry-help">ⓘ</summary><div class="title-description" id="workbench-entry-help" role="note">粘贴完整单账户授权 JSON，系统自动提取邮箱、套餐与设备指纹；共享自动代充 IP 池，无需手动配置代理。点击“保存并打开浏览器”后，系统将在本机直接拉起独立的指纹 Chrome 窗口并加载 ChatGPT，自动注入登录态保留给您手动订阅及绑定支付。</div></details>
           </div>
         </header>
