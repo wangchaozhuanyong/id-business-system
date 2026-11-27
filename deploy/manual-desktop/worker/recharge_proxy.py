@@ -13,9 +13,8 @@ import ssl
 
 RELAY_PATH = '/run/workspace-input/egress.sock'
 PROBE_HOST = 'api.country.is'
-APPROVED_DOMAIN_SUFFIXES = (
+SITE_DOMAIN_SUFFIXES = (
     'chatgpt.com', 'openai.com', 'oaistatic.com', 'oaiusercontent.com', 'oaistatsig.com',
-    'js.stripe.com',
 )
 # Narrow third-party dependencies from OpenAI's published network requirements
 # and the Stripe-hosted checkout.
@@ -25,6 +24,12 @@ SUPPORT_HOSTS = frozenset({
     'cdn.workos.com', 'frontend-apps-multi-region.workos.com', 'forwarder.workos.com',
     'images.workoscdn.com', 'setup.workos.com', 'workos.imgix.net',
     'api.stripe.com', 'checkout.stripe.com', 'hooks.stripe.com',
+})
+RENEWAL_LOGIN_HOSTS = frozenset({
+    'accounts.google.com', 'accounts.gstatic.com', 'ssl.gstatic.com', 'www.gstatic.com',
+    'appleid.apple.com', 'idmsa.apple.com', 'appleid.cdn-apple.com',
+    'login.live.com', 'login.microsoftonline.com', 'login.microsoft.com', 'aadcdn.msauth.net',
+    'aadcdn.msftauth.net', 'logincdn.msauth.net', 'logincdn.msftauth.net',
 })
 HEADER_LIMIT = 16 * 1024
 BUFFER_SIZE = 64 * 1024
@@ -64,10 +69,20 @@ def _basic_auth(credentials):
     return b'Proxy-Authorization: Basic ' + base64.b64encode(value) + b'\r\n'
 
 
+def _site_host(host):
+    return any(host == domain or host.endswith('.' + domain) for domain in SITE_DOMAIN_SUFFIXES)
+
+
 def _allowed_host(host):
-    return host in SUPPORT_HOSTS or any(
-        host == domain or host.endswith('.' + domain) for domain in APPROVED_DOMAIN_SUFFIXES
-    )
+    return host in SUPPORT_HOSTS or _site_host(host) or host == 'js.stripe.com' or host.endswith('.js.stripe.com')
+
+
+def renewal_host_allowed(host):
+    # Both the browser-side adapter and the host relay enforce the same destinations.
+    if not isinstance(host, str) or len(host) > 253 or not all(DNS_LABEL.fullmatch(label) for label in host.split('.')):
+        return False
+    return (host != PROBE_HOST and
+            (host in RENEWAL_LOGIN_HOSTS or host in SUPPORT_HOSTS or host == 'js.stripe.com' or _site_host(host)))
 
 
 async def _head(reader):
@@ -161,7 +176,8 @@ async def _close(writer):
 
 
 class WorkerProxy:
-    def __init__(self, relay_path, authorization):
+    def __init__(self, relay_path, authorization, allow_host):
+        self._allow_host = allow_host
         self._relay_path = relay_path
         self._authorization = authorization
         self._listener = None
@@ -187,7 +203,7 @@ class WorkerProxy:
             error = b'400 Bad Request'
             host = _destination(await asyncio.wait_for(_head(reader), HANDSHAKE_TIMEOUT))
             error = b'403 Forbidden'
-            if not _allowed_host(host):
+            if not self._allow_host(host):
                 return
             error = b'502 Bad Gateway'
             upstream_reader, upstream_writer = await asyncio.wait_for(
@@ -239,9 +255,11 @@ class WorkerProxy:
         await self.close()
 
 
-async def open_proxy(credentials=None, *, relay_path=RELAY_PATH):
+async def open_proxy(credentials=None, *, relay_path=RELAY_PATH, renewal=False):
     """Listen only on the isolated worker's IPv4 loopback."""
-    proxy = WorkerProxy(relay_path, _basic_auth(credentials))
+    if renewal and credentials is not None:
+        raise ProxyError('Renewal workspaces use a credential-free relay')
+    proxy = WorkerProxy(relay_path, _basic_auth(credentials), renewal_host_allowed if renewal else _allowed_host)
     proxy._listener = await asyncio.start_server(
         proxy._accept, host='127.0.0.1', port=0, family=socket.AF_INET,
         limit=HEADER_LIMIT, backlog=MAX_CONNECTIONS,

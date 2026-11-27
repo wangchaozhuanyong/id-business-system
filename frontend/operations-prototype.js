@@ -909,7 +909,7 @@
       ? `<nav class="bit-address-jump" aria-label="手动充值快捷定位">${button('前往地址管理', 'ops-bit-address-jump', '', '', 'data-pane="address" aria-controls="bit-addresses-host"')}${button('前往续费管理', 'ops-bit-address-jump', '', '', 'data-pane="renewals" aria-controls="bit-addresses-host"')}</nav>`
       : '';
     const workbench = showWorkbench ? renderRechargeRegion('manual') : '';
-    const entryTitle = `<div class="title-with-help"><h2>录入续费账号</h2>${api.titleInfo('录入续费账号', '登记账号邮箱、当前套餐和处理状态。金额或支付结果请在实际确认后登记。', 'bit-entry-info')}</div>`;
+    const entryTitle = `<div class="title-with-help"><h2>录入续费账号</h2>${api.titleInfo('录入续费账号', '可输入邮箱或粘贴 JSON 提取邮箱。当前套餐和处理状态请按实际结果登记。', 'bit-entry-info')}</div>`;
     const entry = `<section class="panel bit-entry-panel">
       ${showWorkbench ? `<div class="bit-workspace-heading bit-entry-heading"><div class="tabs" role="tablist" aria-label="录入工作区">
         <button class="tab active" type="button" role="tab" id="manual-recharge-tab" data-action="ops-bit-entry-pane" data-entry-pane="workbench" aria-controls="manual-recharge-content" aria-selected="true">工作台</button>

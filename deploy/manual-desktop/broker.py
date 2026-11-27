@@ -24,6 +24,7 @@ from aiohttp import WSMsgType, web
 # Isolated Python (-I) omits the script directory, including these installed
 # broker modules. Trust only this script's own directory for sibling imports.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import egress
 from egress import EgressError, SOCKET_NAME as EGRESS_SOCKET, open_relay, resolve_proxy
 
 
@@ -425,6 +426,10 @@ class RechargeInputs:
         pinned = await resolve_proxy(url, blocked_networks=self.blocked_networks)
         return await open_relay(directory, pinned, uid=self.uid, gid=self.gid)
 
+    async def renewal_relay(self, directory):
+        return await egress.open_renewal_relay(directory, uid=self.uid, gid=self.gid,
+                                              blocked_networks=self.blocked_networks)
+
     @contextlib.asynccontextmanager
     async def bootstrap(self, directory, config):
         loop = asyncio.get_running_loop()
@@ -442,7 +447,13 @@ class RechargeInputs:
                 reply = await reader.readuntil(b'\n')
                 if len(reply) > RECHARGE_REPLY_LIMIT:
                     raise ValueError()
-                outcome.set_result(recharge_result(json.loads(reply), config['expectedCountry']))
+                result = json.loads(reply)
+                if config == {'mode': 'renewal'}:
+                    if result != {'mode': 'renewal', 'ready': True} or result['ready'] is not True:
+                        raise ValueError()
+                else:
+                    result = recharge_result(result, config['expectedCountry'])
+                outcome.set_result(result)
             except (OSError, ValueError, asyncio.IncompleteReadError, asyncio.LimitOverrunError,
                     web.HTTPUnprocessableEntity):
                 if not outcome.done():
@@ -579,7 +590,7 @@ def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, c
             if not await stopped(entry['key']):
                 raise WorkspaceLocked()
             journal.set(owner, entry['key'], None)
-            await clear_recharge(entry['key'])
+            await clear_session(entry['key'])
         return entry if entry and entry['key'] == key else None
 
     async def await_ready(key):
@@ -602,21 +613,26 @@ def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, c
             raise web.HTTPServiceUnavailable()
         return await inspect_unit(key)
 
-    async def clear_recharge(key):
+    def renewal_marker(key):
+        # Stored beside the host's ownership journal and never mounted inside a worker.
+        return journal.root / ('renewal-display-%064x' % int(key[len('manual-v1-'):], 16))
+
+    async def clear_session(key):
+        renewal_marker(key).unlink(missing_ok=True)
         session = prepared.pop(key, None)
         if session:
             await session['relay'].close()
 
-    def current_recharge(key):
+    def current_session(key):
         session = prepared.get(key)
         with contextlib.suppress(OSError):
             if session and session['display'] == socket_identity(worker_display(key).lstat()):
                 return session
         return None
 
-    def require_recharge(key):
-        session = current_recharge(key)
-        if not session:
+    def require_session(key, mode):
+        session = current_session(key)
+        if not session or session['mode'] != mode:
             raise web.HTTPConflict()
         return session
 
@@ -628,6 +644,15 @@ def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, c
     async def recharge_enabled():
         return recharge is not None and activate and admit and stop and await recharge_available()
 
+    async def renewal_enabled():
+        return (await recharge_enabled() and recharge.fd is not None and bool(recharge.blocked_networks) and
+                callable(getattr(egress, 'open_renewal_relay', None)))
+
+    async def renewal_status(request):
+        if request.query_string or not await renewal_enabled():
+            raise web.HTTPServiceUnavailable()
+        return web.json_response({'renewalWorkspace': 1})
+
     async def recharge_workspace_status(request):
         owner, key = desktop(request)
         async with journal.lock(owner, startup_seconds + 5, lambda: on_contention(owner, key, 'stream')):
@@ -636,7 +661,7 @@ def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, c
                 raise WorkspaceLocked()
             if not entry or entry['phase'] != 'tracking':
                 raise web.HTTPConflict()
-            session = require_recharge(key)
+            session = require_session(key, 'recharge')
             return web.json_response(session['result'])
 
     async def prepare_recharge(request):
@@ -648,67 +673,91 @@ def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, c
         selection = hmac.digest(selection_key, selected_input, 'sha256')
         async with journal.lock(owner, startup_seconds + 5, lambda: on_contention(owner, key, 'open')):
             entry = await release_previous(owner, key)
-            session = current_recharge(key)
+            session = current_session(key)
             if session and entry and entry['phase'] == 'tracking':
+                if session['mode'] != 'recharge':
+                    raise web.HTTPConflict()
                 if (session['selection'] != selection or (config['expectedCountry']
                         and session['result']['country'] != config['expectedCountry'])):
                     raise web.HTTPConflict()
                 return web.json_response(session['result'])
 
-            async with journal.lock('admission', startup_seconds + 5):
-                state = await admission_state(key)
-                if state == 'unknown':
-                    raise web.HTTPServiceUnavailable()
-                if state != 'idle' or await desktop_ready(key, connect_worker):
-                    raise web.HTTPConflict()
-                if not await admit():
-                    raise web.HTTPTooManyRequests()
-                await clear_recharge(key)
-                try:
-                    directory = recharge.workspace(key)
-                    config = {**config, 'proxyUrl': materialize_proxy_session(config['proxyUrl'])}
-                    relay = await recharge.relay(directory, config['proxyUrl'])
-                except EgressError:
-                    raise web.HTTPUnprocessableEntity() from None
-                except OSError:
-                    raise web.HTTPServiceUnavailable() from None
-                launched = False
-                try:
-                    async with recharge.bootstrap(directory, config) as receipt:
-                        journal.set(owner, key, 'starting')
-                        launched = True
-                        if await activate(key) is not True:
-                            raise web.HTTPServiceUnavailable()
-                        result = await asyncio.wait_for(asyncio.shield(receipt), startup_seconds)
-                        if result is None:
-                            raise web.HTTPUnprocessableEntity()
-                        if not await await_ready(key):
-                            raise web.HTTPServiceUnavailable()
-                        display = socket_identity(worker_display(key).lstat())
-                    journal.set(owner, key, 'tracking')
-                    prepared[key] = {'relay': relay, 'display': display, 'selection': selection, 'result': result}
-                except BaseException as error:
-                    await relay.close()
-                    if launched:
-                        journal.set(owner, key, 'stopping')
-                        if not await stop(key) or not await stopped(key):
-                            raise web.HTTPServiceUnavailable() from None
-                        journal.set(owner, key, None)
-                    if isinstance(error, (OSError, asyncio.TimeoutError)):
-                        raise web.HTTPServiceUnavailable() from None
-                    raise
+            result = await start_managed(owner, key, 'recharge', config, selection)
         return web.json_response(result)
 
-    async def reap_recharge():
+    async def start_managed(owner, key, mode, config, selection=None):
+        async with journal.lock('admission', startup_seconds + 5):
+            state = await admission_state(key)
+            if state == 'unknown':
+                raise web.HTTPServiceUnavailable()
+            if state != 'idle' or await desktop_ready(key, connect_worker):
+                raise web.HTTPConflict()
+            if not await admit():
+                raise web.HTTPTooManyRequests()
+            await clear_session(key)
+            try:
+                directory = recharge.workspace(key)
+                if mode == 'renewal':
+                    relay = await recharge.renewal_relay(directory)
+                else:
+                    config = {**config, 'proxyUrl': materialize_proxy_session(config['proxyUrl'])}
+                    relay = await recharge.relay(directory, config['proxyUrl'])
+            except EgressError:
+                if mode == 'renewal':
+                    raise web.HTTPServiceUnavailable() from None
+                raise web.HTTPUnprocessableEntity() from None
+            except OSError:
+                raise web.HTTPServiceUnavailable() from None
+            session = {'mode': mode, 'relay': relay}
+            launched = False
+            try:
+                if mode == 'renewal':
+                    session['egress'] = directory / EGRESS_SOCKET
+                    session['egress_identity'] = socket_identity(session['egress'].lstat())
+                async with recharge.bootstrap(directory, config) as receipt:
+                    journal.set(owner, key, 'starting')
+                    launched = True
+                    if await activate(key) is not True:
+                        raise web.HTTPServiceUnavailable()
+                    result = await asyncio.wait_for(asyncio.shield(receipt), startup_seconds)
+                    if result is None:
+                        if mode == 'renewal':
+                            raise web.HTTPServiceUnavailable()
+                        raise web.HTTPUnprocessableEntity()
+                    if not await await_ready(key):
+                        raise web.HTTPServiceUnavailable()
+                    display = socket_identity(worker_display(key).lstat())
+                if mode == 'renewal':
+                    fd = os.open(renewal_marker(key), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                    with os.fdopen(fd, 'wb') as marker:
+                        marker.write(('%d:%d' % display).encode('ascii'))
+                        marker.flush()
+                        os.fsync(marker.fileno())
+                journal.set(owner, key, 'tracking')
+                session.update(display=display, selection=selection, result=result)
+                prepared[key] = session
+                return result
+            except BaseException as error:
+                await relay.close()
+                if launched:
+                    journal.set(owner, key, 'stopping')
+                    if not await stop(key) or not await stopped(key):
+                        raise web.HTTPServiceUnavailable() from None
+                    journal.set(owner, key, None)
+                if isinstance(error, (OSError, asyncio.TimeoutError)):
+                    raise web.HTTPServiceUnavailable() from None
+                raise
+
+    async def reap_sessions():
         while True:
             await asyncio.sleep(5)
             for key, session in tuple(prepared.items()):
-                if current_recharge(key) is None and prepared.get(key) is session:
-                    await clear_recharge(key)
+                if current_session(key) is None and prepared.get(key) is session:
+                    await clear_session(key)
 
     async def manage_recharge(_app):
         with recharge.exclusive():
-            reaper = asyncio.create_task(reap_recharge())
+            reaper = asyncio.create_task(reap_sessions())
             try:
                 yield
             finally:
@@ -718,6 +767,35 @@ def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, c
 
     if recharge is not None:
         app.cleanup_ctx.append(manage_recharge)
+
+    async def reconnect_renewal(key):
+        if key in prepared:
+            session = require_session(key, 'renewal')
+            try:
+                if socket_identity(session['egress'].lstat()) != session['egress_identity']:
+                    raise web.HTTPServiceUnavailable()
+            except OSError:
+                raise web.HTTPServiceUnavailable() from None
+            return
+        # The broker's relay listener closes on restart while Chromium keeps its
+        # desktop. Rebind the same private path only for this exact live display.
+        try:
+            display = socket_identity(worker_display(key).lstat())
+            if renewal_marker(key).read_bytes() != ('%d:%d' % display).encode('ascii'):
+                raise web.HTTPConflict()
+            directory = recharge.workspace(key)
+            relay = await recharge.renewal_relay(directory)
+        except FileNotFoundError:
+            raise web.HTTPConflict() from None
+        except (OSError, EgressError):
+            raise web.HTTPServiceUnavailable() from None
+        try:
+            path = directory / EGRESS_SOCKET
+            prepared[key] = {'mode': 'renewal', 'display': display, 'relay': relay,
+                             'egress': path, 'egress_identity': socket_identity(path.lstat())}
+        except OSError:
+            await relay.close()
+            raise web.HTTPServiceUnavailable() from None
 
     async def open_workspace(request):
         owner, key = desktop(request)
@@ -729,7 +807,14 @@ def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, c
                 journal.set(owner, key, None)
                 entry = None
             if entry and await desktop_ready(key, connect_worker):
+                if recharge is not None:
+                    await reconnect_renewal(key)
                 journal.set(owner, key, 'tracking')
+                return web.Response(status=204)
+            if recharge is not None:
+                if not await renewal_enabled():
+                    raise web.HTTPServiceUnavailable()
+                await start_managed(owner, key, 'renewal', {'mode': 'renewal'})
                 return web.Response(status=204)
             if not activate or not admit:
                 raise web.HTTPServiceUnavailable()
@@ -763,12 +848,12 @@ def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, c
                 raise web.HTTPServiceUnavailable()
             if entry['phase'] != 'starting' and await stopped(key):
                 journal.set(owner, key, None)
-                await clear_recharge(key)
+                await clear_session(key)
                 return
             if not stop:
                 raise web.HTTPServiceUnavailable()
             journal.set(owner, key, 'stopping')
-            await clear_recharge(key)
+            await clear_session(key)
             if not await stop(key) or not await stopped(key):
                 raise web.HTTPServiceUnavailable()
             journal.set(owner, key, None)
@@ -808,7 +893,9 @@ def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, c
                 raise web.HTTPConflict()
             if not ws.can_prepare(request).ok:
                 raise web.HTTPBadRequest()
-            expected = require_recharge(key)['display'] if recharge_only else None
+            expected = None
+            if recharge_only or recharge is not None:
+                expected = require_session(key, 'recharge' if recharge_only else 'renewal')['display']
             try:
                 reader, writer = await asyncio.wait_for(connect_worker(key, expected), 2)
             except (OSError, asyncio.TimeoutError):
@@ -855,6 +942,7 @@ def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, c
     app.router.add_post('/v1/workspaces/{key}/open', open_workspace)
     app.router.add_post('/v1/workspaces/{key}/stop', stop_workspace)
     app.router.add_get('/v1/workspaces/{key}/stream', stream, allow_head=False)
+    app.router.add_get('/v1/renewal/status', renewal_status, allow_head=False)
     app.router.add_get('/v1/recharge/status', recharge_status, allow_head=False)
     app.router.add_post('/v1/workspaces/{key}/prepare', prepare_recharge)
     app.router.add_get('/v1/workspaces/{key}/recharge-status', recharge_workspace_status, allow_head=False)

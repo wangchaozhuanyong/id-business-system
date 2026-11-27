@@ -863,7 +863,11 @@ def main(sample_backup_resources=False):
     if manual_workspace:
         files += ("frontend/native-workbench-prototype.html", "frontend/native-workbench-prototype.mjs",
                   "frontend/native-workbench-prototype.css", "server/manual-remote-access.mjs",
-                  "server/manual-desktop-workspace.mjs")
+                  "server/manual-desktop-workspace.mjs", "frontend/bitbrowser-addresses.js",
+                  "frontend/operations-prototype.js", "deploy/manual-desktop/broker.py",
+                  "deploy/manual-desktop/worker/recharge_proxy.py", "deploy/manual-desktop/worker/worker.py",
+                  "deploy/manual-desktop/egress.py", "deploy/manual-desktop/host/provision.py",
+                  "deploy/manual-desktop/host/runtime.py", "deploy/manual-desktop/host/check_renewal.py")
     plan = {"operation": "release", "sha": sha, "before": before, "artifacts": artifacts,
             "files": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in files},
             "qualityRun": quality_run, "preflightCommand": preflight_id, 'externalEvents': True}
@@ -895,7 +899,7 @@ def main(sample_backup_resources=False):
     if manual_workspace:
         desktop = receipt.get("manualWorkspace", {})
         if (desktop.get("imageId") != image_id or desktop.get("browserSandboxVerified") is not True
-                or desktop.get("websiteBrokerVerified") is not True
+                or desktop.get("websiteBrokerVerified") is not True or desktop.get("renewalLifecycleVerified") is not True
                 or desktop.get("maxActive") != 1 or receipt.get("protectedComponentsUnchanged") is not True):
             raise RuntimeError(f"manual_workspace_release_receipt_mismatch: {command_id}")
     recovery = receipt.get("portableRecoveryBackup", {})

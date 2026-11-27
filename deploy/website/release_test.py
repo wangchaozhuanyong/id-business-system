@@ -40,6 +40,15 @@ await startPreview(port, {
 
 
 class WebsiteReleaseTests(unittest.TestCase):
+    def test_renewal_records_enable_only_during_checked_workspace_release(self):
+        old = remote.MANUAL_RECHARGE_ONLY_ARGS
+        current = remote.MANUAL_SITE_ARGS
+        self.assertEqual(remote.wire_manual_workspace(old, False), old)
+        self.assertEqual(remote.wire_manual_workspace(old, True), current)
+        self.assertEqual(remote.wire_manual_workspace(current, False), current)
+        with self.assertRaisesRegex(remote.ReleaseError, "manual_workspace_launcher_layout_unexpected"):
+            remote.wire_manual_workspace(old + "\n" + current, True)
+
     def test_interrupted_scope_requires_only_release_files_to_change_since_running_native(self):
         import interrupted_release
 
