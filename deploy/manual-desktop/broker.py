@@ -36,7 +36,6 @@ ASSET_FILENAME = re.compile(r"[A-Za-z0-9_.-]+\.js")
 MAX_ASSET_PATH = 1024
 RECHARGE_BODY_LIMIT = 8 * 1024
 RECHARGE_REPLY_LIMIT = 512
-ACCOUNT_EMAIL = re.compile(r"[^\s@]+@[^\s@]+\.[^\s@]+")
 COUNTRY = re.compile(r"[A-Z]{2}")
 PROXY_SESSION = re.compile(r"([-_:]session[-_:])([a-zA-Z0-9_-]{1,2048}?)((?:[-_:]sessiontime[-_:]|\b|$))",
                            re.IGNORECASE | re.ASCII)
@@ -305,12 +304,20 @@ async def read_recharge_config(request):
         body = await request.json()
         if isinstance(body, dict) and set(body) == {'email', 'proxyUrl', 'expectedCountry'}:
             email, proxy_url, country = body['email'], body['proxyUrl'], body['expectedCountry']
-            if (isinstance(email, str) and 1 <= len(email) <= 254
-                    and email.isprintable() and ACCOUNT_EMAIL.fullmatch(email)
+            if (valid_account_email(email)
                     and isinstance(proxy_url, str) and 1 <= len(proxy_url) <= 2048
                     and isinstance(country, str) and (not country or COUNTRY.fullmatch(country))):
                 return body
     raise web.HTTPBadRequest()
+
+
+def valid_account_email(email):
+    if (not isinstance(email, str) or not 1 <= len(email) <= 254 or not email.isprintable()
+            or any(character.isspace() for character in email)):
+        return False
+    account, marker, domain = email.partition('@')
+    name, dot, suffix = domain.rpartition('.')
+    return bool(account and marker and name and dot and suffix and '@' not in domain)
 
 
 def materialize_proxy_session(url):

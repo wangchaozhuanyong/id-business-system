@@ -259,7 +259,9 @@ def _request_exit(sock):
             response.begin()
             if response.status != 200:
                 raise ProxyError('Proxy exit check failed')
-        with ssl.create_default_context().wrap_socket(probe, server_hostname=PROBE_HOST) as tls:
+        context = ssl.create_default_context()
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        with context.wrap_socket(probe, server_hostname=PROBE_HOST) as tls:
             tls.sendall(
                 f'GET / HTTP/1.1\r\nHost: {PROBE_HOST}\r\n'
                 'Accept: application/json\r\nConnection: close\r\n\r\n'.encode('ascii')

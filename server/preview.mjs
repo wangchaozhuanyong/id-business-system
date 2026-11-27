@@ -923,7 +923,10 @@ export async function startPreview(
           if (action === 'launch') {
             const email = publicUrl && typeof body?.email === 'string' ? body.email.trim().toLowerCase() : '';
             if (publicUrl) {
-              if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
+              const [mailbox, domain, ...extra] = email.split('@');
+              const suffix = domain?.lastIndexOf('.');
+              if (email.length > 254 || !mailbox || !domain || extra.length || /\s/.test(email) ||
+                  suffix <= 0 || suffix === domain.length - 1 ||
                   Object.keys(body).some(key => !['email', 'proxyId', 'proxyVersion', 'customProxyUrl'].includes(key)))
                 throw new NativeBrowserError(400, '请核对工作区的账号邮箱与代理选择');
               if (request.headers.origin !== requestOrigin)
