@@ -525,7 +525,9 @@ def remote(plan):
                             print(line, flush=True)
                 if plan.get("manualWorkspace"):
                     for line in invocation["StandardOutputContent"].splitlines():
-                        if re.fullmatch(r"manual_workspace_(prepare|check|install|verify|smoke|deactivate)_(started|completed)", line):
+                        if (re.fullmatch(r"manual_workspace_(prepare|check|install|verify|smoke|deactivate)_(started|completed)", line)
+                                or re.fullmatch(r'\{"websiteAssetFailure": \{"path": "/[a-zA-Z0-9_./-]{1,150}", '
+                                                r'"status": [45][0-9]{2}\}\}', line)):
                             print(line, flush=True)
                 for detail in invocation["StandardErrorContent"].splitlines():
                     if re.fullmatch(r"[a-z_]+(?:: [a-z_]+)?", detail) or (
