@@ -14,7 +14,7 @@ const units = ['local-data-read-cache', 'change-sync-client', 'change-sync-feed'
   'module-boundaries', 'document-delta', 'business-lists', 'renewal-sidebar',
   'system-monitoring', 'site-management', 'login-security', 'staff-workspaces', 'finance-reconciliation', 'renewal-handoff',
   'renewal-account-reference',
-  'account-lifecycle', 'account-lifecycle-performance', 'personal-subscriptions', 'inventory-usage', 'operation-recovery',
+  'manual-renewal-records', 'account-lifecycle', 'account-lifecycle-performance', 'personal-subscriptions', 'inventory-usage', 'operation-recovery',
   'mailbox-updates', 'mailbox-query-content', 'relay-mail-updates', 'recharge-events', 'recharge-activity'];
 const browsers = ['date-filter', 'search-input', 'ui-idle-contract', 'change-sync', 'performance-read-index', 'system-monitoring', 'site-management', 'card-type-settings',
   'staff-workspaces', 'finance-reconciliation', 'renewal-handoff', 'renewal-status-entries', 'renewal-detail-card-retry',
@@ -22,7 +22,7 @@ const browsers = ['date-filter', 'search-input', 'ui-idle-contract', 'change-syn
   'order-customer-suggestions', 'contact-recovery', 'operation-recovery',
   'mobile-navigation-layout', 'tab-navigation', 'list-filter-toolbar', 'order-price-shortcuts', 'inventory-workspace', 'design-list-boundaries', 'global-pagination', 'business-lists', 'site-visual-v2-border',
   'recharge-layout-transitions', 'recharge-cell-overflow', 'recharge-server-diagnostic', 'recharge-partner',
-  'recharge-invoice-subscription', 'mailbox-updates', 'initial-loading-layout', 'workbench-cloud-hold'];
+  'recharge-invoice-subscription', 'mailbox-updates', 'initial-loading-layout', 'workbench-cloud-hold', 'manual-renewal-layout', 'manual-renewal-registration'];
 const groups = [
   ['unit', ['--test', ...frontend, ...units.map(name => `test/${name}.test.mjs`)]],
   ['browser', ['--test', '--test-concurrency=1', ...browsers.map(name => `test/${name}.browser.mjs`)]],

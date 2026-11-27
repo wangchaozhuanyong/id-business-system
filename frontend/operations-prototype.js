@@ -726,7 +726,7 @@
   const workspaceRechargeRoute = 'workspace/recharge';
   const workspaceRechargeView = ['redeem', '兑换开通', 'workspace'];
   const bitLoginRoute = 'recharge/start';
-  const bitLoginView = ['bit-login', '手动充值', '/integrations/bitbrowser/local-login?v=20261125-layout-fix'];
+  const bitLoginView = ['bit-login', '手动充值', '/integrations/bitbrowser/local-login?v=20261127-renewal-layout'];
   const onlineRechargeRoute = 'online-recharge/chatgpt';
   const rechargeCardsRoute = 'staff/finance/cards';
   const onlineRechargeMount = '/integrations/codexdaichong/';
@@ -904,13 +904,31 @@
   function renderBitBrowserLogin() {
     const showAddresses = localData && isAdmin();
     const jump = showAddresses
-      ? button('前往地址管理', 'ops-bit-address-jump', 'bit-address-jump', '', 'aria-controls="bit-addresses-host"')
+      ? `<nav class="bit-address-jump" aria-label="手动充值快捷定位">${button('前往地址管理', 'ops-bit-address-jump', '', '', 'data-pane="address" aria-controls="bit-addresses-host"')}${button('前往续费管理', 'ops-bit-address-jump', '', '', 'data-pane="renewals" aria-controls="bit-addresses-host"')}</nav>`
       : '';
     const login = renderRechargeRegion('bit');
+    const entry = `<section class="panel bit-entry-panel">
+      <div class="bit-workspace-heading bit-entry-heading"><div class="tabs" role="tablist" aria-label="录入工作区">
+        <button class="tab active" type="button" role="tab" id="bit-entry-tab" data-action="ops-bit-entry-pane" data-entry-pane="entry" aria-controls="bit-entry-registration" aria-selected="true">工作台</button>
+        <button class="tab" type="button" role="tab" id="bit-single-tab" data-action="ops-bit-entry-pane" data-entry-pane="login" aria-controls="bit-single-content" aria-selected="false" tabindex="-1">单号登录</button>
+      </div></div>
+      <div id="bit-entry-registration" role="tabpanel" aria-labelledby="bit-entry-tab" class="panel-body">
+        <div class="title-with-help"><h2>录入续费账号</h2>${api.titleInfo('录入续费账号', '登记账号邮箱、当前套餐和处理状态。金额或支付结果请在实际确认后登记。', 'bit-entry-info')}</div>
+        <form id="bit-renewal-entry" class="bit-registration-form">
+          <label for="bit-renewal-email">账号邮箱<input class="input" type="email" id="bit-renewal-email" name="email" maxlength="254" required autocomplete="off" /></label>
+          <label for="bit-renewal-plan">当前套餐<input class="input" id="bit-renewal-plan" name="currentPlan" maxlength="48" placeholder="尚未确认可留空" /></label>
+          <label for="bit-renewal-state">续费状态<select class="select" id="bit-renewal-state" name="status"><option value="pending_renewal">待续费</option><option value="active">已开通</option><option value="expired">已过期</option></select></label>
+          <label for="bit-renewal-notes">续费备注（选填）<textarea class="input" id="bit-renewal-notes" name="renewalNotes" maxlength="2000" rows="3"></textarea></label>
+          <div class="bit-registration-footer"><button class="button primary" type="submit">保存账号</button><button class="button" type="reset">重置输入</button></div>
+          <div role="status" data-record-feedback></div>
+        </form>
+      </div>
+      <div id="bit-single-content" role="tabpanel" aria-labelledby="bit-single-tab" hidden>${login}</div>
+    </section>`;
     return (
       header('手动充值', '使用 ChatGPT 授权 JSON 登录账号，共享自动代充 IP 池并在指纹浏览器中进入登录状态，支持手动操作与续费管理。') +
       (showAddresses
-        ? `<div class="bit-login-layout">${jump}${login}<aside id="bit-addresses-host" aria-label="地址管理" tabindex="-1"></aside></div>`
+        ? `<div class="bit-login-layout">${jump}${entry}<aside id="bit-addresses-host" aria-label="手动充值管理" tabindex="-1"></aside></div>`
         : login)
     );
   }
@@ -1236,7 +1254,10 @@
     const frame = document.createElement('iframe');
     request.frame = frame;
     frame.className = 'recharge-integration__frame';
-    if (bit) frame.classList.add('recharge-integration__frame--bit-local');
+    if (bit) {
+      frame.classList.add('recharge-integration__frame--bit-local');
+      if (panel.closest('.bit-login-layout')) frame.dataset.renewalSidebar = '';
+    }
     frame.title = selected[1];
     frame.dataset.viewGroup = group;
     frame.dataset.view = selected[0];
@@ -4228,9 +4249,21 @@
         selectOnlineView(node.closest('nav'), view);
         void loadIntegratedRecharge();
       }
+    } else if (action === 'ops-bit-entry-pane' && state.route === bitLoginRoute) {
+      if (blockRechargeNavigation()) return true;
+      const entry = node.closest('.bit-entry-panel');
+      for (const tab of entry.querySelectorAll('[data-entry-pane]')) {
+        const selected = tab === node;
+        tab.classList.toggle('active', selected);
+        tab.tabIndex = selected ? 0 : -1;
+        tab.setAttribute('aria-selected', String(selected));
+        entry.querySelector('#' + tab.getAttribute('aria-controls')).hidden = !selected;
+      }
+      if (node.dataset.entryPane === 'login') void loadIntegratedRecharge();
     } else if (action === 'ops-bit-address-jump' && state.route === bitLoginRoute) {
       const host = $('#bit-addresses-host', integrationRoot());
-      host?.focus({ preventScroll: true });
+      api.modules.bitbrowserAddresses?.selectPane(host, node.dataset.pane);
+      host?.querySelector('[role="tab"][aria-selected="true"]')?.focus({ preventScroll: true });
       host?.scrollIntoView({ block: 'start' });
     } else if (action === 'ops-login-log-tab' && state.route === loginLogsRoute &&
         (!localData?.authRequired || state.actor?.role === 'super')) {
@@ -4797,7 +4830,7 @@
       if (state.route === bitLoginRoute) {
         const host = $('#bit-addresses-host', integrationRoot());
         if (host && isAdmin()) api.modules.bitbrowserAddresses?.mount(host);
-        void loadIntegratedRecharge();
+        if (!host || !$('#bit-single-content', integrationRoot())?.hidden) void loadIntegratedRecharge();
         return;
       }
       if (pluginPages[state.route]) { openOnlineTool(pluginPages[state.route].tool); api.compactListToolbars?.(document.getElementById('main')); return; }

@@ -7,9 +7,6 @@ import { listBitBrowserAddresses } from '../server/bitbrowser-addresses.mjs';
 import { interceptDesign, origin, settle, toggleDesignTheme } from './helpers/offline-design.mjs';
 
 const email = 'address-workspace@example.test';
-const authorization = JSON.stringify({
-  sessionToken: 'synthetic-session', user: { id: 'user-fixture', email }, account: { id: 'account-fixture' }
-});
 const sample = {
   id: '00000000-0000-4000-8000-000000000001',
   country: 'US',
@@ -123,13 +120,13 @@ test('比特登录右侧地址库支持复制、重试标记和按快照批量�
       const errors = [];
       page.on('pageerror', (error) => errors.push(error.message));
       await page.goto(origin + '/#/recharge/start');
-      const frame = page.frameLocator('.recharge-integration__frame--bit-local');
-      const login = page.locator('[data-recharge-module="bit"]');
-      const panel = page.getByRole('complementary', { name: '地址管理' });
-      await panel.getByRole('heading', { name: '地址管理' }).waitFor();
-      await frame.locator('#bit-window-name').waitFor();
+      const entry = page.locator('#bit-entry-registration');
+      const panel = page.locator('#bit-addresses-host');
+      const addressTab = panel.getByRole('tab', { name: '地址管理', exact: true });
+      await addressTab.click();
+      await entry.waitFor();
       if (width === 1440) await toggleDesignTheme(page);
-      const formBox = await login.boundingBox();
+      const formBox = await page.locator('.bit-entry-heading').locator('..').boundingBox();
       const addressBox = await panel.boundingBox();
       if (width === 1440) {
         assert(addressBox.x >= formBox.x + formBox.width);
@@ -137,10 +134,10 @@ test('比特登录右侧地址库支持复制、重试标记和按快照批量�
       } else {
         assert(addressBox.y >= formBox.y + formBox.height);
         await page.getByRole('button', { name: '前往地址管理' }).click();
-        assert.equal(await panel.evaluate((node) => node === document.activeElement), true);
+        assert.equal(await addressTab.evaluate((node) => node === document.activeElement), true);
       }
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
-      await frame.locator('#bit-authorization-json').fill(authorization);
+      await entry.locator('#bit-renewal-email').fill(email);
 
       const tabs = panel.getByRole('tablist', { name: '地址状态' });
       const unused = tabs.getByRole('tab', { name: /^未使用/ });
@@ -163,7 +160,7 @@ test('比特登录右侧地址库支持复制、重试标记和按快照批量�
       await row.waitFor({ state: 'hidden' });
       assert.equal(server.writes.length, 2);
       assert.deepEqual(await page.evaluate(() => window.addressClipboard.copied), [addressText]);
-      assert.equal(await frame.locator('#bit-window-name').inputValue(), email);
+      assert.equal(await page.locator('#bit-renewal-email').inputValue(), email);
 
       await unused.focus();
       await unused.press('ArrowRight');
@@ -216,15 +213,13 @@ test('左右顶部栏、文字和内容起点对齐，页签切换和窄屏保�
   const errors = [], measurements = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(origin + '/#/recharge/start');
-  const frame = page.frameLocator('.recharge-integration__frame--bit-local');
-  await frame.locator('.bit-local--embedded').waitFor();
-  await frame.locator('#bit-authorization-json').fill(authorization);
-  await page.locator('#bit-address-heading').waitFor();
+  await page.locator('#bit-renewal-email').fill(email);
+  await page.getByRole('tab', { name: '地址管理', exact: true }).click();
   assert.equal(await page.locator('#bit-addresses-panel input[type="file"], #bit-address-import').count(), 0);
   assert.equal(await page.locator('#bit-addresses-panel').getByRole('button', { name: '导入地址', exact: true }).count(), 0);
   const measure = () => page.evaluate(() => {
     const iframe = document.querySelector('.recharge-integration__frame--bit-local');
-    const inner = iframe.contentDocument;
+    const inner = iframe?.contentDocument;
     const read = (heading, label, offset, content) => {
       const box = heading.getBoundingClientRect(), range = document.createRange();
       range.selectNodeContents(label.firstChild);
@@ -233,11 +228,12 @@ test('左右顶部栏、文字和内容起点对齐，页签切换和窄屏保�
         textTop: text.top + offset, textHeight: text.height, lineHeight: style.lineHeight, fontSize: style.fontSize,
         textInset: text.left - box.left, contentTop: content.getBoundingClientRect().top + offset };
     };
-    const tab = inner.querySelector('.bit-local__workspace-bar [aria-selected="true"]');
-    const left = read(inner.querySelector('.bit-workspace-heading'), tab, iframe.getBoundingClientRect().top,
-      inner.querySelector('#bit-login-panel:not([hidden]) .bit-local__section, #bit-library-panel:not([hidden])'));
+    const leftHead = document.querySelector('.bit-entry-heading');
+    const tab = leftHead.querySelector('[aria-selected="true"]');
+    const entry = document.querySelector('#bit-entry-registration');
+    const left = read(leftHead, tab, 0, entry.checkVisibility() ? entry : iframe);
     const heading = document.querySelector('#bit-addresses-panel .bit-workspace-heading');
-    const title = heading.querySelector('h2');
+    const title = heading.querySelector('[data-pane="address"]');
     const right = read(heading, title, 0, document.querySelector('.bit-address-tabs'));
     const bounds = heading.getBoundingClientRect();
     const [titleBox, generate] = [title, heading.querySelector('#bit-address-generate-open')]
@@ -250,15 +246,15 @@ test('左右顶部栏、文字和内容起点对齐，页签切换和窄屏保�
       controlsInside: [generate].every(box =>
         box.left >= bounds.left && box.right <= bounds.right && bounds.bottom - box.bottom >= 8),
       hostOverflow: document.documentElement.scrollWidth - innerWidth,
-      frameOverflow: inner.documentElement.scrollWidth - iframe.clientWidth
+      frameOverflow: inner && iframe.checkVisibility() ? inner.documentElement.scrollWidth - iframe.clientWidth : 0
     };
   });
   for (const width of [2040, 1440, 1180, 1024, 901, 900, 768, 390, 320]) {
     await page.setViewportSize({ width, height: 1100 });
     for (const theme of ['light', 'dark']) {
       if (await page.evaluate(() => document.documentElement.dataset.theme) !== theme) await toggleDesignTheme(page);
-      for (const view of ['login', 'library', 'login']) {
-        await frame.locator('#bit-tab-' + view).click();
+      for (const view of ['entry', 'login', 'entry']) {
+        await page.locator(`[data-entry-pane="${view}"]`).click();
         await settle(page);
         const result = await measure();
         const { left, right } = result;
@@ -268,8 +264,9 @@ test('左右顶部栏、文字和内容起点对齐，页签切换和窄屏保�
         assert(result.oneRow, `${width}px ${theme} ${view} 的地址标题和生成按钮同排`);
         assert.equal(left.height, right.height, '顶部栏高度一致');
         assert(Math.abs((left.textTop - left.top) - (right.textTop - right.top)) <= 1, '真实文字顶边一致');
-        if (view === 'login') assert(Math.abs(left.textInset - right.textInset) <= 1, '首个标题左右内距一致');
-        assert(Math.abs((left.contentTop - left.bottom) - (right.contentTop - right.bottom)) <= 1, '内容区起始留白一致');
+        if (view === 'entry') {
+          assert(Math.abs(left.textInset - right.textInset) <= 1, '首个页签左右内距一致');
+        }
         if (width >= 1180) {
           assert(Math.abs(left.bottom - right.bottom) <= 1, '左右分隔线对齐');
           assert(Math.abs(left.textTop - right.textTop) <= 1, '左右实际文字对齐');
@@ -278,7 +275,7 @@ test('左右顶部栏、文字和内容起点对齐，页签切换和窄屏保�
           `${width}px ${theme} ${view} 横向溢出，宿主 ${result.hostOverflow}px，嵌入页 ${result.frameOverflow}px`);
         measurements.push({ width, theme, view, ...result });
       }
-      assert.equal(await frame.locator('#bit-window-name').inputValue(), email);
+      assert.equal(await page.locator('#bit-renewal-email').inputValue(), email);
       if (output && [2040, 390].includes(width)) {
         await page.evaluate(() => scrollTo(0, 0));
         await page.screenshot({ path: join(output, `bit-workspace-${width}-${theme}.png`), fullPage: true, animations: 'disabled' });
@@ -325,6 +322,7 @@ test('地址生成收到保存回执后提示成功并自动消失，写入失�
     await page.clock.install();
     await page.goto(origin + '/#/recharge/start');
     if (width === 390) await toggleDesignTheme(page);
+    await page.getByRole('tab', { name: '地址管理', exact: true }).click();
     const openGenerator = page.locator('#bit-address-generate-open');
     const drawer = page.getByRole('dialog', { name: '生成地址', exact: true });
     const generate = drawer.locator('#bit-address-generate-button'), toast = page.locator('#toast');

@@ -76,6 +76,9 @@ export async function interceptDesign(context, { beforeDirectory, localFixtures,
       if (resource === 'staff/finance/cards/pending') return json(localFixtures?.[resource] ?? { pending: [] });
       if (resource === 'subscriptions/lookup' && !localFixtures?.[resource])
         return json({ ownerId: '', ownerName: '' });
+      if (resource === 'native-browser-workbench' && url.searchParams.get('action') === 'renewals' && !localFixtures?.[resource])
+        return json({ version: 0, page: 1, pageSize: 20, items: [], total: 0,
+          summary: { total: 0, statuses: { pending_renewal: 0, active: 0, expired: 0, unknown: 0 }, plans: [] } });
       if (resource === 'renewals' && !localFixtures?.[resource])
         return json({ version: 0, candidates: [], items: [] });
       return json(localFixtures?.[resource] ?? { version: 0, data: null, items: [] });

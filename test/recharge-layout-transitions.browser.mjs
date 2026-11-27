@@ -136,11 +136,12 @@ test('recharge transitions keep content and geometry through delayed, superseded
         assert(frames.every(f => !f.overflow && f.toolbarHeight < 90), '切换过程中导航换行或整页横向溢出');
       };
 
+      const interceptors = offline ? page.context() : page;
       try {
         const access = Promise.withResolvers();
-        await page.route('**' + statusPath, async route => {
+        await interceptors.route('**' + statusPath, async route => {
           await access.promise;
-          await (offline ? offlineFixture.handle(route) : route.continue());
+          await (offline ? route.fallback() : route.continue());
         }, { times: 1 });
         await page.goto(origin + '/#/online-recharge/chatgpt');
         try {
@@ -155,10 +156,10 @@ test('recharge transitions keep content and geometry through delayed, superseded
         const before = await page.locator(frameSelector).boundingBox();
         const started = Promise.withResolvers();
         const release = Promise.withResolvers();
-        await page.route('**/integrations/codexdaichong/admin?view=dashboard', async route => {
+        await interceptors.route('**/integrations/codexdaichong/admin?view=dashboard', async route => {
           started.resolve();
           await release.promise;
-          await (offline ? offlineFixture.handle(route) : route.continue()).catch(() => {});
+          await (offline ? route.fallback() : route.continue()).catch(() => {});
         }, { times: 1 });
         await startProbe();
         try {
@@ -202,7 +203,7 @@ test('recharge transitions keep content and geometry through delayed, superseded
         assert.equal(statusChecks, 1, '兑换开通和充值管理共用已确认的服务状态');
 
         const oldFrame = await page.locator(frameSelector).evaluateHandle(n => n);
-        await page.route('**' + statusPath, route => route.fulfill({ status: 503, body: '{}' }), { times: 1 });
+        await interceptors.route('**' + statusPath, route => route.fulfill({ status: 503, body: '{}' }), { times: 1 });
         await page.locator('[data-action="ops-integrated-refresh"]').click();
         await idle();
         assert.equal(statusChecks, 2, '主动刷新重新检查服务');
@@ -216,7 +217,7 @@ test('recharge transitions keep content and geometry through delayed, superseded
         await page.evaluate(() => window.IDDesignAPI.clearPageRegions());
         assert.equal(await page.locator('#main [data-page-region]').count(), 0);
         const expired = route => route.fulfill({ status: 401, json: { message: '请通过统一账号登录' } });
-        await page.route('**' + statusPath, expired, { times: 1 });
+        await interceptors.route('**' + statusPath, expired, { times: 1 });
         await page.evaluate(() => { location.hash = '#/workspace/recharge'; });
         const denied = page.locator('[data-recharge-module="workspace"] [data-unavailable="401"]');
         await denied.getByRole('button', { name: /去登录/ }).waitFor();
@@ -238,15 +239,17 @@ test('recharge transitions keep content and geometry through delayed, superseded
         const bitReady = () => page.locator(bitSelector + ':not([hidden])').waitFor();
         const bitLoginPath = '/integrations/bitbrowser/local-login';
         const bitRelease = Promise.withResolvers();
-        await page.route(url => url.pathname === bitLoginPath, async route => {
+        await interceptors.route(url => url.pathname === bitLoginPath, async route => {
           await bitRelease.promise;
-          await (offline ? offlineFixture.handle(route) : route.continue()).catch(() => {});
+          await (offline ? route.fallback() : route.continue()).catch(() => {});
         }, { times: 1 });
+        await navigate('recharge/start');
+        await page.locator('#bit-entry-registration').waitFor();
         await startProbe();
         try {
           await Promise.all([
             page.waitForRequest(request => new URL(request.url()).pathname === bitLoginPath, { timeout: 8000 }),
-            navigate('recharge/start')
+            page.getByRole('tab', { name: '单号登录', exact: true }).click()
           ]);
           await page.locator('[data-recharge-module="bit"] .design-region-progress:not([hidden])').waitFor();
           assert.equal(await page.locator(bitSelector + ':not([hidden])').count(), 0, '未测量的比特登录空框不应可见');
@@ -260,8 +263,9 @@ test('recharge transitions keep content and geometry through delayed, superseded
           Math.abs(sample.height - bitHeight) <= 1 && !sample.overflow),
         '比特登录首帧应包含完整表单、正确主题和测量后的高度');
         const addresses = page.locator('#bit-addresses-host');
-        await addresses.getByRole('heading', { name: '地址管理', exact: true }).waitFor();
-        const loginBox = await page.locator('[data-recharge-module="bit"]').boundingBox();
+        const addressTab = addresses.getByRole('tab', { name: '地址管理', exact: true });
+        await addressTab.click();
+        const loginBox = await page.locator('.bit-entry-panel').boundingBox();
         const addressBox = await addresses.boundingBox();
         const jumpToAddresses = page.getByRole('button', { name: '前往地址管理', exact: true });
         if (width === 1440) {
@@ -289,7 +293,7 @@ test('recharge transitions keep content and geometry through delayed, superseded
           const addressList = addresses.locator('#bit-address-list');
           await addressList.getByText('暂无未使用地址', { exact: true }).waitFor();
           const releaseAddressRead = Promise.withResolvers();
-          await page.route('**/api/local/bitbrowser-addresses?*', async route => {
+          await interceptors.route('**/api/local/bitbrowser-addresses?*', async route => {
             await releaseAddressRead.promise;
             await route.fulfill({ status: 503, json: { error: '地址读取暂时失败' } });
           }, { times: 1 });
@@ -309,7 +313,7 @@ test('recharge transitions keep content and geometry through delayed, superseded
           await addressList.getByText('暂无未使用地址', { exact: true }).waitFor();
         } else if (width === 390) {
           await jumpToAddresses.click();
-          assert.equal(await addresses.evaluate((node) => document.activeElement === node), true);
+          assert.equal(await addressTab.evaluate((node) => document.activeElement === node), true);
         }
         assert.deepEqual(errors, []);
         if (output) await page.screenshot({ path: join(output, `transition-${width}-${dark ? 'dark' : 'light'}.png`) });

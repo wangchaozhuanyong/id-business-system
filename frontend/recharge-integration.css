@@ -909,3 +909,9 @@
 }
 
 
+
+.bit-local--renewal-sidebar .bit-local__workspace-bar { display: none; }
+#bit-single-content .recharge-integration { border: 0; box-shadow: none; }
+@media (min-width: 1180px) {
+  .bit-login-layout { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); }
+}

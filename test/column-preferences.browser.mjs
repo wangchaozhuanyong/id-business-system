@@ -91,11 +91,13 @@ test('列设置刷新后按账户及表格恢复，覆盖共享列表和比特�
   await page.goto(url(gpt));
   await header('账号密码').waitFor();
   await page.goto(url(addresses));
+  await addressPanel.getByRole('tab', { name: '地址管理', exact: true }).click();
   await addressHeader('街道地址').waitFor();
   await addressPanel.getByRole('button', { name: '列设置', exact: true }).click();
   await addressPanel.getByRole('checkbox', { name: '城市', exact: true }).uncheck();
   await addressHeader('城市').waitFor({ state: 'hidden' });
   await page.reload();
+  await addressPanel.getByRole('tab', { name: '地址管理', exact: true }).click();
   await addressHeader('街道地址').waitFor();
   assert.equal(await addressHeader('城市').count(), 0);
   await addressPanel.getByRole('tab', { name: /^已使用/ }).click();
@@ -140,6 +142,7 @@ test('列设置刷新后按账户及表格恢复，覆盖共享列表和比特�
   await header('邮箱密码').waitFor();
   assert(await header('国家地区').isVisible());
   await page.goto(url(addresses));
+  await addressPanel.getByRole('tab', { name: '地址管理', exact: true }).click();
   await addressHeader('街道地址').waitFor();
   assert.equal(await addressHeader('城市').count(), 0);
   assert.deepEqual(errors, []);

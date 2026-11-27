@@ -81,6 +81,7 @@ import {
   launchWorkbenchBrowser,
   closeWorkbenchBrowser
 } from './native-browser-workbench.mjs';
+import { editRenewalRecord, listRenewalPage, manualRenewalRecords, ManualRenewalError, requireRenewalRecord } from './manual-renewal-records.mjs';
 import { NativeBrowserError } from './native-chrome-runner.mjs';
 import {
   resolveWorkbenchProxy,
@@ -1126,6 +1127,24 @@ export function createLocalBusinessStore(databasePath) {
     if (!inTransaction) notifyChanges();
     return result;
   } };
+
+  function readRenewalRegistry(actor) {
+    if (!actor?.id) throw new LocalDataError(401, '请先登录');
+    if (!managesBusiness(actor)) throw new LocalDataError(403, '无权管理续费登记');
+    const domain = `manual-renewal-records:${actor.id}`;
+    const legacy = readDocument(`${nativeWorkbenchDomain}:${actor.id}`);
+    const manual = readDocument(domain);
+    return { domain, legacy: legacy.data || [], registry: manual.data || [],
+      registryVersion: manual.version, version: legacy.version + manual.version };
+  }
+
+  function writeRenewalRegistry(batch, entry) {
+    const registry = batch.registry.filter(row => row.id !== entry.id);
+    registry.push(entry);
+    const nextVersion = batch.registryVersion + 1;
+    put.run(batch.domain, nextVersion, encrypt(key, batch.domain, nextVersion, JSON.stringify(registry)));
+    return { version: batch.version + 1, record: requireRenewalRecord(manualRenewalRecords(batch.legacy, registry), entry.id) };
+  }
 
   function readDocument(domain) {
     const row = get.get(domain);
@@ -2219,6 +2238,34 @@ export function createLocalBusinessStore(databasePath) {
         log.run(new Date().toISOString(), bitBrowserWindowDomain, 'bitbrowser_window_save',
           auditSummary('保存比特原窗口关联', actor, record.sourceJobId), version);
         return { record };
+      });
+    },
+    listManualRenewals(query, actor) {
+      const { legacy, registry, version } = readRenewalRegistry(actor);
+      return { version, ...listRenewalPage(manualRenewalRecords(legacy, registry), query) };
+    },
+    getManualRenewalRecord(id, actor) {
+      const { legacy, registry } = readRenewalRegistry(actor);
+      return requireRenewalRecord(manualRenewalRecords(legacy, registry), id);
+    },
+    saveManualRenewalRecord(command, actor) {
+      return writeTransaction(() => {
+        const batch = readRenewalRegistry(actor);
+        const rows = manualRenewalRecords(batch.legacy, batch.registry);
+        const entry = editRenewalRecord(rows, batch.registry, command, new Date().toISOString());
+        if (entry.unchanged) return { version: batch.version, record: requireRenewalRecord(rows, entry.id) };
+        const result = writeRenewalRegistry(batch, entry);
+        log.run(entry.updatedAt, 'manual-renewal-records', 'manual_renewal_save',
+          auditSummary('人工登记账号续费状态和套餐', actor, entry.id), result.version);
+        return result;
+      });
+    },
+    markManualRenewalOpened(id, actor) {
+      return writeTransaction(() => {
+        const batch = readRenewalRegistry(actor);
+        const row = requireRenewalRecord(manualRenewalRecords(batch.legacy, batch.registry), id);
+        const entry = batch.registry.find(item => item.id === id) || { id: row.id, origin: 'legacy' };
+        return writeRenewalRegistry(batch, { ...entry, lastOpenedAt: new Date().toISOString() });
       });
     },
     loadNativeWorkbenchAccounts(query, actor = localToolboxActor) {
@@ -3741,6 +3788,8 @@ export function createLocalBusinessStore(databasePath) {
       for (const scope of ['toolbox', savedTotpDomain, bitBrowserConnectionDomain, bitBrowserProxyDomain, bitBrowserAddressDomain])
         versions[scope] = version(`${scope}:${actor.id}`);
       if (['admin', 'super'].includes(actor.role)) {
+        versions['manual-renewal-records'] = String(Number(version(`manual-renewal-records:${actor.id}`)) +
+          Number(version(`${nativeWorkbenchDomain}:${actor.id}`)));
         for (const scope of ['settings', 'appleBalance', 'tenant-cards', 'recharge-codes', 'order-sync', 'finance-rates',
           cardTypeDocument, cardFreezeDocument, subscriptionDomain, orderExpenseDomain]) versions[scope] = version(scope);
         versions['system-monitoring'] = `${version('system-monitoring-config')}:${version('system-monitoring-state')}`;
@@ -4025,6 +4074,18 @@ export async function handleLocalBusiness(
       if (request.headers.origin && request.headers.origin !== origin) throw new LocalDataError(403, '仅允许从当前页面操作');
       const url = new URL(request.url, origin);
       const action = url.searchParams.get('action') || '';
+      if (action === 'renewals' || action === 'renewal-record') {
+        if (!actor?.id) throw new LocalDataError(401, '请先登录');
+        if (!managesBusiness(actor)) throw new LocalDataError(403, '无权管理续费登记');
+        if (action === 'renewals' && request.method === 'GET') {
+          return json(response, 200, store.listManualRenewals(url.searchParams, actor));
+        }
+        if (action === 'renewal-record' && request.method === 'POST') {
+          if (request.headers.origin !== origin) throw new LocalDataError(403, '请从当前页面提交');
+          return json(response, 200, store.saveManualRenewalRecord(await readJson(request, 16_384), actor));
+        }
+        throw new LocalDataError(405, '续费登记不支持此操作');
+      }
       if (request.method === 'GET') {
         if (action === 'preferences') {
           return json(response, 200, store.loadNativeWorkbenchPreferences(effectiveActor));
@@ -4191,6 +4252,7 @@ export async function handleLocalBusiness(
       error instanceof BitBrowserWindowError ||
       error instanceof SavedTotpError ||
       error instanceof MailboxPoolError ||
+      error instanceof ManualRenewalError ||
       error instanceof NativeWorkbenchError ||
       error instanceof NativeBrowserError
     )

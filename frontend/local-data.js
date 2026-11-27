@@ -57,7 +57,7 @@
   });
   const expenseScope = 'order-expense-receipts';
   const revisionScopes = new Set(['inventory', 'commerce', 'settings', 'appleBalance', 'toolbox', 'saved-totp',
-    'bitbrowser-connections', 'bitbrowser-proxies', 'bitbrowser-addresses', 'tenant-cards', 'recharge-codes', 'recharge-partners',
+    'bitbrowser-connections', 'bitbrowser-proxies', 'bitbrowser-addresses', 'manual-renewal-records', 'tenant-cards', 'recharge-codes', 'recharge-partners',
     'order-sync', 'tools/mailbox-pool', 'tools/website-visits', 'apple-relay', 'operators', 'audit', 'finance-rates', 'card-types',
     'order-card-freeze', 'subscription-management', 'system-monitoring', 'recharge-card-plans', 'tools/mailbox-delivery',
     expenseScope, 'site-observations', 'site-resources', 'site-backups', 'renewal-handoffs', 'recharge-billing']);
@@ -744,6 +744,10 @@
       return ['primary-save', 'primary-import', 'alias-register', 'code-reset-confirm', 'mail-reassign-confirm'].includes(operation)
         ? write(['inventory', 'apple-relay', 'tools/mailbox-pool'], send) : send();
     },
+    listManualRenewals: (filters, signal) => request('native-browser-workbench?' + new URLSearchParams({ ...filters, action: 'renewals' }),
+      undefined, 'GET', { readSignal: signal }),
+    saveManualRenewal: data => write(['manual-renewal-records'], () =>
+      request('native-browser-workbench?action=renewal-record', data, 'POST', { retryWrite: false })),
     saveBitBrowserAddresses: (data) => write(['bitbrowser-addresses'], () => request('bitbrowser-addresses', data)),
     startMicrosoftMailbox: (data) => request('tools/mailbox-microsoft/start', data, 'POST'),
     finishMicrosoftMailbox: (authorizationId) => write(['tools/mailbox-pool'], () => request('tools/mailbox-microsoft/finish', { authorizationId }, 'POST')),

@@ -49,14 +49,19 @@
     const hiddenColumns = A.hiddenTableColumns(endpoint);
     host.innerHTML = `<section class="panel" id="bit-addresses-panel" aria-labelledby="bit-address-heading">
       <header class="panel-heading bit-workspace-heading bit-address-heading">
-        <div class="title-with-help"><h2 id="bit-address-heading" tabindex="-1">地址管理</h2>${A.titleInfo(
+        <div class="tabs bit-management-tabs" role="tablist" aria-label="右侧管理">
+          <button class="tab" type="button" role="tab" id="bit-address-heading" aria-controls="bit-address-content" data-pane="address">地址管理</button>
+          <button class="tab" type="button" role="tab" id="bit-renewals-heading" aria-controls="bit-renewals-content" data-pane="renewals">账号续费管理</button>
+        </div>
+        <div class="bit-address-heading-tools" data-address-tool>${A.titleInfo(
           '地址管理',
           '生成美国账单地址模板。复制成功后自动移入已使用，使用前请核对。',
           'bit-address-help'
-        )}</div>
-        ${button('生成地址', 'bit-address-open-generate', 'primary compact', '', 'id="bit-address-generate-open" aria-haspopup="dialog"')}
+        )}
+        <button type="button" class="button primary compact" id="bit-address-generate-open" data-action="bit-address-open-generate" aria-label="生成地址" aria-haspopup="dialog">生成<span class="bit-generate-suffix">地址</span></button></div>
+        <div data-renewal-help>${A.titleInfo('账号续费管理', '数量按当前操作员全部登记账号统计。套餐与状态以登记为准，完成手动续费后请更新记录。', 'bit-renewal-help')}</div>
       </header>
-      <div class="panel-body bit-address-body">
+      <div class="panel-body bit-address-body" id="bit-address-content" role="tabpanel" aria-labelledby="bit-address-heading">
         <div class="list-controls bit-address-controls">
           <div class="tabs bit-address-tabs" role="tablist" aria-label="地址状态">
             ${statuses.map(([id, label]) => `
@@ -95,11 +100,178 @@
           </div>
         </div>
       </div>
+      <div id="bit-renewals-content" class="panel-body bit-renewals" role="tabpanel" aria-labelledby="bit-renewals-heading" hidden>
+        <div class="bit-renewals-filters">
+          <input class="input" type="search" id="bit-renewals-search" data-auto-search aria-label="搜索邮箱、代理或备注" placeholder="搜索邮箱、代理或备注" />
+          <select class="select" id="bit-renewals-status" aria-label="续费状态">
+            <option value="">全部状态</option><option value="pending_renewal">待续费</option><option value="active">已开通</option><option value="expired">已过期</option>
+          </select>
+          ${button('刷新', 'bit-renewals-refresh', '', 'refresh')}
+        </div>
+        <div class="bit-renewal-summary" data-renewal-summary></div>
+        <div data-renewals-progress hidden role="status"></div>
+        <p class="inline-notice warning" data-renewals-error role="alert" hidden></p>
+        <table class="bit-renewal-records" aria-label="账号续费记录">
+          <thead><tr><th scope="col">账号邮箱</th><th scope="col">当前套餐</th><th scope="col">状态</th><th scope="col">操作</th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div data-renewal-pagination></div>
+      </div>
     </section>`;
     $('.bit-address-tabs', host).addEventListener('keydown', onTabKeydown);
+    const panes = $('.bit-management-tabs', host);
+    panes.addEventListener('click', event => {
+      const tab = event.target.closest('[role="tab"]');
+      if (tab) selectPane(host, tab.dataset.pane);
+    });
+    const renewals = $('#bit-renewals-content', host);
+    mountRenewals(host, renewals);
+    selectPane(host, 'renewals');
     renderTabs();
     renderList();
     void refresh('', { force: false });
+  }
+
+  const renewalStatuses = { pending_renewal: '待续费', active: '已开通', expired: '已过期', unknown: '未登记' };
+  const renewalPages = new WeakMap();
+  const planName = value => value ? String(value).toUpperCase() : '未登记';
+  const openDate = value => value && Number.isFinite(Date.parse(value)) ? dates.format(new Date(value)) : '未曾打开';
+
+  function selectPane(host, name) {
+    if (!host || !['address', 'renewals'].includes(name)) return;
+    const tools = host.querySelector('.bit-management-tabs');
+    if (!tools) return;
+    const tab = tools.querySelector('[data-pane="' + name + '"]');
+    if (tab.getAttribute('aria-selected') === 'true') return;
+    const renewals = host.querySelector('#bit-renewals-content');
+    for (const button of tools.children) {
+      const active = button === tab;
+      button.classList.toggle('active', active);
+      button.setAttribute('aria-selected', String(active));
+      button.tabIndex = active ? 0 : -1;
+      host.querySelector('#' + button.getAttribute('aria-controls')).hidden = !active;
+    }
+    host.querySelector('[data-address-tool]').hidden = name !== 'address';
+    host.querySelector('[data-renewal-help]').hidden = name !== 'renewals';
+    host.querySelector('#bit-addresses-panel').setAttribute('aria-labelledby', tab.id);
+    if (name === 'renewals') {
+      window.IDSearchInput?.restore(renewals);
+      void readRenewals(renewals);
+    } else {
+      window.IDSearchInput?.suspend(renewals);
+      renewalPages.get(renewals)?.controller?.abort();
+    }
+  }
+
+  function mountRenewals(host, panel) {
+    const state = { page: 1, pageSize: window.IDPagination.defaultPageSize, rows: [], controller: null };
+    renewalPages.set(panel, state);
+    const updateFilter = () => { state.page = 1; void readRenewals(panel); };
+    panel.querySelector('#bit-renewals-search').addEventListener('input', updateFilter);
+    panel.querySelector('#bit-renewals-status').addEventListener('change', updateFilter);
+    panel.addEventListener('id-pagination-change', ({ detail }) => {
+      Object.assign(state, { page: detail.page, pageSize: detail.pageSize });
+      void readRenewals(panel);
+    });
+    panel.addEventListener('click', event => {
+      const control = event.target.closest('button');
+      if (!control) return;
+      if (control.dataset.action === 'bit-renewals-refresh') void readRenewals(panel);
+      const row = state.rows.find(item => item.id === control.dataset.record);
+      if (row) editRenewal(panel, row);
+    });
+    const entry = host.closest('.bit-login-layout').querySelector('#bit-renewal-entry');
+    entry.addEventListener('submit', event => {
+      event.preventDefault();
+      void saveRecord(entry, panel);
+    });
+  }
+
+  function editRenewal(panel, row) {
+    A.openDrawer('续费记录', '按实际办理结果登记状态和套餐。', `
+      <form id="bit-edit-renewal" class="bit-registration-form">
+        <div class="property-row"><span>账号邮箱</span><strong>${esc(row.email)}</strong></div>
+        <div class="property-row"><span>最后打开</span><strong>${esc(openDate(row.lastOpenedAt))}</strong></div>
+        <div class="property-row"><span>绑定代理</span><strong>${esc(row.proxySummary || '—')}</strong></div>
+        <label>当前套餐<input class="input" name="currentPlan" value="${esc(row.currentPlan)}" maxlength="48"></label>
+        <label>续费状态<select class="select" name="status">${Object.entries(renewalStatuses)
+          .filter(([key]) => key !== 'unknown' || row.status === key)
+          .map(([key, label]) => `<option value="${key}" ${row.status === key ? 'selected' : ''}>${label}</option>`).join('')}</select></label>
+        <label>续费备注<textarea class="input" name="renewalNotes" rows="3" maxlength="2000">${esc(row.renewalNotes)}</textarea></label>
+        <button class="button primary" type="submit">保存登记</button><div role="status" data-record-feedback></div>
+      </form>`, '', 'bit-renewal-record');
+    const form = $('#bit-edit-renewal');
+    form.addEventListener('submit', event => {
+      event.preventDefault();
+      void saveRecord(form, panel, row);
+    });
+  }
+
+  async function saveRecord(form, panel, previous) {
+    if (form.getAttribute('aria-busy') === 'true') return;
+    const data = Object.fromEntries(new FormData(form));
+    const submit = form.querySelector('[type="submit"]');
+    const status = form.querySelector('[data-record-feedback]');
+    const snapshot = JSON.stringify(data);
+    form.setAttribute('aria-busy', 'true');
+    submit.disabled = true;
+    status.textContent = '正在保存…';
+    try {
+      const saved = await localData.saveManualRenewal(previous ? { ...data, id: previous.id, expectedRevision: previous.revision } : data);
+      if (!form.isConnected) return;
+      const unchanged = JSON.stringify(Object.fromEntries(new FormData(form))) === snapshot;
+      if (previous && unchanged) A.closeDrawer();
+      else if (previous) previous.revision = saved.record.revision;
+      else if (!previous && unchanged) form.reset();
+      status.textContent = unchanged ? '已保存续费登记。' : '已保存上次提交的内容，后续修改尚未保存。';
+      A.notify('已保存续费登记');
+      if (!panel.hidden && panel.isConnected) await readRenewals(panel);
+    } catch (error) {
+      status.textContent = error.message || '保存失败，请重试。';
+    } finally {
+      form.setAttribute('aria-busy', 'false');
+      submit.disabled = false;
+    }
+  }
+
+  async function readRenewals(panel) {
+    const state = renewalPages.get(panel);
+    if (!state || panel.hidden || panel.closest('[hidden]')) return;
+    state.controller?.abort();
+    const controller = new AbortController();
+    state.controller = controller;
+    const query = { page: state.page, pageSize: state.pageSize, search: panel.querySelector('#bit-renewals-search').value.trim(),
+      status: panel.querySelector('#bit-renewals-status').value };
+    const read = A.beginRegionRead(panel, panel.querySelector('[data-renewals-progress]'), {
+      loadingText: '正在读取续费记录…', refreshButton: panel.querySelector('[data-action="bit-renewals-refresh"]')
+    });
+    const errorBox = panel.querySelector('[data-renewals-error]');
+    try {
+      const result = await localData.listManualRenewals(query, controller.signal);
+      if (controller.signal.aborted || !read.current() || panel.closest('[hidden]')) return;
+      state.rows = result.items;
+      state.page = result.page;
+      errorBox.hidden = true;
+      const counts = result.summary.statuses;
+      panel.querySelector('[data-renewal-summary]').innerHTML = `<div class="bit-renewal-counts" aria-label="所有登记账号状态">
+        <span>全部 <b>${esc(result.summary.total)}</b></span><span>待续费 <b>${esc(counts.pending_renewal)}</b></span>
+        <span>已开通 <b>${esc(counts.active)}</b></span><span>已过期 <b>${esc(counts.expired)}</b></span>
+        ${counts.unknown ? `<span>未登记 <b>${esc(counts.unknown)}</b></span>` : ''}</div>
+        <div class="bit-renewal-plans">登记套餐　${result.summary.plans.map(p => `${esc(planName(p.name))} · ${esc(p.count)}`).join('　') || '—'}</div>`;
+      panel.querySelector('tbody').innerHTML = state.rows.length ? state.rows.map(row => `<tr>
+        <td><strong>${esc(row.email)}</strong><small>上次打开 · ${esc(openDate(row.lastOpenedAt))}</small></td>
+        <td data-label="套餐">${esc(planName(row.currentPlan))}</td>
+        <td data-label="状态">${A.tag(renewalStatuses[row.status] || '未登记', row.status === 'active' ? 'success' : row.status === 'pending_renewal' ? 'warning' : '')}</td>
+        <td>${button('查看记录', 'bit-renewal-detail', '', '', `data-record="${esc(row.id)}"`)}</td>
+      </tr>`).join('') : `<tr><td colspan="4" class="bit-renewal-empty">${query.search || query.status ? '没有符合条件的账号' : '暂无续费账号'}</td></tr>`;
+      panel.querySelector('[data-renewal-pagination]').innerHTML = window.IDPagination.render({
+        id: 'manual-renewals', page: result.page, pageSize: result.pageSize, total: result.total
+      });
+    } catch (error) {
+      if (controller.signal.aborted || !read.current()) return;
+      errorBox.textContent = '续费记录读取失败，请刷新重试。';
+      errorBox.hidden = false;
+    } finally { read.finish(); }
   }
 
   function renderTabs() {
@@ -377,12 +549,16 @@
     void refresh();
   });
 
-  A.modules.bitbrowserAddresses = { mount };
+  A.modules.bitbrowserAddresses = { mount, selectPane };
   window.IDDesignModules.push({
     id: 'bitbrowser-addresses',
     matches: () => false,
     onDataChanges(scopes) {
-      if (scopes.includes(endpoint) && addressPanel() && !saving) return refresh();
+      const jobs = [];
+      const panel = document.querySelector('#bit-renewals-content');
+      if (scopes.includes('manual-renewal-records') && panel && !panel.closest('[hidden]')) jobs.push(readRenewals(panel));
+      if (scopes.includes(endpoint) && addressPanel() && !saving) jobs.push(refresh());
+      if (jobs.length) return Promise.all(jobs);
     },
     onClick(action, node) {
       if (action === 'bit-address-open-generate') openGenerateDrawer();
