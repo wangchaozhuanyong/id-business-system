@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { interceptDesign, origin } from './helpers/offline-design.mjs';
 import { editRenewalRecord, listRenewalPage, manualRenewalRecords } from '../server/manual-renewal-records.mjs';
@@ -51,6 +53,16 @@ async function expectStats(pane, counts, plans) {
     assert.match(planText, new RegExp(plan + '\\s*·\\s*' + count + '(?!\\d)'));
 }
 
+async function pasteEmail(field, text) {
+  return field.evaluate((input, value) => {
+    const clipboard = new DataTransfer();
+    clipboard.setData('text/plain', value);
+    const paste = new ClipboardEvent('paste', { clipboardData: clipboard, bubbles: true, cancelable: true });
+    input.dispatchEvent(paste);
+    return paste.defaultPrevented;
+  }, text);
+}
+
 async function checkLongNote(textarea) {
   assert.equal(await textarea.inputValue(), longNote);
   await textarea.scrollIntoViewIfNeeded();
@@ -84,6 +96,8 @@ test('人工新增、编辑及失败重试保留登记内容和全量统计', as
     const traffic = await interceptDesign(context, { actor: { id: 'qa', role, name: '离线操作员' },
       localFixtures: {}, skipRechargeAssets: true });
     const data = await interceptRenewals(context);
+    const screenshotDirectory = role === 'finance' ? process.env.ID_LAYOUT_QA_OUTPUT : null;
+    if (screenshotDirectory) await mkdir(screenshotDirectory,{recursive:true});
     const page = await context.newPage();
     page.setDefaultTimeout(6000);
     const errors = [];
@@ -109,7 +123,30 @@ test('人工新增、编辑及失败重试保留登记内容和全量统计', as
     }
     await expectStats(panel, [1, 0, 1, 0], { pro: 1 });
 
-    await entry.getByLabel('账号邮箱').fill(email);
+    const emailField = entry.getByLabel('账号邮箱');
+    const marker = 'offline-fixture-extra-field-only';
+    const sentMarker = [];
+    page.on('request', request => {
+      if (request.url().includes(marker) || request.postData()?.includes(marker)) sentMarker.push(request.method());
+    });
+    await emailField.fill('typed@example.test');
+    assert.equal(await pasteEmail(emailField, 'plain@example.test'), false, '普通邮箱沿用浏览器粘贴');
+    assert.equal(await pasteEmail(emailField, JSON.stringify({ email:'top@example.test', extra:marker })), true);
+    assert.equal(await emailField.inputValue(), 'top@example.test');
+    assert.equal(await pasteEmail(emailField, JSON.stringify({ user:{email:'bad@_.test'},email:'top@example.test' })), true);
+    assert.equal(await emailField.inputValue(), 'top@example.test', '无效嵌套邮箱回退到有效的顶层邮箱');
+    assert.equal(await pasteEmail(emailField, JSON.stringify({ user:{ email:'invalid' }, extra:marker })), true);
+    assert.equal(await emailField.inputValue(), 'top@example.test', '不可识别时保留原邮箱');
+    assert.equal(await pasteEmail(emailField, '{"incomplete"'), true);
+    assert.equal(await emailField.inputValue(), 'top@example.test');
+    assert.equal(await pasteEmail(emailField, JSON.stringify({ user:{ email }, email:'other@example.test', extra:marker })), true);
+    assert.equal(await emailField.inputValue(), email);
+    assert.equal(data.writes.length,0,'粘贴不会提交表单');
+    assert.equal(await page.evaluate(value => document.body.textContent.includes(value) ||
+      [...document.querySelectorAll('input,textarea')].some(node => node.value.includes(value)) ||
+      [localStorage,sessionStorage].some(store => Object.keys(store).some(key => store.getItem(key)?.includes(value))), marker), false);
+
+    if (screenshotDirectory) await page.screenshot({path:join(screenshotDirectory,'finance-email-'+width+'.png')});
     await entry.getByLabel('当前套餐').fill('plus');
     await entry.getByLabel('续费备注').fill('第一次登记');
     const create = entry.getByRole('button', { name: '保存账号' });
@@ -132,9 +169,19 @@ test('人工新增、编辑及失败重试保留登记内容和全量统计', as
     await page.evaluate(() => document.body.setAttribute('data-manual-remote-workspaces', ''));
     await open(email);
     const workspace = drawer.getByRole('link', { name: '打开服务器工作区' });
-    assert.equal(await workspace.getAttribute('href'), '/manual-workspaces/' + data.records().find(record => record.email === email).id + '/');
+    const workspacePath = '/manual-workspaces/' + data.records().find(record => record.email === email).id + '/';
+    assert.equal(await workspace.getAttribute('href'), workspacePath);
     assert.equal(await workspace.getAttribute('target'), '_blank');
     assert((await workspace.getAttribute('rel')).split(' ').includes('noopener'));
+    await context.route(origin + workspacePath, route => route.fulfill({ contentType:'text/html',body:'<title>合成工作区</title>' }));
+    if (screenshotDirectory) await page.screenshot({path:join(screenshotDirectory,'finance-record-'+width+'.png')});
+    for (let visit = 0; visit < 2; visit++) {
+      const popup = page.waitForEvent('popup');
+      await workspace.click();
+      const viewer = await popup;
+      await viewer.waitForURL(origin + workspacePath);
+      await viewer.close();
+    }
     await drawer.getByLabel('续费状态').selectOption('expired');
     await drawer.getByLabel('当前套餐').fill('pro');
     await notes.fill('已复核到期');
@@ -167,6 +214,8 @@ test('人工新增、编辑及失败重试保留登记内容和全量统计', as
     await row(existingEmail).waitFor({ state: 'hidden' });
     await expectStats(panel, [2, 1, 0, 1], { '未登记': 1, pro: 1 });
     assert.equal(data.writes.length, 4, '失败或冲突不会额外重发写入');
+    assert.deepEqual(sentMarker, []);
+    assert(!JSON.stringify(data.writes).includes(marker));
     assert.deepEqual(errors, []);
     assert.deepEqual(traffic.external, []);
     assert.deepEqual(traffic.unavailable, []);

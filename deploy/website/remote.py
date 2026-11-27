@@ -31,7 +31,8 @@ SITE_HOST = "54-249-61-238.sslip.io"
 MANUAL_SOCKET = "/run/id-manual-bridge/site.sock"
 MANUAL_SITE_ARGS = ('  state+=(--group-add 10001 '
                     '--mount "type=bind,src=/run/id-manual-bridge,dst=/run/id-manual-bridge,readonly" '
-                    f'-e "ID_MANUAL_WORKSPACE_SOCKET={MANUAL_SOCKET}" -e "ID_MANUAL_RECHARGE_ONLY=1")')
+                    f'-e "ID_MANUAL_WORKSPACE_SOCKET={MANUAL_SOCKET}" -e "ID_MANUAL_RECHARGE_ONLY=0")')
+MANUAL_RECHARGE_ONLY_ARGS = MANUAL_SITE_ARGS.replace("ID_MANUAL_RECHARGE_ONLY=0", "ID_MANUAL_RECHARGE_ONLY=1")
 WEBSITE = ("app", "drive-backup", "sheets-sync")
 PROTECTED = ("recharge", "recharge-native", "vendure", "formal-mysql", "media", "caddy")
 ADAPTER_UNIT = "id-business-independent-recharge.service"
@@ -709,9 +710,10 @@ def wire_partner_api(content, enable):
 
 def wire_manual_workspace(content, enable):
     if "ID_MANUAL_WORKSPACE_SOCKET" in content:
-        require(content.count(MANUAL_SITE_ARGS) == content.count("ID_MANUAL_WORKSPACE_SOCKET") == 1,
+        require(content.count(MANUAL_SITE_ARGS) + content.count(MANUAL_RECHARGE_ONLY_ARGS)
+                == content.count("ID_MANUAL_WORKSPACE_SOCKET") == 1,
                 "manual_workspace_launcher_layout_unexpected")
-        return content
+        return content.replace(MANUAL_RECHARGE_ONLY_ARGS, MANUAL_SITE_ARGS) if enable else content
     if not enable:
         return content
     anchor = '    --mount "type=bind,src=$root/releases/$sha/runtime/mysql-ca.pem,dst=/run/recharge-mysql-ca.pem,readonly")'
@@ -989,17 +991,17 @@ def check_manual_website_socket(container):
             and not mounts[0]["RW"], "manual_workspace_website_mount_mismatch")
     probe = """
 const http = require('node:http');
-if (process.env.ID_MANUAL_WORKSPACE_SOCKET !== process.argv[1] || process.env.ID_MANUAL_RECHARGE_ONLY !== '1')
+if (process.env.ID_MANUAL_WORKSPACE_SOCKET !== process.argv[1] || process.env.ID_MANUAL_RECHARGE_ONLY !== '0')
   process.exit(2);
 const req = http.get({
   socketPath: process.env.ID_MANUAL_WORKSPACE_SOCKET,
-  path: '/v1/recharge/status', signal: AbortSignal.timeout(3000)
+  path: '/v1/renewal/status', signal: AbortSignal.timeout(5000)
 }, response => {
   let body = '';
   response.setEncoding('utf8');
   response.on('data', chunk => { body += chunk; if (body.length > 100) req.destroy(); });
   response.on('end', () => {
-    if (response.statusCode !== 200 || JSON.parse(body).rechargeBootstrap !== 1) process.exit(2);
+    if (response.statusCode !== 200 || JSON.parse(body).renewalWorkspace !== 1) process.exit(2);
     console.log('ready');
   });
 });
@@ -1017,7 +1019,8 @@ def manual_host_command(operation, release, image):
             "--image-id", image, "--assets", str(runtime / "novnc"),
             "--site-packages", str(runtime / "site-packages"), "--max-active", "1",
             "--min-available-mib", "512", "--block-network", f"{site_ip}/32"]
-    result = subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True, timeout=90)
+    result = subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True,
+                            timeout=285 if operation == "smoke" else 90)
     if result.returncode != 0:
         reason = result.stderr.decode(errors="replace").strip()
         raise ReleaseError(reason if re.fullmatch(r"[a-z][a-z0-9_]{6,95}", reason)
@@ -1062,8 +1065,10 @@ def release_with_manual_workspace(plan):
         expected = wire_event_credential(expected)
     installed = manual_host_command("install", release, image)["started"]
     try:
-        manual_host_command("verify", release, image)
+        require(manual_host_command("smoke", release, image).get("renewalLifecycleVerified") is True,
+                "renewal_workspace_lifecycle_not_verified")
         plan["manualWorkspace"]["offlinePeakMiB"] = peak
+        plan["manualWorkspace"]["renewalLifecycleVerified"] = True
         return release_website(plan, staged=(source, ops))
     except Exception:
         if DROP.read_text() == expected:

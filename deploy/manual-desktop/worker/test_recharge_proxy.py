@@ -52,7 +52,7 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
             if not task.cancelled() and task.exception():
                 raise task.exception()
 
-    async def start(self, fixture, credentials=None):
+    async def start(self, fixture, credentials=None, *, renewal=False):
         async def upstream(reader, writer):
             try:
                 head = await reader.readuntil(b'\r\n\r\n')
@@ -62,7 +62,7 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
                 await proxy._close(writer)
 
         await self.server(asyncio.start_unix_server, upstream, self.relay_path)
-        service = await proxy.open_proxy(credentials, relay_path=self.relay_path)
+        service = await proxy.open_proxy(credentials, relay_path=self.relay_path, renewal=renewal)
         self.addAsyncCleanup(service.close)
         self.assertEqual(service._listener.sockets[0].getsockname()[0], '127.0.0.1')
         return service
@@ -73,6 +73,30 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
         writer.write(message)
         await writer.drain()
         return reader, writer
+
+    async def test_renewal_uses_shared_official_destinations_without_probe_or_credentials(self):
+        for host in ('auth0.openai.com', 'ws.chatgpt.com', 'accounts.google.com', 'idmsa.apple.com',
+                     'login.microsoftonline.com', 'checkout.stripe.com', 'js.stripe.com', 'challenges.cloudflare.com'):
+            self.assertTrue(proxy.renewal_host_allowed(host), host)
+        for host in (proxy.PROBE_HOST, 'notopenai.com', 'chatgpt.com.evil.test', '.openai.com', 'evil..openai.com',
+                     '-bad.openai.com', 'auth.google.com', 'anything.checkout.stripe.com', '192.168.1.1'):
+            self.assertFalse(proxy.renewal_host_allowed(host), host)
+        self.assertFalse(proxy._allowed_host('accounts.google.com'))
+        self.assertTrue(proxy._allowed_host(proxy.PROBE_HOST))
+        with self.assertRaises(proxy.ProxyError):
+            await proxy.open_proxy(('fixture', 'fixture'), relay_path=self.relay_path, renewal=True)
+
+        async def upstream(_reader, writer):
+            writer.write(OK)
+
+        service = await self.start(upstream, renewal=True)
+        reader, _ = await self.connect(service, b'CONNECT accounts.google.com:443 HTTP/1.1\r\n\r\n')
+        self.assertEqual(await reader.readuntil(b'\r\n\r\n'), OK)
+        self.assertEqual(self.connections, [
+            b'CONNECT accounts.google.com:443 HTTP/1.1\r\nHost: accounts.google.com:443\r\n\r\n'])
+        denied, _ = await self.connect(service, b'CONNECT api.country.is:443 HTTP/1.1\r\n\r\n')
+        self.assertIn(b'403', await denied.readuntil(b'\r\n\r\n'))
+        self.assertEqual(len(self.connections), 1)
 
     async def test_connect_has_fixed_authorization_and_forwards_opaque_bytes(self):
         async def fixture(reader, writer):

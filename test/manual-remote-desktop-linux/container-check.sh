@@ -134,8 +134,10 @@ if [[ ${1:-} == --self-test && $# == 1 ]]; then
 fi
 archive_dir=
 verified_image=
+host_fixture=0
 case "$#:${1:-}" in
   0:) ;;
+  1:--host-fixture) host_fixture=1 ;;
   2:--archive-dir)
     archive_dir=$2
     [[ -n $archive_dir ]] || fail invalid_archive_directory
@@ -238,6 +240,9 @@ fi
 "${engine[@]}" stop -t 35 "$container" >/dev/null 2>&1 || fail worker_stop_failed
 state=$("${engine[@]}" inspect --format '{{.State.ExitCode}} {{.State.OOMKilled}}' "$container" 2>/dev/null) || fail worker_state_unavailable
 [[ $state == '0 false' ]] || fail worker_did_not_exit_cleanly
+if [[ $host_fixture == 1 ]]; then
+  bash "$repo/test/manual-remote-desktop-linux/host-fixture.sh" "$image"
+fi
 if [[ -n $archive_dir ]]; then
   staging=$(mktemp -d -- "$archive_dir/.manual-worker.XXXXXXXX") || fail worker_archive_directory_failed
   "${engine[@]}" image save --platform linux/amd64 "$image" | gzip -n > "$staging/image.tar.gz" ||

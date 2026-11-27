@@ -1,3 +1,5 @@
+from concurrent.futures import ThreadPoolExecutor
+import json
 import os
 from contextlib import contextmanager
 from pathlib import Path
@@ -84,6 +86,38 @@ class WorkerTest(unittest.TestCase):
             self.assertEqual([arg for arg in worker.browser_command() if arg.startswith("http")], ["https://chatgpt.com/"])
             Path("Local State").touch()
             self.assertFalse(any(arg.startswith("http") for arg in worker.browser_command()))
+
+    def test_ordinary_worker_requires_a_listening_relay_and_reports_only_graphical_readiness(self):
+        for available in (False, True):
+            with self.subTest(available=available), fixture_directory(), ThreadPoolExecutor(max_workers=1) as pool:
+                path = Path('input')
+                path.mkdir()
+                with socket.socket(socket.AF_UNIX) as bootstrap, socket.socket(socket.AF_UNIX) as relay:
+                    bootstrap.bind(str(path / 'bootstrap.sock'))
+                    bootstrap.listen(1)
+                    bootstrap.settimeout(3)
+                    if available:
+                        relay.bind(str(path / 'egress.sock'))
+                        relay.listen(1)
+                    def broker_exchange():
+                        client, _ = bootstrap.accept()
+                        with client, client.makefile('rb') as reply:
+                            client.settimeout(3)
+                            client.sendall(b'{"mode":"renewal"}\n')
+                            return reply.readline()
+                    receipt = pool.submit(broker_exchange)
+                    with patch.object(worker, 'INPUT', path), patch.object(os, 'statvfs', return_value=Mock(f_flag=os.ST_RDONLY)):
+                        if available:
+                            with worker.workspace_proxy_context() as (port, report_ready):
+                                self.assertGreater(port, 0)
+                                self.assertFalse(receipt.done())
+                                report_ready()
+                            self.assertEqual(json.loads(receipt.result(3)), {'mode': 'renewal', 'ready': True})
+                        else:
+                            with self.assertRaisesRegex(RuntimeError, '网络连接服务'):
+                                with worker.workspace_proxy_context():
+                                    self.fail('Worker reported readiness without its relay')
+                            self.assertEqual(receipt.result(3), b'')
 
     def test_gui_listens_only_on_private_unix_socket_and_disables_clipboard(self):
         args = worker.display_command(Path("rfb.sock"))

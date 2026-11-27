@@ -60,7 +60,8 @@ def release_config(args):
     assets = release_path(args.assets, stat.S_ISDIR)
     require(assets.is_relative_to(root), "novnc_outside_staged_release")
     release_path(assets / "core/rfb.js", stat.S_ISREG)
-    for file in ("broker.py", "egress.py", "chromium-seccomp.json", "host/runtime.py"):
+    for file in ("broker.py", "egress.py", "worker/recharge_proxy.py", "chromium-seccomp.json",
+                 "host/runtime.py", "host/check_renewal.py"):
         release_path(desktop / file, stat.S_ISREG)
     packages = release_path(args.site_packages, stat.S_ISDIR) if args.site_packages else None
     require(packages is None or packages.is_relative_to(root), "python_packages_outside_staged_release")
@@ -285,6 +286,8 @@ def verify(config):
     checked_path(path, stat.S_ISSOCK, 0o660, UID, GID)
     status, body = probe(path, "/v1/recharge/status")
     require(status == 200 and json.loads(body) == {"rechargeBootstrap": 1}, "manual_broker_not_ready")
+    status, body = probe(path, "/v1/renewal/status")
+    require(status == 200 and json.loads(body) == {"renewalWorkspace": 1}, "renewal_workspace_not_ready")
     status, body = probe(path, "/v1/client/core/rfb.js")
     require(status == 200 and bool(body), "novnc_client_unavailable")
     verify_policy()
@@ -357,7 +360,7 @@ def deactivate(config):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("check", "install", "verify", "deactivate"))
+    parser.add_argument("operation", choices=("check", "install", "verify", "smoke", "deactivate"))
     parser.add_argument("--release-root", required=True, type=Path)
     parser.add_argument("--image-id", required=True)
     parser.add_argument("--assets", required=True, type=Path)
@@ -376,8 +379,14 @@ def main():
         deactivate(config)
     else:
         check_host(config, available=args.operation == "check")
-        if args.operation == "verify":
+        if args.operation in ("verify", "smoke"):
             verify(config)
+        if args.operation == "smoke":
+            if config["site_packages"]:
+                sys.path.append(config["site_packages"])
+            from check_renewal import run as check_renewal
+            check_renewal()
+            result["renewalLifecycleVerified"] = True
     print(json.dumps(result, sort_keys=True))
 
 

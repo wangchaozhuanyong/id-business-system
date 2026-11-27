@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from aiohttp import WSServerHandshakeError, web
 from aiohttp.test_utils import TestClient, TestServer
@@ -165,7 +166,7 @@ class BrokerTests(unittest.IsolatedAsyncioTestCase):
 
         directory = Path('in')
         directory.mkdir(mode=0o700)
-        inputs = Inputs(directory, uid=os.geteuid(), gid=os.getegid())
+        inputs = Inputs(directory, blocked_networks=("192.0.2.1/32",), uid=os.geteuid(), gid=os.getegid())
         inputs.upstreams = []
         inputs.messages = []
 
@@ -197,8 +198,78 @@ class BrokerTests(unittest.IsolatedAsyncioTestCase):
             await self.release_display(key)
             return True
 
-        client = await self.make_client(activate, admit, stop, recharge=inputs, recharge_available=admit)
-        return client, inputs
+        async def open_client():
+            return await self.make_client(activate, admit, stop, recharge=inputs, recharge_available=admit)
+
+        inputs.open_client = open_client
+        return await open_client(), inputs
+
+    async def test_renewal_bootstrap_reconnects_after_broker_restart_and_releases(self):
+        key, other = self.keys
+        client, inputs = await self.make_recharge_lab({'mode': 'renewal', 'ready': True})
+        route = '/v1/workspaces/' + key
+        self.assertEqual((await self.client.get('/v1/renewal/status')).status, 503)
+        self.assertEqual(await (await client.get('/v1/renewal/status')).json(), {'renewalWorkspace': 1})
+        self.assertEqual((await client.get('/v1/renewal/status?x=1')).status, 503)
+        with patch.object(inputs, 'blocked_networks', ()):
+            self.assertEqual((await client.get('/v1/renewal/status')).status, 503)
+        opened = await asyncio.gather(client.post(route + '/open'), client.post(route + '/open'))
+        self.assertEqual([response.status for response in opened], [204, 204])
+        for response in opened:
+            self.assertEqual(await response.read(), b'')
+        self.assertEqual(inputs.messages, [{'mode': 'renewal'}])
+        self.assertFalse(inputs.upstreams)
+        self.assertFalse((inputs.root / key / 'bootstrap.sock').exists())
+        relay = inputs.root / key / 'egress.sock'
+        self.assertTrue(relay.is_socket())
+        self.assertEqual((await client.get(route + '/recharge-status')).status, 409)
+        self.assertEqual((await client.post('/v1/workspaces/' + other + '/open')).status, 423)
+        self.assertEqual((await client.post(route + '/open', headers={'X-Manual-Owner': self.owners[1]})).status, 403)
+        async with client.ws_connect(route + '/stream', protocols=('binary',)) as first:
+            self.assertEqual(await first.receive_bytes(), b'RFB 003.008\n')
+        await client.close()
+        self.assertFalse(relay.exists())
+        # A replacement broker recreates this same desktop's private relay.
+        second = await inputs.open_client()
+        self.assertEqual((await second.post(route + '/open')).status, 204)
+        self.assertTrue(relay.is_socket())
+        self.assertEqual(inputs.messages, [{'mode': 'renewal'}])
+        self.assertEqual((await second.get(route + '/recharge-status')).status, 409)
+        async with second.ws_connect(route + '/stream', protocols=('binary',)) as desktop:
+            self.assertEqual(await desktop.receive_bytes(), b'RFB 003.008\n')
+        self.assertEqual((await second.post(route + '/stop')).status, 204)
+        self.assertFalse(relay.exists())
+        self.assertFalse(Claims(self.claims).read())
+        self.assertEqual((await second.post('/v1/workspaces/' + other + '/open')).status, 204)
+
+    async def test_renewal_rejects_recharge_receipt_and_releases_its_claim(self):
+        client, inputs = await self.make_recharge_lab(
+            {'exitIp': '1.1.1.1', 'country': 'PH', 'accountStatus': 'check-in-browser'})
+        route = '/v1/workspaces/' + self.keys[0]
+        self.assertEqual((await client.post(route + '/open')).status, 503)
+        self.assertEqual(inputs.messages, [{'mode': 'renewal'}])
+        self.assertFalse(inputs.upstreams)
+        self.assertFalse(Claims(self.claims).read())
+        self.assertFalse((inputs.root / self.keys[0] / 'egress.sock').exists())
+        self.assertEqual((await client.get(route + '/recharge-status')).status, 409)
+
+    async def test_renewal_never_acquires_an_existing_recharge_desktop(self):
+        config = {'email': 'operator@example.test', 'proxyUrl': 'http://relay.example.test:8080',
+                  'expectedCountry': ''}
+        receipt = {'exitIp': '1.1.1.1', 'country': 'PH', 'accountStatus': 'check-in-browser'}
+        key = self.keys[0]
+        client, inputs = await self.make_recharge_lab(receipt)
+        route = '/v1/workspaces/' + key
+        self.assertEqual((await client.post(route + '/prepare', json=config)).status, 200)
+        self.assertEqual((await client.post(route + '/open')).status, 409)
+        with self.assertRaises(WSServerHandshakeError) as denied:
+            await client.ws_connect(route + '/stream', protocols=('binary',))
+        self.assertEqual(denied.exception.status, 409)
+        await client.close()
+        second = await inputs.open_client()
+        self.assertEqual((await second.post(route + '/open')).status, 409)
+        self.assertFalse((inputs.root / key / 'egress.sock').exists())
+        self.assertEqual(inputs.messages, [config])
 
     async def test_recharge_prepares_exact_owner_exit_and_reconnects_without_another_launch(self):
         config = {'email': 'operator@example.test', 'proxyUrl': 'http://relay.example.test:8080',
