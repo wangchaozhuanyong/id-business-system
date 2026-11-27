@@ -204,6 +204,60 @@ class WorkerContract(unittest.TestCase):
 
 
 class ProvisionContract(unittest.TestCase):
+    def test_distinguishes_a_missing_unit_from_an_active_or_transitioning_unit(self):
+        for response, active in ((("LoadState=not-found\nActiveState=inactive", 1), False),
+                                 (("LoadState=loaded\nActiveState=active", 0), True),
+                                 (("LoadState=loaded\nActiveState=failed", 0), False)):
+            with self.subTest(response=response), patch.object(provision, "systemctl", return_value=response):
+                self.assertIs(provision.broker_active(), active)
+        with patch.object(provision, "systemctl", return_value=("LoadState=loaded\nActiveState=activating", 0)):
+            with self.assertRaisesRegex(runtime.InvalidHost, "broker_service_is_transitioning"):
+                provision.broker_active()
+
+    def test_empty_show_requires_successful_positive_controls_in_both_systemd_views(self):
+        unit = ("docker.service loaded active running Docker", 0)
+        unit_file = ("docker.service enabled disabled", 0)
+        for initial in (1, 4):
+            with self.subTest(initial=initial), patch.object(
+                    provision, "systemctl", side_effect=[("", initial), unit, unit_file]) as ctl:
+                self.assertFalse(provision.broker_active())
+                self.assertEqual(ctl.call_args_list[1:], [
+                    call("list-units", "--all", "--plain", "--full", "--no-legend", "docker.service",
+                         runtime.BROKER_UNIT, failure="broker_service_inventory_unavailable"),
+                    call("list-unit-files", "--plain", "--full", "--no-legend", "docker.service",
+                         runtime.BROKER_UNIT, failure="broker_service_inventory_unavailable"),
+                ])
+        for bad in (("", 1), ("", 0), ("docker.service", 0), ("unrelated.service enabled disabled", 0),
+                    (unit_file[0], 1), (unit_file[0] + "\n" + runtime.BROKER_UNIT + " disabled disabled", 0)):
+            for views in ([bad], [unit, bad]):
+                with self.subTest(views=views), patch.object(
+                        provision, "systemctl", side_effect=[("", 1), *views]):
+                    with self.assertRaisesRegex(runtime.InvalidHost, "broker_service_inventory_unverified"):
+                        provision.broker_active()
+        with patch.object(provision, "systemctl", side_effect=[
+                ("", 1), unit, runtime.InvalidHost("broker_service_inventory_unavailable")]):
+            with self.assertRaisesRegex(runtime.InvalidHost, "broker_service_inventory_unavailable"):
+                provision.broker_active()
+
+    def test_verified_start_waits_for_an_active_unit_and_a_responding_socket(self):
+        with patch.object(provision, "broker_state", side_effect=["activating", "active", "active"]), \
+             patch.object(provision.time, "sleep"), patch.object(Path, "is_socket", return_value=True), \
+             patch.object(provision, "probe", side_effect=[ConnectionRefusedError(), (200, b'{"rechargeBootstrap":1}')]):
+            provision.wait_for_broker_ready()
+        for query, reason in (
+                (("Result=exit-code\nExecMainStatus=217", 0), "manual_broker_startup_exit_217"),
+                (("Result=exit-code\nExecMainStatus=29", 0), "manual_broker_startup_failed"),
+                (("Result=signal\nExecMainStatus=1", 0), "manual_broker_startup_failed"),
+                (("Result=exit-code\nExecMainStatus=untrusted-value", 0), "manual_broker_startup_failed")):
+            with self.subTest(query=query), patch.object(provision, "broker_state", return_value="failed"), \
+                 patch.object(provision, "systemctl", return_value=query):
+                with self.assertRaisesRegex(runtime.InvalidHost, "^" + reason + "$"):
+                    provision.wait_for_broker_ready()
+        with patch.object(provision.time, "monotonic", side_effect=[0, 16]), \
+             patch.object(provision, "systemctl", return_value=("Result=success\nExecMainStatus=0", 0)):
+            with self.assertRaisesRegex(runtime.InvalidHost, "manual_broker_readiness_timeout"):
+                provision.wait_for_broker_ready()
+
     def test_broker_unit_contract(self):
         files = provision.managed_files(CONFIG)
         broker = files[provision.UNIT_DIR / runtime.BROKER_UNIT]
@@ -253,11 +307,10 @@ class ProvisionContract(unittest.TestCase):
                 "ensure_directory": {},
                 "installed": {"return_value": None},
                 "command": {},
+                "wait_for_broker_ready": {},
                 "verify": {"side_effect": runtime.InvalidHost("fixture_readiness_failure")},
             }.items():
                 stack.enter_context(patch.object(provision, name, **kwargs))
-            # The service fixture has already created its socket before the readiness check.
-            stack.enter_context(patch.object(Path, "is_socket", return_value=True))
             systemctl = stack.enter_context(patch.object(provision, "systemctl", return_value=("not-found", 1)))
             write = stack.enter_context(patch.object(provision, "write_atomic"))
             with self.assertRaisesRegex(runtime.InvalidHost, "fixture_readiness_failure"):

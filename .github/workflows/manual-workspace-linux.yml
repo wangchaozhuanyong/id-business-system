@@ -28,24 +28,24 @@ jobs:
         run: |
           set -euo pipefail
           stage=$(mktemp -d "$RUNNER_TEMP/manual-workspace-rpms-XXXXXX")
-          python3 - "$stage/host-packages" <<'PY'
-          from pathlib import Path
-          import sys
-          from deploy.website.build_manual_workspace import package_host_tools
-          package_host_tools(Path(sys.argv[1]))
-          PY
-          cp -R deploy/manual-desktop/host "$stage/host"
+          revision=$(git rev-parse HEAD)
+          python3 -B deploy/website/build_manual_workspace.py "$revision"
+          mkdir "$stage/manual-runtime"
+          tar -xzf ".runtime/website-release/independent-manual-runtime-$revision.tar.gz" -C "$stage/manual-runtime"
+          cp -R deploy/manual-desktop "$stage/desktop"
           cp test/manual-remote-desktop-linux/amazon-linux-prepare.py "$stage/check.py"
+          cp test/manual-remote-desktop-linux/amazon-linux-broker.py "$stage/broker-check.py"
           cat > "$stage/Dockerfile" <<'DOCKERFILE'
           # Docker Official Image amazonlinux:2023.12.20260817.0, linux/amd64
           FROM amazonlinux@sha256:fa946e513ed149232490479653141fa4c6cd1e71c70130525cf00a791477ed19
           RUN test "$(rpm -q --qf '%{VERSION}' system-release)" = 2023.12.20260817 && \
               dnf -qy --releasever=2023.12.20260817 --disablerepo='*' --enablerepo=amazonlinux \
-                --setopt=gpgcheck=1 --setopt=install_weak_deps=False install systemd && \
+                --setopt=gpgcheck=1 --setopt=install_weak_deps=False install systemd dbus-broker && \
               dnf -q clean all && test ! -e /usr/bin/pkcheck
           WORKDIR /opt/id-business-independent/releases/1111111111111111111111111111111111111111
-          COPY --chown=0:0 host source/deploy/manual-desktop/host/
-          COPY --chown=0:0 host-packages manual-runtime/host-packages/
+          COPY --chown=0:0 desktop source/deploy/manual-desktop/
+          COPY --chown=0:0 manual-runtime manual-runtime/
+          COPY --chown=0:0 broker-check.py /fixture/broker-check.py
           COPY --chown=0:0 check.py /fixture/check.py
           RUN chmod -R go-w /opt/id-business-independent
           DOCKERFILE
@@ -54,6 +54,52 @@ jobs:
         run: |
           docker run --rm --pull=never --platform linux/amd64 --network none --security-opt no-new-privileges \
             --memory 1536m --pids-limit 128 id-manual-offline-host:qa /usr/bin/python3 -IB /fixture/check.py
+      - name: Run the release broker wheels as the unprivileged user without a system manager
+        run: |
+          docker run --rm --pull=never --platform linux/amd64 --network none --user 10001:10001 \
+            --cap-drop ALL --security-opt no-new-privileges --read-only --tmpfs /tmp:rw,nosuid,nodev,mode=1777 \
+            --pids-limit 64 --memory 256m id-manual-offline-host:qa /usr/bin/python3 -IBu /fixture/broker-check.py
+      - name: Check first-install unit states with the actual Amazon Linux system manager
+        shell: bash
+        run: |
+          set -euo pipefail
+          [[ $RUNNER_ENVIRONMENT == github-hosted && $GITHUB_EVENT_NAME == pull_request ]]
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends systemd-container
+          root=$(mktemp -d "$RUNNER_TEMP/manual-workspace-init-XXXXXX")
+          container=$(docker create --network none id-manual-offline-host:qa)
+          trap 'docker rm "$container" >/dev/null' EXIT
+          docker export "$container" | sudo tar --numeric-owner -xpf - -C "$root"
+          sudo chown 0:0 "$root"
+          sudo chmod 0755 "$root"
+          echo manual-first-install | sudo tee "$root/etc/hostname" >/dev/null
+          sudo install -m 0644 test/manual-remote-desktop-linux/amazon-linux-systemd.py "$root/fixture/systemd-check.py"
+          sudo tee "$root/etc/systemd/system/manual-first-install-check.service" >/dev/null <<'UNIT'
+          [Unit]
+          Description=Verify first-install unit states
+          SuccessAction=poweroff
+          FailureAction=poweroff
+          [Service]
+          Type=oneshot
+          TimeoutStartSec=75
+          ExecStart=/usr/bin/python3 -IBu /fixture/systemd-check.py
+          StandardOutput=truncate:/fixture/systemd-check.log
+          StandardError=inherit
+          UNIT
+          guest_status=0
+          sudo systemd-run --wait --pipe --collect --property=Delegate=yes --property=RuntimeMaxSec=120s \
+            --property=TimeoutStopSec=15s /usr/bin/systemd-nspawn --keep-unit --settings=no --register=no \
+            --private-network --resolv-conf=off --link-journal=no --console=pipe --machine=manual-first-install \
+            --directory="$root" --boot -- --unit=manual-first-install-check.service || guest_status=$?
+          if sudo test -f "$root/fixture/systemd-first-install.error"; then
+            sudo cat "$root/fixture/systemd-first-install.error"
+          fi
+          if sudo test -f "$root/fixture/systemd-check.log"; then
+            sudo tail -50 "$root/fixture/systemd-check.log"
+          fi
+          test "$guest_status" -eq 0
+          sudo cat "$root/fixture/missing-unit-results.json"
+          sudo test -f "$root/fixture/systemd-first-install.passed"
 
   desktop:
     runs-on: ubuntu-24.04
