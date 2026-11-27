@@ -7,6 +7,7 @@ import {
   getActiveBrowser,
   getPageTargetWsUrl,
   launchNativeChrome,
+  operatorBrowserProfileKey,
   parseProxyServerConfig,
   resolveDynamicProxySession
 } from './native-chrome-runner.mjs';
@@ -320,12 +321,13 @@ export function createCdpClient(wsUrl, WebSocketImpl = globalThis.WebSocket) {
  */
 export async function verifyChatGptLogin({
   port,
+  browserDebuggerPath,
   expectedEmail = '',
   getTargetWsUrlFn = getPageTargetWsUrl,
   createCdpClientFn = createCdpClient,
   timeoutMs = 6000
 } = {}) {
-  const wsUrl = await getTargetWsUrlFn(port);
+  const wsUrl = await getTargetWsUrlFn(port, browserDebuggerPath);
   const cdp = createCdpClientFn(wsUrl);
   const deadline = Date.now() + timeoutMs;
 
@@ -478,6 +480,34 @@ export async function verifyChatGptLogin({
   }
 }
 
+export async function verifyOwnedWorkbenchLogin({ profileKey, ownerId, expectedPid, expectedEmail }) {
+  const browser = getActiveBrowser(profileKey, ownerId);
+  const requireCurrent = () => {
+    if (!browser || (expectedPid !== undefined && browser.pid !== expectedPid) ||
+        getActiveBrowser(profileKey, ownerId) !== browser) {
+      throw new NativeBrowserError(404, '浏览器实例未运行或已关闭');
+    }
+  };
+  requireCurrent();
+  const verification = await verifyChatGptLogin({
+    port: browser.port,
+    browserDebuggerPath: browser.browserDebuggerPath,
+    expectedEmail,
+    getTargetWsUrlFn: async () => {
+      requireCurrent();
+      const url = await getPageTargetWsUrl(browser.port, browser.browserDebuggerPath);
+      requireCurrent();
+      return url;
+    },
+    createCdpClientFn: url => {
+      requireCurrent();
+      return createCdpClient(url);
+    }
+  });
+  requireCurrent();
+  return verification;
+}
+
 /**
  * Launch an isolated prototype browser session with proxy validation and real login verification.
  */
@@ -485,13 +515,15 @@ export async function launchPrototypeWorkbenchSession({
   sessionJson,
   proxyRegion = 'auto',
   customProxyUrl = '',
-  ownerId = 'local-operator',
+  ownerId,
   regionProxies = loadEnvRegionProxies(),
   probeFn = probeExitCountry,
   launchChromeFn = launchNativeChrome,
-  verifyLoginFn = verifyChatGptLogin
+  verifyLoginFn = verifyOwnedWorkbenchLogin
 } = {}) {
   const parsed = parseSessionPayload(sessionJson);
+  const scopeId = parsed.email;
+  const profileKey = operatorBrowserProfileKey('proto', ownerId, scopeId);
   const proxyConfig = resolveWorkbenchProxy({
     proxyRegion,
     customProxyUrl,
@@ -506,9 +538,9 @@ export async function launchPrototypeWorkbenchSession({
     probeFn
   });
 
-  const safeProfileKey = `proto_${parsed.profileKey}`;
   const launchResult = await launchChromeFn({
-    profileKey: safeProfileKey,
+    profileKey,
+    scopeId,
     proxyUrl: resolvedProxyUrl,
     skipSessionRotation: true,
     token: parsed.token,
@@ -523,13 +555,16 @@ export async function launchPrototypeWorkbenchSession({
   });
 
   const loginVerification = await verifyLoginFn({
+    profileKey,
+    ownerId,
+    expectedPid: launchResult.pid,
     port: launchResult.port,
     expectedEmail: parsed.email
   });
 
   return {
     ok: true,
-    profileKey: safeProfileKey,
+    profileKey,
     pid: launchResult.pid,
     account: {
       email: parsed.email,
@@ -552,62 +587,87 @@ export async function launchPrototypeWorkbenchSession({
 export async function attachPrototypeWsBridge({
   ws,
   profileKey,
-  ownerId = '',
+  ownerId,
   getBrowserFn = getActiveBrowser,
   getTargetWsUrlFn = getPageTargetWsUrl,
   createCdpClientFn = createCdpClient,
   verifyLoginFn = verifyChatGptLogin
 } = {}) {
-  const browser = getBrowserFn(profileKey);
-  if (!browser) {
+  const browser = typeof ownerId === 'string' && ownerId.trim() ? getBrowserFn(profileKey, ownerId) : null;
+  if (!browser || browser.ownerId !== ownerId) {
     ws.sendJson({ type: 'error', message: '浏览器实例未运行或已关闭' });
     ws.close(1008, 'Browser not running');
     return;
   }
-  if (browser.ownerId && ownerId && browser.ownerId !== ownerId) {
-    ws.sendJson({ type: 'error', message: '无权访问该浏览器会话' });
-    ws.close(1008, 'Forbidden');
-    return;
-  }
 
   let cdp;
+  let offEvent;
+  const isCurrentBrowser = () => getBrowserFn(profileKey, ownerId) === browser;
+  const closeDebugger = () => {
+    const client = cdp;
+    const unsubscribe = offEvent;
+    cdp = undefined;
+    offEvent = undefined;
+    unsubscribe?.();
+    if (!client) return;
+    if (unsubscribe && isCurrentBrowser()) client.send('Page.stopScreencast').catch(() => {});
+    client.close();
+  };
+  const requireCurrentBrowser = () => {
+    if (ws.isClosed) return false;
+    if (isCurrentBrowser()) return true;
+    ws.sendJson({ type: 'error', message: '浏览器实例未运行或已关闭' });
+    ws.close(1008, 'Browser not running');
+    return false;
+  };
+  const getCurrentTarget = async () => {
+    if (!requireCurrentBrowser()) throw new NativeBrowserError(404, '浏览器实例未运行或已关闭');
+    const url = await getTargetWsUrlFn(browser.port, browser.browserDebuggerPath);
+    if (!requireCurrentBrowser()) throw new NativeBrowserError(404, '浏览器实例未运行或已关闭');
+    return url;
+  };
+  const connectCurrentDebugger = (url) => {
+    if (!requireCurrentBrowser()) throw new NativeBrowserError(404, '浏览器实例未运行或已关闭');
+    return createCdpClientFn(url);
+  };
+  ws.onClose(closeDebugger);
   try {
-    const targetWsUrl = await getTargetWsUrlFn(browser.port);
-    cdp = createCdpClientFn(targetWsUrl);
+    const targetWsUrl = await getCurrentTarget();
+    cdp = connectCurrentDebugger(targetWsUrl);
     await cdp.ready;
+    if (!requireCurrentBrowser()) return;
     await cdp.send('Page.enable');
+    if (!requireCurrentBrowser()) return;
     await cdp.send('Runtime.enable');
+    if (!requireCurrentBrowser()) return;
     await cdp.send('Page.startScreencast', {
       format: 'jpeg',
       quality: 75,
       maxWidth: 1280,
       maxHeight: 800
     });
+    if (!requireCurrentBrowser()) return;
   } catch (err) {
-    ws.sendJson({ type: 'error', message: `连接浏览器画面失败: ${err.message || '未知错误'}` });
-    ws.close(1011, 'CDP attach failed');
-    cdp?.close();
+    if (requireCurrentBrowser()) {
+      ws.sendJson({ type: 'error', message: `连接浏览器画面失败: ${err.message || '未知错误'}` });
+      ws.close(1011, 'CDP attach failed');
+    }
     return;
   }
 
-  ws.sendJson({
-    type: 'ready',
-    profileKey,
-    exitInfo: browser.exitInfo || null
-  });
-
-  const offEvent = cdp.onEvent((msg) => {
-    if (ws.isClosed) return;
+  offEvent = cdp.onEvent((msg) => {
+    if (!requireCurrentBrowser()) return;
     if (msg.method === 'Page.screencastFrame' && msg.params) {
       const { data, metadata, sessionId } = msg.params;
       ws.sendJson({ type: 'frame', data, metadata });
-      cdp.send('Page.screencastFrameAck', { sessionId }).catch(() => {});
+      cdp?.send('Page.screencastFrameAck', { sessionId }).catch(() => {});
     } else if (msg.method === 'Page.frameNavigated' && msg.params?.frame?.parentId === undefined) {
       ws.sendJson({ type: 'navigated', url: msg.params.frame.url || '' });
     }
   });
 
   ws.onMessage(async (raw) => {
+    if (!requireCurrentBrowser()) return;
     let cmd;
     try {
       cmd = JSON.parse(String(raw));
@@ -664,20 +724,23 @@ export async function attachPrototypeWsBridge({
         case 'recheckLogin': {
           const verification = await verifyLoginFn({
             port: browser.port,
-            expectedEmail: cmd.expectedEmail || ''
+            browserDebuggerPath: browser.browserDebuggerPath,
+            expectedEmail: cmd.expectedEmail || '',
+            getTargetWsUrlFn: getCurrentTarget,
+            createCdpClientFn: connectCurrentDebugger
           });
-          ws.sendJson({ type: 'loginVerification', verification });
+          if (requireCurrentBrowser()) ws.sendJson({ type: 'loginVerification', verification });
           break;
         }
       }
     } catch (err) {
-      ws.sendJson({ type: 'error', message: err.message || '操作执行失败' });
+      if (requireCurrentBrowser()) ws.sendJson({ type: 'error', message: err.message || '操作执行失败' });
     }
   });
 
-  ws.onClose(() => {
-    offEvent();
-    cdp.send('Page.stopScreencast').catch(() => {});
-    cdp.close();
+  ws.sendJson({
+    type: 'ready',
+    profileKey,
+    exitInfo: browser.exitInfo || null
   });
 }

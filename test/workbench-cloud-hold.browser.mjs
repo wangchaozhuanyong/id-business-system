@@ -43,7 +43,12 @@ test('正式工作台暂缓云端操作时保留记录、保存和单号登录',
         });
         const page = await context.newPage();
         page.setDefaultTimeout(6000);
-        page.on('dialog', dialog => dialog.accept());
+        const acceptAlert = async (expected) => {
+          const alert = await page.waitForEvent('dialog');
+          const message = alert.message();
+          await alert.accept();
+          assert.match(message, expected);
+        };
         await page.goto(origin + path);
         await page.getByText('云端浏览器暂缓开放').waitFor();
         await page.getByText(account.email, { exact: true }).waitFor();
@@ -52,12 +57,12 @@ test('正式工作台暂缓云端操作时保留记录、保存和单号登录',
         assert(await page.getByRole('tab', { name: '单号登录' }).isVisible());
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
         await page.locator('#wb-json-input').fill(sessionJson);
-        await page.locator('#wb-save-only').click();
+        await Promise.all([acceptAlert(/账号已成功保存/), page.locator('#wb-save-only').click()]);
         await page.waitForFunction(() => document.querySelector('#wb-json-input').value === '');
         assert.deepEqual(writes.map(write => write.action), [null]);
         await page.getByRole('button', { name: '更换 JSON' }).click();
         await page.locator('#wb-update-json-textarea').fill(sessionJson);
-        await page.locator('#wb-update-json-save-only').click();
+        await Promise.all([acceptAlert(/凭据已成功更新/), page.locator('#wb-update-json-save-only').click()]);
         await page.locator('#wb-update-json-dialog').waitFor({ state: 'hidden' });
         assert.deepEqual(writes.map(write => write.action), [null, 'update-json']);
         assert.equal(writes[1].body.autoLaunch, false);

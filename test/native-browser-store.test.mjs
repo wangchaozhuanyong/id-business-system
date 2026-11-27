@@ -111,3 +111,99 @@ test('本机工作台仍可走原有浏览器操作入口', async t => {
   assert.equal(result.status, 200);
   assert.deepEqual(launchNativeWorkbenchBrowser.mock.calls[0].arguments, [body, operator]);
 });
+
+test('同一邮箱按操作员隔离记录，超级管理员也只能操作自己的记录', async t => {
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  const alice = { id: 'operator-a', role: 'admin' };
+  const bob = { id: 'operator-b', role: 'super' };
+  const request = (actor, action = '', body) => localBusinessRequest(
+    store, action ? `${workbench}?action=${action}` : workbench, { actor, body }
+  );
+  const first = (await request(alice, '', { sessionJson: fixtureJson })).body.record;
+  const second = (await request(bob, '', {
+    sessionJson: fixtureJson,
+    ownerId: alice.id,
+    profileKey: first.profileKey
+  })).body.record;
+  assert.notEqual(first.id, second.id);
+  assert.notEqual(first.profileKey, second.profileKey);
+  assert.deepEqual((await request(alice)).body.items.map(item => item.id), [first.id]);
+  assert.deepEqual((await request(bob)).body.items.map(item => item.id), [second.id]);
+  assert.equal((await localBusinessRequest(store, workbench, { publicOrigin: formalOptions.publicOrigin })).status, 401);
+  assert.equal((await localBusinessRequest(store, `${workbench}:${alice.id}`, { actor: bob })).status, 404);
+
+  const launch = t.mock.method(store, '_launchWorkbenchSession', async () => ({
+    launchRes: { account: { id: second.id, profileKey: second.profileKey, lastOpenedAt: new Date().toISOString() }, result: {} }
+  }));
+  for (const action of ['launch', 'close', 'note', 'delete', 'update-json']) {
+    const result = await request(bob, action, {
+      id: first.id, profileKey: first.profileKey, ownerId: alice.id, autoLaunch: true, sessionJson: fixtureJson
+    });
+    assert.equal(result.status, 404, action);
+  }
+  assert.equal(launch.mock.callCount(), 0);
+  const allowed = await request(bob, 'launch', { id: second.id, ownerId: alice.id, profileKey: first.profileKey });
+  assert.equal(allowed.status, 200);
+  assert.equal(allowed.body.profileKey, second.profileKey);
+  assert.equal(launch.mock.calls[0].arguments[1].actor.id, bob.id);
+  assert.equal((await request(alice)).body.items[0].lastOpenedAt, null);
+});
+
+test('云端浏览器启动回写保留并发备注和新增记录，删除后不会复活', async t => {
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  const { record } = store.saveNativeWorkbenchAccount({ sessionJson: fixtureJson }, operator);
+  let pending = Promise.withResolvers();
+  t.mock.method(store, '_launchWorkbenchSession', async () => {
+    await pending.promise;
+    return {
+      launchRes: { account: { id: record.id, profileKey: record.profileKey, lastOpenedAt: '2026-11-27T00:00:00.000Z' }, result: {} }
+    };
+  });
+
+  const launch = store.launchNativeWorkbenchBrowser({ id: record.id }, operator);
+  store.updateNativeWorkbenchNote({ id: record.id, renewalNotes: '新增并发备注' }, operator);
+  const extra = store.saveNativeWorkbenchAccount({ email: 'extra@example.test' }, operator).record;
+  pending.resolve();
+  await launch;
+  const loaded = store.loadNativeWorkbenchAccounts({}, operator);
+  assert.equal(loaded.total, 2);
+  assert(loaded.items.some(item => item.id === extra.id));
+  assert.equal(loaded.items.find(item => item.id === record.id).renewalNotes, '新增并发备注');
+
+  pending = Promise.withResolvers();
+  const removed = store.launchNativeWorkbenchBrowser({ id: record.id }, operator);
+  store.deleteNativeWorkbenchAccount({ id: record.id }, operator);
+  pending.resolve();
+  await assert.rejects(removed, error => error.status === 404);
+  assert.deepEqual(store.loadNativeWorkbenchAccounts({}, operator).items.map(item => item.id), [extra.id]);
+});
+
+test('更换授权并启动时遇到并发授权更新，不会覆盖已保存的授权', async t => {
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  const { record } = store.saveNativeWorkbenchAccount({ sessionJson: fixtureJson }, operator);
+  let pending = Promise.withResolvers();
+  t.mock.method(store, '_launchWorkbenchSession', async () => {
+    await pending.promise;
+    return { launchRes: { account: { profileKey: record.profileKey, lastOpenedAt: new Date().toISOString() }, result: {} } };
+  });
+
+  const oldJson = JSON.stringify({ ...JSON.parse(fixtureJson), sessionToken: 'test-finish-older' });
+  const newJson = JSON.stringify({ ...JSON.parse(fixtureJson), sessionToken: 'test-save-latest', account: {
+    id: 'account-001', planType: 'plus'
+  } });
+  const opening = store.updateNativeWorkbenchJson({ id: record.id, sessionJson: oldJson, autoLaunch: true }, operator);
+  await store.updateNativeWorkbenchJson({ id: record.id, sessionJson: newJson }, operator);
+  pending.resolve();
+  await assert.rejects(opening, error => error.status === 409);
+  assert.equal(store.loadNativeWorkbenchAccounts({}, operator).items[0].currentPlan, 'plus');
+
+  pending = Promise.withResolvers();
+  const reopening = store.updateNativeWorkbenchJson({ id: record.id, sessionJson: newJson, autoLaunch: true }, operator);
+  store.updateNativeWorkbenchNote({ id: record.id, status: 'active' }, operator);
+  pending.resolve();
+  await assert.rejects(reopening, error => error.status === 409);
+  assert.equal(store.loadNativeWorkbenchAccounts({}, operator).items[0].status, 'active');
+});

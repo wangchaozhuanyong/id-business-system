@@ -5,6 +5,7 @@ import net from 'node:net';
 import http from 'node:http';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 
 export class NativeBrowserError extends Error {
   constructor(status, message) {
@@ -231,40 +232,71 @@ export function findChromeExecutable() {
   return null;
 }
 
-/**
- * Allocate an unused ephemeral TCP port on loopback.
- */
-export async function getFreePort() {
-  return new Promise((resolve, reject) => {
-    const server = net.createServer();
-    server.unref();
-    server.on('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const port = server.address().port;
-      server.close(() => resolve(port));
-    });
-  });
+const browserDebuggerPathPattern = /^\/devtools\/browser\/[a-f0-9-]{36}$/;
+const pageDebuggerPathPattern = /^\/devtools\/page\/[a-f0-9-]{16,64}$/i;
+
+function readDebuggerMarker(profileDir) {
+  const file = path.join(profileDir, 'DevToolsActivePort');
+  let descriptor;
+  try {
+    descriptor = fs.openSync(file, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW | fs.constants.O_NONBLOCK);
+    const opened = fs.fstatSync(descriptor);
+    const current = fs.lstatSync(file);
+    if (!opened.isFile() || !current.isFile() || opened.ino !== current.ino || opened.dev !== current.dev) {
+      throw new NativeBrowserError(500, 'Chrome 调试标记文件无效');
+    }
+    const buffer = Buffer.alloc(129);
+    const bytes = fs.readSync(descriptor, buffer, 0, buffer.length, 0);
+    if (bytes === buffer.length) throw new NativeBrowserError(500, 'Chrome 调试标记文件无效');
+    return buffer.toString('utf8', 0, bytes);
+  } catch (error) {
+    if (error.code === 'ENOENT') return '';
+    throw new NativeBrowserError(500, 'Chrome 调试标记文件无效');
+  } finally {
+    if (descriptor !== undefined) fs.closeSync(descriptor);
+  }
 }
 
-/**
- * Wait until the Chrome remote debugging HTTP endpoint becomes reachable.
- */
-export async function waitForDebuggerReady(port, timeoutMs = 12000) {
-  const start = Date.now();
-  const url = `http://127.0.0.1:${port}/json/version`;
-  while (Date.now() - start < timeoutMs) {
-    try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(1000) });
-      if (res.ok) {
-        const data = await res.json();
-        if (data && typeof data.webSocketDebuggerUrl === 'string') {
-          return data;
-        }
+function loopbackDebuggerUrl(value, port) {
+  const url = typeof value === 'string' ? URL.parse(value) : null;
+  return url?.protocol === 'ws:' && url.hostname === '127.0.0.1' &&
+    Number(url.port) === port && !url.username && !url.password && !url.search && !url.hash ? url : null;
+}
+
+async function requireBrowserDebugger(port, browserDebuggerPath) {
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65535 || !browserDebuggerPathPattern.test(browserDebuggerPath)) {
+    throw new NativeBrowserError(500, 'Chrome 调试身份无效');
+  }
+  const response = await fetch(`http://127.0.0.1:${port}/json/version`, {
+    redirect: 'error',
+    signal: AbortSignal.timeout(1000)
+  });
+  const version = response.ok ? await response.json() : null;
+  if (loopbackDebuggerUrl(version?.webSocketDebuggerUrl, port)?.pathname !== browserDebuggerPath) {
+    throw new NativeBrowserError(500, 'Chrome 调试身份无法核对');
+  }
+}
+
+export async function waitForProfileDebugger(profileDir, previousMarker, isRunning, timeoutMs = 12000) {
+  const previousPath = previousMarker.split(/\r?\n/)[1];
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isRunning()) throw new NativeBrowserError(409, '浏览器已关闭，请重新打开');
+    const marker = readDebuggerMarker(profileDir);
+    const match = /^([0-9]{1,5})\r?\n(\/devtools\/browser\/[a-f0-9-]{36})(?:\r?\n)?$/.exec(marker);
+    if (match && match[2] !== previousPath) {
+      const port = Number(match[1]);
+      const browserDebuggerPath = match[2];
+      let verified = false;
+      try {
+        await requireBrowserDebugger(port, browserDebuggerPath);
+        verified = true;
+      } catch {
+        // A fresh file can appear before Chrome starts answering requests.
       }
-    } catch {
-      // Chrome is still starting up
+      if (verified && isRunning() && readDebuggerMarker(profileDir) === marker) return { port, browserDebuggerPath };
     }
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((resolve) => setTimeout(resolve, 200));
   }
   throw new NativeBrowserError(500, 'Chrome 远程调试接口启动超时，请重试');
 }
@@ -272,17 +304,40 @@ export async function waitForDebuggerReady(port, timeoutMs = 12000) {
 /**
  * Connect to Chrome DevTools Protocol via WebSocket and inject cookies.
  */
-export async function injectCookiesAndNavigate(wsUrl, cookies, targetUrl = 'https://chatgpt.com/') {
+export async function injectCookiesAndNavigate(wsUrl, cookies, targetUrl = 'https://chatgpt.com/', timeoutMs = 10000) {
   const ws = new globalThis.WebSocket(wsUrl);
   return new Promise((resolve, reject) => {
     let nextId = 1;
+    let settled = false;
     const callbacks = new Map();
+    const timer = setTimeout(() => finish(new NativeBrowserError(500, 'Chrome 调试操作超时，请重试')), timeoutMs);
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) for (const callback of callbacks.values()) callback.reject(error);
+      callbacks.clear();
+      try {
+        ws.close();
+      } catch {}
+      if (error) reject(error);
+      else resolve({ ok: true });
+    };
 
     const send = (method, params = {}) => {
       const id = nextId++;
       return new Promise((res, rej) => {
+        if (settled || ws.readyState !== globalThis.WebSocket.OPEN) {
+          rej(new NativeBrowserError(500, 'Chrome 调试连接已关闭'));
+          return;
+        }
         callbacks.set(id, { resolve: res, reject: rej });
-        ws.send(JSON.stringify({ id, method, params }));
+        try {
+          ws.send(JSON.stringify({ id, method, params }));
+        } catch (error) {
+          callbacks.delete(id);
+          rej(error);
+        }
       });
     };
 
@@ -303,9 +358,8 @@ export async function injectCookiesAndNavigate(wsUrl, cookies, targetUrl = 'http
       }
     };
 
-    ws.onerror = (err) => {
-      reject(new NativeBrowserError(500, `CDP WebSocket 错误: ${err.message || '连接失败'}`));
-    };
+    ws.onerror = () => finish(new NativeBrowserError(500, 'Chrome 调试连接失败'));
+    ws.onclose = () => finish(new NativeBrowserError(500, 'Chrome 调试连接已关闭'));
 
     ws.onopen = async () => {
       try {
@@ -361,66 +415,72 @@ export async function injectCookiesAndNavigate(wsUrl, cookies, targetUrl = 'http
           }
         }
         await send('Page.navigate', { url: targetUrl });
-        ws.close();
-        resolve({ ok: true });
+        finish();
       } catch (err) {
-        try {
-          ws.close();
-        } catch {}
-        reject(err);
+        finish(err);
       }
     };
   });
 }
 
 const activeBrowsers = new Map();
+const launchingProfiles = new Set();
+const ownedProfilePattern = /^(chatgpt|proto)_[a-f0-9]{64}$/;
 
-/**
- * Check if a Chrome browser instance is currently running for the given profileKey.
- */
-export function isBrowserRunning(profileKey) {
-  const safeKey = String(profileKey || '').replace(/[^a-zA-Z0-9_-]/g, '_');
-  const instance = activeBrowsers.get(safeKey);
-  if (!instance) return false;
-  try {
-    process.kill(instance.pid, 0);
-    return true;
-  } catch {
-    activeBrowsers.delete(safeKey);
-    return false;
-  }
+function hasOwner(value) {
+  return typeof value === 'string' && value.trim().length > 0;
 }
 
-/**
- * Return the active browser entry for profileKey if the process is still alive.
- */
-export function getActiveBrowser(profileKey) {
-  if (!isBrowserRunning(profileKey)) return null;
-  const safeKey = String(profileKey || '').replace(/[^a-zA-Z0-9_-]/g, '_');
-  return activeBrowsers.get(safeKey) || null;
+export function operatorBrowserProfileKey(kind, ownerId, scopeId) {
+  if (!['chatgpt', 'proto'].includes(kind) || !hasOwner(ownerId) || !hasOwner(scopeId)) {
+    throw new NativeBrowserError(400, '缺少有效的浏览器归属或范围');
+  }
+  const hash = crypto.createHash('sha256')
+    .update(JSON.stringify([kind, ownerId, scopeId]))
+    .digest('hex');
+  return kind + '_' + hash;
+}
+
+function ownedBrowserEntry(profileKey, ownerId) {
+  if (typeof profileKey !== 'string' || !ownedProfilePattern.test(profileKey) || !hasOwner(ownerId)) {
+    return null;
+  }
+  const instance = activeBrowsers.get(profileKey);
+  if (!instance || instance.ownerId !== ownerId) return null;
+  return instance.child.pid && instance.child.exitCode === null && instance.child.signalCode === null
+    ? instance
+    : null;
+}
+
+export function isBrowserRunning(profileKey, ownerId) {
+  return getActiveBrowser(profileKey, ownerId) !== null;
+}
+
+export function getActiveBrowser(profileKey, ownerId) {
+  const instance = ownedBrowserEntry(profileKey, ownerId);
+  return instance && !instance.closing && !launchingProfiles.has(profileKey) ? instance : null;
 }
 
 /**
  * Resolve the page-level CDP WebSocket URL for the active tab on a debugging port.
  */
-export async function getPageTargetWsUrl(port) {
-  const listRes = await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(3000) });
+export async function getPageTargetWsUrl(port, browserDebuggerPath) {
+  await requireBrowserDebugger(port, browserDebuggerPath);
+  const listRes = await fetch(`http://127.0.0.1:${port}/json/list`, {
+    redirect: 'error',
+    signal: AbortSignal.timeout(3000)
+  });
   if (!listRes.ok) {
     throw new NativeBrowserError(500, '无法读取 Chrome 页面调试目标');
   }
   const targets = await listRes.json();
-  const pageTarget = Array.isArray(targets)
-    ? targets.find((t) => t?.type === 'page' && typeof t.webSocketDebuggerUrl === 'string')
-    : null;
-  if (pageTarget) return pageTarget.webSocketDebuggerUrl;
-
-  const newRes = await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, {
-    method: 'PUT',
-    signal: AbortSignal.timeout(3000)
-  });
-  if (newRes.ok) {
-    const created = await newRes.json();
-    if (created?.webSocketDebuggerUrl) return created.webSocketDebuggerUrl;
+  for (const target of Array.isArray(targets) ? targets : []) {
+    if (target?.type !== 'page') continue;
+    const url = loopbackDebuggerUrl(target.webSocketDebuggerUrl, port);
+    if (url && pageDebuggerPathPattern.test(url.pathname)) {
+      await requireBrowserDebugger(port, browserDebuggerPath);
+      return url.href;
+    }
   }
   throw new NativeBrowserError(500, '未找到可用的 Chrome 页面调试目标');
 }
@@ -428,36 +488,33 @@ export async function getPageTargetWsUrl(port) {
 /**
  * Terminate a running Chrome instance and immediately tear down its proxy tunnel.
  */
-export function closeNativeBrowser(profileKey) {
-  const safeKey = String(profileKey || '').replace(/[^a-zA-Z0-9_-]/g, '_');
-  const instance = activeBrowsers.get(safeKey);
-  if (!instance) return false;
+function closeBrowserProxy(instance) {
+  const cleanup = instance.proxyCleanup;
+  instance.proxyCleanup = null;
   try {
-    if (instance.proxyCleanup) {
-      try {
-        instance.proxyCleanup();
-      } catch {}
-    }
-    process.kill(instance.pid, 'SIGTERM');
+    cleanup?.();
   } catch {}
-  activeBrowsers.delete(safeKey);
+}
+
+export function closeNativeBrowser(profileKey, ownerId, expectedPid) {
+  const instance = ownedBrowserEntry(profileKey, ownerId);
+  if (!instance || instance.closing || (expectedPid !== undefined && instance.pid !== expectedPid)) return false;
+  instance.closing = true;
+  try {
+    if (!instance.child.kill('SIGTERM')) {
+      instance.closing = false;
+      return false;
+    }
+  } catch {
+    instance.closing = false;
+    return false;
+  }
+  closeBrowserProxy(instance);
   return true;
 }
 
-/**
- * Return list of all currently active profileKeys.
- */
-export function getRunningProfileKeys() {
-  const active = [];
-  for (const [key, instance] of activeBrowsers.entries()) {
-    try {
-      process.kill(instance.pid, 0);
-      active.push(key);
-    } catch {
-      activeBrowsers.delete(key);
-    }
-  }
-  return active;
+export function getRunningProfileKeys(ownerId) {
+  return [...activeBrowsers.keys()].filter((key) => isBrowserRunning(key, ownerId));
 }
 
 /**
@@ -485,7 +542,27 @@ export function resolveBaseProfilesDir() {
 /**
  * Launch an isolated native Chrome instance with independent profile and optional proxy.
  */
-export async function launchNativeChrome({
+export async function launchNativeChrome(options = {}) {
+  const { profileKey, ownerId, scopeId } = options;
+  const kind = typeof profileKey === 'string' ? ownedProfilePattern.exec(profileKey)?.[1] : undefined;
+  if (profileKey !== operatorBrowserProfileKey(kind, ownerId, scopeId)) {
+    throw new NativeBrowserError(403, '无权使用该浏览器配置');
+  }
+  if (activeBrowsers.has(profileKey) && activeBrowsers.get(profileKey).ownerId !== ownerId) {
+    throw new NativeBrowserError(403, '无权使用该浏览器配置');
+  }
+  if (launchingProfiles.has(profileKey)) {
+    throw new NativeBrowserError(409, '该浏览器正在打开，请稍后重试');
+  }
+  launchingProfiles.add(profileKey);
+  try {
+    return await launchOwnedBrowser(options);
+  } finally {
+    launchingProfiles.delete(profileKey);
+  }
+}
+
+async function launchOwnedBrowser({
   profileKey,
   proxyUrl = '',
   token = '',
@@ -493,38 +570,54 @@ export async function launchNativeChrome({
   customArgs = [],
   headless = process.env.NATIVE_BROWSER_HEADLESS === '1' || (process.platform === 'linux' && !process.env.DISPLAY),
   windowSize = '1520,960',
-  ownerId = '',
+  ownerId,
   exitInfo = null,
   targetUrl = 'https://chatgpt.com/',
   skipSessionRotation = false
-} = {}) {
+}) {
   const executable = findChromeExecutable();
   if (!executable) {
     throw new NativeBrowserError(500, '系统未找到可用的 Google Chrome 或 Chromium 浏览器，请先安装 Chrome');
   }
 
   const baseProfilesDir = resolveBaseProfilesDir();
-  const safeKey = String(profileKey || 'default').replace(/[^a-zA-Z0-9_-]/g, '_');
 
-  // If a previous instance is already running for this profile, close it first
-  if (isBrowserRunning(safeKey)) {
-    closeNativeBrowser(safeKey);
+  // A profile may only be opened once, including while its prior Chrome exits.
+  const previous = ownedBrowserEntry(profileKey, ownerId);
+  if (previous) {
+    if (!previous.closing && !closeNativeBrowser(profileKey, ownerId, previous.pid)) {
+      throw new NativeBrowserError(409, '前一个浏览器仍在运行，请关闭后重试');
+    }
+    try {
+      await once(previous.child, 'exit', { signal: AbortSignal.timeout(5000) });
+    } catch {
+      throw new NativeBrowserError(409, '前一个浏览器仍在关闭，请稍后重试');
+    }
   }
 
-  const profileDir = path.join(baseProfilesDir, safeKey);
-  fs.mkdirSync(profileDir, { recursive: true });
+  const operatorDir = path.join(baseProfilesDir, 'operator-v1');
+  fs.mkdirSync(operatorDir, { recursive: true, mode: 0o700 });
+  if (!fs.lstatSync(operatorDir).isDirectory()) {
+    throw new NativeBrowserError(500, 'Chrome 用户配置目录无效');
+  }
+  const profileDir = path.join(operatorDir, profileKey);
+  fs.mkdirSync(profileDir, { recursive: true, mode: 0o700 });
+  if (!fs.lstatSync(profileDir).isDirectory()) {
+    throw new NativeBrowserError(500, 'Chrome 用户配置目录无效');
+  }
+  const previousDebuggerMarker = readDebuggerMarker(profileDir);
 
-  const port = await getFreePort();
   const args = [
-    `--user-data-dir=${profileDir}`,
-    `--remote-debugging-port=${port}`,
     '--no-first-run',
     '--no-default-browser-check',
     '--disable-blink-features=AutomationControlled',
     '--disable-infobars',
     `--window-size=${windowSize}`,
     ...(headless ? ['--headless=new', '--disable-gpu', '--no-sandbox', '--disable-dev-shm-usage'] : []),
-    ...customArgs
+    ...customArgs,
+    '--remote-debugging-address=127.0.0.1',
+    '--remote-debugging-port=0',
+    `--user-data-dir=${profileDir}`
   ];
 
   let proxyCleanup = null;
@@ -573,27 +666,21 @@ export async function launchNativeChrome({
   const browserEntry = {
     pid: child.pid,
     child,
-    port,
     profileDir,
     proxyCleanup,
     ownerId,
     exitInfo,
     startedAt: new Date().toISOString()
   };
-  activeBrowsers.set(safeKey, browserEntry);
+  activeBrowsers.set(profileKey, browserEntry);
 
-  child.on('exit', () => {
-    if (proxyCleanup) {
-      try {
-        proxyCleanup();
-      } catch {}
-    }
-    activeBrowsers.delete(safeKey);
-  });
+  const forgetBrowser = () => {
+    closeBrowserProxy(browserEntry);
+    if (activeBrowsers.get(profileKey) === browserEntry) activeBrowsers.delete(profileKey);
+  };
+  child.once('exit', forgetBrowser);
+  child.once('error', forgetBrowser);
   child.unref();
-
-  await waitForDebuggerReady(port);
-  const wsUrl = await getPageTargetWsUrl(port);
 
   // Build the complete cookie set (host-only url matching direct-login.mjs):
   const cookiesToSet = [];
@@ -623,14 +710,25 @@ export async function launchNativeChrome({
   }
 
   // Inject cookies and navigate to targetUrl
-  await injectCookiesAndNavigate(wsUrl, cookiesToSet, targetUrl);
+  try {
+    const isCurrent = () => ownedBrowserEntry(profileKey, ownerId) === browserEntry && !browserEntry.closing;
+    const { port, browserDebuggerPath } = await waitForProfileDebugger(profileDir, previousDebuggerMarker, isCurrent);
+    const wsUrl = await getPageTargetWsUrl(port, browserDebuggerPath);
+    if (!isCurrent()) throw new NativeBrowserError(409, '浏览器已关闭，请重新打开');
+    await injectCookiesAndNavigate(wsUrl, cookiesToSet, targetUrl);
+    if (!isCurrent()) throw new NativeBrowserError(409, '浏览器已关闭，请重新打开');
+    Object.assign(browserEntry, { port, browserDebuggerPath });
+  } catch (error) {
+    closeNativeBrowser(profileKey, ownerId, child.pid);
+    throw error;
+  }
 
   return {
     ok: true,
     pid: child.pid,
-    port,
+    port: browserEntry.port,
     profileDir,
-    profileKey: safeKey,
+    profileKey,
     exitInfo
   };
 }
