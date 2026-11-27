@@ -15,6 +15,25 @@ permissions:
   contents: read
 
 jobs:
+  amazon-linux-prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Prepare and verify signed packages in the Amazon Linux 2023 base image
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Docker Official Image, Amazon Linux 2023.12.20261120.0, linux/amd64.
+          image=amazonlinux@sha256:8ba7eb1e9aa2747ad5206f5f53ad1dfc03fa9f5fb69b7a7dcd95cbc2ade3bd97
+          docker run --rm --platform linux/amd64 --security-opt no-new-privileges \
+            --pids-limit 128 --memory 1536m --env AWS_EC2_METADATA_DISABLED=true \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/deploy/manual-desktop/host,dst=/fixture/host,readonly" \
+            --mount "type=bind,src=$GITHUB_WORKSPACE/test/manual-remote-desktop-linux/amazon-linux-prepare.py,dst=/fixture/check.py,readonly" \
+            "$image" /usr/bin/python3 -IB /fixture/check.py
+
   desktop:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
