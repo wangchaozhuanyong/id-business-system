@@ -12,9 +12,11 @@ const maxBillPages = 3;
 const maxChecks = 6;
 const retryAfter = 15 * 60_000;
 const readbackFailure = '本次回读未确认，可重试';
+const failedReadback = row => !row.excluded && row.needs?.includes(readbackFailure);
 const retryable = row => !row.excluded && row.needs?.some(issue =>
   [readbackFailure, rechargeAdmissionPending, rechargeAdmissionConflict, rechargeEvidenceConflict].includes(issue));
 const hasReadbackNeeds = row => row.needs?.some(issue => issue !== renewalExpiryIssue && issue !== renewalAssociationIssue);
+const orderPending = row => !row.excluded && (!row.orderNo || hasReadbackNeeds(row));
 const fallbackRules = Object.freeze({
   currency: 'CNY', version: 1, cardIssueUsd: '0.5', cardPercent: '0.008', cardPerPaymentUsd: '0.3'
 });
@@ -188,7 +190,7 @@ export function createRechargeOrderSync({ store, client, publicOrigin, quoteServ
       nextOffset = offset + 100;
       more = page === maxSessionPages - 1;
     }
-    if (apply && !selected) saved = store.rememberRechargeSessions([...jobs], nextOffset);
+    if (apply && !selected) saved = store.rememberRechargeSessions([...jobs], nextOffset, clock());
     const prior = new Map(saved.rows.map((row) => [row.jobKey, row]));
     if (!selected) {
       for (const row of saved.rows) if (hasReadbackNeeds(row) && !row.excluded) jobs.add(row.jobKey);
@@ -199,7 +201,7 @@ export function createRechargeOrderSync({ store, client, publicOrigin, quoteServ
         (selected || !row?.checkedAt || clock() - row.checkedAt >= retryAfter);
     })
       .sort((a, b) => (prior.get(a)?.checkedAt || 0) - (prior.get(b)?.checkedAt || 0));
-    if (!candidates.length) return { rows: [], more };
+    if (!candidates.length) return { rows: [], more, checked: !selected };
     const date = beijing(saved.since).slice(0, 10);
     let sharedCodes, shared;
     async function evidenceSources() {
@@ -220,13 +222,17 @@ export function createRechargeOrderSync({ store, client, publicOrigin, quoteServ
     const rows = [];
     for (const jobKey of candidates.slice(0, maxChecks)) {
       const checkedAt = clock();
-      const saveStatus = fields => {
-        const row = { jobKey, checkedAt, ...fields };
-        return apply ? store.applyRechargeOrder({ since: saved.since, row }) : row;
+      const previous = prior.get(jobKey);
+      const firstPendingAt = previous && orderPending(previous) ? previous.firstPendingAt || previous.checkedAt : null;
+      const saveStatus = (fields, details) => {
+        const row = { jobKey, checkedAt, ...(firstPendingAt && { firstPendingAt }), ...fields };
+        return apply ? store.applyRechargeOrder({ since: saved.since, row, ...details }) : row;
       };
       let result;
+      let taskRead = false;
       try {
         const { task, runtimeEntries } = await client.get('/api/admin/task-logs/' + jobKey);
+        taskRead = true;
         if (task?.jobKey !== jobKey) {
           if (committed || prior.has(jobKey)) throw new Error('未取得对应的代充任务');
           continue;
@@ -236,7 +242,7 @@ export function createRechargeOrderSync({ store, client, publicOrigin, quoteServ
           if (apply) saveStatus({ excluded: true, needs: [] });
           continue;
         }
-        if (apply && committed) store.rememberRechargeSessions([jobKey], saved.scanOffset);
+        if (apply && committed) store.rememberRechargeSessions([jobKey], saved.scanOffset, checkedAt);
         const codes = await (sharedCodes ??= Promise.resolve().then(() => client.listCodes()));
         if (!Array.isArray(codes)) throw new Error('代充码列表格式不正确');
         const admission = await readRechargeAdmission(task, codes, client);
@@ -263,10 +269,10 @@ export function createRechargeOrderSync({ store, client, publicOrigin, quoteServ
         const completed = utcInstant(evidence.completedAt);
         const created = utcInstant(task.createdAt);
         if (!(completed >= saved.since || !Number.isFinite(completed) && created >= saved.since)) {
-          if (apply) store.applyRechargeOrder({ since: saved.since, row: {
-            jobKey, checkedAt, excluded: Number.isFinite(completed),
+          if (apply) saveStatus({
+            excluded: Number.isFinite(completed),
             needs: Number.isFinite(completed) ? [] : ['无法确认该任务在启用后开通']
-          } });
+          });
           continue;
         }
         const order = buildRechargeOrder(evidence, settings, checkedAt);
@@ -274,27 +280,29 @@ export function createRechargeOrderSync({ store, client, publicOrigin, quoteServ
           try { order.fxSnapshot = await quoteService.snapshotFor(order); } catch {}
           if (!order.fxSnapshot) evidence.needs.push('订单汇率尚未取得');
         }
-        result = { jobKey, needs: evidence.needs, checkedAt };
-        if (apply) result = store.applyRechargeOrder({ since: saved.since, row: result, order, admission: admission.code,
+        result = saveStatus({ needs: evidence.needs }, { order, admission: admission.code,
           firstUse: evidence.firstUse, codeRenewal: evidence.codeRenewal });
       } catch (error) {
-        result = { jobKey, checkedAt, needs: [committed && error.upstreamStatus === 404
-          ? '原代充任务已移除，请人工核对' : readbackFailure] };
-        if (apply) result = store.applyRechargeOrder({ since: saved.since, row: result });
+        result = saveStatus({ needs: [committed && !taskRead && error.upstreamStatus === 404
+          ? '原代充任务已移除，请人工核对' : readbackFailure] });
       }
       rows.push(publicSummary(result));
     }
-    return { rows, more: more || candidates.length > maxChecks };
+    return { rows, more: more || candidates.length > maxChecks, checked: true };
   }
   function run({ apply = false, jobKeys, retry = false, committed = false } = {}) {
     if (running) return Promise.reject(Object.assign(new Error('同步正在进行，请稍后查看'), { status: 409 }));
-    running = scan(apply, jobKeys, retry, committed).then((result) => {
-      const pending = apply ? (store.featureDocument(domain).data?.rows || []).filter(retryable).length : 0;
+    running = scan(apply, jobKeys, retry, committed).then(({ checked, ...result }) => {
+      const saved = apply ? store.featureDocument(domain).data?.rows || [] : [];
       if (apply) {
-        lastError = pending ? '有代充任务暂未取得入单回执，可重试读取' : '';
-        onStatus?.(!pending);
+        const failed = result.rows.some(failedReadback);
+        const pendingReadback = saved.some(failedReadback);
+        if (failed || pendingReadback) lastError = '有代充任务暂未取得入单回执，可重试读取';
+        else if (checked) lastError = '';
+        if (failed) onStatus?.(false);
+        else if (checked && !pendingReadback) onStatus?.(true);
       }
-      return retry ? { ...result, pending } : result;
+      return retry ? { ...result, pending: saved.filter(retryable).length } : result;
     }).catch((error) => {
       if (apply) {
         lastError = '最近一轮读取失败，等待重试';
@@ -344,14 +352,23 @@ export function createRechargeOrderSync({ store, client, publicOrigin, quoteServ
       const stored = store.featureDocument(domain).data;
       if (!stored) return null;
       let pending = 0, oldestPendingAt = null, lastImportedAt = null;
+      let technicalPending = 0, lastTechnicalFailureAt = null, reviewPending = 0, oldestReviewAt = null;
       for (const row of stored.rows || []) {
         if (row.excluded) continue;
-        if (!row.orderNo || hasReadbackNeeds(row)) {
+        if (orderPending(row)) {
           pending++;
-          if (row.checkedAt && (!oldestPendingAt || row.checkedAt < oldestPendingAt)) oldestPendingAt = row.checkedAt;
+          const pendingAt = row.firstPendingAt || row.checkedAt;
+          if (pendingAt && (!oldestPendingAt || pendingAt < oldestPendingAt)) oldestPendingAt = pendingAt;
+          if (failedReadback(row)) {
+            technicalPending++;
+            if (row.checkedAt > (lastTechnicalFailureAt || 0)) lastTechnicalFailureAt = row.checkedAt;
+          } else if (row.checkedAt && hasReadbackNeeds(row)) {
+            reviewPending++;
+            if (!oldestReviewAt || pendingAt < oldestReviewAt) oldestReviewAt = pendingAt;
+          }
         } else if (row.checkedAt > (lastImportedAt || 0)) lastImportedAt = row.checkedAt;
       }
-      return { pending, oldestPendingAt, lastImportedAt };
+      return { pending, oldestPendingAt, lastImportedAt, technicalPending, lastTechnicalFailureAt, reviewPending, oldestReviewAt };
     },
     eventBoundary() {
       let current = store.featureDocument(domain);
@@ -359,11 +376,10 @@ export function createRechargeOrderSync({ store, client, publicOrigin, quoteServ
       if (!Number.isFinite(current.data.since) || current.data.since <= 0) throw new Error('入单启用边界无效');
       return Math.floor(current.data.since / 1000);
     },
-    pendingJobs: () => (store.featureDocument(domain).data?.rows || [])
-      .filter(row => !row.excluded && (!row.orderNo || hasReadbackNeeds(row))).map(row => row.jobKey),
+    pendingJobs: () => (store.featureDocument(domain).data?.rows || []).filter(orderPending).map(row => row.jobKey),
     async runCommitted(command) {
       const result = await run({ ...command, committed: true });
-      if (result.rows.some(row => row.needs?.includes(readbackFailure))) throw new Error('committed_readback_unavailable');
+      if (result.rows.some(failedReadback)) throw new Error('committed_readback_unavailable');
       return result;
     }
   };

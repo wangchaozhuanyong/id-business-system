@@ -105,18 +105,24 @@ export function createMonitoringSources({ monitor, databasePath, externalProbe =
     if (state === 'connected' || orderReader.state !== state) orderReader = { state, at: clock() };
   }
 
-  function orderSyncSample(now) {
-    const sample = (status, reason) => ({ code: 'order_sync', status, count: orderSync.failures, reason });
+  function orderSyncSample(now, orderPending, ledgerUnavailable) {
+    const sample = (status, reason, count = orderSync.failures) => ({ code: 'order_sync', status, count, reason });
     if (!syncEnabled) return sample('disabled', 'sync_disabled');
     if (syncViaEvents) {
       if (orderReader.state === 'review') return sample('bad', 'sync_reader_review');
       if (now - orderReader.at > orderSyncTimeout) return sample('bad', 'sync_reader_stale');
-    } else if (!orderSync.at) return sample('unknown', 'sync_missing');
-    if (orderSync.at && (!syncViaEvents || orderSync.failures) && now - orderSync.at > orderSyncTimeout)
+    }
+    if (orderSync.failures >= 3) return sample('bad', 'sync_failed');
+    const lastFailureAt = Math.max(orderSync.failures ? orderSync.at : 0, orderPending?.lastTechnicalFailureAt || 0);
+    if (lastFailureAt && now - lastFailureAt > orderSyncTimeout)
+      return sample('bad', 'sync_readback_stale', orderSync.failures || null);
+    if (ledgerUnavailable) return sample('unknown', 'sync_ledger_unavailable');
+    if (!syncViaEvents && !orderSync.at && !orderPending?.technicalPending) return sample('unknown', 'sync_missing');
+    if (!syncViaEvents && orderSync.at && now - orderSync.at > orderSyncTimeout)
       return sample('bad', 'sync_stale');
-    if (orderSync.failures >= 3) return sample('bad');
     if (syncViaEvents && orderReader.state !== 'connected') return sample('unknown', 'sync_reader_waiting');
     if (orderSync.failures) return sample('unknown', 'recovering');
+    if (orderPending?.technicalPending > 0) return sample('unknown', 'sync_readback_pending');
     return sample('ok', syncViaEvents ? 'sync_reader_active' : undefined);
   }
 
@@ -152,9 +158,12 @@ export function createMonitoringSources({ monitor, databasePath, externalProbe =
         collectorDirectory: backupReports ? backupReceiptDirectory : undefined,
         now, startedAt, readWorker: readReceipt, readCollector: readSheetsReceipt
       }),
-      backupReports && readBackupReceipt(backupReceiptDirectory)
+      backupReports && readBackupReceipt(backupReceiptDirectory),
+      syncEnabled && Promise.resolve().then(() => readOrderPending?.())
     ]);
-    const [disk, backup, sheets, report] = results.map(row => row.status === 'fulfilled' ? row.value : null);
+    const [disk, backup, sheets, report, orderPending] = results.map(row => row.status === 'fulfilled' ? row.value : null);
+    const { pending = null, oldestPendingAt = null, lastImportedAt = null,
+      reviewPending = null, oldestReviewAt = null } = orderPending || {};
     const available = disk && disk.blocks > 0 ? Math.round(100 * disk.bavail / disk.blocks) : null;
     const job = (code, receipt, stale, configured = workerReports) => ({ code, status: !configured ? 'disabled' :
       !receipt || receipt.at > now + minute ? 'unknown' :
@@ -170,7 +179,7 @@ export function createMonitoringSources({ monitor, databasePath, externalProbe =
       { code: 'sheets', status: sheets?.state === 'unconfigured' ? 'disabled' : sheets?.state === 'healthy' ? 'ok' :
         ['stale', 'failed'].includes(sheets?.state) ? 'bad' : 'unknown',
         count: sheets?.failures ?? undefined, reason: sheets?.reason },
-      orderSyncSample(now)
+      orderSyncSample(now, orderPending, results[4].status === 'rejected')
     ];
     if (!backupReports) {
       output.push(job('backup', backup, 20 * minute),
@@ -205,23 +214,14 @@ export function createMonitoringSources({ monitor, databasePath, externalProbe =
         reason: !enabled ? 'rates_disabled' : finance.state.failures > 0 && finance.state.failures < 3 ? 'recovering' :
           !finance.state.lastSuccessAt && finance.state.failures < 3 ? 'rates_missing' : undefined });
     } catch { output.push({ code: 'exchange_rates', status: 'unknown', reason: 'rates_unavailable' }); }
-    let pending = null, oldestPendingAt = null, lastImportedAt = null;
-    if (syncEnabled) {
-      try {
-        const result = readOrderPending?.();
-        pending = result?.pending ?? null;
-        oldestPendingAt = result?.oldestPendingAt ?? null;
-        lastImportedAt = result?.lastImportedAt ?? null;
-      } catch { /* Existing status remains available during a read failure. */ }
-    }
     const status = code => output.find(row => row.code === code)?.status || 'unknown';
     const oldest = oldestPendingAt && now - oldestPendingAt >= 15 * minute;
     const orderState = status('order_sync');
     adminSources = { sources: [
       { key: 'orders', state: pending > 0 && orderState === 'ok' ? 'watch' : orderState,
-        lastSuccessAt: orderSync.lastSuccessAt || lastImportedAt, pending, oldestPendingAt,
-        problem: orderState === 'bad' ? '最近的订单读取未完成' : oldest ? '有订单资料核对已超过 15 分钟' :
-          pending > 0 ? '有订单资料等待读回' : orderState === 'unknown' ? '等待来源确认' : '' },
+        lastSuccessAt: orderSync.lastSuccessAt || lastImportedAt, pending, oldestPendingAt, reviewPending, oldestReviewAt,
+        problem: orderState === 'bad' ? '最近的订单读取未完成' : oldest ? '有任务待处理超过 15 分钟' :
+          pending > (reviewPending ?? 0) ? '有订单回执等待处理' : orderState === 'unknown' ? '等待来源确认' : '' },
       { key: 'rates', state: status('exchange_rates'), lastSuccessAt: Date.parse(finance?.state?.lastSuccessAt) || null,
         pending: null, problem: finance?.state?.failures > 0 ? '最近未能取得有效汇率' : '' },
       { key: 'mailbox', state: usageSamples(now).find(row => row.code === 'mailbox').status, lastSuccessAt: mailboxSuccess,

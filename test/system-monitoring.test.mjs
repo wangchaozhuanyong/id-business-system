@@ -512,8 +512,10 @@ test('Sheets monitoring follows the collector with fresh, missing, recovering an
 
 test('reader heartbeats keep quiet order sync healthy without clearing failed imports or review stops', async t => {
   const { monitor, clock, tick } = fixture(t);
+  const oldestReviewAt = clock() - 5 * minute;
   const sources = createMonitoringSources({ monitor, databasePath: '/fixture/data.sqlite', clock,
-    syncEnabled: true, syncViaEvents: true, readDisk: async () => ({ blocks: 100, bavail: 60 }) });
+    syncEnabled: true, syncViaEvents: true, readDisk: async () => ({ blocks: 100, bavail: 60 }),
+    readOrderPending: () => ({ pending: 2, oldestPendingAt: oldestReviewAt, reviewPending: 1, oldestReviewAt }) });
   t.after(() => sources.close());
   const read = async () => {
     tick(1);
@@ -523,6 +525,10 @@ test('reader heartbeats keep quiet order sync healthy without clearing failed im
   assert.equal((await read()).status, 'unknown');
   sources.recordOrderSyncReader('connected');
   assert.equal((await read()).status, 'ok');
+  const orderSource = () => sources.adminView().sources.find(row => row.key === 'orders');
+  assert.equal(orderSource().state, 'watch');
+  assert.equal(orderSource().reviewPending, 1);
+  assert.equal(orderSource().oldestReviewAt, oldestReviewAt);
   tick(12 * minute);
   sources.recordOrderSyncReader('connected');
   assert.match((await read()).detail, /心跳正常/);
@@ -543,6 +549,61 @@ test('reader heartbeats keep quiet order sync healthy without clearing failed im
   const stopped = await read();
   assert.equal(stopped.status, 'bad');
   assert.match(stopped.detail, /读取器已停止/);
+  assert.equal(orderSource().reviewPending, 1);
+});
+
+test('a stored technical readback keeps an open order sync incident through a restart until a valid run', async t => {
+  const { monitor, clock, tick } = fixture(t);
+  let technicalPending = 1;
+  let ledgerUnavailable = false;
+  const lastTechnicalFailureAt = clock();
+  const options = { monitor, databasePath: '/fixture/data.sqlite', clock, syncEnabled: true, syncViaEvents: true,
+    readDisk: async () => ({ blocks: 100, bavail: 60 }),
+    readOrderPending() {
+      if (ledgerUnavailable) throw new Error('test ledger unavailable');
+      return { pending: technicalPending, technicalPending, lastTechnicalFailureAt: technicalPending ? lastTechnicalFailureAt : null };
+    } };
+  const beforeRestart = createMonitoringSources(options);
+  t.after(() => beforeRestart.close());
+  beforeRestart.recordOrderSyncReader('connected');
+  for (let index = 0; index < 3; index++) beforeRestart.recordOrderSync(false);
+  await beforeRestart.tick();
+  assert.equal(monitor.view().checks.find(row => row.code === 'order_sync').status, 'bad');
+  beforeRestart.close();
+
+  const restarted = createMonitoringSources(options);
+  t.after(() => restarted.close());
+  for (let index = 0; index < 2; index++) {
+    tick();
+    restarted.recordOrderSyncReader('connected');
+    await restarted.tick();
+  }
+  const check = () => monitor.view().checks.find(row => row.code === 'order_sync');
+  const incident = () => monitor.view().items.find(row => row.label === '代充订单同步连续失败');
+  assert.equal(check().status, 'unknown');
+  assert.equal(incident().resolvedAt, undefined, 'the incident must stay open');
+  assert.match(check().detail, /还有失败的回执未重新核实/);
+  tick(11 * minute);
+  restarted.recordOrderSyncReader('connected');
+  await restarted.tick();
+  assert.equal(check().status, 'bad');
+  assert.match(check().detail, /超过 10 分钟未确认恢复/);
+  ledgerUnavailable = true;
+  tick();
+  restarted.recordOrderSyncReader('connected');
+  await restarted.tick();
+  assert.match(check().detail, /暂时无法读取订单同步记录/);
+  assert.equal(incident().resolvedAt, undefined);
+  ledgerUnavailable = false;
+  technicalPending = 0;
+  restarted.recordOrderSync(true);
+  for (let index = 0; index < 2; index++) {
+    tick();
+    restarted.recordOrderSyncReader('connected');
+    await restarted.tick();
+  }
+  assert.equal(check().status, 'ok');
+  assert.equal(incident().resolvedAt, clock());
 });
 
 test('two backup checks use the verified capture time, report failure and recover independently', async t => {

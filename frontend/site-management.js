@@ -134,9 +134,14 @@
       (rows || []).filter(row => Object.hasOwn(sources, row.key)).map(row => {
         const [name, route] = sources[row.key];
         const problem = row.problem || (row.state === 'unknown' ? '尚未收到结果' : '—');
+        const review = row.reviewPending > 0
+          ? '<small>待人工核对 ' + e(count(row.reviewPending)) + ' 项' +
+            (row.oldestReviewAt ? ' · 最早已知待处理于 ' + e(time(row.oldestReviewAt)) : '') + '</small>'
+          : '';
         return [e(name), badge(sourceStates, row.state), e(time(row.lastSuccessAt)),
           e(row.pending === null || row.pending === undefined ? '未提供' : count(row.pending)),
-          e(problem) + (row.oldestPendingAt ? '<small>最早一笔核对于 ' + e(time(row.oldestPendingAt)) + '</small>' : ''),
+          e(problem) + (row.oldestPendingAt && row.oldestPendingAt !== row.oldestReviewAt
+            ? '<small>最早已知待处理于 ' + e(time(row.oldestPendingAt)) + '</small>' : '') + review,
           A.canVisit(route) ? link(route, '查看') : '—'];
       }));
   }
