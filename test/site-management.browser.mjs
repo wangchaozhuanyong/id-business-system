@@ -17,7 +17,8 @@ const groups = {
     { activity: 'order-save', total: 34, failed: 3, blocked: 1, p95: 200 }
   ], trend: [{ at, p95: 200 }] }
 };
-const sources = [{ key: 'orders', state: 'watch', lastSuccessAt: at - 2_000, pending: 3, problem: '有订单资料等待读回' }];
+const sources = [{ key: 'orders', state: 'watch', lastSuccessAt: at - 2_000, pending: 3,
+  oldestPendingAt: at - 600_000, reviewPending: 2, oldestReviewAt: at - 500_000, problem: '有订单回执等待处理' }];
 
 async function environment(browser, role) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, acceptDownloads: true });
@@ -141,6 +142,13 @@ test('admin can diagnose a report, navigate through data, and download only the 
   await page.getByText('id.example.test', { exact: true }).waitFor();
   assert.equal(await page.getByRole('link', { name: '查看操作记录' }).getAttribute('href'), '#/settings/audit');
   await page.goto(origin + '/#/monitor');
+  const orderSync = page.getByRole('row', { name: /代充订单同步/ });
+  await orderSync.getByText('待人工核对 2 项', { exact: false }).waitFor();
+  for (const width of [1440, 390, 320]) {
+    await page.setViewportSize({ width, height: 900 });
+    assert.match(await orderSync.innerText(), /最早已知待处理于[\s\S]*待人工核对 2 项 · 最早已知/);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), true, width);
+  }
   await page.getByText('查看最近 24 小时走势', { exact: true }).click();
   await checkChart();
   assert.deepEqual(errors, []);

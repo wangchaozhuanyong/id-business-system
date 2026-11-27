@@ -3449,12 +3449,12 @@ export function createLocalBusinessStore(databasePath) {
       if (!orderFeatureDomains.has(domain)) throw new TypeError('未知订单附属资料');
       log.run(new Date().toISOString(), domain, action, auditSummary(action, actor, targetId), version);
     },
-    rememberRechargeSessions(jobKeys, scanOffset) {
+    rememberRechargeSessions(jobKeys, scanOffset, firstPendingAt = Date.now()) {
       return writeTransaction(() => {
         const current = readDocument('order-sync');
         const known = new Set(current.data.rows.map(({ jobKey }) => jobKey));
         const rows = [...current.data.rows, ...jobKeys.filter((id) => !known.has(id)).map((jobKey) => ({
-          jobKey, needs: ['等待获取成功回执']
+          jobKey, needs: ['等待获取成功回执'], firstPendingAt
         }))];
         if (rows.length === current.data.rows.length && scanOffset === current.data.scanOffset) return current.data;
         const data = { ...current.data, rows, scanOffset };

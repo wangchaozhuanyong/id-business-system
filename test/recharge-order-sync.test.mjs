@@ -191,7 +191,7 @@ test('后台已核实充值码，账单与卡池不可用时保留成功并等�
   assert.equal(writes[1].order.paidAmount, '123');
 });
 
-test('入单回读失败保持监控异常，管理员每次只重读一批已有任务', async t => {
+test('实际回读失败只计一次，未重读的技术待办既不累加也不恢复', async t => {
   const store = createLocalBusinessStore(':memory:');
   t.after(() => store.close());
   const since = Date.parse('2026-10-31T15:00:00.000Z');
@@ -201,6 +201,7 @@ test('入单回读失败保持监控异常，管理员每次只重读一批已�
     jobKey, checkedAt: now, needs: ['本次回读未确认，可重试']
   })) });
   const reads = [], states = [];
+  let unavailable = true;
   const client = {
     listCodes: async () => fixtures.map(task => usedRechargeCode(task)),
     async get(path) {
@@ -211,6 +212,7 @@ test('入单回读失败保持监控异常，管理员每次只重读一批已�
       assert(path.startsWith('/api/admin/task-logs/'));
       const jobKey = path.split('/').at(-1);
       reads.push(jobKey);
+      if (unavailable) throw new Error('fixture task read unavailable');
       return { task: fixtures.find(task => task.jobKey === jobKey), runtimeEntries: [{
         source: 'task', jobKey, ts: Date.parse(completedAt), text: '任务结束 status=success progress=100'
       }] };
@@ -218,6 +220,10 @@ test('入单回读失败保持监控异常，管理员每次只重读一批已�
   };
   const sync = createRechargeOrderSync({ store, client, background: true, clock: () => now,
     publicOrigin: 'http://fixture.local', onStatus: ok => states.push(ok) });
+  await assert.rejects(sync.runCommitted({ apply: true, jobKeys: tasks.slice(-2) }), /committed_readback_unavailable/);
+  assert.deepEqual(reads.splice(0), tasks.slice(-2));
+  assert.deepEqual(states, [false]);
+  unavailable = false;
   await sync.run({ apply: true });
   assert.deepEqual(reads, []);
   assert.deepEqual(states, [false]);
@@ -237,12 +243,74 @@ test('入单回读失败保持监控异常，管理员每次只重读一批已�
   assert.equal(first.body.rows.filter(row => row.orderNo).length, 6);
   assert.equal(first.body.pending, 1);
   assert.deepEqual(reads, tasks.slice(0, 6));
-  assert.deepEqual(states, [false, false]);
+  assert.deepEqual(states, [false]);
   const second = await call(admin);
   assert.equal(second.body.pending, 0);
   assert.deepEqual(reads, tasks);
-  assert.deepEqual(states, [false, false, true]);
+  assert.deepEqual(states, [false, true]);
   assert.equal(store.load('commerce').data.orders.length, 7);
+});
+
+test('业务待核对保留初次记录时间并可重试，空批次不能确认恢复', async t => {
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  const firstPendingAt = now - 60 * 60_000;
+  store.saveFeatureDocument('order-sync', 0, { since: Date.parse(createdAt) - 1000, rows: [
+    { jobKey: session.jobKey, checkedAt: firstPendingAt, needs: [rechargeAdmissionConflict] },
+    { jobKey: 'excluded-task', excluded: true, checkedAt: firstPendingAt, needs: [] }
+  ] });
+  store.rememberRechargeSessions(['not-yet-checked'], 100, firstPendingAt - 1000);
+  const states = [];
+  let clock = now;
+  const sync = createRechargeOrderSync({ store, clock: () => clock, onStatus: ok => states.push(ok), client: {
+    async get(path) {
+      if (path.startsWith('/api/admin/sessions')) throw new Error('fixture session list unavailable');
+      assert.equal(path, '/api/admin/task-logs/' + session.jobKey);
+      return { task: session };
+    },
+    listCodes: async () => []
+  } });
+
+  await assert.rejects(sync.run({ apply: true }), /fixture session list unavailable/);
+  assert.deepEqual(await sync.runCommitted({ apply: true, jobKeys: ['excluded-task'] }), { rows: [], more: false });
+  assert.deepEqual(states, [false]);
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    clock += 60_000;
+    const result = await sync.runCommitted({ apply: true, jobKeys: [session.jobKey] });
+    assert.deepEqual(result, { rows: [{ jobKey: session.jobKey, needs: [rechargeAdmissionPending], orderNo: '' }], more: false });
+  }
+  assert.deepEqual(states, [false, true, true, true]);
+  assert.deepEqual(sync.pendingJobs().sort(), [session.jobKey, 'not-yet-checked'].sort());
+  assert.deepEqual(sync.healthView(), { pending: 2, oldestPendingAt: firstPendingAt - 1000, lastImportedAt: null,
+    technicalPending: 0, lastTechnicalFailureAt: null, reviewPending: 1, oldestReviewAt: firstPendingAt });
+  assert.equal(store.load('commerce').data, null);
+});
+
+test('只有原任务接口的 404 转人工核对，证据接口的 404 仍需要重试', async t => {
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  store.saveFeatureDocument('order-sync', 0, { since: Date.parse(createdAt) - 1000, rows: [] });
+  const missing = Object.assign(new Error('fixture upstream 404'), { upstreamStatus: 404 });
+  const states = [];
+  let missingTask = false;
+  const sync = createRechargeOrderSync({ store, clock: () => now, onStatus: ok => states.push(ok), client: {
+    async get() {
+      if (missingTask) throw missing;
+      return { task: session };
+    },
+    async listCodes() { throw missing; }
+  } });
+  const retry = () => sync.runCommitted({ apply: true, jobKeys: [session.jobKey] });
+  await assert.rejects(retry(), /committed_readback_unavailable/);
+  assert.equal(sync.healthView().technicalPending, 1);
+  assert.equal(sync.healthView().lastTechnicalFailureAt, now);
+  missingTask = true;
+  const { rows } = await retry();
+  assert.deepEqual(rows[0].needs, ['原代充任务已移除，请人工核对']);
+  assert.deepEqual(states, [false, true]);
+  assert.equal(sync.healthView().technicalPending, 0);
+  assert.equal(sync.healthView().reviewPending, 1);
 });
 
 test('Apple renewals enforce original binding and first-use card fees use actual history', () => {
