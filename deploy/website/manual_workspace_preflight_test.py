@@ -125,7 +125,7 @@ class WorkspacePreflightTests(unittest.TestCase):
         self.assertEqual(self.inspect()["observed"]["brokerStartupError"], "invalid_input_directory_or_network")
         self.broker_journal += " with a private detail"
         self.assertIsNone(self.inspect()["observed"]["brokerStartupError"])
-        self.broker_journal = ("/usr/bin/python3: can't open file '/private/deploy/manual-desktop/host/runtime.py': "
+        self.broker_journal = ("/usr/bin/python3.9: can't open file '/private/deploy/manual-desktop/host/runtime.py': "
                                "[Errno 13] Permission denied")
         self.assertEqual(self.inspect()["observed"]["brokerStartupError"], "runtime_file_permission_denied")
 

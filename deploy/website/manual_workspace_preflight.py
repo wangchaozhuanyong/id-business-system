@@ -74,11 +74,11 @@ def _broker_startup_error(command):
     messages = "|".join(re.escape(message) for message in BROKER_STARTUP_ERRORS)
     output = command(["/usr/bin/journalctl", "--boot=0", "--unit=id-manual-broker.service",
                       "--since=-12h", "--lines=1", "--output=cat", "--no-pager",
-                      "--grep=^(broker\\.py: error: (" + messages + r")|/usr/bin/python3: can't open file "
+                      "--grep=^(broker\\.py: error: (" + messages + r")|/usr/bin/python3(\.9)?: can't open file "
                       r"'.*/deploy/manual-desktop/host/runtime\.py': \[Errno (2|13)\] (No such file or directory|Permission denied))$"])
     if not output:
         return None
-    if output.startswith("/usr/bin/python3: can't open file ") and "/deploy/manual-desktop/host/runtime.py':" in output:
+    if re.match(r"^/usr/bin/python3(?:\.9)?: can't open file ", output) and "/deploy/manual-desktop/host/runtime.py':" in output:
         return {"[Errno 2] No such file or directory": "runtime_file_missing",
                 "[Errno 13] Permission denied": "runtime_file_permission_denied"}.get(output.rpartition(": ")[2])
     return BROKER_STARTUP_ERRORS.get(output.removeprefix("broker.py: error: "))
