@@ -10,6 +10,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 import egress
+from worker.recharge_proxy import open_proxy
 
 
 def record(address, port=8080):
@@ -218,6 +219,38 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
                                          b'HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
         lookup.assert_not_called()
         dial.assert_not_called()
+
+    async def test_worker_adapter_connects_to_renewal_relay_without_credentials(self):
+        async def site(reader, writer):
+            try:
+                writer.write(await reader.readexactly(5))
+                await writer.drain()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        upstream = await self.connect_fixture(site)
+        loop = asyncio.get_running_loop()
+        with patch.object(loop, 'getaddrinfo', AsyncMock(return_value=[record('1.1.1.1', 443)])) as lookup:
+            with patch.object(egress, '_assigned_to_host', return_value=False):
+                async with await self.open_renewal():
+                    adapter = await open_proxy(None, relay_path=str(self.path), renewal=True)
+                    try:
+                        reader, writer = await asyncio.open_connection('127.0.0.1', adapter.port)
+                        try:
+                            writer.write(b'CONNECT login.microsoftonline.com:443 HTTP/1.1\r\n\r\n')
+                            reply = await asyncio.wait_for(reader.readuntil(b'\r\n\r\n'), 2)
+                            self.assertTrue(reply.startswith(b'HTTP/1.1 200 '))
+                            writer.write(b'hello')
+                            self.assertEqual(await asyncio.wait_for(reader.readexactly(5), 2), b'hello')
+                        finally:
+                            writer.close()
+                            await writer.wait_closed()
+                    finally:
+                        await adapter.close()
+        lookup.assert_awaited_once_with('login.microsoftonline.com.', 443,
+                                        type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP)
+        upstream.assert_awaited_once_with(self.proxy)
 
     async def test_renewal_refuses_private_metadata_configured_and_locally_assigned_addresses(self):
         loop = asyncio.get_running_loop()
