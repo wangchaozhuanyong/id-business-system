@@ -103,6 +103,8 @@ node server/business-reconcile-cli.mjs --data-dir /绝对路径/项目内的恢�
 
 网站应用发布使用 [Independent Website Production Release](../.github/workflows/production-website-release.yml)。在 `main` 的 `quality` 通过后，手动触发工作流并输入当前 `main` 的完整 SHA。工作流验证锁定上游，构建并核对同一提交的制品，由现有 OIDC 专用角色读取正式基线。网站切换沿用宿主发布锁、隔离金丝雀和同 SHA 应用服务，充值执行器和网关沿用各自发布流程。根据 Actions 记录的 SSM 命令编号回读结果。回执不明确时先查原命令和运行版本。
 
+手动续费服务器工作区的宿主检查使用同一工作流，填写当前 `main` 的完整 SHA，只选 `inspect_manual_workspace_host`。此操作持共享读锁，记录可用内存、宿主隔离能力和网站桌面套接字的接入情况。实际浏览器的沙箱、网络隔离与业务负载下的资源余量须通过单工作区实测。
+
 2026-11-16 合作方页面发布采用一次精确限定的网站发布范围：线上网站基线必须为 `18ca7897c494352f5ab0ce0217d11b294ac645b8`，待发布的核心差异仅可为已合并 `47447e73c6562b43f27f9e1f80f82573b81ec00d` 的支付调试补丁、清单及定向测试。`deploy/website/deferred-checkout-debug-20261116.json` 记录三份文件的前后 SHA-256 与不变的充值资源摘要，候选必须包含该合并且每份原始字节匹配。只走普通网站发布，不启用原生、适配器或商城回执重试操作；原生容器、网关与受保护组件按原身份读回。发布回执登记 `deferredNativeBuildInputs.nativeDeploymentPending=true` 和保留的原生版本。这不代表原生补丁已上线，也不放宽原生切换的数据库空闲、未确认任务或资产锁检查；真实任务及记录保持原状。任何额外核心差异、源码或资源摘要漂移均拒绝。
 
 同一精确旧基线下，原生发布必须等网站先切换：发布入口在创建制品目录前拒绝这组原生重试，并输出 `publish_reviewed_website_before_deferred_native_retry`。这次延期输入的网站发布同样不能混用后续新增的 `include_customer_progress` 操作，须先完成普通网站切换。网站切换后，此顺序约束自然失效，原生发布继续执行原有的数据库空闲检查。失败发布留下的同 SHA 目录、日志、镜像与回执全部保留；不删除或覆盖失败候选，不将未知完成状态当作可重试。2026-11-16 的 `52a5f810` 已被失败核心发布占用，后续网站发布从新的受审查 main 提交重新构建。
