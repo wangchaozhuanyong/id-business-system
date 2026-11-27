@@ -24,6 +24,7 @@ class WorkspacePreflightTests(unittest.TestCase):
         self.daemon_state = "active"
         self.app_views = ["true|123|directory"]
         self.unit = probe.UNIT + " static -"
+        self.broker_journal = None
 
     def write(self, path, value):
         path = self.root / path
@@ -36,6 +37,8 @@ class WorkspacePreflightTests(unittest.TestCase):
             return self.unit
         if args == ["systemctl", "--no-pager", "show", "--property=ActiveState", "--value", "docker.service"]:
             return self.daemon_state
+        if args == probe.BROKER_JOURNAL:
+            return self.broker_journal
         if args == [*probe.DOCKER, "info", "--format", probe.DOCKER_INFO]:
             return self.docker_info
         self.assertEqual(args, [*probe.DOCKER, "inspect", "--type", "container", "--format", probe.APP_VIEW, probe.APP])
@@ -104,6 +107,48 @@ class WorkspacePreflightTests(unittest.TestCase):
                 self.assertIsNone(probe._command(["systemctl", "--version"]))
         with patch.object(probe.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, b"private", b"private")):
             self.assertIsNone(probe._command(["systemctl", "--version"]))
+
+    def test_broker_journal_distinguishes_python_argument_and_systemd_startup(self):
+        messages = [
+            ({"_SYSTEMD_UNIT": "id-other.service"}, "runtime.py: error: unrelated-fixture"),
+            ({"_PID": "42", "UNIT": probe.BROKER_UNIT}, "runtime.py: error: unrelated-fixture"),
+            ({"_PID": "1", "UNIT": probe.BROKER_UNIT}, "Started ID manual recharge browser broker."),
+            ({"_SYSTEMD_UNIT": probe.BROKER_UNIT},
+             "/usr/bin/python3.9: can't open file '/private/fixture/runtime.py': [Errno 13] Permission denied"),
+            ({"_PID": "1", "UNIT": probe.BROKER_UNIT},
+             "id-manual-broker.service: Main process exited, code=exited, status=2/INVALIDARGUMENT"),
+            ({"_SYSTEMD_UNIT": probe.BROKER_UNIT}, "broker.py: error: private argument"),
+            ({"_PID": "1", "OBJECT_SYSTEMD_UNIT": probe.BROKER_UNIT},
+             "id-manual-broker.service: Main process exited, code=exited, status=226/NAMESPACE"),
+            ({"_SYSTEMD_UNIT": probe.BROKER_UNIT}, ["nontext-ignored"]),
+            ({"_SYSTEMD_UNIT": probe.BROKER_UNIT}, "private unknown message"),
+            ({"_PID": "1", "UNIT": probe.BROKER_UNIT},
+             "id-manual-broker.service: Failed with result 'exit-code'."),
+        ]
+        self.broker_journal = "\n".join(json.dumps({**fields, "MESSAGE": message}) for fields, message in messages)
+        result = self.inspect()["observed"]["brokerStartup"]
+        self.assertEqual(result, {"journalReadable": True, "recentCategories": [
+            "systemd_failure", "systemd_sandbox_failure", "broker_argument_error",
+            "systemd_exit_2", "python_open_permission", "systemd_lifecycle",
+        ]})
+        for text in ("private", "fixture", "INVALIDARGUMENT", "id-other.service"):
+            self.assertNotIn(text, json.dumps(result))
+        self.assertIn(["/usr/bin/journalctl", "--quiet", "--no-pager", "--boot", "--since=-2h", "--lines=24",
+                       "--unit=id-manual-broker.service", "--output=json",
+                       "--output-fields=MESSAGE,_SYSTEMD_UNIT,UNIT,OBJECT_SYSTEMD_UNIT,_PID"], self.commands)
+
+    def test_broker_journal_is_bounded_and_missing_output_is_explicit(self):
+        self.assertEqual(self.inspect()["observed"]["brokerStartup"],
+                         {"journalReadable": False, "recentCategories": []})
+        self.broker_journal = ""
+        self.assertEqual(self.inspect()["observed"]["brokerStartup"],
+                         {"journalReadable": True, "recentCategories": []})
+        self.broker_journal = "unstructured-fixture\n" * probe.BROKER_JOURNAL_LINES + "{}"
+        self.assertEqual(self.inspect()["observed"]["brokerStartup"],
+                         {"journalReadable": False, "recentCategories": []})
+        sized = subprocess.CompletedProcess([], 0, b"a" * (probe.BROKER_JOURNAL_BYTES + 1), b"")
+        with patch.object(probe.subprocess, "run", return_value=sized):
+            self.assertIsNone(probe._command(probe.BROKER_JOURNAL))
 
     def test_workspace_package_log_reports_only_a_fixed_diagnostic(self):
         self.write("usr/bin/pkcheck", "fixture")
