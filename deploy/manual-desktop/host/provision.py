@@ -99,8 +99,9 @@ def existing_identity(required=False):
     require(not required or (user is not None and group is not None), "broker_identity_unavailable")
 
 
-def systemctl(*args, allowed=(0,), timeout=10):
-    return command([SYSTEMCTL, "--no-ask-password", "--no-pager", *args], allowed=allowed, timeout=timeout)
+def systemctl(*args, allowed=(0,), timeout=10, failure="host_command_failed"):
+    return command([SYSTEMCTL, "--no-ask-password", "--no-pager", *args],
+                   allowed=allowed, timeout=timeout, failure=failure)
 
 
 def prepare_host_tools(config):
@@ -294,25 +295,30 @@ def broker_state():
     if load == "not-found" and active in (None, "inactive"):
         return "inactive"
     if not output and status in (1, 4):
-        # Some systemctl builds return no properties for a unit the manager
-        # has never loaded. Establish that the unit is absent from both views.
-        units, _ = systemctl("list-units", "--all", "--plain", "--no-legend", BROKER_UNIT)
-        files, _ = systemctl("list-unit-files", "--plain", "--no-legend", BROKER_UNIT, allowed=(0, 1, 4))
-        if not units and not files:
-            return "inactive"
+        # v252 can return exit 1 both for an empty unit-file match and a D-Bus
+        # error. Include Docker, an existing host prerequisite, as a positive
+        # control in both the manager's live view and the unit-file inventory.
+        for verb, options in (("list-units", ("--all",)), ("list-unit-files", ())):
+            rows, code = systemctl(verb, *options, "--plain", "--full", "--no-legend",
+                                   "docker.service", BROKER_UNIT, failure="broker_service_inventory_unavailable")
+            records = [row.split() for row in rows.splitlines()]
+            require(code == 0 and len(records) == 1 and len(records[0]) >= 2
+                    and records[0][0] == "docker.service", "broker_service_inventory_unverified")
+        return "inactive"
     require(load == "loaded" and active is not None, "broker_service_state_unverified")
     return active
 
 
-def broker_active():
+def broker_active(transition_error="broker_service_is_transitioning"):
     state = broker_state()
-    require(state in ("active", "inactive", "failed"), "broker_service_is_transitioning")
+    require(state in ("active", "inactive", "failed"), transition_error)
     return state == "active"
 
 
 def wait_for_broker_ready():
     deadline = time.monotonic() + 15
     path = BRIDGE / "site.sock"
+    reason = "manual_broker_readiness_timeout"
     while time.monotonic() < deadline:
         state = broker_state()
         if state == "active" and path.is_socket():
@@ -321,9 +327,19 @@ def wait_for_broker_ready():
                 if status == 200 and json.loads(body) == {"rechargeBootstrap": 1}:
                     return
         if state == "failed":
+            reason = "manual_broker_startup_failed"
             break
         time.sleep(0.2)
-    raise InvalidHost("manual_broker_startup_failed")
+    # During RestartSec a failed exec may still report "activating". Preserve
+    # a known status on timeout as well, without returning unit logs or arguments.
+    with suppress(InvalidHost, OSError, UnicodeError, subprocess.SubprocessError):
+        output, code = systemctl("show", BROKER_UNIT, "-p", "Result", "-p", "ExecMainStatus")
+        fields = dict(line.split("=", 1) for line in output.splitlines() if "=" in line)
+        exit_status = fields.get("ExecMainStatus")
+        if code == 0 and fields.get("Result") == "exit-code" and exit_status in (
+                "1", "2", "203", "216", "217", "226"):
+            reason = "manual_broker_startup_exit_" + exit_status
+    raise InvalidHost(reason)
 
 
 def require_no_workers():
@@ -368,7 +384,7 @@ def verify_policy():
 def verify(config):
     require(all(installed(path) == data for path, data in managed_files(config).items()),
             "installed_manual_runtime_differs_from_release")
-    require(broker_active(), "manual_broker_is_not_active")
+    require(broker_active("manual_broker_verification_transition"), "manual_broker_is_not_active")
     existing_identity(required=True)
     verify_loaded_units()
     checked_path(BRIDGE, stat.S_ISDIR, 0o750, UID, GID)
@@ -419,7 +435,7 @@ def install(config):
             systemctl("daemon-reload")
             verify_loaded_units()
             start_attempted = True
-            systemctl("start", BROKER_UNIT)
+            systemctl("start", BROKER_UNIT, failure="manual_broker_start_command_failed")
             wait_for_broker_ready()
             verify(config)
             enable_attempted = previous_enabled != "enabled"
@@ -427,7 +443,7 @@ def install(config):
         except (OSError, ValueError, subprocess.SubprocessError, InvalidHost):
             if start_attempted:
                 systemctl("stop", BROKER_UNIT)
-                require(not broker_active(), "manual_broker_deactivation_not_verified")
+                require(not broker_active("manual_broker_rollback_transition"), "manual_broker_deactivation_not_verified")
             if enable_attempted:
                 systemctl("disable", BROKER_UNIT)
             for path in reversed(changed):
