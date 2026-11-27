@@ -410,6 +410,19 @@ def require_main(sha):
     require(remote.decode().split() == [sha, "refs/heads/main"], "remote_main_changed")
 
 
+def exec_start_spec(state, error):
+    """Return static systemd ExecStart fields without runtime timestamps or PIDs."""
+    text = state.decode() if isinstance(state, bytes) else state
+    parsed = re.fullmatch(
+        r"\{ (path=[^;{}\r\n]+ ; argv\[\]=[^;{}\r\n]+ ; ignore_errors=(?:yes|no) ;)"
+        r" start_time=\[[^\]\r\n]*\] ; stop_time=\[[^\]\r\n]*\] ; pid=\d+ ;"
+        r" code=[^;{}\r\n]+ ; status=[^;{}\r\n]+ \}",
+        text.strip(),
+    )
+    require(parsed is not None, error)
+    return parsed[1].encode() if isinstance(state, bytes) else parsed[1]
+
+
 def adapter_unit_state(components):
     adapter, native = components["recharge"], components["recharge-native"]
     image, revision = adapter["image"], adapter["revision"]
@@ -423,7 +436,10 @@ def adapter_unit_state(components):
     binding = inspect("recharge-native")["NetworkSettings"]["Ports"].get("3000/tcp")
     require(binding == [{"HostIp": "127.0.0.1", "HostPort": "44579"}], "native_binding_mismatch")
     require(run(["systemctl", "is-active", ADAPTER_UNIT]).strip() == b"active", "adapter_unit_not_active")
-    command = run(["systemctl", "show", "--property=ExecStart", "--value", ADAPTER_UNIT]).decode()
+    command = exec_start_spec(
+        run(["systemctl", "show", "--property=ExecStart", "--value", ADAPTER_UNIT]).decode(),
+        "adapter_unit_launch_mismatch",
+    )
     require(re.search(r"/run-recharge\.py adapter " + revision + r"(?=[ ;}]|$)", command), "adapter_unit_launch_mismatch")
     override = None
     if ADAPTER_DROP.exists() or ADAPTER_DROP.is_symlink():
@@ -449,13 +465,17 @@ def website_release_dropin(content, base, launcher):
     return content[:active.start("path")] + str(launcher) + content[active.end("path"):]
 
 
-def snapshot(include_adapter=False):
-    components = {name: identity(inspect(name)) for name in (*WEBSITE, *PROTECTED)}
+def snapshot(include_adapter=False, *, interrupted=None):
+    names = (*WEBSITE, *PROTECTED)
+    if interrupted is not None:
+        names = tuple(name for name in names if name != "recharge")
+    components = {name: identity(inspect(name)) for name in names}
     base = components["app"]["revision"]
     require(isinstance(base, str) and re.fullmatch(r"[a-f0-9]{40}", base), "invalid_live_revision")
     require(all(components[name]["running"] and components[name]["revision"] == base for name in WEBSITE),
             "website_and_sidecars_not_on_one_live_revision")
-    require("# BEGIN ID CORE RELEASE " not in GATEWAY.read_text(), "core_release_gate_active")
+    if interrupted is None:
+        require("# BEGIN ID CORE RELEASE " not in GATEWAY.read_text(), "core_release_gate_active")
     dropin = DROP.read_text()
     require(dropin.count(base) == 1, "live_service_revision_mismatch")
     live_operations = Path(website_launcher(dropin, base)["path"]).parent
@@ -472,7 +492,49 @@ def snapshot(include_adapter=False):
         state["adapterUnit"] = adapter_unit_state(components)
     require(state["nativePublication"]["identity"] == components["recharge-native"],
             "native_publication_changed_during_read")
+    if interrupted is not None:
+        validate_interrupted_snapshot(interrupted, state)
     return state
+
+
+def validate_interrupted_snapshot(interrupted, state):
+    previous = interrupted["before"]
+    revision = interrupted["sha"]
+    require(re.fullmatch(r"[a-f0-9]{40}", revision), "interrupted_release_revision_invalid")
+    components = state["components"]
+    require(all(components[name] == previous["components"][name] for name in
+                (*WEBSITE, "vendure", "formal-mysql", "media")) and
+            all(components["caddy"][key] == previous["components"]["caddy"][key] for key in
+                ("id", "image", "running", "revision")), "interrupted_release_component_changed")
+    require(state["nativePublication"] == {"identity": interrupted["native"], "imageLabelsVerified": True} and
+            components["recharge-native"]["revision"] == revision, "interrupted_native_identity_changed")
+    require(all(state[name] == previous[name] for name in ("unitSha256", "assetsSha256", "launchers")) and
+            state["mountedAssets"].get("available") is True and
+            state["mountedAssets"].get("sha256") == previous["assetsSha256"],
+            "interrupted_website_baseline_changed")
+    launcher = ROOT / "releases" / revision / "source/deploy/recharge-core/release-gate.py"
+    require(launcher.is_file() and launcher.resolve() == launcher and
+            digest(launcher) == interrupted["gateSha256"], "interrupted_ingress_gate_source_changed")
+    gate_source = GATEWAY.read_bytes()
+    require(hashlib.sha256(gate_source).hexdigest() == state["gatewaySha256"], "interrupted_ingress_gate_changed")
+    gate = runpy.run_path(str(launcher))["gated_text"]
+    try:
+        restored = gate(gate_source.decode(), revision, False)
+        canonical = gate(restored, revision, True).encode()
+    except ValueError:
+        raise ReleaseError("interrupted_ingress_gate_changed") from None
+    require(canonical == gate_source and hashlib.sha256(restored.encode()).hexdigest() == previous["gatewaySha256"],
+            "interrupted_ingress_gate_changed")
+    try:
+        inspect("recharge")
+    except ContainerMetadataError as error:
+        if error.reason != "not_found":
+            raise
+    else:
+        raise ReleaseError("interrupted_adapter_already_present")
+    require(ADAPTER_DROP.is_file() and ADAPTER_DROP.resolve() == ADAPTER_DROP and
+            digest(ADAPTER_DROP) == previous["adapterUnit"]["overrideSha256"],
+            "interrupted_adapter_override_changed")
 
 
 def check_baseline(current, expected, *, asset_mount_error=None):
@@ -781,6 +843,13 @@ def presentation_scope(plan):
 def require_asset_digest(plan, candidate_sha):
     before = plan["before"]["assetsSha256"]
     scope = presentation_scope(plan)
+    if plan.get("interruptedRelease"):
+        interruption = plan["interruptedRelease"]
+        require(scope is None and plan.get("adapter") and not plan.get("rechargeCore") and
+                before == interruption["before"]["assetsSha256"] and
+                candidate_sha != before and interruption["assetsSha256"] == candidate_sha and
+                re.fullmatch(r"[a-f0-9]{64}", candidate_sha), "interrupted_release_asset_digest_mismatch")
+        return
     if plan.get("rechargeCore"):
         require(scope is None and plan.get("adapter") and
                 plan["rechargeCore"]["assetsSha256"] == candidate_sha and
@@ -848,6 +917,9 @@ def stage(plan, release):
     live = ROOT / "releases" / base
     if scope:
         verify_presentation_bundle(live / "assets.json", artifacts / assets_name, PRESENTATION_SCOPES[scope][1])
+    elif plan.get("interruptedRelease"):
+        verify_presentation_bundle(live / "assets.json", artifacts / assets_name,
+                                   {"/admin", "/admin.js", "/shell.css", "/shell.js"})
     (source / ".runtime").mkdir(mode=0o755)
     shutil.copyfile(artifacts / assets_name, release / "assets.json")
     os.chmod(release / "assets.json", 0o644)
@@ -1128,6 +1200,9 @@ def switch_adapter(plan, source, ops, native_runtime=None):
                             if native_runtime else {"ready": True, "cardStopRouteReady": True})
                 if ready == expected:
                     break
+        except ContainerMetadataError as error:
+            if error.reason != "not_found":
+                raise
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError):
             pass
         time.sleep(1)
@@ -1511,10 +1586,10 @@ def read_website(plan, release, source, adapter=None, core=None):
     require(mount_matches(containers["app"], release / "assets.json"), "live_assets_mount_mismatch")
     live_assets = digest(release / "assets.json")
     scope = require_asset_digest(plan, live_assets)
-    if scope in PRESENTATION_MOUNT_ERRORS:
+    if scope in PRESENTATION_MOUNT_ERRORS or plan.get("interruptedRelease"):
         mounted = mounted_assets_digest()
         require(mounted.get("available") is True and mounted.get("sha256") == live_assets,
-                PRESENTATION_MOUNT_ERRORS[scope])
+                PRESENTATION_MOUNT_ERRORS.get(scope, "interrupted_release_live_asset_mismatch"))
     require(all(any(m["Destination"] == "/state" and not m["RW"] for m in containers[name]["Mounts"])
                 for name in WEBSITE[1:]), "sidecar_state_mount_not_readonly")
     hash_files = """
@@ -1612,7 +1687,12 @@ def release_website(plan, staged=None):
     sha = plan["sha"]
     before = plan["before"]
     base = before["components"]["app"]["revision"]
-    include_adapter = bool(plan.get("adapter"))
+    interrupted = plan.get("interruptedRelease")
+    include_adapter = bool(plan.get("adapter")) and interrupted is None
+    if interrupted is not None:
+        require(plan.get("adapter") and not any(plan.get(name) for name in
+                ("rechargeCore", "vendureRetryReceipt", "rechargePartnerApi", "customerProgress")),
+                "interrupted_release_scope_mixed")
     asset_mount_error = PRESENTATION_MOUNT_ERRORS.get(presentation_scope(plan))
     if plan.get("deployedNativeBuildInputs"):
         native = before.get("nativePublication", {})
@@ -1623,24 +1703,32 @@ def release_website(plan, staged=None):
                 plan["deployedNativeBuildInputs"] == {"nativeRevision": native["identity"]["revision"],
                                                        "image": native["identity"]["image"]},
                 "deployed_native_inputs_not_verified")
-    check_baseline(snapshot(include_adapter), before, asset_mount_error=asset_mount_error)
+    def confirm_baseline():
+        current = snapshot(interrupted=interrupted) if interrupted is not None else snapshot(include_adapter)
+        check_baseline(current, before, asset_mount_error=asset_mount_error)
+
+    confirm_baseline()
     release = ROOT / "releases" / sha
     source, ops = staged or stage(plan, release)
     check_native_recovery_source(plan, source)
     core = None
-    if plan.get("rechargeCore"):
+    if plan.get("rechargeCore") or interrupted is not None:
         sys.path.insert(0, str(source / "deploy/website"))
         try:
-            from recharge_core import CoreRelease
+            if interrupted is not None:
+                from interrupted_cutover import InterruptedCutover
+                core = InterruptedCutover(plan, source, ops)
+            else:
+                from recharge_core import CoreRelease
+                core = CoreRelease(plan, source, ops)
         finally:
             sys.path.pop(0)
-        core = CoreRelease(plan, source, ops)
     canary_retried = canary(sha, ops)
     if include_adapter and not core:
         adapter_canary(plan, source, ops)
     if core:
         core.prepare()
-    check_baseline(snapshot(include_adapter), before, asset_mount_error=asset_mount_error)
+    confirm_baseline()
     old = DROP.read_text()
     launcher = ops / "run-app"
     require(launcher.is_file() and os.access(launcher, os.X_OK), "staged_website_launcher_not_executable")
@@ -1654,6 +1742,8 @@ def release_website(plan, staged=None):
     with backup as install_recovery:
         install_backup_monitoring(source, sha)
         with core.cutover() if core else nullcontext() as native:
+            if interrupted is not None:
+                print("Resuming the adapter and website with the existing native runtime", flush=True)
             adapter = switch_adapter(plan, source, ops, native) if native else (
                 switch_adapter(plan, source, ops) if include_adapter else None)
             require_main(sha)
@@ -1675,7 +1765,7 @@ def release_website(plan, staged=None):
               "sourceFilesVerified": len(plan["files"]), "artifacts": plan["artifacts"],
               "qualityRun": plan["qualityRun"], "preflightCommand": plan["preflightCommand"],
               "appCanaryPassed": True, "appCanaryRetried": canary_retried,
-              "protectedComponentsUnchanged": not include_adapter,
+              "protectedComponentsUnchanged": not include_adapter and interrupted is None,
               "liveAssetsSha256": digest(release / "assets.json"),
               "backupMonitoring": monitoring,
               "backupResources": backup_resource_summary(),
@@ -1690,7 +1780,9 @@ def release_website(plan, staged=None):
     scope = presentation_scope(plan)
     if scope:
         result[scope + "Verified"] = True
-    if core:
+    if interrupted is not None:
+        result.update(adapter=adapter, interruptedRelease=core.receipt)
+    elif core:
         result.update(adapter=adapter, rechargeCore=core.receipt)
     elif adapter:
         result.update(adapter=adapter, adapterCanaryPassed=True, nativeEngineUnchanged=True,
@@ -1755,6 +1847,12 @@ def main(plan):
             require_main(plan["sha"])
             if plan["operation"] == "preflight":
                 result = snapshot(plan.get("adapter") is True)
+            elif plan["operation"] == "interrupted-preflight":
+                from interrupted_cutover import InterruptedCutover
+
+                result = snapshot(interrupted=plan["interruptedRelease"])
+                InterruptedCutover(plan | {"before": result}, None, None).prepare()
+                print("Verified the existing native runtime before resuming the interrupted release", flush=True)
             elif plan["operation"] == "inspect":
                 result = inspect_canary(plan["attemptSha"], plan.get("sampleBackupResources") is True)
             elif plan["operation"] == "repair-assets":

@@ -411,8 +411,15 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False, 
 
 def script_for(plan):
     script = Path(__file__).with_name("remote.py").read_text()
-    program = (script + "\nsys.modules['remote'] = sys.modules[__name__]\n" +
-               f"main(json.loads({json.dumps(plan)!r}))\n").encode("utf8")
+    program = script + "\nsys.modules['remote'] = sys.modules[__name__]\n"
+    if plan["operation"] == "interrupted-preflight":
+        program += "from types import ModuleType\n"
+        for name in ("vendure_admission", "recharge_core", "interrupted_cutover"):
+            source = Path(__file__).with_name(name + ".py").read_text()
+            program += (f"module = sys.modules[{name!r}] = ModuleType({name!r})\n"
+                        f"exec(compile({source!r}, {name + '.py'!r}, 'exec'), module.__dict__)\n")
+    program += f"main(json.loads({json.dumps(plan)!r}))\n"
+    program = program.encode("utf8")
     encoded = base64.b64encode(lzma.compress(program)).decode("ascii")
     checksum = hashlib.sha256(program).hexdigest()
     return ("set -eu\npython3 - <<'ID_WEBSITE_RELEASE'\n" +
@@ -423,15 +430,27 @@ def script_for(plan):
             "exec(compile(program, '<id-website-release>', 'exec'))\nID_WEBSITE_RELEASE\n")
 
 
+CONTAINER_METADATA_FAILURE = re.compile(
+    r"container_metadata_read_failed:"
+    r"(?:app|drive-backup|sheets-sync|recharge|recharge-native|vendure|formal-mysql|media|caddy|unknown):"
+    r"(?:not_found|command_failed|command_unavailable|timeout|invalid_metadata)"
+)
+
+
 def release_failure_diagnostic(invocation):
     reasons = []
     for line in invocation["StandardErrorContent"].splitlines():
+        if CONTAINER_METADATA_FAILURE.fullmatch(line):
+            reasons.append(line)
+            continue
         message = re.fullmatch(r"(?:remote\.ReleaseError: )?([a-z][a-z0-9_]+(?:: [a-z][a-z0-9_]+)?)", line)
         if message and ("_" in message[1] or line.startswith("remote.ReleaseError: ")):
             reasons.append(message[1])
     markers = {
         "Building the exact main native recharge image": "native_build_started",
         "Switching the drained native recharge runtime": "native_cutover_started",
+        "Verified the existing native runtime before resuming the interrupted release": "interrupted_preflight_verified",
+        "Resuming the adapter and website with the existing native runtime": "interrupted_peripheral_switch_started",
     }
     stdout = invocation["StandardOutputContent"].splitlines()
     phases = [markers[line] for line in stdout if line in markers]
@@ -494,13 +513,15 @@ def remote(plan):
             if status == "Success":
                 return command_id, json.loads(invocation["StandardOutputContent"].strip().splitlines()[-1])
             if status not in {"Pending", "InProgress", "Delayed", "Cancelling"}:
-                if plan.get("rechargeCore"):
+                report_details = plan.get("rechargeCore") or plan.get("interruptedRelease")
+                if report_details:
                     print(json.dumps(release_failure_diagnostic(invocation), sort_keys=True), flush=True)
                     for line in invocation["StandardOutputContent"].splitlines():
                         if re.fullmatch(r'\{"rechargePreflight": [a-zA-Z0-9_":{}, ]+\}', line):
                             print(line, flush=True)
                 for detail in invocation["StandardErrorContent"].splitlines():
-                    if re.fullmatch(r"[a-z_]+(?:: [a-z_]+)?", detail):
+                    if re.fullmatch(r"[a-z_]+(?:: [a-z_]+)?", detail) or (
+                            not report_details and CONTAINER_METADATA_FAILURE.fullmatch(detail)):
                         print(detail, flush=True)
                 raise RuntimeError(f"SSM {name} {status}: {command_id}")
         time.sleep(5)
@@ -551,6 +572,49 @@ def published_asset_receipt():
     return {"runId": ASSET_METADATA_RELEASE_RUN, **expected_receipt}
 
 
+INTERRUPTED_RELEASE_FILES = {
+    ".github/workflows/production-website-release.yml",
+    "deploy/website/interrupted_cutover.py",
+    "deploy/website/interrupted_cutover_test.py",
+    "deploy/website/interrupted_release.py",
+    "deploy/website/interrupted_release_test.py",
+    "deploy/website/recharge_core.py",
+    "deploy/website/recharge_core_test.py",
+    "deploy/website/release.py",
+    "deploy/website/release_test.py",
+    "deploy/website/remote.py",
+    "deploy/website/vendure_admission.py",
+    "docs/PRODUCTION_OPERATIONS.md",
+}
+INTERRUPTED_GATE_SOURCE = "deploy/recharge-core/release-gate.py"
+INTERRUPTED_NATIVE = {
+    "id": "1eda0d9c13d2693de133f5af566fb231b30550ab1b00defc14e88e57ad4a3984",
+    "image": "sha256:b5d33ff0bfd6b6b66f9af2a2069e707dc5a0edcf4b29a62e90c238db78fe43c8",
+    "startedAt": "2026-11-27T04:48:54.715428665Z",
+    "running": True,
+}
+
+
+def interrupted_release_plan(sha):
+    from interrupted_cutover import HELPER_FILES
+    from interrupted_release import INTERRUPTED_SHA, INTERRUPTED_WEBSITE_SHA, INTERRUPTED_NEW_ASSETS, original_baseline
+
+    require_ancestor(INTERRUPTED_SHA, sha)
+    delta = set(git("diff", "--name-only", INTERRUPTED_SHA, sha).splitlines())
+    from_live = set(git("diff", "--name-only", INTERRUPTED_WEBSITE_SHA, INTERRUPTED_SHA, "--", *CORE_PATHS).splitlines())
+    if (not delta or not delta <= INTERRUPTED_RELEASE_FILES or
+            from_live != CARD_REUSE_ROUTING_HEALTH_AND_CANARY_NATIVE_SCOPE):
+        raise RuntimeError("interrupted_release_scope_mismatch")
+    previous = original_baseline(aws, INSTANCE)
+    baseline = {name: previous[name] for name in
+                ("components", "unitSha256", "gatewaySha256", "assetsSha256", "launchers", "adapterUnit")}
+    runtime_sources = {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in HELPER_FILES}
+    return {"sha": INTERRUPTED_SHA, "before": baseline,
+            "native": INTERRUPTED_NATIVE | {"revision": INTERRUPTED_SHA},
+            "assetsSha256": INTERRUPTED_NEW_ASSETS, "runtimeSources": runtime_sources,
+            "gateSha256": runtime_sources[INTERRUPTED_GATE_SOURCE]}
+
+
 def main(sample_backup_resources=False):
     sha = os.environ["RELEASE_SHA"]
     quality_run = os.environ["QUALITY_RUN_ID"]
@@ -562,6 +626,10 @@ def main(sample_backup_resources=False):
     retry_receipt = os.environ.get("VENDURE_RETRY_RECEIPT_SHA256", "")
     partner_api = os.environ.get("RELEASE_RECHARGE_PARTNER_API") == "true"
     customer_progress = os.environ.get("RELEASE_CUSTOMER_PROGRESS") == "true"
+    resume_interrupted = os.environ.get("RESUME_INTERRUPTED_RELEASE") == "true"
+    if resume_interrupted and any((attempt, inspect_command, include_adapter, include_core, retry_receipt,
+                                  partner_api, customer_progress, sample_backup_resources)):
+        raise RuntimeError("interrupted_release_requires_its_own_operation")
     if sample_backup_resources and (not attempt or inspect_command or include_adapter or include_core or
                                     retry_receipt or partner_api or customer_progress):
         raise RuntimeError("backup_observation_requires_readonly_inspection")
@@ -589,13 +657,20 @@ def main(sample_backup_resources=False):
         command_id, diagnostic = remote(plan)
         print(json.dumps({"command": command_id, "diagnostic": diagnostic}), flush=True)
         return
-    preflight_id, before = remote({"operation": "preflight", "sha": sha, "adapter": include_adapter or include_core})
+    interrupted = interrupted_release_plan(sha) if resume_interrupted else None
+    if interrupted:
+        preflight_id, before = remote({"operation": "interrupted-preflight", "sha": sha,
+                                      "interruptedRelease": interrupted})
+    else:
+        preflight_id, before = remote({"operation": "preflight", "sha": sha, "adapter": include_adapter or include_core})
     base = before["components"]["app"]["revision"]
     print(f"Live website: {base}; free bytes: {before['freeBytes']}", flush=True)
     if base == sha:
         raise RuntimeError("requested_revision_already_running_read_back_the_existing_release")
-    presentation_scope, presentation = require_website_scope(base, sha, include_adapter, include_core,
-        partner_api=partner_api, native_publication=before.get("nativePublication")) or (None, None)
+    presentation_scope, presentation = None, None
+    if not interrupted:
+        presentation_scope, presentation = require_website_scope(base, sha, include_adapter, include_core,
+            partner_api=partner_api, native_publication=before.get("nativePublication")) or (None, None)
     if presentation_scope == "rechargeRedemptionCardImportPresentation" and (retry_receipt or customer_progress):
         raise RuntimeError("recharge_presentation_requires_plain_website")
     deferred_native = None
@@ -624,7 +699,11 @@ def main(sample_backup_resources=False):
     expected_assets = before["assetsSha256"]
     actual_assets = hashlib.sha256((OUTPUT / names[1]).read_bytes()).hexdigest()
     asset_repair = None
-    if include_core:
+    if interrupted:
+        expected_assets = interrupted["assetsSha256"]
+        if actual_assets != expected_assets:
+            raise RuntimeError("interrupted_release_asset_digest_mismatch")
+    elif include_core:
         expected_assets = actual_assets
     if presentation:
         if presentation["beforeAssetsSha256"] != expected_assets:
@@ -732,8 +811,10 @@ def main(sample_backup_resources=False):
                   "server/order-auxiliary.mjs", "server/order-recharge-client.mjs",
                   "modules/recharge/codexdaichong/gateway.mjs", "modules/recharge/codexdaichong/local-gateway.mjs",
                   *ADAPTER_FILES)
-    if include_core:
+    if include_core or interrupted:
         files = tuple(dict.fromkeys((*files, *NATIVE_RELEASE_FILES)))
+    if interrupted:
+        files += ("deploy/website/interrupted_cutover.py", INTERRUPTED_GATE_SOURCE)
     if retry_receipt or partner_api or customer_progress:
         files += VENDURE_REFRESH_FILES
     if partner_api or customer_progress:
@@ -753,8 +834,10 @@ def main(sample_backup_resources=False):
         plan["assetMetadataRepair"] = asset_repair
     if deployed_native:
         plan["deployedNativeBuildInputs"] = deployed_native
-    if include_adapter:
+    if include_adapter or interrupted:
         plan["adapter"] = {"runtimeFiles": ADAPTER_RUNTIME_FILES}
+    if interrupted:
+        plan["interruptedRelease"] = interrupted
     if include_core:
         plan["rechargeCore"] = {"assetsSha256": expected_assets}
         plan["adapter"] = {"runtimeFiles": ADAPTER_RUNTIME_FILES}
@@ -773,6 +856,17 @@ def main(sample_backup_resources=False):
     recovery = receipt.get("portableRecoveryBackup", {})
     if recovery.get("sourceRevision") != sha or recovery.get("programSha256") != plan["files"][BACKUP_OPERATION]:
         raise RuntimeError(f"backup_program_release_receipt_mismatch: {command_id}")
+    if interrupted:
+        resumed = receipt.get("interruptedRelease", {})
+        if (resumed.get("native") != interrupted["native"] or
+                any(resumed.get(name) is not True for name in ("nativeEngineUnchanged", "nativeCanaryPassed",
+                    "encryptedSnapshotVerified", "workerPollingObserved", "ingressResumed")) or
+                resumed.get("workerSourceRevision") != interrupted["sha"] or
+                receipt.get("adapter", {}).get("revision") != sha or
+                receipt.get("website", {}).get("revision") != sha or
+                receipt.get("productionBusinessTestWrites") is not False or
+                receipt.get("liveAssetsSha256") != expected_assets):
+            raise RuntimeError(f"interrupted_release_receipt_mismatch: {command_id}")
     if include_adapter and (receipt.get("adapter", {}).get("revision") != sha or
                             not receipt.get("adapterCanaryPassed") or not receipt.get("nativeEngineUnchanged")):
         raise RuntimeError(f"adapter_release_receipt_mismatch: {command_id}")
