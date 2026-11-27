@@ -24,6 +24,50 @@ CONFIG = {
 }
 
 
+class HostDependency(unittest.TestCase):
+    def test_existing_polkit_needs_no_package_changes(self):
+        with patch.object(provision.os, "access", return_value=True), patch.object(provision, "command") as command:
+            self.assertFalse(provision.prepare_host_tools(CONFIG))
+            command.assert_not_called()
+
+    def test_downloaded_packages_are_verified_before_an_install_only_transaction(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).parent, prefix=".test-") as staging:
+            package = Path(staging) / "polkit-x86_64.rpm"
+            package.touch()
+            for installed, signature, failure in (
+                    (1, "digests signatures OK", None),
+                    (0, "digests signatures OK", "manual_host_dependency_would_upgrade_existing_package"),
+                    (1, "digests OK", "manual_host_dependency_signature_invalid")):
+                with self.subTest(installed=installed, signature=signature):
+                    def system(args, **options):
+                        if args[:2] == [provision.RPM_KEYS, "--checksig"]:
+                            return f"package: {signature}", 0
+                        if args[:2] == [provision.RPM, "-qp"]:
+                            return "polkit", 0
+                        if args[:2] == [provision.RPM, "-q"]:
+                            return "", installed
+                        return "", 0
+
+                    with patch.object(provision.os, "access", side_effect=[False, True]), \
+                         patch.object(Path, "read_text", return_value='ID="amzn"\nVERSION_ID="2023"\n'), \
+                         patch.object(provision, "release_path", side_effect=lambda path, _: path), \
+                         patch.object(provision.tempfile, "mkdtemp", return_value=staging), \
+                         patch.object(provision, "command", side_effect=system) as command, \
+                         patch.object(provision, "systemctl") as systemctl:
+                        if failure:
+                            with self.assertRaisesRegex(runtime.InvalidHost, failure):
+                                provision.prepare_host_tools(CONFIG)
+                            self.assertFalse(any(call.args[0][1] == "--install" for call in command.call_args_list))
+                            systemctl.assert_not_called()
+                        else:
+                            self.assertTrue(provision.prepare_host_tools(CONFIG))
+                            self.assertEqual(command.call_args_list[-2:], [
+                                call([provision.RPM, "--install", "--test", str(package)], timeout=20),
+                                call([provision.RPM, "--install", str(package)], timeout=35),
+                            ])
+                            systemctl.assert_called_once_with("daemon-reload")
+
+
 class WorkerContract(unittest.TestCase):
     def test_worker_pins_image_and_has_only_its_own_mounts(self):
         with patch.object(runtime, "release_path", side_effect=lambda path, _: path):
