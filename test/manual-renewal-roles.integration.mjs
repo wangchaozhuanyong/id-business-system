@@ -4,8 +4,6 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
 import { join } from 'node:path';
 import test from 'node:test';
-import { initializeLocalAdmin } from '../server/local-auth.mjs';
-import { startPreview } from '../server/preview.mjs';
 
 test('authenticated host serves finance and admins only their own renewal records, workspaces and addresses', { timeout: 30_000 }, async t => {
   const runtime = new URL('../.runtime/', import.meta.url);
@@ -13,7 +11,10 @@ test('authenticated host serves finance and admins only their own renewal record
   const dir = await mkdtemp(new URL('renewal-role-qa-', runtime));
   const authPath = join(dir, 'staff.json'), canonical = new URL('https://renewal-role.example.test');
   const fixture = role => ({ name: '隔离测试 ' + role, email: role + '@example.test', password: randomUUID() });
-  const supervisor = fixture('super');
+  const superAdmin = fixture('super');
+  const restricted = ['employee', 'supervisor', 'registrar'];
+  const initialDirectory = process.cwd();
+  const initialEnvironment = process.env;
   let server;
   t.after(async () => {
     try {
@@ -22,18 +23,31 @@ test('authenticated host serves finance and admins only their own renewal record
         server.closeAllConnections();
         await closed;
       }
-    } finally { await rm(dir, { recursive: true, force: true }); }
+    } finally {
+      process.chdir(initialDirectory);
+      process.env = initialEnvironment;
+      await rm(dir, { recursive: true, force: true });
+    }
   });
-  await initializeLocalAdmin(authPath, supervisor);
+  // startPreview resolves private login settings from the environment and site observations from cwd.
+  process.chdir(dir);
+  process.env = { HOME: dir, TMPDIR: dir, TZ: 'UTC' };
+  const network = t.mock.method(globalThis, 'fetch', async () => { throw new Error('External requests are disabled in this fixture'); });
+  const { initializeLocalAdmin } = await import('../server/local-auth.mjs');
+  const { startPreview } = await import('../server/preview.mjs');
+  await initializeLocalAdmin(authPath, superAdmin);
   const preview = await startPreview(0, {
     authPath, databasePath: ':memory:', publicOrigin: canonical.origin, manualWorkspaceSocket: join(dir, 'unstarted.sock'),
     storefrontAdmissionDirectory: null, monitoringProbeSecret: null, monitoringWorkerReceiptsDirectory: null,
     monitoringBackupReceiptsDirectory: null, rechargePartnerEnabled: false, rechargeOrderSync: false
   });
   server = preview.server;
-  assert.equal(new URL(preview.url).hostname, '127.0.0.1');
+  const loopback = new URL(preview.url);
+  assert.equal(loopback.hostname, '127.0.0.1');
   const call = (path, cookie, method = 'GET', body) => new Promise((resolve, reject) => {
-    const req = httpRequest(new URL(path, preview.url), { method, agent: false, signal: AbortSignal.timeout(5000),
+    const target = new URL(path, loopback);
+    assert.equal(target.origin, loopback.origin);
+    const req = httpRequest(target, { method, agent: false, signal: AbortSignal.timeout(5000),
       headers: { Host: canonical.host, ...(cookie && { Cookie: cookie }), ...(method !== 'GET' && { Origin: canonical.origin }),
         ...(body && { 'Content-Type': 'application/json' }) } }, async res => {
       try {
@@ -51,10 +65,10 @@ test('authenticated host serves finance and admins only their own renewal record
     assert.equal(r.status, 200); assert.ok(r.cookie);
     return r.cookie;
   }
-  const root = await login(supervisor);
+  const root = await login(superAdmin);
   const sessions = { super: root };
   let secondFinance;
-  for (const role of ['admin', 'finance', 'employee']) {
+  for (const role of ['admin', 'finance', ...restricted]) {
     const account = fixture(role);
     const result = await call('/api/local/auth/employees', root, 'POST', { ...account, role });
     assert.equal(result.status, 201);
@@ -68,7 +82,7 @@ test('authenticated host serves finance and admins only their own renewal record
   const marker = /<body\s[^>]*\bdata-manual-remote-workspaces(?:\s|>|=)/i;
   assert.equal(marker.test((await call('/')).text), false);
   for (const [role, cookie] of Object.entries(sessions)) {
-    const allowed = role !== 'employee';
+    const allowed = ['super', 'admin', 'finance'].includes(role);
     const home = await call('/', cookie);
     assert.equal(home.status, 200);
     assert.equal(marker.test(home.text), allowed);
@@ -78,7 +92,8 @@ test('authenticated host serves finance and admins only their own renewal record
     assert.equal((await call(list, cookie)).status, allowed ? 200 : 403);
     assert.equal((await call(address, cookie)).status, allowed ? 200 : 403);
   }
-  for (const cookie of [sessions.finance, sessions.employee]) {
+  for (const role of ['finance', ...restricted]) {
+    const cookie = sessions[role];
     for (const [path, method] of [[base, 'GET'], [base + '?action=preferences', 'GET'],
       [base + '?action=renewals&action=preferences', 'GET'], [base + '?action=preferences&action=renewals', 'GET'],
       [base + '?action=update-json', 'POST'], [base + '?action=launch', 'POST'],
@@ -88,8 +103,10 @@ test('authenticated host serves finance and admins only their own renewal record
       assert.equal((await call(path, cookie, method, method === 'POST' ? {} : undefined)).status, 403, method + ' ' + path);
     }
   }
-  assert.equal((await call(save, sessions.employee, 'POST', form)).status, 403);
-  assert.equal((await call(address, sessions.employee, 'PUT', { count: 1 })).status, 403);
+  for (const role of restricted) {
+    assert.equal((await call(save, sessions[role], 'POST', form)).status, 403, role + ' may not register a renewal');
+    assert.equal((await call(address, sessions[role], 'PUT', { count: 1 })).status, 403, role + ' may not manage addresses');
+  }
   assert.equal((await call(address, sessions.finance, 'POST', { count: 1 })).status, 403);
   assert.equal((await call(address, sessions.finance, 'PUT', { count: 1, ownerId: 'other' })).status, 400);
   const ads = await call(address, sessions.finance, 'PUT', { count: 1 });
@@ -112,9 +129,13 @@ test('authenticated host serves finance and admins only their own renewal record
   const workspace = '/manual-workspaces/' + record.id + '/';
   for (const cookie of [sessions.finance, secondFinance]) assert.equal((await call(workspace, cookie)).status, 200);
   assert.equal((await call(workspace, sessions.admin)).status, 404);
-  assert.equal((await call(workspace, sessions.employee)).status, 403);
+  for (const role of restricted) {
+    assert.equal((await call(workspace, sessions[role])).status, 403, role + ' may not view a workspace');
+    assert.equal((await call(workspace + 'open', sessions[role], 'POST')).status, 403, role + ' may not open a workspace');
+  }
   assert.equal((await call(workspace)).status, 401);
   const adminRecord = (await call(save, sessions.admin, 'POST', form)).json().record;
   assert.equal((await call('/manual-workspaces/' + adminRecord.id + '/', sessions.admin)).status, 200);
   assert.equal((await call('/manual-workspaces/' + adminRecord.id + '/', sessions.finance)).status, 404);
+  assert.equal(network.mock.callCount(), 0, 'all fixture traffic used the loopback host');
 });

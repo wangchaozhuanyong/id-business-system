@@ -23,6 +23,8 @@
 
 在隔离测试机运行 `node --test test/manual-renewal-roles.integration.mjs`，使用测试身份登录网站，检查财务和管理员的本人续费记录、地址、套餐汇总与工作区权限，以及普通员工的拒绝结果。
 
+拉取请求在 x86_64 Linux 标准运行器上用 `test/manual-remote-desktop-linux/container-check.sh` 验证实际工作区镜像。单个测试容器的上限为 512 MiB，使用 Docker 默认安全配置和无网络环境，检查私有显示套接字、Chromium 渲染进程沙箱和正常退出。
+
 [Linux 图形验收](../../test/manual-remote-desktop-linux/run.sh) 在一次性测试机安装临时服务单元，通过两个客户端的可见画面验证账号隔离、操作接续及关闭重开。测试仅使用虚构的登录资料，完成后回收临时单元。资源读数来自工作区所在的 cgroup。
 
 ## 正式启用条件
