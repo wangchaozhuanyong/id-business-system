@@ -198,7 +198,7 @@ def runtime_sources(config):
     source = Path(config["root"])
     desktop = Path(config["desktop"])
     files = [release_path(desktop / name, stat.S_ISREG) for name in
-             ("broker.py", "egress.py", "chromium-seccomp.json", "host/runtime.py")]
+             ("broker.py", "egress.py", "chromium-seccomp.json", "host/runtime.py", "worker/recharge_proxy.py")]
     for name in ("assets", "site_packages"):
         if not config[name]:
             continue

@@ -211,7 +211,7 @@ class ProvisionContract(unittest.TestCase):
             desktop = source / "source/deploy/manual-desktop"
             assets = source / "manual-runtime/novnc"
             paths = (desktop / "broker.py", desktop / "egress.py", desktop / "chromium-seccomp.json",
-                     desktop / "host/runtime.py", assets / "core/rfb.js")
+                     desktop / "host/runtime.py", desktop / "worker/recharge_proxy.py", assets / "core/rfb.js")
             for file in (*paths, source / "excluded.bin"):
                 file.parent.mkdir(parents=True, exist_ok=True)
                 file.write_bytes(file.name.encode())
