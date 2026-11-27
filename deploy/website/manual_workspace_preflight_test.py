@@ -33,12 +33,14 @@ class WorkspacePreflightTests(unittest.TestCase):
 
     def command(self, args):
         self.commands.append(args)
+        if args[0] == "/usr/bin/journalctl":
+            self.assertIn("--unit=id-manual-broker.service", args)
+            self.assertIn("--lines=1", args)
+            return self.broker_journal
         if args == ["systemctl", "--no-pager", "--no-legend", "--plain", "list-unit-files", probe.UNIT]:
             return self.unit
         if args == ["systemctl", "--no-pager", "show", "--property=ActiveState", "--value", "docker.service"]:
             return self.daemon_state
-        if args == probe.BROKER_JOURNAL:
-            return self.broker_journal
         if args == [*probe.DOCKER, "info", "--format", probe.DOCKER_INFO]:
             return self.docker_info
         self.assertEqual(args, [*probe.DOCKER, "inspect", "--type", "container", "--format", probe.APP_VIEW, probe.APP])
@@ -108,48 +110,6 @@ class WorkspacePreflightTests(unittest.TestCase):
         with patch.object(probe.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, b"private", b"private")):
             self.assertIsNone(probe._command(["systemctl", "--version"]))
 
-    def test_broker_journal_distinguishes_python_argument_and_systemd_startup(self):
-        messages = [
-            ({"_SYSTEMD_UNIT": "id-other.service"}, "runtime.py: error: unrelated-fixture"),
-            ({"_PID": "42", "UNIT": probe.BROKER_UNIT}, "runtime.py: error: unrelated-fixture"),
-            ({"_PID": "1", "UNIT": probe.BROKER_UNIT}, "Started ID manual recharge browser broker."),
-            ({"_SYSTEMD_UNIT": probe.BROKER_UNIT},
-             "/usr/bin/python3.9: can't open file '/private/fixture/runtime.py': [Errno 13] Permission denied"),
-            ({"_PID": "1", "UNIT": probe.BROKER_UNIT},
-             "id-manual-broker.service: Main process exited, code=exited, status=2/INVALIDARGUMENT"),
-            ({"_SYSTEMD_UNIT": probe.BROKER_UNIT}, "broker.py: error: private argument"),
-            ({"_PID": "1", "OBJECT_SYSTEMD_UNIT": probe.BROKER_UNIT},
-             "id-manual-broker.service: Main process exited, code=exited, status=226/NAMESPACE"),
-            ({"_SYSTEMD_UNIT": probe.BROKER_UNIT}, ["nontext-ignored"]),
-            ({"_SYSTEMD_UNIT": probe.BROKER_UNIT}, "private unknown message"),
-            ({"_PID": "1", "UNIT": probe.BROKER_UNIT},
-             "id-manual-broker.service: Failed with result 'exit-code'."),
-        ]
-        self.broker_journal = "\n".join(json.dumps({**fields, "MESSAGE": message}) for fields, message in messages)
-        result = self.inspect()["observed"]["brokerStartup"]
-        self.assertEqual(result, {"journalReadable": True, "recentCategories": [
-            "systemd_failure", "systemd_sandbox_failure", "broker_argument_error",
-            "systemd_exit_2", "python_open_permission", "systemd_lifecycle",
-        ]})
-        for text in ("private", "fixture", "INVALIDARGUMENT", "id-other.service"):
-            self.assertNotIn(text, json.dumps(result))
-        self.assertIn(["/usr/bin/journalctl", "--quiet", "--no-pager", "--boot", "--since=-2h", "--lines=24",
-                       "--unit=id-manual-broker.service", "--output=json",
-                       "--output-fields=MESSAGE,_SYSTEMD_UNIT,UNIT,OBJECT_SYSTEMD_UNIT,_PID"], self.commands)
-
-    def test_broker_journal_is_bounded_and_missing_output_is_explicit(self):
-        self.assertEqual(self.inspect()["observed"]["brokerStartup"],
-                         {"journalReadable": False, "recentCategories": []})
-        self.broker_journal = ""
-        self.assertEqual(self.inspect()["observed"]["brokerStartup"],
-                         {"journalReadable": True, "recentCategories": []})
-        self.broker_journal = "unstructured-fixture\n" * probe.BROKER_JOURNAL_LINES + "{}"
-        self.assertEqual(self.inspect()["observed"]["brokerStartup"],
-                         {"journalReadable": False, "recentCategories": []})
-        sized = subprocess.CompletedProcess([], 0, b"a" * (probe.BROKER_JOURNAL_BYTES + 1), b"")
-        with patch.object(probe.subprocess, "run", return_value=sized):
-            self.assertIsNone(probe._command(probe.BROKER_JOURNAL))
-
     def test_workspace_package_log_reports_only_a_fixed_diagnostic(self):
         self.write("usr/bin/pkcheck", "fixture")
         (self.root / "usr/bin/pkcheck").chmod(0o755)
@@ -159,6 +119,30 @@ class WorkspacePreflightTests(unittest.TestCase):
         self.assertTrue(details["executables"]["pkcheck"])
         self.assertEqual(details["packageDownload"], "repository_access")
         self.assertNotIn("private", json.dumps(details))
+
+    def test_broker_startup_reports_only_a_known_argument_error(self):
+        self.broker_journal = "broker.py: error: Invalid recharge input directory or blocked network"
+        self.assertEqual(self.inspect()["observed"]["brokerStartupError"], "invalid_input_directory_or_network")
+        self.broker_journal += " with a private detail"
+        self.assertIsNone(self.inspect()["observed"]["brokerStartupError"])
+        self.broker_journal = ("/usr/bin/python3.9: can't open file '/private/deploy/manual-desktop/host/runtime.py': "
+                               "[Errno 13] Permission denied")
+        self.assertEqual(self.inspect()["observed"]["brokerStartupError"], "runtime_file_permission_denied")
+
+    def test_broker_release_access_probes_run_as_the_broker_identity(self):
+        self.write("usr/bin/setpriv", "fixture")
+        (self.root / "usr/bin/setpriv").chmod(0o755)
+
+        def access(args):
+            self.assertEqual(args[:5], ["/usr/bin/setpriv", "--reuid=10001", "--regid=10001",
+                                       "--clear-groups", "/usr/bin/test"])
+            return "" if args[5] == "-x" else None
+
+        result = probe._broker_release_access(self.root, access, "f" * 40)
+        self.assertTrue(result["releaseParent"])
+        self.assertTrue(result["runtimePython"])
+        self.assertFalse(result["brokerLauncher"])
+        self.assertFalse(result["brokerCode"])
 
     def test_stopped_app_stale_socket_and_pid_reuse_do_not_prove_configuration(self):
         self.unit = ""

@@ -1,5 +1,6 @@
 """Run only as a service in the dedicated offline, booted Amazon Linux CI fixture."""
 
+import ast
 import json
 import os
 from pathlib import Path
@@ -7,6 +8,8 @@ import platform
 import subprocess
 import sys
 import traceback
+from types import SimpleNamespace
+from unittest.mock import patch
 
 
 ROOT = Path("/opt/id-business-independent/releases/" + "1" * 40)
@@ -23,6 +26,7 @@ WantedBy=multi-user.target
 """
 sys.path.insert(0, str(DESKTOP / "host"))
 import provision
+import runtime
 
 
 def run(*args, check=True):
@@ -60,6 +64,23 @@ def check_state(expected_state, expected_enablement):
     print(f"fixture={expected_state} broker_state={actual_state} is_enabled={value!r} exit={code}")
 
 
+def broker_journal(config):
+    # Print only fixed argparse reasons from this release. Never print journal lines or argv values.
+    source = ast.parse((DESKTOP / "broker.py").read_text())
+    known = {node.args[0].value for node in ast.walk(source) if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Attribute) and node.func.attr == "error" and node.args
+             and isinstance(node.args[0], ast.Constant) and isinstance(node.args[0].value, str)}
+    records = run("/usr/bin/journalctl", "-b", "--no-pager", "-u", provision.BROKER_UNIT,
+                  "-n", "60", "-o", "cat", check=False)
+    errors = set()
+    for line in records.stdout.splitlines():
+        if ": error: " in line:
+            reason = line.split(": error: ", 1)[1]
+            errors.add(reason if reason in known else "other_argparse_error")
+    print(json.dumps({"broker_argv_count": len(runtime.broker_arguments(config)) - 1,
+                      "broker_cli_errors": sorted(errors), "journal_exit": records.returncode}))
+
+
 def main():
     assert os.geteuid() == 0 and platform.machine() == "x86_64"
     assert Path("/proc/1/comm").read_text().strip() == "systemd"
@@ -89,43 +110,47 @@ def main():
     assert provision.prepare_host_tools({"root": str(ROOT), "desktop": str(DESKTOP)}) is False
     print("polkit=loaded real_daemon_reload=passed")
 
-    stage_unit(provision.BROKER_UNIT)
-    stage_unit(provision.WORKER_UNIT)
+    assert run("/usr/bin/rpm", "-q", "--qf", "%{NAME}", "dbus-broker").stdout == "dbus-broker"
+    run(provision.SYSTEMCTL, "start", "dbus.socket", "dbus-broker.service")
+    config = provision.release_config(SimpleNamespace(
+        release_root=ROOT, assets=ROOT / "manual-runtime/novnc", site_packages=ROOT / "manual-runtime/site-packages",
+        python="/usr/bin/python3", image_id="sha256:" + "1" * 64, max_active=1, min_available_mib=512,
+        block_network=["203.0.113.1/32"]))
+    try:
+        # The guest has no Docker daemon/worker image. Only its pre-install host capability check is substituted.
+        # The release installer writes all files, creates the user and directories, starts systemd and verifies Polkit.
+        with patch.object(provision, "check_host") as preflight:
+            assert provision.install(config) is True
+            preflight.assert_called_once_with(config, available=False)
+        for path, contents in provision.managed_files(config).items():
+            assert provision.installed(path) == contents
+        check_state("active", "enabled")
+        for route, key in (("renewal", "renewalWorkspace"), ("recharge", "rechargeBootstrap")):
+            status, body = provision.probe(provision.BRIDGE / "site.sock", f"/v1/{route}/status")
+            assert status == 200 and json.loads(body) == {key: 1}, (route, status)
+        print("actual_broker_unit=active actual_runtime=cp39 renewal=200 recharge=200 polkit_policy=passed")
+    finally:
+        broker_journal(config)
+
+    # Check the active-worker guard without starting a business workspace or touching the installed template.
+    instance = "id-manual-workspace@manual-v1-" + "f" * 64 + ".service"
+    stage_unit(instance)
     run(provision.SYSTEMCTL, "daemon-reload")
-    check_state("inactive", "disabled")
-    run(provision.SYSTEMCTL, "enable", "--now", provision.BROKER_UNIT)
-    check_state("active", "enabled")
     provision.require_no_workers()
-    run(provision.SYSTEMCTL, "start", provision.PROBE_UNIT)
+    run(provision.SYSTEMCTL, "start", instance)
     try:
         provision.require_no_workers()
     except provision.InvalidHost as error:
         assert str(error) == "active_workspace_units_present"
     else:
         raise AssertionError("active_workspace_was_not_detected")
-    run(provision.SYSTEMCTL, "stop", provision.PROBE_UNIT)
+    run(provision.SYSTEMCTL, "stop", instance)
     provision.require_no_workers()
     run(provision.SYSTEMCTL, "stop", provision.BROKER_UNIT)
     check_state("inactive", "enabled")
+    run(provision.SYSTEMCTL, "disable", provision.BROKER_UNIT)
+    check_state("inactive", "disabled")
     print("worker_active_and_stopped=passed")
-
-    # Use the same service identity as a provisioned host for its system-bus connection.
-    provision.ensure_sysusers_directory()
-    provision.SYSUSERS_FILE.write_text(
-        f'g {provision.USER} {provision.GID}\nu {provision.USER} {provision.UID}:{provision.GID} "CI broker" -\n')
-    run(provision.SYSUSERS, str(provision.SYSUSERS_FILE))
-    provision.existing_identity(required=True)
-    assert run("/usr/bin/rpm", "-q", "--qf", "%{NAME}", "dbus-broker").stdout == "dbus-broker"
-    run(provision.SYSTEMCTL, "start", "dbus.socket", "dbus-broker.service")
-    probe = subprocess.run([provision.SYSTEMCTL, "--no-ask-password", "--no-pager", "show", "-p", "LoadState",
-                            "--value", provision.PROBE_UNIT], user=provision.UID, group=provision.GID, extra_groups=[],
-                           text=True, capture_output=True, timeout=8)
-    print(json.dumps({"broker_uid": provision.UID, "worker_template_load_state": probe.stdout.strip(),
-                      "systemctl_exit": probe.returncode, "stderr": probe.stderr.strip()[:512]}))
-    assert probe.returncode == 0 and probe.stdout.strip() == "loaded", "broker_cannot_query_template"
-    # With the actual manager and newly loaded template, the same unprivileged broker must report ready.
-    subprocess.run(["/usr/bin/python3", "-IBu", "/fixture/broker-check.py", "--with-systemd"],
-                   user=10001, group=10001, extra_groups=[], check=True, timeout=25)
     Path("/fixture/systemd-first-install.passed").touch(exist_ok=False)
 
 
