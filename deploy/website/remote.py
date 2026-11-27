@@ -479,7 +479,10 @@ def check_baseline(current, expected, *, asset_mount_error=None):
     require(all(current[key] == expected[key] for key in
                 ("components", "unitSha256", "gatewaySha256", "assetsSha256", "launchers")),
             "live_baseline_changed")
-    require(current.get("adapterUnit") == expected.get("adapterUnit"), "live_adapter_unit_changed")
+    if current.get("adapterUnit") != expected.get("adapterUnit"):
+        changed = [label for key, label in (("commandSha256", "command"), ("overrideSha256", "override"))
+                   if (current.get("adapterUnit") or {}).get(key) != (expected.get("adapterUnit") or {}).get(key)]
+        raise ReleaseError("live_adapter_unit_changed" + (": " + "_".join(changed) if changed else ""))
     if asset_mount_error:
         require(current.get("mountedAssets") == expected.get("mountedAssets"), asset_mount_error)
 
