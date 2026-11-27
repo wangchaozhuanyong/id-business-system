@@ -68,7 +68,7 @@ import { NativeBrowserError, closeNativeBrowser, getActiveBrowser } from './nati
 import {
   attachPrototypeWsBridge,
   launchPrototypeWorkbenchSession,
-  verifyChatGptLogin
+  verifyOwnedWorkbenchLogin
 } from './native-browser-session.mjs';
 
 function requireSecurityConfirmation(response) {
@@ -864,7 +864,8 @@ export async function startPreview(
         return response.writeHead(405, { Allow: 'POST' }).end();
       }
       const action = route.slice('/api/local/native-workbench-prototype/'.length);
-      const ownerId = actor?.id || 'local-operator';
+      const ownerId = actor?.id || (auth ? '' : 'local-operator');
+      if (!ownerId) return forbidden();
       const sendJson = (status, payload) => {
         response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
         return response.end(JSON.stringify(payload));
@@ -889,20 +890,17 @@ export async function startPreview(
           }
           if (action === 'close') {
             const profileKey = String(body?.profileKey || '');
-            const browser = profileKey.startsWith('proto_') ? getActiveBrowser(profileKey) : null;
-            if (browser && (!browser.ownerId || browser.ownerId === ownerId)) {
-              return sendJson(200, { ok: true, closed: closeNativeBrowser(profileKey) });
-            }
-            return sendJson(200, { ok: true, closed: false });
+            const closed = profileKey.startsWith('proto_') && closeNativeBrowser(profileKey, ownerId);
+            return sendJson(200, { ok: true, closed });
           }
           if (action === 'verify-login') {
             const profileKey = String(body?.profileKey || '');
-            const browser = profileKey.startsWith('proto_') ? getActiveBrowser(profileKey) : null;
-            if (!browser || (browser.ownerId && browser.ownerId !== ownerId)) {
-              return sendJson(404, { error: '浏览器实例未运行' });
+            if (!profileKey.startsWith('proto_')) {
+              return sendJson(404, { error: '浏览器实例未运行或已关闭' });
             }
-            return sendJson(200, await verifyChatGptLogin({
-              port: browser.port,
+            return sendJson(200, await verifyOwnedWorkbenchLogin({
+              profileKey,
+              ownerId,
               expectedEmail: body?.expectedEmail || ''
             }));
           }
@@ -1071,23 +1069,21 @@ export async function startPreview(
         return;
       }
       const actor = auth ? auth.getActor(request) : null;
-      const canManage = !auth || managesBusiness(actor);
-      if (!canManage) {
+      const ownerId = actor?.id || (auth ? '' : 'local-operator');
+      const requestOrigin = secureOrigin || `http://${request.headers.host}`;
+      if (!ownerId || (auth && !managesBusiness(actor)) ||
+          (request.headers.origin && request.headers.origin !== requestOrigin)) {
         socket.destroy();
         return;
       }
       const profileKey = reqUrl.searchParams.get('profileKey') || '';
-      if (!profileKey.startsWith('proto_') && !profileKey.startsWith('chatgpt_')) {
+      if (!getActiveBrowser(profileKey, ownerId)) {
         socket.destroy();
         return;
       }
       const ws = acceptWebSocketUpgrade(request, socket, head);
       if (!ws) return;
-      void attachPrototypeWsBridge({
-        ws,
-        profileKey,
-        ownerId: actor?.id || 'local-operator'
-      });
+      void attachPrototypeWsBridge({ ws, profileKey, ownerId });
       return;
     }
     if (

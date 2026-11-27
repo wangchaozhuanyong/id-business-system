@@ -1,10 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { acceptWebSocketUpgrade } from '../server/native-ws.mjs';
 import {
   findChromeExecutable,
-  getFreePort,
-  waitForDebuggerReady,
+  getPageTargetWsUrl,
+  injectCookiesAndNavigate,
+  waitForProfileDebugger,
   NativeBrowserError,
   resolveDynamicProxySession,
   parseProxyServerConfig,
@@ -19,17 +23,21 @@ test('findChromeExecutable returns string or null', () => {
   }
 });
 
-test('getFreePort provides a valid free port', async () => {
-  const port = await getFreePort();
-  assert.equal(typeof port, 'number');
-  assert.ok(port > 1024 && port < 65536);
-});
+const oldBrowser = '/devtools/browser/11111111-1111-4111-8111-111111111111';
+const newBrowser = '/devtools/browser/22222222-2222-4222-8222-222222222222';
 
-test('waitForDebuggerReady resolves when debug endpoint responds', async () => {
+test('a stale DevTools marker never establishes a session, and a fresh marker must match the browser endpoint', async () => {
+  const temporaryRoot = path.resolve('.runtime');
+  await mkdir(temporaryRoot, { recursive: true, mode: 0o700 });
+  const profileDir = await mkdtemp(path.join(temporaryRoot, 'test-devtools-marker-'));
+  const markerFile = path.join(profileDir, 'DevToolsActivePort');
+  let debuggerPath = oldBrowser;
+  let requests = 0;
   const server = http.createServer((req, res) => {
+    requests++;
     if (req.url === '/json/version') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ webSocketDebuggerUrl: 'ws://127.0.0.1:9222/devtools/browser/fake' }));
+      res.end(JSON.stringify({ webSocketDebuggerUrl: 'ws://' + req.headers.host + debuggerPath }));
       return;
     }
     res.writeHead(404);
@@ -42,21 +50,90 @@ test('waitForDebuggerReady resolves when debug endpoint responds', async () => {
     });
   });
 
+  const oldMarker = port + '\n' + oldBrowser;
+  const rejectUnverified = () => assert.rejects(
+    waitForProfileDebugger(profileDir, oldMarker, () => true, 100),
+    (err) => err instanceof NativeBrowserError && err.status === 500
+  );
   try {
-    const data = await waitForDebuggerReady(port, 3000);
-    assert.equal(data.webSocketDebuggerUrl, 'ws://127.0.0.1:9222/devtools/browser/fake');
+    await writeFile(markerFile, oldMarker);
+    await rejectUnverified();
+    assert.equal(requests, 0, 'never query the port in the preserved stale marker');
+    await writeFile(markerFile, port + '\n' + newBrowser);
+    await rejectUnverified();
+    assert.ok(requests > 0, 'reject a listener that reports the wrong browser identity');
+    debuggerPath = newBrowser;
+    assert.deepEqual(await waitForProfileDebugger(profileDir, oldMarker, () => true, 3000), {
+      port, browserDebuggerPath: newBrowser
+    });
+  } finally {
+    server.close();
+    await rm(profileDir, { recursive: true });
+  }
+});
+
+test('page target lookup refuses a reused port and never creates a page on it', async () => {
+  const pagePath = '/devtools/page/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+  const requests = [];
+  let debuggerPath = oldBrowser;
+  let changeDuringLookup = true;
+  let pageAvailable = true;
+  const server = http.createServer((req, res) => {
+    requests.push([req.method, req.url]);
+    res.setHeader('Content-Type', 'application/json');
+    if (req.url === '/json/version') {
+      res.end(JSON.stringify({ webSocketDebuggerUrl: 'ws://' + req.headers.host + debuggerPath }));
+    } else if (req.url === '/json/list') {
+      if (changeDuringLookup) debuggerPath = newBrowser;
+      res.end(JSON.stringify(pageAvailable ?
+        [{ type: 'page', webSocketDebuggerUrl: 'ws://' + req.headers.host + pagePath }] : []));
+    } else {
+      assert.fail('Unexpected DevTools request');
+    }
+  });
+  const port = await new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => resolve(server.address().port));
+  });
+  try {
+    await assert.rejects(getPageTargetWsUrl(port, oldBrowser), /调试身份无法核对/);
+    assert.deepEqual(requests.splice(0), [['GET', '/json/version'], ['GET', '/json/list'], ['GET', '/json/version']]);
+    changeDuringLookup = false;
+    await assert.rejects(getPageTargetWsUrl(port, oldBrowser), /调试身份无法核对/);
+    assert.deepEqual(requests.splice(0), [['GET', '/json/version']]);
+    assert.equal(await getPageTargetWsUrl(port, newBrowser), 'ws://127.0.0.1:' + port + pagePath);
+    requests.length = 0;
+    pageAvailable = false;
+    await assert.rejects(getPageTargetWsUrl(port, newBrowser), /未找到可用的/);
+    assert.deepEqual(requests, [['GET', '/json/version'], ['GET', '/json/list']]);
   } finally {
     server.close();
   }
 });
 
-test('waitForDebuggerReady throws when endpoint unreachable', async () => {
-  // Use a port that is unlikely to be running
-  const port = await getFreePort();
-  await assert.rejects(
-    () => waitForDebuggerReady(port, 400),
-    (err) => err instanceof NativeBrowserError && err.status === 500
-  );
+test('cookie and navigation setup settles if the debugger closes or stops replying', async () => {
+  const commands = [];
+  const server = http.createServer();
+  let closeOnCommand = true;
+  server.on('upgrade', (request, socket, head) => {
+    const ws = acceptWebSocketUpgrade(request, socket, head);
+    ws.onMessage((raw) => {
+      commands.push(JSON.parse(raw).method);
+      if (closeOnCommand) ws.close();
+    });
+  });
+  const port = await new Promise((resolve) => {
+    server.listen(0, '127.0.0.1', () => resolve(server.address().port));
+  });
+  const endpoint = 'ws://127.0.0.1:' + port + '/devtools/page/fixture';
+  try {
+    await assert.rejects(injectCookiesAndNavigate(endpoint, [], 'about:blank', 2000), /调试连接已关闭/);
+    assert.deepEqual(commands, ['Network.enable']);
+    closeOnCommand = false;
+    await assert.rejects(injectCookiesAndNavigate(endpoint, [], 'about:blank', 200), /调试操作超时/);
+    assert.deepEqual(commands, ['Network.enable', 'Network.enable']);
+  } finally {
+    server.close();
+  }
 });
 
 test('resolveDynamicProxySession rotates dynamic mobile proxy session IDs with CSPRNG', () => {
