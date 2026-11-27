@@ -1,5 +1,7 @@
+import stat
 import unittest
-from unittest.mock import call, patch
+from types import SimpleNamespace
+from unittest.mock import Mock, call, patch
 
 import interrupted_cutover as recovery
 from remote import ReleaseError
@@ -26,6 +28,19 @@ class InterruptedCutoverTests(unittest.TestCase):
         }
         self.release = recovery.InterruptedCutover(self.plan, candidate / "source", candidate / "operations")
 
+    def test_archive_allows_root_group_write_without_loosening_live_config(self):
+        path = Mock()
+        path.resolve.return_value = path
+        path.lstat.return_value = SimpleNamespace(st_uid=0, st_gid=0, st_mode=stat.S_IFREG | 0o664)
+        self.assertIs(recovery.trusted_file(path, archived=True), path)
+        with self.assertRaisesRegex(ReleaseError, "interrupted_release_file_untrusted"):
+            recovery.trusted_file(path)
+        for mode, gid, uid in ((0o666, 0, 0), (0o664, 993, 0), (0o664, 0, 993)):
+            path.lstat.return_value = SimpleNamespace(st_uid=uid, st_gid=gid, st_mode=stat.S_IFREG | mode)
+            with self.subTest(mode=mode, gid=gid, uid=uid):
+                with self.assertRaisesRegex(ReleaseError, "interrupted_archive_source_untrusted"):
+                    recovery.trusted_file(path, archived=True)
+
     def test_distinguishes_gate_program_and_config_digests(self):
         self.assertEqual(self.release.gated_digest, "current-gated-config")
         self.assertEqual(self.release.gate_script_digest, "reviewed-gate-program")
@@ -36,7 +51,7 @@ class InterruptedCutoverTests(unittest.TestCase):
         preflight = recovery.InterruptedCutover(self.plan, None, None)
         with (
             patch.object(recovery, "require_main"),
-            patch.object(recovery, "trusted_file", side_effect=lambda path: path),
+            patch.object(recovery, "trusted_file", side_effect=lambda path, **options: path),
             patch.object(recovery, "digest", return_value="reviewed-source") as digest,
             patch.object(preflight, "require_native_unchanged", side_effect=ReleaseError("fixture_stop")),
         ):
