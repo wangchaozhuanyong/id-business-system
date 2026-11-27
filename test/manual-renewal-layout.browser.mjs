@@ -178,6 +178,13 @@ test('手动充值 A 布局在桌面和手机使用相同的续费资料与地�
       }
       await pane.waitFor({ state: 'hidden' });
       await host.getByRole('tab', { name: /^未使用/ }).waitFor();
+      const addressHelp = host.locator('[data-address-help] summary');
+      const addressBox = await addressTab.boundingBox(), infoBox = await addressHelp.boundingBox();
+      assert(infoBox && Math.abs(infoBox.x - addressBox.x - addressBox.width) <= 8, '地址说明紧邻地址页签');
+      await addressHelp.click();
+      assert(await addressHelp.evaluate(node => node.parentElement.open));
+      await page.keyboard.press('Escape');
+      assert.equal(await addressHelp.evaluate(node => node.parentElement.open), false);
       await addressTab.focus();
       await addressTab.press('ArrowRight');
       await first.waitFor();

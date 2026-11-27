@@ -89,6 +89,9 @@
 #bit-addresses-panel .bit-address-heading { justify-content: flex-start; padding-block: 0; }
 .bit-address-heading-tools { display: flex; flex: 1; align-items: center; gap: 8px; }
 .bit-address-heading-tools #bit-address-generate-open { margin-inline-start: auto; }
+.bit-address-heading .bit-management-tabs { --management-tab-gap: 24px; gap: 0; }
+.bit-management-tabs [data-pane="renewals"] { margin-inline-start: var(--management-tab-gap); }
+.bit-management-tabs [data-address-help] { align-self: center; margin-inline-start: 4px; }
 #bit-addresses-panel [hidden], .bit-entry-panel > [role="tabpanel"][hidden] { display: none !important; }
 .bit-entry-panel > .panel-body > .title-with-help { margin-bottom: 20px; }
 .bit-entry-panel h2 { margin: 0; font-size: 16px; }
@@ -137,7 +140,7 @@
 @media (max-width: 420px) {
   .bit-entry-panel .bit-entry-heading { padding-inline: 10px; }
   #bit-addresses-panel .bit-address-heading { flex-wrap: nowrap; gap: 4px; padding-inline: 10px; }
-  .bit-address-heading .bit-management-tabs { flex: 0 1 auto; gap: 9px; }
+  .bit-address-heading .bit-management-tabs { flex: 0 1 auto; --management-tab-gap: 9px; }
   .bit-address-heading-tools { gap: 2px; }
   .bit-address-heading-tools .button { padding-inline: 6px; min-width: 44px; min-height: 44px; }
   .bit-generate-suffix { display: none; }

@@ -51,13 +51,10 @@
       <header class="panel-heading bit-workspace-heading bit-address-heading">
         <div class="tabs bit-management-tabs" role="tablist" aria-label="右侧管理">
           <button class="tab" type="button" role="tab" id="bit-address-heading" aria-controls="bit-address-content" data-pane="address">地址管理</button>
+          <div data-address-help hidden>${A.titleInfo('地址管理', '生成美国账单地址模板。复制成功后自动移入已使用，使用前请核对。', 'bit-address-help')}</div>
           <button class="tab" type="button" role="tab" id="bit-renewals-heading" aria-controls="bit-renewals-content" data-pane="renewals">账号续费管理</button>
         </div>
-        <div class="bit-address-heading-tools" data-address-tool>${A.titleInfo(
-          '地址管理',
-          '生成美国账单地址模板。复制成功后自动移入已使用，使用前请核对。',
-          'bit-address-help'
-        )}
+        <div class="bit-address-heading-tools" data-address-tool>
         <button type="button" class="button primary compact" id="bit-address-generate-open" data-action="bit-address-open-generate" aria-label="生成地址" aria-haspopup="dialog">生成<span class="bit-generate-suffix">地址</span></button></div>
         <div data-renewal-help>${A.titleInfo('账号续费管理', '数量按当前操作员全部登记账号统计。套餐与状态以登记为准，完成手动续费后请更新记录。', 'bit-renewal-help')}</div>
       </header>
@@ -144,7 +141,7 @@
     const tab = tools.querySelector('[data-pane="' + name + '"]');
     if (tab.getAttribute('aria-selected') === 'true') return;
     const renewals = host.querySelector('#bit-renewals-content');
-    for (const button of tools.children) {
+    for (const button of tools.querySelectorAll('[role="tab"]')) {
       const active = button === tab;
       button.classList.toggle('active', active);
       button.setAttribute('aria-selected', String(active));
@@ -152,6 +149,7 @@
       host.querySelector('#' + button.getAttribute('aria-controls')).hidden = !active;
     }
     host.querySelector('[data-address-tool]').hidden = name !== 'address';
+    host.querySelector('[data-address-help]').hidden = name !== 'address';
     host.querySelector('[data-renewal-help]').hidden = name !== 'renewals';
     host.querySelector('#bit-addresses-panel').setAttribute('aria-labelledby', tab.id);
     if (name === 'renewals') {
