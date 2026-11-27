@@ -10,14 +10,14 @@ import subprocess
 
 SYSTEM_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 APP = "id-business-independent-app"
-SOCKET = "run/id-bridge/site.sock"
+SOCKET = "run/id-manual-bridge/site.sock"
 UNIT = "id-manual-workspace@.service"
 DOCKER = ("docker", "--config", "/var/empty/id-manual-preflight", "--host", "unix:///var/run/docker.sock")
 DOCKER_INFO = ("{{.CgroupVersion}}|{{.MemoryLimit}}|{{.SwapLimit}}|{{.PidsLimit}}|"
                "{{range .SecurityOptions}}{{if eq (index (split . \",\" ) 0) \"name=seccomp\"}}seccomp{{end}}{{end}}")
 APP_VIEW = ('{{.State.Running}}|{{.State.Pid}}|{{range .Mounts}}{{if eq .Type "bind"}}'
-            '{{if eq .Destination "/run/id-bridge"}}directory{{end}}'
-            '{{if eq .Destination "/run/id-bridge/site.sock"}}socket{{end}}{{end}}{{end}}')
+            '{{if eq .Destination "/run/id-manual-bridge"}}directory{{end}}'
+            '{{if eq .Destination "/run/id-manual-bridge/site.sock"}}socket{{end}}{{end}}{{end}}')
 MEMORY = ("MemTotal", "MemAvailable", "SwapTotal", "SwapFree")
 FAMILY = {"amzn": "amazon-linux", "debian": "debian", "ubuntu": "ubuntu", "rhel": "rhel",
           "rocky": "rhel", "almalinux": "rhel", "centos": "rhel", "fedora": "fedora",

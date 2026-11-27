@@ -11,7 +11,7 @@ RUN apt-get update \
       --shell /usr/sbin/nologin workspace \
  && install -d -m 0700 -o workspace -g workspace /profile /run/workspace
 
-COPY worker.py /usr/local/lib/manual-desktop/worker.py
+COPY worker.py recharge_proxy.py /usr/local/lib/manual-desktop/
 USER 10001:10001
 RUN /usr/bin/python3 -IB -c 'import runpy; runpy.run_path("/usr/local/lib/manual-desktop/worker.py")'
 STOPSIGNAL SIGTERM

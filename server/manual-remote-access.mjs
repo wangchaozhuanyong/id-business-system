@@ -1,18 +1,21 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { request as sendRequest } from 'node:http';
+import { isIP } from 'node:net';
 import { isAbsolute } from 'node:path';
 import { canManageManualRenewals } from './access-roles.mjs';
-import { manualDesktopOwnerKey } from './manual-desktop-workspace.mjs';
+import { manualDesktopOwnerKey, manualDesktopWorkspaceKey } from './manual-desktop-workspace.mjs';
 
 export const manualWorkspacePrefix = '/manual-workspaces/';
 const routePattern = /^\/manual-workspaces\/([A-Za-z0-9_-]{1,128})\/(.*)$/;
 const assetPattern = /^client\/((?:core|vendor)\/(?:[A-Za-z0-9_][A-Za-z0-9._-]*\/)*[A-Za-z0-9_][A-Za-z0-9._-]*\.js)$/;
 const keyPattern = /^manual-v1-[a-f0-9]{64}$/;
+const rechargeIdPattern = /^recharge-[a-f0-9]{64}$/;
 const wsAccept = key => createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
 const errors = new Map([[400, '工作区请求无效。'], [401, '请先登录业务系统，再打开工作区。'],
   [403, '无权访问此工作区。'], [404, '找不到此记录或资源。'], [405, '不支持此操作。'],
   [409, '桌面连接已断开，请重新连接。'],
   [423, '你已有另一个账号工作区正在运行。请回到该账号的工作区，点击「保存并关闭工作区」，再连接此账号。'],
+  [422, '所选代理或账号授权未通过核验，请重新检查。'],
   [429, '可用工作区已满，请稍后重试。'],
   [503, '桌面服务暂不可用，请稍后重试。']]);
 
@@ -29,9 +32,11 @@ const scale = document.getElementById('scale');
 const stop = document.getElementById('stop');
 let desktop;
 let stopping = false;
+const recharge = location.pathname.startsWith('/manual-workspaces/recharge-');
 function reset(message) {
   desktop = null;
-  keyboard.hidden = scale.hidden = stop.hidden = true;
+  keyboard.hidden = scale.hidden = true;
+  stop.hidden = !recharge;
   stop.disabled = false;
   keyboardInput.value = '';
   toggle.disabled = false;
@@ -46,6 +51,7 @@ toggle.addEventListener('click', async () => {
     const { default: RFB } = await import('./client/core/rfb.js');
     const response = await fetch('./open', { method: 'POST', credentials: 'same-origin' });
     if (!response.ok) throw new Error(await response.text());
+    const prepared = response.status === 200 ? await response.json() : null;
     const url = new URL('./stream', location.href);
     url.protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
     const rfb = new RFB(document.getElementById('screen'), url.href);
@@ -55,7 +61,9 @@ toggle.addEventListener('click', async () => {
     rfb.addEventListener('connect', () => {
       toggle.disabled = false;
       toggle.textContent = '断开连接';
-      status.textContent = '已连接';
+      status.textContent = prepared
+        ? '已连接 · 出口 ' + prepared.exitIp + ' · ' + prepared.country + ' · 请在 ChatGPT 中核对账号'
+        : '已连接';
       scale.textContent = '原始大小';
       keyboard.hidden = scale.hidden = stop.hidden = false;
       fetch('./connected', { method: 'POST', credentials: 'same-origin' }).then(result => {
@@ -75,7 +83,7 @@ toggle.addEventListener('click', async () => {
   }
 });
 stop.addEventListener('click', async () => {
-  if (!desktop || stopping || !window.confirm('保存并关闭此账号的工作区？其他设备上此账号的连接也会断开。下次连接会恢复浏览器保存的网页。')) return;
+  if ((!desktop && !recharge) || stopping || !window.confirm('保存并关闭此账号的工作区？其他设备上此账号的连接也会断开。下次连接会恢复浏览器保存的网页。')) return;
   const current = desktop;
   stopping = true;
   stop.disabled = toggle.disabled = true;
@@ -85,7 +93,7 @@ stop.addEventListener('click', async () => {
   if (result?.ok) {
     const stillConnected = desktop === current;
     reset('工作区已关闭。下次连接会恢复浏览器保存的网页。');
-    if (stillConnected) current.disconnect();
+    if (stillConnected) current?.disconnect();
     return;
   }
   const message = result?.status === 423 ? ${JSON.stringify(errors.get(423))} : '未能确认工作区已保存并关闭，请重新检查连接后重试。';
@@ -129,6 +137,10 @@ keyboardInput.addEventListener('keydown', event => {
 });
 keyboardInput.addEventListener('blur', () => { keyboardInput.value = ''; });
 window.addEventListener('pagehide', () => desktop?.disconnect());
+if (recharge) {
+  stop.hidden = false;
+  toggle.click();
+}
 `;
 const scriptHash = createHash('sha256').update(controlScript).digest('base64');
 const page = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
@@ -165,55 +177,98 @@ function authorize(request, getActor, store, expectedOrigin, mutation) {
   const match = routePattern.exec(request.url);
   if (!match || request.url.includes('?')) throw new AccessError(404);
   const [, id, path] = match;
+  const recharge = rechargeIdPattern.test(id);
+  if (recharge && !['admin', 'super'].includes(actor.role)) throw new AccessError(403);
   let key;
-  try { ({ key } = store.resolveManualWorkspace(id, actor)); }
-  catch (error) { throw new AccessError([401, 403, 404].includes(error.status) ? error.status : 503); }
+  try {
+    key = recharge ? manualDesktopWorkspaceKey({ operatorId: actor.id, accountId: id })
+      : store.resolveManualWorkspace(id, actor).key;
+  } catch (error) { throw new AccessError([401, 403, 404].includes(error.status) ? error.status : 503); }
   if (!keyPattern.test(key)) throw new AccessError(503);
-  return { id, path, key, actor };
+  return { id, path, key, actor, recharge };
 }
 
-function brokerRequest(socketPath, path, method, owner) {
+function brokerRequest(socketPath, path, method, owner, payload) {
+  const body = payload && Buffer.from(JSON.stringify(payload));
+  const headers = { ...(owner && { 'X-Manual-Owner': owner }), ...(body && {
+    'Content-Type': 'application/json', 'Content-Length': body.length
+  }) };
   return new Promise((resolve, reject) => {
     // A cold start includes service activation and the broker's 30-second display check.
-    const timeout = method === 'POST' ? 45_000 : 10_000;
-    const request = sendRequest({ socketPath, path, method, headers: owner && { 'X-Manual-Owner': owner },
+    const timeout = body ? 65_000 : method === 'POST' ? 45_000 : 10_000;
+    const request = sendRequest({ socketPath, path, method, headers,
       agent: false, signal: AbortSignal.timeout(timeout) },
       async response => {
         try {
           if (![200, 204].includes(response.statusCode)) {
             response.destroy();
-            throw new AccessError([404, 423, 429].includes(response.statusCode) ? response.statusCode : 503);
+            throw new AccessError([404, 409, 422, 423, 429].includes(response.statusCode) ? response.statusCode : 503);
           }
           let size = 0;
           const chunks = [];
           for await (const chunk of response) {
             size += chunk.length;
             if (size > 2 * 1024 * 1024) throw new AccessError(503);
-            if (method === 'GET') chunks.push(chunk);
+            if (method === 'GET' || body) chunks.push(chunk);
           }
           resolve(Buffer.concat(chunks));
         } catch (error) { reject(error); }
       });
-    request.on('error', reject).end();
+    request.on('error', reject).end(body);
   });
 }
 
-export function createManualRemoteAccess({ socketPath, publicOrigin, getActor, store, recheckInterval = 5000 }) {
+function rechargeResult(body) {
+  let parsed;
+  try { parsed = JSON.parse(body); } catch { throw new AccessError(503); }
+  if (body.length > 512 || !isIP(parsed?.exitIp || '') ||
+      typeof parsed.country !== 'string' || !/^[A-Z]{2}$/.test(parsed.country) ||
+      parsed.accountStatus !== 'check-in-browser') throw new AccessError(503);
+  return { exitIp: parsed.exitIp, country: parsed.country, accountStatus: 'check-in-browser' };
+}
+
+export function createManualRemoteAccess({ socketPath, publicOrigin, getActor, store, rechargeOnly = false, recheckInterval = 5000 }) {
   if (socketPath && (!isAbsolute(socketPath) || /[\0\r\n]/.test(socketPath)))
     throw new Error('工作区服务必须使用绝对 Unix socket 路径');
   const streams = new Set();
   const originFor = request => publicOrigin || 'http://' + request.headers.host;
-  const validate = (req, write) => authorize(req, getActor, store, originFor(req), write);
+  const validate = (req, write) => {
+    const identity = authorize(req, getActor, store, originFor(req), write);
+    if (rechargeOnly && !identity.recharge) throw new AccessError(404);
+    return identity;
+  };
   const statusOf = error => error instanceof AccessError ? error.status : 503;
   const sameSession = (entry, request, identity) => !entry.socket.destroyed &&
     entry.key === identity.key && entry.actorId === identity.actor.id &&
     entry.request.headers.cookie === request.headers.cookie;
 
+  async function rechargeReady() {
+    if (!socketPath || !publicOrigin) return false;
+    try {
+      const body = await brokerRequest(socketPath, '/v1/recharge/status', 'GET');
+      return body.length < 128 && JSON.parse(body)?.rechargeBootstrap === 1;
+    } catch { return false; }
+  }
+
+  async function prepareRecharge(request, { email, proxyUrl, expectedCountry }) {
+    const actor = getActor(request);
+    if (!actor) throw new AccessError(401);
+    if (!['admin', 'super'].includes(actor.role) || request.headers.origin !== originFor(request) ||
+        (request.headers['sec-fetch-site'] && request.headers['sec-fetch-site'] !== 'same-origin'))
+      throw new AccessError(403);
+    if (!await rechargeReady()) throw new AccessError(503);
+    const id = 'recharge-' + createHash('sha256').update(JSON.stringify([actor.id, email])).digest('hex');
+    const key = manualDesktopWorkspaceKey({ operatorId: actor.id, accountId: id });
+    const result = rechargeResult(await brokerRequest(socketPath, '/v1/workspaces/' + key + '/prepare', 'POST',
+      manualDesktopOwnerKey(actor.id), { email, proxyUrl, expectedCountry }));
+    return { viewerUrl: manualWorkspacePrefix + id + '/', ...result };
+  }
+
   async function handle(request, response) {
     try {
       const method = request.method;
       const identity = validate(request, method !== 'GET');
-      const { path, key, id, actor } = identity;
+      const { path, key, id, actor, recharge } = identity;
       if (!socketPath) throw new AccessError(503);
       if (!path && method === 'GET') {
         const streamOrigin = new URL(originFor(request));
@@ -225,6 +280,11 @@ export function createManualRemoteAccess({ socketPath, publicOrigin, getActor, s
         return reply(response, 200, page, 'text/html; charset=utf-8');
       }
       if (path === 'open' && method === 'POST') {
+        if (recharge) {
+          const result = rechargeResult(await brokerRequest(socketPath, '/v1/workspaces/' + key + '/recharge-status',
+            'GET', manualDesktopOwnerKey(actor.id)));
+          return reply(response, 200, JSON.stringify(result), 'application/json; charset=utf-8');
+        }
         await brokerRequest(socketPath, '/v1/workspaces/' + key + '/open', 'POST', manualDesktopOwnerKey(actor.id));
         return reply(response, 204);
       }
@@ -239,7 +299,7 @@ export function createManualRemoteAccess({ socketPath, publicOrigin, getActor, s
         if (!active.length) throw new AccessError(409);
         const fresh = active.find(entry => !entry.marked && entry.receivedData);
         if (fresh) {
-          store.markManualRenewalOpened(id, actor);
+          if (!recharge) store.markManualRenewalOpened(id, actor);
           fresh.marked = true;
         } else if (!active.some(entry => entry.marked)) throw new AccessError(409);
         return reply(response, 204);
@@ -271,7 +331,8 @@ export function createManualRemoteAccess({ socketPath, publicOrigin, getActor, s
       const protocols = request.headers['sec-websocket-protocol'];
       if (protocols && !protocols.split(',').map(p => p.trim()).includes('binary')) throw new AccessError(400);
       const privateKey = randomBytes(16).toString('base64');
-      const upstream = sendRequest({ socketPath, path: '/v1/workspaces/' + identity.key + '/stream', agent: false,
+      const streamPath = identity.recharge ? '/recharge-stream' : '/stream';
+      const upstream = sendRequest({ socketPath, path: '/v1/workspaces/' + identity.key + streamPath, agent: false,
         headers: { Connection: 'Upgrade', Upgrade: 'websocket', 'Sec-WebSocket-Key': privateKey,
           'X-Manual-Owner': manualDesktopOwnerKey(identity.actor.id),
           'Sec-WebSocket-Version': '13', ...(protocols && { 'Sec-WebSocket-Protocol': 'binary' }) } });
@@ -315,5 +376,5 @@ export function createManualRemoteAccess({ socketPath, publicOrigin, getActor, s
       upstream.end();
     } catch (error) { reject(statusOf(error)); }
   }
-  return { handle, upgrade, close() { for (const entry of streams) entry.socket.destroy(); } };
+  return { handle, upgrade, rechargeReady, prepareRecharge, close() { for (const entry of streams) entry.socket.destroy(); } };
 }

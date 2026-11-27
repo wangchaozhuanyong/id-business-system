@@ -491,7 +491,8 @@ def remote(plan):
     comment = f"ID website {name} {plan['sha'][:12]} run {os.environ['GITHUB_RUN_ID']}/{os.environ['GITHUB_RUN_ATTEMPT']}"
     started = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     print(f"SSM request: {comment}", flush=True)
-    execution_timeout = 1140 if plan.get("rechargeCore") else (900 if plan.get("adapter") and name == "release" else 600)
+    execution_timeout = 1140 if plan.get("rechargeCore") else (
+        900 if name == "release" and (plan.get("adapter") or plan.get("manualWorkspace")) else 600)
     try:
         result = aws("ssm", "send-command", "--instance-ids", INSTANCE, "--document-name", "AWS-RunShellScript",
                      "--timeout-seconds", "600", "--comment", comment, "--parameters",
@@ -532,8 +533,12 @@ def remote(plan):
 
 
 def put_artifact(path, sha):
-    data = path.read_bytes()
-    checksum = base64.b64encode(hashlib.sha256(data).digest()).decode("ascii")
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1048576), b""):
+            digest.update(chunk)
+    size = path.stat().st_size
+    checksum = base64.b64encode(digest.digest()).decode("ascii")
     common = ("--bucket", BUCKET, "--expected-bucket-owner", ACCOUNT,
               "--key", f"release-artifacts/formal/{sha}/{path.name}")
     try:
@@ -544,10 +549,10 @@ def put_artifact(path, sha):
             raise
     head = aws("s3api", "head-object", *common, "--checksum-mode", "ENABLED")
     if (head.get("ChecksumSHA256"), head.get("ContentLength"), head.get("ServerSideEncryption")) != (
-        checksum, len(data), "AES256"
+        checksum, size, "AES256"
     ) or not head.get("VersionId") or head["VersionId"] == "null":
         raise RuntimeError("formal_artifact_readback_mismatch")
-    return {"sha256": hashlib.sha256(data).hexdigest(), "bytes": len(data), "version": head["VersionId"]}
+    return {"sha256": digest.hexdigest(), "bytes": size, "version": head["VersionId"]}
 
 
 def published_asset_receipt():
@@ -637,6 +642,11 @@ def main(sample_backup_resources=False):
     partner_api = os.environ.get("RELEASE_RECHARGE_PARTNER_API") == "true"
     customer_progress = os.environ.get("RELEASE_CUSTOMER_PROGRESS") == "true"
     resume_interrupted = os.environ.get("RESUME_INTERRUPTED_RELEASE") == "true"
+    manual_workspace = os.environ.get("RELEASE_MANUAL_WORKSPACE") == "true"
+    if manual_workspace and any((attempt, inspect_command, include_adapter, include_core, retry_receipt,
+                                 partner_api, customer_progress, resume_interrupted, sample_backup_resources,
+                                 os.environ.get("INSPECT_MANUAL_WORKSPACE_HOST") == "true")):
+        raise RuntimeError("manual_workspace_release_requires_its_own_operation")
     if os.environ.get("INSPECT_MANUAL_WORKSPACE_HOST") == "true":
         if any((attempt, inspect_command, include_adapter, include_core, retry_receipt, partner_api,
                 customer_progress, resume_interrupted, sample_backup_resources)):
@@ -749,6 +759,12 @@ def main(sample_backup_resources=False):
             "candidate": asset_bundle_summary(OUTPUT / names[1])
         }}, sort_keys=True), flush=True)
         raise RuntimeError("website_release_would_change_recharge_assets")
+    image_id = None
+    if manual_workspace:
+        image_id = (OUTPUT / f"independent-manual-image-{sha}.id").read_text().strip()
+        if not re.fullmatch(r"sha256:[a-f0-9]{64}", image_id):
+            raise RuntimeError("manual_workspace_image_identity_missing")
+        names += (f"independent-manual-image-{sha}.tar.gz", f"independent-manual-runtime-{sha}.tar.gz")
     require_main(sha)
     artifacts = {name: put_artifact(OUTPUT / name, sha) for name in names}
     files = ("frontend/index.html", "frontend/commerce-prototype.js", "frontend/subscription-management.js",
@@ -844,6 +860,10 @@ def main(sample_backup_resources=False):
         files += ("frontend/recharge-partners.mjs", *sorted(DEFERRED_DEBUG_FILES))
     if deployed_native:
         files += tuple(sorted(DEPLOYED_TRIAL_BUILD_INPUTS))
+    if manual_workspace:
+        files += ("frontend/native-workbench-prototype.html", "frontend/native-workbench-prototype.mjs",
+                  "frontend/native-workbench-prototype.css", "server/manual-remote-access.mjs",
+                  "server/manual-desktop-workspace.mjs")
     plan = {"operation": "release", "sha": sha, "before": before, "artifacts": artifacts,
             "files": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in files},
             "qualityRun": quality_run, "preflightCommand": preflight_id, 'externalEvents': True}
@@ -866,10 +886,18 @@ def main(sample_backup_resources=False):
         plan["customerProgress"] = True
     if presentation_scope:
         plan[presentation_scope] = presentation
+    if manual_workspace:
+        plan["manualWorkspace"] = {"imageId": image_id}
     require_main(sha)
     command_id, receipt = remote(plan)
     if receipt.get("mainSha") != sha or not receipt.get("appCanaryPassed"):
         raise RuntimeError(f"website_release_receipt_mismatch: {command_id}")
+    if manual_workspace:
+        desktop = receipt.get("manualWorkspace", {})
+        if (desktop.get("imageId") != image_id or desktop.get("browserSandboxVerified") is not True
+                or desktop.get("websiteBrokerVerified") is not True
+                or desktop.get("maxActive") != 1 or receipt.get("protectedComponentsUnchanged") is not True):
+            raise RuntimeError(f"manual_workspace_release_receipt_mismatch: {command_id}")
     recovery = receipt.get("portableRecoveryBackup", {})
     if recovery.get("sourceRevision") != sha or recovery.get("programSha256") != plan["files"][BACKUP_OPERATION]:
         raise RuntimeError(f"backup_program_release_receipt_mismatch: {command_id}")

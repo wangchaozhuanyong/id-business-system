@@ -1,17 +1,23 @@
 """Supervise one ordinary browser desktop. The host owns workspace assignment and egress."""
 
+import asyncio
 import fcntl
+from importlib import util
+import json
 import os
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 import re
 import secrets
 import signal
+import socket
 import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+from urllib.parse import unquote, urlsplit
 
 
 PROFILE = Path("/profile")
@@ -19,6 +25,7 @@ RUNTIME = Path("/run/workspace")
 SOCKET = RUNTIME / "rfb.sock"
 STAGING_SOCKET = RUNTIME / ".starting.sock"
 DISPLAY = ":1"
+INPUT = Path("/run/workspace-input")
 
 
 def check_container(mountinfo, status):
@@ -77,13 +84,22 @@ def display_command(socket_path):
     ]
 
 
-def browser_command():
+def browser_command(proxy_port=None):
     # A startup URL on subsequent launches would add a tab to the restored session.
     args = [
         "/usr/lib/chromium/chromium", "--ozone-platform=x11", "--user-data-dir=/profile",
         "--restore-last-session", "--no-first-run", "--no-default-browser-check",
         "--start-maximized",
     ]
+    if proxy_port is not None:
+        if not 1 <= proxy_port <= 65535:
+            raise RuntimeError("充值工作区代理不可用")
+        args.extend([
+            f"--proxy-server=http://127.0.0.1:{proxy_port}",
+            "--proxy-bypass-list=<-loopback>",
+            "--disable-quic",
+            "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+        ])
     if not (PROFILE / "Local State").exists():
         args.append("https://chatgpt.com/")
     return args
@@ -96,7 +112,7 @@ def stop_process(process, sig):
     process.wait()
 
 
-def run_desktop(private_tmp):
+def run_desktop(private_tmp, proxy_port=None, report_ready=None):
     auth = private_tmp / "Xauthority"
     auth.touch(mode=0o600)
     env = {
@@ -166,13 +182,15 @@ def run_desktop(private_tmp):
         if not wait_ready(STAGING_SOCKET.is_socket):
             return
         start(["/usr/bin/matchbox-window-manager", "-use_titlebar", "no"], signal.SIGTERM)
-        browser = start(browser_command(), signal.SIGINT)
+        browser = start(browser_command(proxy_port), signal.SIGINT)
         if not wait_ready(has_window):
             return
         if stat.S_IMODE(STAGING_SOCKET.lstat().st_mode) != 0o600:
             raise RuntimeError("工作区显示套接字权限无效")
         STAGING_SOCKET.rename(SOCKET)
         cleanup.callback(remove_owned_socket, SOCKET)
+        if report_ready:
+            report_ready()
         while not stopping:
             code = browser.poll()
             if code is not None:
@@ -182,6 +200,81 @@ def run_desktop(private_tmp):
             check_running(children[:-1])
             time.sleep(0.2)
 
+
+def recharge_settings(source):
+    try:
+        line = source.readline(8193)
+        if len(line) > 8192 or not line.endswith(b"\n"):
+            raise ValueError
+        data = json.loads(line)
+        if not isinstance(data, dict) or set(data) != {"email", "proxyUrl", "expectedCountry"}:
+            raise ValueError
+        email, url, country = data["email"], data["proxyUrl"], data["expectedCountry"]
+        if (not isinstance(email, str) or len(email) > 254 or
+                not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email) or
+                not isinstance(url, str) or len(url) > 2048 or
+                not isinstance(country, str) or not re.fullmatch(r"(?:[A-Z]{2})?", country)):
+            raise ValueError
+        parsed = urlsplit(url)
+        if parsed.scheme != "http" or not parsed.hostname or not parsed.port:
+            raise ValueError
+        username = unquote(parsed.username or "", errors="strict")
+        password = unquote(parsed.password or "", errors="strict")
+        if bool(username) != bool(password):
+            raise ValueError
+        return ((username, password) if username else None), country
+    except (ValueError, TypeError, UnicodeError):
+        raise RuntimeError("工作区收到无效的代理启动资料") from None
+
+
+@contextmanager
+def recharge_proxy_context():
+    if not INPUT.exists():
+        yield None, None
+        return
+    if not os.statvfs(INPUT).f_flag & os.ST_RDONLY:
+        raise RuntimeError("充值工作区启动目录需要只读挂载")
+
+    spec = util.spec_from_file_location("manual_recharge_proxy", Path(__file__).with_name("recharge_proxy.py"))
+    module = util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as bootstrap:
+        bootstrap.settimeout(20)
+        bootstrap.connect(str(INPUT / "bootstrap.sock"))
+        with bootstrap.makefile("rb") as source:
+            authorization, expected_country = recharge_settings(source)
+        loop = asyncio.new_event_loop()
+        proxy = None
+        runner = None
+        try:
+            proxy = loop.run_until_complete(asyncio.wait_for(module.open_proxy(authorization), 3))
+            authorization = None
+            exit_info = loop.run_until_complete(asyncio.wait_for(module.verify_exit(proxy, expected_country), 15))
+            runner = threading.Thread(target=loop.run_forever, daemon=True)
+            runner.start()
+        except Exception:
+            if proxy:
+                loop.run_until_complete(proxy.close())
+            loop.close()
+            raise RuntimeError("所选代理出口未通过核验") from None
+
+        def report_ready():
+            receipt = {"exitIp": exit_info["ip"], "country": exit_info["country"], "accountStatus": "check-in-browser"}
+            bootstrap.sendall(json.dumps(receipt, separators=(",", ":")).encode("ascii") + b"\n")
+            bootstrap.close()
+
+        try:
+            yield proxy.port, report_ready
+        finally:
+            closing = asyncio.run_coroutine_threadsafe(proxy.close(), loop)
+            try:
+                closing.result(timeout=8)
+            finally:
+                loop.call_soon_threadsafe(loop.stop)
+                runner.join(3)
+                if not runner.is_alive():
+                    loop.close()
 
 def main():
     os.umask(0o077)
@@ -194,7 +287,8 @@ def main():
             remove_owned_socket(path)
             cleanup.callback(remove_owned_socket, path)
         private = cleanup.enter_context(tempfile.TemporaryDirectory(dir="/tmp", prefix="desktop-"))
-        run_desktop(Path(private))
+        with recharge_proxy_context() as (port, report_ready):
+            run_desktop(Path(private), port, report_ready)
 
 
 if __name__ == "__main__":

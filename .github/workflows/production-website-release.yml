@@ -47,6 +47,10 @@ on:
         description: 单独只读核对手动续费工作区的宿主条件
         default: false
         type: boolean
+      include_manual_workspace:
+        description: 发布站内手动充值和单个隔离浏览器工作区
+        default: false
+        type: boolean
 
 concurrency:
   group: independent-production-website-release
@@ -70,6 +74,7 @@ jobs:
       INSPECT_CANARY_SHA: ${{ inputs.inspect_canary_sha }}
       INSPECT_RELEASE_COMMAND: ${{ inputs.inspect_release_command }}
       INSPECT_MANUAL_WORKSPACE_HOST: ${{ inputs.inspect_manual_workspace_host }}
+      RELEASE_MANUAL_WORKSPACE: ${{ inputs.include_manual_workspace }}
       RELEASE_RECHARGE_ADAPTER: ${{ inputs.include_recharge_adapter }}
       RELEASE_RECHARGE_CORE: ${{ inputs.include_recharge_core }}
       RESUME_INTERRUPTED_RELEASE: ${{ inputs.resume_interrupted_release }}
@@ -125,6 +130,13 @@ jobs:
           export ID_CODEXDAICHONG_ASSETS_FILE="$output/independent-assets-$RELEASE_SHA.json"
           node --input-type=module -e 'import { loadCodexdaichongAssets } from "./modules/recharge/codexdaichong/assets.mjs"; await loadCodexdaichongAssets({requireBundle: true});'
           python3 -m unittest discover -s deploy/website -p '*_test.py'
+      - name: Build and test the manual workspace release artifacts on x86
+        if: inputs.include_manual_workspace && inputs.inspect_canary_sha == '' && !inputs.inspect_manual_workspace_host
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 deploy/website/build_manual_workspace.py "$RELEASE_SHA"
+          bash test/manual-remote-desktop-linux/container-check.sh --archive-dir "$GITHUB_WORKSPACE/.runtime/website-release"
       - name: Assume the existing website release role
         uses: aws-actions/configure-aws-credentials@61815dcd50bd041e203e49132bacad1fd04d2708
         with:

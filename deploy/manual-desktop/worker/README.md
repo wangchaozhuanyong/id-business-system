@@ -17,6 +17,8 @@
 
 ## 隔离验证
 
+Docker 工作区单独加载 [Chromium seccomp 配置](../chromium-seccomp.json)。部署时用 `--security-opt seccomp=<已部署配置的绝对路径>`，同时保留 `--cap-drop ALL`、`--security-opt no-new-privileges=true`、非特权 10001 用户、宿主现有 LSM 以及工作区的私有命名空间。配置基于 Apache-2.0 的 Moby seccomp v0.2.1 默认拒绝规则，仅为 amd64 和 arm64 的 Chromium 增加必需的用户、PID 和网络命名空间创建操作，以及新建用户命名空间内的沙箱根目录切换。Linux 在执行该切换时仍检查能力。平台必须支持非特权用户命名空间。验收由实际 renderer 的嵌套 PID 命名空间和附加 seccomp 过滤器提供证据。[配置许可证](../chromium-seccomp.LICENSE) · [Moby 默认配置](https://github.com/moby/profiles/blob/seccomp/v0.2.1/seccomp/default.json) · [Chromium 命名空间沙箱](https://chromium.googlesource.com/chromium/src/+/main/sandbox/linux/services/namespace_sandbox.cc)
+
 构建上下文为本目录。运行 `python3 -B -m unittest discover -s deploy/manual-desktop/worker -v` 检查挂载约束、双目录独占、套接字权限、禁用剪贴板、断开重连和退出顺序。单元测试使用本地临时套接字以及模拟的图形进程。
 
 真实 Linux 验收需使用专用测试卷、隔离测试网页和已生效的网络规则。通过显示客户端打开两个不同测试网页，手工登录测试站，再依次验证断开重连、正常关闭重开、另一个工作区的空白初态，以及阻断内部目标。另检查 `chrome://sandbox`、监听端口和挂载信息。只记录测试结果与合成页面标识。

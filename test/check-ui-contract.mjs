@@ -22,7 +22,7 @@ const browsers = ['date-filter', 'search-input', 'ui-idle-contract', 'change-syn
   'order-customer-suggestions', 'contact-recovery', 'operation-recovery',
   'mobile-navigation-layout', 'tab-navigation', 'list-filter-toolbar', 'order-price-shortcuts', 'inventory-workspace', 'design-list-boundaries', 'global-pagination', 'business-lists', 'site-visual-v2-border',
   'recharge-layout-transitions', 'recharge-cell-overflow', 'recharge-server-diagnostic', 'recharge-partner',
-  'recharge-invoice-subscription', 'mailbox-updates', 'initial-loading-layout', 'workbench-cloud-hold', 'manual-renewal-layout', 'manual-renewal-registration'];
+  'recharge-invoice-subscription', 'mailbox-updates', 'initial-loading-layout', 'workbench-cloud-hold', 'manual-recharge-workbench', 'manual-renewal-layout', 'manual-renewal-registration'];
 const groups = [
   ['unit', ['--test', ...frontend, ...units.map(name => `test/${name}.test.mjs`)]],
   ['browser', ['--test', '--test-concurrency=1', ...browsers.map(name => `test/${name}.browser.mjs`)]],

@@ -5,6 +5,7 @@ import fcntl
 from contextlib import contextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -27,6 +28,10 @@ LOCK = FORMAL / ".application-release.lock"
 REPOSITORY = "https://github.com/wangchaozhuanyong/id-business-system.git"
 BUCKET = "id-business-v2-backups-098208446664-ap-northeast-1"
 SITE_HOST = "54-249-61-238.sslip.io"
+MANUAL_SOCKET = "/run/id-manual-bridge/site.sock"
+MANUAL_SITE_ARGS = ('  state+=(--group-add 10001 '
+                    '--mount "type=bind,src=/run/id-manual-bridge,dst=/run/id-manual-bridge,readonly" '
+                    f'-e "ID_MANUAL_WORKSPACE_SOCKET={MANUAL_SOCKET}" -e "ID_MANUAL_RECHARGE_ONLY=1")')
 WEBSITE = ("app", "drive-backup", "sheets-sync")
 PROTECTED = ("recharge", "recharge-native", "vendure", "formal-mysql", "media", "caddy")
 ADAPTER_UNIT = "id-business-independent-recharge.service"
@@ -196,7 +201,11 @@ def run(args, timeout=25):
 
 
 def digest(path):
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    checksum = hashlib.sha256()
+    with path.open("rb") as stream:
+        for data in iter(lambda: stream.read(1048576), b""):
+            checksum.update(data)
+    return checksum.hexdigest()
 
 
 def inspect(name, timeout=None):
@@ -698,6 +707,18 @@ def wire_partner_api(content, enable):
     return content.replace(anchor, configured)
 
 
+def wire_manual_workspace(content, enable):
+    if "ID_MANUAL_WORKSPACE_SOCKET" in content:
+        require(content.count(MANUAL_SITE_ARGS) == content.count("ID_MANUAL_WORKSPACE_SOCKET") == 1,
+                "manual_workspace_launcher_layout_unexpected")
+        return content
+    if not enable:
+        return content
+    anchor = '    --mount "type=bind,src=$root/releases/$sha/runtime/mysql-ca.pem,dst=/run/recharge-mysql-ca.pem,readonly")'
+    require(content.count(anchor) == 1, "manual_workspace_launcher_layout_unexpected")
+    return content.replace(anchor, anchor + "\n" + MANUAL_SITE_ARGS)
+
+
 def wire_storefront_analytics(content):
     """Read the optional Cloudflare configuration from the existing sealed tools credential."""
     replacements = (
@@ -895,6 +916,8 @@ def stage(plan, release):
     expected_names = {source_name, assets_name}
     if plan.get('externalEvents'):
         expected_names.add(f"independent-event-runtime-{sha}.tar.gz")
+    if plan.get("manualWorkspace"):
+        expected_names.update((f"independent-manual-runtime-{sha}.tar.gz", f"independent-manual-image-{sha}.tar.gz"))
     require(set(plan["artifacts"]) == expected_names, "invalid_artifact_names")
     scope = require_asset_digest(plan, plan["artifacts"][assets_name]["sha256"])
     require(not release.exists(), "release_directory_already_exists_inspect_before_retry")
@@ -904,7 +927,8 @@ def stage(plan, release):
     for name, expected in plan["artifacts"].items():
         target = artifacts / name
         run(["aws", "s3", "cp", f"s3://{BUCKET}/release-artifacts/formal/{sha}/{name}", str(target),
-             "--region", "ap-northeast-1", "--only-show-errors"], timeout=75)
+             "--region", "ap-northeast-1", "--only-show-errors"],
+            timeout=150 if name.startswith("independent-manual-image-") else 75)
         require(target.stat().st_size == expected["bytes"] and digest(target) == expected["sha256"],
                 "downloaded_artifact_mismatch")
     source = release / "source"
@@ -952,8 +976,120 @@ def stage(plan, release):
                 content = wire_event_launcher(content)
             elif name == 'app-entry.mjs':
                 content = wire_event_entry(content)
+        if name == "run-app":
+            content = wire_manual_workspace(content, plan.get("manualWorkspace"))
         write_new(ops / name, content, 0o755 if name == "run-app" else 0o644)
     return source, ops
+
+
+def check_manual_website_socket(container):
+    socket_directory = str(Path(MANUAL_SOCKET).parent)
+    mounts = [entry for entry in container["Mounts"] if entry["Destination"] == socket_directory]
+    require(len(mounts) == 1 and mounts[0]["Type"] == "bind" and mounts[0]["Source"] == socket_directory
+            and not mounts[0]["RW"], "manual_workspace_website_mount_mismatch")
+    probe = """
+const http = require('node:http');
+if (process.env.ID_MANUAL_WORKSPACE_SOCKET !== process.argv[1] || process.env.ID_MANUAL_RECHARGE_ONLY !== '1')
+  process.exit(2);
+const req = http.get({
+  socketPath: process.env.ID_MANUAL_WORKSPACE_SOCKET,
+  path: '/v1/recharge/status', signal: AbortSignal.timeout(3000)
+}, response => {
+  let body = '';
+  response.setEncoding('utf8');
+  response.on('data', chunk => { body += chunk; if (body.length > 100) req.destroy(); });
+  response.on('end', () => {
+    if (response.statusCode !== 200 || JSON.parse(body).rechargeBootstrap !== 1) process.exit(2);
+    console.log('ready');
+  });
+});
+req.on('error', () => process.exit(2));
+"""
+    require(run(["docker", "exec", "id-business-independent-app", "node", "-e", probe, MANUAL_SOCKET]).strip() == b"ready",
+            "manual_workspace_website_broker_unavailable")
+
+
+def manual_host_command(operation, release, image):
+    runtime = release / "manual-runtime"
+    executor = release / "source/deploy/manual-desktop/host/provision.py"
+    site_ip = ipaddress.IPv4Address(SITE_HOST.removesuffix(".sslip.io").replace("-", "."))
+    args = ["/usr/bin/python3", "-IB", str(executor), operation, "--release-root", str(release),
+            "--image-id", image, "--assets", str(runtime / "novnc"),
+            "--site-packages", str(runtime / "site-packages"), "--max-active", "1",
+            "--min-available-mib", "512", "--block-network", f"{site_ip}/32"]
+    result = subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True, timeout=90)
+    if result.returncode != 0:
+        reason = result.stderr.decode(errors="replace").strip()
+        raise ReleaseError(reason if re.fullmatch(r"[a-z][a-z0-9_]{6,95}", reason)
+                           else "manual_workspace_host_operation_failed")
+    receipt = json.loads(result.stdout)
+    require(receipt.get("operation") == operation and receipt.get("revision") == release.name,
+            "manual_workspace_host_receipt_mismatch")
+    return receipt
+
+
+def release_with_manual_workspace(plan):
+    image = plan["manualWorkspace"]["imageId"]
+    sha = plan["sha"]
+    base = plan["before"]["components"]["app"]["revision"]
+    require(re.fullmatch(r"sha256:[a-f0-9]{64}", image) and not any(plan.get(key) for key in (
+        "adapter", "rechargeCore", "interruptedRelease", "rechargePartnerApi", "vendureRetryReceipt", "customerProgress"
+    )), "invalid_manual_workspace_release_scope")
+    check_baseline(snapshot(), plan["before"])
+    release = ROOT / "releases" / sha
+    source, ops = stage(plan, release)
+    runtime = release / "manual-runtime"
+    runtime.mkdir(mode=0o755)
+    run(["tar", "--no-same-owner", "--no-same-permissions", "-xzf",
+         str(release / "artifacts" / f"independent-manual-runtime-{sha}.tar.gz"),
+         "-C", str(runtime)], timeout=45)
+    run(["docker", "load", "-i", str(release / "artifacts" / f"independent-manual-image-{sha}.tar.gz")], timeout=120)
+    manual_host_command("check", release, image)
+    synthetic = subprocess.run(
+        ["bash", str(source / "test/manual-remote-desktop-linux/container-check.sh"), "--verified-image", image],
+        cwd=source, env=os.environ | {"CI": "true"}, stdin=subprocess.DEVNULL, capture_output=True, timeout=130)
+    offline = re.fullmatch(rb"worker_check=passed ready peak_before_stop_mib=([1-9][0-9]{0,2}) clean_exit=true\s*",
+                           synthetic.stdout)
+    if synthetic.returncode != 0 or not offline:
+        reason = re.fullmatch(rb"worker_check=([a-z][a-z_0-9]{4,90})\s*", synthetic.stderr)
+        raise ReleaseError("manual_host_" + reason[1].decode() if reason else "manual_workspace_host_canary_failed")
+    peak = int(offline[1])
+    require(peak <= 512, "manual_workspace_host_memory_exceeded")
+    require_main(sha)
+    old = DROP.read_text()
+    expected = website_release_dropin(old, base, ops / "run-app")
+    if plan.get("externalEvents"):
+        expected = wire_event_credential(expected)
+    installed = manual_host_command("install", release, image)["started"]
+    try:
+        manual_host_command("verify", release, image)
+        plan["manualWorkspace"]["offlinePeakMiB"] = peak
+        return release_website(plan, staged=(source, ops))
+    except Exception:
+        if DROP.read_text() == expected:
+            restore = DROP.with_name(f".{DROP.name}.{sha[:12]}.manual-rollback")
+            write_new(restore, old, DROP.stat().st_mode & 0o777)
+            os.replace(restore, DROP)
+            run(["systemctl", "daemon-reload"])
+            run(["systemctl", "restart", UNIT], timeout=55)
+            deadline = time.monotonic() + 35
+            while time.monotonic() < deadline:
+                try:
+                    restored = {name: identity(inspect(name)) for name in WEBSITE}
+                    if all(restored[name]["running"] and
+                           all(restored[name][field] == plan["before"]["components"][name][field]
+                               for field in ("image", "revision")) for name in WEBSITE):
+                        with http("/") as response:
+                            if response.status == 200:
+                                break
+                except (ContainerMetadataError, urllib.error.URLError, TimeoutError):
+                    pass
+                time.sleep(1)
+            else:
+                raise ReleaseError("manual_workspace_website_rollback_unverified")
+        if installed:
+            manual_host_command("deactivate", release, image)
+        raise
 
 
 def write_website_version(source, sha):
@@ -1766,6 +1902,8 @@ def release_website(plan, staged=None):
             live = read_website(plan, release, source, adapter, core) if core else read_website(plan, release, source, adapter)
             events = read_event_runtime() if plan.get('externalEvents') else None
             monitoring = read_backup_monitoring(inspect("app"))
+            if plan.get("manualWorkspace"):
+                check_manual_website_socket(inspect("app"))
             recovery = install_recovery()
             if core:
                 core.finish()
@@ -1780,6 +1918,9 @@ def release_website(plan, staged=None):
               "backupResources": backup_resource_summary(),
               "portableRecoveryBackup": recovery,
               "unauthenticatedProtectedReadsRejected": True, "productionBusinessTestWrites": False}
+    if plan.get("manualWorkspace"):
+        result["manualWorkspace"] = {**plan["manualWorkspace"], "browserSandboxVerified": True,
+                                     "websiteBrokerVerified": True, "maxActive": 1}
     if plan.get("assetMetadataRepair"):
         result["assetMetadataRepair"] = plan["assetMetadataRepair"]
     if plan.get("deployedNativeBuildInputs"):
@@ -1873,7 +2014,8 @@ def main(plan):
                 result = repair_current_asset_metadata(plan)
             else:
                 require(plan["operation"] == "release", "invalid_release_operation")
-                result = release_with_optional_vendure_refresh(plan)
+                result = (release_with_manual_workspace(plan) if plan.get("manualWorkspace")
+                          else release_with_optional_vendure_refresh(plan))
             print(json.dumps(result, sort_keys=True), flush=True)
     except ReleaseError as error:
         sys.exit(error.public_code() if isinstance(error, ContainerMetadataError) else str(error))

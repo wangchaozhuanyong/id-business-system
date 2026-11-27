@@ -1970,6 +1970,9 @@ function render() {
       if (scroll) table.parentElement.scrollTo({ ...scroll, behavior: 'instant' });
     }
   }
+  // An embedded page can reveal its frame before the host's table and viewport
+  // layout is finished. Restore after both layouts have established their height.
+  if (retain) restorePendingPageScroll();
   requestAnimationFrame(() => {
     if (renderVersion !== layoutRenderVersion) return;
     restorePageScroll(scrollTarget);

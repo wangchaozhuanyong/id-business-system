@@ -5,33 +5,60 @@ import asyncio
 import contextlib
 from contextvars import ContextVar
 import fcntl
+import hmac
+import ipaddress
 import json
 import os
 from pathlib import Path
 import re
+import secrets
 import socket
 import stat
+import struct
+import sys
 import tempfile
+from urllib.parse import quote, unquote
 
 from aiohttp import WSMsgType, web
+
+# Isolated Python (-I) omits the script directory, including these installed
+# broker modules. Trust only this script's own directory for sibling imports.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from egress import EgressError, SOCKET_NAME as EGRESS_SOCKET, open_relay, resolve_proxy
 
 
 SYSTEMCTL = "/usr/bin/systemctl"
 CLAIM_LOCKS = ContextVar("claim_locks", default=())
 KEY = re.compile(r"manual-v1-[0-9a-f]{64}")
 OWNER = re.compile(r"owner-v1-[0-9a-f]{64}")
-ASSET = re.compile(r"(?:core|vendor)/(?:[A-Za-z0-9_-]+/)*[A-Za-z0-9_.-]+\.js")
+ASSET_DIRECTORY = re.compile(r"[A-Za-z0-9_-]+")
+ASSET_FILENAME = re.compile(r"[A-Za-z0-9_.-]+\.js")
+MAX_ASSET_PATH = 1024
+RECHARGE_BODY_LIMIT = 8 * 1024
+RECHARGE_REPLY_LIMIT = 512
+ACCOUNT_EMAIL = re.compile(r"[^\s@]+@[^\s@]+\.[^\s@]+")
+COUNTRY = re.compile(r"[A-Z]{2}")
+PROXY_SESSION = re.compile(r"([-_:]session[-_:])([a-zA-Z0-9_-]{1,2048}?)((?:[-_:]sessiontime[-_:]|\b|$))",
+                           re.IGNORECASE | re.ASCII)
+WORKER_UID = WORKER_GID = 10001
 RFB_VERSION = re.compile(rb"RFB 003\.00[378]\n")
 
 
-async def connect_display(path):
+def socket_identity(info):
+    if not stat.S_ISSOCK(info.st_mode):
+        raise ConnectionRefusedError()
+    return info.st_dev, info.st_ino
+
+
+async def connect_display(path, expected=None):
     # Linux O_PATH pins the actual socket in the assigned directory. A worker
     # cannot substitute a symlink to a neighbouring display during connection.
     directory = os.open(path.parent, os.O_DIRECTORY | os.O_NOFOLLOW | os.O_RDONLY)
     try:
-        fd = os.open(path.name, os.O_PATH | os.O_NOFOLLOW, dir_fd=directory)
+        fd = os.open('rfb.sock', os.O_PATH | os.O_NOFOLLOW, dir_fd=directory)
         try:
-            if not stat.S_ISSOCK(os.fstat(fd).st_mode):
+            identity = socket_identity(os.fstat(fd))
+            if expected is not None and identity != expected:
                 raise ConnectionRefusedError()
             return await asyncio.open_unix_connection('/proc/self/fd/' + str(fd))
         finally:
@@ -40,9 +67,9 @@ async def connect_display(path):
         os.close(directory)
 
 
-async def desktop_ready(path, connect):
+async def desktop_ready(key, connect_worker):
     try:
-        reader, writer = await asyncio.wait_for(connect(path), 1)
+        reader, writer = await asyncio.wait_for(connect_worker(key), 1)
         try:
             version = await asyncio.wait_for(reader.readexactly(12), 1)
             return bool(RFB_VERSION.fullmatch(version))
@@ -222,8 +249,26 @@ class Claims:
 
     @contextlib.asynccontextmanager
     async def lock(self, name, timeout, on_busy=None):
-        fd = os.open(self.root / (name + '.lock'), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        if name == 'admission':
+            filename = 'admission.lock'
+        elif OWNER.fullmatch(name):
+            owner_id = int(name[len('owner-v1-'):], 16)
+            filename = f'owner-v1-{owner_id:064x}.lock'
+        else:
+            raise web.HTTPForbidden()
+        root = os.path.abspath(self.root)
+        path = os.path.abspath(os.path.join(root, filename))
+        if not path.startswith(root + os.sep):
+            raise web.HTTPForbidden()
         try:
+            fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        except OSError:
+            raise web.HTTPServiceUnavailable(reason='Workspace lock unavailable') from None
+        try:
+            info = os.fstat(fd)
+            if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                    or stat.S_IMODE(info.st_mode) != 0o600 or info.st_nlink != 1):
+                raise web.HTTPServiceUnavailable(reason='Workspace lock unavailable')
             deadline = asyncio.get_running_loop().time() + timeout
             while True:
                 try:
@@ -253,12 +298,241 @@ async def host_has_capacity(max_active, min_available_mib):
     return active is not None and len(active) < max_active
 
 
+async def read_recharge_config(request):
+    if request.content_type != 'application/json' or 'Content-Encoding' in request.headers:
+        raise web.HTTPBadRequest()
+    with contextlib.suppress(ValueError):
+        body = await request.json()
+        if isinstance(body, dict) and set(body) == {'email', 'proxyUrl', 'expectedCountry'}:
+            email, proxy_url, country = body['email'], body['proxyUrl'], body['expectedCountry']
+            if (isinstance(email, str) and 1 <= len(email) <= 254
+                    and email.isprintable() and ACCOUNT_EMAIL.fullmatch(email)
+                    and isinstance(proxy_url, str) and 1 <= len(proxy_url) <= 2048
+                    and isinstance(country, str) and (not country or COUNTRY.fullmatch(country))):
+                return body
+    raise web.HTTPBadRequest()
+
+
+def materialize_proxy_session(url):
+    # Only a provider username participates in rotation. Preserve the selected
+    # host, port and encoded password so the same connection is probed and used.
+    scheme, marker, remainder = url.partition('://')
+    authority, slash, suffix = remainder.partition('/')
+    credentials, separator, destination = authority.rpartition('@')
+    name, colon, password = credentials.partition(':')
+    if scheme != 'http' or not separator or not name or not colon or not password:
+        return url
+    try:
+        username = unquote(name, errors='strict')
+    except UnicodeError:
+        return url
+    if '{session}' in username:
+        identifier = str(10_000_000 + secrets.randbelow(90_000_000))
+        username = username.replace('{session}', identifier)
+    else:
+        match = PROXY_SESSION.search(username)
+        if match is None:
+            return url
+        identifier = str(10_000_000 + secrets.randbelow(90_000_000))
+        username = username[:match.start(2)] + identifier + username[match.end(2):]
+    resolved = quote(username, safe="-_.~!*'()")
+    return scheme + marker + resolved + colon + password + separator + destination + slash + suffix
+
+
+def recharge_result(data, expected_country):
+    if (not isinstance(data, dict) or set(data) != {'exitIp', 'country', 'accountStatus'}
+            or not isinstance(data['country'], str) or not COUNTRY.fullmatch(data['country'])
+            or (expected_country and data['country'] != expected_country)
+            or data['accountStatus'] != 'check-in-browser' or not isinstance(data['exitIp'], str)
+            or '%' in data['exitIp']):
+        raise web.HTTPUnprocessableEntity()
+    with contextlib.suppress(ValueError):
+        ip = ipaddress.ip_address(data['exitIp'])
+        if ip.is_global and not ip.is_multicast:
+            return {'exitIp': str(ip), 'country': data['country'], 'accountStatus': 'check-in-browser'}
+    raise web.HTTPUnprocessableEntity()
+
+
+async def recharge_unit_available():
+    probe = 'id-manual-workspace@manual-v1-' + '0' * 64 + '.service'
+    state = await systemd_output('show', '-p', 'LoadState', '--value', probe)
+    return state is not None and state.strip() == 'loaded'
+
+
+class RechargeInputs:
+    def __init__(self, root, blocked_networks=(), uid=WORKER_UID, gid=WORKER_GID):
+        self.root = Path(root)
+        self.blocked_networks = tuple(ipaddress.ip_network(network) for network in blocked_networks)
+        self.uid = uid
+        self.gid = gid
+        self.fd = None
+
+    def check(self):
+        info = self.root.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
+                or stat.S_IMODE(info.st_mode) != 0o700):
+            raise ValueError('Recharge input root must be broker-owned with mode 0700')
+
+    @contextlib.contextmanager
+    def exclusive(self):
+        self.check()
+        fd = os.open(self.root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.fd = fd
+            yield
+        finally:
+            self.fd = None
+            os.close(fd)
+
+    def workspace(self, key):
+        if self.fd is None or not KEY.fullmatch(key):
+            raise web.HTTPServiceUnavailable()
+        identifier = int(key[len('manual-v1-'):], 16)
+        root = os.path.abspath(self.root)
+        path = os.path.abspath(os.path.join(root, f'manual-v1-{identifier:064x}'))
+        if not path.startswith(root + os.sep):
+            raise web.HTTPServiceUnavailable()
+        # Keep a relative socket path where a fixture runs on macOS. Linux
+        # binds the real listener through an open descriptor below.
+        directory = Path(path) if self.root.is_absolute() else self.root / Path(path).name
+        with contextlib.suppress(FileExistsError):
+            directory.mkdir(mode=0o710)
+            os.chown(directory, -1, self.gid)
+            directory.chmod(0o710)
+        info = directory.lstat()
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or info.st_gid != self.gid
+                or stat.S_IMODE(info.st_mode) != 0o710):
+            raise web.HTTPServiceUnavailable()
+        # The caller confirmed that the worker ended. Only the exclusive
+        # broker can write here, so an existing relay is left by a dead broker.
+        stale = directory / EGRESS_SOCKET
+        with contextlib.suppress(FileNotFoundError):
+            info = stale.lstat()
+            if not stat.S_ISSOCK(info.st_mode) or info.st_uid != self.uid or info.st_gid != self.gid:
+                raise web.HTTPServiceUnavailable()
+            stale.unlink()
+        return directory
+
+    async def relay(self, directory, url):
+        pinned = await resolve_proxy(url, blocked_networks=self.blocked_networks)
+        return await open_relay(directory, pinned, uid=self.uid, gid=self.gid)
+
+    @contextlib.asynccontextmanager
+    async def bootstrap(self, directory, config):
+        loop = asyncio.get_running_loop()
+        outcome = loop.create_future()
+        client = None
+        connection = None
+
+        async def exchange(reader, writer):
+            try:
+                payload = json.dumps(config, ensure_ascii=False, separators=(',', ':')).encode() + b'\n'
+                if len(payload) > RECHARGE_BODY_LIMIT:
+                    raise ValueError()
+                writer.write(payload)
+                await writer.drain()
+                reply = await reader.readuntil(b'\n')
+                if len(reply) > RECHARGE_REPLY_LIMIT:
+                    raise ValueError()
+                outcome.set_result(recharge_result(json.loads(reply), config['expectedCountry']))
+            except (OSError, ValueError, asyncio.IncompleteReadError, asyncio.LimitOverrunError,
+                    web.HTTPUnprocessableEntity):
+                if not outcome.done():
+                    outcome.set_result(None)
+            finally:
+                writer.close()
+                with contextlib.suppress(OSError, asyncio.TimeoutError):
+                    await asyncio.wait_for(writer.wait_closed(), 1)
+
+        def accept(reader, writer):
+            nonlocal client, connection
+            if client is not None:
+                writer.close()
+                return
+            try:
+                if hasattr(socket, 'SO_PEERCRED'):
+                    peer = writer.get_extra_info('socket')
+                    _, uid, gid = struct.unpack('3i', peer.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+                    if (uid, gid) != (self.uid, self.gid):
+                        writer.close()
+                        return
+            except OSError:
+                writer.close()
+                return
+            client = writer
+            connection = asyncio.create_task(exchange(reader, writer))
+
+        fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            base = Path('/proc/self/fd') / str(fd) if Path('/proc/self/fd').is_dir() else directory
+            target = base / 'bootstrap.sock'
+            with broker_listener(target) as listener:
+                os.chown(target, -1, self.gid)
+                server = await asyncio.start_unix_server(accept, sock=listener, limit=RECHARGE_REPLY_LIMIT)
+                try:
+                    yield outcome
+                finally:
+                    server.close()
+                    await server.wait_closed()
+                    if client is not None:
+                        client.close()
+                    if connection is not None:
+                        connection.cancel()
+                        await asyncio.gather(connection, return_exceptions=True)
+                    outcome.cancel()
+        finally:
+            os.close(fd)
+
+
+def client_assets(root):
+    root = Path(root).resolve(strict=True)
+    assets = {}
+    for directory in ('core', 'vendor'):
+        for candidate in (root / directory).rglob('*.js'):
+            relative = candidate.relative_to(root)
+            name = relative.as_posix()
+            if (len(name) > MAX_ASSET_PATH or not ASSET_FILENAME.fullmatch(relative.name)
+                    or any(not ASSET_DIRECTORY.fullmatch(part) for part in relative.parts[:-1])):
+                continue
+            try:
+                path = candidate.resolve()
+            except (OSError, RuntimeError):
+                continue
+            if path.is_relative_to(root) and path.is_file():
+                assets[name] = path
+    return assets
+
+
 def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, connect=connect_display, stop=None,
-               *, claims, inspect_unit=unit_state, inventory=running_units):
-    app = web.Application(client_max_size=1024)
-    assets = Path(assets).resolve(strict=True)
+               *, claims, inspect_unit=unit_state, inventory=running_units,
+               recharge=None, recharge_available=recharge_unit_available):
+    app = web.Application(client_max_size=RECHARGE_BODY_LIMIT)
+    workers = Path(workers)
+    assets = client_assets(assets)
     journal = Claims(claims)
     stops = {}
+    prepared = {}
+    selection_key = secrets.token_bytes(32)
+
+    def worker_display(key):
+        # Look up the registered directory on disk. The request identifies a
+        # workspace but never supplies a path component to the socket opener.
+        with os.scandir(workers) as entries:
+            path = next((entry.path for entry in entries
+                         if entry.name == key and entry.is_dir(follow_symlinks=False)), None)
+        if path is None:
+            raise FileNotFoundError()
+        return Path(path) / 'rfb.sock'
+
+    async def connect_worker(key, expected=None):
+        path = worker_display(key)
+        if expected is not None:
+            if socket_identity(path.lstat()) != expected:
+                raise ConnectionRefusedError()
+            if connect is connect_display:
+                return await connect_display(path, expected)
+        return await connect(path)
 
     def desktop(request):
         key = request.match_info['key']
@@ -267,7 +541,7 @@ def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, c
         owners = request.headers.getall('X-Manual-Owner', [])
         if len(owners) != 1 or not OWNER.fullmatch(owners[0]):
             raise web.HTTPForbidden()
-        return owners[0], key, Path(workers) / key / 'rfb.sock'
+        return owners[0], key
 
     def entry_for(owner, key):
         data = journal.read()
@@ -284,7 +558,7 @@ def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, c
 
     async def stopped(key):
         return (await inspect_unit(key) == 'idle' and
-                not await desktop_ready(Path(workers) / key / 'rfb.sock', connect))
+                not await desktop_ready(key, connect_worker))
 
     async def release_previous(owner, key):
         entry = entry_for(owner, key)
@@ -292,17 +566,18 @@ def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, c
             # An interrupted start may not yet have reached systemd. Keep its reservation
             # until its owner retries that record or explicitly stops it.
             if entry['phase'] == 'starting':
-                if await desktop_ready(Path(workers) / entry['key'] / 'rfb.sock', connect):
+                if await desktop_ready(entry['key'], connect_worker):
                     journal.set(owner, entry['key'], 'tracking')
                 raise WorkspaceLocked()
             if not await stopped(entry['key']):
                 raise WorkspaceLocked()
             journal.set(owner, entry['key'], None)
+            await clear_recharge(entry['key'])
         return entry if entry and entry['key'] == key else None
 
-    async def await_ready(key, path):
+    async def await_ready(key):
         deadline = asyncio.get_running_loop().time() + startup_seconds
-        while not await desktop_ready(path, connect):
+        while not await desktop_ready(key, connect_worker):
             if await inspect_unit(key) == 'idle':
                 return False
             if asyncio.get_running_loop().time() >= deadline:
@@ -310,8 +585,135 @@ def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, c
             await asyncio.sleep(0.25)
         return True
 
+    async def admission_state(key):
+        # Untracked units and earlier unresolved commands block new starts.
+        active = await inventory()
+        bindings = journal.read()
+        tracked = {value['key'] for value in bindings.values()}
+        unresolved = {value['key'] for value in bindings.values() if value['phase'] == 'starting'}
+        if active is None or active - tracked or unresolved - active - {key}:
+            raise web.HTTPServiceUnavailable()
+        return await inspect_unit(key)
+
+    async def clear_recharge(key):
+        session = prepared.pop(key, None)
+        if session:
+            await session['relay'].close()
+
+    def current_recharge(key):
+        session = prepared.get(key)
+        with contextlib.suppress(OSError):
+            if session and session['display'] == socket_identity(worker_display(key).lstat()):
+                return session
+        return None
+
+    def require_recharge(key):
+        session = current_recharge(key)
+        if not session:
+            raise web.HTTPConflict()
+        return session
+
+    async def recharge_status(request):
+        if request.query_string or not await recharge_enabled():
+            raise web.HTTPServiceUnavailable()
+        return web.json_response({'rechargeBootstrap': 1})
+
+    async def recharge_enabled():
+        return recharge is not None and activate and admit and stop and await recharge_available()
+
+    async def recharge_workspace_status(request):
+        owner, key = desktop(request)
+        async with journal.lock(owner, startup_seconds + 5, lambda: on_contention(owner, key, 'stream')):
+            entry = entry_for(owner, key)
+            if entry and entry['key'] != key:
+                raise WorkspaceLocked()
+            if not entry or entry['phase'] != 'tracking':
+                raise web.HTTPConflict()
+            session = require_recharge(key)
+            return web.json_response(session['result'])
+
+    async def prepare_recharge(request):
+        owner, key = desktop(request)
+        if not await recharge_enabled():
+            raise web.HTTPServiceUnavailable()
+        config = await read_recharge_config(request)
+        selected_input = json.dumps([config['email'], config['proxyUrl']], separators=(',', ':')).encode()
+        selection = hmac.digest(selection_key, selected_input, 'sha256')
+        async with journal.lock(owner, startup_seconds + 5, lambda: on_contention(owner, key, 'open')):
+            entry = await release_previous(owner, key)
+            session = current_recharge(key)
+            if session and entry and entry['phase'] == 'tracking':
+                if (session['selection'] != selection or (config['expectedCountry']
+                        and session['result']['country'] != config['expectedCountry'])):
+                    raise web.HTTPConflict()
+                return web.json_response(session['result'])
+
+            async with journal.lock('admission', startup_seconds + 5):
+                state = await admission_state(key)
+                if state == 'unknown':
+                    raise web.HTTPServiceUnavailable()
+                if state != 'idle' or await desktop_ready(key, connect_worker):
+                    raise web.HTTPConflict()
+                if not await admit():
+                    raise web.HTTPTooManyRequests()
+                await clear_recharge(key)
+                try:
+                    directory = recharge.workspace(key)
+                    config = {**config, 'proxyUrl': materialize_proxy_session(config['proxyUrl'])}
+                    relay = await recharge.relay(directory, config['proxyUrl'])
+                except EgressError:
+                    raise web.HTTPUnprocessableEntity() from None
+                except OSError:
+                    raise web.HTTPServiceUnavailable() from None
+                launched = False
+                try:
+                    async with recharge.bootstrap(directory, config) as receipt:
+                        journal.set(owner, key, 'starting')
+                        launched = True
+                        if await activate(key) is not True:
+                            raise web.HTTPServiceUnavailable()
+                        result = await asyncio.wait_for(asyncio.shield(receipt), startup_seconds)
+                        if result is None:
+                            raise web.HTTPUnprocessableEntity()
+                        if not await await_ready(key):
+                            raise web.HTTPServiceUnavailable()
+                        display = socket_identity(worker_display(key).lstat())
+                    journal.set(owner, key, 'tracking')
+                    prepared[key] = {'relay': relay, 'display': display, 'selection': selection, 'result': result}
+                except BaseException as error:
+                    await relay.close()
+                    if launched:
+                        journal.set(owner, key, 'stopping')
+                        if not await stop(key) or not await stopped(key):
+                            raise web.HTTPServiceUnavailable() from None
+                        journal.set(owner, key, None)
+                    if isinstance(error, (OSError, asyncio.TimeoutError)):
+                        raise web.HTTPServiceUnavailable() from None
+                    raise
+        return web.json_response(result)
+
+    async def reap_recharge():
+        while True:
+            await asyncio.sleep(5)
+            for key, session in tuple(prepared.items()):
+                if current_recharge(key) is None and prepared.get(key) is session:
+                    await clear_recharge(key)
+
+    async def manage_recharge(_app):
+        with recharge.exclusive():
+            reaper = asyncio.create_task(reap_recharge())
+            try:
+                yield
+            finally:
+                reaper.cancel()
+                await asyncio.gather(reaper, return_exceptions=True)
+                await asyncio.gather(*(session['relay'].close() for session in prepared.values()))
+
+    if recharge is not None:
+        app.cleanup_ctx.append(manage_recharge)
+
     async def open_workspace(request):
-        owner, key, path = desktop(request)
+        owner, key = desktop(request)
         async with journal.lock(owner, startup_seconds + 5, lambda: on_contention(owner, key, 'open')):
             entry = await release_previous(owner, key)
             if entry and entry['phase'] == 'stopping':
@@ -319,23 +721,14 @@ def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, c
                     raise web.HTTPConflict()
                 journal.set(owner, key, None)
                 entry = None
-            if entry and await desktop_ready(path, connect):
+            if entry and await desktop_ready(key, connect_worker):
                 journal.set(owner, key, 'tracking')
                 return web.Response(status=204)
             if not activate or not admit:
                 raise web.HTTPServiceUnavailable()
             async with journal.lock('admission', startup_seconds + 5):
-                # A prestarted unit with no trusted binding has an unknown owner.
-                # New starts must wait until the host reconciles it.
-                active = await inventory()
-                bindings = journal.read()
-                tracked = {value['key'] for value in bindings.values()}
-                # An interrupted command could still start a unit after the host count.
-                unresolved = {value['key'] for value in bindings.values() if value['phase'] == 'starting'}
-                if active is None or active - tracked or unresolved - active - {key}:
-                    raise web.HTTPServiceUnavailable()
-                state = await inspect_unit(key)
-                if state == 'unknown' or (not entry and (state != 'idle' or await desktop_ready(path, connect))):
+                state = await admission_state(key)
+                if state == 'unknown' or (not entry and (state != 'idle' or await desktop_ready(key, connect_worker))):
                     raise web.HTTPServiceUnavailable()
                 if state == 'idle':
                     if not await admit():
@@ -347,7 +740,7 @@ def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, c
                             journal.set(owner, key, None)
                         raise web.HTTPServiceUnavailable()
                 journal.set(owner, key, 'tracking')
-                if not await await_ready(key, path):
+                if not await await_ready(key):
                     journal.set(owner, key, None)
                     raise web.HTTPServiceUnavailable()
         return web.Response(status=204)
@@ -363,16 +756,18 @@ def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, c
                 raise web.HTTPServiceUnavailable()
             if entry['phase'] != 'starting' and await stopped(key):
                 journal.set(owner, key, None)
+                await clear_recharge(key)
                 return
             if not stop:
                 raise web.HTTPServiceUnavailable()
             journal.set(owner, key, 'stopping')
+            await clear_recharge(key)
             if not await stop(key) or not await stopped(key):
                 raise web.HTTPServiceUnavailable()
             journal.set(owner, key, None)
 
     async def stop_workspace(request):
-        identity = desktop(request)[:2]
+        identity = desktop(request)
         if identity not in stops:
             task = asyncio.create_task(finish_stop(*identity))
             stops[identity] = task
@@ -382,18 +777,21 @@ def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, c
 
     async def asset(request):
         name = request.match_info['asset']
-        if not ASSET.fullmatch(name) or request.query_string:
+        if len(name) > MAX_ASSET_PATH or request.query_string:
             raise web.HTTPNotFound()
-        path = (assets / name).resolve()
-        if assets not in path.parents or not path.is_file():
+        path = assets.get(name)
+        if path is None:
             raise web.HTTPNotFound()
         response = web.FileResponse(path)
         response.content_type = 'application/javascript'
         response.headers['X-Content-Type-Options'] = 'nosniff'
         return response
 
-    async def stream(request):
-        owner, key, path = desktop(request)
+    async def recharge_stream(request):
+        return await stream(request, recharge_only=True)
+
+    async def stream(request, recharge_only=False):
+        owner, key = desktop(request)
         ws = web.WebSocketResponse(protocols=('binary',), compress=False, max_msg_size=1024 * 1024)
         async with journal.lock(owner, startup_seconds + 5, lambda: on_contention(owner, key, 'stream')):
             entry = entry_for(owner, key)
@@ -403,8 +801,9 @@ def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, c
                 raise web.HTTPConflict()
             if not ws.can_prepare(request).ok:
                 raise web.HTTPBadRequest()
+            expected = require_recharge(key)['display'] if recharge_only else None
             try:
-                reader, writer = await asyncio.wait_for(connect(path), 2)
+                reader, writer = await asyncio.wait_for(connect_worker(key, expected), 2)
             except (OSError, asyncio.TimeoutError):
                 raise web.HTTPServiceUnavailable()
 
@@ -449,6 +848,10 @@ def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, c
     app.router.add_post('/v1/workspaces/{key}/open', open_workspace)
     app.router.add_post('/v1/workspaces/{key}/stop', stop_workspace)
     app.router.add_get('/v1/workspaces/{key}/stream', stream, allow_head=False)
+    app.router.add_get('/v1/recharge/status', recharge_status, allow_head=False)
+    app.router.add_post('/v1/workspaces/{key}/prepare', prepare_recharge)
+    app.router.add_get('/v1/workspaces/{key}/recharge-status', recharge_workspace_status, allow_head=False)
+    app.router.add_get('/v1/workspaces/{key}/recharge-stream', recharge_stream, allow_head=False)
     app.router.add_get('/v1/client/{asset:.*}', asset)
     return app
 
@@ -517,6 +920,9 @@ def main():
     parser.add_argument('--claims', required=True, type=Path, help='Private persistent broker state directory (0700)')
     parser.add_argument('--assets', default='/usr/share/novnc', type=Path)
     parser.add_argument('--start-units', action='store_true', help='Activate installed isolated worker units')
+    parser.add_argument('--recharge-input', type=Path, help='Existing private broker-owned recharge input root (0700)')
+    parser.add_argument('--recharge-block-network', action='append', default=[],
+                        help='Additional host or business network to block from recharge worker egress')
     parser.add_argument('--max-active', type=int, help='Measured host limit for concurrent desktop units')
     parser.add_argument('--min-available-mib', type=int, help='Required MemAvailable before a cold start')
     args = parser.parse_args()
@@ -533,11 +939,27 @@ def main():
     parent = args.socket.parent.stat()
     if parent.st_uid != os.geteuid() or parent.st_mode & 0o022:
         parser.error('The broker must own its private socket directory')
+    recharge = None
+    if args.recharge_input:
+        if not args.start_units or not args.recharge_input.is_absolute():
+            parser.error('Recharge preparation requires --start-units and an absolute --recharge-input')
+        roots = (args.workers.resolve(), args.claims.resolve(), args.socket.parent.resolve())
+        incoming = args.recharge_input.resolve()
+        if any(incoming.is_relative_to(root) or root.is_relative_to(incoming) for root in roots):
+            parser.error('Recharge input must be separate from socket, claim and mutable worker directories')
+        try:
+            recharge = RechargeInputs(args.recharge_input, args.recharge_block_network)
+            recharge.check()
+        except (OSError, ValueError):
+            parser.error('Invalid recharge input directory or blocked network')
+    elif args.recharge_block_network:
+        parser.error('Recharge blocked networks require --recharge-input')
+
     async def admit():
         return await host_has_capacity(args.max_active, args.min_available_mib)
 
     app = create_app(args.workers, args.assets, start_unit if args.start_units else None, admit,
-                     stop=stop_unit if args.start_units else None, claims=args.claims)
+                     stop=stop_unit if args.start_units else None, claims=args.claims, recharge=recharge)
     with broker_listener(args.socket) as listener:
         web.run_app(app, sock=listener, print=None, access_log=None)
 

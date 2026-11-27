@@ -90,6 +90,7 @@ test('人工新增、编辑及失败重试保留登记内容和全量统计', as
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(origin + '/#/recharge/start');
     const panel = page.locator('#bit-renewals-content');
+    await page.getByRole('tab', { name: '续费登记', exact: true }).click();
     const entry = page.locator('#bit-renewal-entry');
     const drawer = page.getByRole('dialog', { name: '续费记录' });
     const row = value => panel.locator('tbody tr').filter({ hasText: value });

@@ -65,12 +65,21 @@ import { createRenewalHandoff, renewalHandoffPath } from './renewal-handoff.mjs'
 import { readBackupMonitorReceipt, readRestoreEvidence } from './monitoring-worker-receipts.mjs';
 import { websitePages } from '../modules/website/pages.mjs';
 import { acceptWebSocketUpgrade } from './native-ws.mjs';
-import { NativeBrowserError, closeNativeBrowser, getActiveBrowser } from './native-chrome-runner.mjs';
+import { NativeBrowserError, closeNativeBrowser, getActiveBrowser, parseProxyServerConfig } from './native-chrome-runner.mjs';
 import {
   attachPrototypeWsBridge,
   launchPrototypeWorkbenchSession,
+  loadEnvRegionProxies,
   verifyOwnedWorkbenchLogin
 } from './native-browser-session.mjs';
+
+function manualWorkbenchHttpProxy(value) {
+  if (typeof value !== 'string' || !value.trim() || value.length > 2048 || /[\u0000-\u001f\u007f]/.test(value)) return false;
+  const proxy = parseProxyServerConfig(value);
+  return proxy?.protocol === 'http:' && Boolean(proxy.host) &&
+    Number.isInteger(proxy.port) && proxy.port > 0 && proxy.port <= 65535 &&
+    Boolean(proxy.username) === Boolean(proxy.password);
+}
 
 function requireSecurityConfirmation(response) {
   response.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -218,6 +227,7 @@ export async function startPreview(
     rechargePartnerEnabled = process.env.ID_RECHARGE_PARTNER_API === '1',
     rechargeOrderSync = Boolean(publicOrigin && rechargeConfig),
     manualWorkspaceSocket = process.env.ID_MANUAL_WORKSPACE_SOCKET,
+    manualRechargeOnly = process.env.ID_MANUAL_RECHARGE_ONLY === '1',
     monitoringProbeSecret = process.env.ID_MONITOR_PROBE_SECRET,
     monitoringWorkerReceiptsDirectory = process.env.ID_MONITOR_WORKER_RECEIPTS_DIR,
     monitoringBackupReceiptsDirectory = process.env.ID_MONITOR_BACKUP_RECEIPTS_DIR
@@ -641,7 +651,7 @@ export async function startPreview(
     ]
   }) : null;
   const manualRemote = createManualRemoteAccess({
-    socketPath: manualWorkspaceSocket, publicOrigin: secureOrigin, store,
+    socketPath: manualWorkspaceSocket, publicOrigin: secureOrigin, store, rechargeOnly: manualRechargeOnly,
     getActor: request => auth?.getActor(request)
   });
   const server = createServer((request, response) => {
@@ -864,39 +874,92 @@ export async function startPreview(
     }
     if (route.startsWith('/api/local/native-workbench-prototype/')) {
       if (!canManage) return forbidden();
-      if (publicUrl) return response.writeHead(404, { 'Cache-Control': 'private, no-store' }).end();
       const requestOrigin = secureOrigin || `http://${request.headers.host}`;
       if (request.headers.origin && request.headers.origin !== requestOrigin) {
         response.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
         return response.end(JSON.stringify({ error: '仅允许从当前页面操作' }));
       }
-      if (request.method !== 'POST') {
-        return response.writeHead(405, { Allow: 'POST' }).end();
-      }
       const action = route.slice('/api/local/native-workbench-prototype/'.length);
+      if (publicUrl && (!manualWorkspaceSocket || !['ip-options', 'launch'].includes(action)))
+        return response.writeHead(404, { 'Cache-Control': 'private, no-store' }).end();
       const ownerId = actor?.id || (auth ? '' : 'local-operator');
       if (!ownerId) return forbidden();
       const sendJson = (status, payload) => {
         response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
         return response.end(JSON.stringify(payload));
       };
+      const availableProxies = () => Object.entries(loadEnvRegionProxies())
+        .filter(([code, link]) => ['ph', 'eg'].includes(code) && manualWorkbenchHttpProxy(link));
       return void (async () => {
         try {
+          if (publicUrl && !await manualRemote.rechargeReady())
+            return sendJson(503, { error: '正式站浏览器工作区暂时无法启动' });
+          if (action === 'ip-options' && request.method === 'GET') {
+            const personal = actor && store ? store.loadBitBrowserProxies(actor) : { version: 0, items: [] };
+            const choices = personal.items.filter(item => item.mode === 'static' && item.protocol === 'http');
+            return sendJson(200, {
+              version: personal.version,
+              choices: [
+                ...choices.map(({ id, name, endpoint, countryCode }) => ({ id, name, endpoint, countryCode })),
+                ...availableProxies().map(([code, link]) => {
+                  const { host, port } = parseProxyServerConfig(link);
+                  return { id: code, name: code === 'ph' ? '菲律宾线路' : '埃及线路', endpoint: `${host}:${port}` };
+                })
+              ]
+            });
+          }
+          if (request.method !== 'POST') return response.writeHead(405, { Allow: 'POST' }).end();
           const chunks = [];
           let total = 0;
-          for await (const chunk of request) {
+          for await (const chunk of request.iterator({ destroyOnReturn: false })) {
             total += chunk.length;
-            if (total > 1024 * 1024) throw new NativeBrowserError(413, '请求体过大');
+            if (total > (publicUrl ? 8_192 : 132_000)) {
+              request.resume();
+              throw new NativeBrowserError(413, '手动充值提交资料过大');
+            }
             chunks.push(chunk);
           }
           const body = chunks.length ? JSON.parse(Buffer.concat(chunks).toString('utf8')) : {};
           if (action === 'launch') {
-            return sendJson(200, await launchPrototypeWorkbenchSession({
-              sessionJson: body?.sessionJson,
-              proxyRegion: body?.proxyRegion,
-              customProxyUrl: body?.customProxyUrl,
-              ownerId
-            }));
+            const email = publicUrl && typeof body?.email === 'string' ? body.email.trim().toLowerCase() : '';
+            if (publicUrl) {
+              if (!email || email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) ||
+                  Object.keys(body).some(key => !['email', 'proxyId', 'proxyVersion', 'customProxyUrl'].includes(key)))
+                throw new NativeBrowserError(400, '请核对工作区的账号邮箱与代理选择');
+              if (request.headers.origin !== requestOrigin)
+                throw new NativeBrowserError(403, '仅允许从当前页面提交');
+            } else if (typeof body?.sessionJson !== 'string' || Buffer.byteLength(body.sessionJson) > 65_000) {
+              throw new NativeBrowserError(400, '请粘贴 65 KB 以内的单账号授权 JSON');
+            }
+            const choice = body?.proxyId;
+            let link, countryCode;
+            if (choice === 'custom') {
+              link = body.customProxyUrl;
+            } else if (['ph', 'eg'].includes(choice)) {
+              link = availableProxies().find(([code]) => code === choice)?.[1];
+              countryCode = choice.toUpperCase();
+            } else if (actor && store && typeof choice === 'string' && choice) {
+              const proxy = store.useBitBrowserProxy({ id: choice, version: body.proxyVersion }, actor);
+              if (proxy.mode === 'static' && proxy.protocol === 'http') {
+                link = proxy.link;
+                countryCode = proxy.countryCode;
+              }
+            }
+            if (!manualWorkbenchHttpProxy(link))
+              throw new NativeBrowserError(400, '请选择可用的 HTTP 代理 IP');
+            if (publicUrl) {
+              const proxy = parseProxyServerConfig(link);
+              const host = proxy.host.includes(':') && !proxy.host.startsWith('[') ? '[' + proxy.host + ']' : proxy.host;
+              const auth = proxy.username ? encodeURIComponent(proxy.username) + ':' + encodeURIComponent(proxy.password) + '@' : '';
+              const proxyUrl = 'http://' + auth + host + ':' + proxy.port;
+              return sendJson(200, await manualRemote.prepareRecharge(request, {
+                email, proxyUrl, expectedCountry: countryCode || ''
+              }));
+            }
+            const { profileKey, account, proxy, loginVerification } = await launchPrototypeWorkbenchSession({
+              sessionJson: body.sessionJson, customProxyUrl: link, countryCode, requireVerifiedProxy: true, ownerId
+            });
+            return sendJson(200, { profileKey, account: { email: account.email }, proxy, loginVerification });
           }
           if (action === 'close') {
             const profileKey = String(body?.profileKey || '');
@@ -914,10 +977,13 @@ export async function startPreview(
               expectedEmail: body?.expectedEmail || ''
             }));
           }
-          return sendJson(404, { error: '不支持的原型操作' });
+          return sendJson(404, { error: '不支持的工作台操作' });
         } catch (error) {
-          const status = error instanceof NativeBrowserError ? error.status : (error instanceof SyntaxError ? 400 : 500);
-          return sendJson(status, { error: error?.message || '原型操作失败' });
+          const status = Number.isInteger(error?.status) && error.status >= 400 && error.status <= 599
+            ? error.status : error instanceof SyntaxError ? 400 : 500;
+          const message = status >= 500 ? '内置浏览器未能启动或连接，请重试'
+            : error instanceof SyntaxError ? '无法读取提交资料' : error.message;
+          return sendJson(status, { error: message });
         }
       })();
     }
@@ -941,18 +1007,26 @@ export async function startPreview(
 
     if (route === '/integrations/native-workbench/prototype') {
       if (!canManage) return forbidden();
-      if (publicUrl) return response.writeHead(404, { 'Cache-Control': 'private, no-store' }).end();
       if (request.method !== 'GET' && request.method !== 'HEAD') {
         return response.writeHead(405, { Allow: 'GET, HEAD' }).end();
       }
-      response.writeHead(200, {
-        'Content-Type': 'text/html; charset=utf-8',
-        'Content-Length': nativePrototypeHtml.length,
-        'Cache-Control': 'no-cache, no-store, must-revalidate, max-age=0',
-        'Content-Security-Policy':
-          "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self' ws: wss:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'"
-      });
-      return response.end(request.method === 'HEAD' ? undefined : nativePrototypeHtml);
+      const embedded = new URL(request.url, 'http://localhost').searchParams.get('embedded') === '1';
+      const sendPage = ready => {
+        const flags = [publicUrl && (ready ? 'data-workbench-isolated' : 'data-workbench-paused'),
+          embedded && 'data-workbench-embedded'].filter(Boolean);
+        const page = flags.length ? Buffer.from(nativePrototypeHtml.toString().replace('<body class="proto-body">',
+          `<body class="proto-body" ${flags.join(' ')}>`)) : nativePrototypeHtml;
+        response.writeHead(200, {
+          'Content-Type': 'text/html; charset=utf-8',
+          'Content-Length': page.length,
+          'Cache-Control': 'no-cache, no-store, must-revalidate, max-age=0',
+          'Content-Security-Policy':
+            "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' blob:; connect-src 'self' ws: wss:; frame-ancestors 'self'; base-uri 'none'; form-action 'none'"
+        });
+        return response.end(request.method === 'HEAD' ? undefined : page);
+      };
+      if (publicUrl && manualWorkspaceSocket) return void manualRemote.rechargeReady().then(sendPage);
+      return sendPage(false);
     }
     if (route === '/integrations/bitbrowser/local-login') {
       if (!canManage) return forbidden();
@@ -1030,7 +1104,7 @@ export async function startPreview(
         metadata += `\n<meta name="id-column-preferences" content="${preferences}" />`;
       }
       let document = body.toString('utf8').replace('<head>', metadata);
-      if (manualWorkspaceSocket && canManageManualRenewals(actor))
+      if (manualWorkspaceSocket && !manualRechargeOnly && canManageManualRenewals(actor))
         document = document.replace('<body>', '<body data-manual-remote-workspaces>');
       body = Buffer.from(document);
     }

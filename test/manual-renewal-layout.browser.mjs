@@ -162,6 +162,7 @@ test('手动充值 A 布局在桌面和手机使用相同的续费资料与地�
       assert.equal((await headerGeometry()).formOffset, before.formOffset, '展开说明不挤动列表');
       await page.keyboard.press('Escape');
       assert.equal(await help.evaluate(node => node.open), false);
+      await page.getByRole('tab', { name: '续费登记', exact: true }).click();
       const draft = page.locator('#bit-renewal-notes');
       await draft.fill('布局验收草稿');
       const addressJump = page.getByRole('button', { name: '前往地址管理', exact: true });

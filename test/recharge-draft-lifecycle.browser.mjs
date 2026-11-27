@@ -113,28 +113,22 @@ test('embedded recharge retains ordinary drafts across reloads, isolates records
   await assertEventually(() => frame().locator('#checkout_region_selector').inputValue(), 'EG');
   assert.match(await frame().locator('#checkout_region_hint').textContent(), /埃及/);
 
-  // The BitBrowser iframe keeps connection drafts and clears the authorization and its email.
+  // Temporary authorization and proxy credentials are cleared on leaving the workbench.
   await navigate('recharge/start');
-  const bit = () => page.frameLocator('.recharge-integration__frame--bit-local');
-  await bit().locator('#bit-tab-login').click();
+  const manual = () => page.frameLocator('iframe[data-view="manual-recharge"]');
   const windowEmail = 'draft-window@example.test';
-  await bit().locator('#bit-authorization-json').fill(JSON.stringify({
-    sessionToken: 'synthetic-session', user: { id: 'user-fixture', email: windowEmail },
-    account: { id: 'account-fixture' }
+  await manual().locator('#protoJsonInput').fill(JSON.stringify({
+    sessionToken: 'synthetic-session', user: { email: windowEmail }
   }));
-  await assertEventually(() => bit().locator('#bit-window-name').inputValue(), windowEmail);
-  await bit().locator('#bit-connection-name').fill('Draft connection');
-  await bit().locator('#bit-local-token').fill('fixture-local-secret');
+  await assertEventually(() => manual().locator('#protoParsedEmail').textContent(), windowEmail);
+  await manual().locator('#protoRegionSelect').selectOption('custom');
+  await manual().locator('#protoProxyInput').fill('synthetic.example.test:8080');
   await navigate('customers/list');
   await page.locator('#main > [data-page-region]:not([hidden]) [data-recharge-module]').waitFor({ state: 'detached' });
   await navigate('recharge/start');
-  await bit().locator('#bit-tab-login').click();
-  await assertEventually(() => bit().locator('#bit-connection-name').inputValue(), 'Draft connection');
-  assert.equal(await bit().locator('#bit-window-name').inputValue(), '');
-  assert.equal(await bit().locator('#bit-local-token').inputValue(), '');
-  const bitDraft = JSON.stringify(await page.evaluate(() => window.IDRechargeDrafts.read('bit-local')));
-  assert(!bitDraft.includes(windowEmail));
-  assert(!bitDraft.includes('fixture-local-secret'));
+  assert.equal(await manual().locator('#protoRegionSelect').inputValue(), 'custom');
+  assert.equal(await manual().locator('#protoJsonInput').inputValue(), '');
+  assert.equal(await manual().locator('#protoProxyInput').inputValue(), '');
   assert.deepEqual(traffic.external, []);
   assert.deepEqual(errors, []);
 });

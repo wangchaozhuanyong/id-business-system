@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import socket
 import sys
@@ -9,7 +10,7 @@ import unittest
 from aiohttp import WSServerHandshakeError, web
 from aiohttp.test_utils import TestClient, TestServer
 
-from broker import Claims, broker_listener, connect_display, create_app
+from broker import Claims, RechargeInputs, broker_listener, connect_display, create_app, materialize_proxy_session
 
 
 class BrokerTests(unittest.IsolatedAsyncioTestCase):
@@ -25,6 +26,10 @@ class BrokerTests(unittest.IsolatedAsyncioTestCase):
         assets = Path('assets')
         (assets / 'core').mkdir(parents=True)
         (assets / 'core' / 'rfb.js').write_text('export default 1;')
+        (assets / 'vendor' / 'nested_lib').mkdir(parents=True)
+        (assets / 'vendor' / 'nested_lib' / 'renderer.js').write_text('export default 2;')
+        Path('internal.js').write_text('fixture outside the asset root')
+        (assets / 'core' / 'unlisted.js').symlink_to('../../internal.js')
         # macOS has short socket paths and no Linux O_PATH. Test the real broker
         # transport on Linux; on macOS use a socket owned by this test process.
         self.connect = connect_display if hasattr(os, 'O_PATH') else asyncio.open_unix_connection
@@ -35,14 +40,14 @@ class BrokerTests(unittest.IsolatedAsyncioTestCase):
         self.claims.mkdir(mode=0o700)
         self.client = await self.make_client()
 
-    async def make_client(self, activate=None, admit=None, stop=None, inspect_unit=None, inventory=None):
+    async def make_client(self, activate=None, admit=None, stop=None, inspect_unit=None, inventory=None, **opts):
         async def inspect(key):
             return self.states.get(key, 'idle')
         async def units():
             return {key for key, state in self.states.items() if state == 'busy'}
         app = create_app('.', 'assets', activate, admit, stop=stop, connect=self.connect,
                          claims=self.claims, inspect_unit=inspect_unit or inspect, inventory=inventory or units,
-                         startup_seconds=1)
+                         startup_seconds=1, **opts)
         client = TestClient(TestServer(app), headers={'X-Manual-Owner': self.owners[0]})
         await client.start_server()
         self.addAsyncCleanup(client.close)
@@ -111,6 +116,174 @@ class BrokerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await asset.text(), 'export default 1;')
         self.assertEqual((await self.client.get('/v1/client/core/rfb.js?u=a')).status, 404)
         self.assertEqual((await self.client.get('/v1/client/unused.js')).status, 404)
+
+    async def test_client_serves_only_registered_assets(self):
+        asset = await self.client.get('/v1/client/vendor/nested_lib/renderer.js')
+        self.assertEqual(asset.status, 200)
+        self.assertEqual(await asset.text(), 'export default 2;')
+        self.assertEqual(asset.headers['X-Content-Type-Options'], 'nosniff')
+        self.assertEqual((await self.client.get('/v1/client/core/unlisted.js')).status, 404)
+        long_unregistered_name = '/v1/client/core/' + 'a' * 1024 + '.js'
+        self.assertEqual((await self.client.get(long_unregistered_name)).status, 404)
+
+    async def test_claim_lock_uses_the_existing_owner_filename_and_rejects_links(self):
+        owner = self.owners[0]
+        lock = self.claims / (owner + '.lock')
+        claims = Claims(self.claims)
+        async with claims.lock(owner, 1):
+            self.assertTrue(lock.is_file())
+        lock.unlink()
+        marker = Path('outside-lock').resolve()
+        marker.write_text('preserve')
+        lock.symlink_to(marker)
+        route = '/v1/workspaces/' + self.keys[0] + '/open'
+        self.assertEqual((await self.client.post(route)).status, 503)
+        self.assertEqual(marker.read_text(), 'preserve')
+
+    async def test_worker_directory_must_be_registered_without_a_link(self):
+        first, second = self.keys
+        await self.add_display(first, b'private:')
+        Path(second).symlink_to(first, target_is_directory=True)
+        self.bind(self.owners[0], second)
+        route = '/v1/workspaces/' + second
+        self.assertEqual((await self.client.post(route + '/open')).status, 503)
+        with self.assertRaises(WSServerHandshakeError) as denied:
+            await self.client.ws_connect(route + '/stream', protocols=('binary',))
+        self.assertEqual(denied.exception.status, 503)
+
+    async def make_recharge_lab(self, response):
+        class Relay:
+            closed = False
+
+            async def close(self):
+                self.closed = True
+
+        class Inputs(RechargeInputs):
+            async def relay(self, directory, url):
+                self.upstreams.append((directory, url, Relay()))
+                return self.upstreams[-1][2]
+
+        directory = Path('in')
+        directory.mkdir(mode=0o700)
+        inputs = Inputs(directory, uid=os.geteuid(), gid=os.getegid())
+        inputs.upstreams = []
+        inputs.messages = []
+
+        async def worker(key):
+            reader, writer = await asyncio.open_unix_connection(directory / key / 'bootstrap.sock')
+            try:
+                inputs.messages.append(json.loads(await reader.readline()))
+                await self.add_display(key, b'recharge:')
+                writer.write(json.dumps(response).encode() + b'\n')
+                await writer.drain()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        async def activate(key):
+            self.states[key] = 'busy'
+            task = asyncio.create_task(worker(key))
+
+            async def finish():
+                await task
+
+            self.addAsyncCleanup(finish)
+            return True
+
+        async def admit():
+            return True
+
+        async def stop(key):
+            await self.release_display(key)
+            return True
+
+        client = await self.make_client(activate, admit, stop, recharge=inputs, recharge_available=admit)
+        return client, inputs
+
+    async def test_recharge_prepares_exact_owner_exit_and_reconnects_without_another_launch(self):
+        config = {'email': 'operator@example.test', 'proxyUrl': 'http://relay.example.test:8080',
+                  'expectedCountry': 'PH'}
+        result = {'exitIp': '1.1.1.1', 'country': 'PH', 'accountStatus': 'check-in-browser'}
+        client, inputs = await self.make_recharge_lab(result)
+        self.assertEqual((await self.client.get('/v1/recharge/status')).status, 503)
+        self.assertEqual(await (await client.get('/v1/recharge/status')).json(), {'rechargeBootstrap': 1})
+        key = self.keys[0]
+        route = '/v1/workspaces/' + key
+        self.assertEqual((await client.get(route + '/recharge-status')).status, 409)
+        self.assertEqual((await client.post(route + '/prepare', json={**config, 'unexpected': True})).status, 400)
+        oversized = dict(config, email='a' * 8192 + '@example.test')
+        self.assertEqual((await client.post(route + '/prepare', json=oversized)).status, 413)
+        self.assertEqual(inputs.upstreams, [])
+        for _ in range(2):
+            prepared = await client.post(route + '/prepare', json=config)
+            self.assertEqual(prepared.status, 200)
+            self.assertEqual(await prepared.json(), result)
+        self.assertEqual(inputs.messages, [config])
+        automatic = await client.post(route + '/prepare', json=dict(config, expectedCountry=''))
+        self.assertEqual(automatic.status, 200)
+        self.assertEqual(await automatic.json(), result)
+        self.assertEqual(len(inputs.upstreams), 1)
+        self.assertEqual(inputs.upstreams[0][1], config['proxyUrl'])
+        self.assertFalse((inputs.root / key / 'bootstrap.sock').exists())
+        self.assertEqual(await (await client.get(route + '/recharge-status')).json(), result)
+        self.assertEqual(Claims(self.claims).read(), {self.owners[0]: {'key': key, 'phase': 'tracking'}})
+        self.assertEqual((await client.get(route + '/recharge-status',
+                                           headers={'X-Manual-Owner': self.owners[1]})).status, 403)
+        async with client.ws_connect(route + '/recharge-stream', protocols=('binary',)) as stream:
+            self.assertEqual(await stream.receive_bytes(), b'RFB 003.008\n')
+            await stream.send_bytes(b'test')
+            self.assertEqual(await stream.receive_bytes(), b'recharge:test')
+        altered = dict(config, proxyUrl='http://replacement.example.test:8080')
+        self.assertEqual((await client.post(route + '/prepare', json=altered)).status, 409)
+        replacement = await asyncio.start_unix_server(lambda _reader, writer: writer.close(),
+                                                      path=Path(key) / 'replacement.sock')
+        try:
+            (Path(key) / 'replacement.sock').replace(Path(key) / 'rfb.sock')
+            self.assertEqual((await client.get(route + '/recharge-status')).status, 409)
+            with self.assertRaises(WSServerHandshakeError) as denied:
+                await client.ws_connect(route + '/recharge-stream', protocols=('binary',))
+            self.assertEqual(denied.exception.status, 409)
+        finally:
+            replacement.close()
+            await replacement.wait_closed()
+        self.assertEqual((await client.post(route + '/stop')).status, 204)
+        self.assertTrue(inputs.upstreams[0][2].closed)
+        self.assertEqual((await client.get(route + '/recharge-status')).status, 409)
+
+    async def test_recharge_materializes_one_sticky_proxy_session_for_probe_and_viewer(self):
+        receipt = {'exitIp': '1.1.1.1', 'country': 'PH', 'accountStatus': 'check-in-browser'}
+        client, inputs = await self.make_recharge_lab(receipt)
+        selected_url = 'http://fixture-%7Bsession%7D-%7Bsession%7D:test%40value@relay.example.test:8080'
+        route = '/v1/workspaces/' + self.keys[0]
+        config = {'email': 'operator@example.test', 'proxyUrl': selected_url, 'expectedCountry': ''}
+        for _ in range(2):
+            response = await client.post(route + '/prepare', json=config)
+            self.assertEqual(response.status, 200)
+            self.assertEqual(await response.json(), receipt)
+        self.assertEqual(len(inputs.upstreams), 1)
+        self.assertEqual(len(inputs.messages), 1)
+        effective_url = inputs.upstreams[0][1]
+        self.assertEqual(inputs.messages[0]['proxyUrl'], effective_url)
+        self.assertRegex(effective_url, r'^http://fixture-([1-9][0-9]{7})-\1:test%40value@relay\.example\.test:8080$')
+        legacy = materialize_proxy_session('http://fixture-session-original-sessiontime-3:test@relay.example.test:8080')
+        self.assertRegex(legacy, r'^http://fixture-session-[1-9][0-9]{7}-sessiontime-3:test@relay\.example\.test:8080$')
+        fixed = 'http://fixture:test%40value@relay.example.test:8080'
+        self.assertEqual(materialize_proxy_session(fixed), fixed)
+
+    async def test_recharge_mismatched_exit_stops_worker_and_keeps_viewer_closed(self):
+        response = {'exitIp': '1.1.1.1', 'country': 'EG', 'accountStatus': 'check-in-browser'}
+        client, inputs = await self.make_recharge_lab(response)
+        route = '/v1/workspaces/' + self.keys[0]
+        config = {'email': 'operator@example.test', 'proxyUrl': 'http://relay.example.test:8080',
+                  'expectedCountry': 'PH'}
+        self.assertEqual((await client.post(route + '/prepare', json=config)).status, 422)
+        self.assertTrue(inputs.upstreams[0][2].closed)
+        self.assertEqual(self.states[self.keys[0]], 'idle')
+        self.assertEqual(Claims(self.claims).read(), {})
+        self.assertEqual((await client.get(route + '/recharge-status')).status, 409)
+        with self.assertRaises(WSServerHandshakeError) as denied:
+            await client.ws_connect(route + '/recharge-stream', protocols=('binary',))
+        self.assertEqual(denied.exception.status, 409)
 
     async def test_capacity_only_controls_cold_starts(self):
         count = 0

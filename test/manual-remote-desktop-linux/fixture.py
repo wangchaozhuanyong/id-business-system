@@ -2,23 +2,28 @@
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 
+START_PAGES = {
+    "/start/alpha": ("demo=alpha; HttpOnly; SameSite=Strict; Path=/; Max-Age=3600", "/work/alpha"),
+    "/start/bravo": ("demo=bravo; HttpOnly; SameSite=Strict; Path=/; Max-Age=3600", "/work/bravo"),
+}
+PAGES = {f"/{action}/{account}": account for action in ("work", "detail") for account in ("alpha", "bravo")}
+
+
 class Fixture(BaseHTTPRequestHandler):
     def log_message(self, *_):
         pass
 
     def do_GET(self):
-        parts = self.path.split("/")
-        if len(parts) != 3 or parts[2] not in ("alpha", "bravo"):
-            self.send_error(404)
-            return
-        action, account = parts[1:]
-        if action == "start":
+        start = START_PAGES.get(self.path)
+        if start:
+            cookie, location = start
             self.send_response(303)
-            self.send_header("Set-Cookie", f"demo={account}; HttpOnly; SameSite=Strict; Path=/; Max-Age=3600")
-            self.send_header("Location", "/work/" + account)
+            self.send_header("Set-Cookie", cookie)
+            self.send_header("Location", location)
             self.end_headers()
             return
-        if action not in ("work", "detail"):
+        account = PAGES.get(self.path)
+        if account is None:
             self.send_error(404)
             return
         signed_in = self.headers.get("Cookie") == "demo=" + account

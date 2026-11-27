@@ -46,12 +46,23 @@ test('embedded IP editor uses the host viewport and retains its original control
         return route.fulfill({ status: 400, json: { error: '不应读取真实代理' } });
       });
       try {
-        await page.goto(origin + '/#/recharge/start');
+        await page.goto(origin + '/#/overview');
+        await page.evaluate(() => {
+          const frame = document.createElement('iframe');
+          frame.className = 'recharge-integration__frame--bit-local';
+          frame.style.cssText = 'display:block;width:100%;height:600px;border:0';
+          frame.src = '/integrations/bitbrowser/local-login';
+          document.querySelector('#main').append(frame);
+        });
         const bit = page.frameLocator('.recharge-integration__frame--bit-local');
+        await bit.locator('#bit-tab-login').click();
         await bit.locator('#bit-connection-profile').selectOption(profile.id);
         await bit.locator('#bit-local-group option[value="fixture-group"]').waitFor({ state: 'attached' });
-        if (theme === 'dark') await page.locator('#theme-toggle').click();
-        await bit.locator('#bit-tab-library').click();
+        if (theme === 'dark') {
+          await page.locator('#theme-toggle').click();
+          await bit.locator('html').evaluate(node => { node.dataset.theme = 'dark'; });
+        }
+        await bit.locator('#bit-show-library').click();
         await bit.locator('#bit-library-add').click();
         const modal = page.locator('#bit-proxy-editor[open]');
         await modal.waitFor();
@@ -90,7 +101,7 @@ test('embedded IP editor uses the host viewport and retains its original control
         await page.locator('body > #bit-proxy-editor').waitFor({ state: 'detached' });
         await bit.locator('#bit-proxy-editor:not([open])').waitFor({ state: 'attached' });
         await page.waitForFunction(() => document.querySelector('.recharge-integration__frame--bit-local').contentDocument.querySelector('#bit-execution-proxy').value === '22222222-2222-4222-8222-222222222222');
-        await bit.locator('#bit-tab-library').click();
+        await bit.locator('#bit-show-library').click();
         await bit.locator('#bit-library-add').click();
         await modal.locator('#bit-ip-name').fill('保留的普通草稿');
         await modal.locator('#bit-ip-link').fill('socks5://temporary-secret@192.0.2.8:8080');

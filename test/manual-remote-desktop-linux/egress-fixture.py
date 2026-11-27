@@ -46,6 +46,7 @@ def serve(role, directory):
     if role == "web":
         tls = http.server.ThreadingHTTPServer(("203.0.113.10", 443), Page)
         cert = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        cert.minimum_version = ssl.TLSVersion.TLSv1_2
         cert.load_cert_chain(directory / "cert.pem", directory / "key.pem")
         tls.socket = cert.wrap_socket(tls.socket, server_side=True)
         services.extend([tls, http.server.ThreadingHTTPServer(("203.0.113.10", 8080), Page),

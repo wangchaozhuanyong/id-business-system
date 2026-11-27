@@ -46,7 +46,7 @@ test('warm navigation reuses connected page documents, scopes refresh and clears
           '/integrations/codexdaichong/redeem': 'query',
           '/integrations/codexdaichong/admin': 'admin',
           '/integrations/codexdaichong/workspace': 'workspace',
-          '/integrations/bitbrowser/local-login': 'bit'
+          '/integrations/native-workbench/prototype': 'bit'
         })[path];
         if (key) requests[key]++;
       });
@@ -57,7 +57,7 @@ test('warm navigation reuses connected page documents, scopes refresh and clears
       const idle = () => page.locator(active + ' .recharge-integration__view[aria-busy="false"]').waitFor();
       const ready = async route => {
         await page.locator(`${active}[data-page-region="${route}"]`).waitFor();
-        await frame().locator(route === bit ? '#bit-login-form' : route === workspace ? '#workspaceOperation' : '#querySection').waitFor();
+        await frame().locator(route === bit ? '#protoLaunchForm' : route === workspace ? '#workspaceOperation' : '#querySection').waitFor();
         await idle();
         await settle();
       };
@@ -164,8 +164,8 @@ test('warm navigation reuses connected page documents, scopes refresh and clears
         if (width <= 900) await page.locator('#nav-toggle').click();
         await page.locator('#sidebar').getByRole('button', { name: '快速操作', exact: true }).click();
         await page.locator(`#sidebar a[href="#/${workspace}"]`).click();
-        await page.getByText('充值任务正在执行，请等待任务处理完成后再切换或刷新。', { exact: true }).waitFor();
-        assert.equal(new URL(page.url()).hash, '#/' + bit, '比特登录执行锁未阻止导航');
+        await page.getByText('正在打开手动充值操作窗，请稍候。', { exact: true }).waitFor();
+        assert.equal(new URL(page.url()).hash, '#/' + bit, '站内操作窗启动期间未阻止导航');
         await same('bit');
         await frame().locator('html').evaluate(root => { root.dataset.rechargeNavigationLocked = 'false'; });
         // A blocked mobile navigation leaves the menu open.
@@ -175,7 +175,7 @@ test('warm navigation reuses connected page documents, scopes refresh and clears
         await same('workspace');
         assert.deepEqual(requests, { query: 1, admin: 2, workspace: 1, bit: 1 });
         assert.deepEqual(errors, []);
-        await page.getByText('充值任务正在执行，请等待任务处理完成后再切换或刷新。', { exact: true }).waitFor({ state: 'hidden' });
+        await page.getByText('正在打开手动充值操作窗，请稍候。', { exact: true }).waitFor({ state: 'hidden' });
         if (output) await page.screenshot({ path: join(output, `page-lifecycle-${width}-${dark ? 'dark' : 'light'}.png`) });
         await page.evaluate(() => window.IDDesignAPI.clearPageRegions());
         assert.equal(await page.locator('#main [data-page-region]').count(), 0, '身份清理必须移除全部已挂载页面');

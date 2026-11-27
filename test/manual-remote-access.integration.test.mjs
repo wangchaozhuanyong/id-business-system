@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 import { createLocalAuth, initializeLocalAdmin } from '../server/local-auth.mjs';
 import { createLocalBusinessStore } from '../server/local-business.mjs';
-import { manualDesktopOwnerKey } from '../server/manual-desktop-workspace.mjs';
+import { manualDesktopOwnerKey, manualDesktopWorkspaceKey } from '../server/manual-desktop-workspace.mjs';
 import { createManualRemoteAccess } from '../server/manual-remote-access.mjs';
 
 function stream(url, origin, cookie) {
@@ -25,6 +25,15 @@ function stream(url, origin, cookie) {
   });
 }
 
+async function readFixtureJson(request) {
+  let body = '';
+  for await (const chunk of request) {
+    body += chunk;
+    if (body.length > 1024) throw new RangeError('Fixture request too large');
+  }
+  return JSON.parse(body);
+}
+
 test('independent platform logins share only their own renewal desktop and revoking one does not close the other', { timeout: 15_000 }, async t => {
   const checkout = fileURLToPath(new URL('..', import.meta.url));
   const parent = dirname(checkout);
@@ -37,11 +46,13 @@ test('independent platform logins share only their own renewal desktop and revok
   const owner = { name: '隔离财务操作员', email: 'workspace-owner@example.test', password: randomUUID() };
   const other = { name: '另一名隔离管理员', email: 'other-workspace-owner@example.test', password: randomUUID() };
   const peers = new Set(), openPaths = [], streamPaths = [], privateCalls = [];
-  const running = new Map();
+  const running = new Map(), rechargeProofs = new Map(), rechargeSubmissions = [];
+  const rechargeReceipt = { exitIp: '1.1.1.1', country: 'PH', accountStatus: 'check-in-browser' };
+  let rechargeEnabled = true;
   function identify(req) {
     const ownerKey = req.headers['x-manual-owner'];
     const key = req.url.split('/')[3];
-    privateCalls.push({ ownerKey, key, path: req.url });
+    privateCalls.push({ ownerKey, key, path: req.url, cookie: req.headers.cookie, origin: req.headers.origin });
     return { ownerKey, key, conflict: running.has(ownerKey) && running.get(ownerKey) !== key };
   }
   let store, server, broker, remote, stopStatus = 503;
@@ -63,13 +74,37 @@ test('independent platform logins share only their own renewal desktop and revok
   await initializeLocalAdmin(authPath, bootstrap);
   const auth = createLocalAuth(authPath);
   store = createLocalBusinessStore(':memory:');
-  broker = createServer((req, res) => {
+  broker = createServer(async (req, res) => {
+    if (req.method === 'GET' && req.url === '/v1/recharge/status') {
+      return rechargeEnabled
+        ? res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify({ rechargeBootstrap: 1 }))
+        : res.writeHead(503).end();
+    }
+    if (req.method === 'GET' && req.url.endsWith('/recharge-status')) {
+      const { ownerKey, key } = identify(req);
+      return rechargeProofs.get(key) === ownerKey
+        ? res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(rechargeReceipt))
+        : res.writeHead(409).end();
+    }
     if (req.method !== 'POST') return res.writeHead(405).end();
     const { ownerKey, key, conflict } = identify(req);
     if (conflict) return res.writeHead(423).end();
     if (req.url.endsWith('/stop')) {
-      if (stopStatus === 204) running.delete(ownerKey);
+      if (stopStatus === 204) {
+        running.delete(ownerKey);
+        rechargeProofs.delete(key);
+      }
       return res.writeHead(stopStatus).end();
+    }
+    if (req.url.endsWith('/prepare')) {
+      try {
+        rechargeSubmissions.push(await readFixtureJson(req));
+        running.set(ownerKey, key);
+        rechargeProofs.set(key, ownerKey);
+        return res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(rechargeReceipt));
+      } catch {
+        return res.writeHead(400).end();
+      }
     }
     running.set(ownerKey, key);
     openPaths.push(req.url);
@@ -78,8 +113,12 @@ test('independent platform logins share only their own renewal desktop and revok
   const greeting = Buffer.concat([Buffer.from([0x82, 12]), Buffer.from('RFB 003.008\n')]);
   broker.on('upgrade', (req, socket) => {
     const { ownerKey, key, conflict } = identify(req);
-    if (conflict || running.get(ownerKey) !== key)
-      return socket.end('HTTP/1.1 ' + (conflict ? 423 : 404) + ' No Desktop\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+    const recharge = req.url.endsWith('/recharge-stream');
+    const available = recharge ? rechargeProofs.get(key) === ownerKey : running.get(ownerKey) === key;
+    if (conflict || !available) {
+      const status = conflict ? 423 : recharge ? 409 : 404;
+      return socket.end('HTTP/1.1 ' + status + ' No Desktop\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+    }
     peers.add(socket);
     socket.on('error', () => socket.destroy());
     socket.on('close', () => peers.delete(socket));
@@ -90,18 +129,27 @@ test('independent platform logins share only their own renewal desktop and revok
   });
   broker.listen(socketPath);
   await once(broker, 'listening');
-  remote = createManualRemoteAccess({ socketPath, getActor: auth.getActor, store, recheckInterval: 25 });
-  server = createServer((req, res) => {
+  server = createServer(async (req, res) => {
     if (req.url.startsWith('/api/local/auth/')) return void auth.handle(req, res);
+    if (req.method === 'POST' && req.url === '/qa/prepare-recharge') {
+      try {
+        const result = await remote.prepareRecharge(req, await readFixtureJson(req));
+        return res.writeHead(200, { 'Content-Type': 'application/json' }).end(JSON.stringify(result));
+      } catch (error) {
+        return res.writeHead(error.status || 500).end();
+      }
+    }
     return void remote.handle(req, res);
   });
-  server.on('upgrade', remote.upgrade);
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
   const origin = 'http://127.0.0.1:' + server.address().port;
-  const http = (path, { method = 'GET', cookie, body } = {}) => fetch(origin + path, {
+  remote = createManualRemoteAccess({ socketPath, getActor: auth.getActor, store, publicOrigin: origin, recheckInterval: 25 });
+  server.on('upgrade', remote.upgrade);
+  const http = (path, { method = 'GET', cookie, body, headers = {} } = {}) => fetch(origin + path, {
     method, redirect: 'error', signal: AbortSignal.timeout(5000),
-    headers: { ...(cookie && { cookie }), ...(method !== 'GET' && { origin }), ...(body && { 'Content-Type': 'application/json' }) },
+    headers: { ...(cookie && { cookie }), ...(method !== 'GET' && { origin }),
+      ...(body && { 'Content-Type': 'application/json' }), ...headers },
     body: body && JSON.stringify(body)
   });
   async function signIn({ email, password }) {
@@ -196,4 +244,64 @@ test('independent platform logins share only their own renewal desktop and revok
     assert.equal(entry.ownerKey, manualDesktopOwnerKey(expectedId));
     assert.match(entry.ownerKey, /^owner-v1-[0-9a-f]{64}$/);
   }
+
+  const config = { email: 'recharge-fixture@example.test', proxyUrl: 'http://proxy.example.test:8080', expectedCountry: 'PH' };
+  const prepare = (session, body = config, headers = {}) => http('/qa/prepare-recharge', {
+    ...session, method: 'POST', body, headers
+  });
+  const rechargeOffset = privateCalls.length;
+  const legacyOpenCount = openPaths.length;
+  assert.equal((await prepare({})).status, 401);
+  assert.equal((await prepare(second)).status, 403);
+  assert.equal((await prepare(root, config, { origin: 'https://outside.invalid' })).status, 403);
+  assert.equal((await prepare(root, config, { 'sec-fetch-site': 'cross-site' })).status, 403);
+  rechargeEnabled = false;
+  assert.equal((await prepare(root)).status, 503);
+  rechargeEnabled = true;
+  assert.equal(privateCalls.length, rechargeOffset);
+  assert.deepEqual(rechargeSubmissions, []);
+
+  const ready = await prepare(root);
+  assert.equal(ready.status, 200);
+  const result = await ready.json();
+  const rechargeId = 'recharge-' + createHash('sha256').update(JSON.stringify([root.actor.id, config.email])).digest('hex');
+  const rechargePage = '/manual-workspaces/' + rechargeId + '/';
+  const rechargeKey = manualDesktopWorkspaceKey({ operatorId: root.actor.id, accountId: rechargeId });
+  const endpoint = '/v1/workspaces/' + rechargeKey;
+  assert.deepEqual(result, { viewerUrl: rechargePage, ...rechargeReceipt });
+  assert.deepEqual(rechargeSubmissions, [config]);
+
+  assert.equal((await http(rechargePage)).status, 401);
+  assert.equal((await http(rechargePage, second)).status, 403);
+  assert.equal((await http(rechargePage + 'open', { ...second, method: 'POST' })).status, 403);
+  assert.equal((await stream(origin + rechargePage + 'stream', origin, second.cookie)).status, 403);
+  assert.equal((await http(rechargePage + 'open', { ...root, method: 'POST', headers: { origin: 'https://outside.invalid' } })).status, 403);
+  assert.equal((await stream(origin + rechargePage + 'stream', 'https://outside.invalid', root.cookie)).status, 403);
+  assert.deepEqual(privateCalls.slice(rechargeOffset).map(call => call.path), [endpoint + '/prepare']);
+
+  assert.equal((await http(rechargePage, root)).status, 200);
+  const proof = await http(rechargePage + 'open', { ...root, method: 'POST' });
+  assert.equal(proof.status, 200);
+  assert.deepEqual(await proof.json(), rechargeReceipt);
+  const rechargeScreen = await connect(root, rechargePage);
+  rechargeScreen.destroy();
+  assert.notEqual((await http(rechargePage + 'open', { ...stranger, method: 'POST' })).status, 200);
+  assert.notEqual((await stream(origin + rechargePage + 'stream', origin, stranger.cookie)).status, 101);
+  const firstCalls = privateCalls.slice(rechargeOffset).filter(call => call.key === rechargeKey);
+  assert.deepEqual(firstCalls.map(call => call.path), [endpoint + '/prepare', endpoint + '/recharge-status', endpoint + '/recharge-stream']);
+  assert(firstCalls.every(call => call.ownerKey === manualDesktopOwnerKey(root.actor.id) && !call.cookie && !call.origin));
+
+  rechargeProofs.delete(rechargeKey);
+  assert.equal((await http(rechargePage + 'open', { ...root, method: 'POST' })).status, 409);
+  assert.equal((await stream(origin + rechargePage + 'stream', origin, root.cookie)).status, 503);
+  assert.equal((await http(rechargePage + 'stop', { ...root, method: 'POST' })).status, 204);
+  assert.equal(openPaths.length, legacyOpenCount, 'recharge reconnect never falls back to generic desktop startup');
+  assert.equal(streamPaths.at(-1), endpoint + '/recharge-stream');
+
+  const nextConfig = { ...config, email: 'another-recharge@example.test' };
+  const next = await prepare(root, nextConfig);
+  assert.equal(next.status, 200);
+  assert.notEqual((await next.json()).viewerUrl, rechargePage, 'viewer identity depends on the email');
+  assert.deepEqual(rechargeSubmissions, [config, nextConfig]);
+
 });

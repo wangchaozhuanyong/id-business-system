@@ -4,10 +4,11 @@ const VIEWPORT_HEIGHT = 800;
 const el = {
   jsonInput: document.getElementById('protoJsonInput'),
   parsedEmail: document.getElementById('protoParsedEmail'),
-  parsedPlan: document.getElementById('protoParsedPlan'),
-  parsedDevice: document.getElementById('protoParsedDevice'),
-  parsedToken: document.getElementById('protoParsedToken'),
-  parseBtn: document.getElementById('protoParseBtn'),
+  jsonStatus: document.getElementById('protoJsonStatus'),
+  launchForm: document.getElementById('protoLaunchForm'),
+  reloadIps: document.getElementById('protoReloadIps'),
+  proxyInputLabel: document.getElementById('protoProxyInputLabel'),
+  stage: document.querySelector('.proto-stage'),
   clearBtn: document.getElementById('protoClearBtn'),
   regionSelect: document.getElementById('protoRegionSelect'),
   proxyInput: document.getElementById('protoProxyInput'),
@@ -29,6 +30,16 @@ const el = {
 };
 
 const ctx = el.canvas.getContext('2d');
+const endpoint = '/api/local/native-workbench-prototype/';
+const paused = document.body.hasAttribute('data-workbench-paused');
+const isolated = document.body.hasAttribute('data-workbench-isolated');
+const layout = document.querySelector('.proto-layout');
+const embedded = document.body.hasAttribute('data-workbench-embedded') && window.parent !== window;
+let formBusy = false;
+let formValid = false;
+let proxyVersion;
+let moduleVisible = true;
+document.documentElement.dataset.rechargeNavigationLocked = 'false';
 
 let viewportWidth = VIEWPORT_WIDTH;
 let viewportHeight = VIEWPORT_HEIGHT;
@@ -39,31 +50,9 @@ let ws = null;
 let lastMouseMoveAt = 0;
 let renderingFrame = false;
 
-export function parseSessionPreview(raw) {
-  const text = String(raw || '').trim();
-  if (!text) return null;
-  const data = JSON.parse(text);
-  const email = String(data?.user?.email || data?.email || '').trim();
-  const token = String(
-    data?.accessToken ||
-    data?.sessionToken ||
-    data?.token ||
-    data?.['__Secure-next-auth.session-token'] ||
-    ''
-  ).trim();
-  const deviceId = String(data?.deviceId || data?.oaiDeviceId || data?.['oai-did'] || '').trim();
-  const plan = String(
-    data?.account?.planType ||
-    data?.planType ||
-    data?.plan ||
-    data?.user?.plan ||
-    'unknown'
-  ).trim();
-  return { email, token, deviceId, plan };
-}
-
 function setMessage(text, tone = 'muted') {
   el.message.textContent = text || '';
+  el.message.hidden = !text;
   el.message.className = 'proto-message' + (tone === 'error' ? ' is-error' : tone === 'ok' ? ' is-ok' : tone === 'warn' ? ' is-warn' : '');
 }
 
@@ -78,35 +67,77 @@ function setControlsEnabled(enabled) {
   el.urlInput.disabled = !enabled;
   el.goBtn.disabled = !enabled;
   el.recheckBtn.disabled = !enabled;
-  el.closeBtn.disabled = !enabled;
+  el.closeBtn.disabled = !activeProfileKey;
   el.sendTextInput.disabled = !enabled;
   el.sendTextBtn.disabled = !enabled;
   el.overlay.hidden = enabled;
 }
 
+function updateLaunchButton() {
+  const custom = el.regionSelect.value === 'custom';
+  el.proxyInput.hidden = el.proxyInputLabel.hidden = !custom;
+  el.proxyInput.required = custom;
+  el.launchBtn.disabled = paused || formBusy || !formValid || !el.regionSelect.value ||
+    (custom && !el.proxyInput.value.trim()) || Boolean(activeProfileKey);
+}
+
 function updateParsePreview() {
   const raw = el.jsonInput.value.trim();
-  if (!raw) {
-    el.parsedEmail.textContent = '—';
-    el.parsedPlan.textContent = '—';
-    el.parsedDevice.textContent = '—';
-    el.parsedToken.textContent = '等待输入';
-    return null;
+  let email = '', issue = '';
+  if (raw) {
+    try {
+      const data = JSON.parse(raw);
+      const address = typeof data?.user?.email === 'string' ? data.user.email.trim() : '';
+      email = address.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address) ? address.toLowerCase() : '';
+      const session = data?.sessionToken ?? data?.session_token;
+      if (new TextEncoder().encode(raw).byteLength > 65_000) issue = '请粘贴 65 KB 以内的单账号授权 JSON。';
+      else if (!email) issue = '授权 JSON 缺少有效邮箱。';
+      else if (!isolated && (typeof session !== 'string' || !session.trim())) issue = '授权 JSON 缺少会话凭据。';
+    } catch { issue = 'JSON 格式无效，请粘贴完整内容。'; }
   }
+  formValid = Boolean(email) && !issue;
+  el.parsedEmail.textContent = email || expectedEmail || '—';
+  el.jsonStatus.textContent = issue;
+  el.jsonStatus.hidden = !issue;
+  updateLaunchButton();
+}
+
+async function loadIpChoices() {
+  const selected = el.regionSelect.value;
+  el.regionSelect.disabled = true;
+  el.regionSelect.replaceChildren(new Option('正在读取 IP 线路…', ''));
+  el.reloadIps.hidden = true;
+  updateLaunchButton();
   try {
-    const parsed = parseSessionPreview(raw);
-    el.parsedEmail.textContent = parsed?.email || '未识别';
-    el.parsedPlan.textContent = parsed?.plan || 'unknown';
-    el.parsedDevice.textContent = parsed?.deviceId || '未提供';
-    el.parsedToken.textContent = parsed?.token ? '已提取凭据' : '缺少 Token';
-    return parsed;
+    const res = await fetch(endpoint + 'ip-options', { cache: 'no-store', signal: AbortSignal.timeout(8000) });
+    const data = await res.json();
+    if (!res.ok || !Array.isArray(data.choices)) throw new Error();
+    proxyVersion = data.version;
+    el.regionSelect.replaceChildren(new Option('请选择执行 IP', ''), ...data.choices.map(line =>
+      new Option([line.name, line.countryCode, line.endpoint].filter(Boolean).join(' · '), line.id)
+    ), new Option('输入 HTTP 代理地址', 'custom'));
+    if ([...el.regionSelect.options].some(option => option.value === selected)) el.regionSelect.value = selected;
+    el.regionSelect.disabled = false;
   } catch {
-    el.parsedEmail.textContent = 'JSON 格式错误';
-    el.parsedPlan.textContent = '—';
-    el.parsedDevice.textContent = '—';
-    el.parsedToken.textContent = '解析失败';
-    return null;
+    el.regionSelect.replaceChildren(new Option('IP 线路暂时无法读取', ''));
+    el.reloadIps.hidden = false;
   }
+  updateLaunchButton();
+}
+
+function clearSensitiveInput() {
+  el.jsonInput.value = '';
+  el.proxyInput.value = '';
+  el.sendTextInput.value = '';
+  updateParsePreview();
+}
+
+function reportSize() {
+  if (!embedded) return;
+  window.parent.postMessage({
+    source: 'id-manual-workbench', type: 'resize',
+    height: Math.ceil(layout.getBoundingClientRect().height), open: !el.stage.hidden && moduleVisible
+  }, location.origin);
 }
 
 function applyLoginVerification(verification) {
@@ -117,7 +148,7 @@ function applyLoginVerification(verification) {
   switch (verification.status) {
     case 'matched':
       setPill(el.loginBadge, `已登录且匹配: ${verification.actualEmail}`, 'ok');
-      setMessage(`${verification.message}。请在右侧操作窗内手动选套餐并填写付款资料。`, 'ok');
+      setMessage(`${verification.message}。请在操作窗内手动选套餐和付款。`, 'ok');
       break;
     case 'mismatch':
       setPill(el.loginBadge, `账号不匹配: ${verification.actualEmail}`, 'err');
@@ -197,14 +228,17 @@ function connectWs(profileKey) {
   disconnectWs();
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   const url = `${proto}//${location.host}/integrations/native-workbench/ws?profileKey=${encodeURIComponent(profileKey)}`;
-  ws = new WebSocket(url);
+  const socket = new WebSocket(url);
+  ws = socket;
 
-  ws.onopen = () => {
+  socket.onopen = () => {
+    if (ws !== socket) return;
     setControlsEnabled(true);
-    el.canvas.focus();
+    el.canvas.focus({ preventScroll: true });
   };
 
-  ws.onmessage = (event) => {
+  socket.onmessage = (event) => {
+    if (ws !== socket) return;
     let msg;
     try {
       msg = JSON.parse(event.data);
@@ -222,8 +256,10 @@ function connectWs(profileKey) {
     }
   };
 
-  ws.onclose = () => {
+  socket.onclose = () => {
+    if (ws !== socket) return;
     setControlsEnabled(false);
+    setMessage('操作窗连接已断开。可关闭后重新提交，或返回工作台接回现有窗口。', 'warn');
   };
 }
 
@@ -252,36 +288,46 @@ function keyboardModifiers(event) {
   );
 }
 
-el.canvas.addEventListener('mousedown', (event) => {
+let touchPointer;
+el.canvas.addEventListener('pointerdown', (event) => {
+  if (event.pointerType === 'touch') {
+    if (event.isPrimary) {
+      touchPointer = { id: event.pointerId, y: event.clientY, moved: false };
+      el.canvas.setPointerCapture(event.pointerId);
+    }
+    return;
+  }
   el.canvas.focus();
-  const pos = mapCanvasCoords(event);
-  sendWs({
-    type: 'mouse',
-    eventType: 'mousePressed',
-    ...pos,
-    button: mouseButtonName(event.button),
-    clickCount: 1
-  });
+  sendWs({ type: 'mouse', eventType: 'mousePressed', ...mapCanvasCoords(event),
+    button: mouseButtonName(event.button), clickCount: 1 });
 });
-
-el.canvas.addEventListener('mouseup', (event) => {
-  const pos = mapCanvasCoords(event);
-  sendWs({
-    type: 'mouse',
-    eventType: 'mouseReleased',
-    ...pos,
-    button: mouseButtonName(event.button),
-    clickCount: 1
-  });
-});
-
-el.canvas.addEventListener('mousemove', (event) => {
+el.canvas.addEventListener('pointermove', (event) => {
+  const position = mapCanvasCoords(event);
+  if (event.pointerType === 'touch') {
+    if (touchPointer?.id !== event.pointerId) return;
+    const delta = touchPointer.y - event.clientY;
+    if (!touchPointer.moved && Math.abs(delta) < 6) return;
+    touchPointer = { ...touchPointer, y: event.clientY, moved: true };
+    sendWs({ type: 'wheel', ...position, deltaX: 0, deltaY: delta * 2 });
+    return;
+  }
   const now = performance.now();
   if (now - lastMouseMoveAt < 40) return;
   lastMouseMoveAt = now;
-  const pos = mapCanvasCoords(event);
-  sendWs({ type: 'mouse', eventType: 'mouseMoved', ...pos, button: 'none', clickCount: 0 });
+  sendWs({ type: 'mouse', eventType: 'mouseMoved', ...position, button: 'none', clickCount: 0 });
 });
+el.canvas.addEventListener('pointerup', (event) => {
+  const click = { type: 'mouse', ...mapCanvasCoords(event), button: mouseButtonName(event.button), clickCount: 1 };
+  if (event.pointerType === 'touch') {
+    if (touchPointer?.id !== event.pointerId) return;
+    const tapped = !touchPointer.moved;
+    touchPointer = undefined;
+    if (!tapped) return;
+    sendWs({ ...click, eventType: 'mousePressed' });
+  }
+  sendWs({ ...click, eventType: 'mouseReleased' });
+});
+el.canvas.addEventListener('pointercancel', () => { touchPointer = undefined; });
 
 el.canvas.addEventListener('wheel', (event) => {
   event.preventDefault();
@@ -332,57 +378,70 @@ el.canvas.addEventListener('paste', (event) => {
 });
 
 el.jsonInput.addEventListener('input', updateParsePreview);
-el.parseBtn.addEventListener('click', () => {
-  const parsed = updateParsePreview();
-  if (parsed?.email && parsed?.token) {
-    setMessage(`解析成功：${parsed.email} (${parsed.plan})`, 'ok');
-  } else {
-    setMessage('JSON 未包含有效邮箱或 Token，请检查内容', 'error');
-  }
+el.regionSelect.addEventListener('change', () => {
+  el.proxyInput.value = '';
+  updateLaunchButton();
 });
-
+el.proxyInput.addEventListener('input', updateLaunchButton);
 el.clearBtn.addEventListener('click', () => {
-  el.jsonInput.value = '';
-  updateParsePreview();
-  setMessage('');
+  clearSensitiveInput();
+  if (!paused) setMessage('');
+  el.jsonInput.focus();
 });
+el.reloadIps.addEventListener('click', () => void loadIpChoices());
 
-el.launchBtn.addEventListener('click', async () => {
-  const sessionJson = el.jsonInput.value.trim();
-  if (!sessionJson) {
-    setMessage('请先粘贴授权 JSON', 'error');
-    el.jsonInput.focus();
-    return;
-  }
-  el.launchBtn.disabled = true;
-  el.launchBtn.textContent = '正在校验线路并启动浏览器…';
-  setMessage('正在解析凭据、校验出口并启动独立 Chrome 实例…');
-  setPill(el.loginBadge, '登录态: 核验中…', 'muted');
-
+el.launchForm.addEventListener('submit', async event => {
+  event.preventDefault();
+  if (el.launchBtn.disabled) return;
+  const proxyId = el.regionSelect.value;
+  const body = { proxyId, proxyVersion, ...(isolated ? { email: el.parsedEmail.textContent }
+    : { sessionJson: el.jsonInput.value.trim() }) };
+  if (proxyId === 'custom') body.customProxyUrl = el.proxyInput.value.trim();
+  formBusy = true;
+  document.documentElement.dataset.rechargeNavigationLocked = 'true';
+  updateLaunchButton();
+  el.jsonInput.readOnly = el.proxyInput.readOnly = el.regionSelect.disabled = el.clearBtn.disabled = true;
+  el.launchBtn.textContent = '正在打开操作窗…';
+  setMessage('正在核验所选 IP 并打开 ChatGPT…');
   try {
-    const res = await fetch('/api/local/native-workbench-prototype/launch', {
+    const res = await fetch(endpoint + 'launch', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        sessionJson,
-        proxyRegion: el.regionSelect.value,
-        customProxyUrl: el.proxyInput.value.trim()
-      })
+      body: JSON.stringify(body)
     });
     const data = await res.json();
-    if (!res.ok) throw new Error(data.error || '启动失败');
-
+    if (!res.ok) {
+      if (res.status === 409 && proxyId !== 'custom') void loadIpChoices();
+      throw new Error(data.error || '未能打开站内操作窗');
+    }
+    if (isolated) {
+      if (!/^\/manual-workspaces\/recharge-[a-f0-9]{64}\/$/.test(data.viewerUrl || ''))
+        throw new Error('操作窗没有返回连接信息，请重试');
+      clearSensitiveInput();
+      if (embedded) {
+        window.parent.postMessage({ source: 'id-manual-workbench', type: 'open-viewer', viewerUrl: data.viewerUrl }, location.origin);
+      } else window.location.assign(data.viewerUrl);
+      return;
+    }
+    if (!data.profileKey) throw new Error('操作窗没有返回连接信息，请重试');
     activeProfileKey = data.profileKey;
     expectedEmail = data.account?.email || '';
+    clearSensitiveInput();
     applyProxyInfo(data.proxy);
     applyLoginVerification(data.loginVerification);
-    connectWs(activeProfileKey);
+    el.stage.hidden = false;
+    setControlsEnabled(false);
+    reportSize();
+    if (moduleVisible) connectWs(activeProfileKey);
   } catch (err) {
-    setPill(el.loginBadge, '登录态: 启动失败', 'err');
-    setMessage(err.message || '启动操作窗失败', 'error');
+    setMessage(err.message || '未能打开站内操作窗，请重试', 'error');
   } finally {
-    el.launchBtn.disabled = false;
-    el.launchBtn.textContent = '识别并启动站内操作窗';
+    formBusy = false;
+    document.documentElement.dataset.rechargeNavigationLocked = 'false';
+    el.jsonInput.readOnly = el.proxyInput.readOnly = el.clearBtn.disabled = false;
+    el.regionSelect.disabled = !el.regionSelect.options.length || !el.reloadIps.hidden;
+    el.launchBtn.textContent = '提交并打开操作窗';
+    updateLaunchButton();
   }
 });
 
@@ -407,17 +466,64 @@ el.sendTextBtn.addEventListener('click', () => {
 
 el.closeBtn.addEventListener('click', async () => {
   if (!activeProfileKey) return;
-  disconnectWs();
+  el.closeBtn.disabled = true;
   try {
-    await fetch('/api/local/native-workbench-prototype/close', {
+    const response = await fetch(endpoint + 'close', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ profileKey: activeProfileKey })
     });
-  } catch {}
-  activeProfileKey = '';
-  setControlsEnabled(false);
-  ctx.clearRect(0, 0, el.canvas.width, el.canvas.height);
-  setPill(el.loginBadge, '登录态: 已关闭', 'muted');
-  setMessage('浏览器实例已关闭并释放代理。');
+    if (!response.ok) throw new Error();
+    activeProfileKey = '';
+    expectedEmail = '';
+    disconnectWs();
+    setControlsEnabled(false);
+    ctx.clearRect(0, 0, el.canvas.width, el.canvas.height);
+    el.stage.hidden = true;
+    updateParsePreview();
+    setMessage('操作窗已关闭。');
+    reportSize();
+  } catch {
+    el.closeBtn.disabled = false;
+    setMessage('暂时无法确认操作窗是否关闭，请重试。', 'error');
+  }
 });
+
+window.addEventListener('pagehide', () => {
+  moduleVisible = false;
+  clearSensitiveInput();
+  disconnectWs();
+});
+window.addEventListener('pageshow', ({ persisted }) => {
+  if (!persisted || embedded) return;
+  moduleVisible = true;
+  if (activeProfileKey) connectWs(activeProfileKey);
+});
+if (embedded) {
+  window.addEventListener('message', event => {
+    const message = event.data;
+    if (event.origin !== location.origin || event.source !== window.parent ||
+        message?.source !== 'id-recharge-shell') return;
+    if (message.type === 'theme' && ['light', 'dark'].includes(message.theme)) {
+      document.documentElement.dataset.theme = message.theme;
+    } else if (message.type === 'visibility' && moduleVisible !== message.visible) {
+      moduleVisible = message.visible;
+      if (!moduleVisible) {
+        clearSensitiveInput();
+        disconnectWs();
+      } else {
+        if (activeProfileKey) connectWs(activeProfileKey);
+        reportSize();
+      }
+    }
+  });
+  new ResizeObserver(reportSize).observe(layout);
+  reportSize();
+}
+if (paused) {
+  el.regionSelect.replaceChildren(new Option('内置浏览器暂未开放', ''));
+  setMessage('当前站点的内置浏览器仍暂停开放。', 'warn');
+} else {
+  if (isolated) setMessage('站内工作区使用 ChatGPT 网页登录。已有有效登录的账号会恢复原会话。');
+  void loadIpChoices();
+}
