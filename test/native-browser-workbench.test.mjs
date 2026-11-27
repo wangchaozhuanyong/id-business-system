@@ -54,15 +54,15 @@ test('queryWorkbenchAccounts supports searching and filtering', () => {
     { id: '1', email: 'alice@example.com', status: 'pending_renewal', lastOpenedAt: '2026-11-20T10:00:00Z', createdAt: '2026-11-20T10:00:00Z' },
     { id: '2', email: 'bob@example.com', status: 'active', lastOpenedAt: '2026-11-23T10:00:00Z', createdAt: '2026-11-21T10:00:00Z' }
   ];
-  const all = queryWorkbenchAccounts(records);
+  const all = queryWorkbenchAccounts(records, {}, 'operator-a');
   assert.equal(all.length, 2);
   assert.equal(all[0].email, 'bob@example.com'); // sorted by lastOpenedAt desc
 
-  const searchAlice = queryWorkbenchAccounts(records, { search: 'alice' });
+  const searchAlice = queryWorkbenchAccounts(records, { search: 'alice' }, 'operator-a');
   assert.equal(searchAlice.length, 1);
   assert.equal(searchAlice[0].email, 'alice@example.com');
 
-  const filterActive = queryWorkbenchAccounts(records, { status: 'active' });
+  const filterActive = queryWorkbenchAccounts(records, { status: 'active' }, 'operator-a');
   assert.equal(filterActive.length, 1);
   assert.equal(filterActive[0].email, 'bob@example.com');
 });
@@ -81,14 +81,18 @@ test('updateWorkbenchNote and removeWorkbenchAccount', () => {
 
 test('closeWorkbenchBrowser and isRunning status', () => {
   const records = [{ id: '1', email: 'alice@example.com', profileKey: 'chatgpt_test123' }];
-  const query = queryWorkbenchAccounts(records);
+  const query = queryWorkbenchAccounts(records, {}, 'operator-a');
   assert.equal(typeof query[0].isRunning, 'boolean');
   assert.equal(query[0].isRunning, false);
 
-  const res = closeWorkbenchBrowser(records, '1');
+  assert.notEqual(query[0].profileKey, records[0].profileKey);
+  assert.notEqual(query[0].profileKey, queryWorkbenchAccounts(records, {}, 'operator-b')[0].profileKey);
+  assert.equal(query[0].profileKey, queryWorkbenchAccounts(records, {}, 'operator-a')[0].profileKey);
+
+  const res = closeWorkbenchBrowser(records, '1', 'operator-a');
   assert.equal(res.ok, true);
   assert.equal(res.id, '1');
-  assert.throws(() => closeWorkbenchBrowser(records, 'unknown'), NativeWorkbenchError);
+  assert.throws(() => closeWorkbenchBrowser(records, 'unknown', 'operator-a'), NativeWorkbenchError);
 });
 
 test('updateAccountSessionJson updates credentials in-place and rejects mismatched email', () => {

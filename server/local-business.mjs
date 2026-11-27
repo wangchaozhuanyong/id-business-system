@@ -82,12 +82,12 @@ import {
   closeWorkbenchBrowser
 } from './native-browser-workbench.mjs';
 import { editRenewalRecord, listRenewalPage, manualRenewalRecords, ManualRenewalError, requireRenewalRecord } from './manual-renewal-records.mjs';
-import { NativeBrowserError } from './native-chrome-runner.mjs';
+import { NativeBrowserError, closeNativeBrowser, operatorBrowserProfileKey } from './native-chrome-runner.mjs';
 import {
   resolveWorkbenchProxy,
   resolveProxySessionOnce,
   verifyProxyExitCountry,
-  verifyChatGptLogin
+  verifyOwnedWorkbenchLogin
 } from './native-browser-session.mjs';
 import { bitBrowserProxyDomain, validateBitBrowserProxyWrite, summarizeBitBrowserProxies, readBitBrowserProxy } from './bitbrowser-proxies.mjs';
 import { checkAppleIdHealthChanges, checkInventoryHistory } from './inventory-history.mjs';
@@ -1127,6 +1127,22 @@ export function createLocalBusinessStore(databasePath) {
     if (!inTransaction) notifyChanges();
     return result;
   } };
+
+  function requireUnchangedWorkbenchLaunchTarget(records, original, updatesAuthorization = false) {
+    const latest = records.find(row => row.id === original.id);
+    if (!latest) throw new NativeWorkbenchError(404, '该账号记录不存在');
+    const fields = ['email', 'token', 'deviceId', 'proxyRegion', 'proxyUrl'];
+    if (updatesAuthorization) fields.push('accountId', 'userId', 'currentPlan', 'status');
+    if (fields.some(field => latest[field] !== original[field])) {
+      throw new NativeWorkbenchError(409, '账号资料已更新，请刷新后重新打开');
+    }
+    return latest;
+  }
+
+  function closeUncommittedWorkbenchLaunch(launch, ownerId) {
+    const { pid, profileKey } = launch?.result ?? {};
+    if (Number.isSafeInteger(pid) && pid > 0) closeNativeBrowser(profileKey, ownerId, pid);
+  }
 
   function readRenewalRegistry(actor) {
     if (!actor?.id) throw new LocalDataError(401, '请先登录');
@@ -2270,7 +2286,7 @@ export function createLocalBusinessStore(databasePath) {
     },
     loadNativeWorkbenchAccounts(query, actor = localToolboxActor) {
       const { version, data } = readDocument(`${nativeWorkbenchDomain}:${actor.id}`);
-      const items = queryWorkbenchAccounts(data ?? [], query);
+      const items = queryWorkbenchAccounts(data ?? [], query, actor.id);
       return { version, items, total: (data ?? []).length };
     },
     saveNativeWorkbenchAccount(body, actor = localToolboxActor) {
@@ -2282,7 +2298,7 @@ export function createLocalBusinessStore(databasePath) {
         put.run(domain, version, encrypt(key, domain, version, JSON.stringify(records)));
         log.run(new Date().toISOString(), nativeWorkbenchDomain, 'native_workbench_save',
           auditSummary('保存代充账号资料', actor, record.id), version);
-        return { version, record };
+        return { version, record: { ...record, profileKey: operatorBrowserProfileKey('chatgpt', actor.id, record.id) } };
       });
     },
     updateNativeWorkbenchNote(body, actor = localToolboxActor) {
@@ -2294,12 +2310,12 @@ export function createLocalBusinessStore(databasePath) {
         put.run(domain, version, encrypt(key, domain, version, JSON.stringify(records)));
         log.run(new Date().toISOString(), nativeWorkbenchDomain, 'native_workbench_note',
           auditSummary('更新代充续费备注', actor, record.id), version);
-        return { version, record };
+        return { version, record: { ...record, profileKey: operatorBrowserProfileKey('chatgpt', actor.id, record.id) } };
       });
     },
     deleteNativeWorkbenchAccount(body, actor = localToolboxActor) {
       const domain = `${nativeWorkbenchDomain}:${actor.id}`;
-      return writeTransaction(() => {
+      const result = writeTransaction(() => {
         const current = readDocument(domain);
         const { records } = removeWorkbenchAccount(current.data ?? [], body?.id);
         const version = current.version + 1;
@@ -2308,38 +2324,44 @@ export function createLocalBusinessStore(databasePath) {
           auditSummary('移除代充账号记录', actor, body?.id), version);
         return { version, ok: true };
       });
+      closeNativeBrowser(operatorBrowserProfileKey('chatgpt', actor.id, body.id), actor.id);
+      return result;
     },
     async launchNativeWorkbenchBrowser(body, actor = localToolboxActor) {
       const domain = `${nativeWorkbenchDomain}:${actor.id}`;
-      const current = readDocument(domain);
-      const { launchRes, exitInfo, loginVerification } = await (async () => {
-        const records = current.data ?? [];
-        const target = records.find((row) => row.id === body?.id);
-        if (!target) {
-          throw new NativeWorkbenchError(404, '该账号记录不存在');
-        }
-        return this._launchWorkbenchSession(records, target, {
-          proxyRegion: body?.proxyRegion ?? target.proxyRegion ?? 'auto',
-          proxyUrl: body?.proxyUrl || '',
-          actor
-        });
-      })();
-      writeTransaction(() => {
-        const version = current.version + 1;
-        put.run(domain, version, encrypt(key, domain, version, JSON.stringify(launchRes.records)));
-        log.run(new Date().toISOString(), nativeWorkbenchDomain, 'native_browser_launch',
-          auditSummary('拉起原生代充浏览器', actor, body?.id), version);
+      const target = readDocument(domain).data?.find(row => row.id === body?.id);
+      if (!target) throw new NativeWorkbenchError(404, '该账号记录不存在');
+      const { launchRes, exitInfo, loginVerification } = await this._launchWorkbenchSession(target, {
+        proxyRegion: body?.proxyRegion ?? target.proxyRegion ?? 'auto',
+        proxyUrl: body?.proxyUrl || '',
+        actor
       });
+      try {
+        writeTransaction(() => {
+          const current = readDocument(domain);
+          const latest = requireUnchangedWorkbenchLaunchTarget(current.data ?? [], target);
+          const now = new Date().toISOString();
+          const records = current.data.map(row => row === latest
+            ? { ...latest, lastOpenedAt: launchRes.account.lastOpenedAt, updatedAt: now } : row);
+          const version = current.version + 1;
+          put.run(domain, version, encrypt(key, domain, version, JSON.stringify(records)));
+          log.run(now, nativeWorkbenchDomain, 'native_browser_launch',
+            auditSummary('拉起原生代充浏览器', actor, target.id), version);
+        });
+      } catch (error) {
+        closeUncommittedWorkbenchLaunch(launchRes, actor.id);
+        throw error;
+      }
       return {
         ok: true,
-        profileKey: launchRes.account?.profileKey || launchRes.result?.profileKey || '',
+        profileKey: launchRes.account.profileKey,
         account: launchRes.account,
         exitInfo,
         loginVerification,
         result: launchRes.result
       };
     },
-    async _launchWorkbenchSession(records, target, { proxyRegion = 'auto', proxyUrl = '', actor = localToolboxActor } = {}) {
+    async _launchWorkbenchSession(target, { proxyRegion = 'auto', proxyUrl = '', actor = localToolboxActor } = {}) {
       let resolvedProxyUrl = '';
       let exitInfo = null;
       if (String(proxyRegion).toLowerCase() !== 'direct') {
@@ -2357,60 +2379,76 @@ export function createLocalBusinessStore(databasePath) {
           exitInfo = { ...exitInfo, region: proxyConfig.region, regionLabel: proxyConfig.regionLabel };
         }
       }
-      const launchRes = await launchWorkbenchBrowser(records, target.id, {
+      const launchRes = await launchWorkbenchBrowser([target], target.id, {
         customProxyUrl: resolvedProxyUrl,
         ownerId: actor.id,
         windowSize: '1280,800',
         exitInfo,
         skipSessionRotation: Boolean(resolvedProxyUrl)
       });
-      let loginVerification = null;
-      if (launchRes.result?.port) {
-        try {
-          loginVerification = await verifyChatGptLogin({
-            port: launchRes.result.port,
-            expectedEmail: launchRes.account?.email || ''
-          });
-        } catch (err) {
-          loginVerification = {
-            status: 'error',
-            loggedIn: false,
-            message: err?.message || '登录核验失败'
-          };
+      let loginVerification;
+      try {
+        loginVerification = await verifyOwnedWorkbenchLogin({
+          profileKey: launchRes.account.profileKey,
+          ownerId: actor.id,
+          expectedPid: launchRes.result.pid,
+          expectedEmail: launchRes.account.email
+        });
+      } catch (err) {
+        if (err instanceof NativeBrowserError && err.status === 404) {
+          throw new NativeWorkbenchError(409, '浏览器已关闭，请重新打开');
         }
+        loginVerification = {
+          status: 'error',
+          loggedIn: false,
+          message: err?.message || '登录核验失败'
+        };
       }
       return { launchRes, exitInfo, loginVerification };
     },
     closeNativeWorkbenchBrowser(body, actor = localToolboxActor) {
       const domain = `${nativeWorkbenchDomain}:${actor.id}`;
       const current = readDocument(domain);
-      const res = closeWorkbenchBrowser(current.data ?? [], body?.id);
+      const res = closeWorkbenchBrowser(current.data ?? [], body?.id, actor.id);
       log.run(new Date().toISOString(), nativeWorkbenchDomain, 'native_browser_close',
         auditSummary('关闭原生代充浏览器', actor, body?.id), current.version);
       return res;
     },
     async updateNativeWorkbenchJson(body, actor = localToolboxActor) {
       const domain = `${nativeWorkbenchDomain}:${actor.id}`;
-      const current = readDocument(domain);
-      const { record, records } = updateAccountSessionJson(current.data ?? [], body?.id, body?.sessionJson);
-
+      const id = body?.id;
+      const sessionJson = body?.sessionJson;
+      let original;
       let launchSession = null;
-      let finalRecords = records;
       if (body?.autoLaunch) {
-        launchSession = await this._launchWorkbenchSession(records, record, {
-          proxyRegion: body?.proxyRegion ?? record.proxyRegion ?? 'auto',
-          proxyUrl: body?.proxyUrl || '',
+        const before = readDocument(domain).data ?? [];
+        const { record } = updateAccountSessionJson(before, id, sessionJson);
+        original = before.find(row => row.id === id);
+        launchSession = await this._launchWorkbenchSession(record, {
+          proxyRegion: body.proxyRegion ?? record.proxyRegion ?? 'auto',
+          proxyUrl: body.proxyUrl || '',
           actor
         });
-        finalRecords = launchSession.launchRes.records;
       }
 
-      writeTransaction(() => {
-        const version = current.version + 1;
-        put.run(domain, version, encrypt(key, domain, version, JSON.stringify(finalRecords)));
-        log.run(new Date().toISOString(), nativeWorkbenchDomain, 'native_workbench_update_json',
-          auditSummary('更换账号授权凭据' + (body?.autoLaunch ? '并启动' : ''), actor, body?.id), version);
-      });
+      let record;
+      try {
+        record = writeTransaction(() => {
+          const current = readDocument(domain);
+          const currentRecords = current.data ?? [];
+          if (launchSession) requireUnchangedWorkbenchLaunchTarget(currentRecords, original, true);
+          const updated = updateAccountSessionJson(currentRecords, id, sessionJson);
+          if (launchSession) updated.record.lastOpenedAt = launchSession.launchRes.account.lastOpenedAt;
+          const version = current.version + 1;
+          put.run(domain, version, encrypt(key, domain, version, JSON.stringify(updated.records)));
+          log.run(updated.record.updatedAt, nativeWorkbenchDomain, 'native_workbench_update_json',
+            auditSummary('更换账号授权凭据' + (launchSession ? '并启动' : ''), actor, id), version);
+          return { ...updated.record, profileKey: operatorBrowserProfileKey('chatgpt', actor.id, id) };
+        });
+      } catch (error) {
+        closeUncommittedWorkbenchLaunch(launchSession?.launchRes, actor.id);
+        throw error;
+      }
 
       return {
         ok: true,
@@ -2418,7 +2456,7 @@ export function createLocalBusinessStore(databasePath) {
         launch: launchSession
           ? {
               ok: true,
-              profileKey: launchSession.launchRes.account?.profileKey || launchSession.launchRes.result?.profileKey || '',
+              profileKey: launchSession.launchRes.account.profileKey,
               account: launchSession.launchRes.account,
               exitInfo: launchSession.exitInfo,
               loginVerification: launchSession.loginVerification
@@ -4069,8 +4107,9 @@ export async function handleLocalBusiness(
       throw new LocalDataError(405, '本机接口不支持此操作');
     }
     if (domain === nativeWorkbenchDomain) {
-      const effectiveActor = actor?.id ? actor : localToolboxActor;
       response.setHeader('Cache-Control', 'private, no-store');
+      if (publicOrigin && !actor?.id) throw new LocalDataError(401, '请先登录');
+      const effectiveActor = actor?.id ? actor : localToolboxActor;
       if (request.headers.origin && request.headers.origin !== origin) throw new LocalDataError(403, '仅允许从当前页面操作');
       const url = new URL(request.url, origin);
       const action = url.searchParams.get('action') || '';

@@ -1,5 +1,5 @@
-import { randomUUID, createHash } from 'node:crypto';
-import { launchNativeChrome, isBrowserRunning, closeNativeBrowser } from './native-chrome-runner.mjs';
+import { randomUUID } from 'node:crypto';
+import { launchNativeChrome, isBrowserRunning, closeNativeBrowser, operatorBrowserProfileKey } from './native-chrome-runner.mjs';
 
 export const nativeWorkbenchDomain = 'native-browser-workbench';
 
@@ -27,10 +27,6 @@ function formatProxySummary(input) {
     return String(input.proxySummary).trim();
   }
   return '共享代充池 · 智能选路';
-}
-
-function hashKey(value) {
-  return createHash('sha256').update(String(value || '')).digest('hex');
 }
 
 /**
@@ -84,7 +80,7 @@ export function parseSessionPayload(sessionJson) {
 /**
  * Filter and sort accounts.
  */
-export function queryWorkbenchAccounts(records = [], { search = '', status = '', limit = 50 } = {}) {
+export function queryWorkbenchAccounts(records = [], { search = '', status = '', limit = 50 } = {}, ownerId) {
   let list = Array.isArray(records) ? [...records] : [];
   const query = search.trim().toLowerCase();
   if (query) {
@@ -104,23 +100,26 @@ export function queryWorkbenchAccounts(records = [], { search = '', status = '',
     if (timeA !== timeB) return timeB - timeA;
     return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
   });
-  return list.slice(0, limit).map((row) => ({
-    id: row.id,
-    email: row.email,
-    accountId: row.accountId,
-    profileKey: row.profileKey,
-    proxyRegion: row.proxyRegion || 'auto',
-    proxySummary: row.proxySummary || '共享代充池 · 智能选路',
-    status: row.status,
-    currentPlan: row.currentPlan || 'free',
-    lastOpenedAt: row.lastOpenedAt || null,
-    renewalNotes: row.renewalNotes || '',
-    hasToken: Boolean(row.token),
-    hasDeviceId: Boolean(row.deviceId),
-    isRunning: isBrowserRunning(row.profileKey),
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt
-  }));
+  return list.slice(0, limit).map((row) => {
+    const profileKey = operatorBrowserProfileKey('chatgpt', ownerId, row.id);
+    return {
+      id: row.id,
+      email: row.email,
+      accountId: row.accountId,
+      profileKey,
+      proxyRegion: row.proxyRegion || 'auto',
+      proxySummary: row.proxySummary || '共享代充池 · 智能选路',
+      status: row.status,
+      currentPlan: row.currentPlan || 'free',
+      lastOpenedAt: row.lastOpenedAt || null,
+      renewalNotes: row.renewalNotes || '',
+      hasToken: Boolean(row.token),
+      hasDeviceId: Boolean(row.deviceId),
+      isRunning: isBrowserRunning(profileKey, ownerId),
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt
+    };
+  });
 }
 
 /**
@@ -145,7 +144,6 @@ export function upsertWorkbenchAccount(records = [], input = {}) {
     throw new NativeWorkbenchError(400, '请提供有效的账号邮箱');
   }
 
-  const profileKey = `chatgpt_${hashKey(email).slice(0, 16)}`;
   const now = new Date().toISOString();
   const existingIndex = entries.findIndex((row) => row.email === email);
   const proxySummary = formatProxySummary(input);
@@ -178,7 +176,6 @@ export function upsertWorkbenchAccount(records = [], input = {}) {
     userId: userId || '',
     token: token || '',
     deviceId: deviceId || '',
-    profileKey,
     proxyRegion,
     proxyUrl: String(input.proxyUrl || '').trim(),
     proxySummary,
@@ -273,10 +270,12 @@ export async function launchWorkbenchBrowser(records = [], id, {
     throw new NativeWorkbenchError(404, '该账号记录不存在');
   }
   const account = entries[index];
+  const profileKey = operatorBrowserProfileKey('chatgpt', ownerId, account.id);
   const proxyUrl = customProxyUrl || account.proxyUrl;
 
   const result = await launchNativeChrome({
-    profileKey: account.profileKey,
+    profileKey,
+    scopeId: account.id,
     proxyUrl,
     skipSessionRotation,
     token: account.token,
@@ -287,8 +286,7 @@ export async function launchWorkbenchBrowser(records = [], id, {
   });
 
   const now = new Date().toISOString();
-  account.lastOpenedAt = now;
-  account.updatedAt = now;
+  entries[index] = { ...account, lastOpenedAt: now, updatedAt: now };
 
   return {
     ok: true,
@@ -296,7 +294,7 @@ export async function launchWorkbenchBrowser(records = [], id, {
     account: {
       id: account.id,
       email: account.email,
-      profileKey: account.profileKey,
+      profileKey,
       proxyRegion: account.proxyRegion || 'auto',
       proxySummary: account.proxySummary || '',
       lastOpenedAt: now
@@ -308,13 +306,13 @@ export async function launchWorkbenchBrowser(records = [], id, {
 /**
  * Close native Chrome instance for an account and stop proxy usage immediately.
  */
-export function closeWorkbenchBrowser(records = [], id) {
+export function closeWorkbenchBrowser(records = [], id, ownerId) {
   const entries = Array.isArray(records) ? [...records] : [];
   const index = entries.findIndex((row) => row.id === id);
   if (index < 0) {
     throw new NativeWorkbenchError(404, '该账号记录不存在');
   }
   const account = entries[index];
-  const closed = closeNativeBrowser(account.profileKey);
+  const closed = closeNativeBrowser(operatorBrowserProfileKey('chatgpt', ownerId, account.id), ownerId);
   return { ok: true, closed, id: account.id };
 }

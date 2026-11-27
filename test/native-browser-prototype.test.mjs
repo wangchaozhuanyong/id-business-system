@@ -2,12 +2,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { EventEmitter } from 'node:events';
+import { launchNativeChrome, operatorBrowserProfileKey } from '../server/native-chrome-runner.mjs';
 import { acceptWebSocketUpgrade } from '../server/native-ws.mjs';
 import {
   attachPrototypeWsBridge,
   launchPrototypeWorkbenchSession,
   resolveProxySessionOnce,
   resolveWorkbenchProxy,
+  verifyOwnedWorkbenchLogin,
   verifyChatGptLogin,
   verifyProxyExitCountry
 } from '../server/native-browser-session.mjs';
@@ -150,7 +152,7 @@ test('launchPrototypeWorkbenchSession wires proxy verification, Chrome launch, a
   });
 
   assert.equal(result.ok, true);
-  assert.ok(result.profileKey.startsWith('proto_'));
+  assert.equal(result.profileKey, operatorBrowserProfileKey('proto', 'admin-1', launchedArgs.scopeId));
   assert.equal(launchedArgs.proxyUrl, 'http://u:p@ph.proxy:8080');
   assert.equal(launchedArgs.skipSessionRotation, true);
   assert.equal(launchedArgs.ownerId, 'admin-1');
@@ -162,7 +164,154 @@ test('launchPrototypeWorkbenchSession wires proxy verification, Chrome launch, a
   assert.equal(resolveProxySessionOnce(rotatedOnce) !== rotatedOnce || !rotatedOnce.includes('12345'), true);
 });
 
+test('login verification rejects a profile from another operator before opening DevTools', async () => {
+  const profileKey = operatorBrowserProfileKey('proto', 'operator-a', 'fixture@example.test');
+  await assert.rejects(verifyOwnedWorkbenchLogin({ profileKey, ownerId: 'operator-b' }), error => error.status === 404);
+});
+
+test('prototype browser profiles are stable and distinct for the same account used by two operators', async () => {
+  const sessionJson = JSON.stringify({
+    user: { email: 'shared-fixture@example.test' },
+    sessionToken: 'synthetic-session-fixture'
+  });
+  const options = {
+    sessionJson,
+    regionProxies: {},
+    probeFn: async () => ({ ip: '192.0.2.7', country: 'PH' }),
+    launchChromeFn: async () => ({ pid: 4242, port: 19222 }),
+    verifyLoginFn: async () => ({ status: 'matched' })
+  };
+  const first = await launchPrototypeWorkbenchSession({ ...options, ownerId: 'operator-a' });
+  const reopened = await launchPrototypeWorkbenchSession({ ...options, ownerId: 'operator-a' });
+  const second = await launchPrototypeWorkbenchSession({ ...options, ownerId: 'operator-b' });
+  assert.match(first.profileKey, /^proto_[a-f0-9]{64}$/);
+  assert.equal(first.profileKey, reopened.profileKey);
+  assert.notEqual(first.profileKey, second.profileKey);
+  assert.ok(!first.profileKey.includes('operator-a'));
+  await assert.rejects(
+    launchPrototypeWorkbenchSession({ ...options, launchChromeFn: () => assert.fail('must require an operator') }),
+    { status: 400 }
+  );
+});
+
+test('the runner refuses an old shared profile or another operator’s derived key before opening Chrome', async () => {
+  const scopeId = 'account-record-fixture';
+  const profileKey = operatorBrowserProfileKey('chatgpt', 'operator-a', scopeId);
+  assert.notEqual(profileKey, operatorBrowserProfileKey('chatgpt', 'operator-a', 'other-record'));
+  assert.notEqual(profileKey, operatorBrowserProfileKey('proto', 'operator-a', scopeId));
+  assert.throws(() => operatorBrowserProfileKey('chatgpt', 'operator-a', ' '), { status: 400 });
+  await assert.rejects(launchNativeChrome({ profileKey, scopeId }), { status: 400 });
+  await assert.rejects(launchNativeChrome({ profileKey, ownerId: 'operator-b', scopeId }), { status: 403 });
+  await assert.rejects(launchNativeChrome({
+    profileKey: 'chatgpt_0123456789abcdef', ownerId: 'operator-a', scopeId
+  }), { status: 400 });
+});
+
+test('Chrome WebSocket refuses missing or mismatched ownership before reaching DevTools', async () => {
+  const profileKey = operatorBrowserProfileKey('proto', 'operator-a', 'account-fixture');
+  for (const [ownerId, browserOwner] of [[undefined, 'operator-a'], ['operator-a', undefined], ['operator-b', 'operator-a']]) {
+    const messages = [];
+    const lookups = [];
+    const actions = [];
+    await attachPrototypeWsBridge({
+      profileKey,
+      ownerId,
+      ws: {
+        sendJson: (value) => messages.push(value),
+        close: (code) => actions.push(code)
+      },
+      getBrowserFn: (...args) => {
+        lookups.push(args);
+        return { ownerId: browserOwner, port: 19222 };
+      },
+      getTargetWsUrlFn: () => assert.fail('must not contact a foreign browser')
+    });
+    assert.deepEqual(lookups, ownerId ? [[profileKey, ownerId]] : []);
+    assert.deepEqual(messages, [{ type: 'error', message: '浏览器实例未运行或已关闭' }]);
+    assert.deepEqual(actions, [1008]);
+  }
+});
+
+function frameSocketFixture() {
+  const messages = [];
+  const closeCodes = [];
+  const ws = {
+    isClosed: false,
+    sendJson: (value) => messages.push(value),
+    close(code) {
+      this.isClosed = true;
+      closeCodes.push(code);
+      this.handleClose();
+    },
+    onMessage(fn) { this.handleMessage = fn; },
+    onClose(fn) { this.handleClose = fn; }
+  };
+  return { ws, messages, closeCodes };
+}
+
+test('Chrome WebSocket will not connect to the debugger when the browser changes during target lookup', async () => {
+  const ownerId = 'operator-a';
+  const profileKey = operatorBrowserProfileKey('proto', ownerId, 'lookup-fixture');
+  const { ws, messages, closeCodes } = frameSocketFixture();
+  const lookup = Promise.withResolvers();
+  let browser = { ownerId, port: 19222, pid: 11 };
+  const attachment = attachPrototypeWsBridge({
+    profileKey,
+    ownerId,
+    ws,
+    getBrowserFn: () => browser,
+    getTargetWsUrlFn: (port) => {
+      assert.equal(port, 19222);
+      return lookup.promise;
+    },
+    createCdpClientFn: () => assert.fail('must not connect after the original instance is replaced')
+  });
+  browser = { ...browser, pid: 12 };
+  lookup.resolve('ws://127.0.0.1:19222/devtools/page/replacement');
+  await attachment;
+  assert.deepEqual(messages, [{ type: 'error', message: '浏览器实例未运行或已关闭' }]);
+  assert.deepEqual(closeCodes, [1008]);
+});
+
+test('an open Chrome WebSocket closes on replacement before forwarding the frame or input', async () => {
+  const ownerId = 'operator-a';
+  const profileKey = operatorBrowserProfileKey('proto', ownerId, 'forwarding-fixture');
+  for (const incoming of ['frame', 'input']) {
+    const { ws, messages, closeCodes } = frameSocketFixture();
+    let browser = { ownerId, port: 19222, pid: 11 };
+    let notify;
+    const actions = [];
+    await attachPrototypeWsBridge({
+      profileKey,
+      ownerId,
+      ws,
+      getBrowserFn: () => browser,
+      getTargetWsUrlFn: async () => 'ws://127.0.0.1:19222/devtools/page/original',
+      createCdpClientFn: () => ({
+        ready: Promise.resolve(),
+        async send(method) { actions.push(method); },
+        onEvent(fn) {
+          notify = fn;
+          return () => actions.push('unsubscribe');
+        },
+        close: () => actions.push('close')
+      })
+    });
+    browser = { ...browser, pid: 12 };
+    if (incoming === 'frame') {
+      notify({ method: 'Page.screencastFrame', params: { data: 'stale', sessionId: 1 } });
+    } else {
+      await ws.handleMessage(JSON.stringify({ type: 'text', text: 'stale' }));
+    }
+    assert.deepEqual(messages.map(({ type }) => type), ['ready', 'error'], incoming);
+    assert.deepEqual(actions, ['Page.enable', 'Runtime.enable', 'Page.startScreencast', 'unsubscribe', 'close'], incoming);
+    assert.deepEqual(closeCodes, [1008], incoming);
+  }
+});
+
 test('acceptWebSocketUpgrade and attachPrototypeWsBridge stream frames and forward input', async () => {
+  const profileKey = operatorBrowserProfileKey('proto', 'admin-1', 'websocket-fixture');
+  const browser = { port: 19222, ownerId: 'admin-1', exitInfo: { country: 'PH', ip: '1.2.3.4' } };
   const cdpEvents = new EventEmitter();
   const cdpCalls = [];
   const mockCdp = {
@@ -183,9 +332,9 @@ test('acceptWebSocketUpgrade and attachPrototypeWsBridge stream frames and forwa
     const ws = acceptWebSocketUpgrade(req, socket, head);
     void attachPrototypeWsBridge({
       ws,
-      profileKey: 'proto_demo',
+      profileKey,
       ownerId: 'admin-1',
-      getBrowserFn: () => ({ port: 19222, ownerId: 'admin-1', exitInfo: { country: 'PH', ip: '1.2.3.4' } }),
+      getBrowserFn: () => browser,
       getTargetWsUrlFn: async () => 'ws://127.0.0.1:19222/devtools/page/1',
       createCdpClientFn: () => mockCdp,
       verifyLoginFn: async ({ expectedEmail }) => ({
@@ -201,7 +350,7 @@ test('acceptWebSocketUpgrade and attachPrototypeWsBridge stream frames and forwa
   const { port } = server.address();
 
   const received = [];
-  const client = new globalThis.WebSocket(`ws://127.0.0.1:${port}/integrations/native-workbench/ws?profileKey=proto_demo`);
+  const client = new globalThis.WebSocket(`ws://127.0.0.1:${port}/integrations/native-workbench/ws?profileKey=${profileKey}`);
 
   await new Promise((resolve, reject) => {
     client.onerror = reject;
