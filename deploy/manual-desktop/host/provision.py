@@ -202,6 +202,13 @@ def installed(path):
         return None
 
 
+def ensure_sysusers_directory():
+    parent = SYSUSERS_FILE.parent
+    checked_path(parent.parent, stat.S_ISDIR)
+    parent.mkdir(mode=0o755, exist_ok=True)
+    checked_path(parent, stat.S_ISDIR)
+
+
 def write_atomic(path, content):
     if content is None:
         path.unlink(missing_ok=True)
@@ -308,6 +315,7 @@ def install(config):
                 "unmanaged_manual_runtime_files_present")
         previous_enabled, _ = systemctl("is-enabled", BROKER_UNIT, allowed=(0, 1, 3, 4))
         require(previous_enabled in ("enabled", "disabled", "not-found", ""), "unsupported_broker_enablement")
+        ensure_sysusers_directory()
         for directory, uid, gid, mode in ((CONFIG.parent, 0, 0, 0o755), (STATE, 0, 0, 0o711),
                                           (PROFILES, 0, 0, 0o700), (CLAIMS, UID, GID, 0o700)):
             ensure_directory(directory, uid, gid, mode)
