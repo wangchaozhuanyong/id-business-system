@@ -32,7 +32,7 @@ on:
         default: false
         type: boolean
       inspect_canary_sha:
-        description: 只读检查指定失败版本的金丝雀日志，发布时留空
+        description: 只读检查指定失败版本，发布时留空。与宿主检查同用时只检查该版的依赖制品
         required: false
         type: string
       inspect_release_command:

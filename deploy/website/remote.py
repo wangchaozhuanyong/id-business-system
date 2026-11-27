@@ -1020,6 +1020,7 @@ def manual_host_command(operation, release, image):
             "--site-packages", str(runtime / "site-packages"), "--max-active", "1",
             "--min-available-mib", "512", "--block-network", f"{site_ip}/32"]
     timeout = {"prepare": 175, "smoke": 285}.get(operation, 90)
+    print(f"manual_workspace_{operation}_started", flush=True)
     result = subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True, timeout=timeout)
     if result.returncode != 0:
         reason = result.stderr.decode(errors="replace").strip()
@@ -1028,6 +1029,7 @@ def manual_host_command(operation, release, image):
     receipt = json.loads(result.stdout)
     require(receipt.get("operation") == operation and receipt.get("revision") == release.name,
             "manual_workspace_host_receipt_mismatch")
+    print(f"manual_workspace_{operation}_completed", flush=True)
     return receipt
 
 
@@ -2016,7 +2018,7 @@ def main(plan):
             elif plan["operation"] == "inspect-manual-workspace":
                 from manual_workspace_preflight import summary
 
-                result = summary()
+                result = summary(attempt_sha=plan.get("attemptSha")) if plan.get("attemptSha") else summary()
             elif plan["operation"] == "repair-assets":
                 result = repair_current_asset_metadata(plan)
             else:

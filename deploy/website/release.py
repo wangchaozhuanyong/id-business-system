@@ -523,6 +523,10 @@ def remote(plan):
                     for line in invocation["StandardOutputContent"].splitlines():
                         if re.fullmatch(r'\{"rechargePreflight": [a-zA-Z0-9_":{}, ]+\}', line):
                             print(line, flush=True)
+                if plan.get("manualWorkspace"):
+                    for line in invocation["StandardOutputContent"].splitlines():
+                        if re.fullmatch(r"manual_workspace_(prepare|check|install|verify|smoke|deactivate)_(started|completed)", line):
+                            print(line, flush=True)
                 for detail in invocation["StandardErrorContent"].splitlines():
                     if re.fullmatch(r"[a-z_]+(?:: [a-z_]+)?", detail) or (
                             not report_details and CONTAINER_METADATA_FAILURE.fullmatch(detail)):
@@ -648,10 +652,16 @@ def main(sample_backup_resources=False):
                                  os.environ.get("INSPECT_MANUAL_WORKSPACE_HOST") == "true")):
         raise RuntimeError("manual_workspace_release_requires_its_own_operation")
     if os.environ.get("INSPECT_MANUAL_WORKSPACE_HOST") == "true":
-        if any((attempt, inspect_command, include_adapter, include_core, retry_receipt, partner_api,
+        if any((inspect_command, include_adapter, include_core, retry_receipt, partner_api,
                 customer_progress, resume_interrupted, sample_backup_resources)):
             raise RuntimeError("manual_workspace_inspection_requires_its_own_operation")
-        command_id, host = remote({"operation": "inspect-manual-workspace", "sha": sha})
+        plan = {"operation": "inspect-manual-workspace", "sha": sha}
+        if attempt:
+            if not SHA.fullmatch(attempt):
+                raise RuntimeError("invalid_manual_workspace_attempt_revision")
+            require_ancestor(attempt, sha)
+            plan["attemptSha"] = attempt
+        command_id, host = remote(plan)
         print(json.dumps({"command": command_id, "workspaceHost": host}), flush=True)
         return
     if resume_interrupted and any((attempt, inspect_command, include_adapter, include_core, retry_receipt,

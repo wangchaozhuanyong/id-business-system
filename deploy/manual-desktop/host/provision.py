@@ -115,26 +115,28 @@ def prepare_host_tools(config):
     package_dir = Path(tempfile.mkdtemp(prefix="workspace-dependencies-", dir=artifacts))
     # Resolve the single missing dependency from the already configured Amazon
     # Linux release. This transaction only downloads packages.
-    command([DNF, "-qy", "--disablerepo=*", "--enablerepo=amazonlinux",
+    command([DNF, "-q", "-y", "--disablerepo=*", "--enablerepo=amazonlinux",
              "--setopt=install_weak_deps=False", "install", "--downloadonly",
-             "--destdir=" + str(package_dir), "polkit"], timeout=100)
+             "--destdir=" + str(package_dir), "polkit"], timeout=100, failure="manual_host_dependency_download_failed")
     packages = sorted(package_dir.glob("*.rpm"))
     require(packages and len(packages) <= 20 and all(package.is_file() and not package.is_symlink()
             for package in packages), "manual_host_dependency_bundle_invalid")
     names = set()
     for package in packages:
-        signature, _ = command([RPM_KEYS, "--checksig", str(package)])
+        signature, _ = command([RPM_KEYS, "--checksig", str(package)],
+                               failure="manual_host_dependency_verification_failed")
         require(signature.endswith("digests signatures OK"), "manual_host_dependency_signature_invalid")
-        name, _ = command([RPM, "-qp", "--qf", "%{NAME}", str(package)])
+        name, _ = command([RPM, "-qp", "--qf", "%{NAME}", str(package)],
+                          failure="manual_host_dependency_header_failed")
         require(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9+_.-]{0,79}", name) is not None and name not in names,
                 "manual_host_dependency_name_invalid")
-        _, status = command([RPM, "-q", name], allowed=(0, 1))
+        _, status = command([RPM, "-q", name], allowed=(0, 1), failure="manual_host_package_inventory_failed")
         require(status == 1, "manual_host_dependency_would_upgrade_existing_package")
         names.add(name)
     require("polkit" in names, "manual_host_dependency_bundle_invalid")
     package_paths = [str(package) for package in packages]
-    command([RPM, "--install", "--test", *package_paths], timeout=20)
-    command([RPM, "--install", *package_paths], timeout=35)
+    command([RPM, "--install", "--test", *package_paths], timeout=20, failure="manual_host_dependency_rpm_check_failed")
+    command([RPM, "--install", *package_paths], timeout=35, failure="manual_host_dependency_rpm_install_failed")
     require(os.access(PKCHECK, os.X_OK), "manual_host_dependency_install_unverified")
     systemctl("daemon-reload")
     return True
@@ -143,8 +145,9 @@ def prepare_host_tools(config):
 def check_host(config, available=True):
     require(platform.system() == "Linux" and os.geteuid() == 0, "requires_root_linux_release_host")
     require(Path("/proc/1/comm").read_text().strip() == "systemd", "systemd_host_required")
-    for tool in (DOCKER[0], SYSTEMCTL, TMPFILES, SYSUSERS, PKCHECK, config["python"]):
-        require(os.access(tool, os.X_OK), "required_host_tool_unavailable")
+    for name, tool in (("docker", DOCKER[0]), ("systemctl", SYSTEMCTL), ("tmpfiles", TMPFILES),
+                       ("sysusers", SYSUSERS), ("pkcheck", PKCHECK), ("python", config["python"])):
+        require(os.access(tool, os.X_OK), f"manual_host_{name}_unavailable")
     require(systemctl("show", "polkit.service", "-p", "LoadState", "--value")[0] == "loaded",
             "polkit_service_unavailable")
     existing_identity()
@@ -171,7 +174,8 @@ def check_host(config, available=True):
         "sys.path[0:0] = sys.argv[1:]; import aiohttp"
     )
     command([config["python"], "-IB", "-c", python_check] +
-            ([config["site_packages"]] if config["site_packages"] else []))
+            ([config["site_packages"]] if config["site_packages"] else []),
+            failure="manual_broker_python_runtime_unavailable")
 
 
 def managed_files(config):
