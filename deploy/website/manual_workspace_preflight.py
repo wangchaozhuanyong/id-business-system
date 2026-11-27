@@ -13,6 +13,17 @@ SYSTEM_PATH = "/usr/sbin:/usr/bin:/sbin:/bin"
 APP = "id-business-independent-app"
 SOCKET = "run/id-manual-bridge/site.sock"
 UNIT = "id-manual-workspace@.service"
+BROKER_STARTUP_ERRORS = {
+    "The desktop broker requires Linux with procfs": "procfs_unavailable",
+    "The socket and worker directory must use absolute paths": "invalid_socket_path",
+    "Cold starts require measured concurrency and available-memory limits": "invalid_capacity",
+    "Claims require a separate broker-owned directory outside all worker mounts": "invalid_claims_directory",
+    "The broker must own its private socket directory": "invalid_socket_directory",
+    "Recharge preparation requires --start-units and an absolute --recharge-input": "invalid_input_path",
+    "Recharge input must be separate from socket, claim and mutable worker directories": "overlapping_input_directory",
+    "Invalid recharge input directory or blocked network": "invalid_input_directory_or_network",
+    "Recharge blocked networks require --recharge-input": "missing_input_directory",
+}
 DOCKER = ("docker", "--config", "/var/empty/id-manual-preflight", "--host", "unix:///var/run/docker.sock")
 DOCKER_INFO = ("{{.CgroupVersion}}|{{.MemoryLimit}}|{{.SwapLimit}}|{{.PidsLimit}}|"
                "{{range .SecurityOptions}}{{if eq (index (split . \",\" ) 0) \"name=seccomp\"}}seccomp{{end}}{{end}}")
@@ -55,6 +66,22 @@ def _socket(path):
         return False
     except OSError:
         return None
+
+
+def _broker_startup_error(command):
+    # Read only exact messages emitted by the broker's argument checks. Never
+    # return journal text, exception details, paths or user input.
+    messages = "|".join(re.escape(message) for message in BROKER_STARTUP_ERRORS)
+    output = command(["/usr/bin/journalctl", "--boot=0", "--unit=id-manual-broker.service",
+                      "--since=-12h", "--lines=1", "--output=cat", "--no-pager",
+                      "--grep=^(broker\\.py: error: (" + messages + r")|/usr/bin/python3(\.9)?: can't open file "
+                      r"'.*/deploy/manual-desktop/host/runtime\.py': \[Errno (2|13)\] (No such file or directory|Permission denied))$"])
+    if not output:
+        return None
+    if re.match(r"^/usr/bin/python3(?:\.9)?: can't open file ", output) and "/deploy/manual-desktop/host/runtime.py':" in output:
+        return {"[Errno 2] No such file or directory": "runtime_file_missing",
+                "[Errno 13] Permission denied": "runtime_file_permission_denied"}.get(output.rpartition(": ")[2])
+    return BROKER_STARTUP_ERRORS.get(output.removeprefix("broker.py: error: "))
 
 
 def _package_observation(root):
@@ -102,6 +129,24 @@ def _staged_packages(root, command, revision):
     return {"release": revision, "downloadDirectories": len(folders), "rpmFiles": len(paths),
             "signatureChecksPassed": verified,
             "systemRelease": version if version and re.fullmatch(r"2023\.[0-9]+\.[0-9]{8}", version) else None}
+
+
+def _broker_release_access(root, command, revision):
+    if not re.fullmatch(r"[a-f0-9]{40}", revision):
+        raise ValueError("manual_workspace_attempt_revision_invalid")
+    base = root / "opt/id-business-independent"
+    candidate = base / "releases" / revision
+    source = candidate / "source"
+    desktop = source / "deploy/manual-desktop"
+    runtime = candidate / "manual-runtime"
+    target_paths = {"releaseParent": base / "releases", "release": candidate, "source": source,
+                    "runtimeAssets": runtime / "novnc", "runtimePython": runtime / "site-packages",
+                    "brokerLauncher": desktop / "host/runtime.py", "brokerCode": desktop / "broker.py"}
+    if not os.access(root / "usr/bin/setpriv", os.X_OK):
+        return None
+    return {name: command(["/usr/bin/setpriv", "--reuid=10001", "--regid=10001", "--clear-groups",
+                           "/usr/bin/test", "-r" if path.suffix == ".py" else "-x", str(path)]) == ""
+            for name, path in target_paths.items()}
 
 
 def _docker_info(command, daemon_active):
@@ -202,6 +247,8 @@ def summary(*, root=Path("/"), command=_command, machine=platform.machine, attem
                                **({"failedReleasePackageState": _staged_packages(root, command, attempt_sha)}
                                   if attempt_sha else {})},
             "docker": _docker_info(command, daemon_active), "workerTemplateAvailable": template_available,
+            "brokerStartupError": _broker_startup_error(command),
+            "failedReleaseBrokerAccess": _broker_release_access(root, command, attempt_sha) if attempt_sha else None,
             "website": _website(root, command, daemon_active),
         },
         "actualChecks": {name: "not-run" for name in

@@ -529,7 +529,9 @@ def remote(plan):
                             print(line, flush=True)
                 for detail in invocation["StandardErrorContent"].splitlines():
                     if re.fullmatch(r"[a-z_]+(?:: [a-z_]+)?", detail) or (
-                            not report_details and CONTAINER_METADATA_FAILURE.fullmatch(detail)):
+                            not report_details and CONTAINER_METADATA_FAILURE.fullmatch(detail)) or (
+                            plan.get("manualWorkspace") and
+                            re.fullmatch(r"manual_broker_startup_exit_(1|2|203|216|217|226)", detail)):
                         print(detail, flush=True)
                 raise RuntimeError(f"SSM {name} {status}: {command_id}")
         time.sleep(5)

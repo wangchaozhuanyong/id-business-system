@@ -24,6 +24,7 @@ class WorkspacePreflightTests(unittest.TestCase):
         self.daemon_state = "active"
         self.app_views = ["true|123|directory"]
         self.unit = probe.UNIT + " static -"
+        self.broker_journal = None
 
     def write(self, path, value):
         path = self.root / path
@@ -32,6 +33,10 @@ class WorkspacePreflightTests(unittest.TestCase):
 
     def command(self, args):
         self.commands.append(args)
+        if args[0] == "/usr/bin/journalctl":
+            self.assertIn("--unit=id-manual-broker.service", args)
+            self.assertIn("--lines=1", args)
+            return self.broker_journal
         if args == ["systemctl", "--no-pager", "--no-legend", "--plain", "list-unit-files", probe.UNIT]:
             return self.unit
         if args == ["systemctl", "--no-pager", "show", "--property=ActiveState", "--value", "docker.service"]:
@@ -114,6 +119,30 @@ class WorkspacePreflightTests(unittest.TestCase):
         self.assertTrue(details["executables"]["pkcheck"])
         self.assertEqual(details["packageDownload"], "repository_access")
         self.assertNotIn("private", json.dumps(details))
+
+    def test_broker_startup_reports_only_a_known_argument_error(self):
+        self.broker_journal = "broker.py: error: Invalid recharge input directory or blocked network"
+        self.assertEqual(self.inspect()["observed"]["brokerStartupError"], "invalid_input_directory_or_network")
+        self.broker_journal += " with a private detail"
+        self.assertIsNone(self.inspect()["observed"]["brokerStartupError"])
+        self.broker_journal = ("/usr/bin/python3.9: can't open file '/private/deploy/manual-desktop/host/runtime.py': "
+                               "[Errno 13] Permission denied")
+        self.assertEqual(self.inspect()["observed"]["brokerStartupError"], "runtime_file_permission_denied")
+
+    def test_broker_release_access_probes_run_as_the_broker_identity(self):
+        self.write("usr/bin/setpriv", "fixture")
+        (self.root / "usr/bin/setpriv").chmod(0o755)
+
+        def access(args):
+            self.assertEqual(args[:5], ["/usr/bin/setpriv", "--reuid=10001", "--regid=10001",
+                                       "--clear-groups", "/usr/bin/test"])
+            return "" if args[5] == "-x" else None
+
+        result = probe._broker_release_access(self.root, access, "f" * 40)
+        self.assertTrue(result["releaseParent"])
+        self.assertTrue(result["runtimePython"])
+        self.assertFalse(result["brokerLauncher"])
+        self.assertFalse(result["brokerCode"])
 
     def test_stopped_app_stale_socket_and_pid_reuse_do_not_prove_configuration(self):
         self.unit = ""
