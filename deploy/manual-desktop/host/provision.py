@@ -14,6 +14,7 @@ from pathlib import Path
 import platform
 import pwd
 import re
+import shutil
 import socket
 import stat
 import subprocess
@@ -184,7 +185,82 @@ def check_host(config, available=True):
             failure="manual_broker_python_runtime_unavailable")
 
 
+def installed_runtime(config):
+    source = Path(config["root"])
+    root = STATE / "releases" / source.name
+    return dict(config, root=str(root), **{
+        key: str(root / Path(config[key]).relative_to(source)) if config[key] else ""
+        for key in ("desktop", "assets", "site_packages")
+    })
+
+
+def runtime_sources(config):
+    source = Path(config["root"])
+    desktop = Path(config["desktop"])
+    files = [release_path(desktop / name, stat.S_ISREG) for name in
+             ("broker.py", "egress.py", "chromium-seccomp.json", "host/runtime.py", "worker/recharge_proxy.py")]
+    for name in ("assets", "site_packages"):
+        if not config[name]:
+            continue
+        for path in Path(config[name]).rglob("*"):
+            if path.is_dir():
+                release_path(path, stat.S_ISDIR)
+            else:
+                files.append(release_path(path, stat.S_ISREG))
+    return {path.relative_to(source): path for path in files}
+
+
+def stage_installed_runtime(config):
+    root = Path(installed_runtime(config)["root"])
+    ensure_directory(root.parent, 0, 0, 0o755)
+    files = runtime_sources(config)
+    if not root.exists() and not root.is_symlink():
+        with tempfile.TemporaryDirectory(prefix=".manual-runtime-", dir=root.parent) as directory:
+            payload = Path(directory) / "runtime"
+            payload.mkdir(mode=0o755)
+            for relative, source in files.items():
+                target = payload / relative
+                target.parent.mkdir(parents=True, exist_ok=True, mode=0o755)
+                for parent in target.parents:
+                    if not parent.is_relative_to(payload):
+                        break
+                    parent.chmod(0o755)
+                shutil.copyfile(source, target)
+                target.chmod(0o644)
+            payload.rename(root)
+    release_path(root, stat.S_ISDIR)
+    require({path.relative_to(root) for path in root.rglob("*") if not path.is_dir() or path.is_symlink()} == files.keys(),
+            "manual_runtime_contents_mismatch")
+    for relative, source in files.items():
+        target = release_path(root / relative, stat.S_ISREG)
+        require(target.read_bytes() == source.read_bytes(), "manual_runtime_contents_mismatch")
+    return root
+
+
+def verify_runtime_access(config):
+    runtime = installed_runtime(config)
+    probe = """
+from pathlib import Path
+import runpy
+import sys
+desktop, assets, packages = sys.argv[1:]
+for file in (Path(desktop) / 'host/runtime.py', Path(desktop) / 'broker.py', Path(assets) / 'core/rfb.js'):
+    with file.open('rb') as stream:
+        assert stream.read(1)
+if packages:
+    sys.path.insert(0, packages)
+sys.path.insert(0, desktop)
+runpy.run_path(str(Path(desktop) / 'broker.py'), run_name='__runtime_access_probe__')
+"""
+    result = subprocess.run([runtime["python"], "-IB", "-c", probe, runtime["desktop"], runtime["assets"],
+                             runtime["site_packages"]], user=UID, group=GID, extra_groups=[],
+                            cwd="/", stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                            timeout=8)
+    require(result.returncode == 0, "manual_broker_runtime_access_unverified")
+
+
 def managed_files(config):
+    config = installed_runtime(config)
     runner = str(Path(config["desktop"]) / "host/runtime.py")
     broker = f"""[Unit]
 Description=ID manual recharge browser broker
@@ -418,6 +494,8 @@ def install(config):
         for directory, uid, gid, mode in ((CONFIG.parent, 0, 0, 0o755), (STATE, 0, 0, 0o711),
                                           (PROFILES, 0, 0, 0o700), (CLAIMS, UID, GID, 0o700)):
             ensure_directory(directory, uid, gid, mode)
+        stage_installed_runtime(config)
+        verify_runtime_access(config)
         # Refuse to adopt or change permissions on directories from another runtime.
         for directory, uid, gid, mode in ((BRIDGE, UID, GID, 0o750), (WORKERS, 0, GID, 0o750), (INPUTS, UID, GID, 0o700)):
             with suppress(FileNotFoundError):
