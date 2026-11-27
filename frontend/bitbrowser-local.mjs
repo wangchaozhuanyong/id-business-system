@@ -242,6 +242,20 @@ function initializeNativeWorkbench() {
 
   if (!wbJsonInput || !wbTbody) return;
 
+  const cloudWorkbenchPaused = document.body.hasAttribute('data-cloud-workbench-paused');
+  if (cloudWorkbenchPaused) {
+    get('wb-browser-status').remove();
+    const notice = document.createElement('p');
+    notice.className = 'field-help';
+    notice.setAttribute('role', 'status');
+    notice.textContent = '云端浏览器暂缓开放';
+    wbSaveAndOpen?.closest('.wb-button-row')?.after(notice);
+    get('wb-entry-action-title').textContent = '录入账号';
+    get('workbench-entry-help').textContent = '粘贴完整的单账户授权 JSON，系统会识别邮箱、套餐和设备信息，并保存到下方列表。';
+    wbSaveAndOpen?.remove();
+    wbUpdateSaveAndLaunch?.remove();
+  }
+
   let accounts = [];
   let userDefaultProxy = 'auto';
 
@@ -492,7 +506,7 @@ function initializeNativeWorkbench() {
   }
 
   function openRemoteBrowserModal({ accountId = '', profileKey = '', email = '', exitInfo = null, loginVerification = null } = {}) {
-    if (!remoteDialog || !profileKey) return;
+    if (cloudWorkbenchPaused || !remoteDialog || !profileKey) return;
     activeRemoteAccountId = accountId;
     activeRemoteEmail = email;
     setRemotePill(remoteEmailBadge, email || profileKey, 'muted');
@@ -810,7 +824,7 @@ function initializeNativeWorkbench() {
           expired: { text: '授权过期', color: 'var(--tag-error-color, #dc2626)' }
         };
         const statusBadge = statusMap[item.status] || { text: item.status, color: 'var(--text-secondary)' };
-        const runningBadge = item.isRunning
+        const runningBadge = !cloudWorkbenchPaused && item.isRunning
           ? `<span style="display:inline-block; margin-left: 4px; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 500; background: #22c55e20; color: #16a34a; border: 1px solid #22c55e40;">● 运行中</span>`
           : '';
         const openTime = item.lastOpenedAt
@@ -826,6 +840,14 @@ function initializeNativeWorkbench() {
           ? 'wb-plan-pill--pro'
           : (item.currentPlan?.toLowerCase() === 'plus' ? 'wb-plan-pill--plus' : 'wb-plan-pill--free');
 
+        let browserControls = '';
+        if (!cloudWorkbenchPaused) {
+          browserControls = item.isRunning
+            ? `<button type="button" class="button button--small button--primary wb-btn-attach" data-id="${escapeHtml(item.id)}" data-profile-key="${escapeHtml(item.profileKey)}" data-email="${escapeHtml(item.email)}">进入操作窗</button>
+               <button type="button" class="button button--small button--warning wb-btn-close" data-id="${escapeHtml(item.id)}" title="关闭浏览器并立即切断代理连接">关闭窗口</button>`
+            : `<button type="button" class="button button--small button--primary wb-btn-launch" data-id="${escapeHtml(item.id)}" data-email="${escapeHtml(item.email)}">打开浏览器</button>`;
+        }
+
         return `
           <tr data-account-id="${escapeHtml(item.id)}">
             <td style="font-weight: 500;">
@@ -837,11 +859,7 @@ function initializeNativeWorkbench() {
             <td style="font-size: 12.5px; color: var(--text-secondary);">${escapeHtml(openTime)}</td>
             <td style="font-size: 12.5px;">${escapeHtml(item.renewalNotes || '—')}</td>
             <td style="text-align: right; white-space: nowrap;">
-              ${item.isRunning
-                ? `<button type="button" class="button button--small button--primary wb-btn-attach" data-id="${escapeHtml(item.id)}" data-profile-key="${escapeHtml(item.profileKey)}" data-email="${escapeHtml(item.email)}">进入操作窗</button>
-                   <button type="button" class="button button--small button--warning wb-btn-close" data-id="${escapeHtml(item.id)}" title="关闭浏览器并立即切断代理连接">关闭窗口</button>`
-                : `<button type="button" class="button button--small button--primary wb-btn-launch" data-id="${escapeHtml(item.id)}" data-email="${escapeHtml(item.email)}">打开浏览器</button>`
-              }
+              ${browserControls}
               <button type="button" class="button button--small wb-btn-update-json" data-id="${escapeHtml(item.id)}" data-email="${escapeHtml(item.email)}" title="会话过期时，更换最新授权 JSON">更换 JSON</button>
               <button type="button" class="button button--small wb-btn-mark-active" data-id="${escapeHtml(item.id)}" title="标记为已开通Plus">标记开通</button>
               <button type="button" class="button button--small button--danger wb-btn-delete" data-id="${escapeHtml(item.id)}">删除</button>
@@ -1027,6 +1045,7 @@ function initializeNativeWorkbench() {
   });
 
   async function handleUpdateJson(autoLaunch = false) {
+    if (cloudWorkbenchPaused && autoLaunch) return;
     const id = wbUpdateDialog?.dataset.accountId;
     const sessionJson = wbUpdateTextarea?.value.trim();
     if (!id || !sessionJson) {
@@ -1070,6 +1089,7 @@ function initializeNativeWorkbench() {
   wbUpdateSaveAndLaunch?.addEventListener('click', () => handleUpdateJson(true));
 
   async function saveAccount(andOpen = false) {
+    if (cloudWorkbenchPaused && andOpen) return;
     const raw = wbJsonInput.value.trim();
     if (!raw) {
       alert('请先粘贴授权 JSON');

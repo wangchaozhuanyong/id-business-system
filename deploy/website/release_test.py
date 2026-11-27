@@ -40,6 +40,72 @@ await startPreview(port, {
 
 
 class WebsiteReleaseTests(unittest.TestCase):
+    def test_interrupted_scope_requires_only_release_files_to_change_since_running_native(self):
+        import interrupted_release
+
+        reviewed = "\n".join(release.CARD_REUSE_ROUTING_HEALTH_AND_CANARY_NATIVE_SCOPE)
+        old = {name: {"record": name} for name in
+               ("components", "unitSha256", "gatewaySha256", "assetsSha256", "launchers", "adapterUnit")}
+        with patch.object(release, "require_ancestor") as ancestor, \
+                patch.object(interrupted_release, "original_baseline", return_value=old | {"extras": "original"}) as baseline, \
+                patch.object(release, "git", side_effect=["deploy/website/remote.py", reviewed]):
+            interruption = release.interrupted_release_plan(TARGET)
+        ancestor.assert_called_once_with(interrupted_release.INTERRUPTED_SHA, TARGET)
+        baseline.assert_called_once_with(release.aws, release.INSTANCE)
+        self.assertEqual(interruption["before"], old)
+        self.assertEqual(interruption["native"]["revision"], interrupted_release.INTERRUPTED_SHA)
+        self.assertEqual(interruption["assetsSha256"], interrupted_release.INTERRUPTED_NEW_ASSETS)
+
+        for changes in ([release.INTERRUPTED_GATE_SOURCE, reviewed],
+                        ["deploy/website/remote.py", reviewed + "\n" + release.INTERRUPTED_GATE_SOURCE]):
+            with self.subTest(changes=changes), patch.object(release, "require_ancestor"), \
+                    patch.object(release, "git", side_effect=changes), \
+                    patch.object(interrupted_release, "original_baseline") as baseline:
+                with self.assertRaisesRegex(RuntimeError, "interrupted_release_scope_mismatch"):
+                    release.interrupted_release_plan(TARGET)
+                baseline.assert_not_called()
+
+    def test_interrupted_release_cannot_be_mixed_with_native_deployment_or_inspection(self):
+        args = {"RELEASE_SHA": TARGET, "QUALITY_RUN_ID": "123", "RESUME_INTERRUPTED_RELEASE": "true"}
+        for name, value in (("RELEASE_RECHARGE_CORE", "true"), ("INSPECT_CANARY_SHA", BASE)):
+            with self.subTest(name=name), patch.dict(os.environ, args | {name: value}, clear=True), \
+                    patch.object(release, "require_main"), patch.object(release, "remote") as dispatch:
+                with self.assertRaisesRegex(RuntimeError, "interrupted_release_requires_its_own_operation"):
+                    release.main()
+                dispatch.assert_not_called()
+
+    def test_interrupted_release_accepts_only_original_candidate_assets(self):
+        old_assets, candidate = "c" * 64, "d" * 64
+        before = {"assetsSha256": old_assets}
+        plan = {"before": before, "adapter": {"runtimeFiles": ["known"]}, "interruptedRelease": {
+            "before": before, "assetsSha256": candidate,
+        }}
+        self.assertIsNone(remote.require_asset_digest(plan, candidate))
+        for changed in (plan | {"rechargeCore": {"assetsSha256": candidate}}, plan | {"adapter": False}):
+            with self.assertRaisesRegex(remote.ReleaseError, "interrupted_release_asset_digest_mismatch"):
+                remote.require_asset_digest(changed, candidate)
+        with self.assertRaisesRegex(remote.ReleaseError, "interrupted_release_asset_digest_mismatch"):
+            remote.require_asset_digest(plan, old_assets)
+
+    def test_interrupted_preflight_rejects_different_native_identity_and_old_mount(self):
+        components = {name: {"id": name, "image": "same", "running": True, "revision": BASE}
+                      for name in (*remote.WEBSITE, *remote.PROTECTED)}
+        native = components["recharge-native"] | {"revision": TARGET}
+        live = components | {"recharge-native": native}
+        previous = {"components": components, "unitSha256": "app-unit", "assetsSha256": "previous-assets",
+                    "launchers": {}, "gatewaySha256": "original-gateway"}
+        plan = {"before": previous, "native": native, "sha": TARGET}
+        state = previous | {"components": live, "mountedAssets": {"available": True, "sha256": "previous-assets"},
+                            "nativePublication": {"identity": native, "imageLabelsVerified": True}}
+        for changed, reason in (
+                ({"nativePublication": {"identity": native | {"id": "another"}, "imageLabelsVerified": True}},
+                 "interrupted_native_identity_changed"),
+                ({"mountedAssets": {"available": True, "sha256": "different"}}, "interrupted_website_baseline_changed"),
+                ({"components": live | {"app": live["app"] | {"id": "different"}}},
+                 "interrupted_release_component_changed")):
+            with self.subTest(reason=reason), self.assertRaisesRegex(remote.ReleaseError, reason):
+                remote.validate_interrupted_snapshot(plan, state | changed)
+
     def test_asset_recovery_reads_the_exact_successful_original_github_release(self):
         metadata = {"databaseId": release.ASSET_METADATA_RELEASE_RUN, "workflowDatabaseId": 414321281,
                     "headSha": release.ASSET_METADATA_REPAIR_BASE, "headBranch": "main", "event": "workflow_dispatch",
@@ -268,11 +334,14 @@ class WebsiteReleaseTests(unittest.TestCase):
                                                'Building the exact main native recharge image\n'
                                                'unrelated terminal detail\n',
                       "StandardErrorContent": "Traceback (most recent call last):\n"
-                                              "remote.ReleaseError: native_canary_failed: controlled_command_failed\n"}
+                                              "remote.ReleaseError: native_canary_failed: controlled_command_failed\n"
+                                              "container_metadata_read_failed:recharge-native:not_found\n"
+                                              "container_metadata_read_failed:example:unreviewed\n"}
         self.assertEqual(release.release_failure_diagnostic(invocation), {
             "status": "Failed",
             "phases": ["native_production_readonly_preflight_completed", "native_build_started"],
-            "reasons": ["native_canary_failed: controlled_command_failed"]
+            "reasons": ["native_canary_failed: controlled_command_failed",
+                        "container_metadata_read_failed:recharge-native:not_found"]
         })
 
     def test_tools_credential_json_keeps_values_and_line_boundaries(self):
@@ -1698,6 +1767,35 @@ class WebsiteReleaseTests(unittest.TestCase):
         self.assertEqual(content.splitlines(), ["[Service]", "ExecStart=",
             f"ExecStart=/usr/bin/python3 {remote.ROOT}/releases/{TARGET}/source/deploy/recharge-core/run-recharge.py"
             f" adapter {TARGET} {BASE} {image}"])
+
+    def test_adapter_unit_state_ignores_runtime_timestamps_across_daemon_reload(self):
+        image = "sha256:" + "c" * 64
+        components = {
+            "recharge": {"image": image, "revision": BASE, "running": True},
+            "recharge-native": {"image": image, "revision": BASE, "running": True},
+        }
+        prefix = f"{{ path=/usr/bin/python3 ; argv[]=/usr/bin/python3 /releases/{BASE}/run-recharge.py adapter {BASE} ; ignore_errors=no ; "
+        before = f"{prefix}start_time=[Thu 2026-11-26 10:55:00 UTC] ; stop_time=[n/a] ; pid=1234 ; code=(null) ; status=0/0 }}\n"
+        reloaded = f"{prefix}start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }}\n"
+        changed = before.replace(f"adapter {BASE}", f"adapter {TARGET}")
+        multiple = before.strip() + " ; " + reloaded.strip() + "\n"
+        missing = Path("/nonexistent/id-adapter-dropin-check.conf")
+
+        def read_state(command):
+            labels = json.dumps({"org.id-business.upstream.revision": remote.PINNED_UPSTREAM,
+                                 "org.opencontainers.image.revision": BASE}).encode()
+            with patch.object(remote, "run", side_effect=[labels, b"active\n", command.encode()]), \
+                    patch.object(remote, "inspect", return_value={"NetworkSettings": {"Ports": {"3000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "44579"}]}}}), \
+                    patch.object(remote, "ADAPTER_DROP", missing):
+                return remote.adapter_unit_state(components)
+
+        first = read_state(before)
+        self.assertEqual(first, read_state(reloaded))
+        self.assertNotEqual(first["commandSha256"], read_state(before.replace("ignore_errors=no", "ignore_errors=yes"))["commandSha256"])
+        self.assertIsNone(first["overrideSha256"])
+        for invalid in (changed, multiple):
+            with self.assertRaisesRegex(remote.ReleaseError, "adapter_unit_launch_mismatch"):
+                read_state(invalid)
 
     def test_runtime_mount_must_match_exact_readonly_source(self):
         source = Path("/opt/id-business-independent/releases") / TARGET / "source"

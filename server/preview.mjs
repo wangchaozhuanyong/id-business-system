@@ -330,7 +330,7 @@ export async function startPreview(
     databasePath
       ? bitLoginHtml.replace(
           '<body class="bit-local">',
-          '<body class="bit-local" data-connection-profiles>'
+          `<body class="bit-local" data-connection-profiles${publicUrl ? ' data-cloud-workbench-paused' : ''}>`
         )
       : bitLoginHtml
   );
@@ -854,6 +854,7 @@ export async function startPreview(
     }
     if (route.startsWith('/api/local/native-workbench-prototype/')) {
       if (!canManage) return forbidden();
+      if (publicUrl) return response.writeHead(404, { 'Cache-Control': 'private, no-store' }).end();
       const requestOrigin = secureOrigin || `http://${request.headers.host}`;
       if (request.headers.origin && request.headers.origin !== requestOrigin) {
         response.writeHead(403, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -932,6 +933,7 @@ export async function startPreview(
 
     if (route === '/integrations/native-workbench/prototype') {
       if (!canManage) return forbidden();
+      if (publicUrl) return response.writeHead(404, { 'Cache-Control': 'private, no-store' }).end();
       if (request.method !== 'GET' && request.method !== 'HEAD') {
         return response.writeHead(405, { Allow: 'GET, HEAD' }).end();
       }
@@ -1064,6 +1066,10 @@ export async function startPreview(
     }
     const reqUrl = new URL(request.url || '/', `http://${request.headers.host || '127.0.0.1'}`);
     if (reqUrl.pathname === '/integrations/native-workbench/ws') {
+      if (publicUrl) {
+        socket.destroy();
+        return;
+      }
       const actor = auth ? auth.getActor(request) : null;
       const canManage = !auth || managesBusiness(actor);
       if (!canManage) {

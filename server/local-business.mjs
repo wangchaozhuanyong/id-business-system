@@ -4035,6 +4035,12 @@ export async function handleLocalBusiness(
       }
       if (request.method === 'POST') {
         const body = await readJson(request);
+        if (publicOrigin && (action === 'launch' || action === 'close' || (action === 'update-json' && body?.autoLaunch))) {
+          return json(response, 503, {
+            code: 'CLOUD_WORKBENCH_PAUSED',
+            error: '正式站云端操作窗暂不可用，仍可保存账号资料和凭据'
+          });
+        }
         if (action === 'preferences') {
           return json(response, 200, store.saveNativeWorkbenchPreferences(body, effectiveActor));
         }

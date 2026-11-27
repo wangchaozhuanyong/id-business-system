@@ -9,8 +9,9 @@ import runpy
 import subprocess
 import time
 
-from remote import ADAPTER_UNIT, FORMAL, GATEWAY, PINNED_UPSTREAM, ROOT, ReleaseError, digest, identity, inspect
+from remote import ADAPTER_UNIT, FORMAL, GATEWAY, PINNED_UPSTREAM, ROOT, ContainerMetadataError, ReleaseError
 from remote import check_baseline, require, require_main, require_native_idle, run, snapshot, write_new
+from remote import digest, identity, inspect
 from vendure_admission import ADMISSION, SQLITE_FILENAME, STATE, WORKER_LAUNCHER, WORKER_UNIT
 from vendure_admission import read_idle_queue, ready_socket, worker_binding, worker_runtime
 
@@ -94,6 +95,9 @@ def ready_native(sha, image, expected_mounts):
                             sources.get("plusTrialFiles") == ['browser-pool.js', 'chatgpt.js', 'pricing-checkout.js', 'session-auth.js', 'stripe-payment.js'] and sources.get("retryFiles") == ["server.js"],
                             "running_native_sources_mismatch")
                     return state
+        except ContainerMetadataError as error:
+            if error.reason != "not_found":
+                raise
         except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
             pass
         time.sleep(1)
@@ -324,17 +328,23 @@ class CoreRelease:
         while time.monotonic() < deadline:
             try:
                 worker = inspect("vendure-worker")
-                if worker_runtime(worker) == self.worker_expected:
+            except ContainerMetadataError as error:
+                if error.reason != "not_found":
+                    raise
+                worker = None
+            try:
+                if worker is not None and worker["State"]["Running"] and worker_runtime(worker) == self.worker_expected:
                     revision, retained = read_idle_queue(queue)
                     require(retained == count, "storefront_recharge_task_count_changed")
                     if revision > baseline:
                         name = "modules/recharge/vendure/codexdaichong-worker.mjs"
                         reported = run(["docker", "exec", worker["Id"], "sha256sum", "/app/" + name]).decode().split()[0]
                         require(reported == digest(self.source / name), "storefront_worker_source_mismatch")
-                        self.reopen()
-                        self.receipt.update(workerSourceRevision=self.sha, workerPollingObserved=True, ingressResumed=True)
-                        return
+                        break
             except subprocess.CalledProcessError:
                 pass
             time.sleep(1)
-        raise ReleaseError("updated_storefront_worker_readback_failed")
+        else:
+            raise ReleaseError("updated_storefront_worker_readback_failed")
+        self.reopen()
+        self.receipt.update(workerSourceRevision=self.sha, workerPollingObserved=True, ingressResumed=True)
