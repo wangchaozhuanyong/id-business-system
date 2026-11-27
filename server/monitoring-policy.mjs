@@ -43,6 +43,8 @@ export const taskMonitorRules = new Set(['recharge_review', 'recharge_stuck', 'r
 export const readyPath = '/health/ready';
 export const monitorPath = '/api/local/system-monitoring';
 export const monitorReportPath = '/api/monitoring/site-probe';
+export const monitorEventIdPattern = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
+export const rechargeReviewOutcomes = new Set(['charged_activated', 'uncharged_not_activated', 'reversed_not_activated']);
 export const monitorConfigDomain = 'system-monitoring-config';
 export const monitorStateDomain = 'system-monitoring-state';
 export const scopePattern = /^[a-zA-Z0-9_-]{1,80}$/;
@@ -70,7 +72,7 @@ export const monitorCheckInfo = {
   login_abuse: ['登录安全', '当前服务进程的登录统计', '5 分钟内同一账号 5 次失败或限流，或合计 12 次限流。', '查看登录日志，核对异常时间与登录行为。'],
   sensitive_reads: ['敏感资料访问', '当前服务进程的受监测读取统计', '10 分钟内同一员工至少 20 次指定敏感资料读取，连续 2 次观测触发。', '查看操作记录，核对读取行为与业务用途。'],
   recharge_runtime: ['代充执行器', '原代充服务就绪检测', '连续 3 次就绪检测失败告警。', '查看代充后台状态；结果不明的付款先核对原任务。'],
-  recharge_review: ['付款结果核对', '原代充近期任务回执', '仅识别原任务明确标记的付款待核实；近期记录最多 200 条。', '核对原任务和付款回执，确认前不要重复充值。'],
+  recharge_review: ['付款结果核对', '原代充近期任务回执', '扫描最近 200 笔任务。同一原任务连续两次出现成功回执才会自动恢复。', '逐笔核对原任务、实际扣款或撤销及开通结果。已有对账凭据的告警可登记人工结案。'],
   recharge_stuck: ['代充任务时长', '原代充近期任务回执', '运行超过 30 分钟，连续 2 次观测触发；近期记录最多 200 条。', '查看原任务当前进度和回执，不自动重启付款。'],
   recharge_burst: ['代充失败频率', '原代充近期任务回执', '近 15 分钟至少 5 笔明确失败；近期记录最多 200 条。', '核对近期失败原因及原任务结果。'],
   order_sync: ['订单同步', '读取器心跳与入单回执', '读取器停止或心跳超过 10 分钟、实际回读或入单连续失败 3 次、失败后超过 10 分钟未恢复时告警。定时同步按回执时效判断。', '请核对读取器和最近的同步回执。业务待核对数量见后台任务和同步。'],

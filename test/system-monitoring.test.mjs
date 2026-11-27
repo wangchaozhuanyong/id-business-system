@@ -346,6 +346,107 @@ async function http(handler, { url = monitorPath, method = 'GET', body, headers 
   return result;
 }
 
+test('payment review uses each open task and missing readings interrupt its recovery streak', async t => {
+  const { monitor, tick, clock } = fixture(t);
+  const task = (jobKey, status) => ({ jobKey, status, time: '2026/11/10 09:58:00',
+    message: status === 'manual' ? '付款结果待核实，已转人工确认，请勿重复充值，请联系客服处理。' : '' });
+  let tasks = [task('review-a', 'manual'), task('review-b', 'manual'), task('unrelated', 'success')];
+  const sources = createMonitoringSources({ monitor, clock, databasePath: '/fixture/data.sqlite',
+    readDisk: async () => ({ bavail: 8, blocks: 10 }), runtimeProbe: () => ({ ready: true }),
+    rechargeClient: { get: () => ({ tasks }) } });
+  t.after(() => sources.close());
+  const cycle = async rows => { tasks = rows; tick(); await sources.tick(); };
+  const check = () => monitor.view().checks.find(row => row.code === 'recharge_review');
+  await sources.tick();
+  assert.equal(check().status, 'bad');
+  assert.match(check().detail, /有 2 笔原任务仍待核对/);
+  await cycle([task('review-a', 'success'), task('unrelated', 'success')]);
+  assert.match(check().detail, /有 2 笔原任务仍待核对/);
+  await cycle([task('review-a', 'failed'), task('unrelated', 'success')]);
+  await cycle([task('review-a', 'success'), task('unrelated', 'success')]);
+  assert.equal(monitor.activeCount(), 2);
+  await cycle([task('review-a', 'success'), task('unrelated', 'success')]);
+  assert.equal(monitor.activeCount(), 1);
+  assert.match(check().detail, /有 1 笔原任务仍待核对/);
+  await cycle([task('review-b', 'success')]);
+  assert.match(check().detail, /对应原任务已出现成功观测/);
+  await cycle([task('review-b', 'success')]);
+  assert.equal(check().status, 'ok');
+  assert.equal(monitor.view({ status: 'resolved' }).total, 2);
+});
+
+test('only a super administrator can close the exact payment alert with a durable internal evidence reference', async t => {
+  const { monitor, store, clock, audit, tick } = fixture(t);
+  const review = scope => ({ code: 'recharge_review', scope, status: 'bad' });
+  monitor.observe([review('review-one'), review('review-two'), { code: 'backup', status: 'bad' }]);
+  const opened = monitor.view().items;
+  const first = opened.find(row => row.taskId === 'review-one');
+  const other = opened.find(row => row.taskId === 'review-two');
+  const backup = opened.find(row => !row.taskId);
+  assert.equal(first.canCloseReview, true);
+  assert.equal(backup.canCloseReview, undefined);
+  const handler = createMonitoringHandler({ monitor, publicOrigin: origin });
+  const payload = { action: 'close-recharge-review', id: first.id, outcome: 'reversed_not_activated',
+    reference: '12345678-1234-1234-1234-123456789abc' };
+  const send = (body, actor = supervisor) => http(handler, { method: 'POST', body, actor, headers: {
+    origin, 'content-type': 'application/json'
+  } });
+  assert.equal((await send(payload, admin)).status, 403);
+  assert.equal((await send({ ...payload, reference: '' })).status, 422);
+  assert.equal((await send({ ...payload, outcome: 'still_uncertain' })).status, 422);
+  assert.equal((await send({ ...payload, id: backup.id })).status, 404);
+  monitor.acknowledge(other.id, admin);
+  assert.equal((await send(payload)).status, 200);
+  assert.equal((await send(payload)).status, 200);
+  assert.equal((await send({ ...payload, outcome: 'charged_activated' })).status, 409);
+  assert.equal(monitor.view({ status: 'acknowledged' }).items[0].id, other.id);
+  const [closed] = monitor.view({ status: 'resolved' }).items;
+  assert.equal(closed.id, first.id);
+  assert.equal(closed.resolvedAt, clock());
+  assert.equal(closed.canCloseReview, undefined);
+  assert.deepEqual(closed.reviewResolution, { outcome: payload.outcome, reference: payload.reference, by: supervisor.name });
+  assert.deepEqual(audit.filter(row => row.action === 'monitor_close_recharge_review'),
+    [{ action: 'monitor_close_recharge_review', actor: supervisor, targetId: first.id }]);
+  assert.equal(monitor.view({ tab: 'deliveries' }).total, 0);
+
+  monitor.close();
+  const restarted = createSystemMonitoring({ store, origin, clock });
+  t.after(() => restarted.close());
+  tick();
+  restarted.observe([review('review-one'), review('review-three')]);
+  assert.equal(restarted.view().items.filter(row => row.taskId === 'review-one').length, 1);
+  assert.equal(restarted.view().items.find(row => row.taskId === 'review-three').canCloseReview, true);
+});
+
+test('payment review closure cancels queued opening notices and prevents in-flight retries', async t => {
+  const response = Promise.withResolvers(), sending = Promise.withResolvers();
+  const f = fixture(t, { send(_input, count) {
+    if (count === 1) return { status: 'accepted', messageId: 1 };
+    sending.resolve();
+    return response.promise;
+  } });
+  await enable(f, { rechargeAdmin: '-100999011' });
+  const { monitor, tick, sent } = f;
+  monitor.observe(['review-pending', 'review-sending'].map(scope => ({ code: 'recharge_review', scope, status: 'bad' })));
+  const initialDispatch = monitor.dispatch();
+  await sending.promise;
+  const notices = () => monitor.view({ tab: 'deliveries' }).items.filter(row => row.kind === 'opened');
+  const queued = notices().find(row => row.status === 'queued');
+  const inFlight = notices().find(row => row.status === 'sending');
+  const reference = '12345678-1234-1234-1234-123456789abc';
+  for (const row of [queued, inFlight])
+    monitor.closeRechargeReview(row.incidentId, 'uncharged_not_activated', reference, supervisor);
+  assert.equal(notices().find(row => row.id === queued.id).status, 'cancelled');
+  response.resolve({ status: 'retry', delay: minute });
+  assert.equal(await initialDispatch, true);
+  assert.deepEqual(notices().map(row => [row.status, row.reason]), [
+    ['cancelled', 'review_closed'], ['cancelled', 'review_closed']
+  ]);
+  tick(2 * minute);
+  assert.equal(await monitor.dispatch(), false);
+  assert.equal(sent.length, 2);
+});
+
 test('monitor APIs enforce roles, same-origin writes, and explicit verified evidence', async t => {
   const { monitor } = fixture(t);
   const handler = createMonitoringHandler({ monitor, publicOrigin: origin });

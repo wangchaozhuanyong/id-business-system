@@ -1,8 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { monitorPath, monitorReportPath, readyPath, monitoringError } from './monitoring-policy.mjs';
+import { monitorPath, monitorReportPath, readyPath, monitoringError, monitorEventIdPattern as uuid } from './monitoring-policy.mjs';
 import { calendarRange } from './calendar-range.mjs';
 
-const uuid = /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/;
 const object = value => value && typeof value === 'object' && !Array.isArray(value);
 const known = (value, keys) => object(value) && Object.keys(value).every(key => keys.includes(key));
 const incidentStates = ['', 'open', 'acknowledged', 'resolved'];
@@ -70,6 +69,11 @@ export function createMonitoringHandler({ monitor, publicOrigin }) {
       const body = parse(await readBody(request));
       if (known(body, ['action', 'id']) && body.action === 'acknowledge' && typeof body.id === 'string' && uuid.test(body.id))
         return json(response, 200, monitor.acknowledge(body.id, actor));
+      if (known(body, ['action', 'id', 'outcome', 'reference']) && body.action === 'close-recharge-review' &&
+          typeof body.id === 'string' && uuid.test(body.id)) {
+        if (actor.role !== 'super') return json(response, 403, { error: '仅超级管理员可以登记付款核对结案' });
+        return json(response, 200, monitor.closeRechargeReview(body.id, body.outcome, body.reference, actor));
+      }
       if (actor.role !== 'super') return json(response, 403, { error: '仅超级管理员可以管理通知' });
       if (known(body, ['action', 'code', 'reference']) && body.action === 'verified' &&
           ['payment_duplicate', 'security_confirmed'].includes(body.code) &&
