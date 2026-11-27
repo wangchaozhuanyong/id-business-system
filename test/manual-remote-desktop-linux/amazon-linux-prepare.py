@@ -1,82 +1,103 @@
-"""Exercise the release's actual AL2023 package transaction in a disposable base container."""
+"""Exercise the real workspace RPM install twice in an offline AL2023 container."""
 
 import os
 from pathlib import Path
 import platform
+import stat
 import subprocess
 import sys
-from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-sys.path.insert(0, "/fixture/host")
+
+RELEASE = Path("/opt/id-business-independent/releases/" + "1" * 40)
+DESKTOP = RELEASE / "source/deploy/manual-desktop"
+RPMS = RELEASE / "manual-runtime/host-packages"
+VERSION = "2023.12.20260817"
+PACKAGE = "%{NAME}\\t%{ARCH}\\t%{EPOCHNUM}:%{VERSION}-%{RELEASE}\\n"
+sys.path.insert(0, str(DESKTOP / "host"))
 import provision
 
 
-def package_step(argv):
-    if argv[0] == provision.DNF:
-        return "dnf_download"
-    if argv[0] == provision.RPM_KEYS:
-        return "rpm_signature"
-    if argv[0] == provision.RPM:
-        if "--test" in argv:
-            return "rpm_install_test"
-        if "--install" in argv:
-            return "rpm_install"
-        return "rpm_package_query"
-    return None
+def query(*args):
+    return subprocess.check_output(["/usr/bin/rpm", *args], text=True).strip()
+
+
+def inventory():
+    return set(query("-qa", "--qf", PACKAGE).splitlines())
 
 
 def main():
-    if (not Path("/.dockerenv").is_file() or platform.machine() != "x86_64" or os.geteuid() != 0
-            or Path("/proc/1/comm").read_text().strip() == "systemd"):
-        raise RuntimeError("requires_disposable_x86_container")
-    release = Path("/etc/os-release").read_text().splitlines()
-    if 'ID="amzn"' not in release or 'VERSION_ID="2023"' not in release:
-        raise RuntimeError("requires_amazon_linux_2023")
+    active_interfaces = {dev.name for dev in Path("/sys/class/net").iterdir()
+                         if int((dev / "flags").read_text(), 16) & 1}
+    if (not Path("/.dockerenv").is_file() or os.geteuid() != 0 or platform.machine() != "x86_64"
+            or active_interfaces != {"lo"}):
+        raise RuntimeError("requires_isolated_x86_docker_without_network")
+    if query("-q", "--qf", "%{VERSION}", "system-release") != VERSION:
+        raise RuntimeError("wrong_amazon_linux_release")
+    if Path(provision.PKCHECK).exists():
+        raise RuntimeError("expected_initially_missing_pkcheck")
+    manifest = DESKTOP / "host/polkit-rpms.json"
+    files = sorted(RPMS.glob("*.rpm"))
+    if not files or not manifest.is_file():
+        raise RuntimeError("expected_staged_release_rpms")
+    for path in (manifest, DESKTOP, RPMS, *files, *RPMS.parents, *manifest.parents):
+        info = path.lstat()
+        if info.st_uid != 0 or info.st_mode & 0o022 or stat.S_ISLNK(info.st_mode):
+            raise RuntimeError("staging_path_not_root_controlled")
 
-    # The ordinary AL2023 image ships the full AMI DNF backend, but the booted
-    # release host already has systemd. Recreate that package baseline only.
-    subprocess.run([provision.RPM, "-q", "dnf", "python3-dnf"], check=True)
-    subprocess.run([provision.DNF, "-qy", "--disablerepo=*", "--enablerepo=amazonlinux",
-                    "--setopt=gpgcheck=1", "--setopt=install_weak_deps=False", "install", "systemd"], check=True)
-    if os.path.exists(provision.PKCHECK):
-        raise RuntimeError("fixture_requires_initially_absent_pkcheck")
+    before = inventory()
+    shipped = set()
+    for artifact in files:
+        signed = subprocess.check_output(["/usr/bin/rpmkeys", "--checksig", str(artifact)], text=True)
+        if not signed.strip().endswith("digests signatures OK"):
+            raise RuntimeError("staged_rpm_signature_not_verified")
+        shipped.add(query("-qp", "--qf", PACKAGE, str(artifact)))
+    if not any(row.startswith("polkit\t") for row in shipped):
+        raise RuntimeError("staged_rpms_missing_polkit")
 
-    steps = []
+    transactions = []
+    signature_checks = []
+    tools = []
 
     def observe(event, args):
-        if event == "subprocess.Popen":
-            step = package_step(args[1])
-            if step:
-                steps.append(step)
+        if event != "subprocess.Popen":
+            return
+        argv = args[1]
+        tool = Path(argv[0]).name
+        tools.append(tool)
+        if tool == "rpmkeys" and "--checksig" in argv:
+            signature_checks.append(Path(argv[-1]))
+        if tool in {"dnf", "yum"}:
+            raise RuntimeError("prepare_attempted_package_resolution")
+        if tool == "rpm" and "--install" in argv:
+            transactions.append("test" if "--test" in argv else "install")
 
+    config = {"root": str(RELEASE), "desktop": str(DESKTOP)}
     sys.addaudithook(observe)
-    with TemporaryDirectory(dir="/opt", prefix="manual-prepare-") as root:
-        artifacts = Path(root, "artifacts")
-        artifacts.mkdir(mode=0o700)
-        with patch.object(provision, "systemctl") as reload:
-            try:
-                if provision.prepare_host_tools({"root": root}) is not True:
-                    raise RuntimeError("first_prepare_did_not_install")
-            except Exception:
-                print("last_package_step=" + (steps[-1] if steps else "none"), flush=True)
-                print("downloaded_rpms=" + str(len(list(artifacts.glob("workspace-dependencies-*/*.rpm")))), flush=True)
-                raise
-            reload.assert_called_once()
-            if reload.call_args.args[-1] != "daemon-reload":
-                raise RuntimeError("unexpected_systemd_operation")
-            previous = len(steps)
-            if provision.prepare_host_tools({"root": root}) is not False or len(steps) != previous:
-                raise RuntimeError("repeated_prepare_was_not_idempotent")
-            reload.assert_called_once()
-
-    if not {"dnf_download", "rpm_signature", "rpm_install_test", "rpm_install"}.issubset(steps):
-        raise RuntimeError("missing_real_package_transaction")
-    owner = subprocess.check_output([provision.RPM, "-qf", "--qf", "%{NAME}", provision.PKCHECK], text=True)
-    if owner != "polkit" or not os.access(provision.PKCHECK, os.X_OK):
-        raise RuntimeError("installed_pkcheck_owner_mismatch")
-    subprocess.run([provision.PKCHECK, "--version"], check=True)
-    print("amazon_linux_prepare=passed verified_rpms=" + str(steps.count("rpm_signature")), flush=True)
+    # Only the systemd manager reload is unavailable in this non-booted container.
+    with patch.object(provision, "systemctl", return_value=("", 0)) as reload:
+        if provision.prepare_host_tools(config) is not True:
+            raise RuntimeError("first_prepare_did_not_install")
+        reload.assert_called_once_with("daemon-reload")
+        if sorted(signature_checks) != files:
+            raise RuntimeError("prepare_did_not_verify_every_rpm_signature")
+        if transactions != ["test", "install"]:
+            raise RuntimeError("expected_real_rpm_test_and_install")
+        after = inventory()
+        if not before < after or after - before != shipped - before:
+            raise RuntimeError("installed_package_set_does_not_match_release")
+        if query("-qf", "--qf", "%{NAME}", provision.PKCHECK) != "polkit" or not os.access(provision.PKCHECK, os.X_OK):
+            raise RuntimeError("pkcheck_not_owned_by_installed_polkit")
+        subprocess.run([provision.PKCHECK, "--version"], check=True)
+        previous_calls = len(tools)
+        if provision.prepare_host_tools(config) is not False or len(tools) != previous_calls:
+            raise RuntimeError("repeat_prepare_started_a_process")
+        if inventory() != after:
+            raise RuntimeError("repeat_prepare_not_idempotent")
+        reload.assert_called_once_with("daemon-reload")
+        if transactions != ["test", "install"]:
+            raise RuntimeError("repeat_prepare_started_an_rpm_transaction")
+    print(f"offline_prepare=passed release={VERSION} signed_rpms={len(files)} newly_installed={len(after-before)} repeat=no-op")
 
 
 if __name__ == "__main__":

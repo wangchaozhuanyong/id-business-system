@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/manual-workspace-linux.yml'
       - 'deploy/manual-desktop/**'
+      - 'deploy/website/build_manual_workspace.py'
       - 'server/access-roles.mjs'
       - 'server/manual-*.mjs'
       - 'test/manual-renewal-roles.integration.mjs'
@@ -17,22 +18,42 @@ permissions:
 jobs:
   amazon-linux-prepare:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
-      - name: Prepare and verify signed packages in the Amazon Linux 2023 base image
+      - name: Stage the release RPMs and build the matching Amazon Linux systemd baseline
         shell: bash
         run: |
           set -euo pipefail
-          # Docker Official Image, Amazon Linux 2023.12.20261120.0, linux/amd64.
-          image=amazonlinux@sha256:8ba7eb1e9aa2747ad5206f5f53ad1dfc03fa9f5fb69b7a7dcd95cbc2ade3bd97
-          docker run --rm --platform linux/amd64 --security-opt no-new-privileges \
-            --pids-limit 128 --memory 1536m --env AWS_EC2_METADATA_DISABLED=true \
-            --mount "type=bind,src=$GITHUB_WORKSPACE/deploy/manual-desktop/host,dst=/fixture/host,readonly" \
-            --mount "type=bind,src=$GITHUB_WORKSPACE/test/manual-remote-desktop-linux/amazon-linux-prepare.py,dst=/fixture/check.py,readonly" \
-            "$image" /usr/bin/python3 -IB /fixture/check.py
+          stage=$(mktemp -d "$RUNNER_TEMP/manual-workspace-rpms-XXXXXX")
+          python3 - "$stage/host-packages" <<'PY'
+          from pathlib import Path
+          import sys
+          from deploy.website.build_manual_workspace import package_host_tools
+          package_host_tools(Path(sys.argv[1]))
+          PY
+          cp -R deploy/manual-desktop/host "$stage/host"
+          cp test/manual-remote-desktop-linux/amazon-linux-prepare.py "$stage/check.py"
+          cat > "$stage/Dockerfile" <<'DOCKERFILE'
+          # Docker Official Image amazonlinux:2023.12.20260817.0, linux/amd64
+          FROM amazonlinux@sha256:fa946e513ed149232490479653141fa4c6cd1e71c70130525cf00a791477ed19
+          RUN test "$(rpm -q --qf '%{VERSION}' system-release)" = 2023.12.20260817 && \
+              dnf -qy --releasever=2023.12.20260817 --disablerepo='*' --enablerepo=amazonlinux \
+                --setopt=gpgcheck=1 --setopt=install_weak_deps=False install systemd && \
+              dnf -q clean all && test ! -e /usr/bin/pkcheck
+          WORKDIR /opt/id-business-independent/releases/1111111111111111111111111111111111111111
+          COPY --chown=0:0 host source/deploy/manual-desktop/host/
+          COPY --chown=0:0 host-packages manual-runtime/host-packages/
+          COPY --chown=0:0 check.py /fixture/check.py
+          RUN chmod -R go-w /opt/id-business-independent
+          DOCKERFILE
+          docker build --platform linux/amd64 --tag id-manual-offline-host:qa "$stage"
+      - name: Verify signed release packages, installation and retry without networking
+        run: |
+          docker run --rm --pull=never --platform linux/amd64 --network none --security-opt no-new-privileges \
+            --memory 1536m --pids-limit 128 id-manual-offline-host:qa /usr/bin/python3 -IB /fixture/check.py
 
   desktop:
     runs-on: ubuntu-24.04
