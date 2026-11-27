@@ -201,8 +201,11 @@ for (const name of workspaceNames) {
 }
 get('bit-show-library')?.addEventListener('click', () => showWorkspace('library', true));
 const savedWorkspace = readConnectionDrafts().workspace;
-const defaultInitialWorkspace = savedWorkspace || 'workbench';
+const hasRenewalSidebar = window.frameElement?.hasAttribute('data-renewal-sidebar') === true;
+if (hasRenewalSidebar) document.body.classList.add('bit-local--renewal-sidebar');
+const defaultInitialWorkspace = hasRenewalSidebar ? 'login' : savedWorkspace || 'workbench';
 showWorkspace(defaultInitialWorkspace);
+
 function initializeNativeWorkbench() {
   const wbJsonInput = get('wb-json-input');
   const wbJsonStatus = get('wb-json-status');
@@ -1168,7 +1171,7 @@ function initializeNativeWorkbench() {
   void loadAccounts();
 }
 
-initializeNativeWorkbench();
+if (!hasRenewalSidebar) initializeNativeWorkbench();
 executionProxies = initializeExecutionProxies({ get, drafts: draftBridge, onChange: updateStartButton, locked: () => Boolean(activeLogin), onUse: () => showWorkspace('login'), connection: () => ({ url: urlInput.value, token: tokenInput.value }) });
 void executionProxies.refresh();
 get('bit-token-eye').addEventListener('click', () => {

@@ -54,8 +54,8 @@ test('address pagination retains the active response and corrects an out-of-rang
   });
 
   await page.goto(origin + '/#/recharge/start');
-  const panel = page.getByRole('complementary', { name: '地址管理' });
-  await panel.getByRole('heading', { name: '地址管理' }).waitFor();
+  const panel = page.locator('#bit-addresses-panel');
+  await panel.getByRole('tab', { name: '地址管理', exact: true }).click();
   const pager = panel.locator('nav[data-pagination="bitbrowser-addresses"]');
   const rows = panel.locator('#bit-address-list tbody tr');
   const row = id => panel.locator(`#bit-address-list tr[data-row-id="fixture-${id}"]`);

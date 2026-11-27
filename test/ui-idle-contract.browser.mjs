@@ -39,8 +39,10 @@ test('every registered navigation route stays idle without data changes', { time
     await page.evaluate(route => window.IDDesignAPI.go(route), route);
     await page.waitForFunction(route => document.querySelector('#main').dataset.layoutRoute === route, route);
     await page.clock.runFor(350);
-    const integration = page.locator('#main > [data-page-region]:not([hidden]) .recharge-integration__view');
-    if (await integration.count()) await page.locator('#main > [data-page-region]:not([hidden]) .recharge-integration__view[aria-busy="false"]').waitFor();
+    const activeRegion = page.locator('#main > [data-page-region]:not([hidden])');
+    const integration = activeRegion.locator('.recharge-integration__view:visible');
+    if (await integration.count()) await activeRegion.locator('.recharge-integration__view[aria-busy="false"]:visible').waitFor();
+    if (route === 'recharge/start') await activeRegion.locator('#bit-renewals-content nav[data-pagination]').waitFor();
     if (route === 'staff/finance/cards') {
       // The host can report ready before the card frame has selected its view
       // and started the first local type read. Network quiet alone is not ready.
