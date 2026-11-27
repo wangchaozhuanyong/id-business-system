@@ -29,6 +29,11 @@ REPOSITORY = "https://github.com/wangchaozhuanyong/id-business-system.git"
 BUCKET = "id-business-v2-backups-098208446664-ap-northeast-1"
 SITE_HOST = "54-249-61-238.sslip.io"
 MANUAL_SOCKET = "/run/id-manual-bridge/site.sock"
+MANUAL_WORKBENCH_ASSET_ROUTES = {
+    "frontend/native-workbench-prototype.mjs": "/assets/native-workbench/prototype.mjs",
+    "frontend/native-workbench-prototype.css": "/assets/native-workbench/prototype.css",
+    "frontend/native-workbench-prototype.html": None,  # Authenticated and hashed inside the website container.
+}
 MANUAL_SITE_ARGS = ('  state+=(--group-add 10001 '
                     '--mount "type=bind,src=/run/id-manual-bridge,dst=/run/id-manual-bridge,readonly" '
                     f'-e "ID_MANUAL_WORKSPACE_SOCKET={MANUAL_SOCKET}" -e "ID_MANUAL_RECHARGE_ONLY=0")')
@@ -1681,6 +1686,15 @@ def http(path):
     return urllib.request.urlopen(request, timeout=5)
 
 
+def website_asset_route(name, module_paths):
+    if name in MANUAL_WORKBENCH_ASSET_ROUTES:
+        return MANUAL_WORKBENCH_ASSET_ROUTES[name]
+    route = module_paths.get(name)
+    if not route and name.startswith("frontend/") and name != "frontend/index.html":
+        return "/" + Path(name).name
+    return route
+
+
 def read_event_runtime():
     name = 'independent-mysql-root'
     password = run(['systemd-creds', 'decrypt', '--name=' + name,
@@ -1766,12 +1780,14 @@ console.log(JSON.stringify(Object.fromEntries(hashes)));
         )},
     }
     for name, expected in plan["files"].items():
-        route = module_paths.get(name)
-        if not route and name.startswith("frontend/") and name != "frontend/index.html":
-            route = "/" + Path(name).name
+        route = website_asset_route(name, module_paths)
         if route:
-            with http(route) as response:
-                require(hashlib.sha256(response.read()).hexdigest() == expected, "live_website_asset_mismatch")
+            try:
+                with http(route) as response:
+                    require(hashlib.sha256(response.read()).hexdigest() == expected, "live_website_asset_mismatch")
+            except urllib.error.HTTPError as error:
+                print(json.dumps({"websiteAssetRead": route, "httpStatus": error.code}), flush=True)
+                raise ReleaseError("live_website_asset_unavailable") from None
     protected_reads = ("/api/local/settings", "/api/local/inventory", "/api/local/commerce", "/api/local/order-sync",
                        "/api/local/system-monitoring", "/api/local/recharge-activity")
     if (source / "server/site-management.mjs").is_file():
@@ -1783,6 +1799,9 @@ console.log(JSON.stringify(Object.fromEntries(hashes)));
                 version.get("version") == plan["sha"], "website_version_receipt_mismatch")
     if (source / "modules/website/pages.mjs").is_file():
         protected_reads += ("/api/local/staff/finance/reconciliation", "/api/local/renewal-sidebar")
+    if plan.get("manualWorkspace"):
+        protected_reads += ("/integrations/native-workbench/prototype", "/api/local/native-workbench-prototype/ip-options",
+                            "/manual-workspaces/recharge-" + "0" * 64 + "/")
     if adapter:
         protected_reads += ("/api/local/subscription-card-status",)
     if presentation_scope(plan) == "subscriptionInvoicePresentation":

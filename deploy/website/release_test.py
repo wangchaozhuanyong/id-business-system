@@ -1724,6 +1724,14 @@ class WebsiteReleaseTests(unittest.TestCase):
             remote.release_website({"sha": TARGET, "before": before})
         stage.assert_not_called()
 
+    def test_manual_workspace_uses_canonical_static_asset_urls_and_keeps_the_page_protected(self):
+        files = ("frontend/native-workbench-prototype.mjs", "frontend/native-workbench-prototype.css",
+                 "frontend/native-workbench-prototype.html")
+        self.assertEqual([remote.website_asset_route(name, {}) for name in files],
+                         ["/assets/native-workbench/prototype.mjs", "/assets/native-workbench/prototype.css", None])
+        self.assertEqual(remote.website_asset_route("frontend/operations-prototype.js", {}),
+                         "/operations-prototype.js")
+
     def test_website_readback_waits_for_the_restarting_container(self):
         container = {"Id": "synthetic", "Image": "image", "State": {"Running": True, "StartedAt": "now"},
                      "Config": {"Labels": {"org.opencontainers.image.revision": TARGET}}}
