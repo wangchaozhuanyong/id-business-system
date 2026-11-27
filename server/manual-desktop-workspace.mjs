@@ -7,6 +7,19 @@ import { isAbsolute, join } from 'node:path';
 import { once } from 'node:events';
 import { setTimeout as delay } from 'node:timers/promises';
 
+const validIdentityId = id => typeof id === 'string' && id.trim().length > 0 && id.length <= 256;
+
+export function manualDesktopOwnerKey(operatorId) {
+  if (!validIdentityId(operatorId)) throw new Error('缺少操作员标识');
+  return 'owner-v1-' + createHash('sha256').update(JSON.stringify([operatorId])).digest('hex');
+}
+
+export function manualDesktopWorkspaceKey({ operatorId, accountId }) {
+  if (![operatorId, accountId].every(validIdentityId))
+    throw new Error('缺少操作员或账号标识');
+  return 'manual-v1-' + createHash('sha256').update(JSON.stringify([operatorId, accountId])).digest('hex');
+}
+
 // This component runs inside an operator's isolated graphical desktop. Its caller
 // supplies the authenticated operator ID and a record already owned by that operator.
 export function createManualDesktopWorkspaces({ profileRoot, executable, firstPage = 'https://chatgpt.com/' }) {
@@ -18,12 +31,6 @@ export function createManualDesktopWorkspaces({ profileRoot, executable, firstPa
     throw new Error('浏览器主页地址无效');
   const opening = new Map();
   const children = new Map();
-
-  function keyOf({ operatorId, accountId }) {
-    if (![operatorId, accountId].every(id => typeof id === 'string' && id.trim() && id.length <= 256))
-      throw new Error('缺少操作员或账号标识');
-    return 'manual-v1-' + createHash('sha256').update(JSON.stringify([operatorId, accountId])).digest('hex');
-  }
 
   async function privateDirectory(directory) {
     const info = await lstat(directory);
@@ -74,13 +81,13 @@ export function createManualDesktopWorkspaces({ profileRoot, executable, firstPa
 
   return {
     open(identity) {
-      const key = keyOf(identity);
+      const key = manualDesktopWorkspaceKey(identity);
       if (!opening.has(key))
         opening.set(key, start(key).finally(() => opening.delete(key)));
       return opening.get(key);
     },
     async close(identity) {
-      const key = keyOf(identity);
+      const key = manualDesktopWorkspaceKey(identity);
       await opening.get(key);
       const active = children.get(key);
       if (!active) return false;
@@ -93,7 +100,11 @@ export function createManualDesktopWorkspaces({ profileRoot, executable, firstPa
             const { stdout } = await promisify(execFile)('/usr/bin/osascript',
               ['-l', 'JavaScript', '-e', quit, String(active.child.pid)], { timeout: 5000 });
             if (stdout.trim() !== 'true') throw new Error('请在该工作区的 Chrome 菜单中退出浏览器');
-          } else active.child.kill('SIGTERM');
+          } else {
+            // On Linux SIGINT requests normal application exit. SIGTERM follows
+            // the session-ending path and can lose the open tabs on restart.
+            active.child.kill(process.platform === 'linux' ? 'SIGINT' : 'SIGTERM');
+          }
           const result = await Promise.race([active.closed, delay(10000, null, { ref: false })]);
           if (!result) throw new Error('浏览器仍在运行，请处理窗口中的提示后再退出');
           return true;

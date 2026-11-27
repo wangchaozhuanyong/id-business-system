@@ -1,0 +1,27 @@
+[Unit]
+Description=Isolated QA desktop %i
+
+[Service]
+Type=exec
+User=10001
+Group=10001
+Environment=HOME=/profile
+ExecStart=/usr/bin/tini -- /usr/bin/python3 -IB /run/id-manual-qa/lifecycle.py start
+ExecStop=/usr/bin/python3 -IB /run/id-manual-qa/lifecycle.py stop
+KillMode=mixed
+TimeoutStopSec=30
+MemoryAccounting=yes
+UMask=0077
+ProtectSystem=strict
+PrivateDevices=yes
+PrivateNetwork=yes
+PrivatePIDs=yes
+ProtectProc=invisible
+ProtectHome=yes
+InaccessiblePaths=/run/id-manual-qa/profiles /run/id-manual-qa/workers /run/id-manual-qa/broker /run/id-manual-qa/claims -/mnt/qa -/srv/manual-qa
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+SystemCallFilter=~@reboot
+TemporaryFileSystem=/tmp:rw,nosuid,nodev,mode=1777
+TemporaryFileSystem=/dev/shm:rw,nosuid,nodev,mode=1777,size=256M
+BindPaths=/run/id-manual-qa/profiles/%i:/profile /run/id-manual-qa/workers/%i:/run/workspace
