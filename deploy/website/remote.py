@@ -1723,7 +1723,9 @@ def release_website(plan, staged=None):
                 core = CoreRelease(plan, source, ops)
         finally:
             sys.path.pop(0)
-    canary_retried = canary(sha, ops)
+    canary_retried = False
+    if interrupted is None:
+        canary_retried = canary(sha, ops)
     if include_adapter and not core:
         adapter_canary(plan, source, ops)
     if core:
@@ -1740,12 +1742,19 @@ def release_website(plan, staged=None):
         write_website_version(source, sha)
     backup = prepare_backup_recovery(source, ops, base, sha)
     with backup as install_recovery:
-        install_backup_monitoring(source, sha)
+        if interrupted is None:
+            install_backup_monitoring(source, sha)
         with core.cutover() if core else nullcontext() as native:
             if interrupted is not None:
                 print("Resuming the adapter and website with the existing native runtime", flush=True)
             adapter = switch_adapter(plan, source, ops, native) if native else (
                 switch_adapter(plan, source, ops) if include_adapter else None)
+            if interrupted is not None:
+                print("Verified the interrupted adapter before the isolated website canary", flush=True)
+                canary_retried = canary(sha, ops)
+                core.require_paused()
+                require_main(sha)
+                install_backup_monitoring(source, sha)
             require_main(sha)
             require(digest(DROP) == before["unitSha256"], "live_service_override_changed")
             write_new(ops / "id-business-independent-app.service.before.conf", old, 0o600)
