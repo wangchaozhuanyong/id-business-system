@@ -1756,6 +1756,8 @@ console.log(JSON.stringify(Object.fromEntries(hashes)));
         "modules/recharge/bitbrowser/login/index.mjs": "/assets/bitbrowser/login/index.mjs",
         "modules/recharge/bitbrowser/login/direct-login.mjs": "/assets/bitbrowser/login/direct-login.mjs",
         "frontend/bitbrowser-local.mjs": "/assets/bitbrowser/local.mjs",
+        "frontend/native-workbench-prototype.mjs": "/assets/native-workbench/prototype.mjs",
+        "frontend/native-workbench-prototype.css": "/assets/native-workbench/prototype.css",
         **{name: "/" + name for name in (
             "modules/orders/order-opening.mjs", "modules/orders/list-order.mjs",
             "modules/orders/order-customer-match.mjs", "modules/orders/order-whatsapp.mjs",
@@ -1767,11 +1769,18 @@ console.log(JSON.stringify(Object.fromEntries(hashes)));
     }
     for name, expected in plan["files"].items():
         route = module_paths.get(name)
-        if not route and name.startswith("frontend/") and name != "frontend/index.html":
+        if not route and name.startswith("frontend/") and name not in (
+                "frontend/index.html", "frontend/native-workbench-prototype.html"):
             route = "/" + Path(name).name
         if route:
-            with http(route) as response:
-                require(hashlib.sha256(response.read()).hexdigest() == expected, "live_website_asset_mismatch")
+            try:
+                with http(route) as response:
+                    require(hashlib.sha256(response.read()).hexdigest() == expected, "live_website_asset_mismatch")
+            except urllib.error.HTTPError as error:
+                if re.fullmatch(r"/[a-zA-Z0-9_./-]{1,150}", route) and 400 <= error.code <= 599:
+                    print(json.dumps({"websiteAssetFailure": {"path": route, "status": error.code}}, sort_keys=True),
+                          flush=True)
+                raise ReleaseError("live_website_asset_unavailable") from None
     protected_reads = ("/api/local/settings", "/api/local/inventory", "/api/local/commerce", "/api/local/order-sync",
                        "/api/local/system-monitoring", "/api/local/recharge-activity")
     if (source / "server/site-management.mjs").is_file():
@@ -1783,6 +1792,8 @@ console.log(JSON.stringify(Object.fromEntries(hashes)));
                 version.get("version") == plan["sha"], "website_version_receipt_mismatch")
     if (source / "modules/website/pages.mjs").is_file():
         protected_reads += ("/api/local/staff/finance/reconciliation", "/api/local/renewal-sidebar")
+    if plan.get("manualWorkspace"):
+        protected_reads += ("/integrations/native-workbench/prototype", "/manual-workspaces/verification-example/")
     if adapter:
         protected_reads += ("/api/local/subscription-card-status",)
     if presentation_scope(plan) == "subscriptionInvoicePresentation":
