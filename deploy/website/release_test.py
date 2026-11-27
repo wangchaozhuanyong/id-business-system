@@ -2322,13 +2322,19 @@ class WebsiteReleaseTests(unittest.TestCase):
             dispatch.assert_not_called()
 
     @patch("release.require_main")
+    @patch("release.require_ancestor")
     @patch("release.remote", return_value=("command", {}))
-    def test_manual_workspace_inspection_never_stages_a_release(self, dispatch, _main):
+    def test_manual_workspace_inspection_never_stages_a_release(self, dispatch, ancestor, _main):
         env = {"RELEASE_SHA": TARGET, "QUALITY_RUN_ID": "123", "INSPECT_MANUAL_WORKSPACE_HOST": "true"}
         with patch.dict(os.environ, env, clear=True), redirect_stdout(io.StringIO()):
             release.main()
         dispatch.assert_called_once_with({"operation": "inspect-manual-workspace", "sha": TARGET})
-        for name in ("INSPECT_CANARY_SHA", "INSPECT_RELEASE_COMMAND", "RELEASE_RECHARGE_ADAPTER",
+        dispatch.reset_mock()
+        with patch.dict(os.environ, env | {"INSPECT_CANARY_SHA": BASE}, clear=True), redirect_stdout(io.StringIO()):
+            release.main()
+        dispatch.assert_called_once_with({"operation": "inspect-manual-workspace", "sha": TARGET, "attemptSha": BASE})
+        ancestor.assert_called_once_with(BASE, TARGET)
+        for name in ("INSPECT_RELEASE_COMMAND", "RELEASE_RECHARGE_ADAPTER",
                      "RELEASE_RECHARGE_CORE", "VENDURE_RETRY_RECEIPT_SHA256", "RELEASE_RECHARGE_PARTNER_API",
                      "RELEASE_CUSTOMER_PROGRESS", "RESUME_INTERRUPTED_RELEASE"):
             dispatch.reset_mock()

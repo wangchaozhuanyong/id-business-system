@@ -1,5 +1,6 @@
 """Read-only host observations for the manual browser workspace. No canary is started."""
 import datetime
+import os
 from pathlib import Path
 import platform
 import re
@@ -56,6 +57,53 @@ def _socket(path):
         return None
 
 
+def _package_observation(root):
+    tools = {name: os.access(root / "usr/bin" / name, os.X_OK) for name in
+             ("dnf", "rpm", "rpmkeys", "systemd-sysusers", "systemd-tmpfiles", "pkcheck")}
+    log = root / "var/log/dnf.log"
+    try:
+        metadata = log.lstat()
+        if not stat.S_ISREG(metadata.st_mode):
+            return {"executables": tools, "packageDownload": "unavailable"}
+        with log.open("rb") as stream:
+            stream.seek(max(0, metadata.st_size - 65_536))
+            latest = stream.read(65_536).decode("utf8", errors="replace")
+    except OSError:
+        return {"executables": tools, "packageDownload": "unavailable"}
+    commands = re.split(r"\n[^\n]*\bCommand: ", latest)
+    entry = next((item.lower() for item in reversed(commands[1:]) if
+                  "workspace-dependencies-" in item.partition("\n")[0] and "polkit" in item.partition("\n")[0]), "")
+    categories = (
+        ("repository_missing", ("unknown repo", "no matching repo", "repository not found")),
+        ("signature", ("public key", "gpg signature", "repomd.xml gpg", "bad signature")),
+        ("repository_access", ("failed to download metadata", "curl error", "cannot prepare internal mirrorlist")),
+        ("package_unavailable", ("no match for argument", "unable to find a match")),
+        ("package_conflict", ("conflicting requests", "nothing provides", "problem with installed package")),
+        ("installation_error", ("transaction check error", "errors during downloading")),
+    )
+    outcome = next((label for label, markers in categories if any(value in entry for value in markers)),
+                   "unclassified" if entry else "no_recent_workspace_transaction")
+    return {"executables": tools, "packageDownload": outcome}
+
+
+def _staged_packages(root, command, revision):
+    if not re.fullmatch(r"[a-f0-9]{40}", revision):
+        raise ValueError("manual_workspace_attempt_revision_invalid")
+    target = root / "opt/id-business-independent/releases" / revision / "artifacts"
+    folders = [folder for folder in target.glob("workspace-dependencies-*")
+               if folder.is_dir() and not folder.is_symlink()]
+    paths = [path for folder in folders[:4] for path in folder.glob("*.rpm")
+             if path.is_file() and not path.is_symlink()]
+    if len(folders) > 4 or len(paths) > 20:
+        raise ValueError("manual_workspace_package_report_limit")
+    verified = sum((command(["/usr/bin/rpmkeys", "--checksig", str(path)]) or "").endswith("digests signatures OK")
+                   for path in paths)
+    version = command(["/usr/bin/rpm", "-q", "--qf", "%{VERSION}", "system-release"])
+    return {"release": revision, "downloadDirectories": len(folders), "rpmFiles": len(paths),
+            "signatureChecksPassed": verified,
+            "systemRelease": version if version and re.fullmatch(r"2023\.[0-9]+\.[0-9]{8}", version) else None}
+
+
 def _docker_info(command, daemon_active):
     output = command([*DOCKER, "info", "--format", DOCKER_INFO]) if daemon_active else None
     fields = (output or "").split("|")
@@ -101,7 +149,7 @@ def _website(root, command, daemon_active):
     return report
 
 
-def summary(*, root=Path("/"), command=_command, machine=platform.machine):
+def summary(*, root=Path("/"), command=_command, machine=platform.machine, attempt_sha=None):
     root = Path(root)
     os_text = _text(root / "etc/os-release")
     if os_text is None:
@@ -150,6 +198,9 @@ def summary(*, root=Path("/"), command=_command, machine=platform.machine):
                 "apparmorUsernsRestrictionEnabled": {0: False, 1: True}.get(_number(_text(root / "proc/sys/kernel/apparmor_restrict_unprivileged_userns"))),
             },
             "packetFilterCommands": {name: shutil.which(name, path=SYSTEM_PATH) is not None for name in ("nft", "iptables")},
+            "workspaceTools": {**_package_observation(root),
+                               **({"failedReleasePackageState": _staged_packages(root, command, attempt_sha)}
+                                  if attempt_sha else {})},
             "docker": _docker_info(command, daemon_active), "workerTemplateAvailable": template_available,
             "website": _website(root, command, daemon_active),
         },

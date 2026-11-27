@@ -62,8 +62,10 @@ class HostDependency(unittest.TestCase):
                         else:
                             self.assertTrue(provision.prepare_host_tools(CONFIG))
                             self.assertEqual(command.call_args_list[-2:], [
-                                call([provision.RPM, "--install", "--test", str(package)], timeout=20),
-                                call([provision.RPM, "--install", str(package)], timeout=35),
+                                call([provision.RPM, "--install", "--test", str(package)], timeout=20,
+                                     failure="manual_host_dependency_rpm_check_failed"),
+                                call([provision.RPM, "--install", str(package)], timeout=35,
+                                     failure="manual_host_dependency_rpm_install_failed"),
                             ])
                             systemctl.assert_called_once_with("daemon-reload")
 
