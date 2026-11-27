@@ -22,6 +22,8 @@ sudo apt-get install -y --no-install-recommends python3-aiohttp polkitd
 sudo install -d -m 0755 "$fixture/source"
 git -C "$repo" -c tar.umask=0022 archive "$revision" deploy/manual-desktop | sudo tar -xf - -C "$fixture/source"
 sudo cp -R "$scratch/novnc" "$fixture/novnc"
+# A production release root can be private to the release operator.
+sudo chmod 0700 "$fixture"
 installer=(sudo /usr/bin/python3 -IB "$fixture/source/deploy/manual-desktop/host/provision.py")
 settings=(--release-root "$fixture" --image-id "$1" --assets "$fixture/novnc"
           --max-active 1 --min-available-mib 512 --block-network 203.0.113.1/32)

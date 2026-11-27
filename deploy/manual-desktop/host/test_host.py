@@ -204,6 +204,36 @@ class WorkerContract(unittest.TestCase):
 
 
 class ProvisionContract(unittest.TestCase):
+    def test_stages_only_the_service_payload_and_verifies_immutable_contents(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).parent, prefix=".test-") as directory:
+            base = Path(directory)
+            source = base / "source-root" / RELEASE.name
+            desktop = source / "source/deploy/manual-desktop"
+            assets = source / "manual-runtime/novnc"
+            paths = (desktop / "broker.py", desktop / "egress.py", desktop / "chromium-seccomp.json",
+                     desktop / "host/runtime.py", assets / "core/rfb.js")
+            for file in (*paths, source / "excluded.bin"):
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_bytes(file.name.encode())
+            state = base / "service-data"
+            state.mkdir()
+            config = dict(CONFIG, root=str(source), desktop=str(desktop), assets=str(assets), site_packages="")
+            with patch.object(provision, "STATE", state), \
+                 patch.object(provision, "release_path", side_effect=lambda path, kind: path), \
+                 patch.object(provision, "ensure_directory", side_effect=lambda path, *mode: path.mkdir(exist_ok=True)):
+                staged = provision.stage_installed_runtime(config)
+                self.assertEqual(staged, state / "releases" / source.name)
+                self.assertEqual(provision.stage_installed_runtime(config), staged)
+                self.assertFalse((staged / "excluded.bin").exists())
+                for path in paths:
+                    installed = staged / path.relative_to(source)
+                    self.assertEqual(installed.read_bytes(), path.read_bytes())
+                    self.assertEqual(stat.S_IMODE(installed.stat().st_mode), 0o644)
+                    self.assertEqual(stat.S_IMODE(installed.parent.stat().st_mode), 0o755)
+                (staged / paths[0].relative_to(source)).write_bytes(b"changed")
+                with self.assertRaisesRegex(runtime.InvalidHost, "manual_runtime_contents_mismatch"):
+                    provision.stage_installed_runtime(config)
+
     def test_distinguishes_a_missing_unit_from_an_active_or_transitioning_unit(self):
         for response, active in ((("LoadState=not-found\nActiveState=inactive", 1), False),
                                  (("LoadState=loaded\nActiveState=active", 0), True),
@@ -303,6 +333,8 @@ class ProvisionContract(unittest.TestCase):
                 "require_no_workers": {},
                 "existing_identity": {},
                 "ensure_sysusers_directory": {},
+                "stage_installed_runtime": {},
+                "verify_runtime_access": {},
                 "checked_path": {"side_effect": FileNotFoundError},
                 "ensure_directory": {},
                 "installed": {"return_value": None},
