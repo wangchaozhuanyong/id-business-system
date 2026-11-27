@@ -1,3 +1,4 @@
+import { createManualRemoteAccess, manualWorkspacePrefix } from './manual-remote-access.mjs';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { gzipSync } from 'node:zlib';
@@ -58,7 +59,7 @@ import { createRechargeEvents } from './recharge-events.mjs';
 import { createSiteObservations, measuredActivity } from './site-observations.mjs';
 import { createSiteManagement, siteManagementPath, siteObservationScope, siteReleaseInfo, siteBackupView } from './site-management.mjs';
 import { loadLoginSecurity, turnstileLoginPage, verifiedAddress } from './login-security.mjs';
-import { managesBusiness, nativeBrowserVerification, nativeManagerAccess, retailAccess } from './access-roles.mjs';
+import { canManageManualRenewals, isManualRenewalRequest, managesBusiness, nativeBrowserVerification, nativeManagerAccess, retailAccess } from './access-roles.mjs';
 import { createStaffWorkspaces, staffPath } from './staff-workspaces.mjs';
 import { createRenewalHandoff, renewalHandoffPath } from './renewal-handoff.mjs';
 import { readBackupMonitorReceipt, readRestoreEvidence } from './monitoring-worker-receipts.mjs';
@@ -216,6 +217,7 @@ export async function startPreview(
     storefrontAdmissionDirectory = process.env.ID_VENDURE_ADMISSION_DIRECTORY,
     rechargePartnerEnabled = process.env.ID_RECHARGE_PARTNER_API === '1',
     rechargeOrderSync = Boolean(publicOrigin && rechargeConfig),
+    manualWorkspaceSocket = process.env.ID_MANUAL_WORKSPACE_SOCKET,
     monitoringProbeSecret = process.env.ID_MONITOR_PROBE_SECRET,
     monitoringWorkerReceiptsDirectory = process.env.ID_MONITOR_WORKER_RECEIPTS_DIR,
     monitoringBackupReceiptsDirectory = process.env.ID_MONITOR_BACKUP_RECEIPTS_DIR
@@ -638,6 +640,10 @@ export async function startPreview(
       ...(authPath ? [authPath] : [])
     ]
   }) : null;
+  const manualRemote = createManualRemoteAccess({
+    socketPath: manualWorkspaceSocket, publicOrigin: secureOrigin, store,
+    getActor: request => auth?.getActor(request)
+  });
   const server = createServer((request, response) => {
     response.setHeader('Cache-Control', 'no-store');
     response.setHeader('X-Content-Type-Options', 'nosniff');
@@ -697,6 +703,7 @@ export async function startPreview(
       response.writeHead(503, { 'Content-Type': 'application/json; charset=utf-8', 'Retry-After': '5' });
       return response.end(JSON.stringify({ error: '登录服务暂时不可用，请稍后重试，登录信息未清除' }));
     }
+    if (route.startsWith(manualWorkspacePrefix)) return void manualRemote.handle(request, response);
     if (route === storefrontMailboxQueryRoute) {
       if (!storefrontMailbox || !auth || request.url !== storefrontMailboxQueryRoute) {
         response.writeHead(storefrontMailbox ? 400 : 404, { 'Cache-Control': 'private, no-store' }).end();
@@ -744,7 +751,10 @@ export async function startPreview(
     const readable = request.method === 'GET' || request.method === 'HEAD';
     if (route === renewalHandoffPath && handleRenewalHandoff) return void handleRenewalHandoff(request, response, actor);
     const publicQuery = [managedMailboxQueryRoute, '/api/local/apple-relay/public-query'].includes(route);
-    if (scopedRole && route.startsWith('/api/local/') && !publicQuery && route !== siteManagementPath + '/timing' &&
+    const manualOperation = canManageManualRenewals(actor) && (
+      (route === '/api/local/native-browser-workbench' && isManualRenewalRequest(request.method, new URL(request.url, 'http://localhost').searchParams)) ||
+      (route === '/api/local/bitbrowser-addresses' && ['GET', 'PUT'].includes(request.method)));
+    if (scopedRole && route.startsWith('/api/local/') && !manualOperation && !publicQuery && route !== siteManagementPath + '/timing' &&
         route !== localBusiness?.columnPreferencesRoute && !retailAccess(actor, route, request.method))
       return forbidden();
     if (store && route.startsWith(staffPath)) {
@@ -1019,7 +1029,10 @@ export async function startPreview(
         } catch { /* Leave the page usable and let it report that preferences could not be read. */ }
         metadata += `\n<meta name="id-column-preferences" content="${preferences}" />`;
       }
-      body = Buffer.from(body.toString('utf8').replace('<head>', metadata));
+      let document = body.toString('utf8').replace('<head>', metadata);
+      if (manualWorkspaceSocket && canManageManualRenewals(actor))
+        document = document.replace('<body>', '<body data-manual-remote-workspaces>');
+      body = Buffer.from(document);
     }
     if (loginRequired && signedOutIndex && asset === assets.get('/index.html')) {
       response.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
@@ -1045,6 +1058,7 @@ export async function startPreview(
     timer.unref();
     server.once('close', () => clearInterval(timer));
   }
+  server.once('close', () => manualRemote.close());
   if (rechargeActivity) server.once('close', () => rechargeActivity.close());
   if (rechargeEvents) server.once('close', () => rechargeEvents.close());
   if (store) server.once('close', () => { relay?.close(); handleManagedMailboxQuery?.close(); store.close(); });
@@ -1062,6 +1076,7 @@ export async function startPreview(
       socket.destroy();
       return;
     }
+    if (request.url?.startsWith(manualWorkspacePrefix)) return manualRemote.upgrade(request, socket, head);
     const reqUrl = new URL(request.url || '/', `http://${request.headers.host || '127.0.0.1'}`);
     if (reqUrl.pathname === '/integrations/native-workbench/ws') {
       if (publicUrl) {

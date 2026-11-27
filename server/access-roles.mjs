@@ -9,6 +9,17 @@ export function managesBusiness(actor) {
   return actor?.role === 'admin' || actor?.role === 'super';
 }
 
+export function canManageManualRenewals(actor) {
+  return Boolean(typeof actor?.id === 'string' && actor.id.trim() && actor.active !== false &&
+    (managesBusiness(actor) || actor.role === 'finance'));
+}
+
+export function isManualRenewalRequest(method, params) {
+  const actions = params.getAll('action');
+  return actions.length === 1 && ((method === 'GET' && actions[0] === 'renewals') ||
+    (method === 'POST' && actions[0] === 'renewal-record'));
+}
+
 export function canUseWorkspace(actor, workspace) {
   return Boolean(workspaces.get('staff/' + workspace)?.roles.includes(actor?.role));
 }

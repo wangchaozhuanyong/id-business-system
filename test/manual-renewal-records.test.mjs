@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
 import { createLocalBusinessStore, handleLocalBusiness } from '../server/local-business.mjs';
+import { manualDesktopOwnerKey, manualDesktopWorkspaceKey } from '../server/manual-desktop-workspace.mjs';
 import { editRenewalRecord, listRenewalPage, manualRenewalRecords } from '../server/manual-renewal-records.mjs';
 
 const actor = { id: 'operator-a', name: '管理员甲', role: 'admin' };
@@ -82,6 +83,51 @@ test('manual updates of a legacy account preserve its existing document and manu
   assert.equal(visible.items.find(item => item.email === form.email).id, manual.record.id);
 });
 
+test('workspace lookup returns only the established actor-bound key, without marking a record opened', t => {
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  assert.equal(manualDesktopWorkspaceKey({ operatorId: actor.id, accountId: 'record-a' }),
+    'manual-v1-8dfdf32dca08a198dc03f2f8784b4c097de0fb1e314a1e23c9ded3644222e6d7');
+  assert.notEqual(manualDesktopWorkspaceKey({ operatorId: actor.id, accountId: 'record-a' }),
+    manualDesktopWorkspaceKey({ operatorId: second.id, accountId: 'record-a' }));
+
+  const first = store.saveManualRenewalRecord(form, actor).record;
+  const other = store.saveManualRenewalRecord({ ...form, email: 'other@example.test' }, actor).record;
+  const legacy = store.saveNativeWorkbenchAccount({ email: 'legacy@example.test', plan: 'free' }, actor).record;
+  const before = store.listManualRenewals(query(), actor);
+  const otherScope = store.listManualRenewals(query(), second);
+  const binding = store.resolveManualWorkspace(first.id, actor);
+  assert.deepEqual(binding, { key: manualDesktopWorkspaceKey({ operatorId: actor.id, accountId: first.id }) });
+  assert.deepEqual(store.resolveManualWorkspace(first.id, { ...actor, name: '同一管理员的新设备' }), binding);
+  assert.notEqual(store.resolveManualWorkspace(other.id, actor).key, binding.key);
+  assert.deepEqual(store.resolveManualWorkspace(legacy.id, actor),
+    { key: manualDesktopWorkspaceKey({ operatorId: actor.id, accountId: legacy.id }) });
+  assert.throws(() => store.resolveManualWorkspace(first.id, null), { status: 401 });
+  assert.throws(() => store.resolveManualWorkspace(first.id, { ...actor, role: 'employee' }), { status: 403 });
+  assert.throws(() => store.resolveManualWorkspace(first.id, second), { status: 404 });
+  assert.throws(() => store.resolveManualWorkspace('absent', actor), { status: 404 });
+  assert.deepEqual(store.listManualRenewals(query(), actor), before);
+  assert.deepEqual(store.listManualRenewals(query(), second), otherScope);
+});
+
+test('ten saved records can each be resolved on another client without opening ten browsers', t => {
+  const store = createLocalBusinessStore(':memory:');
+  t.after(() => store.close());
+  const ids = Array.from({ length: 10 }, (_, i) =>
+    store.saveManualRenewalRecord({ ...form, email: `saved-${i}@example.test` }, actor).record.id);
+  const keys = ids.map(id => store.resolveManualWorkspace(id, actor).key);
+  const ownerKey = manualDesktopOwnerKey(actor.id);
+  assert.equal(ownerKey, 'owner-v1-9c68764cd4351b6303e68ab09db8769932b3373791e2066bbf91e28c8599083a');
+  assert.notEqual(ownerKey, manualDesktopOwnerKey(second.id));
+  assert.notEqual(ownerKey, keys[0]);
+  assert.throws(() => manualDesktopOwnerKey(' '));
+  assert.equal(new Set(keys).size, 10);
+  for (const [index, id] of ids.entries()) {
+    assert.equal(store.resolveManualWorkspace(id, { ...actor }).key, keys[index]);
+    assert.equal(store.getManualRenewalRecord(id, actor).lastOpenedAt, null);
+  }
+});
+
 test('renewal routes enforce actor, same origin, accepted method and input whitelist', async t => {
   const store = createLocalBusinessStore(':memory:');
   t.after(() => store.close());
@@ -104,4 +150,16 @@ test('renewal routes enforce actor, same origin, accepted method and input white
   assert.equal((await call('renewal-record', 'POST', { ...form, extra: 1 }, actor)).status, 400);
   assert.equal((await call('renewal-record', 'POST', form, actor)).status, 200);
   assert.equal((await call('renewals', 'GET', null, actor)).body.summary.total, 1);
+  const finance = { id: 'finance-fixture', role: 'finance' };
+  const created = await call('renewal-record', 'POST', form, finance);
+  assert.equal(created.status, 200);
+  assert.equal((await call('renewals', 'GET', null, finance)).body.total, 1);
+  assert.equal(store.changeVersions(finance)['manual-renewal-records'], '1');
+  assert.equal((await call('renewals', 'GET', null, { ...finance, active: false })).status, 403);
+  assert.equal((await call('renewals&action=preferences', 'GET', null, finance)).status, 405);
+  assert.equal((await call('preferences', 'GET', null, finance)).status, 403);
+  assert.equal((await call('update-json', 'POST', {}, finance)).status, 403);
+  assert.throws(() => store.resolveManualWorkspace(created.body.record.id, actor), { status: 404 });
+  for (const role of ['finance', 'admin', 'super'])
+    assert.throws(() => store.resolveManualWorkspace(created.body.record.id, { ...finance, role, active: false }), { status: 403 });
 });

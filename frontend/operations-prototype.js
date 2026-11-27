@@ -902,18 +902,21 @@
     return `<nav class="recharge-integration__nav tabs" aria-label="ChatGPT 充值功能">${actions}</nav>`;
   }
   function renderBitBrowserLogin() {
-    const showAddresses = localData && isAdmin();
-    const jump = showAddresses
+    const showManagement = localData && api.canVisit(bitLoginRoute);
+    const legacyLogin = isAdmin();
+    const jump = showManagement
       ? `<nav class="bit-address-jump" aria-label="手动充值快捷定位">${button('前往地址管理', 'ops-bit-address-jump', '', '', 'data-pane="address" aria-controls="bit-addresses-host"')}${button('前往续费管理', 'ops-bit-address-jump', '', '', 'data-pane="renewals" aria-controls="bit-addresses-host"')}</nav>`
       : '';
-    const login = renderRechargeRegion('bit');
-    const entry = `<section class="panel bit-entry-panel">
-      <div class="bit-workspace-heading bit-entry-heading"><div class="tabs" role="tablist" aria-label="录入工作区">
+    const login = legacyLogin ? renderRechargeRegion('bit') : '';
+    const entryTitle = `<div class="title-with-help"><h2>录入续费账号</h2>${api.titleInfo('录入续费账号', '登记账号邮箱、当前套餐和处理状态。金额或支付结果请在实际确认后登记。', 'bit-entry-info')}</div>`;
+    const entryTabs = `<div class="bit-workspace-heading bit-entry-heading"><div class="tabs" role="tablist" aria-label="录入工作区">
         <button class="tab active" type="button" role="tab" id="bit-entry-tab" data-action="ops-bit-entry-pane" data-entry-pane="entry" aria-controls="bit-entry-registration" aria-selected="true">工作台</button>
         <button class="tab" type="button" role="tab" id="bit-single-tab" data-action="ops-bit-entry-pane" data-entry-pane="login" aria-controls="bit-single-content" aria-selected="false" tabindex="-1">单号登录</button>
-      </div></div>
-      <div id="bit-entry-registration" role="tabpanel" aria-labelledby="bit-entry-tab" class="panel-body">
-        <div class="title-with-help"><h2>录入续费账号</h2>${api.titleInfo('录入续费账号', '登记账号邮箱、当前套餐和处理状态。金额或支付结果请在实际确认后登记。', 'bit-entry-info')}</div>
+      </div></div>`;
+    const entry = `<section class="panel bit-entry-panel">
+      ${legacyLogin ? entryTabs : `<header class="panel-heading bit-workspace-heading bit-entry-heading">${entryTitle}</header>`}
+      <div id="bit-entry-registration" class="panel-body"${legacyLogin ? ' role="tabpanel" aria-labelledby="bit-entry-tab"' : ''}>
+        ${legacyLogin ? entryTitle : ''}
         <form id="bit-renewal-entry" class="bit-registration-form">
           <label for="bit-renewal-email">账号邮箱<input class="input" type="email" id="bit-renewal-email" name="email" maxlength="254" required autocomplete="off" /></label>
           <label for="bit-renewal-plan">当前套餐<input class="input" id="bit-renewal-plan" name="currentPlan" maxlength="48" placeholder="尚未确认可留空" /></label>
@@ -923,11 +926,11 @@
           <div role="status" data-record-feedback></div>
         </form>
       </div>
-      <div id="bit-single-content" role="tabpanel" aria-labelledby="bit-single-tab" hidden>${login}</div>
+      ${legacyLogin ? `<div id="bit-single-content" role="tabpanel" aria-labelledby="bit-single-tab" hidden>${login}</div>` : ''}
     </section>`;
     return (
-      header('手动充值', '使用 ChatGPT 授权 JSON 登录账号，共享自动代充 IP 池并在指纹浏览器中进入登录状态，支持手动操作与续费管理。') +
-      (showAddresses
+      header('手动充值', '登记账号、套餐和续费状态，管理办理时用到的地址。') +
+      (showManagement
         ? `<div class="bit-login-layout">${jump}${entry}<aside id="bit-addresses-host" aria-label="手动充值管理" tabindex="-1"></aside></div>`
         : login)
     );
@@ -4829,8 +4832,8 @@
       });
       if (state.route === bitLoginRoute) {
         const host = $('#bit-addresses-host', integrationRoot());
-        if (host && isAdmin()) api.modules.bitbrowserAddresses?.mount(host);
-        if (!host || !$('#bit-single-content', integrationRoot())?.hidden) void loadIntegratedRecharge();
+        if (host && api.canVisit(bitLoginRoute)) api.modules.bitbrowserAddresses?.mount(host);
+        if (isAdmin() && (!host || !$('#bit-single-content', integrationRoot())?.hidden)) void loadIntegratedRecharge();
         return;
       }
       if (pluginPages[state.route]) { openOnlineTool(pluginPages[state.route].tool); api.compactListToolbars?.(document.getElementById('main')); return; }
