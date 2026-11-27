@@ -6,7 +6,7 @@ from contextlib import contextmanager, suppress
 import fcntl
 import grp
 import hashlib
-from http.client import HTTPResponse
+from http.client import HTTPException, HTTPResponse
 import ipaddress
 import json
 import os
@@ -312,10 +312,14 @@ def broker_active():
 
 def wait_for_broker_ready():
     deadline = time.monotonic() + 15
+    path = BRIDGE / "site.sock"
     while time.monotonic() < deadline:
         state = broker_state()
-        if state == "active" and (BRIDGE / "site.sock").is_socket():
-            return
+        if state == "active" and path.is_socket():
+            with suppress(OSError, ValueError, HTTPException):
+                status, body = probe(path, "/v1/recharge/status")
+                if status == 200 and json.loads(body) == {"rechargeBootstrap": 1}:
+                    return
         if state == "failed":
             break
         time.sleep(0.2)

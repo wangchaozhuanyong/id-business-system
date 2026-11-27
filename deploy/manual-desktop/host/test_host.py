@@ -220,9 +220,10 @@ class ProvisionContract(unittest.TestCase):
             with self.assertRaisesRegex(runtime.InvalidHost, "broker_service_is_transitioning"):
                 provision.broker_active()
 
-    def test_verified_start_waits_for_an_active_unit_and_a_socket(self):
-        with patch.object(provision, "broker_state", side_effect=["activating", "active"]), \
-             patch.object(provision.time, "sleep"), patch.object(Path, "is_socket", return_value=True):
+    def test_verified_start_waits_for_an_active_unit_and_a_responding_socket(self):
+        with patch.object(provision, "broker_state", side_effect=["activating", "active", "active"]), \
+             patch.object(provision.time, "sleep"), patch.object(Path, "is_socket", return_value=True), \
+             patch.object(provision, "probe", side_effect=[ConnectionRefusedError(), (200, b'{"rechargeBootstrap":1}')]):
             provision.wait_for_broker_ready()
         with patch.object(provision, "broker_state", return_value="failed"), \
              patch.object(Path, "is_socket", return_value=True):
