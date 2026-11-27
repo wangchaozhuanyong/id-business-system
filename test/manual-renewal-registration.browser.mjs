@@ -90,7 +90,7 @@ test('人工新增、编辑及失败重试保留登记内容和全量统计', as
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(origin + '/#/recharge/start');
     const panel = page.locator('#bit-renewals-content');
-    await page.getByRole('tab', { name: '续费登记', exact: true }).click();
+    if (role === 'admin') await page.getByRole('tab', { name: '续费登记', exact: true }).click();
     const entry = page.locator('#bit-renewal-entry');
     const drawer = page.getByRole('dialog', { name: '续费记录' });
     const row = value => panel.locator('tbody tr').filter({ hasText: value });
@@ -101,6 +101,7 @@ test('人工新增、编辑及失败重试保留登记内容和全量统计', as
     if (role === 'finance') {
       assert.equal(await page.locator('#sidebar a[href="#/recharge/start"]').innerText(), '手动充值');
       assert.equal(await page.locator('#bit-single-content, #bit-single-tab, [data-recharge-module="bit"]').count(), 0);
+      assert.equal(await page.getByRole('tab', { name: '工作台', exact: true }).count(), 0);
       await page.getByRole('tab', { name: '地址管理', exact: true }).click();
       await page.getByRole('button', { name: '生成地址' }).waitFor();
       await page.getByRole('tab', { name: '账号续费管理', exact: true }).click();

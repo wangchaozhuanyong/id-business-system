@@ -88,7 +88,10 @@ function updateParsePreview() {
     try {
       const data = JSON.parse(raw);
       const address = typeof data?.user?.email === 'string' ? data.user.email.trim() : '';
-      email = address.length <= 254 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(address) ? address.toLowerCase() : '';
+      const [mailbox, domain, ...extra] = address.split('@');
+      const suffix = domain?.lastIndexOf('.');
+      if (address.length <= 254 && mailbox && domain && !extra.length && !/\s/.test(address) &&
+          suffix > 0 && suffix < domain.length - 1) email = address.toLowerCase();
       const session = data?.sessionToken ?? data?.session_token;
       if (new TextEncoder().encode(raw).byteLength > 65_000) issue = '请粘贴 65 KB 以内的单账号授权 JSON。';
       else if (!email) issue = '授权 JSON 缺少有效邮箱。';
