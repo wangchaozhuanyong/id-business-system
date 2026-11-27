@@ -43,6 +43,10 @@ on:
         description: 与 inspect_canary_sha 同用，只读观测 60 秒自然备份资源
         default: false
         type: boolean
+      inspect_manual_workspace_host:
+        description: 单独只读核对手动续费工作区的宿主条件
+        default: false
+        type: boolean
 
 concurrency:
   group: independent-production-website-release
@@ -65,6 +69,7 @@ jobs:
       RELEASE_SHA: ${{ inputs.expected_sha }}
       INSPECT_CANARY_SHA: ${{ inputs.inspect_canary_sha }}
       INSPECT_RELEASE_COMMAND: ${{ inputs.inspect_release_command }}
+      INSPECT_MANUAL_WORKSPACE_HOST: ${{ inputs.inspect_manual_workspace_host }}
       RELEASE_RECHARGE_ADAPTER: ${{ inputs.include_recharge_adapter }}
       RELEASE_RECHARGE_CORE: ${{ inputs.include_recharge_core }}
       RESUME_INTERRUPTED_RELEASE: ${{ inputs.resume_interrupted_release }}
@@ -96,12 +101,12 @@ jobs:
           echo "Verified main quality run: $run"
           echo "QUALITY_RUN_ID=$run" >> "$GITHUB_ENV"
       - name: Set up Node.js
-        if: inputs.inspect_canary_sha == ''
+        if: inputs.inspect_canary_sha == '' && !inputs.inspect_manual_workspace_host
         uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444
         with:
           node-version: '24.22.1'
       - name: Build the exact main artifacts
-        if: inputs.inspect_canary_sha == ''
+        if: inputs.inspect_canary_sha == '' && !inputs.inspect_manual_workspace_host
         shell: bash
         run: |
           set -euo pipefail
@@ -132,7 +137,7 @@ jobs:
             {"Version":"2012-10-17","Statement":[
               {"Effect":"Allow","Action":"ssm:SendCommand","Resource":["arn:aws:ssm:ap-northeast-1::document/AWS-RunShellScript","arn:aws:ec2:ap-northeast-1:098208446664:instance/i-0838cebf64f0e2a89"]},
               {"Effect":"Allow","Action":["ssm:GetCommandInvocation","ssm:ListCommands"],"Resource":"*"},
-              {"Effect":"Allow","Action":["s3:GetObject","s3:PutObject"],"Resource":"arn:aws:s3:::id-business-v2-backups-098208446664-ap-northeast-1/release-artifacts/formal/${{ github.sha }}/*"}
+              {"Effect":"${{ inputs.inspect_manual_workspace_host && 'Deny' || 'Allow' }}","Action":["s3:GetObject","s3:PutObject"],"Resource":"arn:aws:s3:::id-business-v2-backups-098208446664-ap-northeast-1/release-artifacts/formal/${{ github.sha }}/*"}
             ]}
       - name: Run the selected operation through SSM
         if: ${{ !inputs.inspect_backup_resources }}

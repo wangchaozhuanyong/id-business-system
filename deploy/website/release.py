@@ -412,9 +412,11 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False, 
 def script_for(plan):
     script = Path(__file__).with_name("remote.py").read_text()
     program = script + "\nsys.modules['remote'] = sys.modules[__name__]\n"
-    if plan["operation"] == "interrupted-preflight":
+    if plan["operation"] in ("interrupted-preflight", "inspect-manual-workspace"):
         program += "from types import ModuleType\n"
-        for name in ("vendure_admission", "recharge_core", "interrupted_cutover"):
+        modules = (("manual_workspace_preflight",) if plan["operation"] == "inspect-manual-workspace"
+                   else ("vendure_admission", "recharge_core", "interrupted_cutover"))
+        for name in modules:
             source = Path(__file__).with_name(name + ".py").read_text()
             program += (f"module = sys.modules[{name!r}] = ModuleType({name!r})\n"
                         f"exec(compile({source!r}, {name + '.py'!r}, 'exec'), module.__dict__)\n")
@@ -635,6 +637,13 @@ def main(sample_backup_resources=False):
     partner_api = os.environ.get("RELEASE_RECHARGE_PARTNER_API") == "true"
     customer_progress = os.environ.get("RELEASE_CUSTOMER_PROGRESS") == "true"
     resume_interrupted = os.environ.get("RESUME_INTERRUPTED_RELEASE") == "true"
+    if os.environ.get("INSPECT_MANUAL_WORKSPACE_HOST") == "true":
+        if any((attempt, inspect_command, include_adapter, include_core, retry_receipt, partner_api,
+                customer_progress, resume_interrupted, sample_backup_resources)):
+            raise RuntimeError("manual_workspace_inspection_requires_its_own_operation")
+        command_id, host = remote({"operation": "inspect-manual-workspace", "sha": sha})
+        print(json.dumps({"command": command_id, "workspaceHost": host}), flush=True)
+        return
     if resume_interrupted and any((attempt, inspect_command, include_adapter, include_core, retry_receipt,
                                   partner_api, customer_progress, sample_backup_resources)):
         raise RuntimeError("interrupted_release_requires_its_own_operation")

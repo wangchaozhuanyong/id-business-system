@@ -2312,6 +2312,26 @@ class WebsiteReleaseTests(unittest.TestCase):
                 release.main(sample_backup_resources=True)
             dispatch.assert_not_called()
 
+    @patch("release.require_main")
+    @patch("release.remote", return_value=("command", {}))
+    def test_manual_workspace_inspection_never_stages_a_release(self, dispatch, _main):
+        env = {"RELEASE_SHA": TARGET, "QUALITY_RUN_ID": "123", "INSPECT_MANUAL_WORKSPACE_HOST": "true"}
+        with patch.dict(os.environ, env, clear=True), redirect_stdout(io.StringIO()):
+            release.main()
+        dispatch.assert_called_once_with({"operation": "inspect-manual-workspace", "sha": TARGET})
+        for name in ("INSPECT_CANARY_SHA", "INSPECT_RELEASE_COMMAND", "RELEASE_RECHARGE_ADAPTER",
+                     "RELEASE_RECHARGE_CORE", "VENDURE_RETRY_RECEIPT_SHA256", "RELEASE_RECHARGE_PARTNER_API",
+                     "RELEASE_CUSTOMER_PROGRESS", "RESUME_INTERRUPTED_RELEASE"):
+            dispatch.reset_mock()
+            with patch.dict(os.environ, env | {name: "true"}, clear=True), self.assertRaisesRegex(
+                    RuntimeError, "manual_workspace_inspection_requires_its_own_operation"):
+                release.main()
+            dispatch.assert_not_called()
+        with patch.dict(os.environ, env, clear=True), self.assertRaisesRegex(
+                RuntimeError, "manual_workspace_inspection_requires_its_own_operation"):
+            release.main(sample_backup_resources=True)
+        dispatch.assert_not_called()
+
     def test_readonly_inspection_shares_the_backup_lock_and_releases_remain_exclusive(self):
         runtime = Path(__file__).resolve().parents[2] / ".runtime"
         runtime.mkdir(exist_ok=True)
@@ -2322,6 +2342,10 @@ class WebsiteReleaseTests(unittest.TestCase):
                     patch.object(remote.fcntl, "flock") as acquire, redirect_stdout(io.StringIO()):
                 remote.main({"operation": "inspect", "sha": TARGET, "attemptSha": BASE, "sampleBackupResources": True})
                 self.assertEqual(acquire.call_args.args[1], remote.fcntl.LOCK_SH | remote.fcntl.LOCK_NB)
+                with patch("manual_workspace_preflight.summary", return_value={}) as inspect_host:
+                    remote.main({"operation": "inspect-manual-workspace", "sha": TARGET})
+                    inspect_host.assert_called_once_with()
+                    self.assertEqual(acquire.call_args.args[1], remote.fcntl.LOCK_SH | remote.fcntl.LOCK_NB)
                 remote.main({"operation": "preflight", "sha": TARGET})
                 self.assertEqual(acquire.call_args.args[1], remote.fcntl.LOCK_EX | remote.fcntl.LOCK_NB)
 

@@ -1851,7 +1851,8 @@ def main(plan):
     try:
         require(re.fullmatch(r"[a-f0-9]{40}", plan["sha"]), "invalid_release_revision")
         with LOCK.open("r") as lock:
-            mode = fcntl.LOCK_SH if plan["operation"] == "inspect" else fcntl.LOCK_EX
+            readonly = plan["operation"] in ("inspect", "inspect-manual-workspace")
+            mode = fcntl.LOCK_SH if readonly else fcntl.LOCK_EX
             fcntl.flock(lock, mode | fcntl.LOCK_NB)
             require_main(plan["sha"])
             if plan["operation"] == "preflight":
@@ -1864,6 +1865,10 @@ def main(plan):
                 print("Verified the existing native runtime before resuming the interrupted release", flush=True)
             elif plan["operation"] == "inspect":
                 result = inspect_canary(plan["attemptSha"], plan.get("sampleBackupResources") is True)
+            elif plan["operation"] == "inspect-manual-workspace":
+                from manual_workspace_preflight import summary
+
+                result = summary()
             elif plan["operation"] == "repair-assets":
                 result = repair_current_asset_metadata(plan)
             else:
