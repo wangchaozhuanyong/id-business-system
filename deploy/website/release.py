@@ -877,7 +877,8 @@ def main(sample_backup_resources=False):
                   "frontend/operations-prototype.js", "deploy/manual-desktop/broker.py",
                   "deploy/manual-desktop/worker/recharge_proxy.py", "deploy/manual-desktop/worker/worker.py",
                   "deploy/manual-desktop/egress.py", "deploy/manual-desktop/host/provision.py",
-                  "deploy/manual-desktop/host/runtime.py", "deploy/manual-desktop/host/check_renewal.py")
+                  "deploy/manual-desktop/host/runtime.py", "deploy/manual-desktop/host/check_renewal.py",
+                  "deploy/manual-desktop/host/polkit-rpms.json")
     plan = {"operation": "release", "sha": sha, "before": before, "artifacts": artifacts,
             "files": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in files},
             "qualityRun": quality_run, "preflightCommand": preflight_id, 'externalEvents': True}

@@ -1,0 +1,24 @@
+{
+  "systemRelease": "2023.12.20260817",
+  "architecture": "x86_64",
+  "packages": [
+    {
+      "name": "duktape",
+      "file": "duktape-2.7.0-21.amzn2023.x86_64.rpm",
+      "bytes": 175004,
+      "sha256": "15f5cde041b9bb19fdf0209065990c43bbe409dc4689e327806b08356cb63a63"
+    },
+    {
+      "name": "polkit-libs",
+      "file": "polkit-libs-125-1.amzn2023.0.3.x86_64.rpm",
+      "bytes": 70287,
+      "sha256": "52ce8cf6556590a4bbac0138317e755362560fca65d7970ea8f6102abd0b8913"
+    },
+    {
+      "name": "polkit",
+      "file": "polkit-125-1.amzn2023.0.3.x86_64.rpm",
+      "bytes": 156029,
+      "sha256": "5e38ee0d6f66469c72e13f3f3e5fa1d669884480e749e2328d44157e46ef0b6c"
+    }
+  ]
+}
