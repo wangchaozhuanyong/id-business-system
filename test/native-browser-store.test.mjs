@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createLocalBusinessStore } from '../server/local-business.mjs';
 import { localBusinessRequest } from './helpers/local-business-request.mjs';
 
-const operator = { id: 'test-operator-1', name: '测试员' };
+const operator = { id: 'test-operator-1', name: '测试管理员', role: 'admin', active: true };
 const fixtureJson = JSON.stringify({
   sessionToken: 'fixture-token-abc',
   user: { email: 'worker@example.com', id: 'user-001' },
@@ -59,6 +59,19 @@ test('store manages native workbench accounts with encryption and audit', () => 
 
 const workbench = 'native-browser-workbench';
 const formalOptions = { actor: operator, publicOrigin: 'https://workbench.example.test' };
+
+test('旧工作台只接受有管理角色的有效登录身份', async t => {
+  const loadNativeWorkbenchAccounts = t.mock.fn();
+  const store = { loadNativeWorkbenchAccounts };
+  for (const actor of [
+    null, { id: operator.id }, { ...operator, role: 'finance' }, { ...operator, role: 'employee' },
+    { ...operator, active: false }
+  ]) {
+    const result = await localBusinessRequest(store, workbench, { ...formalOptions, actor });
+    assert.equal(result.status, actor ? 403 : 401);
+  }
+  assert.equal(loadNativeWorkbenchAccounts.mock.callCount(), 0);
+});
 
 test('正式工作台暂停云端浏览器操作，拒绝请求前未调用业务存储', async t => {
   const browserOperation = t.mock.fn();
