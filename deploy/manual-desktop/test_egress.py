@@ -1,4 +1,6 @@
 import asyncio
+import errno
+import ipaddress
 import os
 from pathlib import Path
 import socket
@@ -8,6 +10,7 @@ import unittest
 from unittest.mock import AsyncMock, patch
 
 import egress
+from worker.recharge_proxy import open_proxy
 
 
 def record(address, port=8080):
@@ -16,7 +19,24 @@ def record(address, port=8080):
     return (family, socket.SOCK_STREAM, socket.IPPROTO_TCP, '', sockaddr)
 
 
+def connect_request(authority):
+    return b'CONNECT ' + authority + b' HTTP/1.1\r\nHost: ' + authority + b'\r\n\r\n'
+
+
 class ResolutionTests(unittest.IsolatedAsyncioTestCase):
+    def test_host_interface_check_uses_local_bind_and_fails_closed_on_unexpected_error(self):
+        address = ipaddress.ip_address('2001:db8::1')
+        with patch.object(socket, 'socket') as socket_factory:
+            bind = socket_factory.return_value.__enter__.return_value.bind
+            self.assertTrue(egress._assigned_to_host(address))
+            socket_factory.assert_called_once_with(socket.AF_INET6, socket.SOCK_DGRAM)
+            bind.assert_called_once_with((str(address), 0))
+            bind.side_effect = OSError(errno.EADDRNOTAVAIL, '')
+            self.assertFalse(egress._assigned_to_host(address))
+            bind.side_effect = OSError(errno.EACCES, '')
+            with self.assertRaises(egress.EgressError):
+                egress._assigned_to_host(address)
+
     async def test_dns_is_absolute_pins_one_numeric_address_and_omits_credentials(self):
         records = [record('2606:4700:4700::1111'), record('9.9.9.9'), record('1.1.1.1')]
         loop = asyncio.get_running_loop()
@@ -131,6 +151,148 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
             task.cancel()
         await asyncio.gather(*self.tasks, return_exceptions=True)
         await server.wait_closed()
+
+    async def open_renewal(self, *, blocked_networks=('192.0.2.17/32',), limits=egress.RelayLimits()):
+        return await egress.open_renewal_relay(
+            'relay', uid=os.getuid(), gid=os.getgid(), blocked_networks=blocked_networks, limits=limits
+        )
+
+    async def exchange(self, data):
+        reader, writer = await asyncio.open_unix_connection(self.path)
+        try:
+            writer.write(data)
+            writer.write_eof()
+            return await asyncio.wait_for(reader.read(), 2)
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    async def test_renewal_connect_pins_one_public_answer_and_passes_opaque_bytes(self):
+        received = asyncio.get_running_loop().create_future()
+
+        async def site(reader, writer):
+            try:
+                received.set_result(await reader.read())
+                writer.write(b'synthetic encrypted response')
+                await writer.drain()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        upstream = await self.connect_fixture(site)
+        loop = asyncio.get_running_loop()
+        with patch.object(loop, 'getaddrinfo', AsyncMock(return_value=[record('1.1.1.1', 443)])) as lookup:
+            with patch.object(egress, '_assigned_to_host', return_value=False):
+                async with await self.open_renewal():
+                    self.assertEqual(stat.S_IMODE(self.path.stat().st_mode), 0o600)
+                    reader, writer = await asyncio.open_unix_connection(self.path)
+                    try:
+                        writer.write(connect_request(b'chatgpt.com:443'))
+                        self.assertEqual(await asyncio.wait_for(reader.readuntil(b'\r\n\r\n'), 2),
+                                         b'HTTP/1.1 200 Connection Established\r\n\r\n')
+                        writer.write(b'synthetic encrypted request')
+                        writer.write_eof()
+                        self.assertEqual(await asyncio.wait_for(reader.read(), 2), b'synthetic encrypted response')
+                    finally:
+                        writer.close()
+                        await writer.wait_closed()
+        lookup.assert_awaited_once_with('chatgpt.com.', 443, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP)
+        upstream.assert_awaited_once_with(self.proxy)
+        self.assertEqual(received.result(), b'synthetic encrypted request')
+        self.assertFalse(self.path.exists())
+
+    async def test_renewal_rejects_unapproved_requests_without_lookup(self):
+        loop = asyncio.get_running_loop()
+        cases = (
+            connect_request(b'example.org:443'), connect_request(b'api.country.is:443'),
+            connect_request(b'accounts.google.com:80'), connect_request(b'1.1.1.1:443'),
+            connect_request(b'chatgpt.com.example.org:443'), connect_request(b'chatgpt.com.:443'),
+            b'GET / HTTP/1.1\r\nHost: chatgpt.com\r\n\r\n',
+            b'CONNECT chatgpt.com:443 HTTP/1.1\r\nHost: other.example:443\r\n\r\n',
+            b'CONNECT chatgpt.com:443 HTTP/1.1\r\nHost: chatgpt.com:443\r\nProxy-Authorization: unused\r\n\r\n',
+        )
+        with patch.object(loop, 'getaddrinfo', AsyncMock()) as lookup, patch.object(egress, '_open_pinned') as dial:
+            async with await self.open_renewal():
+                for request in cases:
+                    with self.subTest(request=request):
+                        self.assertEqual(await self.exchange(request),
+                                         b'HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
+        lookup.assert_not_called()
+        dial.assert_not_called()
+
+    async def test_worker_adapter_connects_to_renewal_relay_without_credentials(self):
+        async def site(reader, writer):
+            try:
+                writer.write(await reader.readexactly(5))
+                await writer.drain()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+
+        upstream = await self.connect_fixture(site)
+        loop = asyncio.get_running_loop()
+        with patch.object(loop, 'getaddrinfo', AsyncMock(return_value=[record('1.1.1.1', 443)])) as lookup:
+            with patch.object(egress, '_assigned_to_host', return_value=False):
+                async with await self.open_renewal():
+                    adapter = await open_proxy(None, relay_path=str(self.path), renewal=True)
+                    try:
+                        reader, writer = await asyncio.open_connection('127.0.0.1', adapter.port)
+                        try:
+                            writer.write(b'CONNECT login.microsoftonline.com:443 HTTP/1.1\r\n\r\n')
+                            reply = await asyncio.wait_for(reader.readuntil(b'\r\n\r\n'), 2)
+                            self.assertTrue(reply.startswith(b'HTTP/1.1 200 '))
+                            writer.write(b'hello')
+                            self.assertEqual(await asyncio.wait_for(reader.readexactly(5), 2), b'hello')
+                        finally:
+                            writer.close()
+                            await writer.wait_closed()
+                    finally:
+                        await adapter.close()
+        lookup.assert_awaited_once_with('login.microsoftonline.com.', 443,
+                                        type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP)
+        upstream.assert_awaited_once_with(self.proxy)
+
+    async def test_renewal_refuses_private_metadata_configured_and_locally_assigned_addresses(self):
+        loop = asyncio.get_running_loop()
+        blocked = ('9.9.9.9/32',)
+        for address in ('127.0.0.1', '10.0.0.9', '169.254.169.254', '::1', '9.9.9.9', '8.8.8.8'):
+            with self.subTest(address=address), patch.object(egress, '_open_pinned') as dial:
+                with patch.object(loop, 'getaddrinfo', AsyncMock(return_value=[record('1.1.1.1', 443), record(address, 443)])):
+                    with patch.object(egress, '_assigned_to_host', side_effect=lambda addr: str(addr) == '8.8.8.8'):
+                        async with await self.open_renewal(blocked_networks=blocked):
+                            reply = await self.exchange(connect_request(b'accounts.google.com:443'))
+                            self.assertTrue(reply.startswith(b'HTTP/1.1 502 '))
+                            self.assertNotIn(address.encode(), reply)
+                dial.assert_not_called()
+
+    async def test_renewal_requires_configured_host_exclusions(self):
+        with self.assertRaises(egress.EgressError):
+            await self.open_renewal(blocked_networks=())
+        self.assertFalse(self.path.exists())
+
+    async def test_renewal_incomplete_handshake_times_out_and_releases_connection_slot(self):
+        limits = egress.RelayLimits(connections=1, connect_timeout=0.15)
+        loop = asyncio.get_running_loop()
+        with patch.object(loop, 'getaddrinfo', AsyncMock()) as lookup:
+            async with await self.open_renewal(limits=limits) as relay:
+                first, first_writer = await asyncio.open_unix_connection(self.path)
+                try:
+                    first_writer.write(b'CONNECT ')
+                    await first_writer.drain()
+                    second, second_writer = await asyncio.open_unix_connection(self.path)
+                    try:
+                        self.assertEqual(await asyncio.wait_for(second.read(), 2), b'')
+                    finally:
+                        second_writer.close()
+                        await second_writer.wait_closed()
+                    self.assertTrue((await asyncio.wait_for(first.read(), 2)).startswith(b'HTTP/1.1 502 '))
+                finally:
+                    first_writer.close()
+                    await first_writer.wait_closed()
+                await asyncio.wait_for(asyncio.gather(*tuple(relay._clients)), 2)
+                reply = await self.exchange(connect_request(b'example.org:443'))
+                self.assertTrue(reply.startswith(b'HTTP/1.1 403 '))
+        lookup.assert_not_called()
 
     async def test_relay_forwards_both_ways_and_preserves_half_close(self):
         async def fixture(reader, writer):

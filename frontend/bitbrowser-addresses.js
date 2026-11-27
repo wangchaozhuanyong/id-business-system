@@ -179,10 +179,41 @@
       if (row) editRenewal(panel, row);
     });
     const entry = host.closest('.bit-login-layout').querySelector('#bit-renewal-entry');
+    entry.elements.email.addEventListener('paste', pasteRegistrationEmail);
     entry.addEventListener('submit', event => {
       event.preventDefault();
       void saveRecord(entry, panel);
     });
+  }
+
+  function pasteRegistrationEmail(event) {
+    const input = event.currentTarget;
+    const text = event.clipboardData?.getData('text/plain') ?? '';
+    let data;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      // Plain email text keeps the browser's normal insertion and selection behavior.
+      if (text && !/[{}\[\]"`\r\n]/.test(text)) return;
+    }
+    event.preventDefault();
+    const feedback = input.form.querySelector('[data-record-feedback]');
+    const checker = document.createElement('input');
+    checker.type = 'email';
+    const email = [data?.user?.email, data?.email]
+      .map(value => typeof value === 'string' ? value.trim() : '')
+      .find(value => {
+        if (value.length > input.maxLength || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/u.test(value)) return false;
+        checker.value = value;
+        return checker.validity.valid;
+      });
+    if (!email) {
+      feedback.textContent = '未能从粘贴内容识别邮箱，请输入账号邮箱。';
+      return;
+    }
+    input.value = email;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    feedback.textContent = '已识别账号邮箱。';
   }
 
   function editRenewal(panel, row) {

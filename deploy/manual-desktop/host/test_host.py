@@ -221,6 +221,7 @@ class ProvisionContract(unittest.TestCase):
                 "broker_active": {"return_value": False},
                 "require_no_workers": {},
                 "existing_identity": {},
+                "ensure_sysusers_directory": {},
                 "checked_path": {"side_effect": FileNotFoundError},
                 "ensure_directory": {},
                 "installed": {"return_value": None},

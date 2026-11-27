@@ -201,12 +201,14 @@ def run_desktop(private_tmp, proxy_port=None, report_ready=None):
             time.sleep(0.2)
 
 
-def recharge_settings(source):
+def workspace_settings(source):
     try:
         line = source.readline(8193)
         if len(line) > 8192 or not line.endswith(b"\n"):
             raise ValueError
         data = json.loads(line)
+        if data == {"mode": "renewal"}:
+            return "renewal", None, None
         if not isinstance(data, dict) or set(data) != {"email", "proxyUrl", "expectedCountry"}:
             raise ValueError
         email, url, country = data["email"], data["proxyUrl"], data["expectedCountry"]
@@ -222,13 +224,13 @@ def recharge_settings(source):
         password = unquote(parsed.password or "", errors="strict")
         if bool(username) != bool(password):
             raise ValueError
-        return ((username, password) if username else None), country
+        return "recharge", ((username, password) if username else None), country
     except (ValueError, TypeError, UnicodeError):
         raise RuntimeError("工作区收到无效的代理启动资料") from None
 
 
 @contextmanager
-def recharge_proxy_context():
+def workspace_proxy_context():
     if not INPUT.exists():
         yield None, None
         return
@@ -243,24 +245,34 @@ def recharge_proxy_context():
         bootstrap.settimeout(20)
         bootstrap.connect(str(INPUT / "bootstrap.sock"))
         with bootstrap.makefile("rb") as source:
-            authorization, expected_country = recharge_settings(source)
+            mode, authorization, expected_country = workspace_settings(source)
         loop = asyncio.new_event_loop()
         proxy = None
         runner = None
         try:
-            proxy = loop.run_until_complete(asyncio.wait_for(module.open_proxy(authorization), 3))
+            proxy = loop.run_until_complete(asyncio.wait_for(
+                module.open_proxy(authorization, relay_path=INPUT / "egress.sock", renewal=mode == "renewal"), 3))
             authorization = None
-            exit_info = loop.run_until_complete(asyncio.wait_for(module.verify_exit(proxy, expected_country), 15))
+            if mode == "renewal":
+                # Verify the local private relay is listening before publishing the desktop.
+                with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as relay:
+                    relay.settimeout(3)
+                    relay.connect(str(INPUT / "egress.sock"))
+                receipt = {"mode": "renewal", "ready": True}
+            else:
+                exit_info = loop.run_until_complete(asyncio.wait_for(module.verify_exit(proxy, expected_country), 15))
+                receipt = {"exitIp": exit_info["ip"], "country": exit_info["country"], "accountStatus": "check-in-browser"}
             runner = threading.Thread(target=loop.run_forever, daemon=True)
             runner.start()
         except Exception:
             if proxy:
                 loop.run_until_complete(proxy.close())
             loop.close()
+            if mode == "renewal":
+                raise RuntimeError("续费工作区的网络连接服务不可用") from None
             raise RuntimeError("所选代理出口未通过核验") from None
 
         def report_ready():
-            receipt = {"exitIp": exit_info["ip"], "country": exit_info["country"], "accountStatus": "check-in-browser"}
             bootstrap.sendall(json.dumps(receipt, separators=(",", ":")).encode("ascii") + b"\n")
             bootstrap.close()
 
@@ -287,7 +299,7 @@ def main():
             remove_owned_socket(path)
             cleanup.callback(remove_owned_socket, path)
         private = cleanup.enter_context(tempfile.TemporaryDirectory(dir="/tmp", prefix="desktop-"))
-        with recharge_proxy_context() as (port, report_ready):
+        with workspace_proxy_context() as (port, report_ready):
             run_desktop(Path(private), port, report_ready)
 
 

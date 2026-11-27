@@ -28,4 +28,4 @@ jobs:
       - name: Verify real platform sessions with isolated business records
         run: node --test test/manual-renewal-roles.integration.mjs
       - name: Verify the isolated browser container and its memory limit
-        run: bash test/manual-remote-desktop-linux/container-check.sh
+        run: bash test/manual-remote-desktop-linux/container-check.sh --host-fixture
