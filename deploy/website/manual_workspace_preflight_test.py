@@ -105,6 +105,16 @@ class WorkspacePreflightTests(unittest.TestCase):
         with patch.object(probe.subprocess, "run", return_value=subprocess.CompletedProcess([], 1, b"private", b"private")):
             self.assertIsNone(probe._command(["systemctl", "--version"]))
 
+    def test_workspace_package_log_reports_only_a_fixed_diagnostic(self):
+        self.write("usr/bin/pkcheck", "fixture")
+        (self.root / "usr/bin/pkcheck").chmod(0o755)
+        self.write("var/log/dnf.log", "\nDEBUG Command: dnf install polkit --destdir=/private/workspace-dependencies-example\n"
+                   "ERROR Failed to download metadata for repo fixture-private\n")
+        details = self.inspect()["observed"]["workspaceTools"]
+        self.assertTrue(details["executables"]["pkcheck"])
+        self.assertEqual(details["packageDownload"], "repository_access")
+        self.assertNotIn("private", json.dumps(details))
+
     def test_stopped_app_stale_socket_and_pid_reuse_do_not_prove_configuration(self):
         self.unit = ""
         self.docker_info = "1|false|false|true|"

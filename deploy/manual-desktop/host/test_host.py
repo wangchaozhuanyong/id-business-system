@@ -1,6 +1,8 @@
 """Host contract tests. All service-manager and Docker calls are mocked."""
 
 from contextlib import ExitStack, nullcontext
+import hashlib
+import json
 import os
 from pathlib import Path
 import socket
@@ -30,40 +32,65 @@ class HostDependency(unittest.TestCase):
             self.assertFalse(provision.prepare_host_tools(CONFIG))
             command.assert_not_called()
 
-    def test_downloaded_packages_are_verified_before_an_install_only_transaction(self):
+    def test_staged_packages_are_verified_before_an_install_only_transaction(self):
         with tempfile.TemporaryDirectory(dir=Path(__file__).parent, prefix=".test-") as staging:
-            package = Path(staging) / "polkit-x86_64.rpm"
-            package.touch()
-            for installed, signature, failure in (
-                    (1, "digests signatures OK", None),
-                    (0, "digests signatures OK", "manual_host_dependency_would_upgrade_existing_package"),
-                    (1, "digests OK", "manual_host_dependency_signature_invalid")):
-                with self.subTest(installed=installed, signature=signature):
+            base = Path(staging)
+            desktop = base / "source/deploy/manual-desktop"
+            inventory = desktop / "host/polkit-rpms.json"
+            inventory.parent.mkdir(parents=True)
+            package_dir = base / "manual-runtime/host-packages"
+            package_dir.mkdir(parents=True)
+            packages = []
+            for name in ("duktape", "polkit-libs", "polkit"):
+                artifact = package_dir / f"{name}-fixture.x86_64.rpm"
+                content = name.encode("ascii")
+                artifact.write_bytes(content)
+                packages.append({"name": name, "file": artifact.name, "bytes": len(content),
+                                 "sha256": hashlib.sha256(content).hexdigest()})
+            catalog = {"systemRelease": "2023.12.20260817", "architecture": "x86_64", "packages": packages}
+            inventory.write_text(json.dumps(catalog))
+            config = dict(CONFIG, root=str(base), desktop=str(desktop))
+            read_text = Path.read_text
+            for version, signature, failure in (
+                    ("2023.12.20260817", "digests signatures OK", None),
+                    ("2023.12.20261109", "digests signatures OK", "manual_host_package_release_mismatch"),
+                    ("2023.12.20260817", "digests OK", "manual_host_dependency_signature_invalid")):
+                with self.subTest(version=version, signature=signature):
                     def system(args, **options):
                         if args[:2] == [provision.RPM_KEYS, "--checksig"]:
                             return f"package: {signature}", 0
                         if args[:2] == [provision.RPM, "-qp"]:
-                            return "polkit", 0
+                            return Path(args[-1]).name.removesuffix("-fixture.x86_64.rpm"), 0
+                        if args[-1] == "system-release":
+                            return version, 0
                         if args[:2] == [provision.RPM, "-q"]:
-                            return "", installed
+                            return "", 0 if args[-1] == "duktape" else 1
                         return "", 0
 
+                    def file_text(path, **kwargs):
+                        if path == Path("/etc/os-release"):
+                            return 'ID="amzn"\nVERSION_ID="2023"\n'
+                        return read_text(path, **kwargs)
+
                     with patch.object(provision.os, "access", side_effect=[False, True]), \
-                         patch.object(Path, "read_text", return_value='ID="amzn"\nVERSION_ID="2023"\n'), \
+                         patch.object(provision.platform, "machine", return_value="x86_64"), \
+                         patch.object(Path, "read_text", new=file_text), \
                          patch.object(provision, "release_path", side_effect=lambda path, _: path), \
-                         patch.object(provision.tempfile, "mkdtemp", return_value=staging), \
                          patch.object(provision, "command", side_effect=system) as command, \
                          patch.object(provision, "systemctl") as systemctl:
                         if failure:
                             with self.assertRaisesRegex(runtime.InvalidHost, failure):
-                                provision.prepare_host_tools(CONFIG)
+                                provision.prepare_host_tools(config)
                             self.assertFalse(any(call.args[0][1] == "--install" for call in command.call_args_list))
                             systemctl.assert_not_called()
                         else:
-                            self.assertTrue(provision.prepare_host_tools(CONFIG))
+                            self.assertTrue(provision.prepare_host_tools(config))
+                            missing = [str(package_dir / item["file"]) for item in packages[1:]]
                             self.assertEqual(command.call_args_list[-2:], [
-                                call([provision.RPM, "--install", "--test", str(package)], timeout=20),
-                                call([provision.RPM, "--install", str(package)], timeout=35),
+                                call([provision.RPM, "--install", "--test", *missing], timeout=20,
+                                     failure="manual_host_dependency_rpm_check_failed"),
+                                call([provision.RPM, "--install", *missing], timeout=35,
+                                     failure="manual_host_dependency_rpm_install_failed"),
                             ])
                             systemctl.assert_called_once_with("daemon-reload")
 

@@ -136,10 +136,10 @@ def worker_command(key, invocation, config, profile, state, source):
     ]
 
 
-def command(args, timeout=8, allowed=(0,)):
+def command(args, timeout=8, allowed=(0,), *, failure="host_command_failed"):
     result = subprocess.run(args, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                             env=ENV, timeout=timeout, check=False)
-    require(result.returncode in allowed and len(result.stdout) <= 32768, "host_command_failed")
+    require(result.returncode in allowed and len(result.stdout) <= 32768, failure)
     return result.stdout.decode("ascii").strip(), result.returncode
 
 
