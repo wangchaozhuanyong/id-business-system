@@ -152,7 +152,7 @@ class WebsiteReleaseTests(unittest.TestCase):
                        "RELEASE_CUSTOMER_PROGRESS": "false", "VENDURE_RETRY_RECEIPT_SHA256": ""}
         runtime = Path(__file__).resolve().parents[2] / ".runtime"
         runtime.mkdir(exist_ok=True)
-        with TemporaryDirectory(dir=runtime) as directory, patch.dict(os.environ, environment), \
+        with TemporaryDirectory(dir=runtime) as directory, patch.dict(os.environ, environment, clear=True), \
                 patch.multiple(release, OUTPUT=Path(directory), ASSET_METADATA_REPAIR_BASE=BASE,
                     ASSET_METADATA_REPAIR_DIGEST=expected, require_main=Mock(), require_website_scope=Mock(),
                     published_asset_receipt=Mock(return_value={"synthetic": True}),
