@@ -26,11 +26,14 @@ HELPER_FILES = (
 )
 
 
-def trusted_file(path, *, executable=False):
+def trusted_file(path, *, executable=False, archived=False):
     file = path.lstat()
-    require(stat.S_ISREG(file.st_mode) and file.st_uid == 0 and not file.st_mode & 0o022 and
-            path.resolve(strict=True) == path and (not executable or file.st_mode & stat.S_IXUSR),
-            "interrupted_release_file_untrusted")
+    # Git archives preserve root-group write on extracted source. Those inputs are hash-checked.
+    writable = stat.S_IWOTH if archived else stat.S_IWGRP | stat.S_IWOTH
+    require(stat.S_ISREG(file.st_mode) and file.st_uid == 0 and not file.st_mode & writable and
+            (not archived or file.st_gid == 0) and path.resolve(strict=True) == path and
+            (not executable or file.st_mode & stat.S_IXUSR),
+            "interrupted_archive_source_untrusted" if archived else "interrupted_release_file_untrusted")
     return path
 
 
@@ -143,8 +146,9 @@ class InterruptedCutover(CoreRelease):
         require_main(self.candidate_sha)
         for name in HELPER_FILES:
             expected = self.runtime_sources[name]
-            require(digest(trusted_file(self.source / name)) == expected and
-                    (self.candidate_source is None or digest(trusted_file(self.candidate_source / name)) == expected),
+            require(digest(trusted_file(self.source / name, archived=True)) == expected and
+                    (self.candidate_source is None or
+                     digest(trusted_file(self.candidate_source / name, archived=True)) == expected),
                     "interrupted_release_runtime_source_mismatch")
         self.require_native_unchanged()
         self.require_native_launcher()
@@ -164,7 +168,7 @@ class InterruptedCutover(CoreRelease):
                 "interrupted_native_work_pending")
 
         gate = trusted_file(GATEWAY).read_text()
-        script = trusted_file(self.scripts / "release-gate.py")
+        script = trusted_file(self.scripts / "release-gate.py", archived=True)
         require(digest(script) == self.gate_script_digest, "interrupted_release_gate_program_mismatch")
         transform = runpy.run_path(str(script))["gated_text"]
         ungated = transform(gate, self.sha, False)
