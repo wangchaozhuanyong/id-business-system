@@ -62,6 +62,15 @@ async function prepare(browser, width, role = 'super', phase = 'native', changeE
         return request.fulfill({ json: { acknowledged: true } });
       }
       if (failSave) return request.fulfill({ status: 409, json: { error: '合成版本冲突，请重新读取' } });
+      if (body.action === 'close-recharge-review') {
+        if (role !== 'super') return request.fulfill({ status: 403, json: { error: '没有结案权限' } });
+        const row = records.find(row => row.id === body.id);
+        if (!row?.canCloseReview || row.resolvedAt) return request.fulfill({ status: 409, json: { error: '告警已更新' } });
+        row.resolvedAt = at + 120_000;
+        row.reviewResolution = { outcome: body.outcome, reference: body.reference, by: '合成管理员' };
+        delete row.canCloseReview;
+        return request.fulfill({ json: { closed: true } });
+      }
       if (body.action === 'settings') {
         settings.version++;
         settings.enabled = body.settings.enabled;
@@ -79,7 +88,9 @@ async function prepare(browser, width, role = 'super', phase = 'native', changeE
     if (tab === 'deliveries') return request.fulfill({ json: { page: 1, total: 1, pageSize,
       items: [{ id: 'receipt-fixture', label: '渠道测试', status: 'accepted', target: '运维接收人', at, attempts: 1, messageId: 421 }] } });
     const query = (url.searchParams.get('q') || '').toLowerCase();
-    const matched = url.searchParams.get('status') === 'resolved' ? [] : records.filter(row =>
+    const status = url.searchParams.get('status');
+    const matched = records.filter(row =>
+      (!status || (status === 'resolved' ? Boolean(row.resolvedAt) : !row.resolvedAt && Boolean(row.ackAt) === (status === 'acknowledged'))) &&
       (!url.searchParams.get('priority') || row.priority === url.searchParams.get('priority')) &&
       (!query || [row.label, row.id, row.taskTail].some(value => String(value || '').toLowerCase().includes(query))));
     const page = Math.min(requestedPage, Math.max(1, Math.ceil(matched.length / pageSize)));
@@ -356,6 +367,73 @@ test('已恢复的代充告警保留触发探测，旧告警仍能查看', { tim
   assert.deepEqual(f.writes, []);
   assert.deepEqual(f.errors, []);
   assert.deepEqual(f.offline.external, []);
+});
+
+test('付款待核实按证据人工结案，普通管理员只能查看', { timeout: 40_000 }, async t => {
+  const browser = await chromium.launch({ headless: true });
+  t.after(() => browser.close());
+  const reference = '72aed6a4-3f90-4fb0-a1b8-d065079e53bf';
+  const outcome = 'reversed_not_activated';
+  for (const [width, role] of [[1440, 'super'], [390, 'super'], [390, 'admin']]) {
+    const f = await prepare(browser, width, role);
+    t.after(() => f.context.close());
+    const { page } = f;
+    f.records[0].canCloseReview = true;
+    await page.goto(origin + '/#/monitor');
+    await page.getByRole('tab', { name: '告警记录', exact: true }).click();
+    const row = page.locator('[data-monitor-card="monitor-fixture-1"]:visible, [data-row-id="monitor-fixture-1"]:visible');
+    const drawer = page.locator('#drawer[open]');
+    const details = () => row.getByRole('button', { name: '查看详情', exact: true }).click();
+    await details();
+    await drawer.getByRole('button', { name: '查看原任务', exact: true }).waitFor();
+    const edit = drawer.getByRole('button', { name: '人工结案', exact: true });
+    if (role === 'admin') {
+      assert.equal(await edit.count(), 0);
+      assert.deepEqual(f.writes, []);
+    } else {
+      await edit.click();
+      await drawer.getByRole('heading', { name: '付款核对人工结案' }).waitFor();
+      await drawer.getByText('4821', { exact: true }).waitFor();
+      const choice = drawer.locator('#system-monitor-review-outcome');
+      const evidence = drawer.locator('#system-monitor-review-reference');
+      const submit = drawer.getByRole('button', { name: '确认结案', exact: true });
+      assert.equal(await choice.inputValue(), '');
+      assert.equal(await evidence.inputValue(), '');
+      assert.equal(await drawer.evaluate(node => node.scrollWidth > node.clientWidth + 1), false);
+      const bounds = await submit.boundingBox();
+      assert(bounds && bounds.x >= 0 && bounds.x + bounds.width <= width + 1);
+      await submit.click();
+      assert.equal(await choice.evaluate(node => node.validity.valueMissing), true);
+      assert.deepEqual(f.writes, []);
+      await choice.selectOption(outcome);
+      await evidence.fill('invalid');
+      await submit.click();
+      assert.equal(await evidence.evaluate(node => node.validity.patternMismatch), true);
+      assert.deepEqual(f.writes, []);
+      await evidence.fill(reference);
+      f.setFailSave(true);
+      await submit.click();
+      await drawer.locator('[data-system-monitor-error]').filter({ hasText: '合成版本冲突' }).waitFor();
+      assert.equal(await choice.inputValue(), outcome);
+      assert.equal(await evidence.inputValue(), reference);
+      f.setFailSave(false);
+      await submit.click();
+      await row.getByText('已人工结案', { exact: true }).waitFor();
+      const command = { action: 'close-recharge-review', id: 'monitor-fixture-1', outcome, reference };
+      assert.deepEqual(f.writes, [command, command]);
+      await page.locator('#system-monitor-filter').selectOption('resolved');
+      await page.locator('[data-monitor-card="monitor-fixture-2"]:visible, [data-row-id="monitor-fixture-2"]:visible').waitFor({ state: 'hidden' });
+      await details();
+      await drawer.getByText('已人工结案', { exact: true }).waitFor();
+      await drawer.getByText('确认扣款已撤销且未开通', { exact: true }).waitFor();
+      await drawer.getByText(reference, { exact: true }).waitFor();
+      await drawer.getByText('合成管理员', { exact: true }).waitFor();
+      await drawer.getByText('2026/11/10 10:02:00', { exact: true }).waitFor();
+      assert.equal(await edit.count(), 0);
+    }
+    assert.deepEqual(f.errors, []);
+    assert.deepEqual(f.offline.external, []);
+  }
 });
 
 test('缺少监控资料时显示读取失败，不渲染虚构的零值概览', { timeout: 20_000 }, async t => {
