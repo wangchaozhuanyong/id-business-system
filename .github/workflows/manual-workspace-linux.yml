@@ -40,7 +40,7 @@ jobs:
           FROM amazonlinux@sha256:fa946e513ed149232490479653141fa4c6cd1e71c70130525cf00a791477ed19
           RUN test "$(rpm -q --qf '%{VERSION}' system-release)" = 2023.12.20260817 && \
               dnf -qy --releasever=2023.12.20260817 --disablerepo='*' --enablerepo=amazonlinux \
-                --setopt=gpgcheck=1 --setopt=install_weak_deps=False install systemd && \
+                --setopt=gpgcheck=1 --setopt=install_weak_deps=False install systemd dbus-broker && \
               dnf -q clean all && test ! -e /usr/bin/pkcheck
           WORKDIR /opt/id-business-independent/releases/1111111111111111111111111111111111111111
           COPY --chown=0:0 desktop source/deploy/manual-desktop/

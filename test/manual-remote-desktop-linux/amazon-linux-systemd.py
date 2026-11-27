@@ -6,6 +6,7 @@ from pathlib import Path
 import platform
 import subprocess
 import sys
+import traceback
 
 
 ROOT = Path("/opt/id-business-independent/releases/" + "1" * 40)
@@ -91,9 +92,6 @@ def main():
     stage_unit(provision.BROKER_UNIT)
     stage_unit(provision.WORKER_UNIT)
     run(provision.SYSTEMCTL, "daemon-reload")
-    # With the actual manager and newly loaded template, the same unprivileged broker must report ready.
-    subprocess.run(["/usr/bin/python3", "-IBu", "/fixture/broker-check.py", "--with-systemd"],
-                   user=10001, group=10001, extra_groups=[], check=True, timeout=25)
     check_state("inactive", "disabled")
     run(provision.SYSTEMCTL, "enable", "--now", provision.BROKER_UNIT)
     check_state("active", "enabled")
@@ -110,8 +108,30 @@ def main():
     run(provision.SYSTEMCTL, "stop", provision.BROKER_UNIT)
     check_state("inactive", "enabled")
     print("worker_active_and_stopped=passed")
+
+    # Use the same service identity as a provisioned host for its system-bus connection.
+    provision.ensure_sysusers_directory()
+    provision.SYSUSERS_FILE.write_text(
+        f'g {provision.USER} {provision.GID}\nu {provision.USER} {provision.UID}:{provision.GID} "CI broker" -\n')
+    run(provision.SYSUSERS, str(provision.SYSUSERS_FILE))
+    provision.existing_identity(required=True)
+    assert run("/usr/bin/rpm", "-q", "--qf", "%{NAME}", "dbus-broker").stdout == "dbus-broker"
+    run(provision.SYSTEMCTL, "start", "dbus.socket", "dbus-broker.service")
+    probe = subprocess.run([provision.SYSTEMCTL, "--no-ask-password", "--no-pager", "show", "-p", "LoadState",
+                            "--value", provision.PROBE_UNIT], user=provision.UID, group=provision.GID, extra_groups=[],
+                           text=True, capture_output=True, timeout=8)
+    print(json.dumps({"broker_uid": provision.UID, "worker_template_load_state": probe.stdout.strip(),
+                      "systemctl_exit": probe.returncode, "stderr": probe.stderr.strip()[:512]}))
+    assert probe.returncode == 0 and probe.stdout.strip() == "loaded", "broker_cannot_query_template"
+    # With the actual manager and newly loaded template, the same unprivileged broker must report ready.
+    subprocess.run(["/usr/bin/python3", "-IBu", "/fixture/broker-check.py", "--with-systemd"],
+                   user=10001, group=10001, extra_groups=[], check=True, timeout=25)
     Path("/fixture/systemd-first-install.passed").touch(exist_ok=False)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        Path("/fixture/systemd-first-install.error").write_text(traceback.format_exc()[-8192:])
+        raise
