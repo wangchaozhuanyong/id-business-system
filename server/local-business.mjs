@@ -28,7 +28,7 @@ import { rechargeAdmissionConflict, rechargeCodeKey } from './recharge-order-adm
 import { prepareRechargeDebugRemoval } from './recharge-debug-cleanup.mjs';
 import { validOrderCurrencies, validOrderCurrencyGroups, retainOrderSettings } from './order-currency-settings.mjs';
 import { isDeepStrictEqual } from 'node:util';
-import { employeeCommerce, feeAndPriceSettingsChanged, financeCommerce, managesBusiness, protectedSettingsChanged, registrarInventory } from './access-roles.mjs';
+import { canManageManualRenewals, employeeCommerce, feeAndPriceSettingsChanged, financeCommerce, isManualRenewalRequest, managesBusiness, protectedSettingsChanged, registrarInventory } from './access-roles.mjs';
 import {
   applyOrderCompletion, assignMissingManualOrderOwners, fillManualOrderDetails,
   OrderCompletionError, readOrderCompletion, rechargeOrderEmailConflict, rechargePriceSnapshot, requireCompletionActor
@@ -81,6 +81,7 @@ import {
   launchWorkbenchBrowser,
   closeWorkbenchBrowser
 } from './native-browser-workbench.mjs';
+import { manualDesktopWorkspaceKey } from './manual-desktop-workspace.mjs';
 import { editRenewalRecord, listRenewalPage, manualRenewalRecords, ManualRenewalError, requireRenewalRecord } from './manual-renewal-records.mjs';
 import { NativeBrowserError, closeNativeBrowser, operatorBrowserProfileKey } from './native-chrome-runner.mjs';
 import {
@@ -1147,7 +1148,7 @@ export function createLocalBusinessStore(databasePath) {
 
   function readRenewalRegistry(actor) {
     if (!actor?.id) throw new LocalDataError(401, '请先登录');
-    if (!managesBusiness(actor)) throw new LocalDataError(403, '无权管理续费登记');
+    if (!canManageManualRenewals(actor)) throw new LocalDataError(403, '无权管理续费登记');
     const domain = `manual-renewal-records:${actor.id}`;
     const legacy = readDocument(`${nativeWorkbenchDomain}:${actor.id}`);
     const manual = readDocument(domain);
@@ -2264,6 +2265,10 @@ export function createLocalBusinessStore(databasePath) {
     getManualRenewalRecord(id, actor) {
       const { legacy, registry } = readRenewalRegistry(actor);
       return requireRenewalRecord(manualRenewalRecords(legacy, registry), id);
+    },
+    resolveManualWorkspace(id, actor) {
+      const record = this.getManualRenewalRecord(id, actor);
+      return { key: manualDesktopWorkspaceKey({ operatorId: actor.id, accountId: record.id }) };
     },
     saveManualRenewalRecord(command, actor) {
       return writeTransaction(() => {
@@ -3824,11 +3829,14 @@ export function createLocalBusinessStore(databasePath) {
       if (actor.role === 'registrar') versions['apple-relay'] = String(relayRevision.get().version);
       if (actor.role === 'registrar')
         versions.inventory += ':' + version(managedMailboxDomain);
-      for (const scope of ['toolbox', savedTotpDomain, bitBrowserConnectionDomain, bitBrowserProxyDomain, bitBrowserAddressDomain])
+      for (const scope of ['toolbox', savedTotpDomain, bitBrowserConnectionDomain, bitBrowserProxyDomain])
         versions[scope] = version(`${scope}:${actor.id}`);
-      if (['admin', 'super'].includes(actor.role)) {
+      if (canManageManualRenewals(actor)) {
+        versions[bitBrowserAddressDomain] = version(`${bitBrowserAddressDomain}:${actor.id}`);
         versions['manual-renewal-records'] = String(Number(version(`manual-renewal-records:${actor.id}`)) +
           Number(version(`${nativeWorkbenchDomain}:${actor.id}`)));
+      }
+      if (['admin', 'super'].includes(actor.role)) {
         for (const scope of ['settings', 'appleBalance', 'tenant-cards', 'recharge-codes', 'order-sync', 'finance-rates',
           cardTypeDocument, cardFreezeDocument, subscriptionDomain, orderExpenseDomain]) versions[scope] = version(scope);
         versions['system-monitoring'] = `${version('system-monitoring-config')}:${version('system-monitoring-state')}`;
@@ -4107,6 +4115,11 @@ export async function handleLocalBusiness(
       }
       throw new LocalDataError(405, '本机接口不支持此操作');
     }
+    if (domain === bitBrowserAddressDomain && actor && !canManageManualRenewals(actor))
+      throw new LocalDataError(403, '无权管理地址');
+    if (actor?.role && [bitBrowserConnectionDomain, bitBrowserProxyDomain, bitBrowserWindowDomain].includes(domain) &&
+        (!managesBusiness(actor) || actor.active === false))
+      throw new LocalDataError(403, '无权使用此工作台接口');
     if (domain === nativeWorkbenchDomain) {
       response.setHeader('Cache-Control', 'private, no-store');
       if (publicOrigin && !actor?.id) throw new LocalDataError(401, '请先登录');
@@ -4116,16 +4129,16 @@ export async function handleLocalBusiness(
       const action = url.searchParams.get('action') || '';
       if (action === 'renewals' || action === 'renewal-record') {
         if (!actor?.id) throw new LocalDataError(401, '请先登录');
-        if (!managesBusiness(actor)) throw new LocalDataError(403, '无权管理续费登记');
-        if (action === 'renewals' && request.method === 'GET') {
+        if (!canManageManualRenewals(actor)) throw new LocalDataError(403, '无权管理续费登记');
+        if (!isManualRenewalRequest(request.method, url.searchParams))
+          throw new LocalDataError(405, '续费登记不支持此操作');
+        if (action === 'renewals') {
           return json(response, 200, store.listManualRenewals(url.searchParams, actor));
         }
-        if (action === 'renewal-record' && request.method === 'POST') {
-          if (request.headers.origin !== origin) throw new LocalDataError(403, '请从当前页面提交');
-          return json(response, 200, store.saveManualRenewalRecord(await readJson(request, 16_384), actor));
-        }
-        throw new LocalDataError(405, '续费登记不支持此操作');
+        if (request.headers.origin !== origin) throw new LocalDataError(403, '请从当前页面提交');
+        return json(response, 200, store.saveManualRenewalRecord(await readJson(request, 16_384), actor));
       }
+      if (actor && (!managesBusiness(actor) || actor.active === false)) throw new LocalDataError(403, '无权使用此工作台接口');
       if (request.method === 'GET') {
         if (action === 'preferences') {
           return json(response, 200, store.loadNativeWorkbenchPreferences(effectiveActor));

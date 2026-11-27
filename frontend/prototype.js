@@ -1220,7 +1220,7 @@ function permittedRoute(route) {
     'settings/accounts', 'settings/monitoring', 'settings/mail-types', 'settings/costs',
     'settings/payment-countries', 'settings/exchange-rates'
   ].includes(route);
-  if (role === 'finance') return route === 'overview' ||
+  if (role === 'finance') return route === 'overview' || route === 'recharge/start' ||
     /^orders\/(?:gpt|claude|gemini|grok|statistics|detail\/[^/]+)$/.test(route);
   if (role === 'employee') return ['workspace/order-completion', 'workspace/recharge-codes', 'plugins/websites', 'plugins/mailboxes'].includes(route) ||
     /^orders\/(?:gpt|claude|gemini|grok|detail\/[^/]+)$/.test(route);
@@ -1374,11 +1374,11 @@ function renderSidebar(openCurrent = false) {
   const isCurrent = (route) => orderSubmissionRoute(route)
     ? isOrderSubmissionView(state.route) : matchesNav(state.route, route);
   const allowedNavigation = navigation
-    .map(([label, iconName, children]) => [
-      label,
-      iconName,
-      sidebarChildren(children)
-    ])
+    .map(([label, iconName, children]) => {
+      const allowed = sidebarChildren(children);
+      const directManualRecharge = allowed.length === 1 && allowed[0][1] === 'recharge/start';
+      return [directManualRecharge ? allowed[0][0] : label, iconName, allowed];
+    })
     .filter((group) => group[2].length > 0);
   const currentGroup = allowedNavigation.find((group) =>
     group[2].some((item) => isCurrent(item[1]))
@@ -1970,6 +1970,9 @@ function render() {
       if (scroll) table.parentElement.scrollTo({ ...scroll, behavior: 'instant' });
     }
   }
+  // An embedded page can reveal its frame before the host's table and viewport
+  // layout is finished. Restore after both layouts have established their height.
+  if (retain) restorePendingPageScroll();
   requestAnimationFrame(() => {
     if (renderVersion !== layoutRenderVersion) return;
     restorePageScroll(scrollTarget);

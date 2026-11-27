@@ -73,6 +73,8 @@ export async function interceptDesign(context, { beforeDirectory, localFixtures,
       if (resource === 'apple-relay/status')
         return json(localFixtures?.[resource] ?? { configured: true, codeQueryConfigured: true, parentIds: [], aliasIds: [] });
       if (resource === 'audit') return json([]);
+      if (resource === 'native-workbench-prototype/ip-options')
+        return json({ version: 0, choices: [] });
       if (resource === 'staff/finance/cards/pending') return json(localFixtures?.[resource] ?? { pending: [] });
       if (resource === 'subscriptions/lookup' && !localFixtures?.[resource])
         return json({ ownerId: '', ownerName: '' });
@@ -92,6 +94,10 @@ export async function interceptDesign(context, { beforeDirectory, localFixtures,
       file = path.join(root, 'frontend/apple-relay-public.html');
     if (url.pathname === '/integrations/bitbrowser/local-login')
       file = path.join(root, 'frontend/bitbrowser-local.html');
+    if (url.pathname === '/integrations/native-workbench/prototype')
+      file = path.join(root, 'frontend/native-workbench-prototype.html');
+    if (url.pathname.startsWith('/assets/native-workbench/'))
+      file = path.join(root, 'frontend/native-workbench-' + path.basename(url.pathname));
     if (url.pathname.startsWith('/assets/bitbrowser/')) {
       const suffix = url.pathname.slice('/assets/bitbrowser/'.length);
       file = path.join(
@@ -126,6 +132,8 @@ export async function interceptDesign(context, { beforeDirectory, localFixtures,
       file = path.join(beforeDirectory, path.basename(file));
     try {
       let body = await readFile(file);
+      if (url.pathname === '/integrations/native-workbench/prototype' && url.searchParams.get('embedded') === '1')
+        body = body.toString().replace('<body class="proto-body">', '<body class="proto-body" data-workbench-embedded>');
       // Custom scrollbars reserve layout space even when the headless browser uses overlay scrollbars.
       if (scrollbarSelector && path.basename(file) === 'prototype.css')
         body = body.toString() + `\n${scrollbarSelector} { scrollbar-width: auto !important; }\n${scrollbarSelector}::-webkit-scrollbar { display: block !important; width: 12px; height: 12px; }\n`;

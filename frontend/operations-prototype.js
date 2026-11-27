@@ -725,8 +725,8 @@
   let loginLogTab = 'system';
   const workspaceRechargeRoute = 'workspace/recharge';
   const workspaceRechargeView = ['redeem', '兑换开通', 'workspace'];
-  const bitLoginRoute = 'recharge/start';
-  const bitLoginView = ['bit-login', '手动充值', '/integrations/bitbrowser/local-login?v=20261127-renewal-layout'];
+  const manualRechargeRoute = 'recharge/start';
+  const manualRechargeView = ['manual-recharge', '站内手动充值', '/integrations/native-workbench/prototype?embedded=1'];
   const onlineRechargeRoute = 'online-recharge/chatgpt';
   const rechargeCardsRoute = 'staff/finance/cards';
   const onlineRechargeMount = '/integrations/codexdaichong/';
@@ -861,16 +861,17 @@
   }
   function lockedRechargeFrame(root = document) {
     const frame = root.querySelector(
-      'iframe[data-view-group="workspace"]:not([hidden]), iframe[data-view-group="public"]:not([hidden]), iframe[data-view-group="bit"]:not([hidden])'
+      'iframe[data-view-group="workspace"]:not([hidden]), iframe[data-view-group="public"]:not([hidden]), iframe[data-view-group="manual"]:not([hidden])'
     );
     return frame?.contentDocument?.documentElement?.dataset.rechargeNavigationLocked === 'true'
       ? frame
       : null;
   }
   function blockRechargeNavigation({ quiet = false } = {}) {
-    if (![workspaceRechargeRoute, onlineRechargeRoute, bitLoginRoute].includes(state.route)) return false;
+    if (![workspaceRechargeRoute, onlineRechargeRoute, manualRechargeRoute].includes(state.route)) return false;
     if (!lockedRechargeFrame(integrationRoot())) return false;
-    if (!quiet) notify('充值任务正在执行，请等待任务处理完成后再切换或刷新。');
+    if (!quiet) notify(state.route === manualRechargeRoute
+      ? '正在打开手动充值操作窗，请稍候。' : '充值任务正在执行，请等待任务处理完成后再切换或刷新。');
     return true;
   }
   function selectOnlineView(nav, view) {
@@ -901,19 +902,23 @@
       .join('');
     return `<nav class="recharge-integration__nav tabs" aria-label="ChatGPT 充值功能">${actions}</nav>`;
   }
-  function renderBitBrowserLogin() {
-    const showAddresses = localData && isAdmin();
+  function renderManualRecharge() {
+    const showAddresses = localData && api.canVisit(manualRechargeRoute);
+    const showWorkbench = isAdmin();
     const jump = showAddresses
       ? `<nav class="bit-address-jump" aria-label="手动充值快捷定位">${button('前往地址管理', 'ops-bit-address-jump', '', '', 'data-pane="address" aria-controls="bit-addresses-host"')}${button('前往续费管理', 'ops-bit-address-jump', '', '', 'data-pane="renewals" aria-controls="bit-addresses-host"')}</nav>`
       : '';
-    const login = renderRechargeRegion('bit');
+    const workbench = showWorkbench ? renderRechargeRegion('manual') : '';
+    const entryTitle = `<div class="title-with-help"><h2>录入续费账号</h2>${api.titleInfo('录入续费账号', '登记账号邮箱、当前套餐和处理状态。金额或支付结果请在实际确认后登记。', 'bit-entry-info')}</div>`;
     const entry = `<section class="panel bit-entry-panel">
-      <div class="bit-workspace-heading bit-entry-heading"><div class="tabs" role="tablist" aria-label="录入工作区">
-        <button class="tab active" type="button" role="tab" id="bit-entry-tab" data-action="ops-bit-entry-pane" data-entry-pane="entry" aria-controls="bit-entry-registration" aria-selected="true">工作台</button>
-        <button class="tab" type="button" role="tab" id="bit-single-tab" data-action="ops-bit-entry-pane" data-entry-pane="login" aria-controls="bit-single-content" aria-selected="false" tabindex="-1">单号登录</button>
+      ${showWorkbench ? `<div class="bit-workspace-heading bit-entry-heading"><div class="tabs" role="tablist" aria-label="录入工作区">
+        <button class="tab active" type="button" role="tab" id="manual-recharge-tab" data-action="ops-bit-entry-pane" data-entry-pane="workbench" aria-controls="manual-recharge-content" aria-selected="true">工作台</button>
+        <button class="tab" type="button" role="tab" id="bit-entry-tab" data-action="ops-bit-entry-pane" data-entry-pane="entry" aria-controls="bit-entry-registration" aria-selected="false" tabindex="-1">续费登记</button>
       </div></div>
-      <div id="bit-entry-registration" role="tabpanel" aria-labelledby="bit-entry-tab" class="panel-body">
-        <div class="title-with-help"><h2>录入续费账号</h2>${api.titleInfo('录入续费账号', '登记账号邮箱、当前套餐和处理状态。金额或支付结果请在实际确认后登记。', 'bit-entry-info')}</div>
+      <div id="manual-recharge-content" role="tabpanel" aria-labelledby="manual-recharge-tab">${workbench}</div>`
+        : `<header class="panel-heading bit-workspace-heading bit-entry-heading">${entryTitle}</header>`}
+      <div id="bit-entry-registration" class="panel-body"${showWorkbench ? ' role="tabpanel" aria-labelledby="bit-entry-tab" hidden' : ''}>
+        ${showWorkbench ? entryTitle : ''}
         <form id="bit-renewal-entry" class="bit-registration-form">
           <label for="bit-renewal-email">账号邮箱<input class="input" type="email" id="bit-renewal-email" name="email" maxlength="254" required autocomplete="off" /></label>
           <label for="bit-renewal-plan">当前套餐<input class="input" id="bit-renewal-plan" name="currentPlan" maxlength="48" placeholder="尚未确认可留空" /></label>
@@ -923,16 +928,17 @@
           <div role="status" data-record-feedback></div>
         </form>
       </div>
-      <div id="bit-single-content" role="tabpanel" aria-labelledby="bit-single-tab" hidden>${login}</div>
     </section>`;
     return (
-      header('手动充值', '使用 ChatGPT 授权 JSON 登录账号，共享自动代充 IP 池并在指纹浏览器中进入登录状态，支持手动操作与续费管理。') +
+      header('手动充值', showWorkbench ? '粘贴 ChatGPT 授权 JSON 核对邮箱，选择执行 IP 后，在站内操作窗手动充值。'
+        : '登记账号、套餐和续费状态，管理办理时用到的地址。') +
       (showAddresses
         ? `<div class="bit-login-layout">${jump}${entry}<aside id="bit-addresses-host" aria-label="手动充值管理" tabindex="-1"></aside></div>`
-        : login)
+        : workbench)
     );
   }
   function rechargeLoadingState(module) {
+    if (module === 'manual') return api.loadingState('正在加载手动充值工作台…', { rows: 3 });
     if (module === 'cards') return api.loadingState('正在读取银行卡…', { rows: 3 });
     if (module === 'online') return api.loadingState('正在加载充值页面…', { rows: 3 });
     return '';
@@ -969,8 +975,8 @@
   }
   function showUnavailableIntegration(view, status, keepContent = false) {
     finishIntegrationLoad(view);
-    const bit = view.closest('[data-recharge-module]')?.dataset.rechargeModule === 'bit';
-    if (!bit && status !== 403) onlineAdmin = undefined;
+    const manual = view.closest('[data-recharge-module]')?.dataset.rechargeModule === 'manual';
+    if (!manual && status !== 403) onlineAdmin = undefined;
     const auth = window.IDLocalAuth;
     const needsSetup = status === 401 && auth?.getState().status === 'unconfigured';
     const title =
@@ -978,7 +984,7 @@
         ? (needsSetup ? '请先设置本机管理员密码' : '需要系统登录')
         : status === 403
           ? '当前账号没有充值权限'
-          : bit ? '比特登录页面未能加载' : 'ChatGPT 充值服务未就绪';
+          : manual ? '手动充值工作台未能加载' : 'ChatGPT 充值服务未就绪';
     if (keepContent && status !== 401 && status !== 403) {
       const progress = view.querySelector('.design-region-progress');
       progress.textContent = `${title}，已保留当前内容。`;
@@ -990,11 +996,11 @@
         ? '在 Mac「终端」的设置窗口为本机管理员设置密码，完成后回到此页继续登录。'
         : status === 401 || status === 403
           ? '请使用有充值权限的本机系统账号。'
-          : bit ? '请重新加载页面。' : '本机尚未连接独立充值服务。完成统一账号与服务配置后，可在这里使用。';
+          : manual ? '请重新加载页面。' : '本机尚未连接独立充值服务。完成统一账号与服务配置后，可在这里使用。';
     const action = status === 401 && auth
       ? button(needsSetup ? '我已设置密码，去登录' : '去登录', 'ops-integrated-login', 'primary')
-      : [workspaceRechargeRoute, loginLogsRoute, bitLoginRoute].includes(state.route) && status !== 401 && status !== 403
-        ? button(bit ? '重新加载' : '重新检查服务', 'ops-integrated-refresh')
+      : [workspaceRechargeRoute, loginLogsRoute, manualRechargeRoute].includes(state.route) && status !== 401 && status !== 403
+        ? button(manual ? '重新加载' : '重新检查服务', 'ops-integrated-refresh')
         : state.route === rechargeCardsRoute && status !== 401 && status !== 403
           ? button('重新检查服务', 'staff-card-pool-refresh')
           : '';
@@ -1023,7 +1029,7 @@
     frame.dataset.bridgeReady = 'true';
     const root = frame.contentDocument?.documentElement;
     if (root) {
-      const themeKey = frame.dataset.viewGroup === 'bit' ? 'theme' : 'idTheme';
+      const themeKey = frame.dataset.viewGroup === 'manual' ? 'theme' : 'idTheme';
       root.dataset[themeKey] = integrationTheme();
       if (frame.dataset.viewGroup === 'workspace') window.IDTabNavigation.attachWorkspace(root.ownerDocument);
     }
@@ -1062,14 +1068,25 @@
     const view = frame.closest('.recharge-integration__view');
     if (!view) return;
     const request = currentIntegrationRequest.get(view);
+    if (frame.dataset.view === 'manual-recharge' && message?.source === 'id-manual-workbench' &&
+        message.type === 'open-viewer') {
+      if (isAdmin() && !frame.hidden && !view.closest('[role="tabpanel"][hidden]') &&
+          typeof message.viewerUrl === 'string' && /^\/manual-workspaces\/recharge-[a-f0-9]{64}\/$/.test(message.viewerUrl))
+        window.location.assign(message.viewerUrl);
+      return;
+    }
     if (
-      frame.classList.contains('recharge-integration__frame--bit-local') &&
-      event.data?.source === 'id-bitbrowser-local' &&
-      event.data.type === 'resize' &&
-      Number.isFinite(event.data.height) && event.data.height > 0
+      frame.dataset.viewGroup === 'manual' && message?.source === 'id-manual-workbench' &&
+      message.type === 'resize' && Number.isFinite(message.height) && message.height > 0
     ) {
-      if (request?.frame === frame) revealRechargeFrame(view, frame, request, event.data.height);
-      else if (!frame.hidden) resizeRechargeFrame(frame, event.data.height);
+      if (view.closest('[role="tabpanel"][hidden]')) return;
+      const layout = frame.closest('.bit-login-layout');
+      layout?.toggleAttribute('data-manual-browser-open', message.open === true);
+      if (request?.frame === frame) revealRechargeFrame(view, frame, request, message.height);
+      else if (!frame.hidden) {
+        resizeRechargeFrame(frame, message.height);
+        api.restorePendingPageScroll();
+      }
       return;
     }
     if (event.data?.source !== 'id-codexdaichong') return;
@@ -1132,7 +1149,7 @@
   }
   function resizeRechargeFrame(frame, height) {
     if (!Number.isFinite(height) || height <= 0) return;
-    const minimum = frame.dataset.viewGroup === 'bit' ? 360 : 290;
+    const minimum = frame.dataset.viewGroup === 'manual' ? 320 : 290;
     const nextHeight = `${Math.max(minimum, Math.ceil(height))}px`;
     if (frame.style.height !== nextHeight) frame.style.height = nextHeight;
     frame.dataset.measuredHeight = String(height);
@@ -1169,17 +1186,17 @@
     }
   }
   async function loadIntegratedRecharge({ refresh = false } = {}) {
-    const bit = state.route === bitLoginRoute;
+    const manual = state.route === manualRechargeRoute;
     const workspace = state.route === workspaceRechargeRoute;
     const loginLogs = state.route === loginLogsRoute;
     const cards = state.route === rechargeCardsRoute;
-    const module = bit ? 'bit' : workspace ? 'workspace' : loginLogs ? 'login-logs' : cards ? 'cards' : 'online';
+    const module = manual ? 'manual' : workspace ? 'workspace' : loginLogs ? 'login-logs' : cards ? 'cards' : 'online';
     const panel = integrationRoot().querySelector(`[data-recharge-module="${module}"]`);
     const view = panel?.querySelector('.recharge-integration__view');
     if (!view) return;
-    const selected = bit ? bitLoginView : workspace ? workspaceRechargeView :
+    const selected = manual ? manualRechargeView : workspace ? workspaceRechargeView :
       loginLogs ? rechargeLoginLogsView : onlineRechargeViews.find(([id]) => id === (cards ? 'cards' : activeOnlineView));
-    const group = bit ? 'bit' : workspace ? 'workspace' : selected[2] ? 'public' : 'admin';
+    const group = manual ? 'manual' : workspace ? 'workspace' : selected[2] ? 'public' : 'admin';
     const existingFrame = view.querySelector('iframe:not([hidden])');
     const key = `${module}:${group}:${selected[0]}`;
     const pending = currentIntegrationRequest.get(view);
@@ -1190,7 +1207,7 @@
       const cachedFrame = view.querySelector(`iframe[data-view-group="${group}"][data-bridge-ready="true"]`);
       if (
         cachedFrame &&
-        (group === 'bit' || group === 'public' || group === 'workspace' || onlineAdmin === true)
+        (group === 'manual' || group === 'public' || group === 'workspace' || onlineAdmin === true)
       ) {
         finishIntegrationLoad(view);
         for (const frame of view.querySelectorAll('iframe')) {
@@ -1219,7 +1236,7 @@
     currentIntegrationRequest.set(view, request);
     const active = () => panel.isConnected && currentIntegrationRequest.get(view) === request;
     const progress = view.querySelector('.design-region-progress');
-    const needsAccessCheck = !bit && (refresh || onlineAdmin === undefined);
+    const needsAccessCheck = !manual && (refresh || onlineAdmin === undefined);
     if (!existingFrame && view.dataset.unavailable && (cards || module === 'online')) {
       view.querySelector('.recharge-integration__content').innerHTML = rechargeLoadingState(module);
     }
@@ -1245,7 +1262,7 @@
       const publicPath = onlineRechargeViews.find(([id]) => id === control.dataset.view)?.[2];
       control.disabled = !onlineAdmin && !publicPath;
     });
-    if (!onlineAdmin && !selected[2]) {
+    if (!manual && !onlineAdmin && !selected[2]) {
       showUnavailableIntegration(view, 403);
       // Only the selected view is restricted. Public views can still load.
       delete view.dataset.unavailable;
@@ -1254,20 +1271,16 @@
     const frame = document.createElement('iframe');
     request.frame = frame;
     frame.className = 'recharge-integration__frame';
-    if (bit) {
-      frame.classList.add('recharge-integration__frame--bit-local');
-      if (panel.closest('.bit-login-layout')) frame.dataset.renewalSidebar = '';
-    }
     frame.title = selected[1];
     frame.dataset.viewGroup = group;
     frame.dataset.view = selected[0];
     frame.referrerPolicy = 'no-referrer';
     frame.hidden = true;
-    frame.src = bit ? selected[2] : onlineRechargeMount + (selected[2] || 'admin?view=' + selected[0]);
+    frame.src = manual ? selected[2] : onlineRechargeMount + (selected[2] || 'admin?view=' + selected[0]);
     // The gateway still authorizes every frame request and returns JSON if access changed.
     frame.addEventListener('load', async () => {
       if (!active() || frame.contentDocument?.contentType !== 'application/json') return;
-      if (bit) {
+      if (manual) {
         showUnavailableIntegration(view, 503);
         return;
       }
@@ -3996,7 +4009,7 @@
     const route = state.route;
     if (pluginPages[route]) return header(pluginPages[route].label, pluginPages[route].description) +
       `<section id="plugin-tool-host" class="panel form-panel plugin-tool-page" data-plugin-tool data-route="${route}"></section>`;
-    if (route === bitLoginRoute) return renderBitBrowserLogin();
+    if (route === manualRechargeRoute) return renderManualRecharge();
     if (route === workspaceRechargeRoute) return renderIntegratedRecharge(true);
     if (route === onlineRechargeRoute) return renderIntegratedRecharge();
     if (route === 'settings/accounts') return renderStaff();
@@ -4249,7 +4262,7 @@
         selectOnlineView(node.closest('nav'), view);
         void loadIntegratedRecharge();
       }
-    } else if (action === 'ops-bit-entry-pane' && state.route === bitLoginRoute) {
+    } else if (action === 'ops-bit-entry-pane' && state.route === manualRechargeRoute) {
       if (blockRechargeNavigation()) return true;
       const entry = node.closest('.bit-entry-panel');
       for (const tab of entry.querySelectorAll('[data-entry-pane]')) {
@@ -4259,8 +4272,15 @@
         tab.setAttribute('aria-selected', String(selected));
         entry.querySelector('#' + tab.getAttribute('aria-controls')).hidden = !selected;
       }
-      if (node.dataset.entryPane === 'login') void loadIntegratedRecharge();
-    } else if (action === 'ops-bit-address-jump' && state.route === bitLoginRoute) {
+      const showingWorkbench = node.dataset.entryPane === 'workbench';
+      const frame = entry.querySelector('iframe[data-view-group="manual"]');
+      if (showingWorkbench) void loadIntegratedRecharge();
+      else {
+        finishIntegrationLoad(entry.querySelector('.recharge-integration__view'));
+        if (frame?.isConnected) setFrameVisible(frame, false);
+        entry.closest('.bit-login-layout')?.removeAttribute('data-manual-browser-open');
+      }
+    } else if (action === 'ops-bit-address-jump' && state.route === manualRechargeRoute) {
       const host = $('#bit-addresses-host', integrationRoot());
       api.modules.bitbrowserAddresses?.selectPane(host, node.dataset.pane);
       host?.querySelector('[role="tab"][aria-selected="true"]')?.focus({ preventScroll: true });
@@ -4274,7 +4294,7 @@
     } else if (action === 'ops-integrated-login') {
       window.location.reload();
     } else if (action === 'ops-integrated-refresh') {
-      if ([onlineRechargeRoute, rechargeCardsRoute, workspaceRechargeRoute, loginLogsRoute, bitLoginRoute].includes(state.route)) {
+      if ([onlineRechargeRoute, rechargeCardsRoute, workspaceRechargeRoute, loginLogsRoute, manualRechargeRoute].includes(state.route)) {
         if (blockRechargeNavigation()) return true;
         void loadIntegratedRecharge({ refresh: true });
       }
@@ -4783,7 +4803,7 @@
   };
   window.IDDesignModules.push({
     id: 'operations',
-    retainPage: (route) => [bitLoginRoute, workspaceRechargeRoute, onlineRechargeRoute].includes(route),
+    retainPage: (route) => [manualRechargeRoute, workspaceRechargeRoute, onlineRechargeRoute].includes(route),
     deactivate(region) {
       const host = region?.querySelector('[data-plugin-tool]');
       if (host) {
@@ -4805,7 +4825,7 @@
     },
     matches: (route) =>
       [
-        bitLoginRoute,
+        manualRechargeRoute,
         workspaceRechargeRoute,
         onlineRechargeRoute,
         'settings/accounts',
@@ -4827,10 +4847,11 @@
           : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length;
         tabs[next].click();
       });
-      if (state.route === bitLoginRoute) {
+      if (state.route === manualRechargeRoute) {
         const host = $('#bit-addresses-host', integrationRoot());
-        if (host && isAdmin()) api.modules.bitbrowserAddresses?.mount(host);
-        if (!host || !$('#bit-single-content', integrationRoot())?.hidden) void loadIntegratedRecharge();
+        if (host && api.canVisit(manualRechargeRoute)) api.modules.bitbrowserAddresses?.mount(host);
+        if (integrationRoot().querySelector('[data-recharge-module="manual"]') &&
+            !$('#manual-recharge-content', integrationRoot())?.hidden) void loadIntegratedRecharge();
         return;
       }
       if (pluginPages[state.route]) { openOnlineTool(pluginPages[state.route].tool); api.compactListToolbars?.(document.getElementById('main')); return; }

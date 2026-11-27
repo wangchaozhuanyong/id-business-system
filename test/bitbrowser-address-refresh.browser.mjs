@@ -98,6 +98,7 @@ test('地址保存后的版本通知不丢失刷新，不重复写入或覆盖�
     await pager.locator('[data-pagination-size]').waitFor();
     await page.waitForFunction(() => window.IDChangeSync?.status().snapshots > 0);
     const email = 'address-refresh@example.test';
+    await page.getByRole('tab', { name: '续费登记', exact: true }).click();
     await page.locator('#bit-renewal-email').fill(email);
     const total = count => panel.locator('[data-pagination="bitbrowser-addresses"][data-total="' + count + '"]').waitFor();
     const settled = () => page.waitForFunction(() => !document.querySelector('#bit-address-generate-open').disabled);

@@ -164,6 +164,35 @@ test('launchPrototypeWorkbenchSession wires proxy verification, Chrome launch, a
   assert.equal(resolveProxySessionOnce(rotatedOnce) !== rotatedOnce || !rotatedOnce.includes('12345'), true);
 });
 
+test('required manual IP is verified and the same resolved session is passed to Chrome', async () => {
+  const urls = [];
+  const options = {
+    sessionJson: JSON.stringify({ user: { email: 'selected@example.test' }, sessionToken: 'synthetic-session' }),
+    customProxyUrl: 'http://user-session-12345-sessiontime-5:fixture@proxy.example.test:8080',
+    ownerId: 'operator-a', countryCode: 'PH', requireVerifiedProxy: true,
+    probeFn: async (url) => { urls.push(url); return { ip: '192.0.2.15', country: 'PH' }; },
+    launchChromeFn: async (args) => {
+      assert.equal(args.headless, true);
+      urls.push(args.proxyUrl);
+      return { pid: 4242, port: 19222 };
+    },
+    verifyLoginFn: async () => ({ status: 'matched' })
+  };
+  const result = await launchPrototypeWorkbenchSession(options);
+  assert.equal(result.proxy.exitInfo.ip, '192.0.2.15');
+  assert.equal(urls.length, 2);
+  assert.equal(urls[0], urls[1]);
+  assert.notEqual(urls[0], options.customProxyUrl);
+  const mustNotLaunch = { ...options, launchChromeFn: () => assert.fail('未核验的线路不能启动浏览器') };
+  await assert.rejects(launchPrototypeWorkbenchSession({ ...mustNotLaunch, customProxyUrl: '' }), { status: 400 });
+  await assert.rejects(launchPrototypeWorkbenchSession({ ...mustNotLaunch,
+    probeFn: async () => ({ country: 'EG', ip: '192.0.2.16' })
+  }), { status: 422 });
+  await assert.rejects(launchPrototypeWorkbenchSession({ ...mustNotLaunch,
+    probeFn: async () => ({ country: 'PH', ip: 'unknown' })
+  }), { status: 422 });
+});
+
 test('login verification rejects a profile from another operator before opening DevTools', async () => {
   const profileKey = operatorBrowserProfileKey('proto', 'operator-a', 'fixture@example.test');
   await assert.rejects(verifyOwnedWorkbenchLogin({ profileKey, ownerId: 'operator-b' }), error => error.status === 404);

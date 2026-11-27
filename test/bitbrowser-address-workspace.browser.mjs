@@ -120,6 +120,7 @@ test('比特登录右侧地址库支持复制、重试标记和按快照批量�
       const errors = [];
       page.on('pageerror', (error) => errors.push(error.message));
       await page.goto(origin + '/#/recharge/start');
+      await page.getByRole('tab', { name: '续费登记', exact: true }).click();
       const entry = page.locator('#bit-entry-registration');
       const panel = page.locator('#bit-addresses-host');
       const addressTab = panel.getByRole('tab', { name: '地址管理', exact: true });
@@ -213,12 +214,15 @@ test('左右顶部栏、文字和内容起点对齐，页签切换和窄屏保�
   const errors = [], measurements = [];
   page.on('pageerror', error => errors.push(error.message));
   await page.goto(origin + '/#/recharge/start');
+  await page.getByRole('tab', { name: '续费登记', exact: true }).click();
   await page.locator('#bit-renewal-email').fill(email);
+  await page.getByRole('tab', { name: '工作台', exact: true }).click();
+  await page.locator('iframe[data-view="manual-recharge"]:visible').waitFor();
   await page.getByRole('tab', { name: '地址管理', exact: true }).click();
   assert.equal(await page.locator('#bit-addresses-panel input[type="file"], #bit-address-import').count(), 0);
   assert.equal(await page.locator('#bit-addresses-panel').getByRole('button', { name: '导入地址', exact: true }).count(), 0);
   const measure = () => page.evaluate(() => {
-    const iframe = document.querySelector('.recharge-integration__frame--bit-local');
+    const iframe = document.querySelector('iframe[data-view="manual-recharge"]');
     const inner = iframe?.contentDocument;
     const read = (heading, label, offset, content) => {
       const box = heading.getBoundingClientRect(), range = document.createRange();
@@ -253,8 +257,9 @@ test('左右顶部栏、文字和内容起点对齐，页签切换和窄屏保�
     await page.setViewportSize({ width, height: 1100 });
     for (const theme of ['light', 'dark']) {
       if (await page.evaluate(() => document.documentElement.dataset.theme) !== theme) await toggleDesignTheme(page);
-      for (const view of ['entry', 'login', 'entry']) {
+      for (const view of ['workbench', 'entry', 'workbench']) {
         await page.locator(`[data-entry-pane="${view}"]`).click();
+        if (view === 'workbench') await page.locator('iframe[data-view="manual-recharge"]:visible').waitFor();
         await settle(page);
         const result = await measure();
         const { left, right } = result;
@@ -264,7 +269,7 @@ test('左右顶部栏、文字和内容起点对齐，页签切换和窄屏保�
         assert(result.oneRow, `${width}px ${theme} ${view} 的地址标题和生成按钮同排`);
         assert.equal(left.height, right.height, '顶部栏高度一致');
         assert(Math.abs((left.textTop - left.top) - (right.textTop - right.top)) <= 1, '真实文字顶边一致');
-        if (view === 'entry') {
+        if (view === 'workbench') {
           assert(Math.abs(left.textInset - right.textInset) <= 1, '首个页签左右内距一致');
         }
         if (width >= 1180) {

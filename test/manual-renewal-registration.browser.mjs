@@ -77,11 +77,11 @@ test('人工新增、编辑及失败重试保留登记内容和全量统计', as
   const { chromium } = await import(pathToFileURL(process.env.ID_RECHARGE_QA_PLAYWRIGHT).href);
   const browser = await chromium.launch();
   t.after(() => browser.close());
-  for (const width of [1440, 390]) await t.test(width + 'px', async t => {
+  for (const [role, width] of [['admin', 1440], ['admin', 390], ['finance', 1440], ['finance', 390]]) await t.test(role + ' ' + width + 'px', async t => {
     const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 980 },
       hasTouch: width === 390, locale: 'zh-CN' });
     t.after(() => context.close());
-    const traffic = await interceptDesign(context, { actor: { id: 'qa', role: 'admin', name: '离线管理员' },
+    const traffic = await interceptDesign(context, { actor: { id: 'qa', role, name: '离线操作员' },
       localFixtures: {}, skipRechargeAssets: true });
     const data = await interceptRenewals(context);
     const page = await context.newPage();
@@ -90,6 +90,7 @@ test('人工新增、编辑及失败重试保留登记内容和全量统计', as
     page.on('pageerror', error => errors.push(error.message));
     await page.goto(origin + '/#/recharge/start');
     const panel = page.locator('#bit-renewals-content');
+    if (role === 'admin') await page.getByRole('tab', { name: '续费登记', exact: true }).click();
     const entry = page.locator('#bit-renewal-entry');
     const drawer = page.getByRole('dialog', { name: '续费记录' });
     const row = value => panel.locator('tbody tr').filter({ hasText: value });
@@ -97,6 +98,15 @@ test('人工新增、编辑及失败重试保留登记内容和全量统计', as
     const submit = drawer.getByRole('button', { name: '保存登记' });
     const notes = drawer.getByLabel('续费备注');
     await row(existingEmail).waitFor();
+    if (role === 'finance') {
+      assert.equal(await page.locator('#sidebar a[href="#/recharge/start"]').innerText(), '手动充值');
+      assert.equal(await page.locator('#bit-single-content, #bit-single-tab, [data-recharge-module="bit"]').count(), 0);
+      assert.equal(await page.getByRole('tab', { name: '工作台', exact: true }).count(), 0);
+      await page.getByRole('tab', { name: '地址管理', exact: true }).click();
+      await page.getByRole('button', { name: '生成地址' }).waitFor();
+      await page.getByRole('tab', { name: '账号续费管理', exact: true }).click();
+      await row(existingEmail).waitFor();
+    }
     await expectStats(panel, [1, 0, 1, 0], { pro: 1 });
 
     await entry.getByLabel('账号邮箱').fill(email);
@@ -117,6 +127,14 @@ test('人工新增、编辑及失败重试保留登记内容和全量统计', as
     await expectStats(panel, [2, 1, 1, 0], { plus: 1, pro: 1 });
 
     await open(email);
+    assert.equal(await drawer.getByRole('link', { name: '打开服务器工作区' }).count(), 0);
+    await drawer.getByRole('button', { name: '关闭抽屉' }).click();
+    await page.evaluate(() => document.body.setAttribute('data-manual-remote-workspaces', ''));
+    await open(email);
+    const workspace = drawer.getByRole('link', { name: '打开服务器工作区' });
+    assert.equal(await workspace.getAttribute('href'), '/manual-workspaces/' + data.records().find(record => record.email === email).id + '/');
+    assert.equal(await workspace.getAttribute('target'), '_blank');
+    assert((await workspace.getAttribute('rel')).split(' ').includes('noopener'));
     await drawer.getByLabel('续费状态').selectOption('expired');
     await drawer.getByLabel('当前套餐').fill('pro');
     await notes.fill('已复核到期');
@@ -152,5 +170,20 @@ test('人工新增、编辑及失败重试保留登记内容和全量统计', as
     assert.deepEqual(errors, []);
     assert.deepEqual(traffic.external, []);
     assert.deepEqual(traffic.unavailable, []);
+  });
+  await t.test('普通员工从菜单或直达地址均无法进入手动充值', async t => {
+    const context = await browser.newContext();
+    t.after(() => context.close());
+    await interceptDesign(context, { actor: { id: 'employee-qa', role: 'employee', name: '普通员工' }, localFixtures: {}, skipRechargeAssets: true });
+    const page = await context.newPage();
+    const requests = [];
+    page.on('request', request => {
+      const { pathname } = new URL(request.url());
+      if (/bitbrowser-addresses$|native-browser-workbench$|\/manual-workspaces\//.test(pathname)) requests.push(pathname);
+    });
+    await page.goto(origin + '/#/recharge/start');
+    await page.getByText('当前账号无权打开此页面', { exact: true }).waitFor();
+    assert.equal(await page.locator('#sidebar a[href="#/recharge/start"], #bit-renewal-entry, #bit-addresses-panel').count(), 0);
+    assert.deepEqual(requests, []);
   });
 });

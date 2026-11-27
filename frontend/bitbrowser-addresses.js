@@ -186,11 +186,14 @@
   }
 
   function editRenewal(panel, row) {
+    const remoteWorkspace = document.body.hasAttribute('data-manual-remote-workspaces');
     A.openDrawer('续费记录', '按实际办理结果登记状态和套餐。', `
       <form id="bit-edit-renewal" class="bit-registration-form">
         <div class="property-row"><span>账号邮箱</span><strong>${esc(row.email)}</strong></div>
         <div class="property-row"><span>最后打开</span><strong>${esc(openDate(row.lastOpenedAt))}</strong></div>
-        <div class="property-row"><span>绑定代理</span><strong>${esc(row.proxySummary || '—')}</strong></div>
+        ${remoteWorkspace
+          ? `<a class="button" href="/manual-workspaces/${esc(encodeURIComponent(row.id))}/" target="_blank" rel="noopener noreferrer">打开服务器工作区</a>` : ''}
+        <div class="property-row"><span>${remoteWorkspace ? '历史登记代理' : '绑定代理'}</span><strong>${esc(row.proxySummary || '—')}</strong></div>
         <label>当前套餐<input class="input" name="currentPlan" value="${esc(row.currentPlan)}" maxlength="48"></label>
         <label>续费状态<select class="select" name="status">${Object.entries(renewalStatuses)
           .filter(([key]) => key !== 'unknown' || row.status === key)

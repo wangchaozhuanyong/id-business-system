@@ -1,0 +1,12 @@
+# Amazon Linux 2023 x86_64, CPython 3.9. All wheels are installed without resolution.
+aiohappyeyeballs==2.6.1 --hash=sha256:f349ba8f4b75cb25c99c5c2d84e997e485204d2902a9597802b0371f09331fb8
+aiohttp==3.13.5 --hash=sha256:e999f0c88a458c836d5fb521814e92ed2172c649200336a6df514987c1488258
+aiosignal==1.4.0 --hash=sha256:053243f8b92b990551949e63930a839ff0cf0b0ebbe0597b0f3fb19e1a0fe82e
+async-timeout==5.0.1 --hash=sha256:39e3809566ff85354557ec2398b55e096c8364bacac9405a7a1fa429e77fe76c
+attrs==26.1.0 --hash=sha256:c647aa4a12dfbad9333ca4e71fe62ddc36f4e63b2d260a37a8b83d2f043ac309
+frozenlist==1.8.0 --hash=sha256:59a6a5876ca59d1b63af8cd5e7ffffb024c3dc1e9cf9301b21a2e76286505c95
+idna==3.20 --hash=sha256:ab7ae7122974553370f0bdb919e1a960b2cd1bc1ef0276416d896db81c14582c
+multidict==6.7.1 --hash=sha256:c6b3228e1d80af737b72925ce5fb4daf5a335e49cd7ab77ed7b9fdfbf58c526e
+propcache==0.4.1 --hash=sha256:fd2dbc472da1f772a4dae4fa24be938a6c544671a912e30529984dd80400cd88
+typing-extensions==4.16.0 --hash=sha256:481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8
+yarl==1.22.0 --hash=sha256:2e4e1f6f0b4da23e61188676e3ed027ef0baa833a2e633c29ff8530800edccba

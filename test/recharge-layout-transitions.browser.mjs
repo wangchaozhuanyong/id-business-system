@@ -116,8 +116,8 @@ test('recharge transitions keep content and geometry through delayed, superseded
           probe.frames.push({ height: frame?.getBoundingClientRect().height || 0,
             view: frame?.dataset.view, toolbarHeight: bar?.getBoundingClientRect().height,
             documentHeight: document.documentElement.scrollHeight,
-            ...(frame?.dataset.view === 'bit-login' ? {
-              form: Boolean(frame.contentDocument?.querySelector('#bit-login-form')),
+            ...(frame?.dataset.view === 'manual-recharge' ? {
+              form: Boolean(frame.contentDocument?.querySelector('#protoLaunchForm')),
               theme: frame.contentDocument?.documentElement.dataset.theme,
               scroll: scrollY
             } : {}),
@@ -235,33 +235,31 @@ test('recharge transitions keep content and geometry through delayed, superseded
           }
           await link.click();
         };
-        const bitSelector = '.recharge-integration__frame--bit-local';
+        const bitSelector = 'iframe[data-view="manual-recharge"]';
         const bitReady = () => page.locator(bitSelector + ':not([hidden])').waitFor();
-        const bitLoginPath = '/integrations/bitbrowser/local-login';
+        const bitLoginPath = '/integrations/native-workbench/prototype';
         const bitRelease = Promise.withResolvers();
         await interceptors.route(url => url.pathname === bitLoginPath, async route => {
           await bitRelease.promise;
           await (offline ? route.fallback() : route.continue()).catch(() => {});
         }, { times: 1 });
-        await navigate('recharge/start');
-        await page.locator('#bit-entry-registration').waitFor();
         await startProbe();
         try {
           await Promise.all([
             page.waitForRequest(request => new URL(request.url()).pathname === bitLoginPath, { timeout: 8000 }),
-            page.getByRole('tab', { name: '单号登录', exact: true }).click()
+            navigate('recharge/start')
           ]);
-          await page.locator('[data-recharge-module="bit"] .design-region-progress:not([hidden])').waitFor();
-          assert.equal(await page.locator(bitSelector + ':not([hidden])').count(), 0, '未测量的比特登录空框不应可见');
+          await page.locator('[data-recharge-module="manual"] .design-region-progress:not([hidden])').waitFor();
+          assert.equal(await page.locator(bitSelector + ':not([hidden])').count(), 0, '未测量的站内操作窗空框不应可见');
         } finally { bitRelease.resolve(); }
         await bitReady();
         await settle();
-        const bitFirst = (await stopProbe()).filter(sample => sample.view === 'bit-login');
+        const bitFirst = (await stopProbe()).filter(sample => sample.view === 'manual-recharge');
         const bitHeight = (await page.locator(bitSelector).boundingBox()).height;
         assert(bitFirst.length > 0 && bitFirst.every(sample =>
           sample.form && sample.theme === (dark ? 'dark' : 'light') &&
           Math.abs(sample.height - bitHeight) <= 1 && !sample.overflow),
-        '比特登录首帧应包含完整表单、正确主题和测量后的高度');
+        '站内操作窗首帧应包含完整表单、正确主题和测量后的高度');
         const addresses = page.locator('#bit-addresses-host');
         const addressTab = addresses.getByRole('tab', { name: '地址管理', exact: true });
         await addressTab.click();
@@ -276,19 +274,20 @@ test('recharge transitions keep content and geometry through delayed, superseded
           assert.equal(await jumpToAddresses.isVisible(), true);
         }
 
+        await page.setViewportSize({ width, height: 480 });
         await page.evaluate(() => scrollTo(0, 180));
         await settle();
         const bitScroll = await page.evaluate(() => scrollY);
-        assert(bitScroll > 0, '比特登录页面必须覆盖实际滚动');
+        assert(bitScroll > 0, '手动充值页面必须覆盖实际滚动');
         await navigate('workspace/order/gpt');
         await page.locator('#commerce-payment').waitFor();
         await startProbe();
         await navigate('recharge/start');
         await bitReady();
         await settle();
-        const bitReturned = (await stopProbe()).filter(sample => sample.view === 'bit-login');
+        const bitReturned = (await stopProbe()).filter(sample => sample.view === 'manual-recharge');
         assert(bitReturned.length > 0 && bitReturned.every(sample => sample.scroll === bitScroll),
-          '返回比特登录的第一个可见帧应恢复阅读位置');
+          '返回手动充值的第一个可见帧应恢复阅读位置：' + JSON.stringify({ bitScroll, bitReturned }));
         if (width === 1440 && !dark) {
           const addressList = addresses.locator('#bit-address-list');
           await addressList.getByText('暂无未使用地址', { exact: true }).waitFor();
@@ -317,23 +316,6 @@ test('recharge transitions keep content and geometry through delayed, superseded
         }
         assert.deepEqual(errors, []);
         if (output) await page.screenshot({ path: join(output, `transition-${width}-${dark ? 'dark' : 'light'}.png`) });
-        if (offline && !dark) {
-          await page.setViewportSize({ width, height: 900 });
-          const bit = page.frameLocator(bitSelector);
-          const libTab = bit.getByRole('tab', { name: /IP 资料库/ });
-          if (await libTab.isVisible().catch(() => false)) {
-            await libTab.click();
-            await bit.locator('nav[data-total="51"] [data-pagination-size]').selectOption('50');
-            await page.waitForFunction(selector => {
-              const frame = document.querySelector(selector);
-              const doc = frame?.contentDocument;
-              return doc?.querySelectorAll('#bit-ip-rows tr').length === 50 &&
-                Math.abs(doc.body.offsetHeight - frame.clientHeight) <= 2;
-            }, bitSelector);
-            const rowsScroll = await bit.locator('.bit-local__ip-table').evaluate(node => node.scrollHeight > node.clientHeight + 1);
-            assert.equal(rowsScroll, width > 900, '桌面表格内部滚动，手机在页面上滚动');
-          }
-        }
         results.push({ width, theme: dark ? 'dark' : 'light', delayed, rapid, bitFirst, bitReturned, retainedOnFailure: true });
       } catch (error) {
         if (output) {

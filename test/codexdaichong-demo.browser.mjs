@@ -168,7 +168,7 @@ test('local demo workspace, retry, refresh failure and restart', { timeout: 45_0
   await addressTab.click();
   assert.equal(await page.locator('#bit-entry-registration').getByRole('tab', { name: '地址管理', exact: true }).count(), 0);
   assert.equal(
-    await page.locator('[data-recharge-module="bit"] .recharge-integration__toolbar').count(),
+    await page.locator('[data-recharge-module="manual"] .recharge-integration__toolbar').count(),
     0
   );
   const bitToolbar = page.locator('.bit-entry-heading');
@@ -176,6 +176,7 @@ test('local demo workspace, retry, refresh failure and restart', { timeout: 45_0
     bitToolbar.evaluate((node) => node.scrollWidth <= node.clientWidth);
   assert.equal(await bitToolbarFits(), true);
   const windowEmail = 'demo-window@example.test';
+  await page.getByRole('tab', { name: '续费登记', exact: true }).click();
   await page.locator('#bit-renewal-email').fill(windowEmail);
   await addresses.getByRole('button', { name: '生成地址', exact: true }).click();
   const generator = page.getByRole('dialog', { name: '生成地址', exact: true });

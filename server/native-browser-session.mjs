@@ -3,6 +3,7 @@ import net from 'node:net';
 import tls from 'node:tls';
 import {
   NativeBrowserError,
+  closeNativeBrowser,
   createLocalProxyTunnel,
   getActiveBrowser,
   getPageTargetWsUrl,
@@ -517,6 +518,8 @@ export async function launchPrototypeWorkbenchSession({
   customProxyUrl = '',
   ownerId,
   regionProxies = loadEnvRegionProxies(),
+  countryCode,
+  requireVerifiedProxy = false,
   probeFn = probeExitCountry,
   launchChromeFn = launchNativeChrome,
   verifyLoginFn = verifyOwnedWorkbenchLogin
@@ -532,11 +535,21 @@ export async function launchPrototypeWorkbenchSession({
 
   const resolvedProxyUrl = resolveProxySessionOnce(proxyConfig.proxyUrl);
 
-  const exitInfo = await verifyProxyExitCountry({
-    proxyUrl: resolvedProxyUrl,
-    expectedCountry: proxyConfig.expectedCountry,
-    probeFn
-  });
+  if (requireVerifiedProxy && !resolvedProxyUrl)
+    throw new NativeBrowserError(400, '请选择执行 IP');
+  let exitInfo;
+  try {
+    exitInfo = await verifyProxyExitCountry({
+      proxyUrl: resolvedProxyUrl,
+      expectedCountry: countryCode || proxyConfig.expectedCountry,
+      probeFn
+    });
+  } catch (error) {
+    if (!requireVerifiedProxy) throw error;
+    throw new NativeBrowserError(422, '所选 IP 的出口检测失败或地区不符，请换一条线路再试');
+  }
+  if (requireVerifiedProxy && (!exitInfo.verified || !net.isIP(exitInfo.ip)))
+    throw new NativeBrowserError(422, '无法核验所选线路的实际出口 IP，请重新选择');
 
   const launchResult = await launchChromeFn({
     profileKey,
@@ -545,6 +558,7 @@ export async function launchPrototypeWorkbenchSession({
     skipSessionRotation: true,
     token: parsed.token,
     deviceId: parsed.deviceId,
+    headless: true,
     windowSize: '1280,800',
     ownerId,
     exitInfo: {
@@ -554,13 +568,21 @@ export async function launchPrototypeWorkbenchSession({
     }
   });
 
-  const loginVerification = await verifyLoginFn({
-    profileKey,
-    ownerId,
-    expectedPid: launchResult.pid,
-    port: launchResult.port,
-    expectedEmail: parsed.email
-  });
+  let loginVerification;
+  try {
+    loginVerification = await verifyLoginFn({
+      profileKey,
+      ownerId,
+      expectedPid: launchResult.pid,
+      port: launchResult.port,
+      expectedEmail: parsed.email
+    });
+    if (requireVerifiedProxy && loginVerification.status === 'mismatch')
+      throw new NativeBrowserError(409, '登录邮箱与授权 JSON 不一致，请重新核对授权');
+  } catch (error) {
+    closeNativeBrowser(profileKey, ownerId, launchResult.pid);
+    throw error;
+  }
 
   return {
     ok: true,
