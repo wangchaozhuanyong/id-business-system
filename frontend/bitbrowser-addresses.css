@@ -77,3 +77,71 @@
     min-height: 44px;
   }
 }
+
+.bit-entry-heading,
+#bit-addresses-panel .bit-address-heading { --tab-row-height: 68px; }
+.bit-entry-panel, .bit-entry-panel > div, .bit-renewals { min-width: 0; }
+.bit-entry-heading > .tabs, .bit-address-heading .bit-management-tabs {
+  align-self: stretch;
+  padding: 0;
+  border: 0;
+}
+#bit-addresses-panel .bit-address-heading { justify-content: flex-start; padding-block: 0; }
+.bit-address-heading-tools { display: flex; flex: 1; align-items: center; gap: 8px; }
+.bit-address-heading-tools #bit-address-generate-open { margin-inline-start: auto; }
+.bit-address-heading .bit-management-tabs { --management-tab-gap: 24px; gap: 0; }
+.bit-management-tabs [data-pane="renewals"] { margin-inline-start: var(--management-tab-gap); }
+.bit-management-tabs [data-address-help] { align-self: center; margin-inline-start: 4px; }
+#bit-addresses-panel [hidden], .bit-entry-panel > [role="tabpanel"][hidden] { display: none !important; }
+.bit-entry-panel > .panel-body > .title-with-help { margin-bottom: 20px; }
+.bit-entry-panel h2 { margin: 0; font-size: 16px; }
+.bit-registration-form { display: grid; gap: 16px; min-width: 0; }
+.bit-registration-form label { display: grid; gap: 6px; color: var(--text); font-weight: 500; }
+.bit-registration-form :is(input, textarea, select) { width: 100%; min-width: 0; }
+.bit-registration-form textarea { resize: vertical; height: auto; min-height: 68px; padding-block: 9px; }
+.bit-registration-form .property-row strong { min-width: 0; overflow-wrap: anywhere; }
+.bit-registration-form [role=status]:empty { display: none; }
+.bit-registration-footer { display: flex; flex-wrap: wrap; gap: 8px; }
+.bit-renewals { container-type: inline-size; }
+.bit-renewals-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-block: var(--toolbar-padding-block); }
+.bit-renewals-filters input { flex: 1 1 12rem; width: auto; min-width: 0; }
+.bit-renewals-filters select { flex: 0 0 auto; width: auto; min-width: 7em; }
+.bit-renewal-summary { display: grid; gap: 6px; padding-bottom: var(--toolbar-padding-block); }
+.bit-renewal-counts { display: flex; flex-wrap: wrap; gap: 6px 16px; color: var(--secondary); }
+.bit-renewal-counts b { color: var(--text); font-variant-numeric: tabular-nums; }
+.bit-renewal-plans { overflow-wrap: anywhere; color: var(--secondary); font-size: 12px; }
+.bit-renewal-records { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.bit-renewal-records th, .bit-renewal-records td { padding: 12px 8px; text-align: left; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.bit-renewal-records th { color: var(--secondary); background: var(--surface-soft); font-weight: 500; }
+.bit-renewal-records th:first-child { width: 42%; }
+.bit-renewal-records th:last-child { width: 98px; }
+.bit-renewal-records th:last-child, .bit-renewal-records td:last-child { text-align: right; }
+.bit-renewal-records td { min-width: 0; height: auto; white-space: normal; }
+.bit-renewal-records td strong { display: block; min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+.bit-renewal-records small { display: block; margin-top: 4px; font-size: 12px; color: var(--secondary); }
+.bit-renewal-records .bit-renewal-empty { padding-block: 36px; text-align: center; }
+.bit-renewals .pagination { padding-inline: 0; }
+@container (max-width: 470px) {
+  .bit-renewal-records thead { position: absolute; width: 1px; height: 1px; clip-path: inset(50%); overflow: hidden; }
+  .bit-renewal-records, .bit-renewal-records tbody { display: block; }
+  .bit-renewal-records tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; border-top: 1px solid var(--line); padding: 14px 0; }
+  .bit-renewal-records td { border: 0; padding: 0; min-height: 0; }
+  .bit-renewal-records td:first-child { grid-column: 1 / -1; }
+  .bit-renewal-records td[data-label="套餐"]::before { content: '套餐 · '; color: var(--secondary); }
+  .bit-renewal-records td[data-label="状态"] { justify-self: end; }
+  .bit-renewal-records td:last-child { grid-column: 1 / -1; justify-self: start; }
+  .bit-renewal-records td .button { min-height: 44px; }
+  .bit-renewal-records td.bit-renewal-empty { justify-self: center; }
+}
+@media (max-width: 1179px) {
+  .bit-address-jump { display: flex; flex-wrap: wrap; gap: 8px; }
+  .bit-address-jump .button { min-height: 44px; }
+}
+@media (max-width: 420px) {
+  .bit-entry-panel .bit-entry-heading { padding-inline: 10px; }
+  #bit-addresses-panel .bit-address-heading { flex-wrap: nowrap; gap: 4px; padding-inline: 10px; }
+  .bit-address-heading .bit-management-tabs { flex: 0 1 auto; --management-tab-gap: 9px; }
+  .bit-address-heading-tools { gap: 2px; }
+  .bit-address-heading-tools .button { padding-inline: 6px; min-width: 44px; min-height: 44px; }
+  .bit-generate-suffix { display: none; }
+}

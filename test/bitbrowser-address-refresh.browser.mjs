@@ -67,7 +67,7 @@ test('地址保存后的版本通知不丢失刷新，不重复写入或覆盖�
           const version = String(state.version);
           await page.evaluate(version => window.emitAddressVersion(version), version);
           await page.waitForFunction(version =>
-            window.IDLocalData.pendingChangeVersions(['bitbrowser-addresses'])['bitbrowser-addresses'] === version, version);
+            window.IDLocalData.changeVersion('bitbrowser-addresses') === version, version);
         }
         return state.failRead
           ? route.fulfill({ status: 503, json: { error: '合成读取失败' } })
@@ -93,15 +93,13 @@ test('地址保存后的版本通知不丢失刷新，不重复写入或覆盖�
     });
     await page.goto(origin + '/#/recharge/start');
     const panel = page.locator('#bit-addresses-panel');
+    await panel.getByRole('tab', { name: '地址管理', exact: true }).click();
     const pager = panel.locator('[data-pagination="bitbrowser-addresses"]');
     await pager.locator('[data-pagination-size]').waitFor();
     await page.waitForFunction(() => window.IDChangeSync?.status().snapshots > 0);
-    const frame = page.frameLocator('.recharge-integration__frame--bit-local');
     const email = 'address-refresh@example.test';
-    await frame.locator('#bit-authorization-json').fill(JSON.stringify({
-      sessionToken: 'synthetic-session', user: { id: 'user-fixture', email }, account: { id: 'account-fixture' }
-    }));
-    const total = count => panel.locator('[data-pagination][data-total="' + count + '"]').waitFor();
+    await page.locator('#bit-renewal-email').fill(email);
+    const total = count => panel.locator('[data-pagination="bitbrowser-addresses"][data-total="' + count + '"]').waitFor();
     const settled = () => page.waitForFunction(() => !document.querySelector('#bit-address-generate-open').disabled);
     const openGenerator = async () => {
       await panel.locator('#bit-address-generate-open').click();
@@ -118,7 +116,7 @@ test('地址保存后的版本通知不丢失刷新，不重复写入或覆盖�
       assert.deepEqual(errors, []);
       assert.deepEqual(network.external, []);
       assert.deepEqual(network.unavailable, []);
-      assert.equal(await frame.locator('#bit-window-name').inputValue(), expectedEmail);
+      assert.equal(await page.locator('#bit-renewal-email').inputValue(), expectedEmail);
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
     };
     return { page, panel, pager, state, total, settled, openGenerator, generate, assertClean };
@@ -256,8 +254,8 @@ test('地址保存后的版本通知不丢失刷新，不重复写入或覆盖�
 
   await t.test('等待刷新时切换页签或暂离保留页面，不覆盖当前查看状态与草稿', async t => {
     const { page, panel, state, total, settled, generate, assertClean } = await setup(t);
-    const connectionName = page.frameLocator('.recharge-integration__frame--bit-local').locator('#bit-connection-name');
-    await connectionName.fill('地址联动测试连接');
+    const notes = page.locator('#bit-renewal-notes');
+    await notes.fill('地址联动测试备注');
     let resolveStarted, release;
     const started = new Promise(resolve => { resolveStarted = resolve; });
     const done = new Promise(resolve => { release = resolve; });
@@ -292,7 +290,7 @@ test('地址保存后的版本通知不丢失刷新，不重复写入或覆盖�
     await settled();
     assert.equal(state.writes.length, 2);
     assert.equal(await panel.locator('#bit-address-feedback').textContent(), '', '成功提示不会留在地址列表里');
-    assert.equal(await connectionName.inputValue(), '地址联动测试连接');
-    await assertClean('');
+    assert.equal(await notes.inputValue(), '地址联动测试备注');
+    await assertClean();
   });
 });

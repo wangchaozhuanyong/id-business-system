@@ -163,23 +163,20 @@ test('local demo workspace, retry, refresh failure and restart', { timeout: 45_0
   };
 
   await page.goto(host.url + '#/recharge/start');
-  const bitFrame = page.frameLocator('.recharge-integration__frame--bit-local');
   const addresses = page.locator('#bit-addresses-host');
-  await addresses.getByRole('heading', { name: '地址管理', exact: true }).waitFor();
-  assert.equal(await bitFrame.getByRole('button', { name: '地址管理', exact: true }).count(), 0);
+  const addressTab = addresses.getByRole('tab', { name: '地址管理', exact: true });
+  await addressTab.click();
+  assert.equal(await page.locator('#bit-entry-registration').getByRole('tab', { name: '地址管理', exact: true }).count(), 0);
   assert.equal(
     await page.locator('[data-recharge-module="bit"] .recharge-integration__toolbar').count(),
     0
   );
-  const bitToolbar = bitFrame.locator('.bit-local__workspace-bar');
+  const bitToolbar = page.locator('.bit-entry-heading');
   const bitToolbarFits = () =>
     bitToolbar.evaluate((node) => node.scrollWidth <= node.clientWidth);
   assert.equal(await bitToolbarFits(), true);
   const windowEmail = 'demo-window@example.test';
-  await bitFrame.locator('#bit-authorization-json').fill(JSON.stringify({
-    sessionToken: 'synthetic-session', user: { id: 'user-fixture', email: windowEmail },
-    account: { id: 'account-fixture' }
-  }));
+  await page.locator('#bit-renewal-email').fill(windowEmail);
   await addresses.getByRole('button', { name: '生成地址', exact: true }).click();
   const generator = page.getByRole('dialog', { name: '生成地址', exact: true });
   const countField = generator.getByLabel('生成数量');
@@ -193,11 +190,11 @@ test('local demo workspace, retry, refresh failure and restart', { timeout: 45_0
   await generator.waitFor({ state: 'hidden' });
   await page.locator('#toast[data-kind="success"]').getByText('已成功生成 3 条地址', { exact: true }).waitFor();
   await page.waitForFunction(() => document.querySelectorAll('#bit-address-list tbody tr[data-row-id]').length === 3);
-  assert.equal(await page.getByRole('button', { name: '导入地址', exact: true }).count(), 1);
-  assert.equal(await bitFrame.locator('#bit-window-name').inputValue(), windowEmail);
+  assert.equal(await addresses.getByRole('button', { name: '导入地址', exact: true }).count(), 0);
+  assert.equal(await page.locator('#bit-renewal-email').inputValue(), windowEmail);
   await page.setViewportSize({ width: 390, height: 820 });
   await page.getByRole('button', { name: '前往地址管理', exact: true }).click();
-  assert.equal(await addresses.evaluate((node) => document.activeElement === node), true);
+  assert.equal(await addressTab.evaluate((node) => document.activeElement === node), true);
   assert.equal(await bitToolbarFits(), true);
   await page.setViewportSize({ width: 1280, height: 850 });
 
