@@ -6,7 +6,7 @@ from contextlib import contextmanager, suppress
 import fcntl
 import grp
 import hashlib
-from http.client import HTTPResponse
+from http.client import HTTPException, HTTPResponse
 import ipaddress
 import json
 import os
@@ -286,10 +286,44 @@ def exclusive_install():
         os.close(fd)
 
 
+def broker_state():
+    output, status = systemctl("show", "--all", BROKER_UNIT, "-p", "LoadState", "-p", "ActiveState", allowed=(0, 1, 4))
+    properties = dict(line.split("=", 1) for line in output.splitlines() if "=" in line)
+    load = properties.get("LoadState")
+    active = properties.get("ActiveState")
+    if load == "not-found" and active in (None, "inactive"):
+        return "inactive"
+    if not output and status in (1, 4):
+        # Some systemctl builds return no properties for a unit the manager
+        # has never loaded. Establish that the unit is absent from both views.
+        units, _ = systemctl("list-units", "--all", "--plain", "--no-legend", BROKER_UNIT)
+        files, _ = systemctl("list-unit-files", "--plain", "--no-legend", BROKER_UNIT, allowed=(0, 1, 4))
+        if not units and not files:
+            return "inactive"
+    require(load == "loaded" and active is not None, "broker_service_state_unverified")
+    return active
+
+
 def broker_active():
-    state, _ = systemctl("show", BROKER_UNIT, "-p", "ActiveState", "--value", allowed=(0, 1, 4))
+    state = broker_state()
     require(state in ("active", "inactive", "failed"), "broker_service_is_transitioning")
     return state == "active"
+
+
+def wait_for_broker_ready():
+    deadline = time.monotonic() + 15
+    path = BRIDGE / "site.sock"
+    while time.monotonic() < deadline:
+        state = broker_state()
+        if state == "active" and path.is_socket():
+            with suppress(OSError, ValueError, HTTPException):
+                status, body = probe(path, "/v1/recharge/status")
+                if status == 200 and json.loads(body) == {"rechargeBootstrap": 1}:
+                    return
+        if state == "failed":
+            break
+        time.sleep(0.2)
+    raise InvalidHost("manual_broker_startup_failed")
 
 
 def require_no_workers():
@@ -386,9 +420,7 @@ def install(config):
             verify_loaded_units()
             start_attempted = True
             systemctl("start", BROKER_UNIT)
-            deadline = time.monotonic() + 15
-            while time.monotonic() < deadline and not (BRIDGE / "site.sock").is_socket():
-                time.sleep(0.2)
+            wait_for_broker_ready()
             verify(config)
             enable_attempted = previous_enabled != "enabled"
             systemctl("enable", BROKER_UNIT)
