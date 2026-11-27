@@ -3,7 +3,8 @@ import { randomUUID } from 'node:crypto';
 import {
   monitorRules, monitorChannels, monitorConfigDomain, monitorStateDomain, legacyRules, initialMonitoringConfig,
   taskMonitorRules, scopePattern, chatIdPattern, botTokenPattern, boundedCount, monitoringError, telegramText, sendTelegram,
-  monitorReasons, monitorCheckDetail, recoveryStageLabels, monitorReasonText, normalizeRechargeRuntimeProbe
+  monitorReasons, monitorCheckDetail, recoveryStageLabels, monitorReasonText, normalizeRechargeRuntimeProbe,
+  monitorEventIdPattern, rechargeReviewOutcomes
 } from './monitoring-policy.mjs';
 
 const limit = 1000;
@@ -75,8 +76,9 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
     const { version, data } = state();
     const result = update(data);
     if (result === false) return false;
-    const keep = data.incidents.filter(row => !row.resolvedAt && !monitorRules[row.code].oneShot);
-    const history = data.incidents.filter(row => row.resolvedAt || monitorRules[row.code].oneShot);
+    // Keep reviewed task scopes across ordinary history rotation so an unchanged native receipt cannot reopen them.
+    const keep = data.incidents.filter(row => row.reviewResolution || (!row.resolvedAt && !monitorRules[row.code].oneShot));
+    const history = data.incidents.filter(row => !row.reviewResolution && (row.resolvedAt || monitorRules[row.code].oneShot));
     data.incidents = [...keep, ...history.slice(0, limit)].sort((a, b) => b.at - a.at);
     data.deliveries = [...data.deliveries.filter(row => transient.has(row.status)),
       ...data.deliveries.filter(row => !transient.has(row.status)).slice(0, limit)].sort((a, b) => b.at - a.at);
@@ -175,9 +177,18 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
     const { data: settings } = config();
     const nextSamples = new Map(samples);
     const changed = updateState(data => {
+      const reviewScan = current.find(item => item.code === 'recharge_review' && item.scope === 'system');
+      const seenReviewScopes = new Set(current.filter(item => item.code === 'recharge_review').map(item => item.scope));
+      if (reviewScan) for (const incident of data.incidents) {
+        if (incident.code !== 'recharge_review' || incident.resolvedAt || seenReviewScopes.has(incident.scope)) continue;
+        const missing = normalizedSample({ code: incident.code, scope: incident.scope, status: 'unknown', at: reviewScan.at }, now);
+        if (missing) current.push(missing);
+      }
+      const closedReviews = new Set(data.incidents.filter(row => row.reviewResolution).map(row => row.scope));
       let dirty = false;
       for (const item of current) {
         const { key, code, scope, status, count, at, external, confirmed, accepted, externalId, rule, summary, reason, backup, runtimeProbe } = item;
+        if (code === 'recharge_review' && (closedReviews.has(scope) || (scope === 'system' && status === 'bad'))) continue;
         const last = nextSamples.get(key);
         if (last && at <= last.at && !confirmed) continue;
         const continuesStreak = last?.status === status && at - last.at <= 3 * minute;
@@ -393,7 +404,10 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
         if (result.status === 'retry') {
           const due = finishedAt + result.delay;
           data.telegramRetryAt = Math.max(data.telegramRetryAt, due);
-          Object.assign(current, current.attempts < 3 ? { status: 'queued', due, reason: 'rate_limited' }
+          const reviewClosed = current.code === 'recharge_review' && current.kind === 'opened' &&
+            data.incidents.some(incident => incident.id === current.incidentId && incident.reviewResolution);
+          if (reviewClosed) Object.assign(current, { status: 'cancelled', reason: 'review_closed', finishedAt });
+          else Object.assign(current, current.attempts < 3 ? { status: 'queued', due, reason: 'rate_limited' }
             : { status: 'failed', reason: 'rate_limited', finishedAt });
         } else {
           Object.assign(current, result, { finishedAt });
@@ -426,6 +440,28 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
       return true;
     }, { action: 'monitor_acknowledge', actor, targetId: id });
     return { acknowledged: true };
+  }
+
+  function closeRechargeReview(id, outcome, reference, actor) {
+    if (!rechargeReviewOutcomes.has(outcome) || typeof reference !== 'string' || !monitorEventIdPattern.test(reference))
+      throw monitoringError(422, '请选择已核实的结论并填写内部对账凭据 UUID');
+    const scope = updateState(data => {
+      const incident = data.incidents.find(row => row.id === id && row.code === 'recharge_review');
+      if (!incident) throw monitoringError(404, '未找到该付款核对告警');
+      if (incident.resolvedAt) {
+        if (incident.reviewResolution?.outcome === outcome && incident.reviewResolution.reference === reference) return false;
+        throw monitoringError(409, '该告警已关闭，请刷新核对处置记录');
+      }
+      incident.resolvedAt = clock();
+      incident.reviewResolution = { outcome, reference, by: actor.name };
+      for (const delivery of data.deliveries) {
+        if (delivery.incidentId === id && delivery.kind === 'opened' && delivery.status === 'queued')
+          Object.assign(delivery, { status: 'cancelled', reason: 'review_closed', finishedAt: incident.resolvedAt });
+      }
+      return incident.scope;
+    }, { action: 'monitor_close_recharge_review', actor, targetId: id });
+    if (scope) samples.delete('recharge_review:' + scope);
+    return { closed: true };
   }
 
   function notificationOverview(data, settings) {
@@ -470,7 +506,18 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
       kind: row.kind, target: monitorChannels[row.target], status: row.status, attempts: row.attempts,
       at: row.at, finishedAt: row.finishedAt, messageId: row.messageId, reason: row.reason
     })).filter(matches), page, pageSize);
+    const openReviews = data.incidents.filter(row => row.code === 'recharge_review' && !row.resolvedAt);
     const checks = Object.entries(monitorRules).filter(([, rule]) => !rule.oneShot).map(([code, rule]) => {
+      if (code === 'recharge_review' && openReviews.length) {
+        const reviews = openReviews.map(row => samples.get(code + ':' + row.scope))
+          .filter(sample => sample && clock() - sample.at <= 5 * minute);
+        const allSucceeded = reviews.length === openReviews.length && reviews.every(sample => sample.status === 'ok');
+        const detail = allSucceeded ? '对应原任务已出现成功观测，正在等待连续成功确认。'
+          : '有 ' + openReviews.length + ' 笔原任务仍待核对，请查看对应的告警记录和付款凭据。';
+        return { code, label: rule.label, category: rule.category, status: 'bad',
+          at: reviews.reduce((latest, sample) => Math.max(latest || 0, sample.at), null),
+          ...monitorCheckDetail(code, 'bad'), detail };
+      }
       const readings = [...samples.values()].filter(sample => sample.code === code);
       const observed = readings.sort((a, b) => b.at - a.at)[0];
       const open = data.incidents.some(row => row.code === code && !row.resolvedAt);
@@ -491,6 +538,8 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
       category: monitorRules[row.code].category, kind: monitorRules[row.code].oneShot ? 'event' : 'incident',
       taskTail: taskMonitorRules.has(row.code) ? row.scope.slice(-6) : '',
       taskId: taskMonitorRules.has(row.code) ? row.scope : undefined,
+      canCloseReview: row.code === 'recharge_review' && !row.resolvedAt ? true : undefined,
+      reviewResolution: row.reviewResolution,
       backup: row.backup && { detail: monitorReasonText(row.backup.reason, row.backup.stage), completeAt: row.backup.completeAt },
       runtimeProbes: row.code === 'recharge_runtime' && Array.isArray(row.runtimeProbes)
         ? row.runtimeProbes.slice(0, monitorRules.recharge_runtime.failures).map(probe => {
@@ -504,7 +553,7 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
     })).filter(matches), page, pageSize) };
   }
 
-  return { observe, receiveProbe, configView, view, save, importLegacy, takeOver, acknowledge, queueTest, dispatch,
+  return { observe, receiveProbe, configView, view, save, importLegacy, takeOver, acknowledge, closeRechargeReview, queueTest, dispatch,
     changeVersion: () => `${changeEpoch}:${sampleRevision}`,
     subscribeChanges(listener) { changeListeners.add(listener); return () => changeListeners.delete(listener); },
     probeAt: () => lastProbeAt,

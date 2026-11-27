@@ -12,9 +12,14 @@
   const monitorView = () => A.state.drafts.get(viewKey) || 'checks';
   const checks = { ok: '正常', bad: '异常', watch: '观察中', unknown: '未知', disabled: '未启用' };
   const delivery = { queued: '等待发送', sending: '正在发送', accepted: 'Telegram 已接收', failed: '投递失败',
-    unknown: '结果待核对', cancelled: '配置变化，已取消' };
+    unknown: '结果待核对', cancelled: '已取消' };
   const incidentDelivery = { ...delivery, partial: '部分接收', no_record: '无投递记录',
     external_unknown: '站外投递待核对', queue_full: '投递队列已满' };
+  const reviewOutcomes = {
+    charged_activated: '确认扣款且已开通',
+    uncharged_not_activated: '确认未扣款且未开通',
+    reversed_not_activated: '确认扣款已撤销且未开通'
+  };
   const notificationLabels = { disabled: '未启用', inactive: '无启用规则', unready: '待接通', partial: '部分接通', ready: '已就绪' };
   const sourceLinks = {
     login_abuse: ['查看登录日志', 'settings/login-logs'], sensitive_reads: ['查看操作记录', 'settings/audit'],
@@ -31,6 +36,7 @@
   const settingsPage = () => A.state.route === settingsRoute;
   const local = () => D?.authRequired && ['admin', 'super'].includes(A.state.actor?.role);
   const superAdmin = () => A.state.actor?.role === 'super';
+  const canCloseReview = row => superAdmin() && row?.canCloseReview === true && !row.resolvedAt;
   const settingsTab = () => A.state.drafts.get(tabKey) || 'channels';
   const queryTab = () => !settingsPage() ? 'incidents' : settingsTab() === 'deliveries' ? 'deliveries' : 'config';
   const dates = window.IDDateFilter;
@@ -125,20 +131,38 @@
     });
     fields.push(
       ['投递', receiptLabel(row)],
-      ['人工确认', row.ackAt ? time(row.ackAt) + ' · ' + row.ackBy : '待确认'],
-      ['恢复', row.kind === 'event' ? '单次事件' : row.resolvedAt ? time(row.resolvedAt) : '尚无恢复证据']);
+      ['人工确认', row.ackAt ? time(row.ackAt) + ' · ' + row.ackBy : '待确认']);
+    if (row.reviewResolution) {
+      const { outcome, reference, by } = row.reviewResolution;
+      fields.push(['处置状态', '已人工结案'], ['付款核对结论', reviewOutcomes[outcome] || '—'],
+        ['内部证据编号', reference], ['结案人', by], ['结案时间（北京）', time(row.resolvedAt)]);
+    } else fields.push(['恢复', row.kind === 'event' ? '单次事件' : row.resolvedAt ? time(row.resolvedAt) : '尚无恢复证据']);
     if (row.summary) fields.push(['日报', '成功 ' + row.summary.success + ' · 失败 ' + row.summary.failure +
       ' · 待核实 ' + row.summary.review + ' · 未恢复 ' + row.summary.open]);
     const actions = (row.taskId ? A.button('查看原任务', 'system-monitor-task', '', '', `data-id="${e(row.id)}"`) : '') +
-      (row.ackAt ? '' : A.button('确认已知悉', 'system-monitor-ack', 'primary', '', `data-id="${e(row.id)}"`));
-    A.openDrawer(row.label, '确认已知悉只记录处置进度。恢复时间来自后续观测。',
+      (row.ackAt ? '' : A.button('确认已知悉', 'system-monitor-ack', 'primary', '', `data-id="${e(row.id)}"`)) +
+      (canCloseReview(row) ? A.button('人工结案', 'system-monitor-close-review', '', '', `data-id="${e(row.id)}"`) : '');
+    A.openDrawer(row.label, '确认已知悉只记录处置进度。自动恢复时间来自后续观测。',
       '<div class="property-list">' + fields.map(([label, value]) => `<div class="property-row"><span>${e(label)}</span><strong>${e(value)}</strong></div>`).join('') + '</div>',
       actions + A.button('关闭', 'drawer-close'));
   }
 
+  function closeReviewForm(row) {
+    const outcome = 'system-monitor-review-outcome', reference = 'system-monitor-review-reference';
+    const choices = A.options([['', '选择已核实的结论'], ...Object.entries(reviewOutcomes)], '');
+    const task = row.taskTail ? `<div class="property-list"><div class="property-row"><span>原任务尾号</span><strong>${e(row.taskTail)}</strong></div></div>` : '';
+    A.openDrawer('付款核对人工结案', '请核对原任务的扣款或撤销凭据，以及目标账号的开通状态。提交后保存告警处置记录。',
+      task + `<form id="system-monitor-close-review-form" data-incident-id="${e(row.id)}" class="form-panel"><fieldset class="form-grid">
+        ${A.field('付款核对结论', outcome, `<select id="${outcome}" name="${outcome}" required>${choices}</select>`, true)}
+        ${A.field('内部证据编号', reference, A.input(reference, '', 'required maxlength="36" pattern="[a-f0-9]{8}(-[a-f0-9]{4}){3}-[a-f0-9]{12}" autocomplete="off" data-no-draft'), true, '填写此次付款核对所依据的内部证据 UUID。')}
+        </fieldset><p data-system-monitor-error class="field-error" role="alert" hidden></p></form>`,
+      '<button class="button primary" type="submit" form="system-monitor-close-review-form">确认结案</button>' +
+      A.button('取消', 'drawer-close'));
+  }
+
   function tableView(tab, data) {
     const isDelivery = tab === 'deliveries';
-    const statuses = isDelivery ? Object.entries(delivery) : [['open', '待确认'], ['acknowledged', '已确认'], ['resolved', '已恢复']];
+    const statuses = isDelivery ? Object.entries(delivery) : [['open', '待确认'], ['acknowledged', '已确认'], ['resolved', '已恢复或已结案']];
     const action = (row, kind = '') => A.button('查看详情', 'system-monitor-detail', kind, '', `data-id="${e(row.id)}"`);
     const columns = isDelivery ? [
       { id: 'label', label: '通知' }, { id: 'target', label: '接收人' },
@@ -147,7 +171,8 @@
       { id: 'at', label: '时间（北京）', render: row => e(time(row.finishedAt || row.at)) }
     ] : [
       { id: 'label', label: '告警' }, { id: 'priority', label: '级别', render: row => A.tag(row.priority, row.priority === 'P0' ? 'danger' : 'warning') },
-      { id: 'state', label: '处置状态', render: row => A.tag(row.resolvedAt ? '已恢复' : row.ackAt ? '已确认' : '待确认') },
+      { id: 'state', label: '处置状态', render: row => A.tag(row.reviewResolution ? '已人工结案' :
+        row.resolvedAt ? '已恢复' : row.ackAt ? '已确认' : '待确认') },
       { id: 'receipt', label: '投递', render: row => e(receiptLabel(row)) },
       { id: 'at', label: '发生时间（北京）', render: row => e(time(row.at)) },
       { id: 'actions', label: '操作', action: true, render: row => action(row, 'compact') }
@@ -437,6 +462,7 @@
     }
     if (action === 'system-monitor-detail' && row) details(row);
     if (action === 'system-monitor-task' && row?.taskId) A.modules.operations?.openRechargeTaskLog(row.taskId);
+    if (action === 'system-monitor-close-review' && canCloseReview(row)) closeReviewForm(row);
     if (action === 'system-monitor-ack' && row) {
       A.confirmAction('确认已知悉', '保留事件和恢复状态，登记当前管理员已知悉。', async () => {
         if (await act({ action: 'acknowledge', id: row.id }, '已登记人工确认')) A.closeDrawer();
@@ -515,6 +541,17 @@
 
   async function onSubmit(form) {
     if (form.id === 'system-monitor-query-form') { queryList(form); return true; }
+    if (form.id === 'system-monitor-close-review-form') {
+      const row = snapshots.get('incidents')?.data.items.find(item => item.id === form.dataset.incidentId);
+      if (!canCloseReview(row)) {
+        const error = form.querySelector('[data-system-monitor-error]');
+        error.textContent = '当前告警无法结案，请刷新后核对处置状态。';
+        error.hidden = false;
+      } else if (form.reportValidity()) await act({ action: 'close-recharge-review', id: row.id,
+        outcome: form.elements['system-monitor-review-outcome'].value,
+        reference: form.elements['system-monitor-review-reference'].value.trim() }, '已登记付款核对结案', form);
+      return true;
+    }
     if (form.id === 'system-monitor-verified-form') {
       if (form.reportValidity()) await act({ action: 'verified',
         code: form.elements['system-monitor-verified-code'].value,

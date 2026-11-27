@@ -263,8 +263,12 @@ export function createMonitoringSources({ monitor, databasePath, externalProbe =
         .map(code => ({ code, status: 'unknown', reason: 'tasks_unavailable' }))];
     const projection = projectRechargeMonitoring(tasks.tasks, now, monitor.legacyStatus().since);
     const output = [...result, ...projection.samples];
-    for (const code of ['recharge_review', 'recharge_stuck']) if (!projection.samples.some(row => row.code === code))
-      output.push({ code, status: 'unknown', reason: projection.complete ? 'tasks_empty' : 'tasks_incomplete' });
+    const hasReviewReading = projection.samples.some(row => row.code === 'recharge_review');
+    const noReading = { status: 'unknown', reason: projection.complete ? 'tasks_empty' : 'tasks_incomplete' };
+    // This unscoped reading marks a completed scan. It carries no recovery evidence for a task.
+    output.push({ code: 'recharge_review', ...(hasReviewReading ? { status: 'ok' } : noReading) });
+    if (!projection.samples.some(row => row.code === 'recharge_stuck'))
+      output.push({ code: 'recharge_stuck', ...noReading });
     const dayKey = beijingDay(now - day);
     if (projection.complete && lastDigest !== dayKey && new Date(now + 8 * 60 * minute).getUTCHours() >= 9) {
       const cohort = projection.rows.filter(row => beijingDay(row.createdAt) === dayKey);

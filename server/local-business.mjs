@@ -298,6 +298,7 @@ const orderFeatureAuditLabels = {
   monitor_settings: '保存监控与通知设置',
   monitor_test: '提交 Telegram 测试投递',
   monitor_acknowledge: '确认监控告警',
+  monitor_close_recharge_review: '登记代充付款告警结案',
   monitor_legacy_import: '导入原代充通知订阅',
   monitor_legacy_begin: '开始接管原代充通知',
   monitor_legacy_finish: '确认接管原代充通知',
