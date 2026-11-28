@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { test } from 'node:test';
+import { setImmediate } from 'node:timers/promises';
 import { createNativeRechargeRouting, DEFAULT_PLAN_ROUTES, parseExitTrace,
   validatePlanRoutes, migrateRechargeRouting, manualProxyDialOptions } from './native-routing.mjs';
 import { normalizeRechargeProxyInput } from './proxy-input.mjs';
 
-function fixture({ rows = [], countries = ['PH'], onProbe, measure, failures = [], types = [] } = {}) {
+function fixture({ rows = [], countries = ['PH'], onProbe, onVerify, onUsage, onPolicy, onObservation,
+  measure, now, failures = [], types = [] } = {}) {
   let version = 1;
   let plans = { ...DEFAULT_PLAN_ROUTES };
   const audit = [];
@@ -13,19 +15,31 @@ function fixture({ rows = [], countries = ['PH'], onProbe, measure, failures = [
   const labelAudit = [];
   const calls = [];
   const warnings = [];
+  const starts = [];
   let proxyTypes = new Map(types);
   const fail = name => { if (failures.includes(name)) throw new Error('private database credentials'); };
   let substitutions = 0;
   const store = {
     async runQuery(sql, values) {
-      if (sql.startsWith('SELECT version')) { fail('policy'); return [{ version, plans_json: plans, audit_json: audit }]; }
+      if (sql.startsWith('SELECT version')) {
+        fail('policy');
+        await onPolicy?.();
+        return [{ version, plans_json: plans, audit_json: audit }];
+      }
       if (sql.includes('FROM id_recharge_proxy_checks')) { fail('history-read'); return [...checks.values()]; }
-      if (sql.includes('JOIN app_config c ON')) {
+      if (sql.startsWith('SELECT p.id, c.config_value')) {
         fail('type-read');
         return rows.filter(row => proxyTypes.has(row.id)).map(row => ({ id: row.id, proxy_type: proxyTypes.get(row.id) }));
       }
       if (sql.includes('FROM proxy_assets p LEFT JOIN id_recharge_proxy_country_labels')) {
-        if (sql.includes('WHERE p.id')) { fail('proxy-read'); return rows.filter(row => row.id === values[0]); }
+        if (sql.includes('WHERE p.id')) {
+          fail('proxy-read');
+          if (sql.includes('LEFT JOIN app_config c ON')) {
+            await onVerify?.();
+            return rows.filter(row => row.id === values[1]).map(row => ({ ...row, proxy_type: proxyTypes.get(row.id) }));
+          }
+          return rows.filter(row => row.id === values[0]);
+        }
         fail('pool-read');
         return rows;
       }
@@ -34,9 +48,10 @@ function fixture({ rows = [], countries = ['PH'], onProbe, measure, failures = [
     async runExecute(sql, values) {
       if (sql.startsWith('INSERT INTO id_recharge_proxy_checks')) {
         fail('history-write');
-        const [proxy_id, config_hash, country_code, exit_ip, check_status, check_source, latency_ms] = values;
+        const [proxy_id, config_hash, country_code, exit_ip, check_status, check_source, checked_ms, latency_ms] = values;
+        await onObservation?.({ proxyId: proxy_id, status: check_status });
         checks.set(proxy_id, { proxy_id, config_hash, country_code, exit_ip, check_status,
-          check_source, latency_ms, checked_ms: Date.now() });
+          check_source, latency_ms, checked_ms });
         return { affectedRows: 1 };
       }
       if (sql.startsWith('UPDATE id_recharge_route_config')) {
@@ -47,6 +62,7 @@ function fixture({ rows = [], countries = ['PH'], onProbe, measure, failures = [
       assert.match(sql, /^UPDATE proxy_assets SET usage_count/);
       fail('usage-write');
       calls.push(['usage', values[0]]);
+      await onUsage?.();
       return { affectedRows: 1 };
     },
     async updateProxyAssetCheck(id, value) { fail('status-write'); calls.push(['check', id, value.ok]); },
@@ -91,8 +107,9 @@ function fixture({ rows = [], countries = ['PH'], onProbe, measure, failures = [
       return result;
     }
   };
-  const routing = createNativeRechargeRouting({ store, chooseOrder: rows => rows,
+  const routing = createNativeRechargeRouting({ store, now, chooseOrder: rows => rows,
     onWarning(message) { warnings.push(message); fail('warning'); },
+    onStart(message) { starts.push(message); fail('start-log'); },
     substituteSession(raw) {
       return raw.replace(/\{session\}/gi, () => 'synthetic-sticky-' + ++substitutions);
     },
@@ -113,7 +130,7 @@ function fixture({ rows = [], countries = ['PH'], onProbe, measure, failures = [
     });
     return response;
   };
-  return { routing, calls, rows, checks, warnings, labelAudit, request, substitutions: () => substitutions };
+  return { routing, calls, rows, checks, warnings, starts, labelAudit, request, substitutions: () => substitutions };
 }
 const proxy = (id, enabled = 1, label = null) => ({ id, is_active: enabled, label_country_code: label,
   proxy_url: 'socks5://synthetic-{session}:synthetic-secret@proxy.example.test:' + (1000 + id) });
@@ -331,6 +348,12 @@ test('a same-country IP change uses the measured backup session without starting
   assert.equal(f.substitutions(), 2);
   assert.deepEqual(f.calls.filter(([kind]) => kind === 'usage'), [['usage', 2]]);
   assert.doesNotMatch(JSON.stringify(f.warnings), /synthetic-secret|proxy\.example|8\.8/);
+  const routeRef = f.routing.describe(primary).split(' route_ref=')[1];
+  assert.match(routeRef, /^[a-f0-9-]{36}$/);
+  assert.deepEqual(f.starts, [
+    '代理线路已交接 route_ref=' + routeRef + ' network=proxy#2 country=PH checked_exit=***.***.4.4'
+  ]);
+  assert.doesNotMatch(f.starts[0], /synthetic-secret|proxy\.example|8\.8\.4\.4/);
 });
 
 test('same-country drift without a measured backup never launches or generates a replacement session', async () => {
@@ -358,6 +381,108 @@ test('typed rotating gateways require a session template for automatic routing b
   const probes = f.calls.filter(([kind]) => kind === 'probe').map(([, url]) => url);
   assert.equal(probes[1], rotating.proxy_url);
   assert.equal(new Set([probes[0], ...probes.slice(2)]).size, 3);
+});
+
+test('an accepted static proxy cannot start once marked rotating without a session template', async () => {
+  const row = proxy(1, 1, 'PH');
+  row.proxy_url = row.proxy_url.replace('{session}', 'fixed');
+  const f = fixture({ rows: [row], types: [[1, 'static_residential']] });
+  const route = await f.routing.resolve('plus');
+  const edit = await f.request('PUT', '/proxies/1/type', { proxyType: 'mobile', expectedProxyType: 'static_residential' });
+  assert.equal(edit.statusCode, 200);
+  await assert.rejects(f.routing.verifiedStart(route, () => assert.fail('must not launch'))({}), /会话占位符/);
+  assert.equal(f.calls.filter(([kind]) => kind === 'probe').length, 1);
+  assert.deepEqual(f.starts, []);
+});
+
+test('startup spends its remaining budget on the probe and will not launch after slow metadata reads', async () => {
+  let time = 0;
+  let delaying = false;
+  const budgets = [];
+  const f = fixture({ rows: [proxy(1)], now: () => time,
+    onVerify() { if (delaying) time += 11000; },
+    measure(_url, timeout) {
+      budgets.push(timeout);
+      return { ip: '8.8.8.8', countryCode: 'PH', latencyMs: 10 };
+    }
+  });
+  const route = await f.routing.resolve('plus');
+  delaying = true;
+  await assert.rejects(f.routing.verifiedStart(route, () => assert.fail('must not launch'))({}), /核验超时/);
+  assert.deepEqual(budgets, [20000, 9000]);
+  assert.deepEqual(f.starts, []);
+});
+
+test('route selection times out even while a required policy read remains pending', async t => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const pending = new Promise(() => {});
+  const f = fixture({ rows: [proxy(1)], onPolicy: () => pending });
+  const rejected = assert.rejects(f.routing.resolve('plus'), /套餐选路超时/);
+  t.mock.timers.tick(20000);
+  await rejected;
+  assert.deepEqual(f.calls, []);
+});
+
+test('a slow observation write does not delay selection and the verified handoff', async () => {
+  let releaseWrite;
+  let writeBegan;
+  const pendingWrite = new Promise(resolve => { releaseWrite = resolve; });
+  const startedWrite = new Promise(resolve => { writeBegan = resolve; });
+  let pendingWrites = 0;
+  const f = fixture({ rows: Array.from({ length: 12 }, (_, index) => proxy(index + 1)), async onObservation() {
+    pendingWrites++;
+    writeBegan();
+    await pendingWrite;
+  } });
+  let launched = false;
+  const result = f.routing.resolve('plus')
+    .then(route => f.routing.verifiedStart(route, () => { launched = true; })({}));
+  await startedWrite;
+  await setImmediate();
+  const launchedWhileWritePending = launched;
+  const concurrentWrites = pendingWrites;
+  releaseWrite();
+  await result;
+  assert.equal(launchedWhileWritePending, true);
+  assert.equal(concurrentWrites, 1);
+});
+
+test('a delayed initial observation cannot overwrite the result of startup verification', async () => {
+  let releaseWrite;
+  let writeBegan;
+  const pendingWrite = new Promise(resolve => { releaseWrite = resolve; });
+  const startedWrite = new Promise(resolve => { writeBegan = resolve; });
+  const written = [];
+  let now = 1000;
+  const f = fixture({ rows: [proxy(1)], now: () => now, countries: ['PH', 'error'], async onObservation({ status }) {
+    written.push(status);
+    if (status === 'verified') { writeBegan(); await pendingWrite; }
+  } });
+  const route = await f.routing.resolve('plus');
+  await startedWrite;
+  now = 2000;
+  await assert.rejects(f.routing.verifiedStart(route, () => assert.fail('must not launch'))({}), /检测失败/);
+  releaseWrite();
+  await setImmediate();
+  assert.deepEqual(written, ['verified', 'failed']);
+  assert.equal(f.checks.get(1).check_status, 'failed');
+  assert.equal(f.checks.get(1).checked_ms, 2000);
+});
+
+test('asynchronous usage accounting does not delay the verified handoff', async () => {
+  let releaseUsage;
+  let usageBegan;
+  const pendingUsage = new Promise(resolve => { releaseUsage = resolve; });
+  const startedUsage = new Promise(resolve => { usageBegan = resolve; });
+  const f = fixture({ rows: [proxy(1)], async onUsage() { usageBegan(); await pendingUsage; } });
+  const route = await f.routing.resolve('plus');
+  let launched = false;
+  const result = f.routing.verifiedStart(route, () => { launched = true; })({});
+  await startedUsage;
+  const launchedWhileWritePending = launched;
+  releaseUsage();
+  await result;
+  assert.equal(launchedWhileWritePending, true);
 });
 
 test('startup compares IPv6 addresses independently of their text representation', async () => {
@@ -395,14 +520,15 @@ test('configuration races during selection fail before a route is accepted', asy
   await assert.rejects(f.routing.resolve('plus'), /配置已更新/);
   assert.ok(!f.calls.some(call => call[0] === 'usage'));
 });
-test('auxiliary storage and warning failures never block a verified route or mark it unhealthy', async () => {
+test('auxiliary storage and logging failures never block a verified route or mark it unhealthy', async () => {
   for (const failures of [['history-read'], ['history-write'], ['status-write'], ['usage-write'],
-    ['history-read', 'history-write', 'status-write', 'usage-write', 'warning']]) {
+    ['history-read', 'history-write', 'status-write', 'usage-write', 'warning', 'start-log']]) {
     const f = fixture({ rows: [proxy(1)], failures });
     const route = await f.routing.resolve('plus');
     let started = false;
     await f.routing.verifiedStart(route, () => { started = true; })({ PROXY: route.proxy });
     if (failures.includes('history-read')) await f.routing.view();
+    await setImmediate();
     assert.equal(started, true);
     assert.equal(f.calls.filter(call => call[0] === 'probe').length, 2);
     assert.ok(!f.calls.some(call => call[0] === 'check' && call[2] === false));
