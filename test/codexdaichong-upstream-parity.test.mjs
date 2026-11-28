@@ -250,7 +250,7 @@ test('API-first checkout, same-region UI fallback and the no-payment debug stop 
     }
     assert.equal(integrated.error, undefined);
     assert.deepEqual(steps, ['api', ...(scenario.failApi ? ['ui'] : []),
-      ...(scenario.debugOnly ? ['verify', 'screenshot'] : ['payment'])]);
+      ...(scenario.debugOnly ? ['verify', 'screenshot'] : ['verify', 'payment'])]);
     assert.equal(integrated.calls[0][1].country, 'MY');
     assert.equal(integrated.calls[0][1].currency, 'MYR');
     assert.equal(integrated.calls[0][1].planType, 'plus');
