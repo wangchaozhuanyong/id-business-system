@@ -45,7 +45,10 @@ test('all 203 upstream files match the original and five exact patches', async (
   assert.equal(result.files, 203);
   await exec(process.execPath, ['--check', join(prepared, 'server.js')]);
   await exec(process.execPath, ['--check', join(prepared, 'mysql-store.js')]);
-  assert.equal(result.originalFiles, 194);
+    // 2026-11-26 补丁链把被修改的上游文件从 9 个扩到 11 个（新增 chatgpt.js / index.js /
+  // public/admin.js 等），因此未修改文件数由 194 变为 192。变更清单见
+  // docs/RECHARGE_PATCH_LEDGER.md。
+  assert.equal(result.originalFiles, 192);
   assert.deepEqual(result.routingFiles, ['pricing-checkout.js', 'region-config.js', 'server.js']);
   assert.deepEqual(result.returnFiles, ['mysql-store.js', 'server.js']);
   assert.deepEqual(result.providerRetirementFiles, ['mysql-store.js', 'server.js']);
@@ -234,7 +237,11 @@ test('API-first checkout, same-region UI fallback and the no-payment debug stop 
   ]) {
     const baseline = await checkoutPhase(originalWorker, scenario);
     const integrated = await checkoutPhase(integratedWorker, scenario);
-    assert.deepEqual(integrated, baseline);
+    // unify-wait（2026-11-26）让生产路径复用调试的结账页等待，
+    // 因此会比上游多一次 verify 调用；除此之外必须完全一致。
+    const withoutUnifyWait = calls => calls.filter(([name]) => name !== 'verify');
+    assert.deepEqual({ ...integrated, calls: withoutUnifyWait(integrated.calls) },
+      { ...baseline, calls: withoutUnifyWait(baseline.calls) });
     const steps = integrated.calls.map(([name]) => name);
     if (scenario.apiOnly) {
       assert.deepEqual(steps, ['api']);
