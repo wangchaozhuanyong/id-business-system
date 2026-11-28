@@ -1,0 +1,24 @@
+diff --git a/browser-pool.js b/browser-pool.js
+--- a/browser-pool.js
++++ b/browser-pool.js
+@@ -138,6 +138,20 @@
+     const profileDir = path.join(__dirname, 'data', 'browser-pool', `slot-${slotId}`);
+     fs.mkdirSync(profileDir, { recursive: true });
+ 
++    // POOL_LOCK_CLEAN: 上一轮 Chromium 若被强杀（容器重启 / OOM / 手动 kill），profile 目录会残留
++    // SingletonLock / SingletonCookie / SingletonSocket，新实例会拒绝启动并报
++    // "The profile appears to be in use by another Chromium process"，池随之失效，
++    // 所有任务都会 connectOverCDP ECONNREFUSED。预热前主动清理即可自愈。
++    for (const lockName of ['SingletonLock', 'SingletonCookie', 'SingletonSocket',
++        path.join('Default', 'SingletonLock'), path.join('Default', 'SingletonCookie'),
++        path.join('Default', 'SingletonSocket')]) {
++        try {
++            fs.rmSync(path.join(profileDir, lockName), { force: true });
++        } catch (lockError) {
++            console.warn(`[BrowserPool] 清理 profile 锁失败 ${lockName}: ${lockError.message}`);
++        }
++    }
++
+     const launchOptions = {
+         headless: process.env.HEADFUL !== '1',
+         args: buildLaunchArgs(port),

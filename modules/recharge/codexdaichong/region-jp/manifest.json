@@ -1,0 +1,11 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "description": "新增日本区（JPY），供服务器直连调试使用；默认套餐路由不变",
+  "files": {
+    "region-config.js": {
+      "original": "e576b10fac92f638aaedfce6409994c4305fe38f",
+      "approved": "327a9533ed15faa0b11cadf135208329e77259ed"
+    }
+  },
+  "patchSha256": "44225c8929cc149fc896a563efc8c8ce88bf678fa491b88ac7997d724f854aaa"
+}

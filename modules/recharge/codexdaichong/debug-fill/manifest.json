@@ -1,0 +1,11 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "description": "调试与生产共用同一套执行环境拼装；调试走卡池取卡并填卡填地址；默认跳过 API 建单（该路径必然被上游 400 拒绝且会用非浏览器指纹请求会话端点）",
+  "files": {
+    "server.js": {
+      "original": "f240d3eddbd25524f6afc9ed483230b4e441a253",
+      "approved": "d7c89c90cfa04711b307702481687ebd2643f7f5"
+    }
+  },
+  "patchSha256": "7a4760f02f02a985143c2a56fff003d070a8b85e9df1382d46c7d5fb57be5745"
+}

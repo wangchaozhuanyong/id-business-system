@@ -1,0 +1,45 @@
+diff --git a/chatgpt.js b/chatgpt.js
+--- a/chatgpt.js
++++ b/chatgpt.js
+@@ -562,7 +562,7 @@
+         await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 90000 });
+     }
+ 
+-    console.log('[调试] 正在等待支付表单加载（不填卡、不提交）...');
++    console.log('[调试] 正在等待支付表单加载（随后自动填卡与账单地址，不提交付款）...');
+     // FORM_WAIT_HEARTBEAT: 移动代理加载 Stripe 组件常需 90-180 秒，原来 120 秒上限
+     // 会把还在正常加载的任务判死。放宽到 300 秒，并保证循环内持续输出心跳。
+     const deadline = Date.now() + Math.max(1000, Math.min(Number(timeoutMs) || 60000, 300000));
+diff --git a/index.js b/index.js
+--- a/index.js
++++ b/index.js
+@@ -544,7 +544,7 @@
+         // --- Phase 1: Resolve payment parameters ---
+         const debugOnly = process.env.CHECKOUT_DEBUG_ONLY === '1';
+         if (debugOnly) {
+-            console.log('[调试] 支付页面调试：Session 登录 → Checkout API（失败则转网页定价）→ 支付表单 → 截图后停止（不填卡、不付款）');
++            console.log('[调试] 支付页面调试：Session 登录 → Checkout API（失败则转网页定价）→ 支付表单 → 填卡与账单地址 → 截图后停止（不提交付款）');
+         } else {
+             console.log('[1] 准备自助充值流程...');
+         }
+diff --git a/server.js b/server.js
+--- a/server.js
++++ b/server.js
+@@ -1090,7 +1090,7 @@
+         const checkoutPageReady = /^CHECKOUT_PAGE_READY$/m.test(normalized);
+         return {
+             status: 'success',
+-            message: checkoutPageReady ? '支付页面已打开，调试已停止（未填卡、未付款）'
++            message: checkoutPageReady ? '已填卡与账单地址，调试已停止（未付款）'
+                 : (checkoutUrl ? `支付链接已生成: ${checkoutUrl}` : '支付链接调试成功'),
+             checkoutUrl,
+             checkoutPageReady,
+@@ -4291,7 +4291,7 @@
+             const finalMessage = finalStatus === 'success' && analysis.checkoutPageReady
+                 ? (debugCardFilled
+                     ? '已填卡与账单地址，停在付款前（未付款）'
+-                    : '支付页面已打开，调试已停止（未填卡、未付款）')
++                    : '已填卡与账单地址，调试已停止（未付款）')
+                 : finalStatus === 'success' && checkoutUrl
+                 ? `支付链接: ${checkoutUrl}`
+                 : (analysis.message || '支付链接调试失败');

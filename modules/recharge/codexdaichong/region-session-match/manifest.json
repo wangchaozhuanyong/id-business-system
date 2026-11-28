@@ -1,0 +1,11 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "description": "启动前校验账号登录地区与支付地区一致，避免上游吊销会话导致客户掉线",
+  "files": {
+    "server.js": {
+      "original": "d7c89c90cfa04711b307702481687ebd2643f7f5",
+      "approved": "4aba7bc2727c59e56a5d9e7198f21af203e834ba"
+    }
+  },
+  "patchSha256": "e3b9c68d3556cc8e477c4dacf52c0cc4ce3947abbb62e0a93fdef5e54a3f59dc"
+}

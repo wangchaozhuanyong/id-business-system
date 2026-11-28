@@ -1,0 +1,32 @@
+diff --git a/stripe-payment.js b/stripe-payment.js
+--- a/stripe-payment.js
++++ b/stripe-payment.js
+@@ -2113,10 +2113,27 @@
+     status = getBillingFieldStatus(await readBillingInputValues(page), filled);
+     missing = listBillingMissing(status);
+ 
++    // CITY_REQUIRED: 城市之前缺失也判定通过，真付款时地址不全会被 Stripe 拒绝或税额算错。
++    // 这里先补填一次；仍失败则明确报错，不再静默放行。
++    if (missing.includes('city') && address && address.city) {
++        console.warn('  [Stripe] 城市缺失，补填一次...');
++        const retriedCity = await fillBillingControl(
++            page,
++            [/^city$/i, /^城市$/i, /address-level2/i],
++            address.city,
++            '城市'
++        ).catch(() => false);
++        if (retriedCity) {
++            filled.city = true;
++            missing = missing.filter((item) => item !== 'city');
++            console.log('  [Stripe] ✅ 城市补填成功: ' + address.city);
++        }
++    }
++
+     if (missing.length > 0) {
+         console.warn(`  [Stripe] ⚠️ 账单字段未全部填写: ${missing.join(', ')}`);
+         const stillError = await hasBillingValidationError(page);
+-        if (stillError || missing.includes('line1')) {
++        if (stillError || missing.includes('line1') || missing.includes('city')) {
+             return {
+                 ok: false,
+                 error: `账单地址未完整填写 (缺失: ${missing.join(', ') || '校验未通过'})`,

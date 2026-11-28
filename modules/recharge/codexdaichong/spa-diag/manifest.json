@@ -1,0 +1,11 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "description": "记录页面自身发出的 checkout 建单请求与响应体，用于定位上游拒绝原因",
+  "files": {
+    "index.js": {
+      "original": "4383f91d237a0b8e6dadf92041fc2814ba782169",
+      "approved": "d0f5da14a76952b1af086aefe3e20393937d028a"
+    }
+  },
+  "patchSha256": "0230725f107e0a186167bc19b00675e6d79fa3e75f09cfe9e9c620ec8cd4d8a3"
+}

@@ -1,0 +1,11 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "description": "修正「支付表单已加载」提示，说明未开启自动填卡而非已填卡",
+  "files": {
+    "chatgpt.js": {
+      "original": "200b7d3f7a6dc9fdfd08d68448a8489b1d5ab9a4",
+      "approved": "3017174c4813a040ace25d0d8c42e2589d317976"
+    }
+  },
+  "patchSha256": "d9d0800a20d012fad47dff5506d62ebb2fc62905bfed713e6b3a541f0b0e0ee9"
+}

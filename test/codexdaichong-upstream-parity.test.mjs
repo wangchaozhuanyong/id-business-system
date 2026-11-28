@@ -45,7 +45,10 @@ test('all 203 upstream files match the original and five exact patches', async (
   assert.equal(result.files, 203);
   await exec(process.execPath, ['--check', join(prepared, 'server.js')]);
   await exec(process.execPath, ['--check', join(prepared, 'mysql-store.js')]);
-  assert.equal(result.originalFiles, 194);
+    // 2026-11-26 补丁链把被修改的上游文件从 9 个扩到 11 个（新增 chatgpt.js / index.js /
+  // public/admin.js 等），因此未修改文件数由 194 变为 192。变更清单见
+  // docs/RECHARGE_PATCH_LEDGER.md。
+  assert.equal(result.originalFiles, 192);
   assert.deepEqual(result.routingFiles, ['pricing-checkout.js', 'region-config.js', 'server.js']);
   assert.deepEqual(result.returnFiles, ['mysql-store.js', 'server.js']);
   assert.deepEqual(result.providerRetirementFiles, ['mysql-store.js', 'server.js']);
@@ -58,8 +61,14 @@ test('all 203 upstream files match the original and five exact patches', async (
     ['async function markCdkUsed(', 'async function deletePhoneAsset('],
     ['async function releaseCard(', 'async function importCards(']
   ]) assert.equal(section(mysql, start, end), section(previousMysql, start, end), start);
-  for (const name of ['index.js', 'tax-free-address.js', 'package-lock.json'])
+  // 2026-11-26：index.js 不再是逐字节原样文件——补丁链在它上面加了设备指纹对齐、
+  // 结账页等待复用、干跑开关与结账诊断监听。这里改为断言必须存在的补丁标记，
+  // 其余文件仍要求与上游完全一致。
+  for (const name of ['tax-free-address.js', 'package-lock.json'])
     assert.equal(await readFile(join(prepared, name), 'utf8'), await original(name), name);
+  const indexSource = await readFile(join(prepared, 'index.js'), 'utf8');
+  for (const marker of ['FINGERPRINT_ALIGN', 'UNIFY_WAIT_FROM_DEBUG'])
+    assert.ok(indexSource.includes(marker), 'index.js missing patch marker: ' + marker);
   assert.equal((await readFile(join(prepared, 'payment-retry.js'), 'utf8'))
     .replace('store.reserveCard(ownerKey, planType)', 'store.reserveCard(ownerKey)'), await original('payment-retry.js'));
 });
@@ -197,7 +206,8 @@ async function checkoutPhase(source, { debugOnly, failApi = false, apiOnly = fal
     loginInfo: { session: { accessToken: 'synthetic-token' } },
     planType: 'plus', billingCountry: 'MY', billingCurrency: 'MYR',
     cdkCode: 'synthetic-code', email: 'fixture@example.test', context: {}, paymentSucceeded: false,
-    page: { url: () => checkoutUrl }, sanitizeCheckoutDiagnostic: (value) => value,
+    // spa-diag 补丁会调用 page.on 注册诊断监听，mock page 需要提供这个 API。
+    page: { url: () => checkoutUrl, on: () => {} }, sanitizeCheckoutDiagnostic: (value) => value,
     openApiCheckout: async (_page, options) => {
       calls.push(['api', options]);
       if (failApi) throw new Error('synthetic API rejection');
@@ -233,7 +243,11 @@ test('API-first checkout, same-region UI fallback and the no-payment debug stop 
   ]) {
     const baseline = await checkoutPhase(originalWorker, scenario);
     const integrated = await checkoutPhase(integratedWorker, scenario);
-    assert.deepEqual(integrated, baseline);
+    // unify-wait（2026-11-26）让生产路径复用调试的结账页等待，
+    // 因此会比上游多一次 verify 调用；除此之外必须完全一致。
+    const withoutUnifyWait = calls => calls.filter(([name]) => name !== 'verify');
+    assert.deepEqual({ ...integrated, calls: withoutUnifyWait(integrated.calls) },
+      { ...baseline, calls: withoutUnifyWait(baseline.calls) });
     const steps = integrated.calls.map(([name]) => name);
     if (scenario.apiOnly) {
       assert.deepEqual(steps, ['api']);
@@ -242,7 +256,7 @@ test('API-first checkout, same-region UI fallback and the no-payment debug stop 
     }
     assert.equal(integrated.error, undefined);
     assert.deepEqual(steps, ['api', ...(scenario.failApi ? ['ui'] : []),
-      ...(scenario.debugOnly ? ['verify', 'screenshot'] : ['payment'])]);
+      ...(scenario.debugOnly ? ['verify', 'screenshot'] : ['verify', 'payment'])]);
     assert.equal(integrated.calls[0][1].country, 'MY');
     assert.equal(integrated.calls[0][1].currency, 'MYR');
     assert.equal(integrated.calls[0][1].planType, 'plus');

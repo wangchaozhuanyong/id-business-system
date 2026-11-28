@@ -1,0 +1,66 @@
+diff --git a/stripe-payment.js b/stripe-payment.js
+--- a/stripe-payment.js
++++ b/stripe-payment.js
+@@ -1868,11 +1868,27 @@
+             return false;
+         }
+     })();
++    // SELECT_FAST_CONFIRM: 内层往往已经选成功，但它在等一个永远不来的信号（下拉关闭等），
++    // 于是外层只能空等到 12 秒超时，白等十几秒。这里改成轮询读回控件当前值，
++    // 一旦是目标国家就立即判定成功；只有真的没选上才走超时分支。
++    const confirmed = new Promise((resolve) => {
++        const tick = async () => {
++            const current = await getCurrentBillingCountryValue(page).catch(() => null);
++            const label = String(current && current.label || '');
++            const value = String(current && current.value || '').toUpperCase();
++            if (value === 'US' || /united\s*states|美国/i.test(label)) {
++                console.log('  [Stripe] ✅ 国家已确认: ' + (label || value) + '（读回校验）');
++                return resolve(true);
++            }
++            setTimeout(tick, 700);
++        };
++        setTimeout(tick, 1000);
++    });
+     const timed = new Promise((resolve) => setTimeout(() => {
+         console.log('  [Stripe] ⚠️ 选择国家超时（12s），继续填后续字段');
+         resolve(false);
+     }, 12000));
+-    return Promise.race([attempt, timed]);
++    return Promise.race([attempt, confirmed, timed]);
+ }
+ async function selectBillingState(page, stateFullName, stateRaw) {
+     console.log('  [Stripe] 选择州...');
+@@ -1916,11 +1932,32 @@
+             return false;
+         }
+     })();
++    // SELECT_FAST_CONFIRM: 州下拉同样会「已选成功但等不到信号」，改成读回校验快速确认。
++    const stateConfirmed = new Promise((resolve) => {
++        const wanted = [stateFullName, stateRaw].filter(Boolean).map((v) => String(v).toLowerCase());
++        const tick = async () => {
++            const current = await page.evaluate(() => {
++                const els = [...document.querySelectorAll('select')];
++                const el = els.find((e) => /state|province|address-level1/i.test(
++                    (e.name || '') + (e.id || '') + (e.getAttribute('autocomplete') || '')));
++                if (!el) return '';
++                const opt = el.options[el.selectedIndex];
++                return opt ? String(opt.textContent || '').trim() : '';
++            }).catch(() => '');
++            const text = String(current || '').toLowerCase();
++            if (text && wanted.some((w) => text.includes(w) || w.includes(text))) {
++                console.log('  [Stripe] ✅ 州已确认: ' + current + '（读回校验）');
++                return resolve(true);
++            }
++            setTimeout(tick, 700);
++        };
++        setTimeout(tick, 1000);
++    });
+     const timed = new Promise((resolve) => setTimeout(() => {
+         console.log('  [Stripe] ⚠️ 选择州超时（10s），继续后续步骤');
+         resolve(false);
+     }, 10000));
+-    return Promise.race([attempt, timed]);
++    return Promise.race([attempt, stateConfirmed, timed]);
+ }
+ async function locateOpenAiBillingHeading(page) {
+     const heading = page.getByText(/^Billing address$|^账单地址$/i).first();

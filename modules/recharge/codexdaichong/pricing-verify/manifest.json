@@ -1,0 +1,11 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "description": "定价页加载后校验真实套餐内容；点击升级前断言页面状态，避免在聊天主页误点",
+  "files": {
+    "pricing-checkout.js": {
+      "original": "76252b56f1d6bd15b944ac78cb3cdc032bf98a18",
+      "approved": "bb94a3e7adacc63f68c373409b9b0c2e3860f666"
+    }
+  },
+  "patchSha256": "563967156dd1c372a1596249bc88ae0a10213cdf734e7d29856606bbab537467"
+}

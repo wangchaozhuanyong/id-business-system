@@ -1,0 +1,49 @@
+diff --git a/index.js b/index.js
+--- a/index.js
++++ b/index.js
+@@ -463,20 +463,33 @@
+         // --- Phase 0: Proxy Connectivity Check ---
+         if (proxyConfig) {
+             console.log('正在检查代理连通性...');
+-            try {
+-                const probeResponse = await context.request.get("http://api.ipify.org/?format=text", {
+-                    timeout: 15000
+-                });
+-                if (probeResponse.ok()) {
+-                    const ip = (await probeResponse.text()).trim();
+-                    const ipMasked = String(ip).replace(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/, '***.***.$3.$4');
+-                    console.log(`✅ [系统] 代理连接成功! 代理公网 IP: ${ipMasked}`);
+-                } else {
+-                    throw new Error(`代理响应异常: HTTP ${probeResponse.status()}`);
++            // PROXY_PROBE_RETRY: 移动代理首包可能较慢，单次 15s 超时会把正常线路误判为故障。
++            // 改为可配置超时（默认 30s）并默认重试 2 次；全部失败才终止。
++            const probeTimeoutMs = Math.max(5000, Number(process.env.PROXY_PROBE_TIMEOUT_MS) || 30000);
++            const probeRounds = Math.max(1, Number(process.env.PROXY_PROBE_ROUNDS) || 2);
++            let lastProbeError = null;
++            let probeOk = false;
++            for (let probeTry = 1; probeTry <= probeRounds && !probeOk; probeTry += 1) {
++                try {
++                    const probeResponse = await context.request.get("http://api.ipify.org/?format=text", {
++                        timeout: probeTimeoutMs
++                    });
++                    if (probeResponse.ok()) {
++                        const ip = (await probeResponse.text()).trim();
++                        const ipMasked = String(ip).replace(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/, '***.***.$3.$4');
++                        console.log(`✅ [系统] 代理连接成功! 代理公网 IP: ${ipMasked}`);
++                        probeOk = true;
++                    } else {
++                        throw new Error(`代理响应异常: HTTP ${probeResponse.status()}`);
++                    }
++                } catch (proxyError) {
++                    lastProbeError = proxyError;
++                    console.log(`    [!] 代理连通性第 ${probeTry}/${probeRounds} 次检查失败: ${String(proxyError.message).slice(0, 80)}`);
+                 }
+-            } catch (proxyError) {
++            }
++            if (!probeOk) {
+                 console.log("    [!] 请检查 PROXY 配置是否正确，或者账号余额是否充足。");
+-                throw proxyError;
++                throw lastProbeError;
+             }
+         }
+ 

@@ -1,0 +1,14 @@
+diff --git a/region-config.js b/region-config.js
+--- a/region-config.js
++++ b/region-config.js
+@@ -11,7 +11,9 @@
+     PH: { currency: 'PHP', label: '菲律宾', locale: 'en-PH', timezone: 'Asia/Manila' },
+     US: { currency: 'USD', label: '美国', locale: 'en-US', timezone: 'America/New_York' },
+     SG: { currency: 'SGD', label: '新加坡', locale: 'en-SG', timezone: 'Asia/Singapore' },
+-    MY: { currency: 'MYR', label: '马来西亚', locale: 'en-MY', timezone: 'Asia/Kuala_Lumpur' }
++    MY: { currency: 'MYR', label: '马来西亚', locale: 'en-MY', timezone: 'Asia/Kuala_Lumpur' },
++    // 服务器直连调试：服务器出口在日本，加日本区才能不调用代理跑完整流程
++    JP: { currency: 'JPY', label: '日本', locale: 'ja-JP', timezone: 'Asia/Tokyo' }
+ };
+ 
+ /** 支持的地区代码列表 */

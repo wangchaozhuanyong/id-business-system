@@ -1,0 +1,11 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "description": "放行真实 /api/auth/session 与 csrf，不再注入旧 accessToken，避免结账时 401 触发登出",
+  "files": {
+    "session-auth.js": {
+      "original": "37c6e2eb1961f6990deb974c6bb232e66fc5a024",
+      "approved": "23138d516b77fe14ca7ab48caf58fa770a5e9b78"
+    }
+  },
+  "patchSha256": "99fe0dbb210d526817988caf44c433fe34b3497a4ca898d13d1d31b7e7467d3c"
+}

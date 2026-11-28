@@ -1,0 +1,11 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "description": "支付表单等待加心跳并放宽上限，避免慢线路被看门狗误杀",
+  "files": {
+    "chatgpt.js": {
+      "original": "5ea9f8833ecfcf1d0bba2b57aac24bedf205687a",
+      "approved": "3ff8755022d5af47cd4f9def364cb616cb9a3ca6"
+    }
+  },
+  "patchSha256": "bcfa76bc21de5e989203248e64b3ed2a83b2617fa6c03648220e577150c4ae72"
+}

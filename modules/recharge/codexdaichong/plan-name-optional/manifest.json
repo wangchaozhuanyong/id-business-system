@@ -1,0 +1,11 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "description": "网页流程下 Pro 套餐不再要求 API plan_name，缺失时用空值继续，使 Pro 可以调试",
+  "files": {
+    "server.js": {
+      "original": "4aba7bc2727c59e56a5d9e7198f21af203e834ba",
+      "approved": "3ab63c8b08b7afe3c573ade1928deded55e42ae6"
+    }
+  },
+  "patchSha256": "f86c5420fa58a139c4481e53f16f4c4966977fef503f5616020d15f4198480d6"
+}

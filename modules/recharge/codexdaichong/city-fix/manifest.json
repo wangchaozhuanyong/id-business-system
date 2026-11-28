@@ -1,0 +1,11 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "description": "城市字段缺失时补填一次，仍缺失则明确失败，避免地址不全通过校验",
+  "files": {
+    "stripe-payment.js": {
+      "original": "29e323600d6638e817be2b04378f2c24109463ea",
+      "approved": "e323f0243fa33a3d24d59bd6e6cbf748da6bf4f4"
+    }
+  },
+  "patchSha256": "d2f83762cfb86b9e26ef61d6bf911dcce33fa461f9f0b7e075e7a8b24c85d5d0"
+}

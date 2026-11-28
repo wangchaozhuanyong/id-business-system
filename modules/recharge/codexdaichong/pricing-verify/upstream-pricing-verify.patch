@@ -1,0 +1,47 @@
+diff --git a/pricing-checkout.js b/pricing-checkout.js
+--- a/pricing-checkout.js
++++ b/pricing-checkout.js
+@@ -658,6 +658,27 @@
+     if (!url.includes('chatgpt.com')) {
+         throw new Error(`定价页打开失败，当前 URL: ${url}`);
+     }
++
++    // PRICING_PAGE_VERIFY: ChatGPT 是 SPA，路由渲染慢。只校验域名会把聊天主页
++    // （"What's on your mind today?"）误判成定价页，之后在错误页面上找 Plus 卡片和
++    // Start now 会点到不可控的元素，甚至触发登出。这里必须确认页面确实有套餐内容。
++    const looksLikePricing = async () => {
++        const text = String(await page.evaluate(() => document.body?.innerText || '').catch(() => ''));
++        if (/What's on your mind today/i.test(text)) return false;
++        return /(Free|Plus|Pro|Business)[\s\S]{0,120}(\/\s*month|per month|每月|\/\s*mo)|\bUpgrade\b|\bStart now\b|\bGet started\b|升级/i.test(text);
++    };
++    let pricingOk = await looksLikePricing();
++    for (let attempt = 1; attempt <= 2 && !pricingOk; attempt += 1) {
++        console.log(`[Warn] 定价页内容未就绪，重新打开 ${attempt}/2...`);
++        await page.goto(PRICING_URL, { waitUntil: 'domcontentloaded', timeout }).catch(() => {});
++        await page.waitForLoadState('networkidle', { timeout: 30000 }).catch(() => {});
++        await page.waitForTimeout(3000);
++        pricingOk = await looksLikePricing();
++    }
++    if (!pricingOk) {
++        const snippet = String(await page.evaluate(() => (document.body?.innerText || '').replace(/\s+/g, ' ').slice(0, 140)).catch(() => ''));
++        throw new Error(`定价页未就绪（不是套餐页），当前 URL: ${page.url()}，页面: ${snippet}`);
++    }
+     console.log('✅ [步骤] 已打开 ChatGPT 定价页 (#pricing)');
+ }
+ 
+@@ -949,6 +970,15 @@
+     console.log(`📦 [步骤] 正在点击升级按钮 (套餐: ${plan})...`);
+ 
+     await assertChatGptLoggedIn(page, '升级前');
++
++    // CLICK_PRECONDITION: 点击前确认确实在套餐页。之前出现过程序在聊天主页上继续
++    // 找 Plus 卡片并点击，点击目标完全不可控，可能触发登出。这里直接中止并报真实页面。
++    const preClickText = String(await page.evaluate(() => (document.body?.innerText || '').replace(/\s+/g, ' ').slice(0, 160)).catch(() => ''));
++    if (/What's on your mind today/i.test(preClickText)
++        && !/(Upgrade|Start now|Get started|Plus|Pro|升级)/i.test(preClickText)) {
++        throw new Error(`升级前页面不在套餐页，已中止点击。当前 URL: ${page.url()}，页面: ${preClickText}`);
++    }
++
+     await switchToPersonalPlans(page);
+     await page.waitForTimeout(1000);
+ 

@@ -1,0 +1,11 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "description": "把「等待 Checkout 页面超时」「未找到升级按钮」改为可换线路重试",
+  "files": {
+    "server.js": {
+      "original": "744b47e1ad2847774fea4dc5fc189073921e5567",
+      "approved": "f240d3eddbd25524f6afc9ed483230b4e441a253"
+    }
+  },
+  "patchSha256": "3e0af5a6ec795a09c42a0e420243a12e61a74ede3abf4fe928a921806180d887"
+}

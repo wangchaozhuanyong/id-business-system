@@ -1,0 +1,24 @@
+diff --git a/server.js b/server.js
+--- a/server.js
++++ b/server.js
+@@ -3339,7 +3339,19 @@
+             return res.status(400).json({ success: false, error: error.message });
+         }
+         const planNameOverride = body.plan_name ? String(body.plan_name).trim() : '';
+-        const resolvedPlanName = planNameOverride || store.resolvePlanName(planType);
++        // PLAN_NAME_OPTIONAL_UI: 网页流程（CHECKOUT_MODE=ui）不需要 API 的 plan_name，
++        // 而 Pro 系列在 plan-registry 里 checkoutPlanName 为空，解析会抛「未配置」，
++        // 导致 Pro 套餐根本进不了调试。UI 模式下解析失败就用空值继续。
++        let resolvedPlanName = planNameOverride;
++        if (!resolvedPlanName) {
++            try {
++                resolvedPlanName = store.resolvePlanName(planType);
++            } catch (planNameError) {
++                if (String(process.env.CHECKOUT_MODE || 'ui').toLowerCase() !== 'ui') throw planNameError;
++                resolvedPlanName = '';
++                console.warn(`[调试] ${planType} 的 plan_name 未配置（网页流程不需要，继续）`);
++            }
++        }
+         const executionRoute = await (await getRechargeRouting()).resolve(planType);
+         const regionCode = executionRoute.region;
+         if (!isSupportedRegion(regionCode)) {
