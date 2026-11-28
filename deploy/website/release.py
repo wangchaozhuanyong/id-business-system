@@ -116,6 +116,7 @@ ROUTING_STARTUP_NATIVE_SCOPE = {
 # #1136 shipped the shared routing inputs to the website and adapter while the native image stayed on its prior revision.
 ROUTING_STARTUP_MANUAL_SITE = "70d3f6a48f56de7e6e2143492bfcfb9b11646d48"
 ROUTING_STARTUP_PRIOR_NATIVE = "d7a9b22909ea7d716a202866fe08a99e9e70128a"
+ROUTING_STARTUP_MOBILE_SITE = "e23a690e8315a06db009be88251da4194d093499"
 # 已批准的优惠及浏览器补丁独立核验，不与银行卡套餐或供应商退役批次绑定。
 PLUS_TRIAL_PATCH_FILES = {
     f"modules/recharge/codexdaichong/plus-trial/{name}"
@@ -376,11 +377,16 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False, 
             native_changes = set(git("diff", "--name-only", native_revision, sha, "--",
                                      "modules/recharge", "package-lock.json", *CORE_PATHS).splitlines())
             native_changes.discard(BACKUP_OPERATION)
-            approved_manual_routing = (base == ROUTING_STARTUP_MANUAL_SITE and
-                                       native_revision == ROUTING_STARTUP_PRIOR_NATIVE and
-                                       native_changes == MANUAL_ROUTING_SCOPE)
+            manual_scope = MANUAL_ROUTING_SCOPE
+            if base == ROUTING_STARTUP_MOBILE_SITE:
+                manual_scope |= {*MOBILE_LAYOUT_PRESENTATION_FILES, MOBILE_LAYOUT_MANIFEST_PATH}
+            approved_manual_routing = (base in (ROUTING_STARTUP_MANUAL_SITE, ROUTING_STARTUP_MOBILE_SITE) and
+                                       native_revision == ROUTING_STARTUP_PRIOR_NATIVE and native_changes == manual_scope)
             if native_changes != ROUTING_STARTUP_NATIVE_SCOPE and not approved_manual_routing:
                 raise RuntimeError("routing_startup_native_scope_mismatch")
+            if base == ROUTING_STARTUP_MOBILE_SITE:
+                return "routingStartupPublishedAssets", require_presentation_approval(
+                    ROUTING_STARTUP_MANUAL_SITE, base, MOBILE_LAYOUT_MANIFEST, MOBILE_LAYOUT_PRESENTATION_FILES)
     elif include_adapter:
         if not changed <= ADAPTER_SCOPE or not changed.intersection(ADAPTER_RUNTIME_FILES):
             raise RuntimeError("recharge_adapter_release_scope_mismatch")
@@ -771,6 +777,10 @@ def main(sample_backup_resources=False):
         raise RuntimeError("recharge_presentation_requires_plain_website")
     deferred_native = None
     deployed_native = None
+    routing_assets = None
+    if presentation_scope == "routingStartupPublishedAssets":
+        routing_assets = presentation["assetsSha256"]
+        presentation_scope, presentation = None, None
     if presentation_scope == "deployedNativeBuildInputs":
         deployed_native = presentation
         presentation_scope, presentation = None, None
@@ -794,6 +804,11 @@ def main(sample_backup_resources=False):
     names = (f"independent-source-{sha}.tar.gz", f"independent-assets-{sha}.json", f"independent-event-runtime-{sha}.tar.gz")
     expected_assets = before["assetsSha256"]
     actual_assets = hashlib.sha256((OUTPUT / names[1]).read_bytes()).hexdigest()
+    if routing_assets is not None and (
+            before["assetsSha256"] != routing_assets or actual_assets != routing_assets or
+            before.get("mountedAssets", {}).get("available") is not True or
+            before["mountedAssets"].get("sha256") != routing_assets):
+        raise RuntimeError("routing_startup_published_assets_mismatch")
     asset_repair = None
     if interrupted:
         expected_assets = interrupted["assetsSha256"]

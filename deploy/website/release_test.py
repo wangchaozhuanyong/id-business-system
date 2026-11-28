@@ -1547,6 +1547,25 @@ class WebsiteReleaseTests(unittest.TestCase):
     @patch("release.require_presentation_approval")
     @patch("release.require_ancestor")
     @patch("release.git")
+    def test_routing_startup_reuses_only_the_published_mobile_assets(self, git, _ancestor, approval):
+        site = release.ROUTING_STARTUP_MOBILE_SITE
+        native = {"identity": {"revision": release.ROUTING_STARTUP_PRIOR_NATIVE, "running": True},
+                  "imageLabelsVerified": True}
+        website_changes = "\n".join(sorted(release.ROUTING_STARTUP_NATIVE_SCOPE))
+        native_changes = "\n".join(sorted(release.MANUAL_ROUTING_SCOPE |
+            {*release.MOBILE_LAYOUT_PRESENTATION_FILES, release.MOBILE_LAYOUT_MANIFEST_PATH}))
+        git.side_effect = [website_changes, native_changes]
+        self.assertEqual(release.require_website_scope(site, TARGET, include_core=True, native_publication=native),
+                         ("routingStartupPublishedAssets", approval.return_value))
+        approval.assert_called_once_with(release.ROUTING_STARTUP_MANUAL_SITE, site,
+            release.MOBILE_LAYOUT_MANIFEST, release.MOBILE_LAYOUT_PRESENTATION_FILES)
+        git.side_effect = [website_changes, native_changes + "\nmodules/recharge/codexdaichong/prepare.mjs"]
+        with self.assertRaisesRegex(RuntimeError, "routing_startup_native_scope_mismatch"):
+            release.require_website_scope(site, TARGET, include_core=True, native_publication=native)
+
+    @patch("release.require_presentation_approval")
+    @patch("release.require_ancestor")
+    @patch("release.git")
     def test_card_reuse_limits_presentation_scope(self, git, ancestor, approval):
         files = remote.CARD_REUSE_LIMITS_PRESENTATION_FILES
         manifest = release.CARD_REUSE_LIMITS_MANIFEST_PATH
