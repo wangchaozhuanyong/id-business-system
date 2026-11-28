@@ -1,0 +1,28 @@
+diff --git a/server.js b/server.js
+--- a/server.js
++++ b/server.js
+@@ -4173,6 +4173,24 @@
+     hcaptchaEnv = {},
+     debug = null
+ }) {
++    // REGION_SESSION_MATCH: OpenAI 把会话绑定到创建它的地区。账号在马来登录、却从菲律宾 IP
++    // 使用，会被判定凭证异地出现而直接吊销（客户掉线，须重新登录）。实测确认：马来登录的
++    // 账号用菲律宾区下单必掉线；菲律宾登录的账号用菲律宾区下单不掉线。
++    // 启动前就拦下不一致的组合，避免跑完才把客户踢下线。
++    try {
++        const regionSession = JSON.parse(String(sessionRaw || ''));
++        const sessionCountry = String(regionSession?.statsigContext?.country || '').toUpperCase();
++        const targetRegion = String(region || '').toUpperCase();
++        if (sessionCountry && targetRegion && sessionCountry !== targetRegion) {
++            throw new Error(
++                `账号登录地区(${sessionCountry}) 与支付地区(${targetRegion}) 不一致，`
++                + `上游会吊销该会话并让客户掉线。请在 ${targetRegion} 网络环境下重新登录后导出 session JSON。`
++            );
++        }
++    } catch (regionError) {
++        if (String(regionError.message || '').includes('不一致')) throw regionError;
++    }
++
+     const base = {
+         ...process.env,
+         ...hcaptchaEnv,

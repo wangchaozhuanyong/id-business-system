@@ -1,0 +1,11 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "description": "地区不一致改为警告继续，不再阻断调试与充值",
+  "files": {
+    "server.js": {
+      "original": "3ab63c8b08b7afe3c573ade1928deded55e42ae6",
+      "approved": "da868775c70b35eb5f69069ec34f92ac65f4d736"
+    }
+  },
+  "patchSha256": "aef151a69d4b02b41c7fffd2e5a0a2f2bca5a43f42b67d1d16595967ec5748c7"
+}

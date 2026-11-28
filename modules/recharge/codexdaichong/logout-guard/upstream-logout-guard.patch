@@ -1,0 +1,47 @@
+diff --git a/pricing-checkout.js b/pricing-checkout.js
+--- a/pricing-checkout.js
++++ b/pricing-checkout.js
+@@ -331,7 +331,7 @@
+     const triggerCandidates = [
+         surface.locator('button[aria-haspopup="listbox"]').last(),
+         surface.locator('button[aria-haspopup="listbox"]').first(),
+-        surface.locator('button[aria-haspopup="menu"]').last(),
++        // 已移除 button[aria-haspopup="menu"]：账号头像菜单同属性，点错会触发登出（见 LOGOUT_GUARD）
+         surface.locator('button[aria-expanded]').filter({ hasText: ALL_COUNTRY_NAME_PATTERN }).last(),
+         surface.locator('[role="dialog"] button').filter({ hasText: ALL_COUNTRY_NAME_PATTERN }).last()
+     ];
+@@ -521,7 +521,8 @@
+ 
+     const optionLocators = [
+         page.getByRole('option', { name: new RegExp(`^${escapeRegExp(label)}$`, 'i') }),
+-        page.getByRole('menuitem', { name: new RegExp(escapeRegExp(label), 'i') }),
++        page.getByRole('menuitem', { name: new RegExp(escapeRegExp(label), 'i') })
++            .filter({ hasNotText: /log\s*out|sign\s*out|登出|退出/i }),
+         page.getByRole('radio', { name: new RegExp(escapeRegExp(label), 'i') }),
+         page.getByRole('button', { name: new RegExp(`^${escapeRegExp(label)}$`, 'i') }),
+         page.locator(`[role="option"]:has-text("${label}")`),
+@@ -1068,7 +1069,24 @@
+     throw new Error(`等待 Checkout 页面超时，当前 URL: ${page.url()}`);
+ }
+ 
++// LOGOUT_GUARD: 地区选择器的候选里包含 button[aria-haspopup="menu"]，账号头像菜单同样有该属性。
++// 一旦点开到账号菜单，后续选项匹配会落到 "Log out" 上，页面会导航到 /auth/logout 并吊销会话，
++// 连带把账号原主人踢下线（实测任务 #50）。这里在协议层直接封死登出导航，任何误点都不会生效。
++async function guardLogoutNavigation(page) {
++    if (!page || page.__logoutGuardInstalled) return;
++    page.__logoutGuardInstalled = true;
++    try {
++        await page.route('**/auth/logout*', (route) => {
++            console.warn('[防护] 拦截到登出导航，已阻止: ' + String(route.request().url()).slice(0, 80));
++            return route.abort();
++        });
++    } catch (error) {
++        console.warn('[防护] 登出导航拦截安装失败: ' + error.message);
++    }
++}
++
+ async function openPricingCheckout(page, { region, planType }) {
++    await guardLogoutNavigation(page);
+     await waitForPricingPage(page);
+     await switchToPersonalPlans(page);
+     await selectPricingRegion(page, region);

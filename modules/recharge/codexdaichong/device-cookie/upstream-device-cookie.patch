@@ -1,0 +1,39 @@
+diff --git a/session-auth.js b/session-auth.js
+--- a/session-auth.js
++++ b/session-auth.js
+@@ -336,11 +336,34 @@
+         push('__Host-next-auth.csrf-token', csrfToken);
+     }
+ 
+-    const deviceId = String(sessionData?.deviceId || sessionData?.device_id || sessionData?.['oai-did'] || '').trim();
++    // DID_FROM_STATSIG: /api/auth/session 的导出里设备 ID 在 statsigContext.deviceId，
++    // 顶层没有 deviceId/oai-did。原实现只读顶层，导致 oai-did 永远取空、从不注入，
++    // 每次都是一个「没有设备指纹的全新浏览器配有效会话」——OpenAI 会判定凭证被复制。
++    const deviceId = String(
++        sessionData?.deviceId
++        || sessionData?.device_id
++        || sessionData?.['oai-did']
++        || sessionData?.statsigContext?.deviceId
++        || sessionData?.statsigContext?.device_id
++        || sessionData?.statsig?.deviceId
++        || ''
++    ).trim();
+     if (deviceId && !seenNames.has('oai-did')) {
+         push('oai-did', deviceId);
+     }
+ 
++    // ACCOUNT_COOKIE_FROM_JSON: _account 是账号 UUID，导出 JSON 里有 account.id，
++    // 原实现没有注入，OpenAI 校验身份一致性时会缺一项。
++    const accountId = String(
++        sessionData?.account?.id
++        || sessionData?.account_id
++        || sessionData?._account
++        || ''
++    ).trim();
++    if (accountId && !seenNames.has('_account')) {
++        push('_account', accountId);
++    }
++
+     return specs;
+ }
+ 

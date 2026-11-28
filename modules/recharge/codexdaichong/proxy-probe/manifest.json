@@ -1,0 +1,11 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "description": "代理连通性检查改为可配置超时并默认重试 2 次，避免移动线路首包慢被误判为故障",
+  "files": {
+    "index.js": {
+      "original": "aee01415ac2600951e9f7825690447929dca193e",
+      "approved": "4383f91d237a0b8e6dadf92041fc2814ba782169"
+    }
+  },
+  "patchSha256": "d39f6eabc83b8dbe6bf13007e9ea0ffac46cc64d7db6b7e38f14c608adf4bd7b"
+}

@@ -1,0 +1,12 @@
+diff --git a/public/admin.js b/public/admin.js
+--- a/public/admin.js
++++ b/public/admin.js
+@@ -4746,7 +4746,7 @@
+             if (statusEl) {
+                 if (status === 'success') {
+                     statusEl.textContent = data.checkout_page_ready
+-                        ? '✅ 支付页面已打开，调试已停止（未填卡、未付款）'
++                        ? '✅ 已填卡与账单地址，调试已停止（未付款）'
+                         : '✅ 支付链接已生成';
+                     statusEl.style.color = 'var(--success, #22c55e)';
+                 } else if (status === 'running') {

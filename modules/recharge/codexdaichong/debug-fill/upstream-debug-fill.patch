@@ -1,0 +1,132 @@
+diff --git a/server.js b/server.js
+--- a/server.js
++++ b/server.js
+@@ -4160,6 +4160,46 @@
+     });
+ }
+ 
++// 充值执行环境唯一拼装入口：生产任务与后台调试共用，改充值参数只改这里。
++// 只影响启动前注入的环境变量；执行步骤、填卡、付款、重试仍由同一套 index.js 完成。
++function buildCheckoutWorkerEnv({
++    jobKey = '',
++    cdk = '',
++    token,
++    sessionRaw,
++    planType,
++    region,
++    proxy,
++    hcaptchaEnv = {},
++    debug = null
++}) {
++    const base = {
++        ...process.env,
++        ...hcaptchaEnv,
++        // 跳过 API 建单：该路径每次都被上游 400 拒绝，且会用非浏览器指纹请求 /api/auth/session，
++        // 有作废真实会话的风险。默认走网页流程；需要时可用 CHECKOUT_MODE=api 显式恢复。
++        CHECKOUT_MODE: String(process.env.CHECKOUT_MODE || 'ui'),
++        CHATGPT_TOKEN: token,
++        CHATGPT_SESSION_JSON: String(sessionRaw || '').startsWith('{') ? sessionRaw : '',
++        CDK_PLAN_TYPE: planType,
++        PAYMENT_REGION_OVERRIDE: region,
++        PROXY: proxy
++    };
++    if (debug) {
++        return {
++            ...base,
++            CHECKOUT_DEBUG_ONLY: '1',
++            CHECKOUT_API_ONLY: debug.apiOnly ? '1' : '0',
++            CHECKOUT_DEBUG_FILL: debug.cardJson ? '1' : '0',
++            DEBUG_CARD_JSON: debug.cardJson || '',
++            PLAN_NAME_OVERRIDE: debug.planNameOverride || '',
++            ACTIVATION_EMAIL: debug.email || '',
++            CDK_CODE: ''
++        };
++    }
++    return { ...base, JOB_KEY: jobKey, CDK_CODE: cdk };
++}
++
+ function spawnCheckoutDebugWorker({ task, token, sessionRaw, planType, region, executionRoute, planNameOverride, email, apiOnly = false }) {
+     (async () => {
+         const checkoutScript = path.join(__dirname, 'index.js');
+@@ -4169,21 +4209,31 @@
+             logTask(task.jobKey, routing.describe(executionRoute));
+             const hcaptchaCfg = await store.getHcaptchaConfig();
+             const { env: hcaptchaEnv } = buildHcaptchaEnvFromConfig(hcaptchaCfg);
+-            const runtimeEnv = {
+-                ...process.env,
+-                ...hcaptchaEnv,
+-                CHECKOUT_DEBUG_ONLY: '1',
+-                CHECKOUT_MODE: 'api',
+-                CHECKOUT_API_ONLY: apiOnly ? '1' : '0',
+-                CHATGPT_TOKEN: token,
+-                CHATGPT_SESSION_JSON: String(sessionRaw || '').startsWith('{') ? sessionRaw : '',
+-                CDK_PLAN_TYPE: planType,
+-                PAYMENT_REGION_OVERRIDE: region,
+-                PLAN_NAME_OVERRIDE: planNameOverride || '',
+-                CDK_CODE: '',
+-                ACTIVATION_EMAIL: email || '',
+-                PROXY: proxy
+-            };
++            // 调试也走卡池取卡：只读快照，不锁定卡、不计次数、不扣款。
++            let debugCardJson = '';
++            try {
++                const debugAssets = await store.getRuntimeAssets();
++                const debugPoolCard = debugAssets && debugAssets.card ? debugAssets.card : null;
++                if (debugPoolCard && debugPoolCard.number) {
++                    const expiryParts = String(debugPoolCard.expiry || '').split('/');
++                    debugCardJson = JSON.stringify({
++                        number: String(debugPoolCard.number).replace(/\D/g, ''),
++                        expMonth: String(expiryParts[0] || '').padStart(2, '0'),
++                        expYear: String(expiryParts[1] || '').trim(),
++                        cvc: String(debugPoolCard.cvc || '').trim(),
++                        holder: ''
++                    });
++                    logTask(task.jobKey, `调试取卡: 尾号 ${String(debugPoolCard.number).slice(-4)}（不锁定、不计次数）`);
++                } else {
++                    logTask(task.jobKey, '调试取卡: 卡池无可用卡，将不填卡');
++                }
++            } catch (debugCardError) {
++                logTask(task.jobKey, `调试取卡失败: ${debugCardError.message}`);
++            }
++            const runtimeEnv = buildCheckoutWorkerEnv({
++                jobKey: task.jobKey, token, sessionRaw, planType, region, proxy, hcaptchaEnv,
++                debug: { apiOnly, planNameOverride, email, cardJson: debugCardJson }
++            });
+ 
+             logTask(task.jobKey, `启动 Playwright 浏览器 proxy=${proxy ? 'yes' : 'no'}`);
+             const run = await spawnWorkerWithBrowser({
+@@ -4205,8 +4255,11 @@
+             const failureScreenshots = extractScreenshotsFromOutput(run.output);
+             const finalStatus = analysis.status || 'failed';
+             const finalProgress = finalStatus === 'success' ? 100 : Math.min(getCheckoutProgress(run.output, finalStatus), 99);
++            const debugCardFilled = /\[调试\] 结果: card=true/.test(String(run.output || ''));
+             const finalMessage = finalStatus === 'success' && analysis.checkoutPageReady
+-                ? '支付页面已打开，调试已停止（未填卡、未付款）'
++                ? (debugCardFilled
++                    ? '已填卡与账单地址，停在付款前（未付款）'
++                    : '支付页面已打开，调试已停止（未填卡、未付款）')
+                 : finalStatus === 'success' && checkoutUrl
+                 ? `支付链接: ${checkoutUrl}`
+                 : (analysis.message || '支付链接调试失败');
+@@ -4282,17 +4335,10 @@
+                 logTask(task.jobKey, routing.describe(attemptRoute));
+                 const hcaptchaCfg = await store.getHcaptchaConfig();
+                 const { env: hcaptchaEnv } = buildHcaptchaEnvFromConfig(hcaptchaCfg);
+-                const runtimeEnv = {
+-                    ...process.env,
+-                    ...hcaptchaEnv,
+-                    JOB_KEY: task.jobKey,
+-                    CHATGPT_TOKEN: token,
+-                    CHATGPT_SESSION_JSON: String(sessionRaw || '').startsWith('{') ? sessionRaw : '',
+-                    CDK_CODE: cdk,
+-                    CDK_PLAN_TYPE: planType,
+-                    PAYMENT_REGION_OVERRIDE: executionRoute.region,
+-                    PROXY: proxy
+-                };
++                const runtimeEnv = buildCheckoutWorkerEnv({
++                    jobKey: task.jobKey, cdk, token, sessionRaw, planType,
++                    region: executionRoute.region, proxy, hcaptchaEnv
++                });
+ 
+                 logTask(task.jobKey, `尝试 ${attempt} 启动自动化 proxy=${proxy ? 'yes' : 'no'}`);
+ 

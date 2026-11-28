@@ -1,0 +1,25 @@
+diff --git a/pricing-checkout.js b/pricing-checkout.js
+--- a/pricing-checkout.js
++++ b/pricing-checkout.js
+@@ -686,8 +686,10 @@
+         pricingOk = await looksLikePricing();
+     }
+     if (!pricingOk) {
+-        const snippet = String(await page.evaluate(() => (document.body?.innerText || '').replace(/\s+/g, ' ').slice(0, 140)).catch(() => ''));
+-        throw new Error(`定价页未就绪（不是套餐页），当前 URL: ${page.url()}，页面: ${snippet}`);
++        // MSG_LEN_GUARD: task_logs.message 是 varchar(255)，带整段页面内容会超长，
++        // 写库本身报「Data too long」，真正的失败原因反而丢失。片段压到 40 字符。
++        const snippet = String(await page.evaluate(() => (document.body?.innerText || '').replace(/\s+/g, ' ').slice(0, 40)).catch(() => ''));
++        throw new Error(`定价页未就绪: URL=${page.url()} 页面=${snippet}`);
+     }
+     console.log('✅ [步骤] 已打开 ChatGPT 定价页 (#pricing)');
+ }
+@@ -986,7 +988,7 @@
+     const preClickText = String(await page.evaluate(() => (document.body?.innerText || '').replace(/\s+/g, ' ').slice(0, 160)).catch(() => ''));
+     if (/What's on your mind today/i.test(preClickText)
+         && !/(Upgrade|Start now|Get started|Plus|Pro|升级)/i.test(preClickText)) {
+-        throw new Error(`升级前页面不在套餐页，已中止点击。当前 URL: ${page.url()}，页面: ${preClickText}`);
++        throw new Error(`升级前不在套餐页，已中止: URL=${page.url()} 页面=${String(preClickText).slice(0, 40)}`);
+     }
+ 
+     await switchToPersonalPlans(page);

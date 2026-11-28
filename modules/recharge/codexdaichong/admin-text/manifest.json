@@ -1,0 +1,11 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "description": "前端任务卡文案改为已填卡与账单地址，与后端消息一致",
+  "files": {
+    "public/admin.js": {
+      "original": "fc5981e1780c700ed42a2808c58e5a6b569b5ee3",
+      "approved": "8eb5716a036fd2bdd92296a2b2ca6dc5c2efe4f1"
+    }
+  },
+  "patchSha256": "c50f41e5d88a7b20fe57a868797d58814a5d7879c23b8a698d46b168b604b6c2"
+}

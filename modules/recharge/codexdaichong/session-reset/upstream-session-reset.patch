@@ -1,0 +1,19 @@
+diff --git a/session-auth.js b/session-auth.js
+--- a/session-auth.js
++++ b/session-auth.js
+@@ -506,6 +506,15 @@
+         );
+     }
+ 
++    // SESSION_RESET_CLEAR: 浏览器池槽位用的是持久化 profile，上一个账号的 _account / oai-* /
++    // 旧 session-token 会留在磁盘。注入新账号前必须先清空，否则 OpenAI 会判定身份不一致，
++    // 作废新会话并把账号原主人踢下线。清空后与 standalone 全新上下文行为一致。
++    try {
++        await context.clearCookies();
++    } catch (clearError) {
++        console.warn('[Session] 清理旧 Cookie 失败: ' + clearError.message);
++    }
++
+     const injectResult = await injectChatGptCookies(context, cookieSpecs);
+ 
+     const sessionTokenFailed = injectResult.failed?.filter((item) => isSessionTokenCookieName(item.name)) || [];

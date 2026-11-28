@@ -1,0 +1,32 @@
+diff --git a/index.js b/index.js
+--- a/index.js
++++ b/index.js
+@@ -471,7 +471,14 @@
+             let probeOk = false;
+             for (let probeTry = 1; probeTry <= probeRounds && !probeOk; probeTry += 1) {
+                 try {
+-                    const probeResponse = await context.request.get("http://api.ipify.org/?format=text", {
++                    // PROXY_PROBE_HTTPS: 明文 http 经 SOCKS→HTTP 中继会被卡住（实测 30s 超时），
++                    // 改用 https；首个端点失败时换备用端点再试。
++                    const probeEndpoints = [
++                        'https://api.ipify.org/?format=text',
++                        'https://ifconfig.me/ip'
++                    ];
++                    const probeUrl = probeEndpoints[(probeTry - 1) % probeEndpoints.length];
++                    const probeResponse = await context.request.get(probeUrl, {
+                         timeout: probeTimeoutMs
+                     });
+                     if (probeResponse.ok()) {
+@@ -488,8 +495,10 @@
+                 }
+             }
+             if (!probeOk) {
+-                console.log("    [!] 请检查 PROXY 配置是否正确，或者账号余额是否充足。");
+-                throw lastProbeError;
++                // PROXY_PROBE_HTTPS: 探测只作健康提示，不再硬终止。
++                // 线路若真的不可用，后续真实请求会给出更准确的错误，避免误判把整单打死。
++                console.log("    [!] 代理连通性探测未成功，继续执行（真实请求会暴露问题）: "
++                    + String(lastProbeError && lastProbeError.message || '').slice(0, 80));
+             }
+         }
+ 

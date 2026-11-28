@@ -1,0 +1,11 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "description": "表单等待心跳对所有模式生效，生产也获得防看门狗保护；填卡分支仍限调试",
+  "files": {
+    "chatgpt.js": {
+      "original": "3017174c4813a040ace25d0d8c42e2589d317976",
+      "approved": "463a75e6d1eee28bae03b9b25728746dd39ac3db"
+    }
+  },
+  "patchSha256": "951b5190e4e97279828603a4165ccce61d811c110b47ebc2005f402d263ae6a2"
+}

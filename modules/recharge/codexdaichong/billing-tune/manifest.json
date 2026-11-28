@@ -1,0 +1,11 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "description": "延长账单表单首等、缩短国家/州选择的空等超时，减少地址填写重试与总耗时",
+  "files": {
+    "stripe-payment.js": {
+      "original": "e4454ece42efec16892eea53220bb52fcf281183",
+      "approved": "29e323600d6638e817be2b04378f2c24109463ea"
+    }
+  },
+  "patchSha256": "cabc17606def52980cf0c8c4ba0fcbe3178ed7541039c9592899e0a0a1beaa2b"
+}

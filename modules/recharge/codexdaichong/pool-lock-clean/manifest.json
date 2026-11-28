@@ -1,0 +1,11 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "description": "预热前清理 profile 残留 Singleton 锁，Chromium 被强杀后池可自愈",
+  "files": {
+    "browser-pool.js": {
+      "original": "68642e735c606ef1a97f46b0e0598ff5129bdc31",
+      "approved": "ea3c894f45b0945eb1ef75f26b28ee2a1a16a356"
+    }
+  },
+  "patchSha256": "5d44a5af79077547d5c6d603efecb24d41422efcc43a1297a23f15c524ecfd89"
+}

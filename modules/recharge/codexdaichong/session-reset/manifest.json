@@ -1,0 +1,11 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "description": "注入 Session 前清空浏览器池持久化 Cookie，避免上一账号身份残留导致新会话被作废",
+  "files": {
+    "session-auth.js": {
+      "original": "e186977d149f3d6e57d1cc8f2888a1a06df1cd0b",
+      "approved": "a280ebb367324069c7cc2ddcdfd6c877030c1764"
+    }
+  },
+  "patchSha256": "88c4fc3197bb22643a708cd7b43d79a5a5950b6403eb468a4fb387d1fff280b4"
+}

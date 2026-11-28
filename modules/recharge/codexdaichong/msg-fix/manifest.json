@@ -1,0 +1,19 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "description": "修正调试提示文案：实际会填卡与地址，仅不提交付款",
+  "files": {
+    "chatgpt.js": {
+      "original": "3ff8755022d5af47cd4f9def364cb616cb9a3ca6",
+      "approved": "200b7d3f7a6dc9fdfd08d68448a8489b1d5ab9a4"
+    },
+    "index.js": {
+      "original": "6f487ed07d09bd85f2f84c47583ed1cff73c2f0e",
+      "approved": "ce33f8050d5b72185327ddf2a6cb878bd8310c83"
+    },
+    "server.js": {
+      "original": "da868775c70b35eb5f69069ec34f92ac65f4d736",
+      "approved": "0dd2131ce9e17460406748f64458107eb7f50a6a"
+    }
+  },
+  "patchSha256": "75cc28dbb63c2111cdbc5dd604656427007e4ba42a569a6c5a0d8c19f10df73a"
+}

@@ -1,0 +1,16 @@
+diff --git a/chatgpt.js b/chatgpt.js
+--- a/chatgpt.js
++++ b/chatgpt.js
+@@ -584,7 +584,11 @@
+             if (await frame.locator(cardSelectorForFill).count().catch(() => 0)) { cardPresent = true; break; }
+         }
+         // Stripe 支付区是懒加载：调试填卡时先滚动到支付区，等卡号框渲染出来（最多 90 秒）。
+-        if (!cardPresent && process.env.CHECKOUT_DEBUG_FILL === '1') {
++        // WAIT_ALL_MODES: 表单等待（带 3 秒心跳与 180 秒上限）原来只在调试模式生效，
++        // 生产不设 CHECKOUT_DEBUG_FILL，于是拿不到这套保护，慢线路下会被 3 分钟无输出的
++        // 看门狗误杀。这里改为所有模式都执行等待；真正的「用调试卡填卡」分支仍由下面的
++        // CHECKOUT_DEBUG_FILL 条件控制，生产不会误用调试卡。
++        if (!cardPresent) {
+             const waitMs = Number(process.env.CHECKOUT_FORM_WAIT_MS || 180000);
+             for (let waited = 0; waited < waitMs && !cardPresent; waited += 3000) {
+                 // 页面繁忙时 page.evaluate 会无限等待，造成日志静默被看门狗误杀。

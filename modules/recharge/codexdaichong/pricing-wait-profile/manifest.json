@@ -1,0 +1,11 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "description": "判断定价页前等待账号资料初始化完成，避免 Loading profile 时误判为聊天主页",
+  "files": {
+    "pricing-checkout.js": {
+      "original": "48027ca0806ffa24d86061b3901ed8478420228d",
+      "approved": "005d68ad0a70ad851cef081e52087da1f44d475b"
+    }
+  },
+  "patchSha256": "5836bdb022573875c6090bfc160b3a23a055813f2cdb8b3d5d177f8757a5427b"
+}

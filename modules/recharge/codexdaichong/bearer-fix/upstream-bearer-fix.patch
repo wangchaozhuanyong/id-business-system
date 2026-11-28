@@ -1,0 +1,34 @@
+diff --git a/session-auth.js b/session-auth.js
+--- a/session-auth.js
++++ b/session-auth.js
+@@ -603,7 +603,17 @@
+             await route.continue();
+             return;
+         }
+-        if (url.includes('auth.openai.com') || url.includes('chatgpt.com') || url.includes('openai.com') || url.includes('pay.openai.com')) {
++        // BEARER_SCOPE_FIX: 原实现给所有 chatgpt.com / openai.com 请求强塞
++        // Authorization: Bearer <固定 accessToken>，包括页面导航、静态资源、打点与心跳。
++        // ChatGPT 网页端是纯 Cookie 认证，浏览器本来不会发这个头；一旦 token 过期或
++        // 服务端不认，就会出现大面积 401，NextAuth 收到 401 立即 signOut()，把本地会话
++        // 清掉并跳登录页。同时「Cookie 会话 + 不匹配的 Bearer」会被判定为会话异常，
++        // 直接吊销原会话，导致账号原主人被踢下线（必须重新登录）。
++        // 修复：只有真正靠 Bearer 鉴权的 backend-api 请求才注入，其余原样转发。
++        const isBackendApi = /\/backend-api\//.test(url);
++        const isDocumentOrAsset = ['document', 'script', 'stylesheet', 'image', 'font', 'media', 'manifest', 'other']
++            .includes(resourceType);
++        if (isBackendApi && !isDocumentOrAsset && !route.request().headers().authorization) {
+             await route.continue({
+                 headers: {
+                     ...route.request().headers(),
+diff --git a/pricing-checkout.js b/pricing-checkout.js
+--- a/pricing-checkout.js
++++ b/pricing-checkout.js
+@@ -50,7 +50,7 @@
+ const SKIP_REGION_BUTTON_TEXT = /^(Upgrade|Personal|Business|Free|Plus|Pro|Subscribe|Close|Your current plan|升级|订阅|关闭)$/i;
+ 
+ const PLAN_UPGRADE_PATTERNS = {
+-    plus: [/升级至\s*Plus/i, /Upgrade to Plus/i, /Get Plus/i, /Subscribe to Plus/i, /^Upgrade$/i, /^Buy now$/i, /^Get started$/i],
++    plus: [/升级至\s*Plus/i, /Upgrade to Plus/i, /Get Plus/i, /Subscribe to Plus/i, /Upgrade/i, /Buy now/i, /Get started/i],
+     pro_5x: [/升级至\s*Pro/i, /Upgrade to Pro/i, /Get Pro/i, /^Upgrade$/i],
+     pro_20x: [/升级至\s*Pro/i, /Upgrade to Pro/i, /Get Pro/i, /^Upgrade$/i]
+ };

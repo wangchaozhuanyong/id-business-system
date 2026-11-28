@@ -1,0 +1,11 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "description": "账单表单首等缩短到 8 秒；国家州选择成功后不再打印误导性超时提示",
+  "files": {
+    "stripe-payment.js": {
+      "original": "088ef5c974e65a22cc9ec7de0b9c6b7e7c2ab4e9",
+      "approved": "0b9447aac1b93868a8adc4aec670037baa4fa5e3"
+    }
+  },
+  "patchSha256": "f0f92c01c96cca0e9beda361b59231fad529b883e172b05c2c23bf63ff25d9c4"
+}

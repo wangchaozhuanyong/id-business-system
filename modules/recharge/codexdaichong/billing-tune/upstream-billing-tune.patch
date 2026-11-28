@@ -1,0 +1,36 @@
+diff --git a/stripe-payment.js b/stripe-payment.js
+--- a/stripe-payment.js
++++ b/stripe-payment.js
+@@ -601,7 +601,7 @@
+ 
+         // 等待账单地址区域出现（chatgpt.com/checkout 在填完卡号后才会展示）
+         console.log('[Stripe] Step 5: 等待账单地址表单出现...');
+-        await waitForBillingFields(page, 25000);
++        await waitForBillingFields(page, 40000); // BILLING_TIMEOUT_TUNED
+         await page.waitForTimeout(1200);
+ 
+         holderName = generateRandomName();
+@@ -1869,9 +1869,9 @@
+         }
+     })();
+     const timed = new Promise((resolve) => setTimeout(() => {
+-        console.log('  [Stripe] ⚠️ 选择国家超时（25s），继续填后续字段');
++        console.log('  [Stripe] ⚠️ 选择国家超时（12s），继续填后续字段');
+         resolve(false);
+-    }, 25000));
++    }, 12000));
+     return Promise.race([attempt, timed]);
+ }
+ async function selectBillingState(page, stateFullName, stateRaw) {
+@@ -1917,9 +1917,9 @@
+         }
+     })();
+     const timed = new Promise((resolve) => setTimeout(() => {
+-        console.log('  [Stripe] ⚠️ 选择州超时（20s），继续后续步骤');
++        console.log('  [Stripe] ⚠️ 选择州超时（10s），继续后续步骤');
+         resolve(false);
+-    }, 20000));
++    }, 10000));
+     return Promise.race([attempt, timed]);
+ }
+ async function locateOpenAiBillingHeading(page) {

@@ -1,0 +1,24 @@
+diff --git a/pricing-checkout.js b/pricing-checkout.js
+--- a/pricing-checkout.js
++++ b/pricing-checkout.js
+@@ -664,9 +664,19 @@
+     // Start now 会点到不可控的元素，甚至触发登出。这里必须确认页面确实有套餐内容。
+     const looksLikePricing = async () => {
+         const text = String(await page.evaluate(() => document.body?.innerText || '').catch(() => ''));
+-        if (/What's on your mind today/i.test(text)) return false;
++        if (/What's on your mind today|Where should we begin|How can I help you today/i.test(text)) return false;
+         return /(Free|Plus|Pro|Business)[\s\S]{0,120}(\/\s*month|per month|每月|\/\s*mo)|\bUpgrade\b|\bStart now\b|\bGet started\b|升级/i.test(text);
+     };
++    // PRICING_WAIT_PROFILE: ChatGPT 是单页应用，#pricing 路由必须等账号资料初始化完成后
++    // 才生效。之前只等 domcontentloaded 就判定，遇到页面底部还在 "Loading profile" 时
++    // 会读到聊天主页内容，被误判成「定价页未就绪」并中止（美国账号 + 跨区代理特别容易这样）。
++    // 这里先等资料加载提示消失，再多给 800ms 让路由切换。
++    await page.waitForFunction(
++        () => !/Loading profile|Loading your|正在加载/i.test(document.body?.innerText || ''),
++        { timeout: 30000, polling: 500 }
++    ).catch(() => {});
++    await page.waitForTimeout(800);
++
+     let pricingOk = await looksLikePricing();
+     for (let attempt = 1; attempt <= 2 && !pricingOk; attempt += 1) {
+         console.log(`[Warn] 定价页内容未就绪，重新打开 ${attempt}/2...`);

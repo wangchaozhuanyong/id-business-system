@@ -1,0 +1,11 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "description": "国家与州选择改为读回校验快速确认，消除 12s/10s 空等",
+  "files": {
+    "stripe-payment.js": {
+      "original": "e323f0243fa33a3d24d59bd6e6cbf748da6bf4f4",
+      "approved": "088ef5c974e65a22cc9ec7de0b9c6b7e7c2ab4e9"
+    }
+  },
+  "patchSha256": "1c100f5f967a883aeaa4e80f6900bcf65aaebd4b70d3a2d9ec0c04a5eca1e31d"
+}
