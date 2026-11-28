@@ -796,6 +796,7 @@
     websiteAnalytics: (period, site) => request('tools/website-analytics?' + new URLSearchParams({
       ...(typeof period === 'number' || typeof period === 'string' ? { days: period } : period), ...(site && { site })
     })),
+    websiteStorefrontVisitors: ({ site, from, to }) => request('tools/storefront-visitors?' + new URLSearchParams({ site, from, to })),
     sheetsStatus: () => request('tools/sheets-status'),
     websiteMonitor: (url) => request('tools/website-monitor', { url }, 'POST'),
     resolveMedia: (url) => request('tools/media/resolve', { url }, 'POST'),

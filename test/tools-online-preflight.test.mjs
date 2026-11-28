@@ -134,6 +134,25 @@ test('the optional Cloudflare config is validated without sending or printing th
   assert.ok(!result.stdout.includes(secretMarker));
 });
 
+test('the optional storefront visitors config is private, dedicated and checked offline', async (t) => {
+  const dir = await testDirectory(t);
+  const token = 'a'.repeat(64);
+  const file = await fixture(dir, 'storefront-visitors.json', JSON.stringify({ token }));
+  const config = { 'website-storefront-visitors-config': file };
+  const options = { fetchImpl: async () => assert.fail('preflight must stay offline') };
+  const result = await preflightOnlineTools(config, options);
+  assert.equal(result.tools.websiteStorefrontVisitors.status, 'valid');
+  assert.equal(result.tools.websiteStorefrontVisitors.realIntegration, 'not_verified');
+  assert.doesNotMatch(JSON.stringify(result), new RegExp(token));
+  const invalid = await fixture(dir, 'storefront-visitors-with-origin.json',
+    JSON.stringify({ token, origin: 'https://unexpected.example.test' }));
+  const rejected = await preflightOnlineTools({ 'website-storefront-visitors-config': invalid }, options);
+  assert.equal(rejected.tools.websiteStorefrontVisitors.issues[0].code, 'RUNTIME_CONFIG_INVALID');
+  await chmod(file, 0o644);
+  const publicFile = await preflightOnlineTools(config, options);
+  assert.equal(publicFile.tools.websiteStorefrontVisitors.issues[0].code, 'CONFIG_FILE_REJECTED');
+});
+
 test('public route checks issue only two safe GETs and reject redirects or missing endpoints', async () => {
   const publicOrigin = 'https://admin.example.test';
   const options = { 'public-origin': publicOrigin, 'probe-public-routes': true };

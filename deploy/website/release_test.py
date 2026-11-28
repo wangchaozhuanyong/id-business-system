@@ -419,6 +419,34 @@ class WebsiteReleaseTests(unittest.TestCase):
                     remote.ReleaseError, "unexpected_storefront_analytics_launcher"):
                 remote.wire_storefront_analytics(content)
 
+    def test_storefront_visitors_accepts_legacy_and_cloudflare_launchers_and_is_idempotent(self):
+        cloudflare = remote.wire_storefront_analytics(ANALYTICS_LAUNCHER)
+        visitors = remote.wire_storefront_visitors(cloudflare)
+        self.assertEqual(remote.wire_storefront_visitors(ANALYTICS_LAUNCHER), visitors)
+        self.assertEqual(remote.wire_storefront_visitors(visitors), visitors)
+        self.assertIn("...(storefrontVisitors === undefined ? [] : [['storefront-visitors', "
+                      "JSON.stringify(storefrontVisitors)]])", visitors)
+        self.assertIn("readToolConfig(storefrontVisitors === undefined ? undefined : "
+                      "'/credentials/storefront-visitors', 'website-storefront-visitors')", visitors)
+        self.assertIn("  websiteCloudflareConfig,\n  websiteStorefrontVisitorsConfig,\n  websiteVisitsSecret,", visitors)
+        self.assertIn("{ flag: 'wx', mode: 0o600 }", visitors)
+        prefix, suffix = "const bridgeSecret = source;\n", "\ncheckOriginalIntegrations();\n"
+        self.assertEqual(remote.wire_storefront_visitors(prefix + cloudflare + suffix), prefix + visitors + suffix)
+
+    def test_storefront_visitors_rejects_partial_wiring_and_credentials_drift(self):
+        cloudflare = remote.wire_storefront_analytics(ANALYTICS_LAUNCHER)
+        visitors = remote.wire_storefront_visitors(cloudflare)
+        for partial in (
+            cloudflare.replace("  websiteCloudflareConfig,", "  websiteStorefrontVisitorsConfig,"),
+            visitors.replace("  websiteStorefrontVisitorsConfig,\n", ""),
+            visitors.replace("'/credentials/storefront-visitors'", "'/credentials/visits'"),
+        ):
+            with self.subTest(partial=partial), self.assertRaisesRegex(
+                    remote.ReleaseError, "unexpected_storefront_visitors_launcher"):
+                remote.wire_storefront_visitors(partial)
+        with self.assertRaisesRegex(remote.ReleaseError, "unexpected_storefront_analytics_launcher"):
+            remote.wire_storefront_visitors(visitors.replace("  ['microsoft',", "  ['renamed',"))
+
     @patch("release.git")
     def test_rejects_a_main_that_changed(self, git):
         git.side_effect = [TARGET, f"{BASE}\trefs/heads/main"]
@@ -1602,7 +1630,7 @@ class WebsiteReleaseTests(unittest.TestCase):
             self.assertEqual((operations / "run-app").read_text(), remote.normalize_tools_credential_stream(
                 f"sha={TARGET}\nops=$release/operations\n{tools_stream}"))
             self.assertEqual((operations / "app-entry.mjs").read_text(),
-                             remote.wire_storefront_analytics(launchers["app-entry.mjs"]))
+                             remote.wire_storefront_visitors(launchers["app-entry.mjs"]))
             self.assertIn("prototype.css?v=new", (operations / "check-app.mjs").read_text())
 
     def test_rejects_unrecognized_or_multiple_website_start_commands(self):
