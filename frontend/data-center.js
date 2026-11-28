@@ -25,20 +25,22 @@
     ? { from, to } : dateFilter.range(preset, Date.now(), sourceZone(site));
   const count = (value) => Number.isSafeInteger(value) && value >= 0 ? number.format(value) : '—';
   const columns = (site) => site === renovation
-    ? [['pageViews', '浏览量', '次'], ['sessions', '访问次数', '次'], ['visitors', '访客数', '位']]
+    ? [['visitors', '访客数（GA4）', '位'], ['pageViews', '浏览量', '次'], ['sessions', '访问次数', '次']]
     : [['pageViews', '浏览量', '次'], ['visits', '访问次数', '次']];
 
   function renderTraffic() {
     const selection = filters(), { site, preset } = selection;
     const live = canRead();
     const disabled = live ? '' : 'disabled';
+    const overviewHelp = site === renovation
+      ? '访客数是 GA4 在所选时段去重后的用户数，用于估计到访人数。阻止统计的浏览器可能漏计。' +
+        '统计使用马来西亚时间。原始 IP 采集见「监控中心 → 网站监控 → 访问记录与 IP」。'
+      : '独立 IP 数按站点和所选时段汇总已采集的访问，相同公网 IP 只计一次。' +
+        '商城报表使用世界标准时间（UTC），数据含估算，切换日期范围时，同一天的数字也可能变化。';
     return `<div class="data-traffic" data-traffic>
       <section class="panel" aria-labelledby="traffic-overview-title">
         <div class="panel-heading data-traffic-heading">
-          <div class="section-title-row"><h2 id="traffic-overview-title">访问概况</h2>${A.titleInfo('访问概况',
-            '独立 IP 数按站点和所选时段汇总已采集的访问，相同公网 IP 只计一次。装修站使用马来西亚时间，其他站使用世界标准时间（UTC）。' +
-            '装修站的访客数由 GA4 去重。' +
-            '商城数据含估算，切换日期范围时，同一天的数字也可能变化。',
+          <div class="section-title-row"><h2 id="traffic-overview-title">访问概况</h2>${A.titleInfo('访问概况', overviewHelp,
             'traffic-overview-help')}</div>
           <div class="data-traffic-filters">
             <div class="data-traffic-site"><label for="data-center-site">网站</label><select id="data-center-site" ${disabled}>${[...sites].map(([value, label]) =>
@@ -103,11 +105,12 @@
   }
 
   function renderTrend(report, metrics, open) {
-    const title = '每日浏览量趋势';
+    const [key, label, unit] = metrics[0];
+    const title = key === 'visitors' ? '每日访客趋势' : '每日浏览量趋势';
     const chart = window.IDCharts.bars({
-      title, unit: '次', details: false,
-      rows: report.daily.map(({ date, metrics }) => ({ label: date, shortLabel: date.slice(5), pageViews: metrics?.pageViews })),
-      series: [{ key: 'pageViews', label: '浏览量', tone: 'blue' }]
+      title, unit, details: false,
+      rows: report.daily.map(({ date, metrics }) => ({ label: date, shortLabel: date.slice(5), [key]: metrics?.[key] })),
+      series: [{ key, label, tone: 'blue' }]
     });
     const rows = report.daily.map(({ date, metrics: values }) => `<tr>
       <th scope="row"><time datetime="${A.esc(date)}">${A.esc(date)}</time></th>
@@ -115,7 +118,7 @@
     </tr>`).join('');
     return `<section class="panel data-traffic-trend" aria-labelledby="traffic-trend-title">
       <div class="panel-heading"><div class="section-title-row"><h2 id="traffic-trend-title">${title}</h2>${A.titleInfo(title,
-        '查看每天的浏览量。未收到数据的日期不画柱子，明细用「—」表示。', 'traffic-trend-help')}</div></div>
+        `查看每天的${label}。未收到数据的日期不画柱子，明细用「—」表示。`, 'traffic-trend-help')}</div></div>
       <div class="panel-body">
         ${chart}
         <details class="data-traffic-daily"${open ? ' open' : ''}>
@@ -132,9 +135,9 @@
   function showOverview(workspace, report, site, ipCount, loading) {
     const overview = workspace.querySelector('[data-traffic-summary]');
     const ready = report?.status === 'ready';
-    const items = columns(site).map(([key, label, unit]) =>
-      [label, count(report?.summary?.[key]), unit, key === 'pageViews' && ready]);
-    items.push(['独立 IP 数', count(ipCount), '个']);
+    const items = columns(site).map(([key, label, unit], index) =>
+      [label, count(report?.summary?.[key]), unit, index === 0 && ready]);
+    if (site !== renovation) items.push(['独立 IP 数', count(ipCount), '个']);
     const meta = report && report.status !== 'unconfigured' ? reportMeta(report, site) : '';
     const source = site === renovation ? 'GA4' : 'Cloudflare';
     const message = loading ? '正在读取网站统计…' : report?.status === 'unconfigured'
@@ -193,7 +196,7 @@
     const analytics = data.queries.peek(scope, query);
     const previous = analytics?.data;
     let report = previous;
-    let ipCount = data.queries.peek(visitScope, query)?.data;
+    let ipCount = site !== renovation ? data.queries.peek(visitScope, query)?.data : undefined;
     let loading = !previous;
     const updateOverview = () => showOverview(workspace, report, site, ipCount, loading);
     const sameSelection = workspace.dataset.trafficKey === key;
@@ -253,6 +256,7 @@
       }
     };
     try {
+      if (site === renovation) return await readAnalytics();
       const [, ipsRead] = await Promise.all([readAnalytics(), readIps()]);
       return !current() || ipsRead;
     } finally {
@@ -269,8 +273,9 @@
       else void loadTraffic(document.querySelector('[data-traffic]'), filters());
     },
     onDataChanges(scopes) {
-      if (A.state.route !== trafficRoute || !scopes.includes(visitScope)) return;
-      return loadTraffic(document.querySelector('[data-traffic]'), filters());
+      const selection = filters();
+      if (A.state.route !== trafficRoute || selection.site === renovation || !scopes.includes(visitScope)) return;
+      return loadTraffic(document.querySelector('[data-traffic]'), selection);
     },
     deactivate(region) {
       const read = region.querySelector('[data-traffic-read]');
