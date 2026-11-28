@@ -55,6 +55,7 @@ WORKSPACE_PROGRESS_PRESENTATION_FILES = (
     "modules/recharge/codexdaichong/shell.css",
 )
 TABLE_ACTIONS_STYLESHEET = "modules/recharge/codexdaichong/shell.css"
+MOBILE_LAYOUT_PRESENTATION_FILES = (TABLE_ACTIONS_STYLESHEET, "modules/recharge/codexdaichong/shell.js")
 CARD_IMPORT_ASSET_SOURCE = "modules/recharge/codexdaichong/assets.mjs"
 CARD_IMPORT_PRESENTATION_FILES = (CARD_IMPORT_ASSET_SOURCE, "frontend/pagination.js", "frontend/tabs.css")
 CARD_IMPORT_PREVIEW_SOURCE = "modules/recharge/codexdaichong/card-import-preview.mjs"
@@ -112,6 +113,7 @@ SUBSCRIPTION_INVOICE_PRESENTATION_FILES = ("modules/recharge/codexdaichong/asset
 SUBSCRIPTION_INVOICE_ASSET = "/subscription"
 ACTION_PASSWORD_PRESENTATION_FILES = ("modules/recharge/codexdaichong/assets.mjs",)
 PRESENTATION_SCOPES = {
+    "mobileLayoutPresentation": (MOBILE_LAYOUT_PRESENTATION_FILES, {"/shell.css", "/shell.js"}),
     "redeemPresentation": (REDEEM_PRESENTATION_FILES, REDEEM_PRESENTATION_ASSETS),
     "workspaceProgressPresentation": (WORKSPACE_PROGRESS_PRESENTATION_FILES, REDEEM_PRESENTATION_ASSETS),
     "rechargeAdminWorkspacePresentation": (WORKSPACE_PROGRESS_PRESENTATION_FILES, {"/admin", "/admin.js", "/shell.js", "/shell.css"}),
@@ -134,6 +136,7 @@ PRESENTATION_SCOPES = {
     "cardReuseLimitsPresentation": (CARD_REUSE_LIMITS_PRESENTATION_FILES, {"/admin", "/admin.js", "/shell.css"}),
 }
 PRESENTATION_MOUNT_ERRORS = {
+    "mobileLayoutPresentation": "recharge_presentation_mount_mismatch",
     "cardReuseLimitsPresentation": "recharge_presentation_mount_mismatch",
     "cardPoolTogglePresentation": "recharge_presentation_mount_mismatch",
     "cardPoolLimitPresentation": "recharge_presentation_mount_mismatch",

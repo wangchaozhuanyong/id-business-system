@@ -315,10 +315,10 @@
   function detail(row) {
     const contacts = A.modules.commerce?.subscriptionContacts?.(row.contacts);
     const xAccount = row.product === 'Grok' && row.registrationEmail && row.account !== row.registrationEmail ? row.account : '';
-    const history = row.history.map(item => `<tr><td>${esc(item.orderNo || '历史入库')}</td><td>${esc(item.plan || '待核对')}</td>` +
-      `<td>${esc(displayDate(item.start))}</td><td>${esc(displayDate(item.expiry))}</td><td>${stateTag(item.status)}${item.missingAssociation
-        ? A.tag('资料待补', 'warning') : ''}</td>` +
-      `<td class="table-actions"><div class="action-links">${!row.conflict && row.series.some(series => series.sourceId === item.sourceId) &&
+    const history = row.history.map(item => `<tr><td data-mobile-field="identity">${esc(item.orderNo || '历史入库')}</td><td data-mobile-field="summary" data-label="套餐">${esc(item.plan || '待核对')}</td>` +
+      `<td data-mobile-field="summary" data-label="订阅时间">${esc(displayDate(item.start))}</td><td data-mobile-field="summary" data-label="到期时间">${esc(displayDate(item.expiry))}</td><td data-mobile-field="summary" data-label="状态"><div>${stateTag(item.status)}${item.missingAssociation
+        ? A.tag('资料待补', 'warning') : ''}</div></td>` +
+      `<td class="table-actions" data-mobile-field="actions"><div class="action-links">${!row.conflict && row.series.some(series => series.sourceId === item.sourceId) &&
         item.source === 'order' && item.confirmed && !['ended', 'dead'].includes(item.status)
         ? A.modules.commerce?.renewalActions?.(item, row.id) || '' : ''}${item.source === 'order' ? textAction(!item.confirmed && ['Gemini', 'Grok'].includes(row.product) ? '前往订单核对' : '查看订单',
         'subscriptions-order', `data-order-id="${esc(item.sourceId)}"`) : '历史资料'}` +
@@ -332,7 +332,7 @@
        <div class="property-row"><span>操作人</span><strong>${esc(row.operatorName)}</strong></div></div>
        ${contacts ? `<section class="property-list subscription-contact-list" aria-label="客户联系方式">${contacts}</section>` : ''}
        ${row.conflict ? '<p class="inline-notice warning">账号、客户或邮箱关联存在冲突，请先核对原资料。</p>' : ''}
-       <div class="table-viewport" tabindex="0"><table><thead><tr><th>订单／来源</th><th>套餐</th><th>订阅时间</th><th>到期时间</th><th>状态</th><th class="table-actions">操作</th></tr></thead><tbody>${history}</tbody></table></div>`,
+       <div class="table-viewport mobile-records" tabindex="0" role="region" aria-label="订阅历史"><table><thead><tr><th>订单／来源</th><th>套餐</th><th>订阅时间</th><th>到期时间</th><th>状态</th><th class="table-actions">操作</th></tr></thead><tbody>${history}</tbody></table></div>`,
       button('关闭', 'drawer-close'));
   }
 

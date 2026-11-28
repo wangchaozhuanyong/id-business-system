@@ -377,6 +377,47 @@
     }
   });
 
+  function prepareMobileRecordTables() {
+    const bodies = document.querySelectorAll('#proxy_pool_body,#address_list_body,#card_pool_list_body,#orbitcard_usage_body,#cdk_body,#session_body,#log_body,#activation_manual_hold_body,#ip_ban_body,#admin_login_logs_body');
+    for (const body of bodies) {
+      const table = body.closest('table');
+      const headers = table?.tHead?.rows[0]?.cells;
+      if (!headers?.length) continue;
+      table.classList.add('mobile-resource-records');
+      const compact = ['card_pool_list_body', 'orbitcard_usage_body', 'cdk_body'].includes(body.id);
+      const secondaryFields = new Set(['有效期','CVC','导入持卡人','支付姓名','绑定地址','最近使用','卡片资料','充值账号与订单','首充金额','Session 记录','使用时间']);
+      const labelRows = rows => {
+        for (const row of rows) {
+          if (!row.cells || row.cells.length !== headers.length) continue;
+          Array.from(row.cells).forEach((cell, index) => {
+            const label = headers[index].textContent.trim();
+            cell.dataset.fieldLabel = label;
+            if (compact && secondaryFields.has(label)) cell.dataset.mobileExtra = '';
+          });
+          const actions = row.querySelector('td[data-field-label="操作"]');
+          if (actions && row.querySelector('[data-mobile-extra]') && !actions.querySelector('.mobile-resource-toggle')) {
+            const toggle = document.createElement('button');
+            toggle.type = 'button';
+            toggle.className = 'btn mobile-resource-toggle';
+            toggle.textContent = '更多资料';
+            toggle.setAttribute('aria-expanded', 'false');
+            toggle.addEventListener('click', () => {
+              const expanded = row.toggleAttribute('data-mobile-expanded');
+              toggle.setAttribute('aria-expanded', String(expanded));
+              toggle.textContent = expanded ? '收起资料' : '更多资料';
+            });
+            actions.append(toggle);
+          }
+        }
+      };
+      labelRows(body.rows);
+      // Rows arrive after the initial paint and are replaced on refresh or pagination.
+      new MutationObserver(changes => {
+        for (const change of changes) labelRows(change.addedNodes);
+      }).observe(body, { childList: true });
+    }
+  }
+
   function styleAdminLayout() {
     for (const table of document.querySelectorAll('table.data-table')) {
       const container = table.parentElement;
@@ -728,6 +769,7 @@
         for (const title of document.querySelectorAll('.page-header > h1'))
           window.IDTitleHelp.attach(title, title.nextElementSibling);
       } else styleAdminLayout();
+      prepareMobileRecordTables();
       updateTableLayout = window.IDPagination?.watchTableLayout?.(
         document.querySelector('.main-content'),
         { hostFrame: window.frameElement, rows: '.table-container' }

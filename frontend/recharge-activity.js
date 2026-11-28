@@ -129,7 +129,7 @@
         '<li><div class="recharge-activity-history-summary"><strong>' + esc(status(row) + ' · ' + plan(row)) +
         (row.unread ? '<span class="recharge-activity-unread">未读</span>' : '') +
         '</strong><span>' + esc(email(row) + ' · ' + code(row) + ' · ' + owner(row)) + '</span>' +
-        '<span class="recharge-activity-meta">' + esc(time.format(row.updatedAt) + ' · 任务尾号 ' + row.jobTail) + '</span></div>' +
+        '<span class="recharge-activity-meta"><time>' + esc(time.format(row.updatedAt)) + '</time> <span>任务尾号 ' + esc(row.jobTail) + '</span></span></div>' +
         action('查看任务', 'detail', row.id) + '</li>').join('');
       panel.innerHTML =
         (coverageMessages[result.coverage] ? '<p class="inline-notice" role="status">' + coverageMessages[result.coverage] + '</p>' : '') +

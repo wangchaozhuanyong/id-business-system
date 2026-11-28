@@ -897,7 +897,10 @@ function closeDrawer() {
   $('#drawer').dispatchEvent(new Event('id-view-deactivate'));
   $('#drawer').close();
   state.drawerContext = '';
-  toolEntry?.focus({ preventScroll: true });
+  if (toolEntry) {
+    const trigger = toolEntry.getClientRects().length ? toolEntry : $('#mobile-tools-toggle');
+    trigger.focus({ preventScroll: true });
+  }
 }
 function dismissDrawer() {
   if ($('#drawer [data-protect-drawer-dismiss][aria-busy="true"]')) return;
@@ -1287,6 +1290,59 @@ function restoreMobileEntryFooter() {
   mobileEntryFooter = null;
   $('#mobile-entry-actions').hidden = true;
 }
+// Keep the original controls so permissions, selection and event handlers follow
+// the same button when it moves between a toolbar and the overflow menu.
+const mobileActionGroups = new WeakMap();
+const mobileActionSizes = new WeakMap();
+const mobileActionObserver = new ResizeObserver(entries => {
+  for (const { target, contentRect } of entries) {
+    if (mobileActionSizes.get(target) === contentRect.width) continue;
+    mobileActionSizes.set(target, contentRect.width);
+    fitMobileActions(target);
+  }
+});
+function fitMobileActions(group) {
+  const entry = mobileActionGroups.get(group);
+  if (!entry || !group.isConnected) return;
+  const { trigger, slots } = entry;
+  const mobile = matchMedia('(max-width: 900px)').matches;
+  const candidates = [];
+  for (const { button, marker } of slots) {
+    if (!marker.isConnected) {
+      if (button.parentNode === group) button.remove();
+      continue;
+    }
+    button.classList.remove('mobile-secondary-action');
+    if (!mobile || button.hidden || marker.parentElement.closest('[hidden], [inert]')) {
+      if (marker.nextSibling !== button) marker.after(button);
+    } else {
+      if (button.parentNode !== group) trigger.before(button);
+      candidates.push(button);
+    }
+  }
+  trigger.hidden = !mobile;
+  if (!mobile || !group.clientWidth) return;
+  group.classList.add('mobile-actions-measuring');
+  const style = getComputedStyle(group);
+  const available = group.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+  const gap = parseFloat(style.columnGap) || 0;
+  const buttons = Array.from(group.children).filter(node => node !== trigger && node.getClientRects().length);
+  const total = buttons.reduce((sum, node) => sum + node.getBoundingClientRect().width, 0) + Math.max(0, buttons.length - 1) * gap;
+  let used = total;
+  const overflow = [];
+  if (total > available + 0.5) {
+    used += trigger.getBoundingClientRect().width + gap;
+    for (const button of candidates.toReversed()) {
+      if (used <= available + 0.5) break;
+      used -= button.getBoundingClientRect().width + gap;
+      overflow.unshift(button);
+      button.classList.add('mobile-secondary-action');
+    }
+  }
+  trigger.hidden = !overflow.length;
+  mobileToolbarSources.set(trigger, overflow);
+  group.classList.remove('mobile-actions-measuring');
+}
 function mountMobileListActions(region) {
   const sourceButtons = group => Array.from(group.children).filter(node => node.matches('button:not(.primary, .mobile-secondary-action, .mobile-list-actions, [type="submit"], [data-mobile-visible], [hidden])'));
   const prepare = (group, sources) => {
@@ -1294,10 +1350,17 @@ function mountMobileListActions(region) {
     trigger.type = 'button'; trigger.className = 'button mobile-list-actions';
     trigger.dataset.action = 'mobile-list-actions'; trigger.textContent = '更多操作';
     trigger.setAttribute('aria-haspopup', 'menu'); trigger.setAttribute('aria-expanded', 'false');
-    for (const source of sources) source.classList.add('mobile-secondary-action');
+    const slots = sources.map(button => {
+      const marker = document.createComment('toolbar action');
+      button.before(marker);
+      return { button, marker };
+    });
     group.append(trigger);
-    mobileToolbarSources.set(trigger, sources);
+    group.classList.add('mobile-action-group');
+    mobileActionGroups.set(group, { trigger, slots });
+    fitMobileActions(group);
   };
+  mobileActionObserver.disconnect();
   for (const panel of $$('.panel', region)) {
     const groups = $$(':scope > .content-toolbar > .toolbar-right, :scope > .toolbar > .toolbar-right', panel);
     const primary = groups.find(group => $(':scope > .primary', group));
@@ -1312,11 +1375,14 @@ function mountMobileListActions(region) {
     const sources = sourceButtons(group);
     if (sources.length >= 2) prepare(group, sources);
   }
+  for (const group of $$('.mobile-action-group', region)) {
+    mobileActionObserver.observe(group);
+  }
 }
 function syncMobileLayout() {
   const mobile = matchMedia('(max-width: 900px)').matches;
   const tools = $('#mobile-tools-panel');
-  if (!mobileToolSlots.length) for (const node of $$('.topbar-tools, #interaction-preferences, #theme-toggle, .prototype-label')) {
+  if (!mobileToolSlots.length) for (const node of $$('.topbar-tools, #interaction-preferences, .prototype-label')) {
     const marker = document.createComment('desktop tool position');
     node.before(marker); mobileToolSlots.push({ node, marker });
   }
@@ -1326,6 +1392,7 @@ function syncMobileLayout() {
   }
   if (!mobile && tools.matches(':popover-open')) tools.hidePopover();
   const region = activePageRegion();
+  for (const group of $$('.mobile-action-group', region)) fitMobileActions(group);
   const entry = $('.commerce-entry-layout', region);
   const showFooter = mobile && entry && entry.dataset.mobileView !== 'records';
   if (!showFooter) restoreMobileEntryFooter();
@@ -1349,8 +1416,27 @@ function updateMobileDatePreviews(root) {
 }
 function positionMobileKeyboard() {
   const viewport = window.visualViewport;
-  const inset = viewport ? Math.max(0, innerHeight - viewport.height - viewport.offsetTop) : 0;
-  document.documentElement.style.setProperty('--mobile-keyboard-inset', `${inset}px`);
+  const style = document.documentElement.style;
+  // Pinch zoom also shrinks visualViewport. Keep the user's native zoom and pan.
+  const occluded = viewport && Math.abs(viewport.scale - 1) < 0.01 && viewport.height < innerHeight - 1;
+  document.documentElement.toggleAttribute('data-short-input-viewport', Boolean(occluded && viewport.height < 240));
+  if (!occluded) {
+    style.removeProperty('--mobile-keyboard-inset');
+    style.removeProperty('--mobile-viewport-top');
+    style.removeProperty('--mobile-viewport-height');
+    return;
+  }
+  style.setProperty('--mobile-keyboard-inset', `${Math.max(0, innerHeight - viewport.height - viewport.offsetTop)}px`);
+  style.setProperty('--mobile-viewport-top', `${viewport.offsetTop}px`);
+  style.setProperty('--mobile-viewport-height', `${viewport.height}px`);
+  const field = document.activeElement;
+  const body = field?.closest('.drawer-body');
+  if (body && field.matches('input, textarea, [contenteditable="true"]')) {
+    const visible = body.getBoundingClientRect();
+    const editing = field.getBoundingClientRect();
+    if (editing.bottom > visible.bottom) body.scrollTop += editing.bottom - visible.bottom;
+    else if (editing.top < visible.top) body.scrollTop -= visible.top - editing.top;
+  }
 }
 window.visualViewport?.addEventListener('resize', positionMobileKeyboard);
 window.visualViewport?.addEventListener('scroll', positionMobileKeyboard);
@@ -2949,12 +3035,13 @@ document.addEventListener('click', async (event) => {
   }
   if (action === 'mobile-list-actions') {
     const sources = mobileToolbarSources.get(node) || [];
-    openActionMenu(node, sources.map((source, index) => `<button type="button" data-action="mobile-list-action" data-index="${index}" ${source.matches(':disabled') ? 'disabled' : ''}>${source.innerHTML}</button>`).join(''));
-    return;
-  }
-  if (action === 'mobile-list-action') {
-    const source = mobileToolbarSources.get(actionMenuInvokers.get(node))?.[Number(node.dataset.index)];
-    if (source?.isConnected && !source.matches(':disabled') && !source.closest('[inert], [hidden]')) source.click();
+    openActionMenu(node, sources.map((source, index) =>
+      `<button type="button" data-action="mobile-list-action" data-index="${index}" ${source.disabled ? 'disabled' : ''}>${source.innerHTML}</button>`).join(''), {
+      onSelect(choice) {
+        const source = sources[Number(choice.dataset.index)];
+        if (source?.isConnected && !source.disabled && !source.closest('[inert], [hidden]')) source.click();
+      }
+    });
     return;
   }
   if (action === 'mobile-entry-view') {
@@ -3590,7 +3677,8 @@ if (window.IDLocalData) {
   $('.profile-name', profile).textContent = state.actor.name;
   $('[data-action="preview-states"]').hidden = true;
 }
-$('#profile-button').addEventListener('click', () => {
+$('#profile-button').addEventListener('click', (event) => {
+  event.currentTarget.focus({ preventScroll: true });
   if (window.IDLocalData?.authRequired && window.IDLocalAuth?.openProfile) {
     window.IDLocalAuth.openProfile();
     return;
@@ -3607,11 +3695,13 @@ $('#profile-button').addEventListener('click', () => {
 window.addEventListener('hashchange', navigate);
 window.addEventListener('popstate', navigate);
 window.addEventListener('resize', () => {
-  if (window.innerWidth > 900) {
+  const mobile = window.innerWidth <= 900;
+  if (!mobile) {
     mobileSidebarScroll = null;
     document.body.classList.remove('nav-open');
     $('#sidebar-shade').hidden = true;
   }
+  $('#nav-toggle').setAttribute('aria-expanded', String(mobile ? document.body.classList.contains('nav-open') : !state.collapsed));
 });
 let designIdCounter = 0;
 function designGo(route, entryState = null) {

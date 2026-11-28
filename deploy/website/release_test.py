@@ -1309,6 +1309,27 @@ class WebsiteReleaseTests(unittest.TestCase):
                 release.require_website_scope(BASE, TARGET)
         self.assertEqual(approval.call_count, 1)
 
+    @patch("release.require_presentation_approval")
+    @patch("release.require_ancestor")
+    @patch("release.git")
+    def test_mobile_layout_accepts_only_reviewed_shell_assets(self, git, ancestor, approval):
+        files = remote.MOBILE_LAYOUT_PRESENTATION_FILES
+        manifest = release.MOBILE_LAYOUT_MANIFEST_PATH
+        scope = "mobileLayoutPresentation"
+        git.return_value = "\n".join((*files, manifest))
+        self.assertEqual(release.require_website_scope(BASE, TARGET), (scope, approval.return_value))
+        approval.assert_called_once_with(BASE, TARGET, release.MOBILE_LAYOUT_MANIFEST, files)
+        self.assertIn(manifest, git.call_args.args)
+        for switch in ("include_adapter", "include_core", "partner_api"):
+            with self.assertRaises(RuntimeError):
+                release.require_website_scope(BASE, TARGET, **{switch: True})
+        for changed in (files, (files[0], manifest), (*files, manifest, release.CARD_IMPORT_ASSET_SOURCE)):
+            git.return_value = "\n".join(changed)
+            with self.assertRaisesRegex(RuntimeError, "recharge_core_or_runtime_changed"):
+                release.require_website_scope(BASE, TARGET)
+        self.assertEqual(remote.PRESENTATION_SCOPES[scope], (files, {"/shell.css", "/shell.js"}))
+        self.assertIn(scope, remote.PRESENTATION_MOUNT_ERRORS)
+
     def test_orbitcard_layout_release_checks_mount_digest_and_exact_routes(self):
         before, after = "a" * 64, "b" * 64
         scope = "orbitcardLayoutPresentation"

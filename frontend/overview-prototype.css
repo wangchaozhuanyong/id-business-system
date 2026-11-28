@@ -69,8 +69,11 @@
   .overview-status-short { display: inline; }
 }
 @container overview-toolbar (max-width: 679px) {
-  .overview-toolbar { gap: 4px; min-height: 44px; }
-  .overview-actions { gap: 4px; }
+  .overview-toolbar { gap: 4px; min-height: 44px; flex-wrap: wrap; }
+  .overview-period { flex: none; max-width: 100%; }
+  .overview-actions { flex: 1 1 max-content; flex-wrap: wrap; justify-content: flex-end; max-width: 100%; gap: 4px; }
+  .overview-actions .overview-design-label { display: contents; }
+  .overview-actions .id-date-filter, .overview-actions .id-date-select { flex: 1 1 auto; }
   .overview-period > strong, .overview-timezone, .overview-toolbar .overview-previous-compact,
   .overview-status-short,
   .overview-toolbar-action > span { display: none; }
@@ -85,7 +88,7 @@
     font-weight: 600;
   }
   .overview-toolbar-action.button { width: 44px; min-height: 44px; padding: 0; justify-content: center; }
-  .overview-toolbar .id-date-select { min-height: 44px; }
+  .overview-toolbar .id-date-select { min-height: 44px; field-sizing: content; min-width: min(100%, 5.25em); }
 }
 .overview-metrics {
   display: grid;

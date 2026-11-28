@@ -66,7 +66,8 @@ try {
       });
       assert(!geometry.overflow && !geometry.clipped, `${width}/${theme}/${label} overflow`);
       assert(geometry.rows.every((r, i, all) => !i || (Math.abs(r.x - all[0].x) < 1 && r.y >= all[i-1].bottom - 1)), '每个账号必须独占一行');
-      assert(geometry.rows.every(r => r.height <= (width <= 900 ? 61 : 54)), `所有记录单行显示，不被长内容撑高 ${width}/${theme}/${label}`);
+      if (width <= 900) assert(!geometry.tableOverflow, "手机记录所有内容纵向可达");
+      else assert(geometry.rows.every(r => r.height <= 54), `所有记录单行显示，不被长内容撑高 ${width}/${theme}/${label}`);
       results.push({ width, theme, label, geometry, codeReads: codeReads.length });
       if ([1440,390].includes(width)) await page.screenshot({ path: path.join(output, `${label}-${width}-${theme}.png`) });
     };
@@ -82,10 +83,15 @@ try {
       const email = row.querySelector('strong');
       return { codeElided: code.scrollWidth > code.clientWidth && getComputedStyle(code).textOverflow === 'ellipsis', emailElided: email.scrollWidth > email.clientWidth, title: email.title, copy: copy.textContent, centerDifference: Math.abs((c.top+c.bottom-b.top-b.bottom)/2), codeHeight:c.height };
     });
-    assert(compact.codeElided && compact.emailElided);
+    if (width > 900) assert(compact.codeElided && compact.emailElided);
+    else {
+      await firstRow.getByRole("button", {name:"更多资料"}).click();
+      assert(await firstRow.locator("[data-label=最近查询]").isVisible());
+      await firstRow.getByRole("button", {name:"收起资料"}).click();
+    }
     assert.equal(compact.title, fixture[0].email);
     assert.equal(compact.copy, '复制查询');
-    assert(compact.centerDifference < 1 && compact.codeHeight <= 20);
+    if (width > 900) assert(compact.centerDifference < 1 && compact.codeHeight <= 20);
     await pool.locator('.mailbox-account__more').first().click();
     const actions = page.getByRole('menu', { name: '邮箱操作', exact: true });
     await actions.getByRole('menuitem', { name: '仅复制当前码', exact: true }).waitFor();

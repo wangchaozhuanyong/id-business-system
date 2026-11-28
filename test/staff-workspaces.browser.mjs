@@ -775,8 +775,12 @@ test('card drawers preserve plan choices, clear private input and submit imports
   await page.goto(origin + '/#/staff/finance/cards');
   await page.getByRole('heading', { name: '资料未能读取', exact: true }).waitFor();
   assert(await page.getByRole('button', { name: '导入银行卡', exact: true }).isDisabled());
-  await page.getByRole('button', { name: '更多操作', exact: true }).click();
-  await page.getByRole('menuitem', { name: '刷新', exact: true }).click();
+  const refresh = page.getByRole('button', { name: '刷新', exact: true });
+  if (await refresh.isVisible()) await refresh.click();
+  else {
+    await page.getByRole('button', { name: '更多操作', exact: true }).click();
+    await page.getByRole('menuitem', { name: '刷新', exact: true }).click();
+  }
   await page.getByText(financeCardNumber, { exact: true }).waitFor();
   await page.setViewportSize({ width: 1440, height: 900 });
   const openImport = () => page.getByRole('button', { name: '导入银行卡', exact: true }).click();
@@ -810,8 +814,12 @@ test('card drawers preserve plan choices, clear private input and submit imports
   assert.deepEqual({ action: writes[0].action, plans: writes[0].plans, version: writes[0].version },
     { action: 'import', plans: ['plus'], version: 7 });
   assert.equal(await drawer.evaluate(node => node.open), false);
-  await page.getByRole('button', { name: '更多操作', exact: true }).click();
-  await page.getByRole('menuitem', { name: '取卡设置' }).click();
+  const settings = page.getByRole('button', { name: '取卡设置', exact: true });
+  if (await settings.isVisible()) await settings.click();
+  else {
+    await page.getByRole('button', { name: '更多操作', exact: true }).click();
+    await page.getByRole('menuitem', { name: '取卡设置' }).click();
+  }
   await drawer.getByRole('heading', { name: '取卡设置', exact: true }).waitFor();
   await page.getByRole('button', { name: '仅使用已配置套餐的卡', exact: true }).click();
   await page.getByRole('button', { name: '确认', exact: true }).click();

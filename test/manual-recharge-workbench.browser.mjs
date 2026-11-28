@@ -345,7 +345,10 @@ test(
         await p.getByRole('button', { name: '生成地址' }).click();
         await p.locator('#bit-address-generate-count').waitFor();
         await p.getByRole('button', { name: '关闭抽屉' }).click();
-        if (width === 320) await el('mr-search-toggle').click();
+        if (width === 320) {
+          assert(await el('mr-address-search').isVisible(), '地址页签下直接显示搜索框');
+          assert(await el('mr-search-toggle').isHidden());
+        }
         await el('mr-address-search').fill('Oregon');
         const searched = p.waitForRequest(req => {
           const url = new URL(req.url());
@@ -353,31 +356,24 @@ test(
         });
         await el('mr-address-search').press('Enter');
         await searched;
-        if (width === 320) await el('mr-search-close').click();
         await el('mr-window-tab').click();
         await p.getByRole('button', { name: '历史登记' }).click();
         await el('bit-renewals-content').waitFor();
         assert.equal(await el('bit-renewal-entry').count(), 0);
         await p.getByRole('button', { name: '返回手动充值' }).click();
         await el('bit-address-heading').click();
-        if (width === 320) await el('mr-search-toggle').click();
         assert.equal(await el('mr-address-search').inputValue(), 'Oregon');
-        if (width === 320) await el('mr-search-close').click();
         await el('mr-window-tab').click();
         if (width === 320) {
-          const gap = await p.evaluate(
-            () =>
-              document.querySelector('#mr-search-toggle').getBoundingClientRect().left -
-              document.querySelector('#bit-address-heading').getBoundingClientRect().right
-          );
-          assert(gap >= 0, '搜索按钮挡住地址管理页签');
-          await el('mr-search-toggle').click();
+          const tab = await el('bit-address-heading').boundingBox();
+          const search = await el('mr-window-search').boundingBox();
+          assert(search && tab && search.y >= tab.y + tab.height && search.x + search.width <= width,
+            '窗口搜索完整显示在页签下方');
         }
         await el('mr-window-search').fill('不存在');
         await p.getByText('没有符合条件的窗口记录').waitFor();
         await el('mr-window-search').fill('');
         await row.getByText('备注已更新').waitFor();
-        if (width === 320) await el('mr-search-close').click();
         await row.getByRole('button', { name: /更多/ }).click();
         await p.getByRole('menuitem', { name: '删除记录' }).click();
         await p.getByRole('dialog').getByRole('button', { name: '删除记录' }).click();

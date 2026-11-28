@@ -3025,7 +3025,7 @@
       return;
     }
     const visible = items.slice((page - 1) * pageSize, page * pageSize);
-    list.innerHTML = `<p class="mailbox-table-hint">左右滑动可查看完整列表与操作</p><div class="table-viewport online-tool-mail-list" tabindex="0" role="region" aria-label="邮箱池列表，可横向滚动"><table class="mailbox-pool-table"><colgroup>${selected ? '<col class="mailbox-column-check">' : ''}<col class="mailbox-column-identity"><col class="mailbox-column-meta"><col class="mailbox-column-meta"><col class="mailbox-column-source"><col class="mailbox-column-code"><col class="mailbox-column-status"><col class="mailbox-column-date"><col class="mailbox-column-status"><col class="mailbox-column-date"><col class="mailbox-column-actions"></colgroup><thead><tr>${selected ? `<th scope="col"><input type="checkbox" data-mailbox-batch-page aria-label="选择当前页" ${visible.every(row => selected.has(row.id)) ? 'checked' : ''}></th>` : ''}<th scope="col">邮箱账号</th><th scope="col">类型</th><th scope="col">备注</th><th scope="col">来源</th><th scope="col">买家查询码</th><th scope="col">状态</th><th scope="col">到期时间</th><th scope="col">剩余有效天数</th><th scope="col">最近查询</th><th scope="col">操作</th></tr></thead><tbody>${visible.map((row) => {
+    list.innerHTML = `<div class="table-viewport online-tool-mail-list mobile-records${selected ? ' mobile-records--selectable' : ''}" tabindex="0" role="region" aria-label="邮箱池列表"><table class="mailbox-pool-table"><colgroup>${selected ? '<col class="mailbox-column-check">' : ''}<col class="mailbox-column-identity"><col class="mailbox-column-meta"><col class="mailbox-column-meta"><col class="mailbox-column-source"><col class="mailbox-column-code"><col class="mailbox-column-status"><col class="mailbox-column-date"><col class="mailbox-column-status"><col class="mailbox-column-date"><col class="mailbox-column-actions"></colgroup><thead><tr>${selected ? `<th scope="col" class="check-cell"><label class="table-selection"><input type="checkbox" data-mailbox-batch-page aria-label="选择当前页" ${visible.every(row => selected.has(row.id)) ? 'checked' : ''}><span class="mobile-record-only">选择本页</span></label></th>` : ''}<th scope="col">邮箱账号</th><th scope="col">类型</th><th scope="col">备注</th><th scope="col">来源</th><th scope="col">买家查询码</th><th scope="col">状态</th><th scope="col">到期时间</th><th scope="col">剩余有效天数</th><th scope="col">最近查询</th><th scope="col">操作</th></tr></thead><tbody>${visible.map((row) => {
       const attrs = `data-id="${esc(row.id)}" data-active="${row.active}" data-provider="${esc(row.provider)}" data-email="${esc(row.email)}"`;
       const status = mailboxStatus(row);
       const authorize = button('绑定邮箱', 'ops-mailbox-pool-authorize', '', '', attrs + (row.associationConflict ? ' disabled title="请先核对库存邮箱关联"' : ''));
@@ -3036,7 +3036,20 @@
       const source = row.inventorySources?.map(type => mailboxSources[type]).filter(Boolean).join('、') || (row.source === 'claude' ? 'Claude 账号' : '手工登记');
       const code = row.associationConflict ? '关联待核对' : row.authorizationPending ? '授权后生成' :
         `<output data-mailbox-code="${esc(row.id)}">正在读取…</output>${button('复制', 'ops-mailbox-pool-copy-existing', '', '', attrs + ' disabled aria-label="复制买家查询码"')}`;
-      return `<tr class="mailbox-account">${selected ? `<td><input type="checkbox" data-mailbox-batch-id="${esc(row.id)}" aria-label="选择 ${esc(row.email)}" ${selected.has(row.id) ? 'checked' : ''}></td>` : ''}<td><div class="mailbox-account__heading"><strong title="${esc(row.email)}">${esc(row.email)}</strong></div></td><td class="mailbox-account__text" title="${esc(mailboxProviders[row.provider] || '待选择')}">${esc(mailboxProviders[row.provider] || '待选择')}</td><td class="mailbox-account__text" title="${esc(row.label || '未填写备注')}">${esc(row.label || '—')}</td><td class="mailbox-account__text" title="${esc(source)}">${esc(source)}</td><td><div class="mailbox-account__code">${code}</div></td><td>${tag(mailboxStatuses[status], status === 'active' ? 'success' : status === 'disabled' ? '' : 'warning')}</td><td class="mailbox-account__date">${formatMailboxDate(row.expiresAt)}</td><td>${esc(delivery?.remaining(row) || '—')}</td><td class="mailbox-account__date">${formatMailboxDate(row.lastQueriedAt)}</td><td><div class="mailbox-row-actions">${actions}</div></td></tr>`;
+      const cell = (label, value, field = 'summary', className = '') =>
+        `<td data-mobile-field="${field}" data-label="${label}" class="${className}"${className === 'mailbox-account__text' ? ` title="${value}"` : ''}><div class="mobile-record-value">${value}</div></td>`;
+      return `<tr class="mailbox-account">${selected ? `<td class="check-cell"><label class="table-selection"><input type="checkbox" data-mailbox-batch-id="${esc(row.id)}" aria-label="选择 ${esc(row.email)}" ${selected.has(row.id) ? 'checked' : ''}></label></td>` : ''}
+        ${cell('邮箱账号', `<div class="mailbox-account__heading"><strong title="${esc(row.email)}">${esc(row.email)}</strong></div>`, 'identity')}
+        ${cell('类型', esc(mailboxProviders[row.provider] || '待选择'), 'summary', 'mailbox-account__text')}
+        ${cell('备注', esc(row.label || '—'), 'summary', 'mailbox-account__text')}
+        ${cell('来源', esc(source), 'secondary', 'mailbox-account__text')}
+        ${cell('买家查询码', `<div class="mailbox-account__code">${code}</div>`)}
+        ${cell('状态', tag(mailboxStatuses[status], status === 'active' ? 'success' : status === 'disabled' ? '' : 'warning'))}
+        ${cell('到期时间', formatMailboxDate(row.expiresAt), 'summary', 'mailbox-account__date')}
+        ${cell('剩余有效天数', esc(delivery?.remaining(row) || '—'), 'secondary')}
+        ${cell('最近查询', formatMailboxDate(row.lastQueriedAt), 'secondary', 'mailbox-account__date')}
+        <td data-mobile-field="actions"><div class="mailbox-row-actions">${actions}</div>
+        <button type="button" class="text-button mobile-record-only mobile-record-toggle" data-action="table-mobile-toggle" aria-expanded="false">更多资料</button></td></tr>`;
     }).join('')}</tbody></table></div>${renderPagination({ id: 'operations-mailbox-pool', page, pageSize, total: items.length })}`;
     void loadVisibleMailboxCodes(panel);
   }

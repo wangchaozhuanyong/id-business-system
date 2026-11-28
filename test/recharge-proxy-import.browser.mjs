@@ -93,7 +93,7 @@ test('代理国家和类型必选，批量保存、补录类型及慢响应保�
     assert(labelBox.x + labelBox.width <= countryBox.x && countryBox.y + countryBox.height <= inputBox.y);
     const typeBox = await type.boundingBox();
     assert(typeBox.y + typeBox.height <= inputBox.y);
-    assert.equal(await frame.locator('#proxy_pool_scroll_hint').isVisible(), width <= 760);
+    assert.equal(await frame.locator('#proxy_pool_scroll_hint').isVisible(), false);
     const legacy = frame.locator('#proxy_country_1');
     const legacyType = frame.locator('#proxy_type_1');
     const measured = frame.locator('#proxy_ip_2');
@@ -109,18 +109,14 @@ test('代理国家和类型必选，批量保存、补录类型及慢响应保�
     assert.equal(await frame.locator('#proxy_lat_2').innerText(), '32ms');
     await settle(page);
     await page.screenshot({ path: `${output}/proxy-types-${width}-${theme}.png` });
-    if (width <= 760) {
-      const header = frame.getByRole('columnheader', { name: '代理类型', exact: true });
-      const readable = await header.evaluate(cell => {
-        const viewport = cell.closest('.table-container');
-        viewport.scrollLeft += cell.getBoundingClientRect().left - viewport.getBoundingClientRect().left;
-        const label = document.createRange();
-        label.selectNodeContents(cell);
-        const bounds = label.getBoundingClientRect();
-        const actions = cell.parentElement.lastElementChild.getBoundingClientRect();
-        return viewport.scrollLeft > 0 && bounds.left >= viewport.getBoundingClientRect().left && bounds.right <= actions.left;
+    if (await frame.locator('html').evaluate(() => innerWidth <= 900)) {
+      const geometry = await legacyType.evaluate(node => {
+        const cell = node.closest('td'), viewport = cell.closest('.table-container');
+        return { label: cell.dataset.fieldLabel, width: viewport.clientWidth, content: viewport.scrollWidth };
       });
-      assert(readable, `代理类型列在 ${width}px 可横向滑动并完整读到表头`);
+      assert.equal(geometry.label, '代理类型');
+      assert(geometry.content <= geometry.width + 1, '手机代理记录按字段换行展示');
+
     }
     const hint = frame.locator('#proxy_add_hint');
     const save = frame.getByRole('button', { name: '保存到代理池', exact: true });

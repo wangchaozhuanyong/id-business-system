@@ -345,15 +345,15 @@ test('完整银行卡入口在深浅主题、宽窄屏和空结果下保持可�
           strip.scrollLeft = strip.scrollWidth;
           const endReachable = bounds(summary).right <= bounds(strip).right + 1;
           strip.scrollLeft = 0;
-          return { offsets, scrolls, endReachable,
-            importVisible: bounds(importButton).left >= bounds(strip).right && bounds(importButton).right <= innerWidth,
+          return { offsets, scrolls, endReachable, stacked: innerWidth <= 900,
+            importVisible: (innerWidth <= 900 ? bounds(importButton).left >= 0 : bounds(importButton).left >= bounds(strip).right) && bounds(importButton).right <= innerWidth,
             startVisible: bounds(strip.querySelector('h2')).left >= bounds(strip).left - 1 };
         });
-        assert(headerLayout.offsets.every(offset => offset <= 2), '列表标题、套餐操作、说明与导入按钮必须同排居中');
+        if (!headerLayout.stacked) assert(headerLayout.offsets.every(offset => offset <= 2), '列表标题、套餐操作、说明与导入按钮必须同排居中');
         assert(headerLayout.importVisible && headerLayout.startVisible && headerLayout.endReachable,
           '导入按钮固定可见，横向滑动可读完整说明');
         if (width >= 1440) assert.equal(headerLayout.scrolls, false, '宽屏直接展示全部操作');
-        if (width <= 390) assert.equal(headerLayout.scrolls, true, '窄屏只在标题与套餐操作区域横向滚动');
+        if (headerLayout.stacked) assert.equal(headerLayout.scrolls, false, '窄屏操作换行显示');
         if (output && theme === 'light' && width === 1920)
           await listHeader.screenshot({ path: join(output, 'card-list-header.png') });
         assert.equal(await poolTabs(page).count(), 0);
@@ -369,6 +369,7 @@ test('完整银行卡入口在深浅主题、宽窄屏和空结果下保持可�
         const table = frame.locator('#cards [data-switch-panel="local"] .table-container');
         const planButton = frame.locator('[data-card-plan-edit="1"]');
         if (width <= 768) {
+          await planButton.scrollIntoViewIfNeeded();
           const planHit = await planButton.evaluate(button => {
             const scroller = button.closest('.table-container');
             const edge = scroller.getBoundingClientRect().right;
@@ -394,6 +395,10 @@ test('完整银行卡入口在深浅主题、宽窄屏和空结果下保持可�
           await page.screenshot({ path: join(output, theme + '-' + width + '-dialog.png') });
         await dialog.getByRole('button', { name: '关闭套餐设置', exact: true }).click();
         if (width <= 768) {
+          const extra = table.locator('tbody tr').first().getByRole('button', {name: '更多资料'});
+          await extra.click();
+          assert(await table.locator('tbody tr').first().locator('td[data-field-label=CVC]').isVisible());
+          await table.locator('#card_pool_list_body tr td:last-child button').first().scrollIntoViewIfNeeded();
           const actionsReachable = await table.evaluate(scroller => {
             scroller.scrollLeft = scroller.scrollWidth;
             const button = scroller.querySelector('#card_pool_list_body tr td:last-child button');

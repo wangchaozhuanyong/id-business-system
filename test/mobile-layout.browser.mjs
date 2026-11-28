@@ -30,9 +30,7 @@ test('手机记录卡、工具入口、表单与草稿使用同一套业务控�
         await page.goto(origin + '/#/accounts/gpt');
         await page.locator('#main tr[data-row-id]').first().waitFor();
         if (dark) {
-          if (width <= 900) await page.locator('#mobile-tools-toggle').click();
           await page.locator('#theme-toggle').click();
-          if (width <= 900) await page.locator('#mobile-tools-toggle').click();
         }
         for (const route of ['accounts/gpt', 'mailboxes/google', 'orders/gpt']) {
           if (!page.url().endsWith(route)) await page.evaluate(route => { location.hash = '#/' + route; }, route);
@@ -63,17 +61,22 @@ test('手机记录卡、工具入口、表单与草稿使用同一套业务控�
           if (output && route === 'accounts/gpt') await page.evaluate(() => scrollTo(0, 0));
           if (output && route === 'accounts/gpt') await page.screenshot({ path: join(output, `accounts-${width}-${dark ? 'dark' : 'light'}.png`) });
           if (route === 'accounts/gpt' && width <= 900) {
-            await page.locator('#main [data-action="mobile-list-actions"]').click();
-            assert(!(await page.getByRole('menuitem', { name: '复制所选', exact: true }).isEnabled()));
+            const menu = page.locator('#main [data-action="mobile-list-actions"]');
+            const action = async name => {
+              const direct = page.locator('#main').getByRole('button', { name, exact: true });
+              if (await direct.isVisible()) return direct;
+              if (!await page.getByRole('menu').isVisible()) await menu.click();
+              return page.getByRole('menuitem', { name, exact: true });
+            };
+            assert(!(await (await action('复制所选')).isEnabled()));
             await page.keyboard.press('Escape');
             const selection = page.locator('#main tbody tr').first().locator('input[type="checkbox"]');
             await selection.check();
             assert.equal(await page.locator('#main tbody input:checked').count(), 1);
-            const menu = page.locator('#main [data-action="mobile-list-actions"]');
-            assert.equal(await menu.count(), 1, '同一列表只保留一个更多操作入口');
-            await menu.click();
-            assert(await page.getByRole('menuitem', { name: '复制所选', exact: true }).isEnabled());
-            await page.getByRole('menuitem', { name: '列设置', exact: true }).click();
+            assert.equal(await menu.count(), 1);
+            assert(await (await action('复制所选')).isEnabled());
+            await page.keyboard.press('Escape');
+            await (await action('列设置')).click();
             await page.locator('#drawer[open]').waitFor();
             await page.locator('#drawer [data-column="password"]').uncheck();
             assert.equal(await page.locator('#main td[data-column="password"]').count(), 0);
