@@ -42,7 +42,7 @@ test('failed selection returns before card availability, CDK locking or task cre
     getRechargeRouting: async () => routing
   });
   assert.equal(result.code, 409); assert.equal(result.body.execution_started, false);
-  assert.match(result.body.message, /联系我们/);
+  assert.match(result.body.message, /联系客服/);
   assert.doesNotMatch(JSON.stringify(result), /proxy\.example|MX/);
   assert.deepEqual(calls, []);
 });
