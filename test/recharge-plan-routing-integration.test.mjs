@@ -1,4 +1,4 @@
-import assert from 'node:assert/strict';
+﻿import assert from 'node:assert/strict';
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { before, after, test } from 'node:test';
@@ -42,16 +42,19 @@ test('failed selection returns before card availability, CDK locking or task cre
     getRechargeRouting: async () => routing
   });
   assert.equal(result.code, 409); assert.equal(result.body.execution_started, false);
-  assert.match(result.body.message, /联系客服/);
+  assert.match(result.body.message, /鑱旂郴瀹㈡湇/);
   assert.doesNotMatch(JSON.stringify(result), /proxy\.example|MX/);
   assert.deepEqual(calls, []);
 });
+// 结账页流程契约：2026-11-26 起默认走网页定价页（CHECKOUT_MODE=ui）。
+// API 建单在跨区账号上稳定返回 400 unusual activity，回退又会污染前端状态，
+// 因此 env 构建收敛到 buildCheckoutWorkerEnv，且默认值改为 ui。
 test('debug worker passes the selected route and preserves all upstream api_only variants', async t => {
   for (const apiOnly of [undefined, false, true]) await t.test(String(apiOnly), async () => {
   const route = { proxy: 'socks5://synthetic-sticky', region: 'PH' };
   let actual, verifyCount = 0, finish;
   const done = new Promise(resolve => { finish = resolve; });
-  const worker = section(server, 'function spawnCheckoutDebugWorker(', 'const LEGACY_PROVIDER_FAILURE_MESSAGE');
+  const worker = section(server, 'function buildCheckoutWorkerEnv(', 'const LEGACY_PROVIDER_FAILURE_MESSAGE');
   const sandbox = {
     path: { join: (...parts) => parts.join('/') }, __dirname: '/synthetic',
     process: { env: { PROXY: 'wrong-global', PAYMENT_REGION_OVERRIDE: 'MY', CHECKOUT_API_ONLY: '1' } }, console: { error: finish },
@@ -71,7 +74,7 @@ test('debug worker passes the selected route and preserves all upstream api_only
       region: route.region, executionRoute: route, ...(apiOnly === undefined ? {} : { apiOnly }) } });
   await done;
   assert.equal(actual.PROXY, route.proxy); assert.equal(actual.PAYMENT_REGION_OVERRIDE, 'PH');
-  assert.equal(actual.CHECKOUT_DEBUG_ONLY, '1'); assert.equal(actual.CHECKOUT_MODE, 'api');
+  assert.equal(actual.CHECKOUT_DEBUG_ONLY, '1'); assert.equal(actual.CHECKOUT_MODE, 'ui');
   assert.equal(actual.CHECKOUT_API_ONLY, apiOnly === true ? '1' : '0'); assert.equal(verifyCount, 1);
   });
 });
@@ -165,7 +168,12 @@ async function activationTrace(source, analyses, integrated, failReselect = fals
     notifyTaskOutcome: value => { trace.push(['notification', value.event]); },
     releaseForegroundSlot: () => { trace.push(['release-slot']); released(); }, getTotalActiveJobs: () => 1
   };
-  const worker = section(source, 'function spawnActivationWorker(', 'async function handleActivationRequest(');
+  // 上游原版没有 buildCheckoutWorkerEnv（补丁新增），基线切片要从 spawnActivationWorker 起，
+  // 否则 section() 找不到起点会断言失败。
+  const traceStart = source.includes('function buildCheckoutWorkerEnv(')
+    ? 'function buildCheckoutWorkerEnv('
+    : 'function spawnActivationWorker(';
+  const worker = section(source, traceStart, 'async function handleActivationRequest(');
   runInNewContext(worker + '\nspawnActivationWorker(input);', { ...sandbox,
     input: { task: { jobKey: 'synthetic-job' }, token: 'synthetic', sessionRaw: '{}', cdk: 'synthetic-code',
       cdkDetails: { plan_type: 'plus' }, executionRoute: integrated ? route(1) : undefined } });
