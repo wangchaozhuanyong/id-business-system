@@ -20,6 +20,10 @@ import recharge_proxy as proxy
 OK = b'HTTP/1.1 200 Connection Established\r\n\r\n'
 
 
+def connect_authority(head):
+    return head.partition(b'\r\n')[0].split(b' ')[1]
+
+
 class ProxyTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         root = Path(__file__).resolve().parents[3] / '.runtime' / 'worker-proxy-tests'
@@ -210,8 +214,10 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
                 await proxy._close(writer)
         endpoint = await self.server(asyncio.start_server, https, '127.0.0.1', 0, ssl=tls)
 
+        business_authorities = {b'chatgpt.com:443', b'auth.openai.com:443'}
+
         async def relay(reader, writer):
-            if self.connections[-1].startswith(b'CONNECT auth.openai.com:'):
+            if connect_authority(self.connections[-1]) == b'auth.openai.com:443':
                 writer.write(OK)
                 await writer.drain()
                 await reader.read()
@@ -245,12 +251,12 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
                 result = await asyncio.to_thread(receipt.verify, first=True)
                 self.assertEqual(result['exitIp'], observed['ip'])
                 self.assertTrue(requests and any(b'GET /?check=' in req for req in requests))
-                self.assertFalse(any(b'chatgpt.com' in head or b'auth.openai.com' in head for head in self.connections))
+                self.assertTrue(business_authorities.isdisjoint(map(connect_authority, self.connections)))
                 # An independent fresh Chromium navigation on the same selected relay now drifts.
                 observed['ip'] = '8.8.8.8'
                 with self.assertRaises(ValueError):
                     await asyncio.to_thread(receipt.verify)
-                self.assertFalse(any(b'chatgpt.com' in head or b'auth.openai.com' in head for head in self.connections))
+                self.assertTrue(business_authorities.isdisjoint(map(connect_authority, self.connections)))
                 observed['ip'] = '1.1.1.1'
                 self.assertEqual((await asyncio.to_thread(receipt.verify))['exitIp'], '1.1.1.1')
                 with patch.object(worker, 'RUNTIME', Path('.')):
@@ -264,7 +270,7 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
                 # over the same local relay and is served from the attested route.
                 await asyncio.wait_for(reached_workspace.wait(), 8)
                 self.assertEqual(business_exits[0], {'ip':'1.1.1.1', 'country':'MY'})
-                self.assertTrue(any(b'auth.openai.com' in head for head in self.connections))
+                self.assertIn(b'auth.openai.com:443', set(map(connect_authority, self.connections)))
                 business.close()
             finally:
                 browser.terminate()
