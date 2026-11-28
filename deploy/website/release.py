@@ -110,6 +110,9 @@ ROUTING_STARTUP_NATIVE_SCOPE = {
     "modules/recharge/codexdaichong/native-routing.mjs",
     "modules/recharge/codexdaichong/native-routing.test.mjs",
 }
+# #1136 shipped the shared routing inputs to the website and adapter while the native image stayed on its prior revision.
+ROUTING_STARTUP_MANUAL_SITE = "70d3f6a48f56de7e6e2143492bfcfb9b11646d48"
+ROUTING_STARTUP_PRIOR_NATIVE = "d7a9b22909ea7d716a202866fe08a99e9e70128a"
 # 已批准的优惠及浏览器补丁独立核验，不与银行卡套餐或供应商退役批次绑定。
 PLUS_TRIAL_PATCH_FILES = {
     f"modules/recharge/codexdaichong/plus-trial/{name}"
@@ -370,7 +373,10 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False, 
             native_changes = set(git("diff", "--name-only", native_revision, sha, "--",
                                      "modules/recharge", "package-lock.json", *CORE_PATHS).splitlines())
             native_changes.discard(BACKUP_OPERATION)
-            if native_changes != ROUTING_STARTUP_NATIVE_SCOPE:
+            approved_manual_routing = (base == ROUTING_STARTUP_MANUAL_SITE and
+                                       native_revision == ROUTING_STARTUP_PRIOR_NATIVE and
+                                       native_changes == MANUAL_ROUTING_SCOPE)
+            if native_changes != ROUTING_STARTUP_NATIVE_SCOPE and not approved_manual_routing:
                 raise RuntimeError("routing_startup_native_scope_mismatch")
     elif include_adapter:
         if not changed <= ADAPTER_SCOPE or not changed.intersection(ADAPTER_RUNTIME_FILES):

@@ -1503,6 +1503,26 @@ class WebsiteReleaseTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "routing_startup_native_scope_mismatch"):
             release.require_website_scope(BASE, TARGET, include_core=True, native_publication=native)
 
+    @patch("release.require_ancestor")
+    @patch("release.git")
+    def test_routing_startup_includes_only_the_published_manual_routing_inputs(self, git, _ancestor):
+        site = release.ROUTING_STARTUP_MANUAL_SITE
+        reviewed_native = release.ROUTING_STARTUP_PRIOR_NATIVE
+        native = {"identity": {"revision": reviewed_native, "running": True}, "imageLabelsVerified": True}
+        routing_changes = "\n".join(sorted(release.ROUTING_STARTUP_NATIVE_SCOPE))
+        native_changes = "\n".join(sorted(release.MANUAL_ROUTING_SCOPE))
+        git.side_effect = [routing_changes, native_changes]
+        self.assertIsNone(release.require_website_scope(site, TARGET, include_core=True, native_publication=native))
+
+        for other_site, other_native, other_changes in (
+                (BASE, reviewed_native, native_changes),
+                (site, "c" * 40, native_changes),
+                (site, reviewed_native, native_changes + "\nmodules/recharge/codexdaichong/prepare.mjs")):
+            git.side_effect = [routing_changes, other_changes]
+            publication = native | {"identity": {"revision": other_native, "running": True}}
+            with self.assertRaisesRegex(RuntimeError, "routing_startup_native_scope_mismatch"):
+                release.require_website_scope(other_site, TARGET, include_core=True, native_publication=publication)
+
     @patch("release.require_presentation_approval")
     @patch("release.require_ancestor")
     @patch("release.git")
