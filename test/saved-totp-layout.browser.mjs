@@ -85,7 +85,7 @@ test('2FA saved accounts stay compact and pasted keys recover from a failed calc
     await settle(page);
     const measure = async () => saved.locator('.saved-totp-table tbody tr').evaluateAll(nodes => nodes.map(node => {
       const rect = selector => node.querySelector(selector).getBoundingClientRect().toJSON();
-      return { row: node.getBoundingClientRect().toJSON(), code: rect('.ops-code'), countdown: rect('.totp-countdown'), copy: rect('[data-action="ops-totp-copy"]') };
+      return { row: node.getBoundingClientRect().toJSON(), name: rect('.totp-account-name'), code: rect('.ops-code'), countdown: rect('.totp-countdown'), copy: rect('[data-action="ops-totp-copy"]') };
     }));
     const rows = await measure();
     assert.equal(rows.length, 20);
@@ -94,6 +94,7 @@ test('2FA saved accounts stay compact and pasted keys recover from a failed calc
         assert(row.row.height <= 80, `${width} table row too tall: ${row.row.height}`);
         assert(row.countdown.right + 6 <= row.copy.left, `${width} countdown overlaps copy`);
       } else {
+        assert(row.name.top < row.code.bottom && row.code.top < row.name.bottom, '账号名称与验证码需在同一行');
         assert(row.copy.top >= row.countdown.bottom && row.copy.right <= row.row.right,
           `${width} saved account card actions must stay beneath the code and within the card`);
       }

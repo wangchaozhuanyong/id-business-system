@@ -787,11 +787,6 @@ h1 {
 .customer-retention-mobile .guide-item {
   overflow-wrap: anywhere;
 }
-.retention-card-action {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 12px;
-}
 @media (max-width: 900px) {
   .customer-retention-list .toolbar-left { flex-basis: 100%; }
   .customer-retention-list .toolbar-right:not(:empty) {
@@ -5296,6 +5291,7 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
 }
 .recharge-code-filters select { flex: 0 0 var(--code-plan-width); width: var(--code-plan-width); }
 .recharge-code-filters .button { min-width: var(--code-return-min); }
+.recharge-code-selection [data-code-selected-count] { display: none; }
 .recharge-new-batch { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 12px var(--panel-padding-inline); background: var(--primary-soft); color: var(--primary); }
 .recharge-new-batch > span { min-width: 0; flex: 1 1 180px; overflow-wrap: anywhere; }
 .recharge-code-table :is(th, td):not(.table-actions) { white-space: normal; overflow-wrap: anywhere; }
@@ -6238,7 +6234,7 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
-@media (max-width: 760px) {
+@media (max-width: 900px) {
   .apple-management-list table,
   .apple-management-list tbody {
     display: block;
@@ -6523,10 +6519,11 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
   .mobile-records td[data-mobile-field='secondary']::before { content: attr(data-label); color: var(--secondary); font-size: 12px; line-height: 1.7; }
   .mobile-records td[data-mobile-field='secondary'] { display: none; }
   .mobile-records tbody tr:hover td { background: transparent; }
-  .mobile-records td.table-number { text-align: start; }
+  .mobile-records td.table-number::before { text-align: start; }
+  .mobile-records td.table-number > .mobile-record-value { text-align: end; font-variant-numeric: tabular-nums; }
   .mobile-records td.table-number-with-help > .mobile-record-value { margin-inline-end: 0; }
-  .mobile-records .table-number .commerce-stat-amounts { justify-items: start; }
-  .mobile-records td.table-number .text-button { text-align: start; padding-inline-start: 0; }
+  .mobile-records .table-number .commerce-stat-amounts { justify-items: end; }
+  .mobile-records td.table-number .text-button { text-align: end; padding-inline: 0; }
   .mobile-records .mobile-record-value { display: block; min-width: 0; line-height: 1.7; }
   .mobile-records .relay-buyer-code { min-width: 0; max-width: 100%; }
   .mobile-records :is(.table-value-button, .table-value-ellipsis) { max-width: 100%; }
@@ -6552,7 +6549,7 @@ details:not(.title-help, .pagination-jump) > summary:focus-visible {
   .field :is(input:not([type='checkbox']):not([type='radio']), select, textarea) { font-size: 16px; }
   .mobile-date-preview { display: block; margin-top: 4px; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; color: var(--secondary); }
   .drawer-header { padding-block: 10px; min-height: 64px; }
-  .drawer-footer { padding-bottom: calc(12px + env(safe-area-inset-bottom)); }
+  .drawer-footer { padding-bottom: 12px; }
   .entry-mobile-tabs { display: flex; gap: 12px; position: sticky; top: var(--header-height); z-index: 3; background: var(--bg); padding: 8px 0; margin-bottom: 12px; }
   .entry-mobile-tabs .tab { flex: 1; justify-content: center; }
   .entry-mobile-tabs .tab[aria-selected='true'] { color: var(--primary); border-bottom: 2px solid var(--primary); }

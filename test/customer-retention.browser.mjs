@@ -279,13 +279,13 @@ test('客户流失归集、订阅历史、数据核对与响应式离线验收',
         const refresh = region.querySelector('.button').getBoundingClientRect();
         const centers = [...region.querySelectorAll('.summary-label,.summary-number,.retention-report-meta,.button')]
           .map(node => { const rect = node.getBoundingClientRect(); return (rect.top + rect.bottom) / 2; });
-        return { deviation: Math.max(...centers) - Math.min(...centers), scrollWidth: scroll.clientWidth,
+        return { allVisible: scroll.scrollWidth <= scroll.clientWidth + 1, deviation: Math.max(...centers) - Math.min(...centers), scrollWidth: scroll.clientWidth,
           scrollbar: scroll.offsetHeight - scroll.clientHeight,
           refreshVisible: refresh.left >= box.left && refresh.right <= box.right && refresh.right <= innerWidth,
           insets: [refresh.top - box.top, box.bottom - refresh.bottom] };
       });
-      assert(overview.deviation <= 1, '统计标签、数量、时间及刷新必须同排');
-      if (width <= 900) assert(overview.scrollbar >= 10, '应实际覆盖占用布局高度的可见滚动条');
+      if (width > 900) assert(overview.deviation <= 1, '统计标签、数量、时间及刷新必须同排');
+      if (width <= 900) assert(overview.allVisible, '统计数据换行后无需横滑');
       assert(overview.refreshVisible && overview.scrollWidth >= 140, '窄屏刷新固定可见且统计可滚动');
       assert(overview.insets.every(value => value >= 8), '刷新控件距外框至少 8px');
       if ([1440, 390, 320].includes(width)) {

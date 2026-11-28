@@ -116,11 +116,11 @@ test('表头文字与每行数值对齐，手机卡片的字段和值各自对�
           const first = value.querySelector('strong') || value;
           range.selectNodeContents(first.firstChild);
           return { label: getComputedStyle(cell, '::before').content, start: cell.getBoundingClientRect().left,
-            valueStart: range.getBoundingClientRect().left };
+            valueStart: range.getBoundingClientRect().left, valueEnd: range.getBoundingClientRect().right };
         }));
         assert(values.every(value => value.label !== 'none' && value.valueStart > value.start));
         assert(values.every(value => Math.abs(value.start - values[0].start) <= 1 &&
-          Math.abs(value.valueStart - values[0].valueStart) <= 1));
+          Math.abs(value.valueEnd - values[0].valueEnd) <= 1));
       }
       await page.getByText('查看图表数据', { exact: true }).click();
       await check(main.locator('.design-chart-data'));
@@ -146,16 +146,16 @@ test('表头文字与每行数值对齐，手机卡片的字段和值各自对�
         const inset = await amountLink.evaluate(button => {
           const range = document.createRange();
           range.selectNodeContents(button);
-          return range.getBoundingClientRect().left - button.closest('.mobile-record-value').getBoundingClientRect().left;
+          return range.getBoundingClientRect().right - button.closest('.mobile-record-value').getBoundingClientRect().right;
         });
-        assert(Math.abs(inset) <= 1, '费用明细链接的金额沿数值栏左边缘排列');
+        assert(Math.abs(inset) <= 1, '费用明细链接的金额沿数值栏右边缘排列');
       }
       assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
     });
   }
 });
 
-test('订单统计的七个筛选项与重置按钮保持一行，窄屏可访问整行', async t => {
+test('订单统计全部筛选可访问，手机换行展示', async t => {
   const browser = await chromium.launch();
   t.after(() => browser.close());
   const context = await browser.newContext();
@@ -183,11 +183,11 @@ test('订单统计的七个筛选项与重置按钮保持一行，窄屏可访�
       };
     });
     assert.equal(layout.count, 8);
-    assert(layout.sameRow && layout.pageFits, width + 'px ' + JSON.stringify(layout));
+    assert((width <= 900 ? layout.fits : layout.sameRow) && layout.pageFits, width + 'px ' + JSON.stringify(layout));
     if (width >= 1440) assert(layout.fits, '宽屏直接显示全部筛选和重置按钮');
     await reset.scrollIntoViewIfNeeded();
     const endScroll = await bar.evaluate(el => el.scrollLeft);
-    if (width === 390) assert(endScroll > 0);
+    if (width <= 900) assert.equal(endScroll, 0);
     await currency.selectOption('MYR');
     assert.equal(await currency.inputValue(), 'MYR');
     assert.equal(await bar.evaluate(el => el.scrollLeft), endScroll);

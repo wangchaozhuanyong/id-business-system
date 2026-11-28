@@ -35,8 +35,11 @@ const snapshot = () => {
         const range = document.createRange();
         if (node) range.selectNodeContents(node);
         const text = range.getBoundingClientRect(), bounds = tab.getBoundingClientRect(), css = getComputedStyle(tab);
+        const count = tab.querySelector('.tab-count')?.getBoundingClientRect();
+        const stacked = count && count.top >= text.bottom - 1;
+        const contentBottom = stacked ? count.bottom : text.bottom;
         return { text: tab.textContent.trim(), height: bounds.height, font: css.fontSize,
-          centerOffset: (text.top + text.bottom - bounds.top - bounds.bottom) / 2,
+          centerOffset: (text.top + contentBottom - bounds.top - bounds.bottom) / 2,
           padding: [css.paddingTop, css.paddingBottom], shadow: css.boxShadow,
           border: [css.borderTopWidth, css.borderBottomWidth],
           clipped: bounds.width > nav.clientWidth + 1 };

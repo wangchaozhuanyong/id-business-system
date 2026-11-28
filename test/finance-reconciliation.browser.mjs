@@ -102,7 +102,7 @@ test('对账直接显示完整卡号和邮箱，长资料可复制，宽窄屏�
       const heading = amount.closest('table').tHead.rows[0].cells[amount.cellIndex];
       range.selectNodeContents(heading);
       const amountOffset = innerWidth > 900 ? valueBox.right - range.getBoundingClientRect().right :
-        valueBox.left - value.getBoundingClientRect().left;
+        valueBox.right - value.getBoundingClientRect().right;
       return { amountOffset, overflow: document.documentElement.scrollWidth > innerWidth + 1,
         controlsOutside: controls.some(b => b.left < 0 || b.right > innerWidth + 1),
         overlap: controls.some((a, index) => controls.slice(index + 1).some(b =>
