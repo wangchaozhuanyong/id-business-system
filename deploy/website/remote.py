@@ -752,6 +752,37 @@ def wire_storefront_analytics(content):
     return content
 
 
+def wire_storefront_visitors(content):
+    """Add the optional scoped report credential to the already verified tools launcher."""
+    replacements = (
+        ("const { analytics, visits, microsoft, cloudflare } = JSON.parse(toolConfig);",
+         "const { analytics, visits, microsoft, cloudflare, storefrontVisitors } = JSON.parse(toolConfig);"),
+        ("  ...(cloudflare === undefined ? [] : [['cloudflare', JSON.stringify(cloudflare)]])\n",
+         "  ...(cloudflare === undefined ? [] : [['cloudflare', JSON.stringify(cloudflare)]]),\n"
+         "  ...(storefrontVisitors === undefined ? [] : [['storefront-visitors', JSON.stringify(storefrontVisitors)]])\n"),
+        ("const [websiteAnalyticsConfig, websiteVisitsSecret, microsoftMailboxConfig, websiteCloudflareConfig] = await Promise.all([",
+         "const [websiteAnalyticsConfig, websiteVisitsSecret, microsoftMailboxConfig, websiteCloudflareConfig,\n"
+         "  websiteStorefrontVisitorsConfig] = await Promise.all(["),
+        ("  readToolConfig(cloudflare === undefined ? undefined : '/credentials/cloudflare', 'website-cloudflare')\n",
+         "  readToolConfig(cloudflare === undefined ? undefined : '/credentials/cloudflare', 'website-cloudflare'),\n"
+         "  readToolConfig(storefrontVisitors === undefined ? undefined : '/credentials/storefront-visitors', 'website-storefront-visitors')\n"),
+        ("  websiteCloudflareConfig,\n", "  websiteCloudflareConfig,\n  websiteStorefrontVisitorsConfig,\n"),
+    )
+    error = "unexpected_storefront_visitors_launcher"
+    if "storefrontVisitors" in content or "websiteStorefrontVisitorsConfig" in content or "storefront-visitors" in content:
+        require(all(content.count(new) == 1 for _, new in replacements), error)
+        verified = content
+        for old, new in replacements:
+            verified = verified.replace(new, old)
+        require(wire_storefront_analytics(verified) == verified, error)
+        return content
+    content = wire_storefront_analytics(content)
+    require(all(content.count(old) == 1 for old, _ in replacements), error)
+    for old, new in replacements:
+        content = content.replace(old, new)
+    return content
+
+
 def normalize_tools_credential_stream(content):
     # The app-entry protocol has one line per credential. A valid JSON file may
     # contain formatting or a final newline; preserve its values before framing.
@@ -968,7 +999,7 @@ def stage(plan, release):
                 mount_backup_monitoring(content.replace("sha=" + base, "sha=" + sha))))
             content = wire_partner_api(content, plan.get("rechargePartnerApi"))
         elif name == "app-entry.mjs":
-            content = wire_storefront_analytics(content)
+            content = wire_storefront_visitors(content)
         elif name == "check-app.mjs":
             content = update_canary_asset_refs(content, (live / "source/frontend/index.html").read_text(),
                                                (source / "frontend/index.html").read_text())
@@ -1789,7 +1820,8 @@ console.log(JSON.stringify(Object.fromEntries(hashes)));
                 print(json.dumps({"websiteAssetRead": route, "httpStatus": error.code}), flush=True)
                 raise ReleaseError("live_website_asset_unavailable") from None
     protected_reads = ("/api/local/settings", "/api/local/inventory", "/api/local/commerce", "/api/local/order-sync",
-                       "/api/local/system-monitoring", "/api/local/recharge-activity")
+                       "/api/local/system-monitoring", "/api/local/recharge-activity",
+                       "/api/local/tools/storefront-visitors")
     if (source / "server/site-management.mjs").is_file():
         protected_reads += ("/api/local/site-management?view=information", "/api/local/site-management?view=backups",
                             "/api/local/renewals?view=finance", "/api/local/staff/finance/cards",

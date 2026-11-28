@@ -16,6 +16,7 @@ import { createWebsiteMonitor, handleWebsiteMonitor } from './tools/website-moni
 import { createBitBrowserProxyExtraction } from './bitbrowser-proxy-extraction.mjs';
 import { createWebsiteAnalytics } from './tools/website-analytics.mjs';
 import { createWebsiteVisits } from './tools/website-visits.mjs';
+import { createWebsiteStorefrontVisitors, websiteStorefrontVisitorsRoute } from './tools/website-storefront-visitors.mjs';
 import { createSheetsStatusHandler, sheetsStatusRoute } from './tools/sheets-status.mjs';
 import { createMediaResolver } from './tools/media-resolver.mjs';
 import {
@@ -218,6 +219,7 @@ export async function startPreview(
     websiteAnalyticsConfig,
     websiteCloudflareConfig,
     websiteAnalyticsFetch,
+    websiteStorefrontVisitorsConfig,
     websiteVisitsSecret,
     readManagedMailbox,
     mailboxPublicOrigin,
@@ -272,6 +274,9 @@ export async function startPreview(
     cloudflareConfig: websiteCloudflareConfig,
     publicOrigin: secureOrigin,
     fetchImpl: websiteAnalyticsFetch
+  });
+  const handleWebsiteStorefrontVisitors = createWebsiteStorefrontVisitors({
+    config: websiteStorefrontVisitorsConfig, publicOrigin: secureOrigin
   });
   const handleSheetsStatus = createSheetsStatusHandler({
     receiptDirectory: monitoringWorkerReceiptsDirectory,
@@ -863,6 +868,10 @@ export async function startPreview(
       if (!actor || !canManage) return forbidden();
       return void handleWebsiteAnalytics(request, response);
     }
+    if (store && route === websiteStorefrontVisitorsRoute) {
+      if (!actor || !canManage) return forbidden();
+      return void handleWebsiteStorefrontVisitors(request, response);
+    }
     if (store && route === sheetsStatusRoute) return void handleSheetsStatus(request, response, actor);
     if (store && route === '/api/local/tools/website-monitor') {
       if (!actor) return forbidden();
@@ -1233,6 +1242,7 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
         'media-resolver-url': { type: 'string' },
         'website-analytics-config': { type: 'string' },
         'website-cloudflare-config': { type: 'string' },
+        'website-storefront-visitors-config': { type: 'string' },
         'website-visits-secret-file': { type: 'string' },
         'microsoft-mailbox-config': { type: 'string' },
         'mailbox-public-origin': { type: 'string' },
@@ -1261,14 +1271,14 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
     const rechargeConfig = values['codexdaichong-url']
       ? { upstreamUrl: values['codexdaichong-url'], secret: process.env.ID_RECHARGE_BRIDGE_SECRET }
       : undefined;
-    const [websiteAnalyticsConfig, websiteCloudflareConfig, websiteVisitsSecret, microsoftMailboxConfig] = await Promise.all(
-      [
-        readToolConfig(values['website-analytics-config'], 'website-analytics'),
-        readToolConfig(values['website-cloudflare-config'], 'website-cloudflare'),
-        readToolConfig(values['website-visits-secret-file'], 'website-visits'),
-        readToolConfig(values['microsoft-mailbox-config'], 'microsoft-mailbox')
-      ]
-    );
+    const [websiteAnalyticsConfig, websiteCloudflareConfig, websiteStorefrontVisitorsConfig, websiteVisitsSecret,
+      microsoftMailboxConfig] = await Promise.all([
+      readToolConfig(values['website-analytics-config'], 'website-analytics'),
+      readToolConfig(values['website-cloudflare-config'], 'website-cloudflare'),
+      readToolConfig(values['website-storefront-visitors-config'], 'website-storefront-visitors'),
+      readToolConfig(values['website-visits-secret-file'], 'website-visits'),
+      readToolConfig(values['microsoft-mailbox-config'], 'microsoft-mailbox')
+    ]);
     const { url } = await startPreview(port, {
       databasePath,
       authPath,
@@ -1280,6 +1290,7 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
       mediaResolverUrl: values['media-resolver-url'],
       websiteAnalyticsConfig,
       websiteCloudflareConfig,
+      websiteStorefrontVisitorsConfig,
       websiteVisitsSecret,
       mailboxPublicOrigin: values['mailbox-public-origin'],
       microsoftMailboxConfig

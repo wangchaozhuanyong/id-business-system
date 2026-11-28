@@ -6,7 +6,7 @@
 | --- | --- | --- |
 | 2FA | 手工计算支持 Base32、验证器链接和多行输入。保存账号按登录身份隔离，加密落盘，取码和变更审计不包含密钥或验证码 | 使用新版登录，支持本机验证，无外部依赖 |
 | 网站监控 | 公开网站健康检测。管理员访问明细支持 7／30 天、排序分页、按 IP 查询、默认遮挡与经审计查看 | 签名采集使用 `--website-visits-secret-file` |
-| 网站统计 | 装修站首项展示所选时段内 GA4 去重访客数，趋势展示每日访客。装修站的独立 IP 数在网站监控查看。商城继续展示独立 IP 数，各站保留浏览量与访问次数 | 装修站 GA4、商城 Cloudflare Web Analytics、签名访问采集 |
+| 网站统计 | 装修站首项展示所选时段内 GA4 去重访客数，趋势展示每日访客。装修站的独立 IP 数在网站监控查看。商城首项展示 Vendure 去重访客数，同时展示浏览量、访问次数和独立 IP 数 | 装修站 GA4、商城 Vendure 访客统计、Cloudflare Web Analytics、签名访问采集 |
 | 谷歌表格同步 | 查看持续运行的同步进程回执，以及邮箱、账号、订单和客户的工作表字段。刷新只读取回执 | 优先读取同步进程的专用回执。正式站的现有备份状态采集器也从同步进程的日志投影最后核验时间和失败状态，通过现有只读挂载提供给页面 |
 | 抖音解析 | 沿用原执行器协议、公开作品平台规则，按视频、原声、图片显示，统一登录下载 | 通过 `--media-resolver-url` 挂载独立执行器，详见 [解析执行器](MEDIA_RESOLVER.md) |
 | 邮箱查询与邮箱池 | 登录工具和买家查询页共用查询码。管理员可登记、批量登记谷歌／苹果、修改授权、启停、重发查询码、设定默认有效期。Microsoft 逐个完成 OAuth，已接通的 Apple 隐藏邮箱查询入口继续可用 | 谷歌、苹果填写应用专用密码；Microsoft 使用 `--microsoft-mailbox-config`，包含 `clientId`、`clientSecret`、`redirectUri`。独立回调路径为 `/api/local/tools/mailbox-microsoft/callback`。详见 [Microsoft 回调要求](https://learn.microsoft.com/entra/identity-platform/reply-url) 和 [IMAP 授权范围](https://learn.microsoft.com/en-us/exchange/client-developer/legacy-protocols/how-to-authenticate-an-imap-pop-smtp-application-by-using-oauth/) |
@@ -61,6 +61,14 @@ const microsoftMailboxConfig = await readToolConfig(
 
 启动器通过现有 Python 运行时将工具凭据 JSON 规范化为单行，再写入协议分隔符。配置文件可以带末尾换行或使用缩进排版，JSON 内的字符串值保持原样；无效 JSON 会阻止启动，不能破坏下一份凭据的读取边界。
 
+### 商城去重访客数
+
+大马通、模钥商城和闪铸商城分别按已同意统计的浏览器访客标识去重。汇总统计整个所选时段，趋势展示每天的访客。使用 UTC 自然日，每次查询最多 30 天。没有可用访客标识的时段显示「—」。部分访问缺少标识时显示覆盖提示。各站的 Cloudflare 浏览量、访问次数和签名采集独立 IP 数继续按各自数据源读取。
+
+本机通过 `--website-storefront-visitors-config` 提供独立私有 JSON 文件，结构为 `{"token":"<商城访客统计专用令牌>"}`。令牌由受管配置提供，格式为 64 位小写十六进制。ID 后端通过 HTTPS 固定入口 `https://console.moyaoai.com/api/storefront/visitors` 获取聚合数据。浏览器从现有管理员权限下的同源接口读取，响应只含所选站点和日期范围的汇总、每日计数及覆盖提示。
+
+获得正式启用授权后，先发布 Vendure 的聚合接口并启用其专用令牌。核验 Vendure 聚合接口可用后，再在 ID 现有 systemd 加密凭据 `independent-online-tools` 的 JSON 顶层配置 `storefrontVisitors` 对象，格式与本机私有文件相同。发布入口在容器内存文件系统用 `0600` 读取凭据。令牌仅能读取商城访客聚合数据，严禁进入源码、发布制品、浏览器和日志。省略配置时页面显示待接入。正式启用后逐站核对日期范围、无资料状态和同一访客跨日去重。
+
 ### 商城独立 IP 数
 
 Vendure 沿用取得分析同意后的页面访问采集。后端使用可信代理解析的公网 IP，为每个站点生成可跨日去重的脱敏标识，经既有签名入口提交。ID 系统仅接收站点、事件编号、脱敏标识和发生时间，用现有加密文档按站保存，同站同一 UTC 自然日的相同标识只入库一次。查询只返回整个选中时段的去重计数。装修站继续使用原采集和马来西亚自然日。
@@ -108,18 +116,19 @@ node server/tools/online-tools-preflight.mjs
 node server/tools/online-tools-preflight.mjs \
   --website-analytics-config "$ga4_private_file" \
   --website-cloudflare-config "$cloudflare_private_file" \
+  --website-storefront-visitors-config "$storefront_visitors_private_file" \
   --website-visits-secret-file "$visits_private_file" \
   --media-resolver-url "$worker_loopback_origin" \
   --microsoft-mailbox-config "$microsoft_private_file" \
   --preview-origin "$planned_preview_origin"
 ```
 
-- GA4 用相同的加载路径读取标准凭据或已有显式配置，检查属性、数据流、主机名及服务账号私钥格式。访问采集检查私有密钥文件与签名密钥格式。这两项默认无网络请求。
+- GA4 用相同的加载路径读取标准凭据或已有显式配置，检查属性、数据流、主机名及服务账号私钥格式。访问采集检查私有密钥文件与签名密钥格式。商城访客统计检查私有文件和专用令牌格式。这些检查默认无网络请求。
 - Microsoft 检查应用配置和回调格式。提供 `--preview-origin` 后比较回调与计划预览地址的主机及端口。未提供时，这一项标记未检查。预检不打开授权页面、不换取令牌。
 - 计划沿用线上域名时，用 `--public-origin "$planned_https_origin"` 替换 `--preview-origin`。预检检查正式 HTTPS 域名与 Microsoft 配置是否匹配，同时接受老版已登记的回调路径。此检查不会访问该域名。
 - 正式宿主挂载两条旧路由后，可同时加 `--probe-public-routes` 检查 HTTPS 入口。预检对两条旧路径各发一次不带参数和凭据的 GET。Microsoft 应返回 HTTP 400 的授权未完成页面，采集入口应返回 HTTP 405 和 `Allow: POST`。报告只记录探测状态。此步骤验证路由可达，真实邮箱授权和签名采集另行验收。
 - 媒体默认只检查回环配置。对已单独启动、获准测试的执行器，可加 `--probe-media`，仅直连 `127.0.0.1` 发送一次 `GET /health`。超时 2 秒，健康响应须为 JSON 且 `ok: true`。拒绝跳转和 4348；提供计划预览地址时，也拒绝使用与该地址相同的端口。该结果只证明回环健康响应，作品解析与下载仍需独立验收。
 
-每项输出 `valid`、`missing`、`invalid` 或 `unavailable`，并列出真实联调所需输入。退出码 0 表示四项配置检查及请求的健康检查通过，2 表示至少一项有缺口，1 表示命令参数无效。无论退出码，真实联调状态仍为 `not_verified`。
+每项输出 `valid`、`missing`、`invalid` 或 `unavailable`，并列出真实联调所需输入。退出码 0 表示所列配置检查及请求的健康检查通过，2 表示至少一项有缺口，1 表示命令参数无效。无论退出码，真实联调状态仍为 `not_verified`。
 
 抖音真实联调还需独立执行器回环地址及可公开访问的授权测试作品，登录后验证解析、媒体分类和文件下载。预检合成验收运行 `node --test test/tools-online-preflight.test.mjs`。

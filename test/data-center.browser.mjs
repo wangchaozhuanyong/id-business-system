@@ -35,6 +35,22 @@ function report(site, from, days, state) {
   };
 }
 
+function storefrontReport(query, visitors, hasUnidentifiedViews = false) {
+  const start = Date.parse(query.from);
+  const days = (Date.parse(query.to) - start) / 86_400_000 + 1;
+  return {
+    ...query,
+    status: 'ready',
+    timeZone: 'UTC',
+    visitors,
+    hasUnidentifiedViews,
+    daily: Array.from({ length: days }, (_, index) => ({
+      date: new Date(start + index * 86_400_000).toISOString().slice(0, 10),
+      visitors: visitors === null || index === 1 ? null : 4
+    }))
+  };
+}
+
 test('data center navigation, four website reports, reporting dates and responsive layout', { timeout: 45_000 }, async t => {
   const browser = await chromium.launch({ channel: process.env.ID_RECHARGE_QA_BROWSER_CHANNEL });
   t.after(() => browser.close());
@@ -42,8 +58,11 @@ test('data center navigation, four website reports, reporting dates and responsi
   const { external, unavailable } = await interceptDesign(context, { localFixtures: {}, actor: admin, skipRechargeAssets: true });
   const requests = [];
   const ipRequests = [];
+  const visitorRequests = [];
   let mode = 'ready';
   let ipMode = 'ready';
+  let visitorMode = 'ready';
+  let pendingVisitorResponse;
   await context.route('**/api/local/tools/website-analytics?*', route => {
     const request = route.request();
     const params = new URL(request.url()).searchParams;
@@ -54,6 +73,29 @@ test('data center navigation, four website reports, reporting dates and responsi
     requests.push([request.method(), site, days]);
     return mode === 'error' ? route.fulfill({ status: 503, json: { error: '合成内部错误' } })
       : route.fulfill({ json: report(site, from, days, mode) });
+  });
+  const storefrontVisitors = new Map([
+    ['damatong.net', { week: 10, month: 23 }],
+    ['moyaoai.com', { week: 14, month: 33 }],
+    ['shop.flashcast.com.my', { week: 8, month: 13 }]
+  ]);
+  await context.route('**/api/local/tools/storefront-visitors?*', async route => {
+    const request = route.request();
+    const params = new URL(request.url()).searchParams;
+    const query = Object.fromEntries(params);
+    const { site, from, to } = query;
+    const counts = storefrontVisitors.get(site);
+    assert.equal(request.method(), 'GET');
+    assert.deepEqual([...params.keys()].sort(), ['from', 'site', 'to']);
+    assert(counts, `unexpected visitor report site ${site}`);
+    assert.equal(to, '2026-11-12');
+    assert(['2026-11-06', '2026-10-14'].includes(from));
+    visitorRequests.push([site, from]);
+    if (visitorMode === 'error') return route.fulfill({ status: 502, json: { error: '合成商城访客接口错误' } });
+    if (visitorMode === 'unconfigured') return route.fulfill({ json: { ...query, status: 'unconfigured' } });
+    const visitors = visitorMode === 'empty' ? null : counts[from === '2026-11-06' ? 'week' : 'month'];
+    await pendingVisitorResponse;
+    return route.fulfill({ json: storefrontReport(query, visitors, site === 'damatong.net') });
   });
   const storefrontIps = new Map([['damatong.net', 4], ['moyaoai.com', 5], ['shop.flashcast.com.my', null]]);
   await context.route('**/api/local/tools/website-visits/unique-ips', route => {
@@ -99,6 +141,7 @@ test('data center navigation, four website reports, reporting dates and responsi
     .filter({ hasText: new RegExp(`^${Number.isInteger(value) ? format.format(value) : value}${unit}$`) }).waitFor();
   const waitForViews = value => waitForMetric('浏览量', value, '次');
   const waitForVisitors = value => waitForMetric('访客数（GA4）', value, '位');
+  const waitForStorefrontVisitors = value => waitForMetric('访客数（商城）', value, '位');
   const waitForIps = value => waitForMetric('独立 IP 数', value, '个');
   await waitForViews(1234);
   assert.equal(await select.inputValue(), 'flashcast.com.my');
@@ -203,23 +246,37 @@ test('data center navigation, four website reports, reporting dates and responsi
   });
   await announceVisitChange();
   assert.deepEqual(ipRequests, []);
+  assert.deepEqual(visitorRequests, []);
 
   for (const [site, pageViews] of [...sources].slice(1)) {
     await select.selectOption(site);
     await waitForViews(pageViews);
-    assert.deepEqual(await metrics.allTextContents(), ['浏览量', '访问次数', '独立 IP 数']);
+    assert.deepEqual(await metrics.allTextContents(), ['访客数（商城）', '浏览量', '访问次数', '独立 IP 数']);
+    const { week } = storefrontVisitors.get(site);
+    await waitForStorefrontVisitors(week);
+    assert.match(await metric('访客数（商城）').getAttribute('class'), /\baccent\b/);
     if (storefrontIps.get(site) === null) {
       await waitForIps('—');
       await workspace.getByText('该时段尚无可用的独立 IP 采集数据。', { exact: true }).waitFor();
     } else await waitForIps(storefrontIps.get(site));
     assert.match(await overview.innerText(), /世界标准时间（UTC）.*2026-11-12 03:09/s);
     await overview.getByText('含估算', { exact: true }).waitFor();
-    await workspace.getByRole('heading', { name: '每日浏览量趋势' }).waitFor();
+    await workspace.getByRole('heading', { name: '每日访客趋势' }).waitFor();
+    await workspace.getByRole('img', { name: '2026-11-06；访客数（商城） 4 位', exact: true }).waitFor();
     if (site === 'damatong.net') {
+      await workspace.getByText('部分商城访问缺少去重标识，访客数只包含可识别记录。', { exact: true }).waitFor();
+      await details.locator('summary').press('Enter');
+      await rows.first().waitFor();
+      assert.deepEqual(await details.getByRole('columnheader').allTextContents(), ['日期', '访客数（商城）', '浏览量', '访问次数']);
+      const dailyVisitors = await rows.locator('td:first-of-type').allTextContents();
+      assert.deepEqual(dailyVisitors, ['4', '—', '4', '4', '4', '4', '4']);
+      assert.notEqual(week, dailyVisitors.reduce((total, value) => total + (Number(value) || 0), 0));
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 320);
       ipMode = 'error';
       await refresh.click();
       await workspace.getByText('暂时无法更新独立 IP 数，已保留上次数据。', { exact: true }).waitFor();
       await waitForIps(4);
+      await waitForStorefrontVisitors(week);
       await waitForViews(pageViews);
       ipMode = 'ready';
       storefrontIps.set(site, 0);
@@ -227,46 +284,88 @@ test('data center navigation, four website reports, reporting dates and responsi
       await waitForIps(0);
       storefrontIps.set(site, 4);
     }
+    if (site === 'moyaoai.com') {
+      visitorMode = 'error';
+      await refresh.click();
+      await workspace.getByText('暂时无法更新商城访客数，已保留上次数据。', { exact: true }).waitFor();
+      await waitForStorefrontVisitors(week);
+      await waitForViews(pageViews);
+      await waitForIps(5);
+      visitorMode = 'ready';
+    }
   }
+  const monthVisitorResponse = Promise.withResolvers();
+  pendingVisitorResponse = monthVisitorResponse.promise;
   await workspace.getByRole('combobox', { name: '统计时间范围', exact: true }).selectOption('month');
   await overview.getByText('2026-10-14 至 2026-11-12', { exact: true }).waitFor();
+  await waitForStorefrontVisitors('—');
+  await workspace.getByRole('heading', { name: '每日浏览量趋势' }).waitFor();
+  await details.locator('summary').press('Enter');
+  await rows.first().waitFor();
+  pendingVisitorResponse = undefined;
+  monthVisitorResponse.resolve();
+  await waitForStorefrontVisitors(13);
+  await workspace.getByRole('heading', { name: '每日访客趋势' }).waitFor();
+  assert.equal(await details.evaluate(node => node.open), true);
   await overview.getByText('含估算', { exact: true }).waitFor();
   await tabs.getByRole('link', { name: '谷歌表格同步' }).click();
   await page.getByText('未收到有效回执', { exact: true }).waitFor();
   await tabs.getByRole('link', { name: '网站统计' }).click();
   await waitForViews(987);
+  await waitForStorefrontVisitors(13);
   assert.equal(await select.inputValue(), 'shop.flashcast.com.my');
   assert.equal(await workspace.getByRole('combobox', { name: '统计时间范围', exact: true }).inputValue(), 'month');
+
+  visitorMode = 'empty';
+  await refresh.click();
+  await workspace.getByText('所选日期没有可用的商城访客记录。', { exact: true }).waitFor();
+  await waitForStorefrontVisitors('—');
+  await waitForViews(987);
+  await workspace.getByRole('heading', { name: '每日浏览量趋势' }).waitFor();
 
   mode = 'empty';
   await refresh.click();
   await overview.getByText('该时段暂无 Cloudflare 访问数据。', { exact: true }).waitFor();
   assert.equal(await overview.getByText('含估算', { exact: true }).count(), 0);
   assert.match(await overview.innerText(), /2026-10-14 至 2026-11-12/);
-  assert.equal(await metrics.count(), 3);
+  assert.equal(await metrics.count(), 4);
   assert.equal(await details.count(), 0);
   mode = 'unconfigured';
+  visitorMode = 'unconfigured';
   await refresh.click();
   await overview.getByText('该网站尚未接入 Cloudflare 统计。', { exact: true }).waitFor();
-  assert.equal(await metrics.count(), 3);
+  await workspace.getByText('该商城尚未接入去重访客统计。', { exact: true }).waitFor();
+  await waitForStorefrontVisitors('—');
+  assert.equal(await metrics.count(), 4);
   assert.doesNotMatch(await overview.innerText(), /2026-10-14/);
   mode = 'error';
+  visitorMode = 'ready';
   await select.selectOption('damatong.net');
   await workspace.getByText('暂时读不到访问数据，请刷新统计。', { exact: true }).waitFor();
   await waitForIps(4);
-  assert.equal(await metrics.count(), 3);
+  await waitForStorefrontVisitors(23);
+  await waitForViews('—');
+  await workspace.getByRole('heading', { name: '每日访客趋势' }).waitFor();
+  await overview.getByText('2026-10-14 至 2026-11-12', { exact: true }).waitFor();
+  assert.match(await overview.innerText(), /世界标准时间（UTC）/);
+  assert.equal(await metrics.count(), 4);
   assert.deepEqual(requests, [
     ['GET', 'flashcast.com.my', 7],
     ...Array.from({ length: 3 }, () => ['GET', 'flashcast.com.my', 1]),
     ['GET', 'damatong.net', 7],
-    ...[...sources.keys()].slice(1).map(site => ['GET', site, 7]),
+    ...['damatong.net', 'moyaoai.com', 'moyaoai.com', 'shop.flashcast.com.my'].map(site => ['GET', site, 7]),
+    ['GET', 'shop.flashcast.com.my', 30],
     ['GET', 'shop.flashcast.com.my', 30], ['GET', 'shop.flashcast.com.my', 30],
     ['GET', 'shop.flashcast.com.my', 30], ['GET', 'damatong.net', 30]
   ]);
   assert.deepEqual(ipRequests, [
-    ['damatong.net', '2026-11-06'], ['damatong.net', '2026-11-06'],
-    ...[...storefrontIps.keys()].map(site => [site, '2026-11-06']),
-    ...Array.from({ length: 3 }, () => ['shop.flashcast.com.my', '2026-10-14']),
+    ...['damatong.net', 'damatong.net', 'damatong.net', 'moyaoai.com', 'moyaoai.com', 'shop.flashcast.com.my'].map(site => [site, '2026-11-06']),
+    ...Array.from({ length: 4 }, () => ['shop.flashcast.com.my', '2026-10-14']),
+    ['damatong.net', '2026-10-14']
+  ]);
+  assert.deepEqual(visitorRequests, [
+    ...['damatong.net', 'damatong.net', 'moyaoai.com', 'moyaoai.com', 'shop.flashcast.com.my'].map(site => [site, '2026-11-06']),
+    ...Array.from({ length: 4 }, () => ['shop.flashcast.com.my', '2026-10-14']),
     ['damatong.net', '2026-10-14']
   ]);
   assert.deepEqual(errors, []);

@@ -9,6 +9,7 @@ const maxBytes = 64 * 1024;
 const labels = new Map([
   ['website-analytics', '网站访问统计'],
   ['website-cloudflare', 'Cloudflare 商城访问统计'],
+  ['website-storefront-visitors', '商城访客统计'],
   ['website-visits', '网站访问采集'],
   ['microsoft-mailbox', 'Microsoft 邮箱授权'],
   ['login-security', '登录安全'],
