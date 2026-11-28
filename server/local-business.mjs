@@ -82,6 +82,7 @@ import {
   closeWorkbenchBrowser
 } from './native-browser-workbench.mjs';
 import { manualDesktopWorkspaceKey } from './manual-desktop-workspace.mjs';
+import { browserWindowsDomain, createManualBrowserRecords } from './manual-browser-records.mjs';
 import { editRenewalRecord, listRenewalPage, manualRenewalRecords, ManualRenewalError, requireRenewalRecord } from './manual-renewal-records.mjs';
 import { NativeBrowserError, closeNativeBrowser, operatorBrowserProfileKey } from './native-chrome-runner.mjs';
 import {
@@ -2258,6 +2259,7 @@ export function createLocalBusinessStore(databasePath) {
         return { record };
       });
     },
+    ...createManualBrowserRecords({ readDocument, putDocument, writeTransaction }),
     listManualRenewals(query, actor) {
       const { legacy, registry, version } = readRenewalRegistry(actor);
       return { version, ...listRenewalPage(manualRenewalRecords(legacy, registry), query) };
@@ -3837,6 +3839,7 @@ export function createLocalBusinessStore(databasePath) {
           Number(version(`${nativeWorkbenchDomain}:${actor.id}`)));
       }
       if (['admin', 'super'].includes(actor.role)) {
+        versions[browserWindowsDomain] = version(browserWindowsDomain + ':' + actor.id);
         for (const scope of ['settings', 'appleBalance', 'tenant-cards', 'recharge-codes', 'order-sync', 'finance-rates',
           cardTypeDocument, cardFreezeDocument, subscriptionDomain, orderExpenseDomain]) versions[scope] = version(scope);
         versions['system-monitoring'] = `${version('system-monitoring-config')}:${version('system-monitoring-state')}`;
@@ -3897,7 +3900,7 @@ export function createLocalBusinessStore(databasePath) {
   };
 }
 
-async function readJson(request, limit = maximumBodyBytes) {
+export async function readJson(request, limit = maximumBodyBytes) {
   if (!/^application\/json(?:\s*;|$)/i.test(request.headers['content-type'] || '')) {
     throw new LocalDataError(415, '请提交 JSON 资料');
   }

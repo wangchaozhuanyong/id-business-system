@@ -9,7 +9,8 @@ test('authenticated host serves finance and admins only their own renewal record
   const runtime = new URL('../.runtime/', import.meta.url);
   await mkdir(runtime, { recursive: true, mode: 0o700 });
   const dir = await mkdtemp(new URL('renewal-role-qa-', runtime));
-  const authPath = join(dir, 'staff.json'), canonical = new URL('https://renewal-role.example.test');
+  const authPath = join(dir, 'staff.json');
+  let canonical = new URL('https://renewal-role.example.test');
   const fixture = role => ({ name: '隔离测试 ' + role, email: role + '@example.test', password: randomUUID() });
   const superAdmin = fixture('super');
   const restricted = ['employee', 'supervisor', 'registrar'];
@@ -32,7 +33,11 @@ test('authenticated host serves finance and admins only their own renewal record
   // startPreview resolves private login settings from the environment and site observations from cwd.
   process.chdir(dir);
   process.env = { HOME: dir, TMPDIR: dir, TZ: 'UTC' };
-  const network = t.mock.method(globalThis, 'fetch', async () => { throw new Error('External requests are disabled in this fixture'); });
+  const adapterOrigin = 'http://127.0.0.1:1';
+  const network = t.mock.method(globalThis, 'fetch', async input => {
+    if (new URL(input).origin === adapterOrigin) return new Response(null, { status: 503 });
+    throw new Error('External requests are disabled in this fixture');
+  });
   const { initializeLocalAdmin } = await import('../server/local-auth.mjs');
   const { startPreview } = await import('../server/preview.mjs');
   await initializeLocalAdmin(authPath, superAdmin);
@@ -42,7 +47,7 @@ test('authenticated host serves finance and admins only their own renewal record
     monitoringBackupReceiptsDirectory: null, rechargePartnerEnabled: false, rechargeOrderSync: false
   });
   server = preview.server;
-  const loopback = new URL(preview.url);
+  let loopback = new URL(preview.url);
   assert.equal(loopback.hostname, '127.0.0.1');
   const call = (path, cookie, method = 'GET', body) => new Promise((resolve, reject) => {
     const target = new URL(path, loopback);
@@ -91,6 +96,16 @@ test('authenticated host serves finance and admins only their own renewal record
     assert.equal(Object.hasOwn(versions, 'bitbrowser-addresses'), allowed);
     assert.equal((await call(list, cookie)).status, allowed ? 200 : 403);
     assert.equal((await call(address, cookie)).status, allowed ? 200 : 403);
+    const rechargeAdmin = role === 'super' || role === 'admin';
+    assert.equal(Object.hasOwn(versions, 'manual-browser-windows'), rechargeAdmin);
+    assert.equal((await call('/api/local/manual-recharge/windows', cookie)).status, rechargeAdmin ? 404 : 403);
+    if (rechargeAdmin) {
+      assert.doesNotMatch(home.text, /name="id-manual-recharge-workspace"/);
+      const paused = await call('/integrations/native-workbench/prototype?embedded=1', cookie);
+      assert.equal(paused.status, 200);
+      assert.match(paused.text, /<body class="proto-body" data-workbench-paused data-workbench-embedded>/);
+      assert.equal((await call('/api/local/native-workbench-prototype/launch', cookie, 'POST', {})).status, 404);
+    }
   }
   for (const role of ['finance', ...restricted]) {
     const cookie = sessions[role];
@@ -137,5 +152,26 @@ test('authenticated host serves finance and admins only their own renewal record
   const adminRecord = (await call(save, sessions.admin, 'POST', form)).json().record;
   assert.equal((await call('/manual-workspaces/' + adminRecord.id + '/', sessions.admin)).status, 200);
   assert.equal((await call('/manual-workspaces/' + adminRecord.id + '/', sessions.finance)).status, 404);
-  assert.equal(network.mock.callCount(), 0, 'all fixture traffic used the loopback host');
+  assert.equal(network.mock.callCount(), 0);
+
+  const closed = new Promise(done => server.close(done));
+  server.closeAllConnections();
+  await closed;
+  const managed = await startPreview(0, {
+    authPath, databasePath: ':memory:', manualWorkspaceSocket: join(dir, 'unstarted.sock'),
+    rechargeConfig: { upstreamUrl: adapterOrigin, secret: randomUUID() },
+    storefrontAdmissionDirectory: null, monitoringProbeSecret: null, monitoringWorkerReceiptsDirectory: null,
+    monitoringBackupReceiptsDirectory: null, rechargePartnerEnabled: false, rechargeOrderSync: false
+  });
+  server = managed.server;
+  loopback = canonical = new URL(managed.url);
+  const localAdmin = await login(superAdmin);
+  assert.match((await call('/', localAdmin)).text, /name="id-manual-recharge-workspace" content="enabled"/);
+  assert.equal((await call('/api/local/manual-recharge/windows', localAdmin)).status, 200);
+  assert.equal((await call('/api/local/manual-recharge/occupancy', localAdmin)).status, 503);
+  assert.equal((await call('/api/local/manual-recharge/windows')).status, 401);
+  assert.equal((await call('/integrations/native-workbench/prototype', localAdmin)).status, 302);
+  assert.equal((await call('/api/local/native-workbench-prototype/launch', localAdmin, 'POST', {})).status, 404);
+  assert.ok(network.mock.calls.every(({ arguments: [url] }) => new URL(url).origin === adapterOrigin),
+    'all fixture traffic used the loopback host');
 });

@@ -742,6 +742,40 @@ class WebsiteReleaseTests(unittest.TestCase):
 
     @patch("release.require_ancestor")
     @patch("release.git")
+    def test_manual_workspace_combines_only_the_manual_routing_adapter(self, git, ancestor):
+        manual = {"include_adapter": True, "manual_workspace": True,
+                  "native_publication": {"imageLabelsVerified": True, "identity": {"running": True}}}
+        git.return_value = "\n".join(release.MANUAL_ROUTING_SCOPE)
+        release.require_website_scope(BASE, TARGET, **manual)
+        with self.assertRaisesRegex(RuntimeError, "recharge_adapter_release_scope_mismatch"):
+            release.require_website_scope(BASE, TARGET, include_adapter=True)
+        with self.assertRaisesRegex(RuntimeError, "recharge_core_or_runtime_changed"):
+            release.require_website_scope(BASE, TARGET, manual_workspace=True)
+        with self.assertRaisesRegex(RuntimeError, "manual_routing_native_baseline_unverified"):
+            release.require_website_scope(BASE, TARGET, **(manual | {"native_publication": {}}))
+        for files in (
+            release.MANUAL_ROUTING_SCOPE - {release.MANUAL_ROUTING_FILES[0]},
+            release.MANUAL_ROUTING_SCOPE | {"deploy/recharge-core/Dockerfile"},
+            release.MANUAL_ROUTING_SCOPE | {"modules/recharge/codexdaichong/prepare.mjs"},
+        ):
+            git.return_value = "\n".join(files)
+            with self.assertRaisesRegex(RuntimeError, "manual_routing_release_scope_mismatch"):
+                release.require_website_scope(BASE, TARGET, **manual)
+        ancestor.assert_called_with(BASE, TARGET)
+
+    @patch("release.require_ancestor")
+    @patch("release.git", return_value="")
+    def test_manual_routing_release_protects_the_running_adapter_baseline(self, git, ancestor):
+        release.require_manual_routing_baseline(BASE, TARGET)
+        ancestor.assert_called_once_with(BASE, TARGET)
+        git.assert_called_once_with("diff", "--name-only", BASE, TARGET, "--",
+                                    "modules/recharge", "deploy/recharge-core")
+        git.return_value = "modules/recharge/assertion.mjs"
+        with self.assertRaisesRegex(RuntimeError, "manual_routing_adapter_baseline_mismatch"):
+            release.require_manual_routing_baseline(BASE, TARGET)
+
+    @patch("release.require_ancestor")
+    @patch("release.git")
     def test_native_release_requires_both_reviewed_patches_and_rejects_unrelated_runtime_changes(self, git, _ancestor):
         approved = sorted(release.NATIVE_CORE_SCOPE)
         git.return_value = "\n".join(approved)
@@ -1823,12 +1857,16 @@ class WebsiteReleaseTests(unittest.TestCase):
         drop.with_name.return_value = pending
         live = {name: {"revision": TARGET} for name in remote.WEBSITE}
 
-        for interrupted, canary_fails in ((True, False), (True, True), (False, False)):
-            with self.subTest(interrupted=interrupted, canary_fails=canary_fails):
+        scenarios = ((True, False, False), (True, True, False), (False, False, False),
+                     (False, False, True), (False, True, True))
+        for interrupted, canary_fails, manual in scenarios:
+            with self.subTest(interrupted=interrupted, canary_fails=canary_fails, manual=manual):
                 plan = {"sha": TARGET, "before": baseline, "adapter": {"runtimeFiles": []}, "files": {},
                         "artifacts": {}, "qualityRun": "123", "preflightCommand": "fixture"}
                 if interrupted:
                     plan["interruptedRelease"] = {"native": native}
+                if manual:
+                    plan["manualWorkspace"] = {"routingAdapter": True}
                 calls = Mock()
                 calls.core.cutover.return_value = nullcontext(native)
                 calls.core.receipt = {"native": native, "ingressResumed": True}
@@ -1851,6 +1889,10 @@ class WebsiteReleaseTests(unittest.TestCase):
                     patch.object(remote, "prepare_backup_recovery", return_value=nullcontext(lambda: {})),
                     patch.object(remote, "switch_adapter", calls.switch_adapter),
                     patch.object(remote, "install_backup_monitoring", calls.install_backup_monitoring),
+                    patch.object(remote, "require_native_idle", calls.native_idle),
+                    patch.object(remote, "upgrade_manual_workspace", calls.upgrade_workspace),
+                    patch.object(remote, "check_manual_routing_options", calls.read_routing_options),
+                    patch.object(remote, "check_manual_website_socket", calls.read_broker_socket),
                     patch.object(remote, "digest", return_value="unit"),
                     patch.object(remote, "write_new", calls.write),
                     patch.object(remote.os, "replace", calls.replace),
@@ -1868,11 +1910,18 @@ class WebsiteReleaseTests(unittest.TestCase):
                         with self.assertRaisesRegex(remote.ReleaseError, "isolated_app_canary_failed"):
                             remote.release_website(plan)
                     else:
-                        self.assertTrue(remote.release_website(plan)["appCanaryPassed"])
+                        receipt = remote.release_website(plan)
+                        self.assertTrue(receipt["appCanaryPassed"])
+                        if manual:
+                            self.assertTrue(receipt["manualWorkspace"]["routingOptionsVerified"])
+                            self.assertTrue(receipt["manualWorkspace"]["websiteBrokerVerified"])
+                            self.assertTrue(receipt["nativeEngineUnchanged"])
+                            self.assertTrue(receipt["otherProtectedComponentsUnchanged"])
 
                 events = [actual[0] for actual in calls.mock_calls]
                 if canary_fails:
-                    self.assertEqual(events, ["core.prepare", "core.cutover", "switch_adapter", "canary"])
+                    self.assertEqual(events, (["core.prepare", "core.cutover", "switch_adapter", "canary"]
+                                              if interrupted else ["canary"]))
                     calls.core.finish.assert_not_called()
                     calls.replace.assert_not_called()
                     calls.run.assert_not_called()
@@ -1883,12 +1932,31 @@ class WebsiteReleaseTests(unittest.TestCase):
                     ])
                     calls.switch_adapter.assert_called_once_with(plan, source, operations, native)
                     self.assertLess(events.index("read_website"), events.index("core.finish"))
+                elif manual:
+                    self.assertEqual(events[:7], ["canary", "adapter_canary", "install_backup_monitoring",
+                                                  "native_idle", "upgrade_workspace", "switch_adapter",
+                                                  "read_routing_options"])
+                    self.assertLess(events.index("read_website"), events.index("read_broker_socket"))
                 else:
                     self.assertEqual(events[:4], ["canary", "adapter_canary", "install_backup_monitoring", "switch_adapter"])
                     calls.core.prepare.assert_not_called()
                 if not canary_fails:
                     calls.replace.assert_called_once_with(pending, drop)
                     calls.run.assert_any_call(["systemctl", "restart", remote.UNIT], timeout=55)
+
+    def test_workspace_upgrade_requires_a_distinct_previous_version_and_successful_smoke(self):
+        folder = remote.ROOT / "releases" / TARGET
+        image = "sha256:" + "c" * 64
+        plan = {"sha": TARGET, "manualWorkspace": {"imageId": image, "routingAdapter": True}}
+        with patch.object(remote, "manual_host_command", side_effect=[
+            {"started": True, "previousRevision": BASE}, {"renewalLifecycleVerified": True},
+        ]) as command:
+            remote.upgrade_manual_workspace(plan, folder)
+            self.assertEqual(command.call_args_list, [call("upgrade", folder, image), call("smoke", folder, image)])
+            self.assertEqual(plan["manualWorkspace"]["previousRevision"], BASE)
+        with patch.object(remote, "manual_host_command", return_value={"started": True, "previousRevision": TARGET}):
+            with self.assertRaisesRegex(remote.ReleaseError, "manual_workspace_upgrade_receipt_mismatch"):
+                remote.upgrade_manual_workspace(plan, folder)
 
     def test_adapter_override_uses_exact_candidate_and_existing_native_runtime(self):
         image = "sha256:" + "c" * 64

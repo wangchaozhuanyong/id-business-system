@@ -25,7 +25,7 @@ import time
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from runtime import (
     BRIDGE, BROKER_UNIT, CLAIMS, CONFIG, DOCKER, GID, IMAGE, INPUTS, PROFILES, STATE, UID,
-    USER, WORKER_UNIT, WORKERS, InvalidHost, checked_path, command, ensure_directory,
+    USER, WORKER_LABEL, WORKER_UNIT, WORKERS, InvalidHost, checked_path, command, ensure_directory,
     release_path, require, validate_capacity,
 )
 
@@ -425,6 +425,45 @@ def require_no_workers():
     require(not workers, "active_workspace_units_present")
 
 
+@contextmanager
+def pause_workspace_admission():
+    # The active broker holds this lock for the full duration of every start.
+    checked_path(CLAIMS, stat.S_ISDIR, 0o700, UID, GID)
+    path = CLAIMS / "admission.lock"
+    with tempfile.NamedTemporaryFile(dir=CLAIMS, prefix=".upgrade-admission-") as pending:
+        os.fchown(pending.fileno(), UID, GID)
+        with suppress(FileExistsError):
+            os.link(pending.name, path, follow_symlinks=False)
+    fd = os.open(path, os.O_RDWR | os.O_NOFOLLOW)
+    try:
+        held, entry = os.fstat(fd), path.lstat()
+        require(stat.S_ISREG(held.st_mode) and held.st_uid == UID and held.st_gid == GID
+                and stat.S_IMODE(held.st_mode) == 0o600 and held.st_nlink == 1
+                and (held.st_dev, held.st_ino) == (entry.st_dev, entry.st_ino),
+                "workspace_admission_lock_unverified")
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise InvalidHost("workspace_start_in_progress") from None
+        yield
+    finally:
+        os.close(fd)
+
+
+def require_empty_workspace_state():
+    require_no_workers()
+    jobs, _ = systemctl("list-jobs", "--no-legend", "--plain", "--full")
+    require(not re.search(r"(?:^|\s)id-manual-workspace@[^\s]+\.service(?:\s|$)", jobs),
+            "queued_workspace_jobs_present")
+    containers, _ = command([*DOCKER, "ps", "--filter", f"label={WORKER_LABEL}", "--format", "{{.ID}}"])
+    require(not containers, "running_manual_workspace_containers_present")
+    for name in ("initialized", "bindings.json"):
+        checked_path(CLAIMS / name, stat.S_ISREG, 0o600, UID, GID)
+    require((CLAIMS / "bindings.json").stat().st_size <= 1024 * 1024 and
+            json.loads((CLAIMS / "bindings.json").read_text(encoding="ascii")) == {},
+            "workspace_claims_present")
+
+
 def verify_loaded_units():
     for instance, fragment in ((BROKER_UNIT, BROKER_UNIT), (PROBE_UNIT, WORKER_UNIT)):
         display, _ = systemctl("show", instance, "-p", "FragmentPath", "-p", "DropInPaths")
@@ -455,6 +494,19 @@ def verify_policy():
                                  (PROBE_UNIT, "restart", False), ("docker.service", "stop", False)):
         _, status = command([*test, "--detail", "unit", unit, "--detail", "verb", verb], allowed=(0, 1, 2))
         require((status == 0) == expected, "broker_unit_permissions_mismatch")
+
+
+def verify_running_broker(config):
+    runtime = installed_runtime(config)
+    pid, _ = systemctl("show", BROKER_UNIT, "-p", "MainPID", "--value")
+    require(re.fullmatch("[1-9][0-9]*", pid) is not None, "broker_pid_missing")
+    proc = Path("/proc") / pid
+    runner = Path(runtime["desktop"]) / "host/runtime.py"
+    expected = [runtime["python"], "-IB", str(runner), "broker", str(CONFIG)]
+    actual = (proc / "cmdline").read_bytes().split(b"\0")
+    require(proc.stat().st_uid == UID and proc.joinpath("exe").resolve(strict=True) == Path(runtime["python"])
+            and actual == [part.encode("ascii") for part in expected] + [b""],
+            "manual_broker_running_source_mismatch")
 
 
 def verify(config):
@@ -531,6 +583,96 @@ def install(config):
         return True
 
 
+def previous_release(config, before):
+    require(before[CONFIG] is not None, "manual_broker_previous_configuration_missing")
+    previous_runtime = json.loads(before[CONFIG])
+    fields = set(config)
+    require(isinstance(previous_runtime, dict) and set(previous_runtime) == fields and
+            isinstance(previous_runtime["root"], str)
+            and isinstance(previous_runtime["image"], str) and IMAGE.fullmatch(previous_runtime["image"]),
+            "manual_broker_previous_configuration_invalid")
+    root = Path(previous_runtime["root"])
+    require(root.parent == STATE / "releases" and re.fullmatch(r"[0-9a-f]{40}", root.name),
+            "manual_broker_previous_source_invalid")
+    release_path(root, stat.S_ISDIR)
+    original = release_path(Path(config["root"]).parent / root.name, stat.S_ISDIR)
+    previous = dict(previous_runtime, root=str(original))
+    for key in ("desktop", "assets", "site_packages"):
+        if key == "site_packages" and previous[key] == "":
+            continue
+        path = release_path(previous[key], stat.S_ISDIR)
+        require(path.is_relative_to(root), "manual_broker_previous_source_invalid")
+        previous[key] = str(release_path(original / path.relative_to(root), stat.S_ISDIR))
+    require(previous["desktop"] == str(original / "source/deploy/manual-desktop") and
+            previous["assets"] == str(original / "manual-runtime/novnc") and
+            previous["site_packages"] in ("", str(original / "manual-runtime/site-packages")) and
+            Path(previous["python"]).parent == Path("/usr/bin"),
+            "manual_broker_previous_source_invalid")
+    require(before == managed_files(previous), "installed_manual_runtime_differs_from_release")
+    require(all(previous[key] == config[key] for key in ("max_active", "min_available_mib", "block_networks")),
+            "manual_broker_capacity_or_network_configuration_changed")
+    # With the installed root already present, this only reads and compares files.
+    stage_installed_runtime(previous)
+    verify(previous)
+    verify_running_broker(previous)
+    return previous
+
+
+def record_upgrade_baseline(config, revision, before):
+    records = ensure_directory(STATE / "upgrade-baselines", 0, 0, 0o700)
+    destination = records / (Path(config["root"]).name + ".json")
+    data = json.dumps({"previousRevision": revision, "files": {str(path): content for path, content in before.items()}},
+                      sort_keys=True, indent=2) + "\n"
+    with tempfile.NamedTemporaryFile(mode="w", encoding="ascii", dir=records) as pending:
+        pending.write(data)
+        pending.flush()
+        os.fsync(pending.fileno())
+        try:
+            os.link(pending.name, destination, follow_symlinks=False)
+        except FileExistsError:
+            checked_path(destination, stat.S_ISREG, 0o600)
+            require(destination.read_text(encoding="ascii") == data, "manual_broker_upgrade_baseline_mismatch")
+    fd = os.open(records, os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def upgrade(config):
+    files = managed_files(config)
+    with exclusive_install():
+        check_host(config)
+        require(broker_active(), "manual_broker_is_not_active")
+        before = {path: installed(path) for path in files}
+        previous = previous_release(config, before)
+        revision = Path(previous["root"]).name
+        if before == files:
+            return {"started": False, "previousRevision": revision}
+        require(systemctl("is-enabled", BROKER_UNIT)[0] == "enabled", "unsupported_broker_enablement")
+        stage_installed_runtime(config)
+        verify_runtime_access(config)
+        with pause_workspace_admission():
+            require_empty_workspace_state()
+            record_upgrade_baseline(config, revision, before)
+            require(all(installed(path) == content for path, content in before.items()),
+                    "manual_broker_changed_during_upgrade")
+            verify_running_broker(previous)
+            systemctl("stop", BROKER_UNIT, timeout=25, failure="manual_broker_stop_command_failed")
+            require(broker_state() == "inactive", "manual_broker_deactivation_not_verified")
+            require_empty_workspace_state()
+            for path, data in files.items():
+                if data != before[path]:
+                    write_atomic(path, data)
+            systemctl("daemon-reload")
+            verify_loaded_units()
+            systemctl("start", BROKER_UNIT, failure="manual_broker_start_command_failed")
+            wait_for_broker_ready()
+            verify(config)
+            verify_running_broker(config)
+    return {"started": True, "previousRevision": revision}
+
+
 def deactivate(config):
     with exclusive_install():
         require(all(installed(path) == data for path, data in managed_files(config).items()),
@@ -543,7 +685,7 @@ def deactivate(config):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("operation", choices=("prepare", "check", "install", "verify", "smoke", "deactivate"))
+    parser.add_argument("operation", choices=("prepare", "check", "install", "upgrade", "verify", "smoke", "deactivate"))
     parser.add_argument("--release-root", required=True, type=Path)
     parser.add_argument("--image-id", required=True)
     parser.add_argument("--assets", required=True, type=Path)
@@ -560,6 +702,8 @@ def main():
         result["systemDependencyInstalled"] = prepare_host_tools(config)
     elif args.operation == "install":
         result["started"] = install(config)
+    elif args.operation == "upgrade":
+        result.update(upgrade(config))
     elif args.operation == "deactivate":
         deactivate(config)
     else:

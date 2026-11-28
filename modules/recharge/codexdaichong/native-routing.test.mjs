@@ -3,7 +3,8 @@ import { createHash } from 'node:crypto';
 import { test } from 'node:test';
 import { setImmediate } from 'node:timers/promises';
 import { createNativeRechargeRouting, DEFAULT_PLAN_ROUTES, parseExitTrace,
-  validatePlanRoutes, migrateRechargeRouting } from './native-routing.mjs';
+  validatePlanRoutes, migrateRechargeRouting, manualProxyDialOptions } from './native-routing.mjs';
+import { normalizeRechargeProxyInput } from './proxy-input.mjs';
 
 function fixture({ rows = [], countries = ['PH'], onProbe, onVerify, onUsage, onPolicy, onObservation,
   measure, now, failures = [], types = [] } = {}) {
@@ -579,4 +580,202 @@ test('migration is additive and idempotent without touching upstream payment tab
   assert.match(sql[2], /FOREIGN KEY \(proxy_id\) REFERENCES proxy_assets \(id\) ON DELETE CASCADE/);
   assert.match(sql[3], /^INSERT IGNORE INTO id_recharge_route_config/);
   assert.ok(sql.every(statement => !/^(?:DROP|ALTER|DELETE|TRUNCATE)\b/.test(statement)));
+});
+
+const manualProxy = (id, label, enabled = 1) => ({ ...proxy(id, enabled, label),
+  proxy_url: 'http://fixture-{session}:example@proxy.example.test:' + (9000 + id) });
+
+test('manual selection ranks HTTP and SOCKS5 together, reuses the fastest session and never probes direct', async () => {
+  const f = fixture({ rows: [manualProxy(1, 'PH'), manualProxy(2, 'PH'), manualProxy(3, 'EG'),
+    proxy(4, 1, 'PH'), manualProxy(5, null), manualProxy(6, 'PH', 0)],
+    measure: url => ({ ip: '1.1.1.1', countryCode: 'PH', latencyMs: url.startsWith('socks5h://') ? 4 : 40 }) });
+  const options = await f.routing.manualOptions('plus');
+  assert.deepEqual(options.choices.map(row => row.id), ['1', '2', '4']);
+  assert.doesNotMatch(JSON.stringify(options), /example@|proxy\.example|fixture-/);
+  const result = await f.routing.manualProbe('plus', 'auto');
+  assert.equal(result.proxyId, 4);
+  assert.equal(result.proxy, f.calls.find(row => row[1].endsWith(':1004'))[1]);
+  assert.equal(new URL(result.proxy).protocol, 'socks5h:');
+  assert.deepEqual(f.calls.map(call => call[0]), ['probe', 'probe', 'probe']);
+  await f.routing.validateManual(result);
+  assert.equal(f.substitutions(), 3);
+  const empty = fixture();
+  await assert.rejects(empty.routing.manualProbe('plus', 'auto'), /没有符合测速条件的线路/);
+  assert.equal(empty.calls.length, 0);
+});
+
+test('manual routes accept all pool protocols and retain the source protocol and measured URL', async () => {
+  const host = 'gateway.example.test';
+  const schemes = ['http', 'https', 'socks', 'socks4', 'socks5', 'socks5h'];
+  const expected = [`http://${host}:80`, `https://${host}:443`, `socks5h://${host}:1080`,
+    `socks4://${host}:1080`, `socks5h://${host}:1080`, `socks5h://${host}:1080`];
+  const pool = normalizeRechargeProxyInput(schemes.map(scheme => scheme.toUpperCase() + '://' + host));
+  const rows = pool.proxies.map((proxy_url, i) => ({ ...manualProxy(i + 1, 'PH'), proxy_url }));
+  const f = fixture({ rows, measure: url => ({
+    ip: '8.8.8.8', countryCode: 'PH', latencyMs: url.startsWith('https://') ? 3 : 25
+  }) });
+  const { choices } = await f.routing.manualOptions('plus');
+  assert.deepEqual(choices.map(choice => choice.protocol), schemes);
+  assert.doesNotMatch(JSON.stringify(choices), /gateway|:\/\//);
+  const fastest = await f.routing.manualProbe('plus', 'auto');
+  assert.equal(fastest.protocol, 'https');
+  assert.equal(fastest.proxy, expected[1]);
+  assert.deepEqual(f.calls.map(call => call[1]).sort(), [...expected].sort());
+  for (const [i, choice] of choices.entries()) {
+    const route = await f.routing.manualProbe('plus', choice.id);
+    assert.equal(route.protocol, schemes[i]);
+    assert.equal(route.proxy, expected[i]);
+    assert.equal(f.calls.at(-1)[1], route.proxy);
+  }
+});
+
+test('manual HTTPS preserves TLS, nondefault ports and the exact measured provider session', async () => {
+  const row = { ...manualProxy(1, 'PH'), proxy_url: 'https://qa-{session}:p%40ss@gateway.example.test:8443' };
+  const f = fixture({ rows: [row], types: [[1, 'mobile']] });
+  const route = await f.routing.manualProbe('plus', '1');
+  assert.match(route.proxy, /^https:\/\/qa-synthetic-sticky-1:p%40ss@gateway\.example\.test:8443$/);
+  assert.equal(f.calls[0][1], route.proxy);
+  await f.routing.validateManual(route);
+  assert.equal(f.substitutions(), 1);
+});
+
+test('manual HTTP and SOCKS dials pin validated public DNS without changing the proxy hostname', async () => {
+  const url = 'https://synthetic:password@gateway.example.test:9443';
+  const addresses = [{ address: '2001:4860::42', family: 6 }, { address: '8.8.4.4', family: 4 }];
+  let calls = 0;
+  const dial = await manualProxyDialOptions(url, { resolve: async (host, options) => {
+    assert.equal(host, 'gateway.example.test.');
+    assert.deepEqual(options, { all: true });
+    calls++;
+    return addresses;
+  } });
+  assert.equal(dial.lookup, dial.socketOptions.lookup);
+  // HTTP/TLS and the SOCKS client both receive the same dial filter, while
+  // the TLS implementation can read the original identity from the URL.
+  for (const lookup of [dial.lookup, dial.socketOptions.lookup]) {
+    lookup('gateway.example.test', { all: true }, (error, result) => {
+      assert.ifError(error);
+      assert.deepEqual(result, [addresses[1]]);
+    });
+    lookup('gateway.example.test', {}, (error, address, family) => {
+      assert.ifError(error);
+      assert.equal(address, '8.8.4.4');
+      assert.equal(family, 4);
+    });
+    lookup('other.example.test', {}, error => assert.match(error.message, /主机不匹配/));
+  }
+  assert.equal(calls, 1);
+});
+
+test('manual DNS fails closed for a private answer, mixed answer set or private literal', async () => {
+  const url = 'socks5h://gateway.example.test:1080';
+  for (const [address, family] of [['127.0.0.1', 4], ['169.254.169.254', 4], ['192.0.0.9', 4],
+    ['::1', 6], ['2002::1', 6], ['::ffff:192.168.0.1', 6], ['3fff::1', 6]]) {
+    await assert.rejects(manualProxyDialOptions(url, { resolve: async () =>
+      [{ address: '1.1.1.1', family: 4 }, { address, family }] }), /DNS 含不可用地址/);
+  }
+  await assert.rejects(manualProxyDialOptions('http://10.0.0.1:8080', { resolve: assert.fail }),
+    /DNS 含不可用地址/);
+  await assert.rejects(manualProxyDialOptions(url, { timeout: 5, resolve: () => new Promise(() => {}) }), /DNS 查询超时/);
+});
+
+test('SOCKS4 preserves the user ID and excludes an unusable configured password or unsupported protocol', async () => {
+  const row = { ...manualProxy(1, 'PH'), proxy_url: 'socks4://qa-{session}@gateway.example.test:80' };
+  const f = fixture({ rows: [row], types: [[1, 'mobile']] });
+  const route = await f.routing.manualProbe('plus', 'auto');
+  assert.equal(route.protocol, 'socks4');
+  assert.equal(route.proxy, 'socks4://qa-synthetic-sticky-1@gateway.example.test:80');
+  assert.equal(f.calls[0][1], route.proxy);
+  assert.equal(f.substitutions(), 1);
+  for (const url of ['socks4://qa:fixture-password@gateway.example.test', 'future://gateway.example.test:9000']) {
+    const excluded = fixture({ rows: [{ ...row, proxy_url: url }] });
+    assert.deepEqual((await excluded.routing.manualOptions('plus')).choices, []);
+    await assert.rejects(excluded.routing.manualProbe('plus', 'auto'), /代理协议、认证方式/);
+    assert.equal(excluded.calls.length, 0);
+  }
+});
+
+test('manual SOCKS5 uses remote DNS and RFC 1929 byte lengths for both credentials', async () => {
+  const makeRow = value => ({ ...manualProxy(1, 'PH'), proxy_url: value });
+  const authority = '@gateway.example.test:80';
+  for (const scheme of ['socks', 'socks5', 'socks5h']) {
+    const username = 'é'.repeat(127) + ':';
+    const password = '界'.repeat(85);
+    const credentials = encodeURIComponent(username) + ':' + encodeURIComponent(password);
+    const raw = scheme + '://' + credentials + authority;
+    const f = fixture({ rows: [makeRow(raw)] });
+    const result = await f.routing.manualProbe('plus', '1');
+    assert.equal(result.proxy, 'socks5h://' + credentials + authority);
+    assert.equal(f.calls[0][1], result.proxy);
+    const unauth = fixture({ rows: [makeRow(scheme + '://gateway.example.test:1080')] });
+    assert.equal((await unauth.routing.manualProbe('plus', '1')).proxy, 'socks5h://gateway.example.test:1080');
+  }
+  for (const value of ['socks5://gateway.example.test:0', 'socks5://:@gateway.example.test:1080',
+    'socks5://user:@gateway.example.test:1080', 'socks5://:password@gateway.example.test:1080',
+    'socks5://user:%00@gateway.example.test:1080', 'socks5://user:%zz@gateway.example.test:1080',
+    'socks5://' + encodeURIComponent('é'.repeat(128)) + ':x' + authority,
+    'socks5://u:' + 'a'.repeat(256) + authority, 'https://bad%3Aname:password@gateway.example.test',
+    'socks5h://127.0.0.1:1080']) {
+    const f = fixture({ rows: [makeRow(value)] });
+    assert.equal((await f.routing.manualOptions('plus')).choices.length, 0);
+    await assert.rejects(f.routing.manualProbe('plus', '1'), /所选线路测速未通过/);
+    assert.equal(f.calls.length, 0);
+  }
+});
+
+test('six enabled typed Philippine SOCKS entries yield only the reusable session for manual launch', async () => {
+  const rows = Array.from({ length: 6 }, (_, index) => {
+    const row = proxy(index + 1, 1, 'PH');
+    if (index !== 3) row.proxy_url = row.proxy_url.replace('{session}', 'fixed');
+    return row;
+  });
+  const types = rows.map(row => [row.id, row.id % 2 ? 'mobile' : 'dynamic_residential']);
+  const f = fixture({ rows, types });
+  assert.deepEqual((await f.routing.manualOptions('plus')).choices.map(choice => choice.id), ['4']);
+  await assert.rejects(f.routing.manualProbe('plus', '2'), /所选线路测速未通过/);
+  assert.equal(f.calls.length, 0);
+  const selected = await f.routing.manualProbe('plus', 'auto');
+  assert.equal(selected.proxyId, 4);
+  assert.equal(f.substitutions(), 1);
+  assert.equal(f.calls[0][1], selected.proxy);
+  assert.equal(new URL(selected.proxy).protocol, 'socks5h:');
+  await f.routing.validateManual(selected);
+  assert.equal(f.substitutions(), 1);
+});
+
+test('manual choice measures only requested row; mismatched country has no measured fallback', async () => {
+  const rows = [manualProxy(1, 'PH'), manualProxy(2, 'PH')];
+  const f = fixture({ rows, countries: ['EG', 'PH'] });
+  await assert.rejects(f.routing.manualProbe('plus', '1'), /所选线路测速未通过/);
+  assert.equal(f.calls.length, 1);
+  assert(f.calls[0][1].endsWith(':9001'));
+  const result = await f.routing.manualProbe('plus', '1');
+  assert.equal(result.proxyId, 1);
+  assert(f.calls.every(call => call[1].endsWith(':9001')));
+});
+
+test('manual auto considers unmarked candidates only after named country candidates fail', async () => {
+  const f = fixture({ rows: [manualProxy(1, 'PH'), manualProxy(2, null)], countries: ['EG', 'PH'] });
+  const route = await f.routing.manualProbe('plus', 'auto');
+  assert.equal(route.proxyId, 2);
+  assert.equal(f.calls.filter(c => c[0] === 'probe').length, 2);
+  assert.equal((await f.routing.manualOptions('plus')).choices.length, 1);
+  await f.routing.checkProxy(2); // An independent existing observation makes its IP available as a hint.
+  assert.deepEqual((await f.routing.manualOptions('plus')).choices[1], {
+    id: '2', name: '线路 #2', countryCode: 'PH', protocol: 'http', referenceIp: '8.8.8.8'
+  });
+});
+
+test('manual ticket configuration recheck catches plan, provider credential, type, country or enable changes', async () => {
+  for (const field of ['country', 'url', 'type', 'enabled', 'policy']) {
+    const f = fixture({ rows: [manualProxy(1, 'PH')], types: [[1, 'mobile']] });
+    const selected = await f.routing.manualProbe('plus', 'auto');
+    if (field === 'country') f.rows[0].label_country_code = 'EG';
+    if (field === 'url') f.rows[0].proxy_url += '/';
+    if (field === 'type') assert.equal((await f.request('PUT', '/proxies/1/type', {
+      expectedProxyType: 'mobile', proxyType: 'dynamic_residential' })).statusCode, 200);
+    if (field === 'enabled') f.rows[0].is_active = 0;
+    if (field === 'policy') await f.routing.savePolicy({ version: 1, plans: { ...DEFAULT_PLAN_ROUTES, plus: 'EG' } }, 'fixture');
+    await assert.rejects(f.routing.validateManual(selected), /已变更/);
+  }
 });

@@ -9,11 +9,12 @@ import os
 from pathlib import Path
 import re
 import socket
+import ssl
 import stat
 import sys
 from urllib.parse import unquote_to_bytes, urlsplit
 
-from worker.recharge_proxy import renewal_host_allowed
+from worker.recharge_proxy import recharge_host_allowed, renewal_host_allowed
 
 
 SOCKET_NAME = 'egress.sock'
@@ -25,6 +26,8 @@ IPV4_EXCLUDED = tuple(map(ipaddress.ip_network, ('192.0.0.0/24', '192.88.99.0/24
 IPV6_GLOBAL_UNICAST = ipaddress.ip_network('2000::/3')
 IPV6_EXCLUDED = tuple(map(ipaddress.ip_network, ('2001::/23', '2002::/16', '3fff::/20')))
 LOCAL_SUFFIXES = ('.local', '.localhost', '.internal', '.lan', '.home.arpa')
+HTTP_SCHEMES = ('http', 'https')
+SOCKS_SCHEMES = ('socks', 'socks4', 'socks5', 'socks5h')
 
 
 class EgressError(ValueError):
@@ -65,29 +68,41 @@ class PinnedProxy:
         return socket.AF_INET6 if ':' in self.address else socket.AF_INET
 
 
+def _proxy_credentials(parts):
+    userinfo, separator, _ = parts.netloc.rpartition('@')
+    if not separator:
+        return None
+    name, colon, password = userinfo.partition(':')
+    if not USERINFO.fullmatch(name):
+        raise EgressError('Proxy credentials are invalid')
+    if parts.scheme == 'socks4':
+        if password:
+            raise EgressError('SOCKS4 does not support password authentication')
+    elif not colon or not USERINFO.fullmatch(password):
+        raise EgressError('Proxy credentials are invalid')
+    username, password = unquote_to_bytes(name), unquote_to_bytes(password)
+    if (any(octet < 32 or octet == 127 for octet in username + password)
+            or (parts.scheme in HTTP_SCHEMES and b':' in username)
+            or (parts.scheme in ('socks', 'socks5', 'socks5h') and max(len(username), len(password)) > 255)):
+        raise EgressError('Proxy credentials are invalid')
+    return username, password
+
+
 def _parse_proxy(url):
-    if (not isinstance(url, str) or not 1 <= len(url) <= 2048 or not url.startswith('http://')
+    if (not isinstance(url, str) or not 1 <= len(url) <= 2048 or url.partition('://')[0] not in HTTP_SCHEMES + SOCKS_SCHEMES
             or any(not 33 <= ord(char) <= 126 for char in url) or any(char in url for char in '#?\\')):
-        raise EgressError('Expected a canonical HTTP proxy URL')
+        raise EgressError('Expected a canonical proxy URL')
     try:
         parts = urlsplit(url)
     except ValueError:
-        raise EgressError('Expected a canonical HTTP proxy URL') from None
+        raise EgressError('Expected a canonical proxy URL') from None
     if parts.path not in ('', '/') or not parts.netloc or parts.netloc.count('@') > 1:
-        raise EgressError('Expected a canonical HTTP proxy URL')
-    credentials, separator, authority = parts.netloc.rpartition('@')
-    if separator:
-        name, colon, password = credentials.partition(':')
-        if not colon or not USERINFO.fullmatch(name) or not USERINFO.fullmatch(password):
-            raise EgressError('Proxy credentials are invalid')
-        username_bytes = unquote_to_bytes(name)
-        if b':' in username_bytes or any(
-            octet < 32 or octet == 127 for octet in username_bytes + unquote_to_bytes(password)
-        ):
-            raise EgressError('Proxy credentials are invalid')
+        raise EgressError('Expected a canonical proxy URL')
+    _proxy_credentials(parts)
+    authority = parts.netloc.rpartition('@')[2]
     host, separator, raw_port = authority.rpartition(':')
     if not separator or not HTTP_PORT.fullmatch(raw_port) or int(raw_port) > 65535:
-        raise EgressError('An explicit HTTP proxy port is required')
+        raise EgressError('An explicit proxy port is required')
     port = int(raw_port)
     if host.startswith('[') and host.endswith(']'):
         numeric = _public_address(host[1:-1])
@@ -128,14 +143,16 @@ def _assigned_to_host(address):
     return True
 
 
-async def _resolve_target(host, port, numeric, networks, timeout, *, reject_host_addresses=False):
+async def _resolve_target(host, port, numeric, networks, timeout, *, reject_host_addresses=False,
+                          ipv4_only=False):
     if numeric:
         addresses = [_public_address(host)]
     else:
         try:
             records = await asyncio.wait_for(
                 asyncio.get_running_loop().getaddrinfo(
-                    host, port, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP
+                    host, port, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP,
+                    **({'family': socket.AF_INET} if ipv4_only else {})
                 ),
                 timeout,
             )
@@ -145,7 +162,8 @@ async def _resolve_target(host, port, numeric, networks, timeout, *, reject_host
             raise EgressError('Proxy DNS returned an invalid address set')
         addresses = []
         for family, _, _, _, destination in records:
-            if family not in (socket.AF_INET, socket.AF_INET6) or destination[1] != port:
+            if family not in (socket.AF_INET, socket.AF_INET6) or destination[1] != port or (
+                    ipv4_only and family != socket.AF_INET):
                 raise EgressError('Proxy DNS returned an invalid address set')
             address = _public_address(destination[0])
             if (family == socket.AF_INET) != (address.version == 4) or (
@@ -175,7 +193,7 @@ class RelayLimits:
             raise ValueError('Invalid relay limits')
 
 
-async def _open_pinned(proxy):
+async def _open_pinned(proxy, *, tls_context=None, server_hostname=None):
     loop = asyncio.get_running_loop()
     upstream = socket.socket(proxy.family, socket.SOCK_STREAM, socket.IPPROTO_TCP)
     try:
@@ -186,7 +204,8 @@ async def _open_pinned(proxy):
         if proxy.family == socket.AF_INET6:
             address += (0, 0)
         await loop.sock_connect(upstream, address)
-        return await asyncio.open_connection(sock=upstream, limit=CHUNK_SIZE)
+        return await asyncio.open_connection(sock=upstream, limit=CHUNK_SIZE,
+                                             ssl=tls_context, server_hostname=server_hostname)
     except BaseException:
         upstream.close()
         raise
@@ -286,7 +305,7 @@ class Relay:
                 )
             except (EgressError, OSError, asyncio.TimeoutError) as error:
                 if self._answer_connect:
-                    status = b'403 Forbidden' if isinstance(error, RenewalRequestError) else b'502 Bad Gateway'
+                    status = b'403 Forbidden' if isinstance(error, WorkspaceRequestError) else b'502 Bad Gateway'
                     writer.write(b'HTTP/1.1 ' + status + b'\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
                     await asyncio.wait_for(writer.drain(), self._limits.connect_timeout)
                 return
@@ -327,39 +346,136 @@ class Relay:
         await self.close()
 
 
-async def open_relay(workspace_dir, proxy, *, uid=None, gid=None, limits=RelayLimits()):
+async def open_relay(workspace_dir, proxy, *, proxy_url=None, uid=None, gid=None, limits=RelayLimits(),
+                     blocked_networks=()):
     if type(proxy) is not PinnedProxy:
         raise EgressError('A validated, pinned proxy is required')
+    if proxy_url is not None and proxy_url.partition('://')[0] in SOCKS_SCHEMES:
+        connect = socks_connector(proxy_url, lambda: _open_pinned(proxy), blocked_networks=blocked_networks)
+        return await _listen_relay(workspace_dir, connect, uid, gid, limits, answer_connect=True)
+    if proxy_url is not None:
+        _parse_proxy(proxy_url)
+        parts = urlsplit(proxy_url)
+        if parts.scheme == 'https':
+            # Connect only to the selected address. SNI and certificate verification
+            # must use the original proxy identity, before any CONNECT credentials flow.
+            context = ssl.create_default_context()
+            hostname = parts.hostname.rstrip('.')
+            return await _listen_relay(workspace_dir, lambda _: _open_pinned(
+                proxy, tls_context=context, server_hostname=hostname), uid, gid, limits, answer_connect=False)
     return await _listen_relay(workspace_dir, lambda _: _open_pinned(proxy), uid, gid, limits, answer_connect=False)
 
 
-class RenewalRequestError(EgressError):
+class WorkspaceRequestError(EgressError):
     """The worker did not send an approved, unauthenticated HTTPS CONNECT."""
 
 
-async def _renewal_destination(reader):
+async def _connect_destination(reader, allow_host):
     # Only the canonical two-line request generated by the workspace adapter is
     # accepted. No client headers or authorization reach the destination.
     try:
         headers = await reader.readuntil(b'\r\n\r\n')
     except (asyncio.IncompleteReadError, asyncio.LimitOverrunError):
-        raise RenewalRequestError('Invalid renewal request') from None
+        raise WorkspaceRequestError('Invalid workspace CONNECT') from None
     if len(headers) > 1024:
-        raise RenewalRequestError('Invalid renewal request')
+        raise WorkspaceRequestError('Invalid workspace CONNECT')
     first, _, rest = headers.partition(b'\r\n')
     fields = first.split(b' ')
     if len(fields) != 3 or fields[0] != b'CONNECT' or fields[2] != b'HTTP/1.1':
-        raise RenewalRequestError('Invalid renewal request')
+        raise WorkspaceRequestError('Invalid workspace CONNECT')
     authority = fields[1]
     if not authority.endswith(b':443') or rest != b'Host: ' + authority + b'\r\n\r\n':
-        raise RenewalRequestError('Invalid renewal request')
+        raise WorkspaceRequestError('Invalid workspace CONNECT')
     try:
         host = authority[:-4].decode('ascii')
     except UnicodeError:
-        raise RenewalRequestError('Invalid renewal request') from None
-    if not renewal_host_allowed(host):
-        raise RenewalRequestError('Destination unavailable in renewal workspaces')
+        raise WorkspaceRequestError('Invalid workspace CONNECT') from None
+    if not allow_host(host):
+        raise WorkspaceRequestError('Destination unavailable in this workspace')
     return host
+
+
+async def _socks5_connect(reader, writer, host, credentials):
+    # RFC 1928 method selection. Never allow a provider to downgrade configured
+    # username/password authentication to anonymous access.
+    method = 2 if credentials else 0
+    writer.write(bytes((5, 1, method)))
+    await writer.drain()
+    if await reader.readexactly(2) != bytes((5, method)):
+        raise EgressError('SOCKS proxy rejected the required authentication method')
+    if credentials:
+        name, password = credentials
+        writer.write(bytes((1, len(name))) + name + bytes((len(password),)) + password)
+        await writer.drain()
+        if await reader.readexactly(2) != b'\x01\x00':
+            raise EgressError('SOCKS authentication failed')
+
+    # SOCKS5 and SOCKS5h both send the permitted DNS name to the provider.
+    domain = host.encode('ascii')
+    writer.write(bytes((5, 1, 0, 3, len(domain))) + domain + b'\x01\xbb')
+    await writer.drain()
+    reply = await reader.readexactly(4)
+    if reply[:3] != b'\x05\x00\x00':
+        raise EgressError('SOCKS proxy rejected the connection')
+    if reply[3] == 3:
+        size = (await reader.readexactly(1))[0]
+    else:
+        size = {1: 4, 4: 16}.get(reply[3], 0)
+    if not size:
+        raise EgressError('SOCKS proxy returned an invalid bound address')
+    address = await reader.readexactly(size)
+    if reply[3] == 3:
+        try:
+            bound = address.decode('ascii').removesuffix('.').lower()
+        except UnicodeDecodeError:
+            raise EgressError('SOCKS proxy returned an invalid bound name') from None
+        if len(bound) > 253 or not all(DNS_LABEL.fullmatch(label) for label in bound.split('.')):
+            raise EgressError('SOCKS proxy returned an invalid bound name')
+    await reader.readexactly(2)
+
+
+async def _socks4_target(host, blocked_networks):
+    target = await _resolve_target(host + '.', 443, False, blocked_networks, 3,
+                                   reject_host_addresses=True, ipv4_only=True)
+    return ipaddress.IPv4Address(target.address)
+
+
+async def _socks4_connect(reader, writer, address, credentials):
+    user = credentials[0] if credentials else b''
+    writer.write(b'\x04\x01\x01\xbb' + address.packed + user + b'\x00')
+    await writer.drain()
+    reply = await reader.readexactly(8)
+    if reply[:2] != b'\x00\x5a':
+        raise EgressError('SOCKS4 proxy rejected the connection')
+
+
+def socks_connector(url, open_gateway, *, blocked_networks=(), resolve_ipv4=_socks4_target):
+    """Convert an approved, canonical HTTPS CONNECT to a pinned SOCKS gateway."""
+    _parse_proxy(url)
+    parts = urlsplit(url)
+    if parts.scheme not in SOCKS_SCHEMES:
+        raise EgressError('Expected a SOCKS proxy')
+    credentials = _proxy_credentials(parts)
+
+    async def connect(source):
+        host = await _connect_destination(source, recharge_host_allowed)
+        # SOCKS4 uses an IPv4 address on the wire (local DNS). SOCKS4a remote
+        # name resolution is a different protocol and is not implied by socks4://.
+        address = await resolve_ipv4(host, blocked_networks) if parts.scheme == 'socks4' else None
+        reader, writer = await open_gateway()
+        try:
+            if address is not None:
+                await _socks4_connect(reader, writer, address, credentials)
+            else:
+                await _socks5_connect(reader, writer, host, credentials)
+        except BaseException as error:
+            await _close_writer(writer)
+            if isinstance(error, asyncio.IncompleteReadError):
+                raise EgressError('SOCKS response was incomplete') from None
+            raise
+        return reader, writer
+
+    return connect
 
 
 async def open_renewal_relay(workspace_dir, *, uid, gid, blocked_networks, limits=RelayLimits()):
@@ -369,7 +485,7 @@ async def open_renewal_relay(workspace_dir, *, uid, gid, blocked_networks, limit
         raise EgressError('Renewal workspaces require configured host network exclusions')
 
     async def connect(reader):
-        host = await _renewal_destination(reader)
+        host = await _connect_destination(reader, renewal_host_allowed)
         target = await _resolve_target(host + '.', 443, False, networks, 3, reject_host_addresses=True)
         return await _open_pinned(target)
 
