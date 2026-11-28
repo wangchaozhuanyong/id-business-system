@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       include_recharge_adapter:
-        description: 同版本发布银行卡停用所需的代充适配器
+        description: 同版发布代充适配器。手动充值新版须同时选择 include_manual_workspace
         default: false
         type: boolean
       include_recharge_core:

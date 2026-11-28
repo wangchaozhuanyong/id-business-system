@@ -57,7 +57,7 @@
   });
   const expenseScope = 'order-expense-receipts';
   const revisionScopes = new Set(['inventory', 'commerce', 'settings', 'appleBalance', 'toolbox', 'saved-totp',
-    'bitbrowser-connections', 'bitbrowser-proxies', 'bitbrowser-addresses', 'manual-renewal-records', 'tenant-cards', 'recharge-codes', 'recharge-partners',
+    'bitbrowser-connections', 'bitbrowser-proxies', 'bitbrowser-addresses', 'manual-renewal-records', 'manual-browser-windows', 'tenant-cards', 'recharge-codes', 'recharge-partners',
     'order-sync', 'tools/mailbox-pool', 'tools/website-visits', 'apple-relay', 'operators', 'audit', 'finance-rates', 'card-types',
     'order-card-freeze', 'subscription-management', 'system-monitoring', 'recharge-card-plans', 'tools/mailbox-delivery',
     expenseScope, 'site-observations', 'site-resources', 'site-backups', 'renewal-handoffs', 'recharge-billing']);

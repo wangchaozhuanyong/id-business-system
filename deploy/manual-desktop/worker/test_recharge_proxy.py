@@ -1,5 +1,9 @@
 import asyncio
 import base64
+import hashlib
+import shutil
+from contextlib import ExitStack
+import worker
 from contextlib import suppress
 import json
 import os
@@ -52,7 +56,7 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
             if not task.cancelled() and task.exception():
                 raise task.exception()
 
-    async def start(self, fixture, credentials=None, *, renewal=False):
+    async def start(self, fixture, credentials=None, *, renewal=False, verify_browser=False):
         async def upstream(reader, writer):
             try:
                 head = await reader.readuntil(b'\r\n\r\n')
@@ -62,7 +66,7 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
                 await proxy._close(writer)
 
         await self.server(asyncio.start_unix_server, upstream, self.relay_path)
-        service = await proxy.open_proxy(credentials, relay_path=self.relay_path, renewal=renewal)
+        service = await proxy.open_proxy(credentials, relay_path=self.relay_path, renewal=renewal, verify_browser=verify_browser)
         self.addAsyncCleanup(service.close)
         self.assertEqual(service._listener.sockets[0].getsockname()[0], '127.0.0.1')
         return service
@@ -81,8 +85,8 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
         for host in (proxy.PROBE_HOST, 'notopenai.com', 'chatgpt.com.evil.test', '.openai.com', 'evil..openai.com',
                      '-bad.openai.com', 'auth.google.com', 'anything.checkout.stripe.com', '192.168.1.1'):
             self.assertFalse(proxy.renewal_host_allowed(host), host)
-        self.assertFalse(proxy._allowed_host('accounts.google.com'))
-        self.assertTrue(proxy._allowed_host(proxy.PROBE_HOST))
+        self.assertFalse(proxy.recharge_host_allowed('accounts.google.com'))
+        self.assertTrue(proxy.recharge_host_allowed(proxy.PROBE_HOST))
         with self.assertRaises(proxy.ProxyError):
             await proxy.open_proxy(('fixture', 'fixture'), relay_path=self.relay_path, renewal=True)
 
@@ -159,7 +163,7 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response, b'HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
         self.assertEqual(self.connections, [b'CONNECT ws.chatgpt.com:443 HTTP/1.1\r\nHost: ws.chatgpt.com:443\r\n\r\n'])
 
-    async def test_probe_checks_https_exit_over_same_proxy_and_validates_certificate_and_country(self):
+    async def tls_files(self):
         key, cert = Path('fixture.key').resolve(), Path('fixture.crt').resolve()
         config = Path('fixture.cnf')
         config.write_text(
@@ -172,6 +176,102 @@ class ProxyTests(unittest.IsolatedAsyncioTestCase):
                              '-keyout', str(key), '-out', str(cert), '-config', str(config), '-days', '1'],
             check=True, capture_output=True, timeout=8,
         )
+        return key, cert
+
+    async def test_actual_chromium_proves_same_route_and_blocks_business_until_verified(self):
+        binary = (os.environ.get('ID_MANUAL_QA_CHROME') or shutil.which('chromium')
+                  or '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome')
+        if not Path(binary).is_file():
+            self.skipTest('isolated Chromium executable unavailable')
+        key, cert = await self.tls_files()
+        pem = subprocess.check_output(['openssl', 'x509', '-in', str(cert), '-pubkey', '-noout'])
+        der = subprocess.check_output(['openssl', 'pkey', '-pubin', '-outform', 'DER'], input=pem)
+        fingerprint = base64.b64encode(hashlib.sha256(der).digest()).decode()
+        tls = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        tls.load_cert_chain(cert, key)
+        observed = {'ip': '1.1.1.1', 'country': 'MY'}
+        requests = []
+        reached_workspace = asyncio.Event()
+        business_exits = []
+        async def https(reader, writer):
+            try:
+                request = await reader.readuntil(b'\r\n\r\n')
+                requests.append(request.split(b'\r\n', 1)[0])
+                if b'\r\nhost: chatgpt.com\r\n' in request.lower():
+                    business_exits.append(dict(observed))
+                    reached_workspace.set()
+                body = json.dumps(observed).encode()
+                writer.write(b'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: '
+                             + str(len(body)).encode() + b'\r\nConnection: close\r\n\r\n' + body)
+                await writer.drain()
+            except (asyncio.IncompleteReadError, OSError):
+                pass
+            finally:
+                await proxy._close(writer)
+        endpoint = await self.server(asyncio.start_server, https, '127.0.0.1', 0, ssl=tls)
+
+        async def relay(reader, writer):
+            if self.connections[-1].startswith(b'CONNECT auth.openai.com:'):
+                writer.write(OK)
+                await writer.drain()
+                await reader.read()
+                return
+            writer.write(OK)
+            await writer.drain()
+            # Chrome may open a speculative CONNECT and retire it before TLS.
+            hello = await reader.read(16384)
+            if not hello:
+                return
+            remote, dest = await asyncio.open_connection('127.0.0.1', endpoint.sockets[0].getsockname()[1])
+            try:
+                dest.write(hello)
+                await dest.drain()
+                with suppress(OSError):
+                    await proxy._tunnel(reader, writer, remote, dest)
+            finally:
+                await proxy._close(dest)
+        service = await self.start(relay, verify_browser=True)
+        receipt = worker.BrowserProof(service, asyncio.get_running_loop(), proxy,
+                                      dict(expectedCountry='MY', expectedIp='1.1.1.1', runId='fixture-run'))
+        profile = Path('chromium').resolve()
+        args = [binary, '--headless=new', '--no-startup-window', '--no-first-run', '--disable-background-networking',
+                '--disable-component-update', '--user-data-dir='+str(profile),
+                '--proxy-server=http://127.0.0.1:'+str(service.port), '--proxy-bypass-list=<-loopback>',
+                '--disable-quic', '--ignore-certificate-errors-spki-list='+fingerprint]
+        with ExitStack() as cleanup:
+            browser = receipt.start(args, os.environ.copy(), cleanup)
+            try:
+                _, business = await self.connect(service, b'CONNECT auth.openai.com:443 HTTP/1.1\r\n\r\n')
+                result = await asyncio.to_thread(receipt.verify, first=True)
+                self.assertEqual(result['exitIp'], observed['ip'])
+                self.assertTrue(requests and any(b'GET /?check=' in req for req in requests))
+                self.assertFalse(any(b'chatgpt.com' in head or b'auth.openai.com' in head for head in self.connections))
+                # An independent fresh Chromium navigation on the same selected relay now drifts.
+                observed['ip'] = '8.8.8.8'
+                with self.assertRaises(ValueError):
+                    await asyncio.to_thread(receipt.verify)
+                self.assertFalse(any(b'chatgpt.com' in head or b'auth.openai.com' in head for head in self.connections))
+                observed['ip'] = '1.1.1.1'
+                self.assertEqual((await asyncio.to_thread(receipt.verify))['exitIp'], '1.1.1.1')
+                with patch.object(worker, 'RUNTIME', Path('.')):
+                    await asyncio.to_thread(receipt.publish, cleanup)
+                check, channel = await asyncio.open_unix_connection('probe.sock')
+                channel.write(b'fixture-run\n')
+                await channel.drain()
+                self.assertEqual(json.loads(await check.readline())['exitIp'], '1.1.1.1')
+                await proxy._close(channel)
+                # The real Chromium target then reaches the synthetic business page
+                # over the same local relay and is served from the attested route.
+                await asyncio.wait_for(reached_workspace.wait(), 8)
+                self.assertEqual(business_exits[0], {'ip':'1.1.1.1', 'country':'MY'})
+                self.assertTrue(any(b'auth.openai.com' in head for head in self.connections))
+                business.close()
+            finally:
+                browser.terminate()
+                await asyncio.to_thread(browser.wait, 10)
+
+    async def test_probe_checks_https_exit_over_same_proxy_and_validates_certificate_and_country(self):
+        key, cert = await self.tls_files()
         expected_get = b'GET / HTTP/1.1\r\nHost: api.country.is\r\n'
         sni = []
         tls_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
