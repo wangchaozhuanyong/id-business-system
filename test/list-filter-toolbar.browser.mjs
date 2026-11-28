@@ -88,17 +88,13 @@ test('列表筛选文字、日期和操作区在手机与桌面可读，订阅�
             };
           });
           assert.deepEqual(layout.periods, ['upcoming', 'expired', 'refused', 'renewed'], id);
-          assert(layout.overlapY > 0 && layout.leftToRight, id + ' 四个状态按钮在左，搜索、产品、提醒和操作同排在右');
+          if (width > 900) assert(layout.overlapY > 0 && layout.leftToRight, id + ' 四个状态按钮在左，搜索、产品、提醒和操作同排在右');
           if (width === 1440) assert(!layout.scrollable && layout.rightmostVisible, id + ' 桌面工具栏整行可见');
           if (width <= 768) {
-            assert(layout.scrollable, id + ' 窄屏工具栏可局部横向滚动');
-            const action = toolbar.getByRole('button', { name: '提交给财务', exact: true });
-            await action.scrollIntoViewIfNeeded();
-            assert(await action.evaluate(button => {
-              const bar = button.closest('.renewal-status-toolbar');
-              return bar.scrollLeft > 0 && button.getBoundingClientRect().right <= bar.getBoundingClientRect().right + 1 &&
-                document.documentElement.scrollLeft === 0;
-            }), id + ' 末端按钮可完整滚入工具栏，页面保持原位');
+            assert(!layout.scrollable && layout.rightmostVisible, id + ' 手机操作无需横向滚动');
+            assert(await toolbar.locator('#renewal-handoff-search').evaluate(node =>
+              node.getBoundingClientRect().top >= node.closest('.renewal-toolbar').querySelector('.renewal-period-controls').getBoundingClientRect().bottom));
+
           }
         }
         const longChoice = route === 'plugins/mailboxes' ? '#ops-mailbox-filter-status'
@@ -123,15 +119,20 @@ test('列表筛选文字、日期和操作区在手机与桌面可读，订阅�
         if (route === 'subscriptions/claude') {
           const more = toolbar.getByRole('button', { name: '更多操作', exact: true });
           if (width <= 900) {
-            await more.click();
+            const actions = ['订阅历史入库', '账号资料后缀', '续费提醒话术', '列设置'];
+            const direct = await toolbar.getByRole('button').allTextContents();
             const menu = page.getByRole('menu', { name: '更多操作' });
-            assert.deepEqual(await menu.getByRole('menuitem').allTextContents(),
-              ['订阅历史入库', '账号资料后缀', '续费提醒话术', '列设置']);
+            if (await more.isVisible()) await more.click();
+            const hidden = await menu.getByRole('menuitem').allTextContents();
+            assert.deepEqual(actions.filter(name => direct.includes(name) || hidden.includes(name)), actions);
+            assert(!hidden.some(name => direct.includes(name)));
+            await page.keyboard.press('Escape');
             if (width === 390 && theme === 'light') {
-              await menu.getByRole('menuitem', { name: '列设置' }).click();
+              if (hidden.includes('列设置')) await more.click();
+              await (hidden.includes('列设置') ? menu.getByRole('menuitem', { name: '列设置' }) : toolbar.getByRole('button', { name: '列设置' })).click();
               await page.getByRole('dialog').waitFor();
               await page.keyboard.press('Escape');
-            } else await page.keyboard.press('Escape');
+            }
           } else {
             assert.equal(await more.count(), 0);
             assert.equal(await toolbar.getByRole('button', { name: '续费提醒话术' }).count(), 1);

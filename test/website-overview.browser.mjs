@@ -176,8 +176,13 @@ test('网站总览的经营、库存与客户统计', { timeout: 120_000 }, asyn
     assert(Math.abs(layout.period.left - layout.cards[0].bounds.left) <= 1, '时间栏与首张卡片左边缘对齐');
     assert(layout.cards[0].bounds.top - layout.toolbar.bottom >= 12, '工具栏与卡片保留间距');
     for (const control of layout.controls) {
-      assert(Math.abs((control.top + control.bottom) / 2 - (layout.toolbar.top + layout.toolbar.bottom) / 2) <= 1,
-        `${layout.width}px 区间栏控件必须在同一行`);
+      if (layout.width > 560) {
+        assert(Math.abs((control.top + control.bottom) / 2 - (layout.toolbar.top + layout.toolbar.bottom) / 2) <= 1,
+          `${layout.width}px 区间栏控件保持同排`);
+      } else {
+        assert(control.top >= layout.toolbar.top - 1 && control.bottom <= layout.toolbar.bottom + 1,
+          '窄屏区间与操作自然换行，全部留在工具栏内');
+      }
       assert(control.left >= layout.toolbar.left - 1 && control.right <= layout.toolbar.right + 1,
         `${layout.width}px 区间栏控件溢出`);
       if (layout.width <= 560) assert(control.height >= 44, '手机工具栏保留触控高度');

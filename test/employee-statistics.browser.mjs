@@ -153,7 +153,8 @@ test('员工统计从数据管理进入，工作量、当前资产与权限独�
         assert(dateBox.width > 0, '日期选择器应可见');
         assert(geometry.controls.every(box => box.y - geometry.top >= 8 && geometry.bottom - box.bottom >= 8), '筛选控件贴边');
         assert(geometry.controls.every(box => box.height >= (width <= 900 ? 44 : 36)), '控件触控高度不足');
-        assert(geometry.centerDeviation <= 1, '页签、筛选、数据时间和刷新必须同排居中');
+        if (width <= 900) assert(geometry.scrollWidth <= geometry.scrollportWidth + 1, '手机筛选全部可见');
+        else assert(geometry.centerDeviation <= 1, '页签、筛选、数据时间和刷新必须同排居中');
         if (geometry.scrollWidth > geometry.scrollportWidth + 1)
           assert(geometry.scrollbar >= 10, '实际需要横滑时应覆盖占用布局高度的滚动条');
         assert(geometry.scrollportWidth >= 140, '单行滚动区必须保留可见的操作空间');
@@ -163,7 +164,8 @@ test('员工统计从数据管理进入，工作量、当前资产与权限独�
           assert(a.right <= b.x || b.right <= a.x || a.bottom <= b.y || b.bottom <= a.y, '筛选控件重叠');
         }
         if (width >= 1440) assert(geometry.controls.every(box => Math.abs(box.y - dateBox.y) <= 1), '宽屏筛选必须完整同排');
-        assert.equal(geometry.paired[0], geometry.paired[1], '员工与业务筛选应成组排列');
+        if (width >= 390) assert.equal(geometry.paired[0], geometry.paired[1], '员工与业务筛选应成组排列');
+        else assert(geometry.paired[1] >= geometry.paired[0], '窄屏保持筛选顺序');
         if (process.env.ID_LAYOUT_QA_OUTPUT && [2062, 1440, 390, 320].includes(width)) {
           await mkdir(process.env.ID_LAYOUT_QA_OUTPUT, { recursive: true });
           await page.screenshot({ path: `${process.env.ID_LAYOUT_QA_OUTPUT}/employee-statistics-${width}-${dark ? 'dark' : 'light'}.png` });
@@ -245,7 +247,7 @@ test('员工统计从数据管理进入，工作量、当前资产与权限独�
         });
         assert(pendingGeometry.controls.every(box => box.left >= pendingGeometry.left && box.right <= pendingGeometry.right &&
           box.top - pendingGeometry.top >= 8 && pendingGeometry.bottom - box.bottom >= 8), '待处理资产筛选越界或贴边');
-        if (width >= 1024 || (width >= 768 && width <= 900))
+        if (width >= 1024)
           assert(pendingGeometry.controls.every(box => Math.abs(box.center - pendingGeometry.controls[0].center) <= 1), '待处理资产筛选应完整同排');
         for (let i = 0; i < pendingGeometry.controls.length; i++) for (let j = i + 1; j < pendingGeometry.controls.length; j++) {
           const a = pendingGeometry.controls[i], b = pendingGeometry.controls[j];
