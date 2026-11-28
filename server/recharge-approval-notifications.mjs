@@ -31,4 +31,3 @@ export function createApprovalNotifications({ list, observe, publish }) {
   }
   return { collect, version: () => version, close() { closed = true; clearTimeout(retry); } };
 }
-

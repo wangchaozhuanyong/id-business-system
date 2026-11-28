@@ -125,4 +125,3 @@ test('notifications use live pending rows and one Telegram event per confirmatio
   items = []; await notifier.collect();
   assert.equal(calls,2); notifier.close();
 });
-

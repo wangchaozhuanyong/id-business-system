@@ -1,7 +1,8 @@
 diff --git a/payment-retry.js b/payment-retry.js
+index df2d2e6893e7046cc11ea41dbb0d2c2b4fbc6199..ec17fe0b1a02b00f72cebb662fb52c9523aeb36b 100644
 --- a/payment-retry.js
 +++ b/payment-retry.js
-@@ -119,6 +119,7 @@
+@@ -119,6 +119,7 @@ async function executePaymentWithRetry(page, options) {
      progress(`开始支付（最多尝试 ${MAX_CARD_ATTEMPTS} 张卡）...`);
  
      for (let cardAttempt = 1; cardAttempt <= MAX_CARD_ATTEMPTS; cardAttempt += 1) {
@@ -9,7 +10,7 @@ diff --git a/payment-retry.js b/payment-retry.js
          const card = await store.reserveCard(ownerKey, planType);
          if (!card) {
              progress(cardAttempt === 1 ? '卡池无可用卡，终止支付' : `卡池已无更多可用卡（已拒 ${declinedLast4s.length} 张）`);
-@@ -155,8 +156,18 @@
+@@ -155,8 +156,18 @@ async function executePaymentWithRetry(page, options) {
          try {
              const paymentResult = await completeStripeCardPayment(page, cardInfo, address, {
                  cardAttempt,
@@ -28,7 +29,7 @@ diff --git a/payment-retry.js b/payment-retry.js
              const resultUnknown = paymentResult.resultUnknown === true;
  
              if (paymentResult.holderName) {
-@@ -210,6 +221,7 @@
+@@ -210,6 +221,7 @@ async function executePaymentWithRetry(page, options) {
              }
  
              if (paymentResult.declined === true && !resultUnknown) {
@@ -37,9 +38,10 @@ diff --git a/payment-retry.js b/payment-retry.js
                      card_number: card.card_number,
                      card_last4: cardLast4,
 diff --git a/server.js b/server.js
+index 744b47e1ad2847774fea4dc5fc189073921e5567..e055fc4b4f44aa9a0fb9676901b7f0726c6d8850 100644
 --- a/server.js
 +++ b/server.js
-@@ -8,6 +8,8 @@
+@@ -8,6 +8,8 @@ const os = require('os');
  const WebSocket = require('ws');
  const axios = require('axios');
  const store = require('./mysql-store');
@@ -48,17 +50,7 @@ diff --git a/server.js b/server.js
  // User-authorized startup routing only; the payment worker remains pinned upstream.
  let rechargeRoutingPromise;
  function getRechargeRouting() {
-@@ -1083,6 +1085,9 @@
- 
- function analyzeCheckoutDebugOutput(output, timedOut) {
-     const normalized = withoutCheckoutApiDiagnostics(output);
-+    if (/(?:^|\n)PAYMENT_APPROVAL_STOPPED(?:\r?\n|$)/.test(normalized)) {
-+        return { status: 'failed', message: endedLabel, beforeSubmit: true, shouldRetry: false };
-+    }
-     const runtimeError = extractRuntimeErrorMessage(normalized);
- 
-     if (/^CHECKOUT_DEBUG_SUCCESS$/m.test(normalized)) {
-@@ -1169,8 +1174,13 @@
+@@ -1169,8 +1171,13 @@ function extractRuntimeErrorMessage(output) {
  
  function analyzeProcessOutput(output, timedOut) {
      const normalized = withoutCheckoutApiDiagnostics(output);
@@ -73,7 +65,17 @@ diff --git a/server.js b/server.js
          return {
              status: 'manual',
              message: '付款结果待核实，已转人工确认，请勿重复充值，请联系客服处理。',
-@@ -4254,6 +4264,7 @@
+@@ -1180,6 +1187,9 @@ function analyzeProcessOutput(output, timedOut) {
+             deleteCard: false
+         };
+     }
++    if (/(?:^|\n)PAYMENT_APPROVAL_STOPPED(?:\r?\n|$)/.test(normalized)) {
++        return { status: 'failed', message: endedLabel, beforeSubmit: true, shouldRetry: false };
++    }
+     const runtimeError = extractRuntimeErrorMessage(normalized);
+     const reachedPayment = normalized.includes('[Stripe] Step')
+         || normalized.includes('正在使用 Stripe 信用卡')
+@@ -4254,6 +4264,7 @@ function sanitizeCustomerTaskMessage(message) {
      if (typeof message !== 'string') {
          return message;
      }
@@ -81,7 +83,7 @@ diff --git a/server.js b/server.js
      if (message.includes('订单处理超时')) {
          return LEGACY_PROVIDER_TIMEOUT_MESSAGE;
      }
-@@ -4263,7 +4274,7 @@
+@@ -4263,7 +4274,7 @@ function sanitizeCustomerTaskMessage(message) {
      return message;
  }
  
@@ -90,7 +92,7 @@ diff --git a/server.js b/server.js
      (async () => {
          const checkoutScript = path.join(__dirname, 'index.js');
          let finalRun = null;
-@@ -4297,6 +4308,7 @@
+@@ -4297,6 +4308,7 @@ function spawnActivationWorker({ task, token, sessionRaw, cdk, cdkDetails, clien
                  const runtimeEnv = {
                      ...process.env,
                      ...hcaptchaEnv,
@@ -98,7 +100,7 @@ diff --git a/server.js b/server.js
                      JOB_KEY: task.jobKey,
                      CHATGPT_TOKEN: token,
                      CHATGPT_SESSION_JSON: String(sessionRaw || '').startsWith('{') ? sessionRaw : '',
-@@ -4315,9 +4327,10 @@
+@@ -4315,9 +4327,10 @@ function spawnActivationWorker({ task, token, sessionRaw, cdk, cdkDetails, clien
                          if (progress > 0) {
                              const runningProgress = normalizeTaskProgress(progress, 'running', lastProgress);
                              lastProgress = runningProgress;
@@ -110,7 +112,7 @@ diff --git a/server.js b/server.js
                                  rawOutput: null,
                                  cdkCode: cdk,
                                  progress: runningProgress
-@@ -4335,7 +4348,7 @@
+@@ -4335,7 +4348,7 @@ function spawnActivationWorker({ task, token, sessionRaw, cdk, cdkDetails, clien
                                  jobKey: task.jobKey,
                                  progress: runningProgress,
                                  status: 'running',
@@ -119,20 +121,19 @@ diff --git a/server.js b/server.js
                                  cdkCode: cdk,
                                  screenshots: liveOutput ? extractTaskMediaFromOutput(liveOutput).screenshots : undefined,
                                  videos: liveOutput ? extractTaskMediaFromOutput(liveOutput).videos : undefined
-@@ -4388,9 +4401,9 @@
+@@ -4388,9 +4401,9 @@ function spawnActivationWorker({ task, token, sessionRaw, cdk, cdkDetails, clien
              const finalStatus = normalizedAnalysis?.status || 'failed';
              const finalMessage = finalStatus === 'success'
                  ? (normalizedAnalysis?.message || '激活成功')
 -                : getManualReviewMessage(normalizedAnalysis?.message || '激活失败');
--
--            if (finalStatus !== 'success') {
 +                : normalizedAnalysis?.beforeSubmit ? endedLabel : getManualReviewMessage(normalizedAnalysis?.message || '激活失败');
-+
+ 
+-            if (finalStatus !== 'success') {
 +            if (finalStatus !== 'success' && !normalizedAnalysis?.beforeSubmit) {
                  await store.createActivationManualHold({
                      accountKey,
                      accountEmail,
-@@ -4452,7 +4465,7 @@
+@@ -4452,7 +4465,7 @@ function spawnActivationWorker({ task, token, sessionRaw, cdk, cdkDetails, clien
                      jobKey: task.jobKey,
                      message: finalMessage
                  });
@@ -141,7 +142,7 @@ diff --git a/server.js b/server.js
                  notifyTaskOutcome({
                      event: 'failure',
                      email: accountEmail,
-@@ -4656,6 +4669,8 @@
+@@ -4656,6 +4669,8 @@ async function handleActivationRequest(req, res) {
              });
          }
  
@@ -150,7 +151,7 @@ diff --git a/server.js b/server.js
          const lockSuccess = await store.markCdkUsed(cdk);
          if (!lockSuccess) {
              return res.status(403).json({ success: false, message: 'CDK 不可用或正在被他人使用' });
-@@ -4675,7 +4690,7 @@
+@@ -4675,7 +4690,7 @@ async function handleActivationRequest(req, res) {
          logTask(task.jobKey, `任务已创建，CDK=${cdk} mode=local`);
          reserveForegroundSlot(task.jobKey);
  
@@ -160,9 +161,10 @@ diff --git a/server.js b/server.js
          return res.json({
              success: true,
 diff --git a/stripe-payment.js b/stripe-payment.js
+index e4454ece42efec16892eea53220bb52fcf281183..0c55f5e22b0c2e31a554e3ffc373104832e059d8 100644
 --- a/stripe-payment.js
 +++ b/stripe-payment.js
-@@ -555,8 +555,9 @@
+@@ -555,8 +555,9 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {})
          await page.waitForTimeout(1000);
  
          if (await isZeroAmountCheckout(page)) {
@@ -173,7 +175,7 @@ diff --git a/stripe-payment.js b/stripe-payment.js
          }
  
          const openAiCheckout = isOpenAiCustomCheckout(page);
-@@ -715,11 +716,12 @@
+@@ -715,11 +716,12 @@ async function completeStripeCardPayment(page, cardInfo, address, options = {})
                  screenshot: dryShot
              };
          }
@@ -187,7 +189,7 @@ diff --git a/stripe-payment.js b/stripe-payment.js
          if (payResult && payResult.resultUnknown) {
              const planCheck = await verifyAccountPlan(process.env.CHATGPT_TOKEN);
              if (planCheck && planCheck.planType && planCheck.planType !== 'free') {
-@@ -931,9 +933,14 @@
+@@ -931,9 +933,14 @@ async function handlePostSubmitPhase(page) {
      return { action: 'continue', captcha: postCaptcha };
  }
  
@@ -205,7 +207,7 @@ diff --git a/stripe-payment.js b/stripe-payment.js
      if (!submitted) {
          const screenshotPath = await saveDebugScreenshot(page, 'submit_not_found');
          return { success: false, error: '无法找到提交/支付按钮', screenshot: screenshotPath };
-@@ -1386,7 +1393,7 @@
+@@ -1386,7 +1393,7 @@ async function dismissAddressAutocomplete(page) {
  }
  
  async function focusOpenAiBillingSection(page) {
@@ -214,7 +216,7 @@ diff --git a/stripe-payment.js b/stripe-payment.js
      await page.keyboard.press('Escape').catch(() => { });
      const heading = page.getByText(/^Billing address$|^账单地址$/i).first();
      await heading.scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => { });
-@@ -1490,6 +1497,21 @@
+@@ -1490,6 +1497,21 @@ async function pickBillingItem(items, matchers) {
      return null;
  }
  
@@ -236,7 +238,7 @@ diff --git a/stripe-payment.js b/stripe-payment.js
  async function selectBillingComboboxItem(page, item, optionLabels, logLabel) {
      if (!item?.el) return false;
      const options = optionLabels.filter(Boolean);
-@@ -1520,7 +1542,7 @@
+@@ -1520,7 +1542,7 @@ async function selectBillingComboboxItem(page, item, optionLabels, logLabel) {
          if (tag === 'input' || tag === 'textarea') {
              await item.el.fill(String(options[0] || ''));
              await page.keyboard.press('ArrowDown').catch(() => { });
@@ -245,7 +247,7 @@ diff --git a/stripe-payment.js b/stripe-payment.js
              console.log(`  [Stripe] ✅ ${logLabel}: ${options[0]} (typeahead)`);
              return true;
          }
-@@ -1857,7 +1879,7 @@
+@@ -1857,7 +1879,7 @@ async function selectBillingCountry(page, optionLabels) {
              await page.waitForTimeout(600);
              await page.keyboard.press('ArrowDown').catch(() => {});
              await page.waitForTimeout(200);
@@ -254,7 +256,7 @@ diff --git a/stripe-payment.js b/stripe-payment.js
              await page.waitForTimeout(800);
              const now = await getCurrentBillingCountryValue(page).catch(() => ({ value: '', label: '' }));
              const done = now.value === 'US' || /united states/i.test(now.label) || /美国/.test(now.label);
-@@ -1907,7 +1929,7 @@
+@@ -1907,7 +1929,7 @@ async function selectBillingState(page, stateFullName, stateRaw) {
              await page.waitForTimeout(600);
              await page.keyboard.press('ArrowDown').catch(() => {});
              await page.waitForTimeout(200);
@@ -263,7 +265,7 @@ diff --git a/stripe-payment.js b/stripe-payment.js
              await page.waitForTimeout(800);
              console.log('  [Stripe] 键盘选择州完成');
              return true;
-@@ -2567,7 +2589,9 @@
+@@ -2567,7 +2589,9 @@ async function fillBillingLine1Strict(page, value) {
      return ok;
  }
  
@@ -274,7 +276,7 @@ diff --git a/stripe-payment.js b/stripe-payment.js
      await dismissAddressAutocomplete(page);
      await page.keyboard.press('Escape').catch(() => {});
      await page.evaluate(() => {
-@@ -2576,6 +2600,7 @@
+@@ -2576,6 +2600,7 @@ async function clickCheckoutSubmitButton(page) {
      await page.waitForTimeout(400);
  
      const tryClick = async (locator, label) => {
@@ -282,7 +284,7 @@ diff --git a/stripe-payment.js b/stripe-payment.js
          try {
              const target = locator.first ? locator.first() : locator;
              if (!(await target.isVisible({ timeout: 2000 }).catch(() => false))) {
-@@ -2587,10 +2612,22 @@
+@@ -2587,10 +2612,22 @@ async function clickCheckoutSubmitButton(page) {
              }
              await target.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
              await page.waitForTimeout(randomBetween(150, 350));

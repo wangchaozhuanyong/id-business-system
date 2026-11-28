@@ -54,4 +54,3 @@ export async function handleApproval(req, res, actor, approvals) {
     return send(conflict ? 409 : 503, { message: conflict ? '确认已失效，请刷新待办。' : '暂时无法核对付款确认状态。' });
   }
 }
-

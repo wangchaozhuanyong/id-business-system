@@ -107,6 +107,13 @@ test('the prepared checkout button issues zero clicks on stop and never retries 
   });
   assert.equal(result.status, 'manual');
   assert.equal(result.shouldRetry, false);
+  const stopped = runInNewContext(analysis + '\n}\nanalyzeProcessOutput(log, true)', {
+    withoutCheckoutApiDiagnostics: text => text, log: '[Stripe] Step 8\nPAYMENT_APPROVAL_STOPPED',
+    endedLabel: '本次执行已在付款提交前结束'
+  });
+  assert.equal(stopped.status, 'failed');
+  assert.equal(stopped.beforeSubmit, true);
+  assert.equal(stopped.shouldRetry, false);
   const stripeGate = section(source, 'async function completeStripeCardPayment(', 'async function buildDeclinedPaymentResult(');
   assert.match(stripeGate, /isZeroAmountCheckout\(page\)[\s\S]*?return finalizeCheckoutPayment\(page,[^\n]+options.approvalCard\)/);
   assert.match(stripeGate, /const payResult = await finalizeCheckoutPayment\(page, holderName, options.approvalCard\)/);
