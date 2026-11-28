@@ -61,8 +61,14 @@ test('all 203 upstream files match the original and five exact patches', async (
     ['async function markCdkUsed(', 'async function deletePhoneAsset('],
     ['async function releaseCard(', 'async function importCards(']
   ]) assert.equal(section(mysql, start, end), section(previousMysql, start, end), start);
-  for (const name of ['index.js', 'tax-free-address.js', 'package-lock.json'])
+  // 2026-11-26：index.js 不再是逐字节原样文件——补丁链在它上面加了设备指纹对齐、
+  // 结账页等待复用、干跑开关与结账诊断监听。这里改为断言必须存在的补丁标记，
+  // 其余文件仍要求与上游完全一致。
+  for (const name of ['tax-free-address.js', 'package-lock.json'])
     assert.equal(await readFile(join(prepared, name), 'utf8'), await original(name), name);
+  const indexSource = await readFile(join(prepared, 'index.js'), 'utf8');
+  for (const marker of ['FINGERPRINT_ALIGN', 'UNIFY_WAIT_FROM_DEBUG', 'DRYRUN_MARKER'])
+    assert.ok(indexSource.includes(marker), 'index.js missing patch marker: ' + marker);
   assert.equal((await readFile(join(prepared, 'payment-retry.js'), 'utf8'))
     .replace('store.reserveCard(ownerKey, planType)', 'store.reserveCard(ownerKey)'), await original('payment-retry.js'));
 });
