@@ -1479,20 +1479,29 @@ class WebsiteReleaseTests(unittest.TestCase):
 
     @patch("release.require_ancestor")
     @patch("release.git")
-    def test_routing_startup_release_requires_native_and_exact_scope(self, git, _ancestor):
+    def test_routing_startup_release_requires_native_and_exact_scope(self, git, ancestor):
         files = (
             "modules/recharge/codexdaichong/native-routing.mjs",
             "modules/recharge/codexdaichong/native-routing.test.mjs",
         )
+        native_revision = "c" * 40
+        native = {"identity": {"revision": native_revision, "running": True}, "imageLabelsVerified": True}
         git.return_value = "\n".join(files)
-        self.assertIsNone(release.require_website_scope(BASE, TARGET, include_core=True))
+        self.assertIsNone(release.require_website_scope(BASE, TARGET, include_core=True, native_publication=native))
+        self.assertEqual(ancestor.call_args_list, [call(BASE, TARGET), call(native_revision, TARGET)])
+        self.assertEqual(git.call_args.args[:4], ("diff", "--name-only", native_revision, TARGET))
+        with self.assertRaisesRegex(RuntimeError, "routing_startup_native_baseline_unverified"):
+            release.require_website_scope(BASE, TARGET, include_core=True)
         for flags in ({}, {"include_adapter": True}, {"include_core": True, "include_adapter": True}):
             with self.assertRaises(RuntimeError):
-                release.require_website_scope(BASE, TARGET, **flags)
+                release.require_website_scope(BASE, TARGET, native_publication=native, **flags)
         for changed in (files[:1], files[1:], (*files, "modules/recharge/codexdaichong/prepare.mjs")):
             git.return_value = "\n".join(changed)
             with self.assertRaisesRegex(RuntimeError, "recharge_native_release_scope_mismatch"):
-                release.require_website_scope(BASE, TARGET, include_core=True)
+                release.require_website_scope(BASE, TARGET, include_core=True, native_publication=native)
+        git.side_effect = ["\n".join(files), "\n".join((*files, "modules/recharge/codexdaichong/runtime.mjs"))]
+        with self.assertRaisesRegex(RuntimeError, "routing_startup_native_scope_mismatch"):
+            release.require_website_scope(BASE, TARGET, include_core=True, native_publication=native)
 
     @patch("release.require_presentation_approval")
     @patch("release.require_ancestor")

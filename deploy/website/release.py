@@ -361,6 +361,17 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False, 
                 CARD_REUSE_ROUTING_AND_HEALTH_NATIVE_SCOPE,
                 CARD_REUSE_ROUTING_HEALTH_AND_CANARY_NATIVE_SCOPE, ROUTING_STARTUP_NATIVE_SCOPE)):
             raise RuntimeError("recharge_native_release_scope_mismatch")
+        if changed == ROUTING_STARTUP_NATIVE_SCOPE:
+            # A website-only publication can leave the running native image behind.
+            if (native.get("imageLabelsVerified") is not True or native.get("identity", {}).get("running") is not True or
+                    not isinstance(native_revision, str) or not SHA.fullmatch(native_revision)):
+                raise RuntimeError("routing_startup_native_baseline_unverified")
+            require_ancestor(native_revision, sha)
+            native_changes = set(git("diff", "--name-only", native_revision, sha, "--",
+                                     "modules/recharge", "package-lock.json", *CORE_PATHS).splitlines())
+            native_changes.discard(BACKUP_OPERATION)
+            if native_changes != ROUTING_STARTUP_NATIVE_SCOPE:
+                raise RuntimeError("routing_startup_native_scope_mismatch")
     elif include_adapter:
         if not changed <= ADAPTER_SCOPE or not changed.intersection(ADAPTER_RUNTIME_FILES):
             raise RuntimeError("recharge_adapter_release_scope_mismatch")
