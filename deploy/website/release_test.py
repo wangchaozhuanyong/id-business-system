@@ -1415,6 +1415,23 @@ class WebsiteReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "recharge_native_release_scope_mismatch"):
                 release.require_website_scope(BASE, TARGET, include_core=True)
 
+    @patch("release.require_ancestor")
+    @patch("release.git")
+    def test_routing_startup_release_requires_native_and_exact_scope(self, git, _ancestor):
+        files = (
+            "modules/recharge/codexdaichong/native-routing.mjs",
+            "modules/recharge/codexdaichong/native-routing.test.mjs",
+        )
+        git.return_value = "\n".join(files)
+        self.assertIsNone(release.require_website_scope(BASE, TARGET, include_core=True))
+        for flags in ({}, {"include_adapter": True}, {"include_core": True, "include_adapter": True}):
+            with self.assertRaises(RuntimeError):
+                release.require_website_scope(BASE, TARGET, **flags)
+        for changed in (files[:1], files[1:], (*files, "modules/recharge/codexdaichong/prepare.mjs")):
+            git.return_value = "\n".join(changed)
+            with self.assertRaisesRegex(RuntimeError, "recharge_native_release_scope_mismatch"):
+                release.require_website_scope(BASE, TARGET, include_core=True)
+
     @patch("release.require_presentation_approval")
     @patch("release.require_ancestor")
     @patch("release.git")

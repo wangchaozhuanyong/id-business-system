@@ -98,6 +98,10 @@ CARD_REUSE_ROUTING_AND_HEALTH_NATIVE_SCOPE = CARD_REUSE_AND_ROUTING_NATIVE_SCOPE
 CARD_REUSE_ROUTING_HEALTH_AND_CANARY_NATIVE_SCOPE = CARD_REUSE_ROUTING_AND_HEALTH_NATIVE_SCOPE | {
     "deploy/recharge-core/canary.py",
 }
+ROUTING_STARTUP_NATIVE_SCOPE = {
+    "modules/recharge/codexdaichong/native-routing.mjs",
+    "modules/recharge/codexdaichong/native-routing.test.mjs",
+}
 # 已批准的优惠及浏览器补丁独立核验，不与银行卡套餐或供应商退役批次绑定。
 PLUS_TRIAL_PATCH_FILES = {
     f"modules/recharge/codexdaichong/plus-trial/{name}"
@@ -331,7 +335,7 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False, 
         if include_adapter or (not carried_patches and changed not in (
                 PROXY_TYPE_CORE_SCOPE, CARD_REUSE_NATIVE_SCOPE, CARD_REUSE_AND_ROUTING_NATIVE_SCOPE,
                 CARD_REUSE_ROUTING_AND_HEALTH_NATIVE_SCOPE,
-                CARD_REUSE_ROUTING_HEALTH_AND_CANARY_NATIVE_SCOPE)):
+                CARD_REUSE_ROUTING_HEALTH_AND_CANARY_NATIVE_SCOPE, ROUTING_STARTUP_NATIVE_SCOPE)):
             raise RuntimeError("recharge_native_release_scope_mismatch")
     elif include_adapter:
         if not changed <= ADAPTER_SCOPE or not changed.intersection(ADAPTER_RUNTIME_FILES):
