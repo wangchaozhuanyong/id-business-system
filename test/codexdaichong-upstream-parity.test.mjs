@@ -197,7 +197,8 @@ async function checkoutPhase(source, { debugOnly, failApi = false, apiOnly = fal
     loginInfo: { session: { accessToken: 'synthetic-token' } },
     planType: 'plus', billingCountry: 'MY', billingCurrency: 'MYR',
     cdkCode: 'synthetic-code', email: 'fixture@example.test', context: {}, paymentSucceeded: false,
-    page: { url: () => checkoutUrl }, sanitizeCheckoutDiagnostic: (value) => value,
+    // spa-diag 补丁会调用 page.on 注册诊断监听，mock page 需要提供这个 API。
+    page: { url: () => checkoutUrl, on: () => {} }, sanitizeCheckoutDiagnostic: (value) => value,
     openApiCheckout: async (_page, options) => {
       calls.push(['api', options]);
       if (failApi) throw new Error('synthetic API rejection');
