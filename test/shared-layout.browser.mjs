@@ -357,11 +357,11 @@ test('shared layouts preserve alignment, readable controls and stable navigation
       await page.setViewportSize({ width, height: 900 });
       await go('mailboxes/google');
       for (const last of [true, false, true]) {
-        const target = last ? page.locator('.tabs .tab').filter({ hasText: '解封中' }).first()
-          : page.locator('.tabs .tab').first();
+        const target = last ? page.locator('#main > [data-page-region]:not([hidden]) .tabs .tab').filter({ hasText: '解封中' }).first()
+          : page.locator('#main > [data-page-region]:not([hidden]) .tabs .tab').first();
         await target.click();
         await settled();
-        assert(await page.locator('.tabs').first().evaluate(n => {
+        assert(await page.locator('#main > [data-page-region]:not([hidden]) .tabs').first().evaluate(n => {
           const active = n.querySelector('.active').getBoundingClientRect();
           const bounds = n.getBoundingClientRect();
           return active.left >= bounds.left - 1 && active.right <= bounds.right + 1;
@@ -652,18 +652,18 @@ test('shared layouts preserve alignment, readable controls and stable navigation
     }
   });
 
-  await t.test('recharge log tables scroll within their containers with readable single-line headings', async () => {
+  await t.test('mobile recharge logs keep all labeled fields within their own cards', async () => {
     await page.setViewportSize({ width: 390, height: 900 });
     await go('settings/login-logs');
     await page.locator('[data-action="ops-login-log-tab"][data-tab="recharge"]').click();
     await frame().locator('#admin_login_logs.active').waitFor();
     const tables = await frame().locator('#admin_login_logs table').evaluateAll(nodes => nodes.map(n => ({
-      scroll: getComputedStyle(n.parentElement).overflowX,
+      fits: n.parentElement.scrollWidth <= n.parentElement.clientWidth + 1, cards: n.classList.contains('mobile-resource-records'),
       headings: [...n.querySelectorAll('th')].map(th => ({ height: th.getBoundingClientRect().height, wrapping: getComputedStyle(th).whiteSpace }))
     })));
     assert.equal(tables.length, 2);
     for (const table of tables) {
-      assert.equal(table.scroll, 'auto');
+      assert(table.fits && table.cards, '手机日志按记录显示，内容无需横滑');
       assert(table.headings.every(th => th.height < 60 && th.wrapping === 'nowrap'));
     }
     await noOverflow();

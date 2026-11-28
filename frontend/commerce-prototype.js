@@ -3246,11 +3246,14 @@
     const page = A.pageRows(rows);
     const cards = `<div class="customer-retention-mobile panel-body" data-pagination-rows tabindex="0" role="region" aria-label="客户记录">${page.length
       ? `<div class="guide-list">${page.map(row => `<article class="guide-item" data-retention-card="${E(row.id)}">
-        <h3>${E(row.name)}</h3>
-        <p>${E(review ? row.plans : `${row.count} · ${row.plans}`)}</p>
-        <p>${E(review ? `${row.orderNo} · ${row.reason}` : scheduled ? `预计生效 ${row.end}` : `已停用 ${row.days} · ${row.end}`)}</p>
-        ${!review && row.contact ? `<p>${E(row.contact)}</p>` : ''}
-        <div class="retention-card-action">${A.button(label, action, '', '', `data-id="${E(row.id)}"`)}</div>
+        <header class="retention-card-heading"><h3>${E(row.name)}</h3>${A.button(label, action, '', '', `data-id="${E(row.id)}"`)}</header>
+        <dl class="retention-card-facts">${(review ? [
+          ['产品与套餐', row.plans], ['订单编号', row.orderNo], ['资料问题', row.reason]
+        ] : [
+          ['订阅次数', row.count], ['套餐分布', row.plans],
+          ...(!scheduled ? [['已停用', row.days]] : []),
+          [scheduled ? '预计生效' : '最后结束', row.end], ...(row.contact ? [['联系方式', row.contact]] : [])
+        ]).map(([label, value]) => `<div><dt>${E(label)}</dt><dd>${E(value)}</dd></div>`).join('')}</dl>
       </article>`).join('')}</div>`
       : A.empty(guidance.title, guidance.description)}</div>`;
     return A.header('客户流失', '手工及历史订单按已录入的订阅周期统计，无需再次确认开通或付款。同一客户仍有有效订阅时不计流失。缺少客户关联只影响按客户归集，不改变已登记的订阅状态；资料问题列出实际缺项或冲突。') +

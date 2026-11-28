@@ -112,6 +112,7 @@ const files = new Map([
   ['sheets-status.css', 'text/css; charset=utf-8'],
   ['finance-collection.css', 'text/css; charset=utf-8'],
   ['date-filter.css', 'text/css; charset=utf-8'],
+  ['mobile-layout.css', 'text/css; charset=utf-8'],
   ['recharge-integration.css', 'text/css; charset=utf-8'],
   ['recharge-activity.css', 'text/css; charset=utf-8'],
   ['bitbrowser-addresses.css', 'text/css; charset=utf-8'],

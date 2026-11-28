@@ -1,11 +1,14 @@
 /* Horizontal navigation in the workspace, drawers and standalone shells. */
 (() => {
   'use strict';
-  const bars = '.tabs, .entry-mobile-tabs, .subscription-center-nav, .completion-status-filters';
+  const bars = '.tabs, .entry-mobile-tabs, .subscription-center-nav, .completion-status-filters, .renewal-period-controls';
   const selected = '.active, [aria-selected="true"], [aria-pressed="true"], [aria-current="page"]';
   const controls = bar => Array.from(bar.children).filter(node => node.matches('button, a[href], [role="tab"]'));
   const activeTab = bar => controls(bar).find(node => node.matches(selected));
-  const scrollport = bar => bar.parentElement?.matches('[data-tab-scrollport]') ? bar.parentElement : bar;
+  const scrollport = bar => {
+    const parent = bar.parentElement;
+    return parent?.matches('[data-tab-scrollport]') && getComputedStyle(parent).overflowX !== 'visible' ? parent : bar;
+  };
   const key = (bar, index) => bar.getAttribute('aria-label') || bar.id ||
     (bar.querySelector('[data-action]')?.dataset.action || 'tabs') + ':' + index;
 

@@ -20,7 +20,7 @@ const browsers = ['date-filter', 'search-input', 'ui-idle-contract', 'change-syn
   'staff-workspaces', 'finance-reconciliation', 'renewal-handoff', 'renewal-status-entries', 'renewal-detail-card-retry',
   'login-security', 'auth-cookie-race', 'shared-layout', 'order-statistics-cost', 'page-lifecycle', 'order-completion', 'order-submit-stay',
   'order-customer-suggestions', 'contact-recovery', 'operation-recovery',
-  'mobile-navigation-layout', 'tab-navigation', 'list-filter-toolbar', 'order-price-shortcuts', 'inventory-workspace', 'design-list-boundaries', 'global-pagination', 'business-lists', 'site-visual-v2-border',
+  'mobile-navigation-layout', 'mobile-viewport', 'tab-navigation', 'list-filter-toolbar', 'order-price-shortcuts', 'inventory-workspace', 'design-list-boundaries', 'global-pagination', 'business-lists', 'site-visual-v2-border',
   'recharge-layout-transitions', 'recharge-cell-overflow', 'recharge-server-diagnostic', 'recharge-partner',
   'recharge-invoice-subscription', 'mailbox-updates', 'initial-loading-layout', 'workbench-cloud-hold', 'manual-recharge-workbench', 'manual-renewal-layout', 'manual-renewal-registration'];
 const groups = [
