@@ -30,8 +30,10 @@ STOCK_PATH = '/api/admin/cdks/returns/stock'
 ROUTING_PATH = '/api/admin/recharge-routing'
 PROXY_IMPORT_PATH = '/api/admin/proxies'
 CARD_STOP_PATH = '/api/admin/cards/stop-use'
+APPROVAL_MODE_PATH = '/api/admin/payment-approvals/mode'
 PROXY_LABEL_PATH = re.compile(ROUTING_PATH + r'/proxies/[1-9][0-9]{0,15}/(?:country|type)')
-ALLOWED_GETS = RETURN_PATHS | {STOCK_PATH, '/api/public/runtime', '/api/admin/session', '/api/admin/cards', ROUTING_PATH}
+ALLOWED_GETS = RETURN_PATHS | {STOCK_PATH, '/api/public/runtime', '/api/admin/session', '/api/admin/cards',
+                              ROUTING_PATH, APPROVAL_MODE_PATH}
 PRIVATE_NETWORKS = tuple(ipaddress.ip_network(value) for value in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'))
 
 
@@ -498,9 +500,8 @@ class Canary:
             self.source_check(adapter, 'source_203_adapter')
             self.checks.append('no_payment_or_activation_requests')
             return
-        approval_mode = '/api/admin/payment-approvals/mode'
-        status, policy = http_json(adapter_url, approval_mode, headers(approval_mode, privileged))
-        denied, _ = http_json(adapter_url, approval_mode, headers(approval_mode, customer))
+        status, policy = http_json(adapter_url, APPROVAL_MODE_PATH, headers(APPROVAL_MODE_PATH, privileged))
+        denied, _ = http_json(adapter_url, APPROVAL_MODE_PATH, headers(APPROVAL_MODE_PATH, customer))
         if status != 200 or policy != {'automatic': False, 'version': 0} or denied != 403:
             raise CanaryError('payment_approval_mode_readback_failed')
         self.checks.append('payment_approval_manual_default_and_customer_denied')

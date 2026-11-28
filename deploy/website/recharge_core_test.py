@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+import runpy
 import subprocess
 import unittest
 from unittest.mock import call, patch
@@ -20,6 +21,28 @@ NATIVE = {
 
 
 class RechargeCoreReadinessTests(unittest.TestCase):
+    def test_canary_accepts_only_the_exact_read_only_approval_mode_endpoint(self):
+        canary = runpy.run_path(str(Path(__file__).resolve().parents[1] / "recharge-core" / "canary.py"))
+        origin = "http://127.0.0.1:44575"
+        mode = "/api/admin/payment-approvals/mode"
+        with patch("urllib.request.build_opener") as make_opener:
+            opener = make_opener.return_value
+            response = opener.open.return_value
+            response.status = 200
+            response.read.return_value = b'{"automatic":false,"version":0}'
+            status, payload = canary["http_json"](origin, mode)
+            self.assertEqual((status, payload), (200, {"automatic": False, "version": 0}))
+            request = opener.open.call_args.args[0]
+            self.assertEqual((request.get_method(), request.full_url), ("GET", origin + mode))
+            for rejected_origin, rejected_path, method, error in (
+                (origin, mode, "PUT", "write_endpoint_rejected"),
+                (origin, mode + "/extra", "GET", "read_endpoint_rejected"),
+                ("http://localhost:44575", mode, "GET", "read_endpoint_rejected"),
+            ):
+                with self.assertRaisesRegex(canary["CanaryError"], error):
+                    canary["http_json"](rejected_origin, rejected_path, method=method)
+            self.assertEqual(make_opener.call_count, 1)
+
     def test_native_waits_for_container_creation_then_verifies_readiness_and_sources(self):
         sources = {
             "revision": PINNED_UPSTREAM,
