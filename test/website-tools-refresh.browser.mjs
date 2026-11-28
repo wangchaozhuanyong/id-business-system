@@ -177,7 +177,8 @@ test(
       assert.equal(await status.textContent(), '');
       assert((await status.boundingBox()).height <= 3);
     };
-    const showMetric = (value) => analytics.locator('.summary-number').first()
+    const showMetric = (value) => analytics.locator('.summary-item')
+      .filter({ has: page.getByText('浏览量', { exact: true }) }).locator('.summary-number')
       .filter({ hasText: new RegExp('^' + value + '次$') }).waitFor();
     const replyAnalytics = (route, pageViews) => tools.reply(route, analyticsResult(pageViews, route.request()));
     const showVisit = async (path) => {
