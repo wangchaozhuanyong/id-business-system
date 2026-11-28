@@ -198,7 +198,8 @@
       '<form class="toolbar recharge-code-filters" id="code-list-filters">' +
       '<div class="search-field">' + A.icon('search') + A.input('code-list-query', draft['code-list-query'] || '', 'data-auto-search type="search" aria-label="搜索充值码、批次或领用编号" placeholder="充值码 / 批次 / 领用号"') + '</div>' +
       A.select('code-list-plan', [['', '全部套餐'], ...Object.entries(planNames)], draft['code-list-plan'] || '').replace('<select ', '<select aria-label="筛选套餐" ') +
-      A.button('归还所选', 'order-code-return-selected', '', '', 'disabled') + '</form></div>' +
+      '<div class="recharge-code-selection"><span data-code-selected-count role="status"></span>' +
+      A.button('归还所选', 'order-code-return-selected', '', '', 'disabled') + '</div></form></div>' +
       '<div id="recharge-code-new-batch" class="recharge-new-batch" hidden></div><div id="recharge-code-list">' + codesList(view) + '</div>';
   }
   function workspaceRegion(route) {
@@ -243,7 +244,9 @@
     const selected = A.getSelection('recharge-code-items');
     const count = filteredCodes(views.get(codesRoute)?.data).filter(row => selected.has(row.id)).length;
     const button = region.querySelector('[data-action="order-code-return-selected"]');
-    button.disabled = !count; button.textContent = count ? `归还所选（${count}）` : '归还所选';
+    button.disabled = !count;
+    button.textContent = count ? `归还所选（${count}）` : '归还所选';
+    region.querySelector('[data-code-selected-count]').textContent = count ? `已选 ${count} 条` : '';
   }
   function stabilizeCodeFrames() {
     for (const route of [requestRoute, codesRoute]) {

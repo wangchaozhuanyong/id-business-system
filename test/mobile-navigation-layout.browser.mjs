@@ -71,6 +71,14 @@ test('mobile navigation remains reachable without losing the long-page reading p
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
         results.push({ width, theme: dark ? 'dark' : 'light', before, after: await page.evaluate(() => scrollY), headerTop: header.y });
         if (output) await page.screenshot({ path: join(output, `mobile-navigation-${width}-${dark ? 'dark' : 'light'}.png`) });
+        await page.locator('#nav-toggle').click();
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await page.waitForFunction(() => !document.body.classList.contains('nav-open'));
+        await page.setViewportSize({ width, height: 900 });
+        await page.waitForFunction(() => document.querySelector('#nav-toggle').getAttribute('aria-expanded') === 'false');
+        await page.locator('#nav-toggle').click();
+        assert(await page.locator('#sidebar-shade').isVisible(), '从桌面切回手机后可以重新打开侧栏');
+
       } finally { await page.close(); }
     });
   }
