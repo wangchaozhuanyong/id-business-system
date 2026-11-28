@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createPaymentApprovals } from '../../modules/recharge/codexdaichong/payment-approval.mjs';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 
@@ -105,11 +106,39 @@ async function check() {
   await store.saveCardPlanPolicy({ version: 7, strict: true });
   assert.equal((await store.reserveCard('canary-reuse-after-raise-strict', 'plus'))?.id, plusCard.id);
   await store.releaseCard(plusCard.id);
+
+  // This isolated database and account were checked above. No payment worker is launched.
+  stage = 11;
+  const approvals = createPaymentApprovals(store.withTransaction);
+  assert.deepEqual(await approvals.policy(), { automatic: false, version: 0 });
+  const owner = 'canary-approval';
+  const held = await store.reserveCard(owner, 'plus');
+  assert(held);
+  try {
+    const task = await store.createTaskLog({ tokenPreview: 'fixture@example.test', cdkCode: 'canary-approval',
+      status: 'running', progress: 3 });
+    const quote = { currency: 'USD', amount: '0.00' };
+    const pending = await approvals.open(task.jobKey, 'plus', quote, Date.now() + 120_000);
+    assert((await approvals.list()).some(row => row.id === pending.id && row.amount === '0.00'));
+    await approvals.setPolicy(true, 0, 'fixture-super');
+    assert.equal(await approvals.automaticAllowed(0), false);
+    const decisions = await Promise.allSettled(['fixture-one', 'fixture-two'].map(actor => approvals.decide(pending.id, 'approved', actor)));
+    assert.equal(decisions.filter(result => result.status === 'fulfilled').length, 1);
+    assert.equal(decisions.find(result => result.status === 'rejected')?.reason.status, 409);
+    const card = { id: Number(held.id), owner };
+    await assert.rejects(approvals.finish(pending.id, 'consumed', { ...quote, amount: '1.00' }, card), { status: 409 });
+    await approvals.finish(pending.id, 'consumed', quote, card);
+    await assert.rejects(approvals.finish(pending.id, 'consumed', quote, card), { status: 409 });
+    assert.deepEqual(await approvals.list(), []);
+    await approvals.setPolicy(false, 1, 'fixture-super');
+    await store.updateTaskLog(task.jobKey, { status: 'failed', message: '合成验证完成，未提交付款', progress: 3 });
+  } finally { await store.releaseCard(held.id); }
 }
 
 try {
   await check();
   console.log('card_plan_mysql_transactions_passed');
+  console.log('payment_approval_mysql_transactions_passed');
   process.exit(0);
 } catch {
   // Emit only a bounded stage exit code so failures never leak credentials or SQL state.

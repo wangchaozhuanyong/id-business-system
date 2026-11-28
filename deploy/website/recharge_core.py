@@ -18,7 +18,8 @@ from vendure_admission import read_idle_queue, ready_socket, worker_binding, wor
 NATIVE_UNIT = "id-business-independent-recharge-native.service"
 UPSTREAM = "https://github.com/wangchaozhuanyong/codexdaichong.git"
 CORE = "deploy/recharge-core"
-NATIVE_CHECKS = {"card_plan_mysql_transactions_passed", "source_203_native", "source_203_adapter",
+NATIVE_CHECKS = {"card_plan_mysql_transactions_passed", "payment_approval_mysql_transactions_passed", "payment_approval_manual_default_and_customer_denied",
+                 "source_203_native", "source_203_adapter",
                  "customer_cards_denied", "proxy_type_batch_import_and_edit", "no_payment_or_activation_requests",
                  "owned_temporary_containers_removed"}
 
@@ -92,7 +93,8 @@ def ready_native(sha, image, expected_mounts):
                                               "-e", script], timeout=30))
                     require(sources.get("revision") == PINNED_UPSTREAM and sources.get("files") == 203 and
                             sources.get("originalFiles") == 194 and
-                            sources.get("plusTrialFiles") == ['browser-pool.js', 'chatgpt.js', 'pricing-checkout.js', 'session-auth.js', 'stripe-payment.js'] and sources.get("retryFiles") == ["server.js"],
+                            sources.get("plusTrialFiles") == ['browser-pool.js', 'chatgpt.js', 'pricing-checkout.js', 'session-auth.js', 'stripe-payment.js'] and sources.get("retryFiles") == ["server.js"] and
+                            sources.get("paymentApprovalFiles") == ["payment-retry.js", "server.js", "stripe-payment.js"],
                             "running_native_sources_mismatch")
                     return state
         except ContainerMetadataError as error:

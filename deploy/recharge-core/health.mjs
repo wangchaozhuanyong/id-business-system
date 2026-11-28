@@ -34,8 +34,17 @@ try {
       Number.isSafeInteger(limits?.[plan]) && limits[plan] >= 1 && limits[plan] <= 20);
     const ready = denied.status === 403 && success === true && retired.status === 404 && reuseLimitsReady &&
       Number.isSafeInteger(planPolicy?.version) && typeof planPolicy.strict === 'boolean';
-    console.log(JSON.stringify({ ready, cardPlansReady: ready, retiredProviderRoute: retired.status }));
-    if (!ready) process.exitCode = 1;
+    const status = { ready, cardPlansReady: ready, retiredProviderRoute: retired.status };
+    if (process.argv.includes('--check-payment-approvals')) {
+      const queue = await readRoute('/api/admin/payment-approvals');
+      const mode = await readRoute('/api/admin/payment-approvals/mode', { ...actor, id: 'release-readback' });
+      const policy = mode.ok ? await mode.json() : null;
+      status.paymentApprovalsReady = queue.ok && Array.isArray((await queue.json()).items) &&
+        Number.isSafeInteger(policy?.version) && policy.version >= 0 && typeof policy.automatic === 'boolean';
+      status.automatic = policy?.automatic;
+    }
+    console.log(JSON.stringify(status));
+    if (!ready || status.paymentApprovalsReady === false) process.exitCode = 1;
   } else if (!process.argv.includes('--check-card-stop')) {
     console.log(JSON.stringify(result));
     if (!result.ready) process.exitCode = 1;

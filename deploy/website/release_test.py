@@ -812,6 +812,36 @@ class WebsiteReleaseTests(unittest.TestCase):
 
     @patch("release.require_ancestor")
     @patch("release.git")
+    def test_payment_approval_requires_complete_native_scope(self, git, _ancestor):
+        scope = release.PAYMENT_APPROVAL_CORE
+        native_scope = scope | {"modules/recharge/vendure/loopback-bridge.mjs"}
+        native = {"identity": {"revision": BASE, "running": True}, "imageLabelsVerified": True}
+        paths = lambda values: "\n".join(sorted(values))
+        git.side_effect = [paths(scope), paths(native_scope)]
+        self.assertIsNone(release.require_website_scope(BASE, TARGET, include_core=True, native_publication=native))
+        git.side_effect = None
+        for change in (scope - {"modules/recharge/codexdaichong/payment-approval.mjs"},
+                       scope | {"deploy/recharge-core/Dockerfile"}):
+            git.return_value = paths(change)
+            with self.assertRaisesRegex(RuntimeError, "payment_approval_native_scope_mismatch"):
+                release.require_website_scope(BASE, TARGET, include_core=True, native_publication=native)
+        git.return_value = paths(scope)
+        with self.assertRaisesRegex(RuntimeError, "payment_approval_native_baseline_unverified"):
+            release.require_website_scope(BASE, TARGET, include_core=True)
+        native["identity"]["revision"] = release.ROUTING_STARTUP_PRIOR_NATIVE
+        carried = native_scope | release.MANUAL_ROUTING_SCOPE | {
+            *release.MOBILE_LAYOUT_PRESENTATION_FILES, release.MOBILE_LAYOUT_MANIFEST_PATH,
+        }
+        git.side_effect = [paths(scope), paths(carried)]
+        self.assertIsNone(release.require_website_scope(release.ROUTING_STARTUP_MOBILE_SITE, TARGET,
+                                                       include_core=True, native_publication=native))
+        git.side_effect = [paths(scope), paths(carried | {"deploy/recharge-core/Dockerfile"})]
+        with self.assertRaisesRegex(RuntimeError, "payment_approval_running_native_scope_mismatch"):
+            release.require_website_scope(release.ROUTING_STARTUP_MOBILE_SITE, TARGET,
+                                          include_core=True, native_publication=native)
+
+    @patch("release.require_ancestor")
+    @patch("release.git")
     def test_plus_trial_batch_is_its_own_reviewed_native_scope(self, git, _ancestor):
         scope = release.PLUS_TRIAL_SCOPE
         git.return_value = "\n".join(sorted(scope))

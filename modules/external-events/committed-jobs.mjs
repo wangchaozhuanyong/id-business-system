@@ -14,6 +14,7 @@ export async function consumeCommittedJobs(events, { run, pendingJobs, changed, 
         !/^[a-f0-9]{64}$/.test(event.receipt) || !Array.isArray(event.jobs) || event.jobs.length > 512 ||
         event.jobs.some(job => typeof job !== 'string' || !jobPattern.test(job)) ||
         !Array.isArray(event.scopes) || event.scopes.some(scope => !scopes.has(scope)) ||
+        (event.paymentApprovalChanged !== undefined && event.paymentApprovalChanged !== true) ||
         typeof event.reconcile !== 'boolean') throw new Error('invalid_committed_event');
     const pending = event.reconcile ? await pendingJobs() : [];
     if (!Array.isArray(pending) || pending.some(job => typeof job !== 'string' || !jobPattern.test(job)))

@@ -407,8 +407,41 @@ document.addEventListener('change', event => {
     const editor = event.target.closest('.proxy-country-editor');
     editor.querySelector('[data-proxy-country-save]').disabled = !event.target.value || rechargeProxyCountryEdit.conflict;
 });
+let paymentModeVersion, paymentModeBusy = false, paymentModeLoading;
+async function loadPaymentMode() {
+    if (paymentModeLoading) return paymentModeLoading;
+    const field = document.getElementById('payment-automatic'), save = document.getElementById('payment-mode-save');
+    if (!field) return;
+    paymentModeLoading = (async () => {
+        field.disabled = save.disabled = true;
+        try {
+            const reply = await authFetch('/api/admin/payment-approvals/mode');
+            if (!reply.ok) throw new Error();
+            const mode = await reply.json();
+            if (typeof mode.automatic !== 'boolean' || !Number.isSafeInteger(mode.version)) throw new Error();
+            field.checked = mode.automatic;
+            paymentModeVersion = mode.version;
+            document.getElementById('payment-mode-status').textContent = mode.automatic ? '新单自动付款' : '逐单人工确认';
+            field.disabled = save.disabled = false;
+        } catch { document.getElementById('payment-mode-status').textContent = '暂时无法核对付款模式，请重新打开系统配置。'; }
+    })().finally(() => { paymentModeLoading = undefined; });
+    return paymentModeLoading;
+}
+async function savePaymentMode() {
+    const field = document.getElementById('payment-automatic'), save = document.getElementById('payment-mode-save');
+    if (paymentModeBusy || field.disabled) return;
+    paymentModeBusy = field.disabled = save.disabled = true;
+    try {
+        const reply = await authFetch('/api/admin/payment-approvals/mode', { method: 'PUT',
+            headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ automatic: field.checked, version: paymentModeVersion }) });
+        if (!reply.ok) throw new Error(reply.status === 409 ? '模式已被修改，请核对最新配置。' : '保存未确认，请核对最新配置。');
+        showMessage('付款模式已保存', 'success');
+    } catch (error) { showMessage(error.message, 'error'); }
+    finally { await loadPaymentMode(); paymentModeBusy = false; }
+}
 const originalRoutingLoadRegion = loadRegionConfig;
 loadRegionConfig = async function () {
+    void loadPaymentMode();
     await originalRoutingLoadRegion();
     try { await loadRechargeRouting(); }
     catch (error) {

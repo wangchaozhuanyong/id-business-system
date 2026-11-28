@@ -1846,7 +1846,7 @@ function adaptRechargeProgress(source, workspace) {
             statusMsg.style.display = 'none';
             if (status === 'running') {${workspace ? `
                 const useStep = data.stepsAvailable !== false && detailedStep &&
-                    data.stage !== 'paid' && data.stage !== 'subscription_check';` : ''}
+                    data.stage !== 'payment_approval' && data.stage !== 'paid' && data.stage !== 'subscription_check';` : ''}
                 const label = ${workspace ? 'useStep ? detailedStep : stageLabel(data.stage)' : 'stageLabel(data.stage)'};
                 setProgress(progress, label);
                 ${workspace ? 'if (recordReceipt && !useStep) window.idRechargeWorkspaceLog?.receipt(label);' : ''}
@@ -1858,7 +1858,9 @@ function adaptRechargeProgress(source, workspace) {
             taskCompleted = true;
             clearTaskStatusPolling();
             activeJobKey = '';
-            const result = openingResults[status];
+            const result = data.endedBeforePayment && status === 'failed'
+                ? { ...openingResults.failed, title: '付款前结束', label: '本次执行已在付款提交前结束。' }
+                : openingResults[status];
             const succeeded = status === 'success';
             if (status === 'manual') pendingReview.add(reviewCode(verifiedCdk));
             setProgress(succeeded ? 100 : progress, result.label, result.tone);

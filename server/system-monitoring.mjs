@@ -106,7 +106,7 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
       }])),
       rules: Object.entries(monitorRules).map(([code, { label, category, priority, failures, channel }]) =>
         ({ code, label, category, priority, failures, enabled: settings.rules[code],
-          recipient: channel === 'legacy' ? '已接管的代充接收人' : monitorChannels[channel === 'recharge' ? 'rechargeAdmin' : channel] })),
+          recipient: code === 'recharge_approval' ? '已验证的代充管理员和代充群组' : channel === 'legacy' ? '已接管的代充接收人' : monitorChannels[channel === 'recharge' ? 'rechargeAdmin' : channel] })),
       legacy: { phase: settings.legacy.phase, imported: Boolean(settings.legacy.snapshot),
         available: Boolean(native), since: settings.legacy.since || null, recipients: [...settings.legacy.recipients] }
     };
@@ -116,6 +116,7 @@ export function createSystemMonitoring({ store, origin, native, clock = Date.now
     if (!settings.enabled || !settings.rules[code]) return [];
     const { channel } = monitorRules[code];
     const candidates = channel === 'legacy' ? settings.legacy.phase === 'managed' ? settings.legacy.recipients : []
+      : code === 'recharge_approval' ? ['rechargeAdmin', 'rechargeGroup']
       : channel === 'recharge' ? ['rechargeAdmin'] : [channel];
     const seen = new Set();
     return candidates.filter(target => {

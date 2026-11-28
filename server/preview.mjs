@@ -49,6 +49,7 @@ import {
 import { rechargePartnerGateway } from './recharge-partner-gateway.mjs';
 import { createRechargeOrderSync, orderSyncRoute } from './recharge-order-sync.mjs';
 import { automaticGptOrder } from '../modules/orders/order-opening.mjs';
+import { createApprovalNotifications } from './recharge-approval-notifications.mjs';
 import { createRechargeActivity, rechargeActivityDomain, rechargeActivityRoute } from './recharge-activity.mjs';
 import { createDataChangeStream, dataChangeRoute, dataSourceIdentity } from './change-sync.mjs';
 import { createEmployeeStatisticsHandler, employeeStatisticsRoute } from './employee-statistics.mjs';
@@ -139,6 +140,7 @@ const files = new Map([
     'employee-statistics',
     'order-operations',
     'order-completion',
+    'payment-approvals',
     'recharge-activity',
     'change-sync',
     'search-input',
@@ -372,7 +374,7 @@ export async function startPreview(
   let financeCollection = null, handleFinanceCollection = null, handleOrderExpense = null;
   let handleOrderAuxiliary, handleCardManagement, handleClaudeGoogleSubscriptions, handleSubscriptions, handleRechargeCodes, orderSync;
   let partnerRecharge, partnerPage;
-  let rechargeActivity, rechargeEvents;
+  let rechargeActivity, rechargeEvents, approvalNotices;
   let handleEmployeeStatistics, handleCustomerQuery;
   let handleStaffWorkspaces, handleRenewalHandoff;
   let systemMonitoring, monitoringSources, handleMonitoring, handleProbeReport, handleReadiness, siteObservations, handleSiteManagement;
@@ -453,7 +455,12 @@ export async function startPreview(
         readRecoveries: () => readRestoreEvidence(monitoringBackupReceiptsDirectory),
         readSources: () => monitoringSources?.adminView() || { sources: [], externalProbe: null }
       });
+      if (rechargeConfig) approvalNotices = createApprovalNotifications({
+        list: () => orderRechargeClient.pendingPaymentApprovals(),
+        observe: rows => systemMonitoring?.observe(rows), publish: () => store.notifyChanges()
+      });
       if (rechargeConfig) rechargeActivity = createRechargeActivity({
+        onBackgroundScan: approvalNotices.collect,
         store, client: orderRechargeClient, publicOrigin: secureOrigin, getActor: request => auth?.getActor(request)
       });
       systemMonitoring = createSystemMonitoring({ store, origin: secureOrigin,
@@ -600,7 +607,9 @@ export async function startPreview(
         background: Boolean(rechargeOrderSync && rechargeConfig),
         onStatus: success => monitoringSources?.recordOrderSync(success) });
       if (rechargeEventsConfig) rechargeEvents = createRechargeEvents({ config: rechargeEventsConfig,
-        store, orderSync, activity: rechargeActivity, onReaderStatus: state => monitoringSources?.recordOrderSyncReader(state) });
+        store, orderSync, activity: rechargeActivity,
+        onPaymentApprovals: approvalNotices?.collect,
+        onReaderStatus: state => monitoringSources?.recordOrderSyncReader(state) });
       await installFinanceAssets(assets, { automaticQuotes: true });
     } catch (error) {
       financeCollection?.close();
@@ -630,6 +639,7 @@ export async function startPreview(
   function dataChangeVersions(actor) {
     const versions = { ...store.changeVersions(actor), operators: auth?.changeVersion() || '0',
       ...(rechargeActivity && { [rechargeActivityDomain]: rechargeActivity.version(actor) }) };
+    if (actor.role === 'super' && approvalNotices) versions['payment-approvals'] = approvalNotices.version();
     for (const [scope, revision] of Object.entries(rechargeEvents?.versions() || {}))
       if (Object.hasOwn(versions, scope)) versions[scope] += ':' + revision;
     if (systemMonitoring && Object.hasOwn(versions, 'system-monitoring'))
@@ -1139,6 +1149,7 @@ export async function startPreview(
     server.once('close', () => clearInterval(timer));
   }
   server.once('close', () => manualRemote.close());
+  if (approvalNotices) server.once('close', approvalNotices.close);
   if (rechargeActivity) server.once('close', () => rechargeActivity.close());
   if (rechargeEvents) server.once('close', () => rechargeEvents.close());
   if (store) server.once('close', () => { relay?.close(); handleManagedMailboxQuery?.close(); store.close(); });

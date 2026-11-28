@@ -67,7 +67,7 @@ function outcome(task, startedAt, now) {
   if (task.status === 'maintenance')
     return { status: 'failed', at: now, reason: '原任务因代充服务维护而结束' };
   if (task.status === 'failed') {
-    let reason = '原代充任务已返回失败';
+    let reason = task.message === '本次执行已在付款提交前结束' ? task.message : '原代充任务已返回失败';
     if (/无激活权限|无开通资格|不具备.*资格/.test(message)) reason = '该账号不符合套餐开通条件';
     else if (/^(?:Session 格式或有效期检查失败|授权资料无效)/i.test(message)) reason = '账号授权资料未通过校验';
     return { status: 'failed', at: now, reason };
@@ -115,7 +115,7 @@ function responseJson(response, status, body) {
   response.end(JSON.stringify(body));
 }
 
-export function createRechargeActivity({ store, client, publicOrigin, getActor, clock = Date.now, intervalMs = 5000 }) {
+export function createRechargeActivity({ store, client, publicOrigin, getActor, onBackgroundScan, clock = Date.now, intervalMs = 5000 }) {
   let snapshot = { version: 0, data: null };
   try { snapshot = store.featureDocument(rechargeActivityDomain); } catch { /* Retry with the first scan. */ }
   let coverage = 'checking', timer, running, closed = false, checkedThrough = snapshot.data?.checkedThrough;
@@ -381,7 +381,7 @@ export function createRechargeActivity({ store, client, publicOrigin, getActor, 
     },
     start() {
       const tick = async () => {
-        await collect();
+        await Promise.all([collect(), onBackgroundScan?.()]);
         if (!closed) timer = setTimeout(tick, intervalMs).unref();
       };
       void tick();

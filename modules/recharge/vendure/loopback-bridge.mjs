@@ -24,6 +24,7 @@ const progressLabels = new Map([
   ['started', '已开始执行'],
   ['processing', '处理中'],
   ['payment_details', '填写支付资料'],
+  ['payment_approval', '等待商家确认付款，请勿重复提交'],
   ['paying', '正在付款'],
   ['paid', '付款成功'],
   ['subscription_check', '确认订阅'],
@@ -31,7 +32,7 @@ const progressLabels = new Map([
   ['failed', '执行失败，请联系客服处理。'],
   ['awaiting_review', '结果待核实，请勿重复充值，请联系客服处理。']
 ]);
-const workerProgressStages = new Set(['started', 'processing', 'payment_details', 'paying', 'paid', 'subscription_check']);
+const workerProgressStages = new Set(['started', 'processing', 'payment_details', 'payment_approval', 'paying', 'paid', 'subscription_check']);
 const workerFields = new Map([
   ['claim', []],
   ['progress', ['id', 'leaseToken', 'stage', 'upstreamJobId', 'facts']],

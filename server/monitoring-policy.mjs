@@ -20,6 +20,7 @@ export const monitorRules = Object.freeze({
   sensitive_reads: rule('敏感资料读取量异常', '安全', 'P1', 'security', { failures: 2 }),
   channel_change: rule('监控接收人或规则已变更', '安全', 'P1', 'security', { oneShot: true }),
   recharge_runtime: rule('代充执行器不可用', '代充', 'P1', 'operations', { failures: 3 }),
+  recharge_approval: rule('有一笔充值等待确认付款', '代充', 'P1', 'recharge', { oneShot: true }),
   recharge_review: rule('代充付款待核实', '代充', 'P1', 'recharge'),
   recharge_stuck: rule('代充任务长时间未结束', '代充', 'P1', 'recharge', { failures: 2 }),
   recharge_burst: rule('代充明确失败集中出现', '代充', 'P1', 'recharge'),
@@ -203,6 +204,9 @@ export function boundedCount(value) {
 export function telegramText(item, origin) {
   const { code, kind, at, scope, count, summary, backup } = item;
   if (kind === 'test') return '【AI订阅管理系统】Telegram 渠道测试。此消息不对应真实告警。';
+  if (code === 'recharge_approval') return ['【AI订阅管理系统】有一笔充值等待确认付款。',
+    '请在后台「代充动态 → 待确认付款」核对金额和币种。', '北京时间 ' + beijingTime.format(at),
+    ...(origin ? ['管理后台 ' + origin] : [])].join('\n');
   const { priority, label } = monitorRules[code];
   const prefix = kind === 'recovered' ? '已恢复' : priority === 'P0' ? '紧急' : priority === 'P1' ? '告警' : '摘要';
   const details = summary ? ['成功 ' + summary.success + ' · 失败 ' + summary.failure +

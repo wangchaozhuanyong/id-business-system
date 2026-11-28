@@ -64,6 +64,7 @@
     <script src="./overview-prototype.js?v=20261121-entry-audit" defer></script>
     <script src="./finance-collection.js?v=20261111-free-fx-backup" defer></script>
     <script src="./system-monitoring.js?v=20261113-site-foundation" defer></script>
+    <script src="./payment-approvals.js" defer></script>
     <script src="./recharge-activity.js?v=20261112-result-sound" defer></script>
     <script src="./change-sync.js?v=20261114-sync-conflicts" defer></script>
     <script type="module" src="./page-modules.mjs?v=20261121-recharge-loading"></script>
@@ -132,6 +133,7 @@
     <dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-title"></dialog>
     <div id="mobile-tools-panel" class="mobile-tools-panel" popover="auto" aria-label="工具与界面设置"></div>
     <div id="mobile-entry-actions" class="mobile-entry-actions" hidden></div>
+    <aside class="recharge-activity-toast" id="payment-approval-toast" aria-label="待确认付款" aria-live="polite" hidden></aside>
     <aside class="recharge-activity-toast" id="recharge-activity-toast" aria-label="代充提醒" hidden></aside>
     <div class="recharge-activity-announcement" id="recharge-activity-announcement" role="status" aria-live="polite"></div>
     <div class="toast" id="toast" popover="manual" role="status" aria-live="polite" aria-atomic="true" hidden></div>

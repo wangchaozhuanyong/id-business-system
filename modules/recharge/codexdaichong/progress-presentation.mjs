@@ -1,6 +1,7 @@
 export const RECHARGE_STAGE_LABELS = Object.freeze({
   preparing: '任务已受理，正在准备开通',
   payment_details: '正在填写支付资料',
+  payment_approval: '等待商家确认付款，请勿重复提交',
   paying: '正在付款',
   paid: '付款已确认，等待开通结果',
   subscription_check: '正在确认订阅状态'
@@ -102,6 +103,7 @@ const originalStages = new Map([
   ['正在填写支付资料', 'payment_details'],
   ['正在填写银行卡信息', 'payment_details'],
   ['正在填写账单资料', 'payment_details'],
+  ['等待商家确认付款，请勿重复提交', 'payment_approval'],
   ['正在付款', 'paying'],
   ['正在执行付款', 'paying'],
   ['付款成功', 'paid'],
@@ -228,6 +230,7 @@ export function rechargeBrowserPresentation(path, httpStatus, body) {
   const manualReview =
     task.status === 'manual' ||
     (task.status === 'failed' && originalRechargeNeedsReview(task.message));
+  const endedBeforePayment = task.status === 'failed' && task.message === '本次执行已在付款提交前结束';
   const stage = task.status === 'running' ? originalRechargeStage(task.message) : 'processing';
   const progress = Number.isFinite(task.progress)
     ? Math.max(0, Math.min(task.status === 'success' ? 100 : 99, Math.round(task.progress)))
@@ -244,6 +247,7 @@ export function rechargeBrowserPresentation(path, httpStatus, body) {
       ...(progress === undefined ? {} : { progress }),
       ...(stage !== 'processing' ? { stage } : {}),
       ...(manualReview ? { manualReview: true } : {}),
+      ...(endedBeforePayment ? { endedBeforePayment: true } : {}),
       ...(renewalUnconfirmed ? { renewalUnconfirmed: true } : {}),
       ...(Object.hasOwn(task, 'captcha') ? { captcha: null } : {})
     }

@@ -181,6 +181,7 @@
       }
       if (type === 'snapshot') { snapshots++; connected = true; showStatus(); }
       else changes++;
+      window.IDPaymentApprovals?.onVersion(payload.versions?.['payment-approvals']);
       window.IDRechargeActivity?.onVersion(payload.versions?.['recharge-activity']);
     }
   }
