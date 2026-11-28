@@ -1,0 +1,11 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "description": "生产路径复用调试的结账页等待实现，统一等待标准",
+  "files": {
+    "index.js": {
+      "original": "ce33f8050d5b72185327ddf2a6cb878bd8310c83",
+      "approved": "4002c4584e7599ec1dc279c5c9792a6542891608"
+    }
+  },
+  "patchSha256": "0a0a8bd7ecd8483fa8d0aecf07ee5192961dfc145d0073963cdd401e16838ab0"
+}

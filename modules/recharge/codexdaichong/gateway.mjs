@@ -453,10 +453,7 @@ export function createCodexdaichongGateway({
         actor,
         clientIp: clientAddress(req)
       });
-      if (!result.ready) {
-        console.warn('[codexdaichong-gateway] /status unavailable:', result.reason || 'unknown');
-        return respond(res, 503, 'ChatGPT 充值服务未就绪');
-      }
+      if (!result.ready) return respond(res, 503, 'ChatGPT 充值服务未就绪');
       res.writeHead(200, {
         'Content-Type': 'application/json; charset=utf-8',
         'Cache-Control': 'no-store'

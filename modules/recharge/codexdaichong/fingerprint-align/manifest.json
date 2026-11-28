@@ -1,0 +1,11 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "description": "浏览器 UA/locale/时区对齐客户 session 的 statsigContext，消除自相矛盾的伪造特征",
+  "files": {
+    "index.js": {
+      "original": "34bf05fb921eccdce4e07323b3775def35797506",
+      "approved": "6f487ed07d09bd85f2f84c47583ed1cff73c2f0e"
+    }
+  },
+  "patchSha256": "a40cbe2866aff2961486cec7f4a8a7eb79592159d3d46df813f639ed0c150d80"
+}

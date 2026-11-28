@@ -1,0 +1,25 @@
+diff --git a/index.js b/index.js
+--- a/index.js
++++ b/index.js
+@@ -669,6 +669,21 @@
+             return;
+         }
+ 
++        // UNIFY_WAIT_FROM_DEBUG: 调试那条路径连续成功多次，它的结账页等待（3 秒心跳、
++        // 滚动触发 Stripe 懒加载、180 秒上限、登录态与 URL 校验）是经过验证的实现。
++        // 生产原来直接进 executePaymentWithRetry，缺这套保护，慢线路下会被 3 分钟
++        // 无输出的看门狗误杀。这里让生产复用同一个函数，做到「调试改了生产跟着改」。
++        try {
++            await verifyCheckoutDebugPage(page, {
++                checkoutUrl: checkoutResult?.checkoutUrl || page.url(),
++                timeoutMs: Number(process.env.CHECKOUT_READY_WAIT_MS || 180000)
++            });
++            console.log('[统一等待] 结账页已就绪（与调试同一实现）');
++        } catch (unifyWaitError) {
++            // 不阻断：真实支付流程里有自己的重试与换卡逻辑，这里只做预热与告警。
++            console.log('[统一等待] 警告: ' + String(unifyWaitError.message || unifyWaitError).slice(0, 100));
++        }
++
+         console.log('✅ [步骤] Checkout 页面已打开，开始信用卡支付流程...');
+ 
+         const stripeSessionMatch = String(page.url() || '').match(/(oaics_[a-f0-9]+)/i);

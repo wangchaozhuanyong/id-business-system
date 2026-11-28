@@ -1,0 +1,55 @@
+diff --git a/chatgpt.js b/chatgpt.js
+--- a/chatgpt.js
++++ b/chatgpt.js
+@@ -563,7 +563,9 @@
+     }
+ 
+     console.log('[调试] 正在等待支付表单加载（不填卡、不提交）...');
+-    const deadline = Date.now() + Math.max(1000, Math.min(Number(timeoutMs) || 60000, 120000));
++    // FORM_WAIT_HEARTBEAT: 移动代理加载 Stripe 组件常需 90-180 秒，原来 120 秒上限
++    // 会把还在正常加载的任务判死。放宽到 300 秒，并保证循环内持续输出心跳。
++    const deadline = Date.now() + Math.max(1000, Math.min(Number(timeoutMs) || 60000, 300000));
+     const cardSelector = [
+         'input[autocomplete="cc-number"]', 'input[name="cardnumber"]', 'input[name="number"]',
+         'input[aria-label*="Card number" i]', 'input[data-elements-stable-field-name="cardNumber"]'
+@@ -583,24 +585,27 @@
+         }
+         // Stripe 支付区是懒加载：调试填卡时先滚动到支付区，等卡号框渲染出来（最多 90 秒）。
+         if (!cardPresent && process.env.CHECKOUT_DEBUG_FILL === '1') {
+-            const waitMs = Number(process.env.CHECKOUT_FORM_WAIT_MS || 90000);
++            const waitMs = Number(process.env.CHECKOUT_FORM_WAIT_MS || 180000);
+             for (let waited = 0; waited < waitMs && !cardPresent; waited += 3000) {
+-                await page.evaluate(() => {
+-                    const target = Array.from(document.querySelectorAll('h2, h3, div, span'))
+-                        .find((node) => /Payment method|付款方式/i.test(node.textContent || ''));
+-                    if (target && typeof target.scrollIntoView === 'function') {
+-                        target.scrollIntoView({ block: 'center' });
+-                    } else {
+-                        window.scrollBy(0, 600);
+-                    }
+-                }).catch(() => {});
++                // 页面繁忙时 page.evaluate 会无限等待，造成日志静默被看门狗误杀。
++                await Promise.race([
++                    page.evaluate(() => {
++                        const target = Array.from(document.querySelectorAll('h2, h3, div, span'))
++                            .find((node) => /Payment method|付款方式/i.test(node.textContent || ''));
++                        if (target && typeof target.scrollIntoView === 'function') {
++                            target.scrollIntoView({ block: 'center' });
++                        } else {
++                            window.scrollBy(0, 600);
++                        }
++                    }).catch(() => {}),
++                    new Promise((resolve) => setTimeout(resolve, 5000))
++                ]);
+                 await page.waitForTimeout(1500);
+                 for (const frame of page.frames()) {
+                     if (await frame.locator(cardSelectorForFill).count().catch(() => 0)) { cardPresent = true; break; }
+                 }
+-                if (!cardPresent) {
+-                    console.log('  [调试] 等待支付表单渲染... ' + Math.round(waited / 1000) + 's');
+-                }
++                console.log('  [调试] 等待支付表单渲染... ' + Math.round(waited / 1000) + 's'
++                    + (cardPresent ? '（卡号框已出现）' : ''));
+             }
+             if (!cardPresent) {
+                 console.log('  [调试] 支付组件（Stripe iframe）始终未加载：通常是出口 IP 被风控，需要更换线路后重试');

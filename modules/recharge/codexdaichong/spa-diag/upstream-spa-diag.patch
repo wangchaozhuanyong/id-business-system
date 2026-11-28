@@ -1,0 +1,30 @@
+diff --git a/index.js b/index.js
+--- a/index.js
++++ b/index.js
+@@ -577,6 +577,26 @@
+ 
+         if (!checkoutOpened) {
+             console.log('🧭 [步骤] 正在打开定价页并选择升级套餐...');
++            // SPA_CHECKOUT_DIAG: 记录页面自身发出的建单请求与响应体。
++            // OpenAI 拒绝结账时唯一的一手证据就在这个响应里，缺了它只能靠猜。
++            page.on('response', async (diagRes) => {
++                try {
++                    const diagUrl = String(diagRes.url() || '');
++                    if (!/\/backend-api\/payments\/checkout/.test(diagUrl)) return;
++                    let diagBody = '';
++                    try {
++                        diagBody = String(await diagRes.text()).replace(/\s+/g, ' ').slice(0, 240);
++                    } catch (_) { diagBody = ''; }
++                    console.log(`[诊断] 页面自身建单响应: HTTP ${diagRes.status()} | ${diagBody}`);
++                } catch (_) { }
++            });
++            page.on('requestfailed', (diagReq) => {
++                try {
++                    const diagUrl = String(diagReq.url() || '');
++                    if (!/\/backend-api\/payments\/checkout/.test(diagUrl)) return;
++                    console.log(`[诊断] 页面建单请求失败: ${(diagReq.failure() || {}).errorText || 'unknown'}`);
++                } catch (_) { }
++            });
+             await openPricingCheckout(page, {
+                 region: billingCountry,
+                 planType

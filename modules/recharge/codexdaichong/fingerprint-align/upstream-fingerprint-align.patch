@@ -1,0 +1,57 @@
+diff --git a/index.js b/index.js
+--- a/index.js
++++ b/index.js
+@@ -217,11 +217,50 @@
+     const regionCfg = getRegionConfig(paymentRegion);
+     const browserProfile = getRegionBrowserProfile(paymentRegion);
+ 
++    // FINGERPRINT_ALIGN: 用客户 session 里的真实设备指纹（statsigContext）覆盖写死值。
++    // 否则会出现「客户的真实环境是 Chrome157 / zh-CN / 亚洲时区，我们却发 Chrome147 /
++    // en-US / America/Chicago」——这种自相矛盾比「出口 IP 跨国」更容易被判定为伪造，
++    // 因为跨国可以解释为出差或旅行 VPN，设备指纹突变不能。
++    let sessionFp = null;
++    try {
++        const fpRaw = String(process.env.CHATGPT_SESSION_JSON || '').trim();
++        if (fpRaw.startsWith('{')) {
++            const parsedFp = JSON.parse(fpRaw);
++            sessionFp = parsedFp && parsedFp.statsigContext ? parsedFp.statsigContext : null;
++        }
++    } catch (_) {
++        sessionFp = null;
++    }
++    const fpUserAgent = String(sessionFp && sessionFp.userAgent || '').trim();
++    const fpLocale = String(sessionFp && sessionFp.locale || '').trim();
++    const fpCountry = String(sessionFp && sessionFp.country || '').trim().toUpperCase();
++    const SESSION_TIMEZONES = {
++        MY: 'Asia/Kuala_Lumpur', PH: 'Asia/Manila', EG: 'Africa/Cairo', SG: 'Asia/Singapore',
++        US: 'America/New_York', ID: 'Asia/Jakarta', TH: 'Asia/Bangkok', VN: 'Asia/Ho_Chi_Minh',
++        CN: 'Asia/Shanghai', HK: 'Asia/Hong_Kong', TW: 'Asia/Taipei', JP: 'Asia/Tokyo',
++        KR: 'Asia/Seoul', IN: 'Asia/Kolkata', AE: 'Asia/Dubai', SA: 'Asia/Riyadh',
++        GB: 'Europe/London', DE: 'Europe/Berlin', FR: 'Europe/Paris', IT: 'Europe/Rome',
++        ES: 'Europe/Madrid', NL: 'Europe/Amsterdam', RU: 'Europe/Moscow', TR: 'Europe/Istanbul',
++        AU: 'Australia/Sydney', CA: 'America/Toronto', BR: 'America/Sao_Paulo',
++        MX: 'America/Mexico_City', AR: 'America/Argentina/Buenos_Aires', NG: 'Africa/Lagos',
++        KE: 'Africa/Nairobi', ZA: 'Africa/Johannesburg', PK: 'Asia/Karachi',
++        BD: 'Asia/Dhaka', LK: 'Asia/Colombo', NP: 'Asia/Kathmandu', KH: 'Asia/Phnom_Penh',
++        MM: 'Asia/Yangon', MN: 'Asia/Ulaanbaatar', KZ: 'Asia/Almaty', UA: 'Europe/Kyiv'
++    };
++    const fpTimezone = SESSION_TIMEZONES[fpCountry] || '';
++    if (fpUserAgent || fpLocale || fpTimezone) {
++        console.log('[指纹] 采用客户真实环境: '
++            + 'ua=' + (fpUserAgent ? fpUserAgent.slice(-28) : '默认')
++            + ' locale=' + (fpLocale || '默认')
++            + ' tz=' + (fpTimezone || '默认')
++            + ' (session国家=' + (fpCountry || '未知') + ')');
++    }
++
+     const contextOptions = {
+-        userAgent: realUserAgent,
++        userAgent: fpUserAgent || realUserAgent,
+         viewport,
+-        locale: browserProfile.locale,
+-        timezoneId: browserProfile.timezoneId,
++        locale: fpLocale || browserProfile.locale,
++        timezoneId: fpTimezone || browserProfile.timezoneId,
+         screen: { width: 1920, height: 1080 },
+         deviceScaleFactor: 1,
+         isMobile: false,

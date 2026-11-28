@@ -1,0 +1,75 @@
+diff --git a/stripe-payment.js b/stripe-payment.js
+--- a/stripe-payment.js
++++ b/stripe-payment.js
+@@ -601,7 +601,9 @@
+ 
+         // 等待账单地址区域出现（chatgpt.com/checkout 在填完卡号后才会展示）
+         console.log('[Stripe] Step 5: 等待账单地址表单出现...');
+-        await waitForBillingFields(page, 40000); // BILLING_TIMEOUT_TUNED
++        // WAIT_TUNE: 这个等待的判定条件对当前 Stripe DOM 永远不成立，等满 40 秒才进
++        // 下一步纯属浪费；Step 6 自己会等待并重试填写，所以缩短到 8 秒即可。
++        await waitForBillingFields(page, 8000); // BILLING_TIMEOUT_TUNED
+         await page.waitForTimeout(1200);
+ 
+         holderName = generateRandomName();
+@@ -1871,12 +1873,16 @@
+     // SELECT_FAST_CONFIRM: 内层往往已经选成功，但它在等一个永远不来的信号（下拉关闭等），
+     // 于是外层只能空等到 12 秒超时，白等十几秒。这里改成轮询读回控件当前值，
+     // 一旦是目标国家就立即判定成功；只有真的没选上才走超时分支。
++    // WAIT_TUNE: 成功后置位，避免那个无法取消的 setTimeout 事后打印误导性的超时提示。
++    let countrySettled = false;
+     const confirmed = new Promise((resolve) => {
+         const tick = async () => {
++            if (countrySettled) return;
+             const current = await getCurrentBillingCountryValue(page).catch(() => null);
+             const label = String(current && current.label || '');
+             const value = String(current && current.value || '').toUpperCase();
+             if (value === 'US' || /united\s*states|美国/i.test(label)) {
++                countrySettled = true;
+                 console.log('  [Stripe] ✅ 国家已确认: ' + (label || value) + '（读回校验）');
+                 return resolve(true);
+             }
+@@ -1885,7 +1891,7 @@
+         setTimeout(tick, 1000);
+     });
+     const timed = new Promise((resolve) => setTimeout(() => {
+-        console.log('  [Stripe] ⚠️ 选择国家超时（12s），继续填后续字段');
++        if (!countrySettled) console.log('  [Stripe] ⚠️ 选择国家超时（12s），继续填后续字段');
+         resolve(false);
+     }, 12000));
+     return Promise.race([attempt, confirmed, timed]);
+@@ -1933,9 +1939,11 @@
+         }
+     })();
+     // SELECT_FAST_CONFIRM: 州下拉同样会「已选成功但等不到信号」，改成读回校验快速确认。
++    let stateSettled = false;
+     const stateConfirmed = new Promise((resolve) => {
+         const wanted = [stateFullName, stateRaw].filter(Boolean).map((v) => String(v).toLowerCase());
+         const tick = async () => {
++            if (stateSettled) return;
+             const current = await page.evaluate(() => {
+                 const els = [...document.querySelectorAll('select')];
+                 const el = els.find((e) => /state|province|address-level1/i.test(
+@@ -1946,6 +1954,7 @@
+             }).catch(() => '');
+             const text = String(current || '').toLowerCase();
+             if (text && wanted.some((w) => text.includes(w) || w.includes(text))) {
++                stateSettled = true;
+                 console.log('  [Stripe] ✅ 州已确认: ' + current + '（读回校验）');
+                 return resolve(true);
+             }
+@@ -1953,11 +1962,11 @@
+         };
+         setTimeout(tick, 1000);
+     });
+-    const timed = new Promise((resolve) => setTimeout(() => {
+-        console.log('  [Stripe] ⚠️ 选择州超时（10s），继续后续步骤');
++    const stateTimed = new Promise((resolve) => setTimeout(() => {
++        if (!stateSettled) console.log('  [Stripe] ⚠️ 选择州超时（10s），继续后续步骤');
+         resolve(false);
+     }, 10000));
+-    return Promise.race([attempt, stateConfirmed, timed]);
++    return Promise.race([attempt, stateConfirmed, stateTimed]);
+ }
+ async function locateOpenAiBillingHeading(page) {
+     const heading = page.getByText(/^Billing address$|^账单地址$/i).first();

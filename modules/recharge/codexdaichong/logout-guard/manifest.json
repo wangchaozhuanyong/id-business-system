@@ -1,0 +1,11 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "description": "拦截 /auth/logout 导航并移除会误点账号菜单的选择器，避免误登出导致账号掉线",
+  "files": {
+    "pricing-checkout.js": {
+      "original": "50326b3273127acee555512907bfd81da711521a",
+      "approved": "76252b56f1d6bd15b944ac78cb3cdc032bf98a18"
+    }
+  },
+  "patchSha256": "34fccddba246fc97693754f45b65ad52257acf62e617c60e228fef37258bf913"
+}

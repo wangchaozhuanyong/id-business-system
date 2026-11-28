@@ -1,0 +1,12 @@
+diff --git a/chatgpt.js b/chatgpt.js
+--- a/chatgpt.js
++++ b/chatgpt.js
+@@ -667,7 +667,7 @@
+             const count = await inputs.count().catch(() => 0);
+             for (let index = 0; index < count; index++) {
+                 if (await inputs.nth(index).isVisible().catch(() => false)) {
+-                    console.log('✅ [调试] 支付表单已加载，调试已停止（未填卡、未付款）');
++                    console.log('✅ [调试] 支付表单已加载（未开启自动填卡，MSGFIX2 停在此处）');
+                     return { checkoutUrl: page.url() };
+                 }
+             }

@@ -1,0 +1,15 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "description": "收窄 Authorization 注入到 backend-api，避免全局 Bearer 触发 401/signOut 与吊销会话；放宽 Plus 按钮文字匹配",
+  "files": {
+    "session-auth.js": {
+      "original": "a280ebb367324069c7cc2ddcdfd6c877030c1764",
+      "approved": "622d40ed16c06d36986cdb2fdc678019f4eef5f6"
+    },
+    "pricing-checkout.js": {
+      "original": "bb94a3e7adacc63f68c373409b9b0c2e3860f666",
+      "approved": "48027ca0806ffa24d86061b3901ed8478420228d"
+    }
+  },
+  "patchSha256": "3ca4cc844ff90cd1caaa51daab3629e0c1977d14d7bf7581f680386e180653fe"
+}

@@ -1,0 +1,11 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "description": "代理连通性探测改用 HTTPS 并允许失败继续，避免明文探测超时把整单打死",
+  "files": {
+    "index.js": {
+      "original": "d0f5da14a76952b1af086aefe3e20393937d028a",
+      "approved": "34bf05fb921eccdce4e07323b3775def35797506"
+    }
+  },
+  "patchSha256": "95c9eebeb0f6c16c5793a6b60434f2e84c60618a953745322dfa57a8b59e1da0"
+}

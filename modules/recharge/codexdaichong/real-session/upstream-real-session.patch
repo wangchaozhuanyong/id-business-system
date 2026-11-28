@@ -1,0 +1,39 @@
+diff --git a/session-auth.js b/session-auth.js
+--- a/session-auth.js
++++ b/session-auth.js
+@@ -599,6 +599,13 @@
+         };
+     }, sessionData);
+ 
++    // REAL_SESSION_PASSTHROUGH: 默认放行真实 /api/auth/session，不再用客户导出的
++    // JSON 顶替。原实现让前端拿到的是导出那一刻的旧 accessToken；点订阅时前端拿它
++    // 去请求结账接口，一旦过期就返回 401，NextAuth 收到 401 立即 signOut → 掉线。
++    // 这正是「登录正常、一点订阅就掉线」的直接原因。放行后 cookie 有效就会返回新鲜令牌。
++    if (String(process.env.CHATGPT_SESSION_MOCK || '') !== '1')
++        await context.route(/\/api\/auth\/session(\?.*)?$/, (route) => route.continue());
++    else
+     await context.route(/\/api\/auth\/session(\?.*)?$/, async (route) => {
+         await route.fulfill({
+             status: 200,
+@@ -607,6 +614,9 @@
+         });
+     });
+ 
++    if (String(process.env.CHATGPT_SESSION_MOCK || '') !== '1')
++        await context.route(/\/api\/auth\/csrf(\?.*)?$/, (route) => route.continue());
++    else
+     await context.route(/\/api\/auth\/csrf(\?.*)?$/, async (route) => {
+         await route.fulfill({
+             status: 200,
+@@ -636,7 +646,10 @@
+         const isBackendApi = /\/backend-api\//.test(url);
+         const isDocumentOrAsset = ['document', 'script', 'stylesheet', 'image', 'font', 'media', 'manifest', 'other']
+             .includes(resourceType);
+-        if (isBackendApi && !isDocumentOrAsset && !route.request().headers().authorization) {
++        // 默认不注入 Bearer：前端会从真实的 /api/auth/session 拿到新鲜令牌自行携带。
++        // 强行覆盖成导出时的旧令牌，反而会在结账等接口上触发 401 → signOut。
++        const bearerInject = String(process.env.CHATGPT_API_BEARER || '') === '1';
++        if (bearerInject && isBackendApi && !isDocumentOrAsset && !route.request().headers().authorization) {
+             await route.continue({
+                 headers: {
+                     ...route.request().headers(),

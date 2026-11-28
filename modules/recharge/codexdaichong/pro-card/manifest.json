@@ -1,0 +1,11 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "description": "定价页 Pro 卡片定位 + 结账页档位切换校验（档位不符即停止）",
+  "files": {
+    "pricing-checkout.js": {
+      "original": "a2a0fc6ee291fa320a996c97c65d9982c1972694",
+      "approved": "50326b3273127acee555512907bfd81da711521a"
+    }
+  },
+  "patchSha256": "ea0104431656f558dd91e6a64257598cb81e516838b25467f5b7b8f6551b6b6b"
+}

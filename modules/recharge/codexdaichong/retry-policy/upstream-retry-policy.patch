@@ -1,0 +1,65 @@
+diff --git a/server.js b/server.js
+--- a/server.js
++++ b/server.js
+@@ -79,7 +79,7 @@
+ const ADMIN_REFRESH_AFTER_MS = adminAuth.ADMIN_REFRESH_AFTER_MS;
+ const PROCESS_IDLE_TIMEOUT_MS = Number(process.env.PROCESS_IDLE_TIMEOUT_MS) || (3 * 60 * 1000);
+ // 失败任务转人工审核；不在后台自动重试，以免重复开卡和重复扣费。
+-const MAX_PROCESS_ATTEMPTS = Math.max(1, Number(process.env.MAX_PROCESS_ATTEMPTS) || 1);
++const MAX_PROCESS_ATTEMPTS = 1;
+ const WS_HEARTBEAT_PING_TYPE = 'ping';
+ const WS_HEARTBEAT_PONG_TYPE = 'pong';
+ const ACCESS_DEACTIVATED_MESSAGES_URL = '';
+@@ -1250,23 +1250,25 @@
+         };
+     }
+ 
++    // 定价页未渲染完成/线路慢导致找不到按钮：未填卡未提交，不可能扣费，可换线路重试。
+     if (normalized.includes('未找到') && normalized.includes('升级按钮')) {
+         return {
+-            status: 'failed',
+-            message: runtimeError || '定价页未找到对应套餐升级按钮，请确认账号可升级',
++            status: 'retry',
++            message: '定价页未就绪，未找到升级按钮，已换线路重试',
+             reachedPayment: false,
+-            shouldRetry: false,
++            shouldRetry: true,
+             deletePhone: false,
+             deleteCard: false
+         };
+     }
+ 
++    // 点击升级后页面未跳转（多为线路慢/页面未就绪）：未填卡未提交，不可能扣费，可换线路重试。
+     if (normalized.includes('等待 Checkout 页面超时')) {
+         return {
+-            status: 'failed',
+-            message: runtimeError || '点击升级后未跳转到 Checkout 页面',
++            status: 'retry',
++            message: '点击升级后未跳转到 Checkout 页面，已换线路重试',
+             reachedPayment: false,
+-            shouldRetry: false,
++            shouldRetry: true,
+             deletePhone: false,
+             deleteCard: false
+         };
+@@ -1436,20 +1438,6 @@
+             deletePhone: false,
+             deleteCard: false
+         };
+-    }
+-
+-    // 支付组件（Stripe iframe）始终未加载：页面尚未填卡、未提交，不可能产生扣费，可换线路重试。
+-    if (normalized.includes('支付组件（Stripe iframe）始终未加载')
+-        || normalized.includes('支付表单未能加载')
+-        || normalized.includes('Checkout 支付表单未能加载')) {
+-        return {
+-            status: 'retry',
+-            message: '支付组件未加载（出口 IP 被风控），已换线路重试',
+-            reachedPayment: false,
+-            shouldRetry: true,
+-            deletePhone: false,
+-            deleteCard: false
+-        };
+     }
+ 
+     // 已进入 Stripe/Checkout 支付流程后，任何失败都不再整单重试

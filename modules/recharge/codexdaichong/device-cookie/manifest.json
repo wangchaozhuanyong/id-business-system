@@ -1,0 +1,11 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "description": "从 statsigContext.deviceId 取设备指纹注入 oai-did，并从 account.id 注入 _account",
+  "files": {
+    "session-auth.js": {
+      "original": "622d40ed16c06d36986cdb2fdc678019f4eef5f6",
+      "approved": "37c6e2eb1961f6990deb974c6bb232e66fc5a024"
+    }
+  },
+  "patchSha256": "e7381a6a7b306857a8d3b0e937f820947ae0416c66f1726b0543700206672f2f"
+}

@@ -1,0 +1,18 @@
+diff --git a/server.js b/server.js
+--- a/server.js
++++ b/server.js
+@@ -4194,9 +4194,11 @@
+         const sessionCountry = String(regionSession?.statsigContext?.country || '').toUpperCase();
+         const targetRegion = String(region || '').toUpperCase();
+         if (sessionCountry && targetRegion && sessionCountry !== targetRegion) {
+-            throw new Error(
+-                `账号登录地区(${sessionCountry}) 与支付地区(${targetRegion}) 不一致，`
+-                + `上游会吊销该会话并让客户掉线。请在 ${targetRegion} 网络环境下重新登录后导出 session JSON。`
++            // REGION_SESSION_WARN_ONLY: 只提示，不再阻断。代充业务的常态就是客户账号不在
++            // 支付地区登录，硬拒绝会让所有订单无法执行。风险由设备指纹一致性和单次使用来控制。
++            console.warn(
++                `[风控提示] 账号登录地区(${sessionCountry}) 与支付地区(${targetRegion}) 不一致；`
++                + '继续执行，但该会话有被上游吊销的可能（客户可能需要重新登录）。'
+             );
+         }
+     } catch (regionError) {

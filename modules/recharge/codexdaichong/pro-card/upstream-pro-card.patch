@@ -1,0 +1,152 @@
+diff --git a/pricing-checkout.js b/pricing-checkout.js
+--- a/pricing-checkout.js
++++ b/pricing-checkout.js
+@@ -782,10 +782,31 @@
+         await title.filter({ visible: true }).waitFor({ state: 'visible', timeout: 10000 });
+     }
+     const heading = await requireVisibleOne(title, ' Pro 套餐标题');
+-    const card = heading.locator('xpath=ancestor::*[self::div or self::section or self::article][.//*[@role="radiogroup"]][.//button[not(@role="radio")]][1]');
+-    if (await card.getByRole('heading', { name: /^(?:ChatGPT\s+)?(?:Free|Go|Plus(?:\s+.*)?|Business|Team|Enterprise|免费版)$/i }).count()) {
++    // PROCARD_DOM_ALIGNED: 定价页 Pro 卡片本身没有 radiogroup（档位在下一层 Configure 页）
++    // 原逻辑要求祖先必须含 radiogroup，会圈到整个套餐列表而误判范围不明确
++    // 改为逐层向上，取不含其它套餐标题且有按钮的最近容器
++    let card = null;
++    for (let depth = 1; depth <= 8 && !card; depth += 1) {
++        const candidate = heading.locator('xpath=ancestor::*[' + depth + ']').first();
++        if (await candidate.count().catch(() => 0) === 0) break;
++        const foreign = await candidate.getByRole('heading', { name: /^(?:ChatGPT\s+)?(?:Free|Go|Plus(?:\s+.*)?|Business|Team|Enterprise|免费版)$/i }).count().catch(() => 0);
++        if (foreign > 0) continue;
++        const buttonCount = await candidate.getByRole('button').count().catch(() => 0);
++        if (buttonCount > 0) card = candidate;
++    }
++    if (!card) {
+         throw new Error('Pro 套餐卡片范围不明确，已停止开通');
+     }
++    const tierGroupCount = await card.locator('[role="radiogroup"]').count().catch(() => 0);
++    if (tierGroupCount === 0) {
++        console.log('[Pricing] Pro 卡片无档位选择器，直接点开通（档位留给 Configure 页）');
++        const directAction = await requireVisibleOne(card.getByRole('button', {
++            name: /^(?:Get started|Upgrade|Get Pro)$/i
++        }), ' Pro 开通按钮');
++        if (!(await directAction.isEnabled())) throw new Error('Pro 开通按钮不可用，已停止开通');
++        await directAction.click({ timeout: 10000 });
++        return { tier, currency, amount: null, tierDeferred: true };
++    }
+     const group = await requireVisibleOne(card.getByRole('radiogroup', {
+         name: /^Pro\s*(?:用量|usage(?: tier| level)?)$/i
+     }), ' Pro 档位选择器');
+@@ -809,24 +830,107 @@
+     return { tier, currency, amount };
+ }
+ 
++const PRO_TIER_LABEL = Object.freeze({
++    100: /standard/i,
++    200: /more\s*usage/i,
++    500: /max\s*usage/i
++});
++
++async function readCheckedTierText(group) {
++    return (await group.getByRole('radio', { checked: true }).innerText().catch(() => '') || '').replace(/\s+/g, ' ').trim();
++}
++
++async function selectProTierOnCheckout(page, group, tier) {
++    const tierPattern = PRO_TIER_LABEL[String(tier)];
++    if (!tierPattern) return;
++    for (let attempt = 0; attempt < 4; attempt += 1) {
++        const checkedText = await readCheckedTierText(group);
++        if (tierPattern.test(checkedText)) return;
++        const tierRadio = group.getByRole('radio').filter({ hasText: tierPattern }).first();
++        if (await tierRadio.count().catch(() => 0) === 0) {
++            throw new Error(`结账页找不到 Pro ${tier} 档位，已停止开通`);
++        }
++        // 先点控件本身，不行再点它的父级（label 包裹时点父级才生效）
++        await tierRadio.click({ timeout: 8000 }).catch(() => {});
++        for (let i = 0; i < 6; i += 1) {
++            await page.waitForTimeout(700);
++            if (tierPattern.test(await readCheckedTierText(group))) return;
++        }
++        await tierRadio.locator('xpath=..').click({ timeout: 6000 }).catch(() => {});
++        for (let i = 0; i < 6; i += 1) {
++            await page.waitForTimeout(700);
++            if (tierPattern.test(await readCheckedTierText(group))) return;
++        }
++        await tierRadio.focus().catch(() => {});
++        await page.keyboard.press('Space').catch(() => {});
++        for (let i = 0; i < 6; i += 1) {
++            await page.waitForTimeout(700);
++            if (tierPattern.test(await readCheckedTierText(group))) return;
++        }
++    }
++    const stuck = await readCheckedTierText(group);
++    throw new Error(`结账页未能切换到 Pro ${tier} 档位（当前选中: ${stuck.slice(0, 30)}），已停止开通`);
++}
++
+ async function verifyProPricingCheckout(page, { tier, currency, amount }) {
+     const url = new URL(page.url());
+     if (url.origin !== 'https://chatgpt.com' || !url.pathname.startsWith('/checkout/')) {
+         throw new Error('未打开官方 Pro Checkout，已停止开通');
+     }
+-    const pro = page.getByRole('heading', { name: /^ChatGPT Pro$/i });
+-    await pro.waitFor({ state: 'visible', timeout: 15000 }).catch(() => {
+-        throw new Error('结账页未显示 ChatGPT Pro，已停止开通');
+-    });
+-    const amounts = page.getByRole('radio').filter({ hasText: new RegExp(moneyPattern(currency), 'i') });
+-    const group = await requireVisibleOne(page.getByRole('radiogroup').filter({ has: amounts }), '结账页的 Pro 档位选择器');
++    // PROCHECKOUT_TIER: 只等「带金额的档位选择器」真正出现
++    const moneyRe = new RegExp(moneyPattern(currency), 'i');
++    let group = null;
++    for (let attempt = 0; attempt < 30 && !group; attempt += 1) {
++        const upstreamError = await page.getByText(/Checkout could not be completed/i).count().catch(() => 0);
++        if (upstreamError > 0) {
++            throw new Error('结账页返回 Checkout could not be completed，属上游临时错误，已停止开通');
++        }
++        const candidateRadios = page.getByRole('radio').filter({ hasText: moneyRe });
++        const candidateGroup = page.getByRole('radiogroup').filter({ has: candidateRadios });
++        const visibleCount = await candidateGroup.filter({ visible: true }).count().catch(() => 0);
++        if (visibleCount === 1) { group = candidateGroup; break; }
++        await page.waitForTimeout(1500);
++    }
++    if (!group) {
++        throw new Error('无法唯一确认结账页的 Pro 档位选择器，已停止开通');
++    }
++
++    // 切换到目标档位，必须确认已选中，否则宁可停止也不能开错套餐
++    await selectProTierOnCheckout(page, group, tier);
++
++    // 等待金额刷新到稳定值
++    let picked = await readMoneyCents(await readCheckedTierText(group), currency);
++    let stable = 0;
++    for (let i = 0; i < 12 && stable < 2; i += 1) {
++        await page.waitForTimeout(1000);
++        const now = readMoneyCents(await readCheckedTierText(group), currency);
++        if (now !== null && now === picked) stable += 1;
++        else { picked = now; stable = 0; }
++    }
++    if (picked === null) {
++        throw new Error('无法读取结账页所选 Pro 档位金额，已停止开通');
++    }
++
+     const selected = await requireVisibleOne(group.getByRole('radio', { checked: true }), '结账页已选中的 Pro 档位');
++
+     if (amount === 0) {
+         console.log(`✅ [步骤] 已核对 Pro ${tier} 结账档位（0 元试用，继续开通）`);
+         return;
+     }
++    if (amount === null || amount === undefined) {
++        const labelLocator = page.getByText(/^(?:今日应付金额|Due today|Total due today|Total today|Amount due today)$/i).first();
++        let due = null;
++        for (let i = 0; i < 8 && due === null; i += 1) {
++            const dueText = await labelLocator.locator('xpath=..').innerText().catch(() => '');
++            due = readMoneyCents(dueText, currency);
++            if (due === null) await page.waitForTimeout(1000);
++        }
++        const duePart = due === null ? '' : `，Due today ${currency} ${(due / 100).toFixed(2)}`;
++        console.log(`✅ [步骤] 已选中 Pro ${tier} 结账档位 (${currency} ${(picked / 100).toFixed(2)})${duePart}`);
++        return;
++    }
+     const visibleOptions = await group.getByRole('radio').filter({ visible: true }).allTextContents();
+-    const label = await requireVisibleOne(page.getByText(/^(?:今日应付金额|Total due today|Total today|Amount due today)$/i), '结账页今日应付金额标签');
++    const label = await requireVisibleOne(page.getByText(/^(?:今日应付金额|Due today|Total due today|Total today|Amount due today)$/i), '结账页今日应付金额标签');
+     if (readMoneyCents(await selected.innerText(), currency) !== amount
+         || visibleOptions.filter((text) => readMoneyCents(text, currency) === amount).length !== 1
+         || readMoneyCents(await label.locator('xpath=..').innerText(), currency) !== amount) {

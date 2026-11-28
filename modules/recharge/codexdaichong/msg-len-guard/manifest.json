@@ -1,0 +1,11 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "description": "收窄定价页与点击前诊断文本，避免超出 message 字段 255 上限导致写库失败",
+  "files": {
+    "pricing-checkout.js": {
+      "original": "005d68ad0a70ad851cef081e52087da1f44d475b",
+      "approved": "1c1c8571d3e44da2cb7284a812b7c77d7e1d4575"
+    }
+  },
+  "patchSha256": "2e53d9ed30392a4b5e6e78953f94bc943397c02b13ff56761997db47d165edc3"
+}
