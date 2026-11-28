@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+from io import BytesIO
 import json
 import os
 from contextlib import contextmanager
@@ -119,6 +120,26 @@ class WorkerTest(unittest.TestCase):
                                     self.fail('Worker reported readiness without its relay')
                             self.assertEqual(receipt.result(3), b'')
 
+    def test_socks_worker_emits_unauthenticated_local_connect_and_keeps_original_ip_binding(self):
+        body = dict(email='test@example.test', expectedCountry='PH', expectedIp='1.1.1.1',
+                    id='recharge-'+'a'*64, runId='996018b7-2c4c-448b-aa57-5145e5718ee5')
+        binding = {key: body[key] for key in ('expectedCountry', 'expectedIp', 'runId')}
+        for scheme in ('socks', 'socks5', 'socks5h'):
+            for auth in ('', 'pinned%3Aroute:pass%40word@'):
+                url = scheme + '://' + auth + 'proxy.example:1080'
+                data = BytesIO(json.dumps({**body, 'proxyUrl':url}).encode() + b'\n')
+                self.assertEqual(worker.workspace_settings(data), ('recharge', None, 'PH', binding))
+        for auth in ('', 'user@'):
+            data = BytesIO(json.dumps({**body, 'proxyUrl':'socks4://' + auth + 'proxy.example:1080'}).encode() + b'\n')
+            self.assertEqual(worker.workspace_settings(data), ('recharge', None, 'PH', binding))
+        for scheme in ('http', 'https'):
+            url = scheme + '://user:pass%40word@proxy.example:443'
+            data = BytesIO(json.dumps({**body, 'proxyUrl':url}).encode() + b'\n')
+            self.assertEqual(worker.workspace_settings(data), ('recharge', ('user', 'pass@word'), 'PH', binding))
+        data = BytesIO(json.dumps({**body, 'proxyUrl':'socks4://user:password@proxy.example:1080'}).encode() + b'\n')
+        with self.assertRaises(RuntimeError):
+            worker.workspace_settings(data)
+
     def test_gui_listens_only_on_private_unix_socket_and_disables_clipboard(self):
         args = worker.display_command(Path("rfb.sock"))
         for flag, value in (("-rfbport", "-1"), ("-rfbunixmode", "0600"), ("-nolisten", "tcp"),
@@ -127,6 +148,12 @@ class WorkerTest(unittest.TestCase):
         for flag in ("-AcceptCutText=0", "-SendCutText=0", "-SendPrimary=0", "-SetPrimary=0",
                      "-AllowOverride="):
             self.assertIn(flag, args)
+        self.assertIn("-NeverShared", args)
+        self.assertIn("-AlwaysShared", worker.display_command(Path("rfb.sock"), shared=True))
+        verified = worker.browser_command(12345, verify_first=True)
+        self.assertIn("--no-startup-window", verified)
+        self.assertNotIn("--restore-last-session", verified)
+        self.assertNotIn("https://chatgpt.com/", verified)
         browser = worker.browser_command()
         self.assertIn("--restore-last-session", browser)
         self.assertIn("--user-data-dir=/profile", browser)

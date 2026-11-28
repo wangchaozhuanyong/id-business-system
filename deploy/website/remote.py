@@ -1029,19 +1029,24 @@ def check_manual_website_socket(container):
 const http = require('node:http');
 if (process.env.ID_MANUAL_WORKSPACE_SOCKET !== process.argv[1] || process.env.ID_MANUAL_RECHARGE_ONLY !== '0')
   process.exit(2);
-const req = http.get({
-  socketPath: process.env.ID_MANUAL_WORKSPACE_SOCKET,
-  path: '/v1/renewal/status', signal: AbortSignal.timeout(5000)
-}, response => {
-  let body = '';
-  response.setEncoding('utf8');
-  response.on('data', chunk => { body += chunk; if (body.length > 100) req.destroy(); });
-  response.on('end', () => {
-    if (response.statusCode !== 200 || JSON.parse(body).renewalWorkspace !== 1) process.exit(2);
-    console.log('ready');
+const verify = (path, key) => new Promise((resolve, reject) => {
+  const req = http.get({
+    socketPath: process.env.ID_MANUAL_WORKSPACE_SOCKET, path, signal: AbortSignal.timeout(5000)
+  }, async response => {
+    try {
+      let body = '';
+      for await (const chunk of response) {
+        body += chunk;
+        if (body.length > 100) return reject();
+      }
+      if (response.statusCode !== 200 || JSON.parse(body)[key] !== 1) return reject();
+      resolve();
+    } catch { reject(); }
   });
+  req.on('error', reject);
 });
-req.on('error', () => process.exit(2));
+Promise.all([verify('/v1/renewal/status', 'renewalWorkspace'), verify('/v1/recharge/status', 'rechargeBootstrap')])
+  .then(() => console.log('ready'), () => { process.exitCode = 2; });
 """
     require(run(["docker", "exec", "id-business-independent-app", "node", "-e", probe, MANUAL_SOCKET]).strip() == b"ready",
             "manual_workspace_website_broker_unavailable")
@@ -1073,10 +1078,11 @@ def release_with_manual_workspace(plan):
     image = plan["manualWorkspace"]["imageId"]
     sha = plan["sha"]
     base = plan["before"]["components"]["app"]["revision"]
+    routing_adapter = plan["manualWorkspace"].get("routingAdapter") is True
     require(re.fullmatch(r"sha256:[a-f0-9]{64}", image) and not any(plan.get(key) for key in (
-        "adapter", "rechargeCore", "interruptedRelease", "rechargePartnerApi", "vendureRetryReceipt", "customerProgress"
-    )), "invalid_manual_workspace_release_scope")
-    check_baseline(snapshot(), plan["before"])
+        "rechargeCore", "interruptedRelease", "rechargePartnerApi", "vendureRetryReceipt", "customerProgress"
+    )) and bool(plan.get("adapter")) == routing_adapter, "invalid_manual_workspace_release_scope")
+    check_baseline(snapshot(routing_adapter), plan["before"])
     release = ROOT / "releases" / sha
     source, ops = stage(plan, release)
     runtime = release / "manual-runtime"
@@ -1098,6 +1104,11 @@ def release_with_manual_workspace(plan):
     peak = int(offline[1])
     require(peak <= 512, "manual_workspace_host_memory_exceeded")
     require_main(sha)
+    if routing_adapter:
+        plan["manualWorkspace"]["offlinePeakMiB"] = peak
+        plan["manualWorkspace"]["systemDependencyInstalled"] = dependency["systemDependencyInstalled"]
+        return release_website(plan, staged=(source, ops))
+
     old = DROP.read_text()
     expected = website_release_dropin(old, base, ops / "run-app")
     if plan.get("externalEvents"):
@@ -1135,6 +1146,19 @@ def release_with_manual_workspace(plan):
         if installed:
             manual_host_command("deactivate", release, image)
         raise
+
+
+def upgrade_manual_workspace(plan, release):
+    desktop = plan["manualWorkspace"]
+    image = desktop["imageId"]
+    receipt = manual_host_command("upgrade", release, image)
+    previous = receipt.get("previousRevision")
+    require(receipt.get("started") is True and isinstance(previous, str) and
+            re.fullmatch(r"[a-f0-9]{40}", previous) and previous != plan["sha"],
+            "manual_workspace_upgrade_receipt_mismatch")
+    require(manual_host_command("smoke", release, image).get("renewalLifecycleVerified") is True,
+            "renewal_workspace_lifecycle_not_verified")
+    desktop.update(previousRevision=previous, renewalLifecycleVerified=True)
 
 
 def write_website_version(source, sha):
@@ -1394,6 +1418,14 @@ def switch_adapter(plan, source, ops, native_runtime=None):
         require(reported == plan["files"][name], "adapter_source_mismatch")
     require(identity(inspect("recharge-native")) == native, "native_engine_changed")
     return state
+
+
+def check_manual_routing_options(adapter, source):
+    probe = (source / "deploy/website/check-manual-routing.mjs").read_text()
+    result = subprocess.run(["docker", "exec", adapter["id"], "node", "--input-type=module", "-e", probe],
+                            stdin=subprocess.DEVNULL, capture_output=True, timeout=16)
+    require(result.returncode == 0 and result.stdout.strip() == b"manual-routing-ready",
+            "manual_routing_options_unavailable")
 
 
 def install_backup_monitoring(source, sha):
@@ -1834,6 +1866,9 @@ console.log(JSON.stringify(Object.fromEntries(hashes)));
     if plan.get("manualWorkspace"):
         protected_reads += ("/integrations/native-workbench/prototype", "/api/local/native-workbench-prototype/ip-options",
                             "/manual-workspaces/recharge-" + "0" * 64 + "/")
+        if plan["manualWorkspace"].get("routingAdapter") is True:
+            protected_reads += ("/api/local/manual-recharge/routes?plan=plus", "/api/local/manual-recharge/windows",
+                                "/api/local/manual-recharge/occupancy")
     if adapter:
         protected_reads += ("/api/local/subscription-card-status",)
     if presentation_scope(plan) == "subscriptionInvoicePresentation":
@@ -1940,11 +1975,19 @@ def release_website(plan, staged=None):
     with backup as install_recovery:
         if interrupted is None:
             install_backup_monitoring(source, sha)
+        if plan.get("manualWorkspace", {}).get("routingAdapter") is True:
+            require_native_idle()
+            require_main(sha)
+            upgrade_manual_workspace(plan, release)
+            confirm_baseline()
         with core.cutover() if core else nullcontext() as native:
             if interrupted is not None:
                 print("Resuming the adapter and website with the existing native runtime", flush=True)
             adapter = switch_adapter(plan, source, ops, native) if native else (
                 switch_adapter(plan, source, ops) if include_adapter else None)
+            if plan.get("manualWorkspace", {}).get("routingAdapter") is True:
+                check_manual_routing_options(adapter, source)
+                plan["manualWorkspace"]["routingOptionsVerified"] = True
             if interrupted is not None:
                 print("Verified the interrupted adapter before the isolated website canary", flush=True)
                 canary_retried = canary(sha, ops)

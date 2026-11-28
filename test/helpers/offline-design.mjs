@@ -7,7 +7,7 @@ export const origin = 'https://design-layout.invalid';
 let rechargeAssets;
 export async function interceptDesign(context, { beforeDirectory, localFixtures, actor, changeEvents = false, dataVersions,
   documentDelta = false, businessLists = false, skipRechargeAssets = false,
-  scrollbarSelector = '', siteTelemetry = false, localAuthUi = false, rechargePartnerApi = false } = {}) {
+  scrollbarSelector = '', manualRechargeWorkspace = false, siteTelemetry = false, localAuthUi = false, rechargePartnerApi = false } = {}) {
   const unavailable = [],
     external = [];
   if (!skipRechargeAssets) rechargeAssets ??= await loadCodexdaichongAssets();
@@ -140,6 +140,7 @@ export async function interceptDesign(context, { beforeDirectory, localFixtures,
       if (url.pathname === '/' && localFixtures)
         body = body
           .toString()
+          .replace('<head>', manualRechargeWorkspace ? '<head><meta name="id-manual-recharge-workspace" content="enabled">' : '<head>')
           .replace('<head>', siteTelemetry ? '<head><meta name="id-site-observations" content="enabled">' : '<head>')
           .replace('<head>', changeEvents ? '<head><meta name="id-local-data-events" content="enabled">' : '<head>')
           .replace('<head>', documentDelta ? '<head><meta name="id-document-delta" content="enabled">' : '<head>')

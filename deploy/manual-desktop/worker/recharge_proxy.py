@@ -73,7 +73,9 @@ def _site_host(host):
     return any(host == domain or host.endswith('.' + domain) for domain in SITE_DOMAIN_SUFFIXES)
 
 
-def _allowed_host(host):
+def recharge_host_allowed(host):
+    if not isinstance(host, str) or len(host) > 253 or not all(DNS_LABEL.fullmatch(label) for label in host.split('.')):
+        return False
     return host in SUPPORT_HOSTS or _site_host(host) or host == 'js.stripe.com' or host.endswith('.js.stripe.com')
 
 
@@ -176,8 +178,9 @@ async def _close(writer):
 
 
 class WorkerProxy:
-    def __init__(self, relay_path, authorization, allow_host):
+    def __init__(self, relay_path, authorization, allow_host, gate=None):
         self._allow_host = allow_host
+        self._gate = gate
         self._relay_path = relay_path
         self._authorization = authorization
         self._listener = None
@@ -187,6 +190,9 @@ class WorkerProxy:
     @property
     def port(self):
         return self._listener.sockets[0].getsockname()[1]
+
+    def admit_browser(self):
+        self._gate.set()
 
     def _accept(self, reader, writer):
         if self._shutdown_task is not None or len(self._clients) >= MAX_CONNECTIONS:
@@ -205,6 +211,9 @@ class WorkerProxy:
             error = b'403 Forbidden'
             if not self._allow_host(host):
                 return
+            if self._gate is not None and host != PROBE_HOST:
+                # Restored tabs may already be asking for network while Chromium is probed.
+                await asyncio.wait_for(self._gate.wait(), 25)
             error = b'502 Bad Gateway'
             upstream_reader, upstream_writer = await asyncio.wait_for(
                 asyncio.open_unix_connection(self._relay_path, limit=HEADER_LIMIT),
@@ -255,11 +264,12 @@ class WorkerProxy:
         await self.close()
 
 
-async def open_proxy(credentials=None, *, relay_path=RELAY_PATH, renewal=False):
+async def open_proxy(credentials=None, *, relay_path=RELAY_PATH, renewal=False, verify_browser=False):
     """Listen only on the isolated worker's IPv4 loopback."""
     if renewal and credentials is not None:
         raise ProxyError('Renewal workspaces use a credential-free relay')
-    proxy = WorkerProxy(relay_path, _basic_auth(credentials), renewal_host_allowed if renewal else _allowed_host)
+    proxy = WorkerProxy(relay_path, _basic_auth(credentials), renewal_host_allowed if renewal else recharge_host_allowed,
+                        asyncio.Event() if verify_browser else None)
     proxy._listener = await asyncio.start_server(
         proxy._accept, host='127.0.0.1', port=0, family=socket.AF_INET,
         limit=HEADER_LIMIT, backlog=MAX_CONNECTIONS,

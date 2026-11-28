@@ -74,6 +74,14 @@ ADAPTER_RUNTIME_FILES = (
     "deploy/recharge-core/health.mjs",
 )
 ADAPTER_FILES = (*ADAPTER_RUNTIME_FILES, "deploy/recharge-core/canary.py", "deploy/recharge-core/run-recharge.py")
+MANUAL_ROUTING_FILES = tuple("modules/recharge/codexdaichong/" + name for name in (
+    "native-adapter.mjs", "native-routing.mjs", "runtime.mjs", "manual-routing-client.mjs",
+    "manual-routing-service.mjs",
+))
+MANUAL_ROUTING_SCOPE = frozenset((*MANUAL_ROUTING_FILES,
+    "modules/recharge/codexdaichong/native-routing.test.mjs",
+    "modules/recharge/codexdaichong/manual-routing-service.test.mjs",
+))
 NATIVE_PATCH_FILES = {
     f"modules/recharge/codexdaichong/{folder}/{name}"
     for folder, patch in (("card-plans", "upstream-card-plans.patch"),
@@ -288,7 +296,15 @@ def verify_deferred_native_receipt(receipt, approval, before, expected_assets=No
             "assetsSha256": assets_sha}
 
 
-def require_website_scope(base, sha, include_adapter=False, include_core=False, partner_api=False, native_publication=None):
+def require_manual_routing_baseline(adapter_revision, website_revision):
+    require_ancestor(adapter_revision, website_revision)
+    if git("diff", "--name-only", adapter_revision, website_revision, "--",
+           "modules/recharge", "deploy/recharge-core").strip():
+        raise RuntimeError("manual_routing_adapter_baseline_mismatch")
+
+
+def require_website_scope(base, sha, include_adapter=False, include_core=False, partner_api=False,
+                          native_publication=None, manual_workspace=False):
     require_ancestor(base, sha)
     changed = set(git("diff", "--name-only", base, sha, "--", *CORE_PATHS).splitlines())
     # The host backup timer is managed independently from the immutable payment
@@ -323,7 +339,15 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False, 
             raise RuntimeError("partner_api_release_contains_unreviewed_native_inputs")
         require_ancestor(PLUS_TRIAL_MERGE, sha)
         return
-    if include_core:
+    if manual_workspace and include_adapter:
+        if (include_core or partner_api or
+                not set(MANUAL_ROUTING_FILES) <= changed <= MANUAL_ROUTING_SCOPE):
+            raise RuntimeError("manual_routing_release_scope_mismatch")
+        # The updated adapter is mounted onto the already running native revision.
+        if (native.get("imageLabelsVerified") is not True or
+                native.get("identity", {}).get("running") is not True):
+            raise RuntimeError("manual_routing_native_baseline_unverified")
+    elif include_core:
         reviewed_patches = NATIVE_PATCH_FILES | PLUS_TRIAL_PATCH_FILES
         approved_patches = any(required <= changed <= NATIVE_CORE_SCOPE
                                for required in (NATIVE_PATCH_FILES, PLUS_TRIAL_PATCH_FILES))
@@ -529,7 +553,7 @@ def remote(plan):
                             print(line, flush=True)
                 if plan.get("manualWorkspace"):
                     for line in invocation["StandardOutputContent"].splitlines():
-                        if (re.fullmatch(r"manual_workspace_(prepare|check|install|verify|smoke|deactivate)_(started|completed)", line)
+                        if (re.fullmatch(r"manual_workspace_(prepare|check|install|upgrade|verify|smoke|deactivate)_(started|completed)", line)
                                 or re.fullmatch(r'\{"websiteAssetRead": "/[a-zA-Z0-9._/-]+", "httpStatus": [1-5][0-9]{2}\}', line)):
                             print(line, flush=True)
                 for detail in invocation["StandardErrorContent"].splitlines():
@@ -655,7 +679,8 @@ def main(sample_backup_resources=False):
     customer_progress = os.environ.get("RELEASE_CUSTOMER_PROGRESS") == "true"
     resume_interrupted = os.environ.get("RESUME_INTERRUPTED_RELEASE") == "true"
     manual_workspace = os.environ.get("RELEASE_MANUAL_WORKSPACE") == "true"
-    if manual_workspace and any((attempt, inspect_command, include_adapter, include_core, retry_receipt,
+    manual_routing = manual_workspace and include_adapter
+    if manual_workspace and any((attempt, inspect_command, include_core, retry_receipt,
                                  partner_api, customer_progress, resume_interrupted, sample_backup_resources,
                                  os.environ.get("INSPECT_MANUAL_WORKSPACE_HOST") == "true")):
         raise RuntimeError("manual_workspace_release_requires_its_own_operation")
@@ -712,10 +737,13 @@ def main(sample_backup_resources=False):
     print(f"Live website: {base}; free bytes: {before['freeBytes']}", flush=True)
     if base == sha:
         raise RuntimeError("requested_revision_already_running_read_back_the_existing_release")
+    if manual_routing:
+        require_manual_routing_baseline(before["components"]["recharge"]["revision"], base)
     presentation_scope, presentation = None, None
     if not interrupted:
         presentation_scope, presentation = require_website_scope(base, sha, include_adapter, include_core,
-            partner_api=partner_api, native_publication=before.get("nativePublication")) or (None, None)
+            partner_api=partner_api, native_publication=before.get("nativePublication"),
+            manual_workspace=manual_workspace) or (None, None)
     if presentation_scope == "rechargeRedemptionCardImportPresentation" and (retry_receipt or customer_progress):
         raise RuntimeError("recharge_presentation_requires_plain_website")
     deferred_native = None
@@ -888,6 +916,10 @@ def main(sample_backup_resources=False):
                   "deploy/manual-desktop/egress.py", "deploy/manual-desktop/host/provision.py",
                   "deploy/manual-desktop/host/runtime.py", "deploy/manual-desktop/host/check_renewal.py",
                   "deploy/manual-desktop/host/polkit-rpms.json")
+    if manual_routing:
+        files += ("frontend/manual-recharge-workspace.js", "server/manual-browser-records.mjs",
+                  "server/manual-recharge-workspace.mjs", "deploy/website/check-manual-routing.mjs",
+                  *MANUAL_ROUTING_FILES)
     plan = {"operation": "release", "sha": sha, "before": before, "artifacts": artifacts,
             "files": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in files},
             "qualityRun": quality_run, "preflightCommand": preflight_id, 'externalEvents': True}
@@ -896,7 +928,9 @@ def main(sample_backup_resources=False):
     if deployed_native:
         plan["deployedNativeBuildInputs"] = deployed_native
     if include_adapter or interrupted:
-        plan["adapter"] = {"runtimeFiles": ADAPTER_RUNTIME_FILES}
+        runtime_files = tuple(dict.fromkeys((*ADAPTER_RUNTIME_FILES, *MANUAL_ROUTING_FILES))) if manual_routing \
+            else ADAPTER_RUNTIME_FILES
+        plan["adapter"] = {"runtimeFiles": runtime_files}
     if interrupted:
         plan["interruptedRelease"] = interrupted
     if include_core:
@@ -912,6 +946,8 @@ def main(sample_backup_resources=False):
         plan[presentation_scope] = presentation
     if manual_workspace:
         plan["manualWorkspace"] = {"imageId": image_id}
+        if manual_routing:
+            plan["manualWorkspace"]["routingAdapter"] = True
     require_main(sha)
     command_id, receipt = remote(plan)
     if receipt.get("mainSha") != sha or not receipt.get("appCanaryPassed"):
@@ -920,7 +956,11 @@ def main(sample_backup_resources=False):
         desktop = receipt.get("manualWorkspace", {})
         if (desktop.get("imageId") != image_id or desktop.get("browserSandboxVerified") is not True
                 or desktop.get("websiteBrokerVerified") is not True or desktop.get("renewalLifecycleVerified") is not True
-                or desktop.get("maxActive") != 1 or receipt.get("protectedComponentsUnchanged") is not True):
+                or desktop.get("maxActive") != 1 or (
+                    manual_routing and (desktop.get("routingAdapter") is not True
+                                        or desktop.get("routingOptionsVerified") is not True
+                                        or receipt.get("otherProtectedComponentsUnchanged") is not True)
+                ) or (not manual_routing and receipt.get("protectedComponentsUnchanged") is not True)):
             raise RuntimeError(f"manual_workspace_release_receipt_mismatch: {command_id}")
     recovery = receipt.get("portableRecoveryBackup", {})
     if recovery.get("sourceRevision") != sha or recovery.get("programSha256") != plan["files"][BACKUP_OPERATION]:

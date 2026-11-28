@@ -1,7 +1,9 @@
 import { createHash, randomInt } from 'node:crypto';
+import { lookup as dnsLookup } from 'node:dns';
+import { lookup as lookupGateway } from 'node:dns/promises';
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { isIP } from 'node:net';
+import { BlockList, isIP } from 'node:net';
 import { join } from 'node:path';
 import { bitBrowserCountryOptions } from '../bitbrowser/countries.mjs';
 import { isProxyType } from '../bitbrowser/proxy-types.mjs';
@@ -55,6 +57,48 @@ function publicIp(value) {
   return kind === 6 && /^[23][0-9a-f]{0,3}:/i.test(value) && !/^2001:db8/i.test(value) && !value.includes('%');
 }
 
+const nonPublicProxyAddresses = new BlockList();
+nonPublicProxyAddresses.addSubnet('192.0.0.0', 24, 'ipv4');
+nonPublicProxyAddresses.addSubnet('192.88.99.0', 24, 'ipv4');
+nonPublicProxyAddresses.addSubnet('2001::', 23, 'ipv6');
+nonPublicProxyAddresses.addSubnet('2002::', 16, 'ipv6');
+nonPublicProxyAddresses.addSubnet('3fff::', 20, 'ipv6');
+
+const gatewayHost = value => value.replace(/^\[|\]$/g, '').replace(/\.$/, '').toLowerCase();
+
+// The adapter shares the host network. Resolve the configured provider once,
+// reject mixed public/private answers, and use that answer for the actual dial.
+// The URL and TLS hostname stay unchanged for authentication and verification.
+export async function manualProxyDialOptions(proxy, { resolve = lookupGateway, timeout = 3000 } = {}) {
+  const target = new URL(proxy);
+  const host = gatewayHost(target.hostname);
+  const family = isIP(host);
+  let records;
+  if (family) {
+    records = [{ address: host, family }];
+  } else {
+    let timer;
+    try {
+      records = await Promise.race([
+        resolve(host + '.', { all: true }),
+        new Promise((_, reject) => {
+          timer = setTimeout(() => reject(new RechargeRouteError('代理网关 DNS 查询超时')), timeout);
+        })
+      ]);
+    } finally { clearTimeout(timer); }
+  }
+  if (!records.length || records.length > 64 || records.some(({ address, family }) =>
+    !publicIp(address) || isIP(address) !== family || nonPublicProxyAddresses.check(address, 'ipv' + family)))
+    throw new RechargeRouteError('代理网关 DNS 含不可用地址');
+  const pinned = records.find(record => record.family === 4) ?? records[0];
+  const lookup = (name, options, callback) => {
+    if (gatewayHost(name) !== host) return callback(new RechargeRouteError('代理网关主机不匹配'));
+    if (options.all) return callback(null, [pinned]);
+    callback(null, pinned.address, pinned.family);
+  };
+  return { lookup, socketOptions: { lookup } };
+}
+
 export function parseExitTrace(body) {
   if (typeof body !== 'string' || Buffer.byteLength(body) > 16384)
     throw new RechargeRouteError('出口检测返回无效资料');
@@ -66,18 +110,27 @@ export function parseExitTrace(body) {
 }
 
 /** Fixed public destination only. Proxy authentication is never sent as destination data. */
-export function createExitProbe(engineDir) {
+export function createExitProbe(engineDir, { lookup = dnsLookup } = {}) {
   const require = createRequire(join(engineDir, 'package.json'));
   const axios = require('axios');
   const { ProxyAgent } = require('proxy-agent');
-  return async (proxy, timeoutMs = probeTimeoutMs) => {
+  return async (proxy, timeoutMs = probeTimeoutMs, { manual = false } = {}) => {
     const started = performance.now();
     const timeout = Math.max(1, Math.min(probeTimeoutMs, timeoutMs));
-    const agent = proxy ? new ProxyAgent({ getProxyForUrl: () => proxy }) : undefined;
+    const signal = AbortSignal.timeout(timeout);
+    let agent;
     try {
+      const dial = manual ? await manualProxyDialOptions(proxy, { timeout: Math.min(3000, timeout) }) : {};
+      signal.throwIfAborted();
+      agent = proxy ? new ProxyAgent({ getProxyForUrl: () => proxy, ...dial }) : undefined;
       const result = await axios.get(traceEndpoint, {
         ...(agent ? { httpAgent: agent, httpsAgent: agent } : {}),
-        proxy: false, timeout, signal: AbortSignal.timeout(timeout),
+        // SOCKS4 carries an IPv4 destination. Match the browser relay's local
+        // lookup even when the target also has an IPv6 record.
+        ...(manual && proxy?.startsWith('socks4://') && {
+          lookup: (host, options, callback) => lookup(host, { ...options, family: 4 }, callback)
+        }),
+        proxy: false, timeout, signal,
         maxRedirects: 0, maxContentLength: 16384, maxBodyLength: 16384,
         responseType: 'text', transformResponse: [value => value],
         headers: { Accept: 'text/plain' }, validateStatus: status => status === 200
@@ -106,6 +159,42 @@ const json = value => typeof value === 'string' ? JSON.parse(value) : value;
 const safeId = value => Number.isSafeInteger(Number(value)) && Number(value) > 0;
 const labelOf = row => row?.label_country_code ?? null;
 const comparableIp = ip => isIP(ip) === 6 ? new URL(`http://[${ip}]/`).hostname : ip;
+
+// The managed browser relay requires an explicit port. Normalize before the
+// probe and retain that exact URL (including the resolved provider session).
+const manualTransports = Object.freeze({
+  http: 'http', https: 'https', socks4: 'socks4',
+  socks: 'socks5h', socks5: 'socks5h', socks5h: 'socks5h'
+});
+function manualBrowserProxy(raw) {
+  if (typeof raw !== 'string' || raw.length > 2048 || !/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ||
+      /[\s\\?#]/.test(raw)) return null;
+  try {
+    // HTTP uses WHATWG DNS/IDN normalization; the opaque SOCKS scheme does
+    // not. Parse the same authority as HTTP but retain the explicit SOCKS port.
+    const source = new URL(raw);
+    const protocol = source.protocol.slice(0, -1);
+    if (!Object.hasOwn(manualTransports, protocol)) return null;
+    const transport = manualTransports[protocol];
+    const socks = transport === 'socks4' || transport === 'socks5h';
+    const url = socks ? new URL('http:' + raw.slice(raw.indexOf(':') + 1)) : source;
+    const port = source.port || (socks ? '1080' : transport === 'https' ? '443' : '80');
+    if (!url.hostname || url.pathname !== '/' || port === '0') return null;
+    const host = gatewayHost(url.hostname);
+    if (isIP(host) ? !publicIp(host) : !host.includes('.') || /(?:^|\.)(?:local|localhost|internal|lan|home\.arpa)$/i.test(host))
+      return null;
+    const user = decodeURIComponent(url.username), pass = decodeURIComponent(url.password);
+    if (/[\x00-\x1f\x7f]/.test(user + pass) || (raw.includes('@') && !user)) return null;
+    // SOCKS4 has only a USERID; a configured password must not be silently
+    // discarded. Other authenticated transports require both fields.
+    if (transport === 'socks4' ? Boolean(pass) : Boolean(user) !== Boolean(pass)) return null;
+    if (!socks && user.includes(':')) return null;
+    if (transport === 'socks5h' && Math.max(Buffer.byteLength(user), Buffer.byteLength(pass)) > 255) return null;
+    const auth = user ? encodeURIComponent(user) + (pass ? ':' + encodeURIComponent(pass) : '') + '@' : '';
+    const address = transport + '://' + auth + url.hostname.replace(/\.$/, '') + ':' + port;
+    return address.length <= 2048 ? { protocol, address } : null;
+  } catch { return null; }
+}
 
 function requireProxyCountry(value) {
   if (!proxyCountriesByCode.has(value))
@@ -174,30 +263,39 @@ export function createNativeRechargeRouting({ store, engineDir, probe, substitut
       checked_at=VALUES(checked_at), latency_ms=VALUES(latency_ms)`,
     [id, hash, result?.countryCode ?? '', result?.ip ?? '', status, 'Cloudflare trace', result?.latencyMs ?? null]);
   }
-  async function inspectExit(id, raw, resolved, timeout) {
+  async function measureExit(id, raw, resolved, timeout, options) {
     const hash = id ? fingerprint(raw.trim()) : directHash;
-    let result;
     try {
-      result = await exitProbe(resolved, timeout);
+      const result = await exitProbe(resolved, timeout, options);
       if (!publicIp(result?.ip ?? '') || !/^[A-Z]{2}$/.test(result?.countryCode ?? '') || result.countryCode === 'XX')
         throw new RechargeRouteError('检测服务没有提供可核实的国家');
+      return { ...result, configHash: hash };
     } catch {
+      throw new RechargeRouteError('出口国家检测失败，请检查线路后重试');
+    }
+  }
+  async function inspectExit(id, raw, resolved, timeout) {
+    let result;
+    try { result = await measureExit(id, raw, resolved, timeout); }
+    catch {
+      const hash = id ? fingerprint(raw.trim()) : directHash;
       await auxiliary('出口检测失败记录保存失败', () => saveCheck(id, hash, null, 'failed'));
       if (id) await auxiliary('代理检测状态保存失败', () =>
         store.updateProxyAssetCheck(id, { ok: false, error: '出口国家检测失败' }));
       throw new RechargeRouteError('出口国家检测失败，请检查线路后重试');
     }
-    await auxiliary('出口检测成功，检测记录保存失败', () => saveCheck(id, hash, result));
+    await auxiliary('出口检测成功，检测记录保存失败', () => saveCheck(id, result.configHash, result));
     if (id) await auxiliary('出口检测成功，代理检测状态保存失败', () =>
       store.updateProxyAssetCheck(id, { ok: true, ip: result.ip, latencyMs: result.latencyMs }));
-    return { ...result, checkedAt: new Date(now()).toISOString(), configHash: hash };
+    return { ...result, checkedAt: new Date(now()).toISOString() };
   }
   async function proxies() {
     return query(proxyWithLabel + ' ORDER BY p.sort_order ASC, p.id ASC');
   }
-  async function readProxyTypes() {
+  async function readProxyTypes(id) {
     return query(`SELECT p.id, c.config_value AS proxy_type FROM proxy_assets p
-      JOIN app_config c ON c.config_key = CONCAT(?, p.id)`, [proxyTypePrefix]);
+      JOIN app_config c ON c.config_key = CONCAT(?, p.id)` + (id === undefined ? '' : ' WHERE p.id = ?'),
+    id === undefined ? [proxyTypePrefix] : [proxyTypePrefix, id]);
   }
   async function currentProxy(id) {
     const rows = await query(proxyWithLabel + ' WHERE p.id = ?', [id]);
@@ -310,7 +408,7 @@ export function createNativeRechargeRouting({ store, engineDir, probe, substitut
     return selectRoute({ planType: route.planType, region: route.region,
       currency: route.currency, configVersion: route.configVersion }, false);
   }
-  async function rankCandidates(base, rows, deadline) {
+  async function rankCandidates(base, rows, deadline, measureProxy, materialize) {
     const pending = chooseOrder(rows);
     const ranked = [];
     let next = 0;
@@ -319,11 +417,11 @@ export function createNativeRechargeRouting({ store, engineDir, probe, substitut
         const row = pending[next++];
         const raw = String(row.proxy_url);
         const labelCountryCode = labelOf(row);
-        const resolved = substitute(raw);
+        const resolved = materialize(raw);
         const remaining = deadline - now();
         if (remaining <= 0) break;
         let result;
-        try { result = await inspectExit(Number(row.id), raw, resolved, remaining); }
+        try { result = await measureProxy(Number(row.id), raw, resolved, remaining); }
         catch { continue; }
         if (result.countryCode !== base.region || !Number.isFinite(result.latencyMs) ||
             result.latencyMs < 0 || result.latencyMs > remaining) continue;
@@ -332,6 +430,23 @@ export function createNativeRechargeRouting({ store, engineDir, probe, substitut
     }
     await Promise.all(Array.from({ length: Math.min(probeConcurrency, pending.length) }, measure));
     return ranked.sort((a, b) => a.latencyMs - b.latencyMs || a.proxyId - b.proxyId);
+  }
+  async function eligibleRows(active, country, withTypes = false) {
+    const countryCandidates = active.filter(row => labelOf(row) === country || labelOf(row) === null);
+    const types = new Map(countryCandidates.length ? (await readProxyTypes()).map(row => [Number(row.id), row.proxy_type]) : []);
+    const reusable = countryCandidates.filter(row => {
+      const type = types.get(Number(row.id));
+      // A rotating gateway needs a fresh, reusable provider session per probe.
+      return (type !== 'mobile' && type !== 'dynamic_residential') || /\{session\}/i.test(String(row.proxy_url));
+    });
+    return withTypes ? reusable.map(row => ({ ...row, proxyType: types.get(Number(row.id)) || null })) : reusable;
+  }
+  async function rankCountry(base, candidates, measureProxy, materialize = substitute) {
+    const country = base.region;
+    const deadline = now() + selectionTimeoutMs;
+    let ranked = await rankCandidates(base, candidates.filter(row => labelOf(row) === country), deadline, measureProxy, materialize);
+    if (!ranked.length) ranked = await rankCandidates(base, candidates.filter(row => labelOf(row) === null), deadline, measureProxy, materialize);
+    return ranked;
   }
   async function selectRoute(base, requireCurrentPolicy) {
     const country = base.region;
@@ -347,16 +462,8 @@ export function createNativeRechargeRouting({ store, engineDir, probe, substitut
     }
     const active = rows.filter(row => Number(row.is_active) === 1);
     if (!active.length) throw new RechargeRouteError('代理池存在条目，但没有启用的代理；未改为直连');
-    const countryCandidates = active.filter(row => labelOf(row) === country || labelOf(row) === null);
-    const types = new Map(countryCandidates.length ? (await readProxyTypes()).map(row => [Number(row.id), row.proxy_type]) : []);
-    const candidates = countryCandidates.filter(row => {
-      const type = types.get(Number(row.id));
-      // A rotating gateway needs a fresh, reusable provider session per probe.
-      return (type !== 'mobile' && type !== 'dynamic_residential') || /\{session\}/i.test(String(row.proxy_url));
-    });
-    const deadline = now() + selectionTimeoutMs;
-    let ranked = await rankCandidates(base, candidates.filter(row => labelOf(row) === country), deadline);
-    if (!ranked.length) ranked = await rankCandidates(base, candidates.filter(row => labelOf(row) === null), deadline);
+    const candidates = await eligibleRows(active, country);
+    const ranked = await rankCountry(base, candidates, inspectExit);
     const [selected, ...backups] = ranked;
     if (!selected)
       throw new RechargeRouteError(`未找到已核验的 ${ROUTE_REGIONS[country].label}（${country}）可用出口，任务未启动`);
@@ -406,6 +513,70 @@ export function createNativeRechargeRouting({ store, engineDir, probe, substitut
       }
       throw failure ?? new RechargeRouteError('启动前线路核验超时，未启动充值');
     };
+  }
+  // A manual probe never reserves a payment attempt or changes the shared
+  // pool's health/usage counters.
+  async function manualCandidates(country) {
+    const rows = [];
+    for (const row of await proxies()) {
+      if (Number(row.is_active) !== 1) continue;
+      const proxy = manualBrowserProxy(String(row.proxy_url).replace(/\{session\}/gi, 'session'));
+      if (proxy) rows.push({ ...row, protocol: proxy.protocol });
+    }
+    return (await eligibleRows(rows, country, true)).filter(row => row.proxyType === null || isProxyType(row.proxyType));
+  }
+  async function manualOptions(plan) {
+    const config = await policy();
+    if (plan && !Object.hasOwn(config.plans, plan))
+      throw new RechargeRouteError('请选择已配置套餐', 'invalid_plan');
+    const country = config.plans[plan];
+    const candidates = country ? await manualCandidates(country) : [];
+    const checks = candidates.length ? await observations() : [];
+    const byId = new Map(checks.map(check => [check.proxyId, check]));
+    const choices = [];
+    for (const row of candidates) {
+      const check = byId.get(Number(row.id));
+      const currentCheck = check?.status === 'verified' && check.countryCode === country &&
+        check.configHash === fingerprint(row.proxy_url.trim()) && publicIp(check.ip);
+      if (labelOf(row) !== country && !currentCheck) continue;
+      choices.push({ id: String(row.id), name: '线路 #' + row.id, countryCode: country, protocol: row.protocol,
+        ...(currentCheck && { referenceIp: check.ip }) });
+    }
+    return { plans: config.plans, countries: Object.fromEntries(Object.entries(ROUTE_REGIONS)
+      .map(([code, region]) => [code, region.label])), choices };
+  }
+  async function manualProbe(plan, proxyId) {
+    const config = await policy();
+    if (!Object.hasOwn(config.plans, plan) || (proxyId !== 'auto' && !/^[1-9]\d{0,15}$/.test(proxyId)))
+      throw new RechargeRouteError('请选择有效套餐和执行线路', 'invalid_plan');
+    const base = { planType: plan, region: config.plans[plan], configVersion: config.version };
+    let candidates = await manualCandidates(base.region);
+    if (proxyId !== 'auto') {
+      candidates = candidates.filter(row => String(row.id) === proxyId);
+      if (candidates.length && labelOf(candidates[0]) === null &&
+          !(await manualOptions(plan)).choices.some(choice => choice.id === proxyId)) candidates = [];
+    }
+    const [selected] = await rankCountry(base, candidates, (id, raw, address, timeout) => {
+      if (!address) throw new RechargeRouteError('所选代理不支持手动浏览器');
+      return measureExit(id, raw, address, timeout, { manual: true });
+    }, raw => manualBrowserProxy(substitute(raw))?.address);
+    if (!selected) {
+      if (proxyId !== 'auto') throw new RechargeRouteError('所选线路测速未通过，请重测或改选线路');
+      if (!candidates.length) throw new RechargeRouteError('没有符合测速条件的线路，请核对代理池的国家、启用状态、代理协议、认证方式及会话配置。');
+      throw new RechargeRouteError('没有测到符合套餐国家的可用出口，请核对线路连通性和出口国家。');
+    }
+    const source = candidates.find(row => Number(row.id) === selected.proxyId);
+    const route = Object.freeze({ ...selected, proxyType: source.proxyType, protocol: source.protocol });
+    await validateManual(route);
+    return route;
+  }
+  async function validateManual(route) {
+    const [row, types, config] = await Promise.all([currentProxy(route.proxyId), readProxyTypes(route.proxyId), policy()]);
+    const currentType = types.find(type => Number(type.id) === route.proxyId)?.proxy_type || null;
+    if (!row || Number(row.is_active) !== 1 || currentType !== route.proxyType || labelOf(row) !== route.labelCountryCode ||
+        fingerprint(row.proxy_url.trim()) !== route.configHash || config.version !== route.configVersion ||
+        config.plans[route.planType] !== route.region)
+      throw new RechargeRouteError('套餐或代理配置已变更，请重新测速', 'route_version_conflict');
   }
   async function savePolicy(body, actor) {
     if (!body || Object.keys(body).some(key => !['version', 'plans'].includes(key)) ||
@@ -479,6 +650,7 @@ export function createNativeRechargeRouting({ store, engineDir, probe, substitut
   }
   return {
     resolve, nextAttempt, revalidate, checkProxy,
+    manualOptions, manualProbe, validateManual,
     view, savePolicy, checkLocal, handleAdmin,
     verifiedStart,
     describe(route) { return `套餐选路 plan=${route.planType} region=${route.region} currency=${route.currency} network=${route.proxyId ? 'proxy#' + route.proxyId : 'direct'} country=${route.countryCode}`; }

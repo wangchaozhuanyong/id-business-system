@@ -44,11 +44,11 @@
     return $('#bit-addresses-panel');
   }
 
-  function mount(host) {
+  function mount(host, { addressOnly = false } = {}) {
     if (host.querySelector('#bit-addresses-panel')) return;
     const hiddenColumns = A.hiddenTableColumns(endpoint);
     host.innerHTML = `<section class="panel" id="bit-addresses-panel" aria-labelledby="bit-address-heading">
-      <header class="panel-heading bit-workspace-heading bit-address-heading">
+      ${addressOnly ? '' : `<header class="panel-heading bit-workspace-heading bit-address-heading">
         <div class="tabs bit-management-tabs" role="tablist" aria-label="右侧管理">
           <button class="tab" type="button" role="tab" id="bit-address-heading" aria-controls="bit-address-content" data-pane="address">地址管理</button>
           <div data-address-help hidden>${A.titleInfo('地址管理', '生成美国账单地址模板。复制成功后自动移入已使用，使用前请核对。', 'bit-address-help')}</div>
@@ -57,7 +57,7 @@
         <div class="bit-address-heading-tools" data-address-tool>
         <button type="button" class="button primary compact" id="bit-address-generate-open" data-action="bit-address-open-generate" aria-label="生成地址" aria-haspopup="dialog">生成<span class="bit-generate-suffix">地址</span></button></div>
         <div data-renewal-help>${A.titleInfo('账号续费管理', '数量按当前操作员全部登记账号统计。套餐与状态以登记为准，完成手动续费后请更新记录。', 'bit-renewal-help')}</div>
-      </header>
+      </header>`}
       <div class="panel-body bit-address-body" id="bit-address-content" role="tabpanel" aria-labelledby="bit-address-heading">
         <div class="list-controls bit-address-controls">
           <div class="tabs bit-address-tabs" role="tablist" aria-label="地址状态">
@@ -67,7 +67,11 @@
                 ${label}<span class="tab-count">—</span>
               </button>`).join('')}
           </div>
-          <form id="bit-address-filters" class="toolbar bit-address-filters" aria-label="地址查询" novalidate>
+          ${addressOnly ? `<div class="toolbar-right manual-address-actions">
+            <button type="button" id="bit-address-generate-open" class="button primary" data-action="bit-address-open-generate">生成地址</button>
+            ${button('列设置', 'bit-address-columns', '', 'columns', 'aria-expanded="false" aria-controls="bit-address-columns"')}
+            ${button('删除已使用', 'bit-address-delete-used', 'danger', '', 'hidden disabled')}
+          </div>` : `<form id="bit-address-filters" class="toolbar bit-address-filters" aria-label="地址查询" novalidate>
             <div class="toolbar-left">
               <div class="search-field">${A.icon('search')}${input('bit-address-keyword', draft.keyword, 'aria-label="搜索街道地址" placeholder="搜索街道地址" maxlength="80"')}</div>
               <button class="button" type="submit">查询</button>
@@ -77,7 +81,7 @@
               ${button('刷新', 'bit-address-refresh')}
               ${button('一键删除已使用', 'bit-address-delete-used', 'danger', '', 'hidden disabled')}
             </div>
-          </form>
+          </form>`}
         </div>
         <div id="bit-address-tabpanel" role="tabpanel">
           <fieldset id="bit-address-columns" class="bit-address-columns" hidden>
@@ -97,7 +101,7 @@
           </div>
         </div>
       </div>
-      <div id="bit-renewals-content" class="panel-body bit-renewals" role="tabpanel" aria-labelledby="bit-renewals-heading" hidden>
+      ${addressOnly ? '' : `<div id="bit-renewals-content" class="panel-body bit-renewals" role="tabpanel" aria-labelledby="bit-renewals-heading" hidden>
         <div class="bit-renewals-filters">
           <input class="input" type="search" id="bit-renewals-search" data-auto-search aria-label="搜索邮箱、代理或备注" placeholder="搜索邮箱、代理或备注" />
           <select class="select" id="bit-renewals-status" aria-label="续费状态">
@@ -113,9 +117,15 @@
           <tbody></tbody>
         </table>
         <div data-renewal-pagination></div>
-      </div>
+      </div>`}
     </section>`;
     $('.bit-address-tabs', host).addEventListener('keydown', onTabKeydown);
+    if (addressOnly) {
+      renderTabs();
+      renderList();
+      void refresh('', { force: false });
+      return;
+    }
     const panes = $('.bit-management-tabs', host);
     panes.addEventListener('click', event => {
       const tab = event.target.closest('[role="tab"]');
@@ -179,6 +189,7 @@
       if (row) editRenewal(panel, row);
     });
     const entry = host.closest('.bit-login-layout').querySelector('#bit-renewal-entry');
+    if (!entry) return;
     entry.elements.email.addEventListener('paste', pasteRegistrationEmail);
     entry.addEventListener('submit', event => {
       event.preventDefault();
@@ -581,7 +592,16 @@
     void refresh();
   });
 
-  A.modules.bitbrowserAddresses = { mount, selectPane };
+  A.modules.bitbrowserAddresses = {
+    mount, selectPane, formatOpenedAt: openDate, refreshAddress: () => refresh(),
+    get addressSearchDraft() { return draft.keyword; },
+    set addressSearchDraft(keyword) { draft.keyword = keyword; },
+    searchAddress(keyword) {
+      Object.assign(filters, { keyword: keyword.trim(), page: 1 });
+      draft.keyword = keyword;
+      return refresh();
+    }
+  };
   window.IDDesignModules.push({
     id: 'bitbrowser-addresses',
     matches: () => false,

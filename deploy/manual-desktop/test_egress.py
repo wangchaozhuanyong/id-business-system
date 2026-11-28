@@ -4,10 +4,11 @@ import ipaddress
 import os
 from pathlib import Path
 import socket
+import ssl
 import stat
 import tempfile
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 import egress
 from worker.recharge_proxy import open_proxy
@@ -49,6 +50,21 @@ class ResolutionTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('fixture', repr(pinned))
         self.assertNotIn('proxy.example', repr(pinned))
 
+    async def test_socks_gateway_uses_public_pin_policy_and_checks_decoded_credentials(self):
+        loop = asyncio.get_running_loop()
+        for scheme in ('socks', 'socks5', 'socks5h'):
+            url = scheme + '://user%3Aname:pass%40word@egress.example:1080'
+            with patch.object(loop, 'getaddrinfo', AsyncMock(return_value=[record('1.1.1.1', 1080)])) as lookup:
+                pinned = await egress.resolve_proxy(url)
+                self.assertEqual((pinned.address, pinned.port), ('1.1.1.1', 1080))
+                lookup.assert_awaited_once_with('egress.example.', 1080, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP)
+            with patch.object(loop, 'getaddrinfo', AsyncMock(return_value=[record('127.0.0.1', 1080)])):
+                with self.assertRaises(egress.EgressError):
+                    await egress.resolve_proxy(url)
+        for value in ('a:' + 'x' * 256, 'x'*256+':a', 'a:', ':a', 'a:%0A', 'a:%FF%0D'):
+            with self.assertRaises(egress.EgressError):
+                await egress.resolve_proxy('socks5h://' + value + '@1.1.1.1:1080')
+
     async def test_numeric_address_never_resolves_dns(self):
         loop = asyncio.get_running_loop()
         with patch.object(loop, 'getaddrinfo', AsyncMock()) as lookup:
@@ -74,7 +90,7 @@ class ResolutionTests(unittest.IsolatedAsyncioTestCase):
     async def test_rejects_invalid_local_and_special_addresses_without_dns(self):
         loop = asyncio.get_running_loop()
         urls = (
-            'https://proxy.example:8080', 'http://proxy.example', 'http://proxy.example:0',
+            'ftp://proxy.example:8080', 'http://proxy.example', 'http://proxy.example:0',
             'http://proxy.example:65536', 'http://proxy.example:080',
             'http://proxy.example:8080/?', 'http://proxy.example:8080/#',
             'http://proxy.example:8080/route', 'http://localhost:8080',
@@ -88,6 +104,8 @@ class ResolutionTests(unittest.IsolatedAsyncioTestCase):
             'http://proxy.example:8080@127.0.0.1:443',
             'http://user:private%0Avalue@proxy.example:443',
             'http://user:private%value@proxy.example:443',
+            'https://a%3Ab:c@gateway.example:443', 'socks4://user:password@gateway.example:1080',
+            'socks4://empty%00user@gateway.example:1080', 'socks4://:@gateway.example:1080',
         )
         with patch.object(loop, 'getaddrinfo', AsyncMock()) as lookup:
             for url in urls:
@@ -111,6 +129,31 @@ class ResolutionTests(unittest.IsolatedAsyncioTestCase):
             lookup.assert_not_called()
         finally:
             stream.close()
+
+    async def test_tls_proxy_uses_numeric_socket_and_checks_original_hostname_before_forwarding(self):
+        loop = asyncio.get_running_loop()
+        pinned = egress.PinnedProxy('1.1.1.1', 443)
+        async def check_stream(*, sock, limit, ssl, server_hostname):
+            self.assertEqual(server_hostname, 'proxy.example')
+            self.assertTrue(ssl.check_hostname)
+            self.assertEqual(ssl.verify_mode, egress.ssl.CERT_REQUIRED)
+            raise egress.ssl.SSLCertVerificationError('test error')
+
+        async def check_connector(_dir, connect, _uid, _gid, _limits, *, answer_connect):
+            self.assertFalse(answer_connect)
+            await connect(asyncio.StreamReader())
+
+        with patch.object(egress, '_listen_relay', side_effect=check_connector), \
+                patch.object(loop, 'sock_connect', AsyncMock()) as dial, \
+                patch.object(loop, 'getaddrinfo', AsyncMock()) as dns, \
+                patch.object(asyncio, 'open_connection', side_effect=check_stream) as open_stream:
+            with self.assertRaises(ssl.SSLCertVerificationError):
+                await egress.open_relay('unused', pinned, proxy_url='https://user:test@proxy.example:443')
+        self.assertEqual(dial.await_args.args[1], ('1.1.1.1', 443))
+        self.assertEqual(dial.await_count, 1)
+        dns.assert_not_awaited()
+        self.assertEqual(open_stream.await_count, 1)
+        self.assertEqual(open_stream.await_args.kwargs['sock'].fileno(), -1)
 
 
 class RelayTests(unittest.IsolatedAsyncioTestCase):
@@ -166,6 +209,116 @@ class RelayTests(unittest.IsolatedAsyncioTestCase):
         finally:
             writer.close()
             await writer.wait_closed()
+
+    async def test_socks_relay_preserves_session_auth_and_remote_domain_then_forwards_only_tunnel_payload(self):
+        seen = asyncio.Queue()
+        async def gateway(reader, writer):
+            try:
+                greeting = await reader.readexactly(3)
+                writer.write(b'\x05\x02')
+                await writer.drain()
+                version, length = await reader.readexactly(2)
+                name = await reader.readexactly(length)
+                length = (await reader.readexactly(1))[0]
+                password = await reader.readexactly(length)
+                writer.write(b'\x01\x00')
+                await writer.drain()
+                command = await reader.readexactly(5)
+                domain = await reader.readexactly(command[4])
+                port = await reader.readexactly(2)
+                writer.write(b'\x05\x00\x00\x03\x05bound\x00\x00')
+                await writer.drain()
+                data = await reader.read()
+                await seen.put((greeting, version, name, password, command, domain, port, data))
+                writer.write(b'test reply')
+                await writer.drain()
+            finally:
+                writer.close()
+                await writer.wait_closed()
+        upstream = await self.connect_fixture(gateway)
+        url = 'socks5h://session%3A12345:p%40ss%3A%25%E6%B5%8B@1.1.1.1:443'
+        async with await egress.open_relay('relay', self.proxy, proxy_url=url):
+            with patch.object(asyncio.get_running_loop(), 'getaddrinfo', AsyncMock()) as dns:
+                for dest in (b'api.country.is', b'chatgpt.com'):
+                    answer = await self.exchange(connect_request(dest + b':443') + b'test TLS bytes')
+                    self.assertEqual(answer, b'HTTP/1.1 200 Connection Established\r\n\r\ntest reply')
+                    self.assertEqual(await seen.get(), (b'\x05\x01\x02', 1, b'session:12345', 'p@ss:%测'.encode(),
+                        bytes((5, 1, 0, 3, len(dest))), dest, b'\x01\xbb', b'test TLS bytes'))
+                for dest in (b'127.0.0.1', b'evil.example', b'..chatgpt.com'):
+                    self.assertTrue((await self.exchange(connect_request(dest + b':443'))).startswith(b'HTTP/1.1 403'))
+                dns.assert_not_called()
+        self.assertEqual(upstream.await_count, 2)
+        self.assertTrue(all(args.args == (self.proxy,) for args in upstream.await_args_list))
+
+    async def test_socks_rejects_downgrade_wrong_auth_bad_or_truncated_replies_without_retry(self):
+        def source(data):
+            reader = asyncio.StreamReader()
+            reader.feed_data(data)
+            reader.feed_eof()
+            return reader
+        authenticated = b'\x05\x02\x01\x00'
+        replies = (b'\x05\x00', b'\x04\x02', b'\x05\xff', b'\x05\x02\x01\x01', b'\x05\x02\x02\x00',
+                   authenticated + b'\x05\x04\x00\x01', authenticated + b'\x05\x00\x01\x01',
+                   authenticated + b'\x05\x00\x00\x02', authenticated + b'\x05\x00\x00\x03\x00',
+                   authenticated + b'\x05\x00\x00\x04' + bytes(15),
+                   authenticated + b'\x05\x00\x00\x03\x02\x00@\x00\x00')
+        for reply in replies:
+            writer = Mock(drain=AsyncMock(), wait_closed=AsyncMock())
+            dial = AsyncMock(return_value=(source(reply), writer))
+            connect = egress.socks_connector('socks5://test:secret@1.1.1.1:1080', dial)
+            with self.subTest(reply=reply), self.assertRaises(egress.EgressError):
+                await connect(source(connect_request(b'chatgpt.com:443')))
+            dial.assert_awaited_once()
+            writer.close.assert_called_once()
+            self.assertNotIn(b'Proxy-Authorization', b''.join(args.args[0] for args in writer.write.call_args_list))
+        for binding in (b'\x01'+bytes(4), b'\x04'+bytes(16), b'\x03\x05bound'):
+            writer = Mock(drain=AsyncMock(), wait_closed=AsyncMock())
+            dial = AsyncMock(return_value=(source(b'\x05\x00\x05\x00\x00'+binding+b'\x00\x00'), writer))
+            connect = egress.socks_connector('socks5h://1.1.1.1:1080', dial)
+            await connect(source(connect_request(b'api.country.is:443')))
+            self.assertEqual(writer.write.call_args_list[0].args, (b'\x05\x01\x00',))
+
+    async def test_socks4_uses_approved_ipv4_and_optional_user_id_and_refuses_bad_replies(self):
+        loop = asyncio.get_running_loop()
+        for user, reply in [('', b'\x00\x5a' + bytes(6)), ('id%3Aone@', b'\x00\x5a' + bytes(6)),
+                            ('', b'\x00\x5b' + bytes(6)), ('', b'\x04\x5a' + bytes(6)), ('', b'\x00\x5a')]:
+            source = asyncio.StreamReader()
+            source.feed_data(connect_request(b'chatgpt.com:443'))
+            upstream = asyncio.StreamReader()
+            upstream.feed_data(reply)
+            upstream.feed_eof()
+            writer = Mock(drain=AsyncMock(), wait_closed=AsyncMock())
+            dial = AsyncMock(return_value=(upstream, writer))
+            connect = egress.socks_connector('socks4://' + user + '1.1.1.1:1080', dial)
+            with patch.object(loop, 'getaddrinfo', AsyncMock(return_value=[record('8.8.4.4', 443)])) as dns, \
+                    patch.object(egress, '_assigned_to_host', return_value=False):
+                if reply == b'\x00\x5a' + bytes(6):
+                    self.assertEqual(await connect(source), (upstream, writer))
+                else:
+                    with self.assertRaises(egress.EgressError):
+                        await connect(source)
+                    writer.close.assert_called_once()
+            dns.assert_awaited_once_with('chatgpt.com.', 443, family=socket.AF_INET,
+                                          type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP)
+            dial.assert_awaited_once()
+            writer.write.assert_called_once_with(b'\x04\x01\x01\xbb\x08\x08\x04\x04' +
+                                                 (b'id:one' if user else b'') + b'\x00')
+
+    async def test_socks4_rejects_disallowed_targets_before_opening_any_gateway(self):
+        networks = (ipaddress.ip_network('8.8.8.8/32'),)
+        for host, addresses in [('elsewhere.example', ['1.1.1.1']), ('127.0.0.1', ['1.1.1.1']),
+                                ('chatgpt.com', ['127.0.0.1']), ('chatgpt.com', ['::1']),
+                                ('chatgpt.com', ['1.1.1.1', '10.0.0.1']), ('chatgpt.com', ['8.8.8.8'])]:
+            reader = asyncio.StreamReader()
+            reader.feed_data(connect_request(host.encode() + b':443'))
+            dial = AsyncMock()
+            connect = egress.socks_connector('socks4://1.1.1.1:1080', dial, blocked_networks=networks)
+            records = [record(address, 443) for address in addresses]
+            with patch.object(asyncio.get_running_loop(), 'getaddrinfo', AsyncMock(return_value=records)) as dns, \
+                    self.assertRaises(egress.EgressError):
+                await connect(reader)
+            self.assertEqual(dns.await_count, int(host == 'chatgpt.com'))
+            dial.assert_not_awaited()
 
     async def test_renewal_connect_pins_one_public_answer_and_passes_opaque_bytes(self):
         received = asyncio.get_running_loop().create_future()

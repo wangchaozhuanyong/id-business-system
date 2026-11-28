@@ -7,6 +7,8 @@ import { CODEXDAICHONG_REVISION, verifyCodexdaichongSource } from './prepare.mjs
 import { probeCodexdaichongRuntime } from './runtime-health.mjs';
 import { createNativeAdminTokenIssuer, createNativeCardStop, startNativeRechargeAdapter } from './native-adapter.mjs';
 import { verifyNativeNetworkIsolation } from './native-network.mjs';
+import { createNativeRechargeRouting } from './native-routing.mjs';
+import { createManualRouteTickets } from './manual-routing-service.mjs';
 import { resolveNativeAdminTokenSecret } from './native-secret.mjs';
 
 const runtimeRoot = fileURLToPath(new URL('../../../.runtime/', import.meta.url));
@@ -221,8 +223,15 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
               return rows.length === 1 ? Number(rows[0].config_value) : NaN;
             }
           });
+          const manualRoutes = createManualRouteTickets(createNativeRechargeRouting({
+            engineDir: directory,
+            store: { async runQuery(sql, values = []) {
+              const [rows] = await pool.execute({ sql, timeout: 3000 }, values);
+              return rows;
+            } }
+          }));
           const adapter = await startNativeRechargeAdapter({ nativeUrl, secret: env.ID_RECHARGE_BRIDGE_SECRET,
-            getNativeAdminToken, stopCardUse: createNativeCardStop(pool) }, Number(env.PORT));
+            getNativeAdminToken, manualRoutes, stopCardUse: createNativeCardStop(pool) }, Number(env.PORT));
           let closing;
           const stop = () => {
             closing ??= adapter.close().finally(() => pool.end()).catch(() => { process.exitCode = 1; });
