@@ -1,5 +1,7 @@
 import { createServer, request as httpRequest } from 'node:http';
 import { verifyRechargeAssertion } from '../assertion.mjs';
+import { handleManualRouting } from './manual-routing-service.mjs';
+import { manualRoutingPrefix } from './manual-routing-client.mjs';
 import { validateRuntimeOrigin } from './runtime-health.mjs';
 
 const methods = new Set(['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE']);
@@ -104,7 +106,7 @@ export function createNativeAdminTokenIssuer({ issueSignedToken, readPasswordVer
 }
 
 /** Separate transport only. Never patches, imports or wraps the native payment implementation. */
-export function createNativeRechargeAdapter({ nativeUrl, secret, getNativeAdminToken, stopCardUse }) {
+export function createNativeRechargeAdapter({ nativeUrl, secret, getNativeAdminToken, stopCardUse, manualRoutes }) {
   const native = new URL(validateRuntimeOrigin(nativeUrl));
   if (typeof secret !== 'string' || Buffer.byteLength(secret) < 32 || typeof getNativeAdminToken !== 'function')
     throw new TypeError('原版外围接入需要服务签名和原生鉴权');
@@ -117,6 +119,7 @@ export function createNativeRechargeAdapter({ nativeUrl, secret, getNativeAdminT
     if (!actor) return reply(res, 401, '服务认证无效');
     const path = checkedPath(req.url);
     if (!path || !methods.has(req.method) || identityPaths.test(path)) return reply(res, 404, '接口不存在');
+    if (path.startsWith(manualRoutingPrefix)) return handleManualRouting(req, res, actor, manualRoutes);
     if (/^\/api\/admin\/gpt-api(?:\/|$)/.test(path)) return reply(res, 404, '接口不存在');
     const admin = path.startsWith('/api/admin/');
     const external = path === '/api/external/cards/push';

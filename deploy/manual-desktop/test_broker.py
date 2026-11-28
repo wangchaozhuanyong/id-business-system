@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 import tempfile
 import unittest
+from uuid import uuid4
 from unittest.mock import patch
 
 from aiohttp import WSServerHandshakeError, web
@@ -152,7 +153,7 @@ class BrokerTests(unittest.IsolatedAsyncioTestCase):
             await self.client.ws_connect(route + '/stream', protocols=('binary',))
         self.assertEqual(denied.exception.status, 503)
 
-    async def make_recharge_lab(self, response):
+    async def make_recharge_lab(self, response, **options):
         class Relay:
             closed = False
 
@@ -173,8 +174,22 @@ class BrokerTests(unittest.IsolatedAsyncioTestCase):
         async def worker(key):
             reader, writer = await asyncio.open_unix_connection(directory / key / 'bootstrap.sock')
             try:
-                inputs.messages.append(json.loads(await reader.readline()))
+                config = json.loads(await reader.readline())
+                inputs.messages.append(config)
                 await self.add_display(key, b'recharge:')
+                if 'runId' in config:
+                    async def proof(source, dest):
+                        try:
+                            if (await source.readline()).decode().strip() == config['runId']:
+                                dest.write(json.dumps(response).encode() + b'\n')
+                                await dest.drain()
+                        finally:
+                            dest.close()
+                    path = Path(key) / 'probe.sock'
+                    path.unlink(missing_ok=True)
+                    proofs = await asyncio.start_unix_server(proof, path=path)
+                    self.addAsyncCleanup(proofs.wait_closed)
+                    self.addCleanup(proofs.close)
                 writer.write(json.dumps(response).encode() + b'\n')
                 await writer.drain()
             finally:
@@ -195,11 +210,14 @@ class BrokerTests(unittest.IsolatedAsyncioTestCase):
             return True
 
         async def stop(key):
+            if getattr(inputs, 'fail_stops', 0):
+                inputs.fail_stops -= 1
+                return False
             await self.release_display(key)
             return True
 
         async def open_client():
-            return await self.make_client(activate, admit, stop, recharge=inputs, recharge_available=admit)
+            return await self.make_client(activate, admit, stop, recharge=inputs, recharge_available=admit, **options)
 
         inputs.open_client = open_client
         return await open_client(), inputs
@@ -340,6 +358,150 @@ class BrokerTests(unittest.IsolatedAsyncioTestCase):
         self.assertRegex(legacy, r'^http://fixture-session-[1-9][0-9]{7}-sessiontime-3:test@relay\.example\.test:8080$')
         fixed = 'http://fixture:test%40value@relay.example.test:8080'
         self.assertEqual(materialize_proxy_session(fixed), fixed)
+
+    async def test_mixed_proxy_preparation_preserves_measured_identity_and_authentication_boundary(self):
+        observed = {'exitIp':'1.1.1.1', 'country':'PH', 'accountStatus':'check-in-browser'}
+        client, inputs = await self.make_recharge_lab(observed)
+        route = '/v1/workspaces/'+self.keys[0]
+        for scheme in ('https', 'socks', 'socks4', 'socks5', 'socks5h'):
+            authority = 'relay.example.test:1080'
+            auth = 'fixture-session-12345678' if scheme == 'socks4' else 'fixture-session-12345678:p%40ss'
+            measured = scheme + '://' + auth + '@' + authority
+            config = dict(email='fixture@example.test', id='recharge-'+'a'*64, runId=str(uuid4()),
+                          expectedIp='1.1.1.1', expectedCountry='PH', proxyUrl=measured)
+            reply = await client.post(route+'/prepare', json=config)
+            self.assertEqual(reply.status, 200)
+            self.assertEqual(inputs.upstreams[-1][1], measured)
+            delivered = measured if scheme == 'https' else scheme + '://' + authority
+            self.assertEqual(inputs.messages[-1], {**config, 'proxyUrl':delivered})
+            stopped = await client.post(route+'/stop', headers={'X-Manual-Run':config['runId']})
+            self.assertEqual(stopped.status, 204)
+
+    async def test_timed_run_binds_exact_session_and_releases_on_back_disconnect_idle_and_restart(self):
+        clock = [1000.]
+        observed = {'exitIp':'1.1.1.1', 'country':'PH', 'accountStatus':'check-in-browser'}
+        client, inputs = await self.make_recharge_lab(observed, sweep_interval=.01, now=lambda: clock[0])
+        a, b = self.keys
+        route = lambda key: '/v1/workspaces/' + key
+        def config(key):
+            return dict(email='preview@example.test', id='recharge-' + key[-64:], runId=str(uuid4()),
+                        expectedIp='1.1.1.1', expectedCountry='PH',
+                        proxyUrl='http://fixture-session-12345678-sessiontime-3:fixture@relay.example.test:8080')
+        async def opened(key):
+            body = config(key)
+            reply = await client.post(route(key)+'/prepare', json=body)
+            self.assertEqual(reply.status, 200)
+            self.assertEqual(inputs.upstreams[-1][1], body['proxyUrl'])
+            self.assertEqual(inputs.messages[-1], body)
+            hdr = {'X-Manual-Run':body['runId']}
+            proof = await client.get(route(key)+'/recharge-status', headers=hdr)
+            self.assertEqual(await proof.json(), observed)
+            return hdr
+        async def eventually_empty():
+            for _ in range(60):
+                active = await client.get('/v1/recharge/occupancy')
+                if (await active.json())['active'] is None:
+                    return
+                await asyncio.sleep(.01)
+            self.fail('slot still occupied')
+        ra = await opened(a)
+        self.assertEqual((await client.post(route(a)+'/stop-legacy')).status, 409)
+        actor = await (await client.get('/v1/recharge/occupancy')).json()
+        self.assertEqual(actor['active']['runId'], ra['X-Manual-Run'])
+        self.assertEqual((await client.post(route(b)+'/prepare', json=config(b))).status, 423)
+        first = str(uuid4())
+        second = str(uuid4())
+        one = await client.ws_connect(route(a)+'/recharge-stream', headers={**ra, 'X-Manual-View':first})
+        two = await client.ws_connect(route(a)+'/recharge-stream', headers={**ra, 'X-Manual-View':second})
+        self.assertEqual((await client.post(route(a)+'/stop', headers={**ra,'X-Manual-Leaving-View':first})).status, 204)
+        await one.close()
+        self.assertEqual((await client.post(route(a)+'/stop', headers={**ra,'X-Manual-Leaving-View':first})).status, 204)
+        clock[0] += 20
+        self.assertEqual((await client.post(route(a)+'/activity', headers=ra)).status, 204)
+        self.assertEqual((await client.post(route(a)+'/stop', headers={**ra,'X-Manual-Leaving-View':second})).status, 204)
+        await two.close()
+        rb = await opened(b)
+        self.assertIn((await client.post(route(a)+'/stop', headers=ra)).status, (409, 423))
+        # No input, even while receiving screen updates: the server frees the slot.
+        watching = await client.ws_connect(route(b)+'/recharge-stream', headers={**rb,'X-Manual-View':str(uuid4())})
+        clock[0] += 301
+        await eventually_empty()
+        await watching.close()
+        ra2 = await opened(a)
+        self.assertEqual((await client.post(route(a)+'/stop', headers=ra)).status, 409)
+        viewing = await client.ws_connect(route(a)+'/recharge-stream', headers={**ra2,'X-Manual-View':str(uuid4())})
+        await viewing.close()
+        await asyncio.sleep(.03)
+        clock[0] += 14
+        self.assertIsNotNone((await (await client.get('/v1/recharge/occupancy')).json())['active'])
+        clock[0] += 2
+        await eventually_empty()
+        await opened(b)
+        clock[0] += 46
+        await eventually_empty()
+        ra3 = await opened(a)
+        observed['exitIp'] = '8.8.8.8'
+        self.assertEqual((await client.get(route(a)+'/recharge-status', headers=ra3)).status, 422)
+        await eventually_empty()
+        observed['exitIp'] = '1.1.1.1'
+        await opened(b)
+        await client.close()
+        client = await inputs.open_client()
+        await eventually_empty()
+        await opened(a)
+
+    async def test_old_recharge_is_recovered_without_stopping_ordinary_or_financial_desktops(self):
+        observed = {'exitIp': '1.1.1.1', 'country': 'PH', 'accountStatus': 'check-in-browser'}
+        client, inputs = await self.make_recharge_lab(observed, sweep_interval=.02)
+        a, b = self.keys
+        owner = self.owners[0]
+        occupancy = '/v1/recharge/occupancy'
+        config = dict(email='old@example.test', expectedCountry='PH', proxyUrl='http://relay.example.test:8080')
+        self.assertEqual((await client.post('/v1/workspaces/'+a+'/prepare', json=config)).status, 200)
+        self.assertNotIn('runId', Claims(self.claims).read()[owner])
+        self.assertEqual(await (await client.get(occupancy)).json(), {'active': None})
+        self.assertEqual(self.states[a], 'idle')
+        # Replay the disk state of a crashed legacy broker, with no in-memory mode.
+        await self.add_display(a, b'old:')
+        directory = inputs.workspace(a)
+        stale = socket.socket(socket.AF_UNIX)
+        stale.bind(str(directory/'egress.sock'))
+        stale.close()
+        self.bind(owner, a)
+        marker = self.claims / ('renewal-display-' + a[-64:])
+        marker.write_text('finance')
+        self.assertEqual((await client.post('/v1/workspaces/'+a+'/stop-legacy')).status, 409)
+        self.assertEqual((await client.get(occupancy)).status, 423)
+        self.assertEqual(self.states[a], 'busy')
+        marker.unlink()
+        self.assertEqual(await (await client.get(occupancy)).json(), {'active': None})
+        self.assertEqual(self.states[a], 'idle')
+        # A generic desktop can have the same old claim layout, without the
+        # broker-owned input directory/relay. It must keep running.
+        await self.add_display(b, b'ordinary:')
+        self.bind(owner, b)
+        self.assertEqual((await client.get(occupancy)).status, 423)
+        self.assertEqual(self.states[b], 'busy')
+        self.assertEqual((await client.post('/v1/workspaces/'+a+'/stop-legacy')).status, 409)
+        self.assertEqual((await client.post('/v1/workspaces/'+b+'/stop-legacy',
+                         headers={'X-Manual-Owner':self.owners[1]})).status, 403)
+        self.assertEqual(self.states[b], 'busy')
+        # The website can derive the exact old recharge key from the entered
+        # old email even when neither the old relay nor the old viewer survives.
+        inputs.fail_stops = 1
+        self.assertEqual((await client.post('/v1/workspaces/'+b+'/stop-legacy')).status, 503)
+        self.assertTrue(Claims(self.claims).read()[owner]['retiringRecharge'])
+        await client.close()
+        client = await inputs.open_client()
+        for _ in range(40):
+            if owner not in Claims(self.claims).read():
+                break
+            await asyncio.sleep(.02)
+        self.assertNotIn(owner, Claims(self.claims).read())
+        self.assertEqual(self.states[b], 'idle')
+        self.bind(owner, b, 'starting')
+        self.assertEqual(await (await client.get(occupancy)).json(), {'active': None})
+        self.assertEqual(Claims(self.claims).read(), {})
 
     async def test_recharge_mismatched_exit_stops_worker_and_keeps_viewer_closed(self):
         response = {'exitIp': '1.1.1.1', 'country': 'EG', 'accountStatus': 'check-in-browser'}

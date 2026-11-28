@@ -17,6 +17,7 @@ import stat
 import struct
 import sys
 import tempfile
+import time
 from urllib.parse import quote, unquote
 
 from aiohttp import WSMsgType, web
@@ -37,6 +38,8 @@ ASSET_FILENAME = re.compile(r"[A-Za-z0-9_.-]+\.js")
 MAX_ASSET_PATH = 1024
 RECHARGE_BODY_LIMIT = 8 * 1024
 RECHARGE_REPLY_LIMIT = 512
+RUN_ID = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}')
+WINDOW_ID = re.compile(r'recharge-[0-9a-f]{64}')
 COUNTRY = re.compile(r"[A-Z]{2}")
 PROXY_SESSION = re.compile(r"([-_:]session[-_:])([a-zA-Z0-9_-]{1,2048}?)((?:[-_:]sessiontime[-_:]|\b|$))",
                            re.IGNORECASE | re.ASCII)
@@ -55,7 +58,7 @@ async def connect_display(path, expected=None):
     # cannot substitute a symlink to a neighbouring display during connection.
     directory = os.open(path.parent, os.O_DIRECTORY | os.O_NOFOLLOW | os.O_RDONLY)
     try:
-        fd = os.open('rfb.sock', os.O_PATH | os.O_NOFOLLOW, dir_fd=directory)
+        fd = os.open(path.name, os.O_PATH | os.O_NOFOLLOW, dir_fd=directory)
         try:
             identity = socket_identity(os.fstat(fd))
             if expected is not None and identity != expected:
@@ -208,7 +211,10 @@ class Claims:
             if not isinstance(data, dict):
                 raise ValueError()
             for owner, entry in data.items():
-                if not (OWNER.fullmatch(owner) and isinstance(entry, dict) and set(entry) == {'key', 'phase'}
+                if not (OWNER.fullmatch(owner) and isinstance(entry, dict) and set(entry) in (
+                        {'key', 'phase'}, {'key', 'phase', 'retiringRecharge'}, {'key', 'phase', 'runId', 'id'})
+                        and ('retiringRecharge' not in entry or (entry['retiringRecharge'] is True and entry['phase'] == 'stopping'))
+                        and ('runId' not in entry or (RUN_ID.fullmatch(entry['runId']) and WINDOW_ID.fullmatch(entry['id'])))
                         and isinstance(entry['key'], str) and KEY.fullmatch(entry['key'])
                         and entry['phase'] in ('starting', 'tracking', 'stopping') and entry['key'] not in values):
                     raise ValueError()
@@ -230,7 +236,7 @@ class Claims:
             with contextlib.suppress(FileNotFoundError):
                 os.unlink(name)
 
-    def set(self, owner, key, phase):
+    def set(self, owner, key, phase, managed=None):
         # Callers hold the owner lock. The shared index lock also enforces inverse uniqueness.
         with self.map_lock():
             data = self.read()
@@ -239,7 +245,7 @@ class Claims:
             if owner in data and data[owner]['key'] != key:
                 raise WorkspaceLocked()
             old = data.get(owner)
-            new = {'key': key, 'phase': phase} if phase else None
+            new = {**(old or {}), **(managed or {}), 'key': key, 'phase': phase} if phase else None
             if old != new:
                 if new is None:
                     del data[owner]
@@ -303,7 +309,15 @@ async def read_recharge_config(request):
         raise web.HTTPBadRequest()
     with contextlib.suppress(ValueError):
         body = await request.json()
-        if isinstance(body, dict) and set(body) == {'email', 'proxyUrl', 'expectedCountry'}:
+        base = {'email', 'proxyUrl', 'expectedCountry'}
+        if isinstance(body, dict) and set(body) in (base, base | {'expectedIp', 'runId', 'id'}):
+            if 'runId' in body:
+                if not (isinstance(body['runId'], str) and RUN_ID.fullmatch(body['runId'])
+                        and isinstance(body['id'], str) and WINDOW_ID.fullmatch(body['id'])
+                        and isinstance(body['expectedCountry'], str) and COUNTRY.fullmatch(body['expectedCountry'])
+                        and isinstance(body['expectedIp'], str) and '%' not in body['expectedIp']
+                        and ipaddress.ip_address(body['expectedIp']).is_global):
+                    raise web.HTTPBadRequest()
             email, proxy_url, country = body['email'], body['proxyUrl'], body['expectedCountry']
             if (valid_account_email(email)
                     and isinstance(proxy_url, str) and 1 <= len(proxy_url) <= 2048
@@ -347,7 +361,7 @@ def materialize_proxy_session(url):
     return scheme + marker + resolved + colon + password + separator + destination + slash + suffix
 
 
-def recharge_result(data, expected_country):
+def recharge_result(data, expected_country, expected_ip=None):
     if (not isinstance(data, dict) or set(data) != {'exitIp', 'country', 'accountStatus'}
             or not isinstance(data['country'], str) or not COUNTRY.fullmatch(data['country'])
             or (expected_country and data['country'] != expected_country)
@@ -356,7 +370,7 @@ def recharge_result(data, expected_country):
         raise web.HTTPUnprocessableEntity()
     with contextlib.suppress(ValueError):
         ip = ipaddress.ip_address(data['exitIp'])
-        if ip.is_global and not ip.is_multicast:
+        if ip.is_global and not ip.is_multicast and (not expected_ip or ip == ipaddress.ip_address(expected_ip)):
             return {'exitIp': str(ip), 'country': data['country'], 'accountStatus': 'check-in-browser'}
     raise web.HTTPUnprocessableEntity()
 
@@ -424,7 +438,8 @@ class RechargeInputs:
 
     async def relay(self, directory, url):
         pinned = await resolve_proxy(url, blocked_networks=self.blocked_networks)
-        return await open_relay(directory, pinned, uid=self.uid, gid=self.gid)
+        return await open_relay(directory, pinned, proxy_url=url, uid=self.uid, gid=self.gid,
+                                blocked_networks=self.blocked_networks)
 
     async def renewal_relay(self, directory):
         return await egress.open_renewal_relay(directory, uid=self.uid, gid=self.gid,
@@ -439,7 +454,12 @@ class RechargeInputs:
 
         async def exchange(reader, writer):
             try:
-                payload = json.dumps(config, ensure_ascii=False, separators=(',', ':')).encode() + b'\n'
+                worker_config = config
+                url = config.get('proxyUrl', '')
+                if url.partition('://')[0] in egress.SOCKS_SCHEMES and '@' in url:
+                    # SOCKS authentication terminates at the host relay.
+                    worker_config = {**config, 'proxyUrl': url.partition('://')[0] + '://' + url.rpartition('@')[2]}
+                payload = json.dumps(worker_config, ensure_ascii=False, separators=(',', ':')).encode() + b'\n'
                 if len(payload) > RECHARGE_BODY_LIMIT:
                     raise ValueError()
                 writer.write(payload)
@@ -452,7 +472,7 @@ class RechargeInputs:
                     if result != {'mode': 'renewal', 'ready': True} or result['ready'] is not True:
                         raise ValueError()
                 else:
-                    result = recharge_result(result, config['expectedCountry'])
+                    result = recharge_result(result, config['expectedCountry'], config.get('expectedIp'))
                 outcome.set_result(result)
             except (OSError, ValueError, asyncio.IncompleteReadError, asyncio.LimitOverrunError,
                     web.HTTPUnprocessableEntity):
@@ -524,7 +544,8 @@ def client_assets(root):
 
 def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, connect=connect_display, stop=None,
                *, claims, inspect_unit=unit_state, inventory=running_units,
-               recharge=None, recharge_available=recharge_unit_available):
+               recharge=None, recharge_available=recharge_unit_available,
+               disconnect_grace=15, idle_timeout=300, initial_timeout=45, sweep_interval=1, now=time.monotonic):
     app = web.Application(client_max_size=RECHARGE_BODY_LIMIT)
     workers = Path(workers)
     assets = client_assets(assets)
@@ -621,6 +642,8 @@ def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, c
         renewal_marker(key).unlink(missing_ok=True)
         session = prepared.pop(key, None)
         if session:
+            for writer in tuple(session.get('views', {})):
+                writer.close()
             await session['relay'].close()
 
     def current_session(key):
@@ -653,6 +676,131 @@ def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, c
             raise web.HTTPServiceUnavailable()
         return web.json_response({'renewalWorkspace': 1})
 
+    def run_for(request, entry):
+        expected = (entry or {}).get('runId')
+        if request.headers.get('X-Manual-Run') != expected:
+            raise web.HTTPConflict()
+        return expected
+
+    def known_legacy_recharge(entry):
+        key = entry['key']
+        if entry['phase'] != 'tracking' or renewal_marker(key).exists():
+            return False
+        session = current_session(key)
+        if session:
+            return session['mode'] == 'recharge'
+        # The preceding version persisted the financial display marker before
+        # marking it tracking. After a crash, an old, private, managed relay
+        # without that marker identifies a completed recharge bootstrap.
+        if recharge is None:
+            return False
+        try:
+            directory = recharge.root / key
+            info = directory.lstat()
+            relay = (directory / EGRESS_SOCKET).lstat()
+            return (stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid()
+                    and info.st_gid == recharge.gid and stat.S_IMODE(info.st_mode) == 0o710
+                    and stat.S_ISSOCK(relay.st_mode) and relay.st_uid == recharge.uid
+                    and relay.st_gid == recharge.gid)
+        except FileNotFoundError:
+            return False
+
+    async def retire_legacy(owner, entry, exact_key=None):
+        if not entry or 'runId' in entry:
+            return
+        key = entry['key']
+        if await stopped(key):
+            # The owner lock also waits out inherited systemd mutation locks.
+            # idle means no pending job, main PID, control PID or live display.
+            journal.set(owner, key, None)
+            await clear_session(key)
+        elif (entry.get('retiringRecharge') or known_legacy_recharge(entry) or
+              (key == exact_key and not renewal_marker(key).exists()
+               and prepared.get(key, {}).get('mode') != 'renewal')):
+            # A service-manager failure must keep both the reservation and the
+            # positive recharge identification across subsequent broker restarts.
+            journal.set(owner, key, 'stopping', {'retiringRecharge': True})
+            await stop_locked(owner, key)
+
+    async def stop_legacy_workspace(request):
+        owner, key = desktop(request)
+        if 'X-Manual-Run' in request.headers:
+            raise web.HTTPBadRequest()
+        async with journal.lock(owner, startup_seconds + 5):
+            entry = entry_for(owner, key)
+            if not entry:
+                if await stopped(key):
+                    return web.Response(status=204)
+                raise web.HTTPConflict()
+            if (entry['key'] != key or 'runId' in entry or renewal_marker(key).exists()
+                    or prepared.get(key, {}).get('mode') == 'renewal'):
+                raise web.HTTPConflict()
+            await retire_legacy(owner, entry, exact_key=key)
+            return web.Response(status=204)
+
+    async def recharge_occupancy(request):
+        owner = request.headers.get('X-Manual-Owner', '')
+        if not OWNER.fullmatch(owner) or request.query_string:
+            raise web.HTTPForbidden()
+        async with journal.lock(owner, startup_seconds + 5):
+            entry = journal.read().get(owner)
+            await retire_legacy(owner, entry)
+            entry = journal.read().get(owner)
+            if entry and not entry.get('runId'):
+                raise WorkspaceLocked()
+            if not entry:
+                return web.json_response({'active': None})
+            active = {k: entry[k] for k in ('id', 'runId')}
+            session = current_session(entry['key'])
+            if session and entry['phase'] == 'tracking':
+                deadline = session['idleAt'] if session['streams'] else min(session['detachAt'], session['idleAt'])
+                active['recheckAfterMs'] = max(1000, int((deadline - now() + sweep_interval) * 1000))
+            else:
+                active['recheckAfterMs'] = 15000
+            return web.json_response({'active': active})
+
+    async def live_proof(owner, key, session):
+        path = worker_display(key).with_name('probe.sock')
+        writer = None
+        try:
+            # The path is pinned like the display socket. Only this run's worker may attest.
+            expected = session['probeIdentity']
+            if connect is connect_display:
+                reader, writer = await connect_display(path, expected)
+            else:
+                if socket_identity(path.lstat()) != expected:
+                    raise ValueError()
+                reader, writer = await connect(path)
+            writer.write((session['runId'] + '\n').encode())
+            await writer.drain()
+            data = await asyncio.wait_for(reader.readline(), 15)
+            if len(data) > RECHARGE_REPLY_LIMIT:
+                raise ValueError()
+            original = session['result']
+            proof = recharge_result(json.loads(data), original['country'], original['exitIp'])
+            session['checkedAt'] = now()
+            return proof
+        except (OSError, ValueError, asyncio.TimeoutError, web.HTTPUnprocessableEntity):
+            # Shut down with this generation under the already held owner lock.
+            await stop_locked(owner, key)
+            raise web.HTTPUnprocessableEntity() from None
+        finally:
+            if writer:
+                writer.close()
+
+    async def record_activity(request):
+        owner, key = desktop(request)
+        async with journal.lock(owner, startup_seconds + 5):
+            entry = entry_for(owner, key)
+            if not entry or entry['key'] != key or not run_for(request, entry):
+                raise web.HTTPConflict()
+            session = require_session(key, 'recharge')
+            instant = now()
+            if not session['streams'] or expired(session, instant):
+                raise web.HTTPConflict()
+            session['idleAt'] = instant + idle_timeout
+        return web.Response(status=204)
+
     async def recharge_workspace_status(request):
         owner, key = desktop(request)
         async with journal.lock(owner, startup_seconds + 5, lambda: on_contention(owner, key, 'stream')):
@@ -661,8 +809,13 @@ def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, c
                 raise WorkspaceLocked()
             if not entry or entry['phase'] != 'tracking':
                 raise web.HTTPConflict()
+            run = run_for(request, entry)
             session = require_session(key, 'recharge')
-            return web.json_response(session['result'])
+            if run and expired(session, now()):
+                await stop_locked(owner, key)
+                raise web.HTTPConflict()
+            proof = await live_proof(owner, key, session) if run else session['result']
+            return web.json_response(proof)
 
     async def prepare_recharge(request):
         owner, key = desktop(request)
@@ -672,15 +825,19 @@ def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, c
         selected_input = json.dumps([config['email'], config['proxyUrl']], separators=(',', ':')).encode()
         selection = hmac.digest(selection_key, selected_input, 'sha256')
         async with journal.lock(owner, startup_seconds + 5, lambda: on_contention(owner, key, 'open')):
+            if 'runId' in config:
+                await retire_legacy(owner, journal.read().get(owner), exact_key=key)
             entry = await release_previous(owner, key)
             session = current_session(key)
             if session and entry and entry['phase'] == 'tracking':
                 if session['mode'] != 'recharge':
                     raise web.HTTPConflict()
-                if (session['selection'] != selection or (config['expectedCountry']
+                if (entry.get('runId') != config.get('runId') or session['selection'] != selection or (config['expectedCountry']
                         and session['result']['country'] != config['expectedCountry'])):
                     raise web.HTTPConflict()
-                return web.json_response(session['result'])
+                if config.get('expectedIp') and ipaddress.ip_address(config['expectedIp']) != ipaddress.ip_address(session['result']['exitIp']):
+                    raise web.HTTPConflict()
+                return web.json_response(await live_proof(owner, key, session) if config.get('runId') else session['result'])
 
             result = await start_managed(owner, key, 'recharge', config, selection)
         return web.json_response(result)
@@ -700,7 +857,8 @@ def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, c
                 if mode == 'renewal':
                     relay = await recharge.renewal_relay(directory)
                 else:
-                    config = {**config, 'proxyUrl': materialize_proxy_session(config['proxyUrl'])}
+                    if 'runId' not in config:
+                        config = {**config, 'proxyUrl': materialize_proxy_session(config['proxyUrl'])}
                     relay = await recharge.relay(directory, config['proxyUrl'])
             except EgressError:
                 if mode == 'renewal':
@@ -715,7 +873,8 @@ def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, c
                     session['egress'] = directory / EGRESS_SOCKET
                     session['egress_identity'] = socket_identity(session['egress'].lstat())
                 async with recharge.bootstrap(directory, config) as receipt:
-                    journal.set(owner, key, 'starting')
+                    managed = {k: config[k] for k in ('id', 'runId')} if 'runId' in config else None
+                    journal.set(owner, key, 'starting', managed)
                     launched = True
                     if await activate(key) is not True:
                         raise web.HTTPServiceUnavailable()
@@ -727,6 +886,11 @@ def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, c
                     if not await await_ready(key):
                         raise web.HTTPServiceUnavailable()
                     display = socket_identity(worker_display(key).lstat())
+                    if managed:
+                        instant = now()
+                        session.update(**managed, views={}, streams=0, idleAt=instant + idle_timeout,
+                                       detachAt=instant + initial_timeout,
+                                       probeIdentity=socket_identity(worker_display(key).with_name('probe.sock').lstat()))
                 if mode == 'renewal':
                     fd = os.open(renewal_marker(key), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
                     with os.fdopen(fd, 'wb') as marker:
@@ -748,12 +912,44 @@ def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, c
                     raise web.HTTPServiceUnavailable() from None
                 raise
 
+    def expired(session, now):
+        return now >= session['idleAt'] or (not session['streams'] and now >= session['detachAt'])
+
+    async def sweep(owner, entry):
+        key = entry['key']
+        try:
+            async with journal.lock(owner, .05):
+                if journal.read().get(owner) != entry:
+                    return
+                session = current_session(key)
+                if (entry['phase'] == 'stopping' or not session
+                        or expired(session, now())):
+                    await stop_locked(owner, key)
+        except (OSError, web.HTTPException):
+            # Leave the claim for the next pass, including shutdown retries.
+            pass
+
     async def reap_sessions():
+        # Existing active finance/ordinary desks remain under their own lifecycle.
+        # Only positively identified orphan recharge workers enter the stop queue.
+        for owner, entry in journal.read().items():
+            if 'runId' not in entry:
+                try:
+                    async with journal.lock(owner, .1):
+                        if journal.read().get(owner) == entry and known_legacy_recharge(entry):
+                            await retire_legacy(owner, entry)
+                except (web.HTTPException, OSError):
+                    pass
         while True:
-            await asyncio.sleep(5)
+            await asyncio.sleep(sweep_interval)
             for key, session in tuple(prepared.items()):
-                if current_session(key) is None and prepared.get(key) is session:
+                if 'runId' not in session and current_session(key) is None and prepared.get(key) is session:
                     await clear_session(key)
+            try:
+                managed = [(owner, entry) for owner, entry in journal.read().items() if 'runId' in entry or entry.get('retiringRecharge')]
+                await asyncio.gather(*(sweep(owner, entry) for owner, entry in managed))
+            except (web.HTTPException, OSError):
+                continue
 
     async def manage_recharge(_app):
         with recharge.exclusive():
@@ -801,6 +997,8 @@ def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, c
         owner, key = desktop(request)
         async with journal.lock(owner, startup_seconds + 5, lambda: on_contention(owner, key, 'open')):
             entry = await release_previous(owner, key)
+            if entry and entry.get('runId'):
+                raise web.HTTPConflict()
             if entry and entry['phase'] == 'stopping':
                 if not await stopped(key):
                     raise web.HTTPConflict()
@@ -837,29 +1035,46 @@ def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, c
                     raise web.HTTPServiceUnavailable()
         return web.Response(status=204)
 
-    async def finish_stop(owner, key):
+    async def stop_locked(owner, key):
+        entry = entry_for(owner, key)
+        if entry and entry['key'] != key:
+            raise WorkspaceLocked()
+        if not entry:
+            if await stopped(key):
+                return
+            raise web.HTTPServiceUnavailable()
+        if entry['phase'] != 'starting' and await stopped(key):
+            journal.set(owner, key, None)
+            await clear_session(key)
+            return
+        if not stop:
+            raise web.HTTPServiceUnavailable()
+        journal.set(owner, key, 'stopping')
+        await clear_session(key)
+        if not await stop(key) or not await stopped(key):
+            raise web.HTTPServiceUnavailable()
+        journal.set(owner, key, None)
+
+    async def finish_stop(owner, key, run_id, leaving_view):
         async with journal.lock(owner, startup_seconds + 5, lambda: on_contention(owner, key, 'stop')):
             entry = entry_for(owner, key)
-            if entry and entry['key'] != key:
-                raise WorkspaceLocked()
-            if not entry:
-                if await stopped(key):
+            if entry and entry.get('runId') != run_id:
+                raise web.HTTPConflict()
+            if leaving_view:
+                views = prepared.get(key, {}).get('views', {}).values()
+                if any(view != leaving_view for view in views):
                     return
-                raise web.HTTPServiceUnavailable()
-            if entry['phase'] != 'starting' and await stopped(key):
-                journal.set(owner, key, None)
-                await clear_session(key)
-                return
-            if not stop:
-                raise web.HTTPServiceUnavailable()
-            journal.set(owner, key, 'stopping')
-            await clear_session(key)
-            if not await stop(key) or not await stopped(key):
-                raise web.HTTPServiceUnavailable()
-            journal.set(owner, key, None)
+            await stop_locked(owner, key)
 
     async def stop_workspace(request):
-        identity = desktop(request)
+        owner, key = desktop(request)
+        run_id = request.headers.get('X-Manual-Run')
+        if run_id is not None and not RUN_ID.fullmatch(run_id):
+            raise web.HTTPBadRequest()
+        leaving_view = request.headers.get('X-Manual-Leaving-View')
+        if leaving_view is not None and (not run_id or not RUN_ID.fullmatch(leaving_view)):
+            raise web.HTTPBadRequest()
+        identity = owner, key, run_id, leaving_view
         if identity not in stops:
             task = asyncio.create_task(finish_stop(*identity))
             stops[identity] = task
@@ -893,13 +1108,28 @@ def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, c
                 raise web.HTTPConflict()
             if not ws.can_prepare(request).ok:
                 raise web.HTTPBadRequest()
+            run = run_for(request, entry)
+            session = None
             expected = None
             if recharge_only or recharge is not None:
-                expected = require_session(key, 'recharge' if recharge_only else 'renewal')['display']
+                session = require_session(key, 'recharge' if recharge_only else 'renewal')
+                expected = session['display']
+                if run:
+                    view = request.headers.get('X-Manual-View', '')
+                    if not RUN_ID.fullmatch(view) or view in session['views'].values():
+                        raise web.HTTPConflict()
+                    if expired(session, now()):
+                        raise web.HTTPConflict()
+                    if now() - session.get('checkedAt', float('-inf')) > 3:
+                        await live_proof(owner, key, session)
+                    session.pop('checkedAt', None)
             try:
                 reader, writer = await asyncio.wait_for(connect_worker(key, expected), 2)
             except (OSError, asyncio.TimeoutError):
                 raise web.HTTPServiceUnavailable()
+            if run:
+                session['streams'] += 1
+                session['views'][writer] = view
 
         async def receive():
             async for msg in ws:
@@ -929,6 +1159,11 @@ def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, c
             pumps = {asyncio.create_task(receive()), asyncio.create_task(send())}
             await asyncio.wait(pumps, return_when=asyncio.FIRST_COMPLETED)
         finally:
+            if run:
+                session['streams'] -= 1
+                session['views'].pop(writer, None)
+                if not session['streams']:
+                    session['detachAt'] = now() + disconnect_grace
             for task in pumps:
                 task.cancel()
             await asyncio.gather(*pumps, return_exceptions=True)
@@ -941,8 +1176,11 @@ def create_app(workers, assets, activate=None, admit=None, startup_seconds=30, c
 
     app.router.add_post('/v1/workspaces/{key}/open', open_workspace)
     app.router.add_post('/v1/workspaces/{key}/stop', stop_workspace)
+    app.router.add_post('/v1/workspaces/{key}/stop-legacy', stop_legacy_workspace)
     app.router.add_get('/v1/workspaces/{key}/stream', stream, allow_head=False)
     app.router.add_get('/v1/renewal/status', renewal_status, allow_head=False)
+    app.router.add_get('/v1/recharge/occupancy', recharge_occupancy, allow_head=False)
+    app.router.add_post('/v1/workspaces/{key}/activity', record_activity)
     app.router.add_get('/v1/recharge/status', recharge_status, allow_head=False)
     app.router.add_post('/v1/workspaces/{key}/prepare', prepare_recharge)
     app.router.add_get('/v1/workspaces/{key}/recharge-status', recharge_workspace_status, allow_head=False)

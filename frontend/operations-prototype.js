@@ -902,9 +902,13 @@
       .join('');
     return `<nav class="recharge-integration__nav tabs" aria-label="ChatGPT 充值功能">${actions}</nav>`;
   }
+  let manualHistory = false;
   function renderManualRecharge() {
+    const managed = isAdmin() && localData && document.querySelector('meta[name="id-manual-recharge-workspace"][content="enabled"]');
+    if (managed) return header(manualHistory ? '历史续费登记' : '手动充值', manualHistory
+      ? '查看本人旧版登记及已绑定的普通工作区。' : '从授权 JSON 读取邮箱，按套餐测速后打开浏览器手动办理。已有有效网页登录可继续使用，首次打开时请在窗口内登录。') + '<div id="mr-managed-host"></div>';
     const showAddresses = localData && api.canVisit(manualRechargeRoute);
-    const showWorkbench = isAdmin();
+    const showWorkbench = isAdmin() && !manualHistory;
     const jump = showAddresses
       ? `<nav class="bit-address-jump" aria-label="手动充值快捷定位">${button('前往地址管理', 'ops-bit-address-jump', '', '', 'data-pane="address" aria-controls="bit-addresses-host"')}${button('前往续费管理', 'ops-bit-address-jump', '', '', 'data-pane="renewals" aria-controls="bit-addresses-host"')}</nav>`
       : '';
@@ -4255,6 +4259,12 @@
       window.IDLocalAuth?.employeeAction(api, action, id);
       return true;
     }
+    if (['ops-manual-history', 'ops-manual-history-back'].includes(action) && state.route === manualRechargeRoute && isAdmin() && localData) {
+      api.modules.manualRecharge?.unmount();
+      manualHistory = action === 'ops-manual-history';
+      render();
+      return true;
+    }
     if (action === 'ops-integrated-view' && state.route === onlineRechargeRoute) {
       const view = node.dataset.view;
       if (canOpenRechargeView(view) && onlineRechargeViews.some(([id]) => id === view) && view !== activeOnlineView) {
@@ -4805,6 +4815,10 @@
     id: 'operations',
     retainPage: (route) => [manualRechargeRoute, workspaceRechargeRoute, onlineRechargeRoute].includes(route),
     deactivate(region) {
+      if (region?.querySelector('#manual-workspace, .manual-history-layout')) {
+        api.modules.manualRecharge?.unmount();
+        manualHistory = false;
+      }
       const host = region?.querySelector('[data-plugin-tool]');
       if (host) {
         host.dispatchEvent(new Event('id-view-deactivate'));
@@ -4814,6 +4828,8 @@
       deactivateIntegration(region);
     },
     clearPageState() {
+      api.modules.manualRecharge?.unmount();
+      manualHistory = false;
       deactivateIntegration(document.getElementById('main'));
       onlineAdmin = undefined;
       if (recoveryDetail) {
@@ -4848,6 +4864,17 @@
         tabs[next].click();
       });
       if (state.route === manualRechargeRoute) {
+        const managedHost = $('#mr-managed-host', integrationRoot());
+        if (managedHost) {
+          const view = manualHistory ? 'history' : 'workbench';
+          if (managedHost.dataset.view !== view) {
+            managedHost.dataset.view = view;
+            managedHost.innerHTML = manualHistory
+              ? `<div class="toolbar">${button('返回手动充值', 'ops-manual-history-back')}</div><div class="bit-login-layout manual-history-layout"><aside id="bit-addresses-host"></aside></div>`
+              : api.modules.manualRecharge.render();
+          }
+          if (!manualHistory) { api.modules.manualRecharge.mount($('#manual-workspace', managedHost)); return; }
+        }
         const host = $('#bit-addresses-host', integrationRoot());
         if (host && api.canVisit(manualRechargeRoute)) api.modules.bitbrowserAddresses?.mount(host);
         if (integrationRoot().querySelector('[data-recharge-module="manual"]') &&

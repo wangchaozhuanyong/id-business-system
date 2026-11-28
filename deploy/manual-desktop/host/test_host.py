@@ -354,6 +354,84 @@ class ProvisionContract(unittest.TestCase):
             self.assertIn(call("stop", runtime.BROKER_UNIT), systemctl.call_args_list)
             self.assertNotIn(call("enable", runtime.BROKER_UNIT), systemctl.call_args_list)
 
+    def test_upgrade_stops_only_an_idle_verified_broker_and_does_not_restore_on_failure(self):
+        root = RELEASE.with_name("2" * 40)
+        candidate = dict(CONFIG, root=str(root), desktop=str(root / "source/deploy/manual-desktop"),
+                         assets=str(root / "manual-runtime/novnc"), site_packages=str(root / "manual-runtime/site-packages"))
+        previous = provision.managed_files(CONFIG)
+        for readiness_error in (None, runtime.InvalidHost("fixture_readiness_failure")):
+            with self.subTest(failure=readiness_error), ExitStack() as stack:
+                events = []
+                replacements = {
+                    "exclusive_install": {"side_effect": nullcontext},
+                    "check_host": {},
+                    "broker_active": {"return_value": True},
+                    "installed": {"side_effect": previous.__getitem__},
+                    "previous_release": {"return_value": CONFIG},
+                    "stage_installed_runtime": {},
+                    "verify_runtime_access": {},
+                    "pause_workspace_admission": {"side_effect": nullcontext},
+                    "require_empty_workspace_state": {"side_effect": lambda: events.append("empty")},
+                    "record_upgrade_baseline": {"side_effect": lambda *args: events.append("backup")},
+                    "verify_running_broker": {},
+                    "broker_state": {"return_value": "inactive"},
+                    "write_atomic": {"side_effect": lambda *args: events.append("write")},
+                    "verify_loaded_units": {},
+                    "wait_for_broker_ready": {"side_effect": readiness_error},
+                    "verify": {},
+                }
+                mocks = {name: stack.enter_context(patch.object(provision, name, **kwargs))
+                         for name, kwargs in replacements.items()}
+                def manager(verb, *args, **options):
+                    events.append(verb)
+                    return "enabled", 0
+                stack.enter_context(patch.object(provision, "systemctl", side_effect=manager))
+                if readiness_error:
+                    with self.assertRaisesRegex(runtime.InvalidHost, "fixture_readiness_failure"):
+                        provision.upgrade(candidate)
+                    mocks["verify"].assert_not_called()
+                else:
+                    self.assertEqual(provision.upgrade(candidate),
+                                     {"started": True, "previousRevision": RELEASE.name})
+                    mocks["verify"].assert_called_once_with(candidate)
+                self.assertEqual(events, ["is-enabled", "empty", "backup", "stop", "empty",
+                                          "write", "write", "write", "daemon-reload", "start"])
+                mocks["record_upgrade_baseline"].assert_called_once_with(candidate, RELEASE.name, previous)
+
+    def test_busy_admission_never_stops_the_broker(self):
+        files = provision.managed_files(CONFIG)
+        root = RELEASE.with_name("2" * 40)
+        candidate = dict(CONFIG, root=str(root), desktop=str(root / "source/deploy/manual-desktop"),
+                         assets=str(root / "manual-runtime/novnc"), site_packages=str(root / "manual-runtime/site-packages"))
+        with patch.object(provision, "exclusive_install", side_effect=nullcontext), \
+             patch.object(provision, "check_host"), patch.object(provision, "broker_active", return_value=True), \
+             patch.object(provision, "installed", side_effect=files.__getitem__), \
+             patch.object(provision, "previous_release", return_value=CONFIG), \
+             patch.object(provision, "systemctl", return_value=("enabled", 0)) as systemctl, \
+             patch.object(provision, "stage_installed_runtime"), patch.object(provision, "verify_runtime_access"), \
+             patch.object(provision, "pause_workspace_admission", side_effect=nullcontext), \
+             patch.object(provision, "require_empty_workspace_state",
+                          side_effect=runtime.InvalidHost("workspace_claims_present")), \
+             patch.object(provision, "write_atomic") as write, patch.object(provision, "record_upgrade_baseline") as backup:
+            with self.assertRaisesRegex(runtime.InvalidHost, "workspace_claims_present"):
+                provision.upgrade(candidate)
+            systemctl.assert_called_once_with("is-enabled", runtime.BROKER_UNIT)
+            write.assert_not_called()
+            backup.assert_not_called()
+
+    def test_admission_lock_matches_the_brokers_file_and_refuses_a_concurrent_start(self):
+        with tempfile.TemporaryDirectory(dir=Path(__file__).parent, prefix=".test-") as claims, \
+             patch.object(provision, "CLAIMS", Path(claims)), \
+             patch.object(provision, "UID", os.getuid()), patch.object(provision, "GID", os.getgid()):
+            with provision.pause_workspace_admission():
+                path = Path(claims) / "admission.lock"
+                self.assertEqual(stat.S_IMODE(path.lstat().st_mode), 0o600)
+                with self.assertRaisesRegex(runtime.InvalidHost, "workspace_start_in_progress"):
+                    with provision.pause_workspace_admission():
+                        self.fail("admission lock cannot be taken twice")
+            with provision.pause_workspace_admission():
+                self.assertEqual(list(Path(claims).iterdir()), [path])
+
     def test_rollback_only_deactivates_the_exact_broker_without_active_workers(self):
         files = provision.managed_files(CONFIG)
         with patch.object(provision, "exclusive_install", side_effect=nullcontext), \
