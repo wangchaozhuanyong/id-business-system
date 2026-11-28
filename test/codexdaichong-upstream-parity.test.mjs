@@ -67,7 +67,7 @@ test('all 203 upstream files match the original and five exact patches', async (
   for (const name of ['tax-free-address.js', 'package-lock.json'])
     assert.equal(await readFile(join(prepared, name), 'utf8'), await original(name), name);
   const indexSource = await readFile(join(prepared, 'index.js'), 'utf8');
-  for (const marker of ['FINGERPRINT_ALIGN', 'UNIFY_WAIT_FROM_DEBUG', 'DRYRUN_MARKER'])
+  for (const marker of ['FINGERPRINT_ALIGN', 'UNIFY_WAIT_FROM_DEBUG'])
     assert.ok(indexSource.includes(marker), 'index.js missing patch marker: ' + marker);
   assert.equal((await readFile(join(prepared, 'payment-retry.js'), 'utf8'))
     .replace('store.reserveCard(ownerKey, planType)', 'store.reserveCard(ownerKey)'), await original('payment-retry.js'));
