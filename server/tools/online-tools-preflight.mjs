@@ -9,6 +9,7 @@ import { readToolConfig } from './read-tool-config.mjs';
 import { parseToolPublicOrigin } from './request-origin.mjs';
 import { createWebsiteAnalytics } from './website-analytics.mjs';
 import { createWebsiteVisits } from './website-visits.mjs';
+import { createWebsiteStorefrontVisitors } from './website-storefront-visitors.mjs';
 
 const healthTimeoutMs = 2000;
 const healthMaxBytes = 1024;
@@ -34,6 +35,14 @@ const tools = {
     validate: (config) => createWebsiteAnalytics({ cloudflareConfig: config }),
     fields: (config) => [['accountId', config.accountId], ['apiToken', config.apiToken], ['sites', config.sites]],
     needs: ['商城所在 Cloudflare 账户的 Account Analytics Read 令牌', '商城域名与 Web Analytics 站点标识的映射']
+  },
+  websiteStorefrontVisitors: {
+    label: '商城访客统计',
+    option: 'website-storefront-visitors-config',
+    kind: 'website-storefront-visitors',
+    validate: (config, publicOrigin) => createWebsiteStorefrontVisitors({ config, publicOrigin }),
+    fields: (config) => [['token', config.token]],
+    needs: ['商城访客统计专用只读凭据', '各商城的已知统计区间']
   },
   websiteVisits: {
     label: '网站访问明细采集',
@@ -225,16 +234,20 @@ export async function preflightOnlineTools(options = {}, { fetchImpl = fetch } =
     }
   }
   const cloudflareFile = options[tools.websiteCloudflare.option];
-  const [websiteAnalytics, websiteVisits, mediaResolver, microsoftMailbox, websiteCloudflare, publicRoutes] = await Promise.all([
+  const storefrontVisitorsFile = options[tools.websiteStorefrontVisitors.option];
+  const [websiteAnalytics, websiteVisits, mediaResolver, microsoftMailbox, websiteCloudflare,
+    websiteStorefrontVisitors, publicRoutes] = await Promise.all([
     checkFile(tools.websiteAnalytics, options[tools.websiteAnalytics.option], preview),
     checkFile(tools.websiteVisits, options[tools.websiteVisits.option], preview, publicOrigin),
     checkMedia(options[tools.mediaResolver.option], preview, options['probe-media'] === true),
     checkFile(tools.microsoftMailbox, options[tools.microsoftMailbox.option], preview, publicOrigin),
     cloudflareFile === undefined ? undefined : checkFile(tools.websiteCloudflare, cloudflareFile, preview),
+    storefrontVisitorsFile === undefined ? undefined
+      : checkFile(tools.websiteStorefrontVisitors, storefrontVisitorsFile, preview, publicOrigin),
     probePublic ? probePublicToolRoutes(publicOrigin, fetchImpl) : undefined
   ]);
   const results = { websiteAnalytics, websiteVisits, mediaResolver, microsoftMailbox,
-    ...(websiteCloudflare && { websiteCloudflare }) };
+    ...(websiteCloudflare && { websiteCloudflare }), ...(websiteStorefrontVisitors && { websiteStorefrontVisitors }) };
   const counts = { valid: 0, missing: 0, invalid: 0, unavailable: 0 };
   for (const result of Object.values(results)) counts[result.status]++;
   return { scope: publicOrigin ? 'public_config_preflight' : 'local_preflight', counts, tools: results, publicRoutes };
@@ -255,7 +268,7 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
     if (values.help) {
       process.stdout.write(
         'node server/tools/online-tools-preflight.mjs [--website-analytics-config 文件] [--website-visits-secret-file 文件]\n' +
-        '  [--website-cloudflare-config 文件]\n' +
+        '  [--website-cloudflare-config 文件] [--website-storefront-visitors-config 文件]\n' +
         '  [--media-resolver-url 回环地址] [--microsoft-mailbox-config 文件]\n' +
         '  [--preview-origin 计划预览地址 | --public-origin 正式 HTTPS 地址] [--probe-media]\n' +
         '  [--probe-public-routes]\n'
