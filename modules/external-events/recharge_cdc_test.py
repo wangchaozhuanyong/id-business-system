@@ -12,6 +12,14 @@ spec.loader.exec_module(cdc)
 
 
 class CommittedRows(unittest.TestCase):
+    def test_approval_commit_emits_only_invalidation(self):
+        tx = cdc.Transaction()
+        tx.rows("task_logs", [{"after_values": {"job_key": "job1", "message": "等待商家确认付款，请勿重复提交 [private]"}}])
+        event = tx.event("fixture", {"position": 42})
+        self.assertTrue(event["paymentApprovalChanged"])
+        self.assertNotIn("private", json.dumps(event))
+        self.assertNotIn("message", event)
+
     def test_only_safe_identifiers_leave_transaction(self):
         transaction = cdc.Transaction()
         transaction.rows("task_logs", [{"before_values": {"job_key": "before", "session_payload": "private"},

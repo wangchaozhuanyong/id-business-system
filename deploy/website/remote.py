@@ -1402,8 +1402,15 @@ def switch_adapter(plan, source, ops, native_runtime=None):
             if (state["running"] and state["revision"] == sha and state["image"] == image and
                     all(mount_matches(container, source / name, "/candidate/" + name) for name in ADAPTER_MOUNTS)):
                 flag = "--check-card-plans" if native_runtime else "--check-card-stop"
+                approval = native_runtime and "modules/recharge/codexdaichong/payment-approval-api.mjs" in plan["files"]
+                args = [flag, "--check-payment-approvals"] if approval else [flag]
                 ready = json.loads(run(["docker", "exec", state["id"], "node",
-                                        "/candidate/deploy/recharge-core/health.mjs", flag], timeout=14))
+                                        "/candidate/deploy/recharge-core/health.mjs", *args], timeout=28))
+                if approval:
+                    automatic = ready.pop("automatic", None)
+                    require(ready.pop("paymentApprovalsReady", False) is True and
+                            (not plan["rechargeCore"].get("initialPaymentApproval") or automatic is False),
+                            "payment_approval_mode_readback_failed")
                 expected = ({"ready": True, "cardPlansReady": True, "retiredProviderRoute": 404}
                             if native_runtime else {"ready": True, "cardStopRouteReady": True})
                 if ready == expected:

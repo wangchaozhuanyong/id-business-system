@@ -1,4 +1,12 @@
 export const routingAdminPanel = `
+<div class="panel" id="payment-approval-config">
+  <div class="title-with-help"><h2 class="panel-title">充值付款</h2>
+    <details class="title-help"><summary aria-label="查看充值付款说明">ⓘ</summary>
+    <div class="title-description">关闭时由超级管理员逐笔确认，包含 0 元订阅。开启只对新受理的充值生效。待确认提醒使用系统监控的充值 Telegram 渠道。</div></details></div>
+  <label><input id="payment-automatic" type="checkbox" disabled> 完整充值流程（自动付款）</label>
+  <button id="payment-mode-save" type="button" class="btn btn-primary" onclick="savePaymentMode()" disabled>保存付款模式</button>
+  <span id="payment-mode-status" role="status">正在读取…</span>
+</div>
 <div class="panel recharge-routing-panel" id="recharge-routing-panel">
   <h2 class="panel-title">套餐支付线路</h2>
   <p>支付地区决定币种和所需出口国家。先检查标注匹配的启用代理，再检查待标注旧代理。实测匹配后才创建任务。代理池完全为空时检查服务器直连出口。</p>

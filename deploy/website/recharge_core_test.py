@@ -29,6 +29,7 @@ class RechargeCoreReadinessTests(unittest.TestCase):
                 "browser-pool.js", "chatgpt.js", "pricing-checkout.js", "session-auth.js", "stripe-payment.js",
             ],
             "retryFiles": ["server.js"],
+            "paymentApprovalFiles": ["payment-retry.js", "server.js", "stripe-payment.js"],
         }
         mounts = {("source", "target", True)}
         with (

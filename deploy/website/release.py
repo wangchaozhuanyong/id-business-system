@@ -156,7 +156,19 @@ PROXY_TYPE_CORE_SCOPE = {
     "modules/recharge/codexdaichong/routing-admin.js",
     "modules/recharge/codexdaichong/shell.css", "modules/recharge/codexdaichong/shell.js",
 }
-NATIVE_RELEASE_FILES = tuple(sorted(NATIVE_CORE_SCOPE | PROXY_TYPE_CORE_SCOPE | set(ADAPTER_FILES) | {
+PAYMENT_APPROVAL_PATCH = {
+    "modules/recharge/codexdaichong/payment-approval/manifest.json",
+    "modules/recharge/codexdaichong/payment-approval/upstream-payment-approval.patch",
+}
+PAYMENT_APPROVAL_CORE = PAYMENT_APPROVAL_PATCH | {
+    "deploy/recharge-core/card-plans-canary.mjs", "deploy/recharge-core/health.mjs",
+    "deploy/recharge-core/canary.py", "modules/recharge/codexdaichong/prepare.mjs",
+    "modules/recharge/codexdaichong/payment-approval.mjs", "modules/recharge/codexdaichong/payment-approval-api.mjs",
+    "modules/recharge/codexdaichong/runtime.mjs", "modules/recharge/codexdaichong/native-adapter.mjs",
+    "modules/recharge/codexdaichong/assets.mjs", "modules/recharge/codexdaichong/progress-presentation.mjs",
+    "modules/recharge/codexdaichong/routing-admin-ui.mjs", "modules/recharge/codexdaichong/routing-admin.js",
+}
+NATIVE_RELEASE_FILES = tuple(sorted(PAYMENT_APPROVAL_CORE | NATIVE_CORE_SCOPE | PROXY_TYPE_CORE_SCOPE | set(ADAPTER_FILES) | {
     "deploy/recharge-core/Dockerfile", "deploy/recharge-core/entry.mjs", "deploy/recharge-core/release-gate.py",
     "deploy/recharge-core/snapshot.py", "deploy/recharge-core/seal-backup.mjs",
     "deploy/website/recharge_core.py", "deploy/website/remote.py", "deploy/website/vendure_admission.py",
@@ -354,6 +366,24 @@ def require_website_scope(base, sha, include_adapter=False, include_core=False, 
         if (native.get("imageLabelsVerified") is not True or
                 native.get("identity", {}).get("running") is not True):
             raise RuntimeError("manual_routing_native_baseline_unverified")
+    elif include_core and changed & PAYMENT_APPROVAL_PATCH:
+        if include_adapter or changed != PAYMENT_APPROVAL_CORE:
+            raise RuntimeError("payment_approval_native_scope_mismatch")
+        if (native.get("imageLabelsVerified") is not True or native.get("identity", {}).get("running") is not True or
+                not isinstance(native_revision, str) or not SHA.fullmatch(native_revision)):
+            raise RuntimeError("payment_approval_native_baseline_unverified")
+        require_ancestor(native_revision, sha)
+        native_changes = set(git("diff", "--name-only", native_revision, sha, "--",
+                                 "modules/recharge", "package-lock.json", *CORE_PATHS).splitlines())
+        native_changes.discard(BACKUP_OPERATION)
+        approved = PAYMENT_APPROVAL_CORE | {"modules/recharge/vendure/loopback-bridge.mjs"}
+        # The existing site and adapter already run these reviewed routing inputs.
+        published_routing = MANUAL_ROUTING_SCOPE | {
+            *MOBILE_LAYOUT_PRESENTATION_FILES, MOBILE_LAYOUT_MANIFEST_PATH,
+        }
+        carried = base == ROUTING_STARTUP_MOBILE_SITE and native_revision == ROUTING_STARTUP_PRIOR_NATIVE
+        if native_changes != approved and not (carried and native_changes == approved | published_routing):
+            raise RuntimeError("payment_approval_running_native_scope_mismatch")
     elif include_core:
         reviewed_patches = NATIVE_PATCH_FILES | PLUS_TRIAL_PATCH_FILES
         approved_patches = any(required <= changed <= NATIVE_CORE_SCOPE
@@ -934,6 +964,10 @@ def main(sample_backup_resources=False):
                   *ADAPTER_FILES)
     if include_core or interrupted:
         files = tuple(dict.fromkeys((*files, *NATIVE_RELEASE_FILES)))
+    if include_core:
+        files = tuple(dict.fromkeys((*files, "frontend/payment-approvals.js",
+            "server/recharge-approval-notifications.mjs", "modules/recharge/vendure/loopback-bridge.mjs",
+            *MANUAL_ROUTING_FILES)))
     if interrupted:
         files += ("deploy/website/interrupted_cutover.py", INTERRUPTED_GATE_SOURCE)
     if retry_receipt or partner_api or customer_progress:
@@ -975,7 +1009,9 @@ def main(sample_backup_resources=False):
     if interrupted:
         plan["interruptedRelease"] = interrupted
     if include_core:
-        plan["rechargeCore"] = {"assetsSha256": expected_assets}
+        initial_approval = not git("ls-tree", "--name-only", base, "--",
+                                   "modules/recharge/codexdaichong/payment-approval-api.mjs").strip()
+        plan["rechargeCore"] = {"assetsSha256": expected_assets, "initialPaymentApproval": initial_approval}
         plan["adapter"] = {"runtimeFiles": ADAPTER_RUNTIME_FILES}
     if retry_receipt:
         plan["vendureRetryReceipt"] = retry_receipt

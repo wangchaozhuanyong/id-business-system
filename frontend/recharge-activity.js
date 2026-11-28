@@ -132,6 +132,7 @@
         '<span class="recharge-activity-meta"><time>' + esc(time.format(row.updatedAt)) + '</time> <span>任务尾号 ' + esc(row.jobTail) + '</span></span></div>' +
         action('查看任务', 'detail', row.id) + '</li>').join('');
       panel.innerHTML =
+        (A.state?.actor?.role === 'super' ? '<button type="button" class="button compact" data-action="payment-approval-open">待确认付款</button>' : '') +
         (coverageMessages[result.coverage] ? '<p class="inline-notice" role="status">' + coverageMessages[result.coverage] + '</p>' : '') +
         (rows ? '<ul class="recharge-activity-history">' + rows + '</ul>' :
           result.coverage === 'ready' ? '<p class="inline-notice">暂无代充动态。</p>' : '') +

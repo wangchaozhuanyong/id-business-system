@@ -15,6 +15,7 @@ const runtime = fileURLToPath(new URL('../.runtime/', import.meta.url));
 let fixture;
 let prepared;
 let previous;
+let beforeApproval;
 const quiet = { log() {}, warn() {}, error() {} };
 
 async function original(file) {
@@ -27,9 +28,15 @@ before(async () => {
   await mkdir(runtime, { recursive: true, mode: 0o700 });
   fixture = await mkdtemp(join(runtime, 'upstream-parity-'));
   prepared = await prepareCodexdaichong(join(fixture, 'engine'));
+  beforeApproval = join(fixture, 'before-payment-approval');
+  await mkdir(beforeApproval);
+  for (const name of ['server.js', 'payment-retry.js', 'stripe-payment.js'])
+    await copyFile(join(prepared, name), join(beforeApproval, name));
+  const approvalPatch = fileURLToPath(new URL('../modules/recharge/codexdaichong/payment-approval/upstream-payment-approval.patch', import.meta.url));
+  await exec('git', ['--git-dir=' + join(upstream, '.git'), '--work-tree=' + beforeApproval, 'apply', '--reverse', approvalPatch], { cwd: beforeApproval });
   previous = join(fixture, 'before-provider-retirement');
   await mkdir(previous);
-  await Promise.all(['server.js', 'mysql-store.js', 'payment-retry.js'].map(name => copyFile(join(prepared, name), join(previous, name))));
+  await Promise.all(['server.js', 'mysql-store.js', 'payment-retry.js'].map(name => copyFile(join(name === 'mysql-store.js' ? prepared : beforeApproval, name), join(previous, name))));
   for (const patch of ['card-plans/upstream-card-plans.patch', 'provider-retirement/upstream-provider-retirement.patch']) {
     const path = fileURLToPath(new URL('../modules/recharge/codexdaichong/' + patch, import.meta.url));
     await exec('git', ['--git-dir=' + join(upstream, '.git'), '--work-tree=' + previous, 'apply', '--reverse', path], { cwd: previous });
@@ -39,13 +46,14 @@ after(async () => {
   if (fixture) await rm(fixture, { recursive: true, force: true });
 });
 
-test('all 203 upstream files match the original and five exact patches', async () => {
+test('all 203 upstream files match the original and the approved patch chain', async () => {
   const result = await verifyCodexdaichongSource(prepared);
   assert.equal(result.revision, CODEXDAICHONG_REVISION);
   assert.equal(result.files, 203);
   await exec(process.execPath, ['--check', join(prepared, 'server.js')]);
   await exec(process.execPath, ['--check', join(prepared, 'mysql-store.js')]);
   assert.equal(result.originalFiles, 194);
+  assert.deepEqual(result.paymentApprovalFiles, ['payment-retry.js', 'server.js', 'stripe-payment.js']);
   assert.deepEqual(result.routingFiles, ['pricing-checkout.js', 'region-config.js', 'server.js']);
   assert.deepEqual(result.returnFiles, ['mysql-store.js', 'server.js']);
   assert.deepEqual(result.providerRetirementFiles, ['mysql-store.js', 'server.js']);
@@ -60,8 +68,48 @@ test('all 203 upstream files match the original and five exact patches', async (
   ]) assert.equal(section(mysql, start, end), section(previousMysql, start, end), start);
   for (const name of ['index.js', 'tax-free-address.js', 'package-lock.json'])
     assert.equal(await readFile(join(prepared, name), 'utf8'), await original(name), name);
-  assert.equal((await readFile(join(prepared, 'payment-retry.js'), 'utf8'))
+  assert.equal((await readFile(join(beforeApproval, 'payment-retry.js'), 'utf8'))
     .replace('store.reserveCard(ownerKey, planType)', 'store.reserveCard(ownerKey)'), await original('payment-retry.js'));
+});
+
+test('the prepared checkout button issues zero clicks on stop and never retries an uncertain dispatch', async () => {
+  const source = await readFile(join(prepared, 'stripe-payment.js'), 'utf8');
+  assert.doesNotMatch(source, /keyboard\.press\(['"]Enter['"]\)|body['"]\)\.click\(\{ position:/);
+  const clickSource = section(source, 'async function clickCheckoutSubmitButton(', 'async function fillBillingNameElement(');
+  const paymentSource = section(source, 'async function finalizeCheckoutPayment(', "    if (!submitted)");
+  for (const scenario of ['cancel', 'gate-unavailable', 'accepted', 'unknown']) {
+    let clicks = 0, approvals = 0;
+    const target = {
+      isVisible: async () => true, isDisabled: async () => false, scrollIntoViewIfNeeded: async () => {},
+      click: async () => { clicks++; if (scenario === 'unknown') throw new Error('no readback'); }
+    };
+    const page = { keyboard: { press: async () => {} }, evaluate: async () => {}, waitForTimeout: async () => {},
+      getByRole: () => target };
+    const sandbox = { page, console: quiet, process: { env: {} }, randomBetween: () => 0,
+      dismissAddressAutocomplete: async () => {}, require: () => ({
+        createPaymentApprovals: () => ({}), authorizeSubmit: async () => {
+          approvals++; if (scenario === 'gate-unavailable') throw new Error('unavailable');
+          return scenario !== 'cancel';
+        }
+      }) };
+    const result = await runInNewContext(clickSource + '\n' + paymentSource +
+      '\nreturn { submitted }; }\nfinalizeCheckoutPayment(page, null, {});', sandbox);
+    assert.equal(approvals, 1);
+    assert.equal(clicks, ['accepted', 'unknown'].includes(scenario) ? 1 : 0);
+    if (scenario === 'unknown') assert.equal(result.resultUnknown && !result.canRetryCard, true);
+    else if (scenario !== 'accepted') assert.equal(result.approvalStopped, true);
+    else assert.equal(result.submitted, true);
+  }
+  const server = await readFile(join(prepared, 'server.js'), 'utf8');
+  const analysis = section(server, 'function analyzeProcessOutput(output, timedOut)', '    const runtimeError =');
+  const result = runInNewContext(analysis + '\n}\nanalyzeProcessOutput(log, true)', {
+    withoutCheckoutApiDiagnostics: text => text, log: 'PAYMENT_SUBMIT_DISPATCH\nchild terminated'
+  });
+  assert.equal(result.status, 'manual');
+  assert.equal(result.shouldRetry, false);
+  const stripeGate = section(source, 'async function completeStripeCardPayment(', 'async function buildDeclinedPaymentResult(');
+  assert.match(stripeGate, /isZeroAmountCheckout\(page\)[\s\S]*?return finalizeCheckoutPayment\(page,[^\n]+options.approvalCard\)/);
+  assert.match(stripeGate, /const payResult = await finalizeCheckoutPayment\(page, holderName, options.approvalCard\)/);
 });
 
 test('a tampered core file is rejected even when the revision marker is unchanged', async () => {
@@ -122,7 +170,7 @@ async function submitTrace(source, { plan = 'plus', state = 'ready', providerEna
 }
 
 test('removing the provider preserves native admission and dispatch even with stale enabled settings', async () => {
-  const [baseline, candidate] = await Promise.all([previous, prepared].map(dir => readFile(join(dir, 'server.js'), 'utf8')));
+  const [baseline, candidate] = await Promise.all([previous, beforeApproval].map(dir => readFile(join(dir, 'server.js'), 'utf8')));
   for (const [start, end] of [
     ['function spawnCheckoutDebugWorker(', "const LEGACY_PROVIDER_FAILURE_MESSAGE"],
     ['function spawnActivationWorker(', 'async function handleActivationRequest(']

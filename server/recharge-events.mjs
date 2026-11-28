@@ -21,7 +21,7 @@ async function* envelopes(stream) {
 
 // The child reads MySQL only. The parent alone owns business writes and ACKs.
 // Timers retry a broken transport; they never poll the source for business data.
-export function createRechargeEvents({ config, store, orderSync, activity, onReaderStatus,
+export function createRechargeEvents({ config, store, orderSync, activity, onReaderStatus, onPaymentApprovals,
   spawnProcess = spawn, schedule = setTimeout, cancel = clearTimeout }) {
   let child, reconnect, stopped = false, started = false, retry = 0, unsubscribe;
   let work = Promise.resolve(), localQueued = false, observed;
@@ -39,6 +39,7 @@ export function createRechargeEvents({ config, store, orderSync, activity, onRea
     return current;
   }
   async function changed(scopes, event) {
+    if (event.paymentApprovalChanged) void onPaymentApprovals?.();
     await activity?.collect({ jobKeys: event.jobs, reconcile: event.reconcile, strict: true });
     // Only resources whose upstream rows actually committed receive a new
     // opaque revision. Activity retains its per-actor visibility filtering.
@@ -108,7 +109,7 @@ export function createRechargeEvents({ config, store, orderSync, activity, onRea
           ready = true;
           // Reconnection also retries durable pending work once, without an
           // idle timer or a new source commit being required.
-          observed = undefined; wakeLocal();
+          observed = undefined; wakeLocal(); void onPaymentApprovals?.();
         }
         if (line === 'recharge_event_subscriber_heartbeat' && ready && !fatal)
           onReaderStatus?.('connected');

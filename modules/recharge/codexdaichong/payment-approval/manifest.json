@@ -1,0 +1,19 @@
+{
+  "revision": "4e9bb201cf481d4bcc85da34970fc26c63ab818a",
+  "patchSha256": "bc22fe3ac39a53ca11bd08fe6a3e6a4138aa8ca1e5ef3f2c7e2ec3d4ae56c618",
+  "files": {
+    "payment-retry.js": {
+      "original": "df2d2e6893e7046cc11ea41dbb0d2c2b4fbc6199",
+      "approved": "ec17fe0b1a02b00f72cebb662fb52c9523aeb36b"
+    },
+    "server.js": {
+      "original": "744b47e1ad2847774fea4dc5fc189073921e5567",
+      "approved": "2d4c1d0e3376d823cb893536658776603c48bcbf"
+    },
+    "stripe-payment.js": {
+      "original": "e4454ece42efec16892eea53220bb52fcf281183",
+      "approved": "0c55f5e22b0c2e31a554e3ffc373104832e059d8"
+    }
+  },
+  "implementationSha256": "e2fb1f48ee39cf61742ea0c70fdd6cb396e324eeefd412083a6c1288a8fd3338"
+}

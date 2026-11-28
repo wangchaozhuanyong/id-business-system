@@ -1,0 +1,307 @@
+diff --git a/payment-retry.js b/payment-retry.js
+--- a/payment-retry.js
++++ b/payment-retry.js
+@@ -119,6 +119,7 @@
+     progress(`开始支付（最多尝试 ${MAX_CARD_ATTEMPTS} 张卡）...`);
+ 
+     for (let cardAttempt = 1; cardAttempt <= MAX_CARD_ATTEMPTS; cardAttempt += 1) {
++        const reservedAt = Date.now();
+         const card = await store.reserveCard(ownerKey, planType);
+         if (!card) {
+             progress(cardAttempt === 1 ? '卡池无可用卡，终止支付' : `卡池已无更多可用卡（已拒 ${declinedLast4s.length} 张）`);
+@@ -155,8 +156,18 @@
+         try {
+             const paymentResult = await completeStripeCardPayment(page, cardInfo, address, {
+                 cardAttempt,
++                approvalCard: { id: Number(card.id), owner: ownerKey.slice(0, 64),
++                    deadline: reservedAt + Number(process.env.ASSET_LOCK_STALE_MS || 15 * 60_000) - 5000 },
+                 holderName: billingHolderName
+             });
++            if (paymentResult.approvalStopped) {
++                cardHandled = true;
++                await store.withTransaction(db => db.execute(
++                    'UPDATE card_assets SET in_use = 0, locked_at = NULL, locked_by = NULL WHERE id = ? AND locked_by = ?',
++                    [card.id, ownerKey.slice(0, 64)]));
++                console.log('PAYMENT_APPROVAL_STOPPED');
++                return { success: false, error: '本次执行已在付款提交前结束' };
++            }
+             const resultUnknown = paymentResult.resultUnknown === true;
+ 
+             if (paymentResult.holderName) {
+@@ -210,6 +221,7 @@
+             }
+ 
+             if (paymentResult.declined === true && !resultUnknown) {
++                console.log('PAYMENT_SUBMIT_DECLINED');
+                 await store.createBillingRecord({
+                     card_number: card.card_number,
+                     card_last4: cardLast4,
+diff --git a/server.js b/server.js
+--- a/server.js
++++ b/server.js
+@@ -8,6 +8,8 @@
+ const WebSocket = require('ws');
+ const axios = require('axios');
+ const store = require('./mysql-store');
++const { createPaymentApprovals, waitingLabel, endedLabel } = require('../../modules/recharge/codexdaichong/payment-approval.mjs');
++const paymentApprovals = createPaymentApprovals(store.withTransaction);
+ // User-authorized startup routing only; the payment worker remains pinned upstream.
+ let rechargeRoutingPromise;
+ function getRechargeRouting() {
+@@ -1083,6 +1085,9 @@
+ 
+ function analyzeCheckoutDebugOutput(output, timedOut) {
+     const normalized = withoutCheckoutApiDiagnostics(output);
++    if (/(?:^|\n)PAYMENT_APPROVAL_STOPPED(?:\r?\n|$)/.test(normalized)) {
++        return { status: 'failed', message: endedLabel, beforeSubmit: true, shouldRetry: false };
++    }
+     const runtimeError = extractRuntimeErrorMessage(normalized);
+ 
+     if (/^CHECKOUT_DEBUG_SUCCESS$/m.test(normalized)) {
+@@ -1169,8 +1174,13 @@
+ 
+ function analyzeProcessOutput(output, timedOut) {
+     const normalized = withoutCheckoutApiDiagnostics(output);
++    // A worker may disappear between dispatch and its final payment receipt.
++    const lines = normalized.split(/\r?\n/);
++    const lastDispatch = lines.lastIndexOf('PAYMENT_SUBMIT_DISPATCH');
++    const unfinishedDispatch = lastDispatch !== -1 && !lines.slice(lastDispatch + 1).some(line =>
++        ['PAYMENT_SUCCESS', 'PAYMENT_SUBMIT_DECLINED'].includes(line));
+     // The final unknown result takes precedence over text from earlier attempts.
+-    if (/(?:^|\n)PAYMENT_RESULT_UNKNOWN(?:\r?\n|$)/.test(normalized)) {
++    if (unfinishedDispatch || /(?:^|\n)PAYMENT_RESULT_UNKNOWN(?:\r?\n|$)/.test(normalized)) {
+         return {
+             status: 'manual',
+             message: '付款结果待核实，已转人工确认，请勿重复充值，请联系客服处理。',
+@@ -4254,6 +4264,7 @@
+     if (typeof message !== 'string') {
+         return message;
+     }
++    if (message.startsWith(waitingLabel + ' [')) return waitingLabel;
+     if (message.includes('订单处理超时')) {
+         return LEGACY_PROVIDER_TIMEOUT_MESSAGE;
+     }
+@@ -4263,7 +4274,7 @@
+     return message;
+ }
+ 
+-function spawnActivationWorker({ task, token, sessionRaw, cdk, cdkDetails, clientIp, executionRoute }) {
++function spawnActivationWorker({ task, token, sessionRaw, cdk, cdkDetails, clientIp, executionRoute, admissionVersion }) {
+     (async () => {
+         const checkoutScript = path.join(__dirname, 'index.js');
+         let finalRun = null;
+@@ -4297,6 +4308,7 @@
+                 const runtimeEnv = {
+                     ...process.env,
+                     ...hcaptchaEnv,
++                    PAYMENT_ADMISSION_VERSION: String(admissionVersion),
+                     JOB_KEY: task.jobKey,
+                     CHATGPT_TOKEN: token,
+                     CHATGPT_SESSION_JSON: String(sessionRaw || '').startsWith('{') ? sessionRaw : '',
+@@ -4315,9 +4327,10 @@
+                         if (progress > 0) {
+                             const runningProgress = normalizeTaskProgress(progress, 'running', lastProgress);
+                             lastProgress = runningProgress;
++                            const waiting = liveOutput.lastIndexOf('PAYMENT_APPROVAL_WAITING') > liveOutput.lastIndexOf('PAYMENT_APPROVAL_WAIT_OVER');
+                             const updatePayload = {
+                                 status: 'running',
+-                                message: '正在开通中',
++                                message: waiting ? waitingLabel : '正在开通中',
+                                 rawOutput: null,
+                                 cdkCode: cdk,
+                                 progress: runningProgress
+@@ -4335,7 +4348,7 @@
+                                 jobKey: task.jobKey,
+                                 progress: runningProgress,
+                                 status: 'running',
+-                                message: '正在开通中',
++                                message: waiting ? waitingLabel : '正在开通中',
+                                 cdkCode: cdk,
+                                 screenshots: liveOutput ? extractTaskMediaFromOutput(liveOutput).screenshots : undefined,
+                                 videos: liveOutput ? extractTaskMediaFromOutput(liveOutput).videos : undefined
+@@ -4388,9 +4401,9 @@
+             const finalStatus = normalizedAnalysis?.status || 'failed';
+             const finalMessage = finalStatus === 'success'
+                 ? (normalizedAnalysis?.message || '激活成功')
+-                : getManualReviewMessage(normalizedAnalysis?.message || '激活失败');
+-
+-            if (finalStatus !== 'success') {
++                : normalizedAnalysis?.beforeSubmit ? endedLabel : getManualReviewMessage(normalizedAnalysis?.message || '激活失败');
++
++            if (finalStatus !== 'success' && !normalizedAnalysis?.beforeSubmit) {
+                 await store.createActivationManualHold({
+                     accountKey,
+                     accountEmail,
+@@ -4452,7 +4465,7 @@
+                     jobKey: task.jobKey,
+                     message: finalMessage
+                 });
+-            } else if (finalStatus === 'failed' || finalStatus === 'manual') {
++            } else if (!normalizedAnalysis?.beforeSubmit && (finalStatus === 'failed' || finalStatus === 'manual')) {
+                 notifyTaskOutcome({
+                     event: 'failure',
+                     email: accountEmail,
+@@ -4656,6 +4669,8 @@
+             });
+         }
+ 
++        const paymentMode = await paymentApprovals.policy().catch(() => ({ automatic: false }));
++        const admissionVersion = paymentMode.automatic ? paymentMode.version : 0;
+         const lockSuccess = await store.markCdkUsed(cdk);
+         if (!lockSuccess) {
+             return res.status(403).json({ success: false, message: 'CDK 不可用或正在被他人使用' });
+@@ -4675,7 +4690,7 @@
+         logTask(task.jobKey, `任务已创建，CDK=${cdk} mode=local`);
+         reserveForegroundSlot(task.jobKey);
+ 
+-        spawnActivationWorker({ task, token, sessionRaw: storedSession, cdk, cdkDetails, clientIp, executionRoute });
++        spawnActivationWorker({ task, token, sessionRaw: storedSession, cdk, cdkDetails, clientIp, executionRoute, admissionVersion });
+ 
+         return res.json({
+             success: true,
+diff --git a/stripe-payment.js b/stripe-payment.js
+--- a/stripe-payment.js
++++ b/stripe-payment.js
+@@ -555,8 +555,9 @@
+         await page.waitForTimeout(1000);
+ 
+         if (await isZeroAmountCheckout(page)) {
++            if (options.dryRun || process.env.CHECKOUT_DEBUG_ONLY === '1') return { success: false, dryRun: true };
+             console.log('[Stripe] 检测到 0 元结账页，跳过信用卡与账单填写，直接提交...');
+-            return finalizeCheckoutPayment(page, (cardInfo && cardInfo.holder) || '');
++            return finalizeCheckoutPayment(page, (cardInfo && cardInfo.holder) || '', options.approvalCard);
+         }
+ 
+         const openAiCheckout = isOpenAiCustomCheckout(page);
+@@ -715,11 +716,12 @@
+                 screenshot: dryShot
+             };
+         }
+-        const payResult = await finalizeCheckoutPayment(page, holderName);
++        const payResult = await finalizeCheckoutPayment(page, holderName, options.approvalCard);
+         if (checkoutDue?.amount) {
+             payResult.dueAmount = checkoutDue.amount;
+             payResult.dueCurrency = checkoutDue.currency;
+         }
++        if (payResult?.approvalDispatchUnknown) return payResult;
+         if (payResult && payResult.resultUnknown) {
+             const planCheck = await verifyAccountPlan(process.env.CHATGPT_TOKEN);
+             if (planCheck && planCheck.planType && planCheck.planType !== 'free') {
+@@ -931,9 +933,14 @@
+     return { action: 'continue', captcha: postCaptcha };
+ }
+ 
+-async function finalizeCheckoutPayment(page, holderName) {
+-    console.log('[Stripe] Step 9: 点击订阅/支付...');
+-    const submitted = await clickCheckoutSubmitButton(page);
++async function finalizeCheckoutPayment(page, holderName, approvalCard) {
++    let submitted;
++    try { submitted = await clickCheckoutSubmitButton(page, approvalCard); }
++    catch (error) {
++        if (error.approvalStopped) return { success: false, approvalStopped: true, error: '付款前结束' };
++        if (error.resultUnknown) return { success: false, approvalDispatchUnknown: true, resultUnknown: true, canRetryCard: false, error: '付款提交结果待核实' };
++        throw error;
++    }
+     if (!submitted) {
+         const screenshotPath = await saveDebugScreenshot(page, 'submit_not_found');
+         return { success: false, error: '无法找到提交/支付按钮', screenshot: screenshotPath };
+@@ -1386,7 +1393,7 @@
+ }
+ 
+ async function focusOpenAiBillingSection(page) {
+-    await page.locator('body').click({ position: { x: 12, y: 12 }, timeout: 2000 }).catch(() => { });
++    await blurActiveBillingField(page);
+     await page.keyboard.press('Escape').catch(() => { });
+     const heading = page.getByText(/^Billing address$|^账单地址$/i).first();
+     await heading.scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => { });
+@@ -1490,6 +1497,21 @@
+     return null;
+ }
+ 
++// Do not send a bare Enter to a checkout form: it can invoke implicit payment submission.
++async function acceptHighlightedBillingOption(field) {
++    return field.evaluate(control => {
++        const doc = control.ownerDocument;
++        const focused = doc.activeElement;
++        const list = doc.getElementById(control.getAttribute('aria-controls') || control.getAttribute('aria-owns') || '');
++        const highlighted = doc.getElementById(control.getAttribute('aria-activedescendant') || '');
++        const option = highlighted || (list && list.contains(focused) ? focused : null);
++        if (!option || option.getAttribute('role') !== 'option' || !option.getClientRects().length ||
++            option.closest('a, button, input, label, [role="button"]') || option.getAttribute('aria-disabled') === 'true') return false;
++        option.click();
++        return true;
++    }).catch(() => false);
++}
++
+ async function selectBillingComboboxItem(page, item, optionLabels, logLabel) {
+     if (!item?.el) return false;
+     const options = optionLabels.filter(Boolean);
+@@ -1520,7 +1542,7 @@
+         if (tag === 'input' || tag === 'textarea') {
+             await item.el.fill(String(options[0] || ''));
+             await page.keyboard.press('ArrowDown').catch(() => { });
+-            await page.keyboard.press('Enter').catch(() => { });
++            if (!await acceptHighlightedBillingOption(item.el)) return false;
+             console.log(`  [Stripe] ✅ ${logLabel}: ${options[0]} (typeahead)`);
+             return true;
+         }
+@@ -1857,7 +1879,7 @@
+             await page.waitForTimeout(600);
+             await page.keyboard.press('ArrowDown').catch(() => {});
+             await page.waitForTimeout(200);
+-            await page.keyboard.press('Enter').catch(() => {});
++            if (!await acceptHighlightedBillingOption(field)) return false;
+             await page.waitForTimeout(800);
+             const now = await getCurrentBillingCountryValue(page).catch(() => ({ value: '', label: '' }));
+             const done = now.value === 'US' || /united states/i.test(now.label) || /美国/.test(now.label);
+@@ -1907,7 +1929,7 @@
+             await page.waitForTimeout(600);
+             await page.keyboard.press('ArrowDown').catch(() => {});
+             await page.waitForTimeout(200);
+-            await page.keyboard.press('Enter').catch(() => {});
++            if (!await acceptHighlightedBillingOption(field)) return false;
+             await page.waitForTimeout(800);
+             console.log('  [Stripe] 键盘选择州完成');
+             return true;
+@@ -2567,7 +2589,9 @@
+     return ok;
+ }
+ 
+-async function clickCheckoutSubmitButton(page) {
++async function clickCheckoutSubmitButton(page, approvalCard) {
++    const { authorizeSubmit, checkoutQuote, createPaymentApprovals } = require('../../modules/recharge/codexdaichong/payment-approval.mjs');
++    const approvals = createPaymentApprovals(require('./mysql-store').withTransaction);
+     await dismissAddressAutocomplete(page);
+     await page.keyboard.press('Escape').catch(() => {});
+     await page.evaluate(() => {
+@@ -2576,6 +2600,7 @@
+     await page.waitForTimeout(400);
+ 
+     const tryClick = async (locator, label) => {
++        let atBoundary = false, dispatched = false;
+         try {
+             const target = locator.first ? locator.first() : locator;
+             if (!(await target.isVisible({ timeout: 2000 }).catch(() => false))) {
+@@ -2587,10 +2612,22 @@
+             }
+             await target.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
+             await page.waitForTimeout(randomBetween(150, 350));
++            atBoundary = true;
++            if (!await authorizeSubmit({ approvals, card: approvalCard, jobKey: process.env.JOB_KEY, plan: process.env.CDK_PLAN_TYPE,
++                admissionVersion: Number(process.env.PAYMENT_ADMISSION_VERSION), debug: process.env.CHECKOUT_DEBUG_ONLY === '1',
++                currentPage: () => page.isClosed() ? '' : page.url(),
++                readQuote: async () => checkoutQuote(await page.locator('body').innerText({ timeout: 3000 })) }))
++                throw new Error('approval_stopped');
++            console.log('[Stripe] Step 9: 点击订阅/支付...');
++            dispatched = true;
++            console.log('PAYMENT_SUBMIT_DISPATCH');
+             await target.click({ timeout: 8000, delay: randomBetween(40, 120) });
+             console.log(`[Stripe] ✅ 已点击提交按钮 (${label})`);
+             return true;
+         } catch (error) {
++            if (atBoundary) throw Object.assign(new Error(dispatched ? '付款提交结果待核实' : '付款前结束'), {
++                approvalStopped: !dispatched, resultUnknown: dispatched
++            });
+             console.log(`[Stripe] 提交按钮点击失败 (${label}): ${error.message}`);
+             return false;
+         }

@@ -137,3 +137,7 @@
   .recharge-activity-history li { flex-wrap: wrap; }
   .recharge-activity-history li > button { margin-inline-start: auto; }
 }
+
+#payment-approval-toast:not([hidden]) ~ #recharge-activity-toast { display: none; }
+.payment-approval-row { padding-block: var(--toolbar-padding-block, 12px); border-bottom: 1px solid var(--line); }
+.payment-approval-row + button { margin-block-start: 12px; }

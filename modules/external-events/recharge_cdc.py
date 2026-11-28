@@ -78,6 +78,7 @@ class Transaction:
     def __init__(self):
         self.jobs = set()
         self.scopes = set()
+        self.approval_changed = False
 
     def rows(self, table, rows):
         if table not in TABLES:
@@ -90,6 +91,8 @@ class Transaction:
             for values in (row.get("values"), row.get("before_values"), row.get("after_values")):
                 if values is None:
                     continue
+                if table == "task_logs" and str(values.get("message") or "").startswith("等待商家确认付款，请勿重复提交"):
+                    self.approval_changed = True
                 value = values.get("job_key")
                 if not isinstance(value, str) or not JOB.fullmatch(value):
                     raise Unavailable("task_identity_unavailable")
@@ -100,6 +103,8 @@ class Transaction:
     def event(self, source, position, snapshot=False):
         event = {"version": 1, "jobs": sorted(self.jobs), "scopes": sorted(self.scopes),
                  "reconcile": bool(self.scopes - {"task_logs"}) or snapshot}
+        if self.approval_changed:
+            event["paymentApprovalChanged"] = True
         # The opaque receipt identifies replayed work without exposing position
         # or a source identifier to downstream observers.
         raw = json.dumps([source, position, event], sort_keys=True, separators=(",", ":"))

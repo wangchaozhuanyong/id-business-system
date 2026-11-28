@@ -20,6 +20,7 @@ const cardPlanPatch = new URL('./card-plans/upstream-card-plans.patch', import.m
 const cardPlanFiles = ['mysql-store.js', 'payment-retry.js', 'server.js'];
 const plusTrialPatch = new URL('./plus-trial/upstream-plus-trial.patch', import.meta.url);
 const retryPatch = new URL('./retry/upstream-retry.patch', import.meta.url);
+const paymentPatch = new URL('./payment-approval/upstream-payment-approval.patch', import.meta.url);
 const retryFiles = ['server.js'];
 const plusTrialFiles = ['browser-pool.js', 'chatgpt.js', 'pricing-checkout.js', 'session-auth.js', 'stripe-payment.js'];
 
@@ -149,6 +150,26 @@ export async function applyApprovedRechargeRouting(directory) {
   const retryPath = fileURLToPath(retryPatch);
   await exec('git', [...args, '--check', retryPath], { cwd: directory });
   await exec('git', [...args, retryPath], { cwd: directory });
+  const payment = await approvedPayment(retry, plusTrial, cardPlans);
+  await verifyPatchPreimage(directory, payment);
+  await exec('git', [...args, '--check', fileURLToPath(paymentPatch)], { cwd: directory });
+  await exec('git', [...args, fileURLToPath(paymentPatch)], { cwd: directory });
+}
+
+async function approvedPayment(retry, plusTrial, cardPlans) {
+  const manifest = JSON.parse(await readFile(new URL('./payment-approval/manifest.json', import.meta.url), 'utf8'));
+  const patch = await readFile(paymentPatch);
+  const names = [...patch.toString().matchAll(/^diff --git a\/(\S+) b\/\1$/gm)].map(match => match[1]);
+  const implementation = await readFile(new URL('./payment-approval.mjs', import.meta.url));
+  if (createHash('sha256').update(implementation).digest('hex') !== manifest.implementationSha256)
+    throw new Error('付款确认执行模块与审查清单不符');
+  const inputs = { 'payment-retry.js': cardPlans, 'server.js': retry, 'stripe-payment.js': plusTrial };
+  if (manifest.revision !== CODEXDAICHONG_REVISION || JSON.stringify(names) !== JSON.stringify(Object.keys(inputs)) ||
+      JSON.stringify(Object.keys(manifest.files)) !== JSON.stringify(names) ||
+      names.some(name => manifest.files[name].original !== inputs[name].files[name].approved) ||
+      createHash('sha256').update(patch).digest('hex') !== manifest.patchSha256)
+    throw new Error('付款前确认补丁与审查清单不符');
+  return manifest;
 }
 
 function isDescendant(base, target) {
@@ -178,6 +199,7 @@ export async function verifyCodexdaichongSource(directory) {
   const cardPlans = await approvedCardPlans(retirement);
   const plusTrial = await approvedPlusTrial(routing);
   const retry = await approvedRetry(cardPlans);
+  const payment = await approvedPayment(retry, plusTrial, cardPlans);
   const { stdout } = await exec('git', ['-C', sourceRoot, 'ls-tree', '-rz', CODEXDAICHONG_REVISION], {
     maxBuffer: 8 * 1024 * 1024
   });
@@ -200,7 +222,7 @@ export async function verifyCodexdaichongSource(directory) {
     const afterPlusTrial = plusTrialFile?.approved || afterCardPlans;
     const retryFile = retry.files[name];
     if (retryFile && retryFile.original !== afterPlusTrial) throw new Error('失败重试补丁基准不符：' + name);
-    const expected = retryFile?.approved || afterPlusTrial;
+    const expected = payment.files[name]?.approved || retryFile?.approved || afterPlusTrial;
     if (type !== 'blob' || !['100644', '100755', '120000'].includes(mode))
       throw new Error('锁定仓库包含不支持的文件类型');
     const path = resolve(destination, name);
@@ -221,6 +243,7 @@ export async function verifyCodexdaichongSource(directory) {
   return { revision: CODEXDAICHONG_REVISION, files,
     originalFiles: files - new Set([...routingFiles, ...Object.keys(returns.files), ...cardPlanFiles, ...plusTrialFiles]).size,
     routingFiles: [...routingFiles], returnFiles: Object.keys(returns.files), returnPatchSha256: returns.patchSha256,
+    paymentApprovalFiles: Object.keys(payment.files), paymentApprovalPatchSha256: payment.patchSha256,
     routingPatchSha256: routing.patchSha256, providerRetirementFiles: [...providerRetirementFiles],
     providerRetirementPatchSha256: retirement.patchSha256, cardPlanFiles: [...cardPlanFiles],
     cardPlanPatchSha256: cardPlans.patchSha256, plusTrialFiles: [...plusTrialFiles], retryFiles: [...retryFiles],

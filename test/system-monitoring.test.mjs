@@ -1018,3 +1018,14 @@ test('monitoring emits changed samples and their exact stale deadline without po
   monitor.observe([{ code: 'disk_space', status: 'ok', at: f.clock() }]);
   assert.equal(notifications, 2, 'removed observers are never called');
 });
+
+test('pending payment sends one reminder to each verified recharge recipient across repeated observations', async t => {
+  const f = fixture(t);
+  await enable(f, { rechargeAdmin: security, rechargeGroup: group, operations: ops });
+  const sample = { code: 'recharge_approval', scope: 'fixture-approval', status: 'bad' };
+  f.monitor.observe([sample]); f.monitor.observe([sample]);
+  for (let i = 0; i < 8; i++) { f.tick(); await f.monitor.dispatch(); }
+  const notices = f.sent.filter(item => item.text.includes('有一笔充值等待确认付款'));
+  assert.deepEqual(notices.map(item => item.chatId).sort(), [security, group].sort());
+  assert(notices.every(item => item.text.includes('待确认付款') && !item.text.includes('fixture-approval')));
+});

@@ -256,7 +256,8 @@ class Canary:
             ['pricing-checkout.js', 'region-config.js', 'server.js'] or result.get('returnFiles') != ['mysql-store.js', 'server.js'] or
             result.get('providerRetirementFiles') != ['mysql-store.js', 'server.js'] or
             result.get('cardPlanFiles') != ['mysql-store.js', 'payment-retry.js', 'server.js'] or
-            result.get('plusTrialFiles') != ['browser-pool.js', 'chatgpt.js', 'pricing-checkout.js', 'session-auth.js', 'stripe-payment.js'] or result.get('retryFiles') != ['server.js']):
+            result.get('plusTrialFiles') != ['browser-pool.js', 'chatgpt.js', 'pricing-checkout.js', 'session-auth.js', 'stripe-payment.js'] or result.get('retryFiles') != ['server.js'] or
+            result.get('paymentApprovalFiles') != ['payment-retry.js', 'server.js', 'stripe-payment.js']):
             raise CanaryError('pristine_source_mismatch')
         self.checks.append(code)
 
@@ -266,9 +267,10 @@ class Canary:
         result = self.command(['docker', 'exec', '-i', native, 'node',
             '/candidate/deploy/recharge-core/card-plans-canary.mjs'], input=(self.password + '\n').encode(),
             timeout=35, step='card_plans_canary_exec')
-        if result != 'card_plan_mysql_transactions_passed':
+        checks = ['card_plan_mysql_transactions_passed', 'payment_approval_mysql_transactions_passed']
+        if result.splitlines() != checks:
             raise CanaryError('card_plan_mysql_transactions_failed')
-        self.checks.append(result)
+        self.checks.extend(checks)
 
     def check_card_stop(self, mysql, adapter_url, privileged):
         number = '4242424242424242'
@@ -496,6 +498,12 @@ class Canary:
             self.source_check(adapter, 'source_203_adapter')
             self.checks.append('no_payment_or_activation_requests')
             return
+        approval_mode = '/api/admin/payment-approvals/mode'
+        status, policy = http_json(adapter_url, approval_mode, headers(approval_mode, privileged))
+        denied, _ = http_json(adapter_url, approval_mode, headers(approval_mode, customer))
+        if status != 200 or policy != {'automatic': False, 'version': 0} or denied != 403:
+            raise CanaryError('payment_approval_mode_readback_failed')
+        self.checks.append('payment_approval_manual_default_and_customer_denied')
         self.check_card_plans(native)
         route_path = ROUTING_PATH
         def routing_request(path, actor, method='GET', body=None):

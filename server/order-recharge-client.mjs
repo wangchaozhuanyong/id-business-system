@@ -35,7 +35,7 @@ export function createOrderRechargeClient(config, fetchImpl = fetch) {
     const target = new URL(path, upstream);
     const orbitRead = target.pathname !== '/api/admin/orbitcard/usage' ||
       [...target.searchParams.keys()].every((name) => ['page_size', 'keyword', 'recharge_status'].includes(name));
-    const monitoringPath = monitoring && (method === 'GET' && path === '/api/admin/data' ||
+    const monitoringPath = monitoring && (method === 'GET' && ['/api/admin/data', '/api/admin/payment-approvals'].includes(path) ||
       method === 'POST' && path === '/api/admin/telegram');
     const storefrontVerify = actor.id === 'vendure-admission' && method === 'POST' && path === '/api/verify-cdk';
     const storefrontLookup = actor.id === 'vendure-admission' && method === 'GET' && target.pathname === '/api/cdk/query' &&
@@ -86,6 +86,7 @@ export function createOrderRechargeClient(config, fetchImpl = fetch) {
         throw new Error('卡池停用未确认');
       return { state: result.state, refs: result.refs };
     } }),
+    pendingPaymentApprovals: () => request('GET', '/api/admin/payment-approvals', undefined, service, true),
     readLegacyNotificationSettings: () => request('GET', '/api/admin/data', undefined, service, true),
     async disableLegacyBusinessNotifications({ adminChat, groupChat, notifyAdmin, notifyGroup }) {
       await request('POST', '/api/admin/telegram', {
